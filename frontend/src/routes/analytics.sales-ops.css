@@ -1,0 +1,55 @@
+/* ============================================================
+   Sales ops period control (2026-09-21 audit critic-10, item 6a)
+   ============================================================
+   deviation:sales-manager-period. The prototype's `.segmented`
+   (design_files/index.html:926-935) lives only inside the Console's
+   tweak rows; the sales manager view reuses its shape as a role=group of
+   aria-pressed buttons, scoped to `.sales-ops-period` so no other
+   `.segmented` changes. The custom range uses the Field primitive with
+   native date inputs. Ships with the analytics route chunk. */
+
+.sales-ops-period {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+.sales-ops-period .eyebrow { align-self: center; }
+.sales-ops-period .segmented {
+  display: flex;
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  padding: var(--sp-1);
+  gap: var(--sp-1);
+}
+.sales-ops-period .segmented button {
+  background: transparent;
+  border: 1px solid transparent;
+  padding: var(--sp-1) var(--sp-2);
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  color: var(--text-2);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.sales-ops-period .segmented button.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.sales-ops-period .segmented button:active { translate: 0 var(--pressed-shift); }
+
+.sales-ops-period__range {
+  display: flex;
+  flex-wrap: wrap;
+  /* First baselines: the fields and Apply stay on one line while an inline
+     error hangs below its own field. */
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+.sales-ops-period__date { min-inline-size: calc(var(--sp-6) * 6); }
+
+@media (forced-colors: active) {
+  .sales-ops-period .segmented button.is-active { border-color: Highlight; }
+}

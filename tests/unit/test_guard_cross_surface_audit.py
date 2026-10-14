@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi.exceptions import HTTPException
+from pydantic import ValidationError
 
 import backend.schemas.portfolio  # noqa: F401 - resolve forward refs
 from backend.api.genie_guardrails import (
@@ -158,9 +159,10 @@ def test_campaign_text_still_refuses_pii(text: str) -> None:
 @pytest.mark.parametrize(
     "note",
     [
-        # Retired (D-shell-deviations-g2): every non-blank note is refused,
-        # governed product/geography text and names alike, and nothing is
-        # persisted; the audit false negative (lowercase names) is moot.
+        # Deleted (D-shell-deviations-g2, W5d): the field is gone, so every
+        # note is an unknown key under extra='forbid', governed product /
+        # geography text and names alike, and nothing is persisted; the audit
+        # false negative (lowercase names) is moot.
         "Discussed Home Equity options for the El Paso property.",
         "spoke with john smith about cash-out",
         "maria garcia is the top borrower",
@@ -168,8 +170,9 @@ def test_campaign_text_still_refuses_pii(text: str) -> None:
     ],
 )
 def test_disposition_notes_are_retired_and_refused(note: str) -> None:
-    with pytest.raises(ValueError, match="Free-text disposition notes are retired"):
-        DispositionRequest(lo_email="lo@entrada.ai", outcome="connected", notes=note)
+    with pytest.raises(ValidationError) as caught:
+        DispositionRequest.model_validate({"lo_email": "lo@entrada.ai", "outcome": "connected", "notes": note})
+    assert [error["type"] for error in caught.value.errors()] == ["extra_forbidden"]
 
 
 def test_audit_ledger_notes_gate_matches_the_schema() -> None:

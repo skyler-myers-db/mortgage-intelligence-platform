@@ -157,6 +157,7 @@ RUM_API_ROUTE_SEGMENTS = frozenset({
     "queue-version",
     "question", "receipt",
     "recommend", "refusal-report", "refusal-reports", "reject", "rollups", "rules", "rum", "run",
+    "release",
     "revoke",
     "runs",
     "saved-views",

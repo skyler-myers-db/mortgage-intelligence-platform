@@ -37,6 +37,7 @@ from backend.services.sales_state_mappers import (
     clear_sales_state_cache,
     get_sales_lakebase,
 )
+from backend.services.sales_state_release import _SalesStateRelease
 from backend.services.sales_state_reporting import _SalesStateReporting
 from backend.services.sales_state_writes import _SalesStateWrites
 
@@ -82,7 +83,7 @@ def get_sales_state_store(client: LakebaseDep) -> SalesStateStore:
     return SalesStateStore(client)
 
 
-class SalesStateStore(_SalesStateWrites, _SalesStateReporting):
+class SalesStateStore(_SalesStateWrites, _SalesStateRelease, _SalesStateReporting):
     """Lakebase-backed sales work-management state.
 
     UC gold remains the source for borrower facts and scoring. Lakebase is the

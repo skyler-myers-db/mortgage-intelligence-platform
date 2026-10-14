@@ -323,6 +323,22 @@ W5e `w5-lead-table-compile`: until then, show a revoke from the audit ledger
 text screen is recorded as `GOVERNED_TEXT_REFUSED` (surface, screen and a
 count; never the text).
 
+Sales-manager beat (optional, 15 seconds; Analytics → Sales ops, a sales
+manager or roster admin session: pick a period, open "Distribute approved
+leads…", commit, then press Undo on the toast):
+
+> "The Board's dry run writes nothing; it shows how approved leads would land
+> by score, capacity and region. Commit runs that plan, and Undo is an
+> audited release. Nothing is assigned automatically."
+
+Off-script detail, if asked: the period stays in the shared link; a commit is
+refused when the book moved since the preview and the Board shows what
+changed; the Undo hands leads back to the officer they replaced only while
+that is still allowed. Claim boundary: the fill is greedy at state grain (a
+'National' or empty region is a generalist) with capacity measured as the
+daily capacity minus the open book; it is not an optimiser. Per-officer
+workload and the previous-period comparison ship in W5e.
+
 ## Close
 
 > "Module 0 answers the practical growth question: who should we contact, why
@@ -381,6 +397,9 @@ When a prospect frames goals in these words, land each one on a live surface:
 
 - Do not say every asset is live if `/api/v1/data-estate` shows unconnected or
   pending assets.
+- Do not say the platform "auto-assigns leads": the Distribution Board
+  previews a plan and a manager commits it, and every assignment and Undo is
+  an audited human action.
 - Do not quote borrower names, raw CLIP, raw Owner Link, or unmasked addresses
   in a public recording.
 - Do not claim Genie actions work unless the filtered destination route is shown

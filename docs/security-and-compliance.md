@@ -125,6 +125,13 @@ is refused lead assign, disposition and outcome whatever its tier
 - **Outcome**: a roster `sales_manager` against an active assignment in
   their scope, or a roster `admin` (`require_manager_actor`,
   `require_outcome_scope`).
+- **Release (Undo)** (`POST /leads/{id}/assignment/release`, `POST
+  /sales/distribute/release`, W5d): the same manager scope as assign
+  (`require_manager_actor`, `require_assignee_in_scope`); a distribution is
+  undone only by the actor who ran it. A release never deletes: it sets
+  `released_at`, and hands the lead back to the officer it replaced only while
+  that officer is still an active loan officer in the actor's scope and the
+  lead is still approved and contactable.
 
 A roster `admin` is a sales-roster role, not the `MIP_ADMIN_*` Administrator
 tier; neither implies the other.
@@ -185,6 +192,8 @@ the pull request that ships the behaviour, never earlier.
 | Offer open (the approval surface) | `DRAFT_OUTREACH` | once per `POST /outreach/draft` (`outreach.draft_outreach`) | committed in the same transaction as the draft row, fail-closed |
 | Approve / Reject (`outreach.approve_outreach` / `outreach.reject_outreach`) | `APPROVE` / `OUTREACH_REJECT` | once per decision; an approve without `review_mode` is refused with 422 `Reload the app to approve` before any read or write (required since W5c) | committed with the approvals row, fail-closed; carries `decision_inputs` and the draft proof, `approval_request_batch_id` when the decision answers an approval request, and the client-declared `declared_lead_view_id` when taken from the paged Lead Queue |
 | Revoke (`outreach_revoke.revoke_outreach`) | `OUTREACH_REVOKE` | once per revoke | committed with the revoke's approvals row, fail-closed; the approve row is never changed |
+| Assignment release, the Undo (`sales.release_lead_assignment`, `sales.release_distribution`) | `LEAD_UNASSIGN` (borrower entity; `borrower_id`, `assignment_id`, `assigned_to_email`, then `restored_assignment_id` + `restored_to_email` or a closed `restore_skipped_reason`) | once per released borrower; a replayed request id writes nothing and returns the original audit id | committed in the release transaction, fail-closed; the released row is kept (`released_at`), never deleted |
+| Distribution Board dry run (`POST /sales/distribute` with `dry_run`) | none | when the Board opens, or re-plans after a 409 | audit-free: writes no Lakebase row and no audit row; returns per-officer aggregates and a plan fingerprint, never a borrower id |
 | Queue-version poll (`workspace.read_queue_version`) | none | every poll | audit-free |
 | Console "My recent activity" (`audit.list_my_events`) | none | every read | audit-free |
 | Own decision receipts (`audit_receipt.read_decision_receipt`) | none | every read | audit-free |

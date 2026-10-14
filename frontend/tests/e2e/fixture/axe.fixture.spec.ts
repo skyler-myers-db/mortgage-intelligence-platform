@@ -17,7 +17,9 @@
  *  - W5c w5-evidence-drawer: a Home KPI drawer's How we got and its Under
  *    the hood tab (`evidence-how-we-got`, `evidence-under-the-hood`);
  *  - the teal, navy and red accents on Home, Lead Queue and Borrower 360,
- *    default and evidence drawer, both themes (bright is everything above).
+ *    default and evidence drawer, both themes (bright is everything above);
+ *  - W5d w5-sales-loop: the Sales ops manager view (30-day period) and the
+ *    Distribution Board's dry-run plan, both themes.
  *
  * The ratchet (axe.ts KNOWN_VIOLATIONS) is validated against this matrix at
  * load: every entry names a scan that runs here, in each theme and accent it
@@ -26,6 +28,7 @@
  */
 import type { FixtureTheme } from './app';
 import { KNOWN_VIOLATIONS, expectAxeClean, validateKnownViolations, type AxeAccent, type AxeScanTarget } from './axe';
+import { registerBoard } from './data/salesLoop';
 import { OVERLAY_STATES, enterState, prepareState, type FixtureState } from './fixtureStates';
 import { FIXTURE_ROUTES, FIXTURE_THEMES, type FixtureRoute } from './routes';
 import { expect, test } from './test';
@@ -91,6 +94,34 @@ for (const { route, state, theme, accent } of SCANS) {
     expectNoAuditedReadSince(mockApi, naturalLoad, `${route.name} · ${state}`);
   });
 }
+
+// W5d w5-sales-loop (critic-10 / wow-power-5): the Sales ops manager view on
+// a 30-day period and the Distribution Board's dry-run plan, both themes, with
+// no ratchet entry (known: {}).
+test.describe('the sales manager view and the Distribution Board', () => {
+  for (const theme of FIXTURE_THEMES) {
+    test(`analytics · sales-ops manager view · ${theme} has no WCAG A/AA violation`, async ({ app, mockApi, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/analytics?view=sales-ops&sales_period=30d');
+      const naturalLoad = markNaturalLoad(mockApi);
+      await expect(page.locator('.sales-ops-period').getByRole('button', { name: '30 days' })).toHaveAttribute('aria-pressed', 'true');
+      await expectAxeClean(page, { key: { route: 'analytics-sales-ops', state: 'manager-view' }, theme, known: {} });
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'analytics · sales-ops manager view');
+    });
+
+    test(`analytics · distribution board · ${theme} has no WCAG A/AA violation`, async ({ app, mockApi, page }) => {
+      await app.setTheme(theme);
+      registerBoard(mockApi);
+      await app.gotoRoute('/analytics?view=sales-ops');
+      const naturalLoad = markNaturalLoad(mockApi);
+      await page.getByRole('button', { name: 'Distribute approved leads…' }).click();
+      await expect(page.locator('dialog.distribution-board .distribution-board__bar')).toHaveCount(2);
+      await app.settle();
+      await expectAxeClean(page, { key: { route: 'analytics-sales-ops', state: 'distribution-board' }, theme, known: {} });
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'analytics · distribution board');
+    });
+  }
+});
 
 test.describe('named groups in the evidence drawer', () => {
   // ARIA 1.2 prohibits aria-label on an element with no role (a plain div).

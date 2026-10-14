@@ -22,8 +22,10 @@
  *  L. W5c w5-lead-queue-paging: the Lead Queue paged footer            2
  *  M. W5c w5-zcta-watchlist: the Segments map drilled to Illinois'
  *     ZIP areas                                                        2
+ *  O. W5d w5-sales-loop: the Sales ops manager view (30-day period)
+ *     and the Distribution Board's dry-run plan                        4
  *                                                                     --
- *                                                                    122
+ *                                                                    126
  *
  * Baselines are amd64-Linux renders from the pinned Playwright container:
  * this spec runs only with MIP_VRT=1 (playwright.config.ts) and refuses any
@@ -39,6 +41,7 @@ import { enterState, prepareState, type FixtureState } from './fixtureStates';
 import type { HomeSummary, SessionResponse } from '../../../src/types';
 import { RATE_MOVE_HOME_SUMMARY } from './data/homeAnswer';
 import { registerPagedQueue } from './data/leadPages';
+import { registerBoard } from './data/salesLoop';
 import { PRESENTER_SESSION } from './data/shell';
 import { json, type MockApi } from './mockApi';
 import { FIXTURE_ROUTES, FIXTURE_THEMES, type FixtureRoute } from './routes';
@@ -234,6 +237,29 @@ for (const theme of FIXTURE_THEMES) {
       await expectNoSurfaceOverflow(page, { route: 'segment-intelligence', state: 'zcta-drill', theme });
       await capture(page, `segment-intelligence--${theme}--zcta-drill.png`, { element: map, mask: await zctaLegendMask(page) });
       expectNoAuditedReadSince(mockApi, drilled, 'segment-intelligence · zcta drill');
+    });
+
+    // O (W5d w5-sales-loop, critic-10 / wow-power-5): the sales manager
+    // view on a 30-day period, then the Distribution Board's dry-run plan
+    // (audit-free: it writes nothing and names no borrower).
+    test('analytics-sales-ops · manager view', async ({ app, mockApi, page }) => {
+      const { naturalLoad } = await load(app, mockApi, route('analytics-sales-ops'), theme);
+      await page.locator('.sales-ops-period').getByRole('button', { name: '30 days' }).click();
+      await expect(page).toHaveURL(/sales_period=30d/);
+      await app.settle();
+      await check(page, 'analytics-sales-ops', theme, 'manager-view');
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'analytics-sales-ops · manager view');
+    });
+
+    test('analytics-sales-ops · distribution board', async ({ app, mockApi, page }) => {
+      registerBoard(mockApi);
+      const { naturalLoad } = await load(app, mockApi, route('analytics-sales-ops'), theme);
+      await page.getByRole('button', { name: 'Distribute approved leads…' }).click();
+      const dialog = page.locator('dialog.distribution-board');
+      await expect(dialog.locator('.distribution-board__bar')).toHaveCount(2);
+      await app.settle();
+      await capture(page, `analytics-sales-ops--${theme}--distribution-board.png`);
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'analytics-sales-ops · distribution board');
     });
 
     // E: compact density.

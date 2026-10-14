@@ -571,6 +571,9 @@ class _FakeLakebaseClient:
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         self.fetchalls.append((sql, params or {}, limit))
+        sales_loop_rows = self._sales_loop_rows(sql, params or {})
+        if sales_loop_rows is not None:
+            return sales_loop_rows[:limit]
         if "GROUP BY COALESCE(status, 'assigned')" in sql:
             # S6 funnel: distinct borrowers per lifecycle status (active rows).
             by_status: dict[str, set[str]] = {}
@@ -978,13 +981,78 @@ class _FakeLakebaseClient:
             ]
         return []
 
+    def _labelled(self, row: dict[str, Any]) -> dict[str, Any]:
+        team = next((t for t in self.sales_team if t["email"] == row["assigned_to_email"]), {})
+        return {**row, "assigned_to_label": team.get("display_label")}
+
+    def _sales_loop_rows(self, sql: str, params: dict[str, Any]) -> list[dict[str, Any]] | None:
+        """W5d sales loop (declared hunk): release, Board and replay reads."""
+        if "FROM mip_app.lead_assignments" in sql and "FOR UPDATE" in sql:
+            return [
+                {**row, "status": row.get("status") or "assigned"}
+                for row in self.assignments
+                if row["borrower_id"] == params.get("borrower_id") and row.get("released_at") is None
+            ]
+        if "r.assigned_at" in sql:
+            released = next(
+                (r for r in self.assignments if str(r["assignment_id"]) == str(params.get("assignment_id"))),
+                None,
+            )
+            if released is None:
+                return []
+            return [
+                {**row, "status": row.get("status") or "assigned"}
+                for row in reversed(self.assignments)
+                if row["borrower_id"] == params.get("borrower_id")
+                and str(row["assignment_id"]) != str(released["assignment_id"])
+                and row.get("released_at") == released["assigned_at"]
+            ][:1]
+        if "AS open_count" in sql:
+            emails = set(params.get("emails") or [])
+            counts: dict[str, int] = {}
+            for row in self.assignments:
+                if row["assigned_to_email"] in emails and row.get("released_at") is None:
+                    counts[row["assigned_to_email"]] = counts.get(row["assigned_to_email"], 0) + 1
+            return [{"assigned_to_email": email, "open_count": n} for email, n in sorted(counts.items())]
+        if "AS active_borrower_id" in sql:
+            wanted = set(params.get("borrower_ids") or [])
+            return [
+                {"active_borrower_id": borrower_id}
+                for borrower_id in sorted(
+                    {
+                        row["borrower_id"]
+                        for row in self.assignments
+                        if row["borrower_id"] in wanted and row.get("released_at") is None
+                    }
+                )
+            ]
+        if "FROM mip_app.action_audit" in sql and "LEAD_UNASSIGN" in sql:
+            return [
+                dict(row)
+                for row in sorted(self.audit_events, key=lambda r: int(r.get("audit_sequence") or 0))
+                if row.get("event_type") == "LEAD_UNASSIGN"
+                and row.get("request_id") == params.get("request_id")
+            ]
+        if "a.assignment_id::text = ANY" in sql:
+            wanted = {str(value) for value in params.get("assignment_ids") or []}
+            return [
+                self._labelled({**row, "status": row.get("status") or "assigned"})
+                for row in self.assignments
+                if str(row["assignment_id"]) in wanted
+            ]
+        return None
+
     @contextmanager
     def transaction(self) -> Iterator[Any]:
         client = self
+        # PostgreSQL's now() is the TRANSACTION's start: a release and the
+        # insert that replaced it share one timestamp (the restore match).
+        tx_now = datetime.now(UTC)
 
         class _Cursor:
             def __init__(self) -> None:
                 self._last: dict[str, Any] | None = None
+                self._rows: list[dict[str, Any]] = []
 
             def __enter__(self) -> _Cursor:
                 return self
@@ -995,7 +1063,24 @@ class _FakeLakebaseClient:
             def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
                 params = params or {}
                 client.executes.append((sql, params))
-                now = datetime.now(UTC)
+                now = tx_now
+                self._rows = []
+                if "FROM mip_app.lead_assignments" in sql and sql.lstrip().startswith("SELECT"):
+                    rows = client._sales_loop_rows(sql, params)
+                    if rows is not None:
+                        self._rows = rows
+                        self._last = rows[0] if rows else None
+                        return
+                if "SET released_at = now()" in sql and "WHERE assignment_id" in sql:
+                    self._last = None
+                    for row in client.assignments:
+                        if (
+                            str(row["assignment_id"]) == str(params.get("assignment_id"))
+                            and row.get("released_at") is None
+                        ):
+                            row["released_at"] = now
+                            self._last = {**row, "status": row.get("status") or "assigned"}
+                    return
                 if "UPDATE mip_app.lead_assignments" in sql and "SET status" in sql:
                     self._last = None
                     for row in client.assignments:
@@ -1061,7 +1146,9 @@ class _FakeLakebaseClient:
                         "assigned_by": params["assigned_by"],
                         "assigned_at": now,
                         "expires_at": (
-                            now + timedelta(hours=int(params["expires_in_hours"]))
+                            params.get("expires_at")
+                            if "expires_at" in params
+                            else now + timedelta(hours=int(params["expires_in_hours"]))
                             if params.get("expires_in_hours") is not None
                             else None
                         ),
@@ -1214,6 +1301,9 @@ class _FakeLakebaseClient:
 
             def fetchone(self) -> dict[str, Any] | None:
                 return self._last
+
+            def fetchall(self) -> list[dict[str, Any]]:
+                return list(self._rows)
 
         class _Conn:
             def cursor(self) -> _Cursor:

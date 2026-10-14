@@ -7,11 +7,14 @@ from datetime import date, datetime, timedelta
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 
 from backend.schemas.common import validate_public_borrower_id
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.schemas.sales import (
     AssignLeadRequest,
+    AssignmentReleaseRequest,
+    AssignmentReleaseResponse,
     AssignmentResponse,
     BorrowerLifecycleResponse,
     CampaignPerformanceFunnelResponse,
@@ -19,9 +22,12 @@ from backend.schemas.sales import (
     DispositionResponse,
     DistributeLeadsRequest,
     DistributeLeadsResponse,
+    DistributionReleaseRequest,
+    DistributionReleaseResponse,
     LeadAssignment,
     LeadOutcomeRequest,
     LeadOutcomeResponse,
+    RestoreSkippedReason,
     SalesAgingLead,
     SalesConversionResponse,
     SalesOutcomeSummaryResponse,
@@ -39,7 +45,13 @@ from backend.services.repositories import (
     get_borrower_repository,
     get_lead_repository,
 )
+from backend.services.sales_distribution_plan import Candidate, DistributionPlanChanged
 from backend.services.sales_state import SalesStateStore, get_sales_state_store
+from backend.services.sales_state_release import (
+    DistributionNotFound,
+    ReleaseConflict,
+    RestoreGate,
+)
 
 router = APIRouter(tags=["sales"])
 
@@ -68,23 +80,69 @@ def _forbidden(exc: PermissionError | KeyError) -> HTTPException:
     return HTTPException(status_code=403, detail="sales operation is outside the actor scope")
 
 
+def _contactability_refusal(borrower: object) -> str | None:
+    """Why this borrower may not be contacted, or None (the assign 409 copy)."""
+    fields_set = getattr(borrower, "model_fields_set", set())
+    required_contactability = {"marketing_eligible", "consent_status", "suppression_reason"}
+    if not required_contactability.issubset(set(fields_set)):
+        return "lead contactability is not configured"
+    if getattr(borrower, "marketing_eligible", None) is not True:
+        return "lead is not marketing eligible"
+    if getattr(borrower, "consent_status", None) != "opt_in":
+        return "lead does not have opt-in consent"
+    if getattr(borrower, "suppression_reason", None):
+        return "lead is suppressed"
+    return None
+
+
+def _assignability_refusal(borrower: object, *, lifecycle: BorrowerLifecycleResponse) -> str | None:
+    if lifecycle.approval_status != "approved":
+        return "lead must be approved before assignment"
+    return _contactability_refusal(borrower)
+
+
 def _ensure_assignable_borrower(
     borrower: object,
     *,
     lifecycle: BorrowerLifecycleResponse,
 ) -> None:
-    if lifecycle.approval_status != "approved":
-        raise HTTPException(status_code=409, detail="lead must be approved before assignment")
-    fields_set = getattr(borrower, "model_fields_set", set())
-    required_contactability = {"marketing_eligible", "consent_status", "suppression_reason"}
-    if not required_contactability.issubset(set(fields_set)):
-        raise HTTPException(status_code=409, detail="lead contactability is not configured")
-    if getattr(borrower, "marketing_eligible", None) is not True:
-        raise HTTPException(status_code=409, detail="lead is not marketing eligible")
-    if getattr(borrower, "consent_status", None) != "opt_in":
-        raise HTTPException(status_code=409, detail="lead does not have opt-in consent")
-    if getattr(borrower, "suppression_reason", None):
-        raise HTTPException(status_code=409, detail="lead is suppressed")
+    refusal = _assignability_refusal(borrower, lifecycle=lifecycle)
+    if refusal is not None:
+        raise HTTPException(status_code=409, detail=refusal)
+
+
+def _restore_gate(repo: BorrowerRepository, store: SalesStateStore) -> RestoreGate:
+    """May a release hand this lead back to the officer it replaced?"""
+    seen: dict[str, RestoreSkippedReason | None] = {}
+
+    def gate(borrower_id: str) -> RestoreSkippedReason | None:
+        if borrower_id not in seen:
+            lifecycle = BorrowerLifecycleResponse(**store.lifecycle_for(borrower_id))
+            borrower = repo.get(borrower_id) if lifecycle.approval_status == "approved" else None
+            seen[borrower_id] = (
+                "lead_not_approved"
+                if lifecycle.approval_status != "approved"
+                else "lead_not_contactable"
+                if borrower is None or _contactability_refusal(borrower) is not None
+                else None
+            )
+        return seen[borrower_id]
+
+    return gate
+
+
+# Fixed copy per closed 409 code: the client keys its own words on ``reason``.
+_CONFLICT_DETAIL: dict[str, str] = {
+    "assignment_not_active": "This assignment is no longer the borrower's active assignment.",
+    "assignment_started": "The loan officer has already started on this lead.",
+    "assignee_inactive": "The assigned loan officer is no longer an active loan officer.",
+    "request_id_conflict": "request_id already belongs to a different release.",
+    "distribution_plan_changed": "The distribution plan changed since the preview.",
+}
+
+
+def _conflict(reason: str) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": _CONFLICT_DETAIL[reason], "reason": reason})
 
 
 @router.get("/sales/team", response_model=list[SalesTeamMember])
@@ -172,6 +230,145 @@ def lead_assignment(
 
 
 @router.post(
+    "/leads/{borrower_id}/assignment/release",
+    response_model=AssignmentReleaseResponse,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
+def release_lead_assignment(
+    borrower_id: str,
+    payload: AssignmentReleaseRequest,
+    request: Request,
+    _: Annotated[None, Depends(require_json_content_type)],
+    repo: BorrowerRepoDep,
+    store: SalesStateDep,
+) -> AssignmentReleaseResponse | JSONResponse:
+    """Undo one assignment: a compensating, audited release (states-07 item 1).
+
+    Releases the active row (never deletes it) and, when that row replaced
+    another officer's, hands the lead back to them while they are still an
+    active loan officer in scope and the lead is still approved and
+    contactable. Writes one LEAD_UNASSIGN; a replay returns the same body.
+    """
+    borrower_id = _borrower_id(borrower_id)
+    borrower = repo.get(borrower_id)
+    if borrower is None:
+        raise HTTPException(status_code=404, detail=f"Borrower {borrower_id} not found")
+    actor = resolve_actor(request)
+    try:
+        ensure_sales_workflow_request_id_columns(store._client)
+        return store.release_assignment(
+            borrower_id=borrower_id,
+            assignment_id=payload.assignment_id,
+            actor=actor,
+            request_id=payload.request_id,
+            restore_gate=_restore_gate(repo, store),
+            subject_clip=borrower.clip,
+        )
+    except ReleaseConflict as exc:
+        return _conflict(exc.reason)
+    except (KeyError, PermissionError) as exc:
+        raise _forbidden(exc) from exc
+    except LakebaseError as exc:
+        raise _lakebase_503(exc) from exc
+
+
+@router.post(
+    "/sales/distribute/release",
+    response_model=DistributionReleaseResponse,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
+def release_distribution(
+    payload: DistributionReleaseRequest,
+    request: Request,
+    _: Annotated[None, Depends(require_json_content_type)],
+    repo: BorrowerRepoDep,
+    store: SalesStateDep,
+) -> DistributionReleaseResponse | JSONResponse:
+    """Undo one distribution run: release its own still-unstarted rows."""
+    actor = resolve_actor(request)
+    try:
+        ensure_sales_workflow_request_id_columns(store._client)
+        return store.release_distribution(
+            distribution_request_id=payload.distribution_request_id,
+            actor=actor,
+            request_id=payload.request_id,
+            restore_gate=_restore_gate(repo, store),
+        )
+    except DistributionNotFound as exc:
+        raise HTTPException(status_code=404, detail="distribution not found") from exc
+    except ReleaseConflict as exc:
+        return _conflict(exc.reason)
+    except (KeyError, PermissionError) as exc:
+        raise _forbidden(exc) from exc
+    except LakebaseError as exc:
+        raise _lakebase_503(exc) from exc
+
+
+def _score_balanced_distribution(
+    payload: DistributeLeadsRequest,
+    borrower_ids: list[str],
+    *,
+    actor: str,
+    borrower_repo: BorrowerRepository,
+    store: SalesStateStore,
+) -> DistributeLeadsResponse | JSONResponse:
+    """The Distribution Board: greedy fill, dry run or fingerprint-checked commit.
+
+    A borrower that is not assignable is skipped and counted, not a 409 for
+    the whole run (the manual and round-robin paths stay strict).
+    """
+    try:
+        ensure_sales_workflow_request_id_columns(store._client)
+        store.require_manager_actor(actor, use_cache=False)
+        candidates: list[Candidate] = []
+        skipped = 0
+        for borrower_id in borrower_ids[: payload.limit]:
+            borrower = borrower_repo.get(borrower_id)
+            lifecycle = BorrowerLifecycleResponse(**store.lifecycle_for(borrower_id)) if borrower else None
+            if borrower is None or lifecycle is None or _assignability_refusal(borrower, lifecycle=lifecycle):
+                skipped += 1
+                continue
+            candidates.append(Candidate(borrower_id, int(borrower.opportunity_score), borrower.state))
+        plan_keys = {
+            "candidates": candidates,
+            "lo_emails": payload.lo_emails,
+            "expires_in_hours": payload.expires_in_hours,
+            "skipped_not_assignable": skipped,
+        }
+        if payload.dry_run:
+            preview = store.preview_distribution(actor=actor, **plan_keys)
+            return DistributeLeadsResponse(
+                assigned_count=0,
+                strategy="score_balanced",
+                assignments=[],
+                per_lo_counts={},
+                preview=preview,
+            )
+        assignments, audit_event_id, preview = store.distribute_score_balanced(
+            assigned_by=actor,
+            request_id=payload.request_id,
+            expected_plan_fingerprint=payload.expected_plan_fingerprint,
+            **plan_keys,
+        )
+        return DistributeLeadsResponse(
+            assigned_count=len(assignments),
+            strategy="score_balanced",
+            assignments=assignments,
+            per_lo_counts=dict(Counter(a.assigned_to_email for a in assignments)),
+            audit_event_id=audit_event_id,
+            preview=preview,
+        )
+    except DistributionPlanChanged:
+        return _conflict("distribution_plan_changed")
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail="lo_emails must all be active loan officers") from exc
+    except PermissionError as exc:
+        raise _forbidden(exc) from exc
+    except LakebaseError as exc:
+        raise _lakebase_503(exc) from exc
+
+
+@router.post(
     "/sales/distribute",
     response_model=DistributeLeadsResponse,
     responses=JSON_CONTENT_TYPE_RESPONSE,
@@ -183,7 +380,7 @@ def distribute_leads(
     repo: LeadRepoDep,
     borrower_repo: BorrowerRepoDep,
     store: SalesStateDep,
-) -> DistributeLeadsResponse:
+) -> DistributeLeadsResponse | JSONResponse:
     actor = resolve_actor(request)
     borrower_ids = list(payload.borrower_ids)
     if not borrower_ids:
@@ -196,6 +393,10 @@ def distribute_leads(
             portfolio_criteria=PortfolioCriteria(marketing_eligibility="Eligible only"),
         )
         borrower_ids = [lead.borrower_id for lead in leads]
+    if payload.strategy == "score_balanced":
+        return _score_balanced_distribution(
+            payload, borrower_ids, actor=actor, borrower_repo=borrower_repo, store=store
+        )
     try:
         ensure_sales_workflow_request_id_columns(store._client)
         store.require_manager_actor(actor, use_cache=False)

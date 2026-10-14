@@ -1595,7 +1595,9 @@ def test_sales_assignment_request_id_replay_is_strict() -> None:
             "request_id": request_id,
         },
     )
-    assert changed_strategy.status_code == 403
+    # wow-power-5 step 2: a single assign never records a balancing it did not
+    # run, so 'score_balanced' is refused by the schema before any replay check.
+    assert changed_strategy.status_code == 422
 
     changed_expiry = client.post(
         f"/api/leads/{borrower_id}/assign",

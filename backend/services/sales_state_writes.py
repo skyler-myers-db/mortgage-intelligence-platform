@@ -11,12 +11,22 @@ from backend.schemas.sales import (
     AssignmentStrategy,
     CallDisposition,
     CallDispositionOutcome,
+    DistributionOfficerLoad,
+    DistributionPreview,
     LeadAssignment,
     LeadOutcome,
     LeadOutcomeSourceSystem,
     LeadOutcomeType,
+    SalesTeamMember,
 )
 from backend.services.lakebase import LakebaseError
+from backend.services.sales_distribution_plan import (
+    Candidate,
+    DistributionPlan,
+    DistributionPlanChanged,
+    OfficerSlot,
+    plan_score_balanced,
+)
 from backend.services.sales_state_core import _SalesStateCore
 from backend.services.sales_state_mappers import (
     _assignment_duration_matches,
@@ -26,6 +36,26 @@ from backend.services.sales_state_mappers import (
     _outcome_from_row,
     clear_sales_state_cache,
 )
+
+# The greedy fill only places borrowers with no active assignment, so it never
+# releases a row first (unlike assign / round-robin, which replace). A
+# concurrent assign that lands first trips idx_lead_assignments_active_borrower.
+_SCORE_BALANCED_INSERT = """
+INSERT INTO mip_app.lead_assignments (
+    borrower_id, assigned_to_email, assigned_by,
+    expires_at, strategy, request_id, assignment_scope
+)
+VALUES (
+    %(borrower_id)s, %(assigned_to_email)s, %(assigned_by)s,
+    CASE
+        WHEN %(expires_in_hours)s IS NULL THEN NULL
+        ELSE now() + (%(expires_in_hours)s::int * interval '1 hour')
+    END,
+    %(strategy)s, %(request_id)s, %(assignment_scope)s
+)
+RETURNING assignment_id, borrower_id, assigned_to_email,
+          assigned_by, assigned_at, expires_at, released_at, strategy
+"""
 
 
 class _SalesStateWrites(_SalesStateCore):
@@ -212,17 +242,15 @@ class _SalesStateWrites(_SalesStateCore):
             if existing := _matches_existing(existing_rows):
                 return existing, ""
             raise PermissionError("request_id already belongs to a different distribution")
-        # Allocation is plain round-robin in REQUEST order for every strategy:
-        # borrower_ids[i] goes to lo_emails[i % len(lo_emails)], exactly as
-        # expected_by_borrower above. Nothing score-orders borrower_ids first
-        # (backend/api/sales.py passes them straight through), and the
-        # roster's capacity_per_day and region are not read here. The literal
-        # 'score_balanced' stays in AssignmentStrategy only so historical
-        # rows and their audit payloads still validate; the Lead Queue sends
-        # 'manual' (one loan officer) or 'round_robin' (two or more), so the
-        # strategy an audit row records is the allocation that ran (audit
-        # wow-power-5 step 1). A score- or capacity-aware fill is future
-        # work (step 2), not something this store does.
+        # Allocation is plain round-robin in REQUEST order for 'manual' and
+        # 'round_robin': borrower_ids[i] goes to lo_emails[i % len(lo_emails)],
+        # exactly as expected_by_borrower above. Nothing score-orders
+        # borrower_ids first and capacity/region are not read here; the Lead
+        # Queue sends 'manual' (one loan officer) or 'round_robin' (two or
+        # more), so the strategy an audit row records is the allocation that
+        # ran (audit wow-power-5 step 1). 'score_balanced' never reaches this
+        # method: the route sends it to distribute_score_balanced below, the
+        # greedy capacity/region fill (step 2), the only path that records it.
         with self._client.transaction() as conn, conn.cursor() as cur:
             if request_id:
                 cur.execute(
@@ -307,6 +335,170 @@ class _SalesStateWrites(_SalesStateCore):
             )
         clear_sales_state_cache()
         return assignments, audit_event_id
+
+    def _score_balanced_plan(
+        self,
+        assignees: list[SalesTeamMember],
+        candidates: list[Candidate],
+        *,
+        expires_in_hours: int | None,
+        skipped_not_assignable: int,
+        cur: Any = None,
+    ) -> tuple[DistributionPlan, DistributionPreview]:
+        open_counts = self.open_assignment_counts([a.email for a in assignees], cur=cur)
+        active = self.active_borrower_ids([c.borrower_id for c in candidates], cur=cur)
+        pool = [c for c in candidates if c.borrower_id not in active]
+        slots = [
+            OfficerSlot(a.email, a.display_label, a.region, a.capacity_per_day, open_counts.get(a.email, 0))
+            for a in assignees
+        ]
+        plan = plan_score_balanced(pool, slots, expires_in_hours=expires_in_hours)
+        preview = DistributionPreview(
+            plan_fingerprint=plan.fingerprint,
+            pool_count=len(pool),
+            placed_count=len(plan.placements),
+            placed_score_sum=plan.placed_score_sum,
+            unplaced_no_capacity=plan.unplaced_no_capacity,
+            skipped_not_assignable=skipped_not_assignable,
+            skipped_already_assigned=len(candidates) - len(pool),
+            officers=[
+                DistributionOfficerLoad(
+                    email=load.slot.email,
+                    display_label=load.slot.display_label,
+                    region=load.slot.region,
+                    capacity_per_day=load.slot.capacity_per_day,
+                    open_count=load.slot.open_count,
+                    added_count=load.added_count,
+                    added_score_sum=load.added_score_sum,
+                    in_region_count=load.in_region_count,
+                )
+                for load in plan.officers
+            ],
+        )
+        return plan, preview
+
+    def preview_distribution(
+        self,
+        *,
+        candidates: list[Candidate],
+        lo_emails: list[str],
+        actor: str,
+        expires_in_hours: int | None,
+        skipped_not_assignable: int,
+    ) -> DistributionPreview:
+        """The Board's dry run: plans on live counts and writes NOTHING."""
+        self.require_manager_actor(actor, use_cache=False)
+        assignees = [
+            self.require_assignee_in_scope(actor=actor, assigned_to_email=email, use_cache=False)
+            for email in lo_emails
+        ]
+        _, preview = self._score_balanced_plan(
+            assignees,
+            candidates,
+            expires_in_hours=expires_in_hours,
+            skipped_not_assignable=skipped_not_assignable,
+        )
+        return preview
+
+    def distribute_score_balanced(
+        self,
+        *,
+        candidates: list[Candidate],
+        lo_emails: list[str],
+        assigned_by: str,
+        expires_in_hours: int | None,
+        request_id: str | None,
+        expected_plan_fingerprint: str | None,
+        skipped_not_assignable: int,
+    ) -> tuple[list[LeadAssignment], str, DistributionPreview | None]:
+        """Commit the greedy fill; a replay returns its rows and never re-plans."""
+        assignees = [
+            self.require_assignee_in_scope(actor=assigned_by, assigned_to_email=email, use_cache=False)
+            for email in lo_emails
+        ]
+        by_email = {a.email: a for a in assignees}
+
+        def _replayed(rows: list[dict[str, Any]]) -> list[LeadAssignment] | None:
+            out: list[LeadAssignment] = []
+            for row in rows:
+                assignment = _assignment_from_row(row)
+                if (
+                    assignment is None
+                    or str(row.get("assignment_scope") or "single") != "distribution"
+                    or assignment.assigned_by != assigned_by.lower()
+                    or assignment.strategy != "score_balanced"
+                    or assignment.assigned_to_email not in by_email
+                    or not _assignment_duration_matches(assignment, expires_in_hours)
+                ):
+                    return None
+                out.append(assignment)
+            return out
+
+        existing_rows = self.assignment_rows_for_request(request_id)
+        if existing_rows:
+            if (replayed := _replayed(existing_rows)) is not None:
+                return replayed, "", None
+            raise PermissionError("request_id already belongs to a different distribution")
+        assignments: list[LeadAssignment] = []
+        with self._client.transaction() as conn, conn.cursor() as cur:
+            if request_id:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%(lock_key)s))",
+                    {"lock_key": f"lead_assignment:{request_id}"},
+                )
+                existing_rows = self.assignment_rows_for_request(request_id)
+                if existing_rows:
+                    if (replayed := _replayed(existing_rows)) is not None:
+                        return replayed, "", None
+                    raise PermissionError("request_id already belongs to a different distribution")
+            plan, preview = self._score_balanced_plan(
+                assignees,
+                candidates,
+                expires_in_hours=expires_in_hours,
+                skipped_not_assignable=skipped_not_assignable,
+                cur=cur,
+            )
+            if expected_plan_fingerprint is not None and plan.fingerprint != expected_plan_fingerprint:
+                raise DistributionPlanChanged(plan.fingerprint)
+            if not plan.placements:
+                return [], "", preview
+            for borrower_id, email in plan.placements:
+                cur.execute(
+                    _SCORE_BALANCED_INSERT,
+                    {
+                        "borrower_id": borrower_id,
+                        "assigned_to_email": email,
+                        "assigned_by": assigned_by.lower(),
+                        "expires_in_hours": expires_in_hours,
+                        "strategy": "score_balanced",
+                        "request_id": request_id,
+                        "assignment_scope": "distribution",
+                    },
+                )
+                assignment = _assignment_from_row(
+                    {**dict(cur.fetchone() or {}), "assigned_to_label": by_email[email].display_label}
+                )
+                if assignment is None:
+                    raise LakebaseError("assignment insert returned no row")
+                assignments.append(assignment)
+            audit_event_id = self._insert_audit_event(
+                cur,
+                actor=assigned_by,
+                action="lead.distribute",
+                entity_type="lead_queue",
+                entity_id="_sales_distribution",
+                payload_json={
+                    "borrower_ids": [a.borrower_id for a in assignments],
+                    "assigned_count": len(assignments),
+                    "lo_emails": [a.email for a in assignees],
+                    "per_lo_counts": dict(Counter(a.assigned_to_email for a in assignments)),
+                    "strategy": "score_balanced",
+                },
+                event_type="LEAD_DISTRIBUTE",
+                request_id=request_id,
+            )
+        clear_sales_state_cache()
+        return assignments, audit_event_id, preview
 
     def log_disposition(
         self,

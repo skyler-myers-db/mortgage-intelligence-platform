@@ -50,6 +50,7 @@ export const AUDIT_EVENT_TYPE_LABELS: Readonly<Record<string, string>> = {
   LEAD_EXPORT: 'Lead list exported',
   LEAD_OUTCOME: 'Lead outcome recorded',
   LEAD_OUTCOME_RECORDED: 'Loan officer outcome recorded',
+  LEAD_UNASSIGN: 'Lead assignment released',
   OUTREACH_APPROVE: 'Outreach approved (legacy code)',
   OUTREACH_HOLD: 'Outreach held',
   OUTREACH_REJECT: 'Outreach rejected',

@@ -348,6 +348,12 @@ export interface ResponseSchemas {
     feedback_id: string;
     outcome: "success" | "no_response" | "declined";
   };
+  AssignmentReleaseResponse: {
+    audit_event_id: string;
+    released: ResponseSchemas['LeadAssignment'];
+    restore_skipped_reason: "previous_assignee_inactive" | "previous_assignee_out_of_scope" | "lead_not_approved" | "lead_not_contactable" | null;
+    restored: ResponseSchemas['LeadAssignment'] | null;
+  };
   AssignmentResponse: {
     assignment: ResponseSchemas['LeadAssignment'];
     audit_event_id: string | null;
@@ -809,7 +815,41 @@ export interface ResponseSchemas {
     assignments: ResponseSchemas['LeadAssignment'][];
     audit_event_id: string | null;
     per_lo_counts: { [key: string]: number };
+    preview: ResponseSchemas['DistributionPreview'] | null;
     strategy: "manual" | "round_robin" | "score_balanced";
+  };
+  /** One officer's share of a planned fill: staff aggregates only. */
+  DistributionOfficerLoad: {
+    added_count: number;
+    added_score_sum: number;
+    capacity_per_day: number;
+    display_label: string;
+    email: string;
+    in_region_count: number;
+    open_count: number;
+    region: string | null;
+  };
+  /** What the score-balanced fill placed: counts and sums, never a borrower id. */
+  DistributionPreview: {
+    officers: ResponseSchemas['DistributionOfficerLoad'][];
+    placed_count: number;
+    placed_score_sum: number;
+    plan_fingerprint: string;
+    pool_count: number;
+    skipped_already_assigned: number;
+    skipped_not_assignable: number;
+    strategy: "score_balanced";
+    unplaced_no_capacity: number;
+  };
+  DistributionReleaseResponse: {
+    audit_event_ids: string[];
+    released: ResponseSchemas['LeadAssignment'][];
+    released_count: number;
+    restore_skipped_count: number;
+    restored: ResponseSchemas['LeadAssignment'][];
+    restored_count: number;
+    skipped_not_active_count: number;
+    skipped_started_count: number;
   };
   EconomicsAnalyticsResponse: {
     equity_spread: ResponseSchemas['EquitySpreadOverview'];
@@ -2635,7 +2675,7 @@ export interface RequestSchemas {
     assigned_to_email: string;
     expires_in_hours?: number | null;
     request_id?: string | null;
-    strategy?: "manual" | "round_robin" | "score_balanced";
+    strategy?: "manual" | "round_robin";
   };
   AssignLoanOfficerRequest: {
     borrower_id: string;
@@ -2645,6 +2685,11 @@ export interface RequestSchemas {
   AssignmentOutcomeRequest: {
     outcome: "success" | "no_response" | "declined";
     request_id?: string | null;
+  };
+  /** Undo one assignment (audit states-07 item 1): a compensating write. */
+  AssignmentReleaseRequest: {
+    assignment_id: string;
+    request_id: string;
   };
   AssignmentStatusUpdateRequest: {
     request_id?: string | null;
@@ -2705,8 +2750,6 @@ export interface RequestSchemas {
   DispositionRequest: {
     callback_at?: string | null;
     lo_email: string;
-    /** Retired 2026-10: must be absent, null or blank; free-text disposition notes are no longer accepted */
-    notes?: string | null;
     occurred_at?: string | null;
     outcome: "called_no_answer" | "called_left_voicemail" | "connected" | "callback_scheduled" | "application_started" | "not_interested" | "not_now" | "dead";
     request_id?: string | null;
@@ -2714,12 +2757,19 @@ export interface RequestSchemas {
   DistributeLeadsRequest: {
     approval_status?: "approved" | "pending" | "rejected" | "hold" | "any";
     borrower_ids?: string[];
+    dry_run?: boolean;
+    expected_plan_fingerprint?: string | null;
     expires_in_hours?: number | null;
     limit?: number;
     lo_emails: string[];
     outreach_status?: "none" | "queued" | "actioned" | "sent" | "bounced" | "replied" | "any";
     request_id?: string | null;
     strategy?: "manual" | "round_robin" | "score_balanced";
+  };
+  /** Undo one distribution run: release that run's own rows by the same actor. */
+  DistributionReleaseRequest: {
+    distribution_request_id: string;
+    request_id: string;
   };
   /**
    * Run the plan the user reviewed, exactly as composed and signed.
@@ -4501,6 +4551,15 @@ export interface ApiOperations {
     body: RequestSchemas['AssignLeadRequest'];
     ok: ResponseSchemas['AssignmentResponse'];
   };
+  "POST /api/v1/leads/{borrower_id}/assignment/release": {
+    pathParams: {
+      borrower_id: string;
+    };
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['AssignmentReleaseRequest'];
+    ok: ResponseSchemas['AssignmentReleaseResponse'];
+  };
   "POST /api/v1/leads/{borrower_id}/disposition": {
     pathParams: {
       borrower_id: string;
@@ -4622,6 +4681,13 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: RequestSchemas['DistributeLeadsRequest'];
     ok: ResponseSchemas['DistributeLeadsResponse'];
+  };
+  "POST /api/v1/sales/distribute/release": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['DistributionReleaseRequest'];
+    ok: ResponseSchemas['DistributionReleaseResponse'];
   };
   "POST /api/v1/telemetry/rum": {
     pathParams: Record<string, never>;

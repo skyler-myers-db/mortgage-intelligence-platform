@@ -55,6 +55,7 @@ from backend.services.audit_metadata_policy import (
     _OUTREACH_DRAFT_ATTRIBUTIONS,
     _OUTREACH_GENERATION_MODES,
     _PUBLIC_COMPETITOR_LABEL_PATTERN,
+    _RESTORE_SKIPPED_REASONS,
     _RESULT_FILTER_NUMERIC_BOUNDS,
     _SALES_DISPOSITION_OUTCOMES,
     _SALES_STRATEGIES,
@@ -415,6 +416,9 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"strategy"}):
         if value is not None and str(value) not in _SALES_STRATEGIES:
             raise AuditMetadataValueViolation(field, "must be a governed sales assignment strategy")
+    for field, value in _metadata_values_for(metadata, {"restore_skipped_reason"}):
+        if value is not None and str(value) not in _RESTORE_SKIPPED_REASONS:
+            raise AuditMetadataValueViolation(field, "must be a governed restore skip reason")
     for field, value in _metadata_values_for(metadata, {"outcome"}):
         if value is not None and str(value) not in _SALES_DISPOSITION_OUTCOMES:
             raise AuditMetadataValueViolation(field, "must be a governed call disposition outcome")

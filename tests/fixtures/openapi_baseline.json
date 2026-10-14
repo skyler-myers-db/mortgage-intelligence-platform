@@ -2253,8 +2253,7 @@
             "default": "manual",
             "enum": [
               "manual",
-              "round_robin",
-              "score_balanced"
+              "round_robin"
             ],
             "title": "Strategy",
             "type": "string"
@@ -2386,6 +2385,71 @@
           "feedback_id"
         ],
         "title": "AssignmentOutcomeResponse",
+        "type": "object"
+      },
+      "AssignmentReleaseRequest": {
+        "additionalProperties": false,
+        "description": "Undo one assignment (audit states-07 item 1): a compensating write.",
+        "properties": {
+          "assignment_id": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "title": "Assignment Id",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "assignment_id",
+          "request_id"
+        ],
+        "title": "AssignmentReleaseRequest",
+        "type": "object"
+      },
+      "AssignmentReleaseResponse": {
+        "properties": {
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "released": {
+            "$ref": "#/components/schemas/LeadAssignment"
+          },
+          "restore_skipped_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "previous_assignee_inactive",
+                  "previous_assignee_out_of_scope",
+                  "lead_not_approved",
+                  "lead_not_contactable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restore Skipped Reason"
+          },
+          "restored": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LeadAssignment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "released",
+          "audit_event_id"
+        ],
+        "title": "AssignmentReleaseResponse",
         "type": "object"
       },
       "AssignmentResponse": {
@@ -5716,19 +5780,6 @@
             "title": "Lo Email",
             "type": "string"
           },
-          "notes": {
-            "anyOf": [
-              {
-                "maxLength": 500,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Retired 2026-10: must be absent, null or blank; free-text disposition notes are no longer accepted",
-            "title": "Notes"
-          },
           "occurred_at": {
             "anyOf": [
               {
@@ -5819,6 +5870,23 @@
             "maxItems": 500,
             "title": "Borrower Ids",
             "type": "array"
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "expected_plan_fingerprint": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Plan Fingerprint"
           },
           "expires_in_hours": {
             "anyOf": [
@@ -5923,6 +5991,16 @@
             "title": "Per Lo Counts",
             "type": "object"
           },
+          "preview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DistributionPreview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "strategy": {
             "enum": [
               "manual",
@@ -5940,6 +6018,196 @@
           "per_lo_counts"
         ],
         "title": "DistributeLeadsResponse",
+        "type": "object"
+      },
+      "DistributionOfficerLoad": {
+        "description": "One officer's share of a planned fill: staff aggregates only.",
+        "properties": {
+          "added_count": {
+            "title": "Added Count",
+            "type": "integer"
+          },
+          "added_score_sum": {
+            "title": "Added Score Sum",
+            "type": "integer"
+          },
+          "capacity_per_day": {
+            "title": "Capacity Per Day",
+            "type": "integer"
+          },
+          "display_label": {
+            "title": "Display Label",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "in_region_count": {
+            "title": "In Region Count",
+            "type": "integer"
+          },
+          "open_count": {
+            "title": "Open Count",
+            "type": "integer"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          }
+        },
+        "required": [
+          "email",
+          "display_label",
+          "capacity_per_day",
+          "open_count",
+          "added_count",
+          "added_score_sum",
+          "in_region_count"
+        ],
+        "title": "DistributionOfficerLoad",
+        "type": "object"
+      },
+      "DistributionPreview": {
+        "description": "What the score-balanced fill placed: counts and sums, never a borrower id.",
+        "properties": {
+          "officers": {
+            "items": {
+              "$ref": "#/components/schemas/DistributionOfficerLoad"
+            },
+            "title": "Officers",
+            "type": "array"
+          },
+          "placed_count": {
+            "title": "Placed Count",
+            "type": "integer"
+          },
+          "placed_score_sum": {
+            "title": "Placed Score Sum",
+            "type": "integer"
+          },
+          "plan_fingerprint": {
+            "title": "Plan Fingerprint",
+            "type": "string"
+          },
+          "pool_count": {
+            "title": "Pool Count",
+            "type": "integer"
+          },
+          "skipped_already_assigned": {
+            "title": "Skipped Already Assigned",
+            "type": "integer"
+          },
+          "skipped_not_assignable": {
+            "title": "Skipped Not Assignable",
+            "type": "integer"
+          },
+          "strategy": {
+            "const": "score_balanced",
+            "default": "score_balanced",
+            "title": "Strategy",
+            "type": "string"
+          },
+          "unplaced_no_capacity": {
+            "title": "Unplaced No Capacity",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "plan_fingerprint",
+          "pool_count",
+          "placed_count",
+          "placed_score_sum",
+          "unplaced_no_capacity",
+          "skipped_not_assignable",
+          "skipped_already_assigned",
+          "officers"
+        ],
+        "title": "DistributionPreview",
+        "type": "object"
+      },
+      "DistributionReleaseRequest": {
+        "additionalProperties": false,
+        "description": "Undo one distribution run: release that run's own rows by the same actor.",
+        "properties": {
+          "distribution_request_id": {
+            "title": "Distribution Request Id",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "distribution_request_id",
+          "request_id"
+        ],
+        "title": "DistributionReleaseRequest",
+        "type": "object"
+      },
+      "DistributionReleaseResponse": {
+        "properties": {
+          "audit_event_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Audit Event Ids",
+            "type": "array"
+          },
+          "released": {
+            "items": {
+              "$ref": "#/components/schemas/LeadAssignment"
+            },
+            "title": "Released",
+            "type": "array"
+          },
+          "released_count": {
+            "title": "Released Count",
+            "type": "integer"
+          },
+          "restore_skipped_count": {
+            "title": "Restore Skipped Count",
+            "type": "integer"
+          },
+          "restored": {
+            "items": {
+              "$ref": "#/components/schemas/LeadAssignment"
+            },
+            "title": "Restored",
+            "type": "array"
+          },
+          "restored_count": {
+            "title": "Restored Count",
+            "type": "integer"
+          },
+          "skipped_not_active_count": {
+            "title": "Skipped Not Active Count",
+            "type": "integer"
+          },
+          "skipped_started_count": {
+            "title": "Skipped Started Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "released_count",
+          "restored_count",
+          "skipped_started_count",
+          "skipped_not_active_count",
+          "restore_skipped_count",
+          "released",
+          "restored",
+          "audit_event_ids"
+        ],
+        "title": "DistributionReleaseResponse",
         "type": "object"
       },
       "EconomicsAnalyticsResponse": {
@@ -27040,6 +27308,70 @@
         ]
       }
     },
+    "/api/leads/{borrower_id}/assignment/release": {
+      "post": {
+        "deprecated": true,
+        "description": "Undo one assignment: a compensating, audited release (states-07 item 1).\n\nReleases the active row (never deletes it) and, when that row replaced\nanother officer's, hands the lead back to them while they are still an\nactive loan officer in scope and the lead is still approved and\ncontactable. Writes one LEAD_UNASSIGN; a replay returns the same body.",
+        "operationId": "post_api_leads_borrower_id_assignment_release_release_lead_assignment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "borrower_id",
+            "required": true,
+            "schema": {
+              "title": "Borrower Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentReleaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Lead Assignment",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
     "/api/leads/{borrower_id}/disposition": {
       "post": {
         "deprecated": true,
@@ -28565,6 +28897,59 @@
           }
         },
         "summary": "Distribute Leads",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/sales/distribute/release": {
+      "post": {
+        "deprecated": true,
+        "description": "Undo one distribution run: release its own still-unstarted rows.",
+        "operationId": "post_api_sales_distribute_release_release_distribution",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DistributionReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DistributionReleaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Distribution",
         "tags": [
           "sales"
         ]
@@ -37757,6 +38142,69 @@
         ]
       }
     },
+    "/api/v1/leads/{borrower_id}/assignment/release": {
+      "post": {
+        "description": "Undo one assignment: a compensating, audited release (states-07 item 1).\n\nReleases the active row (never deletes it) and, when that row replaced\nanother officer's, hands the lead back to them while they are still an\nactive loan officer in scope and the lead is still approved and\ncontactable. Writes one LEAD_UNASSIGN; a replay returns the same body.",
+        "operationId": "post_api_v1_leads_borrower_id_assignment_release_release_lead_assignment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "borrower_id",
+            "required": true,
+            "schema": {
+              "title": "Borrower Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentReleaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Lead Assignment",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
     "/api/v1/leads/{borrower_id}/disposition": {
       "post": {
         "operationId": "post_api_v1_leads_borrower_id_disposition_log_disposition",
@@ -39255,6 +39703,58 @@
           }
         },
         "summary": "Distribute Leads",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/sales/distribute/release": {
+      "post": {
+        "description": "Undo one distribution run: release its own still-unstarted rows.",
+        "operationId": "post_api_v1_sales_distribute_release_release_distribution",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DistributionReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DistributionReleaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Distribution",
         "tags": [
           "sales"
         ]

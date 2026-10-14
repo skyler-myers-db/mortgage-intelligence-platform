@@ -521,6 +521,52 @@ class _SalesStateCore:
         _cache_set(cache_key, result)
         return {k: cast(CallDisposition, v).model_copy(deep=True) for k, v in result.items()}
 
+    def _rows(
+        self, sql: str, params: dict[str, Any], *, cur: Any = None, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        """A read on the caller's transaction cursor when given, else the pool."""
+        if cur is None:
+            return self._client.fetchall(sql, params, limit=limit)
+        cur.execute(sql, params)
+        return [dict(row) for row in cur.fetchall()]
+
+    def open_assignment_counts(self, emails: list[str], *, cur: Any = None) -> dict[str, int]:
+        """Each officer's open book: active (unreleased) assignment rows."""
+        if not emails:
+            return {}
+        rows = self._rows(
+            """
+            SELECT assigned_to_email, COUNT(*) AS open_count
+            FROM mip_app.lead_assignments
+            WHERE assigned_to_email = ANY(%(emails)s)
+              AND released_at IS NULL
+            GROUP BY assigned_to_email
+            """,
+            {"emails": sorted({email.lower() for email in emails})},
+            cur=cur,
+        )
+        counts = {email.lower(): 0 for email in emails}
+        for row in rows:
+            counts[str(row["assigned_to_email"]).lower()] = int(row.get("open_count") or 0)
+        return counts
+
+    def active_borrower_ids(self, borrower_ids: list[str], *, cur: Any = None) -> set[str]:
+        """The borrowers among ``borrower_ids`` that hold an active assignment."""
+        if not borrower_ids:
+            return set()
+        rows = self._rows(
+            """
+            SELECT DISTINCT borrower_id AS active_borrower_id
+            FROM mip_app.lead_assignments
+            WHERE borrower_id = ANY(%(borrower_ids)s)
+              AND released_at IS NULL
+            """,
+            {"borrower_ids": sorted(set(borrower_ids))},
+            cur=cur,
+            limit=max(len(borrower_ids), 1),
+        )
+        return {str(row["active_borrower_id"]) for row in rows}
+
     def borrower_ids_for_assignee(self, assigned_to_email: str | None) -> list[str] | None:
         if assigned_to_email is None:
             return None
