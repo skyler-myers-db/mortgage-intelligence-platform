@@ -108,7 +108,7 @@ export function spreadSummary(model: HistogramModel, thresholds: Pick<AnalyticsT
   const t = thresholds.min_spread_bps;
   if (t === null) return `${base} ${thresholdNotice(thresholds)}`;
   if (t % SPREAD_BUCKET_BPS !== 0 || model.past === null) return base;
-  return `${base} ${formatCount(model.past)} (${share(model.past, model.total)}) sit at or past the ${formatCount(t)} bps refi screen.`;
+  return `${base} ${formatCount(model.past)} (${share(model.past, model.total)}) sit at or past the ${formatCount(t)} bps In the Money spread threshold.`;
 }
 
 /** A full calendar date, "May 2, 2026": the summary and the table name the year the short axis labels drop. */

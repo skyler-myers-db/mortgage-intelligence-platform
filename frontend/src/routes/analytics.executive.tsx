@@ -40,6 +40,11 @@ import { RateWindowSection } from './analytics.rate-window';
  * is by design, and the two tabs are never reconciled to match. Publishing the
  * sources and the mirror's as-of boundary is what lets someone comparing the
  * tabs see why a number differs instead of guessing which one is broken.
+ *
+ * flow-10 (copy for lenders, not auditors): the visible line says what a
+ * lender needs, in their words; the exact sources, the gold mirror and its
+ * sync time sit in a native disclosure, "How these counts are sourced"
+ * (deviation:analytics-provenance-disclosure).
  */
 export function ExecutiveProvenanceNote({
   provenance,
@@ -49,16 +54,24 @@ export function ExecutiveProvenanceNote({
   leadParams: LenderFilterParams;
 }) {
   return (
-    <p className="analytics-panel-note">
-      Stages 1&ndash;4 from <span className="mono">{provenance.population_source}</span>
-      {provenance.snapshot_date ? <> (snapshot <Timestamp value={provenance.snapshot_date} format="date" />)</> : null}. Approved and
-      Actioned from <span className="mono">{provenance.workflow_source}</span>, the gold mirror of
-      Lakebase
-      {provenance.lifecycle_synced_at ? <>, synced {formatTimestamp(provenance.lifecycle_synced_at)}</> : null}.
-      The <Link to={analyticsHref({ view: 'approval-funnel', ...leadParams })}>Approval funnel</Link> tab
-      reads the Lakebase approval tables directly and is exact, so a higher count there means this
-      mirror is one sync behind &mdash; by design, not a discrepancy.
-    </p>
+    <>
+      <p className="analytics-panel-note" data-testid="executive-provenance">
+        Counts are from the latest data refresh
+        {provenance.snapshot_date ? <>, snapshot <Timestamp value={provenance.snapshot_date} format="date" /></> : null}.
+        Approved and Actioned can trail the{' '}
+        <Link to={analyticsHref({ view: 'approval-funnel', ...leadParams })}>Approval funnel</Link> tab by up to
+        one sync; that tab is exact.
+      </p>
+      <details className="analytics-panel-note" data-testid="executive-provenance-details">
+        <summary>How these counts are sourced</summary>
+        Stages 1&ndash;4 from <span className="mono">{provenance.population_source}</span>. Approved and
+        Actioned from <span className="mono">{provenance.workflow_source}</span>, the gold mirror of
+        Lakebase
+        {provenance.lifecycle_synced_at ? <>, synced {formatTimestamp(provenance.lifecycle_synced_at)}</> : null}.
+        The Approval funnel tab reads the Lakebase approval tables directly, so a higher count there means
+        this mirror is one sync behind &mdash; by design, not a discrepancy.
+      </details>
+    </>
   );
 }
 
@@ -106,7 +119,7 @@ export function ExecutiveView({
     <>
       <div className="kpi-row">
         <KpiCard label="Addressable Borrowers" value={formatCount(data.totals.addressable_borrowers)} delta={data.totals.snapshot_date ? `Snapshot ${formatDate(data.totals.snapshot_date)}` : undefined} deltaDir="flat" />
-        <KpiCard label="Refi Economics" value={formatCount(data.totals.in_the_money_borrowers)} delta={`${formatCount(data.totals.high_opportunity_borrowers)} score ${HIGH_OPPORTUNITY_SCORE_LABEL}`} deltaDir="up" />
+        <KpiCard label="In the Money" value={formatCount(data.totals.in_the_money_borrowers)} delta={`${formatCount(data.totals.high_opportunity_borrowers)} score ${HIGH_OPPORTUNITY_SCORE_LABEL}`} deltaDir="up" />
         <KpiCard label="Primary Offer Paths" value={formatCount(data.totals.offer_recommended_borrowers)} delta="Offer path assigned" deltaDir="up" />
         <KpiCard label="Approved Outreach" value={formatCount(data.totals.approved_borrowers)} delta={`${formatCount(data.totals.actioned_borrowers)} actioned`} deltaDir="flat" />
       </div>
@@ -118,7 +131,7 @@ export function ExecutiveView({
             <p className="analytics-panel-note">
               Each stage is an independent cut of the addressable book, shown as its
               share of addressable &mdash; not a conversion from the stage before it. A
-              high-opportunity borrower need not pass the refi-economics screen, and an
+              high-opportunity borrower need not be in the money, and an
               approved borrower need not be high-opportunity. Only Approved &rarr; Actioned
               is nested, so only it carries a conversion.
               Offer-path coverage remains in Pipeline Metrics because nearly every

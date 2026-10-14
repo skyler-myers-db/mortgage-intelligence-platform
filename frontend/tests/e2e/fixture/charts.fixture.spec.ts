@@ -372,12 +372,12 @@ test.describe('analytics charts: governed histograms', () => {
     const ruleBox = await rule.boundingBox();
     if (!ruleBox) throw new Error('rule not painted');
     expect(Math.abs(ruleBox.x + ruleBox.width / 2 - (await tickCentre(figure, '100')))).toBeLessThanOrEqual(1);
-    await expect(figure.locator('.chart-hist__rule-label')).toHaveText('Refi screen ≥ 100 bps');
+    await expect(figure.locator('.chart-hist__rule-label')).toHaveText('In the Money spread ≥ 100 bps');
     const past = await figure.locator('rect.chart-hist__bar').evaluateAll((bars) => bars.map((bar) => bar.classList.contains('chart-hist__bar--past')));
     expect(past).toEqual(SPREAD_BUCKETS.map(([start]) => start >= 100));
     const pastCount = SPREAD_BUCKETS.filter(([start]) => start >= 100).reduce((total, [, n]) => total + n, 0);
     await expect(figure.locator('figcaption')).toContainText(`${count(pastCount)} (`);
-    await expect(figure.locator('figcaption')).toContainText('at or past the 100 bps refi screen');
+    await expect(figure.locator('figcaption')).toContainText('at or past the 100 bps In the Money spread threshold');
   });
 
   for (const [name, thresholds, notice] of [

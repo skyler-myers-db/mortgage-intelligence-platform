@@ -76,7 +76,7 @@ function EquitySpreadScatterPending() {
 const spreadRange = (start: number) => formatBinRange(start, SPREAD_BUCKET_BPS, 'bps');
 
 /**
- * Rate spreads as a histogram with the refresh's governed refi screen
+ * Rate spreads as a histogram with the refresh's governed In the Money spread threshold
  * (data.thresholds, dataviz-06): no rule and a notice when the refresh
  * carries no single screen.
  */
@@ -95,7 +95,7 @@ export function SpreadDistribution({ data }: { data: EconomicsAnalyticsResponse 
       bins={model.bins}
       binWidth={SPREAD_BUCKET_BPS}
       threshold={threshold}
-      ruleLabel={threshold === null ? null : `Refi screen ≥ ${formatCount(threshold)} bps`}
+      ruleLabel={threshold === null ? null : `In the Money spread ≥ ${formatCount(threshold)} bps`}
       xLabel="Spread bps"
       yLabel="Borrowers"
       formatRange={spreadRange}
@@ -142,7 +142,7 @@ export function GeographyView({ data, leadParams }: { data: GeographyAnalyticsRe
         </section>
       </div>
       <section className="surface analytics-section">
-        <div className="surface__hdr"><h2 className="h-3">Top ZIPs by Refi Economics</h2></div>
+        <div className="surface__hdr"><h2 className="h-3">Top ZIPs by In the Money borrowers</h2></div>
         <div className="surface__body">
           <DataTable<TopZipOpportunityRow>
             rows={data.top_zips}
@@ -150,7 +150,7 @@ export function GeographyView({ data, leadParams }: { data: GeographyAnalyticsRe
             columns={[
               { key: 'zip', label: 'ZIP', render: (row) => <Link to={leadQueueHref({ state: row.state, zip: row.zip, ...leadParams })}>{row.zip}</Link> },
               { key: 'place', label: 'Market', render: (row) => `${row.city ?? 'Unknown'}, ${row.state}` },
-              { key: 'itm', label: 'Refi economics', render: (row) => formatCount(row.in_the_money_borrowers) },
+              { key: 'itm', label: 'In the Money', render: (row) => formatCount(row.in_the_money_borrowers) },
               { key: 'score', label: 'Avg opportunity score', render: (row) => row.mean_opportunity_score },
               { key: 'spread', label: 'Avg rate spread', render: (row) => signedBpsLabel(row.mean_rate_spread_bps) },
             ]}
@@ -244,7 +244,7 @@ export function SegmentsView({ data, leadParams }: { data: SegmentAnalyticsRespo
               { key: 'segment', label: 'Segment', render: (row) => <Link to={leadQueueHref({ segment: row.segment_code, ...leadParams })}>{row.name}</Link> },
               { key: 'borrowers', label: 'Borrowers', render: (row) => formatCount(row.borrower_count) },
               { key: 'score', label: 'Avg Score', render: (row) => row.mean_opportunity_score },
-              { key: 'itm', label: 'Refi economics', render: (row) => formatCount(row.in_the_money_borrowers) },
+              { key: 'itm', label: 'In the Money', render: (row) => formatCount(row.in_the_money_borrowers) },
               { key: 'approval', label: 'Approval', render: (row) => pct(row.approval_rate) },
             ]}
           />

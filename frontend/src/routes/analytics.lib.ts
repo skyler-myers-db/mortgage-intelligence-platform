@@ -12,6 +12,7 @@ import type {
   TopBorrowerAnalyticsRow,
 } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
+import { segmentName } from '../lib/segmentMetadata';
 import { fixedAttr } from '../lib/fixedPrecision';
 import { formatCompact, formatCount, formatPercent } from '../lib/formatters';
 import { formatDate } from '../lib/time';
@@ -37,15 +38,15 @@ export function parseAnalyticsTab(value: string | null | undefined): AnalyticsTa
   return TABS.some((tab) => tab.id === value) ? (value as AnalyticsTab) : 'executive';
 }
 
-export const SEGMENT_FILTERS = [
+/** The filterable segments, in menu order; their labels are the governed names. */
+const SEGMENT_FILTER_CODES = ['itm', 'equity', 'investor', 'retention', 'listed', 'permit'] as const satisfies readonly SegmentCode[];
+
+// Labels come from lib/segmentMetadata (critic-11 / D-platform-process-g):
+// a segment rename lands here with no literal to chase.
+export const SEGMENT_FILTERS: ReadonlyArray<readonly [string, SegmentCode | null]> = [
   ['All segments', null],
-  ['Prime Refi Candidates', 'itm'],
-  ['Home Equity Candidate', 'equity'],
-  ['Investor / Multi-Property', 'investor'],
-  ['Retention Risk', 'retention'],
-  ['Listed for Sale', 'listed'],
-  ['HELOC Intent', 'permit'],
-] as const satisfies ReadonlyArray<readonly [string, SegmentCode | null]>;
+  ...SEGMENT_FILTER_CODES.map((code) => [segmentName(code), code] as const),
+];
 export const SEGMENT_CODE_TO_OPTION = Object.fromEntries(
   SEGMENT_FILTERS.filter(([, value]) => value !== null).map(([label, value]) => [value, label]),
 ) as Record<SegmentCode, string>;
@@ -151,7 +152,6 @@ export function leadQueueHrefForFunnelStage(
   const byLabel: Record<string, LeadFunnelStage> = {
     addressable: 'addressable',
     'in the money': 'in_the_money',
-    'refi economics': 'in_the_money',
     'high opportunity': 'high_opportunity',
     [HIGH_OPPORTUNITY_KPI_LABEL.toLowerCase()]: 'high_opportunity',
     'top-tier score': 'high_opportunity',
@@ -167,7 +167,7 @@ export function leadQueueHrefForFunnelStage(
 export function funnelStageDisplayLabel(row: Pick<FunnelStage, 'stage' | 'stage_order'>): string {
   const byOrder: Record<number, string> = {
     1: 'Addressable',
-    2: 'Refi economics',
+    2: 'In the Money',
     3: HIGH_OPPORTUNITY_KPI_LABEL,
     4: 'Primary offer selected',
     5: 'Approved',
@@ -374,7 +374,7 @@ export function analyticsHref(params: Record<string, RouteParamValue>): string {
 // over the population; every other stage is an independent SUM(CASE ...) over
 // those same rows (sql/transformations/gold_funnel_snapshot_daily.sql, and
 // DatabricksAnalyticsRepository._LIVE_FUNNEL_SQL for the filtered path). A
-// high-opportunity borrower need not pass the refi-economics screen and an
+// high-opportunity borrower need not be In the Money and an
 // approved borrower need not be high-opportunity, so "stage / previous stage"
 // is a ratio of unrelated counts, not a conversion. Addressable is the one
 // guaranteed superset, so every stage is labelled with its share of THAT.

@@ -9,7 +9,9 @@ import {
   binDensityAlpha,
   binZoomViewport,
   buildDailyEvidenceTotals,
+  funnelStageDisplayLabel,
   leadQueueHrefForFunnelStage,
+  SEGMENT_MULTI_OPTIONS,
   leadQueueHref,
   normalizeAnalyticsSegmentCodes,
   scatterPosition,
@@ -19,6 +21,7 @@ import {
 } from './analytics.lib';
 import { ExecutiveProvenanceNote, ScoreDistribution } from './analytics.executive';
 import { TIMESTAMP_UNAVAILABLE } from '../lib/time';
+import { segmentName } from '../lib/segmentMetadata';
 import type {
   AnalyticsThresholds,
   EquitySpreadOverview,
@@ -51,7 +54,7 @@ function pointFixture(overrides: Partial<EquitySpreadPoint> = {}): EquitySpreadP
   return {
     borrower_id: 'B-0000000000025',
     display_name: 'Owner 25',
-    segment: 'Prime Refi Candidates',
+    segment: segmentName('itm'),
     state: 'IL',
     equity_pct: 42,
     rate_spread_bps: 88,
@@ -97,6 +100,23 @@ describe('analytics drilldown links', () => {
     expect(leadQueueHrefForFunnelStage({ stage: 'Offer Recommended', stage_order: 4 })).toBe('/lead-queue?funnel_stage=offer_recommended');
     expect(leadQueueHrefForFunnelStage({ stage: 'Approved', stage_order: 5 })).toBe('/lead-queue?funnel_stage=approved');
     expect(leadQueueHrefForFunnelStage({ stage: 'Actioned', stage_order: 6 })).toBe('/lead-queue?funnel_stage=actioned');
+  });
+
+  // critic-11 / D-platform-process-g: stage 2 is In the Money by its order,
+  // whatever label the row carries, and by its canonical label alone.
+  it('routes stage 2 by its order under any label, and the label In the Money alone', () => {
+    for (const stage of ['Refi Economics', 'anything', 'In the Money']) {
+      expect(leadQueueHrefForFunnelStage({ stage, stage_order: 2 })).toBe('/lead-queue?funnel_stage=in_the_money');
+    }
+    expect(leadQueueHrefForFunnelStage({ stage: 'In the Money', stage_order: 99 })).toBe('/lead-queue?funnel_stage=in_the_money');
+    // The retired alias no longer routes by label.
+    expect(leadQueueHrefForFunnelStage({ stage: 'Refi economics', stage_order: 99 })).toBe('/lead-queue?funnel_stage=addressable');
+    expect(funnelStageDisplayLabel({ stage: 'Refi Economics', stage_order: 2 })).toBe('In the Money');
+  });
+
+  it('labels the segment filters with the governed segment names', () => {
+    for (const option of SEGMENT_MULTI_OPTIONS) expect(option.label).toBe(segmentName(option.value));
+    expect(SEGMENT_MULTI_OPTIONS.map((option) => option.value)).toEqual(['itm', 'equity', 'investor', 'retention', 'listed', 'permit']);
   });
 
   it('preserves lender overlay filters in funnel drilldowns', () => {
@@ -345,6 +365,32 @@ describe('executive provenance disclosure', () => {
     expect(html).toContain('href="/analytics?view=approval-funnel"');
     expect(html).toContain('one sync behind');
     expect(html).toContain('analytics-panel-note');
+  });
+
+  // flow-10: the visible line is lender copy; the exact semantics sit in a
+  // native disclosure (deviation:analytics-provenance-disclosure).
+  it('keeps the visible line in lender language and the exact sources in a disclosure', () => {
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <ExecutiveProvenanceNote provenance={PROVENANCE} leadParams={{}} />
+      </MemoryRouter>,
+    );
+    // This suite runs without a DOM: split the markup at the disclosure.
+    const [visibleHtml, detailsHtml] = html.split('<details');
+    const line = visibleHtml.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ');
+    expect(line).toContain('Counts are from the latest data refresh, snapshot');
+    expect(line).toContain('Approved and Actioned can trail the Approval funnel tab by up to one sync; that tab is exact.');
+    expect(visibleHtml).toContain('href="/analytics?view=approval-funnel"');
+    expect(visibleHtml).not.toContain('class="mono"');
+    for (const banned of [/\bSQL\b/, /\bUC\b/, /\bsemantics\b/i, /capabilit/i, /preflight/i, /de-duplicat/i, /hand-editing/i, /scheduler/i, /Module 0/, /mip\./]) {
+      expect(line, String(banned)).not.toMatch(banned);
+    }
+    expect(detailsHtml).toBeDefined();
+    expect(detailsHtml).not.toMatch(/^[^>]*\bopen\b/);
+    expect(detailsHtml).toContain('<summary>How these counts are sourced</summary>');
+    expect(detailsHtml).toContain(`<span class="mono">${PROVENANCE.population_source}</span>`);
+    expect(detailsHtml).toContain(`<span class="mono">${PROVENANCE.workflow_source}</span>`);
+    expect(detailsHtml).toContain('synced');
   });
 
   it('drops the as-of clause when the mirror has never been synced', () => {

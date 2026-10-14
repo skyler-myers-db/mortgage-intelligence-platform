@@ -297,7 +297,7 @@ describe('FunnelSankey (render + a11y)', () => {
     // is compact (2026-09-21 audit responsive-04: lib/formatters).
     expect(labels[0]).toBe('Addressable: 5,156,184 borrowers. Open in lead queue.');
     expect(labels[1]).toBe(
-      'Refi economics: 117,189 borrowers, 2.3% of addressable (drawn at minimum size, not to scale). Open in lead queue.',
+      'In the Money: 117,189 borrowers, 2.3% of addressable (drawn at minimum size, not to scale). Open in lead queue.',
     );
     // 3,990 / 117,189 = 3.4% was the published "conversion"; the honest
     // figure is 3,990 of 5,156,184 addressable, 1 in 1,292 (D-dataviz-geo-a).

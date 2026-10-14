@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { designCss } from '../test/designCss';
 import { escapeLayerCount, pushEscapeLayer } from '../lib/escapeStack';
+import { segmentName } from '../lib/segmentMetadata';
 import {
   SCORE_BAND_HIGH_MIN,
   SCORE_BAND_MED_MIN,
@@ -55,7 +56,7 @@ const drilldown: EquitySpreadPointsResponse = {
     {
       borrower_id: 'B-0000000000025',
       display_name: 'Owner 25',
-      segment: 'Prime Refi Candidates',
+      segment: segmentName('itm'),
       state: 'IL',
       equity_pct: 42,
       rate_spread_bps: 88,
