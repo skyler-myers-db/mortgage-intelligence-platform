@@ -146,7 +146,9 @@ export function OfferActionBar({
       {rejectReview}
       <div className="offer-action-bar__row">
         {/* Field on both routing selects (critic-04): the ids stay pinned for
-            tests and the live walk; the follow-up says nothing reaches the borrower. */}
+            tests and the live walk; the follow-up says nothing reaches the borrower,
+            in one line of its 12rem field so the docked bar keeps its height
+            (the hint wraps and never sizes the field: action-bar.css). */}
         <div className="outreach-routing" data-testid="outreach-routing">
           <Field label="Assign to loan officer" controlId="lo-assign" className="outreach-routing__field">
             {(control) => (
@@ -172,7 +174,7 @@ export function OfferActionBar({
             controlId="lo-followup"
             className="outreach-routing__field"
             unit="days"
-            hint="A reminder for the assigned loan officer; nothing is sent to the borrower."
+            hint="Nothing is sent to the borrower."
           >
             {(control) => (
               <select
