@@ -1,13 +1,23 @@
-"""The one-shot compose execute is retired; the reviewed-plan path refuses alike.
+"""The one-shot compose execute is retired; both co-pilot paths refuse alike.
 
 Audit 2026-09-21 ``critic-01``: ``POST /api/growth-agent/agent/compose`` with
 ``execute: true`` re-composed and ran a plan the lender never saw. Every
 refusal battery moved to ``POST /api/growth-agent/agent/plan/execute`` after a
 parity run proved both paths refused the whole battery corpus identically.
 This module pins a sample of that corpus, one or more objectives per refusal
-family, with the family the parity run recorded; and it pins the retirement:
-``execute: true`` is a 422 that composes and runs nothing, ``execute: false``
-composes exactly as before, and the compose route cannot reach the executor.
+family, with the family the parity run recorded, and posts each sampled
+objective to BOTH paths: the reviewed-plan execute and the compose route
+(``{"objective": ...}``, no ``execute`` flag). Both must give the same
+refusal signature (status, refusal reason, fixed detail), never echo the
+objective, and reach no planner, SQL or Lakebase call; a guard-family
+refusal writes its refusal audit row on each path. Every sampled family,
+the plan-shape ones (``_NAMED_WORKFLOW_DETAIL``, ``_SINGLE_SEGMENT_DETAIL``)
+included, refuses identically on compose, so no row is execute-only (W5e,
+W5a w5-growth-agent-trust reviewNonBlocking[0]).
+
+It also pins the retirement: ``execute: true`` is a 422 that composes and
+runs nothing, ``execute: false`` composes exactly as before, and the compose
+route cannot reach the executor.
 """
 
 from __future__ import annotations
@@ -91,7 +101,8 @@ def test_sampled_refusals_agree_on_both_execute_paths(
     inert_growth_dependencies: tuple[MagicMock, ...],
 ) -> None:
     sql, lakebase, audit_store, planner = inert_growth_dependencies
-    response = post_growth_execute(TestClient(app), objective, headers=HEADERS)
+    client = TestClient(app)
+    response = post_growth_execute(client, objective, headers=HEADERS)
 
     status, reason, detail = refusal_signature(response)
     assert status == 422
@@ -100,11 +111,24 @@ def test_sampled_refusals_agree_on_both_execute_paths(
     else:
         assert detail is not None and expected in detail
     assert objective not in response.text
+    if reason is not None:
+        assert_only_refusal_audit_writes(audit_store)
+    else:
+        assert audit_store.mock_calls == []
+
+    # The compose route refuses the same objective the same way.
+    audit_store.reset_mock()
+    composed = client.post(LEGACY_COMPOSE_PATH, json={"objective": objective}, headers=HEADERS)
+    assert refusal_signature(composed) == (status, reason, detail)
+    assert objective not in composed.text
+    if reason is not None:
+        assert_only_refusal_audit_writes(audit_store)
+    else:
+        assert audit_store.mock_calls == []
+
     planner.assert_not_called()
     assert sql.mock_calls == []
     assert lakebase.mock_calls == []
-    if reason is not None:
-        assert_only_refusal_audit_writes(audit_store)
 
 
 BENIGN_OBJECTIVE = "Compose a refi growth plan for review."
