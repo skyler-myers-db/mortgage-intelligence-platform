@@ -206,10 +206,11 @@ export function LeadTable({
   });
   // flow-v2: this session's revokes read pending until the stale-marked queue is read again.
   const revokedIds = useRevokedBorrowers(queryClient);
-  const displayLeads = applyRevocations(sales.displayLeads, revokedIds);
-  const leadsById = displayLeads === sales.displayLeads
+  // Memoized like the sort below, so the compiler preserves that memo (runtime-04).
+  const displayLeads = useMemo(() => applyRevocations(sales.displayLeads, revokedIds), [sales.displayLeads, revokedIds]);
+  const leadsById = useMemo(() => (displayLeads === sales.displayLeads
     ? sales.leadsById
-    : new Map(displayLeads.map((lead) => [lead.borrower_id, lead]));
+    : new Map(displayLeads.map((lead) => [lead.borrower_id, lead]))), [displayLeads, sales.displayLeads, sales.leadsById]);
   const [revokeFor, setRevokeFor] = useState<string | null>(null);
   // Audit runtime-04 slice 1: sorted once per (rows, sort), not on every
   // render; the id list is what the virtualizer keys rows by. A server sort
