@@ -30,7 +30,10 @@ from backend.schemas.workspace import (
     WorkspaceMutationResponse,
     WorkspaceState,
 )
-from backend.services.audit_fingerprint import SAVED_VIEW_FINGERPRINT_DOMAIN, keyed_filter_fingerprint
+from backend.services.audit_fingerprint import (
+    SAVED_VIEW_FINGERPRINT_DOMAIN,
+    keyed_filter_fingerprint,
+)
 from backend.services.disclosures import MissingTenantDisclosureError, resolve_tenant_disclosure
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type

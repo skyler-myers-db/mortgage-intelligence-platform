@@ -10,7 +10,10 @@ from typing import Any
 import pytest
 
 from backend.services import saved_view_store as store_module
-from backend.services.audit_fingerprint import SAVED_VIEW_FINGERPRINT_DOMAIN, keyed_filter_fingerprint
+from backend.services.audit_fingerprint import (
+    SAVED_VIEW_FINGERPRINT_DOMAIN,
+    keyed_filter_fingerprint,
+)
 from backend.services.saved_view_params import canonical_saved_view_params
 from backend.services.saved_view_store import (
     SAVED_VIEW_LIMIT,

@@ -19,7 +19,10 @@ from pydantic import SecretStr
 from backend.config.settings import settings
 from backend.main import app
 from backend.schemas.saved_views import SavedView, SavedViewMutationResponse
-from backend.services.audit_fingerprint import SAVED_VIEW_FINGERPRINT_DOMAIN, keyed_filter_fingerprint
+from backend.services.audit_fingerprint import (
+    SAVED_VIEW_FINGERPRINT_DOMAIN,
+    keyed_filter_fingerprint,
+)
 from backend.services.audit_store import get_audit_store
 from backend.services.lakebase import LakebaseError
 from backend.services.saved_view_params import (
