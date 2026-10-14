@@ -3,6 +3,7 @@ import { Icon } from '../components/Icon';
 import { Tooltip } from '../components/ui/Tooltip';
 import type { LeadQueueFilterChip } from './lead-queue.activeFilters';
 import { FilterFacetsProvider } from './lead-queue.facets';
+import { LeadQueueOmnibox } from './lead-queue.omnibox';
 import { LeadQueueRangeFilters } from './lead-queue.rangeFilters';
 import './lead-queue.css';
 
@@ -21,6 +22,7 @@ import './lead-queue.css';
  * W5a: the STATE, SEGMENT, PRODUCT and APPROVAL menus show option counts on
  * open (FilterFacetsProvider, lead-queue.facets.tsx), and the panel ends
  * with the score and rate-spread bounds (lead-queue.rangeFilters.tsx).
+ * W5e: the filter omnibox pill leads the row (lead-queue.omnibox.tsx).
  */
 export function LeadQueueFilterBar({
   core,
@@ -43,6 +45,7 @@ export function LeadQueueFilterBar({
   return (
     <FilterFacetsProvider>
       <div className="filter-row filter-row--lead-queue" role="group" aria-label="Queue filters">
+        <LeadQueueOmnibox />
         {core}
         <button
           ref={moreToggleRef}
