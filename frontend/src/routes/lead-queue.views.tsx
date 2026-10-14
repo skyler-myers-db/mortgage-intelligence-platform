@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../components/Icon';
 import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
@@ -123,10 +123,13 @@ export function LeadQueueViews({
  */
 function LeadQueueSavedViewsControl({ searchParams }: { searchParams: URLSearchParams }) {
   const [open, setOpen] = useState(false);
+  // Each Retry after a failed chunk mounts a fresh loader (a new
+  // useLazyModule instance re-attempts the import: lazyModule clears its
+  // pending promise after a failure).
+  const [attempt, setAttempt] = useState(0);
   const panelId = useId();
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const { module: panel, failed } = useLazyModule(SAVED_VIEWS, open);
   const close = (refocus = true) => {
     setOpen(false);
     if (refocus) triggerRef.current?.focus();
@@ -147,20 +150,78 @@ function LeadQueueSavedViewsControl({ searchParams }: { searchParams: URLSearchP
         <span className="lead-queue-views__saved-long">Saved views</span>
         <span className="lead-queue-views__saved-short">Views</span>
       </button>
-      {open && (panel ? (
-        <panel.LeadQueueSavedViewsPanel
+      {open && (
+        <SavedViewsPanelSlot
+          key={attempt}
           id={panelId}
           searchParams={searchParams}
           rootRef={rootRef}
+          triggerRef={triggerRef}
+          retried={attempt > 0}
+          onRetry={() => setAttempt((count) => count + 1)}
           onClose={close}
         />
-      ) : (
-        <div id={panelId} className="filter-menu lead-queue-saved-views" role="group" aria-label="Saved views">
-          <p className="lead-queue-saved-views__status">
-            {failed ? 'Saved views unavailable' : 'Loading saved views…'}
-          </p>
-        </div>
-      ))}
+      )}
+    </div>
+  );
+}
+
+/**
+ * The panel, or its placeholder while the chunk loads. A failed chunk says
+ * "Saved views unavailable" with a Retry (tables-06 nit): Retry remounts
+ * this slot under a new key, and the fresh loader re-attempts the import.
+ * Focus stays on Retry (the reloading slot's own Retry) until the panel
+ * renders, then returns to the trigger, never to <body>.
+ */
+function SavedViewsPanelSlot({
+  id,
+  searchParams,
+  rootRef,
+  triggerRef,
+  retried,
+  onRetry,
+  onClose,
+}: {
+  id: string;
+  searchParams: URLSearchParams;
+  rootRef: RefObject<HTMLDivElement | null>;
+  triggerRef: RefObject<HTMLButtonElement | null>;
+  retried: boolean;
+  onRetry: () => void;
+  onClose: (refocus?: boolean) => void;
+}) {
+  const { module: panel, failed } = useLazyModule(SAVED_VIEWS, true);
+  const retryRef = useRef<HTMLButtonElement | null>(null);
+  useLayoutEffect(() => {
+    if (!retried) return;
+    const lost = document.activeElement === null || document.activeElement === document.body;
+    if (!lost) return;
+    if (panel) triggerRef.current?.focus();
+    else retryRef.current?.focus();
+  }, [retried, panel, triggerRef]);
+  if (panel) {
+    return <panel.LeadQueueSavedViewsPanel id={id} searchParams={searchParams} rootRef={rootRef} onClose={onClose} />;
+  }
+  const reloading = retried && !failed;
+  return (
+    <div id={id} className="filter-menu lead-queue-saved-views" role="group" aria-label="Saved views">
+      <div className="lead-queue-saved-views__status">
+        <span>{failed ? 'Saved views unavailable' : 'Loading saved views…'}</span>
+        {(failed || reloading) && (
+          <button
+            ref={retryRef}
+            type="button"
+            className="btn btn--ghost btn--sm"
+            aria-disabled={reloading || undefined}
+            onClick={() => {
+              if (!reloading) onRetry();
+            }}
+            data-testid="lead-queue-saved-views-retry"
+          >
+            Retry
+          </button>
+        )}
+      </div>
     </div>
   );
 }

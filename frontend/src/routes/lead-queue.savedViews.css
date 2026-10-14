@@ -7,9 +7,14 @@
    lead-queue.filterTools.css, so the placeholder shown while this chunk
    loads is already placed. Tokens only.
    ============================================================ */
+/* At the 25-view limit the list scrolls inside its own block (tables-06
+   nit), so the View name field and Save stay above the 900px fold; its
+   links stay focusable and scroll into view inside it. */
 .lead-queue-saved-views__list {
   display: flex;
   flex-direction: column;
+  max-block-size: calc(var(--sp-16) * 4);
+  overflow-y: auto;
   margin: 0;
   padding: 0;
   list-style: none;
