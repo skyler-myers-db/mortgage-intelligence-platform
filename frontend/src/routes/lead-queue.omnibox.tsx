@@ -11,7 +11,8 @@
  *
  * Only the pill, its keycap and the F binding ride the route chunk: the
  * popover (the combobox, the chips, the count status) and the grammar load
- * together on the FIRST open (lead-queue.omniboxPopover.tsx), never on mount.
+ * together on the FIRST open (components/mortgage/LeadQueueOmniboxPopover),
+ * never on mount; this module hands it the count read.
  * The F binding is registered in an effect, so it is released while the
  * kept-alive queue is hidden behind a dossier, and it is off in the Triage
  * deck. Nothing here reads, writes or persists the typed text.
@@ -20,12 +21,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Icon } from '../components/Icon';
 import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
+import { leadCountQueryOptions } from '../lib/apiClients/leadCount';
 import { registerKeyBinding } from '../lib/keymap';
 import { searchParamsCleared } from './lead-queue.activeFilters';
 import { parseTriageMode, TRIAGE_MODE_PARAM } from './lead-queue.filters';
 import './lead-queue.omnibox.css';
 
-const POPOVER = lazyModule(() => import('./lead-queue.omniboxPopover'));
+const POPOVER = lazyModule(() => import('../components/mortgage/LeadQueueOmniboxPopover'));
 
 export const OMNIBOX_BINDING_ID = 'lead-queue-omnibox';
 
@@ -83,6 +85,7 @@ export function LeadQueueOmnibox() {
       {open && (popover ? (
         <popover.LeadQueueOmniboxPopover
           rootRef={rootRef}
+          countOptions={leadCountQueryOptions}
           onClose={close}
           onApply={(params) => {
             setSearchParams(searchParamsWithOmniboxFilters(searchParams, params));

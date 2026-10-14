@@ -1,7 +1,9 @@
 /**
  * The filter omnibox popover (wow-power-6, W5e item 3c; deviation:filter-omnibox).
  * Its own lazy chunk with lib/filterGrammar, loaded on the omnibox's first
- * open (lead-queue.omnibox.tsx).
+ * open (routes/lead-queue.omnibox.tsx). It never imports the transport or
+ * the query keys: the route hands the count read down (`countOptions`,
+ * lib/apiClients/leadCount.ts), so the initial transport chunk is not split.
  *
  * A WAI-ARIA APG combobox input; the readings as a listbox of chips, each
  * "STATE · TX (from "TX")"; a "Not recognized: …" line; and a polite
@@ -21,12 +23,11 @@
  */
 import { useEffect, useEffectEvent, useId, useMemo, useRef, useState, type RefObject } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { fetchLeadCount, leadCountQuery } from '../lib/apiClients/leadCount';
-import { parseFilterGrammar } from '../lib/filterGrammar';
-import { formatCount } from '../lib/formatters';
-import { openGenie } from '../lib/genieOpen';
-import { pushEscapeLayer } from '../lib/escapeStack';
-import { queryKeys } from '../lib/queryKeys';
+import { leadCountQuery, type LeadCountSource } from '../../lib/leadCountQuery';
+import { parseFilterGrammar } from '../../lib/filterGrammar';
+import { formatCount } from '../../lib/formatters';
+import { openGenie } from '../../lib/genieOpen';
+import { pushEscapeLayer } from '../../lib/escapeStack';
 
 export const OMNIBOX_COUNT_DEBOUNCE_MS = 200;
 const COUNT_STALE_MS = 60_000;
@@ -40,11 +41,14 @@ function countText(total: number | undefined, failed: boolean): string {
 
 export function LeadQueueOmniboxPopover({
   rootRef,
+  countOptions,
   onClose,
   onApply,
 }: {
   /** The pill and this popover: a pointer-down outside closes. */
   rootRef: RefObject<HTMLElement | null>;
+  /** The audit-free count read for an allowlisted query (lib/apiClients/leadCount leadCountQueryOptions). */
+  countOptions: LeadCountSource;
   /** `refocus` false: a pointer-down elsewhere keeps the focus it moved. */
   onClose: (refocus?: boolean) => void;
   onApply: (params: URLSearchParams) => void;
@@ -63,8 +67,7 @@ export function LeadQueueOmniboxPopover({
     return () => window.clearTimeout(timer);
   }, [nextQuery]);
   const count = useQuery({
-    queryKey: queryKeys.leadCount([countQuery]),
-    queryFn: ({ signal }) => fetchLeadCount(new URLSearchParams(countQuery), signal),
+    ...countOptions(countQuery),
     enabled: countQuery !== '',
     placeholderData: keepPreviousData,
     staleTime: COUNT_STALE_MS,

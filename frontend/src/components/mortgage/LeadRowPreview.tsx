@@ -17,6 +17,7 @@ import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { ScoreAnatomyGate } from './ScoreAnatomyGate';
 import { ScoreBadge } from './ScoreBadge';
 import { lazyModule, useLazyModule } from './useLazyModule';
+import { leadCountQueryOptions } from '../../lib/apiClients/leadCount';
 import { dispositionLabel, outreachLabel } from './LeadTable.logic';
 
 // A row's Decision receipt renders only after a decision in this session, so
@@ -299,7 +300,7 @@ export function RowPreview({
             </Button>
           </div>
           {similarOpen && (SimilarCohortPanel ? (
-            <SimilarCohortPanel id={similarId} lead={lead} canApprove={canApprove === true} />
+            <SimilarCohortPanel id={similarId} lead={lead} canApprove={canApprove === true} countOptions={leadCountQueryOptions} />
           ) : (
             <p id={similarId} className="muted fs-12 mt-2 flush" role="status">
               {similarChunk.failed ? 'More like this could not load; reload the page.' : 'Loading…'}

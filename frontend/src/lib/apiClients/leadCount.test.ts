@@ -5,7 +5,8 @@
  * GET /api/leads/count, whatever the caller's params hold.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchLeadCount, leadCountQuery } from './leadCount';
+import { leadCountQuery } from '../leadCountQuery';
+import { fetchLeadCount, leadCountQueryOptions } from './leadCount';
 
 const GROWTH_AGENT_PROOF_PARAMS = [
   'growth_agent_run_id', 'actionable_total', 'actionable_cohort_fingerprint',
@@ -45,5 +46,9 @@ describe('leadCountQuery', () => {
     expect(answer.total_matching).toBe(1234);
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatch(/\/api\/(v1\/)?leads\/count\?product=Refi$/);
+  });
+
+  it('keys the TanStack options by the allowlisted query (queryKeys.leadCount)', () => {
+    expect(leadCountQueryOptions('state=TX').queryKey).toEqual(['mip', 'lead-count', 'state=TX']);
   });
 });

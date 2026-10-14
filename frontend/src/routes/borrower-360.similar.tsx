@@ -3,6 +3,7 @@ import type { LeadSummary } from '../types';
 import { useApp } from '../components/AppContext';
 import { Button } from '../components/Primitives';
 import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
+import { leadCountQueryOptions } from '../lib/apiClients/leadCount';
 
 /**
  * Borrower 360's "More like this" entry (wow-power-2, W5e item 4d;
@@ -32,7 +33,7 @@ export function BorrowerMoreLikeThis({ borrower }: { borrower: LeadSummary }) {
         More like this
       </Button>
       {open && (Panel ? (
-        <Panel id={panelId} lead={borrower} canApprove={canApprove === true} />
+        <Panel id={panelId} lead={borrower} canApprove={canApprove === true} countOptions={leadCountQueryOptions} />
       ) : (
         <p id={panelId} className="muted fs-12 flush" role="status">
           {chunk.failed ? 'More like this could not load; reload the page.' : 'Loading…'}

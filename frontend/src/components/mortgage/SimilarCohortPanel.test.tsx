@@ -12,6 +12,7 @@ import { act } from 'react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
+import { leadCountQueryOptions } from '../../lib/apiClients/leadCount';
 import { mount } from '../../test/render';
 import { SimilarCohortPanel } from './SimilarCohortPanel';
 
@@ -48,7 +49,7 @@ async function render(canApprove: boolean) {
   const mounted = await mount(
     <QueryClientProvider client={client}>
       <MemoryRouter>
-        <SimilarCohortPanel id="similar" lead={LEAD} canApprove={canApprove} />
+        <SimilarCohortPanel id="similar" lead={LEAD} canApprove={canApprove} countOptions={leadCountQueryOptions} />
       </MemoryRouter>
     </QueryClientProvider>,
   );

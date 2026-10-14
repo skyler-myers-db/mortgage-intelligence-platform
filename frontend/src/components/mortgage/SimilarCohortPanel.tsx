@@ -11,7 +11,9 @@
  *
  * Its own lazy chunk, loaded on the explicit "More like this" click (never on
  * a row expand or hover). The one read is the audit-free GET /api/leads/count
- * over the pattern's allowlisted query, on open. The count is the queue's
+ * over the pattern's allowlisted query, on open; the parent hands the read
+ * down (`countOptions`), so this chunk never reaches the initial transport
+ * chunk on its own (which would split it). The count is the queue's
  * contactable-only default, and it includes the borrower the pattern came
  * from. A failed count says "Count unavailable" and still offers the links.
  * Prototype: the Primary offer card and the row preview have no cohort
@@ -20,10 +22,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import type { LeadSummary } from '../../types';
-import { fetchLeadCount, leadCountQuery } from '../../lib/apiClients/leadCount';
 import { formatCount } from '../../lib/formatters';
+import { leadCountQuery, type LeadCountSource } from '../../lib/leadCountQuery';
 import { leadPattern } from '../../lib/leadPattern';
-import { queryKeys } from '../../lib/queryKeys';
 import './SimilarCohortPanel.css';
 
 const COUNT_STALE_MS = 60_000;
@@ -32,17 +33,18 @@ export function SimilarCohortPanel({
   id,
   lead,
   canApprove,
+  countOptions,
 }: {
   id: string;
   lead: LeadSummary;
   /** The actor may approve: the Triage deck link is theirs only. */
   canApprove: boolean;
+  /** The audit-free count read for an allowlisted query (lib/apiClients/leadCount leadCountQueryOptions). */
+  countOptions: LeadCountSource;
 }) {
   const pattern = leadPattern(lead);
-  const query = leadCountQuery(pattern.params);
   const count = useQuery({
-    queryKey: queryKeys.leadCount([query]),
-    queryFn: ({ signal }) => fetchLeadCount(pattern.params, signal),
+    ...countOptions(leadCountQuery(pattern.params)),
     staleTime: COUNT_STALE_MS,
     retry: false,
   });
