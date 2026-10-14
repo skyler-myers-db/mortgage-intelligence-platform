@@ -6,6 +6,7 @@
  * exported `api` object in the original order. Consumers import `api` from
  * `../api` — never from this module.
  */
+import type { ApiRequest } from '../../types/api.gen';
 import type {
   ActivationDestination,
   ActivationOutboxItem,
@@ -15,15 +16,7 @@ import type {
 import { _newRequestId, getJson, postJson } from '../apiTransport';
 
 /** The `/api/activation/stage` body as the client sends it. */
-export interface ActivationStageRequest {
-  borrower_id: string;
-  destination_key: string;
-  offer_code?: string | null;
-  channel: 'email' | 'sms' | 'direct_mail';
-  campaign_id?: string | null;
-  approval_id: string;
-  request_id: string;
-}
+export type ActivationStageRequest = ApiRequest<'ActivationStageRequest'>;
 
 export const activationApi = {
   activationSummary: (signal?: AbortSignal) =>
