@@ -104,6 +104,24 @@ def test_the_release_gate_jobs_and_git_sha_checks_exist() -> None:
     assert "tools/live_validation_gate.py" in text.split("\non:", 1)[0]
 
 
+def test_bundle_commands_address_the_isolated_ci_staging_install() -> None:
+    """W5e (D-platform-process-b step 7): nightly's `bundle validate/run -t dev`
+    read the state deploy-dev.yml wrote under the dev-ci root, never the live
+    install's; the triggers and both --git-sha checks stay as they were."""
+
+    text = NIGHTLY.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(text)
+
+    assert workflow["env"]["BUNDLE_VAR_bundle_root_leaf"] == "dev-ci"
+    assert workflow["env"]["BUNDLE_VAR_install_suffix"] == "_ci"
+    assert "isolated CI staging install" in text.split("\non:", 1)[0]
+    assert list(workflow.get("on", workflow.get(True))) == ["workflow_dispatch"]
+    assert text.count('--git-sha "$GITHUB_SHA"') == 2
+    for job in workflow["jobs"].values():
+        for step in job.get("steps", []):
+            assert "BUNDLE_VAR_bundle_root_leaf" not in (step.get("env") or {}), "one top-level value only"
+
+
 def test_live_playwright_job_budgets_cold_app_and_serial_browser_matrix() -> None:
     workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
 

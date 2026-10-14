@@ -68,7 +68,8 @@ deploy_app_snapshot() {
   run "$PYTHON" -m tools.databricks.converge_static_app_source \
     --source-code-path "$APP_SOURCE_PATH" \
     --expected-principal "$APP_CURRENT_USER" \
-    --expected-target "$TARGET"
+    --expected-target "$TARGET" \
+    --expected-root-leaf "${MIP_BUNDLE_ROOT_LEAF_RESOLVED:-$TARGET}"
   run databricks apps deploy "$APP_NAME" --json "@$APP_DEPLOY_PAYLOAD" --timeout 20m
   assert_expected_app_identity "$APP_NAME"
   if [[ -n "${APP_LAST_DEPLOY_PAYLOAD:-}" ]]; then

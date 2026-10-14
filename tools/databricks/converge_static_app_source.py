@@ -14,7 +14,13 @@ from databricks.sdk.errors import NotFound, ResourceDoesNotExist
 _ROOT_NODE_MANIFESTS = ("package.json", "package-lock.json")
 
 
-def _expected_source_path(*, principal: str, target: str) -> str:
+def _expected_source_path(*, principal: str, target: str, root_leaf: str | None = None) -> str:
+    """The bundle files root; ``root_leaf`` (default: the target) is its last root segment.
+
+    The live dev install keeps ``.../dev/files``; the isolated CI staging
+    install (W5e, tools/databricks/ci_install_isolation.py) passes its own
+    leaf, e.g. ``dev-ci``.
+    """
     if (
         type(principal) is not str
         or not principal
@@ -29,9 +35,12 @@ def _expected_source_path(*, principal: str, target: str) -> str:
         or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", target) is None
     ):
         raise RuntimeError("expected App source target is not canonical")
+    leaf = target if root_leaf is None else root_leaf
+    if type(leaf) is not str or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", leaf) is None:
+        raise RuntimeError("expected App source root leaf is not canonical")
     return (
         f"/Workspace/Users/{principal}/.bundle/"
-        f"mortgage-intelligence-platform/{target}/files"
+        f"mortgage-intelligence-platform/{leaf}/files"
     )
 
 
@@ -40,6 +49,7 @@ def _workspace_api_path(
     *,
     expected_principal: str,
     expected_target: str,
+    expected_root_leaf: str | None = None,
 ) -> str:
     if (
         type(source_code_path) is not str
@@ -51,6 +61,7 @@ def _workspace_api_path(
     expected_source = _expected_source_path(
         principal=expected_principal,
         target=expected_target,
+        root_leaf=expected_root_leaf,
     )
     if source != expected_source:
         raise RuntimeError("App source path does not match the authenticated bundle identity")
@@ -115,6 +126,7 @@ def converge_static_app_source(
     source_code_path: str,
     expected_principal: str,
     expected_target: str,
+    expected_root_leaf: str | None = None,
 ) -> None:
     """Require a built SPA and remove only exact root npm build manifests."""
 
@@ -122,6 +134,7 @@ def converge_static_app_source(
         source_code_path,
         expected_principal=expected_principal,
         expected_target=expected_target,
+        expected_root_leaf=expected_root_leaf,
     )
     index_path = f"{root}/frontend/dist/index.html"
     index_status = _status_or_none(workspace, index_path)
@@ -137,12 +150,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-code-path", required=True)
     parser.add_argument("--expected-principal", required=True)
     parser.add_argument("--expected-target", required=True)
+    parser.add_argument("--expected-root-leaf", default=None, help="the bundle root leaf (default: the target)")
     args = parser.parse_args(argv)
     converge_static_app_source(
         WorkspaceClient(),
         source_code_path=args.source_code_path,
         expected_principal=args.expected_principal,
         expected_target=args.expected_target,
+        expected_root_leaf=args.expected_root_leaf,
     )
     print("[static-app-source] prebuilt frontend present; root Node manifests absent")
     return 0

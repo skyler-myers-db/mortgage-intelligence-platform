@@ -91,6 +91,45 @@ else
 fi
 # <<< frontend dependency freshness: check <<<
 
+# >>> ci-install-isolation (W5e w5-deps-report, D-platform-process-b step 7)
+# Pure and fail-closed, so it also runs in DRY_RUN, and it sits before the
+# confirmation prompt, the BUNDLE_VAR exports and any mutation: deploy-dev.yml
+# must use its own bundle root (MIP_BUNDLE_ROOT_LEAF) and staging names, and a
+# non-default root is CI-only (tools/databricks/ci_install_isolation.py, which
+# names only variables on refusal). The names are read as the gates below read
+# them (shell, then .env.local); an unset name falls back to its live default,
+# so the tool refuses it. An operator run (no leaf, not deploy-dev.yml)
+# resolves to the live root without Python: the tool's answer for that input.
+_CI_INSTALL_LEAF="$(deployment_control_value MIP_BUNDLE_ROOT_LEAF)"
+if [[ -z "$_CI_INSTALL_LEAF" && "${GITHUB_WORKFLOW_REF:-}" != *"/.github/workflows/deploy-dev.yml@"* ]]; then
+  _CI_INSTALL_VARS=$'bundle_root_leaf=dev\ninstall_suffix='
+elif ! _CI_INSTALL_VARS="$(
+  MIP_BUNDLE_ROOT_LEAF="$_CI_INSTALL_LEAF" \
+  MIP_APP_NAME="$(deployment_control_value MIP_APP_NAME)" \
+  MIP_DEFAULT_CATALOG="$(deployment_control_value MIP_DEFAULT_CATALOG)" \
+  MIP_LAKEBASE_INSTANCE="$(deployment_control_value MIP_LAKEBASE_INSTANCE)" \
+  MIP_LAKEBASE_SYNC_CATALOG="$(deployment_control_value MIP_LAKEBASE_SYNC_CATALOG)" \
+  MIP_RUNTIME_SECRET_SCOPE="$(deployment_control_value MIP_RUNTIME_SECRET_SCOPE)" \
+  MIP_APP_ROLLBACK_SECRET_SCOPE="$(deployment_control_value MIP_APP_ROLLBACK_SECRET_SCOPE)" \
+  MIP_GENIE_SPACE_NAME="$(deployment_control_value MIP_GENIE_SPACE_NAME)" \
+  MIP_AI_GATEWAY_TABLE_PREFIX="$(deployment_control_value MIP_AI_GATEWAY_TABLE_PREFIX)" \
+  MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE="$(deployment_control_value MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE)" \
+  GENIE_SPACE_ID="$(deployment_control_value GENIE_SPACE_ID)" \
+  MIP_DEPLOY_TARGET="$TARGET" "$PYTHON" -m tools.databricks.ci_install_isolation
+)"; then
+  echo "${RED}[deploy] refusing: the CI staging install is not isolated from the live install (see above).${RST}" >&2
+  exit 2
+fi
+BUNDLE_VAR_bundle_root_leaf="$(printf '%s\n' "$_CI_INSTALL_VARS" | sed -n 's/^bundle_root_leaf=//p')"
+BUNDLE_VAR_install_suffix="$(printf '%s\n' "$_CI_INSTALL_VARS" | sed -n 's/^install_suffix=//p')"
+export BUNDLE_VAR_bundle_root_leaf BUNDLE_VAR_install_suffix
+MIP_BUNDLE_ROOT_LEAF_RESOLVED="$TARGET"
+if [[ "$TARGET" == "dev" ]]; then
+  MIP_BUNDLE_ROOT_LEAF_RESOLVED="$BUNDLE_VAR_bundle_root_leaf"
+fi
+unset _CI_INSTALL_VARS _CI_INSTALL_LEAF
+# <<< ci-install-isolation
+
 if [[ "$DRY_RUN" -eq 0 && "$NO_CONFIRM" -eq 0 ]]; then
   read -r -p "About to DEPLOY to the ${TARGET} target. Continue? [y/N] " ans
   if [[ "$ans" != "y" && "$ans" != "Y" ]]; then

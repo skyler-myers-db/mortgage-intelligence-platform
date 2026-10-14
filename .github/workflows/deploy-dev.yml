@@ -358,6 +358,13 @@ jobs:
           MIP_AI_GATEWAY_AGENT_MODEL_FAMILY: ${{ vars.MIP_AI_GATEWAY_AGENT_MODEL_FAMILY }}
           MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE: ${{ vars.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE }}
           MIP_AI_GATEWAY_TABLE_PREFIX: ${{ vars.MIP_AI_GATEWAY_TABLE_PREFIX }}
+          # A literal, never a var: the CI staging install's own bundle root
+          # (~/.bundle/<bundle>/dev-ci) and its _ci display-name suffix, so
+          # this run never uploads into or shares state with the live
+          # install. scripts/deploy.sh refuses this workflow without it, and
+          # refuses any live-default name beside it (D-platform-process-b
+          # step 7; tools/databricks/ci_install_isolation.py).
+          MIP_BUNDLE_ROOT_LEAF: dev-ci
           MIP_REBASE_UNVERIFIED_APP: ${{ inputs.rebase_unverified_app && '1' || '0' }}
           MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS: ${{ inputs.remediate_foreign_catalog_bindings && '1' || '0' }}
           MIP_REQUIRE_AI_GATEWAY_CLAIMABLE: '1'

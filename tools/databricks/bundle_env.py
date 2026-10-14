@@ -21,6 +21,8 @@ Mapping (env -> BUNDLE_VAR_*):
   MIP_LAKEBASE_SYNC_CATALOG -> BUNDLE_VAR_lakebase_catalog_name
   LAKEBASE_DATABASE       -> BUNDLE_VAR_lakebase_database_name
   MIP_RUNTIME_SECRET_SCOPE -> BUNDLE_VAR_runtime_secret_scope
+  MIP_BUNDLE_ROOT_LEAF    -> BUNDLE_VAR_bundle_root_leaf (default dev; CI staging only)
+  (derived from the leaf) -> BUNDLE_VAR_install_suffix ('' for dev)
 
 Usage:
   python tools/databricks/bundle_env.py validate -t dev
@@ -58,6 +60,7 @@ from backend.schemas.lender_identity import (  # noqa: E402
     validate_public_lender_identity,
 )
 from tools import render_sql  # noqa: E402
+from tools.databricks import ci_install_isolation  # noqa: E402
 from tools.databricks.workspace_auth import (  # noqa: E402
     strip_app_facing_workspace_auth,
 )
@@ -419,6 +422,7 @@ def main() -> int:
                 "MIP_LAKEBASE_SYNC_CATALOG",
                 "MIP_GENIE_SPACE_NAME",
                 "MIP_RUNTIME_SECRET_SCOPE",
+                "MIP_BUNDLE_ROOT_LEAF",
             }:
                 if str(env.get(k) or "").strip():
                     continue
@@ -540,6 +544,14 @@ def main() -> int:
         return 2
     env["MIP_RUNTIME_SECRET_SCOPE"] = runtime_secret_scope
     env["BUNDLE_VAR_runtime_secret_scope"] = runtime_secret_scope
+    # The bundle root leaf's shape only; scripts/deploy.sh's preflight
+    # (tools/databricks/ci_install_isolation.py) owns the isolation rules.
+    root_leaf = str(env.get("MIP_BUNDLE_ROOT_LEAF") or ci_install_isolation.DEFAULT_LEAF).strip()
+    if re.fullmatch(r"dev(?:-[a-z0-9]{1,20})?", root_leaf) is None:
+        print("[bundle_env] MIP_BUNDLE_ROOT_LEAF is invalid", file=sys.stderr)
+        return 2
+    env["BUNDLE_VAR_bundle_root_leaf"] = root_leaf
+    env["BUNDLE_VAR_install_suffix"] = ci_install_isolation.install_suffix(root_leaf)
 
     catalog = str(env.get("MIP_DEFAULT_CATALOG") or "mip").strip()
     if _UC_IDENTIFIER.fullmatch(catalog) is None:
