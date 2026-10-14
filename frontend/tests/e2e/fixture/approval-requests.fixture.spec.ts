@@ -28,7 +28,12 @@
  *  (j) the 83 px header with the Console open, in both sessions; eight rows
  *      above the fold for an approver, seven for a non-approver, whose
  *      pre-existing role line keeps ONE line with its request note, at Linux
- *      text widths and for an address of any length.
+ *      text widths and for an address of any length;
+ *  (k) the Approval column's request marks inside its 156 px and the 44 px
+ *      row, Console open and closed: the approver's drawn glyph after Reject
+ *      (named "Requested · <name>", its tooltip on hover) with Approve and
+ *      Reject where an unmarked row has them and inside the content box; the
+ *      requester's "Approval requested" label whole at Linux text widths.
  *
  * Chromium only (fixture-chromium): this is not a cross-engine spec, so the
  * fixture-webkit and Firefox projects do not collect it (playwright.config's
@@ -86,6 +91,64 @@ const LINUX_TEXT_EMULATION = `
 const LONG_ACTOR_EMAIL = 'regional.mortgage.loan.analyst.team@summit.example';
 /** The share of the role line's content box its one line leaves free (the ~6% text slack). */
 const ROLE_LINE_SLACK = 0.06;
+/** The Approval column's chips (Geist Mono), widened the same way off Linux. */
+const LINUX_APPROVAL_CHIP_EMULATION = '.tbl-cell--approval .chip { letter-spacing: calc(0.02em + 0.5px); }';
+
+/** One rendered row's Approval cell: its edges, Approve / Reject, the approver's glyph, the requester's chip label. */
+interface ApprovalCellGeometry {
+  id: string;
+  rowHeight: number;
+  cellRight: number;
+  contentRight: number;
+  approveLeft: number | null;
+  rejectLeft: number | null;
+  rejectRight: number | null;
+  mark: { width: number; height: number; right: number } | null;
+  label: { client: number; scroll: number } | null;
+}
+
+function approvalCells(page: Page): Promise<ApprovalCellGeometry[]> {
+  return page.locator('tr[data-borrower-row]').evaluateAll((rows) => rows
+    .filter((row) => row.getBoundingClientRect().height > 0)
+    .map((row) => {
+      const td = row.querySelector<HTMLElement>('.tbl-cell--approval');
+      const box = td?.getBoundingClientRect();
+      const rect = (selector: string) => td?.querySelector(selector)?.getBoundingClientRect() ?? null;
+      const approve = rect('[data-testid^="lead-approve-"]');
+      const reject = rect('[data-testid^="lead-reject-"]');
+      const glyph = rect('.lead-table__request-mark svg');
+      const label = td?.querySelector<HTMLElement>('.lead-table__request-chip .chip__label') ?? null;
+      return {
+        id: row.getAttribute('data-borrower-row') ?? '',
+        rowHeight: row.getBoundingClientRect().height,
+        cellRight: box?.right ?? 0,
+        contentRight: td && box ? box.right - parseFloat(getComputedStyle(td).paddingInlineEnd) : 0,
+        approveLeft: approve?.left ?? null,
+        rejectLeft: reject?.left ?? null,
+        rejectRight: reject?.right ?? null,
+        mark: glyph && { width: glyph.width, height: glyph.height, right: glyph.right },
+        label: label && { client: label.clientWidth, scroll: label.scrollWidth },
+      };
+    }));
+}
+
+/** The marked rows (every requested id, rendered) and one unmarked row with live Approve / Reject. */
+async function markedAndReference(page: Page) {
+  const cells = await approvalCells(page);
+  const marked = cells.filter((geometry) => REQUESTED_IDS.includes(geometry.id));
+  expect(marked.map((geometry) => geometry.id).sort(), 'every requested row is rendered').toEqual([...REQUESTED_IDS].sort());
+  const reference = cells.find((geometry) => !REQUESTED_IDS.includes(geometry.id) && geometry.approveLeft !== null);
+  if (!reference) throw new Error('no unmarked row with Approve / Reject to compare against');
+  return { marked, reference };
+}
+
+/** Open the Console and wait for the main column to narrow (the Approval pin then sits mid-page). */
+async function openConsoleNarrow(app: { openConsole(): Promise<unknown>; settle(): Promise<void> }, page: Page): Promise<void> {
+  await app.openConsole();
+  await expect.poll(() => page.locator('#main-content .main__inner').first().evaluate((element) => Math.round(element.getBoundingClientRect().width)))
+    .toBeLessThan(1100);
+  await app.settle();
+}
 
 /** The role line's fit: its height against two chip heights, the free share of its box, the address clipped. */
 function roleLineFit(status: Locator) {
@@ -231,7 +294,7 @@ test.describe('an approver', () => {
     const store = registerApprovalRequestStore(mockApi, { seed: batchView(REQUESTED_IDS, false) });
     await app.gotoRoute('/lead-queue');
     await expect(chip(page)).toHaveText(`Approval requests · ${REQUESTED_IDS.length}`);
-    await expect(cell(page, REQUESTED_IDS[0]).locator('.lead-table__request-chip')).toHaveText(`Requested · ${REQUESTER_LABEL}`);
+    await expect(visible(page.getByTestId(`lead-request-mark-${REQUESTED_IDS[0]}`))).toHaveAccessibleName(`Requested · ${REQUESTER_LABEL}`);
     await chip(page).click();
     const panel = page.getByTestId('approval-requests-panel');
     await expect(panel).toContainText(REQUESTER_LABEL);
@@ -313,6 +376,55 @@ test.describe('an approver', () => {
     expect(await box(confirm)).toEqual(confirmBox);
     approveGate.release();
   });
+});
+
+test.describe('the request marks at 1440x900', () => {
+  for (const consoleOpen of [false, true]) {
+    const consoleState = consoleOpen ? 'Console open' : 'Console closed';
+    test(`(k) approver, ${consoleState}: a drawn, named glyph after Reject; Approve and Reject keep their unmarked places`, async ({ app, mockApi, page }) => {
+      useSession(mockApi, SESSION);
+      registerApprovalRequestStore(mockApi, { seed: batchView(REQUESTED_IDS, false) });
+      await app.gotoRoute('/lead-queue');
+      await expect(chip(page)).toHaveText(`Approval requests · ${REQUESTED_IDS.length}`);
+      if (consoleOpen) await openConsoleNarrow(app, page);
+      else await app.settle();
+      const mark = visible(page.getByTestId(`lead-request-mark-${REQUESTED_IDS[0]}`));
+      await expect(mark).toHaveRole('img');
+      await expect(mark).toHaveAccessibleName(`Requested · ${REQUESTER_LABEL}`);
+      await expect(mark).not.toHaveAttribute('title');
+      const { marked, reference } = await markedAndReference(page);
+      for (const geometry of marked) {
+        const at = `${geometry.id} (${consoleState})`;
+        expect(geometry.mark?.width ?? 0, `${at}: the glyph is drawn`).toBeGreaterThan(0);
+        expect(geometry.mark?.height ?? 0, `${at}: the glyph is drawn`).toBeGreaterThan(0);
+        expect(geometry.mark?.right ?? Infinity, `${at}: the glyph stays in the column`).toBeLessThanOrEqual(geometry.cellRight);
+        expect(geometry.rejectRight ?? Infinity, `${at}: Reject stays in the content box`).toBeLessThanOrEqual(geometry.contentRight + 0.5);
+        expect(geometry.approveLeft ?? NaN, `${at}: Approve where an unmarked row has it`).toBeCloseTo(reference.approveLeft ?? NaN, 0);
+        expect(geometry.rejectLeft ?? NaN, `${at}: Reject where an unmarked row has it`).toBeCloseTo(reference.rejectLeft ?? NaN, 0);
+        expect(geometry.rowHeight, `${at}: the row height holds`).toBe(reference.rowHeight);
+      }
+      // A pointer reads the same text on the design-system tooltip (no title=).
+      await mark.hover();
+      await expect(page.getByRole('tooltip')).toHaveText(`Requested · ${REQUESTER_LABEL}`);
+    });
+
+    test(`(k) requester, ${consoleState}: "Approval requested" keeps its whole label at Linux text widths`, async ({ app, mockApi, page }) => {
+      useSession(mockApi, NON_APPROVER_SESSION);
+      registerApprovalRequestStore(mockApi, { seed: batchView(REQUESTED_IDS, true) });
+      await app.gotoRoute('/lead-queue');
+      await expect(cell(page, REQUESTED_IDS[0])).toHaveText('Approval requested');
+      if (consoleOpen) await openConsoleNarrow(app, page);
+      else await app.settle();
+      if (process.platform !== 'linux') await page.addStyleTag({ content: LINUX_APPROVAL_CHIP_EMULATION });
+      const { marked, reference } = await markedAndReference(page);
+      for (const geometry of marked) {
+        const at = `${geometry.id} (${consoleState})`;
+        expect(geometry.label, `${at}: the chip is there`).not.toBeNull();
+        expect(geometry.label?.client ?? 0, `${at}: the label is not clipped`).toBeGreaterThanOrEqual(geometry.label?.scroll ?? Infinity);
+        expect(geometry.rowHeight, `${at}: the row height holds`).toBe(reference.rowHeight);
+      }
+    });
+  }
 });
 
 for (const theme of FIXTURE_THEMES) {

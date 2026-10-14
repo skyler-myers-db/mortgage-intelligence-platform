@@ -6,6 +6,7 @@ import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { safeSegmentName, segmentColor } from '../../lib/segmentMetadata';
 import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip } from '../Primitives';
+import { Tooltip } from '../ui/Tooltip';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { RowPreview } from './LeadRowPreview';
@@ -61,7 +62,7 @@ interface LeadTableRowProps {
   /**
    * An OPEN approval request holds this row (flow-02; deviation:request-approval):
    * the requester's chip replaces the disabled Approve / Reject, the approver's
-   * sits before them. Hidden whenever `approval` is set.
+   * icon marker follows them. Hidden whenever `approval` is set.
    */
   requestMark?: ApprovalRequestMark | null;
   /** The request path is open (a ready non-approver, unscoped queue); its blocked reason, if any. */
@@ -278,11 +279,10 @@ export function LeadTableRow({
         {approval === 'hold' && <Chip variant="warning" icon="shield">Hold</Chip>}
         {!approval && !isApprovalEligible && <Chip variant="warning" icon="shield">Not actionable</Chip>}
         {!approval && isApprovalEligible && requestMark?.tone === 'warning' && (
-          <Chip variant="warning" className="lead-table__request-chip">{requestMark.label}</Chip>
+          <Chip variant="warning" className="chip--compact lead-table__request-chip">{requestMark.label}</Chip>
         )}
         {!approval && isApprovalEligible && requestMark?.tone !== 'warning' && (
           <div className="lead-table__approval-actions" onClick={stop}>
-            {requestMark && <Chip variant="neutral" className="lead-table__request-chip">{requestMark.label}</Chip>}
             <Button
               variant="primary"
               size="sm"
@@ -320,6 +320,24 @@ export function LeadTableRow({
               }}
               data-testid={`lead-reject-${lead.borrower_id}`}
             />
+            {/* deviation:request-approval: the approver's marker is the `send` glyph
+                (the decision history's "requested") AFTER Reject, its full
+                "Requested · <name>" text the accessible name and the hover tooltip.
+                The pinned 156 px column holds Approve + Reject with ~14 px to
+                spare, so a text chip squeezed to an empty pill and pushed both
+                buttons off their unmarked x. */}
+            {requestMark && (
+              <Tooltip content={requestMark.label}>
+                <span
+                  role="img"
+                  aria-label={requestMark.label}
+                  className="lead-table__request-mark"
+                  data-testid={`lead-request-mark-${lead.borrower_id}`}
+                >
+                  <Icon name="send" size={10} />
+                </span>
+              </Tooltip>
+            )}
           </div>
         )}
       </td>

@@ -351,13 +351,22 @@
   outline-offset: var(--focus-ring-offset);
 }
 
-/* Approval-request chips in the pinned Approval column (audit flow-02 /
-   shell-06; deviation:request-approval): the requester's "Approval requested"
-   replaces the disabled Approve / Reject, the approver's "Requested · name"
-   sits before them and shrinks to an ellipsis (the base .chip / .chip__label
-   carry it), so the row height and the column's declared width hold. */
-.tbl-cell--approval .lead-table__approval-actions { max-inline-size: 100%; }
-.lead-table__request-chip { flex: 0 1 auto; }
+/* Approval-request marks in the pinned Approval column (audit flow-02 /
+   shell-06; deviation:request-approval), inside its 156 px and the 44 px row.
+   The requester's "Approval requested" replaces the disabled Approve / Reject
+   as a .chip--compact (the table's in-row chip size), so its label keeps its
+   slack in the 140 px content box at Linux text widths too. The approver's
+   mark follows Reject: Approve + Reject fill 126 px of that box, so a text
+   chip there squeezed to an empty pill; a 10 px glyph two pixels after Reject
+   (half the group's gap) fits, never shrinks, and leaves both buttons where
+   an unmarked row has them. Its full "Requested · name" is its accessible
+   name and its tooltip. */
+.lead-table__request-mark {
+  display: inline-flex;
+  flex: none;
+  margin-inline-start: calc(var(--sp-1) / -2);
+  color: var(--text-2);
+}
 
 /* The non-approver's role line (approver-role-status) keeps one line at
    1440x900 with the Console open, its request note included (audit

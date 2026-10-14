@@ -322,17 +322,27 @@ describe('the table: the approver side', { timeout: 60_000 }, () => {
     app.state.canApprove = true;
   });
 
-  it('marks a requested row before Approve / Reject, and a local decision hides the chip', async () => {
+  it('marks a requested row after Approve / Reject (named, no title), and a local decision hides the mark', async () => {
     const marks = new Map([[IDS[0], { label: 'Requested · Alice Analyst', tone: 'neutral' as const }]]);
     const mounted = await renderTable(requests({ role: 'approver', marks, count: 1 }));
     const cell = () => q(`[data-testid="lead-approval-cell-${IDS[0]}"]`)!;
-    expect(cell().querySelector('.lead-table__request-chip')?.textContent).toBe('Requested · Alice Analyst');
-    expect(cell().querySelector(`[data-testid="lead-approve-${IDS[0]}"]`)).not.toBeNull();
+    const mark = cell().querySelector<HTMLElement>(`[data-testid="lead-request-mark-${IDS[0]}"]`)!;
+    expect(mark.getAttribute('role')).toBe('img');
+    expect(mark.getAttribute('aria-label')).toBe('Requested · Alice Analyst');
+    expect(mark.hasAttribute('title')).toBe(false);
+    // The tooltip carries the same text for a pointer.
+    expect(document.getElementById(mark.getAttribute('data-tooltip')!)!.textContent).toBe('Requested · Alice Analyst');
+    expect(mark.querySelector('svg')).not.toBeNull();
+    // After both buttons, never before them: Approve and Reject keep their unmarked places.
+    const actions = [...cell().querySelectorAll('[data-testid]')].map((node) => node.getAttribute('data-testid'));
+    expect(actions).toEqual([`lead-approve-${IDS[0]}`, `lead-reject-${IDS[0]}`, `lead-request-mark-${IDS[0]}`]);
+    expect(cell().querySelector('.chip')).toBeNull();
+    expect(q(`[data-testid="lead-request-mark-${IDS[1]}"]`)).toBeNull();
     expect(q('[data-testid="approval-requests-chip"]')!.textContent).toBe('Approval requests · 1');
     mounted.unmount();
     app.state.approvals = { [IDS[0]]: 'approved' };
     await renderTable(requests({ role: 'approver', marks, count: 1 }));
-    expect(q(`[data-testid="lead-approval-cell-${IDS[0]}"]`)!.querySelector('.lead-table__request-chip')).toBeNull();
+    expect(q(`[data-testid="lead-request-mark-${IDS[0]}"]`)).toBeNull();
   });
 
   it('a scoped queue shows the scope row and every decision carries the request id', async () => {
