@@ -13,6 +13,7 @@ import { queryKeys } from '../lib/queryKeys';
 import { formatCount } from '../lib/formatters';
 import { formatTimestamp } from '../lib/time';
 import type { AssetFreshness, AssetMetadataResponse } from '../types';
+import './asset.css';
 
 /**
  * The shared failure surface (audit 2026-09-21 states-04 / states-03), loaded

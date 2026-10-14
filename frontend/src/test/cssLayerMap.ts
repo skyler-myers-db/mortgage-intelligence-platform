@@ -60,6 +60,8 @@ export const PENDING_INTEGRATOR_WRAP: readonly string[] = [
 export const ROUTES_EXCEPTIONS: Readonly<Record<string, string>> = {
   'src/design-system/components/14-genie-markdown-and-proof.css':
     'moved out of the initial sheet (css-05 step 2); it cascaded in components, below every lazy sheet (the inversion scan finds no equal-specificity tie with partials 15-38 that loading later now flips)',
+  'src/routes/asset.css':
+    'the .asset-* blocks moved out of 05-command-palette.css (css-05 step 2) keep the components layer they cascaded in, against the initial .tbl / .surface partials and any lazy sheet',
   'src/components/mortgage/ProofPanels.css':
     'the .proof-* blocks moved out of 05-command-palette.css (css-05 step 2); EvidenceHowWeGot.css (.evidence-proof__sql) and ScoreSpine.css (.proof-component--focused) override them at equal specificity and must keep winning whatever order the chunks load in',
 };

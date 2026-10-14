@@ -1,0 +1,92 @@
+/* Data-estate asset page (routes/asset.tsx): the `.asset-*` blocks, moved
+   verbatim from 05-command-palette.css (css-05 step 2). The selector lists
+   they shared with the evidence drawer's `.source-stat*` blocks are split,
+   declarations unchanged; `.source-stat*` and `.lineage-node*` stay in the
+   partial. They keep the components layer they cascaded in (cssLayerMap.ts
+   ROUTES_EXCEPTIONS). */
+@layer components {
+.asset-card-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-3);
+}
+.asset-metric {
+  min-inline-size: 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+}
+.asset-metric span,
+.asset-metric em {
+  display: block;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  font-style: normal;
+}
+.asset-metric strong {
+  display: block;
+  margin-top: var(--sp-1);
+  color: var(--text-1);
+  font-size: var(--fs-13);
+  overflow-wrap: anywhere;
+}
+.asset-layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-grid);
+}
+.asset-hero .surface__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.asset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  align-items: center;
+}
+.asset-table-wrap { overflow-x: auto; }
+.asset-table td,
+.asset-table th { vertical-align: top; }
+.asset-ddl {
+  margin: 0;
+  max-block-size: 420px;
+  overflow: auto;
+  padding: var(--sp-4);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-0);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+  white-space: pre-wrap;
+}
+.asset-callout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
+.asset-callout span {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid color-mix(in oklab, var(--signal-warning) 45%, var(--line-2));
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--signal-warning) 7%, transparent);
+}
+.asset-tag-grid,
+.asset-lineage {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3);
+}
+@media(max-width:900px){
+  .asset-card-grid,
+  .asset-tag-grid,
+  .asset-lineage { grid-template-columns: 1fr; }
+}
+}
