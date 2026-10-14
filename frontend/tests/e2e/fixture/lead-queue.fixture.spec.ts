@@ -384,7 +384,11 @@ async function addScrollRoom(page: Page): Promise<void> {
 /**
  * Scroll `.main` so `target` sits entirely behind the sticky route nav. The
  * browser counts a control there as in view, so without a clearance a focus
- * leaves it hidden under the nav.
+ * leaves it hidden under the nav. A control inside the table's own scroller
+ * is first brought inside that scroller's box (its bottom edge): clipped
+ * below it, the control is out of view and a focus scrolls it whatever the
+ * margins (the expanded row's Approve sits under the 480px scroller's
+ * bottom edge since the preview's chip row wraps, W5e More like this).
  */
 async function behindRouteNav(page: Page, target: Locator): Promise<void> {
   await addScrollRoom(page);
@@ -392,12 +396,18 @@ async function behindRouteNav(page: Page, target: Locator): Promise<void> {
     const main = element.closest<HTMLElement>('.main');
     const nav = main?.querySelector<HTMLElement>('.route-nav');
     if (!main || !nav || getComputedStyle(nav).position !== 'sticky') throw new Error('no sticky route nav');
+    const scroller = element.closest<HTMLElement>('.tbl-wrap');
+    if (scroller) {
+      const below = element.getBoundingClientRect().bottom - scroller.getBoundingClientRect().bottom;
+      if (below > 0) scroller.scrollTop += below;
+    }
     main.scrollTop += element.getBoundingClientRect().top - (nav.getBoundingClientRect().top + 2);
     const box = element.getBoundingClientRect();
     const band = nav.getBoundingClientRect();
-    return box.top >= band.top && box.bottom <= band.bottom;
+    const inScroller = !scroller || box.bottom <= scroller.getBoundingClientRect().bottom + 0.5;
+    return box.top >= band.top && box.bottom <= band.bottom && inScroller;
   });
-  expect(covered, 'precondition: the control sits behind the route nav').toBe(true);
+  expect(covered, 'precondition: the control sits behind the route nav (inside its scroller)').toBe(true);
 }
 
 /** The control's top edge below the route nav's bottom edge (negative: under it). */
