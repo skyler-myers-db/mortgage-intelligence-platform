@@ -2,7 +2,7 @@
 
 import { act, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useExitPresence, useExitRetained } from './useExitRetained';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -98,6 +98,90 @@ describe('useExitRetained', () => {
     expect(shown()).toBe('dossier');
     fire(panel(), 'transitionend');
     expect(shown()).toBe('');
+  });
+});
+
+/**
+ * The deadline (computed 120 ms + 120 ms grace on the Panel above) is wall
+ * clock; the exit runs on the document timeline, which a starved renderer
+ * advances late (Linux WebKit on CI). The rendered proof is the History menu
+ * case in genie-context-deeplink.cross-engine.fixture.spec.ts.
+ */
+describe('useExitRetained deadline', () => {
+  const DEADLINE_MS = 240;
+  const advance = (ms: number) =>
+    act(() => {
+      vi.advanceTimersByTime(ms);
+    });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    (globalThis as unknown as { CSSTransition: unknown }).CSSTransition = FakeCssTransition;
+    running = [];
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    delete (globalThis as unknown as { CSSTransition?: unknown }).CSSTransition;
+    vi.useRealTimers();
+  });
+
+  it('holds an exit still running at the deadline until its own transitionend', async () => {
+    await render('dossier');
+    running = [new FakeCssTransition('running')];
+    await render(null);
+    advance(DEADLINE_MS * 2);
+    expect(shown(), 'a late exit is not cut at the deadline').toBe('dossier');
+    running = [new FakeCssTransition('finished')];
+    fire(panel(), 'transitionend');
+    expect(shown()).toBe('');
+  });
+
+  it('holds an exit that finished on the timeline until its transitionend is dispatched', async () => {
+    // WebKit reports a transition `finished` (and drops it from
+    // getAnimations) before the rendering update that sends its transitionend.
+    await render('dossier');
+    const exit = new FakeCssTransition('running');
+    running = [exit];
+    await render(null);
+    exit.playState = 'finished';
+    running = [];
+    advance(DEADLINE_MS);
+    expect(shown(), 'its transitionend is still owed').toBe('dossier');
+    fire(panel(), 'transitionend');
+    expect(shown()).toBe('');
+  });
+
+  it('releases at the deadline when the exit was cancelled (display:none) or never ran', async () => {
+    await render('dossier');
+    const exit = new FakeCssTransition('running');
+    running = [exit];
+    await render(null);
+    exit.playState = 'idle';
+    running = [];
+    advance(DEADLINE_MS - 1);
+    expect(shown()).toBe('dossier');
+    advance(1);
+    expect(shown(), 'a cancelled exit owes no transitionend').toBe('');
+
+    await render('brief');
+    await render(null);
+    advance(DEADLINE_MS);
+    expect(shown(), 'no exit transition at all').toBe('');
+  });
+
+  it('gives a running exit at most four more deadlines', async () => {
+    await render('dossier');
+    running = [new FakeCssTransition('running')];
+    await render(null);
+    advance(DEADLINE_MS * 5 - 1);
+    expect(shown(), 'four extensions').toBe('dossier');
+    advance(1);
+    expect(shown(), 'a timeline that never ticks cannot hold the panel').toBe('');
   });
 });
 
