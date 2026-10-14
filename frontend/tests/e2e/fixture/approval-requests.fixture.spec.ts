@@ -436,7 +436,8 @@ test.describe('the request marks and entry at 1440x900', () => {
       await app.gotoRoute('/lead-queue');
       const entry = visible(page.getByTestId('approval-requests-unavailable'));
       await expect(entry).toHaveRole('status');
-      await expect(entry).toContainText('Requests unavailable');
+      // The exact copy is the vitest's; here, the layout ("Approval" is spoken, not shown).
+      await expect(entry).toContainText(/requests unavailable/i);
       await expect(page.getByTestId('approval-requests-chip')).toHaveCount(0);
       await expect(page.locator('.lead-table__request-mark, .lead-table__request-chip')).toHaveCount(0);
       await openConsoleNarrow(app, page);
