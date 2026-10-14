@@ -47,6 +47,19 @@
   .offer-action-bar__row > .outreach-routing { align-content: center; }
 }
 
+/* A routing hint wraps inside its own field and never sizes it (W5d VRT
+   review of the Field hint, critic-04). Without this its max-content width
+   (388px here, about 403px on Linux) set the Follow-up field's width: that
+   select read twice the Assign select, and through the `auto` routing column
+   above it took about 211px from the approval gate, whose copy then wrapped
+   a line and made the docked bar taller. Zero inline size for the intrinsic
+   pass, then the field's whole width: both fields keep the 12rem floor of
+   `.outreach-routing__field` (04-approval-and-drawer.css). */
+.outreach-routing__field > .field__hint {
+  inline-size: 0;
+  min-inline-size: 100%;
+}
+
 /* Docked only when the viewport has the height for it (40rem: 640 CSS px at
    the default 16px font size). Browser zoom shrinks the CSS viewport, so the
    query tracks zoom in px or rem alike; rem also tracks the user's default

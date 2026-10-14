@@ -91,7 +91,7 @@ describe('OfferActionBar', () => {
     expect(assign?.classList.contains('outreach-routing__select')).toBe(true);
     expect(followUp?.labels?.[0]?.textContent).toBe('Follow-up reminder');
     const described = (followUp?.getAttribute('aria-describedby') ?? '').split(' ').map((id) => document.getElementById(id)?.textContent);
-    expect(described).toEqual(['days', 'A reminder for the assigned loan officer; nothing is sent to the borrower.']);
+    expect(described).toEqual(['days', 'Nothing is sent to the borrower.']);
   });
 
   it('shows a failed write and the reject rationale inside the bar, above the gate', () => {

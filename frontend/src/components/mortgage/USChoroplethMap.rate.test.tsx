@@ -524,7 +524,8 @@ describe('USChoroplethMap rate change as numbers', () => {
     const link = [...document.querySelectorAll<HTMLAnchorElement>('.rate-lever a')].find((a) =>
       a.textContent === 'Open borrowers within 50 bps of the refi screen in the Lead Queue');
     expect(link?.getAttribute('href')).toBe('/lead-queue?min_rate_spread_bps=25&max_rate_spread_bps=74');
-    expect(link?.className).toBe('btn btn--ghost btn--sm');
+    // deviation:lever-cohort-link-wraps: the scoped class lets the sentence label wrap in the lever.
+    expect(link?.className).toBe('btn btn--ghost btn--sm rate-lever__cohort');
 
     // Drilled into Texas: no whole-book clause; the link scopes to the state.
     await renderMap({ mode: 'rate', step: 25, selection: { state: 'TX', county: null, zip: null } });
