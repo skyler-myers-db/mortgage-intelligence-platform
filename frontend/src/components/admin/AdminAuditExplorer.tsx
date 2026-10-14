@@ -246,7 +246,7 @@ export function AdminAuditExplorer() {
       tabIndex={-1}
       aria-labelledby="audit-explorer-title"
     >
-      <div className="surface__hdr surface__hdr--split">
+      <div className="surface__hdr surface__hdr--split surface__hdr--audit">
         <div>
           <SurfaceTitle id="audit-explorer-title">Audit explorer</SurfaceTitle>
           <div className="muted fs-12">
