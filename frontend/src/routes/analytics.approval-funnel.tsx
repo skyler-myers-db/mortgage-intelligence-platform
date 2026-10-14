@@ -1,7 +1,3 @@
-// React Compiler memo caches add enough code here to breach the strict bundle
-// budget; the analytics route family opts out. Keep this section explicit.
-'use no memo';
-
 import { Fragment, useState } from 'react';
 import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
