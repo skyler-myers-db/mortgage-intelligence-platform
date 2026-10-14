@@ -18,8 +18,8 @@ import yaml
 REPO = Path(__file__).resolve().parents[2]
 NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
 REAL_DATA_SPEC = REPO / "frontend" / "tests" / "e2e" / "real_data.spec.ts"
-LIVE_CAMPAIGN_PROOF = REPO / "frontend" / "src" / "lib" / "liveCampaignProof.ts"
-LIVE_CAMPAIGN_PROOF_TEST = REPO / "frontend" / "src" / "lib" / "liveCampaignProof.test.ts"
+LIVE_CAMPAIGN_PROOF = REPO / "frontend" / "tests" / "support" / "liveCampaignProof.ts"
+LIVE_CAMPAIGN_PROOF_TEST = REPO / "frontend" / "tests" / "support" / "liveCampaignProof.test.ts"
 LIVE_HARDENING_SPEC = REPO / "frontend" / "tests" / "e2e" / "live_hardening_regressions.spec.ts"
 CONSOLE_LAYOUT_SPEC = REPO / "frontend" / "tests" / "e2e" / "console-layout.spec.ts"
 ECONOMICS_SCATTER_SPEC = REPO / "frontend" / "tests" / "e2e" / "economics_scatter.spec.ts"
