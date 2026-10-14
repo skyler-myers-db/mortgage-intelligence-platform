@@ -42,6 +42,7 @@ from tools.databricks.audit_global_m2m_access import (
     assert_workspace_admin_inventory_identity,
 )
 from tools.databricks.deployment_lease_authority import held_assertion
+from tools.databricks.install_scope import active_install_suffix, assert_endpoint_revokes_owned
 from tools.databricks.legacy_permissions_acl_cleanup import (
     stopped_deployment_app_assertion,
 )
@@ -272,6 +273,11 @@ def grant_and_audit_agent_proxy_access(
     missing = reviewed_ids.difference(agents)
     if missing:
         raise RuntimeError("reviewed Supervisor Agent is absent from global inventory")
+    if not audit_only and active_install_suffix():
+        # The CI staging install: refuse (exit 2, nothing changed) before the
+        # first convergence if the proxy holds access outside this install's
+        # reviewed endpoints, which the obsolete-endpoint revoke would remove.
+        assert_endpoint_revokes_owned(workspace, reviewed=reviewed_endpoints, application_id=proxy_id)
     _converge_supervisor_agent_acls(
         workspace,
         agents=agents,
