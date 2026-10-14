@@ -1132,7 +1132,24 @@ revoke clears the sales-state cache and enqueues the lifecycle sync with
 reason `revocation`; the sync, `lifecycle_for` and the activation delivery
 guard read the borrower as pending / none / superseded. The funnel's
 "approved" stage counts borrowers ever approved, so a revoked approval still
-counts there, exactly like approve-then-reject.
+counts there, exactly like approve-then-reject; its recent-approvals list
+(W5e) leaves out an approve with a later finalized revoke for the same
+borrower, and a re-approve after the revoke lists again.
+
+A refused revoke answers the house 409 shape (W5e, as `sales._conflict`):
+`{"detail": <fixed sentence>, "reason": <code>}`, the detail byte-identical
+to the earlier body, and nothing is written. The client reads `reason` and
+shows one closed sentence per code (`REVOKE_REFUSAL_COPY`), never the raw
+detail:
+
+| `reason` | Refused because |
+| --- | --- |
+| `not_current` | the named approval is no longer the borrower's current, finalized decision |
+| `campaign_bound` | the approval is campaign-bound (not revocable in v1; the Lead Queue hides the action and says why) |
+| `dispositioned` | a call disposition was logged since the approval |
+| `outcome_recorded` | a lead outcome was recorded since the approval |
+| `delivered` | the approval's outreach was delivered |
+| `assignment_worked` | the active assignment was already worked (`actioned`, `outcome_recorded`) |
 
 Queue version: the change signal now reads six ledgers (approvals,
 assignments, call dispositions, loan-officer outcomes, activation delivery

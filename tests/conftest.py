@@ -635,6 +635,19 @@ class _FakeLakebaseClient:
                 :limit
             ]
         if "FROM mip_app.approvals" in sql and "ORDER BY decided_at DESC" in sql:
+            # The funnel's recent list drops an approve with a later finalized
+            # revoke for the same borrower (flow-v2, the NOT EXISTS arm).
+            revoke_aware = "r.action = 'revoke'" in sql
+
+            def _revoked(approve: dict[str, Any]) -> bool:
+                return revoke_aware and any(
+                    other.get("borrower_id") == approve.get("borrower_id")
+                    and other.get("action") == "revoke"
+                    and other.get("audit_event_id") is not None
+                    and other["decided_at"] >= approve["decided_at"]
+                    for other in self.approvals
+                )
+
             rows = [
                 {
                     "approval_id": row.get("approval_id"),
@@ -645,7 +658,7 @@ class _FakeLakebaseClient:
                     "decided_at": row.get("decided_at"),
                 }
                 for row in self.approvals
-                if row.get("action") == "approve"
+                if row.get("action") == "approve" and not _revoked(row)
             ]
             rows.sort(key=lambda r: r["decided_at"], reverse=True)
             return rows[:limit]

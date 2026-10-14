@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from backend.schemas.outreach_revoke import OutreachRevokeRequest, OutreachRevokeResponse
 from backend.services.audit_store import AuditMetadataValueViolation, AuditPIIError
@@ -45,6 +46,15 @@ LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
 REVOKE_NOT_RECORDED = "The request could not be recorded."
 
 
+def _revoke_refused(kind: str) -> JSONResponse:
+    """The house 409 shape (sales._conflict): the fixed detail plus its ``reason`` code.
+
+    The client reads ``reason`` (apiActorBinding.actorRefusalReason -> ApiError.reason)
+    to pick the refusal sentence; ``detail`` stays byte-identical to the old body.
+    """
+    return JSONResponse(status_code=409, content={"detail": REVOKE_REFUSED_DETAIL[kind], "reason": kind})
+
+
 @router.post("/revoke", response_model=OutreachRevokeResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
 def revoke_outreach(
     payload: OutreachRevokeRequest,
@@ -53,7 +63,7 @@ def revoke_outreach(
     repo: RepoDep,
     lakebase: LakebaseDep,
     _: Annotated[None, Depends(require_json_content_type)],
-) -> OutreachRevokeResponse:
+) -> OutreachRevokeResponse | JSONResponse:
     actor = require_approver(request)
     rationale = scrub_free_text(payload.rationale)
     refuse_ungoverned_text_audited(
@@ -86,7 +96,7 @@ def revoke_outreach(
             subject_clip=getattr(borrower, "clip_id", None),
         )
     except RevokeRefused as exc:
-        raise HTTPException(status_code=409, detail=REVOKE_REFUSED_DETAIL[exc.kind]) from exc
+        return _revoke_refused(exc.kind)
     except AuditMetadataValueViolation as exc:
         raise text_policy_refusal(exc) from exc
     except AuditPIIError as exc:
