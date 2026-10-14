@@ -71,6 +71,20 @@ test.describe('borrower decision history', () => {
       const disclosure = page.getByTestId('offer-prior-decisions');
       const toggle = disclosure.getByRole('button', { name: 'Prior decisions (4)' });
       await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      // It never sits flush on the surfaces stacked above it (W5c VRT review): the
+      // nearest surface whose bottom is above its top and that overlaps it
+      // horizontally leaves at least the grid gap.
+      const gapAbove = await disclosure.evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        let nearest = Number.NEGATIVE_INFINITY;
+        for (const other of document.querySelectorAll('.surface')) {
+          if (other === el || el.contains(other) || other.contains(el)) continue;
+          const r = other.getBoundingClientRect();
+          if (r.bottom <= box.top + 1 && r.right > box.left && r.left < box.right) nearest = Math.max(nearest, r.bottom);
+        }
+        return box.top - nearest;
+      });
+      expect(gapAbove, 'the grid gap above Prior decisions').toBeGreaterThanOrEqual(16);
       await expect(rows(page, '[data-testid="offer-prior-decisions"]')).toHaveCount(0);
       await toggle.click();
       await expect(toggle).toHaveAttribute('aria-expanded', 'true');

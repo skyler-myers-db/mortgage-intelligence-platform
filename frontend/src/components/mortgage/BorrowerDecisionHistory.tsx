@@ -186,7 +186,9 @@ export function BorrowerDecisionHistory({ borrowerId, variant }: BorrowerDecisio
   }
   const count = query.data ? (query.data.truncated ? '50+' : String(query.data.items.length)) : null;
   return (
-    <div className="surface" data-testid="offer-prior-decisions">
+    // mt-grid: a surface stacked under the Offer review grid keeps the grid gap
+    // its sibling surfaces use (offer-orchestrator.decision.tsx).
+    <div className="surface mt-grid" data-testid="offer-prior-decisions">
       <button
         type="button"
         className="surface__hdr appearance-toggle"

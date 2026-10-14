@@ -228,6 +228,8 @@ describe('BorrowerDecisionHistory', () => {
     await mount('disclosure');
 
     const toggle = document.querySelector<HTMLButtonElement>('[data-testid="offer-prior-decisions"] > button');
+    // Stacked under the review grid, it keeps the grid gap above it (W5c VRT review).
+    expect(document.querySelector('[data-testid="offer-prior-decisions"]')?.classList.contains('mt-grid')).toBe(true);
     expect(toggle?.textContent).toBe('Prior decisions (2)');
     expect(toggle?.getAttribute('aria-expanded')).toBe('false');
     expect(rows()).toHaveLength(0);
