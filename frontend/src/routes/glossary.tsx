@@ -142,7 +142,9 @@ export default function GlossaryRoute() {
                 <Icon name={category === 'governance' || category === 'principles' ? 'shield' : category === 'evidence' ? 'layers' : 'info'} size={14} className="icon-accent" />
                 <div>
                   <SurfaceTitle>{CATEGORY_LABELS[category]}</SurfaceTitle>
-                  <div className="muted fs-12">{grouped[category].length} terms</div>
+                  <div className="muted fs-12">
+                    {`${grouped[category].length} ${grouped[category].length === 1 ? 'term' : 'terms'}`}
+                  </div>
                 </div>
               </div>
               <div className="surface__body glossary-grid">
