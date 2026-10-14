@@ -15,9 +15,11 @@ import {
  * hidden. The selection, row expand, Borrower, Primary offer (it carries the
  * rules evidence chip), Score, Signal and Approval columns are never
  * offered (LeadTable.columns.ts). The route owns the value (`?hide=`,
- * lead-queue.columns.ts) and renders this through LeadTableHeaderSlotContext,
- * so it ships in the route chunk, not the LeadTable chunk. Hiding a column
- * reads nothing and writes no audit row; the CSV export keeps every column.
+ * lead-queue.columns.ts) and renders this through LeadTableHeaderSlotContext;
+ * it loads right after the queue (routes/lead-queue.hideSlot.tsx), so neither
+ * it nor MultiFilterSelect rides the route's or the LeadTable chunk. Hiding a
+ * column reads nothing and writes no audit row; the CSV export keeps every
+ * column.
  */
 const OPTIONS: Partial<Record<LeadTableView, ReadonlyArray<MultiFilterSelectOption<LeadTableHideToken>>>> = {};
 

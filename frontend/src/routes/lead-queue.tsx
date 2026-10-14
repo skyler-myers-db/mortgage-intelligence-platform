@@ -7,7 +7,6 @@ import { isAbortError } from '../lib/apiTransport';
 import { PageShell } from '../components/layout/PageShell';
 import { LeadTable, type LeadExportContext } from '../components/mortgage/LeadTable';
 import { LeadTableHeaderSlotContext, LeadTableHiddenColumnsContext } from '../components/mortgage/LeadTable.columns';
-import { LeadTableHideControl } from '../components/mortgage/LeadTableHideControl';
 import { Chip } from '../components/Primitives';
 import { AsyncState } from '../components/ui/AsyncState';
 import { DescribedErrorBody } from '../components/ui/DescribedError';
@@ -29,6 +28,7 @@ import { useLeadQueueFreshness } from './lead-queue.freshness';
 import { LeadQueueFilterBar, LeadQueueHeroFilterChips } from './lead-queue.filterBar';
 import { LeadQueueViews } from './lead-queue.views';
 import { leadQueueColumns, searchParamsWithLeadTableColumns, useLeadQueueColumnState } from './lead-queue.columns';
+import { LeadQueueHideSlot } from './lead-queue.hideSlot';
 import { buildPortfolioBuilderUrlFromQueue } from './lead-queue.handoff';
 import { copyLink } from '../lib/copyLink';
 import {
@@ -697,7 +697,7 @@ export default function LeadQueue() {
               >
                 <LeadTableHiddenColumnsContext.Provider value={columnState.hidden}>
                   <LeadTableHeaderSlotContext.Provider value={(
-                    <LeadTableHideControl
+                    <LeadQueueHideSlot
                       view={tableView}
                       hidden={columnState.hidden}
                       onChange={(hidden) => writeColumns({ view: tableView, hidden })}
