@@ -199,6 +199,10 @@ for (const theme of FIXTURE_THEMES) {
       // R (W5d w5-print-glossary-sales-manager): the account menu and glossary search.
       { route: 'home', state: 'identity-menu' },
       { route: 'glossary', state: 'glossary-search' },
+      // W5e w5-lead-queue-columns: the HIDE menu, the omnibox and More like this.
+      { route: 'lead-queue', state: 'hide-menu' },
+      { route: 'lead-queue', state: 'omnibox' },
+      { route: 'lead-queue', state: 'more-like-this' },
     ];
     for (const { route: name, state } of SHELL_STATES) {
       test(`${name} · ${state}`, async ({ app, mockApi, page }) => {

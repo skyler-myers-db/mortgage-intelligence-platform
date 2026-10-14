@@ -30,7 +30,15 @@ pending or failed state; it must not claim success.
   authorization as the ranked list (admin gate, assignee visibility, cohort
   replay) but return totals or the actor's own views only, never resolve the
   audit store, and write no row. The Lead Queue reads facet counts only when a
-  person opens a filter menu, and the saved views only when the panel opens.
+  person opens a filter menu, the saved views only when the panel opens, and
+  the match count only while a person types in the open filter omnibox
+  (debounced, recognized readings only) and once when "More like this" opens
+  (a borrower's reviewed pattern: segment, product, state, relationship, score
+  band; never sub-state geography or an id). Both count queries are built from
+  an allowlist (`frontend/src/lib/leadCountQuery.ts`), so neither ever carries
+  `borrower_ids`, an approval-request scope, a cohort or a Growth Agent proof,
+  and the omnibox's typed text is never stored, put in a URL or sent anywhere
+  (unrecognized text reaches Genie only as a composer prefill on a click).
   Count and facets refuse `borrower_ids` (422): an aggregate over named
   borrowers would read their attributes with no `VIEW_LEADS` row, so a read of
   named borrowers is the audited list only, and the Lead Queue shows a borrower
