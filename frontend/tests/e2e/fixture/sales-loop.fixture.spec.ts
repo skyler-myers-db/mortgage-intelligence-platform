@@ -101,6 +101,26 @@ test.describe('(a) the sales manager view', () => {
     await expect(conversion.locator('.split-row').nth(1)).toHaveText(`${LOAN_OFFICERS[1].display_label}0 calls`);
     await expect(conversion.locator('[title]')).toHaveCount(0);
 
+    // W5e (critic-10 6b): the team row states its change against the
+    // previous 30 days, from the cohort reads.
+    const team = page.getByTestId('sales-team-comparison');
+    await expect(team.locator('.kpi')).toHaveCount(4);
+    await expect(team.locator('.kpi__delta').first()).toContainText('vs previous 30 days');
+    // W5e (critic-10 6c): the workload lists every in-scope officer, sorts by
+    // a numeric header with aria-sort, links each officer into the Lead
+    // Queue's assigned_to filter and never shows an email.
+    const workload = page.getByTestId('sales-workload');
+    await expect(workload.locator('tbody tr')).toHaveCount(LOAN_OFFICERS.length);
+    await expect(workload.getByRole('columnheader', { name: /^Open/ })).toHaveAttribute('aria-sort', 'descending');
+    const stale = workload.getByRole('columnheader', { name: /^Stale/ });
+    await stale.getByRole('button').click();
+    await expect(stale).toHaveAttribute('aria-sort', 'descending');
+    await expect(workload.getByRole('columnheader', { name: /^Open/ })).toHaveAttribute('aria-sort', 'none');
+    const first = workload.locator('tbody tr').first().locator('a');
+    await expect(first).toHaveAttribute('href', /^\/lead-queue\?assigned_to=[^&]+%40summit\.example$/);
+    await expect(workload).not.toContainText('@summit.example');
+    await expect(workload.locator('[title]')).toHaveCount(0);
+
     await openBoard(page);
     await app.settle();
     expectNoAuditedReadSince(mockApi, 0, 'sales ops: load, period change, Board dry run');

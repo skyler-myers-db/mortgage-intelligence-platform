@@ -19,7 +19,10 @@
  *  - the teal, navy and red accents on Home, Lead Queue and Borrower 360,
  *    default and evidence drawer, both themes (bright is everything above);
  *  - W5d w5-sales-loop: the Sales ops manager view (30-day period) and the
- *    Distribution Board's dry-run plan, both themes.
+ *    Distribution Board's dry-run plan, both themes;
+ *  - W5e w5-analytics: an Executive KPI drawer on How we got, a failed
+ *    Executive Refresh's stale note, a focused scatter cell's tip and the
+ *    Sales ops workload table, both themes.
  *
  * The ratchet (axe.ts KNOWN_VIOLATIONS) is validated against this matrix at
  * load: every entry names a scan that runs here, in each theme and accent it
@@ -29,6 +32,7 @@
 import type { FixtureTheme } from './app';
 import { KNOWN_VIOLATIONS, expectAxeClean, validateKnownViolations, type AxeAccent, type AxeScanTarget } from './axe';
 import { registerBoard } from './data/salesLoop';
+import { ANALYTICS_W5E_ROUTE, ANALYTICS_W5E_STATES, enterAnalyticsW5eState } from './analyticsW5eStates';
 import { OVERLAY_STATES, enterState, prepareState, type FixtureState } from './fixtureStates';
 import { FIXTURE_ROUTES, FIXTURE_THEMES, type FixtureRoute } from './routes';
 import { expect, test } from './test';
@@ -158,6 +162,29 @@ test.describe('named groups in the evidence drawer', () => {
     await app.settle();
     expect(await flaggedIn('evidence-drawer-groups-under-the-hood'), 'aria-label on a role that prohibits it, under the hood').toEqual([]);
   });
+});
+
+// W5e w5-analytics: the four new Analytics states, each scanned on the region
+// it changes, with no recorded exception.
+test.describe('W5e analytics states', () => {
+  for (const theme of FIXTURE_THEMES) {
+    for (const state of ANALYTICS_W5E_STATES) {
+      const target = ANALYTICS_W5E_ROUTE[state];
+      test(`${target.route} · ${state} · ${theme}`, async ({ app, mockApi, page }) => {
+        await app.setTheme(theme);
+        await app.gotoRoute(target.path);
+        const naturalLoad = markNaturalLoad(mockApi);
+        await enterAnalyticsW5eState(app, page, mockApi, state);
+        await expectAxeClean(page, {
+          key: { route: target.route, state },
+          theme,
+          known: {},
+          include: state === 'executive-evidence' ? 'dialog.drawer' : '#main-content',
+        });
+        expectNoAuditedReadSince(mockApi, naturalLoad, `${target.route} · ${state} · ${theme}`);
+      });
+    }
+  }
 });
 
 // W5d w5-palette-offer-sales-loop: the palette's provider groups, the ? sheet

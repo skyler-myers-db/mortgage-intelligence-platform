@@ -37,8 +37,11 @@
  *  T. W5d w5-growth-watchlists: the Rate Lever's "Watch this level" row
  *     and its watching line on Home and Segments, and a composed plan's
  *     card mid-progress                                               10
+ *  U. W5e w5-analytics: an Executive KPI drawer on How we got, a failed
+ *     Executive Refresh with its stale note, a focused scatter cell's
+ *     tip and the Sales ops workload table                              8
  *                                                                     --
- *                                                                    154
+ *                                                                    162
  *
  * Baselines are amd64-Linux renders from the pinned Playwright container:
  * this spec runs only with MIP_VRT=1 (playwright.config.ts) and refuses any
@@ -60,6 +63,7 @@ import { composeReply, executedReply, EXECUTE_PATTERN, registerGrowthAgentTrust 
 import { PLAN_PROGRESS_PATTERN, PROGRESS_SEQUENCE, registerRateWatch } from './data/growthWatchlists';
 import { registerPagedQueue } from './data/leadPages';
 import { registerBoard } from './data/salesLoop';
+import { ANALYTICS_W5E_ROUTE, ANALYTICS_W5E_STATES, enterAnalyticsW5eState } from './analyticsW5eStates';
 import { PRESENTER_SESSION } from './data/shell';
 import { json, type MockApi } from './mockApi';
 import { FIXTURE_ROUTES, FIXTURE_THEMES, type FixtureRoute } from './routes';
@@ -282,6 +286,19 @@ for (const theme of FIXTURE_THEMES) {
       await capture(page, `analytics-sales-ops--${theme}--distribution-board.png`);
       expectNoAuditedReadSince(mockApi, naturalLoad, 'analytics-sales-ops · distribution board');
     });
+
+    // U (W5e w5-analytics): the Executive KPI evidence drawer, a failed
+    // Refresh's stale note, the scatter tip and the workload table. None
+    // opens an audited read (the KPI proof and the workload are audit-free).
+    for (const state of ANALYTICS_W5E_STATES) {
+      const target = ANALYTICS_W5E_ROUTE[state];
+      test(`analytics · ${state}`, async ({ app, mockApi, page }) => {
+        const { naturalLoad } = await load(app, mockApi, route(target.route), theme);
+        await enterAnalyticsW5eState(app, page, mockApi, state);
+        await check(page, target.route, theme, state);
+        expectNoAuditedReadSince(mockApi, naturalLoad, `analytics · ${state}`);
+      });
+    }
 
     // P (W5d w5-palette-offer-sales-loop, shell-07): the palette's provider
     // groups for a typed query (Pages & actions, Saved views, Segments,
