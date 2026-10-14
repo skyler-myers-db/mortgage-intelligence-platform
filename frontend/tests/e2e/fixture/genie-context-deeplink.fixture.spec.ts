@@ -118,14 +118,20 @@ test.describe('(a) an empty Lead Queue asks a server-rendered scoped question (g
     expect(scope.bodies).toHaveLength(0);
   });
 
-  test('a withheld render replaces the button with the fixed line inside the status region', async ({ app, mockApi, page }) => {
+  test('a withheld render replaces the button with the fixed line inside the status region, and focus moves to Clear filters', async ({ app, mockApi, page }) => {
     registerEmptyQueue(mockApi);
     registerScope(mockApi, WITHHELD_SCOPE);
+    await app.setTheme('dark');
     await app.gotoRoute('/lead-queue?zip=60601&segment_codes=itm,equity&segment_mode=all');
-    await emptyState(page).getByRole('button', { name: 'Ask Genie about this filter selection' }).click();
+    const ask = emptyState(page).getByRole('button', { name: 'Ask Genie about this filter selection' });
+    await ask.focus();
+    await page.keyboard.press('Enter');
     await expect(page.locator('#main-content .empty[role="status"] .muted')).toHaveText(SCOPE_UNAVAILABLE);
     await expect(emptyState(page).locator('.genie-ask-about')).toHaveCount(0);
+    // The focused Ask left the DOM: focus lands on its sibling, never on <body> (WCAG 2.4.3).
+    await expect(emptyState(page).getByRole('button', { name: 'Clear lead queue filters' })).toBeFocused();
     await expect(geniePanel(page)).toBeHidden();
+    await expectAxeClean(page, { key: { route: 'lead-queue', state: 'genie-scope-withheld' }, theme: 'dark', known: KNOWN_VIOLATIONS });
   });
 });
 

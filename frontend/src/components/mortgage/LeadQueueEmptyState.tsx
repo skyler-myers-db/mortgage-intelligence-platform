@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { EmptyState } from '../ui/EmptyState';
 import { Button } from '../Primitives';
 import { GenieAskAbout } from './GenieAskAbout';
@@ -72,15 +72,32 @@ type ScopePhase = 'idle' | 'pending' | 'unavailable';
  * pending while it runs, aborted on unmount. A prompt whose `omitted` list is
  * what this context expects prefills the composer; a withheld render, an
  * unexpected `omitted` or a failed request replaces the button with a fixed
- * muted line inside the empty state's role=status region.
+ * muted line inside the empty state's role=status region. A FOCUSED Ask
+ * hands focus to `focusFallbackRef` (Clear filters, always beside it) in the
+ * commit that removes it, never to <body> (WCAG 2.4.3); an Ask that did not
+ * hold focus moves nothing.
  */
-function GenieScopedAsk({ context }: { context: GenieContext }) {
+function GenieScopedAsk({ context, focusFallbackRef }: { context: GenieContext; focusFallbackRef: RefObject<HTMLButtonElement | null> }) {
   const [phase, setPhase] = useState<ScopePhase>('idle');
   const controllerRef = useRef<AbortController | null>(null);
+  const askRef = useRef<HTMLButtonElement | null>(null);
+  // Written by the settle handler while the Ask is still mounted; read after
+  // the commit that replaced it.
+  const refocusRef = useRef(false);
   useEffect(() => () => controllerRef.current?.abort(), []);
+  useLayoutEffect(() => {
+    if (phase !== 'unavailable' || !refocusRef.current) return;
+    refocusRef.current = false;
+    focusFallbackRef.current?.focus({ preventScroll: true });
+  }, [phase, focusFallbackRef]);
   if (phase === 'unavailable') return <span className="muted fs-12">{GENIE_SCOPE_UNAVAILABLE_COPY}</span>;
   const withoutAssignee = context.assignee === 'me';
   const suffix = withoutAssignee ? ASSIGNEE_SUFFIX : '';
+  const unavailable = () => {
+    const button = askRef.current;
+    refocusRef.current = button !== null && document.activeElement === button;
+    setPhase('unavailable');
+  };
   const ask = () => {
     controllerRef.current?.abort();
     const controller = new AbortController();
@@ -95,15 +112,16 @@ function GenieScopedAsk({ context }: { context: GenieContext }) {
           openGenie({ prompt: response.prompt });
           return;
         }
-        setPhase('unavailable');
+        unavailable();
       },
       () => {
-        if (!controller.signal.aborted) setPhase('unavailable');
+        if (!controller.signal.aborted) unavailable();
       },
     );
   };
   return (
     <Button
+      ref={askRef}
       variant="ghost"
       size="sm"
       className="genie-ask-about"
@@ -132,13 +150,14 @@ export function LeadQueueEmptyState({ filterParams, countyNoCoverage, intersecti
   const cause = countyNoCoverage ? 'coverage' : intersection ? 'intersection' : 'filtered';
   const prompt = cause === 'filtered' ? queueFilterGeniePrompt(filterParams) : null;
   const context = cause !== 'coverage' && prompt === null ? genieContextFromQueueFilters(filterParams) : null;
+  const clearRef = useRef<HTMLButtonElement | null>(null);
   return (
     <EmptyState
       cause={cause}
       secondary={filtersActive ? undefined : UNFILTERED_SECONDARY}
       actions={[
         filtersActive ? (
-          <button type="button" className="btn btn--sm" aria-label="Clear lead queue filters" onClick={onClearFilters}>
+          <button ref={clearRef} type="button" className="btn btn--sm" aria-label="Clear lead queue filters" onClick={onClearFilters}>
             Clear filters
           </button>
         ) : null,
@@ -146,7 +165,7 @@ export function LeadQueueEmptyState({ filterParams, countyNoCoverage, intersecti
           <GenieAskAbout prompt={prompt} subject="filter selection" />
         ) : context ? (
           // Keyed by the selection: a new filter set starts a fresh Ask.
-          <GenieScopedAsk key={filterParams.toString()} context={context} />
+          <GenieScopedAsk key={filterParams.toString()} context={context} focusFallbackRef={clearRef} />
         ) : null,
       ]}
     />

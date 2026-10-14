@@ -237,6 +237,36 @@ describe('LeadQueueEmptyState', () => {
     expect(line?.textContent).toBe("Genie can't take this filter set as a question.");
   });
 
+  it.each([
+    ['a withheld render', () => Promise.resolve({ prompt: null, withheld: 'refused', omitted: [] })],
+    ['an omitted list the client did not expect', () => Promise.resolve({ prompt: 'How many borrowers are in ZIP code 60601, and what is the average rate spread?', withheld: null, omitted: ['assignee'] })],
+    ['a transport failure', () => Promise.reject(new Error('503'))],
+  ])('%s: a focused Ask hands focus to Clear filters, never to <body>', async (_label, answer) => {
+    genieMocks.requestGenieContextScope.mockImplementation(answer);
+    renderEmpty('zip=60601');
+    act(() => ask()?.focus());
+    expect(document.activeElement).toBe(ask());
+    act(() => ask()?.click());
+    // Pending keeps focus on the Ask (aria-disabled, never native disabled).
+    expect(document.activeElement).toBe(ask());
+    await settle();
+    expect(ask()).toBeNull();
+    expect(document.activeElement).toBe(clear());
+  });
+
+  it('an Ask that did not hold focus moves nothing when it is replaced', async () => {
+    genieMocks.requestGenieContextScope.mockResolvedValue({ prompt: null, withheld: 'refused', omitted: [] });
+    renderEmpty('zip=60601');
+    const elsewhere = document.createElement('input');
+    elsewhere.setAttribute('aria-label', 'elsewhere');
+    document.body.appendChild(elsewhere);
+    act(() => elsewhere.focus());
+    act(() => ask()?.click());
+    await settle();
+    expect(ask()).toBeNull();
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
   it('aborts the pending render on unmount and stays silent', async () => {
     genieMocks.requestGenieContextScope.mockImplementation((_body: unknown, signal: AbortSignal) => new Promise((_done, fail) => {
       signal.addEventListener('abort', () => fail(new DOMException('aborted', 'AbortError')));
