@@ -138,3 +138,4 @@ enforces it.
 
 | id | deviation | prototype cite | class | code | pinning test | finding ids | ruling date | lane |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| lead-queue-distribution-opener | "Plan distribution" in the Lead Queue bulk toolbar, after Assign and Distribute: a sales manager or admin only (the signed-in user's own roster row; a loan officer never sees it), aria-disabled with a spoken reason past the server's 500-borrower cap, opening the lazy Distribution Board on the selected rows. The prototype's bulk actions are the approval banner's Reject / Approve; it has no distribution surface. | design_files/Module 0 Prototype.html:1494-1506 | product | frontend/src/components/mortgage/LeadTable.distribution.tsx; frontend/src/components/mortgage/LeadTableBulkActions.tsx | frontend/src/components/mortgage/LeadTable.distribution.test.tsx | wow-power-5 | 2026-10-14 | w5-lead-table-compile |

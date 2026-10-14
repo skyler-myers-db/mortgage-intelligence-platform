@@ -38,6 +38,7 @@ import { Button } from '../Primitives';
 import type { BulkToast } from './useLeadApprovalActions';
 import { bulkRunVerb, type BulkRunKind } from './useLeadBulkRun';
 import { APPROVER_ROLE_STATUS_ID, describedBy } from './approverGate';
+import { DISTRIBUTION_MAX_BORROWERS } from './LeadTable.distribution';
 
 interface LeadTableBulkActionsProps {
   selectionCount: number;
@@ -99,6 +100,12 @@ interface LeadTableBulkActionsProps {
   requestApproval?: { blockedReason: string | null; onOpen: () => void } | null;
   /** The request form (RequestApprovalForm, lazy), while it is open from here. */
   requestGate?: ReactNode;
+  /**
+   * "Plan distribution" (wow-power-5; deviation:lead-queue-distribution-opener):
+   * a sales manager or admin only (LeadTable.distribution). Opens the
+   * Distribution Board on the selection; aria-disabled past the server's cap.
+   */
+  planDistribution?: { onOpen: () => void } | null;
 }
 
 const PREVIEW_SAMPLES_SELECTOR = '[data-testid="lead-bulk-preview-samples"]';
@@ -138,9 +145,12 @@ export function LeadTableBulkActions({
   campaignHandoff = null,
   requestApproval = null,
   requestGate = null,
+  planDistribution = null,
 }: LeadTableBulkActionsProps) {
   const armingId = useId();
   const requestNoteId = useId();
+  const planNoteId = useId();
+  const planOverCap = selectionCount > DISTRIBUTION_MAX_BORROWERS;
   const [bulkRationale, setBulkRationale] = useState('');
   const gateOpen = selectionCount > 1 && bulkRationaleOpen;
   const rejectGateOpen = selectionCount > 1 && bulkRejectOpen;
@@ -246,6 +256,26 @@ export function LeadTableBulkActions({
             >
               Distribute
             </Button>
+            {planDistribution && (
+              <Button
+                variant="default"
+                size="sm"
+                icon="layers"
+                onClick={() => {
+                  if (!planOverCap) planDistribution.onOpen();
+                }}
+                aria-disabled={planOverCap || undefined}
+                aria-describedby={planOverCap ? planNoteId : undefined}
+                data-testid="lead-bulk-plan-distribution"
+              >
+                Plan distribution
+              </Button>
+            )}
+            {planDistribution && planOverCap && (
+              <span id={planNoteId} className="sr-only">
+                Plan distribution takes at most {formatCount(DISTRIBUTION_MAX_BORROWERS)} selected leads.
+              </span>
+            )}
           </>
         )}
         <Button

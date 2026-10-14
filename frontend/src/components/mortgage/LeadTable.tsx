@@ -25,6 +25,7 @@ import { LEAD_TABLE_KEYS } from './LeadTable.keymap';
 import { useLeadApprovalActions, type CampaignBindingState } from './useLeadApprovalActions';
 import { requestDecisionBatchId, useLeadTableRequests } from './LeadTable.requests';
 import { useLeadSalesActions } from './useLeadSalesActions';
+import { LeadDistributionBoard, useCanPlanDistribution } from './LeadTable.distribution';
 import { useLeadTableKeyboardFlow } from './useLeadTableKeyboardFlow';
 import { useLeadTableFillHeight } from './useLeadTableFillHeight';
 import { useTableScrollClearance } from './useTableScrollClearance';
@@ -465,6 +466,9 @@ export function LeadTable({
     );
     void sales.assignSelected(mode, borrowerIds, approval.clearSelection);
   }
+  // "Plan distribution" (wow-power-5): the Board on the selection, managers only.
+  const canPlanDistribution = useCanPlanDistribution(actorEmail ?? null);
+  const [distributionIds, setDistributionIds] = useState<string[] | null>(null);
 
   /**
    * Export as CSV. The bytes are built client-side from the real /api/leads
@@ -716,6 +720,9 @@ export function LeadTable({
             onOpen: () => requests.openBulk(flow.eligibleSelectedIds()),
           }}
           requestGate={requests.bulkForm}
+          planDistribution={canPlanDistribution ? {
+            onOpen: () => setDistributionIds([...approval.selectedIds].filter((id) => approval.selectableIds.includes(id))),
+          } : null}
           bulkRejectOpen={approval.bulkRejectOpen}
           onOpenBulkReject={flow.bulkRejectFromToolbar}
           bulkRejectBtnRef={approval.bulkRejectBtnRef}
@@ -750,6 +757,7 @@ export function LeadTable({
           ) : null}
         />
       )}
+      <LeadDistributionBoard borrowerIds={distributionIds} onClose={() => setDistributionIds(null)} />
       {bulkRun.result && (BulkRunResult
         ? <BulkRunResult result={bulkRun.result} onDismiss={bulkRun.dismissResult} />
         : bulkChunk.failed && <LeadBulkRunResultFallback result={bulkRun.result} onDismiss={bulkRun.dismissResult} />)}

@@ -10,7 +10,7 @@
  * LeadTable chunk.
  */
 import { createRef } from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mount } from '../../test/render';
 import { LeadTableBulkActions } from './LeadTableBulkActions';
 import type { BulkRunKind } from './useLeadBulkRun';
@@ -58,5 +58,59 @@ describe('LeadTableBulkActions: a run\'s own button is never native disabled', (
     await renderToolbar({ eligible: 0 });
     expect(byTestId('lead-bulk-approve').disabled).toBe(true);
     expect(byTestId('lead-bulk-reject').disabled).toBe(true);
+  });
+});
+
+describe('LeadTableBulkActions: Plan distribution (wow-power-5)', () => {
+  const TEAM = [
+    { email: 'lo.alpha@summit.example', display_label: 'Loan Officer A', role: 'loan_officer', region: 'Midwest', manager_email: null, capacity_per_day: 25, active: true },
+  ];
+
+  async function renderPlanner(selectionCount: number, planDistribution: { onOpen: () => void } | null) {
+    return mount(
+      <LeadTableBulkActions
+        selectionCount={selectionCount}
+        selectedApprovalEligibleCount={0}
+        bulkApproving={false}
+        bulkRationaleOpen={false}
+        campaignBindingBlocked={false}
+        salesTeam={TEAM}
+        salesBusy={false}
+        selectedAssignee={TEAM[0].email}
+        onSelectedAssigneeChange={() => undefined}
+        onAssign={() => undefined}
+        onClearSelection={() => undefined}
+        onBulkApprove={() => Promise.resolve(true)}
+        bulkApproveBtnRef={createRef<HTMLButtonElement>()}
+        planDistribution={planDistribution}
+      />,
+    );
+  }
+
+  it('is absent without the planner gate', async () => {
+    await renderPlanner(3, null);
+    expect(document.querySelector('[data-testid="lead-bulk-plan-distribution"]')).toBeNull();
+  });
+
+  it('opens the Board on a click, inside the cap', async () => {
+    const onOpen = vi.fn();
+    await renderPlanner(500, { onOpen });
+    const button = byTestId('lead-bulk-plan-distribution');
+    expect(button.getAttribute('aria-disabled')).toBeNull();
+    button.click();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('is aria-disabled with a spoken reason past the 500-borrower cap, and opens nothing', async () => {
+    const onOpen = vi.fn();
+    await renderPlanner(501, { onOpen });
+    const button = byTestId('lead-bulk-plan-distribution');
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    const note = document.getElementById(button.getAttribute('aria-describedby') ?? '');
+    expect(note?.className).toBe('sr-only');
+    expect(note?.textContent).toBe('Plan distribution takes at most 500 selected leads.');
+    button.click();
+    expect(onOpen).not.toHaveBeenCalled();
   });
 });
