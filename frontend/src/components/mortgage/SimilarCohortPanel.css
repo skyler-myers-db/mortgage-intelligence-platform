@@ -1,0 +1,23 @@
+/* ============================================================
+   MORE LIKE THIS (W5e; wow-power-2). deviation:more-like-this
+   An inline block under the Primary offer card's actions (row preview and
+   Borrower 360): the pattern as `.filter` pills (design_files/index.html:
+   822-838 pill family, read-only here), the match count and two links.
+   Ships with the lazy SimilarCohortPanel chunk. Tokens only.
+   ============================================================ */
+/* flex-basis: inside a wrapping `.chip-row` (Borrower 360) it takes its own line. */
+.similar-cohort {
+  display: flex;
+  flex-basis: 100%;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-block-start: var(--sp-3);
+  padding-block-start: var(--sp-3);
+  border-block-start: 1px solid var(--line-1);
+}
+.similar-cohort__chip { cursor: default; }
+.similar-cohort__chip:active { translate: none; }
+.similar-cohort__count,
+.similar-cohort__note { margin: 0; font-size: var(--fs-12); }
+.similar-cohort__count { color: var(--text-1); min-block-size: 1lh; }
+.similar-cohort__note { color: var(--text-3); }

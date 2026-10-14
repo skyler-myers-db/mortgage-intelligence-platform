@@ -36,6 +36,7 @@ import { useApp } from '../components/AppContext';
 import { LtvEquityValue } from './borrower-360.ltv-field';
 import { BorrowerQueuePager } from './borrower-360.pager';
 import { BorrowerTitle } from './borrower-360.title';
+import { BorrowerMoreLikeThis } from './borrower-360.similar';
 import { useQueueContext } from '../lib/queueContext';
 import { saveDataRequested } from '../lib/prefetch';
 import { preloadRouteForPath } from '../lib/routePreloaders';
@@ -678,6 +679,8 @@ export default function Borrower360() {
                 {proofDrawer.failed && (
                   <span className="muted fs-12" role="status">{SCORE_ANATOMY_COPY.proofChunkFailed}</span>
                 )}
+                {/* Last in the action row: its panel wraps onto its own line below. */}
+                <BorrowerMoreLikeThis borrower={b} />
               </div>
             </div>
           </div>

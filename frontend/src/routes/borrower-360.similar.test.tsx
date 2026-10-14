@@ -4,13 +4,17 @@
  * Borrower 360 route-level pins for this lane's dossier surfaces, mounted
  * through the ROUTE (the defects lived in its JSX):
  *  - critic-08: the synthetic-data note and the Metro / loan type raw pair
- *    are ui/Tooltip descriptions, never DOM `title=` attributes.
+ *    are ui/Tooltip descriptions, never DOM `title=` attributes;
+ *  - wow-power-2 (item 4d): "More like this" on the Primary offer card reads
+ *    nothing until clicked, then shows the pattern panel with one audit-free
+ *    count and links only (no Triage deck link for a non-approver).
  */
 import { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+vi.setConfig({ testTimeout: 30_000 });
 import type { ReactNode } from 'react';
 import type { Borrower360 as Borrower360Type } from '../types';
 
@@ -108,8 +112,14 @@ function borrower(overrides: Partial<Borrower360Type> = {}): Borrower360Type {
 
 let container: HTMLDivElement;
 let root: Root;
+let calls: string[] = [];
 
 beforeEach(() => {
+  calls = [];
+  vi.stubGlobal('fetch', async (path: string) => {
+    calls.push(path);
+    return new Response(JSON.stringify({ total_matching: 9 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  });
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -117,6 +127,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.unstubAllGlobals();
 });
 
 function mount(b: Borrower360Type) {
@@ -165,5 +176,27 @@ describe('Borrower 360 dossier tooltips (critic-08)', () => {
     expect(description(value)).toBe('16980 · CNV');
     // No other field__value carries a native title either.
     expect(container.querySelector('.field__value[title]')).toBeNull();
+  });
+});
+
+describe('Borrower 360 More like this (wow-power-2)', () => {
+  it('reads nothing until clicked, then shows the pattern with one count and links only', async () => {
+    mount(borrower());
+    const trigger = container.querySelector<HTMLButtonElement>('[data-testid="borrower-more-like-this"]')!;
+    expect(trigger.closest('.chip-row')?.textContent).toContain('Build outreach draft');
+    expect(calls.filter((path) => path.includes('/leads/count'))).toEqual([]);
+    await act(async () => trigger.click());
+    await vi.waitFor(async () => {
+      await act(async () => {
+        for (let i = 0; i < 6; i += 1) await new Promise((resolve) => window.setTimeout(resolve, 0));
+      });
+      expect(container.querySelector('.similar-cohort [role="status"]')?.textContent).toBe('9 borrowers match this pattern');
+    }, { timeout: 20_000 });
+    const counts = calls.filter((path) => path.includes('/leads/count'));
+    expect(counts).toHaveLength(1);
+    expect(new URL(counts[0], 'http://b360.test').searchParams.get('state')).toBe('IL');
+    expect(container.querySelector('[data-testid="lead-similar-open-queue"]')?.getAttribute('href')).toContain('/lead-queue?segment=itm');
+    // The mocked session cannot approve: no Triage deck link.
+    expect(container.querySelector('[data-testid="lead-similar-open-triage"]')).toBeNull();
   });
 });
