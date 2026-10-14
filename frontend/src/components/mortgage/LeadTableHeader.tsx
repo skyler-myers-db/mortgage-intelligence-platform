@@ -85,9 +85,12 @@ export function LeadTableHeader({
   // deviation:lead-table-title-row-clearance).
   const titleRow = Boolean(headerStatus || triageEntry || requestChips);
   // `.lead-table__header` keys the two-row hint grid on both routes
-  // (LeadTableHeader.css, deviation:ranked-table-header-hint-row).
+  // (LeadTableHeader.css, deviation:ranked-table-header-hint-row); the HIDE
+  // slot's modifier keys the compact actions in a narrow `main`
+  // (deviation:lead-table-hide-columns).
+  const modifiers = `${titleRow ? ' lead-table__header--title-row' : ''}${hideControl ? ' lead-table__header--hide-slot' : ''}`;
   return (
-    <div className={`surface__hdr surface__hdr--split lead-table__header${titleRow ? ' lead-table__header--title-row' : ''}`}>
+    <div className={`surface__hdr surface__hdr--split lead-table__header${modifiers}`}>
       <div className="surface__hdr-main">
         <div className="surface__icon">
           <Icon name="user" size={14} />
@@ -136,7 +139,7 @@ export function LeadTableHeader({
       <div className="lead-table__header-actions">
         <LeadTableShortcutsButton singleKeysOn={singleKeysOn} />
         {onViewChange && <LeadTableViewControl view={view} onChange={onViewChange} />}
-        {hideControl}
+        {hideControl && <span className="lead-table__hide-slot">{hideControl}</span>}
         {exportState.status === 'done' && (
           <LeadExportReceiptLine
             rowCount={exportState.rowCount}

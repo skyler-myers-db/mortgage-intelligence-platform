@@ -46,3 +46,32 @@
     align-self: start;
   }
 }
+
+/* ============================================================
+   COMPACT HEADER ACTIONS (W5e). deviation:lead-table-hide-columns
+   The Lead Queue's HIDE pill sits after VIEW (`.lead-table__hide-slot`,
+   the route's slot). Up to a 1219px `main` (the Console open at 1440x900)
+   the full actions left the title row too little room: an approver's
+   Triage entry and "Approval requests" (or its failed-read Retry) wrapped
+   the title and the header grew 83 -> 95px (approval-requests.fixture.spec.ts
+   (j) and (l)). There the Shortcuts button is its `?` keycap, VIEW shows
+   its value and HIDE its name: each word stays in the control's accessible
+   name (visually hidden, never display:none) and hidden columns still mark
+   the HIDE pill active. Keyed on the header's modifier, so a header without
+   the slot (Segment Intelligence) keeps its words.
+   ============================================================ */
+.lead-table__hide-slot { display: contents; }
+.lead-table__shortcuts-key { display: none; }
+@container main (max-width: 1219px) {
+  .lead-table__header--hide-slot .lead-table__shortcuts-label,
+  .lead-table__header--hide-slot .lead-table__header-actions > .filter-root .filter__label,
+  .lead-table__header--hide-slot .lead-table__hide-slot .filter__value {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .lead-table__header--hide-slot .lead-table__shortcuts-key { display: inline-block; }
+}

@@ -188,7 +188,9 @@ describe('hidden columns on the rendered table', () => {
     render('');
     const actions = container.querySelector('.lead-table__header-actions')!;
     const view = actions.querySelector('[aria-label^="VIEW:"]')!.closest('.filter-root')!;
-    expect(view.nextElementSibling?.getAttribute('data-testid')).toBe('hide-slot');
+    // In the header's `.lead-table__hide-slot` wrapper (display: contents), the compact actions' hook.
+    expect(view.nextElementSibling?.className).toBe('lead-table__hide-slot');
+    expect(view.nextElementSibling?.firstElementChild?.getAttribute('data-testid')).toBe('hide-slot');
   });
 
   it('an unrelated re-render with an equal ?hide= re-renders no Status cell; a hide change does', () => {
