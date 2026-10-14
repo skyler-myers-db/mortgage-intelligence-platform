@@ -1,0 +1,36 @@
+# Synthetic workflow for tests/unit/test_deps_report.py: the literal shapes
+# tools/deps_report/pins.py and waivers.py read, with a deliberate gitleaks
+# split (8.28.0 and 8.30.1) that holds.json covers until 2026-11-15.
+name: synthetic
+
+env:
+  SHELLCHECK_VERSION: 'v0.11.0'
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.15-bookworm@sha256:efedf3595f1d6f415c08568ba171029bf54052e754cc9f030e3f2412b21f3d67
+    steps:
+      - uses: actions/checkout@v6
+      - uses: databricks/setup-cli@bc7e6aabb6006d8d1758bd25ee1a100935c9cb7c # v1.7.0
+      - name: gitleaks (source artifact)
+        run: GITLEAKS_VERSION="8.30.1"
+      - name: gitleaks (secret scan)
+        run: GITLEAKS_VERSION="8.28.0"
+      - name: tools
+        run: pip install 'bandit[toml]==1.7.9' 'pip-audit==2.9.0'
+      - name: pip-audit
+        # Review date: 2026-10-13. A past date is the gate.
+        # Review date: 2026-10-20. Within 7 days is a warning.
+        run: pip-audit -r requirements.txt --strict --ignore-vuln GHSA-xpv3-w29h-x7cv
+  visual:
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
+    env:
+      MIP_VRT_IMAGE: mcr.microsoft.com/playwright:v1.63.0-noble
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/upload-artifact@v7

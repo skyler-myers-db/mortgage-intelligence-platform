@@ -1,0 +1,162 @@
+name: deps-report
+
+# Weekly dependency and release-signal report (decision D-platform-process-a;
+# audit quality-v2 / stack-10). A signal, never a bot: it opens no branch and
+# no pull request, and it holds only the ephemeral GITHUB_TOKEN.
+#
+# - report: read-only (contents + actions read). Runs tools/deps_report over
+#   the committed manifests and locks (npm view, npm audit over the lock and
+#   pip-audit over uv.lock; frontend packages are never installed), writes the
+#   step summary and the deps-report artifact, and exits with the tool's
+#   status: 1 only on a gate signal, 2 when a source could not be read.
+# - publish: issues write only, and it runs no repository or package code (no
+#   checkout, no setup, no installs). It re-validates the markdown and edits
+#   the ONE open issue labelled dependency-report in place, or opens it once.
+#
+# The live-validation section is informational and never turns the run red
+# (tools/deps_report/live.py). Owner: docs/audits/supply-chain-audit.md.
+
+on:
+  schedule:
+    - cron: '17 13 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: deps-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: report (read-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      exit_code: ${{ steps.build.outputs.exit_code }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The live section reads the release gate's verdict for origin/main,
+          # which diffs commits locally.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install pip-audit (the ci.yml pin)
+        run: python -m pip install 'pip-audit==2.9.0'
+      - name: Build the report
+        id: build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          python -m tools.deps_report --json dist/deps-report.json --markdown dist/deps-report.md
+          status=$?
+          set -e
+          echo "exit_code=${status}" >> "$GITHUB_OUTPUT"
+      - name: Step summary
+        if: always()
+        run: |
+          if [ -f dist/deps-report.md ]; then
+            cat dist/deps-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deps-report
+          path: |
+            dist/deps-report.json
+            dist/deps-report.md
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Exit with the report status
+        env:
+          REPORT_EXIT: ${{ steps.build.outputs.exit_code }}
+        run: exit "${REPORT_EXIT:-2}"
+
+  publish:
+    name: publish (one issue, edited in place)
+    needs: report
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Download this run's report
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: deps-report
+          path: report
+      - name: Upsert the dependency-report issue
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            // >>> validate (tests/unit/test_dependency_update_policy.py runs this block with node)
+            const MAX_CHARS = 60000;
+            const ADVISORY_LINK = /^https:\/\/github\.com\/advisories\/(GHSA(-[23456789cfghjmpqrvwx]{4}){3}|CVE-\d{4}-\d{4,}|PYSEC-\d{4}-\d+)$/;
+            function validate(markdown, runUrl) {
+              const problems = [];
+              if (markdown.length > MAX_CHARS) problems.push('too long');
+              if (markdown.includes('<')) problems.push("contains '<'");
+              const noCode = markdown.replace(/`[^`\n]*`/g, '');
+              for (const match of noCode.matchAll(/\]\(([^)\s]*)\)/g)) {
+                if (match[1] !== runUrl && !ADVISORY_LINK.test(match[1])) problems.push('link target not allowed');
+              }
+              const bare = noCode.replace(/\]\(([^)\s]*)\)/g, ']');
+              if (bare.includes('@')) problems.push("'@' outside a code span");
+              if (bare.includes('://') || bare.includes('www.')) problems.push('URL outside a link or code span');
+              return problems;
+            }
+            // <<< validate
+            const LABEL = 'dependency-report';
+            const TITLE = 'Weekly dependency and release-signal report';
+            const { owner, repo } = context.repo;
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            let markdown = null;
+            try {
+              markdown = fs.readFileSync('report/deps-report.md', 'utf8');
+            } catch (error) {
+              markdown = null;
+            }
+            const problems = markdown === null ? ['no report artifact'] : validate(markdown, runUrl);
+            const body = problems.length === 0 ? markdown : `Report withheld: output validation failed; see ${runUrl}`;
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name: LABEL });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              await github.rest.issues.createLabel({
+                owner, repo, name: LABEL, color: '5319e7',
+                description: 'The weekly dependency and release-signal report (deps-report.yml)',
+              });
+            }
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'open', labels: LABEL, per_page: 100,
+            });
+            const reports = open
+              .filter((issue) => !issue.pull_request && issue.title === TITLE)
+              .sort((a, b) => a.number - b.number);
+            if (reports.length === 0) {
+              const created = await github.rest.issues.create({ owner, repo, title: TITLE, body, labels: [LABEL] });
+              core.summary.addRaw(`Opened the report issue #${created.data.number}.\n`);
+            } else {
+              await github.rest.issues.update({ owner, repo, issue_number: reports[0].number, body });
+              core.summary.addRaw(`Updated the report issue #${reports[0].number} in place.\n`);
+              if (reports.length > 1) {
+                const others = reports.slice(1).map((issue) => `#${issue.number}`).join(', ');
+                core.summary.addRaw(`Other open report issues (not edited): ${others}\n`);
+              }
+            }
+            if (problems.length > 0) core.summary.addRaw(`Report withheld: ${problems.join('; ')}\n`);
+            await core.summary.write();
