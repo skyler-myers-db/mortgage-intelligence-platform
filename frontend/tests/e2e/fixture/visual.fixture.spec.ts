@@ -77,6 +77,22 @@ async function legendCaptionMask(page: Page) {
   await expect(caption).toContainText('Colored by: marketable population');
   return [caption];
 }
+/**
+ * The ZCTA drill's legend sits on the same fractional `backdrop-filter` layer as
+ * legendCaptionMask's, but at the drilled map's offset both its caption AND its
+ * Lower / Higher end labels land within 0.02px of a pixel boundary, so the CI
+ * double run re-rasters both lines (354 and 412 px in dark and light, all inside
+ * the legend text; the ZIP polygons and the ramp were byte-stable). Mask those two
+ * lines only, after asserting their copy.
+ */
+async function zctaLegendMask(page: Page) {
+  const map = page.locator('#main-content .map-wrap');
+  const ends = map.locator('.map-legend__end');
+  await expect(ends).toHaveText(['Lower', 'Higher']);
+  const caption = map.locator('.map-legend__caption').first();
+  await expect(caption).toContainText('Colored by: marketable population');
+  return [caption, ends];
+}
 const ROUTE_BY_NAME = new Map(FIXTURE_ROUTES.map((route) => [route.name, route]));
 
 function route(name: string): FixtureRoute {
@@ -212,7 +228,7 @@ for (const theme of FIXTURE_THEMES) {
       await map.scrollIntoViewIfNeeded();
       await app.settle();
       await expectNoSurfaceOverflow(page, { route: 'segment-intelligence', state: 'zcta-drill', theme });
-      await capture(page, `segment-intelligence--${theme}--zcta-drill.png`, { element: map });
+      await capture(page, `segment-intelligence--${theme}--zcta-drill.png`, { element: map, mask: await zctaLegendMask(page) });
       expectNoAuditedReadSince(mockApi, drilled, 'segment-intelligence · zcta drill');
     });
 
