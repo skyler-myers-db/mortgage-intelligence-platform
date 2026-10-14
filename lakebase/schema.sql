@@ -4397,10 +4397,10 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_plan_progress (
 COMMENT ON TABLE mip_app.growth_agent_plan_progress IS
     'Operational progress of a composed Growth Agent plan execute, one row per (actor_email, request_id): the step running, at the approval gate, or being recorded. Written best-effort outside the audit transaction; never an audit record; never deleted.';
 
--- PLACEHOLDER version: the integrator dates it at the W5d merge.
+-- Dated at the W5d merge: the third and last W5d block (no genie_tiles block was built).
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
-    '2026_10_0X_growth_watchlists',
+    '2026_10_14_growth_watchlists',
     'Growth Agent watchlists: rate_trigger_watch added in place to the growth_agent_runs and growth_agent_monitors workflow_id CHECKs; mip_app.growth_agent_plan_progress (per-step progress of a composed-plan execute, SELECT/INSERT/UPDATE only)'
 )
 ON CONFLICT (version) DO NOTHING;

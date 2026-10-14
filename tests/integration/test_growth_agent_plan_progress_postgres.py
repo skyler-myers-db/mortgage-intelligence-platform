@@ -41,8 +41,8 @@ from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
 
-#: PLACEHOLDER: the integrator dates the block at the W5d merge.
-GROWTH_WATCHLISTS_VERSION = "2026_10_0X_growth_watchlists"
+#: Dated at the W5d merge: the third and last W5d block, after 2026_10_14_lead_snoozes.
+GROWTH_WATCHLISTS_VERSION = "2026_10_14_growth_watchlists"
 _MARKER = "-- Growth Agent watchlists (W5d) ---"
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 _SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
