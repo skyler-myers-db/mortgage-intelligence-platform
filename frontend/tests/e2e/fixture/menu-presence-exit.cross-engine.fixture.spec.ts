@@ -3,9 +3,9 @@
  * menu, the account menu and the ? shortcut sheet stay mounted while they
  * fade, aria-hidden and inert, with focus already back on their trigger,
  * then unmount. Runs in fixture-chromium on every fixture run and in
- * fixture-webkit in the e2e-cross-engine CI job (MIP_CROSS_ENGINE=1); the
- * config routes no cross-engine spec to Firefox (it runs only the forced-
- * colors specs there). The exits are lengthened by a test stylesheet so the
+ * fixture-webkit and fixture-firefox-forced in the e2e-cross-engine CI job
+ * (MIP_CROSS_ENGINE=1; playwright.config.ts FIREFOX_FORCED_SPEC names it, as
+ * it names genie-pagehide). The exits are lengthened by a test stylesheet so the
  * mid-exit frame can be read on a loaded runner: the hook waits for the
  * element's own transition, whatever its length.
  */

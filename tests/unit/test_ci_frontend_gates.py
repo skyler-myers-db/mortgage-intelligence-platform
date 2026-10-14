@@ -283,6 +283,7 @@ def test_the_engine_projects_collect_exactly_their_specs() -> None:
     cases = {
         "queue-clearance.cross-engine.fixture.spec.ts": (True, False, False),
         "genie-pagehide.cross-engine.fixture.spec.ts": (True, True, False),
+        "menu-presence-exit.cross-engine.fixture.spec.ts": (True, True, False),
         "pinned-focus.webkit.fixture.spec.ts": (True, False, True),
         "forced-colors.firefox.fixture.spec.ts": (False, True, True),
         "lead-queue.fixture.spec.ts": (False, False, False),
@@ -294,5 +295,10 @@ def test_the_engine_projects_collect_exactly_their_specs() -> None:
         assert bool(firefox.search(path)) is in_firefox, spec
         assert bool(engine_only.search(path)) is ignored_in_chromium, spec
     # The shipped cross-engine specs are committed.
-    for spec in ("queue-clearance.cross-engine", "forced-colors.firefox", "genie-pagehide.cross-engine"):
+    for spec in (
+        "queue-clearance.cross-engine",
+        "forced-colors.firefox",
+        "genie-pagehide.cross-engine",
+        "menu-presence-exit.cross-engine",
+    ):
         assert (FRONTEND / "tests" / "e2e" / "fixture" / f"{spec}.fixture.spec.ts").is_file(), spec
