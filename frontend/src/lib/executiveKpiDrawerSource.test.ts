@@ -4,6 +4,7 @@
  * registry entries they spread, never pinned (lexicon renames them).
  */
 import { describe, expect, it } from 'vitest';
+import type { DrawerSource } from '../components/AppContext';
 import { DRAWER_SOURCES, drawerForAsset } from './drawerSources';
 import {
   EXECUTIVE_KPI_PROOF_KEYS,
@@ -18,7 +19,7 @@ describe('Executive KPI drawer sources', () => {
   it('spread the registry entry of the asset each number comes from', () => {
     const lifecycle = drawerForAsset('mip.gold.borrower_lifecycle_state');
     expect(lifecycle).not.toBeNull();
-    const expected: Record<ExecutiveKpi, typeof DRAWER_SOURCES.population> = {
+    const expected: Record<ExecutiveKpi, DrawerSource> = {
       addressable: DRAWER_SOURCES.population,
       inTheMoney: DRAWER_SOURCES.itm,
       primaryOfferPaths: DRAWER_SOURCES.nbo,

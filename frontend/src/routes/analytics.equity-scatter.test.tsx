@@ -721,7 +721,7 @@ describe('Equity scatter borrower links (bundle-09)', () => {
       act(() => marker.click());
       const link = container.querySelector<HTMLAnchorElement>('.analytics-scatter__cluster-link')!;
       act(() => link.focus());
-      expect(preload.paths.at(-1)).toBe('/borrower-360/B-0000000000002');
+      expect(preload.paths[preload.paths.length - 1]).toBe('/borrower-360/B-0000000000002');
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       unmount();

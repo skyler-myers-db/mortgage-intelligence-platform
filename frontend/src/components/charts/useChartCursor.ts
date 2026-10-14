@@ -32,8 +32,8 @@ export interface ChartCursorPlotProps {
   onFocus: (event: FocusEvent<HTMLElement>) => void;
   onBlur: (event: FocusEvent<HTMLElement>) => void;
   /** A press on the plot (it bubbles from the tooltip layer): the focus it makes follows the pointer. */
-  onPointerDown: () => void;
-  onPointerUp: () => void;
+  onPointerDown?: () => void;
+  onPointerUp?: () => void;
 }
 
 export interface ChartCursorSurfaceProps {
