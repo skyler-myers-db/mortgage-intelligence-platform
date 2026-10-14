@@ -96,7 +96,10 @@ describe('RateWindowPanel', () => {
   it('draws two stacked panels on one shared axis and says what the chart means', () => {
     render();
     expect(container.querySelectorAll('.rate-window__panel svg')).toHaveLength(2);
-    const summary = container.querySelector('[data-testid="rate-window-summary"]');
+    // On the chart kit (W5e item 6): one ChartFrame, its figcaption the summary.
+    const figures = container.querySelectorAll('figure.chart-frame');
+    expect(figures).toHaveLength(1);
+    const summary = figures[0].querySelector('figcaption.chart-frame__summary');
     expect(summary?.textContent).toContain("The 30-year is 88 bps below the book's median note rate.");
     expect(summary?.textContent).toContain(
       "1,956 of 48,210 fixed-rate liens in the whole book are in the money at this week's rate (spread and equity screens).",
@@ -109,14 +112,21 @@ describe('RateWindowPanel', () => {
     // Only the bottom panel carries the week ticks: one x-axis, never two.
     expect(container.querySelectorAll('.rate-window__panel--rates .analytics-chart__x-ticks')).toHaveLength(0);
     expect(container.querySelectorAll('.rate-window__panel--itm .analytics-chart__tick--x').length).toBeGreaterThan(1);
-    // The disclosure names today's book against the historical rate.
-    expect(container.querySelector('[data-testid="rate-window-asof"]')?.textContent).toContain("Today's book (as of");
-    // The image has an accessible description carrying the current print, the
-    // spread and the threshold value, not just the sentence.
-    const described = container.querySelector('.rate-window__panels')?.getAttribute('aria-label') ?? '';
-    expect(described).toContain('30-year fixed 6.22%');
-    expect(described).toContain('88 bps below');
-    expect(described).toContain('Spread screen: 75 bps below the book median (6.35%)');
+    // The disclosure names today's book against the historical rate: the frame's notice.
+    const asOf = container.querySelector('[data-testid="rate-window-asof"]');
+    expect(asOf?.textContent).toContain("Today's book (as of");
+    expect(asOf?.closest('.chart-frame__notice')).not.toBeNull();
+    // The frame's described group names the two panels (they carry no
+    // role="img" of their own): its name is the section title, its
+    // description the summary, and the current print, the spread screen and
+    // the axes are text inside it.
+    expect(container.querySelector('.rate-window__panels')?.hasAttribute('role')).toBe(false);
+    const plot = container.querySelector<HTMLElement>('.chart-frame__plot')!;
+    expect(plot.getAttribute('role')).toBe('group');
+    expect(plot.getAttribute('aria-label')).toBe('Why now: the market rate against the book');
+    expect(document.getElementById(plot.getAttribute('aria-describedby') ?? '')).toBe(summary);
+    expect(plot.textContent).toContain('6.22% now');
+    expect(plot.textContent).toContain('Spread screen: 75 bps below the book median (6.35%)');
     // The edge month labels are anchored inside the plot.
     const xTicks = container.querySelectorAll('.rate-window__panel--itm .analytics-chart__tick--x');
     expect(xTicks[0].classList.contains('rate-window__xtick--start')).toBe(true);
@@ -136,7 +146,11 @@ describe('RateWindowPanel', () => {
 
   it('offers a table alternative listing the same weeks', () => {
     render();
-    const toggle = container.querySelector<HTMLButtonElement>('[data-testid="rate-window-view-toggle"]');
+    // One toggle, the frame's own: the header no longer carries a second one.
+    const toggles = container.querySelectorAll<HTMLButtonElement>('button.chart-frame__toggle');
+    expect(toggles).toHaveLength(1);
+    expect(container.querySelector('[data-testid="rate-window-view-toggle"]')).toBeNull();
+    const toggle = toggles[0];
     // One mechanism: the label names the view it switches to, no aria-pressed on top.
     expect(toggle?.textContent).toBe('View as table');
     expect(toggle?.hasAttribute('aria-pressed')).toBe(false);
@@ -147,6 +161,9 @@ describe('RateWindowPanel', () => {
     expect(rows[0].textContent).toContain(WEEKS[0].week);
     expect(rows[rows.length - 1].textContent).toContain('(current)');
     expect(rows[rows.length - 1].textContent).toContain('1,956');
+    // The summary and the as-of notice stay with the table view.
+    expect(container.querySelector('figcaption.chart-frame__summary')?.textContent).toContain('88 bps below');
+    expect(container.querySelector('[data-testid="rate-window-asof"]')).not.toBeNull();
     expect(toggle?.textContent).toBe('View as chart');
     act(() => toggle?.click());
     expect(container.querySelectorAll('.rate-window__panel svg')).toHaveLength(2);
@@ -180,7 +197,15 @@ describe('RateWindowPanel', () => {
     expect(container.querySelectorAll('.rate-window__panel svg')).toHaveLength(2);
     expect(container.querySelector('[data-testid="rate-window-threshold"]')).toBeNull();
     expect(container.querySelectorAll('polygon.rate-window__band')).toHaveLength(0);
-    expect(container.querySelector('[data-testid="rate-window-summary"]')?.textContent).toContain('empty');
+    expect(container.querySelector('figcaption.chart-frame__summary')?.textContent).toContain('empty');
+  });
+
+  it('keeps the no-weeks message outside the frame, with no toggle', () => {
+    render({ ...RESPONSE, weeks: [] });
+    expect(container.querySelector('figure.chart-frame')).toBeNull();
+    expect(container.querySelector('[data-testid="rate-window-summary"]')?.textContent).toContain('No weeks in the rate window yet');
+    expect(container.querySelector('button.chart-frame__toggle')).toBeNull();
+    expect(container.querySelector('[data-testid="rate-window-asof"]')).not.toBeNull();
   });
 });
 
