@@ -76,6 +76,8 @@ test.describe('per-tab chunks (bundle-06)', () => {
 });
 
 test('no tab carries a DOM title attribute under main (critic-08)', async ({ app, page }) => {
+  // Seven route loads in one case.
+  test.slow();
   for (const tab of TABS) {
     await app.gotoRoute(tab === 'executive' ? '/analytics' : `/analytics?view=${tab}`);
     await expect(page.locator('#main-content [data-analytics-skeleton]')).toHaveCount(0);
