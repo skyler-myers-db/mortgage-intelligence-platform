@@ -301,7 +301,7 @@ export function LeadTableBulkActions({
             campaignBindingBlocked && 'campaign-binding-status',
             armingCopy !== null && armingId,
           )}
-          title={approverGate ?? undefined}
+          tooltip={approverGate ?? undefined}
           data-testid="lead-bulk-approve"
           aria-label={`Approve ${selectedApprovalEligibleCount} eligible leads`}
           aria-keyshortcuts={approverGate === null && shortcutsLive ? 'Shift+A' : undefined}

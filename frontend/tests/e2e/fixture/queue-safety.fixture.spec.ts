@@ -143,15 +143,19 @@ test.describe('approver gate', () => {
     const reject = page.getByTestId(`lead-reject-${id}`);
     await expect(approve).toBeDisabled();
     await expect(reject).toBeDisabled();
-    await expect(approve).toHaveAttribute('title', 'Requires approver role');
-    await expect(reject).toHaveAttribute('title', 'Requires approver role');
+    // critic-08: the reason rides the design-system tooltip's description, never a native title.
+    for (const control of [approve, reject]) {
+      await expect(control).not.toHaveAttribute('title');
+      await expect(control).toHaveAccessibleDescription(/Requires approver role/);
+    }
     await expect(page.getByTestId('lead-approving-as')).toHaveCount(0);
 
     await page.getByTestId(`lead-select-${id}`).check();
     const bulk = page.getByTestId('lead-bulk-approve');
     await expect(bulk).toHaveText(/^Approve \d+ eligible$/);
     await expect(bulk).toBeDisabled();
-    await expect(bulk).toHaveAttribute('title', /Requires approver role/);
+    await expect(bulk).not.toHaveAttribute('title');
+    await expect(bulk).toHaveAccessibleDescription(/Requires approver role/);
     // Reject N (tables-07) is gated the same way, explained by the same status.
     const bulkReject = page.getByTestId('lead-bulk-reject');
     await expect(bulkReject).toHaveText(/^Reject \d+$/);

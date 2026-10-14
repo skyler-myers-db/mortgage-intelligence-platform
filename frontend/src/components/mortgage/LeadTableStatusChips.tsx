@@ -11,6 +11,7 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
+import { Tooltip } from '../ui/Tooltip';
 import type { GrowthAgentCohortVerification } from '../../lib/api';
 import { formatCount } from '../../lib/formatters';
 import type { CampaignBinding } from './LeadTable.logic';
@@ -66,23 +67,24 @@ export function LeadTableStatusChips({
         <div className="table-success chip-row" role="status" data-testid="growth-agent-cohort-proof">
           <Chip variant="success" icon="shield">Verified Growth Agent cohort</Chip>
           <span className="num">{formatCount(growthAgentVerification.total)} borrowers</span>
-          <span className="mono" title={growthAgentVerification.cohortFingerprint}>
-            proof {growthAgentVerification.cohortFingerprint.slice(0, 12)}
-          </span>
-          <span title={growthAgentVerification.snapshotId}>
-            snapshot {growthAgentVerification.snapshotId}
-          </span>
-          <span className="mono" title={growthAgentVerification.runId}>
-            run {growthAgentVerification.runId.slice(0, 12)}
-          </span>
+          {/* Sliced ids carry the full value on the design-system tooltip (critic-08). */}
+          <Tooltip content={growthAgentVerification.cohortFingerprint}>
+            <span className="mono">proof {growthAgentVerification.cohortFingerprint.slice(0, 12)}</span>
+          </Tooltip>
+          <Tooltip content={growthAgentVerification.snapshotId}>
+            <span>snapshot {growthAgentVerification.snapshotId}</span>
+          </Tooltip>
+          <Tooltip content={growthAgentVerification.runId}>
+            <span className="mono">run {growthAgentVerification.runId.slice(0, 12)}</span>
+          </Tooltip>
         </div>
       )}
       {campaignBindingState === 'validating' && requestedCampaignBinding && (
         <div id="campaign-binding-status" className="table-neutral chip-row" role="status" aria-live="polite" data-testid="campaign-binding-status">
           <Chip variant="neutral" icon="shield">Validating campaign binding</Chip>
-          <span className="mono" title={requestedCampaignBinding.campaign_id}>
-            campaign {requestedCampaignBinding.campaign_id.slice(0, 12)}
-          </span>
+          <Tooltip content={requestedCampaignBinding.campaign_id}>
+            <span className="mono">campaign {requestedCampaignBinding.campaign_id.slice(0, 12)}</span>
+          </Tooltip>
           <span>variant {requestedCampaignBinding.variant_name}</span>
         </div>
       )}
@@ -95,9 +97,9 @@ export function LeadTableStatusChips({
       {campaignBinding && (
         <div className="table-success chip-row" role="status" data-testid="campaign-operational-provenance">
           <Chip variant="success" icon="shield">Campaign-bound outreach</Chip>
-          <span className="mono" title={campaignBinding.campaign_id}>
-            campaign {campaignBinding.campaign_id.slice(0, 12)}
-          </span>
+          <Tooltip content={campaignBinding.campaign_id}>
+            <span className="mono">campaign {campaignBinding.campaign_id.slice(0, 12)}</span>
+          </Tooltip>
           <span>variant {campaignBinding.variant_name}</span>
           {expandedBorrowerId && (
             <Link

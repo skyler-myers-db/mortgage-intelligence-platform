@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { pushEscapeLayer } from '../../lib/escapeStack';
 import { useAdvanceAssignment, useRecordAssignmentOutcome } from '../../lib/mutations/sales';
@@ -116,7 +116,6 @@ export function AssignmentLifecycleAdvance({
 
   const next = NEXT_STATUS[status];
   if (!next) return null;
-  const stop = (e: ReactMouseEvent) => e.stopPropagation();
 
   const moveTo = (nextPicker: Picker, focus: 'opener' | 'picker') => {
     focusNextRef.current = focus;
@@ -152,7 +151,7 @@ export function AssignmentLifecycleAdvance({
   };
 
   return (
-    <div className="chip-stack" onClick={stop} data-testid={`lifecycle-advance-${borrowerId}`}>
+    <div className="chip-stack" data-testid={`lifecycle-advance-${borrowerId}`}>
       {next !== 'outcome_recorded' ? (
         <Button
           variant="ghost"

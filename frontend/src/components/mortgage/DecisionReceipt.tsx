@@ -34,6 +34,7 @@ import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip, SurfaceTitle } from '../Primitives';
 import { Skeleton } from '../ui/Skeleton';
+import { Tooltip } from '../ui/Tooltip';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { ScoreBadge } from './ScoreBadge';
 import {
@@ -119,7 +120,8 @@ interface ReceiptRow {
   label: string;
   value: string;
   mono?: boolean;
-  title?: string;
+  /** The full value of a sliced one, on the design-system tooltip (critic-08). */
+  tooltip?: string;
 }
 
 function receiptRows(receipt: DecisionReceiptPayload): ReceiptRow[] {
@@ -141,7 +143,7 @@ function receiptRows(receipt: DecisionReceiptPayload): ReceiptRow[] {
       label: 'Campaign · variant',
       value: `${receipt.campaign_id.slice(0, 12)} · ${receipt.variant_name ?? 'variant unnamed'}`,
       mono: true,
-      title: receipt.campaign_id,
+      tooltip: receipt.campaign_id,
     });
   }
   if (receipt.rationale_code) {
@@ -151,9 +153,9 @@ function receiptRows(receipt: DecisionReceiptPayload): ReceiptRow[] {
     rows.push({
       key: 'copy-hash',
       label: 'Copy hash (bound at approval)',
+      // Shown in full, so it needs no tooltip.
       value: receipt.copy_hash,
       mono: true,
-      title: receipt.copy_hash,
     });
   }
   if (receipt.copy_generation_id) {
@@ -424,18 +426,22 @@ export function DecisionReceipt({
             <p className="decision-receipt__routing" data-testid="decision-receipt-routing">{routingLine}</p>
           )}
           <dl className="decision-receipt__grid">
-            {rows.map((row, index) => (
-              <div key={row.key} className="decision-receipt__row" style={staggerIndex(index)}>
-                <dt className="field__label">{row.label}</dt>
+            {rows.map((row, index) => {
+              const value = (
                 <dd
                   className={`field__value${row.mono ? ' decision-receipt__value--mono' : ''}`}
-                  title={row.title}
                   data-receipt-field={row.key}
                 >
                   {row.value}
                 </dd>
-              </div>
-            ))}
+              );
+              return (
+                <div key={row.key} className="decision-receipt__row" style={staggerIndex(index)}>
+                  <dt className="field__label">{row.label}</dt>
+                  {row.tooltip ? <Tooltip content={row.tooltip}>{value}</Tooltip> : value}
+                </div>
+              );
+            })}
           </dl>
           <div className="decision-receipt__section" style={staggerIndex(evidenceIndex)}>
             <div className="eyebrow mb-2">{DECISION_RECEIPT_COPY.evidence}</div>
