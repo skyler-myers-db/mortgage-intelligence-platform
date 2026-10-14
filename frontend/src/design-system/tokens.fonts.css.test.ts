@@ -1,6 +1,7 @@
 /**
- * Source pins for the webfont faces at the head of tokens.css (2026-09-21
- * audit bundle-05 / css-v2). The rendered proof (one fetch per preloaded
+ * Source pins for the webfont faces in fonts.css, which tokens.css imports
+ * first and unlayered (2026-09-21 audit bundle-05 / css-v2; css-05 moved the
+ * faces out of tokens.css verbatim). The rendered proof (one fetch per preloaded
  * woff2, the 600 < 650 < 700 < 800 weight ladder, the metric-matched
  * fallbacks) is tests/e2e/fixture/build-currency.fixture.spec.ts; this file
  * keeps the source honest between builds:
@@ -12,10 +13,18 @@
  *    local bold face (600 900), each with all four overrides, the same line
  *    box, and the same unicode-range as their webfont, so a glyph Geist does
  *    not cover keeps the system face instead of a scaled Arial / Courier New;
- *  - --font-sans / --font-mono try the webfont, then its fallback face.
+ *  - --font-sans / --font-mono try the webfont, then its fallback face;
+ *  - tokens.css imports fonts.css with no layer(), so the faces stay
+ *    top-level @font-face rules (build-currency finds 'Geist Fallback' at a
+ *    sheet's top level).
  */
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// test reads the design-system CSS text under Vitest only.
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { readTokensCss } from '../test/tokenCascade';
+
+declare const process: { cwd(): string };
 
 interface FontFace {
   family: string;
@@ -41,12 +50,13 @@ function customProperty(css: string, name: string): string {
   return match[1].trim();
 }
 
-const css = readTokensCss();
+const tokensCss = readTokensCss();
+const css = readFileSync(`${process.cwd()}/src/design-system/fonts.css`, 'utf8') as string;
 const faces = fontFaces(css);
 const webfonts = faces.filter((face) => /url\(/.test(face.descriptors.src ?? ''));
 const fallbacks = faces.filter((face) => /local\(/.test(face.descriptors.src ?? ''));
 
-describe('tokens.css webfont faces', () => {
+describe('fonts.css webfont faces', () => {
   it('declares exactly the two prototype families as webfonts', () => {
     expect(webfonts.map((face) => face.family).sort()).toEqual(['Geist', 'Geist Mono']);
   });
@@ -65,8 +75,16 @@ describe('tokens.css webfont faces', () => {
   });
 
   it('imports no static @fontsource face and names no .woff file', () => {
-    expect(css).not.toMatch(/@import\s+['"]@fontsource\//);
-    expect(css).not.toMatch(/\.woff['")]/);
+    for (const text of [css, tokensCss]) {
+      expect(text).not.toMatch(/@import\s+['"]@fontsource\//);
+      expect(text).not.toMatch(/\.woff['")]/);
+    }
+  });
+
+  it('is imported by tokens.css unlayered, and tokens.css declares no face of its own', () => {
+    expect(tokensCss).toMatch(/^@import "\.\/fonts\.css";$/m);
+    expect(fontFaces(tokensCss)).toEqual([]);
+    expect(css.replace(/\/\*[\s\S]*?\*\//g, '').replace(/@font-face\s*\{[^}]*\}/g, '').trim()).toBe('');
   });
 });
 
@@ -79,7 +97,7 @@ function fallbackFace(family: string, weight: 'regular' | 'bold'): FontFace | un
   );
 }
 
-describe('tokens.css metric-matched fallback faces', () => {
+describe('fonts.css metric-matched fallback faces', () => {
   it.each([
     ['Geist Fallback', 'regular', /^local\('Arial'\), local\('Liberation Sans'\)$/],
     ['Geist Fallback', 'bold', /^local\('Arial Bold'\), local\('Liberation Sans Bold'\)$/],
@@ -122,7 +140,7 @@ describe('tokens.css metric-matched fallback faces', () => {
 
 describe('font stacks', () => {
   it('try the webfont, then its metric-matched fallback, before the system faces', () => {
-    expect(customProperty(css, '--font-sans')).toMatch(/^'Geist', 'Geist Fallback', /);
-    expect(customProperty(css, '--font-mono')).toMatch(/^'Geist Mono', 'Geist Mono Fallback', /);
+    expect(customProperty(tokensCss, '--font-sans')).toMatch(/^'Geist', 'Geist Fallback', /);
+    expect(customProperty(tokensCss, '--font-mono')).toMatch(/^'Geist Mono', 'Geist Mono Fallback', /);
   });
 });
