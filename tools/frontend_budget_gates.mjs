@@ -428,11 +428,12 @@ export const budgets = {
   //    model in the genie-answer chunk, the lazy GenieFigureMark (0.73).
   //  - w5-growth-watchlists +2.06: the RateWatchControl in the lazy
   //    RateScenarioControl (4.71 closure), the plan progress mapping.
-  // Totals: 2129.33 raw / 753.09 gzip / 650.59 br across 148 chunks
-  // (+42.44 br against 29.0 of summed lane caps; no registered feature was
-  // cut, G5). Initial JS 146.13 -> 147.63 br (see initialJsBrBytes). ~5%.
-  totalJsBytes: 2236 * KiB, // actual 2129.33 (wave-5d integration)
-  totalJsGzipBytes: 791 * KiB, // actual 753.09 (wave-5d integration)
+  //  - integration +0.15: the Offer's actor_changed sentence (c7c94d5d).
+  // Totals: 2129.35 raw / 753.13 gzip / 650.74 br across 148 chunks
+  // (+42.59 br against 29.0 of summed lane caps; no registered feature was
+  // cut, G5). Initial JS 146.13 -> 147.60 br (see initialJsBrBytes). ~5%.
+  totalJsBytes: 2236 * KiB, // actual 2129.35 (wave-5d integration)
+  totalJsGzipBytes: 791 * KiB, // actual 753.13 (wave-5d integration)
   // Re-baselined 2026-09-23 for wave 1c (lane queue-keyboard-review): the
   // shared LeadTable chunk (Lead Queue + Segment Intelligence) grew from
   // 92.96 / 29.59 to 105.51 / 33.56 with the keyboard triage that must be
@@ -546,10 +547,11 @@ export const budgets = {
   // print-glossary-sales-manager +0.31 (cap 0.15: the shell exits in
   // IdentityMenu, the ? sheet host and DrawerBoundary), context-deeplink
   // -0.03, provenance-tiles -0.06, growth-watchlists +0.09 (two additive
-  // RUM vocabulary lines). 146.13 -> 147.63 (+1.50; the three overages
+  // RUM vocabulary lines), integration -0.03 (hash churn, raw +0). 146.13
+  // -> 147.60 (+1.47; the three overages
   // are ruled accepted with this attribution, 12.4 #11). The gate is HELD
-  // at 152: W5e keeps 4.37 KiB br.
-  initialJsBrBytes: 152 * KiB, // actual 147.63 (8 chunks, wave-5d integration)
+  // at 152: W5e keeps 4.40 KiB br.
+  initialJsBrBytes: 152 * KiB, // actual 147.60 (8 chunks, wave-5d integration)
   // wave-4b integration: 24.17 -> 24.32 br (see initialCssBytes), which left
   // 2.7%. Re-baselined to ~5%.
   // wave-5b integration: 24.53 -> 24.74 br (theme-white-label +0.23: the
@@ -559,7 +561,7 @@ export const budgets = {
   // wave-5d integration: 24.88 -> 25.20 br (print-glossary-sales-manager
   // +0.26, followups-snooze +0.06; see initialCssBytes), 3.1% left. ~5%.
   initialCssBrBytes: 27 * KiB, // actual 25.20 (wave-5d integration; 24.88 at W5c)
-  totalJsBrBytes: 684 * KiB, // actual 650.59 (148 chunks, wave-5d integration; see totalJsBytes)
+  totalJsBrBytes: 684 * KiB, // actual 650.74 (148 chunks, wave-5d integration; see totalJsBytes)
   maxLazyJsBrBytes: 43 * KiB, // actual 40.89 (leadsQuery = LeadTable chunk, wave-5d integration; see maxLazyJsBytes)
   // What a navigation to each route fetches beyond the initial closure: the
   // route chunk plus its static imports, JS + CSS, brotli q11. Keyed by the
@@ -771,8 +773,9 @@ export const budgets = {
     // +1.2 cap, ruled accepted: Field joins the closure +1.47, the route
     // chunk +1.22 (the verified binding, describeApiError copy, the pending
     // banner, the mock exit), the QueuePager scope +0.17; the refusal
-    // sentence is lazy). ~5% headroom.
-    'src/routes/offer-orchestrator.tsx': 45 * KiB, // actual 42.07
+    // sentence is lazy; integration +0.03, the actor_changed branch).
+    // ~5% headroom.
+    'src/routes/offer-orchestrator.tsx': 45 * KiB, // actual 42.10
     // wave-4b: 32.88 -> 37.48 (w4-workflow +4.61: compiler memo code for
     // the newly compiled route about +2.6, campaign mutations, the Field
     // primitive on the numeric editors).
