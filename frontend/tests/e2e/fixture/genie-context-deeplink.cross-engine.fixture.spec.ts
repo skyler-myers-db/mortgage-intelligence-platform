@@ -11,7 +11,8 @@
  *       second read of A (the link cache follows every settled turn).
  *   (h) motion-01 item 2e: the History menu's exiting class (inert,
  *       aria-hidden) holds until transitionend, then the menu leaves the
- *       DOM; under reduced motion it leaves at once; a reopen mid-exit reads
+ *       DOM, also when the timeline runs the exit past the hook's wall-clock
+ *       deadline; under reduced motion it leaves at once; a reopen mid-exit reads
  *       the sessions again; keys pressed while the floating panel's menu
  *       fades over the Lead Queue (A, R) still reach the queue; and a
  *       keyboard pick hands focus back to the History toggle, never to
@@ -30,6 +31,7 @@ import {
   registerSessions,
 } from './data/genieContextDeeplink';
 import { registerDraftEcho, registerHeldDecision } from './data/queueKeyboard';
+import { describeExit, observeExit, type ExitObservation } from './exitObservation';
 import type { MockApi } from './mockApi';
 import { expect, test } from './test';
 
@@ -111,27 +113,53 @@ test.describe('(h) the History menu exit (motion-01 item 2e)', () => {
   const toggle = (page: Page) => askPanel(page).getByRole('button', { name: 'Genie conversation history' });
   const menu = (page: Page) => askPanel(page).locator('.genie-history__menu');
 
+  const HISTORY_EXIT = {
+    trigger: '#main-content button[aria-label="Genie conversation history"]',
+    exitingClass: 'genie-history__menu--exiting',
+  };
+
+  /** The exit held (exiting, inert, aria-hidden, mounted) through its own transitionend, then the node left. */
+  function expectHeldUntilTransitionEnd(exit: ExitObservation): void {
+    const story = describeExit(exit);
+    expect(exit.during, `mid-exit; ${story}`).toEqual({ exiting: true, inert: true, hidden: 'true', connected: true });
+    expect(exit.end && { exiting: exit.end.exiting, inert: exit.end.inert, connected: exit.end.connected }, story).toEqual({
+      exiting: true,
+      inert: true,
+      connected: true,
+    });
+    expect(exit.removedAfterMs, story).not.toBeNull();
+    expect(exit.removedAfterMs ?? -1, story).toBeGreaterThanOrEqual(exit.end?.afterMs ?? Number.POSITIVE_INFINITY);
+  }
+
   test('the exiting class holds until transitionend, then the menu leaves the DOM', async ({ app, mockApi, page }) => {
     registerSessions(mockApi);
     await app.gotoRoute('/ask-genie');
     await toggle(page).click();
     await expect(menu(page).getByRole('menuitem')).toHaveCount(1);
-    const exit = await menu(page).evaluate(async (element) => {
-      const ended = new Promise<void>((resolve) => element.addEventListener('transitionend', () => resolve(), { once: true }));
-      document.querySelector<HTMLButtonElement>('#main-content button[aria-label="Genie conversation history"]')?.click();
-      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
-      const during = {
-        exiting: element.classList.contains('genie-history__menu--exiting'),
-        inert: element.hasAttribute('inert'),
-        hidden: element.getAttribute('aria-hidden'),
-        connected: element.isConnected,
-      };
-      await ended;
-      return during;
-    });
-    expect(exit).toEqual({ exiting: true, inert: true, hidden: 'true', connected: true });
+    expectHeldUntilTransitionEnd(await observeExit(menu(page), HISTORY_EXIT));
     await expect(menu(page)).toHaveCount(0);
     await expect(toggle(page)).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  test('an exit the timeline runs late still holds until its own transitionend: the deadline waits for it', async ({ app, mockApi, page }) => {
+    // Linux WebKit on CI (run 38565698599) painted no frame for ~430 ms, so
+    // the exit started late on the document timeline while the hook's wall-
+    // clock deadline (computed exit + 120 ms) ran on: the menu was cut mid-
+    // exit and its transitionend never came. Slowing the menu's own
+    // transitions to 0.3x replays that on any engine: they need ~400 ms
+    // against a 240 ms first deadline.
+    registerSessions(mockApi);
+    await app.gotoRoute('/ask-genie');
+    await toggle(page).click();
+    await expect(menu(page).getByRole('menuitem')).toHaveCount(1);
+    const exit = await observeExit(menu(page), { ...HISTORY_EXIT, slowTo: 0.3 });
+    expectHeldUntilTransitionEnd(exit);
+    expect(exit.pastDeadline, `non-vacuity: the exit outlived the first deadline; ${describeExit(exit)}`).toEqual({
+      connected: true,
+      exiting: true,
+      running: true,
+    });
+    await expect(menu(page)).toHaveCount(0);
   });
 
   test('under reduced motion it leaves at once', async ({ app, mockApi, page }) => {
