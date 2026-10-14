@@ -181,6 +181,9 @@ def _contexts_for_state(state: str) -> list[GenieContext]:
         if zip_state == state:
             contexts.append(GenieContext(route="lead-queue", zip=zip_code))
             contexts.append(GenieContext(route="lead-queue", zip=zip_code, segment_codes=[FIXED_SEGMENT]))
+        # A state beside a ZIP (the map's ZIP drill, or a mismatched pair): both are named.
+        contexts.append(GenieContext(route="lead-queue", state=state, zip=zip_code))
+    contexts.append(GenieContext(route="lead-queue", state=state, zip="60601", segment_codes=[FIXED_SEGMENT]))
     for city, city_state in CITY_SAMPLE.items():
         if city_state == state and city not in CITY_SAMPLE_WITHHELD:
             key = f"{city}~{city_state}"
@@ -196,7 +199,8 @@ def _assert_governed_place(ctx: GenieContext, prompt: str) -> None:
         return
     assert place in prompt
     if ctx.zip is not None:
-        assert _ZIP_PHRASE_RE.fullmatch(place), place
+        zip_phrase = _ZIP_PHRASE_RE.pattern + (f", {ctx.state}" if ctx.state is not None else "")
+        assert re.fullmatch(zip_phrase, place, re.IGNORECASE), place
     else:
         assert is_governed_analytics_location(place), place
 
@@ -335,6 +339,26 @@ def test_the_withheld_sample_cities_stay_outside_the_governed_place_set() -> Non
             assert not is_governed_analytics_location(phrase), f"{city} is admitted now; render it"
         else:
             assert response.prompt is not None, city
+
+
+@pytest.mark.parametrize("state", ["IL", "TX"])
+def test_a_state_beside_a_zip_stays_in_the_question(state: str) -> None:
+    """The map's ZIP drill sends both; a mismatched pair must never ask about the ZIP alone."""
+
+    assert render_genie_context_scope(GenieContext(route="lead-queue", state=state, zip="60601")).prompt == (
+        f"How many borrowers are in ZIP code 60601, {state}, and what is the average rate spread?"
+    )
+    paired = render_genie_context_scope(
+        GenieContext(route="lead-queue", state=state, zip="60601", segment_codes=["itm", "equity"], segment_mode="all")
+    )
+    assert paired.prompt == (
+        f"How many borrowers in ZIP code 60601, {state} are in the prime refi candidates segment and the "
+        "home equity candidate segment, and what is the average rate spread?"
+    )
+    # Non-vacuity: the ZIP alone still renders without a state.
+    assert render_genie_context_scope(GenieContext(route="lead-queue", zip="60601")).prompt == (
+        "How many borrowers are in ZIP code 60601, and what is the average rate spread?"
+    )
 
 
 def test_a_cold_city_dimension_withholds_the_city_slot() -> None:

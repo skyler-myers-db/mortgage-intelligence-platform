@@ -224,6 +224,8 @@ describe('genieContextFromQueueFilters (phase 2, a closed grammar)', () => {
     ['a county list of one, with its state and a segment', 'state=il&counties=17031&segment=ITM', { route: 'lead-queue', segment_codes: ['itm'], segment_mode: 'any', state: 'IL', county_fips: '17031' }],
     ['a ZIP', 'zip=60601', { route: 'lead-queue', zip: '60601' }],
     ['a ZIP list of one', 'zips=99950&segment=equity', { route: 'lead-queue', segment_codes: ['equity'], segment_mode: 'any', zip: '99950' }],
+    ['the map\'s ZIP drill: a state beside its ZIP, both carried', 'state=IL&zip=60601', { route: 'lead-queue', state: 'IL', zip: '60601' }],
+    ['a state beside a ZIP elsewhere, both carried (never dropped)', 'states=TX&zips=60601&segment_codes=itm,equity&segment_mode=all', { route: 'lead-queue', segment_codes: ['itm', 'equity'], segment_mode: 'all', state: 'TX', zip: '60601' }],
     ['a governed city key', 'cities=ALISO VIEJO~CA', { route: 'lead-queue', city: 'ALISO VIEJO~CA' }],
     ['a city in its own state', 'state=WA&cities=KENT~WA', { route: 'lead-queue', state: 'WA', city: 'KENT~WA' }],
     ['a Competitor ref', 'state=IL&target_lender_ref=Competitor B', { route: 'lead-queue', state: 'IL', lender_ref: 'Competitor B' }],

@@ -174,6 +174,12 @@ def scope_place_phrase(ctx: GenieContext) -> str | None:
     elif ctx.city is not None:
         phrase = _city_phrase(ctx.city)
     elif ctx.zip is not None:
+        # A state beside a ZIP stays in the question ('ZIP code NNNNN, ST', the
+        # county phrase's shape): no committed table checks that the ZIP lies
+        # in the state, so dropping it could ask about a broader cohort than
+        # the empty one on screen.
+        if ctx.state is not None:
+            return f"ZIP code {ctx.zip}, {ctx.state}"
         return f"ZIP code {ctx.zip}"
     elif ctx.state is not None:
         phrase = STATE_NAME_BY_CODE[ctx.state]

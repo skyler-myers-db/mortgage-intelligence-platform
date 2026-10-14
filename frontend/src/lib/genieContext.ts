@@ -156,7 +156,10 @@ export function genieLeadPrompt({ segmentCodes, stateCode }: GenieLeadContext): 
  * Null as well when phase 1 already covers the selection (at most one
  * segment and nothing but a state: `queueFilterGeniePrompt`), and for a
  * combination the model refuses (two places, a city outside the state, or
- * no slot it can render).
+ * no slot it can render). A state beside a ZIP (the map's ZIP drill) travels
+ * as both codes, and the server's question names both ('ZIP code NNNNN,
+ * ST'): no committed table checks that the ZIP lies in the state, so the
+ * state never drops out.
  */
 const CONTEXT_FILTER_KEYS: ReadonlySet<string> = new Set([
   'segment', 'segment_codes', 'segment_mode', 'state', 'states', 'county', 'counties',
