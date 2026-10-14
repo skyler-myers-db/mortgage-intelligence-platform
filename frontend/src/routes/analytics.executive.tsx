@@ -7,6 +7,7 @@ import { Link } from 'react-router';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { Histogram } from '../components/charts/Histogram';
 import { formatCount } from '../lib/formatters';
+import { EXECUTIVE_KPI_SOURCES, executiveKpiEvidence } from '../lib/executiveKpiDrawerSource';
 import { formatDate, formatTimestamp } from '../lib/time';
 import { Timestamp } from '../components/ui/Timestamp';
 import type {
@@ -115,13 +116,44 @@ export function ExecutiveView({
   /** The tab's state / segment / lender filters narrow the KPIs; the rate window says it ignores them. */
   filtersActive?: boolean;
 }) {
+  // flow-06: every Executive card opens its evidence; "How we got N" (and
+  // the reproduce statement) only for the unfiltered book.
+  const asOf = data.totals.snapshot_date ?? null;
   return (
     <>
       <div className="kpi-row">
-        <KpiCard label="Addressable Borrowers" value={formatCount(data.totals.addressable_borrowers)} delta={data.totals.snapshot_date ? `Snapshot ${formatDate(data.totals.snapshot_date)}` : undefined} deltaDir="flat" />
-        <KpiCard label="In the Money" value={formatCount(data.totals.in_the_money_borrowers)} delta={`${formatCount(data.totals.high_opportunity_borrowers)} score ${HIGH_OPPORTUNITY_SCORE_LABEL}`} deltaDir="up" />
-        <KpiCard label="Primary Offer Paths" value={formatCount(data.totals.offer_recommended_borrowers)} delta="Offer path assigned" deltaDir="up" />
-        <KpiCard label="Approved Outreach" value={formatCount(data.totals.approved_borrowers)} delta={`${formatCount(data.totals.actioned_borrowers)} actioned`} deltaDir="flat" />
+        <KpiCard
+          label="Addressable Borrowers"
+          value={formatCount(data.totals.addressable_borrowers)}
+          delta={data.totals.snapshot_date ? `Snapshot ${formatDate(data.totals.snapshot_date)}` : undefined}
+          deltaDir="flat"
+          source={EXECUTIVE_KPI_SOURCES.addressable}
+          evidence={executiveKpiEvidence('addressable', asOf, filtersActive)}
+        />
+        <KpiCard
+          label="In the Money"
+          value={formatCount(data.totals.in_the_money_borrowers)}
+          delta={`${formatCount(data.totals.high_opportunity_borrowers)} score ${HIGH_OPPORTUNITY_SCORE_LABEL}`}
+          deltaDir="up"
+          source={EXECUTIVE_KPI_SOURCES.inTheMoney}
+          evidence={executiveKpiEvidence('inTheMoney', asOf, filtersActive)}
+        />
+        <KpiCard
+          label="Primary Offer Paths"
+          value={formatCount(data.totals.offer_recommended_borrowers)}
+          delta="Offer path assigned"
+          deltaDir="up"
+          source={EXECUTIVE_KPI_SOURCES.primaryOfferPaths}
+          evidence={executiveKpiEvidence('primaryOfferPaths', asOf, filtersActive)}
+        />
+        <KpiCard
+          label="Approved Outreach"
+          value={formatCount(data.totals.approved_borrowers)}
+          delta={`${formatCount(data.totals.actioned_borrowers)} actioned`}
+          deltaDir="flat"
+          source={EXECUTIVE_KPI_SOURCES.approved}
+          evidence={executiveKpiEvidence('approved', asOf, filtersActive)}
+        />
       </div>
       <RateWindowSection filtersActive={filtersActive} />
       <section className="surface analytics-section">

@@ -9,7 +9,11 @@ KPI's own read executes (never a copy of their text):
   criteria (lib/homeQueries ``HOME_PORTFOLIO_PREVIEW_CRITERIA``:
   ``marketing_eligibility='Any'``), exactly what ``preview()`` runs for Home;
 * ``funnel.*`` -- ``DatabricksAnalyticsRepository._FUNNEL_POPULATION_SQL``, the
-  approval funnel's population statement.
+  approval funnel's population statement;
+* ``analytics.*`` -- ``DatabricksAnalyticsRepository._LIVE_FUNNEL_SQL`` with no
+  WHERE clause and no binds, exactly what ``executive()`` runs for the
+  unfiltered book (the Executive KPI cards; a filtered card carries no proof,
+  W5e w5-analytics item 8B).
 
 Every statement passes ``proof_policy.validate_kpi_proof_sql`` (read-only,
 gold/semantics relations only); a key whose statement fails is refused, never
@@ -73,6 +77,16 @@ def funnel_statement(measure_column: str, measure_predicate: str | None) -> KpiS
     )
 
 
+def analytics_statement(measure_column: str, measure_predicate: str | None) -> KpiStatement:
+    return KpiStatement(
+        sql=DatabricksAnalyticsRepository._LIVE_FUNNEL_SQL.format(where=""),
+        params={},
+        measure_column=measure_column,
+        measure_predicate=measure_predicate,
+        where="",
+    )
+
+
 KPI_STATEMENTS: dict[str, Callable[[], KpiStatement]] = {
     "home.addressable_population": lambda: home_statement("marketable_population", None),
     "home.in_the_money": lambda: home_statement("high_intent_leads", "in_the_money = TRUE"),
@@ -80,6 +94,14 @@ KPI_STATEMENTS: dict[str, Callable[[], KpiStatement]] = {
     "home.primary_offer_paths": lambda: home_statement("offers_recommended", "offer_recommended = TRUE"),
     "funnel.population": lambda: funnel_statement("population", None),
     "funnel.high_opportunity": lambda: funnel_statement("high_opportunity", "is_high_opportunity = TRUE"),
+    "analytics.addressable": lambda: analytics_statement("addressable_borrowers", None),
+    "analytics.in_the_money": lambda: analytics_statement("in_the_money_borrowers", "b.in_the_money = TRUE"),
+    "analytics.primary_offer_paths": lambda: analytics_statement(
+        "offer_recommended_borrowers", "LOWER(b.recommended_offer_code) <> 'nurture'"
+    ),
+    "analytics.approved": lambda: analytics_statement(
+        "approved_borrowers", "COALESCE(ls.approval_status, 'pending') = 'approved'"
+    ),
 }
 
 

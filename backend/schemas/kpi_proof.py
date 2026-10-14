@@ -19,6 +19,10 @@ KpiProofKey = Literal[
     "home.primary_offer_paths",
     "funnel.population",
     "funnel.high_opportunity",
+    "analytics.addressable",
+    "analytics.in_the_money",
+    "analytics.primary_offer_paths",
+    "analytics.approved",
 ]
 
 

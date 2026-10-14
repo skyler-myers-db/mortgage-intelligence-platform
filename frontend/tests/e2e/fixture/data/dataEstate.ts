@@ -182,6 +182,17 @@ const HOME_SQL =
 const FUNNEL_SQL =
   'SELECT   CAST(COUNT(*) AS INT) AS population,   CAST(COALESCE(SUM(CASE WHEN is_high_opportunity THEN 1 ELSE 0 END), 0) AS INT)' +
   `     AS high_opportunity FROM ${HEADLINE}`;
+// The Executive KPI cards' statement (backend _LIVE_FUNNEL_SQL, no WHERE, no binds).
+const LIFECYCLE = 'mip.gold.borrower_lifecycle_state';
+const EXECUTIVE_SQL =
+  'SELECT   CAST(MAX(DATE(b.refreshed_at)) AS STRING) AS snapshot_date,   CAST(MAX(ls.synced_at) AS STRING) AS lifecycle_synced_at,   ' +
+  'CAST(COUNT(*) AS INT) AS addressable_borrowers,   CAST(SUM(CASE WHEN b.in_the_money THEN 1 ELSE 0 END) AS INT) AS in_the_money_borrowers,   ' +
+  'CAST(SUM(CASE WHEN b.opportunity_score                 >= 75 THEN 1 ELSE 0 END) AS INT) AS high_opportunity_borrowers,   ' +
+  "CAST(SUM(CASE WHEN LOWER(b.recommended_offer_code) <> 'nurture' THEN 1 ELSE 0 END) AS INT)     AS offer_recommended_borrowers,   " +
+  "CAST(SUM(CASE WHEN COALESCE(ls.approval_status, 'pending') = 'approved' THEN 1 ELSE 0 END) AS INT)     AS approved_borrowers,   " +
+  "CAST(SUM(CASE WHEN COALESCE(ls.approval_status, 'pending') = 'approved'                  AND COALESCE(ls.outreach_status, 'none') = 'actioned'             " +
+  'THEN 1 ELSE 0 END) AS INT)     AS actioned_borrowers ' +
+  `FROM mip.gold.borrower_360 AS b LEFT JOIN ${LIFECYCLE} AS ls   ON ls.borrower_id = b.borrower_id`;
 const KPI_PROOF_SHAPES: Readonly<Record<KpiProofKey, { measure: string; predicates: string[]; sql: string; hash: string }>> = {
   'home.addressable_population': { measure: 'marketable_population', predicates: [], sql: HOME_SQL, hash: '1f2e3d4c5b6a7980' },
   'home.in_the_money': { measure: 'high_intent_leads', predicates: ['in_the_money = TRUE'], sql: HOME_SQL, hash: '1f2e3d4c5b6a7980' },
@@ -189,6 +200,11 @@ const KPI_PROOF_SHAPES: Readonly<Record<KpiProofKey, { measure: string; predicat
   'home.primary_offer_paths': { measure: 'offers_recommended', predicates: ['offer_recommended = TRUE'], sql: HOME_SQL, hash: '1f2e3d4c5b6a7980' },
   'funnel.population': { measure: 'population', predicates: [], sql: FUNNEL_SQL, hash: '0a9b8c7d6e5f4a3b' },
   'funnel.high_opportunity': { measure: 'high_opportunity', predicates: ['is_high_opportunity = TRUE'], sql: FUNNEL_SQL, hash: '0a9b8c7d6e5f4a3b' },
+  // The Executive KPI cards (W5e w5-analytics item 8B): _LIVE_FUNNEL_SQL, unfiltered.
+  'analytics.addressable': { measure: 'addressable_borrowers', predicates: [], sql: EXECUTIVE_SQL, hash: '81cbcba4035a4d5b' },
+  'analytics.in_the_money': { measure: 'in_the_money_borrowers', predicates: ['b.in_the_money = TRUE'], sql: EXECUTIVE_SQL, hash: '81cbcba4035a4d5b' },
+  'analytics.primary_offer_paths': { measure: 'offer_recommended_borrowers', predicates: ["LOWER(b.recommended_offer_code) <> 'nurture'"], sql: EXECUTIVE_SQL, hash: '81cbcba4035a4d5b' },
+  'analytics.approved': { measure: 'approved_borrowers', predicates: ["COALESCE(ls.approval_status, 'pending') = 'approved'"], sql: EXECUTIVE_SQL, hash: '81cbcba4035a4d5b' },
 };
 
 /** GET /api/kpi-proof?kpi= (flow-06): the governed statement behind one KPI card. */
@@ -202,7 +218,9 @@ export function kpiProof(kpiParam: string | null): KpiProofResponse {
     sql: shape.sql,
     sql_hash: shape.hash,
     params: [],
-    relations: shape.sql.includes('borrower_360') ? ['mip.gold.borrower_360', HEADLINE] : [HEADLINE],
+    relations: shape.sql.includes(LIFECYCLE)
+      ? ['mip.gold.borrower_360', LIFECYCLE]
+      : shape.sql.includes('borrower_360') ? ['mip.gold.borrower_360', HEADLINE] : [HEADLINE],
     note: `Column ${shape.measure} of this statement is the number on the card.`,
     databricks_sql_url: null,
   };
@@ -214,6 +232,7 @@ export function contractSamples(): ContractSample[] {
   return [
     { source: 'assetFreshness(not_tracked)', method: 'GET', pattern: '/api/assets/:assetKey/freshness', path: '/api/assets/fn_in_the_money/freshness', status: 200, body: assetFreshness('fn_in_the_money') },
     { source: 'kpiProof(funnel.high_opportunity)', method: 'GET', pattern: '/api/kpi-proof', path: '/api/kpi-proof', query: 'kpi=funnel.high_opportunity', status: 200, body: kpiProof('funnel.high_opportunity') },
+    { source: 'kpiProof(analytics.approved)', method: 'GET', pattern: '/api/kpi-proof', path: '/api/kpi-proof', query: 'kpi=analytics.approved', status: 200, body: kpiProof('analytics.approved') },
     { source: 'homeAttribution(competitor_lien)', method: 'GET', pattern: '/api/home/summary/attribution', path: '/api/home/summary/attribution', query: 'measure=competitor_lien&baseline=2026-07-09', status: 200, body: attribution },
   ];
 }
