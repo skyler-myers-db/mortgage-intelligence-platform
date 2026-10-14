@@ -17325,7 +17325,7 @@
           },
           "rows": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SalesConversionRow"
             },
             "title": "Rows",
             "type": "array"
@@ -17344,6 +17344,148 @@
         "title": "SalesConversionResponse",
         "type": "object"
       },
+      "SalesConversionRow": {
+        "description": "One conversion group: a loan officer, or the single all_cohorts group.",
+        "properties": {
+          "application_start_rate": {
+            "title": "Application Start Rate",
+            "type": "number"
+          },
+          "applications_started": {
+            "title": "Applications Started",
+            "type": "integer"
+          },
+          "callbacks_scheduled": {
+            "title": "Callbacks Scheduled",
+            "type": "integer"
+          },
+          "calls_attempted": {
+            "title": "Calls Attempted",
+            "type": "integer"
+          },
+          "contacts_reached": {
+            "title": "Contacts Reached",
+            "type": "integer"
+          },
+          "group_key": {
+            "title": "Group Key",
+            "type": "string"
+          },
+          "unique_application_starts": {
+            "title": "Unique Application Starts",
+            "type": "integer"
+          },
+          "unique_contacts_reached": {
+            "title": "Unique Contacts Reached",
+            "type": "integer"
+          },
+          "unique_leads_contacted": {
+            "title": "Unique Leads Contacted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "group_key",
+          "calls_attempted",
+          "contacts_reached",
+          "callbacks_scheduled",
+          "applications_started",
+          "unique_leads_contacted",
+          "unique_contacts_reached",
+          "unique_application_starts",
+          "application_start_rate"
+        ],
+        "title": "SalesConversionRow",
+        "type": "object"
+      },
+      "SalesOutcomeLoRow": {
+        "description": "Outcome counts for one assigned loan officer (or unassigned).",
+        "properties": {
+          "lo_email": {
+            "title": "Lo Email",
+            "type": "string"
+          },
+          "outcomes": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Outcomes",
+            "type": "object"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lo_email",
+          "outcomes",
+          "total"
+        ],
+        "title": "SalesOutcomeLoRow",
+        "type": "object"
+      },
+      "SalesOutcomeSourceRow": {
+        "description": "Outcome counts for one source system.",
+        "properties": {
+          "outcomes": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Outcomes",
+            "type": "object"
+          },
+          "source_system": {
+            "title": "Source System",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source_system",
+          "outcomes",
+          "total"
+        ],
+        "title": "SalesOutcomeSourceRow",
+        "type": "object"
+      },
+      "SalesOutcomeSourceStatus": {
+        "description": "One outcome feed's configuration status and its outcome count in the window.",
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "outcome_count": {
+            "title": "Outcome Count",
+            "type": "integer"
+          },
+          "source_system": {
+            "title": "Source System",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_system",
+          "display_name",
+          "status",
+          "configured",
+          "outcome_count"
+        ],
+        "title": "SalesOutcomeSourceStatus",
+        "type": "object"
+      },
       "SalesOutcomeSummaryResponse": {
         "properties": {
           "applications_submitted": {
@@ -17352,14 +17494,14 @@
           },
           "by_lo": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SalesOutcomeLoRow"
             },
             "title": "By Lo",
             "type": "array"
           },
           "by_source_system": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SalesOutcomeSourceRow"
             },
             "title": "By Source System",
             "type": "array"
@@ -17382,7 +17524,7 @@
           },
           "source_statuses": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SalesOutcomeSourceStatus"
             },
             "title": "Source Statuses",
             "type": "array"
@@ -17393,7 +17535,7 @@
           },
           "top_competitors": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SalesTopCompetitorRow"
             },
             "title": "Top Competitors",
             "type": "array"
@@ -17434,6 +17576,33 @@
         "title": "SalesOutcomeSummaryResponse",
         "type": "object"
       },
+      "SalesStandupLoRow": {
+        "description": "One loan officer's call dispositions on the standup day.",
+        "properties": {
+          "calls_logged": {
+            "title": "Calls Logged",
+            "type": "integer"
+          },
+          "lo_email": {
+            "title": "Lo Email",
+            "type": "string"
+          },
+          "outcomes": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Outcomes",
+            "type": "object"
+          }
+        },
+        "required": [
+          "lo_email",
+          "outcomes",
+          "calls_logged"
+        ],
+        "title": "SalesStandupLoRow",
+        "type": "object"
+      },
       "SalesStandupResponse": {
         "properties": {
           "applications_started": {
@@ -17442,7 +17611,7 @@
           },
           "by_lo": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SalesStandupLoRow"
             },
             "title": "By Lo",
             "type": "array"
@@ -17540,6 +17709,25 @@
           "display_label"
         ],
         "title": "SalesTeamMember",
+        "type": "object"
+      },
+      "SalesTopCompetitorRow": {
+        "description": "A public competitor label and its lost-to-competitor count.",
+        "properties": {
+          "competitor_lender_label": {
+            "title": "Competitor Lender Label",
+            "type": "string"
+          },
+          "lost_to_competitor": {
+            "title": "Lost To Competitor",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "competitor_lender_label",
+          "lost_to_competitor"
+        ],
+        "title": "SalesTopCompetitorRow",
         "type": "object"
       },
       "SavedDraft": {

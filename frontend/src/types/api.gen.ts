@@ -2375,28 +2375,66 @@ export interface ResponseSchemas {
   SalesConversionResponse: {
     from_date: string;
     group_by: "lo" | "cohort";
-    rows: { [key: string]: unknown }[];
+    rows: ResponseSchemas['SalesConversionRow'][];
     to_date: string;
+  };
+  /** One conversion group: a loan officer, or the single all_cohorts group. */
+  SalesConversionRow: {
+    application_start_rate: number;
+    applications_started: number;
+    callbacks_scheduled: number;
+    calls_attempted: number;
+    contacts_reached: number;
+    group_key: string;
+    unique_application_starts: number;
+    unique_contacts_reached: number;
+    unique_leads_contacted: number;
+  };
+  /** Outcome counts for one assigned loan officer (or unassigned). */
+  SalesOutcomeLoRow: {
+    lo_email: string;
+    outcomes: { [key: string]: number };
+    total: number;
+  };
+  /** Outcome counts for one source system. */
+  SalesOutcomeSourceRow: {
+    outcomes: { [key: string]: number };
+    source_system: string;
+    total: number;
+  };
+  /** One outcome feed's configuration status and its outcome count in the window. */
+  SalesOutcomeSourceStatus: {
+    configured: boolean;
+    display_name: string;
+    outcome_count: number;
+    source_system: string;
+    status: string;
   };
   SalesOutcomeSummaryResponse: {
     applications_submitted: number;
-    by_lo: { [key: string]: unknown }[];
-    by_source_system: { [key: string]: unknown }[];
+    by_lo: ResponseSchemas['SalesOutcomeLoRow'][];
+    by_source_system: ResponseSchemas['SalesOutcomeSourceRow'][];
     closed_funded: number;
     from_date: string;
     lost_to_competitor: number;
     not_qualified: number;
-    source_statuses: { [key: string]: unknown }[];
+    source_statuses: ResponseSchemas['SalesOutcomeSourceStatus'][];
     to_date: string;
-    top_competitors: { [key: string]: unknown }[];
+    top_competitors: ResponseSchemas['SalesTopCompetitorRow'][];
     total_outcomes: number;
     unique_applications_submitted: number;
     unique_closed_funded: number;
     withdrawn: number;
   };
+  /** One loan officer's call dispositions on the standup day. */
+  SalesStandupLoRow: {
+    calls_logged: number;
+    lo_email: string;
+    outcomes: { [key: string]: number };
+  };
   SalesStandupResponse: {
     applications_started: number;
-    by_lo: { [key: string]: unknown }[];
+    by_lo: ResponseSchemas['SalesStandupLoRow'][];
     callbacks_scheduled: number;
     calls_logged: number;
     contacts_reached: number;
@@ -2411,6 +2449,11 @@ export interface ResponseSchemas {
     manager_email: string | null;
     region: string | null;
     role: "loan_officer" | "sales_manager" | "admin";
+  };
+  /** A public competitor label and its lost-to-competitor count. */
+  SalesTopCompetitorRow: {
+    competitor_lender_label: string;
+    lost_to_competitor: number;
   };
   SavedDraft: {
     body: string;
