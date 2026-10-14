@@ -124,6 +124,8 @@ export interface UseLeadApprovalActionsInput {
   approvalRequestBatchId?: string | null;
   /** The Console's Recent activity: the cut-short run toast's action. */
   openRecentActivity?: () => void;
+  /** Set by the keyboard flow: raise the decision toast for an approve its 429 Retry recorded. */
+  lateApprovedRef?: RefObject<((borrowerId: string) => void) | null>;
 }
 
 export function useLeadApprovalActions({
@@ -141,6 +143,7 @@ export function useLeadApprovalActions({
   leadViewId = null,
   approvalRequestBatchId = null,
   openRecentActivity,
+  lateApprovedRef,
 }: UseLeadApprovalActionsInput) {
   // A11y: the bulk-approve button is the launch point for the bulk flow.
   // After the action settles we restore focus deterministically — to this
@@ -283,6 +286,7 @@ export function useLeadApprovalActions({
       recordDecision(borrowerId, { auditEventId, decision });
     },
     stillDecidable: (borrowerId) => !isDecisionLocked(borrowerId) && eligibleRef.current.has(borrowerId),
+    onRetryApproved: (borrowerId) => lateApprovedRef?.current?.(borrowerId),
   };
   const approveWithReport = (
     borrowerId: string,

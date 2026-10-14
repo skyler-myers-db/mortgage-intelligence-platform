@@ -89,6 +89,12 @@ export interface DecisionWriteDeps {
    * this mount, not in a bulk run, still eligible): a 429's Retry re-checks it.
    */
   stillDecidable?: (borrowerId: string) => boolean;
+  /**
+   * A single approve that succeeded through its 429 Retry (states-08): the
+   * review had already reported the failure, so the table raises the one
+   * decision toast now, with no cursor or Triage advance.
+   */
+  onRetryApproved?: (borrowerId: string) => void;
 }
 
 /** A 429 Retry that found the row decided meanwhile: nothing is sent. */
@@ -192,7 +198,9 @@ export function approveWithReport(
           toastWriteRefusal(`Couldn't approve ${borrowerId}`, DECIDED_SINCE);
           return;
         }
-        void approveWithReport(deps, borrowerId, undefined, extras, reviewedDraft);
+        void approveWithReport(deps, borrowerId, undefined, extras, reviewedDraft).then((report) => {
+          if (report.outcome === 'ok') deps.onRetryApproved?.(borrowerId);
+        });
       };
       if (!inBulk) toastWriteFailure(`Couldn't approve ${borrowerId}`, err, 'the approval', retry);
       // The session ended mid-click (on the draft step or the approve POST):

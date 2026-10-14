@@ -261,6 +261,8 @@ export function LeadTable({
     onFreshEntry: requestReveal,
   });
 
+  // The decision toast for an approve a 429 Retry recorded (the flow publishes it).
+  const lateApprovedRef = useRef<((borrowerId: string) => void) | null>(null);
   const approval = useLeadApprovalActions({
     displayLeads,
     leadsById,
@@ -278,6 +280,7 @@ export function LeadTable({
     // A request-scoped queue (flow-02): every decision answers that request.
     approvalRequestBatchId: requestDecisionBatchId(approvalRequests),
     openRecentActivity: openConsoleRecentActivity,
+    lateApprovedRef,
   });
   const requests = useLeadTableRequests({
     approvalRequests,
@@ -366,6 +369,7 @@ export function LeadTable({
     // states-07 item 1: the approval result is a shell toast (the Toaster speaks it once).
     openRecentActivity: openConsoleRecentActivity,
     raiseDecisionToast: (input) => REVIEW_CHUNK.current()?.raiseDecisionToast(input),
+    lateApprovedRef,
   });
   const { review } = flow;
   const openReview = review.review;

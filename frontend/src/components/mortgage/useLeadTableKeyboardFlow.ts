@@ -75,6 +75,8 @@ export interface UseLeadTableKeyboardFlowInput {
   openRecentActivity?: () => void;
   /** Raise the approval's result toast (from the review chunk, loaded by then). */
   raiseDecisionToast?: (input: DecisionToastInput) => void;
+  /** Published here: the decision toast for an approve a 429 Retry recorded later (states-08). */
+  lateApprovedRef?: RefObject<((borrowerId: string) => void) | null>;
 }
 
 /** Focus an element once it is rendered (a virtualized row may need a frame or two). */
@@ -147,6 +149,7 @@ export function useLeadTableKeyboardFlow({
   triage,
   openRecentActivity,
   raiseDecisionToast,
+  lateApprovedRef,
 }: UseLeadTableKeyboardFlowInput) {
   const triageActive = triage?.active === true;
 
@@ -472,6 +475,12 @@ export function useLeadTableKeyboardFlow({
       openRecentActivity,
     });
   }
+  // states-08: an approve that failed with a 429 and then succeeded through
+  // the toast's Retry raises the one decision toast, never an advance.
+  // (After the declaration: the compiler refuses a hoisted reference here.)
+  useLayoutEffect(() => {
+    if (lateApprovedRef) lateApprovedRef.current = showDecisionToast;
+  });
 
   /**
    * Toolbar "Approve N eligible": one row opens its review, several run the
