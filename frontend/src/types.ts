@@ -32,10 +32,7 @@ export type OutreachStatus = ApiResponse<'LeadSummary'>['outreach_status'];
 export type EvidenceEvent = ApiResponse<'EvidenceEvent'>;
 
 /** One value/count pair in a borrower-dimension mix, sorted by count descending. */
-export interface DimensionFacetCount {
-  value: string;
-  count: number;
-}
+export type DimensionFacetCount = ApiResponse<'DimensionFacetCount'>;
 
 export interface SegmentSummary {
   code: SegmentCode;
@@ -272,18 +269,7 @@ export interface HouseholdDedupConfig {
   primary_contact_strategy: 'highest_opportunity_eligible';
 }
 
-export interface HouseholdDedupSummary {
-  enabled: boolean;
-  candidate_borrower_count: number;
-  selected_primary_count: number;
-  suppressed_co_owner_count: number;
-  household_count: number;
-  owner_link_household_count: number;
-  mailing_address_household_count: number;
-  singleton_household_count: number;
-  primary_contact_strategy: 'highest_opportunity_eligible';
-  source_assets: string[];
-}
+export type HouseholdDedupSummary = ApiResponse<'HouseholdDedupSummary'>;
 
 export interface CampaignSummary {
   campaign_id: string;
