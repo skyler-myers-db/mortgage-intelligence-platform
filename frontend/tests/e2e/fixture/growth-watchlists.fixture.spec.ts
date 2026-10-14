@@ -211,32 +211,38 @@ async function leverLines(page: Page) {
 // in the 384px lever (Segments, Console closed) the one-line cohort link ran
 // past the lever's edge, its last glyph clipped, and the meta line split its
 // date ('Jul / 14'). Both cohort labels (gains at -100, drops at +100), in
-// every layout the lever has.
+// every layout the lever has, in both themes.
 test.describe('lever lines', () => {
-  for (const route of ['/', SEGMENTS_CLEARED]) {
-    test(`${route}: the cohort link wraps inside the lever and the book date stays on one line`, async ({ app, page, mockApi }) => {
-      registerRateWatch(mockApi, ['saved']);
-      for (const consoleOpen of [false, true]) {
-        for (const step of [-100, 100]) {
-          await app.gotoRoute(`${route}${route.includes('?') ? '&' : '?'}map_mode=rate&rate_step=${step}`);
-          await setConsole(page, consoleOpen);
-          if (process.platform !== 'linux') await page.addStyleTag({ content: LEVER_LINE_EMULATION });
-          await expect(page.locator('.map-legend__lever').getByRole('link', { name: /^Open / })).toBeVisible();
-          const lines = await leverLines(page);
-          const where = `${route} console ${consoleOpen} step ${step}`;
-          console.log(`[lever-lines] ${JSON.stringify({ route, console: consoleOpen, step, ...lines })}`);
-          expect(lines.date, `${where}: the meta line names the book date`).not.toBe('');
-          expect(lines.linkScroll, `${where}: the cohort label fits its link`).toBeLessThanOrEqual(lines.linkClient);
-          expect(lines.linkRight, `${where}: the cohort link ends inside the lever`).toBeLessThanOrEqual(lines.leverRight + 0.5);
-          expect(lines.dateLines, `${where}: the book date is on one line`).toBe(1);
-          if (route === SEGMENTS_CLEARED && !consoleOpen) {
-            // The narrow lever is where both lines are at stake; elsewhere the checks above hold trivially.
-            expect(lines.linkLines, `${where}: the cohort label wraps`).toBeGreaterThan(1);
-            expect(lines.metaLines, `${where}: the meta line wraps`).toBeGreaterThan(1);
+  for (const theme of FIXTURE_THEMES) {
+    for (const route of ['/', SEGMENTS_CLEARED]) {
+      test(`${theme}, ${route}: the cohort link wraps inside the lever and the book date stays on one line`, async ({ app, page, mockApi }) => {
+        registerRateWatch(mockApi, ['saved']);
+        await app.setTheme(theme);
+        for (const consoleOpen of [false, true]) {
+          for (const step of [-100, 100]) {
+            await app.gotoRoute(`${route}${route.includes('?') ? '&' : '?'}map_mode=rate&rate_step=${step}`);
+            await setConsole(page, consoleOpen);
+            if (process.platform !== 'linux') await page.addStyleTag({ content: LEVER_LINE_EMULATION });
+            await expect(page.locator('.map-legend__lever').getByRole('link', { name: /^Open / })).toBeVisible();
+            const lines = await leverLines(page);
+            const where = `${theme} ${route} console ${consoleOpen} step ${step}`;
+            console.log(`[lever-lines] ${JSON.stringify({ theme, route, console: consoleOpen, step, ...lines })}`);
+            expect(lines.date, `${where}: the meta line names the book date`).not.toBe('');
+            // The defect itself: the one-line link box ran past the lever's edge.
+            expect(lines.linkRight, `${where}: the cohort link ends inside the lever`).toBeLessThanOrEqual(lines.leverRight + 0.5);
+            // A link held to the lever's width that clips or ellipsizes its own label would pass
+            // the check above: the label must fit the link's box as well.
+            expect(lines.linkScroll, `${where}: the cohort label fits its link`).toBeLessThanOrEqual(lines.linkClient);
+            expect(lines.dateLines, `${where}: the book date is on one line`).toBe(1);
+            if (route === SEGMENTS_CLEARED && !consoleOpen) {
+              // The narrow lever is where both lines are at stake; elsewhere the checks above hold trivially.
+              expect(lines.linkLines, `${where}: the cohort label wraps`).toBeGreaterThan(1);
+              expect(lines.metaLines, `${where}: the meta line wraps`).toBeGreaterThan(1);
+            }
           }
         }
-      }
-    });
+      });
+    }
   }
 });
 
