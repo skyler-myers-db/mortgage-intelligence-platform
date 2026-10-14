@@ -41,6 +41,12 @@ _MAP = "frontend/src/components/mortgage"
 
 # (file, old, new, expected count). Grouped by file; keep it sorted.
 TABLE: tuple[tuple[str, str, str, int], ...] = (
+    (
+        f"{_MAP}/DeltaExplainer.test.tsx",
+        "?.textContent ?? '').replace(/[+,]/g, '')));",
+        f"?.textContent ?? '').replace(/[+,]/g, '').replace(/{MINUS}/g, '-')));",
+        1,
+    ),
     (f"{_MAP}/LastLoginSummary.test.tsx", "toBe('-40 bps 30-year par", f"toBe('{MINUS}40 bps 30-year par", 1),
     (f"{_MAP}/LastLoginSummary.test.tsx", "'6.30%', '-40 bps']", f"'6.30%', '{MINUS}40 bps']", 1),
     (
@@ -57,6 +63,12 @@ TABLE: tuple[tuple[str, str, str, int], ...] = (
         1,
     ),
     (f"{_MAP}/LeadTableRow.render.test.tsx", "toContain('-422 bps')", f"toContain('{MINUS}422 bps')", 1),
+    (
+        f"{_MAP}/rateScenario.copy.test.ts",
+        "'Largest in-the-money drops: Texas -1,234 · Florida -980 · California -870'",
+        f"'Largest in-the-money drops: Texas {MINUS}1,234 · Florida {MINUS}980 · California {MINUS}870'",
+        1,
+    ),
     (
         f"{_MAP}/RateScenarioControl.test.tsx",
         "'Largest in-the-money drops: IL -200'",

@@ -58,7 +58,7 @@ describe('largestChanges (wow-stage-1)', () => {
 
   it('names the three largest drops for a par rise', () => {
     expect(largestChanges({ tx: -1_234, fl: -980, ca: -870, il: -12 }, nameOf, 50)).toBe(
-      'Largest in-the-money drops: Texas -1,234 · Florida -980 · California -870',
+      'Largest in-the-money drops: Texas −1,234 · Florida −980 · California −870',
     );
   });
 

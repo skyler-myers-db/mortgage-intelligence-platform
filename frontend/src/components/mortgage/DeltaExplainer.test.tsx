@@ -124,7 +124,7 @@ describe('DeltaExplainer', () => {
     const rows = [...document.querySelectorAll('.delta-explainer__table tbody tr')];
     const labels = rows.map((row) => row.querySelector('th')?.textContent);
     expect(labels).toEqual(['TX', 'FL', 'CA', 'IL', 'AZ', 'GA', OTHER_STATES_LABEL, UNATTRIBUTED_LABEL]);
-    const changes = rows.map((row) => Number((row.querySelectorAll('td')[2]?.textContent ?? '').replace(/[+,]/g, '')));
+    const changes = rows.map((row) => Number((row.querySelectorAll('td')[2]?.textContent ?? '').replace(/[+,]/g, '').replace(/−/g, '-')));
     expect(changes.reduce((sum, value) => sum + value, 0)).toBe(response.total_change);
     expect(document.querySelector('[data-testid="delta-explainer-total"]')?.textContent).toBe(`+${response.total_change}`);
     // Each state opens its cohort in the Lead Queue: the measure's predicate plus the state.
