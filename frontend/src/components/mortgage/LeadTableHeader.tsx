@@ -10,6 +10,7 @@ import { LeadTableViewControl } from './LeadTableViewControl';
 import type { LeadTableView } from './LeadTable.columns';
 import type { LeadCsvExportState } from './useLeadCsvExport';
 import type { TriageEntry } from './LeadTable.triage';
+import './LeadTableHeader.css';
 
 export interface LeadTableHeaderProps {
   headerStatus?: ReactNode;
@@ -80,8 +81,10 @@ export function LeadTableHeader({
   // it without growing the header (LeadTable.css,
   // deviation:lead-table-title-row-clearance).
   const titleRow = Boolean(headerStatus || triageEntry || requestChips);
+  // `.lead-table__header` keys the two-row hint grid on both routes
+  // (LeadTableHeader.css, deviation:ranked-table-header-hint-row).
   return (
-    <div className={`surface__hdr surface__hdr--split${titleRow ? ' lead-table__header--title-row' : ''}`}>
+    <div className={`surface__hdr surface__hdr--split lead-table__header${titleRow ? ' lead-table__header--title-row' : ''}`}>
       <div className="surface__hdr-main">
         <div className="surface__icon">
           <Icon name="user" size={14} />

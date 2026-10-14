@@ -7,6 +7,8 @@
  *    can_read_audit, the same decision require_audit_reader makes); anyone
  *    else sees the plain id. A header with no finished export reads no
  *    session, so it renders without a QueryClientProvider.
+ *  - 12.3 R2-N2: the root carries `.lead-table__header`, the class the
+ *    two-row hint grid (LeadTableHeader.css) keys on for both routes.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
@@ -103,5 +105,13 @@ describe('LeadTableHeader export receipt', () => {
     const { container } = await mount(<MemoryRouter><LeadTableHeader {...props()} /></MemoryRouter>);
     expect(receiptLine(container)).toBeNull();
     expect(container.querySelector('[data-testid="lead-export"]')).not.toBeNull();
+  });
+});
+
+describe('LeadTableHeader root', () => {
+  it('carries the lead-table__header block class the hint-row grid keys on', async () => {
+    const { container } = await mount(<MemoryRouter><LeadTableHeader {...props()} /></MemoryRouter>);
+    const root = container.firstElementChild as HTMLElement;
+    expect([...root.classList]).toEqual(['surface__hdr', 'surface__hdr--split', 'lead-table__header']);
   });
 });

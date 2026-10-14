@@ -129,51 +129,18 @@
      a 640px container still stacks the hero (10-native-analytics.css).
      Console closed, the title block only widens beyond its content.
    - the ranked table header's hint ran under the title only, beside the
-     action row, and wrapped (header 83 -> 101px). From a 960px container
-     the header is a two-row grid: the title in row 1, the hint in row 2
-     spanning under the actions too, the actions spanning both rows from
-     the top, so the header keeps one hint line and its 83px height. A
-     declared deviation (deviation:ranked-table-header-hint-row).
-   Scoped to the Lead Queue's painted route (`.route-transition--lead-queue`,
-   components/layout/LeadQueueKeepAlive) with plain descendant selectors:
-   a `:has()` subject here re-styled ~2,300 elements on every table scroll
-   (focus-clearance-cost.fixture.spec.ts). Segment Intelligence's header is
-   unchanged (its 101px remainder is recorded for W5e).
+     action row, and wrapped (header 83 -> 101px). That two-row header
+     grid moved to components/mortgage/LeadTableHeader.css in W5e, keyed
+     on the header's own class, so Segment Intelligence's header keeps
+     83px too (deviation:ranked-table-header-hint-row).
+   The hero rule stays scoped to the Lead Queue's painted route
+   (`.route-transition--lead-queue`, components/layout/LeadQueueKeepAlive)
+   with plain descendant selectors: a `:has()` subject re-styled ~2,300
+   elements on every table scroll (focus-clearance-cost.fixture.spec.ts).
    ============================================================ */
 @container main (min-width: 641px) {
   .route-transition--lead-queue .proto-hero > :first-child {
     flex: 1 1 calc(var(--sp-16) * 6);
     min-inline-size: 0;
-  }
-}
-@container main (min-width: 960px) {
-  .route-transition--lead-queue .stable-refresh-region--table .surface__hdr--split {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    column-gap: var(--sp-3);
-    row-gap: 0;
-  }
-  .route-transition--lead-queue .stable-refresh-region--table .surface__hdr-main,
-  .route-transition--lead-queue .stable-refresh-region--table .surface__hdr-main > div:not(.surface__icon) {
-    display: contents;
-  }
-  .route-transition--lead-queue .stable-refresh-region--table .surface__hdr-main .surface__icon {
-    grid-column: 1;
-    grid-row: 1 / span 2;
-    align-self: center;
-  }
-  .route-transition--lead-queue .stable-refresh-region--table .surface__hdr-main > div:not(.surface__icon) > :first-child {
-    grid-column: 2;
-    grid-row: 1;
-    align-self: center;
-  }
-  .route-transition--lead-queue .stable-refresh-region--table .surface__hdr-main > div:not(.surface__icon) > .muted {
-    grid-column: 2 / span 2;
-    grid-row: 2;
-  }
-  .route-transition--lead-queue .stable-refresh-region--table .lead-table__header-actions {
-    grid-column: 3;
-    grid-row: 1 / span 2;
-    align-self: start;
   }
 }

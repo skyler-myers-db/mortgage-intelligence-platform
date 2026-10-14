@@ -485,7 +485,7 @@ test.describe('the ranked table fits 1440x900 with the Console open (W5c, integr
     await expect.poll(() => rowsAboveFold(page)).toBeLessThan(8);
   });
 
-  test('the ranked-table header: one hint line on the Lead Queue; the Segment Intelligence remainder', async ({ app, page }) => {
+  test('the ranked-table header keeps one hint line on the Lead Queue and Segment Intelligence', async ({ app, page }) => {
     const header = page.locator('.surface:has(> .tbl-wrap) > .surface__hdr').first();
     const height = () => header.evaluate((element) => Math.round(element.getBoundingClientRect().height));
     const heights: Record<string, number> = {};
@@ -508,12 +508,11 @@ test.describe('the ranked table fits 1440x900 with the Console open (W5c, integr
     // or closed (was 83 / 101: the hint wrapped beside the actions).
     expect(heights['/lead-queue closed'], measured).toBeLessThanOrEqual(84);
     expect(heights['/lead-queue open'], measured).toBe(heights['/lead-queue closed']);
-    // Segment Intelligence keeps its pre-existing remainder (83 -> 101px, one
-    // more hint line, Console open): a shared rule could not fix it without
-    // either a :has() restyle cost or a markup change, so it is recorded for
-    // W5e w5-lead-queue-columns (integrator C3). Only the regression bound is
-    // pinned (no more than that one line), so the W5e fix stays green here.
+    // W5e (12.3 R2-N2 remainder): the two-row hint grid is keyed on the
+    // header's own class (LeadTableHeader.css), so Segment Intelligence's
+    // header no longer wraps to 101px with the Console open.
     expect(heights['/segment-intelligence closed'], measured).toBe(heights['/lead-queue closed']);
-    expect(heights['/segment-intelligence open'] - heights['/segment-intelligence closed'], measured).toBeLessThanOrEqual(24);
+    expect(heights['/segment-intelligence open'], measured).toBe(heights['/segment-intelligence closed']);
+    expect(heights['/segment-intelligence open'], measured).toBe(heights['/lead-queue open']);
   });
 });
