@@ -12,6 +12,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build && node ../tools/postbuild_artifacts.mjs && node ../tools/precompress_assets.mjs",
     "budget": "node ../tools/check_frontend_budgets.mjs",
+    "build:analyze": "ANALYZE=1 vite build --config vite.analyze.config.ts",
     "gen:api": "python3 ../tools/gen_api_types.py --write",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
@@ -53,6 +54,7 @@
     "eslint-plugin-react-hooks": "7.1.1",
     "happy-dom": "20.10.3",
     "oxlint": "1.85.0",
+    "rollup-plugin-visualizer": "7.1.1",
     "typescript": "6.0.3",
     "vite": "8.3.2",
     "vitest": "4.1.11"
