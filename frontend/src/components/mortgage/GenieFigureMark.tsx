@@ -36,7 +36,11 @@ export default function GenieFigureMark({ token, column }: { token: string; colu
   // Pointer only, attached as native mouseenter/mouseleave listeners: the
   // mark stays a non-interactive element (no focus, no key handlers, no
   // role), because the same fact is in the proof drawer's Verified figures
-  // list for keyboard and screen-reader users.
+  // list for keyboard and screen-reader users. Do not move these to JSX
+  // onMouseEnter/onMouseLeave props: jsx-a11y no-noninteractive-element-
+  // interactions then asks for an interactive role or element, and making the
+  // mark interactive is the opposite of the declared design
+  // (docs/prototype-deviations.md genie-figure-highlight).
   const markRef = (el: HTMLElement | null) => {
     anchorRef(el);
     if (!el) return undefined;
