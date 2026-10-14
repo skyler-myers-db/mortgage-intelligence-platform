@@ -415,3 +415,20 @@ def test_the_snooze_is_a_lakebase_mutation(path: str) -> None:
     assert budget is not None
     assert (budget.scope, budget.dependency) == ("mutation", "lakebase")
     assert budget.requests_per_minute == settings.mip_rate_limit_mutation_per_minute
+
+
+# --- 2026-09-21 audit genie-04 phase 2: the Genie context-scope render ---------
+
+
+@pytest.mark.parametrize("path", ["/api/genie/context-scope", "/api/v1/genie/context-scope"])
+def test_the_genie_context_scope_render_takes_the_default_bucket_and_no_slot(path: str) -> None:
+    # The render fills a closed template and runs the prompt guards in-process:
+    # no Genie call, so it never spends the Genie budget or holds a Genie slot.
+    budget = BackpressureController().classify("POST", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("default", None)
+    assert budget.requests_per_minute == settings.mip_rate_limit_default_per_minute
+    # Only the exact POST leaves the Genie budget.
+    sibling = BackpressureController().classify("POST", path + "x")
+    assert sibling is not None and (sibling.scope, sibling.dependency) == ("genie", "genie")

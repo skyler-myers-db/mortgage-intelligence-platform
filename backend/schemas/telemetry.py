@@ -140,6 +140,7 @@ RUM_API_ROUTE_SEGMENTS = frozenset({
     "borrowers", "campaign-performance", "campaign-recommendation", "campaigns",
     "cancel",
     "capabilities", "combinations", "complete", "compose", "config", "conversion", "count", "county-rollups",
+    "context-scope",
     "create", "custom", "data-estate", "destinations", "disposition", "distribute",
     "decisions",
     "draft", "drafts", "economics", "event", "events", "evidence", "executive",

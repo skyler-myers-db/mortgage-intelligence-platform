@@ -900,6 +900,34 @@ app's work and record only, and the copy keeps "Genie may keep the question
 as context". `tests/unit/test_genie_cancel.py` fails on an SDK that adds a
 cancel method, which forces the decision then.
 
+### Genie context scope (genie-04 phase 2, W5d)
+
+`POST /api/v1/genie/context-scope` renders a closed Lead Queue context
+(codes only: segment codes, a USPS code, a county FIPS, a ZIP, a governed
+`CITY~ST` key, a Competitor ref, assignee `me`) into a reviewed question for
+the Genie composer, or a closed `withheld` reason. It is render-only and
+click-only: no Genie call, no Lakebase, no warehouse query of its own, no
+audit row (`AUDIT EXEMPT` in `tests/unit/test_audit_store_contract.py`). Its
+guard battery reads the shared governed place dimension the startup warm
+resolves, as every submit does; the first guard call after that
+dimension's 900 s TTL lapses (this route's or any other) refreshes it from
+gold inline, and a failed refresh degrades fail-closed
+(`genie_place_dimension_unavailable`). The city slot reads only the
+published city set and is withheld as `place_unavailable` while it is
+empty.
+Backpressure: the `default` bucket and no dependency slot, so a click never
+spends the 30/min Genie budget. RUM reports it under its canonical route
+template (segments `genie` and `context-scope`). Logger
+`backend.services.genie_context_scope`:
+
+| Event | Level | Fields | Meaning |
+| --- | --- | --- | --- |
+| `genie_context_scope_withheld` | WARNING for `refused`, INFO otherwise | `outcome` withheld, `reason` (`refused`, `excluded_value`, `place_unavailable`, `unsupported_combination`), `slots` (the filled slot NAMES), `matcher` (only for `refused`: the guard's name) | No prompt was offered. Never the prompt, never a slot value. A `refused` render means a reviewed template tripped a guard on live vocabulary (most likely a new governed city): treat it as a template bug, capture the slot names, and fix it with a wording change or a committed exclusion, never a guard change. |
+
+The conversation-switch signal and the link-cache sync between the floating
+panel and `/ask-genie/<id>` (lib/genieConversationSwitch) are client-only
+and emit no telemetry.
+
 ### Admin SSE ingress probe (delivery-04)
 
 `GET /api/v1/admin/sse-probe` (admin only, schema-hidden, audit exempt)

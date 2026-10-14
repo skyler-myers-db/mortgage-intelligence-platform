@@ -172,9 +172,9 @@ describe('GenieAnswerFeedback', () => {
       await Promise.resolve();
     });
     const firstRequestId = genieFeedback.mock.calls[0][0].request_id;
-    expect(container.querySelector('.genie-feedback__error')?.textContent).toContain(
-      'Invalid feedback request.',
-    );
+    // Declared copy change (W5d): the fixed line, never the server's detail.
+    expect(container.querySelector('.genie-feedback__error')?.textContent).toBe('Feedback could not be recorded.');
+    expect(container.textContent).not.toContain('Invalid feedback request.');
     await act(async () => {
       upBtn(container)!.click();
       await Promise.resolve();
@@ -220,6 +220,23 @@ describe('GenieAnswerFeedback', () => {
     });
     expect(genieFeedback.mock.calls[1][0].request_id).toBe(firstRequestId);
     expect(container.querySelector('.genie-feedback--done')).not.toBeNull();
+  });
+
+  it('a 409 actor_changed says the signed-in user changed and never invites a retry of the same vote', async () => {
+    genieFeedback.mockRejectedValueOnce(
+      new ApiError('actor changed', { path: '/api/genie/feedback', status: 409, reason: 'actor_changed' }),
+    );
+    await act(async () => {
+      root.render(<GenieAnswerFeedback conversationId="c1" messageId="m1" />);
+    });
+    await act(async () => {
+      upBtn(container)!.click();
+      await Promise.resolve();
+    });
+    const line = container.querySelector('.genie-feedback__error');
+    expect(line?.textContent).toBe('The signed-in user changed. Nothing was recorded.');
+    expect(container.textContent).not.toContain('Retry to safely confirm the same vote');
+    expect(container.textContent).not.toContain('actor changed');
   });
 
   it('latches against a double submit while a request is in flight', async () => {
@@ -392,6 +409,41 @@ describe('GenieAnswerFeedback', () => {
       });
       expect(genieFeedback).toHaveBeenCalledTimes(2);
       expect(genieFeedback.mock.calls[1][0].request_id).toBe(firstRequestId);
+      expect(container.querySelector('.genie-feedback--done')).not.toBeNull();
+    });
+
+    it('a failed vote keeps its line across a collapse/expand and a remount, announced only where it settled', async () => {
+      genieFeedback
+        .mockRejectedValueOnce(new ApiError('Service Unavailable', { path: '/api/genie/feedback', status: 500 }))
+        .mockResolvedValueOnce({ accepted: true, audit_event_id: 'evt-9' });
+      renderTurn(true);
+      await act(async () => {
+        upBtn(container)!.click();
+        await Promise.resolve();
+      });
+      const line = () => container.querySelector('.genie-feedback__error');
+      expect(line()?.textContent).toBe('Feedback could not be recorded. Please try again.');
+      expect(line()?.getAttribute('role')).toBe('alert');
+
+      renderTurn(false);
+      expect(line()).toBeNull();
+      renderTurn(true);
+      expect(line()?.textContent).toBe('Feedback could not be recorded. Please try again.');
+      // Remounted: the same text, not re-announced.
+      expect(line()?.hasAttribute('role')).toBe(false);
+      expect(upBtn(container)!.disabled).toBe(false);
+      expect(downBtn(container)!.disabled).toBe(false);
+
+      remount();
+      expect(line()?.textContent).toBe('Feedback could not be recorded. Please try again.');
+      expect(line()?.hasAttribute('role')).toBe(false);
+      const firstRequestId = genieFeedback.mock.calls[0][0].request_id;
+      await act(async () => {
+        upBtn(container)!.click();
+        await Promise.resolve();
+      });
+      expect(genieFeedback.mock.calls[1][0].request_id).toBe(firstRequestId);
+      expect(line()).toBeNull();
       expect(container.querySelector('.genie-feedback--done')).not.toBeNull();
     });
   });

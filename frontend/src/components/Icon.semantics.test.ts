@@ -34,6 +34,7 @@ const GENIE_SURFACE_FILES = [
   'components/mortgage/GenieChatBody.tsx',
   'components/mortgage/GenieConversationLinkState.tsx',
   'components/mortgage/GenieProgress.tsx',
+  'components/mortgage/LeadQueueEmptyState.tsx', // the scoped Ask Genie (genie-04 phase 2)
   'lib/auditEventPresentation.ts', // GENIE activity events (moved from components/layout/Console.tsx)
   'lib/routeMeta.ts', // askGenie
   'routes/analytics.tsx', // the Ask Genie link

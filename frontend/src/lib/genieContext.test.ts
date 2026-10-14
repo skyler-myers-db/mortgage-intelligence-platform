@@ -28,6 +28,7 @@ import { FIPS_TO_USCODE } from '../components/mortgage/USChoroplethMap.utils';
 import {
   GENIE_STARTERS,
   US_STATE_NAME_BY_CODE,
+  genieContextFromQueueFilters,
   genieKpiPrompt,
   genieLeadPrompt,
   genieSegmentPrompt,
@@ -210,5 +211,81 @@ describe('state registry parity', () => {
     }
     expect(atlasNames.size).toBe(STATE_CODES.length);
     for (const [code, name] of atlasNames) expect(US_STATE_NAME_BY_CODE[code], code).toBe(name);
+  });
+});
+
+describe('genieContextFromQueueFilters (phase 2, a closed grammar)', () => {
+  const build = (query: string) => genieContextFromQueueFilters(new URLSearchParams(query));
+
+  it.each([
+    ['an all-mode intersection', 'segment_codes=itm,equity&segment_mode=all', { route: 'lead-queue', segment_codes: ['itm', 'equity'], segment_mode: 'all' }],
+    ['an any-mode pair in a state', 'states=OK&segment_codes=listed,permit', { route: 'lead-queue', segment_codes: ['listed', 'permit'], segment_mode: 'any', state: 'OK' }],
+    ['a county', 'county=17031', { route: 'lead-queue', county_fips: '17031' }],
+    ['a county list of one, with its state and a segment', 'state=il&counties=17031&segment=ITM', { route: 'lead-queue', segment_codes: ['itm'], segment_mode: 'any', state: 'IL', county_fips: '17031' }],
+    ['a ZIP', 'zip=60601', { route: 'lead-queue', zip: '60601' }],
+    ['a ZIP list of one', 'zips=99950&segment=equity', { route: 'lead-queue', segment_codes: ['equity'], segment_mode: 'any', zip: '99950' }],
+    ['the map\'s ZIP drill: a state beside its ZIP, both carried', 'state=IL&zip=60601', { route: 'lead-queue', state: 'IL', zip: '60601' }],
+    ['a state beside a ZIP elsewhere, both carried (never dropped)', 'states=TX&zips=60601&segment_codes=itm,equity&segment_mode=all', { route: 'lead-queue', segment_codes: ['itm', 'equity'], segment_mode: 'all', state: 'TX', zip: '60601' }],
+    ['a governed city key', 'cities=ALISO VIEJO~CA', { route: 'lead-queue', city: 'ALISO VIEJO~CA' }],
+    ['a city in its own state', 'state=WA&cities=KENT~WA', { route: 'lead-queue', state: 'WA', city: 'KENT~WA' }],
+    ['a Competitor ref', 'state=IL&target_lender_ref=Competitor B', { route: 'lead-queue', state: 'IL', lender_ref: 'Competitor B' }],
+    ['Competitor Other alone', 'target_lender_ref=Competitor Other', { route: 'lead-queue', lender_ref: 'Competitor Other' }],
+    ['the assignee preset', 'state=TX&segment=itm&assigned_to=me', { route: 'lead-queue', segment_codes: ['itm'], segment_mode: 'any', state: 'TX', assignee: 'me' }],
+  ])('accepts %s', (_label, query, expected) => {
+    expect(build(query)).toEqual(expected);
+  });
+
+  it.each([
+    ['no filter', ''],
+    ['one state (phase 1 owns it)', 'state=TX'],
+    ['one segment (phase 1 owns it)', 'segment=itm'],
+    ['one state and one segment (phase 1 owns it)', 'state=TX&segment_codes=itm&segment_mode=all'],
+    ['the assignee alone', 'assigned_to=me'],
+    ['an assignee email', 'state=TX&segment_codes=itm,equity&assigned_to=lo@summit.example'],
+    ['two assignee values', 'state=TX&assigned_to=me,someone'],
+    ['borrower ids', 'segment_codes=itm,equity&borrower_ids=B-0123456789ABC'],
+    ['a cohort', 'segment_codes=itm,equity&cohort_id=c-1'],
+    ['an approval status', 'segment_codes=itm,equity&approval_status=pending'],
+    ['an outreach status', 'county=17031&outreach_status=drafted'],
+    ['a funnel stage', 'county=17031&funnel_stage=approved'],
+    ['aged days', 'county=17031&aged_days=7'],
+    ['a portfolio criterion', 'county=17031&occupancy=owner'],
+    ['a score bound', 'county=17031&min_opportunity_score=70'],
+    ['a display param that leaked through', 'county=17031&sort=equity'],
+    ['three segments', 'segment_codes=itm,equity,listed&segment_mode=all'],
+    ['an unknown segment', 'segment_codes=itm,not_a_segment'],
+    ['a segment without templates', 'segment_codes=itm,permit_activity'],
+    ['two states', 'states=TX,IL&segment_codes=itm,equity'],
+    ['a state outside the federal list', 'state=PR&segment_codes=itm,equity'],
+    ['two counties', 'counties=17031,17043'],
+    ['a county name', 'county=Cook'],
+    ['two ZIPs', 'zips=60601,60602'],
+    ['a ZIP+4', 'zip=60601-1234'],
+    ['two cities', 'cities=KENT~WA,MEDINA~OH'],
+    ['a lower-case city', 'cities=kent~WA'],
+    ['a five-word city', 'cities=A B C D E~WA'],
+    ['a city outside USPS', 'cities=SAN JUAN~PR'],
+    ['a city outside its state', 'state=TX&cities=KENT~WA'],
+    ['a county and a ZIP', 'county=17031&zip=60601'],
+    ['a ZIP and a city', 'zip=98032&cities=KENT~WA'],
+    ['a tenant lender ref', 'state=IL&target_lender_ref=Summit Mortgage'],
+    ['two lender refs', 'target_lender_ref=Competitor A,Competitor B'],
+    ['an unknown segment mode', 'segment_codes=itm,equity&segment_mode=none'],
+  ])('is null for %s', (_label, query) => {
+    expect(build(query)).toBeNull();
+  });
+
+  it('is null wherever phase 1 already has a reviewed prompt', () => {
+    for (const state of STATE_CODES) {
+      expect(build(`state=${state}`)).toBeNull();
+      for (const code of SEGMENT_CODES) expect(build(`state=${state}&segment=${code}`)).toBeNull();
+    }
+  });
+
+  it('never carries a value outside the closed codes', () => {
+    const context = build('state=IL&county=17031&segment_codes=itm,equity&segment_mode=all&target_lender_ref=Competitor Z&assigned_to=me');
+    expect(context).not.toBeNull();
+    expect(JSON.stringify(context)).not.toMatch(/@|B-[0-9A-Z]{13}/);
+    expect(Object.keys(context ?? {}).sort()).toEqual(['assignee', 'county_fips', 'lender_ref', 'route', 'segment_codes', 'segment_mode', 'state']);
   });
 });

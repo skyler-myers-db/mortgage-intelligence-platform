@@ -1200,6 +1200,19 @@ export interface ResponseSchemas {
     typical_seconds: number | null;
     verified_sections: number | null;
   };
+  /**
+   * The reviewed question for a context, or the closed reason none is offered.
+   *
+   * ``prompt`` is a server-rendered sentence that has already passed the
+   * deterministic prompt guards; the browser only prefills the composer with
+   * it. ``withheld`` names why no prompt is offered, and ``omitted`` names the
+   * slots the question deliberately leaves out.
+   */
+  GenieContextScopeResponse: {
+    omitted: "assignee"[];
+    prompt: string | null;
+    withheld: "unsupported_combination" | "excluded_value" | "place_unavailable" | "refused" | null;
+  };
   GenieDataFreshness: {
     asset: string;
     note: string | null;
@@ -2917,6 +2930,24 @@ export interface RequestSchemas {
     question: string;
     sections_rev?: number | null;
   };
+  /**
+   * A Lead Queue filter selection as closed codes, for a server-rendered Genie question.
+   *
+   * Codes only: segment codes, a USPS state code, a county FIPS code, a ZIP, a
+   * governed city key and a public Competitor lender ref. No field carries free
+   * text, a borrower id or an email address.
+   */
+  GenieContext: {
+    assignee?: "me" | null;
+    city?: string | null;
+    county_fips?: string | null;
+    lender_ref?: string | null;
+    route: "lead-queue";
+    segment_codes?: ("itm" | "listed" | "permit" | "investor" | "equity" | "retention" | "second_lien_itm" | "heloc_draw_to_payback" | "home_equity_history" | "refi_propensity" | "itm_on_related_property" | "payoff_loss_leads" | "permit_activity")[];
+    segment_mode?: "any" | "all";
+    state?: "AL" | "AK" | "AZ" | "AR" | "CA" | "CO" | "CT" | "DE" | "DC" | "FL" | "GA" | "HI" | "ID" | "IL" | "IN" | "IA" | "KS" | "KY" | "LA" | "ME" | "MD" | "MA" | "MI" | "MN" | "MS" | "MO" | "MT" | "NE" | "NV" | "NH" | "NJ" | "NM" | "NY" | "NC" | "ND" | "OH" | "OK" | "OR" | "PA" | "RI" | "SC" | "SD" | "TN" | "TX" | "UT" | "VT" | "VA" | "WA" | "WV" | "WI" | "WY" | null;
+    zip?: string | null;
+  };
   GenieFeedbackRequest: {
     comment?: string | null;
     conversation_id: string;
@@ -4475,6 +4506,13 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: RequestSchemas['GenieActionRequest'];
     ok: ResponseSchemas['GenieActionResponse'];
+  };
+  "POST /api/v1/genie/context-scope": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['GenieContext'];
+    ok: ResponseSchemas['GenieContextScopeResponse'];
   };
   "POST /api/v1/genie/export-receipt": {
     pathParams: Record<string, never>;

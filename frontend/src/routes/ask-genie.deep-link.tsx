@@ -2,9 +2,17 @@ import { lazy, Suspense, useState, useSyncExternalStore } from 'react';
 import { queryOptions, useQuery } from '@tanstack/react-query';
 import { ApiError, api } from '../lib/api';
 import type { GenieTurn } from '../lib/genieConversationStore';
-import { getGenieTurnSnapshot, subscribeGenieTurn } from '../lib/genieInFlightTurn';
-import { queryKeys } from '../lib/queryKeys';
+import { announceGenie, getGenieTurnSnapshot, subscribeGenieTurn } from '../lib/genieInFlightTurn';
+import {
+  GENIE_CONVERSATION_ID_RE,
+  genieConversationQueryKey,
+  isGenieConversationId,
+} from '../lib/genieConversationSwitch';
 import type { GenieConversationLinkStateProps } from '../components/mortgage/GenieConversationLinkState';
+import {
+  GENIE_LINK_NOT_FOUND_COPY,
+  GENIE_LINK_RETRY_FAILED_COPY,
+} from '../components/mortgage/GenieConversationLinkState.copy';
 
 /**
  * `/ask-genie/:conversationId` — a shareable, actor-scoped link to one Genie
@@ -35,16 +43,10 @@ import type { GenieConversationLinkStateProps } from '../components/mortgage/Gen
  * (components/mortgage/GenieConversationLinkState.tsx).
  */
 
-export const GENIE_CONVERSATION_ID_RE = /^(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i;
-
-export function isGenieConversationId(value: string | null | undefined): value is string {
-  return typeof value === 'string' && GENIE_CONVERSATION_ID_RE.test(value);
-}
-
-/** The link's cache key: local, under the shared `mip` root. */
-export function genieConversationQueryKey(conversationId: string) {
-  return [...queryKeys.all, 'genie', 'session', conversationId] as const;
-}
+// The grammar and the cache key live in lib/genieConversationSwitch (moved
+// verbatim, shell-03 remainder) so the panel can share them; re-exported here
+// so every importer is unchanged.
+export { GENIE_CONVERSATION_ID_RE, genieConversationQueryKey, isGenieConversationId };
 
 /** A verified conversation: the id the link asked for and its replayable turns. */
 export interface GenieConversationLinkOk {
@@ -106,7 +108,13 @@ export function useGenieConversationLink(param: string | undefined): GenieConver
     retrying,
     retry: () => {
       setRetriedId(param);
-      void query.refetch();
+      // A Retry that fails again is said once, in the route announcer: a
+      // 404/403 now reads as not found, anything else as still unavailable.
+      // Nothing is said on success (the conversation itself appears).
+      void query.refetch().then((result) => {
+        if (!result.isError) return;
+        announceGenie(isNotFound(result.error) ? GENIE_LINK_NOT_FOUND_COPY : GENIE_LINK_RETRY_FAILED_COPY);
+      });
     },
   };
 }

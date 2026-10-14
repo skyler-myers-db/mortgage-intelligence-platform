@@ -53,4 +53,22 @@ describe('GenieConversationLinkState Retry', () => {
     act(() => idle.click());
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
+
+  it('a retry in flight wears the shared pending style (Button loading) and keeps its label and focus', () => {
+    const running = renderRetry(true, () => undefined);
+    act(() => running.focus());
+    expect(running.classList.contains('btn--loading')).toBe(true);
+    expect(running.classList.contains('btn--primary')).toBe(true);
+    expect(running.getAttribute('aria-busy')).toBe('true');
+    expect(running.querySelector('.btn__spinner')?.getAttribute('aria-hidden')).toBe('true');
+    expect(running.querySelector('.btn__label')?.textContent).toBe('Retrying…');
+
+    // Settling back to idle swaps the markup in place: same button, focus kept.
+    const idle = renderRetry(false, () => undefined);
+    expect(idle).toBe(running);
+    expect(document.activeElement).toBe(idle);
+    expect(idle.classList.contains('btn--loading')).toBe(false);
+    expect(idle.hasAttribute('aria-busy')).toBe(false);
+    expect(idle.textContent).toBe('Retry');
+  });
 });
