@@ -1459,7 +1459,7 @@ export interface ResponseSchemas {
     status: "passed" | "review_required" | "roadmap" | "not_provisioned" | "not_attached";
   };
   GrowthAgentHomeResponse: {
-    capabilities: { [key: string]: unknown }[];
+    capabilities: ResponseSchemas['AdminCapability'][];
     monitors: ResponseSchemas['GrowthAgentMonitor'][];
     scheduler_state: "active" | "paused" | "unavailable";
     workflows: ResponseSchemas['GrowthAgentWorkflow'][];

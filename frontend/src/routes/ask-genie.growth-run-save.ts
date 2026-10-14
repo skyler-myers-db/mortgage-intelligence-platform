@@ -4,7 +4,7 @@ import { growthAgentRunsApi } from '../lib/apiClients/growthAgentRuns';
 import { CLIENT_FAILURE_MESSAGES } from '../lib/apiFailure';
 import { clientFailureReason } from '../lib/apiTransport';
 import type { GrowthAgentCadence, GrowthAgentMonitor, GrowthAgentRunResponse } from '../types';
-import type { GrowthAgentWorkflowId } from '../types/growthAgent';
+import type { GrowthAgentReviewedWorkflowId } from '../types/growthAgent';
 
 /** Any 4xx: the run is gone, changed, failed, unaudited or not savable; nothing was saved. */
 export const RUN_SAVE_REFUSED_MESSAGE = "This run can't be saved as shown. Run it again, then save.";
@@ -27,7 +27,7 @@ const REVIEWED_WORKFLOW_IDS: ReadonlySet<string> = new Set(Object.keys({
   source_freshness_sentinel: true,
   custom_segment_watch: true,
   rate_trigger_watch: true,
-} satisfies Record<GrowthAgentWorkflowId, true>));
+} satisfies Record<GrowthAgentReviewedWorkflowId, true>));
 
 /**
  * Whether the card may offer Save as watchlist (audit 2026-09-21 `genie-09`

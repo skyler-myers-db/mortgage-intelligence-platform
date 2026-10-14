@@ -10006,7 +10006,7 @@
         "properties": {
           "capabilities": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/AdminCapability"
             },
             "title": "Capabilities",
             "type": "array"

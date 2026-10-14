@@ -18,6 +18,7 @@ from backend.schemas._validators_protected_class import (
     protected_class_marketing_reason,
 )
 from backend.schemas._validators_unsafe_text import contains_unsafe_ai_text
+from backend.schemas.admin import AdminCapability
 from backend.schemas.borrower_copy_claims import (
     contains_unsupported_borrower_qualification_claim,
 )
@@ -880,7 +881,7 @@ class GrowthAgentRunResponse(BaseModel):
 class GrowthAgentHomeResponse(BaseModel):
     workflows: list[GrowthAgentWorkflow]
     monitors: list[GrowthAgentMonitor]
-    capabilities: list[dict[str, object]] = Field(default_factory=list)
+    capabilities: list[AdminCapability] = Field(default_factory=list)
     scheduler_state: GrowthAgentSchedulerState = "unavailable"
 
 
