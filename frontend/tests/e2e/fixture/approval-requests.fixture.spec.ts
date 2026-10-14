@@ -36,7 +36,15 @@
  *      Reject where an unmarked row has them and inside the content box; the
  *      requester's "Approval requested" label whole at Linux text widths;
  *  (l) a failed list read: one line in the title row (the 83 px header with
- *      the Console open, both sessions), and Retry reads the list once more.
+ *      the Console open, both sessions), and Retry reads the list once more;
+ *  (m) the title row (W5d VRT): the request entry, chip or unavailable,
+ *      draws --sp-2 clear of its neighbour (it sat flush on the bordered
+ *      Triage entry) and moves nothing already in the row, both sessions,
+ *      Console open and closed;
+ *  (n) the toolbar's request form takes the full line under the label and
+ *      controls (the toolbar's content width, no rules of its own) and
+ *      "N leads selected" stays one line, for 2 selected and for 1 (which
+ *      never loads the bulk chunk), Console open and closed.
  *
  * Chromium only (fixture-chromium): this is not a cross-engine spec, so the
  * fixture-webkit and Firefox projects do not collect it (playwright.config's
@@ -167,6 +175,60 @@ function roleLineFit(status: Locator) {
       slack: (content - needed) / content,
       clipped: address !== null && address.scrollWidth > address.clientWidth,
     };
+  });
+}
+
+/** A design token's length in px (`--sp-2` -> 8), read from the root the app themes. */
+function tokenPx(page: Page, name: string): Promise<number> {
+  return page.evaluate((token) => parseFloat(getComputedStyle(document.documentElement).getPropertyValue(token)), name);
+}
+
+/** One title-row item and the extent it draws. */
+interface TitleRowInk {
+  name: string;
+  left: number;
+  right: number;
+}
+
+/**
+ * The table header's title row, item by item, as each one DRAWS: a painted
+ * border or fill, else its text. A ghost button (Refresh) draws only its
+ * label, so its own padding is clear space; two bordered buttons with no
+ * space between them draw one double rule (the W5d VRT). `.sr-only` text is
+ * not drawn. Also whether the row overflows its box.
+ */
+function titleRowInk(page: Page): Promise<{ items: TitleRowInk[]; overflow: number }> {
+  return visible(page.locator('.lead-table__title-row')).first().evaluate((row) => {
+    const painted = (color: string) => color !== 'transparent' && !/^rgba\(.*,\s*0\)$/.test(color);
+    const inkOf = (root: Element) => {
+      let left = Infinity;
+      let right = -Infinity;
+      const add = (rect: DOMRect) => {
+        if (rect.width <= 0 || rect.height <= 0) return;
+        left = Math.min(left, rect.left);
+        right = Math.max(right, rect.right);
+      };
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+      for (let node: Node | null = root; node; node = walker.nextNode()) {
+        const element = node instanceof Element ? node : node.parentElement;
+        if (!element || element.closest('.sr-only')) continue;
+        if (node instanceof Element) {
+          const style = getComputedStyle(node);
+          const bordered = parseFloat(style.borderInlineStartWidth) > 0 && painted(style.borderInlineStartColor);
+          if (bordered || painted(style.backgroundColor)) add(node.getBoundingClientRect());
+        } else if (node.textContent?.trim()) {
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          add(range.getBoundingClientRect());
+        }
+      }
+      return Number.isFinite(left) ? { left, right } : null;
+    };
+    const items = [...row.children].flatMap((child) => {
+      const ink = child.classList.contains('sr-only') ? null : inkOf(child);
+      return ink ? [{ name: child.getAttribute('data-testid') ?? child.className, ...ink }] : [];
+    });
+    return { items, overflow: row.scrollWidth - row.clientWidth };
   });
 }
 
@@ -484,6 +546,105 @@ test.describe('the request marks and entry at 1440x900', () => {
       await expect(chip(page)).toHaveText(name === 'approver' ? `Approval requests · ${REQUESTED_IDS.length}` : 'My requests · 1');
       await expect(page.getByTestId('approval-requests-unavailable')).toHaveCount(0);
     });
+  }
+});
+
+test.describe('the title row at 1440x900', () => {
+  for (const consoleOpen of [false, true]) {
+    const consoleState = consoleOpen ? 'Console open' : 'Console closed';
+    for (const [name, session] of [['approver', SESSION], ['non-approver', NON_APPROVER_SESSION]] as const) {
+      test(`(m) ${name}, ${consoleState}: the request entry keeps --sp-2 clear of its neighbour and moves nothing already in the title row`, async ({ app, hygiene, mockApi, page }) => {
+        // Three loads (no request, the chip, the failed read) in one test: the slow budget, not a retry.
+        test.slow();
+        hygiene.allow('console.error', /status of 500/);
+        useSession(mockApi, session);
+        const load = async (options: Parameters<typeof registerApprovalRequestStore>[1]) => {
+          const store = registerApprovalRequestStore(mockApi, options);
+          await app.gotoRoute('/lead-queue');
+          await expect.poll(() => store.lists.length).toBeGreaterThan(0);
+          if (consoleOpen) await openConsoleNarrow(app, page);
+          else await app.settle();
+          return titleRowInk(page);
+        };
+        // No open request: the row as it was before the entry existed.
+        const before = await load({});
+        const gap = await tokenPx(page, '--sp-2');
+        await expect(page.getByTestId('approval-requests-chip')).toHaveCount(0);
+        const mine = name === 'non-approver';
+        for (const entry of ['chip', 'unavailable'] as const) {
+          const seed = batchView(REQUESTED_IDS, mine);
+          const row = await load(entry === 'chip' ? { seed } : { seed, failLists: 1 });
+          const testId = entry === 'chip' ? 'approval-requests-chip' : 'approval-requests-unavailable';
+          await expect(visible(page.getByTestId(testId))).toBeVisible();
+          const at = `${name} ${entry} (${consoleState})`;
+          expect(row.items.length, `${at}: the entry is one more item`).toBe(before.items.length + 1);
+          row.items.slice(0, before.items.length).forEach((item, index) => {
+            expect(item.name, `${at}: the same items lead the row`).toBe(before.items[index].name);
+            expect(item.left, `${at}: ${item.name} does not move`).toBeCloseTo(before.items[index].left, 1);
+          });
+          row.items.slice(1).forEach((item, index) => {
+            const previous = row.items[index];
+            expect(item.left - previous.right, `${at}: ${previous.name} -> ${item.name} clear space`).toBeGreaterThanOrEqual(gap - 0.5);
+          });
+          expect(row.overflow, `${at}: the title row does not overflow`).toBeLessThanOrEqual(0);
+        }
+      });
+    }
+  }
+});
+
+test.describe('the bulk request form at 1440x900', () => {
+  for (const consoleOpen of [false, true]) {
+    const consoleState = consoleOpen ? 'Console open' : 'Console closed';
+    for (const ids of [REQUESTED_IDS.slice(1), REQUESTED_IDS.slice(1, 2)]) {
+      test(`(n) ${ids.length} selected, ${consoleState}: the bulk request form takes the toolbar's full third row`, async ({ app, mockApi, page }) => {
+        useSession(mockApi, NON_APPROVER_SESSION);
+        // As the request-approval-form capture: the first requested row is already requested.
+        registerApprovalRequestStore(mockApi, { seed: batchView(REQUESTED_IDS.slice(0, 1), true) });
+        await app.gotoRoute('/lead-queue');
+        if (consoleOpen) await openConsoleNarrow(app, page);
+        for (const borrowerId of ids) await visible(page.getByTestId(`lead-select-${borrowerId}`)).check();
+        await visible(page.getByTestId('lead-bulk-request-approval')).click();
+        const form = page.getByTestId('request-approval-form');
+        await expect(form.getByLabel('Reason for the request')).toBeFocused();
+        await app.settle();
+        const toolbar = visible(page.getByTestId('lead-bulk-actions'));
+        await expect(toolbar.locator('.bulk-actions__label')).toHaveText(`${ids.length} ${ids.length === 1 ? 'lead' : 'leads'} selected`);
+        const fit = await toolbar.evaluate((element) => {
+          // Lines the text sets on: its fragments, grouped by top within half the font size.
+          const countLines = (target: Element) => {
+            const range = document.createRange();
+            range.selectNodeContents(target);
+            const tops = [...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => rect.top).sort((a, b) => a - b);
+            const tolerance = parseFloat(getComputedStyle(target).fontSize) / 2;
+            return tops.filter((top, index) => index === 0 || top - tops[index - 1] > tolerance).length;
+          };
+          const style = getComputedStyle(element);
+          const box = element.getBoundingClientRect();
+          const formElement = element.querySelector<HTMLElement>('[data-testid="request-approval-form"]');
+          const formBox = formElement?.getBoundingClientRect();
+          const formStyle = formElement ? getComputedStyle(formElement) : null;
+          const label = element.querySelector('.bulk-actions__label');
+          const controls = element.querySelector('.bulk-actions__controls')?.getBoundingClientRect();
+          return {
+            contentLeft: box.left + element.clientLeft + parseFloat(style.paddingInlineStart),
+            contentWidth: element.clientWidth - parseFloat(style.paddingInlineStart) - parseFloat(style.paddingInlineEnd),
+            formLeft: formBox?.left ?? NaN,
+            formWidth: formBox?.width ?? NaN,
+            formTop: formBox?.top ?? NaN,
+            above: Math.max(label?.getBoundingClientRect().bottom ?? NaN, controls?.bottom ?? NaN),
+            borders: formStyle ? [formStyle.borderTopWidth, formStyle.borderBottomWidth] : null,
+            labelLines: label ? countLines(label) : NaN,
+          };
+        });
+        const at = `${ids.length} selected (${consoleState})`;
+        expect(fit.formWidth, `${at}: the form is as wide as the toolbar's content`).toBeCloseTo(fit.contentWidth, 0);
+        expect(fit.formLeft, `${at}: the form starts at the toolbar's content edge`).toBeCloseTo(fit.contentLeft, 0);
+        expect(fit.formTop, `${at}: the form is its own row under the label and controls`).toBeGreaterThanOrEqual(fit.above);
+        expect(fit.borders, `${at}: no inline rules of its own inside the toolbar's`).toEqual(['0px', '0px']);
+        expect(fit.labelLines, `${at}: the selection label is one line`).toBe(1);
+      });
+    }
   }
 });
 

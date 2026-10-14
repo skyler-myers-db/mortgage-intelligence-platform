@@ -721,6 +721,7 @@ export function LeadTable({
             onOpen: () => requests.openBulk(flow.eligibleSelectedIds()),
           }}
           requestGate={requests.bulkForm}
+          requestFormOpen={requests.bulkFormOpen}
           bulkRejectOpen={approval.bulkRejectOpen}
           onOpenBulkReject={flow.bulkRejectFromToolbar}
           bulkRejectBtnRef={approval.bulkRejectBtnRef}

@@ -98,6 +98,7 @@ export function LeadTableHeader({
                 // deviation:triage-deck: the deck's entry (D-approval-flow-a2); aria-disabled with its reason.
                 <Button
                   size="sm"
+                  className="lead-table__triage-entry"
                   onClick={() => {
                     if (triageEntry.disabledReason === null) onEnterTriage?.();
                   }}

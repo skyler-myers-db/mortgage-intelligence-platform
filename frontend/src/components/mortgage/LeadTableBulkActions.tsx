@@ -99,6 +99,12 @@ interface LeadTableBulkActionsProps {
   requestApproval?: { blockedReason: string | null; onOpen: () => void } | null;
   /** The request form (RequestApprovalForm, lazy), while it is open from here. */
   requestGate?: ReactNode;
+  /**
+   * The request form is open from here (LeadTable.requests' bulkFormOpen):
+   * the toolbar takes its gate layout, so the form gets the full row under
+   * the controls, as the bulk approve and reject gates do.
+   */
+  requestFormOpen?: boolean;
 }
 
 const PREVIEW_SAMPLES_SELECTOR = '[data-testid="lead-bulk-preview-samples"]';
@@ -138,6 +144,7 @@ export function LeadTableBulkActions({
   campaignHandoff = null,
   requestApproval = null,
   requestGate = null,
+  requestFormOpen = false,
 }: LeadTableBulkActionsProps) {
   const armingId = useId();
   const requestNoteId = useId();
@@ -187,7 +194,7 @@ export function LeadTableBulkActions({
       data-testid="lead-bulk-actions"
       className={[
         'bulk-actions',
-        gateOpen || rejectGateOpen ? 'bulk-actions--gate' : '',
+        gateOpen || rejectGateOpen || requestFormOpen ? 'bulk-actions--gate' : '',
         gateOpen && samplesShown ? 'bulk-actions--samples' : '',
         running ? 'bulk-actions--running' : '',
       ].filter(Boolean).join(' ')}

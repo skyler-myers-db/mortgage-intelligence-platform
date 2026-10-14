@@ -55,6 +55,27 @@
 }
 .lead-table__header--title-row .lead-table__hint { margin-block-start: var(--sp-1); }
 
+/* Every control in the title row stands clear of the one before it (W5d
+   VRT, lead-queue--*--approval-requests): the title keeps FetchedAt's own
+   var(--sp-3) start margin, and a ghost Refresh's padding clears whatever
+   follows it, but the approval-request entry sat flush on the bordered
+   Triage entry, two borders reading as one double rule. After Triage it
+   takes the var(--sp-2) the header's own buttons keep between bordered
+   neighbours (.lead-table__header-actions); nothing already in the row
+   moves. Here, in the LeadTable chunk: ApprovalRequests.css is lazy (a
+   panel's), so the closed chip and the unavailable entry cannot rely on it. */
+.lead-table__triage-entry ~ :is(.approval-requests, .lead-table__requests-unavailable) {
+  margin-inline-start: var(--sp-2);
+}
+
+/* The bulk toolbar's gate layout (LeadTableBulkActions): while a gate is
+   open (the approve review, the reject gate, the request form) the toolbar
+   wraps and the gate takes a full line under the controls (order 3). It
+   lives with the toolbar, not in the lazy bulk chunk: the request form
+   opens for a single selected row, which never loads that chunk, and its
+   flex-basis 100% would otherwise overflow a row that does not wrap. */
+.bulk-actions--gate { flex-wrap: wrap; }
+
 /* One line per cell: a primary value, then `+n`. Chips shrink with an
    ellipsis; the `+n` and compliance flags never do. */
 .lead-table__line {

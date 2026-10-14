@@ -15,7 +15,11 @@ import { mount } from '../../test/render';
 import { LeadTableBulkActions } from './LeadTableBulkActions';
 import type { BulkRunKind } from './useLeadBulkRun';
 
-async function renderToolbar({ eligible, runKind = null }: { eligible: number; runKind?: BulkRunKind | null }) {
+async function renderToolbar({ eligible, runKind = null, requestFormOpen = false }: {
+  eligible: number;
+  runKind?: BulkRunKind | null;
+  requestFormOpen?: boolean;
+}) {
   return mount(
     <LeadTableBulkActions
       selectionCount={Math.max(eligible, 2)}
@@ -32,6 +36,7 @@ async function renderToolbar({ eligible, runKind = null }: { eligible: number; r
       onClearSelection={() => undefined}
       onBulkApprove={() => Promise.resolve(true)}
       bulkApproveBtnRef={createRef<HTMLButtonElement>()}
+      requestFormOpen={requestFormOpen}
     />,
   );
 }
@@ -58,5 +63,14 @@ describe('LeadTableBulkActions: a run\'s own button is never native disabled', (
     await renderToolbar({ eligible: 0 });
     expect(byTestId('lead-bulk-approve').disabled).toBe(true);
     expect(byTestId('lead-bulk-reject').disabled).toBe(true);
+  });
+});
+
+describe('LeadTableBulkActions: the toolbar request form takes the gate layout', () => {
+  // The rendered row (the form on the full line under the controls) is
+  // approval-requests.fixture.spec.ts (n); this pins the toolbar's half.
+  it.each([[true, true], [false, false]])('requestFormOpen=%s: bulk-actions--gate is %s', async (open, gate) => {
+    await renderToolbar({ eligible: 2, requestFormOpen: open });
+    expect(document.querySelector('[data-testid="lead-bulk-actions"]')?.classList.contains('bulk-actions--gate')).toBe(gate);
   });
 });

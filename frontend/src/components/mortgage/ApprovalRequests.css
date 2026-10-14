@@ -10,6 +10,17 @@
 .approval-requests__form {
   grid-template-columns: minmax(12rem, 1fr) minmax(16rem, 2fr) auto;
 }
+/* Opened from the bulk toolbar (its requestGate slot, gate layout): the full
+   line under the label and controls, as the bulk reject gate has
+   (.bulk-actions__review, LeadBulkApproveReview.css). The toolbar already
+   draws the rules and the padding around it, so the inline panel's own top
+   and bottom rules and padding go: they drew a half-width double rule. */
+.bulk-actions > .approval-requests__form {
+  flex: 1 0 100%;
+  order: 3;
+  padding: 0;
+  border-block: 0;
+}
 .approval-requests__note {
   grid-column: 1 / -1;
   margin: 0;

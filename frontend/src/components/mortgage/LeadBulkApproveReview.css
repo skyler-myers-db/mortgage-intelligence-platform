@@ -3,11 +3,11 @@
    LeadBulkApproveReview chunk. New elements of the app's `.bulk-actions` toolbar
    (03-score-and-table.css): the count-by-offer strip, the explicit
    sample-draft control and the sampled drafts. While the gate is open
-   the toolbar wraps so the review takes a full line under the controls,
-   and it stops being sticky once samples are shown, so a tall review
-   never covers the table rows it is about.
+   the toolbar wraps (`.bulk-actions--gate`, LeadTable.css) so the review
+   takes a full line under the controls, and it stops being sticky once
+   samples are shown, so a tall review never covers the table rows it is
+   about.
    ============================================================ */
-.bulk-actions--gate { flex-wrap: wrap; }
 .bulk-actions--samples { position: static; }
 .bulk-actions__review {
   flex: 1 0 100%;
