@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Icon } from '../Icon';
 import type { KpiProofResponse } from '../../lib/apiTypes';
 import './EvidenceHowWeGot.css';
+import './ProofPanels.css';
 
 /**
  * The KPI reproduce card on the drawer's Under the hood tab (audit 2026-09-21

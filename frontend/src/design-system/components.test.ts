@@ -16,6 +16,8 @@ const tokensCss = () => readFileSync(
   new URL('./tokens.css', import.meta.url),
   'utf8',
 );
+/** The `.proof-*` blocks, which load with the proof drawer's chunk (css-05 step 2). */
+const proofPanelsCss = () => featureStylesheets().find((sheet) => sheet.file === 'src/components/mortgage/ProofPanels.css')?.css ?? '';
 
 describe('layout containment contracts', () => {
   it('keeps component CSS free of hard-coded color literals', () => {
@@ -315,7 +317,7 @@ describe('layout containment contracts', () => {
   });
 
   it('uses readable accent ink for light-theme active and hover text', () => {
-    const css = designCss();
+    const css = designCss() + proofPanelsCss();
     const tokens = tokensCss();
 
     expect(tokens).toContain('[data-theme="light"][data-accent="bright"] { --accent-ink: #014E80; }');
@@ -484,7 +486,7 @@ describe('layout containment contracts', () => {
    * to the prototype, which defines none).
    */
   it('gives every interactive family a pressed state on the shared tokens', () => {
-    const css = designCss();
+    const css = designCss() + proofPanelsCss();
     const tokens = tokensCss();
     expect(tokens).toMatch(/--pressed-shift:\s*1px;/);
     expect(tokens).toMatch(/--pressed-scale:\s*0\.98;/);
@@ -799,7 +801,7 @@ describe('hover states promise only real clicks (motion-09)', () => {
   });
 
   it('gives a hovered or focused proof tab a lighter step than the selected tab', () => {
-    const rules = cssRules(designCss());
+    const rules = cssRules(proofPanelsCss());
     const activeAt = rules.findIndex((rule) => rule.selector === '.proof-tab.is-active');
     expect(rules[activeAt]?.block).toBe('border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)');
     const hoverAt = rules.findIndex((rule) => rule.selector.includes('.proof-tab:hover'));

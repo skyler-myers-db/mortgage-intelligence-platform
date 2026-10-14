@@ -15,6 +15,7 @@ import { useBorrowerProof } from './useBorrowerProof';
 import { SCORE_SPINE_COPY } from './scoreSpine.copy';
 import { ProofMargins } from './ProofMargins';
 import { SpreadHistoryChart } from './SpreadHistoryChart';
+import './ProofPanels.css';
 
 type ProofTab = 'math' | 'evidence' | 'lineage' | 'reproduce';
 

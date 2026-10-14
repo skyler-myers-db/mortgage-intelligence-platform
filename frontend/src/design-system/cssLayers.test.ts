@@ -37,8 +37,16 @@ import {
 
 declare const process: { cwd(): string };
 
-const read = (path: string): string => readFileSync(`${process.cwd()}/${path}`, 'utf8') as string;
-const code = (path: string): string => stripCssComments(read(path));
+const texts = new Map<string, string>();
+const read = (path: string): string => {
+  if (!texts.has(path)) texts.set(path, readFileSync(`${process.cwd()}/${path}`, 'utf8') as string);
+  return texts.get(path) as string;
+};
+const stripped = new Map<string, string>();
+const code = (path: string): string => {
+  if (!stripped.has(path)) stripped.set(path, stripCssComments(read(path)));
+  return stripped.get(path) as string;
+};
 
 const MANIFEST_STATEMENT = `@layer ${LAYER_MANIFEST.join(', ')};`;
 const MODE_MEDIA = /^@media\b.*\b(?:forced-colors|prefers-contrast|prefers-reduced-transparency)\b/;
