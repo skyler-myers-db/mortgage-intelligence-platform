@@ -18,9 +18,15 @@
  *      and the success toast shows; focus then moves to the next VISIBLE row,
  *      else the tray heading (never <body>); a 409 not_contactable keeps the
  *      row and re-reads the list;
- *  (e) the default (ineligible) actor gets no item and no list read.
+ *  (e) the default (ineligible) actor gets no item and no list read;
+ *  (f) one row grammar in every row, short due text or long, contactable or
+ *      withheld: the reason line (id, then the reason), then a meta line
+ *      that STARTS with the due time, Snooze after it on the same line (a
+ *      withheld row's closed reason below it); each reason qualifier (the
+ *      owner name, "attempt N", "new signal") renders on one line. Measured
+ *      under LINUX_TEXT_EMULATION off Linux.
  */
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { expectAxeClean, KNOWN_VIOLATIONS } from './axe';
 import { FOLLOWUP_IDS, registerFollowUps, SNOOZE_NOT_CONTACTABLE_409 } from './data/followUps';
 import { json, normalizeApiPath, type MockApi } from './mockApi';
@@ -29,6 +35,81 @@ import { expect, test } from './test';
 import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
 
 const TRIGGER = '.rail button.rail__item:has(.mod:text-is("Due"))';
+/**
+ * Linux Chromium draws Geist Mono about 6% wider (the LINUX_TEXT_EMULATION
+ * pattern of geo-foundation.fixture.spec.ts): off Linux, widen the tray's mono
+ * ids, so the reason beside them gets the width CI gives it.
+ */
+const LINUX_TEXT_EMULATION = '.followups .followups__id { letter-spacing: 0.5px; }';
+
+interface RowGeometry {
+  borrower: string;
+  due: string;
+  withheld: boolean;
+  /** The due time's left edge minus the row's content-box start. */
+  dueInset: number;
+  /** The due time's top minus the reason line's bottom (the id and the reason). */
+  dueBelowReason: number;
+  /** Snooze's left edge minus the due time's right edge (null: no Snooze). */
+  snoozeAfterDue: number | null;
+  /** Snooze overlaps the due time's line box vertically (null: no Snooze). */
+  snoozeOnDueLine: boolean | null;
+  /** The closed reason's top minus the due time's bottom (null: contactable). */
+  blockBelowDue: number | null;
+}
+
+/** Every row's boxes, collapsed groups included (open them first). */
+async function rowGeometry(tray: Locator): Promise<RowGeometry[]> {
+  return tray.evaluate((element) =>
+    [...element.querySelectorAll<HTMLElement>('.followups__row')].map((row) => {
+      const box = (selector: string) => row.querySelector(selector)?.getBoundingClientRect() ?? null;
+      const id = box('.followups__id');
+      const why = box('.followups__why');
+      const due = box('.followups__due');
+      if (!id || !why || !due) throw new Error(`row ${row.dataset.borrowerId} lacks its id, reason or due time`);
+      const snooze = box('button.followups__snooze');
+      const block = box('.followups__block');
+      const start = row.getBoundingClientRect().left + parseFloat(getComputedStyle(row).paddingLeft);
+      return {
+        borrower: row.dataset.borrowerId ?? '',
+        due: row.querySelector('.followups__due')?.textContent ?? '',
+        withheld: block !== null,
+        dueInset: due.left - start,
+        dueBelowReason: due.top - Math.max(id.bottom, why.bottom),
+        snoozeAfterDue: snooze ? snooze.left - due.right : null,
+        snoozeOnDueLine: snooze ? snooze.top < due.bottom && snooze.bottom > due.top : null,
+        blockBelowDue: block ? block.top - due.bottom : null,
+      };
+    }),
+  );
+}
+
+/** How many line boxes `phrase` occupies inside the row's reason (-1: not found). */
+async function phraseLines(row: Locator, phrase: string): Promise<number> {
+  return row.locator('.followups__why').evaluate((why, text) => {
+    const walker = document.createTreeWalker(why, NodeFilter.SHOW_TEXT);
+    const nodes: Text[] = [];
+    const starts: number[] = [];
+    let flat = '';
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      starts.push(flat.length);
+      nodes.push(node);
+      flat += node.data;
+    }
+    const at = flat.indexOf(text);
+    if (at < 0) return -1;
+    const locate = (offset: number): [Text, number] => {
+      let index = nodes.length - 1;
+      while (index > 0 && starts[index] > offset) index -= 1;
+      return [nodes[index], offset - starts[index]];
+    };
+    const range = document.createRange();
+    range.setStart(...locate(at));
+    range.setEnd(...locate(at + text.length));
+    return new Set([...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top))).size;
+  }, phrase);
+}
 
 function listReads(mockApi: MockApi): number {
   return mockApi.calls.filter((call) => call.method === 'GET' && normalizeApiPath(call.path) === '/api/sales/followups').length;
@@ -209,6 +290,51 @@ for (const theme of FIXTURE_THEMES) {
       expect(summaries.length, 'non-vacuity: the poll ran').toBeGreaterThan(0);
       await expect(page.locator(TRIGGER)).toHaveCount(0);
       expect(listReads(mockApi)).toBe(0);
+    });
+
+    test('(f) every row reads its reason, then a meta line that starts with the due time', async ({ app, mockApi, page }) => {
+      registerFollowUps(mockApi);
+      await app.gotoRoute('/');
+      if (process.platform !== 'linux') await page.addStyleTag({ content: LINUX_TEXT_EMULATION });
+      const { tray } = await openTray(page);
+      // Older and No longer contactable are collapsed: open them (a <summary>
+      // click inside the tray reads nothing and keeps it open).
+      for (const summary of await tray.locator('details.followups__section--collapsed > summary').all()) await summary.click();
+      await expect(tray.locator('details.followups__section--collapsed[open]')).toHaveCount(2);
+      await app.settle();
+
+      const rows = await rowGeometry(tray);
+      console.log(`[followups-rows] ${JSON.stringify(rows)}`);
+      expect(rows).toHaveLength(9);
+      // Non-vacuity: the shortest due text (the Today row's) and the long ones
+      // both run, and so do contactable and withheld rows.
+      expect(rows.map((row) => row.due)).toEqual(expect.arrayContaining(['in 5 hr.', '2 days ago', 'yesterday']));
+      expect(rows.filter((row) => row.withheld)).toHaveLength(3);
+      for (const row of rows) {
+        const label = `${row.borrower} (${row.due})`;
+        expect.soft(Math.abs(row.dueInset), `${label}: the due time starts the meta line`).toBeLessThanOrEqual(0.5);
+        expect.soft(row.dueBelowReason, `${label}: the meta line sits below the reason line`).toBeGreaterThanOrEqual(0);
+        if (row.withheld) {
+          expect.soft(row.snoozeAfterDue, `${label}: a withheld row offers no Snooze`).toBeNull();
+          expect.soft(row.blockBelowDue ?? -1, `${label}: the closed reason sits below the meta line`).toBeGreaterThanOrEqual(0);
+        } else {
+          expect.soft(row.snoozeOnDueLine, `${label}: Snooze shares the due time's line`).toBe(true);
+          expect.soft(row.snoozeAfterDue ?? -1, `${label}: Snooze follows the due time`).toBeGreaterThan(0);
+        }
+      }
+      // One due column: every due time starts at the same x.
+      expect.soft(new Set(rows.map((row) => Math.round(row.dueInset))).size, 'every due time starts at one x').toBe(1);
+
+      // Each qualifier is one phrase: the owner name never breaks inside itself.
+      const row = (borrowerId: string) => tray.locator(`.followups__row[data-borrower-id="${borrowerId}"]`);
+      for (const [borrowerId, phrase] of [
+        [FOLLOWUP_IDS.requested, 'Summit LO 02'],
+        [FOLLOWUP_IDS.week, 'attempt 1'],
+        [FOLLOWUP_IDS.week, 'new signal'],
+        [FOLLOWUP_IDS.overdue, 'attempt 2'],
+      ] as const) {
+        expect.soft(await phraseLines(row(borrowerId), phrase), `${borrowerId}: "${phrase}" renders on one line`).toBe(1);
+      }
     });
   });
 }

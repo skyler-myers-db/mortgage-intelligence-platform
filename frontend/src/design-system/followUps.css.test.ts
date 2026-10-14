@@ -71,6 +71,19 @@ describe('the due dot', () => {
   });
 });
 
+describe('the tray row grammar', () => {
+  it('gives the meta line the full row, so the due time always starts it', () => {
+    expect(tray()).toMatch(/\.followups__meta\s*\{[^}]*flex-basis:\s*100%;/);
+  });
+
+  it('keeps each reason qualifier whole without letting it overflow', () => {
+    const rule = /\.followups__qualifier\s*\{([^}]*)\}/.exec(tray())?.[1] ?? '';
+    expect(rule).toContain('display: inline-block;');
+    expect(rule).toContain('max-inline-size: 100%;');
+    expect(rule).not.toContain('nowrap');
+  });
+});
+
 describe('the tray layer', () => {
   it('declares --z-tray in tokens.css above the Console and Genie', () => {
     const tokens = read('design-system', 'tokens.css');
