@@ -785,6 +785,11 @@ class ResilientLakebaseClient:
     def resilient(self) -> Any:
         return self._resilient
 
+    @property
+    def bare_client(self) -> LakebaseClient:
+        """Read-only: the unwrapped client, for writes that must never record on the breaker."""
+        return self._client
+
     @contextmanager
     def transaction(self) -> Iterator[Connection[Any]]:
         from backend.services.resilience import DependencyDownError

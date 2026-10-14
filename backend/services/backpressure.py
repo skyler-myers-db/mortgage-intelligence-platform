@@ -218,6 +218,20 @@ class BackpressureController:
             if path.startswith("/api/genie"):
                 dependency = "genie"
             return RouteBudget("mutation", settings.mip_rate_limit_mutation_per_minute, dependency)
+        if method.upper() == "GET" and path == "/api/sales/followups/summary":
+            # The rail's Follow-ups poll (D-shell-deviations-a), like the
+            # /api/genie/message/status precedent: a once-a-minute read of the
+            # caller's own Lakebase workflow state, never the warehouse. The
+            # default read bucket and a Lakebase slot; under the '/api/sales'
+            # prefix below it would spend the expensive warehouse budget and
+            # hold a warehouse slot per poll. The tray's list (GET
+            # /api/sales/followups) reads gold, so it stays on that prefix.
+            return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
+        if method.upper() == "GET" and path == "/api/admin/field-performance":
+            # Admin Field performance (D-platform-process-d2, runtime-09): one
+            # read of mip_app.rum_daily in Lakebase, no warehouse statement.
+            # Same precedent; the '/api/admin' prefix below is warehouse-read.
+            return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
         if path.startswith("/api/audit") or path.startswith("/api/workspace"):
             return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
         if method.upper() == "GET" and self._BORROWER_DECISIONS_RE.match(path):

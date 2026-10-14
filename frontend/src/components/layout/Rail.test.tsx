@@ -4,7 +4,9 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installLocalStorage } from '../../test/installLocalStorage';
 import type { SessionResponse } from '../../types';
+import type { ConnectionStatus } from '../connectionState';
 
 const apiMocks = vi.hoisted(() => ({ session: vi.fn() }));
 const roadmapLoads = vi.hoisted(() => {
@@ -19,6 +21,19 @@ vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
   api: apiMocks,
 }));
+
+// Rail reads only the connection from the health context; with no provider
+// (every other test) the hook answers null, as the real one does.
+const healthState = vi.hoisted(() => ({ connection: null as ConnectionStatus | null }));
+vi.mock('../HealthProvider', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../HealthProvider')>();
+  type Health = ReturnType<typeof original.useOptionalHealth>;
+  return {
+    ...original,
+    useOptionalHealth: (): Health =>
+      healthState.connection === null ? null : ({ connection: healthState.connection } as NonNullable<Health>),
+  };
+});
 
 // Counts every load of the lazy roadmap chunk (the real module is served) and
 // signals when Rail's own request for it has been transformed and evaluated.
@@ -47,6 +62,9 @@ const PRESENTER: SessionResponse = { ...CUSTOMER, presenter_mode: true };
 
 let root: Root;
 let queryClient: QueryClient;
+// The Follow-ups summary poll (D-shell-deviations-a) is the rail's only
+// fetch; a session without actor_email never sends it.
+let fetchSpy: ReturnType<typeof vi.fn>;
 
 function LocationProbe() {
   const current = useLocation();
@@ -115,17 +133,22 @@ const roadmapButtons = (rail: HTMLElement) => [...rail.querySelectorAll<HTMLButt
 
 describe('the module rail', () => {
   beforeEach(() => {
+    installLocalStorage();
     document.body.innerHTML = '<div id="root"></div>';
     root = createRoot(document.getElementById('root') as HTMLElement);
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     apiMocks.session.mockReset();
+    healthState.connection = null;
     roadmapLoads.count = 0;
+    fetchSpy = vi.fn(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal('fetch', fetchSpy);
   });
 
   afterEach(() => {
     act(() => root.unmount());
     queryClient.clear();
     document.body.innerHTML = '';
+    vi.unstubAllGlobals();
   });
 
   it('shows a customer session M0 alone and never loads the roadmap chunk', async () => {
@@ -196,4 +219,74 @@ describe('the module rail', () => {
     expect(location()).toBe(before);
     expect(apiMocks.session).not.toHaveBeenCalled();
   }, PRESENTER_TEST_TIMEOUT_MS);
+
+  describe('the Follow-ups due item (D-shell-deviations-a)', () => {
+    const ACTOR: SessionResponse = { ...CUSTOMER, actor_email: 'lo01@summit.example' };
+    const respond = (body: unknown, status = 200) =>
+      Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }));
+    const dueItem = (rail: HTMLElement) =>
+      [...rail.querySelectorAll<HTMLElement>('.rail__item')].find((item) => item.querySelector('.mod')?.textContent === 'Due');
+
+    async function renderPolling(reply: () => Promise<Response>, until: (rail: HTMLElement) => boolean): Promise<HTMLElement> {
+      fetchSpy.mockImplementation(reply);
+      queryClient.setQueryData<SessionResponse>(SESSION_QUERY_KEY, ACTOR);
+      const rail = await renderRail();
+      for (let tick = 0; tick < 400 && !(fetchSpy.mock.calls.length > 0 && until(rail)); tick += 1) {
+        await act(async () => {
+          await new Promise((resolve) => window.setTimeout(resolve, 25));
+        });
+      }
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe('/api/v1/sales/followups/summary');
+      return rail;
+    }
+
+    it('never polls a session that names no actor', async () => {
+      queryClient.setQueryData<SessionResponse>(SESSION_QUERY_KEY, CUSTOMER);
+      await renderRail();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('never polls while the session is expired, and polls once the connection is back', async () => {
+      fetchSpy.mockImplementation(() => respond({ eligible: true, next_due_at: null }));
+      queryClient.setQueryData<SessionResponse>(SESSION_QUERY_KEY, ACTOR);
+      healthState.connection = 'session_expired';
+      const rail = await renderRail();
+      await settle();
+      expect(fetchSpy, 'an expired session sends no summary poll').not.toHaveBeenCalled();
+      expect(dueItem(rail)).toBeUndefined();
+
+      // Control: the same actor, online again, polls (the wait above was long enough to see one).
+      healthState.connection = 'online';
+      await renderRail();
+      await settle(() => fetchSpy.mock.calls.length > 0);
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe('/api/v1/sales/followups/summary');
+    });
+
+    it.each([
+      ['pending', () => new Promise<Response>(() => undefined)],
+      ['errored', () => respond({ detail: 'lakebase is temporarily unavailable' }, 503)],
+      ['ineligible', () => respond({ eligible: false, next_due_at: null })],
+    ] as const)('renders no item while the summary is %s, and the class sequence is unchanged', async (_state, reply) => {
+      const rail = await renderPolling(reply, () => true);
+      await settle();
+      expect(dueItem(rail)).toBeUndefined();
+      expect([...rail.children].map((child) => child.className)).toEqual([
+        'rail__brand', 'rail__item is-active', 'rail__spacer', 'rail__item', 'rail__item',
+      ]);
+    });
+
+    it('for an eligible actor orders spacer, follow-ups, ledger, gear', async () => {
+      const rail = await renderPolling(() => respond({ eligible: true, next_due_at: null }), (r) => dueItem(r) !== undefined);
+      const children = [...rail.children];
+      const due = dueItem(rail);
+      expect(due).toBeDefined();
+      const spacer = children.findIndex((child) => child.className === 'rail__spacer');
+      // The item's hidden hint, then its button, sit between the spacer and the ledger link.
+      expect(children[spacer + 1]?.hasAttribute('hidden')).toBe(true);
+      expect(children[spacer + 2]).toBe(due);
+      expect(children[spacer + 3]?.getAttribute('aria-label')).toBe('Audit ledger');
+      expect(children[spacer + 4]?.getAttribute('href')).toBe('/admin-config');
+      expect(children).toHaveLength(spacer + 5);
+    });
+  });
 });

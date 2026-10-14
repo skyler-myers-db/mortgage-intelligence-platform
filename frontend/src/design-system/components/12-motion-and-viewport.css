@@ -102,7 +102,8 @@
        from collapsing but does not pretend to be a mobile layout. */
 @media (max-width: 1023px) {
   .app-shell {
-    grid-template-columns: 56px 1fr;
+    --shell-rail-w: 56px;
+    grid-template-columns: var(--shell-rail-w) 1fr;
   }
   /* Search and the actions share one row (2026-09-21 audit responsive-06):
      hiding `.topbar__actions` here took the theme, Genie and Console
@@ -179,7 +180,8 @@
        are more legible at distance; still fits the prototype look. */
 @media (min-width: 1920px) {
   .app-shell {
-    grid-template-columns: 80px 1fr;
+    --shell-rail-w: 80px;
+    grid-template-columns: var(--shell-rail-w) 1fr;
   }
   .rail__item {
     width: 60px;
@@ -192,7 +194,8 @@
        (its .main gutter follows --console-w). */
 @media (min-width: 2560px) {
   .app-shell {
-    grid-template-columns: 96px 1fr;
+    --shell-rail-w: 96px;
+    grid-template-columns: var(--shell-rail-w) 1fr;
     /* Row height flows from the variable so .rail__brand tracks it and the
        mark stays centered on the topbar line at this breakpoint too. */
     --shell-topbar-h: 64px;

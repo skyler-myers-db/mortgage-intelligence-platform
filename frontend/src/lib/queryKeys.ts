@@ -125,6 +125,13 @@ export const queryKeys = {
    * create or withdraw. Never persisted, never polled.
    */
   approvalRequests: (scope?: 'open' | 'mine') => ['mip', 'approval-requests', scope] as const,
+  /**
+   * The Follow-ups rail poll and tray list (D-shell-deviations-a): audit-free,
+   * never persisted; under ['mip','followups'] so a snooze invalidates both
+   * and the actor boundary's clear drops them.
+   */
+  followUpsSummary: () => ['mip', 'followups', 'summary'] as const,
+  followUpsList: (windowDays: number) => ['mip', 'followups', 'list', windowDays] as const,
 };
 
 export function invalidateOperationalQueries(queryClient: QueryClient): Promise<void> {

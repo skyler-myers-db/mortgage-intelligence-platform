@@ -65,6 +65,10 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "OUTREACH_HOLD",
         "REJECT",
         "SUPPRESS_CONTACT",
+        # wow-power-3 phase 2: a Follow-ups tray snooze, and its refusal when
+        # the item may not be contacted (borrower id and closed reason only).
+        "LEAD_SNOOZE",
+        "LEAD_SNOOZE_REFUSED",
     }
 )
 

@@ -416,3 +416,67 @@ def test_flush_on_shutdown_writes_once_and_is_idempotent() -> None:
     rum_rollup.flush_on_shutdown()
 
     assert len(client.inserts()) == 1
+
+
+# --- W5d item 3b: the RUM flush never touches the shared 'lakebase' breaker ---
+
+
+class _ManualClock:
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def test_a_half_open_breaker_is_never_probed_by_a_flush(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.services import resilience_breaker
+
+    clock = _ManualClock()
+    breaker = resilience_breaker.CircuitBreaker("lakebase", failure_threshold=1, cooldown_s=5.0, now=clock)
+    monkeypatch.setitem(resilience_breaker._BREAKERS, "lakebase", breaker)
+    breaker.record_failure()
+    clock.t += 10.0
+    assert breaker.state == breaker.HALF_OPEN, "non-vacuity: the cool-down elapsed"
+    allow_calls: list[bool] = []
+    real_allow = breaker.allow
+    monkeypatch.setattr(breaker, "allow", lambda: allow_calls.append(True) or real_allow())
+    client = _FakeClient()
+    rollup = _rollup(client)
+    rollup.add(_event("lcp", 900))
+
+    rollup.flush()
+
+    assert allow_calls == [], "telemetry never takes the HALF_OPEN probe slot"
+    assert client.statements == [] and client.transactions == 0, "nothing is written"
+    assert len(rollup.pending_keys()) == 1, "the aggregates wait for a CLOSED breaker"
+    assert breaker.state == breaker.HALF_OPEN
+
+
+def test_a_failing_rum_write_leaves_the_shared_lakebase_breaker_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The DEFAULT client path (the App's): a ResilientLakebaseClient over a bare
+    client whose statement fails. The write goes through the bare client, so the
+    shared breaker's state and failure count stay exactly as they were."""
+    from backend.services import lakebase
+    from backend.services.resilience import Resilient
+
+    failing = _FakeClient()
+    # A LakebaseError is what the wrapper's transaction records as a failure.
+    failing.error = lakebase.LakebaseError("relation mip_app.rum_daily does not exist")
+    breaker = get_breaker("lakebase")
+    breaker.record_failure()
+    before = (breaker.state, breaker._failure_count)
+    resilient = lakebase.ResilientLakebaseClient(
+        failing,  # type: ignore[arg-type]
+        Resilient[Any](breaker=breaker, dependency_name="lakebase", attempts=1),
+    )
+    monkeypatch.setattr(lakebase, "get_lakebase_client", lambda: resilient)
+    rollup = rum_rollup.RumRollup(clock=_Clock(), autostart=False)
+    rollup.add(_event("lcp", 900))
+
+    rollup.flush()
+
+    assert failing.transactions == 1, "non-vacuity: the write really ran and failed"
+    assert (breaker.state, breaker._failure_count) == before

@@ -437,6 +437,16 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "surface",
         "screen",
         "item_count",
+        # LEAD_SNOOZE / LEAD_SNOOZE_REFUSED (wow-power-3 phase 2): the snooze's
+        # opaque id, the chosen days, its wake time and whether the contact
+        # frequency cap moved it, the tray item's kind, and the closed reason
+        # a refused snooze was withheld for. Never text.
+        "snooze_id",
+        "snooze_days",
+        "wake_at",
+        "wake_clamped",
+        "followup_kind",
+        "contact_block_reason",
     }
 )
 

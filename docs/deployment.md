@@ -927,6 +927,21 @@ envelope is in
   `mip-app` first: the migrate job fails closed while an App-role session is
   live.
 
+## Follow-ups due and snooze (W5d)
+
+The rail's Follow-ups due item and tray need two Lakebase blocks that
+`mip_lakebase_migrate` applies at deploy step 4b
+(`scripts/lib/deploy_step_lakebase_and_uc_grants.sh`): the partial index
+`idx_approvals_follow_up_open` and the table `mip_app.lead_snoozes` (the App
+role gets `SELECT`, `INSERT` and `UPDATE` through the reviewed privilege
+matrix). Both are idempotent. Migrate BEFORE the App: the follow-ups CTE
+reads `lead_snoozes`, so a piecewise deploy stops `mip-app`, runs the
+migrate job, starts the App and then deploys its source. The snooze wake
+ships in the bundle job file (`jobs/sync_lifecycle_state.py`, synced by
+`deploy.sh`) and in the App source, and runs at deploy step 9 through
+`tools.sync_lifecycle_warehouse`. There is no new environment variable,
+grant step, job or task.
+
 ## Resources
 
 Databricks App resources expected by `app.yaml`:

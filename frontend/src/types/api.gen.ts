@@ -1008,6 +1008,43 @@ export interface ResponseSchemas {
     /** Route registry template. */
     route: string;
   };
+  /** One open item of the caller's own due work. */
+  FollowupItem: {
+    /** The scheduling call's attempt number; callbacks only. */
+    attempt_number: number | null;
+    borrower_id: string;
+    /** Why the row is withheld; null exactly when contactable. */
+    contact_block_reason: "consent_not_opt_in" | "frequency_cap" | "suppressed" | "eligibility_not_proven" | "contactability_not_configured" | "not_in_coverage" | null;
+    /** True only when the gold eligibility decision and the set-level predicate both allow contact. */
+    contactable: boolean;
+    /** Null for a new assignment, which has no due time. */
+    due_at: string | null;
+    /** When the contact frequency cap lifts; frequency_cap rows only. */
+    earliest_recontact_at: string | null;
+    kind: "callback" | "approval_follow_up" | "requested_follow_up" | "new_assignment";
+    /** The current assignee's display label; requested follow-ups with an assignee only. */
+    owner_label: string | null;
+    /** Requested follow-ups only. */
+    owner_state: "assigned" | "unassigned" | null;
+    /** When the item was scheduled, decided or assigned. */
+    since_at: string;
+    /** True when a snooze of this item ended early on a new recorded signal. */
+    woke_on_signal: boolean;
+  };
+  /** The tray's read: due and newly assigned items, at most 50 per kind. */
+  FollowupList: {
+    generated_at: string;
+    items: ResponseSchemas['FollowupItem'][];
+    /** True when a kind had more than 50 open items. */
+    truncated: boolean;
+  };
+  /** The rail item's poll: whether the actor has a tray, and its next due time. */
+  FollowupSummary: {
+    /** True when the caller is an active sales-team member or an approver. */
+    eligible: boolean;
+    /** Earliest due time over the caller's open callbacks and follow-ups due no more than 14 days ago; null when nothing is due. */
+    next_due_at: string | null;
+  };
   FootprintState: {
     display_order: number;
     is_default_state: boolean;
@@ -1766,6 +1803,14 @@ export interface ResponseSchemas {
     fit: number;
     intent_trigger: number;
     relationship: number;
+  };
+  LeadSnoozeResponse: {
+    audit_event_id: string;
+    borrower_id: string;
+    /** When the item returns to the tray at the latest. */
+    wake_at: string;
+    /** True when the wake time was moved to the contact frequency cap's end. */
+    wake_clamped: boolean;
   };
   LeadSummary: {
     aging_days: number | null;
@@ -2974,6 +3019,11 @@ export interface RequestSchemas {
     request_id?: string | null;
     source_record_ref?: string | null;
     source_system: "salesforce" | "crm_cdp" | "los_pos" | "servicing" | "webhook" | "manual_import";
+  };
+  LeadSnoozeRequest: {
+    /** One UUID per snooze intent; a retry resends it. */
+    request_id: string;
+    snooze_days: 1 | 3 | 7;
   };
   OfferRecommendRequest: {
     borrower_id: string;
@@ -4231,6 +4281,22 @@ export interface ApiOperations {
     body: never;
     ok: ResponseSchemas['SalesConversionResponse'];
   };
+  "GET /api/v1/sales/followups": {
+    pathParams: Record<string, never>;
+    query: {
+      window_days?: number;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['FollowupList'];
+  };
+  "GET /api/v1/sales/followups/summary": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['FollowupSummary'];
+  };
   "GET /api/v1/sales/outcomes/summary": {
     pathParams: Record<string, never>;
     query: {
@@ -4577,6 +4643,15 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: RequestSchemas['LeadOutcomeRequest'];
     ok: ResponseSchemas['LeadOutcomeResponse'];
+  };
+  "POST /api/v1/leads/{borrower_id}/snooze": {
+    pathParams: {
+      borrower_id: string;
+    };
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['LeadSnoozeRequest'];
+    ok: ResponseSchemas['LeadSnoozeResponse'];
   };
   "POST /api/v1/loan-officers/assignments": {
     pathParams: Record<string, never>;

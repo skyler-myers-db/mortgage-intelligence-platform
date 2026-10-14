@@ -1,0 +1,121 @@
+/* ============================================================
+   FOLLOW-UPS TRAY (D-shell-deviations-a; audit shell-09, wow-power-3;
+   deviation:followups-tray)
+   ============================================================
+   DECLARED EXTENSION. The prototype rail (design_files/Module 0
+   Prototype.html:1180-1204) has no tray and its `bell` glyph (:1008) is
+   never placed. The `.followups` block is built from the `.surface` weight
+   tokens only and ships in the lazy tray chunk, so the initial stylesheet
+   carries none of it.
+
+   The tray is a manual popover (top layer) placed beside the rail, anchored
+   to the bottom where the rail item sits. These rules reset the UA popover
+   box; where the Popover API is missing the same element is a fixed region
+   on --z-tray. Rows wrap: Linux Chromium draws Geist Mono wider, so nothing
+   relies on a one-line fit. */
+.followups {
+  position: fixed;
+  inset: auto;
+  inset-inline-start: calc(var(--shell-rail-w) + var(--sp-2));
+  inset-block-end: var(--sp-4);
+  margin: 0;
+  padding: 0;
+  inline-size: min(22.5rem, 100vw - var(--shell-rail-w) - 2 * var(--sp-4));
+  max-block-size: min(70vh, 35rem);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-2);
+  color: var(--text-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  z-index: var(--z-tray);
+  text-align: start;
+}
+.followups__hdr {
+  padding: var(--sp-3) var(--sp-4);
+  border-block-end: 1px solid var(--line-1);
+}
+.followups__title {
+  margin: 0;
+  font-size: var(--fs-14);
+  font-weight: 600;
+}
+.followups__title:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+.followups__body {
+  flex: 1;
+  min-block-size: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--sp-2) var(--sp-4);
+  display: grid;
+  align-content: start;
+  gap: var(--sp-3);
+}
+.followups__section { display: grid; gap: var(--sp-1); }
+.followups__section-title {
+  margin: 0;
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.followups__section--collapsed > summary { cursor: pointer; }
+.followups__list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); }
+.followups__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--sp-2);
+  row-gap: var(--sp-1);
+  padding: var(--sp-2) 0;
+  border-block-end: 1px solid var(--line-1);
+}
+.followups__row:last-child { border-block-end: 0; }
+.followups__id {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  color: var(--accent-ink);
+  overflow-wrap: anywhere;
+}
+.followups__id:active { translate: 0 var(--pressed-shift); }
+.followups__why { font-size: var(--fs-12); color: var(--text-2); flex: 1 1 10rem; min-inline-size: 0; }
+.followups__due { font-size: var(--fs-11); color: var(--text-3); }
+.followups__block {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-12);
+  color: var(--text-2);
+}
+.followups__snooze { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+.followups__snooze.btn { flex-basis: auto; }
+.followups__hint { flex-basis: 100%; margin: 0; font-size: var(--fs-11); color: var(--text-3); }
+.followups__empty { margin: 0; padding: var(--sp-3) 0; font-size: var(--fs-12); color: var(--text-2); }
+.followups__foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border-block-start: 1px solid var(--line-1);
+  font-size: var(--fs-12);
+}
+.followups__foot a { color: var(--accent-ink); }
+.followups__foot a:active { translate: 0 var(--pressed-shift); }
+
+/* Entry only, never under reduced motion (the shared block in
+   12-motion-and-viewport.css zeroes durations there). */
+@starting-style {
+  .followups:popover-open { opacity: 0; translate: calc(-1 * var(--sp-2)) 0; }
+}
+.followups { transition: opacity var(--dur-fast) var(--ease), translate var(--dur-fast) var(--ease); }
+@media (prefers-reduced-motion: reduce) {
+  .followups { transition: none; }
+}

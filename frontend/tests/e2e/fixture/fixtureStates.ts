@@ -29,6 +29,7 @@ import type { HealthPayload } from '../../../src/lib/apiTypes';
 import type { LeadSummary, SessionResponse } from '../../../src/types';
 import type { AppDriver } from './app';
 import { WAREHOUSE_OUTAGE_503 } from './data/errorSurfaces';
+import { registerFollowUps } from './data/followUps';
 import { HEALTH_OK } from './data/shell';
 import { NON_APPROVER_SESSION, REQUESTED_IDS, batchView, registerApprovalRequestStore } from './data/approvalRequests';
 import { json, type MockApi } from './mockApi';
@@ -54,7 +55,9 @@ export type FixtureState =
   // request panels, and the non-approver's Request approval form.
   | 'approval-requests'
   | 'my-approval-requests'
-  | 'request-approval-form';
+  | 'request-approval-form'
+  // W5d w5-followups-snooze: an eligible actor's Follow-ups tray, open.
+  | 'followups-tray';
 
 /** The reads `read-failed` fails, per route name (routes.ts). */
 export const READ_FAILED_ENDPOINTS: Readonly<Record<string, readonly string[]>> = {
@@ -109,6 +112,8 @@ export function prepareState(mockApi: MockApi, state: FixtureState, routeName?: 
   } else if (state === 'my-approval-requests' || state === 'request-approval-form') {
     mockApi.register<SessionResponse>('GET', '/api/session', () => json<SessionResponse>(NON_APPROVER_SESSION));
     registerApprovalRequestStore(mockApi, { seed: batchView(REQUESTED_IDS.slice(0, 1), true) });
+  } else if (state === 'followups-tray') {
+    registerFollowUps(mockApi);
   } else if (state === 'empty') {
     mockApi.register<LeadSummary[]>('GET', '/api/leads', () =>
       json<LeadSummary[]>([], { headers: { 'X-Total-Matching': '0', 'X-Returned-Rows': '0' } }),
@@ -205,6 +210,15 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
         await drawer.getByRole('tab', { name: 'Under the hood' }).click();
         await expect(drawer.locator('[data-testid="evidence-kpi-proof"] .proof-sql-card__sql')).toBeVisible();
       }
+      break;
+    }
+    case 'followups-tray': {
+      // The rail item appears for the eligible actor; opening the tray reads
+      // the audit-free list (never an audited read).
+      const trigger = page.locator('.rail button.rail__item', { hasText: 'Due' });
+      await trigger.click();
+      await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+      await expect(page.locator('.followups .followups__row').first()).toBeVisible();
       break;
     }
   }

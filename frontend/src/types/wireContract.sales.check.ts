@@ -18,6 +18,8 @@ import type { QueueVersionBody } from '../lib/queueVersion';
 import type { CallDisposition, SalesAgingLead, SalesConversionResponse, SalesOutcomeSummaryResponse, SalesStandupResponse } from '../types';
 import type { LeadAssignment, LoanOfficer, LoanOfficerAssignment, SalesTeamMember } from './loanOfficer';
 import type { SavedDraft, SavedDraftInput, SavedLead, SavedLeadInput, SessionResponse, WorkspaceMutationResult, WorkspaceState } from './workspace';
+import type { FollowupItem, FollowupList, LeadSnoozeRequest, LeadSnoozeResponse } from '../lib/apiClients/followUps';
+import type { FollowupSummary } from '../lib/apiClients/followUpsSummary';
 
 export type WireContractSales = [
   // (i) schema-named hand types
@@ -86,6 +88,17 @@ export type WireContractSales = [
   Expect<NoPhantomKeys<SessionResponse, ApiResponse<'SessionResponse'>>>,
   Expect<WireFits<ApiResponse<'WorkspaceState'>, WorkspaceState>>,
   Expect<NoPhantomKeys<WorkspaceState, ApiResponse<'WorkspaceState'>>>,
+  // Follow-ups tray and snooze (D-shell-deviations-a, wow-power-3).
+  Expect<WireFits<ApiResponse<'FollowupSummary'>, FollowupSummary>>,
+  Expect<NoPhantomKeys<FollowupSummary, ApiResponse<'FollowupSummary'>>>,
+  Expect<WireFits<ApiResponse<'FollowupList'>, FollowupList>>,
+  Expect<NoPhantomKeys<FollowupList, ApiResponse<'FollowupList'>>>,
+  Expect<WireFits<ApiResponse<'FollowupItem'>, FollowupItem>>,
+  Expect<NoPhantomKeys<FollowupItem, ApiResponse<'FollowupItem'>>>,
+  Expect<WireFits<LeadSnoozeRequest, ApiRequest<'LeadSnoozeRequest'>>>,
+  Expect<DeepNoPhantomKeys<LeadSnoozeRequest, ApiRequest<'LeadSnoozeRequest'>>>,
+  Expect<WireFits<ApiResponse<'LeadSnoozeResponse'>, LeadSnoozeResponse>>,
+  Expect<NoPhantomKeys<LeadSnoozeResponse, ApiResponse<'LeadSnoozeResponse'>>>,
   // (ii) bound call sites whose type argument is not schema-named
   Expect<WireFits<ApiOk<'DELETE /api/v1/workspace/leads/{borrower_id}'>, WorkspaceMutationResult>>,
   Expect<NoPhantomKeys<WorkspaceMutationResult, ApiOk<'DELETE /api/v1/workspace/leads/{borrower_id}'>>>,

@@ -43,6 +43,8 @@ export const ACTIVITY_LABELS: Record<string, string> = {
   VIEW_REFUSAL_REPORT_TEXT: 'Refusal question read',
   GENIE_SECTION_REVEALED: 'Genie verified section made available',
   GOVERNED_TEXT_REFUSED: 'Decision reason refused',
+  LEAD_SNOOZE: 'Follow-up snoozed',
+  LEAD_SNOOZE_REFUSED: 'Follow-up snooze refused',
 };
 
 export type DecisionTone = 'green' | 'amber' | 'red';

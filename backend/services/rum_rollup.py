@@ -22,9 +22,13 @@ Every key part is already validated against a closed vocabulary
 facet is built only from closed values, and the rating is derived here from
 the value, never taken from the browser. No identifier of any kind is stored.
 
-Failure posture: an open Lakebase breaker skips the flush and keeps the
-bounded aggregates for the next minute (the ``state`` is read; ``allow`` is
-never called). A failed statement drops that batch, logs ONE
+Failure posture: the flush runs only while the shared 'lakebase' breaker is
+CLOSED (its ``state`` is read; ``allow`` is never called), so telemetry can
+never take the HALF_OPEN probe that approvals and audit writes wait on; any
+other state keeps the bounded aggregates for the next minute. The write goes
+through the bare Lakebase client, never the breaker-recording wrapper, so a
+RUM-only failure cannot open that breaker either (W5d item 3b). A failed
+statement drops that batch, logs ONE
 ``rum_rollup_flush_failed`` warning with counts only, and never raises. At
 most 1000 keys wait at once; an event for a new key past that cap is
 dropped and counted.
@@ -169,15 +173,17 @@ def _current_build() -> str:
 
 
 def _default_client() -> Any:
+    """The bare client: a RUM write never records on the shared 'lakebase' breaker."""
     from backend.services.lakebase import get_lakebase_client
 
-    return get_lakebase_client()
+    client = get_lakebase_client()
+    return getattr(client, "bare_client", client)
 
 
-def _breaker_open() -> bool:
+def _breaker_closed() -> bool:
     from backend.services.resilience import CircuitBreaker, get_breaker
 
-    return get_breaker("lakebase").state == CircuitBreaker.OPEN
+    return get_breaker("lakebase").state == CircuitBreaker.CLOSED
 
 
 class RumRollup:
@@ -242,7 +248,7 @@ class RumRollup:
                 emit(log, "rum_rollup_flush_failed", level=logging.WARNING, rows=0, events=0, dropped=0)
 
     def _flush(self) -> None:
-        if _breaker_open():
+        if not _breaker_closed():
             return
         with self._lock:
             if not self._pending and not self._dropped:

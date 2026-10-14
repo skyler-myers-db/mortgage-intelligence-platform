@@ -7020,6 +7020,200 @@
         "title": "FieldPerformanceVitalsRow",
         "type": "object"
       },
+      "FollowupItem": {
+        "description": "One open item of the caller's own due work.",
+        "properties": {
+          "attempt_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The scheduling call's attempt number; callbacks only.",
+            "title": "Attempt Number"
+          },
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "contact_block_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "consent_not_opt_in",
+                  "frequency_cap",
+                  "suppressed",
+                  "eligibility_not_proven",
+                  "contactability_not_configured",
+                  "not_in_coverage"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the row is withheld; null exactly when contactable.",
+            "title": "Contact Block Reason"
+          },
+          "contactable": {
+            "description": "True only when the gold eligibility decision and the set-level predicate both allow contact.",
+            "title": "Contactable",
+            "type": "boolean"
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null for a new assignment, which has no due time.",
+            "title": "Due At"
+          },
+          "earliest_recontact_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the contact frequency cap lifts; frequency_cap rows only.",
+            "title": "Earliest Recontact At"
+          },
+          "kind": {
+            "enum": [
+              "callback",
+              "approval_follow_up",
+              "requested_follow_up",
+              "new_assignment"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "owner_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The current assignee's display label; requested follow-ups with an assignee only.",
+            "title": "Owner Label"
+          },
+          "owner_state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "assigned",
+                  "unassigned"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Requested follow-ups only.",
+            "title": "Owner State"
+          },
+          "since_at": {
+            "description": "When the item was scheduled, decided or assigned.",
+            "format": "date-time",
+            "title": "Since At",
+            "type": "string"
+          },
+          "woke_on_signal": {
+            "description": "True when a snooze of this item ended early on a new recorded signal.",
+            "title": "Woke On Signal",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "borrower_id",
+          "due_at",
+          "since_at",
+          "attempt_number",
+          "owner_label",
+          "owner_state",
+          "contactable",
+          "contact_block_reason",
+          "earliest_recontact_at",
+          "woke_on_signal"
+        ],
+        "title": "FollowupItem",
+        "type": "object"
+      },
+      "FollowupList": {
+        "description": "The tray's read: due and newly assigned items, at most 50 per kind.",
+        "properties": {
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FollowupItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "truncated": {
+            "description": "True when a kind had more than 50 open items.",
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "generated_at",
+          "truncated"
+        ],
+        "title": "FollowupList",
+        "type": "object"
+      },
+      "FollowupSummary": {
+        "description": "The rail item's poll: whether the actor has a tray, and its next due time.",
+        "properties": {
+          "eligible": {
+            "description": "True when the caller is an active sales-team member or an approver.",
+            "title": "Eligible",
+            "type": "boolean"
+          },
+          "next_due_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Earliest due time over the caller's open callbacks and follow-ups due no more than 14 days ago; null when nothing is due.",
+            "title": "Next Due At"
+          }
+        },
+        "required": [
+          "eligible",
+          "next_due_at"
+        ],
+        "title": "FollowupSummary",
+        "type": "object"
+      },
       "FootprintState": {
         "properties": {
           "display_order": {
@@ -12450,6 +12644,63 @@
           "evidence"
         ],
         "title": "LeadScorePoints",
+        "type": "object"
+      },
+      "LeadSnoozeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "description": "One UUID per snooze intent; a retry resends it.",
+            "maxLength": 64,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "snooze_days": {
+            "enum": [
+              1,
+              3,
+              7
+            ],
+            "title": "Snooze Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "snooze_days",
+          "request_id"
+        ],
+        "title": "LeadSnoozeRequest",
+        "type": "object"
+      },
+      "LeadSnoozeResponse": {
+        "properties": {
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "wake_at": {
+            "description": "When the item returns to the tray at the latest.",
+            "format": "date-time",
+            "title": "Wake At",
+            "type": "string"
+          },
+          "wake_clamped": {
+            "description": "True when the wake time was moved to the contact frequency cap's end.",
+            "title": "Wake Clamped",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "borrower_id",
+          "wake_at",
+          "wake_clamped",
+          "audit_event_id"
+        ],
+        "title": "LeadSnoozeResponse",
         "type": "object"
       },
       "LeadSummary": {
@@ -27498,6 +27749,70 @@
         ]
       }
     },
+    "/api/leads/{borrower_id}/snooze": {
+      "post": {
+        "deprecated": true,
+        "description": "Hide one of the caller's own open follow-ups for 1, 3 or 7 days.\n\nThe service writes the LEAD_SNOOZE audit row in the same Lakebase\ntransaction as the snooze row, or exactly one LEAD_SNOOZE_REFUSED row\nwhen the item may not be contacted (409 not_contactable). 401 without a\nforwarded identity, 403 for a caller with no tray, 409 no_open_follow_up\nwhen the caller has no open item for the borrower.",
+        "operationId": "post_api_leads_borrower_id_snooze_snooze_lead_followup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "borrower_id",
+            "required": true,
+            "schema": {
+              "title": "Borrower Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadSnoozeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadSnoozeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Snooze Lead Followup",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
     "/api/lineage/manifest": {
       "get": {
         "deprecated": true,
@@ -28950,6 +29265,76 @@
           }
         },
         "summary": "Release Distribution",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/sales/followups": {
+      "get": {
+        "deprecated": true,
+        "description": "The caller's due callbacks and follow-ups and new assignments.\n\nAUDIT EXEMPT: the caller's own work list, read when the tray opens;\nevery row is checked against gold with the Lead Queue's eligibility pair\nand carries only a masked id, times and closed codes. 401 without a\nforwarded identity, 403 when the caller is neither an active sales-team\nmember nor an approver.",
+        "operationId": "get_api_sales_followups_followups_list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window_days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "maximum": 14,
+              "minimum": 1,
+              "title": "Window Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowupList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Followups List",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/sales/followups/summary": {
+      "get": {
+        "deprecated": true,
+        "description": "Whether the caller has a Follow-ups tray, and its next due time.\n\nAUDIT EXEMPT: the caller's own workflow state, polled once a minute by\nthe rail; no borrower field and no audit row. Lakebase only: no\nwarehouse statement. No identity, or an ineligible caller, reads\n``eligible: false``.",
+        "operationId": "get_api_sales_followups_summary_followups_summary",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowupSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Followups Summary",
         "tags": [
           "sales"
         ]
@@ -38329,6 +38714,69 @@
         ]
       }
     },
+    "/api/v1/leads/{borrower_id}/snooze": {
+      "post": {
+        "description": "Hide one of the caller's own open follow-ups for 1, 3 or 7 days.\n\nThe service writes the LEAD_SNOOZE audit row in the same Lakebase\ntransaction as the snooze row, or exactly one LEAD_SNOOZE_REFUSED row\nwhen the item may not be contacted (409 not_contactable). 401 without a\nforwarded identity, 403 for a caller with no tray, 409 no_open_follow_up\nwhen the caller has no open item for the borrower.",
+        "operationId": "post_api_v1_leads_borrower_id_snooze_snooze_lead_followup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "borrower_id",
+            "required": true,
+            "schema": {
+              "title": "Borrower Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadSnoozeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadSnoozeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Snooze Lead Followup",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
     "/api/v1/lineage/manifest": {
       "get": {
         "operationId": "get_api_v1_lineage_manifest_get_lineage_manifest",
@@ -39755,6 +40203,74 @@
           }
         },
         "summary": "Release Distribution",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/sales/followups": {
+      "get": {
+        "description": "The caller's due callbacks and follow-ups and new assignments.\n\nAUDIT EXEMPT: the caller's own work list, read when the tray opens;\nevery row is checked against gold with the Lead Queue's eligibility pair\nand carries only a masked id, times and closed codes. 401 without a\nforwarded identity, 403 when the caller is neither an active sales-team\nmember nor an approver.",
+        "operationId": "get_api_v1_sales_followups_followups_list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window_days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "maximum": 14,
+              "minimum": 1,
+              "title": "Window Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowupList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Followups List",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/sales/followups/summary": {
+      "get": {
+        "description": "Whether the caller has a Follow-ups tray, and its next due time.\n\nAUDIT EXEMPT: the caller's own workflow state, polled once a minute by\nthe rail; no borrower field and no audit row. Lakebase only: no\nwarehouse statement. No identity, or an ineligible caller, reads\n``eligible: false``.",
+        "operationId": "get_api_v1_sales_followups_summary_followups_summary",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowupSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Followups Summary",
         "tags": [
           "sales"
         ]

@@ -24,6 +24,8 @@
  *     ZIP areas                                                        2
  *  O. W5d w5-sales-loop: the Sales ops manager view (30-day period)
  *     and the Distribution Board's dry-run plan                        4
+ *  Q. W5d w5-followups-snooze: the rail with the Follow-ups due dot
+ *     and the open Follow-ups tray                                     4
  *                                                                     --
  *                                                                    126
  *
@@ -40,6 +42,7 @@ import type { AppDriver, FixtureAccent, FixtureTheme } from './app';
 import { enterState, prepareState, type FixtureState } from './fixtureStates';
 import type { HomeSummary, SessionResponse } from '../../../src/types';
 import { RATE_MOVE_HOME_SUMMARY } from './data/homeAnswer';
+import { registerFollowUps } from './data/followUps';
 import { registerPagedQueue } from './data/leadPages';
 import { registerBoard } from './data/salesLoop';
 import { PRESENTER_SESSION } from './data/shell';
@@ -273,6 +276,21 @@ for (const theme of FIXTURE_THEMES) {
       await app.settle();
       await check(page, 'home', theme, 'command-palette-groups');
       expectNoAuditedReadSince(mockApi, naturalLoad, 'home · command-palette-groups');
+    });
+
+    // Q (W5d w5-followups-snooze, D-shell-deviations-a): the eligible actor's
+    // rail with the due dot, then the open tray over Home. The tray's list is
+    // audit-free, so the no-audited-read claim holds after it opens.
+    test('home · follow-ups rail and tray', async ({ app, mockApi, page }) => {
+      registerFollowUps(mockApi);
+      const { naturalLoad } = await load(app, mockApi, route('home'), theme);
+      const trigger = page.locator('.rail button.rail__item.has-due', { hasText: 'Due' });
+      await expect(trigger).toBeVisible();
+      await app.settle();
+      await capture(page, `home--${theme}--followups-rail.png`, { element: page.locator('nav.rail') });
+      await enterState(app, page, 'followups-tray');
+      await check(page, 'home', theme, 'followups-tray');
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'home · follow-ups tray');
     });
 
     // E: compact density.
