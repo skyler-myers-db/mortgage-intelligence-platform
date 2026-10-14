@@ -31,3 +31,61 @@ describe('print.css reveal contract', () => {
     expect(designCss()).not.toMatch(/\.reveal-on-scroll\s*\{[^}]*will-change/s);
   });
 });
+
+/**
+ * responsive-08 (W5d): the print path. The stylesheet had linearized grids
+ * that do not exist (`.grid-2`, `.layout-2`, `.cols-2`, `.confidence`,
+ * `.fab`) while the real ones stayed multi-column; dark segment ink printed
+ * pastel on white; overlays and the consented refusal text could reach
+ * paper. Rendered proof: tests/e2e/fixture/print-glossary-sales-manager.
+ * fixture.spec.ts (emulateMedia print, both themes).
+ */
+const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+/**
+ * The selectors of every rule whose declarations include `display: none`,
+ * with a `:root :is(...)` list flattened to its arguments.
+ */
+function hiddenSelectors(css: string): string[] {
+  const hidden: string[] = [];
+  for (const match of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!/display:\s*none/.test(match[2])) continue;
+    const list = /:root :is\(([^)]*)\)/.exec(match[1])?.[1] ?? match[1];
+    hidden.push(...list.split(',').map((part) => part.trim()));
+  }
+  return hidden;
+}
+
+describe('print.css paper contract (responsive-08)', () => {
+  it('keeps no dead selector: none of these classes exists in the app', () => {
+    const css = stripComments(printCss());
+    for (const dead of ['grid', 'grid-2', 'grid-3', 'layout-2', 'layout-3', 'cols-2', 'cols-3', 'fab', 'confidence']) {
+      expect(css, `.${dead}`).not.toMatch(new RegExp(`\\.${dead}(?![\\w-])`));
+    }
+  });
+
+  it('remaps every --seg-* token tokens.css declares (a new segment cannot print pastel)', () => {
+    const tokens = readFileSync(new URL('./tokens.css', import.meta.url), 'utf8') as string;
+    const declared = new Set([...stripComments(tokens).matchAll(/(--seg-[\w-]+)\s*:/g)].map((match) => match[1]));
+    const remapped = new Set([...stripComments(printCss()).matchAll(/(--seg-[\w-]+)\s*:\s*CanvasText\s*;/g)].map((match) => match[1]));
+    expect(declared.size).toBeGreaterThan(0);
+    expect([...declared].filter((name) => !remapped.has(name))).toEqual([]);
+  });
+
+  it('hides the chrome, the overlays, the toasts and the refusal reports on paper', () => {
+    const hidden = hiddenSelectors(printCss());
+    for (const selector of ['.rail', '.topbar', '.tweaks', '.genie', '.genie__fab', '.cmdk', '.evidence-hovercard', '.toast-region', '#refusal-reports']) {
+      expect(hidden, selector).toContain(selector);
+    }
+    // At id specificity, so an open panel's own display rule never wins.
+    expect(stripComments(printCss())).toMatch(/:root :is\([^)]*#refusal-reports[^)]*\)\s*\{\s*display:\s*none;/s);
+  });
+
+  it('shows the provenance block that the screen keeps hidden, and unclips the tables', () => {
+    const css = stripComments(printCss());
+    expect(css).toMatch(/:root \.print-provenance\[hidden\]\s*\{[^}]*display:\s*block;/s);
+    expect(css).toMatch(/:root :is\(\.tbl-wrap\.tbl-wrap--fill, \.tbl-wrap, \.admin-audit-list\)\s*\{[^}]*overflow:\s*visible;/s);
+    expect(css).toMatch(/:root :is\(\.layoutA-grid, \.kpi-row, \.seg-grid, \.kpi-row:has\(> :nth-child\(4\):last-child\)\)\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\);/s);
+    expect(css).toMatch(/@bottom-right\s*\{[^}]*counter\(page\)[^}]*counter\(pages\)/s);
+  });
+});

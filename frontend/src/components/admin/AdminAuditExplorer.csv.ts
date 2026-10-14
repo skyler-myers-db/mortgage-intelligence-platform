@@ -2,10 +2,12 @@
  * CSV of the audit explorer's current page (audit flow-04 phase 1 /
  * tables-10). The rows are the ones on screen, fetched by an admin through
  * the admin-gated page read; no second query is made and nothing is widened.
- * Cells go through the shared formula-injection gate (lib/csv.ts).
+ * Cells go through the shared formula-injection gate (lib/csv.ts). The
+ * download itself waits for its AUDIT_EXPORT receipt
+ * (AdminAuditExplorer.export.ts, W5d).
  */
 import type { AuditEventRow } from '../../lib/apiTypes';
-import { csvEscape, downloadCsvText } from '../../lib/csv';
+import { csvEscape } from '../../lib/csv';
 import { auditEventCode, auditEventLabel } from './AdminAuditExplorer.labels';
 
 export const AUDIT_PAGE_CSV_HEADER = [
@@ -55,8 +57,4 @@ export function auditPageCsvFilename(page: number, now: Date = new Date()): stri
     String(now.getDate()).padStart(2, '0'),
   ].join('-');
   return `mip-audit-page-${page + 1}-${day}.csv`;
-}
-
-export function downloadAuditPageCsv(events: readonly AuditEventRow[], page: number): void {
-  downloadCsvText(buildAuditPageCsv(events), auditPageCsvFilename(page));
 }

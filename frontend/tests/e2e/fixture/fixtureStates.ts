@@ -57,7 +57,9 @@ export type FixtureState =
   | 'my-approval-requests'
   | 'request-approval-form'
   // W5d w5-followups-snooze: an eligible actor's Follow-ups tray, open.
-  | 'followups-tray';
+  | 'followups-tray'
+  | 'identity-menu'
+  | 'glossary-search';
 
 /** The reads `read-failed` fails, per route name (routes.ts). */
 export const READ_FAILED_ENDPOINTS: Readonly<Record<string, readonly string[]>> = {
@@ -219,6 +221,21 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
       await trigger.click();
       await expect(trigger).toHaveAttribute('aria-expanded', 'true');
       await expect(page.locator('.followups .followups__row').first()).toBeVisible();
+      break;
+    }
+    case 'identity-menu': {
+      // W5d: the account menu open on its first item (reads nothing).
+      await page.getByTestId('identity-menu-trigger').click();
+      const menu = page.getByRole('menu', { name: 'Account' });
+      await expect(menu).toBeVisible();
+      await expect(menu.getByRole('menuitemradio').first()).toBeFocused();
+      break;
+    }
+    case 'glossary-search': {
+      // W5d critic-07: the glossary filtered by ?q= (matching reads nothing).
+      await page.getByLabel('Search the glossary').fill('equity');
+      await expect(page).toHaveURL(/[?&]q=equity(&|#|$)/);
+      await expect(page.locator('.glossary-search__status')).toHaveText(/^\d+ terms? match/);
       break;
     }
   }

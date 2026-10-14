@@ -1855,8 +1855,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 
     await gotoApp(page, `/borrower-360/${target}`);
 
-    // Unique-to-route: the refi economics surface with ITM/rate-spread chips.
-    await expect(page.getByText(/Refi economics check/i)).toBeVisible({ timeout: 30_000 });
+    // Unique-to-route: the In the Money surface with ITM/rate-spread chips.
+    await expect(page.getByText(/In the Money check/i)).toBeVisible({ timeout: 30_000 });
 
     // Real data: the borrower dossier surface shows masked property and owner
     // graph refs. Raw Cotality identifiers must not appear in the UI.
@@ -1865,7 +1865,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(c360).toContainText(/Property ref/i);
     await expect(c360).toContainText(/clip_ref_|clip_demo_/i);
 
-    const economics = page.locator('.surface', { hasText: /Refi economics check/i }).first();
+    const economics = page.locator('.surface', { hasText: /In the Money check/i }).first();
     await assertSourceDrawer(page, economics, 'Market rate comparison', 'Market rate comparison');
     await assertSourceDrawer(page, economics, 'Refinance economics screen', 'Rate + equity screen');
 

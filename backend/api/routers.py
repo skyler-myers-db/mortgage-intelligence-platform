@@ -43,6 +43,7 @@ from backend.api import (
     outreach,
     outreach_revoke,
     portfolio,
+    print_receipt,
     refusal_reports_admin,
     sales,
     sales_followups,
@@ -95,4 +96,5 @@ API_ROUTERS = [
     workspace.router,
     admin_sse_probe.router,
     admin_field_performance.router,
+    print_receipt.router,
 ]

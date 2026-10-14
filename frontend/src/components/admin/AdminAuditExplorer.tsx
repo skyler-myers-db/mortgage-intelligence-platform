@@ -10,16 +10,36 @@
  * links to the explorer opened on that row (`?audit_event_id=`), which the
  * explorer expands and scrolls into view on arrival; and the current page
  * downloads as CSV.
+ *
+ * W5d (tables-10; deviation:audit-explorer-controls): the Action menu and the
+ * menus' counts come from the facets, read only on an explicit menu open;
+ * 'Exclude my ledger reads', a per-viewer, server-side filter kept out of the
+ * URL (a shared link must not silently mean 'hide the recipient's reads');
+ * the page CSV, for administrators only, downloads only after its
+ * AUDIT_EXPORT receipt (AdminAuditExplorer.export.ts, loaded on click); and
+ * Export PDF behind a PRINT_EXPORT receipt for every ledger reader.
  */
 import { lazy, Suspense, useRef, useState, type ComponentType } from 'react';
 import { useLocation, useNavigate } from 'react-router';
+import { useApp } from '../AppContext';
 import { Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
-import { api, type AuditEventPage } from '../../lib/api';
+import { PrintProvenance } from '../print/PrintProvenance';
+import { toastReceiptFailure } from '../print/receiptFailureToast';
+import { usePrintReceipt } from '../print/usePrintReceipt';
+import type { PrintReceiptRequest } from '../../lib/apiClients/printReceipt';
+import { api, type AuditEventPage, type AuditEventRow } from '../../lib/api';
+import {
+  auditEventPage,
+  auditQueryFilters,
+  createAuditExportReceipt,
+  type AuditExplorerQuery,
+} from '../../lib/apiClients/auditExplorer';
 import { queryKeys } from '../../lib/queryKeys';
+import { toast } from '../../lib/toast';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
-import { downloadAuditPageCsv } from './AdminAuditExplorer.csv';
+import { AuditFacetsProvider } from './AdminAuditExplorer.facets';
 import { useScrollDeepLinkedRow } from './AdminAuditExplorer.deepLink';
 import { AuditAppliedFilterChips, AuditExplorerFilterForm } from './AdminAuditExplorer.filters';
 import { auditEventLabel } from './AdminAuditExplorer.labels';
@@ -33,6 +53,7 @@ import {
 } from './AdminAuditExplorer.params';
 import { AUDIT_TABLE_CONTEXT, AuditEventTableRow, formatAuditTimestamp } from './AdminAuditExplorer.row';
 import { formatCount } from '../../lib/formatters';
+import './AdminAuditExplorer.css';
 
 interface ErrorBodyProps {
   error: unknown;
@@ -76,6 +97,29 @@ interface AuditCopyState {
 
 const AUDIT_PAGE_SIZE = 25;
 
+/**
+ * The audited page CSV (administrators only): the file and its hashes are
+ * built in a click-time chunk; the download waits for the AUDIT_EXPORT row.
+ * Module scope on purpose: an import() inside the component body is a React
+ * Compiler bailout (BuildHIR cannot lower Import expressions).
+ */
+async function exportAuditPageCsv(
+  events: readonly AuditEventRow[],
+  page: number,
+  filters: Record<string, string>,
+  retry: () => void,
+): Promise<void> {
+  try {
+    const csvModule = await import('./AdminAuditExplorer.export');
+    const prepared = await csvModule.prepareAuditPageCsv(events, page, filters);
+    const receipt = await createAuditExportReceipt(prepared.declaration);
+    csvModule.downloadPreparedCsv(prepared);
+    toast.success('Audit page exported', { auditEventId: receipt.audit_event_id });
+  } catch (error: unknown) {
+    toastReceiptFailure('Audit page not exported', error, 'the audit export receipt', retry);
+  }
+}
+
 export function AdminAuditExplorer() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -83,7 +127,16 @@ export function AdminAuditExplorer() {
   const applyButtonRef = useRef<HTMLButtonElement>(null);
   const searchParams = new URLSearchParams(location.search);
   const applied = parseAuditExplorerFilters(searchParams);
-  const appliedKey = auditFiltersKey(applied);
+  // 'Exclude my ledger reads': per viewer, default off, never in the URL. It
+  // is part of the page's identity (query and cursor-reset key).
+  const [excludeOwnReads, setExcludeOwnReads] = useState(false);
+  const appliedKey = `${auditFiltersKey(applied)}${excludeOwnReads ? '|exclude-own-ledger-reads' : ''}`;
+  const explorerQuery: AuditExplorerQuery = {
+    ...auditEventPageQuery(applied),
+    exclude_own_ledger_reads: excludeOwnReads,
+  };
+  const { canAccessAdmin } = useApp();
+  const [csvPending, setCsvPending] = useState(false);
   // Cursor pages and the expanded row belong to one applied filter set; a
   // new set (Apply, a chip removal, a deep link, Back) starts on page 1.
   const [cursorState, setCursorState] = useState<{ key: string; cursors: Array<string | null> }>(
@@ -115,10 +168,7 @@ export function AdminAuditExplorer() {
     error: errorObj,
     isFetching,
   } = useWarmingUpRetry<AuditEventPage>(
-    (signal) => api.auditEventPage(AUDIT_PAGE_SIZE, signal, {
-      ...auditEventPageQuery(applied),
-      cursor: pageCursor,
-    }),
+    (signal) => auditEventPage(AUDIT_PAGE_SIZE, signal, { ...explorerQuery, cursor: pageCursor }),
     {
       queryKey: queryKeys.auditEvents(['explorer', appliedKey, pageCursor]),
       keepPreviousData: false,
@@ -148,6 +198,28 @@ export function AdminAuditExplorer() {
     { queryKey: queryKeys.auditRollups('week') },
   );
   const rollupsError = rollupsErrorObj;
+
+  // The query of the page on screen, as the receipts' fingerprinted filters
+  // (only the set parameters, as the page request sends them).
+  const receiptFilters = auditQueryFilters(explorerQuery);
+  const printRequest: PrintReceiptRequest | null = events?.length
+    ? { surface: 'audit_ledger', filters: receiptFilters, row_count: events.length }
+    : null;
+  // Export PDF (responsive-08; deviation:print-export): any ledger reader
+  // prints the page already rendered, behind a PRINT_EXPORT receipt. The
+  // receipt belongs to THIS page: the page index and the event ids on screen
+  // are its client-only identity (never sent), so the next page of the same
+  // query, even one of the same size, prints as unaudited until its own
+  // Export PDF, and a receipt resolving after Next prints nothing.
+  const print = usePrintReceipt(
+    printRequest,
+    `${page}|${(events ?? []).map((event) => event.event_id).join(',')}`,
+  );
+  const exportCsv = () => {
+    if (!events?.length) return;
+    setCsvPending(true);
+    void exportAuditPageCsv(events, page, receiptFilters, exportCsv).finally(() => setCsvPending(false));
+  };
 
   const goToPage = (cursors: Array<string | null>) => {
     setExpandedState({ key: appliedKey, id: null });
@@ -194,16 +266,38 @@ export function AdminAuditExplorer() {
               ? 'Copied table context'
               : 'Copy table context'}
           </button>
+          <label className="audit-exclude-own">
+            <input
+              type="checkbox"
+              checked={excludeOwnReads}
+              onChange={(event) => setExcludeOwnReads(event.target.checked)}
+            />
+            Exclude my ledger reads
+          </label>
+          {canAccessAdmin && (
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={exportCsv}
+              disabled={!events?.length || updating || csvPending}
+              aria-busy={csvPending || undefined}
+              aria-label={`Download page ${page + 1} of the audit explorer as CSV`}
+              title="Download the rows on this page as CSV"
+            >
+              <Icon name="export" size={12} />
+              Page CSV
+            </button>
+          )}
           <button
             type="button"
             className="btn btn--ghost btn--sm"
-            onClick={() => events && downloadAuditPageCsv(events, page)}
-            disabled={!events?.length || updating}
-            aria-label={`Download page ${page + 1} of the audit explorer as CSV`}
-            title="Download the rows on this page as CSV"
+            onClick={print.run}
+            disabled={!events?.length || updating || print.pending}
+            aria-busy={print.pending || undefined}
+            data-testid="audit-export-pdf"
           >
             <Icon name="export" size={12} />
-            Page CSV
+            Export PDF
           </button>
           <Chip variant={error ? 'warning' : filtersActive ? 'success' : 'neutral'}>
             {error
@@ -228,7 +322,9 @@ export function AdminAuditExplorer() {
             {copyState.message}
           </div>
         )}
-        <AuditExplorerFilterForm applied={applied} onApply={applyFilters} applyButtonRef={applyButtonRef} />
+        <AuditFacetsProvider since={applied.since} until={applied.until} eventType={applied.eventType}>
+          <AuditExplorerFilterForm applied={applied} onApply={applyFilters} applyButtonRef={applyButtonRef} />
+        </AuditFacetsProvider>
         <AuditAppliedFilterChips
           applied={applied}
           emptiedFocusRef={applyButtonRef}
@@ -275,6 +371,12 @@ export function AdminAuditExplorer() {
             </div>
           )}
         </div>
+        {events !== null && !error && (
+          <PrintProvenance
+            subject={`Audit ledger page ${page + 1} · ${formatCount(events.length)} rows`}
+            receipt={print.receipt}
+          />
+        )}
         {events !== null && !error && (
           <div
             className={`admin-audit-list stable-refresh-region stable-refresh-region--table mt-3 ${updating ? 'is-updating' : ''}`}

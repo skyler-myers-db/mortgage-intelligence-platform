@@ -15388,6 +15388,117 @@
         "title": "PostedPlanStep",
         "type": "object"
       },
+      "PrintReceipt": {
+        "description": "The ``PRINT_EXPORT`` ledger entry the print dialog waits for.",
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "borrower_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Borrower Id"
+          },
+          "event_type": {
+            "const": "PRINT_EXPORT",
+            "default": "PRINT_EXPORT",
+            "title": "Event Type",
+            "type": "string"
+          },
+          "filter_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filter Fingerprint"
+          },
+          "recorded_at": {
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "row_count": {
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "surface": {
+            "enum": [
+              "borrower_360",
+              "audit_ledger"
+            ],
+            "title": "Surface",
+            "type": "string"
+          }
+        },
+        "required": [
+          "audit_event_id",
+          "actor",
+          "surface",
+          "row_count",
+          "recorded_at"
+        ],
+        "title": "PrintReceipt",
+        "type": "object"
+      },
+      "PrintReceiptRequest": {
+        "description": "What the page declares about the copy it is about to print.",
+        "properties": {
+          "borrower_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The masked borrower id of the printed dossier (Borrower 360 only).",
+            "title": "Borrower Id"
+          },
+          "filters": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The audit explorer query parameters the printed page was read with (audit ledger only). Only their keyed fingerprint is written.",
+            "title": "Filters",
+            "type": "object"
+          },
+          "row_count": {
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "surface": {
+            "enum": [
+              "borrower_360",
+              "audit_ledger"
+            ],
+            "title": "Surface",
+            "type": "string"
+          }
+        },
+        "required": [
+          "surface",
+          "row_count"
+        ],
+        "title": "PrintReceiptRequest",
+        "type": "object"
+      },
       "ProofEvidenceEvent": {
         "properties": {
           "confidence": {
@@ -20875,6 +20986,16 @@
               ],
               "title": "Until"
             }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -21154,6 +21275,16 @@
               ],
               "title": "Event Id"
             }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -21391,6 +21522,16 @@
                 }
               ],
               "title": "Event Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
             }
           }
         ],
@@ -28980,6 +29121,59 @@
         ]
       }
     },
+    "/api/print-receipt": {
+      "post": {
+        "deprecated": true,
+        "description": "Write the ``PRINT_EXPORT`` row the print dialog must wait for.",
+        "operationId": "post_api_print_receipt_create_print_receipt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrintReceiptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Print Receipt",
+        "tags": [
+          "print"
+        ]
+      }
+    },
     "/api/sales/aging": {
       "get": {
         "deprecated": true,
@@ -31907,6 +32101,16 @@
               ],
               "title": "Until"
             }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -32184,6 +32388,16 @@
               ],
               "title": "Event Id"
             }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -32420,6 +32634,16 @@
                 }
               ],
               "title": "Event Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
             }
           }
         ],
@@ -39920,6 +40144,58 @@
         "summary": "Patch Portfolio",
         "tags": [
           "portfolio"
+        ]
+      }
+    },
+    "/api/v1/print-receipt": {
+      "post": {
+        "description": "Write the ``PRINT_EXPORT`` row the print dialog must wait for.",
+        "operationId": "post_api_v1_print_receipt_create_print_receipt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrintReceiptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Print Receipt",
+        "tags": [
+          "print"
         ]
       }
     },

@@ -35,6 +35,7 @@ export const API_ROUTE_SEGMENTS = [
   'monitors', 'my-events', 'notification-drafts', 'offers', 'operations', 'options',
   'outbox', 'outcome', 'outcomes', 'outreach', 'page', 'points', 'portfolio',
   'plan',
+  'print-receipt',
   'preview', 'progress', 'proof', 'property-loan', 'rate-sensitivity', 'rate-window',
   'queue-version',
   'question', 'receipt',

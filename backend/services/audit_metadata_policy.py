@@ -447,6 +447,12 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "wake_clamped",
         "followup_kind",
         "contact_block_reason",
+        # PRINT_EXPORT (print receipt; backend/services/print_receipt.py):
+        # which surface printed and how many rows the page held. The
+        # borrower_id and filter_fingerprint keys above are reused; the
+        # filters and row contents never land.
+        "print_surface",
+        "printed_row_count",
     }
 )
 
@@ -794,3 +800,6 @@ LEDGER_SURFACES: frozenset[str] = frozenset(
 # category. Pinned equal to governed_text_refusal's Literal tuples.
 GOVERNED_TEXT_SURFACE_VALUES: frozenset[str] = frozenset({"approve", "reject", "request", "revoke"})
 GOVERNED_TEXT_SCREEN_VALUES: frozenset[str] = frozenset({"pii", "fair_lending", "other"})
+# The closed ``print_surface`` vocabulary of a PRINT_EXPORT row (W5d,
+# responsive-08): the two pages Export PDF prints.
+PRINT_SURFACES: frozenset[str] = frozenset({"borrower_360", "audit_ledger"})

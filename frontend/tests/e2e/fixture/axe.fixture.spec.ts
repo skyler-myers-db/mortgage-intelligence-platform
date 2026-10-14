@@ -37,9 +37,10 @@ import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
 const OVERLAY_ROUTES = new Set(['home', 'lead-queue', 'borrower-360-detail', 'offer-orchestrator-detail', 'ask-genie']);
 const EXTRA_STATES: Readonly<Record<string, readonly FixtureState[]>> = {
   'lead-queue': ['filter-menu', 'expanded-row', 'read-failed', 'triage', 'approval-requests', 'my-approval-requests', 'request-approval-form'],
-  home: ['degraded', 'delta-explainer', 'evidence-how-we-got', 'evidence-under-the-hood', 'followups-tray'],
+  home: ['degraded', 'delta-explainer', 'evidence-how-we-got', 'evidence-under-the-hood', 'followups-tray', 'identity-menu'],
   'segment-intelligence': ['read-failed', 'stale-note'],
   'admin-config': ['run-dialog-open'],
+  glossary: ['glossary-search'],
 };
 const ACCENT_ROUTES = new Set(['home', 'lead-queue', 'borrower-360-detail']);
 const SWEPT_ACCENTS: readonly AxeAccent[] = ['teal', 'navy', 'red'];

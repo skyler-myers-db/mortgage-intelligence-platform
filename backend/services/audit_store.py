@@ -141,6 +141,7 @@ class AuditStore(Protocol):
         since: datetime | None = None,
         until: datetime | None = None,
         event_id: str | None = None,
+        exclude_ledger_reads_by: str | None = None,
     ) -> list[AuditEvent]: ...
 
 

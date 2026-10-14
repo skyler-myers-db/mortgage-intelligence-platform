@@ -306,6 +306,15 @@ export const AUDITED_READS: ReadonlyArray<{ method: string; path: RegExp; event:
   // "Show refusal reports" (never on /audit-ledger's natural load), and each
   // question only on its own "Show question" click.
   { method: 'GET', path: /^\/api\/audit\/refusal-reports$/, event: 'VIEW_AUDIT_LEDGER' },
+  // D-audit-reads-c3 (W5d): every served ledger read writes one
+  // VIEW_AUDIT_LEDGER row. The explorer's page and rollups load with
+  // /audit-ledger; the facets wait for an explicit menu open and the count
+  // for a click, so no entered state may open any of them.
+  { method: 'GET', path: /^\/api\/audit\/events$/, event: 'VIEW_AUDIT_LEDGER' },
+  { method: 'GET', path: /^\/api\/audit\/events\/page$/, event: 'VIEW_AUDIT_LEDGER' },
+  { method: 'GET', path: /^\/api\/audit\/rollups$/, event: 'VIEW_AUDIT_LEDGER' },
+  { method: 'GET', path: /^\/api\/audit\/facets$/, event: 'VIEW_AUDIT_LEDGER' },
+  { method: 'GET', path: /^\/api\/audit\/count$/, event: 'VIEW_AUDIT_LEDGER' },
   { method: 'GET', path: /^\/api\/audit\/refusal-reports\/[^/]+\/question$/, event: 'VIEW_REFUSAL_REPORT_TEXT' },
 ];
 

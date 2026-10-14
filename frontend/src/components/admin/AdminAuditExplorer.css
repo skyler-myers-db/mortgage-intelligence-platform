@@ -1,0 +1,19 @@
+/* ============================================================
+   Audit explorer controls (W5d, tables-10;
+   deviation:audit-explorer-controls). Lazy: shipped with the
+   audit-ledger route chunk, never in the initial stylesheet. The
+   prototype's audit log is a plain list (design_files/Module 0
+   Prototype.html:2198); these are app blocks beside the existing
+   .filter-row / .chip-row primitives.
+   ============================================================ */
+
+/* 'Exclude my ledger reads' in the header chip row. */
+.audit-exclude-own {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  white-space: nowrap;
+  cursor: pointer;
+}

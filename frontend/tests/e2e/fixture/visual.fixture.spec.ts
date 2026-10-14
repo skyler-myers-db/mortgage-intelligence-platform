@@ -26,6 +26,8 @@
  *     and the Distribution Board's dry-run plan                        4
  *  Q. W5d w5-followups-snooze: the rail with the Follow-ups due dot
  *     and the open Follow-ups tray                                     4
+ *  R. W5d w5-print-glossary-sales-manager: Home's account menu open,
+ *     the glossary filtered by a search                                4
  *                                                                     --
  *                                                                    126
  *
@@ -181,6 +183,9 @@ for (const theme of FIXTURE_THEMES) {
       { route: 'lead-queue', state: 'approval-requests' },
       { route: 'lead-queue', state: 'my-approval-requests' },
       { route: 'lead-queue', state: 'request-approval-form' },
+      // R (W5d w5-print-glossary-sales-manager): the account menu and glossary search.
+      { route: 'home', state: 'identity-menu' },
+      { route: 'glossary', state: 'glossary-search' },
     ];
     for (const { route: name, state } of SHELL_STATES) {
       test(`${name} · ${state}`, async ({ app, mockApi, page }) => {

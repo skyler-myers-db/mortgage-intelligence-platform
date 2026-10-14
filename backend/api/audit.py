@@ -13,6 +13,13 @@ one background, fail-open ``VIEW_AUDIT_LEDGER`` row naming its surface
 are never polled or prefetched. ``POST /audit/export-receipt`` (admin only)
 writes exactly one server-owned ``AUDIT_EXPORT`` row before an explorer CSV
 download; ``/my-events`` stays the caller's own, audit-free feed.
+
+'Exclude my ledger reads' (W5d, tables-10): ``/events``, ``/events/page`` and
+``/count`` take ``exclude_own_ledger_reads=true``, which drops the
+VIEW_AUDIT_LEDGER rows written by the SERVER-resolved reader (the
+``AuditReaderDep`` identity, never a query value). The flag joins the filter
+fingerprint only when true, so default cursors and stored fingerprints stay
+byte-identical; every served read still writes its own VIEW_AUDIT_LEDGER row.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -101,6 +108,11 @@ class ActorAuditEventPage(BaseModel):
 
 def _event_type_for_payload(payload: AuditEventCreateRequest) -> str:
     return (payload.event_type or payload.action).replace(".", "_").replace("-", "_").upper()
+
+
+def _exclusion_filters(exclude_own_ledger_reads: bool) -> dict[str, bool]:
+    """The fingerprint entry the exclusion adds: present only when it is on."""
+    return {"exclude_own_ledger_reads": True} if exclude_own_ledger_reads else {}
 
 
 def _validate_correlation_filter(value: str) -> str:
@@ -238,6 +250,7 @@ def list_events(
     since: datetime | None = None,
     until: datetime | None = None,
     event_id: Annotated[str | None, Query(max_length=64)] = None,
+    exclude_own_ledger_reads: bool = False,
 ) -> list[AuditEvent]:
     correlation_id = _validated_explorer_filters(
         borrower_id=borrower_id, correlation_id=correlation_id, event_id=event_id
@@ -246,6 +259,7 @@ def list_events(
         rows = store.list(
             limit=limit,
             offset=offset,
+            exclude_ledger_reads_by=actor_id if exclude_own_ledger_reads else None,
             actor=actor,
             action=action,
             entity_id=entity_id,
@@ -278,6 +292,7 @@ def list_events(
             "since": since,
             "until": until,
             "event_id": event_id,
+            **_exclusion_filters(exclude_own_ledger_reads),
         }
     )
     record_ledger_read(
@@ -309,6 +324,7 @@ def list_event_page(
     since: datetime | None = None,
     until: datetime | None = None,
     event_id: Annotated[str | None, Query(max_length=64)] = None,
+    exclude_own_ledger_reads: bool = False,
 ) -> AuditEventPage:
     """Traverse a snapshot of the append-only audit ledger without page drift."""
 
@@ -327,6 +343,7 @@ def list_event_page(
         "since": since,
         "until": until,
         "event_id": event_id,
+        **_exclusion_filters(exclude_own_ledger_reads),
     }
     fingerprint = audit_filter_fingerprint(filters)
     decoded = None
@@ -351,6 +368,7 @@ def list_event_page(
             since=since,
             until=until,
             event_id=event_id,
+            exclude_ledger_reads_by=actor_id if exclude_own_ledger_reads else None,
         )
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
@@ -395,6 +413,7 @@ def count_events(
     correlation_id: Annotated[str | None, Query(max_length=128)] = None,
     since: datetime | None = None,
     until: datetime | None = None,
+    exclude_own_ledger_reads: bool = False,
 ) -> AuditCountResponse:
     """How many ledger rows match the /events/page filters, up to a cap (a recorded read)."""
 
@@ -413,6 +432,7 @@ def count_events(
             correlation_id=correlation_id,
             since=since,
             until=until,
+            exclude_ledger_reads_by=actor_id if exclude_own_ledger_reads else None,
         )
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
@@ -427,6 +447,7 @@ def count_events(
             "correlation_id": correlation_id,
             "since": since,
             "until": until,
+            **_exclusion_filters(exclude_own_ledger_reads),
         }
     )
     record_ledger_read(

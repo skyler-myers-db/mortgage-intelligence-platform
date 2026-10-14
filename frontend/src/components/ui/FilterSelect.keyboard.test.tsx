@@ -13,6 +13,8 @@
 import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { hasOpenOverlay } from '../../lib/keymap';
+import { installFakeCssTransition, runExitOn } from '../../test/runningExit';
 import { FilterSelect } from './FilterSelect';
 import { TYPEAHEAD_RESET_MS } from './useListboxNavigation';
 
@@ -251,5 +253,80 @@ describe('FilterSelect — viewport-edge flip', () => {
     press('ArrowDown');
     expect(listbox()).not.toBeNull();
     expect(listbox()?.classList.contains('filter-menu--up')).toBe(false);
+  });
+});
+
+/**
+ * The exit (motion-01 item 2e): a closed menu stays mounted for its fade,
+ * `is-closing`, aria-hidden and inert, while everything a screen reader or
+ * the keymap reads already says "closed". Mutation check: dropping
+ * aria-hidden from the closing menu fails the first case (hasOpenOverlay
+ * would hold the Lead Queue A / R keys off for the whole fade).
+ */
+describe('FilterSelect — presence exit', () => {
+  let uninstall: () => void = () => undefined;
+  beforeEach(() => {
+    uninstall = installFakeCssTransition();
+  });
+  afterEach(() => uninstall());
+
+  it('keeps a closing menu mounted, aria-hidden and inert until its own transitionend', () => {
+    render();
+    press('ArrowDown');
+    const menu = listbox();
+    expect(menu).not.toBeNull();
+    expect(hasOpenOverlay(document), 'an open menu is an overlay').toBe(true);
+    const exit = runExitOn(menu!);
+
+    press('Escape');
+
+    expect(container.querySelector('.filter-menu')).toBe(menu);
+    expect(menu?.classList.contains('is-closing')).toBe(true);
+    expect(menu?.getAttribute('aria-hidden')).toBe('true');
+    expect(menu?.hasAttribute('inert')).toBe(true);
+    expect(menu?.hasAttribute('id'), 'the listbox id exists only while open').toBe(false);
+    expect(combobox().getAttribute('aria-expanded')).toBe('false');
+    expect(combobox().hasAttribute('aria-controls')).toBe(false);
+    expect(combobox().hasAttribute('aria-activedescendant')).toBe(false);
+    expect(document.activeElement, 'focus returns as the exit starts').toBe(combobox());
+    expect(hasOpenOverlay(document), 'a closing menu is not an open overlay').toBe(false);
+
+    exit.finish();
+    expect(container.querySelector('.filter-menu')).toBeNull();
+  });
+
+  it('a reopen during the exit reuses the menu, so its option ids exist once', () => {
+    render();
+    press('ArrowDown');
+    const menu = listbox();
+    runExitOn(menu!);
+    press('Escape');
+    press('ArrowDown');
+    expect(container.querySelectorAll('.filter-menu')).toHaveLength(1);
+    expect(listbox()).toBe(menu);
+    expect(menu?.classList.contains('is-closing')).toBe(false);
+    expect(menu?.hasAttribute('aria-hidden')).toBe(false);
+    expect(combobox().getAttribute('aria-controls')).toBe(menu?.id);
+    const ids = options().map((option) => option.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.every((id) => document.querySelectorAll(`[id="${id}"]`).length === 1)).toBe(true);
+  });
+
+  it('a click on an option glyph is delegated to the listbox and selects that option', () => {
+    render({ initial: 'TX' });
+    press('ArrowDown');
+    const menu = listbox();
+    act(() => {
+      menu!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(changes, 'a press on the listbox padding selects nothing').not.toHaveBeenCalled();
+    expect(listbox()).toBe(menu);
+    const glyph = options()[2].querySelector('svg');
+    expect(glyph).not.toBeNull();
+    act(() => {
+      glyph!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(changes).toHaveBeenLastCalledWith('TX');
+    expect(listbox()).toBeNull();
   });
 });

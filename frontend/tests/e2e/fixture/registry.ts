@@ -14,6 +14,7 @@ import { genieFixtures } from './data/genie';
 import { leadFixtures } from './data/leads';
 import { offerFixtures } from './data/offers';
 import { portfolioFixtures } from './data/portfolio';
+import { printReceiptFixtures } from './data/printReceipt';
 import { rateLeverFixtures } from './data/rateLever';
 import { rateWindowFixtures } from './data/rateWindow';
 import { salesOpsFixtures } from './data/salesOps';
@@ -36,5 +37,7 @@ export function defaultFixtures(): FixtureEntry[] {
     ...adminFixtures,
     ...dataEstateFixtures,
     ...approvalRequestFixtures,
+    // W5d responsive-08: the PRINT_EXPORT receipt Export PDF waits for.
+    ...printReceiptFixtures,
   ];
 }

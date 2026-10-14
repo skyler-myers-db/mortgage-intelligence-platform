@@ -1,0 +1,41 @@
+/* Borrower 360 route sheet. Route-level on purpose: imported by
+   routes/borrower-360.tsx so it ships in the dossier's lazy CSS chunk, not
+   the initial stylesheet (the glossary.css pattern).
+
+   The dossier hero's actions (responsive-08, deviation:print-export). The
+   score, the Signal meter, the Approval and Outreach chips, 'Latest decision'
+   (once the lifecycle row names a decision) and 'Export PDF' need 646-667px
+   at their full widths, past .proto-hero__actions' min(42vw, ...) cap
+   (604.8px at 1440, 537.6px at 1280; 09-console-and-layout.css). That row
+   does not wrap, so it SHRANK its items: the chip labels ellipsized
+   ('Approval Pen…') and the meter's label broke onto two lines.
+
+   Scoped by :has() to the hero that carries Export PDF (.b360-export-pdf),
+   the actions instead:
+     - take the space beside the title block rather than their max-content:
+       a zero flex basis grown into the row's free space, so the title keeps
+       its width and the actions keep its row. A line that fits renders where
+       it did, flush to the hero's end edge;
+     - wrap, end-aligned, so every item keeps its full width (the shared gap
+       spaces the lines too);
+     - drop the 42vw cap, which only kept a max-content basis from crowding
+       the title: one line whenever the row has room for it;
+     - floor at 6 x --sp-16 (384px): two lines that wide hold all six items
+       (a third only within a few px of the floor at Linux text widths), so
+       beside the title they stay about two lines deep, and a row narrower
+       than that moves them onto their own line under the title. */
+.proto-hero__actions:has(> .b360-export-pdf) {
+  flex: 1 1 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-inline-size: min(100%, calc(var(--sp-16) * 6));
+  max-inline-size: 100%;
+}
+
+/* The <= 640px column hero (10-native-analytics.css:520) gives the actions
+   a full-width line of their own: start-aligned there, as on every route. */
+@container main (max-width: 640px) {
+  .proto-hero__actions:has(> .b360-export-pdf) {
+    justify-content: flex-start;
+  }
+}

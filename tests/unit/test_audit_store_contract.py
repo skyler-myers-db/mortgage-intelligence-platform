@@ -224,6 +224,8 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "create_genie_answer_export_receipt": ("write_genie_answer_export_receipt(",),
     # AUDIT_EXPORT receipt (audit explorer): the whole route body is the audited write.
     "create_audit_export_receipt": ("write_audit_export_receipt(",),
+    # PRINT_EXPORT receipt (Export PDF): the whole route body is the audited write.
+    "create_print_receipt": ("write_print_receipt(",),
     "save_lead": ("store.save_lead(",),
     "delete_lead": ("store.delete_lead(",),
     "save_draft": ("store.save_draft(",),

@@ -147,6 +147,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("POST", "/api/portfolio/preview"): "tests/unit/test_api_routes.py",
     ("GET", "/api/portfolio/{portfolio_id}"): "tests/unit/test_api_routes.py",
     ("PATCH", "/api/portfolio/{portfolio_id}"): "tests/unit/test_api_routes.py",
+    ("POST", "/api/print-receipt"): "tests/unit/test_print_receipt.py",
     ("GET", "/api/sales/aging"): "tests/unit/test_sales_manager_api.py",
     ("GET", "/api/sales/campaign-performance"): "tests/unit/test_sales_manager_api.py",
     ("GET", "/api/sales/conversion"): "tests/unit/test_sales_manager_api.py",

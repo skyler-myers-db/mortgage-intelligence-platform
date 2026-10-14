@@ -1,4 +1,4 @@
-import { Fragment, useId, useRef, useSyncExternalStore } from 'react';
+import { Fragment, useId, useRef, useSyncExternalStore, type RefObject } from 'react';
 import { useModalDialog } from '../../hooks/useModalDialog';
 import {
   KEYMAP_SCOPE_LABELS,
@@ -28,8 +28,17 @@ import './ShortcutOverlay.css';
  * palette it is a native modal <dialog class="cmdk"> (useModalDialog): the
  * full-viewport layer is its own backdrop, and the panel keeps the
  * `shortcut-sheet` test id.
+ *
+ * Exit (motion-01 item 2e, deviation:menu-exit-motion): the Host keeps the
+ * sheet mounted while its dialog fades (`.cmdk`'s allow-discrete exit) and
+ * owns `dialogRef`, whose transition it waits for. `open` drives
+ * useModalDialog, which closes the dialog and returns focus at exit start;
+ * the closing copy is aria-hidden and inert.
  */
 export interface ShortcutOverlayProps {
+  open: boolean;
+  /** Owned by ShortcutOverlayHost, which unmounts the sheet once its exit ends. */
+  dialogRef: RefObject<HTMLDialogElement | null>;
   onClose: () => void;
 }
 
@@ -61,15 +70,14 @@ function sheetEntries(): Map<KeymapScope, SheetEntry[]> {
   return grouped;
 }
 
-export function ShortcutOverlay({ onClose }: ShortcutOverlayProps) {
+export function ShortcutOverlay({ open, dialogRef, onClose }: ShortcutOverlayProps) {
   const titleId = useId();
   const noteId = useId();
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const [singleKeysOn] = useSingleKeyShortcuts();
   // Re-render when a page registers or drops a binding while the sheet is open.
   useSyncExternalStore(subscribeKeyBindings, keyBindingsVersion, keyBindingsVersion);
-  useModalDialog({ open: true, dialogRef, initialFocusRef: closeRef, onDismiss: onClose, backdrop: 'self' });
+  useModalDialog({ open, dialogRef, initialFocusRef: closeRef, onDismiss: onClose, backdrop: 'self' });
 
   const grouped = sheetEntries();
   return (
@@ -78,6 +86,8 @@ export function ShortcutOverlay({ onClose }: ShortcutOverlayProps) {
       className="cmdk"
       aria-labelledby={titleId}
       aria-describedby={singleKeysOn ? undefined : noteId}
+      aria-hidden={!open || undefined}
+      inert={!open}
     >
       <div
         className="cmdk__panel cmdk__panel--sheet"

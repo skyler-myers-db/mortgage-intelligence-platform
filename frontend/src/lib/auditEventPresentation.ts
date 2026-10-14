@@ -45,6 +45,7 @@ export const ACTIVITY_LABELS: Record<string, string> = {
   GOVERNED_TEXT_REFUSED: 'Decision reason refused',
   LEAD_SNOOZE: 'Follow-up snoozed',
   LEAD_SNOOZE_REFUSED: 'Follow-up snooze refused',
+  PRINT_EXPORT: 'Print requested',
 };
 
 export type DecisionTone = 'green' | 'amber' | 'red';

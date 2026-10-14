@@ -2075,6 +2075,17 @@ export interface ResponseSchemas {
     trend_status: string;
     trends: { [key: string]: ResponseSchemas['KpiTrend'] };
   };
+  /** The ``PRINT_EXPORT`` ledger entry the print dialog waits for. */
+  PrintReceipt: {
+    actor: string;
+    audit_event_id: string;
+    borrower_id: string | null;
+    event_type: "PRINT_EXPORT";
+    filter_fingerprint: string | null;
+    recorded_at: string;
+    row_count: number;
+    surface: "borrower_360" | "audit_ledger";
+  };
   ProofEvidenceEvent: {
     confidence: number;
     display_text: string;
@@ -3150,6 +3161,15 @@ export interface RequestSchemas {
     step_id: string;
     tool: string;
   };
+  /** What the page declares about the copy it is about to print. */
+  PrintReceiptRequest: {
+    /** The masked borrower id of the printed dossier (Borrower 360 only). */
+    borrower_id?: string | null;
+    /** The audit explorer query parameters the printed page was read with (audit ledger only). Only their keyed fingerprint is written. */
+    filters?: { [key: string]: string };
+    row_count: number;
+    surface: "borrower_360" | "audit_ledger";
+  };
   /**
    * Request body for ``POST /api/v1/lookup/property-loan``.
    *
@@ -3531,6 +3551,7 @@ export interface ApiOperations {
       correlation_id?: string | null;
       since?: string | null;
       until?: string | null;
+      exclude_own_ledger_reads?: boolean;
     };
     headers: Record<string, never>;
     body: never;
@@ -3551,6 +3572,7 @@ export interface ApiOperations {
       since?: string | null;
       until?: string | null;
       event_id?: string | null;
+      exclude_own_ledger_reads?: boolean;
     };
     headers: Record<string, never>;
     body: never;
@@ -3571,6 +3593,7 @@ export interface ApiOperations {
       since?: string | null;
       until?: string | null;
       event_id?: string | null;
+      exclude_own_ledger_reads?: boolean;
     };
     headers: Record<string, never>;
     body: never;
@@ -4749,6 +4772,13 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body?: RequestSchemas['PortfolioPreviewRequest'] | null;
     ok: ResponseSchemas['PortfolioPreview'];
+  };
+  "POST /api/v1/print-receipt": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['PrintReceiptRequest'];
+    ok: ResponseSchemas['PrintReceipt'];
   };
   "POST /api/v1/sales/distribute": {
     pathParams: Record<string, never>;
