@@ -12,7 +12,13 @@
    to the bottom where the rail item sits. These rules reset the UA popover
    box; where the Popover API is missing the same element is a fixed region
    on --z-tray. Rows wrap: Linux Chromium draws Geist Mono wider, so nothing
-   relies on a one-line fit. */
+   relies on a one-line fit.
+
+   Row grammar, the same in every row: the reason line (id, reason), then the
+   meta line, which always starts with the due time, Snooze after it; a
+   withheld row's closed reason, or the open Snooze group, on its own line
+   below. The meta line takes the full row, so the due time never rides up
+   beside a short reason. */
 .followups {
   position: fixed;
   inset: auto;
@@ -85,6 +91,18 @@
 }
 .followups__id:active { translate: 0 var(--pressed-shift); }
 .followups__why { font-size: var(--fs-12); color: var(--text-2); flex: 1 1 10rem; min-inline-size: 0; }
+/* One phrase (an owner name, "attempt 2", "new signal"): it moves to the next
+   line whole, and wraps inside itself only when it is longer than the line. */
+.followups__qualifier { display: inline-block; max-inline-size: 100%; overflow-wrap: anywhere; }
+.followups__meta {
+  flex-basis: 100%;
+  min-inline-size: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--sp-2);
+  row-gap: var(--sp-1);
+}
 .followups__due { font-size: var(--fs-11); color: var(--text-3); }
 .followups__block {
   flex-basis: 100%;

@@ -170,6 +170,26 @@ describe('the Follow-ups tray', () => {
     expect(why(id(5))).toBe('Assigned to you');
   });
 
+  it('writes every row in one grammar: the reason line, then a meta line led by the due time', async () => {
+    // The geometry is pinned on the rendered build (followups-snooze.fixture.spec.ts (f)); this is the DOM it stands on.
+    const { tray } = await openTray(FULL);
+    const rows = [...tray.querySelectorAll<HTMLElement>('.followups__row')];
+    expect(rows).toHaveLength(FULL.length);
+    for (const row of rows) {
+      const withheld = row.querySelector('.followups__block') !== null;
+      const children = [...row.children].map((child) => child.className);
+      expect(children).toEqual(['followups__id', 'followups__why', 'followups__meta', ...(withheld ? ['followups__block'] : [])]);
+      const meta = [...row.querySelector('.followups__meta')!.children];
+      expect(meta[0].matches('time.followups__due')).toBe(true);
+      expect(meta.slice(1).map((child) => child.matches('button.followups__snooze'))).toEqual(withheld ? [] : [true]);
+    }
+    const qualifiers = (borrower: string) =>
+      [...tray.querySelectorAll(`[data-borrower-id="${borrower}"] .followups__why .followups__qualifier`)].map((node) => node.textContent);
+    expect(qualifiers(id(3))).toEqual(['attempt 2', 'new signal']);
+    expect(qualifiers(id(4))).toEqual(['Routed, not yet assigned']);
+    expect(qualifiers(id(5))).toEqual([]);
+  });
+
   it('keeps every withheld row in its own group, with the closed copy and no Snooze', async () => {
     const { tray } = await openTray(FULL);
     const withheld = sectionOf(tray, 'No longer contactable');

@@ -71,6 +71,31 @@ describe('the due dot', () => {
   });
 });
 
+describe('the open trigger', () => {
+  it('wears the rail active fill, edge and ink from aria-expanded, after :hover, with no location bar', () => {
+    const css = appShell();
+    const rule = /\.rail__item\[aria-expanded="true"\]\s*\{([^}]*)\}/.exec(css);
+    expect(rule?.[1]).toContain('background: var(--accent-soft);');
+    expect(rule?.[1]).toContain('border-color: var(--chip-line);');
+    expect(rule?.[1]).toContain('color: var(--accent-ink);');
+    expect(rule?.index ?? -1).toBeGreaterThan(css.indexOf('.rail__item:hover {'));
+    expect(css).not.toMatch(/\.rail__item\[aria-expanded="true"\]::before/);
+  });
+});
+
+describe('the tray row grammar', () => {
+  it('gives the meta line the full row, so the due time always starts it', () => {
+    expect(tray()).toMatch(/\.followups__meta\s*\{[^}]*flex-basis:\s*100%;/);
+  });
+
+  it('keeps each reason qualifier whole without letting it overflow', () => {
+    const rule = /\.followups__qualifier\s*\{([^}]*)\}/.exec(tray())?.[1] ?? '';
+    expect(rule).toContain('display: inline-block;');
+    expect(rule).toContain('max-inline-size: 100%;');
+    expect(rule).not.toContain('nowrap');
+  });
+});
+
 describe('the tray layer', () => {
   it('declares --z-tray in tokens.css above the Console and Genie', () => {
     const tokens = read('design-system', 'tokens.css');
