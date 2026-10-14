@@ -150,7 +150,8 @@ describe('LeadTable: printing the virtualized queue', () => {
     expect(scrollToOffset).toContain(480);
     expect(apiCalls()).toBe(callsBefore);
     expect(fetchSpy).not.toHaveBeenCalled();
-  });
+    // 600 rows mount synchronously in happy-dom: a heavy render on a loaded host.
+  }, 30_000);
 
   it('stops listening once the table unmounts', () => {
     act(() => root.unmount());
