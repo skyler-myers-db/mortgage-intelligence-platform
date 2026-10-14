@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router';
 import { useApp } from '../AppContext';
@@ -11,7 +11,7 @@ import { leadExportNotice } from './LeadExportNotice';
 import { useLeadCsvExport } from './useLeadCsvExport';
 import { LEAD_VIRTUALIZATION_THRESHOLD, leadRowEstimatePx } from './LeadTable.constants';
 import { leadTableColumnCount, leadTableColumns } from './LeadTable.columns';
-import { keepsServerOrder, sortValue, verifiedCampaignBinding } from './LeadTable.logic';
+import { applyRevocations, keepsServerOrder, sortValue, verifiedCampaignBinding, withoutRevokedReceipts } from './LeadTable.logic';
 import { LeadTableBody } from './LeadTableBody';
 import { useStableRowCallbacks } from './LeadTable.rowCallbacks';
 import { LeadTableHead } from './LeadTableHead';
@@ -40,6 +40,7 @@ import { approverGateReason } from './approverGate';
 import { ariaKeyShortcuts } from '../../lib/keymap';
 import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
+import { useRevokedBorrowers } from '../../lib/mutations/outreach';
 import type { LeadSummary } from '../../types';
 import type { LeadTableProps, LeadTableSort, SortDir, SortKey } from './LeadTable.types';
 import './LeadTable.css';
@@ -58,6 +59,8 @@ export type { LeadTableView } from './LeadTable.columns';
 // explicit Approve: their own chunks, not the shared LeadTable chunk.
 const REVIEW_CHUNK = lazyModule(() => import('./LeadApproveReview'));
 const BULK_REVIEW_CHUNK = lazyModule(() => import('./LeadBulkApproveReview'));
+// Revoke an approval (flow-v2): its own chunk, loaded on an explicit open.
+const RevokeApprovalPanel = lazy(() => import('./RevokeApprovalPanel'));
 
 /**
  * LeadTable — prototype `.surface` + `.tbl` BEM. Sticky thead, hover, row
@@ -201,7 +204,13 @@ export function LeadTable({
     salesTeam,
     queryClient,
   });
-  const { displayLeads, leadsById } = sales;
+  // flow-v2: this session's revokes read pending until the stale-marked queue is read again.
+  const revokedIds = useRevokedBorrowers(queryClient);
+  const displayLeads = applyRevocations(sales.displayLeads, revokedIds);
+  const leadsById = displayLeads === sales.displayLeads
+    ? sales.leadsById
+    : new Map(displayLeads.map((lead) => [lead.borrower_id, lead]));
+  const [revokeFor, setRevokeFor] = useState<string | null>(null);
   // Audit runtime-04 slice 1: sorted once per (rows, sort), not on every
   // render; the id list is what the virtualizer keys rows by. A server sort
   // (the paged Lead Queue, tables-02) is already the rows' order.
@@ -451,6 +460,7 @@ export function LeadTable({
     onAssignmentUpdate: sales.applyLeadUpdate,
     onFocusRow: flow.focusRow,
     onRequestApproval: requests.openRow,
+    onRevoke: setRevokeFor,
   });
   // An Approve waiting on the review chunk (nothing drafted yet), or a
   // review whose chunk is still rendering in.
@@ -565,6 +575,11 @@ export function LeadTable({
           onSubmit={(reasonCode, rationale) => void flow.submitReject(reasonCode, rationale)}
         />
       )}
+      {!triageOn && revokeFor && (
+        <Suspense fallback={null}>
+          <RevokeApprovalPanel key={revokeFor} borrowerId={revokeFor} approvalId={null} onClose={() => setRevokeFor(null)} />
+        </Suspense>
+      )}
       {!triageOn && requests.rowForm}
       {!triageOn && sales.pendingDisposition && (
         <LeadDispositionPanel
@@ -649,7 +664,7 @@ export function LeadTable({
             approvals={approvals}
             selectedIds={approval.selectedIds}
             pendingDecisions={approval.pendingDecisions}
-            decisionReceipts={approval.decisionReceipts}
+            decisionReceipts={withoutRevokedReceipts(approval.decisionReceipts, revokedIds, approvals)}
             cursorId={flow.cursor.cursorId}
             campaignBindingBlocked={campaignBindingBlocked}
             approverGate={approverGate}
@@ -666,6 +681,7 @@ export function LeadTable({
             requestMarks={approvalRequests?.marks ?? null}
             canRequestApproval={requests.path !== null}
             requestBlockedReason={requests.path?.blockedReason ?? null}
+            canRevoke={approverGate === null && campaignBindingState === 'absent'}
           />
         </table>
       </div>

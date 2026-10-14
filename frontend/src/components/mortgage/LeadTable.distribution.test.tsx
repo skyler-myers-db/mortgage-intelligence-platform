@@ -157,7 +157,7 @@ describe('LeadTable: Plan distribution', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('[data-testid="distribution-board-stub"]')).not.toBeNull();
     });
-    expect(boards.at(-1)?.slice().sort()).toEqual(LEADS.map((row) => row.borrower_id).sort());
+    expect(boards[boards.length - 1]?.slice().sort()).toEqual(LEADS.map((row) => row.borrower_id).sort());
     expect(salesTeam).not.toHaveBeenCalled();
   });
 

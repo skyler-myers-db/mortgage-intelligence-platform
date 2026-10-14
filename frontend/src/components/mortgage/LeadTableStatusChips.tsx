@@ -18,6 +18,7 @@ import { preloadIntentProps } from '../../lib/preloadIntent';
 import type { CampaignBinding } from './LeadTable.logic';
 import type { CampaignBindingState } from './useLeadApprovalActions';
 import { APPROVER_ROLE_STATUS_ID } from './approverGate';
+import { REVOKE_CAMPAIGN_BOUND } from './LeadTable.constants';
 
 interface LeadTableStatusChipsProps {
   growthAgentVerification: GrowthAgentCohortVerification | null;
@@ -108,6 +109,8 @@ export function LeadTableStatusChips({
             <span className="mono">campaign {campaignBinding.campaign_id.slice(0, 12)}</span>
           </Tooltip>
           <span>variant {campaignBinding.variant_name}</span>
+          {/* flow-v2: an approver's Revoke is hidden on a bound queue; this says why. */}
+          {approverGate === null && <span className="muted">{REVOKE_CAMPAIGN_BOUND}</span>}
           {boundOfferHref && (
             // bundle-09 item 1: intent warms the Offer route CHUNK only
             // (never a read: opening an offer writes audit rows).

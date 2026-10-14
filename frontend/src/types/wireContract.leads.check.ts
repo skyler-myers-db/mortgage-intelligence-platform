@@ -19,6 +19,7 @@ import type { ApproveResult, OutreachDraftResult, RejectResult } from '../lib/ap
 import type { Borrower360, BorrowerLifecycle, BorrowerProof, EvidenceEvent, LeadScorePoints, LeadSummary, OfferAlternative, OfferRecommendation, ProofEvidenceEvent, ProofFormulaLine, ProofOfferBranch, ProofReproduceQuery, ProofScoreComponent, SourceLabel, WhyPanel } from '../types';
 import type { LeadCountResponse, LeadFacetBucket, LeadFacetsResponse, SavedView, SavedViewCreateRequest, SavedViewListResponse, SavedViewMutationResponse } from './leadFilters';
 import type { ApprovalRequestBatchView, ApprovalRequestCreate, ApprovalRequestCreated, ApprovalRequestList, ApprovalRequestRow, ApprovalRequestSkip, ApprovalRequestWithdrawBody, ApprovalRequestWithdrawn } from './approvalRequests';
+import type { OutreachRevokeRequest, OutreachRevokeResponse } from '../lib/apiClients/outreachRevoke';
 
 export type WireContractLeads = [
   // (i) schema-named hand types
@@ -108,4 +109,9 @@ export type WireContractLeads = [
   Expect<NoPhantomKeys<ApprovalRequestWithdrawn, ApiResponse<'ApprovalRequestWithdrawn'>>>,
   Expect<WireFits<ApprovalRequestWithdrawBody, ApiBody<'POST /api/v1/outreach/approval-requests/{batch_id}/withdraw'>>>,
   Expect<DeepNoPhantomKeys<ApprovalRequestWithdrawBody, ApiBody<'POST /api/v1/outreach/approval-requests/{batch_id}/withdraw'>>>,
+  // Revoke an approval (flow-v2, W5e w5-lead-table-compile).
+  Expect<WireFits<OutreachRevokeRequest, ApiRequest<'OutreachRevokeRequest'>>>,
+  Expect<DeepNoPhantomKeys<OutreachRevokeRequest, ApiRequest<'OutreachRevokeRequest'>>>,
+  Expect<WireFits<ApiResponse<'OutreachRevokeResponse'>, OutreachRevokeResponse>>,
+  Expect<NoPhantomKeys<OutreachRevokeResponse, ApiResponse<'OutreachRevokeResponse'>>>,
 ];

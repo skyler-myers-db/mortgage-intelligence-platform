@@ -11,6 +11,7 @@
  */
 import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import type { SalesTeamMember } from '../../types';
 import { mount } from '../../test/render';
 import { LeadTableBulkActions } from './LeadTableBulkActions';
 import type { BulkRunKind } from './useLeadBulkRun';
@@ -62,7 +63,7 @@ describe('LeadTableBulkActions: a run\'s own button is never native disabled', (
 });
 
 describe('LeadTableBulkActions: Plan distribution (wow-power-5)', () => {
-  const TEAM = [
+  const TEAM: SalesTeamMember[] = [
     { email: 'lo.alpha@summit.example', display_label: 'Loan Officer A', role: 'loan_officer', region: 'Midwest', manager_email: null, capacity_per_day: 25, active: true },
   ];
 

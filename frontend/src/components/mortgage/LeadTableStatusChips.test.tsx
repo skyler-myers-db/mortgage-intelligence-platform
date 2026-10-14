@@ -6,7 +6,9 @@
  *    warms the Offer route CHUNK for that exact href; never a query or
  *    prefetch (opening an offer writes audit rows), nothing under saveData;
  *  - critic-08: the sliced campaign and Growth Agent ids carry the full value
- *    on the design-system tooltip, never a native title.
+ *    on the design-system tooltip, never a native title;
+ *  - flow-v2: a campaign-bound queue says, to an approver, that its
+ *    approvals cannot be revoked in this release.
  */
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -100,5 +102,14 @@ describe('LeadTableStatusChips', () => {
     const id = [...container.querySelectorAll('span.mono')].find((span) => span.textContent?.startsWith('campaign '));
     expect(id?.hasAttribute('title')).toBe(false);
     expect(tooltipText(id ?? null)).toBe(BINDING.campaign_id);
+  });
+
+  it("tells an approver that a campaign-bound queue's approvals cannot be revoked in this release", () => {
+    render();
+    expect(container.querySelector('[data-testid="campaign-operational-provenance"]')?.textContent)
+      .toContain("Campaign-bound approvals can't be revoked in this release.");
+    render({ approverGate: 'Requires approver role' });
+    expect(container.querySelector('[data-testid="campaign-operational-provenance"]')?.textContent)
+      .not.toContain('revoked');
   });
 });

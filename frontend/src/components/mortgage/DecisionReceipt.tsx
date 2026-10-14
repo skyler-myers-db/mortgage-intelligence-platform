@@ -19,7 +19,7 @@
  * BEM block `.decision-receipt` (frontend/src/design-system/components/
  * DecisionReceipt.css, shipped with this lazy module), an extension of the prototype's `.surface`.
  */
-import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import { lazy, Suspense, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { api, ApiError } from '../../lib/api';
@@ -47,6 +47,10 @@ import {
   type DecisionRouting,
 } from './DecisionReceipt.copy';
 import { copyAuditId, printReceipt } from './DecisionReceipt.actions';
+import { REVOKE_CAMPAIGN_BOUND } from './LeadTable.constants';
+
+// flow-v2 (deviation:revoke-approval): the queue receipt's Revoke loads the panel on click.
+const RevokeApprovalPanel = lazy(() => import('./RevokeApprovalPanel'));
 
 // The explorer loads this module on an expanded row and asks it whether the
 // row is a decision (AdminAuditExplorer.row.tsx).
@@ -222,7 +226,8 @@ export function DecisionReceipt({
   headingLevel = 2,
   className = '',
 }: DecisionReceiptProps) {
-  const { canAccessAdmin } = useApp();
+  const { canAccessAdmin, canApprove } = useApp();
+  const [revoking, setRevoking] = useState(false);
   // The ledger opens for administrators and the read-only Auditor role
   // (D-audit-reads-c3), the same decision /audit-ledger's gate makes.
   const canReadLedger = useAuditLedgerAccess();
@@ -393,6 +398,7 @@ export function DecisionReceipt({
   }
 
   const receipt = query.data;
+  const revocable = decidedHere && compact && receipt.decision === 'approved' && Boolean(receipt.approval_id) && canApprove;
   // The seal needs a trusted, gap-free proof whose score is the one shown.
   const sealed = Boolean(
     score && cachedProof && proofSealHolds(cachedProof) && cachedProof.opportunity_score === score.opportunityScore,
@@ -498,8 +504,26 @@ export function DecisionReceipt({
                 {DECISION_RECEIPT_COPY.openExplorer}
               </Link>
             )}
+            {/* flow-v2: only the Lead Queue's in-session receipt (decidedHere and compact) of an approval. */}
+            {revocable && !receipt.campaign_id && (
+              <Button size="sm" variant="ghost" onClick={() => setRevoking(true)} data-testid="decision-receipt-revoke">
+                Revoke approval
+              </Button>
+            )}
+            {revocable && receipt.campaign_id && (
+              <span className="muted fs-12" data-testid="decision-receipt-revoke-bound">{REVOKE_CAMPAIGN_BOUND}</span>
+            )}
           </div>
         </div>
+        {revoking && revocable && receipt.approval_id && receipt.borrower_id && (
+          <Suspense fallback={null}>
+            <RevokeApprovalPanel
+              borrowerId={receipt.borrower_id}
+              approvalId={receipt.approval_id}
+              onClose={() => setRevoking(false)}
+            />
+          </Suspense>
+        )}
       </section>
     </>
   );

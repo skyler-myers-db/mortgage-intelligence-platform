@@ -58,6 +58,8 @@ export interface LeadTableBodyProps {
   /** The request path is open, and its blocked reason (primitives: rows keep identical props). */
   canRequestApproval?: boolean;
   requestBlockedReason?: string | null;
+  /** An approver on an unbound queue may revoke an Approved row (flow-v2). */
+  canRevoke?: boolean;
 }
 
 /**
@@ -115,6 +117,7 @@ export function LeadTableBody({
   requestMarks = null,
   canRequestApproval = false,
   requestBlockedReason = null,
+  canRevoke = false,
 }: LeadTableBodyProps) {
   'use no memo';
 
@@ -233,6 +236,8 @@ export function LeadTableBody({
               canRequestApproval={canRequestApproval}
               requestBlockedReason={requestBlockedReason}
               onRequestApproval={rowCallbacks.onRequestApproval}
+              canRevoke={canRevoke}
+              onRevoke={rowCallbacks.onRevoke}
             />
           </tbody>
         );

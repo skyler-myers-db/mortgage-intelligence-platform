@@ -22,6 +22,10 @@ import { APPROVER_ROLE_STATUS_ID, describedBy } from './approverGate';
 import { ScoreBadge } from './ScoreBadge';
 import type { ApprovalRequestMark } from './LeadTable.types';
 import { Tooltip } from '../ui/Tooltip';
+import type { OutreachDecision } from '../../lib/mutations/outreach';
+
+/** Outreach still revocable (flow-v2): none or queued (an absent status reads as none). */
+const REVOCABLE_OUTREACH: ReadonlySet<string> = new Set(['none', 'queued']);
 
 interface LeadTableRowProps {
   lead: LeadSummary;
@@ -45,7 +49,7 @@ interface LeadTableRowProps {
    * (audit stack-09). Either one disables both buttons; only an approve
    * reads "Approving…".
    */
-  pendingDecision?: 'approve' | 'reject' | null;
+  pendingDecision?: OutreachDecision | null;
   /** The audit row this row's decision wrote; the expanded preview reads it back. */
   decisionReceipt?: LeadDecisionReceipt | null;
   /** The keyboard cursor is on this row (audit tables-03): A / R / X / Enter act here. */
@@ -69,6 +73,12 @@ interface LeadTableRowProps {
   canRequestApproval?: boolean;
   requestBlockedReason?: string | null;
   onRequestApproval?: (borrowerId: string) => void;
+  /**
+   * An approver on an unbound queue (flow-v2; deviation:revoke-approval):
+   * an Approved row whose outreach is none or queued offers Revoke.
+   */
+  canRevoke?: boolean;
+  onRevoke?: (borrowerId: string) => void;
   onToggleRow: (lead: LeadSummary, isOpen: boolean) => void;
   /** `range`: Shift was held (audit tables-07): select from the anchor to this row. */
   onToggleSelect: (borrowerId: string, range: boolean) => void;
@@ -132,6 +142,8 @@ export function LeadTableRow({
   canRequestApproval = false,
   requestBlockedReason = null,
   onRequestApproval,
+  canRevoke = false,
+  onRevoke,
   onToggleRow,
   onToggleSelect,
   onApprove,
@@ -293,6 +305,19 @@ export function LeadTableRow({
     approval: () => (
       <td className="tbl-cell--approval" data-testid={`lead-approval-cell-${lead.borrower_id}`}>
         {approval === 'approved' && <Chip variant="success" icon="check">Approved</Chip>}
+        {approval === 'approved' && canRevoke && onRevoke && REVOCABLE_OUTREACH.has(lead.outreach_status ?? 'none') && (
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="down"
+            className="lead-table__revoke"
+            loading={pendingDecision === 'revoke'}
+            tooltip="Revoke approval"
+            aria-label={`Revoke approval for ${lead.borrower_id}`}
+            onClick={() => onRevoke(lead.borrower_id)}
+            data-testid={`lead-revoke-${lead.borrower_id}`}
+          />
+        )}
         {approval === 'rejected' && <Chip variant="danger" icon="cross">Rejected</Chip>}
         {approval === 'hold' && <Chip variant="warning" icon="shield">Hold</Chip>}
         {!approval && !isApprovalEligible && <Chip variant="warning" icon="shield">Not actionable</Chip>}

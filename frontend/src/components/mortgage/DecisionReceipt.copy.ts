@@ -5,8 +5,9 @@
  */
 import type { IconName } from '../Icon';
 import type { DecisionOutcome } from '../../lib/apiTypes';
+import type { RevokeRefusalReason } from '../../lib/apiClients/outreachRevoke';
 import { formatDate, parseBackendTimestamp } from '../../lib/time';
-import { REJECT_REASONS } from './LeadTable.constants';
+import { REJECT_REASONS, REVOKE_CAMPAIGN_BOUND } from './LeadTable.constants';
 
 export const DECISION_RECEIPT_COPY = {
   title: 'Decision receipt',
@@ -164,3 +165,16 @@ export function humanizeReasonCode(code: string): string {
   const known = REJECT_REASONS.find((reason) => reason.code === code);
   return known ? known.label : code.replace(/_/g, ' ');
 }
+
+/**
+ * One closed sentence per revoke 409 `reason` (flow-v2, owner ruling O1's
+ * revoke copy). The server's detail is never shown; nothing was written.
+ */
+export const REVOKE_REFUSAL_COPY: Readonly<Record<RevokeRefusalReason, string>> = {
+  not_current: "This approval is no longer the borrower's current decision. Nothing was revoked; reload to see the latest.",
+  campaign_bound: REVOKE_CAMPAIGN_BOUND,
+  dispositioned: 'A call has been logged since the approval, so it can no longer be revoked.',
+  outcome_recorded: 'A lead outcome has been recorded since the approval, so it can no longer be revoked.',
+  delivered: "This approval's outreach has been delivered, so it can no longer be revoked.",
+  assignment_worked: 'The loan officer has already worked this lead, so the approval can no longer be revoked.',
+};

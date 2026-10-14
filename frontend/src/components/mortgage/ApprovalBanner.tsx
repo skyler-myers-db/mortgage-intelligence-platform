@@ -67,7 +67,11 @@ interface ApprovalBannerProps {
   borrowerId?: string | null;
 }
 
-const PENDING_LINE = { approve: 'Approval being recorded…', reject: 'Rejection being recorded…' } as const;
+const PENDING_LINE = {
+  approve: 'Approval being recorded…',
+  reject: 'Rejection being recorded…',
+  revoke: 'Revocation being recorded…',
+} as const;
 
 export function ApprovalBanner({
   text,

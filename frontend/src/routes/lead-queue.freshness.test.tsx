@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QUEUE_VERSION_KEY, QUEUE_VERSION_SERVER_TTL_MS } from '../lib/queueVersion';
 import { AssignmentLifecycleAdvance } from '../components/mortgage/AssignmentLifecycleAdvance';
 import { useLeadQueueFreshness } from './lead-queue.freshness';
+import { useRevokeApproval } from '../lib/mutations/outreach';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -73,6 +74,17 @@ beforeEach(() => {
       return new Response(JSON.stringify({
         assignment: { assignment_id: 'asg-own-1', borrower_id: 'B-OWNWRITE00001', status: 'contact_drafted' },
         audit_event_id: 'audit-lifecycle-1',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (path === '/api/v1/outreach/revoke') {
+      // flow-v2: the revoke commits (the ledger moves) before it returns.
+      ledger = ledger === V1 ? V2 : V3;
+      return new Response(JSON.stringify({
+        revoked: true,
+        approval_id: 'rv-own-1',
+        revoked_approval_id: '6f1c4d2e-8b3a-4c5d-9e6f-7a8b9c0d1e2f',
+        audit_event_id: 'audit-revoke-own-1',
+        released_assignment_id: null,
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
     otherPaths.push(path);
@@ -288,6 +300,47 @@ describe('useLeadQueueFreshness', () => {
       expect(pill(), `no pill at t=${at} ms`).toBeNull();
     }
     expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('an own revoke (the keyed mutation) never raises "Queue updated"', async () => {
+    // flow-v2: the revoke runs under ['mip','outreach','revoke'], which the
+    // own-write store counts like approve and reject.
+    function RevokeHarness() {
+      const revoke = useRevokeApproval(queryClient);
+      return (
+        <button
+          type="button"
+          data-testid="own-revoke"
+          onClick={() => revoke.mutate({
+            decision: 'revoke',
+            borrowerId: 'B-OWNWRITE00001',
+            approvalId: '6f1c4d2e-8b3a-4c5d-9e6f-7a8b9c0d1e2f',
+            rationale: 'Mis-keyed offer.',
+            requestId: 'req-own-revoke-1',
+          })}
+        />
+      );
+    }
+    const onRefresh = vi.fn();
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Harness enabled dataUpdatedAt={T0} onRefresh={onRefresh} />
+          <RevokeHarness />
+        </QueryClientProvider>,
+      );
+    });
+    await advance(1);
+    await advanceTo(10_000);
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="own-revoke"]')!.click());
+    await advance(1);
+    expect(ledger, 'the revoke committed').toBe(V2);
+    for (const at of [60_001, 90_000, 120_001, 150_000]) {
+      await advanceTo(at);
+      expect(pill(), `no pill at t=${at} ms`).toBeNull();
+    }
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(otherPaths).toEqual([]);
   });
 
   it('a version reading cached before mount never becomes the baseline', async () => {
