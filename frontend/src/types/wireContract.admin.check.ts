@@ -13,10 +13,9 @@ import type { ApiBody, ApiOk, ApiRequest, ApiResponse } from './api.gen';
 import type { DeepNoPhantomKeys, Expect, NoPhantomKeys, WireFits } from './wireContract.check';
 import type { FootprintPayload } from '../components/FootprintProvider';
 import type { HealthPayload as BannerHealthPayload } from '../components/mortgage/DegradedBanner';
-import type { AdminCapabilitiesResponse, AdminOperationRunBody, adminApi } from '../lib/apiClients/admin';
+import type { AdminOperationRunBody, adminApi } from '../lib/apiClients/admin';
 import type { AuditRollupResponse } from '../lib/apiClients/audit';
 import type { RefusalReportFamilyCount, RefusalReportItem, RefusalReportListResponse, RefusalReportQuestionResponse } from '../lib/apiClients/refusalReports';
-import type { FieldPerformanceCell, FieldPerformanceResponse } from '../lib/apiClients/fieldPerformance';
 import type { PrintReceipt, PrintReceiptRequest } from '../lib/apiClients/printReceipt';
 import type { AuditExportReceipt, AuditExportReceiptRequest, AuditFacetsResponse, AuditFacetValue } from '../lib/apiClients/auditExplorer';
 import type { ActorAuditEventPage, ActorAuditEventSummary, AuditEventPage, AuditEventRow, DecisionReceipt, HealthPayload as LibHealthPayload } from '../lib/apiTypes';
@@ -29,8 +28,6 @@ export type WireContractAdmin = [
   // (i) schema-named hand types
   Expect<WireFits<ApiResponse<'AuditRollupResponse'>, AuditRollupResponse>>,
   Expect<NoPhantomKeys<AuditRollupResponse, ApiResponse<'AuditRollupResponse'>>>,
-  Expect<WireFits<ApiResponse<'AdminCapabilitiesResponse'>, AdminCapabilitiesResponse>>,
-  Expect<NoPhantomKeys<AdminCapabilitiesResponse, ApiResponse<'AdminCapabilitiesResponse'>>>,
   Expect<WireFits<ApiResponse<'ActorAuditEventPage'>, ActorAuditEventPage>>,
   Expect<NoPhantomKeys<ActorAuditEventPage, ApiResponse<'ActorAuditEventPage'>>>,
   Expect<WireFits<ApiResponse<'ActorAuditEventSummary'>, ActorAuditEventSummary>>,
@@ -71,10 +68,6 @@ export type WireContractAdmin = [
   Expect<NoPhantomKeys<KpiProofResponse, ApiResponse<'KpiProofResponse'>>>,
   Expect<WireFits<ApiResponse<'KpiProofParam'>, KpiProofParam>>,
   Expect<NoPhantomKeys<KpiProofParam, ApiResponse<'KpiProofParam'>>>,
-  Expect<WireFits<ApiResponse<'FieldPerformanceResponse'>, FieldPerformanceResponse>>,
-  Expect<NoPhantomKeys<FieldPerformanceResponse, ApiResponse<'FieldPerformanceResponse'>>>,
-  Expect<WireFits<ApiResponse<'FieldPerformanceCell'>, FieldPerformanceCell>>,
-  Expect<NoPhantomKeys<FieldPerformanceCell, ApiResponse<'FieldPerformanceCell'>>>,
   Expect<WireFits<ApiResponse<'PrintReceipt'>, PrintReceipt>>,
   Expect<NoPhantomKeys<PrintReceipt, ApiResponse<'PrintReceipt'>>>,
   Expect<WireFits<PrintReceiptRequest, ApiRequest<'PrintReceiptRequest'>>>,

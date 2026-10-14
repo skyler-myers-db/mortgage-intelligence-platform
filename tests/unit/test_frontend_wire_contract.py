@@ -27,6 +27,7 @@ import json
 import re
 from functools import cache
 
+from tests.unit import frontend_wire_aliases as aliases
 from tests.unit import frontend_wire_contract as wire
 from tests.unit import frontend_wire_raw_sites as wire_raw
 from tests.unit import frontend_wire_source as source
@@ -98,9 +99,22 @@ def test_every_schema_named_hand_type_has_its_pair() -> None:
     sides = {side for side, _, _ in named}
     print(f"schema-named hand types: {len(named)} ({sorted(sides)})")
 
+    covered = aliases.alias_coverage(project)
+    print(f"generated aliases counted as coverage: {len(covered)}")
+
     assert {"response", "request"} <= sides
     assert checks.unresolved == []
-    assert wire.missing_coverage(named, checks.pairs) == []
+    assert wire.missing_coverage(named, checks.pairs, covered) == []
+
+
+def test_every_indexed_vocabulary_has_its_widening_guard() -> None:
+    """D-api-types-a3 P3: `export type X = ApiResponse<'S'>['f']` needs `Expect<string extends X ? false : true>`."""
+
+    project, _, checks, _ = _state()
+    vocabularies = aliases.indexed_vocabularies(project)
+    print(f"indexed vocabularies: {len(vocabularies)}")
+
+    assert aliases.unguarded_vocabularies(project, checks.files) == []
 
 
 def test_every_network_call_site_is_bound_or_exempt() -> None:

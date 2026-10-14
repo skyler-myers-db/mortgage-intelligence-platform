@@ -762,10 +762,18 @@ def schema_named(project: Project, responses: set[str], requests: set[str]) -> l
     return found
 
 
-def missing_coverage(named: list[tuple[str, str, str]], pairs: list[Pair]) -> list[str]:
+def missing_coverage(
+    named: list[tuple[str, str, str]],
+    pairs: list[Pair],
+    aliases: set[tuple[str, str, str]] | frozenset[tuple[str, str, str]] = frozenset(),
+) -> list[str]:
+    """Schema-named hand types with no pair; a same-named generated alias (P3) is its own coverage."""
+
     have = {(p.side, p.hand, p.wire, p.key) for p in pairs}
     missing: list[str] = []
     for side, rel, name in named:
+        if (side, rel, name) in aliases:
+            continue
         wire = "ApiResponse" if side == "response" else "ApiRequest"
         if (side, (rel, name), wire, name) not in have:
             missing.append(f"{side} pair {rel}:{name} vs {wire}<'{name}'>")
