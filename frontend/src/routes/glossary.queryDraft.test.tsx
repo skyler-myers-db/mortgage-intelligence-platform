@@ -15,7 +15,10 @@
  * "keeps every key typed before the router commits" and "a mid-word edit
  * keeps the caret where it was typed"; treating every stamped location as
  * the field's own write (dropping the `stamp > draft.landed` bound) fails
- * "Back to an older search shows that search, not the newer draft".
+ * "Back to an older search shows that search, not the newer draft"; never
+ * treating one as the field's own write (always taking ?q= on a location
+ * change) fails "an own write that lands after a newer keystroke keeps the
+ * newer draft".
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -43,16 +46,19 @@ function type(value: string): void {
   });
 }
 
+/** One key typed at the caret; call it inside an act. */
+function keyAtCaret(key: string): void {
+  const input = field();
+  const at = input.selectionStart ?? input.value.length;
+  setDomValue(input.value.slice(0, at) + key + input.value.slice(at));
+  input.setSelectionRange(at + 1, at + 1);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 /** Keys typed at the caret, all before the router's transition can commit (one act). */
 async function typeFast(keys: string): Promise<void> {
   await act(async () => {
-    for (const key of keys) {
-      const input = field();
-      const at = input.selectionStart ?? input.value.length;
-      setDomValue(input.value.slice(0, at) + key + input.value.slice(at));
-      input.setSelectionRange(at + 1, at + 1);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    }
+    for (const key of keys) keyAtCaret(key);
   });
 }
 
@@ -116,6 +122,49 @@ describe('glossary search draft', () => {
     await navigate(1);
     expect(shownQuery()).toBe('lien');
     expect(field().value).toBe('lien');
+  });
+
+  it('an own write that lands after a newer keystroke keeps the newer draft', async () => {
+    // The app's navigations finish synchronously (no loaders: the
+    // data-router-loaders ruling), so React renders every pending ?q= write
+    // together and only the newest lands. A loader here makes each write land
+    // late, so the first one commits while a second keystroke is already in
+    // the field: an older own write must not pull the field back to it.
+    act(() => root.unmount());
+    const landings: Array<() => void> = [];
+    let holdWrites = false;
+    router = createMemoryRouter(
+      [{
+        path: '/glossary',
+        element: <GlossaryRoute />,
+        HydrateFallback: () => null,
+        loader: () => (holdWrites ? new Promise<null>((resolve) => landings.push(() => resolve(null))) : null),
+      }],
+      { initialEntries: ['/glossary'] },
+    );
+    root = createRoot(container);
+    await act(async () => root.render(<RouterProvider router={router} />));
+    holdWrites = true;
+
+    field().focus();
+    await act(async () => {
+      keyAtCaret('e');
+      landings.shift()!();
+      // Let the first write commit to the router before the next key.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(router.state.location.search).toBe('?q=e');
+      keyAtCaret('q');
+    });
+    expect(shownQuery(), 'the older write has landed').toBe('e');
+    expect(field().value).toBe('eq');
+    expect(field().selectionStart).toBe(2);
+
+    await act(async () => {
+      landings.shift()!();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(shownQuery()).toBe('eq');
+    expect(field().value).toBe('eq');
   });
 
   it('a link that changes or drops ?q= from outside replaces the draft', async () => {
