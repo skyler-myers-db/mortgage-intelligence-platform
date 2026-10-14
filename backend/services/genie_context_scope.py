@@ -7,11 +7,13 @@ may edit it, and presses Ask, so the scope rides inside the question text and
 therefore inside the prompt of record, its ``question_hash`` and the
 ``RUN_GENIE`` audit row. Nothing here changes the submit path.
 
-Pure by construction: no Lakebase, no warehouse query, no Genie call and no
-audit write. The guards it runs read the governed place dimension the startup
-warm already resolved (the same read every submit makes), and the city slot
-reads only the set that warm PUBLISHED: when it is empty the slot is withheld
-as ``place_unavailable`` rather than reaching for live coverage.
+Render-only: no Lakebase, no Genie call, no audit write, and no warehouse
+query of its own. The guards it runs read the shared governed place
+dimension, which the startup warm resolves; like every guard caller (a
+submit included), the first call after its 900 s TTL lapses refreshes it
+from gold inline, under the resolver's lock and fail-closed. The city slot
+reads only the set that resolver PUBLISHED: when it is empty the slot is
+withheld as ``place_unavailable`` rather than reaching for live coverage.
 
 Fail-closed twice over. Every vocabulary is closed (segment names from the
 registry, federal state names, shipped county names screened by the governed

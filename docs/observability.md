@@ -875,11 +875,15 @@ cancel method, which forces the decision then.
 (codes only: segment codes, a USPS code, a county FIPS, a ZIP, a governed
 `CITY~ST` key, a Competitor ref, assignee `me`) into a reviewed question for
 the Genie composer, or a closed `withheld` reason. It is render-only and
-click-only: no Genie call, no Lakebase, no warehouse query, no audit row
-(`AUDIT EXEMPT` in `tests/unit/test_audit_store_contract.py`). Its guard
-battery reads the governed place dimension the startup warm already
-resolved, as every submit does; the city slot reads only the published
-city set and is withheld as `place_unavailable` while it is empty.
+click-only: no Genie call, no Lakebase, no warehouse query of its own, no
+audit row (`AUDIT EXEMPT` in `tests/unit/test_audit_store_contract.py`). Its
+guard battery reads the shared governed place dimension the startup warm
+resolves, as every submit does; the first guard call after that
+dimension's 900 s TTL lapses (this route's or any other) refreshes it from
+gold inline, and a failed refresh degrades fail-closed
+(`genie_place_dimension_unavailable`). The city slot reads only the
+published city set and is withheld as `place_unavailable` while it is
+empty.
 Backpressure: the `default` bucket and no dependency slot, so a click never
 spends the 30/min Genie budget. RUM reports it under its canonical route
 template (segments `genie` and `context-scope`). Logger
