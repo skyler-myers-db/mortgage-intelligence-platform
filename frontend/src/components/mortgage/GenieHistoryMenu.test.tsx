@@ -326,6 +326,72 @@ describe('GenieHistoryMenu', () => {
       expect(menu()?.hasAttribute('aria-hidden')).toBe(false);
     });
 
+    /**
+     * A browser drops focus from a row that turns disabled (the pick's
+     * loading state) before the menu closes; happy-dom does not, so the
+     * tests below blur the row themselves. The browser-layer proof is
+     * genie-context-deeplink.cross-engine.fixture.spec.ts (h).
+     */
+    const toggleButton = () => container.querySelector<HTMLButtonElement>('button[aria-label="Genie conversation history"]');
+
+    it('a keyboard pick whose row lost focus to <body> hands focus back to the toggle as the menu closes', async () => {
+      withExitTransition();
+      mocks.genieSessions.mockResolvedValue([PAST]);
+      const session = deferred<{ conversation_id: string; turns: [] }>();
+      mocks.genieSession.mockReturnValue(session.promise);
+      render(true);
+      await waitUntil(() => rowTitles().length === 1);
+      const row = container.querySelector<HTMLButtonElement>('.genie-history__item');
+      act(() => row?.focus());
+      act(() => row?.click());
+      // The browser's focus fixup for a disabled element (happy-dom will not
+      // blur a disabled button, so focus passes through a node that leaves).
+      act(() => {
+        const sink = document.createElement('input');
+        document.body.appendChild(sink);
+        sink.focus();
+        sink.remove();
+      });
+      expect(document.activeElement).toBe(document.body);
+
+      await act(async () => session.resolve({ conversation_id: 'conv-past', turns: [] }));
+      await waitUntil(() => mocks.onLoad.mock.calls.length === 1);
+      render(false);
+      expect(document.activeElement).toBe(toggleButton());
+    });
+
+    it('a pick whose focus the user moved elsewhere leaves it there', async () => {
+      mocks.genieSessions.mockResolvedValue([PAST]);
+      const session = deferred<{ conversation_id: string; turns: [] }>();
+      mocks.genieSession.mockReturnValue(session.promise);
+      render(true);
+      await waitUntil(() => rowTitles().length === 1);
+      const row = container.querySelector<HTMLButtonElement>('.genie-history__item');
+      act(() => row?.focus());
+      act(() => row?.click());
+      const elsewhere = document.createElement('input');
+      container.appendChild(elsewhere);
+      act(() => elsewhere.focus());
+
+      await act(async () => session.resolve({ conversation_id: 'conv-past', turns: [] }));
+      await waitUntil(() => mocks.onLoad.mock.calls.length === 1);
+      render(false);
+      expect(document.activeElement).toBe(elsewhere);
+    });
+
+    it('a failed pick keeps the menu open and hands the row\'s focus to the toggle', async () => {
+      mocks.genieSessions.mockResolvedValue([PAST]);
+      mocks.genieSession.mockRejectedValue(new Error('fixture: detail is down'));
+      render(true);
+      await waitUntil(() => rowTitles().length === 1);
+      const row = container.querySelector<HTMLButtonElement>('.genie-history__item');
+      act(() => row?.focus());
+      await act(async () => row?.click());
+      await waitUntil(() => container.textContent?.includes('History unavailable') ?? false);
+      expect(menu()).not.toBeNull();
+      expect(document.activeElement).toBe(toggleButton());
+    });
+
     it('a closed menu never reads, exit or not', async () => {
       withExitTransition();
       mocks.genieSessions.mockResolvedValue([PAST]);

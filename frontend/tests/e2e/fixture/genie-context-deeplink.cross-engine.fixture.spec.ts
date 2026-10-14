@@ -12,8 +12,11 @@
  *   (h) motion-01 item 2e: the History menu's exiting class (inert,
  *       aria-hidden) holds until transitionend, then the menu leaves the
  *       DOM; under reduced motion it leaves at once; a reopen mid-exit reads
- *       the sessions again; and keys pressed while the floating panel's menu
- *       fades over the Lead Queue (A, R) still reach the queue.
+ *       the sessions again; keys pressed while the floating panel's menu
+ *       fades over the Lead Queue (A, R) still reach the queue; and a
+ *       keyboard pick hands focus back to the History toggle, never to
+ *       <body> (the picked row turns disabled while it loads), with and
+ *       without reduced motion.
  *
  * The rest of the lane is genie-context-deeplink.fixture.spec.ts.
  */
@@ -160,6 +163,25 @@ test.describe('(h) the History menu exit (motion-01 item 2e)', () => {
     await expect(menu(page).getByRole('menuitem')).toHaveCount(1);
     await expect.poll(() => sessionListReads(mockApi), STAGE_WAIT).toBe(2);
   });
+
+  for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+    test(`a keyboard pick returns focus to the History toggle as the menu leaves · ${reducedMotion}`, async ({ app, mockApi, page }) => {
+      registerSessions(mockApi);
+      await page.emulateMedia({ reducedMotion });
+      await app.gotoRoute('/ask-genie');
+      await toggle(page).click();
+      const row = menu(page).getByRole('menuitem', { name: /Equity spread/ });
+      await expect(row).toHaveCount(1);
+      await row.focus();
+      await expect(row).toBeFocused();
+      await page.keyboard.press('Enter');
+      await expect(page).toHaveURL(new RegExp(`/ask-genie/${LINK_B_ID}$`), STAGE_WAIT);
+      await expect(askPanel(page)).toContainText(LINK_B_ANSWER);
+      await expect(menu(page)).toHaveCount(0, STAGE_WAIT);
+      await expect(toggle(page)).toHaveAttribute('aria-expanded', 'false');
+      await expect(toggle(page)).toBeFocused();
+    });
+  }
 
   test('keys during the exit: with the panel’s History menu fading over the Lead Queue, A and R reach the queue', async ({ app, mockApi, page }) => {
     registerSessions(mockApi);

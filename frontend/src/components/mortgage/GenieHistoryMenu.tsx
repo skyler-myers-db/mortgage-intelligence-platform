@@ -33,6 +33,20 @@ function readGenieSessionTurns(
 }
 
 /**
+ * Focus goes back to the History toggle when it sits inside the menu, or when
+ * a row held it at pick time and the browser has since dropped it to <body>
+ * (the row turned disabled while loading, then the menu went inert or
+ * unmounted). Focus the user moved anywhere else stays where it is.
+ */
+function returnFocusToToggle(toggle: HTMLButtonElement | null, menu: HTMLElement | null, pickHadFocus: boolean): void {
+  if (toggle === null || typeof document === 'undefined') return;
+  const active = document.activeElement;
+  const inMenu = active !== null && menu !== null && menu.contains(active);
+  const dropped = pickHadFocus && (active === null || active === document.body);
+  if (inMenu || dropped) toggle.focus({ preventScroll: true });
+}
+
+/**
  * Past-conversation picker for the floating Genie panel header.
  *
  * Reads `GET /api/genie/sessions` on open (not on mount) so the panel's first
@@ -51,8 +65,11 @@ function readGenieSessionTurns(
  * `genie-history__menu--exiting`, inert and aria-hidden, so it takes no
  * pointer, no focus and is no open overlay for the keymap; instant under
  * reduced motion. Focus inside the menu returns to the toggle as the exit
- * STARTS. The rows are keyed by an open generation, so a reopen during the
- * exit remounts them and reads again: one read per open.
+ * STARTS, and so does focus a picked row held: the pick records it before the
+ * row turns disabled, because by the close the browser has already dropped
+ * it to <body>. A failed pick (the menu stays open, its rows hidden) hands it
+ * to the toggle the same way. The rows are keyed by an open generation, so a
+ * reopen during the exit remounts them and reads again: one read per open.
  * deviation:genie-history-exit
  */
 export function GenieHistoryMenu({
@@ -74,6 +91,9 @@ export function GenieHistoryMenu({
   const loadLatchRef = useRef(false);
   const toggleRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  // Whether focus sat in the menu when a row was picked, recorded before the
+  // rows turn disabled (a ref: read by the close effect, never rendered).
+  const pickHadFocusRef = useRef(false);
   // One generation per open (tracked during render, the useExitRetained
   // pattern): it keys the rows, so a reopen mid-exit mounts fresh rows.
   const [lastOpen, setLastOpen] = useState(open);
@@ -84,11 +104,13 @@ export function GenieHistoryMenu({
   }
   const shownGeneration = useExitRetained(open ? generation : null, menuRef);
   const exiting = !open && shownGeneration !== null;
-  // The exit starts with focus back on the toggle (never left in an inert menu).
+  // The exit starts with focus back on the toggle (never left in an inert
+  // menu, never dropped to <body> by a picked row).
   useEffect(() => {
     if (open) return;
-    const active = typeof document === 'undefined' ? null : document.activeElement;
-    if (active && menuRef.current?.contains(active)) toggleRef.current?.focus();
+    const pickHadFocus = pickHadFocusRef.current;
+    pickHadFocusRef.current = false;
+    returnFocusToToggle(toggleRef.current, menuRef.current, pickHadFocus);
   }, [open]);
 
   /** Resolves false only when the picked session could not be read; an
@@ -96,6 +118,8 @@ export function GenieHistoryMenu({
   const load = (conversationId: string): Promise<boolean> => {
     if (loadLatchRef.current || disabled) return Promise.resolve(true);
     loadLatchRef.current = true;
+    const active = typeof document === 'undefined' ? null : document.activeElement;
+    pickHadFocusRef.current = active !== null && (menuRef.current?.contains(active) ?? false);
     setLoadingId(conversationId);
     return readGenieSessionTurns(conversationId)
       .then((session) => {
@@ -104,6 +128,16 @@ export function GenieHistoryMenu({
         return true;
       })
       .catch(() => false)
+      .then((ok) => {
+        if (!ok) {
+          // The menu stays open and hides its rows: the picked row's focus
+          // goes to the toggle now, not to <body>.
+          const pickHadFocus = pickHadFocusRef.current;
+          pickHadFocusRef.current = false;
+          returnFocusToToggle(toggleRef.current, menuRef.current, pickHadFocus);
+        }
+        return ok;
+      })
       .finally(() => {
         loadLatchRef.current = false;
         setLoadingId(null);
