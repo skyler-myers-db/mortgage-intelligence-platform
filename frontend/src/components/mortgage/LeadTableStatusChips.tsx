@@ -14,7 +14,8 @@ import { Chip } from '../Primitives';
 import { Tooltip } from '../ui/Tooltip';
 import type { GrowthAgentCohortVerification } from '../../lib/api';
 import { formatCount } from '../../lib/formatters';
-import { preloadIntentProps } from '../../lib/preloadIntent';
+import { saveDataRequested } from '../../lib/prefetch';
+import { preloadRouteForPath } from '../../lib/routePreloaders';
 import type { CampaignBinding } from './LeadTable.logic';
 import type { CampaignBindingState } from './useLeadApprovalActions';
 import { APPROVER_ROLE_STATUS_ID } from './approverGate';
@@ -37,6 +38,18 @@ interface LeadTableStatusChipsProps {
   requestPathOpen?: boolean;
   /** An approver's request-scoped queue (flow-02): its scope row, from the route. */
   requestScopeRow?: ReactNode;
+}
+
+/**
+ * bundle-09 item 1: warm the Offer route CHUNK on intent (never a read:
+ * opening an offer writes audit rows), nothing while the browser asks to save
+ * data. Inline rather than lib/preloadIntent: importing that module here
+ * split it out of the Console's chunk into a shared one and added its name to
+ * the entry chunk's preload list (initial JS); both functions used here
+ * already ship in the entry chunk.
+ */
+function warmOfferRoute(path: string): void {
+  if (!saveDataRequested()) preloadRouteForPath(path);
 }
 
 export function LeadTableStatusChips({
@@ -112,9 +125,12 @@ export function LeadTableStatusChips({
           {/* flow-v2: an approver's Revoke is hidden on a bound queue; this says why. */}
           {approverGate === null && <span className="muted">{REVOKE_CAMPAIGN_BOUND}</span>}
           {boundOfferHref && (
-            // bundle-09 item 1: intent warms the Offer route CHUNK only
-            // (never a read: opening an offer writes audit rows).
-            <Link className="btn btn--primary btn--sm" to={boundOfferHref} {...preloadIntentProps(boundOfferHref)}>
+            <Link
+              className="btn btn--primary btn--sm"
+              to={boundOfferHref}
+              onPointerEnter={() => warmOfferRoute(boundOfferHref)}
+              onFocus={() => warmOfferRoute(boundOfferHref)}
+            >
               Open bound offer
               <Icon name="chevright" size={12} />
             </Link>

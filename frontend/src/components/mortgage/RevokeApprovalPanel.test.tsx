@@ -19,8 +19,17 @@ import { ApiError } from '../../lib/apiTransport';
 import { clearToasts, getToasts } from '../../lib/toast';
 import { mount } from '../../test/render';
 import { AppStoreContext, createAppStore, type AppStore } from '../appStore';
-import { REVOKE_REFUSAL_COPY } from './DecisionReceipt.copy';
-import RevokeApprovalPanel, { REVOKE_COPY, REVOKE_NOT_RECORDED } from './RevokeApprovalPanel';
+import { RATIONALE_GOVERNED_REFUSAL } from '../../lib/apiClients/approvalRequests';
+import { useRevokeApproval } from '../../lib/mutations/outreach';
+import { describeWriteFailure, toastWriteFailure } from './leadWriteFailureToast';
+import RevokeApprovalPanel, { REVOKE_COPY } from './RevokeApprovalPanel';
+import {
+  REVOKE_FAILED_LINE,
+  REVOKE_FAILURE_COPY,
+  REVOKE_GOVERNED_REFUSAL,
+  REVOKE_NOT_RECORDED,
+  REVOKE_REFUSAL_COPY,
+} from './RevokeApprovalPanel.failure';
 
 const revokeApproval = vi.hoisted(() => vi.fn());
 const borrowerLifecycle = vi.hoisted(() => vi.fn());
@@ -55,11 +64,25 @@ async function flush() {
   });
 }
 
+/** The shell's side: it owns the revoke mutation and hands it, with the toasts, to the panel. */
+function Shell({ approvalId }: { approvalId: string | null }) {
+  const revoke = useRevokeApproval(client);
+  return (
+    <RevokeApprovalPanel
+      borrowerId={BORROWER}
+      approvalId={approvalId}
+      onClose={onClose}
+      revoke={revoke}
+      failureDeps={{ toastWriteFailure, describeWriteFailure }}
+    />
+  );
+}
+
 async function render(approvalId: string | null = APPROVAL) {
   const mounted = await mount(
     <QueryClientProvider client={client}>
       <AppStoreContext.Provider value={store}>
-        <RevokeApprovalPanel borrowerId={BORROWER} approvalId={approvalId} onClose={onClose} />
+        <Shell approvalId={approvalId} />
       </AppStoreContext.Provider>
     </QueryClientProvider>,
   );
@@ -89,8 +112,10 @@ function refused(status: number, message: string, extra: { reason?: string; retr
 }
 
 beforeAll(async () => {
-  // describeApiError's sentence rides AsyncFailure's lazy chunk: transformed once up front.
+  // describeApiError's sentence rides AsyncFailure's lazy chunk, and the failure
+  // copy rides its own: both transformed once up front.
   await import('../ui/AsyncFailure');
+  await import('./RevokeApprovalPanel.failure');
 }, 60_000);
 
 beforeEach(() => {
@@ -211,7 +236,7 @@ describe('RevokeApprovalPanel: the lifecycle read on open', () => {
   ])('shows why nothing can be revoked instead of the form (%o)', async (life, copy) => {
     borrowerLifecycle.mockResolvedValue({ borrower_id: BORROWER, ...life });
     const { container } = await render(null);
-    expect(container.querySelector('[data-testid="revoke-approval-blocked"]')?.textContent).toBe(copy);
+    expect(container.querySelector('[data-testid="revoke-approval-note"]')?.textContent).toBe(copy);
     expect(field()).toBeNull();
     expect(confirm()).toBeNull();
   });
@@ -237,7 +262,7 @@ describe('RevokeApprovalPanel: failures stay inline, in closed copy', () => {
     await render();
     await type(RATIONALE);
     await submit();
-    expect(failure()).toBe(REVOKE_COPY.governed);
+    expect(failure()).toBe(REVOKE_FAILURE_COPY.governed);
   });
 
   it("NB-1's unaudited 422 says nothing was recorded, never 'Shorten the reason'", async () => {
@@ -245,7 +270,7 @@ describe('RevokeApprovalPanel: failures stay inline, in closed copy', () => {
     await render();
     await type(RATIONALE);
     await submit();
-    expect(failure()).toBe(REVOKE_COPY.notRecorded);
+    expect(failure()).toBe(REVOKE_FAILURE_COPY.notRecorded);
     expect(failure()).not.toContain('recorded.');
     expect(failure()).not.toContain('Shorten');
   });
@@ -255,7 +280,7 @@ describe('RevokeApprovalPanel: failures stay inline, in closed copy', () => {
     await render();
     await type(RATIONALE);
     await submit();
-    expect(failure()).toBe(REVOKE_COPY.invalid);
+    expect(failure()).toBe(REVOKE_FAILURE_COPY.invalid);
   });
 
   it('a changed actor says nothing was recorded', async () => {
@@ -263,7 +288,7 @@ describe('RevokeApprovalPanel: failures stay inline, in closed copy', () => {
     await render();
     await type(RATIONALE);
     await submit();
-    expect(failure()).toBe(REVOKE_COPY.actorChanged);
+    expect(failure()).toBe(REVOKE_FAILURE_COPY.actorChanged);
   });
 
   it('a 503 never claims a record, and never shows the raw message', async () => {
@@ -281,7 +306,7 @@ describe('RevokeApprovalPanel: failures stay inline, in closed copy', () => {
     await render();
     await type(RATIONALE);
     await submit();
-    expect(failure()).toBe(`${REVOKE_COPY.failed}.`);
+    expect(failure()).toBe(REVOKE_FAILED_LINE);
   });
 
   it('a 429 with Retry-After raises the shared toast; its Retry is inert until the countdown, then re-sends the SAME request id', async () => {
@@ -294,7 +319,7 @@ describe('RevokeApprovalPanel: failures stay inline, in closed copy', () => {
     await flush();
     const [toast] = getToasts();
     expect(toast?.tone).toBe('error');
-    expect(toast?.title).toBe(REVOKE_COPY.failed);
+    expect(toast?.title).toBe(REVOKE_FAILURE_COPY.failed);
     expect(toast?.action?.label).toBe('Retry');
     // The Toaster holds the action inert until this instant (the shared countdown).
     expect(toast?.actionReadyAt ?? 0).toBeGreaterThan(Date.now());
@@ -305,6 +330,12 @@ describe('RevokeApprovalPanel: failures stay inline, in closed copy', () => {
     const ids = revokeApproval.mock.calls.map((call) => (call[0] as Record<string, string>).request_id);
     expect(ids[1]).toBe(ids[0]);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('RevokeApprovalPanel: copy parity', () => {
+  it("the governed 422 detail is the approval-request client's (one server sentence, two copies pinned equal)", () => {
+    expect(REVOKE_GOVERNED_REFUSAL).toBe(RATIONALE_GOVERNED_REFUSAL);
   });
 });
 

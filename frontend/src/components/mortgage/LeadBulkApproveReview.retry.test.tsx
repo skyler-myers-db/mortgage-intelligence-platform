@@ -16,6 +16,7 @@ import { ApiError } from '../../lib/apiTransport';
 import { clearToasts, getToasts } from '../../lib/toast';
 import { mount } from '../../test/render';
 import { LeadBulkApproveReview, SAMPLE_DRAFTS_THROTTLED } from './LeadBulkApproveReview';
+import { describeWriteFailure, toastWriteFailure } from './leadWriteFailureToast';
 
 function lead(borrowerId: string, offer: string): LeadSummary {
   return {
@@ -51,6 +52,7 @@ async function render() {
       canStartApproval={() => true}
       draftForApproval={draftForApproval as unknown as (id: string, signal?: AbortSignal) => Promise<OutreachDraftResult>}
       onSamplesChange={() => undefined}
+      writeFailure={{ toastWriteFailure, describeWriteFailure }}
     />,
   );
   await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="lead-bulk-preview-samples"]')!.click());

@@ -8,7 +8,7 @@ import { Button, Chip } from '../Primitives';
 import { offerCounts } from './LeadBulkApproveReview.counts';
 import { bulkSampleCoverage } from './LeadBulkApproveReview.coverage';
 import { stratifiedSampleIds } from './LeadBulkApproveReview.sampler';
-import { describeWriteFailure, toastWriteFailure } from './leadWriteFailureToast';
+import type { WriteFailureToasts } from './leadWriteFailureToast';
 import './LeadBulkApproveReview.css';
 
 // A bulk run's progress and report ride this lazy chunk too (tables-07),
@@ -76,6 +76,8 @@ export interface LeadBulkApproveReviewProps {
   onSamplesChange: (drafts: ReadonlyMap<string, OutreachDraftResult>) => void;
   /** Whether every offer in the run has a ready sample; sent only when it changes. */
   onCoverageChange?: (coverage: BulkSampleCoverageChange) => void;
+  /** The queue's write-failure toast and sentence, handed in by the shell (W5e budget: no shared-chunk import here). */
+  writeFailure: WriteFailureToasts;
 }
 
 const NO_COVERAGE: BulkSampleCoverageChange = { complete: false, missingOfferLabels: [] };
@@ -86,6 +88,7 @@ export function LeadBulkApproveReview({
   draftForApproval,
   onSamplesChange,
   onCoverageChange,
+  writeFailure,
 }: LeadBulkApproveReviewProps) {
   const noteId = useId();
   const [samples, setSamples] = useState<BulkSample[]>([]);
@@ -182,7 +185,7 @@ export function LeadBulkApproveReview({
             draftSamples(retryIds, false);
           }
         : undefined;
-      toastWriteFailure(SAMPLE_DRAFTS_THROTTLED, throttle, 'the sample drafts', retry);
+      writeFailure.toastWriteFailure(SAMPLE_DRAFTS_THROTTLED, throttle, 'the sample drafts', retry);
     };
     for (const borrowerId of ids) {
       draftForApproval(borrowerId, ctrl.signal)
@@ -197,7 +200,7 @@ export function LeadBulkApproveReview({
             if (throttle === null) throttle = err;
           }
           // describeApiError's sentence, never the raw message.
-          return describeWriteFailure(err instanceof ApiError ? err : null, 'the sample draft').then((sentence) => {
+          return writeFailure.describeWriteFailure(err instanceof ApiError ? err : null, 'the sample draft').then((sentence) => {
             if (!ctrl.signal.aborted) settle(borrowerId, { status: 'error', error: sentence ?? SAMPLE_FAILED });
           });
         })

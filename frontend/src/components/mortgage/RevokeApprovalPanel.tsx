@@ -13,28 +13,21 @@
  * lifecycle ONCE on open (audit-free) to name the approval, and shows why
  * nothing can be revoked instead of the form when there is no current
  * approval or outreach has started. Every failure stays inline with the
- * typed reason kept, in closed copy that claims a record only when one was
- * written (owner ruling O1, W5e C9); the raw error text is never shown.
+ * typed reason kept, in closed copy (RevokeApprovalPanel.failure, loaded on
+ * the failure only) that claims a record only when one was written.
  */
 import { useContext, useEffect, useId, useRef, useState, type ContextType } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api, ApiError } from '../../lib/api';
-import { RATIONALE_GOVERNED_REFUSAL } from '../../lib/apiClients/approvalRequests';
-import { isRevokeRefusalReason } from '../../lib/apiClients/outreachRevoke';
 import { pushEscapeLayer } from '../../lib/escapeStack';
-import { useRevokeApproval } from '../../lib/mutations/outreach';
+import type { useRevokeApproval } from '../../lib/mutations/outreach';
 import { intentFingerprint, useIntentRequestIds } from '../../lib/mutations/requestIds';
 import { queryKeys } from '../../lib/queryKeys';
 import { toast } from '../../lib/toast';
 import { AppStoreContext } from '../appStore';
 import { Button, SurfaceTitle } from '../Primitives';
-import { REVOKE_REFUSAL_COPY } from './DecisionReceipt.copy';
-import { describeWriteFailure, toastWriteFailure } from './leadWriteFailureToast';
+import type { RevokeFailureCopy, RevokeFailureDeps } from './RevokeApprovalPanel.failure';
 import './RevokeApprovalPanel.css';
-
-export const REVOKE_REASON_MAX_LENGTH = 500;
-/** NB-1's fixed, unaudited 422 (backend/api/outreach_revoke.py REVOKE_NOT_RECORDED). */
-export const REVOKE_NOT_RECORDED = 'The request could not be recorded.';
 
 export const REVOKE_COPY = {
   consequence: 'The borrower returns to pending. Nothing is sent; an unworked assignment is released. '
@@ -44,29 +37,18 @@ export const REVOKE_COPY = {
   outreachStarted: 'Outreach has started for this borrower, so the approval can no longer be revoked.',
   checking: 'Checking the current approval…',
   checkFailed: "Couldn't check this borrower's approval. Close and try again.",
-  actorChanged: 'The signed-in user changed. Nothing was recorded.',
-  governed: 'The reason was refused by the governed text policy, and the refusal was recorded. '
-    + 'Rewrite it without personal details or protected-class language.',
-  notRecorded: 'Nothing was recorded: the audit ledger could not record this revoke. '
-    + 'Rewrite the reason without personal details, then try again.',
-  invalid: 'Shorten the reason and leave out personal details.',
-  failed: "Couldn't revoke the approval",
 } as const;
 
-/** The inline sentence for a failed revoke, or null when the 429 toast carries it. */
-export function revokeFailureCopy(error: unknown): { text: string; final: boolean } | 'toast' | 'describe' {
-  if (!(error instanceof ApiError)) return 'describe';
-  if (error.reason === 'actor_changed') return { text: REVOKE_COPY.actorChanged, final: false };
-  if (error.status === 409 && isRevokeRefusalReason(error.reason)) {
-    return { text: REVOKE_REFUSAL_COPY[error.reason], final: error.reason === 'campaign_bound' };
-  }
-  if (error.status === 422) {
-    if (error.message === RATIONALE_GOVERNED_REFUSAL) return { text: REVOKE_COPY.governed, final: false };
-    if (error.message === REVOKE_NOT_RECORDED) return { text: REVOKE_COPY.notRecorded, final: false };
-    return { text: REVOKE_COPY.invalid, final: false };
-  }
-  if (error.status === 429 && (error.retryAfterMs ?? 0) > 0) return 'toast';
-  return 'describe';
+/** The failure copy could not load (a stale deploy, offline): a fixed line, never the raw error. */
+const FAILED_FALLBACK: RevokeFailureCopy = { text: "Couldn't revoke the approval.", final: false };
+
+/**
+ * The failure copy's chunk, loaded on a failure only. Module level: an
+ * import() inside the component is a React Compiler bailout (BuildHIR
+ * "Handle Import expressions") that would leave the whole panel uncompiled.
+ */
+function loadFailureCopy() {
+  return import('./RevokeApprovalPanel.failure');
 }
 
 export interface RevokeApprovalPanelProps {
@@ -75,6 +57,10 @@ export interface RevokeApprovalPanelProps {
   approvalId: string | null;
   /** Cancel, Escape or a recorded revoke: the parent closes the panel. */
   onClose: () => void;
+  /** The shell's revoke mutation (it outlives the panel: a late 429 Retry still lands). */
+  revoke: ReturnType<typeof useRevokeApproval>;
+  /** The queue's write-failure toast and sentence, handed in (no shared-chunk import here). */
+  failureDeps: RevokeFailureDeps;
 }
 
 type AppStore = NonNullable<ContextType<typeof AppStoreContext>>;
@@ -88,20 +74,23 @@ function dropOverride(store: AppStore | null, borrowerId: string): void {
   });
 }
 
-export default function RevokeApprovalPanel({ borrowerId, approvalId, onClose }: RevokeApprovalPanelProps) {
-  const queryClient = useQueryClient();
-  const revoke = useRevokeApproval(queryClient);
+export default function RevokeApprovalPanel({
+  borrowerId,
+  approvalId,
+  onClose,
+  revoke,
+  failureDeps,
+}: RevokeApprovalPanelProps) {
   const requestIds = useIntentRequestIds();
   const store = useContext(AppStoreContext);
   const [reason, setReason] = useState('');
-  const [failure, setFailure] = useState<{ text: string; final: boolean } | null>(null);
+  const [failure, setFailure] = useState<RevokeFailureCopy | null>(null);
   const fieldRef = useRef<HTMLTextAreaElement | null>(null);
   const inFlight = useRef(false);
   const liveRef = useRef(true);
   const [opener] = useState(() => (typeof document === 'undefined' ? null : document.activeElement));
   const titleId = useId();
   const hintId = useId();
-  const failureId = useId();
   // The Approved-row path names no approval: one audit-free lifecycle read, on this open only.
   const lifecycle = useQuery({
     queryKey: queryKeys.borrowerLifecycle(borrowerId),
@@ -114,14 +103,18 @@ export default function RevokeApprovalPanel({ borrowerId, approvalId, onClose }:
   });
   const life = approvalId === null ? lifecycle.data : null;
   const target = approvalId ?? (life?.approval_status === 'approved' ? life.approval_id ?? null : null);
-  const blocked = approvalId !== null || !life
+  const note = approvalId !== null
     ? null
-    : target === null
-      ? REVOKE_COPY.noApproval
-      : life.outreach_status && life.outreach_status !== 'none' && life.outreach_status !== 'queued'
-        ? REVOKE_COPY.outreachStarted
-        : null;
-  const ready = target !== null && blocked === null;
+    : lifecycle.isError
+      ? REVOKE_COPY.checkFailed
+      : !life
+        ? REVOKE_COPY.checking
+        : target === null
+          ? REVOKE_COPY.noApproval
+          : life.outreach_status && life.outreach_status !== 'none' && life.outreach_status !== 'queued'
+            ? REVOKE_COPY.outreachStarted
+            : null;
+  const ready = target !== null && note === null;
 
   const cancel = () => {
     onClose();
@@ -168,26 +161,27 @@ export default function RevokeApprovalPanel({ borrowerId, approvalId, onClose }:
           requestAnimationFrame(() => document.getElementById(`lead-row-toggle-${borrowerId}`)?.focus());
         },
         onError: (error) => {
-          const copy = revokeFailureCopy(error);
-          if (copy === 'toast') {
-            // The same request id on the retry (the intent is unchanged); inert until the countdown ends.
-            toastWriteFailure(REVOKE_COPY.failed, error, 'the revoke', () => send(approval, rationale, fingerprint));
-            return;
-          }
-          if (copy !== 'describe') {
-            setFailure(copy);
-            return;
-          }
-          void describeWriteFailure(error instanceof ApiError ? error : null, 'the revoke').then((sentence) => {
-            if (liveRef.current) setFailure({ text: sentence ?? `${REVOKE_COPY.failed}.`, final: false });
-          });
+          // The same request id on a 429's Retry: the intent is unchanged (unsettled).
+          loadFailureCopy()
+            .then((module) => module.describeRevokeFailure(
+              error,
+              error instanceof ApiError
+                ? { status: error.status, reason: error.reason, message: error.message, retryAfterMs: error.retryAfterMs }
+                : null,
+              () => send(approval, rationale, fingerprint),
+              failureDeps,
+            ))
+            .then((copy) => copy, () => FAILED_FALLBACK)
+            .then((copy) => {
+              if (copy && liveRef.current) setFailure(copy);
+            });
         },
       },
     );
   };
 
   const submit = () => {
-    if (target === null || blocked !== null || failure?.final) return;
+    if (target === null || note !== null || failure?.final) return;
     const rationale = reason.trim();
     if (rationale.length === 0) {
       fieldRef.current?.focus();
@@ -211,13 +205,11 @@ export default function RevokeApprovalPanel({ borrowerId, approvalId, onClose }:
         <SurfaceTitle level={3} id={titleId}>{`Revoke the approval for ${borrowerId}?`}</SurfaceTitle>
         <div className="muted fs-12">{REVOKE_COPY.consequence}</div>
       </div>
-      {approvalId === null && lifecycle.isPending && (
-        <p role="status" className="muted fs-12 revoke-panel__note">{REVOKE_COPY.checking}</p>
+      {note && (
+        <p role={note === REVOKE_COPY.checkFailed ? 'alert' : 'status'} className="revoke-panel__note" data-testid="revoke-approval-note">
+          {note}
+        </p>
       )}
-      {approvalId === null && lifecycle.isError && (
-        <p role="alert" className="revoke-panel__failure">{REVOKE_COPY.checkFailed}</p>
-      )}
-      {blocked && <p role="status" className="revoke-panel__note" data-testid="revoke-approval-blocked">{blocked}</p>}
       {ready && (
         <label className="decision-panel__field decision-panel__field--wide">
           <span className="field__label">Reason for revoking</span>
@@ -225,9 +217,10 @@ export default function RevokeApprovalPanel({ borrowerId, approvalId, onClose }:
             ref={fieldRef}
             value={reason}
             required
-            maxLength={REVOKE_REASON_MAX_LENGTH}
+            maxLength={500}
             aria-invalid={failure !== null || undefined}
-            aria-describedby={failure ? `${hintId} ${failureId}` : hintId}
+            aria-describedby={hintId}
+            aria-errormessage={failure ? `${hintId}-failure` : undefined}
             onChange={(event) => setReason(event.target.value)}
             data-testid="revoke-approval-reason"
           />
@@ -250,7 +243,7 @@ export default function RevokeApprovalPanel({ borrowerId, approvalId, onClose }:
         )}
       </div>
       {failure && (
-        <p id={failureId} role="alert" className="revoke-panel__failure" data-testid="revoke-approval-failure">
+        <p id={`${hintId}-failure`} role="alert" className="revoke-panel__failure" data-testid="revoke-approval-failure">
           {failure.text}
         </p>
       )}

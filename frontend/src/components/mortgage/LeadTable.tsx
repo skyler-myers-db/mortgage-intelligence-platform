@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router';
 import { useApp } from '../AppContext';
@@ -26,6 +26,7 @@ import { useLeadApprovalActions, type CampaignBindingState } from './useLeadAppr
 import { requestDecisionBatchId, useLeadTableRequests } from './LeadTable.requests';
 import { useLeadSalesActions } from './useLeadSalesActions';
 import { LeadDistributionBoard, useCanPlanDistribution } from './LeadTable.distribution';
+import { useLeadRevoke, WRITE_FAILURE_TOASTS } from './LeadTable.revoke';
 import { useLeadTableKeyboardFlow } from './useLeadTableKeyboardFlow';
 import { useLeadTableFillHeight } from './useLeadTableFillHeight';
 import { useTableScrollClearance } from './useTableScrollClearance';
@@ -59,8 +60,6 @@ export type { LeadTableView } from './LeadTable.columns';
 // explicit Approve: their own chunks, not the shared LeadTable chunk.
 const REVIEW_CHUNK = lazyModule(() => import('./LeadApproveReview'));
 const BULK_REVIEW_CHUNK = lazyModule(() => import('./LeadBulkApproveReview'));
-// Revoke an approval (flow-v2): its own chunk, loaded on an explicit open.
-const RevokeApprovalPanel = lazy(() => import('./RevokeApprovalPanel'));
 
 /**
  * LeadTable — prototype `.surface` + `.tbl` BEM. Sticky thead, hover, row
@@ -211,7 +210,8 @@ export function LeadTable({
   const leadsById = useMemo(() => (displayLeads === sales.displayLeads
     ? sales.leadsById
     : new Map(displayLeads.map((lead) => [lead.borrower_id, lead]))), [displayLeads, sales.displayLeads, sales.leadsById]);
-  const [revokeFor, setRevokeFor] = useState<string | null>(null);
+  // flow-v2: the revoke panel slot (the Approved row's Revoke, the queue receipt's).
+  const revoke = useLeadRevoke(queryClient);
   // Audit runtime-04 slice 1: sorted once per (rows, sort), not on every
   // render; the id list is what the virtualizer keys rows by. A server sort
   // (the paged Lead Queue, tables-02) is already the rows' order.
@@ -466,7 +466,7 @@ export function LeadTable({
     onAssignmentUpdate: sales.applyLeadUpdate,
     onFocusRow: flow.focusRow,
     onRequestApproval: requests.openRow,
-    onRevoke: setRevokeFor,
+    onRevoke: revoke.open,
   });
   // An Approve waiting on the review chunk (nothing drafted yet), or a
   // review whose chunk is still rendering in.
@@ -581,11 +581,7 @@ export function LeadTable({
           onSubmit={(reasonCode, rationale) => void flow.submitReject(reasonCode, rationale)}
         />
       )}
-      {!triageOn && revokeFor && (
-        <Suspense fallback={null}>
-          <RevokeApprovalPanel key={revokeFor} borrowerId={revokeFor} approvalId={null} onClose={() => setRevokeFor(null)} />
-        </Suspense>
-      )}
+      {!triageOn && revoke.panel}
       {!triageOn && requests.rowForm}
       {!triageOn && sales.pendingDisposition && (
         <LeadDispositionPanel
@@ -775,6 +771,7 @@ export function LeadTable({
                 setSamplesShown(drafts.size > 0);
               }}
               onCoverageChange={(coverage) => setSamplesCoverAllOffers(coverage.complete)}
+              writeFailure={WRITE_FAILURE_TOASTS}
             />
           ) : null}
         />

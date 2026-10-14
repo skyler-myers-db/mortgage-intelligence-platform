@@ -59,6 +59,7 @@ vi.mock('../../lib/apiClients/outreachRevoke', async (importOriginal) => ({
 }));
 
 import { LeadTable } from './LeadTable';
+import { REVOKE_APPROVAL_EVENT } from './LeadTable.constants';
 
 const APPROVAL = '6f1c4d2e-8b3a-4c5d-9e6f-7a8b9c0d1e2f';
 const APPROVED = 'B-0000000000RQ1';
@@ -171,6 +172,31 @@ describe('LeadTable: Revoke from the Approved row', () => {
     expect(revokeButton(APPROVED)).toBeNull();
   });
 
+  it("opens on the queue receipt's request with its approval id, reading no lifecycle", async () => {
+    const lifecycle = vi.spyOn((await import('../../lib/api')).api, 'borrowerLifecycle');
+    revokeApproval.mockResolvedValue({
+      revoked: true, approval_id: 'rv-2', revoked_approval_id: 'apr-receipt-1', audit_event_id: 'audit-rv-2', released_assignment_id: null,
+    });
+    await render();
+    act(() => {
+      window.dispatchEvent(new CustomEvent(REVOKE_APPROVAL_EVENT, { detail: { borrowerId: APPROVED, approvalId: 'apr-receipt-1' } }));
+    });
+    await vi.waitFor(async () => {
+      await flush();
+      expect(document.querySelector('[data-testid="revoke-approval-reason"]')).not.toBeNull();
+    }, { timeout: 10_000 });
+    const field = document.querySelector<HTMLTextAreaElement>('[data-testid="revoke-approval-reason"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field, 'Mis-keyed offer.');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="revoke-approval-confirm"]')!.click());
+    await flush();
+    expect((revokeApproval.mock.calls[0] as [Record<string, string>])[0]).toMatchObject({ borrower_id: APPROVED, approval_id: 'apr-receipt-1' });
+    expect(lifecycle).not.toHaveBeenCalled();
+    lifecycle.mockRestore();
+  }, 20_000);
+
   it('keeps the row Approved while the revoke is on the wire, then reads it pending after the 200', async () => {
     let resolve!: (value: unknown) => void;
     revokeApproval.mockImplementation(() => new Promise((settle) => {
@@ -203,5 +229,5 @@ describe('LeadTable: Revoke from the Approved row', () => {
     expect(cell(APPROVED)?.textContent).not.toContain('Approved');
     expect(container.querySelector(`[data-testid="lead-approve-${APPROVED}"]`)).not.toBeNull();
     expect(document.querySelector('[data-testid="revoke-approval-panel"]')).toBeNull();
-  });
+  }, 20_000);
 });

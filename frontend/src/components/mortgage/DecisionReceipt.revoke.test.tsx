@@ -6,15 +6,16 @@
  * 'Revoke approval', and only to an approver; a campaign-bound approval
  * shows why it cannot be revoked instead; Offer (decidedHere, not compact)
  * and the decision history (compact, not decidedHere) are unchanged. The
- * button opens the lazy panel on the receipt's approval id, with no
- * lifecycle read. critic-08: the sliced campaign row carries its full id on
- * the design-system tooltip.
+ * button asks the Lead Queue shell (REVOKE_APPROVAL_EVENT) to open its
+ * revoke panel on the receipt's approval id, so the receipt chunk loads no
+ * queue code and reads no lifecycle. critic-08: the sliced campaign row
+ * carries its full id on the design-system tooltip.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DecisionReceipt as DecisionReceiptPayload } from '../../lib/apiTypes';
 
 const apiMocks = vi.hoisted(() => ({
@@ -39,6 +40,7 @@ vi.mock('../AppContext', () => ({
 }));
 
 import { DecisionReceipt } from './DecisionReceipt';
+import { REVOKE_APPROVAL_EVENT } from './LeadTable.constants';
 
 const AUDIT_ID = '5b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d';
 const APPROVAL_ID = '11111111-1111-4111-8111-111111111111';
@@ -70,10 +72,6 @@ describe('DecisionReceipt: Revoke on the queue receipt', () => {
   let container: HTMLDivElement;
   let root: Root;
   let client: QueryClient;
-
-  beforeAll(async () => {
-    await import('./RevokeApprovalPanel');
-  }, 60_000);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -108,14 +106,18 @@ describe('DecisionReceipt: Revoke on the queue receipt', () => {
   const revoke = () => container.querySelector<HTMLButtonElement>('[data-testid="decision-receipt-revoke"]');
   const bound = () => container.querySelector('[data-testid="decision-receipt-revoke-bound"]');
 
-  it('shows Revoke approval on the queue receipt of an approval, and opens the panel on its approval id', async () => {
+  it('shows Revoke approval on the queue receipt of an approval, and asks the shell to revoke its approval', async () => {
     await show(LEDGER, { decidedHere: true, compact: true });
     expect(revoke()?.textContent).toBe('Revoke approval');
+    const asked: unknown[] = [];
+    const listener = (event: Event) => asked.push((event as CustomEvent<unknown>).detail);
+    window.addEventListener(REVOKE_APPROVAL_EVENT, listener);
     act(() => revoke()!.click());
-    await vi.waitFor(() => expect(container.querySelector('[data-testid="revoke-approval-reason"]')).not.toBeNull());
-    expect(container.querySelector('h3')?.textContent).toContain('Revoke the approval for B-0000000000001?');
-    // The receipt names the approval: no lifecycle read.
+    window.removeEventListener(REVOKE_APPROVAL_EVENT, listener);
+    expect(asked).toEqual([{ borrowerId: 'B-0000000000001', approvalId: APPROVAL_ID }]);
+    // The receipt names the approval: no lifecycle read, and no panel of its own.
     expect(apiMocks.borrowerLifecycle).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="revoke-approval-panel"]')).toBeNull();
   });
 
   it.each([

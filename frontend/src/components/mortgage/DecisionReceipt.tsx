@@ -19,7 +19,7 @@
  * BEM block `.decision-receipt` (frontend/src/design-system/components/
  * DecisionReceipt.css, shipped with this lazy module), an extension of the prototype's `.surface`.
  */
-import { lazy, Suspense, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { api, ApiError } from '../../lib/api';
@@ -47,10 +47,7 @@ import {
   type DecisionRouting,
 } from './DecisionReceipt.copy';
 import { copyAuditId, printReceipt } from './DecisionReceipt.actions';
-import { REVOKE_CAMPAIGN_BOUND } from './LeadTable.constants';
-
-// flow-v2 (deviation:revoke-approval): the queue receipt's Revoke loads the panel on click.
-const RevokeApprovalPanel = lazy(() => import('./RevokeApprovalPanel'));
+import { REVOKE_APPROVAL_EVENT, REVOKE_CAMPAIGN_BOUND, type RevokeApprovalRequest } from './LeadTable.constants';
 
 // The explorer loads this module on an expanded row and asks it whether the
 // row is a decision (AdminAuditExplorer.row.tsx).
@@ -227,7 +224,6 @@ export function DecisionReceipt({
   className = '',
 }: DecisionReceiptProps) {
   const { canAccessAdmin, canApprove } = useApp();
-  const [revoking, setRevoking] = useState(false);
   // The ledger opens for administrators and the read-only Auditor role
   // (D-audit-reads-c3), the same decision /audit-ledger's gate makes.
   const canReadLedger = useAuditLedgerAccess();
@@ -505,8 +501,16 @@ export function DecisionReceipt({
               </Link>
             )}
             {/* flow-v2: only the Lead Queue's in-session receipt (decidedHere and compact) of an approval. */}
-            {revocable && !receipt.campaign_id && (
-              <Button size="sm" variant="ghost" onClick={() => setRevoking(true)} data-testid="decision-receipt-revoke">
+            {/* flow-v2 (deviation:revoke-approval): the Lead Queue shell opens its revoke panel on this approval. */}
+            {revocable && !receipt.campaign_id && receipt.approval_id && receipt.borrower_id && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => window.dispatchEvent(new CustomEvent<RevokeApprovalRequest>(REVOKE_APPROVAL_EVENT, {
+                  detail: { borrowerId: receipt.borrower_id ?? '', approvalId: receipt.approval_id ?? '' },
+                }))}
+                data-testid="decision-receipt-revoke"
+              >
                 Revoke approval
               </Button>
             )}
@@ -515,15 +519,6 @@ export function DecisionReceipt({
             )}
           </div>
         </div>
-        {revoking && revocable && receipt.approval_id && receipt.borrower_id && (
-          <Suspense fallback={null}>
-            <RevokeApprovalPanel
-              borrowerId={receipt.borrower_id}
-              approvalId={receipt.approval_id}
-              onClose={() => setRevoking(false)}
-            />
-          </Suspense>
-        )}
       </section>
     </>
   );

@@ -4,12 +4,12 @@
  * POST /api/outreach/revoke appends a revoke decision row and its
  * OUTREACH_REVOKE audit row in one Lakebase transaction; the approve row is
  * never changed. A refused revoke answers 409 `{detail, reason}` (one of
- * the six REVOKE_REFUSAL_REASONS) and writes nothing; a governed-text
+ * the six RevokeRefusalReason codes) and writes nothing; a governed-text
  * refusal of the rationale is a 422 that WAS recorded (GOVERNED_TEXT_REFUSED,
  * owner ruling O1).
  *
- * Imported only by the lazy revoke mutation hook and panel, never spread
- * into `api` (api.ts sits in the initial closure).
+ * Imported only by the revoke mutation hook (lib/mutations/outreach), never
+ * spread into `api` (api.ts sits in the initial closure).
  */
 import { postJson } from '../apiTransport';
 
@@ -34,19 +34,13 @@ export interface OutreachRevokeResponse {
 }
 
 /** The 409 `reason` codes (backend/services/outreach_revoke.REVOKE_REFUSED_DETAIL). */
-export const REVOKE_REFUSAL_REASONS = [
-  'not_current',
-  'campaign_bound',
-  'dispositioned',
-  'outcome_recorded',
-  'delivered',
-  'assignment_worked',
-] as const;
-export type RevokeRefusalReason = (typeof REVOKE_REFUSAL_REASONS)[number];
-
-export function isRevokeRefusalReason(value: unknown): value is RevokeRefusalReason {
-  return typeof value === 'string' && (REVOKE_REFUSAL_REASONS as readonly string[]).includes(value);
-}
+export type RevokeRefusalReason =
+  | 'not_current'
+  | 'campaign_bound'
+  | 'dispositioned'
+  | 'outcome_recorded'
+  | 'delivered'
+  | 'assignment_worked';
 
 export function revokeApproval(body: OutreachRevokeRequest, signal?: AbortSignal): Promise<OutreachRevokeResponse> {
   return postJson<OutreachRevokeResponse, OutreachRevokeRequest>('/api/outreach/revoke', body, signal);

@@ -77,3 +77,15 @@ export const DISPOSITION_OPTIONS: { outcome: CallDisposition['outcome']; label: 
  * chunk to read it.
  */
 export const REVOKE_CAMPAIGN_BOUND = "Campaign-bound approvals can't be revoked in this release.";
+
+/**
+ * The queue receipt's 'Revoke approval' asks the Lead Queue shell to open its
+ * revoke panel on the receipt's approval (flow-v2): a window event, so the
+ * receipt chunk imports nothing of the queue (LeadTable.revoke listens).
+ */
+export const REVOKE_APPROVAL_EVENT = 'mip:revoke-approval';
+
+export interface RevokeApprovalRequest {
+  borrowerId: string;
+  approvalId: string;
+}
