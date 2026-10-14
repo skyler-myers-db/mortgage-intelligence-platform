@@ -16,6 +16,7 @@ import { EvidenceChip } from '../components/Primitives';
 import { api, type AnalyticsQueryOptions } from '../lib/api';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { pushEscapeLayer } from '../lib/escapeStack';
+import { preloadIntentProps } from '../lib/preloadIntent';
 import {
   SCORE_BAND_HIGH_MIN,
   SCORE_BAND_MED_MIN,
@@ -516,6 +517,8 @@ function ScatterPointLink({
 }) {
   const position = scatterPosition(point.equity_pct, point.rate_spread_bps, layout);
   const band = point.score_band ?? scoreBand(point.opportunity_score);
+  // The dossier chunk warms on intent (bundle-09); VIEW_BORROWER stays click-only.
+  const warm = preloadIntentProps(`/borrower-360/${point.borrower_id}`);
   return (
     <Link
       className={`analytics-scatter__dot analytics-scatter__dot--band score--${band}`}
@@ -529,9 +532,14 @@ function ScatterPointLink({
       data-scatter-key={pointCoordinateKey(point)}
       tabIndex={tabIndex}
       {...tipHandlers}
+      onPointerEnter={(event) => {
+        tipHandlers.onPointerEnter(event);
+        warm.onPointerEnter();
+      }}
       onFocus={(event) => {
         onFocus();
         tipHandlers.onFocus(event);
+        warm.onFocus();
       }}
     />
   );
@@ -632,6 +640,7 @@ function ScatterPointCluster({
                 <Link
                   className="analytics-scatter__cluster-link"
                   to={`/borrower-360/${encodeURIComponent(point.borrower_id)}`}
+                  {...preloadIntentProps(`/borrower-360/${point.borrower_id}`)}
                   aria-label={`${point.display_name}, ${point.borrower_id}, score ${point.opportunity_score} (${pointBand}). Open Borrower 360.`}
                 >
                   <span className={`analytics-scatter__cluster-score score--${pointBand}`} aria-hidden="true" />

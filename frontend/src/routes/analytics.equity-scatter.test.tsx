@@ -4,13 +4,22 @@ import { act, type ReactElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 // @ts-expect-error Frontend app types intentionally exclude Node globals; this
 // unit test reads the design-system CSS text under Vitest only.
 import { readFileSync } from 'node:fs';
 // @ts-expect-error see node:fs note above.
 import { join } from 'node:path';
 import { designCss } from '../test/designCss';
+
+// bundle-09: borrower links warm the dossier CHUNK through lib/preloadIntent.
+const preload = vi.hoisted(() => ({ paths: [] as string[] }));
+vi.mock('../lib/routePreloaders', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/routePreloaders')>()),
+  preloadRouteForPath: (path: string) => {
+    preload.paths.push(path);
+  },
+}));
 import { escapeLayerCount, pushEscapeLayer } from '../lib/escapeStack';
 import { segmentName } from '../lib/segmentMetadata';
 import {
@@ -689,5 +698,34 @@ describe('Equity scatter tooltip, guides and markers (W5e: dataviz-07 a, dataviz
   it('recolours the guide to the data-guide ink, --text-3', () => {
     const rule = /\.analytics-scatter__guide\s*\{([^}]*)\}/.exec(designCss())?.[1] ?? '';
     expect(rule).toContain('stroke: var(--text-3)');
+  });
+});
+
+describe('Equity scatter borrower links (bundle-09)', () => {
+  it('warm the dossier chunk on focus and hover, and read nothing', () => {
+    preload.paths.length = 0;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const { container, unmount } = mountScatter(
+      <EquitySpreadPointsView thresholds={THRESHOLDS} payload={collisionDrilldown} />,
+    );
+    try {
+      const dot = container.querySelector<HTMLAnchorElement>('a.analytics-scatter__dot')!;
+      act(() => dot.focus());
+      expect(preload.paths).toEqual(['/borrower-360/B-0000000000003']);
+      pointer(dot, 'pointerover');
+      expect(preload.paths).toEqual(['/borrower-360/B-0000000000003', '/borrower-360/B-0000000000003']);
+      // The roving focus and the tip still run beside the warm-up.
+      expect(dot.getAttribute('tabindex')).toBe('0');
+      expect(tipText(container)?.label).toBe('Owner 3');
+      const marker = container.querySelector<HTMLButtonElement>('.analytics-scatter__cluster-marker')!;
+      act(() => marker.click());
+      const link = container.querySelector<HTMLAnchorElement>('.analytics-scatter__cluster-link')!;
+      act(() => link.focus());
+      expect(preload.paths.at(-1)).toBe('/borrower-360/B-0000000000002');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      unmount();
+      fetchSpy.mockRestore();
+    }
   });
 });

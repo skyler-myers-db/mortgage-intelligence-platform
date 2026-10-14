@@ -6,6 +6,7 @@ import { lazy, Suspense, useEffect, useId, useState, type ReactNode } from 'reac
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router';
 import { api } from '../lib/api';
+import { preloadIntentProps } from '../lib/preloadIntent';
 import { queryKeys } from '../lib/queryKeys';
 import { loanOfficersOnly, useSalesRoster } from '../lib/salesRoster';
 import { Chip, SurfaceTitle } from '../components/Primitives';
@@ -279,7 +280,12 @@ export function SalesOpsSection() {
                 Open stale queue
               </Link>
               {staleLeads.slice(0, 2).map((lead) => (
-                <Link key={lead.borrower_id} className="chip chip--neutral chip--compact" to={`/borrower-360/${lead.borrower_id}`}>
+                <Link
+                  key={lead.borrower_id}
+                  className="chip chip--neutral chip--compact"
+                  to={`/borrower-360/${lead.borrower_id}`}
+                  {...preloadIntentProps(`/borrower-360/${lead.borrower_id}`)}
+                >
                   {lead.borrower_id} · {lead.age_days}d
                 </Link>
               ))}

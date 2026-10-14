@@ -9,6 +9,7 @@ import { Histogram } from '../components/charts/Histogram';
 import { friendlyAssetLabel } from '../lib/assetLabels';
 import { formatCompact, formatCount, formatFixed, formatUsdCompact, pct, signedBpsLabel } from '../lib/formatters';
 import { offerDisplayLabel } from '../lib/offerLanguage';
+import { preloadIntentProps } from '../lib/preloadIntent';
 import type {
   EconomicsAnalyticsResponse,
   EvidenceBySignalRow,
@@ -202,7 +203,16 @@ export function EconomicsView({
               rows={data.top_borrowers}
               getKey={(row) => row.borrower_id}
               columns={[
-                { key: 'borrower', label: 'Borrower', render: (row) => <Link to={`/borrower-360/${row.borrower_id}`}>{borrowerDisplay(row)}</Link> },
+                {
+                  key: 'borrower',
+                  label: 'Borrower',
+                  // The dossier CHUNK warms on intent; its audited read stays click-only (bundle-09).
+                  render: (row) => (
+                    <Link to={`/borrower-360/${row.borrower_id}`} {...preloadIntentProps(`/borrower-360/${row.borrower_id}`)}>
+                      {borrowerDisplay(row)}
+                    </Link>
+                  ),
+                },
                 { key: 'score', label: 'Score', render: (row) => row.opportunity_score },
                 { key: 'spread', label: 'Spread', render: (row) => signedBpsLabel(row.rate_spread_bps) },
                 { key: 'offer', label: 'Offer', render: (row) => offerDisplayLabel(null, row.recommended_offer) },
@@ -301,7 +311,15 @@ function EvidenceExamplesTable({ rows }: { rows: SignalEvidenceExample[] }) {
       rows={rows}
       getKey={(row, idx) => `${row.borrower_id}-${row.signal_type}-${row.timestamp}-${idx}`}
       columns={[
-        { key: 'borrower', label: 'Borrower', render: (row) => <Link to={`/borrower-360/${row.borrower_id}`}>{borrowerDisplay(row)}</Link> },
+        {
+          key: 'borrower',
+          label: 'Borrower',
+          render: (row) => (
+            <Link to={`/borrower-360/${row.borrower_id}`} {...preloadIntentProps(`/borrower-360/${row.borrower_id}`)}>
+              {borrowerDisplay(row)}
+            </Link>
+          ),
+        },
         { key: 'signal', label: 'Signal', render: (row) => signalLabel(row.signal_type) },
         { key: 'value', label: 'Value', render: (row) => row.signal_value },
         { key: 'confidence', label: 'Evidence confidence', render: (row) => formatFixed(row.confidence, 3) },

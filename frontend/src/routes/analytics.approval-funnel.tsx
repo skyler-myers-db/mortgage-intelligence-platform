@@ -23,6 +23,7 @@ import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 import { ADDRESSABLE_POPULATION_KPI_LABEL } from '../lib/populationLabels';
 import { formatTimestamp } from '../lib/time';
 import { offerDisplayLabel } from '../lib/offerLanguage';
+import { preloadIntentProps } from '../lib/preloadIntent';
 import type {
   ApprovalFunnelResponse,
   ApprovalFunnelStage,
@@ -137,8 +138,11 @@ function WhoApprovedWhat({ data }: { data: ApprovalFunnelResponse }) {
               {
                 key: 'borrower',
                 label: 'Borrower',
+                // The dossier chunk warms on intent; VIEW_BORROWER stays click-only (bundle-09).
                 render: (row) => (
-                  <Link className="mono" to={`/borrower-360/${row.borrower_id}`}>{row.borrower_id}</Link>
+                  <Link className="mono" to={`/borrower-360/${row.borrower_id}`} {...preloadIntentProps(`/borrower-360/${row.borrower_id}`)}>
+                    {row.borrower_id}
+                  </Link>
                 ),
               },
               { key: 'offer', label: 'Offer', render: (row) => offerDisplayLabel(row.offer_code) },
@@ -198,7 +202,9 @@ function LoanOfficerDrill({ loanOfficerId }: { loanOfficerId: string }) {
               key: 'borrower',
               label: 'Borrower',
               render: (row) => (
-                <Link className="mono" to={`/borrower-360/${row.borrower_id}`}>{row.borrower_id}</Link>
+                <Link className="mono" to={`/borrower-360/${row.borrower_id}`} {...preloadIntentProps(`/borrower-360/${row.borrower_id}`)}>
+                  {row.borrower_id}
+                </Link>
               ),
             },
             {
