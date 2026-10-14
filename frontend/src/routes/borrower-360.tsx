@@ -21,6 +21,7 @@ import { Button, Chip, EvidenceChip, SurfaceTitle } from '../components/Primitiv
 import { GlossaryTerm } from '../components/GlossaryTerm';
 import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
+import { Tooltip } from '../components/ui/Tooltip';
 import { WAREHOUSE_WARMING_BODY, WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { Reveal } from '../components/fx/Reveal';
 import { PrintProvenance } from '../components/print/PrintProvenance';
@@ -407,12 +408,9 @@ export default function Borrower360() {
                 <SurfaceTitle>{BORROWER_DOSSIER_LABEL}</SurfaceTitle>
               </div>
               {b.first_party_synthetic_demo && (
-                <span
-                  className="muted fs-11"
-                  title="This borrower's first-party fields are synthetic demo data (Summit Mortgage demo tenant)."
-                >
-                  Summit demo synthetic
-                </span>
+                <Tooltip content="This borrower's first-party fields are synthetic demo data (Summit Mortgage demo tenant).">
+                  <span className="muted fs-11">Summit demo synthetic</span>
+                </Tooltip>
               )}
             </div>
             <div className="surface__body field-grid">
@@ -478,12 +476,12 @@ export default function Borrower360() {
                   labelled (gold carries no metro NAME column, so this is as
                   far as it can honestly go) and the Cotality loan type code is
                   expanded. Unknown codes pass through verbatim — never guessed
-                  into a product bucket. The raw pair stays on the title for
+                  into a product bucket. The raw pair stays in a tooltip for
                   anyone reconciling against the source row. */}
               <Field
                 k="Metro / loan type"
                 v={metroLoanTypeLabel(b.situs_cbsa_code, b.first_pos_loan_type)}
-                title={`${b.situs_cbsa_code ?? '—'} · ${b.first_pos_loan_type ?? '—'}`}
+                source={`${b.situs_cbsa_code ?? '—'} · ${b.first_pos_loan_type ?? '—'}`}
               />
               <Field
                 k="Relationship flags"
@@ -717,23 +715,20 @@ function Field({
   v,
   mono,
   childEl,
-  title,
+  source,
 }: {
   k: ReactNode;
   v: string;
   mono?: boolean;
   childEl?: ReactElement;
-  /** Raw source value, when the rendered one is a friendly expansion of it. */
-  title?: string;
+  /** Raw source value, when the rendered one is a friendly expansion of it (a ui/Tooltip, critic-08). */
+  source?: string;
 }) {
+  const value = <div className={`field__value ${mono ? 'mono num' : ''}`}>{v}</div>;
   return (
     <div>
       <div className="field__label">{k}</div>
-      {childEl ?? (
-        <div className={`field__value ${mono ? 'mono num' : ''}`} title={title}>
-          {v}
-        </div>
-      )}
+      {childEl ?? (source ? <Tooltip content={source}>{value}</Tooltip> : value)}
     </div>
   );
 }

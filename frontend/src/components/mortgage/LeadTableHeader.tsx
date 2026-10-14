@@ -157,7 +157,9 @@ export function LeadTableHeader({
             ? 'Recording the export in the audit ledger'
             : `Export ${formatCount(csvExportCount)} ${exportNoun} as CSV`}
           aria-describedby={partial ? scopeNoteId : undefined}
-          title={exportBlockedReason ?? (csvExportCount === 0 && csvExportExcluded > 0
+          // A design-system tooltip, never a DOM title (critic-08): the
+          // reason is the button's description.
+          tooltip={exportBlockedReason ?? (csvExportCount === 0 && csvExportExcluded > 0
             ? 'Every row in scope is excluded by the marketing-eligibility gate'
             : undefined)}
         >

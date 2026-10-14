@@ -192,6 +192,12 @@ describe('Lead Queue filter bar', () => {
     ]);
     // Core filters are shown by their highlighted pill, not repeated here.
     expect(hero.textContent).not.toContain('STATE');
+    // critic-08: each chip's full "LABEL: value" is a ui/Tooltip description, never a DOM title.
+    const chip = hero.querySelector<HTMLElement>('.filter--removable')!;
+    expect(hero.querySelector('[title]')).toBeNull();
+    expect(chip.dataset.tooltip).toBeTruthy();
+    expect(document.getElementById(chip.getAttribute('aria-describedby')!)?.textContent)
+      .toBe('OWNER LINK: Portfolio investor (5+)');
     expect(byTestId('lead-queue-more-filters')?.getAttribute('aria-label')).toBe('More filters (3 active)');
 
     await act(async () => (hero.querySelector('button') as HTMLButtonElement).click());

@@ -1,5 +1,6 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Icon } from '../components/Icon';
+import { Tooltip } from '../components/ui/Tooltip';
 import type { LeadQueueFilterChip } from './lead-queue.activeFilters';
 import { FilterFacetsProvider } from './lead-queue.facets';
 import { LeadQueueRangeFilters } from './lead-queue.rangeFilters';
@@ -131,21 +132,25 @@ export function LeadQueueHeroFilterChips({
       data-testid="lead-queue-active-filters"
     >
       {chips.map((chip, index) => (
-        <span key={chip.key} className="filter is-active filter--removable" title={`${chip.label}: ${chip.value}`}>
-          <span className="filter__label">{chip.label}</span>
-          <span className="filter__value">{chip.value}</span>
-          <button
-            type="button"
-            className="filter__remove"
-            aria-label={`Remove ${chip.label}: ${chip.value} filter`}
-            onClick={() => {
-              removedRef.current = { key: chip.key, index };
-              onRemove(chip);
-            }}
-          >
-            <Icon name="cross" size={9} />
-          </button>
-        </span>
+        // The full "LABEL: value" in a ui/Tooltip (critic-08): a long value
+        // truncates; the Remove button's aria-label already names the chip.
+        <Tooltip key={chip.key} content={`${chip.label}: ${chip.value}`}>
+          <span className="filter is-active filter--removable">
+            <span className="filter__label">{chip.label}</span>
+            <span className="filter__value">{chip.value}</span>
+            <button
+              type="button"
+              className="filter__remove"
+              aria-label={`Remove ${chip.label}: ${chip.value} filter`}
+              onClick={() => {
+                removedRef.current = { key: chip.key, index };
+                onRemove(chip);
+              }}
+            >
+              <Icon name="cross" size={9} />
+            </button>
+          </span>
+        </Tooltip>
       ))}
     </div>
   );
