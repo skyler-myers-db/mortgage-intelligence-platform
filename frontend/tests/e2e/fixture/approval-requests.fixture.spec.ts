@@ -297,7 +297,7 @@ test.describe('an approver', () => {
     const store = registerApprovalRequestStore(mockApi, { seed: batchView(REQUESTED_IDS, false) });
     await app.gotoRoute('/lead-queue');
     await expect(chip(page)).toHaveText(`Approval requests · ${REQUESTED_IDS.length}`);
-    await expect(visible(page.getByTestId(`lead-request-mark-${REQUESTED_IDS[0]}`))).toHaveAccessibleName(`Requested · ${REQUESTER_LABEL}`);
+    await expect(cell(page, REQUESTED_IDS[0]).locator('.lead-table__request-mark')).toHaveAccessibleName(`Requested · ${REQUESTER_LABEL}`);
     await chip(page).click();
     const panel = page.getByTestId('approval-requests-panel');
     await expect(panel).toContainText(REQUESTER_LABEL);
@@ -412,7 +412,7 @@ test.describe('the request marks and entry at 1440x900', () => {
       await expect(chip(page)).toHaveText(`Approval requests · ${REQUESTED_IDS.length}`);
       if (consoleOpen) await openConsoleNarrow(app, page);
       else await app.settle();
-      const mark = visible(page.getByTestId(`lead-request-mark-${REQUESTED_IDS[0]}`));
+      const mark = cell(page, REQUESTED_IDS[0]).locator('.lead-table__request-mark');
       await expect(mark).toHaveRole('img');
       await expect(mark).toHaveAccessibleName(`Requested · ${REQUESTER_LABEL}`);
       await expect(mark).not.toHaveAttribute('title');

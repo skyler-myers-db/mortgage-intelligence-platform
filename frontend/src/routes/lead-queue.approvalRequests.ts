@@ -19,6 +19,7 @@ import { approvalRequestsApi } from '../lib/apiClients/approvalRequests';
 import { queryKeys } from '../lib/queryKeys';
 import type { ApprovalRequestBatchView, ApprovalRequestList } from '../types/approvalRequests';
 import type { ApprovalRequestMark, LeadTableApprovalRequests } from '../components/mortgage/LeadTable.types';
+import { approverMark, requesterMark } from '../components/mortgage/ApprovalRequestMarks';
 
 export const APPROVAL_REQUESTS_STALE_MS = 60_000;
 
@@ -29,7 +30,7 @@ interface UseLeadQueueApprovalRequestsInput {
   scopeBatchId: string | null;
 }
 
-const REQUESTED_BY_ME: ApprovalRequestMark = { label: 'Approval requested', tone: 'warning' };
+const REQUESTED_BY_ME: ApprovalRequestMark = requesterMark('Approval requested');
 
 function openRows(batch: ApprovalRequestBatchView) {
   return batch.rows.filter((row) => row.state === 'open');
@@ -44,7 +45,7 @@ export function deriveApprovalRequests(
   const marks = new Map<string, ApprovalRequestMark>();
   for (const batch of data.batches) {
     const mark = role === 'approver'
-      ? { label: `Requested · ${batch.requested_by_display ?? 'a teammate'}`, tone: 'neutral' as const }
+      ? approverMark(`Requested · ${batch.requested_by_display ?? 'a teammate'}`)
       : REQUESTED_BY_ME;
     for (const row of openRows(batch)) marks.set(row.borrower_id, mark);
   }

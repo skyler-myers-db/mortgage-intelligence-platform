@@ -166,10 +166,15 @@ export interface LeadTableSort {
   dir: SortDir;
 }
 
-/** One row's approval-request chip (flow-02): an OPEN request only. */
+/** One row's approval-request mark (flow-02): an OPEN request only. */
 export interface ApprovalRequestMark {
   label: string;
   tone: 'warning' | 'neutral';
+  /**
+   * What the Approval cell renders (ApprovalRequestMarks.tsx): built by the
+   * Lead Queue's request read, so the markup stays out of the LeadTable chunk.
+   */
+  node: ReactNode;
 }
 
 /**

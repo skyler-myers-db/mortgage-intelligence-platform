@@ -64,6 +64,7 @@ vi.mock('../lib/api', () => ({
 import { LeadTable } from '../components/mortgage/LeadTable';
 import { ApprovalRequestChips } from '../components/mortgage/ApprovalRequestChips';
 import { ApprovalRequestScopeRow } from '../components/mortgage/ApprovalRequestScopeRow';
+import { approverMark, requesterMark } from '../components/mortgage/ApprovalRequestMarks';
 
 beforeAll(async () => {
   await import('../components/mortgage/RequestApprovalForm');
@@ -180,10 +181,11 @@ afterEach(() => {
 describe('deriveApprovalRequests', () => {
   it('marks OPEN rows only: the approver sees who asked, the requester their own mark', () => {
     const approver = deriveApprovalRequests(LIST, 'approver', null);
-    expect([...approver.marks]).toEqual([[IDS[0], { label: 'Requested · Alice Analyst', tone: 'neutral' }]]);
+    const labels = (marks: typeof approver.marks) => [...marks].map(([id, mark]) => [id, mark.label, mark.tone]);
+    expect(labels(approver.marks)).toEqual([[IDS[0], 'Requested · Alice Analyst', 'neutral']]);
     expect(approver.count).toBe(1);
     const requester = deriveApprovalRequests({ ...LIST, scope: 'mine' }, 'requester', null);
-    expect(requester.marks.get(IDS[0])).toEqual({ label: 'Approval requested', tone: 'warning' });
+    expect(labels(requester.marks)).toEqual([[IDS[0], 'Approval requested', 'warning']]);
     expect(requester.marks.has(IDS[1])).toBe(false);
     expect(requester.count).toBe(1);
   });
@@ -304,7 +306,7 @@ describe('the table: Request approval', { timeout: 60_000 }, () => {
   });
 
   it('the row offers Request approval under its banner, hidden once the row carries my open request', async () => {
-    const marks = new Map([[IDS[1], { label: 'Approval requested', tone: 'warning' as const }]]);
+    const marks = new Map([[IDS[1], requesterMark('Approval requested')]]);
     await renderTable(requests({ marks, count: 1, batches: [] }));
     await expandRow(IDS[0]);
     expect(q(`[data-testid="lead-row-approval-${IDS[0]}"] [data-testid="lead-request-approval-${IDS[0]}"]`)).not.toBeNull();
@@ -323,10 +325,10 @@ describe('the table: the approver side', { timeout: 60_000 }, () => {
   });
 
   it('marks a requested row after Approve / Reject (named, no title), and a local decision hides the mark', async () => {
-    const marks = new Map([[IDS[0], { label: 'Requested · Alice Analyst', tone: 'neutral' as const }]]);
+    const marks = new Map([[IDS[0], approverMark('Requested · Alice Analyst')]]);
     const mounted = await renderTable(requests({ role: 'approver', marks, count: 1 }));
     const cell = () => q(`[data-testid="lead-approval-cell-${IDS[0]}"]`)!;
-    const mark = cell().querySelector<HTMLElement>(`[data-testid="lead-request-mark-${IDS[0]}"]`)!;
+    const mark = cell().querySelector<HTMLElement>('.lead-table__request-mark')!;
     expect(mark.getAttribute('role')).toBe('img');
     expect(mark.getAttribute('aria-label')).toBe('Requested · Alice Analyst');
     expect(mark.hasAttribute('title')).toBe(false);
@@ -334,15 +336,15 @@ describe('the table: the approver side', { timeout: 60_000 }, () => {
     expect(document.getElementById(mark.getAttribute('data-tooltip')!)!.textContent).toBe('Requested · Alice Analyst');
     expect(mark.querySelector('svg')).not.toBeNull();
     // After both buttons, never before them: Approve and Reject keep their unmarked places.
-    const actions = [...cell().querySelectorAll('[data-testid]')].map((node) => node.getAttribute('data-testid'));
-    expect(actions).toEqual([`lead-approve-${IDS[0]}`, `lead-reject-${IDS[0]}`, `lead-request-mark-${IDS[0]}`]);
+    const order = [...cell().querySelectorAll('button, .lead-table__request-mark')].map((node) => node.getAttribute('data-testid') ?? node.className);
+    expect(order).toEqual([`lead-approve-${IDS[0]}`, `lead-reject-${IDS[0]}`, 'lead-table__request-mark']);
     expect(cell().querySelector('.chip')).toBeNull();
-    expect(q(`[data-testid="lead-request-mark-${IDS[1]}"]`)).toBeNull();
+    expect(q(`[data-testid="lead-approval-cell-${IDS[1]}"] .lead-table__request-mark`)).toBeNull();
     expect(q('[data-testid="approval-requests-chip"]')!.textContent).toBe('Approval requests · 1');
     mounted.unmount();
     app.state.approvals = { [IDS[0]]: 'approved' };
     await renderTable(requests({ role: 'approver', marks, count: 1 }));
-    expect(q(`[data-testid="lead-request-mark-${IDS[0]}"]`)).toBeNull();
+    expect(q(`[data-testid="lead-approval-cell-${IDS[0]}"] .lead-table__request-mark`)).toBeNull();
   });
 
   it('a failed list read: one status with Retry in the chip slot, no chip and no mark', async () => {
@@ -354,7 +356,7 @@ describe('the table: the approver side', { timeout: 60_000 }, () => {
     expect(status.textContent).toBe('Approval Requests unavailableRetry');
     expect(status.querySelector('.sr-only')!.textContent).toBe('Approval ');
     expect(q('[data-testid="approval-requests-chip"]')).toBeNull();
-    expect(q('[data-testid^="lead-request-mark-"]')).toBeNull();
+    expect(q('.lead-table__request-mark')).toBeNull();
     await act(async () => q<HTMLButtonElement>('[data-testid="approval-requests-retry"]')!.click());
     expect(retry).toHaveBeenCalledTimes(1);
   });
