@@ -13,8 +13,9 @@
  * write-failure toast functions, to the panel: the lazy panel then imports
  * no module of a shared chunk (each such import split the chunk and put a new
  * name into every route's preload list in the entry chunk; W5e budget). The
- * mutation also outlives the panel, so a 429 Retry still lands when the
- * panel was closed.
+ * mutation also outlives the panel: a revoke still on the wire when the
+ * panel closes lands all the same (its toast, the override drop and the
+ * queue refresh). A 429's Retry re-sends only while its panel is open.
  */
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import type { QueryClient } from '@tanstack/react-query';
