@@ -17,6 +17,7 @@
  */
 import { fetchFollowupList, type FollowupItem, type FollowupList } from './apiClients/followUps';
 import { endOfLocalDay, instantOf, startOfLocalDay } from './followUpsDay';
+import { MAX_QUEUE_BORROWER_IDS } from './queueBorrowerIds';
 import { queryKeys } from './queryKeys';
 import { useWarmingUpRetry } from './useWarmingUpRetry';
 
@@ -25,7 +26,7 @@ export const FOLLOW_UPS_WINDOW_DAYS = 7;
 /** The overdue horizon: older rows collapse under "Older", and never light the dot. */
 export const OVERDUE_HORIZON_MS = 14 * 24 * 60 * 60 * 1000;
 /** The Lead Queue's borrower_ids parse cap (routes/lead-queue.filters.ts parseBorrowerIds). */
-export const QUEUE_HANDOFF_MAX = 20;
+export const QUEUE_HANDOFF_MAX = MAX_QUEUE_BORROWER_IDS;
 
 export type FollowupSection = 'overdue' | 'today' | 'week' | 'requested' | 'assigned' | 'older' | 'withheld';
 

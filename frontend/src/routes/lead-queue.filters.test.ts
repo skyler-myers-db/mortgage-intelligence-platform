@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  parseBorrowerIds,
   APPROVAL_REQUEST_BATCH_PARAM,
   LEAD_BOUND_FILTER_KEYS,
   LEAD_BOUND_LIMITS,
@@ -30,6 +31,7 @@ import {
 import { hasLeadQueueFilters, searchParamsCleared } from './lead-queue.activeFilters';
 import { leadsRequestFromSearchParams } from './lead-queue.request';
 import { leadsQuery } from '../lib/leadsQuery';
+import { MAX_QUEUE_BORROWER_IDS } from '../lib/queueBorrowerIds';
 
 describe('lead queue effective workflow filters', () => {
   it('shows Approved when the approved funnel stage is driving the filter', () => {
@@ -420,5 +422,20 @@ describe('the approval-request scope param (flow-02 / shell-06, D-approval-flow-
     expect(key(`approval_request_batch=${ID}`)).not.toBe(key(''));
     expect(key(`approval_request_batch=${ID}`)).toContain(ID);
     expect(key(`approval_request_batch=${ID}&cohort_id=c1`)).toBe(key('cohort_id=c1'));
+  });
+});
+
+describe('the borrower_ids hand-off cap (W5d follow-ups deferral)', () => {
+  const ids = (count: number) => Array.from({ length: count }, (_, index) => `B-${String(index).padStart(13, '0')}`);
+
+  it('keeps a 50-id deep link whole and truncates the 51st id client-side', () => {
+    expect(MAX_QUEUE_BORROWER_IDS).toBe(50);
+    expect(parseBorrowerIds(ids(50).join(','))).toEqual(ids(50));
+    expect(parseBorrowerIds(ids(51).join(','))).toEqual(ids(50));
+  });
+
+  it('counts only valid, de-duplicated ids toward the cap', () => {
+    const raw = ['not-an-id', ...ids(50), ids(50)[0], 'B-ZZZZZZZZZZZZZ'].join(',');
+    expect(parseBorrowerIds(raw)).toEqual(ids(50));
   });
 });

@@ -13,6 +13,7 @@ vi.mock('./apiClients/followUps', () => ({
 
 import { followUpsSummaryEnabled, followUpsSummaryQueryOptions, FOLLOW_UPS_POLL_MS } from './apiClients/followUpsSummary';
 import { dueQueueHandoff, groupFollowups, QUEUE_HANDOFF_MAX, sectionFor, useFollowUpsList } from './followUps';
+import { MAX_QUEUE_BORROWER_IDS } from './queueBorrowerIds';
 import { endOfLocalDay, hasDueToday, startOfLocalDay } from './followUpsDay';
 import type { SessionResponse } from '../types';
 
@@ -115,8 +116,8 @@ describe('the tray sections', () => {
     }
   });
 
-  it('hands at most 20 Overdue and Today ids to the queue, contactable only', () => {
-    const due = Array.from({ length: 25 }, (_, index) =>
+  it('hands at most the queue parse cap of Overdue and Today ids to the queue, contactable only', () => {
+    const due = Array.from({ length: MAX_QUEUE_BORROWER_IDS + 5 }, (_, index) =>
       item({ borrower_id: `B-${String(index).padStart(13, '0')}`, due_at: '2026-10-07T20:00:00Z' }));
     const withheld = item({ borrower_id: 'B-WITHHELD00001', due_at: '2026-10-07T20:00:00Z', contactable: false, contact_block_reason: 'suppressed' });
     const week = item({ borrower_id: 'B-WEEK000000001', due_at: '2026-10-10T20:00:00Z' });
@@ -124,7 +125,8 @@ describe('the tray sections', () => {
     const handoff = dueQueueHandoff(groupFollowups([withheld, week, ...due], NOW));
 
     expect(handoff.ids).toHaveLength(QUEUE_HANDOFF_MAX);
-    expect(QUEUE_HANDOFF_MAX).toBe(20);
+    // One constant for both ends: the tray never offers more ids than the queue reads.
+    expect(QUEUE_HANDOFF_MAX).toBe(MAX_QUEUE_BORROWER_IDS);
     expect(handoff.more).toBe(true);
     expect(handoff.ids).not.toContain('B-WITHHELD00001');
     expect(handoff.ids).not.toContain('B-WEEK000000001');

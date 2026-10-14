@@ -6,6 +6,7 @@ import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 import type { LeadTableView } from '../components/mortgage/LeadTable.columns';
 import type { LeadTableSort, LeadTableSortKey, SortDir } from '../components/mortgage/LeadTable.types';
 import { QUEUE_MASKED_ID_RE } from '../lib/queueContext';
+import { MAX_QUEUE_BORROWER_IDS } from '../lib/queueBorrowerIds';
 
 // S1.3: codes, labels, and filter options derive from SEGMENT_DEFINITIONS
 // (the canonical presentation registry) so a segment added there appears in
@@ -98,7 +99,7 @@ export function parseBorrowerIds(raw: string | null): string[] {
     const borrowerId = value.trim();
     if (!borrowerId.startsWith('B-') || out.includes(borrowerId)) continue;
     out.push(borrowerId);
-    if (out.length >= 20) break;
+    if (out.length >= MAX_QUEUE_BORROWER_IDS) break;
   }
   return out;
 }
