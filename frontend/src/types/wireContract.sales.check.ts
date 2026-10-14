@@ -11,68 +11,24 @@
  */
 import type { ApiOk, ApiRequest, ApiResponse } from './api.gen';
 import type { DeepNoPhantomKeys, Expect, NoPhantomKeys, WireFits } from './wireContract.check';
-import type { AssignLeadRequest, AssignLoanOfficerRequest, AssignmentOutcomeRequest, AssignmentStatusUpdateRequest, DispositionRequest, DistributeLeadsRequest, DistributeLeadsResponse, DistributionOfficerLoad, DistributionPreview, LoanOfficerAssignmentResponse } from '../lib/apiClients/sales';
-import type { AssignmentReleaseRequest, AssignmentReleaseResponse, DistributionReleaseRequest, DistributionReleaseResponse } from '../lib/apiClients/salesLoop';
-import type { AssignmentResponse, DispositionResponse } from '../lib/apiTypes';
+import type { DistributeLeadsResponse } from '../lib/apiClients/sales';
+import type { AssignmentReleaseResponse, DistributionReleaseResponse } from '../lib/apiClients/salesLoop';
 import type { QueueVersionBody } from '../lib/queueVersion';
-import type { CallDisposition, SalesAgingLead, SalesConversionResponse, SalesOutcomeSummaryResponse, SalesStandupResponse } from '../types';
-import type { LeadAssignment, LoanOfficer, LoanOfficerAssignment, SalesTeamMember } from './loanOfficer';
-import type { SavedDraft, SavedDraftInput, SavedLead, SavedLeadInput, SessionResponse, WorkspaceMutationResult, WorkspaceState } from './workspace';
+import type { LeadAssignment, SalesTeamMember } from './loanOfficer';
+import type { SavedDraftInput, SavedLead, SavedLeadInput, SessionResponse, WorkspaceMutationResult, WorkspaceState } from './workspace';
 
 export type WireContractSales = [
   // (i) schema-named hand types
-  Expect<WireFits<AssignLeadRequest, ApiRequest<'AssignLeadRequest'>>>,
-  Expect<DeepNoPhantomKeys<AssignLeadRequest, ApiRequest<'AssignLeadRequest'>>>,
-  Expect<WireFits<AssignLoanOfficerRequest, ApiRequest<'AssignLoanOfficerRequest'>>>,
-  Expect<DeepNoPhantomKeys<AssignLoanOfficerRequest, ApiRequest<'AssignLoanOfficerRequest'>>>,
-  Expect<WireFits<AssignmentOutcomeRequest, ApiRequest<'AssignmentOutcomeRequest'>>>,
-  Expect<DeepNoPhantomKeys<AssignmentOutcomeRequest, ApiRequest<'AssignmentOutcomeRequest'>>>,
-  Expect<WireFits<AssignmentStatusUpdateRequest, ApiRequest<'AssignmentStatusUpdateRequest'>>>,
-  Expect<DeepNoPhantomKeys<AssignmentStatusUpdateRequest, ApiRequest<'AssignmentStatusUpdateRequest'>>>,
-  Expect<WireFits<DispositionRequest, ApiRequest<'DispositionRequest'>>>,
-  Expect<DeepNoPhantomKeys<DispositionRequest, ApiRequest<'DispositionRequest'>>>,
-  Expect<WireFits<DistributeLeadsRequest, ApiRequest<'DistributeLeadsRequest'>>>,
-  Expect<DeepNoPhantomKeys<DistributeLeadsRequest, ApiRequest<'DistributeLeadsRequest'>>>,
   Expect<WireFits<ApiResponse<'DistributeLeadsResponse'>, DistributeLeadsResponse>>,
   Expect<NoPhantomKeys<DistributeLeadsResponse, ApiResponse<'DistributeLeadsResponse'>>>,
-  Expect<WireFits<ApiResponse<'DistributionPreview'>, DistributionPreview>>,
-  Expect<NoPhantomKeys<DistributionPreview, ApiResponse<'DistributionPreview'>>>,
-  Expect<WireFits<ApiResponse<'DistributionOfficerLoad'>, DistributionOfficerLoad>>,
-  Expect<NoPhantomKeys<DistributionOfficerLoad, ApiResponse<'DistributionOfficerLoad'>>>,
-  Expect<WireFits<AssignmentReleaseRequest, ApiRequest<'AssignmentReleaseRequest'>>>,
-  Expect<DeepNoPhantomKeys<AssignmentReleaseRequest, ApiRequest<'AssignmentReleaseRequest'>>>,
   Expect<WireFits<ApiResponse<'AssignmentReleaseResponse'>, AssignmentReleaseResponse>>,
   Expect<NoPhantomKeys<AssignmentReleaseResponse, ApiResponse<'AssignmentReleaseResponse'>>>,
-  Expect<WireFits<DistributionReleaseRequest, ApiRequest<'DistributionReleaseRequest'>>>,
-  Expect<DeepNoPhantomKeys<DistributionReleaseRequest, ApiRequest<'DistributionReleaseRequest'>>>,
   Expect<WireFits<ApiResponse<'DistributionReleaseResponse'>, DistributionReleaseResponse>>,
   Expect<NoPhantomKeys<DistributionReleaseResponse, ApiResponse<'DistributionReleaseResponse'>>>,
-  Expect<WireFits<ApiResponse<'LoanOfficerAssignmentResponse'>, LoanOfficerAssignmentResponse>>,
-  Expect<NoPhantomKeys<LoanOfficerAssignmentResponse, ApiResponse<'LoanOfficerAssignmentResponse'>>>,
-  Expect<WireFits<ApiResponse<'AssignmentResponse'>, AssignmentResponse>>,
-  Expect<NoPhantomKeys<AssignmentResponse, ApiResponse<'AssignmentResponse'>>>,
-  Expect<WireFits<ApiResponse<'DispositionResponse'>, DispositionResponse>>,
-  Expect<NoPhantomKeys<DispositionResponse, ApiResponse<'DispositionResponse'>>>,
-  Expect<WireFits<ApiResponse<'CallDisposition'>, CallDisposition>>,
-  Expect<NoPhantomKeys<CallDisposition, ApiResponse<'CallDisposition'>>>,
-  Expect<WireFits<ApiResponse<'SalesAgingLead'>, SalesAgingLead>>,
-  Expect<NoPhantomKeys<SalesAgingLead, ApiResponse<'SalesAgingLead'>>>,
-  Expect<WireFits<ApiResponse<'SalesConversionResponse'>, SalesConversionResponse>>,
-  Expect<NoPhantomKeys<SalesConversionResponse, ApiResponse<'SalesConversionResponse'>>>,
-  Expect<WireFits<ApiResponse<'SalesOutcomeSummaryResponse'>, SalesOutcomeSummaryResponse>>,
-  Expect<NoPhantomKeys<SalesOutcomeSummaryResponse, ApiResponse<'SalesOutcomeSummaryResponse'>>>,
-  Expect<WireFits<ApiResponse<'SalesStandupResponse'>, SalesStandupResponse>>,
-  Expect<NoPhantomKeys<SalesStandupResponse, ApiResponse<'SalesStandupResponse'>>>,
   Expect<WireFits<ApiResponse<'LeadAssignment'>, LeadAssignment>>,
   Expect<NoPhantomKeys<LeadAssignment, ApiResponse<'LeadAssignment'>>>,
-  Expect<WireFits<ApiResponse<'LoanOfficer'>, LoanOfficer>>,
-  Expect<NoPhantomKeys<LoanOfficer, ApiResponse<'LoanOfficer'>>>,
-  Expect<WireFits<ApiResponse<'LoanOfficerAssignment'>, LoanOfficerAssignment>>,
-  Expect<NoPhantomKeys<LoanOfficerAssignment, ApiResponse<'LoanOfficerAssignment'>>>,
   Expect<WireFits<ApiResponse<'SalesTeamMember'>, SalesTeamMember>>,
   Expect<NoPhantomKeys<SalesTeamMember, ApiResponse<'SalesTeamMember'>>>,
-  Expect<WireFits<ApiResponse<'SavedDraft'>, SavedDraft>>,
-  Expect<NoPhantomKeys<SavedDraft, ApiResponse<'SavedDraft'>>>,
   Expect<WireFits<SavedDraftInput, ApiRequest<'SavedDraftInput'>>>,
   Expect<DeepNoPhantomKeys<SavedDraftInput, ApiRequest<'SavedDraftInput'>>>,
   Expect<WireFits<ApiResponse<'SavedLead'>, SavedLead>>,

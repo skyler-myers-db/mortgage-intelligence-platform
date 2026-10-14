@@ -7,10 +7,9 @@
  * client file stays reviewable — `api.ts` re-exports every name here, which
  * is still the only import path consumers use.
  */
+import type { ApiResponse } from '../types/api.gen';
 import type {
-  CallDisposition,
   LeadSummary,
-  LeadAssignment,
   SegmentCode,
   GenieActionSuggestion,
   GenieRefusalReason,
@@ -336,15 +335,9 @@ export interface AnalyticsQueryOptions {
   days?: number | null;
 }
 
-export interface AssignmentResponse {
-  assignment: LeadAssignment;
-  audit_event_id?: string | null;
-}
+export type AssignmentResponse = ApiResponse<'AssignmentResponse'>;
 
-export interface DispositionResponse {
-  disposition: CallDisposition;
-  audit_event_id?: string | null;
-}
+export type DispositionResponse = ApiResponse<'DispositionResponse'>;
 
 export interface LeadsPageResult {
   leads: LeadSummary[];

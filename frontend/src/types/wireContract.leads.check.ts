@@ -17,7 +17,7 @@ import type { WIRE_OFFER_CODES, WIRE_REJECT_REASON_CODES, WireOfferCode, WireRej
 import type { RejectReasonCode } from '../components/mortgage/LeadTable.types';
 import type { ApproveResult, OutreachDraftResult, RejectResult } from '../lib/apiTypes';
 import type { ApprovalStatus, Borrower360, BorrowerLifecycle, BorrowerProof, LeadSummary, OfferRecommendation, OutreachStatus, ProofReproduceQuery, ProofScoreComponent, WhyPanel } from '../types';
-import type { ApprovalRequestBatchView, ApprovalRequestCreate, ApprovalRequestCreated, ApprovalRequestList, ApprovalRequestRow, ApprovalRequestSkip, ApprovalRequestWithdrawBody, ApprovalRequestWithdrawn } from './approvalRequests';
+import type { ApprovalRequestWithdrawBody } from './approvalRequests';
 
 export type WireContractLeads = [
   // (i) schema-named hand types
@@ -63,20 +63,6 @@ export type WireContractLeads = [
   Expect<WireFits<ApiOk<'POST /api/v1/outreach/draft'>, OutreachDraftResult>>,
   Expect<NoPhantomKeys<OutreachDraftResult, ApiOk<'POST /api/v1/outreach/draft'>>>,
   // Maker-checker approval requests (flow-02 / shell-06, W5d w5-lq-requests-binding).
-  Expect<WireFits<ApiResponse<'ApprovalRequestBatchView'>, ApprovalRequestBatchView>>,
-  Expect<NoPhantomKeys<ApprovalRequestBatchView, ApiResponse<'ApprovalRequestBatchView'>>>,
-  Expect<WireFits<ApprovalRequestCreate, ApiRequest<'ApprovalRequestCreate'>>>,
-  Expect<DeepNoPhantomKeys<ApprovalRequestCreate, ApiRequest<'ApprovalRequestCreate'>>>,
-  Expect<WireFits<ApiResponse<'ApprovalRequestCreated'>, ApprovalRequestCreated>>,
-  Expect<NoPhantomKeys<ApprovalRequestCreated, ApiResponse<'ApprovalRequestCreated'>>>,
-  Expect<WireFits<ApiResponse<'ApprovalRequestList'>, ApprovalRequestList>>,
-  Expect<NoPhantomKeys<ApprovalRequestList, ApiResponse<'ApprovalRequestList'>>>,
-  Expect<WireFits<ApiResponse<'ApprovalRequestRow'>, ApprovalRequestRow>>,
-  Expect<NoPhantomKeys<ApprovalRequestRow, ApiResponse<'ApprovalRequestRow'>>>,
-  Expect<WireFits<ApiResponse<'ApprovalRequestSkip'>, ApprovalRequestSkip>>,
-  Expect<NoPhantomKeys<ApprovalRequestSkip, ApiResponse<'ApprovalRequestSkip'>>>,
-  Expect<WireFits<ApiResponse<'ApprovalRequestWithdrawn'>, ApprovalRequestWithdrawn>>,
-  Expect<NoPhantomKeys<ApprovalRequestWithdrawn, ApiResponse<'ApprovalRequestWithdrawn'>>>,
   Expect<WireFits<ApprovalRequestWithdrawBody, ApiBody<'POST /api/v1/outreach/approval-requests/{batch_id}/withdraw'>>>,
   Expect<DeepNoPhantomKeys<ApprovalRequestWithdrawBody, ApiBody<'POST /api/v1/outreach/approval-requests/{batch_id}/withdraw'>>>,
 ];

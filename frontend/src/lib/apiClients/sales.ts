@@ -7,6 +7,7 @@
  * exported `api` object in the original order. Consumers import `api` from
  * `../api` — never from this module.
  */
+import type { ApiRequest, ApiResponse } from '../../types/api.gen';
 import type {
   CallDisposition,
   LeadAssignment,
@@ -43,62 +44,25 @@ import {
 export type SalesSendStrategy = 'manual' | 'round_robin';
 
 /** The `/api/loan-officers/assignments` body. */
-export interface AssignLoanOfficerRequest {
-  borrower_id: string;
-  loan_officer_id: string;
-  request_id: string;
-}
+export type AssignLoanOfficerRequest = ApiRequest<'AssignLoanOfficerRequest'>;
 
 /** The assignment create and status-change response. */
-export interface LoanOfficerAssignmentResponse {
-  assignment: LoanOfficerAssignment;
-  audit_event_id?: string | null;
-}
+export type LoanOfficerAssignmentResponse = ApiResponse<'LoanOfficerAssignmentResponse'>;
 
 /** The `/api/loan-officers/assignments/{id}/status` body. */
-export interface AssignmentStatusUpdateRequest {
-  status: AssignmentLifecycleStatus;
-  request_id: string;
-}
+export type AssignmentStatusUpdateRequest = ApiRequest<'AssignmentStatusUpdateRequest'>;
 
 /** The `/api/loan-officers/assignments/{id}/outcome` body. */
-export interface AssignmentOutcomeRequest {
-  outcome: AssignmentOutcome;
-  request_id: string;
-}
+export type AssignmentOutcomeRequest = ApiRequest<'AssignmentOutcomeRequest'>;
 
 /** The `/api/leads/{id}/assign` body. */
-export interface AssignLeadRequest {
-  assigned_to_email: string;
-  strategy: SalesSendStrategy;
-  expires_in_hours: number;
-  request_id: string;
-}
+export type AssignLeadRequest = ApiRequest<'AssignLeadRequest'>;
 
 /** One officer's share of a planned score-balanced fill (aggregates only). */
-export interface DistributionOfficerLoad {
-  email: string;
-  display_label: string;
-  region: string | null;
-  capacity_per_day: number;
-  open_count: number;
-  added_count: number;
-  added_score_sum: number;
-  in_region_count: number;
-}
+export type DistributionOfficerLoad = ApiResponse<'DistributionOfficerLoad'>;
 
 /** What the Board's greedy fill placed: counts and sums, never a borrower id. */
-export interface DistributionPreview {
-  strategy: 'score_balanced';
-  plan_fingerprint: string;
-  pool_count: number;
-  placed_count: number;
-  placed_score_sum: number;
-  unplaced_no_capacity: number;
-  skipped_not_assignable: number;
-  skipped_already_assigned: number;
-  officers: DistributionOfficerLoad[];
-}
+export type DistributionPreview = ApiResponse<'DistributionPreview'>;
 
 /** The `/api/sales/distribute` response; `preview` on a Board dry run or commit. */
 export interface DistributeLeadsResponse {
@@ -116,23 +80,10 @@ export interface DistributeLeadsResponse {
  * `dry_run` (and no request id) or with the previewed
  * `expected_plan_fingerprint`.
  */
-export interface DistributeLeadsRequest {
-  borrower_ids: string[];
-  lo_emails: string[];
-  strategy: SalesSendStrategy | 'score_balanced';
-  expires_in_hours: number;
-  request_id?: string;
-  dry_run?: boolean;
-  expected_plan_fingerprint?: string;
-}
+export type DistributeLeadsRequest = ApiRequest<'DistributeLeadsRequest'>;
 
 /** The `/api/leads/{id}/disposition` body. */
-export interface DispositionRequest {
-  lo_email: string;
-  outcome: CallDisposition['outcome'];
-  callback_at?: string | null;
-  request_id: string;
-}
+export type DispositionRequest = ApiRequest<'DispositionRequest'>;
 
 export const salesApi = {
   salesTeam: (signal?: AbortSignal) =>
