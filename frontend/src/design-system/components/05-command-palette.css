@@ -421,9 +421,7 @@
 .glossary-term__tip{position:absolute;inset-inline-start:0;inset-block-end:calc(100% + var(--sp-2));inline-size:min(300px,80vw);padding:var(--sp-3);border:1px solid var(--line-2);border-radius:var(--r-md);background:var(--bg-1);box-shadow:var(--shadow-md);color:var(--text-2);font-size:var(--fs-12);line-height:var(--lh-snug);display:none;opacity:0;pointer-events:none;transform:translateY(var(--sp-1));transition:opacity var(--dur-fast) var(--ease),transform var(--dur-fast) var(--ease),display var(--dur-fast) var(--ease) allow-discrete;z-index:var(--z-tooltip)}
 .glossary-term:hover .glossary-term__tip,.glossary-term:focus-visible .glossary-term__tip{display:block;opacity:1;transform:translateY(0)}
 @starting-style{.glossary-term:hover .glossary-term__tip,.glossary-term:focus-visible .glossary-term__tip{opacity:0;transform:translateY(var(--sp-1))}}.glossary-term__tip-title,.glossary-term__tip-context{display:block}.glossary-term__tip-title{margin-bottom:var(--sp-1);color:var(--text-1);font-weight:700}.glossary-term__tip-context{margin-top:var(--sp-2);color:var(--text-3)}
-.glossary-layout{display:grid;grid-template-columns:minmax(220px,.28fr) minmax(0,1fr);gap:var(--gap-grid)}.glossary-index{align-self:start;position:sticky;top:var(--sp-4)}.glossary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp-4)}
-.glossary-entry{padding-block:var(--sp-3);border-bottom:1px solid var(--line-1)}.glossary-entry:last-child{border-bottom:0}.glossary-entry__term{margin:0;color:var(--text-1);font-size:var(--fs-18);line-height:var(--lh-snug)}.glossary-entry__aliases{display:flex;flex-wrap:wrap;gap:var(--sp-2);margin-top:var(--sp-1);color:var(--text-3);font-size:var(--fs-11)}.glossary-entry__detail{margin-top:var(--sp-3)}.glossary-entry__detail>p{margin:var(--sp-1) 0 0;color:var(--text-2);font-size:var(--fs-13);line-height:var(--lh-body)}
-@media(max-width:900px){.proof-formula-grid,.glossary-layout,.glossary-grid{grid-template-columns:1fr}.glossary-index{position:static}}
+@media(max-width:900px){.proof-formula-grid{grid-template-columns:1fr}}
 
 .lineage-node {
   padding: var(--sp-3) var(--sp-4);

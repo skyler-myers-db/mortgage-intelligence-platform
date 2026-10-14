@@ -10,6 +10,15 @@
    only matches a native fragment navigation (history.pushState never updates
    it), so the route also sets `.is-target` from the router's hash. The spread
    shadow widens the tint into the grid gap without moving any layout. */
+@layer components {
+/* The glossary page layout, moved verbatim from 05-command-palette.css
+   (css-05 step 2: only this route uses it), in the components layer it
+   cascaded in (cssLayerMap.ts COMPONENTS_BLOCKS). `.glossary-term`, the
+   inline term used on every route, stays in the partial. */
+.glossary-layout{display:grid;grid-template-columns:minmax(220px,.28fr) minmax(0,1fr);gap:var(--gap-grid)}.glossary-index{align-self:start;position:sticky;top:var(--sp-4)}.glossary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp-4)}
+.glossary-entry{padding-block:var(--sp-3);border-bottom:1px solid var(--line-1)}.glossary-entry:last-child{border-bottom:0}.glossary-entry__term{margin:0;color:var(--text-1);font-size:var(--fs-18);line-height:var(--lh-snug)}.glossary-entry__aliases{display:flex;flex-wrap:wrap;gap:var(--sp-2);margin-top:var(--sp-1);color:var(--text-3);font-size:var(--fs-11)}.glossary-entry__detail{margin-top:var(--sp-3)}.glossary-entry__detail>p{margin:var(--sp-1) 0 0;color:var(--text-2);font-size:var(--fs-13);line-height:var(--lh-body)}
+@media(max-width:900px){.glossary-layout,.glossary-grid{grid-template-columns:1fr}.glossary-index{position:static}}
+}
 @layer routes {
 .glossary-section,
 .glossary-entry {

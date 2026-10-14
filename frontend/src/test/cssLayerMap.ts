@@ -78,6 +78,8 @@ export const COMPONENTS_BLOCKS: Readonly<Record<string, string>> = {
     ".distribution-board__wrap's overflow-x must keep losing to print.css's :root :is(.tbl-wrap, ...) overflow: visible on paper",
   'src/components/charts/charts.css':
     'the .analytics-chart* chrome moved here from 10-native-analytics.css (css-05 step 2) keeps the components layer it cascaded in, so analytics.scatter.css and the kit rules after it still win',
+  'src/routes/glossary.css':
+    "the glossary page layout moved here from 05-command-palette.css (css-05 step 2) keeps the components layer it cascaded in, below the route's own rules",
 };
 
 /** The layer a colocated sheet's own (non-mode, non-print) rules belong to. */
