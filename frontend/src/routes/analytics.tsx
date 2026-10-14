@@ -53,6 +53,7 @@ import {
   type TabRead,
 } from './analytics.tabStates';
 import { preloadBestEffort } from '../lib/lazyPreload';
+import { useIsOnline } from '../lib/connectivity';
 
 const TAB_IDS: readonly AnalyticsTab[] = TABS.map((item) => item.id);
 
@@ -104,11 +105,14 @@ export default function AnalyticsRoute() {
   // tabpanel the selected tab controls.
   const tabs = useTabs({ tabs: TAB_IDS, selected: tab, onSelect: setTab, idBase: 'analytics' });
   // The selected tab's chunk loads with its read (a deep link or a key press
-  // as much as a click), never after the read lands.
+  // as much as a click), never after the read lands. Offline the read is
+  // paused and the fetch could only fail (a chunk error report), so the chunk
+  // waits for the network like the read does.
+  const online = useIsOnline();
   useEffect(() => {
     const chunk = TAB_CHUNKS[tab];
-    if (chunk) preloadBestEffort(chunk);
-  }, [tab]);
+    if (chunk && online) preloadBestEffort(chunk);
+  }, [tab, online]);
   const footprint = useFootprint();
   const configOptionsQuery = useConfigOptionsQuery();
   const targetLenderOptions = useMemo(() => {

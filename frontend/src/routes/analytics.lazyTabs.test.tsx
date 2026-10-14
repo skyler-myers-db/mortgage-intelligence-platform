@@ -9,7 +9,7 @@
  * are mocked with SYNCHRONOUS factories that record when they are imported.
  */
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
@@ -159,6 +159,28 @@ describe('Analytics per-tab chunks', () => {
     expect(document.querySelector('[data-testid="economics-view"]')).not.toBeNull();
   });
 
+  it('offline, the selected tab requests no chunk until the network returns', async () => {
+    const scatterLoads = () => state.imported.filter((name) => name === 'equity-scatter').length;
+    const before = scatterLoads();
+    onlineManager.setOnline(false);
+    try {
+      await render('/analytics?view=economics');
+      await settle();
+      await act(async () => {
+        tabButton('Economics').dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+      });
+      await settle();
+      expect(scatterLoads(), 'no chunk fetch while offline, on selection or on hover').toBe(before);
+      await act(async () => {
+        onlineManager.setOnline(true);
+      });
+      await settle();
+      expect(scatterLoads(), 'the selected tab loads its chunks once back online').toBe(before + 1);
+    } finally {
+      onlineManager.setOnline(true);
+    }
+  });
+
   it('focusing or hovering a tab warms its chunk and starts no read', async () => {
     await render('/analytics');
     const readsBefore = [...state.reads];
@@ -187,5 +209,18 @@ describe('warmChunk', () => {
     warmChunk(preload);
     expect(preload).toHaveBeenCalledTimes(1);
     warmChunk(undefined);
+  });
+
+  it('warms nothing while offline', () => {
+    const preload = vi.fn(() => Promise.resolve());
+    onlineManager.setOnline(false);
+    try {
+      warmChunk(preload);
+      expect(preload).not.toHaveBeenCalled();
+    } finally {
+      onlineManager.setOnline(true);
+    }
+    warmChunk(preload);
+    expect(preload).toHaveBeenCalledTimes(1);
   });
 });
