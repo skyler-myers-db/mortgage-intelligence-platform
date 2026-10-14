@@ -14,6 +14,7 @@ import { Chip } from '../Primitives';
 import { Tooltip } from '../ui/Tooltip';
 import type { GrowthAgentCohortVerification } from '../../lib/api';
 import { formatCount } from '../../lib/formatters';
+import { preloadIntentProps } from '../../lib/preloadIntent';
 import type { CampaignBinding } from './LeadTable.logic';
 import type { CampaignBindingState } from './useLeadApprovalActions';
 import { APPROVER_ROLE_STATUS_ID } from './approverGate';
@@ -48,6 +49,12 @@ export function LeadTableStatusChips({
   requestPathOpen = false,
   requestScopeRow = null,
 }: LeadTableStatusChipsProps) {
+  const boundOfferHref = campaignBinding && expandedBorrowerId
+    ? `/offer-orchestrator/${encodeURIComponent(expandedBorrowerId)}?${new URLSearchParams({
+      campaign_id: campaignBinding.campaign_id,
+      variant_name: campaignBinding.variant_name,
+    }).toString()}`
+    : null;
   return (
     <>
       {requestScopeRow}
@@ -101,14 +108,10 @@ export function LeadTableStatusChips({
             <span className="mono">campaign {campaignBinding.campaign_id.slice(0, 12)}</span>
           </Tooltip>
           <span>variant {campaignBinding.variant_name}</span>
-          {expandedBorrowerId && (
-            <Link
-              className="btn btn--primary btn--sm"
-              to={`/offer-orchestrator/${encodeURIComponent(expandedBorrowerId)}?${new URLSearchParams({
-                campaign_id: campaignBinding.campaign_id,
-                variant_name: campaignBinding.variant_name,
-              }).toString()}`}
-            >
+          {boundOfferHref && (
+            // bundle-09 item 1: intent warms the Offer route CHUNK only
+            // (never a read: opening an offer writes audit rows).
+            <Link className="btn btn--primary btn--sm" to={boundOfferHref} {...preloadIntentProps(boundOfferHref)}>
               Open bound offer
               <Icon name="chevright" size={12} />
             </Link>
