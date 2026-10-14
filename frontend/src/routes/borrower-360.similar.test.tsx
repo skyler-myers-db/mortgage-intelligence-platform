@@ -14,7 +14,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-vi.setConfig({ testTimeout: 30_000 });
+// The panel chunk imports cold (its graph transforms on first use): slow under a loaded full run.
+vi.setConfig({ testTimeout: 60_000 });
 import type { ReactNode } from 'react';
 import type { Borrower360 as Borrower360Type } from '../types';
 
@@ -191,7 +192,7 @@ describe('Borrower 360 More like this (wow-power-2)', () => {
         for (let i = 0; i < 6; i += 1) await new Promise((resolve) => window.setTimeout(resolve, 0));
       });
       expect(container.querySelector('.similar-cohort [role="status"]')?.textContent).toBe('9 borrowers match this pattern');
-    }, { timeout: 20_000 });
+    }, { timeout: 45_000 });
     const counts = calls.filter((path) => path.includes('/leads/count'));
     expect(counts).toHaveLength(1);
     expect(new URL(counts[0], 'http://b360.test').searchParams.get('state')).toBe('IL');

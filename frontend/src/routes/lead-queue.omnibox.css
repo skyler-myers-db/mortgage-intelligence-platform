@@ -40,8 +40,12 @@
   flex-wrap: wrap;
   gap: var(--sp-2);
 }
-/* With the Console open the filter row is narrower: the pill keeps its icon
-   and keycap, and its name stays on the button (aria-label). */
-@container main (max-width: 1100px) {
-  .lead-queue-omnibox__label { display: none; }
+/* The core filter row has no room for the pill's word and keycap at 1440px
+   (Console open or closed; Linux Chromium draws the mono values wider): they
+   would push Clear all onto a second line and the table under the fold. Up
+   to a 1480px `main` the pill is its icon; its name stays on the button
+   (aria-label "Filter leads") and its tooltip names the F key. */
+@container main (max-width: 1480px) {
+  .lead-queue-omnibox__label,
+  .lead-queue-omnibox__pill kbd { display: none; }
 }

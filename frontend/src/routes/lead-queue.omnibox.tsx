@@ -20,6 +20,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Icon } from '../components/Icon';
+import { Tooltip } from '../components/ui/Tooltip';
 import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { leadCountQueryOptions } from '../lib/apiClients/leadCount';
 import { registerKeyBinding } from '../lib/keymap';
@@ -67,21 +68,23 @@ export function LeadQueueOmnibox() {
 
   return (
     <div ref={rootRef} className="lead-queue-omnibox">
-      <button
-        ref={pillRef}
-        type="button"
-        className={`filter lead-queue-omnibox__pill${open ? ' is-active' : ''}`}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        aria-keyshortcuts="F"
-        aria-label="Filter leads"
-        onClick={() => (open ? close() : setOpen(true))}
-        data-testid="lead-queue-omnibox"
-      >
-        <Icon name="search" size={11} />
-        <span className="lead-queue-omnibox__label" aria-hidden="true">Filter…</span>
-        <kbd aria-hidden="true">F</kbd>
-      </button>
+      <Tooltip content="Filter leads" shortcut="F">
+        <button
+          ref={pillRef}
+          type="button"
+          className={`filter lead-queue-omnibox__pill${open ? ' is-active' : ''}`}
+          aria-expanded={open}
+          aria-haspopup="dialog"
+          aria-keyshortcuts="F"
+          aria-label="Filter leads"
+          onClick={() => (open ? close() : setOpen(true))}
+          data-testid="lead-queue-omnibox"
+        >
+          <Icon name="search" size={11} />
+          <span className="lead-queue-omnibox__label" aria-hidden="true">Filter…</span>
+          <kbd aria-hidden="true">F</kbd>
+        </button>
+      </Tooltip>
       {open && (popover ? (
         <popover.LeadQueueOmniboxPopover
           rootRef={rootRef}

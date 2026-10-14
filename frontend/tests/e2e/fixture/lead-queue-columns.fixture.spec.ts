@@ -71,6 +71,13 @@ for (const theme of FIXTURE_THEMES) {
       await app.setTheme(theme);
       await app.gotoRoute('/lead-queue');
       await expect(page.locator(ROWS).first()).toBeVisible();
+      // The omnibox pill leads the core filter row without wrapping it at 1440,
+      // with Linux Chromium's wider Geist Mono emulated off Linux.
+      await page.addStyleTag({ content: '.filter-row--lead-queue .filter__value { letter-spacing: 0.5px; }' });
+      const tops = await page.locator('.filter-row--lead-queue > *:not(.filter-row__spacer)').evaluateAll(
+        (items) => [...new Set(items.map((item) => Math.round(item.getBoundingClientRect().top)))],
+      );
+      expect(tops, 'the core filter row stays one line').toHaveLength(1);
       const reads = leadReads(mockApi).length;
       const t0 = markNaturalLoad(mockApi);
       const menu = await app.openFilterMenu('HIDE');
@@ -174,8 +181,8 @@ test('(e) the omnibox reads one allowlisted count, applies on Enter, and hands u
   await page.getByTestId('lead-queue-omnibox-ask-genie').click();
   const genie = page.getByRole('dialog', { name: 'Genie chat' });
   await expect(genie.getByRole('textbox', { name: 'Ask Genie' })).toHaveValue('TX IL heloc aged>7 zyrplax in or');
-  // A prefill only: nothing was asked (the panel's own background reads are not a question).
-  expect(mockApi.calls.filter((call) => call.method === 'POST' && call.path.startsWith('/api/genie'))).toEqual([]);
+  // A prefill only: nothing was asked (opening the panel starts its session; no question is sent).
+  expect(mockApi.calls.filter((call) => call.path.startsWith('/api/genie/message'))).toEqual([]);
   await page.keyboard.press('Escape');
 
   await page.getByTestId('lead-queue-omnibox').click();
@@ -222,7 +229,8 @@ test('(f) More like this offers links only, after one count without a borrower l
   // The kept-alive queue still holds its own (hidden) panel: read the dossier's.
   const dossier = page.locator('.chip-row:has([data-testid="borrower-more-like-this"])');
   await expect(dossier.locator('.similar-cohort [role="status"]')).toHaveText(/match this pattern/);
-  expect(countReads(mockApi)).toHaveLength(before + 1);
+  // The same pattern's count is served from the 60 s cache: at most one more read.
+  expect(countReads(mockApi).length).toBeLessThanOrEqual(before + 1);
 });
 
 test('(g) the filter-panel fixes: inverted pair, rounding, 25 views above the fold, chunk Retry, announced facet status', async ({ app, page, mockApi, hygiene }) => {

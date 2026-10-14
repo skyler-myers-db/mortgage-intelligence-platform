@@ -28,7 +28,7 @@ vi.mock('../AppContext', () => ({
 
 import { RowPreview } from './LeadRowPreview';
 
-vi.setConfig({ testTimeout: 30_000 });
+vi.setConfig({ testTimeout: 60_000 });
 
 const LEAD = {
   borrower_id: 'B-0000000000007',
@@ -105,7 +105,7 @@ describe('RowPreview More like this', () => {
       await flush();
       expect(container.querySelector('.similar-cohort')).not.toBeNull();
       expect(container.querySelector('.similar-cohort [role="status"]')?.textContent).toBe('12 borrowers match this pattern');
-    }, { timeout: 20_000 });
+    }, { timeout: 45_000 });
     expect(trigger(container).getAttribute('aria-expanded')).toBe('true');
     expect(trigger(container).getAttribute('aria-controls')).toBe(container.querySelector('.similar-cohort')!.id);
     const counts = calls.filter((path) => path.includes('/leads/count'));
