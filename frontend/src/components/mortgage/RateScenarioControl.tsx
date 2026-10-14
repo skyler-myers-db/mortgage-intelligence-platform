@@ -151,7 +151,8 @@ function RateLever({ index, step, onStepChange, onStepCommit, scope, stateName }
         // deviation:watch-this-level: the cohort link and "Watch this level" share one actions row.
         <div className="rate-lever__actions">
           {cohort && (
-            <Link to={cohort.href} className="btn btn--ghost btn--sm">
+            // deviation:lever-cohort-link-wraps: the sentence label wraps inside the actions row.
+            <Link to={cohort.href} className="btn btn--ghost btn--sm rate-lever__cohort">
               {cohort.label}
             </Link>
           )}
@@ -162,7 +163,7 @@ function RateLever({ index, step, onStepChange, onStepCommit, scope, stateName }
         Refi screen {typeof minSpread === 'number' ? bpsLabel(minSpread) : '—'} spread,{' '}
         {typeof minEquity === 'number' ? `${formatCount(minEquity)}%` : '—'} equity · today&apos;s par{' '}
         {typeof response.base_market_rate_pct === 'number' ? ratePct(response.base_market_rate_pct) : '—'} · book as
-        of {formatDate(response.provenance.book_as_of ?? null)}
+        of <span className="rate-lever__date">{formatDate(response.provenance.book_as_of ?? null)}</span>
       </div>
     </div>
   );

@@ -159,6 +159,87 @@ test.describe('Watch this level', () => {
   }
 });
 
+/**
+ * Linux Chromium also draws the lever's sans lines wider (CI run
+ * 38563619204's actuals: the cohort link ~397px against 390px here, the
+ * meta line ~389px against 378px), enough to wrap the meta line in the
+ * 384px lever; off Linux those lines are widened past that as well.
+ */
+const LEVER_LINE_EMULATION = `${LINUX_TEXT_EMULATION}
+.map-legend__lever .rate-lever__meta, .map-legend__lever .rate-lever__actions > a { letter-spacing: 0.1px; }`;
+
+/** The cohort link's box against the lever's, and the lines the meta line's book date paints on. */
+async function leverLines(page: Page) {
+  return page.locator('#main-content .map-legend__lever').evaluate((lever) => {
+    const link = lever.querySelector<HTMLElement>('.rate-lever__actions > a');
+    const metas = lever.querySelectorAll<HTMLElement>('.rate-lever__meta');
+    const meta = metas[metas.length - 1];
+    if (!link || !meta) throw new Error('lever lines not found');
+    // A Range over the date's characters, whatever elements carry them.
+    const text = meta.textContent ?? '';
+    const date = /book as of (.+)$/.exec(text.trim())?.[1] ?? '';
+    const start = text.lastIndexOf(date);
+    const range = document.createRange();
+    const walker = document.createTreeWalker(meta, NodeFilter.SHOW_TEXT);
+    let offset = 0;
+    for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
+      const end = offset + node.data.length;
+      if (start >= offset && start < end) range.setStart(node, start - offset);
+      if (start + date.length <= end) {
+        range.setEnd(node, start + date.length - offset);
+        break;
+      }
+      offset = end;
+    }
+    const tops = new Set([...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top)));
+    const linkStyle = getComputedStyle(link);
+    const linkText = link.clientHeight - parseFloat(linkStyle.paddingBlockStart) - parseFloat(linkStyle.paddingBlockEnd);
+    return {
+      date,
+      leverRight: lever.getBoundingClientRect().right,
+      linkRight: link.getBoundingClientRect().right,
+      linkScroll: link.scrollWidth,
+      linkClient: link.clientWidth,
+      linkLines: Math.round(linkText / parseFloat(linkStyle.lineHeight)),
+      metaLines: Math.round(meta.getBoundingClientRect().height / parseFloat(getComputedStyle(meta).lineHeight)),
+      dateLines: tops.size,
+    };
+  });
+}
+
+// W5d VRT review (segment-intelligence--*--rate-watch-row / rate-watching):
+// in the 384px lever (Segments, Console closed) the one-line cohort link ran
+// past the lever's edge, its last glyph clipped, and the meta line split its
+// date ('Jul / 14'). Both cohort labels (gains at -100, drops at +100), in
+// every layout the lever has.
+test.describe('lever lines', () => {
+  for (const route of ['/', SEGMENTS_CLEARED]) {
+    test(`${route}: the cohort link wraps inside the lever and the book date stays on one line`, async ({ app, page, mockApi }) => {
+      registerRateWatch(mockApi, ['saved']);
+      for (const consoleOpen of [false, true]) {
+        for (const step of [-100, 100]) {
+          await app.gotoRoute(`${route}${route.includes('?') ? '&' : '?'}map_mode=rate&rate_step=${step}`);
+          await setConsole(page, consoleOpen);
+          if (process.platform !== 'linux') await page.addStyleTag({ content: LEVER_LINE_EMULATION });
+          await expect(page.locator('.map-legend__lever').getByRole('link', { name: /^Open / })).toBeVisible();
+          const lines = await leverLines(page);
+          const where = `${route} console ${consoleOpen} step ${step}`;
+          console.log(`[lever-lines] ${JSON.stringify({ route, console: consoleOpen, step, ...lines })}`);
+          expect(lines.date, `${where}: the meta line names the book date`).not.toBe('');
+          expect(lines.linkScroll, `${where}: the cohort label fits its link`).toBeLessThanOrEqual(lines.linkClient);
+          expect(lines.linkRight, `${where}: the cohort link ends inside the lever`).toBeLessThanOrEqual(lines.leverRight + 0.5);
+          expect(lines.dateLines, `${where}: the book date is on one line`).toBe(1);
+          if (route === SEGMENTS_CLEARED && !consoleOpen) {
+            // The narrow lever is where both lines are at stake; elsewhere the checks above hold trivially.
+            expect(lines.linkLines, `${where}: the cohort label wraps`).toBeGreaterThan(1);
+            expect(lines.metaLines, `${where}: the meta line wraps`).toBeGreaterThan(1);
+          }
+        }
+      }
+    });
+  }
+});
+
 const CARD = '[aria-label="Composed Growth Agent plan"]';
 
 function gate() {
