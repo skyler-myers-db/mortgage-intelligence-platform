@@ -18,8 +18,15 @@
  * The list read is audit-free; save and delete are pessimistic (nothing
  * reads as saved or deleted before the server's audited write returns).
  * Errors are fixed copy and never echo the name that was typed.
+ *
+ * W5e (tables-05 step 2): each view has a "Use as my default" toggle
+ * (aria-pressed; the actor's PRIVATE_LOCAL preference,
+ * lead-queue.savedViewPrefs.ts) whose column state applies when a queue URL
+ * names none; following a view's link records it as recent, a successful
+ * list read reconciles both with the listed views, and a delete forgets it.
+ * The savable draft carries the EFFECTIVE columns (lead-queue.columns.ts).
  */
-import { useEffect, useEffectEvent, useState, type FormEvent, type RefObject } from 'react';
+import { useEffect, useEffectEvent, useId, useState, type FormEvent, type RefObject } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { Icon } from '../components/Icon';
@@ -31,8 +38,17 @@ import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { pushEscapeLayer } from '../lib/escapeStack';
 import { queryKeys } from '../lib/queryKeys';
 import type { SavedView } from '../types/leadFilters';
-import { leadQueueShareParams } from './lead-queue.filters';
+import { leadQueueShareParams, type LeadQueueColumns } from './lead-queue.filters';
+import { leadQueueColumns, useLeadQueueColumnState } from './lead-queue.columns';
 import { leadQueueFilterInputFromSearchParams, leadQueueLenderRefs } from './lead-queue.request';
+import {
+  forgetSavedView,
+  reconcileSavedViewPrefs,
+  recordRecentSavedView,
+  setDefaultSavedView,
+  useSavedViewPrefs,
+  type SavedViewRef,
+} from './lead-queue.savedViewPrefs';
 import './lead-queue.savedViews.css';
 
 export const SAVED_VIEW_NAME_MAX = 60;
@@ -62,9 +78,13 @@ export interface SavedViewDraft {
   omitted: string[];
 }
 
-/** The current queue as a savable view: the Copy-link grammar minus the campaign binding. */
-export function savedViewDraft(searchParams: URLSearchParams, allowedLenderRefs: readonly string[]): SavedViewDraft {
-  const share = leadQueueShareParams(searchParams, leadQueueFilterInputFromSearchParams(searchParams, allowedLenderRefs));
+/** The current queue as a savable view: the Copy-link grammar (effective columns) minus the campaign binding. */
+export function savedViewDraft(
+  searchParams: URLSearchParams,
+  allowedLenderRefs: readonly string[],
+  columns?: LeadQueueColumns,
+): SavedViewDraft {
+  const share = leadQueueShareParams(searchParams, leadQueueFilterInputFromSearchParams(searchParams, allowedLenderRefs), columns);
   const params = new URLSearchParams(share.search);
   const omitted = [...share.omitted];
   if ([...CAMPAIGN_BINDING].some((key) => params.has(key))) omitted.push('the campaign binding');
@@ -101,6 +121,10 @@ export function saveErrorCopy(error: unknown): string {
   return SAVED_VIEW_COPY.unavailable;
 }
 
+function viewRef(view: SavedView): SavedViewRef {
+  return { id: view.view_id, name: view.name, params: view.params };
+}
+
 export function LeadQueueSavedViewsPanel({
   id,
   searchParams,
@@ -116,7 +140,10 @@ export function LeadQueueSavedViewsPanel({
 }) {
   const queryClient = useQueryClient();
   const configOptions = useConfigOptionsQuery();
-  const draft = savedViewDraft(searchParams, leadQueueLenderRefs(configOptions.data?.target_lender_refs));
+  const columns = useLeadQueueColumnState(searchParams);
+  const draft = savedViewDraft(searchParams, leadQueueLenderRefs(configOptions.data?.target_lender_refs), leadQueueColumns(columns));
+  const prefs = useSavedViewPrefs();
+  const defaultNoteId = useId();
   const list = useQuery({
     queryKey: queryKeys.savedViews(),
     queryFn: ({ signal }) => fetchSavedViews(signal),
@@ -144,6 +171,12 @@ export function LeadQueueSavedViewsPanel({
     return () => window.removeEventListener('pointerdown', listener);
   }, []);
 
+  // A successful list read is the truth the preferences follow (no extra read).
+  const listed = list.data?.saved_views;
+  useEffect(() => {
+    if (listed) reconcileSavedViewPrefs(listed.map(viewRef));
+  }, [listed]);
+
   const refetchList = () => queryClient.invalidateQueries({ queryKey: queryKeys.savedViews() });
 
   const save = async (event: FormEvent<HTMLFormElement>) => {
@@ -170,6 +203,7 @@ export function LeadQueueSavedViewsPanel({
     setDeleteError(null);
     try {
       await deleteSavedView(view.view_id);
+      forgetSavedView(view.view_id);
       await refetchList();
     } catch (error) {
       setDeleteError(isActorChanged(error) ? SAVED_VIEW_COPY.actorChanged : SAVED_VIEW_COPY.deleteFailed);
@@ -203,16 +237,34 @@ export function LeadQueueSavedViewsPanel({
           {views.map((view) => {
             const current = isCurrentSavedView(view.params, draft.params);
             const busy = deleting.has(view.view_id);
+            const isDefault = prefs.defaultView?.id === view.view_id;
             return (
               <li key={view.view_id} className="lead-queue-saved-views__item">
                 <Link
                   to={{ search: `?${view.params}` }}
                   className={`filter-menu__item lead-queue-saved-views__link${current ? ' is-selected' : ''}`}
                   aria-current={current ? 'true' : undefined}
-                  onClick={() => onClose()}
+                  onClick={() => {
+                    recordRecentSavedView(viewRef(view));
+                    onClose();
+                  }}
                 >
                   {view.name}
                 </Link>
+                {isDefault && (
+                  <span id={defaultNoteId} className="lead-queue-saved-views__default-note">Default</span>
+                )}
+                <button
+                  type="button"
+                  className={`filter__remove lead-queue-saved-views__default${isDefault ? ' is-default' : ''}`}
+                  aria-pressed={isDefault}
+                  aria-label={`Use as my default: ${view.name}`}
+                  aria-describedby={isDefault ? defaultNoteId : undefined}
+                  onClick={() => setDefaultSavedView(isDefault ? null : viewRef(view))}
+                  data-testid="lead-queue-saved-views-default"
+                >
+                  <Icon name="check" size={9} />
+                </button>
                 <button
                   type="button"
                   className="filter__remove"

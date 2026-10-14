@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from 'react';
+import { useContext, useId, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../Icon';
 import { Button, SurfaceTitle } from '../Primitives';
@@ -7,7 +7,7 @@ import { formatCount } from '../../lib/formatters';
 import { useAuditLedgerAccess } from '../../lib/sessionQuery';
 import { LeadTableKeyboardHint, LeadTableShortcutsButton } from './LeadTableKeyboardHint';
 import { LeadTableViewControl } from './LeadTableViewControl';
-import type { LeadTableView } from './LeadTable.columns';
+import { LeadTableHeaderSlotContext, type LeadTableView } from './LeadTable.columns';
 import type { LeadCsvExportState } from './useLeadCsvExport';
 import type { TriageEntry } from './LeadTable.triage';
 import './LeadTableHeader.css';
@@ -72,6 +72,9 @@ export function LeadTableHeader({
   'use no memo';
 
   const exporting = exportState.status === 'pending';
+  // The Lead Queue's HIDE pill (tables-05 step 2): the route provides it, so
+  // its code rides the route chunk, not this one.
+  const hideControl = useContext(LeadTableHeaderSlotContext);
   const scopeNoteId = useId();
   const triageNoteId = useId();
   const partial = csvExportTruncatedOf !== null;
@@ -133,6 +136,7 @@ export function LeadTableHeader({
       <div className="lead-table__header-actions">
         <LeadTableShortcutsButton singleKeysOn={singleKeysOn} />
         {onViewChange && <LeadTableViewControl view={view} onChange={onViewChange} />}
+        {hideControl}
         {exportState.status === 'done' && (
           <LeadExportReceiptLine
             rowCount={exportState.rowCount}

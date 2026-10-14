@@ -42,6 +42,15 @@ pending or failed state; it must not claim success.
   `VIEW_LEADS` copies; omitted outside local/test when no key is configured)
   and the request id, never the view name or the params. The name passes the same
   public-text policy as a campaign name and a refusal never echoes it.
+- Column visibility (`?view=` and `?hide=`) is display state: it never reaches
+  `/api/leads`, the leads query key, the export filters or the Growth Agent
+  proof, and a change reads nothing. Which saved view is the actor's default
+  (its columns apply when a queue URL names none; it never injects a filter)
+  and the three most recently opened views live in the actor-scoped
+  PRIVATE_LOCAL browser key `mip.leadQueue.savedViews.v1` (lib/actorScope:
+  read only under the actor's own stamp, removed on an actor change). It holds
+  view ids, names and canonical params, the same public-safe text the actor's
+  saved views already hold, and is never sent anywhere.
 
 ## Source Truth
 

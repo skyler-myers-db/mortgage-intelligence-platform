@@ -259,7 +259,7 @@ test.describe('column presets', () => {
     await expectReachable(page.getByTestId(`lead-approve-${PRIMARY_BORROWER.borrower_id}`), 'Approve in Sales ops');
 
     const menu = await app.openFilterMenu('VIEW');
-    await menu.getByRole('option', { name: 'Default' }).click();
+    await menu.getByRole('option', { name: 'Review' }).click();
     await expect.poll(() => new URL(page.url()).searchParams.has('view')).toBe(false);
     await expect(page.getByTestId('lead-status-sort')).toBeVisible();
     for (const name of WORKFLOW_HEADERS) {

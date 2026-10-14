@@ -3,7 +3,13 @@ import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFil
 import { SEGMENT_DEFINITIONS } from '../lib/segmentMetadata';
 import type { SegmentCode } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
-import type { LeadTableView } from '../components/mortgage/LeadTable.columns';
+import {
+  LEAD_TABLE_HIDE_VOCABULARY,
+  leadTableHideableColumns,
+  leadTableHideToken,
+  type LeadTableHideToken,
+  type LeadTableView,
+} from '../components/mortgage/LeadTable.columns';
 import type { LeadTableSort, LeadTableSortKey, SortDir } from '../components/mortgage/LeadTable.types';
 import { QUEUE_MASKED_ID_RE } from '../lib/queueContext';
 import { MAX_QUEUE_BORROWER_IDS } from '../lib/queueBorrowerIds';
@@ -503,13 +509,19 @@ export function parseApprovalRequestBatch(sp: URLSearchParams): string | undefin
 }
 
 /** Every param the queue reads; anything else in a URL is unrecognized. */
-const KNOWN_QUEUE_PARAMS: readonly string[] = [
+export const KNOWN_QUEUE_PARAMS: readonly string[] = [
   'segment', 'segment_codes', 'segment_mode', 'state', 'zip', 'states', 'zips', 'cities',
   'borrower_ids', 'county', 'counties', 'approval_status', 'outreach_status', 'assigned_to',
   'aged_days', 'funnel_stage', 'cohort_id', ...PORTFOLIO_FILTER_KEYS, ...LEAD_BOUND_FILTER_KEYS,
-  'sort', 'dir', 'row', 'view', 'mode', 'campaign_id', 'variant_name', ...GROWTH_AGENT_PROOF_PARAMS,
+  'sort', 'dir', 'row', 'view', 'hide', 'mode', 'campaign_id', 'variant_name', ...GROWTH_AGENT_PROOF_PARAMS,
   APPROVAL_REQUEST_BATCH_PARAM,
 ];
+
+/** The effective column state a shared link or a saved view carries (lead-queue.columns.ts). */
+export interface LeadQueueColumns {
+  view: LeadTableView;
+  hidden: readonly LeadTableHideToken[];
+}
 
 export interface LeadQueueShare {
   /** `?...` or '' — the query string a copied link carries. */
@@ -521,8 +533,9 @@ export interface LeadQueueShare {
 /**
  * The query a "Copy link" carries (audit tables-09): the allowlisted,
  * sanitized filter grammar (the export's own), the segment mode, the sort
- * and direction, the column preset, the campaign binding, and `assigned_to`
- * only when it is `me`. Left out: the open row (a place, not a view), the
+ * and direction, the EFFECTIVE column state (`view` and `hide`, never the
+ * `hide=none` sentinel; `columns` when the caller knows it, else the URL's),
+ * the campaign binding, and `assigned_to` only when it is `me`. Left out: the open row (a place, not a view), the
  * Triage deck (`?mode=triage`, a mode of work, not a view), an
  * `assigned_to` that holds an email, the Growth Agent proof, an
  * approval-request scope (an approver's working view, never a shared one)
@@ -531,6 +544,7 @@ export interface LeadQueueShare {
 export function leadQueueShareParams(
   raw: URLSearchParams,
   filters: LeadQueueExportFiltersInput,
+  columns?: LeadQueueColumns,
 ): LeadQueueShare {
   const params = leadQueueFilterParams({
     ...filters,
@@ -541,8 +555,10 @@ export function leadQueueShareParams(
     params.set('sort', sort.key);
     params.set('dir', sort.dir);
   }
-  const view = parseLeadTableView(raw.get(LEAD_TABLE_VIEW_PARAM));
+  const view = columns?.view ?? parseLeadTableView(raw.get(LEAD_TABLE_VIEW_PARAM));
   if (view !== 'default') params.set(LEAD_TABLE_VIEW_PARAM, view);
+  const hide = leadTableHideParamValue(view, columns?.hidden ?? parseLeadTableHide(raw.get(LEAD_TABLE_HIDE_PARAM)));
+  if (hide !== null) params.set(LEAD_TABLE_HIDE_PARAM, hide);
   for (const key of ['campaign_id', 'variant_name'] as const) {
     const value = raw.get(key)?.trim();
     if (value) params.set(key, value);
@@ -574,6 +590,35 @@ export const LEAD_TABLE_VIEW_PARAM = 'view';
 
 export function parseLeadTableView(raw: string | null): LeadTableView {
   return raw?.trim().toLowerCase() === 'sales-ops' ? 'sales-ops' : 'default';
+}
+
+/**
+ * Hidden columns of the ranked table (tables-05 step 2), persisted as
+ * `?hide=segments,rate`: comma-separated LEAD_TABLE_HIDE_VOCABULARY tokens,
+ * lower-case, de-duplicated and re-emitted in column order, unknown tokens
+ * dropped; or the sentinel `hide=none` (explicitly no hidden column), which
+ * is written only to override the actor's default saved view. Display
+ * state like `?view=`: never in /api/leads, the leads or paged query keys,
+ * the export filters or the Growth Agent proof key, and it survives Clear all.
+ */
+export const LEAD_TABLE_HIDE_PARAM = 'hide';
+export const LEAD_TABLE_HIDE_NONE = 'none';
+
+const HIDE_TOKENS: readonly LeadTableHideToken[] = LEAD_TABLE_HIDE_VOCABULARY.map((entry) => entry.token);
+
+/** The vocabulary tokens a `?hide=` value names, in column order ('none' and junk name none). */
+export function parseLeadTableHide(raw: string | null): LeadTableHideToken[] {
+  const named = new Set((raw ?? '').split(',').map((token) => token.trim().toLowerCase()));
+  return HIDE_TOKENS.filter((token) => named.has(token));
+}
+
+/** The `?hide=` value for `view`: its hideable tokens in column order, or null when none is hidden. */
+export function leadTableHideParamValue(view: LeadTableView, hidden: readonly LeadTableHideToken[]): string | null {
+  const wanted = new Set(hidden);
+  const tokens = leadTableHideableColumns(view)
+    .map((column) => leadTableHideToken(column.key))
+    .filter((token): token is LeadTableHideToken => token !== null && wanted.has(token));
+  return tokens.length > 0 ? tokens.join(',') : null;
 }
 
 /**

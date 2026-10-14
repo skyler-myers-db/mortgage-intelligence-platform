@@ -74,11 +74,13 @@ describe('Saved views chunk failure', () => {
     await vi.waitFor(async () => {
       await settle();
       expect(byTestId('lead-queue-saved-views-panel'), document.body.textContent ?? '').not.toBeNull();
-    }, { timeout: 10_000 });
+    }, { timeout: 25_000 });
     expect(attempts.count).toBe(2);
     expect(byTestId('lead-queue-saved-views-retry')).toBeNull();
     expect(document.activeElement).toBe(trigger);
-  });
+    // The second attempt imports the real panel module cold (its whole graph
+    // transforms on first use), which takes seconds under a loaded full run.
+  }, 30_000);
 });
 
 describe('useLazyModule after a failure', () => {

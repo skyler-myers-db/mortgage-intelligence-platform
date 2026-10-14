@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  KNOWN_QUEUE_PARAMS,
+  LEAD_TABLE_HIDE_PARAM,
+  leadTableHideParamValue,
   parseBorrowerIds,
+  parseLeadTableHide,
   APPROVAL_REQUEST_BATCH_PARAM,
   LEAD_BOUND_FILTER_KEYS,
   LEAD_BOUND_LIMITS,
@@ -437,5 +441,28 @@ describe('the borrower_ids hand-off cap (W5d follow-ups deferral)', () => {
   it('counts only valid, de-duplicated ids toward the cap', () => {
     const raw = ['not-an-id', ...ids(50), ids(50)[0], 'B-ZZZZZZZZZZZZZ'].join(',');
     expect(parseBorrowerIds(raw)).toEqual(ids(50));
+  });
+});
+
+describe('the ?hide= grammar (tables-05 step 2)', () => {
+  it('reads vocabulary tokens in column order, de-duplicated and lower-cased; none and junk name none', () => {
+    expect(LEAD_TABLE_HIDE_PARAM).toBe('hide');
+    expect(parseLeadTableHide('rate,SEGMENTS,rate, location ')).toEqual(['location', 'segments', 'rate']);
+    expect(parseLeadTableHide('none')).toEqual([]);
+    expect(parseLeadTableHide('borrower,score,approval,offer,confidence,zyrplax')).toEqual([]);
+    expect(parseLeadTableHide(null)).toEqual([]);
+  });
+
+  it("writes only the view's hideable tokens, or nothing", () => {
+    expect(leadTableHideParamValue('default', ['rate', 'relationship', 'segments'])).toBe('segments,rate');
+    expect(leadTableHideParamValue('sales-ops', ['status', 'assigned'])).toBe('assigned');
+    expect(leadTableHideParamValue('default', [])).toBeNull();
+  });
+
+  it('is a known queue param, so Copy link never counts it as unrecognized', () => {
+    expect(KNOWN_QUEUE_PARAMS).toContain('hide');
+    const share = leadQueueShareParams(new URLSearchParams('state=IL&hide=none'), { stateFilter: 'IL' });
+    expect(share.search).toBe('?state=IL');
+    expect(share.omitted).toEqual([]);
   });
 });

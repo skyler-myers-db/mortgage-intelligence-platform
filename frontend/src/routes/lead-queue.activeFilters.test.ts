@@ -74,6 +74,15 @@ describe('the Triage deck mode is display state (D-approval-flow-a2)', () => {
   });
 });
 
+describe('hidden columns are display state (tables-05 step 2)', () => {
+  it('never enable Clear all and survive it, the none sentinel included', () => {
+    expect(hasLeadQueueFilters(new URLSearchParams('hide=segments,rate&view=sales-ops'))).toBe(false);
+    expect(hasLeadQueueFilters(new URLSearchParams('hide=none'))).toBe(false);
+    expect(leadQueueFilterParams(new URLSearchParams('hide=rate&state=IL')).toString()).toBe('state=IL');
+    expect(searchParamsCleared(new URLSearchParams('state=IL&hide=none&view=sales-ops')).toString()).toBe('hide=none&view=sales-ops');
+  });
+});
+
 describe('an approval-request scope is a filter (flow-02 / shell-06)', () => {
   it('Clear all drops approval_request_batch and keeps the display state', () => {
     const scoped = new URLSearchParams('approval_request_batch=0f8fad5b-d9cb-469f-a165-70867728950e&view=sales-ops');
