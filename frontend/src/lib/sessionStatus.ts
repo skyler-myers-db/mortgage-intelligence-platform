@@ -60,6 +60,8 @@ export function unrecordedWriteFor(method: string, path: string): UnrecordedWrit
   const verb = method.toUpperCase();
   if (verb === 'POST' && /\/outreach\/approve(?:[/?]|$)/.test(path)) return 'approval';
   if (verb === 'POST' && /\/outreach\/reject(?:[/?]|$)/.test(path)) return 'rejection';
+  // An approval request and its withdraw are writes (flow-02); the list GET is not.
+  if (verb === 'POST' && /\/outreach\/approval-requests(?:\/[^/?]+\/withdraw)?(?:\?|$)/.test(path)) return 'change';
   return UPDATE_METHODS.has(verb) ? 'change' : null;
 }
 

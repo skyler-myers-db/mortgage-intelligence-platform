@@ -1041,6 +1041,30 @@ the governed text policy unchanged):
 | `APPROVAL_REQUEST_REFUSED` | `outreach.approval_request_refused` / `approval_request` (the client request key) | `borrower_ids` (every id asked for), `requested_count` 0, `skipped_count`, `skipped_by_reason`, `rationale` | its own transaction, after the attempt rolled back; the 409 answers counts per reason only |
 | `APPROVAL_REQUEST_WITHDRAWN` | `outreach.approval_request_withdraw` / `approval_request_batch` | `approval_request_batch_id`, `withdrawn_count`, `borrower_ids` (withdrawn) | only when the withdraw closed at least one borrower |
 | `OUTREACH_REVOKE` | `outreach.revoke` / `approval` (the revoke row) | `approval_id`, `revoked_approval_id`, `borrower_id`, `offer_code`, `channel`, `rationale`, `request_id`, `released_assignment_id` (when a not-yet-worked assignment was released) | in the same transaction as the revoke's approvals row |
+| `GOVERNED_TEXT_REFUSED` | `outreach.governed_text_refused` / `governed_text_refusal` (a fresh UUID) | `surface` (`approve`, `reject`, `request`, `revoke`), `screen` (`pii`, `fair_lending`, `other`), `item_count` (the borrowers the attempt named); never the text, a borrower id or the matched pattern | its own transaction, when the governed text screen refuses a rationale, before any read; the route still answers the same 422 (owner ruling O1, W5d) |
+
+Owner ruling O1 (W5d `w5-lq-requests-binding`): a rationale the governed
+text screen refuses on approve, reject, approval-request create or revoke
+writes one `GOVERNED_TEXT_REFUSED` row (`backend/services/governed_text_refusal.py`)
+and answers the unchanged 422 `<field> failed the governed text policy`.
+If that row cannot be written the route answers 503 (fail-closed): a refusal
+that was not recorded never answers as though it were. Unaudited, by the same
+ruling: the approver 409 (role routing), every schema 422 (including the
+request and revoke schemas' name-shape check, which runs before the route),
+the size cap, the write-time value-policy branches and the NB-1 fixed 422.
+The structured log line `governed_text_refused` carries `surface` and
+`screen` only. Refusals by surface and screen in the last 30 days:
+
+```sql
+SELECT metadata->>'surface' AS surface,
+       metadata->>'screen' AS screen,
+       count(*) AS refusals
+FROM mip_app.action_audit
+WHERE event_type = 'GOVERNED_TEXT_REFUSED'
+  AND event_at >= now() - interval '30 days'
+GROUP BY 1, 2
+ORDER BY 3 DESC;
+```
 
 Value rules: `approval_request_batch_id`, `revoked_approval_id` and
 `released_assignment_id` are opaque ids; the three counts are bounded row
@@ -1117,6 +1141,25 @@ WHERE event_type = 'OUTREACH_REVOKE'
   AND event_at >= now() - interval '30 days'
 ORDER BY event_at DESC;
 ```
+
+Client (W5d `w5-lq-requests-binding`). The Lead Queue reads
+`GET /api/v1/outreach/approval-requests` once per mount, only once the
+session is ready (approvers `scope=open`, anyone else `scope=mine`; the
+keep-alive slot keeps the mount across a dossier and Back), and refetches it
+only while mounted, after an approve or reject (single, Triage, a bulk run
+that recorded at least one row, or the Offer), a create or a withdraw
+(`invalidateApprovalRequests`, refetchType `active`). No polling, no focus or
+reconnect refetch, no retry: a failed read shows "Approval requests
+unavailable" with a Retry and no row marks. Expect at most a handful of these
+audit-free GETs per Lead Queue session; a steady stream means a regression.
+A create is one `POST` whose `request_key` is one UUID per intent (the sorted
+ids and the reason), replayed on a retry of the same content; a request-key
+409 retires that key, so the next send of the same content is a new request
+under a new key. The request path never calls `/outreach/draft`. Every approve and reject taken in a
+request-scoped queue (`?approval_request_batch=`) carries
+`approval_request_batch_id`; an unscoped body is unchanged. A session that
+ends during a create or a withdraw reads as a lost change in the session
+dialog.
 
 ## 12. Browser RUM day aggregates and the Field performance panel
 

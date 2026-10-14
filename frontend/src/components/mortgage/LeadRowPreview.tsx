@@ -1,4 +1,4 @@
-import { useRef, type CSSProperties } from 'react';
+import { useId, useRef, type CSSProperties } from 'react';
 import { Link } from 'react-router';
 import type { LeadSummary } from '../../types';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
@@ -68,6 +68,15 @@ export interface RowPreviewApprovalGate {
   submitting: boolean;
   onApprove: (borrowerId: string) => void;
   onReject: (borrowerId: string) => void;
+  /**
+   * Request approval (flow-02 / shell-06; deviation:request-approval): set only
+   * for a ready non-approver on an unscoped queue whose row carries no open
+   * request of theirs. It renders under the banner (ApprovalBanner.tsx is
+   * another lane's file in W5d) and opens the request form; it drafts nothing.
+   */
+  onRequestApproval?: (borrowerId: string) => void;
+  /** Non-null keeps Request approval aria-disabled with this reason (a campaign binding). */
+  requestBlockedReason?: string | null;
 }
 
 /**
@@ -289,11 +298,47 @@ export function RowPreview({
               rejectDisabled={approvalGate.blocked}
               actorEmail={actorEmail}
             />
+            {approvalGate.onRequestApproval && (
+              <RequestApprovalButton
+                borrowerId={lead.borrower_id}
+                blockedReason={approvalGate.requestBlockedReason ?? null}
+                onRequest={approvalGate.onRequestApproval}
+              />
+            )}
           </div>
         )}
       </div>
     </div>
     </>
+  );
+}
+
+function RequestApprovalButton({
+  borrowerId,
+  blockedReason,
+  onRequest,
+}: {
+  borrowerId: string;
+  blockedReason: string | null;
+  onRequest: (borrowerId: string) => void;
+}) {
+  const noteId = useId();
+  return (
+    <div className="chip-row mt-2">
+      <Button
+        size="sm"
+        onClick={() => {
+          if (blockedReason === null) onRequest(borrowerId);
+        }}
+        aria-disabled={blockedReason !== null || undefined}
+        aria-describedby={blockedReason !== null ? noteId : undefined}
+        aria-label={`Request approval for ${borrowerId}`}
+        data-testid={`lead-request-approval-${borrowerId}`}
+      >
+        Request approval
+      </Button>
+      {blockedReason && <span id={noteId} className="muted fs-12">{blockedReason}</span>}
+    </div>
   );
 }
 

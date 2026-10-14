@@ -356,6 +356,12 @@ async function installMockApi(
       await fulfillJson(route, { campaigns: [] });
       return;
     }
+    // Wave 5d (flow-02): the Lead Queue reads its audit-free approval-request
+    // list once per mount; an empty list shows no chips.
+    if (path === '/api/outreach/approval-requests') {
+      await fulfillJson(route, { scope: url.searchParams.get('scope') ?? 'mine', batches: [] });
+      return;
+    }
     if (path === '/api/sales/team') {
       await fulfillJson(route, []);
       return;

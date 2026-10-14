@@ -17,10 +17,10 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { QueryClient } from '@tanstack/react-query';
 import type { LeadSummary } from '../../types';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
-import { invalidateOperationalQueries } from '../../lib/queryKeys';
 import {
   decisionFailure,
   draftForApproval as draftGovernedCopy,
+  invalidateAfterDecision,
   isDecisionPending,
   useApproveLead,
   usePendingDecisions,
@@ -40,6 +40,8 @@ import { clearCancelledBulk, readCancelledBulk } from './bulkApproveStash';
 import { useLeadBulkRun, type BulkRunCanary, type BulkRunResult } from './useLeadBulkRun';
 import {
   approveWithReport as writeApprove,
+  DECIDED_SINCE,
+  requestScopeParts,
   type ApproveExtras,
   type DecisionWriteDeps,
 } from './leadDecisionWrites';
@@ -98,6 +100,8 @@ export interface UseLeadApprovalActionsInput {
   bulkRuns?: () => BulkRunsChunk | null;
   /** The paged Lead Queue view every decision declares (D-audit-reads-a); null elsewhere. */
   leadViewId?: string | null;
+  /** The approval request a request-scoped queue answers (flow-02); every decision sends it. */
+  approvalRequestBatchId?: string | null;
 }
 
 export function useLeadApprovalActions({
@@ -113,6 +117,7 @@ export function useLeadApprovalActions({
   tableWrapRef,
   bulkRuns,
   leadViewId = null,
+  approvalRequestBatchId = null,
 }: UseLeadApprovalActionsInput) {
   // A11y: the bulk-approve button is the launch point for the bulk flow.
   // After the action settles we restore focus deterministically — to this
@@ -158,6 +163,12 @@ export function useLeadApprovalActions({
   // `decidedRef` holds rows whose approve / reject write returned ok in this
   // mount, `bulkRunIdsRef` the rows of the bulk run on the wire.
   const decidedRef = useRef<Set<string>>(new Set());
+  // Read by a 429 Retry long after its render (states-08 item 3): the rows
+  // still eligible and the latest rejectLead, synced after every commit.
+  const eligibleRef = useRef<ReadonlySet<string>>(new Set());
+  const rejectLatestRef = useRef<(borrowerId: string, reasonCode: RejectReasonCode, rationale: string | null) => Promise<boolean>>(
+    () => Promise.resolve(false),
+  );
   const bulkRunIdsRef = useRef<ReadonlySet<string>>(new Set());
   // R5-21: a run the last unmount cut short is flashed once on this mount
   // (read in the initializer, so StrictMode's double render is safe; the
@@ -181,7 +192,10 @@ export function useLeadApprovalActions({
   // motion-06: the receipt's reveal plays once per decision; markRevealed
   // flips `revealed` so a collapse + re-expand renders it finished.
   const [decisionReceipts, setDecisionReceipts] = useState<Record<string, LeadDecisionReceipt>>({});
+  // The same audit ids, readable synchronously (the decision toast is raised before the state commits).
+  const receiptIdsRef = useRef<Map<string, string | null>>(new Map());
   const recordDecision = (borrowerId: string, receipt: LeadDecisionReceipt) => {
+    receiptIdsRef.current.set(borrowerId, receipt.auditEventId);
     const markRevealed = () => setDecisionReceipts((cur) => {
       const current = cur[borrowerId];
       if (!current || current.auditEventId !== receipt.auditEventId || current.revealed) return cur;
@@ -243,6 +257,7 @@ export function useLeadApprovalActions({
     leadsById,
     campaignBinding,
     leadViewId,
+    approvalRequestBatchId,
     approve: (variables) => approveMutation.mutateAsync(variables),
     reject: (variables) => rejectMutation.mutateAsync(variables),
     requestIds,
@@ -256,6 +271,7 @@ export function useLeadApprovalActions({
       setApproval(borrowerId, decision);
       recordDecision(borrowerId, { auditEventId, decision });
     },
+    stillDecidable: (borrowerId) => !isDecisionLocked(borrowerId) && eligibleRef.current.has(borrowerId),
   };
   const approveWithReport = (
     borrowerId: string,
@@ -296,7 +312,7 @@ export function useLeadApprovalActions({
     reviewedDraft: OutreachDraftResult | null = null,
   ): Promise<LeadDecisionOutcome> {
     return approveWithReport(borrowerId, signal, extras, reviewedDraft).then(
-      ({ outcome }) => (outcome === 'session_expired' ? 'backend' : outcome),
+      ({ outcome }) => (outcome === 'session_expired' || outcome === 'actor_changed' ? 'backend' : outcome),
     );
   }
 
@@ -325,7 +341,7 @@ export function useLeadApprovalActions({
     if (!passesDecisionGate('rejection', borrowerId)) return Promise.resolve(false);
     rowInFlightRef.current[borrowerId] = true;
     const lead = leadsById.get(borrowerId);
-    const intent = intentFingerprint('reject', borrowerId, reasonCode, rationale);
+    const intent = intentFingerprint('reject', borrowerId, reasonCode, rationale, ...requestScopeParts(writeDeps));
     const rejected = rejectMutation.mutateAsync({
       decision: 'reject',
       borrowerId,
@@ -337,6 +353,7 @@ export function useLeadApprovalActions({
       offerCode: lead?.recommended_offer_code ?? null,
       bulkId: null,
       leadViewId,
+      approvalRequestBatchId,
     }).then(
       (res) => {
         if (!res.rejected) {
@@ -351,7 +368,16 @@ export function useLeadApprovalActions({
       },
       (err: unknown) => {
         if (decisionFailure(err) === 'aborted') return false;
-        toastWriteFailure(`Couldn't reject ${borrowerId}`, err, 'the rejection');
+        // states-08 item 3: a 429's Retry re-runs this same rejection once
+        // (same request_id: the intent is unsettled), if the row is still open.
+        const retry = () => {
+          if (decisionInFlight(borrowerId) || !writeDeps.stillDecidable?.(borrowerId)) {
+            toastWriteRefusal(`Couldn't reject ${borrowerId}`, DECIDED_SINCE);
+            return;
+          }
+          void rejectLatestRef.current(borrowerId, reasonCode, rationale);
+        };
+        toastWriteFailure(`Couldn't reject ${borrowerId}`, err, 'the rejection', retry);
         return false;
       },
     );
@@ -417,6 +443,12 @@ export function useLeadApprovalActions({
     setBulkRunCanary(null);
   }
 
+  /** An approval request was sent for these rows (flow-02): they leave the selection. */
+  function dropFromSelection(ids: readonly string[]) {
+    const dropped = new Set(ids);
+    setSelectedIds((cur) => new Set([...cur].filter((id) => !dropped.has(id))));
+  }
+
   // Sales Manager selection is broader than approval eligibility: already
   // approved rows must still be selectable for assignment/distribution.
   // Rejected and hold rows remain locked out so operations do not
@@ -432,6 +464,10 @@ export function useLeadApprovalActions({
       return isLeadApprovalEligible(l.approval_status, localStatus, l) && !pendingDecisions.has(l.borrower_id);
     })
     .map((l) => l.borrower_id);
+  useEffect(() => {
+    eligibleRef.current = new Set(approvalEligibleIds);
+    rejectLatestRef.current = rejectLead;
+  });
   // Audit tables-07: the selection a render may act on is the stored set
   // intersected with the rows on screen, derived here (never pruned in an
   // effect). Counts, the header checkbox, the Cmd-K verbs, the CSV scope,
@@ -483,13 +519,16 @@ export function useLeadApprovalActions({
    * (safe to retry: the server did not commit them) and the rows that never
    * started stay selected. Skipped rows (a decision already on the wire) and
    * unmount-aborted rows are not re-selected (R5-21). One invalidation for
-   * the whole run, then focus goes back to the trigger when the toolbar
-   * survives, else to the table region.
+   * the whole run (every row's write suppressed its own), the same as after
+   * a single decision: the audited reads go stale and the audit-free
+   * approval-request list refetches (flow-02 item 4a: a decided request's
+   * count, panel and scope row clear). Then focus goes back to the trigger
+   * when the toolbar survives, else to the table region.
    */
   function settleRun(result: BulkRunResult) {
     const keep = [...result.failed.map((issue) => issue.borrowerId), ...result.notStarted];
     setSelectedIds(new Set(keep));
-    if (result.ok > 0) void invalidateOperationalQueries(queryClient);
+    if (result.ok > 0) invalidateAfterDecision(queryClient);
     const focusTarget = bulkActionFocusTarget(keep.length);
     const trigger = result.kind === 'reject' ? bulkRejectBtnRef : bulkApproveBtnRef;
     requestAnimationFrame(() => {
@@ -608,6 +647,7 @@ export function useLeadApprovalActions({
     toggleSelect,
     selectRange,
     clearSelection,
+    dropFromSelection,
     toggleSelectAll,
     selectableIds,
     approvalEligibleIds,
@@ -634,5 +674,6 @@ export function useLeadApprovalActions({
     setBulkToast,
     bulkRunCanary,
     decisionReceipts,
+    decisionAuditEventId: (borrowerId: string) => receiptIdsRef.current.get(borrowerId) ?? null,
   };
 }

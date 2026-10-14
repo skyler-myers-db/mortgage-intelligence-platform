@@ -5,7 +5,8 @@
  *   - the active-row cursor (useLeadTableCursor),
  *   - the approve review (useLeadApproveReview): the first Approve or A
  *     opens it, Confirm approves that exact draft,
- *   - the result toast with "View receipt",
+ *   - the result toast with "View receipt" (on the shell toast region,
+ *     leadDecisionToast; deviation:toast-actions-and-path),
  *   - the table's keymap bindings (LeadTable.keymap + useLeadTableHotkeys),
  *   - the selection context the Cmd-K verbs read (commandSelection).
  *
@@ -13,7 +14,7 @@
  * handlers; this hook only decides WHICH row and WHEN.
  */
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { useNavigationType } from 'react-router';
+import { useNavigate, useNavigationType } from 'react-router';
 import type { LeadSummary } from '../../types';
 import type { DrawerSource } from '../AppContext';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
@@ -22,7 +23,7 @@ import { publishCommandSelection, type CommandVerb } from '../command/commandSel
 import { isLeadApprovalEligible, isLeadSelectableForSalesOps, isTerminalApproval } from './LeadTable.logic';
 import { isInsideLeadApproveReview, leadApproveReviewId } from './LeadApproveReview.ids';
 import { leadReceiptAnchorId } from './LeadRowPreview';
-import type { LeadDecisionToastState } from './LeadTableDecisionToast';
+import type { DecisionToastInput } from './leadDecisionToast';
 import type { RejectReasonCode } from './LeadTable.types';
 import type { useLeadApprovalActions } from './useLeadApprovalActions';
 import { useLeadApproveReview } from './useLeadApproveReview';
@@ -70,6 +71,10 @@ export interface UseLeadTableKeyboardFlowInput {
    * deck closes, the cursor returns to the last card shown.
    */
   triage?: { active: boolean; onApproved: (borrowerId: string) => void; lastShown: () => string | null };
+  /** The Console's Recent activity: the decision toast's action for a row not listed. */
+  openRecentActivity?: () => void;
+  /** Raise the approval's result toast (from the review chunk, loaded by then). */
+  raiseDecisionToast?: (input: DecisionToastInput) => void;
 }
 
 /** Focus an element once it is rendered (a virtualized row may need a frame or two). */
@@ -140,6 +145,8 @@ export function useLeadTableKeyboardFlow({
   onCampaignBindingChange,
   urlRowId = null,
   triage,
+  openRecentActivity,
+  raiseDecisionToast,
 }: UseLeadTableKeyboardFlowInput) {
   'use no memo';
 
@@ -175,7 +182,13 @@ export function useLeadTableKeyboardFlow({
       if (pending !== null && borrowerId !== pending) dropPendingApprove();
     },
   });
-  const [toast, setToast] = useState<LeadDecisionToastState | null>(null);
+  const navigate = useNavigate();
+  // The decision toast's action outlives this render: it reads the latest rows and receipt opener.
+  // Until the first commit installs the real opener, nothing can be opened: false, never a claimed success.
+  const toastActionsRef = useRef<{ leadsById: typeof leadsById; viewReceipt: (borrowerId: string) => boolean }>({
+    leadsById,
+    viewReceipt: () => false,
+  });
   const [refocusTable, setRefocusTable] = useState(false);
   // The review chunk being fetched for an Approve (no draft until it loads),
   // and whether that fetch failed.
@@ -208,7 +221,7 @@ export function useLeadTableKeyboardFlow({
         triage.onApproved(borrowerId);
         return;
       }
-      setToast({ borrowerId });
+      showDecisionToast(borrowerId);
       cursor.advanceAfter(borrowerId);
       setRefocusTable(true);
     },
@@ -426,6 +439,36 @@ export function useLeadTableKeyboardFlow({
     cursor.moveTo(borrowerId);
     focusWhenRendered(leadReceiptAnchorId(borrowerId));
   }
+  useEffect(() => {
+    toastActionsRef.current = {
+      leadsById,
+      // Only while this table is mounted and shown (not behind a dossier or the deck).
+      viewReceipt: (borrowerId) => {
+        const region = tableWrapRef.current;
+        if (!liveRef.current || !region?.isConnected || region.hidden) return false;
+        viewReceipt(borrowerId);
+        return true;
+      },
+    };
+  });
+
+  /** states-07 item 1: the approval's result on the shell toast region (one at a time). */
+  function showDecisionToast(borrowerId: string) {
+    const params = new URLSearchParams(window.location.search);
+    params.set('row', borrowerId);
+    const rowHref = `${window.location.pathname}?${params.toString()}`;
+    raiseDecisionToast?.({
+      borrowerId,
+      auditEventId: approval.decisionAuditEventId(borrowerId),
+      listed: leadsById.has(borrowerId),
+      isListed: () => toastActionsRef.current.leadsById.has(borrowerId),
+      viewReceipt: () => toastActionsRef.current.viewReceipt(borrowerId),
+      navigateToRow: () => {
+        void navigate(rowHref);
+      },
+      openRecentActivity,
+    });
+  }
 
   /**
    * Toolbar "Approve N eligible": one row opens its review, several run the
@@ -625,8 +668,6 @@ export function useLeadTableKeyboardFlow({
     review,
     confirmRef,
     shouldConfirmTakeFocus,
-    toast,
-    dismissToast: () => setToast(null),
     openReview,
     /** The Triage deck's A: the same guards as openReview, always inline. */
     openTriageReview: (borrowerId: string) => openReview(borrowerId, true),

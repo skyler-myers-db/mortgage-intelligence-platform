@@ -42,6 +42,7 @@ export const ACTIVITY_LABELS: Record<string, string> = {
   LEAD_UNASSIGN: 'Lead assignment released',
   VIEW_REFUSAL_REPORT_TEXT: 'Refusal question read',
   GENIE_SECTION_REVEALED: 'Genie verified section made available',
+  GOVERNED_TEXT_REFUSED: 'Decision reason refused',
 };
 
 export type DecisionTone = 'green' | 'amber' | 'red';

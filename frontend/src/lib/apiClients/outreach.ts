@@ -32,6 +32,8 @@ export interface OutreachApproveRequest {
   follow_up_in_days?: number | null;
   /** The Lead Queue view the decision was taken from, as this client declares it. */
   lead_view_id?: string | null;
+  /** The approval request this decision answers (a request-scoped queue only). */
+  approval_request_batch_id?: string | null;
   request_id: string;
 }
 
@@ -48,6 +50,7 @@ export interface OutreachRejectRequest {
   variant_name?: string | null;
   bulk_id?: string | null;
   lead_view_id?: string | null;
+  approval_request_batch_id?: string | null;
   request_id: string;
 }
 
@@ -88,6 +91,8 @@ export const outreachApi = {
       follow_up_in_days?: number | null;
       /** The paged Lead Queue's view (D-audit-reads-a); null elsewhere. */
       lead_view_id?: string | null;
+      /** The approval request this decision answers; sent only when set. */
+      approval_request_batch_id?: string | null;
       request_id?: string;
     },
     signal?: AbortSignal,
@@ -114,6 +119,8 @@ export const outreachApi = {
         assigned_to_email: opts.assigned_to_email ?? null,
         follow_up_in_days: opts.follow_up_in_days ?? null,
         lead_view_id: opts.lead_view_id ?? null,
+        // Only when set, so an unscoped body stays byte-identical.
+        ...(opts.approval_request_batch_id ? { approval_request_batch_id: opts.approval_request_batch_id } : {}),
         // R5-01 idempotency: generate one UUID per user action and reuse
         // across any transparent retries inside _fetchWithRetry. The
         // backend has a unique index on mip_app.approvals(request_id)
@@ -147,6 +154,8 @@ export const outreachApi = {
       /** One bulk rejection run: every row carries the same id and shared note. */
       bulk_id?: string | null;
       lead_view_id?: string | null;
+      /** The approval request this decision answers; sent only when set. */
+      approval_request_batch_id?: string | null;
       request_id?: string;
     },
     signal?: AbortSignal,
@@ -165,6 +174,7 @@ export const outreachApi = {
         variant_name: opts.variant_name ?? null,
         bulk_id: opts.bulk_id ?? null,
         lead_view_id: opts.lead_view_id ?? null,
+        ...(opts.approval_request_batch_id ? { approval_request_batch_id: opts.approval_request_batch_id } : {}),
         request_id: opts.request_id ?? _newRequestId(),
       },
       signal,

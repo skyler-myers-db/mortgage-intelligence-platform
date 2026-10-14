@@ -482,12 +482,32 @@ export function isAssignedToMe(value: string | null | undefined): boolean {
   return value?.trim().toLowerCase() === ASSIGNED_TO_ME;
 }
 
+/**
+ * `?approval_request_batch=<id>`: an approver's queue scoped to one open
+ * approval request (audit flow-02 / shell-06, D-approval-flow-c). The server
+ * reads the request's open borrowers and refuses the scope beside a cohort, a
+ * borrower list or a Growth Agent handoff; v1 scopes only an unbound queue.
+ */
+export const APPROVAL_REQUEST_BATCH_PARAM = 'approval_request_batch';
+const APPROVAL_REQUEST_BATCH_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const REQUEST_SCOPE_CONFLICTS: readonly string[] = [
+  'cohort_id', 'borrower_ids', 'campaign_id', 'variant_name', ...GROWTH_AGENT_PROOF_PARAMS,
+];
+
+/** The scoped request id, lower-cased; undefined when absent, malformed or beside a conflicting param. */
+export function parseApprovalRequestBatch(sp: URLSearchParams): string | undefined {
+  const raw = sp.get(APPROVAL_REQUEST_BATCH_PARAM)?.trim().toLowerCase();
+  if (!raw || !APPROVAL_REQUEST_BATCH_RE.test(raw)) return undefined;
+  return REQUEST_SCOPE_CONFLICTS.some((key) => Boolean(sp.get(key)?.trim())) ? undefined : raw;
+}
+
 /** Every param the queue reads; anything else in a URL is unrecognized. */
 const KNOWN_QUEUE_PARAMS: readonly string[] = [
   'segment', 'segment_codes', 'segment_mode', 'state', 'zip', 'states', 'zips', 'cities',
   'borrower_ids', 'county', 'counties', 'approval_status', 'outreach_status', 'assigned_to',
   'aged_days', 'funnel_stage', 'cohort_id', ...PORTFOLIO_FILTER_KEYS, ...LEAD_BOUND_FILTER_KEYS,
   'sort', 'dir', 'row', 'view', 'mode', 'campaign_id', 'variant_name', ...GROWTH_AGENT_PROOF_PARAMS,
+  APPROVAL_REQUEST_BATCH_PARAM,
 ];
 
 export interface LeadQueueShare {
@@ -503,8 +523,9 @@ export interface LeadQueueShare {
  * and direction, the column preset, the campaign binding, and `assigned_to`
  * only when it is `me`. Left out: the open row (a place, not a view), the
  * Triage deck (`?mode=triage`, a mode of work, not a view), an
- * `assigned_to` that holds an email, the Growth Agent proof and unknown
- * params. `filters.assignedTo` is the RAW URL value, never the resolved one.
+ * `assigned_to` that holds an email, the Growth Agent proof, an
+ * approval-request scope (an approver's working view, never a shared one)
+ * and unknown params. `filters.assignedTo` is the RAW URL value, never the resolved one.
  */
 export function leadQueueShareParams(
   raw: URLSearchParams,
@@ -533,6 +554,7 @@ export function leadQueueShareParams(
     else if (key === TRIAGE_MODE_PARAM) omitted.add('the triage deck');
     else if (key === 'assigned_to' && raw.get(key)?.trim()) omitted.add('the assignee email');
     else if ((GROWTH_AGENT_PROOF_PARAMS as readonly string[]).includes(key)) omitted.add('the Growth Agent proof');
+    else if (key === APPROVAL_REQUEST_BATCH_PARAM) omitted.add('the approval request');
     else if (!KNOWN_QUEUE_PARAMS.includes(key)) unknown += 1;
   }
   if (unknown > 0) omitted.add(unknown === 1 ? '1 unrecognized parameter' : `${unknown} unrecognized parameters`);

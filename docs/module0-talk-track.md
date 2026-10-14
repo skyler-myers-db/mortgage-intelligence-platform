@@ -306,7 +306,7 @@ Maker-checker beat (optional, 30 seconds):
 
 > "Most lenders split the person who builds a list from the person who
 > releases it. An analyst without the approver role selects borrowers and
-> asks for approval with a short note; nothing is drafted or sent. An approver
+> asks for approval with a short reason; nothing is drafted or sent. An approver
 > opens that request in the Lead Queue, reviews each borrower's draft in the
 > same review sheet, and decides. The ledger shows both sides: who asked, why,
 > and who approved. The server refuses the person who raised a request when
@@ -314,10 +314,14 @@ Maker-checker beat (optional, 30 seconds):
 > while outreach is still queued, which writes its own audit row."
 
 Claim boundary: the request, decision link and revoke endpoints and their
-audit rows are live from the W5b backend; the Lead Queue request and revoke
-controls ship with the W5d UI. Until then, demo this beat from the audit
-explorer (`APPROVAL_REQUESTED`, `APPROVE` with its request id,
-`OUTREACH_REVOKE`), not from a button.
+audit rows are live from the W5b backend, and the Lead Queue request
+controls are live from W5d (a non-approver's "Request approval" with its
+"Reason for the request", "My requests" with Withdraw, the approver's
+"Approval requests" opening a scoped queue). The revoke control ships with
+W5e `w5-lead-table-compile`: until then, show a revoke from the audit ledger
+(`OUTREACH_REVOKE`), not from a button. A rationale refused by the governed
+text screen is recorded as `GOVERNED_TEXT_REFUSED` (surface, screen and a
+count; never the text).
 
 ## Close
 

@@ -24,6 +24,7 @@ import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
 import { parseLeadTablePlace, searchParamsWithLeadTablePlace } from '../../routes/lead-queue.filters';
+import { clearToasts, getToasts } from '../../lib/toast';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -148,6 +149,7 @@ describe('LeadTable: Back / Forward away from an open inline review', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearToasts();
     installLocalStorage();
     clearSingleKeyShortcutsPreference();
     draftOutreach.mockImplementation((borrowerId: string) => Promise.resolve(draftFor(borrowerId)));
@@ -274,7 +276,7 @@ describe('LeadTable: Back / Forward away from an open inline review', () => {
     await flush();
     // The approval the reader confirmed landed and was reported: the review
     // was not dropped out from under its own write.
-    expect(container.querySelector('[data-testid="lead-decision-status"]')?.textContent).toBe(`Approved ${ROW_B}.`);
+    expect(getToasts().map((toast) => toast.title)).toEqual([`Approved ${ROW_B}`]);
     expect(setApproval).toHaveBeenCalledTimes(1);
     expect(setApproval).toHaveBeenCalledWith(ROW_B, 'approved');
 

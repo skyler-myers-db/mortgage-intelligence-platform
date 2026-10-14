@@ -90,6 +90,15 @@ interface LeadTableBulkActionsProps {
   totalMatching?: number | null;
   /** The campaign handoff link (LeadBulkCampaignHandoff, lazy), on the scope line. */
   campaignHandoff?: ReactNode;
+  /**
+   * "Request approval for N" (flow-02 / shell-06; deviation:request-approval):
+   * a ready non-approver on an unscoped queue only. `blockedReason` keeps it
+   * aria-disabled with its reason (a campaign binding). A selection over the
+   * server's per-request cap is the lazy form's to refuse (REQUEST_OVER_CAP).
+   */
+  requestApproval?: { blockedReason: string | null; onOpen: () => void } | null;
+  /** The request form (RequestApprovalForm, lazy), while it is open from here. */
+  requestGate?: ReactNode;
 }
 
 const PREVIEW_SAMPLES_SELECTOR = '[data-testid="lead-bulk-preview-samples"]';
@@ -127,12 +136,23 @@ export function LeadTableBulkActions({
   loadedCount = 0,
   totalMatching = null,
   campaignHandoff = null,
+  requestApproval = null,
+  requestGate = null,
 }: LeadTableBulkActionsProps) {
   const armingId = useId();
+  const requestNoteId = useId();
   const [bulkRationale, setBulkRationale] = useState('');
   const gateOpen = selectionCount > 1 && bulkRationaleOpen;
   const rejectGateOpen = selectionCount > 1 && bulkRejectOpen;
   const running = runKind !== null;
+  const requestOff = requestApproval !== null && (
+    requestApproval.blockedReason !== null || running || selectedApprovalEligibleCount === 0
+  );
+  // motion-08 slice 2: a run's own button shows Button loading and is never native disabled
+  // (focus would drop to <body>), even once its last group leaves no selected row eligible.
+  // Plain booleans, not a helper: a closure here costs the compiled toolbar memo slots.
+  const approveRunning = bulkApproving && runKind === 'approve';
+  const rejectRunning = bulkApproving && runKind === 'reject';
   const rationaleMissing = bulkRationale.trim().length === 0;
   const armingCopy = !gateOpen
     ? null
@@ -244,10 +264,13 @@ export function LeadTableBulkActions({
           onClick={() => {
             if (!bulkBlocked) onOpenBulkReject?.();
           }}
+          // motion-08 slice 2: its own run shows Button loading (never native
+          // disabled, which would drop focus); the other kind's run disables it.
           disabled={
-            approverGate !== null || campaignBindingBlocked || bulkApproving
-            || selectedApprovalEligibleCount === 0
+            approverGate !== null || campaignBindingBlocked
+            || ((bulkApproving || selectedApprovalEligibleCount === 0) && !rejectRunning)
           }
+          loading={rejectRunning}
           aria-disabled={bulkBlocked || undefined}
           aria-describedby={describedBy(
             approverGate !== null && APPROVER_ROLE_STATUS_ID,
@@ -268,9 +291,10 @@ export function LeadTableBulkActions({
           icon={bulkApproving ? undefined : 'check'}
           onClick={approve}
           disabled={
-            approverGate !== null || campaignBindingBlocked || bulkApproving
-            || selectedApprovalEligibleCount === 0
+            approverGate !== null || campaignBindingBlocked
+            || ((bulkApproving || selectedApprovalEligibleCount === 0) && !approveRunning)
           }
+          loading={approveRunning}
           aria-disabled={armingCopy !== null || bulkBlocked || undefined}
           aria-describedby={describedBy(
             approverGate !== null && APPROVER_ROLE_STATUS_ID,
@@ -286,7 +310,25 @@ export function LeadTableBulkActions({
             ? `${bulkRunVerb('approve')}…`
             : `Approve ${selectedApprovalEligibleCount} eligible`}
         </Button>
+        {requestApproval && (
+          <Button
+            size="sm"
+            onClick={() => {
+              if (!requestOff) requestApproval.onOpen();
+            }}
+            aria-disabled={requestOff || undefined}
+            aria-describedby={requestApproval.blockedReason !== null ? requestNoteId : undefined}
+            data-testid="lead-bulk-request-approval"
+          >
+            Request approval for {selectedApprovalEligibleCount}
+          </Button>
+        )}
       </div>
+      {requestApproval?.blockedReason && (
+        <span id={requestNoteId} className="muted fs-12" data-testid="lead-bulk-request-blocked">
+          {requestApproval.blockedReason}
+        </span>
+      )}
       {armingCopy !== null && (
         <span id={armingId} className="muted fs-12" data-testid="lead-bulk-arming">{armingCopy}</span>
       )}
@@ -309,6 +351,7 @@ export function LeadTableBulkActions({
       )}
       {gateOpen && gateReview}
       {rejectGateOpen && rejectGate}
+      {requestGate}
       {running && runStatus}
     </div>
   );

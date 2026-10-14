@@ -18,6 +18,15 @@ describe('session status: what the dialog says was not recorded', () => {
     expect(unrecordedWriteFor('GET', '/api/v1/leads')).toBeNull();
   });
 
+  it('classifies an approval request and its withdraw as a change, never the list (flow-02)', () => {
+    expect(unrecordedWriteFor('POST', '/api/v1/outreach/approval-requests')).toBe('change');
+    expect(unrecordedWriteFor('POST', '/api/outreach/approval-requests')).toBe('change');
+    expect(unrecordedWriteFor('POST', '/api/v1/outreach/approval-requests/0f8fad5b-d9cb-469f-a165-70867728950e/withdraw'))
+      .toBe('change');
+    expect(unrecordedWriteFor('GET', '/api/v1/outreach/approval-requests?scope=mine')).toBeNull();
+    expect(unrecordedWriteFor('POST', '/api/v1/outreach/approval-requests/x/other')).toBeNull();
+  });
+
   it('never marks anything before the session has ended', () => {
     markUnrecordedWrite('bulk_approval');
     expect(getSessionStatus()).toEqual({ expired: false, unrecorded: null });

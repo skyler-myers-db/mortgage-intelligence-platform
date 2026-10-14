@@ -19,6 +19,7 @@ import { rateWindowFixtures } from './data/rateWindow';
 import { salesOpsFixtures } from './data/salesOps';
 import { segmentFixtures } from './data/segments';
 import { shellFixtures } from './data/shell';
+import { approvalRequestFixtures } from './data/approvalRequests';
 
 export function defaultFixtures(): FixtureEntry[] {
   return [
@@ -34,5 +35,6 @@ export function defaultFixtures(): FixtureEntry[] {
     ...genieFixtures,
     ...adminFixtures,
     ...dataEstateFixtures,
+    ...approvalRequestFixtures,
   ];
 }

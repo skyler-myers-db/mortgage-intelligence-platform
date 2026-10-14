@@ -562,7 +562,7 @@ def test_the_commit_reraise_still_answers_422_when_the_precheck_is_bypassed(
 ) -> None:
     draft = _draft()
     ran = _enable_atomic_decisions(monkeypatch, fake_lakebase_client)
-    monkeypatch.setattr(outreach_mod, "_refuse_ungoverned_text", lambda values: None)
+    monkeypatch.setattr(outreach_mod, "refuse_ungoverned_text_audited", lambda *_a, **_k: None)
 
     response = client.post(
         "/api/outreach/approve",

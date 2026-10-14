@@ -46,6 +46,7 @@ from backend.services.audit_store import (
 )
 from backend.services.disclosures import disclosure_audit_payload
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.governed_text_refusal import refuse_ungoverned_text_audited
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.job_trigger import enqueue_lifecycle_trigger
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
@@ -87,9 +88,6 @@ from backend.services.outreach_drafts import (
     _verified_generated_draft,
 )
 from backend.services.outreach_intelligence import compose_intelligent_outreach
-from backend.services.outreach_text_policy import (
-    refuse_ungoverned_text as _refuse_ungoverned_text,
-)
 from backend.services.outreach_text_policy import (
     text_policy_refusal as _text_policy_refusal,
 )
@@ -272,7 +270,13 @@ def approve_outreach(
     safe_bulk_rationale = (
         scrub_free_text(payload.bulk_rationale) if payload.bulk_rationale else None
     )
-    _refuse_ungoverned_text({"rationale": safe_rationale, "bulk_rationale": safe_bulk_rationale})
+    refuse_ungoverned_text_audited(
+        lakebase,
+        actor=actor,
+        surface="approve",
+        values={"rationale": safe_rationale, "bulk_rationale": safe_bulk_rationale},
+        item_count=1,
+    )
     if payload.request_id:
         try:
             replay = _lookup_persisted_decision_replay(
@@ -628,7 +632,9 @@ def reject_outreach(
     # 2026-06-11 audit P2-5: optional approver allowlist, same as /approve.
     actor = require_approver(request)
     safe_rationale = _compose_reject_rationale(payload.rationale_code, payload.rationale)
-    _refuse_ungoverned_text({"rationale": safe_rationale})
+    refuse_ungoverned_text_audited(
+        lakebase, actor=actor, surface="reject", values={"rationale": safe_rationale}, item_count=1
+    )
     if payload.request_id:
         try:
             replay = _lookup_persisted_decision_replay(

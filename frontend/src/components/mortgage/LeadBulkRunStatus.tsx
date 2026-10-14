@@ -28,6 +28,7 @@ const ISSUE_REASON: Record<BulkRunIssue['outcome'], string> = {
   network: 'the request never reached the server; retry it',
   session_expired: 'the session ended; not recorded',
   duplicate: 'skipped: a decision was already on the wire',
+  actor_changed: 'the signed-in user changed; not recorded',
 };
 
 function issueReason(issue: BulkRunIssue): string {
@@ -83,7 +84,7 @@ export function LeadBulkRunResult({
   onDismiss: () => void;
 }) {
   const issues = [...result.failed, ...result.skipped];
-  const tone = result.failed.length > 0 || result.sessionEnded
+  const tone = result.failed.length > 0 || result.sessionEnded || result.actorChanged
     ? 'bulk-actions__toast--danger'
     : result.notStarted.length > 0 || result.skipped.length > 0
       ? 'bulk-actions__toast--warn'

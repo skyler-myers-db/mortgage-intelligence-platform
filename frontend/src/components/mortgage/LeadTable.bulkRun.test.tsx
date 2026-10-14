@@ -265,6 +265,76 @@ describe('LeadTable bulk run', () => {
     expect(q('[data-testid="lead-bulk-canary"]'), 'never on the approve gate').toBeNull();
   });
 
+  /** The run's invalidations of the audit-free approval-request list (flow-02 item 4a). */
+  function approvalRequestInvalidations(invalidate: { mock: { calls: unknown[][] } }) {
+    return invalidate.mock.calls.filter(([filters]) => {
+      const key = (filters as { queryKey?: readonly unknown[] } | undefined)?.queryKey;
+      return key?.[0] === 'mip' && key[1] === 'approval-requests';
+    });
+  }
+
+  async function openRejectGateWithNote() {
+    act(() => q<HTMLInputElement>('[data-testid="lead-select-all"]')!.click());
+    act(() => q<HTMLButtonElement>('[data-testid="lead-bulk-reject"]')!.click());
+    await vi.waitFor(async () => {
+      await flush(1);
+      expect(q('[data-testid="lead-bulk-reject-gate"]')).not.toBeNull();
+    }, { timeout: 15_000 });
+    const reason = q<HTMLSelectElement>('[data-testid="lead-bulk-reject-reason"]')!;
+    act(() => {
+      reason.value = reason.options[1].value;
+      reason.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const note = q<HTMLTextAreaElement>('[data-testid="lead-bulk-reject-note"]')!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(note, 'Out of footprint for this sweep');
+      note.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  it('a completed approve run refetches the active approval-request list exactly once (flow-02 item 4a)', async () => {
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    await startApproveRun();
+    // The canary, then three groups of up to three.
+    for (let group = 0; group < 4; group += 1) await releaseHeld();
+    await flush(5);
+
+    expect(approve).toHaveBeenCalledTimes(9);
+    expect(q('[data-testid="lead-bulk-run"]'), 'the run is over').toBeNull();
+    // Every row's write suppressed its own invalidation: the settled run refetches once.
+    expect(approvalRequestInvalidations(invalidate)).toEqual([
+      [{ queryKey: ['mip', 'approval-requests'], refetchType: 'active' }],
+    ]);
+  });
+
+  it('a completed reject run refetches the active approval-request list exactly once (flow-02 item 4a)', async () => {
+    reject.mockImplementation(() => Promise.resolve({ rejected: true, audit_event_id: 'audit-reject' }));
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    await openRejectGateWithNote();
+    act(() => q<HTMLButtonElement>('[data-testid="lead-bulk-reject-confirm"]')!.click());
+    await vi.waitFor(async () => {
+      await flush(1);
+      expect(reject).toHaveBeenCalledTimes(9);
+      expect(q('[data-testid="lead-bulk-run"]')).toBeNull();
+    }, { timeout: 15_000 });
+
+    expect(approvalRequestInvalidations(invalidate)).toEqual([
+      [{ queryKey: ['mip', 'approval-requests'], refetchType: 'active' }],
+    ]);
+  });
+
+  it('a run that recorded nothing (a refused canary) does not refetch the approval-request list', async () => {
+    approve.mockImplementationOnce(() => Promise.reject(new Error('bulk_rationale failed the governed text policy')));
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    await startApproveRun();
+    await flush(5);
+
+    expect(approve).toHaveBeenCalledTimes(1);
+    expect(q('[data-testid="lead-bulk-result"]')?.textContent).toContain('0 of 9 approved');
+    expect(approvalRequestInvalidations(invalidate)).toEqual([]);
+  });
+
   it('Stop leaves the rest unsent and selected; the report lists them and stays until dismissed', async () => {
     await startApproveRun();
     act(() => q<HTMLButtonElement>('[data-testid="lead-bulk-stop"]')!.click());

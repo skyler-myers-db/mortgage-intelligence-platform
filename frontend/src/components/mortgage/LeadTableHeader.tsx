@@ -35,6 +35,8 @@ export interface LeadTableHeaderProps {
   /** The Triage deck's entry (approvers; null hides it). */
   triageEntry?: TriageEntry | null;
   onEnterTriage?: () => void;
+  /** The approval-request chips (flow-02; the Lead Queue only), beside the Triage entry. */
+  requestChips?: ReactNode;
 }
 
 /**
@@ -60,6 +62,7 @@ export function LeadTableHeader({
   onExport,
   triageEntry = null,
   onEnterTriage,
+  requestChips = null,
 }: LeadTableHeaderProps) {
   // The shell's compile posture (audit runtime-04, cut 5): compiled, this
   // module's memo caches would ride the LeadTable chunk and buy nothing
@@ -75,7 +78,7 @@ export function LeadTableHeader({
   // `.btn--sm` tall; its modifier gives the keycap hint block clearance from
   // it without growing the header (LeadTable.css,
   // deviation:lead-table-title-row-clearance).
-  const titleRow = Boolean(headerStatus || triageEntry);
+  const titleRow = Boolean(headerStatus || triageEntry || requestChips);
   return (
     <div className={`surface__hdr surface__hdr--split${titleRow ? ' lead-table__header--title-row' : ''}`}>
       <div className="surface__hdr-main">
@@ -108,6 +111,7 @@ export function LeadTableHeader({
               {triageEntry?.disabledReason && (
                 <span id={triageNoteId} className="sr-only">{triageEntry.disabledReason}</span>
               )}
+              {requestChips}
             </div>
           ) : (
             <SurfaceTitle>Ranked borrowers</SurfaceTitle>

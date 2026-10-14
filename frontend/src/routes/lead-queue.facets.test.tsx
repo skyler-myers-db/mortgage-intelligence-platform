@@ -131,6 +131,14 @@ describe('Lead Queue facet counts', () => {
     expect(listbox()!.querySelector('[aria-hidden="true"].filter-menu__count, .filter-menu__count')).toBeNull();
   });
 
+  it('never counts an approval-request scope (the server refuses it): labels only, nothing read', async () => {
+    await mountAt('?approval_request_batch=0f8fad5b-d9cb-469f-a165-70867728950e&segment=itm');
+    await toggle('STATE');
+    expect(listbox()).not.toBeNull();
+    expect(facetCalls).toEqual([]);
+    expect(listbox()!.querySelector('.filter-menu__count')).toBeNull();
+  });
+
   it('never reads for an uncounted menu, and a change while closed reads nothing', async () => {
     await mountAt('');
     await toggle('RELATIONSHIP');

@@ -23,7 +23,9 @@
  *      A opens no review, so no second DRAFT_OUTREACH row, and one approve;
  *  (h) with the Console open at 1440x900, every bulk toolbar control of the
  *      approve gate (D-approval-flow-a1) and the reject gate (d) is on
- *      screen and the control row wraps to at most two lines (W5b).
+ *      screen and the control row wraps to at most two lines (W5b); and a
+ *      non-approver's toolbar, "Request approval for N" included (W5d,
+ *      flow-02), in both themes.
  *
  * Axe runs on '.tbl-wrap' during the pending approve in (a), and on '.toast'
  * in (c), on the sales toast. The brief asked for '.toast' during (a)'s
@@ -37,11 +39,12 @@ import { readFile } from 'node:fs/promises';
 import type { Locator, Page } from '@playwright/test';
 import type { LeadExportReceipt, LeadExportReceiptRequest } from '../../../src/lib/apiClients/leadExport';
 import type { ApproveResult, DecisionReceipt } from '../../../src/lib/apiTypes';
-import type { LeadAssignment, LeadSummary } from '../../../src/types';
+import type { LeadAssignment, LeadSummary, SessionResponse } from '../../../src/types';
 import { LEADS, PRIMARY_BORROWER } from './data/borrowers';
 import { APPROVE_AUDIT_ID, RequestGate, approveResult, ledgerReceipt } from './data/decisionReceipt';
 import { EXPORT_RECEIPT_ID, leadExportReceiptFor } from './data/exportAudit';
 import { leadFixtures } from './data/leads';
+import { NON_APPROVER_SESSION } from './data/approvalRequests';
 import { SALES_TEAM } from './data/portfolio';
 import { registerDraftEcho, registerHeldDecision, reviewSubject } from './data/queueKeyboard';
 import { json, type FixtureReply, type FixtureRequest, type MockApi } from './mockApi';
@@ -474,4 +477,21 @@ test.describe('(h) the bulk toolbar fits with the Console open', () => {
     }
     expect(await controlLines(page), 'reject gate: the controls wrap to two lines at most').toBeLessThanOrEqual(2);
   });
+
+  for (const theme of FIXTURE_THEMES) {
+    test(`${theme}: a non-approver's toolbar, Request approval for N included, on screen in two lines at most`, async ({ app, mockApi, page }) => {
+      mockApi.register<SessionResponse>('GET', '/api/session', () => json<SessionResponse>(NON_APPROVER_SESSION));
+      await app.setTheme(theme);
+      await app.gotoRoute('/lead-queue');
+      await app.openConsole();
+      const boxes = page.locator('table.tbl tbody [data-testid^="lead-select-B-"]');
+      for (let index = 0; index < 3; index += 1) await boxes.nth(index).check();
+      await expect(page.getByTestId('lead-bulk-actions')).toBeVisible();
+      for (const testId of ['lead-bulk-clear', 'lead-bulk-reject', 'lead-bulk-approve', 'lead-bulk-request-approval']) {
+        await expectOnScreen(page, page.getByTestId(testId), testId);
+      }
+      await expect(page.getByTestId('lead-bulk-request-approval')).toHaveText(/^Request approval for \d+$/);
+      expect(await controlLines(page), 'non-approver: the controls wrap to two lines at most').toBeLessThanOrEqual(2);
+    });
+  }
 });

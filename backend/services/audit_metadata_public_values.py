@@ -58,6 +58,8 @@ from backend.services.audit_metadata_policy import (
     _RESULT_FILTER_NUMERIC_BOUNDS,
     _SALES_DISPOSITION_OUTCOMES,
     _SALES_STRATEGIES,
+    GOVERNED_TEXT_SCREEN_VALUES,
+    GOVERNED_TEXT_SURFACE_VALUES,
     LEDGER_SURFACES,
     AuditMetadataValueViolation,
     _metadata_values_for,
@@ -719,3 +721,17 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     # VIEW_LEADS paging and the decisions / export that declare a view.
     for field, reason in validate_lead_view_values(metadata):
         raise AuditMetadataValueViolation(field, reason)
+    # GOVERNED_TEXT_REFUSED (owner ruling O1): two closed tokens and a count.
+    for field, value in _metadata_values_for(metadata, {"surface"}):
+        if value is not None and str(value) not in GOVERNED_TEXT_SURFACE_VALUES:
+            raise AuditMetadataValueViolation(field, "must be a governed decision surface")
+    for field, value in _metadata_values_for(metadata, {"screen"}):
+        if value is not None and str(value) not in GOVERNED_TEXT_SCREEN_VALUES:
+            raise AuditMetadataValueViolation(field, "must be a governed text screen")
+    for field, value in _metadata_values_for(metadata, {"item_count"}):
+        if value is None:
+            continue
+        try:
+            validate_row_count(value)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, str(exc)) from exc

@@ -20,6 +20,7 @@ import {
 } from './LeadTableWorkflowCells';
 import { APPROVER_ROLE_STATUS_ID, describedBy } from './approverGate';
 import { ScoreBadge } from './ScoreBadge';
+import type { ApprovalRequestMark } from './LeadTable.types';
 
 interface LeadTableRowProps {
   lead: LeadSummary;
@@ -57,6 +58,16 @@ interface LeadTableRowProps {
    * preview's approval banner stands down, so two gates never stack.
    */
   reviewActive?: boolean;
+  /**
+   * An OPEN approval request holds this row (flow-02; deviation:request-approval):
+   * the requester's chip replaces the disabled Approve / Reject, the approver's
+   * icon marker follows them. Hidden whenever `approval` is set.
+   */
+  requestMark?: ApprovalRequestMark | null;
+  /** The request path is open (a ready non-approver, unscoped queue); its blocked reason, if any. */
+  canRequestApproval?: boolean;
+  requestBlockedReason?: string | null;
+  onRequestApproval?: (borrowerId: string) => void;
   onToggleRow: (lead: LeadSummary, isOpen: boolean) => void;
   /** `range`: Shift was held (audit tables-07): select from the anchor to this row. */
   onToggleSelect: (borrowerId: string, range: boolean) => void;
@@ -108,6 +119,10 @@ export function LeadTableRow({
   shortcutsLive = true,
   reviewSlot = null,
   reviewActive = false,
+  requestMark = null,
+  canRequestApproval = false,
+  requestBlockedReason = null,
+  onRequestApproval,
   onToggleRow,
   onToggleSelect,
   onApprove,
@@ -262,7 +277,8 @@ export function LeadTableRow({
         {approval === 'rejected' && <Chip variant="danger" icon="cross">Rejected</Chip>}
         {approval === 'hold' && <Chip variant="warning" icon="shield">Hold</Chip>}
         {!approval && !isApprovalEligible && <Chip variant="warning" icon="shield">Not actionable</Chip>}
-        {!approval && isApprovalEligible && (
+        {!approval && isApprovalEligible && requestMark?.tone === 'warning' && requestMark.node}
+        {!approval && isApprovalEligible && requestMark?.tone !== 'warning' && (
           <div className="lead-table__approval-actions" onClick={stop}>
             <Button
               variant="primary"
@@ -282,23 +298,28 @@ export function LeadTableRow({
             >
               {pendingDecision === 'approve' ? 'Approving…' : 'Approve'}
             </Button>
-            <button
-              type="button"
-              className="btn btn--sm lead-table__reject"
-              aria-label={pendingDecision === 'reject' ? `Rejecting ${lead.borrower_id}` : `Reject ${lead.borrower_id}`}
-              aria-busy={pendingDecision === 'reject' || undefined}
+            {/* motion-08 slice 2: a reject on the wire shows Button loading (spinner over
+                the same box, same name, aria-busy + aria-disabled); native disabled only for
+                the gate, a blocked binding or an approve on the wire, so focus stays put. */}
+            <Button
+              size="sm"
+              icon="cross"
+              className="lead-table__reject"
+              loading={pendingDecision === 'reject'}
+              aria-label={`Reject ${lead.borrower_id}`}
               aria-keyshortcuts={rowKeys && !gated ? 'R' : undefined}
               title={approverGate ?? 'Reject'}
-              disabled={gated || approvalActionsDisabled || decisionPending}
+              disabled={gated || approvalActionsDisabled || pendingDecision === 'approve'}
               aria-describedby={decisionDescribedBy}
               onClick={(e) => {
                 e.stopPropagation();
                 onReject(lead.borrower_id);
               }}
               data-testid={`lead-reject-${lead.borrower_id}`}
-            >
-              <Icon name="cross" size={12} />
-            </button>
+            />
+            {/* deviation:request-approval: the approver's mark (ApprovalRequestMarks)
+                follows Reject, so both buttons keep an unmarked row's places. */}
+            {requestMark?.node}
           </div>
         )}
       </td>
@@ -338,6 +359,8 @@ export function LeadTableRow({
                     submitting: decisionPending,
                     onApprove,
                     onReject,
+                    onRequestApproval: canRequestApproval && !requestMark ? onRequestApproval : undefined,
+                    requestBlockedReason,
                   }
                 : null}
             />

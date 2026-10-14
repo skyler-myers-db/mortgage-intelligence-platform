@@ -15,9 +15,12 @@
  *   - One request_id per intent, passed in the variables (see
  *     requestIds.ts); the backend replays a matching id without a second
  *     audit row.
- *   - Invalidation goes only through invalidateOperationalQueries, which uses
+ *   - Invalidation goes through invalidateOperationalQueries, which uses
  *     refetchType 'none': an active ['mip','borrower'] or ['mip','leads']
- *     refetch would write VIEW_* audit rows nobody asked for.
+ *     refetch would write VIEW_* audit rows nobody asked for. The one
+ *     exception is the audit-free approval-request list
+ *     (invalidateApprovalRequests, refetchType 'active'), so a decided
+ *     request's chips clear at once (flow-02).
  *   - No shared `scope`: a scope would serialize a bulk run's POSTs.
  *
  * Bulk rows carry their bulkId in the variables, so a progress view can
@@ -33,7 +36,30 @@ import {
 } from '@tanstack/react-query';
 import { api, ApiError, isAbortError } from '../api';
 import type { ApproveResult, OutreachDraftResult, RejectResult, ReviewMode } from '../apiTypes';
-import { invalidateOperationalQueries } from '../queryKeys';
+import { invalidateOperationalQueries, queryKeys } from '../queryKeys';
+
+/**
+ * Refetch the ACTIVE approval-request list (only a mounted Lead Queue reads
+ * it; flow-02). Never through invalidateOperationalQueries: that one must
+ * stay refetchType 'none' for the audited reads, and this list is
+ * audit-free. Here, not in queryKeys, to keep it out of the initial chunk.
+ */
+export function invalidateApprovalRequests(queryClient: QueryClient): Promise<void> {
+  return queryClient.invalidateQueries({ queryKey: queryKeys.approvalRequests().slice(0, 2), refetchType: 'active' });
+}
+
+/**
+ * After a recorded decision: a single approve or reject, or a bulk run that
+ * recorded at least one row (its rows each suppress their own). The audited
+ * reads go stale without refetching (invalidateOperationalQueries, 'none')
+ * and the audit-free approval-request list refetches while mounted
+ * (invalidateApprovalRequests, 'active'), so a decided request's count,
+ * panel and scope row clear (flow-02 item 4a).
+ */
+export function invalidateAfterDecision(queryClient: QueryClient): void {
+  void invalidateOperationalQueries(queryClient);
+  void invalidateApprovalRequests(queryClient);
+}
 
 export const outreachMutationKeys = {
   all: ['mip', 'outreach'] as const,
@@ -79,6 +105,8 @@ export interface ApproveLeadVariables {
   suppressInvalidation?: boolean;
   /** The paged Lead Queue view the decision is taken from (client-declared); null elsewhere. */
   leadViewId?: string | null;
+  /** The approval request a request-scoped queue answers (flow-02); null elsewhere. */
+  approvalRequestBatchId?: string | null;
 }
 
 export interface RejectLeadVariables {
@@ -98,6 +126,8 @@ export interface RejectLeadVariables {
   suppressInvalidation?: boolean;
   /** The paged Lead Queue view the decision is taken from (client-declared); null elsewhere. */
   leadViewId?: string | null;
+  /** The approval request a request-scoped queue answers (flow-02); null elsewhere. */
+  approvalRequestBatchId?: string | null;
 }
 
 /**
@@ -175,6 +205,7 @@ async function approveLeadRequest(variables: ApproveLeadVariables): Promise<Appr
       campaign_id: variables.campaignBinding?.campaign_id ?? null,
       variant_name: variables.campaignBinding?.variant_name ?? null,
       lead_view_id: variables.leadViewId ?? null,
+      approval_request_batch_id: variables.approvalRequestBatchId ?? null,
       request_id: variables.requestId,
     },
     variables.signal,
@@ -191,6 +222,7 @@ function rejectLeadRequest(variables: RejectLeadVariables): Promise<RejectResult
     variant_name: variables.campaignBinding?.variant_name ?? null,
     bulk_id: variables.bulkId,
     lead_view_id: variables.leadViewId ?? null,
+    approval_request_batch_id: variables.approvalRequestBatchId ?? null,
     request_id: variables.requestId,
   };
   // The signal only when set: a single rejection is never abortable.
@@ -207,9 +239,7 @@ export function useApproveLead(queryClient: QueryClient) {
       networkMode: 'always',
       retry: false,
       onSuccess: (result, variables) => {
-        if (result.approved && !variables.suppressInvalidation) {
-          void invalidateOperationalQueries(queryClient);
-        }
+        if (result.approved && !variables.suppressInvalidation) invalidateAfterDecision(queryClient);
       },
     },
     queryClient,
@@ -224,9 +254,7 @@ export function useRejectLead(queryClient: QueryClient) {
       networkMode: 'always',
       retry: false,
       onSuccess: (result, variables) => {
-        if (result.rejected && !variables.suppressInvalidation) {
-          void invalidateOperationalQueries(queryClient);
-        }
+        if (result.rejected && !variables.suppressInvalidation) invalidateAfterDecision(queryClient);
       },
     },
     queryClient,

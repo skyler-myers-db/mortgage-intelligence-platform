@@ -11,6 +11,8 @@ export interface LeadRowCallbacks {
   onAssignmentUpdate: (borrowerId: string, update: Partial<LeadSummary>) => void;
   /** Focus landed on a control in the row: it becomes the cursor row (no scroll, no announcement). */
   onFocusRow: (borrowerId: string) => void;
+  /** Request approval for this row (flow-02): opens the lazy request form. */
+  onRequestApproval: (borrowerId: string) => void;
 }
 
 /**
@@ -36,6 +38,7 @@ export function useStableRowCallbacks(latest: LeadRowCallbacks): LeadRowCallback
     onOpenDisposition: (borrowerId) => latestRef.current.onOpenDisposition(borrowerId),
     onAssignmentUpdate: (borrowerId, update) => latestRef.current.onAssignmentUpdate(borrowerId, update),
     onFocusRow: (borrowerId) => latestRef.current.onFocusRow(borrowerId),
+    onRequestApproval: (borrowerId) => latestRef.current.onRequestApproval(borrowerId),
   }));
   return stable;
 }

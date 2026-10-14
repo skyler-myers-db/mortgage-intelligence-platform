@@ -339,6 +339,11 @@ describe('LeadTable: a decision on the wire locks its row\'s review, across a re
     expect(reject).toHaveBeenCalledTimes(1);
     // Precondition: the reject is on the wire and the row says so.
     expect(rejectButton(IDS[0])?.getAttribute('aria-busy')).toBe('true');
+    // motion-08 slice 2: Button loading, never native disabled (focus stays), same name.
+    expect(rejectButton(IDS[0])?.classList.contains('btn--loading')).toBe(true);
+    expect(rejectButton(IDS[0])?.disabled).toBe(false);
+    expect(rejectButton(IDS[0])?.getAttribute('aria-disabled')).toBe('true');
+    expect(rejectButton(IDS[0])?.getAttribute('aria-label')).toBe(`Reject ${IDS[0]}`);
     expect(approveButton(IDS[0])?.disabled).toBe(true);
 
     region().focus();

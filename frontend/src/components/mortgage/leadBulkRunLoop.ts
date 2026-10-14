@@ -10,7 +10,8 @@
  * useLeadBulkRun's, unchanged (see its header).
  */
 import { formatCount } from '../../lib/formatters';
-import { markUnrecordedWrite } from '../../lib/sessionStatus';
+import { actorScopeStatus } from '../../lib/actorScope';
+import { isSessionExpired, markUnrecordedWrite } from '../../lib/sessionStatus';
 import { BULK_APPROVE_CONCURRENCY, MUTATION_BUDGET_PER_MINUTE } from './LeadTable.constants';
 import { stashCancelledBulk } from './bulkApproveStash';
 import {
@@ -67,6 +68,9 @@ export async function runBulk(engine: BulkRunEngine, spec: BulkRunSpec): Promise
   let ok = 0;
   let aborted = 0;
   let sessionEnded = false;
+  // D-identity-review-a4 (Lead Queue half): a 409 actor_changed row, or an
+  // actor gate that is no longer open, stops the run as Stop does.
+  let actorChanged = false;
   let quarter = 1;
   // Canary: one row at a time until one comes back ok.
   let fannedOut = false;
@@ -78,9 +82,12 @@ export async function runBulk(engine: BulkRunEngine, spec: BulkRunSpec): Promise
       aborted += group.length;
       continue;
     }
-    // Cooperative Stop, an ended session and a canary refusal: checked
-    // before each chunk only.
-    if (stopRef.current || sessionEnded || canary) {
+    // Before each chunk: an ended session keeps its own path; otherwise a
+    // gate that is no longer open means the signed-in user changed.
+    if (!sessionEnded && !actorChanged && !isSessionExpired() && actorScopeStatus() !== 'open') actorChanged = true;
+    // Cooperative Stop, an ended session, a changed user and a canary
+    // refusal: checked before each chunk only.
+    if (stopRef.current || sessionEnded || actorChanged || canary) {
       notStarted.push(...group.map((row) => row.borrowerId));
       continue;
     }
@@ -103,7 +110,8 @@ export async function runBulk(engine: BulkRunEngine, spec: BulkRunSpec): Promise
       else if (report.outcome === 'duplicate') skipped.push({ borrowerId, outcome: 'duplicate', message: report.message });
       else failed.push({ borrowerId, outcome: report.outcome, message: report.message });
       if (report.outcome === 'session_expired') sessionEnded = true;
-      if (fannedOut || report.outcome === 'aborted' || report.outcome === 'duplicate') return;
+      if (report.outcome === 'actor_changed') actorChanged = true;
+      if (fannedOut || report.outcome === 'actor_changed' || report.outcome === 'aborted' || report.outcome === 'duplicate') return;
       if (report.outcome === 'ok') fannedOut = true;
       else canary = { borrowerId, message: report.message };
     });
@@ -116,7 +124,7 @@ export async function runBulk(engine: BulkRunEngine, spec: BulkRunSpec): Promise
       crossed = quarter;
       quarter += 1;
     }
-    if (crossed > 0 && remaining.length > 0 && !stopRef.current && !sessionEnded && !canary) {
+    if (crossed > 0 && remaining.length > 0 && !stopRef.current && !sessionEnded && !actorChanged && !canary) {
       setAnnouncement(`${crossed * 25}% done: ${formatCount(settled)} of ${formatCount(total)}.`);
     }
   }
@@ -141,6 +149,7 @@ export async function runBulk(engine: BulkRunEngine, spec: BulkRunSpec): Promise
     stopped: stopRef.current && notStarted.length > 0,
     sessionEnded,
     canary,
+    actorChanged,
   };
   stopRef.current = false;
   setProgress(null);

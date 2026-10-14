@@ -10,9 +10,9 @@ import { leadApproveReviewId } from './LeadApproveReview.ids';
 import type { LeadApproveReviewPhase, LeadApproveReviewState } from './useLeadApproveReview';
 import './LeadApproveReview.css';
 
-// The approval result line renders only after an approve made through this
-// review, so it ships in this chunk rather than in the table's.
-export { LeadTableDecisionToast } from './LeadTableDecisionToast';
+// The approval's result toast is raised only after an approve made through
+// this review, so it ships in this chunk (loaded by then), not the table's.
+export { raiseDecisionToast } from './leadDecisionToast';
 
 /**
  * The approve-review sheet (audit flow-03, states-06): the governed email a
@@ -232,7 +232,10 @@ export function LeadApproveReview({
           type="submit"
           variant="primary"
           size="sm"
-          icon={phase === 'submitting' ? undefined : 'check'}
+          icon="check"
+          // motion-08 slice 2: while the approve is on the wire the spinner
+          // sits over the kept label (the same box, the same name, aria-busy).
+          loading={phase === 'submitting'}
           // aria-disabled, never native `disabled`: a focused Confirm that
           // turned disabled would drop keyboard focus to <body> mid-approval.
           aria-disabled={phase !== 'ready' || undefined}
@@ -247,7 +250,7 @@ export function LeadApproveReview({
           }}
           data-testid="lead-approve-review-confirm"
         >
-          {phase === 'submitting' ? 'Approving…' : 'Confirm approval'}
+          Confirm approval
         </Button>
       </div>
     </form>

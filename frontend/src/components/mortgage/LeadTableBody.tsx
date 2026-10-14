@@ -9,6 +9,7 @@ import { LeadTableRow } from './LeadTableRow';
 import { useLeadTableInitialOffset, type LeadTableVirtualScroll } from './useLeadTableScroll';
 import type { OutreachDecision } from '../../lib/mutations/outreach';
 import type { LeadRowCallbacks } from './LeadTable.rowCallbacks';
+import type { ApprovalRequestMark } from './LeadTable.types';
 
 /** The approve review rendered inline in its (expanded) row, when there is one. */
 export interface LeadTableReviewSlot {
@@ -51,6 +52,11 @@ export interface LeadTableBodyProps {
   reviewBorrowerId: string | null;
   /** The shell's row callbacks, one identity for the table's life (useStableRowCallbacks). */
   rowCallbacks: LeadRowCallbacks;
+  /** OPEN approval-request marks by borrower (flow-02); one identity per list read. */
+  requestMarks?: ReadonlyMap<string, ApprovalRequestMark> | null;
+  /** The request path is open, and its blocked reason (primitives: rows keep identical props). */
+  canRequestApproval?: boolean;
+  requestBlockedReason?: string | null;
 }
 
 /**
@@ -103,6 +109,9 @@ export function LeadTableBody({
   reviewSlot,
   reviewBorrowerId,
   rowCallbacks,
+  requestMarks = null,
+  canRequestApproval = false,
+  requestBlockedReason = null,
 }: LeadTableBodyProps) {
   'use no memo';
 
@@ -214,6 +223,10 @@ export function LeadTableBody({
               onOpenDisposition={rowCallbacks.onOpenDisposition}
               onAssignmentUpdate={rowCallbacks.onAssignmentUpdate}
               onFocusRow={rowCallbacks.onFocusRow}
+              requestMark={requestMarks?.get(lead.borrower_id) ?? null}
+              canRequestApproval={canRequestApproval}
+              requestBlockedReason={requestBlockedReason}
+              onRequestApproval={rowCallbacks.onRequestApproval}
             />
           </tbody>
         );

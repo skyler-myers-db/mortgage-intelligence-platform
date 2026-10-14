@@ -94,6 +94,14 @@ const CASES: Case[] = [
     },
     '/api/v1/leads?segment=itm&include_identity_proof=true&growth_handoff=signed.token',
   ],
+  [
+    'an approval-request scope (flow-02), only when set',
+    undefined,
+    { state: 'IL' },
+    { approvalRequestBatch: '0f8fad5b-d9cb-469f-a165-70867728950e', growthAgentProof: null },
+    '/api/v1/leads?state=IL&approval_request_batch=0f8fad5b-d9cb-469f-a165-70867728950e',
+  ],
+  ['an unset approval-request scope', undefined, { state: 'IL' }, { approvalRequestBatch: undefined, growthAgentProof: null }, '/api/v1/leads?state=IL'],
 ];
 
 afterEach(() => {
