@@ -325,6 +325,11 @@ describe('Borrower 360 loaded dossier (W5d)', () => {
         </QueryClientProvider>,
       );
     });
+    // Like mount(): the dossier's lazy pieces settle before the click, so
+    // this case never depends on an earlier test having warmed the chunks.
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
 
     act(() => document.querySelector<HTMLButtonElement>('[data-testid="export-pdf"]')!.click());
     expect(printMocks.createPrintReceipt).toHaveBeenCalledWith({ surface: 'borrower_360', borrower_id: ID, row_count: 1 });
