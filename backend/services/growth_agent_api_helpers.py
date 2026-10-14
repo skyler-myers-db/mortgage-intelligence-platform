@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from backend.schemas.admin import AdminCapability
 from backend.schemas.growth_agent import GrowthAgentPromptRunRequest
 from backend.services.capabilities import (
     Capability,
@@ -50,7 +51,7 @@ _PUBLIC_CAPABILITY_CONFIGURED_DETAILS = {
 def public_capability_rows(
     *,
     live_statuses: LiveCapabilityMap | None = None,
-) -> list[dict[str, object]]:
+) -> list[AdminCapability]:
     """Return Growth Agent-safe capability rows.
 
     The admin capability endpoint may expose raw proof details such as endpoint
@@ -59,11 +60,11 @@ def public_capability_rows(
     must keep proof identifiers behind the admin boundary.
     """
 
-    rows: list[dict[str, object]] = []
+    rows: list[AdminCapability] = []
     for capability in probe_capabilities(live_statuses=live_statuses):
         row = capability.to_dict()
         row["detail"] = _public_capability_detail(capability)
-        rows.append(row)
+        rows.append(AdminCapability.model_validate(row))
     return rows
 
 
