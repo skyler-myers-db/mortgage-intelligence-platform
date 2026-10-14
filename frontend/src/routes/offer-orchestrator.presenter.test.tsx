@@ -28,7 +28,7 @@ const previewModule = vi.hoisted(() => ({ loads: 0 }));
 
 // The audit-free decision history (D-audit-reads-c2) stays pending: this suite counts its own reads.
 vi.mock('../lib/apiClients/borrowerDecisions', () => ({ borrowerDecisionsQuery: (id: string) => ({ queryKey: ['mip', 'borrower', id, 'decisions'], queryFn: () => new Promise(() => undefined) }) }));
-vi.mock('../lib/api', () => {
+vi.mock('../lib/api', async (importOriginal) => {
   class ApiError extends Error {
     status: number | null;
 
@@ -38,6 +38,7 @@ vi.mock('../lib/api', () => {
     }
   }
   return {
+    ...(await importOriginal<typeof import('../lib/api')>()),
     api: apiMocks,
     ApiError,
     isAbortError: () => false,
@@ -183,6 +184,8 @@ describe('Offer Orchestrator presenter-only borrower preview', () => {
   it('shows no preview button and never imports the mock in customer mode', async () => {
     await mount();
 
+    // The spread factory's api mock answered (no async-factory bypass, PR #265).
+    expect(apiMocks.borrower).toHaveBeenCalled();
     expect(heroLoaded()).toBe(true);
     expect(previewButton()).toBeNull();
     expect(previewModule.loads).toBe(0);

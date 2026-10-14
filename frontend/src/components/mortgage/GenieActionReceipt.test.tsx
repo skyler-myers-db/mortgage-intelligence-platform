@@ -18,7 +18,7 @@ const apiMocks = vi.hoisted(() => ({ session: vi.fn(), genieAction: vi.fn(), gen
 
 vi.mock('../AppContext', () => ({ useApp: () => ({ setDrawer: vi.fn() }) }));
 
-vi.mock('../../lib/api', () => {
+vi.mock('../../lib/api', async (importOriginal) => {
   class ApiError extends Error {
     status: number | null;
 
@@ -27,7 +27,7 @@ vi.mock('../../lib/api', () => {
       this.status = opts.status ?? null;
     }
   }
-  return { api: apiMocks, ApiError };
+  return { ...(await importOriginal<typeof import('../../lib/api')>()), api: apiMocks, ApiError };
 });
 
 import * as transport from '../../lib/apiTransport';

@@ -47,14 +47,14 @@ vi.mock('../AppContext', () => ({
   }),
 }));
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: {
     draftOutreach: (...args: unknown[]) => draftOutreach(...args),
     approve: vi.fn(),
     campaign: vi.fn(),
     auditReceipt: () => new Promise(() => {}),
   },
-  ApiError: class extends Error {},
   isAbortError: () => false,
   isWarmingUpError: () => false,
 }));

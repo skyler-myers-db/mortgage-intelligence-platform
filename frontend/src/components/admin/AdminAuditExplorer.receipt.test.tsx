@@ -20,11 +20,11 @@ import type { AuditEventRow, DecisionReceipt as DecisionReceiptPayload } from '.
 
 const apiMocks = vi.hoisted(() => ({ auditReceipt: vi.fn(), borrowerProof: vi.fn() }));
 
-vi.mock('../../lib/api', () => {
+vi.mock('../../lib/api', async (importOriginal) => {
   class ApiError extends Error {
     status: number | null = null;
   }
-  return { api: apiMocks, ApiError };
+  return { ...(await importOriginal<typeof import('../../lib/api')>()), api: apiMocks, ApiError };
 });
 
 vi.mock('../AppContext', () => ({

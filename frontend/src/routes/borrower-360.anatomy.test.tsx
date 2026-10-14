@@ -40,11 +40,11 @@ vi.mock('../lib/useWarmingUpRetry', () => ({
   useWarmingUpRetry: () => ({ data: state.borrower, warmingUp: null, error: null, manualRetry: vi.fn() }),
 }));
 
-vi.mock('../lib/api', () => {
+vi.mock('../lib/api', async (importOriginal) => {
   class ApiError extends Error {
     status = 500;
   }
-  return { api: apiMocks, ApiError, isWarmingUpError: () => false };
+  return { ...(await importOriginal<typeof import('../lib/api')>()), api: apiMocks, ApiError, isWarmingUpError: () => false };
 });
 
 vi.mock('../components/AppContext', () => ({
@@ -73,6 +73,12 @@ vi.mock('../components/GlossaryTerm', () => ({
 }));
 
 import Borrower360 from './borrower-360';
+// The lib/api factory is async (it spreads the real module), and a chunk the
+// route imports lazily would otherwise be handed the ORIGINAL lib/api (the
+// PR #265 bypass: apiMocks.borrowerProof never called). Loading the chunk's
+// graph here, in the static graph, gives it the mock; the route's import()
+// then resolves from the module cache.
+import '../components/mortgage/ScoreAnatomy';
 import { createMipQueryClient } from '../lib/queryClient';
 import { queryKeys } from '../lib/queryKeys';
 import { sampleProof } from '../mocks/scoreAnatomyProof';

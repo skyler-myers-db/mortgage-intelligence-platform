@@ -42,7 +42,7 @@ const appMocks = vi.hoisted(() => ({
 
 // The audit-free decision history (D-audit-reads-c2) stays pending: this suite counts its own reads.
 vi.mock('../lib/apiClients/borrowerDecisions', () => ({ borrowerDecisionsQuery: (id: string) => ({ queryKey: ['mip', 'borrower', id, 'decisions'], queryFn: () => new Promise(() => undefined) }) }));
-vi.mock('../lib/api', () => {
+vi.mock('../lib/api', async (importOriginal) => {
   // Same constructor shape as the real ApiError (message, { path, status }).
   class ApiError extends Error {
     status: number | null;
@@ -53,6 +53,7 @@ vi.mock('../lib/api', () => {
     }
   }
   return {
+    ...(await importOriginal<typeof import('../lib/api')>()),
     api: apiMocks,
     ApiError,
     isAbortError: () => false,

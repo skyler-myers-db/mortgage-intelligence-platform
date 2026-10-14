@@ -16,7 +16,7 @@ const apiMocks = vi.hoisted(() => ({
   session: vi.fn(),
 }));
 
-vi.mock('../../lib/api', () => {
+vi.mock('../../lib/api', async (importOriginal) => {
   // Same constructor shape as the real ApiError (message, { path, status }).
   class ApiError extends Error {
     status: number | null;
@@ -26,7 +26,7 @@ vi.mock('../../lib/api', () => {
       this.status = opts.status ?? null;
     }
   }
-  return { api: apiMocks, ApiError };
+  return { ...(await importOriginal<typeof import('../../lib/api')>()), api: apiMocks, ApiError };
 });
 
 const appMocks = vi.hoisted(() => ({

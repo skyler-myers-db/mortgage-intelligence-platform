@@ -101,7 +101,8 @@ vi.mock('../components/mortgage/LeadTable', () => ({
   },
 }));
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   ApiError: class ApiError extends Error {
     path: string;
     status: number | null;

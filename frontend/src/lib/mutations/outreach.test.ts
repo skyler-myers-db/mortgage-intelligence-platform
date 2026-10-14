@@ -20,7 +20,7 @@ const apiMocks = vi.hoisted(() => ({
   borrower: vi.fn(),
 }));
 
-vi.mock('../api', () => {
+vi.mock('../api', async (importOriginal) => {
   class ApiError extends Error {
     readonly status: number | null;
     readonly aborted: boolean;
@@ -31,6 +31,7 @@ vi.mock('../api', () => {
     }
   }
   return {
+    ...(await importOriginal<typeof import('../api')>()),
     api: apiMocks,
     ApiError,
     isAbortError: (err: unknown) => err instanceof ApiError && err.aborted,

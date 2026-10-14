@@ -28,11 +28,11 @@ vi.mock('../lib/useWarmingUpRetry', () => ({
   }),
 }));
 
-vi.mock('../lib/api', () => {
+vi.mock('../lib/api', async (importOriginal) => {
   class ApiError extends Error {
     status = 500;
   }
-  return { api: { borrower: vi.fn(), borrowerLifecycle: vi.fn() }, ApiError };
+  return { ...(await importOriginal<typeof import('../lib/api')>()), api: { borrower: vi.fn(), borrowerLifecycle: vi.fn() }, ApiError };
 });
 
 vi.mock('../components/AppContext', () => ({

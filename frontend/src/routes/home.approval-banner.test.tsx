@@ -28,11 +28,12 @@ const apiMocks = vi.hoisted(() => ({
   leads: vi.fn(),
 }));
 
-vi.mock('../lib/api', () => {
+vi.mock('../lib/api', async (importOriginal) => {
   class ApiError extends Error {
     status = 500;
   }
   return {
+    ...(await importOriginal<typeof import('../lib/api')>()),
     api: apiMocks,
     ApiError,
     isAbortError: () => false,

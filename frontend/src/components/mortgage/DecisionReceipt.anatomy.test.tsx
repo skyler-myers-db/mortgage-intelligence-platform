@@ -32,7 +32,7 @@ const apiMocks = vi.hoisted(() => ({
   borrowerProof: vi.fn(),
 }));
 
-vi.mock('../../lib/api', () => {
+vi.mock('../../lib/api', async (importOriginal) => {
   class ApiError extends Error {
     status: number | null;
 
@@ -41,7 +41,7 @@ vi.mock('../../lib/api', () => {
       this.status = opts.status ?? null;
     }
   }
-  return { api: apiMocks, ApiError };
+  return { ...(await importOriginal<typeof import('../../lib/api')>()), api: apiMocks, ApiError };
 });
 
 vi.mock('../AppContext', () => ({
