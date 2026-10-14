@@ -5,6 +5,7 @@
  * token vocabulary. Colocated with the lazy component: never part of the
  * initial stylesheet (design-system/components.css does not import it).
  */
+@layer routes {
 .empty {
   display: flex;
   align-items: flex-start;
@@ -46,4 +47,5 @@
   flex-wrap: wrap;
   gap: var(--sp-2);
   margin-top: var(--sp-3);
+}
 }

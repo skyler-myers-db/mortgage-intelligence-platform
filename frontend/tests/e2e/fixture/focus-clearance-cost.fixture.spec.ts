@@ -58,20 +58,31 @@ interface StyleCost {
   scrollMs: number;
 }
 
-/** Delete the top-level rules that carry the clearance; returns how many. */
+/**
+ * Delete the style rules that carry the clearance; returns how many. The
+ * sheets are layered (css-05), so the walk descends into @layer blocks and
+ * other grouping rules (@media, @supports, @container) and deletes only the
+ * inner marker rules: deleting a top-level rule whose cssText merely
+ * contains the marker would now drop a whole layer block.
+ */
 async function deleteClearanceRules(page: Page): Promise<number> {
   return page.evaluate((marker) => {
-    let deleted = 0;
-    for (const sheet of [...document.styleSheets]) {
-      for (let index = sheet.cssRules.length - 1; index >= 0; index -= 1) {
-        const rule = sheet.cssRules[index];
-        if (!(rule instanceof CSSPropertyRule) && rule.cssText.includes(marker)) {
-          sheet.deleteRule(index);
-          deleted += 1;
-        }
+    const sweep = (owner: CSSStyleSheet | CSSGroupingRule): number => {
+      let deleted = 0;
+      for (let index = owner.cssRules.length - 1; index >= 0; index -= 1) {
+        const rule = owner.cssRules[index];
+        // A style rule first: with CSS nesting, CSSStyleRule is itself a
+        // CSSGroupingRule in current engines.
+        if (rule instanceof CSSStyleRule) {
+          if (rule.cssText.includes(marker)) {
+            owner.deleteRule(index);
+            deleted += 1;
+          }
+        } else if (rule instanceof CSSGroupingRule) deleted += sweep(rule);
       }
-    }
-    return deleted;
+      return deleted;
+    };
+    return [...document.styleSheets].reduce((sum, sheet) => sum + sweep(sheet), 0);
   }, CLEARANCE_MARKER);
 }
 

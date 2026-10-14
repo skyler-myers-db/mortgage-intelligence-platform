@@ -586,14 +586,16 @@ describe('layout containment contracts', () => {
 
 describe('contrast-mode partial order (css-06 / a11y-10 / responsive-v3)', () => {
   // 33 overrides partials 01-32 at equal specificity, so it must come after
-  // all of them. Later partials (34+, other lanes) may follow it.
-  it('imports 33-contrast-modes.css after every partial it overrides', () => {
+  // all of them. Later partials (34+, other lanes) may follow it. Since
+  // css-05 the modes layer is what puts it above every components and routes
+  // rule (cssLayers.test.ts); the import position stays the pre-layer order.
+  it('imports 33-contrast-modes.css after every partial it overrides, into the modes layer', () => {
     const entry = readFileSync(join(process.cwd(), 'src/design-system/components.css'), 'utf8');
-    const imports = [...entry.matchAll(/@import\s+["']\.\/components\/(\d+)-[\w-]+\.css["'];/g)].map((match) => Number(match[1]));
+    const imports = [...entry.matchAll(/@import\s+["']\.\/components\/(\d+)-[\w-]+\.css["'](?:\s+layer\([\w-]+\))?;/g)].map((match) => Number(match[1]));
     const at = imports.indexOf(33);
     expect(at, '33-contrast-modes.css is imported').toBeGreaterThan(0);
     expect(imports.slice(at + 1).filter((n) => n <= 32), 'no 01-32 partial after 33').toEqual([]);
-    expect(entry).toMatch(/@import "\.\/components\/32-feedback\.css";\n@import "\.\/components\/33-contrast-modes\.css";/);
+    expect(entry).toMatch(/@import "\.\/components\/32-feedback\.css" layer\(components\);\n@import "\.\/components\/33-contrast-modes\.css" layer\(modes\);/);
   });
 });
 

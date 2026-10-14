@@ -6,6 +6,7 @@
    Prototype.html:2198); these are app blocks beside the existing
    .filter-row / .chip-row primitives.
    ============================================================ */
+@layer routes {
 
 /* 'Exclude my ledger reads' in the header chip row. */
 .audit-exclude-own {
@@ -16,4 +17,5 @@
   font-size: var(--fs-12);
   white-space: nowrap;
   cursor: pointer;
+}
 }

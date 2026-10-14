@@ -11,6 +11,7 @@
    borrowers in the selection, drawn as muted context) and block .map-zoom
    (the header's Zoom in / Zoom out / Fit row).
    ============================================================ */
+@layer routes {
 
 /* The stage zooms its viewBox, so every stroke keeps its screen width. */
 .map-zcta path { vector-effect: non-scaling-stroke; }
@@ -56,6 +57,9 @@
 .map-zcta { cursor: grab; touch-action: none; }
 .map-zcta:active { cursor: grabbing; }
 
+}
+@layer modes {
 @media (forced-colors: active) {
   .map-zcta__outline { stroke: CanvasText; }
+}
 }

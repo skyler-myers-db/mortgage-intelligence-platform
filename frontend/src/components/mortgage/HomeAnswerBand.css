@@ -10,6 +10,7 @@
    Imported by HomeAnswerBand.tsx, so it ships with the lazy Home
    chunk instead of the initial stylesheet (wave-1 budget rule).
    ============================================================ */
+@layer routes {
 
 .home-answer__hdr {
   align-items: flex-start;
@@ -329,6 +330,8 @@
   }
 }
 
+}
+@layer modes {
 /* Forced colours: the bar and its swatches are non-text data marks, so they
    keep the segment hues (as SegmentCard.css does), on a Canvas track edged in
    CanvasText; the gaps between slices and each swatch take a system colour
@@ -350,4 +353,5 @@
   .offer-mix__swatch {
     outline: 1px solid CanvasText;
   }
+}
 }

@@ -9,6 +9,7 @@
    tokens and --seg-* colours only. The UpSet strip is a bar per exact
    combination over a six-row dot matrix (one row per core signal).
    ============================================================ */
+@layer routes {
 /* The grid gap above, like the filter row's below (.filter-row--spaced). */
 .signal-stack { margin-block-start: var(--gap-grid); }
 .signal-stack__body {
@@ -155,3 +156,4 @@
   color: var(--text-1);
 }
 .signal-stack__note { color: var(--text-3); }
+}

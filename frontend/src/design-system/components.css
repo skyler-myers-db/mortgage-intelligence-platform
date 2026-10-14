@@ -2,30 +2,34 @@
    Component CSS — prototype BEM port plus app extensions.
    Core class names match design_files/index.html; route helpers below
    keep app-specific composition tokenized instead of inline.
+   Cascade layers (css-05; order in layers.css): every partial imports into
+   the components layer, except 33-contrast-modes.css, which imports into
+   modes so it outranks every components and routes rule it overrides.
+   No partial wraps itself in @layer (cssLayers.test.ts).
    ============================================================ */
 
-@import "./components/01-app-shell.css";
-@import "./components/02-chips-kpi-segments.css";
-@import "./components/03-score-and-table.css";
-@import "./components/04-approval-and-drawer.css";
-@import "./components/05-command-palette.css";
-@import "./components/06-genie-chat.css";
-@import "./components/07-audit-and-filter-chips.css";
-@import "./components/08-map.css";
-@import "./components/09-console-and-layout.css";
-@import "./components/10-native-analytics.css";
-@import "./components/11-skeleton-menu-and-genie-answer.css";
-@import "./components/12-motion-and-viewport.css";
-@import "./components/13-route-composition.css";
-@import "./components/14-genie-markdown-and-proof.css";
-@import "./components/15-error-surface.css";
-@import "./components/16-genie-fab-status.css";
-@import "./components/17-genie-controls.css";
-@import "./components/20-audit-explorer.css";
-@import "./components/23-filter-listbox.css";
-@import "./components/29-shell-wayfinding.css";
-@import "./components/31-session-recovery.css";
-@import "./components/32-feedback.css";
-@import "./components/33-contrast-modes.css";
-@import "./components/37-topbar-status.css";
-@import "./components/38-focus-clearance.css";
+@import "./components/01-app-shell.css" layer(components);
+@import "./components/02-chips-kpi-segments.css" layer(components);
+@import "./components/03-score-and-table.css" layer(components);
+@import "./components/04-approval-and-drawer.css" layer(components);
+@import "./components/05-command-palette.css" layer(components);
+@import "./components/06-genie-chat.css" layer(components);
+@import "./components/07-audit-and-filter-chips.css" layer(components);
+@import "./components/08-map.css" layer(components);
+@import "./components/09-console-and-layout.css" layer(components);
+@import "./components/10-native-analytics.css" layer(components);
+@import "./components/11-skeleton-menu-and-genie-answer.css" layer(components);
+@import "./components/12-motion-and-viewport.css" layer(components);
+@import "./components/13-route-composition.css" layer(components);
+@import "./components/14-genie-markdown-and-proof.css" layer(components);
+@import "./components/15-error-surface.css" layer(components);
+@import "./components/16-genie-fab-status.css" layer(components);
+@import "./components/17-genie-controls.css" layer(components);
+@import "./components/20-audit-explorer.css" layer(components);
+@import "./components/23-filter-listbox.css" layer(components);
+@import "./components/29-shell-wayfinding.css" layer(components);
+@import "./components/31-session-recovery.css" layer(components);
+@import "./components/32-feedback.css" layer(components);
+@import "./components/33-contrast-modes.css" layer(modes);
+@import "./components/37-topbar-status.css" layer(components);
+@import "./components/38-focus-clearance.css" layer(components);

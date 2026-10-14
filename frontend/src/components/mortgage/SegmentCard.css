@@ -5,6 +5,7 @@
    `.seg-card` at design_files/index.html:488-533 and the 12px `.seg-grid`
    at design_files/Module 0 Prototype.html:956.
    ============================================================ */
+@layer routes {
 
 /* Every card spans six rows of the grid and adopts them as a subgrid, so the
    cards in one grid row share row heights (header, count, reconcile, sub,
@@ -196,6 +197,8 @@
 .seg-card__facet-share--2 { background: color-mix(in oklab, var(--seg-color, var(--accent)) 60%, var(--bg-2)); }
 .seg-card__facet-share--3 { background: color-mix(in oklab, var(--seg-color, var(--accent)) 32%, var(--bg-2)); }
 .seg-card__facet-share--4 { background: var(--line-2); }
+}
+@layer modes {
 /* Forced colors (audit a11y-10 / responsive-v3): a selected card gets a
    Highlight edge (its segment-hue border and glow are forced away), and the
    share bar is a non-text data mark, so it keeps its segment-hue shares (the
@@ -211,4 +214,5 @@
   }
   .seg-card__facet-share + .seg-card__facet-share { border-inline-start-color: CanvasText; }
   .seg-card__facet-share--4 { background-color: Canvas; }
+}
 }

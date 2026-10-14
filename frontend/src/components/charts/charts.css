@@ -3,6 +3,7 @@
    KPI sparklines, so the frame is new; its axes, grid and tooltip reuse the
    `.analytics-chart__*` chrome of 10-native-analytics.css. Tokens only.
    Lazy: ChartFrame.tsx is the one importer. */
+@layer routes {
 .chart-frame {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -87,6 +88,8 @@
   transform: translateX(calc(-100% - var(--sp-1)));
 }
 
+}
+@layer modes {
 /* Forced colours (a11y-10 / responsive-v3): bins are non-text data marks,
    so they keep their encoding in system colours. Past = solid CanvasText;
    the rest = Canvas with a CanvasText edge; the rule stays CanvasText. */
@@ -103,4 +106,5 @@
     forced-color-adjust: none;
     stroke: CanvasText;
   }
+}
 }

@@ -6,6 +6,7 @@
    padding, `--row-h` rows and the Approval pin all come from
    design-system/components/03-score-and-table.css); only the placeholder
    shapes inside the cells live here, inside the `.skeleton` vocabulary. */
+@layer routes {
 /* A placeholder: no row hover, pressed state or pointer cursor. */
 .lead-queue-skeleton__table { pointer-events: none; }
 .lead-queue-skeleton__action {
@@ -36,4 +37,5 @@
   inline-size: calc(var(--sp-16) + var(--sp-4));
   block-size: var(--sp-6);
   border-radius: var(--r-md);
+}
 }

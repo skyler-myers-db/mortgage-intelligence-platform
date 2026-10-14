@@ -3,6 +3,7 @@
    field system; this reuses its `.field__label` and adds only the message
    lines a form needs. Tokens only. Loaded with the route chunk that imports
    Field (Portfolio Builder today), never the shell. */
+@layer routes {
 
 .field__hint,
 .field__notice,
@@ -59,4 +60,5 @@
 }
 .field .form-input:user-invalid {
   border-color: var(--status-danger-line-strong);
+}
 }

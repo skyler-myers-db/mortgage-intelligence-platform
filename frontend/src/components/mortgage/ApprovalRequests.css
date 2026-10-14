@@ -4,6 +4,7 @@
    or LeadTable chunks. Composes the prototype's .decision-panel, .filter-menu,
    .chip--neutral / .chip--warning and .btn (design_files/Module 0
    Prototype.html:1494-1506); tokens only. */
+@layer routes {
 
 /* The request form: the reject panel's .decision-panel grid with the reason
    field wide and the "nothing is sent" line beside the actions. */
@@ -78,4 +79,5 @@
 .approval-requests__state {
   color: var(--text-2);
   font-size: var(--fs-12);
+}
 }

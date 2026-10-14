@@ -6,6 +6,7 @@
    panel (design_files/Module 0 Prototype.html :1365) and the trigger timeline
    (:569 CSS, :1942 markup). Deviation ids: docs/prototype-deviations.md,
    "Pending rows". */
+@layer routes {
 
 /* deviation:growth-agent-command-side
    Command bar, column 2: the buttons with the hint UNDER them. The hint used
@@ -94,4 +95,5 @@
 }
 .growth-agent-step__recording {
   margin-block: var(--sp-2) 0;
+}
 }

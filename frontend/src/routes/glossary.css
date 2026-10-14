@@ -10,6 +10,7 @@
    only matches a native fragment navigation (history.pushState never updates
    it), so the route also sets `.is-target` from the router's hash. The spread
    shadow widens the tint into the grid gap without moving any layout. */
+@layer routes {
 .glossary-section,
 .glossary-entry {
   scroll-margin-top: var(--nav-clear);
@@ -41,4 +42,5 @@
 }
 .glossary-search__status + .btn {
   margin-block-end: var(--sp-3);
+}
 }

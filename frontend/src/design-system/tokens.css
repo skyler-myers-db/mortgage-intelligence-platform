@@ -5,6 +5,7 @@
 
 @import "./fonts.css";
 
+@layer tokens {
 :root {
   /* ---------- Brand (Entrada AI) ---------- */
   --entrada-navy:   #025080;
@@ -428,7 +429,9 @@
   --pad-card: 20px;
   --gap-grid: 18px;
 }
+}
 
+@layer base {
 /* ============================================================
    Base element styles
    ============================================================ */
@@ -493,7 +496,9 @@ input[type="checkbox"] {
 .num  { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
 .divider { height: 1px; background: var(--line-1); }
 .vdivider { width: 1px; background: var(--line-1); }
+}
 
+@layer tokens {
 /* ---------- Layering (z-index scale) ----------
  * Every z-index in component CSS reads one of these (components.test.ts
  * fails on a numeric literal outside this file). Values are the ones the
@@ -736,3 +741,4 @@ input[type="checkbox"] {
  * --z-topbar-menu, which lives inside the topbar's own context.
  */
 :root { --z-tray: 55; }
+}

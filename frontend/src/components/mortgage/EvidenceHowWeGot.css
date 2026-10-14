@@ -4,6 +4,7 @@
  * with the shell. Tokens only; the card reads as the drawer's lead fact, on
  * the .source-summary surface vocabulary (05-command-palette.css).
  */
+@layer routes {
 .evidence-proof {
   display: grid;
   gap: var(--sp-2);
@@ -21,3 +22,4 @@
    (EvidenceKpiProof): a height-capped <pre> would be a scroll region the
    keyboard cannot reach (axe scrollable-region-focusable). */
 .evidence-proof__sql { max-block-size: none; overflow: visible; overflow-wrap: anywhere; }
+}

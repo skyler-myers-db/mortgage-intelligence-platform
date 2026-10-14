@@ -16,6 +16,7 @@
  * panel's own loading state, and #appearance below never moves while the
  * panel loads.
  */
+@layer routes {
 
 .field-perf {
   --field-perf-hdr: calc(var(--sp-12) + var(--sp-6));
@@ -110,3 +111,4 @@
 }
 
 .field-perf__none { margin: 0; }
+}

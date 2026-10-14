@@ -18,6 +18,7 @@
    (section 10 item 10). `.offer-action-bar` is a new app block: the
    prototype has no action bar. The `.approval` rules themselves
    (04-approval-and-drawer.css) are untouched. Tokens only. */
+@layer routes {
 .offer-action-bar {
   display: flex;
   flex-direction: column;
@@ -125,6 +126,8 @@
   padding-inline-end: calc(var(--offer-action-bar-genie-clearance, 0px) + var(--sp-4));
 }
 
+}
+@layer modes {
 /* Reduced transparency (audit responsive-v3): an opaque bar, no frosted
    blur, the same treatment 33-contrast-modes.css gives the topbar. Here, not
    there, because this lazy sheet loads after the shell CSS and wins ties. */
@@ -133,4 +136,5 @@
     background: var(--bg-1);
     backdrop-filter: none;
   }
+}
 }

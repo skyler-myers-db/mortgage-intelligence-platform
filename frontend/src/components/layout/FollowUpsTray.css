@@ -13,6 +13,7 @@
    box; where the Popover API is missing the same element is a fixed region
    on --z-tray. Rows wrap: Linux Chromium draws Geist Mono wider, so nothing
    relies on a one-line fit. */
+@layer routes {
 .followups {
   position: fixed;
   inset: auto;
@@ -95,7 +96,11 @@
   font-size: var(--fs-12);
   color: var(--text-2);
 }
+}
+@layer components {
 .followups__snooze { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+}
+@layer routes {
 .followups__snooze.btn { flex-basis: auto; }
 .followups__hint { flex-basis: 100%; margin: 0; font-size: var(--fs-11); color: var(--text-3); }
 .followups__empty { margin: 0; padding: var(--sp-3) 0; font-size: var(--fs-12); color: var(--text-2); }
@@ -118,4 +123,5 @@
 .followups { transition: opacity var(--dur-fast) var(--ease), translate var(--dur-fast) var(--ease); }
 @media (prefers-reduced-motion: reduce) {
   .followups { transition: none; }
+}
 }
