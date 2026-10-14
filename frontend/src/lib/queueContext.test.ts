@@ -34,6 +34,16 @@ describe('queue context', () => {
     expect(QUEUE_MASKED_ID_RE.flags).toBe(MASKED_BORROWER_ID_RE.flags);
   });
 
+  it('carries every row the paged queue can load: ten 500-row pages (tables-02), and no more', () => {
+    const loaded = Array.from({ length: 5001 }, (_, index) => `B-${String(index + 1).padStart(13, '0')}`);
+    const context = publishQueueContext({ search: '?state=IL', label: 'IL', ids: loaded });
+    expect(context?.ids).toHaveLength(5000);
+    expect(context?.ids[4999]).toBe(loaded[4999]);
+    // Row 4,000 (page 8) still pages from its dossier; row 5,001 is past the cap.
+    expect(resolveQueueContext({ queue: context! }, loaded[3999])?.search).toBe('?state=IL');
+    expect(resolveQueueContext({ queue: context! }, loaded[5000])).toBeNull();
+  });
+
   it('keeps only masked borrower ids, in rank order', () => {
     const context = publishQueueContext({
       search: '?state=IL',
