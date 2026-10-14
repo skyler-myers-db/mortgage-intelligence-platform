@@ -6,10 +6,11 @@
    its `.approval` banner (design_files/index.html:634-651) inside a
    `.surface--elev` dialog shell, the body its `.tbl` (:595), and each
    officer's load bar is drawn from the `.conf__bars` vocabulary (:560-565):
-   open book on --line-2 / --text-3, the planned leads on --accent, and a
-   --signal-danger marker when the open book already exceeds capacity. The
-   bar's column widths are written on the bar itself (never a custom property
-   on an ancestor, which would restyle the whole table). */
+   the free capacity is the track, on the `.conf__bar` off-state --line-2
+   (:561); the open book on --line-2 / --text-3 over it; the planned leads on
+   --accent; and a --signal-danger marker when the open book already exceeds
+   capacity. The bar's column widths are written on the bar itself (never a
+   custom property on an ancestor, which would restyle the whole table). */
 
 .distribution-board {
   display: grid;
@@ -39,7 +40,9 @@
   inline-size: 100%;
   min-inline-size: calc(var(--sp-6) * 4);
   border-radius: var(--r-sm);
-  background: var(--bg-2);
+  /* The track IS the free capacity. Never --bg-2: that is the dialog's own
+     .surface fill, so the free extent painted invisible in both themes. */
+  background: var(--line-2);
   overflow: hidden;
 }
 .distribution-board__seg { min-inline-size: 0; }
