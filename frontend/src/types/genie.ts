@@ -130,14 +130,23 @@ export interface GenieFreshness {
 
 /**
  * One figure in the shipped prose that the claims verifier proved against
- * the returned rows (audit genie-10 phase 1). Mirrors backend
- * `GenieVerifiedClaim`; `section` is null for the summary or a single turn.
+ * the returned rows (audit genie-10). Mirrors backend `GenieVerifiedClaim`;
+ * `section` is null for the summary or a single turn. Phase 2 provenance:
+ * `support` (the best support under the verifier's fixed priority),
+ * `column` (the returned column of a cell, sum or share support) and
+ * `occurrences` (set only for a cell figure locatable by its token); all
+ * three are absent on an answer recorded before they existed.
  */
+export type GenieClaimSupport = 'cell' | 'row_count' | 'sum' | 'share' | 'derived' | 'bound';
+
 export interface GenieVerifiedClaim {
   token: string;
   kind: 'currency' | 'percent' | 'bps' | 'number';
   derivation: 'returned_value' | 'derived_from_rows' | 'bound';
   section?: string | null;
+  support?: GenieClaimSupport | null;
+  column?: string | null;
+  occurrences?: number | null;
 }
 
 /** How many of the prose's figures were verified, and which. Mirrors

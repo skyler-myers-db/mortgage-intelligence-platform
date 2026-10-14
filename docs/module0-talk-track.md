@@ -225,7 +225,13 @@ What to show:
    strings.
 3. "Show proof" exposes SQL/source/freshness when Genie returns trusted
    evidence.
-4. Run "Open this cohort in Lead Queue" only after the action preview shows the
+4. Hover a dotted-underlined figure in Genie's answer: the card names the
+   returned column it matches. The proof's Figures metric says "N of N
+   answer figures verified" and lists how the rows prove each one (a returned
+   value, the row count, a total, a share, or another derivation). Only the
+   answer's own figures are counted: a governed cross-check note stays
+   visible as its own disclosure and is never counted or underlined.
+5. Run "Open this cohort in Lead Queue" only after the action preview shows the
    same ZIP/state/segment filters from the answer.
 
 Talk track:

@@ -11,6 +11,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { MarkdownAnswer, isSectionHeading, isSourceFootnote } from './GenieAnswer.markdown';
+import { GenieFigureScopes } from './GenieAnswerFigures';
+// Load the lazy mark's module graph (EvidenceHoverCard and its imports) at
+// file load, as GenieAnswerFigures.test.tsx does, so its first transform is
+// not charged to the first figure-mark test's timeout. renderScoped still
+// awaits the import to let React.lazy settle.
+import './GenieFigureMark';
+import type { GenieVerifiedClaim } from '../../types';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -264,5 +271,125 @@ describe('isSourceFootnote', () => {
     'Source: mip.gold.borrower_360 and mip.gold.lead_scores',
   ])('rejects %s', (line) => {
     expect(isSourceFootnote(line)).toBe(false);
+  });
+});
+
+/**
+ * genie-10 phase 2: the figure marks live inside the inline grammar. With a
+ * GenieFigureScopes entry for the text, a located cell figure is marked in
+ * paragraphs, headings, list items, bold, italics and link text; never in
+ * inline code, a verbatim block or the Source anchor. Without a provider the
+ * renderer is unchanged: the expected HTML below was captured from the base
+ * renderer (2931d82c) for the same five answers.
+ */
+describe('MarkdownAnswer figure marks', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  const HOST = 'https://dbc-test.cloud.databricks.com';
+  const cell = (token: string, occurrences: number): GenieVerifiedClaim => ({
+    token,
+    kind: 'number',
+    derivation: 'returned_value',
+    support: 'cell',
+    column: 'borrowers',
+    occurrences,
+  });
+  const renderScoped = async (text: string, items: GenieVerifiedClaim[], workspaceHost: string | null = null) => {
+    act(() =>
+      root.render(
+        <GenieFigureScopes value={new Map([[text, items]])}>
+          <MarkdownAnswer text={text} workspaceHost={workspaceHost} />
+        </GenieFigureScopes>,
+      ),
+    );
+    // The mark loads lazily: let the import settle and React re-render.
+    await act(async () => {
+      await import('./GenieFigureMark');
+    });
+  };
+  const markParents = () =>
+    Array.from(container.querySelectorAll('mark.genie-md-figure')).map((m) => [m.textContent, m.parentElement?.tagName]);
+
+  it('marks inside strong, em, list items, headings and link text', async () => {
+    await renderScoped(
+      '### 412 in the lead\nThe leader holds **1,204** borrowers and *388* more.\n- 71 in the list\n\nSee [the 905 rows](https://example.test/x).',
+      [cell('412', 1), cell('1,204', 1), cell('388', 1), cell('71', 1), cell('905', 1)],
+    );
+    expect(markParents()).toEqual([
+      ['412', 'SPAN'],
+      ['1,204', 'STRONG'],
+      ['388', 'EM'],
+      ['71', 'SPAN'],
+      ['905', 'SPAN'],
+    ]);
+    expect(container.querySelector('h3 mark')?.textContent).toBe('412');
+    expect(container.querySelector('li mark')?.textContent).toBe('71');
+  });
+
+  it('never marks inside inline code, a verbatim block or the Source anchor', async () => {
+    // Four 250s are counted (code, prose, verbatim, the anchor's table name);
+    // only the prose one is marked.
+    await renderScoped('Use `250` here and 250 borrowers.\n\n```\n250\n```\n\nSource: mip.gold.250.', [cell('250', 4)], HOST);
+    expect(markParents()).toEqual([['250', 'SPAN']]);
+    expect(container.querySelector('code mark')).toBeNull();
+    expect(container.querySelector('pre mark')).toBeNull();
+    expect(container.querySelector('a.uc-asset-link')?.textContent).toBe('mip.gold.250');
+    expect(container.querySelector('a.uc-asset-link mark')).toBeNull();
+  });
+
+  it('marks nothing for a text the provider has no entry for', () => {
+    act(() =>
+      root.render(
+        <GenieFigureScopes value={new Map([['another text', [cell('250', 1)]]])}>
+          <MarkdownAnswer text="Texas has 250 borrowers." workspaceHost={null} />
+        </GenieFigureScopes>,
+      ),
+    );
+    expect(container.querySelector('mark')).toBeNull();
+  });
+
+  const BASE_HTML: Array<[string, string | null, string]> = [
+    [
+      'Illinois leads with **48,396** in-the-money borrowers, ahead of Texas at 10,914 (a 48.3% share).\n\nSource: mip.gold.borrower_360.',
+      HOST,
+      '<p class="genie-md-p genie-md-p--first"><span>Illinois leads with </span><strong>48,396</strong><span> in-the-money borrowers, ahead of Texas at 10,914 (a 48.3% share).</span></p><p class="genie-md-p genie-md-p--source"><span>Source: <a class="uc-asset-link" href="https://dbc-test.cloud.databricks.com/explore/data/mip/gold/borrower_360" target="_blank" rel="noopener noreferrer" title="Open mip.gold.borrower_360 in Databricks Catalog Explorer">mip.gold.borrower_360</a>.</span></p>',
+    ],
+    [
+      'I asked the governed space to plan this request itself; it decomposed the question into 8 sub-analyses.\n\n**Which segments lead?**\n\nThe in-the-money segment leads with **1,204** borrowers at an average score of 71.',
+      null,
+      '<p class="genie-md-p genie-md-p--first"><span>I asked the governed space to plan this request itself; it decomposed the question into 8 sub-analyses.</span></p><h3 class="genie-md-p genie-md-p--heading"><strong>Which segments lead?</strong></h3><p class="genie-md-p"><span>The in-the-money segment leads with </span><strong>1,204</strong><span> borrowers at an average score of 71.</span></p>',
+    ],
+    [
+      'Top states:\n1. Illinois holds 412 borrowers.\n2. Texas holds 388.\n- a side note at 5 m\n\n### Where 12k sits\nSee [the 7 rates](https://example.com/7) and `250 rows`.',
+      null,
+      '<p class="genie-md-p genie-md-p--first"><span>Top states:</span></p><ol class="genie-md-list genie-md-list--ordered"><li><span>Illinois holds 412 borrowers.</span></li><li><span>Texas holds 388.</span></li></ol><ul class="genie-md-list"><li><span>a side note at 5 m</span></li></ul><h3 class="genie-md-p genie-md-p--heading"><span>Where 12k sits</span></h3><p class="genie-md-p"><span>See </span><span>the 7 rates</span><span> and </span><code class="inline-code">250 rows</code><span>.</span></p>',
+    ],
+    [
+      'Breakdown:\n| State | Borrowers |\n|---|---|\n| IL | 1,204 |\nThe *largest* cohort is 1,204 borrowers; mip.gold.lead_scores_2026 and _5_ stay.\n```\nSELECT 5\n```',
+      HOST,
+      '<p class="genie-md-p genie-md-p--first"><span>Breakdown:</span></p><figure class="genie-md-pre"><figcaption class="genie-md-pre__label">As written in Genie\'s narrative</figcaption><pre tabindex="0">| State | Borrowers |\n|---|---|\n| IL | 1,204 |</pre></figure><p class="genie-md-p"><span>The </span><em>largest</em><span> cohort is 1,204 borrowers; mip.gold.lead_scores_2026 and _5_ stay.</span></p><figure class="genie-md-pre"><pre tabindex="0">SELECT 5</pre></figure>',
+    ],
+    [
+      'The book holds $1.2B across 3,410 loans, +350 bps over par, with 5Source: mip.gold.borrower_360 cited.',
+      HOST,
+      '<p class="genie-md-p genie-md-p--first"><span>The book holds $1.2B across 3,410 loans, +350 bps over par, with 5Source: <a class="uc-asset-link" href="https://dbc-test.cloud.databricks.com/explore/data/mip/gold/borrower_360" target="_blank" rel="noopener noreferrer" title="Open mip.gold.borrower_360 in Databricks Catalog Explorer">mip.gold.borrower_360</a> cited.</span></p>',
+    ],
+  ];
+
+  it.each(BASE_HTML)('renders %j byte-identically to the base without a provider', (text, workspaceHost, html) => {
+    act(() => root.render(<MarkdownAnswer text={text} workspaceHost={workspaceHost} />));
+    expect(container.innerHTML).toBe(html);
   });
 });

@@ -4,18 +4,55 @@ The table/chart rows are the ground truth. This module keeps the natural-
 language answer from claiming unsupported borrower counts, rates, scores, or
 dollar values while avoiding false positives on identifiers, dates, and query
 limits.
+
+Provenance (audit 2026-09-21 ``genie-10`` phase 2). The support set a claim
+is checked against is a map from each support value to how the rows produce
+it (``databricks_genie_numeric_support._numeric_support_from_rows``); its key
+set is exactly the set the verdict has always read, so the verdict, its
+order and its tolerance are unchanged. A supported claim's provenance is the
+best support among ALL keys within the verdict's tolerance, under the FIXED
+priority
+
+    cell > row_count > sum > share > derived
+
+where ``cell`` is a value a reader can find in one returned cell, ``row_count``
+the number of returned rows, ``sum`` a column total, ``share`` a share of a
+column total, and ``derived`` everything else (min, max, mean, changes,
+range, quantiles, running totals, and identifier or date tokens). Two
+different columns at the winning priority leave the column unnamed. A claim
+that holds only as a stated threshold is ``bound``. The derivation label is
+``returned_value`` exactly when the best support is ``cell``.
+
+``occurrences`` lets the client locate a cell figure by its raw token, never
+by an offset: it is the token's count over EVERY number in the checked text,
+set only when each of those numbers is itself a cell-supported claim (so a
+token also used as a query limit, an identifier, a timeframe, a non-measure
+number or a derived figure gets None) and the token is at most 32
+characters.
+
+O2 (owner ruling, 2026-10-06): the Figures metric counts the answer's OWN
+figures. Callers check Genie's governed prose before any deterministic
+cross-check note is appended, so a divergence note's figures are never in the
+denominator; the note stays its own disclosure. Today a disputing cross-check
+(the count divergence) withholds the prose and ships no claims. If prose ever
+ships under a disputing cross-check, its disputed figures join the
+denominator as NOT verified and are listed with the divergence.
 """
 from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from collections import Counter
+from collections.abc import Set as AbstractSet
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from backend.services.genie_answers import GenieClaimsSummary, GenieVerifiedClaim
-from backend.services.repositories.databricks_genie_visualization import (
-    _is_genie_identifier_column,
-    _row_columns,
+from backend.services.repositories.databricks_genie_numeric_support import (
+    SUPPORT_PRIORITY,
+    SupportKind,
+    _numeric_support_from_rows,
+    _Support,
 )
 
 _NUMBER_RE = re.compile(
@@ -26,7 +63,6 @@ _NUMBER_RE = re.compile(
     r"(?P<pct>%)?"
     r"(?![A-Za-z0-9_-])"
 )
-_NUMERIC_CELL_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$")
 
 _MEASURE_TERMS = {
     "$",
@@ -106,16 +142,28 @@ class _NumericClaim:
 
 
 ClaimDerivation = Literal["returned_value", "derived_from_rows", "bound"]
+ClaimSupport = Literal["cell", "row_count", "sum", "share", "derived", "bound"]
 _MAX_VERIFIED_CLAIMS = 40
+_MAX_TOKEN_CHARS = 32
+_MAX_COLUMN_CHARS = 128
+_MAX_OCCURRENCES = 500
 
 
 @dataclass(frozen=True)
 class VerifiedNumericClaim:
-    """A figure the verifier proved against the rows, and how (genie-10)."""
+    """A figure the verifier proved against the rows, and how (genie-10).
+
+    ``support`` is the provenance under the module's fixed priority;
+    ``column`` names the returned column of a cell, sum or share support
+    (None when two columns tie, or the name is over 128 characters);
+    ``occurrences`` is set for a locatable cell figure only."""
 
     token: str
     kind: Literal["currency", "percent", "bps", "number"]
     derivation: ClaimDerivation
+    support: ClaimSupport
+    column: str | None = None
+    occurrences: int | None = None
 
 
 @dataclass(frozen=True)
@@ -151,27 +199,91 @@ def check_numeric_claims(
         and not _number_is_timeframe(answer_text, claim)
     ]
     unsupported: list[str] = []
-    verified: list[VerifiedNumericClaim] = []
+    verified: list[tuple[_NumericClaim, VerifiedNumericClaim]] = []
+    # The map depends on the claim only through its kind, so one build per
+    # kind serves every claim of that kind (the key set is unchanged).
+    maps: dict[str, dict[float, _Support]] = {}
     for claim in claims:
-        support = _numeric_support_values_from_rows(rows, claim=claim)
-        if _is_supported(claim.value, support):
-            direct = _is_supported(claim.value, _direct_cell_values(rows, claim))
-            verified.append(_verified(claim, "returned_value" if direct else "derived_from_rows"))
+        support = maps.get(claim.kind)
+        if support is None:
+            support = maps[claim.kind] = _numeric_support_from_rows(rows, claim=claim)
+        if _is_supported(claim.value, support.keys()):
+            verified.append((claim, _verified(claim, _best_support(claim.value, support))))
             continue
-        if _bounded_claim_holds(answer_text, claim, support):
-            verified.append(_verified(claim, "bound"))
+        if _bounded_claim_holds(answer_text, claim, support.keys()):
+            verified.append((claim, _verified(claim, None)))
             continue
         unsupported.append("unsupported_numeric_claim")
+    located = _with_occurrences(answer_text, verified)
     return NumericClaimCheck(
         unsupported=unsupported[:5],
         total=len(claims),
-        verified=verified[:_MAX_VERIFIED_CLAIMS],
-        verified_count=len(verified),
+        verified=located[:_MAX_VERIFIED_CLAIMS],
+        verified_count=len(located),
     )
 
 
-def _verified(claim: _NumericClaim, derivation: ClaimDerivation) -> VerifiedNumericClaim:
-    return VerifiedNumericClaim(token=claim.raw.strip()[:32], kind=claim.kind, derivation=derivation)
+def _best_support(value: float, support: dict[float, _Support]) -> _Support:
+    """The highest-priority support among ALL keys within the verdict's
+    tolerance (the same rel_tol and abs_tol as ``_is_supported``); two
+    different columns at that priority leave the column None."""
+
+    best: _Support | None = None
+    for candidate, label in support.items():
+        if not math.isclose(value, candidate, rel_tol=0.001, abs_tol=0.05):
+            continue
+        if best is None or SUPPORT_PRIORITY[label.kind] > SUPPORT_PRIORITY[best.kind]:
+            best = label
+        elif (
+            SUPPORT_PRIORITY[label.kind] == SUPPORT_PRIORITY[best.kind]
+            and best.column is not None
+            and best.column != label.column
+        ):
+            best = _Support(best.kind)
+    # A supported claim always has a key within tolerance.
+    return best if best is not None else _Support("derived")
+
+
+def _verified(claim: _NumericClaim, support: _Support | None) -> VerifiedNumericClaim:
+    """``support`` None is a stated threshold the rows satisfy (bound)."""
+
+    kind: SupportKind | Literal["bound"] = support.kind if support is not None else "bound"
+    column = support.column if support is not None else None
+    return VerifiedNumericClaim(
+        token=claim.raw.strip()[:_MAX_TOKEN_CHARS],
+        kind=claim.kind,
+        derivation=(
+            "bound" if support is None else "returned_value" if kind == "cell" else "derived_from_rows"
+        ),
+        support=kind,
+        column=column if column is not None and len(column) <= _MAX_COLUMN_CHARS else None,
+    )
+
+
+def _with_occurrences(
+    answer_text: str,
+    verified: list[tuple[_NumericClaim, VerifiedNumericClaim]],
+) -> list[VerifiedNumericClaim]:
+    """Set ``occurrences`` on a cell figure the client can locate by token:
+    A counts every number in the checked text (before the claim filters), C
+    the cell-supported claims; a token gets A[t] only when A[t] == C[t]."""
+
+    every = Counter(
+        match.group(0).strip()[:_MAX_TOKEN_CHARS] for match in _NUMBER_RE.finditer(answer_text)
+    )
+    cells = Counter(item.token for _, item in verified if item.support == "cell")
+    located: list[VerifiedNumericClaim] = []
+    for claim, item in verified:
+        count = every[item.token]
+        if (
+            item.support == "cell"
+            and len(claim.raw.strip()) <= _MAX_TOKEN_CHARS
+            and count == cells[item.token]
+            and count <= _MAX_OCCURRENCES
+        ):
+            item = replace(item, occurrences=count)
+        located.append(item)
+    return located
 
 
 def claims_summary(check: NumericClaimCheck, *, section: str | None = None) -> GenieClaimsSummary | None:
@@ -183,7 +295,15 @@ def claims_summary(check: NumericClaimCheck, *, section: str | None = None) -> G
         verified=min(check.verified_count, 500),
         total=min(check.total, 500),
         items=[
-            GenieVerifiedClaim(token=item.token, kind=item.kind, derivation=item.derivation, section=section)
+            GenieVerifiedClaim(
+                token=item.token,
+                kind=item.kind,
+                derivation=item.derivation,
+                section=section,
+                support=item.support,
+                column=item.column,
+                occurrences=item.occurrences,
+            )
             for item in check.verified
         ],
     )
@@ -203,50 +323,6 @@ def _unsupported_answer_numeric_claims(
     return check_numeric_claims(answer_text, rows, question).unsupported
 
 
-#: An ISO date or timestamp cell ("2026-09", "2026-09-30T12:00:00Z"): its
-#: year is not a figure a reader would call a returned value.
-_ISO_DATE_CELL_RE = re.compile(r"\d{4}-\d{2}(?:-\d{2})?(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?")
-
-
-def _direct_cell_values(rows: list[dict[str, Any]] | None, claim: _NumericClaim) -> set[float]:
-    """Values a reader can find in ONE cell: kind-compatible, non-identifier,
-    non-date column cells and numeric tokens in non-identifier, non-date
-    string cells, with their display variants and column unit multipliers (no
-    aggregates). Only the derivation LABEL reads this; the verdict does not."""
-
-    values: set[float] = set()
-    if not rows:
-        return values
-    for row in rows:
-        for col, cell in row.items():
-            if (
-                isinstance(cell, str)
-                and not _is_genie_identifier_column(col)
-                and not _column_looks_dateish(col)
-                and not _ISO_DATE_CELL_RE.fullmatch(cell.strip())
-            ):
-                for token in re.findall(r"-?\d[\d,]*\.?\d*", cell):
-                    try:
-                        _add_supported_variants(values, float(token.replace(",", "")))
-                    except ValueError:
-                        continue
-    for col in _row_columns(rows):
-        if (
-            _is_genie_identifier_column(col)
-            or _column_looks_dateish(col)
-            or not _column_supports_claim_kind(col, claim.kind)
-        ):
-            continue
-        for row in rows:
-            numeric_value = _numeric_cell_value(row.get(col))
-            if numeric_value is None:
-                continue
-            _add_supported_variants(values, numeric_value)
-            if multiplier := _column_unit_multiplier(col):
-                _add_supported_variants(values, numeric_value * multiplier)
-    return values
-
-
 _BOUND_ABOVE_RE = re.compile(
     r"(?:above|over|at least|more than|exceed(?:s|ing)?|\+)\s*$", re.IGNORECASE
 )
@@ -258,7 +334,7 @@ _BOUND_BELOW_RE = re.compile(
 def _bounded_claim_holds(
     answer_text: str,
     claim: _NumericClaim,
-    support: set[float],
+    support: AbstractSet[float],
 ) -> bool:
     """A threshold phrasing ("above 80%") is supported when the returned
     values actually satisfy the stated bound — the reader can verify it from
@@ -370,238 +446,7 @@ def _numeric_claim_kind(
     return "number"
 
 
-def _numeric_support_values_from_rows(
-    rows: list[dict[str, Any]] | None,
-    *,
-    claim: _NumericClaim,
-) -> set[float]:
-    values: set[float] = set()
-    if rows is None:
-        return values
-    if claim.kind == "number":
-        values.add(float(len(rows)))
-    for row in rows:
-        for cell in row.values():
-            if isinstance(cell, str):
-                for token in re.findall(r"-?\d[\d,]*\.?\d*", cell):
-                    try:
-                        _add_supported_variants(values, float(token.replace(",", "")))
-                    except ValueError:
-                        continue
-    columns = [
-        col
-        for col in _row_columns(rows)
-        if not _is_genie_identifier_column(col)
-        and not _column_looks_dateish(col)
-        and _column_supports_claim_kind(col, claim.kind)
-    ]
-    by_column: list[list[float]] = []
-    for col in columns:
-        col_values: list[float] = []
-        for row in rows:
-            value = row.get(col)
-            numeric_value = _numeric_cell_value(value)
-            if numeric_value is not None:
-                col_values.append(numeric_value)
-        if col_values:
-            by_column.append(col_values)
-            for value in col_values:
-                _add_supported_variants(values, value)
-                if multiplier := _column_unit_multiplier(col):
-                    _add_supported_variants(values, value * multiplier)
-    for col_values in by_column:
-        _add_supported_variants(values, sum(col_values))
-        _add_supported_variants(values, min(col_values))
-        _add_supported_variants(values, max(col_values))
-        _add_supported_variants(values, sum(col_values) / len(col_values))
-        # Deltas an honest trend narrative derives from the returned rows:
-        # consecutive-row changes, the endpoint change, and the max-min range.
-        for earlier, later in zip(col_values, col_values[1:], strict=False):
-            _add_supported_variants(values, abs(later - earlier))
-        _add_supported_variants(values, abs(col_values[-1] - col_values[0]))
-        _add_supported_variants(values, max(col_values) - min(col_values))
-        _add_distribution_shape_support(values, col_values, kind=claim.kind)
-    # A PERCENT claim is legitimately derived from a COUNT column (a bucket's
-    # share of the column total), which the claim-kind filter above excludes.
-    # Only SHARE ratios are contributed here — never raw values, quantiles, or
-    # cumulative totals — so a count column can still never support a currency
-    # or bps claim (cross-kind laundering stays closed).
-    if claim.kind == "percent":
-        for col in _row_columns(rows):
-            if _is_genie_identifier_column(col) or _column_looks_dateish(col):
-                continue
-            share_values = [
-                numeric
-                for row in rows
-                if (numeric := _numeric_cell_value(row.get(col))) is not None
-            ]
-            _add_share_support(values, share_values)
-    return values
-
-
-def _add_share_support(values: set[float], col_values: list[float]) -> None:
-    """Bucket shares and cumulative shares of a column total (percent only)."""
-
-    if not col_values or len(col_values) > _MAX_DISTRIBUTION_ROWS:
-        return
-    total = sum(col_values)
-    if total <= 0:
-        return
-    running = 0.0
-    for value in col_values:
-        _add_supported_variants(values, 100.0 * value / total)
-        running += value
-        _add_supported_variants(values, 100.0 * running / total)
-        _add_supported_variants(values, 100.0 * (total - running) / total)
-
-
-# Distribution/shape narratives ("the median bucket is X", "62% of borrowers
-# sit above N bps", "the top three bands hold 41,203 borrowers") are the whole
-# point of a histogram question, but every such figure is DERIVED, never a
-# cell literal — so the claims verifier suppressed them and shape questions
-# became structurally unanswerable (live persona audit 2026-08-07, VP-Lending
-# distribution probe returned 101 rows and zero narrative).
-#
-# This is a POSITIVE proof path, not an exemption: each value below is
-# computed from the returned column, so an unsupported number still fails
-# closed. Bounded at O(len(column)) per column.
-_MAX_DISTRIBUTION_ROWS = 2_000
-
-
-def _add_distribution_shape_support(
-    values: set[float],
-    col_values: list[float],
-    *,
-    kind: str,
-) -> None:
-    if not col_values or len(col_values) > _MAX_DISTRIBUTION_ROWS:
-        return
-    ordered = sorted(col_values)
-    count = len(ordered)
-
-    # Order statistics an honest shape narrative cites.
-    def _quantile(fraction: float) -> float:
-        idx = min(count - 1, max(0, int(round(fraction * (count - 1)))))
-        return ordered[idx]
-
-    for fraction in (0.1, 0.25, 0.5, 0.75, 0.9, 0.95):
-        _add_supported_variants(values, _quantile(fraction))
-    if count % 2 == 0:  # even-length median as the mean of the middle pair
-        _add_supported_variants(
-            values, (ordered[count // 2 - 1] + ordered[count // 2]) / 2
-        )
-
-    total = sum(col_values)
-    if total <= 0:
-        return
-    # Cumulative counts from both ends: on a histogram column these are
-    # exactly "N borrowers above/below the threshold" and "the top K bands
-    # hold N". Shares are contributed separately (percent claims only).
-    running = 0.0
-    for value in col_values:
-        running += value
-        _add_supported_variants(values, running)
-        _add_supported_variants(values, total - running)
-    # Shares are PERCENT values. Contributing them to a bare COUNT claim let a
-    # rounded cumulative share stand in for a fabricated borrower count — the
-    # canonical-ranking regression test caught exactly that false accept.
-    if kind == "percent":
-        _add_share_support(values, col_values)
-
-
-def _column_supports_claim_kind(
-    column: str,
-    kind: Literal["currency", "percent", "bps", "number"],
-) -> bool:
-    if kind == "number":
-        return True
-    normalized = column.lower().replace("-", "_").replace(" ", "_")
-    if kind == "currency":
-        return any(
-            term in normalized
-            for term in (
-                "amount",
-                "avm",
-                "balance",
-                "dollar",
-                "equity_value",
-                "loan_value",
-                "usd",
-                "value",
-            )
-        )
-    if kind == "percent":
-        return any(
-            term in normalized
-            for term in ("pct", "percent", "percentage", "ratio", "rate", "share")
-        ) and not any(term in normalized for term in ("bps", "basis", "spread"))
-    return any(term in normalized for term in ("bps", "basis", "spread"))
-
-
-def _numeric_cell_value(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int | float):
-        numeric = float(value)
-        return numeric if math.isfinite(numeric) else None
-    if isinstance(value, str):
-        normalized = value.strip().replace(",", "")
-        if not _NUMERIC_CELL_RE.fullmatch(normalized):
-            return None
-        numeric = float(normalized)
-        return numeric if math.isfinite(numeric) else None
-    return None
-
-
-def _column_unit_multiplier(column: str) -> float | None:
-    lower = column.lower()
-    if re.search(r"(?:^|[_\s-])(?:thousands?|k)(?:$|[_\s-])", lower):
-        return 1_000
-    if re.search(r"(?:^|[_\s-])(?:millions?|m)(?:$|[_\s-])", lower):
-        return 1_000_000
-    # Basis-point columns are legitimately narrated as percentage points
-    # ("+350 bps" == "3.50 percentage points"); support the converted form.
-    if re.search(r"(?:^|[_\s-])bps(?:$|[_\s-])", lower):
-        return 0.01
-    if re.search(r"(?:^|[_\s-])(?:billions?|b)(?:$|[_\s-])", lower):
-        return 1_000_000_000
-    return None
-
-
-def _add_supported_variants(values: set[float], value: float) -> None:
-    if not math.isfinite(value):
-        return
-    values.add(value)
-    values.add(round(value))
-    values.add(round(value, 1))
-    values.add(round(value, 2))
-    values.add(round(value, 3))
-    if abs(value) <= 1:
-        pct = value * 100
-        values.add(pct)
-        values.add(round(pct))
-        values.add(round(pct, 1))
-        values.add(round(pct, 2))
-    if abs(value) >= 1_000:
-        values.add(round(value / 1_000, 3))
-        _add_scaled_display_variants(values, value, 1_000)
-    if abs(value) >= 100_000:
-        _add_scaled_display_variants(values, value, 1_000_000)
-    if abs(value) >= 1_000_000:
-        values.add(round(value / 1_000_000, 3))
-    if abs(value) >= 100_000_000:
-        _add_scaled_display_variants(values, value, 1_000_000_000)
-    if abs(value) >= 1_000_000_000:
-        values.add(round(value / 1_000_000_000, 3))
-
-
-def _add_scaled_display_variants(values: set[float], value: float, scale: float) -> None:
-    scaled = value / scale
-    for digits in (0, 1, 2, 3):
-        values.add(round(scaled, digits) * scale)
-
-
-def _is_supported(value: float, support: set[float]) -> bool:
+def _is_supported(value: float, support: AbstractSet[float]) -> bool:
     return any(
         math.isclose(value, candidate, rel_tol=0.001, abs_tol=0.05)
         for candidate in support
@@ -691,11 +536,6 @@ def _number_is_query_limit(question: str, claim: _NumericClaim) -> bool:
 
 def _normalized_window(before: str, raw: str, after: str) -> str:
     return re.sub(r"\s+", " ", f"{before} {raw} {after}".lower())
-
-
-def _column_looks_dateish(column: str) -> bool:
-    lower = column.lower()
-    return lower.endswith("_date") or lower.endswith("_at") or "snapshot" in lower
 
 
 def _context(text: str, span: tuple[int, int], *, size: int) -> tuple[str, str]:

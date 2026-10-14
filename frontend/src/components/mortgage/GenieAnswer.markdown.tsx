@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { parseGenieMarkdownBlocks, tokenizeGenieInline } from '../../lib/genieAnswerText';
-import { SOURCE_LINE_RE, catalogExplorerUrl } from '../../lib/ucAssetLinks';
+import { splitSourceLinks } from '../../lib/genieSourceLinks';
+import { SOURCE_LINE_RE } from '../../lib/ucAssetLinks';
+import { markFigures, useGenieFigures, type GenieFigureMarks } from './GenieAnswerFigures';
 
 /** Phrases Genie commonly uses to restate the question before answering. */
 const RESTATEMENT_LEADERS = [
@@ -46,36 +48,31 @@ export function stripQuestionRestatement(answer: string): string {
  * captured token is not a 3-part UC name — a "Source:" line must never
  * render as a dead or fabricated link.
  */
-export function renderSourceLinks(text: string, workspaceHost: string | null | undefined): ReactNode[] {
-  if (!workspaceHost || !text.includes('.')) return [text];
-  const out: ReactNode[] = [];
-  const re = new RegExp(SOURCE_LINE_RE.source, SOURCE_LINE_RE.flags);
-  let last = 0;
+export function renderSourceLinks(
+  text: string,
+  workspaceHost: string | null | undefined,
+  figures: GenieFigureMarks | null = null,
+): ReactNode[] {
+  // The split is lib/genieSourceLinks', shared with the figure counter
+  // (genie-10 phase 2), so a figure is never marked inside the anchor and
+  // the counter sees exactly the strings that are marked.
   let key = 0;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) {
-    const [whole, label, asset] = match;
-    const href = catalogExplorerUrl(workspaceHost, asset);
-    if (!href) continue;
-    if (match.index > last) out.push(text.slice(last, match.index));
-    out.push(label);
-    out.push(
+  return splitSourceLinks(text, workspaceHost).map((part) =>
+    part.kind === 'text' ? (
+      markFigures(part.text, figures)
+    ) : (
       <a
         key={`uc-${key++}`}
         className="uc-asset-link"
-        href={href}
+        href={part.href}
         target="_blank"
         rel="noopener noreferrer"
-        title={`Open ${asset} in Databricks Catalog Explorer`}
+        title={`Open ${part.text} in Databricks Catalog Explorer`}
       >
-        {asset}
-      </a>,
-    );
-    last = match.index + whole.length;
-  }
-  if (out.length === 0) return [text];
-  if (last < text.length) out.push(text.slice(last));
-  return out;
+        {part.text}
+      </a>
+    ),
+  );
 }
 
 /**
@@ -107,10 +104,10 @@ export function isSourceFootnote(text: string): boolean {
  * grammar is lib/genieAnswerText's, shared with the plain-text flatten; the
  * only anchors this renderer ever emits are the reviewed "Source:" links.
  */
-function renderInlineMd(text: string, workspaceHost?: string | null): ReactNode[] {
+function renderInlineMd(text: string, workspaceHost?: string | null, figures: GenieFigureMarks | null = null): ReactNode[] {
   return tokenizeGenieInline(text).map((token, key) => {
-    if (token.kind === 'strong') return <strong key={key}>{token.text}</strong>;
-    if (token.kind === 'em') return <em key={key}>{token.text}</em>;
+    if (token.kind === 'strong') return <strong key={key}>{markFigures(token.text, figures)}</strong>;
+    if (token.kind === 'em') return <em key={key}>{markFigures(token.text, figures)}</em>;
     if (token.kind === 'code') {
       return (
         <code key={key} className="inline-code">
@@ -120,8 +117,8 @@ function renderInlineMd(text: string, workspaceHost?: string | null): ReactNode[
     }
     // A link keeps its words only: an LLM-authored URL never becomes an
     // anchor and an image URL is never fetched.
-    if (token.kind === 'link') return <span key={key}>{token.text}</span>;
-    return <span key={key}>{renderSourceLinks(token.text, workspaceHost)}</span>;
+    if (token.kind === 'link') return <span key={key}>{markFigures(token.text, figures)}</span>;
+    return <span key={key}>{renderSourceLinks(token.text, workspaceHost, figures)}</span>;
   });
 }
 
@@ -152,6 +149,9 @@ export function MarkdownAnswer({
   headingLevel?: 3 | 4;
 }) {
   const Heading = headingLevel === 4 ? 'h4' : 'h3';
+  // genie-10 phase 2: the cell figures GenieAnswer located in THIS text, or
+  // null (no provider, no entry): then every node below is unchanged.
+  const figures = useGenieFigures(text, workspaceHost);
   return (
     <>
       {parseGenieMarkdownBlocks(text).map((b, i) => {
@@ -159,19 +159,19 @@ export function MarkdownAnswer({
         if (b.type === 'h' || (b.type === 'p' && isSectionHeading(b.text))) {
           return (
             <Heading key={i} className={`genie-md-p${first} genie-md-p--heading`}>
-              {renderInlineMd(b.text, workspaceHost)}
+              {renderInlineMd(b.text, workspaceHost, figures)}
             </Heading>
           );
         }
         if (b.type === 'p') {
           return (
             <p key={i} className={`genie-md-p${first}${isSourceFootnote(b.text) ? ' genie-md-p--source' : ''}`}>
-              {renderInlineMd(b.text, workspaceHost)}
+              {renderInlineMd(b.text, workspaceHost, figures)}
             </p>
           );
         }
         if (b.type === 'pre') return <NarrativePre key={i} lines={b.lines} narrative={b.narrative} />;
-        const items = b.items.map((it, j) => <li key={j}>{renderInlineMd(it, workspaceHost)}</li>);
+        const items = b.items.map((it, j) => <li key={j}>{renderInlineMd(it, workspaceHost, figures)}</li>);
         return b.type === 'ol' ? (
           // `start` keeps the numbering of a list an interleaved bullet split.
           <ol key={i} className="genie-md-list genie-md-list--ordered" start={b.start !== 1 ? b.start : undefined}>

@@ -1,0 +1,253 @@
+[
+  {
+    "text": "Illinois leads with 48,396 borrowers.",
+    "tokens": [
+      "48,396"
+    ]
+  },
+  {
+    "text": "The total balance is $1,204,500 across the book.",
+    "tokens": [
+      "$1,204,500"
+    ]
+  },
+  {
+    "text": "A 48.3% in-the-money share.",
+    "tokens": [
+      "48.3%"
+    ]
+  },
+  {
+    "text": "The spread averages +350 bps over the note rate.",
+    "tokens": [
+      "350"
+    ]
+  },
+  {
+    "text": "Spreads sit 120 bps above market.",
+    "tokens": [
+      "120"
+    ]
+  },
+  {
+    "text": "About 12k borrowers and $3.5m of balance.",
+    "tokens": [
+      "12k",
+      "$3.5m"
+    ]
+  },
+  {
+    "text": "Roughly 5 m borrowers in scope.",
+    "tokens": [
+      "5 m"
+    ]
+  },
+  {
+    "text": "Balances reach 2.4 million dollars.",
+    "tokens": [
+      "2.4"
+    ]
+  },
+  {
+    "text": "The book holds $1.2B in loans.",
+    "tokens": [
+      "$1.2B"
+    ]
+  },
+  {
+    "text": "A 1,234,567.89 total.",
+    "tokens": [
+      "1,234,567.89"
+    ]
+  },
+  {
+    "text": "Decimals: 0.483 and .5 and 3.",
+    "tokens": [
+      "0.483",
+      "5",
+      "3"
+    ]
+  },
+  {
+    "text": "Underscored _5_ stays a word.",
+    "tokens": []
+  },
+  {
+    "text": "Bold **1,204** borrowers.",
+    "tokens": [
+      "1,204"
+    ]
+  },
+  {
+    "text": "Borrower B-0123456789ABC is masked.",
+    "tokens": []
+  },
+  {
+    "text": "Snapshot 2026-09-30 refreshed.",
+    "tokens": []
+  },
+  {
+    "text": "A change of -5 points.",
+    "tokens": []
+  },
+  {
+    "text": "A drop to -5% this week.",
+    "tokens": []
+  },
+  {
+    "text": "Value 5\u00a0m with a no-break space.",
+    "tokens": [
+      "5\u00a0m"
+    ]
+  },
+  {
+    "text": "Trailing 5 .",
+    "tokens": [
+      "5"
+    ]
+  },
+  {
+    "text": "A long $1,234,567,890,123,456,789,012,345.67 figure.",
+    "tokens": [
+      "$1,234,567,890,123,456,789,012,3"
+    ]
+  },
+  {
+    "text": "ZIP 60614 and FIPS 17031.",
+    "tokens": [
+      "60614",
+      "17031"
+    ]
+  },
+  {
+    "text": "Ratio 3:1 and 4/5 and 7-day.",
+    "tokens": [
+      "3",
+      "1",
+      "4",
+      "5"
+    ]
+  },
+  {
+    "text": "v2 and 3D and x5 and 5x.",
+    "tokens": []
+  },
+  {
+    "text": "Rates 6.25%, 6.5% and 7%.",
+    "tokens": [
+      "6.25%",
+      "6.5%",
+      "7%"
+    ]
+  },
+  {
+    "text": "Counts 1,2,3 and 12,34 and 1,000,0.",
+    "tokens": [
+      "1",
+      "2",
+      "3",
+      "12",
+      "34",
+      "1,000",
+      "0"
+    ]
+  },
+  {
+    "text": "Version 1.2.3 and 10.5.",
+    "tokens": [
+      "1.2",
+      "3",
+      "10.5"
+    ]
+  },
+  {
+    "text": "In 2026 there were 3 quarters.",
+    "tokens": [
+      "2026",
+      "3"
+    ]
+  },
+  {
+    "text": "Price $99 and $ 5 and $5k.",
+    "tokens": [
+      "$99",
+      "5",
+      "$5k"
+    ]
+  },
+  {
+    "text": "Shares 50 % with a space.",
+    "tokens": [
+      "50 %"
+    ]
+  },
+  {
+    "text": "Tab\t7\tseparated and newline\n8\nhere.",
+    "tokens": [
+      "7",
+      "8"
+    ]
+  },
+  {
+    "text": "(42) borrowers and [17] loans.",
+    "tokens": [
+      "42",
+      "17"
+    ]
+  },
+  {
+    "text": "Top-10 lists and 10-K forms.",
+    "tokens": []
+  },
+  {
+    "text": "Arabic-Indic \u0663\u0660\u0660 borrowers.",
+    "tokens": [
+      "\u0663\u0660\u0660"
+    ]
+  },
+  {
+    "text": "Mixed 1\u0662 digits.",
+    "tokens": [
+      "1\u0662"
+    ]
+  },
+  {
+    "text": "Next-line 5\u0085m and file-sep 6\u001cm.",
+    "tokens": [
+      "5\u0085m",
+      "6\u001cm"
+    ]
+  },
+  {
+    "text": "BOM 5\ufeffm here.",
+    "tokens": [
+      "5"
+    ]
+  },
+  {
+    "text": "Kilo 5K and 5 K and 5KB.",
+    "tokens": [
+      "5K",
+      "5 K"
+    ]
+  },
+  {
+    "text": "A 45.10% rate and 45.1% too.",
+    "tokens": [
+      "45.10%",
+      "45.1%"
+    ]
+  },
+  {
+    "text": "Ends with 9",
+    "tokens": [
+      "9"
+    ]
+  },
+  {
+    "text": "Start 5% end.",
+    "tokens": [
+      "5%"
+    ]
+  }
+]

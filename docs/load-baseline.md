@@ -185,6 +185,12 @@ w5-genie-provenance-tiles, not cut; the 1.5 s status poll stays. When it is
 built, the job-events route (`POST /api/v1/genie/message/events`) joins
 rumApiRoute.ts EXCLUDED_TEMPLATES beside the status poll's template.
 
+2026-10-07 (W5d w5-genie-provenance-tiles): delivery-04 not built: the
+Decision row above was still 'pending integrator run' at W5d branch start
+(2931d82c), so the stream is re-homed to W5e w5-deps-report under the same
+Decision row and the same RUM requirement (the events template joins
+EXCLUDED_TEMPLATES); the 1.5 s status poll stays.
+
 ## Cold-cache profile (delivery-09)
 
 The baselines above are WARM. delivery-09 asks the cold question: on a cold
@@ -240,3 +246,9 @@ measured numbers.
 | A, cold process | pending integrator run | | | | |
 | B, post-refresh generation advance | pending integrator run | | | | |
 | Decision | pending integrator run | | | | build / notBuilt |
+
+2026-10-07 (W5d w5-genie-provenance-tiles): the single-flight slot release is
+not built: both scenario rows and the Decision row above were still 'pending
+integrator run' at W5d branch start (2931d82c), so it is re-homed to W5e
+w5-deps-report under the same Decision row (built only if A or B is
+`reproduced`).

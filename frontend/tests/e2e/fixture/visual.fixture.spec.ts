@@ -28,6 +28,8 @@
  *     and the open Follow-ups tray                                     4
  *  R. W5d w5-print-glossary-sales-manager: Home's account menu open,
  *     the glossary filtered by a search                                4
+ *  S. W5d w5-genie-provenance-tiles: an /ask-genie answer with a
+ *     verified figure's hover card open                                2
  *                                                                     --
  *                                                                    126
  *
@@ -43,6 +45,8 @@ import type { Locator, Page } from '@playwright/test';
 import type { AppDriver, FixtureAccent, FixtureTheme } from './app';
 import { enterState, prepareState, type FixtureState } from './fixtureStates';
 import type { HomeSummary, SessionResponse } from '../../../src/types';
+import { provenanceSingleAnswer } from './data/genieProvenance';
+import { GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
 import { RATE_MOVE_HOME_SUMMARY } from './data/homeAnswer';
 import { registerFollowUps } from './data/followUps';
 import { registerPagedQueue } from './data/leadPages';
@@ -319,6 +323,27 @@ for (const theme of FIXTURE_THEMES) {
       await footer.scrollIntoViewIfNeeded();
       await app.settle();
       await capture(page, `lead-queue--${theme}--paged-footer.png`, { element: footer });
+    });
+
+    // S (W5d w5-genie-provenance-tiles, genie-10 phase 2): a verified figure
+    // in an /ask-genie answer with its evidence hover card open. The open card
+    // IS the state under test, so the pointer stays on the figure instead of
+    // capture()'s parking (which would close it); the figure is a <mark>, not
+    // a control, and nothing else is hovered.
+    test('ask-genie · verified figures', async ({ app, mockApi, page }) => {
+      registerGenieTurn(mockApi, { holdProgress: false, answer: provenanceSingleAnswer() });
+      const { naturalLoad } = await load(app, mockApi, route('ask-genie'), theme);
+      const main = page.locator('#main-content');
+      await main.getByRole('textbox', { name: 'Ask Genie — question' }).fill(GENIE_QUESTION);
+      await main.getByRole('button', { name: 'Ask Genie', exact: true }).click();
+      const figure = main.locator('.genie-thread .genie-answer mark.genie-md-figure').first();
+      await expect(figure).toBeVisible({ timeout: 20_000 });
+      await expectNoSurfaceOverflow(page, { route: 'ask-genie', state: 'verified-figures', theme });
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await figure.hover();
+      await expect(page.locator('.evidence-hovercard:not(.is-closing)')).toBeVisible();
+      await expect.soft(page).toHaveScreenshot(`ask-genie--${theme}--verified-figures.png`);
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'ask-genie · verified figures');
     });
 
     // F: a 1280x720 laptop.
