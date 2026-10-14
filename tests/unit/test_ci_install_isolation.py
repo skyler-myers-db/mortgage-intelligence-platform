@@ -234,3 +234,13 @@ def test_an_operator_run_never_starts_python_and_keeps_the_live_root() -> None:
         assert result.stdout.strip() == "dev||dev"
     prod = _bash_block({"TARGET": "prod"}, python="/usr/bin/false")
     assert prod.stdout.strip() == "dev||prod", "a prod converge keeps --expected-root-leaf prod"
+
+
+def test_any_leaf_or_the_deploy_dev_ref_always_runs_the_rule_table() -> None:
+    """The Python-free path is only for 'no leaf and not deploy-dev.yml'."""
+
+    local_leaf = _bash_block({"MIP_BUNDLE_ROOT_LEAF": "dev-ci", **STAGING})
+    assert local_leaf.returncode == 2 and "CI-only" in local_leaf.stderr, "a leaf outside CI is refused"
+    for env in ({"MIP_BUNDLE_ROOT_LEAF": "dev-ci"}, {"GITHUB_ACTIONS": "true", "GITHUB_WORKFLOW_REF": DEPLOY_DEV_REF}):
+        consulted = _bash_block(env, python="/usr/bin/false")
+        assert consulted.returncode == 2, f"{env} must reach the tool, which fails closed here"
