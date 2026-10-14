@@ -1907,7 +1907,7 @@ def test_audit_store_rejects_pii_like_campaign_and_variant_metadata() -> None:
     store = InMemoryAuditStore()
     with pytest.raises(AuditMetadataValueViolation):
         store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="draft_outreach",
             entity_type="outreach_draft",
             entity_id="B-48291",
@@ -1915,7 +1915,7 @@ def test_audit_store_rejects_pii_like_campaign_and_variant_metadata() -> None:
         )
     with pytest.raises(AuditMetadataValueViolation):
         store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="draft_outreach",
             entity_type="outreach_draft",
             entity_id="B-48291",
@@ -1923,7 +1923,7 @@ def test_audit_store_rejects_pii_like_campaign_and_variant_metadata() -> None:
         )
     with pytest.raises(AuditMetadataValueViolation):
         store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="draft_outreach",
             entity_type="outreach_draft",
             entity_id="B-48291",

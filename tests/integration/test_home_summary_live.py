@@ -124,7 +124,7 @@ def test_two_visits_produce_a_real_last_login_delta() -> None:
     client = _client_from_env()
     _apply_schema(client)
 
-    actor = f"integration-s4+{uuid4().hex[:12]}@entrada.ai"
+    actor = f"integration-s4+{uuid4().hex[:12]}@summit.example"
     first_visit_at = datetime.now(UTC) - timedelta(minutes=30)
     _cleanup(client, actor)
     try:

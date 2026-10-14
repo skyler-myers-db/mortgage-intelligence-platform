@@ -20,7 +20,7 @@ from tests.fixtures import mock_population as mock_data
 from tests.fixtures.reviewed_approval import reviewed_approval
 
 client = TestClient(app)
-client.headers.update({"X-Forwarded-Email": "skyler@entrada.ai"})
+client.headers.update({"X-Forwarded-Email": "operator@summit.example"})
 
 LO_01 = "55555555-5555-4555-8555-555555555501"
 LO_02 = "55555555-5555-4555-8555-555555555502"
@@ -142,7 +142,7 @@ def test_approving_in_the_api_moves_the_funnel_immediately() -> None:
     # Who-approved-what: the approver identity is on the approval row.
     approvals = after["approvals"]
     assert approvals, "expected the approve decision to surface"
-    assert approvals[0]["actor_email"] == "skyler@entrada.ai"
+    assert approvals[0]["actor_email"] == "operator@summit.example"
     assert approvals[0]["borrower_id"] == mock_data.BORROWERS[0].borrower_id
 
 

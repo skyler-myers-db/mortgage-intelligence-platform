@@ -858,7 +858,7 @@ def _fake_lakebase_workspace():
                 token="short-lived-token"
             ),
         ),
-        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="op@entrada.ai")),
+        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="op@summit.example")),
     )
 
 
@@ -879,7 +879,7 @@ def test_verifier_mints_lakebase_env_when_absent(monkeypatch) -> None:
     assert _os.environ["PGHOST"] == "mip-app-state.db.example"
     assert _os.environ["PGPASSWORD"] == "short-lived-token"
     assert _os.environ["LAKEBASE_HOST"] == "mip-app-state.db.example"
-    assert _os.environ["LAKEBASE_USER"] == "op@entrada.ai"
+    assert _os.environ["LAKEBASE_USER"] == "op@summit.example"
     assert _os.environ["LAKEBASE_PASSWORD"] == "short-lived-token"
     # Explicit env wins: second call is a no-op.
     assert verifier.ensure_lakebase_env(workspace_factory=lambda: fake) is False
@@ -905,7 +905,7 @@ def test_verifier_overrides_stale_localhost_lakebase_settings(monkeypatch) -> No
 
     # The exact object backend.services.lakebase holds must now resolve real.
     assert singleton.lakebase_host == "mip-app-state.db.example"
-    assert singleton.lakebase_user == "op@entrada.ai"
+    assert singleton.lakebase_user == "op@summit.example"
     assert singleton.lakebase_database == "mip_app_state"
     assert singleton.lakebase_password is not None
     assert singleton.lakebase_password.get_secret_value() == "short-lived-token"

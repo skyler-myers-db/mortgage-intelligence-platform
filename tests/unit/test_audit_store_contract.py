@@ -68,7 +68,7 @@ def test_write_issues_insert_with_named_params() -> None:
     store = LakebaseAuditStore(client=client)
 
     event = store.write(
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
         action="view_borrower_360",
         entity_type="borrower",
         entity_id="B-48291",
@@ -101,14 +101,14 @@ def test_write_issues_insert_with_named_params() -> None:
         "metadata",
     ):
         assert key in params, f"missing bind param: {key}"
-    assert params["actor_email"] == "skyler@entrada.ai"
+    assert params["actor_email"] == "operator@summit.example"
     assert params["event_type"] == "VIEW_BORROWER"
     assert re.fullmatch(r"clip_ref_[0-9a-f]{12}", params["subject_clip"])
     assert params["correlation_id"]
     assert params["evidence_ids"] == ["ev-1", "ev-2"]
     assert "opportunity_score" in params["metadata"]  # JSON-serialized
     # Round-tripped AuditEvent.
-    assert event.actor == "skyler@entrada.ai"
+    assert event.actor == "operator@summit.example"
     assert event.event_type == "VIEW_BORROWER"
     assert re.fullmatch(r"clip_ref_[0-9a-f]{12}", event.subject_clip or "")
 
@@ -346,7 +346,7 @@ def test_list_hydrates_rows_into_audit_events() -> None:
             "audit_id": aid,
             "audit_sequence": 42,
             "event_type": "VIEW_BORROWER",
-            "actor_email": "skyler@entrada.ai",
+            "actor_email": "operator@summit.example",
             "entity_type": "borrower",
             "entity_id": "B-48291",
             "subject_clip": "clip_ref_abc123def456",
@@ -393,7 +393,7 @@ def test_list_masks_legacy_raw_subject_clip_values() -> None:
             "audit_id": aid,
             "audit_sequence": 43,
             "event_type": "VIEW_BORROWER",
-            "actor_email": "skyler@entrada.ai",
+            "actor_email": "operator@summit.example",
             "entity_type": "borrower",
             "entity_id": "B-48291",
             "subject_clip": "1234567890",

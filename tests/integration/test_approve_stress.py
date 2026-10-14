@@ -59,6 +59,7 @@ from fastapi.testclient import TestClient
 from backend.main import app
 from backend.services.lakebase import LakebaseClient
 from tests.fixtures.reviewed_approval import synthetic_review_proof
+from tests.integration._live_actor import resolve_live_admin_actor
 
 pytestmark = pytest.mark.integration
 
@@ -118,6 +119,11 @@ def test_approve_stress_50_sequential() -> None:
     installs an in-memory override, so we clear it for this test and
     restore it on teardown.
     """
+    verifier = _real_client_from_env()
+    # NB-a / C8: approve as the target roster's admin, never a literal.
+    # Resolved before the overrides are dropped, so a skip leaves them intact.
+    stress_actor = resolve_live_admin_actor(verifier)
+
     # conftest.py autouse fixture stubs every service. For this test we
     # want the real wiring, so drop the overrides and let FastAPI build
     # live dependencies from the factories.
@@ -127,7 +133,6 @@ def test_approve_stress_50_sequential() -> None:
     # The FastAPI client re-uses a single ASGI transport; since approve
     # is a sync handler this gives us real single-caller latency.
     http = TestClient(app)
-    verifier = _real_client_from_env()
 
     run_uuid = f"stress-{uuid4().hex[:12]}"
     run_started_iso = verifier.fetchone("SELECT now() AS n")  # type: ignore[assignment]
@@ -147,7 +152,7 @@ def test_approve_stress_50_sequential() -> None:
                 json={
                     "borrower_id": borrower_id,
                     "offer_code": f"STRESS-{i:02d}",
-                    "actor": "stress-test@entrada.ai",
+                    "actor": stress_actor,
                     "evidence_ids": [f"ev-stress-{run_uuid}-{i}"],
                     # review_mode is required since W5c, with its proof.
                     **synthetic_review_proof(),

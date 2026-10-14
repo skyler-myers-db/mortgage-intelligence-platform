@@ -24,7 +24,7 @@ from backend.main import app
 from tests.fixtures import mock_population as mock_data
 from tests.fixtures.reviewed_approval import draft_proof
 
-ADMIN = "skyler@entrada.ai"
+ADMIN = "operator@summit.example"
 client = TestClient(app)
 client.headers.update({"X-Forwarded-Email": ADMIN})
 

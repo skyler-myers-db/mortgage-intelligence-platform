@@ -21,7 +21,7 @@ from backend.services.sales_state import get_sales_state_store
 from tests.fixtures import mock_population as mock_data
 
 client = TestClient(app)
-client.headers.update({"X-Forwarded-Email": "skyler@entrada.ai"})
+client.headers.update({"X-Forwarded-Email": "operator@summit.example"})
 
 
 def _destination(status: str = "not_configured", allowed_actions: list[str] | None = None) -> ActivationDestination:
@@ -61,7 +61,7 @@ def _outbox_item(
         channel="email",
         status=status,
         request_id=request_id,
-        created_by="skyler@entrada.ai",
+        created_by="operator@summit.example",
         created_at=now,
         updated_at=now,
     )
@@ -78,7 +78,7 @@ def _approval_decision(
         "approval_id": approval_id,
         "borrower_id": borrower_id,
         "action": "approve",
-        "actor_email": "skyler@entrada.ai",
+        "actor_email": "operator@summit.example",
         "offer_code": offer_code,
         "campaign_id": campaign_id,
         "channel": "email",

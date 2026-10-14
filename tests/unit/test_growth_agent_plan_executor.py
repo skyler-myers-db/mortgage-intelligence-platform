@@ -77,7 +77,7 @@ def _execute(plan: ComposedPlan) -> Any:
         sql_client=object(),  # unused: tool impls are injected
         lakebase=_FakeLakebase(),
         audit_store=object(),  # unused: no property lookup step
-        actor="analyst@entrada.ai",
+        actor="analyst@summit.example",
         request_id=None,
         tool_impls=_TOOL_IMPLS,
     )

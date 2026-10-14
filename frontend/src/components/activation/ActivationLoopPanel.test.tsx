@@ -58,7 +58,7 @@ function outboxItem(overrides: Partial<ActivationOutboxItem> = {}): ActivationOu
     channel: 'email',
     status: 'dry_run',
     request_id: REQUEST_ID,
-    created_by: 'skyler@entrada.ai',
+    created_by: 'operator@summit.example',
     created_at: '2026-06-01T00:00:00Z',
     updated_at: '2026-06-01T00:00:00Z',
     ...overrides,

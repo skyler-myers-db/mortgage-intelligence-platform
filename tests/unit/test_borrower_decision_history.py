@@ -165,7 +165,7 @@ Captured = tuple[str, str, str, dict[str, Any], str]  # event_type, entity_type,
 # what ENTITY_RESOLUTION_SQL selects by borrower_id in production.
 Resolved = Mapping[str, Collection[str]]
 
-ACTOR = "skyler@entrada.ai"
+ACTOR = "operator@summit.example"
 HEADERS = {"X-Forwarded-Email": ACTOR}
 LO_01 = "55555555-5555-4555-8555-555555555501"
 STRANGER = "B-STRANGER00001"

@@ -58,7 +58,7 @@ from backend.services.repositories import get_outreach_repository
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 client = TestClient(app)
-OWNER = "skyler@entrada.ai"
+OWNER = "operator@summit.example"
 HEADERS = {"X-Forwarded-Email": OWNER}
 BORROWER = "B-48291"
 BULK_ID = "22222222-2222-4222-8222-222222222222"

@@ -37,12 +37,12 @@ from backend.services.sales_state import SalesStateStore
 from backend.services.sales_state_release import ReleaseConflict
 from jobs import lakebase_migrate
 from tests.fixtures.lakebase_contract_prefix import contract_as_of
+from tests.integration._live_actor import roster_admin
 
 pytestmark = pytest.mark.integration
 
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 _SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
-ADMIN = "skyler@entrada.ai"
 LO1 = "lo01@summit.example"
 LO2 = "lo02@summit.example"
 BORROWERS = [f"B-0000000000SL{n}" for n in range(1, 6)]
@@ -101,11 +101,19 @@ def _store(conn_kwargs: dict[str, str]) -> SalesStateStore:
     return SalesStateStore(_PgLakebase(conn_kwargs))  # type: ignore[arg-type]
 
 
-def _assign(store: SalesStateStore, borrower_id: str, lo: str) -> str:
+@pytest.fixture
+def admin(conn_kwargs: dict[str, str]) -> str:
+    """The seed's admin, read from the roster the fixture just applied (NB-a / C8)."""
+    email = roster_admin(_PgLakebase(conn_kwargs))
+    assert email, "lakebase/seed_campaigns.sql must seed an active admin"
+    return email
+
+
+def _assign(store: SalesStateStore, borrower_id: str, lo: str, admin: str) -> str:
     assignment, _ = store.assign_lead(
         borrower_id=borrower_id,
         assigned_to_email=lo,
-        assigned_by=ADMIN,
+        assigned_by=admin,
         expires_in_hours=24,
         strategy="manual",
         request_id=str(uuid4()),
@@ -122,14 +130,14 @@ def _rows(conn_kwargs: dict[str, str], sql: str, params: dict[str, Any]) -> list
         return conn.execute(sql, params).fetchall()
 
 
-def test_a_release_hands_the_lead_back_through_the_released_at_match(conn_kwargs: dict[str, str]) -> None:
+def test_a_release_hands_the_lead_back_through_the_released_at_match(conn_kwargs: dict[str, str], admin: str) -> None:
     store = _store(conn_kwargs)
     borrower_id = BORROWERS[0]
-    first = _assign(store, borrower_id, LO1)
-    second = _assign(store, borrower_id, LO2)
+    first = _assign(store, borrower_id, LO1, admin)
+    second = _assign(store, borrower_id, LO2, admin)
 
     result = store.release_assignment(
-        borrower_id=borrower_id, assignment_id=second, actor=ADMIN, request_id=str(uuid4()), restore_gate=_no_gate
+        borrower_id=borrower_id, assignment_id=second, actor=admin, request_id=str(uuid4()), restore_gate=_no_gate
     )
 
     assert result.released.assignment_id == second
@@ -152,17 +160,17 @@ def test_a_release_hands_the_lead_back_through_the_released_at_match(conn_kwargs
     assert audit["metadata"]["restored_assignment_id"] == result.restored.assignment_id
 
 
-def test_two_concurrent_releases_serialise_on_the_row_lock(conn_kwargs: dict[str, str]) -> None:
+def test_two_concurrent_releases_serialise_on_the_row_lock(conn_kwargs: dict[str, str], admin: str) -> None:
     store = _store(conn_kwargs)
     borrower_id = BORROWERS[1]
-    assignment_id = _assign(store, borrower_id, LO1)
+    assignment_id = _assign(store, borrower_id, LO1, admin)
 
     def release(_: int) -> str:
         try:
             _store(conn_kwargs).release_assignment(
                 borrower_id=borrower_id,
                 assignment_id=assignment_id,
-                actor=ADMIN,
+                actor=admin,
                 request_id=str(uuid4()),
                 restore_gate=_no_gate,
             )
@@ -178,14 +186,14 @@ def test_two_concurrent_releases_serialise_on_the_row_lock(conn_kwargs: dict[str
     assert len(audits) == 1
 
 
-def test_a_distribution_release_is_found_in_each_borrower_s_history_only(conn_kwargs: dict[str, str]) -> None:
+def test_a_distribution_release_is_found_in_each_borrower_s_history_only(conn_kwargs: dict[str, str], admin: str) -> None:
     store = _store(conn_kwargs)
     run = BORROWERS[2:5]
     run_id = str(uuid4())
     store.distribute(
         borrower_ids=run,
         lo_emails=[LO1, LO2],
-        assigned_by=ADMIN,
+        assigned_by=admin,
         expires_in_hours=24,
         strategy="round_robin",
         request_id=run_id,
@@ -193,10 +201,10 @@ def test_a_distribution_release_is_found_in_each_borrower_s_history_only(conn_kw
     request_id = str(uuid4())
 
     result = store.release_distribution(
-        distribution_request_id=run_id, actor=ADMIN, request_id=request_id, restore_gate=_no_gate
+        distribution_request_id=run_id, actor=admin, request_id=request_id, restore_gate=_no_gate
     )
     replay = store.release_distribution(
-        distribution_request_id=run_id, actor=ADMIN, request_id=request_id, restore_gate=_no_gate
+        distribution_request_id=run_id, actor=admin, request_id=request_id, restore_gate=_no_gate
     )
 
     assert result.released_count == 3
@@ -211,17 +219,17 @@ def test_a_distribution_release_is_found_in_each_borrower_s_history_only(conn_kw
         assert [row["entity_id"] for row in unassigns] == [borrower_id]
 
 
-def test_the_board_commit_re_plans_on_the_transaction_cursor(conn_kwargs: dict[str, str]) -> None:
+def test_the_board_commit_re_plans_on_the_transaction_cursor(conn_kwargs: dict[str, str], admin: str) -> None:
     store = _store(conn_kwargs)
     candidates = [Candidate(BORROWERS[0], 90, "IL"), Candidate(BORROWERS[1], 80, "CA")]
     preview = store.preview_distribution(
-        candidates=candidates, lo_emails=[LO1, LO2], actor=ADMIN, expires_in_hours=24, skipped_not_assignable=0
+        candidates=candidates, lo_emails=[LO1, LO2], actor=admin, expires_in_hours=24, skipped_not_assignable=0
     )
 
     assignments, audit_id, committed = store.distribute_score_balanced(
         candidates=candidates,
         lo_emails=[LO1, LO2],
-        assigned_by=ADMIN,
+        assigned_by=admin,
         expires_in_hours=24,
         request_id=str(uuid4()),
         expected_plan_fingerprint=preview.plan_fingerprint,
