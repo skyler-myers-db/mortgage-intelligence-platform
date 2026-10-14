@@ -359,8 +359,17 @@ for (const theme of FIXTURE_THEMES) {
       const card = page.locator('[aria-label="Composed Growth Agent plan"]');
       await card.getByRole('button', { name: 'Run this plan' }).click();
       await expect(card.locator('.growth-agent-step--running')).toBeVisible();
+      // The held execute keeps one request in flight and the workflow cards
+      // aria-busy by design (ask-genie.growth-agent-panel.tsx), so app.settle(),
+      // which waits for neither, cannot return in this state. Settle on the
+      // card's own reported state instead: PROGRESS_SEQUENCE[1] is step 2 of 3
+      // (Done / Running / Waiting), the only open request is the held execute,
+      // and the webfonts are ready.
+      await expect(card.locator('.growth-agent-step--completed')).toHaveCount(1);
+      await expect(card.locator('.growth-agent-step--waiting')).toHaveCount(1);
+      await expect.poll(() => mockApi.inflight, { message: 'only the held execute is open' }).toBe(1);
       await page.mouse.move(0, 0);
-      await app.settle();
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
       await capture(page, `ask-genie--${theme}--plan-progress.png`, { element: card });
       expectNoAuditedReadSince(mockApi, naturalLoad, 'ask-genie · plan progress');
       release();

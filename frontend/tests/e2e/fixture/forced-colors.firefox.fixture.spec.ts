@@ -36,6 +36,7 @@ import {
   SAMPLE_SCALE,
   describeInk,
   describePair,
+  highlightFloor,
   highlightInkFaults,
   insetRingBand,
   paintedInks,
@@ -270,17 +271,23 @@ test.describe('Firefox forced colors (a11y-10 item 4 / css-06 item 3)', () => {
         // W5d: the palette's and the topbar search's active row drew the
         // Highlight ring on the Highlight fill (1.46:1 light, 1.58:1 dark);
         // 33-contrast-modes.css rings them in HighlightText, as the filter menu.
+        // The ring is a glyph-class mark on a Highlight state, so it is held to
+        // the W5a R2 contract: it must BE the system HighlightText, at the 3:1
+        // floor unless the system pair itself is weaker (CI's Linux Firefox
+        // light standin is #ffffff on #3399ff, 2.94:1; see highlightFloor).
         await app.gotoRoute('/lead-queue');
         expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches), 'precondition: forced colors').toBe(true);
         const fill = await paintedSystemFill(page, 'Highlight');
+        const pair = await highlightPair(page);
         const ringOf = async (name: string, cursor: Locator) => {
           await expect(cursor).toHaveCount(1);
           const width = Number.parseFloat(await tokenValue(cursor, '--focus-ring-width'));
           const ring = await insetRingBand(page, cursor, width);
           const ratio = contrastRatio(ring.ring, ring.inside);
-          const described = `${name}: ring rgb(${ring.ring.join(', ')}) on fill rgb(${ring.inside.join(', ')}) at ${ratio.toFixed(2)}:1`;
+          const described = `${name}: ring rgb(${ring.ring.join(', ')}) on fill rgb(${ring.inside.join(', ')}) at ${ratio.toFixed(2)}:1 (system ${describePair(pair)})`;
           expect.soft(sameColor(ring.inside, fill), `${described}: the cursor keeps the Highlight fill`).toBe(true);
-          expect.soft(ratio, described).toBeGreaterThanOrEqual(3);
+          expect.soft(sameColor(ring.ring, pair.ink), `${described}: the ring is the system HighlightText`).toBe(true);
+          expect.soft(ratio, described).toBeGreaterThanOrEqual(highlightFloor('glyph', pair));
         };
 
         // The topbar search, from the keyboard: ArrowDown moves its cursor.
