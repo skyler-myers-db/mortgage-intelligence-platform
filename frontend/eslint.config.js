@@ -52,51 +52,30 @@ export const FORMATTING_BAN = [
 // now; the export stays because formattingBan.test.ts reads it.
 export const FORMATTING_ALLOWLIST = {};
 
-// Files where react-hooks/set-state-in-effect is already an error (see the
-// block after the main config). Grow it as files leave effect-driven state.
-export const SET_STATE_IN_EFFECT_SCOPE = [
-  "src/components/mortgage/useLeadApprovalActions.ts",
-  "src/components/mortgage/useLeadSalesActions.ts",
-  "src/components/mortgage/ApprovalBanner.tsx",
-  "src/components/mortgage/GenieHistoryMenu.tsx",
-  "src/routes/lead-queue.tsx",
-  "src/lib/mutations/*.ts",
-  // Wave 3 queue-place: new hooks born on the query layer.
-  "src/components/mortgage/useLeadBulkRun.ts",
-  "src/components/mortgage/useLeadTableScroll.ts",
-  "src/components/mortgage/LeadTable.selection.ts",
-  // Wave 4a error-surfaces: the shared async-state surfaces and the queue's
-  // version poll, born without effect-driven state (each proven with
-  // `eslint --rule 'react-hooks/set-state-in-effect: error'`, zero hits).
-  "src/routes/lead-queue.freshness.tsx",
-  "src/components/ui/AsyncState.tsx",
-  "src/components/ui/EmptyState.tsx",
-  "src/components/ui/FetchedAt.tsx",
-  "src/components/ui/RetryClock.tsx",
-  "src/lib/queueVersion.ts",
-  // Wave 4b workflow: Offer and Portfolio on the query layer, the queue pager
-  // and the Field primitive (each proven with the rule at error, zero hits).
-  "src/routes/offer-orchestrator.tsx",
-  "src/routes/offer-orchestrator.queries.ts",
-  "src/routes/offer-orchestrator.sales-team.ts",
-  "src/routes/portfolio-builder.tsx",
-  "src/routes/portfolio-builder.governance.tsx",
-  "src/routes/portfolio-builder.campaign-setup.tsx",
-  "src/components/mortgage/QueuePager.tsx",
-  "src/components/ui/Field.tsx",
-  // Wave 4b genie-client: the named set (GenieChat.tsx stays out: its open
-  // effect still sets state).
-  "src/components/mortgage/GenieAnswerFeedback.tsx",
-  "src/components/layout/GenieDock.tsx",
-  "src/routes/ask-genie.deep-link.tsx",
-  // Wave 4b lead-queue: the modules it created (each proven at error, zero
-  // hits; the lane named none, so the integrator proved them at merge).
-  "src/components/mortgage/LeadBulkRunFallback.tsx",
-  "src/components/mortgage/LeadTable.rowCallbacks.ts",
-  "src/components/mortgage/LeadTableBody.tsx",
-  "src/components/mortgage/leadWriteFailureToast.ts",
-  "src/components/mortgage/useTableScrollClearance.ts",
-];
+// react-hooks/set-state-in-effect is an ERROR for production sources repo-wide
+// (audit quality-10 step 4 / stack-09 item 5, W5e): a synchronous setState in
+// an effect body renders twice for one change. Derive the value during
+// render, or set state from an event, a callback or a subscription.
+// SHRINK-ONLY: the files that still carried a hit on the W5e base, each
+// with the W5e lane that owns its fix (w5-compiler-lint for the residual
+// partition). src/lib/setStateInEffectScope.test.ts fails when an entry no
+// longer reproduces a hit, so a fixed file leaves this list in the same
+// change. Never add an entry: fix the effect.
+export const SET_STATE_IN_EFFECT_PENDING = {
+  "src/components/AppContext.tsx": "w5-compiler-lint (residual partition)",
+  "src/components/activation/ActivationLoopPanel.tsx": "w5-compiler-lint",
+  "src/components/feedback/Toaster.tsx": "w5-compiler-lint",
+  "src/components/mortgage/EvidenceDrawer.tsx": "w5-compiler-lint (residual partition)",
+  "src/components/mortgage/GenieChat.tsx": "w5-compiler-lint",
+  "src/components/mortgage/GenieProgress.tsx": "w5-compiler-lint (residual partition)",
+  "src/components/mortgage/GenieRefusalCard.tsx": "w5-compiler-lint",
+  "src/components/mortgage/TriageDeck.tsx": "w5-compiler-lint (residual partition)",
+  "src/components/mortgage/useGenieWindow.ts": "w5-compiler-lint (residual partition)",
+  "src/components/ui/useMenuPlacement.ts": "w5-compiler-lint (residual partition)",
+  "src/hooks/useRoutePending.ts": "w5-compiler-lint (residual partition)",
+  "src/routes/admin-config.tsx": "w5-lexicon-copy",
+  "src/routes/ask-genie.tsx": "w5-compiler-lint",
+};
 
 /** Fixture harness files may import TYPES from frontend/src, never runtime code. */
 const FIXTURE_SRC_TYPE_ONLY = {
@@ -134,15 +113,8 @@ export default [
     rules: {
       ...tsPlugin.configs.recommended.rules,
       ...reactHooks.configs["recommended-latest"].rules,
-      // The current route layer still has legitimate external-system sync
-      // effects while the remaining query-layer migration is in progress.
-      // Keep compiler-safety rules on, but do not fail CI on this advisory
-      // rule until those effects are converted to query/mutation ownership.
-      // TODO(2026-07-15, audit P2-14): re-enable after the post-Summit
-      // query-layer migration (tracked in docs/modernization-todo.md
-      // alongside the LeadTable/analytics 'use no memo' pragmas — same
-      // root cause, same removal slice).
-      "react-hooks/set-state-in-effect": "off",
+      // See SET_STATE_IN_EFFECT_PENDING above (test files: the block below).
+      "react-hooks/set-state-in-effect": "error",
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
       // Re-audit #4 (2026-06-12): the Portfolio Builder save used to call
       // window.prompt() — a synchronous native dialog that froze the
@@ -165,18 +137,21 @@ export default [
       ],
     },
   },
-  // The files the query-layer migration has converted (wave 2, audit
-  // stack-09): their writes run on useMutation and their reads on useQuery,
-  // so a synchronous setState in an effect body is a regression here. The
-  // repo-wide flip (and the TODO above) is wave-5 lint-depth work.
-  // src/lib/setStateInEffectScope.test.ts pins exactly this scope.
+  // react-hooks/set-state-in-effect gates production code only: a test's
+  // harness component may drive state from an effect. The pending files
+  // (SET_STATE_IN_EFFECT_PENDING) stay off until their owners fix them;
+  // src/lib/setStateInEffectScope.test.ts pins both.
   {
-    files: SET_STATE_IN_EFFECT_SCOPE,
-    ignores: ["src/**/*.test.{ts,tsx}"],
+    files: ["src/**/*.test.{ts,tsx}"],
     rules: {
-      "react-hooks/set-state-in-effect": "error",
+      "react-hooks/set-state-in-effect": "off",
     },
   },
+  // An empty `files` array throws in @eslint/config-array, so the override
+  // exists only while the pending list has an entry.
+  ...(Object.keys(SET_STATE_IN_EFFECT_PENDING).length
+    ? [{ files: Object.keys(SET_STATE_IN_EFFECT_PENDING), rules: { "react-hooks/set-state-in-effect": "off" } }]
+    : []),
   // Credential-free e2e fixture harness. Linted at the same bar as src, and
   // it may import TYPES from src (so fixtures are checked against the app's
   // own response contracts) but never runtime code: the harness must drive

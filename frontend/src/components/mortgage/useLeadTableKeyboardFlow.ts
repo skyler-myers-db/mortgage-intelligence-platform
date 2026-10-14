@@ -13,7 +13,7 @@
  * Every decision still goes through useLeadApprovalActions' guarded
  * handlers; this hook only decides WHICH row and WHEN.
  */
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { useNavigate, useNavigationType } from 'react-router';
 import type { LeadSummary } from '../../types';
 import type { DrawerSource } from '../AppContext';
@@ -187,7 +187,9 @@ export function useLeadTableKeyboardFlow({
     leadsById,
     viewReceipt: () => false,
   });
-  const [refocusTable, setRefocusTable] = useState(false);
+  // Set when a decision surface (the review, the reject panel) closes with
+  // the keyboard inside it; consumed by the layout effect below.
+  const refocusTableRef = useRef(false);
   // The review chunk being fetched for an Approve (no draft until it loads),
   // and whether that fetch failed.
   const [reviewLoading, setReviewLoading] = useState<string | null>(null);
@@ -221,23 +223,26 @@ export function useLeadTableKeyboardFlow({
       }
       showDecisionToast(borrowerId);
       cursor.advanceAfter(borrowerId);
-      setRefocusTable(true);
+      refocusTableRef.current = true;
     },
   });
   // The review's Confirm unmounts with it (and a modal dialog keeps the page
-  // inert until it closes). After that commit, keep the keyboard in the
-  // table so J / K / A carry on from the advanced cursor; a focus the reader
-  // already moved elsewhere on the page is left alone.
-  useEffect(() => {
-    if (!refocusTable) return;
-    setRefocusTable(false);
+  // inert until it closes: useModalDialog restores its opener in the layout
+  // phase, before this). After the commit that closed it (every path that
+  // sets the flag also commits: the review's close, the reject panel's), keep
+  // the keyboard in the table so J / K / A carry on from the advanced cursor;
+  // a focus the reader already moved elsewhere on the page is left alone. A
+  // ref, not state: no setState in an effect (react-hooks/set-state-in-effect).
+  useLayoutEffect(() => {
+    if (!refocusTableRef.current) return;
+    refocusTableRef.current = false;
     const region = tableWrapRef.current;
     const active = document.activeElement;
     if (!region || active === region) return;
     if (active === null || active === document.body || region.contains(active)) {
       region.focus({ preventScroll: true });
     }
-  }, [refocusTable, tableWrapRef]);
+  });
   const current = review.review;
 
   // flow-03: a review whose row was decided another way while it was open
@@ -548,13 +553,13 @@ export function useLeadTableKeyboardFlow({
     const rejected = await approval.submitReject(reasonCode, rationale);
     if (!rejected) return;
     cursor.advanceAfter(rejected);
-    setRefocusTable(true);
+    refocusTableRef.current = true;
   }
 
   /** Cancel on the reject panel: nothing recorded (the panel's fields go with it); focus back in the table. */
   function cancelReject() {
+    refocusTableRef.current = true;
     approval.setPendingReject(null);
-    setRefocusTable(true);
   }
 
   /**
