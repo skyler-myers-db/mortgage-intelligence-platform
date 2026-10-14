@@ -280,7 +280,7 @@ describe('Lead Queue filter bar', () => {
     const hero = byTestId('lead-queue-active-filters')!;
     expect([...hero.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))).toEqual([
       'Remove SCORE: 70–90 filter',
-      'Remove RATE SPREAD: ≥ -25 bps filter',
+      'Remove RATE SPREAD: ≥ −25 bps filter',
     ]);
     expect(byTestId('lead-queue-more-filters')?.getAttribute('aria-label')).toBe('More filters (2 active)');
     await act(async () => (hero.querySelector('button') as HTMLButtonElement).click());

@@ -305,12 +305,13 @@ describe('LeadTableRow numeric rendering', () => {
     vi.clearAllMocks();
   });
 
-  it('renders a below-market spread as -422, never +-422', () => {
+  it('renders a below-market spread as −422, never +−422', () => {
     renderRow({ rate_spread_bps: -422 }, true);
 
-    expect(document.body.textContent).toContain('-422');
-    expect(document.body.textContent).not.toContain('+-422');
-    expect(document.body.textContent).toContain('-422 bps');
+    expect(document.body.textContent).toContain('−422');
+    expect(document.body.textContent).not.toContain('+−422');
+    expect(document.body.textContent).not.toContain('-422');
+    expect(document.body.textContent).toContain('−422 bps');
   });
 
   it('renders an at-market spread without a sign', () => {

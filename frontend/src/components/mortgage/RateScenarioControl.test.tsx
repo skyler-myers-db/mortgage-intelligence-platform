@@ -245,7 +245,7 @@ describe('RateScenarioControl', () => {
     expect(link?.textContent).toBe('Open borrowers within 50 bps of the refi screen in the Lead Queue');
     expect(link?.getAttribute('href')).toBe('/lead-queue?min_rate_spread_bps=25&max_rate_spread_bps=74');
     change(25);
-    expect(document.querySelector('[data-testid="rate-lever-largest"]')?.textContent).toBe('Largest in-the-money drops: IL -200');
+    expect(document.querySelector('[data-testid="rate-lever-largest"]')?.textContent).toBe('Largest in-the-money drops: IL −200');
     expect(document.querySelector('.rate-lever a')?.getAttribute('href')).toBe(
       '/lead-queue?segment=itm&min_rate_spread_bps=75&max_rate_spread_bps=99',
     );

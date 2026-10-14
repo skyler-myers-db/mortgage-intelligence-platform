@@ -310,13 +310,13 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     const rows = Array.from(container.querySelectorAll('.home-answer__trigger'));
     expect(rows).toHaveLength(4);
     expect(rows[0].getAttribute('data-testid')).toBe('why-now-rate-move');
-    expect(rows[0].textContent).toBe('-40 bps 30-year par rate since your last visit (from 6.70% to 6.30%)');
+    expect(rows[0].textContent).toBe('−40 bps 30-year par rate since your last visit (from 6.70% to 6.30%)');
     expect(rows[0].querySelector('a')?.getAttribute('href')).toBe('/analytics');
     act(() => chips()[0].click());
     const source = setDrawer.mock.calls[0][0] as DrawerSource;
     expect(source.assetPath).toBe('mip.gold.rate_window_weekly');
     expect(source.lineageFamily).toBe('rate_spread');
-    expect((source.signals ?? []).slice(0, 3).map((signal) => signal.value)).toEqual(['6.70%', '6.30%', '-40 bps']);
+    expect((source.signals ?? []).slice(0, 3).map((signal) => signal.value)).toEqual(['6.70%', '6.30%', '−40 bps']);
     expect((source.signals ?? [])[0].source).toContain('MORTGAGE30US');
   });
 

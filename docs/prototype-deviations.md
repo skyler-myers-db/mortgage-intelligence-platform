@@ -138,3 +138,4 @@ enforces it.
 
 | id | deviation | prototype cite | class | code | pinning test | finding ids | ruling date | lane |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| typographic-minus | The signed formatters (`signedPct`, `signedBps`, `signedBpsLabel`, `signedCount`) print the typographic minus U+2212 for a negative value instead of the prototype's ASCII hyphen-minus; zero stays unsigned and the unsigned formatters keep Intl's output. | design_files/Module 0 Prototype.html:1787 | product | frontend/src/lib/formatters.ts::MINUS_SIGN | frontend/src/lib/formatters.test.ts | responsive-04; D-dataviz-geo-b | 2026-10-14 | w5-test-harness-deps-report |

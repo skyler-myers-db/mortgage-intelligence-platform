@@ -21,6 +21,11 @@
  * (constructing one per table cell is measurable on a 120-row virtualized
  * queue). Missing or non-finite input renders the unknown glyph, never a
  * fabricated 0 and never "NaN".
+ *
+ * Sign rule (responsive-04): the SIGNED formatters (`signedPct`, `signedBps`,
+ * `signedBpsLabel`, `signedCount`) print the typographic minus U+2212 (`−`)
+ * for a negative value, "+" for a positive one, and no sign at all for a
+ * value that rounds to zero. The unsigned formatters keep Intl's output.
  */
 
 /** The product's one number locale: a US mortgage product, USD amounts. */
@@ -44,6 +49,24 @@ function isKnown(value: MaybeNumber): value is number {
  */
 function unsignedZero(value: number, fractionDigits: number): number {
   return Math.abs(value) < 0.5 / 10 ** fractionDigits ? 0 : value;
+}
+
+/**
+ * The typographic minus every signed formatter prints for a negative value:
+ * U+2212 has the "+" glyph's width and the digits' baseline, so a signed
+ * column lines up, and screen readers announce it as "minus".
+ * deviation:typographic-minus — the prototype prints the ASCII hyphen-minus
+ * (`delta="-$0.11"`, design_files/Module 0 Prototype.html:1787).
+ */
+export const MINUS_SIGN = '\u2212';
+
+/**
+ * Replace the single leading hyphen-minus that en-US Intl emits for a
+ * negative value with `MINUS_SIGN`. `signDisplay: 'exceptZero'` already gives
+ * "+" and an unsigned zero, so only the first character can change.
+ */
+function typographicMinus(formatted: string): string {
+  return formatted.startsWith('-') ? `${MINUS_SIGN}${formatted.slice(1)}` : formatted;
 }
 
 const COUNT = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 0 });
@@ -193,12 +216,12 @@ export function pct(percentValue: MaybeNumber, digits = 1): string {
 
 /**
  * A signed change in PERCENT form, for KPI deltas: 3.24 → "+3.2%",
- * -1.5 → "-1.5%", and anything that rounds to zero → "0.0%" (never "-0.0%",
- * which a hand-rolled `${sign}${toFixed(1)}` printed for -0.04).
+ * -1.5 → "−1.5%" (U+2212), and anything that rounds to zero → "0.0%" (never
+ * "−0.0%", which a hand-rolled `${sign}${toFixed(1)}` printed for -0.04).
  */
 export function signedPct(percentValue: MaybeNumber, digits = 1): string {
   if (!isKnown(percentValue)) return UNKNOWN;
-  return `${signedFixedFormatter(digits).format(unsignedZero(percentValue, digits))}%`;
+  return `${typographicMinus(signedFixedFormatter(digits).format(unsignedZero(percentValue, digits)))}%`;
 }
 
 /**
@@ -210,29 +233,28 @@ export function signedPct(percentValue: MaybeNumber, digits = 1): string {
  * above market (a refi opportunity), negative is below market, zero is at
  * market. So the sign belongs to the VALUE, never to the template:
  *   180  → "+180"   (above market)
- *   -422 → "-422"   (below market — the "+-422" defect)
- *   0    → "0"      (at market: neither "+0" nor "-0" is true)
+ *   -422 → "−422"   (below market, U+2212 — the "+-422" defect)
+ *   0    → "0"      (at market: neither "+0" nor "−0" is true)
  * Whole basis points, grouped (1250 → "+1,250"), via Intl signDisplay.
  */
 export function signedBps(value: number): string {
   if (!isKnown(value)) return UNKNOWN;
-  return BPS.format(unsignedZero(value, 0));
+  return typographicMinus(BPS.format(unsignedZero(value, 0)));
 }
 
 /**
- * A signed whole count, for a change in a population ("+1,234", "-1,234",
- * "0"; -0.4 rounds to "0", never "-0"). The minus is the ASCII hyphen-minus
- * the other signed formatters print (the U+2212 sweep is one later
- * cross-formatter commit). Rate Lever change versus today (wow-stage-1),
- * the watchlist briefings, the Delta Explainer.
+ * A signed whole count, for a change in a population ("+1,234", "−1,234",
+ * "0"; -0.4 rounds to "0", never "−0"). The minus is the typographic U+2212
+ * (`MINUS_SIGN`) that every signed formatter prints. Rate Lever change versus
+ * today (wow-stage-1), the watchlist briefings, the Delta Explainer.
  */
 export function signedCount(value: MaybeNumber): string {
   if (!isKnown(value)) return UNKNOWN;
   // `+ 0` turns Math.round's -0 (e.g. for -0.4) into 0.
-  return BPS.format(Math.round(value) + 0);
+  return typographicMinus(BPS.format(Math.round(value) + 0));
 }
 
-/** `signedBps` with the unit: "+180 bps" / "-422 bps" / "0 bps". */
+/** `signedBps` with the unit: "+180 bps" / "−422 bps" / "0 bps". */
 export function signedBpsLabel(value: number): string {
   const magnitude = signedBps(value);
   return magnitude === UNKNOWN ? UNKNOWN : `${magnitude} bps`;
