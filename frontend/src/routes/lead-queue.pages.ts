@@ -35,6 +35,7 @@ import {
   type QueryKey,
 } from '@tanstack/react-query';
 import { ApiError, isWarmingUpError } from '../lib/api';
+import { ACTOR_CHANGED_REASON } from '../lib/apiActorBinding';
 import { planForReason } from '../lib/retryPlan';
 import { queryKeys } from '../lib/queryKeys';
 import { LEADS_PAGED_SCOPE, leadsPagedQueryKey, type LeadsRequest } from '../lib/leadsQuery';
@@ -123,9 +124,15 @@ function selectView(data: InfiniteData<LeadsPagedPage, string | null>): Selected
   };
 }
 
-/** A later page the server refused because the view itself is stale. */
+/**
+ * A later page the server refused because the view itself is stale. A 409
+ * `actor_changed` (D-identity-review-a4) is the actor binding refusing the
+ * request, not a stale view: the loaded pages stay and Load next fails the
+ * normal way while the tab resets for the new user.
+ */
 export function isViewResetError(error: unknown): boolean {
   return error instanceof ApiError
+    && error.reason !== ACTOR_CHANGED_REASON
     && (error.status === 409 || (error.status === 422 && error.message === LEAD_VIEW_CURSOR_INVALID));
 }
 

@@ -25,6 +25,7 @@ import { Link } from 'react-router';
 import { Icon } from '../components/Icon';
 import { Field } from '../components/ui/Field';
 import { createSavedView, deleteSavedView, fetchSavedViews } from '../lib/apiClients/savedViews';
+import { ACTOR_CHANGED_COPY, ACTOR_CHANGED_REASON } from '../lib/apiActorBinding';
 import { ApiError } from '../lib/apiTransport';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { pushEscapeLayer } from '../lib/escapeStack';
@@ -46,7 +47,13 @@ export const SAVED_VIEW_COPY = {
   changed: 'Saved views changed while saving; try again.',
   unavailable: 'Saved views unavailable. Try again.',
   deleteFailed: 'Could not delete that saved view. Try again.',
+  actorChanged: ACTOR_CHANGED_COPY,
 } as const;
+
+/** A write the actor binding refused (409 actor_changed): not this panel's own conflict. */
+function isActorChanged(error: unknown): boolean {
+  return error instanceof ApiError && error.reason === ACTOR_CHANGED_REASON;
+}
 
 export interface SavedViewDraft {
   /** The canonical query to save, no leading `?`; '' when nothing is shareable. */
@@ -80,6 +87,7 @@ export function isCurrentSavedView(savedParams: string, currentParams: string): 
 
 /** Fixed copy for a failed save; never the server's text, never the name. */
 export function saveErrorCopy(error: unknown): string {
+  if (isActorChanged(error)) return SAVED_VIEW_COPY.actorChanged;
   if (error instanceof ApiError && error.status === 422) {
     return error.validationIssues.some((issue) => issue.location.includes('name') || issue.field === 'name')
       ? SAVED_VIEW_COPY.name
@@ -163,8 +171,8 @@ export function LeadQueueSavedViewsPanel({
     try {
       await deleteSavedView(view.view_id);
       await refetchList();
-    } catch {
-      setDeleteError(SAVED_VIEW_COPY.deleteFailed);
+    } catch (error) {
+      setDeleteError(isActorChanged(error) ? SAVED_VIEW_COPY.actorChanged : SAVED_VIEW_COPY.deleteFailed);
     }
     setDeleting((current) => {
       const next = new Set(current);

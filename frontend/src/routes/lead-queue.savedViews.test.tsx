@@ -140,6 +140,14 @@ describe('saved-view helpers', () => {
     expect(saveErrorCopy(error(503, 'Lakebase down'))).toBe(SAVED_VIEW_COPY.unavailable);
     expect(saveErrorCopy(new Error('boom'))).toBe(SAVED_VIEW_COPY.unavailable);
   });
+
+  it('reads a 409 actor_changed as the actor binding, never as a duplicate, limit or changed list', () => {
+    const refused = new ApiError(SAVED_VIEW_COPY.duplicate, {
+      path: '/api/v1/workspace/saved-views', status: 409, reason: 'actor_changed',
+    });
+    expect(saveErrorCopy(refused)).toBe(SAVED_VIEW_COPY.actorChanged);
+    expect(SAVED_VIEW_COPY.actorChanged).toBe('Nothing was recorded. This tab resets for the new user.');
+  });
 });
 
 describe('Saved views panel', () => {
@@ -221,6 +229,23 @@ describe('Saved views panel', () => {
     ]);
     expect(document.querySelector('.lead-queue-saved-views__link')).toBeNull();
     expect(byTestId('lead-queue-saved-views-panel')!.textContent).toContain('No saved views yet.');
+  });
+
+  it('a save or delete refused 409 actor_changed says nothing was recorded', async () => {
+    await mountAt('state=IL');
+    await open();
+    respond = (call) => (call.method === 'GET'
+      ? json({ saved_views: views })
+      : json({ detail: 'Actor changed', reason: 'actor_changed' }, 409));
+    await typeName('IL pending 2');
+    await save();
+    const panel = byTestId('lead-queue-saved-views-panel')!;
+    expect(panel.querySelector('.field__error')?.textContent).toBe(SAVED_VIEW_COPY.actorChanged);
+    const remove = document.querySelector<HTMLButtonElement>('.lead-queue-saved-views__item .filter__remove')!;
+    await act(async () => remove.click());
+    await settle();
+    expect(panel.textContent).toContain(SAVED_VIEW_COPY.actorChanged);
+    expect(panel.textContent).not.toContain(SAVED_VIEW_COPY.deleteFailed);
   });
 
   it('says Saved views unavailable with an explicit Retry and no alert role', async () => {
