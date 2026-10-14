@@ -4404,3 +4404,48 @@ VALUES (
     'Growth Agent watchlists: rate_trigger_watch added in place to the growth_agent_runs and growth_agent_monitors workflow_id CHECKs; mip_app.growth_agent_plan_progress (per-step progress of a composed-plan execute, SELECT/INSERT/UPDATE only)'
 )
 ON CONFLICT (version) DO NOTHING;
+
+-- Growth Agent watchlist run links (W5e) ---
+-- Audit 2026-09-21 wow-ai-4 (W5d w5-growth-watchlists cut 2, the W5e Lakebase
+-- slot ruled for w5-lead-queue-columns). A run saved into an EXISTING
+-- watchlist name (POST /growth-agent/runs/{run_id}/monitors) cannot be tagged
+-- with that watchlist's monitor_id: growth_agent_runs is append-only. It was
+-- in the watchlist's series only while it stayed the last_run_id, so the next
+-- Run now dropped it and "change since the previous run" skipped it. This
+-- link record keeps it in the series: one row per (watchlist, run), written in
+-- the save's own transaction after a new upsert, never updated or deleted
+-- (SELECT, INSERT only). The backfill links each watchlist's current
+-- last_run_id when that run is the actor's own, is not tagged with the
+-- watchlist and is not its seed (those are already in the series); no run row
+-- is touched and the append-only run triggers are unchanged. The CHECK uses
+-- only length(); no trigger, routine or expression index.
+CREATE TABLE IF NOT EXISTS mip_app.growth_agent_watchlist_run_links (
+    monitor_id  UUID NOT NULL REFERENCES mip_app.growth_agent_monitors(monitor_id),
+    run_id      UUID NOT NULL REFERENCES mip_app.growth_agent_runs(run_id),
+    actor_email TEXT NOT NULL CHECK (length(actor_email) <= 320),
+    linked_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (monitor_id, run_id)
+);
+
+COMMENT ON TABLE mip_app.growth_agent_watchlist_run_links IS
+    'Growth Agent watchlist series links (wow-ai-4): a run saved into an existing watchlist name, which the append-only runs table cannot tag with monitor_id. One row per (monitor_id, run_id), written in the save transaction; never updated or deleted. Read by the Home briefing series (WATCHLIST_SUMMARY_SQL).';
+
+INSERT INTO mip_app.growth_agent_watchlist_run_links (monitor_id, run_id, actor_email)
+SELECT m.monitor_id, m.last_run_id, m.actor_email
+  FROM mip_app.growth_agent_monitors AS m
+  JOIN mip_app.growth_agent_runs AS r
+    ON r.run_id = m.last_run_id
+   AND r.actor_email = m.actor_email
+ WHERE m.last_run_id IS NOT NULL
+   AND r.monitor_id IS DISTINCT FROM m.monitor_id
+   AND m.last_run_id IS DISTINCT FROM m.seed_run_id
+ON CONFLICT DO NOTHING;
+
+-- PLACEHOLDER version: the W5e integrator dates it in merge order (a day after
+-- 2026_10_14_growth_watchlists, so it sorts after it), here and in the tests.
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_XX_growth_watchlist_run_links',
+    'Growth Agent watchlist run links: mip_app.growth_agent_watchlist_run_links (monitor_id, run_id) keeps a run saved into an existing watchlist name in its series; backfilled from untagged non-seed last_run_id; SELECT/INSERT only'
+)
+ON CONFLICT (version) DO NOTHING;

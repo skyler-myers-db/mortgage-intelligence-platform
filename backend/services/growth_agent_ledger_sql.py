@@ -282,15 +282,19 @@ RETURNING draft_id, actor_email, monitor_id, run_id, channel, title, body,
 
 # Audit 2026-09-21 wow-ai-4: the caller's watchlists with their run series,
 # newest-updated first. A series is the actor's COMPLETED runs tagged with the
-# monitor, plus its seed and last run (runs saved before monitor_id tagging).
+# monitor, plus its seed and last run (runs saved before monitor_id tagging),
+# plus every run LINKED to it (a run saved into an existing watchlist name,
+# growth_agent_watchlist_run_links, W5e).
 # LAG gives each run its predecessor; recency <= 8 feeds the sparkline and
 # recency = 1 is the briefing's latest run. A watchlist with no completed run
 # comes back once with NULL run columns. It never selects route, criteria or
 # actor: a stored route can carry an expiring, actor-bound handoff proof.
 #
-# The series is three index-backed arms (W5c w5-zcta-watchlist, the 12.3 plan
-# fix): the tagged runs through idx_growth_agent_runs_monitor_created, the
-# seed and the last run through the run_id primary key. The single OR join it
+# The series is four index-backed arms (W5c w5-zcta-watchlist, the 12.3 plan
+# fix; the fourth W5e): the tagged runs through
+# idx_growth_agent_runs_monitor_created, the seed and the last run through the
+# run_id primary key, and the linked runs through the links' (monitor_id,
+# run_id) primary key and then the run_id primary key. The single OR join it
 # replaces kept every index unused, so PG16 planned a Seq Scan of
 # growth_agent_runs. Each arm is actor-bound and completed-only; UNION (not
 # UNION ALL) keeps one row per (monitor_id, run_id) when a run matches two
@@ -322,6 +326,16 @@ series_runs AS (
   FROM watchlists AS w
   JOIN mip_app.growth_agent_runs AS r
     ON r.run_id = w.last_run_id
+   AND r.actor_email = %(actor_email)s
+   AND r.status = 'completed'
+  UNION
+  SELECT w.monitor_id, r.run_id, r.created_at, r.actionable_total, r.actionable_avg_score
+  FROM watchlists AS w
+  JOIN mip_app.growth_agent_watchlist_run_links AS l
+    ON l.monitor_id = w.monitor_id
+   AND l.actor_email = %(actor_email)s
+  JOIN mip_app.growth_agent_runs AS r
+    ON r.run_id = l.run_id
    AND r.actor_email = %(actor_email)s
    AND r.status = 'completed'
 ),

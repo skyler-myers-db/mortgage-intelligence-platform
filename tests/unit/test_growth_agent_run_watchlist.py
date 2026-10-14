@@ -120,6 +120,63 @@ def test_a_replay_returns_the_same_watchlist_with_no_second_audit_row(harness: _
     assert len(harness.lakebase.monitors) == 1
 
 
+def _link_inserts(harness: _Harness) -> list[dict[str, Any]]:
+    from backend.services.growth_agent_run_watchlist import RUN_LINK_INSERT_SQL
+
+    return [params for sql, params in harness.lakebase.executes if sql == RUN_LINK_INSERT_SQL]
+
+
+def test_a_new_save_links_the_run_into_the_watchlist_series_in_the_same_transaction(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # wow-ai-4 (W5e): a run saved into a watchlist gets one series link row,
+    # written inside the save's own transaction, after the upsert and audit.
+    from contextlib import contextmanager
+
+    transactions: list[list[str]] = []
+    original = harness.lakebase.transaction
+
+    @contextmanager
+    def tracked() -> Iterator[Any]:
+        statements: list[str] = []
+        transactions.append(statements)
+        with original() as conn:
+            execute = conn.execute
+
+            def recording(sql: str, params: dict[str, Any] | None = None) -> Any:
+                statements.append(sql)
+                return execute(sql, params)
+
+            conn.execute = recording
+            yield conn
+
+    monkeypatch.setattr(harness.lakebase, "transaction", tracked)
+    response = harness.save()
+    assert response.status_code == 200, response.text
+    [link] = _link_inserts(harness)
+    assert link == {
+        "monitor_id": response.json()["monitor_id"], "run_id": harness.run["run_id"], "actor_email": ACTOR,
+    }
+    [statements] = [tx for tx in transactions if any("growth_agent_watchlist_run_links" in sql for sql in tx)]
+    upsert = statements.index(ledger_sql.MONITOR_UPSERT_SQL)
+    audit = next(index for index, sql in enumerate(statements) if "INSERT INTO mip_app.action_audit" in sql)
+    linked = next(index for index, sql in enumerate(statements) if "growth_agent_watchlist_run_links" in sql)
+    assert upsert < audit < linked
+
+
+def test_a_replay_writes_no_second_link(harness: _Harness) -> None:
+    assert harness.save().status_code == 200
+    assert harness.save().status_code == 200
+    assert len(_link_inserts(harness)) == 1
+
+
+def test_the_link_insert_is_idempotent_and_never_updates_a_run() -> None:
+    from backend.services.growth_agent_run_watchlist import RUN_LINK_INSERT_SQL
+
+    assert "ON CONFLICT (monitor_id, run_id) DO NOTHING" in RUN_LINK_INSERT_SQL
+    assert "UPDATE" not in RUN_LINK_INSERT_SQL and "growth_agent_runs" not in RUN_LINK_INSERT_SQL
+
+
 def test_an_explicit_name_is_kept(harness: _Harness) -> None:
     response = harness.save({"tool_result_hash": harness.run["tool_result_hash"], "monitor_name": "IL Refi Watch"})
     assert response.status_code == 200, response.text
