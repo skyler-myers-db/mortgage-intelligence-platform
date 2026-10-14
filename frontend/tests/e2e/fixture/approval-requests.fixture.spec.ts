@@ -318,6 +318,8 @@ test.describe('an approver', () => {
 for (const theme of FIXTURE_THEMES) {
   test.describe(`${theme}`, () => {
     test('(h) axe: the form, both panels and the scope row', async ({ app, mockApi, page }) => {
+      // Two sessions and four axe scans in one test: the slow budget, not a retry.
+      test.slow();
       await app.setTheme(theme);
       useSession(mockApi, NON_APPROVER_SESSION);
       registerApprovalRequestStore(mockApi, { seed: batchView(REQUESTED_IDS.slice(0, 1), true) });
