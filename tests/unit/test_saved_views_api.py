@@ -14,9 +14,12 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
+from backend.config.settings import settings
 from backend.main import app
 from backend.schemas.saved_views import SavedView, SavedViewMutationResponse
+from backend.services.audit_fingerprint import SAVED_VIEW_FINGERPRINT_DOMAIN, keyed_filter_fingerprint
 from backend.services.audit_store import get_audit_store
 from backend.services.lakebase import LakebaseError
 from backend.services.saved_view_params import (
@@ -60,7 +63,9 @@ class _MemoryStore:
             for row in live[:SAVED_VIEW_LIMIT]
         ]
 
-    def create(self, *, actor: str, name: str, params: str, filter_fingerprint: str) -> SavedViewMutationResponse:
+    def create(
+        self, *, actor: str, name: str, params: str, filter_fingerprint: str | None
+    ) -> SavedViewMutationResponse:
         if self.down:
             raise LakebaseError("down")
         live = self._live(actor)
@@ -117,6 +122,35 @@ def store() -> Iterator[_MemoryStore]:
 
 def _save(name: str, params: str = PARAMS, headers: dict[str, str] = ALICE) -> Any:
     return TestClient(app).post("/api/workspace/saved-views", json={"name": name, "params": params}, headers=headers)
+
+
+def test_the_stored_fingerprint_is_keyed_never_the_plain_sha256(
+    store: _MemoryStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 12.4 #11 / NB-e: SAVE_QUEUE_VIEW stores the SAVED_VIEW-domain HMAC of
+    # the canonical params' digest, like VIEW_AUDIT_LEDGER, AUDIT_EXPORT and
+    # VIEW_LEADS; the plain digest is a dictionary target.
+    monkeypatch.setattr(settings, "mip_genie_action_secret_current", SecretStr("test-secret-0123456789abcdef"))
+    monkeypatch.setattr(settings, "mip_genie_action_secret_previous", None)
+    assert _save("Keyed fingerprint view").status_code == 200
+    [row] = store.rows
+    plain = canonical_saved_view_params(PARAMS)[1]
+    assert row["fingerprint"] != plain
+    assert row["fingerprint"] == keyed_filter_fingerprint(plain, domain=SAVED_VIEW_FINGERPRINT_DOMAIN)
+
+
+def test_with_no_key_outside_local_the_view_is_saved_without_a_fingerprint(
+    store: _MemoryStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "mip_genie_action_secret_current", None)
+    monkeypatch.setattr(settings, "mip_genie_action_secret", None)
+    monkeypatch.setattr(settings, "mip_genie_action_secret_previous", None)
+    monkeypatch.setattr(settings, "app_env", "production")
+    saved = _save("Unkeyed environment view")
+    assert saved.status_code == 200, saved.text
+    [row] = store.rows
+    assert row["fingerprint"] is None
+    assert [event for event, _ in store.audits] == ["SAVE_QUEUE_VIEW"]
 
 
 def test_save_list_and_delete_round_trip(store: _MemoryStore) -> None:

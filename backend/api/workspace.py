@@ -30,6 +30,7 @@ from backend.schemas.workspace import (
     WorkspaceMutationResponse,
     WorkspaceState,
 )
+from backend.services.audit_fingerprint import SAVED_VIEW_FINGERPRINT_DOMAIN, keyed_filter_fingerprint
 from backend.services.disclosures import MissingTenantDisclosureError, resolve_tenant_disclosure
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
@@ -385,10 +386,16 @@ def create_saved_view(
     store: SavedViewStoreDep,
     _: Annotated[None, Depends(require_json_content_type)],
 ) -> SavedViewMutationResponse:
-    """Name the current Lead Queue view; writes SAVE_QUEUE_VIEW in the same statement."""
+    """Name the current Lead Queue view; writes SAVE_QUEUE_VIEW in the same statement.
+
+    The stored ``filter_fingerprint`` is keyed under the SAVED_VIEW domain
+    (12.4 #11, NB-e), never the plain SHA-256 of the canonical params. With no
+    key outside local/test the row is still written, without the fingerprint:
+    the view id is the point of the row.
+    """
 
     try:
-        params, fingerprint = canonical_saved_view_params(payload.params)
+        params, digest = canonical_saved_view_params(payload.params)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=SAVED_VIEW_PARAMS_REFUSED) from exc
     try:
@@ -396,7 +403,7 @@ def create_saved_view(
             actor=resolve_workflow_actor(request),
             name=payload.name,
             params=params,
-            filter_fingerprint=fingerprint,
+            filter_fingerprint=keyed_filter_fingerprint(digest, domain=SAVED_VIEW_FINGERPRINT_DOMAIN),
         )
     except SavedViewConflict as exc:
         raise HTTPException(status_code=409, detail=SAVED_VIEW_CONFLICT_DETAIL[exc.kind]) from exc

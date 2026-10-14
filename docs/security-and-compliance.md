@@ -37,8 +37,10 @@ pending or failed state; it must not claim success.
   list's menus without counts.
 - Saving and deleting a view write `SAVE_QUEUE_VIEW` / `DELETE_QUEUE_VIEW` in
   the same Lakebase statement as the change (deletes are soft). The audit
-  metadata carries the view id, the SHA-256 of its canonical params and the
-  request id, never the view name or the params. The name passes the same
+  metadata carries the view id, a keyed fingerprint of its canonical params
+  (an HMAC of their SHA-256 under the saved-view domain, like the ledger and
+  `VIEW_LEADS` copies; omitted outside local/test when no key is configured)
+  and the request id, never the view name or the params. The name passes the same
   public-text policy as a campaign name and a refusal never echoes it.
 
 ## Source Truth
