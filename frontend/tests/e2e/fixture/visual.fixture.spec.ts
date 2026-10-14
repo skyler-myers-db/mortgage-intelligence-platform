@@ -272,14 +272,20 @@ for (const theme of FIXTURE_THEMES) {
       expectNoAuditedReadSince(mockApi, naturalLoad, 'analytics-sales-ops · manager view');
     });
 
+    // The capture is BOARD_PLANS.default (data/salesLoop.ts), a plan the
+    // planner produces: Loan Officer A takes the pool with room to spare (the
+    // free track drawn), B's book is over capacity (+0, the marker). check(),
+    // not a bare capture, so the dialog's own .surface is held to no
+    // sideways overflow too.
     test('analytics-sales-ops · distribution board', async ({ app, mockApi, page }) => {
       registerBoard(mockApi);
       const { naturalLoad } = await load(app, mockApi, route('analytics-sales-ops'), theme);
       await page.getByRole('button', { name: 'Distribute approved leads…' }).click();
       const dialog = page.locator('dialog.distribution-board');
       await expect(dialog.locator('.distribution-board__bar')).toHaveCount(2);
+      await expect(dialog).toContainText('4 of 4 leads placed');
       await app.settle();
-      await capture(page, `analytics-sales-ops--${theme}--distribution-board.png`);
+      await check(page, 'analytics-sales-ops', theme, 'distribution-board');
       expectNoAuditedReadSince(mockApi, naturalLoad, 'analytics-sales-ops · distribution board');
     });
 

@@ -48,7 +48,7 @@ import { json, type FixtureReply, type MockApi } from './mockApi';
 import { centerPixel, contrastRatio, renderedColors, type Rgb } from './renderedColor';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
-import { expectNoAuditedReadSince } from './visual';
+import { expectNoAuditedReadSince, expectNoSurfaceOverflow } from './visual';
 
 const SALES_OPS = '/analytics?view=sales-ops';
 
@@ -165,6 +165,9 @@ test.describe('(b) the Distribution Board', () => {
       const fill = (await renderedColors(dialog)).bg;
       expect(contrastRatio(free, fill), `free capacity ${rgb(free)} on the dialog fill ${rgb(fill)}`).toBeGreaterThanOrEqual(FREE_TRACK_FLOOR);
       expect(contrastRatio(free, open), `free capacity ${rgb(free)} beside the open book ${rgb(open)}`).toBeGreaterThanOrEqual(FREE_TRACK_FLOOR);
+      // The dialog is a .surface like the page's: nothing in it scrolls sideways
+      // (visual.fixture.spec.ts holds its capture to the same check()).
+      await expectNoSurfaceOverflow(page, { route: 'analytics-sales-ops', state: 'distribution-board', theme });
       await expectAxeClean(page, { key: { route: 'analytics-sales-ops', state: 'distribution-board' }, theme, known: {}, include: 'dialog.distribution-board' });
 
       await dialog.getByRole('button', { name: 'Commit distribution' }).click();
