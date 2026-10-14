@@ -503,12 +503,15 @@ for (const theme of FIXTURE_THEMES) {
       await expectAxeClean(page, { key: key('request-approval-form'), theme, known: KNOWN_VIOLATIONS, include: '[data-testid="request-approval-form"]' });
       await page.keyboard.press('Escape');
       await chip(page).click();
+      // Each panel is a lazy chunk: scan it once it is on screen, never before.
+      await expect(page.getByTestId('my-approval-requests-panel')).toBeVisible();
       await expectAxeClean(page, { key: key('my-approval-requests'), theme, known: KNOWN_VIOLATIONS, include: '[data-testid="my-approval-requests-panel"]' });
 
       useSession(mockApi, SESSION);
       registerApprovalRequestStore(mockApi, { seed: batchView(REQUESTED_IDS, false) });
       await app.gotoRoute('/lead-queue');
       await chip(page).click();
+      await expect(page.getByTestId('approval-requests-panel')).toBeVisible();
       await expectAxeClean(page, { key: key('approval-requests'), theme, known: KNOWN_VIOLATIONS, include: '[data-testid="approval-requests-panel"]' });
       await page.getByTestId(`approval-request-open-${REQUEST_BATCH_ID}`).click();
       await expect(visible(page.getByTestId('approval-request-scope'))).toBeVisible();
