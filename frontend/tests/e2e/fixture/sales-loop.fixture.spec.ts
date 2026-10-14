@@ -111,11 +111,12 @@ test.describe('(a) the sales manager view', () => {
     // Queue's assigned_to filter and never shows an email.
     const workload = page.getByTestId('sales-workload');
     await expect(workload.locator('tbody tr')).toHaveCount(LOAN_OFFICERS.length);
-    await expect(workload.getByRole('columnheader', { name: /^Open/ })).toHaveAttribute('aria-sort', 'descending');
-    const stale = workload.getByRole('columnheader', { name: /^Stale/ });
+    // A sortable header is named by its button (LeadTableHead's pattern).
+    await expect(workload.getByRole('columnheader', { name: 'Sort by Open', exact: true })).toHaveAttribute('aria-sort', 'descending');
+    const stale = workload.getByRole('columnheader', { name: 'Sort by Stale', exact: true });
     await stale.getByRole('button').click();
     await expect(stale).toHaveAttribute('aria-sort', 'descending');
-    await expect(workload.getByRole('columnheader', { name: /^Open/ })).toHaveAttribute('aria-sort', 'none');
+    await expect(workload.getByRole('columnheader', { name: 'Sort by Open', exact: true })).toHaveAttribute('aria-sort', 'none');
     const first = workload.locator('tbody tr').first().locator('a');
     await expect(first).toHaveAttribute('href', /^\/lead-queue\?assigned_to=[^&]+%40summit\.example$/);
     await expect(workload).not.toContainText('@summit.example');
