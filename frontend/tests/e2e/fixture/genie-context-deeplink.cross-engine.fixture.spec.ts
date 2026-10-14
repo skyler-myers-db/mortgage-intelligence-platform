@@ -184,6 +184,8 @@ test.describe('(h) the History menu exit (motion-01 item 2e)', () => {
   }
 
   test('keys during the exit: with the panel’s History menu fading over the Lead Queue, A and R reach the queue', async ({ app, mockApi, page }) => {
+    // The Lead Queue, the panel and two dialogs in one test: slow under load.
+    test.slow();
     registerSessions(mockApi);
     registerDraftEcho(mockApi);
     registerHeldDecision(mockApi);

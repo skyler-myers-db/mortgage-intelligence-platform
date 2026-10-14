@@ -12,7 +12,9 @@
  *       live in genie-context-deeplink.cross-engine.fixture.spec.ts, so the
  *       WebKit cross-engine run collects them too.
  *   (e) shell-03: an unavailable link: Retry wears the shared pending style and keeps
- *       focus, and a second failure is announced in the route announcer.
+ *       focus (axe-clean while pending), and a second failure is announced
+ *       in the route announcer. An exiting History menu (inert,
+ *       aria-hidden) is axe-clean too.
  *   (f) genie-08 item 1: a five-section answer, on the route and in the
  *       panel, has five 24 px outline targets; a jump opens a collapsed
  *       section, lands its heading at the scroller top and focuses its
@@ -136,8 +138,9 @@ test.describe('(a) an empty Lead Queue asks a server-rendered scoped question (g
 });
 
 test.describe('the conversation link (shell-03)', () => {
-  test('(e) Retry shows the pending style, keeps focus, and a second failure is announced', async ({ mockApi, page, hygiene }) => {
+  test('(e) Retry shows the pending style, keeps focus, and a second failure is announced', async ({ app, mockApi, page, hygiene }) => {
     hygiene.allow('console.error', /status of 503/);
+    await app.setTheme('dark');
     let reads = 0;
     let release: () => void = () => undefined;
     const held = new Promise<void>((resolve) => {
@@ -158,11 +161,35 @@ test.describe('the conversation link (shell-03)', () => {
     await expect(retry).toHaveAttribute('aria-busy', 'true');
     await expect(retry).toHaveAttribute('aria-disabled', 'true');
     await expect(retry).toBeFocused();
+    await expectAxeClean(page, { key: { route: 'ask-genie', state: 'genie-link-retry-pending' }, theme: 'dark', known: KNOWN_VIOLATIONS });
     release();
     await expect(page.locator('[data-genie-announcer="route"]')).toHaveText(RETRY_FAILED, STAGE_WAIT);
     await expect(retry).not.toHaveClass(/btn--loading/);
     await expect(retry).toBeFocused();
     expect(reads).toBe(2);
+  });
+});
+
+test.describe('an exiting History menu (motion-01 item 2e)', () => {
+  // The harness pins reduced motion; the exit must run for the scan to see it.
+  test.use({ contextOptions: { reducedMotion: 'no-preference' } });
+
+  test('is axe-clean while it fades out inert and aria-hidden', async ({ app, mockApi, page }) => {
+    registerSessions(mockApi);
+    await app.setTheme('dark');
+    await app.gotoRoute('/ask-genie');
+    const toggle = askPanel(page).getByRole('button', { name: 'Genie conversation history' });
+    const menu = askPanel(page).locator('.genie-history__menu');
+    await toggle.click();
+    await expect(menu.getByRole('menuitem')).toHaveCount(1);
+    // Hold the exit well past one scan (inline CSSOM style, not CSP-gated markup).
+    await menu.evaluate((element) => {
+      (element as HTMLElement).style.transitionDuration = '60000ms';
+    });
+    await toggle.click();
+    await expect(menu).toHaveClass(/genie-history__menu--exiting/);
+    await expectAxeClean(page, { key: { route: 'ask-genie', state: 'genie-history-exiting' }, theme: 'dark', known: KNOWN_VIOLATIONS });
+    await expect(menu, 'the scan ran inside the exit').toHaveClass(/genie-history__menu--exiting/);
   });
 });
 
@@ -209,6 +236,10 @@ async function bottomOf(locator: Locator): Promise<number> {
 test.describe('(f) the section outline for long sweeps (genie-08 item 1)', () => {
   for (const theme of FIXTURE_THEMES) {
     test(`on the route and in the panel · ${theme}`, async ({ app, mockApi, page }) => {
+      // A route sweep, a panel sweep and two full axe scans in one test: on a
+      // loaded runner the second scan alone can take 15 s (the W5d review
+      // traces), so the budget is tripled rather than the halves split.
+      test.slow();
       registerSessions(mockApi);
       registerInlineSubmit(mockApi, {
         answerFor: (question, conversationId) => fiveSectionAnswer(conversationId, `sweep-${question.length}`, question),
