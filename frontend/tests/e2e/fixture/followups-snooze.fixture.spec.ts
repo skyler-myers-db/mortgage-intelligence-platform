@@ -24,7 +24,11 @@
  *      that STARTS with the due time, Snooze after it on the same line (a
  *      withheld row's closed reason below it); each reason qualifier (the
  *      owner name, "attempt N", "new signal") renders on one line. Measured
- *      under LINUX_TEXT_EMULATION off Linux.
+ *      under LINUX_TEXT_EMULATION off Linux;
+ *  (g) while the tray is open its trigger keeps the rail's current-module
+ *      fill, edge and ink (aria-expanded), pointer elsewhere, without the
+ *      location bar, and drops it when the tray closes; under forced colours
+ *      (its fill forced away) the open edge alone paints Highlight.
  */
 import type { Locator, Page } from '@playwright/test';
 import { expectAxeClean, KNOWN_VIOLATIONS } from './axe';
@@ -109,6 +113,25 @@ async function phraseLines(row: Locator, phrase: string): Promise<number> {
     range.setEnd(...locate(at + text.length));
     return new Set([...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top))).size;
   }, phrase);
+}
+
+interface TriggerPaint {
+  background: string;
+  border: string;
+  color: string;
+  bar: string;
+}
+
+async function triggerPaint(locator: Locator): Promise<TriggerPaint> {
+  return locator.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      background: style.backgroundColor,
+      border: style.borderTopColor,
+      color: style.color,
+      bar: getComputedStyle(element, '::before').content,
+    };
+  });
 }
 
 function listReads(mockApi: MockApi): number {
@@ -335,6 +358,52 @@ for (const theme of FIXTURE_THEMES) {
       ] as const) {
         expect.soft(await phraseLines(row(borrowerId), phrase), `${borrowerId}: "${phrase}" renders on one line`).toBe(1);
       }
+    });
+
+    test('(g) the open tray keeps its trigger in the rail active state, without the location bar', async ({ app, mockApi, page }) => {
+      registerFollowUps(mockApi);
+      await app.gotoRoute('/');
+      const trigger = page.locator(TRIGGER);
+      await expect(trigger).toBeVisible();
+      await app.settle();
+      const closed = await triggerPaint(trigger);
+      const current = await triggerPaint(page.locator('.rail a.rail__item.is-active'));
+      expect(current.bar, 'non-vacuity: the current module draws its location bar').not.toBe('none');
+      expect(closed.background, 'at rest the trigger has no fill').toBe('rgba(0, 0, 0, 0)');
+
+      // Forced colours force the fill away. Chromium paints the open state's
+      // --chip-line edge Highlight; at rest (unfocused) the edge is the forced
+      // ink, never Highlight. Measured unfocused: a focus-visible trigger
+      // takes a Highlight edge whatever its state.
+      await page.emulateMedia({ forcedColors: 'active' });
+      const highlight = await page.evaluate(() => {
+        const probe = document.body.appendChild(document.createElement('span'));
+        probe.style.color = 'Highlight';
+        const value = getComputedStyle(probe).color;
+        probe.remove();
+        return value;
+      });
+      expect(await trigger.evaluate((element) => element === document.activeElement), 'measured unfocused').toBe(false);
+      expect((await triggerPaint(trigger)).border, 'forced colours: no Highlight edge at rest').not.toBe(highlight);
+      await page.emulateMedia({ forcedColors: 'none' });
+
+      const { tray } = await openTray(page);
+      // Pointer off the trigger: the open state, not :hover, is measured.
+      const title = await tray.locator('.followups__title').boundingBox();
+      if (!title) throw new Error('the tray title has no box');
+      await page.mouse.move(title.x + title.width / 2, title.y + title.height / 2);
+      expect(await trigger.evaluate((element) => element.matches(':hover'))).toBe(false);
+      await expect
+        .poll(() => triggerPaint(trigger), { message: 'the open trigger wears the current-module fill, edge and ink, no bar' })
+        .toEqual({ background: current.background, border: current.border, color: current.color, bar: 'none' });
+      await page.emulateMedia({ forcedColors: 'active' });
+      await expect.poll(async () => (await triggerPaint(trigger)).border, { message: 'forced colours: a Highlight edge' }).toBe(highlight);
+      await page.emulateMedia({ forcedColors: 'none' });
+
+      await page.keyboard.press('Escape');
+      await expect(tray).toHaveCount(0);
+      await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+      await expect.poll(() => triggerPaint(trigger), { message: 'closed again, the trigger is at rest' }).toEqual(closed);
     });
   });
 }

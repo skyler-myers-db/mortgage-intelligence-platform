@@ -509,6 +509,19 @@
   box-shadow: 0 0 0 calc(var(--sp-1) / 2) var(--bg-1);
   pointer-events: none;
 }
+/* While its tray is open the Follow-ups trigger (deviation:followups-rail-item)
+   wears the prototype's current-module fill, edge and ink
+   (.rail__item.is-active, design_files/Module 0 Prototype.html:316-320), as
+   the topbar's open account-menu trigger wears .topbar__icon-btn.is-active.
+   It never draws the ::before location bar: that marks the current module
+   only. After :hover, so the pointer on or off it changes nothing. Under
+   forced colours Chromium paints this --chip-line edge Highlight (the
+   resting edge is the forced ink), so the open state needs no forced rule. */
+.rail__item[aria-expanded="true"] {
+  background: var(--accent-soft);
+  border-color: var(--chip-line);
+  color: var(--accent-ink);
+}
 @media (forced-colors: active) {
   .rail__item.has-due::after { background: CanvasText; box-shadow: none; }
 }
