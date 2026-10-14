@@ -33,7 +33,9 @@
  *      row, Console open and closed: the approver's drawn glyph after Reject
  *      (named "Requested · <name>", its tooltip on hover) with Approve and
  *      Reject where an unmarked row has them and inside the content box; the
- *      requester's "Approval requested" label whole at Linux text widths.
+ *      requester's "Approval requested" label whole at Linux text widths;
+ *  (l) a failed list read: one line in the title row (the 83 px header with
+ *      the Console open, both sessions), and Retry reads the list once more.
  *
  * Chromium only (fixture-chromium): this is not a cross-engine spec, so the
  * fixture-webkit and Firefox projects do not collect it (playwright.config's
@@ -378,7 +380,7 @@ test.describe('an approver', () => {
   });
 });
 
-test.describe('the request marks at 1440x900', () => {
+test.describe('the request marks and entry at 1440x900', () => {
   for (const consoleOpen of [false, true]) {
     const consoleState = consoleOpen ? 'Console open' : 'Console closed';
     test(`(k) approver, ${consoleState}: a drawn, named glyph after Reject; Approve and Reject keep their unmarked places`, async ({ app, mockApi, page }) => {
@@ -423,6 +425,41 @@ test.describe('the request marks at 1440x900', () => {
         expect(geometry.label?.client ?? 0, `${at}: the label is not clipped`).toBeGreaterThanOrEqual(geometry.label?.scroll ?? Infinity);
         expect(geometry.rowHeight, `${at}: the row height holds`).toBe(reference.rowHeight);
       }
+    });
+  }
+
+  for (const [name, session] of [['non-approver', NON_APPROVER_SESSION], ['approver', SESSION]] as const) {
+    test(`(l) ${name}: a failed list read is one line in the 83 px header with the Console open; Retry reads once more`, async ({ app, hygiene, mockApi, page }) => {
+      hygiene.allow('console.error', /status of 500/);
+      useSession(mockApi, session);
+      const store = registerApprovalRequestStore(mockApi, { seed: batchView(REQUESTED_IDS, name === 'non-approver'), failLists: 1 });
+      await app.gotoRoute('/lead-queue');
+      const entry = visible(page.getByTestId('approval-requests-unavailable'));
+      await expect(entry).toHaveRole('status');
+      await expect(entry).toContainText('Requests unavailable');
+      await expect(page.getByTestId('approval-requests-chip')).toHaveCount(0);
+      await expect(page.locator('.lead-table__request-mark, .lead-table__request-chip')).toHaveCount(0);
+      await openConsoleNarrow(app, page);
+      const header = page.locator('.surface:has(> .tbl-wrap) > .surface__hdr').first();
+      expect(await header.evaluate((element) => Math.round(element.getBoundingClientRect().height)), 'the header keeps 83 px').toBeLessThanOrEqual(84);
+      const fit = await entry.evaluate((element) => {
+        const retry = element.querySelector('button')?.getBoundingClientRect().height ?? 0;
+        const row = element.closest('.lead-table__title-row');
+        return {
+          height: element.getBoundingClientRect().height,
+          retry,
+          clipped: element.scrollWidth > element.clientWidth,
+          rowOverflow: row ? row.scrollWidth - row.clientWidth : 0,
+        };
+      });
+      expect(fit.height, 'the entry is one line').toBeLessThanOrEqual(fit.retry + 1);
+      expect(fit.clipped, 'the entry is not clipped').toBe(false);
+      expect(fit.rowOverflow, 'the title row does not overflow').toBeLessThanOrEqual(0);
+      expect(store.lists).toHaveLength(1);
+      await entry.getByRole('button', { name: 'Retry' }).click();
+      await expect.poll(() => store.lists.length).toBe(2);
+      await expect(chip(page)).toHaveText(name === 'approver' ? `Approval requests · ${REQUESTED_IDS.length}` : 'My requests · 1');
+      await expect(page.getByTestId('approval-requests-unavailable')).toHaveCount(0);
     });
   }
 });

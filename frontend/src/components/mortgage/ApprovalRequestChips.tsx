@@ -25,10 +25,12 @@ export function ApprovalRequestChips({ requests }: { requests: LeadTableApproval
   const approverPanel = useLazyModule(APPROVER_PANEL, open && approver);
   const myPanel = useLazyModule(MY_PANEL, open && !approver);
   if (requests.status === 'error') {
+    // One line in the title row (the 83 px header, Console open): "Approval" is
+    // spoken, not shown, so the entry is no wider than the chip it stands in for.
     return (
-      <span className="inline-flex muted fs-12" role="status" data-testid="approval-requests-unavailable">
-        Approval requests unavailable
-        <Button size="sm" variant="ghost" onClick={requests.retry}>Retry</Button>
+      <span className="inline-flex muted fs-12 lead-table__requests-unavailable" role="status" data-testid="approval-requests-unavailable">
+        <span><span className="sr-only">Approval </span>Requests unavailable</span>
+        <Button size="sm" variant="ghost" onClick={requests.retry} data-testid="approval-requests-retry">Retry</Button>
       </span>
     );
   }

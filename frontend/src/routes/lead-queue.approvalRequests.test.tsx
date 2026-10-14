@@ -345,6 +345,20 @@ describe('the table: the approver side', { timeout: 60_000 }, () => {
     expect(q(`[data-testid="lead-request-mark-${IDS[0]}"]`)).toBeNull();
   });
 
+  it('a failed list read: one status with Retry in the chip slot, no chip and no mark', async () => {
+    const retry = vi.fn();
+    await renderTable(requests({ role: 'approver', status: 'error', retry }));
+    const status = q('[data-testid="approval-requests-unavailable"]')!;
+    expect(status.getAttribute('role')).toBe('status');
+    // "Approval" is spoken, not shown: one line beside the Triage entry.
+    expect(status.textContent).toBe('Approval Requests unavailableRetry');
+    expect(status.querySelector('.sr-only')!.textContent).toBe('Approval ');
+    expect(q('[data-testid="approval-requests-chip"]')).toBeNull();
+    expect(q('[data-testid^="lead-request-mark-"]')).toBeNull();
+    await act(async () => q<HTMLButtonElement>('[data-testid="approval-requests-retry"]')!.click());
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
   it('a scoped queue shows the scope row and every decision carries the request id', async () => {
     const scoped = requests({
       role: 'approver',

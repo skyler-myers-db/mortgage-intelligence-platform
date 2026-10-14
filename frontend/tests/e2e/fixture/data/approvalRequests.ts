@@ -88,6 +88,8 @@ export interface ApprovalRequestStoreOptions {
   failCreate?: { status: number; detail: string } | null;
   /** Seed an open request (the approver's side). */
   seed?: ApprovalRequestBatchView | null;
+  /** Answer the first n list reads 500 (the degraded entry and its Retry). */
+  failLists?: number;
 }
 
 export function registerApprovalRequestStore(mockApi: MockApi, options: ApprovalRequestStoreOptions = {}): ApprovalRequestStore {
@@ -104,9 +106,12 @@ export function registerApprovalRequestStore(mockApi: MockApi, options: Approval
     const shown = store.batch && (mine || open) ? [{ ...store.batch, is_mine: mine }] : [];
     return { scope: scope === 'open' ? 'open' : 'mine', batches: shown };
   };
-  mockApi.register<ApprovalRequestList>('GET', '/api/outreach/approval-requests', ({ query }: FixtureRequest) => {
+  mockApi.register<ApprovalRequestList | ErrorBody>('GET', '/api/outreach/approval-requests', ({ query }: FixtureRequest) => {
     const scope = query.get('scope');
     store.lists.push(scope ?? '');
+    if (store.lists.length <= (options.failLists ?? 0)) {
+      return json<ErrorBody>({ detail: 'Approval requests are temporarily unavailable.' }, { status: 500 });
+    }
     return json(listFor(scope, scope !== 'open'));
   });
   mockApi.register<ApprovalRequestCreated | ErrorBody>('POST', '/api/outreach/approval-requests', async (request) => {

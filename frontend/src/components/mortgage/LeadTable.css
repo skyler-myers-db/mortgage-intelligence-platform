@@ -367,6 +367,12 @@
   margin-inline-start: calc(var(--sp-1) / -2);
   color: var(--text-2);
 }
+/* The failed request-list read in the title row (ApprovalRequestChips): one
+   line, never wrapping inside the 83 px header with the Console open. */
+.lead-table__requests-unavailable {
+  align-items: center;
+  white-space: nowrap;
+}
 
 /* The non-approver's role line (approver-role-status) keeps one line at
    1440x900 with the Console open, its request note included (audit
