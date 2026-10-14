@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type KeyboardEvent,
   type ReactNode,
 } from 'react';
 import { Link } from 'react-router';
@@ -26,6 +25,7 @@ import {
 import { queryKeys } from '../lib/queryKeys';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type {
+  AnalyticsThresholds,
   EquitySpreadCoordinateGroup,
   EquitySpreadOverview,
   EquitySpreadPoint,
@@ -35,6 +35,17 @@ import type {
 import { niceTicksWithin } from '../lib/chartTicks';
 import { formatCompact } from '../lib/formatters';
 import { LoadState } from './analytics.charts';
+import { thresholdNotice } from './analytics.chart-model';
+import {
+  ScatterGuideLabels,
+  ScatterGuideLines,
+  ScatterTip,
+  guideLegendLine,
+  scatterGuides,
+  useScatterTip,
+  type ScatterMarkerHandlers,
+  type ScatterTipSpot,
+} from './analytics.scatter-overlay';
 import './analytics.scatter.css';
 import {
   MAX_SCATTER_POINTS,
@@ -62,10 +73,13 @@ import {
  */
 export function EquitySpreadScatter({
   overview,
+  thresholds,
   filters,
   filterCriteria,
 }: {
   overview: EquitySpreadOverview;
+  /** The refresh's governed In the Money thresholds: the guides draw from these only. */
+  thresholds: AnalyticsThresholds;
   filters: AnalyticsQueryOptions;
   filterCriteria: ReadonlyArray<string | number>;
 }) {
@@ -105,10 +119,10 @@ export function EquitySpreadScatter({
       </div>
       <div className="surface__body analytics-chart-panel analytics-chart-panel--scatter">
         {viewport === null ? (
-          <EquitySpreadBinsView overview={overview} onZoom={setViewport} />
+          <EquitySpreadBinsView overview={overview} thresholds={thresholds} onZoom={setViewport} />
         ) : (
           <LoadState query={points} title="Borrower points">
-            {(payload) => <EquitySpreadPointsView payload={payload} />}
+            {(payload) => <EquitySpreadPointsView payload={payload} thresholds={thresholds} />}
           </LoadState>
         )}
       </div>
@@ -123,6 +137,7 @@ function ScatterFrame({
   overlay,
   meta,
   scoreScope,
+  thresholds,
 }: {
   layout: ScatterLayout;
   xTicks: number[];
@@ -130,10 +145,13 @@ function ScatterFrame({
   overlay: ReactNode;
   meta: ReactNode;
   scoreScope: 'overview' | 'borrower';
+  thresholds: AnalyticsThresholds;
 }) {
+  // dataviz-06 (b): the In the Money guides, drawn only inside the domain.
+  const guides = scatterGuides(thresholds, layout);
   return (
     <>
-      <ScoreBandLegend scope={scoreScope} />
+      <ScoreBandLegend scope={scoreScope} guideLine={guideLegendLine(thresholds, thresholdNotice(thresholds))} />
       <div className="analytics-scatter-wrap">
         <div className="analytics-chart__plot">
           <div className="analytics-chart__y-ticks" aria-hidden="true">
@@ -171,7 +189,9 @@ function ScatterFrame({
                   vectorEffect="non-scaling-stroke"
                 />
               ))}
+              <ScatterGuideLines guides={guides} />
             </svg>
+            <ScatterGuideLabels guides={guides} />
             {overlay}
             <div className="analytics-chart__x-ticks" aria-hidden="true">
               {xTicks.map((tick) => (
@@ -210,7 +230,14 @@ const SCORE_BAND_LEGEND: ReadonlyArray<{
 
 const CLUSTER_PAGE_SIZE = 50;
 
-export function ScoreBandLegend({ scope }: { scope: 'overview' | 'borrower' }) {
+export function ScoreBandLegend({
+  scope,
+  guideLine = null,
+}: {
+  scope: 'overview' | 'borrower';
+  /** What the dashed guides are (or why there are none), from the governed thresholds. */
+  guideLine?: string | null;
+}) {
   const scopeLabel = scope === 'overview' ? 'overview cell means' : 'borrower drilldown points';
   return (
     <div
@@ -246,19 +273,25 @@ export function ScoreBandLegend({ scope }: { scope: 'overview' | 'borrower' }) {
           ? 'Color metric: mean opportunity score per overview cell.'
           : 'Colors show individual opportunity scores. A numbered marker uses the highest returned score in its cluster; its number is the exact coordinate population. Open it for ranked links returned under the server cap.'}
       </p>
+      {guideLine !== null && (
+        <p className="analytics-scatter-legend__scope muted fs-12 flush" data-testid="scatter-guide-legend">{guideLine}</p>
+      )}
     </div>
   );
 }
 
 export function EquitySpreadBinsView({
   overview,
+  thresholds,
   onZoom,
 }: {
   overview: EquitySpreadOverview;
+  thresholds: AnalyticsThresholds;
   onZoom: (viewport: EquitySpreadViewport) => void;
 }) {
   const binKeys = overview.bins.map((bin) => `${bin.equity_bin_pct}:${bin.spread_bin_bps}`);
   const [activeMarkerKey, setActiveMarkerKey] = useState<string | null>(binKeys[0] ?? null);
+  const tip = useScatterTip(binTipSpots(overview));
   if (overview.bins.length === 0) {
     return <div className="analytics-empty">No borrower points returned.</div>;
   }
@@ -273,12 +306,9 @@ export function EquitySpreadBinsView({
       xTicks={niceTicksWithin(overview.equity_domain_min, overview.equity_domain_max, 5, { integer: true })}
       yTicks={niceTicksWithin(overview.spread_domain_min, overview.spread_domain_max, 5, { integer: true })}
       scoreScope="overview"
+      thresholds={thresholds}
       overlay={
-        <div
-          className="analytics-scatter__points"
-          aria-label="Borrower density cells"
-          onKeyDown={handleScatterMarkerNavigation}
-        >
+        <div className="analytics-scatter__points" role="group" aria-label="Borrower density cells">
           {overview.bins.map((bin) => {
             const markerKey = `${bin.equity_bin_pct}:${bin.spread_bin_bps}`;
             const rect = binCellRect(bin, overview);
@@ -296,15 +326,19 @@ export function EquitySpreadBinsView({
                   '--bin-alpha': binDensityAlpha(bin.borrower_count, maxCount),
                 } as CSSProperties}
                 onClick={() => onZoom(binZoomViewport(bin, overview))}
-                aria-label={`${formatCompact(bin.borrower_count)} borrowers near ${bin.equity_bin_pct}% equity and ${bin.spread_bin_bps} bps spread, mean score ${bin.mean_opportunity_score}. Zoom in to load real borrowers.`}
-                title={`${formatCompact(bin.borrower_count)} borrowers · mean score ${bin.mean_opportunity_score} · ${formatCompact(bin.in_the_money_borrowers)} in the money`}
+                aria-label={`${formatCompact(bin.borrower_count)} borrowers near ${bin.equity_bin_pct}% equity and ${bin.spread_bin_bps} bps spread, mean score ${bin.mean_opportunity_score}, ${formatCompact(bin.in_the_money_borrowers)} in the money. Zoom in to load real borrowers.`}
                 data-scatter-marker
                 data-scatter-key={markerKey}
                 tabIndex={markerKey === resolvedActiveMarkerKey ? 0 : -1}
-                onFocus={() => setActiveMarkerKey(markerKey)}
+                {...tip.handlers}
+                onFocus={(event) => {
+                  setActiveMarkerKey(markerKey);
+                  tip.handlers.onFocus(event);
+                }}
               />
             );
           })}
+          <ScatterTip spot={tip.spot} />
         </div>
       }
       meta={
@@ -317,7 +351,13 @@ export function EquitySpreadBinsView({
   );
 }
 
-export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPointsResponse }) {
+export function EquitySpreadPointsView({
+  payload,
+  thresholds,
+}: {
+  payload: EquitySpreadPointsResponse;
+  thresholds: AnalyticsThresholds;
+}) {
   const [openClusterKey, setOpenClusterKey] = useState<string | null>(null);
   const [activeMarkerKey, setActiveMarkerKey] = useState<string | null>(null);
   const layout = zoomScatterLayout(payload.viewport);
@@ -335,6 +375,7 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
     && coordinateGroups.some((group) => group.key === activeMarkerKey)
     ? activeMarkerKey
     : coordinateGroups[0]?.key ?? null;
+  const tip = useScatterTip(pointTipSpots(coordinateGroups, layout));
   const meta = (
     <p className="analytics-scatter-meta muted fs-12" data-testid="scatter-meta">
       Plotting {formatCompact(plotted.length)} of {formatCompact(payload.showing)} returned borrowers
@@ -359,12 +400,9 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
       xTicks={niceTicksWithin(payload.viewport.equity_min, payload.viewport.equity_max, 5, { integer: true })}
       yTicks={niceTicksWithin(payload.viewport.spread_min, payload.viewport.spread_max, 5, { integer: true })}
       scoreScope="borrower"
+      thresholds={thresholds}
       overlay={
-        <div
-          className="analytics-scatter__points"
-          aria-label="Borrower drilldown points"
-          onKeyDown={handleScatterMarkerNavigation}
-        >
+        <div className="analytics-scatter__points" role="group" aria-label="Borrower drilldown points">
           {coordinateGroups.map((group) => (
             group.coordinate_total === 1 ? (
               <ScatterPointLink
@@ -373,6 +411,7 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
                 layout={layout}
                 tabIndex={group.key === resolvedActiveMarkerKey ? 0 : -1}
                 onFocus={() => setActiveMarkerKey(group.key)}
+                tipHandlers={tip.handlers}
               />
             ) : (
               <ScatterPointCluster
@@ -383,9 +422,11 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
                 onOpenChange={(open) => setOpenClusterKey(open ? group.key : null)}
                 tabIndex={group.key === resolvedActiveMarkerKey ? 0 : -1}
                 onFocus={() => setActiveMarkerKey(group.key)}
+                tipHandlers={tip.handlers}
               />
             )
           ))}
+          <ScatterTip spot={tip.spot} />
         </div>
       }
       meta={meta}
@@ -393,23 +434,41 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
   );
 }
 
-function handleScatterMarkerNavigation(event: KeyboardEvent<HTMLDivElement>) {
-  const direction = event.key === 'ArrowRight' || event.key === 'ArrowDown'
-    ? 1
-    : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
-      ? -1
-      : 0;
-  if (direction === 0 && event.key !== 'Home' && event.key !== 'End') return;
-  const markers = [...event.currentTarget.querySelectorAll<HTMLElement>('[data-scatter-marker]')];
-  const current = event.target instanceof HTMLElement ? markers.indexOf(event.target) : -1;
-  if (current < 0 || markers.length === 0) return;
-  event.preventDefault();
-  const next = event.key === 'Home'
-    ? 0
-    : event.key === 'End'
-      ? markers.length - 1
-      : (current + direction + markers.length) % markers.length;
-  markers[next]?.focus();
+/** Each density cell's tip: at the cell's top centre (critic-08: the text its title attribute carried). */
+function binTipSpots(overview: EquitySpreadOverview): Map<string, ScatterTipSpot> {
+  return new Map(overview.bins.map((bin) => {
+    const rect = binCellRect(bin, overview);
+    return [`${bin.equity_bin_pct}:${bin.spread_bin_bps}`, {
+      xPct: rect.xPct + rect.wPct / 2,
+      yPct: rect.yPct,
+      label: `${formatCompact(bin.borrower_count)} borrowers`,
+      detail: `mean score ${bin.mean_opportunity_score} · ${formatCompact(bin.in_the_money_borrowers)} in the money`,
+    }];
+  }));
+}
+
+/** Each plotted coordinate's tip: a point names its borrower, a cluster its membership. */
+function pointTipSpots(groups: ReadonlyArray<EquitySpreadCoordinateGroup>, layout: ScatterLayout): Map<string, ScatterTipSpot> {
+  return new Map(groups.map((group) => {
+    const position = scatterPosition(group.equity_pct, group.rate_spread_bps, layout);
+    const point = group.points[0];
+    const spot: ScatterTipSpot = group.coordinate_total === 1
+      ? {
+          ...position,
+          label: point.display_name,
+          detail: `${point.segment} · ${point.state} · ${point.equity_pct}% equity · ${point.rate_spread_bps} bps · score ${point.opportunity_score}`,
+        }
+      : { ...position, label: clusterMembershipLabel(group), detail: 'at the same coordinate' };
+    return [group.key, spot];
+  }));
+}
+
+/** "N borrowers", or with the server cap: the cluster's membership, as its marker says it. */
+function clusterMembershipLabel(group: EquitySpreadCoordinateGroup): string {
+  const returnedCount = group.points.length;
+  return group.coordinate_total > returnedCount
+    ? `${group.coordinate_total} borrowers; showing ${returnedCount} ranked links returned under server cap`
+    : `${group.coordinate_total} borrowers`;
 }
 
 function pointCoordinateKey(point: Pick<EquitySpreadPoint, 'equity_pct' | 'rate_spread_bps'>): string {
@@ -447,11 +506,13 @@ function ScatterPointLink({
   layout,
   tabIndex,
   onFocus,
+  tipHandlers,
 }: {
   point: EquitySpreadPoint;
   layout: ScatterLayout;
   tabIndex: number;
   onFocus: () => void;
+  tipHandlers: ScatterMarkerHandlers;
 }) {
   const position = scatterPosition(point.equity_pct, point.rate_spread_bps, layout);
   const band = point.score_band ?? scoreBand(point.opportunity_score);
@@ -463,12 +524,15 @@ function ScatterPointLink({
         '--dot-x': `${position.xPct}%`,
         '--dot-y': `${position.yPct}%`,
       } as CSSProperties}
-      aria-label={`${point.display_name}: ${point.equity_pct}% equity, ${point.rate_spread_bps} bps spread, score ${point.opportunity_score} (${band}). Open Borrower 360.`}
-      title={`${point.display_name} · ${point.segment} · ${point.state} · ${point.equity_pct}% equity · ${point.rate_spread_bps} bps · score ${point.opportunity_score}`}
+      aria-label={`${point.display_name}: ${point.segment}, ${point.state}, ${point.equity_pct}% equity, ${point.rate_spread_bps} bps spread, score ${point.opportunity_score} (${band}). Open Borrower 360.`}
       data-scatter-marker
       data-scatter-key={pointCoordinateKey(point)}
       tabIndex={tabIndex}
-      onFocus={onFocus}
+      {...tipHandlers}
+      onFocus={(event) => {
+        onFocus();
+        tipHandlers.onFocus(event);
+      }}
     />
   );
 }
@@ -480,6 +544,7 @@ function ScatterPointCluster({
   onOpenChange,
   tabIndex,
   onFocus,
+  tipHandlers,
 }: {
   group: EquitySpreadCoordinateGroup;
   layout: ScatterLayout;
@@ -487,17 +552,14 @@ function ScatterPointCluster({
   onOpenChange: (open: boolean) => void;
   tabIndex: number;
   onFocus: () => void;
+  tipHandlers: ScatterMarkerHandlers;
 }) {
   const panelId = useId();
   const [visibleCount, setVisibleCount] = useState(CLUSTER_PAGE_SIZE);
   const markerRef = useRef<HTMLButtonElement>(null);
   const position = scatterPosition(group.equity_pct, group.rate_spread_bps, layout);
   const highestScore = Math.max(...group.points.map((point) => point.opportunity_score));
-  const returnedCount = group.points.length;
-  const cappedMembership = group.coordinate_total > returnedCount;
-  const membershipLabel = cappedMembership
-    ? `${group.coordinate_total} borrowers; showing ${returnedCount} ranked links returned under server cap`
-    : `${group.coordinate_total} borrowers`;
+  const membershipLabel = clusterMembershipLabel(group);
   const band = scoreBand(highestScore);
   const alignment = position.xPct < 24
     ? 'analytics-scatter__cluster--align-start'
@@ -540,12 +602,15 @@ function ScatterPointCluster({
         aria-expanded={open}
         aria-controls={panelId}
         aria-label={`${membershipLabel} at ${group.equity_pct}% equity and ${group.rate_spread_bps} bps spread. Open exact-coordinate cluster.`}
-        title={`${membershipLabel} at the same coordinate`}
         onClick={() => onOpenChange(!open)}
         data-scatter-marker
         data-scatter-key={group.key}
         tabIndex={tabIndex}
-        onFocus={onFocus}
+        {...tipHandlers}
+        onFocus={(event) => {
+          onFocus();
+          tipHandlers.onFocus(event);
+        }}
       >
         {group.coordinate_total}
       </button>

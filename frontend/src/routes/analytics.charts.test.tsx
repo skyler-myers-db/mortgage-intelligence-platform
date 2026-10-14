@@ -1,5 +1,7 @@
 /** @vitest-environment happy-dom */
 
+import { act, type ReactElement } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
@@ -7,7 +9,7 @@ import type { UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
 import { designCss } from '../test/designCss';
 import { histogramModel } from './analytics.chart-model';
 import type { FunnelStage } from '../types';
-import { BAR_FLOOR_PCT, Bars, FunnelBars, HistogramTable, LoadState } from './analytics.charts';
+import { BAR_FLOOR_PCT, Bars, FunnelBars, HistogramTable, LoadState, ScopeChip } from './analytics.charts';
 
 /** Rendered `--bar-pct` of each bar fill, and the not-to-scale note, in the DOM Bars produces. */
 function renderBars(values: number[]): { pcts: string[]; note: string | null; host: HTMLElement } {
@@ -170,5 +172,38 @@ describe('LoadState stale-while-refreshing contract', () => {
 
     expect(html).not.toContain('stable-refresh-status');
     expect(html).not.toContain('aria-busy');
+  });
+});
+
+describe('ScopeChip (critic-08)', () => {
+  const render = (ui: ReactElement) => {
+    const host = document.body.appendChild(document.createElement('div'));
+    const root = createRoot(host);
+    act(() => root.render(ui));
+    return { host, done: () => { act(() => root.unmount()); host.remove(); } };
+  };
+
+  it('carries its detail as a tooltip description, never a DOM title', () => {
+    const { host, done } = render(<ScopeChip detail="mip.gold.evidence_events">Evidence events</ScopeChip>);
+    try {
+      const chip = host.querySelector<HTMLElement>('.analytics-scope-chip')!;
+      expect(document.querySelectorAll('[title]')).toHaveLength(0);
+      expect(chip.hasAttribute('data-tooltip')).toBe(true);
+      const description = document.getElementById(chip.getAttribute('aria-describedby') ?? '');
+      expect(description?.textContent).toBe('mip.gold.evidence_events');
+    } finally {
+      done();
+    }
+  });
+
+  it('renders the bare chip without a detail', () => {
+    const { host, done } = render(<ScopeChip>Top 25</ScopeChip>);
+    try {
+      const chip = host.querySelector<HTMLElement>('.analytics-scope-chip')!;
+      expect(chip.hasAttribute('data-tooltip')).toBe(false);
+      expect(host.querySelectorAll('[title]')).toHaveLength(0);
+    } finally {
+      done();
+    }
   });
 });

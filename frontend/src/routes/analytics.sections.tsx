@@ -214,6 +214,7 @@ export function EconomicsView({
       <Suspense fallback={<EquitySpreadScatterPending />}>
         <EquitySpreadScatter
           overview={data.equity_spread}
+          thresholds={data.thresholds}
           filters={filters}
           filterCriteria={filterCriteria}
         />
@@ -348,7 +349,7 @@ export function SignalsView({
               trailing decimal is the mean <GlossaryTerm term="evidenceConfidence" /> (0–1).
             </p>
           </div>
-          <ScopeChip title="mip.gold.evidence_events">Evidence events</ScopeChip>
+          <ScopeChip detail="mip.gold.evidence_events">Evidence events</ScopeChip>
         </div>
         <div className="surface__body">
           <Bars<EvidenceBySignalRow>

@@ -11,6 +11,7 @@ import {
 } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Icon } from '../components/Icon';
+import { Tooltip } from '../components/ui/Tooltip';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { type UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
 import { useFirstAppearance } from '../lib/useFirstAppearance';
@@ -95,12 +96,17 @@ export function SectionHeader({ title, action }: { title: string; action?: React
   );
 }
 
-export function ScopeChip({ children, title }: { children: ReactNode; title?: string }) {
-  return (
-    <span className="chip chip--neutral analytics-scope-chip" title={title}>
+/**
+ * A panel's scope chip. Its optional `detail` (for example the source table)
+ * is the design-system Tooltip, never a DOM title (critic-08).
+ */
+export function ScopeChip({ children, detail }: { children: ReactNode; detail?: string }) {
+  const chip = (
+    <span className="chip chip--neutral analytics-scope-chip">
       <span className="chip__label">{children}</span>
     </span>
   );
+  return detail ? <Tooltip content={detail}>{chip}</Tooltip> : chip;
 }
 
 /**

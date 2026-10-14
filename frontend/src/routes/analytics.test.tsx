@@ -20,12 +20,16 @@ import {
 import { ExecutiveProvenanceNote, ScoreDistribution } from './analytics.executive';
 import { TIMESTAMP_UNAVAILABLE } from '../lib/time';
 import type {
+  AnalyticsThresholds,
   EquitySpreadOverview,
   EquitySpreadPoint,
   EquitySpreadPointsResponse,
   ExecutiveAnalyticsResponse,
   ExecutiveProvenance,
 } from '../types';
+
+/** The refresh's governed thresholds (the payload's `thresholds`). */
+const THRESHOLDS: AnalyticsThresholds = { min_spread_bps: 75, min_equity_pct: 20, reason: null };
 
 const OVERVIEW_FIXTURE: EquitySpreadOverview = {
   bins: [
@@ -160,7 +164,7 @@ describe('analytics chart readability', () => {
   it('renders the scatter overview as density-bin cells, never borrower rows', () => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <EquitySpreadBinsView overview={OVERVIEW_FIXTURE} onZoom={() => {}} />
+        <EquitySpreadBinsView thresholds={THRESHOLDS} overview={OVERVIEW_FIXTURE} onZoom={() => {}} />
       </MemoryRouter>,
     );
 
@@ -180,7 +184,7 @@ describe('analytics chart readability', () => {
   it('renders zoomed real points with honest returned-versus-matching copy and Borrower 360 links', () => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <EquitySpreadPointsView
+        <EquitySpreadPointsView thresholds={THRESHOLDS}
           payload={pointsPayload({
             points: [
               pointFixture(),
@@ -212,7 +216,7 @@ describe('analytics chart readability', () => {
   it('falls back to the pinned scoreBand constants when a point payload lacks score_band', () => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <EquitySpreadPointsView
+        <EquitySpreadPointsView thresholds={THRESHOLDS}
           payload={pointsPayload({ points: [pointFixture({ score_band: null, opportunity_score: 90 })] })}
         />
       </MemoryRouter>,
@@ -228,7 +232,7 @@ describe('analytics chart readability', () => {
       }));
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <EquitySpreadPointsView
+        <EquitySpreadPointsView thresholds={THRESHOLDS}
           payload={pointsPayload({ points: many, showing: many.length, total_matching: many.length })}
         />
       </MemoryRouter>,
