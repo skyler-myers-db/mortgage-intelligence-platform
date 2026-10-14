@@ -7,6 +7,12 @@ the governed property-loan lookup), collects a per-step trace, writes a per-step
 audit row plus a top-level compose audit row, and STOPS at the first
 approval-gated tool exactly like the reviewed workflows do. Nothing here sends
 outreach, activates a connector, or executes model-authored SQL.
+
+Audit 2026-09-21 ``genie-09`` part 4 (W5d): when the request carries a
+``request_id`` the executor records best-effort progress before each step,
+at the approval gate and before the audit transaction
+(``growth_agent_plan_progress``). Progress is never written inside the audit
+transaction and a progress failure changes nothing here.
 """
 
 from __future__ import annotations
@@ -31,6 +37,10 @@ from backend.services.databricks_sql import DatabricksSqlClient, DatabricksSqlEr
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.eligibility import eligible_sql_predicate
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.growth_agent_plan_progress import (
+    LakebasePlanProgressRecorder,
+    PlanProgressRecorder,
+)
 from backend.services.growth_agent_workflows import (
     BORROWER_360,
     BORROWER_DOSSIER,
@@ -81,19 +91,27 @@ def execute_plan(
     actor: str,
     request_id: str | None = None,
     tool_impls: dict[str, ToolImpl] | None = None,
+    progress: PlanProgressRecorder | None = None,
 ) -> PlanExecution:
     """Execute a validated plan; return trace + audit ids, stopping at approval."""
 
     impls = tool_impls or default_tool_impls()
+    if progress is None and request_id is not None:
+        progress = LakebasePlanProgressRecorder(lakebase, actor=actor, request_id=request_id)
+    total = len(plan.steps)
+    last_tool = ""
     ctx = ToolExecutionContext(sql_client=sql_client, audit_store=audit_store, actor=actor)
     plan_id = str(uuid4())
     execution = PlanExecution(plan_id=plan_id)
 
     executed: list[tuple[PlanStep, AgentTool, PlanStepResult, str, int]] = []
-    for step in plan.steps:
+    for position, step in enumerate(plan.steps, start=1):
         tool = get_agent_tool(step.tool)
         result_hash = _step_hash(step, tool)
+        last_tool = tool.name
         if tool.gates_run:
+            if progress is not None:
+                progress.record(position, total, tool.name, "gate")
             execution.trace.append(
                 PlanStepTrace(
                     step_id=step.step_id,
@@ -120,6 +138,8 @@ def execute_plan(
                 status_code=422,
                 detail=f"composed plan references a non-executable tool: {tool.name}",
             )
+        if progress is not None:
+            progress.record(position, total, tool.name, "running")
         started = time.monotonic()
         result = impl(ctx, dict(step.params))
         duration_ms = max(0, int((time.monotonic() - started) * 1000))
@@ -139,6 +159,9 @@ def execute_plan(
             )
         )
     execution.executed_step_count = len(executed)
+    if progress is not None:
+        # Before, never inside, the audit transaction below.
+        progress.record(len(executed), total, last_tool, "recording")
 
     _write_plan_audits(
         lakebase,

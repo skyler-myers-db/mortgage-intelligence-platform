@@ -62,6 +62,8 @@ _APP_ROLE_TABLE_PRIVILEGES: dict[str, tuple[str, ...]] = {
     "rum_daily": ("SELECT", "INSERT", "UPDATE"),
     # Follow-ups snoozes: a row is closed once (woken_at), never deleted.
     "lead_snoozes": ("SELECT", "INSERT", "UPDATE"),
+    # Composed-plan execute progress (genie-09 part 4): upserted, never deleted.
+    "growth_agent_plan_progress": ("SELECT", "INSERT", "UPDATE"),
 }
 
 _APP_ROLE_SEQUENCE_PRIVILEGES: dict[str, tuple[str, ...]] = {

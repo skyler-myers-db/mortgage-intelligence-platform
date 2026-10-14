@@ -2388,7 +2388,8 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_runs (
                        'high_equity_heloc_watch',
                        'branch_capacity_review',
                        'source_freshness_sentinel',
-                       'custom_segment_watch'
+                       'custom_segment_watch',
+                       'rate_trigger_watch'
                      )),
     workflow_title   TEXT NOT NULL,
     status           TEXT NOT NULL DEFAULT 'completed'
@@ -2460,7 +2461,8 @@ BEGIN
           'high_equity_heloc_watch',
           'branch_capacity_review',
           'source_freshness_sentinel',
-          'custom_segment_watch'
+          'custom_segment_watch',
+          'rate_trigger_watch'
         ));
 END $$;
 
@@ -2480,7 +2482,8 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_monitors (
                       'high_equity_heloc_watch',
                       'branch_capacity_review',
                       'source_freshness_sentinel',
-                      'custom_segment_watch'
+                      'custom_segment_watch',
+                      'rate_trigger_watch'
                      )),
     name             TEXT NOT NULL,
     cadence          TEXT NOT NULL CHECK (cadence IN ('daily','weekly')),
@@ -2516,7 +2519,8 @@ BEGIN
           'high_equity_heloc_watch',
           'branch_capacity_review',
           'source_freshness_sentinel',
-          'custom_segment_watch'
+          'custom_segment_watch',
+          'rate_trigger_watch'
         ));
 END $$;
 
@@ -4356,5 +4360,47 @@ INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_10_14_lead_snoozes',
     'Follow-ups snooze: mip_app.lead_snoozes (one open row per actor and borrower, closed once as timer, signal or superseded), SELECT/INSERT/UPDATE only'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- Growth Agent watchlists (W5d) ---
+-- Audit 2026-09-21 wow-ai-2 and genie-09 part 4 (W5d w5-growth-watchlists).
+-- (1) The reviewed rate watch ('rate_trigger_watch', saved from the Rate
+--     Lever's "Watch this level") joins the workflow vocabulary. The four
+--     workflow_id IN-lists of growth_agent_runs and growth_agent_monitors are
+--     widened IN PLACE above, not here: their pre-seed DO blocks drop and
+--     re-add the CHECK on every apply, so a post-seed widening would be
+--     re-narrowed first and, once a rate_trigger_watch row exists, the
+--     validating ADD CONSTRAINT would abort mip_lakebase_migrate (precedent
+--     2b81811b9, custom_segment_watch). The append-only run triggers are not
+--     touched.
+-- (2) growth_agent_plan_progress: the operational per-step progress of one
+--     composed-plan execute request, keyed (actor_email, request_id). The App
+--     upserts it best-effort, outside the plan's audit transaction, so the
+--     composing browser can poll its own request; it is not an audit record
+--     and rows are never deleted (SELECT, INSERT, UPDATE only). The CHECKs use
+--     only length(), IN and same-type comparisons (smallint literals) so the
+--     executable-hook preflight accepts every re-run. No trigger or routine.
+CREATE TABLE IF NOT EXISTS mip_app.growth_agent_plan_progress (
+    actor_email  TEXT NOT NULL,
+    request_id   TEXT NOT NULL CHECK (length(request_id) <= 128),
+    step_index   SMALLINT NOT NULL,
+    step_total   SMALLINT NOT NULL CHECK (step_total >= 1::smallint AND step_total <= 8::smallint),
+    step_tool    TEXT NOT NULL CHECK (length(step_tool) <= 64),
+    phase        TEXT NOT NULL CHECK (phase IN ('running','gate','recording')),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT growth_agent_plan_progress_step_chk
+        CHECK (step_index >= 0::smallint AND step_index <= step_total),
+    PRIMARY KEY (actor_email, request_id)
+);
+
+COMMENT ON TABLE mip_app.growth_agent_plan_progress IS
+    'Operational progress of a composed Growth Agent plan execute, one row per (actor_email, request_id): the step running, at the approval gate, or being recorded. Written best-effort outside the audit transaction; never an audit record; never deleted.';
+
+-- PLACEHOLDER version: the integrator dates it at the W5d merge.
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_0X_growth_watchlists',
+    'Growth Agent watchlists: rate_trigger_watch added in place to the growth_agent_runs and growth_agent_monitors workflow_id CHECKs; mip_app.growth_agent_plan_progress (per-step progress of a composed-plan execute, SELECT/INSERT/UPDATE only)'
 )
 ON CONFLICT (version) DO NOTHING;

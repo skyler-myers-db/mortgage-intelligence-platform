@@ -114,11 +114,16 @@
    the headline, the slider at its longest sentence is 191.375px on Home with
    the Console open and on Segments with it closed (175.19px in the other two
    layouts), and the status lines are 27-28.19px. The off-Linux Geist Mono
-   emulation measures the same 191.375px maximum. 196px reserves it with
-   4.625px to spare, inside the tightness window. geo-foundation.fixture.spec.ts
-   logs every measurement and pins slot >= each state everywhere, and
-   slot - max < var(--sp-2) on Linux. */
-.map-legend__lever-slot { min-block-size: calc(var(--sp-16) * 3 + var(--sp-1)); }
+   emulation measures the same 191.375px maximum. W5d (deviation:watch-this-level,
+   audit wow-ai-2) adds "Watch {level}" to the cohort link's actions row; in
+   the two narrow layouts it wraps under the link, and the off-Linux emulation
+   measures the slider at its longest sentence at 245.5625px on Segments with
+   the Console closed (229.375px on Home with it open, 175.19px in the other
+   two layouts). 248px reserves it with 2.4375px to spare, inside the
+   tightness window; the integrator confirms it against CI's Linux log.
+   geo-foundation.fixture.spec.ts logs every measurement and pins slot >= each
+   state everywhere, and slot - max < var(--sp-2) on Linux. */
+.map-legend__lever-slot { min-block-size: calc(var(--sp-16) * 4 - var(--sp-2)); }
 .map-wrap:has(.map-legend__lever) .map-levels {
   flex: 1 0 auto;
   min-block-size: calc(var(--sp-16) * 5);

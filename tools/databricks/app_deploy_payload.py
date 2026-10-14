@@ -349,6 +349,7 @@ def build_payload(
         {"name": "MIP_FRED_RATES_JOB_ID", "value_from": "fred_rates_job"},
         {"name": "MIP_SILVER_REFRESH_JOB_ID", "value_from": "silver_refresh_job"},
         {"name": "MIP_GOLD_REFRESH_JOB_ID", "value_from": "gold_refresh_job"},
+        {"name": "MIP_GROWTH_AGENT_SCHEDULER_JOB_ID", "value_from": "growth_agent_scheduler_job"},
         *(
             {"name": name, "value_from": resource}
             for name, resource in SECRET_RESOURCE_BINDINGS.items()

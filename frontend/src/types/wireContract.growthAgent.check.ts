@@ -11,7 +11,7 @@
  */
 import type { ApiRequest, ApiResponse } from './api.gen';
 import type { DeepNoPhantomKeys, Expect, NoPhantomKeys, WireFits } from './wireContract.check';
-import type { ComposePlanRequest, ComposePlanResponse, ComposedPlan, ExecutePlanRequest, GrowthAgentCustomRunRequest, GrowthAgentDueMonitorRunRequest, GrowthAgentDueMonitorRunResponse, GrowthAgentGovernanceChip, GrowthAgentHomeResponse, GrowthAgentMonitor, GrowthAgentMonitorDraftRequest, GrowthAgentNotificationDraft, GrowthAgentPolicyCheck, GrowthAgentPromptRunRequest, GrowthAgentRunRequest, GrowthAgentRunResponse, GrowthAgentRunSummary, GrowthAgentRunWatchlistRequest, GrowthAgentSchedulerStatus, GrowthAgentToolStep, GrowthAgentWatchlistBriefing, GrowthAgentWatchlistSummaryResponse, GrowthAgentWorkflow, PlanStep, PlanStepTrace } from './growthAgent';
+import type { ComposePlanRequest, ComposePlanResponse, ComposedPlan, ExecutePlanRequest, GrowthAgentCustomRunRequest, GrowthAgentDueMonitorRunRequest, GrowthAgentDueMonitorRunResponse, GrowthAgentGovernanceChip, GrowthAgentHomeResponse, GrowthAgentMonitor, GrowthAgentMonitorDraftRequest, GrowthAgentNotificationDraft, GrowthAgentPlanProgressResponse, GrowthAgentPolicyCheck, GrowthAgentPromptRunRequest, GrowthAgentRateWatchRequest, GrowthAgentRateWatchResponse, GrowthAgentRunRequest, GrowthAgentRunResponse, GrowthAgentRunSummary, GrowthAgentRunWatchlistRequest, GrowthAgentSchedulerStatus, GrowthAgentToolStep, GrowthAgentWatchlistBriefing, GrowthAgentWatchlistSummaryResponse, GrowthAgentWorkflow, PlanStep, PlanStepTrace } from './growthAgent';
 
 export type WireContractGrowthAgent = [
   // (i) schema-named hand types
@@ -43,10 +43,17 @@ export type WireContractGrowthAgent = [
   Expect<DeepNoPhantomKeys<GrowthAgentMonitorDraftRequest, ApiRequest<'GrowthAgentMonitorDraftRequest'>>>,
   Expect<WireFits<ApiResponse<'GrowthAgentNotificationDraft'>, GrowthAgentNotificationDraft>>,
   Expect<NoPhantomKeys<GrowthAgentNotificationDraft, ApiResponse<'GrowthAgentNotificationDraft'>>>,
+  Expect<WireFits<ApiResponse<'GrowthAgentPlanProgressResponse'>, GrowthAgentPlanProgressResponse>>,
+  Expect<NoPhantomKeys<GrowthAgentPlanProgressResponse, ApiResponse<'GrowthAgentPlanProgressResponse'>>>,
   Expect<WireFits<ApiResponse<'GrowthAgentPolicyCheck'>, GrowthAgentPolicyCheck>>,
   Expect<NoPhantomKeys<GrowthAgentPolicyCheck, ApiResponse<'GrowthAgentPolicyCheck'>>>,
   Expect<WireFits<GrowthAgentPromptRunRequest, ApiRequest<'GrowthAgentPromptRunRequest'>>>,
   Expect<DeepNoPhantomKeys<GrowthAgentPromptRunRequest, ApiRequest<'GrowthAgentPromptRunRequest'>>>,
+  Expect<WireFits<GrowthAgentRateWatchRequest, ApiRequest<'GrowthAgentRateWatchRequest'>>>,
+  Expect<DeepNoPhantomKeys<GrowthAgentRateWatchRequest, ApiRequest<'GrowthAgentRateWatchRequest'>>>,
+  // @ts-expect-error wire-drift quality-04 2026-10-07 w5-wire-types: monitor.workflow_id can be live_analysis on the wire, which GrowthAgentWorkflowId omits
+  Expect<WireFits<ApiResponse<'GrowthAgentRateWatchResponse'>, GrowthAgentRateWatchResponse>>,
+  Expect<NoPhantomKeys<GrowthAgentRateWatchResponse, ApiResponse<'GrowthAgentRateWatchResponse'>>>,
   Expect<WireFits<GrowthAgentRunRequest, ApiRequest<'GrowthAgentRunRequest'>>>,
   Expect<DeepNoPhantomKeys<GrowthAgentRunRequest, ApiRequest<'GrowthAgentRunRequest'>>>,
   // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: workflow.id can be live_analysis on the wire, which GrowthAgentWorkflowId omits

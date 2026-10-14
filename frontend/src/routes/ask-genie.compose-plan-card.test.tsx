@@ -2,10 +2,14 @@
  * @vitest-environment happy-dom
  */
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { auditEventHref } from '../lib/auditLinks';
 import type { ComposedPlan, ComposePlanResponse, GrowthAgentWorkflow } from '../types';
+import type { GrowthAgentPlanProgressResponse } from '../types/growthAgent';
 import { ComposePlanCard, type ComposePlanRunControls } from './ask-genie.compose-plan-card';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -318,5 +322,108 @@ describe('ComposePlanCard', () => {
     expect(container.querySelector('[role="alert"]')?.textContent).toBe('lakebase is temporarily unavailable');
     expect(runButton(container)?.disabled).toBe(false);
     expect(container.textContent).not.toContain('Compose again');
+  });
+
+  // --- genie-09 part 4: per-step progress of this card's own pending run ---
+
+  const progress = (state: GrowthAgentPlanProgressResponse['state'], step: number): GrowthAgentPlanProgressResponse => ({
+    state, step_index: step, step_total: 3, step_tool: SIGNED_PLAN.steps[Math.max(0, step - 1)].tool, updated_at: null,
+  });
+  const stepChips = () =>
+    Array.from(container.querySelectorAll('.growth-agent-step')).map((row) => [
+      row.className.replace('growth-agent-step', '').trim(),
+      row.querySelector('.growth-agent-step__progress')?.textContent ?? null,
+      row.getAttribute('aria-current'),
+    ]);
+
+  it.each([
+    ['running at 2', progress('running', 2), [
+      ['growth-agent-step--completed', 'Done', null],
+      ['growth-agent-step--running', 'Running', 'step'],
+      ['growth-agent-step--waiting', 'Waiting', null],
+    ], 'Step 2 of 3: fn_segment_counts'],
+    ['the gate at 3', progress('gate', 3), [
+      ['growth-agent-step--completed', 'Done', null],
+      ['growth-agent-step--completed', 'Done', null],
+      ['growth-agent-step--running', 'Approval gate', 'step'],
+    ], 'Step 3 of 3: fn_borrower_dossier_evidence, approval gate'],
+    ['recording after 2', progress('recording', 2), [
+      ['growth-agent-step--completed', 'Done', null],
+      ['growth-agent-step--completed', 'Done', null],
+      ['growth-agent-step--waiting', 'Waiting', null],
+    ], 'Recording the audit trail…'],
+  ])('maps %s onto the Plan steps and announces it once', (_label, reported, rows, announced) => {
+    renderResponse(COMPOSED_SIGNED, runControls({ pending: true, progress: reported }));
+    expect(stepChips()).toEqual(rows);
+    const status = container.querySelector('[role="status"]');
+    expect(status?.textContent).toBe(announced);
+    expect(status?.closest('[aria-busy="true"]')).toBeNull();
+    expect(container.querySelector('.growth-agent-step__recording') !== null).toBe(reported.state === 'recording');
+  });
+
+  it('keeps the indeterminate state while nothing is reported, and drops progress after settle', () => {
+    renderResponse(COMPOSED_SIGNED, runControls({ pending: true, progress: null }));
+    expect(stepChips().every(([cls, chip, current]) => cls === '' && chip === null && current === null)).toBe(true);
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('Running the plan you reviewed.');
+    renderResponse(COMPOSED_SIGNED, runControls({ pending: false, progress: progress('running', 2) }));
+    expect(container.querySelector('.growth-agent-step--running')).toBeNull();
+  });
+
+  it('re-announces only when the step or the phase changes', () => {
+    const run = runControls({ pending: true, progress: progress('running', 1) });
+    renderResponse(COMPOSED_SIGNED, run);
+    const status = container.querySelector('[role="status"]');
+    const mutations: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => mutations.push(...records));
+    observer.observe(status as Node, { childList: true, characterData: true, subtree: true });
+    renderResponse(COMPOSED_SIGNED, { ...run, progress: progress('running', 1) });
+    renderResponse(COMPOSED_SIGNED, { ...run, progress: { ...progress('running', 1), updated_at: '2026-10-07T12:00:01Z' } });
+    expect(observer.takeRecords().length + mutations.length).toBe(0);
+    renderResponse(COMPOSED_SIGNED, { ...run, progress: progress('running', 2) });
+    expect(observer.takeRecords().length + mutations.length).toBeGreaterThan(0);
+    observer.disconnect();
+  });
+
+  // --- flow-04: trace audit ids and the focus fallback ---
+
+  function renderWithSession(response: ComposePlanResponse, session: { can_access_admin: boolean; can_read_audit: boolean }, run?: ComposePlanRunControls) {
+    const client = new QueryClient();
+    client.setQueryData(['session', 'access'], { ...session, can_approve: false });
+    act(() => root.render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <ComposePlanCard response={response} run={run} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    ));
+  }
+
+  it.each([
+    ['an administrator', { can_access_admin: true, can_read_audit: true }],
+    ['an auditor', { can_access_admin: false, can_read_audit: true }],
+  ])('links a trace audit id into the ledger for %s', (_who, session) => {
+    renderWithSession(COMPOSED_EXECUTED, session);
+    const link = container.querySelector<HTMLAnchorElement>('.growth-agent-step__meta a.mono');
+    expect(link?.getAttribute('href')).toBe(auditEventHref('audit-step-1'));
+    expect(link?.getAttribute('aria-label')).toBe('Open audit event audit-step-1 in the audit ledger');
+    expect(link?.textContent).toBe('audit audit-step-1');
+    expect(link?.hasAttribute('title')).toBe(false);
+  });
+
+  it('keeps the trace audit id as mono text for everyone else', () => {
+    renderWithSession(COMPOSED_EXECUTED, { can_access_admin: false, can_read_audit: false });
+    expect(container.querySelector('.growth-agent-step__meta a')).toBeNull();
+    expect(container.querySelector('.growth-agent-step__meta span.mono')?.textContent).toBe('audit audit-step-1');
+  });
+
+  it('moves focus to the title when an executed plan has an empty trace', () => {
+    const run = runControls();
+    renderResponse(COMPOSED_SIGNED, run);
+    act(() => runButton(container)?.click());
+    renderResponse(COMPOSED_SIGNED, { ...run, pending: true });
+    renderResponse({ ...COMPOSED_SIGNED, executed: true, trace: [] }, { ...run, pending: false });
+    expect(container.textContent).not.toContain('Execution trace');
+    expect(document.activeElement).toBe(container.querySelector('h3'));
+    expect(document.activeElement).not.toBe(document.body);
   });
 });

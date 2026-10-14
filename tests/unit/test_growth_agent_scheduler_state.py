@@ -10,6 +10,7 @@ the no-client path when the job is unbound, the process cache, the GET
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any, get_args
@@ -71,9 +72,17 @@ def _fresh_cache(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     scheduler.reset_growth_agent_scheduler_cache()
 
 
-def _status_with(jobs: _Jobs, monkeypatch: pytest.MonkeyPatch, *, job_id: str = "4242") -> Any:
+def _inline(refresh: Any) -> None:
+    refresh()
+
+
+def _status_with(
+    jobs: _Jobs, monkeypatch: pytest.MonkeyPatch, *, job_id: str = "4242", refresh_runner: Any = _inline
+) -> Any:
     monkeypatch.setenv(ENV, job_id)
-    return scheduler.growth_agent_scheduler_status(workspace_factory=lambda: SimpleNamespace(jobs=jobs))
+    return scheduler.growth_agent_scheduler_status(
+        workspace_factory=lambda: SimpleNamespace(jobs=jobs), refresh_runner=refresh_runner
+    )
 
 
 @pytest.mark.parametrize(
@@ -147,8 +156,103 @@ def test_a_failed_lookup_is_retried_after_the_short_ttl(monkeypatch: pytest.Monk
     clock[0] += 2
     jobs.error = None
     jobs.job = _job(schedule="UNPAUSED")
+    # Stale-while-refresh: the stale answer is served while the (inlined) refresh runs.
+    assert _status_with(jobs, monkeypatch).reason == "lookup_failed"
     assert _status_with(jobs, monkeypatch).state == "active"
     assert len(jobs.gets) == 2
+
+
+class _BlockingJobs(_Jobs):
+    """A Jobs API whose get() blocks until released, counting every call."""
+
+    def __init__(self, job: Any = None, *, error: Exception | None = None) -> None:
+        super().__init__(job, error=error)
+        self.release = threading.Event()
+        self.entered = threading.Event()
+
+    def get(self, *, job_id: int) -> Any:
+        self.gets.append(job_id)
+        self.entered.set()
+        assert self.release.wait(10), "the test never released the Jobs API"
+        if self.error is not None:
+            raise self.error
+        return self.job
+
+
+def _expire(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    clock = [1000.0]
+    monkeypatch.setattr(scheduler.time, "monotonic", lambda: clock[0])
+    return clock
+
+
+def _in_thread(fn: Any) -> tuple[threading.Thread, list[Any]]:
+    out: list[Any] = []
+    thread = threading.Thread(target=lambda: out.append(fn()), daemon=True)
+    thread.start()
+    return thread, out
+
+
+def test_a_stale_reader_returns_at_once_while_one_refresh_is_held(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = _expire(monkeypatch)
+    assert _status_with(_Jobs(_job(schedule="PAUSED")), monkeypatch).state == "paused"
+    clock[0] += scheduler.RESOLVED_TTL_S + 1
+    jobs = _BlockingJobs(_job(schedule="UNPAUSED"))
+    held: list[Any] = []
+    readers = [_in_thread(lambda: _status_with(jobs, monkeypatch, refresh_runner=held.append)) for _ in range(5)]
+    for thread, _ in readers:
+        thread.join(2)
+        assert not thread.is_alive(), "a stale reader waited on the Jobs API"
+    assert [out[0].state for _, out in readers] == ["paused"] * 5
+    assert len(held) == 1, "N stale readers start exactly one refresh"
+
+    refresh, _ = _in_thread(held[0])  # the held refresh now runs, and blocks in jobs.get
+    assert jobs.entered.wait(2)
+    reader, out = _in_thread(lambda: _status_with(jobs, monkeypatch, refresh_runner=held.append))
+    reader.join(2)
+    assert not reader.is_alive() and out[0].state == "paused", "the lock is never held during the lookup"
+    jobs.release.set()
+    refresh.join(2)
+    assert _status_with(jobs, monkeypatch).state == "active"
+    assert jobs.gets == [4242] and len(held) == 1
+
+
+def test_a_cold_burst_shares_one_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    jobs = _BlockingJobs(_job(schedule="PAUSED"))
+    callers = [_in_thread(lambda: _status_with(jobs, monkeypatch)) for _ in range(6)]
+    assert jobs.entered.wait(2)
+    jobs.release.set()
+    for thread, _ in callers:
+        thread.join(5)
+        assert not thread.is_alive()
+    assert [out[0].state for _, out in callers] == ["paused"] * 6
+    assert jobs.gets == [4242], "concurrent cold callers never issue a second jobs.get"
+
+
+def test_a_failed_refresh_stores_lookup_failed_with_the_short_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(scheduler, "emit", lambda _logger, event, **_fields: events.append(event))
+    clock = _expire(monkeypatch)
+    jobs = _Jobs(_job(schedule="UNPAUSED"))
+    assert _status_with(jobs, monkeypatch).state == "active"
+    clock[0] += scheduler.RESOLVED_TTL_S + 1
+    jobs.error = RuntimeError("timeout")
+    assert _status_with(jobs, monkeypatch).state == "active"  # stale, while the inlined refresh fails
+    assert _status_with(jobs, monkeypatch).reason == "lookup_failed"
+    assert events == ["growth_agent_scheduler_state_unavailable"]
+    clock[0] += scheduler.LOOKUP_FAILED_TTL_S - 1
+    assert _status_with(jobs, monkeypatch).reason == "lookup_failed"
+    assert len(jobs.gets) == 2, "the failed answer is cached for the 60 s TTL"
+
+
+def test_reset_clears_an_in_flight_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = _expire(monkeypatch)
+    assert _status_with(_Jobs(_job(schedule="PAUSED")), monkeypatch).state == "paused"
+    clock[0] += scheduler.RESOLVED_TTL_S + 1
+    held: list[Any] = []
+    _status_with(_Jobs(_job(schedule="UNPAUSED")), monkeypatch, refresh_runner=held.append)
+    scheduler.reset_growth_agent_scheduler_cache()
+    held[0]()  # a refresh from before the reset stores nothing
+    assert _status_with(_Jobs(_job(schedule="PAUSED")), monkeypatch).state == "paused"
 
 
 def test_the_sdk_client_is_bounded_by_names_the_pinned_sdk_accepts() -> None:

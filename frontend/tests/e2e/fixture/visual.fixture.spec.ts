@@ -30,6 +30,9 @@
  *     the glossary filtered by a search                                4
  *  S. W5d w5-genie-provenance-tiles: an /ask-genie answer with a
  *     verified figure's hover card open                                2
+ *  T. W5d w5-growth-watchlists: the Rate Lever's "Watch this level" row
+ *     and its watching line on Home and Segments, and a composed plan's
+ *     card mid-progress                                               10
  *                                                                     --
  *                                                                    126
  *
@@ -49,6 +52,8 @@ import { provenanceSingleAnswer } from './data/genieProvenance';
 import { GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
 import { RATE_MOVE_HOME_SUMMARY } from './data/homeAnswer';
 import { registerFollowUps } from './data/followUps';
+import { composeReply, executedReply, EXECUTE_PATTERN, registerGrowthAgentTrust } from './data/growthAgentTrust';
+import { PLAN_PROGRESS_PATTERN, PROGRESS_SEQUENCE, registerRateWatch } from './data/growthWatchlists';
 import { registerPagedQueue } from './data/leadPages';
 import { registerBoard } from './data/salesLoop';
 import { PRESENTER_SESSION } from './data/shell';
@@ -300,6 +305,62 @@ for (const theme of FIXTURE_THEMES) {
       await enterState(app, page, 'followups-tray');
       await check(page, 'home', theme, 'followups-tray');
       expectNoAuditedReadSince(mockApi, naturalLoad, 'home · follow-ups tray');
+    });
+
+    // T (W5d w5-growth-watchlists, wow-ai-2): the lever's actions row with
+    // "Watch this level" at -50 bps, then its watching line, on Home and on
+    // Segments (filters cleared); the save is a POST, never an audited read.
+    for (const name of ['home', 'segment-intelligence'] as const) {
+      test(`${name} · rate lever watch row and watching line`, async ({ app, mockApi, page }) => {
+        registerRateWatch(mockApi, ['saved']);
+        await app.setTheme(theme);
+        const path = name === 'home' ? '/?map_mode=rate&rate_step=-50' : '/segment-intelligence?marketing_eligibility=Any&map_mode=rate&rate_step=-50';
+        await app.gotoRoute(path);
+        const naturalLoad = markNaturalLoad(mockApi);
+        const lever = page.locator('#main-content .map-legend__lever');
+        const watch = lever.getByRole('button', { name: /^Watch \d/ });
+        await expect(watch).toBeVisible();
+        await lever.scrollIntoViewIfNeeded();
+        await app.settle();
+        await capture(page, `${name}--${theme}--rate-watch-row.png`, { element: lever });
+        await watch.click();
+        await expect(lever.locator('.rate-lever__watching')).toBeVisible();
+        await page.mouse.move(0, 0);
+        await app.settle();
+        await capture(page, `${name}--${theme}--rate-watching.png`, { element: lever });
+        expectNoAuditedReadSince(mockApi, naturalLoad, `${name} · rate lever watch`);
+      });
+    }
+
+    // T (W5d, genie-09 part 4): the composed plan card while its held execute
+    // reports step 2 of 3 (Done / Running / Waiting).
+    test('ask-genie · composed plan mid-progress', async ({ app, mockApi, page }) => {
+      registerGrowthAgentTrust(mockApi, { replies: [composeReply()], execute: 'ran' });
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      mockApi.register('POST', EXECUTE_PATTERN, async (request) => {
+        await held;
+        return { body: executedReply((request.body as { plan_digest: string }).plan_digest) };
+      });
+      mockApi.register('GET', PLAN_PROGRESS_PATTERN, () => json(PROGRESS_SEQUENCE[1]));
+      await app.setTheme(theme);
+      await app.gotoRoute('/ask-genie?tab=workflows');
+      const naturalLoad = markNaturalLoad(mockApi);
+      await page
+        .getByRole('region', { name: 'Mortgage Growth Agent command center' })
+        .getByRole('button', { name: 'Compose plan', exact: true })
+        .click();
+      const card = page.locator('[aria-label="Composed Growth Agent plan"]');
+      await card.getByRole('button', { name: 'Run this plan' }).click();
+      await expect(card.locator('.growth-agent-step--running')).toBeVisible();
+      await page.mouse.move(0, 0);
+      await app.settle();
+      await capture(page, `ask-genie--${theme}--plan-progress.png`, { element: card });
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'ask-genie · plan progress');
+      release();
+      await expect(card.getByRole('region', { name: 'Execution trace' })).toBeVisible();
     });
 
     // E: compact density.

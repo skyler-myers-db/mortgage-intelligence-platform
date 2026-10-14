@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Sequence
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -19,12 +20,18 @@ from backend.services.growth_agent_ledger_sql import (
     NOTIFICATION_DRAFT_INSERT_SQL,
     NOTIFICATION_DRAFT_SELECT_ACTIVE_SQL,
     NOTIFICATION_DRAFT_SELECT_BY_REQUEST_ID_SQL,
+    RUN_POLICY_CHECKS_SQL,
 )
 from backend.services.growth_agent_notification_intelligence import (
     NotificationIntelligence,
     recommend_notification_intelligence,
 )
+from backend.services.growth_agent_rate_trigger import rate_trigger_reached
+from backend.services.growth_agent_workflows import RATE_TRIGGER_WORKFLOW_ID
 from backend.services.lakebase import LakebaseClient, LakebaseError
+from backend.services.observability import emit
+
+log = logging.getLogger(__name__)
 
 
 def create_notification_drafts(
@@ -38,6 +45,12 @@ def create_notification_drafts(
     channels: Sequence[str],
     request_id: str | None = None,
 ) -> list[GrowthAgentNotificationDraft]:
+    if monitor.workflow_id == RATE_TRIGGER_WORKFLOW_ID and not _rate_trigger_reached(
+        lakebase, actor=actor, run_id=run_id
+    ):
+        # wow-ai-2: a quiet watch drafts nothing and writes no audit row.
+        emit(log, "growth_agent_rate_trigger_quiet")
+        return []
     intents = {
         channel: _notification_draft_intent(
             actor=actor,
@@ -166,6 +179,20 @@ def create_notification_drafts(
     except (LakebaseError, psycopg.Error) as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     return drafts
+
+
+def _rate_trigger_reached(lakebase: LakebaseClient, *, actor: str, run_id: str) -> bool:
+    """The draft gate: the run's stored Watched rate level check asks for review."""
+
+    try:
+        with lakebase.transaction() as conn:
+            row = _txn_fetchone(conn, RUN_POLICY_CHECKS_SQL, {"actor_email": actor, "run_id": run_id})
+    except (LakebaseError, psycopg.Error) as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    checks = row.get("policy_checks") if row is not None else None
+    if isinstance(checks, str):
+        checks = json.loads(checks)
+    return rate_trigger_reached(checks)
 
 
 def _notification_draft_intent(

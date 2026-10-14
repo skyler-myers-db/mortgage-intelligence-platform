@@ -1,6 +1,10 @@
 import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
+import { Link } from 'react-router';
 import { Button, Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import { auditEventHref } from '../lib/auditLinks';
+import { useAuditLinkAccess } from '../lib/optionalQueryReads';
+import { planStepProgress, progressAnnouncement, type PlanStepProgress } from './ask-genie.compose-plan-progress';
 import { ComposePlanDiffView } from './ask-genie.compose-plan-diff-view';
 import { formatStepParams, type SegmentLabeler } from './ask-genie.compose-plan-params';
 import type { GrowthAgentPlanChanges } from './ask-genie.growth-agent-state';
@@ -15,6 +19,7 @@ import type {
   GrowthAgentWorkflow,
   PlanStepTrace,
 } from '../types';
+import type { GrowthAgentPlanProgressResponse } from '../types/growthAgent';
 
 function traceStepIcon(status: PlanStepTrace['status']): 'check' | 'audit' | 'cross' {
   if (status === 'completed') return 'check';
@@ -65,7 +70,16 @@ export interface ComposePlanRunControls {
   onRun: () => void;
   /** Compose the objective again, to review the current plan. */
   onComposeAgain: () => void;
+  /** Per-step progress of this card's own pending run (genie-09 part 4). */
+  progress?: GrowthAgentPlanProgressResponse | null;
 }
+
+const STEP_PROGRESS_CHIP: Record<PlanStepProgress, { label: string; variant: 'success' | 'warning' | 'neutral' }> = {
+  completed: { label: 'Done', variant: 'success' },
+  running: { label: 'Running', variant: 'neutral' },
+  gate: { label: 'Approval gate', variant: 'warning' },
+  waiting: { label: 'Waiting', variant: 'neutral' },
+};
 
 interface ComposePlanCardProps {
   response: ComposePlanResponse;
@@ -144,7 +158,7 @@ function ComposePlanRunRow({
           </Button>
         )}
         <span className="sr-only" role="status">
-          {run.pending ? 'Running the plan you reviewed.' : ''}
+          {run.pending ? progressAnnouncement(run.progress ?? null) ?? 'Running the plan you reviewed.' : ''}
         </span>
       </div>
       <p id={hintId} className="growth-agent__hint mt-2">
@@ -172,6 +186,8 @@ export function ComposePlanCard({
   // Focus follows only the answer to THIS card's own Run (critic-01), never a remount.
   const ranHere = useRef(false);
   const conflict = run?.conflict ?? false;
+  const auditLinks = useAuditLinkAccess();
+  const live = run?.pending ? run.progress ?? null : null;
 
   useEffect(() => {
     if (!focusOnMount) return;
@@ -183,7 +199,8 @@ export function ComposePlanCard({
     if (!ranHere.current) return;
     if (response.executed) {
       ranHere.current = false;
-      traceRef.current?.focus();
+      // flow-04: an executed plan with an empty trace renders no trace section.
+      (traceRef.current ?? titleRef.current)?.focus();
     } else if (conflict) {
       ranHere.current = false;
       composeAgainRef.current?.focus();
@@ -276,22 +293,39 @@ export function ComposePlanCard({
           <div className="growth-agent-run__section">
             <div className="eyebrow">Plan steps</div>
             <div className="growth-agent-timeline">
-              {plan.steps.map((step, index) => (
-                <div key={step.step_id} className="growth-agent-step">
-                  <Icon name="sparkle" size={12} />
-                  <div>
-                    <div className="growth-agent-step__title">
-                      {index + 1}. {publicAgentResponsesText(step.tool)}
+              {plan.steps.map((step, index) => {
+                // deviation:growth-agent-plan-progress (genie-09 part 4)
+                const stepProgress = planStepProgress(live, index + 1);
+                const chip = stepProgress ? STEP_PROGRESS_CHIP[stepProgress] : null;
+                return (
+                  <div
+                    key={step.step_id}
+                    className={`growth-agent-step${stepProgress ? ` growth-agent-step--${stepProgress === 'gate' ? 'running' : stepProgress}` : ''}`}
+                    aria-current={stepProgress === 'running' || stepProgress === 'gate' ? 'step' : undefined}
+                  >
+                    <Icon name="sparkle" size={12} />
+                    <div>
+                      <div className="growth-agent-step__title">
+                        {index + 1}. {publicAgentResponsesText(step.tool)}
+                      </div>
+                      <div className="growth-agent-step__detail">
+                        {publicAgentResponsesText(step.rationale)}
+                      </div>
+                      <div className="growth-agent-step__meta">{formatParams(step.params)}</div>
+                      <div className="growth-agent-step__meta">step {step.step_id}</div>
+                      {chip && (
+                        <div className="chip-row growth-agent-step__progress">
+                          <Chip variant={chip.variant}>{chip.label}</Chip>
+                        </div>
+                      )}
                     </div>
-                    <div className="growth-agent-step__detail">
-                      {publicAgentResponsesText(step.rationale)}
-                    </div>
-                    <div className="growth-agent-step__meta">{formatParams(step.params)}</div>
-                    <div className="growth-agent-step__meta">step {step.step_id}</div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
+            {live?.state === 'recording' && (
+              <p className="growth-agent__hint growth-agent-step__recording">Recording the audit trail…</p>
+            )}
           </div>
 
           {plan.expected_outcome && (
@@ -355,10 +389,26 @@ export function ComposePlanCard({
                               ? `${formatGrowthAgentCount(step.row_summary)} rows`
                               : null,
                             step.result_hash ? `hash ${shortHash(step.result_hash)}` : null,
-                            step.audit_event_id ? `audit ${shortHash(step.audit_event_id)}` : null,
                           ]
                             .filter(Boolean)
                             .join(' · ')}
+                          {step.audit_event_id && (
+                            <>
+                              {' · '}
+                              {/* flow-04: administrators and auditors open the step's ledger row. */}
+                              {auditLinks ? (
+                                <Link
+                                  className="mono"
+                                  to={auditEventHref(step.audit_event_id)}
+                                  aria-label={`Open audit event ${step.audit_event_id} in the audit ledger`}
+                                >
+                                  audit {shortHash(step.audit_event_id)}
+                                </Link>
+                              ) : (
+                                <span className="mono">audit {shortHash(step.audit_event_id)}</span>
+                              )}
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>

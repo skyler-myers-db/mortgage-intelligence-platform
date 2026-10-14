@@ -21,6 +21,9 @@ import { SurfaceTitle } from '../components/Primitives';
  * The sentence says what THIS kind of action does (audit 2026-09-21
  * `critic-01`): composing runs nothing, and drafting sends nothing.
  */
+/** A rate watch whose level was not reached drafts nothing (audit `wow-ai-2`). */
+export const RATE_WATCH_QUIET_MESSAGE = "No note was drafted: this watch's level has not been reached.";
+
 const PENDING_INTENT: Record<GrowthAgentRunKind, string> = {
   workflow:
     'Counting eligible borrowers and checking each review rule. The counts, the checks and the Lead Queue link '
@@ -118,12 +121,19 @@ export function GrowthAgentRunSlot({ agent, origin, onOpenRoute }: GrowthAgentRu
             conflict: agent.planExecution.conflict !== null,
             errorMessage: agent.planExecution.errorMessage,
             onRun: () => agent.executeComposedPlan(composePlan),
+            progress: agent.planExecution.progress,
             // The card that answers Compose again takes focus once (critic-01).
             onComposeAgain: () => void agent.composeGrowthAgentPlan({ focusResult: true }),
           }}
         />
       )}
       {origin === 'monitors' && <GrowthAgentDraftPanel drafts={agent.latestGrowthDrafts} />}
+      {origin === 'monitors' && (
+        // wow-ai-2: one persistent polite line, filled only when a rate watch's draft step was quiet.
+        <div className={agent.draftQuiet ? 'status-callout status-callout--info mt-3' : undefined} role="status">
+          {agent.draftQuiet ? RATE_WATCH_QUIET_MESSAGE : ''}
+        </div>
+      )}
     </>
   );
 }

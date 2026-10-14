@@ -432,3 +432,21 @@ def test_the_genie_context_scope_render_takes_the_default_bucket_and_no_slot(pat
     # Only the exact POST leaves the Genie budget.
     sibling = BackpressureController().classify("POST", path + "x")
     assert sibling is not None and (sibling.scope, sibling.dependency) == ("genie", "genie")
+
+
+# --- 2026-09-21 audit genie-09 part 4: the composed-plan progress poll -------
+
+
+@pytest.mark.parametrize(
+    "path", ["/api/growth-agent/agent/plan/progress", "/api/v1/growth-agent/agent/plan/progress"]
+)
+def test_the_plan_progress_poll_has_its_own_lakebase_read_scope(path: str) -> None:
+    controller = BackpressureController()
+    budget = controller.classify("GET", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("growth-plan-progress", "lakebase")
+    assert budget.requests_per_minute == settings.mip_rate_limit_default_per_minute
+    # The audited execute it polls beside stays a Lakebase mutation.
+    execute = controller.classify("POST", path.replace("progress", "execute"))
+    assert execute is not None and execute.scope == "mutation"

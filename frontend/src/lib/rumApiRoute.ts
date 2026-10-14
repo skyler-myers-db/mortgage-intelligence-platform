@@ -38,6 +38,7 @@ export const API_ROUTE_SEGMENTS = [
   'plan',
   'print-receipt',
   'preview', 'progress', 'proof', 'property-loan', 'rate-sensitivity', 'rate-window',
+  'rate-watch',
   'queue-version',
   'question', 'receipt',
   'recommend', 'refusal-report', 'refusal-reports', 'reject', 'rollups', 'rules', 'rum', 'run',
@@ -77,6 +78,9 @@ const EXCLUDED_TEMPLATES: ReadonlySet<string> = new Set([
   // The rail's Follow-ups poll (D-shell-deviations-a): once a minute on every
   // route for an eligible actor; a poll, not a read a person made.
   '/api/sales/followups/summary',
+  // A composed plan's per-step progress (genie-09 part 4): a 1 s poll only
+  // while the caller's own execute is pending.
+  '/api/growth-agent/agent/plan/progress',
 ]);
 const EXCLUDED_PREFIX = '/api/telemetry/';
 
