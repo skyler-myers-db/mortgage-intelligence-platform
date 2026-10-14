@@ -21,7 +21,6 @@
 @import "./components/11-skeleton-menu-and-genie-answer.css" layer(components);
 @import "./components/12-motion-and-viewport.css" layer(components);
 @import "./components/13-route-composition.css" layer(components);
-@import "./components/14-genie-markdown-and-proof.css" layer(components);
 @import "./components/15-error-surface.css" layer(components);
 @import "./components/16-genie-fab-status.css" layer(components);
 @import "./components/17-genie-controls.css" layer(components);

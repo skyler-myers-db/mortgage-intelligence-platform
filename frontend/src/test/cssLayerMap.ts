@@ -50,8 +50,17 @@ export const PENDING_INTEGRATOR_WRAP: readonly string[] = [
   'src/components/mortgage/GenieAnswerCharts.css',
 ];
 
-/** Lazy sheets whose rules stay in `components`: path -> why routes cannot reach parity. */
-export const ROUTES_EXCEPTIONS: Readonly<Record<string, string>> = {};
+/**
+ * Lazy sheets whose rules stay in `components`: path -> why routes cannot
+ * reach parity. The blocks css-05 step 2 moved out of the initial sheet keep
+ * the layer they cascaded in: in routes they would outrank every initial
+ * partial by layer and race the lazy sheets that override them by load
+ * order.
+ */
+export const ROUTES_EXCEPTIONS: Readonly<Record<string, string>> = {
+  'src/design-system/components/14-genie-markdown-and-proof.css':
+    'moved out of the initial sheet (css-05 step 2); it cascaded in components, below every lazy sheet (the inversion scan finds no equal-specificity tie with partials 15-38 that loading later now flips)',
+};
 
 /**
  * Routes sheets that keep one rule (or block) in an in-place `@layer

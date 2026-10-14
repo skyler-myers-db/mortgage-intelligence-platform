@@ -63,6 +63,8 @@ import {
   buildTrustedAssetQuestion,
   trustedAssetsForCatalog,
 } from './ask-genie.growth-agent.helpers';
+// Genie markdown and proof styles (css-05 step 2), before the route's own sheet.
+import '../design-system/components/14-genie-markdown-and-proof.css';
 import './ask-genie.css';
 
 export { formatGrowthAgentCount };

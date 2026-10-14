@@ -128,6 +128,13 @@ describe('components.css', () => {
       expect(code(path), path).not.toMatch(/@layer\b/);
     }
   });
+
+  it('leaves the Genie markdown/proof partial to the Genie surfaces (css-05 step 2)', () => {
+    expect(imports.map(([, path]) => path)).not.toContain('./components/14-genie-markdown-and-proof.css');
+    expect(lazyPartials()).toContain('components/14-genie-markdown-and-proof.css');
+    expect(read('src/components/mortgage/GenieChat.tsx')).toMatch(/^import '\.\.\/\.\.\/design-system\/components\/14-genie-markdown-and-proof\.css';$/m);
+    expect(read('src/routes/ask-genie.tsx')).toMatch(/^import '\.\.\/design-system\/components\/14-genie-markdown-and-proof\.css';$/m);
+  });
 });
 
 describe('tokens.css and fonts.css', () => {
