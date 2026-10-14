@@ -234,6 +234,9 @@ test('(f) More like this offers links only, after one count without a borrower l
 });
 
 test('(g) the filter-panel fixes: inverted pair, rounding, 25 views above the fold, chunk Retry, announced facet status', async ({ app, page, mockApi, hygiene }) => {
+  // Two route loads, a stale-chunk reload and possibly a page Reload in one
+  // test: the slow budget, not a retry.
+  test.slow();
   await app.gotoRoute('/lead-queue?min_opportunity_score=91&max_opportunity_score=90');
   await page.getByTestId('lead-queue-more-filters').click();
   await expect(page.getByTestId('lead-queue-range-min_opportunity_score')).toHaveAttribute('aria-invalid', 'true');
