@@ -136,10 +136,11 @@ export default function SalesWorkloadTable({ workload, days, conversion }: Sales
       </tr>
     );
   } else if (data === undefined) {
-    // Skeleton rows, never a zero, before the read settles.
+    // Skeleton rows, never a zero, before the read settles (the row and its
+    // one text-free cell are both hidden from assistive technology).
     body = [0, 1, 2].map((index) => (
       <tr key={index} aria-hidden="true">
-        <td colSpan={COLUMNS.length + 2}><span className="skeleton kpi__delta-skeleton" /></td>
+        <td colSpan={COLUMNS.length + 2} aria-hidden="true"><span className="skeleton kpi__delta-skeleton" /></td>
       </tr>
     ));
   } else if (data.rows.length === 0) {

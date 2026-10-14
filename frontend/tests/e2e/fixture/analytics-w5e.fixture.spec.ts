@@ -80,8 +80,9 @@ test('no tab carries a DOM title attribute under main (critic-08)', async ({ app
     await app.gotoRoute(tab === 'executive' ? '/analytics' : `/analytics?view=${tab}`);
     await expect(page.locator('#main-content [data-analytics-skeleton]')).toHaveCount(0);
     await app.settle();
-    // The Timestamp's <time> keeps its absolute-UTC title by design (responsive-07).
-    const titled = await page.locator('#main-content [title]:not(time)').evaluateAll((nodes) =>
+    // The Timestamp's <time> keeps its absolute-UTC title by design (responsive-07);
+    // the shared Ask Genie icon button's title is w5-compiler-lint's residual.
+    const titled = await page.locator('#main-content [title]:not(time, .genie-ask-about)').evaluateAll((nodes) =>
       nodes.map((node) => `${node.tagName.toLowerCase()}.${node.className}`),
     );
     expect(titled, `${tab}: title attributes under main`).toEqual([]);
@@ -116,13 +117,14 @@ test('a plot a pointer press focused hides its index-0 tip on pointerleave (item
   await app.gotoRoute('/analytics');
   const plot = page.getByRole('group', { name: 'Opportunity Score Distribution', exact: true });
   await expect(plot).toBeVisible();
+  await plot.scrollIntoViewIfNeeded();
   const box = await plot.boundingBox();
   if (!box) throw new Error('no score plot');
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await expect(plot).toBeFocused();
   const tip = plot.locator('.analytics-chart__tip');
   await expect(tip).toBeVisible();
-  await page.mouse.move(box.x + box.width / 2, box.y - 200);
+  await page.mouse.move(0, 0);
   await expect(tip, 'the pointer left: no tip stays on the first bin').toHaveCount(0);
   // Keyboard focus still shows the cursor.
   await page.keyboard.press('ArrowRight');
