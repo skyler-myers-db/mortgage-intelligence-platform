@@ -57,6 +57,8 @@ vi.mock('./rateScenario.lazy', async (importOriginal) => {
     RATE_SCENARIO_CONTROL: {
       load: () => (chunk.retired ? Promise.reject(new Error('retired chunk (test)')) : real.load()),
       current: () => (chunk.retired ? null : real.current()),
+      // useLazyModule reads the cache through the store (runtime-04 3(b)).
+      subscribe: real.subscribe,
     },
   };
 });
