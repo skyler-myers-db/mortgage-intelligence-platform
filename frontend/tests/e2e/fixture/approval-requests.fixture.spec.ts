@@ -24,7 +24,8 @@
  *  (g) an errored session shows no request control;
  *  (h) axe on the form, both panels and the scope row, both themes;
  *  (i) Button loading computes a grid display over an unchanged box on
- *      Confirm approval and the row Reject;
+ *      Confirm approval and the row Reject, and on the bulk Reject of its
+ *      own run (busy, never native disabled);
  *  (j) the 83 px header with the Console open, in both sessions; eight rows
  *      above the fold for an approver, seven for a non-approver, whose
  *      pre-existing role line keeps ONE line with its request note, at Linux
@@ -377,6 +378,27 @@ test.describe('an approver', () => {
     expect(['grid', 'inline-grid']).toContain(await display(confirm));
     expect(await box(confirm)).toEqual(confirmBox);
     approveGate.release();
+  });
+
+  test('(i) Button loading: the bulk Reject of its own run computes a grid, busy, focus kept', async ({ app, mockApi, page }) => {
+    useSession(mockApi, SESSION);
+    const rejects = registerRejectRecorder(mockApi, { holdFirst: 1 });
+    await app.gotoRoute('/lead-queue');
+    await selectRequested(page);
+    const bulkReject = visible(page.getByTestId('lead-bulk-reject'));
+    await bulkReject.click();
+    const gate = page.getByTestId('lead-bulk-reject-gate');
+    await gate.getByTestId('lead-bulk-reject-reason').selectOption('low_intent');
+    await gate.getByTestId('lead-bulk-reject-note').fill('Q3 sweep: no intent signal in this cohort.');
+    await gate.getByTestId('lead-bulk-reject-confirm').click();
+    // The canary is on the wire, held: the toolbar's Reject is its own run's.
+    await expect.poll(() => rejects.bodies.length).toBe(1);
+    await expect(bulkReject).toHaveClass(/btn--loading/);
+    await expect(bulkReject).toHaveAttribute('aria-busy', 'true');
+    await expect(bulkReject).not.toHaveAttribute('disabled');
+    expect(['grid', 'inline-grid']).toContain(await bulkReject.evaluate((element) => getComputedStyle(element).display));
+    rejects.gate.release();
+    for (const borrowerId of REQUESTED_IDS) await expect(cell(page, borrowerId)).toContainText('Rejected');
   });
 });
 
