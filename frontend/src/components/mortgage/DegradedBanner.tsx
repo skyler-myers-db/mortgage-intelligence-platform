@@ -49,12 +49,16 @@ export { degradedDependency };
  */
 
 export interface HealthPayload {
-  status?: 'ok' | 'degraded';
+  /** Plain strings, like the backend's (health.py keeps plain dicts so a stray
+   *  probe value can never 500): only `=== 'degraded'` reads as an outage. */
+  status?: string;
   mode?: string;
   /** `resuming` (a serverless warehouse waking from auto-stop) is not an
-   *  outage and never produces a banner; the topbar pill shows it calmly. */
-  dependencies?: Record<string, 'up' | 'down' | 'resuming'>;
-  circuit_breakers?: Record<string, 'closed' | 'open' | 'half_open'>;
+   *  outage and never produces a banner; the topbar pill shows it calmly.
+   *  Only `=== 'down'` is an outage; an unknown value renders no banner. */
+  dependencies?: Record<string, string>;
+  /** Only `=== 'open'` is an open breaker. */
+  circuit_breakers?: Record<string, string>;
   forced_degraded?: {
     active: boolean;
     dependency: string;
@@ -168,7 +172,7 @@ export function DegradedBanner({
     pollIntervalDegradedMs,
     fetchHealth: fetchHealth ?? defaultFetchHealth,
   });
-  const providerHealth = (providerCtx?.health as HealthPayload | null) ?? null;
+  const providerHealth: HealthPayload | null = providerCtx?.health ?? null;
   const health = isStandalone ? standaloneHealth : providerHealth;
   const connection: ConnectionStatus = isStandalone ? 'online' : providerCtx?.connection ?? 'online';
 

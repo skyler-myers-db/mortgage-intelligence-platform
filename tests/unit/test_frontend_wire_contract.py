@@ -40,9 +40,8 @@ BINDING_EXEMPT: dict[str, str] = {
     "frontend/src/lib/apiClients/admin.ts:adminRules:1": _ADMIN_PASSTHROUGH,
     "frontend/src/lib/apiClients/admin.ts:adminSources:1": _ADMIN_PASSTHROUGH,
     "frontend/src/lib/apiClients/admin.ts:adminOperations:1": _ADMIN_PASSTHROUGH,
-    "frontend/src/lib/apiClients/admin.ts:adminCapabilities:1": _ADMIN_PASSTHROUGH,
     "frontend/src/lib/apiClients/admin.ts:adminRunOperation:1": (
-        f"{_ADMIN_PASSTHROUGH}; typeof payload body: request pair via Parameters<> in wireContract.admin.check.ts"
+        f"{_ADMIN_PASSTHROUGH}; the response only (the AdminOperationRunBody body is bound by its pair)"
     ),
     "frontend/src/lib/bootPrime.ts:usableJson:1": "T is inferred from the fallback transport call, which is itself bound",
 }

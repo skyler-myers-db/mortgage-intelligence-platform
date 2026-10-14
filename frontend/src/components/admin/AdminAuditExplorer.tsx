@@ -83,11 +83,8 @@ function ErrorBody(props: ErrorBodyProps) {
   );
 }
 
-interface AuditRollupRow {
-  bucket_start: string;
-  event_type: string;
-  event_count: number;
-}
+/** The rollups client's row (lib/apiClients/audit AuditRollupResponse): event_type is fail-closed nullable. */
+type AuditRollupRow = Awaited<ReturnType<typeof api.auditRollups>>[number];
 
 interface AuditCopyState {
   value: string;
@@ -354,11 +351,13 @@ export function AdminAuditExplorer() {
           {!rollupsWarming && !rollupsError && (
             <div className="admin-rollups__grid">
               {(rollups ?? []).slice(0, 6).map((row) => (
-                <div key={`${row.bucket_start}-${row.event_type}`} className="admin-rollup">
+                <div key={`${row.bucket_start}-${row.event_type ?? 'unrecorded'}`} className="admin-rollup">
                   <span className="fs-12">
-                    {auditEventLabel({ event_type: row.event_type, action: row.event_type })}
+                    {row.event_type === null
+                      ? 'Event type not recorded'
+                      : auditEventLabel({ event_type: row.event_type, action: row.event_type })}
                   </span>
-                  <span className="mono muted fs-11">{row.event_type}</span>
+                  <span className="mono muted fs-11">{row.event_type ?? '—'}</span>
                   <strong>{formatCount(row.event_count)}</strong>
                   <span className="muted fs-11">{formatAuditTimestamp(row.bucket_start)}</span>
                 </div>

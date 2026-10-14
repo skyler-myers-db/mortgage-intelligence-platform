@@ -35,8 +35,6 @@ export interface HealthHint {
 export interface HealthPayload {
   status: string;
   mode: string;
-  warehouse_id?: string | null;
-  app_env?: string;
   /**
    * `warehouse` / `lakebase` / `genie` -> a `DependencyState`. Plain strings
    * on purpose, like the backend's `dict[str, str]`: an unknown value must
@@ -65,7 +63,7 @@ export interface HealthPayload {
    * running process came from a bare deploy (treatment writes 503 and
    * status reports degraded). Absent on the anonymous liveness body.
    */
-  campaign_treatment_runtime?: string;
+  campaign_treatment_runtime?: string | null;
   /**
    * Commit the running backend was built from. Present only after a governed
    * scripts/deploy.sh promotion; bare deploys omit it. HealthProvider compares
