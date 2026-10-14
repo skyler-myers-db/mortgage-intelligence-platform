@@ -6,7 +6,9 @@ import { Suspense, useEffect, useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { Icon } from '../components/Icon';
 import { PageShell } from '../components/layout/PageShell';
+import { FetchedAt } from '../components/ui/FetchedAt';
 import { FilterSelect } from '../components/ui/FilterSelect';
+import { LazyStaleDataNote } from '../components/ui/StaleDataNote.lazy';
 import { MultiFilterSelect } from '../components/ui/MultiFilterSelect';
 import { useTabs } from '../components/ui/useTabs';
 import '../components/ui/LayoutTabs.css';
@@ -40,6 +42,16 @@ import { ANALYTICS_SKELETONS, AnalyticsSkeleton, type AnalyticsSkeletonShape } f
 import { ExecutiveView } from './analytics.executive';
 import { lazyView, warmChunk } from './analytics.lazyView';
 import { useRateWindowQuery } from './analytics.rate-window';
+import {
+  AnalyticsEmpty,
+  isEmptyExecutive,
+  isEmptyGeography,
+  isEmptySegments,
+  isEmptySignals,
+  refreshTab,
+  tabFreshness,
+  type TabRead,
+} from './analytics.tabStates';
 import { preloadBestEffort } from '../lib/lazyPreload';
 
 const TAB_IDS: readonly AnalyticsTab[] = TABS.map((item) => item.id);
@@ -204,7 +216,7 @@ export default function AnalyticsRoute() {
     },
   );
   // Start the Executive tab's rate window beside the executive read, not after it renders.
-  useRateWindowQuery(tab === 'executive');
+  const rateWindow = useRateWindowQuery(tab === 'executive');
   const executiveFiltersActive = Boolean(states.length || segmentCodes.length || lenderRelationship !== 'All' || targetLenderRef);
   const geography = useWarmingUpRetry<GeographyAnalyticsResponse>(
     (signal) => api.analyticsGeography(signal, baseFilters),
@@ -243,12 +255,48 @@ export default function AnalyticsRoute() {
     },
   );
 
+  // The active data tab's reads (states-09, delivery-05): their fetch age and
+  // one Refresh in the hero, and a stale marker over data whose refresh
+  // failed. Executive is two reads: the older fetch is the tab's age, and
+  // Refresh re-reads both. Approval funnel and Sales ops state their own
+  // as-of and period. Every analytics read is audit-free; Refresh is a click.
+  const TAB_READS: Partial<Record<AnalyticsTab, readonly TabRead[]>> = {
+    executive: [executive, rateWindow],
+    geography: [geography],
+    economics: [economics],
+    segments: [segments],
+    signals: [signals],
+  };
+  const tabReads = TAB_READS[tab] ?? null;
+  const freshness = tabReads ? tabFreshness(tabReads) : null;
+  // Clear data filters but stay on the current tab.
+  const clearFilters = () => {
+    const params = new URLSearchParams();
+    if (tab !== 'executive') params.set('view', tab);
+    setSearchParams(params);
+  };
+  const emptyTab = (active: boolean) => <AnalyticsEmpty filtersActive={active} onClearFilters={clearFilters} />;
+
   return (
     <PageShell
       eyebrow="Analytics"
       title="Analytics"
       lede="Command center for portfolio trends, geography, economics, segments, and evidence signals."
-      heroRight={<Link className="btn btn--primary" to="/ask-genie"><Icon name="sparkle" size={14} /> Ask Genie</Link>}
+      heroRight={
+        <>
+          {/* deviation:analytics-fetched-at: the active tab's own fetch age and
+              its one Refresh, before the primary action. */}
+          {tabReads && freshness && (
+            <FetchedAt
+              at={freshness.fetchedAt}
+              subject={TAB_SKELETON[tab].title.toLowerCase()}
+              isFetching={freshness.isFetching}
+              onRefresh={() => refreshTab(tabReads)}
+            />
+          )}
+          <Link className="btn btn--primary" to="/ask-genie"><Icon name="sparkle" size={14} /> Ask Genie</Link>
+        </>
+      }
     >
       <div className="layout-tabs analytics-tabs" {...tabs.tabListProps} aria-label="Analytics views">
         {TABS.map((item) => (
@@ -314,12 +362,7 @@ export default function AnalyticsRoute() {
           className="btn btn--sm"
           disabled={!filtersActive}
           aria-disabled={!filtersActive}
-          onClick={() => {
-            // Clear data filters but stay on the current tab.
-            const params = new URLSearchParams();
-            if (tab !== 'executive') params.set('view', tab);
-            setSearchParams(params);
-          }}
+          onClick={clearFilters}
         >
           Clear filters
         </button>
@@ -328,14 +371,28 @@ export default function AnalyticsRoute() {
 
       {/* Keyed by tab: a ?view= change shows the new tab's skeleton at once
           instead of holding the old tab while the chunk loads. */}
+      {/* The data on screen is not current: its refresh failed (states-09). */}
+      <LazyStaleDataNote lastGoodAt={freshness?.staleAt ?? null} />
       <Suspense key={tab} fallback={<AnalyticsSkeleton title={TAB_SKELETON[tab].title} shape={TAB_SKELETON[tab].shape} />}>
       {tab === 'executive' && (
-        <LoadState query={executive} title="Executive analytics" skeleton={ANALYTICS_SKELETONS.executive}>
+        <LoadState
+          query={executive}
+          title="Executive analytics"
+          skeleton={ANALYTICS_SKELETONS.executive}
+          isEmpty={isEmptyExecutive}
+          empty={emptyTab(executiveFiltersActive)}
+        >
           {(data) => <ExecutiveView data={data} leadParams={leadParams} filtersActive={executiveFiltersActive} />}
         </LoadState>
       )}
       {tab === 'geography' && (
-        <LoadState query={geography} title="Geography analytics" skeleton={ANALYTICS_SKELETONS.geography}>
+        <LoadState
+          query={geography}
+          title="Geography analytics"
+          skeleton={ANALYTICS_SKELETONS.geography}
+          isEmpty={isEmptyGeography}
+          empty={emptyTab(executiveFiltersActive)}
+        >
           {(data) => <GeographyView data={data} leadParams={leadParams} />}
         </LoadState>
       )}
@@ -345,12 +402,24 @@ export default function AnalyticsRoute() {
         </LoadState>
       )}
       {tab === 'segments' && (
-        <LoadState query={segments} title="Segment analytics" skeleton={ANALYTICS_SKELETONS.segments}>
+        <LoadState
+          query={segments}
+          title="Segment analytics"
+          skeleton={ANALYTICS_SKELETONS.segments}
+          isEmpty={isEmptySegments}
+          empty={emptyTab(executiveFiltersActive)}
+        >
           {(data) => <SegmentsView data={data} leadParams={leadParams} />}
         </LoadState>
       )}
       {tab === 'signals' && (
-        <LoadState query={signals} title="Signal analytics" skeleton={ANALYTICS_SKELETONS.signals}>
+        <LoadState
+          query={signals}
+          title="Signal analytics"
+          skeleton={ANALYTICS_SKELETONS.signals}
+          isEmpty={isEmptySignals}
+          empty={emptyTab(filtersActive)}
+        >
           {(data) => <SignalsView data={data} filterParams={{ states, segmentCodes, days, ...leadParams }} />}
         </LoadState>
       )}

@@ -29,6 +29,8 @@ vi.mock('../AppContext', () => ({
 const rate = vi.hoisted(() => ({
   data: null as unknown,
   error: null as Error | null,
+  isFetching: false,
+  dataUpdatedAt: null as number | null,
   calls: [] as Array<{ key: string; enabled: boolean }>,
 }));
 vi.mock('../../lib/useWarmingUpRetry', () => ({
@@ -39,9 +41,9 @@ vi.mock('../../lib/useWarmingUpRetry', () => ({
       warmingUp: null,
       error: rate.error,
       manualRetry: () => undefined,
-      isFetching: false,
+      isFetching: rate.isFetching,
       isPlaceholderData: false,
-      dataUpdatedAt: null,
+      dataUpdatedAt: rate.dataUpdatedAt,
       errorUpdatedAt: null,
     };
   },
@@ -152,6 +154,8 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     showEvidence = true;
     rate.data = null;
     rate.error = null;
+    rate.isFetching = false;
+    rate.dataUpdatedAt = null;
     rate.calls = [];
   });
 
@@ -359,5 +363,27 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     expect(triggerLink(0)).toBe('/lead-queue?purchase_intent=Listed+for+sale');
     expect(triggerLink(1)).toBe('/lead-queue?lender_relationship=Competitor+customer');
     expect(triggerLink(2)).toBe('/lead-queue?funnel_stage=offer_recommended');
+  });
+
+  // W5e w5-analytics (delivery-05, the W5a ruling): a rate window restored
+  // from the persisted snapshot is the last session's prints. No "since your
+  // last visit" row comes from it while its fresh read is in flight.
+  it('holds back the rate move from a restored window until its fresh read lands', () => {
+    rate.data = RATE_WINDOW;
+    rate.dataUpdatedAt = performance.timeOrigin - 3_600_000;
+    rate.isFetching = true;
+    render(DELTA_SUMMARY);
+    expect(container.querySelector('[data-testid="why-now-rate-move"]')).toBeNull();
+    // The triggers render as before.
+    expect(chips().map((chip) => chip.textContent)).toEqual(['+1.5%', '+2,250', '+4,120']);
+    // The fresh read lands (a fetch of this document): the row returns.
+    rate.isFetching = false;
+    rate.dataUpdatedAt = performance.timeOrigin + 1_000;
+    render(DELTA_SUMMARY);
+    expect(container.querySelector('[data-testid="why-now-rate-move"]')).not.toBeNull();
+    // A window this document fetched shows even while a refetch runs.
+    rate.isFetching = true;
+    render(DELTA_SUMMARY);
+    expect(container.querySelector('[data-testid="why-now-rate-move"]')).not.toBeNull();
   });
 });

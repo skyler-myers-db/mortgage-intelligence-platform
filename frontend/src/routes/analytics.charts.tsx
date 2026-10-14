@@ -10,9 +10,8 @@ import {
   type ReactNode,
 } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Icon } from '../components/Icon';
+import { AsyncStatus } from '../components/ui/AsyncState';
 import { Tooltip } from '../components/ui/Tooltip';
-import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { type UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
 import { useFirstAppearance } from '../lib/useFirstAppearance';
 import { CountChart } from '../components/charts/CountChart';
@@ -35,19 +34,36 @@ import {
 } from './analytics.lib';
 import { AnalyticsSkeleton, ANALYTICS_SKELETONS, type AnalyticsSkeletonShape } from './analytics.skeleton';
 
+/**
+ * An Analytics panel's four states (2026-09-21 audit states-04, states-03,
+ * states-v2). Data keeps its stable-refresh region; a first load reserves the
+ * loaded shape; warming and failure render the shared AsyncStatus vocabulary
+ * (the calm bannered status under a DegradedBanner, whose recovery refetches
+ * these reads; never the transport message); `empty` shows only for a
+ * settled, measured zero, never on the previous filters' placeholder rows.
+ */
 export function LoadState<T>({
   query,
   title,
   skeleton = ANALYTICS_SKELETONS.panel,
+  isEmpty,
+  empty = null,
   children,
 }: {
   query: UseWarmingUpRetryResult<T>;
+  /** The panel's name, sentence case; also the failure's subject. */
   title: string;
   /** The loaded view's shape, reserved while it loads (analytics.skeleton.tsx). */
   skeleton?: AnalyticsSkeletonShape;
+  /** True for a payload with nothing in it. */
+  isEmpty?: (data: T) => boolean;
+  empty?: ReactNode;
   children: (data: T) => ReactNode;
 }) {
   if (query.data) {
+    if (isEmpty?.(query.data) && !query.isPlaceholderData && query.error === null && query.warmingUp === null) {
+      return <>{empty}</>;
+    }
     const updating = query.isFetching || Boolean(query.warmingUp);
     return (
       <div
@@ -63,28 +79,16 @@ export function LoadState<T>({
       </div>
     );
   }
-  if (query.warmingUp) {
-    return <WarmingUpBlock state={query.warmingUp} title={title} compact />;
-  }
-  if (query.error) {
-    return (
-      <div className="surface surface--danger">
-        <div className="surface__hdr surface__hdr--split">
-          <div className="surface__hdr-main">
-            <div className="surface__icon"><Icon name="info" size={14} /></div>
-            <h2 className="h-3">{title}</h2>
-          </div>
-          <button type="button" className="btn btn--sm" onClick={query.manualRetry}>
-            Retry
-          </button>
-        </div>
-        <div className="surface__body body">
-          {query.error.message || 'Analytics are unavailable.'}
-        </div>
-      </div>
-    );
-  }
-  return <AnalyticsSkeleton title={title} shape={skeleton} />;
+  const status = <AsyncStatus query={query} subject={title} compact />;
+  // A failure: AsyncFailure's copy and its one Retry.
+  if (query.error) return status;
+  // Warming: the block (it steps aside under the banner), the slot kept.
+  return (
+    <>
+      {query.warmingUp ? status : null}
+      <AnalyticsSkeleton title={title} shape={skeleton} />
+    </>
+  );
 }
 
 export function SectionHeader({ title, action }: { title: string; action?: ReactNode }) {

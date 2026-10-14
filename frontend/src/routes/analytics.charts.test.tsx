@@ -4,7 +4,8 @@ import { act, type ReactElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { preloadAsyncFailure } from '../components/ui/AsyncState';
 import type { UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
 import { designCss } from '../test/designCss';
 import { histogramModel } from './analytics.chart-model';
@@ -172,6 +173,84 @@ describe('LoadState stale-while-refreshing contract', () => {
 
     expect(html).not.toContain('stable-refresh-status');
     expect(html).not.toContain('aria-busy');
+  });
+});
+
+describe('LoadState shared states (states-04, states-v2)', () => {
+  beforeAll(async () => {
+    await preloadAsyncFailure();
+  });
+
+  const view = (overrides: Partial<UseWarmingUpRetryResult<{ value: number }>>, extra: { empty?: boolean } = {}) => {
+    const host = document.body.appendChild(document.createElement('div'));
+    const root = createRoot(host);
+    act(() => root.render(
+      <LoadState
+        query={query(overrides)}
+        title="Executive analytics"
+        isEmpty={extra.empty === undefined ? undefined : (data) => data.value === 0}
+        empty={<p data-testid="empty-slot">Empty</p>}
+      >
+        {(data) => <div data-testid="loaded">Value {data.value}</div>}
+      </LoadState>,
+    ));
+    return { host, done: () => { act(() => root.unmount()); host.remove(); } };
+  };
+
+  it('never prints the transport message, and its Retry is the shared failure one', () => {
+    const retry = vi.fn();
+    const { host, done } = view({ data: null, error: new Error('500 Internal Server Error'), manualRetry: retry });
+    try {
+      expect(host.textContent).not.toContain('500 Internal Server Error');
+      expect(host.querySelector('[data-async-status]')).not.toBeNull();
+      const button = [...host.querySelectorAll('button')].find((item) => item.textContent?.includes('Retry'));
+      act(() => button?.click());
+      expect(retry).toHaveBeenCalledTimes(1);
+      expect(host.querySelector('.surface--danger')).toBeNull();
+    } finally {
+      done();
+    }
+  });
+
+  it('keeps the skeleton beside the warming block', () => {
+    const { host, done } = view({
+      data: null,
+      warmingUp: { dependency: 'warehouse', label: 'Warehouse warming up', attempt: 1, maxAttempts: 6, correlationId: null },
+    });
+    try {
+      expect(host.querySelector('[data-analytics-skeleton]')).not.toBeNull();
+      expect(host.textContent).toContain('Warehouse warming up');
+    } finally {
+      done();
+    }
+  });
+
+  it('shows the empty slot only for a settled, measured zero', () => {
+    const settled = view({ data: { value: 0 } }, { empty: true });
+    try {
+      expect(settled.host.querySelector('[data-testid="empty-slot"]')).not.toBeNull();
+      expect(settled.host.querySelector('[data-testid="loaded"]')).toBeNull();
+    } finally {
+      settled.done();
+    }
+    for (const overrides of [
+      { data: { value: 0 }, isPlaceholderData: true },
+      { data: { value: 0 }, error: new Error('refresh failed') },
+      { data: { value: 0 }, warmingUp: { dependency: 'warehouse', label: 'Warehouse warming up', attempt: 1, maxAttempts: 6, correlationId: null } },
+    ] satisfies Array<Partial<UseWarmingUpRetryResult<{ value: number }>>>) {
+      const shown = view(overrides, { empty: true });
+      try {
+        expect(shown.host.querySelector('[data-testid="empty-slot"]'), JSON.stringify(Object.keys(overrides))).toBeNull();
+      } finally {
+        shown.done();
+      }
+    }
+    const nonEmpty = view({ data: { value: 3 } }, { empty: true });
+    try {
+      expect(nonEmpty.host.querySelector('[data-testid="loaded"]')).not.toBeNull();
+    } finally {
+      nonEmpty.done();
+    }
   });
 });
 
