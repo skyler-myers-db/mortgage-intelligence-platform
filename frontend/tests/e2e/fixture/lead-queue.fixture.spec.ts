@@ -384,11 +384,9 @@ async function addScrollRoom(page: Page): Promise<void> {
 /**
  * Scroll `.main` so `target` sits entirely behind the sticky route nav. The
  * browser counts a control there as in view, so without a clearance a focus
- * leaves it hidden under the nav. A control inside the table's own scroller
- * is first brought inside that scroller's box (its bottom edge): clipped
- * below it, the control is out of view and a focus scrolls it whatever the
- * margins (the expanded row's Approve sits under the 480px scroller's
- * bottom edge since the preview's chip row wraps, W5e More like this).
+ * leaves it hidden under the nav. A control clipped below the table's own
+ * scroller is out of view (a focus scrolls it whatever the margins): first
+ * bring it inside (the expanded row's Approve, since its chip row wraps).
  */
 async function behindRouteNav(page: Page, target: Locator): Promise<void> {
   await addScrollRoom(page);
@@ -397,10 +395,7 @@ async function behindRouteNav(page: Page, target: Locator): Promise<void> {
     const nav = main?.querySelector<HTMLElement>('.route-nav');
     if (!main || !nav || getComputedStyle(nav).position !== 'sticky') throw new Error('no sticky route nav');
     const scroller = element.closest<HTMLElement>('.tbl-wrap');
-    if (scroller) {
-      const below = element.getBoundingClientRect().bottom - scroller.getBoundingClientRect().bottom;
-      if (below > 0) scroller.scrollTop += below;
-    }
+    if (scroller) scroller.scrollTop += Math.max(0, element.getBoundingClientRect().bottom - scroller.getBoundingClientRect().bottom);
     main.scrollTop += element.getBoundingClientRect().top - (nav.getBoundingClientRect().top + 2);
     const box = element.getBoundingClientRect();
     const band = nav.getBoundingClientRect();
