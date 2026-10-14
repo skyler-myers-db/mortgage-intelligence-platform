@@ -149,6 +149,13 @@ const DATA_MARKS = [
   // inside a bar edged in CanvasText (DistributionBoard.css).
   '.distribution-board__seg--added',
   '.distribution-board__over',
+  // Floored funnel stages and bars (W5e w5-analytics, D-dataviz-geo-a): a
+  // dashed CanvasText edge, a Canvas / CanvasText hatch, a dashed outline
+  // (10-native-analytics.css).
+  '.funnel-sankey__bar--floored.funnel-sankey__bar--floored',
+  '.funnel-sankey__hatch-bg',
+  '.funnel-sankey__hatch-line',
+  '.analytics-bars__fill--floored.analytics-bars__fill--floored',
 ];
 
 /** The Highlight-filled interactive states that paint the system pair themselves (W5b, Firefox backplate). */

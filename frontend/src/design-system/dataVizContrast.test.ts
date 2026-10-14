@@ -40,6 +40,9 @@ const DATA_MARK_SELECTORS = [
   '.genie-line__point',
   '.genie-bars__bar',
   '.chart-hist__bar--past',
+  // Floored marks (D-dataviz-geo-a): the hatch and the outline paint the data ink.
+  '.funnel-sankey__bar--floored',
+  '.analytics-bars__fill--floored',
 ];
 
 /** TSX sites that paint a data mark inline. The Genie line and bar charts

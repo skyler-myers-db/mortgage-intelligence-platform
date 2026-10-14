@@ -15,6 +15,7 @@ import {
   activationFunnelStages,
   buildFunnelSankeyModel,
   formatConversionPct,
+  formatShareOfAddressable,
 } from './analytics.lib';
 
 // Sources mirror the server's per-stage provenance; the geometry ignores them.
@@ -175,6 +176,63 @@ describe('buildFunnelSankeyModel (pure geometry)', () => {
     expect(model.ribbons).toEqual([]);
   });
 
+  // D-dataviz-geo-a (ruled 2026-09-30): the live magnitudes stay LINEAR.
+  it('draws the live magnitudes linearly, flooring stages two to five at 12', () => {
+    const model = buildFunnelSankeyModel([
+      { stage: 'Addressable', stage_order: 1, borrower_count: 5_160_000, source: POP },
+      { stage: 'In the Money', stage_order: 2, borrower_count: 135_520, source: POP },
+      { stage: 'Opportunity Score 75+', stage_order: 3, borrower_count: 4_350, source: POP },
+      { stage: 'Approved', stage_order: 5, borrower_count: 23, source: WORKFLOW },
+      { stage: 'Actioned', stage_order: 6, borrower_count: 3, source: WORKFLOW },
+    ]);
+    expect(model.addressableCount).toBe(5_160_000);
+    expect(model.nodes[0].height).toBe(152);
+    expect(model.nodes[0].clamped).toBe(false);
+    // Named: a sqrt scale would draw 135,520 at 24.6 (16% of the tallest bar
+    // against a printed 2.6%); linear floors it at the minimum 12.
+    expect(model.nodes[1].height, 'In the Money is floored at 12 (sqrt would give 24.6)').toBe(12);
+    for (const node of model.nodes.slice(1)) {
+      expect(node.height).toBe(12);
+      expect(node.clamped).toBe(true);
+    }
+  });
+
+  it('labels a share of addressable, and a stage under 0.1% as 1 in N', () => {
+    const live = [5_160_000, 135_520, 4_350, 23, 3] as const;
+    expect(live.slice(1).map((count) => formatShareOfAddressable(count, live[0]))).toEqual([
+      '2.6% of addressable',
+      '1 in 1,186 addressable',
+      '1 in 224.3K addressable',
+      '1 in 1.7M addressable',
+    ]);
+    const fixture = [5_156_184, 117_189, 3_990, 35, 3] as const;
+    expect(fixture.slice(1).map((count) => formatShareOfAddressable(count, fixture[0]))).toEqual([
+      '2.3% of addressable',
+      '1 in 1,292 addressable',
+      '1 in 147.3K addressable',
+      '1 in 1.7M addressable',
+    ]);
+    expect(formatShareOfAddressable(0, 1_000)).toBe('0.0% of addressable');
+    expect(formatShareOfAddressable(1, 1_000)).toBe('0.1% of addressable');
+    expect(formatShareOfAddressable(1, 9_999)).toBe('1 in 9,999 addressable');
+    expect(formatShareOfAddressable(1, 10_000)).toBe('1 in 10K addressable');
+    expect(formatShareOfAddressable(3, 4_000)).toBe('1 in 1,333 addressable');
+    // N is rounded from the two integers, never from 1 / share: 2,003 / 2 is
+    // exactly 1,001.5, while 1 / (2 / 2,003) is 1,001.4999... in floating point.
+    expect(formatShareOfAddressable(2, 2_003)).toBe('1 in 1,002 addressable');
+  });
+
+  it('prints no share against a missing, empty or smaller Addressable', () => {
+    expect(formatShareOfAddressable(5, null)).toBeNull();
+    expect(formatShareOfAddressable(5, 0)).toBeNull();
+    expect(formatShareOfAddressable(5, -10)).toBeNull();
+    expect(formatShareOfAddressable(5, Number.NaN)).toBeNull();
+    expect(formatShareOfAddressable(5, Number.POSITIVE_INFINITY)).toBeNull();
+    expect(formatShareOfAddressable(1_100, 1_000)).toBeNull();
+    expect(formatShareOfAddressable(1_000, 1_000)).toBe('100% of addressable');
+    expect(buildFunnelSankeyModel([]).addressableCount).toBeNull();
+  });
+
   it('formats conversion percent compactly and suppresses meaningless values', () => {
     expect(formatConversionPct(null)).toBeNull();
     expect(formatConversionPct(0.0427)).toBe('4.3%');
@@ -238,18 +296,24 @@ describe('FunnelSankey (render + a11y)', () => {
     // The accessible name reads the exact count; only the drawn node label
     // is compact (2026-09-21 audit responsive-04: lib/formatters).
     expect(labels[0]).toBe('Addressable: 5,156,184 borrowers. Open in lead queue.');
-    expect(labels[1]).toBe('Refi economics: 117,189 borrowers, 2.3% of addressable. Open in lead queue.');
+    expect(labels[1]).toBe(
+      'Refi economics: 117,189 borrowers, 2.3% of addressable (drawn at minimum size, not to scale). Open in lead queue.',
+    );
     // 3,990 / 117,189 = 3.4% was the published "conversion"; the honest
-    // figure is 3,990 / 5,156,184 = 0.1% of addressable.
-    expect(labels[2]).toContain('0.1% of addressable');
+    // figure is 3,990 of 5,156,184 addressable, 1 in 1,292 (D-dataviz-geo-a).
+    expect(labels[2]).toContain('1 in 1,292 addressable');
     expect(labels[2]).not.toContain('3.4%');
     expect(labels[3]).toContain('87% of addressable'); // offers: a share, not ">100% conversion"
-    expect(labels[4]).toBe('Approved: 35 borrowers, <0.1% of addressable. Open in lead queue.');
+    expect(labels[3]).not.toContain('not to scale'); // Primary offer selected draws in proportion
+    expect(labels[4]).toBe(
+      'Approved: 35 borrowers, 1 in 147.3K addressable (drawn at minimum size, not to scale). Open in lead queue.',
+    );
     // Visible text mirrors the accessible name.
     const printed = (link: Element) => [...link.querySelectorAll('.funnel-sankey__conv')].map((t) => t.textContent);
     expect(printed(links[0])).toEqual([]);
     expect(printed(links[1])).toEqual(['2.3% of addressable']);
-    expect(printed(links[4])).toEqual(['<0.1% of addressable']);
+    expect(printed(links[4])).toEqual(['1 in 147.3K addressable']);
+    expect(links[1].querySelector('[data-ratio="share-of-addressable"]')?.textContent).toBe('2.3% of addressable');
   });
 
   it('keeps a conversion label only on Actioned, measured against Approved', () => {
@@ -258,7 +322,7 @@ describe('FunnelSankey (render + a11y)', () => {
     const conversions = links.map((l) => l.querySelector('[data-ratio="nested-conversion"]')?.textContent ?? null);
     expect(conversions).toEqual([null, null, null, null, null, '8.6% of approved']);
     expect(links[5].getAttribute('aria-label')).toBe(
-      'Actioned: 3 borrowers, <0.1% of addressable, 8.6% of approved. Open in lead queue.',
+      'Actioned: 3 borrowers, 1 in 1.7M addressable, 8.6% of approved (drawn at minimum size, not to scale). Open in lead queue.',
     );
     // The two lines and the count stack without sharing a baseline.
     const ys = [...links[5].querySelectorAll('text')].slice(0, 3).map((t) => Number(t.getAttribute('y')));
@@ -268,15 +332,70 @@ describe('FunnelSankey (render + a11y)', () => {
   it('says the chart is not to scale whenever a stage is drawn at the minimum thickness', () => {
     mount(activationFunnelStages(STAGES));
     const note = container.querySelector('[data-testid="funnel-sankey-scale-note"]');
-    expect(note?.textContent).toContain('Not to scale');
-    expect(note?.textContent).toContain('exact');
+    expect(note?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'Not to scale: hatched stages are too small to draw in proportion and are shown at a minimum thickness. '
+        + 'The printed counts and shares of addressable are exact.',
+    );
     const svgLabel = container.querySelector('svg')!.getAttribute('aria-label') ?? '';
     expect(svgLabel).toContain('share of the addressable population');
     expect(svgLabel).toContain('not a conversion');
-    expect(svgLabel).toContain('not to scale');
+    expect(svgLabel).toContain(' Hatched stages and the ribbons into them are not to scale.');
     // Drawn, not hairline: every bar is at least the visible minimum.
     const heights = [...container.querySelectorAll('.funnel-sankey__bar')].map((b) => Number(b.getAttribute('height')));
     expect(Math.min(...heights)).toBeGreaterThanOrEqual(SANKEY_VIEW.minNodeHeight);
+  });
+
+  it('hatches the floored stages and the ribbons into them, never through the fill attribute', () => {
+    mount(activationFunnelStages(STAGES));
+    const svg = container.querySelector('svg')!;
+    const floorId = svg.querySelector('pattern[id^="fs-floor-"]')?.id ?? '';
+    const ribbonFloorId = svg.querySelector('pattern[id^="fs-ribbon-floor-"]')?.id ?? '';
+    expect(floorId).not.toBe('');
+    expect(ribbonFloorId).not.toBe('');
+    const bars = [...svg.querySelectorAll('rect.funnel-sankey__bar')];
+    const floored = bars.filter((bar) => bar.classList.contains('funnel-sankey__bar--floored'));
+    expect(floored).toHaveLength(4);
+    expect(bars[0].classList.contains('funnel-sankey__bar--floored')).toBe(false);
+    expect(bars[0].hasAttribute('data-to-scale')).toBe(false);
+    for (const bar of floored) {
+      expect(bar.getAttribute('data-to-scale')).toBe('false');
+      expect((bar as SVGElement).style.getPropertyValue('--floor-fill')).toBe(`url(#${floorId})`);
+      expect(bar.hasAttribute('fill')).toBe(false);
+    }
+    // Every ribbon INTO a floored stage is floored: 4 of 4 at live magnitudes.
+    const ribbons = [...svg.querySelectorAll('path.funnel-sankey__ribbon')];
+    const flooredRibbons = ribbons.filter((ribbon) => ribbon.classList.contains('funnel-sankey__ribbon--floored'));
+    expect(flooredRibbons).toHaveLength(4);
+    for (const ribbon of flooredRibbons) {
+      expect(ribbon.getAttribute('data-to-scale')).toBe('false');
+      expect((ribbon as SVGElement).style.getPropertyValue('--floor-fill')).toBe(`url(#${ribbonFloorId})`);
+      expect((ribbon as SVGElement).style.getPropertyValue('--ribbon-i')).not.toBe('');
+    }
+  });
+
+  it('leaves a ribbon into a stage drawn to scale unhatched', () => {
+    mount([
+      { stage: 'Addressable', stage_order: 1, borrower_count: 1000, source: POP },
+      { stage: 'Refi Economics', stage_order: 2, borrower_count: 500, source: POP },
+      { stage: 'Approved', stage_order: 5, borrower_count: 1, source: WORKFLOW },
+    ]);
+    const ribbons = [...container.querySelectorAll('path.funnel-sankey__ribbon')];
+    expect(ribbons.map((ribbon) => ribbon.classList.contains('funnel-sankey__ribbon--floored'))).toEqual([false, true]);
+    const links = [...container.querySelectorAll('[role="link"]')];
+    expect(links[1].getAttribute('aria-label')).not.toContain('not to scale');
+    expect(links[2].getAttribute('aria-label')).toContain('(drawn at minimum size, not to scale). Open in lead queue.');
+  });
+
+  it('gives two Sankeys on one page their own pattern ids', () => {
+    act(() => root.render(
+      <>
+        <FunnelSankey stages={activationFunnelStages(STAGES)} />
+        <FunnelSankey stages={activationFunnelStages(STAGES)} />
+      </>,
+    ));
+    const ids = [...container.querySelectorAll('pattern')].map((pattern) => pattern.id);
+    expect(ids).toHaveLength(4);
+    expect(new Set(ids).size).toBe(4);
   });
 
   it('omits the not-to-scale note when every stage is drawn in proportion', () => {

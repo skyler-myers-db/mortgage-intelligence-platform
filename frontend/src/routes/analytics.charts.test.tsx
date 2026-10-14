@@ -6,10 +6,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
 import { designCss } from '../test/designCss';
 import { histogramModel } from './analytics.chart-model';
-import { BAR_FLOOR_PCT, Bars, HistogramTable, LoadState } from './analytics.charts';
+import type { FunnelStage } from '../types';
+import { BAR_FLOOR_PCT, Bars, FunnelBars, HistogramTable, LoadState } from './analytics.charts';
 
 /** Rendered `--bar-pct` of each bar fill, and the not-to-scale note, in the DOM Bars produces. */
-function renderBars(values: number[]): { pcts: string[]; note: string | null } {
+function renderBars(values: number[]): { pcts: string[]; note: string | null; host: HTMLElement } {
   const host = document.createElement('div');
   host.innerHTML = renderToStaticMarkup(
     <MemoryRouter>
@@ -19,22 +20,68 @@ function renderBars(values: number[]): { pcts: string[]; note: string | null } {
   return {
     pcts: [...host.querySelectorAll<HTMLElement>('.analytics-bars__fill')].map((fill) => fill.style.getPropertyValue('--bar-pct')),
     note: host.querySelector('[data-testid="bars-scale-note"]')?.textContent ?? null,
+    host,
   };
+}
+
+/** Per row: whether its fill is floored, its data-to-scale, and its screen-reader suffix. */
+function flooredRows(host: HTMLElement) {
+  return [...host.querySelectorAll('.analytics-bars__row')].map((row) => ({
+    floored: row.querySelector('.analytics-bars__fill')?.classList.contains('analytics-bars__fill--floored') ?? false,
+    toScale: row.querySelector('.analytics-bars__fill')?.getAttribute('data-to-scale') ?? null,
+    suffix: row.querySelector('.sr-only')?.textContent ?? null,
+  }));
 }
 
 describe('Bars scale (dataviz-03)', () => {
   it('floors a tiny non-zero bar at BAR_FLOOR_PCT and says the bars are not to scale', () => {
-    const { pcts, note } = renderBars([5_160_000, 4_350, 23, 0]);
+    const { pcts, note, host } = renderBars([5_160_000, 4_350, 23, 0]);
     expect(pcts).toEqual(['100%', `${BAR_FLOOR_PCT}%`, `${BAR_FLOOR_PCT}%`, '0%']);
     expect(note).toBe(
-      `Not to scale: bars under ${BAR_FLOOR_PCT}% of the largest are drawn at a minimum length. The printed values are exact.`,
+      `Not to scale: outlined bars are under ${BAR_FLOOR_PCT}% of the largest and are drawn at a minimum length. The printed values are exact.`,
     );
+    // D-dataviz-geo-a: the floored rows say so, the others do not (a zero
+    // draws no fill, so it is not floored either).
+    const suffix = ', drawn at minimum length, not to scale';
+    expect(flooredRows(host)).toEqual([
+      { floored: false, toScale: null, suffix: null },
+      { floored: true, toScale: 'false', suffix },
+      { floored: true, toScale: 'false', suffix },
+      { floored: false, toScale: null, suffix: null },
+    ]);
+  });
+
+  it('keeps Primary offer selected unfloored among the six Pipeline Metrics stages', () => {
+    const stage = (stage: string, stage_order: number, borrower_count: number): FunnelStage => ({
+      stage,
+      stage_order,
+      borrower_count,
+      source: 'mip.gold.borrower_360',
+    });
+    const host = document.createElement('div');
+    host.innerHTML = renderToStaticMarkup(
+      <MemoryRouter>
+        <FunnelBars
+          stages={[
+            stage('Addressable', 1, 5_160_000),
+            stage('In the Money', 2, 135_520),
+            stage('Opportunity Score 75+', 3, 4_350),
+            stage('Primary Offer Selected', 4, 4_467_395),
+            stage('Approved', 5, 23),
+            stage('Actioned', 6, 3),
+          ]}
+        />
+      </MemoryRouter>,
+    );
+    // In the Money (2.6%) and Primary offer selected (87%) draw to scale.
+    expect(flooredRows(host).map((row) => row.floored)).toEqual([false, false, true, false, true, true]);
   });
 
   it('draws every bar at its linear share, zero as no fill, and adds no note when none is floored', () => {
-    const { pcts, note } = renderBars([400, 100, 0]);
+    const { pcts, note, host } = renderBars([400, 100, 0]);
     expect(pcts).toEqual(['100%', '25%', '0%']);
     expect(note).toBeNull();
+    expect(flooredRows(host).some((row) => row.floored || row.suffix !== null)).toBe(false);
   });
 
   it('keeps no CSS minimum width that would floor a bar behind the note', () => {
