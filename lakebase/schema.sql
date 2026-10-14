@@ -4309,7 +4309,7 @@ CREATE INDEX IF NOT EXISTS idx_approvals_follow_up_open
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
-    '2026_10_0X_followups_index',
+    '2026_10_14_followups_index',
     'Follow-ups tray: partial index on open approval follow-ups'
 )
 ON CONFLICT (version) DO NOTHING;

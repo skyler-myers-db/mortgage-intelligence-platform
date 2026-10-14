@@ -34,8 +34,8 @@ from tests.fixtures.lakebase_contract_prefix import contract_as_of
 
 pytestmark = pytest.mark.integration
 
-#: A placeholder the integrator dates at the W5d merge (tail order: first).
-FOLLOWUPS_INDEX_VERSION = "2026_10_0X_followups_index"
+#: Dated at the W5d merge: the first of the W5d blocks, after 2026_10_07_rum_daily.
+FOLLOWUPS_INDEX_VERSION = "2026_10_14_followups_index"
 _MARKER = "-- Follow-ups due index ---"
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 _SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
