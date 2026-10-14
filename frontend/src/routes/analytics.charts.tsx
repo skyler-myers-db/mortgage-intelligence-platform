@@ -86,7 +86,7 @@ export function LoadState<T>({
   return (
     <>
       {query.warmingUp ? status : null}
-      <AnalyticsSkeleton title={title} shape={skeleton} />
+      <AnalyticsSkeleton title={title} shape={skeleton} reserve={Boolean(query.warmingUp)} />
     </>
   );
 }

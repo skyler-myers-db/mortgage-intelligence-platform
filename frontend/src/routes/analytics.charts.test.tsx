@@ -212,14 +212,19 @@ describe('LoadState shared states (states-04, states-v2)', () => {
     }
   });
 
-  it('keeps the skeleton beside the warming block', () => {
+  it('keeps the skeleton beside the warming block, as a hidden shape that is never busy', () => {
     const { host, done } = view({
       data: null,
       warmingUp: { dependency: 'warehouse', label: 'Warehouse warming up', attempt: 1, maxAttempts: 6, correlationId: null },
     });
     try {
-      expect(host.querySelector('[data-analytics-skeleton]')).not.toBeNull();
+      const skeleton = host.querySelector('[data-analytics-skeleton]');
+      expect(skeleton).not.toBeNull();
       expect(host.textContent).toContain('Warehouse warming up');
+      // The warming status speaks; a warm-up that outlasts the page is not an endless busy region.
+      expect(host.querySelectorAll('[aria-busy="true"]')).toHaveLength(0);
+      expect(skeleton?.getAttribute('aria-hidden')).toBe('true');
+      expect(skeleton?.getAttribute('role')).toBeNull();
     } finally {
       done();
     }
