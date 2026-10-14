@@ -38,6 +38,7 @@ import { BorrowerTitle } from './borrower-360.title';
 import { useQueueContext } from '../lib/queueContext';
 import { saveDataRequested } from '../lib/prefetch';
 import { preloadRouteForPath } from '../lib/routePreloaders';
+import './borrower-360.css';
 
 // The proof drawer ships in the lazy Score anatomy chunk (wow-stage-2): the
 // dossier's natural load does not carry it. It is mounted (closed) on the
@@ -361,10 +362,13 @@ export default function Borrower360() {
               Latest decision
             </Button>
           )}
+          {/* The class lets the actions wrap rather than truncate once
+              Latest decision joins them (borrower-360.css; deviation:print-export). */}
           <Button
             variant="ghost"
             size="sm"
             icon="export"
+            className="b360-export-pdf"
             loading={print.pending}
             onClick={print.run}
             data-testid="export-pdf"

@@ -23,13 +23,19 @@
  *  - D-platform-process-g / bundle-09: the Borrower 360 In the Money labels,
  *    and intent on 'Build outreach draft' fetching the Offer chunk with zero
  *    /api calls.
+ *  - responsive-08 hero: with a recorded decision ('Latest decision') beside
+ *    Export PDF, the Borrower 360 hero actions wrap instead of shrinking, so
+ *    no chip truncates and the Signal meter keeps one line (1440x900 and
+ *    1280x720, both themes, Console open and closed, at Linux text widths).
  * The new states' axe scans are axe.fixture.spec.ts (EXTRA_STATES).
  */
 import type { Page } from '@playwright/test';
-import type { SessionResponse } from '../../../src/types';
+import type { BorrowerLifecycle, SessionResponse } from '../../../src/types';
 import type { FixtureTheme } from './app';
-import { PRIMARY_BORROWER } from './data/borrowers';
+import { BORROWERS, PRIMARY_BORROWER } from './data/borrowers';
+import { APPROVE_AUDIT_ID, decidedLifecycle } from './data/decisionReceipt';
 import { PRINT_RECEIPT_ID, printReceiptFor } from './data/printReceipt';
+import { SNAPSHOT_AT } from './data/reference';
 import { AUDITOR_ONLY_SESSION } from './data/shell';
 import { json, type MockApi } from './mockApi';
 import { expect, test } from './test';
@@ -458,4 +464,97 @@ test.describe('Borrower 360 (D-platform-process-g, bundle-09)', () => {
     await page.waitForTimeout(300);
     expect(callsSince(mockApi, before), 'the chunk only: no Offer read, no audit row').toEqual([]);
   });
+});
+
+/**
+ * Linux Chromium draws Geist Mono about 6% wider (the LINUX_TEXT_EMULATION
+ * pattern of charts.fixture.spec.ts): off Linux the hero actions' text is
+ * widened past that, +0.5px per glyph over each item's own tracking, so an
+ * actions row that only fits at macOS widths fails here too.
+ */
+const HERO_LINUX_TEXT_EMULATION = `
+  .proto-hero__actions .chip { letter-spacing: calc(0.02em + 0.5px); }
+  .proto-hero__actions .conf, .proto-hero__actions .score, .proto-hero__actions .btn { letter-spacing: calc(var(--tracking-body, 0px) + 0.5px); }
+`;
+const HERO_VIEWPORTS = [{ width: 1440, height: 900 }, { width: 1280, height: 720 }] as const;
+
+async function setConsole(page: Page, open: boolean): Promise<void> {
+  const body = page.getByRole('complementary', { name: 'Workspace console' }).locator('.tweaks__body');
+  if ((await body.isVisible().catch(() => false)) !== open) {
+    await page.getByRole('banner').getByRole('button', { name: 'Toggle console' }).click();
+  }
+  if (open) await expect(body).toBeVisible();
+  else await expect(body).toBeHidden();
+  // The shell's column change is a transition: measure the settled layout.
+  await page.evaluate(async () => {
+    await Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined)));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+}
+
+/**
+ * What a reader of the hero would see go wrong: a truncated item (its text
+ * wider than its box), the Signal meter's label broken onto a second line,
+ * an action drawn over the title block, or one pushed past the hero's edge.
+ */
+async function heroDefects(page: Page): Promise<{ truncated: string[]; meterLines: number; overTitle: string[]; pastHero: string[] }> {
+  return page.locator('#main-content .proto-hero').evaluate((hero) => {
+    const actions = hero.querySelector('.proto-hero__actions');
+    const title = hero.firstElementChild?.getBoundingClientRect();
+    if (!actions || !title) return { truncated: ['no hero actions'], meterLines: 0, overTitle: [], pastHero: [] };
+    const heroBox = hero.getBoundingClientRect();
+    const name = (element: Element) => element.textContent?.trim() || element.className;
+    const items = [...actions.children];
+    // A chip's text sits in its own `.chip__label`, which is what ellipsizes:
+    // read every box in the actions, the chips, the meter and the labels.
+    const truncated = [...actions.querySelectorAll('*')]
+      .filter((element) => element instanceof HTMLElement && element.clientWidth > 0 && element.scrollWidth > element.clientWidth)
+      .map(name);
+    const label = actions.querySelector('.conf > span:last-child');
+    const range = document.createRange();
+    if (label) range.selectNodeContents(label);
+    const meterLines = label ? new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size : 0;
+    const overTitle = items
+      .filter((element) => {
+        const box = element.getBoundingClientRect();
+        return box.left < title.right - 0.5 && box.right > title.left + 0.5 && box.top < title.bottom - 0.5 && box.bottom > title.top + 0.5;
+      })
+      .map(name);
+    const pastHero = items
+      .filter((element) => {
+        const box = element.getBoundingClientRect();
+        return box.left < heroBox.left - 0.5 || box.right > heroBox.right + 0.5;
+      })
+      .map(name);
+    return { truncated, meterLines, overTitle, pastHero };
+  });
+}
+
+test.describe('Borrower 360 hero with a recorded decision (responsive-08)', () => {
+  for (const viewport of HERO_VIEWPORTS) {
+    for (const theme of THEMES) {
+      test(`Latest decision and Export PDF wrap the actions instead of truncating them (${viewport.width}x${viewport.height}, ${theme})`, async ({ app, mockApi, page }) => {
+        await page.setViewportSize(viewport);
+        await app.setTheme(theme);
+        mockApi.register('GET', '/api/borrowers/:id/lifecycle', ({ params }) =>
+          json<BorrowerLifecycle>(decidedLifecycle(params.id, 'approved', APPROVE_AUDIT_ID, SNAPSHOT_AT)),
+        );
+        // The first borrower reads 'Approval Pending' / 'Outreach None'; the
+        // second carries the longer 'Approval Approved' / 'Outreach Queued'.
+        for (const borrower of BORROWERS.slice(0, 2)) {
+          await app.gotoRoute(`/borrower-360/${borrower.borrower_id}`);
+          if (process.platform !== 'linux') await page.addStyleTag({ content: HERO_LINUX_TEXT_EMULATION });
+          await expect(page.getByTestId('latest-decision-toggle')).toBeVisible();
+          await expect(page.getByTestId('export-pdf')).toBeVisible();
+          for (const consoleOpen of [false, true]) {
+            await setConsole(page, consoleOpen);
+            const where = `${borrower.borrower_id}, Console ${consoleOpen ? 'open' : 'closed'}`;
+            expect(await heroDefects(page), where).toEqual({ truncated: [], meterLines: 1, overTitle: [], pastHero: [] });
+            await expect(page.getByTestId('latest-decision-toggle'), where).toBeInViewport();
+            await expect(page.getByTestId('export-pdf'), where).toBeInViewport();
+          }
+        }
+      });
+    }
+  }
 });
