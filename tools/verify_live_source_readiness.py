@@ -5,6 +5,14 @@ approve-probe and data-age changes): every core Cotality / UC gold source must
 be live with a row count, ``last_updated`` and a fresh ``checked_at``; every
 first-party source is live or a disclosed synthetic demo feed; the pending
 Building Permits feed is never reported live.
+
+Data-age decision (W5b deploy follow-up, decided W5e): ``checked_at`` stays
+fresh only within ``DEFAULT_MAX_SOURCE_AGE_DAYS`` (3) unless the operator
+passes ``--max-source-age-days``. On dev the flag is expected: only a full
+``deploy.sh`` run or a refresh job moves ``checked_at``, and a scheduled dev
+refresh was rejected (metered, and it would only move timestamps). Each stale
+flag prints the measured age against the threshold, so a reader sees how
+stale, not only that it is.
 """
 
 from __future__ import annotations
@@ -12,8 +20,10 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+DEFAULT_MAX_SOURCE_AGE_DAYS = 3
 
-def _source_readiness_flags(rows: list[Any]) -> list[str]:
+
+def _source_readiness_flags(rows: list[Any], *, max_age_days: int = DEFAULT_MAX_SOURCE_AGE_DAYS) -> list[str]:
     flags: list[str] = []
     by_name = {
         str(row.get("name")): row
@@ -57,8 +67,8 @@ def _source_readiness_flags(rows: list[Any]) -> list[str]:
             flags.append(f"admin.sources: {source_name} missing last_updated")
         if not row.get("checked_at"):
             flags.append(f"admin.sources: {source_name} missing checked_at")
-        elif _is_stale_checked_at(row.get("checked_at")):
-            flags.append(f"admin.sources: {source_name} checked_at is stale")
+        elif (stale := _stale_checked_at_flag(source_name, row.get("checked_at"), max_age_days)) is not None:
+            flags.append(stale)
     for source_name in sorted(first_party_sources):
         row = by_name.get(source_name)
         if row is None:
@@ -76,8 +86,8 @@ def _source_readiness_flags(rows: list[Any]) -> list[str]:
             flags.append(f"admin.sources: {source_name} missing last_updated")
         if not row.get("checked_at"):
             flags.append(f"admin.sources: {source_name} missing checked_at")
-        elif _is_stale_checked_at(row.get("checked_at")):
-            flags.append(f"admin.sources: {source_name} checked_at is stale")
+        elif (stale := _stale_checked_at_flag(source_name, row.get("checked_at"), max_age_days)) is not None:
+            flags.append(stale)
     for source_name in ("Building Permits",):
         row = by_name.get(source_name)
         if row is None:
@@ -87,9 +97,10 @@ def _source_readiness_flags(rows: list[Any]) -> list[str]:
     return flags
 
 
-def _is_stale_checked_at(value: Any, *, max_age: timedelta = timedelta(days=3)) -> bool:
+def _checked_at_age(value: Any) -> timedelta | None:
+    """How old a ``checked_at`` stamp is, or None when it is missing or unparseable."""
     if not isinstance(value, str) or not value.strip():
-        return True
+        return None
     raw = value.strip()
     candidates = [
         raw,
@@ -104,5 +115,24 @@ def _is_stale_checked_at(value: Any, *, max_age: timedelta = timedelta(days=3)) 
             continue
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=UTC)
-        return datetime.now(UTC) - parsed.astimezone(UTC) > max_age
-    return True
+        return datetime.now(UTC) - parsed.astimezone(UTC)
+    return None
+
+
+def _is_stale_checked_at(value: Any, *, max_age: timedelta = timedelta(days=DEFAULT_MAX_SOURCE_AGE_DAYS)) -> bool:
+    age = _checked_at_age(value)
+    return age is None or age > max_age
+
+
+def _format_age_days(age: timedelta) -> str:
+    days = age.total_seconds() / 86400
+    return f"{days:.0f} d" if days >= 10 else f"{days:.1f} d"
+
+
+def _stale_checked_at_flag(source_name: str, value: Any, max_age_days: int) -> str | None:
+    """The stale flag with the measured age, or None while ``checked_at`` is fresh."""
+    if not _is_stale_checked_at(value, max_age=timedelta(days=max_age_days)):
+        return None
+    age = _checked_at_age(value)
+    measured = "unparseable" if age is None else _format_age_days(age)
+    return f"admin.sources: {source_name} checked_at is stale ({measured} > {max_age_days} d)"

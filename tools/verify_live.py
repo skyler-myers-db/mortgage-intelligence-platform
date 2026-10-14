@@ -35,7 +35,10 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from tools.verify_live_rate_sensitivity import rate_sensitivity_flags  # noqa: E402
-from tools.verify_live_source_readiness import _source_readiness_flags  # noqa: E402
+from tools.verify_live_source_readiness import (  # noqa: E402
+    DEFAULT_MAX_SOURCE_AGE_DAYS,
+    _source_readiness_flags,
+)
 
 DEFAULT_BASE = "https://mip-app-2543889327043640.aws.databricksapps.com"
 
@@ -328,34 +331,13 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
             body={"borrower_id": borrower_id},
         )
         results.append(draft_probe)
-        draft_payload = draft_probe.sample if isinstance(draft_probe.sample, dict) else {}
     else:
-        draft_payload = {}
+        draft_probe = None
 
     # 6. Approval writes. Positive probes use real borrowers; negative probes
     # use synthetic IDs and must 404 without writing Lakebase rows.
     if borrower_id:
-        results.append(
-            probe(
-                base,
-                token,
-                "outreach.approve.real",
-                "POST",
-                "/api/outreach/approve",
-                # review_mode is required (W5c) and certifies the draft's proof.
-                body={
-                    "borrower_id": borrower_id,
-                    "offer_code": draft_payload.get("offer_code") or "refi",
-                    "draft_body": draft_payload.get("body") or "",
-                    "draft_subject": draft_payload.get("subject"),
-                    "draft_generation_id": draft_payload.get("generation_id"),
-                    "draft_response_hash": draft_payload.get("response_hash"),
-                    "draft_source_refreshed_at": draft_payload.get("source_refreshed_at"),
-                    "review_mode": "individual",
-                    "request_id": str(uuid.uuid4()),
-                },
-            )
-        )
+        results.append(approve_real_probe(base, token, borrower_id, draft_probe))
     if reject_borrower_id:
         results.append(
             probe(
@@ -575,7 +557,62 @@ def _geo_drill_probes(base: str, token: str) -> list[ProbeResult]:
     return results
 
 
-def collect_red_flags(results: list[ProbeResult]) -> list[str]:
+APPROVE_PATH = "/api/outreach/approve"
+APPROVE_DRAFT_UNAVAILABLE = "draft unavailable: approve not attempted (no audited draft proof)"
+
+
+def approve_body_from_draft(borrower_id: str, draft: Any) -> dict[str, Any] | None:
+    """The approve.real body: the audited draft's exact copy and proof, or None.
+
+    The approve contract (W5c) certifies the draft the approver saw: the copy
+    (body, subject), the channel and campaign binding it was generated for,
+    and its proof (generation id, response hash, source refresh), with
+    review_mode 'individual'. Without a generation id and response hash there
+    is no audited draft to certify, so there is no approve to send.
+    """
+    if not isinstance(draft, dict) or not draft.get("generation_id") or not draft.get("response_hash"):
+        return None
+    return {
+        "borrower_id": borrower_id,
+        "offer_code": draft.get("offer_code"),
+        "channel": draft.get("channel"),
+        "campaign_id": draft.get("campaign_id"),
+        "variant_name": draft.get("variant_name"),
+        "draft_body": draft.get("body"),
+        "draft_subject": draft.get("subject"),
+        "draft_generation_id": draft.get("generation_id"),
+        "draft_response_hash": draft.get("response_hash"),
+        "draft_source_refreshed_at": draft.get("source_refreshed_at"),
+        "review_mode": "individual",
+        "request_id": str(uuid.uuid4()),
+    }
+
+
+def approve_real_probe(base: str, token: str, borrower_id: str, draft_probe: ProbeResult | None) -> ProbeResult:
+    """Approve the audited draft for a real borrower, only when the draft probe proved one.
+
+    An audited approval WRITE on the target (one APPROVE row per run). It is
+    attempted only after outreach.draft succeeded with its proof; otherwise it
+    is a not-ok result and nothing is written.
+    """
+    draft = draft_probe.sample if draft_probe is not None and draft_probe.ok else None
+    body = approve_body_from_draft(borrower_id, draft)
+    if body is None:
+        return ProbeResult(
+            name="outreach.approve.real",
+            method="POST",
+            path=APPROVE_PATH,
+            status=0,
+            latency_ms=0.0,
+            ok=False,
+            error=APPROVE_DRAFT_UNAVAILABLE,
+        )
+    return probe(base, token, "outreach.approve.real", "POST", APPROVE_PATH, body=body)
+
+
+def collect_red_flags(
+    results: list[ProbeResult], *, max_source_age_days: int = DEFAULT_MAX_SOURCE_AGE_DAYS
+) -> list[str]:
     flags: list[str] = []
 
     def find(n: str) -> ProbeResult | None:
@@ -610,7 +647,7 @@ def collect_red_flags(results: list[ProbeResult]) -> list[str]:
 
     admin_sources = find("admin.sources")
     if admin_sources is not None and admin_sources.ok and isinstance(admin_sources.sample, list):
-        flags.extend(_source_readiness_flags(admin_sources.sample))
+        flags.extend(_source_readiness_flags(admin_sources.sample, max_age_days=max_source_age_days))
 
     rate_sensitivity = find("geo.rate_sensitivity")
     if rate_sensitivity is not None and rate_sensitivity.ok:
@@ -637,14 +674,22 @@ def _rate_sensitivity_flags(sample: Any) -> list[str]:
     return rate_sensitivity_flags(sample)
 
 
-def render_markdown(results: list[ProbeResult], base: str, test_tag: str) -> str:
+def render_markdown(
+    results: list[ProbeResult],
+    base: str,
+    test_tag: str,
+    *,
+    profile: str = "DEFAULT",
+    max_source_age_days: int = DEFAULT_MAX_SOURCE_AGE_DAYS,
+) -> str:
     lines: list[str] = []
     lines.append("# E2E live verification — 2026-04-23")
     lines.append("")
     lines.append("> **Internal validation artifact. Not public release collateral.**")
     lines.append("")
     lines.append(f"Base URL: `{base}`  ")
-    lines.append("Auth: `databricks auth token -p DEFAULT` (OAuth bearer, skyler@entrada.ai)  ")
+    lines.append(f"Auth: `databricks auth token -p {profile}` (OAuth bearer of the profile's identity)  ")
+    lines.append(f"Source freshness: `checked_at` within {max_source_age_days} d (`--max-source-age-days`)  ")
     lines.append(f"Synthetic test-id prefix: `{test_tag}`")
     lines.append("")
     lines.append("## Endpoint results")
@@ -674,7 +719,7 @@ def render_markdown(results: list[ProbeResult], base: str, test_tag: str) -> str
     lines.append("")
     lines.append("## Red flags")
     lines.append("")
-    flags = collect_red_flags(results)
+    flags = collect_red_flags(results, max_source_age_days=max_source_age_days)
 
     if not flags:
         lines.append("(none)")
@@ -697,7 +742,15 @@ def main() -> int:
     ap.add_argument("--base-url", default=DEFAULT_BASE)
     ap.add_argument("--profile", default="DEFAULT")
     ap.add_argument("--out", default="docs/validation/e2e-verification-2026-04-23.md")
+    ap.add_argument(
+        "--max-source-age-days",
+        type=int,
+        default=DEFAULT_MAX_SOURCE_AGE_DAYS,
+        help="flag a source whose checked_at is older than this many days (default 3)",
+    )
     args = ap.parse_args()
+    if args.max_source_age_days < 1:
+        ap.error("--max-source-age-days must be at least 1")
 
     try:
         token = get_oauth_token(args.profile)
@@ -706,7 +759,13 @@ def main() -> int:
         return 2
 
     results = run_probes(args.base_url, token)
-    report = render_markdown(results, args.base_url, "B-TEST-*")
+    report = render_markdown(
+        results,
+        args.base_url,
+        "B-TEST-*",
+        profile=args.profile,
+        max_source_age_days=args.max_source_age_days,
+    )
     with open(args.out, "w", encoding="utf-8") as fh:
         fh.write(report)
     # also print JSON summary on stdout for the caller agent
@@ -724,7 +783,7 @@ def main() -> int:
         for r in results
     ]
     print(json.dumps(summary, indent=2))
-    flags = collect_red_flags(results)
+    flags = collect_red_flags(results, max_source_age_days=args.max_source_age_days)
     if flags:
         print("Live verification red flags:", file=sys.stderr)
         for flag in flags:

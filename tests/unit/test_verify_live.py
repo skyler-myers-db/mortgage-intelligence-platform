@@ -1,10 +1,24 @@
 from __future__ import annotations
 
+import io
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from tools.verify_live import ProbeResult, collect_red_flags
+from tools import verify_live
+from tools.verify_live import (
+    APPROVE_DRAFT_UNAVAILABLE,
+    ProbeResult,
+    collect_red_flags,
+    render_markdown,
+    run_probes,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -154,7 +168,11 @@ def test_verify_live_checks_admin_source_readiness_contract() -> None:
 
     assert "admin.sources: Cotality Public Records missing checked_at" in flags
     assert "admin.sources: Voluntary Lien status=error expected live" in flags
-    assert "admin.sources: MMA Mortgage Analytics checked_at is stale" in flags
+    # The stale flag names the measured age against the threshold (W5e).
+    assert any(
+        flag.startswith("admin.sources: MMA Mortgage Analytics checked_at is stale (") and flag.endswith(" d > 3 d)")
+        for flag in flags
+    ), flags
     assert "admin.sources: Building Permits cannot be live until the feed is loaded" in flags
 
 
@@ -362,3 +380,151 @@ def test_rate_grid_offenders_are_capped_at_five_states() -> None:
 
     assert len([line for line in flags if "rate_movable above addressable" in line]) == 5
     assert flags[-1] == "geo.rate_sensitivity: and 3 more states"
+
+
+# ---------------------------------------------------------------------------
+# W5e (W5b deploy follow-ups): outreach.approve.real certifies the audited
+# draft, and the source-age threshold is an operator argument.
+# ---------------------------------------------------------------------------
+
+_BORROWERS = [{"borrower_id": "B-0000000000AA1"}, {"borrower_id": "B-0000000000AA2"}]
+_DRAFT: dict[str, Any] = {
+    "generation_id": "0b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8",
+    "response_hash": "f" * 64,
+    "source_refreshed_at": "2026-08-09T12:00:00Z",
+    "borrower_id": "B-0000000000AA1",
+    "campaign_id": None,
+    "variant_name": None,
+    "offer_code": "heloc",
+    "channel": "sms",
+    "subject": None,
+    "body": "Summit Mortgage: review your home equity options. Reply STOP to opt out.",
+}
+
+
+class _Response:
+    def __init__(self, status: int, payload: Any) -> None:
+        self.status = status
+        self._raw = json.dumps(payload).encode("utf-8")
+
+    def read(self) -> bytes:
+        return self._raw
+
+    def __enter__(self) -> _Response:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+
+class _Recorder:
+    """A urlopen stand-in: canned answers per (method, path), every request recorded."""
+
+    def __init__(self, routes: dict[tuple[str, str], tuple[int, Any]]) -> None:
+        self.routes = routes
+        self.calls: list[tuple[str, str, Any]] = []
+
+    def __call__(self, request: urllib.request.Request, timeout: float | None = None) -> _Response:
+        method = request.get_method()
+        path = urllib.parse.urlsplit(request.full_url).path
+        raw = request.data
+        body = json.loads(raw) if isinstance(raw, bytes) else None
+        self.calls.append((method, path, body))
+        status, payload = self.routes.get((method, path), (200, {}))
+        if status >= 400:
+            fp = io.BytesIO(json.dumps(payload).encode("utf-8"))
+            raise urllib.error.HTTPError(request.full_url, status, "error", hdrs=None, fp=fp)  # type: ignore[arg-type]
+        return _Response(status, payload)
+
+    def posts(self, path: str) -> list[Any]:
+        return [body for method, called, body in self.calls if method == "POST" and called == path]
+
+
+def _run(monkeypatch: pytest.MonkeyPatch, draft: tuple[int, Any]) -> tuple[_Recorder, list[ProbeResult]]:
+    recorder = _Recorder({("GET", "/api/leads"): (200, _BORROWERS), ("POST", "/api/outreach/draft"): draft})
+    monkeypatch.setattr(urllib.request, "urlopen", recorder)
+    return recorder, run_probes("https://app.example", "test-token")
+
+
+def test_approve_real_certifies_the_audited_draft_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder, results = _run(monkeypatch, (200, _DRAFT))
+
+    [body] = [b for b in recorder.posts("/api/outreach/approve") if b["borrower_id"] == "B-0000000000AA1"]
+    assert body["borrower_id"] == "B-0000000000AA1"
+    assert body["draft_generation_id"] == _DRAFT["generation_id"]
+    assert body["draft_response_hash"] == _DRAFT["response_hash"]
+    assert body["draft_source_refreshed_at"] == _DRAFT["source_refreshed_at"]
+    assert body["draft_subject"] == _DRAFT["subject"]
+    assert body["draft_body"] == _DRAFT["body"]
+    assert body["offer_code"] == _DRAFT["offer_code"]
+    assert body["channel"] == _DRAFT["channel"]
+    assert body["campaign_id"] is None and body["variant_name"] is None
+    assert body["review_mode"] == "individual"
+    assert body["request_id"]
+    approve = next(r for r in results if r.name == "outreach.approve.real")
+    assert approve.ok and approve.status == 200
+
+
+def test_a_failed_draft_sends_no_approve_and_raises_the_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder, results = _run(monkeypatch, (503, {"detail": "draft generation unavailable"}))
+
+    real_approves = [
+        body for body in recorder.posts("/api/outreach/approve") if body["borrower_id"] == "B-0000000000AA1"
+    ]
+    assert real_approves == []
+    approve = next(r for r in results if r.name == "outreach.approve.real")
+    assert not approve.ok and approve.error == APPROVE_DRAFT_UNAVAILABLE
+    assert f"outreach.approve.real: status=0 error={APPROVE_DRAFT_UNAVAILABLE}" in collect_red_flags(results)
+
+
+def test_a_draft_without_its_proof_sends_no_approve(monkeypatch: pytest.MonkeyPatch) -> None:
+    unproven = {key: value for key, value in _DRAFT.items() if key != "response_hash"}
+    recorder, results = _run(monkeypatch, (200, unproven))
+
+    assert [b for b in recorder.posts("/api/outreach/approve") if b["borrower_id"] == "B-0000000000AA1"] == []
+    assert next(r for r in results if r.name == "outreach.approve.real").error == APPROVE_DRAFT_UNAVAILABLE
+
+
+def _admin_sources_checked(days_ago: float) -> list[ProbeResult]:
+    stamp = (datetime.now(UTC) - timedelta(days=days_ago)).strftime("%Y-%m-%d %H:%M:%S")
+    rows = _clean_source_rows()
+    for row in rows:
+        if row["checked_at"] is not None:
+            row["checked_at"] = stamp
+    return [ProbeResult(name="admin.sources", method="GET", path="/api/admin/sources", status=200, ok=True, sample=rows)]
+
+
+def test_the_threshold_argument_moves_the_stale_boundary() -> None:
+    five_days = _admin_sources_checked(5)
+
+    stale = [flag for flag in collect_red_flags(five_days) if "checked_at is stale" in flag]
+    assert stale and all(flag.endswith("(5.0 d > 3 d)") for flag in stale), stale
+    assert collect_red_flags(five_days, max_source_age_days=7) == []
+    sixty_six = [flag for flag in collect_red_flags(_admin_sources_checked(66.2)) if "stale" in flag]
+    assert sixty_six and all(flag.endswith("(66 d > 3 d)") for flag in sixty_six), sixty_six
+
+
+def test_the_report_header_names_no_identity_and_prints_the_threshold() -> None:
+    report = render_markdown([], "https://app.example", "B-TEST-*", profile="dev", max_source_age_days=7)
+
+    assert "Auth: `databricks auth token -p dev` (OAuth bearer of the profile's identity)" in report
+    assert "Source freshness: `checked_at` within 7 d (`--max-source-age-days`)" in report
+    assert "@" not in report.split("## Endpoint results", 1)[0]
+
+
+def test_the_cli_threads_the_threshold_into_the_flags(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    seen: dict[str, int] = {}
+
+    def fake_collect(results: list[ProbeResult], *, max_source_age_days: int = 3) -> list[str]:
+        seen["days"] = max_source_age_days
+        return []
+
+    monkeypatch.setattr(verify_live, "get_oauth_token", lambda profile: "test-token")
+    monkeypatch.setattr(verify_live, "run_probes", lambda base, token: [])
+    monkeypatch.setattr(verify_live, "collect_red_flags", fake_collect)
+    out = tmp_path / "report.md"
+    monkeypatch.setattr("sys.argv", ["verify_live.py", "--out", str(out), "--max-source-age-days", "9"])
+
+    assert verify_live.main() == 0
+    assert seen["days"] == 9
+    assert "within 9 d" in out.read_text(encoding="utf-8")
