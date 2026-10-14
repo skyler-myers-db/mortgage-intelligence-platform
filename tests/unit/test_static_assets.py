@@ -17,6 +17,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from fastapi.responses import FileResponse
+from fastapi.testclient import TestClient
+from starlette.requests import Request
+from starlette.routing import Route
+
+from backend.main import app
 from backend.services.static_assets import accepted_encodings, select_asset_variant
 
 
@@ -118,3 +124,56 @@ def test_css_media_type(tmp_path: Path) -> None:
     assert variant is not None
     assert variant.media_type == "text/css"
     assert variant.content_encoding == "br"
+
+
+# ---------------------------------------------------------------------------
+# W5c (audit dataviz-01): the committed ZCTA geometry ships as hashed
+# ``<USPS>.topo-<hash>.json`` assets with build-time ``.br`` / ``.gz``
+# siblings. The fixture harness serves the build through ``vite preview``,
+# which never sends brotli, so the br-encoded, immutable answer is proven
+# here, through the real middleware stack.
+# ---------------------------------------------------------------------------
+
+
+def _make_topology_asset(tmp_path: Path) -> Path:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "IL.topo-Ab12Cd34.json").write_bytes(b'{"type":"Topology","objects":{}}' * 64)
+    (assets / "IL.topo-Ab12Cd34.json.br").write_bytes(b"br-topology")
+    (assets / "IL.topo-Ab12Cd34.json.gz").write_bytes(b"gz-topology")
+    return assets
+
+
+def test_topology_asset_is_served_brotli_as_json(tmp_path: Path) -> None:
+    assets = _make_topology_asset(tmp_path)
+    variant = select_asset_variant(assets, "IL.topo-Ab12Cd34.json", "gzip, deflate, br")
+    assert variant is not None
+    assert variant.path.name == "IL.topo-Ab12Cd34.json.br"
+    assert variant.content_encoding == "br"
+    assert variant.media_type == "application/json"
+
+
+def test_topology_asset_is_br_encoded_and_immutable_through_the_app(tmp_path: Path) -> None:
+    assets = _make_topology_asset(tmp_path)
+
+    def _probe(request: Request) -> FileResponse:
+        # The /assets handler's body (backend/main.py) over this scratch dist:
+        # main.py mounts the real route only when frontend/dist exists, which
+        # the backend CI job does not build.
+        variant = select_asset_variant(assets, request.path_params["asset_path"], request.headers.get("accept-encoding"))
+        assert variant is not None
+        headers = {"Vary": "Accept-Encoding"}
+        if variant.content_encoding is not None:
+            headers["Content-Encoding"] = variant.content_encoding
+        return FileResponse(variant.path, media_type=variant.media_type, headers=headers)
+
+    probe = Route("/assets/{asset_path:path}", _probe)
+    app.router.routes.insert(0, probe)
+    try:
+        response = TestClient(app).get("/assets/IL.topo-Ab12Cd34.json", headers={"Accept-Encoding": "br"})
+    finally:
+        app.router.routes.remove(probe)
+    assert response.status_code == 200
+    assert response.headers["content-encoding"] == "br"
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.headers["cache-control"] == "public, max-age=31536000, immutable"

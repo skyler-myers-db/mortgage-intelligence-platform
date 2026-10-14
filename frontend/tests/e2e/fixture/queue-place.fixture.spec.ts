@@ -35,6 +35,7 @@ import type { FixtureTheme } from './app';
 import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
 import { LEADS, PRIMARY_BORROWER } from './data/borrowers';
 import { ledgerReceipt } from './data/decisionReceipt';
+import { serverOrder } from './data/leadPages';
 import { VIRTUAL_QUEUE, registerDraftEcho } from './data/queueKeyboard';
 import { LO_EMAIL, LO_SESSION, registerBulkApprove, registerRankedQueue } from './data/queuePlace';
 import { json, type MockApi } from './mockApi';
@@ -111,23 +112,27 @@ async function startBulkApprove(page: Page): Promise<void> {
 test.describe('(a)-(c) the reader keeps their place', () => {
   test('(a) sort, expanded row, cursor and table scroll survive Borrower 360 and Back on a virtualized queue', async ({ app, mockApi, page }) => {
     test.slow();
-    mockApi.register<LeadSummary[]>('GET', '/api/leads', () => json<LeadSummary[]>([...VIRTUAL_QUEUE], {
-      headers: { 'X-Total-Matching': String(VIRTUAL_QUEUE.length), 'X-Returned-Rows': String(VIRTUAL_QUEUE.length) },
-    }));
+    // W5c: Equity is a server sort, so the fixture answers in the server's order.
+    mockApi.register<LeadSummary[]>('GET', '/api/leads', ({ query }) => json<LeadSummary[]>(
+      serverOrder(VIRTUAL_QUEUE, query.get('sort'), query.get('sort_dir')),
+      { headers: { 'X-Total-Matching': String(VIRTUAL_QUEUE.length), 'X-Returned-Rows': String(VIRTUAL_QUEUE.length) } },
+    ));
     const echo = registerDraftEcho(mockApi);
     registerBulkApprove(mockApi);
     registerReceiptRead(mockApi);
     await app.gotoRoute('/lead-queue');
 
-    // Sort by Equity: the URL gets sort and dir; no /api/leads call follows.
+    // Sort by Equity: the URL gets sort and dir; the server's equity order is
+    // read once (W5c, a server sort of the paged view).
     const readsBeforeSort = leadReads(mockApi);
     await page.getByRole('button', { name: 'Sort by Equity' }).click();
     await expect(page).toHaveURL(/[?&]sort=equity&dir=desc(&|$)/);
-    expect(leadReads(mockApi), 'a sort is not a new query').toBe(readsBeforeSort);
+    await expect.poll(() => leadReads(mockApi), 'one page-0 read in equity order').toBe(readsBeforeSort + 1);
+    expect(lastLeadsSearch(mockApi)).toContain('sort=equity');
 
-    // The on-screen order (a stable sort, like the table's) and a real
+    // The on-screen order (the server's: equity, then rank) and a real
     // dossier row about 2,000px down.
-    const onScreen = [...VIRTUAL_QUEUE].sort((a, b) => b.equity_estimate - a.equity_estimate);
+    const onScreen = serverOrder(VIRTUAL_QUEUE, 'equity', 'desc');
     const realIds = new Set(LEADS.map((lead) => lead.borrower_id));
     const targetIndex = onScreen.findIndex((lead, index) => index >= 40 && realIds.has(lead.borrower_id) && lead.approval_status === 'pending');
     expect(targetIndex, 'precondition: a real dossier row sits deep in the sorted queue').toBeGreaterThan(0);

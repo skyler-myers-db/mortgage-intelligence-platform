@@ -22,6 +22,7 @@ import type {
   GenieLiveProgress,
 } from '../apiTypes';
 import { _newRequestId, getJson, postJson } from '../apiTransport';
+import type { GenieCompleteAsyncResult } from './genieJobs';
 
 /** The `/api/genie/message` and `/api/genie/message/submit` body. */
 export interface GenieMessageRequest {
@@ -126,7 +127,9 @@ export const genieApi = {
     question: string,
     signal?: AbortSignal,
   ) =>
-    postJson<GenieResult, GenieCompleteAsyncRequest>(
+    // The wire ok is GenieMessageResponse | GenieCompletionJobStatus
+    // (quality-04 P2): the caller narrows (genieAsk.requestGenieCompletion).
+    postJson<GenieCompleteAsyncResult, GenieCompleteAsyncRequest>(
       '/api/genie/message/complete',
       {
         conversation_id: conversationId,

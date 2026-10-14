@@ -86,6 +86,14 @@ describe('app.transitions.css (View Transitions phase 1)', () => {
     expect(sheet.replace(/\/\*[\s\S]*?\*\//g, '')).not.toMatch(/view-transition-name:\s*(?!none)[\w-]+/);
   });
 
+  it('keeps the borrower-id morph target one unfragmented box, with its name inline only', () => {
+    // deviation:borrower-id-morph: lib/borrowerMorph names the source and the
+    // title span sets the target name inline; the sheet only makes the span an
+    // inline-block and carries no name or per-name group rule.
+    expect(declarationsOf(sheet, '.page-title__id')).toMatch(/display:\s*inline-block/);
+    expect(sheet.replace(/\/\*[\s\S]*?\*\//g, '')).not.toMatch(/mip-borrower-id/);
+  });
+
   it('gates route-in on missing View Transitions, above the (0,1,0) rule that sets it', () => {
     // The rule it overrides, from the design-system partials later in the cascade.
     expect(designCss()).toMatch(/\n\.route-transition\s*\{\s*animation:\s*route-in var\(--dur-base\) var\(--ease\);/);

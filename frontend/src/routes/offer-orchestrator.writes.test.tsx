@@ -35,6 +35,8 @@ const appMocks = vi.hoisted(() => ({
   approvals: {} as Record<string, 'approved' | 'rejected'>,
 }));
 
+// The audit-free decision history (D-audit-reads-c2) stays pending: this suite counts its own reads.
+vi.mock('../lib/apiClients/borrowerDecisions', () => ({ borrowerDecisionsQuery: (id: string) => ({ queryKey: ['mip', 'borrower', id, 'decisions'], queryFn: () => new Promise(() => undefined) }) }));
 vi.mock('../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/api')>()),
   api: apiMocks,
@@ -425,6 +427,7 @@ describe('Offer Orchestrator writes', () => {
     mount();
     await waitUntil(() => loaded());
     await openRejectReview();
+    choose(container.querySelector<HTMLSelectElement>('[data-testid="offer-action-bar"] form select')!, 'low_intent');
     const confirm = button('Confirm reject');
     act(() => {
       confirm.click();

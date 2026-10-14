@@ -440,14 +440,17 @@ export function GenieChat() {
         }
         if (action.action_type === 'save_borrowers') refreshWorkspace();
         const confirmed = genieActionConfirmation(outcome.result);
+        const auditEventId = outcome.result.audit_event_id;
         landActionBubble(
           {
-            answer: confirmed,
+            // The receipt (GenieChatBody) renders the id; spoken in full.
+            answer: auditEventId ? outcome.result.message : confirmed,
             // A governed action result answers no question (its turn's is '').
             question: '',
             source: GOVERNED_ACTION_SOURCE,
             trusted_assets: [],
             conversation_id: payload.conversation_id,
+            ...(auditEventId ? { action_audit_event_id: auditEventId } : {}),
           },
           confirmed,
         );
@@ -502,6 +505,7 @@ export function GenieChat() {
       <div
         ref={panelRef}
         className={`genie ${genieOpen ? 'is-open' : ''} ${pos ? 'is-undocked' : ''}`}
+        data-rum-target="genie-panel"
         // Focusable container: a click on the transcript lands focus inside
         // the panel, which is what "Escape closes Genie" now keys off.
         tabIndex={-1}
@@ -662,6 +666,7 @@ export function GenieChat() {
         />
         <form
           className="genie__input"
+          data-rum-target="genie-composer"
           onSubmit={(e) => {
             e.preventDefault();
             ask(input, undefined, Date.now());

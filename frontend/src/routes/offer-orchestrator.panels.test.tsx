@@ -155,6 +155,32 @@ describe('OfferReviewGrid message intelligence', () => {
     expect(submit).toHaveBeenCalledTimes(1);
   });
 
+  it('opens on "Choose a reason", stays aria-disabled without one, and a submit focuses Reason', () => {
+    const submit = vi.fn();
+    act(() => root.render(
+      <MemoryRouter>
+        <RejectRationalePanel
+          reasonCode=""
+          rationale=""
+          onReasonChange={vi.fn()}
+          onRationaleChange={vi.fn()}
+          onCancel={vi.fn()}
+          onSubmit={submit}
+        />
+      </MemoryRouter>,
+    ));
+    const reason = container.querySelector('select')!;
+    expect(reason.value).toBe('');
+    expect(reason.options[0].textContent).toBe('Choose a reason');
+    const confirm = [...container.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Confirm reject')!;
+    expect(confirm.getAttribute('aria-disabled')).toBe('true');
+    expect(confirm.disabled).toBe(false);
+    act(() => reason.blur());
+    act(() => confirm.click());
+    expect(submit).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(reason);
+  });
+
   it('shows real warming progress and keeps the draft editor disabled', () => {
     act(() => root.render(
       <MemoryRouter>

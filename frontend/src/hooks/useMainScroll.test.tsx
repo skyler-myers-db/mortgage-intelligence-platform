@@ -42,7 +42,8 @@ function Shell({ children }: { children: ReactNode }) {
   useMainScroll(mainRef);
   return (
     <main ref={mainRef} id="main-content" className="main">
-      <nav className="route-nav" />
+      {/* Docked (sticky), as useRouteNavDock marks it with the room to dock. */}
+      <nav className="route-nav" data-docked="" />
       {children}
     </main>
   );
@@ -295,6 +296,19 @@ describe('useMainScroll', () => {
     await go('/glossary#clip');
 
     expect(main().scrollTop).toBe(1400 - 96);
+  });
+
+  it('adds nothing for a nav in flow (undocked): it scrolls away and covers no target', async () => {
+    await mount(['/home']);
+    main().querySelector('.route-nav')?.removeAttribute('data-docked');
+    rects.set('main-content', { top: 100, height: 800 });
+    rects.set('route-nav', { top: 100, height: 96 });
+    rects.set('clip', { top: 1500, height: 120 });
+
+    await go('/glossary#clip');
+
+    // Only the CSS scroll-margin-top (64): the 96px nav is not over the target.
+    expect(main().scrollTop).toBe(1400 - 64);
   });
 
   it('places the target by layout offset, so the route entrance transform cannot skew it', async () => {

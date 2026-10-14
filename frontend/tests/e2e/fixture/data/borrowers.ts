@@ -6,7 +6,7 @@
  * `B-[0-9A-Z]{13}`; display names are the `Owner XXXXXX` synthetic label the
  * API emits. No real names, addresses or contact fields.
  */
-import type { Borrower360, EvidenceEvent, LeadSummary, SegmentCode } from '../../../../src/types';
+import type { Borrower360, EvidenceEvent, LeadScorePoints, LeadSummary, SegmentCode } from '../../../../src/types';
 import { SNAPSHOT_AT, STATES } from './reference';
 
 const ID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -70,6 +70,19 @@ function economicsFor(index: number): Economics {
   };
 }
 
+/** The five gold *_points for a score S (wow-stage-2): the fn_lead_score
+ *  weights times S, to two decimals, so they sum exactly to S. */
+export function scorePointsFor(score: number): LeadScorePoints {
+  const at = (weight: number): number => Math.round(weight * score * 100) / 100;
+  return {
+    economic_incentive: at(0.35),
+    intent_trigger: at(0.3),
+    fit: at(0.15),
+    relationship: at(0.1),
+    evidence: at(0.1),
+  };
+}
+
 /** The columns /api/leads returns for one ranked borrower. */
 function buildLead(index: number): LeadSummary {
   const state = STATES[index % STATES.length];
@@ -77,6 +90,7 @@ function buildLead(index: number): LeadSummary {
   const { tag, spreadBps, equity, lienBalance, evidence } = economicsFor(index);
   const approval: LeadSummary['approval_status'] = index === 1 ? 'approved' : index === 9 ? 'rejected' : 'pending';
   const isInvestor = profile.segments.includes('investor');
+  const opportunityScore = Math.max(52, 96 - index * 2);
   return {
     borrower_id: maskedBorrowerId(index),
     display_name: `Owner ${tag}`,
@@ -87,8 +101,9 @@ function buildLead(index: number): LeadSummary {
     segment_codes: profile.segments,
     equity_estimate: equity,
     rate_spread_bps: spreadBps,
-    opportunity_score: Math.max(52, 96 - index * 2),
+    opportunity_score: opportunityScore,
     confidence: Math.max(48, 92 - ((index * 7) % 40)),
+    score_points: scorePointsFor(opportunityScore),
     recommended_offer_code: profile.code,
     recommended_offer: profile.label,
     why_now: profile.whyNow,
@@ -122,6 +137,9 @@ function buildBorrower(index: number): Borrower360 {
   const equityPct = 100 - ltv;
   return {
     ...lead,
+    // The dossier read never projects the points: it answers its spine from
+    // /proof, so Borrower360.score_points is always null on the wire.
+    score_points: null,
     source_refreshed_at: SNAPSHOT_AT,
     clip_id: lead.clip,
     owner_link_id: `ol_demo_${tag.toLowerCase()}`,
@@ -133,6 +151,17 @@ function buildBorrower(index: number): Borrower360 {
     related_property_count: lead.related_property_count ?? 1,
     trigger_timeline: evidence,
     evidence_events: evidence,
+    // Crossed the line (wow-stage-4) defaults: the default population never
+    // charts. Its why panels price the spread against a 4.875% par that the
+    // rate-window series (data/rateWindow.ts) does not share, so no crossing
+    // week could agree with both, and FIX with a null week would caption an
+    // in-the-money borrower "Not in the money". All three fields are null,
+    // as the server sends them before the gold refresh that builds them, so
+    // the Math tab says the history is not available and reads no series.
+    // data/spreadHistory.ts registers the coherent charted dossiers.
+    first_pos_date: null,
+    first_pos_rate_type: null,
+    first_itm_week: null,
     why_panel: {
       rate_spread_bps: spreadBps,
       market_rate: 0.04875,

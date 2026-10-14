@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useState, type ComponentType } from 'react';
 import { useNavigate } from 'react-router';
 import { useOptionalFootprint } from '../FootprintProvider';
 import {
@@ -28,7 +28,8 @@ import { USChoroplethMapTooltip } from './USChoroplethMapTooltip';
 import { buildMapCard } from './USChoroplethMap.hover';
 import { useMapHover } from './useMapHover';
 import { snapStep, useMapColoring } from './useMapModeParams';
-import { USChoroplethMapZipLevel } from './USChoroplethMapZipLevel';
+import { USChoroplethMapZipLevel, zipPopulated } from './USChoroplethMapZipLevel';
+import type { ZipStage, ZipStageProps, ZipStageView } from './USChoroplethMap.zipStage';
 import { useChoroplethLiveFacts, type GeoRead } from './useChoroplethLiveFacts';
 import { indexRateScenario, scenarioView } from './rateScenario.logic';
 import { RATE_SCENARIO_CONTROL } from './rateScenario.lazy';
@@ -102,6 +103,14 @@ export type { MapSelection } from './USChoroplethMap.selection';
  * Runtime-06 (map slice): a changed cohort keeps the previous fill up,
  * labelled "Updating…" (`.stable-refresh-region.is-updating` on the stage and
  * the legend, one announcement in `.map-status`), instead of blanking.
+ *
+ * ZIP areas (W5c, audit dataviz-01 / visual-09 / motion-10;
+ * deviation:zcta-level): a host's `zipStage` (Segment Intelligence's
+ * ZIP_AREAS, the committed Census ZCTAs) draws a map-view drill in place of
+ * the tiles; the legend's scale, caption and the header's zoom buttons follow
+ * the view it reports (USChoroplethMap.zipStage). Home passes none, so the
+ * polygon code and the geometry stay out of its closure. The root carries
+ * data-rum-target="map" (D-platform-process-d2, runtime-09).
  */
 
 interface USChoroplethMapProps {
@@ -132,6 +141,12 @@ interface USChoroplethMapProps {
    * note; without it the legend shows the note itself.
    */
   onReadStale?: (lastGoodAt: string | null) => void;
+  /**
+   * Draws the ZIP level in the map view instead of the tiles (Segment
+   * Intelligence's ZIP_AREAS). Opt-in per host: Home passes none, so it never
+   * loads the polygon rung or fetches geometry.
+   */
+  zipStage?: ZipStage;
 }
 
 /**
@@ -150,6 +165,7 @@ export function USChoroplethMap({
   onModeChange,
   onStepCommit,
   onReadStale,
+  zipStage,
 }: USChoroplethMapProps) {
   const [ownSelection, setOwnSelection] = useState<MapSelection>(EMPTY_MAP_SELECTION);
   const current = selection ?? ownSelection;
@@ -184,6 +200,13 @@ export function USChoroplethMap({
   const [view, setView] = useState<MapView>('map');
   // The table view's own chunk, loaded the first time the table is picked.
   const tableView = useLazyModule(MAP_TABLE, view === 'table');
+  // A host's ZIP stage (dataviz-01) in the map view of a drill, and the view
+  // it reports for the drilled state.
+  const stage = drillBehavior === 'filter' && view === 'map' ? zipStage : undefined;
+  const [stageView, setStageView] = useState<ZipStageView & { state: string } | null>(null);
+  const onStageView = useCallback((next: ZipStageView) => setStageView({ ...next, state: drillStateUC }), [drillStateUC]);
+  const zipView = stage && level === 'zip' && stageView?.state === drillStateUC ? stageView : null;
+  const polygons = zipView?.polygons === true;
   // A keyboard drill, and any drill from a table row, removes the control
   // that had focus (the state path, the row's button). Focus then moves on to
   // the drilled level (a ZIP tile, the empty state's action or the ZIP table)
@@ -246,11 +269,15 @@ export function USChoroplethMap({
   const scale = useMemo(() => {
     if (shownScenario) return rateIndex?.scale ?? null;
     if (overlayActive && overlayData) return buildChoroplethScale(overlayData.units.map((u) => u.unattended_count));
-    if (level === 'zip') return zipFacts ? buildChoroplethScale(densestZips(zipFacts).map((r) => r.addressable_borrowers)) : null;
+    if (level === 'zip') {
+      // Polygons paint every populated ZIP; the tiles, the densest they show.
+      const shown = zipFacts && (polygons ? Object.values(zipFacts).filter(zipPopulated) : densestZips(zipFacts));
+      return shown ? buildChoroplethScale(shown.map((r) => r.addressable_borrowers)) : null;
+    }
     return stateFacts ? buildChoroplethScale(Object.values(stateFacts).map((r) => r.addressable)) : null;
-  }, [level, overlayActive, overlayData, rateIndex, shownScenario, stateFacts, zipFacts]);
+  }, [level, overlayActive, overlayData, polygons, rateIndex, shownScenario, stateFacts, zipFacts]);
   const zipCount = zipFacts ? Object.keys(zipFacts).length : 0;
-  const scaleScope = level === 'zip' && !overlayActive && zipCount > ZIP_TILE_CAP
+  const scaleScope = level === 'zip' && !overlayActive && !polygons && zipCount > ZIP_TILE_CAP
     ? `over the ${ZIP_TILE_CAP} densest of ${formatCount(zipCount)} ZIPs`
     : null;
 
@@ -282,7 +309,7 @@ export function USChoroplethMap({
   useEffect(() => {
     onReadStale?.(staleAt);
   }, [onReadStale, staleAt]);
-  const mapBusy = !usaMap || primary.loading || (level === 'zip' && states.loading);
+  const mapBusy = !usaMap || primary.loading || (level === 'zip' && states.loading) || zipView?.busy === true;
   // Borrowers in the drilled state that the ZIP layer cannot show. The
   // backend derives it as (state total - sum of ZIP tiles) off one refresh
   // anchor, so it IS the on-screen gap rather than a second estimate of it.
@@ -365,6 +392,7 @@ export function USChoroplethMap({
         zipFacts,
         selectedZip: current.zip,
         scenario: shownScenario,
+        zipNote: zipView?.cardNote,
       })
     : null;
 
@@ -448,8 +476,12 @@ export function USChoroplethMap({
     if (!zipFacts) {
       return <div className="map-stage map-stage--empty">Loading ZIPs…</div>;
     }
+    // A host's ZIP stage (Segment Intelligence's ZIP areas), or the tiles,
+    // which ignore the stage-only props (usps, nationalViewBox, onView).
+    const ZipView: ComponentType<ZipStageProps> = stage?.Stage ?? USChoroplethMapZipLevel;
     return (
-      <USChoroplethMapZipLevel
+      <ZipView
+        key={drillStateUC}
         drillStateName={drillStateName}
         byZip={zipFacts}
         stateFacts={drillStateId ? stateFacts?.[drillStateId] : undefined}
@@ -462,11 +494,14 @@ export function USChoroplethMap({
         hover={hoverStage}
         onSelectZip={(zip) => {
           // Record the ZIP on this entry, then open its queue: Back returns
-          // to this drill with the tile selected.
+          // to this drill with the tile (or ZIP area) selected.
           changeSelection({ state: drillStateUC, county: null, zip }, { replace: true });
           navigate(leadQueuePath({ state: drillStateUC, zip }));
         }}
         onOpenStateQueue={() => navigate(leadQueuePath({ state: drillStateUC }))}
+        usps={drillStateUC}
+        nationalViewBox={usaMap.viewBox}
+        onView={onStageView}
       />
     );
   };
@@ -474,6 +509,7 @@ export function USChoroplethMap({
   return (
     <div
       className="map-wrap"
+      data-rum-target="map"
       // Rate mode grows the map by the lever instead of squeezing the stage
       // (USChoroplethMap.css keeps the stage's floor); `height` stays the floor.
       style={rateOn ? { minHeight: height } : { height }}
@@ -496,6 +532,7 @@ export function USChoroplethMap({
         setView={setView}
         campaignPrefillPath={campaignPrefillPath}
         onStartCampaign={(path) => navigate(path)}
+        zoomControls={zipView?.controls ?? null}
       />
 
       {/* Animated level transitions (Buyer-Wow #4): keying on `level`
@@ -507,6 +544,8 @@ export function USChoroplethMap({
         className={`map-levels stable-refresh-region ${updating ? 'is-updating' : ''}`}
         key={level}
         aria-busy={mapBusy}
+        // Warm the ZIP stage's code (never its data) when the national stage is pointed at.
+        onPointerEnter={stage && level === 'state' ? stage.warm : undefined}
         // Escape hides an open card and stops there, so the same keypress
         // never also closes a menu that listens on window. With no card, at
         // the ZIP level (map or table) it backs out one level, a history push
@@ -547,6 +586,7 @@ export function USChoroplethMap({
         totalCount={totalCount}
         scale={scale}
         scaleScope={scaleScope}
+        caption={zipView?.caption ?? null}
         offMapNote={offMapCaption(tableGroups.offMap, shownScenario || overlayActive ? 'extra' : 'count')}
         segmentCaption={segmentCaption}
         segmentFilter={segmentFilter}

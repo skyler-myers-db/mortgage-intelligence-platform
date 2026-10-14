@@ -173,6 +173,22 @@ describe('LeadTable aria-sort columnheaders', () => {
     );
   });
 
+  // D-platform-process-d2 item 4 (W5c): the interaction targets the RUM
+  // vocabulary names are static attributes, beside (never instead of) the
+  // morph source data-borrower-row / .lead-table__borrower.
+  it('marks the row, its expand toggle, its Approve and every sort control as RUM targets', () => {
+    mount();
+    const row = container.querySelector('tr[data-borrower-row="B-AAAAAAAAAAAA1"]');
+    expect(row?.getAttribute('data-rum-target')).toBe('lead-row');
+    expect(row?.querySelector('.lead-table__borrower-btn')?.getAttribute('data-rum-target')).toBe('lead-expand');
+    expect(row?.querySelector('.lead-table__borrower')?.textContent).toBe('B-AAAAAAAAAAAA1');
+    expect(row?.querySelector('[data-testid="lead-approve-B-AAAAAAAAAAAA1"]')?.getAttribute('data-rum-target')).toBe('lead-approve');
+    const sorts = Array.from(container.querySelectorAll('th[aria-sort] button.tbl__sort'));
+    expect(sorts).toHaveLength(5);
+    expect(sorts.map((button) => button.getAttribute('data-rum-target'))).toEqual(Array(5).fill('sort'));
+    expect(container.querySelector('[data-testid="lead-status-sort"]')?.getAttribute('data-rum-target')).toBe('sort');
+  });
+
   it('counts the expanded preview row and shifts later row indices', () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },

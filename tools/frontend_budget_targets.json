@@ -27,6 +27,11 @@
         "finding": "quality-08",
         "waiver": null
       },
+      "src/routes/admin-config.field-performance.tsx": {
+        "targetKiB": null,
+        "finding": "quality-08",
+        "waiver": null
+      },
       "src/routes/admin-config.tsx": {
         "targetKiB": null,
         "finding": "quality-08",

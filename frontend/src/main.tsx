@@ -42,7 +42,7 @@ const router = createAppRouter();
 // rate-window reads on an unfiltered `/analytics`, no data anywhere else.
 prefetchRouteData(queryClient, router.state.location.pathname, router.state.location.search);
 
-// RUM (lib/rum, lazy and off by default) reports a route_change only when the
+// RUM (lib/rum, lazy; on by default through the deploy payload, MIP_RUM_ENABLED=0 opts out) reports a route_change only when the
 // router COMMITS a new location: a Back the unsaved-changes guard blocks
 // never changes router.state.location, so it records nothing.
 setRumRouteSource((listener) => router.subscribe((state) => listener(state.location.pathname)));

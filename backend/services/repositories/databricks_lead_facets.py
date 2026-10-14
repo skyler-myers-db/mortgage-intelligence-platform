@@ -126,6 +126,7 @@ class DatabricksLeadFacetRepository:
             separators=(",", ":"),
             default=str,
         )
+        generation = self._cache.generation_for(cache_key)  # before the read (TTLCache.generation_for)
         if self._cache_ttl_s > 0:
             cached = self._cache.get(cache_key)
             if isinstance(cached, LeadFacetCounts):
@@ -155,7 +156,7 @@ class DatabricksLeadFacetRepository:
         )
         result = self._read(dimension, filters)
         if self._cache_ttl_s > 0:
-            self._cache.set(cache_key, result, self._cache_ttl_s)
+            self._cache.set(cache_key, result, self._cache_ttl_s, generation=generation)
         return result
 
     def _read(self, dimension: LeadFacetDimension, filters: LeadCohortFilters) -> LeadFacetCounts:

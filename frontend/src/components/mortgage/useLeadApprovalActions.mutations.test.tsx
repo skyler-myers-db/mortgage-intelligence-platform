@@ -85,6 +85,8 @@ let actions: Actions | null = null;
 /** The lazy bulk chunk as the harness sees it; a test may unload it. */
 let bulkChunk: BulkRunsChunk | null = { runBulkApprove, runBulkReject };
 const setApproval = vi.fn();
+/** The paged Lead Queue view the table shows (null outside it). */
+let harnessViewId: string | null = null;
 
 function Harness({ client }: { client: QueryClient }) {
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
@@ -100,6 +102,7 @@ function Harness({ client }: { client: QueryClient }) {
     canApprove: true,
     tableWrapRef,
     bulkRuns: () => bulkChunk,
+    leadViewId: harnessViewId,
   });
   useEffect(() => {
     actions = current;
@@ -158,6 +161,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     client.clear();
     actions = null;
     harnessLeads = LEADS;
+    harnessViewId = null;
     bulkChunk = { runBulkApprove, runBulkReject };
   });
 
@@ -265,6 +269,25 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     expect(actions!.bulkRun.result).toMatchObject({ ok: 7, failed: [], skipped: [], notStarted: [], stopped: false });
     expect(actions!.bulkToast).toBeNull();
     expect(actions!.selectionCount).toBe(0);
+  });
+
+  // W5c (D-audit-reads-a, F8): every decision declares the paged view it was
+  // taken on: the single approve, each bulk row and the row reject.
+  it('declares the paged Lead Queue view on single, bulk and reject decisions', async () => {
+    harnessViewId = '0123456789abcdef0123456789abcdef';
+    mount();
+    await act(async () => {
+      await actions!.approveLead(BORROWER, undefined, {}, draft('gen-review'));
+      await actions!.rejectLead(IDS[1], 'low_intent', 'No intent');
+    });
+    act(() => actions!.toggleSelectAll());
+    await act(async () => {
+      await actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
+    });
+    const views = (calls: unknown[][]) => new Set(calls.map((call) => (call[1] as { lead_view_id: unknown }).lead_view_id));
+    expect(apiMocks.approve.mock.calls.length).toBeGreaterThan(1);
+    expect(views(apiMocks.approve.mock.calls)).toEqual(new Set([harnessViewId]));
+    expect(views(apiMocks.reject.mock.calls)).toEqual(new Set([harnessViewId]));
   });
 
   it('Stop after this batch: the canary and one batch are sent, nothing is aborted, the rest stay selected and undrafted', async () => {

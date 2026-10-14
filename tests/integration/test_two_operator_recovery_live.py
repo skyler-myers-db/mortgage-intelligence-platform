@@ -125,6 +125,8 @@ def _approve_first_bulk_item(
         "draft_source_refreshed_at": _required_string(first, "source_refreshed_at"),
         "bulk_id": f"{label}-bulk-{uuid4().hex[:12]}",
         "bulk_rationale": "Live interrupted-bulk recovery proof.",
+        # A bulk row whose copy was sampled (review_mode required since W5c).
+        "review_mode": "bulk_sample",
         "request_id": str(uuid4()),
     }
     status, approved = _request(

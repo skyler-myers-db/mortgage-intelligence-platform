@@ -46,6 +46,7 @@ from backend.config.settings import settings
 from backend.main import app
 from backend.services.databricks_sql import (
     DatabricksSqlClient,
+    DatabricksSqlColumnMissingError,
     DatabricksSqlError,
     DatabricksSqlObjectMissingError,
     DatabricksSqlPermissionError,
@@ -408,3 +409,71 @@ def test_a_missing_gold_schema_stays_a_503_after_one_statement(warehouse: _Wareh
     assert response.json()["reason"] == "retries_exhausted"
     assert len(warehouse.statements) == 1
     assert get_breaker("warehouse").state == CircuitBreaker.CLOSED
+
+
+# ---------------------------------------------------------------------------
+# UNRESOLVED_COLUMN (audits wow-stage-2 / wow-stage-4): a gold column the
+# refresh has not built yet. Before 2026-10 it was a plain DatabricksSqlError:
+# three statements with backoff, then a breaker FAILURE.
+# ---------------------------------------------------------------------------
+
+_MISSING_COLUMN = (
+    "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name "
+    "`b`.`some_new_column` cannot be resolved. Did you mean one of the following? "
+    "[`b`.`state`]. SQLSTATE: 42703; line 1 pos 7"
+)
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (_MISSING_COLUMN, DatabricksSqlColumnMissingError),
+        ("[UNRESOLVED_COLUMN] x cannot be resolved.", DatabricksSqlColumnMissingError),
+        ("cannot resolve 'b.x' given input columns. SQLSTATE: 42703", DatabricksSqlColumnMissingError),
+        # A refusal still wins; near misses stay plain.
+        (f"{_REFUSAL} {_MISSING_COLUMN}", DatabricksSqlPermissionError),
+        ("[UNRESOLVED_COLUMN_SOMETHING] x", DatabricksSqlError),
+        ("SQLSTATE: 427030", DatabricksSqlError),
+        ("the column was not found", DatabricksSqlError),
+    ],
+)
+def test_the_classifier_owns_the_missing_column_marker(
+    message: str, expected: type[DatabricksSqlError]
+) -> None:
+    assert _sql_error_class(message) is expected
+
+
+def test_the_missing_column_class_is_a_sibling_of_the_missing_table_class() -> None:
+    """A route that maps a missing lane table to 'not built' must never swallow it."""
+    assert issubclass(DatabricksSqlColumnMissingError, DatabricksSqlError)
+    assert not issubclass(DatabricksSqlColumnMissingError, DatabricksSqlObjectMissingError)
+    assert not issubclass(DatabricksSqlObjectMissingError, DatabricksSqlColumnMissingError)
+
+
+def test_a_missing_column_fails_fast_with_no_breaker_failure(warehouse: _Warehouse) -> None:
+    warehouse.message = _MISSING_COLUMN
+    client = get_sql_client()
+
+    with pytest.raises(DependencyDownError) as raised:
+        client.execute("SELECT b.some_new_column FROM mip.gold.borrower_360 b")
+
+    assert len(warehouse.statements) == 1, "one attempt, no retries"
+    assert raised.value.kind == DependencyDownError.KIND_RETRIES_EXHAUSTED
+    assert isinstance(raised.value.last_error, DatabricksSqlColumnMissingError)
+    assert get_breaker("warehouse").state == CircuitBreaker.CLOSED
+
+
+def test_the_rate_lever_route_never_maps_a_missing_column_to_not_built(
+    warehouse: _Warehouse,
+) -> None:
+    warehouse.message = _MISSING_COLUMN
+    api = TestClient(app)
+
+    for request_number in range(1, 7):
+        response = api.get("/api/v1/geo/rate-sensitivity")
+        assert response.status_code == 503, response.text
+        assert len(warehouse.statements) == request_number, "one statement per request"
+
+    assert response.json()["reason"] == "retries_exhausted"
+    assert "UNRESOLVED_COLUMN" not in response.text and "42703" not in response.text
+    assert get_breaker("warehouse").state == CircuitBreaker.CLOSED, "six misses, threshold five"

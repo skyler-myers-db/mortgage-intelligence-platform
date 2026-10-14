@@ -79,6 +79,20 @@ _LIFECYCLE_SCHEMA_MIGRATIONS = {
     "outreach_event_id": "STRING",
 }
 
+# gold.funnel_snapshot_daily is MERGE-maintained, so its 003 CREATE TABLE IF
+# NOT EXISTS never adds a column to an existing table (audit wow-ai-3). The
+# comment is byte-identical to sql/ddl/003_gold_tables.sql §8 (pinned by
+# tests/unit/test_funnel_snapshot_competitor_lien.py). Nullable: snapshots
+# recorded before the column existed stay NULL and are never backfilled.
+FUNNEL_SNAPSHOT_COLUMN_COMMENTS: dict[str, str] = {
+    "competitor_lien_borrowers": (
+        "COUNT where is_competitor_lien = TRUE: the headline SUM(is_competitor_lien) carried per "
+        "(state, segment) cell. NULL on snapshots recorded before the column existed; never "
+        "backfilled with 0."
+    ),
+}
+_FUNNEL_SNAPSHOT_SCHEMA_MIGRATIONS = {"competitor_lien_borrowers": "INT"}
+
 
 def _catalog_default() -> str:
     return (os.environ.get("MIP_DEFAULT_CATALOG") or "mip").strip() or "mip"
@@ -457,6 +471,68 @@ def _ensure_lifecycle_schema(
     return False
 
 
+def _build_funnel_snapshot_schema_probe(*, catalog: str) -> str:
+    columns_table = _qualified_uc_table(catalog, "information_schema", "columns")
+    column_names = ", ".join(f"'{name}'" for name in _FUNNEL_SNAPSHOT_SCHEMA_MIGRATIONS)
+    return f"""
+    SELECT column_name
+    FROM {columns_table}
+    WHERE table_schema = 'gold'
+      AND table_name = 'funnel_snapshot_daily'
+      AND column_name IN ({column_names})
+    """
+
+
+def _build_funnel_snapshot_schema_migration(*, catalog: str, columns: tuple[str, ...]) -> str:
+    funnel_table = _qualified_uc_table(catalog, "gold", "funnel_snapshot_daily")
+    unknown = set(columns) - set(_FUNNEL_SNAPSHOT_SCHEMA_MIGRATIONS)
+    if unknown:
+        raise ValueError(f"unknown funnel snapshot migration columns: {sorted(unknown)}")
+    definitions_list: list[str] = []
+    for column in columns:
+        comment = FUNNEL_SNAPSHOT_COLUMN_COMMENTS[column].replace("'", "''")
+        definitions_list.append(
+            f"{column} {_FUNNEL_SNAPSHOT_SCHEMA_MIGRATIONS[column]} COMMENT '{comment}'"
+        )
+    definitions = ",\n      ".join(definitions_list)
+    return f"""
+    ALTER TABLE {funnel_table}
+    ADD COLUMNS (
+      {definitions}
+    )
+    """
+
+
+def _missing_funnel_snapshot_columns(rows: list[dict[str, Any]]) -> tuple[str, ...]:
+    existing = {str(row.get("column_name") or "").lower() for row in rows}
+    return tuple(name for name in _FUNNEL_SNAPSHOT_SCHEMA_MIGRATIONS if name not in existing)
+
+
+def _ensure_funnel_snapshot_schema(
+    execute: Callable[[str], list[dict[str, Any]]],
+    *,
+    catalog: str,
+) -> bool:
+    """Add the funnel snapshot's newer columns once; tolerate a concurrent add.
+
+    Mirrors ``_ensure_lifecycle_schema``: an information_schema probe, an
+    ALTER only for a missing column, and a re-probe when a concurrent add
+    raises. Returns True when it issued the ALTER. Any other failure (a
+    permission refusal included) propagates for the caller to decide.
+    """
+    probe = _build_funnel_snapshot_schema_probe(catalog=catalog)
+    missing = _missing_funnel_snapshot_columns(execute(probe))
+    if not missing:
+        return False
+    try:
+        execute(_build_funnel_snapshot_schema_migration(catalog=catalog, columns=missing))
+    except Exception:
+        if not _missing_funnel_snapshot_columns(execute(probe)):
+            return False
+        raise
+    return True
+
+
 def _build_legacy_default_prune(*, catalog: str) -> str:
     """Remove only synthetic default rows left by the retired full seed.
 
@@ -563,6 +639,18 @@ def _get_spark() -> Any:
     return spark
 
 
+def _spark_executor(spark: Any) -> Callable[[str], list[dict[str, Any]]]:
+    """``spark.sql`` as the ensure helpers' executor: rows as dicts, a None result as no rows."""
+
+    def execute(statement: str) -> list[dict[str, Any]]:
+        result = spark.sql(statement)
+        if result is None:
+            return []
+        return [row.asDict(recursive=True) for row in result.collect()]
+
+    return execute
+
+
 def _write_gold(
     rows: list[dict[str, Any]],
     *,
@@ -571,14 +659,7 @@ def _write_gold(
 ) -> None:
     """Migrate and merge; prune defaults only on explicit operator request."""
     spark = _get_spark()
-
-    def execute(statement: str) -> list[dict[str, Any]]:
-        result = spark.sql(statement)
-        if result is None:
-            return []
-        return [row.asDict(recursive=True) for row in result.collect()]
-
-    _ensure_lifecycle_schema(execute, catalog=catalog)
+    _ensure_lifecycle_schema(_spark_executor(spark), catalog=catalog)
     if prune_legacy_defaults:
         spark.sql(_build_legacy_default_prune(catalog=catalog))
     spark.sql(_build_lifecycle_merge(rows, catalog=catalog))
@@ -635,6 +716,10 @@ def main(argv: list[str] | None = None) -> None:
         prune_legacy_defaults=args.prune_legacy_defaults,
     )
     print("[sync-lifecycle] gold mirror refreshed")
+    # The bundle job's record_funnel_snapshot SQL task runs next and MERGEs
+    # every funnel column, so an existing table gains them here first.
+    if _ensure_funnel_snapshot_schema(_spark_executor(_get_spark()), catalog=args.catalog):
+        print("[sync-lifecycle] funnel snapshot columns added")
 
 
 # Tolerate being exec()'d without __file__ (some Databricks notebook paths).

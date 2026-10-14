@@ -4,7 +4,7 @@ import { appendFileSync, readdirSync, readFileSync, realpathSync, writeFileSync 
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { initialClosure, routeClosures, staleManifestProblems } from './build_manifest.mjs';
+import { initialClosure, lazyEntryClosures, routeClosures, staleManifestProblems } from './build_manifest.mjs';
 // quality-08: targets, the per-chunk JSON and the step summary (main() only).
 import { chunkReport, evaluateTargets, loadTargets, parseBudgetFlags, summaryTable } from './frontend_budget_report.mjs';
 // The gates, their headroom policy and each re-baseline's attribution.
@@ -12,7 +12,7 @@ import { KiB, budgets } from './frontend_budget_gates.mjs';
 
 // The manifest maths, re-exported so a test (or another tool) can import the
 // budget gate's exact definitions from one place.
-export { initialClosure, routeClosures, staleManifestProblems };
+export { initialClosure, lazyEntryClosures, routeClosures, staleManifestProblems };
 
 const repoRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const distDir = path.join(repoRoot, 'frontend', 'dist');
@@ -66,6 +66,32 @@ export function routeBudgetProblems(routeKeys, budgetRoutes) {
     if (!routeKeys.includes(key)) problems.push(`budgets.routes names ${key}, which is not a route module in the build manifest`);
   }
   return problems;
+}
+
+/**
+ * budgets.lazyModules (W5c, D-dataviz-geo-e): a br gate per named lazy module,
+ * over lazyEntryClosures. A key that is not a dynamic entry in the build is a
+ * problem, never a silent pass (a renamed or inlined module would blind it).
+ * Returns each measured closure (for the report) and the problems.
+ */
+export function lazyModuleGates(manifest, initial, lazyBudgets, sizeOf) {
+  const keys = Object.keys(lazyBudgets);
+  const closures = lazyEntryClosures(manifest, initial, keys);
+  const measured = [];
+  const problems = [];
+  for (const key of keys) {
+    const closure = closures[key];
+    if (!closure) {
+      problems.push(`budgets.lazyModules names ${key}, which is not a dynamic entry in the build manifest`);
+      continue;
+    }
+    const size = sumSizes([...closure.js, ...closure.css], sizeOf);
+    measured.push({ key, ...size });
+    if (size.brBytes > lazyBudgets[key]) {
+      problems.push(`lazy module ${key} closure br is ${bytes(size.brBytes)} > ${bytes(lazyBudgets[key])}`);
+    }
+  }
+  return { measured, problems };
 }
 
 /** The largest lazy chunk, per dimension (a chunk can be largest raw but not largest br). */
@@ -342,6 +368,10 @@ function main(argv = process.argv.slice(2)) {
   for (const route of routes) {
     if (route.key in budgets.routes) gate(`route ${route.key} closure br`, route.brBytes, budgets.routes[route.key]);
   }
+  // The integrator owns the numbers (frontend_budget_gates.mjs); an absent map gates nothing.
+  const lazyModules = lazyModuleGates(manifest, initial, budgets.lazyModules ?? {}, (file) =>
+    (present.has(file) ? sizeOf(file) : { bytes: 0, gzipBytes: 0, brBytes: 0 }));
+  overages.push(...lazyModules.problems);
   overages.push(...vendorChunkProblems(manifest, initial, chunkModules));
   failIf(initialJs.files.length === 0, 'the build manifest names no initial JS');
   failIf(initialCss.files.length === 0, 'the build manifest names no initial CSS');
@@ -365,6 +395,10 @@ function main(argv = process.argv.slice(2)) {
   console.log('  route closures (beyond the initial closure):');
   for (const route of routes) {
     console.log(`    ${route.key}: ${triple(route)} (${route.files.length} files)`);
+  }
+  console.log(`  lazy modules (beyond the initial closure and their importers): ${lazyModules.measured.length ? '' : 'none gated'}`);
+  for (const lazyModule of lazyModules.measured) {
+    console.log(`    ${lazyModule.key}: ${triple(lazyModule)} (${lazyModule.files.length} files)`);
   }
   const vendorModules = Object.values(manifest)
     .filter((chunk) => (chunk.name ?? '').startsWith('vendor-'))

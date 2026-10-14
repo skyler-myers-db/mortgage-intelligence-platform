@@ -119,7 +119,7 @@ export function MultiFilterSelect<T extends string>({
   );
 
   return (
-    <div ref={rootRef} className="filter-root">
+    <div ref={rootRef} className="filter-root" data-rum-target="filter">
       <button
         ref={btnRef}
         type="button"

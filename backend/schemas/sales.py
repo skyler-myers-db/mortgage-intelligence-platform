@@ -47,8 +47,13 @@ LeadOutcomeSourceSystem = Literal[
     "manual_import",
 ]
 
-_NOTE_PLACEHOLDER_PATTERN = re.compile(
-    r"\[(?:first|last|full)[_\s-]?[Nn]ame\]|\{(?:first|last|full)[_\s-]?[Nn]ame\}",
+# D-shell-deviations-g2 (flow-08 adjacent, critic-05): the write-only free-text
+# disposition note is retired. The field survives one tolerant release so a tab
+# loaded before the deploy still logs a call with an empty Notes box; any
+# non-blank value is refused (422) and nothing is persisted.
+DISPOSITION_NOTES_RETIRED = (
+    "Free-text disposition notes are retired. Clear the Notes field (or reload the page) "
+    "and log the call again."
 )
 _PUBLIC_COMPETITOR_LABEL_PATTERN = re.compile(r"^Competitor ([A-Z]|Other)$")
 _MAX_CLIENT_CLOCK_SKEW = timedelta(minutes=5)
@@ -197,7 +202,14 @@ class DispositionRequest(BaseModel):
     outcome: CallDispositionOutcome
     occurred_at: datetime | None = None
     callback_at: datetime | None = None
-    notes: str | None = Field(default=None, max_length=500)
+    notes: str | None = Field(
+        default=None,
+        max_length=500,
+        description=(
+            "Retired 2026-10: must be absent, null or blank; free-text disposition notes "
+            "are no longer accepted"
+        ),
+    )
     request_id: str | None = None
 
     @field_validator("lo_email")
@@ -205,17 +217,12 @@ class DispositionRequest(BaseModel):
     def _lo_email(cls, value: str) -> str:
         return validate_internal_staff_email(value)
 
-    @field_validator("notes")
+    @field_validator("notes", mode="before")
     @classmethod
-    def _notes(cls, value: str | None) -> str | None:
-        if value is None:
+    def _notes_retired(cls, value: object) -> None:
+        if value is None or (isinstance(value, str) and not value.strip()):
             return None
-        note = re.sub(r"\s+", " ", value.strip())
-        if not note:
-            return None
-        if _NOTE_PLACEHOLDER_PATTERN.search(note) or contains_human_name_shape(note):
-            raise ValueError("notes must not contain names or unresolved placeholders")
-        return note
+        raise ValueError(DISPOSITION_NOTES_RETIRED)
 
     @field_validator("request_id")
     @classmethod
@@ -250,7 +257,6 @@ class CallDisposition(BaseModel):
     attempt_number: int
     occurred_at: datetime
     callback_at: datetime | None = None
-    notes: str | None = None
     audit_event_id: str | None = None
 
 

@@ -76,7 +76,7 @@ describe('geo *WithFreshness reads', () => {
     expect((await api.zipRollupsWithFreshness({ state: 'tx' })).lastGoodAt).toBeNull();
   });
 
-  it('keep every URL byte for byte, county and ZIP included', async () => {
+  it('keep every URL byte for byte, county and a cohort query included', async () => {
     const calls: string[] = [];
     vi.stubGlobal('fetch', async (path: string) => {
       calls.push(path);
@@ -84,8 +84,9 @@ describe('geo *WithFreshness reads', () => {
     });
     await api.countyRollups('tx', undefined, ['equity'], 'any');
     await api.countyRollupsWithFreshness('tx', undefined, ['equity'], 'any');
-    await api.zipRollups({ state: 'tx' }, undefined, null, 'any', { occupancy: 'Owner occupied' });
-    await api.zipRollupsWithFreshness({ state: 'tx' }, undefined, null, 'any', { occupancy: 'Owner occupied' });
+    // W5c deleted the unused plain zipRollups; the state pair stands in for the cohort query.
+    await api.stateRollups(null, undefined, 'any', { occupancy: 'Owner occupied' });
+    await api.stateRollupsWithFreshness(null, undefined, 'any', { occupancy: 'Owner occupied' });
     await api.segments(undefined, null);
     await api.segmentsWithFreshness(undefined, null);
     expect(calls[0]).toBe(calls[1]);

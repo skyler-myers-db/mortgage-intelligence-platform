@@ -163,6 +163,9 @@
        (audit responsive-v1; degraded band only). */
     z-index: var(--z-sheet);
   }
+  /* The bottom padding shrinks .main's content box, which the route-nav dock
+     measures (hooks/useRouteNavDock): with the sheet open a nav that no
+     longer fits a sixth of what is left undocks and scrolls away. */
   [data-console="open"] .main {
     padding-right: var(--sp-6);
     padding-bottom: calc(50vh + var(--sp-6));

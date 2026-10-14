@@ -207,7 +207,6 @@ def _disposition_from_row(row: dict[str, Any] | None) -> CallDisposition | None:
         attempt_number=int(row.get("attempt_number") or 1),
         occurred_at=row["occurred_at"],
         callback_at=row.get("callback_at"),
-        notes=row.get("notes"),
         audit_event_id=str(row["audit_event_id"]) if row.get("audit_event_id") else None,
     )
 

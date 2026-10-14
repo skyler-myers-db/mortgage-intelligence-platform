@@ -47,6 +47,18 @@ from backend.services.outreach_decision_intent import _canonical_intent
 from backend.services.repositories import get_outreach_repository
 from backend.services.resilience import _reset_breakers_for_tests
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.fixtures.reviewed_approval import skip_draft_verification, synthetic_review_proof
+
+# W5c (D-approval-flow-a1): review_mode is required on approve, with its draft
+# proof. These tests pin the decision write, replay and audit (the draft
+# verification is test_outreach_draft_binding's), so one fixed proof rides
+# every approve body and the verifier answers the local no-proof outcome.
+REVIEWED = synthetic_review_proof(draft_generation_id="99999999-9999-4999-8999-999999999999")
+
+
+@pytest.fixture(autouse=True)
+def _approve_reaches_the_decision(monkeypatch: pytest.MonkeyPatch) -> None:
+    skip_draft_verification(monkeypatch)
 
 
 def _disclosure_row(params: dict[str, Any] | None = None) -> dict[str, str]:
@@ -498,7 +510,7 @@ def test_approve_reject_unknown_borrower_fail_closed_before_lakebase(override_de
 
     client = TestClient(app)
     for path, body in (
-        ("/api/outreach/approve", {"borrower_id": "B-DOES-NOT-EXIST", "offer_code": "heloc"}),
+        ("/api/outreach/approve", {"borrower_id": "B-DOES-NOT-EXIST", "offer_code": "heloc", **REVIEWED}),
         (
             "/api/outreach/reject",
             {
@@ -701,6 +713,7 @@ def test_atomic_decision_rolls_back_if_audit_insert_fails(
     resp = client.post(
         "/api/outreach/approve",
         json={
+            **REVIEWED,
             "borrower_id": "B-48291",
             "offer_code": "heloc",
             "draft_subject": "Your mortgage review",
@@ -734,6 +747,7 @@ def test_atomic_conflict_does_not_write_audit_for_uninserted_approval(
     resp = client.post(
         "/api/outreach/approve",
         json={
+            **REVIEWED,
             "borrower_id": "B-48291",
             "offer_code": "heloc",
             "request_id": "11111111-1111-4111-8111-111111111111",
@@ -784,6 +798,7 @@ def test_atomic_conflict_rejects_request_id_for_different_decision(
     response = client.post(
         "/api/outreach/approve",
         json={
+            **REVIEWED,
             "borrower_id": "B-48291",
             "offer_code": "heloc",
             "request_id": "11111111-1111-4111-8111-111111111111",
@@ -820,6 +835,7 @@ def test_approve_audit_captures_decision_inputs(
     response = client.post(
         "/api/outreach/approve",
         json={
+            **REVIEWED,
             "borrower_id": "B-48291",
             "offer_code": "heloc",
             "draft_subject": "Your mortgage review",
@@ -920,6 +936,7 @@ def test_approve_forwards_final_subject_and_body_into_audit_metadata(
     resp = client.post(
         "/api/outreach/approve",
         json={
+            **REVIEWED,
             "borrower_id": "B-48291",
             "actor": "anonymous",
             "draft_subject": "Your mortgage review",
@@ -961,6 +978,7 @@ def test_approve_rejects_protected_class_language_before_write(
     response = TestClient(app).post(
         "/api/outreach/approve",
         json={
+            **REVIEWED,
             "borrower_id": "B-48291",
             "draft_subject": "Your mortgage review",
             "draft_body": f"{protected_copy} should call for a review. {DISCLOSURE_BODY}",
@@ -1003,6 +1021,7 @@ def test_approve_rejects_unsupported_or_identity_shaped_borrower_copy_before_wri
     response = TestClient(app).post(
         "/api/outreach/approve",
         json={
+            **REVIEWED,
             "borrower_id": "B-48291",
             "draft_subject": "Your mortgage review",
             "draft_body": f"{unsafe_copy} {DISCLOSURE_BODY}",
@@ -1060,6 +1079,7 @@ def test_approve_idempotent_on_retry_with_same_request_id(
 
     client = TestClient(app)
     body = {
+        **REVIEWED,
         "borrower_id": "B-48291",
         "actor": "anonymous",
         "request_id": "22222222-2222-4222-8222-222222222222",
@@ -1193,6 +1213,7 @@ def test_request_id_conflict_for_different_decision_is_rejected(
     response = client.post(
         "/api/outreach/approve",
         json={
+            **REVIEWED,
             "borrower_id": "B-48291",
             "request_id": "44444444-4444-4444-8444-444444444444",
             "draft_subject": "Your mortgage review",
@@ -1213,6 +1234,7 @@ def test_request_id_conflict_for_different_decision_is_rejected(
         (
             "/api/outreach/approve",
             {
+                **REVIEWED,
                 "borrower_id": "B-48291",
                 "offer_code": "heloc",
                 "channel": "email",
@@ -1297,6 +1319,7 @@ def test_fallback_request_id_binds_the_full_decision_payload(
     )
     override_deps(audit=InMemoryAuditStore(), lakebase=lakebase)
     base = {
+        **REVIEWED,
         "borrower_id": "B-48291",
         "draft_subject": "Your mortgage review",
         "draft_body": APPROVAL_DRAFT_BODY,
@@ -1360,6 +1383,7 @@ def test_approve_without_request_id_repeated_payload_collapses_to_one_row(
 
     client = TestClient(app)
     body = {
+        **REVIEWED,
         "borrower_id": "B-48291",
         "draft_subject": "Your mortgage review",
         "draft_body": APPROVAL_DRAFT_BODY,
@@ -1500,6 +1524,7 @@ def test_approve_body_not_in_logs(
     resp = client.post(
         "/api/outreach/approve",
         json={
+            **REVIEWED,
             "borrower_id": "B-48291",
             "actor": f"{sentinel}@example.com",
             "draft_subject": "Your mortgage review",

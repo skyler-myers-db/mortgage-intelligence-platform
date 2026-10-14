@@ -40,6 +40,8 @@ const appMocks = vi.hoisted(() => ({
   savedDrafts: {} as Record<string, SavedDraft>,
 }));
 
+// The audit-free decision history (D-audit-reads-c2) stays pending: this suite counts its own reads.
+vi.mock('../lib/apiClients/borrowerDecisions', () => ({ borrowerDecisionsQuery: (id: string) => ({ queryKey: ['mip', 'borrower', id, 'decisions'], queryFn: () => new Promise(() => undefined) }) }));
 vi.mock('../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/api')>()),
   api: apiMocks,

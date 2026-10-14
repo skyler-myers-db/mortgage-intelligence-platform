@@ -182,11 +182,7 @@ test.describe('focus() walks never stop under sticky chrome (a11y-v2)', () => {
   }
 
   for (const restored of [false, true]) {
-    test(`${restored ? 'non-vacuity, nav margin restored inside it: ' : ''}a control in view in the approval review dialog takes focus ${restored ? 'and the dialog over-scrolls' : 'without the dialog scrolling'}`, async ({ app, browserName, page }) => {
-      test.fixme(
-        browserName === 'webkit' && process.platform === 'linux',
-        'w5-shell-nav-followups (W5c, owns the a11y-v2 nested-scroller clearance) · CI Linux WebKit: the harness cannot place a control within 20px of the review dialog\'s top (the precondition message carries the dialog metrics); the clearance is proven in Chromium and macOS WebKit',
-      );
+    test(`${restored ? 'non-vacuity, nav margin restored inside it: ' : ''}a control in view in the approval review dialog takes focus ${restored ? 'and the dialog over-scrolls' : 'without the dialog scrolling'}`, async ({ app, page }) => {
       await app.gotoRoute('/lead-queue');
       await page.getByTestId(`lead-approve-${ELIGIBLE}`).click();
       const dialog = page.locator('dialog.lead-approve-dialog[open]');
@@ -205,29 +201,43 @@ test.describe('focus() walks never stop under sticky chrome (a11y-v2)', () => {
           .filter((el) => el.getClientRects().length > 0 && el !== document.activeElement)
           .at(-1);
         if (!control) throw new Error('precondition: a control in the dialog');
-        // WebKit can still be settling the dialog's layout after `room` lands
-        // (a later frame moves the control), so re-place until it holds.
-        let port = scroller.getBoundingClientRect();
-        let box = control.getBoundingClientRect();
-        for (let attempt = 0; attempt < 4; attempt += 1) {
-          scroller.scrollTop += box.top - port.top - 4;
+        // Linux WebKit can still be settling the dialog's layout after `room`
+        // lands (a later frame moves the control). Re-place until two
+        // consecutive frame pairs report the same rects, bounded; the 20px
+        // precondition stays (the twin's >40px over-scroll needs it, 61px margin).
+        const read = () => {
+          const port = scroller.getBoundingClientRect();
+          const box = control.getBoundingClientRect();
+          return { top: scroller.scrollTop, portTop: port.top, portBottom: port.bottom, boxTop: box.top, boxBottom: box.bottom };
+        };
+        const same = (a: ReturnType<typeof read>, b: ReturnType<typeof read>) =>
+          (Object.keys(a) as Array<keyof typeof a>).every((key) => Math.abs(a[key] - b[key]) < 0.5);
+        const placed = (r: ReturnType<typeof read>) => r.boxTop >= r.portTop && r.boxBottom <= r.portBottom && r.boxTop - r.portTop < 20;
+        let attempts = 0;
+        let settled = false;
+        let last = read();
+        while (attempts < 12 && !settled) {
+          attempts += 1;
+          scroller.scrollTop += last.boxTop - last.portTop - 4;
           await frames();
-          port = scroller.getBoundingClientRect();
-          box = control.getBoundingClientRect();
-          if (box.top >= port.top && box.bottom <= port.bottom && box.top - port.top < 20) break;
+          const first = read();
+          await frames();
+          last = read();
+          settled = same(first, last) && placed(last);
         }
         const before = scroller.scrollTop;
         control.focus();
         await frames();
         const delta = Math.abs(scroller.scrollTop - before);
         room.remove();
-        const metrics = `scrollTop ${before} of ${scroller.scrollHeight - scroller.clientHeight}; control ${(box.top - port.top).toFixed(1)}..${(box.bottom - port.top).toFixed(1)} in ${port.height.toFixed(1)}`;
-        return { inView: box.top >= port.top && box.bottom <= port.bottom && box.top - port.top < 20, delta, focused: document.activeElement === control, metrics };
+        const metrics = `${attempts} placement(s), settled ${settled}; scrollTop ${before} of ${scroller.scrollHeight - scroller.clientHeight}; `
+          + `control ${(last.boxTop - last.portTop).toFixed(1)}..${(last.boxBottom - last.portTop).toFixed(1)} in ${(last.portBottom - last.portTop).toFixed(1)}`;
+        return { inView: settled, delta, focused: document.activeElement === control, metrics };
       });
-      expect(moved.inView, `precondition: the control sits within 20px of the dialog's top, in full view (${moved.metrics})`).toBe(true);
+      expect(moved.inView, `precondition: the control sits within 20px of the dialog's top, in full view, on stable rects (${moved.metrics})`).toBe(true);
       expect(moved.focused).toBe(true);
-      if (restored) expect(moved.delta, 'the nav margin over-scrolls the dialog').toBeGreaterThan(40);
-      else expect(moved.delta, 'the dialog does not move').toBeLessThanOrEqual(1);
+      if (restored) expect(moved.delta, `the nav margin over-scrolls the dialog (${moved.metrics})`).toBeGreaterThan(40);
+      else expect(moved.delta, `the dialog does not move (${moved.metrics})`).toBeLessThanOrEqual(1);
     });
   }
 

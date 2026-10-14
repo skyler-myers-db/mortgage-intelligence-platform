@@ -9,16 +9,18 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from backend.config.settings import settings as settings
 from backend.schemas.assets import (
     AssetColumn,
+    AssetFreshnessResponse,
     AssetLineageNode,
     AssetMetadataResponse,
     AssetProperty,
     AssetTag,
 )
+from backend.schemas.data_estate import DataEstateStatus
 from backend.services.asset_metadata_utils import (
     catalog_explorer_url as _catalog_explorer_url,
 )
@@ -67,6 +69,10 @@ _SAFE_PROPERTY_RE = re.compile(
 )
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _CACHE_KEY_PREFIX = "asset:"
+# The every-user freshness read (critic-03) caches under its own prefix, so it
+# never serves, or is served by, the administrator metadata payload.
+_FRESHNESS_CACHE_KEY_PREFIX = "asset_freshness:"
+_READINESS_STATUSES: frozenset[str] = frozenset(get_args(DataEstateStatus))
 # App SQL is gold-only: Delta detail, the COUNT(*) fallback and table
 # properties are read from the App's own catalog in these schemas only. Silver,
 # first_party and provider-catalog assets still get their information_schema
@@ -101,6 +107,45 @@ class AssetMetadataService:
         payload = self._load_asset(descriptor)
         self._cache.set(cache_key, payload, self._ttl)
         return payload
+
+    def get_freshness(self, asset_key: str) -> AssetFreshnessResponse:
+        """Freshness of a registered asset for every authenticated user.
+
+        Audit 2026-09-21 ``critic-03`` / ``D-audit-reads-c1``. Reads only the
+        reviewed ``gold.source_readiness`` row the descriptor names in
+        ``freshness_basis``: never the object probe, Delta detail, COUNT,
+        columns, tags, properties or lineage the administrator read issues.
+        An asset no readiness row covers answers ``not_tracked`` with no SQL.
+        A SQL failure propagates to the route (503) and is never cached; a
+        genuine no-row read is cached as ``unavailable``.
+        """
+        descriptor = resolve_asset_descriptor(asset_key)
+        basis = descriptor.freshness_basis
+        if descriptor.freshness_not_tracked or basis is None:
+            return AssetFreshnessResponse(
+                asset_key=descriptor.key,
+                title=descriptor.title,
+                source="not_tracked",
+            )
+        cache_key = f"{_FRESHNESS_CACHE_KEY_PREFIX}{descriptor.key}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached  # type: ignore[no-any-return]
+        payload = _freshness_payload(descriptor, basis, self._query_freshness_basis(basis))
+        self._cache.set(cache_key, payload, self._ttl)
+        return payload
+
+    def _query_freshness_basis(self, basis: str) -> dict[str, Any] | None:
+        """The exact-match readiness row for ``basis``; raises on any SQL failure."""
+        rows = self._sql.execute(
+            "SELECT status, CAST(last_updated AS STRING) AS last_updated, "
+            "CAST(checked_at AS STRING) AS checked_at "
+            f"FROM {qualify('gold', 'source_readiness')} "
+            "WHERE source_name = :basis "
+            "LIMIT 1",
+            {"basis": basis},
+        )
+        return rows[0] if rows else None
 
     def _load_asset(self, descriptor: AssetDescriptor) -> AssetMetadataResponse:
         gaps: list[str] = []
@@ -435,6 +480,32 @@ class AssetMetadataService:
         for node in nodes:
             deduped.setdefault((node.direction, node.asset_path.lower()), node)
         return list(deduped.values())[:12]
+
+
+def _freshness_payload(
+    descriptor: AssetDescriptor,
+    basis: str,
+    row: dict[str, Any] | None,
+) -> AssetFreshnessResponse:
+    if row is None:
+        return AssetFreshnessResponse(
+            asset_key=descriptor.key,
+            title=descriptor.title,
+            basis=basis,
+            source="unavailable",
+        )
+    last_updated = _opt_str(row.get("last_updated"))
+    status = _opt_str(row.get("status"))
+    return AssetFreshnessResponse(
+        asset_key=descriptor.key,
+        title=descriptor.title,
+        freshness=_freshness_bucket(last_updated),
+        last_updated=last_updated,
+        checked_at=_opt_str(row.get("checked_at")),
+        status=status if status in _READINESS_STATUSES else "unknown",  # type: ignore[arg-type]
+        basis=basis,
+        source="source_readiness",
+    )
 
 
 def resolve_asset_descriptor(asset_key: str) -> AssetDescriptor:

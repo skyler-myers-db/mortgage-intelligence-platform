@@ -48,3 +48,30 @@ export function leadsQuery(
       api.leadsPage(request.segment, signal, request.geo, request.opts),
   };
 }
+
+/**
+ * The paged Lead Queue view's scope (routes/lead-queue.pages.ts). Also spelled
+ * in lib/queryClient.ts's setQueryDefaults, which must not import this module
+ * (it would pull `api` users into the initial chunk); queryClient.test.ts
+ * pins the two equal.
+ */
+export const LEADS_PAGED_SCOPE = 'lead-queue-paged';
+
+/**
+ * The paged view's key: the request, the server sort and the implicit inputs.
+ * Never a cursor: pages ride the cache entry's page params, so a cursor never
+ * reaches a key, the URL or the router state (D-audit-reads-a).
+ */
+export function leadsPagedQueryKey(
+  request: LeadsRequest,
+  order: { sort: string; dir: 'asc' | 'desc' },
+  implicitInputs: readonly string[] = [],
+) {
+  return queryKeys.leads([
+    LEADS_PAGED_SCOPE,
+    request,
+    order.sort,
+    order.sort === 'rank' ? null : order.dir,
+    ...implicitInputs,
+  ]);
+}

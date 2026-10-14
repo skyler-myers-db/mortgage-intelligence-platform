@@ -128,6 +128,20 @@ export type RoutePattern = (typeof ROUTES)[RouteId]['pattern'];
 export const ROUTE_IDS = Object.keys(ROUTES) as RouteId[];
 
 /**
+ * The nav's two clusters (deviation:route-nav-clusters; flow-07, shell-09;
+ * D-shell-deviations-b): the lead workflow first, then insight and reference
+ * tools. Unlabelled on screen; each cluster is a named list for assistive
+ * technology. Flattened, they are NAVIGATION_ROUTE_IDS, the one order the
+ * palette also follows.
+ */
+export const NAVIGATION_GROUPS = [
+  { id: 'flow', label: 'Lead workflow', routes: ['home', 'portfolio', 'segments', 'leads', 'borrowerIndex', 'offerIndex'] },
+  { id: 'tools', label: 'Insight and reference', routes: ['analytics', 'askGenie', 'glossary', 'auditLedger', 'admin'] },
+] as const satisfies readonly { id: string; label: string; routes: readonly RouteId[] }[];
+
+export type NavigationRouteId = (typeof NAVIGATION_GROUPS)[number]['routes'][number];
+
+/**
  * The ONE navigation order, in product-flow order: build the portfolio,
  * segment, rank, explain (Borrower 360), recommend (Offer), then the
  * analytics, Genie, glossary, audit-ledger and admin destinations. The
@@ -141,12 +155,9 @@ export const ROUTE_IDS = Object.keys(ROUTES) as RouteId[];
  * eleventh link would wrap the pinned one-line nav); the palette and the
  * rail offer it to administrators and auditors.
  */
-export const NAVIGATION_ROUTE_IDS = [
-  'home', 'portfolio', 'segments', 'leads', 'borrowerIndex',
-  'offerIndex', 'analytics', 'askGenie', 'glossary', 'auditLedger', 'admin',
-] as const satisfies readonly RouteId[];
-
-export type NavigationRouteId = (typeof NAVIGATION_ROUTE_IDS)[number];
+export const NAVIGATION_ROUTE_IDS: readonly NavigationRouteId[] = NAVIGATION_GROUPS.flatMap(
+  (group): readonly NavigationRouteId[] => group.routes,
+);
 
 /** `/borrower-360/<id>`: the dossier of one masked borrower. */
 export function borrowerPath(borrowerId: string): `/borrower-360/${string}` {

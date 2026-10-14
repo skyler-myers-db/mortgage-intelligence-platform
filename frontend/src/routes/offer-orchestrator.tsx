@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Navigate, useLocation, useParams } from 'react-router';
 import type { ApproveResult, RejectResult } from '../lib/apiTypes';
@@ -15,6 +15,7 @@ import { intentFingerprint, useIntentRequestIds } from '../lib/mutations/request
 import { queueHref, useQueueContext } from '../lib/queueContext';
 import { queuePosition } from '../lib/queuePosition';
 import { offerPath } from '../lib/routeMeta';
+import { queryKeys } from '../lib/queryKeys';
 import { usePresenterMode } from '../lib/presenterMode';
 import { PageShell } from '../components/layout/PageShell';
 import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
@@ -26,7 +27,7 @@ import { useApp } from '../components/AppContext';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import { approverGateReason } from '../components/mortgage/approverGate';
 import { offerDisplayLabel } from '../lib/offerLanguage';
-import { DEFAULT_REJECT_REASON, type OutreachChannel, type RejectReasonCode } from './offer-orchestrator.constants';
+import type { OutreachChannel, RejectReasonCode } from './offer-orchestrator.constants';
 import { useOfferSalesTeam } from './offer-orchestrator.sales-team';
 import { OfferReviewGrid, RejectRationalePanel } from './offer-orchestrator.panels';
 import { OfferActionBar } from './offer-orchestrator.action-bar';
@@ -34,6 +35,7 @@ import { useOfferDraft, useOfferSnapshot } from './offer-orchestrator.queries';
 import { draftProofMatchesSnapshot, resolveOfferApprovalStatus } from './offer-orchestrator.snapshot';
 import { OfferSnapshotReconciliation } from './offer-orchestrator.snapshot-status';
 import { OfferDecisionOutcome } from './offer-orchestrator.decision';
+import { OfferPriorDecisions } from './offer-orchestrator.priorDecisions';
 import { announceApprovalRouting, offerUnsavedMessage } from './offer-orchestrator.feedback';
 import {
   OfferLoadErrorRoute,
@@ -92,7 +94,10 @@ export default function OfferOrchestrator() {
   const [approvalRouting, setApprovalRouting] = useState<{ id: string; assignedTo: string | null; followUpAt: string | null } | null>(null);
   const [draftChannel, setDraftChannel] = useState<OutreachChannel>('email');
   const [rejectReviewOpen, setRejectReviewOpen] = useState(false);
-  const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode>(DEFAULT_REJECT_REASON);
+  // No default reason (D-approval-flow-d item 13): every rationale_code in the
+  // ledger is one a reviewer chose.
+  const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode | ''>('');
+  const rejectReasonRef = useRef<HTMLSelectElement>(null);
   const salesTeam = useOfferSalesTeam();
   const [assignedTo, setAssignedTo] = useState<string>('');
   const [followUpDays, setFollowUpDays] = useState<number>(0); // 0 = no reminder
@@ -302,6 +307,9 @@ export default function OfferOrchestrator() {
     }
     requestIds.settle(intent);
     setApproval(id, 'approved');
+    // The audit-free decision history re-reads now (exact key: never the
+    // dossier, whose read is an audited VIEW_BORROWER).
+    void queryClient.invalidateQueries({ queryKey: queryKeys.borrowerDecisions(id), exact: true });
     setDecidedHere({
       id,
       generation: loadGeneration,
@@ -322,6 +330,12 @@ export default function OfferOrchestrator() {
     }
     if (!rejectReviewOpen) {
       setRejectReviewOpen(true);
+      return;
+    }
+    // No reason yet: send nothing and land on Reason. The panel's submit
+    // focuses it itself; this covers the bar's own Reject.
+    if (rejectReasonCode === '') {
+      rejectReasonRef.current?.focus();
       return;
     }
     if (rejectReasonCode === 'other_with_text' && rejectRationale.trim().length === 0) {
@@ -355,9 +369,10 @@ export default function OfferOrchestrator() {
     }
     requestIds.settle(intent);
     setApproval(id, 'rejected');
+    void queryClient.invalidateQueries({ queryKey: queryKeys.borrowerDecisions(id), exact: true });
     setDecidedHere({ id, generation: loadGeneration, auditId: res.audit_event_id ?? null, approvalId: null });
     setRejectReviewOpen(false);
-    setRejectReasonCode(DEFAULT_REJECT_REASON);
+    setRejectReasonCode('');
     setRejectRationale('');
   };
 
@@ -506,6 +521,7 @@ export default function OfferOrchestrator() {
         queue={queue}
         nextId={queue ? queuePosition(queue, id)?.next ?? null : null}
       />
+      <OfferPriorDecisions borrowerId={b?.borrower_id ?? id} />
       {decisionPending && (
         <OfferActionBar
           borrowerId={b?.borrower_id ?? null}
@@ -532,10 +548,11 @@ export default function OfferOrchestrator() {
               onCancel={() => {
                 setRejectReviewOpen(false);
                 setRejectRationale('');
-                setRejectReasonCode(DEFAULT_REJECT_REASON);
+                setRejectReasonCode('');
               }}
               onSubmit={() => void onReject()}
               submitDisabled={snapshot.reading}
+              reasonRef={rejectReasonRef}
             />
           )}
         />

@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, status
 
 from backend.config.settings import settings
 from backend.schemas.telemetry import RumBatch
 from backend.schemas.telemetry_response import RumAcceptedResponse
-from backend.services.backpressure import actor_key_for_request
+from backend.services import rum_rollup
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
-from backend.services.observability import emit
 
-log = logging.getLogger(__name__)
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 
 
@@ -26,32 +23,23 @@ router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 )
 def record_rum(
     batch: RumBatch,
-    request: Request,
     _: Annotated[None, Depends(require_json_content_type)],
 ) -> RumAcceptedResponse:
     """Accept sanitized browser performance telemetry.
 
     RUM events are operational telemetry, not audit rows. They are kept
-    deliberately narrow: sanitized route patterns, metric name, numeric
-    value, coarse rating, and non-identifying details. The schema rejects
-    query strings, borrower ids, UUIDs, and email-looking values before
-    anything reaches logs or downstream collectors.
+    deliberately narrow: route-registry templates, metric name, numeric
+    value, coarse rating, and closed-vocabulary details. The schema rejects
+    query strings, borrower ids, UUIDs, and email-looking values first.
+
+    Each accepted event is folded into the in-process day aggregates
+    (backend/services/rum_rollup.py), which flush once a minute to
+    mip_app.rum_daily. Nothing is logged per event and no actor is resolved:
+    the stored rows carry no identifier of any kind (D-platform-process-d1).
     """
     if not settings.mip_rum_enabled:
         return RumAcceptedResponse(accepted=0, enabled=False)
 
-    actor_key = actor_key_for_request(request)
-    actor_class = "anonymous" if actor_key in {"anonymous", "untrusted-edge"} else "authenticated"
     for event in batch.events:
-        emit(
-            log,
-            "rum_metric",
-            metric=event.metric,
-            value=round(event.value, 2),
-            rating=event.rating,
-            route=event.route,
-            navigation_type=event.navigation_type,
-            actor_class=actor_class,
-            details=event.details,
-        )
+        rum_rollup.add(event)
     return RumAcceptedResponse(accepted=len(batch.events), enabled=True)

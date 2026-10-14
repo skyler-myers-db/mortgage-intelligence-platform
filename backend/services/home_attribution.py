@@ -16,6 +16,14 @@ name goes through ``qualify``; values are named binds; the measure maps to
 its column through a closed table, never through user text. The read writes
 no audit row. With no snapshot rows the response says so with None totals
 and no states: nothing is fabricated.
+
+Snapshot dates are chosen only among snapshots that RECORDED the measure
+(``{column} IS NOT NULL``). That matters for ``competitor_lien``: its column
+(wow-ai-3, W5c) is nullable, rows recorded before it existed stay NULL, so
+until the first post-deploy snapshot the response is the no-snapshot shape.
+An install whose table has not gained the column yet (the App ahead of
+``jobs/sync_lifecycle_state._ensure_funnel_snapshot_schema``) answers that
+same shape, never a 5xx.
 """
 from __future__ import annotations
 
@@ -30,8 +38,10 @@ from backend.schemas.home_attribution import (
     HomeAttributionState,
     HomeSummaryAttributionResponse,
 )
+from backend.services.databricks_sql import DatabricksSqlColumnMissingError
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.gold_cache import AggregateCache, GoldAggregateCache
+from backend.services.resilience_breaker import DependencyDownError
 
 #: measure -> (segment_code row of funnel_snapshot_daily, column, display label).
 MEASURE_COLUMNS: dict[str, tuple[str, str, str]] = {
@@ -39,21 +49,36 @@ MEASURE_COLUMNS: dict[str, tuple[str, str, str]] = {
     "high_opportunity": ("_ALL", "high_opportunity_borrowers", "high-opportunity"),
     "offers_recommended": ("_ALL", "offer_recommended_borrowers", "primary offer paths"),
     "listed_for_sale": ("listed", "addressable_borrowers", "listed for sale"),
+    "competitor_lien": ("_ALL", "competitor_lien_borrowers", "competitor liens"),
 }
+
+#: Funnel columns an existing table gains only from the ensure step, so a
+#: read may run ahead of them; every other column is NOT NULL in 003.
+_ENSURED_COLUMNS = frozenset({"competitor_lien_borrowers"})
 
 RATE_SERIES_ID = "MORTGAGE30US"
 NATIONAL = "_ALL"
 
 
-def _snapshot_dates_sql() -> str:
+def _snapshot_dates_sql(column: str) -> str:
+    # ``column`` comes from the closed MEASURE_COLUMNS table, never user text.
     return (
         "SELECT "
         "CAST(MAX(CASE WHEN snapshot_date <= CAST(:baseline AS DATE) THEN snapshot_date END) AS STRING) AS at_or_before, "
         "CAST(MIN(CASE WHEN snapshot_date > CAST(:baseline AS DATE) THEN snapshot_date END) AS STRING) AS after, "
         "CAST(MAX(snapshot_date) AS STRING) AS latest "
         f"FROM {qualify('gold', 'funnel_snapshot_daily')} "
-        "WHERE state = '_ALL' AND segment_code = :segment_code"
+        "WHERE state = '_ALL' AND segment_code = :segment_code "
+        f"AND {column} IS NOT NULL"
     )
+
+
+def _is_ensured_column_missing(exc: BaseException, column: str) -> bool:
+    """The App read the funnel table before the ensure step added ``column``."""
+    if column not in _ENSURED_COLUMNS:
+        return False
+    error = exc.last_error if isinstance(exc, DependencyDownError) else exc
+    return isinstance(error, DatabricksSqlColumnMissingError)
 
 
 def _snapshot_values_sql(column: str) -> str:
@@ -184,7 +209,14 @@ class HomeAttributionService:
         segment_code, column, label = MEASURE_COLUMNS[measure]
         sql = self._sql()
         baseline_iso = baseline.isoformat()
-        dates = sql.execute_one(_snapshot_dates_sql(), {"baseline": baseline_iso, "segment_code": segment_code})
+        try:
+            dates = sql.execute_one(
+                _snapshot_dates_sql(column), {"baseline": baseline_iso, "segment_code": segment_code}
+            )
+        except (DependencyDownError, DatabricksSqlColumnMissingError) as exc:
+            if not _is_ensured_column_missing(exc, column):
+                raise
+            dates = None  # no snapshot has recorded the measure yet
         baseline_date, current_date = choose_snapshot_dates(dates)
         rate = rate_facts(
             sql.execute(_rate_weeks_sql(), {"series_id": RATE_SERIES_ID, "baseline": baseline_iso}) or [],

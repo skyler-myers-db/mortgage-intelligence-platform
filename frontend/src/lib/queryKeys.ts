@@ -27,6 +27,13 @@ export const queryKeys = {
   borrowerLifecycle: (borrowerId: string | null | undefined) =>
     ['mip', 'borrower', borrowerId ?? '', 'lifecycle'] as const,
   /**
+   * The audit-free borrower decision history (audit flow-04 phase 2). Under
+   * ['mip','borrower'] on purpose: invalidateOperationalQueries marks it stale
+   * after every governed decision. Never persisted.
+   */
+  borrowerDecisions: (borrowerId: string | null | undefined) =>
+    ['mip', 'borrower', borrowerId ?? '', 'decisions'] as const,
+  /**
    * The Offer Orchestrator's one composite read: borrower, recommendation and
    * lifecycle for one open (routes/offer-orchestrator.queries.ts). Never under
    * ['mip','borrower'], so it never shares the Borrower 360 dossier entry (the
@@ -62,6 +69,8 @@ export const queryKeys = {
   adminSources: () => ['mip', 'admin', 'sources'] as const,
   adminOperations: () => ['mip', 'admin', 'operations'] as const,
   adminCapabilities: () => ['mip', 'admin', 'capabilities'] as const,
+  /** Administration's Field performance (D-platform-process-d2): audit-free, never persisted, never polled. */
+  adminFieldPerformance: (days: number) => ['mip', 'admin', 'field-performance', days] as const,
   activationDestinations: () => ['mip', 'activation', 'destinations'] as const,
   activationSummary: () => ['mip', 'activation', 'summary'] as const,
   activationOutbox: (criteria: readonly unknown[]) => ['mip', 'activation', 'outbox', ...criteria] as const,
@@ -70,6 +79,13 @@ export const queryKeys = {
     ['mip', 'audit', 'rollups', period, groupBy ?? 'event_type'] as const,
   auditReceipt: (auditEventId: string | null | undefined) =>
     ['mip', 'audit', 'receipt', auditEventId ?? ''] as const,
+  /**
+   * The refusal-reports page (D-audit-reads-d): every served page writes one
+   * VIEW_AUDIT_LEDGER row, so it is read only on an explicit open, a filter
+   * change, Load more or Retry, and never persisted. Never the question text.
+   */
+  refusalReports: (family: string | null, cursor: string | null) =>
+    ['mip', 'audit', 'refusal-reports', family ?? '', cursor ?? ''] as const,
   genieStart: () => ['mip', 'genie', 'start'] as const,
   growthAgent: () => ['mip', 'growth-agent'] as const,
   growthAgentCapabilities: () => ['mip', 'growth-agent', 'capabilities'] as const,
@@ -79,6 +95,13 @@ export const queryKeys = {
   /** The Delta Explainer's read (wow-ai-3): audit-free; not persisted (only ['mip','home','summary'] is). */
   homeSummaryAttribution: (measure: string, baseline: string) =>
     ['mip', 'home', 'summary', 'attribution', measure, baseline] as const,
+  /**
+   * The evidence drawer's every-user freshness read (critic-03): audit-free,
+   * never persisted, and never a prefix-child of assetMetadata ['mip','asset',key].
+   */
+  assetFreshness: (assetKey: string | null | undefined) => ['mip', 'asset-freshness', assetKey ?? ''] as const,
+  /** One KPI's server-emitted reproduce SQL (flow-06): fixed text, never persisted. */
+  kpiProof: (kpi: string | null | undefined) => ['mip', 'kpi-proof', kpi ?? ''] as const,
 };
 
 export function invalidateOperationalQueries(queryClient: QueryClient): Promise<void> {

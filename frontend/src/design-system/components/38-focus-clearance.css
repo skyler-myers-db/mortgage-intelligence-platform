@@ -2,13 +2,13 @@
    FOCUS CLEARANCE — the sticky route nav (audit a11y-v2)
    ============================================================
    Focus Not Obscured (WCAG 2.2 SC 2.4.11, technique C43). `.route-nav` is
-   sticky at the top of `.main`, the app scroller, whenever there is the
-   vertical room for it (01-app-shell.css, the same 40rem condition). A
-   control that takes focus from above the view (Shift+Tab up a page) was
-   scrolled only to the scroller's top edge, behind the nav. Everything in
-   `.main` outside the nav keeps the nav's block size, plus room for the
-   focus ring, as scroll-margin at its start, so focus scrolling stops
-   below the nav.
+   sticky at the top of `.main`, the app scroller, while it is docked
+   (01-app-shell.css `.route-nav[data-docked]`: the measured nav is at most a
+   sixth of `.main`'s content box, report 12.4 #5). A control that takes
+   focus from above the view (Shift+Tab up a page) was scrolled only to the
+   scroller's top edge, behind the nav. Everything in `.main` outside the
+   nav keeps the nav's block size, plus room for the focus ring, as
+   scroll-margin at its start, so focus scrolling stops below the nav.
 
    Scroll-margin on what is outside the nav, not scroll-padding on `.main`
    (declared departure from the lane brief, which asked for scroll-padding;
@@ -25,8 +25,9 @@
    re-style the whole `.main` subtree on every node inserted into or
    removed from it: every virtual-window shift of the Lead Queue's rows
    (about 8x the style recalc of a wheel scroll, measured). Proof:
-   focus-clearance-cost.fixture.spec.ts. A `.main` with no nav (or on the
-   Ask tab, below) has no --nav-clear, so the margin is its initial 0.
+   focus-clearance-cost.fixture.spec.ts. A `.main` whose nav is undocked
+   (or on the Ask tab, below) sets no --nav-clear, so the margin is its
+   registered initial 0px.
 
    Left out:
    - `.tbl-wrap` contents (the ranked-borrower table, the app's one
@@ -39,8 +40,9 @@
      container query): given a margin with the table scrolled, a focus
      moved the table back to "reveal" a header already stuck in view (45px)
      and still left it under the nav (measured). Engines without
-     scroll-state queries (WebKit 26) leave a header control focused from
-     under the nav where it is.
+     scroll-state queries (WebKit 26) get the same clearance from
+     useTableScrollClearance's data-at-block-start flag, which LeadTable.css
+     mirrors.
    - `.lead-approve-dialog` contents: the collapsed row's approval review,
      a top-layer <dialog> that is its own scroller. The nav is not over it,
      so the margin only over-scrolled that dialog when a control already in
@@ -50,6 +52,13 @@
      into view ({block:'nearest'}) as the pointer moves over it. The nav's
      margin there rolled a scrolled menu back under a still pointer, so a
      click picked the option above the one aimed at.
+   - `.zip-tiles` contents: the map's ZIP drill is an overflow-y scroller of
+     tile buttons with roving arrow-key focus. The nav is not over it, so
+     the margin only over-scrolled the list when a tile already in its view
+     took focus. The other nested scrollers in `.main` need nothing:
+     `.lead-queue-scope` holds no focusable element and
+     `.filter-row--lead-queue` does not scroll (lead-queue.css); the census
+     is shell-nav-followups.fixture.spec.ts.
    - /ask-genie while its Ask tab shows (a `.genie-composer` outside any
      hidden tabpanel): routes/ask-genie.css already clears the nav there
      with `.main` scroll-padding, and a margin as well put the nav in twice
@@ -59,20 +68,16 @@
    route's own scroll-margin (glossary.css, ask-genie.css
    `.growth-agent-run`, `.genie__msg`) still wins.
 
-   The size is the one-line nav: its --sp-3 padding at each end, a --sp-8
-   link and the 1px bottom border; 57px, exact at 1440x900 on every route
-   with the Console closed and open (measured). A nav that wraps on a
-   narrow screen is under-cleared; measuring it needs RouteNav.tsx, initial
-   JS (wave 5, with the other routes). The shell stylesheet's raw and gzip
-   gates set how short this rule is.
+   The size is measured: useRouteNavDock writes the nav's border-box block
+   size on `.main` as --route-nav-block (registered in 01-app-shell.css, not
+   inherited, so the write re-styles `.main` alone), and only a `.main`
+   whose nav is docked turns it into --nav-clear (registered, inherited, 0px
+   by default). A wrapped, docked nav is cleared by its real height; a nav
+   in flow scrolls away and is cleared by nothing.
    ============================================================ */
-@media (min-height: 40rem) {
-  .main:has(.route-nav):not(:has(.genie-composer:not([hidden] *))) {
-    --nav-clear: calc(
-      var(--sp-3) * 2 + var(--sp-8) + 1px + var(--focus-ring-width) + var(--focus-ring-offset)
-    );
-  }
-  :where(.main :not(.route-nav *, .tbl-wrap *, .filter-menu *, .lead-approve-dialog *)) {
-    scroll-margin-block-start: var(--nav-clear);
-  }
+.main:has(> .route-nav[data-docked]):not(:has(.genie-composer:not([hidden] *))) {
+  --nav-clear: calc(var(--route-nav-block) + var(--focus-ring-width) + var(--focus-ring-offset));
+}
+:where(.main :not(.route-nav *, .tbl-wrap *, .filter-menu *, .lead-approve-dialog *, .zip-tiles *)) {
+  scroll-margin-block-start: var(--nav-clear);
 }

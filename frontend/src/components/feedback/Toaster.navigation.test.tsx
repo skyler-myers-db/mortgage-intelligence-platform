@@ -19,6 +19,7 @@ import { UnsavedChangesGuard } from './UnsavedChangesGuard';
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('../AppContext', () => ({ useApp: () => ({ canAccessAdmin: true }) }));
+vi.mock('../../lib/sessionQuery', () => ({ useAuditLedgerAccess: () => false }));
 
 const AUDIT_ID = 'evt-0001';
 

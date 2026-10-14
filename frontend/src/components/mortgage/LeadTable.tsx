@@ -11,7 +11,7 @@ import { leadExportNotice } from './LeadExportNotice';
 import { useLeadCsvExport } from './useLeadCsvExport';
 import { LEAD_VIRTUALIZATION_THRESHOLD, leadRowEstimatePx } from './LeadTable.constants';
 import { leadTableColumnCount, leadTableColumns } from './LeadTable.columns';
-import { sortValue, verifiedCampaignBinding } from './LeadTable.logic';
+import { keepsServerOrder, sortValue, verifiedCampaignBinding } from './LeadTable.logic';
 import { LeadTableBody } from './LeadTableBody';
 import { useStableRowCallbacks } from './LeadTable.rowCallbacks';
 import { LeadTableHead } from './LeadTableHead';
@@ -120,6 +120,8 @@ export function LeadTable({
   headerStatus,
   campaignHandoff = null,
   triage = null,
+  paging = null,
+  sortScope = 'loaded',
 }: LeadTableProps) {
   // Budget trade (audit runtime-04 slice 3, cut 5 of the wave-4b lane): the
   // compiled shell measured +2.63 KiB br on the LeadTable chunk (35.81 ->
@@ -201,8 +203,9 @@ export function LeadTable({
   });
   const { displayLeads, leadsById } = sales;
   // Audit runtime-04 slice 1: sorted once per (rows, sort), not on every
-  // render; the id list is what the virtualizer keys rows by.
-  const sortedLeads = useMemo(() => (sortKey === 'rank'
+  // render; the id list is what the virtualizer keys rows by. A server sort
+  // (the paged Lead Queue, tables-02) is already the rows' order.
+  const sortedLeads = useMemo(() => (keepsServerOrder(sortKey, sortScope)
     ? displayLeads
     : [...displayLeads].sort((a, b) => {
         const direction = sortDir === 'asc' ? 1 : -1;
@@ -212,7 +215,7 @@ export function LeadTable({
           return (av - bv) * direction;
         }
         return String(av).localeCompare(String(bv)) * direction;
-      })), [displayLeads, sortKey, sortDir]);
+      })), [displayLeads, sortKey, sortDir, sortScope]);
   const rowIds = useMemo(() => sortedLeads.map((lead) => lead.borrower_id), [sortedLeads]);
   const expandedRowIndex = expanded ? rowIds.indexOf(expanded) : -1;
   const hasExpandedRow = expandedRowIndex >= 0;
@@ -260,6 +263,8 @@ export function LeadTable({
     canApprove: approverGate === null,
     tableWrapRef,
     bulkRuns: BULK_REVIEW_CHUNK.current,
+    // The view every decision declares (D-audit-reads-a); null outside the paged queue.
+    leadViewId: paging?.viewId ?? null,
   });
   // The Triage deck (D-approval-flow-a2): `?mode=triage`, approvers only. A
   // definitive non-approver's check strips the mode; a loading one waits; a
@@ -484,6 +489,7 @@ export function LeadTable({
     void runExport({
       plan: csvExport, approvals, exportContext, rowOrder, matchingRows: totalMatching, loadedCount: leads.length,
       campaignHref: campaignHandoff?.href,
+      view: paging?.viewId ? { viewId: paging.viewId, pagesLoaded: paging.pagesLoaded } : null,
     });
   }
 
@@ -759,8 +765,11 @@ export function LeadTable({
         totalMatching={totalMatching}
         truncatedAt={truncatedAt}
         sortKey={sortKey}
+        sortLabel={columns.find((column) => column.sortKey === sortKey)?.label ?? sortKey}
+        sortScope={sortScope}
         sortedCount={sortedLeads.length}
         onResetSort={() => toggleSort('rank')}
+        paging={paging}
       />}
     </div>
   );

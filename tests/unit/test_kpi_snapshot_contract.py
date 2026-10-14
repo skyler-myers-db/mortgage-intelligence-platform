@@ -140,7 +140,16 @@ def test_event_measures_are_one_additive_nullable_block() -> None:
     block = block[: block.index("ON CONFLICT (version) DO NOTHING;")]
     for measure in HEADLINE_EVENT_MEASURES:
         assert f"ADD COLUMN IF NOT EXISTS {measure} BIGINT;" in block
-        assert f"DROP CONSTRAINT IF EXISTS kpi_snapshots_{measure}_chk" in block
+        # W5c R1 NB-8: added only when pg_constraint lacks it, never dropped
+        # and re-validated on a re-run.
+        assert f"DROP CONSTRAINT IF EXISTS kpi_snapshots_{measure}_chk" not in block
+        assert re.search(
+            rf"IF NOT EXISTS \(\s+SELECT 1 FROM pg_constraint\s+"
+            rf"WHERE conrelid = 'mip_app\.kpi_snapshots'::regclass\s+"
+            rf"AND conname = 'kpi_snapshots_{measure}_chk'\s+\) THEN\s+"
+            rf"ALTER TABLE mip_app\.kpi_snapshots\s+ADD CONSTRAINT kpi_snapshots_{measure}_chk\s+",
+            block,
+        ), measure
         assert f"CHECK ({measure} IS NULL OR {measure} >= 0)" in block
         assert f"COMMENT ON COLUMN mip_app.kpi_snapshots.{measure}" in block
     assert "_kpi_snapshot_event_measures'" in block

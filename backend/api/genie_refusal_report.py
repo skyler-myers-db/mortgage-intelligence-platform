@@ -1,13 +1,20 @@
-"""Genie refusal false-positive report route (hash-only).
+"""Genie refusal false-positive report route.
 
 ``POST /api/genie/refusal-report`` records that a lender believes a governed
 refusal was a false positive. The body carries the coarse ``refusal_reason``
-and the ``refusal_report_hash`` from the refused turn, never the question:
-the schema has no text field, the hash is shape-validated, and the ids must
-have a shape the server issues (a Genie id, or one of the app's own synthetic
-message ids). The route shares the
+and the ``refusal_report_hash`` from the refused turn; the hash is
+shape-validated, and the ids must have a shape the server issues (a Genie id,
+or one of the app's own synthetic message ids). The route shares the
 ``/genie`` prefix so the backpressure classifier gives it the same "genie"
 budget as ``/api/genie/feedback`` (audit 2026-09-21 ``genie-05``).
+
+The question text is accepted only when the reporter opts in ("Report with
+my question", D-audit-reads-d): it must normalize to the exact bytes the hash
+was taken from (else a fixed 422 and nothing is stored), and it is kept only
+when capture is enabled, it names no person or borrower, and the reporter's
+own ledger holds the refusal. Otherwise the report stays hash-only. A kept
+question lives only in ``genie_refusal_report_texts``, never on the report
+row, in audit metadata, a log line or ``genie_messages``.
 """
 
 from __future__ import annotations
@@ -16,21 +23,32 @@ import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
+from backend.config.settings import settings
 from backend.services.audit_store import resolve_actor
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.genie_message_policy import GenieMessageRequest
 from backend.services.genie_refusal_reason import (
     GenieRefusalReason,
     is_refusal_report_hash,
+    refusal_report_hash,
 )
-from backend.services.genie_refusal_report import record_genie_refusal_report
+from backend.services.genie_refusal_report import (
+    OfferedRefusalText,
+    RefusalTextDecline,
+    personal_details_in,
+    record_genie_refusal_report,
+)
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
+from backend.services.pii_redaction import scrub_free_text
 
 router = APIRouter(prefix="/genie", tags=["genie"])
 
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
+
+QUESTION_TEXT_MISMATCH = "question_text does not match the reported refusal"
 
 # A closed grammar of the ids the server itself issues on a turn the card can
 # report. Genie issues 32-hex conversation and message ids (a UUID is accepted
@@ -52,7 +70,12 @@ _GENIE_ID_RE = re.compile(
 
 
 class GenieRefusalReportRequest(BaseModel):
-    """Hash-only report body. There is deliberately no field for prompt text."""
+    """Report body. The question text is optional and consented.
+
+    ``question_text`` is sent only when the reporter chose "Report with my
+    question"; it is checked against ``question_hash`` and stored, if at all,
+    only in ``genie_refusal_report_texts`` (never on the report row).
+    """
 
     #: Full SHA-256 of the refused question (the audit ledger's exact bytes),
     #: as returned on the refused turn's ``refusal_report_hash``. Shape-checked
@@ -62,6 +85,16 @@ class GenieRefusalReportRequest(BaseModel):
     refusal_reason: GenieRefusalReason
     conversation_id: str | None = Field(default=None, max_length=128)
     message_id: str | None = Field(default=None, max_length=128)
+    question_text: str | None = Field(
+        default=None,
+        max_length=4000,
+        description=(
+            "Only when the reporter opts in: the refused question exactly as it "
+            "was asked. It must hash to question_hash; it is kept, scrubbed and "
+            "for 90 days, only when capture is enabled, it names no person or "
+            "borrower, and the reporter's own ledger holds the refusal."
+        ),
+    )
 
 
 class GenieRefusalReportResponse(BaseModel):
@@ -71,6 +104,14 @@ class GenieRefusalReportResponse(BaseModel):
     duplicate: bool
     report_id: str | None = None
     audit_event_id: str | None = None
+    question_captured: bool = Field(
+        default=False,
+        description=(
+            "True when the reporter's question is held for review (stored now, "
+            "or already held for this report). False for a report without the "
+            "question or one kept hash-only."
+        ),
+    )
 
 
 def _validated_genie_id(value: str | None, *, field_name: str) -> str | None:
@@ -87,6 +128,31 @@ def _validated_genie_id(value: str | None, *, field_name: str) -> str | None:
     return stripped
 
 
+def _normalized_question(text: str) -> str:
+    """The question as the Genie route validated it, or '' when it fails."""
+
+    try:
+        return GenieMessageRequest(question=text).question
+    except ValidationError:
+        return ""
+
+
+def _offered_text(
+    text: str, *, question_hash: str, refusal_reason: str
+) -> tuple[OfferedRefusalText | None, RefusalTextDecline | None]:
+    """Bind the text to the hash (fixed 422), then the route's decline gates."""
+
+    normalized = _normalized_question(text)
+    if not normalized or refusal_report_hash(normalized) != question_hash:
+        raise HTTPException(status_code=422, detail=QUESTION_TEXT_MISMATCH)
+    if settings.mip_genie_refusal_text_capture != "enabled":
+        return None, "capture_disabled"
+    scrubbed = scrub_free_text(normalized)
+    if personal_details_in(normalized=normalized, scrubbed=scrubbed, refusal_reason=refusal_reason):
+        return None, "personal_details"
+    return OfferedRefusalText(scrubbed=scrubbed, redacted=scrubbed != normalized), None
+
+
 @router.post(
     "/refusal-report",
     response_model=GenieRefusalReportResponse,
@@ -98,12 +164,13 @@ def genie_refusal_report(
     lakebase: LakebaseDep,
     _: Annotated[None, Depends(require_json_content_type)],
 ) -> GenieRefusalReportResponse:
-    """Record a hash-only false-positive report for a governed refusal.
+    """Record a false-positive report for a governed refusal.
 
-    The actor comes from the edge identity header. The report row and its
-    ``GENIE_REFUSAL_REPORT`` audit event commit together
-    (``record_genie_refusal_report``); a replay for the same actor, hash and
-    family is acknowledged as a duplicate without a second row.
+    The actor comes from the edge identity header. The report row, any
+    consented question text and its ``GENIE_REFUSAL_REPORT`` audit event
+    commit together (``record_genie_refusal_report``); a replay for the same
+    actor, hash and family is acknowledged as a duplicate without a second
+    report row.
     """
     actor = resolve_actor(request)
     if not is_refusal_report_hash(payload.question_hash):
@@ -113,6 +180,13 @@ def genie_refusal_report(
         )
     conversation_id = _validated_genie_id(payload.conversation_id, field_name="conversation_id")
     message_id = _validated_genie_id(payload.message_id, field_name="message_id")
+    offered, declined = (None, None)
+    if payload.question_text is not None:
+        offered, declined = _offered_text(
+            payload.question_text,
+            question_hash=payload.question_hash,
+            refusal_reason=payload.refusal_reason,
+        )
     try:
         record = record_genie_refusal_report(
             lakebase,
@@ -121,6 +195,8 @@ def genie_refusal_report(
             refusal_reason=payload.refusal_reason,
             conversation_id=conversation_id,
             message_id=message_id,
+            offered_text=offered,
+            declined=declined,
         )
     except LakebaseError as exc:
         raise HTTPException(
@@ -132,4 +208,5 @@ def genie_refusal_report(
         duplicate=record.duplicate,
         report_id=record.report_id,
         audit_event_id=record.audit_event_id,
+        question_captured=record.question_captured,
     )

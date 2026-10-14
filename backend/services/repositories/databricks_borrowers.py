@@ -41,7 +41,9 @@ from backend.services.repositories.databricks_shared import (
     _BORROWER_DOSSIER_COLUMNS,
     _EVIDENCE_COLUMNS,
     _coerce_bool,
+    _iso_date,
     _parse_timeline,
+    _rate_type,
     _redact_evidence_list,
 )
 from backend.services.resilience import TTLCache
@@ -267,6 +269,12 @@ class DatabricksBorrowerRepository:
             trigger_timeline=timeline_events,
             evidence_events=evidence_events,
             why_panel=why,
+            # Crossed the line (audit wow-stage-4): NULL until the gold
+            # refresh builds them, and NULL twins while optional_gold_columns
+            # holds the spread_history family. Same read, same VIEW_BORROWER.
+            first_pos_date=_iso_date(row.get("first_pos_date")),
+            first_pos_rate_type=_rate_type(row.get("first_pos_rate_type")),
+            first_itm_week=_iso_date(row.get("first_itm_week")),
         )
         # Defence in depth: compare gold's materialized ITM flag against the
         # canonical Python primitive using the same applied thresholds. Do not

@@ -182,6 +182,11 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   market_rate_fraction      DOUBLE    NOT NULL COMMENT 'Fractional market rate from silver.market_rates_weekly WHERE is_latest=TRUE. Router maps to WhyPanel.market_rate.',
   opportunity_score         INT       NOT NULL COMMENT 'fn_lead_score output. 0..100.',
   confidence                INT       NOT NULL COMMENT 'ROUND(mean(5 sub-scores)). 0..100. Matches mock_data._build_borrower.',
+  economic_incentive_points DECIMAL(5,2)       COMMENT 'Weighted economic_incentive sub-score: 0.35 * economic_incentive (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.',
+  intent_trigger_points     DECIMAL(5,2)       COMMENT 'Weighted intent_trigger sub-score: 0.30 * intent_trigger (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.',
+  fit_points                DECIMAL(5,2)       COMMENT 'Weighted fit sub-score: 0.15 * fit (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.',
+  relationship_points       DECIMAL(5,2)       COMMENT 'Weighted relationship sub-score: 0.10 * relationship (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.',
+  evidence_points           DECIMAL(5,2)       COMMENT 'Weighted evidence sub-score: 0.10 * evidence (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.',
   recommended_offer_code    STRING    NOT NULL COMMENT 'fn_next_best_offer output (lowercase code). Router resolves to human label via NBO_PRODUCT_LABELS.',
   recommended_offer         STRING    NOT NULL COMMENT 'Human label for recommended_offer_code (resolved in SQL via product_labels map).',
   why_now                   STRING    NOT NULL COMMENT 'Deterministic one-sentence template per offer_code. No PII. See data-contract §6.',
@@ -417,6 +422,11 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
   rate_spread_bps           INT       NOT NULL COMMENT 'From gold.borrower_360.',
   opportunity_score         INT       NOT NULL COMMENT 'fn_lead_score output 0..100.',
   confidence                INT       NOT NULL COMMENT 'Mean of 5 sub-scores 0..100.',
+  economic_incentive_points DECIMAL(5,2)       COMMENT 'Weighted economic_incentive sub-score: 0.35 * economic_incentive (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.',
+  intent_trigger_points     DECIMAL(5,2)       COMMENT 'Weighted intent_trigger sub-score: 0.30 * intent_trigger (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.',
+  fit_points                DECIMAL(5,2)       COMMENT 'Weighted fit sub-score: 0.15 * fit (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.',
+  relationship_points       DECIMAL(5,2)       COMMENT 'Weighted relationship sub-score: 0.10 * relationship (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.',
+  evidence_points           DECIMAL(5,2)       COMMENT 'Weighted evidence sub-score: 0.10 * evidence (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.',
   recommended_offer_code    STRING    NOT NULL COMMENT 'fn_next_best_offer output code; canonical offer enum for operational filters and audit grouping.',
   recommended_offer         STRING    NOT NULL COMMENT 'Human label (resolved in gold via product_labels map).',
   why_now                   STRING    NOT NULL COMMENT 'Deterministic template per offer code.',
@@ -569,7 +579,11 @@ CREATE TABLE IF NOT EXISTS mip.gold.funnel_snapshot_daily (
   approved_borrowers            INT       NOT NULL COMMENT 'COUNT of approved lifecycle states at snapshot time.',
   actioned_borrowers            INT       NOT NULL COMMENT 'COUNT of outreach_status = "actioned" at snapshot time.',
   avg_opportunity_score         INT       NOT NULL COMMENT 'AVG(opportunity_score) for the cell.',
-  snapshot_at                   TIMESTAMP NOT NULL COMMENT 'Precise refresh timestamp.'
+  snapshot_at                   TIMESTAMP NOT NULL COMMENT 'Precise refresh timestamp.',
+  -- Last on purpose (audit wow-ai-3): an existing table gains it from
+  -- jobs/sync_lifecycle_state._ensure_funnel_snapshot_schema, whose ALTER
+  -- TABLE ADD COLUMNS appends, so fresh and upgraded installs agree.
+  competitor_lien_borrowers     INT                COMMENT 'COUNT where is_competitor_lien = TRUE: the headline SUM(is_competitor_lien) carried per (state, segment) cell. NULL on snapshots recorded before the column existed; never backfilled with 0.'
 )
 USING DELTA
 CLUSTER BY (snapshot_date, state)
@@ -722,6 +736,11 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_dossier (
   market_rate_fraction      DOUBLE    NOT NULL COMMENT 'Fractional market rate.',
   opportunity_score         INT       NOT NULL COMMENT 'fn_lead_score output 0..100.',
   confidence                INT       NOT NULL COMMENT 'Mean of 5 sub-scores.',
+  economic_incentive_points DECIMAL(5,2)       COMMENT 'Weighted economic_incentive sub-score: 0.35 * economic_incentive (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.',
+  intent_trigger_points     DECIMAL(5,2)       COMMENT 'Weighted intent_trigger sub-score: 0.30 * intent_trigger (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.',
+  fit_points                DECIMAL(5,2)       COMMENT 'Weighted fit sub-score: 0.15 * fit (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.',
+  relationship_points       DECIMAL(5,2)       COMMENT 'Weighted relationship sub-score: 0.10 * relationship (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.',
+  evidence_points           DECIMAL(5,2)       COMMENT 'Weighted evidence sub-score: 0.10 * evidence (the fn_lead_score weight), DECIMAL(5,2); NULL when the sub-score is NULL. Score anatomy: the five *_points sum, banker-rounded and clipped to 0..100, to opportunity_score.',
   recommended_offer_code    STRING    NOT NULL COMMENT 'fn_next_best_offer code.',
   recommended_offer         STRING    NOT NULL COMMENT 'Human label.',
   why_now                   STRING    NOT NULL COMMENT 'Deterministic template per offer code.',
@@ -792,6 +811,9 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_dossier (
                                       NOT NULL COMMENT 'Full evidence array (capped at 20 per CLIP) sorted by signal_rank.',
   trigger_timeline          ARRAY<STRUCT<evidence_id: STRING, source_product: STRING, source_table: STRING, signal_type: STRING, signal_value: STRING, display_text: STRING, confidence: DOUBLE, `timestamp`: STRING, signal_rank: INT>>
                                       NOT NULL COMMENT 'Top-3 slice of evidence_events for the trigger timeline.',
+  first_pos_date            DATE               COMMENT '1st-lien origination date from silver.lien_current (gold refresh only; the App reads this column, never silver). NULL when the source has no origination date.',
+  first_pos_rate_type       STRING             COMMENT '1st-lien rate type, a closed upper-case code: FIX or ARM. Any other source value is NULL. Crossed the line is drawn for FIX only.',
+  first_itm_week            DATE               COMMENT 'Week-starting Monday on which the current unbroken in-the-money run began in the weekly MORTGAGE30US series: fn_in_the_money(fn_rate_spread(note rate, week rate), equity_pct, thresholds) with today''s rule and today''s equity applied to past weekly rates; not a forecast. Never before the origination week; equals the series start when the run reaches it. NULL unless an active FIX first lien with an in-bounds rate is in the money at the latest week.',
   refreshed_at              TIMESTAMP NOT NULL COMMENT 'Refresh timestamp.'
 )
 USING DELTA

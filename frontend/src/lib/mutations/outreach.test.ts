@@ -311,6 +311,19 @@ describe('request bodies', () => {
     );
   });
 
+  it('declares the paged Lead Queue view a decision was taken on, and null elsewhere (W5c)', async () => {
+    const VIEW = '0123456789abcdef0123456789abcdef';
+    const approve = mountHook(() => useApproveLead(client));
+    const reject = mountHook(() => useRejectLead(client));
+    await act(async () => {
+      await approve().mutateAsync(approveVars({ leadViewId: VIEW }));
+      await reject().mutateAsync(rejectVars({ leadViewId: VIEW }));
+      await approve().mutateAsync(approveVars({ requestId: 'req-elsewhere' }));
+    });
+    expect(apiMocks.approve.mock.calls.map((call) => call[1].lead_view_id)).toEqual([VIEW, null]);
+    expect(apiMocks.reject).toHaveBeenCalledWith(OTHER, expect.objectContaining({ lead_view_id: VIEW }));
+  });
+
   it('sends a bulk rejection row with its bulk_id and signal, and skips its invalidation', async () => {
     const invalidate = vi.spyOn(client, 'invalidateQueries');
     const ctrl = new AbortController();

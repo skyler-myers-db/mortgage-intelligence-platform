@@ -24,11 +24,17 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+from backend.api.audit import DEFAULT_AUDIT_LIMIT
 from backend.config.settings import settings
 from backend.main import app
 from backend.services import audit_ledger_reads, rbac
 from backend.services.activation_state import get_activation_state_store
+from backend.services.audit_fingerprint import (
+    AUDIT_LEDGER_FINGERPRINT_DOMAIN,
+    keyed_filter_fingerprint,
+)
 from backend.services.audit_metadata_policy import LEDGER_SURFACES
+from backend.services.audit_pagination import audit_filter_fingerprint
 from backend.services.audit_store import (
     AuditMetadataValueViolation,
     build_safe_audit_metadata,
@@ -163,8 +169,13 @@ def test_auditor_gets_200_on_every_ledger_read(
 
 
 def test_auditor_page_read_writes_exactly_one_row(
-    audit_store: InMemoryAuditStore, lakebase: _LedgerLakebase
+    audit_store: InMemoryAuditStore, lakebase: _LedgerLakebase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The deployed posture keys the stored fingerprint with the server secret
+    # (W5c); without one the value is omitted, never stored plain.
+    monkeypatch.setattr(
+        settings, "mip_genie_action_secret_current", SecretStr("ledger-cursor-key-0123456789abcdef")
+    )
     _seed_events(audit_store, 2)
 
     response = client.get(LEDGER_READS["events_page"], headers=AUDITOR_HEADERS)
@@ -184,6 +195,29 @@ def test_auditor_page_read_writes_exactly_one_row(
     assert row.payload_json["returned_row_count"] == 2
     assert re.fullmatch(r"[0-9a-f]{64}", row.payload_json["filter_fingerprint"])
     assert set(row.payload_json) <= ROW_KEYS - {"read_audit_event_id"}
+
+
+def test_the_stored_ledger_fingerprint_is_keyed_never_the_plain_digest(
+    audit_store: InMemoryAuditStore, lakebase: _LedgerLakebase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """W5c (12.3): a VIEW_AUDIT_LEDGER row stores the HMAC of the filter digest,
+    so a dictionary of candidate actor filters never reproduces it."""
+
+    monkeypatch.setattr(
+        settings, "mip_genie_action_secret_current", SecretStr("ledger-fingerprint-key-0123456789ab")
+    )
+    _seed_events(audit_store, 1)
+    actor_filter = "approver@summit-mortgage.example"
+
+    response = client.get(LEDGER_READS["events"], params={"actor": actor_filter}, headers=AUDITOR_HEADERS)
+
+    assert response.status_code == 200, response.text
+    (row,) = _ledger_rows(audit_store)
+    stored = row.payload_json["filter_fingerprint"]
+    plain = audit_filter_fingerprint({"limit": DEFAULT_AUDIT_LIMIT, "offset": 0, "actor": actor_filter})
+    assert re.fullmatch(r"[0-9a-f]{64}", stored)
+    assert stored != plain
+    assert stored == keyed_filter_fingerprint(plain, domain=AUDIT_LEDGER_FINGERPRINT_DOMAIN)
 
 
 def _new_ledger_row(store: InMemoryAuditStore, seen: list[Any]) -> Any:

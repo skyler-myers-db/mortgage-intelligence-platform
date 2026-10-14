@@ -298,6 +298,8 @@ test.describe('Rate Lever on the geography hero', () => {
     await page.locator('.rate-lever__headline').getByRole('button', { name: /Rate scenario grid/ }).click();
     const drawer = page.getByRole('dialog').filter({ hasText: 'Rate scenario: in the money if par moved' });
     await expect(drawer).toBeVisible();
+    // The gold grid is its first signal, under the hood (W5c w5-evidence-drawer, flow-10).
+    await drawer.getByRole('tab', { name: 'Under the hood' }).click();
     await expect(drawer).toContainText('mip.gold.rate_sensitivity_rollup');
     expectNoAuditedReadSince(mockApi, naturalLoadEnd, 'rate lever');
   });

@@ -27,8 +27,8 @@ export const GENIE_BUSY_REASON =
   'Genie is still answering. Ask unlocks when this answer lands, or press Stop. Leaving this page does not stop it.';
 
 /** The Stopped note until the server confirms a cancel (audit `genie-03`),
- *  and for good when there is none to confirm (a turn stopped before its
- *  completion job was named, a non-job turn, or a failed cancel request). */
+ *  and for good when there is none to confirm (a turn stopped while its
+ *  submit was in flight, a non-job turn, or a failed cancel request). */
 export const GENIE_STOPPED_REASON =
   'Stopped before the answer arrived. Genie may still finish this turn on the server; that reply is ' +
   'discarded and never shown, but Genie may keep the question as context for the next turn in this thread.';
@@ -42,6 +42,21 @@ export const GENIE_STOP_CONFIRMED_REASON =
 /** The Stop arrived after the governed answer was recorded. */
 export const GENIE_STOP_RECORDED_REASON =
   'Stopped here, but the answer had already been verified and recorded. Find it in History.';
+
+/** Too late to stop, and its History row is still being written. */
+export const GENIE_STOP_RECORDING_REASON =
+  'Too late to stop: the answer was already verified and was still being recorded. Check History in a ' +
+  'moment; if it is not there, Ask again.';
+
+/** Too late to stop, and the answer is one History never keeps. */
+export const GENIE_STOP_NOT_KEPT_REASON =
+  'Too late to stop: the answer was already complete, but this kind of answer is not kept in History. Ask ' +
+  'again to see it.';
+
+/** The record's commit point passed, but recording did not finish. */
+export const GENIE_STOP_INCOMPLETE_REASON =
+  'Stopped. The answer was verified, but recording it did not finish, so it may be missing from History. ' +
+  'Ask again if you need it.';
 
 /** A resumed turn that failed before its question could be shown again. */
 export const GENIE_RESUME_FAILED_REASON = 'Could not resume your last question after the reload. Ask it again.';

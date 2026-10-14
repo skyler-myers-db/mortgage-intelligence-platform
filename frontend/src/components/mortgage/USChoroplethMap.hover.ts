@@ -39,6 +39,8 @@ export interface MapCardInputs {
   selectedZip: string | null;
   /** The Rate Lever view at the shown step (rate mode); only STATE cards read it. */
   scenario: MapScenarioView | null;
+  /** A ZIP stage's line for the ZIP card (USChoroplethMap.zipStage), or null. */
+  zipNote?: string | null;
 }
 
 /** One state's scenario facts, or undefined off the grid (or without a step 0 to compare with). */
@@ -115,6 +117,7 @@ function zipCard(zip: string, inputs: MapCardInputs): MapCard | null {
     avgScore,
     topSegment,
     sourceHint: SOURCE_ZIP,
+    note: inputs.zipNote ?? undefined,
     overlay: overlayUnit
       ? {
           leadCount: overlayUnit.lead_count,

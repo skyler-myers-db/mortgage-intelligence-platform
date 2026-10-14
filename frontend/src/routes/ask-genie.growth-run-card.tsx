@@ -1,5 +1,8 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { Link } from 'react-router';
 import { Button, Chip, SurfaceTitle } from '../components/Primitives';
+import { auditEventHref } from '../lib/auditLinks';
+import { useAuditLinkAccess } from '../lib/optionalQueryReads';
 import { Icon } from '../components/Icon';
 import { formatNumber } from '../lib/formatters';
 import {
@@ -219,6 +222,7 @@ export function GrowthAgentRunCard({
   save,
 }: GrowthAgentRunCardProps) {
   const cohortProofAttached = hasGrowthAgentCohortProof(run);
+  const auditLinks = useAuditLinkAccess();
   return (
     <section className="growth-agent-run" aria-label="Latest Growth Agent run">
       <div className="growth-agent-run__head">
@@ -262,7 +266,22 @@ export function GrowthAgentRunCard({
           icon="audit"
           title={run.audit_event_id ?? undefined}
         >
-          {run.audit_event_id ? `Audit ${shortHash(run.audit_event_id)}` : 'Audit pending'}
+          {run.audit_event_id ? (
+            // flow-04: administrators and auditors open the run's ledger row.
+            auditLinks ? (
+              <Link
+                className="mono"
+                to={auditEventHref(run.audit_event_id)}
+                aria-label={`Open audit event ${run.audit_event_id} in the audit ledger`}
+              >
+                Audit {shortHash(run.audit_event_id)}
+              </Link>
+            ) : (
+              `Audit ${shortHash(run.audit_event_id)}`
+            )
+          ) : (
+            'Audit pending'
+          )}
         </Chip>
       </div>
       <div className="growth-agent-run__intent">

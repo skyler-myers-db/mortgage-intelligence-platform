@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 
 from backend.main import app
 from tests.fixtures import mock_population as mock_data
+from tests.fixtures.reviewed_approval import draft_proof
 
 client = TestClient(app)
 client.headers.update({"X-Forwarded-Email": "skyler@entrada.ai"})
@@ -35,10 +36,8 @@ def _approve_for_sales(borrower_id: str) -> None:
         "/api/outreach/approve",
         json={
             "borrower_id": borrower_id,
-            "offer_code": "refi_plus_heloc",
             "channel": "email",
-            "draft_subject": draft.json()["subject"],
-            "draft_body": draft.json()["body"],
+            **draft_proof(draft.json()),
             "request_id": str(uuid4()),
         },
     )

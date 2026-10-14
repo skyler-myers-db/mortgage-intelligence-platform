@@ -66,6 +66,8 @@ def _approval(draft: dict[str, object], **updates: object) -> dict[str, object]:
         "draft_generation_id": draft["generation_id"],
         "draft_response_hash": draft["response_hash"],
         "draft_source_refreshed_at": draft["source_refreshed_at"],
+        # Required since W5c (D-approval-flow-a1).
+        "review_mode": "individual",
     }
     if draft.get("campaign_id") is not None:
         payload["campaign_id"] = draft["campaign_id"]
@@ -345,12 +347,15 @@ def test_production_approval_requires_persisted_draft_proof(monkeypatch) -> None
             "evidence_ids": BORROWER_EVIDENCE_IDS,
             "draft_subject": draft["subject"],
             "draft_body": draft["body"],
+            "review_mode": "individual",
         },
         headers={"X-Forwarded-Email": OWNER},
     )
 
+    # W5c: review_mode is required and a declared mode needs the proof, so an
+    # approval without the proof is refused by the request schema.
     assert response.status_code == 422
-    assert response.json()["detail"] == "Approval requires the audited generated draft proof."
+    assert "review_mode requires the generated draft proof" in response.text
 
 
 def test_production_approval_accepts_exact_draft_proof(monkeypatch) -> None:
@@ -1049,6 +1054,8 @@ def test_campaign_approval_idempotency_rejects_each_governed_payload_mismatch(
         # A bulk approval must carry its shared rationale (a schema rule since
         # the review_mode ledger), so the bulk_id mismatch sends one too.
         changed["bulk_rationale"] = "A governed bulk rationale"
+        # A bulk_id rides a bulk review mode (W5c: review_mode is required).
+        changed["review_mode"] = "bulk_sample"
     conflict = client.post(
         "/api/outreach/approve",
         json={**request_payload, **changed},

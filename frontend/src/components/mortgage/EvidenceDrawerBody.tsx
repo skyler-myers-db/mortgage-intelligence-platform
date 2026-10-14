@@ -3,12 +3,13 @@ import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Icon } from '../Icon';
 import { api } from '../../lib/api';
+import { kpiProofApi } from '../../lib/apiClients/kpiProof';
 import { assetKeyForSource } from '../../lib/drawerSources';
+import { resolveDrawerProse } from '../../lib/drawerSourceRegistry.prose';
 import { queryKeys } from '../../lib/queryKeys';
 import { formatTimestamp } from '../../lib/time';
 import { formatCount } from '../../lib/formatters';
 import type {
-  AssetFreshness,
   AssetLineageNode,
   AssetMetadataResponse,
   LineageLayer,
@@ -17,14 +18,24 @@ import type {
 } from '../../types';
 import { EvidenceDrawerBodyContext, type EvidenceDrawerBodyProps } from './evidenceDrawerBodyLoader';
 import { deltaExplainerOf } from '../../lib/deltaExplainerSource';
+import { EvidenceFreshness } from './EvidenceFreshness';
+import { EvidenceHowWeGot } from './EvidenceHowWeGot';
+import { EvidenceKpiProof } from './EvidenceKpiProof';
 
 /**
  * The Delta Explainer (audit wow-ai-3, deviation:delta-explainer): its own
  * chunk, mounted only while the drawer is open on Overview for a source that
- * carries one, so its audit-free read never runs on hover or for any other
- * source. The evidence hover card never renders it.
+ * carries one (after How we got), so its audit-free read never runs on hover
+ * or for any other source. The evidence hover card never renders it.
  */
 const DeltaExplainer = lazy(() => import('./DeltaExplainer'));
+
+/**
+ * The registry prose resolver ships inside this chunk; the loader records it
+ * once the chunk has loaded (evidenceDrawerBodyLoader.getLoadedDrawerProse),
+ * for the evidence hover card's signal row.
+ */
+export { resolveDrawerProse };
 
 /**
  * Data source / evidence drawer — fast context for a source chip.
@@ -36,7 +47,11 @@ const DeltaExplainer = lazy(() => import('./DeltaExplainer'));
  * node a chip deep-linking to Catalog Explorer.
  *
  * This module is the drawer's lazy BODY (audit 2026-09-21 `bundle-04`):
- * EvidenceDrawer.tsx is the shell frame around it.
+ * EvidenceDrawer.tsx is the shell frame around it. It resolves the source's
+ * registry prose (lib/drawerSourceRegistry.prose, which ships with this
+ * chunk) before rendering. Overview leads with "How we got {value}" (audit
+ * flow-06); Under the hood holds the KPI reproduce SQL, the sanitized
+ * signals and the administrator's catalog detail.
  */
 
 const LINEAGE_LAYER_LABELS: Record<LineageLayer, string> = {
@@ -165,39 +180,6 @@ function formatNumber(value: number | null | undefined): string {
   return formatCount(value);
 }
 
-/**
- * Freshness chip state. 'loading'/'error' are VIEW states (governed
- * metadata request in flight / failed), distinct from "the source has no
- * refresh timestamp" — conflating them made a 403 on the metadata read
- * render as "Freshness Unavailable", which reads like a data problem
- * (observed 2026-06-11 during the admin-allowlist incident).
- */
-type FreshnessView = AssetFreshness | 'loading' | 'error' | 'restricted' | undefined;
-
-function freshnessLabel(view: FreshnessView): string {
-  if (view === 'loading') return 'Checking freshness…';
-  if (view === 'error') return 'Metadata not loaded';
-  if (view === 'restricted') return 'Admin-only freshness';
-  if (view === 'fresh') return 'Fresh';
-  if (view === 'aging') return 'Aging';
-  if (view === 'stale') return 'Stale';
-  return 'Freshness unavailable';
-}
-
-function freshnessHelp(view: FreshnessView): string {
-  if (view === 'loading') return 'Reading governed Unity Catalog metadata.';
-  if (view === 'error') {
-    return 'Governed freshness could not be read for this view — see the notice below. This does not mean the source is stale.';
-  }
-  if (view === 'restricted') {
-    return 'Governed table metadata is an administrator read. The evidence and lineage below are unaffected.';
-  }
-  if (view === 'fresh') return 'Updated within 7 days.';
-  if (view === 'aging') return 'Updated 7-30 days ago.';
-  if (view === 'stale') return 'Updated more than 30 days ago.';
-  return 'No backend refresh timestamp is available for this source.';
-}
-
 function metadataStatRows(metadata?: AssetMetadataResponse) {
   if (!metadata) return [];
   return [
@@ -214,11 +196,12 @@ function metadataStatRows(metadata?: AssetMetadataResponse) {
 }
 
 /**
- * The panels of the evidence drawer (audit 2026-09-21 `bundle-04`): both
- * governed reads (admin asset metadata, the lineage manifest) and the
- * Overview / Lineage tab panels. Loaded lazily by the EvidenceDrawer frame,
- * which renders it only once a source has been opened and hands it the
- * source and everything derived from it alone (evidenceDrawerBodyLoader).
+ * The panels of the evidence drawer (audit 2026-09-21 `bundle-04`): the
+ * governed reads (freshness, the KPI proof, the lineage manifest, admin
+ * asset metadata) and the Overview / Lineage / Under the hood panels. Loaded
+ * lazily by the EvidenceDrawer frame, which renders it only once a source
+ * has been opened and hands it the source and everything derived from it
+ * alone (evidenceDrawerBodyLoader). Every read starts only while it is open.
  */
 function useEvidenceDrawerBodyProps(): EvidenceDrawerBodyProps {
   const props = useContext(EvidenceDrawerBodyContext);
@@ -227,12 +210,16 @@ function useEvidenceDrawerBodyProps(): EvidenceDrawerBodyProps {
 }
 
 export function EvidenceDrawerBody() {
-  const { source: d, open, tab, panelProps, destination, assetDetailsHref, eventDateLabel, canAccessAdmin, onClose } =
+  const { source, open, tab, panelProps, destination, assetDetailsHref, eventDateLabel, canAccessAdmin, onClose } =
     useEvidenceDrawerBodyProps();
+  const d = resolveDrawerProse(source);
   // /api/admin/assets/:key/metadata is AdminDep-gated. A loan officer opening
   // an evidence drawer used to fire it and eat a 403 on every open — invisible
   // in the UI, loud in the browser console (2026-08-07 audit H4). Ask only
-  // when the server-authoritative session says this actor may.
+  // when the server-authoritative session says this actor may. It drives only
+  // the administrator's stat rows, workspace verification and observed
+  // lineage; the freshness chip reads GET /assets/{key}/freshness for every
+  // role (EvidenceFreshness, critic-03).
   const metadataQuery = useQuery({
     queryKey: queryKeys.assetMetadata(d.assetKey),
     queryFn: ({ signal }) => api.assetMetadata(d.assetKey ?? '', signal),
@@ -248,6 +235,17 @@ export function EvidenceDrawerBody() {
     staleTime: Infinity,
     retry: false,
   });
+  // One KPI's server-emitted reproduce SQL (flow-06 phase 2): one GET per KPI
+  // per document, shared by How we got's filter chips and Under the hood.
+  const proofKey = d.proofKey;
+  const proofQuery = useQuery({
+    queryKey: queryKeys.kpiProof(proofKey),
+    queryFn: ({ signal }) =>
+      proofKey ? kpiProofApi.kpiProof(proofKey, signal) : Promise.reject(new Error('no KPI proof key')),
+    enabled: open && !!proofKey,
+    staleTime: Infinity,
+    retry: false,
+  });
   const lineageFamily = d.lineageFamily
     ? lineageQuery.data?.families.find((family) => family.id === d.lineageFamily) ?? null
     : null;
@@ -256,17 +254,6 @@ export function EvidenceDrawerBody() {
   const catalogLinksUnavailable = Boolean(
     lineageFamily?.nodes.some((node) => !node.catalog_explorer_url),
   );
-  // View-state for the freshness chip: only mapped assets ever issue the
-  // governed metadata read, so loading/error states are scoped to them.
-  const freshnessView: FreshnessView = d.assetKey
-    ? !canAccessAdmin
-      ? 'restricted'
-      : metadataQuery.isError
-        ? 'error'
-        : metadataQuery.isPending
-          ? 'loading'
-          : metadata?.freshness
-    : metadata?.freshness;
   // Lakebase destinations are non-admin app surfaces; the readiness ledger is
   // an asset-detail page, so it is an admin action too.
   const destinationAction =
@@ -420,31 +407,19 @@ export function EvidenceDrawerBody() {
           )}
           {tab === 'overview' ? (
             <div {...panelProps('overview')}>
+              <EvidenceHowWeGot source={d} proof={proofKey ? proofQuery : null} />
               {explainer && (
                 <Suspense fallback={<div className="source-card" role="status">Loading the change breakdown…</div>}>
                   <DeltaExplainer explainer={explainer} />
                 </Suspense>
               )}
-              <div className="source-summary">
-                <div className="source-summary__top">
-                  {/* Modifier keys off the VIEW state, not metadata.freshness:
-                      'loading' and 'error' previously fell through to the
-                      --unavailable style, visually conflating "checking" /
-                      "fetch failed" with "no timestamp" (re-audit 2026-06-11
-                      cosmetic finding). */}
-                  {(destination.kind === 'unity_catalog' || destination.kind === 'readiness') && (
-                    <span className={`source-freshness source-freshness--${freshnessView ?? 'unavailable'}`}>
-                      {freshnessLabel(freshnessView)}
-                    </span>
-                  )}
-                  <span className="chip chip--neutral">{destination.label}</span>
-                  {metadata?.status && <span className="chip chip--neutral">{metadata.status}</span>}
-                </div>
-                <p className="body flush">{d.description}</p>
-                {(destination.kind === 'unity_catalog' || destination.kind === 'readiness') && (
-                  <p className="muted fs-12 flush">{freshnessHelp(freshnessView)}</p>
-                )}
-              </div>
+              <EvidenceFreshness
+                assetKey={d.assetKey}
+                open={open}
+                tracked={destination.kind === 'unity_catalog' || destination.kind === 'readiness'}
+                destinationLabel={destination.label}
+                description={d.description}
+              />
 
               {(destination.kind === 'lakebase' || destination.kind === 'readiness') && (
                 <div className="source-card">
@@ -456,46 +431,6 @@ export function EvidenceDrawerBody() {
                     ))}
                   </div>
                 </div>
-              )}
-
-              {metadataQuery.isFetching && (
-                <div className="source-card" role="status" aria-live="polite">
-                  Loading governed asset metadata…
-                </div>
-              )}
-
-              {metadataQuery.isError && d.assetKey && (
-                <div className="source-card source-card--warning">
-                  Governed asset metadata requires admin access or the warehouse is warming. The source explanation above remains available.
-                </div>
-              )}
-
-              {metadata && (
-                <>
-                  <div className="source-card source-card--subtle" role="status">
-                    <div className="eyebrow mb-2">Workspace verification</div>
-                    <p className="body flush">
-                      {metadata.observed_in_unity_catalog === true
-                        ? `Observed as a ${metadata.object_type} in this workspace.`
-                        : metadata.observed_in_unity_catalog === false
-                          ? 'The declared asset was not found in current Unity Catalog metadata.'
-                          : 'Unity Catalog object verification was unavailable for this request.'}
-                    </p>
-                    {metadata.observation_source && metadata.observation_source !== 'unavailable' && (
-                      <p className="muted fs-12 flush">
-                        Verified through {metadata.observation_source}.
-                      </p>
-                    )}
-                  </div>
-                  <div className="source-stat-grid" role="group" aria-label="Governed asset metadata">
-                    {metadataStatRows(metadata).map(([label, value]) => (
-                      <div key={label} className="source-stat">
-                        <span>{label}</span>
-                        <strong>{value}</strong>
-                      </div>
-                    ))}
-                  </div>
-                </>
               )}
 
               {d.usedIn && d.usedIn.length > 0 && (
@@ -510,9 +445,11 @@ export function EvidenceDrawerBody() {
               )}
 
               <div className="eyebrow mt-4 mb-2">Governed assets</div>
-              <p className="muted fs-12">
-                Compact semantics: Overview de-duplicates this governed family&apos;s Unity Catalog objects. Lineage uses the same family in documented derivation order, with notes and supplemental 90-day observations.
-              </p>
+              {d.lineageFamily && (
+                <p className="muted fs-12">
+                  The Unity Catalog objects behind this source. The Lineage tab shows how they connect.
+                </p>
+              )}
               {!d.lineageFamily && destination.kind === 'lakebase' ? (
                 <div className="source-card source-card--subtle" role="status">
                   Operational Lakebase records are queried through the linked app surface;
@@ -545,28 +482,6 @@ export function EvidenceDrawerBody() {
                     <LineageManifestChip key={node.id} node={node} />
                   ))}
                 </div>
-              )}
-
-              {d.signals && d.signals.length > 0 && (
-                <>
-                  <div className="eyebrow mt-5 mb-2">Sanitized signals</div>
-                  {d.signals.map((s, i) => {
-                    const catalogNode = catalogNodeForSource(s.source, lineageQuery.data);
-                    return (
-                      <div key={`${s.label}-${i}`} className="lineage-node lineage-node--signal">
-                        <div>
-                          <div className="lineage-node__label">{s.label}</div>
-                          {catalogNode ? (
-                            <LineageManifestChip node={catalogNode} display={s.source} />
-                          ) : (
-                            <div className="lineage-node__name">{s.source}</div>
-                          )}
-                        </div>
-                        <div className="mono num lineage-node__value">{s.value}</div>
-                      </div>
-                    );
-                  })}
-                </>
               )}
 
               {(assetDetailsHref || destinationAction || catalogExplorerUrl) && (
@@ -602,10 +517,82 @@ export function EvidenceDrawerBody() {
                   Evidence event date: {eventDateLabel}
                 </div>
               )}
-              {metadata?.last_updated && (
-                <div className="drawer__updated">
-                  Business refresh: {formatTimestamp(metadata.last_updated)}
+            </div>
+          ) : null}
+          {tab === 'under-the-hood' ? (
+            // A focusable tabpanel (the WAI-ARIA tabs pattern): this panel can
+            // hold no control at all (a non-KPI source for a non-admin), and
+            // the drawer body still scrolls it (axe scrollable-region-focusable).
+            <div {...panelProps('under-the-hood')} role="tabpanel" tabIndex={0}>
+              {proofKey && <EvidenceKpiProof title={d.title} proof={proofQuery} />}
+
+              <div className="eyebrow mt-4 mb-2">How these assets are listed</div>
+              <p className="muted fs-12">
+                Each governed object behind this source is listed once on Overview. The Lineage tab shows the same
+                objects in the order they are derived, with notes and the last 90 days of observed relationships.
+              </p>
+
+              {d.signals && d.signals.length > 0 && (
+                <>
+                  <div className="eyebrow mt-5 mb-2">Sanitized signals</div>
+                  {d.signals.map((s, i) => {
+                    const catalogNode = catalogNodeForSource(s.source, lineageQuery.data);
+                    return (
+                      <div key={`${s.label}-${i}`} className="lineage-node lineage-node--signal">
+                        <div>
+                          <div className="lineage-node__label">{s.label}</div>
+                          {catalogNode ? (
+                            <LineageManifestChip node={catalogNode} display={s.source} />
+                          ) : (
+                            <div className="lineage-node__name">{s.source}</div>
+                          )}
+                        </div>
+                        <div className="mono num lineage-node__value">{s.value}</div>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+
+              {metadataQuery.isFetching && (
+                <div className="source-card" role="status" aria-live="polite">
+                  Loading governed asset metadata…
                 </div>
+              )}
+
+              {metadataQuery.isError && d.assetKey && (
+                <div className="source-card source-card--warning">
+                  Governed asset metadata could not be loaded, or the warehouse is warming. The source explanation on
+                  Overview remains available.
+                </div>
+              )}
+
+              {metadata && (
+                <>
+                  <div className="source-card source-card--subtle" role="status">
+                    <div className="eyebrow mb-2">Workspace verification</div>
+                    <p className="body flush">
+                      {metadata.observed_in_unity_catalog === true
+                        ? `Observed as a ${metadata.object_type} in this workspace.`
+                        : metadata.observed_in_unity_catalog === false
+                          ? 'The declared asset was not found in current Unity Catalog metadata.'
+                          : 'Unity Catalog object verification was unavailable for this request.'}
+                    </p>
+                    {metadata.observation_source && metadata.observation_source !== 'unavailable' && (
+                      <p className="muted fs-12 flush">
+                        Verified through {metadata.observation_source}.
+                      </p>
+                    )}
+                  </div>
+                  <div className="source-stat-grid" role="group" aria-label="Governed asset metadata">
+                    {metadataStatRows(metadata).map(([label, value]) => (
+                      <div key={label} className="source-stat">
+                        <span>{label}</span>
+                        <strong>{value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </>
               )}
             </div>
           ) : null}

@@ -129,8 +129,14 @@ export const budgets = {
   // Gzip re-baselined the same day for the lane's bundle-03 vendor split
   // (five initial chunks compress separately: +0.84 gzip), which left it
   // 4.3%; raw kept 4.8% (+0.27). Measured: 536.74 / 167.41.
-  initialJsBytes: 564 * KiB, // actual 536.74 (index + rolldown-runtime + vendor-react + vendor-data + apiPaths)
-  initialJsGzipBytes: 176 * KiB, // actual 167.41
+  // wave-5c integration (2026-10-07): ratcheted DOWN per rule 2. The batch
+  // shrank initial JS raw 544.45 -> 530.62 (w5-evidence-drawer moved the
+  // registry prose out of the shell, -16.53 raw; the other eight lanes and
+  // the integration added +2.70 raw; per-step br attribution under
+  // initialJsBrBytes). ~5% headroom. Gzip 169.21 keeps 4.0% under 176 (the
+  // gate is not raised for an initial chunk; see initialJsBrBytes).
+  initialJsBytes: 558 * KiB, // actual 530.62 (8 chunks, wave-5c integration)
+  initialJsGzipBytes: 176 * KiB, // actual 169.21 (wave-5c integration; 167.41 at the w2 split)
   // Bumped 2026-06-11 for the re-audit #4 Buyer-Wow tranche: ⌘K command
   // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
   // sleek one-time KPI entrance (.kpi__value--enter / .spark__line--draw),
@@ -348,8 +354,42 @@ export const budgets = {
   // Totals: 1888.91 raw / 656.11 gzip / 566.68 br across 118 chunks (100
   // before). Initial JS 146.40 -> 148.78 br (+2.38, inside the 3.0 KiB batch
   // cap; the 152 gate is held). ~5% headroom.
-  totalJsBytes: 1984 * KiB, // actual 1888.91 (wave-5b integration)
-  totalJsGzipBytes: 689 * KiB, // actual 656.11 (wave-5b integration)
+  // Re-baselined 2026-10-07 at the wave-5c integration: every first-parent
+  // merge step of ux/wave-5c built and measured on one host (br deltas; base
+  // d99eb60b, the W5b head, 566.40 br / 1889.23 raw / 656.29 gzip across 118
+  // chunks). The nine lanes' total-JS caps summed to 31.5 KiB br against
+  // ~29.6 of headroom; the batch took 41.78, each lane reported its growth
+  // with attribution and G5 forbids cutting a registered feature for it:
+  //  - w5-evidence-drawer +4.95: EvidenceDrawerBody 4.50 -> 11.09 (the
+  //    registry prose moved out of the initial chunk, about 3.5, plus How we
+  //    got, freshness, the KPI proof card and Under the hood), the
+  //    useWarmingUpRetry split and the asset route chunk.
+  //  - w5-lead-queue-paging +3.88: the shared useInfiniteQuery chunk,
+  //    lead-queue.pages.ts, leadsPaged.ts, the keep-alive slot and the paged
+  //    footer.
+  //  - w5-refusal-capture-sales +5.86: RefusalReportsPanel / RefusalReportRow,
+  //    the shared genieRefusal split, the lazy consent confirm and
+  //    optionalQueryReads.
+  //  - w5-dossier-decisions +5.52: BorrowerDecisionHistory, the shared
+  //    auditEventPresentation split and the lazy borrowerMorph chunk.
+  //  - w5-gold-slot-cache +3.71: the lazy ScoreAnatomy proof chunk carries
+  //    SpreadHistoryChart, its model and copy, and the margins section.
+  //  - w5-genie-stop-context +0.32: the Stop client and the action receipt
+  //    (lazy), net of the deleted genieVerifiedReveal side channel.
+  //  - w5-shell-nav-followups +0.87: the dock hook and clustered RouteNav, the
+  //    lazy RailRoadmap chunk (0.54).
+  //  - w5-field-vitals +8.77: the lazy web-vitals/attribution chunk (+4.80),
+  //    the Field performance panel (+2.57), the rum chunk's glue and closed
+  //    vocabularies (+0.86), the admin-config mapDeps list (and the
+  //    integrator's two-step Rail roadmap guard, a few bytes).
+  //  - w5-zcta-watchlist +7.80: the lazy ZCTA rung (6.27 JS), the Segments
+  //    ZIP-areas stage and the shared map chunk's seam.
+  //  - integration +0.10: the rung's 'absent' outcome (no false load-failure
+  //    line while no ZCTA geometry is committed).
+  // Totals: 2011.14 raw / 703.86 gzip / 608.18 br across 131 chunks. Initial
+  // JS 148.72 -> 146.15 br (net -2.57; see initialJsBrBytes). ~5% headroom.
+  totalJsBytes: 2112 * KiB, // actual 2011.14 (wave-5c integration)
+  totalJsGzipBytes: 740 * KiB, // actual 703.86 (wave-5c integration)
   // Re-baselined 2026-09-23 for wave 1c (lane queue-keyboard-review): the
   // shared LeadTable chunk (Lead Queue + Segment Intelligence) grew from
   // 92.96 / 29.59 to 105.51 / 33.56 with the keyboard triage that must be
@@ -384,8 +424,14 @@ export const budgets = {
   // deck, stepper and canary are lazy), then w5-home-geo-lever split
   // FetchedAt into its own chunk (-0.98 / -0.39 / -0.23). 2.8% gzip left;
   // ~5% headroom restored before W5c's w5-lead-queue-paging.
-  maxLazyJsBytes: 147 * KiB, // actual 139.46 (LeadTable chunk, wave-5b integration)
-  maxLazyJsGzipBytes: 48 * KiB, // actual 45.68 (LeadTable chunk, wave-5b integration)
+  // wave-5c integration: rolldown names the LeadTable chunk leadsQuery-*
+  // since w5-lead-queue-paging (the shared paged-read module now leads it).
+  // 139.63 -> 142.02 raw / 45.74 -> 46.61 gzip / 38.73 -> 39.52 br: paging
+  // +2.62 raw / +0.84 gz / +0.76 br (the paged footer, the keyset cursor
+  // plumbing and the server-sort switch), evidence-drawer +0.08 br, the rest
+  // hash churn. It did not cross 41 br; ~5% headroom restored on all three.
+  maxLazyJsBytes: 150 * KiB, // actual 142.02 (leadsQuery chunk = LeadTable, wave-5c integration)
+  maxLazyJsGzipBytes: 49 * KiB, // actual 46.61 (leadsQuery chunk = LeadTable, wave-5c integration)
   // Re-baselined 2026-09-24 for audit bundle-05 / css-v2 (lane
   // w2-build-currency): the seven static @fontsource faces (7 woff2 + their
   // 7 never-requested woff twins, 215.42 KiB) became one variable woff2 each
@@ -425,15 +471,28 @@ export const budgets = {
   // Query held at 5.100.10 in vendor-data). 146.40 -> 148.78 (+2.38, inside
   // the 3.0 KiB batch cap). The gate is HELD at 152: an initial-chunk
   // regression is made lazy, never paid for by raising this number.
-  initialJsBrBytes: 152 * KiB, // actual 148.78 (8 chunks, wave-5b integration)
+  // wave-5c integration (per merge step, br; base d99eb60b measured 148.72):
+  // evidence-drawer -3.38 (index 46.34 -> 42.78: the prose registry went lazy;
+  // queryKeys +0.19), lead-queue-paging +0.16 (the keep-alive mount in
+  // RouteTransition, setQueryDefaults, the auditedPages predicate; ruled
+  // accepted net of the evidence return), refusal-capture-sales +0.08
+  // (mapDeps entries for four lazy chunks), dossier-decisions +0.24 (the
+  // dynamic borrowerMorph import in AppShell, the decisions query key),
+  // gold-slot-cache +0.04 (hash churn, raw +0), genie-stop-context -0.06,
+  // shell-nav-followups +0.25 (the dock hook and policy, the clustered
+  // RouteNav, usePresenterMode), field-vitals +0.09 (the bridge timeline and
+  // committed-route read; the Rail guard), zcta-watchlist +0.04 (raw +0),
+  // integration -0.03. 148.72 -> 146.15 (-2.57): evidence-drawer's 3.38
+  // return funded the batch's +0.81. The gate is HELD at 152.
+  initialJsBrBytes: 152 * KiB, // actual 146.15 (8 chunks, wave-5c integration)
   // wave-4b integration: 24.17 -> 24.32 br (see initialCssBytes), which left
   // 2.7%. Re-baselined to ~5%.
   // wave-5b integration: 24.53 -> 24.74 br (theme-white-label +0.23: the
   // success-fill, spin and mark-plate tokens and the forced-colors Highlight
   // states; genie-verified-reveal -0.05 dead rules), 4.9% left: unchanged.
   initialCssBrBytes: 26 * KiB, // actual 24.74 (wave-5b integration; 24.32 at wave 4b)
-  totalJsBrBytes: 596 * KiB, // actual 566.68 (118 chunks, wave-5b integration; see totalJsBytes)
-  maxLazyJsBrBytes: 41 * KiB, // actual 38.72 (LeadTable chunk, wave-5b integration; see maxLazyJsBytes)
+  totalJsBrBytes: 639 * KiB, // actual 608.18 (131 chunks, wave-5c integration; see totalJsBytes)
+  maxLazyJsBrBytes: 42 * KiB, // actual 39.52 (leadsQuery = LeadTable chunk, wave-5c integration; see maxLazyJsBytes)
   // What a navigation to each route fetches beyond the initial closure: the
   // route chunk plus its static imports, JS + CSS, brotli q11. Keyed by the
   // manifest's source path; every route module must have an entry and every
@@ -441,6 +500,19 @@ export const budgets = {
   // integrator). Baselined 2026-09-24 at measured + ~5%, whole KiB, on
   // the dependency batch; the actuals below are the lane's final tree
   // (vendor split + variable fonts), each within 0.3 KiB of the baseline.
+  // A br gate per named lazy module over its closure beyond the initial
+  // closure and every dynamic importer's (tools/build_manifest.mjs
+  // lazyEntryClosures; added by w5-zcta-watchlist, D-dataviz-geo-e). Set at
+  // the wave-5c integration from measured actuals + ~5%, whole KiB.
+  lazyModules: {
+    // The ZCTA polygon rung (JS + CSS, 2 files), loaded on a Segments ZIP
+    // drill only. Measured 6.71 (the lane's 6.42-6.68 plus the
+    // integration's 'absent' outcome); the record target is 8 KiB br.
+    'src/components/mortgage/USChoroplethMapZctaLevel.tsx': 8 * KiB, // actual 6.71
+    // The presenter-only M1-M4 roadmap slots (w5-shell-nav-followups);
+    // a customer session never requests it.
+    'src/components/layout/RailRoadmap.tsx': 1 * KiB, // actual 0.54
+  },
   routes: {
     // wave-3 integration: 4.52 -> 5.01, w3-motion-nav's icon stroke floor
     // and audit glyph in the shared Icon module. ~5% headroom.
@@ -451,7 +523,15 @@ export const budgets = {
     // wave-5b: ratcheted DOWN, 35.40 -> 24.79 (w5-audit-ledger-presenter
     // -10.76: the explorer moved to /audit-ledger; the section nav and the
     // Run confirm came in; theme-white-label +0.05). ~5% headroom.
-    'src/routes/admin-config.tsx': 27 * KiB, // actual 24.79
+    // wave-5c: 24.79 -> 26.06 (field-vitals +0.79: the lazy Field
+    // performance import's mapDeps list and its Suspense reserve;
+    // evidence-drawer +0.35 shared; shell-nav +0.08 the section nav's
+    // overflow cue). 3.6% left: ~5% headroom restored.
+    'src/routes/admin-config.tsx': 28 * KiB, // actual 26.06
+    // wave-5c (w5-field-vitals): the admin Field performance panel, a lazy
+    // route module (11 files). The lane measured 12.05-12.10 with a shared
+    // chunk the merged tree splits differently. ~5% headroom.
+    'src/routes/admin-config.field-performance.tsx': 12 * KiB, // actual 11.35
     // wave-4a: 42.32 -> 43.24 (error-surfaces +0.95).
     // wave-4b: 43.30 -> 46.71 (w4-charts +3.42: the compiled ChartFrame kit,
     // histograms with governed thresholds, Evidence per day on the kit; its
@@ -479,19 +559,31 @@ export const budgets = {
     // reveal and preview, minus the old SVG charts; the rest is chunk
     // re-splitting and lazy sheets; identity-reset +0.17 pagehide window;
     // home-geo-lever +0.10). ~5% headroom.
-    'src/routes/ask-genie.tsx': 81 * KiB, // actual 76.50
+    // wave-5c: 76.42 -> 78.68 (refusal-capture-sales +1.55: the shared
+    // genieRefusal split, the lazy consent confirm and optionalQueryReads;
+    // genie-stop-context +0.39: the Stop client and the receipt;
+    // evidence-drawer +0.24 shared). ~5% headroom.
+    'src/routes/ask-genie.tsx': 83 * KiB, // actual 78.68
     // wave-5b: 7.87 -> 7.95 (theme-white-label +0.06), 0.7% left. ~5%.
-    'src/routes/asset.tsx': 9 * KiB, // actual 7.95
+    // wave-5c: 7.95 -> 8.50 (evidence-drawer +0.55: the route renders
+    // failures through AsyncStatus and the slim registry). 5.9% left: unchanged.
+    'src/routes/asset.tsx': 9 * KiB, // actual 8.50
     // wave-5b (w5-audit-ledger-presenter): the ledger's 403 page, a second
     // measured route module beside admin-config's (theme-white-label +0.07).
     'src/routes/audit-ledger.access-denied.tsx': 6 * KiB, // actual 5.37
     // wave-5b (w5-audit-ledger-presenter): the audit ledger route, the
     // explorer moved from admin-config (12 files). ~5% headroom.
-    'src/routes/audit-ledger.tsx': 23 * KiB, // actual 21.19
+    // wave-5c: 21.18 -> 21.86 (evidence-drawer +0.34 shared, refusal-capture-
+    // sales +0.32: the 'Show refusal reports' toggle; the panel itself is a
+    // lazy chunk loaded on an explicit open). 5.2% left: unchanged.
+    'src/routes/audit-ledger.tsx': 23 * KiB, // actual 21.86
     // wave-4a: 36.x -> 37.44 (delivery-boot +0.4, error-surfaces +0.37).
     // wave-5b: 38.26 -> 38.51 (audit-ledger-presenter +0.20 ledger access in
     // the receipt, portfolio-forms +0.06, theme-white-label +0.03).
-    'src/routes/borrower-360.tsx': 41 * KiB, // actual 38.51
+    // wave-5c: 38.51 -> 40.01 (dossier-decisions +1.07: the Decision history
+    // mount, its lazy-module loader and the title morph; evidence-drawer
+    // +0.35 shared; gold-slot-cache +0.07). ~5% headroom.
+    'src/routes/borrower-360.tsx': 43 * KiB, // actual 40.01
     // w4 pre-cut: 8.42 -> 8.99 on the CI (Linux) build, which measures ~0.1
     // KiB br more per route than the macOS builds these gates were set on;
     // SurfaceTitle folded into the shared Primitives chunk adds ~0.1 (a
@@ -507,7 +599,11 @@ export const budgets = {
     // hero, the WHY NOW rate move, the briefings card host, the stale note;
     // the map table and the note were made lazy first; theme-white-label
     // +0.08). ~5% headroom.
-    'src/routes/home.tsx': 54 * KiB, // actual 51.10
+    // wave-5c: 51.23 -> 52.22 (zcta-watchlist +0.52: the shared map chunk's
+    // ZIP-stage seam, scale branch, caption / zoom / note pass-through and the
+    // briefings slot fix; evidence-drawer +0.42: KpiCard proof props and the
+    // slim registry). ~5% headroom.
+    'src/routes/home.tsx': 55 * KiB, // actual 52.22
     // wave-3 integration: 66.10 -> 67.13 net: w3-score-anatomy moved the
     // proof out (-4.23), w3-queue-place added place + bulk progress (+4.22).
     // wave-4a: 67.13 -> 69.44 (error-surfaces +1.90 FetchedAt, EmptyState,
@@ -520,11 +616,17 @@ export const budgets = {
     // export honesty, portfolio-forms +0.64 the shared Field chunk,
     // home-geo-lever +0.51 FetchedAt chunk and headers, theme-white-label
     // +0.16, audit-ledger-presenter +0.04). ~5% headroom.
-    'src/routes/lead-queue.tsx': 87 * KiB, // actual 82.41
+    // wave-5c: 82.50 -> 86.47 (lead-queue-paging +3.36: the shared
+    // useInfiniteQuery chunk, lead-queue.pages.ts, leadsPaged.ts, the
+    // keep-alive slot and the paged footer; evidence-drawer +0.45 shared; the
+    // rest within +-0.1 of hash churn). ~5% headroom.
+    'src/routes/lead-queue.tsx': 91 * KiB, // actual 86.47
     // wave-5a (w5-filters-saved-views): the Saved views panel, a lazy route
     // module whose closure statically reaches the lead-queue chunk.
     // wave-5b: 82.79 -> 85.17, the lead-queue closure's growth above.
-    'src/routes/lead-queue.savedViews.tsx': 90 * KiB, // actual 85.17
+    // wave-5c: 85.26 -> 89.24, the lead-queue closure's growth above
+    // (paging +3.35, evidence-drawer +0.46). ~5% headroom.
+    'src/routes/lead-queue.savedViews.tsx': 94 * KiB, // actual 89.24
     // w4 pre-cut: 3.93 (wave 3) -> 4.00 on the CI build (see glossary above).
     // wave-5b: 4.18 -> 4.26 (theme-white-label +0.07). Gate unchanged.
     'src/routes/not-found.tsx': 5 * KiB, // actual 4.26 (macOS build)
@@ -539,7 +641,9 @@ export const budgets = {
     // wave-5b: 38.97 -> 38.38 (audit-ledger-presenter -0.79: the PROTOTYPE
     // preview is its own lazy chunk; lead-triage-export +0.25 the shared
     // roster read). Gate unchanged.
-    'src/routes/offer-orchestrator.tsx': 41 * KiB, // actual 38.38
+    // wave-5c: 38.40 -> 38.97 (evidence-drawer +0.39 shared,
+    // dossier-decisions +0.28: the Prior decisions mount). 5.2% left: unchanged.
+    'src/routes/offer-orchestrator.tsx': 41 * KiB, // actual 38.97
     // wave-4b: 32.88 -> 37.48 (w4-workflow +4.61: compiler memo code for
     // the newly compiled route about +2.6, campaign mutations, the Field
     // primitive on the numeric editors).
@@ -561,6 +665,10 @@ export const budgets = {
     // wave-5b: 98.20 -> 99.56 (lead-triage-export +0.71 via the shared
     // LeadTable chunk, home-geo-lever +0.49 the stale note and FetchedAt
     // chunk, theme-white-label +0.13). ~5% headroom.
-    'src/routes/segment-intelligence.tsx': 105 * KiB, // actual 99.56
+    // wave-5c: 99.61 -> 102.34 (zcta-watchlist +1.36: the ZIP-areas stage
+    // +0.77 and the shared map chunk; lead-queue-paging +0.73 via the shared
+    // LeadTable chunk; evidence-drawer +0.43 shared; integration +0.09 the
+    // rung's 'absent' outcome). ~5% headroom.
+    'src/routes/segment-intelligence.tsx': 108 * KiB, // actual 102.34
   },
 };

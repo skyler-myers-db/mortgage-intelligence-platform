@@ -39,6 +39,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from backend.services.cooperative_cancel import CooperativeCancel
 from backend.services.genie_client_parsing import (
     _GENIE_MAX_SUGGESTED_QUESTIONS,
     _collect_uc_refs,
@@ -47,9 +48,25 @@ from backend.services.genie_client_parsing import (
     _parse_suggested_questions,
     _question_hash,
 )
+from backend.services.genie_completion_stages import cooperative_cancel_point
 from backend.services.observability import emit
 
 log = logging.getLogger(__name__)
+
+
+def _emit_cancelled(operation: str, start: float, **ids: str) -> None:
+    """A Genie call the owner stopped (genie-03): the operation's INFO end with
+    outcome ``cancelled`` (never ``genie_query_error``), ids and hash only."""
+
+    emit(
+        log,
+        "genie_query_end",
+        dependency="genie",
+        operation=operation,
+        duration_ms=round((time.monotonic() - start) * 1000.0, 2),
+        outcome="cancelled",
+        **ids,
+    )
 
 # Terminal Genie message states. The API docs list COMPLETED as the
 # happy path; FAILED / CANCELED / EXPIRED are terminal errors; SUBMITTED
@@ -223,6 +240,9 @@ class GenieClient:
                 poll_timeout_s=poll_timeout_s,
             )
         except BaseException as exc:
+            if isinstance(exc, CooperativeCancel):
+                _emit_cancelled("ask", start, statement_hash=q_hash)
+                raise
             emit(
                 log,
                 "genie_query_error",
@@ -302,6 +322,9 @@ class GenieClient:
                 operation="resume",
             )
         except BaseException as exc:
+            if isinstance(exc, CooperativeCancel):
+                _emit_cancelled("resume", start, statement_hash=f"resume:{message_id}", message_id=message_id)
+                raise
             emit(
                 log,
                 "genie_query_error",
@@ -547,6 +570,9 @@ class GenieClient:
                     message_id=message_id,
                     state=last_state,
                 )
+            # A stopped governed turn (genie-03) ends here, before the next
+            # poll; every Genie call precedes the record's commit point.
+            cooperative_cancel_point()
             time.sleep(sleep_s)
             sleep_s = min(self._POLL_MAX_S, sleep_s * self._POLL_BACKOFF)
 

@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from backend.main import app
 from backend.schemas.offer import OutreachApproveRequest
+from tests.fixtures.reviewed_approval import reviewed_approval
 
 _DISCLOSURE = (
     "Summit Mortgage, NMLS #123456. Equal Housing Lender. " "Reply unsubscribe to opt out."
@@ -39,14 +40,10 @@ def _approve_payload(**overrides: object) -> dict[str, object]:
 def test_approve_persists_assignment_and_follow_up_and_echoes_them(
     fake_lakebase_client,
 ) -> None:
+    client = TestClient(app)
+    body = reviewed_approval(client, "B-48291", assigned_to_email="lo01@summit.example", follow_up_in_days=5)
     before = datetime.now(UTC)
-    response = TestClient(app).post(
-        "/api/outreach/approve",
-        json=_approve_payload(
-            assigned_to_email="lo01@summit.example",
-            follow_up_in_days=5,
-        ),
-    )
+    response = client.post("/api/outreach/approve", json=body)
     after = datetime.now(UTC)
 
     assert response.status_code == 200, response.text
@@ -95,10 +92,8 @@ def test_assigned_to_email_outside_staff_domain_is_422() -> None:
 def test_approve_without_assignment_or_follow_up_still_works(
     fake_lakebase_client,
 ) -> None:
-    response = TestClient(app).post(
-        "/api/outreach/approve",
-        json=_approve_payload(),
-    )
+    client = TestClient(app)
+    response = client.post("/api/outreach/approve", json=reviewed_approval(client, "B-48291"))
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["approved"] is True

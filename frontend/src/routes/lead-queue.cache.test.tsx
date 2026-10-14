@@ -2,14 +2,16 @@
  * @vitest-environment happy-dom
  *
  * Lead Queue cache identity, at the layer where the defect lived (audit
- * runtime-02 / tables-v1, 2026-09-21): the REAL `useWarmingUpRetry` + a real
- * QueryClient with the production 30 s staleTime, and only the network client
- * mocked. The old key omitted `cities`, so navigating CHICAGO~IL ->
+ * runtime-02 / tables-v1, 2026-09-21): the REAL paged view
+ * (lead-queue.pages.ts, W5c) + a real QueryClient, and only the network
+ * client mocked. The old key omitted `cities`, so navigating CHICAGO~IL ->
  * SPRINGFIELD~IL inside the stale window issued no second fetch and kept
  * Chicago's rows on screen under a Springfield chip.
  *
- * `lead-queue.test.tsx` mocks `useWarmingUpRetry` wholesale, so it could never
- * see this; that is why this file does not.
+ * `lead-queue.test.tsx` mocks the paged view wholesale, so it could never
+ * see this; that is why this file does not. The page fetch is answered by
+ * `apiMocks.leadsPage` with the plain read's argument order (segment,
+ * signal, geo, opts) plus the server order and the cursor.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -26,7 +28,7 @@ const apiMocks = vi.hoisted(() => ({
   salesTeam: vi.fn(),
   portfolioPreview: vi.fn(),
   adminRules: vi.fn(),
-  zipRollups: vi.fn(),
+  zipRollupsWithFreshness: vi.fn(),
   leadsPage: vi.fn(),
 }));
 
@@ -67,7 +69,7 @@ vi.mock('../components/mortgage/PropertyLookupPanel', () => ({
 
 interface PlaceProps {
   sort?: { key: string; dir: string } | null;
-  onSortChange?: (next: { key: 'equity'; dir: 'desc' } | null) => void;
+  onSortChange?: (next: { key: 'equity' | 'outreach'; dir: 'desc' } | null) => void;
   expandedId?: string | null;
   onExpandedChange?: (id: string | null) => void;
   triage?: { mode: 'triage' | null; onModeChange: (mode: 'triage' | null, row?: string | null) => void } | null;
@@ -88,6 +90,15 @@ vi.mock('../lib/api', () => ({
   isWarmingUpError: () => false,
   dependencyLabel: () => 'Dependency',
   api: apiMocks,
+}));
+
+vi.mock('../lib/apiClients/leadsPaged', () => ({
+  fetchLeadsPage: (
+    request: { segment?: unknown; geo?: unknown; opts?: unknown },
+    order: unknown,
+    cursor: string | null,
+    signal: AbortSignal,
+  ) => apiMocks.leadsPage(request.segment, signal, request.geo, request.opts, order, cursor),
 }));
 
 import LeadQueue from './lead-queue';
@@ -143,7 +154,7 @@ describe('LeadQueue cache identity', () => {
     apiMocks.salesTeam.mockResolvedValue([]);
     apiMocks.portfolioPreview.mockResolvedValue({ data_refreshed_at: null });
     apiMocks.adminRules.mockResolvedValue({ offer_rules_version: null });
-    apiMocks.zipRollups.mockResolvedValue({ rollups: [] });
+    apiMocks.zipRollupsWithFreshness.mockResolvedValue({ data: { rollups: [] }, lastGoodAt: null });
     apiMocks.leadsPage.mockImplementation(
       (_segment: unknown, _signal: unknown, geo: GeoArg | undefined) => Promise.resolve(rowsFor(geo)),
     );
@@ -288,19 +299,28 @@ describe('LeadQueue cache identity', () => {
     expect(apiMocks.leadsPage).toHaveBeenCalledTimes(2);
   });
 
-  it('serves a revisited cohort from cache instead of refetching', async () => {
+  // W5c (D-audit-reads-a), a stated behaviour change: one paged view is
+  // cached at a time, so a revisited cohort is a new view, read from page 0
+  // (one VIEW_LEADS row for the reader's own navigation), never a cached
+  // view whose every loaded page a key change would refetch.
+  it('reads page 0 again for a revisited cohort: one paged view at a time', async () => {
     await mountAt('/lead-queue?cities=CHICAGO~IL');
     await go('/lead-queue?cities=SPRINGFIELD~IL');
     await go('/lead-queue?cities=CHICAGO~IL');
 
-    expect(apiMocks.leadsPage).toHaveBeenCalledTimes(2);
+    expect(apiMocks.leadsPage).toHaveBeenCalledTimes(3);
+    expect(apiMocks.leadsPage.mock.calls.map((call) => call[5])).toEqual([null, null, null]);
     expect(tableText()).toBe('B-CHICAGO~IL');
+    const paged = queryClient.getQueryCache().getAll()
+      .filter((query) => JSON.stringify(query.queryKey).includes('lead-queue-paged'));
+    expect(paged).toHaveLength(1);
   });
   // Audit shell-03 / runtime-08: the table place (sort, expanded row) rides
-  // in the URL but is not a filter. A sort (push) and an expand (replace)
-  // must reuse the leads cache entry: one GET /api/leads, no refetch, and the
-  // place never reaches the request.
-  it('reuses the leads cache entry when the sort or the expanded row changes', async () => {
+  // in the URL but is not a filter, so it never reaches the request. W5c
+  // (tables-02): a warehouse-column sort is the SERVER's order, so it reads
+  // page 0 of that order once; a client-only sort (outreach) and an expand
+  // read nothing.
+  it('reads page 0 once for a server sort, and nothing for a client sort or an expand', async () => {
     const row = 'B-P5YP9ESW32R7Z';
     apiMocks.leadsPage.mockImplementation(() => Promise.resolve({
       ...rowsFor(undefined),
@@ -308,19 +328,28 @@ describe('LeadQueue cache identity', () => {
     }));
     await mountAt('/lead-queue?state=IL');
     expect(apiMocks.leadsPage).toHaveBeenCalledTimes(1);
+    expect(apiMocks.leadsPage.mock.calls[0][4]).toEqual({ sort: 'rank', dir: 'desc' });
+
+    // Outreach is Lakebase-hydrated: it sorts the loaded rows, in rank order.
+    await act(async () => tablePlace.current?.onSortChange?.({ key: 'outreach', dir: 'desc' }));
+    await settle();
+    expect(tablePlace.current?.sort).toEqual({ key: 'outreach', dir: 'desc' });
+    expect(apiMocks.leadsPage, 'a client sort reads nothing').toHaveBeenCalledTimes(1);
 
     await act(async () => tablePlace.current?.onSortChange?.({ key: 'equity', dir: 'desc' }));
     await settle();
     expect(currentSearch).toBe('?state=IL&sort=equity&dir=desc');
     expect(tablePlace.current?.sort).toEqual({ key: 'equity', dir: 'desc' });
+    expect(apiMocks.leadsPage).toHaveBeenCalledTimes(2);
+    expect(apiMocks.leadsPage.mock.calls[1].slice(4)).toEqual([{ sort: 'equity', dir: 'desc' }, null]);
 
     await act(async () => tablePlace.current?.onExpandedChange?.(row));
     await settle();
     expect(currentSearch).toBe(`?state=IL&sort=equity&dir=desc&row=${row}`);
     expect(tablePlace.current?.expandedId).toBe(row);
+    expect(apiMocks.leadsPage, 'an expand reads nothing').toHaveBeenCalledTimes(2);
 
-    expect(apiMocks.leadsPage).toHaveBeenCalledTimes(1);
-    const request = JSON.stringify(apiMocks.leadsPage.mock.calls[0].filter((arg: unknown) => !(arg instanceof AbortSignal)));
+    const request = JSON.stringify(apiMocks.leadsPage.mock.calls.map((call) => [call[0], call[2], call[3]]));
     expect(request).not.toMatch(/equity|sort|B-P5YP9ESW32R7Z/);
   });
 

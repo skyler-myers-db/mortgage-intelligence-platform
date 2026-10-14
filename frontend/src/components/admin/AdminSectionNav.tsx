@@ -41,6 +41,7 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
   { id: 'buyer-readiness', label: 'Deployment readiness' },
   { id: 'capability-readiness', label: 'Agentic capabilities' },
   { id: 'activation', label: 'Activation' },
+  { id: 'field-performance', label: 'Field performance' },
   { id: 'appearance', label: 'Appearance' },
 ];
 
@@ -110,7 +111,7 @@ function useSectionInView(
     if (typeof IntersectionObserver === 'undefined' || !nav) return undefined;
     const scroller = nav.closest<HTMLElement>('.main');
     const routeNav = scroller?.querySelector<HTMLElement>('.route-nav');
-    const bars = () => (routeNav?.offsetHeight ?? 0) + nav.offsetHeight;
+    const bars = () => (routeNav?.hasAttribute('data-docked') ? routeNav.offsetHeight : 0) + nav.offsetHeight;
     const observedRoots = new Map<string, Element>();
     const inBand = new Set<string>();
     const inView = new Set<string>();

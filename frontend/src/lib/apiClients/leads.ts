@@ -23,12 +23,7 @@ import {
   getJsonWithHeaders,
   postJson,
 } from '../apiTransport';
-
-const DATA_REFRESHED_AT_RE = /^[0-9TZ:.+-]+$/;
-
-function dataRefreshedAtHeader(value: string | null): string | null {
-  return value && DATA_REFRESHED_AT_RE.test(value) ? value : null;
-}
+import { dataRefreshedAtHeader } from './headers';
 
 /** The geography argument of `api.leadsPage`. */
 export interface LeadsGeo {

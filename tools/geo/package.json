@@ -1,0 +1,21 @@
+{
+  "name": "mip-geo-tools",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Operator-only build of the committed per-state ZCTA TopoJSON (frontend/src/geo/zcta). Never run in CI or deploy; never shipped.",
+  "engines": {
+    "node": ">=22.22"
+  },
+  "scripts": {
+    "build:zcta": "node build_zcta_topojson.mjs"
+  },
+  "dependencies": {
+    "d3-geo": "3.1.1",
+    "d3-geo-projection": "4.0.0",
+    "shapefile": "0.6.6",
+    "topojson-client": "3.1.0",
+    "topojson-server": "3.0.1",
+    "topojson-simplify": "3.0.3"
+  }
+}

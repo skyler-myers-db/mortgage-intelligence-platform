@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import type { LeadSummary } from '../../types';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
 import { auditEventHref } from '../../lib/auditLinks';
+import { useAuditLinkAccess } from '../../lib/optionalQueryReads';
 import { pushEscapeLayer } from '../../lib/escapeStack';
 import { hasOpenOverlay, isEditableElement, registerKeyBinding } from '../../lib/keymap';
 import { Icon } from '../Icon';
@@ -61,6 +62,8 @@ export function TriageDeck(props: TriageDeckProps) {
     state: table, sortedLeads, flow, approval, leadsById, approvals, ReviewInline, actorEmail, campaignBinding,
     canAccessAdmin,
   } = props;
+  // flow-04: administrators AND auditors open the receipt's ledger row.
+  const auditLinks = useAuditLinkAccess();
   // Bumped by the table flow once an approve made through the review returned ok.
   const { approvedSignal, setLastShown } = table;
   /** Back to the table (replace, with the row to return to): the card's review or reject panel is closed first. */
@@ -263,7 +266,7 @@ export function TriageDeck(props: TriageDeckProps) {
             {lastReceipt?.auditEventId && (
               <>
                 {' · audit '}
-                {canAccessAdmin
+                {canAccessAdmin || auditLinks
                   ? <Link className="mono" to={auditEventHref(lastReceipt.auditEventId)}>{lastReceipt.auditEventId}</Link>
                   : <span className="mono">{lastReceipt.auditEventId}</span>}
               </>

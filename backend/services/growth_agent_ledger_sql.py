@@ -272,6 +272,14 @@ RETURNING draft_id, actor_email, monitor_id, run_id, channel, title, body,
 # recency = 1 is the briefing's latest run. A watchlist with no completed run
 # comes back once with NULL run columns. It never selects route, criteria or
 # actor: a stored route can carry an expiring, actor-bound handoff proof.
+#
+# The series is three index-backed arms (W5c w5-zcta-watchlist, the 12.3 plan
+# fix): the tagged runs through idx_growth_agent_runs_monitor_created, the
+# seed and the last run through the run_id primary key. The single OR join it
+# replaces kept every index unused, so PG16 planned a Seq Scan of
+# growth_agent_runs. Each arm is actor-bound and completed-only; UNION (not
+# UNION ALL) keeps one row per (monitor_id, run_id) when a run matches two
+# arms, exactly the row set the OR join produced, before the windows run.
 WATCHLIST_SUMMARY_SQL = """
 WITH watchlists AS (
   SELECT monitor_id, workflow_id, name, cadence, status, seed_run_id, last_run_id, updated_at
@@ -280,19 +288,37 @@ WITH watchlists AS (
   ORDER BY updated_at DESC, monitor_id
   LIMIT %(limit)s
 ),
+series_runs AS (
+  SELECT w.monitor_id, r.run_id, r.created_at, r.actionable_total, r.actionable_avg_score
+  FROM watchlists AS w
+  JOIN mip_app.growth_agent_runs AS r
+    ON r.monitor_id = w.monitor_id
+   AND r.actor_email = %(actor_email)s
+   AND r.status = 'completed'
+  UNION
+  SELECT w.monitor_id, r.run_id, r.created_at, r.actionable_total, r.actionable_avg_score
+  FROM watchlists AS w
+  JOIN mip_app.growth_agent_runs AS r
+    ON r.run_id = w.seed_run_id
+   AND r.actor_email = %(actor_email)s
+   AND r.status = 'completed'
+  UNION
+  SELECT w.monitor_id, r.run_id, r.created_at, r.actionable_total, r.actionable_avg_score
+  FROM watchlists AS w
+  JOIN mip_app.growth_agent_runs AS r
+    ON r.run_id = w.last_run_id
+   AND r.actor_email = %(actor_email)s
+   AND r.status = 'completed'
+),
 series AS (
-  SELECT w.monitor_id, r.created_at AS run_at, r.actionable_total, r.actionable_avg_score,
+  SELECT r.monitor_id, r.created_at AS run_at, r.actionable_total, r.actionable_avg_score,
          LAG(r.created_at) OVER ordered AS previous_run_at,
          LAG(r.actionable_total) OVER ordered AS previous_actionable_total,
          LAG(r.actionable_avg_score) OVER ordered AS previous_actionable_avg_score,
-         ROW_NUMBER() OVER (PARTITION BY w.monitor_id ORDER BY r.created_at DESC, r.run_id DESC) AS recency,
-         COUNT(*) OVER (PARTITION BY w.monitor_id) AS run_count
-  FROM watchlists AS w
-  JOIN mip_app.growth_agent_runs AS r
-    ON r.actor_email = %(actor_email)s
-   AND r.status = 'completed'
-   AND (r.monitor_id = w.monitor_id OR r.run_id = w.seed_run_id OR r.run_id = w.last_run_id)
-  WINDOW ordered AS (PARTITION BY w.monitor_id ORDER BY r.created_at, r.run_id)
+         ROW_NUMBER() OVER (PARTITION BY r.monitor_id ORDER BY r.created_at DESC, r.run_id DESC) AS recency,
+         COUNT(*) OVER (PARTITION BY r.monitor_id) AS run_count
+  FROM series_runs AS r
+  WINDOW ordered AS (PARTITION BY r.monitor_id ORDER BY r.created_at, r.run_id)
 )
 SELECT w.monitor_id, w.workflow_id, w.name, w.cadence, w.status,
        s.recency, s.run_count, s.run_at, s.actionable_total, s.actionable_avg_score,

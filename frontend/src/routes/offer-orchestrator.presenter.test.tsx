@@ -26,6 +26,8 @@ const apiMocks = vi.hoisted(() => ({
 /** How many times the mock's module was evaluated (it is, once, on its first import). */
 const previewModule = vi.hoisted(() => ({ loads: 0 }));
 
+// The audit-free decision history (D-audit-reads-c2) stays pending: this suite counts its own reads.
+vi.mock('../lib/apiClients/borrowerDecisions', () => ({ borrowerDecisionsQuery: (id: string) => ({ queryKey: ['mip', 'borrower', id, 'decisions'], queryFn: () => new Promise(() => undefined) }) }));
 vi.mock('../lib/api', () => {
   class ApiError extends Error {
     status: number | null;

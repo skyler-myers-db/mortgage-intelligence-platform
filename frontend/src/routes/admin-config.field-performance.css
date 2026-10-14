@@ -1,0 +1,112 @@
+/*
+ * Administration -> Field performance (D-platform-process-d2 step 12).
+ *
+ * Declared prototype extension (deviation:field-performance-panel):
+ * design_files has no telemetry panel. The
+ * panel reuses .surface / .surface__hdr / .surface__body
+ * (design_files/index.html:355-367), .tbl (design_files/index.html:595-621),
+ * the rating chips .chip--success / --warning / --danger
+ * (design_files/index.html:403-417) and the segmented toggle of .tweak-row
+ * (design_files/index.html:926-935); .field-perf only lays them out, in the
+ * prototype's token vocabulary.
+ *
+ * Imported by admin-config.tsx (not by the lazy panel), so the Suspense
+ * fallback's reserved block size applies before the panel's chunk arrives:
+ * the header row and the body keep one block size from the fallback to the
+ * panel's own loading state, and #appearance below never moves while the
+ * panel loads.
+ */
+
+.field-perf {
+  --field-perf-hdr: calc(var(--sp-12) + var(--sp-6));
+  --field-perf-reserve: calc(var(--sp-16) * 5);
+}
+
+.field-perf__hdr {
+  min-block-size: var(--field-perf-hdr);
+  flex-wrap: wrap;
+  row-gap: var(--sp-2);
+}
+
+.field-perf__title,
+.field-perf__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.field-perf__controls .segmented {
+  display: flex;
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  padding: calc(var(--sp-1) / 2);
+}
+
+.field-perf__controls .segmented button {
+  background: transparent;
+  border: 0;
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-12);
+  font-family: var(--font-sans);
+  color: var(--text-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.field-perf__controls .segmented button.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.field-perf__controls .segmented button:active { translate: 0 var(--pressed-shift); }
+
+.field-perf__body {
+  min-block-size: var(--field-perf-reserve);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.field-perf__skeleton {
+  block-size: var(--field-perf-reserve);
+  border-radius: var(--r-md);
+}
+
+.field-perf__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-inline-size: 0;
+  overflow-x: auto;
+}
+
+.field-perf__tbl th[scope="row"],
+.field-perf__route {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  font-weight: 400;
+  color: var(--text-1);
+  text-align: left;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+  padding: 0 var(--sp-4);
+  border-bottom: 1px solid var(--line-1);
+}
+
+.field-perf__cell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.field-perf__samples,
+.field-perf__floor,
+.field-perf__none {
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.field-perf__none { margin: 0; }

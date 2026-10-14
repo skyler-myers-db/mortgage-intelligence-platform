@@ -19,8 +19,12 @@ import { createMipQueryClient } from '../../lib/queryClient';
 import type { SegmentCombinationResponse } from '../../types/segmentCombinations';
 import { preloadAsyncFailure } from '../ui/AsyncState';
 import { SignalStack } from './SignalStack';
+// @ts-expect-error see node:fs note above (a `?raw` import of a .css module
+// resolves to '' under this Vitest config, so the source is read from disk).
+import { join } from 'node:path';
 
 declare const process: { cwd(): string };
+const signalStackCss = readFileSync(join(process.cwd(), 'src/components/mortgage/SignalStack.css'), 'utf8') as string;
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -104,6 +108,17 @@ describe('SignalStack', () => {
     expect(document.querySelector('.signal-stack')?.getAttribute('aria-busy')).toBe('true');
     expect(text()).toContain('Loading the signal stack');
     expect(document.querySelector('.signal-stack h2')?.textContent).toBe('Signal stack');
+  });
+
+  it('reserves the loaded height only while busy or loaded with rows, never in a one-line settled state', () => {
+    const css = signalStackCss.replace(/\/\*[\s\S]*?\*\//g, '');
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(([, selector, body]) => ({ selector: selector.trim(), body }));
+    const reserving = rules.filter((rule) => /min-block-size/.test(rule.body));
+    expect(reserving.map((rule) => rule.selector.split(/,\s*/))).toEqual([[
+      ".signal-stack[aria-busy='true'] > .signal-stack__body",
+      '.signal-stack__body:has(> .signal-stack__actions)',
+    ]]);
+    expect(rules.find((rule) => rule.selector === '.signal-stack__body')?.body).not.toMatch(/min-block-size|min-height|block-size/);
   });
 
   it('says it is not built yet', async () => {

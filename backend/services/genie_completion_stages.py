@@ -42,11 +42,13 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
+
+from backend.services.cooperative_cancel import CooperativeCancel
 
 
 class GenieJobStage(StrEnum):
@@ -135,13 +137,15 @@ StageCallback = Callable[[GenieJobStage, int | None, int | None], None]
 SectionsCallback = Callable[[list[dict[str, Any]]], None]
 
 
-class GenieTurnCancelled(BaseException):
+class GenieTurnCancelled(CooperativeCancel):
     """The owner stopped this turn before its governed record existed.
 
-    A ``BaseException`` on purpose: the governed path has broad
-    ``except Exception`` handlers (a failed sweep theme becomes a disclosed
-    gap, a failed planner falls through to the single turn) that must never
-    turn a cancel into more Genie work. Only the completion runner catches it.
+    A ``BaseException`` on purpose (through ``CooperativeCancel``): the
+    governed path has broad ``except Exception`` handlers (a failed sweep
+    theme becomes a disclosed gap, a failed planner falls through to the
+    single turn) that must never turn a cancel into more Genie work, and the
+    resilience and observability layers pass it through as a stop, never a
+    dependency failure. Only the completion runner catches it.
     """
 
 
@@ -155,6 +159,24 @@ class _SinkBinding:
 
 
 _STAGE_SINK: ContextVar[_SinkBinding | None] = ContextVar("mip_genie_stage_sink", default=None)
+#: The cancel predicate of the work running in this context (W5c genie-03):
+#: set on the runner's thread by ``stage_sink`` and on each sweep sub-turn's
+#: pool thread by ``cancel_scope``, so a non-owner thread can stop too.
+_CANCEL_SCOPE: ContextVar[Callable[[], bool] | None] = ContextVar("mip_genie_cancel_scope", default=None)
+
+
+@contextmanager
+def cancel_scope(predicate: Callable[[], bool] | None) -> Iterator[None]:
+    """Make ``predicate`` this context's cancel predicate for the block.
+
+    Reset in ``finally``: a pooled thread never carries it into its next task.
+    """
+
+    token = _CANCEL_SCOPE.set(predicate)
+    try:
+        yield
+    finally:
+        _CANCEL_SCOPE.reset(token)
 
 
 @contextmanager
@@ -167,16 +189,17 @@ def stage_sink(
 ) -> Iterator[None]:
     """Route :func:`report_stage` calls made on THIS thread to ``callback``.
 
-    ``cancelled`` makes each report a cancel point; ``commit`` is the hook
-    :func:`commit_governed_record` calls; ``sections`` receives
-    :func:`report_sections` snapshots.
+    ``cancelled`` makes each report a cancel point (and is this thread's
+    cancel scope); ``commit`` is the hook :func:`commit_governed_record`
+    calls; ``sections`` receives :func:`report_sections` snapshots.
     """
 
     token = _STAGE_SINK.set(
         _SinkBinding(callback, threading.get_ident(), cancelled, commit, sections)
     )
     try:
-        yield
+        with cancel_scope(cancelled) if cancelled is not None else nullcontext():
+            yield
     finally:
         _STAGE_SINK.reset(token)
 
@@ -188,13 +211,42 @@ def _owned_binding() -> _SinkBinding | None:
     return binding
 
 
-def _cancel_requested(binding: _SinkBinding) -> bool:
-    if binding.cancelled is None:
+def _true(predicate: Callable[[], bool] | None) -> bool:
+    if predicate is None:
         return False
     try:
-        return binding.cancelled() is True
+        return predicate() is True
     except Exception:  # noqa: BLE001 - an unreadable predicate is not a cancel
         return False
+
+
+def _cancel_requested(binding: _SinkBinding) -> bool:
+    return _true(binding.cancelled)
+
+
+def cancel_probe() -> Callable[[], bool] | None:
+    """The owning runner thread's cancel predicate, or None (elsewhere, or
+    no runner). The sweep hands it to each sub-turn's ``cancel_scope``."""
+
+    binding = _owned_binding()
+    return binding.cancelled if binding is not None else None
+
+
+def cooperative_cancel_point() -> None:
+    """Raise :class:`GenieTurnCancelled` if this work was stopped (W5c).
+
+    On the owning runner thread the sink's predicate decides; on any other
+    thread (a sweep sub-turn) the context's ``cancel_scope``. It never
+    reports a stage and never writes; without a runner it does nothing.
+    """
+
+    binding = _owned_binding()
+    if binding is not None:
+        if _cancel_requested(binding):
+            raise GenieTurnCancelled()
+        return
+    if _true(_CANCEL_SCOPE.get()):
+        raise GenieTurnCancelled()
 
 
 def report_stage(
@@ -205,11 +257,14 @@ def report_stage(
     """Report where the completion is; a no-op outside the owning runner thread.
 
     Raises :class:`GenieTurnCancelled` after the report when the runner's
-    ``cancelled`` predicate is true (owner thread only).
+    ``cancelled`` predicate is true (owner thread only). On any other thread
+    it reports nothing but is still a cancel point: a sweep sub-turn's own
+    stage boundaries stop it under its ``cancel_scope``.
     """
 
     binding = _owned_binding()
     if binding is None:
+        cooperative_cancel_point()
         return
     # Progress reporting never fails an answer: a failing sink is swallowed.
     with suppress(Exception):
@@ -258,7 +313,10 @@ __all__ = [
     "GenieTurnCancelled",
     "SectionsCallback",
     "StageCallback",
+    "cancel_probe",
+    "cancel_scope",
     "commit_governed_record",
+    "cooperative_cancel_point",
     "report_sections",
     "report_stage",
     "stage_sink",

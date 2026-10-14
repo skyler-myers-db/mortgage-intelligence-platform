@@ -55,7 +55,8 @@ def test_the_dataclass_keeps_the_pre_w5a_wire_order_as_its_prefix() -> None:
 @pytest.mark.parametrize("path", ["/api/leads", "/api/v1/leads"])
 def test_the_published_parameter_order_is_the_dataclass_order_then_limit(path: str) -> None:
     published = [param["name"] for param in app.openapi()["paths"][path]["get"]["parameters"]]
-    assert published == [*_field_wire_names(), "limit"]
+    # W5c (D-audit-reads-a): the server paging parameters follow limit.
+    assert published == [*_field_wire_names(), "limit", "cursor", "sort", "sort_dir"]
 
 
 def test_the_dependency_returns_every_declared_default() -> None:

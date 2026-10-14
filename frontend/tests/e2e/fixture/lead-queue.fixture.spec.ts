@@ -804,7 +804,9 @@ test.describe('(f) a restored ?row= is revealed', () => {
     await page.getByRole('button', { name: 'Sort by Equity' }).click();
     await expect(page).toHaveURL(new RegExp(`[?&]sort=equity&dir=desc.*row=${row140}|row=${row140}.*sort=equity`));
     await expectRowInScrollport(page, row140);
-    expect(calls(mockApi, 'GET', '/api/leads'), 'the reveal reads nothing').toBe(reads);
+    // W5c: Equity is a server sort, so it reads page 0 of that order once;
+    // the reveal itself reads nothing more.
+    expect(calls(mockApi, 'GET', '/api/leads'), 'one page-0 read for the server sort, none for the reveal').toBe(reads + 1);
   });
 });
 

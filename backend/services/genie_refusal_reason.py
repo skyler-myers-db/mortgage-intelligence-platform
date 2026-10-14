@@ -20,9 +20,10 @@ already computed.
 audit ledger hashes (the validated ``GenieMessageRequest.question``), with no
 further normalization. Its first 16 hex therefore equal the ``question_hash``
 on the ``genie.refused_prompt`` / ``genie.response_blocked`` audit row, so a
-"this was legitimate" report joins to the refusal it reports. The
-false-positive report endpoint accepts only that hash, so a refused prompt is
-never round-tripped or stored as text.
+"this was legitimate" report joins to the refusal it reports. The report row
+carries only that hash; question text is stored only when the reporter opts
+in, hash-bound to a refusal of theirs in the ledger, in the sibling
+``genie_refusal_report_texts`` table (D-audit-reads-d).
 """
 
 from __future__ import annotations
@@ -69,6 +70,24 @@ GENIE_REFUSAL_AUDIT_CODES: dict[str, str] = {
 
 REFUSAL_REPORT_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 
+# The ``action_type`` of every RUN_GENIE row a governed refusal writes
+# (genie_deterministic: the pre-Genie refusals, the outreach guardrail and the
+# output-policy block). A consented refusal text is stored only when the
+# reporter's own ledger holds one of these rows for the same question hash
+# (D-audit-reads-d); tests/unit/test_refusal_report_text_access.py pins every
+# writer to this set.
+REFUSAL_LEDGER_ACTION_TYPES: frozenset[str] = frozenset(
+    {"refused_prompt", "response_blocked", "outreach_guardrail"}
+)
+
+# Family -> the writer that refuses it. ``unknown`` (a client that could not
+# name the family) binds to any refusal writer.
+_FAMILY_LEDGER_ACTION_TYPES: dict[str, tuple[str, ...]] = {
+    "outreach_instruction": ("outreach_guardrail",),
+    "output_policy": ("response_blocked",),
+    "unknown": tuple(sorted(REFUSAL_LEDGER_ACTION_TYPES)),
+}
+
 
 def refusal_family_for_protected_code(audit_code: str) -> GenieRefusalReason:
     """Map the guard's protected-class audit code to its coarse wire family."""
@@ -90,3 +109,9 @@ def refusal_report_hash(question: str) -> str:
 
 def is_refusal_report_hash(value: str) -> bool:
     return REFUSAL_REPORT_HASH_RE.fullmatch(value) is not None
+
+
+def refusal_ledger_action_types(refusal_reason: str) -> tuple[str, ...]:
+    """The RUN_GENIE ``action_type`` values that refuse this family."""
+
+    return _FAMILY_LEDGER_ACTION_TYPES.get(refusal_reason, ("refused_prompt",))

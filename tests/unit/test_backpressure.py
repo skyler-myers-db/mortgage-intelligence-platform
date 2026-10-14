@@ -273,7 +273,6 @@ def test_genie_session_reads_are_lakebase_reads_outside_the_genie_budget(path: s
         ("POST", "/api/v1/genie/message/complete"),
         ("POST", "/api/v1/genie/message/submit"),
         ("POST", "/api/v1/genie/actions"),
-        ("POST", "/api/v1/genie/start"),
         ("GET", "/api/v1/genie/start"),
         ("GET", "/api/v1/genie/sessionsx"),
         ("POST", "/api/v1/genie/sessions/0123456789abcdef0123456789abcdef"),
@@ -298,3 +297,75 @@ def test_the_admin_sse_probe_holds_no_dependency_slot(path: str) -> None:
     assert budget is not None
     assert (budget.scope, budget.dependency) == ("admin-diagnostic", None)
     assert BackpressureController().classify("GET", "/api/admin/rules").dependency == "warehouse"
+
+
+@pytest.mark.parametrize("path", ["/api/assets/x/freshness", "/api/v1/assets/x/freshness"])
+def test_asset_freshness_is_a_warehouse_read(path: str) -> None:
+    # critic-03: every authenticated user's freshness read is one
+    # source-readiness SELECT on the warehouse; the admin metadata read keeps
+    # its /api/admin branch.
+    budget = BackpressureController().classify("GET", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("warehouse-read", "warehouse")
+    admin = BackpressureController().classify("GET", "/api/v1/admin/assets/x/metadata")
+    assert admin is not None and (admin.scope, admin.dependency) == ("warehouse-read", "warehouse")
+
+
+@pytest.mark.parametrize("path", ["/api/kpi-proof", "/api/v1/kpi-proof"])
+def test_kpi_proof_takes_the_default_budget_and_no_slot(path: str) -> None:
+    # flow-06: the route emits fixed SQL text and reads nothing.
+    budget = BackpressureController().classify("GET", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("default", None)
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/api/borrowers/B-0123456789ABC/decisions", "/api/v1/borrowers/B-X/decisions"],
+)
+def test_the_borrower_decision_history_is_a_lakebase_read_never_a_warehouse_read(path: str) -> None:
+    # Audit flow-04 phase 2: the history reads the Lakebase ledger only; under
+    # the '/api/borrowers' prefix it would spend the expensive warehouse budget
+    # and hold a warehouse slot.
+    controller = BackpressureController()
+    budget = controller.classify("GET", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("lakebase-read", "lakebase")
+    assert budget.requests_per_minute == settings.mip_rate_limit_default_per_minute
+    # Non-vacuity: the dossier read beside it keeps the warehouse budget.
+    dossier = controller.classify("GET", "/api/v1/borrowers/B-X")
+    assert dossier is not None and dossier.dependency == "warehouse"
+
+
+# --- 2026-09-21 audit delivery-09: the Genie surface's open ---------------------
+
+
+@pytest.mark.parametrize("path", ["/api/genie/start", "/api/v1/genie/start"])
+def test_genie_start_is_a_lakebase_read_outside_the_genie_budget(path: str) -> None:
+    # genie_start reads the caller's latest Lakebase session row, the static
+    # trusted assets and the sample-question file: no Genie call, no audit
+    # row. Inside the Genie budget every surface open would hold a Genie slot.
+    budget = BackpressureController().classify("POST", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("lakebase-read", "lakebase")
+    assert budget.requests_per_minute == settings.mip_rate_limit_default_per_minute
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/genie/message",
+        "/api/v1/genie/message/complete",
+        "/api/v1/genie/actions",
+        "/api/v1/genie/startx",
+    ],
+)
+def test_the_genie_start_branch_leaves_answer_path_posts_in_the_genie_budget(path: str) -> None:
+    budget = BackpressureController().classify("POST", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("genie", "genie")

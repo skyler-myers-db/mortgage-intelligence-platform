@@ -19,6 +19,7 @@ from backend.services.sales_state import (
 )
 from tests.fixtures import mock_population as mock_data
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.fixtures.reviewed_approval import draft_proof
 
 client = TestClient(app)
 client.headers.update({"X-Forwarded-Email": "skyler@entrada.ai"})
@@ -38,10 +39,8 @@ def _approve_for_sales(borrower_id: str) -> None:
         "/api/outreach/approve",
         json={
             "borrower_id": borrower_id,
-            "offer_code": "refi_plus_heloc",
             "channel": "email",
-            "draft_subject": draft.json()["subject"],
-            "draft_body": draft.json()["body"],
+            **draft_proof(draft.json()),
             "request_id": str(uuid4()),
         },
     )
@@ -124,7 +123,6 @@ def test_disposition_requires_callback_time_and_updates_lifecycle() -> None:
             "lo_email": "lo01@summit.example",
             "outcome": "callback_scheduled",
             "callback_at": callback_at,
-            "notes": "Callback requested after rate review.",
         },
     )
     assert logged.status_code == 200
@@ -200,7 +198,6 @@ def test_disposition_request_id_replays_without_duplicate_or_breaker(fake_lakeba
     payload = {
         "lo_email": "lo01@summit.example",
         "outcome": "connected",
-        "notes": "Reviewed scenario and next steps.",
         "request_id": request_id,
     }
 
@@ -281,7 +278,6 @@ def test_disposition_deactivated_cached_lo_is_rejected(fake_lakebase_client) -> 
         json={
             "lo_email": stale_lo_email,
             "outcome": "connected",
-            "notes": "This should not persist.",
             "request_id": str(uuid4()),
         },
     )
@@ -1372,10 +1368,8 @@ def test_genie_routes_sales_manager_lo_conversion_to_sales_ops_adapter() -> None
             "/api/outreach/approve",
             json={
                 "borrower_id": borrower_id,
-                "offer_code": "refi_plus_heloc",
                 "channel": "email",
-                "draft_subject": draft.json()["subject"],
-                "draft_body": draft.json()["body"],
+                **draft_proof(draft.json()),
                 "request_id": str(uuid4()),
             },
         )

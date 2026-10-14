@@ -140,6 +140,8 @@ def main() -> None:
         sql_client=_build_client(args.timeout_s, settings, workspace),
         record_funnel_snapshot=not args.skip_funnel,
         funnel_sql_path=args.funnel_sql,
+        # The deploy identity owns the funnel ALTER: a refusal fails the deploy.
+        tolerate_funnel_schema_denied=False,
     )
     print(json.dumps(result.__dict__, sort_keys=True))
 

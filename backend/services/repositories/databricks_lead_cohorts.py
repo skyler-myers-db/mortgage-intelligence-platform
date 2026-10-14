@@ -51,6 +51,12 @@ from backend.services.repositories.databricks_campaign_treatment_preflight impor
 from backend.services.repositories.databricks_lead_cohort_support import (
     LeadCohortQuerySupport,
 )
+from backend.services.repositories.databricks_lead_order import (
+    MATCHED_SOURCE,
+    RANK,
+    LeadOrder,
+    order_by_sql,
+)
 from backend.services.repositories.databricks_portfolio import build_preview_predicates
 from backend.services.repositories.databricks_shared import (
     _LEAD_POPULATION_SELECT_FROM_B360,
@@ -288,8 +294,25 @@ CROSS JOIN snapshot_validation
         filters: LeadCohortFilters,
         *,
         limit: int,
+        order: LeadOrder = RANK,
     ) -> tuple[list[LeadSummary], dict[str, str | int]]:
         """Return page rows and complete-set identity from one uncached statement."""
+
+        rows, identity = self.list_with_identity_rows(filters, limit=limit, order=order)
+        return [_redacted_lead(row) for row in rows], identity
+
+    def list_with_identity_rows(
+        self,
+        filters: LeadCohortFilters,
+        *,
+        limit: int,
+        order: LeadOrder = RANK,
+    ) -> tuple[list[dict[str, Any]], dict[str, str | int]]:
+        """The ranked RAW rows (``__rank_order`` included) and the identity.
+
+        A paged view mints its first cursor from the last raw row, so the
+        keyset is never read off a redacted lead.
+        """
 
         matched_sql, params, uses_lead_population = self.matched_cohort_sql(
             filters,
@@ -314,7 +337,7 @@ identity AS (
 ),
 ranked AS (
   SELECT * FROM matched
-  ORDER BY __rank_order DESC, borrower_id ASC
+  {order_by_sql(order, MATCHED_SOURCE)}
   LIMIT {limit}
 )
 SELECT ranked.*, identity.__identity_total, identity.__cohort_digest, identity.__snapshot_id
@@ -331,16 +354,7 @@ LEFT JOIN ranked ON TRUE
             digest_key="__cohort_digest",
             snapshot_key="__snapshot_id",
         )
-        leads = [
-            LeadSummary(
-                **redact_lead_row(
-                    {key: value for key, value in row.items() if not key.startswith("__")}
-                )
-            )
-            for row in rows
-            if row.get("borrower_id")
-        ]
-        return leads, identity
+        return [row for row in rows if row.get("borrower_id")], identity
 
     def matched_cohort_sql(
         self,
@@ -488,6 +502,10 @@ LEFT JOIN ranked ON TRUE
             lifecycle_params,
             True,
         )
+
+def _redacted_lead(row: Mapping[str, Any]) -> LeadSummary:
+    return LeadSummary(**redact_lead_row({key: value for key, value in row.items() if not key.startswith("__")}))
+
 
 def normalise_growth_agent_handoff_filters(
     criteria: Mapping[str, object],

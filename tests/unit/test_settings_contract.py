@@ -68,6 +68,8 @@ def _sample_for_field(field_name: str) -> tuple[str, Any]:
         return "600.5", 600.5  # bounded ge=60
     if field_name == "mip_warehouse_keep_warm":
         return "activity", "activity"  # off | activity | scheduled
+    if field_name == "mip_genie_refusal_text_capture":
+        return "enabled", "enabled"  # enabled | disabled (default disabled)
     annotation = Settings.model_fields[field_name].annotation
     if _annotation_contains(annotation, bool):
         return "false", False
@@ -245,6 +247,22 @@ def test_presenter_mode_parses_strictly_and_an_unparseable_value_fails_closed(
     monkeypatch.setenv("MIP_PRESENTER_MODE", raw)
 
     assert Settings(_env_file=None).mip_presenter_mode is expected
+
+
+def test_refusal_text_capture_defaults_off_and_parses_only_its_two_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-audit-reads-d, fail-closed (W5c C8): an env that drops the payload
+    (a bare UI deploy) reads as disabled; the deploy payload ships 'enabled'
+    explicitly and refuses a typo before boot."""
+    monkeypatch.delenv("MIP_GENIE_REFUSAL_TEXT_CAPTURE", raising=False)
+    assert Settings(_env_file=None).mip_genie_refusal_text_capture == "disabled"
+    for value in ("enabled", "disabled"):
+        monkeypatch.setenv("MIP_GENIE_REFUSAL_TEXT_CAPTURE", value)
+        assert Settings(_env_file=None).mip_genie_refusal_text_capture == value
+    monkeypatch.setenv("MIP_GENIE_REFUSAL_TEXT_CAPTURE", "on")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
 
 
 @pytest.mark.parametrize(

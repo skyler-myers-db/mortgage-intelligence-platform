@@ -520,6 +520,15 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
     return output
 
 
+def _score_points(row: dict[str, Any]) -> dict[str, float] | None:
+    # Local import: lead_score_points imports the schema package, which must
+    # not become an import-time dependency of this redaction module.
+    from backend.services.lead_score_points import score_points_from_row
+
+    points = score_points_from_row(row)
+    return points.model_dump() if points is not None else None
+
+
 def redact_lead_row(row: dict[str, Any]) -> dict[str, Any]:
     """Project a ``gold.lead_population`` row into the ``LeadSummary`` shape.
 
@@ -557,6 +566,9 @@ def redact_lead_row(row: dict[str, Any]) -> dict[str, Any]:
         "rate_spread_bps": int(row.get("rate_spread_bps") or 0),
         "opportunity_score": int(row.get("opportunity_score") or 0),
         "confidence": int(row.get("confidence") or 0),
+        # Score anatomy (audit wow-stage-2): an additive projection of the
+        # five gold *_points columns; None when absent, NULL or inconsistent.
+        "score_points": _score_points(row),
         "recommended_offer_code": row.get("recommended_offer_code") or "nurture",
         "recommended_offer": row.get("recommended_offer") or "Nurture",
         "why_now": row.get("why_now") or "",

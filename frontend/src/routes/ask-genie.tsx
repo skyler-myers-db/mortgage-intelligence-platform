@@ -33,7 +33,7 @@ import {
 } from '../lib/genieInFlightTurn';
 import { ensureGenieLauncherSignal } from '../lib/genieLauncherSignal';
 import { genieStartQueryOptions } from '../lib/genieStartQuery';
-import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
+import { AskGenieAnswerPanel, type GenieActionStatus } from './ask-genie.answer-panel';
 import {
   GenieConversationLinkPlaceholder,
   NO_GENIE_TURN,
@@ -151,7 +151,7 @@ export default function AskGenie() {
     });
   }, [genieStartQuery.data]);
   const trustedAssets = trustedAssetsForCatalog(genieStartQuery.data?.trusted_assets);
-  const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [actionStatus, setActionStatus] = useState<GenieActionStatus | null>(null);
 
   // The launchers ring for a turn asked here even before the floating panel
   // first mounts (Genie residual #2), and a reload may have interrupted a
@@ -257,7 +257,7 @@ export default function AskGenie() {
     // by this route's own listener, which clears `actionStatus`. Setting the
     // confirmation BEFORE the dispatch left it permanently invisible.
     clearGenieConversationState({ notify: true });
-    setActionStatus('Started a new Genie thread.');
+    setActionStatus({ text: 'Started a new Genie thread.', auditEventId: null });
   }
 
   /**
@@ -310,10 +310,12 @@ export default function AskGenie() {
   /** A governed action, bound to the turn it was offered on (never the
    *  latest answer). Pessimistic: the status says what the server recorded. */
   function runAction(action: GenieActionSuggestion, payload: GenieAnswerShape) {
-    setActionStatus(`Running ${action.label.toLowerCase()}...`);
+    setActionStatus({ text: `Running ${action.label.toLowerCase()}...`, auditEventId: null });
     return runGenieActionRequest(action, payload, conversationId).then((outcome) => {
       const message = outcome.kind === 'ok' ? genieActionConfirmation(outcome.result) : outcome.message;
-      setActionStatus(message);
+      // The callout renders the receipt (flow-04); the announcer says it all.
+      const auditEventId = outcome.kind === 'ok' ? (outcome.result.audit_event_id ?? null) : null;
+      setActionStatus({ text: auditEventId && outcome.kind === 'ok' ? outcome.result.message : message, auditEventId });
       announceGenie(message);
       if (outcome.kind !== 'ok') return;
       if (action.action_type === 'save_borrowers') refreshWorkspace();

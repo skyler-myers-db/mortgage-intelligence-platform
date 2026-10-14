@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { ApiError } from '../../lib/api';
 import { describeApiError, type ApiErrorKind } from '../../lib/describeApiError';
 import { PageShell } from '../layout/PageShell';
+import { BorrowerTitle } from '../../routes/borrower-360.title';
 import { Button, Chip } from '../Primitives';
 import { useOptionalHealth } from '../HealthProvider';
 import { degradedDependency, friendlyDependencyName, isBanneredOutage } from '../healthRecovery';
@@ -29,7 +30,7 @@ function failureChipLabel(kind: ApiErrorKind): string {
 interface FailurePageProps {
   id: string;
   pager: ReactNode;
-  title: string;
+  title: ReactNode;
   lede: string;
   chip: { label: string; variant: 'warning' | 'neutral' | 'danger'; icon: 'search' | 'bolt' | 'cross' };
   onRetry: (() => void) | null;
@@ -79,8 +80,8 @@ export function DossierFailure({ id, error, pager, onRetry }: { id: string; erro
       <FailurePage
         id={id}
         pager={pager}
-        title={`Loading ${id}…`}
-        lede={`This dossier reloads when the ${friendlyDependencyName(degradedDependency(health) ?? '')} reconnects.`}
+        title={<BorrowerTitle id={id} />}
+        lede={`Loading this dossier. It reloads when the ${friendlyDependencyName(degradedDependency(health) ?? '')} reconnects.`}
         chip={{ label: 'Reconnecting', variant: 'neutral', icon: 'bolt' }}
         onRetry={onRetry}
         quietRetry

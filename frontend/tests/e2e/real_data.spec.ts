@@ -1105,7 +1105,10 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(drawer.locator('.drawer__subtitle')).toHaveText(
       /Marketable population|Ranked lead population|Lead score model|Borrower 360 feature set|Lead-generation metric view|Borrower opportunity metric view/,
     );
-    await expect(drawer.getByText(/Compact semantics: Overview de-duplicates/i)).toBeVisible();
+    // How the assets are listed sits under the hood (W5c w5-evidence-drawer, flow-10).
+    await drawer.getByRole('tab', { name: 'Under the hood' }).click();
+    await expect(drawer.getByText(/Each governed object behind this source is listed once on Overview/i)).toBeVisible();
+    await drawer.getByRole('tab', { name: 'Overview' }).click();
     const overviewAssets = drawer.locator('.governed-assets__list .lineage-node__chip');
     await expect(overviewAssets.first()).toBeVisible({ timeout: 10_000 });
     const overviewLinkState = await overviewAssets.evaluateAll((nodes) => nodes.map((node) => ({

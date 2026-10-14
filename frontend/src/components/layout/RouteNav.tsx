@@ -1,12 +1,14 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef } from 'react';
 import { NavLink } from 'react-router';
 import { Icon } from '../Icon';
 import { useApp } from '../AppContext';
+import { useRouteNavDock } from '../../hooks/useRouteNavDock';
 import { saveDataRequested } from '../../lib/prefetch';
 import { prefetchRouteData } from '../../lib/routeDataPrefetch';
 import { preloadRouteForPath } from '../../lib/routePreloaders';
 import {
-  NAVIGATION_ROUTE_IDS,
+  NAVIGATION_GROUPS,
   ROUTES,
   borrowerPath,
   offerPath,
@@ -20,6 +22,9 @@ import { sessionQueryOptions, useAuditLedgerAccess } from '../../lib/sessionQuer
  * with a rail plus `.segmented` (design_files/index.html:926-935) and has no
  * route nav; our app splits Module 0 across routes for the linear user flow
  * (portfolio → segments → leads → borrower → offer → …).
+ * Two unlabelled clusters (deviation:route-nav-clusters; flow-07, shell-09):
+ * the lead workflow, then the insight and reference tools flush right, each
+ * a list named for assistive technology. No count badges (nav-count-badges).
  *
  * Underline links (`.route-nav__link` / `.route-nav__label`; 2026-09-21
  * audit visual-05, M part): Geist sans 13/500 with a 2px --accent-ink
@@ -52,10 +57,16 @@ export function useAdminNavigationAccess(): boolean {
 }
 
 export function RouteNav() {
-  const { lastBorrowerId } = useApp();
+  // The keyed read (runtime-05): a drawer open or another app-state change
+  // leaves the nav alone; only the last borrower moves its two detail links.
+  const { lastBorrowerId } = useApp('lastBorrowerId');
   const canAccessAdmin = useAdminNavigationAccess();
   const canReadLedger = useAuditLedgerAccess();
   const queryClient = useQueryClient();
+  // Docked (sticky) only while the measured nav is at most a sixth of the
+  // scroller (hooks/useRouteNavDock, report 12.4 #5).
+  const navRef = useRef<HTMLElement>(null);
+  useRouteNavDock(navRef);
   // Intent (hover / focus) preloads the route chunk. Analytics alone also
   // prefetches its unfiltered hero reads (non-audited aggregates, audit
   // delivery-03), unless the browser asks to save data. Home prefetches no
@@ -70,25 +81,44 @@ export function RouteNav() {
   // auditor, in Admin's place, so the nav stays one 57px line at 1440x900 with
   // the Console open (D-audit-reads-c3). Administrators reach the ledger from
   // the rail, the Admin page and the palette.
-  const items = NAVIGATION_ROUTE_IDS
-    .filter((id) => (id === 'admin' ? canAccessAdmin : id === 'auditLedger' ? canReadLedger && !canAccessAdmin : true))
-    .map((id) => ({ id, to: navTargetFor(id, lastBorrowerId), route: ROUTES[id] }));
+  const shown = (id: NavigationRouteId) => (
+    id === 'admin' ? canAccessAdmin : id === 'auditLedger' ? canReadLedger && !canAccessAdmin : true
+  );
+  // One list per cluster: a div with an explicit role (as GenieAnswer's
+  // lists), which keeps the list and its name in WebKit / VoiceOver and is
+  // no redundant <ul role="list">. A cluster with no visible link renders
+  // nothing.
   return (
-    <nav aria-label="Main navigation" className="route-nav">
-      {items.map((i) => {
-        const end = i.to === '/';
-        return (
-          <NavLink
-            key={i.id}
-            to={i.to}
-            end={end}
-            onMouseEnter={() => onIntent(i.to)}
-            onFocus={() => onIntent(i.to)}
-            className="route-nav__link"
+    // data-rum-target: field telemetry attributes an interaction to "nav"
+    // (D-platform-process-d2); a static word, never an identifier.
+    <nav ref={navRef} aria-label="Main navigation" className="route-nav" data-rum-target="nav">
+      {NAVIGATION_GROUPS.map((group) => {
+        const ids = group.routes.filter(shown);
+        return ids.length > 0 && (
+          <div
+            key={group.id}
+            className={group.id === 'tools' ? 'route-nav__group route-nav__group--end' : 'route-nav__group'}
+            role="list"
+            aria-label={group.label}
           >
-            <Icon name={i.route.icon} size={12} />
-            <span className="route-nav__label">{i.route.navLabel}</span>
-          </NavLink>
+            {ids.map((id) => {
+              const to = navTargetFor(id, lastBorrowerId);
+              return (
+                <div key={id} className="route-nav__item" role="listitem">
+                  <NavLink
+                    to={to}
+                    end={to === '/'}
+                    onMouseEnter={() => onIntent(to)}
+                    onFocus={() => onIntent(to)}
+                    className="route-nav__link"
+                  >
+                    <Icon name={ROUTES[id].icon} size={12} />
+                    <span className="route-nav__label">{ROUTES[id].navLabel}</span>
+                  </NavLink>
+                </div>
+              );
+            })}
+          </div>
         );
       })}
     </nav>

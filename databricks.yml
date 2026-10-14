@@ -81,6 +81,15 @@ sync:
     # serves frontend/dist and never reads these, so they must not ride
     # along in every deploy upload.
     - frontend/tests/**
+    # ZCTA geometry SOURCES (audit dataviz-01, W5c): the 51 committed
+    # per-state TopoJSON files reach the App only as hashed frontend/dist
+    # assets (with .br/.gz siblings) that `npm --prefix frontend run build`
+    # emits; the raw sources would double the upload and the file count.
+    - frontend/src/geo/**
+    # The operator-only geometry tool keeps its own package.json and lock:
+    # never App source (a nested npm manifest has no place in the tree the
+    # Apps build phase inspects), never run by deploy.
+    - tools/geo/**
 
 targets:
   dev:

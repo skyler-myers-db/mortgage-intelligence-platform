@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from backend.main import app
 from backend.schemas.portfolio import PortfolioCreateResponse
 from backend.services.repositories import get_portfolio_repository
+from tests.fixtures.reviewed_approval import reviewed_approval
 
 client = TestClient(app)
 
@@ -65,12 +66,8 @@ def test_required_routes_exist_and_respond():
         (
             "post",
             "/api/outreach/approve",
-            {
-                "borrower_id": "B-48291",
-                "actor": "anonymous",
-                "draft_subject": "Your mortgage review",
-                "draft_body": "Contact a loan officer to review available mortgage options. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
-            },
+            # Built at call time: a reviewed approval certifies a real draft.
+            {"borrower_id": "B-48291"},
             200,
         ),
         ("post", "/api/genie/start", {"context": {}}, 200),
@@ -99,6 +96,8 @@ def test_required_routes_exist_and_respond():
     ]
 
     for method, path, payload, expected in checks:
+        if path == "/api/outreach/approve" and payload is not None:
+            payload = reviewed_approval(client, payload["borrower_id"])
         call = getattr(client, method)
         headers = (
             {"Idempotency-Key": "11111111-1111-4111-8111-111111111112"}

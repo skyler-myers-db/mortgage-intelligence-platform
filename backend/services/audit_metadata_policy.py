@@ -97,8 +97,9 @@ _PII_DENYLIST_KEYS: frozenset[str] = frozenset(
 #     draft_generation_id, draft_response_hash, draft_source_refreshed_at,
 #     campaign_treatment_fingerprint,
 #     draft_edited, draft_attribution, rationale, bulk_id, bulk_rationale,
-#     decision_inputs, review_mode (every row; 'undeclared' for an older
-#     client), draft_age_seconds (when a draft proof was verified)
+#     decision_inputs, review_mode (every row; required since W5c, so
+#     'undeclared' is historic only), draft_age_seconds (when a draft proof
+#     was verified), declared_lead_view_id (client-declared Lead Queue view)
 #   backend/api/outreach.py::reject_outreach
 #     approval_id, offer_code, borrower_id, request_id, rationale, rationale_code,
 #     decision_inputs (every row), bulk_id (a bulk rejection run)
@@ -295,6 +296,11 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "conversation_id",
         "message_id",
         "question_hash",
+        # GENIE_REFUSAL_REPORT (D-audit-reads-d): whether the reporter's
+        # consented question text was stored, and the closed reason when it
+        # was offered but declined. Never the text itself.
+        "question_text_captured",
+        "question_text_declined",
         # Genie completion job cancelled by its owner (audit genie-03): the
         # job's server-issued UUID. Not ``job_id``, which carries Databricks
         # job ids.
@@ -406,6 +412,19 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "has_cursor",
         "returned_row_count",
         "read_audit_event_id",
+        # VIEW_LEADS server paging (D-audit-reads-a): the server-minted view
+        # every page row of one Lead Queue view shares, the page index, the
+        # closed sort tokens and the view's total. APPROVE / OUTREACH_REJECT /
+        # LEAD_EXPORT carry the CLIENT-DECLARED view (declared_lead_view_id)
+        # and the export the pages it held. Closed values only
+        # (audit_metadata_value_policy.validate_lead_view_values).
+        "view_id",
+        "page_index",
+        "sort",
+        "sort_dir",
+        "total_matching",
+        "declared_lead_view_id",
+        "pages_loaded",
     }
 )
 

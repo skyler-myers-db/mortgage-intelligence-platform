@@ -77,6 +77,8 @@ export interface ApproveLeadVariables {
   signal?: AbortSignal;
   /** A bulk run invalidates once at the end instead of per row. */
   suppressInvalidation?: boolean;
+  /** The paged Lead Queue view the decision is taken from (client-declared); null elsewhere. */
+  leadViewId?: string | null;
 }
 
 export interface RejectLeadVariables {
@@ -94,6 +96,8 @@ export interface RejectLeadVariables {
   signal?: AbortSignal;
   /** A bulk run invalidates once at the end instead of per row. */
   suppressInvalidation?: boolean;
+  /** The paged Lead Queue view the decision is taken from (client-declared); null elsewhere. */
+  leadViewId?: string | null;
 }
 
 /**
@@ -170,6 +174,7 @@ async function approveLeadRequest(variables: ApproveLeadVariables): Promise<Appr
       review_mode: variables.reviewMode,
       campaign_id: variables.campaignBinding?.campaign_id ?? null,
       variant_name: variables.campaignBinding?.variant_name ?? null,
+      lead_view_id: variables.leadViewId ?? null,
       request_id: variables.requestId,
     },
     variables.signal,
@@ -185,6 +190,7 @@ function rejectLeadRequest(variables: RejectLeadVariables): Promise<RejectResult
     campaign_id: variables.campaignBinding?.campaign_id ?? null,
     variant_name: variables.campaignBinding?.variant_name ?? null,
     bulk_id: variables.bulkId,
+    lead_view_id: variables.leadViewId ?? null,
     request_id: variables.requestId,
   };
   // The signal only when set: a single rejection is never abortable.

@@ -10,10 +10,11 @@
 
    One line, never wrapping: it scrolls sideways instead, so its block size is
    exact and the sections below can clear it. With the vertical room for it
-   (the route nav's own 40rem condition) it is sticky directly under the
-   one-line route nav, whose block size is the expression
-   38-focus-clearance.css documents (57px at 1440x900), below the route nav's
-   --z-sticky. */
+   (40rem) it is sticky directly under the route nav while that is docked,
+   at the route nav's MEASURED block size (--nav-clear less the ring:
+   38-focus-clearance.css, report 12.4 #5; a wrapped, docked nav included),
+   and at the top of .main while the route nav is in flow (--nav-clear is
+   0px then); below the route nav's --z-sticky. */
 
 /* The sections sit in one wrapper (the scroll-margin scope below), so the
    shell's direct-child surface rules (09-console-and-layout.css
@@ -41,9 +42,26 @@
   margin-block-end: var(--sp-4);
   padding-block: var(--sp-1);
   border-block-end: 1px solid var(--line-1);
-  /* Opaque, not the route nav's blur: content scrolls under it. */
-  background: var(--bg-1);
+  /* Opaque, not the route nav's blur: content scrolls under it. The
+     scrollbar stays hidden (a classic one would change the block size the
+     sticky clearance depends on), so an overflow cue takes its place:
+     scrolling shadows (deviation:admin-section-nav-overflow-cue). Two edge
+     shadows sit fixed to the box (scroll); two --bg-1 covers ride with the
+     content (local) and hide a shadow while that end of the content is in
+     view, so a shadow shows only on a side with more links. Paint only: no
+     layout. */
+  background:
+    linear-gradient(to right, var(--bg-1) 30%, transparent) left center / var(--sp-8) 100% no-repeat local,
+    linear-gradient(to left, var(--bg-1) 30%, transparent) right center / var(--sp-8) 100% no-repeat local,
+    linear-gradient(to right, color-mix(in oklab, var(--text-1) 22%, transparent), transparent) left center / var(--sp-3) 100% no-repeat scroll,
+    linear-gradient(to left, color-mix(in oklab, var(--text-1) 22%, transparent), transparent) right center / var(--sp-3) 100% no-repeat scroll,
+    var(--bg-1);
   scrollbar-width: none;
+}
+/* Forced colours keep the plain system background; the links stay
+   reachable by Tab and by sideways scrolling. */
+@media (forced-colors: active) {
+  .admin-section-nav { background-image: none; }
 }
 
 .admin-section-nav__link {
@@ -69,7 +87,7 @@
 @media (min-height: 40rem) {
   .admin-section-nav {
     position: sticky;
-    inset-block-start: calc(var(--sp-3) * 2 + var(--sp-8) + 1px);
+    inset-block-start: max(0px, calc(var(--nav-clear) - var(--focus-ring-width) - var(--focus-ring-offset)));
     z-index: var(--z-raised-4);
   }
 

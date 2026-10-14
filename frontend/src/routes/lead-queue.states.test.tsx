@@ -9,9 +9,9 @@
  * the DegradedBanner already covers the dependency, which left ONLY that
  * false-zero table on screen.
  *
- * Verified at the rendered layer: the REAL LeadTable and the REAL
- * useWarmingUpRetry, with only the network client mocked. A test that mocks
- * LeadTable cannot see the "Showing 0" footer at all.
+ * Verified at the rendered layer: the REAL LeadTable and the REAL paged
+ * view (lead-queue.pages.ts, W5c), with only the network client mocked. A
+ * test that mocks LeadTable cannot see the "Showing 0" footer at all.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -26,7 +26,7 @@ const apiMocks = vi.hoisted(() => ({
   salesTeam: vi.fn(),
   portfolioPreview: vi.fn(),
   adminRules: vi.fn(),
-  zipRollups: vi.fn(),
+  zipRollupsWithFreshness: vi.fn(),
   leadsPage: vi.fn(),
 }));
 
@@ -93,6 +93,11 @@ vi.mock('../lib/api', () => {
   };
 });
 
+// The paged fetch (W5c) answers through the same mock the plain read used.
+vi.mock('../lib/apiClients/leadsPaged', () => ({
+  fetchLeadsPage: (...args: unknown[]) => apiMocks.leadsPage(...args),
+}));
+
 import LeadQueue from './lead-queue';
 import { preloadAsyncFailure } from '../components/ui/AsyncState';
 
@@ -157,7 +162,7 @@ describe('LeadQueue never shows a zero count it did not measure', () => {
     apiMocks.salesTeam.mockResolvedValue([]);
     apiMocks.portfolioPreview.mockResolvedValue({ data_refreshed_at: null });
     apiMocks.adminRules.mockResolvedValue({ offer_rules_version: null });
-    apiMocks.zipRollups.mockResolvedValue({ rollups: [] });
+    apiMocks.zipRollupsWithFreshness.mockResolvedValue({ data: { rollups: [] }, lastGoodAt: null });
   });
 
   afterEach(() => {

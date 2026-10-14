@@ -767,6 +767,36 @@ curl -s -H "X-Forwarded-Groups: mip-auditor" \
 Missing header returns `403 {"detail": "forbidden"}` — that exact body
 string is what the frontend's admin 403 banner keys off of.
 
+**Refusal reports and consented questions (D-audit-reads-d).**
+Administrators and auditors open them on `/audit-ledger` with "Show
+refusal reports" (nothing loads with the page): the list
+(`GET /api/v1/audit/refusal-reports`) writes one `VIEW_AUDIT_LEDGER` row per
+served page and never carries question text; "Show question"
+(`GET /api/v1/audit/refusal-reports/{report_id}/question`) writes a
+fail-closed `VIEW_REFUSAL_REPORT_TEXT` row before it answers, or answers 503
+with no text. Locally:
+
+```bash
+curl -s -H "X-Forwarded-Groups: mip-auditor" \
+     -H "X-Forwarded-Email: auditor@example.com" \
+     "http://localhost:8000/api/v1/audit/refusal-reports?limit=25" | jq .
+```
+
+`MIP_GENIE_REFUSAL_TEXT_CAPTURE` (`enabled` | `disabled`) is the lender's
+switch for "Report with my question". The runtime default is `disabled`; the
+deploy payload ships `enabled` unless the environment or `.env.local` sets
+`disabled`, and `./scripts/deploy.sh` step 0 refuses any other value. A bare
+UI deploy drops every payload env var, so capture turns OFF there (never
+on): a lender who set `disabled` keeps it, but one who wants capture must
+deploy with `./scripts/deploy.sh`. Switching capture off does not purge
+questions already kept; they remain readable to administrators and auditors
+until their 90-day expiry. Kept questions expire after 90 days: an
+hourly App loop (structured event `refusal_text_purged`, a count only;
+`refusal_text_purge_failed` on an error) plus a bounded sweep on every report
+and auditor read null the text in place; the report and its audit rows stay.
+Purged text remains in Lakebase backups and point-in-time recovery for the
+backup window.
+
 The admin health body (`/api/v1/admin/health`) carries
 `auditor_role_overlap`: how many configured auditors also hold the
 administrator or approver role (a count, never an identity). Non-zero is a

@@ -28,6 +28,10 @@ from backend.config.settings import settings
 from backend.main import app
 from backend.services.audit_event_types import is_server_owned_audit_event_type
 from backend.services.audit_filter_sql import AUDIT_COUNT_CAP, AUDIT_FACET_LIMIT
+from backend.services.audit_fingerprint import (
+    AUDIT_LEDGER_FINGERPRINT_DOMAIN,
+    keyed_filter_fingerprint,
+)
 from backend.services.audit_lakebase_store import LakebaseAuditStore
 from backend.services.audit_pagination import audit_filter_fingerprint
 from backend.services.audit_store import get_audit_store
@@ -358,7 +362,11 @@ def test_receipt_writes_one_audit_export_row_with_exactly_four_keys(
     rows = audit_store.list(limit=10)
     assert len(rows) == 1
     row = rows[0]
-    fingerprint = audit_filter_fingerprint(dict(FILTERS))
+    # W5c (12.3): the stored and answered fingerprint is KEYED, never the
+    # plain digest a dictionary of candidate filters would reproduce.
+    plain = audit_filter_fingerprint(dict(FILTERS))
+    fingerprint = keyed_filter_fingerprint(plain, domain=AUDIT_LEDGER_FINGERPRINT_DOMAIN)
+    assert fingerprint is not None and fingerprint != plain
     assert (row.event_type, row.action, row.entity_type) == (
         "AUDIT_EXPORT",
         "audit_explorer.export",

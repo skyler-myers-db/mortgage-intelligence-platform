@@ -1,21 +1,26 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { useLocation, useNavigationType } from 'react-router';
+import { ROUTE_NAV_DOCKED_ATTRIBUTE } from '../lib/routeNavDock';
 import { usePrefersReducedMotion } from '../lib/usePrefersReducedMotion';
 
 /**
  * Whether the question that starts the latest exchange sits between the
- * sticky route nav at the top of `.main` and the docked composer at its
- * bottom. Under either bar is not in view. Null when the anchor is not laid
- * out (the Ask tab is hidden while another tab shows), so nothing may scroll.
+ * route nav at the top of `.main` (while it is docked, sticky) and the docked
+ * composer at its bottom. Under either bar is not in view. A nav in flow
+ * scrolls away with the page and covers nothing, so the view then starts at
+ * the scroller's top. Null when the anchor is not laid out (the Ask tab is
+ * hidden while another tab shows), so nothing may scroll.
  */
-function latestAnchorInView(
+export function latestAnchorInView(
   anchor: HTMLElement,
   dock: HTMLElement | null,
 ): boolean | null {
   if (anchor.getClientRects().length === 0) return null;
   const scroller = anchor.closest<HTMLElement>('.main');
   const nav = scroller?.querySelector<HTMLElement>('.route-nav');
-  const viewTop = nav?.getBoundingClientRect().bottom ?? scroller?.getBoundingClientRect().top ?? 0;
+  const viewTop = nav?.hasAttribute(ROUTE_NAV_DOCKED_ATTRIBUTE)
+    ? nav.getBoundingClientRect().bottom
+    : (scroller?.getBoundingClientRect().top ?? 0);
   const viewBottom = dock?.getBoundingClientRect().top ?? window.innerHeight;
   const top = anchor.getBoundingClientRect().top;
   return top >= viewTop && top + anchor.offsetHeight <= viewBottom;

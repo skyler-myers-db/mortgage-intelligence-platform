@@ -2,9 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useSearchParams } from 'react-router';
 import { api } from '../lib/api';
-import { leadsQuery, type LeadsRequest } from '../lib/leadsQuery';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
-import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { isAbortError } from '../lib/apiTransport';
 import { PageShell } from '../components/layout/PageShell';
 import { LeadTable, type LeadExportContext } from '../components/mortgage/LeadTable';
@@ -19,8 +17,9 @@ import { queryKeys } from '../lib/queryKeys';
 import { loanOfficersOnly, useSalesRoster } from '../lib/salesRoster';
 import { queueFilterLabel, usePublishQueueContext } from '../lib/queueContextPublish';
 import { LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
-import { CITY_STATE_PAIR_RE } from '../lib/cityStateFilter';
 import { LeadQueueTableSkeleton } from './lead-queue.skeleton';
+import { serverOrderOf, useLeadQueuePages } from './lead-queue.pages';
+import { leadQueueFilterInputFromSearchParams, leadQueueLenderRefs, leadsRequestFromSearchParams } from './lead-queue.request';
 import { useLeadQueueFreshness } from './lead-queue.freshness';
 import { LeadQueueFilterBar, LeadQueueHeroFilterChips } from './lead-queue.filterBar';
 import { LeadQueueViews } from './lead-queue.views';
@@ -56,14 +55,8 @@ import {
   isNoOpPortfolioValue,
   leadQueueShareParams,
   outreachFilterDisplayValue,
-  parseBorrowerIds,
-  parseCsvParam,
-  parseFunnelStage,
-  parsePortfolioCriteria,
-  parseSegmentCodes,
   parseLeadTablePlace,
   parseLeadTableView,
-  parseTargetLenderRef,
   parseTriageMode,
   searchParamsAfterSegmentRemoval,
   searchParamsWithLeadTablePlace,
@@ -99,18 +92,18 @@ interface AdminRulesSummary {
   offer_rules_version?: string | null;
 }
 
-/** The ranked page with the headers the client reads, X-Data-Refreshed-At included. */
-type LeadsPage = Awaited<ReturnType<typeof api.leadsPage>>;
-
-/** The ZIPs a county rollup covers. Module-level, so the derived Set keeps its identity. */
-function selectCountyZips(payload: Awaited<ReturnType<typeof api.zipRollups>>): ReadonlySet<string> {
-  return new Set(payload.rollups.map((rollup) => rollup.zip));
+/** The ZIPs a county rollup covers (the Fresh shape). Module-level, so the derived Set keeps its identity. */
+function selectCountyZips(payload: Awaited<ReturnType<typeof api.zipRollupsWithFreshness>>): ReadonlySet<string> {
+  return new Set(payload.data.rollups.map((rollup) => rollup.zip));
 }
 
 const RULES_VERSION_STALE_MS = 5 * 60_000;
 const EMPTY_STATE = lazyModule(() => import('../components/mortgage/LeadQueueEmptyState'));
 const PROPERTY_LOOKUP = lazyModule(() => import('../components/mortgage/PropertyLookupPanel'));
 const EXPORT_WAITS_FOR_ROWS = 'Export waits for the rows of the current filters';
+
+// The keep-alive slot app.tsx renders the queue in rides this chunk (W5c runtime-08).
+export { default as LeadQueueKeepAlive } from '../components/layout/LeadQueueKeepAlive';
 
 export default function LeadQueue() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -122,53 +115,26 @@ export default function LeadQueue() {
   const { canAccessAdmin, actorEmail, sessionStatus } = useApp();
   const queryClient = useQueryClient();
   const moreFiltersToggleRef = useRef<HTMLButtonElement | null>(null);
-  const segment = parseSegmentCodes(searchParams.get('segment'))[0];
-  const segmentCodes = useMemo(
-    () => parseSegmentCodes(searchParams.get('segment_codes')),
-    [searchParams],
-  );
-  const segmentMode = searchParams.get('segment_mode')?.trim().toLowerCase() === 'all' ? 'all' : 'any';
-  // 2-char state code (e.g. `?state=IL`) from the home-map deep-link.
-  // Uppercased defensively so `/lead-queue?state=il` still works.
-  const stateFilter = (searchParams.get('state') ?? '').toUpperCase() || undefined;
-  const zipFilter = (searchParams.get('zip') ?? '').trim() || undefined;
-  const stateFilters = useMemo(
-    () => parseCsvParam(searchParams.get('states'), /^[A-Z]{2}$/, 20),
-    [searchParams],
-  );
-  const zipFilters = useMemo(
-    () => parseCsvParam(searchParams.get('zips'), /^\d{5}$/, 50),
-    [searchParams],
-  );
-  const cityFilters = useMemo(
-    () => parseCsvParam(searchParams.get('cities'), CITY_STATE_PAIR_RE, 50),
-    [searchParams],
-  );
-  const borrowerIdFilters = useMemo(
-    () => parseBorrowerIds(searchParams.get('borrower_ids')),
-    [searchParams],
-  );
-  const countyFilter = (searchParams.get('county') ?? '').trim() || undefined;
-  const countyFilters = useMemo(
-    () => parseCsvParam(searchParams.get('counties'), /^\d{5}$/, 50),
-    [searchParams],
-  );
   const configOptionsQuery = useConfigOptionsQuery();
-  const targetLenderOptions = useMemo(() => {
-    const values = configOptionsQuery.data?.target_lender_refs?.filter(Boolean);
-    return values && values.length > 0 ? values : ['All'];
-  }, [configOptionsQuery.data?.target_lender_refs]);
-  const targetLenderRef = parseTargetLenderRef(searchParams.get('target_lender_ref'), targetLenderOptions);
-  const portfolioCriteria = useMemo(
-    () => parsePortfolioCriteria(searchParams, targetLenderOptions),
+  const targetLenderOptions = useMemo(
+    () => leadQueueLenderRefs(configOptionsQuery.data?.target_lender_refs),
+    [configOptionsQuery.data?.target_lender_refs],
+  );
+  // ONE derivation of the URL (lead-queue.request.ts, W5c): the request the
+  // queue sends, the export and Copy-link input, the facet counts and the
+  // saved views read the same grammar (parity pinned in lead-queue.filterBar.test).
+  const input = useMemo(
+    () => leadQueueFilterInputFromSearchParams(searchParams, targetLenderOptions),
     [searchParams, targetLenderOptions],
   );
+  const {
+    segment, segmentCodes, segmentMode, stateFilter, zipFilter, stateFilters, zipFilters, cityFilters,
+    borrowerIdFilters, countyFilter, countyFilters, targetLenderRef, portfolioCriteria, cohortId, funnelStage, agedDays,
+  } = input;
   const campaignHandoff = useMemo(
     () => buildPortfolioBuilderUrlFromQueue(searchParams, targetLenderOptions),
     [searchParams, targetLenderOptions],
   );
-  const cohortId = (searchParams.get('cohort_id') ?? '').trim() || undefined;
-  const funnelStage = parseFunnelStage(searchParams.get('funnel_stage'));
   const tableView = parseLeadTableView(searchParams.get(LEAD_TABLE_VIEW_PARAM));
   const stateOptions = useMemo(() => {
     const states = footprint.ready && !footprint.usingFallback
@@ -185,19 +151,18 @@ export default function LeadQueue() {
   const contactabilityFilter = portfolioCriteria?.marketing_eligibility ?? 'Eligible only';
   const consentFilter = portfolioCriteria?.consent_status ?? 'Any';
   const recencyFilter = portfolioCriteria?.recency ?? 'Any';
-  const approvalStatus = (searchParams.get('approval_status') ?? 'any').toLowerCase();
-  const outreachStatus = (searchParams.get('outreach_status') ?? 'any').toLowerCase();
+  const approvalStatus = input.approvalStatus ?? 'any';
+  const outreachStatus = input.outreachStatus ?? 'any';
   // `?assigned_to=me` (the "Assigned to me" preset) is resolved to the
   // signed-in actor's email here, at request time: the request and the export
   // get the email, the URL never holds one a preset wrote. While the session
   // is loading the leads query waits; a session with no email reads nothing
   // and says so.
-  const assignedParam = (searchParams.get('assigned_to') ?? '').trim() || undefined;
+  const assignedParam = input.assignedTo;
   const assignedToMe = isAssignedToMe(assignedParam);
   const assignedTo = assignedToMe ? actorEmail ?? undefined : assignedParam;
   const meUnresolved = assignedToMe && !actorEmail;
   const meWithoutEmail = meUnresolved && sessionStatus !== 'loading';
-  const agedDays = Number(searchParams.get('aged_days') ?? '') || null;
   const growthAgentProofKey = GROWTH_AGENT_PROOF_PARAMS.map((key) => searchParams.get(key) ?? '').join('|');
   // Sales team feeds the ASSIGNED filter and LeadTable's assign actions. The
   // Sales ops snapshot that also used it moved to the Analytics "Sales ops" tab.
@@ -246,60 +211,29 @@ export default function LeadQueue() {
     setSearchParams(next);
   };
 
-  // 2026-05-04 FIX β: pass state + zip to the API so the geo-filtered
-  // path on the backend bypasses lead_population's score >= 50 floor
-  // and queries borrower_360 directly. The returned rows then match
-  // the per-geo addressable counts the map tooltips report. Pre-fix,
-  // the FE only filtered client-side against the top-500 from
-  // lead_population, so ZIPs whose borrowers didn't make the national
-  // top 500 rendered as 0 rows (the "ZIP shows 19 but queue shows 0"
-  // bug). Re-runs when state, zip, or segment changes.
-  // Audit runtime-02 / tables-v1 (2026-09-21): ONE request object feeds the
-  // fetcher and the query key (see lib/leadsQuery.ts). The key used to be a
-  // second hand-written list that forgot `cities`, so two city drill-downs
-  // shared one cache entry and the table showed the wrong cohort.
-  const leadsRequest: LeadsRequest = {
-    segment,
-    geo: {
-      state: stateFilter,
-      zip: zipFilter,
-      county: countyFilter,
-      counties: countyFilters,
-      states: stateFilters,
-      zips: zipFilters,
-      cities: cityFilters,
-      borrowerIds: borrowerIdFilters,
-    },
-    opts: {
-      segmentCodes,
-      segmentMode,
-      targetLenderRef,
-      cohortId,
-      funnelStage,
-      portfolioCriteria,
-      approvalStatus: approvalStatus === 'any' ? 'any' : approvalStatus as 'pending' | 'approved' | 'rejected' | 'hold',
-      outreachStatus: outreachStatus === 'any' ? 'any' : outreachStatus as 'none' | 'queued' | 'actioned' | 'sent' | 'bounced' | 'replied',
-      assignedTo,
-      agedDays,
-    },
-  };
-  // The Growth Agent proof is the one input api.leadsPage reads from outside
-  // the request (window.location), so its URL fingerprint rides in the key.
-  // An unresolved "Assigned to me" sends no assignee, so without a sentinel
-  // it would share the UNFILTERED queue's key and paint its cached rows under
-  // the Me preset; the sentinel (only then, so every other key stays
-  // byte-identical), no placeholder carry-over and a payload-less queue
-  // close that (w3-queue-place review).
-  const leadsPageQuery = leadsQuery(
-    'lead-queue',
-    leadsRequest,
-    meUnresolved ? [growthAgentProofKey, 'assigned_to=me:unresolved'] : [growthAgentProofKey],
+  // State, ZIP and every other filter go to /api/leads (geo cohorts read
+  // borrower_360, so the queue keeps the map's counted population). ONE
+  // request object feeds the fetch and the key (lib/leadsQuery, audit
+  // runtime-02). The paged view (lead-queue.pages.ts, D-audit-reads-a): page
+  // 0 per view, one page per Load next, no passive re-read. The server sorts
+  // by the URL's ?sort= when it is a warehouse column, else by rank. The
+  // Growth Agent proof (read from window.location) rides in the key; an
+  // unresolved "Assigned to me" adds a sentinel, reads nothing and never
+  // carries a placeholder (w3-queue-place review).
+  const leadsRequest = useMemo(
+    () => leadsRequestFromSearchParams(searchParams, targetLenderOptions, actorEmail),
+    [searchParams, targetLenderOptions, actorEmail],
   );
-  const leadsState = useWarmingUpRetry<LeadsPage>(
-    leadsPageQuery.fetcher,
-    { queryKey: leadsPageQuery.queryKey, keepPreviousData: !meUnresolved, enabled: !meUnresolved },
-  );
-  const leadsQueryState = meUnresolved ? { ...leadsState, data: null } : leadsState;
+  const place = parseLeadTablePlace(searchParams);
+  const order = serverOrderOf(place.sort);
+  const pages = useLeadQueuePages({
+    request: leadsRequest,
+    order,
+    implicitInputs: meUnresolved ? [growthAgentProofKey, 'assigned_to=me:unresolved'] : [growthAgentProofKey],
+    enabled: !meUnresolved,
+    keepPrevious: !meUnresolved,
+  });
+  const leadsQueryState = meUnresolved ? { ...pages, data: null } : pages;
   const {
     data: leadsData,
     warmingUp,
@@ -334,7 +268,7 @@ export default function LeadQueue() {
     enabled: hasQueue && !leadsPlaceholderData && !meUnresolved,
     dataUpdatedAt: leadsQueryState.dataUpdatedAt,
     isFetching: leadsFetching,
-    onRefresh: leadsState.manualRetry,
+    onRefresh: pages.manualRetry,
   });
 
   // Resolve `?county=FFFFF` → set of ZIPs via /api/geo/zip-rollups for an
@@ -345,7 +279,7 @@ export default function LeadQueue() {
   const countyCohort = segmentCodes.length > 0 ? segmentCodes : segment ? [segment] : null;
   const countyZipsQuery = useQuery({
     queryKey: queryKeys.geoCountyZipRollups(countyFilter ?? '', [countyCohort, segmentMode, portfolioCriteria]),
-    queryFn: ({ signal }) => api.zipRollups(
+    queryFn: ({ signal }) => api.zipRollupsWithFreshness(
       { countyFips: countyFilter ?? '' },
       signal,
       countyCohort,
@@ -368,7 +302,6 @@ export default function LeadQueue() {
   // filters); otherwise it is ignored here and the next place write drops it.
   // Restoring it re-opens the in-memory preview only: no borrower, proof or
   // draft request.
-  const place = parseLeadTablePlace(searchParams);
   const settledRowIds = leadsData && !leadsPlaceholderData
     ? new Set(visibleLeads.map((lead) => lead.borrower_id))
     : null;
@@ -389,28 +322,7 @@ export default function LeadQueue() {
   // X-Data-Refreshed-At, and the rules version read on the Export click only,
   // for an actor who may read admin rules (GET /api/admin/rules writes no
   // audit row). Nothing export-only is fetched on mount.
-  const filterInput: LeadQueueExportFiltersInput = {
-    segment,
-    segmentCodes,
-    segmentMode,
-    stateFilter,
-    zipFilter,
-    stateFilters,
-    zipFilters,
-    cityFilters,
-    borrowerIdFilters,
-    countyFilter,
-    countyFilters,
-    targetLenderRef,
-    targetLenderRefs: targetLenderOptions,
-    portfolioCriteria,
-    approvalStatus: approvalStatus === 'any' ? undefined : approvalStatus,
-    outreachStatus: outreachStatus === 'any' ? undefined : outreachStatus,
-    assignedTo,
-    agedDays,
-    cohortId,
-    funnelStage,
-  };
+  const filterInput: LeadQueueExportFiltersInput = { ...input, assignedTo };
   const exportContext: LeadExportContext = {
     filters: buildLeadQueueExportFilters(filterInput),
     refreshedAt: leadsData?.dataRefreshedAt ?? null,
@@ -762,6 +674,8 @@ export default function LeadQueue() {
                   growthAgentVerification={leadsPlaceholderData
                     ? null
                     : page.growthAgentVerification ?? null}
+                  paging={pages.paging}
+                  sortScope={order.sort === 'rank' && place.sort ? 'loaded' : 'server'}
                   exportContext={exportContext}
                   salesTeam={salesTeam}
                   view={tableView}

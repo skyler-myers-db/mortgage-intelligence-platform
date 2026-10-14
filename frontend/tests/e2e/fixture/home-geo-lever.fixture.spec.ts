@@ -78,6 +78,8 @@ test.describe('WHY NOW leads with the par move since the last visit', () => {
 
     const drawer = await app.openEvidenceDrawer(rate.locator('.evidence-chip'));
     await expect(drawer).toContainText('30-year par rate since your last visit');
+    // The two weekly prints are its signals, under the hood (W5c w5-evidence-drawer, flow-10).
+    await drawer.getByRole('tab', { name: 'Under the hood' }).click();
     await expect(drawer).toContainText('Week of 2026-01-12');
     await expect(drawer).toContainText('mip.gold.rate_window_weekly');
     await expect(drawer).toContainText('MORTGAGE30US');
@@ -110,6 +112,44 @@ test.describe('Watchlist briefings', () => {
     const growthAgent = mockApi.calls.filter((call) => /\/growth-agent\//.test(call.path));
     expect(growthAgent.filter((call) => call.method !== 'GET'), 'Home load never POSTs to the Growth Agent').toEqual([]);
     expect(growthAgent.map((call) => call.path.replace(/^\/api\/v\d+/, '/api'))).toEqual(['/api/growth-agent/monitors/summary']);
+  });
+
+  // W5c C6: the card is its own chunk; while it loads, Home holds the card's
+  // loading block (header and one skeleton row), so nothing below it moves
+  // when the chunk lands. Its read is held too: the step proven is the
+  // chunk's arrival, not the rows'.
+  test('nothing below the card moves when its chunk arrives', async ({ app, page, mockApi }) => {
+    let releaseChunk: () => void = () => undefined;
+    const chunkGate = new Promise<void>((resolve) => {
+      releaseChunk = resolve;
+    });
+    await page.route(/\/assets\/WatchlistBriefings-[^/]+\.js$/, async (route) => {
+      await chunkGate;
+      await route.fallback();
+    });
+    let releaseRead: () => void = () => undefined;
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    mockApi.register('GET', '/api/growth-agent/monitors/summary', async () => {
+      await readGate;
+      return json(HOME_WATCHLIST_SUMMARY);
+    });
+    await app.gotoRoute('/');
+    const slot = page.locator('#main-content .home-side__slot');
+    await expect(slot).toBeVisible();
+    await expect(slot).toHaveAttribute('aria-hidden', 'true');
+    const below = page.locator('#main-content .home-side .section-actions');
+    const before = await below.boundingBox();
+    releaseChunk();
+    const card = page.locator('#main-content .watchlist-briefings');
+    await expect(card.locator('.watchlist-briefings__skeleton')).toBeVisible();
+    await expect(slot).toHaveCount(0);
+    const after = await below.boundingBox();
+    expect(before).not.toBeNull();
+    expect(after?.y).toBe(before?.y);
+    releaseRead();
+    await expect(card.locator('[data-testid="watchlist-briefing"]')).toHaveCount(HOME_WATCHLIST_SUMMARY.watchlists.length);
   });
 });
 

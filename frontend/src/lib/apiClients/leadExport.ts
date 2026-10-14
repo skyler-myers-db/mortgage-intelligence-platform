@@ -29,6 +29,9 @@ export interface LeadExportReceiptRequest {
   filters: Record<string, string>;
   /** How many borrowers matched (the CSV's `# matching_rows=` line); sent only when known. */
   matching_row_count?: number;
+  /** The paged Lead Queue view the file was built from, and its loaded pages (client-declared). */
+  lead_view_id?: string;
+  pages_loaded?: number;
 }
 
 export interface LeadExportReceipt {

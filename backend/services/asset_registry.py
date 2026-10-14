@@ -20,6 +20,15 @@ class AssetDescriptor:
     readiness_source_name: str | None = None
     allow_count_fallback: bool = True
     aliases: tuple[str, ...] = ()
+    #: The ``gold.source_readiness`` ``source_name`` whose row answers this
+    #: asset's freshness for every authenticated user (audit 2026-09-21
+    #: ``critic-03`` / ``D-audit-reads-c1``): its own row, or the row of the
+    #: primary input it is derived from. Exactly one of this and
+    #: ``freshness_not_tracked`` is set per descriptor.
+    freshness_basis: str | None = None
+    #: No source-readiness row covers this asset (UC functions, ref tables,
+    #: the readiness ledger itself, the lifecycle mirror, owner transfers).
+    freshness_not_tracked: bool = False
 
     @property
     def fqn(self) -> str:
@@ -44,6 +53,8 @@ def _descriptor(
     readiness_source_name: str | None = None,
     allow_count_fallback: bool = True,
     aliases: tuple[str, ...] = (),
+    freshness_basis: str | None = None,
+    freshness_not_tracked: bool = False,
 ) -> AssetDescriptor:
     return AssetDescriptor(
         key=object_name,
@@ -56,6 +67,8 @@ def _descriptor(
         readiness_source_name=readiness_source_name,
         allow_count_fallback=allow_count_fallback,
         aliases=aliases,
+        freshness_basis=freshness_basis,
+        freshness_not_tracked=freshness_not_tracked,
     )
 
 
@@ -63,6 +76,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "lead_population",
+        freshness_basis="UC Gold Lead Population",
         title="Gold Lead Queue Population",
         description=(
             "Ranked, quality-filtered borrowers eligible for the lead queue. "
@@ -74,6 +88,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "borrower_360",
+        freshness_basis="UC Gold Borrower 360",
         title="Gold Borrower 360",
         description=(
             "Borrower-level dossier table used by Borrower 360, offers, and "
@@ -85,6 +100,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "lead_scores",
+        freshness_basis="UC Gold Lead Scores",
         title="Gold Lead Scores",
         description=(
             "Deterministic score table with the five scoring sub-scores, "
@@ -95,6 +111,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "segment_population",
+        freshness_basis="UC Gold Segment Population",
         title="Gold Segment Population",
         description="Segment rollup table that powers Segment Intelligence and analytics.",
         readiness_source_name="UC Gold Segment Population",
@@ -102,6 +119,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "segment_combination_rollup",
+        freshness_basis="UC Gold Borrower 360",
         title="Gold Segment Combination Rollup",
         description=(
             "Signal stack: one row per exact set of the six core segments a "
@@ -113,6 +131,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "borrower_dossier",
+        freshness_basis="UC Gold Borrower Dossier",
         title="Gold Borrower Dossier",
         description="Pre-joined borrower dossier used by proof, offer, and 360 read paths.",
         readiness_source_name="UC Gold Borrower Dossier",
@@ -120,6 +139,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "evidence_events",
+        freshness_basis="Voluntary Lien",
         title="Gold Evidence Events",
         description=(
             "Append-only evidence stream. Evidence rows explain which governed "
@@ -129,6 +149,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "source_readiness",
+        freshness_not_tracked=True,
         title="Gold Source Readiness",
         description=(
             "Non-PII source status summary used by data estate and admin surfaces "
@@ -138,6 +159,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "corelogic",
         "entrada_eval_property_domain_v3",
+        freshness_basis="Cotality Public Records",
         catalog_name="cotality_mortgage_data",
         title="Cotality Property Domain Share",
         description="Governed shared property-domain input used by the Module 0 property lift.",
@@ -146,6 +168,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "corelogic",
         "entrada_eval_voluntary_lien_status_marketing_v2",
+        freshness_basis="Voluntary Lien",
         catalog_name="cotality_mortgage_data",
         title="Cotality Voluntary Lien Share",
         description="Governed shared lien and valuation input used by Module 0 economics.",
@@ -154,6 +177,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "corelogic",
         "entrada_eval_mls_listing_v1",
+        freshness_basis="MLS Listings",
         catalog_name="cotality_mortgage_data",
         title="Cotality MLS Listing Share",
         description="Governed shared MLS listing input used by the listing-activity lift.",
@@ -162,6 +186,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "corelogic",
         "entrada_eval_heloc_propensity_score_v1",
+        freshness_basis="Cotality HELOC Propensity",
         catalog_name="cotality_mortgage_data",
         title="Cotality HELOC Propensity Share",
         description="Governed shared HELOC propensity-model input; not a permit filing feed.",
@@ -170,6 +195,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "corelogic",
         "entrada_eval_refi_propensity_score_v1",
+        freshness_basis="Cotality Refi Propensity",
         catalog_name="cotality_mortgage_data",
         title="Cotality Refi Propensity Share",
         description="Governed shared refinance propensity-model input.",
@@ -178,6 +204,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "corelogic",
         "entrada_eval_mortgage_domain_v1",
+        freshness_basis="MMA Mortgage Analytics",
         catalog_name="cotality_mortgage_data",
         title="Cotality Mortgage Domain Share",
         description="Governed shared mortgage-event history used by lifecycle evidence.",
@@ -186,6 +213,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "corelogic",
         "entrada_eval_owner_transfer_domain_v1",
+        freshness_not_tracked=True,
         catalog_name="cotality_mortgage_data",
         title="Cotality Owner Transfer Share",
         description="Governed shared owner-transfer and sale-event history.",
@@ -194,60 +222,70 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "silver",
         "property_master",
+        freshness_basis="Cotality Public Records",
         title="Silver Property Master",
         description="PII-minimized CLIP-grain property lift from the Cotality property share.",
     ),
     _descriptor(
         "silver",
         "property_owners",
+        freshness_basis="Owner Link",
         title="Silver Property Owners",
         description="Multi-owner, masked owner-entity lift used by household and eligibility logic.",
     ),
     _descriptor(
         "silver",
         "lien_current",
+        freshness_basis="Voluntary Lien",
         title="Silver Current Liens",
         description="Typed current-lien and valuation inputs used by borrower economics.",
     ),
     _descriptor(
         "silver",
         "market_rates_weekly",
+        freshness_basis="FRED Market Rates",
         title="Silver Weekly Market Rates",
         description="Governed weekly MORTGAGE30US market-rate reference used by rate-spread logic.",
     ),
     _descriptor(
         "silver",
         "mortgage_events",
+        freshness_basis="MMA Mortgage Analytics",
         title="Silver Mortgage Events",
         description="PII-minimized mortgage-event history lifted from the Cotality share.",
     ),
     _descriptor(
         "silver",
         "owner_transfer_events",
+        freshness_not_tracked=True,
         title="Silver Owner Transfer Events",
         description="PII-minimized owner-transfer and sale events lifted from the Cotality share.",
     ),
     _descriptor(
         "gold",
         "property_owner_bridge",
+        freshness_basis="Owner Link",
         title="Gold Property Owner Bridge",
         description="Owner-Link rollup used for related-property and investor evidence.",
     ),
     _descriptor(
         "gold",
         "household_rollup",
+        freshness_basis="Owner Link",
         title="Gold Household Rollup",
         description="Opt-in household grouping with one contact-eligible primary borrower.",
     ),
     _descriptor(
         "first_party",
         "loan_applications",
+        freshness_basis="First-party LOS / Applications",
         title="First-Party Loan Applications",
         description="Governed first-party LOS application facts used for origination channel.",
     ),
     _descriptor(
         "gold",
         "fn_bounded_mortgage_rate",
+        freshness_not_tracked=True,
         title="Bounded Mortgage Rate Function",
         description="Canonical rate-boundary function used before amortization estimates.",
         object_type="function",
@@ -256,6 +294,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "fn_estimated_upb",
+        freshness_not_tracked=True,
         title="Estimated UPB Function",
         description="Canonical amortization function for estimated current unpaid principal balance.",
         object_type="function",
@@ -264,6 +303,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "fn_estimated_upb_confidence_band",
+        freshness_not_tracked=True,
         title="Estimated UPB Confidence Band Function",
         description="Canonical confidence-band function around estimated current UPB.",
         object_type="function",
@@ -272,6 +312,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "fn_high_opportunity",
+        freshness_not_tracked=True,
         title="High Opportunity Function",
         description="Canonical threshold for high-opportunity borrower scores.",
         object_type="function",
@@ -280,6 +321,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "fn_in_the_money",
+        freshness_not_tracked=True,
         title="In-the-Money Function",
         description="Canonical refinance-economics screen over rate spread and equity.",
         object_type="function",
@@ -288,6 +330,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "fn_lead_score",
+        freshness_not_tracked=True,
         title="Lead Score Function",
         description="Canonical weighted Module 0 opportunity-score function.",
         object_type="function",
@@ -296,6 +339,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "fn_loan_product_type",
+        freshness_not_tracked=True,
         title="Loan Product Type Function",
         description="Canonical loan-product classifier using lien facts and governed limits.",
         object_type="function",
@@ -304,6 +348,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "fn_next_best_offer",
+        freshness_not_tracked=True,
         title="Next Best Offer Function",
         description="Canonical reviewed function selecting the primary offer path.",
         object_type="function",
@@ -312,6 +357,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "fn_rate_spread",
+        freshness_not_tracked=True,
         title="Rate Spread Function",
         description="Canonical basis-point spread between borrower and market rates.",
         object_type="function",
@@ -320,6 +366,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "fn_score_band",
+        freshness_not_tracked=True,
         title="Score Band Function",
         description="Canonical high, medium, and low opportunity-band classifier.",
         object_type="function",
@@ -328,6 +375,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "silver",
         "listing_activity",
+        freshness_basis="MLS Listings",
         title="Silver MLS Listing Activity",
         description=(
             "CLIP-keyed Cotality MLS listing lift. Excludes raw street address, "
@@ -340,6 +388,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "silver",
         "heloc_propensity",
+        freshness_basis="Cotality HELOC Propensity",
         title="Silver HELOC Propensity",
         description=(
             "CLIP-keyed Cotality HELOC propensity model scores. This is a "
@@ -351,6 +400,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "silver",
         "refi_propensity",
+        freshness_basis="Cotality Refi Propensity",
         title="Silver Refi Propensity",
         description="CLIP-keyed Cotality refinance propensity model scores.",
         readiness_source_name="Cotality Refi Propensity",
@@ -359,12 +409,14 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "lockin_cohort",
+        freshness_basis="UC Gold Borrower 360",
         title="Gold Lock-in Cohort",
         description="Borrower cohort table used to identify retention and lock-in opportunities.",
     ),
     _descriptor(
         "gold",
         "borrower_lifecycle_state",
+        freshness_not_tracked=True,
         title="Gold Borrower Lifecycle State",
         description=(
             "Scheduled Unity Catalog mirror of borrower approval and outreach state. "
@@ -374,18 +426,21 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "funnel_snapshot_daily",
+        freshness_basis="UC Gold Borrower 360",
         title="Gold Funnel Snapshot Daily",
         description="Daily aggregate funnel counts used by executive analytics.",
     ),
     _descriptor(
         "gold",
         "county_rollup",
+        freshness_basis="UC Gold Borrower 360",
         title="Gold County Rollup",
         description="County-level rollup for geographic analytics and drilldowns.",
     ),
     _descriptor(
         "gold",
         "zip_rollup",
+        freshness_basis="UC Gold Borrower 360",
         title="Gold ZIP Rollup",
         description="ZIP-level rollup for geographic analytics and drilldowns.",
         aliases=("zip_code_rollup",),
@@ -393,6 +448,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "equity_spread_points",
+        freshness_basis="UC Gold Borrower 360",
         title="Gold Equity Spread Points",
         description=(
             "Precomputed economics scatter surface: per-borrower equity x "
@@ -403,6 +459,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "rate_window_weekly",
+        freshness_basis="FRED Market Rates",
         title="Gold Rate Window Weekly",
         description=(
             "Why-now rate window: one row per FRED MORTGAGE30US week with that "
@@ -415,6 +472,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "gold",
         "rate_sensitivity_rollup",
+        freshness_basis="UC Gold Borrower 360",
         title="Gold Rate Sensitivity Rollup",
         description=(
             "Rate Lever scenario grid: per state and par-rate step (-100 to +100 "
@@ -427,6 +485,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "semantics",
         "portfolio_headline_metric_view",
+        freshness_basis="UC Gold Borrower 360",
         title="Portfolio Headline Metric View",
         description=(
             "Borrower-grain semantic view defining every demoed headline KPI: "
@@ -441,6 +500,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "semantics",
         "lead_generation_metric_view",
+        freshness_basis="UC Gold Lead Population",
         title="Lead Generation Metric View",
         description="Business-friendly KPI view used by the home page and Genie answers.",
         object_type="view",
@@ -448,6 +508,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "semantics",
         "segment_performance_metric_view",
+        freshness_basis="UC Gold Segment Population",
         title="Segment Performance Metric View",
         description="Semantic segment rollup used by analytics segment pages.",
         object_type="view",
@@ -455,6 +516,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "semantics",
         "borrower_opportunity_metric_view",
+        freshness_basis="UC Gold Borrower 360",
         title="Borrower Opportunity Metric View",
         description=(
             "Business-friendly semantic view for borrower economics, geography, "
@@ -465,6 +527,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "ref",
         "offer_rules_config",
+        freshness_not_tracked=True,
         title="Offer Rules Configuration",
         description="Governed threshold table for refinance-economics and primary offer rules.",
         aliases=("offer_rules",),
@@ -472,6 +535,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     _descriptor(
         "ref",
         "lender_dictionary",
+        freshness_not_tracked=True,
         title="Lender Dictionary",
         description="Public lender alias dictionary used for non-PII target-lender labeling.",
     ),

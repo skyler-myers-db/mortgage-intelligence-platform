@@ -11,8 +11,9 @@ import fs from 'node:fs';
 import type { Locator, Page } from '@playwright/test';
 import type { LeadExportReceipt, LeadExportReceiptRequest } from '../../../src/lib/apiClients/leadExport';
 import type { ApproveResult, DecisionReceipt } from '../../../src/lib/apiTypes';
-import type { SessionResponse } from '../../../src/types';
+import type { LeadSummary, SessionResponse } from '../../../src/types';
 import { LEADS, PRIMARY_BORROWER } from './data/borrowers';
+import { serverOrder } from './data/leadPages';
 import { ledgerReceipt } from './data/decisionReceipt';
 import { leadExportReceiptFor } from './data/exportAudit';
 import { json, WAREHOUSE_WARMING_UP, type MockApi } from './mockApi';
@@ -200,17 +201,26 @@ test.describe('warm-up', () => {
 });
 
 test.describe('column sort scope', () => {
-  test('sorting by Equity says it covers only the loaded rows, and Reset to rank restores rank order', async ({ app, page }) => {
+  // W5c (tables-02, D-audit-reads-a): a warehouse column is the SERVER's
+  // sort of the whole view (one page-0 read in that order), so the footer
+  // names it instead of claiming it covers only the loaded rows.
+  test('sorting by Equity reads the server order once and names it, and Reset to rank restores rank order', async ({ app, mockApi, page }) => {
+    mockApi.register<LeadSummary[]>('GET', '/api/leads', ({ query }) => json<LeadSummary[]>(
+      serverOrder(LEADS, query.get('sort'), query.get('sort_dir')),
+      { headers: { 'X-Total-Matching': String(LEADS.length), 'X-Returned-Rows': String(LEADS.length) } },
+    ));
     await app.gotoRoute('/lead-queue');
     const firstId = page.locator('table.tbl tbody .lead-table__borrower').first();
     await expect(firstId).toHaveText(LEADS[0].borrower_id);
     await expect(page.getByTestId('lead-sort-scope')).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Sort by Equity' }).click();
-    const byEquity = [...LEADS].sort((a, b) => b.equity_estimate - a.equity_estimate)[0];
+    const byEquity = serverOrder(LEADS, 'equity', 'desc')[0];
     await expect(firstId).toHaveText(byEquity.borrower_id);
-    await expect(page.getByTestId('lead-sort-scope')).toContainText('sorted within the loaded');
+    await expect(page.getByTestId('lead-sort-scope')).toHaveText(' · sorted by Equity');
     await expect(page.locator('th[aria-sort="descending"]')).toContainText('Equity');
+    const reads = mockApi.calls.filter((call) => call.method === 'GET' && call.path === '/api/leads');
+    expect(reads.map((call) => new URLSearchParams(call.search).get('sort'))).toEqual([null, 'equity']);
 
     await page.getByTestId('lead-sort-reset').click();
     await expect(firstId).toHaveText(LEADS[0].borrower_id);

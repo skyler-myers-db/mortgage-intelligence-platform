@@ -31,6 +31,7 @@ import { routePreloaders } from './routePreloaders';
 import { MASKED_BORROWER_ID_RE as GENIE_MASKED_BORROWER_ID_RE } from './genieCellLinks';
 import {
   MASKED_BORROWER_ID_RE,
+  NAVIGATION_GROUPS,
   NAVIGATION_ROUTE_IDS,
   NOT_FOUND_ROUTE_META,
   ROUTES,
@@ -258,6 +259,21 @@ describe('route tables stay pinned to routeMeta', () => {
     expect(navOrder).toEqual(flowOrder.filter((to) => to !== '/audit-ledger'));
     expect(paletteOrder).toEqual(flowOrder);
     expect(navOrder.indexOf('/analytics'), 'Analytics follows Offer').toBe(navOrder.indexOf('/offer-orchestrator') + 1);
+  });
+
+  /**
+   * flow-07 / shell-09 (D-shell-deviations-b): the nav's two clusters are the
+   * one order split in two, each route exactly once; the literal pins the
+   * split (the lead workflow, then insight and reference).
+   */
+  it('the two nav clusters flatten to the one navigation order, each route once', () => {
+    expect(NAVIGATION_GROUPS).toEqual([
+      { id: 'flow', label: 'Lead workflow', routes: ['home', 'portfolio', 'segments', 'leads', 'borrowerIndex', 'offerIndex'] },
+      { id: 'tools', label: 'Insight and reference', routes: ['analytics', 'askGenie', 'glossary', 'auditLedger', 'admin'] },
+    ]);
+    const flat = NAVIGATION_GROUPS.flatMap((group) => [...group.routes]);
+    expect(flat).toEqual([...NAVIGATION_ROUTE_IDS]);
+    expect(new Set(flat).size).toBe(flat.length);
   });
 
   /**

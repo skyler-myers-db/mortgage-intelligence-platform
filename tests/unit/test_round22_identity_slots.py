@@ -19,6 +19,7 @@ from backend.services.audit_store import (
     get_audit_store,
 )
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.fixtures.reviewed_approval import skip_draft_verification, synthetic_review_proof
 from tests.unit.growth_refusal_contract import GROWTH_REFUSAL_MESSAGE_RE
 
 _DISCLOSURE = (
@@ -128,10 +129,14 @@ def test_round22_final_approval_fails_before_any_write(
 ) -> None:
     monkeypatch.setattr(outreach_mod, "ensure_approval_idempotency_column", lambda lakebase: None)
     monkeypatch.setattr(outreach_mod, "ensure_approval_followup_columns", lambda lakebase: None)
+    # The copy screens run after the draft verification (W5c: review_mode and
+    # its proof are required), so the custom copy reaches them unverified.
+    skip_draft_verification(monkeypatch)
     payload = {
         "borrower_id": "B-48291",
         "draft_subject": "Mortgage options review",
         "draft_body": f"Reply YES to review mortgage options. {_DISCLOSURE}",
+        **synthetic_review_proof(),
     }
     payload[unsafe_field] = (
         f"{identity_slot}. {_DISCLOSURE}" if unsafe_field == "draft_body" else identity_slot

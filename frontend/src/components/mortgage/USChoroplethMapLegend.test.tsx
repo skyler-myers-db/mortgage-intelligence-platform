@@ -91,6 +91,29 @@ describe('USChoroplethMapLegend break row', () => {
     );
   });
 
+  it('adds the ZCTA caption for ZIP areas, and nothing without it (W5c dataviz-01)', () => {
+    const render = (caption: string | null) => act(() => {
+      root.render(
+        <USChoroplethMapLegend
+          overlayOn={false}
+          overlayData={null}
+          overlayLoading={false}
+          overlayError={null}
+          totalCount={55}
+          scale={buildChoroplethScale([50, 5])}
+          caption={caption}
+          segmentCaption="marketable population"
+        />,
+      );
+    });
+    render('ZIP areas are Census 2020 ZCTAs, an approximation of USPS delivery areas');
+    expect(document.querySelector('.map-legend__caption')?.textContent).toBe(
+      'Colored by: marketable population · square-root scale · ZIP areas are Census 2020 ZCTAs, an approximation of USPS delivery areas',
+    );
+    render(null);
+    expect(document.querySelector('.map-legend__caption')?.textContent).toBe('Colored by: marketable population · square-root scale');
+  });
+
   it('says Escape backs out a level in the keyboard hint (dataviz-10)', () => {
     renderLegend([3, 2, 1]);
     expect(document.querySelector('.map-legend__hint')?.textContent?.replace(/\s+/g, ' ')).toBe(

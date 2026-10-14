@@ -53,6 +53,9 @@ regexes = [
   # must use to pin actor_cache_key's derivation byte for byte. A test-only
   # literal that never configures any running process.
   '''^test-secret-0123456789abcdef$''',
+  # The fixed CLIP-mask placeholder tests/unit/test_leads_paging_audit.py sets
+  # for MIP_COTALITY_ID_MASK_SECRET (W5c paging). Test-only; configures no process.
+  '''^clip-mask-key-0123456789abcdef0123$''',
 ]
 
 # Paths where noisy-but-safe strings live. The design_files/ prototypes

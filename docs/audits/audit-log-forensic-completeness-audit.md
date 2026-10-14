@@ -190,8 +190,31 @@ did the rule see when it happened?" from the ledger row itself.
 | Who approved, with what disclosure version and body? | Yes - `APPROVE` |
 | What evidence was cited? | Yes - immutable `evidence_ids[]` |
 | What request/log trail triggered it? | Yes - `correlation_id` |
-| Was a borrower surfaced in a queue? | Yes - `VIEW_LEADS.payload_json.rendered_borrower_ids` |
+| Was a borrower surfaced in a queue? | Yes - `VIEW_LEADS.payload_json.rendered_borrower_ids` (returned in that page's response) |
+| Which Lead Queue view was a borrower surfaced in, and in what order? | Yes - `VIEW_LEADS` rows grouped by `metadata->>'view_id'`, ordered by `(metadata->>'page_index')::int` (W5c, D-audit-reads-a; reconstruction query below) |
+| Which view was the approver looking at when they decided? | Client-declared - `APPROVE` / `OUTREACH_REJECT` / `LEAD_EXPORT` `declared_lead_view_id` joins that view's `VIEW_LEADS` rows; the timestamp join (the actor's latest `VIEW_LEADS` row before the decision) is the fallback |
 | What did the approver see on the approval surface? | Yes - `RECOMMEND_OFFER` per Offer open (fail-closed) + `APPROVE.decision_inputs` |
+
+Lead Queue view reconstruction (W5c, D-audit-reads-a). Each served page of a
+paged Lead Queue view is one `VIEW_LEADS` row carrying the server-minted
+`view_id`, its `page_index` (0..9), `sort` / `sort_dir`, `total_matching`, the
+keyed `filter_fingerprint` and `source_refreshed_at`. Every borrower id that
+reached the browser in one view, in delivery order, for one actor:
+
+```sql
+SELECT (metadata->>'page_index')::int AS page_index,
+       jsonb_array_elements_text(metadata->'rendered_borrower_ids') AS borrower_id
+FROM mip_app.action_audit
+WHERE event_type = 'VIEW_LEADS'
+  AND actor_email = :actor_email
+  AND metadata->>'view_id' = :view_id
+ORDER BY (metadata->>'page_index')::int;
+```
+
+A gap in `page_index` within one `view_id` means a dropped background write
+(`audit.dropped`; the row is fail-open). `declared_lead_view_id` on a decision
+or an export is what the CLIENT declared, never verified by the server: treat
+it as a join hint, and confirm with the timestamp join when it matters.
 
 ## Validation
 

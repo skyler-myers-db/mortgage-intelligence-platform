@@ -5,7 +5,8 @@
  * The identity menu puts the actor's email on screen and the queue pager rides
  * masked borrower ids in React Router location state; neither may reach the
  * `/telemetry/rum` payload. This drives the real builder the way the app does:
- * a data router registered as the RUM route source (main.tsx), a navigation
+ * a data router registered as the RUM route source (main.tsx), an immediate
+ * scheduler in place of the idle callback, a navigation
  * whose location state carries both, a flush, and the body the beacon was
  * handed.
  */
@@ -37,10 +38,11 @@ describe('RUM payload', () => {
     });
     Object.defineProperty(navigator, 'sendBeacon', { configurable: true, value: beacon });
 
+    // main.tsx registers while the URL is the router's location.
+    window.history.replaceState(null, '', '/lead-queue');
     const router = createMemoryRouter([{ path: '*', element: null }], { initialEntries: ['/lead-queue'] });
     setRumRouteSource((listener) => router.subscribe((state) => listener(state.location.pathname)));
-    window.history.replaceState(null, '', '/lead-queue');
-    installRum();
+    installRum((task) => task());
 
     await router.navigate(`/borrower-360/${IDS[1]}?from=${encodeURIComponent(EMAIL)}`, {
       state: { queue: { search: '?state=IL', ids: IDS, label: 'IL' }, actor: EMAIL },
@@ -52,7 +54,8 @@ describe('RUM payload', () => {
     const payload = bodies.join('\n');
     // Non-vacuity: the route change really was reported.
     expect(payload).toContain('"metric":"route_change"');
-    expect(payload).toContain('/borrower-360/:borrower_id');
+    expect(payload).toContain('"route":"/borrower-360/:id"');
+    expect(payload).not.toContain(':borrower_id');
     expect(payload).toContain('"from_route":"/lead-queue"');
     expect(payload).not.toContain('@');
     expect(payload).not.toContain('jane');

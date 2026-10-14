@@ -385,6 +385,8 @@ test.describe('analytics executive: why-now rate window', () => {
 
     const dialog = page.getByRole('dialog', { name: 'Rate window: market rate against the book' });
     await expect(dialog).toBeVisible();
+    // The cited tables are its signals, under the hood (W5c w5-evidence-drawer, flow-10).
+    await dialog.getByRole('tab', { name: 'Under the hood' }).click();
     await expect(dialog).toContainText('mip.silver.market_rates_weekly');
     await expect(dialog).toContainText('mip.gold.rate_window_weekly');
   });

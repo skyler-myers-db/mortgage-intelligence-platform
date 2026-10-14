@@ -11,11 +11,12 @@
  */
 import type { ApiOk, ApiRequest, ApiResponse } from './api.gen';
 import type { DeepNoPhantomKeys, Expect, NoPhantomKeys, WireFits } from './wireContract.check';
+import type { BorrowerDecisionEvent, BorrowerDecisionHistoryResponse } from '../lib/apiClients/borrowerDecisions';
 import type { LeadExportReceipt, LeadExportReceiptRequest } from '../lib/apiClients/leadExport';
 import type { OfferRecommendRequest } from '../lib/apiClients/leads';
 import type { OutreachApproveRequest, OutreachDraftRequest, OutreachRejectRequest } from '../lib/apiClients/outreach';
 import type { ApproveResult, OutreachDraftResult, RejectResult } from '../lib/apiTypes';
-import type { Borrower360, BorrowerLifecycle, BorrowerProof, EvidenceEvent, LeadSummary, OfferAlternative, OfferRecommendation, ProofEvidenceEvent, ProofFormulaLine, ProofOfferBranch, ProofReproduceQuery, ProofScoreComponent, SourceLabel, WhyPanel } from '../types';
+import type { Borrower360, BorrowerLifecycle, BorrowerProof, EvidenceEvent, LeadScorePoints, LeadSummary, OfferAlternative, OfferRecommendation, ProofEvidenceEvent, ProofFormulaLine, ProofOfferBranch, ProofReproduceQuery, ProofScoreComponent, SourceLabel, WhyPanel } from '../types';
 import type { LeadCountResponse, LeadFacetBucket, LeadFacetsResponse, SavedView, SavedViewCreateRequest, SavedViewListResponse, SavedViewMutationResponse } from './leadFilters';
 
 export type WireContractLeads = [
@@ -42,6 +43,8 @@ export type WireContractLeads = [
   Expect<NoPhantomKeys<EvidenceEvent, ApiResponse<'EvidenceEvent'>>>,
   Expect<WireFits<ApiResponse<'LeadSummary'>, LeadSummary>>,
   Expect<NoPhantomKeys<LeadSummary, ApiResponse<'LeadSummary'>>>,
+  Expect<WireFits<ApiResponse<'LeadScorePoints'>, LeadScorePoints>>,
+  Expect<NoPhantomKeys<LeadScorePoints, ApiResponse<'LeadScorePoints'>>>,
   Expect<WireFits<ApiResponse<'OfferAlternative'>, OfferAlternative>>,
   Expect<NoPhantomKeys<OfferAlternative, ApiResponse<'OfferAlternative'>>>,
   Expect<WireFits<ApiResponse<'OfferRecommendation'>, OfferRecommendation>>,
@@ -74,6 +77,10 @@ export type WireContractLeads = [
   Expect<NoPhantomKeys<SavedViewListResponse, ApiResponse<'SavedViewListResponse'>>>,
   Expect<WireFits<ApiResponse<'SavedViewMutationResponse'>, SavedViewMutationResponse>>,
   Expect<NoPhantomKeys<SavedViewMutationResponse, ApiResponse<'SavedViewMutationResponse'>>>,
+  Expect<WireFits<ApiResponse<'BorrowerDecisionEvent'>, BorrowerDecisionEvent>>,
+  Expect<NoPhantomKeys<BorrowerDecisionEvent, ApiResponse<'BorrowerDecisionEvent'>>>,
+  Expect<WireFits<ApiResponse<'BorrowerDecisionHistoryResponse'>, BorrowerDecisionHistoryResponse>>,
+  Expect<NoPhantomKeys<BorrowerDecisionHistoryResponse, ApiResponse<'BorrowerDecisionHistoryResponse'>>>,
   // (ii) bound call sites whose type argument is not schema-named
   Expect<WireFits<ApiOk<'GET /api/v1/borrowers/{borrower_id}/lifecycle'>, BorrowerLifecycle>>,
   Expect<NoPhantomKeys<BorrowerLifecycle, ApiOk<'GET /api/v1/borrowers/{borrower_id}/lifecycle'>>>,

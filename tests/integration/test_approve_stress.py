@@ -58,6 +58,7 @@ from fastapi.testclient import TestClient
 
 from backend.main import app
 from backend.services.lakebase import LakebaseClient
+from tests.fixtures.reviewed_approval import synthetic_review_proof
 
 pytestmark = pytest.mark.integration
 
@@ -148,6 +149,8 @@ def test_approve_stress_50_sequential() -> None:
                     "offer_code": f"STRESS-{i:02d}",
                     "actor": "stress-test@entrada.ai",
                     "evidence_ids": [f"ev-stress-{run_uuid}-{i}"],
+                    # review_mode is required since W5c, with its proof.
+                    **synthetic_review_proof(),
                 },
             )
             dt_ms = (time.monotonic() - t0) * 1000.0

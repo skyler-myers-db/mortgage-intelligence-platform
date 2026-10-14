@@ -686,6 +686,16 @@ def test_a_cancel_after_the_commit_is_recorded_with_exactly_one_run_genie(monkey
 
     job_id = post_complete(client).json()["job_id"]
     assert audit.entered.wait(10)
+
+    def release_then_await_history(read: int) -> None:
+        # W5c settle: the Stop answers 'recorded' only once History has the
+        # turn; let the runner finish its record during the settle's read.
+        audit.release.set()
+        deadline = time.monotonic() + 10
+        while read == 1 and not lakebase.history_rows and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+    lakebase.on_settle_read = release_then_await_history
     late = _cancel(client, job_id)
     audit.release.set()
     job = wait_for_job(lakebase)

@@ -14,6 +14,8 @@
  *  - W5b w5-home-geo-lever: the Delta Explainer drawer on Home
  *    (`delta-explainer`) and the retained-value note on Segment
  *    Intelligence (`stale-note`);
+ *  - W5c w5-evidence-drawer: a Home KPI drawer's How we got and its Under
+ *    the hood tab (`evidence-how-we-got`, `evidence-under-the-hood`);
  *  - the teal, navy and red accents on Home, Lead Queue and Borrower 360,
  *    default and evidence drawer, both themes (bright is everything above).
  *
@@ -32,7 +34,7 @@ import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
 const OVERLAY_ROUTES = new Set(['home', 'lead-queue', 'borrower-360-detail', 'offer-orchestrator-detail', 'ask-genie']);
 const EXTRA_STATES: Readonly<Record<string, readonly FixtureState[]>> = {
   'lead-queue': ['filter-menu', 'expanded-row', 'read-failed', 'triage'],
-  home: ['degraded', 'delta-explainer'],
+  home: ['degraded', 'delta-explainer', 'evidence-how-we-got', 'evidence-under-the-hood'],
   'segment-intelligence': ['read-failed', 'stale-note'],
   'admin-config': ['run-dialog-open'],
 };
@@ -101,22 +103,27 @@ test.describe('named groups in the evidence drawer', () => {
     await app.gotoRoute('/lead-queue');
     const drawer = await app.openEvidenceDrawer(page.locator('.evidence-chip:visible').first());
     await app.settle();
-    // Both labelled groups are rendered: the governed-asset metadata stats
-    // (admin session) and the governed-assets list of the lineage family.
-    await expect(drawer.locator('.source-stat-grid')).toBeVisible();
+    // Both labelled groups are rendered: the governed-assets list of the
+    // lineage family on Overview, and the governed-asset metadata stats
+    // (admin session) under the hood (W5c w5-evidence-drawer, flow-10).
     await expect(drawer.locator('.governed-assets__list')).toBeVisible();
-
-    // The drawer is a native <dialog> (stack-05): scope the gate to it. The
-    // helper fails on any violation; the needs-review results are read here.
-    const r = await expectAxeClean(page, {
-      key: { route: 'lead-queue', state: 'evidence-drawer-groups' },
-      theme: 'dark',
-      known: {},
-      include: 'dialog.drawer:not(.proof-drawer)',
-    });
-    const flagged = r.incomplete
-      .filter((result) => result.id === 'aria-prohibited-attr')
-      .flatMap((result) => result.nodes.map((node) => `${node.target.join(' ')} (${result.impact ?? 'n/a'})`));
-    expect(flagged, 'aria-label on a role that prohibits it, inside the drawer').toEqual([]);
+    const flaggedIn = async (state: string): Promise<string[]> => {
+      // The drawer is a native <dialog> (stack-05): scope the gate to it. The
+      // helper fails on any violation; the needs-review results are read here.
+      const r = await expectAxeClean(page, {
+        key: { route: 'lead-queue', state },
+        theme: 'dark',
+        known: {},
+        include: 'dialog.drawer:not(.proof-drawer)',
+      });
+      return r.incomplete
+        .filter((result) => result.id === 'aria-prohibited-attr')
+        .flatMap((result) => result.nodes.map((node) => `${node.target.join(' ')} (${result.impact ?? 'n/a'})`));
+    };
+    expect(await flaggedIn('evidence-drawer-groups'), 'aria-label on a role that prohibits it, inside the drawer').toEqual([]);
+    await drawer.getByRole('tab', { name: 'Under the hood' }).click();
+    await expect(drawer.locator('.source-stat-grid')).toBeVisible();
+    await app.settle();
+    expect(await flaggedIn('evidence-drawer-groups-under-the-hood'), 'aria-label on a role that prohibits it, under the hood').toEqual([]);
   });
 });

@@ -111,6 +111,7 @@ def test_session_returns_only_admin_capability_from_same_group_rule(
         "presenter_mode": False, "actor_email": None,
         "actor_display_name": None, "role_labels": ["Administrator", "Approver"],
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
+        "refusal_text_capture_enabled": settings.mip_genie_refusal_text_capture == "enabled",
         "actor_cache_key": None,
     }
     assert denied.status_code == 200
@@ -119,6 +120,7 @@ def test_session_returns_only_admin_capability_from_same_group_rule(
         "presenter_mode": False, "actor_email": None,
         "actor_display_name": None, "role_labels": [],
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
+        "refusal_text_capture_enabled": settings.mip_genie_refusal_text_capture == "enabled",
         "actor_cache_key": None,
     }
     assert compat.status_code == 200
@@ -148,6 +150,7 @@ def test_session_and_admin_gate_share_email_allowlist_rule(
         "role_labels": ["Administrator", "Approver"],
         "lender_name": settings.mip_lender_name,
         "rum_enabled": settings.mip_rum_enabled,
+        "refusal_text_capture_enabled": settings.mip_genie_refusal_text_capture == "enabled",
         "actor_cache_key": actor_cache_key("operator@example.com"),
     }
     assert admin.status_code == 200, admin.text
@@ -282,6 +285,7 @@ def test_admin_respects_trust_forwarded_headers_flag(
         "presenter_mode": False, "actor_email": None,
         "actor_display_name": None, "role_labels": [],
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
+        "refusal_text_capture_enabled": settings.mip_genie_refusal_text_capture == "enabled",
         "actor_cache_key": None,
     }
 
@@ -299,6 +303,7 @@ def test_admin_respects_trust_forwarded_headers_flag(
         "presenter_mode": False, "actor_email": None,
         "actor_display_name": None, "role_labels": ["Administrator", "Approver"],
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
+        "refusal_text_capture_enabled": settings.mip_genie_refusal_text_capture == "enabled",
         "actor_cache_key": None,
     }
 

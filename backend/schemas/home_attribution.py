@@ -20,6 +20,7 @@ HomeAttributionMeasure = Literal[
     "high_opportunity",
     "offers_recommended",
     "listed_for_sale",
+    "competitor_lien",
 ]
 
 #: The fixed note every response carries.
@@ -68,3 +69,7 @@ class HomeSummaryAttributionResponse(BaseModel):
     offer_rules_changed_since_baseline: bool | None = None
     sources: list[str] = Field(default_factory=list)
     note: str = ATTRIBUTION_NOTE
+    #: False when the daily funnel snapshot has no per-state column for this
+    #: measure yet: the route answers without reading anything, and the
+    #: drawer says so instead of showing an empty breakdown.
+    snapshotted: bool = True

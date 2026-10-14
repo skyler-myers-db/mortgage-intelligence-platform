@@ -9,7 +9,8 @@
  *  - Truth: the table's "at least these" counts for a single signal equal
  *    that segment's card, and the exact rows sum once per borrower.
  *  - States: not built and warming say so; a held response keeps its place,
- *    so the filter row below never moves.
+ *    so the filter row below never moves; a settled one-line state keeps no
+ *    reserved dead space (the reservation is scoped to aria-busy, W5c).
  *  - Evidence: the chip opens the drawer on mip.gold.segment_combination_rollup.
  *  - Layout and a11y: no sideways scroll, axe clean in both themes.
  */
@@ -92,6 +93,8 @@ test('the evidence chip opens the drawer on the gold table', async ({ app, page 
   await stack(page).locator('.surface__hdr').getByRole('button', { name: /Signal combinations/ }).click();
   const drawer = page.getByRole('dialog').filter({ hasText: 'Signal stack: borrowers per exact set of core signals' });
   await expect(drawer).toBeVisible();
+  // The gold table is its first signal, under the hood (W5c w5-evidence-drawer, flow-10).
+  await drawer.getByRole('tab', { name: 'Under the hood' }).click();
   await expect(drawer).toContainText('mip.gold.segment_combination_rollup');
 });
 
@@ -132,6 +135,27 @@ test('a held response keeps its place: the filter row below never moves', async 
 });
 
 for (const theme of THEMES) {
+  test(`a settled not-built body keeps no loading reservation (${theme})`, async ({ app, mockApi, page }) => {
+    await app.setTheme(theme);
+    mockApi.register('GET', PATH, () => json(SEGMENT_COMBINATIONS_NOT_BUILT));
+    await app.gotoRoute(ROUTE);
+    await expect(stack(page)).toContainText('The signal stack is not built yet');
+    await expect(stack(page)).toHaveAttribute('aria-busy', 'false');
+    const body = stack(page).locator('.signal-stack__body');
+    // The loading reservation in px, resolved from the same tokens the rule uses.
+    const reserved = await body.evaluate((element) => {
+      const probe = element.ownerDocument.createElement('div');
+      probe.style.blockSize = 'calc(var(--sp-16) * 2 + var(--sp-5))';
+      element.appendChild(probe);
+      const px = probe.getBoundingClientRect().height;
+      probe.remove();
+      return px;
+    });
+    expect(reserved).toBeGreaterThan(100);
+    const box = await body.boundingBox();
+    expect(box?.height ?? Infinity).toBeLessThan(reserved);
+  });
+
   test(`fits without sideways scroll and is axe clean (${theme})`, async ({ app, page }) => {
     await app.setTheme(theme);
     await app.gotoRoute(ROUTE);

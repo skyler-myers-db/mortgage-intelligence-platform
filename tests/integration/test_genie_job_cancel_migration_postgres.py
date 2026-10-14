@@ -48,6 +48,8 @@ _EXPECTED_CHECKS = {
     "genie_completion_jobs_cancelled_shape_chk",
     # 2026_10_01_genie_job_sections (genie-01 phase 1b): the verified-sections size CHECK.
     "genie_completion_jobs_sections_size_chk",
+    # genie_job_precancel (W5c genie-03): the pre-cancelled row's shape.
+    "genie_completion_jobs_precancel_shape_chk",
 }
 
 

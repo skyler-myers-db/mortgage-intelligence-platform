@@ -89,3 +89,43 @@
    role="alert" and its wording carry the failure, not the hue.
    genie-refusal.fixture.spec.ts measures both themes. */
 [data-theme="light"] .genie-answer__refusal-error { color: var(--text-1); }
+
+/* ------------------------------------------------------------
+   Consented capture step (D-audit-reads-d; deviation:genie-refusal-confirm)
+   ------------------------------------------------------------
+   GenieRefusalReportConfirm, loaded lazily by the card:
+     .genie-answer__refusal-confirm          the step under the actions
+     .genie-answer__refusal-question         the question, read-only, mono
+     .genie-answer__refusal-disclosure       what keeping it means
+     .genie-answer__refusal-confirm-actions  Report with / without / Cancel
+   Same documented extension of `.genie-answer`; tokens only. The step's
+   CSS rides this file, which is already in the card's lazy chunk. */
+.genie-answer__refusal-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--status-warning-line);
+}
+.genie-answer__refusal-question {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-left: calc(var(--sp-1) / 2) solid var(--line-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.genie-answer__refusal-disclosure {
+  margin: 0;
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+  color: var(--text-1);
+}
+.genie-answer__refusal-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}

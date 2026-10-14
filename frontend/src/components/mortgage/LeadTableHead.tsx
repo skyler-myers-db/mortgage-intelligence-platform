@@ -77,6 +77,7 @@ export function LeadTableHead({
                   <button
                     type="button"
                     className="tbl__sort"
+                    data-rum-target="sort"
                     onClick={() => onSort(key)}
                     aria-label={`Sort by ${column.label}`}
                     aria-pressed={activeSort}

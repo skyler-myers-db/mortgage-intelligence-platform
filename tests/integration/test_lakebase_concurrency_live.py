@@ -280,6 +280,7 @@ def _approval_payload(draft: dict[str, object], *, request_id: str) -> dict[str,
         "draft_generation_id": _required_string(draft, "generation_id"),
         "draft_response_hash": _required_string(draft, "response_hash"),
         "draft_source_refreshed_at": _required_string(draft, "source_refreshed_at"),
+        "review_mode": "individual",  # required since W5c (D-approval-flow-a1)
         "request_id": request_id,
     }
 

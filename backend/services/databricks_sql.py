@@ -34,7 +34,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from threading import Lock
-from typing import Any
+from typing import Any, cast
 
 from backend.services.observability import emit
 from backend.services.server_timing import record_dependency
@@ -93,6 +93,20 @@ class DatabricksSqlObjectMissingError(DatabricksSqlError):
     """
 
 
+class DatabricksSqlColumnMissingError(DatabricksSqlError):
+    """The warehouse answered that a referenced column does not exist.
+
+    ``UNRESOLVED_COLUMN`` (SQLSTATE 42703): the App reads a gold column its
+    refresh has not built yet (audits wow-stage-2 / wow-stage-4). A definitive
+    answer like a missing table, so the resilient client fails fast on it
+    (one statement, a breaker SUCCESS, the unchanged ``retries_exhausted``
+    503). A SIBLING of ``DatabricksSqlObjectMissingError``, never a subclass:
+    a route that maps a missing lane table to 'not built' must never swallow
+    a missing column. ``optional_gold_columns`` re-runs a registered optional
+    projection on its NULL twins; anything else stays a 503.
+    """
+
+
 # Unity Catalog's authorization refusal: its error class or its SQLSTATE.
 _UC_PERMISSION_DENIED_RE = re.compile(r"\bINSUFFICIENT_PERMISSIONS\b|\bSQLSTATE:?\s*42501\b")
 # A missing table or view (its error class or SQLSTATE 42P01), schema or
@@ -103,6 +117,9 @@ _UC_OBJECT_MISSING_RE = re.compile(
     r"\bTABLE_OR_VIEW_NOT_FOUND\b|\bSQLSTATE:?\s*42P01\b"
     r"|\bSCHEMA_NOT_FOUND\b|\bUNRESOLVED_ROUTINE\b"
 )
+# A missing column: its error class (with or without a sub-class suffix such
+# as ``.WITH_SUGGESTION``) or its SQLSTATE.
+_UC_COLUMN_MISSING_RE = re.compile(r"\bUNRESOLVED_COLUMN\b|\bSQLSTATE:?\s*42703\b")
 
 
 def _sql_error_class(message: object, error_code: object = None) -> type[DatabricksSqlError]:
@@ -115,15 +132,18 @@ def _sql_error_class(message: object, error_code: object = None) -> type[Databri
     token, which a re-minted token can fix) stays a plain, retryable
     ``DatabricksSqlError``. A refusal wins when a message carries both.
 
+    ``DatabricksSqlColumnMissingError`` for a missing column, then
     ``DatabricksSqlObjectMissingError`` for a missing table, view, schema or
-    routine, from the message only (never from an error code alone). Anything
-    else is the base.
+    routine, both from the message only (never from an error code alone).
+    Anything else is the base.
     """
     text = str(message or "")
     if _UC_PERMISSION_DENIED_RE.search(text):
         return DatabricksSqlPermissionError
     if str(error_code or "").strip().upper() == "PERMISSION_DENIED":
         return DatabricksSqlPermissionError
+    if _UC_COLUMN_MISSING_RE.search(text):
+        return DatabricksSqlColumnMissingError
     if _UC_OBJECT_MISSING_RE.search(text):
         return DatabricksSqlObjectMissingError
     return DatabricksSqlError
@@ -470,7 +490,7 @@ def get_sql_client() -> DatabricksSqlClient:
             # never counted against the breaker, not "warming".
             retry_on=(DatabricksSqlError, OSError),
             permission_denied_on=(DatabricksSqlPermissionError,),
-            object_missing_on=(DatabricksSqlObjectMissingError,),
+            object_missing_on=(DatabricksSqlObjectMissingError, DatabricksSqlColumnMissingError),
         )
         _CLIENT = ResilientSqlClient(bare, resilient)
         return _CLIENT
@@ -518,11 +538,40 @@ class ResilientSqlClient:
         statement: str,
         parameters: dict[str, Any] | list[Any] | tuple[Any, ...] | None = None,
     ) -> list[dict[str, Any]]:
-        return self._resilient.call(lambda: self._client.execute(statement, parameters))
+        return cast(
+            "list[dict[str, Any]]",
+            self._call(statement, lambda sql: self._client.execute(sql, parameters)),
+        )
 
     def execute_one(
         self,
         statement: str,
         parameters: dict[str, Any] | list[Any] | tuple[Any, ...] | None = None,
     ) -> dict[str, Any] | None:
-        return self._resilient.call(lambda: self._client.execute_one(statement, parameters))
+        return cast(
+            "dict[str, Any] | None",
+            self._call(statement, lambda sql: self._client.execute_one(sql, parameters)),
+        )
+
+    def _call(self, statement: str, run: Callable[[str], Any]) -> Any:
+        """One resilient call, with the optional-gold-column fail-soft path.
+
+        A registered optional family whose latch holds is rewritten onto its
+        NULL twins before the statement runs. A ``DatabricksSqlColumnMissingError``
+        naming a registered column of a family in this statement latches the
+        family and re-runs ONCE on the twins. Every other failure re-raises
+        unchanged (see ``optional_gold_columns``).
+        """
+        from backend.services import optional_gold_columns
+        from backend.services.resilience_breaker import DependencyDownError
+
+        sql = optional_gold_columns.rewrite_latched(statement)
+        try:
+            return self._resilient.call(lambda: run(sql))
+        except DependencyDownError as exc:
+            family = optional_gold_columns.family_for_missing_column(exc.last_error, sql)
+            if family is None:
+                raise
+            optional_gold_columns.latch(family, error=exc.last_error)
+            fallback = optional_gold_columns.rewrite(sql, (family,))
+            return self._resilient.call(lambda: run(fallback))

@@ -103,6 +103,21 @@ class SegmentSummary(BaseModel):
     origination_channel_mix: list[DimensionFacetCount] = Field(default_factory=list)
 
 
+class LeadScorePoints(BaseModel):
+    """The five weighted sub-scores behind one row's opportunity_score.
+
+    Keyed by the score-anatomy component vocabulary. Each value is the
+    fn_lead_score weight times its 0..100 sub-score; the five sum, rounded half
+    to even and clipped to 0..100, to the row's opportunity_score.
+    """
+
+    economic_incentive: float = Field(ge=0, le=100)
+    intent_trigger: float = Field(ge=0, le=100)
+    fit: float = Field(ge=0, le=100)
+    relationship: float = Field(ge=0, le=100)
+    evidence: float = Field(ge=0, le=100)
+
+
 class LeadSummary(BaseModel):
     borrower_id: str
     display_name: str
@@ -119,6 +134,16 @@ class LeadSummary(BaseModel):
     rate_spread_bps: int
     opportunity_score: int = Field(ge=0, le=100)
     confidence: int = Field(ge=0, le=100)
+    # Score anatomy on queue and geo drill-down rows (audit wow-stage-2). None
+    # when the gold refresh has not built the points yet or they disagree
+    # with opportunity_score: a client renders None as absent, never as 0.
+    score_points: LeadScorePoints | None = Field(
+        default=None,
+        description=(
+            "The five weighted sub-scores that sum to opportunity_score; "
+            "null when unavailable."
+        ),
+    )
     recommended_offer_code: str = "nurture"
     recommended_offer: str
     why_now: str
@@ -279,6 +304,23 @@ class Borrower360(LeadSummary):
     trigger_timeline: list[EvidenceEvent]
     evidence_events: list[EvidenceEvent]
     why_panel: WhyPanel
+    # Crossed the line (audit wow-stage-4), from gold.borrower_dossier. All
+    # three are null until the gold refresh builds them.
+    first_pos_date: str | None = Field(
+        default=None,
+        description="First-lien origination date (YYYY-MM-DD); null when unknown.",
+    )
+    first_pos_rate_type: Literal["FIX", "ARM"] | None = Field(
+        default=None,
+        description="First-lien rate type: FIX or ARM; null when unknown.",
+    )
+    first_itm_week: str | None = Field(
+        default=None,
+        description=(
+            "Week (YYYY-MM-DD, a Monday) the current in-the-money run began, "
+            "with today's rule applied to past weekly rates; null when not in the money."
+        ),
+    )
 
     @field_validator("clip_id")
     @classmethod

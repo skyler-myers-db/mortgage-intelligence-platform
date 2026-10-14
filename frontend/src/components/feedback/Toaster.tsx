@@ -11,6 +11,7 @@ import {
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router';
 import { AUDIT_EVENT_ID_PARAM, AUDIT_EXPLORER_PATH, auditEventHref } from '../../lib/auditLinks';
+import { useAuditLedgerAccess } from '../../lib/sessionQuery';
 import { registerKeyBinding } from '../../lib/keymap';
 import { subscribeModalLayers, topModalLayer } from '../../lib/modalLayers';
 import { dismissToast, getToasts, subscribeToasts, type Toast, type ToastAction } from '../../lib/toast';
@@ -56,9 +57,11 @@ import './Toaster.css';
  *     live region (it exists before any toast is inserted, so additions are
  *     announced). A failure toast carries `role="alert"` itself: an inserted
  *     alert is announced, and the shell never holds an empty alert region.
- *   - A toast with an `auditEventId` links to that ledger row; an actor who
- *     cannot open the admin audit explorer sees the id as text instead
- *     (lib/auditLinks). The toast goes once the explorer is showing its row,
+ *   - A toast with an `auditEventId` links to that ledger row in the audit
+ *     ledger (administrators and auditors, D-audit-reads-c3); an actor who
+ *     can read neither sees the id as text instead (lib/auditLinks). The
+ *     link reads nothing until it is followed, and then the ledger's own
+ *     VIEW_AUDIT_LEDGER applies. The toast goes once the explorer is showing its row,
  *     never on the click itself: the unsaved-changes guard can still hold
  *     that navigation, and Stay must find the toast and its link where they
  *     were.
@@ -317,6 +320,9 @@ export function Toaster() {
   useActorResetNotice();
   const toasts = useSyncExternalStore(subscribeToasts, getToasts, getToasts);
   const { canAccessAdmin } = useApp();
+  // The shared session read (no request of its own): a read-only auditor
+  // opens the ledger too.
+  const canReadLedger = useAuditLedgerAccess();
   // The topmost open modal dialog, or null for the shell (see the module note).
   const layer = useSyncExternalStore(subscribeModalLayers, topModalLayer, noModalLayer);
   // Toasts on screen when the host last changed: a render-time latch, so the
@@ -476,7 +482,7 @@ export function Toaster() {
       key={toast.id}
       toast={toast}
       paused={paused}
-      canOpenAudit={canAccessAdmin}
+      canOpenAudit={canAccessAdmin || canReadLedger}
       announce={!carried.has(toastKey(toast))}
       onDismiss={dismiss}
     />

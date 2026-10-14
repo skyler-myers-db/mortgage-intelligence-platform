@@ -5,9 +5,11 @@ request and the requester their own; an unknown request is 404 and anyone
 else 403. The scope never combines with a cohort, a borrower list or a Growth
 Agent handoff, and the audit-free aggregates (count, facets) refuse it, as
 they refuse a borrower list (W5a ruling). A request with no open borrower
-answers an empty list WITHOUT a VIEW_LEADS row and never widens to the whole
-queue; otherwise the VIEW_LEADS row records the request id. Lakebase is
-resolved only when the scope is named.
+answers an empty list and never widens to the whole queue; the VIEW_LEADS row
+records the request id. Lakebase is resolved only when the scope is named.
+W5c (D-audit-reads-a): the empty answer is a served page too, so it writes
+exactly one VIEW_LEADS row (no ids, a new view, page 0, total 0, the request
+id); before W5c it wrote none.
 """
 
 from __future__ import annotations
@@ -123,7 +125,11 @@ def test_a_request_with_no_open_borrower_is_empty_never_the_whole_queue(
     assert response.json() == []
     assert response.headers["X-Total-Matching"] == "0"
     assert response.headers["X-Returned-Rows"] == "0"
-    assert _view_rows(audit) == []
+    (row,) = _view_rows(audit)
+    assert row["rendered_borrower_ids"] == []
+    assert row["approval_request_batch_id"] == batch_id
+    assert (row["page_index"], row["total_matching"]) == (0, 0)
+    assert row["view_id"] == response.headers["X-Lead-View-Id"]
 
 
 def test_unknown_and_foreign_requests_are_refused(ledger: FakeApprovalLedger) -> None:

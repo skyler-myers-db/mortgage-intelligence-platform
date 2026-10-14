@@ -24,9 +24,17 @@
  *     across all of it (a duplicate view-transition-name would be one);
  *  h. a cold load with the route chunk held: the fallback wrapper runs no
  *     CSS animation, and at most one entrance runs after release.
+ *  i. phase 2, the borrower-id morph (deviation:borrower-id-morph): "Open
+ *     Borrower 360" from an expanded Lead Queue row makes exactly one call
+ *     with a ::view-transition-group(mip-borrower-id) animation within
+ *     250 ms, and no element keeps the name afterwards; a J / K pager move
+ *     (a programmatic navigate) makes no such group; two rapid clicks on the
+ *     link during a held navigation log no console error (a duplicate name
+ *     would). None of it assumes the queue's DOM is removed: it may stay
+ *     hidden in an Activity slot.
  *
- * No case reads a proof drawer, a draft or a borrower dossier: the routes
- * load naturally and nothing here writes an audit row.
+ * No case reads a proof drawer or a draft; only (i) opens a borrower dossier,
+ * and nothing here writes an audit row.
  */
 import type { Page, Route } from '@playwright/test';
 import {
@@ -40,6 +48,8 @@ import { expect, test } from './test';
 
 const MOTION_CEILING_MS = 250;
 const GLOSSARY_CHUNK = /\/assets\/glossary-[^/]+\.js$/;
+const BORROWER_360_CHUNK = /\/assets\/borrower-360-[^/]+\.js$/;
+const MORPH_GROUP = '::view-transition-group(mip-borrower-id)';
 
 function nav(page: Page) {
   return page.getByRole('navigation', { name: 'Main navigation' });
@@ -77,6 +87,24 @@ function accentInk(page: Page): Promise<string> {
     probe.remove();
     return rgb;
   });
+}
+
+/** Expand the second IL queue row; returns its "Open Borrower 360" link. */
+async function expandQueueRow(page: Page) {
+  const toggle = page.locator('table.tbl tbody [aria-expanded]').nth(1);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  return page.locator('tr.tbl__expand').getByRole('link', { name: 'Open Borrower 360' });
+}
+
+/** Elements whose computed view-transition-name is the morph's. */
+function morphNamed(page: Page): Promise<number> {
+  return page.evaluate(() => [...document.querySelectorAll('*')]
+    .filter((element) => getComputedStyle(element).viewTransitionName === 'mip-borrower-id').length);
+}
+
+function morphGroups(log: ViewTransitionLog, index: number) {
+  return (log.transitions[index]?.ready ?? []).filter((animation) => animation.pseudo === MORPH_GROUP);
 }
 
 function paintedRoutePath(page: Page): Promise<string | null> {
@@ -269,6 +297,55 @@ test.describe('with motion allowed', () => {
     expect(pseudos.filter((pseudo) => /^::view-transition-(?:old|new)\(root\)$/.test(pseudo)), 'the shell never fades').toEqual([]);
     await waitForViewTransitionsToFinish(page);
     expect(newCalls(await readViewTransitions(page), before)).toBe(1);
+  });
+
+  test('(i) Open Borrower 360 from an expanded queue row morphs the row id into the title, once', async ({ app, page }) => {
+    await app.gotoRoute('/lead-queue?state=IL');
+    // Warm the dossier chunk (the nav preloads on intent) so the navigation
+    // commits inside the morph's one-second hold.
+    await nav(page).getByRole('link', { name: 'Borrower 360' }).hover();
+    await page.waitForLoadState('networkidle');
+    await waitForViewTransitionsToFinish(page);
+    const open = await expandQueueRow(page);
+    const before = await readViewTransitions(page);
+
+    await open.click();
+    await expect(page).toHaveURL(/\/borrower-360\/B-[0-9A-Z]{13}$/);
+    await app.settle();
+    const log = await waitForViewTransitionsToFinish(page);
+    expect(newCalls(log, before), 'exactly one startViewTransition').toBe(1);
+    const groups = morphGroups(log, before.transitions.length);
+    expect(groups.length, 'the borrower id morphs as its own group').toBeGreaterThan(0);
+    for (const group of groups) expect(group.endMs, 'the morph ends within 250 ms').toBeLessThanOrEqual(MOTION_CEILING_MS);
+    await expect(page.locator('#main-content h1 .page-title__id')).toHaveText(/^B-[0-9A-Z]{13}$/);
+    // The title lets the name go after the morph; the row's mark is gone too.
+    await expect.poll(() => morphNamed(page), 'no element keeps the morph name').toBe(0);
+
+    // J pages programmatically: a route transition, never the morph.
+    const paged = await readViewTransitions(page);
+    await page.keyboard.press('j');
+    await app.settle();
+    const pagedLog = await waitForViewTransitionsToFinish(page);
+    expect(newCalls(pagedLog, paged)).toBe(1);
+    expect(morphGroups(pagedLog, paged.transitions.length), 'a pager move makes no morph group').toEqual([]);
+  });
+
+  test('(i) two rapid clicks during a held navigation log no console error', async ({ app, page }) => {
+    const chunk = await gateChunk(page, BORROWER_360_CHUNK);
+    await app.gotoRoute('/lead-queue?state=IL');
+    await waitForViewTransitionsToFinish(page);
+    const open = await expandQueueRow(page);
+    const before = await readViewTransitions(page);
+
+    await open.click();
+    await open.click();
+    await expect(page).toHaveURL(/\/borrower-360\/B-[0-9A-Z]{13}$/);
+    chunk.release();
+    await app.settle();
+    const log = await waitForViewTransitionsToFinish(page);
+    expect(newCalls(log, before), 'one held navigation, one transition').toBeLessThanOrEqual(1);
+    await expect.poll(() => morphNamed(page)).toBe(0);
+    // The hygiene gate fails this test on any console error or page error.
   });
 
   test('(h) a cold load with the chunk held: the fallback never animates, and one entrance at most', async ({ page }) => {

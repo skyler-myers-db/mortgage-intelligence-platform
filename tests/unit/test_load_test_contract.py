@@ -35,6 +35,17 @@ def test_load_harness_has_opt_in_write_path_coverage() -> None:
     assert "MipUser.tasks.extend" in source
 
 
+def test_both_load_harnesses_approve_with_the_draft_proof_and_a_review_mode() -> None:
+    # review_mode is required on approve since W5c, and it needs the proof.
+    locust = (ROOT / "tools" / "load_test" / "locustfile.py").read_text(encoding="utf-8")
+    k6 = (ROOT / "tools" / "load_test" / "k6_smoke.js").read_text(encoding="utf-8")
+    for field in ("draft_generation_id", "draft_response_hash", "draft_source_refreshed_at"):
+        assert f'"{field}": draft.get(' in locust
+        assert f"{field}: draft." in k6
+    assert '"review_mode": "individual"' in locust
+    assert "review_mode: 'individual'" in k6
+
+
 def test_committed_load_baseline_covers_read_and_write_contracts() -> None:
     payload = json.loads(
         (ROOT / "tools" / "load_test" / "baseline.json").read_text(encoding="utf-8")

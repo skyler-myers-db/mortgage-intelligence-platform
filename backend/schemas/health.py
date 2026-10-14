@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -67,3 +69,7 @@ class AdminHealthResponse(HealthResponse):
         ),
     )
     presenter_mode: bool = False
+    browser_telemetry: Literal["on", "off"] = Field(
+        default="off",
+        description="The effective browser RUM setting of this App process (D-platform-process-d1).",
+    )

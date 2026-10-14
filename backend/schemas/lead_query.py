@@ -34,6 +34,12 @@ from backend.schemas.genie_numeric_filters import GENIE_NUMERIC_FILTER_BOUNDS
 DEFAULT_LEAD_LIMIT: int = 500
 MAX_LEAD_LIMIT: int = 5000
 
+# Server paging (D-audit-reads-a): a Lead Queue view is page 0 plus pages
+# loaded one explicit "Load next" at a time, 500 rows each, up to page index
+# 9 (5,000 rows, MAX_LEAD_LIMIT). Only a page-size request is paged.
+LEAD_PAGE_SIZE: int = DEFAULT_LEAD_LIMIT
+LEAD_MAX_PAGE_INDEX: int = 9
+
 SegmentCodesParam = Annotated[
     str | None,
     Query(
@@ -440,6 +446,37 @@ LimitParam = Annotated[
     ),
 ]
 
+CursorParam = Annotated[
+    str | None,
+    Query(
+        alias="cursor",
+        max_length=2048,
+        description=(
+            "Opaque, signed next-page token from a previous page's X-Next-Cursor "
+            "header. Sent with the identical filters and sort; never with limit."
+        ),
+    ),
+]
+
+LeadSortValue = Literal["rank", "score", "equity", "rate", "confidence"]
+LeadSortDirValue = Literal["asc", "desc"]
+
+SortParam = Annotated[
+    LeadSortValue,
+    Query(
+        alias="sort",
+        description=(
+            "Server sort over warehouse columns: rank (the default ranked order), "
+            "score, equity, rate (spread) or confidence."
+        ),
+    ),
+]
+
+SortDirParam = Annotated[
+    LeadSortDirValue,
+    Query(alias="sort_dir", description="Direction of a server sort. Ignored for rank."),
+]
+
 ApprovalStatusValue = Literal["pending", "approved", "rejected", "hold", "any"]
 OutreachStatusValue = Literal["none", "queued", "actioned", "sent", "bounced", "replied", "any"]
 FunnelStageValue = Literal[
@@ -619,5 +656,25 @@ def lead_limit(limit: LimitParam = DEFAULT_LEAD_LIMIT) -> int:
     return limit
 
 
+@dataclass(frozen=True)
+class LeadPagingParams:
+    """The server-paging inputs of ``GET /leads`` (D-audit-reads-a)."""
+
+    cursor: str | None
+    sort: LeadSortValue
+    sort_dir: LeadSortDirValue
+
+
+def lead_paging_params(
+    cursor: CursorParam = None,
+    sort: SortParam = "rank",
+    sort_dir: SortDirParam = "desc",
+) -> LeadPagingParams:
+    """FastAPI dependency: the paging parameters, declared after ``limit``."""
+
+    return LeadPagingParams(cursor=cursor, sort=sort, sort_dir=sort_dir)
+
+
 LeadQueryParamsDep = Annotated[LeadQueryParams, Depends(lead_query_params)]
 LeadLimitDep = Annotated[int, Depends(lead_limit)]
+LeadPagingParamsDep = Annotated[LeadPagingParams, Depends(lead_paging_params)]

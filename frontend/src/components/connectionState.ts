@@ -1,5 +1,14 @@
-import type { QueryClient } from '@tanstack/react-query';
+import type { Query, QueryClient } from '@tanstack/react-query';
 import { clientFailureReason } from '../lib/apiTransport';
+
+/**
+ * A query whose every served page writes an audit row (`meta.auditedPages`:
+ * the Lead Queue's paged view, D-audit-reads-a). A recovery never re-reads
+ * it: the reader's Refresh does (one page 0, one VIEW_LEADS row).
+ */
+export function hasAuditedPages(query: Pick<Query, 'meta'>): boolean {
+  return query.meta?.auditedPages === true;
+}
 
 /**
  * Connection state the shell shows above every page (audit 2026-09-21
@@ -67,7 +76,7 @@ export function refetchUnreachableQueries(queryClient: QueryClient): void {
     type: 'active',
     predicate: (query) => {
       const reason = clientFailureReason(query.state.error);
-      return reason === 'unreachable' || reason === 'offline';
+      return (reason === 'unreachable' || reason === 'offline') && !hasAuditedPages(query);
     },
   });
 }

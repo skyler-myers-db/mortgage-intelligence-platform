@@ -128,17 +128,9 @@ export const geoApi = {
     portfolioCriteria?: GeoQueryCriteria | null,
   ) => getJson<CountyRollupResponse>(countyRollupsPath(state, segmentCodes, segmentMode, portfolioCriteria), signal),
 
-  zipRollups: (
-    key: ZipRollupKey,
-    signal?: AbortSignal,
-    segmentCodes?: string[] | null,
-    segmentMode: SegmentFilterMode = 'any',
-    portfolioCriteria?: GeoQueryCriteria | null,
-  ) => getJson<ZipRollupResponse>(zipRollupsPath(key, segmentCodes, segmentMode, portfolioCriteria), signal),
-
   /**
    * S9 assigned-vs-unattended overlay for one drill level. Follows the
-   * stateRollups/countyRollups/zipRollups pattern: 422 when level=county
+   * stateRollups/countyRollups/zipRollupsWithFreshness pattern: 422 when level=county
    * without state or level=zip without countyFips; a transient 503 flows
    * through the same retry/degraded-state path as every other geo read.
    */

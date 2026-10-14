@@ -51,7 +51,7 @@ describe('outreach approve — loan-officer assignment + follow-up (Feature C)',
 
     const res = await api.approve('B-48291', {
       offer_code: 'refi',
-      channel: 'email',
+      channel: 'email', review_mode: 'individual',
       assigned_to_email: 'stacy@summit.example',
       follow_up_in_days: 5,
     });
@@ -72,7 +72,7 @@ describe('outreach approve — loan-officer assignment + follow-up (Feature C)',
       return jsonResponse(200, { approved: true });
     });
 
-    await api.approve('B-48291', { offer_code: 'refi' });
+    await api.approve('B-48291', { offer_code: 'refi', review_mode: 'individual' });
     const body = JSON.parse(String(calls[0].init?.body));
     expect(body.assigned_to_email).toBeNull();
     expect(body.follow_up_in_days).toBeNull();
@@ -702,7 +702,7 @@ describe('geo API client', () => {
       'all',
       portfolioCriteria,
     );
-    await api.zipRollups(
+    await api.zipRollupsWithFreshness(
       { state: 'fl' },
       undefined,
       ['itm', 'investor', 'equity', 'retention'],
@@ -753,7 +753,7 @@ describe('geo API client', () => {
       return jsonResponse(200, { rollups: [], snapshot_date: null });
     });
 
-    await api.zipRollups({ countyFips: '17031' });
+    await api.zipRollupsWithFreshness({ countyFips: '17031' });
 
     const url = new URL(calls[0].path, 'http://localhost');
     expect(url.pathname).toBe('/api/v1/geo/zip-rollups');

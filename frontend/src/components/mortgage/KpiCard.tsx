@@ -7,6 +7,7 @@ import { useFirstAppearance } from '../../lib/useFirstAppearance';
 import { genieKpiPrompt } from '../../lib/genieContext';
 import { GenieAskAbout } from './GenieAskAbout';
 import { formatCount } from '../../lib/formatters';
+import type { KpiProofKey } from '../../lib/apiTypes';
 
 /**
  * KpiCard — prototype `.kpi` BEM: label / value / unit / delta / source.
@@ -53,6 +54,14 @@ interface KpiCardProps {
   loading?: boolean;
   /** Data-quality note for the trend, e.g. step-change or shortened-window context. */
   trendNote?: string | null;
+  /**
+   * Opt-in "How we got {value}" evidence (audit 2026-09-21 flow-06): when set,
+   * the chip's drawer source carries the displayed value, its as-of and its
+   * server reproduce key. Without it the card is unchanged, so a
+   * criteria-filtered count (Portfolio Builder) never borrows an unfiltered
+   * definition or proof.
+   */
+  evidence?: { asOf?: string | null; proofKey?: KpiProofKey };
 }
 
 const defaultFormat = (n: number): string => formatCount(n);
@@ -70,6 +79,7 @@ export function KpiCard({
   trend,
   loading = false,
   trendNote,
+  evidence,
 }: KpiCardProps) {
   let display: string;
   if (valueAnimated === null) {
@@ -132,9 +142,15 @@ export function KpiCard({
       {source && (
         <div className="kpi__source">
           <Icon name="db" size={11} />
-          <EvidenceChip source={source}>{source.short ?? source.title}</EvidenceChip>
+          <EvidenceChip source={evidenceSource(source, display, evidence)}>{source.short ?? source.title}</EvidenceChip>
         </div>
       )}
     </div>
   );
+}
+
+/** The chip's source: the number, its as-of and its proof key only for an opted-in, loaded value. */
+function evidenceSource(source: DrawerSource, display: string, evidence: KpiCardProps['evidence']): DrawerSource {
+  if (!evidence || display === '' || display === '—') return source;
+  return { ...source, value: display, asOf: evidence.asOf, proofKey: evidence.proofKey };
 }

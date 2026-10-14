@@ -21,7 +21,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from databricks.sdk.service.jobs import Run, RunLifeCycleState, RunResultState, RunState
+from databricks.sdk.service.jobs import BaseRun, Run, RunLifeCycleState, RunResultState, RunState
 
 from backend.services import job_trigger, lifecycle_run_watch
 from backend.services.gold_cache import workflow_generation, workflow_key
@@ -286,3 +286,173 @@ def test_a_job_mode_trigger_registers_its_run(monkeypatch: pytest.MonkeyPatch) -
     finally:
         job_trigger._reset_for_tests()
     assert lifecycle_run_watch.pending_run_ids() == [], "the trigger reset forgets the watch too"
+
+
+# --- the foreign arm (W5c w5-field-vitals, delivery-06 remainder) ----------------
+
+_BASELINE_MS = 1_760_000_000_000
+
+
+class _ForeignJobs:
+    """``WorkspaceClient.jobs`` answering ``list_runs`` (and ``get_run`` for an own run)."""
+
+    def __init__(self) -> None:
+        self.runs: list[BaseRun] = []
+        self.error: BaseException | None = None
+        self.list_calls: list[dict[str, Any]] = []
+        self.get_calls: list[int] = []
+
+    def list_runs(self, **kwargs: Any) -> Iterator[BaseRun]:
+        self.list_calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return iter(self.runs)
+
+    def get_run(self, run_id: int) -> Run:
+        self.get_calls.append(run_id)
+        return Run(run_id=run_id, state=RunState(life_cycle_state=RunLifeCycleState.TERMINATED))
+
+
+def _ended(run_id: int, end_ms: int, result: RunResultState = RunResultState.SUCCESS) -> BaseRun:
+    return BaseRun(
+        run_id=run_id,
+        end_time=end_ms,
+        state=RunState(life_cycle_state=RunLifeCycleState.TERMINATED, result_state=result),
+    )
+
+
+@pytest.fixture
+def foreign(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[_ForeignJobs, list[int]]]:
+    jobs = _ForeignJobs()
+    builds: list[int] = []
+
+    def _factory() -> Any:
+        builds.append(1)
+        return SimpleNamespace(jobs=jobs)
+
+    monkeypatch.setenv("MIP_LIFECYCLE_SYNC_JOB_ID", "42")
+    lifecycle_run_watch._reset_for_tests(workspace_factory=_factory)
+    lifecycle_run_watch.enable_foreign_run_watch(now_ms=_BASELINE_MS)
+    yield jobs, builds
+
+
+def test_a_foreign_run_after_the_baseline_bumps_once(
+    foreign: tuple[_ForeignJobs, list[int]], caplog: pytest.LogCaptureFixture
+) -> None:
+    jobs, builds = foreign
+    jobs.runs = [_ended(9001, _BASELINE_MS + 5_000, RunResultState.FAILED), _ended(9000, _BASELINE_MS + 1_000)]
+    generation = workflow_generation()
+
+    with caplog.at_level(logging.INFO):
+        lifecycle_run_watch.observe(now=100.0, executor=_InlineExecutor())
+
+    assert workflow_generation() == generation + 1, "one bump for the newer runs"
+    assert jobs.list_calls == [{"job_id": 42, "completed_only": True, "limit": 5}]
+    [event] = _events(caplog, "lifecycle_sync_completed")
+    assert event.mip_extras == {  # type: ignore[attr-defined]
+        "mode": "job_foreign", "job_id": 42, "run_id": 9001, "result_state": "FAILED",
+    }
+
+    # The baseline moved to the newest end time: the same page bumps nothing.
+    lifecycle_run_watch.observe(now=200.0, executor=_InlineExecutor())
+    assert len(jobs.list_calls) == 2 and workflow_generation() == generation + 1
+    assert builds == [1], "the client is built once and cached"
+
+
+def test_a_run_that_ended_before_the_baseline_does_not_bump(foreign: tuple[_ForeignJobs, list[int]]) -> None:
+    jobs, _ = foreign
+    jobs.runs = [_ended(9000, _BASELINE_MS - 1), _ended(8999, _BASELINE_MS)]
+    generation = workflow_generation()
+
+    lifecycle_run_watch.observe(now=100.0, executor=_InlineExecutor())
+
+    assert len(jobs.list_calls) == 1
+    assert workflow_generation() == generation
+
+
+def test_an_own_run_is_bumped_once_never_twice(foreign: tuple[_ForeignJobs, list[int]]) -> None:
+    jobs, _ = foreign
+    own = SimpleNamespace(jobs=jobs)
+    lifecycle_run_watch.note_submitted(own, job_id=42, run_id=7, now=0.0)
+    jobs.runs = [_ended(7, _BASELINE_MS + 2_000)]
+    generation = workflow_generation()
+
+    lifecycle_run_watch.observe(now=100.0, executor=_InlineExecutor())
+
+    assert jobs.get_calls == [7], "the pending arm saw it finish"
+    assert len(jobs.list_calls) == 1, "and the foreign arm listed it"
+    assert workflow_generation() == generation + 1, "one bump, not two"
+
+
+def test_two_observes_within_a_minute_make_one_list_runs(foreign: tuple[_ForeignJobs, list[int]]) -> None:
+    jobs, _ = foreign
+    inline = _InlineExecutor()
+
+    lifecycle_run_watch.observe(now=100.0, executor=inline)
+    lifecycle_run_watch.observe(now=159.9, executor=inline)
+    assert len(jobs.list_calls) == 1
+
+    lifecycle_run_watch.observe(now=160.0, executor=inline)
+    assert len(jobs.list_calls) == 2
+
+
+def test_a_foreign_check_in_flight_is_never_doubled(foreign: tuple[_ForeignJobs, list[int]]) -> None:
+    jobs, _ = foreign
+    deferred = _DeferredExecutor()
+
+    lifecycle_run_watch.observe(now=100.0, executor=deferred)
+    lifecycle_run_watch.observe(now=500.0, executor=deferred)
+    assert len(deferred.jobs) == 1
+
+    deferred.run_all()
+    lifecycle_run_watch.observe(now=600.0, executor=deferred)
+    assert len(deferred.jobs) == 1 and len(jobs.list_calls) == 1
+
+
+def test_list_runs_raising_warns_without_a_bump_and_keeps_the_baseline(
+    foreign: tuple[_ForeignJobs, list[int]], caplog: pytest.LogCaptureFixture
+) -> None:
+    jobs, _ = foreign
+    jobs.error = RuntimeError("403 from https://adb-1.example/api/2.2/jobs/runs/list?token=abc")
+    jobs.runs = [_ended(9000, _BASELINE_MS + 1_000)]
+    generation = workflow_generation()
+
+    with caplog.at_level(logging.WARNING):
+        lifecycle_run_watch.observe(now=100.0, executor=_InlineExecutor())
+
+    assert workflow_generation() == generation
+    [event] = _events(caplog, "lifecycle_job_watch_error")
+    assert event.mip_extras == {"exc_type": "RuntimeError"}  # type: ignore[attr-defined]
+    assert "adb-1" not in caplog.text and "token" not in caplog.text
+
+    jobs.error = None
+    lifecycle_run_watch.observe(now=160.0, executor=_InlineExecutor())
+    assert workflow_generation() == generation + 1, "the unchanged baseline still sees the run"
+
+
+def test_unbound_means_no_observer_and_no_jobs_call(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    calls: list[str] = []
+
+    def _factory() -> Any:
+        calls.append("built")
+        return SimpleNamespace(jobs=_ForeignJobs())
+
+    monkeypatch.delenv("MIP_LIFECYCLE_SYNC_JOB_ID", raising=False)
+    lifecycle_run_watch._reset_for_tests(workspace_factory=_factory)
+    with caplog.at_level(logging.INFO):
+        lifecycle_run_watch.enable_foreign_run_watch(now_ms=_BASELINE_MS)
+
+    assert [r.mip_event for r in caplog.records if hasattr(r, "mip_event")].count("lifecycle_foreign_watch_unbound") == 1
+    lifecycle_run_watch.observe(now=100.0, executor=_InlineExecutor())
+    workflow_key("watch.test.unbound")
+    assert calls == []
+    assert lifecycle_run_watch.observe not in _registered_observers()
+
+
+def _registered_observers() -> list[Callable[[], None]]:
+    from backend.services import gold_cache
+
+    with gold_cache._GENERATION_OBSERVERS_LOCK:
+        return list(gold_cache._GENERATION_OBSERVERS)

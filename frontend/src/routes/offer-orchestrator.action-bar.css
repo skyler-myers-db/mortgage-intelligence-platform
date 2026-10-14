@@ -51,12 +51,16 @@
    the default 16px font size). Browser zoom shrinks the CSS viewport, so the
    query tracks zoom in px or rem alike; rem also tracks the user's default
    font-size setting, so a reader with larger default text gets the in-flow
-   bar sooner. At 1440x900 or 1366x768 the bar docks; at 200% zoom (1440x900
-   is then 720x450) the docked bar plus the sticky `.route-nav` covered the
-   whole `.main` scrollport, so the offer and the copy being certified could
-   not be read at any scroll position (WCAG 1.4.4 / 1.4.10). Below the query
-   the bar is in flow at the end of the page, as the gate was before it
-   docked, and reserves no scroll clearance. */
+   bar sooner. At a 1440x900 or 1366x768 viewport the bar docks; '1366x768'
+   is a viewport size here: a 1366x768 laptop's browser viewport is about
+   620-660 px tall, and the bar docks there only from 640 px. At 200% zoom
+   (1440x900 is then 720x450) the docked bar plus the sticky `.route-nav`
+   covered the whole `.main` scrollport, so the offer and the copy being
+   certified could not be read at any scroll position (WCAG 1.4.4 / 1.4.10).
+   Below the query the bar is in flow at the end of the page, as the gate was
+   before it docked, and reserves no scroll clearance. The route nav docks by
+   its own measured share (report 12.4 #5); whether this bar follows a share
+   policy is the Offer cluster's decision, so its rule is unchanged. */
 @media (min-height: 40rem) {
   .offer-action-bar {
     position: sticky;

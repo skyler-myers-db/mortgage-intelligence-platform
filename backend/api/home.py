@@ -12,12 +12,21 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from backend.schemas.home_attribution import HomeAttributionMeasure, HomeSummaryAttributionResponse
+from backend.schemas.home_attribution import (
+    HomeAttributionMeasure,
+    HomeAttributionRate,
+    HomeSummaryAttributionResponse,
+)
 from backend.schemas.home_summary import HomeSummaryResponse
 from backend.services.audit_store import resolve_actor
 from backend.services.databricks_sql import DatabricksSqlError
 from backend.services.error_sanitizer import safe_dependency_detail
-from backend.services.home_attribution import HomeAttributionService, get_home_attribution_service
+from backend.services.home_attribution import (
+    MEASURE_COLUMNS,
+    RATE_SERIES_ID,
+    HomeAttributionService,
+    get_home_attribution_service,
+)
 from backend.services.home_summary import HomeSummaryService, get_home_summary_service
 from backend.services.lakebase import LakebaseError
 from backend.services.resilience import DependencyDownError
@@ -32,6 +41,9 @@ ATTRIBUTION_MAX_LOOKBACK_DAYS = 400
 ATTRIBUTION_BASELINE_DETAIL = (
     "The baseline must be a date within the last 400 days and not in the future."
 )
+#: Display labels of the measures the funnel snapshot does not attribute per
+#: state yet (audit wow-ai-3): answered ``snapshotted=False`` with no read.
+NOT_SNAPSHOTTED_LABELS: dict[str, str] = {"competitor_lien": "competitor liens"}
 
 
 @router.get("/summary", response_model=HomeSummaryResponse)
@@ -76,6 +88,16 @@ def home_summary_attribution(
     today = datetime.now(UTC).date()
     if baseline > today or baseline < today - timedelta(days=ATTRIBUTION_MAX_LOOKBACK_DAYS):
         raise HTTPException(status_code=422, detail=ATTRIBUTION_BASELINE_DETAIL)
+    if measure not in MEASURE_COLUMNS:
+        # Data-driven: once gold.funnel_snapshot_daily carries the measure's
+        # column (MEASURE_COLUMNS gains it), this short-circuit stops firing.
+        return HomeSummaryAttributionResponse(
+            measure=measure,
+            label=NOT_SNAPSHOTTED_LABELS.get(measure, measure),
+            requested_baseline_date=baseline,
+            rate=HomeAttributionRate(series_id=RATE_SERIES_ID),
+            snapshotted=False,
+        )
     try:
         return service.attribution(measure, baseline)
     except DependencyDownError as exc:

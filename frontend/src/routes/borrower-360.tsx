@@ -32,6 +32,7 @@ import { queryKeys } from '../lib/queryKeys';
 import { useApp } from '../components/AppContext';
 import { LtvEquityValue } from './borrower-360.ltv-field';
 import { BorrowerQueuePager } from './borrower-360.pager';
+import { BorrowerTitle } from './borrower-360.title';
 import { useQueueContext } from '../lib/queueContext';
 
 // The proof drawer ships in the lazy Score anatomy chunk (wow-stage-2): the
@@ -41,6 +42,9 @@ import { useQueueContext } from '../lib/queueContext';
 const PROOF_DRAWER_CHUNK = lazyModule(() => import('../components/mortgage/ScoreAnatomy'));
 // A failed read's page (the error vocabulary with it) loads only on a failure.
 const FAILURE_PAGE = lazyModule(() => import('../components/mortgage/DossierFailure'));
+// The decision history (D-audit-reads-c2) is its own chunk, loaded once the
+// dossier has loaded; its audit-free read runs on that mount only.
+const DECISION_HISTORY_CHUNK = lazyModule(() => import('../components/mortgage/BorrowerDecisionHistory'));
 
 /**
  * Borrower 360 — per-borrower dossier composed in `.surface` blocks.
@@ -107,6 +111,8 @@ export default function Borrower360() {
     { enabled: Boolean(id), queryKey: queryKeys.borrower(id) },
   );
   const { module: failurePage, failed: failurePageFailed } = useLazyModule(FAILURE_PAGE, error !== null);
+  const decisionHistory = useLazyModule(DECISION_HISTORY_CHUNK, Boolean(b));
+  const DecisionHistory = decisionHistory.module?.BorrowerDecisionHistory;
   // wow-stage-3: the lifecycle row carries the audit id of the latest
   // decision; when it does, the hero offers the Decision receipt read back
   // from that row. A 403 (actor outside the sales team) simply hides it.
@@ -174,7 +180,7 @@ export default function Borrower360() {
     return (
       <PageShell
         eyebrow={warmingUp.label}
-        title={`Loading ${id}…`}
+        title={<BorrowerTitle id={id} />}
         lede={WAREHOUSE_WARMING_BODY}
       >
         {pager}
@@ -192,7 +198,7 @@ export default function Borrower360() {
     return failurePage ? (
       <failurePage.DossierFailure id={id} error={error} pager={pager} onRetry={manualRetry} />
     ) : (
-      <PageShell eyebrow="Borrower 360" title={`Borrower ${id}`} lede={`Borrower ${id} could not load.`}>
+      <PageShell eyebrow="Borrower 360" title={<BorrowerTitle id={id} />} lede={`Borrower ${id} could not load.`}>
         {pager}
         {failurePageFailed && (
           <div className="surface">
@@ -214,7 +220,7 @@ export default function Borrower360() {
     return (
       <PageShell
         eyebrow="Borrower 360"
-        title={<Skeleton width={280} height={30} rounded="md" />}
+        title={<BorrowerTitle id={id} />}
         lede={`Loading borrower ${id}…`}
       >
         {pager}
@@ -315,7 +321,7 @@ export default function Borrower360() {
   return (
     <PageShell
       eyebrow="Borrower 360"
-      title={`Borrower ${b.borrower_id}`}
+      title={<BorrowerTitle id={id} />}
       lede={`${b.city}, ${b.state} ${b.zip} · ${offerLabel}`}
       heroRight={
         <>
@@ -527,6 +533,8 @@ export default function Borrower360() {
               </div>
             </div>
           </Reveal>
+          {/* The column's last item, so its late arrival shifts nothing above it. */}
+          {DecisionHistory && <DecisionHistory borrowerId={b.borrower_id} variant="surface" />}
         </div>
 
         {/* Right column — Why-now + NBO + CTA */}

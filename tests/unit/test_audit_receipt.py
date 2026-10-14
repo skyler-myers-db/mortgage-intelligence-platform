@@ -41,6 +41,7 @@ from backend.services.audit_store_receipt import (
 )
 from backend.services.scoring import NBO_PRODUCT_LABELS
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.fixtures.reviewed_approval import reviewed_approval
 
 RECEIPT_ROUTE = "/api/audit/receipt/{audit_event_id}"
 RECEIPT_ROUTE_V1 = "/api/v1/audit/receipt/{audit_event_id}"
@@ -105,21 +106,20 @@ def audit_store() -> InMemoryAuditStore:
 
 
 def _approve(headers: dict[str, str], **overrides: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "borrower_id": "B-48291",
-        "offer_code": "refi_plus_heloc",
-        "channel": "email",
-        "draft_subject": _DRAFT_SUBJECT,
-        "draft_body": _DRAFT_BODY,
-        "rationale": "Approved after reviewing the governed draft.",
+    # W5c: a reviewed approval certifies a real draft (review_mode required).
+    payload = reviewed_approval(
+        client,
+        "B-48291",
+        headers=headers,
+        rationale="Approved after reviewing the governed draft.",
         **overrides,
-    }
+    )
     response = client.post("/api/outreach/approve", json=payload, headers=headers)
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["approved"] is True
     assert body["audit_event_id"]
-    return body
+    return {**body, "_payload": payload}
 
 
 def _reject(headers: dict[str, str]) -> dict[str, Any]:
@@ -353,8 +353,8 @@ def test_field_allowlist_is_closed_and_never_carries_the_copy() -> None:
     assert set(receipt) == EXPECTED_RECEIPT_FIELDS
     assert set(DecisionReceipt.model_fields) == EXPECTED_RECEIPT_FIELDS
     text = response.text
-    assert _DRAFT_BODY not in text
-    assert _DRAFT_SUBJECT not in text
+    assert approved["_payload"]["draft_body"] not in text
+    assert approved["_payload"]["draft_subject"] not in text
     assert "Approved after reviewing" not in text
     assert "lo01@summit.example" not in text, "other staff emails never cross the boundary"
     for key in ("draft_body", "draft_subject", "rationale", "assigned_to_email", "decision_inputs"):
@@ -570,8 +570,13 @@ def test_a_foreign_review_mode_or_a_bad_bulk_id_is_not_projected(
     assert "312-555-0100" not in receipt.model_dump_json()
 
 
-def test_a_legacy_approve_reads_back_as_undeclared() -> None:
+def test_a_legacy_approve_reads_back_as_undeclared(audit_store: InMemoryAuditStore) -> None:
+    # Since W5c no approve can write 'undeclared' (review_mode is required and
+    # the write-side policy refuses it), so the row an earlier client left is
+    # seeded directly; the receipt still reads it.
     approved = _approve(ALICE_WRITE)
+    (row,) = audit_store.list(limit=10, event_id=approved["audit_event_id"])
+    row.payload_json["review_mode"] = "undeclared"
 
     receipt = _receipt(approved["audit_event_id"], ALICE_READ).json()
 

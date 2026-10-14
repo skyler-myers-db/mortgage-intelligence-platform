@@ -225,7 +225,7 @@ describe('useAssignLeads request bodies', () => {
       await latest().log.mutateAsync({
         borrowerId: 'B-1',
         requestId: 'r-3',
-        payload: { lo_email: LO_A, outcome: 'connected', callback_at: null, notes: null },
+        payload: { lo_email: LO_A, outcome: 'connected', callback_at: null },
       });
     });
     const mutations = client.getMutationCache().getAll();
@@ -245,13 +245,13 @@ describe('useLogDisposition request body', () => {
       await latest().mutateAsync({
         borrowerId: 'B-AAAAAAAAAAAA1',
         requestId: 'req-disp-1',
-        payload: { lo_email: LO_A, outcome: 'called_left_voicemail', callback_at: null, notes: 'Left a voicemail' },
+        payload: { lo_email: LO_A, outcome: 'called_left_voicemail', callback_at: null },
       });
     });
     expect(posts()).toEqual([
       {
         path: '/api/leads/B-AAAAAAAAAAAA1/disposition',
-        body: { lo_email: LO_A, outcome: 'called_left_voicemail', callback_at: null, notes: 'Left a voicemail', request_id: 'req-disp-1' },
+        body: { lo_email: LO_A, outcome: 'called_left_voicemail', callback_at: null, request_id: 'req-disp-1' },
       },
     ]);
     expect(client.getMutationCache().getAll()[0].options.mutationKey).toEqual(salesMutationKeys.disposition);

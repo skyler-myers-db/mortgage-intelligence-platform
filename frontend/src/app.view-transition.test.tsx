@@ -5,7 +5,7 @@
 import { act, useEffect, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, useNavigate, type NavigateFunction } from 'react-router';
+import { MemoryRouter, useLocation, useNavigate, type Location, type NavigateFunction } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './app';
 
@@ -26,7 +26,7 @@ interface Recorded {
   props: Record<string, unknown>;
 }
 
-const recorder = vi.hoisted(() => ({ renders: [] as Recorded[], mounts: 0, nextInstance: 0 }));
+const recorder = vi.hoisted(() => ({ renders: [] as Recorded[], mounts: 0, nextInstance: 0, real: false }));
 
 vi.mock('react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react')>();
@@ -39,7 +39,10 @@ vi.mock('react', async (importOriginal) => {
     actual.useEffect(() => {
       recorder.mounts += 1;
     }, []);
-    return actual.createElement(actual.Fragment, null, children);
+    // `real`: React's own ViewTransition underneath, to count startViewTransition calls.
+    return recorder.real
+      ? actual.createElement(actual.ViewTransition, props, children)
+      : actual.createElement(actual.Fragment, null, children);
   }
   return { ...actual, ViewTransition: RecordingViewTransition };
 });
@@ -66,7 +69,10 @@ vi.mock('./lib/routePreloaders', async () => {
   return {
     HomeRoute: Ok('home'),
     AnalyticsRoute: Ok('analytics'),
-    LeadQueueRoute: Ok('lead-queue'),
+    // The keep-alive slot rides the route chunk: its preload answers the module with the slot.
+    LeadQueueRoute: Object.assign(Ok('lead-queue'), {
+      preload: () => import('./components/layout/LeadQueueKeepAlive').then((mod) => ({ LeadQueueKeepAlive: mod.default })),
+    }),
     GlossaryRoute: Ok('glossary'),
     AssetRoute: Ok('asset'),
     PortfolioBuilderRoute: Ok('portfolio'),
@@ -112,19 +118,23 @@ describe('App route View Transition boundary', () => {
   let root: Root;
   let container: HTMLElement;
   let navigate: NavigateFunction = () => undefined;
+  let current: Location | null = null;
   const originalMatchMedia = window.matchMedia;
 
   function NavigateProbe() {
     const routerNavigate = useNavigate();
+    const location = useLocation();
     useEffect(() => {
       navigate = routerNavigate;
-    }, [routerNavigate]);
+      current = location;
+    }, [routerNavigate, location]);
     return null;
   }
 
   beforeEach(() => {
     recorder.renders = [];
     recorder.mounts = 0;
+    recorder.real = false;
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -139,6 +149,10 @@ describe('App route View Transition boundary', () => {
   async function flush(): Promise<void> {
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+    // The Lead Queue keep-alive slot is a lazy module (routes/lead-queue.keepAlive).
+    await act(async () => {
+      await vi.dynamicImportSettled();
     });
   }
 
@@ -156,9 +170,9 @@ describe('App route View Transition boundary', () => {
     await flush();
   }
 
-  async function go(to: string): Promise<void> {
+  async function go(to: string | number): Promise<void> {
     await act(async () => {
-      void navigate(to);
+      void (typeof to === 'number' ? navigate(to) : navigate(to));
     });
     await flush();
   }
@@ -277,5 +291,123 @@ describe('App route View Transition boundary', () => {
 
     await go('/glossary');
     expect(recorder.mounts, 'leaving the page still re-keys').toBe(mounted + 1);
+  });
+
+  describe('the Lead Queue keep-alive slot (W5c runtime-08)', () => {
+    const DOSSIER = '/borrower-360/B-0TESTBORROWER0';
+    const queueNode = () => Array.from(container.querySelectorAll('[data-testid="route-ok"]'))
+      .find((node) => node.textContent === 'lead-queue') ?? null;
+    const paths = () => markers().map((node) => node.getAttribute('data-route-path'));
+    const hidden = (node: Element | null) =>
+      node?.closest('[style*="display: none"]') != null;
+
+    it('hides the queue on a dossier and reveals the same node on Back, with one marker throughout', async () => {
+      stubReducedMotion(false);
+      await renderAt('/lead-queue?state=IL&row=B-0TESTBORROWER0');
+      const queue = queueNode();
+      expect(queue).not.toBeNull();
+      expect(paths()).toEqual(['/lead-queue']);
+
+      await go(DOSSIER);
+      expect(queueNode(), 'hidden under Activity, not unmounted').toBe(queue);
+      expect(hidden(queue)).toBe(true);
+      // The hidden wrapper is neither a marker nor a `.route-transition` (one per screen).
+      expect(queue?.parentElement?.hasAttribute('data-route-path'), 'the hidden slot names no route').toBe(false);
+      expect(queue?.parentElement?.classList.contains('route-transition')).toBe(false);
+      expect(container.querySelectorAll('#main-content .route-transition')).toHaveLength(1);
+      expect(paths()).toEqual([DOSSIER]);
+
+      await go(-1);
+      expect(queueNode()).toBe(queue);
+      expect(hidden(queue)).toBe(false);
+      expect(paths()).toEqual(['/lead-queue']);
+      expect(current?.search).toBe('?state=IL&row=B-0TESTBORROWER0');
+    });
+
+    it('reveals the kept queue for the bare Leads link and puts its filters back in the URL', async () => {
+      stubReducedMotion(false);
+      await renderAt('/lead-queue?state=IL');
+      const queue = queueNode();
+      await go(DOSSIER);
+      await go('/lead-queue');
+      expect(queueNode()).toBe(queue);
+      expect(hidden(queue)).toBe(false);
+      expect(current?.pathname).toBe('/lead-queue');
+      expect(current?.search, 'the bare link is replaced with the kept view').toBe('?state=IL');
+      expect(paths()).toEqual(['/lead-queue']);
+    });
+
+    it('a return differing only in ?row= is the kept queue; other filters or another page are not', async () => {
+      stubReducedMotion(false);
+      await renderAt('/lead-queue?state=IL&row=B-0TESTBORROWER0');
+      const queue = queueNode();
+      await go(DOSSIER);
+      await go('/lead-queue?state=IL');
+      expect(queueNode(), 'row is not a filter').toBe(queue);
+
+      await go(DOSSIER);
+      await go('/lead-queue?state=TX');
+      const fresh = queueNode();
+      expect(fresh, 'other filters start a new queue').not.toBe(queue);
+      expect(fresh).not.toBeNull();
+
+      await go('/glossary');
+      expect(queueNode(), 'any other destination unmounts the slot').toBeNull();
+      expect(paths()).toEqual(['/glossary']);
+
+      await go(DOSSIER);
+      expect(queueNode(), 'a dossier reached from elsewhere keeps no queue').toBeNull();
+      expect(paths()).toEqual([DOSSIER]);
+      await go('/lead-queue?state=TX');
+      expect(queueNode(), 'the next visit is a fresh queue').not.toBe(fresh);
+      expect(paths()).toEqual(['/lead-queue']);
+    });
+
+    it('starts one View Transition per navigation into, out of and back to the slot', async () => {
+      stubReducedMotion(false);
+      recorder.real = true;
+      const original = (document as unknown as { startViewTransition?: unknown }).startViewTransition;
+      const calls: string[] = [];
+      // happy-dom has no FontFaceSet or getAnimations; React reads both around the update.
+      Object.defineProperty(document, 'fonts', {
+        configurable: true,
+        value: { status: 'loaded', ready: Promise.resolve() },
+      });
+      Object.defineProperty(document.documentElement, 'getAnimations', { configurable: true, value: () => [] });
+      Object.defineProperty(document, 'startViewTransition', {
+        configurable: true,
+        writable: true,
+        value: (arg: { update: () => void } | (() => void)) => {
+          calls.push(current?.pathname ?? '');
+          const update = typeof arg === 'function' ? arg : arg.update;
+          const done = Promise.resolve().then(update);
+          return { ready: done, finished: done, updateCallbackDone: done, skipTransition: () => undefined };
+        },
+      });
+      try {
+        await renderAt('/glossary');
+        const cold = calls.length;
+        await go('/lead-queue?state=IL');
+        expect(calls.length - cold, 'glossary -> queue').toBe(1);
+        const queue = queueNode();
+        expect(paths()).toEqual(['/lead-queue']);
+        await go('/lead-queue?state=TX');
+        expect(calls.length - cold, 'a filter change animates nothing').toBe(1);
+        await go(DOSSIER);
+        expect(calls.length - cold, 'queue -> dossier (the queue hides)').toBe(2);
+        expect(hidden(queue)).toBe(true);
+        expect(paths()).toEqual([DOSSIER]);
+        await go('/lead-queue');
+        expect(calls.length - cold, 'dossier -> kept queue (a reveal), its URL replace adds none').toBe(3);
+        expect(current?.search).toBe('?state=TX');
+        expect(queueNode()).toBe(queue);
+        expect(hidden(queue)).toBe(false);
+        expect(paths()).toEqual(['/lead-queue']);
+      } finally {
+        Object.defineProperty(document, 'startViewTransition', { configurable: true, writable: true, value: original });
+        Reflect.deleteProperty(document, 'fonts');
+        Reflect.deleteProperty(document.documentElement, 'getAnimations');
+      }
+    });
   });
 });

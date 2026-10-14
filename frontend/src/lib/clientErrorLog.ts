@@ -4,6 +4,7 @@ import { resolveRouteMeta } from './routeMeta';
 import {
   CLIENT_ERROR_BOUNDARIES,
   CLIENT_ERROR_NAMES,
+  getCommittedRouteTemplate,
   queueClientError,
   type ClientErrorBoundary,
   type ClientErrorName,
@@ -26,7 +27,10 @@ import {
  *     mapped onto a closed list (anything else is `Other`);
  *   - never send a concrete pathname: `/borrower-360/B-...` carries a
  *     borrower id. Send the route registry's pattern (`/borrower-360/:id`,
- *     `/*` for a path the app does not serve).
+ *     `/*` for a path the app does not serve), read from the router's
+ *     COMMITTED location (lib/rumBridge), the one template spelling RUM
+ *     uses too: during a navigation the unsaved-changes guard holds, the URL
+ *     has moved but the page on screen has not.
  *
  * The backend RUM schema is closed to the same vocabularies
  * (backend/schemas/telemetry.py), so a message could not pass it anyway.
@@ -81,7 +85,8 @@ function boundaryIdOf(instance: unknown): string | null {
 
 function currentRouteTemplate(): string {
   if (typeof window === 'undefined') return '/*';
-  return resolveRouteMeta(window.location.pathname).pattern;
+  // window.location only before main.tsx registers the router.
+  return getCommittedRouteTemplate() ?? resolveRouteMeta(window.location.pathname).pattern;
 }
 
 /**

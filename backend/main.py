@@ -28,12 +28,14 @@ from backend.config.settings import (
     looks_like_databricks_app_deploy,
     settings,
 )
+from backend.services import lifecycle_run_watch, rum_rollup
 from backend.services.backpressure import BackpressureController, BackpressureMiddleware
 from backend.services.campaign_treatment_runtime import (
     CAMPAIGN_TREATMENT_RUNTIME_MARKER_ENV,
     campaign_treatment_runtime_enabled,
 )
 from backend.services.genie_place_dimension import warm_governed_place_dimension
+from backend.services.genie_refusal_text_retention import refusal_text_purge_loop
 from backend.services.health_probes import prime_warehouse_state_client
 from backend.services.keep_warm import log_startup_policy as _keep_warm_policy
 from backend.services.observability import (
@@ -282,6 +284,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """
     configure_default_thread_limiter(settings.mip_anyio_thread_tokens)  # delivery-09
     rewarm_task: asyncio.Task[None] | None = None
+    purge_task: asyncio.Task[None] | None = None  # D-audit-reads-d hourly text purge
     # Databricks Apps deployment invariant: log the treatment-runtime marker
     # state at boot. The write gate itself is enforced per-request in
     # backend.services.campaign_treatment_runtime (outside any
@@ -315,6 +318,8 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         _warm_lakebase()
         _warm_hot_lead_cache()
         warm_governed_place_dimension()
+        purge_task = asyncio.create_task(refusal_text_purge_loop())
+        lifecycle_run_watch.enable_foreign_run_watch()  # delivery-06: runs this process did not submit
         if _keep_warm_policy() == "scheduled":
             rewarm_task = asyncio.create_task(
                 _lead_cache_rewarm_loop(settings.mip_leads_warm_interval_s)
@@ -322,10 +327,15 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await asyncio.to_thread(rum_rollup.flush_on_shutdown)  # D-platform-process-d2
         if rewarm_task is not None:
             rewarm_task.cancel()
             with suppress(asyncio.CancelledError):
                 await rewarm_task
+        if purge_task is not None:
+            purge_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await purge_task
 
 
 app = FastAPI(

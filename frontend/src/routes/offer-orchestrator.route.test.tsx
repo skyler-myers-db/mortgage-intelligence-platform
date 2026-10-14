@@ -40,6 +40,8 @@ const appMocks = vi.hoisted(() => ({
   actorEmail: 'approver.one@summit.example' as string | null,
 }));
 
+// The audit-free decision history (D-audit-reads-c2) stays pending: this suite counts its own reads.
+vi.mock('../lib/apiClients/borrowerDecisions', () => ({ borrowerDecisionsQuery: (id: string) => ({ queryKey: ['mip', 'borrower', id, 'decisions'], queryFn: () => new Promise(() => undefined) }) }));
 vi.mock('../lib/api', () => {
   // Same constructor shape as the real ApiError (message, { path, status }).
   class ApiError extends Error {
@@ -486,6 +488,7 @@ describe('OfferOrchestrator route behavior', () => {
     await waitUntil(() => [...container.querySelectorAll('button')].some(
       (candidate) => candidate.textContent?.trim() === 'Confirm reject',
     ));
+    act(() => { const reason = container.querySelector<HTMLSelectElement>('[data-testid="offer-action-bar"] form select')!; reason.value = 'low_intent'; reason.dispatchEvent(new Event('change', { bubbles: true })); });
     act(() => button('Confirm reject').click());
 
     await waitUntil(() => apiMocks.reject.mock.calls.length === 1);
@@ -563,6 +566,7 @@ describe('OfferOrchestrator route behavior', () => {
     await waitUntil(() => [...container.querySelectorAll('button')].some(
       (candidate) => candidate.textContent?.trim() === 'Confirm reject',
     ));
+    act(() => { const reason = container.querySelector<HTMLSelectElement>('[data-testid="offer-action-bar"] form select')!; reason.value = 'low_intent'; reason.dispatchEvent(new Event('change', { bubbles: true })); });
     act(() => button('Confirm reject').click());
 
     await waitUntil(() => container.querySelector('[data-testid="decision-receipt"]') !== null);
@@ -757,6 +761,7 @@ describe('OfferOrchestrator route behavior', () => {
     await waitUntil(() => [...container.querySelectorAll('button')].some(
       (candidate) => candidate.textContent?.trim() === 'Confirm reject',
     ));
+    act(() => { const reason = container.querySelector<HTMLSelectElement>('[data-testid="offer-action-bar"] form select')!; reason.value = 'low_intent'; reason.dispatchEvent(new Event('change', { bubbles: true })); });
     act(() => button('Confirm reject').click());
     await waitUntil(() => container.querySelector('[role="alert"]')?.textContent?.includes(message) === true);
     expect(appMocks.setApproval).not.toHaveBeenCalled();

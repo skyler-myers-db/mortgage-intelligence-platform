@@ -5,6 +5,9 @@ Routers import from this package (not from ``.protocols`` /
 small and the Slice-4 swap to Databricks-backed implementations is a
 single-file edit in ``.factory``.
 """
+from backend.services.repositories.databricks_segment_combinations import (
+    SegmentCombinationContractError,
+)
 from backend.services.repositories.factory import (
     get_analytics_repository,
     get_borrower_repository,
@@ -45,6 +48,7 @@ __all__ = [
     "PortfolioRepository",
     "RateSensitivityRepository",
     "RateWindowRepository",
+    "SegmentCombinationContractError",
     "SegmentCombinationRepository",
     "SegmentRepository",
     "get_analytics_repository",

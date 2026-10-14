@@ -22,7 +22,7 @@ import { densestZips } from './USChoroplethMap.utils';
 import type { MapHoverStage } from './useMapHover';
 import { formatCount } from '../../lib/formatters';
 
-interface USChoroplethMapZipLevelProps {
+export interface USChoroplethMapZipLevelProps {
   /** Display name for the drilled state, used in copy and aria labels. */
   drillStateName: string;
   /** ZIP rollups for the drilled state, keyed by ZIP. */
@@ -49,7 +49,7 @@ interface USChoroplethMapZipLevelProps {
 }
 
 /** A ZIP with borrowers in the selection (never the fill value). */
-const zipPopulated = (rollup: ZipRollup) => (rollup.addressable_borrowers ?? 0) > 0;
+export const zipPopulated = (rollup: ZipRollup) => (rollup.addressable_borrowers ?? 0) > 0;
 
 export function USChoroplethMapZipLevel({
   drillStateName,

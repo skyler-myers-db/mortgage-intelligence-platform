@@ -92,14 +92,34 @@ describe('Borrower 360 failure states', () => {
     state.borrower.error = outage();
     await mount();
 
-    expect(document.querySelector('h1')?.textContent).toBe(`Loading ${ID}…`);
-    expect(text()).toContain('This dossier reloads when the analytics warehouse reconnects.');
+    // The title names the borrower (the morph target, BorrowerTitle); the
+    // loading words live in the lede only.
+    expect(document.querySelector('h1')?.textContent).toBe(`Borrower ${ID}`);
+    expect(document.querySelector('h1 .page-title__id')?.textContent).toBe(ID);
+    expect(text()).toContain('Loading this dossier. It reloads when the analytics warehouse reconnects.');
     expect(text()).toContain('Reconnecting');
     expect(text()).not.toContain('Backend unavailable');
     expect(text()).not.toContain('SENTINEL');
     expect(document.querySelector('[role="alert"]')).toBeNull();
     act(() => retry()?.click());
     expect(state.borrower.manualRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('titles the warming-up and skeleton states "Borrower B-…", with the loading words in the lede only', async () => {
+    state.borrower.warmingUp = {
+      dependency: 'warehouse', label: 'Warehouse warming up', attempt: 2, maxAttempts: 6, correlationId: null,
+    };
+    await mount();
+    expect(document.querySelector('h1')?.textContent).toBe(`Borrower ${ID}`);
+    expect(document.querySelector('h1 .page-title__id')?.textContent).toBe(ID);
+    expect(document.querySelector('h1')?.textContent).not.toMatch(/Loading/);
+
+    act(() => root.unmount());
+    root = createRoot(document.getElementById('root') as HTMLElement);
+    state.borrower = { data: null, warmingUp: null, error: null, manualRetry: vi.fn() };
+    await mount();
+    expect(document.querySelector('h1')?.textContent).toBe(`Borrower ${ID}`);
+    expect(document.querySelector('.lede')?.textContent).toBe(`Loading borrower ${ID}…`);
   });
 
   it('names the same outage in the shared vocabulary when no banner does', async () => {

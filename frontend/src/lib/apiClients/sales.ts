@@ -97,7 +97,6 @@ export interface DispositionRequest {
   lo_email: string;
   outcome: CallDisposition['outcome'];
   callback_at?: string | null;
-  notes?: string | null;
   request_id: string;
 }
 
@@ -210,7 +209,6 @@ export const salesApi = {
       lo_email: string;
       outcome: CallDisposition['outcome'];
       callback_at?: string | null;
-      notes?: string | null;
     },
     signal?: AbortSignal,
     requestId: string = _newRequestId(),

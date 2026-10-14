@@ -483,7 +483,10 @@ jobs:
     # perf step now also runs the Lead Queue interaction budget (a 500-row
     # queue at 4x CPU). Measured on run 36639466070: setup 4 min, harness
     # 17 min, then the job hit the old 20-minute cap inside the perf step.
-    timeout-minutes: 30
+    # The harness (1,276+ tests on 4 workers, ~28 min by W5c) and the single-worker
+    # perf/interaction budgets share this job; 30 min cancelled run 38519015417
+    # mid-suite on 2026-10-14. W5d/W5e add more specs; shard before this is reached.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -665,7 +668,8 @@ jobs:
     #      at medium+ severity. `.bandit` silences test-only noise.
     #   3. pip-audit -- Python dependency CVE scan from requirements.txt.
     #   4. npm audit -- frontend dependency CVE scan at high+ severity,
-    #      including dev/build tooling because it runs in CI and build hosts.
+    #      including dev/build tooling because it runs in CI and build hosts,
+    #      and the operator-only tools/geo lock at the same level.
     # Each step has a single responsibility and runs independently so
     # CI output points directly at the failing rail.
     name: security (gitleaks + bandit + npm audit)
@@ -811,4 +815,11 @@ jobs:
         # devDependencies because Vite, Vitest, Playwright, and build
         # plugins execute in CI / bundle-production contexts.
         run: npm --prefix frontend audit --audit-level=high
+        continue-on-error: false
+
+      - name: npm audit (tools/geo, operator-only geometry build)
+        # The ZCTA geometry tool's own lock (W5c, audit dataviz-01). It never
+        # runs in CI or deploy, but an operator runs it, so its tree is
+        # audited at the same bar. A high finding fails; no silent ignore.
+        run: npm --prefix tools/geo audit --audit-level=high
         continue-on-error: false

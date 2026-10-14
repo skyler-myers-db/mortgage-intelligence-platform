@@ -51,6 +51,19 @@ Enforcement is two-layer, pinned by
    governed way to clean a stale tree by hand — it validates the exact
    bundle-files path shape and touches nothing but the two manifest files.
 
+`sync.exclude` also keeps two geometry trees out of the App source (W5c,
+audit `dataviz-01`), pinned by the same test:
+
+- **`frontend/src/geo/**`**: the committed per-state ZCTA TopoJSON sources.
+  The geometry reaches the App only as hashed `frontend/dist/assets/*.topo-*.json`
+  files with `.br`/`.gz` siblings, emitted by the `npm --prefix frontend run
+  build` step `scripts/deploy.sh` already runs (precompression included) and
+  served same-origin by `backend/services/static_assets.py`. Nothing is
+  fetched from the Census Bureau at deploy time or at runtime.
+- **`tools/geo/**`**: the operator-only geometry tool, with its own
+  `package.json` and lock. It never runs in CI or deploy, and a nested npm
+  manifest has no place in the App source tree.
+
 Two operational facts to know before assembling any ad-hoc App source tree
 (emergency recovery only — the command of record is `./scripts/deploy.sh`):
 
@@ -822,8 +835,9 @@ and governed-action HMAC key rotation, use
 ## Presenter mode (demo workspaces only)
 
 `MIP_PRESENTER_MODE` (default off) shows demo-only affordances to every user
-of a deployment; today that is the PROTOTYPE "Preview borrower view" on the
-Offer page, whose module is not even downloaded when the flag is off. It
+of a deployment: the PROTOTYPE "Preview borrower view" on the Offer page and
+the M1-M4 roadmap rail slots, neither of whose modules is downloaded when the
+flag is off. It
 gates no guard, approval, audit or data path, and it is never an
 authorization input. The deploy payload accepts `0`/`false`/`no`/`off`/empty
 (off: the variable is omitted) or `1`/`true`/`yes`/`on` (on: the App receives
@@ -832,6 +846,9 @@ the deploy, and a truthy value is refused for `-t prod`. At runtime an
 unparseable value reads as off instead of failing boot. Admin -> Deployment
 readiness and the admin health body (`presenter_mode`) show the current
 state.
+The deploy preflight parses the same values at step 0, before any bundle, UC
+or Lakebase mutation, so an unparseable value, or a truthy one with `-t prod`,
+exits 2 there instead of at App promotion.
 
 `MIP_PREVIEW_MIRROR` is a different flag: it gates the roadmap rows of the
 Admin capability panel (`backend/services/capabilities.py`), and it is not
@@ -884,6 +901,31 @@ Fail-safe: a plain `npm run build` without the preflight exports ships the
 product defaults and no mark, and the app also hides a mark that was built
 for a different lender than the one the session reports. The mark's hash
 (`MIP_LENDER_MARK_SHA256`) is derived by preflight, never set by an operator.
+
+## Browser telemetry (RUM) default
+
+Browser RUM is ON for every `./scripts/deploy.sh` deploy: the deploy payload
+sets `MIP_RUM_ENABLED=1` when `.env.local` does not set it
+(`tools/databricks/app_deploy_payload.py` `SAFE_RUNTIME_DEFAULTS`). The App
+stores only day-grain, identifier-free aggregates in Lakebase
+`mip_app.rum_daily` (created by `mip_lakebase_migrate` at deploy step 4b),
+and administrators read them in Administration -> Field performance. The
+envelope is in
+[security-and-compliance.md](security-and-compliance.md#browser-telemetry-rum).
+
+- Opt out with `MIP_RUM_ENABLED=0` in `.env.local` and redeploy; the value is
+  forwarded as-is.
+- Upgrade note: an existing `.env.local` that already carries
+  `MIP_RUM_ENABLED=0` (copied from the old `.env.example`) keeps RUM off, and
+  `deploy.sh` never rewrites it. Delete the line, or set it to `1`, to take
+  the new default.
+- A redeploy through the Databricks Apps UI Deploy button drops the operator
+  environment, so RUM is off (the code default) until the next `deploy.sh`
+  run. `GET /api/v1/admin/health` reports the effective state as
+  `browser_telemetry`.
+- A piecewise deploy that runs `mip_lakebase_migrate` by hand must stop
+  `mip-app` first: the migrate job fails closed while an App-role session is
+  live.
 
 ## Resources
 

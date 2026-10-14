@@ -30,6 +30,13 @@
   flex-direction: column;
   gap: var(--gap-grid);
 }
+/* The watchlist card's slot while its chunk loads (W5c): the same .surface
+   header and the one skeleton row the card's own loading state shows
+   (.watchlist-briefings__skeleton, which ships with the card's chunk). */
+.home-side__slot-skeleton {
+  block-size: calc(var(--sp-8) + var(--sp-2));
+  border-radius: var(--r-sm);
+}
 
 /* ============================================================
    HERO ACTIONS (deviation:home-fetched-at). The hero's right slot

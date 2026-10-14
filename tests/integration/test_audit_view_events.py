@@ -22,6 +22,7 @@ from backend.main import app
 from backend.services.audit_store import get_audit_store
 from backend.services.lakebase import get_lakebase_client
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.fixtures.reviewed_approval import reviewed_approval
 
 client = TestClient(app)
 
@@ -80,6 +81,10 @@ def test_list_leads_emits_view_leads_audit_row() -> None:
     assert e.subject_segment == "itm"
     assert "rendered_borrower_ids" in e.payload_json
     assert isinstance(e.payload_json["rendered_borrower_ids"], list)
+    # D-audit-reads-a (W5c): every served page is one page of a server view.
+    assert e.payload_json["view_id"] == r.headers["X-Lead-View-Id"]
+    assert len(e.payload_json["view_id"]) == 32
+    assert e.payload_json["page_index"] == 0
 
 
 def test_recommend_offer_emits_recommend_offer_audit_row() -> None:
@@ -124,16 +129,10 @@ def test_approve_outreach_writes_approvals_row_and_audit_event() -> None:
     lakebase = _installed_lakebase()
     lakebase.executes.clear()
 
-    r = client.post(
-        "/api/outreach/approve",
-        json={
-            "borrower_id": "B-48291",
-            "offer_code": "refi",
-            "actor": "anonymous",
-            "draft_subject": "Your mortgage review",
-            "draft_body": "Contact a loan officer to review available mortgage options. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
-        },
-    )
+    # W5c: a reviewed approval certifies a real draft (review_mode required).
+    body = reviewed_approval(client, "B-48291")
+    lakebase.executes.clear()
+    r = client.post("/api/outreach/approve", json=body)
     assert r.status_code == 200
 
     # Approvals row -- INSERT INTO mip_app.approvals with named params.
@@ -143,7 +142,7 @@ def test_approve_outreach_writes_approvals_row_and_audit_event() -> None:
     assert len(approval_inserts) == 1
     _sql, params = approval_inserts[0]
     assert params["borrower_id"] == "B-48291"
-    assert params["offer_code"] == "refi"
+    assert params["offer_code"] == body["offer_code"]
     assert params["action"] == "approve"
     assert params["actor_email"]  # resolved to default_actor or header
 
@@ -154,5 +153,6 @@ def test_approve_outreach_writes_approvals_row_and_audit_event() -> None:
     e = approves[0]
     assert e.entity_type == "approval"
     assert e.payload_json.get("borrower_id") == "B-48291"
-    assert e.payload_json.get("offer_code") == "refi"
+    assert e.payload_json.get("offer_code") == body["offer_code"]
+    assert e.payload_json.get("review_mode") == "individual"
     assert e.evidence_ids == ["ev-001", "ev-002", "ev-003"]

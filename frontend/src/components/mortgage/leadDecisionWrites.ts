@@ -69,6 +69,8 @@ export interface BulkRejectRow {
 export interface DecisionWriteDeps {
   leadsById: ReadonlyMap<string, LeadSummary>;
   campaignBinding: CampaignBinding | null;
+  /** The paged Lead Queue view every decision declares (D-audit-reads-a); null elsewhere. */
+  leadViewId: string | null;
   approve: (variables: ApproveLeadVariables) => Promise<ApproveResult>;
   reject: (variables: RejectLeadVariables) => Promise<RejectResult>;
   requestIds: IntentRequestIds;
@@ -140,6 +142,7 @@ export function approveWithReport(
     coveredOfferCodes: extras.coveredOfferCodes ?? null,
     signal,
     suppressInvalidation: extras.suppressInvalidation,
+    leadViewId: deps.leadViewId,
   }).then(
     (res): BulkRowReport => {
       if (!res.approved) {

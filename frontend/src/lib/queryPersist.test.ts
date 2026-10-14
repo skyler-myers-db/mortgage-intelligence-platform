@@ -124,6 +124,7 @@ describe('what may persist: default deny', () => {
     ['a borrower dossier', queryKeys.borrower('B-0OXOBYLW8MNCK')],
     ['borrower proof', queryKeys.borrowerProof('B-0OXOBYLW8MNCK')],
     ['borrower lifecycle', queryKeys.borrowerLifecycle('B-0OXOBYLW8MNCK')],
+    ['the borrower decision history', queryKeys.borrowerDecisions('B-0OXOBYLW8MNCK')],
     ['an offer snapshot', queryKeys.offerSnapshot('B-0OXOBYLW8MNCK', null)],
     ['an outreach draft', queryKeys.outreachDraft('B-0OXOBYLW8MNCK', 'email', null)],
     ['audit events', queryKeys.auditEvents([])],

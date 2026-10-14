@@ -107,11 +107,13 @@ describe('every referenced custom property resolves (css-04 / motion-04)', () =>
     '--dot-x', '--dot-y', '--facet-share', '--hover-x', '--hover-y', '--rule-x', '--tick-pos',
     // The Genie kit charts (dataviz-05): a bar's width and a point's position.
     '--bar-w', '--point-x', '--point-y',
+    // The measured route nav on `.main` (useRouteNavDock; registered with @property, so never unset).
+    '--route-nav-block',
   ];
   /** Read with a fallback on purpose: TSX sets them on some elements only. */
   const TSX_SET_WITH_FALLBACK = [
     '--bar-pct', '--chip-hue', '--filter-menu-space', '--genie-composer-block-size',
-    '--genie-route-nav-block-size', '--lead-table-fill-block', '--offer-action-bar-block-size',
+    '--lead-table-fill-block', '--offer-action-bar-block-size',
     '--offer-action-bar-genie-clearance', '--receipt-i', '--seg-color', '--tile-i', '--ribbon-i',
   ];
   const consumers = [{ file: 'design-system/components.css (partials)', css: components }, ...featureStylesheets()];

@@ -19,6 +19,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
+from backend.services import approval_request_create, approval_requests
+from backend.services.audit_store import AuditPIIError
 from backend.services.lakebase import get_lakebase_client
 from backend.services.repositories import get_lead_repository
 from tests.fixtures.approval_ledger_fake import FakeApprovalLedger
@@ -409,3 +411,60 @@ def test_the_canonical_v1_routes_serve_the_same_contract(client: TestClient) -> 
     assert created.status_code == 200
     listed = client.get("/api/v1/outreach/approval-requests", headers=REQUESTER)
     assert listed.json()["batches"][0]["batch_id"] == created.json()["batch_id"]
+
+
+# -- NB-1: phone-shaped masked ids and a refused audit payload ----------------
+
+PHONE_SHAPED = "B-5551234567XYZ"
+
+
+def test_a_phone_shaped_masked_id_is_requested_refused_and_withdrawn_never_a_500(
+    client: TestClient, ledger: FakeApprovalLedger, leads: _Leads
+) -> None:
+    leads.add(PHONE_SHAPED)
+    created = _create(client, [PHONE_SHAPED])
+    assert created.status_code == 200, created.text
+    assert ledger.audits[-1]["metadata"]["borrower_ids"] == [PHONE_SHAPED]
+
+    batch_id = created.json()["batch_id"]
+    withdrawn = client.post(f"{URL}/{batch_id}/withdraw", json={}, headers=REQUESTER)
+    assert withdrawn.status_code == 200, withdrawn.text
+    assert ledger.audits[-1]["event_type"] == "APPROVAL_REQUEST_WITHDRAWN"
+    assert ledger.audits[-1]["metadata"]["borrower_ids"] == [PHONE_SHAPED]
+
+    ledger.add_decision(PHONE_SHAPED, "reject")
+    refused = _create(client, [PHONE_SHAPED])
+    assert refused.status_code == 409, refused.text
+    assert ledger.audits[-1]["event_type"] == "APPROVAL_REQUEST_REFUSED"
+    assert ledger.audits[-1]["metadata"]["skipped_by_reason"] == {
+        "already_decided": [PHONE_SHAPED]
+    }
+
+
+def _raise_audit_pii(*_args: Any, **_kwargs: Any) -> Any:
+    raise AuditPIIError(["metadata.borrower_ids[0]"])
+
+
+@pytest.mark.parametrize("module", ["approval_request_create", "approval_requests"])
+def test_a_refused_audit_payload_is_a_fixed_unaudited_422_never_a_500(
+    client: TestClient, ledger: FakeApprovalLedger, monkeypatch: pytest.MonkeyPatch, module: str
+) -> None:
+    batch_id = _create(client, [OK_1]).json()["batch_id"]
+    audits_before = len(ledger.audits)
+    owner = {
+        "approval_request_create": approval_request_create,
+        "approval_requests": approval_requests,
+    }[module]
+    monkeypatch.setattr(owner, "write_audit_event_in_transaction", _raise_audit_pii)
+
+    if module == "approval_request_create":
+        # A request that would hold a borrower, and the zero-eligible refusal.
+        responses = [_create(client, [OK_2]), _create(client, [MISSING])]
+    else:
+        responses = [client.post(f"{URL}/{batch_id}/withdraw", json={}, headers=REQUESTER)]
+    for response in responses:
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"] == "The request could not be recorded."
+        assert "metadata" not in response.text and "borrower_ids" not in response.text
+    assert len(ledger.audits) == audits_before
+    assert ledger.items[(batch_id, OK_1)]["status"] == "open"

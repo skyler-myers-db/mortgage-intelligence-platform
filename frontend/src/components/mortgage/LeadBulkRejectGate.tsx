@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type RefObject } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { LeadSummary } from '../../types';
 import { formatCount } from '../../lib/formatters';
 import { Button, Chip } from '../Primitives';
@@ -21,6 +21,9 @@ import type { RejectReasonCode } from './LeadTable.types';
  *   - Counts by offer and by state say what the run would reject.
  *   - Confirm stays aria-disabled until both are present; activating it
  *     then moves focus to the first missing field and sends nothing.
+ *   - The gate takes focus on Reason when it mounts (a layout effect, W5c
+ *     integrator C4): the opener's requestAnimationFrame focus raced the
+ *     lazy gate's first paint and could land on nothing.
  *
  * Prototype: design_files/Module 0 Prototype.html:1501-1502 (the toolbar's
  * Reject beside Approve) and :2187 (batch reject); the prototype shows no
@@ -54,6 +57,11 @@ export function LeadBulkRejectGate({ leads, onReject, reasonRef, running }: Lead
       ? 'Choose a reason before rejecting.'
       : noteMissing ? 'Write a shared note before rejecting.' : null;
   const count = leads.length;
+
+  // Opened = mounted (LeadTableBulkActions renders the gate only while open).
+  useLayoutEffect(() => {
+    selectRef.current?.focus();
+  }, [selectRef]);
 
   function submit() {
     if (running) return;

@@ -30,8 +30,15 @@ const retryMocks = vi.hoisted(() => ({
     },
     warmingUp: null,
     error: null,
+    isFetching: false,
+    dataUpdatedAt: null,
+    errorUpdatedAt: null,
     manualRetry: vi.fn(),
     isPlaceholderData: false,
+    paging: {
+      viewId: null, pagesLoaded: 1, hasMore: false, unavailable: false, capped: false,
+      fetchingNext: false, nextError: false, queueUpdated: false, loadNext: vi.fn(), retryNext: vi.fn(),
+    },
   },
 }));
 
@@ -39,7 +46,7 @@ const apiMocks = vi.hoisted(() => ({
   salesTeam: vi.fn(),
   portfolioPreview: vi.fn(),
   adminRules: vi.fn(),
-  zipRollups: vi.fn(),
+  zipRollupsWithFreshness: vi.fn(),
 }));
 
 /** The props the route last handed the (stubbed) LeadTable. */
@@ -51,8 +58,11 @@ vi.mock('../components/AppContext', () => ({
   useApp: () => ({ canAccessAdmin: appMocks.canAccessAdmin }),
 }));
 
-vi.mock('../lib/useWarmingUpRetry', () => ({
-  useWarmingUpRetry: () => retryMocks.state,
+// The paged view (lead-queue.pages.ts) is lead-queue.pages.test's; here it
+// answers whatever a case sets, so no request leaves the test.
+vi.mock('./lead-queue.pages', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lead-queue.pages')>()),
+  useLeadQueuePages: () => retryMocks.state,
 }));
 
 vi.mock('../lib/configOptionsQuery', () => {
@@ -244,7 +254,7 @@ describe('LeadQueue filter state', () => {
     apiMocks.salesTeam.mockResolvedValue([]);
     apiMocks.portfolioPreview.mockResolvedValue({ data_refreshed_at: null });
     apiMocks.adminRules.mockResolvedValue({ offer_rules_version: null });
-    apiMocks.zipRollups.mockResolvedValue({ rollups: [] });
+    apiMocks.zipRollupsWithFreshness.mockResolvedValue({ data: { rollups: [] }, lastGoodAt: null });
     tableProps.current = null;
   });
 
@@ -338,9 +348,9 @@ describe('LeadQueue filter state', () => {
    * county had no ZIP-level coverage. Only a rollup that answered may say so.
    */
   it('says a county has no ZIP-level coverage only when its rollup answered empty', async () => {
-    apiMocks.zipRollups.mockResolvedValue({ rollups: [] });
+    apiMocks.zipRollupsWithFreshness.mockResolvedValue({ data: { rollups: [] }, lastGoodAt: null });
     await mountAt('/lead-queue?county=17031');
-    expect(apiMocks.zipRollups).toHaveBeenCalledWith(
+    expect(apiMocks.zipRollupsWithFreshness).toHaveBeenCalledWith(
       { countyFips: '17031' }, expect.any(AbortSignal), null, 'any', undefined,
     );
     expect(document.body.textContent).toContain(
@@ -349,16 +359,16 @@ describe('LeadQueue filter state', () => {
   });
 
   it('says no leads match when the county rollup has ZIPs', async () => {
-    apiMocks.zipRollups.mockResolvedValue({ rollups: [{ zip: '60617' }, { zip: '60628' }] });
+    apiMocks.zipRollupsWithFreshness.mockResolvedValue({ data: { rollups: [{ zip: '60617' }, { zip: '60628' }] }, lastGoodAt: null });
     await mountAt('/lead-queue?county=17031');
     expect(document.body.textContent).toContain('No leads match this filter.');
     expect(document.body.textContent).not.toContain('No ZIP-level rollup');
   });
 
   it('never turns a failed county rollup into a coverage claim', async () => {
-    apiMocks.zipRollups.mockRejectedValue(new Error('warehouse query failed'));
+    apiMocks.zipRollupsWithFreshness.mockRejectedValue(new Error('warehouse query failed'));
     await mountAt('/lead-queue?county=17031');
-    expect(apiMocks.zipRollups).toHaveBeenCalledTimes(1);
+    expect(apiMocks.zipRollupsWithFreshness).toHaveBeenCalledTimes(1);
     expect(document.body.textContent).not.toContain('Resolving county ZIPs');
     expect(document.body.textContent).toContain('No leads match this filter.');
     expect(document.body.textContent).not.toContain('No ZIP-level rollup');
@@ -366,7 +376,7 @@ describe('LeadQueue filter state', () => {
 
   it('does not read county rollups without a county filter', async () => {
     await mountAt('/lead-queue?state=IL');
-    expect(apiMocks.zipRollups).not.toHaveBeenCalled();
+    expect(apiMocks.zipRollupsWithFreshness).not.toHaveBeenCalled();
   });
 
   it('shows Genie cohort multi-value route filters in dropdown controls', async () => {

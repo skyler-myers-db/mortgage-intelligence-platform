@@ -12,7 +12,8 @@ import { featureStylesheets } from '../test/featureCss';
  *
  *   - Focus Not Obscured (audit a11y-v2, WCAG 2.2 SC 2.4.11, technique
  *     C43): what `.main` holds outside the nav clears the sticky route nav
- *     (scroll-margin) inside the same 40rem condition that docks it, except
+ *     (scroll-margin) by its measured block while it is docked (report
+ *     12.4 #5: `.route-nav[data-docked]`, useRouteNavDock), except
  *     the ranked-borrower table, whose focus targets carry their own
  *     scroll-margin at the block start (the larger of the nav's clearance
  *     and the sticky thead's), and whose scroller clears the pinned
@@ -141,28 +142,56 @@ describe('focus clearance (a11y-v2)', () => {
     expect(block(components(), '.tbl-wrap')).not.toMatch(/scroll-padding|--tbl-/);
   });
 
-  it('everything in .main outside the nav clears the sticky route nav, only inside the 40rem condition that docks it', () => {
+  it('everything in .main outside the nav clears the docked route nav by its measured block, under no media query', () => {
     const css = components();
-    // `.main` carries the clearance (never while /ask-genie's Ask tab clears
-    // the nav itself, below); a universal rule with zero specificity (:where,
-    // so a route's own scroll-margin still wins) reads it.
-    const media = new RegExp(String.raw`@media\s*\(min-height:\s*40rem\)\s*\{\s*`
-      + String.raw`\.main:has\(\.route-nav\):not\(:has\(${ASK_TAB_SHORT}\)\)\s*\{([^}]*)\}\s*`
-      + String.raw`:where\(\.main :not\(\.route-nav \*, \.tbl-wrap \*, \.filter-menu \*, \.lead-approve-dialog \*\)\)\s*\{([^}]*)\}`
-      + String.raw`\s*\}`).exec(css);
-    expect(media, 'both rules sit inside @media (min-height: 40rem)').not.toBeNull();
-    // The one-line nav (--sp-3 padding at each end, a --sp-8 link, the 1px border), plus the ring.
-    expect(media![1]).toMatch(new RegExp(
-      String.raw`^\s*--nav-clear:\s*calc\(\s*var\(--sp-3\)\s*\*\s*2\s*\+\s*var\(--sp-8\)\s*\+\s*1px\s*${RING}\s*\);\s*$`,
-    ));
-    // No fallback: a `.main` without the clearance leaves the margin at its initial 0.
-    expect(media![2]).toMatch(/^\s*scroll-margin-block-start:\s*var\(--nav-clear\);\s*$/);
-    // The sticky nav is docked by the same condition (01-app-shell.css).
-    expect(css).toMatch(/@media\s*\(min-height:\s*40rem\)\s*\{\s*\.route-nav\s*\{[^}]*position:\s*sticky;/);
+    // `.main` carries the clearance only while its nav (a direct child) is
+    // docked, never while /ask-genie's Ask tab clears the nav itself (below);
+    // a universal rule with zero specificity (:where, so a route's own
+    // scroll-margin still wins) reads it.
+    const rules = new RegExp(String.raw`(?:^|\})\s*`
+      + String.raw`\.main:has\(> \.route-nav\[data-docked\]\):not\(:has\(${ASK_TAB_SHORT}\)\)\s*\{([^}]*)\}\s*`
+      + String.raw`:where\(\.main :not\(([^)]*)\)\)\s*\{([^}]*)\}`).exec(css);
+    expect(rules, 'both rules, top level and adjacent').not.toBeNull();
+    // The measured nav block (useRouteNavDock's --route-nav-block), plus the ring.
+    expect(rules![1]).toMatch(new RegExp(String.raw`^\s*--nav-clear:\s*calc\(\s*var\(--route-nav-block\)\s*${RING}\s*\);\s*$`));
+    expect(rules![2].split(',').map((part) => part.trim())).toEqual(
+      expect.arrayContaining(['.route-nav *', '.tbl-wrap *', '.filter-menu *', '.lead-approve-dialog *']),
+    );
+    // No fallback: a `.main` without the clearance leaves the margin at the registered 0px.
+    expect(rules![3]).toMatch(/^\s*scroll-margin-block-start:\s*var\(--nav-clear\);\s*$/);
+    // No 40rem height query docks the nav or wraps the clearance any more.
+    expect(focusClearancePartial()).not.toMatch(/@media/);
+    expect(css).not.toMatch(/@media\s*\(min-height:\s*40rem\)\s*\{\s*(?:\.route-nav|\.main:has\(|:where\(\.main)/);
     // Never scroll-padding on `.main` for the nav: it shrank the view for the
     // nav's own links, so a click on one scrolled `.main` to its top first.
-    expect(css).not.toMatch(/\.main:has\(\.route-nav\)\s*\{[^}]*scroll-padding/);
-    expect(css.match(/\.main:has\(\.route-nav\)/g)).toHaveLength(1);
+    expect(css).not.toMatch(/\.main:has\(> \.route-nav[^{]*\{[^}]*scroll-padding/);
+    expect(css.match(/\.main:has\(> \.route-nav\[data-docked\]\)/g)).toHaveLength(1);
+  });
+
+  it('registers the measured block NON-inherited and the clearance inherited, both <length> at 0px', () => {
+    const css = components();
+    const registered = /@property --route-nav-block\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(registered).toMatch(/syntax:\s*'<length>';/);
+    expect(registered).toMatch(/inherits:\s*false;/);
+    expect(registered).toMatch(/initial-value:\s*0px;/);
+    const clear = /@property --nav-clear\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(clear).toMatch(/syntax:\s*'<length>';/);
+    expect(clear).toMatch(/inherits:\s*true;/);
+    expect(clear).toMatch(/initial-value:\s*0px;/);
+  });
+
+  it('sticks the Administration section nav at the route nav\'s measured block while docked, at .main\'s top while not', () => {
+    const sheet = featureStylesheets().find((entry) => entry.file === 'src/components/admin/AdminSectionNav.css');
+    expect(sheet, 'AdminSectionNav.css is a feature stylesheet').toBeDefined();
+    // Sticky under its own (unchanged) 40rem query; the offset is the route nav's.
+    const media = /@media \(min-height: 40rem\)\s*\{([\s\S]*)\}\s*$/.exec(stripComments(sheet!.css))?.[1] ?? '';
+    const nav = block(media, '.admin-section-nav');
+    expect(nav).toMatch(/position:\s*sticky;/);
+    expect(nav).toMatch(new RegExp(
+      String.raw`inset-block-start:\s*max\(\s*0px,\s*calc\(\s*var\(--nav-clear\)\s*-\s*var\(--focus-ring-width\)\s*-\s*var\(--focus-ring-offset\)\s*\)\s*\);`,
+    ));
+    // No hand-written one-line nav (the 57px expression) is left to drift.
+    expect(stripComments(sheet!.css)).not.toMatch(/var\(--sp-3\)\s*\*\s*2\s*\+\s*var\(--sp-8\)/);
   });
 
   it('keeps every :has() on `.main` itself, never in an ancestor compound', () => {
@@ -200,6 +229,12 @@ describe('focus clearance (a11y-v2)', () => {
     // FilterSelect / MultiFilterSelect scroll their active option into view
     // on hover: the margin rolled a scrolled menu back under the pointer.
     expect(focusClearancePartial()).toMatch(/:where\(\.main :not\([^)]*\.filter-menu \*[^)]*\)\)/);
+  });
+
+  it('leaves the map\'s ZIP tile list, a roving-focus scroller of its own, out of the nav\'s margin', () => {
+    // Measured, not assumed (shell-nav-followups.fixture.spec.ts): the margin
+    // over-scrolled the list when a tile already in its view took focus.
+    expect(focusClearancePartial()).toMatch(/:where\(\.main :not\([^)]*\.zip-tiles \*[^)]*\)\)/);
   });
 
   // The rendered proofs that the two conditions agree (the Ask tab clears the

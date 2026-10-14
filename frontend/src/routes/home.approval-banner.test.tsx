@@ -47,6 +47,9 @@ vi.mock('../components/AppContext', () => ({
 vi.mock('../components/mortgage/USChoroplethMap', () => ({ USChoroplethMap: () => null }));
 vi.mock('../components/mortgage/PinnedInsights', () => ({ PinnedInsights: () => null }));
 vi.mock('../components/mortgage/LastLoginSummary', () => ({ LastLoginSummary: () => null }));
+// The briefings card makes its own audit-free read; unmocked here it fails on the
+// network and races this file's 'no second alert' assertions (CI flake 2026-10-14).
+vi.mock('../components/mortgage/WatchlistBriefings', () => ({ default: () => null, WATCHLIST_BRIEFING_ROWS: 4 }));
 
 import Home from './home';
 import {

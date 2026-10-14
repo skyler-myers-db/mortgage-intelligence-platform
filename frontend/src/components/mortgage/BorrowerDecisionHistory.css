@@ -1,0 +1,21 @@
+/* ============================================================
+   BORROWER DECISION HISTORY (audit flow-04 phase 2)
+   Lazy colocated sheet: it ships with the history chunk only.
+   ============================================================ */
+
+/* deviation:borrower-decision-history — the prototype's .audit-panel is a
+   260px scroller (design_files/Module 0 Prototype.html:1511-1522; here
+   09-console-and-layout.css). The history lists in flow instead, so it is
+   never a scroll region without a focus stop (axe scrollable-region-
+   focusable); rows after the eighth sit behind "Show all N decisions". */
+.audit-panel.audit-panel--flow {
+  max-height: none;
+  overflow: visible;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.audit-panel--flow .audit:last-child { border-bottom: 0; }
+
+/* A receipt opened from a row spans the row's grid under it. */
+.audit__receipt { grid-column: 1 / -1; }

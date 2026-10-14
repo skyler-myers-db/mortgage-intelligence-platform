@@ -62,7 +62,7 @@ export function QueuePager({ borrowerId, queue, pathFor, hotkeys = true, disable
 
   if (!queue || !position) return null;
   return (
-    <nav ref={navRef} className="queue-pager" aria-label="Lead queue position">
+    <nav ref={navRef} className="queue-pager" data-rum-target="pager" aria-label="Lead queue position">
       <span className="queue-pager__position">
         <span className="mono num">{formatCount(position.position)}</span>
         {' of '}

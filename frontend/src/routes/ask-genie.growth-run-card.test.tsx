@@ -2,9 +2,12 @@
  * @vitest-environment happy-dom
  */
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { auditEventHref } from '../lib/auditLinks';
 import type { GrowthAgentRunResponse } from '../types';
 import { GrowthAgentRunCard, type GrowthRunSaveControls } from './ask-genie.growth-run-card';
 
@@ -377,5 +380,50 @@ describe('GrowthAgentRunCard', () => {
 
     expect(onOpenRoute).toHaveBeenCalledWith(unsignedRun.route);
     expect(container.textContent).toContain('Cohort proof unavailable');
+  });
+});
+
+describe('GrowthAgentRunCard audit chip (flow-04)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  function renderAs(session: { can_access_admin: boolean; can_read_audit: boolean }) {
+    const client = new QueryClient();
+    client.setQueryData(['session', 'access'], { ...session, can_approve: false });
+    act(() => root.render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <GrowthAgentRunCard run={RUN} onOpenRoute={vi.fn()} renderSourceAssetChip={(asset) => <span key={asset}>{asset}</span>} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    ));
+  }
+  const auditChip = () =>
+    Array.from(container.querySelectorAll<HTMLElement>('.chip')).find((chip) => chip.textContent?.startsWith('Audit '));
+
+  it.each([
+    ['an administrator', { can_access_admin: true, can_read_audit: true }],
+    ['an auditor', { can_access_admin: false, can_read_audit: true }],
+  ])('turns the audit chip label into a ledger link for %s', (_who, session) => {
+    renderAs(session);
+    const link = auditChip()?.querySelector<HTMLAnchorElement>('a.mono');
+    expect(link?.getAttribute('href')).toBe(auditEventHref(RUN.audit_event_id ?? ''));
+    expect(link?.getAttribute('aria-label')).toBe(`Open audit event ${RUN.audit_event_id} in the audit ledger`);
+    expect(link?.hasAttribute('title')).toBe(false);
+  });
+
+  it('keeps the plain chip for everyone else', () => {
+    renderAs({ can_access_admin: false, can_read_audit: false });
+    expect(auditChip()?.querySelector('a')).toBeNull();
+    expect(auditChip()?.textContent).toMatch(/^Audit /);
   });
 });

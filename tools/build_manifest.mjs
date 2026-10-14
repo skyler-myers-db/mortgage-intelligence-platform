@@ -132,6 +132,39 @@ export function routeClosures(manifest, initial = initialClosure(manifest)) {
   return routes;
 }
 
+/**
+ * Per named lazy module (W5c, budgets.lazyModules): what loading it fetches.
+ * Each key must be a dynamic entry (`isDynamicEntry`); its closure is the
+ * module's chunk plus its transitive static imports, JS + CSS, minus the
+ * initial closure AND minus what every chunk that dynamically imports it has
+ * already loaded (the intersection of their static closures). A lazy rung
+ * imported from the map chunk shares that chunk's modules; counting them
+ * again would gate the map, not the rung. A key that is not a dynamic entry
+ * is absent from the result, and the caller reports it.
+ */
+export function lazyEntryClosures(manifest, initial, keys) {
+  const initialKeys = new Set(initial.keys);
+  const initialCss = new Set(initial.css);
+  const closures = {};
+  for (const key of keys) {
+    if (manifest[key]?.isDynamicEntry !== true) continue;
+    let loaded = null;
+    for (const [importer, chunk] of Object.entries(manifest)) {
+      if (!(chunk.dynamicImports ?? []).includes(key)) continue;
+      const reach = staticImportClosure(manifest, [importer]);
+      loaded = loaded === null ? reach : new Set([...loaded].filter((k) => reach.has(k)));
+    }
+    const loadedKeys = loaded ?? new Set();
+    const loadedCss = new Set(cssFiles(manifest, loadedKeys));
+    const own = [...staticImportClosure(manifest, [key])].filter((k) => !initialKeys.has(k) && !loadedKeys.has(k));
+    closures[key] = {
+      js: jsFiles(manifest, own),
+      css: cssFiles(manifest, own).filter((file) => !initialCss.has(file) && !loadedCss.has(file)),
+    };
+  }
+  return closures;
+}
+
 /** Every .js/.css file the manifest names, as a chunk `file` or in a `css` list. */
 export function manifestChunkFiles(manifest) {
   const files = new Set();

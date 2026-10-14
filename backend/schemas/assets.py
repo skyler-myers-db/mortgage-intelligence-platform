@@ -78,3 +78,22 @@ class AssetMetadataResponse(BaseModel):
     ddl_redacted_lines: int = 0
     lineage: list[AssetLineageNode] = Field(default_factory=list)
     known_data_gaps: list[str] = Field(default_factory=list)
+
+
+class AssetFreshnessResponse(BaseModel):
+    """Freshness of one registered asset, readable by every authenticated user.
+
+    Read from the reviewed source-readiness row behind the asset (its own row
+    or its primary input's): the band, the business refresh, when the row was
+    checked, its status and which row answered. Schema internals stay on the
+    administrator metadata read.
+    """
+
+    asset_key: str
+    title: str
+    freshness: AssetFreshness = "unavailable"
+    last_updated: str | None = None
+    checked_at: str | None = None
+    status: DataEstateStatus | Literal["unknown"] = "unknown"
+    basis: str | None = None
+    source: Literal["source_readiness", "unavailable", "not_tracked"]

@@ -2,8 +2,9 @@
  * @vitest-environment happy-dom
  *
  * The events lib/rum builds and hands the beacon (audit 2026-09-21 stack-01,
- * states-01, quality-01, delivery-v3): the client_error a queued report
- * becomes, and the api_call a resource timing becomes. Each test installs RUM
+ * states-01, quality-01, delivery-v3, stack-08): the client_error a queued
+ * report becomes, and the api_call a resource timing becomes, each on a route
+ * registry template; the long_task observer is gone. Each test installs RUM
  * on fresh modules (vi.resetModules) and reads the body the beacon was
  * handed, which is the wire payload. PerformanceObserver is replaced by a
  * fake that lets a test deliver `resource` entries.
@@ -79,6 +80,9 @@ function wireEvents(): WireEvent[] {
   return bodies.flatMap((body) => (JSON.parse(body) as { events: WireEvent[] }).events);
 }
 
+/** The idle scheduler, run at once: the tests drive installRum synchronously. */
+const now = (task: () => void): void => task();
+
 async function freshRum(): Promise<{ rum: RumModule; log: ClientErrorLog }> {
   vi.resetModules();
   delete window.__mipRumInstalled;
@@ -128,7 +132,7 @@ describe('client_error events', () => {
     const message = "Cannot read properties of null (reading 'find') for B-0123456789ABC";
     log.reportClientError('caught', new TypeError(message), { boundary: 'drawer', componentStack: message });
 
-    rum.installRum();
+    rum.installRum(now);
     const events = await flush(rum);
 
     expect(events).toEqual([
@@ -147,7 +151,7 @@ describe('client_error events', () => {
 
   it('omits the boundary key for a report no boundary caught', async () => {
     const { rum, log } = await freshRum();
-    rum.installRum();
+    rum.installRum(now);
     window.history.replaceState(null, '', '/borrower-360/B-0123456789ABC?from=queue');
     log.reportClientError('uncaught', new RangeError('x'));
 
@@ -166,7 +170,7 @@ describe('api_call events', () => {
   it('reports a sampled tab\'s API calls as templated routes with their Server-Timing fields', async () => {
     window.sessionStorage.setItem('mip.rumApiSample', '1');
     const { rum } = await freshRum();
-    rum.installRum();
+    rum.installRum(now);
     window.history.replaceState(null, '', '/borrower-360/B-0123456789ABC');
     deliverResources([
       {
@@ -189,7 +193,7 @@ describe('api_call events', () => {
         metric: 'api_call',
         value: 912,
         rating: 'info',
-        route: '/borrower-360/:borrower_id',
+        route: '/borrower-360/:id',
         details: {
           api_route: '/api/borrowers/:id/proof',
           transfer_size: 1200,
@@ -203,14 +207,14 @@ describe('api_call events', () => {
         metric: 'api_call',
         value: 120,
         rating: 'info',
-        route: '/borrower-360/:borrower_id',
+        route: '/borrower-360/:id',
         details: { api_route: '/api/analytics/funnel/loan-officers/:id', transfer_size: 0 },
       },
       {
         metric: 'api_call',
         value: 120,
         rating: 'info',
-        route: '/borrower-360/:borrower_id',
+        route: '/borrower-360/:id',
         details: { api_route: '/api/leads', transfer_size: 1200 },
       },
     ]);
@@ -224,7 +228,7 @@ describe('api_call events', () => {
   it('never reports the telemetry POST, the health probes, the Genie progress poll, another origin or a non-fetch load', async () => {
     window.sessionStorage.setItem('mip.rumApiSample', '1');
     const { rum } = await freshRum();
-    rum.installRum();
+    rum.installRum(now);
     deliverResources([
       { path: '/api/v1/telemetry/rum' },
       { path: '/api/v1/health' },
@@ -242,7 +246,7 @@ describe('api_call events', () => {
   it('skips a call longer than the schema allows and leaves an oversized transfer out', async () => {
     window.sessionStorage.setItem('mip.rumApiSample', '1');
     const { rum } = await freshRum();
-    rum.installRum();
+    rum.installRum(now);
     deliverResources([
       { path: '/api/v1/genie/message/submit', duration: 600_001 },
       { path: '/api/v1/leads', transferSize: 600_001 },
@@ -253,10 +257,18 @@ describe('api_call events', () => {
     ]);
   });
 
+  it('observes no long tasks: long_task is no longer sent (stack-08)', async () => {
+    window.sessionStorage.setItem('mip.rumApiSample', '1');
+    const { rum } = await freshRum();
+    rum.installRum(now);
+    expect(observed.has('resource')).toBe(true);
+    expect(observed.has('longtask')).toBe(false);
+  });
+
   it("an unsampled tab ('0') reports no API call", async () => {
     window.sessionStorage.setItem('mip.rumApiSample', '0');
     const { rum, log } = await freshRum();
-    rum.installRum();
+    rum.installRum(now);
     expect(observed.has('resource')).toBe(false);
     // Non-vacuity: the tab's other RUM still flows.
     log.reportClientError('uncaught', new TypeError('x'));
@@ -268,7 +280,7 @@ describe('api_call events', () => {
   it('draws the tab sample once when the key is absent and keeps it', async () => {
     const random = vi.spyOn(Math, 'random').mockReturnValue(0.05);
     const { rum } = await freshRum();
-    rum.installRum();
+    rum.installRum(now);
     expect(window.sessionStorage.getItem('mip.rumApiSample')).toBe('1');
     expect(random).toHaveBeenCalledTimes(1);
     deliverResources([{ path: '/api/v1/leads' }]);
@@ -279,7 +291,7 @@ describe('api_call events', () => {
   it('caps a document at 100 api_call events, in batches of at most 20', async () => {
     window.sessionStorage.setItem('mip.rumApiSample', '1');
     const { rum } = await freshRum();
-    rum.installRum();
+    rum.installRum(now);
     const leads = Array.from({ length: 60 }, () => ({ path: '/api/v1/leads' }));
     deliverResources(leads);
     deliverResources(leads);
@@ -316,7 +328,7 @@ describe('route_change events', () => {
     const nativePushState = window.history.pushState;
     const nativeReplaceState = window.history.replaceState;
     const { rum } = await freshRum();
-    rum.installRum();
+    rum.installRum(now);
     expect(window.history.pushState).toBe(nativePushState);
     expect(window.history.replaceState).toBe(nativeReplaceState);
   });
@@ -328,7 +340,7 @@ describe('route_change events', () => {
       { path: '*', element: createElement(Fragment, null, createElement(Guard), createElement(Outlet)) },
     ]);
     setRumRouteSource((listener) => router.subscribe((state) => listener(state.location.pathname)));
-    rum.installRum();
+    rum.installRum(now);
 
     const container = document.createElement('div');
     document.body.appendChild(container);
@@ -377,7 +389,7 @@ describe('route_change events', () => {
 
   it('records nothing when no route source is registered', async () => {
     const { rum, log } = await freshRum();
-    rum.installRum();
+    rum.installRum(now);
     window.history.pushState(null, '', '/lead-queue');
     window.history.pushState(null, '', '/glossary');
     await frames(3);

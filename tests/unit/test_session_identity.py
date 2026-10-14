@@ -64,6 +64,7 @@ def test_session_identity_matches_the_actor_the_approver_gate_admits(
         "role_labels": ["Approver"],
         "lender_name": settings.mip_lender_name,
         "rum_enabled": settings.mip_rum_enabled,
+        "refusal_text_capture_enabled": settings.mip_genie_refusal_text_capture == "enabled",
         "actor_cache_key": actor_cache_key(_ACTOR),
     }
 
@@ -111,6 +112,7 @@ def test_session_ignores_forwarded_identity_when_the_edge_is_untrusted(
         "role_labels": [],
         "lender_name": settings.mip_lender_name,
         "rum_enabled": settings.mip_rum_enabled,
+        "refusal_text_capture_enabled": settings.mip_genie_refusal_text_capture == "enabled",
         "actor_cache_key": None,
     }
 
@@ -258,6 +260,22 @@ def test_session_carries_the_configured_lender_and_rum_gate(
 
     monkeypatch.setattr(settings, "mip_rum_enabled", False)
     assert client.get("/api/v1/session", headers={"X-Forwarded-Groups": ""}).json()["rum_enabled"] is False
+
+
+@pytest.mark.parametrize(("configured", "expected"), [("enabled", True), ("disabled", False)])
+def test_session_carries_the_effective_refusal_text_capture_switch(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str,
+    expected: bool,
+) -> None:
+    """D-audit-reads-d: the refusal card offers 'Report with my question'
+    only when the effective tenant switch is on."""
+    monkeypatch.setattr(settings, "mip_genie_refusal_text_capture", configured)
+
+    body = client.get("/api/v1/session", headers={"X-Forwarded-Groups": ""}).json()
+
+    assert body["refusal_text_capture_enabled"] is expected
 
 
 def test_session_identity_fields_touch_no_warehouse_or_lakebase(

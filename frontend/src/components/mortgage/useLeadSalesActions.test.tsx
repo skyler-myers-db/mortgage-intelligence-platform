@@ -45,7 +45,7 @@ const TEAM: SalesTeamMember[] = [
 ];
 const IDS = ['B-AAAAAAAAAAAA1', 'B-AAAAAAAAAAAA2'];
 const LEADS = IDS.map((borrower_id) => ({ borrower_id, approval_status: 'approved' }) as unknown as LeadSummary);
-const VOICEMAIL = { lo_email: LO_A, outcome: 'called_left_voicemail', callback_at: null, notes: null } as const;
+const VOICEMAIL = { lo_email: LO_A, outcome: 'called_left_voicemail', callback_at: null } as const;
 
 function assignment(borrowerId: string, email: string) {
   return {
@@ -206,11 +206,33 @@ describe('useLeadSalesActions on the sales mutations', () => {
     expect(apiMocks.logDisposition).not.toHaveBeenCalled();
 
     act(() => sales!.openDisposition(IDS[1]));
-    const payload = { lo_email: LO_B, outcome: 'callback_scheduled', callback_at: '2026-07-15T14:00:00.000Z', notes: 'Asked for Friday.' } as const;
+    const payload = { lo_email: LO_B, outcome: 'callback_scheduled', callback_at: '2026-07-15T14:00:00.000Z' } as const;
     await act(async () => {
       await sales!.submitDisposition(payload);
     });
     expect(apiMocks.logDisposition).toHaveBeenCalledWith(IDS[1], payload, undefined, expect.any(String));
+  });
+
+  it('keys the retry on the structured fields only: a stale notes key never forks the request id', async () => {
+    // D-shell-deviations-g2: the free-text note is retired and is not part of
+    // the intent fingerprint, so a retried disposition reuses its request id.
+    apiMocks.logDisposition.mockRejectedValueOnce(new Error('network'));
+    apiMocks.logDisposition.mockResolvedValueOnce({
+      disposition: { disposition_id: 'd-3', borrower_id: IDS[0], lo_email: LO_A, outcome: 'called_left_voicemail', occurred_at: '2026-07-14T15:00:00Z', callback_at: null },
+      audit_event_id: 'audit-disp-3',
+    });
+    mount();
+    act(() => sales!.openDisposition(IDS[0]));
+    const legacy = { ...VOICEMAIL, notes: 'typed before the deploy' } as unknown as typeof VOICEMAIL;
+    await act(async () => {
+      await sales!.submitDisposition(legacy);
+    });
+    await act(async () => {
+      await sales!.submitDisposition(VOICEMAIL);
+    });
+    expect(apiMocks.logDisposition).toHaveBeenCalledTimes(2);
+    const [first, second] = apiMocks.logDisposition.mock.calls;
+    expect(second[3]).toBe(first[3]);
   });
 
   it('shows the first loan officer as the assignee until one is picked', () => {

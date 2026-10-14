@@ -41,6 +41,7 @@ from backend.services.repositories import (
 )
 from tests.fixtures import mock_population
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
+from tests.fixtures.reviewed_approval import skip_draft_verification, synthetic_review_proof
 
 _SCHEMA_SERVER_PROOF: dict[str, object] = {
     "generation_mode": "reviewed_fallback",
@@ -722,29 +723,32 @@ def test_validated_lender_identity_survives_disclosure_and_final_copy_boundaries
     )
 
 
-def test_outreach_approve_requires_disclosure_backed_draft_body() -> None:
+def test_outreach_approve_requires_disclosure_backed_draft_body(monkeypatch: pytest.MonkeyPatch) -> None:
     client = TestClient(app)
     disclosure = (
         "Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out."
     )
+    # The disclosure screen runs after the draft verification (W5c: review_mode
+    # and its proof are required), so the custom copy reaches it unverified.
+    skip_draft_verification(monkeypatch)
 
     missing = client.post(
         "/api/outreach/approve",
-        json={"borrower_id": "B-48291", "offer_code": "refi_plus_heloc"},
+        json={"borrower_id": "B-48291", "offer_code": "refi_plus_heloc", **synthetic_review_proof()},
     )
     assert missing.status_code == 422
     assert "draft_body is required" in missing.json()["detail"]
 
     no_disclosure = client.post(
         "/api/outreach/approve",
-        json={"borrower_id": "B-48291", "draft_body": "Governed approval body."},
+        json={"borrower_id": "B-48291", "draft_body": "Governed approval body.", **synthetic_review_proof()},
     )
     assert no_disclosure.status_code == 422
     assert "tenant disclosure" in no_disclosure.json()["detail"]
 
     placeholder = client.post(
         "/api/outreach/approve",
-        json={"borrower_id": "B-48291", "draft_body": f"Hi [first name]. {disclosure}"},
+        json={"borrower_id": "B-48291", "draft_body": f"Hi [first name]. {disclosure}", **synthetic_review_proof()},
     )
     assert placeholder.status_code == 422
     assert "placeholder" in placeholder.json()["detail"]
@@ -1482,6 +1486,7 @@ def test_outreach_approve_requires_auditable_evidence() -> None:
                 "offer_code": "refi",
                 "draft_subject": "Summit Mortgage options review",
                 "draft_body": "Governed approval body. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
+                **synthetic_review_proof(),
             },
         )
     finally:
@@ -1503,6 +1508,7 @@ def test_outreach_approve_rejects_evidence_ids_not_owned_by_borrower() -> None:
                 "evidence_ids": ["ev-001", "ev-other-borrower"],
                 "draft_subject": "Summit Mortgage options review",
                 "draft_body": "Governed approval body. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
+                **synthetic_review_proof(),
             },
         )
     finally:

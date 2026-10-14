@@ -59,28 +59,51 @@ export interface GenieCompletionJobStatus {
   revealed_sections?: GenieAnswerSection[] | null;
 }
 
-/** What the progress rail shows of a running job (no id, no answer). */
+/** A running job's verified sections as the in-flight turn holds them
+ *  (genie-01 phase 1b); lib/genieJobReveal folds statuses into it. */
+export interface GenieVerifiedRevealState {
+  jobId: string;
+  /** Sub-analyses verified so far (0 before the server says otherwise). */
+  verified: number;
+  partsPlanned: number | null;
+  /** The revision of `sections`. */
+  rev: number | null;
+  /** Null below the floor; plan-ordered verified sections from it. */
+  sections: readonly GenieAnswerSection[] | null;
+}
+
+/** What the progress rail shows of a running job (no answer). The verified-
+ *  sections reveal is keyed to its job: a status of another job never
+ *  renders here (lib/genieJobReveal, folded by the in-flight store). */
 export interface GenieJobProgress {
   stage: GenieJobStage;
   stage_label: string;
   parts_done: number | null;
   parts_planned: number | null;
   typical_seconds?: number | null;
+  /** Verified sections so far (genie-01 phase 1b); never announced. */
+  reveal?: GenieVerifiedRevealState | null;
 }
 
 /** `POST /api/genie/message/cancel` (audit genie-03). `cancelled`: this app
  *  will not verify or record the answer (never that Genie's own message was
- *  cancelled). `recorded`: the answer was already recorded. `ended`: the job
- *  had already failed or expired. */
+ *  cancelled). `recorded`: too late, and the answer's History row exists.
+ *  `recording`: too late, and no History row was found; `status` says
+ *  whether it is still being written (running), is never kept (succeeded) or
+ *  did not finish (failed, expired). `ended`: the job had already failed or
+ *  expired with nothing recorded. */
 export interface GenieCancelResult {
   kind: 'genie_completion_cancel';
   job_id: string;
-  outcome: 'cancelled' | 'recorded' | 'ended';
+  outcome: 'cancelled' | 'recorded' | 'recording' | 'ended';
   status: GenieJobStatusValue;
 }
 
-/** Genie's own (last) progress, plus the completion job once there is one. */
-export type GenieTurnProgress = GenieLiveProgress & { job?: GenieJobProgress };
+/** Genie's own (last) progress, plus the completion job once there is one.
+ *  `deep` is NOT on the progress wire (quality-04 P2): the client stamps the
+ *  submit response's flag onto every update so the rail can label the long
+ *  completion wait honestly on both Genie surfaces. */
+export type GenieTurnProgress = GenieLiveProgress & { deep?: boolean; job?: GenieJobProgress };
 
 /** Submit's live response: `completion_jobs` when the server runs jobs. */
 export type GenieSubmitResultWithJobs = GenieSubmitResult & { completion_jobs?: boolean };

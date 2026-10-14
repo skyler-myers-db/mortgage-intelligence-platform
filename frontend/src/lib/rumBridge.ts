@@ -1,15 +1,18 @@
 import type { ClientErrorKind } from './chunkLoadError';
+import { resolveRouteMeta } from './routeMeta';
 
 /**
  * rumBridge — the initial-chunk half of browser RUM (2026-09-21 UI/UX audit
  * stack-01, shell-01, states-01, quality-01).
  *
- * lib/rum.ts is lazy: it loads only once `/api/config/options` says RUM is
- * on (`mip_rum_enabled`, off by default). Client errors and router location
+ * lib/rum.ts is lazy: it loads only once the session says RUM is on
+ * (`mip_rum_enabled`: on by default through the deploy payload, off in the
+ * code default; D-platform-process-d1). Client errors and router location
  * changes happen long before that, in code that is in the initial chunk
  * (main.tsx, lib/clientErrorLog). This module is what they talk to, so the
- * initial chunk carries only these vocabularies and a five-slot queue, never
- * the RUM observers. It must never import lib/rum.
+ * initial chunk carries only these vocabularies, a five-slot queue and the
+ * committed route TEMPLATE with its short timeline, never the RUM observers.
+ * It must never import lib/rum.
  *
  * Nothing leaves the browser from here. A report waits in the buffer until
  * rum.ts attaches its sink; while RUM is not installed it simply stays.
@@ -100,14 +103,36 @@ export type RumRouteListener = (pathname: string) => void;
 export type RumRouteSource = (listener: RumRouteListener) => () => void;
 
 let routeSource: RumRouteSource | null = null;
+/**
+ * (performance.now(), registry template) per committed change, oldest first,
+ * at most 64; the last entry is the committed template. Templates only, never
+ * pathnames. Initial-chunk code, so it stays this small (a +0.1 KiB br cap):
+ * the lookup by time, routeTemplateAt, lives in the lazy lib/rum.
+ */
+export const rumRouteTimeline: Array<[number, string]> = [];
 
 /**
- * main.tsx registers the data router here, so rum.ts can report a
- * route_change only when the router really committed a new location. A Back
- * the unsaved-changes guard blocks never changes the router's location.
+ * main.tsx registers the data router here, synchronously right after
+ * creating it and before any navigation, so the initial template is the
+ * router's committed location and holds from time 0. rum.ts can then report
+ * a route_change only when the router really committed a new location (a
+ * Back the unsaved-changes guard blocks never changes it), and both RUM and
+ * client errors read the template in effect at a given time (quality-01).
  */
 export function setRumRouteSource(source: RumRouteSource): void {
   routeSource = source;
+  const commit = (pathname: string, at: number): void => {
+    const template = resolveRouteMeta(pathname).pattern;
+    if (template !== getCommittedRouteTemplate() && rumRouteTimeline.push([at, template]) > 64) rumRouteTimeline.shift();
+  };
+  commit(window.location.pathname, 0);
+  source((pathname) => commit(pathname, performance.now()));
+}
+
+/** The router's committed route template, or null before main.tsx registers the router. */
+export function getCommittedRouteTemplate(): string | null {
+  const last = rumRouteTimeline[rumRouteTimeline.length - 1];
+  return last ? last[1] : null;
 }
 
 export function getRumRouteSource(): RumRouteSource | null {

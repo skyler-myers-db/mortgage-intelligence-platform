@@ -124,7 +124,8 @@ const INDIRECTION: readonly IndirectionRow[] = [
 
 /** Non-key `mip` strings, each reviewed. */
 const UC_NAME = /^mip\.(gold|silver|ref|semantics|first_party)(\.|$)/;
-const VIEW_TRANSITION_NAMES = new Set(['mip-route-enter', 'mip-route-exit']);
+/** View Transition class and element names; lib/borrowerMorph.ts names the borrower-id morph pair. */
+const VIEW_TRANSITION_NAMES = new Set(['mip-route-enter', 'mip-route-exit', 'mip-borrower-id']);
 /** lib/genieTurnLock.ts: `mip-genie-turn:<messageId>` is a Web Lock name, not a storage key. */
 const WEB_LOCK_HEADS = new Set(['mip-genie-turn:']);
 /** components/ui/tooltipController.ts: the shared tooltip popup's DOM id, not a storage key. */

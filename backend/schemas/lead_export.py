@@ -22,7 +22,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.schemas.common import validate_public_borrower_id
-from backend.schemas.lead_query import MAX_LEAD_LIMIT
+from backend.schemas.lead_query import LEAD_MAX_PAGE_INDEX, MAX_LEAD_LIMIT
 
 SHA256_HEX_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _FILTER_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
@@ -92,6 +92,21 @@ class LeadExportReceiptRequest(BaseModel):
             "(the CSV's `# matching_rows=` line). Absent when unknown; never "
             "below row_count."
         ),
+    )
+    # The Lead Queue view the file was built from, AS THE CLIENT DECLARES IT
+    # (D-audit-reads-a), and how many of its pages were loaded: the export
+    # joins the VIEW_LEADS rows of that view. row_count stays within
+    # MAX_LEAD_LIMIT, which covers ten pages of 500.
+    lead_view_id: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{32}$",
+        description="The Lead Queue view the file was built from, as the client declares it.",
+    )
+    pages_loaded: int | None = Field(
+        default=None,
+        ge=1,
+        le=LEAD_MAX_PAGE_INDEX + 1,
+        description="How many pages of that view were loaded when the file was built.",
     )
 
     @field_validator("csv_sha256")

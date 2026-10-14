@@ -16,10 +16,16 @@
   align-content: start;
   gap: var(--sp-2);
   padding: var(--sp-4) var(--pad-card);
-  /* The loaded, collapsed body's height (headline, overlap, footnote and
-     the disclosure: 144.5px at 1440x900, Console open or closed), reserved
-     while the read is in flight so the filter row below never moves when
-     it lands (signal-stack.fixture.spec.ts). */
+}
+/* The loaded, collapsed body's height (headline, overlap, footnote and the
+   disclosure: 144.5px at 1440x900, Console open or closed, under the
+   reservation's 148px), reserved while the read is in flight AND kept by
+   the loaded body that holds the disclosure, so the filter row below never
+   moves when the rows land. The not-built, warming and nobody-fires states
+   are one short line and keep no dead space under it (W5c wow-stage-5 fold;
+   signal-stack.fixture.spec.ts pins both). */
+.signal-stack[aria-busy='true'] > .signal-stack__body,
+.signal-stack__body:has(> .signal-stack__actions) {
   min-block-size: calc(var(--sp-16) * 2 + var(--sp-5));
 }
 .signal-stack__status,

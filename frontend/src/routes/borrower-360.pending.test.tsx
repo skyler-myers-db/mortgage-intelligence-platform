@@ -97,6 +97,8 @@ describe('Borrower 360 before its failure page has loaded', { timeout: 30_000 },
     render(Borrower360);
 
     expect(text()).toContain(`Borrower ${ID} could not load.`);
+    expect(document.querySelector('h1')?.textContent).toBe(`Borrower ${ID}`);
+    expect(document.querySelector('h1 .page-title__id')?.textContent).toBe(ID);
     expect(text()).not.toContain('Loading borrower');
     expect(document.querySelector('[role="alert"]')).toBeNull();
     expect(text()).not.toContain('SENTINEL');

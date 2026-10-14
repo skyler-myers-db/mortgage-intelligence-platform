@@ -112,6 +112,14 @@ describe('buildMapCard (D-dataviz-geo-d1)', () => {
     expect(card).not.toHaveProperty('zipUnassigned');
   });
 
+  it('carries the ZIP stage line on the ZIP card only (the polygon view says whose counts it shows)', () => {
+    const zipNote = 'Counts are Texas borrowers in this ZIP area.';
+    expect(buildMapCard('zip', '77002', inputs({ zipNote }))?.note).toBe(zipNote);
+    expect(buildMapCard('zip', '77002', inputs({ zipNote: null }))?.note).toBeUndefined();
+    expect(buildMapCard('zip', '77002', inputs())?.note).toBeUndefined();
+    expect(buildMapCard('state', 'tx', inputs({ zipNote }))?.note).toBeUndefined();
+  });
+
   // wow-stage-1: the Rate Lever's rows ride on the STATE card only.
   const SCENARIO: MapScenarioView = {
     step: -50,

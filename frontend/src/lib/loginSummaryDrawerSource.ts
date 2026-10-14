@@ -1,6 +1,6 @@
 import type { DrawerSource } from '../components/AppContext';
 import type { HomeSummaryHighlight } from '../types';
-import { isDeltaExplainerMeasure, type DeltaExplainerDrawerSource } from './deltaExplainerSource';
+import { isDeltaExplainerMeasure } from './deltaExplainerSource';
 import { DRAWER_SOURCES } from './drawerSourceRegistry';
 import { formatCount, ratePct, signedBpsLabel } from './formatters';
 import type { RateMoveSinceVisit } from './homeAnswer';
@@ -22,9 +22,11 @@ const HOME_SUMMARY_LINEAGE_FAMILY: Record<string, string> = {
 
 /**
  * Evidence for one "since your last login" number, citing both snapshots.
- * A delta of a measure the funnel snapshots attribute per state (wow-ai-3)
- * also carries the Delta Explainer (lib/deltaExplainerSource), anchored on
- * the baseline KPI snapshot's date; competitor liens say why they have none.
+ * Its `value` is the number the chip shows, so the drawer leads with "How we
+ * got {value}" and its first sentence as the definition (audit flow-06). A
+ * delta of a Delta Explainer measure (wow-ai-3) also carries the explainer,
+ * anchored on the baseline KPI snapshot's date; whether the funnel snapshot
+ * attributes that measure per state is the route's answer (`snapshotted`).
  */
 export function loginSummaryDrawerSource(
   highlight: Pick<
@@ -34,7 +36,7 @@ export function loginSummaryDrawerSource(
   opts: { previousVisitAt: string | null; baselineSnapshotAt?: string | null; status?: string } = {
     previousVisitAt: null,
   },
-): DrawerSource | DeltaExplainerDrawerSource {
+): DrawerSource {
   const hasBaseline = highlight.baseline !== null && highlight.delta !== null;
   const lineageFamily = HOME_SUMMARY_LINEAGE_FAMILY[highlight.measure];
   const signals: NonNullable<DrawerSource['signals']> = [
@@ -61,16 +63,9 @@ export function loginSummaryDrawerSource(
       },
     );
   }
-  if (hasBaseline && highlight.measure === 'competitor_lien') {
-    signals.push({
-      label: 'Per-state attribution',
-      source: 'mip.gold.funnel_snapshot_daily',
-      value: 'not snapshotted for this measure',
-    });
-  }
   const baselineDate = opts.status === 'delta' && hasBaseline ? utcDate(opts.baselineSnapshotAt) : null;
   const explainer = baselineDate && isDeltaExplainerMeasure(highlight.measure)
-    ? { deltaExplainer: { measure: highlight.measure, baselineDate, liveDisplay: highlight.display } }
+    ? { deltaExplainer: { measure: highlight.measure, baselineDate } }
     : {};
   return {
     ...explainer,
@@ -81,13 +76,15 @@ export function loginSummaryDrawerSource(
     assetKey: 'portfolio_headline_metric_view',
     assetPath: 'mip.semantics.portfolio_headline_metric_view',
     ...(lineageFamily ? { lineageFamily } : {}),
-    description: hasBaseline
+    value: highlight.display,
+    definition: hasBaseline
       ? 'Signed movement between the daily headline-KPI snapshot nearest your ' +
         'previous visit (mip_app.kpi_snapshots) and the live unfiltered headline ' +
-        'metric view. Both sides aggregate the same headline set, so the ' +
-        'comparison is apples-to-apples.'
-      : 'Live reading from the unfiltered portfolio headline metric view. ' +
-        'Last-login deltas appear once a previous visit and a baseline snapshot exist.',
+        'metric view.'
+      : 'Live reading from the unfiltered portfolio headline metric view.',
+    description: hasBaseline
+      ? 'Both sides aggregate the same headline set, so the comparison is apples-to-apples.'
+      : 'Last-login deltas appear once a previous visit and a baseline snapshot exist.',
     signals,
     ...(opts.previousVisitAt ? { eventDate: opts.previousVisitAt } : {}),
   };
@@ -96,7 +93,9 @@ export function loginSummaryDrawerSource(
 /**
  * Evidence for WHY NOW's rate move (flow-05): the rate window's source with
  * the two weekly prints the move subtracts (FRED MORTGAGE30US, read from
- * mip.gold.rate_window_weekly) leading its signals.
+ * mip.gold.rate_window_weekly) leading its signals. Its `value` is the chip's
+ * signed basis points and its definition names the two prints (flow-06); the
+ * rate window's description and signals follow by registry key.
  */
 export function rateMoveDrawerSource(
   move: RateMoveSinceVisit,
@@ -106,14 +105,14 @@ export function rateMoveDrawerSource(
   return {
     ...base,
     title: '30-year par rate since your last visit',
-    description:
+    value: signedBpsLabel(move.deltaBps),
+    definition:
       `The weekly FRED MORTGAGE30US print for the week of ${move.toWeek} against the print for the week of your ` +
-      `previous visit (${move.fromWeek}), both read as-is from mip.gold.rate_window_weekly. ${base.description ?? ''}`.trim(),
+      `previous visit (${move.fromWeek}), both read as-is from mip.gold.rate_window_weekly.`,
     signals: [
       { label: `Week of ${move.fromWeek}`, source: 'mip.gold.rate_window_weekly.market_rate_pct (MORTGAGE30US)', value: ratePct(move.fromPct) },
       { label: `Week of ${move.toWeek} (latest)`, source: 'mip.gold.rate_window_weekly.market_rate_pct (MORTGAGE30US)', value: ratePct(move.toPct) },
       { label: 'Since your last visit', source: 'latest - visit week', value: signedBpsLabel(move.deltaBps) },
-      ...(base.signals ?? []),
     ],
     ...(opts.previousVisitAt ? { eventDate: opts.previousVisitAt } : {}),
   };

@@ -183,7 +183,8 @@ def test_the_body_never_carries_route_criteria_or_actor(
 
 
 def test_the_sql_is_actor_scoped_and_selects_no_private_column() -> None:
-    assert WATCHLIST_SUMMARY_SQL.count("actor_email = %(actor_email)s") == 2
+    # The watchlists CTE plus each of the series' three arms (monitor, seed, last run).
+    assert WATCHLIST_SUMMARY_SQL.count("actor_email = %(actor_email)s") == 4
     final_select = WATCHLIST_SUMMARY_SQL.rsplit("SELECT", 1)[1].split("FROM", 1)[0]
     for column in ("route", "criteria", "actor_email", "seed_run_id", "last_run_id"):
         assert not re.search(rf"\b{column}\b", final_select), column

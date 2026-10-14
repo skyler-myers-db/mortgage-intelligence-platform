@@ -23,6 +23,7 @@ from uuid import uuid4
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from backend.schemas.offer import (
+    REVIEW_MODE_REQUIRED_DETAIL,
     OutreachApproveRequest,
     OutreachApproveResponse,
     OutreachDraft,
@@ -264,6 +265,9 @@ def approve_outreach(
     # The admitted actor is the same edge-resolved identity used for the audit
     # row; ``payload.actor`` is never trusted for attribution.
     actor = require_approver(request)
+    if payload.review_mode is None:
+        # Required since W5c (D-approval-flow-a1): refused before any read or write.
+        raise HTTPException(status_code=422, detail=REVIEW_MODE_REQUIRED_DETAIL)
     safe_rationale = scrub_free_text(payload.rationale) if payload.rationale else None
     safe_bulk_rationale = (
         scrub_free_text(payload.bulk_rationale) if payload.bulk_rationale else None
@@ -444,9 +448,8 @@ def approve_outreach(
         )
         if verified_draft.draft_age_seconds is not None:
             audit_payload["draft_age_seconds"] = verified_draft.draft_age_seconds
-    # Every APPROVE row says how the copy was reviewed; a client that sent no
-    # review_mode (older than this ledger) is recorded as 'undeclared'.
-    audit_payload["review_mode"] = payload.review_mode or "undeclared"
+    # Every APPROVE row says how the copy was reviewed (required on the request).
+    audit_payload["review_mode"] = payload.review_mode
     audit_payload["rationale"] = approval_rationale
     if payload.bulk_id:
         audit_payload["bulk_id"] = payload.bulk_id
@@ -454,6 +457,8 @@ def approve_outreach(
         audit_payload["bulk_rationale"] = safe_bulk_rationale
     if payload.approval_request_batch_id:
         audit_payload["approval_request_batch_id"] = payload.approval_request_batch_id
+    if payload.lead_view_id:  # client-declared Lead Queue view (D-audit-reads-a)
+        audit_payload["declared_lead_view_id"] = payload.lead_view_id
     # Feature C: record the assignment + follow-up in the audit metadata so
     # the governance ledger shows who the borrower was routed to and when a
     # follow-up was scheduled. ``assigned_to_email`` is internal-staff-email
@@ -731,6 +736,8 @@ def reject_outreach(
         audit_payload["bulk_id"] = payload.bulk_id
     if payload.approval_request_batch_id:
         audit_payload["approval_request_batch_id"] = payload.approval_request_batch_id
+    if payload.lead_view_id:  # client-declared Lead Queue view (D-audit-reads-a)
+        audit_payload["declared_lead_view_id"] = payload.lead_view_id
     if safe_rationale:
         audit_payload["rationale"] = safe_rationale
     response_payload = {
