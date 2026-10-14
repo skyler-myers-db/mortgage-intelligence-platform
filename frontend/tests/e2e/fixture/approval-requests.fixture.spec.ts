@@ -40,7 +40,11 @@
  *  (m) the title row (W5d VRT): the request entry, chip or unavailable,
  *      draws --sp-2 clear of its neighbour (it sat flush on the bordered
  *      Triage entry) and moves nothing already in the row, both sessions,
- *      Console open and closed.
+ *      Console open and closed;
+ *  (n) the toolbar's request form takes the full line under the label and
+ *      controls (the toolbar's content width, no rules of its own) and
+ *      "N leads selected" stays one line, for 2 selected and for 1 (which
+ *      never loads the bulk chunk), Console open and closed.
  *
  * Chromium only (fixture-chromium): this is not a cross-engine spec, so the
  * fixture-webkit and Firefox projects do not collect it (playwright.config's
@@ -584,6 +588,61 @@ test.describe('the title row at 1440x900', () => {
           });
           expect(row.overflow, `${at}: the title row does not overflow`).toBeLessThanOrEqual(0);
         }
+      });
+    }
+  }
+});
+
+test.describe('the bulk request form at 1440x900', () => {
+  for (const consoleOpen of [false, true]) {
+    const consoleState = consoleOpen ? 'Console open' : 'Console closed';
+    for (const ids of [REQUESTED_IDS.slice(1), REQUESTED_IDS.slice(1, 2)]) {
+      test(`(n) ${ids.length} selected, ${consoleState}: the bulk request form takes the toolbar's full third row`, async ({ app, mockApi, page }) => {
+        useSession(mockApi, NON_APPROVER_SESSION);
+        // As the request-approval-form capture: the first requested row is already requested.
+        registerApprovalRequestStore(mockApi, { seed: batchView(REQUESTED_IDS.slice(0, 1), true) });
+        await app.gotoRoute('/lead-queue');
+        if (consoleOpen) await openConsoleNarrow(app, page);
+        for (const borrowerId of ids) await visible(page.getByTestId(`lead-select-${borrowerId}`)).check();
+        await visible(page.getByTestId('lead-bulk-request-approval')).click();
+        const form = page.getByTestId('request-approval-form');
+        await expect(form.getByLabel('Reason for the request')).toBeFocused();
+        await app.settle();
+        const toolbar = visible(page.getByTestId('lead-bulk-actions'));
+        await expect(toolbar.locator('.bulk-actions__label')).toHaveText(`${ids.length} ${ids.length === 1 ? 'lead' : 'leads'} selected`);
+        const fit = await toolbar.evaluate((element) => {
+          // Lines the text sets on: its fragments, grouped by top within half the font size.
+          const countLines = (target: Element) => {
+            const range = document.createRange();
+            range.selectNodeContents(target);
+            const tops = [...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => rect.top).sort((a, b) => a - b);
+            const tolerance = parseFloat(getComputedStyle(target).fontSize) / 2;
+            return tops.filter((top, index) => index === 0 || top - tops[index - 1] > tolerance).length;
+          };
+          const style = getComputedStyle(element);
+          const box = element.getBoundingClientRect();
+          const formElement = element.querySelector<HTMLElement>('[data-testid="request-approval-form"]');
+          const formBox = formElement?.getBoundingClientRect();
+          const formStyle = formElement ? getComputedStyle(formElement) : null;
+          const label = element.querySelector('.bulk-actions__label');
+          const controls = element.querySelector('.bulk-actions__controls')?.getBoundingClientRect();
+          return {
+            contentLeft: box.left + element.clientLeft + parseFloat(style.paddingInlineStart),
+            contentWidth: element.clientWidth - parseFloat(style.paddingInlineStart) - parseFloat(style.paddingInlineEnd),
+            formLeft: formBox?.left ?? NaN,
+            formWidth: formBox?.width ?? NaN,
+            formTop: formBox?.top ?? NaN,
+            above: Math.max(label?.getBoundingClientRect().bottom ?? NaN, controls?.bottom ?? NaN),
+            borders: formStyle ? [formStyle.borderTopWidth, formStyle.borderBottomWidth] : null,
+            labelLines: label ? countLines(label) : NaN,
+          };
+        });
+        const at = `${ids.length} selected (${consoleState})`;
+        expect(fit.formWidth, `${at}: the form is as wide as the toolbar's content`).toBeCloseTo(fit.contentWidth, 0);
+        expect(fit.formLeft, `${at}: the form starts at the toolbar's content edge`).toBeCloseTo(fit.contentLeft, 0);
+        expect(fit.formTop, `${at}: the form is its own row under the label and controls`).toBeGreaterThanOrEqual(fit.above);
+        expect(fit.borders, `${at}: no inline rules of its own inside the toolbar's`).toEqual(['0px', '0px']);
+        expect(fit.labelLines, `${at}: the selection label is one line`).toBe(1);
       });
     }
   }
