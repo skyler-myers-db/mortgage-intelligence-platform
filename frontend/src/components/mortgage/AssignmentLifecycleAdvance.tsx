@@ -80,13 +80,6 @@ export function AssignmentLifecycleAdvance({
   borrowerId: string;
   onAdvanced: (borrowerId: string, update: Partial<LeadSummary>) => void;
 }) {
-  // Budget trade (audit runtime-03, the wave-4b lane's budget cuts): its
-  // try/finally bailouts are fixed (the module helpers above), so it
-  // compiles cleanly without this line, which measured +0.35 KiB br on the
-  // LeadTable chunk for a control rendered once per expanded row. Delete it
-  // when the chunk has the room.
-  'use no memo';
-
   const queryClient = useQueryClient();
   const advanceMutation = useAdvanceAssignment(queryClient);
   const outcomeMutation = useRecordAssignmentOutcome(queryClient);

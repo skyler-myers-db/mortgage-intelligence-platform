@@ -127,15 +127,10 @@ export function LeadTable({
   requestChips = null,
   requestScopeRow = null,
 }: LeadTableProps) {
-  // Budget trade (audit runtime-04 slice 3, cut 5 of the wave-4b lane): the
-  // compiled shell measured +2.63 KiB br on the LeadTable chunk (35.81 ->
-  // 38.44, over its 38 KiB gate). It stays uncompiled with targeted manual
-  // memoization instead: the sort and the id list (useMemo), the row
-  // callbacks (useStableRowCallbacks) and the virtualizer inputs
-  // (LeadTableBody). The chunk reads below rely on this pragma: compiled,
-  // `REVIEW_CHUNK.current()` would be memoized once (the 5451de15 defect).
-  'use no memo';
-
+  // Compiled (audit runtime-04 slice 3(b)): every lazy chunk is read through
+  // useLazyModule's external store, never a render-time `.current()` read
+  // that a memo cache would freeze (the 5451de15 defect). Callbacks may
+  // still call `.current()` / `.load()`: they run at event time.
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const campaignId = searchParams.get('campaign_id')?.trim() ?? '';
@@ -301,7 +296,7 @@ export function LeadTable({
     triage,
     hideTable: triageOn,
     active: triageActive,
-    Deck: (triageChunk.module ?? TRIAGE_CHUNK.current())?.TriageDeck ?? null,
+    Deck: triageChunk.module?.TriageDeck ?? null,
     failed: triageChunk.failed,
     blocked: sessionStatus === 'error' ? approverGate : null,
     approvedSignal: triageSignal,
@@ -396,18 +391,18 @@ export function LeadTable({
     BULK_REVIEW_CHUNK,
     approval.selectionCount > 1 || approval.headerCheckboxState.checked || approval.bulkApproving || bulkRun.result !== null,
   );
-  // The module cache is the truth: after one failed chunk load this hook's
-  // state stays failed, yet the next Approve re-imports the chunk and drafts
-  // (an audited DRAFT_OUTREACH write), so the review must render from the
-  // cache or that draft would sit unseen with no Cancel. LeadTable is
-  // 'use no memo', so this read is fresh on every render.
-  const reviewModule = reviewChunk.module ?? REVIEW_CHUNK.current();
+  // The module cache is the truth: after one failed chunk load, the next
+  // Approve re-imports the chunk and drafts (an audited DRAFT_OUTREACH
+  // write), so the review must render from the cache or that draft would sit
+  // unseen with no Cancel. useLazyModule subscribes to the cache, so a load
+  // through `REVIEW_CHUNK.load()` re-renders this compiled shell.
+  const reviewModule = reviewChunk.module;
   // Offline, a chunk that could not load is not a stale deploy: reloading
   // would fail too, so the failure copy says to reconnect instead.
   const online = useIsOnline();
   const ReviewInline = reviewModule?.LeadApproveReviewInline;
   const ReviewDialog = reviewModule?.LeadApproveReviewDialog;
-  const bulkModule = bulkChunk.module ?? BULK_REVIEW_CHUNK.current();
+  const bulkModule = bulkChunk.module;
   const BulkReview = bulkModule?.LeadBulkApproveReview;
   const BulkRejectGate = bulkModule?.LeadBulkRejectGate;
   const BulkCampaignHandoff = bulkModule?.LeadBulkCampaignHandoff;

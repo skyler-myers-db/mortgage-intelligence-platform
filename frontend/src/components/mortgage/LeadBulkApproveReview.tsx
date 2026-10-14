@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useEffectEvent, useId, useRef, useState } from 'react';
 import type { LeadSummary } from '../../types';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
 import { isAbortError } from '../../lib/api';
@@ -111,12 +111,15 @@ export function LeadBulkApproveReview({
     onSamplesChangeRef.current = onSamplesChange;
     onCoverageChangeRef.current = onCoverageChange;
   }, [onSamplesChange, onCoverageChange]);
+  // readyDrafts and the coverage are derived from these keys' inputs; the
+  // keys are their identity, so a keystroke elsewhere reports nothing. The
+  // report reads this render's values (an Effect Event, runtime-03).
+  const report = useEffectEvent(() => {
+    onSamplesChange(readyDrafts);
+    onCoverageChange?.({ complete: coverage.complete, missingOfferLabels });
+  });
   useEffect(() => {
-    onSamplesChangeRef.current(readyDrafts);
-    onCoverageChangeRef.current?.({ complete: coverage.complete, missingOfferLabels });
-    // readyDrafts and the coverage are derived from these keys' inputs; the
-    // keys are their identity, so a keystroke elsewhere reports nothing.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    report();
   }, [readyKey, coverageKey]);
   useEffect(() => {
     const controllers = controllersRef.current;

@@ -148,8 +148,6 @@ export function useLeadTableKeyboardFlow({
   openRecentActivity,
   raiseDecisionToast,
 }: UseLeadTableKeyboardFlowInput) {
-  'use no memo';
-
   const triageActive = triage?.active === true;
 
   const effectiveStatus = (lead: LeadSummary) => approvals[lead.borrower_id] ?? lead.approval_status;

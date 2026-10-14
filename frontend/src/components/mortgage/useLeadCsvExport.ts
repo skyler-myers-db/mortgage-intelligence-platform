@@ -118,6 +118,47 @@ export function resolveExportRulesVersion(context: LeadExportContext | undefined
   return Promise.race([resolved, timedOut]);
 }
 
+/**
+ * One export run, steps 1-4, settled to the strip's state. A module helper
+ * (runtime-03): the hook latches with `.then(ok, err)` instead of a
+ * try/finally, which React Compiler 1.0 cannot model (facebook/react#34131).
+ */
+async function runLeadCsvExport({
+  plan, approvals, exportContext, rowOrder, matchingRows = null, loadedCount, campaignHref = null, view = null,
+}: LeadCsvExportRequest): Promise<LeadCsvExportState> {
+  const { buildLeadCsv, describeLeadCsvExport, downloadLeadCsv } = await loadLeadCsvBuilder();
+  // Stamped before the bytes are built and hashed: the receipt's digest
+  // covers the rules_version line the file carries.
+  const rulesVersion = await resolveExportRulesVersion(exportContext);
+  // Decided once: the file's `# matching_rows=` line and the receipt agree.
+  const matching = exportMatchingRows(matchingRows, plan.rows.length);
+  const csv = buildLeadCsv(plan.rows, approvals, {
+    ...exportContext,
+    rulesVersion,
+    scope: plan.scope,
+    rowOrder,
+    matchingRows: matching,
+  });
+  const declaration = await buildLeadExportDeclaration(csv, plan, exportContext?.filters, matching);
+  const receipt = await api.leadExportReceipt(
+    view ? { ...declaration, lead_view_id: view.viewId, pages_loaded: view.pagesLoaded } : declaration,
+  );
+  downloadLeadCsv(csv);
+  return {
+    status: 'done',
+    rowCount: plan.rows.length,
+    notice: describeLeadCsvExport(plan, rowOrder),
+    receipt,
+    truncatedOf: loadedExportTruncatedOf(plan.scope, matching, loadedCount ?? plan.rows.length),
+    campaignHref,
+  };
+}
+
+/** A failed run's state: an abort is silent, anything else says nothing was downloaded. */
+function failedLeadCsvExport(error: unknown): LeadCsvExportState {
+  return isAbortError(error) ? { status: 'idle' } : { status: 'error', message: describeLeadExportFailure(error) };
+}
+
 export function useLeadCsvExport() {
   const [state, setState] = useState<LeadCsvExportState>({ status: 'idle' });
   // One receipt per click: a second click while the first is in flight would
@@ -136,51 +177,18 @@ export function useLeadCsvExport() {
     return () => window.clearTimeout(timer);
   }, [state]);
 
-  async function exportCsv({
-    plan, approvals, exportContext, rowOrder, matchingRows = null, loadedCount, campaignHref = null, view = null,
-  }: LeadCsvExportRequest): Promise<void> {
-    if (inflight.current || plan.rows.length === 0) return;
+  function exportCsv(request: LeadCsvExportRequest): Promise<void> {
+    if (inflight.current || request.plan.rows.length === 0) return Promise.resolve();
     // Placeholder rows belong to the previous filters: never declare them
     // under the new ones.
-    if (exportContext?.exportBlockedReason) return;
+    if (request.exportContext?.exportBlockedReason) return Promise.resolve();
     inflight.current = true;
-    setState({ status: 'pending', rowCount: plan.rows.length });
-    try {
-      const { buildLeadCsv, describeLeadCsvExport, downloadLeadCsv } = await loadLeadCsvBuilder();
-      // Stamped before the bytes are built and hashed: the receipt's digest
-      // covers the rules_version line the file carries.
-      const rulesVersion = await resolveExportRulesVersion(exportContext);
-      // Decided once: the file's `# matching_rows=` line and the receipt agree.
-      const matching = exportMatchingRows(matchingRows, plan.rows.length);
-      const csv = buildLeadCsv(plan.rows, approvals, {
-        ...exportContext,
-        rulesVersion,
-        scope: plan.scope,
-        rowOrder,
-        matchingRows: matching,
-      });
-      const declaration = await buildLeadExportDeclaration(csv, plan, exportContext?.filters, matching);
-      const receipt = await api.leadExportReceipt(
-        view ? { ...declaration, lead_view_id: view.viewId, pages_loaded: view.pagesLoaded } : declaration,
-      );
-      downloadLeadCsv(csv);
-      setState({
-        status: 'done',
-        rowCount: plan.rows.length,
-        notice: describeLeadCsvExport(plan, rowOrder),
-        receipt,
-        truncatedOf: loadedExportTruncatedOf(plan.scope, matching, loadedCount ?? plan.rows.length),
-        campaignHref,
-      });
-    } catch (error) {
-      if (isAbortError(error)) {
-        setState({ status: 'idle' });
-        return;
-      }
-      setState({ status: 'error', message: describeLeadExportFailure(error) });
-    } finally {
+    setState({ status: 'pending', rowCount: request.plan.rows.length });
+    const settle = (next: LeadCsvExportState) => {
       inflight.current = false;
-    }
+      setState(next);
+    };
+    return runLeadCsvExport(request).then(settle, (error: unknown) => settle(failedLeadCsvExport(error)));
   }
 
   return { state, exportCsv };
