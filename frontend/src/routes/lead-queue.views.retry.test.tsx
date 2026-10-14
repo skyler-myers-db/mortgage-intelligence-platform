@@ -16,10 +16,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { mount } from '../test/render';
 
-const attempts = vi.hoisted(() => ({ count: 0 }));
+const attempts = vi.hoisted(() => ({ count: 0, fail: true }));
 vi.mock('./lead-queue.savedViews', async (importOriginal) => {
   attempts.count += 1;
-  if (attempts.count === 1) throw new Error('Chunk unavailable');
+  if (attempts.fail) throw new Error('Chunk unavailable');
   return importOriginal();
 });
 
@@ -47,8 +47,39 @@ afterEach(() => {
 
 const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 
+async function openPanel() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await mount(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={['/lead-queue?state=IL']}>
+        <LeadQueueViews searchParams={new URLSearchParams('state=IL')} showAssignedToMe={false} onCopyLink={() => undefined} />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await act(async () => byTestId('lead-queue-saved-views')!.click());
+  await settle();
+}
+
 describe('Saved views chunk failure', () => {
+  // First: the module only resolves once a test lets it, and a loaded module is cached.
+  it('a re-attempt that fails too offers Reload on the same, still focused, button', async () => {
+    attempts.count = 0;
+    attempts.fail = true;
+    await openPanel();
+    const retry = byTestId('lead-queue-saved-views-retry') as HTMLButtonElement;
+    retry.focus();
+    await act(async () => retry.click());
+    await settle();
+    expect(attempts.count).toBe(2);
+    const reload = byTestId('lead-queue-saved-views-retry')!;
+    expect(reload.textContent).toBe('Reload');
+    expect(document.activeElement).toBe(reload);
+    expect(document.body.textContent).toContain('Reload the page to load them.');
+  });
+
   it('offers Retry, re-attempts the import and keeps focus on Retry until the panel renders', async () => {
+    attempts.count = 0;
+    attempts.fail = true;
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await mount(
       <QueryClientProvider client={client}>
@@ -65,6 +96,7 @@ describe('Saved views chunk failure', () => {
     expect(retry).not.toBeNull();
     retry.focus();
 
+    attempts.fail = false;
     await act(async () => retry.click());
     // The reloading slot's own Retry holds focus while the chunk loads.
     const reloading = byTestId('lead-queue-saved-views-retry');

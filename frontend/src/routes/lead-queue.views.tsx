@@ -171,7 +171,10 @@ function LeadQueueSavedViewsControl({ searchParams }: { searchParams: URLSearchP
  * "Saved views unavailable" with a Retry (tables-06 nit): Retry remounts
  * this slot under a new key, and the fresh loader re-attempts the import.
  * Focus stays on Retry (the reloading slot's own Retry) until the panel
- * renders, then returns to the trigger, never to <body>.
+ * renders, then returns to the trigger, never to <body>. A browser keeps a
+ * failed module fetch for the document's lifetime, so when the re-attempt
+ * fails too the same button becomes Reload: a reload keeps the queue (its
+ * state is the URL) and fetches the current build.
  */
 function SavedViewsPanelSlot({
   id,
@@ -203,10 +206,11 @@ function SavedViewsPanelSlot({
     return <panel.LeadQueueSavedViewsPanel id={id} searchParams={searchParams} rootRef={rootRef} onClose={onClose} />;
   }
   const reloading = retried && !failed;
+  const reload = retried && failed;
   return (
     <div id={id} className="filter-menu lead-queue-saved-views" role="group" aria-label="Saved views">
       <div className="lead-queue-saved-views__status">
-        <span>{failed ? 'Saved views unavailable' : 'Loading saved views…'}</span>
+        <span>{reload ? 'Saved views unavailable. Reload the page to load them.' : failed ? 'Saved views unavailable' : 'Loading saved views…'}</span>
         {(failed || reloading) && (
           <button
             ref={retryRef}
@@ -214,11 +218,12 @@ function SavedViewsPanelSlot({
             className="btn btn--ghost btn--sm"
             aria-disabled={reloading || undefined}
             onClick={() => {
-              if (!reloading) onRetry();
+              if (reload) window.location.reload();
+              else if (!reloading) onRetry();
             }}
             data-testid="lead-queue-saved-views-retry"
           >
-            Retry
+            {reload ? 'Reload' : 'Retry'}
           </button>
         )}
       </div>

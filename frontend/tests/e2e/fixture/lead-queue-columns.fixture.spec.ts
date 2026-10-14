@@ -27,6 +27,7 @@
  */
 import type { Page } from '@playwright/test';
 import type { SavedView, SavedViewListResponse } from '../../../src/types/leadFilters';
+import { spendStaleChunkReload } from './data/errorTelemetry';
 import { SNAPSHOT_AT } from './data/reference';
 import { json, type MockApi } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
@@ -173,7 +174,8 @@ test('(e) the omnibox reads one allowlisted count, applies on Enter, and hands u
   await page.getByTestId('lead-queue-omnibox-ask-genie').click();
   const genie = page.getByRole('dialog', { name: 'Genie chat' });
   await expect(genie.getByRole('textbox', { name: 'Ask Genie' })).toHaveValue('TX IL heloc aged>7 zyrplax in or');
-  expect(mockApi.calls.some((call) => call.path.startsWith('/api/genie'))).toBe(false);
+  // A prefill only: nothing was asked (the panel's own background reads are not a question).
+  expect(mockApi.calls.filter((call) => call.method === 'POST' && call.path.startsWith('/api/genie'))).toEqual([]);
   await page.keyboard.press('Escape');
 
   await page.getByTestId('lead-queue-omnibox').click();
@@ -217,11 +219,13 @@ test('(f) More like this offers links only, after one count without a borrower l
   await app.settle();
   const before = countReads(mockApi).length;
   await page.getByTestId('borrower-more-like-this').click();
-  await expect(page.locator('.similar-cohort [role="status"]')).toHaveText(/match this pattern/);
+  // The kept-alive queue still holds its own (hidden) panel: read the dossier's.
+  const dossier = page.locator('.chip-row:has([data-testid="borrower-more-like-this"])');
+  await expect(dossier.locator('.similar-cohort [role="status"]')).toHaveText(/match this pattern/);
   expect(countReads(mockApi)).toHaveLength(before + 1);
 });
 
-test('(g) the filter-panel fixes: inverted pair, rounding, 25 views above the fold, chunk Retry, announced facet status', async ({ app, page, mockApi }) => {
+test('(g) the filter-panel fixes: inverted pair, rounding, 25 views above the fold, chunk Retry, announced facet status', async ({ app, page, mockApi, hygiene }) => {
   await app.gotoRoute('/lead-queue?min_opportunity_score=91&max_opportunity_score=90');
   await page.getByTestId('lead-queue-more-filters').click();
   await expect(page.getByTestId('lead-queue-range-min_opportunity_score')).toHaveAttribute('aria-invalid', 'true');
@@ -238,6 +242,12 @@ test('(g) the filter-panel fixes: inverted pair, rounding, 25 views above the fo
     updated_at: SNAPSHOT_AT,
   }));
   mockApi.register<SavedViewListResponse>('GET', '/api/workspace/saved-views', () => json<SavedViewListResponse>({ saved_views: views }));
+  // The panel chunk fails ONCE. Retry re-attempts the import; a browser that
+  // kept the failed module fetch fails it again, and the same button then
+  // offers Reload, which recovers (the queue's state is its URL).
+  hygiene.allow('request-failed', /lead-queue\.savedViews-[^/]+\.js/);
+  hygiene.allow('console.error', /\[mip\] client error/);
+  hygiene.allow('console.error', /Failed to load resource|Failed to fetch dynamically imported module/);
   let failed = false;
   await page.route(/\/assets\/lead-queue\.savedViews-[^/]+\.js$/, async (route) => {
     if (!failed) {
@@ -248,11 +258,20 @@ test('(g) the filter-panel fixes: inverted pair, rounding, 25 views above the fo
     }
   });
   await app.gotoRoute('/lead-queue');
+  await spendStaleChunkReload(page);
   await page.getByTestId('lead-queue-saved-views').click();
   const retry = page.getByTestId('lead-queue-saved-views-retry');
-  await expect(retry).toBeVisible();
+  await expect(retry).toHaveText('Retry');
   await retry.click();
   const panel = page.getByTestId('lead-queue-saved-views-panel');
+  await expect(panel.or(retry.filter({ hasText: 'Reload' }))).toBeVisible();
+  if (!(await panel.isVisible())) {
+    await expect(retry).toBeFocused();
+    await retry.click();
+    await app.settle();
+    await expect(page).toHaveURL(/\/lead-queue$/);
+    await page.getByTestId('lead-queue-saved-views').click();
+  }
   await expect(panel).toBeVisible();
   const save = page.getByTestId('lead-queue-saved-views-save');
   const fold = page.viewportSize()?.height ?? 900;
