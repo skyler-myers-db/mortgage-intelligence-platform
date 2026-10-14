@@ -66,7 +66,7 @@ export const MINUS_SIGN = '\u2212';
  * "+" and an unsigned zero, so only the first character can change.
  */
 function typographicMinus(formatted: string): string {
-  return formatted.startsWith('-') ? `${MINUS_SIGN}${formatted.slice(1)}` : formatted;
+  return formatted.replace(/^-/, MINUS_SIGN);
 }
 
 const COUNT = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 0 });
