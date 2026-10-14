@@ -447,6 +447,10 @@ test.describe('Borrower 360 (D-platform-process-g, bundle-09)', () => {
     await expect(panel).toContainText(/In the Money rule\./);
     await expect(page.locator('#main-content')).not.toContainText(/\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b/i);
 
+    // The natural load ends with the lazy decision history's own read; it can
+    // trail the panel, so wait for it before counting what the hover adds.
+    await expect.poll(() => mockApi.calls.some((call) => call.path.endsWith('/decisions'))).toBe(true);
+    await app.settle();
     const before = mockApi.calls.length;
     const chunk = page.waitForRequest((request) => /\/assets\/offer-orchestrator-[^/]+\.js$/.test(request.url()));
     await page.getByRole('link', { name: /Build outreach draft/ }).hover();
