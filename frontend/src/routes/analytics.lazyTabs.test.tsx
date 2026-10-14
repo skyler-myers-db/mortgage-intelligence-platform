@@ -138,7 +138,8 @@ describe('Analytics per-tab chunks', () => {
   });
 
   it('a tab switch shows that tab’s skeleton at once, then its view once the chunk lands', async () => {
-    state.data.set('geography', { state_opportunities: [] });
+    // A non-empty read: an all-empty one renders the tab's empty state instead.
+    state.data.set('geography', { state_opportunities: [{ state: 'IL' }], state_avm_values: [], top_zips: [] });
     await render('/analytics');
     act(() => tabButton('Geography').click());
     const skeleton = document.querySelector('[data-analytics-skeleton]');
