@@ -95,6 +95,12 @@ vi.mock('../components/activation/ActivationLoopPanel', () => ({
 
 import { ApiError } from '../lib/api';
 import OfferOrchestrator from './offer-orchestrator';
+// The lib/api factory is async (it spreads the real module): the decision
+// receipt the route loads lazily would otherwise be handed the ORIGINAL
+// lib/api in a full-suite run (the PR #265 bypass: a real auditReceipt read
+// on the network). Loading its graph here gives it the mock; the route's
+// import() then resolves from the module cache.
+import '../components/mortgage/DecisionReceipt';
 
 const BORROWER_ID = 'B-0000000000001';
 
