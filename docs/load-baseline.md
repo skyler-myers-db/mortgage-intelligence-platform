@@ -191,6 +191,14 @@ Decision row above was still 'pending integrator run' at W5d branch start
 Decision row and the same RUM requirement (the events template joins
 EXCLUDED_TEMPLATES); the 1.5 s status poll stays.
 
+2026-10-14 (W5e w5-deps-report): delivery-04 not built (pre-taken cut 1);
+the Decision row above still read 'pending integrator run' at W5e branch
+start. W5e is the last batch, so the post-wave owner is a Genie delivery
+lane once this row is recorded (`tools/databricks/sse_ingress_spike.py`);
+`POST /api/v1/genie/message/events` then joins rumApiRoute.ts
+EXCLUDED_TEMPLATES, and `lib/genieJobEvents.ts` takes `withActorKey` with
+its RAW_FETCH_ALLOWLIST row. The 1.5 s status poll stays.
+
 ## Cold-cache profile (delivery-09)
 
 The baselines above are WARM. delivery-09 asks the cold question: on a cold
@@ -252,3 +260,7 @@ not built: both scenario rows and the Decision row above were still 'pending
 integrator run' at W5d branch start (2931d82c), so it is re-homed to W5e
 w5-deps-report under the same Decision row (built only if A or B is
 `reproduced`).
+
+2026-10-14 (W5e w5-deps-report): pending at W5e branch start; W5e is the
+last batch: notBuilt, post-wave owner a performance lane after the
+integrator runs `tools/load_test/locust_cold_cache.py` A and B.
