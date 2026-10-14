@@ -1330,3 +1330,18 @@ The saved-watchlist scheduler state (`growth_agent_scheduler_state_unavailable`,
 `exc_type` only) is served stale-while-refresh: a stale answer is returned at
 once while at most one background refresh runs, so a slow Jobs API never holds
 Home or Saved monitors; the event fires once per failed lookup.
+
+## 15. Sales ops per-officer workload (W5e)
+
+Audit 2026-09-21 `critic-10` item 6c (W5e w5-analytics). `GET
+/api/v1/sales/workload?from&to&stale_days` is one Lakebase statement over
+the active roster, `lead_assignments` and `call_dispositions` (no warehouse
+statement); it writes no audit row and answers `private, no-store`. It takes
+the `lakebase-read` backpressure class (the default read bucket and a
+Lakebase slot) through an early return placed before the sales warehouse
+prefix, like the Follow-ups summary in section 13. Browser RUM
+reports its template under the closed `workload` route segment
+(`backend/schemas/telemetry.py` `RUM_API_ROUTE_SEGMENTS`, mirrored in
+`frontend/src/lib/rumApiRoute.ts`), never the dates or an email. A Lakebase
+failure answers 503 with the governed dependency detail; the table shows the
+shared failure copy and no zero.

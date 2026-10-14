@@ -563,7 +563,8 @@ export function formatConversionPct(conversion: number | null): string | null {
 }
 
 /**
- * A stage's share of Addressable as a label (D-dataviz-geo-a, 2026-09-30):
+ * A stage's share of Addressable as a label (D-dataviz-geo-a, 2026-09-30;
+ * deviation:funnel-floored-marks):
  * "2.6% of addressable" down to 0.1%, and below that "1 in 1,186
  * addressable", since "<0.1%" hid the difference between 4,350 and 3
  * borrowers in 5.16M. N is rounded from the two integers, never from the

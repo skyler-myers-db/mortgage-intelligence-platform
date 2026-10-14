@@ -71,6 +71,9 @@ import {
  * honest returned-versus-matching counts. Dots are colored by the canonical S1 score
  * bands (scoreBand → .score--high/med/low) and deep-link to Borrower 360,
  * where the draft-only outreach composer is the terminal action.
+ *
+ * deviation:scatter-guides-tooltip: the markers' tip and the governed In the
+ * Money guides (analytics.scatter-overlay.tsx).
  */
 export function EquitySpreadScatter({
   overview,
