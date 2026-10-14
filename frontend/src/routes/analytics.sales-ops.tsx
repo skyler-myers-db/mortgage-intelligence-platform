@@ -53,6 +53,8 @@ import './analytics.sales-ops.css';
 const DistributionBoard = lazy(() => import('../components/mortgage/DistributionBoard'));
 // Field and its stylesheet load only when a manager picks Custom.
 const SalesPeriodRange = lazy(() => import('../components/mortgage/SalesPeriodRange'));
+// The per-officer workload (critic-10 6c): its own chunk and its own read.
+const SalesWorkloadTable = lazy(() => import('../components/mortgage/SalesWorkloadTable'));
 /** GET /sales/conversion returns at most this many groups (its LIMIT 100). */
 const CONVERSION_ROW_CAP = 100;
 /** An officer the roster does not list: never the raw email. */
@@ -419,6 +421,17 @@ export function SalesOpsSection() {
             ) : null}
           </div>
         </div>
+        {/* deviation:sales-manager-comparison-workload: every in-scope officer's
+            load, its own audit-free Lakebase read; the fallback reserves the
+            table's height while its chunk loads. */}
+        <Suspense fallback={<div className="sales-ops-workload-pending skeleton" aria-hidden="true" />}>
+          <SalesWorkloadTable
+            from={period.from}
+            to={period.to}
+            days={period.days}
+            conversion={periodQuery.isPlaceholderData ? null : (conversion?.rows ?? null)}
+          />
+        </Suspense>
       </div>
       {boardOpen && (
         <Suspense fallback={null}>

@@ -23,6 +23,12 @@ const apiMocks = vi.hoisted(() => ({
   /** The cohort (team) reads of GET /sales/conversion, apart from the per-officer one. */
   salesCohort: vi.fn(),
   salesOutcomeSummary: vi.fn(),
+  /** GET /sales/workload (the lazy SalesWorkloadTable's own client). */
+  salesWorkload: vi.fn(),
+}));
+
+vi.mock('../lib/apiClients/salesWorkload', () => ({
+  fetchSalesWorkload: apiMocks.salesWorkload,
 }));
 
 // The five analytics tabs use useWarmingUpRetry; stub it idle so they render
@@ -126,6 +132,14 @@ describe('Analytics Sales ops tab', () => {
     });
     apiMocks.salesConversion.mockResolvedValue({ rows: [] });
     apiMocks.salesCohort.mockResolvedValue({ rows: [] });
+    apiMocks.salesWorkload.mockResolvedValue({
+      from_date: '2026-07-08',
+      to_date: '2026-07-14',
+      previous_from_date: '2026-07-01',
+      previous_to_date: '2026-07-07',
+      stale_days: 7,
+      rows: [],
+    });
     apiMocks.salesOutcomeSummary.mockResolvedValue({
       total_outcomes: 0,
       applications_submitted: 0,
@@ -554,6 +568,33 @@ describe('Analytics Sales ops tab', () => {
       await renderView('/analytics?view=sales-ops');
       expect(document.body.textContent).not.toContain('Distribute approved leads…');
     });
+  });
+
+  it('mounts the per-officer workload as its own chunk, reading the period window (critic-10 6c)', async () => {
+    apiMocks.salesWorkload.mockResolvedValue({
+      from_date: '2026-07-08',
+      to_date: '2026-07-14',
+      previous_from_date: '2026-07-01',
+      previous_to_date: '2026-07-07',
+      stale_days: 7,
+      rows: [{ email: 'lo02@summit.example', display_label: 'Summit LO 02', region: 'CA', capacity_per_day: 25, open_count: 3, stale_count: 1, assigned_count: 2, worked_count: 1, previous_assigned_count: 1, previous_worked_count: 0 }],
+    });
+    await act(async () => {
+      renderAt('/analytics?view=sales-ops&sales_period=7d');
+    });
+    await vi.waitFor(async () => {
+      await settle();
+      expect(document.querySelector('[data-testid="sales-workload"]')).not.toBeNull();
+    }, { timeout: 10_000 });
+    await settle();
+    // One read for the shown period, the same window the conversion card reads.
+    expect(apiMocks.salesWorkload).toHaveBeenCalledTimes(1);
+    const [from, to] = apiMocks.salesWorkload.mock.calls[0];
+    expect(apiMocks.salesConversion.mock.calls.some((call) => call[0] === from && call[1] === to)).toBe(true);
+    const link = document.querySelector<HTMLAnchorElement>('[data-testid="sales-workload"] tbody a');
+    expect(link?.textContent).toBe('Summit LO 02');
+    expect(link?.getAttribute('href')).toBe('/lead-queue?assigned_to=lo02%40summit.example');
+    expect(document.querySelector('[data-testid="sales-workload"]')?.textContent).not.toContain('@summit.example');
   });
 
   describe('the team comparison (critic-10 6b)', () => {

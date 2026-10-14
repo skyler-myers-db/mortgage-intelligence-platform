@@ -19,6 +19,7 @@ import { printReceiptFixtures } from './data/printReceipt';
 import { rateLeverFixtures } from './data/rateLever';
 import { rateWindowFixtures } from './data/rateWindow';
 import { salesOpsFixtures } from './data/salesOps';
+import { salesWorkloadFixtures } from './data/salesLoop';
 import { segmentFixtures } from './data/segments';
 import { shellFixtures } from './data/shell';
 import { approvalRequestFixtures } from './data/approvalRequests';
@@ -34,6 +35,7 @@ export function defaultFixtures(): FixtureEntry[] {
     ...rateWindowFixtures,
     ...rateLeverFixtures,
     ...salesOpsFixtures,
+    ...salesWorkloadFixtures,
     ...genieFixtures,
     ...growthWatchlistFixtures,
     ...adminFixtures,

@@ -78,6 +78,8 @@ export const queryKeys = {
    */
   salesRoster: () => ['mip', 'sales', 'roster'] as const,
   salesOps: () => ['mip', 'sales', 'ops-snapshot'] as const,
+  /** GET /sales/workload for a period (the Board refetches the ['mip', 'sales', 'workload'] prefix). */
+  salesWorkload: (from: string, to: string) => ['mip', 'sales', 'workload', from, to] as const,
   portfolioPreview: (criteria: readonly unknown[]) => ['mip', 'portfolio', 'preview', ...criteria] as const,
   campaigns: () => ['mip', 'campaigns'] as const,
   campaign: (campaignId: string | null | undefined) =>

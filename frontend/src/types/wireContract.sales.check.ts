@@ -20,6 +20,7 @@ import type { LeadAssignment, LoanOfficer, LoanOfficerAssignment, SalesTeamMembe
 import type { SavedDraft, SavedDraftInput, SavedLead, SavedLeadInput, SessionResponse, WorkspaceMutationResult, WorkspaceState } from './workspace';
 import type { FollowupItem, FollowupList, LeadSnoozeRequest, LeadSnoozeResponse } from '../lib/apiClients/followUps';
 import type { FollowupSummary } from '../lib/apiClients/followUpsSummary';
+import type { SalesWorkloadResponse, SalesWorkloadRow } from '../lib/apiClients/salesWorkload';
 
 export type WireContractSales = [
   // (i) schema-named hand types
@@ -99,6 +100,11 @@ export type WireContractSales = [
   Expect<DeepNoPhantomKeys<LeadSnoozeRequest, ApiRequest<'LeadSnoozeRequest'>>>,
   Expect<WireFits<ApiResponse<'LeadSnoozeResponse'>, LeadSnoozeResponse>>,
   Expect<NoPhantomKeys<LeadSnoozeResponse, ApiResponse<'LeadSnoozeResponse'>>>,
+  // The Sales ops per-officer workload (W5e w5-analytics, critic-10 6c).
+  Expect<WireFits<ApiResponse<'SalesWorkloadResponse'>, SalesWorkloadResponse>>,
+  Expect<NoPhantomKeys<SalesWorkloadResponse, ApiResponse<'SalesWorkloadResponse'>>>,
+  Expect<WireFits<ApiResponse<'SalesWorkloadRow'>, SalesWorkloadRow>>,
+  Expect<NoPhantomKeys<SalesWorkloadRow, ApiResponse<'SalesWorkloadRow'>>>,
   // (ii) bound call sites whose type argument is not schema-named
   Expect<WireFits<ApiOk<'DELETE /api/v1/workspace/leads/{borrower_id}'>, WorkspaceMutationResult>>,
   Expect<NoPhantomKeys<WorkspaceMutationResult, ApiOk<'DELETE /api/v1/workspace/leads/{borrower_id}'>>>,

@@ -16,8 +16,9 @@ import type {
   DistributionReleaseResponse,
 } from '../../../../src/lib/apiClients/salesLoop';
 import type { LeadAssignment, SalesConversionResponse, SalesTeamMember } from '../../../../src/types';
+import type { SalesWorkloadResponse } from '../../../../src/lib/apiClients/salesWorkload';
 import type { ContractSample } from '../contractSamples';
-import { json, type FixtureReply, type MockApi } from '../mockApi';
+import { fixture, json, type FixtureEntry, type FixtureReply, type MockApi } from '../mockApi';
 import { LEADS } from './borrowers';
 import { SALES_TEAM } from './portfolio';
 import { SNAPSHOT_AT } from './reference';
@@ -194,6 +195,54 @@ function sampled(source: string, pattern: string, body: unknown, path = pattern)
   return { source, method: 'POST', pattern, path, query: '', status: 200, body };
 }
 
+/**
+ * GET /api/sales/workload (W5e w5-analytics, critic-10 6c): every in-scope
+ * loan officer of the fixture roster, with a period and the same span before
+ * it. Officer A holds the most open leads, B the stale one.
+ */
+export function workloadBody(from: string, to: string, previousFrom: string, previousTo: string, officers: SalesTeamMember[] = SALES_TEAM): SalesWorkloadResponse {
+  const counts = [
+    { open_count: 14, stale_count: 1, assigned_count: 9, worked_count: 7, previous_assigned_count: 6, previous_worked_count: 7 },
+    { open_count: 6, stale_count: 2, assigned_count: 4, worked_count: 5, previous_assigned_count: 5, previous_worked_count: 2 },
+  ];
+  return {
+    from_date: from,
+    to_date: to,
+    previous_from_date: previousFrom,
+    previous_to_date: previousTo,
+    stale_days: 7,
+    rows: officers
+      .filter((officer) => officer.role === 'loan_officer')
+      .map((officer, index) => ({
+        email: officer.email,
+        display_label: officer.display_label,
+        region: officer.region ?? null,
+        capacity_per_day: officer.capacity_per_day,
+        ...counts[index % counts.length],
+      })),
+  };
+}
+
+/** The same number of days immediately before `from` (YYYY-MM-DD, UTC arithmetic). */
+function previousWindow(from: string, to: string): [string, string] {
+  const day = 24 * 60 * 60 * 1000;
+  const start = Date.parse(`${from}T00:00:00Z`);
+  const span = Math.round((Date.parse(`${to}T00:00:00Z`) - start) / day);
+  const previousTo = start - day;
+  const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+  return [iso(previousTo - span * day), iso(previousTo)];
+}
+
+/** The default registry's workload read (fixture/registry.ts). */
+export const salesWorkloadFixtures: FixtureEntry[] = [
+  fixture('GET', '/api/sales/workload', ({ query }) => {
+    const from = query.get('from') ?? '2026-07-13';
+    const to = query.get('to') ?? '2026-07-14';
+    const [previousFrom, previousTo] = previousWindow(from, to);
+    return json<SalesWorkloadResponse>(workloadBody(from, to, previousFrom, previousTo));
+  }),
+];
+
 /** Every sales-loop body a spec registers, for the fixture contract exporter. */
 export function contractSamples(): ContractSample[] {
   const preview = boardPreview(CONTRACT_OFFICERS, [3, 1]);
@@ -214,6 +263,15 @@ export function contractSamples(): ContractSample[] {
       query: 'from=2026-07-13&to=2026-07-14&groupBy=lo',
       status: 200,
       body: conversionWithCalls(CONTRACT_OFFICERS.slice(0, 1)),
+    },
+    {
+      source: 'workloadBody',
+      method: 'GET',
+      pattern: '/api/sales/workload',
+      path: '/api/sales/workload',
+      query: 'from=2026-07-08&to=2026-07-14',
+      status: 200,
+      body: workloadBody('2026-07-08', '2026-07-14', '2026-07-01', '2026-07-07', CONTRACT_OFFICERS),
     },
   ];
 }
