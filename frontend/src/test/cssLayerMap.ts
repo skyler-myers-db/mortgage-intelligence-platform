@@ -76,6 +76,8 @@ export const COMPONENTS_BLOCKS: Readonly<Record<string, string>> = {
     ".followups__snooze's display: flex must keep losing to print.css's :root :is(.btn, ...) display: none on paper (the snooze control is a .btn)",
   'src/components/mortgage/DistributionBoard.css':
     ".distribution-board__wrap's overflow-x must keep losing to print.css's :root :is(.tbl-wrap, ...) overflow: visible on paper",
+  'src/components/charts/charts.css':
+    'the .analytics-chart* chrome moved here from 10-native-analytics.css (css-05 step 2) keeps the components layer it cascaded in, so analytics.scatter.css and the kit rules after it still win',
 };
 
 /** The layer a colocated sheet's own (non-mode, non-print) rules belong to. */
