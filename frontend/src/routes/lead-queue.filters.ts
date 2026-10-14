@@ -38,7 +38,7 @@ export const OUTREACH_FILTER_OPTIONS = ['Any outreach', 'None', 'Queued', 'Actio
 export const AGING_FILTER_OPTIONS = ['Any age', 'Aged >7d', 'Aged >14d', 'Aged >30d'] as const;
 export const FUNNEL_STAGE_LABELS: Record<LeadFunnelStage, string> = {
   addressable: 'Addressable',
-  in_the_money: 'Refi economics',
+  in_the_money: 'In the Money',
   high_opportunity: HIGH_OPPORTUNITY_KPI_LABEL,
   offer_recommended: 'Primary offer selected',
   approved: 'Approved',

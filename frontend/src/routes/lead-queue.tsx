@@ -495,8 +495,8 @@ export default function LeadQueue() {
               {segmentChips.length > 1 && (
                 <span className="muted fs-11">
                   {segmentMode === 'all'
-                    ? 'Intersection — every borrower is in all selected segments.'
-                    : 'Union — borrowers in any selected segment, de-duplicated.'}
+                    ? 'Borrowers in every selected segment.'
+                    : 'Borrowers in any selected segment, each listed once.'}
                 </span>
               )}
             </div>

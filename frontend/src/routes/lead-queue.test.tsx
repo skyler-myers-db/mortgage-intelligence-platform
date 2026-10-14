@@ -434,7 +434,7 @@ describe('LeadQueue filter state', () => {
     await settle();
 
     expect(document.querySelector('button[aria-label="SEGMENT: 2 segments selected (all selected)"]')).toBeTruthy();
-    expect(document.body.textContent).toContain('Intersection — every borrower is in all selected segments.');
+    expect(document.body.textContent).toContain('Borrowers in every selected segment.');
   });
 
   it('collapses the analytics-drilldown scope strip when no drilldown params are present', async () => {
@@ -547,7 +547,7 @@ describe('LeadQueue filter state', () => {
     expect(chipRow!.querySelectorAll('.chip').length).toBe(2);
     expect(chipRow!.textContent).toContain('Refi Propensity');
     expect(chipRow!.textContent).toContain('Investor / Multi-Property');
-    expect(chipRow!.textContent).toContain('Intersection');
+    expect(chipRow!.textContent).toContain('Borrowers in every selected segment.');
 
     const removeInvestor = document.querySelector(
       'button[aria-label="Remove Investor / Multi-Property segment filter"]',
@@ -563,7 +563,7 @@ describe('LeadQueue filter state', () => {
     expect(document.querySelector('button[aria-label="SEGMENT: Refi Propensity"]')).toBeTruthy();
     const remainingRow = document.querySelector('[aria-label="Active segment filters"]');
     expect(remainingRow!.querySelectorAll('.chip').length).toBe(1);
-    expect(remainingRow!.textContent).not.toContain('Intersection');
+    expect(remainingRow!.textContent).not.toContain('Borrowers in every selected segment.');
     // Unrelated filters survive the chip removal.
     expect(document.querySelector('button[aria-label="STATE: IL"]')).toBeTruthy();
 

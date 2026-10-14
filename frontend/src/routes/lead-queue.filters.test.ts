@@ -53,7 +53,7 @@ describe('lead queue effective workflow filters', () => {
 describe('lead queue drilldown display labels', () => {
   it('shows every analytics funnel stage as a user-facing filter value', () => {
     expect(funnelStageDisplayValue('addressable')).toBe('Addressable');
-    expect(funnelStageDisplayValue('in_the_money')).toBe('Refi economics');
+    expect(funnelStageDisplayValue('in_the_money')).toBe('In the Money');
     expect(funnelStageDisplayValue('high_opportunity')).toBe('Opportunity score 75+');
     expect(funnelStageDisplayValue('offer_recommended')).toBe('Primary offer selected');
     expect(funnelStageDisplayValue('approved')).toBe('Approved');
