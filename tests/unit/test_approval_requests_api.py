@@ -96,13 +96,32 @@ def _create(client: TestClient, ids: list[str], **kwargs: Any) -> Any:
 # -- create -----------------------------------------------------------------
 
 
+REFUSED_NOTE = "Prioritize borrowers who are not Hispanic"
+
+
+@pytest.mark.parametrize("note", [NOTE, REFUSED_NOTE], ids=["allowed-note", "refused-note"])
 def test_an_approver_is_told_to_decide_directly_with_nothing_read_or_written(
-    client: TestClient, ledger: FakeApprovalLedger, leads: _Leads
+    client: TestClient, ledger: FakeApprovalLedger, leads: _Leads, note: str
 ) -> None:
-    response = client.post(URL, json=_body([OK_1]), headers=APPROVER)
+    # The role gate runs before the governed screen: an approver's refused
+    # rationale is the same unaudited 409, never a 422 with a
+    # GOVERNED_TEXT_REFUSED row (O1 audits only what reaches the screen).
+    response = client.post(URL, json=_body([OK_1], note=note), headers=APPROVER)
     assert response.status_code == 409
     assert response.json()["detail"] == "Approvers decide directly; open the review instead."
-    assert ledger.statements == [] and leads.calls == []
+    assert note not in response.text
+    assert ledger.statements == [] and ledger.audits == [] and leads.calls == []
+
+
+def test_the_approver_control_note_is_refused_and_audited_for_a_requester(
+    client: TestClient, ledger: FakeApprovalLedger
+) -> None:
+    # Non-vacuity control for the refused-note leg above: the same rationale
+    # from a non-approver reaches the screen and is refused and recorded.
+    response = _create(client, [OK_1], note=REFUSED_NOTE)
+    assert response.status_code == 422
+    assert response.json()["detail"] == "rationale failed the governed text policy"
+    assert ledger.audit_types() == ["GOVERNED_TEXT_REFUSED"]
 
 
 def test_five_ids_hold_two_and_one_audit_row_records_every_skip(
@@ -283,6 +302,30 @@ def test_a_note_that_redaction_pushes_past_the_cap_is_422_not_a_503(
     fits = note.replace("Ping a@example.com first. ", "Review first, then decide ")
     assert len(fits) == 500
     assert _create(client, [OK_1], note=fits).status_code == 200
+
+
+def test_an_overlong_after_redaction_note_is_refused_by_length_before_the_governed_screen(
+    client: TestClient, ledger: FakeApprovalLedger, leads: _Leads
+) -> None:
+    # Refused text AND past the cap once redacted: the length check answers
+    # first, so nothing is screened, read or written (no GOVERNED row).
+    head = "Ping a@example.com first. " + REFUSED_NOTE + ". "
+    note = (head + "Rate-sensitive refinance candidates. " * 14)[:500]
+    assert len(note) == 500 and REFUSED_NOTE in note
+    response = _create(client, [OK_1], note=note)
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == (
+        "rationale is too long once personal details are redacted; shorten it and leave them out"
+    )
+    assert ledger.statements == [] and ledger.audits == [] and leads.calls == []
+    # Non-vacuity control: without the address the note fits once redacted,
+    # reaches the screen, and is refused and recorded.
+    fits = note.replace("Ping a@example.com first. ", "Review first, then decide ")
+    assert len(fits) == 500
+    refused = _create(client, [OK_1], note=fits)
+    assert refused.status_code == 422
+    assert refused.json()["detail"] == "rationale failed the governed text policy"
+    assert ledger.audit_types() == ["GOVERNED_TEXT_REFUSED"]
 
 
 def test_a_replayed_key_returns_the_stored_body_and_a_changed_payload_conflicts(
