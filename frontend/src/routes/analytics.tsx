@@ -7,6 +7,7 @@ import { Link, useSearchParams } from 'react-router';
 import { Icon } from '../components/Icon';
 import { PageShell } from '../components/layout/PageShell';
 import { FilterSelect } from '../components/ui/FilterSelect';
+import { MultiFilterSelect } from '../components/ui/MultiFilterSelect';
 import { useTabs } from '../components/ui/useTabs';
 import '../components/ui/LayoutTabs.css';
 import { useFootprint } from '../components/FootprintProvider';
@@ -36,11 +37,10 @@ import {
 } from './analytics.lib';
 import { LoadState } from './analytics.charts';
 import { ANALYTICS_SKELETONS } from './analytics.skeleton';
+import { ExecutiveView } from './analytics.executive';
 import {
   EconomicsView,
-  ExecutiveView,
   GeographyView,
-  MultiFilterSelect,
   SegmentsView,
   SignalsView,
 } from './analytics.sections';

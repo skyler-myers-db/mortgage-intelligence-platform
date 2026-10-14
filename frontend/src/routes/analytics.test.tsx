@@ -17,7 +17,7 @@ import {
   signalLabel,
   zoomScatterLayout,
 } from './analytics.lib';
-import { ExecutiveProvenanceNote, ScoreDistribution } from './analytics.sections';
+import { ExecutiveProvenanceNote, ScoreDistribution } from './analytics.executive';
 import { TIMESTAMP_UNAVAILABLE } from '../lib/time';
 import type {
   EquitySpreadOverview,
