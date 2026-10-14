@@ -60,9 +60,12 @@ import { useOfferSalesTeam } from './offer-orchestrator.sales-team';
 import { ApiError } from '../lib/apiTransport';
 import { preloadDescribedError } from '../components/ui/DescribedError';
 
-// The error vocabulary is its own chunk (loaded with the first failure).
+// The error vocabulary is its own chunk (loaded with the first failure), and
+// the Sales ops tab is its own chunk (W5e item 2b): load both up front so a
+// render settles in one tick.
 beforeAll(async () => {
   await preloadDescribedError();
+  await import('./analytics.sales-ops');
 });
 
 async function settle(): Promise<void> {

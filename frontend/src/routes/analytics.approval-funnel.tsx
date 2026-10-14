@@ -33,6 +33,7 @@ import type {
 import type { KpiProofKey } from '../lib/apiTypes';
 import { formatConversionPct } from './analytics.lib';
 import { DataTable, LoadState } from './analytics.charts';
+import { ANALYTICS_SKELETONS } from './analytics.skeleton';
 import { formatCount } from '../lib/formatters';
 
 /**
@@ -315,7 +316,7 @@ export function ApprovalFunnelSection() {
     },
   );
   return (
-    <LoadState query={funnel} title="Approval funnel">
+    <LoadState query={funnel} title="Approval funnel" skeleton={ANALYTICS_SKELETONS.approvalFunnel}>
       {(data) => (
         <>
           <section className="surface analytics-section">

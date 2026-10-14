@@ -2,7 +2,7 @@
 // Keep this route explicit: chart-scale derivations use targeted useMemo below.
 'use no memo';
 
-import { useMemo } from 'react';
+import { Suspense, useMemo } from 'react';
 import { Link } from 'react-router';
 import { GlossaryTerm } from '../components/GlossaryTerm';
 import { Histogram } from '../components/charts/Histogram';
@@ -49,8 +49,29 @@ import {
   spreadSummary,
   thresholdNotice,
 } from './analytics.chart-model';
-import { EquitySpreadScatter } from './analytics.equity-scatter';
+import { lazyView } from './analytics.lazyView';
 import type { AnalyticsQueryOptions } from '../lib/api';
+
+// The scatter is its own chunk (W5e item 2b): Geography, Segments and Signals
+// never download it, and Economics loads it beside its read.
+const EquitySpreadScatter = lazyView(() => import('./analytics.equity-scatter').then((module) => module.EquitySpreadScatter));
+
+/** Warm the scatter chunk (the Economics tab's own preload). */
+export const preloadEquityScatter = (): Promise<unknown> => EquitySpreadScatter.preload();
+
+/** The scatter panel's frame while its chunk loads: the loaded panel's height, so nothing below moves. */
+function EquitySpreadScatterPending() {
+  return (
+    <section className="surface analytics-section" aria-busy="true">
+      <div className="surface__hdr">
+        <h2 className="h-3">Equity vs Rate Spread</h2>
+      </div>
+      <div className="surface__body analytics-chart-panel analytics-chart-panel--scatter">
+        <span className="skeleton analytics-skeleton__chart" aria-hidden="true" />
+      </div>
+    </section>
+  );
+}
 
 const spreadRange = (start: number) => formatBinRange(start, SPREAD_BUCKET_BPS, 'bps');
 
@@ -190,11 +211,13 @@ export function EconomicsView({
           </div>
         </section>
       </div>
-      <EquitySpreadScatter
-        overview={data.equity_spread}
-        filters={filters}
-        filterCriteria={filterCriteria}
-      />
+      <Suspense fallback={<EquitySpreadScatterPending />}>
+        <EquitySpreadScatter
+          overview={data.equity_spread}
+          filters={filters}
+          filterCriteria={filterCriteria}
+        />
+      </Suspense>
     </>
   );
 }

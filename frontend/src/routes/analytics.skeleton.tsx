@@ -34,6 +34,8 @@ export const ANALYTICS_SKELETONS = {
   economics: { rows: ['split-wide-left'] },
   segments: { rows: ['full', 'split', 'full'] },
   signals: { rows: ['full', 'full', 'full'] },
+  /** The live funnel's stage cards, then who approved what and the per-officer table. */
+  approvalFunnel: { rows: ['full', 'full', 'full'] },
 } as const satisfies Record<string, AnalyticsSkeletonShape>;
 
 function SkeletonPanel({

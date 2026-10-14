@@ -2,7 +2,7 @@
 // Keep this route explicit: chart-scale derivations use targeted useMemo below.
 'use no memo';
 
-import { useMemo } from 'react';
+import { Suspense, useEffect, useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { Icon } from '../components/Icon';
 import { PageShell } from '../components/layout/PageShell';
@@ -36,19 +36,47 @@ import {
   type AnalyticsTab,
 } from './analytics.lib';
 import { LoadState } from './analytics.charts';
-import { ANALYTICS_SKELETONS } from './analytics.skeleton';
+import { ANALYTICS_SKELETONS, AnalyticsSkeleton, type AnalyticsSkeletonShape } from './analytics.skeleton';
 import { ExecutiveView } from './analytics.executive';
-import {
-  EconomicsView,
-  GeographyView,
-  SegmentsView,
-  SignalsView,
-} from './analytics.sections';
+import { lazyView, warmChunk } from './analytics.lazyView';
 import { useRateWindowQuery } from './analytics.rate-window';
-import { SalesOpsSection } from './analytics.sales-ops';
-import { ApprovalFunnelSection } from './analytics.approval-funnel';
+import { preloadBestEffort } from '../lib/lazyPreload';
 
 const TAB_IDS: readonly AnalyticsTab[] = TABS.map((item) => item.id);
+
+// Per-tab chunks (2026-09-21 audit bundle-06, W5e item 2b): Executive is the
+// default tab and stays in the route chunk; every other tab loads its own
+// module, and the Economics scatter loads inside that one. The queries stay
+// here, so a tab's read starts beside the route, not after its chunk.
+const loadSections = () => import('./analytics.sections');
+const GeographyView = lazyView(() => loadSections().then((module) => module.GeographyView));
+const EconomicsView = lazyView(() => loadSections().then((module) => module.EconomicsView));
+const SegmentsView = lazyView(() => loadSections().then((module) => module.SegmentsView));
+const SignalsView = lazyView(() => loadSections().then((module) => module.SignalsView));
+const ApprovalFunnelSection = lazyView(() => import('./analytics.approval-funnel').then((module) => module.ApprovalFunnelSection));
+const SalesOpsSection = lazyView(() => import('./analytics.sales-ops').then((module) => module.SalesOpsSection));
+
+/** Each tab's chunks (none for Executive): warmed on intent, loaded on selection. */
+const TAB_CHUNKS: Partial<Record<AnalyticsTab, () => Promise<unknown>>> = {
+  geography: GeographyView.preload,
+  // Sections first (the scatter's own lazy object lives there), then the scatter.
+  economics: () => EconomicsView.preload().then(() => loadSections()).then((module) => module.preloadEquityScatter()),
+  segments: SegmentsView.preload,
+  signals: SignalsView.preload,
+  'approval-funnel': ApprovalFunnelSection.preload,
+  'sales-ops': SalesOpsSection.preload,
+};
+
+/** The skeleton a tab shows while its chunk or its first read loads. */
+const TAB_SKELETON: Record<AnalyticsTab, { title: string; shape: AnalyticsSkeletonShape }> = {
+  executive: { title: 'Executive analytics', shape: ANALYTICS_SKELETONS.executive },
+  geography: { title: 'Geography analytics', shape: ANALYTICS_SKELETONS.geography },
+  economics: { title: 'Economics analytics', shape: ANALYTICS_SKELETONS.economics },
+  segments: { title: 'Segment analytics', shape: ANALYTICS_SKELETONS.segments },
+  signals: { title: 'Signal analytics', shape: ANALYTICS_SKELETONS.signals },
+  'approval-funnel': { title: 'Approval funnel', shape: ANALYTICS_SKELETONS.approvalFunnel },
+  'sales-ops': { title: 'Sales ops snapshot', shape: ANALYTICS_SKELETONS.panel },
+};
 
 export default function AnalyticsRoute() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -63,6 +91,12 @@ export default function AnalyticsRoute() {
   // APG tabs (audit a11y-02): arrow keys, Home/End, roving tabindex, and a
   // tabpanel the selected tab controls.
   const tabs = useTabs({ tabs: TAB_IDS, selected: tab, onSelect: setTab, idBase: 'analytics' });
+  // The selected tab's chunk loads with its read (a deep link or a key press
+  // as much as a click), never after the read lands.
+  useEffect(() => {
+    const chunk = TAB_CHUNKS[tab];
+    if (chunk) preloadBestEffort(chunk);
+  }, [tab]);
   const footprint = useFootprint();
   const configOptionsQuery = useConfigOptionsQuery();
   const targetLenderOptions = useMemo(() => {
@@ -222,6 +256,8 @@ export default function AnalyticsRoute() {
             key={item.id}
             {...tabs.tabProps(item.id)}
             className={tab === item.id ? 'is-active' : undefined}
+            onPointerEnter={() => warmChunk(TAB_CHUNKS[item.id])}
+            onFocus={() => warmChunk(TAB_CHUNKS[item.id])}
           >
             {item.label}
           </button>
@@ -290,6 +326,9 @@ export default function AnalyticsRoute() {
       </div>
       )}
 
+      {/* Keyed by tab: a ?view= change shows the new tab's skeleton at once
+          instead of holding the old tab while the chunk loads. */}
+      <Suspense key={tab} fallback={<AnalyticsSkeleton title={TAB_SKELETON[tab].title} shape={TAB_SKELETON[tab].shape} />}>
       {tab === 'executive' && (
         <LoadState query={executive} title="Executive analytics" skeleton={ANALYTICS_SKELETONS.executive}>
           {(data) => <ExecutiveView data={data} leadParams={leadParams} filtersActive={executiveFiltersActive} />}
@@ -317,6 +356,7 @@ export default function AnalyticsRoute() {
       )}
       {tab === 'approval-funnel' && <ApprovalFunnelSection />}
       {tab === 'sales-ops' && <SalesOpsSection />}
+      </Suspense>
       </div>
     </PageShell>
   );
