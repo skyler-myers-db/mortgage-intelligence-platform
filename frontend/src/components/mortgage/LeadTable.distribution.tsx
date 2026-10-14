@@ -13,14 +13,13 @@
  * sales manager or an admin (sales_state_core.require_manager_actor), and a
  * loan officer's scoped roster is non-empty, so `salesTeam.length > 0` is no
  * manager gate. The opener shows only when the signed-in user's OWN roster
- * row has one of those roles. The roster is read from the cache the route
- * already filled (an observer that never fetches), so the toolbar adds no
- * request.
+ * row has one of those roles. The roster is read through the one roster
+ * reader (lib/salesRoster, runtime-06) from the cache the route already
+ * filled (an observer that never fetches), so the toolbar adds no request.
  */
 import { lazy, Suspense } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { api } from '../../lib/api';
-import { queryKeys } from '../../lib/queryKeys';
+import { useSalesRoster } from '../../lib/salesRoster';
+import type { SalesTeamMember } from '../../types';
 
 const DistributionBoard = lazy(() => import('./DistributionBoard'));
 
@@ -29,18 +28,17 @@ export const DISTRIBUTION_MAX_BORROWERS = 500;
 
 const PLANNER_ROLES: ReadonlySet<string> = new Set(['sales_manager', 'admin']);
 
+/** Module-level `select` (stable identity): the active sales managers and admins. */
+function activePlanners(members: SalesTeamMember[]): SalesTeamMember[] {
+  return members.filter((member) => member.active && PLANNER_ROLES.has(member.role));
+}
+
 /** The signed-in user's own roster row is a sales manager's or an admin's. */
 export function useCanPlanDistribution(actorEmail: string | null): boolean {
-  const roster = useQuery({
-    queryKey: queryKeys.salesRoster(),
-    queryFn: ({ signal }) => api.salesTeam(signal),
-    // The route's roster observer fetches; this one only reads its cache.
-    enabled: false,
-  });
+  // The route's roster observer fetches; this one only reads its cache.
+  const planners = useSalesRoster(activePlanners, { fetch: false }).data;
   const email = actorEmail?.toLowerCase() ?? null;
-  if (email === null) return false;
-  const own = roster.data?.find((member) => member.active && member.email.toLowerCase() === email);
-  return own !== undefined && PLANNER_ROLES.has(own.role);
+  return email !== null && (planners?.some((member) => member.email.toLowerCase() === email) ?? false);
 }
 
 /** The Board on the selected rows, while open. */
