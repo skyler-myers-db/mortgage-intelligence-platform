@@ -135,6 +135,17 @@ build only on criteria 2-4 PASS live AND criterion 1 PASS under a declared
 rows-per-tile cap or a cheaper fail-closed row scan. Static pins stay as they
 are.
 
+2026-10-14 (W5e w5-test-harness-deps-report): living tiles not built again.
+At the W5e base (0927bb22) criteria 2-4 above are still 'pending integrator
+run' (neither the W5c deploy nor `genie_tiles_spike --live` has run), and
+criterion 1 still FAILS offline (104x one prose scan; six tiles fit the
+54,496-call baseline only at about 11 rows in total). The build (an
+`execute_attachment_query` client, a `mip_app.genie_tiles` Lakebase block,
+routes, a server pin store and a refresh job) also needs a Lakebase slot, and
+W5e's only slot is w5-lead-queue-columns'. It goes to a post-wave Genie
+living-tiles lane, gated on the integrator's `--live` verdicts after the W5e
+deploy and on a declared rows-per-tile cap or a cheaper fail-closed row scan.
+
 ## Integrator checklist (after the W5c deploy)
 
 - [ ] Re-run `python -m tools.genie_tiles_spike --offline` on the deployed
