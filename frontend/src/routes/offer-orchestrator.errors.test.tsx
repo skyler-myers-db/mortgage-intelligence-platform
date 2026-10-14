@@ -58,6 +58,17 @@ describe('Offer write failures (states-04)', () => {
     expect(container.querySelector('button')).toBeNull();
   });
 
+  it('a 409 actor_changed on approve reads the identity-change sentence, not the neutral refusal (D-identity-review-a4)', async () => {
+    const cause = new ApiError('The signed-in user changed.', { path: '/api/outreach/approve', status: 409, reason: 'actor_changed' });
+    const { container } = await mount(
+      <OfferWriteFailureCopy failure={{ lead: "Couldn't write approval.", cause }} onRegenerate={vi.fn()} />,
+    );
+    await settle();
+    expect(container.textContent).toBe("Couldn't write approval. Nothing was recorded. This tab resets for the new user.");
+    expect(container.textContent).not.toContain(OFFER_REFUSED.decision);
+    expect(regenerateButton(container)).toBeUndefined();
+  });
+
   it('a draft-proof 409 on approve offers Regenerate draft, run only on the reviewer\'s click', async () => {
     const onRegenerate = vi.fn();
     const { container } = await mount(

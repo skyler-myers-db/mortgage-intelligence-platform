@@ -1,6 +1,7 @@
 import { Button } from '../components/Primitives';
 import { lazyModule, useLazyModule } from '../components/mortgage/useLazyModule';
 import { ApiError } from '../lib/api';
+import { ACTOR_CHANGED_REASON } from '../lib/apiActorBinding';
 import type { OfferRefusalScope } from '../lib/offerRefusals';
 import { FixedCopyError } from './offer-orchestrator.queries';
 
@@ -47,10 +48,13 @@ const FAILURE_SENTENCE_CHUNK = lazyModule(() => import('../components/mortgage/O
  * The detail of a 409 or 422, the server's deliberate refusals; null for
  * any other failure. A client failure (offline, unreachable, an ended
  * session) never carries either status (lib/apiTransport), so it is still
- * described.
+ * described. A 409 `actor_changed` (D-identity-review-a4) is not a refusal
+ * of this decision but of the previous user's tab, so it is described too:
+ * "Nothing was recorded. This tab resets for the new user."
  */
 function refusalDetail(cause: unknown): string | null {
-  return cause instanceof ApiError && (cause.status === 409 || cause.status === 422) ? cause.message : null;
+  if (!(cause instanceof ApiError) || (cause.status !== 409 && cause.status !== 422)) return null;
+  return cause.reason === ACTOR_CHANGED_REASON ? null : cause.message;
 }
 
 /** The cause sentence: fixed app copy as written, otherwise the failure chunk's sentence. */
