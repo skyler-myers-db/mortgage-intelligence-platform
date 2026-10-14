@@ -312,6 +312,80 @@ def test_every_rendering_for_a_state_passes_the_real_prompt_guards(state: str) -
     assert failures == {}
 
 
+def _no_state_contexts(partition: str) -> list[GenieContext]:
+    """Renderings with no state slot, by partition (so ``-n 4`` spreads them).
+
+    The COVERAGE_SCOPE shapes: a segment pair with no state (the most common
+    empty intersection), a pair beside a county, ZIP or city, a lender ref
+    alone or beside a non-state place, and the assignee preset beside each
+    single segment.
+    """
+
+    segments = _templated_segments()
+    if partition == "lenders":
+        contexts = []
+        for ref in LENDER_REFS:
+            contexts.append(GenieContext(route="lead-queue", lender_ref=ref))
+            contexts.append(
+                GenieContext(route="lead-queue", lender_ref=ref, segment_codes=["itm", "equity"], segment_mode="all")
+            )
+        for ref in ("Competitor A", "Competitor Q", "Competitor Other"):
+            contexts.append(GenieContext(route="lead-queue", lender_ref=ref, county_fips="17031"))
+            contexts.append(GenieContext(route="lead-queue", lender_ref=ref, zip="60601"))
+            contexts.append(GenieContext(route="lead-queue", lender_ref=ref, city="KENT~WA"))
+        return contexts
+    if partition == "assignee":
+        return [GenieContext(route="lead-queue", segment_codes=[code], assignee="me") for code in segments]
+    contexts = []
+    for other in segments[segments.index(partition) + 1 :]:
+        for mode in ("all", "any"):
+            contexts.append(GenieContext(route="lead-queue", segment_codes=[partition, other], segment_mode=mode))
+    partner = segments[1] if partition == segments[0] else segments[0]
+    contexts.append(
+        GenieContext(route="lead-queue", segment_codes=[partition, partner], segment_mode="all", county_fips="17031")
+    )
+    contexts.append(GenieContext(route="lead-queue", segment_codes=[partition, partner], segment_mode="any", zip="60601"))
+    contexts.append(
+        GenieContext(route="lead-queue", segment_codes=[partition, partner], segment_mode="all", city="KENT~WA")
+    )
+    return contexts
+
+
+@pytest.mark.parametrize("partition", [*_templated_segments(), "lenders", "assignee"])
+def test_every_no_state_rendering_passes_the_real_prompt_guards(partition: str) -> None:
+    """A future guard change must not silently turn the hero case into "Genie can't take this filter set"."""
+
+    started = time.perf_counter()
+    contexts = _no_state_contexts(partition)
+    failures: dict[str, str] = {}
+    for ctx in contexts:
+        response = render_genie_context_scope(ctx)
+        key = ctx.model_dump_json(exclude_defaults=True)
+        if response.prompt is None:
+            failures[key] = f"withheld:{response.withheld}"
+            continue
+        if hit := genie_context_battery_hit(response.prompt):
+            failures[key] = f"hit:{hit}"
+            continue
+        assert response.withheld is None
+        assert response.omitted == (["assignee"] if ctx.assignee is not None else [])
+        _assert_governed_place(ctx, response.prompt)
+    _BATTERY_SECONDS[f"no-state:{partition}"] = time.perf_counter() - started
+    assert len(contexts) >= 3
+    assert failures == {}
+
+
+def test_a_no_state_pair_asks_across_the_coverage() -> None:
+    response = render_genie_context_scope(
+        GenieContext(route="lead-queue", segment_codes=["itm", "listed"], segment_mode="all")
+    )
+
+    assert response.prompt == (
+        f"How many borrowers {COVERAGE_SCOPE} are in the prime refi candidates segment and the listed for sale "
+        "segment, and what is the average rate spread?"
+    )
+
+
 def test_the_county_grain_covers_every_admitted_shipped_county() -> None:
     counties = _counties()
     admitted = [row for row in counties if not _excluded_county(row[2])]
@@ -399,7 +473,7 @@ def test_zz_record_the_battery_wall_time() -> None:
     """Reported in the lane PR; never a skip, never a threshold."""
 
     total = sum(_BATTERY_SECONDS.values())
-    print(f"genie context battery: {len(_BATTERY_SECONDS)} states in this worker, {total:.1f}s")
+    print(f"genie context battery: {len(_BATTERY_SECONDS)} partitions in this worker, {total:.1f}s")
 
 
 # --- (iii) parity -----------------------------------------------------------------
