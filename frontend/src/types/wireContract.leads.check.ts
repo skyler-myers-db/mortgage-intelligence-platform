@@ -27,12 +27,12 @@ export type WireContractLeads = [
   Expect<DeepNoPhantomKeys<LeadExportReceiptRequest, ApiRequest<'LeadExportReceiptRequest'>>>,
   Expect<WireFits<OfferRecommendRequest, ApiRequest<'OfferRecommendRequest'>>>,
   Expect<DeepNoPhantomKeys<OfferRecommendRequest, ApiRequest<'OfferRecommendRequest'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-lead-queue-paging: offer_code is string | null in the client body but a closed offer-code union | null on the wire
+  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: offer_code is string | null in the client body but a closed offer-code union | null on the wire
   Expect<WireFits<OutreachApproveRequest, ApiRequest<'OutreachApproveRequest'>>>,
   Expect<DeepNoPhantomKeys<OutreachApproveRequest, ApiRequest<'OutreachApproveRequest'>>>,
   Expect<WireFits<OutreachDraftRequest, ApiRequest<'OutreachDraftRequest'>>>,
   Expect<DeepNoPhantomKeys<OutreachDraftRequest, ApiRequest<'OutreachDraftRequest'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-lead-queue-paging: offer_code is string | null and rationale_code is string in the client body, closed literal unions on the wire
+  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: offer_code is string | null and rationale_code is string in the client body, closed literal unions on the wire
   Expect<WireFits<OutreachRejectRequest, ApiRequest<'OutreachRejectRequest'>>>,
   Expect<DeepNoPhantomKeys<OutreachRejectRequest, ApiRequest<'OutreachRejectRequest'>>>,
   Expect<WireFits<ApiResponse<'Borrower360'>, Borrower360>>,

@@ -44,13 +44,13 @@ export type WireContractSales = [
   Expect<NoPhantomKeys<CallDisposition, ApiResponse<'CallDisposition'>>>,
   Expect<WireFits<ApiResponse<'SalesAgingLead'>, SalesAgingLead>>,
   Expect<NoPhantomKeys<SalesAgingLead, ApiResponse<'SalesAgingLead'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-palette-offer-sales-loop: rows are untyped objects on the wire but typed conversion rows in the hand type
+  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: rows are untyped objects on the wire but typed conversion rows in the hand type
   Expect<WireFits<ApiResponse<'SalesConversionResponse'>, SalesConversionResponse>>,
   Expect<NoPhantomKeys<SalesConversionResponse, ApiResponse<'SalesConversionResponse'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-palette-offer-sales-loop: by_lo, by_source_system, source_statuses and top_competitors rows are untyped objects on the wire but typed rows in the hand type
+  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: by_lo, by_source_system, source_statuses and top_competitors rows are untyped objects on the wire but typed rows in the hand type
   Expect<WireFits<ApiResponse<'SalesOutcomeSummaryResponse'>, SalesOutcomeSummaryResponse>>,
   Expect<NoPhantomKeys<SalesOutcomeSummaryResponse, ApiResponse<'SalesOutcomeSummaryResponse'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-palette-offer-sales-loop: by_lo rows are untyped objects on the wire but typed rows in the hand type
+  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: by_lo rows are untyped objects on the wire but typed rows in the hand type
   Expect<WireFits<ApiResponse<'SalesStandupResponse'>, SalesStandupResponse>>,
   Expect<NoPhantomKeys<SalesStandupResponse, ApiResponse<'SalesStandupResponse'>>>,
   Expect<WireFits<ApiResponse<'LeadAssignment'>, LeadAssignment>>,
