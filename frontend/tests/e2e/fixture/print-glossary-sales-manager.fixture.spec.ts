@@ -7,7 +7,8 @@
  *    under print paints Borrower 360 and the ledger with IDENTICAL colours in
  *    dark and light; Export PDF writes exactly one PRINT_EXPORT receipt
  *    BEFORE exactly one print(), a failed receipt prints nothing, and
- *    printing re-reads nothing.
+ *    printing re-reads nothing. One receipt, one paper: once that dialog's
+ *    afterprint has fired, a later Ctrl/Cmd-P prints as unaudited.
  *  - tables-10: the facets read only on an explicit menu open; the exclusion
  *    reaches the page read and stays out of the URL; an auditor gets Export
  *    PDF but no CSV (the admin CSV's receipt order is export-audit.fixture
@@ -40,7 +41,13 @@ declare global {
   }
 }
 
-/** Stub window.print and record, in page order, the receipt request, its response and every print(). */
+/**
+ * Stub window.print and record, in page order, the receipt request, its
+ * response and every print(), with what the provenance read at that moment.
+ * The stub is shaped like Chromium's blocking print(): beforeprint, the
+ * paper, then afterprint before it returns (a listener added after print()
+ * returns misses that afterprint).
+ */
 function installPrintProbe(): void {
   const order: string[] = [];
   const printed: string[] = [];
@@ -56,12 +63,15 @@ function installPrintProbe(): void {
     return response;
   };
   window.print = () => {
+    window.dispatchEvent(new Event('beforeprint'));
     order.push('print');
     printed.push(document.querySelector('[data-testid="print-provenance"]')?.textContent ?? '');
+    window.dispatchEvent(new Event('afterprint'));
   };
 }
 
 const printOrder = (page: Page) => page.evaluate(() => [...(window.__mipPrintOrder ?? [])]);
+const printedPapers = (page: Page) => page.evaluate(() => [...(window.__mipPrintedProvenance ?? [])]);
 
 /** Record every PRINT_EXPORT request body the page sends. */
 function recordReceipts(mockApi: MockApi): unknown[] {
@@ -167,6 +177,9 @@ test.describe('print path (responsive-08)', () => {
       await expect(exportPdf).toHaveText('Export PDF');
       await exportPdf.click();
       await expect.poll(() => printOrder(page)).toEqual(['receipt-request', 'receipt-response 200', 'print']);
+      expect(await printedPapers(page), 'the Export PDF paper named its receipt when print() ran').toEqual([
+        expect.stringContaining(`Audit receipt ${PRINT_RECEIPT_ID}`),
+      ]);
       await expect(page.locator('.toast-region')).toContainText('Print receipt recorded');
       await app.openCommandPalette();
 
@@ -179,8 +192,17 @@ test.describe('print path (responsive-08)', () => {
       const provenance = page.getByTestId('print-provenance');
       await expect(provenance).toBeVisible();
       await expect(provenance).toContainText(`Borrower 360 · ${PRIMARY_BORROWER.borrower_id}`);
-      await expect(provenance).toContainText(`Audit receipt ${PRINT_RECEIPT_ID}`);
       await expect(provenance.locator('img')).toHaveCount(0);
+      // The Export PDF dialog has closed (its afterprint): the receipt
+      // captioned that one paper, so this page on paper now is unaudited.
+      await expect(provenance).toContainText('Unaudited print');
+      await expect(provenance).not.toContainText(PRINT_RECEIPT_ID);
+      // A Ctrl/Cmd-P of the same page: no receipt asked for, none claimed.
+      await page.evaluate(() => window.print());
+      const papers = await printedPapers(page);
+      expect(papers, 'a later print of the page').toHaveLength(2);
+      expect(papers[1]).toContain('Unaudited print');
+      expect(papers[1]).not.toContain(PRINT_RECEIPT_ID);
       await page.emulateMedia({ media: 'screen' });
       await expect(provenance).toBeHidden();
     });
@@ -221,7 +243,7 @@ test.describe('print path (responsive-08)', () => {
 
     await page.getByTestId('export-pdf').click();
     await expect.poll(() => printOrder(page)).toEqual(['receipt-request', 'receipt-response 200', 'print']);
-    const printed = await page.evaluate(() => [...(window.__mipPrintedProvenance ?? [])]);
+    const printed = await printedPapers(page);
     expect(printed, 'the page already named its receipt when print() ran').toEqual([expect.stringContaining(`Audit receipt ${PRINT_RECEIPT_ID}`)]);
     const after = callsSince(mockApi, before);
     expect(after).toEqual(['POST /api/print-receipt']);

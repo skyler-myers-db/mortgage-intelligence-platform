@@ -16,6 +16,13 @@
  * requested on. A receipt that resolves after the page changed (a pager step
  * to another borrower, an unmount on a route change) prints nothing, and a
  * 429 Try again after the page changed asks for nothing.
+ *
+ * Fix round 2 pins one receipt, one paper: the caption lasts until THAT
+ * print dialog's afterprint, so a later Ctrl/Cmd-P (which wrote no
+ * PRINT_EXPORT row) prints as unaudited. Mutation check (lane report):
+ * registering the afterprint clear after `window.print()` returns fails
+ * "clears the caption when afterprint fires inside print(), as Chromium
+ * does"; dropping the clear fails both one-shot cases.
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -260,6 +267,74 @@ describe('usePrintReceipt', () => {
 
     expect(window.print).not.toHaveBeenCalled();
     expect(provenance()?.textContent).toContain(UNAUDITED_PRINT);
+  });
+});
+
+describe('usePrintReceipt: one receipt, one paper', () => {
+  it('keeps the caption until its dialog closes; a later Ctrl/Cmd-P of the same page prints as unaudited', async () => {
+    mocks.createPrintReceipt.mockResolvedValue(RECEIPT);
+    click();
+    await act(async () => undefined);
+
+    expect(printed).toEqual([expect.stringContaining(`Audit receipt ${RECEIPT.audit_event_id}`)]);
+    expect(provenance()?.textContent).toContain(`Audit receipt ${RECEIPT.audit_event_id}`);
+
+    // The Export PDF dialog closes.
+    await act(async () => {
+      window.dispatchEvent(new Event('afterprint'));
+    });
+    expect(provenance()?.textContent).toContain(UNAUDITED_PRINT);
+
+    // Ctrl/Cmd-P on the same page: no receipt was asked for, none is claimed.
+    act(() => window.print());
+    expect(printed[1]).toContain(UNAUDITED_PRINT);
+    expect(printed[1]).not.toContain(RECEIPT.audit_event_id);
+    expect(mocks.createPrintReceipt).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the caption when afterprint fires inside print(), as Chromium does', async () => {
+    // Chromium's print() blocks and dispatches afterprint before returning.
+    Object.defineProperty(window, 'print', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => {
+        printed.push(provenance()?.textContent ?? '');
+        window.dispatchEvent(new Event('afterprint'));
+      }),
+    });
+    mocks.createPrintReceipt.mockResolvedValue(RECEIPT);
+    click();
+    await act(async () => undefined);
+
+    expect(printed).toEqual([expect.stringContaining(`Audit receipt ${RECEIPT.audit_event_id}`)]);
+    expect(provenance()?.textContent).toContain(UNAUDITED_PRINT);
+  });
+
+  it('a second Export PDF captions its own print, and its afterprint clears it again', async () => {
+    const second: PrintReceipt = { ...RECEIPT, audit_event_id: '0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9' };
+    mocks.createPrintReceipt.mockResolvedValueOnce(RECEIPT).mockResolvedValueOnce(second);
+    click();
+    await act(async () => undefined);
+    await act(async () => {
+      window.dispatchEvent(new Event('afterprint'));
+    });
+    click();
+    await act(async () => undefined);
+
+    expect(printed[1]).toContain(`Audit receipt ${second.audit_event_id}`);
+    await act(async () => {
+      window.dispatchEvent(new Event('afterprint'));
+    });
+    expect(provenance()?.textContent).toContain(UNAUDITED_PRINT);
+  });
+
+  it('drops the pending afterprint listener on unmount', async () => {
+    mocks.createPrintReceipt.mockResolvedValue(RECEIPT);
+    click();
+    await act(async () => undefined);
+    const removed = vi.spyOn(window, 'removeEventListener');
+    act(() => root.render(<p id="elsewhere">Another route</p>));
+    expect(removed).toHaveBeenCalledWith('afterprint', expect.any(Function));
   });
 });
 

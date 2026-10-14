@@ -21,7 +21,15 @@ import { toastReceiptFailure } from './receiptFailureToast';
  * nothing prints: the row exists, so an info toast says so and links it, and
  * asks for Export PDF again on the page now shown. Nothing is re-read to
  * print: this hook never refetches, invalidates or prefetches a query, and
- * binds nothing to beforeprint / afterprint.
+ * reads nothing on beforeprint / afterprint.
+ *
+ * One receipt, one paper (fix round 2): the receipt captions only the print
+ * it was recorded for. A once-only `afterprint` listener, registered BEFORE
+ * `window.print()` (Chromium fires afterprint inside the blocking call, so a
+ * listener added after it returns would miss it), drops the caption when
+ * that dialog closes. A later Ctrl/Cmd-P of the same page (or of this page
+ * again after a pager round trip) wrote no PRINT_EXPORT row, so it prints as
+ * unaudited. The listener only clears local state; it reads no data.
  *
  * On failure there is NO print: a 429 raises an error toast whose Try again
  * waits out the Retry-After, anything else an error toast in
@@ -42,13 +50,20 @@ export interface PrintReceiptControl {
   pending: boolean;
   /**
    * The receipt written for exactly the page on screen (same surface,
-   * borrower, filters, row count and page key), else null: a page that
-   * changed since its Export PDF prints as an unaudited copy rather than
-   * under another page's receipt.
+   * borrower, filters, row count and page key) until its print dialog
+   * closes, else null: a page that changed since its Export PDF, or any
+   * later print of it, prints as an unaudited copy rather than under a
+   * receipt it never had.
    */
   receipt: PrintReceipt | null;
   /** Export PDF for the page on screen; a no-op while nothing is shown. */
   run: () => void;
+}
+
+/** The receipt committed for the print it was recorded for, with that page's key. */
+interface Printed {
+  key: string;
+  receipt: PrintReceipt;
 }
 
 /** One page's identity: the request's fields in a fixed order, filters sorted, then the page key. */
@@ -60,9 +75,11 @@ function requestKey(request: PrintReceiptRequest, pageKey: string): string {
 export function usePrintReceipt(shown: PrintReceiptRequest | null, pageKey = ''): PrintReceiptControl {
   const shownKey = shown ? requestKey(shown, pageKey) : null;
   const [pending, setPending] = useState(false);
-  const [printed, setPrinted] = useState<{ key: string; receipt: PrintReceipt } | null>(null);
+  const [printed, setPrinted] = useState<Printed | null>(null);
   const inFlight = useRef(false);
   const mounted = useRef(false);
+  // Removes the pending once-only afterprint clear (a new print, an unmount).
+  const disarmAfterPrint = useRef<(() => void) | null>(null);
   // The committed page's key: what is on screen when a receipt resolves.
   const committedKey = useRef<string | null>(null);
   useLayoutEffect(() => {
@@ -72,10 +89,31 @@ export function usePrintReceipt(shown: PrintReceiptRequest | null, pageKey = '')
     mounted.current = true;
     return () => {
       mounted.current = false;
+      disarmAfterPrint.current?.();
     };
   }, []);
 
   const stillShowing = (key: string): boolean => mounted.current && committedKey.current === key;
+
+  /** Print `entry`'s page once: the dialog's own afterprint drops its caption. */
+  const printOnce = (entry: Printed): void => {
+    disarmAfterPrint.current?.();
+    const clear = (): void => {
+      disarmAfterPrint.current?.();
+      setPrinted((current) => (current === entry ? null : current));
+    };
+    window.addEventListener('afterprint', clear, { once: true });
+    disarmAfterPrint.current = () => {
+      window.removeEventListener('afterprint', clear);
+      disarmAfterPrint.current = null;
+    };
+    try {
+      window.print();
+    } catch {
+      // No dialog opened: nothing may print later under this receipt either.
+      clear();
+    }
+  };
 
   const request = (body: PrintReceiptRequest, key: string): void => {
     if (inFlight.current) return;
@@ -93,12 +131,13 @@ export function usePrintReceipt(shown: PrintReceiptRequest | null, pageKey = '')
           toast.info(PRINT_PAGE_CHANGED, { detail: PRINT_PAGE_CHANGED_RECORDED, auditEventId: receipt.audit_event_id });
           return;
         }
+        const entry: Printed = { key, receipt };
         flushSync(() => {
-          setPrinted({ key, receipt });
+          setPrinted(entry);
           setPending(false);
         });
         toast.info(PRINT_RECEIPT_RECORDED, { auditEventId: receipt.audit_event_id });
-        window.print();
+        printOnce(entry);
       },
       (error: unknown) => {
         inFlight.current = false;

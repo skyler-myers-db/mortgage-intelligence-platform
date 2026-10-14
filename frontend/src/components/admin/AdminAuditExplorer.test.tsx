@@ -8,7 +8,9 @@
  * the facets (an explicit menu open; never on mount), the per-viewer
  * exclusion and the audited, admin-only page CSV. Fix round 1 pins Export
  * PDF's page identity: a receipt captions only the page it was requested on,
- * so the next page of the same size prints as unaudited.
+ * so the next page of the same size prints as unaudited. Fix round 2 pins
+ * one receipt, one paper: once the Export PDF dialog has closed, page 1
+ * reached again through Previous prints as unaudited too.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, useEffect } from 'react';
@@ -513,14 +515,22 @@ describe('AdminAuditExplorer', () => {
 
   describe('Export PDF page identity', () => {
     const provenance = () => container.querySelector<HTMLElement>('[data-testid="print-provenance"]')?.textContent ?? '';
+    // What the paper read at each print() (the provenance at that moment).
+    let papers: string[] = [];
 
     beforeEach(() => {
+      papers = [];
       // Page 2 holds as many rows as page 1: the row count cannot tell them apart.
       mocks.secondPage = [row(3), row(4)];
+      // Chromium-shaped: print() blocks and fires afterprint before returning.
       Object.defineProperty(window, 'print', {
         configurable: true,
         writable: true,
-        value: vi.fn(() => mocks.order.push('print')),
+        value: vi.fn(() => {
+          mocks.order.push('print');
+          papers.push(provenance());
+          window.dispatchEvent(new Event('afterprint'));
+        }),
       });
     });
 
@@ -529,7 +539,9 @@ describe('AdminAuditExplorer', () => {
       act(() => container.querySelector<HTMLButtonElement>('[data-testid="audit-export-pdf"]')!.click());
       await settle();
       expect(mocks.order).toEqual(['print-receipt:2', 'print']);
-      expect(provenance()).toContain(`Audit receipt ${PRINT_RECEIPT_ID}`);
+      expect(papers).toEqual([expect.stringContaining(`Audit receipt ${PRINT_RECEIPT_ID}`)]);
+      // The dialog closed: a Ctrl/Cmd-P of this page now wrote no receipt.
+      expect(provenance()).toContain(UNAUDITED_PRINT);
 
       act(() => button(/^Next$/).click());
       await settle();
@@ -540,11 +552,14 @@ describe('AdminAuditExplorer', () => {
       expect(provenance()).toContain(UNAUDITED_PRINT);
       expect(provenance()).not.toContain(PRINT_RECEIPT_ID);
 
-      // Back on page 1, its own receipt captions it again.
+      // Back on page 1: its receipt captioned the one print it was recorded
+      // for, so a later print of page 1 is unaudited as well.
       act(() => button(/^Previous$/).click());
       await settle();
       await settle();
-      expect(provenance()).toContain(`Audit receipt ${PRINT_RECEIPT_ID}`);
+      expect(provenance()).toContain('Audit ledger page 1 · 2 rows');
+      expect(provenance()).toContain(UNAUDITED_PRINT);
+      expect(provenance()).not.toContain(PRINT_RECEIPT_ID);
     });
 
     it('prints nothing when the receipt resolves after Next', async () => {
