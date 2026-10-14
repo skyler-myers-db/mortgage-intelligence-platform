@@ -10,7 +10,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../lib/apiTransport';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -65,6 +65,14 @@ function outage(): ApiError {
 
 let root: Root;
 let queryClient: QueryClient;
+
+// The route's lazy pieces (the failure page, the decision history) cost a
+// cold transform the first time a case mounts them: about 0.7 s here, more
+// than 5 s on a loaded runner. Import them once, under the hook's own
+// timeout, so each case's budget covers only its own work.
+beforeAll(async () => {
+  await Promise.all([import('../components/mortgage/DossierFailure'), import('../components/mortgage/BorrowerDecisionHistory')]);
+}, 60_000);
 
 beforeEach(() => {
   document.body.innerHTML = '<div id="root"></div>';
