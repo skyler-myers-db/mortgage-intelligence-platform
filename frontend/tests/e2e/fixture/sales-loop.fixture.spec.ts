@@ -7,7 +7,8 @@
  *      audited read;
  *  (b) the Distribution Board, both themes: exactly one dry-run POST
  *      (score_balanced, dry_run, no request id), the per-officer bars and
- *      numbers, axe clean; Commit carries the fingerprint and a request id;
+ *      numbers (the free capacity painted apart from the dialog's fill),
+ *      axe clean; Commit carries the fingerprint and a request id;
  *      F8 reaches the toast's Undo, which POSTs the run's release with that
  *      request id and raises its own audit-linked toast;
  *  (c) a 409 distribution_plan_changed re-previews and shows the notice; a
@@ -44,11 +45,26 @@ import {
   releaseBody,
 } from './data/salesLoop';
 import { json, type FixtureReply, type MockApi } from './mockApi';
+import { centerPixel, contrastRatio, renderedColors, type Rgb } from './renderedColor';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 import { expectNoAuditedReadSince } from './visual';
 
 const SALES_OPS = '/analytics?view=sales-ops';
+
+/**
+ * How far apart (WCAG contrast ratio) a load bar's free capacity must paint
+ * from the dialog's own fill and from the open book beside it, so the gauge
+ * shows its capacity extent (W5d distribution-board VRT review, run
+ * 38563619204). A legibility floor, not a 1.4.11 claim: the bar is
+ * aria-hidden and every number it draws is in its row. A track on the
+ * dialog's own --bg-2 painted the fill exactly, 1:1.
+ */
+const FREE_TRACK_FLOOR = 1.15;
+
+function rgb([r, g, b]: Rgb): string {
+  return `rgb(${r}, ${g}, ${b})`;
+}
 
 interface ReleaseBody {
   assignment_id: string;
@@ -126,6 +142,14 @@ test.describe('(b) the Distribution Board', () => {
       await expect(dialog).toContainText('4 of 6 leads placed · 2 left unplaced: no capacity · 3 skipped: already assigned');
       await expect(dialog.locator('.distribution-board__bar')).toHaveCount(LOAN_OFFICERS.length);
       await expect(dialog.locator('tbody tr').first()).toContainText('+3');
+      // The first officer has room left: its free segment paints the track,
+      // which must stand apart from the dialog's fill and from the open book.
+      const first = dialog.locator('tbody tr').first();
+      const free = await centerPixel(page, first.locator('.distribution-board__seg--free'));
+      const open = await centerPixel(page, first.locator('.distribution-board__seg--open'));
+      const fill = (await renderedColors(dialog)).bg;
+      expect(contrastRatio(free, fill), `free capacity ${rgb(free)} on the dialog fill ${rgb(fill)}`).toBeGreaterThanOrEqual(FREE_TRACK_FLOOR);
+      expect(contrastRatio(free, open), `free capacity ${rgb(free)} beside the open book ${rgb(open)}`).toBeGreaterThanOrEqual(FREE_TRACK_FLOOR);
       await expectAxeClean(page, { key: { route: 'analytics-sales-ops', state: 'distribution-board' }, theme, known: {}, include: 'dialog.distribution-board' });
 
       await dialog.getByRole('button', { name: 'Commit distribution' }).click();
