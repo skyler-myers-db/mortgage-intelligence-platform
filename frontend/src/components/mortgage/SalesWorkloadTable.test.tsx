@@ -4,25 +4,19 @@
  * The Sales ops per-officer workload (2026-09-21 audit critic-10 item 6c):
  * every in-scope officer, sortable numeric columns with aria-sort, the Lead
  * Queue link per officer, no email in the DOM, skeletons before the read
- * settles and the shared failure copy.
+ * settles and the shared failure copy. The Sales ops tab owns the read
+ * (analytics.sales-ops.test.tsx pins its key and window); the table renders
+ * the state it is handed.
  */
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../../lib/apiTransport';
 import { signedCount } from '../../lib/formatters';
-import { queryKeys } from '../../lib/queryKeys';
 import type { SalesWorkloadResponse } from '../../lib/apiClients/salesWorkload';
 import { preloadDescribedError } from '../ui/DescribedError';
-
-const workload = vi.hoisted(() => ({ fetch: vi.fn() }));
-vi.mock('../../lib/apiClients/salesWorkload', () => ({
-  fetchSalesWorkload: workload.fetch,
-}));
-
-import SalesWorkloadTable from './SalesWorkloadTable';
+import SalesWorkloadTable, { type SalesWorkloadState } from './SalesWorkloadTable';
 
 const row = (n: number, open: number, stale: number, assigned: [number, number], worked: [number, number]) => ({
   email: `lo0${n}@summit.example`,
@@ -51,27 +45,17 @@ const CONVERSION = [
 ];
 
 let root: Root;
-let client: QueryClient;
 
-async function settle(): Promise<void> {
-  for (let i = 0; i < 4; i += 1) {
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-  }
-}
+const LOADED: SalesWorkloadState = { isError: false, error: null, data: RESPONSE };
 
-async function render(conversion: typeof CONVERSION | null = CONVERSION): Promise<void> {
+async function render(conversion: typeof CONVERSION | null = CONVERSION, workload: SalesWorkloadState = LOADED): Promise<void> {
   await act(async () => {
     root.render(
-      <QueryClientProvider client={client}>
-        <MemoryRouter>
-          <SalesWorkloadTable from="2026-07-08" to="2026-07-14" days={7} conversion={conversion} />
-        </MemoryRouter>
-      </QueryClientProvider>,
+      <MemoryRouter>
+        <SalesWorkloadTable workload={workload} days={7} conversion={conversion} />
+      </MemoryRouter>,
     );
   });
-  await settle();
 }
 
 const officers = () => [...document.querySelectorAll('tbody tr')].map((tr) => tr.querySelector('td a')?.textContent ?? null);
@@ -86,22 +70,15 @@ describe('SalesWorkloadTable', () => {
   beforeEach(() => {
     document.body.innerHTML = '<div id="root"></div>';
     root = createRoot(document.getElementById('root') as HTMLElement);
-    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    workload.fetch.mockReset();
-    workload.fetch.mockResolvedValue(RESPONSE);
   });
 
   afterEach(() => {
     act(() => root.unmount());
-    client.clear();
     document.body.innerHTML = '';
   });
 
-  it('reads the period once on its own key and lists every officer, Open descending, ties by label', async () => {
+  it('lists every officer, Open descending, ties by label', async () => {
     await render();
-    expect(workload.fetch).toHaveBeenCalledTimes(1);
-    expect(workload.fetch.mock.calls[0].slice(0, 2)).toEqual(['2026-07-08', '2026-07-14']);
-    expect(client.getQueryData(queryKeys.salesWorkload('2026-07-08', '2026-07-14'))).toEqual(RESPONSE);
     expect(officers()).toEqual(['Summit LO 02', 'Summit LO 01', 'Summit LO 03']);
     expect(header('Open').getAttribute('aria-sort')).toBe('descending');
     expect(header('Stale').getAttribute('aria-sort')).toBe('none');
@@ -149,17 +126,21 @@ describe('SalesWorkloadTable', () => {
   });
 
   it('shows skeletons, never a zero, before the read settles', async () => {
-    workload.fetch.mockReturnValue(new Promise(() => undefined));
-    await render(null);
+    await render(null, { isError: false, error: null, data: undefined });
     expect(document.querySelectorAll('tbody .skeleton').length).toBe(3);
     expect(document.querySelector('tbody')?.textContent).toBe('');
   });
 
   it('says why the read failed in the shared vocabulary, never the transport text', async () => {
-    workload.fetch.mockRejectedValue(new ApiError('SENTINEL detail', { path: '/api/v1/sales/workload', status: 403 }));
-    await render();
+    const error = new ApiError('SENTINEL detail', { path: '/api/v1/sales/workload', status: 403 });
+    await render(CONVERSION, { isError: true, error, data: undefined });
     const alert = document.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain('Workload unavailable:');
     expect(document.body.textContent).not.toContain('SENTINEL');
+  });
+
+  it('says the officer list is empty rather than drawing an empty table', async () => {
+    await render(CONVERSION, { isError: false, error: null, data: { ...RESPONSE, rows: [] } });
+    expect(document.querySelector('tbody')?.textContent).toBe('No active loan officers in your scope.');
   });
 });

@@ -23,7 +23,7 @@ const apiMocks = vi.hoisted(() => ({
   /** The cohort (team) reads of GET /sales/conversion, apart from the per-officer one. */
   salesCohort: vi.fn(),
   salesOutcomeSummary: vi.fn(),
-  /** GET /sales/workload (the lazy SalesWorkloadTable's own client). */
+  /** GET /sales/workload (the tab's read; the lazy SalesWorkloadTable renders it). */
   salesWorkload: vi.fn(),
 }));
 
@@ -80,6 +80,7 @@ import './analytics.sales-ops';
 import { useOfferSalesTeam } from './offer-orchestrator.sales-team';
 import { ApiError } from '../lib/apiTransport';
 import { signedCount, signedPct } from '../lib/formatters';
+import { queryKeys } from '../lib/queryKeys';
 import { preloadDescribedError } from '../components/ui/DescribedError';
 
 // The error vocabulary is its own chunk (loaded with the first failure):
@@ -587,10 +588,12 @@ describe('Analytics Sales ops tab', () => {
       expect(document.querySelector('[data-testid="sales-workload"]')).not.toBeNull();
     }, { timeout: 10_000 });
     await settle();
-    // One read for the shown period, the same window the conversion card reads.
+    // One read for the shown period, the same window the conversion card reads,
+    // owned by the tab on its own key (the lazy table imports no transport).
     expect(apiMocks.salesWorkload).toHaveBeenCalledTimes(1);
     const [from, to] = apiMocks.salesWorkload.mock.calls[0];
     expect(apiMocks.salesConversion.mock.calls.some((call) => call[0] === from && call[1] === to)).toBe(true);
+    expect(queryClient.getQueryData(queryKeys.salesWorkload(from, to))).toMatchObject({ stale_days: 7 });
     const link = document.querySelector<HTMLAnchorElement>('[data-testid="sales-workload"] tbody a');
     expect(link?.textContent).toBe('Summit LO 02');
     expect(link?.getAttribute('href')).toBe('/lead-queue?assigned_to=lo02%40summit.example');

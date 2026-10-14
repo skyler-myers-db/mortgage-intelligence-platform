@@ -1,11 +1,9 @@
 import { useState, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { Icon } from '../Icon';
 import { DescribedErrorBody } from '../ui/DescribedError';
-import { fetchSalesWorkload, type SalesWorkloadRow } from '../../lib/apiClients/salesWorkload';
+import type { SalesWorkloadResponse, SalesWorkloadRow } from '../../lib/apiClients/salesWorkload';
 import { formatCount, formatPercent, signedCount, UNKNOWN_VALUE } from '../../lib/formatters';
-import { queryKeys } from '../../lib/queryKeys';
 import type { SalesConversionResponse } from '../../types';
 import './SalesWorkloadTable.css';
 
@@ -18,9 +16,11 @@ import './SalesWorkloadTable.css';
  * conversion rows. The prototype's `.tbl` (design_files/index.html:595) with
  * its `.tbl__sort` headers.
  *
- * One audit-free GET /api/sales/workload (Lakebase only): staleTime 30 s, no
- * focus refetch, no interval (the Distribution Board refetches this key
- * after a commit). Lazy: its own chunk, loaded with the Sales ops tab. The
+ * One audit-free GET /api/sales/workload (Lakebase only), owned by the Sales
+ * ops tab so it starts beside this chunk's download, not after it: staleTime
+ * 30 s, no focus refetch, no interval (the Distribution Board refetches this
+ * key after a commit). Lazy: its own chunk, loaded with the Sales ops tab,
+ * importing no transport module (see lib/apiClients/salesWorkload.ts). The
  * officer cell is a link into the Lead Queue's assigned_to filter, labelled
  * with the roster's display label; the email is never visible text, a title
  * or an accessible name.
@@ -101,53 +101,55 @@ function Change({ current, previous, versus }: { current: number; previous: numb
   );
 }
 
+/** The tab's workload read; a TanStack query result satisfies it. */
+export interface SalesWorkloadState {
+  isError: boolean;
+  error: unknown;
+  /** Undefined until the first response lands (rendered as skeletons). */
+  data: SalesWorkloadResponse | undefined;
+}
+
 export interface SalesWorkloadTableProps {
-  from: string;
-  to: string;
+  workload: SalesWorkloadState;
   /** The period's length, for "vs previous N days". */
   days: number;
   /** The period's per-officer conversion rows (null while that read is pending or failed). */
   conversion: readonly ConversionRow[] | null;
 }
 
-export default function SalesWorkloadTable({ from, to, days, conversion }: SalesWorkloadTableProps) {
+export default function SalesWorkloadTable({ workload, days, conversion }: SalesWorkloadTableProps) {
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'open', dir: 'desc' });
-  const query = useQuery({
-    queryKey: queryKeys.salesWorkload(from, to),
-    queryFn: ({ signal }) => fetchSalesWorkload(from, to, signal),
-    staleTime: 30_000,
-    refetchOnWindowFocus: false,
-  });
+  const data = workload.data;
   const versus = days === 1 ? 'vs previous day' : `vs previous ${formatCount(days)} days`;
   const choose = (key: SortKey) =>
     setSort((current) => ({ key, dir: current.key === key && current.dir === 'desc' ? 'asc' : 'desc' }));
 
   let body: ReactNode;
-  if (query.isPending) {
+  if (workload.isError) {
+    body = (
+      <tr>
+        <td colSpan={COLUMNS.length + 2}>
+          <span role="alert" className="status-callout status-callout--warning sales-workload__status">
+            Workload unavailable: <DescribedErrorBody error={workload.error} subject="the officer workload" />
+          </span>
+        </td>
+      </tr>
+    );
+  } else if (data === undefined) {
     // Skeleton rows, never a zero, before the read settles.
     body = [0, 1, 2].map((index) => (
       <tr key={index} aria-hidden="true">
         <td colSpan={COLUMNS.length + 2}><span className="skeleton kpi__delta-skeleton" /></td>
       </tr>
     ));
-  } else if (query.isError) {
-    body = (
-      <tr>
-        <td colSpan={COLUMNS.length + 2}>
-          <span role="alert" className="status-callout status-callout--warning sales-workload__status">
-            Workload unavailable: <DescribedErrorBody error={query.error} subject="the officer workload" />
-          </span>
-        </td>
-      </tr>
-    );
-  } else if (query.data.rows.length === 0) {
+  } else if (data.rows.length === 0) {
     body = (
       <tr>
         <td colSpan={COLUMNS.length + 2} className="muted">No active loan officers in your scope.</td>
       </tr>
     );
   } else {
-    body = sortWorkload(withConversion(query.data.rows, conversion), sort.key, sort.dir).map(({ row, starts, rate }) => (
+    body = sortWorkload(withConversion(data.rows, conversion), sort.key, sort.dir).map(({ row, starts, rate }) => (
       <tr key={row.email}>
         <td className="is-primary">
           <Link to={`/lead-queue?assigned_to=${encodeURIComponent(row.email)}`}>{row.display_label}</Link>
@@ -168,7 +170,7 @@ export default function SalesWorkloadTable({ from, to, days, conversion }: Sales
     <section className="sales-workload" aria-labelledby="sales-workload-title" data-testid="sales-workload">
       <h3 className="eyebrow" id="sales-workload-title">Workload by loan officer</h3>
       <p className="muted fs-12 sales-workload__note">
-        Open and stale are now (stale: assigned at least {formatCount(query.data?.stale_days ?? 7)} days ago with no call since);
+        Open and stale are now (stale: assigned at least {formatCount(data?.stale_days ?? 7)} days ago with no call since);
         assigned and worked are this period, with the change {versus}.
       </p>
       <div className="sales-workload__wrap">
