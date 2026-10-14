@@ -457,6 +457,14 @@ async function closeConsoleAndSample(page: Page) {
     const close = panel.querySelector<HTMLButtonElement>('[aria-label="Close console"]');
     if (!close) throw new Error('no Close console control');
     close.click();
+    // The first animation frame after the click runs before that frame paints:
+    // what the landmark is then is what the user's next painted frame shows.
+    const firstFrame = new Promise<ConsoleSample | null>((resolve) => {
+      requestAnimationFrame(() => {
+        const landmarkThen = document.getElementById('workspace-console');
+        resolve(landmarkThen ? read(landmarkThen) : null);
+      });
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
     const justClosed = read(panel);
     const inert = panel.inert;
@@ -464,6 +472,7 @@ async function closeConsoleAndSample(page: Page) {
     // with motion, the empty placeholder once there is nothing to wait for.
     const landmarkNow = document.getElementById('workspace-console');
     const landmarkJustClosed = landmarkNow ? read(landmarkNow) : null;
+    const landmarkAtFirstFrame = await firstFrame;
     await Promise.all(panel.getAnimations().map((a) => a.finished.catch(() => undefined)));
     await new Promise((resolve) => setTimeout(resolve, 50));
     const landmark = document.getElementById('workspace-console');
@@ -472,6 +481,7 @@ async function closeConsoleAndSample(page: Page) {
       justClosed,
       inert,
       landmarkJustClosed,
+      landmarkAtFirstFrame,
       afterExit: landmark ? read(landmark) : null,
       samePanelAfterExit: landmark === panel,
     };
@@ -533,11 +543,15 @@ test.describe('Console motion under reduced motion (motion-01)', () => {
   test('closing hides the Console at once', async ({ app, page }) => {
     await app.gotoRoute('/');
     const exit = await closeConsoleAndSample(page);
-    // One macrotask after the click the landmark is already gone from view:
-    // nothing held the panel for an exit the user asked not to see.
-    expect(exit.landmarkJustClosed?.open).toBe(false);
-    expect(exit.landmarkJustClosed?.display, 'hidden in the closing task').toBe('none');
-    for (const transition of exit.landmarkJustClosed?.transitions ?? []) {
+    // The product contract (W5e C4): no painted frame shows the open Console
+    // after Close. Read at the first animation frame after the click, which
+    // runs before that frame paints, the landmark is already gone from view:
+    // nothing held the panel for an exit the user asked not to see. (The old
+    // probe read one macrotask after the click, a timing stricter than any
+    // paint; it went red on the held TanStack Query 5.104.0 bump, W5b.)
+    expect(exit.landmarkAtFirstFrame?.open).toBe(false);
+    expect(exit.landmarkAtFirstFrame?.display, 'hidden before the next paint').toBe('none');
+    for (const transition of exit.landmarkAtFirstFrame?.transitions ?? []) {
       expect(transition.duration, `${transition.property} is instant`).toBeLessThanOrEqual(1);
     }
     expect(exit.afterExit?.display).toBe('none');
