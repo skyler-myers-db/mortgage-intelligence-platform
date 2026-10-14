@@ -40,9 +40,13 @@ jobs:
   backend-tests:
     name: backend (ruff + pytest)
     runs-on: ubuntu-latest
-    # 15 still holds with the Postgres service: the base job took 7m36s (run
-    # 36123325650) and the serial contract step ~31 s locally (19 tests).
-    timeout-minutes: 15
+    # The suite outgrew 15: on 2026-10-14 the job needed ~16 min (setup ~1m45s,
+    # parallel pytest 12m-13m40s, the serial Postgres step ~65 s). Green runs
+    # finished at 14m41s-14m53s (38526714906, 38519015417), and three runs hit
+    # the cap with no failure: main 6b7f9689 (38535004676) and PR #269
+    # (38563619204) in the serial step, 38565698599 at 99% of the parallel
+    # step. 25 leaves ~9 min of headroom on a slow runner.
+    timeout-minutes: 25
     services:
       # Disposable PostgreSQL for the DSN-gated real-SQL contracts (audit
       # genie-01 item 4); only the serial step below is given its DSN.
