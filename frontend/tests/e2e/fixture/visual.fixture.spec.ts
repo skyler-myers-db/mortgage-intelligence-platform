@@ -199,6 +199,8 @@ for (const theme of FIXTURE_THEMES) {
       // R (W5d w5-print-glossary-sales-manager): the account menu and glossary search.
       { route: 'home', state: 'identity-menu' },
       { route: 'glossary', state: 'glossary-search' },
+      // W5e w5-lead-table-compile (flow-v2): the revoke panel (block letter: the integrator's).
+      { route: 'lead-queue', state: 'lead-revoke-panel' },
     ];
     for (const { route: name, state } of SHELL_STATES) {
       test(`${name} · ${state}`, async ({ app, mockApi, page }) => {
