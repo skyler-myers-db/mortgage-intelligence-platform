@@ -128,10 +128,13 @@ async function check(
   routeName: string,
   theme: FixtureTheme,
   state: string,
-  options: { file?: string; mask?: Locator[] } = {},
+  options: { file?: string; mask?: Locator[]; keepFocusWithin?: Locator } = {},
 ): Promise<void> {
   await expectNoSurfaceOverflow(page, { route: routeName, state, theme });
-  await capture(page, options.file ?? `${routeName}--${theme}--${state}.png`, { mask: options.mask });
+  await capture(page, options.file ?? `${routeName}--${theme}--${state}.png`, {
+    mask: options.mask,
+    keepFocusWithin: options.keepFocusWithin,
+  });
 }
 
 interface Loaded {
@@ -172,8 +175,11 @@ for (const theme of FIXTURE_THEMES) {
       });
     }
 
-    // C: shell states.
-    const SHELL_STATES: ReadonlyArray<{ route: string; state: FixtureState }> = [
+    // C: shell states. `focusScope` names the open popover whose roving focus
+    // IS the state: capture keeps focus inside it instead of blurring (the
+    // account menu closes on a blur out of it, IdentityMenu.tsx), and the
+    // test asserts it is still open after the capture. Every other state blurs.
+    const SHELL_STATES: ReadonlyArray<{ route: string; state: FixtureState; focusScope?: (page: Page) => Locator }> = [
       { route: 'home', state: 'evidence-drawer' },
       { route: 'home', state: 'command-palette' },
       { route: 'home', state: 'genie' },
@@ -197,14 +203,20 @@ for (const theme of FIXTURE_THEMES) {
       { route: 'lead-queue', state: 'my-approval-requests' },
       { route: 'lead-queue', state: 'request-approval-form' },
       // R (W5d w5-print-glossary-sales-manager): the account menu and glossary search.
-      { route: 'home', state: 'identity-menu' },
+      { route: 'home', state: 'identity-menu', focusScope: (page) => page.getByRole('menu', { name: 'Account' }) },
       { route: 'glossary', state: 'glossary-search' },
     ];
-    for (const { route: name, state } of SHELL_STATES) {
+    for (const { route: name, state, focusScope } of SHELL_STATES) {
       test(`${name} · ${state}`, async ({ app, mockApi, page }) => {
         const { naturalLoad } = await load(app, mockApi, route(name), theme, state);
         await enterState(app, page, state);
-        await check(page, name, theme, state);
+        const scope = focusScope?.(page);
+        await check(page, name, theme, state, { keepFocusWithin: scope });
+        if (scope) {
+          // Still open, focus inside it: the baseline shows the popover, not the plain route.
+          await expect(scope, `${name} · ${state}: the popover under test survives the capture`).toBeVisible();
+          await expect(scope.locator(':focus')).toHaveCount(1);
+        }
         expectNoAuditedReadSince(mockApi, naturalLoad, `${name} · ${state}`);
       });
     }
