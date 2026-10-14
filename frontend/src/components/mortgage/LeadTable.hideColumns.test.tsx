@@ -197,6 +197,7 @@ describe('hidden columns on the rendered table', () => {
     statusCellRenders.length = 0;
     act(() => setTick?.(1));
     act(() => setTick?.(2));
+    expect(container.querySelector('[data-tick]')?.getAttribute('data-tick'), 'precondition: the harness re-rendered').toBe('2');
     expect(statusCellRenders).toEqual([]);
 
     render('hide=segments');
