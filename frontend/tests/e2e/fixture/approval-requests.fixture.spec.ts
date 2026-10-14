@@ -380,7 +380,7 @@ test.describe('an approver', () => {
     approveGate.release();
   });
 
-  test('(i) Button loading: the bulk Reject of its own run computes a grid, busy, focus kept', async ({ app, mockApi, page }) => {
+  test('(i) Button loading: the bulk Reject of its own run computes a grid, busy, never native disabled', async ({ app, mockApi, page }) => {
     useSession(mockApi, SESSION);
     const rejects = registerRejectRecorder(mockApi, { holdFirst: 1 });
     await app.gotoRoute('/lead-queue');
