@@ -1,4 +1,5 @@
-import type { CampaignSummary, KpiTrend, PortfolioPreview } from '../types';
+import type { CampaignSummary, HouseholdDedupConfig, KpiTrend, PortfolioPreview } from '../types';
+import type { ApiRequest } from '../types/api.gen';
 import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import { roundTo } from '../lib/fixedPrecision';
 import { formatFixed, formatUsd, pct as percentLabel, signedPct } from '../lib/formatters';
@@ -253,11 +254,47 @@ export function buildUrlFromFilters(
   return sp;
 }
 
+/** The closed preview criteria the wire declares (backend PortfolioCriteria, extra='forbid'). */
+export type PortfolioCriteria = ApiRequest<'PortfolioCriteria'>;
+/** The criteria keys a text filter can set: every string-valued PortfolioCriteria field. */
+export type CriteriaTextKey = {
+  [K in keyof PortfolioCriteria]-?: NonNullable<PortfolioCriteria[K]> extends string ? K : never;
+}[keyof PortfolioCriteria];
+export const CRITERIA_TEXT_KEYS = [
+  'consent_status',
+  'geography',
+  'lender_relationship',
+  'lien_status',
+  'loan_product',
+  'marketing_eligibility',
+  'min_equity_pct_label',
+  'occupancy',
+  'origination_channel',
+  'owner_link',
+  'product',
+  'purchase_intent',
+  'recency',
+  'target_lender_ref',
+] as const satisfies readonly CriteriaTextKey[];
+const CRITERIA_TEXT_KEY_SET: ReadonlySet<string> = new Set(CRITERIA_TEXT_KEYS);
+
+function isCriteriaTextKey(key: string): key is CriteriaTextKey {
+  return CRITERIA_TEXT_KEY_SET.has(key);
+}
+
+/**
+ * The preview criteria for a committed filter set: the filters in their
+ * insertion order (only keys the wire declares), then the states. The JSON
+ * of this object is the campaign draft key, so the order never changes.
+ */
 export function buildPreviewCriteria(
   filters: Record<string, string>,
   stateCodes: readonly string[],
-): Record<string, unknown> {
-  const criteria: Record<string, unknown> = { ...filters };
+): PortfolioCriteria {
+  const criteria: PortfolioCriteria = {};
+  for (const [key, value] of Object.entries(filters)) {
+    if (isCriteriaTextKey(key)) criteria[key] = value;
+  }
   if (stateCodes.length > 0) criteria.states = [...stateCodes];
   return criteria;
 }
@@ -450,7 +487,7 @@ export function buildCampaignConfig(setup: CampaignSetupState): {
   send_window: Record<string, unknown>;
   holdout: Record<string, unknown>;
   roi_assumptions: Record<string, unknown>;
-  household_dedup: Record<string, unknown>;
+  household_dedup: HouseholdDedupConfig;
 } {
   const holdoutPct = boundedNumber(setup.holdoutPct, 10, 0, 50);
   const hasCampaignCopy = [
