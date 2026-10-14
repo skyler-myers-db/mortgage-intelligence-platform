@@ -389,14 +389,12 @@ def create_saved_view(
     store: SavedViewStoreDep,
     _: Annotated[None, Depends(require_json_content_type)],
 ) -> SavedViewMutationResponse:
-    """Name the current Lead Queue view; writes SAVE_QUEUE_VIEW in the same statement.
+    """Name the current Lead Queue view; writes SAVE_QUEUE_VIEW in the same statement."""
 
-    The stored ``filter_fingerprint`` is keyed under the SAVED_VIEW domain
-    (12.4 #11, NB-e), never the plain SHA-256 of the canonical params. With no
-    key outside local/test the row is still written, without the fingerprint:
-    the view id is the point of the row.
-    """
-
+    # The stored filter_fingerprint is keyed under the SAVED_VIEW domain
+    # (12.4 #11, NB-e), never the plain SHA-256 of the canonical params. With
+    # no key outside local/test the row is still written, without it: the
+    # view id is the point of the row.
     try:
         params, digest = canonical_saved_view_params(payload.params)
     except ValueError as exc:
