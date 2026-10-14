@@ -45,6 +45,7 @@ import { FIXTURE_ROUTES, FIXTURE_THEMES, type FixtureRoute } from './routes';
 import { expect, test } from './test';
 import {
   assertPinnedVrtHost,
+  auditedReadsAfter,
   capture,
   expectNoAuditedReadSince,
   expectNoSurfaceOverflow,
@@ -198,11 +199,21 @@ for (const theme of FIXTURE_THEMES) {
       const map = page.locator('#main-content .map-wrap');
       await expect(map.locator('svg.map-zcta, .zip-tiles').first()).toBeVisible();
       await expect(map.locator('.map-levels')).toHaveAttribute('aria-busy', 'false');
+      await app.settle();
+      // The drill is a deliberate filter: the ranked table re-reads its named
+      // borrowers for Illinois, so exactly one audited VIEW_LEADS page read
+      // follows the click (D-audit-reads-a, one row per served page). The
+      // capture itself must open none.
+      expect(auditedReadsAfter(mockApi.calls, naturalLoad).map((read) => read.replace(/\?.*? \(/, ' (')), 'the drill reads one leads page').toEqual([
+        'GET /api/leads (VIEW_LEADS)',
+      ]);
+      expect(auditedReadsAfter(mockApi.calls, naturalLoad)[0]).toContain('state=IL');
+      const drilled = markNaturalLoad(mockApi);
       await map.scrollIntoViewIfNeeded();
       await app.settle();
       await expectNoSurfaceOverflow(page, { route: 'segment-intelligence', state: 'zcta-drill', theme });
       await capture(page, `segment-intelligence--${theme}--zcta-drill.png`, { element: map });
-      expectNoAuditedReadSince(mockApi, naturalLoad, 'segment-intelligence · zcta drill');
+      expectNoAuditedReadSince(mockApi, drilled, 'segment-intelligence · zcta drill');
     });
 
     // E: compact density.
