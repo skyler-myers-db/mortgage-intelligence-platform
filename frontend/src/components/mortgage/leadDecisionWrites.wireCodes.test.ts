@@ -6,9 +6,9 @@
  * either. Nothing is recorded, so the row is never decided.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { LeadSummary } from '../../types';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
 import { WireCodeRefusedError } from '../../lib/outreachWireCodes';
+import { makeLeadSummary } from '../../test/factories/leads';
 import { approveWithReport, type DecisionWriteDeps } from './leadDecisionWrites';
 
 const toastMocks = vi.hoisted(() => ({ error: vi.fn(), info: vi.fn(), success: vi.fn() }));
@@ -21,7 +21,7 @@ function deps(approve: DecisionWriteDeps['approve']): DecisionWriteDeps & { deci
   const decided: string[] = [];
   return {
     decided,
-    leadsById: new Map([[BORROWER, { borrower_id: BORROWER, evidence_ids: ['ev-1'], recommended_offer_code: 'mystery_offer' } as LeadSummary]]),
+    leadsById: new Map([[BORROWER, makeLeadSummary({ borrower_id: BORROWER, evidence_ids: ['ev-1'], recommended_offer_code: 'mystery_offer' })]]),
     campaignBinding: null,
     leadViewId: null,
     approve,
