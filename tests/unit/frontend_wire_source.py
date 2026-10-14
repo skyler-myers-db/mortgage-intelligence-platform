@@ -232,7 +232,20 @@ _IMPORT = re.compile(r"\bimport\s+(type\s+)?\{([^}]*)\}\s*from\s*['\"]([^'\"]+)[
 _REEXPORT_NAMED = re.compile(r"\bexport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['\"]([^'\"]+)['\"]")
 _REEXPORT_STAR = re.compile(r"\bexport\s+(?:type\s+)?\*\s+from\s*['\"]([^'\"]+)['\"]")
 _DECL = re.compile(r"(?m)^\s*(export\s+)?(?:declare\s+)?(?:interface|type)\s+([A-Za-z_$][\w$]*)\b")
-_CONST_PATH = re.compile(r"(?m)^\s*(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*'(/[^']*)'\s*;")
+_CONST_PATH = re.compile(r"(?m)^([ \t]*)(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*'(/[^']*)'\s*;")
+
+
+@dataclass(frozen=True)
+class ConstScope:
+    """Where a path const is read: the reading position and the module's function spans.
+
+    A function-local const resolves within the functions that hold the read
+    (innermost first) before module scope, so two same-named local consts in
+    different functions never shadow each other.
+    """
+
+    pos: int
+    spans: tuple[tuple[int, int], ...]
 
 
 @dataclass
@@ -272,7 +285,24 @@ class Module:
         return found
 
     def path_consts(self) -> dict[str, str]:
-        return {m.group(1): m.group(2) for m in _CONST_PATH.finditer(self.code)}
+        """Module-level ``const NAME = '/path'`` declarations (column 0)."""
+
+        return {m.group(2): m.group(3) for m in _CONST_PATH.finditer(self.code) if not m.group(1)}
+
+    def scoped_path_const(self, name: str, scope: ConstScope) -> str | None:
+        """A function-local path const visible at ``scope.pos``: innermost holding function first."""
+
+        hits = [(m.start(2), m.group(3)) for m in _CONST_PATH.finditer(self.code) if m.group(2) == name and m.group(1)]
+        holders = sorted((s for s in scope.spans if s[0] <= scope.pos <= s[1]), key=lambda s: s[0], reverse=True)
+        for start, end in holders:
+            for pos, value in hits:
+                if not start <= pos <= end:
+                    continue
+                # A const inside a nested function that does not hold the read is out of scope.
+                if any(start < s[0] <= pos <= s[1] and not s[0] <= scope.pos <= s[1] for s in scope.spans):
+                    continue
+                return value
+        return None
 
 
 class Project:
@@ -345,10 +375,14 @@ class Project:
             return None
         return self.find_declaration(target, imported[1])
 
-    def resolve_const(self, path: Path, name: str) -> str | None:
-        """A module-level ``const NAME = '/path'`` in ``path`` or imported by name."""
+    def resolve_const(self, path: Path, name: str, scope: ConstScope | None = None) -> str | None:
+        """A path const visible at ``scope`` (function-local first), module-level, or imported by name."""
 
         module = self.module(path)
+        if scope is not None:
+            scoped = module.scoped_path_const(name, scope)
+            if scoped is not None:
+                return scoped
         local = module.path_consts().get(name)
         if local is not None:
             return local

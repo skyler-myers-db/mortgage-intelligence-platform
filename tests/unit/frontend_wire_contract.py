@@ -31,6 +31,7 @@ from tests.unit.frontend_wire_source import (
     EXTENSIONS,
     ROOT,
     SRC,
+    ConstScope,
     Module,
     Project,
     Unresolvable,
@@ -212,8 +213,8 @@ def _string_literal(expr: str) -> str | None:
     return m.group(1) if m.group(1) is not None else m.group(2)
 
 
-def _return_expressions(module: Module, name: str) -> list[str]:
-    """Every ``return <expr>`` of the same-module function ``name``."""
+def _return_expressions(module: Module, name: str) -> list[tuple[str, int]]:
+    """Every ``return <expr>`` of the same-module function ``name``, with its position."""
 
     m = re.search(rf"\bfunction\s+{re.escape(name)}\s*\(", module.code)
     if m is None:
@@ -223,14 +224,16 @@ def _return_expressions(module: Module, name: str) -> list[str]:
     brace = module.code.index("{", rparen)
     end = match_bracket(module.code, module.kinds, brace)
     body = module.code[brace + 1 : end]
-    returns = [r.group(1) for r in re.finditer(r"\breturn\s+([\s\S]*?);", body)]
+    returns = [(r.group(1), brace + 1 + r.start(1)) for r in re.finditer(r"\breturn\s+([\s\S]*?);", body)]
     if not returns:
         raise Unresolvable(f"{name} has no return")
     return returns
 
 
-def path_candidates(project: Project, path: Path, expr: str, depth: int = 0) -> list[list[Part]]:
-    """Every client path ``expr`` can produce, as template parts."""
+def path_candidates(
+    project: Project, path: Path, expr: str, depth: int = 0, scope: ConstScope | None = None
+) -> list[list[Part]]:
+    """Every client path ``expr`` can produce, as template parts (consts read at ``scope``)."""
 
     if depth > 4:
         raise Unresolvable("path expression nests too deeply")
@@ -245,11 +248,11 @@ def path_candidates(project: Project, path: Path, expr: str, depth: int = 0) -> 
         return [[("lit", literal)]]
     ternary = split_ternary(expr)
     if ternary is not None:
-        return path_candidates(project, path, ternary[1], depth + 1) + path_candidates(
-            project, path, ternary[2], depth + 1
+        return path_candidates(project, path, ternary[1], depth + 1, scope) + path_candidates(
+            project, path, ternary[2], depth + 1, scope
         )
     if expr.startswith("`") and expr.endswith("`"):
-        return [_substitute_consts(project, path, template_parts(expr))]
+        return [_substitute_consts(project, path, template_parts(expr), scope)]
     call = re.fullmatch(r"([A-Za-z_$][\w$]*)\s*\(([\s\S]*)\)", expr)
     if call is not None:
         if call.group(1) == "analyticsPath":
@@ -261,22 +264,23 @@ def path_candidates(project: Project, path: Path, expr: str, depth: int = 0) -> 
             return [[("lit", f"/api/analytics/{scope}")]]
         module = project.module(path)
         found: list[list[Part]] = []
-        for returned in _return_expressions(module, call.group(1)):
-            found += path_candidates(project, path, returned, depth + 1)
+        spans = scope.spans if scope is not None else tuple((s.start, s.end) for s in function_spans(module))
+        for returned, at in _return_expressions(module, call.group(1)):
+            found += path_candidates(project, path, returned, depth + 1, ConstScope(at, spans))
         return found
     if re.fullmatch(r"[A-Za-z_$][\w$]*", expr):
-        const = project.resolve_const(path, expr)
+        const = project.resolve_const(path, expr, scope)
         if const is None:
             raise Unresolvable(f"{expr} is not a module-level path const")
         return [[("lit", const)]]
     raise Unresolvable(f"unsupported path expression: {expr[:60]}")
 
 
-def _substitute_consts(project: Project, path: Path, parts: list[Part]) -> list[Part]:
+def _substitute_consts(project: Project, path: Path, parts: list[Part], scope: ConstScope | None = None) -> list[Part]:
     out: list[Part] = []
     for kind, value in parts:
         if kind == "ph" and re.fullmatch(r"[A-Za-z_$][\w$]*", value):
-            const = project.resolve_const(path, value)
+            const = project.resolve_const(path, value, scope)
             if const is not None:
                 out.append(("lit", const))
                 continue
@@ -350,8 +354,16 @@ def _is_param(segment: str) -> bool:
     return segment.startswith("{") and segment.endswith("}")
 
 
-def resolve_path(project: Project, path: Path, expr: str, method: str, operations: dict[str, Operation]) -> str:
-    keys = {match_operation(operations, method, normalize(parts)) for parts in path_candidates(project, path, expr)}
+def resolve_path(
+    project: Project,
+    path: Path,
+    expr: str,
+    method: str,
+    operations: dict[str, Operation],
+    scope: ConstScope | None = None,
+) -> str:
+    candidates = path_candidates(project, path, expr, scope=scope)
+    keys = {match_operation(operations, method, normalize(parts)) for parts in candidates}
     if len(keys) != 1:
         raise Unresolvable(f"branches resolve to {sorted(keys)}")
     return keys.pop()
@@ -466,6 +478,12 @@ def enclosing_name(spans: list[Span], pos: int) -> str:
 def enclosing_span(spans: list[Span], pos: int) -> Span | None:
     inner = [span for span in spans if span.start <= pos <= span.end]
     return max(inner, key=lambda span: span.start) if inner else None
+
+
+def const_scope(spans: list[Span], pos: int) -> ConstScope:
+    """Read path consts at ``pos``: its holding functions first, then module scope."""
+
+    return ConstScope(pos, tuple((span.start, span.end) for span in spans))
 
 
 # --------------------------------------------------------------------------
@@ -595,7 +613,8 @@ def transport_sites(
             args, _ = parse_call_args(code, kinds, lparen)
             if not args:
                 raise Unresolvable("no path argument")
-            site.operation = resolve_path(project, module.path, args[0], TRANSPORT[helper], operations)
+            scope = const_scope(spans, m.start())
+            site.operation = resolve_path(project, module.path, args[0], TRANSPORT[helper], operations, scope)
         except Unresolvable as exc:
             site.errors.append(f"path: {exc}")
         yield site
