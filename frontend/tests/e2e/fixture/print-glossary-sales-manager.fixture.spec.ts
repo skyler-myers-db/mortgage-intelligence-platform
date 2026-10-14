@@ -13,7 +13,10 @@
  *    reaches the page read and stays out of the URL; an auditor gets Export
  *    PDF but no CSV (the admin CSV's receipt order is export-audit.fixture
  *    .spec.ts).
- *  - critic-07: glossary search through ?q=.
+ *  - critic-07: glossary search through ?q=, typed at speed and edited
+ *    mid-word without losing a key or the caret (the field is a local draft
+ *    the router's transition cannot undo), and Back / Forward still bring
+ *    the URL's search back into the field.
  *  - motion-01 2e: a closing filter menu mid-exit (is-closing, aria-hidden,
  *    a running CSSTransition) while the Lead Queue keys already work, gone
  *    afterwards, instant under reduced motion.
@@ -331,6 +334,52 @@ test.describe('glossary search (critic-07)', () => {
     await expect(search).toBeFocused();
     expect(await page.evaluate(() => window.history.length), 'replace, never push').toBe(historyLength);
     expect(callsSince(mockApi, before), 'searching reads nothing').toEqual([]);
+  });
+
+  test('typing at speed keeps every key, and a mid-word edit keeps the caret', async ({ app, mockApi, page }) => {
+    await app.gotoRoute('/glossary');
+    const before = mockApi.calls.length;
+    const historyLength = await page.evaluate(() => window.history.length);
+    const search = page.getByLabel('Search the glossary');
+    const status = page.locator('.glossary-search__status');
+
+    await search.pressSequentially('automated valuation', { delay: 0 });
+    await expect(page).toHaveURL(/\/glossary\?q=automated(\+|%20)valuation$/);
+    await expect(status).toHaveText('1 term matches');
+    await expect(search).toHaveValue('automated valuation');
+
+    await search.fill('');
+    await search.pressSequentially('equty', { delay: 0 });
+    await expect(status).toHaveText('No terms match "equty"');
+    await search.evaluate((input: HTMLInputElement) => input.setSelectionRange(3, 3));
+    await page.keyboard.type('i');
+    await expect(page).toHaveURL(/\/glossary\?q=equity$/);
+    // The list has caught up with 'equity': the render that once threw the caret is done.
+    await expect(status).toHaveText(/^\d+ terms? match(es)?$/);
+    await expect(search).toHaveValue('equity');
+    expect(await search.evaluate((input: HTMLInputElement) => input.selectionStart), 'the caret stays after the typed i').toBe(4);
+    expect(await page.evaluate(() => window.history.length), 'replace, never push').toBe(historyLength);
+    expect(callsSince(mockApi, before), 'searching reads nothing').toEqual([]);
+  });
+
+  test('Back and Forward bring the URL search back into the field', async ({ app, page }) => {
+    await app.gotoRoute('/glossary');
+    const search = page.getByLabel('Search the glossary');
+    await search.pressSequentially('equity', { delay: 0 });
+    await expect(page).toHaveURL(/\?q=equity$/);
+    // A category chip pushes an entry that keeps ?q=.
+    await page.locator('.glossary-index .chip').first().click();
+    await expect(page).toHaveURL(/\?q=equity#/);
+    await search.selectText();
+    await search.pressSequentially('lien', { delay: 0 });
+    await expect(page).toHaveURL(/\/glossary\?q=lien$/);
+
+    await page.goBack();
+    await expect(page).toHaveURL(/\/glossary\?q=equity$/);
+    await expect(search).toHaveValue('equity');
+    await page.goForward();
+    await expect(page).toHaveURL(/\/glossary\?q=lien$/);
+    await expect(search).toHaveValue('lien');
   });
 });
 

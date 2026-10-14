@@ -1,10 +1,11 @@
-import { useRef } from 'react';
-import { Link, useLocation, useSearchParams } from 'react-router';
+import { useDeferredValue, useRef } from 'react';
+import { Link, useLocation } from 'react-router';
 import { PageShell } from '../components/layout/PageShell';
 import { Chip, SurfaceTitle } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { glossaryQueryTokens, matchesGlossaryQuery } from '../lib/glossarySearch';
 import { glossaryEntries, type GlossaryCategory } from '../lib/mortgageGlossary';
+import { useGlossaryQuery } from './glossary.queryDraft';
 import './glossary.css';
 
 const CATEGORY_LABELS: Record<GlossaryCategory, string> = {
@@ -34,19 +35,14 @@ export default function GlossaryRoute() {
   const location = useLocation();
   const targetId = hashTargetId(location.hash);
   // Search (W5d, critic-07; deviation:glossary-search): the query lives in
-  // ?q=, so a filtered glossary can be linked; matching reads nothing.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const query = searchParams.get('q') ?? '';
+  // ?q=, so a filtered glossary can be linked; matching reads nothing. The
+  // field shows a synchronous draft that writes ?q= (glossary.queryDraft):
+  // controlled from the URL, a router transition would undo keystrokes. The
+  // list follows the deferred draft, so typing never waits on the filter.
+  const { text: draftQuery, setText: setQuery } = useGlossaryQuery();
+  const query = useDeferredValue(draftQuery);
   const tokens = glossaryQueryTokens(query);
   const searchRef = useRef<HTMLInputElement>(null);
-  const setQuery = (next: string) => {
-    setSearchParams((current) => {
-      const params = new URLSearchParams(current);
-      if (next) params.set('q', next);
-      else params.delete('q');
-      return params;
-    }, { replace: true, preventScrollReset: true });
-  };
   const matching = glossaryEntries.filter((entry) => matchesGlossaryQuery(entry, tokens));
   const grouped = matching.reduce<Record<GlossaryCategory, typeof glossaryEntries>>(
     (acc, entry) => {
@@ -97,7 +93,7 @@ export default function GlossaryRoute() {
                 ref={searchRef}
                 type="search"
                 className="form-input"
-                value={query}
+                value={draftQuery}
                 onChange={(event) => setQuery(event.target.value)}
                 autoComplete="off"
                 spellCheck={false}
