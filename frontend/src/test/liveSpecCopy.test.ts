@@ -135,7 +135,13 @@ const isShippedFrontendSource = (path: string): boolean =>
   !path.includes('/src/test/') &&
   !path.includes('/src/mocks/');
 
-/** The shipped-copy corpus, normalized, one string. */
+/**
+ * The shipped-copy corpus, normalized, one string. It is raw source text,
+ * comments included: a pin whose copy survives only in a code comment still
+ * passes. That over-approximation is deliberate (no per-language comment
+ * stripping across .ts/.tsx/.json/.py and genie/): it can let a stale pin
+ * through, never fail a shipped one, and the metered live run is the backstop.
+ */
 function shippedCopy(): string {
   const files = [
     ...walk(`${FRONTEND}src`, isShippedFrontendSource),
