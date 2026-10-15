@@ -24,6 +24,7 @@
 import type { Page } from '@playwright/test';
 import type { HealthPayload } from '../../../src/lib/apiTypes';
 import type { GenieStartResult, HomeSummary, PortfolioPreview, SessionResponse } from '../../../src/types';
+import { installActorBinding, type ActorBindingEmulation } from './actorBinding';
 import { AppDriver } from './app';
 import { expectAxeClean, KNOWN_VIOLATIONS } from './axe';
 import { GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
@@ -137,6 +138,14 @@ const HEALTH_CALL = /^\/api(\/v1)?\/health$/;
 const toastRegion = (page: Page) => page.locator('section.toast-region[aria-label="Notifications"]');
 const pathname = (page: Page) => new URL(page.url()).pathname;
 
+/** D-identity-review-a4: since `from`, nothing bound to A was answered while B was served. */
+function expectNothingBoundToALeaked(binding: ActorBindingEmulation, from: number): void {
+  const leaked = binding.log
+    .slice(from)
+    .filter((entry) => entry.key === FIXTURE_ACTOR_A && entry.served === FIXTURE_ACTOR_B && entry.outcome !== 'refused');
+  expect(leaked, 'no request bound to A was answered other than 409 while B was served').toEqual([]);
+}
+
 /** Flip the served actor to B and run page 1's clock past its 8 s poll until the reset lands on '/'. */
 async function flipAndReset(page: Page, app: AppDriver, mockApi: MockApi, flip: () => void): Promise<number> {
   const from = mockApi.calls.length;
@@ -151,16 +160,20 @@ async function flipAndReset(page: Page, app: AppDriver, mockApi: MockApi, flip: 
 
 test.describe('a proven mid-session actor change resets the document (D-identity-review-a3)', () => {
   for (const theme of ['dark', 'light'] as const) {
-    test(`(1a) ${theme}: /lead-queue as A, then B: the tab resets to '/' with the notice, and no audited read leaves after the flip`, async ({ app, page, mockApi }) => {
+    test(`(1a) ${theme}: /lead-queue as A, then B: the tab resets to '/' with the notice, and no audited read leaves after the flip`, async ({ app, page, mockApi, hygiene }) => {
+      hygiene.allow('console.error', /status of 409/);
       let actor = FIXTURE_ACTOR_A;
       serveActor(mockApi, () => actor);
+      const binding = await installActorBinding(page, () => actor);
       await app.setTheme(theme);
       await app.gotoRoute('/lead-queue');
       await expect(page.locator('tr[data-borrower-row]').first()).toBeVisible();
 
+      const boundFrom = binding.log.length;
       const from = await flipAndReset(page, app, mockApi, () => {
         actor = FIXTURE_ACTOR_B;
       });
+      expectNothingBoundToALeaked(binding, boundFrom);
       expect(pathname(page)).toBe('/');
       const after = mockApi.calls.slice(from).map((call) => call.path);
       expect(after.filter((path) => AUDITED_READ.test(path)), 'no audited read after the flip').toEqual([]);
@@ -200,9 +213,11 @@ test.describe('a proven mid-session actor change resets the document (D-identity
     expect(await page.evaluate((key) => window.sessionStorage.getItem(key), DRAFT_KEY), "A's draft is gone").toBeNull();
   });
 
-  test("(2) another tab signs in as B: page 1's pin hides at once, then page 1 resets to '/' with the notice", async ({ app, page, mockApi }) => {
+  test("(2) another tab signs in as B: page 1's pin hides at once, then page 1 resets to '/' with the notice", async ({ app, page, mockApi, hygiene }) => {
+    hygiene.allow('console.error', /status of 409/);
     let actor = FIXTURE_ACTOR_A;
     serveActor(mockApi, () => actor);
+    const binding = await installActorBinding(page, () => actor);
     await seedActorA(page);
     await app.gotoRoute('/');
     await expect(pinsCard(page)).toContainText(A_PIN.question);
@@ -211,6 +226,7 @@ test.describe('a proven mid-session actor change resets the document (D-identity
       if (frame === page.mainFrame()) resets.push(new URL(frame.url()).pathname);
     });
 
+    const boundFrom = binding.log.length;
     actor = FIXTURE_ACTOR_B;
     const tab = await newTab(page, mockApi);
     await tab.app.gotoRoute('/');
@@ -223,6 +239,7 @@ test.describe('a proven mid-session actor change resets the document (D-identity
     await app.settle();
     await expect(toastRegion(page)).toContainText(RESET_NOTICE);
     await expect(pinsCard(page)).toHaveCount(0);
+    expectNothingBoundToALeaked(binding, boundFrom);
     await tab.page.close();
   });
 });

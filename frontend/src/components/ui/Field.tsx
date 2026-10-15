@@ -47,6 +47,11 @@ export interface FieldProps {
   unit?: string;
   /** Keep the label for assistive tech only (a control whose row already says what it is). */
   labelHidden?: boolean;
+  /**
+   * The control's id, when a test or a deep link already pins one ('lo-assign'
+   * on the Offer). Absent, the id is generated and the markup is unchanged.
+   */
+  controlId?: string;
   children: (control: FieldControlProps) => ReactNode;
 }
 
@@ -60,10 +65,11 @@ export function Field({
   suffix,
   unit,
   labelHidden,
+  controlId: pinnedControlId,
   children,
 }: FieldProps) {
   const id = useId();
-  const controlId = `${id}control`;
+  const controlId = pinnedControlId ?? `${id}control`;
   const unitId = `${id}unit`;
   const hintId = `${id}hint`;
   const noticeId = `${id}notice`;

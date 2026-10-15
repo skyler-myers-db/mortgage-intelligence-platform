@@ -7,6 +7,7 @@
  * submit, and never a new endpoint.
  */
 import { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { consumeGeniePrefill, subscribeGenieOpenRequests } from '../../lib/genieOpen';
@@ -23,8 +24,11 @@ vi.mock('../AppContext', () => ({
     setConsoleOpen: vi.fn(),
     setGenieOpen,
     canAccessAdmin: false,
+    savedLeads: {},
   }),
 }));
+// The palette's Saved views group (useCommandPaletteSources) reads this client.
+vi.mock('../../lib/apiClients/savedViews', () => ({ fetchSavedViews: () => Promise.resolve({ saved_views: [] }) }));
 
 const borrowerSearch = vi.fn();
 // The ledger entry reads the shared session (useAuditLedgerAccess); this
@@ -65,7 +69,7 @@ describe('CommandPalette Ask Genie row', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
-    act(() => root.render(<CommandPalette />));
+    act(() => root.render(<QueryClientProvider client={new QueryClient()}><CommandPalette /></QueryClientProvider>));
   });
   afterEach(() => {
     unsubscribe();
@@ -175,6 +179,8 @@ describe('CommandPalette Ask Genie row', () => {
     await act(async () => {
       resolveSearch([{ borrower_id: 'B-1EEEN00S99GXC', city: 'Chicago', state: 'IL', zip: '60611' }]);
     });
+    // TanStack Query notifies on a macrotask (the shared search hook).
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
     expect(container.querySelector('[role="group"][aria-label="Borrowers"]')).not.toBeNull();
     // The selection followed the row, not the index the borrower now holds.
     expect(selected()?.textContent).toContain('Ask Genie: refi');

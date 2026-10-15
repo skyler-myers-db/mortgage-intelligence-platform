@@ -20,6 +20,9 @@ import { LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import { LeadQueueTableSkeleton } from './lead-queue.skeleton';
 import { serverOrderOf, useLeadQueuePages } from './lead-queue.pages';
 import { leadQueueFilterInputFromSearchParams, leadQueueLenderRefs, leadsRequestFromSearchParams } from './lead-queue.request';
+import { useLeadQueueApprovalRequests } from './lead-queue.approvalRequests';
+import { ApprovalRequestChips } from '../components/mortgage/ApprovalRequestChips';
+import { ApprovalRequestScopeRow } from '../components/mortgage/ApprovalRequestScopeRow';
 import { useLeadQueueFreshness } from './lead-queue.freshness';
 import { LeadQueueFilterBar, LeadQueueHeroFilterChips } from './lead-queue.filterBar';
 import { LeadQueueViews } from './lead-queue.views';
@@ -49,6 +52,7 @@ import {
   RECENCY_FILTER_OPTIONS,
   SEGMENT_FILTER_OPTIONS,
   SEGMENT_OPTION_TO_CODE,
+  APPROVAL_REQUEST_BATCH_PARAM,
   approvalFilterDisplayValue,
   buildLeadQueueExportFilters,
   isAssignedToMe,
@@ -101,6 +105,8 @@ const RULES_VERSION_STALE_MS = 5 * 60_000;
 const EMPTY_STATE = lazyModule(() => import('../components/mortgage/LeadQueueEmptyState'));
 const PROPERTY_LOOKUP = lazyModule(() => import('../components/mortgage/PropertyLookupPanel'));
 const EXPORT_WAITS_FOR_ROWS = 'Export waits for the rows of the current filters';
+// The export receipt's grammar cannot declare an approval-request scope.
+const EXPORT_OFF_WHILE_SCOPED = 'Export is off while the queue shows one approval request. Clear the request to export.';
 
 // The keep-alive slot app.tsx renders the queue in rides this chunk (W5c runtime-08).
 export { default as LeadQueueKeepAlive } from '../components/layout/LeadQueueKeepAlive';
@@ -112,7 +118,7 @@ export default function LeadQueue() {
   // are display state, not filters: they never enable Clear all.
   const filtersActive = hasLeadQueueFilters(searchParams);
   const footprint = useFootprint();
-  const { canAccessAdmin, actorEmail, sessionStatus } = useApp();
+  const { canAccessAdmin, canApprove, actorEmail, sessionStatus } = useApp();
   const queryClient = useQueryClient();
   const moreFiltersToggleRef = useRef<HTMLButtonElement | null>(null);
   const configOptionsQuery = useConfigOptionsQuery();
@@ -224,6 +230,14 @@ export default function LeadQueue() {
     () => leadsRequestFromSearchParams(searchParams, targetLenderOptions, actorEmail),
     [searchParams, targetLenderOptions, actorEmail],
   );
+  const requestScopeBatch = leadsRequest.opts?.approvalRequestBatch ?? null;
+  // flow-02 / shell-06: ONE audit-free approval-request read per mount (and
+  // after a decision, create or withdraw); never polled.
+  const approvalRequests = useLeadQueueApprovalRequests({
+    sessionStatus,
+    canApprove: canApprove === true,
+    scopeBatchId: requestScopeBatch,
+  });
   const place = parseLeadTablePlace(searchParams);
   const order = serverOrderOf(place.sort);
   const pages = useLeadQueuePages({
@@ -339,7 +353,9 @@ export default function LeadQueue() {
         .then((rules) => rules.offer_rules_version ?? null)
       : undefined,
     // Placeholder rows belong to the previous filters (keepPreviousData).
-    exportBlockedReason: leadsPlaceholderData ? EXPORT_WAITS_FOR_ROWS : null,
+    exportBlockedReason: requestScopeBatch
+      ? EXPORT_OFF_WHILE_SCOPED
+      : leadsPlaceholderData ? EXPORT_WAITS_FOR_ROWS : null,
   };
   // Audit tables-06: the hero lists the active NON-core filters as removable
   // chips (their pills sit collapsed behind "More filters"); core filters
@@ -374,6 +390,12 @@ export default function LeadQueue() {
     ids: visibleLeads.map((lead) => lead.borrower_id),
   } : null);
   const clearAllFilters = () => setSearchParams(searchParamsCleared(searchParams));
+  const clearRequestScope = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete(APPROVAL_REQUEST_BATCH_PARAM);
+    setSearchParams(next);
+    document.querySelector<HTMLElement>('#main-content .tbl-wrap')?.focus();
+  };
   // Copy link (audit tables-09): this origin and path plus the shareable
   // params only. Never the address bar: that holds the open row, maybe an
   // assignee email and a Growth Agent proof bound to this session.
@@ -676,6 +698,12 @@ export default function LeadQueue() {
                     : page.growthAgentVerification ?? null}
                   paging={pages.paging}
                   sortScope={order.sort === 'rank' && place.sort ? 'loaded' : 'server'}
+                  approvalRequests={approvalRequests}
+                  // The request chips and the scope row ride this route's chunk, not LeadTable's.
+                  requestChips={approvalRequests && <ApprovalRequestChips requests={approvalRequests} />}
+                  requestScopeRow={approvalRequests?.scope && (
+                    <ApprovalRequestScopeRow requests={approvalRequests} onClear={clearRequestScope} />
+                  )}
                   exportContext={exportContext}
                   salesTeam={salesTeam}
                   view={tableView}

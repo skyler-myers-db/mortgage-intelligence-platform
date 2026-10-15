@@ -71,8 +71,19 @@
   list-style: none;
   animation: filter-menu-in var(--dur-fast) var(--ease);
 }
+/* The exit (motion-01 item 2e; deviation:menu-exit-motion): the prototype's
+   overlays hard-cut on close (design_files/index.html:665-676). A closing
+   menu stays mounted (hooks/useExitRetained useExitPresence) while it fades
+   and lifts the entry's 3px back, aria-hidden and inert, then unmounts. */
+.filter-menu.is-closing {
+  opacity: 0;
+  transform: translateY(-3px);
+  pointer-events: none;
+  transition: opacity var(--dur-exit) var(--ease-exit), transform var(--dur-exit) var(--ease-exit);
+}
 @media (prefers-reduced-motion: reduce) {
   .filter-menu { animation: none; }
+  .filter-menu.is-closing { transition: none; }
 }
 @keyframes filter-menu-in {
   from { opacity: 0; transform: translateY(-3px); }

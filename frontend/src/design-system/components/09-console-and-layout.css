@@ -65,7 +65,10 @@
 }
 /* Direct labels only (own row, or the label/switch `.row`): the descendant
    form of this rule also restyled the field labels of the PropertyLookupPanel
-   mounted inside a row. */
+   mounted inside a row. A row caption that names no control is a
+   `.tweak-row__label` span styled the same (deviation:console-row-captions,
+   a11y-05: a <label> must name a control). */
+.tweak-row > .tweak-row__label, .tweak-row > .row > .tweak-row__label,
 .tweak-row > label,
 .tweak-row > .row > label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em; display: block; margin-bottom: 6px; }
 .tweak-row .swatches { display: flex; gap: 6px; }

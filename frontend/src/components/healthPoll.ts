@@ -5,7 +5,7 @@ import type { HealthHint } from '../lib/apiTypes';
 import { subscribeNetworkFailures } from '../lib/apiFailure';
 import { readHealthPrime, takeHealthPrime } from '../lib/bootPrime';
 import { subscribeHealthRecheck } from '../lib/healthRecheck';
-import { healthActorObservation, type ActorIdentity } from '../lib/healthTrust';
+import { healthActorObservation, sameActorIdentity, type ActorIdentity } from '../lib/healthTrust';
 import { isSessionExpired, subscribeSessionStatus } from '../lib/sessionStatus';
 import { recoveredDependencies, refetchRecoveredQueries } from './healthRecovery';
 import {
@@ -271,15 +271,17 @@ export function startHealthPoll({
       observeConnection(rawPayload.status !== 'unreachable');
       // Only a trusted observation may say who the actor is (lib/healthTrust):
       // a transport failure keeps the last actor, and the object is replaced
-      // only when the key changes, so the shell's actor effect runs once per
-      // change. Except the first trusted probe STARTED after a recheck request
-      // (lib/healthRecheck): it publishes a fresh object even for an unchanged
-      // key, or a suspended gate would never hear "still the same actor".
+      // only when the key or its rotation aliases change (order-sensitive), so
+      // the shell's actor effect runs once per change. Except the first trusted
+      // probe STARTED after a recheck request (lib/healthRecheck): it publishes
+      // a fresh object even for an unchanged pair, or a suspended gate would
+      // never hear "still the same actor".
       const actor = healthActorObservation(rawPayload);
       if (actor.trusted) {
         const fresh = covers > rechecksAnswered;
         if (fresh) rechecksAnswered = covers;
-        setActorIdentity((prior) => (!fresh && prior !== null && prior.key === actor.key ? prior : { key: actor.key }));
+        const next = { key: actor.key, aliases: actor.aliases };
+        setActorIdentity((prior) => (!fresh && prior !== null && sameActorIdentity(prior, next) ? prior : next));
       }
       const elapsed = primed?.probeMs ?? Math.round(performance.now() - t0);
       const { payload, next } = applyDownUpDebounce(

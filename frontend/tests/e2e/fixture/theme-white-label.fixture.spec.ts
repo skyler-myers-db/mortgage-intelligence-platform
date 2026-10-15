@@ -114,8 +114,18 @@ test.describe('command palette', () => {
       const match = /\/assets\/([\w-]+?)-[\w-]{8}\.js$/.exec(new URL(request.url()).pathname);
       if (match) chunks.push(match[1]);
     });
-    const apiCallsBefore = mockApi.calls.length;
+    const beforeOpen = mockApi.calls.length;
     const palette = await app.openCommandPalette();
+    // Opening reads the palette's own audit-free sources once (W5d
+    // w5-palette-offer-sales-loop: Saved views and the actor's Recent
+    // borrowers) and nothing else; the claim under test starts after them.
+    const OPEN_READS = ['/api/audit/my-events', '/api/workspace/saved-views'];
+    await expect
+      .poll(() => [...new Set(mockApi.calls.slice(beforeOpen).map((call) => call.path))].sort(), { message: 'the open-time reads' })
+      .toEqual(OPEN_READS);
+    await expect.poll(() => mockApi.inflight, { message: 'the open-time reads settled' }).toBe(0);
+    const apiCallsBefore = mockApi.calls.length;
+    expect(mockApi.calls.slice(beforeOpen).map((call) => call.method), 'open-time reads are GETs').toEqual(OPEN_READS.map(() => 'GET'));
     const input = palette.getByRole('combobox');
     // Rows whose chunks neither the glossary page nor the idle preloader load.
     const targets: Record<string, string> = { '/offer-orchestrator': 'offer-orchestrator', '/ask-genie': 'ask-genie', '/borrower-360': 'borrower-360' };

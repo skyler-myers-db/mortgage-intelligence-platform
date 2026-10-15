@@ -98,9 +98,16 @@
 }
 /* A wide map's overlay legend would park the lever over the map itself: in
    rate mode it joins the flow under the stage, as it does for the ZIP grid. */
+/* In flow it overlays nothing, so it drops the overlay legend's
+   backdrop-filter (08-map.css): a blur of the plain surface behind it paints
+   nothing, while the filter made the legend its own compositor layer at a
+   fractional offset whose raster translation rounded the lever's text lines
+   differently from run to run on CI's Linux Chromium (the W5d PR's VRT
+   double run: Segments lever, both themes). */
 .map-wrap:has(.map-legend__lever) .map-legend {
   position: static;
   margin: 0 var(--sp-3) var(--sp-3);
+  backdrop-filter: none;
 }
 /* Under the stage (a narrow map), the lever takes the strip's full width. */
 @container map-wrap (max-width: 1100px) {
@@ -114,11 +121,20 @@
    the headline, the slider at its longest sentence is 191.375px on Home with
    the Console open and on Segments with it closed (175.19px in the other two
    layouts), and the status lines are 27-28.19px. The off-Linux Geist Mono
-   emulation measures the same 191.375px maximum. 196px reserves it with
-   4.625px to spare, inside the tightness window. geo-foundation.fixture.spec.ts
-   logs every measurement and pins slot >= each state everywhere, and
-   slot - max < var(--sp-2) on Linux. */
-.map-legend__lever-slot { min-block-size: calc(var(--sp-16) * 3 + var(--sp-1)); }
+   emulation measures the same 191.375px maximum. W5d (deviation:watch-this-level,
+   audit wow-ai-2) adds "Watch {level}" to the cohort link's actions row, and
+   the W5d VRT review let the cohort link's sentence wrap inside the lever
+   (deviation:lever-cohort-link-wraps) and kept the book date whole. Measured
+   on CI's Linux Chromium (the W5d PR's run 38654887884, geo-foundation and
+   growth-watchlists [lever-slot] lines): the slider and the Watch button
+   state at their longest are 296.5625px on Segments with the Console closed
+   (229.375px on Home with it open, 214.22 / 198.03px watching, 175.19px in the
+   other layouts); the off-Linux emulation reads 263.5625px there, so it under-
+   measures this layout and only the Linux lines set the slot. 300px reserves
+   it with 3.4375px to spare, inside the tightness window.
+   geo-foundation.fixture.spec.ts logs every measurement and pins slot >= each
+   state everywhere, and slot - max < var(--sp-2) on Linux. */
+.map-legend__lever-slot { min-block-size: calc(var(--sp-16) * 5 - var(--sp-5)); }
 .map-wrap:has(.map-legend__lever) .map-levels {
   flex: 1 0 auto;
   min-block-size: calc(var(--sp-16) * 5);

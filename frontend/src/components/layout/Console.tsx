@@ -11,6 +11,7 @@ import { api } from '../../lib/api';
 import { recentActivityPresentation } from '../../lib/auditEventPresentation';
 import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
+import { preloadIntentProps } from '../../lib/preloadIntent';
 import { lenderMarkUrl } from '../../lib/themePreference';
 import { formatTimeOfDay, formatTimestamp } from '../../lib/time';
 
@@ -19,6 +20,15 @@ import { formatTimeOfDay, formatTimestamp } from '../../lib/time';
  * density, evidence / signal-strength toggles, configured tenant. Opens from the
  * topbar tweak icon. Uses `.tweaks` BEM from the prototype so a single class
  * controls positioning + animation.
+ *
+ * Row captions (deviation:console-row-captions; audit a11y-05): the
+ * prototype captions every `.tweak-row` with a `<label>` tied to no control
+ * (design_files/Module 0 Prototype.html:1442-1470). A `<label>` must name a
+ * control, and labelling a button would rename it ("Open Genie"), so a
+ * caption is a `<span class="tweak-row__label">` styled exactly as the
+ * prototype label; it names its group (Accent, Density) by aria-labelledby.
+ * The three switch rows keep a real `<label htmlFor>` on the switch, whose
+ * aria-label / aria-labelledby still give its accessible name.
  */
 
 const ACCENT_SWATCHES: Accent[] = ['bright', 'teal', 'navy', 'red'];
@@ -80,10 +90,10 @@ export function Console() {
   const savedDraftCount = Object.keys(savedDrafts).length;
 
   return (
+    // A named <aside> is the complementary landmark: no redundant role.
     <aside
       id="workspace-console"
       className={`tweaks ${consoleOpen ? 'is-open' : ''}`}
-      role="complementary"
       aria-label="Workspace console"
       aria-hidden={!consoleOpen}
       inert={!consoleOpen}
@@ -105,12 +115,12 @@ export function Console() {
       </div>
       <div className="tweaks__body">
         <div className="tweak-row">
-          <label>Theme</label>
+          <span className="tweak-row__label" id="console-theme-label">Theme</span>
           <ThemePreferenceControl />
         </div>
         <div className="tweak-row">
-          <label>Accent</label>
-          <div className="swatches">
+          <span className="tweak-row__label" id="console-accent-label">Accent</span>
+          <div className="swatches" role="group" aria-labelledby="console-accent-label">
             {ACCENT_SWATCHES.map((a) => (
               <button
                 key={a}
@@ -124,8 +134,8 @@ export function Console() {
           </div>
         </div>
         <div className="tweak-row">
-          <label>Density</label>
-          <div className="segmented" role="group" aria-label="Density">
+          <span className="tweak-row__label" id="console-density-label">Density</span>
+          <div className="segmented" role="group" aria-labelledby="console-density-label">
             {(['comfortable', 'compact'] as Density[]).map((d) => (
               <button
                 key={d}
@@ -140,7 +150,7 @@ export function Console() {
           </div>
         </div>
         <div className="tweak-row">
-          <label>Property lookup</label>
+          <span className="tweak-row__label" id="console-lookup-label">Property lookup</span>
           <PropertyLookupPanel compact headingLevel={3} onNavigate={() => setConsoleOpen(false)} />
         </div>
         <div
@@ -148,7 +158,7 @@ export function Console() {
           className="tweak-row"
           tabIndex={-1}
         >
-          <label>Recent activity</label>
+          <span className="tweak-row__label" id="console-activity-label">Recent activity</span>
           <div className="surface">
             <div className="surface__hdr">
               <Icon name="audit" size={14} className="tweaks__hdr-icon" />
@@ -224,7 +234,7 @@ export function Console() {
           </div>
         </div>
         <div className="tweak-row">
-          <label>Configured tenant</label>
+          <span className="tweak-row__label" id="console-tenant-label">Configured tenant</span>
           <div className="stack-sm">
             <Chip
               variant="neutral"
@@ -244,7 +254,7 @@ export function Console() {
           </div>
         </div>
         <div className="tweak-row">
-          <label>Saved workspace</label>
+          <span className="tweak-row__label" id="console-workspace-label">Saved workspace</span>
           <div className="saved-workspace">
             <div className="saved-workspace__summary">
               <span>{savedLeadCount} saved lead{savedLeadCount === 1 ? '' : 's'}</span>
@@ -268,12 +278,15 @@ export function Console() {
             {workspaceStatus !== 'loading' && savedLeadItems.length === 0 && savedDraftItems.length === 0 && (
               <div className="muted fs-12">No saved leads or drafts yet.</div>
             )}
+            {/* Intent warms the route CHUNK only (bundle-09 item 1): the
+                dossier and offer reads are audited, so they stay click-only. */}
             {savedLeadItems.map((lead) => (
               <Link
                 key={`lead-${lead.borrower_id}`}
                 className="saved-workspace__item"
                 to={`/borrower-360/${lead.borrower_id}`}
                 onClick={() => setConsoleOpen(false)}
+                {...preloadIntentProps(`/borrower-360/${lead.borrower_id}`)}
               >
                 <Icon name="tag" size={12} />
                 <span className="saved-workspace__body">
@@ -288,6 +301,7 @@ export function Console() {
                 className="saved-workspace__item"
                 to={`/offer-orchestrator/${draft.borrower_id}`}
                 onClick={() => setConsoleOpen(false)}
+                {...preloadIntentProps(`/offer-orchestrator/${draft.borrower_id}`)}
               >
                 <Icon name="doc" size={12} />
                 <span className="saved-workspace__body">
@@ -300,8 +314,9 @@ export function Console() {
         </div>
         <div className="tweak-row">
           <div className="row">
-            <label>Show evidence chips</label>
+            <label htmlFor="console-evidence-switch">Show evidence chips</label>
             <button
+              id="console-evidence-switch"
               className={`switch ${showEvidence ? 'on' : ''}`}
               onClick={() => setShowEvidence(!showEvidence)}
               aria-pressed={showEvidence}
@@ -312,8 +327,9 @@ export function Console() {
         </div>
         <div className="tweak-row">
           <div className="row">
-            <label>Show signal meters</label>
+            <label htmlFor="console-signal-switch">Show signal meters</label>
             <button
+              id="console-signal-switch"
               className={`switch ${showConfidence ? 'on' : ''}`}
               onClick={() => setShowConfidence(!showConfidence)}
               aria-pressed={showConfidence}
@@ -326,8 +342,9 @@ export function Console() {
             off per actor (lib/keymapPreference); ⌘K stays on. */}
         <div className="tweak-row">
           <div className="row">
-            <label id="console-single-key-label">Single-key shortcuts</label>
+            <label id="console-single-key-label" htmlFor="console-single-key-switch">Single-key shortcuts</label>
             <button
+              id="console-single-key-switch"
               className={`switch ${singleKeyShortcuts ? 'on' : ''}`}
               onClick={() => setSingleKeyShortcuts(!singleKeyShortcuts)}
               aria-pressed={singleKeyShortcuts}
@@ -343,7 +360,7 @@ export function Console() {
         </div>
         <div className="tweak-row">
           <div className="row">
-            <label>Ask Genie</label>
+            <span className="tweak-row__label" id="console-genie-label">Ask Genie</span>
             <button
               className="btn btn--sm"
               onClick={() => { setGenieOpen(true); setConsoleOpen(false); }}

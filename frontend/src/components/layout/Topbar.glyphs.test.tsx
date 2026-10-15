@@ -13,6 +13,7 @@
  */
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
@@ -48,6 +49,9 @@ import { NAVIGATION_ROUTE_IDS, ROUTES, type NavigationRouteId } from '../../lib/
 import { Icon, type IconName } from '../Icon';
 import { Topbar } from './Topbar';
 
+// Topbar's borrower search reads through TanStack Query (hooks/useBorrowerSearch).
+const queryClient = new QueryClient();
+
 /** The DOM markup of one glyph at the topbar's size. */
 function glyphMarkup(name: IconName): string {
   const scratch = document.createElement('div');
@@ -72,7 +76,7 @@ describe('the topbar theme toggle', () => {
   for (const [painted, next] of [['dark', 'light'], ['light', 'dark']] as const) {
     it(`asks the provider for ${next} when ${painted} is painted, and writes nothing itself`, async () => {
       app.theme = painted;
-      const { container } = await mount(<MemoryRouter><Topbar /></MemoryRouter>);
+      const { container } = await mount(<QueryClientProvider client={queryClient}><MemoryRouter><Topbar /></MemoryRouter></QueryClientProvider>);
       const toggle = container.querySelector<HTMLButtonElement>('.topbar__icon-btn[aria-label="Toggle theme"]');
       expect(toggle).not.toBeNull();
       toggle!.click();
@@ -95,7 +99,7 @@ describe('topbar glyphs', () => {
       const navigation = new Map<string, NavigationRouteId>(
         NAVIGATION_ROUTE_IDS.map((id) => [glyphMarkup(ROUTES[id].icon), id]),
       );
-      const { container } = await mount(<MemoryRouter><Topbar /></MemoryRouter>);
+      const { container } = await mount(<QueryClientProvider client={queryClient}><MemoryRouter><Topbar /></MemoryRouter></QueryClientProvider>);
       const buttons = [...container.querySelectorAll('.topbar__icon-btn')];
       expect(buttons.length).toBeGreaterThanOrEqual(3);
       const drawn = buttons.flatMap((button) => {

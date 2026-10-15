@@ -476,6 +476,14 @@
             ],
             "title": "Actor Cache Key"
           },
+          "actor_cache_key_aliases": {
+            "description": "The same actor's cache key under the previous rotation secret, while one is configured (D-identity-review-a4): an open tab holding it re-stamps instead of resetting, and requests bound to it are still accepted. Empty outside a rotation. Authenticated body only.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Actor Cache Key Aliases",
+            "type": "array"
+          },
           "agent_gateway_binding_sha256": {
             "anyOf": [
               {
@@ -2245,8 +2253,7 @@
             "default": "manual",
             "enum": [
               "manual",
-              "round_robin",
-              "score_balanced"
+              "round_robin"
             ],
             "title": "Strategy",
             "type": "string"
@@ -2378,6 +2385,71 @@
           "feedback_id"
         ],
         "title": "AssignmentOutcomeResponse",
+        "type": "object"
+      },
+      "AssignmentReleaseRequest": {
+        "additionalProperties": false,
+        "description": "Undo one assignment (audit states-07 item 1): a compensating write.",
+        "properties": {
+          "assignment_id": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "title": "Assignment Id",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "assignment_id",
+          "request_id"
+        ],
+        "title": "AssignmentReleaseRequest",
+        "type": "object"
+      },
+      "AssignmentReleaseResponse": {
+        "properties": {
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "released": {
+            "$ref": "#/components/schemas/LeadAssignment"
+          },
+          "restore_skipped_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "previous_assignee_inactive",
+                  "previous_assignee_out_of_scope",
+                  "lead_not_approved",
+                  "lead_not_contactable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restore Skipped Reason"
+          },
+          "restored": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LeadAssignment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "released",
+          "audit_event_id"
+        ],
+        "title": "AssignmentReleaseResponse",
         "type": "object"
       },
       "AssignmentResponse": {
@@ -5708,19 +5780,6 @@
             "title": "Lo Email",
             "type": "string"
           },
-          "notes": {
-            "anyOf": [
-              {
-                "maxLength": 500,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Retired 2026-10: must be absent, null or blank; free-text disposition notes are no longer accepted",
-            "title": "Notes"
-          },
           "occurred_at": {
             "anyOf": [
               {
@@ -5811,6 +5870,23 @@
             "maxItems": 500,
             "title": "Borrower Ids",
             "type": "array"
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "expected_plan_fingerprint": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Plan Fingerprint"
           },
           "expires_in_hours": {
             "anyOf": [
@@ -5915,6 +5991,16 @@
             "title": "Per Lo Counts",
             "type": "object"
           },
+          "preview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DistributionPreview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "strategy": {
             "enum": [
               "manual",
@@ -5932,6 +6018,196 @@
           "per_lo_counts"
         ],
         "title": "DistributeLeadsResponse",
+        "type": "object"
+      },
+      "DistributionOfficerLoad": {
+        "description": "One officer's share of a planned fill: staff aggregates only.",
+        "properties": {
+          "added_count": {
+            "title": "Added Count",
+            "type": "integer"
+          },
+          "added_score_sum": {
+            "title": "Added Score Sum",
+            "type": "integer"
+          },
+          "capacity_per_day": {
+            "title": "Capacity Per Day",
+            "type": "integer"
+          },
+          "display_label": {
+            "title": "Display Label",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "in_region_count": {
+            "title": "In Region Count",
+            "type": "integer"
+          },
+          "open_count": {
+            "title": "Open Count",
+            "type": "integer"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          }
+        },
+        "required": [
+          "email",
+          "display_label",
+          "capacity_per_day",
+          "open_count",
+          "added_count",
+          "added_score_sum",
+          "in_region_count"
+        ],
+        "title": "DistributionOfficerLoad",
+        "type": "object"
+      },
+      "DistributionPreview": {
+        "description": "What the score-balanced fill placed: counts and sums, never a borrower id.",
+        "properties": {
+          "officers": {
+            "items": {
+              "$ref": "#/components/schemas/DistributionOfficerLoad"
+            },
+            "title": "Officers",
+            "type": "array"
+          },
+          "placed_count": {
+            "title": "Placed Count",
+            "type": "integer"
+          },
+          "placed_score_sum": {
+            "title": "Placed Score Sum",
+            "type": "integer"
+          },
+          "plan_fingerprint": {
+            "title": "Plan Fingerprint",
+            "type": "string"
+          },
+          "pool_count": {
+            "title": "Pool Count",
+            "type": "integer"
+          },
+          "skipped_already_assigned": {
+            "title": "Skipped Already Assigned",
+            "type": "integer"
+          },
+          "skipped_not_assignable": {
+            "title": "Skipped Not Assignable",
+            "type": "integer"
+          },
+          "strategy": {
+            "const": "score_balanced",
+            "default": "score_balanced",
+            "title": "Strategy",
+            "type": "string"
+          },
+          "unplaced_no_capacity": {
+            "title": "Unplaced No Capacity",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "plan_fingerprint",
+          "pool_count",
+          "placed_count",
+          "placed_score_sum",
+          "unplaced_no_capacity",
+          "skipped_not_assignable",
+          "skipped_already_assigned",
+          "officers"
+        ],
+        "title": "DistributionPreview",
+        "type": "object"
+      },
+      "DistributionReleaseRequest": {
+        "additionalProperties": false,
+        "description": "Undo one distribution run: release that run's own rows by the same actor.",
+        "properties": {
+          "distribution_request_id": {
+            "title": "Distribution Request Id",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "distribution_request_id",
+          "request_id"
+        ],
+        "title": "DistributionReleaseRequest",
+        "type": "object"
+      },
+      "DistributionReleaseResponse": {
+        "properties": {
+          "audit_event_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Audit Event Ids",
+            "type": "array"
+          },
+          "released": {
+            "items": {
+              "$ref": "#/components/schemas/LeadAssignment"
+            },
+            "title": "Released",
+            "type": "array"
+          },
+          "released_count": {
+            "title": "Released Count",
+            "type": "integer"
+          },
+          "restore_skipped_count": {
+            "title": "Restore Skipped Count",
+            "type": "integer"
+          },
+          "restored": {
+            "items": {
+              "$ref": "#/components/schemas/LeadAssignment"
+            },
+            "title": "Restored",
+            "type": "array"
+          },
+          "restored_count": {
+            "title": "Restored Count",
+            "type": "integer"
+          },
+          "skipped_not_active_count": {
+            "title": "Skipped Not Active Count",
+            "type": "integer"
+          },
+          "skipped_started_count": {
+            "title": "Skipped Started Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "released_count",
+          "restored_count",
+          "skipped_started_count",
+          "skipped_not_active_count",
+          "restore_skipped_count",
+          "released",
+          "restored",
+          "audit_event_ids"
+        ],
+        "title": "DistributionReleaseResponse",
         "type": "object"
       },
       "EconomicsAnalyticsResponse": {
@@ -6742,6 +7018,200 @@
           "cls"
         ],
         "title": "FieldPerformanceVitalsRow",
+        "type": "object"
+      },
+      "FollowupItem": {
+        "description": "One open item of the caller's own due work.",
+        "properties": {
+          "attempt_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The scheduling call's attempt number; callbacks only.",
+            "title": "Attempt Number"
+          },
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "contact_block_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "consent_not_opt_in",
+                  "frequency_cap",
+                  "suppressed",
+                  "eligibility_not_proven",
+                  "contactability_not_configured",
+                  "not_in_coverage"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the row is withheld; null exactly when contactable.",
+            "title": "Contact Block Reason"
+          },
+          "contactable": {
+            "description": "True only when the gold eligibility decision and the set-level predicate both allow contact.",
+            "title": "Contactable",
+            "type": "boolean"
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null for a new assignment, which has no due time.",
+            "title": "Due At"
+          },
+          "earliest_recontact_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the contact frequency cap lifts; frequency_cap rows only.",
+            "title": "Earliest Recontact At"
+          },
+          "kind": {
+            "enum": [
+              "callback",
+              "approval_follow_up",
+              "requested_follow_up",
+              "new_assignment"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "owner_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The current assignee's display label; requested follow-ups with an assignee only.",
+            "title": "Owner Label"
+          },
+          "owner_state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "assigned",
+                  "unassigned"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Requested follow-ups only.",
+            "title": "Owner State"
+          },
+          "since_at": {
+            "description": "When the item was scheduled, decided or assigned.",
+            "format": "date-time",
+            "title": "Since At",
+            "type": "string"
+          },
+          "woke_on_signal": {
+            "description": "True when a snooze of this item ended early on a new recorded signal.",
+            "title": "Woke On Signal",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "borrower_id",
+          "due_at",
+          "since_at",
+          "attempt_number",
+          "owner_label",
+          "owner_state",
+          "contactable",
+          "contact_block_reason",
+          "earliest_recontact_at",
+          "woke_on_signal"
+        ],
+        "title": "FollowupItem",
+        "type": "object"
+      },
+      "FollowupList": {
+        "description": "The tray's read: due and newly assigned items, at most 50 per kind.",
+        "properties": {
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FollowupItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "truncated": {
+            "description": "True when a kind had more than 50 open items.",
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "generated_at",
+          "truncated"
+        ],
+        "title": "FollowupList",
+        "type": "object"
+      },
+      "FollowupSummary": {
+        "description": "The rail item's poll: whether the actor has a tray, and its next due time.",
+        "properties": {
+          "eligible": {
+            "description": "True when the caller is an active sales-team member or an approver.",
+            "title": "Eligible",
+            "type": "boolean"
+          },
+          "next_due_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Earliest due time over the caller's open callbacks and follow-ups due no more than 14 days ago; null when nothing is due.",
+            "title": "Next Due At"
+          }
+        },
+        "required": [
+          "eligible",
+          "next_due_at"
+        ],
+        "title": "FollowupSummary",
         "type": "object"
       },
       "FootprintState": {
@@ -7740,6 +8210,223 @@
         "title": "GenieCompletionJobStatusRequest",
         "type": "object"
       },
+      "GenieContext": {
+        "additionalProperties": false,
+        "description": "A Lead Queue filter selection as closed codes, for a server-rendered Genie question.\n\nCodes only: segment codes, a USPS state code, a county FIPS code, a ZIP, a\ngoverned city key and a public Competitor lender ref. No field carries free\ntext, a borrower id or an email address.",
+        "properties": {
+          "assignee": {
+            "anyOf": [
+              {
+                "const": "me",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee"
+          },
+          "city": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "pattern": "^[A-Za-z][A-Za-z.'-]*(?: [A-Za-z][A-Za-z.'-]*){0,3}~[A-Z]{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "county_fips": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]{5}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "County Fips"
+          },
+          "lender_ref": {
+            "anyOf": [
+              {
+                "pattern": "^Competitor ([A-Z]|Other)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lender Ref"
+          },
+          "route": {
+            "const": "lead-queue",
+            "title": "Route",
+            "type": "string"
+          },
+          "segment_codes": {
+            "items": {
+              "enum": [
+                "itm",
+                "listed",
+                "permit",
+                "investor",
+                "equity",
+                "retention",
+                "second_lien_itm",
+                "heloc_draw_to_payback",
+                "home_equity_history",
+                "refi_propensity",
+                "itm_on_related_property",
+                "payoff_loss_leads",
+                "permit_activity"
+              ],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "title": "Segment Codes",
+            "type": "array"
+          },
+          "segment_mode": {
+            "default": "any",
+            "enum": [
+              "any",
+              "all"
+            ],
+            "title": "Segment Mode",
+            "type": "string"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "AL",
+                  "AK",
+                  "AZ",
+                  "AR",
+                  "CA",
+                  "CO",
+                  "CT",
+                  "DE",
+                  "DC",
+                  "FL",
+                  "GA",
+                  "HI",
+                  "ID",
+                  "IL",
+                  "IN",
+                  "IA",
+                  "KS",
+                  "KY",
+                  "LA",
+                  "ME",
+                  "MD",
+                  "MA",
+                  "MI",
+                  "MN",
+                  "MS",
+                  "MO",
+                  "MT",
+                  "NE",
+                  "NV",
+                  "NH",
+                  "NJ",
+                  "NM",
+                  "NY",
+                  "NC",
+                  "ND",
+                  "OH",
+                  "OK",
+                  "OR",
+                  "PA",
+                  "RI",
+                  "SC",
+                  "SD",
+                  "TN",
+                  "TX",
+                  "UT",
+                  "VT",
+                  "VA",
+                  "WA",
+                  "WV",
+                  "WI",
+                  "WY"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "zip": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]{5}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Zip"
+          }
+        },
+        "required": [
+          "route"
+        ],
+        "title": "GenieContext",
+        "type": "object"
+      },
+      "GenieContextScopeResponse": {
+        "description": "The reviewed question for a context, or the closed reason none is offered.\n\n``prompt`` is a server-rendered sentence that has already passed the\ndeterministic prompt guards; the browser only prefills the composer with\nit. ``withheld`` names why no prompt is offered, and ``omitted`` names the\nslots the question deliberately leaves out.",
+        "properties": {
+          "omitted": {
+            "items": {
+              "const": "assignee",
+              "type": "string"
+            },
+            "maxItems": 1,
+            "title": "Omitted",
+            "type": "array"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
+          "withheld": {
+            "anyOf": [
+              {
+                "enum": [
+                  "unsupported_combination",
+                  "excluded_value",
+                  "place_unavailable",
+                  "refused"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Withheld"
+          }
+        },
+        "title": "GenieContextScopeResponse",
+        "type": "object"
+      },
       "GenieDataFreshness": {
         "properties": {
           "asset": {
@@ -8707,8 +9394,20 @@
         "type": "object"
       },
       "GenieVerifiedClaim": {
-        "description": "One figure in the shipped prose that the claims verifier proved against\nthe returned rows (audit genie-10 phase 1). ``derivation`` says how: a\nvalue a reader can find in one returned cell, a figure derived from the\nrows (a total, average, share or change), or a stated threshold the\nreturned values satisfy. ``section`` names the deep-research section the\nfigure belongs to; None is the summary or a single-turn answer. An\nunsupported figure is never listed: its prose is withheld instead.",
+        "description": "One figure in the shipped prose that the claims verifier proved against\nthe returned rows (audit genie-10). ``derivation`` says how: a value a\nreader can find in one returned cell, a figure derived from the rows (a\ntotal, average, share or change), or a stated threshold the returned\nvalues satisfy. ``section`` names the deep-research section the figure\nbelongs to; None is the summary or a single-turn answer. An unsupported\nfigure is never listed: its prose is withheld instead.\n\nPhase 2 provenance: ``support`` is the best support under a fixed\npriority (one returned cell, the row count, a column total, a share of a\ncolumn total, another derivation, or a stated threshold); ``column``\nnames the returned column of a cell, total or share support when exactly\none column produces it; ``occurrences`` is how many times the figure's\ntoken appears in the checked prose, set only for a cell figure the\nclient can locate by its token. All three are None on an answer recorded\nbefore they existed.",
         "properties": {
+          "column": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Column"
+          },
           "derivation": {
             "enum": [
               "returned_value",
@@ -8728,6 +9427,19 @@
             "title": "Kind",
             "type": "string"
           },
+          "occurrences": {
+            "anyOf": [
+              {
+                "maximum": 500.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurrences"
+          },
           "section": {
             "anyOf": [
               {
@@ -8739,6 +9451,25 @@
               }
             ],
             "title": "Section"
+          },
+          "support": {
+            "anyOf": [
+              {
+                "enum": [
+                  "cell",
+                  "row_count",
+                  "sum",
+                  "share",
+                  "derived",
+                  "bound"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Support"
           },
           "token": {
             "maxLength": 32,
@@ -9411,6 +10142,7 @@
               "branch_capacity_review",
               "source_freshness_sentinel",
               "custom_segment_watch",
+              "rate_trigger_watch",
               "live_analysis"
             ],
             "title": "Workflow Id",
@@ -9560,6 +10292,80 @@
         "title": "GrowthAgentNotificationDraft",
         "type": "object"
       },
+      "GrowthAgentPlanProgressResponse": {
+        "additionalProperties": false,
+        "description": "Where the caller's own plan execute is: step k of N and its phase.",
+        "properties": {
+          "state": {
+            "enum": [
+              "not_started",
+              "running",
+              "gate",
+              "recording"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "step_index": {
+            "anyOf": [
+              {
+                "maximum": 8.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The 1-based step running or gated; the executed count while recording.",
+            "title": "Step Index"
+          },
+          "step_tool": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The reviewed tool of that step.",
+            "title": "Step Tool"
+          },
+          "step_total": {
+            "anyOf": [
+              {
+                "maximum": 8.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The plan's step count.",
+            "title": "Step Total"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "GrowthAgentPlanProgressResponse",
+        "type": "object"
+      },
       "GrowthAgentPolicyCheck": {
         "properties": {
           "detail": {
@@ -9672,6 +10478,107 @@
           "prompt"
         ],
         "title": "GrowthAgentPromptRunRequest",
+        "type": "object"
+      },
+      "GrowthAgentRateWatchRequest": {
+        "additionalProperties": false,
+        "description": "Watch the par level of one Rate Lever step. No rate, no name.",
+        "properties": {
+          "cadence": {
+            "default": "daily",
+            "enum": [
+              "daily",
+              "weekly"
+            ],
+            "title": "Cadence",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "step_bps": {
+            "description": "The Rate Lever step in basis points of par move; not 0. The server reads its par level.",
+            "maximum": 100.0,
+            "minimum": -100.0,
+            "title": "Step Bps",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "step_bps"
+        ],
+        "title": "GrowthAgentRateWatchRequest",
+        "type": "object"
+      },
+      "GrowthAgentRateWatchResponse": {
+        "additionalProperties": false,
+        "description": "The saved watch, the server's level and the latest weekly print.",
+        "properties": {
+          "latest_print_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The latest weekly 30-year print in percent; None when no print is available.",
+            "title": "Latest Print Pct"
+          },
+          "latest_print_week": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Week-starting Monday of that print (ISO date).",
+            "title": "Latest Print Week"
+          },
+          "monitor": {
+            "$ref": "#/components/schemas/GrowthAgentMonitor"
+          },
+          "replayed": {
+            "description": "True when an identical active watch already existed: nothing was written.",
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "scheduler": {
+            "$ref": "#/components/schemas/GrowthAgentSchedulerStatus"
+          },
+          "watch_direction": {
+            "enum": [
+              "at_or_below",
+              "at_or_above"
+            ],
+            "title": "Watch Direction",
+            "type": "string"
+          },
+          "watch_level_pct": {
+            "description": "The watched 30-year par level in percent, from today's scenario grid.",
+            "title": "Watch Level Pct",
+            "type": "number"
+          }
+        },
+        "required": [
+          "monitor",
+          "replayed",
+          "watch_level_pct",
+          "watch_direction",
+          "scheduler"
+        ],
+        "title": "GrowthAgentRateWatchResponse",
         "type": "object"
       },
       "GrowthAgentRunRequest": {
@@ -10133,6 +11040,7 @@
               "branch_capacity_review",
               "source_freshness_sentinel",
               "custom_segment_watch",
+              "rate_trigger_watch",
               "live_analysis"
             ],
             "title": "Workflow Id",
@@ -10438,6 +11346,7 @@
               "branch_capacity_review",
               "source_freshness_sentinel",
               "custom_segment_watch",
+              "rate_trigger_watch",
               "live_analysis"
             ],
             "title": "Workflow Id",
@@ -10508,6 +11417,7 @@
               "branch_capacity_review",
               "source_freshness_sentinel",
               "custom_segment_watch",
+              "rate_trigger_watch",
               "live_analysis"
             ],
             "title": "Id",
@@ -10654,6 +11564,14 @@
               }
             ],
             "title": "Actor Cache Key"
+          },
+          "actor_cache_key_aliases": {
+            "description": "The same actor's cache key under the previous rotation secret, while one is configured (D-identity-review-a4): an open tab holding it re-stamps instead of resetting, and requests bound to it are still accepted. Empty outside a rotation. Authenticated body only.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Actor Cache Key Aliases",
+            "type": "array"
           },
           "agent_gateway_binding_sha256": {
             "anyOf": [
@@ -12166,6 +13084,63 @@
           "evidence"
         ],
         "title": "LeadScorePoints",
+        "type": "object"
+      },
+      "LeadSnoozeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "description": "One UUID per snooze intent; a retry resends it.",
+            "maxLength": 64,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "snooze_days": {
+            "enum": [
+              1,
+              3,
+              7
+            ],
+            "title": "Snooze Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "snooze_days",
+          "request_id"
+        ],
+        "title": "LeadSnoozeRequest",
+        "type": "object"
+      },
+      "LeadSnoozeResponse": {
+        "properties": {
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "wake_at": {
+            "description": "When the item returns to the tray at the latest.",
+            "format": "date-time",
+            "title": "Wake At",
+            "type": "string"
+          },
+          "wake_clamped": {
+            "description": "True when the wake time was moved to the contact frequency cap's end.",
+            "title": "Wake Clamped",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "borrower_id",
+          "wake_at",
+          "wake_clamped",
+          "audit_event_id"
+        ],
+        "title": "LeadSnoozeResponse",
         "type": "object"
       },
       "LeadSummary": {
@@ -14853,6 +15828,117 @@
         "title": "PostedPlanStep",
         "type": "object"
       },
+      "PrintReceipt": {
+        "description": "The ``PRINT_EXPORT`` ledger entry the print dialog waits for.",
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "borrower_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Borrower Id"
+          },
+          "event_type": {
+            "const": "PRINT_EXPORT",
+            "default": "PRINT_EXPORT",
+            "title": "Event Type",
+            "type": "string"
+          },
+          "filter_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filter Fingerprint"
+          },
+          "recorded_at": {
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "row_count": {
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "surface": {
+            "enum": [
+              "borrower_360",
+              "audit_ledger"
+            ],
+            "title": "Surface",
+            "type": "string"
+          }
+        },
+        "required": [
+          "audit_event_id",
+          "actor",
+          "surface",
+          "row_count",
+          "recorded_at"
+        ],
+        "title": "PrintReceipt",
+        "type": "object"
+      },
+      "PrintReceiptRequest": {
+        "description": "What the page declares about the copy it is about to print.",
+        "properties": {
+          "borrower_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The masked borrower id of the printed dossier (Borrower 360 only).",
+            "title": "Borrower Id"
+          },
+          "filters": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The audit explorer query parameters the printed page was read with (audit ledger only). Only their keyed fingerprint is written.",
+            "title": "Filters",
+            "type": "object"
+          },
+          "row_count": {
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "surface": {
+            "enum": [
+              "borrower_360",
+              "audit_ledger"
+            ],
+            "title": "Surface",
+            "type": "string"
+          }
+        },
+        "required": [
+          "surface",
+          "row_count"
+        ],
+        "title": "PrintReceiptRequest",
+        "type": "object"
+      },
       "ProofEvidenceEvent": {
         "properties": {
           "confidence": {
@@ -17448,6 +18534,14 @@
             "description": "Opaque per-actor browser-cache discriminator: the same keyed hash of the forwarded identity that the authenticated health body carries, so the browser can seed its actor-scoped storage gate before the first health probe. Not reversible to the identity and never sent to telemetry. Null exactly when actor_email is.",
             "title": "Actor Cache Key"
           },
+          "actor_cache_key_aliases": {
+            "description": "The same actor's cache key under the previous rotation secret, while one is configured (D-identity-review-a4); the health body carries the same list, and the browser reads it from there only. Empty whenever actor_email is null.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Actor Cache Key Aliases",
+            "type": "array"
+          },
           "actor_display_name": {
             "anyOf": [
               {
@@ -17527,7 +18621,7 @@
                 "type": "null"
               }
             ],
-            "description": "Whether the browser may install the opt-in RUM beacon (settings.mip_rum_enabled), the same value /api/config/options returns (audit delivery-07).",
+            "description": "Whether the browser may install the RUM beacon (settings.mip_rum_enabled), the same value /api/config/options returns (audit delivery-07). On by default; the deploy setting MIP_RUM_ENABLED=0 turns it off (D-platform-process-d1).",
             "title": "Rum Enabled"
           }
         },
@@ -20332,6 +21426,16 @@
               ],
               "title": "Until"
             }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -20611,6 +21715,16 @@
               ],
               "title": "Event Id"
             }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -20848,6 +21962,16 @@
                 }
               ],
               "title": "Event Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
             }
           }
         ],
@@ -21951,6 +23075,59 @@
           }
         },
         "summary": "Genie Action",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/genie/context-scope": {
+      "post": {
+        "deprecated": true,
+        "description": "Render a Lead Queue filter selection into a reviewed Genie question.\n\nAUDIT EXEMPT: renders a reviewed prompt from closed codes; reads no\nborrower data and writes nothing. Answers 200 with a prompt or a withheld\nreason, 422 only for a body outside the closed model.",
+        "operationId": "post_api_genie_context_scope_genie_context_scope",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieContext"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieContextScopeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Context Scope",
         "tags": [
           "genie"
         ]
@@ -23653,6 +24830,52 @@
         ]
       }
     },
+    "/api/growth-agent/agent/plan/progress": {
+      "get": {
+        "deprecated": true,
+        "description": "Per-step progress of the caller's own composed-plan execute (genie-09 part 4).\n\nThe browser polls it about once a second only while its OWN execute\nrequest is pending. Read-only operational Lakebase state for this actor;\nanother actor's request id reads ``not_started``.",
+        "operationId": "get_api_growth_agent_agent_plan_progress_growth_agent_plan_progress",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentPlanProgressResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Growth Agent Plan Progress",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/growth-agent/agent/run": {
       "post": {
         "deprecated": true,
@@ -24071,6 +25294,62 @@
         ]
       }
     },
+    "/api/growth-agent/rate-watch": {
+      "post": {
+        "deprecated": true,
+        "description": "Watch the par level of one Rate Lever step as a reviewed watchlist.\n\nThe body carries the step only: the server reads the level from today's\nscenario grid and names the watchlist. One ``GROWTH_AGENT_MONITOR_SAVE``\naudit row is written; an identical active watch is returned as-is with\n``replayed`` true and no second row. No run starts and nothing is sent.",
+        "operationId": "post_api_growth_agent_rate_watch_save_growth_agent_rate_watch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentRateWatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentRateWatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "Rate scenarios are not built, or the step is no longer on today's grid. Nothing was saved."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Growth Agent Rate Watch",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/growth-agent/runs": {
       "get": {
         "deprecated": true,
@@ -24212,6 +25491,7 @@
                 "branch_capacity_review",
                 "source_freshness_sentinel",
                 "custom_segment_watch",
+                "rate_trigger_watch",
                 "live_analysis"
               ],
               "title": "Workflow Id",
@@ -27016,6 +28296,70 @@
         ]
       }
     },
+    "/api/leads/{borrower_id}/assignment/release": {
+      "post": {
+        "deprecated": true,
+        "description": "Undo one assignment: a compensating, audited release (states-07 item 1).\n\nReleases the active row (never deletes it) and, when that row replaced\nanother officer's, hands the lead back to them while they are still an\nactive loan officer in scope and the lead is still approved and\ncontactable. Writes one LEAD_UNASSIGN; a replay returns the same body.",
+        "operationId": "post_api_leads_borrower_id_assignment_release_release_lead_assignment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "borrower_id",
+            "required": true,
+            "schema": {
+              "title": "Borrower Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentReleaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Lead Assignment",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
     "/api/leads/{borrower_id}/disposition": {
       "post": {
         "deprecated": true,
@@ -27137,6 +28481,70 @@
           }
         },
         "summary": "Record Lead Outcome",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/leads/{borrower_id}/snooze": {
+      "post": {
+        "deprecated": true,
+        "description": "Hide one of the caller's own open follow-ups for 1, 3 or 7 days.\n\nThe service writes the LEAD_SNOOZE audit row in the same Lakebase\ntransaction as the snooze row, or exactly one LEAD_SNOOZE_REFUSED row\nwhen the item may not be contacted (409 not_contactable). 401 without a\nforwarded identity, 403 for a caller with no tray, 409 no_open_follow_up\nwhen the caller has no open item for the borrower.",
+        "operationId": "post_api_leads_borrower_id_snooze_snooze_lead_followup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "borrower_id",
+            "required": true,
+            "schema": {
+              "title": "Borrower Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadSnoozeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadSnoozeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Snooze Lead Followup",
         "tags": [
           "sales"
         ]
@@ -28309,6 +29717,59 @@
         ]
       }
     },
+    "/api/print-receipt": {
+      "post": {
+        "deprecated": true,
+        "description": "Write the ``PRINT_EXPORT`` row the print dialog must wait for.",
+        "operationId": "post_api_print_receipt_create_print_receipt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrintReceiptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Print Receipt",
+        "tags": [
+          "print"
+        ]
+      }
+    },
     "/api/sales/aging": {
       "get": {
         "deprecated": true,
@@ -28541,6 +30002,129 @@
           }
         },
         "summary": "Distribute Leads",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/sales/distribute/release": {
+      "post": {
+        "deprecated": true,
+        "description": "Undo one distribution run: release its own still-unstarted rows.",
+        "operationId": "post_api_sales_distribute_release_release_distribution",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DistributionReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DistributionReleaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Distribution",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/sales/followups": {
+      "get": {
+        "deprecated": true,
+        "description": "The caller's due callbacks and follow-ups and new assignments.\n\nAUDIT EXEMPT: the caller's own work list, read when the tray opens;\nevery row is checked against gold with the Lead Queue's eligibility pair\nand carries only a masked id, times and closed codes. 401 without a\nforwarded identity, 403 when the caller is neither an active sales-team\nmember nor an approver.",
+        "operationId": "get_api_sales_followups_followups_list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window_days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "maximum": 14,
+              "minimum": 1,
+              "title": "Window Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowupList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Followups List",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/sales/followups/summary": {
+      "get": {
+        "deprecated": true,
+        "description": "Whether the caller has a Follow-ups tray, and its next due time.\n\nAUDIT EXEMPT: the caller's own workflow state, polled once a minute by\nthe rail; no borrower field and no audit row. Lakebase only: no\nwarehouse statement. No identity, or an ineligible caller, reads\n``eligible: false``.",
+        "operationId": "get_api_sales_followups_summary_followups_summary",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowupSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Followups Summary",
         "tags": [
           "sales"
         ]
@@ -31113,6 +32697,16 @@
               ],
               "title": "Until"
             }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -31390,6 +32984,16 @@
               ],
               "title": "Event Id"
             }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -31626,6 +33230,16 @@
                 }
               ],
               "title": "Event Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exclude_own_ledger_reads",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Exclude Own Ledger Reads",
+              "type": "boolean"
             }
           }
         ],
@@ -32709,6 +34323,58 @@
           }
         },
         "summary": "Genie Action",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/context-scope": {
+      "post": {
+        "description": "Render a Lead Queue filter selection into a reviewed Genie question.\n\nAUDIT EXEMPT: renders a reviewed prompt from closed codes; reads no\nborrower data and writes nothing. Answers 200 with a prompt or a withheld\nreason, 422 only for a body outside the closed model.",
+        "operationId": "post_api_v1_genie_context_scope_genie_context_scope",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieContext"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieContextScopeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Context Scope",
         "tags": [
           "genie"
         ]
@@ -34391,6 +36057,51 @@
         ]
       }
     },
+    "/api/v1/growth-agent/agent/plan/progress": {
+      "get": {
+        "description": "Per-step progress of the caller's own composed-plan execute (genie-09 part 4).\n\nThe browser polls it about once a second only while its OWN execute\nrequest is pending. Read-only operational Lakebase state for this actor;\nanother actor's request id reads ``not_started``.",
+        "operationId": "get_api_v1_growth_agent_agent_plan_progress_growth_agent_plan_progress",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentPlanProgressResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Growth Agent Plan Progress",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/v1/growth-agent/agent/run": {
       "post": {
         "description": "Route a natural-language co-pilot request to reviewed workflows.\n\nWhen Databricks Agent Responses is configured, it may suggest exactly\none reviewed workflow id from the app allowlist. The endpoint still does\nnot call the normal Genie answer path for prompt planning because that path\ncan compile and execute SQL. Reviewed deterministic tools own SQL, counts,\nfilters, Lakebase audit rows, and the reconciled Lead Queue/Admin handoff.",
@@ -34801,6 +36512,61 @@
         ]
       }
     },
+    "/api/v1/growth-agent/rate-watch": {
+      "post": {
+        "description": "Watch the par level of one Rate Lever step as a reviewed watchlist.\n\nThe body carries the step only: the server reads the level from today's\nscenario grid and names the watchlist. One ``GROWTH_AGENT_MONITOR_SAVE``\naudit row is written; an identical active watch is returned as-is with\n``replayed`` true and no second row. No run starts and nothing is sent.",
+        "operationId": "post_api_v1_growth_agent_rate_watch_save_growth_agent_rate_watch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentRateWatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentRateWatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "Rate scenarios are not built, or the step is no longer on today's grid. Nothing was saved."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Growth Agent Rate Watch",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/v1/growth-agent/runs": {
       "get": {
         "description": "List the caller's own recent reviewed-workflow runs, newest first.\n\nRead-only Lakebase app state: it writes no audit row, and each summary\nomits the actor, the stored criteria and the stored route (which can hold\nan expiring, actor-bound Lead Queue handoff proof).",
@@ -34939,6 +36705,7 @@
                 "branch_capacity_review",
                 "source_freshness_sentinel",
                 "custom_segment_watch",
+                "rate_trigger_watch",
                 "live_analysis"
               ],
               "title": "Workflow Id",
@@ -37733,6 +39500,69 @@
         ]
       }
     },
+    "/api/v1/leads/{borrower_id}/assignment/release": {
+      "post": {
+        "description": "Undo one assignment: a compensating, audited release (states-07 item 1).\n\nReleases the active row (never deletes it) and, when that row replaced\nanother officer's, hands the lead back to them while they are still an\nactive loan officer in scope and the lead is still approved and\ncontactable. Writes one LEAD_UNASSIGN; a replay returns the same body.",
+        "operationId": "post_api_v1_leads_borrower_id_assignment_release_release_lead_assignment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "borrower_id",
+            "required": true,
+            "schema": {
+              "title": "Borrower Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentReleaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Lead Assignment",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
     "/api/v1/leads/{borrower_id}/disposition": {
       "post": {
         "operationId": "post_api_v1_leads_borrower_id_disposition_log_disposition",
@@ -37852,6 +39682,69 @@
           }
         },
         "summary": "Record Lead Outcome",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/leads/{borrower_id}/snooze": {
+      "post": {
+        "description": "Hide one of the caller's own open follow-ups for 1, 3 or 7 days.\n\nThe service writes the LEAD_SNOOZE audit row in the same Lakebase\ntransaction as the snooze row, or exactly one LEAD_SNOOZE_REFUSED row\nwhen the item may not be contacted (409 not_contactable). 401 without a\nforwarded identity, 403 for a caller with no tray, 409 no_open_follow_up\nwhen the caller has no open item for the borrower.",
+        "operationId": "post_api_v1_leads_borrower_id_snooze_snooze_lead_followup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "borrower_id",
+            "required": true,
+            "schema": {
+              "title": "Borrower Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadSnoozeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadSnoozeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Snooze Lead Followup",
         "tags": [
           "sales"
         ]
@@ -39003,6 +40896,58 @@
         ]
       }
     },
+    "/api/v1/print-receipt": {
+      "post": {
+        "description": "Write the ``PRINT_EXPORT`` row the print dialog must wait for.",
+        "operationId": "post_api_v1_print_receipt_create_print_receipt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrintReceiptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Print Receipt",
+        "tags": [
+          "print"
+        ]
+      }
+    },
     "/api/v1/sales/aging": {
       "get": {
         "operationId": "get_api_v1_sales_aging_sales_aging",
@@ -39231,6 +41176,126 @@
           }
         },
         "summary": "Distribute Leads",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/sales/distribute/release": {
+      "post": {
+        "description": "Undo one distribution run: release its own still-unstarted rows.",
+        "operationId": "post_api_v1_sales_distribute_release_release_distribution",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DistributionReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DistributionReleaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Distribution",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/sales/followups": {
+      "get": {
+        "description": "The caller's due callbacks and follow-ups and new assignments.\n\nAUDIT EXEMPT: the caller's own work list, read when the tray opens;\nevery row is checked against gold with the Lead Queue's eligibility pair\nand carries only a masked id, times and closed codes. 401 without a\nforwarded identity, 403 when the caller is neither an active sales-team\nmember nor an approver.",
+        "operationId": "get_api_v1_sales_followups_followups_list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window_days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "maximum": 14,
+              "minimum": 1,
+              "title": "Window Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowupList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Followups List",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/sales/followups/summary": {
+      "get": {
+        "description": "Whether the caller has a Follow-ups tray, and its next due time.\n\nAUDIT EXEMPT: the caller's own workflow state, polled once a minute by\nthe rail; no borrower field and no audit row. Lakebase only: no\nwarehouse statement. No identity, or an ineligible caller, reads\n``eligible: false``.",
+        "operationId": "get_api_v1_sales_followups_summary_followups_summary",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowupSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Followups Summary",
         "tags": [
           "sales"
         ]

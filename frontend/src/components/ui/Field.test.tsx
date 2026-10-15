@@ -157,6 +157,24 @@ describe('Field', () => {
     );
   });
 
+  it('controlId pins the control id (the Offer routing selects) and changes nothing else', () => {
+    const render = (controlId?: string) => {
+      act(() => {
+        root.render(
+          <Field label="Assign to loan officer" hint="Routing" controlId={controlId}>
+            {(control) => <select {...control} className="outreach-routing__select" />}
+          </Field>,
+        );
+      });
+      return document.getElementById('root')!.innerHTML;
+    };
+    const generated = render().replace(/_r_[0-9a-z]+_control/g, 'CONTROL').replace(/_r_[0-9a-z]+_/g, 'ID');
+    const pinned = render('lo-assign').replace(/_r_[0-9a-z]+_/g, 'ID');
+    expect(pinned).toBe(generated.split('CONTROL').join('lo-assign'));
+    const select = document.getElementById('lo-assign') as HTMLSelectElement | null;
+    expect(select?.labels?.[0]?.textContent).toBe('Assign to loan officer');
+  });
+
   it('FieldReadout shows a value as labelled text, never as an input, and says when it is not set', () => {
     act(() => {
       root.render(

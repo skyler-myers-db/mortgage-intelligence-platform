@@ -24,7 +24,10 @@ from tools.databricks import app_deployment_rollback_inputs as rollback_inputs
 from tools.databricks import app_rollback_record_contract as rollback_contract
 from tools.databricks.app_health_contract import ActiveAppDeploymentPin
 from tools.databricks.app_rollback_gateway_binding import payload_gateway_binding
-from tools.databricks.app_rollback_resource_contract import reviewed_app_resource_contract
+from tools.databricks.app_rollback_resource_contract import (
+    reviewed_app_resource_contract,
+    validated_app_resource_contract,
+)
 from tools.databricks.gateway_legacy_rollback import (
     LEGACY_GATEWAY_RESOURCE_FIELDS,
     PRIOR_GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
@@ -1021,6 +1024,54 @@ def test_reviewed_app_resource_contract_rejects_unresolved_reference() -> None:
 
     with pytest.raises(RuntimeError, match="did not resolve"):
         reviewed_app_resource_contract(summary)
+
+
+def _job_binding(name: str, permission: str) -> dict[str, object]:
+    return {"name": name, "job": {"id": "1234", "permission": permission}}
+
+
+@pytest.mark.parametrize(
+    ("binding", "accepted"),
+    [
+        (_job_binding("growth_agent_scheduler_job", "CAN_VIEW"), True),
+        (_job_binding("growth_agent_scheduler_job", "CAN_MANAGE_RUN"), False),
+        (_job_binding("gold_refresh_job", "CAN_VIEW"), False),
+        (_job_binding("gold_refresh_job", "CAN_MANAGE_RUN"), True),
+    ],
+    ids=["scheduler-view", "scheduler-manage-run-refused", "other-job-view-refused", "other-job-manage-run"],
+)
+def test_only_the_scheduler_job_binding_is_read_only(binding: dict[str, object], accepted: bool) -> None:
+    """flow-08 slice 2: exactly one job binding is CAN_VIEW, and it may not hold more."""
+
+    if accepted:
+        assert validated_app_resource_contract([binding]) == [binding]
+    else:
+        with pytest.raises(RuntimeError, match="permission is invalid"):
+            validated_app_resource_contract([binding])
+
+
+def _dummy_references(value: object) -> object:
+    if isinstance(value, dict):
+        return {key: _dummy_references(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_dummy_references(item) for item in value]
+    if isinstance(value, str) and "${" in value:
+        return "dummy-reference"
+    return value
+
+
+def test_the_real_bundle_app_resources_pass_the_rollback_contract() -> None:
+    """The signed rollback capture validates every App binding databricks.yml declares."""
+
+    import yaml
+
+    bundle = yaml.safe_load((Path(__file__).resolve().parents[2] / "databricks.yml").read_text(encoding="utf-8"))
+    declared = bundle["resources"]["apps"]["mip_app"]["resources"]
+    contract = validated_app_resource_contract(_dummy_references(declared))
+    names = {str(row["name"]) for row in contract}
+    assert {"growth_agent_scheduler_job", "gold_refresh_job", "sql_warehouse", "database"} <= names
+    scheduler = next(row for row in contract if row["name"] == "growth_agent_scheduler_job")
+    assert scheduler["job"] == {"id": "dummy-reference", "permission": "CAN_VIEW"}
 
 
 def test_reviewed_resources_file_accepts_exact_source_free_payload(tmp_path) -> None:

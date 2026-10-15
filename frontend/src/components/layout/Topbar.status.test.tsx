@@ -8,6 +8,7 @@
  * elapsed timer instead of red "Degraded".
  */
 import { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HealthPayload } from '../../lib/apiTypes';
@@ -40,6 +41,9 @@ vi.mock('../FootprintProvider', () => ({ useFootprint: () => ({ usingFallback: f
 vi.mock('./IdentityMenu', () => ({ IdentityMenu: () => null }));
 
 import { Topbar, systemStatusViewModel } from './Topbar';
+
+// Topbar's borrower search reads through TanStack Query (hooks/useBorrowerSearch).
+const queryClient = new QueryClient();
 
 const payload = (warehouse: string, extra: Partial<HealthPayload> = {}): HealthPayload => ({
   status: 'ok',
@@ -113,7 +117,7 @@ describe('the rendered topbar pill', () => {
 
   const pill = () => container.querySelector<HTMLElement>('[data-testid="system-status-pill"]')!;
   const render = async () => {
-    ({ container } = await mount(<MemoryRouter><Topbar /></MemoryRouter>));
+    ({ container } = await mount(<QueryClientProvider client={queryClient}><MemoryRouter><Topbar /></MemoryRouter></QueryClientProvider>));
   };
 
   it('shows "Waking warehouse" with an amber dot and a ticker outside the label and aria text', async () => {

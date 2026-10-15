@@ -20,6 +20,21 @@ from backend.schemas.common import (
 from backend.schemas.loan_officer import AssignmentLifecycleStatus
 
 AssignmentStrategy = Literal["manual", "round_robin", "score_balanced"]
+# What a single assign may record: one officer chosen by the manager, or the
+# round-robin label. 'score_balanced' is a greedy capacity/region fill that only
+# POST /sales/distribute runs (audit wow-power-5 step 2), so a single assign
+# that names it is a 422, never a recorded balancing that did not happen.
+SingleAssignStrategy = Literal["manual", "round_robin"]
+# Why a release did not hand the lead back to the officer it replaced
+# (audit states-07 item 1). Closed set; the audit row records the code only.
+RestoreSkippedReason = Literal[
+    "previous_assignee_inactive",
+    "previous_assignee_out_of_scope",
+    "lead_not_approved",
+    "lead_not_contactable",
+]
+_PLAN_FINGERPRINT_PATTERN = r"^[0-9a-f]{64}$"
+_UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 OutreachStatus = Literal["none", "queued", "actioned", "sent", "bounced", "replied"]
 CallDispositionOutcome = Literal[
     "called_no_answer",
@@ -47,14 +62,6 @@ LeadOutcomeSourceSystem = Literal[
     "manual_import",
 ]
 
-# D-shell-deviations-g2 (flow-08 adjacent, critic-05): the write-only free-text
-# disposition note is retired. The field survives one tolerant release so a tab
-# loaded before the deploy still logs a call with an empty Notes box; any
-# non-blank value is refused (422) and nothing is persisted.
-DISPOSITION_NOTES_RETIRED = (
-    "Free-text disposition notes are retired. Clear the Notes field (or reload the page) "
-    "and log the call again."
-)
 _PUBLIC_COMPETITOR_LABEL_PATTERN = re.compile(r"^Competitor ([A-Z]|Other)$")
 _MAX_CLIENT_CLOCK_SKEW = timedelta(minutes=5)
 
@@ -127,7 +134,7 @@ class AssignLeadRequest(BaseModel):
 
     assigned_to_email: str
     expires_in_hours: int | None = Field(default=24, ge=1, le=168)
-    strategy: AssignmentStrategy = "manual"
+    strategy: SingleAssignStrategy = "manual"
     request_id: str | None = None
 
     @field_validator("assigned_to_email")
@@ -158,6 +165,10 @@ class DistributeLeadsRequest(BaseModel):
     approval_status: Literal["approved", "pending", "rejected", "hold", "any"] = "approved"
     outreach_status: Literal["none", "queued", "actioned", "sent", "bounced", "replied", "any"] = "none"
     request_id: str | None = None
+    # The Distribution Board (wow-power-5 step 2): a dry run plans and writes
+    # nothing; a commit names the fingerprint of the plan it previewed.
+    dry_run: bool = False
+    expected_plan_fingerprint: str | None = Field(default=None, pattern=_PLAN_FINGERPRINT_PATTERN)
 
     @field_validator("borrower_ids")
     @classmethod
@@ -186,6 +197,44 @@ class DistributeLeadsRequest(BaseModel):
             return None
         return validate_public_opaque_id(value)
 
+    @model_validator(mode="after")
+    def _board_fields(self) -> DistributeLeadsRequest:
+        board = self.dry_run or self.expected_plan_fingerprint is not None
+        if board and self.strategy != "score_balanced":
+            raise ValueError("dry_run and expected_plan_fingerprint require strategy score_balanced")
+        if self.dry_run and self.request_id is not None:
+            raise ValueError("a dry run writes nothing and takes no request_id")
+        if self.dry_run and self.expected_plan_fingerprint is not None:
+            raise ValueError("a dry run does not take expected_plan_fingerprint")
+        return self
+
+
+class DistributionOfficerLoad(BaseModel):
+    """One officer's share of a planned fill: staff aggregates only."""
+
+    email: str
+    display_label: str
+    region: str | None = None
+    capacity_per_day: int
+    open_count: int
+    added_count: int
+    added_score_sum: int
+    in_region_count: int
+
+
+class DistributionPreview(BaseModel):
+    """What the score-balanced fill placed: counts and sums, never a borrower id."""
+
+    strategy: Literal["score_balanced"] = "score_balanced"
+    plan_fingerprint: str
+    pool_count: int
+    placed_count: int
+    placed_score_sum: int
+    unplaced_no_capacity: int
+    skipped_not_assignable: int
+    skipped_already_assigned: int
+    officers: list[DistributionOfficerLoad]
+
 
 class DistributeLeadsResponse(BaseModel):
     assigned_count: int
@@ -193,36 +242,72 @@ class DistributeLeadsResponse(BaseModel):
     assignments: list[LeadAssignment]
     per_lo_counts: dict[str, int]
     audit_event_id: str | None = None
+    preview: DistributionPreview | None = None
+
+
+class AssignmentReleaseRequest(BaseModel):
+    """Undo one assignment (audit states-07 item 1): a compensating write."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    assignment_id: str = Field(pattern=_UUID_PATTERN)
+    request_id: str
+
+    @field_validator("request_id")
+    @classmethod
+    def _request_id(cls, value: str) -> str:
+        return validate_public_opaque_id(value)
+
+
+class AssignmentReleaseResponse(BaseModel):
+    released: LeadAssignment
+    restored: LeadAssignment | None = None
+    restore_skipped_reason: RestoreSkippedReason | None = None
+    audit_event_id: str
+
+
+class DistributionReleaseRequest(BaseModel):
+    """Undo one distribution run: release that run's own rows by the same actor."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    distribution_request_id: str
+    request_id: str
+
+    @field_validator("distribution_request_id", "request_id")
+    @classmethod
+    def _opaque_id(cls, value: str) -> str:
+        return validate_public_opaque_id(value)
+
+
+class DistributionReleaseResponse(BaseModel):
+    released_count: int
+    restored_count: int
+    skipped_started_count: int
+    skipped_not_active_count: int
+    restore_skipped_count: int
+    released: list[LeadAssignment]
+    restored: list[LeadAssignment]
+    audit_event_ids: list[str]
 
 
 class DispositionRequest(BaseModel):
+    # D-shell-deviations-g2 (flow-08 adjacent, critic-05): the write-only
+    # free-text disposition note is gone. After its one tolerant release, any
+    # `notes` key (blank included) is an unknown field: extra='forbid' answers
+    # the app-wide 422, whose input echo main.py strips, and nothing is written.
     model_config = ConfigDict(extra="forbid")
 
     lo_email: str
     outcome: CallDispositionOutcome
     occurred_at: datetime | None = None
     callback_at: datetime | None = None
-    notes: str | None = Field(
-        default=None,
-        max_length=500,
-        description=(
-            "Retired 2026-10: must be absent, null or blank; free-text disposition notes "
-            "are no longer accepted"
-        ),
-    )
     request_id: str | None = None
 
     @field_validator("lo_email")
     @classmethod
     def _lo_email(cls, value: str) -> str:
         return validate_internal_staff_email(value)
-
-    @field_validator("notes", mode="before")
-    @classmethod
-    def _notes_retired(cls, value: object) -> None:
-        if value is None or (isinstance(value, str) and not value.strip()):
-            return None
-        raise ValueError(DISPOSITION_NOTES_RETIRED)
 
     @field_validator("request_id")
     @classmethod

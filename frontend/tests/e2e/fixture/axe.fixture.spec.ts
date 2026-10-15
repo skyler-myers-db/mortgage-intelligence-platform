@@ -17,7 +17,9 @@
  *  - W5c w5-evidence-drawer: a Home KPI drawer's How we got and its Under
  *    the hood tab (`evidence-how-we-got`, `evidence-under-the-hood`);
  *  - the teal, navy and red accents on Home, Lead Queue and Borrower 360,
- *    default and evidence drawer, both themes (bright is everything above).
+ *    default and evidence drawer, both themes (bright is everything above);
+ *  - W5d w5-sales-loop: the Sales ops manager view (30-day period) and the
+ *    Distribution Board's dry-run plan, both themes.
  *
  * The ratchet (axe.ts KNOWN_VIOLATIONS) is validated against this matrix at
  * load: every entry names a scan that runs here, in each theme and accent it
@@ -26,6 +28,7 @@
  */
 import type { FixtureTheme } from './app';
 import { KNOWN_VIOLATIONS, expectAxeClean, validateKnownViolations, type AxeAccent, type AxeScanTarget } from './axe';
+import { registerBoard } from './data/salesLoop';
 import { OVERLAY_STATES, enterState, prepareState, type FixtureState } from './fixtureStates';
 import { FIXTURE_ROUTES, FIXTURE_THEMES, type FixtureRoute } from './routes';
 import { expect, test } from './test';
@@ -33,10 +36,11 @@ import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
 
 const OVERLAY_ROUTES = new Set(['home', 'lead-queue', 'borrower-360-detail', 'offer-orchestrator-detail', 'ask-genie']);
 const EXTRA_STATES: Readonly<Record<string, readonly FixtureState[]>> = {
-  'lead-queue': ['filter-menu', 'expanded-row', 'read-failed', 'triage'],
-  home: ['degraded', 'delta-explainer', 'evidence-how-we-got', 'evidence-under-the-hood'],
+  'lead-queue': ['filter-menu', 'expanded-row', 'read-failed', 'triage', 'approval-requests', 'my-approval-requests', 'request-approval-form'],
+  home: ['degraded', 'delta-explainer', 'evidence-how-we-got', 'evidence-under-the-hood', 'followups-tray', 'identity-menu'],
   'segment-intelligence': ['read-failed', 'stale-note'],
   'admin-config': ['run-dialog-open'],
+  glossary: ['glossary-search'],
 };
 const ACCENT_ROUTES = new Set(['home', 'lead-queue', 'borrower-360-detail']);
 const SWEPT_ACCENTS: readonly AxeAccent[] = ['teal', 'navy', 'red'];
@@ -92,6 +96,34 @@ for (const { route, state, theme, accent } of SCANS) {
   });
 }
 
+// W5d w5-sales-loop (critic-10 / wow-power-5): the Sales ops manager view on
+// a 30-day period and the Distribution Board's dry-run plan, both themes, with
+// no ratchet entry (known: {}).
+test.describe('the sales manager view and the Distribution Board', () => {
+  for (const theme of FIXTURE_THEMES) {
+    test(`analytics · sales-ops manager view · ${theme} has no WCAG A/AA violation`, async ({ app, mockApi, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/analytics?view=sales-ops&sales_period=30d');
+      const naturalLoad = markNaturalLoad(mockApi);
+      await expect(page.locator('.sales-ops-period').getByRole('button', { name: '30 days' })).toHaveAttribute('aria-pressed', 'true');
+      await expectAxeClean(page, { key: { route: 'analytics-sales-ops', state: 'manager-view' }, theme, known: {} });
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'analytics · sales-ops manager view');
+    });
+
+    test(`analytics · distribution board · ${theme} has no WCAG A/AA violation`, async ({ app, mockApi, page }) => {
+      await app.setTheme(theme);
+      registerBoard(mockApi);
+      await app.gotoRoute('/analytics?view=sales-ops');
+      const naturalLoad = markNaturalLoad(mockApi);
+      await page.getByRole('button', { name: 'Distribute approved leads…' }).click();
+      await expect(page.locator('dialog.distribution-board .distribution-board__bar')).toHaveCount(2);
+      await app.settle();
+      await expectAxeClean(page, { key: { route: 'analytics-sales-ops', state: 'distribution-board' }, theme, known: {} });
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'analytics · distribution board');
+    });
+  }
+});
+
 test.describe('named groups in the evidence drawer', () => {
   // ARIA 1.2 prohibits aria-label on an element with no role (a plain div).
   // axe files it under aria-prohibited-attr: "needs review" while the element
@@ -126,4 +158,63 @@ test.describe('named groups in the evidence drawer', () => {
     await app.settle();
     expect(await flaggedIn('evidence-drawer-groups-under-the-hood'), 'aria-label on a role that prohibits it, under the hood').toEqual([]);
   });
+});
+
+// W5d w5-palette-offer-sales-loop: the palette's provider groups, the ? sheet
+// in two columns at 1440x720 with the Triage deck open, and the Offer's
+// reject-note field error.
+test.describe('palette groups, the short-viewport sheet and the Offer note error', () => {
+  const offerDetail = FIXTURE_ROUTES.find((route) => route.name === 'offer-orchestrator-detail');
+  for (const theme of FIXTURE_THEMES) {
+    test(`home · command-palette-groups · ${theme}`, async ({ app, mockApi, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/');
+      const naturalLoad = markNaturalLoad(mockApi);
+      const palette = await app.openCommandPalette();
+      await palette.getByRole('combobox').fill('refi');
+      await expect(palette.getByRole('group', { name: 'Glossary' })).toBeVisible();
+      await app.settle();
+      await expectAxeClean(page, {
+        key: { route: 'home', state: 'command-palette-groups' },
+        theme,
+        known: KNOWN_VIOLATIONS,
+        include: 'dialog.cmdk[open]',
+      });
+      expectNoAuditedReadSince(mockApi, naturalLoad, `palette groups · ${theme}`);
+    });
+
+    test(`lead-queue · shortcut sheet at 1440x720 with the Triage deck · ${theme}`, async ({ app, page }) => {
+      await page.setViewportSize({ width: 1440, height: 720 });
+      await app.setTheme(theme);
+      await app.gotoRoute('/lead-queue');
+      await page.getByTestId('lead-triage-enter').click();
+      await expect(page.getByTestId('triage-deck')).toBeVisible();
+      await page.keyboard.press('?');
+      await expect(page.getByTestId('shortcut-sheet')).toBeVisible();
+      await expectAxeClean(page, {
+        key: { route: 'lead-queue', state: 'shortcut-sheet-1440x720-triage' },
+        theme,
+        known: KNOWN_VIOLATIONS,
+        include: '[data-testid="shortcut-sheet"]',
+      });
+    });
+
+    test(`offer-orchestrator-detail · reject note error · ${theme}`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute(offerDetail?.path ?? '/offer-orchestrator');
+      const bar = page.getByTestId('offer-action-bar');
+      await bar.getByRole('button', { name: 'Reject', exact: true }).click();
+      await bar.getByLabel('Reason').selectOption('other_with_text');
+      // aria-disabled until a note is given: a keyboard press still submits.
+      await bar.getByRole('button', { name: 'Confirm reject' }).focus();
+      await page.keyboard.press('Enter');
+      await expect(bar.getByLabel('Rationale note')).toHaveAttribute('aria-invalid', 'true');
+      await expectAxeClean(page, {
+        key: { route: 'offer-orchestrator-detail', state: 'reject-note-error' },
+        theme,
+        known: KNOWN_VIOLATIONS,
+        include: '[data-testid="offer-action-bar"]',
+      });
+    });
+  }
 });

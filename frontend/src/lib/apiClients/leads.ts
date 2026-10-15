@@ -78,6 +78,7 @@ export function leadsQueryParams(
   if (opts.outreachStatus && opts.outreachStatus !== 'any') params.set('outreach_status', opts.outreachStatus);
   if (opts.assignedTo) params.set('assigned_to', opts.assignedTo);
   if (opts.agedDays) params.set('aged_days', String(opts.agedDays));
+  if (opts.approvalRequestBatch) params.set('approval_request_batch', opts.approvalRequestBatch);
   if (growthAgentProof) {
     params.set('include_identity_proof', 'true');
     params.set('growth_handoff', growthAgentProof.growthHandoff);

@@ -7,6 +7,7 @@
  * 2); markup, class names, and test ids are unchanged.
  */
 
+import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
@@ -29,6 +30,10 @@ interface LeadTableStatusChipsProps {
   approverGate?: string | null;
   /** The signed-in actor's own identity, named in the gate line when known. */
   actorEmail?: string | null;
+  /** The request path is open to this non-approver: the gate line says where approval comes from. */
+  requestPathOpen?: boolean;
+  /** An approver's request-scoped queue (flow-02): its scope row, from the route. */
+  requestScopeRow?: ReactNode;
 }
 
 export function LeadTableStatusChips({
@@ -39,9 +44,12 @@ export function LeadTableStatusChips({
   expandedBorrowerId,
   approverGate = null,
   actorEmail = null,
+  requestPathOpen = false,
+  requestScopeRow = null,
 }: LeadTableStatusChipsProps) {
   return (
     <>
+      {requestScopeRow}
       {approverGate !== null && (
         // The approve / reject / bulk-approve controls point their
         // aria-describedby here: the gate stays visible, with its reason.
@@ -49,7 +57,8 @@ export function LeadTableStatusChips({
           <Chip variant="warning" icon="shield">{approverGate}</Chip>
           <span>
             Approve, reject and bulk approve are disabled
-            {actorEmail ? <> for <span className="mono">{actorEmail}</span></> : ' for this sign-in'}.
+            {actorEmail ? <> for <span className="mono lead-table__actor-email">{actorEmail}</span></> : ' for this sign-in'}.
+            {requestPathOpen && ' Request approval sends them to an approver.'}
           </span>
         </div>
       )}

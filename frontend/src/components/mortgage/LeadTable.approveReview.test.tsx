@@ -30,6 +30,8 @@ import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
 import { currentCommandSelection } from '../command/commandSelection';
+import { clearToasts, getToasts } from '../../lib/toast';
+import { DECISION_LEFT_LIST, _resetDecisionToastForTests } from './leadDecisionToast';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -141,6 +143,8 @@ describe('LeadTable approve review', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearToasts();
+    _resetDecisionToastForTests();
     installLocalStorage();
     clearSingleKeyShortcutsPreference();
     draftOutreach.mockImplementation((borrowerId: string) => Promise.resolve(draftFor(borrowerId)));
@@ -254,15 +258,15 @@ describe('LeadTable approve review', () => {
       draft_generation_id: `gen-${IDS[0]}`,
       draft_response_hash: `hash-${IDS[0]}`,
     }), undefined);
-    // In flight: the review says so, nothing claims "approved" yet. The
-    // result's live region is already mounted, and empty.
-    const decisionStatus = () => container.querySelector('[data-testid="lead-decision-status"]');
-    expect(decisionStatus()?.getAttribute('role')).toBe('status');
-    expect(decisionStatus()?.textContent).toBe('');
-    expect(confirm().textContent).toBe('Approving…');
+    // In flight: the review says so, nothing claims "approved" yet: no toast.
+    // The label is kept under the spinner (motion-08 slice 2): busy, not renamed.
+    expect(confirm().textContent).toBe('Confirm approval');
     expect(confirm().getAttribute('aria-disabled')).toBe('true');
-    expect(container.querySelector('[data-testid="lead-decision-toast"]')).toBeNull();
-    expect(container.querySelector('[data-testid="lead-decision-view-receipt"]')).toBeNull();
+    // motion-08 slice 2: the spinner over the kept label, focus kept (aria-busy, no native disabled).
+    expect(confirm().classList.contains('btn--loading')).toBe(true);
+    expect(confirm().getAttribute('aria-busy')).toBe('true');
+    expect(confirm().disabled).toBe(false);
+    expect(getToasts()).toEqual([]);
     expect(setApproval).not.toHaveBeenCalled();
     // A second Confirm while in flight is not a second POST.
     act(() => confirm().click());
@@ -275,14 +279,22 @@ describe('LeadTable approve review', () => {
 
     expect(setApproval).toHaveBeenCalledWith(IDS[0], 'approved');
     expect(review()).toBeNull();
-    expect(container.querySelector('[data-testid="lead-decision-toast"]')?.textContent).toContain(`Approved ${IDS[0]}`);
-    // Spoken once, from the region that was already mounted: the visible
-    // toast is not a second live region.
-    expect(decisionStatus()?.textContent).toBe(`Approved ${IDS[0]}.`);
-    expect(container.querySelector('[data-testid="lead-decision-toast"] [role="status"]')).toBeNull();
-    expect(container.querySelector('[data-testid="lead-decision-view-receipt"]')).not.toBeNull();
+    // states-07 item 1: one info toast on the shell region (its one live
+    // region speaks it), with the audit link and View receipt; the table has
+    // no result line or live region of its own any more.
+    const [result] = getToasts();
+    expect(getToasts()).toHaveLength(1);
+    expect([result.tone, result.title, result.auditEventId]).toEqual(['info', `Approved ${IDS[0]}`, `audit-${IDS[0]}`]);
+    expect(result.action?.label).toBe('View receipt');
+    expect(container.querySelector('[data-testid="lead-decision-status"], [data-testid="lead-decision-toast"]')).toBeNull();
+    expect(container.textContent).not.toContain(`Approved ${IDS[0]}`);
     expect(cursorId()).toBe(IDS[1]);
     expect(draftOutreach).toHaveBeenCalledTimes(1);
+    // View receipt opens the approved row on its receipt, in this table.
+    act(() => result.action!.onAction());
+    await flush();
+    expect(container.querySelector(`#lead-row-toggle-${IDS[0]}`)?.getAttribute('aria-expanded')).toBe('true');
+    expect(openConsoleRecentActivity).not.toHaveBeenCalled();
   });
 
   it('an approved row that left the filtered list gets no dead "View receipt": the line points to Recent activity', async () => {
@@ -293,18 +305,41 @@ describe('LeadTable approve review', () => {
     act(() => confirm().click());
     await flush();
     await flush();
-    expect(container.querySelector('[data-testid="lead-decision-view-receipt"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="lead-decision-row-left"]')).toBeNull();
+    const [result] = getToasts();
+    expect(result.action?.label).toBe('View receipt');
 
-    // A pending-only queue refetches without the approved row.
+    // A pending-only queue refetches without the approved row: the action
+    // goes to Recent activity, never to a row that is not there.
     renderLeads([lead(IDS[1], ['heloc', 'HELOC']), lead(IDS[2])]);
-    expect(container.querySelector('[data-testid="lead-decision-toast"]')?.textContent).toContain(`Approved ${IDS[0]}`);
-    expect(container.querySelector('[data-testid="lead-decision-view-receipt"]')).toBeNull();
-    expect(container.querySelector('[data-testid="lead-decision-row-left"]')?.textContent)
-      .toBe('It left this filtered list; its audit event is in Recent activity.');
-    act(() => container.querySelector<HTMLButtonElement>('[data-testid="lead-decision-recent-activity"]')!.click());
+    await flush();
+    act(() => result.action!.onAction());
     expect(openConsoleRecentActivity).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('[data-testid="lead-decision-toast"]')).toBeNull();
+    expect(container.querySelector(`#lead-receipt-${IDS[0]}`)).toBeNull();
+  });
+
+  it('a second approval replaces the first toast; an approve without a receipt offers Recent activity', async () => {
+    approve.mockImplementation((borrowerId: string) => Promise.resolve({
+      approved: true, audit_event_id: borrowerId === IDS[1] ? null : `audit-${borrowerId}`, approval_id: 'apr-1',
+    }));
+    region().focus();
+    press('j');
+    press('a');
+    await waitForReview();
+    act(() => confirm().click());
+    await flush();
+    await flush();
+    expect(getToasts().map((item) => item.title)).toEqual([`Approved ${IDS[0]}`]);
+    region().focus();
+    press('a');
+    await waitForReview();
+    act(() => confirm().click());
+    await flush();
+    await flush();
+    const toasts = getToasts();
+    expect(toasts.map((item) => item.title)).toEqual([`Approved ${IDS[1]}`]);
+    expect(toasts[0].action?.label).toBe('Review recent activity');
+    expect(toasts[0].detail).toBeNull();
+    expect(DECISION_LEFT_LIST).toBe('It left this filtered list; its audit event is in Recent activity.');
   });
 
   it('Cancel abandons the review: no approval, the draft already written stays the only one', async () => {

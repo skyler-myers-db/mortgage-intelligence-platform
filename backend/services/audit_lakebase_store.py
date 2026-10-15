@@ -293,6 +293,7 @@ class LakebaseAuditStore:
         since: datetime | None = None,
         until: datetime | None = None,
         event_id: str | None = None,
+        exclude_ledger_reads_by: str | None = None,
     ) -> list[AuditEvent]:
         if event_id is not None:
             # ``audit_id`` is a UUID primary key. A caller-supplied id that is
@@ -331,6 +332,7 @@ class LakebaseAuditStore:
             correlation_id=correlation_id,
             since=since,
             until=until,
+            exclude_ledger_reads_by=exclude_ledger_reads_by,
         )
         clauses.extend(filter_clauses)
         params.update(filter_params)

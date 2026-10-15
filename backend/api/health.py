@@ -50,7 +50,11 @@ from fastapi import APIRouter, Request
 from backend.agents.gateway_contract import gateway_runtime_binding_hash
 from backend.config.settings import looks_like_databricks_app_deploy, settings
 from backend.schemas.health import AdminHealthResponse, HealthResponse
-from backend.services.actor_identity import actor_cache_key, forwarded_identity
+from backend.services.actor_identity import (
+    actor_cache_key,
+    actor_cache_key_aliases,
+    forwarded_identity,
+)
 from backend.services.asset_metadata_utils import workspace_origin
 from backend.services.audit_store import get_fallback_identity_count
 from backend.services.campaign_treatment_runtime import (
@@ -198,6 +202,7 @@ def _diagnostic_body(
         # QueryClient data if Databricks Apps swaps the workspace identity
         # within the same browser session.
         "actor_cache_key": actor_cache_key(actor_email),
+        "actor_cache_key_aliases": actor_cache_key_aliases(actor_email),
         # Validated workspace origin so admin surfaces can deep-link UC
         # assets exactly like the authenticated browser body does.
         **(
@@ -333,6 +338,9 @@ def health(request: Request) -> dict[str, Any]:
         # warehouse ids, app_env, log exporter posture, or fallback counters.
         "circuit_breakers": breakers,
         "actor_cache_key": actor_cache_key(actor_email or ""),
+        # Rotation aliases (D-identity-review-a4): set explicitly, so this
+        # authenticated body always carries the list; the anonymous one never.
+        "actor_cache_key_aliases": actor_cache_key_aliases(actor_email or ""),
     }
     # Workspace origin (scheme+host only, validated) so the UI can deep-link
     # cited Unity Catalog assets to the Catalog Explorer. Authenticated body

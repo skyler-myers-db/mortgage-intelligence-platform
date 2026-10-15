@@ -102,6 +102,7 @@ class InMemoryAuditStore:
         since: datetime | None = None,
         until: datetime | None = None,
         event_id: str | None = None,
+        exclude_ledger_reads_by: str | None = None,
     ) -> list[AuditEvent]:
         filtered = self._events
         if event_id:
@@ -136,6 +137,14 @@ class InMemoryAuditStore:
                 e
                 for e in filtered
                 if datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) <= until
+            ]
+        if exclude_ledger_reads_by:
+            # The SQL's NULL-safe IS DISTINCT FROM pair: drop only the named
+            # reader's own VIEW_AUDIT_LEDGER rows.
+            filtered = [
+                e
+                for e in filtered
+                if e.event_type != "VIEW_AUDIT_LEDGER" or e.actor != exclude_ledger_reads_by
             ]
         newest_first = sorted(
             filtered,

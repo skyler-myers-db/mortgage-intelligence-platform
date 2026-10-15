@@ -9,7 +9,7 @@
  * proves the coverage and the binding. A failing pair carries a dated
  * wire-drift entry tagged to the lane that fixes it at the cause.
  */
-import type { ApiOk, ApiRequest, ApiResponse } from './api.gen';
+import type { ApiBody, ApiOk, ApiRequest, ApiResponse } from './api.gen';
 import type { DeepNoPhantomKeys, Expect, NoPhantomKeys, WireFits } from './wireContract.check';
 import type { BorrowerDecisionEvent, BorrowerDecisionHistoryResponse } from '../lib/apiClients/borrowerDecisions';
 import type { LeadExportReceipt, LeadExportReceiptRequest } from '../lib/apiClients/leadExport';
@@ -18,6 +18,7 @@ import type { OutreachApproveRequest, OutreachDraftRequest, OutreachRejectReques
 import type { ApproveResult, OutreachDraftResult, RejectResult } from '../lib/apiTypes';
 import type { Borrower360, BorrowerLifecycle, BorrowerProof, EvidenceEvent, LeadScorePoints, LeadSummary, OfferAlternative, OfferRecommendation, ProofEvidenceEvent, ProofFormulaLine, ProofOfferBranch, ProofReproduceQuery, ProofScoreComponent, SourceLabel, WhyPanel } from '../types';
 import type { LeadCountResponse, LeadFacetBucket, LeadFacetsResponse, SavedView, SavedViewCreateRequest, SavedViewListResponse, SavedViewMutationResponse } from './leadFilters';
+import type { ApprovalRequestBatchView, ApprovalRequestCreate, ApprovalRequestCreated, ApprovalRequestList, ApprovalRequestRow, ApprovalRequestSkip, ApprovalRequestWithdrawBody, ApprovalRequestWithdrawn } from './approvalRequests';
 
 export type WireContractLeads = [
   // (i) schema-named hand types
@@ -27,12 +28,12 @@ export type WireContractLeads = [
   Expect<DeepNoPhantomKeys<LeadExportReceiptRequest, ApiRequest<'LeadExportReceiptRequest'>>>,
   Expect<WireFits<OfferRecommendRequest, ApiRequest<'OfferRecommendRequest'>>>,
   Expect<DeepNoPhantomKeys<OfferRecommendRequest, ApiRequest<'OfferRecommendRequest'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-lead-queue-paging: offer_code is string | null in the client body but a closed offer-code union | null on the wire
+  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: offer_code is string | null in the client body but a closed offer-code union | null on the wire
   Expect<WireFits<OutreachApproveRequest, ApiRequest<'OutreachApproveRequest'>>>,
   Expect<DeepNoPhantomKeys<OutreachApproveRequest, ApiRequest<'OutreachApproveRequest'>>>,
   Expect<WireFits<OutreachDraftRequest, ApiRequest<'OutreachDraftRequest'>>>,
   Expect<DeepNoPhantomKeys<OutreachDraftRequest, ApiRequest<'OutreachDraftRequest'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-lead-queue-paging: offer_code is string | null and rationale_code is string in the client body, closed literal unions on the wire
+  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: offer_code is string | null and rationale_code is string in the client body, closed literal unions on the wire
   Expect<WireFits<OutreachRejectRequest, ApiRequest<'OutreachRejectRequest'>>>,
   Expect<DeepNoPhantomKeys<OutreachRejectRequest, ApiRequest<'OutreachRejectRequest'>>>,
   Expect<WireFits<ApiResponse<'Borrower360'>, Borrower360>>,
@@ -90,4 +91,21 @@ export type WireContractLeads = [
   Expect<NoPhantomKeys<RejectResult, ApiOk<'POST /api/v1/outreach/reject'>>>,
   Expect<WireFits<ApiOk<'POST /api/v1/outreach/draft'>, OutreachDraftResult>>,
   Expect<NoPhantomKeys<OutreachDraftResult, ApiOk<'POST /api/v1/outreach/draft'>>>,
+  // Maker-checker approval requests (flow-02 / shell-06, W5d w5-lq-requests-binding).
+  Expect<WireFits<ApiResponse<'ApprovalRequestBatchView'>, ApprovalRequestBatchView>>,
+  Expect<NoPhantomKeys<ApprovalRequestBatchView, ApiResponse<'ApprovalRequestBatchView'>>>,
+  Expect<WireFits<ApprovalRequestCreate, ApiRequest<'ApprovalRequestCreate'>>>,
+  Expect<DeepNoPhantomKeys<ApprovalRequestCreate, ApiRequest<'ApprovalRequestCreate'>>>,
+  Expect<WireFits<ApiResponse<'ApprovalRequestCreated'>, ApprovalRequestCreated>>,
+  Expect<NoPhantomKeys<ApprovalRequestCreated, ApiResponse<'ApprovalRequestCreated'>>>,
+  Expect<WireFits<ApiResponse<'ApprovalRequestList'>, ApprovalRequestList>>,
+  Expect<NoPhantomKeys<ApprovalRequestList, ApiResponse<'ApprovalRequestList'>>>,
+  Expect<WireFits<ApiResponse<'ApprovalRequestRow'>, ApprovalRequestRow>>,
+  Expect<NoPhantomKeys<ApprovalRequestRow, ApiResponse<'ApprovalRequestRow'>>>,
+  Expect<WireFits<ApiResponse<'ApprovalRequestSkip'>, ApprovalRequestSkip>>,
+  Expect<NoPhantomKeys<ApprovalRequestSkip, ApiResponse<'ApprovalRequestSkip'>>>,
+  Expect<WireFits<ApiResponse<'ApprovalRequestWithdrawn'>, ApprovalRequestWithdrawn>>,
+  Expect<NoPhantomKeys<ApprovalRequestWithdrawn, ApiResponse<'ApprovalRequestWithdrawn'>>>,
+  Expect<WireFits<ApprovalRequestWithdrawBody, ApiBody<'POST /api/v1/outreach/approval-requests/{batch_id}/withdraw'>>>,
+  Expect<DeepNoPhantomKeys<ApprovalRequestWithdrawBody, ApiBody<'POST /api/v1/outreach/approval-requests/{batch_id}/withdraw'>>>,
 ];

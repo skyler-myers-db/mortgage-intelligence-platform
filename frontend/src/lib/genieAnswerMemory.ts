@@ -11,12 +11,14 @@ import { registerActorScopedMemoryCache } from './actorScopedMemoryCaches';
  * recording.
  *
  * A module store read with useSyncExternalStore (the pinnedInsights /
- * genieConversationStore pattern). It holds only opaque ids and fixed copy,
- * never question or answer text:
+ * genieConversationStore pattern). It holds only opaque ids, closed kinds and
+ * fixed copy, never question or answer text:
  *   - a vote per answer, keyed `${conversationId}:${messageId}`: pending or
  *     recorded, plus ONE request id per vote direction. A retry, after a
  *     remount too, reuses that id, so the server's idempotent feedback write
- *     never sees a second one; a recorded vote is never offered again.
+ *     never sees a second one; a recorded vote is never offered again. A vote
+ *     that failed keeps its closed failure KIND (never server text), so a
+ *     remount still shows its line, as the export latch keeps its outcome.
  *   - a CSV export latch per rows block, keyed
  *     `${conversationId}:${messageId}:${scope}:${sectionIndex ?? '-'}`: the
  *     recording flag and the last outcome's fixed copy.
@@ -28,6 +30,14 @@ import { registerActorScopedMemoryCache } from './actorScopedMemoryCaches';
 
 export type GenieVoteDirection = 'up' | 'down';
 
+/**
+ * Why the last vote failed, as a closed kind the control maps to fixed copy:
+ * the server refused the payload (422), the signed-in user changed under the
+ * request (409 actor_changed), an earlier write is still being reconciled
+ * (any other 409), or anything else.
+ */
+export type GenieVoteFailure = 'rejected' | 'actor_changed' | 'unreconciled' | 'failed';
+
 export interface GenieVoteMemory {
   /** 'idle' until a vote starts, and again after one fails. */
   readonly status: 'idle' | 'pending' | 'recorded';
@@ -35,6 +45,8 @@ export interface GenieVoteMemory {
   readonly direction: GenieVoteDirection | null;
   /** The request id minted for each direction, reused by every retry. */
   readonly requestIds: Readonly<Partial<Record<GenieVoteDirection, string>>>;
+  /** The last vote's failure kind; null once a new vote starts or one records. */
+  readonly failure: GenieVoteFailure | null;
 }
 
 export interface GenieExportLatchMemory {
@@ -53,7 +65,7 @@ export interface GenieExportLatchTarget {
 
 export const MAX_GENIE_ANSWER_MEMORY = 500;
 
-const NO_VOTE: GenieVoteMemory = { status: 'idle', direction: null, requestIds: {} };
+const NO_VOTE: GenieVoteMemory = { status: 'idle', direction: null, requestIds: {}, failure: null };
 const NO_EXPORT: GenieExportLatchMemory = { recording: false, status: null };
 
 /** One insertion-ordered map, so the cap evicts the oldest entry of either kind. */
@@ -95,6 +107,15 @@ function readVote(key: string): GenieVoteMemory {
   return (entries.get(key) as GenieVoteMemory | undefined) ?? NO_VOTE;
 }
 
+/**
+ * The vote for `key` outside React (the hook below reads the same). Test-
+ * facing: production components read through the hook; genieAnswerMemory.test.ts
+ * reads the stored record (status, request id, failure kind) directly.
+ */
+export function readGenieVote(key: string): GenieVoteMemory {
+  return readVote(key);
+}
+
 function readExport(key: string): GenieExportLatchMemory {
   return (entries.get(key) as GenieExportLatchMemory | undefined) ?? NO_EXPORT;
 }
@@ -126,16 +147,23 @@ export function beginGenieVote(key: string, direction: GenieVoteDirection, mint:
   const current = readVote(key);
   if (current.status !== 'idle') return null;
   const requestId = current.requestIds[direction] ?? mint();
-  write(key, { status: 'pending', direction, requestIds: { ...current.requestIds, [direction]: requestId } });
+  write(key, { status: 'pending', direction, requestIds: { ...current.requestIds, [direction]: requestId }, failure: null });
   return { requestId, epoch };
 }
 
-/** Recorded, or back to idle with its request ids kept. False (and nothing
- *  written) when the memory was cleared since the vote began. */
-export function settleGenieVote(key: string, start: GenieVoteStart, recorded: boolean): boolean {
+/** Recorded (`failure` null), or back to idle with its request ids kept and
+ *  the failure kind stored. False (and nothing written) when the memory was
+ *  cleared since the vote began. */
+export function settleGenieVote(key: string, start: GenieVoteStart, failure: GenieVoteFailure | null): boolean {
   if (start.epoch !== epoch) return false;
   const current = readVote(key);
-  write(key, { status: recorded ? 'recorded' : 'idle', direction: recorded ? current.direction : null, requestIds: current.requestIds });
+  const recorded = failure === null;
+  write(key, {
+    status: recorded ? 'recorded' : 'idle',
+    direction: recorded ? current.direction : null,
+    requestIds: current.requestIds,
+    failure,
+  });
   return true;
 }
 

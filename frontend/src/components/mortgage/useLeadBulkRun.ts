@@ -47,7 +47,7 @@ import { formatCount } from '../../lib/formatters';
 
 /** Bulk approve, and bulk Reject under one reason and a shared note (tables-07). */
 export type BulkRunKind = 'approve' | 'reject';
-export type BulkRowOutcome = 'ok' | 'backend' | 'network' | 'session_expired' | 'aborted' | 'duplicate';
+export type BulkRowOutcome = 'ok' | 'backend' | 'network' | 'session_expired' | 'aborted' | 'duplicate' | 'actor_changed';
 
 /** How one row's write ended; `message` is the server's reason for a refusal. */
 export interface BulkRowReport {
@@ -103,6 +103,12 @@ export interface BulkRunResult {
   sessionEnded: boolean;
   /** Set when the first rows were refused before any came back ok: nothing else was sent. */
   canary: BulkRunCanary | null;
+  /**
+   * The signed-in user changed mid-run (D-identity-review-a4, Lead Queue half):
+   * a row came back 409 actor_changed, or the actor gate closed between
+   * groups. The run stopped there, exactly as Stop does.
+   */
+  actorChanged?: boolean;
 }
 
 const RUN_COPY: Record<BulkRunKind, { running: string; done: string }> = {
@@ -117,6 +123,12 @@ export function bulkRunVerb(kind: BulkRunKind): string {
 
 /** The result in one sentence (the visible summary and the announcement). */
 export function bulkRunSummary(result: BulkRunResult): string {
+  if (result.actorChanged) {
+    const noun = result.kind === 'reject' ? 'rejection' : 'approval';
+    return `Stopped: the signed-in user changed. ${formatCount(result.ok)} ${result.ok === 1 ? noun : `${noun}s`} `
+      + `${result.ok === 1 ? 'was' : 'were'} recorded before the change; ${formatCount(result.notStarted.length)} `
+      + `${result.notStarted.length === 1 ? 'was' : 'were'} not sent.`;
+  }
   const parts = [`${formatCount(result.ok)} of ${formatCount(result.total)} ${RUN_COPY[result.kind].done}`];
   if (result.failed.length > 0) parts.push(`${formatCount(result.failed.length)} failed`);
   if (result.skipped.length > 0) parts.push(`${formatCount(result.skipped.length)} skipped`);

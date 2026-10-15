@@ -434,10 +434,56 @@ def test_a_blocked_approve_or_activation_is_found_and_a_blocked_draft_is_not() -
 
 
 def test_a_lead_unassign_row_on_the_borrower_entity_is_found() -> None:
-    # No LEAD_UNASSIGN writer exists before W5d; its contract is a borrower
-    # entity with metadata.borrower_id, like every other lead writer.
+    # The seeded contract row; the real writers are pinned below.
     row = next(row for row in seeds.AUDIT_ROWS if row.key == "unassign")
     assert row_found(row.event_type, row.entity_type, row.entity_id, row.metadata, seeds.BORROWER)
+
+
+def test_the_release_writers_are_found(writer_audit: InMemoryAuditStore, fake_lakebase_client: Any) -> None:
+    # W5d w5-sales-loop: both Undo paths write LEAD_UNASSIGN on the borrower
+    # entity with metadata.borrower_id, so the dossier finds each for its own
+    # borrower only.
+    from tests.fixtures import mock_population
+
+    single, run_member = (mock_population.BORROWERS[index].borrower_id for index in (3, 4))
+    for borrower_id in (single, run_member):
+        _approved(borrower_id)
+    assigned = client.post(
+        f"/api/leads/{single}/assign",
+        json={"assigned_to_email": "lo01@summit.example", "strategy": "manual", "request_id": str(uuid4())},
+        headers=HEADERS,
+    )
+    assert assigned.status_code == 200, assigned.text
+    released = client.post(
+        f"/api/leads/{single}/assignment/release",
+        json={"assignment_id": assigned.json()["assignment"]["assignment_id"], "request_id": str(uuid4())},
+        headers=HEADERS,
+    )
+    assert released.status_code == 200, released.text
+    run_id = str(uuid4())
+    distributed = client.post(
+        "/api/sales/distribute",
+        json={
+            "borrower_ids": [run_member], "lo_emails": ["lo02@summit.example"], "strategy": "manual",
+            "request_id": run_id,
+        },
+        headers=HEADERS,
+    )
+    assert distributed.status_code == 200, distributed.text
+    undone = client.post(
+        "/api/sales/distribute/release",
+        json={"distribution_request_id": run_id, "request_id": str(uuid4())},
+        headers=HEADERS,
+    )
+    assert undone.status_code == 200, undone.text
+    unassigns = [row for row in fake_lakebase_client.audit_events if row["event_type"] == "LEAD_UNASSIGN"]
+    owner = {single: single, run_member: run_member}
+    rows: list[Captured] = [
+        (row["event_type"], row["entity_type"], row["entity_id"], json.loads(row["metadata"]), owner[row["entity_id"]])
+        for row in unassigns
+    ]
+    assert sorted(row[2] for row in rows) == sorted([single, run_member])
+    _assert_found_for_its_borrower_only(rows, {"LEAD_UNASSIGN"})
 
 
 # -- 4. the projection, over an in-memory Lakebase ----------------------------------------

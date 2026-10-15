@@ -12,7 +12,12 @@
  *  (c) expectNoSurfaceOverflow flags an injected 2000px child, passes the
  *      clean page, and fails a stale ratchet entry;
  *  (d) the audited-read guard, as a pure check over ApiCall lists;
- *  (e) the VRT host guard refuses everything but the pinned container.
+ *  (e) the VRT host guard refuses everything but the pinned container;
+ *  (f) the capture discipline: parkPointerAndBlur blurs focus (control: the
+ *      open account menu closes on that blur, the defect that made the
+ *      identity-menu baselines plain Home), keeps it only inside the popover
+ *      a state names (the menu stays open on its first item), and fails a
+ *      named popover that does not hold focus.
  *
  * The spec itself opens no audited read: it loads only /glossary and
  * page.setContent() documents, and (a) and (c) assert that.
@@ -31,12 +36,14 @@ import {
   partitionByTags,
   type AxeScanContext,
 } from './axe';
+import { enterState } from './fixtureStates';
 import type { ApiCall } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 import {
   auditedReadsAfter,
   expectNoSurfaceOverflow,
+  parkPointerAndBlur,
   pinnedVrtImage,
   surfaceOverflowProblems,
   vrtHostProblems,
@@ -275,5 +282,34 @@ test.describe('(e) the VRT host guard', () => {
     expect(vrtHostProblems({ image: 'mcr.microsoft.com/playwright:v1.58.0-noble', platform: 'linux', arch: 'x64', playwrightVersion: '1.63.0' }))
       .toHaveLength(1);
     expect(vrtHostProblems({ image: undefined, platform: 'linux', arch: 'x64', playwrightVersion: '1.63.0' })[0]).toContain('unset');
+  });
+});
+
+test.describe('(f) the capture discipline', () => {
+  test('a park blurs focus, keeps it only inside the popover a state names, and fails one that does not hold it', async ({ app, mockApi, page }) => {
+    await app.gotoRoute(GLOSSARY);
+    const menu = page.getByRole('menu', { name: 'Account' });
+
+    // Control: a plain park blurs the focused menu item, and the account menu
+    // closes on that blur, so a blurring capture would show the plain route.
+    await enterState(app, page, 'identity-menu');
+    await parkPointerAndBlur(page);
+    await expect(menu).toHaveCount(0);
+    expect(await page.evaluate(() => document.activeElement === document.body), 'a plain park blurs').toBe(true);
+
+    // The state names its popover: focus stays on the first item, the menu stays open.
+    await enterState(app, page, 'identity-menu');
+    await parkPointerAndBlur(page, { keepFocusWithin: menu });
+    await expect(menu).toBeVisible();
+    await expect(menu.getByRole('menuitemradio').first()).toBeFocused();
+
+    // A named popover that does not hold focus fails the park instead of keeping a stray focus ring.
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    const search = page.getByLabel('Search the glossary');
+    await search.focus();
+    await expect(parkPointerAndBlur(page, { keepFocusWithin: page.locator('nav.rail') })).rejects.toThrow(/keepFocusWithin/);
+    await expect(search, 'the failed park left focus where it was').toBeFocused();
+    expect(auditedReadsAfter(mockApi.calls, 0), 'this spec opens no audited read').toEqual([]);
   });
 });

@@ -34,7 +34,9 @@ vi.mock('../../lib/api', async (importOriginal) => ({
   api: apiMocks,
 }));
 
+import { hasOpenOverlay } from '../../lib/keymap';
 import { NAVIGATION_ROUTE_IDS, ROUTES } from '../../lib/routeMeta';
+import { installFakeCssTransition, runExitOn } from '../../test/runningExit';
 import { Icon, type IconName } from '../Icon';
 import { IdentityMenu, OPEN_SHORTCUTS_EVENT, identityView } from './IdentityMenu';
 
@@ -235,6 +237,61 @@ describe('IdentityMenu', () => {
     expect(glossary.getAttribute('href')).toBe('/glossary');
     act(() => glossary.click());
     expect(container.querySelector('h1')?.textContent).toBe('Glossary page');
+  });
+
+  /**
+   * The exit (motion-01 item 2e): the panel fades out mounted, aria-hidden
+   * and inert, with focus already back on the trigger; a reopen mid-exit
+   * remounts it (keyed on the open generation) so focus starts on the item
+   * the opening key asked for.
+   */
+  describe('presence exit', () => {
+    let uninstall: () => void = () => undefined;
+    beforeEach(() => {
+      uninstall = installFakeCssTransition();
+    });
+    afterEach(() => uninstall());
+    const panel = () => container.querySelector<HTMLElement>('.identity-menu__panel');
+
+    it('keeps the closing panel mounted, aria-hidden and inert until its own transitionend', async () => {
+      await renderMenu();
+      await openWith('ArrowDown');
+      const opened = panel();
+      expect(hasOpenOverlay(document)).toBe(true);
+      const exit = runExitOn(opened!);
+      key(document.activeElement!, 'Escape');
+      expect(panel()).toBe(opened);
+      expect(opened?.classList.contains('is-closing')).toBe(true);
+      expect(opened?.getAttribute('aria-hidden')).toBe('true');
+      expect(opened?.hasAttribute('inert')).toBe(true);
+      expect(trigger().getAttribute('aria-expanded')).toBe('false');
+      expect(trigger().hasAttribute('aria-controls')).toBe(false);
+      expect(document.activeElement).toBe(trigger());
+      expect(hasOpenOverlay(document), 'a closing menu never holds the queue keys off').toBe(false);
+      exit.finish();
+      expect(panel()).toBeNull();
+    });
+
+    it('a reopen during the exit remounts the panel with focus on the requested item', async () => {
+      await renderMenu();
+      await openWith('ArrowDown');
+      const first = panel();
+      runExitOn(first!);
+      key(document.activeElement!, 'Escape');
+      expect(panel()).toBe(first);
+      // The closing panel is still mounted, so wait for the remount itself.
+      key(trigger(), 'ArrowUp');
+      await vi.waitFor(async () => {
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        });
+        expect(panel()).not.toBe(first);
+      }, { timeout: 5000, interval: 10 });
+      expect(container.querySelectorAll('.identity-menu__panel')).toHaveLength(1);
+      expect(panel()?.classList.contains('is-closing')).toBe(false);
+      expect(container.querySelectorAll('[role="menu"]')).toHaveLength(1);
+      expect(document.activeElement?.textContent).toBe('Glossary');
+    });
   });
 
   it('closes when focus leaves the menu (Tab)', async () => {

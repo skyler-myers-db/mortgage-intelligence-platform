@@ -6,7 +6,9 @@ export type GrowthAgentWorkflowId =
   | 'high_equity_heloc_watch'
   | 'branch_capacity_review'
   | 'source_freshness_sentinel'
-  | 'custom_segment_watch';
+  | 'custom_segment_watch'
+  /** Audit `wow-ai-2`: saved from the Rate Lever only; never a workflow card. */
+  | 'rate_trigger_watch';
 
 export type GrowthAgentCadence = 'daily' | 'weekly';
 export type GrowthAgentSegmentCode = 'itm' | 'listed' | 'permit' | 'investor' | 'equity' | 'retention';
@@ -310,6 +312,39 @@ export interface GrowthAgentWatchlistBriefing {
 export interface GrowthAgentWatchlistSummaryResponse {
   scheduler: GrowthAgentSchedulerStatus;
   watchlists: GrowthAgentWatchlistBriefing[];
+}
+
+/**
+ * `POST /api/growth-agent/rate-watch` (audit 2026-09-21 `wow-ai-2`): watch the
+ * par level of one Rate Lever step. The step only: never a rate or a name.
+ */
+export interface GrowthAgentRateWatchRequest {
+  step_bps: number;
+  cadence?: GrowthAgentCadence;
+  request_id?: string | null;
+}
+
+/** The saved watch with the SERVER's level (the shown grid may be a persisted copy). */
+export interface GrowthAgentRateWatchResponse {
+  monitor: GrowthAgentMonitor;
+  replayed: boolean;
+  watch_level_pct: number;
+  watch_direction: 'at_or_below' | 'at_or_above';
+  latest_print_pct: number | null;
+  latest_print_week: string | null;
+  scheduler: GrowthAgentSchedulerStatus;
+}
+
+/** Audit `genie-09` part 4: where the caller's own plan execute is. */
+export type GrowthAgentPlanProgressState = 'not_started' | 'running' | 'gate' | 'recording';
+
+/** `GET /api/growth-agent/agent/plan/progress?request_id=` (audit-free). */
+export interface GrowthAgentPlanProgressResponse {
+  state: GrowthAgentPlanProgressState;
+  step_index: number | null;
+  step_total: number | null;
+  step_tool: string | null;
+  updated_at: string | null;
 }
 
 export interface GrowthAgentDueMonitorRunResponse {

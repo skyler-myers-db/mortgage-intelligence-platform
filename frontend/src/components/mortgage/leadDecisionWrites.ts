@@ -71,6 +71,8 @@ export interface DecisionWriteDeps {
   campaignBinding: CampaignBinding | null;
   /** The paged Lead Queue view every decision declares (D-audit-reads-a); null elsewhere. */
   leadViewId: string | null;
+  /** The approval request a request-scoped queue answers (flow-02); null elsewhere. */
+  approvalRequestBatchId?: string | null;
   approve: (variables: ApproveLeadVariables) => Promise<ApproveResult>;
   reject: (variables: RejectLeadVariables) => Promise<RejectResult>;
   requestIds: IntentRequestIds;
@@ -82,6 +84,19 @@ export interface DecisionWriteDeps {
   latch: (borrowerId: string, inFlight: boolean) => void;
   /** The write returned ok: record the decision and its receipt. */
   onDecided: (borrowerId: string, decision: 'approved' | 'rejected', auditEventId: string | null) => void;
+  /**
+   * The row may still be decided from here, read at call time (not decided in
+   * this mount, not in a bulk run, still eligible): a 429's Retry re-checks it.
+   */
+  stillDecidable?: (borrowerId: string) => boolean;
+}
+
+/** A 429 Retry that found the row decided meanwhile: nothing is sent. */
+export const DECIDED_SINCE = 'It was decided since; nothing was sent.';
+
+/** An intent's request scope: the batch id joins a fingerprint only when set (unscoped ids unchanged). */
+export function requestScopeParts(deps: DecisionWriteDeps): string[] {
+  return deps.approvalRequestBatchId ? [deps.approvalRequestBatchId] : [];
 }
 
 export function released<T>(deps: DecisionWriteDeps, borrowerId: string, report: Promise<T>): Promise<T> {
@@ -125,8 +140,8 @@ export function approveWithReport(
     offerCode: lead?.recommended_offer_code ?? null,
   };
   const intent = extras.bulk_id
-    ? intentFingerprint('approve-bulk', extras.bulk_id, borrowerId)
-    : intentFingerprint('approve', borrowerId, reviewedDraft?.generation_id);
+    ? intentFingerprint('approve-bulk', extras.bulk_id, borrowerId, ...requestScopeParts(deps))
+    : intentFingerprint('approve', borrowerId, reviewedDraft?.generation_id, ...requestScopeParts(deps));
   return released(deps, borrowerId, deps.approve({
     decision: 'approve',
     borrowerId,
@@ -143,6 +158,7 @@ export function approveWithReport(
     signal,
     suppressInvalidation: extras.suppressInvalidation,
     leadViewId: deps.leadViewId,
+    approvalRequestBatchId: deps.approvalRequestBatchId ?? null,
   }).then(
     (res): BulkRowReport => {
       if (!res.approved) {
@@ -156,13 +172,29 @@ export function approveWithReport(
     (err: unknown): BulkRowReport => {
       const failure = decisionFailure(err);
       if (failure === 'aborted') return { outcome: 'aborted', message: null };
+      // D-identity-review-a4: the signed-in user changed under this write. Told
+      // apart BEFORE the 409 conflict, the offer check, the toast and the
+      // session path: nothing was recorded, no draft goes stale, no toast.
+      if (err instanceof ApiError && err.reason === 'actor_changed') {
+        return { outcome: 'actor_changed', message: err.message };
+      }
       if (err instanceof ApiError && err.status === 409) extras.onConflict?.();
       // The drafted offer was never previewed: nothing was sent; the row
       // stays selected for an individual review.
       if (err instanceof OfferNotPreviewedError) return { outcome: 'backend', message: OFFER_NOT_PREVIEWED };
       const message = err instanceof Error ? err.message : null;
       // A single row's failure is a toast; a bulk row reports in the run.
-      if (!inBulk) toastWriteFailure(`Couldn't approve ${borrowerId}`, err, 'the approval');
+      // states-08 item 3: a 429's Retry (live after its Retry-After) re-runs
+      // the SAME write once: the intent is unsettled, so the request_id and
+      // the reviewed draft are the same; pessimistic as ever.
+      const retry = () => {
+        if (deps.isInFlight(borrowerId) || deps.stillDecidable?.(borrowerId) === false) {
+          toastWriteRefusal(`Couldn't approve ${borrowerId}`, DECIDED_SINCE);
+          return;
+        }
+        void approveWithReport(deps, borrowerId, undefined, extras, reviewedDraft);
+      };
+      if (!inBulk) toastWriteFailure(`Couldn't approve ${borrowerId}`, err, 'the approval', retry);
       // The session ended mid-click (on the draft step or the approve POST):
       // the session dialog must say this approval was NOT recorded.
       if (clientFailureReason(err) === 'session_expired') {

@@ -10,6 +10,7 @@ import type { LeadsRequest } from '../lib/leadsQuery';
 import { CITY_STATE_PAIR_RE } from '../lib/cityStateFilter';
 import {
   isAssignedToMe,
+  parseApprovalRequestBatch,
   parseBorrowerIds,
   parseCsvParam,
   parseFunnelStage,
@@ -104,6 +105,7 @@ export function leadsRequestFromSearchParams(
       outreachStatus: (input.outreachStatus ?? 'any') as OutreachFilter,
       assignedTo,
       agedDays: input.agedDays,
+      approvalRequestBatch: parseApprovalRequestBatch(sp),
     },
   };
 }

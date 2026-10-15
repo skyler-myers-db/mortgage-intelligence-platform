@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
+import { useExitPresence } from '../../hooks/useExitRetained';
 import { OPEN_SHORTCUTS_EVENT, hasOpenModal, registerKeyBinding } from '../../lib/keymap';
 import type { ShortcutOverlayProps } from './ShortcutOverlay';
 
@@ -12,6 +13,10 @@ import type { ShortcutOverlayProps } from './ShortcutOverlay';
  * The import is awaited here rather than through React.lazy + Suspense: a
  * stale chunk after a deploy must leave the sheet closed, not throw into the
  * shell's error boundary.
+ *
+ * Exit (motion-01 item 2e): once loaded, the sheet stays mounted while
+ * present (useExitPresence on the dialog this Host owns), so a close plays
+ * the `.cmdk` fade instead of unmounting it mid-frame.
  */
 let loadedOverlay: ComponentType<ShortcutOverlayProps> | null = null;
 
@@ -29,6 +34,8 @@ function loadOverlay(): Promise<ComponentType<ShortcutOverlayProps>> {
 export function ShortcutOverlayHost() {
   const [Overlay, setOverlay] = useState<ComponentType<ShortcutOverlayProps> | null>(() => loadedOverlay);
   const [open, setOpen] = useState(false);
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const { present } = useExitPresence(open, dialogRef);
 
   const openSheet = useCallback(() => {
     setOpen(true);
@@ -53,6 +60,6 @@ export function ShortcutOverlayHost() {
     return () => window.removeEventListener(OPEN_SHORTCUTS_EVENT, openSheet);
   }, [openSheet]);
 
-  if (!open || !Overlay) return null;
-  return <Overlay onClose={close} />;
+  if (!present || !Overlay) return null;
+  return <Overlay open={open} dialogRef={dialogRef} onClose={close} />;
 }

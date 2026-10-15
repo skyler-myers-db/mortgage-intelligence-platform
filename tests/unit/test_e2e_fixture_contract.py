@@ -52,6 +52,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from starlette.routing import Match
 
 from backend.main import API_VERSION, app
+from backend.services.sales_distribution_plan import Candidate, OfficerSlot, plan_score_balanced
 from tests.fixtures.e2e_fixture_known_omissions import KNOWN_OMISSIONS
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -369,6 +370,91 @@ def test_every_default_fixture_yields_a_validated_2xx_sample(samples: list[dict[
     assert sorted(registered - validated) == []
 
 
+def test_every_session_body_pairs_its_actor_key_with_its_identity(samples: list[dict[str, Any]]) -> None:
+    """D-identity-review-a4 (W5a identity-foundation review1 NB[2]): the real
+    /session sends actor_cache_key null exactly when actor_email is null, and
+    always sends actor_cache_key_aliases, so a fixture session cannot open the
+    actor gate for nobody while it names a signed-in person."""
+    sessions = [
+        sample
+        for sample in samples
+        if sample["method"] == "GET"
+        and _canonical_path(sample["path"]) == f"/api/{API_VERSION}/session"
+        and 200 <= int(sample["status"]) < 300
+    ]
+    assert len(sessions) >= 5, "the exporter sampled too few /session bodies"
+    problems = [
+        f"{sample['source']}: actor_cache_key {sample['body'].get('actor_cache_key')!r} "
+        f"vs actor_email {sample['body'].get('actor_email')!r}"
+        for sample in sessions
+        if (sample["body"].get("actor_cache_key") is None) != (sample["body"].get("actor_email") is None)
+    ] + [
+        f"{sample['source']}: no actor_cache_key_aliases"
+        for sample in sessions
+        if "actor_cache_key_aliases" not in sample["body"]
+    ]
+    assert problems == []
+
+
+def planner_replay_problems(source: str, preview: dict[str, Any]) -> list[str]:
+    """Where ``preview`` differs from what the real planner produces for it.
+
+    The fixture builds every Board plan from equal-score, out-of-region leads
+    (frontend/tests/e2e/fixture/data/salesLoop.ts BOARD_PLANS), so the pool is
+    ``pool_count`` leads at the one per-lead score and replays exactly: the
+    officers (capacity, open book, region) are the preview's own.
+    """
+    officers = preview["officers"]
+    placed = preview["placed_count"]
+    score = preview["placed_score_sum"] // placed if placed else 0
+    if any(officer["added_score_sum"] != officer["added_count"] * score for officer in officers):
+        return [f"{source}: the plan's leads do not share one score, so it cannot be replayed"]
+    slots = [
+        OfficerSlot(o["email"], o["display_label"], o["region"], o["capacity_per_day"], o["open_count"])
+        for o in officers
+    ]
+    pool = [Candidate(f"B-REPLAY{index:07d}", score, None) for index in range(preview["pool_count"])]
+    plan = plan_score_balanced(pool, slots, expires_in_hours=None)
+    produced = {
+        "placed_count": len(plan.placements),
+        "placed_score_sum": plan.placed_score_sum,
+        "unplaced_no_capacity": plan.unplaced_no_capacity,
+        "officers": [
+            (load.slot.email, load.added_count, load.added_score_sum, load.in_region_count)
+            for load in plan.officers
+        ],
+    }
+    served = {
+        "placed_count": placed,
+        "placed_score_sum": preview["placed_score_sum"],
+        "unplaced_no_capacity": preview["unplaced_no_capacity"],
+        "officers": [
+            (o["email"], o["added_count"], o["added_score_sum"], o["in_region_count"]) for o in officers
+        ],
+    }
+    return [] if produced == served else [f"{source}: serves {served}; the planner produces {produced}"]
+
+
+def test_every_distribution_preview_is_a_plan_the_planner_produces(samples: list[dict[str, Any]]) -> None:
+    """W5d distribution-board VRT review (CI run 38563619204): the Board's
+    baseline drew a lead planned for an officer already over capacity, and two
+    leads unplaced beside an officer with room: plans
+    backend/services/sales_distribution_plan.py never produces (its rules 2
+    and 4). Every Board preview the fixture serves, dry run or commit, is
+    replayed through the real planner and must come back identical."""
+    previews = [
+        (sample["source"], sample["body"]["preview"])
+        for sample in samples
+        if sample["method"] == "POST"
+        and _canonical_path(sample["path"]) == f"/api/{API_VERSION}/sales/distribute"
+        and 200 <= int(sample["status"]) < 300
+        and sample["body"].get("preview")
+    ]
+    assert len(previews) >= 4, "the exporter sampled too few Board previews"
+    problems = [problem for source, preview in previews for problem in planner_replay_problems(source, preview)]
+    assert problems == [], "fixture Board plans the planner never produces:\n" + "\n".join(problems)
+
+
 def test_known_drift_is_shrink_only(samples: list[dict[str, Any]]) -> None:
     by_source = {sample["source"]: sample for sample in samples}
     for source, entry in KNOWN_DRIFT.items():
@@ -481,6 +567,52 @@ def test_a_dict_field_accepts_arbitrary_keys() -> None:
     body = {"status": "ok", "mode": "live", "dependencies": {"warehouse": "up", "any_new_dependency": "up"}}
     assert undeclared_keys(body, model) == []
     assert undeclared_keys({**body, "app_env": "fixture"}, model) == ["app_env"]
+
+
+def _board_preview(open_counts: tuple[int, int], added: tuple[int, int], unplaced: int) -> dict[str, Any]:
+    """A two-officer Board preview at 72 a lead, the fixture's construction."""
+    roster = [
+        ("lo.a@summit.example", "Loan Officer A", "Midwest", 25),
+        ("lo.b@summit.example", "Loan Officer B", "South", 20),
+    ]
+    officers = [
+        {
+            "email": email,
+            "display_label": label,
+            "region": region,
+            "capacity_per_day": capacity,
+            "open_count": open_count,
+            "added_count": count,
+            "added_score_sum": count * 72,
+            "in_region_count": 0,
+        }
+        for (email, label, region, capacity), open_count, count in zip(roster, open_counts, added, strict=True)
+    ]
+    placed = sum(added)
+    return {
+        "pool_count": placed + unplaced,
+        "placed_count": placed,
+        "placed_score_sum": placed * 72,
+        "unplaced_no_capacity": unplaced,
+        "officers": officers,
+    }
+
+
+def test_the_planner_replay_accepts_a_plan_the_planner_produces() -> None:
+    # B's open book (22) is over its capacity (20): the whole pool goes to A.
+    assert planner_replay_problems("non-vacuity", _board_preview((6, 22), (4, 0), 0)) == []
+    # Every book full: nothing placed, the pool left unplaced.
+    assert planner_replay_problems("non-vacuity", _board_preview((25, 22), (0, 0), 2)) == []
+
+
+def test_the_planner_replay_rejects_a_lead_for_an_officer_over_capacity() -> None:
+    # Rule 2: an officer with no remaining capacity never receives a lead.
+    assert planner_replay_problems("non-vacuity", _board_preview((6, 22), (3, 1), 0)) != []
+
+
+def test_the_planner_replay_rejects_leads_unplaced_beside_an_officer_with_room() -> None:
+    # Rule 4: A still has 15 slots free, so no lead is left unplaced.
+    assert planner_replay_problems("non-vacuity", _board_preview((6, 22), (4, 0), 2)) != []
 
 
 def test_the_validator_rejects_an_unmasked_borrower_id() -> None:

@@ -66,6 +66,17 @@ DRIFT_OWNER_LANES = frozenset(
         "w5-css-cascade",
         "w5-lexicon-copy",
         "w5-compiler-lint",
+        "w5-gold-slot-cache",
+        "w5-actor-binding",
+        "w5-sales-loop",
+        "w5-followups-snooze",
+        "w5-genie-context-deeplink",
+        "w5-genie-provenance-tiles",
+        "w5-growth-watchlists",
+        "w5-analytics",
+        "w5-lead-queue-columns",
+        "w5-lead-table-compile",
+        "w5-deps-report",
     }
 )
 # A drift touching one of these names the record's fail-closed rule.

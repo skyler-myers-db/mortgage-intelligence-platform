@@ -87,6 +87,25 @@ describe('apiCallRoute', () => {
     expect(apiCallRoute(`${ORIGIN}/api/v1/admin/settings`, ORIGIN)).toBe('/api/admin/settings');
   });
 
+  it('never reports the Follow-ups poll, but keeps the tray list and the snooze (D-shell-deviations-a)', () => {
+    expect(apiCallRoute(`${ORIGIN}/api/v1/sales/followups/summary`, ORIGIN)).toBeNull();
+    expect(apiCallRoute(`${ORIGIN}/api/sales/followups/summary`, ORIGIN)).toBeNull();
+    expect(apiCallRoute(`${ORIGIN}/api/v1/sales/followups?window_days=7`, ORIGIN)).toBe('/api/sales/followups');
+    expect(apiCallRoute(`${ORIGIN}/api/v1/leads/B-0123456789ABC/snooze`, ORIGIN)).toBe('/api/leads/:id/snooze');
+    // A sibling 'summary' read still reports.
+    expect(apiCallRoute(`${ORIGIN}/api/v1/sales/outcomes/summary`, ORIGIN)).toBe('/api/sales/outcomes/summary');
+  });
+
+  it('reports the rate watch save and never the composed-plan progress poll (W5d)', () => {
+    expect(apiCallRoute(`${ORIGIN}/api/v1/growth-agent/rate-watch`, ORIGIN)).toBe('/api/growth-agent/rate-watch');
+    expect(apiCallRoute(`${ORIGIN}/api/v1/growth-agent/agent/plan/progress?request_id=r-1`, ORIGIN)).toBeNull();
+    expect(apiCallRoute(`${ORIGIN}/api/growth-agent/agent/plan/progress`, ORIGIN)).toBeNull();
+    // Its sibling, the audited execute, still reports.
+    expect(apiCallRoute(`${ORIGIN}/api/v1/growth-agent/agent/plan/execute`, ORIGIN)).toBe(
+      '/api/growth-agent/agent/plan/execute',
+    );
+  });
+
   it('skips a template over the server\'s 160-character api_route limit instead of costing the batch a 422', () => {
     // '/api' + six '/campaign-recommendation' (24 each) = 148 characters.
     const long = Array.from({ length: 6 }, () => 'campaign-recommendation').join('/');

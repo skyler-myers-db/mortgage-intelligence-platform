@@ -1,0 +1,92 @@
+/* Maker-checker approval requests (audit flow-02 / shell-06, D-approval-flow-c;
+   deviation:request-approval). Lazy: imported only by RequestApprovalForm,
+   ApprovalRequestsPanel and MyApprovalRequestsPanel, never by the initial
+   or LeadTable chunks. Composes the prototype's .decision-panel, .filter-menu,
+   .chip--neutral / .chip--warning and .btn (design_files/Module 0
+   Prototype.html:1494-1506); tokens only. */
+
+/* The request form: the reject panel's .decision-panel grid with the reason
+   field wide and the "nothing is sent" line beside the actions. */
+.approval-requests__form {
+  grid-template-columns: minmax(12rem, 1fr) minmax(16rem, 2fr) auto;
+}
+/* Opened from the bulk toolbar (its requestGate slot, gate layout): the full
+   line under the label and controls, as the bulk reject gate has
+   (.bulk-actions__review, LeadBulkApproveReview.css). The toolbar already
+   draws the rules and the padding around it, so the inline panel's own top
+   and bottom rules and padding go: they drew a half-width double rule. */
+.bulk-actions > .approval-requests__form {
+  flex: 1 0 100%;
+  order: 3;
+  padding: 0;
+  border-block: 0;
+}
+.approval-requests__note {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.approval-requests__failure {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--signal-danger);
+  font-size: var(--fs-12);
+}
+
+/* The two panels: a .filter-menu popover anchored to its chip, holding text
+   and buttons (role="dialog"). */
+.approval-requests {
+  position: relative;
+  display: inline-flex;
+}
+.approval-requests__panel {
+  width: min(26rem, calc(100vw - var(--sp-8)));
+  max-height: min(24rem, 60vh);
+  padding: var(--sp-3);
+  display: grid;
+  gap: var(--sp-3);
+}
+.approval-requests__panel-title {
+  margin: 0;
+}
+.approval-requests__item {
+  display: grid;
+  gap: var(--sp-1);
+  padding-block-start: var(--sp-2);
+  border-top: 1px solid var(--line-1);
+}
+.approval-requests__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
+.approval-requests__reason {
+  margin: 0;
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+.approval-requests__rows {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-12);
+}
+.approval-requests__row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.approval-requests__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.approval-requests__state {
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}

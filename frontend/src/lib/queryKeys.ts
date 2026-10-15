@@ -22,6 +22,23 @@ export const queryKeys = {
   leadCount: (criteria: readonly unknown[]) => ['mip', 'lead-count', ...criteria] as const,
   leadFacets: (dimension: string, criteria: readonly unknown[]) => ['mip', 'lead-facets', dimension, ...criteria] as const,
   savedViews: () => ['mip', 'saved-views'] as const,
+  /**
+   * The audit-free borrower / geography search (runtime-06): ONE entry per
+   * term, shared by the topbar and the ⌘K palette (hooks/useBorrowerSearch).
+   * Outside ['mip','borrower'] and the persistence allow-list: never stored.
+   */
+  borrowerSearch: (term: string) => ['mip', 'borrower-search', term] as const,
+  /**
+   * The palette's Recent borrowers (shell-07): the actor's own audit-free
+   * my-events feed, read only while the palette is open, gcTime 0, never
+   * persisted. Not the Console's ['audit','my-events',…] paged feed.
+   */
+  paletteRecentEvents: () => ['mip', 'palette', 'recent-events'] as const,
+  /**
+   * The palette's admin Data assets (shell-07): its OWN key, never the admin
+   * page's ['mip','data-estate'] (whose query function substitutes a fallback).
+   */
+  paletteAssets: () => ['mip', 'palette', 'assets'] as const,
   borrower: (borrowerId: string | null | undefined) => ['mip', 'borrower', borrowerId ?? ''] as const,
   borrowerProof: (borrowerId: string | null | undefined) => ['mip', 'borrower', borrowerId ?? '', 'proof'] as const,
   borrowerLifecycle: (borrowerId: string | null | undefined) =>
@@ -80,6 +97,11 @@ export const queryKeys = {
   auditReceipt: (auditEventId: string | null | undefined) =>
     ['mip', 'audit', 'receipt', auditEventId ?? ''] as const,
   /**
+   * The explorer's facets (W5d, tables-10): a recorded VIEW_AUDIT_LEDGER read,
+   * started only by an explicit menu open, per since / until window.
+   */
+  auditFacets: (windowKey: string) => ['mip', 'audit', 'facets', windowKey] as const,
+  /**
    * The refusal-reports page (D-audit-reads-d): every served page writes one
    * VIEW_AUDIT_LEDGER row, so it is read only on an explicit open, a filter
    * change, Load more or Retry, and never persisted. Never the question text.
@@ -90,6 +112,8 @@ export const queryKeys = {
   growthAgent: () => ['mip', 'growth-agent'] as const,
   growthAgentCapabilities: () => ['mip', 'growth-agent', 'capabilities'] as const,
   growthAgentRuns: (limit: number) => ['mip', 'growth-agent', 'runs', limit] as const,
+  /** A composed plan's execute progress (genie-09 part 4): polled only while its own execute is pending; never persisted. */
+  growthAgentPlanProgress: (requestId: string) => ['mip', 'growth-agent', 'plan-progress', requestId] as const,
   /** Home's watchlist briefings (wow-ai-4): audit-free, never persisted. */
   growthAgentWatchlistSummary: () => ['mip', 'growth-agent', 'monitors', 'summary'] as const,
   /** The Delta Explainer's read (wow-ai-3): audit-free; not persisted (only ['mip','home','summary'] is). */
@@ -102,6 +126,19 @@ export const queryKeys = {
   assetFreshness: (assetKey: string | null | undefined) => ['mip', 'asset-freshness', assetKey ?? ''] as const,
   /** One KPI's server-emitted reproduce SQL (flow-06): fixed text, never persisted. */
   kpiProof: (kpi: string | null | undefined) => ['mip', 'kpi-proof', kpi ?? ''] as const,
+  /**
+   * The audit-free approval-request list (flow-02 / shell-06): Lakebase
+   * workflow state, read once per Lead Queue mount and after a decision,
+   * create or withdraw. Never persisted, never polled.
+   */
+  approvalRequests: (scope?: 'open' | 'mine') => ['mip', 'approval-requests', scope] as const,
+  /**
+   * The Follow-ups rail poll and tray list (D-shell-deviations-a): audit-free,
+   * never persisted; under ['mip','followups'] so a snooze invalidates both
+   * and the actor boundary's clear drops them.
+   */
+  followUpsSummary: () => ['mip', 'followups', 'summary'] as const,
+  followUpsList: (windowDays: number) => ['mip', 'followups', 'list', windowDays] as const,
 };
 
 export function invalidateOperationalQueries(queryClient: QueryClient): Promise<void> {

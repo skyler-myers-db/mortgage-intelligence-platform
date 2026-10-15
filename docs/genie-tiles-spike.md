@@ -126,6 +126,15 @@ measurable), 64 a usage error (argparse's own 2 would read as INCONCLUSIVE).
 | 3. Own-identity execute, other identity refused, App identity | pending integrator run (after the W5c deploy) |
 | 4. Warm refresh within the Genie p95, one Genie-budget call | pending integrator run (after the W5c deploy) |
 
+2026-10-07 (W5d w5-genie-provenance-tiles): living tiles not built: criteria
+2-4 above were still 'pending integrator run' at W5d branch start (2931d82c),
+and criterion 1 still FAILS offline (104x one prose scan; at 4,738 guard calls
+per row six tiles fit the 54,496-call baseline only at about 11 rows in
+total). Re-homed to W5e w5-test-harness-deps-report under the same verdict:
+build only on criteria 2-4 PASS live AND criterion 1 PASS under a declared
+rows-per-tile cap or a cheaper fail-closed row scan. Static pins stay as they
+are.
+
 ## Integrator checklist (after the W5c deploy)
 
 - [ ] Re-run `python -m tools.genie_tiles_spike --offline` on the deployed

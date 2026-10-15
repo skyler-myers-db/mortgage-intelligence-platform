@@ -22,6 +22,7 @@ export const API_ROUTE_SEGMENTS = [
   'borrowers', 'campaign-performance', 'campaign-recommendation', 'campaigns',
   'cancel',
   'capabilities', 'combinations', 'complete', 'compose', 'config', 'conversion', 'count', 'county-rollups',
+  'context-scope',
   'create', 'custom', 'data-estate', 'destinations', 'disposition', 'distribute',
   'decisions',
   'draft', 'drafts', 'economics', 'event', 'events', 'evidence', 'executive',
@@ -35,10 +36,13 @@ export const API_ROUTE_SEGMENTS = [
   'monitors', 'my-events', 'notification-drafts', 'offers', 'operations', 'options',
   'outbox', 'outcome', 'outcomes', 'outreach', 'page', 'points', 'portfolio',
   'plan',
+  'print-receipt',
   'preview', 'progress', 'proof', 'property-loan', 'rate-sensitivity', 'rate-window',
+  'rate-watch',
   'queue-version',
   'question', 'receipt',
   'recommend', 'refusal-report', 'refusal-reports', 'reject', 'rollups', 'rules', 'rum', 'run',
+  'release',
   'revoke',
   'runs',
   'saved-views',
@@ -47,6 +51,8 @@ export const API_ROUTE_SEGMENTS = [
   'status', 'submit', 'summary', 'team', 'telemetry', 'workflows', 'workspace',
   'withdraw',
   'zip-rollups',
+  // Follow-ups tray and its snooze (D-shell-deviations-a, wow-power-3).
+  'followups', 'snooze',
 ] as const;
 
 const KNOWN_SEGMENTS: ReadonlySet<string> = new Set(API_ROUTE_SEGMENTS);
@@ -69,6 +75,12 @@ const EXCLUDED_TEMPLATES: ReadonlySet<string> = new Set([
   // The Lead Queue's change-signal poll (audit states-09): once a minute
   // while the queue is open; a poll, not a read a person made.
   '/api/workspace/queue-version',
+  // The rail's Follow-ups poll (D-shell-deviations-a): once a minute on every
+  // route for an eligible actor; a poll, not a read a person made.
+  '/api/sales/followups/summary',
+  // A composed plan's per-step progress (genie-09 part 4): a 1 s poll only
+  // while the caller's own execute is pending.
+  '/api/growth-agent/agent/plan/progress',
 ]);
 const EXCLUDED_PREFIX = '/api/telemetry/';
 

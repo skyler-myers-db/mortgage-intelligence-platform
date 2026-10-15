@@ -9,6 +9,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { designCss } from '../../test/designCss';
 import type { Borrower360 } from '../../types';
 
 vi.mock('../AppContext', () => ({ useApp: () => ({ lender: 'Summit Mortgage' }) }));
@@ -114,6 +115,45 @@ describe('BorrowerOfferPreviewMock', () => {
       mock.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 8, clientY: 8 }));
     });
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('closing keeps the dialog attached for its exit, inert and hidden, and returns focus (motion-01)', () => {
+    const opener = document.createElement('button');
+    opener.textContent = 'Preview borrower view';
+    document.body.appendChild(opener);
+    opener.focus();
+    act(() => root.render(<BorrowerOfferPreviewMock borrower={dossier()} open onClose={() => {}} />));
+    const mock = () => document.body.querySelector<HTMLDialogElement>('dialog.offer-mock')!;
+    expect(mock().open).toBe(true);
+    expect(mock().hasAttribute('aria-hidden')).toBe(false);
+
+    act(() => root.render(<BorrowerOfferPreviewMock borrower={dossier()} open={false} onClose={() => {}} />));
+    expect(mock().isConnected).toBe(true);
+    expect(mock().open).toBe(false);
+    expect(mock().getAttribute('aria-hidden')).toBe('true');
+    expect(mock().inert).toBe(true);
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it('fades out on the palette exit recipe, and not at all under reduced motion (deviation:offer-mock-exit)', () => {
+    const css = designCss().replace(/\/\*[\s\S]*?\*\//g, '');
+    const exit = /opacity var\(--dur-exit\) var\(--ease-exit\),\s*display var\(--dur-exit\) allow-discrete,\s*overlay var\(--dur-exit\) allow-discrete;/;
+    expect(/\n\.offer-mock\s*\{([^}]*)\}/.exec(css)?.[1]).toMatch(exit);
+    expect(css).toMatch(/\.offer-mock:not\(\[open\]\)\s*\{\s*display:\s*none;\s*opacity:\s*0;\s*\}/);
+    expect(/\.offer-mock:not\(\[open\]\)::backdrop\s*\{([^}]*)\}/.exec(css)?.[1]).toMatch(exit);
+    expect(css).toMatch(/\.offer-mock,\s*\.offer-mock:not\(\[open\]\)::backdrop\s*\{\s*transition:\s*none;/);
+  });
+
+  it('a new open starts on the offer again, never on the last accepted card', () => {
+    act(() => root.render(<BorrowerOfferPreviewMock borrower={dossier()} open onClose={() => {}} />));
+    act(() => document.body.querySelector<HTMLButtonElement>('[data-testid="offer-mock-accept"]')!.click());
+    expect(document.body.querySelector('.offer-mock__card--done')).not.toBeNull();
+    act(() => root.render(<BorrowerOfferPreviewMock borrower={dossier()} open={false} onClose={() => {}} />));
+    // The exit plays over what was on screen.
+    expect(document.body.querySelector('.offer-mock__card--done')).not.toBeNull();
+    act(() => root.render(<BorrowerOfferPreviewMock borrower={dossier()} open onClose={() => {}} />));
+    expect(document.body.querySelector('.offer-mock__card--done')).toBeNull();
+    expect(document.body.querySelector('[data-testid="offer-mock-accept"]')).not.toBeNull();
   });
 
   it('calls onClose from the close control', () => {

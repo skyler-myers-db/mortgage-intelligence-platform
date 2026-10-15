@@ -46,6 +46,12 @@ export interface HealthPayload {
   circuit_breakers?: Record<string, string>;
   actor_cache_key?: string | null;
   /**
+   * The same actor's key under the previous rotation secret, while one is
+   * configured (D-identity-review-a4): lib/healthTrust passes well-formed
+   * entries to the actor gate, which re-stamps an alias instead of resetting.
+   */
+  actor_cache_key_aliases?: string[];
+  /**
    * Databricks workspace origin (e.g. "https://dbc-x.cloud.databricks.com").
    * Present on the authenticated health body only; absent on the anonymous
    * liveness body and on older backends. Consumed by `useWorkspaceHost()` to
@@ -299,6 +305,8 @@ export interface LeadQueryOptions {
   agedDays?: number | null;
   limit?: number;
   growthAgentProof?: GrowthAgentCohortProof | null;
+  /** `?approval_request_batch=`: the open borrowers of one approval request (flow-02, approvers only). */
+  approvalRequestBatch?: string;
 }
 
 export interface GrowthAgentCohortProof {

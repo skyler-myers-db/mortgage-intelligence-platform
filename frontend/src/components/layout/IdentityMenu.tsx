@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useExitPresence } from '../../hooks/useExitRetained';
 import { useApp, type ThemePreference } from '../AppContext';
 import { Icon } from '../Icon';
 import { actorInitials } from '../../lib/actorInitials';
@@ -68,6 +69,12 @@ export function identityView(session: SessionResponse | undefined, isError: bool
  *
  * The email is display-only: nothing here writes it anywhere, and RUM and
  * client-error telemetry never read the DOM.
+ *
+ * Exit (motion-01 item 2e, deviation:menu-exit-motion): the panel root stays
+ * mounted, `is-closing`, aria-hidden and inert, until its fade ends
+ * (useExitPresence). Each open is a new generation and the panel is keyed on
+ * it, so a reopen during the exit remounts it and focus starts on the item
+ * the opening key asked for.
  */
 export function IdentityMenu() {
   const { themePreference, setThemePreference } = useApp();
@@ -79,9 +86,12 @@ export function IdentityMenu() {
   const view = identityView(session.data, session.isError);
   const [open, setOpen] = useState(false);
   const [initialIndex, setInitialIndex] = useState(0);
+  const [generation, setGeneration] = useState(0);
   const menuId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const { present, closing } = useExitPresence(open, panelRef);
 
   useEffect(() => preloadPanelAtIdle(), []);
 
@@ -104,6 +114,7 @@ export function IdentityMenu() {
   const openAt = (index: number) => {
     const show = () => {
       setInitialIndex(index);
+      setGeneration((current) => current + 1);
       setOpen(true);
     };
     // A failed stylesheet fetch still opens the (base-styled) menu.
@@ -155,8 +166,11 @@ export function IdentityMenu() {
           ? <span className="identity-menu__avatar" aria-hidden="true">{initials}</span>
           : <Icon name="account" size={15} />}
       </button>
-      {open && (
+      {present && (
           <IdentityMenuPanel
+            key={generation}
+            panelRef={panelRef}
+            closing={closing}
             menuId={menuId}
             view={view}
             initialIndex={initialIndex}

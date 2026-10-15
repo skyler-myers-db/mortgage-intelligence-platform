@@ -128,3 +128,28 @@ def test_smoke_approval_retries_with_one_stable_idempotency_key() -> None:
     assert "'.request_id == $key'" in text
     assert 'request_args+=(-H "Idempotency-Key: $idempotency_key")' in text
     assert '"$SMOKE_APPROVE_PAYLOAD" idempotent_mutation "$SMOKE_REQUEST_ID"' in text
+
+
+def test_smoke_proves_the_edge_forwards_the_actor_binding_header() -> None:
+    """D-identity-review-a4: right after health, a stale key must answer 409
+    actor_changed (a 200 means the edge dropped the header or the binding is
+    missing) and the session's own key 200; a deployed app whose session
+    carries no key fails the smoke. Status codes only, never the key."""
+    text = SMOKE_SCRIPT.read_text(encoding="utf-8")
+    lines = _logical_shell_lines(text)
+    health_ok = text.index("[smoke] health ok")
+    stale = text.index("-H 'X-MIP-Actor-Key: actor_0000000000000000'")
+    own = text.index('-H "X-MIP-Actor-Key: $SESSION_ACTOR_KEY"')
+
+    assert health_ok < stale < own < text.index("# --- Five canonical API calls")
+    probes = [line for line in lines if "X-MIP-Actor-Key" in line and line.startswith("ACTOR_PROBE_CODE=")]
+    assert len(probes) == 2
+    assert all('"$APP_URL$API_PREFIX/config/options"' in line for line in probes)
+    assert all("curl_bounded -sS" in line and "-w '%{http_code}'" in line for line in probes)
+    assert 'if [[ "$ACTOR_PROBE_CODE" != "409" ]]' in text
+    assert '!= "actor_changed" ]]' in text
+    assert 'if [[ "$ACTOR_PROBE_CODE" != "200" ]]' in text
+    assert "jq -r '.actor_cache_key // empty'" in text
+    deployed_null = text.index('elif [[ "$BOOT_LOCAL" == "0" ]]; then', own)
+    assert "exit 1" in text[deployed_null : text.index("else", deployed_null)]
+    assert not any("SESSION_ACTOR_KEY" in line and line.startswith("echo") for line in lines)

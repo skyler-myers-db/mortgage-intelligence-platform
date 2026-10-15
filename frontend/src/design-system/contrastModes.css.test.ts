@@ -144,6 +144,11 @@ const DATA_MARKS = [
   '.genie-line__point',
   '.genie-bars__track',
   '.genie-line__path',
+  // The Distribution Board's per-officer load bar (W5d w5-sales-loop,
+  // deviation:distribution-board): aria-hidden segments in Highlight and Mark
+  // inside a bar edged in CanvasText (DistributionBoard.css).
+  '.distribution-board__seg--added',
+  '.distribution-board__over',
 ];
 
 /** The Highlight-filled interactive states that paint the system pair themselves (W5b, Firefox backplate). */
@@ -279,8 +284,14 @@ describe('forced-colors: active (css-06 / a11y-10 / responsive-v3)', () => {
   });
 
   it('rings the listbox cursor in HighlightText, since its inset ring sits on the shared fill', () => {
-    const cursor = declarations.filter((d) => d.selector === '.filter-menu__item.is-focused');
-    expect(cursor.map((d) => [d.property, d.value])).toEqual([['--focus-ring-color', 'HighlightText']]);
+    // The filter menu's, the palette's and the topbar search's cursors
+    // (css-06 / a11y-10): a Highlight ring on the Highlight fill was invisible.
+    for (const cursorSelector of ['.filter-menu__item.is-focused', '.cmdk__row.is-active', '.topbar__search-result.is-active']) {
+      const ring = declarations.filter((d) => (
+        d.property === '--focus-ring-color' && selectorList(d.selector).map(normalize).includes(cursorSelector)
+      ));
+      expect(ring.map((d) => d.value), cursorSelector).toEqual(['HighlightText']);
+    }
   });
 
   it('keeps the score band as a border style, since score chips carry text', () => {
@@ -375,7 +386,9 @@ describe('prefers-reduced-transparency: reduce (responsive-v3)', () => {
   it('drops the blur on every selector that declares a backdrop-filter', () => {
     const blurred = sheets.flatMap(({ file, css }) =>
       topLevelRulesDeep(withoutMedia(css, REDUCED_TRANSPARENCY))
-        .filter((rule) => /backdrop-filter:\s*(?!none)/.test(rule.block))
+        // `\s*` must sit inside the lookahead: outside it, it backtracks to zero
+        // spaces and a `backdrop-filter: none` reset would count as a blur site.
+        .filter((rule) => /backdrop-filter:(?!\s*none\b)/.test(rule.block))
         .flatMap((rule) => rule.selector.split(',').map((part) => ({ file, selector: normalize(part) }))),
     );
     expect(blurred.length).toBeGreaterThanOrEqual(8);

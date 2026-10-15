@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useExitPresence } from '../../hooks/useExitRetained';
 import { Icon } from '../Icon';
+import { eventOptionIndex } from './eventOptionIndex';
 import { useListboxNavigation } from './useListboxNavigation';
 import { menuSpaceStyle, useMenuPlacement } from './useMenuPlacement';
 
@@ -23,6 +25,12 @@ import { menuSpaceStyle, useMenuPlacement } from './useMenuPlacement';
  * typeahead matches option labels; Enter/Space toggle it without closing;
  * Escape closes (topmost Escape layer) and returns focus to the trigger; Tab
  * closes and lets focus continue from the trigger. Outside-click closes.
+ *
+ * Exit (motion-01 item 2e, deviation:menu-exit-motion): a closed menu stays
+ * mounted, `is-closing`, aria-hidden and inert, until its fade ends
+ * (useExitPresence); its id and aria-activedescendant exist only while open.
+ * The listbox and options are `div`s with roles (a11y-05), and option clicks
+ * and hover are delegated to the listbox, which owns the keyboard handler.
  */
 
 export type MultiFilterSelectOption<T extends string> = {
@@ -57,7 +65,7 @@ export function MultiFilterSelect<T extends string>({
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
-  const listRef = useRef<HTMLUListElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   const labels = useMemo(() => [allLabel, ...options.map((option) => option.label)], [allLabel, options]);
   const active = selected.length > 0;
@@ -93,7 +101,10 @@ export function MultiFilterSelect<T extends string>({
     multiple: true,
     initialIndex,
   });
-  const menuLayout = useMenuPlacement(open, btnRef, listRef);
+  const { present, closing } = useExitPresence(open, listRef);
+  // Measured while the menu is present, so a closing menu keeps its side
+  // and its cap through the exit instead of jumping below.
+  const menuLayout = useMenuPlacement(present, btnRef, listRef);
 
   // The listbox owns focus while it is open.
   useEffect(() => {
@@ -101,21 +112,17 @@ export function MultiFilterSelect<T extends string>({
   }, [open]);
 
   const renderOption = (idx: number, text: string, isSelected: boolean) => (
-    <li
+    <div
       key={idx === 0 ? '__all__' : options[idx - 1]?.value}
       id={listbox.optionId(idx)}
       role="option"
       aria-selected={isSelected}
+      data-option-index={idx}
       className={`filter-menu__item${isSelected ? ' is-selected' : ''}${listbox.activeIndex === idx ? ' is-focused' : ''}`}
-      onMouseEnter={() => listbox.setActiveIndex(idx)}
-      onClick={() => {
-        listbox.setActiveIndex(idx);
-        pickIndex(idx);
-      }}
     >
       {text}
       {isSelected && <Icon name="check" size={11} />}
-    </li>
+    </div>
   );
 
   return (
@@ -135,24 +142,36 @@ export function MultiFilterSelect<T extends string>({
         <span className="filter__value">{display}</span>
         <Icon name="chevdown" size={11} />
       </button>
-      {open && (
-        <ul
+      {present && (
+        <div
           ref={listRef}
-          id={listbox.listboxId}
-          className={`filter-menu filter-menu--multi${menuLayout.placement === 'above' ? ' filter-menu--up' : ''}`}
+          id={open ? listbox.listboxId : undefined}
+          className={`filter-menu filter-menu--multi${menuLayout.placement === 'above' ? ' filter-menu--up' : ''}${closing ? ' is-closing' : ''}`}
           style={menuSpaceStyle(menuLayout)}
           role="listbox"
           aria-label={label}
           aria-multiselectable="true"
           aria-activedescendant={listbox.activeDescendant}
+          aria-hidden={closing || undefined}
+          inert={closing}
           // In the tab order while open, so the scrolling menu is keyboard
           // reachable (WCAG 2.1.1; axe scrollable-region-focusable).
           tabIndex={0}
           onKeyDown={listbox.onKeyDown}
+          onMouseMove={(event) => {
+            const index = eventOptionIndex(event);
+            if (index !== null) listbox.setActiveIndex(index);
+          }}
+          onClick={(event) => {
+            const index = eventOptionIndex(event);
+            if (index === null) return;
+            listbox.setActiveIndex(index);
+            pickIndex(index);
+          }}
         >
           {renderOption(0, allLabel, !active)}
           {options.map((option, idx) => renderOption(idx + 1, option.label, selectedSet.has(option.value)))}
-        </ul>
+        </div>
       )}
     </div>
   );

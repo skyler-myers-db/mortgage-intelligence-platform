@@ -365,6 +365,69 @@ test.describe('decision bar (visual-v1)', () => {
     });
     expect(slack, 'empty space inside the Primary offer card (px)').toBeLessThanOrEqual(2);
   });
+
+  // W5d VRT review (offer-orchestrator-detail--*): the Follow-up hint sized
+  // its field, so that select read 2.1x the Assign select, the `auto`
+  // routing column took ~211px from the gate and the docked bar grew 18px
+  // (22px stacked). Ruling: both selects keep the 12rem field, the hint
+  // wraps inside its own field, and the bar keeps its pre-hint height: this
+  // same render with the hint taken out of layout. Linux Chromium draws this
+  // text about 4% wider (CI actuals: ~403px against 388px here), so off
+  // Linux it is widened past that.
+  for (const theme of FIXTURE_THEMES) {
+    for (const consoleOpen of [false, true]) {
+      test(`${theme}, Console ${consoleOpen ? 'open' : 'closed'}: the Follow-up hint sizes neither its field nor the docked bar`, async ({ app, page }) => {
+        await app.setTheme(theme);
+        await app.gotoRoute(ROUTE);
+        if (consoleOpen) await app.openConsole();
+        const { bar, routing, followUp } = decisionControls(page);
+        const hint = bar.locator('.outreach-routing .field__hint');
+        await expect(hint).toBeVisible();
+        if (process.platform !== 'linux') await page.addStyleTag({ content: '.outreach-routing .field__hint { letter-spacing: 0.25px; }' });
+        const width = async (locator: Locator) => (await locator.boundingBox())?.width ?? 0;
+        const height = async (locator: Locator) => (await locator.boundingBox())?.height ?? 0;
+        const layout = () => page.evaluate(() => {
+          const box = (selector: string) => document.querySelector(selector)?.getBoundingClientRect();
+          const gate = box('.offer-action-bar .approval');
+          return {
+            bar: box('[data-testid="offer-action-bar"]')?.height ?? 0,
+            gate: gate?.width ?? 0,
+            stacked: (gate?.top ?? 0) >= (box('.outreach-routing')?.bottom ?? 0) - 1,
+          };
+        });
+        const { line, gap, token } = await hint.evaluate((node) => ({
+          line: parseFloat(getComputedStyle(node).lineHeight),
+          gap: parseFloat(getComputedStyle(node.parentElement as HTMLElement).rowGap),
+          token: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sp-2')),
+        }));
+        const withHint = { ...(await layout()), assign: await width(routing), followUp: await width(followUp), hint: await height(hint) };
+        const hidden = await page.addStyleTag({ content: '.outreach-routing .field__hint { display: none; }' });
+        const preHint = await layout();
+        await hidden.evaluate((node) => (node as Element).remove());
+        test.info().annotations.push({ type: 'routing geometry', description: JSON.stringify({ withHint, preHint }) });
+
+        expect(Math.abs(withHint.followUp - withHint.assign), `Follow-up select ${withHint.followUp}px against Assign ${withHint.assign}px`).toBeLessThanOrEqual(1);
+        expect(withHint.hint, 'the hint is one line of its field').toBeLessThanOrEqual(line + 0.5);
+        expect(withHint.stacked, 'the Console decides the layout').toBe(consoleOpen);
+        if (withHint.stacked) {
+          // Stacked, the routing panel is its own row: the hint adds its one line, nothing more.
+          expect(withHint.bar - preHint.bar, 'bar growth over the pre-hint bar (px)').toBeLessThanOrEqual(line + gap + 0.5);
+        } else {
+          // Side by side, the hint fits the height the gate gives the row, and the gate keeps its width.
+          expect(withHint.bar - preHint.bar, 'bar growth over the pre-hint bar (px)').toBeLessThan(token);
+          expect(Math.abs(withHint.gate - preHint.gate), `gate ${withHint.gate}px against ${preHint.gate}px before the hint`).toBeLessThanOrEqual(1);
+        }
+
+        // Any hint longer than its field wraps inside it: the copy this one replaced is 388px wide.
+        await hint.evaluate((node) => {
+          node.textContent = 'A reminder for the assigned loan officer; nothing is sent to the borrower.';
+        });
+        expect(await height(hint), 'a long hint wraps').toBeGreaterThan(line + 0.5);
+        expect(Math.abs((await width(followUp)) - (await width(routing))), 'a long hint does not widen its select').toBeLessThanOrEqual(1);
+        expect((await layout()).gate, 'a long hint does not narrow the gate').toBeCloseTo(withHint.gate, 0);
+      });
+    }
+  }
 });
 
 interface Readability {

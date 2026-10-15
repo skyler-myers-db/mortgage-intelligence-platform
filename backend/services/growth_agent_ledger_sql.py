@@ -163,6 +163,10 @@ WHERE actor_email = %(actor_email)s
 LIMIT 1
 """
 
+# A saved watchlist is due by cadence, or while its last run lacks a draft
+# for a requested channel. A rate watch (wow-ai-2) drafts only when its level
+# is reached, so a quiet one never has drafts: it is due by cadence only, or it
+# would re-run on every scheduler pass.
 DUE_MONITOR_LIST_SQL = """
 SELECT monitor_id, workflow_id, name, cadence, status, criteria, route,
        actionable_total, source_assets, last_run_id, created_at, updated_at
@@ -178,6 +182,7 @@ WHERE m.actor_email = %(actor_email)s
       SELECT 1
       FROM unnest(%(channels)s::text[]) AS requested(channel)
       WHERE m.last_run_id IS NOT NULL
+        AND m.workflow_id <> 'rate_trigger_watch'
         AND NOT EXISTS (
           SELECT 1
           FROM mip_app.growth_agent_notification_drafts AS d
@@ -205,6 +210,7 @@ WHERE m.status = 'active'
       SELECT 1
       FROM unnest(%(channels)s::text[]) AS requested(channel)
       WHERE m.last_run_id IS NOT NULL
+        AND m.workflow_id <> 'rate_trigger_watch'
         AND NOT EXISTS (
           SELECT 1
           FROM mip_app.growth_agent_notification_drafts AS d
@@ -216,6 +222,15 @@ WHERE m.status = 'active'
   )
 ORDER BY actor_email ASC, updated_at ASC
 LIMIT %(limit)s
+"""
+
+# wow-ai-2 draft gate: the caller's run's stored policy checks, actor-bound.
+RUN_POLICY_CHECKS_SQL = """
+SELECT policy_checks
+FROM mip_app.growth_agent_runs
+WHERE actor_email = %(actor_email)s
+  AND run_id = %(run_id)s
+LIMIT 1
 """
 
 NOTIFICATION_DRAFT_INSERT_SQL = """

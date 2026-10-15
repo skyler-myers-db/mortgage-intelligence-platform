@@ -59,7 +59,7 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 import { LeadTable } from './LeadTable';
 import { LeadBulkRunProgressFallback, LeadBulkRunResultFallback } from './LeadBulkRunFallback';
 import { LeadBulkRunProgress, LeadBulkRunResult } from './LeadBulkRunStatus';
-import { LeadTableBulkToast } from './LeadTableBulkActions';
+import { LeadTableBulkActions, LeadTableBulkToast } from './LeadTableBulkActions';
 import type { BulkRunResult } from './useLeadBulkRun';
 
 const IDS = Array.from({ length: 6 }, (_, index) => `B-CHUNKFALLBK0${index + 1}`);
@@ -227,6 +227,35 @@ describe('bulk run lines name the run kind', () => {
     expect(container.querySelector('.bulk-actions__run .bulk-actions__label')?.textContent).toBe('Rejecting 1 of 3');
     expect(container.querySelector('progress')?.getAttribute('aria-label')).toBe('Rejecting selected borrowers');
     expect(container.querySelector('[data-outcome="not_started"]')?.textContent).toContain('with its own reason and note');
+  });
+
+  it.each(['approve', 'reject'] as const)('a %s run shows Button loading on its own control, never native disabled (motion-08)', (kind) => {
+    const ref = { current: null };
+    act(() => root.render(
+      <LeadTableBulkActions
+        selectionCount={3}
+        selectedApprovalEligibleCount={3}
+        bulkApproving
+        bulkRationaleOpen={false}
+        campaignBindingBlocked={false}
+        salesTeam={[]}
+        salesBusy={false}
+        selectedAssignee=""
+        onSelectedAssigneeChange={() => undefined}
+        onAssign={() => undefined}
+        onClearSelection={() => undefined}
+        onBulkApprove={() => Promise.resolve(false)}
+        bulkApproveBtnRef={ref}
+        runKind={kind}
+      />,
+    ));
+    const own = container.querySelector<HTMLButtonElement>(`[data-testid="lead-bulk-${kind}"]`)!;
+    const other = container.querySelector<HTMLButtonElement>(`[data-testid="lead-bulk-${kind === 'approve' ? 'reject' : 'approve'}"]`)!;
+    expect(own.classList.contains('btn--loading')).toBe(true);
+    expect(own.disabled).toBe(false);
+    expect([own.getAttribute('aria-busy'), own.getAttribute('aria-disabled')]).toEqual(['true', 'true']);
+    expect(other.disabled).toBe(true);
+    expect(other.classList.contains('btn--loading')).toBe(false);
   });
 
   it('the unmount flash says rejected for a cut-short reject run', () => {

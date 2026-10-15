@@ -203,7 +203,9 @@ describe('Offer write mutations', () => {
     });
     expect(invalidate).toHaveBeenCalled();
     for (const call of invalidate.mock.calls) {
-      expect(call[0]).toMatchObject({ refetchType: 'none' });
+      // flow-02: the audit-free approval-request list is the one ACTIVE refetch.
+      const audited = JSON.stringify(call[0]?.queryKey) !== JSON.stringify(['mip', 'approval-requests']);
+      expect(call[0]).toMatchObject({ refetchType: audited ? 'none' : 'active' });
     }
     expect(setQueryData).not.toHaveBeenCalled();
   });

@@ -369,3 +369,84 @@ def test_the_genie_start_branch_leaves_answer_path_posts_in_the_genie_budget(pat
 
     assert budget is not None
     assert (budget.scope, budget.dependency) == ("genie", "genie")
+
+
+# --- W5d w5-followups-snooze: the Follow-ups tray and Field performance -------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/sales/followups/summary",
+        "/api/v1/sales/followups/summary",
+        "/api/admin/field-performance",
+        "/api/v1/admin/field-performance",
+    ],
+)
+def test_the_followups_summary_and_field_performance_are_lakebase_reads(path: str) -> None:
+    # Both read Lakebase only (the rail's once-a-minute poll; mip_app.rum_daily):
+    # the default read bucket and a Lakebase slot, never the warehouse budget
+    # their '/api/sales' and '/api/admin' prefixes carry.
+    budget = BackpressureController().classify("GET", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("lakebase-read", "lakebase")
+    assert budget.requests_per_minute == settings.mip_rate_limit_default_per_minute
+
+
+@pytest.mark.parametrize("path", ["/api/sales/followups", "/api/v1/sales/followups"])
+def test_the_followups_list_reads_gold_so_it_keeps_the_warehouse_budget(path: str) -> None:
+    budget = BackpressureController().classify("GET", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("warehouse-read", "warehouse")
+    assert budget.requests_per_minute == settings.mip_rate_limit_expensive_per_minute
+    # Non-vacuity: a neighbouring admin read keeps the warehouse class too.
+    rules = BackpressureController().classify("GET", "/api/v1/admin/rules")
+    assert rules is not None and rules.dependency == "warehouse"
+
+
+@pytest.mark.parametrize(
+    "path", ["/api/leads/B-0000000000001/snooze", "/api/v1/leads/B-0000000000001/snooze"]
+)
+def test_the_snooze_is_a_lakebase_mutation(path: str) -> None:
+    budget = BackpressureController().classify("POST", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("mutation", "lakebase")
+    assert budget.requests_per_minute == settings.mip_rate_limit_mutation_per_minute
+
+
+# --- 2026-09-21 audit genie-04 phase 2: the Genie context-scope render ---------
+
+
+@pytest.mark.parametrize("path", ["/api/genie/context-scope", "/api/v1/genie/context-scope"])
+def test_the_genie_context_scope_render_takes_the_default_bucket_and_no_slot(path: str) -> None:
+    # The render fills a closed template and runs the prompt guards in-process:
+    # no Genie call, so it never spends the Genie budget or holds a Genie slot.
+    budget = BackpressureController().classify("POST", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("default", None)
+    assert budget.requests_per_minute == settings.mip_rate_limit_default_per_minute
+    # Only the exact POST leaves the Genie budget.
+    sibling = BackpressureController().classify("POST", path + "x")
+    assert sibling is not None and (sibling.scope, sibling.dependency) == ("genie", "genie")
+
+
+# --- 2026-09-21 audit genie-09 part 4: the composed-plan progress poll -------
+
+
+@pytest.mark.parametrize(
+    "path", ["/api/growth-agent/agent/plan/progress", "/api/v1/growth-agent/agent/plan/progress"]
+)
+def test_the_plan_progress_poll_has_its_own_lakebase_read_scope(path: str) -> None:
+    controller = BackpressureController()
+    budget = controller.classify("GET", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("growth-plan-progress", "lakebase")
+    assert budget.requests_per_minute == settings.mip_rate_limit_default_per_minute
+    # The audited execute it polls beside stays a Lakebase mutation.
+    execute = controller.classify("POST", path.replace("progress", "execute"))
+    assert execute is not None and execute.scope == "mutation"

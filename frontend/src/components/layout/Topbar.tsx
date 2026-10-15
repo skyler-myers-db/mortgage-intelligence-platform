@@ -10,15 +10,16 @@ import type { ConnectionStatus } from '../connectionState';
 import { Breadcrumbs } from './Breadcrumbs';
 import { IdentityMenu } from './IdentityMenu';
 import { useFootprint } from '../FootprintProvider';
-import { api, type HealthPayload } from '../../lib/api';
+import type { HealthPayload } from '../../lib/api';
+import { useBorrowerSearch } from '../../hooks/useBorrowerSearch';
 import { hasOpenModal, registerKeyBinding } from '../../lib/keymap';
+import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
 import { lenderMarkUrl } from '../../lib/themePreference';
 import {
   GENIE_LAUNCHER_STATUS_ID,
   genieLauncherStateClass,
   useGenieTurnStatus,
 } from '../../lib/genieTurnStatus';
-import type { LeadSummary } from '../../types';
 import { LazyLenderMark } from './lenderMarkLoader';
 
 // Platform-aware command-palette shortcut label. Mac shows ⌘K; everyone else
@@ -206,6 +207,13 @@ function SystemStatusPill({ status }: { status: SystemStatusView }) {
  */
 
 export function Topbar() {
+  // BUDGET TRADE (runtime-03, W5d): Topbar compiles clean without this
+  // pragma (its try/catch submit is gone; Topbar.compiler.test.ts proves it),
+  // but the compiled shell topbar measured over the W5d lane's initial-JS cap
+  // (see the allowlist entry). The emission moves to W5e w5-compiler-lint
+  // item 6 (the shell opt-out re-measure).
+  'use no memo';
+
   const { lender, sessionStatus, theme, setTheme, genieOpen, setGenieOpen, consoleOpen, setConsoleOpen } = useApp();
   // A Genie turn keeps running behind the closed panel; this toggle is the
   // only desktop launcher, so it carries the running ring / answer-ready badge.
@@ -227,10 +235,13 @@ export function Topbar() {
   // is still in use.
   const [mountGraceOver, setMountGraceOver] = useState(false);
   const [borrowerQuery, setBorrowerQuery] = useState('');
-  const [borrowerResults, setBorrowerResults] = useState<LeadSummary[]>([]);
-  const [borrowerSearchTerm, setBorrowerSearchTerm] = useState('');
-  const [borrowerSearchStatus, setBorrowerSearchStatus] = useState<'idle' | 'loading' | 'empty' | 'error'>('idle');
+  // The one shared borrower search (hooks/useBorrowerSearch, runtime-06): the
+  // ⌘K palette reads the same cache entry for the same term.
+  const borrowerSearch = useBorrowerSearch(borrowerQuery);
+  const borrowerResults = borrowerSearch.rows;
+  const borrowerSearchStatus = borrowerSearch.status;
   const [searchOpen, setSearchOpen] = useState(false);
+  const [singleKeysOn] = useSingleKeyShortcuts();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchFormRef = useRef<HTMLFormElement>(null);
   useEffect(() => {
@@ -251,51 +262,10 @@ export function Topbar() {
     run: () => searchInputRef.current?.focus(),
   }), []);
 
-  useEffect(() => {
-    const q = borrowerQuery.trim();
-    if (q.length < 2) {
-      setBorrowerResults([]);
-      setBorrowerSearchTerm('');
-      setBorrowerSearchStatus('idle');
-      return;
-    }
-    const ctrl = new AbortController();
-    setBorrowerSearchStatus('loading');
-    // Results that land after focus left the search stay closed: an open
-    // popup nobody is in would still sit on the Escape stack.
-    const reopenIfFocused = () => {
-      if (document.activeElement === searchInputRef.current) setSearchOpen(true);
-    };
-    const t = window.setTimeout(() => {
-      api
-        .borrowerSearch(q, ctrl.signal)
-        .then((rows) => {
-          if (ctrl.signal.aborted) return;
-          setBorrowerResults(rows);
-          setBorrowerSearchTerm(q);
-          setBorrowerSearchStatus(rows.length > 0 ? 'idle' : 'empty');
-          reopenIfFocused();
-        })
-        .catch(() => {
-          if (ctrl.signal.aborted) return;
-          setBorrowerResults([]);
-          setBorrowerSearchTerm(q);
-          setBorrowerSearchStatus('error');
-          reopenIfFocused();
-        });
-    }, 180);
-    return () => {
-      window.clearTimeout(t);
-      ctrl.abort();
-    };
-  }, [borrowerQuery]);
-
+  // Resetting the query resets the shared search (no request under 2 characters).
   const openBorrower = (id: string) => {
     setSearchOpen(false);
     setBorrowerQuery('');
-    setBorrowerResults([]);
-    setBorrowerSearchTerm('');
-    setBorrowerSearchStatus('idle');
     navigate(`/borrower-360/${id}`);
   };
 
@@ -321,39 +291,23 @@ export function Topbar() {
     editable: true,
   });
 
-  const submitBorrowerSearch = async () => {
+  // Enter with nothing highlighted (or the form's own submit) searches now,
+  // skipping the debounce: a term searched in the last 30 s answers from the
+  // shared cache. An exact masked id wins over the first row. No try
+  // statement (runtime-03: React Compiler 1.0 bails out on a value block in
+  // a try); a failure or an empty answer is the hook's own status line.
+  const submitBorrowerSearch = () => {
     const q = borrowerQuery.trim();
-    if (q.length < 2) {
-      setSearchOpen(true);
-      setBorrowerSearchStatus('empty');
-      return;
-    }
-    const cached =
-      borrowerSearchTerm === q
-        ? borrowerResults.find((row) => row.borrower_id.toUpperCase() === q.toUpperCase()) ?? borrowerResults[0]
-        : undefined;
-    if (cached) {
-      openBorrower(cached.borrower_id);
-      return;
-    }
     setSearchOpen(true);
-    setBorrowerSearchStatus('loading');
-    try {
-      const rows = await api.borrowerSearch(q);
-      setBorrowerResults(rows);
-      setBorrowerSearchTerm(q);
-      const exact = rows.find((row) => row.borrower_id.toUpperCase() === q.toUpperCase());
-      const first = exact ?? rows[0];
-      if (first) {
-        openBorrower(first.borrower_id);
-      } else {
-        setBorrowerSearchStatus('empty');
-      }
-    } catch {
-      setBorrowerResults([]);
-      setBorrowerSearchTerm(q);
-      setBorrowerSearchStatus('error');
-    }
+    if (q.length < 2) return;
+    borrowerSearch
+      .searchNow(q)
+      .then((rows) => {
+        const exact = rows.find((row) => row.borrower_id.toUpperCase() === q.toUpperCase());
+        const first = exact ?? rows[0];
+        if (first) openBorrower(first.borrower_id);
+      })
+      .catch(() => undefined);
   };
 
   return (
@@ -365,7 +319,7 @@ export function Topbar() {
         role="search"
         onSubmit={(e) => {
           e.preventDefault();
-          void submitBorrowerSearch();
+          submitBorrowerSearch();
         }}
       >
         <Icon name="search" size={12} />
@@ -374,6 +328,9 @@ export function Topbar() {
           value={borrowerQuery}
           onChange={(e) => {
             setBorrowerQuery(e.target.value);
+            // Typing in the focused combobox shows its results again after an
+            // Escape; results that land after focus left stay closed.
+            setSearchOpen(true);
             searchListbox.setActiveIndex(-1);
           }}
           onFocus={() => setSearchOpen(true)}
@@ -392,6 +349,7 @@ export function Topbar() {
           aria-expanded={searchListShown}
           aria-controls={searchListShown ? searchListbox.listboxId : undefined}
           aria-activedescendant={searchListShown ? searchListbox.activeDescendant : undefined}
+          aria-keyshortcuts={singleKeysOn ? '/' : undefined}
         />
         <Tooltip content="Command palette" shortcut={CMDK_LABEL}>
           <button
@@ -411,23 +369,27 @@ export function Topbar() {
                 className="topbar__search-list"
                 role="listbox"
                 aria-label="Borrower matches"
-                // Keep focus in the input while the pointer picks a row.
-                onMouseDown={(e) => e.preventDefault()}
               >
+                {/* Options are buttons out of the Tab order (the palette's
+                    CommandRow pattern, a11y-05): the input keeps focus and
+                    aria-activedescendant; a pointer press never moves it. */}
                 {visibleResults.map((row, index) => {
                   const activeRow = index === searchListbox.activeIndex;
                   return (
-                    <div
+                    <button
+                      type="button"
+                      tabIndex={-1}
                       key={row.borrower_id}
                       id={searchListbox.optionId(index)}
                       role="option"
                       aria-selected={activeRow}
                       className={`topbar__search-result${activeRow ? ' is-active' : ''}`}
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => openBorrower(row.borrower_id)}
                     >
                       <span className="mono">{row.borrower_id}</span>
                       <span>{row.city}, {row.state} · {row.zip}</span>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
@@ -439,7 +401,7 @@ export function Topbar() {
             )}
             {borrowerSearchStatus === 'empty' && borrowerResults.length === 0 && (
               <div className="topbar__search-status" role="status">
-                No borrower, ZIP, city, county, or state matches "{borrowerSearchTerm || borrowerQuery.trim()}".
+                No borrower, ZIP, city, county, or state matches "{borrowerSearch.dataTerm || borrowerQuery.trim()}".
               </div>
             )}
             {borrowerSearchStatus === 'error' && (

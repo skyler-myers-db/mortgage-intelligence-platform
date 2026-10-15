@@ -209,6 +209,14 @@ class BackpressureController:
             # Genie call and writes no audit row, so it takes the default
             # read bucket and a Lakebase slot, never a Genie slot.
             return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
+        if method.upper() == "POST" and path == "/api/genie/context-scope":
+            # The Genie context-scope render (audit genie-04 phase 2) fills a
+            # closed template and runs the prompt guards in-process: no Genie
+            # call, no Lakebase, no warehouse query of its own (the guards'
+            # shared place dimension refreshes from gold on a TTL lapse, as
+            # for any guard caller). The default bucket and no dependency
+            # slot, so a click never spends the Genie budget.
+            return RouteBudget("default", settings.mip_rate_limit_default_per_minute, None)
         if path.startswith("/api/genie"):
             return RouteBudget("genie", settings.mip_rate_limit_genie_per_minute, "genie")
         if method.upper() == "POST" and path in self._READ_ONLY_POSTS:
@@ -218,6 +226,20 @@ class BackpressureController:
             if path.startswith("/api/genie"):
                 dependency = "genie"
             return RouteBudget("mutation", settings.mip_rate_limit_mutation_per_minute, dependency)
+        if method.upper() == "GET" and path == "/api/sales/followups/summary":
+            # The rail's Follow-ups poll (D-shell-deviations-a), like the
+            # /api/genie/message/status precedent: a once-a-minute read of the
+            # caller's own Lakebase workflow state, never the warehouse. The
+            # default read bucket and a Lakebase slot; under the '/api/sales'
+            # prefix below it would spend the expensive warehouse budget and
+            # hold a warehouse slot per poll. The tray's list (GET
+            # /api/sales/followups) reads gold, so it stays on that prefix.
+            return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
+        if method.upper() == "GET" and path == "/api/admin/field-performance":
+            # Admin Field performance (D-platform-process-d2, runtime-09): one
+            # read of mip_app.rum_daily in Lakebase, no warehouse statement.
+            # Same precedent; the '/api/admin' prefix below is warehouse-read.
+            return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
         if path.startswith("/api/audit") or path.startswith("/api/workspace"):
             return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
         if method.upper() == "GET" and self._BORROWER_DECISIONS_RE.match(path):
@@ -232,6 +254,13 @@ class BackpressureController:
             # one source-readiness SELECT on the warehouse per drawer open.
             # The admin metadata read stays under the "/api/admin" prefix.
             return RouteBudget("warehouse-read", settings.mip_rate_limit_expensive_per_minute, "warehouse")
+        if method.upper() == "GET" and path == "/api/growth-agent/agent/plan/progress":
+            # A composed plan's per-step progress (audit genie-09 part 4): a
+            # ~1 s poll of the caller's own progress row while its execute is
+            # pending. Lakebase only, never the warehouse, so it takes its own
+            # scope of the default read bucket and a Lakebase slot (the
+            # genie-job status-poll precedent).
+            return RouteBudget("growth-plan-progress", settings.mip_rate_limit_default_per_minute, "lakebase")
         # NOTE: lead assign/disposition calls are POSTs, so they are already
         # classified by the mutation branch above -- a dedicated pattern here
         # would be unreachable dead code (removed 2026-06-10 audit).

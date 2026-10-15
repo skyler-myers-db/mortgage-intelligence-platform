@@ -110,7 +110,7 @@ test.describe('A / R hotkeys are scoped to focus inside the table', () => {
     const approveButton = cell.getByRole('button', { name: `Approve ${id}` });
     await expect(approveButton).toHaveText('Approving…');
     await expect(approveButton).toBeDisabled();
-    await expect(confirm).toHaveText('Approving…');
+    await expect(confirm).toHaveAttribute('aria-busy', 'true'); // motion-08: the kept label under the spinner
     await expect.poll(() => held.received, 'exactly one approve POST left the browser').toBe(1);
     // The reply is still held: no "Approved" chip may exist yet.
     await expect(cell).not.toContainText('Approved');

@@ -225,7 +225,13 @@ What to show:
    strings.
 3. "Show proof" exposes SQL/source/freshness when Genie returns trusted
    evidence.
-4. Run "Open this cohort in Lead Queue" only after the action preview shows the
+4. Hover a dotted-underlined figure in Genie's answer: the card names the
+   returned column it matches. The proof's Figures metric says "N of N
+   answer figures verified" and lists how the rows prove each one (a returned
+   value, the row count, a total, a share, or another derivation). Only the
+   answer's own figures are counted: a governed cross-check note stays
+   visible as its own disclosure and is never counted or underlined.
+5. Run "Open this cohort in Lead Queue" only after the action preview shows the
    same ZIP/state/segment filters from the answer.
 
 Talk track:
@@ -306,7 +312,7 @@ Maker-checker beat (optional, 30 seconds):
 
 > "Most lenders split the person who builds a list from the person who
 > releases it. An analyst without the approver role selects borrowers and
-> asks for approval with a short note; nothing is drafted or sent. An approver
+> asks for approval with a short reason; nothing is drafted or sent. An approver
 > opens that request in the Lead Queue, reviews each borrower's draft in the
 > same review sheet, and decides. The ledger shows both sides: who asked, why,
 > and who approved. The server refuses the person who raised a request when
@@ -314,10 +320,30 @@ Maker-checker beat (optional, 30 seconds):
 > while outreach is still queued, which writes its own audit row."
 
 Claim boundary: the request, decision link and revoke endpoints and their
-audit rows are live from the W5b backend; the Lead Queue request and revoke
-controls ship with the W5d UI. Until then, demo this beat from the audit
-explorer (`APPROVAL_REQUESTED`, `APPROVE` with its request id,
-`OUTREACH_REVOKE`), not from a button.
+audit rows are live from the W5b backend, and the Lead Queue request
+controls are live from W5d (a non-approver's "Request approval" with its
+"Reason for the request", "My requests" with Withdraw, the approver's
+"Approval requests" opening a scoped queue). The revoke control ships with
+W5e `w5-lead-table-compile`: until then, show a revoke from the audit ledger
+(`OUTREACH_REVOKE`), not from a button. A rationale refused by the governed
+text screen is recorded as `GOVERNED_TEXT_REFUSED` (surface, screen and a
+count; never the text).
+
+Sales-manager beat (optional, 15 seconds; Analytics → Sales ops, a sales
+manager or roster admin session: pick a period, open "Distribute approved
+leads…", commit, then press Undo on the toast):
+
+> "The Board's dry run writes nothing; it shows how approved leads would land
+> by score, capacity and region. Commit runs that plan, and Undo is an
+> audited release. Nothing is assigned automatically."
+
+Off-script detail, if asked: the period stays in the shared link; a commit is
+refused when the book moved since the preview and the Board shows what
+changed; the Undo hands leads back to the officer they replaced only while
+that is still allowed. Claim boundary: the fill is greedy at state grain (a
+'National' or empty region is a generalist) with capacity measured as the
+daily capacity minus the open book; it is not an optimiser. Per-officer
+workload and the previous-period comparison ship in W5e.
 
 ## Close
 
@@ -377,6 +403,9 @@ When a prospect frames goals in these words, land each one on a live surface:
 
 - Do not say every asset is live if `/api/v1/data-estate` shows unconnected or
   pending assets.
+- Do not say the platform "auto-assigns leads": the Distribution Board
+  previews a plan and a manager commits it, and every assignment and Undo is
+  an audited human action.
 - Do not quote borrower names, raw CLIP, raw Owner Link, or unmasked addresses
   in a public recording.
 - Do not claim Genie actions work unless the filtered destination route is shown

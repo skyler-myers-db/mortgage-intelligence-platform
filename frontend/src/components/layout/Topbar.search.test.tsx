@@ -8,11 +8,18 @@
  * Tab never landed on one). Now ArrowDown walks the results while focus stays
  * in the input, Enter opens the highlighted borrower, and Escape closes, then
  * clears.
+ *
+ * W5d (runtime-06): the search is the shared hooks/useBorrowerSearch, the
+ * same cache the ⌘K palette reads, on ONE 160 ms debounce (the topbar's own
+ * was 180 ms; the fake-timer steps below changed on purpose). The options are
+ * buttons out of the Tab order (a11y-05).
  */
 
 import { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { BORROWER_SEARCH_DEBOUNCE_MS } from '../../hooks/useBorrowerSearch';
 import { escapeLayerCount } from '../../lib/escapeStack';
 import { mount } from '../../test/render';
 import type { LeadSummary } from '../../types';
@@ -70,28 +77,43 @@ function press(key: string): KeyboardEvent {
   return event;
 }
 
+/** Let a settled search reach the screen (TanStack notifies on a macrotask). */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+}
+
 async function typeQuery(text: string): Promise<void> {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
   await act(async () => {
     setter?.call(input(), text);
     input().dispatchEvent(new Event('input', { bubbles: true }));
   });
-  // The search is debounced (180 ms); let it fire and resolve.
+  // The search is debounced (BORROWER_SEARCH_DEBOUNCE_MS, 160 ms); let it
+  // fire, then let the query answer and render.
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => setTimeout(resolve, BORROWER_SEARCH_DEBOUNCE_MS + 90));
   });
+  await settle();
+  await settle();
 }
+
 
 // mount() unmounts the Topbar and removes its container after each test.
 beforeEach(async () => {
   apiMocks.borrowerSearch.mockReset();
   apiMocks.borrowerSearch.mockResolvedValue(ROWS);
+  // A fresh cache per test: a term another test searched never answers here.
+  const queryClient = new QueryClient();
   ({ container } = await mount(
-    <MemoryRouter>
-      <Topbar />
-      <button type="button" id="elsewhere">Elsewhere</button>
-      <LocationProbe />
-    </MemoryRouter>,
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>
+        <Topbar />
+        <button type="button" id="elsewhere">Elsewhere</button>
+        <LocationProbe />
+      </MemoryRouter>
+    </QueryClientProvider>,
   ));
   act(() => input().focus());
 });
@@ -155,7 +177,7 @@ describe('Topbar borrower search — keyboard', () => {
     // Leave before the debounced search answers.
     act(() => document.getElementById('elsewhere')?.focus());
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => setTimeout(resolve, BORROWER_SEARCH_DEBOUNCE_MS + 90));
     });
     expect(apiMocks.borrowerSearch).toHaveBeenCalledTimes(1);
     expect(listbox()).toBeNull();
@@ -164,39 +186,55 @@ describe('Topbar borrower search — keyboard', () => {
   });
 
   // runtime-03 pins: the submit path (Enter with nothing highlighted, or the
-  // form's own submit) runs its own search. A rejected search reads as the
-  // error status and never navigates; a found exact id wins over the first row.
+  // form's own submit) searches at once through the shared hook's searchNow
+  // (the same key and function). A rejected search reads as the error status
+  // and never navigates; a found exact id wins over the first row.
   async function submitQuery(text: string): Promise<void> {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
     await act(async () => {
       setter?.call(input(), text);
       input().dispatchEvent(new Event('input', { bubbles: true }));
     });
-    // Submit before the 180 ms debounce, so only the submit path searches.
+    // Submit before the 160 ms debounce, so only the submit path searches.
     await act(async () => {
       container.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
       await Promise.resolve();
     });
+    await settle();
   }
+
+  /** The search calls' terms; every call consumes an abort signal. */
+  const searchedTerms = (): string[] => apiMocks.borrowerSearch.mock.calls.map((call: unknown[]) => {
+    expect(call[1]).toBeInstanceOf(AbortSignal);
+    return String(call[0]);
+  });
 
   it('a submit whose search rejects shows the error status and does not navigate', async () => {
     apiMocks.borrowerSearch.mockReset();
-    apiMocks.borrowerSearch.mockRejectedValue(new Error('warehouse down'));
+    // A failure arrives over the network, after the observer joined the fetch.
+    apiMocks.borrowerSearch.mockImplementation(() => new Promise((_resolve, reject) => {
+      setTimeout(() => reject(new Error('warehouse down')), 5);
+    }));
     await submitQuery('Chic');
+    await settle();
 
-    // The submit path calls the search with the query alone (the debounced
-    // effect also passes its abort signal), and it has not fired yet.
-    expect(apiMocks.borrowerSearch.mock.calls).toEqual([['Chic']]);
+    // One request: the submit's. The debounced term joins it, never a second.
+    expect(searchedTerms()).toEqual(['Chic']);
     const status = container.querySelector('.topbar__search-status--error');
     expect(status?.textContent).toBe('Search is temporarily unavailable.');
     expect(pathname()).toBe('/');
     expect(input().value).toBe('Chic');
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, BORROWER_SEARCH_DEBOUNCE_MS + 90));
+    });
+    expect(searchedTerms()).toEqual(['Chic']);
+    expect(container.querySelector('.topbar__search-status--error')?.textContent).toBe('Search is temporarily unavailable.');
   });
 
   it('a submit that finds the typed id opens that borrower, not the first row', async () => {
     await submitQuery('b-0000000000002');
 
-    expect(apiMocks.borrowerSearch.mock.calls).toEqual([['b-0000000000002']]);
+    expect(searchedTerms()).toEqual(['b-0000000000002']);
     expect(pathname()).toBe('/borrower-360/B-0000000000002');
     expect(input().value).toBe('');
   });
@@ -206,5 +244,71 @@ describe('Topbar borrower search — keyboard', () => {
     expect(listbox()).not.toBeNull();
     act(() => document.getElementById('elsewhere')?.focus());
     expect(listbox()).toBeNull();
+  });
+
+  it('a submit of a term the debounce already answered opens it from the cache', async () => {
+    await typeQuery('Chic');
+    expect(searchedTerms()).toEqual(['Chic']);
+    await act(async () => {
+      container.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+    await settle();
+    expect(searchedTerms()).toEqual(['Chic']);
+    expect(pathname()).toBe('/borrower-360/B-0000000000001');
+  });
+
+  it('debounces: one request for a burst of keystrokes, none under two characters', async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    for (const text of ['C', 'Ch', 'Chi', 'Chic']) {
+      await act(async () => {
+        setter?.call(input(), text);
+        input().dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    }
+    expect(apiMocks.borrowerSearch).not.toHaveBeenCalled();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, BORROWER_SEARCH_DEBOUNCE_MS + 90));
+    });
+    expect(searchedTerms()).toEqual(['Chic']);
+    await typeQuery('C');
+    expect(searchedTerms()).toEqual(['Chic']);
+    expect(listbox()).toBeNull();
+  });
+
+  it('a cleared search never flashes the rows of the search before it', async () => {
+    await typeQuery('Chic');
+    expect(options()).toHaveLength(2);
+    await typeQuery('C');
+    let release: (rows: LeadSummary[]) => void = () => undefined;
+    apiMocks.borrowerSearch.mockReturnValueOnce(new Promise<LeadSummary[]>((resolve) => { release = resolve; }));
+    await typeQuery('Cl');
+    expect(options()).toHaveLength(0);
+    expect(container.querySelector('.topbar__search-status')?.textContent).toContain('Searching');
+    await act(async () => {
+      release([]);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(container.querySelector('.topbar__search-status')?.textContent).toBe(
+      'No borrower, ZIP, city, county, or state matches "Cl".',
+    );
+  });
+
+  it('options are buttons out of the Tab order: Tab leaves the search', async () => {
+    await typeQuery('Chic');
+    for (const option of options()) {
+      expect(option.tagName).toBe('BUTTON');
+      expect(option.getAttribute('type')).toBe('button');
+      expect(option.tabIndex).toBe(-1);
+    }
+    // The listbox carries no handler of its own; each option keeps focus in the input.
+    const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    act(() => {
+      options()[0].dispatchEvent(press);
+    });
+    expect(press.defaultPrevented).toBe(true);
+    const focusable = [...container.querySelectorAll<HTMLElement>('button, input, a[href], [tabindex]')]
+      .filter((el) => el.tabIndex >= 0);
+    expect(focusable.some((el) => el.getAttribute('role') === 'option')).toBe(false);
   });
 });

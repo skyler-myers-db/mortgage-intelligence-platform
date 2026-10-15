@@ -134,6 +134,13 @@ def test_accepts_the_refusal_report_read_templates(
     assert _post(client, _with_details(API_CALL, api_route=api_route)).status_code == 202
 
 
+def test_accepts_the_rate_watch_save_template(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """W5d wow-ai-2: 'rate-watch' is a closed segment on both sides."""
+    monkeypatch.setattr(telemetry_mod.settings, "mip_rum_enabled", True)
+    route = "/api/growth-agent/rate-watch"
+    assert _post(client, _with_details(API_CALL, api_route=route)).status_code == 202
+
+
 def test_the_sink_stays_off_by_default(client: TestClient) -> None:
     response = _post(client, CLIENT_ERROR)
     assert response.status_code == 202

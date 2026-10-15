@@ -26,6 +26,7 @@ const REVIEWED_WORKFLOW_IDS: ReadonlySet<string> = new Set(Object.keys({
   branch_capacity_review: true,
   source_freshness_sentinel: true,
   custom_segment_watch: true,
+  rate_trigger_watch: true,
 } satisfies Record<GrowthAgentWorkflowId, true>));
 
 /**

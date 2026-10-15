@@ -9,7 +9,10 @@
  *    fixture BEFORE navigation;
  *  - OVERLAY states (`evidence-drawer`, `command-palette`, `genie`,
  *    `filter-menu`, `expanded-row`, `triage`, `delta-explainer`,
- *    `evidence-how-we-got`, `evidence-under-the-hood`) are opened
+ *    `evidence-how-we-got`, `evidence-under-the-hood`, and the W5d
+ *    approval-request states `approval-requests`, `my-approval-requests`
+ *    and `request-approval-form`, whose session and request list
+ *    `prepareState` registers first) are opened
  *    after the natural load by
  *    `enterState`, which never opens an audited read: the Borrower 360
  *    proof drawer is not among them, and visual.ts's audited-read guard
@@ -23,10 +26,12 @@
  */
 import type { Page } from '@playwright/test';
 import type { HealthPayload } from '../../../src/lib/apiTypes';
-import type { LeadSummary } from '../../../src/types';
+import type { LeadSummary, SessionResponse } from '../../../src/types';
 import type { AppDriver } from './app';
 import { WAREHOUSE_OUTAGE_503 } from './data/errorSurfaces';
+import { registerFollowUps } from './data/followUps';
 import { HEALTH_OK } from './data/shell';
+import { NON_APPROVER_SESSION, REQUESTED_IDS, batchView, registerApprovalRequestStore } from './data/approvalRequests';
 import { json, type MockApi } from './mockApi';
 import { expect } from './test';
 
@@ -45,7 +50,16 @@ export type FixtureState =
   | 'stale-note'
   | 'delta-explainer'
   | 'evidence-how-we-got'
-  | 'evidence-under-the-hood';
+  | 'evidence-under-the-hood'
+  // N (W5d w5-lq-requests-binding, flow-02): the approver's and the requester's
+  // request panels, and the non-approver's Request approval form.
+  | 'approval-requests'
+  | 'my-approval-requests'
+  | 'request-approval-form'
+  // W5d w5-followups-snooze: an eligible actor's Follow-ups tray, open.
+  | 'followups-tray'
+  | 'identity-menu'
+  | 'glossary-search';
 
 /** The reads `read-failed` fails, per route name (routes.ts). */
 export const READ_FAILED_ENDPOINTS: Readonly<Record<string, readonly string[]>> = {
@@ -95,6 +109,13 @@ export function prepareState(mockApi: MockApi, state: FixtureState, routeName?: 
     const endpoints = STALE_NOTE_ENDPOINTS[routeName ?? ''];
     if (!endpoints) throw new Error(`stale-note names no reads for route ${routeName ?? '(none)'}`);
     for (const endpoint of endpoints) mockApi.withHeaders('GET', endpoint, { 'X-Data-Last-Good-At': STALE_NOTE_LAST_GOOD_AT });
+  } else if (state === 'approval-requests') {
+    registerApprovalRequestStore(mockApi, { seed: batchView(REQUESTED_IDS, false) });
+  } else if (state === 'my-approval-requests' || state === 'request-approval-form') {
+    mockApi.register<SessionResponse>('GET', '/api/session', () => json<SessionResponse>(NON_APPROVER_SESSION));
+    registerApprovalRequestStore(mockApi, { seed: batchView(REQUESTED_IDS.slice(0, 1), true) });
+  } else if (state === 'followups-tray') {
+    registerFollowUps(mockApi);
   } else if (state === 'empty') {
     mockApi.register<LeadSummary[]>('GET', '/api/leads', () =>
       json<LeadSummary[]>([], { headers: { 'X-Total-Matching': '0', 'X-Returned-Rows': '0' } }),
@@ -131,6 +152,21 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
       await page.getByTestId('lead-triage-enter').click();
       await expect(page.getByTestId('triage-deck')).toBeVisible();
       await expect(page.locator('.triage__card .triage__name')).toBeFocused();
+      break;
+    case 'approval-requests':
+    case 'my-approval-requests': {
+      // The chip opens its panel over the one audit-free list read of the natural load.
+      await page.getByTestId('approval-requests-chip').filter({ visible: true }).click();
+      const panel = state === 'approval-requests' ? 'approval-requests-panel' : 'my-approval-requests-panel';
+      await expect(page.getByTestId(panel)).toBeVisible();
+      break;
+    }
+    case 'request-approval-form':
+      for (const borrowerId of REQUESTED_IDS.slice(1)) {
+        await page.getByTestId(`lead-select-${borrowerId}`).filter({ visible: true }).check();
+      }
+      await page.getByTestId('lead-bulk-request-approval').filter({ visible: true }).click();
+      await expect(page.getByTestId('request-approval-form').getByLabel('Reason for the request')).toBeFocused();
       break;
     case 'degraded':
       await expect(page.locator('.degraded-banner').first(), 'the warehouse-down banner is the degraded surface').toBeVisible();
@@ -176,6 +212,30 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
         await drawer.getByRole('tab', { name: 'Under the hood' }).click();
         await expect(drawer.locator('[data-testid="evidence-kpi-proof"] .proof-sql-card__sql')).toBeVisible();
       }
+      break;
+    }
+    case 'followups-tray': {
+      // The rail item appears for the eligible actor; opening the tray reads
+      // the audit-free list (never an audited read).
+      const trigger = page.locator('.rail button.rail__item', { hasText: 'Due' });
+      await trigger.click();
+      await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+      await expect(page.locator('.followups .followups__row').first()).toBeVisible();
+      break;
+    }
+    case 'identity-menu': {
+      // W5d: the account menu open on its first item (reads nothing).
+      await page.getByTestId('identity-menu-trigger').click();
+      const menu = page.getByRole('menu', { name: 'Account' });
+      await expect(menu).toBeVisible();
+      await expect(menu.getByRole('menuitemradio').first()).toBeFocused();
+      break;
+    }
+    case 'glossary-search': {
+      // W5d critic-07: the glossary filtered by ?q= (matching reads nothing).
+      await page.getByLabel('Search the glossary').fill('equity');
+      await expect(page).toHaveURL(/[?&]q=equity(&|#|$)/);
+      await expect(page.locator('.glossary-search__status')).toHaveText(/^\d+ terms? match/);
       break;
     }
   }

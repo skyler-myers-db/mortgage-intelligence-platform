@@ -172,6 +172,10 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     # one Lakebase transaction inside record_outcome.
     "record_assignment_outcome": ("store.record_outcome(",),
     "distribute_leads": ("store.distribute(",),
+    # W5d w5-sales-loop: one LEAD_UNASSIGN per released borrower, written in
+    # the release transaction (tests/unit/test_assignment_release.py).
+    "release_lead_assignment": ("store.release_assignment(",),
+    "release_distribution": ("store.release_distribution(",),
     "log_disposition": ("store.log_disposition(",),
     "record_lead_outcome": ("store.record_outcome(",),
     "property_loan_lookup": ("lookup_property_loan(",),
@@ -196,6 +200,11 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "genie_message_cancel": ("request_cancel(",),
     "genie_action": ("handle_genie_action(",),
     "genie_feedback": ("record_genie_feedback(",),
+    # genie-04 phase 2: a render-only scope sentence from closed codes.
+    "genie_context_scope": (
+        "AUDIT EXEMPT: renders a reviewed prompt from closed codes",
+        "render_genie_context_scope(",
+    ),
     "genie_refusal_report": ("record_genie_refusal_report(",),
     "run_growth_agent_workflow": ("_run_workflow(",),
     "run_custom_growth_agent_workflow": ("_run_workflow(",),
@@ -213,6 +222,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "create_growth_agent_monitor_notification_drafts": ("create_notification_drafts(",),
     # genie-09 part 1: one GROWTH_AGENT_MONITOR_SAVE row in the save transaction.
     "save_growth_agent_run_watchlist": ("save_run_as_watchlist(",),
+    "save_growth_agent_rate_watch": ("save_rate_watch(",),
     "log_event": ("store.write(",),
     # LEAD_EXPORT receipt: the whole route body is the audited write.
     "create_lead_export_receipt": ("write_lead_export_receipt(",),
@@ -220,6 +230,8 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "create_genie_answer_export_receipt": ("write_genie_answer_export_receipt(",),
     # AUDIT_EXPORT receipt (audit explorer): the whole route body is the audited write.
     "create_audit_export_receipt": ("write_audit_export_receipt(",),
+    # PRINT_EXPORT receipt (Export PDF): the whole route body is the audited write.
+    "create_print_receipt": ("write_print_receipt(",),
     "save_lead": ("store.save_lead(",),
     "delete_lead": ("store.delete_lead(",),
     "save_draft": ("store.save_draft(",),
@@ -237,6 +249,9 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     # OUTREACH_REVOKE is written with the revoke row in one transaction.
     "revoke_outreach": ("revoke_approval(",),
     "stage_activation": ("store.stage_borrower(", "_assert_activation_eligible("),
+    # wow-power-3 phase 2: LEAD_SNOOZE in the snooze's own Lakebase transaction,
+    # or exactly one LEAD_SNOOZE_REFUSED (tests/unit/test_lead_snooze.py).
+    "snooze_lead_followup": ("service.snooze(",),
 }
 
 

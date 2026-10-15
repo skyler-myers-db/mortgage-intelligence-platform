@@ -23,6 +23,7 @@ import { LeadTableStatusChips } from './LeadTableStatusChips';
 import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels';
 import { LEAD_TABLE_KEYS } from './LeadTable.keymap';
 import { useLeadApprovalActions, type CampaignBindingState } from './useLeadApprovalActions';
+import { requestDecisionBatchId, useLeadTableRequests } from './LeadTable.requests';
 import { useLeadSalesActions } from './useLeadSalesActions';
 import { useLeadTableKeyboardFlow } from './useLeadTableKeyboardFlow';
 import { useLeadTableFillHeight } from './useLeadTableFillHeight';
@@ -122,6 +123,9 @@ export function LeadTable({
   triage = null,
   paging = null,
   sortScope = 'loaded',
+  approvalRequests = null,
+  requestChips = null,
+  requestScopeRow = null,
 }: LeadTableProps) {
   // Budget trade (audit runtime-04 slice 3, cut 5 of the wave-4b lane): the
   // compiled shell measured +2.63 KiB br on the LeadTable chunk (35.81 ->
@@ -265,6 +269,15 @@ export function LeadTable({
     bulkRuns: BULK_REVIEW_CHUNK.current,
     // The view every decision declares (D-audit-reads-a); null outside the paged queue.
     leadViewId: paging?.viewId ?? null,
+    // A request-scoped queue (flow-02): every decision answers that request.
+    approvalRequestBatchId: requestDecisionBatchId(approvalRequests),
+  });
+  const requests = useLeadTableRequests({
+    approvalRequests,
+    approverGate,
+    campaignBound: hasCampaignBindingRequest,
+    dropFromSelection: approval.dropFromSelection,
+    tableWrapRef,
   });
   // The Triage deck (D-approval-flow-a2): `?mode=triage`, approvers only. A
   // definitive non-approver's check strips the mode; a loading one waits; a
@@ -343,6 +356,9 @@ export function LeadTable({
       setSamplesCoverAllOffers(false);
     },
     triage: triageFlowInput(triageCtl),
+    // states-07 item 1: the approval result is a shell toast (the Toaster speaks it once).
+    openRecentActivity: openConsoleRecentActivity,
+    raiseDecisionToast: (input) => REVIEW_CHUNK.current()?.raiseDecisionToast(input),
   });
   const { review } = flow;
   const openReview = review.review;
@@ -391,9 +407,6 @@ export function LeadTable({
   const online = useIsOnline();
   const ReviewInline = reviewModule?.LeadApproveReviewInline;
   const ReviewDialog = reviewModule?.LeadApproveReviewDialog;
-  // The result line follows an approve made through the review, so it ships
-  // in the review's chunk (loaded by then), not in the table's.
-  const DecisionToast = reviewModule?.LeadTableDecisionToast;
   const bulkModule = bulkChunk.module ?? BULK_REVIEW_CHUNK.current();
   const BulkReview = bulkModule?.LeadBulkApproveReview;
   const BulkRejectGate = bulkModule?.LeadBulkRejectGate;
@@ -441,6 +454,7 @@ export function LeadTable({
     onOpenDisposition: sales.openDisposition,
     onAssignmentUpdate: sales.applyLeadUpdate,
     onFocusRow: flow.focusRow,
+    onRequestApproval: requests.openRow,
   });
   // An Approve waiting on the review chunk (nothing drafted yet), or a
   // review whose chunk is still rendering in.
@@ -529,6 +543,7 @@ export function LeadTable({
         onExport={exportCsv}
         triageEntry={triageEntryNow}
         onEnterTriage={() => enterTriage(triageCtl, triageEntryNow, flow.cancelReview)}
+        requestChips={requestChips}
       />
       <LeadTableStatusChips
         growthAgentVerification={growthAgentVerification}
@@ -538,6 +553,8 @@ export function LeadTable({
         expandedBorrowerId={expanded}
         approverGate={approverGate}
         actorEmail={actorEmail}
+        requestPathOpen={requests.path !== null}
+        requestScopeRow={requestScopeRow}
       />
       {/* Keyed by the row: each form owns its fields, and a new row starts clean. */}
       {!triageOn && approval.pendingReject && (
@@ -549,6 +566,7 @@ export function LeadTable({
           onSubmit={(reasonCode, rationale) => void flow.submitReject(reasonCode, rationale)}
         />
       )}
+      {!triageOn && requests.rowForm}
       {!triageOn && sales.pendingDisposition && (
         <LeadDispositionPanel
           key={sales.pendingDisposition}
@@ -570,19 +588,6 @@ export function LeadTable({
           {exportState.message}
         </div>
       )}
-      {!triageOn && flow.toast && DecisionToast && (
-        <DecisionToast
-          toast={flow.toast}
-          hasReceipt={Boolean(approval.decisionReceipts[flow.toast.borrowerId]?.auditEventId)}
-          rowListed={leadsById.has(flow.toast.borrowerId)}
-          onViewReceipt={() => flow.toast && flow.viewReceipt(flow.toast.borrowerId)}
-          onReviewRecentActivity={() => {
-            openConsoleRecentActivity();
-            flow.dismissToast();
-          }}
-          onDismiss={flow.dismissToast}
-        />
-      )}
       {/* Keyboard users skip past the table's rows in one step (tables-03). */}
       <a
         href={`#${skipTargetId}`}
@@ -600,12 +605,6 @@ export function LeadTable({
       </a>
       <span className="sr-only" role="status" aria-live="polite" data-testid="lead-cursor-status">
         {flow.cursor.announcement}
-      </span>
-      {/* The approval result is spoken from a live region that is always
-          mounted (a region inserted already filled can go unannounced); the
-          visible toast carries the "View receipt" action. */}
-      <span className="sr-only" role="status" aria-live="polite" data-testid="lead-decision-status">
-        {flow.toast ? `Approved ${flow.toast.borrowerId}.` : ''}
       </span>
       {/* A bulk run's start, each quarter, a Stop and the result (tables-07). */}
       <span className="sr-only" role="status" aria-live="polite" data-testid="lead-bulk-run-status">
@@ -665,6 +664,9 @@ export function LeadTable({
             // From the flow state, not from whether the review chunk rendered.
             reviewBorrowerId={openReview?.borrowerId ?? flow.reviewLoading}
             rowCallbacks={rowCallbacks}
+            requestMarks={approvalRequests?.marks ?? null}
+            canRequestApproval={requests.path !== null}
+            requestBlockedReason={requests.path?.blockedReason ?? null}
           />
         </table>
       </div>
@@ -714,6 +716,12 @@ export function LeadTable({
           loadedCount={leads.length}
           totalMatching={totalMatching}
           campaignHandoff={campaignHandoff && BulkCampaignHandoff ? <BulkCampaignHandoff handoff={campaignHandoff} /> : null}
+          requestApproval={requests.path && {
+            blockedReason: requests.path.blockedReason,
+            onOpen: () => requests.openBulk(flow.eligibleSelectedIds()),
+          }}
+          requestGate={requests.bulkForm}
+          requestFormOpen={requests.bulkFormOpen}
           bulkRejectOpen={approval.bulkRejectOpen}
           onOpenBulkReject={flow.bulkRejectFromToolbar}
           bulkRejectBtnRef={approval.bulkRejectBtnRef}

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from backend.schemas.common import (
@@ -55,10 +56,14 @@ from backend.services.audit_metadata_policy import (
     _OUTREACH_DRAFT_ATTRIBUTIONS,
     _OUTREACH_GENERATION_MODES,
     _PUBLIC_COMPETITOR_LABEL_PATTERN,
+    _RESTORE_SKIPPED_REASONS,
     _RESULT_FILTER_NUMERIC_BOUNDS,
     _SALES_DISPOSITION_OUTCOMES,
     _SALES_STRATEGIES,
+    GOVERNED_TEXT_SCREEN_VALUES,
+    GOVERNED_TEXT_SURFACE_VALUES,
     LEDGER_SURFACES,
+    PRINT_SURFACES,
     AuditMetadataValueViolation,
     _metadata_values_for,
 )
@@ -128,6 +133,40 @@ def _assert_approval_request_values(metadata: dict[str, Any]) -> None:
                     raise AuditMetadataValueViolation(
                         field, "must contain only app-scoped public borrower ids"
                     ) from exc
+
+
+# Rate watch (audit wow-ai-2): the Rate Lever's step grid and directions.
+_RATE_WATCH_DIRECTIONS: frozenset[str] = frozenset({"at_or_below", "at_or_above"})
+
+
+def _is_two_decimal_percent(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return False
+    try:
+        exact = Decimal(str(value))
+    except InvalidOperation:
+        return False
+    return exact.is_finite() and Decimal(0) < exact < Decimal(25) and exact == exact.quantize(Decimal("0.01"))
+
+
+def _assert_rate_watch_values(metadata: dict[str, Any]) -> None:
+    """A saved rate watch: a lever step, a 2 dp par level and a closed direction."""
+
+    for field, value in _metadata_values_for(metadata, {"rate_step_bps"}):
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not -100 <= value <= 100
+            or value == 0
+            or value % 25 != 0
+        ):
+            raise AuditMetadataValueViolation(field, "must be a non-zero Rate Lever step")
+    for field, value in _metadata_values_for(metadata, {"watch_level_pct"}):
+        if value is not None and not _is_two_decimal_percent(value):
+            raise AuditMetadataValueViolation(field, "must be a 2-decimal percent inside 0..25")
+    for field, value in _metadata_values_for(metadata, {"watch_direction"}):
+        if value is not None and str(value) not in _RATE_WATCH_DIRECTIONS:
+            raise AuditMetadataValueViolation(field, "must be a governed watch direction")
 
 
 def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
@@ -413,6 +452,9 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"strategy"}):
         if value is not None and str(value) not in _SALES_STRATEGIES:
             raise AuditMetadataValueViolation(field, "must be a governed sales assignment strategy")
+    for field, value in _metadata_values_for(metadata, {"restore_skipped_reason"}):
+        if value is not None and str(value) not in _RESTORE_SKIPPED_REASONS:
+            raise AuditMetadataValueViolation(field, "must be a governed restore skip reason")
     for field, value in _metadata_values_for(metadata, {"outcome"}):
         if value is not None and str(value) not in _SALES_DISPOSITION_OUTCOMES:
             raise AuditMetadataValueViolation(field, "must be a governed call disposition outcome")
@@ -557,6 +599,7 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             raise AuditMetadataValueViolation(
                 field, "must be a governed growth-agent workflow title"
             )
+    _assert_rate_watch_values(metadata)
     for field, value in _metadata_values_for(metadata, {"run_status"}):
         if value is not None and str(value) not in _GROWTH_AGENT_RUN_STATUSES:
             raise AuditMetadataValueViolation(field, "must be a governed growth-agent run status")
@@ -716,6 +759,77 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             validate_row_count(value)
         except ValueError as exc:
             raise AuditMetadataValueViolation(field, str(exc)) from exc
+    # PRINT_EXPORT (W5d, responsive-08): a closed surface token and a bounded
+    # count; borrower_id and filter_fingerprint take their existing rules.
+    for field, value in _metadata_values_for(metadata, {"print_surface"}):
+        if value is not None and str(value) not in PRINT_SURFACES:
+            raise AuditMetadataValueViolation(field, "must be a governed print surface")
+    for field, value in _metadata_values_for(metadata, {"printed_row_count"}):
+        if value is None:
+            continue
+        try:
+            validate_row_count(value)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, str(exc)) from exc
     # VIEW_LEADS paging and the decisions / export that declare a view.
     for field, reason in validate_lead_view_values(metadata):
         raise AuditMetadataValueViolation(field, reason)
+    # GOVERNED_TEXT_REFUSED (owner ruling O1): two closed tokens and a count.
+    for field, value in _metadata_values_for(metadata, {"surface"}):
+        if value is not None and str(value) not in GOVERNED_TEXT_SURFACE_VALUES:
+            raise AuditMetadataValueViolation(field, "must be a governed decision surface")
+    for field, value in _metadata_values_for(metadata, {"screen"}):
+        if value is not None and str(value) not in GOVERNED_TEXT_SCREEN_VALUES:
+            raise AuditMetadataValueViolation(field, "must be a governed text screen")
+    for field, value in _metadata_values_for(metadata, {"item_count"}):
+        if value is None:
+            continue
+        try:
+            validate_row_count(value)
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, str(exc)) from exc
+    _assert_lead_snooze_values(metadata)
+
+
+# LEAD_SNOOZE / LEAD_SNOOZE_REFUSED (wow-power-3 phase 2): closed values only.
+_SNOOZE_DAYS: frozenset[int] = frozenset({1, 3, 7})
+_FOLLOWUP_KINDS: frozenset[str] = frozenset(
+    {"callback", "approval_follow_up", "requested_follow_up", "new_assignment"}
+)
+_CONTACT_BLOCK_REASONS: frozenset[str] = frozenset(
+    {
+        "consent_not_opt_in",
+        "frequency_cap",
+        "suppressed",
+        "eligibility_not_proven",
+        "contactability_not_configured",
+        "not_in_coverage",
+    }
+)
+
+
+def _assert_lead_snooze_values(metadata: dict[str, Any]) -> None:
+    for field, value in _metadata_values_for(metadata, {"snooze_days"}):
+        if value is not None and (isinstance(value, bool) or value not in _SNOOZE_DAYS):
+            raise AuditMetadataValueViolation(field, "must be 1, 3 or 7")
+    for field, value in _metadata_values_for(metadata, {"wake_clamped"}):
+        if value is not None and not isinstance(value, bool):
+            raise AuditMetadataValueViolation(field, "must be a boolean")
+    for field, value in _metadata_values_for(metadata, {"followup_kind"}):
+        if value is not None and str(value) not in _FOLLOWUP_KINDS:
+            raise AuditMetadataValueViolation(field, "must be a governed follow-up kind")
+    for field, value in _metadata_values_for(metadata, {"contact_block_reason"}):
+        if value is not None and str(value) not in _CONTACT_BLOCK_REASONS:
+            raise AuditMetadataValueViolation(field, "must be a governed contact block reason")
+    for field, value in _metadata_values_for(metadata, {"snooze_id"}):
+        if value is not None and not PUBLIC_UUID_PATTERN.fullmatch(str(value)):
+            raise AuditMetadataValueViolation(field, "must be an opaque UUID")
+    for field, value in _metadata_values_for(metadata, {"wake_at"}):
+        if value is None:
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, "must be an ISO timestamp") from exc
+        if parsed.tzinfo is None:
+            raise AuditMetadataValueViolation(field, "must carry a time zone")

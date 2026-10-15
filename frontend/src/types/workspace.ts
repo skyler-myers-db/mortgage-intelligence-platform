@@ -75,7 +75,10 @@ export interface SessionResponse {
    * from this zero-dependency call first. Absent from an older backend.
    */
   lender_name?: string | null;
-  /** The opt-in RUM gate, the same settings value /config/options returns. */
+  /**
+   * The RUM gate, the same settings value /config/options returns: on by
+   * default, off when the deploy sets MIP_RUM_ENABLED=0 (D-platform-process-d1).
+   */
   rum_enabled?: boolean | null;
   /**
    * The effective consented refusal-text capture switch (D-audit-reads-d):
@@ -91,6 +94,12 @@ export interface SessionResponse {
    * from an older backend. Never send it to telemetry.
    */
   actor_cache_key?: string | null;
+  /**
+   * Rotation aliases of actor_cache_key (D-identity-review-a4). The SPA never
+   * reads them from this body (lib/healthTrust takes aliases from /health
+   * only); declared for the fixtures and the SessionResponse wire pair.
+   */
+  actor_cache_key_aliases?: string[];
 }
 
 export interface WorkspaceMutationResult {

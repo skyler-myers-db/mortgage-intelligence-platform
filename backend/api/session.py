@@ -4,7 +4,11 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from backend.config.settings import settings
-from backend.services.actor_identity import actor_cache_key, forwarded_identity
+from backend.services.actor_identity import (
+    actor_cache_key,
+    actor_cache_key_aliases,
+    forwarded_identity,
+)
 from backend.services.identity_display import display_name_for
 from backend.services.rbac import (
     can_access_admin,
@@ -90,9 +94,10 @@ class SessionResponse(BaseModel):
     rum_enabled: bool | None = Field(
         default=None,
         description=(
-            "Whether the browser may install the opt-in RUM beacon "
+            "Whether the browser may install the RUM beacon "
             "(settings.mip_rum_enabled), the same value /api/config/options "
-            "returns (audit delivery-07)."
+            "returns (audit delivery-07). On by default; the deploy setting "
+            "MIP_RUM_ENABLED=0 turns it off (D-platform-process-d1)."
         ),
     )
     refusal_text_capture_enabled: bool = Field(
@@ -112,6 +117,15 @@ class SessionResponse(BaseModel):
             "carries, so the browser can seed its actor-scoped storage gate "
             "before the first health probe. Not reversible to the identity "
             "and never sent to telemetry. Null exactly when actor_email is."
+        ),
+    )
+    actor_cache_key_aliases: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The same actor's cache key under the previous rotation secret, "
+            "while one is configured (D-identity-review-a4); the health body "
+            "carries the same list, and the browser reads it from there only. "
+            "Empty whenever actor_email is null."
         ),
     )
 
@@ -161,4 +175,5 @@ async def get_session(request: Request) -> SessionResponse:
         rum_enabled=settings.mip_rum_enabled,
         refusal_text_capture_enabled=settings.mip_genie_refusal_text_capture == "enabled",
         actor_cache_key=actor_cache_key(identity) if identity else None,
+        actor_cache_key_aliases=actor_cache_key_aliases(identity) if identity else [],
     )

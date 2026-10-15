@@ -222,6 +222,11 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         # revoke superseded and the not-yet-worked assignment it released.
         "revoked_approval_id",
         "released_assignment_id",
+        # LEAD_UNASSIGN (states-07 item 1): the row a release handed the lead
+        # back on, its officer, or the closed reason it did not.
+        "restored_assignment_id",
+        "restored_to_email",
+        "restore_skipped_reason",
         # SAVE_QUEUE_VIEW / DELETE_QUEUE_VIEW (backend/api/workspace.py): the
         # server-issued view id only. The view's name and params never reach
         # the ledger; filter_fingerprint (above) is their SHA-256.
@@ -350,6 +355,11 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "tool_steps",
         "policy_checks",
         "governance_chips",
+        # Rate watch saved from the Rate Lever (audit wow-ai-2): the saved
+        # step, the server's watched par level and its direction only.
+        "rate_step_bps",
+        "watch_level_pct",
+        "watch_direction",
         # Offers
         "thresholds_applied",
         "decision_inputs",
@@ -425,6 +435,29 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "total_matching",
         "declared_lead_view_id",
         "pages_loaded",
+        # GOVERNED_TEXT_REFUSED (owner ruling O1,
+        # backend/services/governed_text_refusal.py): which decision surface
+        # refused, the screen's closed category and how many borrowers the
+        # attempt named. Never the text, a borrower id or the matched pattern.
+        "surface",
+        "screen",
+        "item_count",
+        # LEAD_SNOOZE / LEAD_SNOOZE_REFUSED (wow-power-3 phase 2): the snooze's
+        # opaque id, the chosen days, its wake time and whether the contact
+        # frequency cap moved it, the tray item's kind, and the closed reason
+        # a refused snooze was withheld for. Never text.
+        "snooze_id",
+        "snooze_days",
+        "wake_at",
+        "wake_clamped",
+        "followup_kind",
+        "contact_block_reason",
+        # PRINT_EXPORT (print receipt; backend/services/print_receipt.py):
+        # which surface printed and how many rows the page held. The
+        # borrower_id and filter_fingerprint keys above are reused; the
+        # filters and row contents never land.
+        "print_surface",
+        "printed_row_count",
     }
 )
 
@@ -517,6 +550,7 @@ _OPAQUE_ID_METADATA_KEYS: frozenset[str] = frozenset(
         "approval_request_batch_id",
         "revoked_approval_id",
         "released_assignment_id",
+        "restored_assignment_id",
         "read_audit_event_id",
     }
 )
@@ -524,10 +558,19 @@ _CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset(
     {"variant_name", "recommended_offer", "workspace_offer_code"}
 )
 _INTERNAL_STAFF_EMAIL_METADATA_KEYS: frozenset[str] = frozenset(
-    {"assigned_to_email", "assigned_by", "lo_email"}
+    {"assigned_to_email", "assigned_by", "lo_email", "restored_to_email"}
 )
 _INTERNAL_STAFF_EMAIL_LIST_METADATA_KEYS: frozenset[str] = frozenset({"lo_emails"})
 _SALES_STRATEGIES: frozenset[str] = frozenset({"manual", "round_robin", "score_balanced"})
+# Mirrors RestoreSkippedReason in backend/schemas/sales.py.
+_RESTORE_SKIPPED_REASONS: frozenset[str] = frozenset(
+    {
+        "previous_assignee_inactive",
+        "previous_assignee_out_of_scope",
+        "lead_not_approved",
+        "lead_not_contactable",
+    }
+)
 _ASSIGNMENT_LIFECYCLE_STATUSES: frozenset[str] = frozenset(
     {"assigned", "contact_drafted", "approved", "actioned", "outcome_recorded"}
 )
@@ -672,6 +715,7 @@ _GROWTH_AGENT_WORKFLOWS: frozenset[str] = frozenset(
         "branch_capacity_review",
         "source_freshness_sentinel",
         "custom_segment_watch",
+        "rate_trigger_watch",
     }
 )
 _GROWTH_AGENT_TITLES: frozenset[str] = frozenset(
@@ -684,6 +728,7 @@ _GROWTH_AGENT_TITLES: frozenset[str] = frozenset(
         "Branch Manager Capacity Review",
         "Source/Freshness Sentinel",
         "Custom Segment Workflow",
+        "Rate Trigger Watch",
     }
 )
 _GROWTH_AGENT_RUN_STATUSES: frozenset[str] = frozenset({"completed"})
@@ -756,3 +801,12 @@ class AuditMetadataValueViolation(RuntimeError):
 LEDGER_SURFACES: frozenset[str] = frozenset(
     {"events", "events_page", "rollups", "receipt", "refusal_reports", "facets", "count"}
 )
+
+# The closed GOVERNED_TEXT_REFUSED vocabularies (owner ruling O1): the decision
+# surface whose rationale the governed text screen refused, and the screen's
+# category. Pinned equal to governed_text_refusal's Literal tuples.
+GOVERNED_TEXT_SURFACE_VALUES: frozenset[str] = frozenset({"approve", "reject", "request", "revoke"})
+GOVERNED_TEXT_SCREEN_VALUES: frozenset[str] = frozenset({"pii", "fair_lending", "other"})
+# The closed ``print_surface`` vocabulary of a PRINT_EXPORT row (W5d,
+# responsive-08): the two pages Export PDF prints.
+PRINT_SURFACES: frozenset[str] = frozenset({"borrower_360", "audit_ledger"})

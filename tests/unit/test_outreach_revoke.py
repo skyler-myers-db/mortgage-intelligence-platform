@@ -153,16 +153,36 @@ def test_only_an_approver_may_revoke(client: TestClient, ledger: FakeApprovalLed
 
 
 @pytest.mark.parametrize(
-    "rationale",
-    ["Please ask Jane Smith to call them", "Prioritize borrowers who are not Hispanic", "   "],
-    ids=["name-shaped", "protected-class", "blank"],
+    ("rationale", "screen"),
+    [
+        # Schema 422s (the name-shape check and a blank) run before the route:
+        # unaudited under owner ruling O1.
+        ("Please ask Jane Smith to call them", None),
+        ("   ", None),
+        ("Prioritize borrowers who are not Hispanic", "fair_lending"),
+        ("Call them even if they opted out.", "pii"),
+    ],
+    ids=["name-shaped", "blank", "protected-class", "contact-directive"],
 )
 def test_a_refused_rationale_answers_422_before_any_read(
-    client: TestClient, ledger: FakeApprovalLedger, rationale: str
+    client: TestClient, ledger: FakeApprovalLedger, rationale: str, screen: str | None
 ) -> None:
     response = client.post(URL, json=_body(_approve(ledger), rationale=rationale), headers=APPROVER)
     assert response.status_code == 422
-    assert ledger.statements == []
+    assert len(ledger.approvals) == 1
+    if screen is None:
+        assert ledger.statements == [] and ledger.audits == []
+        return
+    # O1: one GOVERNED_TEXT_REFUSED row, written before any read.
+    assert response.json()["detail"] == "rationale failed the governed text policy"
+    assert ledger.statements == ["INSERT_AUDIT"]
+    [row] = ledger.audits
+    assert row["event_type"] == "GOVERNED_TEXT_REFUSED"
+    assert {key: row["metadata"][key] for key in ("surface", "screen", "item_count")} == {
+        "surface": "revoke", "screen": screen, "item_count": 1,
+    }
+    stored = json.dumps(row, default=str)
+    assert rationale not in stored and BORROWER not in stored
 
 
 def test_the_request_id_and_rationale_are_required(client: TestClient, ledger: FakeApprovalLedger) -> None:

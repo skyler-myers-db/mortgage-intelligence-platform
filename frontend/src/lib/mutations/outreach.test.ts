@@ -51,6 +51,7 @@ import {
   type RejectLeadVariables,
 } from './outreach';
 import { intentFingerprint, useIntentRequestIds } from './requestIds';
+import { queryKeys } from '../queryKeys';
 
 const BORROWER = 'B-AAAAAAAAAAAA1';
 const OTHER = 'B-AAAAAAAAAAAA2';
@@ -235,6 +236,45 @@ describe('invalidation', () => {
     expect(apiMocks.borrower).toHaveBeenCalledTimes(1);
   });
 
+  it('refetches the ACTIVE audit-free approval-request list after a decision (flow-02), and nothing audited', async () => {
+    const requestsKey = queryKeys.approvalRequests('open');
+    const borrowerKey = ['mip', 'borrower', BORROWER] as const;
+    const listRead = vi.fn().mockResolvedValue({ scope: 'open', batches: [] });
+    apiMocks.borrower.mockResolvedValue({ borrower_id: BORROWER });
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    let decide: { approve: ReturnType<typeof useApproveLead>; reject: ReturnType<typeof useRejectLead> } | null = null;
+    function Probe() {
+      useQuery({ queryKey: requestsKey, queryFn: listRead, staleTime: 60_000 }, client);
+      useQuery({ queryKey: borrowerKey, queryFn: () => apiMocks.borrower(BORROWER), staleTime: 0 }, client);
+      decide = { approve: useApproveLead(client), reject: useRejectLead(client) };
+      return null;
+    }
+    act(() => root.render(createElement(Probe)));
+    await flush();
+    expect(listRead).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await decide!.approve.mutateAsync(approveVars());
+    });
+    await flush();
+    expect(listRead).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      await decide!.reject.mutateAsync(rejectVars());
+    });
+    await flush();
+    expect(listRead).toHaveBeenCalledTimes(3);
+    // The audited borrower read is only marked stale, never refetched.
+    expect(apiMocks.borrower).toHaveBeenCalledTimes(1);
+    const requestInvalidations = invalidate.mock.calls.filter(
+      ([filters]) => JSON.stringify(filters?.queryKey) === JSON.stringify(['mip', 'approval-requests']),
+    );
+    expect(requestInvalidations).toHaveLength(2);
+    expect(requestInvalidations.every(([filters]) => filters?.refetchType === 'active')).toBe(true);
+    // invalidateOperationalQueries never names the list (it stays refetchType 'none').
+    const operational = invalidate.mock.calls.filter(([filters]) => filters?.refetchType === 'none');
+    expect(operational.some(([filters]) => JSON.stringify(filters?.queryKey).includes('approval-requests'))).toBe(false);
+  });
+
   it('skips invalidation for a suppressed bulk row and for approved=false', async () => {
     const invalidate = vi.spyOn(client, 'invalidateQueries');
     const latest = mountHook(() => useApproveLead(client));
@@ -322,6 +362,20 @@ describe('request bodies', () => {
     });
     expect(apiMocks.approve.mock.calls.map((call) => call[1].lead_view_id)).toEqual([VIEW, null]);
     expect(apiMocks.reject).toHaveBeenCalledWith(OTHER, expect.objectContaining({ lead_view_id: VIEW }));
+  });
+
+  it('carries the approval request a scoped decision answers, and null elsewhere (flow-02)', async () => {
+    const BATCH = '0f8fad5b-d9cb-469f-a165-70867728950e';
+    const approve = mountHook(() => useApproveLead(client));
+    const reject = mountHook(() => useRejectLead(client));
+    await act(async () => {
+      await approve().mutateAsync(approveVars({ approvalRequestBatchId: BATCH }));
+      await reject().mutateAsync(rejectVars({ approvalRequestBatchId: BATCH }));
+      await approve().mutateAsync(approveVars({ requestId: 'req-unscoped' }));
+      await reject().mutateAsync(rejectVars({ requestId: 'req-unscoped-r' }));
+    });
+    expect(apiMocks.approve.mock.calls.map((call) => call[1].approval_request_batch_id)).toEqual([BATCH, null]);
+    expect(apiMocks.reject.mock.calls.map((call) => call[1].approval_request_batch_id)).toEqual([BATCH, null]);
   });
 
   it('sends a bulk rejection row with its bulk_id and signal, and skips its invalidation', async () => {

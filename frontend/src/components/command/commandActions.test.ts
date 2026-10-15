@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   COMMAND_ACTIONS,
   commandActionsForAccess,
   commandVerbActions,
   filterCommandActions,
+  fuzzyWordPrefixScore,
   scoreAction,
   type CommandAction,
 } from './commandActions';
@@ -91,6 +92,43 @@ describe('command palette action registry', () => {
     expect(filterCommandActions('GENIE').length).toBeGreaterThan(0);
   });
 
+  it('fuzzy step: a run of word prefixes finds the page (shell-07 item 5)', () => {
+    expect(filterCommandActions('leaqu')[0]?.id).toBe('nav-leads');
+    expect(filterCommandActions('segint')[0]?.id).toBe('nav-segments');
+    expect(fuzzyWordPrefixScore('Lead Queue', 'leaqu')).toBe(20);
+    expect(fuzzyWordPrefixScore('Toggle Lead Queue', 'leaqu')).toBe(10);
+    expect(fuzzyWordPrefixScore('Lead Queue', 'lq')).toBe(0); // under three letters
+    expect(fuzzyWordPrefixScore('Lead Queue', 'leaxq')).toBe(0);
+  });
+
+  it('fuzzy step never outranks a keyword hit, so the synonyms resolve first', () => {
+    const fuzzy: CommandAction = {
+      id: 'f', label: 'Refund Fixer', hint: '', icon: 'flow', group: 'Navigate', keywords: [],
+      target: { kind: 'route', to: '/f' },
+    };
+    const keyword: CommandAction = { ...fuzzy, id: 'k', label: 'Queue', keywords: ['refix things'] };
+    expect(scoreAction(fuzzy, 'refi')).toBeGreaterThan(0);
+    expect(scoreAction(keyword, 'refi')).toBeGreaterThan(scoreAction(fuzzy, 'refi'));
+    expect(scoreAction(fuzzy, 'refi')).toBeLessThan(25);
+    expect(filterCommandActions('refi')[0]?.id).toBe('nav-segments');
+  });
+
+  it('masked ids and ZIPs never fuzzy-match', () => {
+    expect(fuzzyWordPrefixScore('Borrower 360', 'b-1eeen00s99gxc')).toBe(0);
+    expect(fuzzyWordPrefixScore('B-1EEEN00S99GXC', 'beee')).toBe(0);
+    expect(fuzzyWordPrefixScore('Zone 60611 Lead', '60611')).toBe(0);
+    expect(filterCommandActions('60611')).toEqual([]);
+  });
+
+  it('offers the shortcut sheet as a workspace command bound to `?` (shell-07 item 3)', () => {
+    const sheet = COMMAND_ACTIONS.find((action) => action.id === 'cmd-shortcuts');
+    expect(sheet).toEqual(expect.objectContaining({
+      label: 'Keyboard shortcuts',
+      target: { kind: 'command', command: 'open-shortcuts' },
+      shortcut: { bindingId: 'shortcut-sheet', chord: '?' },
+    }));
+  });
+
   it('keeps the Ask Genie route distinct from the floating panel command', () => {
     const genieLabels = COMMAND_ACTIONS
       .filter((action) => action.id === 'nav-genie' || action.id === 'cmd-genie')
@@ -111,10 +149,48 @@ describe('selection verbs (responsive-04: one number format)', () => {
     ...overrides,
   });
 
+  // The browser's default locale, forced to German for one test: a label
+  // built with `n.toLocaleString()` or `new Intl.NumberFormat()` would then
+  // read "1.234" (W5d review leftover: the old test never changed the locale).
+  const originalToLocaleString = Number.prototype.toLocaleString;
+  const OriginalNumberFormat = Intl.NumberFormat;
+  function forceDefaultLocale(locale: string): void {
+    Number.prototype.toLocaleString = function toLocaleString(
+      this: number,
+      locales?: Intl.LocalesArgument,
+      options?: Intl.NumberFormatOptions,
+    ): string {
+      return originalToLocaleString.call(this, locales ?? locale, options);
+    };
+    const Forced = function NumberFormat(locales?: Intl.LocalesArgument, options?: Intl.NumberFormatOptions) {
+      return new OriginalNumberFormat(locales ?? locale, options);
+    } as unknown as typeof Intl.NumberFormat;
+    Object.assign(Forced, { supportedLocalesOf: OriginalNumberFormat.supportedLocalesOf });
+    Intl.NumberFormat = Forced;
+  }
+  afterEach(() => {
+    Number.prototype.toLocaleString = originalToLocaleString;
+    Intl.NumberFormat = OriginalNumberFormat;
+  });
+
   it('groups the counts with en-US separators whatever the browser locale', () => {
+    forceDefaultLocale('de-DE');
+    // The stub really changes the default: an unpinned format reads German.
+    expect((1234).toLocaleString()).toBe('1.234');
+    expect(new Intl.NumberFormat().format(1234)).toBe('1.234');
     const labels = commandVerbActions(selection({ approveCount: 1234, rejectCount: 1234, selectedCount: 2500 }))
       .map((action) => action.label);
     expect(labels).toEqual(['Approve 1,234 selected…', 'Reject 1,234 selected…', 'Assign 2,500 selected…']);
+  });
+
+  it('wires the approve and reject verbs to the Lead Queue bulk binding (shell-07 item 3)', () => {
+    const shortcuts = commandVerbActions(selection({ approveCount: 2, rejectCount: 2, selectedCount: 2 }))
+      .map((action) => [action.id, action.shortcut]);
+    expect(shortcuts).toEqual([
+      ['verb-approve-selected', { bindingId: 'lead-table-bulk-approve', chord: 'Shift+A' }],
+      ['verb-reject-selected', { bindingId: 'lead-table-bulk-approve', chord: 'Shift+R' }],
+      ['verb-assign-selected', undefined],
+    ]);
   });
 
   it('offers Reject with the panel hint for one row and the gate hint for several (tables-07)', () => {

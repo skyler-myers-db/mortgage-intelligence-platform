@@ -60,3 +60,52 @@
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
+/* The book date never splits across two lines: at the 384px lever (Segments,
+   Console closed) Linux Chromium wrapped the meta line inside it ("Jul / 14"). */
+.rate-lever__date { white-space: nowrap; }
+
+/* deviation:watch-this-level (audit wow-ai-2): the cohort link and "Watch
+   this level" share one wrapping actions row; after a save the button gives
+   way to a role=status line with the server's level and the scheduler state,
+   and a link to Saved monitors. The prototype legend (Module 0 Prototype.html
+   ~L1860-1871) has no slider and no watch. Prototype tokens only. */
+.rate-lever__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-inline-size: 0;
+}
+/* deviation:lever-cohort-link-wraps (design_files/index.html:385, the
+   prototype's one-line `.btn`): the cohort link's label is a sentence
+   ("Open borrowers within 100 bps of the refi screen in the Lead Queue",
+   395px off Linux and about 403px on it), wider than the 384px lever on
+   Segments with the Console closed, where the nowrap label ran past the
+   lever's edge and its last glyph was clipped. Here alone it wraps inside
+   the actions row, as text, flush with the row's start; every other `.btn`
+   keeps its one-line label. */
+.rate-lever__actions > .rate-lever__cohort {
+  white-space: normal;
+  text-align: start;
+}
+.rate-lever__watching-line {
+  flex: 1 1 100%;
+  min-inline-size: 0;
+  line-height: var(--lh-snug);
+}
+.rate-lever__watching {
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+.rate-lever__watching-link {
+  color: var(--accent-ink);
+  text-decoration: underline;
+}
+.rate-lever__watching:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+.rate-lever__watch-error {
+  flex-basis: 100%;
+  color: var(--status-danger-ink);
+}

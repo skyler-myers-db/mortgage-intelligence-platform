@@ -113,6 +113,7 @@ def test_session_returns_only_admin_capability_from_same_group_rule(
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
         "refusal_text_capture_enabled": settings.mip_genie_refusal_text_capture == "enabled",
         "actor_cache_key": None,
+        "actor_cache_key_aliases": [],
     }
     assert denied.status_code == 200
     assert denied.json() == {
@@ -122,6 +123,7 @@ def test_session_returns_only_admin_capability_from_same_group_rule(
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
         "refusal_text_capture_enabled": settings.mip_genie_refusal_text_capture == "enabled",
         "actor_cache_key": None,
+        "actor_cache_key_aliases": [],
     }
     assert compat.status_code == 200
     assert compat.json() == admitted.json()
@@ -152,6 +154,7 @@ def test_session_and_admin_gate_share_email_allowlist_rule(
         "rum_enabled": settings.mip_rum_enabled,
         "refusal_text_capture_enabled": settings.mip_genie_refusal_text_capture == "enabled",
         "actor_cache_key": actor_cache_key("operator@example.com"),
+        "actor_cache_key_aliases": [],
     }
     assert admin.status_code == 200, admin.text
 
@@ -287,6 +290,7 @@ def test_admin_respects_trust_forwarded_headers_flag(
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
         "refusal_text_capture_enabled": settings.mip_genie_refusal_text_capture == "enabled",
         "actor_cache_key": None,
+        "actor_cache_key_aliases": [],
     }
 
     # Trust re-enabled -- same header admits again.
@@ -305,6 +309,7 @@ def test_admin_respects_trust_forwarded_headers_flag(
         "lender_name": settings.mip_lender_name, "rum_enabled": settings.mip_rum_enabled,
         "refusal_text_capture_enabled": settings.mip_genie_refusal_text_capture == "enabled",
         "actor_cache_key": None,
+        "actor_cache_key_aliases": [],
     }
 
 

@@ -621,7 +621,7 @@ describe('OfferOrchestrator route behavior', () => {
     expect(isReadOnlyText(reviewBody()!)).toBe(true);
 
     act(() => button('Save draft').click());
-    await waitUntil(() => container.textContent?.includes("Couldn't save draft: Lakebase unavailable") === true);
+    await waitUntil(() => container.textContent?.includes("Couldn't save draft.") === true && !container.textContent.includes('Lakebase unavailable'));
     expect(button('Save draft').disabled).toBe(false);
     expect(appMocks.savedDrafts[`${BORROWER_ID}::email`]).toBeUndefined();
 
@@ -750,7 +750,7 @@ describe('OfferOrchestrator route behavior', () => {
     {
       label: 'request error',
       arrange: () => apiMocks.reject.mockRejectedValue(new Error('Lakebase unavailable')),
-      message: "Couldn't record rejection: Lakebase unavailable",
+      message: "Couldn't record rejection.",
     },
   ])('keeps approval unchanged when reject returns a $label', async ({ arrange, message }) => {
     arrange();
@@ -822,7 +822,7 @@ describe('OfferOrchestrator route behavior', () => {
       .mockRejectedValueOnce(new Error('draft service failed'))
       .mockResolvedValue(DRAFT);
     mount();
-    await waitUntil(() => container.textContent?.includes('Offer draft unavailable: draft service failed') === true);
+    await waitUntil(() => container.textContent?.includes('Offer draft unavailable.') === true && !container.textContent.includes('draft service failed'));
     expect(container.textContent).toContain('Review and approve outreach');
 
     act(() => button('Retry draft').click());

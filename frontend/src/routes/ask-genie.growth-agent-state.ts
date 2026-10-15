@@ -100,6 +100,8 @@ export function useGrowthAgentWorkspace() {
   const [growthAgentError, setGrowthAgentError] = useState<string | null>(null);
   const [latestGrowthRun, setLatestGrowthRun] = useState<GrowthAgentRunResponse | null>(null);
   const [latestGrowthDrafts, setLatestGrowthDrafts] = useState<GrowthAgentNotificationDraft[]>([]);
+  // wow-ai-2: a rate watch drafts only when its level is reached; say so when it did not.
+  const [draftQuiet, setDraftQuiet] = useState(false);
   const [customSegments, setCustomSegments] = useState<GrowthAgentSegmentCode[]>(['itm', 'listed']);
   const [customMode, setCustomMode] = useState<GrowthAgentSegmentMode>('any');
   const [composePlan, setComposePlan] = useState<ComposePlanResponse | null>(null);
@@ -366,6 +368,7 @@ export function useGrowthAgentWorkspace() {
     beginRun('monitors', `Re-running ${monitor.name}`);
     setLatestGrowthRun(null);
     setLatestGrowthDrafts([]);
+    setDraftQuiet(false);
     setGrowthAgentError(null);
     return settle(
       () => api.rerunGrowthAgentMonitor(monitor.monitor_id, {}),
@@ -386,12 +389,16 @@ export function useGrowthAgentWorkspace() {
     beginRun('monitors', `Drafting Slack and Teams notes for ${monitor.name}`, 'draft');
     setLatestGrowthRun(null);
     setLatestGrowthDrafts([]);
+    setDraftQuiet(false);
     setGrowthAgentError(null);
     return settle(
       () => api.createGrowthAgentMonitorNotificationDrafts(monitor.monitor_id, {
         channels: ['slack', 'teams'],
       }),
-      (drafts) => setLatestGrowthDrafts(drafts),
+      (drafts) => {
+        setLatestGrowthDrafts(drafts);
+        setDraftQuiet(drafts.length === 0 && monitor.workflow_id === 'rate_trigger_watch');
+      },
       (err) => setGrowthAgentError(err instanceof Error ? err.message : 'Saved watchlist draft handoff failed.'),
       () => {
         setMonitorDraftPending(null);
@@ -433,6 +440,7 @@ export function useGrowthAgentWorkspace() {
     growthAgentError,
     latestGrowthRun,
     latestGrowthDrafts,
+    draftQuiet,
     customSegments,
     customMode,
     setCustomMode,

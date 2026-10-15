@@ -82,6 +82,18 @@ describe('OfferActionBar', () => {
     expect(routing!.compareDocumentPosition(gate!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it('wraps both routing selects in Field: pinned ids, labels, and the follow-up unit and hint (critic-04)', () => {
+    act(() => root.render(<OfferActionBar {...props()} />));
+    const assign = main.querySelector<HTMLSelectElement>('select#lo-assign');
+    const followUp = main.querySelector<HTMLSelectElement>('select#lo-followup');
+    expect(assign?.closest('.field')?.classList.contains('outreach-routing__field')).toBe(true);
+    expect(assign?.labels?.[0]?.textContent).toBe('Assign to loan officer');
+    expect(assign?.classList.contains('outreach-routing__select')).toBe(true);
+    expect(followUp?.labels?.[0]?.textContent).toBe('Follow-up reminder');
+    const described = (followUp?.getAttribute('aria-describedby') ?? '').split(' ').map((id) => document.getElementById(id)?.textContent);
+    expect(described).toEqual(['days', 'Nothing is sent to the borrower.']);
+  });
+
   it('shows a failed write and the reject rationale inside the bar, above the gate', () => {
     act(() => root.render(
       <OfferActionBar

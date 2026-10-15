@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react';
+import { useExitPresence } from '../../hooks/useExitRetained';
 import { formatCount } from '../../lib/formatters';
 import { Icon } from '../Icon';
+import { eventOptionIndex } from './eventOptionIndex';
 import { useFilterFacetCounts } from './FilterSelect.facets';
 import { useListboxNavigation } from './useListboxNavigation';
 import { menuSpaceStyle, useMenuPlacement } from './useMenuPlacement';
@@ -28,6 +30,13 @@ import { menuSpaceStyle, useMenuPlacement } from './useMenuPlacement';
  * label; the listbox is aria-busy while counts load, and a failed read shows
  * a dash with a polite "Counts unavailable". With no provider the DOM is
  * unchanged. deviation:filter-menu-facet-counts
+ *
+ * Exit (motion-01 item 2e, deviation:menu-exit-motion): a closed menu stays
+ * mounted, `is-closing`, aria-hidden and inert, until its fade ends
+ * (useExitPresence); its id and aria-activedescendant exist only while open.
+ * The listbox and options are `div`s with roles (a11y-05: a `ul`/`li` may
+ * not take interactive roles), and option clicks and hover are delegated to
+ * the listbox through each option's index.
  */
 
 interface FilterSelectProps {
@@ -41,7 +50,7 @@ export function FilterSelect({ label, value, options, onChange }: FilterSelectPr
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLUListElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const selectedIndex = Math.max(0, options.indexOf(value));
   const listbox = useListboxNavigation({
     count: options.length,
@@ -56,7 +65,10 @@ export function FilterSelect({ label, value, options, onChange }: FilterSelectPr
     labels: options,
     initialIndex: selectedIndex,
   });
-  const menuLayout = useMenuPlacement(open, btnRef, menuRef);
+  const { present, closing } = useExitPresence(open, menuRef);
+  // Measured while the menu is present, so a closing menu keeps its side
+  // and its cap through the exit instead of jumping below.
+  const menuLayout = useMenuPlacement(present, btnRef, menuRef);
   const counts = useFilterFacetCounts(label, open);
 
   const active = value !== options[0];
@@ -86,17 +98,29 @@ export function FilterSelect({ label, value, options, onChange }: FilterSelectPr
         <span className="filter__value">{value}</span>
         <Icon name="chevdown" size={11} />
       </button>
-      {open && (
-        <ul
+      {present && (
+        <div
           ref={menuRef}
-          id={listbox.listboxId}
-          className={`filter-menu${menuLayout.placement === 'above' ? ' filter-menu--up' : ''}`}
+          id={open ? listbox.listboxId : undefined}
+          className={`filter-menu${menuLayout.placement === 'above' ? ' filter-menu--up' : ''}${closing ? ' is-closing' : ''}`}
           style={menuSpaceStyle(menuLayout)}
           role="listbox"
           aria-label={label}
           aria-busy={counts?.status === 'loading' || undefined}
+          aria-hidden={closing || undefined}
+          inert={closing}
+          tabIndex={-1}
           // Keep DOM focus on the combobox while the pointer picks an option.
           onMouseDown={(event) => event.preventDefault()}
+          onMouseMove={(event) => {
+            const index = eventOptionIndex(event);
+            if (index !== null) listbox.setActiveIndex(index);
+          }}
+          onClick={(event) => {
+            const index = eventOptionIndex(event);
+            if (index !== null) pick(index);
+          }}
+          onKeyDown={listbox.onKeyDown}
         >
           {options.map((opt, i) => {
             const selected = opt === value;
@@ -105,25 +129,24 @@ export function FilterSelect({ label, value, options, onChange }: FilterSelectPr
             const count = counts?.status === 'ready' ? counts.countFor(opt) : null;
             const countText = count !== null ? formatCount(count) : counts?.status === 'error' ? '—' : null;
             return (
-              <li
+              <div
                 key={opt}
                 id={optionId}
                 role="option"
                 aria-selected={selected}
                 aria-describedby={count !== null ? `${optionId}-count` : undefined}
+                data-option-index={i}
                 className={`filter-menu__item${selected ? ' is-selected' : ''}${focused ? ' is-focused' : ''}`}
-                onMouseEnter={() => listbox.setActiveIndex(i)}
-                onClick={() => pick(i)}
               >
                 {opt}
                 {countText !== null && (
                   <span className="filter-menu__count" id={`${optionId}-count`} aria-hidden="true">{countText}</span>
                 )}
                 {selected && <Icon name="check" size={11} />}
-              </li>
+              </div>
             );
           })}
-        </ul>
+        </div>
       )}
       {open && counts && (
         <span className="sr-only" role="status">{counts.status === 'error' ? 'Counts unavailable' : ''}</span>

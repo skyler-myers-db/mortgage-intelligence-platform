@@ -56,6 +56,31 @@ derived from trusted answer rows or source filters and the user confirms the
 action. The destination route must preserve those filters, and the action must
 be audited.
 
+### Genie context scope (genie-04 phase 2)
+
+An empty Lead Queue can offer "Ask Genie" for a filter selection a client
+template cannot state (a segment intersection, a county, a ZIP, a governed
+city, a Competitor ref). The posture:
+
+- **Codes only.** The browser sends a closed `GenieContext`
+  (`backend/schemas/genie_context.py`, `extra='forbid'`): registry segment
+  codes, a USPS code, a five-digit county FIPS or ZIP, one `CITY~ST` key, a
+  `Competitor X` ref and assignee `me`. No field carries free text, a
+  borrower id or an email; the client builder refuses any other filter
+  (borrower ids, cohorts, criteria, bounds) and never sends an email
+  assignee. An assignee is never rendered: the answer names it as omitted.
+- **Render-only, audit-exempt.** `POST /api/v1/genie/context-scope` fills a
+  closed template from governed vocabularies and runs the same deterministic
+  prompt guards the phase-1 template battery runs, plus the Sales Ops router
+  and the request model, before it returns anything; a hit withholds the
+  prompt (`refused`). It reads no borrower data, calls no Genie and writes no
+  audit row; it runs only on an explicit click.
+- **The scope rides in the prompt of record.** The answer only PREFILLS the
+  composer; the user's own Ask submits it through the unchanged submit
+  battery, so the scope is inside the question text, its `question_hash` and
+  the `RUN_GENIE` / `genie.message_submitted` row. Nothing is added to the
+  submit body and no guard changed.
+
 ## Consented Genie refusal questions
 
 A lender who files "This was legitimate" on a governed Genie refusal may
@@ -125,6 +150,13 @@ is refused lead assign, disposition and outcome whatever its tier
 - **Outcome**: a roster `sales_manager` against an active assignment in
   their scope, or a roster `admin` (`require_manager_actor`,
   `require_outcome_scope`).
+- **Release (Undo)** (`POST /leads/{id}/assignment/release`, `POST
+  /sales/distribute/release`, W5d): the same manager scope as assign
+  (`require_manager_actor`, `require_assignee_in_scope`); a distribution is
+  undone only by the actor who ran it. A release never deletes: it sets
+  `released_at`, and hands the lead back to the officer it replaced only while
+  that officer is still an active loan officer in the actor's scope and the
+  lead is still approved and contactable.
 
 A roster `admin` is a sales-roster role, not the `MIP_ADMIN_*` Administrator
 tier; neither implies the other.
@@ -150,6 +182,7 @@ tier; neither implies the other.
 | KPI reproduce SQL (`GET /kpi-proof`) | yes | yes | yes | yes | yes |
 | `/admin/*` (rules 410, operations run, force-degraded, settings, asset metadata) | no | no | no | no | yes |
 | Lead Queue marketing override and `include_suppressed_for_analytics` | no | no | no | no | yes |
+| Follow-ups due tray and Snooze (`GET /sales/followups/summary`, `GET /sales/followups`, `POST /leads/{id}/snooze`) | no (the summary reads `eligible: false`; the list and the snooze answer 403) | yes (active roster member): the actor's own items only | yes: the actor's own items only | only if also on the sales roster | yes (an administrator is an approver): the actor's own items only |
 
 **Segregation of duties (D-audit-reads-c3).** The Auditor role exists so that
 the people who read the ledger are not the people whose actions it records.
@@ -185,19 +218,27 @@ the pull request that ships the behaviour, never earlier.
 | Offer open (the approval surface) | `DRAFT_OUTREACH` | once per `POST /outreach/draft` (`outreach.draft_outreach`) | committed in the same transaction as the draft row, fail-closed |
 | Approve / Reject (`outreach.approve_outreach` / `outreach.reject_outreach`) | `APPROVE` / `OUTREACH_REJECT` | once per decision; an approve without `review_mode` is refused with 422 `Reload the app to approve` before any read or write (required since W5c) | committed with the approvals row, fail-closed; carries `decision_inputs` and the draft proof, `approval_request_batch_id` when the decision answers an approval request, and the client-declared `declared_lead_view_id` when taken from the paged Lead Queue |
 | Revoke (`outreach_revoke.revoke_outreach`) | `OUTREACH_REVOKE` | once per revoke | committed with the revoke's approvals row, fail-closed; the approve row is never changed |
+| Assignment release, the Undo (`sales.release_lead_assignment`, `sales.release_distribution`) | `LEAD_UNASSIGN` (borrower entity; `borrower_id`, `assignment_id`, `assigned_to_email`, then `restored_assignment_id` + `restored_to_email` or a closed `restore_skipped_reason`) | once per released borrower; a replayed request id writes nothing and returns the original audit id | committed in the release transaction, fail-closed; the released row is kept (`released_at`), never deleted |
+| Distribution Board dry run (`POST /sales/distribute` with `dry_run`) | none | when the Board opens, or re-plans after a 409 | audit-free: writes no Lakebase row and no audit row; returns per-officer aggregates and a plan fingerprint, never a borrower id |
 | Queue-version poll (`workspace.read_queue_version`) | none | every poll | audit-free |
 | Console "My recent activity" (`audit.list_my_events`) | none | every read | audit-free |
 | Own decision receipts (`audit_receipt.read_decision_receipt`) | none | every read | audit-free |
 | Borrower decision history (`borrower_decisions.list_borrower_decisions`) | none | on a Borrower 360 or Offer mount; never polled or prefetched | audit-free |
-| Audit ledger (`audit.list_events`, `list_event_page`, `audit_rollups`, `audit_facets`, `count_events`) | `VIEW_AUDIT_LEDGER` (`ledger_surface` events / events_page / rollups / facets / count) | once per served read by an admin or auditor | background, fail-open (`audit.dropped`) |
+| Audit ledger (`audit.list_events`, `list_event_page`, `audit_rollups`, `audit_facets`, `count_events`) | `VIEW_AUDIT_LEDGER` (`ledger_surface` events / events_page / rollups / facets / count) | once per served read by an admin or auditor; the explorer reads its facets only on an explicit Action / Event type menu open (W5d), never on load, hover or focus; with 'Exclude my ledger reads' the read still writes its own row | background, fail-open (`audit.dropped`) |
+| Audit explorer page CSV (`audit.create_audit_export_receipt`) | `AUDIT_EXPORT` | once per download, before it starts (W5d): the CSV and its event-id list are hashed in the browser, the server recomputes the id digest, and only the recorded row releases the file; administrators only (the control is not rendered for an auditor) | synchronous, fail-closed (no download without the row; no key: 503 and no row) |
+| Export PDF, Borrower 360 and the audit explorer (`print_receipt.create_print_receipt`) | `PRINT_EXPORT` (`print_surface`, `printed_row_count`, and the masked `borrower_id` or the keyed `filter_fingerprint`) | once per Export PDF, before the print dialog opens (W5d); the page prints the DOM already rendered, nothing is re-read, and the receipt captions only the print it was recorded for (its dialog's `afterprint` drops it), so any other Ctrl/Cmd-P print, a reprint of the same page included, writes nothing and says it is unaudited | synchronous, fail-closed (no print without the row; a ledger print with no key: 503 and no row) |
 | Another actor's decision receipt (`audit_receipt.read_decision_receipt`) | `VIEW_AUDIT_LEDGER` (`receipt`, `read_audit_event_id`) | once per served cross-actor read | background, fail-open |
 | Refusal reports list (`refusal_reports_admin.list_refusal_reports`) | `VIEW_AUDIT_LEDGER` (`refusal_reports`) | once per served page by an admin or auditor, only on an explicit "Show refusal reports", a family filter, Load more or Retry; report metadata only, never question text | background, fail-open (`audit.dropped`) |
 | Refusal question read (`refusal_reports_admin.read_refusal_report_question`) | `VIEW_REFUSAL_REPORT_TEXT` (the report's 16-hex `question_hash` label and, when governed, its `refusal_reason` code) | once per served "Show question" click; never on hover, focus, prefetch or poll | synchronous, fail-closed: written before the text is returned, and a failed write answers 503 with no text |
 | Lead Queue filter counts (`leads.count_leads`, `leads.lead_facets`) | none | on an explicit menu open or omnibox count; never with `borrower_ids` or `approval_request_batch` (422) | audit-free |
 | Saved queue views list (`GET /workspace/saved-views`) | none | when the Saved views panel opens | audit-free (the actor's own views) |
 | Saved queue view save / delete (`/workspace/saved-views`) | `SAVE_QUEUE_VIEW` / `DELETE_QUEUE_VIEW` | once per save or soft delete | same Lakebase statement as the change, fail-closed |
-| Approval request list (`approval_requests.list_outreach_approval_requests`) | none | when a request panel opens | audit-free (Lakebase workflow state, no borrower attribute) |
+| Approval request list (`approval_requests.list_outreach_approval_requests`) | none | once per Lead Queue mount once the session is ready (approvers `open`, everyone else `mine`; the keep-alive slot keeps the mount), and an active refetch after a decision, a create or a withdraw (W5d); never polled, never on focus or reconnect | audit-free (Lakebase workflow state, no borrower attribute) |
 | Approval request create / withdraw (`/outreach/approval-requests`) | `APPROVAL_REQUESTED` / `APPROVAL_REQUEST_REFUSED` / `APPROVAL_REQUEST_WITHDRAWN` | every create attempt that reaches classification (a zero-eligible one writes `APPROVAL_REQUEST_REFUSED` with each id's reason and answers counts only); a withdraw that closed at least one borrower | same Lakebase transaction as the batch (or its own, for a refusal), fail-closed |
+| Governed-text refusal (approve, reject, approval-request create, revoke; `governed_text_refusal.refuse_ungoverned_text_audited`) | `GOVERNED_TEXT_REFUSED` | once per attempt whose rationale the governed text screen refuses (owner ruling O1, W5d), before any read; metadata `surface`, `screen` (`pii` / `fair_lending` / `other`) and `item_count` only: no text, no borrower or request id, no pattern | its own Lakebase transaction, fail-closed: the route answers the unchanged 422, or 503 when the row cannot be written (a refusal that was not recorded never answers as recorded) |
+| Follow-ups summary poll (`sales_followups.followups_summary`, W5d) | none | once a minute while the tab is visible, for a session that names an actor; Lakebase only (no warehouse statement), never resolves the audit store or bumps the identity-fallback counter | audit-free |
+| Follow-ups tray list (`sales_followups.followups_list`, W5d) | none | when the tray opens (stale after 60 s); the actor's own items, every row checked against gold; never polled, prefetched or read on hover | audit-free |
+| Snooze (`lead_snooze.snooze_lead_followup`, W5d) | `LEAD_SNOOZE` / `LEAD_SNOOZE_REFUSED` | once per snooze (borrower id, snooze id, days, wake time, whether the frequency cap moved it, the item kind); a refusal because the item may not be contacted writes exactly one `LEAD_SNOOZE_REFUSED` (borrower id and the closed reason code). `no_open_follow_up` writes nothing (routing, the O1 analog) | `LEAD_SNOOZE` in the same Lakebase transaction as the snooze row; the refusal in its own; fail-closed |
 | Triage deck (`/lead-queue?mode=triage`) | none on entry, card show, J / K / Skip, Back or Esc (the cards are the loaded rows); `DRAFT_OUTREACH` only on A; `APPROVE` with `review_mode` `triage` per Confirm; `OUTREACH_REJECT` per card rejected | per explicit action | as the draft / approve / reject rows above |
 | Lead Queue CSV export (`leads_export.create_lead_export_receipt`) | `LEAD_EXPORT` | once per download, before it starts; carries `exported_row_count` and, when the client knew it, `matching_row_count` (how many borrowers matched: a loaded-rows export states it is partial; a count below the file's row count is refused with 422 and nothing written), and from the paged Lead Queue the client-declared `declared_lead_view_id` and `pages_loaded` (1-10) | synchronous, fail-closed (no download without the row) |
 | Home Delta Explainer (`home.home_summary_attribution`) | none | only while an evidence drawer for a supported "since your last login" measure is open on Overview; never on hover, prefetch or poll | audit-free (gold and ref aggregates) |
@@ -206,9 +247,36 @@ the pull request that ships the behaviour, never earlier.
 | Genie completion-job status poll (`genie.genie_message_status`) | none | every ~1.5 s poll of the caller's own job; while a deep job runs it may carry verified sections as Partial research | audit-free; `genie.run_query` RUN_GENIE stays at the job's single `recorded_at` commit point and no action token is issued for a revealed section |
 | Genie verified section revealed (the job's sections writer, `genie_completion_sections`) | `GENIE_SECTION_REVEALED` | once per section, before it can be served (ruling R1): job and turn ids, plan index, row count, SQL hash, verification verdict; never question text or a row value | same Lakebase transaction as the `sections_json` write, fail-closed: a failed audit write withholds the section until the final answer; a turn that later fails, stops or expires keeps the rows |
 | Admin SSE ingress probe (`admin_sse_probe.sse_probe`, `admin_sse_probe.sse_probe_outcome`) | none | admin-only transport diagnostic (delivery-04) | audit-free; reads no UC or Lakebase data |
+| Genie context scope (`genie_context_routes.genie_context_scope`) | none | only on an explicit "Ask Genie" click in an empty Lead Queue; never on render, hover, focus or prefetch | audit-free (renders a reviewed prompt from closed codes; the scope is audited later inside the submitted question's `question_hash`) |
 | KPI proof (`kpi_proof.get_kpi_proof`) | none | when a KPI's evidence drawer opens; reads nothing | audit-free (fixed governed SQL text, gold and semantics relations only) |
 | Evidence drawer freshness (`asset_freshness.get_asset_freshness`) | none | when an evidence drawer opens on a mapped asset; never on hover, prefetch or poll | audit-free (one `gold.source_readiness` row; schema internals stay on the admin metadata read) |
 | Admin Field performance (`admin_field_performance.field_performance`) | none | when Administration opens, and on an explicit Refresh or 7/28-day change; never polled or refetched on focus | audit-free (admin-only; day-grain browser RUM aggregates, no borrower data) |
+
+Governed-text refusals (owner ruling O1, built in W5d `w5-lq-requests-binding`).
+A rationale or justification the governed text screen (PII or fair-lending)
+refuses on approve, reject, approval-request create or revoke is a
+fair-lending oversight signal, so the attempt is recorded without the text.
+What stays unaudited, by the same ruling: the approver 409 on a request
+(role routing; nothing is classified or refused on policy grounds), every
+schema 422 (malformed input, including the request and revoke schemas'
+name-shape check, which runs before the route), the size cap, the
+write-time value-policy branches and the NB-1 fixed 422 for an audit payload
+the ledger's PII scan refuses. A refused bulk rationale writes one row per
+bulk attempt: the Lead Queue's bulk run stops after its first refused row.
+
+Approval-request justification: a decision rationale (governed), owner
+ruling O3 (built in W5d `w5-lq-requests-binding`). The "Reason for the
+request" a requester writes is sent as `rationale` and stored in
+`approval_request_batches.note` (the column keeps its name). It is
+batch-scoped: one justification for the whole request, never a note on a
+borrower and never shown as one. It takes the same governed text screen and
+the same 500-character cap as the approve and reject rationales, is
+recorded on the `APPROVAL_REQUESTED` row, and is shown only as "Reason for
+the request" (the approver's panel and scope row, the requester's My
+requests). It is outside the 2026-09-30 borrower-notes ruling. The Lead
+Queue reads the request list once per mount and after a decision, a create
+or a withdraw (audit-free Lakebase workflow state; never polled), and the
+request path never calls `/outreach/draft`.
 
 A `VIEW_AUDIT_LEDGER` row (`backend/services/audit_ledger_reads.py`) carries
 only the closed `ledger_surface`, `has_cursor`, `returned_row_count`, the
@@ -235,12 +303,41 @@ fingerprint; a plain value is never stored. Two digests stay unkeyed on
 purpose: `audit_pagination.audit_filter_fingerprint` inside the
 HMAC-authenticated ledger cursor (only ledger readers receive it), and
 `LEAD_EXPORT`'s fingerprint, which an auditor recomputes from the CSV's
-`# filters=` line. Residual (recorded 2026-10-01, owner in the 2026-09-21
-UI/UX audit report, 12.3): the explorer's
-'Page CSV' downloads the loaded page without `POST /audit/export-receipt`, so
-no `AUDIT_EXPORT` row precedes it (the read that loaded that page wrote its
-own `VIEW_AUDIT_LEDGER` row); W5d `w5-print-glossary-sales-manager` wires the receipt and
-settles whether auditors may export.
+`# filters=` line. The 2026-10-01 residual (the explorer's 'Page CSV'
+downloading without `POST /audit/export-receipt`) is closed by W5d
+`w5-print-glossary-sales-manager`: the download waits for its `AUDIT_EXPORT`
+row, as in the table above.
+
+### Printing and the explorer's exclusion (W5d)
+
+- **`PRINT_EXPORT`** (`backend/services/print_receipt.py`) is a server-owned
+  event type: `POST /api/audit/event` refuses it with 400. The row stores only
+  `print_surface` (`borrower_360` or `audit_ledger`), `printed_row_count`, and
+  the masked `borrower_id` (a dossier) or the KEYED `filter_fingerprint` of
+  the explorer query (a ledger page). Never the filters, an id list or row
+  contents. A metadata policy refusal answers a fixed 422; Lakebase down or a
+  missing fingerprint key answers 503, and no row is written.
+- **Who may print and export (ruling, W5d, delegated owner).** Every
+  authenticated Borrower 360 reader may print the dossier, and every ledger
+  reader (administrator or read-only auditor) may print the explorer page
+  already rendered to them: one borrower, or one page, per `PRINT_EXPORT`
+  receipt, never a re-read. The explorer CSV, the machine-readable bulk
+  path, stays administrator-only: the control is hidden for an auditor and
+  `POST /audit/export-receipt` stays `AdminDep`.
+- **What never reaches paper.** `print.css` hides the workspace chrome, the
+  overlays, the toasts and `#refusal-reports`: consented, expiring,
+  access-logged refusal question text never prints. Print surfaces never
+  carry the lender mark (report 12.4 #9): the provenance block names the
+  lender as text only, beside the actor, the local time and the receipt id.
+- **'Exclude my ledger reads'** (`exclude_own_ledger_reads=true` on
+  `/audit/events`, `/audit/events/page` and `/audit/count`) drops the
+  `VIEW_AUDIT_LEDGER` rows written by the server-resolved reader, through one
+  NULL-safe clause the page and the count share
+  (`backend/services/audit_filter_sql.py`); a query value can never name
+  whose reads are hidden. It is a per-viewer control, default off and never
+  in the URL, so a shared link never silently means 'hide the recipient's
+  reads'. The flag joins the cursor fingerprint only when on, so a cursor
+  never crosses it and default cursors are unchanged.
 
 **Ruling (wave 5, D-audit-reads-b, audit delivery-08):** the Offer Orchestrator
 keeps its own audited reads and no `VIEW_OFFER` event exists. `RECOMMEND_OFFER`
@@ -329,3 +426,45 @@ panel, which shows a p75 only for a cell with at least 20 samples.
 stored, day-grain aggregates, admin-only access and a one-line opt-out. The
 lender decides its own employee-notice obligations. The per-actor record of
 product use is `mip_app.action_audit`, which RUM never joins or references.
+
+## Follow-ups due and snooze (W5d)
+
+D-shell-deviations-a and wow-power-3. The rail's Follow-ups due item and its
+tray show a staff member their OWN due work: callbacks from their call
+dispositions, approval follow-ups on leads assigned to them, follow-ups they
+requested on someone else's lead, and new assignments. Ownership follows the
+active assignment; `approvals.assigned_to_email` never surfaces an item.
+
+**Contactability.** Every tray row, of every kind, is checked against gold
+with the Lead Queue's own pair (`GoldEligibilityService.evaluate` AND
+`eligible_sql_predicate` on the same row); a disagreement fails closed. A
+withheld row is shown only under "No longer contactable" with a closed reason
+chip and a "Do not call" line, never with a Snooze action. An id the current
+gold population no longer carries is withheld as `not_in_coverage`, never
+dropped. The response never carries a raw suppression reason, consent status,
+do-not-contact flag, name, contact field, disposition text, offer code or
+email.
+
+**A snooze never hides a suppression.** A snooze of an item withheld for any
+reason other than the contact frequency cap is refused (409, one
+`LEAD_SNOOZE_REFUSED` row). A capped item wakes no earlier than the cap
+lifts. The cap counts as the reason only when nothing else blocks the row:
+`GoldEligibilityService.evaluate` reports the cap before a suppression,
+do-not-contact or a missing marketing-eligible proof, so a recently touched
+borrower who also carries one of those reads `suppressed` or
+`eligibility_not_proven` in the tray and the snooze, never `frequency_cap`
+and never a "do not call before" date. A cap never masks a suppression. A
+snoozed item that later becomes withheld for any other reason re-surfaces
+under "No longer contactable" whatever the snooze says; one withheld only by
+the cap stays hidden until its snooze wakes, and then shows under "No longer
+contactable" with its cap date.
+
+**Inventory: `mip_app.lead_snoozes`.** Actor email (the staff member's own,
+as the edge forwarded it, lower-cased), the masked borrower id, the snooze,
+wake and woken times, whether the frequency cap moved the wake, the closing
+reason (`timer`, `signal`, `superseded`), the request id and the
+`LEAD_SNOOZE` audit row's id. No text. One open row per actor and borrower;
+a row is closed once and never deleted: the App role holds `SELECT`,
+`INSERT` and `UPDATE` only. The lifecycle sync's wake step (the bundle job
+runs as the deployer, which owns `mip_app`) writes only `woken_at` and
+`wake_reason`, under a `woken_at IS NULL` guard, and writes no audit row.

@@ -42,6 +42,7 @@ import { EvidenceChip } from '../Primitives';
 import { scenarioView, type RateScenarioIndex } from './rateScenario.logic';
 import { nearestStep, recountAt } from './rateScenario.recount';
 import { largestChanges, scenarioCohortLink, scenarioHeadline, scenarioValueText } from './rateScenario.copy';
+import RateWatchControl from './RateWatchControl';
 import './RateScenarioControl.css';
 
 export default function RateScenarioControl({ rate }: { rate: RateLeverInputs }) {
@@ -146,16 +147,23 @@ function RateLever({ index, step, onStepChange, onStepCommit, scope, stateName }
         <EvidenceChip source={DRAWER_SOURCES.rateSensitivity}>{DRAWER_SOURCES.rateSensitivity.short}</EvidenceChip>
       </p>
       {largest && <p className="rate-lever__meta" data-testid="rate-lever-largest">{largest}</p>}
-      {cohort && (
-        <Link to={cohort.href} className="btn btn--ghost btn--sm">
-          {cohort.label}
-        </Link>
+      {(cohort || (step !== 0 && rate !== null)) && (
+        // deviation:watch-this-level: the cohort link and "Watch this level" share one actions row.
+        <div className="rate-lever__actions">
+          {cohort && (
+            // deviation:lever-cohort-link-wraps: the sentence label wraps inside the actions row.
+            <Link to={cohort.href} className="btn btn--ghost btn--sm rate-lever__cohort">
+              {cohort.label}
+            </Link>
+          )}
+          {step !== 0 && rate !== null && <RateWatchControl key={step} step={step} levelPct={rate} />}
+        </div>
       )}
       <div className="rate-lever__meta">
         Refi screen {typeof minSpread === 'number' ? bpsLabel(minSpread) : '—'} spread,{' '}
         {typeof minEquity === 'number' ? `${formatCount(minEquity)}%` : '—'} equity · today&apos;s par{' '}
         {typeof response.base_market_rate_pct === 'number' ? ratePct(response.base_market_rate_pct) : '—'} · book as
-        of {formatDate(response.provenance.book_as_of ?? null)}
+        of <span className="rate-lever__date">{formatDate(response.provenance.book_as_of ?? null)}</span>
       </div>
     </div>
   );

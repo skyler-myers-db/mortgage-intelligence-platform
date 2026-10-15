@@ -1,0 +1,55 @@
+/* ============================================================
+   Audit explorer controls (W5d, tables-10;
+   deviation:audit-explorer-controls). Lazy: shipped with the
+   audit-ledger route chunk, never in the initial stylesheet. The
+   prototype's audit log is a plain list (design_files/Module 0
+   Prototype.html:2198); these are app blocks beside the existing
+   .filter-row / .chip-row primitives.
+   ============================================================ */
+
+/* The header (deviation:audit-explorer-controls, deviation:print-export):
+   five items beside the title block, Copy table context, the exclusion
+   toggle, Page CSV, Export PDF and the status chip, 676-714px at macOS to
+   Linux text widths. The prototype header is one unwrapped row
+   (design_files/index.html:362). Its shared .chip-row shrank and wrapped
+   first, so with the Console open at 1440x900 (943px inside the header) it
+   left the status chip alone, start-aligned, under Copy table context (W5d
+   VRT, audit-ledger--*--console). Here the actions stay ONE group ending at
+   the header's edge:
+     - the title block gives way first, down to a 3 x --sp-16 (192px) basis,
+       wrapping its subtitle (two lines at 1440x900 with the Console open);
+     - a header narrower than that basis plus the group moves the whole
+       group onto its own line under the title, still end-aligned (1280x720
+       with the Console open);
+     - only a group wider than the header wraps inside, end-aligned too. */
+.surface__hdr--audit {
+  flex-wrap: wrap;
+  row-gap: var(--sp-2);
+}
+.surface__hdr--audit > :first-child {
+  flex: 1 1 calc(var(--sp-16) * 3);
+  min-width: 0;
+}
+.surface__hdr--audit > .chip-row {
+  justify-content: flex-end;
+  margin-inline-start: auto;
+}
+/* The <= 640px column header (13-route-composition.css) starts its actions
+   at the left edge on every route; so does this one. */
+@container main (max-width: 640px) {
+  .surface__hdr--audit > .chip-row {
+    justify-content: flex-start;
+    margin-inline-start: 0;
+  }
+}
+
+/* 'Exclude my ledger reads' in the header chip row. */
+.audit-exclude-own {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  white-space: nowrap;
+  cursor: pointer;
+}

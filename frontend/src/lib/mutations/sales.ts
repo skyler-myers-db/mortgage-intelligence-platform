@@ -5,11 +5,18 @@
  * the Lead Queue's own-write store sees them and never reads them as
  * someone else's change).
  *
- * The distribution strategy is honest. The store allocates round-robin in
- * request order for every strategy (backend/services/sales_state_writes.py),
- * so the queue sends 'manual' for one loan officer and 'round_robin' for two
- * or more. 'score_balanced' is never sent: it used to be, and the audit row
- * recorded a balancing that never ran.
+ * The distribution strategy is honest. The store allocates 'manual' and
+ * 'round_robin' round-robin in request order (backend/services/
+ * sales_state_writes.py), so the queue sends 'manual' for one loan officer
+ * and 'round_robin' for two or more. 'score_balanced' is sent only by the
+ * Distribution Board (lib/mutations/salesLoop), whose commit runs the greedy
+ * capacity/region fill it previewed; the queue used to send it and the audit
+ * row recorded a balancing that never ran.
+ *
+ * The Undo releases (states-07 item 1) and the Board's commit run in
+ * lib/mutations/salesLoop under the keys below, so the own-write store and
+ * `salesBusy` see them like any other sales write; the Board's dry run is
+ * keyed OUTSIDE ['mip','sales'] because it writes nothing.
  *
  * Same write posture as outreach.ts: networkMode 'always' (a write started
  * offline fails at once instead of firing on reconnect), retry false, one
@@ -37,6 +44,8 @@ export const salesMutationKeys = {
   disposition: ['mip', 'sales', 'disposition'] as const,
   lifecycle: ['mip', 'sales', 'lifecycle'] as const,
   outcome: ['mip', 'sales', 'outcome'] as const,
+  release: ['mip', 'sales', 'release'] as const,
+  releaseDistribution: ['mip', 'sales', 'release-distribution'] as const,
 };
 
 /** The strategy a distribution to these loan officers really runs. */

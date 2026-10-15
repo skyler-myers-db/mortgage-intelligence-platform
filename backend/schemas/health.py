@@ -32,6 +32,15 @@ class HealthResponse(BaseModel):
     )
     circuit_breakers: dict[str, str] = Field(default_factory=dict)
     actor_cache_key: str | None = None
+    actor_cache_key_aliases: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The same actor's cache key under the previous rotation secret, "
+            "while one is configured (D-identity-review-a4): an open tab holding "
+            "it re-stamps instead of resetting, and requests bound to it are "
+            "still accepted. Empty outside a rotation. Authenticated body only."
+        ),
+    )
     # Validated workspace origin for Catalog Explorer deep links from cited
     # UC assets. Authenticated health body only.
     workspace_host: str | None = None

@@ -42,6 +42,14 @@ const CASES: Array<[string, unknown, Partial<ApiErrorDescription>]> = [
   ['a server 409', apiError({ path: '/api/leads', status: 409 }), {
     kind: 'conflict', action: 'reload', title: 'Ranked borrowers changed since this page loaded',
   }],
+  ['a 409 with any other reason', apiError({ path: '/api/leads', status: 409, reason: 'something_else' }), {
+    kind: 'conflict', action: 'reload',
+  }],
+  // D-identity-review-a4: never 'reload', which would re-request as the new actor.
+  ['a 409 actor_changed', apiError({ path: '/api/leads', status: 409, reason: 'actor_changed' }), {
+    kind: 'actor_changed', tone: 'warning', action: 'none',
+    title: 'The signed-in user changed', body: 'Nothing was recorded. This tab resets for the new user.',
+  }],
   ['a 429', apiError({ path: '/api/leads', status: 429, retryable: true, reason: 'rate_limited', retryAfterMs: 12_000 }), {
     kind: 'rate_limited', action: 'retry', title: 'Too many requests right now', body: 'The app is pacing requests.', retryAfterMs: 12_000,
   }],

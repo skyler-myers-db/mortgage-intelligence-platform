@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  APPROVAL_REQUEST_BATCH_PARAM,
   LEAD_BOUND_FILTER_KEYS,
   LEAD_BOUND_LIMITS,
   approvalFilterDisplayValue,
@@ -12,6 +13,7 @@ import {
   ORIGINATION_CHANNEL_FILTER_OPTIONS,
   outreachFilterDisplayValue,
   leadQueueShareParams,
+  parseApprovalRequestBatch,
   parseLeadTablePlace,
   parseLeadTableView,
   parsePortfolioCriteria,
@@ -364,5 +366,59 @@ describe('the Triage deck deep link (D-approval-flow-a2)', () => {
     expect(searchWithoutTriageMode('?state=IL&mode=triage&row=B-0000000000001')).toBe('?state=IL&row=B-0000000000001');
     expect(searchWithoutTriageMode('?mode=triage')).toBe('');
     expect(searchWithoutTriageMode('?state=IL')).toBe('?state=IL');
+  });
+});
+
+describe('the approval-request scope param (flow-02 / shell-06, D-approval-flow-c)', () => {
+  const ID = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  const sp = (query: string) => new URLSearchParams(query);
+
+  it('parses a lower-cased 8-4-4-4-12 hex UUID and nothing else', () => {
+    expect(APPROVAL_REQUEST_BATCH_PARAM).toBe('approval_request_batch');
+    expect(parseApprovalRequestBatch(sp(`approval_request_batch=${ID}`))).toBe(ID);
+    expect(parseApprovalRequestBatch(sp(`approval_request_batch=${ID.toUpperCase()}`))).toBe(ID);
+    expect(parseApprovalRequestBatch(sp(`approval_request_batch=%20${ID}%20`))).toBe(ID);
+    for (const bad of ['', 'abc', `${ID}0`, ID.replace(/-/g, ''), `{${ID}}`, 'zf8fad5b-d9cb-469f-a165-70867728950e']) {
+      expect(parseApprovalRequestBatch(sp(`approval_request_batch=${bad}`))).toBeUndefined();
+    }
+    expect(parseApprovalRequestBatch(sp('state=IL'))).toBeUndefined();
+  });
+
+  it('is unset beside every param the server refuses with it, and beside a campaign binding (v1 is unbound only)', () => {
+    const conflicts = [
+      'cohort_id=c1', 'borrower_ids=B-0123456789ABC', 'campaign_id=c1', 'variant_name=A',
+      'growth_agent_run_id=r', 'actionable_total=3', 'actionable_cohort_fingerprint=f',
+      'actionable_snapshot_id=s', 'tool_result_hash=h', 'growth_handoff=g',
+    ];
+    for (const conflict of conflicts) {
+      expect(parseApprovalRequestBatch(sp(`approval_request_batch=${ID}&${conflict}`))).toBeUndefined();
+    }
+    // An empty conflicting param is no conflict.
+    expect(parseApprovalRequestBatch(sp(`approval_request_batch=${ID}&cohort_id=`))).toBe(ID);
+    expect(parseApprovalRequestBatch(sp(`approval_request_batch=${ID}&state=IL&sort=equity`))).toBe(ID);
+  });
+
+  it('Copy link and saved views omit it as "the approval request" (known, never unrecognized)', () => {
+    const share = leadQueueShareParams(sp(`state=IL&approval_request_batch=${ID}`), { stateFilter: 'IL' });
+    expect(share.search).toBe('?state=IL');
+    expect(share.omitted).toEqual(['the approval request']);
+  });
+
+  it('enables Clear all, which drops it with every other filter', () => {
+    const scoped = sp(`approval_request_batch=${ID}&view=sales-ops&sort=equity&dir=asc`);
+    expect(hasLeadQueueFilters(scoped)).toBe(true);
+    expect(searchParamsCleared(scoped).get(APPROVAL_REQUEST_BATCH_PARAM)).toBeNull();
+  });
+
+  it('reaches the leads request and its query key only while scoped', () => {
+    const refs = ['All'];
+    const key = (query: string) => JSON.stringify(
+      leadsQuery('lead-queue', leadsRequestFromSearchParams(sp(query), refs, null), ['']).queryKey,
+    );
+    expect(leadsRequestFromSearchParams(sp(`approval_request_batch=${ID}`), refs, null).opts?.approvalRequestBatch).toBe(ID);
+    expect(leadsRequestFromSearchParams(sp('state=IL'), refs, null).opts?.approvalRequestBatch).toBeUndefined();
+    expect(key(`approval_request_batch=${ID}`)).not.toBe(key(''));
+    expect(key(`approval_request_batch=${ID}`)).toContain(ID);
+    expect(key(`approval_request_batch=${ID}&cohort_id=c1`)).toBe(key('cohort_id=c1'));
   });
 });

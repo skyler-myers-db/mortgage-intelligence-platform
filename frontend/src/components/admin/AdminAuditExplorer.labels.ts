@@ -50,11 +50,13 @@ export const AUDIT_EVENT_TYPE_LABELS: Readonly<Record<string, string>> = {
   LEAD_EXPORT: 'Lead list exported',
   LEAD_OUTCOME: 'Lead outcome recorded',
   LEAD_OUTCOME_RECORDED: 'Loan officer outcome recorded',
+  LEAD_UNASSIGN: 'Lead assignment released',
   OUTREACH_APPROVE: 'Outreach approved (legacy code)',
   OUTREACH_HOLD: 'Outreach held',
   OUTREACH_REJECT: 'Outreach rejected',
   OUTREACH_REVOKE: 'Outreach approval revoked',
   PORTFOLIO_CREATE: 'Portfolio created',
+  PRINT_EXPORT: 'Print requested',
   PROPERTY_LOOKUP: 'Property looked up',
   RECOMMEND_OFFER: 'Offer recommended',
   REJECT: 'Outreach rejected (legacy code)',
@@ -70,6 +72,11 @@ export const AUDIT_EVENT_TYPE_LABELS: Readonly<Record<string, string>> = {
   VIEW_LEADS: 'Lead queue reviewed',
   // D-audit-reads-d: an administrator or auditor read one consented question.
   VIEW_REFUSAL_REPORT_TEXT: 'Refusal question read',
+  // Owner ruling O1: a decision rationale the governed text screen refused.
+  GOVERNED_TEXT_REFUSED: 'Decision reason refused',
+  // wow-power-3 phase 2: a Follow-ups tray snooze and its refusal.
+  LEAD_SNOOZE: 'Follow-up snoozed',
+  LEAD_SNOOZE_REFUSED: 'Follow-up snooze refused',
 };
 
 /** The no-op option of the event-type filter. */

@@ -186,7 +186,7 @@ test.describe('figures verified against the rows (genie-10 phase 1)', () => {
       await askOnRoute(page);
       const drawer = await openProof(page);
 
-      await expect(drawer).toContainText('3 of 3 verified against the returned rows');
+      await expect(drawer).toContainText('3 of 3 answer figures verified');
       await expect(drawer.locator('.genie-claims__item')).toHaveCount(3);
       await expect(drawer.locator('.genie-claims__item').nth(2)).toContainText('A threshold the returned values satisfy');
       await expectAxeClean(page, { key: { route: 'ask-genie', state: 'genie-proof-claims' }, theme, known: KNOWN_VIOLATIONS, include: 'dialog.genie-proof-drawer' });
@@ -200,7 +200,7 @@ test.describe('figures verified against the rows (genie-10 phase 1)', () => {
     const drawer = await openProof(page);
 
     await expect(drawer.locator('.genie-proof__metric .eyebrow', { hasText: 'Figures' })).toHaveCount(0);
-    await expect(drawer).not.toContainText('verified against the returned rows');
+    await expect(drawer).not.toContainText('answer figure');
   });
 });
 

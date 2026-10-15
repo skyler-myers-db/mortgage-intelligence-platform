@@ -24,6 +24,9 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:  # cycle-free: genie_answers imports only pydantic/stdlib
     from backend.services.genie_answers import GenieMessageResponse
+    from backend.services.repositories.databricks_borrower_contactability import (
+        BorrowerContactabilityRow,
+    )
 
 from backend.schemas.analytics import (
     AnalyticsFilters,
@@ -360,6 +363,18 @@ class BorrowerRepository(Protocol):
 
     def search(self, query: str, limit: int = 10) -> list[LeadSummary]:
         """Find borrowers by public borrower id, ZIP, city, or masked property ref."""
+        ...
+
+    def contactability(
+        self, borrower_ids: Sequence[str]
+    ) -> dict[str, BorrowerContactabilityRow]:
+        """Gold contactability for a batch of ids (the Follow-ups tray, D-shell-deviations-a).
+
+        One statement per 250 normalised ids. Each row carries the seven gold
+        transport columns and the warehouse's own ``eligible_sql_predicate``
+        verdict, so a caller can AND ``GoldEligibilityService.evaluate`` with
+        the set-level predicate. Ids absent from gold are absent from the map.
+        """
         ...
 
 

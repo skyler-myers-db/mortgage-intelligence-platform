@@ -37,6 +37,21 @@ Sample line:
 {"ts":"2026-04-22T19:18:41.332Z","level":"INFO","logger":"mip.databricks_sql","event":"warehouse_query_end","correlation_id":"a1b2c3d4e5f6789012345678abcdef01","dependency":"warehouse","duration_ms":142.73,"outcome":"ok","statement_hash":"4f8b2e1c9a7d3e55","rows_returned":127}
 ```
 
+### Actor binding refusals (D-identity-review-a4)
+
+| Logger              | Event                    | Level   | Fields                         |
+|---------------------|--------------------------|---------|--------------------------------|
+| `mip.actor_binding` | `actor_binding_mismatch` | WARNING | `method`, `correlation_id` only |
+
+One line per request refused with `409 actor_changed` (section 5): a browser
+tab that was opened for one signed-in user sent a request after the cookie
+changed. The line never carries the path (it can hold a masked borrower or a
+conversation id), the `X-MIP-Actor-Key` value, the identity or a key; join it
+to the same request's `http_request` line (templated path, status 409) by
+`correlation_id`. A burst after a shared-machine sign-in swap is expected; a
+steady rate from one replica can mean two replicas run different
+`MIP_GENIE_ACTION_SECRET_CURRENT` values (`docs/disaster-recovery.md`).
+
 ## 2. Where the logs go by default
 
 On Databricks Apps the runtime captures the container's stdout and
@@ -401,6 +416,22 @@ the App service principal cannot read the warehouse, every probe logs
 a good read re-arms it) and falls back to `SELECT 1`; that restores the
 pre-2026-09 behaviour (including the accidental keep-warm), so check for that
 event after the first deploy.
+
+The request binding (D-identity-review-a4, W5d) adds one refusal, never
+sent for `/api[/v1]/health`, `/api[/v1]/session` or `/api[/v1]/telemetry/*`:
+a request whose `X-MIP-Actor-Key` names neither the forwarded identity's
+`actor_cache_key` nor one of its `actor_cache_key_aliases` (or carries the
+header twice, or arrives with no forwarded identity) answers
+
+```json
+{"detail": "The signed-in user changed in this browser. Nothing was recorded.", "reason": "actor_changed"}
+```
+
+with status `409` and `application/json`, before routing: nothing ran,
+nothing was written, no audit row. A request without the header is never
+refused by it. The authenticated and admin health bodies carry
+`actor_cache_key_aliases` (a list, `[]` outside a rotation); the anonymous
+body stays exactly `{status, mode}`.
 
 ## 6. Server-Timing (per-request attribution)
 
@@ -869,6 +900,34 @@ app's work and record only, and the copy keeps "Genie may keep the question
 as context". `tests/unit/test_genie_cancel.py` fails on an SDK that adds a
 cancel method, which forces the decision then.
 
+### Genie context scope (genie-04 phase 2, W5d)
+
+`POST /api/v1/genie/context-scope` renders a closed Lead Queue context
+(codes only: segment codes, a USPS code, a county FIPS, a ZIP, a governed
+`CITY~ST` key, a Competitor ref, assignee `me`) into a reviewed question for
+the Genie composer, or a closed `withheld` reason. It is render-only and
+click-only: no Genie call, no Lakebase, no warehouse query of its own, no
+audit row (`AUDIT EXEMPT` in `tests/unit/test_audit_store_contract.py`). Its
+guard battery reads the shared governed place dimension the startup warm
+resolves, as every submit does; the first guard call after that
+dimension's 900 s TTL lapses (this route's or any other) refreshes it from
+gold inline, and a failed refresh degrades fail-closed
+(`genie_place_dimension_unavailable`). The city slot reads only the
+published city set and is withheld as `place_unavailable` while it is
+empty.
+Backpressure: the `default` bucket and no dependency slot, so a click never
+spends the 30/min Genie budget. RUM reports it under its canonical route
+template (segments `genie` and `context-scope`). Logger
+`backend.services.genie_context_scope`:
+
+| Event | Level | Fields | Meaning |
+| --- | --- | --- | --- |
+| `genie_context_scope_withheld` | WARNING for `refused`, INFO otherwise | `outcome` withheld, `reason` (`refused`, `excluded_value`, `place_unavailable`, `unsupported_combination`), `slots` (the filled slot NAMES), `matcher` (only for `refused`: the guard's name) | No prompt was offered. Never the prompt, never a slot value. A `refused` render means a reviewed template tripped a guard on live vocabulary (most likely a new governed city): treat it as a template bug, capture the slot names, and fix it with a wording change or a committed exclusion, never a guard change. |
+
+The conversation-switch signal and the link-cache sync between the floating
+panel and `/ask-genie/<id>` (lib/genieConversationSwitch) are client-only
+and emit no telemetry.
+
 ### Admin SSE ingress probe (delivery-04)
 
 `GET /api/v1/admin/sse-probe` (admin only, schema-hidden, audit exempt)
@@ -1010,6 +1069,31 @@ the governed text policy unchanged):
 | `APPROVAL_REQUEST_REFUSED` | `outreach.approval_request_refused` / `approval_request` (the client request key) | `borrower_ids` (every id asked for), `requested_count` 0, `skipped_count`, `skipped_by_reason`, `rationale` | its own transaction, after the attempt rolled back; the 409 answers counts per reason only |
 | `APPROVAL_REQUEST_WITHDRAWN` | `outreach.approval_request_withdraw` / `approval_request_batch` | `approval_request_batch_id`, `withdrawn_count`, `borrower_ids` (withdrawn) | only when the withdraw closed at least one borrower |
 | `OUTREACH_REVOKE` | `outreach.revoke` / `approval` (the revoke row) | `approval_id`, `revoked_approval_id`, `borrower_id`, `offer_code`, `channel`, `rationale`, `request_id`, `released_assignment_id` (when a not-yet-worked assignment was released) | in the same transaction as the revoke's approvals row |
+| `GOVERNED_TEXT_REFUSED` | `outreach.governed_text_refused` / `governed_text_refusal` (a fresh UUID) | `surface` (`approve`, `reject`, `request`, `revoke`), `screen` (`pii`, `fair_lending`, `other`), `item_count` (the borrowers the attempt named); never the text, a borrower id or the matched pattern | its own transaction, when the governed text screen refuses a rationale, before any read; the route still answers the same 422 (owner ruling O1, W5d) |
+| `LEAD_UNASSIGN` (W5d) | `lead.unassign` / `borrower` (the borrower id) | `borrower_id`, `assignment_id` (the released row), `assigned_to_email` (its officer), then `restored_assignment_id` + `restored_to_email` when the lead was handed back, or a closed `restore_skipped_reason` (`previous_assignee_inactive`, `previous_assignee_out_of_scope`, `lead_not_approved`, `lead_not_contactable`); no free text | one per released borrower, in the release transaction (`POST /leads/{id}/assignment/release`, `POST /sales/distribute/release`); a replayed request id writes none |
+
+Owner ruling O1 (W5d `w5-lq-requests-binding`): a rationale the governed
+text screen refuses on approve, reject, approval-request create or revoke
+writes one `GOVERNED_TEXT_REFUSED` row (`backend/services/governed_text_refusal.py`)
+and answers the unchanged 422 `<field> failed the governed text policy`.
+If that row cannot be written the route answers 503 (fail-closed): a refusal
+that was not recorded never answers as though it were. Unaudited, by the same
+ruling: the approver 409 (role routing), every schema 422 (including the
+request and revoke schemas' name-shape check, which runs before the route),
+the size cap, the write-time value-policy branches and the NB-1 fixed 422.
+The structured log line `governed_text_refused` carries `surface` and
+`screen` only. Refusals by surface and screen in the last 30 days:
+
+```sql
+SELECT metadata->>'surface' AS surface,
+       metadata->>'screen' AS screen,
+       count(*) AS refusals
+FROM mip_app.action_audit
+WHERE event_type = 'GOVERNED_TEXT_REFUSED'
+  AND event_at >= now() - interval '30 days'
+GROUP BY 1, 2
+ORDER BY 3 DESC;
+```
 
 Value rules: `approval_request_batch_id`, `revoked_approval_id` and
 `released_assignment_id` are opaque ids; the three counts are bounded row
@@ -1087,6 +1171,25 @@ WHERE event_type = 'OUTREACH_REVOKE'
 ORDER BY event_at DESC;
 ```
 
+Client (W5d `w5-lq-requests-binding`). The Lead Queue reads
+`GET /api/v1/outreach/approval-requests` once per mount, only once the
+session is ready (approvers `scope=open`, anyone else `scope=mine`; the
+keep-alive slot keeps the mount across a dossier and Back), and refetches it
+only while mounted, after an approve or reject (single, Triage, a bulk run
+that recorded at least one row, or the Offer), a create or a withdraw
+(`invalidateApprovalRequests`, refetchType `active`). No polling, no focus or
+reconnect refetch, no retry: a failed read shows "Approval requests
+unavailable" with a Retry and no row marks. Expect at most a handful of these
+audit-free GETs per Lead Queue session; a steady stream means a regression.
+A create is one `POST` whose `request_key` is one UUID per intent (the sorted
+ids and the reason), replayed on a retry of the same content; a request-key
+409 retires that key, so the next send of the same content is a new request
+under a new key. The request path never calls `/outreach/draft`. Every approve and reject taken in a
+request-scoped queue (`?approval_request_batch=`) carries
+`approval_request_batch_id`; an unscoped body is unchanged. A session that
+ends during a create or a withdraw reads as a lost change in the session
+dialog.
+
 ## 12. Browser RUM day aggregates and the Field performance panel
 
 <!-- w5-field-vitals, W5c. Appended as section 12; the integrator renumbers. -->
@@ -1128,8 +1231,11 @@ Log lines (counts only, never a value, route or identifier):
 | `rum_rollup_flush_failed` | WARNING | `rows`, `events`, `dropped` | the upsert failed; that batch is dropped, never retried |
 | `field_performance_read_capped` | WARNING | `rows`, `limit`, `days` | a panel read reached the 100,000-row read cap, so that window's summary is partial; day-grain keys stay far below it, so this points at a vocabulary or ring defect |
 
-An open Lakebase breaker skips the flush silently and keeps the aggregates
-(bounded at 1000 keys) for the next minute.
+Unless the shared Lakebase breaker is CLOSED the flush is skipped silently
+(it never takes a half-open probe) and keeps the aggregates (bounded at 1000
+keys) for the next minute. The write goes through the bare Lakebase client,
+so a RUM-only failure never records on, or opens, that breaker (W5d item
+3b).
 
 **Panel.** Administration -> Field performance
 (`GET /api/v1/admin/field-performance?days=7|28`, admin-only, audit-free)
@@ -1148,3 +1254,79 @@ WHERE day >= current_date - 6 AND sample_count > 0
 GROUP BY day, metric
 ORDER BY day DESC, metric;
 ```
+
+## 13. Follow-ups due and snooze wake
+
+D-shell-deviations-a / wow-power-3 (W5d w5-followups-snooze).
+
+**The rail poll.** `GET /api/v1/sales/followups/summary` runs once a minute
+while the tab is visible (no background or focus refetch, no retry) for a
+session that names an actor and is not expired. It reads Lakebase only (the
+shared open-item CTE in `backend/services/sales_followups_sql.py`; never a
+warehouse statement), is cached per actor for 30 s under the opaque actor
+cache key (never the email), writes no audit row and takes the
+`lakebase-read` backpressure class (the default read bucket and a Lakebase
+slot, like `/api/v1/genie/message/status`). RUM never reports it
+(`EXCLUDED_TEMPLATES`). `GET /api/v1/admin/field-performance` takes the same
+class (it reads `mip_app.rum_daily` only).
+
+**The tray.** `GET /api/v1/sales/followups?window_days=7` is read when the
+tray opens. It stays a `warehouse-read`: after the Lakebase read it makes ONE
+batched gold contactability read. A warehouse failure answers 503 (never
+unverified rows); a Lakebase failure answers 503 too. It writes no audit row.
+
+**Snooze.** `POST /api/v1/leads/{id}/snooze` is a mutation on a Lakebase slot
+and writes `LEAD_SNOOZE` (or one `LEAD_SNOOZE_REFUSED` when the item may not
+be contacted). A snooze ends at its wake time on its own: reads compare
+`wake_at` to `now()`, so a timer wake needs no job.
+
+**Wake on signal.** A new event-dated listing, refinance, payoff or sale
+(dated after the snooze's UTC day) wakes a snooze early, but only when a
+lifecycle sync runs: an approval's background sync, Administration's 'Sync
+workflow state', deploy step 9 and a run of the bundle job, whose schedule
+ships PAUSED. The tray hint says "at the next workflow sync" for that reason.
+One accepted imprecision: a gold `listing` row whose MLS status date and
+listing date are both missing is dated by the source update time, else the
+ingest time (`sql/transformations/gold_evidence_events.sql`, `listing_rows`),
+and gold carries no column that marks the fallback. Such a listing can wake a
+snooze at the first refresh after the snooze day although the listing is not
+new. It is still a current active listing (a purchase signal), so the wake
+accepts it rather than read silver from the probe, which stays gold-only.
+
+| Event | Level | Fields | Meaning |
+| --- | --- | --- | --- |
+| `followups_list_read` | INFO | `items`, `withheld`, `hidden`, `truncated` | one tray read; `hidden` rows were snoozed and callable (or only capped) |
+| `followups_list_failed` / `followups_summary_failed` | WARNING | `dependency`, `exc_type` | the read answered 503 |
+| `lead_snooze_written` | INFO | `snooze_days`, `wake_clamped` | one snooze landed |
+| `lead_snooze_refused` | INFO | `reason` (`no_open_follow_up`, `not_contactable`, `snooze_in_progress`), `contact_block_reason` | a snooze was refused (409) |
+| `lead_snooze_wake` | INFO | `open`, `signal`, `timer` | the App path's wake step after the lifecycle MERGE |
+| `lead_snooze_wake_failed` | WARNING | `exc_type` | the wake step failed; the sync's result and status are unchanged |
+
+The bundle job prints `[sync-lifecycle] snooze wake: open=N signal=N timer=N`
+or `[sync-lifecycle] snooze wake skipped: <ExcType>` (stderr) and keeps its
+exit code. No line carries a borrower id, an email or a message.
+
+**The App never attempts DDL on gold (NB-f).** The App's own lifecycle sync
+paths only probe `information_schema` for the funnel snapshot's newer
+columns: a missing column skips the funnel snapshot write with one
+`funnel_snapshot_schema_deferred` warning (a refused probe:
+`funnel_snapshot_schema_denied`), and the deploy identity (deploy step 9,
+the bundle job) adds the column.
+
+## 14. Growth Agent watchlists (W5d)
+
+Audit 2026-09-21 `wow-ai-2`, `genie-09` part 4 and `flow-08` slice 2. None of
+these events carries an actor, a request or monitor id, a rate, a level, a
+borrower id or any message text.
+
+| Event | Level | Fields | Meaning |
+| --- | --- | --- | --- |
+| `growth_agent_rate_watch_saved` | INFO; WARNING when `failed` | `outcome` saved / replayed / refused_409 / failed | "Watch this level" (`POST /api/v1/growth-agent/rate-watch`). `saved` upserted the watch and wrote one `GROWTH_AGENT_MONITOR_SAVE` row; `replayed` found an identical active watch and wrote nothing; `refused_409` means the grid was not built or the step left today's grid (nothing written); `failed` is a Lakebase failure (a 503, nothing written). |
+| `growth_agent_rate_trigger_quiet` | INFO | — | A rate watch's run did not reach its level (or had no weekly print), so the draft step wrote no draft and no audit row. Expected on most scheduled passes; the watch is due again by cadence only. |
+| `growth_agent_plan_progress_unavailable` | WARNING, once per execution | `exc_type` | A composed-plan progress write failed (typically the App promoted ahead of `mip_lakebase_migrate`). Progress writes stop for that execution; the run, its trace and its audit rows are unaffected, and the browser keeps its indeterminate "Running…". |
+| `growth_agent_plan_progress_read_failed` | WARNING | `exc_type` | `GET /api/v1/growth-agent/agent/plan/progress` could not read the progress row and answered `not_started`. |
+
+The saved-watchlist scheduler state (`growth_agent_scheduler_state_unavailable`,
+`exc_type` only) is served stale-while-refresh: a stale answer is returned at
+once while at most one background refresh runs, so a slow Jobs API never holds
+Home or Saved monitors; the event fires once per failed lookup.

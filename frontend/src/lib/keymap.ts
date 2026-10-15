@@ -28,20 +28,27 @@
  */
 import { singleKeyShortcutsEnabled } from './keymapPreference';
 
-export type KeymapScope = 'global' | 'lead-queue' | 'triage';
+export type KeymapScope = 'global' | 'lead-queue' | 'queue-pager' | 'triage';
 
 /** Higher wins when two active bindings share a chord. */
 const SCOPE_SPECIFICITY: Readonly<Record<KeymapScope, number>> = {
   global: 0,
   'lead-queue': 1,
+  // The Borrower 360 / Offer pager's J / K (wow-power-4); never on the same
+  // page as the ranked-borrower table.
+  'queue-pager': 1,
   triage: 2,
 };
 
 export const KEYMAP_SCOPE_LABELS: Readonly<Record<KeymapScope, string>> = {
   global: 'Everywhere',
   'lead-queue': 'Ranked borrowers table',
+  'queue-pager': 'Queue pager',
   triage: 'Triage deck',
 };
+
+/** The `?` sheet's order: page-specific scopes first, then what works everywhere. Lists every scope. */
+export const KEYMAP_SCOPE_ORDER: readonly KeymapScope[] = ['triage', 'lead-queue', 'queue-pager', 'global'];
 
 /** Window event the `?` sheet also opens on (the identity menu dispatches it). */
 export const OPEN_SHORTCUTS_EVENT = 'mip:open-shortcuts';

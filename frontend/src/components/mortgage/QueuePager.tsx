@@ -1,8 +1,11 @@
 import { useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { Icon } from '../Icon';
+import { Tooltip } from '../ui/Tooltip';
 import { formatCount } from '../../lib/formatters';
-import type { QueueContext } from '../../lib/queueContext';
+import { ariaKeyShortcuts } from '../../lib/keymap';
+import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
+import { MAX_QUEUE_CONTEXT_IDS, type QueueContext } from '../../lib/queueContext';
 import { queuePosition } from '../../lib/queuePosition';
 import { usePagerHotkeys } from '../../lib/usePagerHotkeys';
 import './QueuePager.css';
@@ -44,6 +47,13 @@ export interface QueuePagerProps {
  * Renders nothing when the page has no queue (a search result, a pasted
  * link outside the last queue). New BEM block `.queue-pager`, composed from
  * the prototype `.btn` (design_files/index.html) and token vocabulary only.
+ *
+ * J / K are keymap bindings in the `queue-pager` scope (wow-power-4), so the
+ * `?` sheet lists them and the Console's single-key switch turns them off;
+ * the buttons name them in a Tooltip and aria-keyshortcuts only while they
+ * work. The published queue keeps at most MAX_QUEUE_CONTEXT_IDS ranked ids:
+ * a queue that reached the cap reads "N of the first <cap> ranked", since
+ * more borrowers may follow in the Lead Queue than the pager walks.
  */
 export function QueuePager({ borrowerId, queue, pathFor, hotkeys = true, disabled = false }: QueuePagerProps) {
   const navigate = useNavigate();
@@ -59,38 +69,46 @@ export function QueuePager({ borrowerId, queue, pathFor, hotkeys = true, disable
   // while the caller allows them (never inside an open form or a write).
   const keysLive = hotkeys && !disabled;
   usePagerHotkeys({ previous: keysLive ? previous : null, next: keysLive ? next : null }, navRef);
+  // The keys are named only while they work: single-character keys are off
+  // with the Console's switch (WCAG 2.1.4).
+  const [singleKeysOn] = useSingleKeyShortcuts();
+  const named = keysLive && singleKeysOn;
 
   if (!queue || !position) return null;
+  // The published queue stops at the cap (lib/queueContext): say so.
+  const capped = queue.ids.length >= MAX_QUEUE_CONTEXT_IDS;
   return (
     <nav ref={navRef} className="queue-pager" data-rum-target="pager" aria-label="Lead queue position">
       <span className="queue-pager__position">
         <span className="mono num">{formatCount(position.position)}</span>
-        {' of '}
-        <span className="mono num">{formatCount(position.total)}</span>
+        {capped ? ' of the first ' : ' of '}
+        <span className="mono num">{formatCount(capped ? MAX_QUEUE_CONTEXT_IDS : position.total)}</span>
         <span className="queue-pager__scope">{queue.label ? ` ranked in ${queue.label}` : ' ranked in the Lead Queue'}</span>
       </span>
-      <button
-        type="button"
-        className="btn btn--sm queue-pager__step"
-        onClick={previous ?? undefined}
-        disabled={!previous}
-        aria-keyshortcuts="K"
-        title="Previous borrower (K)"
-      >
-        <Icon name="chevright" size={12} className="queue-pager__prev-icon" />
-        Previous
-      </button>
-      <button
-        type="button"
-        className="btn btn--sm queue-pager__step"
-        onClick={next ?? undefined}
-        disabled={!next}
-        aria-keyshortcuts="J"
-        title="Next borrower (J)"
-      >
-        Next
-        <Icon name="chevright" size={12} />
-      </button>
+      <Tooltip content="Previous borrower" shortcut={named ? 'K' : undefined}>
+        <button
+          type="button"
+          className="btn btn--sm queue-pager__step"
+          onClick={previous ?? undefined}
+          disabled={!previous}
+          aria-keyshortcuts={named ? ariaKeyShortcuts(['k']) : undefined}
+        >
+          <Icon name="chevright" size={12} className="queue-pager__prev-icon" />
+          Previous
+        </button>
+      </Tooltip>
+      <Tooltip content="Next borrower" shortcut={named ? 'J' : undefined}>
+        <button
+          type="button"
+          className="btn btn--sm queue-pager__step"
+          onClick={next ?? undefined}
+          disabled={!next}
+          aria-keyshortcuts={named ? ariaKeyShortcuts(['j']) : undefined}
+        >
+          Next
+          <Icon name="chevright" size={12} />
+        </button>
+      </Tooltip>
     </nav>
   );
 }

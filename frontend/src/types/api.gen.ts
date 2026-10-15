@@ -69,6 +69,8 @@ export interface ResponseSchemas {
   };
   AdminHealthResponse: {
     actor_cache_key: string | null;
+    /** The same actor's cache key under the previous rotation secret, while one is configured (D-identity-review-a4): an open tab holding it re-stamps instead of resetting, and requests bound to it are still accepted. Empty outside a rotation. Authenticated body only. */
+    actor_cache_key_aliases: string[];
     agent_gateway_binding_sha256: string | null;
     app_env: string | null;
     /** Identities configured as auditor that are also configured as administrator or approver (segregation-of-duties signal). A count only. */
@@ -345,6 +347,12 @@ export interface ResponseSchemas {
     audit_event_id: string | null;
     feedback_id: string;
     outcome: "success" | "no_response" | "declined";
+  };
+  AssignmentReleaseResponse: {
+    audit_event_id: string;
+    released: ResponseSchemas['LeadAssignment'];
+    restore_skipped_reason: "previous_assignee_inactive" | "previous_assignee_out_of_scope" | "lead_not_approved" | "lead_not_contactable" | null;
+    restored: ResponseSchemas['LeadAssignment'] | null;
   };
   AssignmentResponse: {
     assignment: ResponseSchemas['LeadAssignment'];
@@ -807,7 +815,41 @@ export interface ResponseSchemas {
     assignments: ResponseSchemas['LeadAssignment'][];
     audit_event_id: string | null;
     per_lo_counts: { [key: string]: number };
+    preview: ResponseSchemas['DistributionPreview'] | null;
     strategy: "manual" | "round_robin" | "score_balanced";
+  };
+  /** One officer's share of a planned fill: staff aggregates only. */
+  DistributionOfficerLoad: {
+    added_count: number;
+    added_score_sum: number;
+    capacity_per_day: number;
+    display_label: string;
+    email: string;
+    in_region_count: number;
+    open_count: number;
+    region: string | null;
+  };
+  /** What the score-balanced fill placed: counts and sums, never a borrower id. */
+  DistributionPreview: {
+    officers: ResponseSchemas['DistributionOfficerLoad'][];
+    placed_count: number;
+    placed_score_sum: number;
+    plan_fingerprint: string;
+    pool_count: number;
+    skipped_already_assigned: number;
+    skipped_not_assignable: number;
+    strategy: "score_balanced";
+    unplaced_no_capacity: number;
+  };
+  DistributionReleaseResponse: {
+    audit_event_ids: string[];
+    released: ResponseSchemas['LeadAssignment'][];
+    released_count: number;
+    restore_skipped_count: number;
+    restored: ResponseSchemas['LeadAssignment'][];
+    restored_count: number;
+    skipped_not_active_count: number;
+    skipped_started_count: number;
   };
   EconomicsAnalyticsResponse: {
     equity_spread: ResponseSchemas['EquitySpreadOverview'];
@@ -966,6 +1008,43 @@ export interface ResponseSchemas {
     /** Route registry template. */
     route: string;
   };
+  /** One open item of the caller's own due work. */
+  FollowupItem: {
+    /** The scheduling call's attempt number; callbacks only. */
+    attempt_number: number | null;
+    borrower_id: string;
+    /** Why the row is withheld; null exactly when contactable. */
+    contact_block_reason: "consent_not_opt_in" | "frequency_cap" | "suppressed" | "eligibility_not_proven" | "contactability_not_configured" | "not_in_coverage" | null;
+    /** True only when the gold eligibility decision and the set-level predicate both allow contact. */
+    contactable: boolean;
+    /** Null for a new assignment, which has no due time. */
+    due_at: string | null;
+    /** When the contact frequency cap lifts; frequency_cap rows only. */
+    earliest_recontact_at: string | null;
+    kind: "callback" | "approval_follow_up" | "requested_follow_up" | "new_assignment";
+    /** The current assignee's display label; requested follow-ups with an assignee only. */
+    owner_label: string | null;
+    /** Requested follow-ups only. */
+    owner_state: "assigned" | "unassigned" | null;
+    /** When the item was scheduled, decided or assigned. */
+    since_at: string;
+    /** True when a snooze of this item ended early on a new recorded signal. */
+    woke_on_signal: boolean;
+  };
+  /** The tray's read: due and newly assigned items, at most 50 per kind. */
+  FollowupList: {
+    generated_at: string;
+    items: ResponseSchemas['FollowupItem'][];
+    /** True when a kind had more than 50 open items. */
+    truncated: boolean;
+  };
+  /** The rail item's poll: whether the actor has a tray, and its next due time. */
+  FollowupSummary: {
+    /** True when the caller is an active sales-team member or an approver. */
+    eligible: boolean;
+    /** Earliest due time over the caller's open callbacks and follow-ups due no more than 14 days ago; null when nothing is due. */
+    next_due_at: string | null;
+  };
   FootprintState: {
     display_order: number;
     is_default_state: boolean;
@@ -1121,6 +1200,19 @@ export interface ResponseSchemas {
     typical_seconds: number | null;
     verified_sections: number | null;
   };
+  /**
+   * The reviewed question for a context, or the closed reason none is offered.
+   *
+   * ``prompt`` is a server-rendered sentence that has already passed the
+   * deterministic prompt guards; the browser only prefills the composer with
+   * it. ``withheld`` names why no prompt is offered, and ``omitted`` names the
+   * slots the question deliberately leaves out.
+   */
+  GenieContextScopeResponse: {
+    omitted: "assignee"[];
+    prompt: string | null;
+    withheld: "unsupported_combination" | "excluded_value" | "place_unavailable" | "refused" | null;
+  };
   GenieDataFreshness: {
     asset: string;
     note: string | null;
@@ -1272,17 +1364,29 @@ export interface ResponseSchemas {
   };
   /**
    * One figure in the shipped prose that the claims verifier proved against
-   * the returned rows (audit genie-10 phase 1). ``derivation`` says how: a
-   * value a reader can find in one returned cell, a figure derived from the
-   * rows (a total, average, share or change), or a stated threshold the
-   * returned values satisfy. ``section`` names the deep-research section the
-   * figure belongs to; None is the summary or a single-turn answer. An
-   * unsupported figure is never listed: its prose is withheld instead.
+   * the returned rows (audit genie-10). ``derivation`` says how: a value a
+   * reader can find in one returned cell, a figure derived from the rows (a
+   * total, average, share or change), or a stated threshold the returned
+   * values satisfy. ``section`` names the deep-research section the figure
+   * belongs to; None is the summary or a single-turn answer. An unsupported
+   * figure is never listed: its prose is withheld instead.
+   *
+   * Phase 2 provenance: ``support`` is the best support under a fixed
+   * priority (one returned cell, the row count, a column total, a share of a
+   * column total, another derivation, or a stated threshold); ``column``
+   * names the returned column of a cell, total or share support when exactly
+   * one column produces it; ``occurrences`` is how many times the figure's
+   * token appears in the checked prose, set only for a cell figure the
+   * client can locate by its token. All three are None on an answer recorded
+   * before they existed.
    */
   GenieVerifiedClaim: {
+    column: string | null;
     derivation: "returned_value" | "derived_from_rows" | "bound";
     kind: "currency" | "percent" | "bps" | "number";
+    occurrences: number | null;
     section: string | null;
+    support: "cell" | "row_count" | "sum" | "share" | "derived" | "bound" | null;
     token: string;
   };
   GenieVisualizationSpec: {
@@ -1372,7 +1476,7 @@ export interface ResponseSchemas {
     source_assets: string[];
     status: "active" | "paused" | "disabled";
     updated_at: string | null;
-    workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "live_analysis";
+    workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "rate_trigger_watch" | "live_analysis";
   };
   GrowthAgentNotificationDraft: {
     body: string;
@@ -1388,10 +1492,35 @@ export interface ResponseSchemas {
     title: string;
     updated_at: string | null;
   };
+  /** Where the caller's own plan execute is: step k of N and its phase. */
+  GrowthAgentPlanProgressResponse: {
+    state: "not_started" | "running" | "gate" | "recording";
+    /** The 1-based step running or gated; the executed count while recording. */
+    step_index: number | null;
+    /** The reviewed tool of that step. */
+    step_tool: string | null;
+    /** The plan's step count. */
+    step_total: number | null;
+    updated_at: string | null;
+  };
   GrowthAgentPolicyCheck: {
     detail: string;
     label: string;
     status: "passed" | "review_required" | "blocked";
+  };
+  /** The saved watch, the server's level and the latest weekly print. */
+  GrowthAgentRateWatchResponse: {
+    /** The latest weekly 30-year print in percent; None when no print is available. */
+    latest_print_pct: number | null;
+    /** Week-starting Monday of that print (ISO date). */
+    latest_print_week: string | null;
+    monitor: ResponseSchemas['GrowthAgentMonitor'];
+    /** True when an identical active watch already existed: nothing was written. */
+    replayed: boolean;
+    scheduler: ResponseSchemas['GrowthAgentSchedulerStatus'];
+    watch_direction: "at_or_below" | "at_or_above";
+    /** The watched 30-year par level in percent, from today's scenario grid. */
+    watch_level_pct: number;
   };
   GrowthAgentRunResponse: {
     actionable_avg_score: number | null;
@@ -1441,7 +1570,7 @@ export interface ResponseSchemas {
     run_id: string;
     source_assets: string[];
     status: "completed" | "failed";
-    workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "live_analysis";
+    workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "rate_trigger_watch" | "live_analysis";
     workflow_title: string;
   };
   /** Whether scheduled watchlist runs are on, and why the App knows. */
@@ -1473,7 +1602,7 @@ export interface ResponseSchemas {
     recent_actionable_totals: number[];
     run_count: number;
     status: "active" | "paused" | "disabled";
-    workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "live_analysis";
+    workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "rate_trigger_watch" | "live_analysis";
   };
   /** The caller's saved watchlists as briefings, with the scheduler state. */
   GrowthAgentWatchlistSummaryResponse: {
@@ -1484,7 +1613,7 @@ export interface ResponseSchemas {
     action_label: string;
     cadence_options: ("daily" | "weekly")[];
     default_route: string;
-    id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "live_analysis";
+    id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "rate_trigger_watch" | "live_analysis";
     objective: string;
     proof_points: string[];
     source_assets: string[];
@@ -1504,6 +1633,8 @@ export interface ResponseSchemas {
   };
   HealthResponse: {
     actor_cache_key?: string | null;
+    /** The same actor's cache key under the previous rotation secret, while one is configured (D-identity-review-a4): an open tab holding it re-stamps instead of resetting, and requests bound to it are still accepted. Empty outside a rotation. Authenticated body only. */
+    actor_cache_key_aliases?: string[];
     agent_gateway_binding_sha256?: string | null;
     campaign_treatment_runtime?: string | null;
     circuit_breakers?: { [key: string]: string };
@@ -1722,6 +1853,14 @@ export interface ResponseSchemas {
     fit: number;
     intent_trigger: number;
     relationship: number;
+  };
+  LeadSnoozeResponse: {
+    audit_event_id: string;
+    borrower_id: string;
+    /** When the item returns to the tray at the latest. */
+    wake_at: string;
+    /** True when the wake time was moved to the contact frequency cap's end. */
+    wake_clamped: boolean;
   };
   LeadSummary: {
     aging_days: number | null;
@@ -1985,6 +2124,17 @@ export interface ResponseSchemas {
     trend_note: string | null;
     trend_status: string;
     trends: { [key: string]: ResponseSchemas['KpiTrend'] };
+  };
+  /** The ``PRINT_EXPORT`` ledger entry the print dialog waits for. */
+  PrintReceipt: {
+    actor: string;
+    audit_event_id: string;
+    borrower_id: string | null;
+    event_type: "PRINT_EXPORT";
+    filter_fingerprint: string | null;
+    recorded_at: string;
+    row_count: number;
+    surface: "borrower_360" | "audit_ledger";
   };
   ProofEvidenceEvent: {
     confidence: number;
@@ -2387,6 +2537,8 @@ export interface ResponseSchemas {
   SessionResponse: {
     /** Opaque per-actor browser-cache discriminator: the same keyed hash of the forwarded identity that the authenticated health body carries, so the browser can seed its actor-scoped storage gate before the first health probe. Not reversible to the identity and never sent to telemetry. Null exactly when actor_email is. */
     actor_cache_key: string | null;
+    /** The same actor's cache key under the previous rotation secret, while one is configured (D-identity-review-a4); the health body carries the same list, and the browser reads it from there only. Empty whenever actor_email is null. */
+    actor_cache_key_aliases: string[];
     /** A readable label for the caller's own forwarded identity, derived from the same header as actor_email and nothing else (no directory lookup): an email's local part with dot, underscore or hyphen separated letter words read as capitalised words (jane.doe@... -> 'Jane Doe'), else the local part verbatim; a non-email identity verbatim. Null exactly when actor_email is. */
     actor_display_name: string | null;
     /** The caller's own identity as forwarded by the trusted Databricks Apps edge (X-Forwarded-Email, else X-Forwarded-User): the name an approval's audit row is recorded under. Null when the edge forwarded none or forwarded headers are not trusted; never a configured default actor. */
@@ -2403,7 +2555,7 @@ export interface ResponseSchemas {
     refusal_text_capture_enabled: boolean;
     /** Display labels for the capability tiers this session holds, most privileged first: 'Administrator' (can_access_admin), 'Approver' (can_approve), 'Auditor' (a configured auditor, read-only), else 'Workspace user' for a forwarded identity that holds no tier. Empty only when the session holds no tier and no identity was forwarded: a tier admitted by group membership alone (the local and test group-compat admission included) carries its label while actor_email is null. Labels only: the can_* booleans stay the authorization contract. */
     role_labels: string[];
-    /** Whether the browser may install the opt-in RUM beacon (settings.mip_rum_enabled), the same value /api/config/options returns (audit delivery-07). */
+    /** Whether the browser may install the RUM beacon (settings.mip_rum_enabled), the same value /api/config/options returns (audit delivery-07). On by default; the deploy setting MIP_RUM_ENABLED=0 turns it off (D-platform-process-d1). */
     rum_enabled: boolean | null;
   };
   SignalAnalyticsResponse: {
@@ -2629,7 +2781,7 @@ export interface RequestSchemas {
     assigned_to_email: string;
     expires_in_hours?: number | null;
     request_id?: string | null;
-    strategy?: "manual" | "round_robin" | "score_balanced";
+    strategy?: "manual" | "round_robin";
   };
   AssignLoanOfficerRequest: {
     borrower_id: string;
@@ -2639,6 +2791,11 @@ export interface RequestSchemas {
   AssignmentOutcomeRequest: {
     outcome: "success" | "no_response" | "declined";
     request_id?: string | null;
+  };
+  /** Undo one assignment (audit states-07 item 1): a compensating write. */
+  AssignmentReleaseRequest: {
+    assignment_id: string;
+    request_id: string;
   };
   AssignmentStatusUpdateRequest: {
     request_id?: string | null;
@@ -2699,8 +2856,6 @@ export interface RequestSchemas {
   DispositionRequest: {
     callback_at?: string | null;
     lo_email: string;
-    /** Retired 2026-10: must be absent, null or blank; free-text disposition notes are no longer accepted */
-    notes?: string | null;
     occurred_at?: string | null;
     outcome: "called_no_answer" | "called_left_voicemail" | "connected" | "callback_scheduled" | "application_started" | "not_interested" | "not_now" | "dead";
     request_id?: string | null;
@@ -2708,12 +2863,19 @@ export interface RequestSchemas {
   DistributeLeadsRequest: {
     approval_status?: "approved" | "pending" | "rejected" | "hold" | "any";
     borrower_ids?: string[];
+    dry_run?: boolean;
+    expected_plan_fingerprint?: string | null;
     expires_in_hours?: number | null;
     limit?: number;
     lo_emails: string[];
     outreach_status?: "none" | "queued" | "actioned" | "sent" | "bounced" | "replied" | "any";
     request_id?: string | null;
     strategy?: "manual" | "round_robin" | "score_balanced";
+  };
+  /** Undo one distribution run: release that run's own rows by the same actor. */
+  DistributionReleaseRequest: {
+    distribution_request_id: string;
+    request_id: string;
   };
   /**
    * Run the plan the user reviewed, exactly as composed and signed.
@@ -2805,6 +2967,24 @@ export interface RequestSchemas {
     question: string;
     sections_rev?: number | null;
   };
+  /**
+   * A Lead Queue filter selection as closed codes, for a server-rendered Genie question.
+   *
+   * Codes only: segment codes, a USPS state code, a county FIPS code, a ZIP, a
+   * governed city key and a public Competitor lender ref. No field carries free
+   * text, a borrower id or an email address.
+   */
+  GenieContext: {
+    assignee?: "me" | null;
+    city?: string | null;
+    county_fips?: string | null;
+    lender_ref?: string | null;
+    route: "lead-queue";
+    segment_codes?: ("itm" | "listed" | "permit" | "investor" | "equity" | "retention" | "second_lien_itm" | "heloc_draw_to_payback" | "home_equity_history" | "refi_propensity" | "itm_on_related_property" | "payoff_loss_leads" | "permit_activity")[];
+    segment_mode?: "any" | "all";
+    state?: "AL" | "AK" | "AZ" | "AR" | "CA" | "CO" | "CT" | "DE" | "DC" | "FL" | "GA" | "HI" | "ID" | "IL" | "IN" | "IA" | "KS" | "KY" | "LA" | "ME" | "MD" | "MA" | "MI" | "MN" | "MS" | "MO" | "MT" | "NE" | "NV" | "NH" | "NJ" | "NM" | "NY" | "NC" | "ND" | "OH" | "OK" | "OR" | "PA" | "RI" | "SC" | "SD" | "TN" | "TX" | "UT" | "VT" | "VA" | "WA" | "WV" | "WI" | "WY" | null;
+    zip?: string | null;
+  };
   GenieFeedbackRequest: {
     comment?: string | null;
     conversation_id: string;
@@ -2869,6 +3049,13 @@ export interface RequestSchemas {
     segment_mode?: "any" | "all";
     states?: string[];
   };
+  /** Watch the par level of one Rate Lever step. No rate, no name. */
+  GrowthAgentRateWatchRequest: {
+    cadence?: "daily" | "weekly";
+    request_id?: string | null;
+    /** The Rate Lever step in basis points of par move; not 0. The server reads its par level. */
+    step_bps: number;
+  };
   GrowthAgentRunRequest: {
     cadence?: "daily" | "weekly";
     monitor_name?: string | null;
@@ -2918,6 +3105,11 @@ export interface RequestSchemas {
     request_id?: string | null;
     source_record_ref?: string | null;
     source_system: "salesforce" | "crm_cdp" | "los_pos" | "servicing" | "webhook" | "manual_import";
+  };
+  LeadSnoozeRequest: {
+    /** One UUID per snooze intent; a retry resends it. */
+    request_id: string;
+    snooze_days: 1 | 3 | 7;
   };
   OfferRecommendRequest: {
     borrower_id: string;
@@ -3043,6 +3235,15 @@ export interface RequestSchemas {
     rationale?: string;
     step_id: string;
     tool: string;
+  };
+  /** What the page declares about the copy it is about to print. */
+  PrintReceiptRequest: {
+    /** The masked borrower id of the printed dossier (Borrower 360 only). */
+    borrower_id?: string | null;
+    /** The audit explorer query parameters the printed page was read with (audit ledger only). Only their keyed fingerprint is written. */
+    filters?: { [key: string]: string };
+    row_count: number;
+    surface: "borrower_360" | "audit_ledger";
   };
   /**
    * Request body for ``POST /api/v1/lookup/property-loan``.
@@ -3425,6 +3626,7 @@ export interface ApiOperations {
       correlation_id?: string | null;
       since?: string | null;
       until?: string | null;
+      exclude_own_ledger_reads?: boolean;
     };
     headers: Record<string, never>;
     body: never;
@@ -3445,6 +3647,7 @@ export interface ApiOperations {
       since?: string | null;
       until?: string | null;
       event_id?: string | null;
+      exclude_own_ledger_reads?: boolean;
     };
     headers: Record<string, never>;
     body: never;
@@ -3465,6 +3668,7 @@ export interface ApiOperations {
       since?: string | null;
       until?: string | null;
       event_id?: string | null;
+      exclude_own_ledger_reads?: boolean;
     };
     headers: Record<string, never>;
     body: never;
@@ -3752,6 +3956,15 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['GrowthAgentHomeResponse'];
+  };
+  "GET /api/v1/growth-agent/agent/plan/progress": {
+    pathParams: Record<string, never>;
+    query: {
+      request_id: string;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['GrowthAgentPlanProgressResponse'];
   };
   "GET /api/v1/growth-agent/monitors": {
     pathParams: Record<string, never>;
@@ -4175,6 +4388,22 @@ export interface ApiOperations {
     body: never;
     ok: ResponseSchemas['SalesConversionResponse'];
   };
+  "GET /api/v1/sales/followups": {
+    pathParams: Record<string, never>;
+    query: {
+      window_days?: number;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['FollowupList'];
+  };
+  "GET /api/v1/sales/followups/summary": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['FollowupSummary'];
+  };
   "GET /api/v1/sales/outcomes/summary": {
     pathParams: Record<string, never>;
     query: {
@@ -4331,6 +4560,13 @@ export interface ApiOperations {
     body: RequestSchemas['GenieActionRequest'];
     ok: ResponseSchemas['GenieActionResponse'];
   };
+  "POST /api/v1/genie/context-scope": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['GenieContext'];
+    ok: ResponseSchemas['GenieContextScopeResponse'];
+  };
   "POST /api/v1/genie/export-receipt": {
     pathParams: Record<string, never>;
     query: Record<string, never>;
@@ -4461,6 +4697,13 @@ export interface ApiOperations {
     body: RequestSchemas['GrowthAgentRunRequest'];
     ok: ResponseSchemas['GrowthAgentRunResponse'];
   };
+  "POST /api/v1/growth-agent/rate-watch": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['GrowthAgentRateWatchRequest'];
+    ok: ResponseSchemas['GrowthAgentRateWatchResponse'];
+  };
   "POST /api/v1/growth-agent/runs/{run_id}/monitors": {
     pathParams: {
       run_id: string;
@@ -4472,7 +4715,7 @@ export interface ApiOperations {
   };
   "POST /api/v1/growth-agent/workflows/{workflow_id}/run": {
     pathParams: {
-      workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "live_analysis";
+      workflow_id: "daily_refi_brief" | "borrower_dossier_review" | "listing_watch" | "competitor_recapture_monitor" | "high_equity_heloc_watch" | "branch_capacity_review" | "source_freshness_sentinel" | "custom_segment_watch" | "rate_trigger_watch" | "live_analysis";
     };
     query: Record<string, never>;
     headers: Record<string, never>;
@@ -4495,6 +4738,15 @@ export interface ApiOperations {
     body: RequestSchemas['AssignLeadRequest'];
     ok: ResponseSchemas['AssignmentResponse'];
   };
+  "POST /api/v1/leads/{borrower_id}/assignment/release": {
+    pathParams: {
+      borrower_id: string;
+    };
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['AssignmentReleaseRequest'];
+    ok: ResponseSchemas['AssignmentReleaseResponse'];
+  };
   "POST /api/v1/leads/{borrower_id}/disposition": {
     pathParams: {
       borrower_id: string;
@@ -4512,6 +4764,15 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: RequestSchemas['LeadOutcomeRequest'];
     ok: ResponseSchemas['LeadOutcomeResponse'];
+  };
+  "POST /api/v1/leads/{borrower_id}/snooze": {
+    pathParams: {
+      borrower_id: string;
+    };
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['LeadSnoozeRequest'];
+    ok: ResponseSchemas['LeadSnoozeResponse'];
   };
   "POST /api/v1/loan-officers/assignments": {
     pathParams: Record<string, never>;
@@ -4610,12 +4871,26 @@ export interface ApiOperations {
     body?: RequestSchemas['PortfolioPreviewRequest'] | null;
     ok: ResponseSchemas['PortfolioPreview'];
   };
+  "POST /api/v1/print-receipt": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['PrintReceiptRequest'];
+    ok: ResponseSchemas['PrintReceipt'];
+  };
   "POST /api/v1/sales/distribute": {
     pathParams: Record<string, never>;
     query: Record<string, never>;
     headers: Record<string, never>;
     body: RequestSchemas['DistributeLeadsRequest'];
     ok: ResponseSchemas['DistributeLeadsResponse'];
+  };
+  "POST /api/v1/sales/distribute/release": {
+    pathParams: Record<string, never>;
+    query: Record<string, never>;
+    headers: Record<string, never>;
+    body: RequestSchemas['DistributionReleaseRequest'];
+    ok: ResponseSchemas['DistributionReleaseResponse'];
   };
   "POST /api/v1/telemetry/rum": {
     pathParams: Record<string, never>;

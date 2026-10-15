@@ -395,3 +395,43 @@ def test_legacy_return_shapes_are_unchanged() -> None:
         guards.footprint_metadata_gap_match("How many borrowers in Boston?", snapshot=snapshot)
         is None
     )
+
+
+# ---------------------------------------------------------------------------
+# W5a e2 corpus case (W5a w5-platform-backend review, nonBlocking [1])
+# ---------------------------------------------------------------------------
+
+_MIXED_HINTS = "How many borrowers in Toronto and Atlanta?"
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "kind", "source"),
+    [
+        (fallback_snapshot(), "metadata_gap", "data_gap"),
+        (metadata_only_snapshot("IL", "CA", "TX"), "metadata_gap", "data_gap"),
+        (live_snapshot("IL", "CA", "TX"), "outside_footprint", "out_of_footprint"),
+    ],
+    ids=["fallback", "metadata_only", "live"],
+)
+def test_a_mixed_us_and_non_us_hint_is_refused_under_every_snapshot(
+    snapshot: FootprintSnapshot, kind: str, source: str, alternating: list[_AlternatingResolver]
+) -> None:
+    """Pinned as a refused -> refused KIND change, never a fail-open.
+
+    Before e2 the mixed question refused as ``outside_footprint`` through
+    Toronto under every snapshot (the W5a review measured it). Since e2 a
+    degraded snapshot reports the US hint first (Atlanta -> GA) as a
+    ``metadata_gap``; the live snapshot still refuses it as
+    ``outside_footprint``. Either way the full deterministic path answers
+    with a refusal source and the question never reaches Genie. No guard
+    is edited here.
+    """
+
+    verdict = guards.footprint_guard_match(_MIXED_HINTS, snapshot=snapshot)
+    assert verdict is not None and verdict.kind == kind
+
+    _install(alternating, snapshot, snapshot)
+    response = _genie(_MIXED_HINTS)
+
+    assert response is not None, "a mixed US/non-US hint question reached Genie"
+    assert response.source == source

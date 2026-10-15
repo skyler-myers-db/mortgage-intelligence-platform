@@ -7,7 +7,8 @@
  *    pinned Playwright container, so a capture anywhere else fails before it
  *    starts and names tools/update_visual_baselines.sh.
  *  - capture: the capture discipline (pointer parked off every hover target,
- *    focus blurred, a soft toHaveScreenshot so one test reports every diff).
+ *    focus blurred unless the state under test names the open popover whose
+ *    focus it is, a soft toHaveScreenshot so one test reports every diff).
  *  - expectNoSurfaceOverflow: no `.surface` may scroll sideways; what did on
  *    the base branch sits in the dated KNOWN_SURFACE_OVERFLOW ratchet.
  *  - the audited-read guard: no state a spec enters after a route's natural
@@ -77,12 +78,23 @@ export function assertPinnedVrtHost(configFile: string | undefined): void {
 const HOVER_TARGETS = 'a, button, [role="row"], .kpi';
 const INTERACTIVE = `${HOVER_TARGETS}, input, select, textarea, label, summary, [role="button"], [role="option"], [tabindex]`;
 
+export interface ParkOptions {
+  /**
+   * The open popover the state under test opened and whose roving focus IS
+   * that state: the account menu (block R) closes when focus leaves it
+   * (IdentityMenu's onBlur), so a blur would capture the plain route. Focus is
+   * kept only when it is inside this element, and the park fails when it is
+   * not, so no other focus ring survives by accident. Every other park blurs.
+   */
+  keepFocusWithin?: Locator;
+}
+
 /**
- * Park the pointer on a point no interactive element covers, blur focus, and
- * assert nothing is hovered, so a capture never depends on where the last
- * click happened to leave the mouse.
+ * Park the pointer on a point no interactive element covers, blur focus
+ * (unless `keepFocusWithin` holds it), and assert nothing is hovered, so a
+ * capture never depends on where the last click happened to leave the mouse.
  */
-export async function parkPointerAndBlur(page: Page): Promise<void> {
+export async function parkPointerAndBlur(page: Page, options: ParkOptions = {}): Promise<void> {
   const viewport = page.viewportSize();
   if (!viewport) throw new Error('viewport size is unset');
   const point = await page.evaluate(
@@ -108,10 +120,17 @@ export async function parkPointerAndBlur(page: Page): Promise<void> {
   );
   if (!point) throw new Error('no non-interactive point to park the pointer on');
   await page.mouse.move(point.x, point.y);
-  await page.evaluate(() => {
-    const active = document.activeElement;
-    if (active instanceof HTMLElement && active !== document.body) active.blur();
-  });
+  if (options.keepFocusWithin) {
+    const held = await options.keepFocusWithin.evaluate(
+      (scope) => document.activeElement !== null && document.activeElement !== scope && scope.contains(document.activeElement),
+    );
+    expect(held, 'keepFocusWithin: focus must sit inside the popover the state under test opened').toBe(true);
+  } else {
+    await page.evaluate(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active !== document.body) active.blur();
+    });
+  }
   const hovered = await page.evaluate(
     (selector) =>
       [...document.querySelectorAll(selector)]
@@ -131,11 +150,19 @@ export interface CaptureOptions {
    * and the caller asserts the masked element's content another way.
    */
   mask?: Locator[];
+  /**
+   * The open popover whose focus is the state under test (ParkOptions): kept
+   * focused, and asserted visible right before the screenshot.
+   */
+  keepFocusWithin?: Locator;
 }
 
 /** Soft screenshot assertion after the capture discipline, so one test reports every diff. */
 export async function capture(page: Page, name: string, options: CaptureOptions = {}): Promise<void> {
-  await parkPointerAndBlur(page);
+  await parkPointerAndBlur(page, { keepFocusWithin: options.keepFocusWithin });
+  if (options.keepFocusWithin) {
+    await expect(options.keepFocusWithin, 'the popover under test is open at capture time').toBeVisible();
+  }
   const screenshot = options.mask ? { mask: options.mask } : {};
   if (options.element) await expect.soft(options.element).toHaveScreenshot(name, screenshot);
   else await expect.soft(page).toHaveScreenshot(name, screenshot);
@@ -306,6 +333,15 @@ export const AUDITED_READS: ReadonlyArray<{ method: string; path: RegExp; event:
   // "Show refusal reports" (never on /audit-ledger's natural load), and each
   // question only on its own "Show question" click.
   { method: 'GET', path: /^\/api\/audit\/refusal-reports$/, event: 'VIEW_AUDIT_LEDGER' },
+  // D-audit-reads-c3 (W5d): every served ledger read writes one
+  // VIEW_AUDIT_LEDGER row. The explorer's page and rollups load with
+  // /audit-ledger; the facets wait for an explicit menu open and the count
+  // for a click, so no entered state may open any of them.
+  { method: 'GET', path: /^\/api\/audit\/events$/, event: 'VIEW_AUDIT_LEDGER' },
+  { method: 'GET', path: /^\/api\/audit\/events\/page$/, event: 'VIEW_AUDIT_LEDGER' },
+  { method: 'GET', path: /^\/api\/audit\/rollups$/, event: 'VIEW_AUDIT_LEDGER' },
+  { method: 'GET', path: /^\/api\/audit\/facets$/, event: 'VIEW_AUDIT_LEDGER' },
+  { method: 'GET', path: /^\/api\/audit\/count$/, event: 'VIEW_AUDIT_LEDGER' },
   { method: 'GET', path: /^\/api\/audit\/refusal-reports\/[^/]+\/question$/, event: 'VIEW_REFUSAL_REPORT_TEXT' },
 ];
 

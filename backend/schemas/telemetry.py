@@ -140,6 +140,7 @@ RUM_API_ROUTE_SEGMENTS = frozenset({
     "borrowers", "campaign-performance", "campaign-recommendation", "campaigns",
     "cancel",
     "capabilities", "combinations", "complete", "compose", "config", "conversion", "count", "county-rollups",
+    "context-scope",
     "create", "custom", "data-estate", "destinations", "disposition", "distribute",
     "decisions",
     "draft", "drafts", "economics", "event", "events", "evidence", "executive",
@@ -153,10 +154,13 @@ RUM_API_ROUTE_SEGMENTS = frozenset({
     "monitors", "my-events", "notification-drafts", "offers", "operations", "options",
     "outbox", "outcome", "outcomes", "outreach", "page", "points", "portfolio",
     "plan",
+    "print-receipt",
     "preview", "progress", "proof", "property-loan", "rate-sensitivity", "rate-window",
+    "rate-watch",
     "queue-version",
     "question", "receipt",
     "recommend", "refusal-report", "refusal-reports", "reject", "rollups", "rules", "rum", "run",
+    "release",
     "revoke",
     "runs",
     "saved-views",
@@ -165,6 +169,8 @@ RUM_API_ROUTE_SEGMENTS = frozenset({
     "status", "submit", "summary", "team", "telemetry", "workflows", "workspace",
     "withdraw",
     "zip-rollups",
+    # Follow-ups tray and its snooze (D-shell-deviations-a, wow-power-3).
+    "followups", "snooze",
 })
 RUM_API_ROUTE_ID_SEGMENT = ":id"
 

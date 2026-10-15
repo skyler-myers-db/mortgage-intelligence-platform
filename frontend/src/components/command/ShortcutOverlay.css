@@ -10,6 +10,16 @@
    must not scroll at 1440x900 on the busiest page (Lead Queue, with the
    toast region's F8 row), or axe flags an unfocusable scroll region. */
 .cmdk__panel--sheet { inline-size: min(36rem, 100%); max-block-size: 80vh; }
+/* Below about 840px tall (1440x720, or 1440x900 at 125% zoom) that one
+   column still scrolled on Lead Queue (W5b IR deferral, report 12.3): where
+   the width allows, the sheet lists its groups in two columns instead
+   (deviation:shortcut-sheet-columns). Scoped to the sheet: the palette
+   shares `.cmdk__list`. A height that still scrolls is W5e's. */
+@media (max-height: 52.5rem) and (min-width: 48rem) {
+  .cmdk__panel--sheet { inline-size: min(56rem, 100%); }
+  .cmdk__panel--sheet .cmdk__list { columns: 2; column-gap: var(--sp-4); }
+  .cmdk__panel--sheet .cmdk__group { break-inside: avoid; }
+}
 .cmdk__title {
   flex: 1;
   margin: 0;

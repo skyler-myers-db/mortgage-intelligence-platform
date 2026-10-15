@@ -22,8 +22,23 @@
  *  L. W5c w5-lead-queue-paging: the Lead Queue paged footer            2
  *  M. W5c w5-zcta-watchlist: the Segments map drilled to Illinois'
  *     ZIP areas                                                        2
+ *  N. W5d w5-lq-requests-binding: the Lead Queue's Approval requests
+ *     panel, My requests and the Request approval form                 6
+ *  O. W5d w5-sales-loop: the Sales ops manager view (30-day period)
+ *     and the Distribution Board's dry-run plan                        4
+ *  P. W5d w5-palette-offer-sales-loop: the command palette's provider
+ *     groups for a typed query                                         2
+ *  Q. W5d w5-followups-snooze: the rail with the Follow-ups due dot
+ *     and the open Follow-ups tray                                     4
+ *  R. W5d w5-print-glossary-sales-manager: Home's account menu open,
+ *     the glossary filtered by a search                                4
+ *  S. W5d w5-genie-provenance-tiles: an /ask-genie answer with a
+ *     verified figure's hover card open                                2
+ *  T. W5d w5-growth-watchlists: the Rate Lever's "Watch this level" row
+ *     and its watching line on Home and Segments, and a composed plan's
+ *     card mid-progress                                               10
  *                                                                     --
- *                                                                    122
+ *                                                                    154
  *
  * Baselines are amd64-Linux renders from the pinned Playwright container:
  * this spec runs only with MIP_VRT=1 (playwright.config.ts) and refuses any
@@ -37,8 +52,14 @@ import type { Locator, Page } from '@playwright/test';
 import type { AppDriver, FixtureAccent, FixtureTheme } from './app';
 import { enterState, prepareState, type FixtureState } from './fixtureStates';
 import type { HomeSummary, SessionResponse } from '../../../src/types';
+import { provenanceSingleAnswer } from './data/genieProvenance';
+import { GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
 import { RATE_MOVE_HOME_SUMMARY } from './data/homeAnswer';
+import { registerFollowUps } from './data/followUps';
+import { composeReply, executedReply, EXECUTE_PATTERN, registerGrowthAgentTrust } from './data/growthAgentTrust';
+import { PLAN_PROGRESS_PATTERN, PROGRESS_SEQUENCE, registerRateWatch } from './data/growthWatchlists';
 import { registerPagedQueue } from './data/leadPages';
+import { registerBoard } from './data/salesLoop';
 import { PRESENTER_SESSION } from './data/shell';
 import { json, type MockApi } from './mockApi';
 import { FIXTURE_ROUTES, FIXTURE_THEMES, type FixtureRoute } from './routes';
@@ -107,10 +128,13 @@ async function check(
   routeName: string,
   theme: FixtureTheme,
   state: string,
-  options: { file?: string; mask?: Locator[] } = {},
+  options: { file?: string; mask?: Locator[]; keepFocusWithin?: Locator } = {},
 ): Promise<void> {
   await expectNoSurfaceOverflow(page, { route: routeName, state, theme });
-  await capture(page, options.file ?? `${routeName}--${theme}--${state}.png`, { mask: options.mask });
+  await capture(page, options.file ?? `${routeName}--${theme}--${state}.png`, {
+    mask: options.mask,
+    keepFocusWithin: options.keepFocusWithin,
+  });
 }
 
 interface Loaded {
@@ -151,8 +175,11 @@ for (const theme of FIXTURE_THEMES) {
       });
     }
 
-    // C: shell states.
-    const SHELL_STATES: ReadonlyArray<{ route: string; state: FixtureState }> = [
+    // C: shell states. `focusScope` names the open popover whose roving focus
+    // IS the state: capture keeps focus inside it instead of blurring (the
+    // account menu closes on a blur out of it, IdentityMenu.tsx), and the
+    // test asserts it is still open after the capture. Every other state blurs.
+    const SHELL_STATES: ReadonlyArray<{ route: string; state: FixtureState; focusScope?: (page: Page) => Locator }> = [
       { route: 'home', state: 'evidence-drawer' },
       { route: 'home', state: 'command-palette' },
       { route: 'home', state: 'genie' },
@@ -171,12 +198,25 @@ for (const theme of FIXTURE_THEMES) {
       // J (W5c w5-evidence-drawer): How we got and Under the hood.
       { route: 'home', state: 'evidence-how-we-got' },
       { route: 'home', state: 'evidence-under-the-hood' },
+      // N (W5d w5-lq-requests-binding): the request panels, both sessions, and the form.
+      { route: 'lead-queue', state: 'approval-requests' },
+      { route: 'lead-queue', state: 'my-approval-requests' },
+      { route: 'lead-queue', state: 'request-approval-form' },
+      // R (W5d w5-print-glossary-sales-manager): the account menu and glossary search.
+      { route: 'home', state: 'identity-menu', focusScope: (page) => page.getByRole('menu', { name: 'Account' }) },
+      { route: 'glossary', state: 'glossary-search' },
     ];
-    for (const { route: name, state } of SHELL_STATES) {
+    for (const { route: name, state, focusScope } of SHELL_STATES) {
       test(`${name} · ${state}`, async ({ app, mockApi, page }) => {
         const { naturalLoad } = await load(app, mockApi, route(name), theme, state);
         await enterState(app, page, state);
-        await check(page, name, theme, state);
+        const scope = focusScope?.(page);
+        await check(page, name, theme, state, { keepFocusWithin: scope });
+        if (scope) {
+          // Still open, focus inside it: the baseline shows the popover, not the plain route.
+          await expect(scope, `${name} · ${state}: the popover under test survives the capture`).toBeVisible();
+          await expect(scope.locator(':focus')).toHaveCount(1);
+        }
         expectNoAuditedReadSince(mockApi, naturalLoad, `${name} · ${state}`);
       });
     }
@@ -232,6 +272,128 @@ for (const theme of FIXTURE_THEMES) {
       expectNoAuditedReadSince(mockApi, drilled, 'segment-intelligence · zcta drill');
     });
 
+    // O (W5d w5-sales-loop, critic-10 / wow-power-5): the sales manager
+    // view on a 30-day period, then the Distribution Board's dry-run plan
+    // (audit-free: it writes nothing and names no borrower).
+    test('analytics-sales-ops · manager view', async ({ app, mockApi, page }) => {
+      const { naturalLoad } = await load(app, mockApi, route('analytics-sales-ops'), theme);
+      await page.locator('.sales-ops-period').getByRole('button', { name: '30 days' }).click();
+      await expect(page).toHaveURL(/sales_period=30d/);
+      await app.settle();
+      await check(page, 'analytics-sales-ops', theme, 'manager-view');
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'analytics-sales-ops · manager view');
+    });
+
+    // The capture is BOARD_PLANS.default (data/salesLoop.ts), a plan the
+    // planner produces: Loan Officer A takes the pool with room to spare (the
+    // free track drawn), B's book is over capacity (+0, the marker). check(),
+    // not a bare capture, so the dialog's own .surface is held to no
+    // sideways overflow too.
+    test('analytics-sales-ops · distribution board', async ({ app, mockApi, page }) => {
+      registerBoard(mockApi);
+      const { naturalLoad } = await load(app, mockApi, route('analytics-sales-ops'), theme);
+      await page.getByRole('button', { name: 'Distribute approved leads…' }).click();
+      const dialog = page.locator('dialog.distribution-board');
+      await expect(dialog.locator('.distribution-board__bar')).toHaveCount(2);
+      await expect(dialog).toContainText('4 of 4 leads placed');
+      await app.settle();
+      await check(page, 'analytics-sales-ops', theme, 'distribution-board');
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'analytics-sales-ops · distribution board');
+    });
+
+    // P (W5d w5-palette-offer-sales-loop, shell-07): the palette's provider
+    // groups for a typed query (Pages & actions, Saved views, Segments,
+    // Glossary, Ask Genie). Audit-free reads only.
+    test('home · command-palette-groups', async ({ app, mockApi, page }) => {
+      const { naturalLoad } = await load(app, mockApi, route('home'), theme);
+      const palette = await app.openCommandPalette();
+      await palette.getByRole('combobox').fill('refi');
+      await expect(palette.getByRole('group', { name: 'Glossary' })).toBeVisible();
+      await app.settle();
+      await check(page, 'home', theme, 'command-palette-groups');
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'home · command-palette-groups');
+    });
+
+    // Q (W5d w5-followups-snooze, D-shell-deviations-a): the eligible actor's
+    // rail with the due dot, then the open tray over Home. The tray's list is
+    // audit-free, so the no-audited-read claim holds after it opens.
+    test('home · follow-ups rail and tray', async ({ app, mockApi, page }) => {
+      registerFollowUps(mockApi);
+      const { naturalLoad } = await load(app, mockApi, route('home'), theme);
+      const trigger = page.locator('.rail button.rail__item.has-due', { hasText: 'Due' });
+      await expect(trigger).toBeVisible();
+      await app.settle();
+      await capture(page, `home--${theme}--followups-rail.png`, { element: page.locator('nav.rail') });
+      await enterState(app, page, 'followups-tray');
+      await check(page, 'home', theme, 'followups-tray');
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'home · follow-ups tray');
+    });
+
+    // T (W5d w5-growth-watchlists, wow-ai-2): the lever's actions row with
+    // "Watch this level" at -50 bps, then its watching line, on Home and on
+    // Segments (filters cleared); the save is a POST, never an audited read.
+    for (const name of ['home', 'segment-intelligence'] as const) {
+      test(`${name} · rate lever watch row and watching line`, async ({ app, mockApi, page }) => {
+        registerRateWatch(mockApi, ['saved']);
+        await app.setTheme(theme);
+        const path = name === 'home' ? '/?map_mode=rate&rate_step=-50' : '/segment-intelligence?marketing_eligibility=Any&map_mode=rate&rate_step=-50';
+        await app.gotoRoute(path);
+        const naturalLoad = markNaturalLoad(mockApi);
+        const lever = page.locator('#main-content .map-legend__lever');
+        const watch = lever.getByRole('button', { name: /^Watch \d/ });
+        await expect(watch).toBeVisible();
+        await lever.scrollIntoViewIfNeeded();
+        await app.settle();
+        await capture(page, `${name}--${theme}--rate-watch-row.png`, { element: lever });
+        await watch.click();
+        await expect(lever.locator('.rate-lever__watching')).toBeVisible();
+        await page.mouse.move(0, 0);
+        await app.settle();
+        await capture(page, `${name}--${theme}--rate-watching.png`, { element: lever });
+        expectNoAuditedReadSince(mockApi, naturalLoad, `${name} · rate lever watch`);
+      });
+    }
+
+    // T (W5d, genie-09 part 4): the composed plan card while its held execute
+    // reports step 2 of 3 (Done / Running / Waiting).
+    test('ask-genie · composed plan mid-progress', async ({ app, mockApi, page }) => {
+      registerGrowthAgentTrust(mockApi, { replies: [composeReply()], execute: 'ran' });
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      mockApi.register('POST', EXECUTE_PATTERN, async (request) => {
+        await held;
+        return { body: executedReply((request.body as { plan_digest: string }).plan_digest) };
+      });
+      mockApi.register('GET', PLAN_PROGRESS_PATTERN, () => json(PROGRESS_SEQUENCE[1]));
+      await app.setTheme(theme);
+      await app.gotoRoute('/ask-genie?tab=workflows');
+      const naturalLoad = markNaturalLoad(mockApi);
+      await page
+        .getByRole('region', { name: 'Mortgage Growth Agent command center' })
+        .getByRole('button', { name: 'Compose plan', exact: true })
+        .click();
+      const card = page.locator('[aria-label="Composed Growth Agent plan"]');
+      await card.getByRole('button', { name: 'Run this plan' }).click();
+      await expect(card.locator('.growth-agent-step--running')).toBeVisible();
+      // The held execute keeps one request in flight and the workflow cards
+      // aria-busy by design (ask-genie.growth-agent-panel.tsx), so app.settle(),
+      // which waits for neither, cannot return in this state. Settle on the
+      // card's own reported state instead: PROGRESS_SEQUENCE[1] is step 2 of 3
+      // (Done / Running / Waiting), the only open request is the held execute,
+      // and the webfonts are ready.
+      await expect(card.locator('.growth-agent-step--completed')).toHaveCount(1);
+      await expect(card.locator('.growth-agent-step--waiting')).toHaveCount(1);
+      await expect.poll(() => mockApi.inflight, { message: 'only the held execute is open' }).toBe(1);
+      await page.mouse.move(0, 0);
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
+      await capture(page, `ask-genie--${theme}--plan-progress.png`, { element: card });
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'ask-genie · plan progress');
+      release();
+      await expect(card.getByRole('region', { name: 'Execution trace' })).toBeVisible();
+    });
+
     // E: compact density.
     test('lead-queue · compact density', async ({ app, mockApi, page }) => {
       await app.setDensity('compact');
@@ -253,6 +415,27 @@ for (const theme of FIXTURE_THEMES) {
       await footer.scrollIntoViewIfNeeded();
       await app.settle();
       await capture(page, `lead-queue--${theme}--paged-footer.png`, { element: footer });
+    });
+
+    // S (W5d w5-genie-provenance-tiles, genie-10 phase 2): a verified figure
+    // in an /ask-genie answer with its evidence hover card open. The open card
+    // IS the state under test, so the pointer stays on the figure instead of
+    // capture()'s parking (which would close it); the figure is a <mark>, not
+    // a control, and nothing else is hovered.
+    test('ask-genie · verified figures', async ({ app, mockApi, page }) => {
+      registerGenieTurn(mockApi, { holdProgress: false, answer: provenanceSingleAnswer() });
+      const { naturalLoad } = await load(app, mockApi, route('ask-genie'), theme);
+      const main = page.locator('#main-content');
+      await main.getByRole('textbox', { name: 'Ask Genie — question' }).fill(GENIE_QUESTION);
+      await main.getByRole('button', { name: 'Ask Genie', exact: true }).click();
+      const figure = main.locator('.genie-thread .genie-answer mark.genie-md-figure').first();
+      await expect(figure).toBeVisible({ timeout: 20_000 });
+      await expectNoSurfaceOverflow(page, { route: 'ask-genie', state: 'verified-figures', theme });
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await figure.hover();
+      await expect(page.locator('.evidence-hovercard:not(.is-closing)')).toBeVisible();
+      await expect.soft(page).toHaveScreenshot(`ask-genie--${theme}--verified-figures.png`);
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'ask-genie · verified figures');
     });
 
     // F: a 1280x720 laptop.

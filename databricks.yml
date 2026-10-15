@@ -240,6 +240,13 @@ resources:
           job:
             id: ${resources.jobs.mip_refresh_scores.id}
             permission: CAN_MANAGE_RUN
+        # flow-08 slice 2: read-only (CAN_VIEW) so Home and Saved monitors can
+        # say whether scheduled runs are on; the App never runs this job.
+        - name: growth_agent_scheduler_job
+          description: "Saved-watchlist scheduler job (schedule state read only; the App never runs it)."
+          job:
+            id: ${resources.jobs.mip_growth_agent_monitor_scheduler.id}
+            permission: CAN_VIEW
         - name: cotality_id_mask_secret
           description: "Deployment-scoped Cotality identifier-mask HMAC key."
           secret:

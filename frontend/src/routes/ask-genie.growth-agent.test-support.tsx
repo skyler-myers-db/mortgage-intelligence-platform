@@ -29,6 +29,7 @@ export const composeMortgageGrowthAgentPlan = vi.fn();
 export const executeComposedGrowthAgentPlan = vi.fn();
 export const growthAgentRuns = vi.fn();
 export const saveGrowthAgentRunWatchlist = vi.fn();
+export const planProgress = vi.fn();
 export const navigate = vi.fn();
 export const setDrawer = vi.fn();
 export const refreshWorkspace = vi.fn();
@@ -68,6 +69,12 @@ vi.mock('../lib/apiClients/growthAgentRuns', async (importOriginal) => {
     },
   };
 });
+
+// The composed-plan progress poll (genie-09 part 4) is its own lazy client.
+vi.mock('../lib/apiClients/growthAgentProgress', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/apiClients/growthAgentProgress')>()),
+  growthAgentProgressApi: { planProgress: (...args: unknown[]) => planProgress(...args) },
+}));
 
 vi.mock('../components/AppContext', () => ({
   useApp: () => ({
@@ -239,6 +246,7 @@ export function registerGrowthAgentRoutePanelHooks() {
     runGrowthAgentWorkflow.mockResolvedValue(RUN);
     runMortgageGrowthAgent.mockResolvedValue(RUN);
     growthAgentRuns.mockResolvedValue([]);
+    planProgress.mockResolvedValue({ state: 'not_started', step_index: null, step_total: null, step_tool: null, updated_at: null });
     rerunGrowthAgentMonitor.mockResolvedValue({
       ...RUN,
       planner_label: 'Saved watchlist runner',

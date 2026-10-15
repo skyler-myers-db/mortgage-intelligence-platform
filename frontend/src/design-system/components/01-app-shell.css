@@ -10,7 +10,10 @@
      padding and the mark sat ~12px below the title at 1440x900. Any future
      topbar height change stays aligned by construction. */
   --shell-topbar-h: 56px;
-  grid-template-columns: 72px 1fr;
+  /* The rail column, named once so the Follow-ups tray can sit beside it
+     (deviation:followups-tray); the breakpoints below restate it. */
+  --shell-rail-w: 72px;
+  grid-template-columns: var(--shell-rail-w) 1fr;
   grid-template-rows: var(--shell-topbar-h) 1fr;
   grid-template-areas:
     "rail topbar"
@@ -490,6 +493,38 @@
 .rail__brand:active,
 .rail__item:active:not(.rail__item--disabled) { scale: var(--pressed-scale); }
 .rail__spacer { flex: 1; }
+/* Follow-ups due (deviation:followups-rail-item): a static dot, never a count,
+   with the Genie launcher ready badge's size and ring
+   (16-genie-fab-status.css), inside the item so it never crosses the rail
+   border. No animation. */
+.rail__item.has-due::after {
+  content: "";
+  position: absolute;
+  inset-block-start: var(--sp-2);
+  inset-inline-end: var(--sp-2);
+  inline-size: var(--sp-3);
+  block-size: var(--sp-3);
+  border-radius: var(--r-pill);
+  background: var(--signal-warning);
+  box-shadow: 0 0 0 calc(var(--sp-1) / 2) var(--bg-1);
+  pointer-events: none;
+}
+/* While its tray is open the Follow-ups trigger (deviation:followups-rail-item)
+   wears the prototype's current-module fill, edge and ink
+   (.rail__item.is-active, design_files/Module 0 Prototype.html:316-320), as
+   the topbar's open account-menu trigger wears .topbar__icon-btn.is-active.
+   It never draws the ::before location bar: that marks the current module
+   only. After :hover, so the pointer on or off it changes nothing. Under
+   forced colours Chromium paints this --chip-line edge Highlight (the
+   resting edge is the forced ink), so the open state needs no forced rule. */
+.rail__item[aria-expanded="true"] {
+  background: var(--accent-soft);
+  border-color: var(--chip-line);
+  color: var(--accent-ink);
+}
+@media (forced-colors: active) {
+  .rail__item.has-due::after { background: CanvasText; box-shadow: none; }
+}
 
 /* Main */
 .main {

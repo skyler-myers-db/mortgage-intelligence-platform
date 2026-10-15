@@ -22,6 +22,9 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "GENIE_REFUSAL_REPORT",
         "GENIE_SECTION_REVEALED",
         "GENIE_TURN_CANCELLED",
+        # Owner ruling O1: a rationale the governed text screen refused on
+        # approve, reject, approval-request create or revoke.
+        "GOVERNED_TEXT_REFUSED",
         "GROWTH_AGENT_COMPOSE",
         "GROWTH_AGENT_MONITOR_SAVE",
         "GROWTH_AGENT_NOTIFICATION_DRAFT",
@@ -33,10 +36,14 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "LEAD_EXPORT",
         "LEAD_OUTCOME",
         "LEAD_OUTCOME_RECORDED",
+        # states-07 item 1: the assignment / distribution release behind Undo.
+        "LEAD_UNASSIGN",
         "OUTREACH_APPROVE",
         "OUTREACH_REJECT",
         "OUTREACH_REVOKE",
         "PORTFOLIO_CREATE",
+        # responsive-08 (W5d): an Export PDF's receipt (services/print_receipt).
+        "PRINT_EXPORT",
         "PROPERTY_LOOKUP",
         "RECOMMEND_OFFER",
         "RUN_GENIE",
@@ -60,6 +67,10 @@ SERVER_OWNED_AUDIT_EVENT_TYPES: frozenset[str] = frozenset(
         "OUTREACH_HOLD",
         "REJECT",
         "SUPPRESS_CONTACT",
+        # wow-power-3 phase 2: a Follow-ups tray snooze, and its refusal when
+        # the item may not be contacted (borrower id and closed reason only).
+        "LEAD_SNOOZE",
+        "LEAD_SNOOZE_REFUSED",
     }
 )
 

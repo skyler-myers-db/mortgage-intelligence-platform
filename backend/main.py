@@ -29,6 +29,7 @@ from backend.config.settings import (
     settings,
 )
 from backend.services import lifecycle_run_watch, rum_rollup
+from backend.services.actor_binding import ActorBindingMiddleware
 from backend.services.backpressure import BackpressureController, BackpressureMiddleware
 from backend.services.campaign_treatment_runtime import (
     CAMPAIGN_TREATMENT_RUNTIME_MARKER_ENV,
@@ -465,6 +466,8 @@ app.add_middleware(BackpressureMiddleware, controller=_backpressure_controller)
 # (last add_middleware call = outermost) and its structured log lines carry
 # the request's correlation id.
 app.add_middleware(VisitTrackingMiddleware)
+# D-identity-review-a4: refuse a stale X-MIP-Actor-Key before visits, slots, routing.
+app.add_middleware(ActorBindingMiddleware)
 # delivery-v3: just inside CorrelationId, so a backpressure 429 carries total.
 app.add_middleware(ServerTimingMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
