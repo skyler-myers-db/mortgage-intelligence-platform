@@ -7,6 +7,7 @@
    the `.form-input` control. Tokens only. Rides the route chunk with the
    pill (the popover's markup loads lazily; its placement is already here).
    ============================================================ */
+@layer routes {
 .lead-queue-omnibox { position: relative; flex-shrink: 0; }
 .lead-queue-omnibox__pill kbd { margin-inline-start: var(--sp-1); }
 .filter-menu.lead-queue-omnibox__panel {
@@ -48,4 +49,5 @@
 @container main (max-width: 1480px) {
   .lead-queue-omnibox__label,
   .lead-queue-omnibox__pill kbd { display: none; }
+}
 }

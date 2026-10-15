@@ -4,6 +4,7 @@
  * surface. Colocated with the lazy SalesWorkloadTable chunk, never in the
  * initial stylesheet. No print or contrast-mode block.
  */
+@layer routes {
 .sales-workload {
   margin-block-start: var(--sp-4);
 }
@@ -31,4 +32,5 @@
 }
 .sales-workload__status {
   display: block;
+}
 }

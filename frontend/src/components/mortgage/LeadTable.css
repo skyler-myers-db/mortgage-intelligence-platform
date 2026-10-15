@@ -6,6 +6,7 @@
    widths and the Approval pin live in
    design-system/components/03-score-and-table.css.
    ============================================================ */
+@layer routes {
 
 /* Width below which each view scrolls horizontally behind the pinned
    Approval column: the sum of the fixed column widths
@@ -24,6 +25,8 @@
    (useLeadTableFillHeight measures it into --lead-table-fill-block), and is
    floored at the prototype's 480px. The viewport calc is only the value
    before the first measurement. */
+}
+@layer components {
 .tbl-wrap.tbl-wrap--fill {
   max-height: none;
   max-block-size: max(
@@ -31,6 +34,8 @@
     var(--lead-table-fill-block, calc(100dvh - var(--shell-topbar-h, var(--sp-12)) - var(--sp-16) * 3))
   );
 }
+}
+@layer routes {
 
 /* The VIEW preset pill keeps its label and value on one line when the
    Console narrows the header ("Sales / ops" wrapped). */
@@ -255,6 +260,7 @@
    whose box is in view, whatever its inline-end margin (measured), so a
    control under the pin stayed there; only a padded view that the control
    lies wholly outside of makes a focus reveal it. */
+}
 /* The thead size is registered NON-inherited: its one consumer,
    --tbl-focus-clear, is computed on this same element, and as an ordinary
    (inherited) custom property each measured write re-styled every row of
@@ -276,6 +282,7 @@
   inherits: true;
   initial-value: 0px;
 }
+@layer routes {
 .tbl-wrap:has(> .lead-table__table) {
   --tbl-head-block-size: var(--row-h);
   --tbl-pin-inline-size: 156px;
@@ -412,6 +419,8 @@
   vertical-align: bottom;
 }
 
+}
+@layer print {
 /* responsive-08 (W5e): the Lead Queue on paper. useLeadTablePrint renders
    every loaded row; print.css unclips .tbl-wrap and hides the buttons and the
    expanded rows. Paper has no scroller behind the pinned Approval column, so
@@ -432,4 +441,5 @@
     position: static;
     box-shadow: none;
   }
+}
 }

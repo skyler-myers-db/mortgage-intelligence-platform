@@ -15,6 +15,7 @@
    LeadTable chunk's CSS. Prototype: the subtitle sits under the title only
    and the actions are centred (design_files/Module 0 Prototype.html:1993-2006).
    ============================================================ */
+@layer routes {
 @container main (min-width: 960px) {
   .lead-table__header.surface__hdr--split {
     display: grid;
@@ -74,4 +75,5 @@
     white-space: nowrap;
   }
   .lead-table__header--hide-slot .lead-table__shortcuts-key { display: inline-block; }
+}
 }

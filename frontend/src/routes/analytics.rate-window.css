@@ -6,6 +6,7 @@
    with the analytics chart chrome (.analytics-chart__*) and tokens.
    Two stacked panels share one x-axis; never a dual axis.
    ============================================================ */
+@layer routes {
 /* The spread-screen ink (line, label, legend swatch). --status-warning-ink
    (a pale amber) is defined once, for the dark surfaces, and measured 1.44:1 as
    label text and as the line on the light theme's white panel (WCAG 1.4.3
@@ -204,3 +205,4 @@
   }
 }
 /* The chart is static: no mark animates, so reduced motion needs no override. */
+}

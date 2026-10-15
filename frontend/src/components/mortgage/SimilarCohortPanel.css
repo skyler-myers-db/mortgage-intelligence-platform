@@ -5,6 +5,7 @@
    822-838 pill family, read-only here), the match count and two links.
    Ships with the lazy SimilarCohortPanel chunk. Tokens only.
    ============================================================ */
+@layer routes {
 /* flex-basis: inside a wrapping `.chip-row` (Borrower 360) it takes its own line. */
 .similar-cohort {
   display: flex;
@@ -21,3 +22,4 @@
 .similar-cohort__note { margin: 0; font-size: var(--fs-12); }
 .similar-cohort__count { color: var(--text-1); min-block-size: 1lh; }
 .similar-cohort__note { color: var(--text-3); }
+}

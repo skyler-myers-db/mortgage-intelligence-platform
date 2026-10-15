@@ -20,6 +20,7 @@
 @property --lead-table-hidden-equity { syntax: '<length>'; inherits: false; initial-value: 0px; }
 @property --lead-table-hidden-rate { syntax: '<length>'; inherits: false; initial-value: 0px; }
 @property --lead-table-hidden-status { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@layer routes {
 
 .lead-table__table--hide-location { --lead-table-hidden-location: 104px; }
 .lead-table__table--hide-relationship { --lead-table-hidden-relationship: 148px; }
@@ -53,4 +54,5 @@
     - var(--lead-table-hidden-equity, 0px)
     - var(--lead-table-hidden-rate, 0px)
   );
+}
 }

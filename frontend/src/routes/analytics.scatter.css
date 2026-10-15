@@ -1,3 +1,4 @@
+@layer routes {
 /* The scatter's tip (deviation:scatter-guides-tooltip): the kit's
    .analytics-chart__tip chrome inside the pointer-events:none markers layer,
    painted above the markers. The guide labels name the governed In the Money
@@ -264,6 +265,8 @@
   --scatter-score-low: var(--text-3);
 }
 
+}
+@layer modes {
 /* Forced colours (a11y-10 / responsive-v3 / css-06): the density cells and
    the zoom dots are non-text data marks, so each keeps a per-band cue in
    system colours (high: CanvasText fill; med: Canvas fill, 2px solid edge;
@@ -286,4 +289,5 @@
   .analytics-scatter__cluster-marker { border-width: 2px; }
   .analytics-scatter__cluster-marker.score--med { border-style: dashed; }
   .analytics-scatter__cluster-marker.score--low { border-style: dotted; }
+}
 }

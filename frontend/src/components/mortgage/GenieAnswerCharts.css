@@ -2,6 +2,7 @@
    Genie half). deviation:genie-chart-axes-drill. Lazy: imported by the
    chart modules only; the axes, grid and tooltip reuse the shared
    `.analytics-chart__*` chrome. Tokens only, Geist / Geist Mono. */
+@layer routes {
 
 /* Line: the plot is the kit's 0-100 percent space. */
 .genie-line__svg {
@@ -153,6 +154,8 @@
   font-size: var(--fs-11);
 }
 
+}
+@layer modes {
 /* Forced colours: bars and the line are non-text data marks and keep ink. */
 @media (forced-colors: active) {
   .genie-bars__bar,
@@ -169,4 +172,5 @@
     forced-color-adjust: none;
     stroke: CanvasText;
   }
+}
 }

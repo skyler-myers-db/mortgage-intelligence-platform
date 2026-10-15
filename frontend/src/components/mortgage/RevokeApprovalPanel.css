@@ -4,6 +4,7 @@
    (design_files/Module 0 Prototype.html:1494-1506), the reject panel's
    grid with the reason field wide; tokens only, no at-rule block (the
    integrator wraps this sheet in place into the routes layer). */
+@layer routes {
 .revoke-panel {
   grid-template-columns: minmax(12rem, 1fr) minmax(16rem, 2fr) auto;
 }
@@ -17,4 +18,5 @@
   margin: 0;
   color: var(--signal-danger);
   font-size: var(--fs-12);
+}
 }
