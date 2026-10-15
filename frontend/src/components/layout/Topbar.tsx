@@ -266,7 +266,7 @@ export function Topbar() {
   const openBorrower = (id: string) => {
     setSearchOpen(false);
     setBorrowerQuery('');
-    navigate(`/borrower-360/${id}`);
+    void navigate(`/borrower-360/${id}`);
   };
 
   // APG editable combobox with a list popup (2026-09-21 audit shell-07 /

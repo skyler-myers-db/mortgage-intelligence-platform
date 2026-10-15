@@ -361,7 +361,7 @@ export function USChoroplethMap({
       if (!populated) return;
       if (drillBehavior === 'navigate') {
         // Home-page teaser → deep-link to the filtered queue.
-        navigate(leadQueuePath({ state: location.id.toUpperCase() }));
+        void navigate(leadQueuePath({ state: location.id.toUpperCase() }));
         return;
       }
       // Straight to ZIPs — there is no honest county rung.
@@ -406,7 +406,7 @@ export function USChoroplethMap({
           read={primary}
           what={levelWhat}
           fallback={level === 'zip' ? (
-            <button type="button" className="btn btn--ghost btn--sm" onClick={() => navigate(leadQueuePath({ state: drillStateUC }))}>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => void navigate(leadQueuePath({ state: drillStateUC }))}>
               Open Lead Queue for {drillStateName}
             </button>
           ) : undefined}
@@ -496,9 +496,9 @@ export function USChoroplethMap({
           // Record the ZIP on this entry, then open its queue: Back returns
           // to this drill with the tile (or ZIP area) selected.
           changeSelection({ state: drillStateUC, county: null, zip }, { replace: true });
-          navigate(leadQueuePath({ state: drillStateUC, zip }));
+          void navigate(leadQueuePath({ state: drillStateUC, zip }));
         }}
-        onOpenStateQueue={() => navigate(leadQueuePath({ state: drillStateUC }))}
+        onOpenStateQueue={() => void navigate(leadQueuePath({ state: drillStateUC }))}
         usps={drillStateUC}
         nationalViewBox={usaMap.viewBox}
         onView={onStageView}
@@ -531,7 +531,7 @@ export function USChoroplethMap({
         view={view}
         setView={setView}
         campaignPrefillPath={campaignPrefillPath}
-        onStartCampaign={(path) => navigate(path)}
+        onStartCampaign={(path) => void navigate(path)}
         zoomControls={zipView?.controls ?? null}
       />
 

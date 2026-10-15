@@ -62,6 +62,12 @@ export function savedCampaignCanArchive(campaign: CampaignSummary): boolean {
     || campaign.treatment_state === 'failed';
 }
 
+/** A replayed scalar criterion as a query value; anything else has none (never '[object Object]'). */
+function scalarParam(raw: unknown): string {
+  if (typeof raw === 'string') return raw;
+  return typeof raw === 'number' || typeof raw === 'boolean' ? String(raw) : '';
+}
+
 export function savedCampaignLeadQueueUrl(
   campaign: CampaignSummary,
   variantName: string,
@@ -77,7 +83,7 @@ export function savedCampaignLeadQueueUrl(
     : campaign.criteria;
   for (const [key, raw] of Object.entries(replayFilters)) {
     if (!SAVED_CAMPAIGN_ROUTE_KEYS.has(key) || raw === null || raw === undefined) continue;
-    const value = Array.isArray(raw) ? raw.join(',') : String(raw);
+    const value = Array.isArray(raw) ? raw.join(',') : scalarParam(raw);
     if (value.trim()) url.searchParams.set(key, value);
   }
   url.searchParams.set('campaign_id', campaign.campaign_id);

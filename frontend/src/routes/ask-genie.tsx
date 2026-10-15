@@ -217,12 +217,12 @@ export default function AskGenie() {
       const url = urlRef.current;
       if (url.conversationParam === undefined || url.conversationParam === id) return;
       if (!isGenieConversationId(id)) {
-        navigate({ pathname: '/ask-genie', search: url.search, hash: url.hash }, { replace: true });
+        void navigate({ pathname: '/ask-genie', search: url.search, hash: url.hash }, { replace: true });
         return;
       }
       primeGenieLinkCache(queryClient, id);
       hydratedIdRef.current = id;
-      navigate({ pathname: `/ask-genie/${id}`, search: url.search, hash: url.hash }, { replace: true });
+      void navigate({ pathname: `/ask-genie/${id}`, search: url.search, hash: url.hash }, { replace: true });
     };
     const stopSwitch = subscribeGenieConversationSwitch((event) => {
       if (event.surface !== 'panel') return;
@@ -262,7 +262,7 @@ export default function AskGenie() {
       // URL stops naming the conversation.
       const url = urlRef.current;
       if (url.conversationParam !== undefined) {
-        navigate({ pathname: '/ask-genie', search: url.search }, { replace: true });
+        void navigate({ pathname: '/ask-genie', search: url.search }, { replace: true });
       }
       setConversationId(null);
       setQuestion('');
@@ -334,7 +334,7 @@ export default function AskGenie() {
     const linkable = isGenieConversationId(conversationIdToLoad);
     if (linkable) queryClient.setQueryData(genieConversationQueryKey(conversationIdToLoad), conversation);
     if (linkable && conversationParam !== conversationIdToLoad) {
-      navigate({ pathname: `/ask-genie/${conversationIdToLoad}`, search, hash }, { replace: true });
+      void navigate({ pathname: `/ask-genie/${conversationIdToLoad}`, search, hash }, { replace: true });
       return;
     }
     suppressBootstrapConversationRef.current = true;
@@ -342,14 +342,14 @@ export default function AskGenie() {
     adoptGenieConversation(conversation);
     setConversationId(conversationIdToLoad);
     if (!linkable && conversationParam !== undefined) {
-      navigate({ pathname: '/ask-genie', search, hash }, { replace: true });
+      void navigate({ pathname: '/ask-genie', search, hash }, { replace: true });
     }
   }
 
   /** Leave a link that shows no conversation (not-found / unavailable). */
   function openAskGenie() {
     focusComposerRef.current = true;
-    navigate({ pathname: '/ask-genie', search }, { replace: true });
+    void navigate({ pathname: '/ask-genie', search }, { replace: true });
   }
 
   function scopeToTrustedAsset(asset: { label: string; path: string }) {
@@ -372,11 +372,13 @@ export default function AskGenie() {
       announceGenie(message);
       if (outcome.kind !== 'ok') return;
       if (action.action_type === 'save_borrowers') refreshWorkspace();
-      if (outcome.result.route) navigate(outcome.result.route);
+      if (outcome.result.route) void navigate(outcome.result.route);
     });
   }
 
-  const openRoute = (route: string) => navigate(route);
+  const openRoute = (route: string) => {
+    void navigate(route);
+  };
 
   return (
     <PageShell

@@ -82,7 +82,7 @@ export function AccessDenied({
             <button
               type="button"
               className={`btn btn--sm ${canRetry ? 'btn--ghost' : 'btn--primary'}`}
-              onClick={() => navigate(-1)}
+              onClick={() => void navigate(-1)}
             >
               Back to previous page
             </button>

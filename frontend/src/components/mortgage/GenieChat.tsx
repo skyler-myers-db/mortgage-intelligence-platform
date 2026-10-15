@@ -484,7 +484,7 @@ export function GenieChat() {
           },
           confirmed,
         );
-        if (outcome.result.route) navigate(outcome.result.route);
+        if (outcome.result.route) void navigate(outcome.result.route);
       })
       .finally(() => setActionRunning(false));
   };

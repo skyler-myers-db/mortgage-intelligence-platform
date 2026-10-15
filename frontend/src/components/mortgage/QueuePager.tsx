@@ -61,7 +61,9 @@ export function QueuePager({ borrowerId, queue, pathFor, hotkeys = true, disable
   const position = queue ? queuePosition(queue, borrowerId) : null;
   const go = (id: string | null) => {
     if (!id || !queue || disabled) return null;
-    return () => navigate(pathFor(id), { state: { queue } });
+    return () => {
+      void navigate(pathFor(id), { state: { queue } });
+    };
   };
   const previous = go(position?.previous ?? null);
   const next = go(position?.next ?? null);

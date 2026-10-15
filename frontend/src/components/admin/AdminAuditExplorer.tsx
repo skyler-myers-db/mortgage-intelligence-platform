@@ -156,7 +156,7 @@ export function AdminAuditExplorer() {
 
   const applyFilters = (next: AuditExplorerFilters) => {
     const params = serializeAuditExplorerFilters(next, searchParams).toString();
-    navigate(
+    void navigate(
       { search: params ? `?${params}` : '', hash: location.hash },
       { preventScrollReset: true },
     );
