@@ -7,7 +7,7 @@
  *     approve route refuses ('mystery_offer') is refused when its review
  *     opens, before the review drafts (useLeadApprovalActions.draftForApproval,
  *     the W5e integration's follow-up): the review reads 'Reload the app, then
- *     try again.' with no Confirm, and nothing is sent: 0 POST
+ *     try again.' with Confirm aria-disabled, and nothing is sent: 0 POST
  *     /api/outreach/draft (no DRAFT_OUTREACH row) and 0 POST
  *     /api/outreach/approve;
  * (b) the audit-ledger explorer renders a rollup whose fail-closed
@@ -52,7 +52,7 @@ for (const theme of FIXTURE_THEMES) {
     await page.getByTestId('lead-bulk-approve').click();
     const dialog = page.locator('dialog.lead-approve-dialog');
     await expect(dialog.getByRole('alert')).toContainText('Reload the app, then try again.');
-    await expect(dialog.getByTestId('lead-approve-review-confirm')).toHaveCount(0);
+    await expect(dialog.getByTestId('lead-approve-review-confirm')).toHaveAttribute('aria-disabled', 'true');
     await expect(dialog).not.toContainText('mystery_offer');
     expect(echo.calls, 'the review drafts nothing for a code the route would refuse').toEqual([]);
     expect(tracker.bodies, 'no approve POST: refused before any I/O').toEqual([]);
