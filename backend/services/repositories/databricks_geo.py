@@ -38,6 +38,7 @@ from backend.services.repositories import databricks_geo_sql as geo_sql
 from backend.services.repositories.databricks_portfolio import DatabricksPortfolioRepository
 from backend.services.repositories.databricks_segment_gates import apply_source_gates
 from backend.services.repositories.databricks_shared import _parse_facet_mix
+from backend.services.segment_labels import SEGMENT_DISPLAY_LABELS
 from backend.services.segment_predicates import (
     compose_segment_predicate,
     normalise_segment_codes,
@@ -179,7 +180,7 @@ class DatabricksSegmentRepository:
             segments = [
                 SegmentSummary(
                     code=row["segment_code"],
-                    name=row["name"],
+                    name=SEGMENT_DISPLAY_LABELS.get(row["segment_code"], row["name"]),
                     count=int(row.get("count") or 0),
                     # The contact-eligible subset of `count`. Both paths
                     # emit it, so a card that says "N of M" is stating one

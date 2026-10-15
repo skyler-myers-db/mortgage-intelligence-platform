@@ -149,8 +149,8 @@ def _direct_itm_top_tier_compare(ctx: _DirectContext) -> GenieMessageResponse | 
         }
     ]
     answer = (
-        "They are related but not the same. In-the-money is a refinance-economics "
-        "screen: the borrower clears the configured rate-spread and equity thresholds. "
+        "They are related but not the same. In the Money is an economics screen, not "
+        "lead quality: the borrower clears the configured rate-spread and equity thresholds. "
         f"Top-tier opportunity means opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD}, which blends economics, "
         "intent, fit, relationship, and evidence. In the current marketable set, "
         f"{rows[0]['in_the_money_borrowers']:,} borrowers are in-the-money, "

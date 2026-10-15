@@ -55,7 +55,7 @@ from backend.services.supervisor_runtime import verify_supervisor_runtime
 
 _OFFER_AUDIENCE: dict[str, str] = {
     "purchase": "borrowers whose current property and listing signals support a next-home conversation",
-    "refi_plus_heloc": "borrowers with refinance economics and usable home equity",
+    "refi_plus_heloc": "borrowers who are in the money and have usable home equity",
     "heloc": "borrowers whose equity and HELOC propensity support an equity-access review",
     "refi": "borrowers whose current lien economics support a refinance review",
     "cash_out": "borrowers with substantial modeled equity for a cash-out review",

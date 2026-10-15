@@ -51,7 +51,7 @@ def _direct_itm_zip(ctx: _DirectContext) -> GenieMessageResponse | None:
             else f"the current borrower coverage in {borrower_asset}"
         )
         answer = (
-            "I ranked ZIP codes by unique records passing the refinance-economics screen "
+            "I ranked ZIP codes by unique records that are in the money "
             f"from {grain_text}. "
             f"The current leader is ZIP {top.get('zip')} ({top.get('state')}) "
             f"with {int(top.get(count_key) or 0):,} "
@@ -59,7 +59,7 @@ def _direct_itm_zip(ctx: _DirectContext) -> GenieMessageResponse | None:
         )
     else:
         answer = (
-            "The trusted population returned no refinance-economics ZIP rows for "
+            "The trusted population returned no in-the-money ZIP rows for "
             "the requested grain."
         )
     return trusted_response(
@@ -88,7 +88,7 @@ def _direct_itm_state_breakdown(ctx: _DirectContext) -> GenieMessageResponse | N
         broad_total = sum(int(row.get("in_the_money_borrowers") or 0) for row in rows)
         lead_queue_total = sum(int(row.get("lead_queue_borrowers") or 0) for row in rows)
         answer = (
-            "I broke down borrowers passing the refinance-economics screen by state from "
+            "I broke down borrowers who are in the money by state from "
             f"{borrower_asset}. "
             f"{top.get('state')} currently leads with "
             f"{int(top.get('in_the_money_borrowers') or 0):,} borrowers. "
@@ -98,7 +98,7 @@ def _direct_itm_state_breakdown(ctx: _DirectContext) -> GenieMessageResponse | N
         )
     else:
         answer = (
-            "The trusted borrower table returned no refinance-economics state rows "
+            "The trusted borrower table returned no in-the-money state rows "
             "for the current refreshed data coverage."
         )
     return trusted_response(

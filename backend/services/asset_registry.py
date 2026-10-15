@@ -104,7 +104,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
         title="Gold Lead Scores",
         description=(
             "Deterministic score table with the five scoring sub-scores, "
-            "opportunity score, refinance-economics flag, and primary offer code."
+            "opportunity score, In the Money flag, and primary offer code."
         ),
         readiness_source_name="UC Gold Lead Scores",
     ),
@@ -323,7 +323,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
         "fn_in_the_money",
         freshness_not_tracked=True,
         title="In-the-Money Function",
-        description="Canonical refinance-economics screen over rate spread and equity.",
+        description="Canonical In the Money rule over rate spread and equity.",
         object_type="function",
         allow_count_fallback=False,
     ),
@@ -476,7 +476,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
         title="Gold Rate Sensitivity Rollup",
         description=(
             "Rate Lever scenario grid: per state and par-rate step (-100 to +100 "
-            "bps), the addressable borrowers that clear this refresh's refi screen "
+            "bps), the addressable borrowers in the money under this refresh's rule "
             "with fn_rate_spread / fn_in_the_money re-run at par plus the step. A "
             "scenario, not a forecast; rebuilt by the gold refresh, not on a "
             "schedule."
@@ -489,7 +489,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
         title="Portfolio Headline Metric View",
         description=(
             "Borrower-grain semantic view defining every demoed headline KPI: "
-            "marketable population, refi economics screen, high opportunity "
+            "marketable population, In the Money, high opportunity "
             "(canonical fn_high_opportunity threshold), offers available "
             "(non-null fn_next_best_offer), primary offer paths, and average "
             "opportunity score."
@@ -529,7 +529,7 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
         "offer_rules_config",
         freshness_not_tracked=True,
         title="Offer Rules Configuration",
-        description="Governed threshold table for refinance-economics and primary offer rules.",
+        description="Governed threshold table for the In the Money rule and primary offer rules.",
         aliases=("offer_rules",),
     ),
     _descriptor(

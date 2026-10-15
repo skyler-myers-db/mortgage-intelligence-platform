@@ -244,7 +244,7 @@ class TopBorrowerAnalyticsRow(BaseModel):
 
 
 class AnalyticsThresholds(BaseModel):
-    """The refi screen this refresh applied, read from ``mip.gold.borrower_360``.
+    """The In the Money rule this refresh applied, read from ``mip.gold.borrower_360``.
 
     ``min_spread_bps`` / ``min_equity_pct`` are the ``*_applied`` columns when
     every scored row carries one and the same value; the charts draw the

@@ -58,6 +58,8 @@ from __future__ import annotations
 
 from decimal import ROUND_HALF_EVEN, Decimal
 
+from backend.services.segment_labels import ITM_RULE_LABEL
+
 _INT32_MIN = -2_147_483_648
 _INT32_MAX = 2_147_483_647
 
@@ -207,7 +209,7 @@ def offer_display_label(code: str | None, fallback: str | None = None) -> str:
 #
 #     from backend.services.scoring import source_display_label
 #     label = source_display_label("mip.gold.fn_in_the_money")
-#     # -> "Refinance economics screen"
+#     # -> "In the Money rule"
 #
 # Unknown entries fall back to the last dotted segment (the pre-existing
 # `shortSourceLabel` behaviour) so adding a new UC object is non-breaking.
@@ -218,7 +220,7 @@ SOURCE_DISPLAY_LABELS: dict[str, str] = {
     "mip.gold.fn_bounded_mortgage_rate": "Mortgage rate quality bound",
     "mip.gold.fn_estimated_upb":    "Estimated UPB amortization",
     "mip.gold.fn_estimated_upb_confidence_band": "Estimated UPB confidence band",
-    "mip.gold.fn_in_the_money":     "Refinance economics screen",
+    "mip.gold.fn_in_the_money":     ITM_RULE_LABEL,
     "mip.gold.fn_next_best_offer":  "Primary offer rules",
     "mip.gold.fn_lead_score":       "Opportunity score",
     "mip.gold.fn_high_opportunity": "High-opportunity threshold",
@@ -241,12 +243,12 @@ SOURCE_DISPLAY_LABELS: dict[str, str] = {
     "fn_bounded_mortgage_rate":     "Mortgage rate quality bound",
     "fn_estimated_upb":             "Estimated UPB amortization",
     "fn_estimated_upb_confidence_band": "Estimated UPB confidence band",
-    "fn_in_the_money":              "Refinance economics screen",
+    "fn_in_the_money":              ITM_RULE_LABEL,
     "fn_next_best_offer":           "Primary offer rules",
     "fn_lead_score":                "Opportunity score",
     "fn_loan_product_type":         "Loan product classification",
     "loan_applications":            "First-party loan applications",
-    "rules.itm_v3":                 "Refinance economics screen",
+    "rules.itm_v3":                 ITM_RULE_LABEL,
     "mlflow.mtg_nbo_v3":            "Primary offer rules v3",
     "permits.building":             "Building permit signal",
     "listing_activity":             "MLS listing activity",

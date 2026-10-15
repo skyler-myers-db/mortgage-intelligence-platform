@@ -106,7 +106,7 @@ def _rationale_for(
             intent_phrase = "The governed home-equity signal"
         return (
             f"{intent_phrase} paired with {_equity_phrase()} supports a "
-            "home-equity line conversation; refinance economics are not strong enough for a full refinance."
+            "home-equity line conversation; the borrower is not in the money for a full refinance."
         )
     if code == "refi":
         return (
@@ -120,8 +120,8 @@ def _rationale_for(
         )
     if code == "investor":
         return (
-            "Owner Link ties multiple properties to this owner -- owner-occupant "
-            "refinance economics are not the right frame; route to investor lending."
+            "Owner Link ties multiple properties to this owner -- the owner-occupant "
+            "In the Money rule is not the right frame; route to investor lending."
         )
     if code == "retention":
         if competitor_lien:
@@ -195,9 +195,9 @@ def _alternatives_for(
                 offer_code="heloc",
                 product_label=offer_display_label("heloc"),
                 reason_not_chosen=(
-                    "Refinance economics also qualify, so a combined first-mortgage and equity review is more complete than HELOC alone."
+                    "The borrower is also in the money, so a combined first-mortgage and equity review is more complete than HELOC alone."
                     if not has_heloc_propensity_trigger
-                    else "Refinance economics also qualify, so the borrower should review both the first mortgage and equity options."
+                    else "The borrower is also in the money, so they should review both the first mortgage and equity options."
                 ),
             ),
         ]

@@ -232,7 +232,7 @@ def test_analytics_repository_uses_governed_gold_and_semantic_sql() -> None:
     assert repo.economics().equity_spread.total_borrowers == 6
     assert repo.economics().equity_spread.source_table == "mip.gold.equity_spread_points"
     assert repo.economics_points().points[0].borrower_id == "B-48291"
-    assert repo.economics_points().points[0].segment == "Prime Refi Candidates"
+    assert repo.economics_points().points[0].segment == "In the Money"
     assert repo.economics_points().showing == 1
     assert repo.economics_points().total_matching == 6
     assert repo.economics_points().truncated is True
@@ -296,7 +296,7 @@ def test_executive_publishes_gold_provenance_for_the_lagging_lifecycle_mirror() 
     # Per-stage source, the same disclosure shape the approval funnel publishes.
     by_stage = {stage.stage: stage.source for stage in executive.stages}
     assert by_stage["Addressable"] == provenance.population_source
-    assert by_stage["Refi Economics"] == provenance.population_source
+    assert by_stage["In the Money"] == provenance.population_source
     assert by_stage["Opportunity Score 75+"] == provenance.population_source
     assert by_stage["Primary Offer Selected"] == provenance.population_source
     # Only the workflow stages read the mirror, so only they can lag.

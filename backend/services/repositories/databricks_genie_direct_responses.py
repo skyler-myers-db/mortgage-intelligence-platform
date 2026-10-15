@@ -4,15 +4,9 @@ from __future__ import annotations
 
 from backend.services.genie_answers import GenieMessageResponse, GenieProof
 from backend.services.repositories.databricks_genie_trust import _genie_question_hash
+from backend.services.segment_labels import labels_for
 
-_SEGMENT_DISPLAY_LABELS = {
-    "itm": "Prime Refi Candidates",
-    "equity": "Home Equity Candidate",
-    "investor": "Investor / Multi-Property",
-    "retention": "Retention Risk",
-    "listed": "Listed for Sale",
-    "permit": "HELOC Intent",
-}
+_SEGMENT_DISPLAY_LABELS = labels_for(("itm", "equity", "investor", "retention", "listed", "permit"))
 
 
 def _segment_display_label(value: object) -> str:

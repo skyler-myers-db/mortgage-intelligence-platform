@@ -56,6 +56,7 @@ from backend.services.scoring import (
     rate_spread_bps,
     rate_spread_bps_at_par_shift,
 )
+from backend.services.segment_labels import ITM_RULE_LABEL
 
 # The SQL gate on the lien rate (gold_borrower_360.sql rate_spread_bps):
 # first_pos_rate strictly inside (1%, 15%) on an active lien. current_rate is
@@ -205,22 +206,22 @@ def _spread_screen(inputs: OfferInputs) -> ProofMargin:
         # The screen is spread AND equity: a spread over its minimum does not
         # clear it while equity sits under its own minimum.
         if margin > 0:
-            spread_text = f"Spread clears the refi screen's spread minimum by {_bps(margin)}"
+            spread_text = f"Spread clears the In the Money rule's spread minimum by {_bps(margin)}"
         elif margin == 0:
-            spread_text = "Spread meets the refi screen's spread minimum exactly"
+            spread_text = "Spread meets the In the Money rule's spread minimum exactly"
         else:
-            spread_text = f"Spread is {_bps(-margin)} under the refi screen's spread minimum"
+            spread_text = f"Spread is {_bps(-margin)} under the In the Money rule's spread minimum"
         value_text = f"{spread_text}; equity is {_pts(equity_gap)} under its {inputs.min_equity_pct}% minimum"
         threshold = f"{threshold} · equity {inputs.equity_pct}% · screen {inputs.min_equity_pct}%"
     elif margin == 0:
-        value_text = "Meets the refi screen exactly"
+        value_text = "Meets the In the Money rule exactly"
     elif margin > 0:
-        value_text = f"Clears the refi screen by {_bps(margin)}"
+        value_text = f"Clears the In the Money rule by {_bps(margin)}"
     else:
-        value_text = f"{_bps(-margin)} below the refi screen"
+        value_text = f"{_bps(-margin)} below the In the Money rule"
     return _margin(
         "spread_screen",
-        "Refi screen",
+        ITM_RULE_LABEL,
         value_text,
         threshold,
         "clears" if _passes_refi_screen(inputs, inputs.rate_spread_bps) else "short",
@@ -239,15 +240,15 @@ def _par_break_even(inputs: OfferInputs, par: _Par | str) -> ProofMargin:
             spread = rate_spread_bps_at_par_shift(par.note_rate, par.market_rate, shift)
             if _passes_refi_screen(inputs, spread) != passes:
                 action = "Drops below" if passes else "Clears"
-                value_text = f"{action} the refi screen if 30-year {_par_move(par.market_rate, shift)}"
+                value_text = f"{action} the In the Money rule if 30-year {_par_move(par.market_rate, shift)}"
                 return _margin("par_break_even", label, value_text, threshold, "flips", "fn_rate_spread")
     grid = f"±{RATE_SCENARIO_MAX_SHIFT_BPS} bps"
     if passes:
         holds_text = f"Holds for any par move within {grid}"
     elif inputs.equity_pct < inputs.min_equity_pct:
-        holds_text = f"No par move within {grid} clears the refi screen; equity is under its minimum"
+        holds_text = f"No par move within {grid} clears the In the Money rule; equity is under its minimum"
     else:
-        holds_text = f"No par move within {grid} clears the refi screen"
+        holds_text = f"No par move within {grid} clears the In the Money rule"
     return _margin("par_break_even", label, holds_text, threshold, "holds", "fn_rate_spread")
 
 

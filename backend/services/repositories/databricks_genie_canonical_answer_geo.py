@@ -83,7 +83,7 @@ def _answer_in_the_money_top_zips(ctx: _CanonicalAnswerContext) -> GenieMessageR
     if rows:
         top = rows[0]
         answer = (
-            "I ranked ZIP codes by unique borrowers passing the refinance-economics screen "
+            "I ranked ZIP codes by unique borrowers who are in the money "
             f"from {borrower_asset}. "
             f"The current leader is ZIP {top.get('zip')} ({top.get('state')}) "
             f"with {int(top.get('in_the_money_borrowers') or 0):,} borrowers; "
@@ -91,7 +91,7 @@ def _answer_in_the_money_top_zips(ctx: _CanonicalAnswerContext) -> GenieMessageR
         )
     else:
         answer = (
-            "The ranked lead population returned no refinance-economics ZIP rows for "
+            "The ranked lead population returned no in-the-money ZIP rows for "
             "the current refreshed, marketing-eligible coverage."
         )
     return GenieMessageResponse(
@@ -446,7 +446,7 @@ def _answer_in_the_money_count_by_city(ctx: _CanonicalAnswerContext) -> GenieMes
         source="trusted_sql",
     )
     answer = (
-        f"There are {count_int:,} borrowers passing the refinance-economics screen in {city_scope} — meaning their current mortgage rate sits far enough above today\'s market, with enough home equity, that refinancing typically pays for itself — "
+        f"There are {count_int:,} borrowers who are in the money in {city_scope} — meaning their current mortgage rate sits far enough above today\'s market, with enough home equity, that refinancing typically pays for itself — "
         f"within the current {_current_footprint_label()} evaluation-share scope. "
         f"This is a city-scoped unique borrower count from {borrower_asset}; "
         "it is not the overall share total."
