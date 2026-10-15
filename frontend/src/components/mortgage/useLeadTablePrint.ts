@@ -13,6 +13,11 @@
  * print of the queue stays unaudited, as ruled at W5d; Export PDF is the
  * audited path where a surface offers one). The listeners live only while
  * the table is virtualized, and go on unmount.
+ *
+ * A scoped receipt print (DecisionReceipt's Print receipt sets
+ * `<html data-print>`, PRINT_MODE_ATTRIBUTE, and hides #root on paper) leaves
+ * the window alone: rendering up to 5,000 rows nobody prints would only
+ * freeze the page before the print dialog (W5e lead-table-compile review).
  */
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { flushSync } from 'react-dom';
@@ -30,13 +35,19 @@ export interface UseLeadTablePrintInput {
 export function useLeadTablePrint({ virtualized, tableWrapRef, virtualScrollRef }: UseLeadTablePrintInput): boolean {
   const [printing, setPrinting] = useState(false);
   const savedOffsetRef = useRef(0);
+  const openedRef = useRef(false);
   useEffect(() => {
     if (!virtualized) return undefined;
     const beforePrint = () => {
+      // The literal, not DecisionReceipt.actions' constant: no new chunk edge.
+      if (document.documentElement.hasAttribute('data-print')) return;
+      openedRef.current = true;
       savedOffsetRef.current = tableWrapRef.current?.scrollTop ?? 0;
       flushSync(() => setPrinting(true));
     };
     const afterPrint = () => {
+      if (!openedRef.current) return;
+      openedRef.current = false;
       flushSync(() => setPrinting(false));
       // The re-enabled virtualizer is published in that commit's layout phase.
       virtualScrollRef.current?.scrollToOffset(savedOffsetRef.current);

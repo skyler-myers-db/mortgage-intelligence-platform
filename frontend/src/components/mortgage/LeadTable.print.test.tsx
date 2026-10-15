@@ -66,7 +66,8 @@ vi.mock('@tanstack/react-virtual', async (importOriginal) => {
 
 import { LeadTable } from './LeadTable';
 
-const ROWS = 600;
+// Just past LEAD_VIRTUALIZATION_THRESHOLD (120): the same de-virtualization, a lighter render.
+const ROWS = 130;
 
 function lead(index: number): LeadSummary {
   return {
@@ -148,8 +149,25 @@ describe('LeadTable: printing the virtualized queue', () => {
     expect(scrollToOffset).toContain(480);
     expect(apiCalls()).toBe(callsBefore);
     expect(fetchSpy).not.toHaveBeenCalled();
-    // 600 rows mount synchronously in happy-dom: a heavy render on a loaded host.
   }, 30_000);
+
+  it('leaves the window alone for a scoped receipt print (html[data-print])', () => {
+    document.documentElement.dataset.print = 'decision-receipt';
+    try {
+      const windowed = rowCount(container);
+      expect(windowed).toBeLessThan(ROWS);
+      act(() => {
+        window.dispatchEvent(new Event('beforeprint'));
+      });
+      expect(rowCount(container)).toBe(windowed);
+      act(() => {
+        window.dispatchEvent(new Event('afterprint'));
+      });
+      expect(scrollToOffset).toEqual([]);
+    } finally {
+      delete document.documentElement.dataset.print;
+    }
+  });
 
   it('stops listening once the table unmounts', () => {
     act(() => root.unmount());
