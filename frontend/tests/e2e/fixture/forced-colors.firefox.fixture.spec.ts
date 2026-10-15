@@ -311,9 +311,12 @@ test.describe('Firefox forced colors (a11y-10 item 4 / css-06 item 3)', () => {
         const ink = `rgb(${(authored as Rgb).join(', ')})`;
         const tab = await tabProbe(page, 'drawer__tab is-active');
         // Out-ranks R2's `.is-active *:not(svg *)` (0,2,2): forcing stays
-        // off, but the state and its svg ink an authored colour.
+        // off, but the state and its svg ink an authored colour. Since css-05
+        // R2 is an !important in the modes layer, and an unlayered injected
+        // !important loses to every layered one, so the twin rides the first
+        // layer, `reset`, whose importants outrank every later layer's.
         await page.addStyleTag({
-          content: `[data-forced-firefox-probe] > button.drawer__tab.is-active, [data-forced-firefox-probe] > button.drawer__tab.is-active * { forced-color-adjust: none !important; color: ${ink} !important; }`,
+          content: `@layer reset { [data-forced-firefox-probe] > button.drawer__tab.is-active, [data-forced-firefox-probe] > button.drawer__tab.is-active * { forced-color-adjust: none !important; color: ${ink} !important; } }`,
         });
         const inks = await paintedInks(page, tab, pair.ground);
         const listing = inks.map((sample) => describeInk('authored drawer tab', sample)).join('\n');
