@@ -41,6 +41,24 @@ const ROUTE_STARTERS: Readonly<Record<string, readonly string[]>> = templates.ro
 const KPI_PROMPTS: Readonly<Record<string, string>> = templates.kpiPrompts;
 const SEGMENTS_WITHOUT_TEMPLATES: Readonly<Record<string, string>> = templates.segmentsWithoutTemplates;
 
+interface SegmentTemplates {
+  segmentTemplate: string;
+  leadTemplate: string;
+}
+
+/**
+ * Per-code sentences and phrase overrides (critic-11). "In the Money" reads
+ * as a prenominal ("in-the-money borrowers"), not as a segment name ("the in
+ * the money segment"), so itm carries its own two sentences and the phrase the
+ * server's phase-2 renderer shares (`genie_context_scope.SEGMENT_PHRASES`).
+ */
+const SEGMENT_TEMPLATES_BY_CODE: Readonly<Record<string, SegmentTemplates>> = templates.segmentTemplatesByCode;
+const SEGMENT_PHRASE_BY_CODE: Readonly<Record<string, string>> = templates.segmentPhraseByCode;
+
+function ownEntry<T>(table: Readonly<Record<string, T>>, code: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(table, code) ? table[code] : undefined;
+}
+
 /**
  * Federal state names by USPS code: the 50 states plus DC. The value a
  * template renders is always one of these 51 strings, never caller text.
@@ -89,7 +107,8 @@ export function genieKpiPrompt(label: string): string | null {
 function segmentPhrase(code: string): string | null {
   if (Object.prototype.hasOwnProperty.call(SEGMENTS_WITHOUT_TEMPLATES, code)) return null;
   const segment = segmentByCode(code);
-  return segment ? segment.name.toLowerCase() : null;
+  if (!segment) return null;
+  return ownEntry(SEGMENT_PHRASE_BY_CODE, code) ?? segment.name.toLowerCase();
 }
 
 /**
@@ -100,7 +119,8 @@ function segmentPhrase(code: string): string | null {
  */
 export function genieSegmentPrompt(code: string): string | null {
   const segment = segmentPhrase(code);
-  return segment ? fill(templates.segmentTemplate, { segment }) : null;
+  if (!segment) return null;
+  return fill(ownEntry(SEGMENT_TEMPLATES_BY_CODE, code)?.segmentTemplate ?? templates.segmentTemplate, { segment });
 }
 
 /** Federal state name for a USPS code, or null when the code is not one. */
@@ -132,9 +152,10 @@ export interface GenieLeadContext {
 export function genieLeadPrompt({ segmentCodes, stateCode }: GenieLeadContext): string | null {
   const state = stateNameForCode(stateCode);
   if (!state) return null;
-  const segment = segmentCodes.map(segmentPhrase).find((phrase) => phrase !== null);
-  if (!segment) return genieStatePrompt(stateCode);
-  return fill(templates.leadTemplate, { state, segment });
+  const code = segmentCodes.find((candidate) => segmentPhrase(candidate) !== null);
+  const segment = code === undefined ? null : segmentPhrase(code);
+  if (code === undefined || !segment) return genieStatePrompt(stateCode);
+  return fill(ownEntry(SEGMENT_TEMPLATES_BY_CODE, code)?.leadTemplate ?? templates.leadTemplate, { state, segment });
 }
 
 /**

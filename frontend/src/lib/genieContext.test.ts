@@ -120,6 +120,7 @@ describe('reviewed vocabulary', () => {
       'Addressable population',
       'Addressable Borrowers',
       'Marketable population',
+      'In the Money',
       'Refi economics screen',
       'Refi Economics',
       'Opportunity score 75+',
@@ -188,7 +189,7 @@ describe('reviewed vocabulary', () => {
     }
     // The first REGISTERED segment names the prompt; unknown codes are skipped.
     expect(genieLeadPrompt({ segmentCodes: ['made_up', 'itm'], stateCode: 'IL' })).toBe(
-      'How many borrowers in Illinois are in the prime refi candidates segment, and what is the average rate spread?',
+      'How many in-the-money borrowers are in Illinois, and what is the average rate spread?',
     );
     // No registered segment: the state template stands in.
     expect(genieLeadPrompt({ segmentCodes: [], stateCode: 'IL' })).toBe(genieStatePrompt('IL'));

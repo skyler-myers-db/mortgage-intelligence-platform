@@ -182,7 +182,7 @@ describe('LeadQueueEmptyState', () => {
   }
 
   it('a click sends ONE closed-code POST and prefills (never submits) the server prompt', async () => {
-    const prompt = 'How many borrowers across the current Cotality data coverage are in the prime refi candidates segment and the home equity candidate segment, and what is the average rate spread?';
+    const prompt = 'How many borrowers across the current Cotality data coverage are in the in-the-money segment and the home equity candidate segment, and what is the average rate spread?';
     let resolve: (value: unknown) => void = () => {};
     genieMocks.requestGenieContextScope.mockImplementation(() => new Promise((done) => { resolve = done; }));
     renderEmpty('segment_codes=itm,equity&segment_mode=all', { intersection: true });
