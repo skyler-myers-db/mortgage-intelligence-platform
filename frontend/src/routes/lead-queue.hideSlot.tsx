@@ -26,8 +26,9 @@ function hideValue(view: LeadTableView, hidden: LeadTableHiddenColumns): string 
       return token !== null && hidden.has(token);
     })
     .map((column) => column.label);
-  if (labels.length === 0) return 'No columns';
-  return labels.length === 1 ? labels[0] : `${labels.length} columns`;
+  const [onlyLabel] = labels;
+  if (onlyLabel === undefined) return 'No columns';
+  return labels.length === 1 ? onlyLabel : `${labels.length} columns`;
 }
 
 export function LeadQueueHideSlot({

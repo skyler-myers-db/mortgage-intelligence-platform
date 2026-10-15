@@ -124,9 +124,10 @@ export function forgetSavedView(id: string): void {
 }
 
 function sameRefs(a: readonly SavedViewRef[], b: readonly SavedViewRef[]): boolean {
-  return a.length === b.length && a.every((entry, index) => (
-    entry.id === b[index].id && entry.name === b[index].name && entry.params === b[index].params
-  ));
+  return a.length === b.length && a.every((entry, index) => {
+    const other = b[index];
+    return other !== undefined && entry.id === other.id && entry.name === other.name && entry.params === other.params;
+  });
 }
 
 /**

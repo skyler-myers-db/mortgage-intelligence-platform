@@ -70,7 +70,7 @@
     "frontend/src/routes/analytics.charts.tsx": {"TS2322":1,"TS2532":2},
     "frontend/src/routes/analytics.equity-scatter.tsx": {"TS2322":1},
     "frontend/src/routes/analytics.lib.ts": {"TS18048":12,"TS2532":2},
-    "frontend/src/routes/analytics.rate-window.lib.ts": {"TS18048":10,"TS2322":4},
+    "frontend/src/routes/analytics.rate-window.lib.ts": {"TS18048":8,"TS2322":4},
     "frontend/src/routes/analytics.rate-window.tsx": {"TS2532":2},
     "frontend/src/routes/analytics.sales-ops.period.ts": {"TS18048":1,"TS2345":1},
     "frontend/src/routes/ask-genie.compose-plan-diff.ts": {"TS2322":2,"TS2345":3,"TS2532":9},

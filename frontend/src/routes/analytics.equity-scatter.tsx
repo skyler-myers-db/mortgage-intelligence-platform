@@ -456,7 +456,7 @@ function pointTipSpots(groups: ReadonlyArray<EquitySpreadCoordinateGroup>, layou
   return new Map(groups.map((group) => {
     const position = scatterPosition(group.equity_pct, group.rate_spread_bps, layout);
     const point = group.points[0];
-    const spot: ScatterTipSpot = group.coordinate_total === 1
+    const spot: ScatterTipSpot = group.coordinate_total === 1 && point !== undefined
       ? {
           ...position,
           label: point.display_name,

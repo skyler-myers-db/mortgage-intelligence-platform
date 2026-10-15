@@ -162,7 +162,8 @@ export default function RevokeApprovalPanel({
         },
         onError: (error) => {
           // The same request id on a 429's Retry: the intent is unchanged (unsettled).
-          loadFailureCopy()
+          // `void`: a rejection is handled inside (the FAILED_FALLBACK step).
+          void loadFailureCopy()
             .then((module) => module.describeRevokeFailure(
               error,
               error instanceof ApiError

@@ -171,6 +171,7 @@ export function parseFilterGrammar(text: string): FilterGrammarResult {
 
   for (let at = 0; at < tokens.length; at += 1) {
     const token = tokens[at];
+    if (token === undefined) break;
     const lower = token.toLowerCase();
     // A segment phrase first: 'IN THE MONEY' is the segment, never Indiana.
     const phrase = segmentPhraseAt(tokens, at);
@@ -203,8 +204,9 @@ export function parseFilterGrammar(text: string): FilterGrammarResult {
       else unrecognized.push(token);
       continue;
     }
-    if (PRODUCT_WORDS[lower]) {
-      setSingle('product', 'PRODUCT', PRODUCT_WORDS[lower], PRODUCT_WORDS[lower], token);
+    const productWord = PRODUCT_WORDS[lower];
+    if (productWord) {
+      setSingle('product', 'PRODUCT', productWord, productWord, token);
       continue;
     }
     const segment = segmentWord(token);
@@ -220,13 +222,14 @@ export function parseFilterGrammar(text: string): FilterGrammarResult {
       setSingle('outreach_status', 'OUTREACH', lower, lower.charAt(0).toUpperCase() + lower.slice(1), token);
       continue;
     }
-    if (RELATIONSHIP_WORDS[lower]) {
-      setSingle('lender_relationship', 'RELATIONSHIP', RELATIONSHIP_WORDS[lower], RELATIONSHIP_WORDS[lower], token);
+    const relationshipWord = RELATIONSHIP_WORDS[lower];
+    if (relationshipWord) {
+      setSingle('lender_relationship', 'RELATIONSHIP', relationshipWord, relationshipWord, token);
       continue;
     }
-    const aged = /^aged>(\d+)$/i.exec(token);
-    if (aged && AGED_DAYS.has(aged[1])) {
-      setSingle('aged_days', 'AGING', aged[1], `Aged >${aged[1]}d`, token);
+    const agedDays = /^aged>(\d+)$/i.exec(token)?.[1];
+    if (agedDays !== undefined && AGED_DAYS.has(agedDays)) {
+      setSingle('aged_days', 'AGING', agedDays, `Aged >${agedDays}d`, token);
       continue;
     }
     const scored = scoreBound(token, tokens[at + 1]);
@@ -246,10 +249,12 @@ export function parseFilterGrammar(text: string): FilterGrammarResult {
   const params = new URLSearchParams();
   const chips: FilterGrammarChip[] = [];
   const sortedStates = states.map((state) => state.code).sort();
-  if (sortedStates.length === 1) params.set('state', sortedStates[0]);
+  const [onlyState] = sortedStates;
+  if (sortedStates.length === 1 && onlyState !== undefined) params.set('state', onlyState);
   else if (sortedStates.length > 1) params.set('states', sortedStates.join(','));
   for (const state of states) chips.push({ key: sortedStates.length === 1 ? 'state' : 'states', label: 'STATE', value: state.code, source: state.source });
-  if (segments.length === 1) params.set('segment', segments[0].code);
+  const [onlySegment] = segments;
+  if (segments.length === 1 && onlySegment !== undefined) params.set('segment', onlySegment.code);
   else if (segments.length > 1) {
     params.set('segment_codes', segments.map((segment) => segment.code).join(','));
     params.set('segment_mode', 'any');
