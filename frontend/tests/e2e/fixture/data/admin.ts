@@ -230,7 +230,7 @@ export const adminFixtures: FixtureEntry[] = [
       offer_rules_version: 'fixture-v1',
       rules_edited_at: SNAPSHOT_AT,
       thresholds: [
-        { key: 'min_spread_bps', value: 75, unit: 'bps', label: 'Minimum rate spread', description: 'Lien rate minus par required to pass the refi economics screen.', sort_order: 1, last_updated: SNAPSHOT_AT },
+        { key: 'min_spread_bps', value: 75, unit: 'bps', label: 'Minimum rate spread', description: 'Lien rate minus par required to be in the money.', sort_order: 1, last_updated: SNAPSHOT_AT },
         { key: 'min_equity_pct', value: 15, unit: 'pct', label: 'Minimum equity', description: 'AVM-based equity required for a refinance offer.', sort_order: 2, last_updated: SNAPSHOT_AT },
         { key: 'heloc_min_equity_pct', value: 40, unit: 'pct', label: 'HELOC equity threshold', description: 'Equity required for the HELOC branch.', sort_order: 3, last_updated: SNAPSHOT_AT },
         { key: 'par_rate', value: 0.04875, unit: 'rate_fraction', label: 'Par refinance rate', description: 'FRED 30-year conforming benchmark.', sort_order: 4, last_updated: SNAPSHOT_AT },

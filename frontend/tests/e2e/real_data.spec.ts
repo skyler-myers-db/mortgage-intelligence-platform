@@ -708,8 +708,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .first();
     await expect(rankedHeader).toContainText(/ranked borrowers/, { timeout: 45_000 });
 
-    await clickSegmentCard(page, 'Prime Refi Candidates');
-    await expect(rankedHeader).toContainText(/segment filter: Prime Refi Candidates/, { timeout: 45_000 });
+    await clickSegmentCard(page, 'In the Money');
+    await expect(rankedHeader).toContainText(/segment filter: In the Money/, { timeout: 45_000 });
 
     const isAnyModeSegmentResponse = (url: string, path: string) => {
       if (!urlIncludesApiPath(url, path)) return false;
@@ -746,7 +746,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     expect((segmentUrl.searchParams.get('segment_codes') ?? '').split(',').sort()).toEqual(['equity', 'itm']);
     expect(segmentUrl.searchParams.get('segment_mode')).toBe('any');
     await expect(rankedHeader).toContainText(
-      /segment filter: Prime Refi Candidates or Home Equity Candidate/,
+      /segment filter: In the Money or Home Equity Candidate/,
       { timeout: 45_000 },
     );
     await expect(rankedHeader).toContainText(/any selected segment, de-duplicated/);
@@ -761,7 +761,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .first();
     await expect(rankedHeader).toContainText(/ranked borrowers/, { timeout: 45_000 });
 
-    await clickSegmentCard(page, 'Prime Refi Candidates');
+    await clickSegmentCard(page, 'In the Money');
     await clickSegmentCard(page, 'Home Equity Candidate');
 
     const allModeLeads = page.waitForResponse((response) => {
@@ -791,7 +791,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     expect(segmentUrl.searchParams.get('segment_mode')).toBe('all');
 
     await expect(rankedHeader).toContainText(
-      /segment filter: Prime Refi Candidates and Home Equity Candidate/,
+      /segment filter: In the Money and Home Equity Candidate/,
       { timeout: 45_000 },
     );
     await expect(rankedHeader).toContainText(/all selected segments/);
@@ -808,7 +808,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   test('segment map drill preserves segment filters through state ZIP and Lead Queue', async ({ page, request }) => {
     await gotoApp(page, '/segment-intelligence');
 
-    const selectedSegments = ['Prime Refi Candidates', 'Home Equity Candidate'];
+    const selectedSegments = ['In the Money', 'Home Equity Candidate'];
     const target = await discoverMapDrillTarget(request, ['itm', 'equity']);
     const filteredGeoResponse = (path: string) => (response: { url: () => string; status: () => number }) => {
       if (response.status() !== 200 || !urlIncludesApiPath(response.url(), path)) return false;
@@ -1143,7 +1143,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await catalogPopup.close();
 
     await drawer.getByRole('tab', { name: 'Lineage' }).click();
-    await expect(drawer.getByText(/Ordered semantics: arrows follow/i)).toBeVisible();
+    await expect(drawer.getByText(/Read top to bottom in the documented order/i)).toBeVisible();
     const lineageAssets = drawer.locator('#drawer-panel-lineage .lineage-node > .lineage-node__chip');
     await expect(lineageAssets.first()).toBeVisible({ timeout: 10_000 });
     const lineageLinkState = await lineageAssets.evaluateAll((nodes) => nodes.map((node) => ({
@@ -1693,7 +1693,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page.getByRole('button', { name: /State: 2 selected/i })).toBeVisible();
 
     await page.getByRole('button', { name: /^Segment:/i }).click();
-    await page.getByRole('option', { name: 'Prime Refi Candidates', exact: true }).click();
+    await page.getByRole('option', { name: 'In the Money', exact: true }).click();
     const segmentResponse = page.waitForResponse((response) => {
       if (!response.url().includes('/api/v1/analytics/executive')) return false;
       const params = new URL(response.url()).searchParams;
@@ -1867,7 +1867,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 
     const economics = page.locator('.surface', { hasText: /In the Money check/i }).first();
     await assertSourceDrawer(page, economics, 'Market rate comparison', 'Market rate comparison');
-    await assertSourceDrawer(page, economics, 'Refinance economics screen', 'Rate + equity screen');
+    await assertSourceDrawer(page, economics, 'In the Money rule', 'Rate + equity screen');
 
     const timeline = page.locator('.surface', { hasText: /Trigger timeline/i }).first();
     await assertSourceDrawer(page, timeline, 'Rate spread evidence', 'Rate spread evidence');
@@ -1937,7 +1937,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .evaluateAll((nodes) => nodes.map((node) => node.textContent?.trim() ?? ''));
     if (sourceLabels.includes('Market rate comparison')) {
       await assertSourceDrawer(page, primaryOffer, 'Market rate comparison', 'Market rate comparison');
-      await assertSourceDrawer(page, primaryOffer, 'Refinance economics screen', 'Rate + equity screen');
+      await assertSourceDrawer(page, primaryOffer, 'In the Money rule', 'Rate + equity screen');
     } else if (sourceLabels.includes('MLS listing activity')) {
       await assertSourceDrawer(page, primaryOffer, 'MLS listing activity', 'MLS listing');
     } else if (sourceLabels.includes('HELOC propensity')) {
@@ -2216,7 +2216,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page).toHaveURL(/\/lead-queue\?.*zips=/, { timeout: 20_000 });
     await expect(page).toHaveURL(/segment=itm/, { timeout: 20_000 });
     await expect(page.getByText(/zips = \d+ selected/i)).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByText(/segment = Prime Refi Candidates/i)).toBeVisible();
+    await expect(page.getByText(/segment = In the Money/i)).toBeVisible();
     await expect(page.getByText(/Loading leads/i)).toBeHidden({ timeout: 45_000 });
     await expect(page.locator('.lead-table__zip').first()).toBeVisible({ timeout: 45_000 });
 

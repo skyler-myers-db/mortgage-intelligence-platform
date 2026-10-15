@@ -32,8 +32,8 @@ const ACTOR_A2 = 'actor_a2a2a2a2a2a2a2a2';
 const PINS_KEY = 'mip.pinnedInsights';
 const A_PIN = {
   id: 'pin-of-a',
-  question: 'Which states lead the refi screen?',
-  summary: 'Illinois leads the refi screen.',
+  question: 'Which states have the most in-the-money borrowers?',
+  summary: 'Illinois has the most in-the-money borrowers.',
   source: 'mip.gold.geo_state_rollup',
   pinnedAt: '2026-07-14T14:00:00Z',
 };

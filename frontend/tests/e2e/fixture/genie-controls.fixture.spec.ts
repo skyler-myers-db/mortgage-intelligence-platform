@@ -176,7 +176,7 @@ test.describe('Genie page context (genie-04, shell-07)', () => {
       'Show the top 10 borrowers by lead score across the current Cotality data coverage.',
     );
     // Not the server's identical global list.
-    await expect(dialog).not.toContainText('Which states have the most prime refi candidates?');
+    await expect(dialog).not.toContainText('Which states have the most in-the-money borrowers?');
     await expect(page.locator('.genie__msg--user')).toHaveCount(0);
   });
 });

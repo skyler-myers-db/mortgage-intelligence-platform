@@ -40,8 +40,8 @@ const QUERY_CACHE_KEY = 'mip.queryCache.v1';
 const A_CONVERSATION = 'fixture-conversation-of-a';
 const A_PIN = {
   id: 'pin-of-a',
-  question: 'Which states lead the refi screen?',
-  summary: 'Illinois leads the refi screen.',
+  question: 'Which states have the most in-the-money borrowers?',
+  summary: 'Illinois has the most in-the-money borrowers.',
   source: 'mip.gold.geo_state_rollup',
   pinnedAt: '2026-07-14T14:00:00Z',
 };

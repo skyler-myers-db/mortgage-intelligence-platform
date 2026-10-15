@@ -60,7 +60,7 @@ const REFUSAL_ANSWERS: Record<GenieRefusalReason, string> = {
 
 /** `load_sample_questions()[:2]` stand-ins (genie_deterministic outreach branch). */
 const OUTREACH_SAMPLE_FOLLOW_UPS = [
-  'Which states have the most prime refi candidates?',
+  'Which states have the most in-the-money borrowers?',
   'How many HELOC-intent borrowers have at least 40% equity?',
 ];
 

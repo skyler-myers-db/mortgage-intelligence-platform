@@ -114,7 +114,7 @@ function assetMetadata(assetKey: string): AssetMetadataResponse {
 const LINEAGE_FAMILIES: ReadonlyArray<readonly [string, string]> = [
   ['marketable_population', 'Marketable population'],
   ['opportunity_score', 'Opportunity score'],
-  ['in_the_money', 'Refi economics screen'],
+  ['in_the_money', 'In the Money'],
   ['next_best_offer', 'Primary offer path'],
 ];
 

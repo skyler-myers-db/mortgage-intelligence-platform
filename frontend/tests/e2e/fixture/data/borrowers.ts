@@ -34,7 +34,7 @@ const OFFER_PROFILES: readonly OfferProfile[] = [
   { code: 'heloc', label: 'HELOC', segments: ['permit', 'equity'], whyNow: 'Cotality HELOC propensity and a strong equity position indicate equity-credit demand.' },
   { code: 'purchase', label: 'Next-home purchase loan', segments: ['listed', 'retention'], whyNow: 'An active listing makes next-home financing more useful than refinancing the current loan.' },
   { code: 'cash_out', label: 'Cash-out refinance', segments: ['itm', 'investor'], whyNow: 'Owner Link shows a multi-property profile with a lien currently in the money.' },
-  { code: 'refi', label: 'Refinance', segments: ['itm'], whyNow: 'Rate spread clears the refinance economics screen on the latest AVM.' },
+  { code: 'refi', label: 'Refinance', segments: ['itm'], whyNow: 'Rate spread puts the lien in the money on the latest AVM.' },
   { code: 'retention', label: 'Retention review', segments: ['retention'], whyNow: 'Current-customer relationship with competitor lien activity nearby.' },
 ];
 

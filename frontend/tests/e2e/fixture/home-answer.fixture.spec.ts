@@ -548,7 +548,7 @@ test.describe('Home answer band links and reads', () => {
   test('WHY NOW and WHAT TO OFFER deep-link through the Lead Queue URL filter contract', async ({ app, page }) => {
     await app.gotoRoute('/');
     const why = page.locator('.home-answer .login-summary');
-    await expect(why.getByRole('link', { name: 'borrowers who pass the refi screen' }))
+    await expect(why.getByRole('link', { name: 'in-the-money borrowers' }))
       .toHaveAttribute('href', '/lead-queue?segment=itm');
     await expect(why.getByRole('link', { name: /opportunity score 75\+/ }))
       .toHaveAttribute('href', '/lead-queue?funnel_stage=high_opportunity');

@@ -19,7 +19,7 @@ import { SNAPSHOT_AT, STATES, TOTALS } from './reference';
 
 export const GENIE_MESSAGE_ID = 'fixture-message-0001';
 export const GENIE_PROGRESS_TOKEN = 'fixture-progress-token-0001';
-export const GENIE_QUESTION = 'Which states have the most prime refi candidates?';
+export const GENIE_QUESTION = 'Which states have the most in-the-money borrowers?';
 
 const SOURCE_ASSETS = ['mip.semantics.borrower_opportunity_metric_view', 'mip.gold.borrower_360'];
 const GOVERNED_SQL =

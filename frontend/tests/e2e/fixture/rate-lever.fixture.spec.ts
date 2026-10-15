@@ -81,22 +81,22 @@ async function openHomeRate(page: Page, app: { gotoRoute: (path: string) => Prom
 /** The legend, headline and slider name for one step, from the fixture rows. */
 const EXPECTED: Record<number, { headline: string; valueText: string }> = {
   0: {
-    headline: "At today's 30-year par rate (6.30%), 12,840 borrowers clear this refresh's refi screen; 536 of them are contactable.",
+    headline: "At today's 30-year par rate (6.30%), 12,840 borrowers are in the money; 536 of them are contactable.",
     valueText: "Par rate 6.30%, today's rate: 12,840 borrowers in the money.",
   },
   [-50]: {
     headline:
-      "If the 30-year par rate were 0.50 points lower (5.80%), 18,619 borrowers would clear this refresh's refi screen: 5,779 more than today; 778 of them are contactable.",
+      "If the 30-year par rate were 0.50 points lower (5.80%), 18,619 borrowers would be in the money: 5,779 more than today; 778 of them are contactable.",
     valueText: 'Par rate 5.80%, down 50 basis points: 18,619 borrowers in the money.',
   },
   100: {
     headline:
-      "If the 30-year par rate were 1.00 points higher (7.30%), 5,136 borrowers would clear this refresh's refi screen: 7,704 fewer than today; 215 of them are contactable.",
+      "If the 30-year par rate were 1.00 points higher (7.30%), 5,136 borrowers would be in the money: 7,704 fewer than today; 215 of them are contactable.",
     valueText: 'Par rate 7.30%, up 100 basis points: 5,136 borrowers in the money.',
   },
   [-100]: {
     headline:
-      "If the 30-year par rate were 1.00 points lower (5.30%), 25,680 borrowers would clear this refresh's refi screen: 12,840 more than today; 1,072 of them are contactable.",
+      "If the 30-year par rate were 1.00 points lower (5.30%), 25,680 borrowers would be in the money: 12,840 more than today; 1,072 of them are contactable.",
     valueText: 'Par rate 5.30%, down 100 basis points: 25,680 borrowers in the money.',
   },
 };
@@ -500,7 +500,7 @@ test.describe('Rate Lever change as numbers and the cohort handoff', () => {
   test('the cohort link opens the Lead Queue over today\'s spread band, with the RATE SPREAD chip', async ({ app, page, mockApi }) => {
     await openHomeRate(page, app);
     await scrubTo(page, 2);
-    const link = page.locator('.rate-lever').getByRole('link', { name: 'Open borrowers within 50 bps of the refi screen in the Lead Queue' });
+    const link = page.locator('.rate-lever').getByRole('link', { name: 'Open borrowers within 50 bps of being in the money in the Lead Queue' });
     await expect(link).toHaveAttribute('href', '/lead-queue?min_rate_spread_bps=25&max_rate_spread_bps=74');
     await link.click();
     await expect(page).toHaveURL(/\/lead-queue\?min_rate_spread_bps=25&max_rate_spread_bps=74$/);

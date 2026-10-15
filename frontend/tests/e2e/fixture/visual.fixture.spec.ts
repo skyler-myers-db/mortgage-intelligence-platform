@@ -37,8 +37,10 @@
  *  T. W5d w5-growth-watchlists: the Rate Lever's "Watch this level" row
  *     and its watching line on Home and Segments, and a composed plan's
  *     card mid-progress                                               10
+ *  U. W5e w5-lexicon-copy: the request-scoped Lead Queue whose
+ *     borrowers are all decided (W5d lq deferral 9)                    2
  *                                                                     --
- *                                                                    154
+ *                                                                    156
  *
  * Baselines are amd64-Linux renders from the pinned Playwright container:
  * this spec runs only with MIP_VRT=1 (playwright.config.ts) and refuses any
@@ -51,7 +53,8 @@
 import type { Locator, Page } from '@playwright/test';
 import type { AppDriver, FixtureAccent, FixtureTheme } from './app';
 import { enterState, prepareState, type FixtureState } from './fixtureStates';
-import type { HomeSummary, SessionResponse } from '../../../src/types';
+import type { HomeSummary, LeadSummary, SessionResponse } from '../../../src/types';
+import { REQUEST_BATCH_ID } from './data/approvalRequests';
 import { provenanceSingleAnswer } from './data/genieProvenance';
 import { GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
 import { RATE_MOVE_HOME_SUMMARY } from './data/homeAnswer';
@@ -368,6 +371,21 @@ for (const theme of FIXTURE_THEMES) {
     });
 
     // E: compact density.
+    // U (W5e w5-lexicon-copy, W5d lq deferral 9): an approval request whose
+    // borrowers were all decided, withdrawn or expired. Its natural load is
+    // the scoped GET /api/leads; nothing after it is an audited read.
+    test('lead-queue · request-scoped empty', async ({ app, mockApi, page }) => {
+      mockApi.register<LeadSummary[]>('GET', '/api/leads', () =>
+        json<LeadSummary[]>([], { headers: { 'X-Total-Matching': '0', 'X-Returned-Rows': '0' } }),
+      );
+      await app.setTheme(theme);
+      await app.gotoRoute(`/lead-queue?approval_request_batch=${REQUEST_BATCH_ID}`);
+      const naturalLoad = markNaturalLoad(mockApi);
+      await expect(page.locator('#main-content .empty__title')).toHaveText('No open borrowers left in this approval request.');
+      await check(page, 'lead-queue', theme, 'request-scoped-empty');
+      expectNoAuditedReadSince(mockApi, naturalLoad, 'lead-queue · request-scoped empty');
+    });
+
     test('lead-queue · compact density', async ({ app, mockApi, page }) => {
       await app.setDensity('compact');
       const { naturalLoad } = await load(app, mockApi, route('lead-queue'), theme);

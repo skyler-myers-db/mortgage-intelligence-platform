@@ -220,7 +220,7 @@ test.describe('Module 0 demo visual baselines', () => {
 
     const longPrompt = Array.from(
       { length: 20 },
-      () => 'Compare prime refi candidates, HELOC candidates, listings, evidence provenance, and lender overlays for the current filtered population.',
+      () => 'Compare in-the-money borrowers, HELOC candidates, listings, evidence provenance, and lender overlays for the current filtered population.',
     ).join(' ');
     const questionBox = page.locator('textarea[aria-label="Ask Genie — question"]');
     await questionBox.fill(longPrompt);

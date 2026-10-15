@@ -290,7 +290,7 @@ export const portfolioFixtures: FixtureEntry[] = [
       generator_label: 'Reviewed campaign framework',
       performance_status: 'insufficient_sample',
       audience_summary:
-        'The selected audience is led by borrowers with refinance economics and usable home equity and is ready for a controlled message test.',
+        'The selected audience is led by borrowers who are in the money and have usable home equity and is ready for a controlled message test.',
       strategy:
         'Compare the reviewed benefit and guidance frames with one clear review invitation and a randomized holdout.',
       variants: [

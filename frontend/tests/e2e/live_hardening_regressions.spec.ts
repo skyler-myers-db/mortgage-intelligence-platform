@@ -339,29 +339,29 @@ test('Clear filters is visible, disabled when clean, and clears active filters o
 
   await gotoApp(page, '/segment-intelligence');
   await expectClearFiltersState(page, true);
-  await clickSegment(page, 'Prime Refi Candidates');
+  await clickSegment(page, 'In the Money');
   await expectClearFiltersState(page, false);
   await page.getByRole('button', { name: /^Clear filters$/ }).first().click();
   await expectClearFiltersState(page, true);
-  await expect(page.getByText(/any selected segment, de-duplicated/i)).toHaveCount(0);
+  await expect(page.getByText(/any selected segment, counted once/i)).toHaveCount(0);
 });
 
 test('Segment Intelligence stacks selected segments into an any-match cohort and replays controls', async ({ page }) => {
   await gotoApp(page, '/segment-intelligence?segment_codes=itm,listed&segment_mode=all');
   await expect(page.getByRole('button', { name: /All selected/i })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('button', { name: /Prime Refi Candidates/i })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: /In the Money/i })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('button', { name: /Listed for Sale/i })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByText(/all selected segments/i)).toBeVisible({ timeout: 20_000 });
 
   await gotoApp(page, '/segment-intelligence');
   await expect(page.getByRole('button', { name: /Any selected/i })).toHaveAttribute('aria-pressed', 'true');
-  await clickSegment(page, 'Prime Refi Candidates');
+  await clickSegment(page, 'In the Money');
   await clickSegment(page, 'Listed for Sale');
   const anyUrl = new URL(page.url());
   expect((anyUrl.searchParams.get('segment_codes') ?? '').split(',').sort()).toEqual(['itm', 'listed']);
   expect(anyUrl.searchParams.get('segment_mode')).toBe('any');
 
-  await expect(page.getByText(/any selected segment, de-duplicated/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/any selected segment, counted once/i)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/all selected segments/i)).toHaveCount(0);
 
   const allModeResponse = page.waitForResponse((response) => {
@@ -385,7 +385,7 @@ test('Segment Intelligence stacks selected segments into an any-match cohort and
   expect(allUrl.searchParams.get('segment_mode')).toBe('all');
   await expect(page.getByRole('button', { name: /All selected/i })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByText(/all selected segments/i)).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText(/any selected segment, de-duplicated/i)).toHaveCount(0);
+  await expect(page.getByText(/any selected segment, counted once/i)).toHaveCount(0);
 
   await page.getByRole('link', { name: /Deep-dive lead queue/i }).click();
   await expect(page).toHaveURL(/\/lead-queue\?/, { timeout: 20_000 });
@@ -408,7 +408,7 @@ test('Segment Intelligence stacks selected segments into an any-match cohort and
  */
 test('clicking the centre of a segment card selects it instead of opening evidence', async ({ page }) => {
   await gotoApp(page, '/segment-intelligence');
-  const card = page.locator('.seg-card', { hasText: 'Prime Refi Candidates' }).first();
+  const card = page.locator('.seg-card', { hasText: 'In the Money' }).first();
   await expect(card, 'segment card should be ready').toBeVisible({ timeout: 45_000 });
   const select = card.locator('.seg-card__select');
   await expect(select).toHaveAttribute('aria-pressed', 'false');
@@ -459,7 +459,7 @@ test('the Evidence Drawer is dismissible by backdrop click and by Escape', async
   await expect(drawer).not.toHaveAttribute('open', { timeout: 20_000 });
 
   // Page is usable again: selection still works after the drawer closes.
-  await clickSegment(page, 'Prime Refi Candidates');
+  await clickSegment(page, 'In the Money');
   await expect(page).toHaveURL(/segment_codes=[^&]*itm/, { timeout: 20_000 });
 });
 
@@ -520,7 +520,7 @@ test('state drilldown lands on ZIP tiles with live segment-filtered fills', asyn
   expect(selected, 'expected a live state with ZIP rollups for the selected segments').not.toBeNull();
 
   await gotoApp(page, '/segment-intelligence');
-  await clickSegment(page, 'Prime Refi Candidates');
+  await clickSegment(page, 'In the Money');
   await clickSegment(page, 'Listed for Sale');
   await page.locator('path.map-region', { hasText: '' }).first().waitFor({ state: 'visible', timeout: 45_000 });
   await page.locator(`path[aria-label^="${selected!.stateName}:"]`).click();
@@ -609,7 +609,7 @@ test('Genie open-cohort action, Lead Queue URL, dropdowns, and rows agree', asyn
   if (segments.length > 1) {
     await expect(page.getByRole('combobox', { name: /SEGMENT:\s*\d+ segments selected/i })).toBeVisible();
   } else {
-    await expect(page.getByRole('combobox', { name: /SEGMENT:\s*Prime Refi Candidates/i })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: /SEGMENT:\s*In the Money/i })).toBeVisible();
   }
 
   if (zips.length > 0) {

@@ -191,7 +191,7 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
     }
     case 'delta-explainer': {
       // Home's refi trigger (WHY NOW): its chip's drawer explains the change (audit-free read).
-      const chip = page.locator('.home-answer .login-summary .home-answer__trigger', { hasText: 'refi screen' }).locator('.evidence-chip');
+      const chip = page.locator('.home-answer .login-summary .home-answer__trigger', { hasText: 'in-the-money borrowers' }).locator('.evidence-chip');
       const drawer = await app.openEvidenceDrawer(chip);
       await expect(drawer.locator('[data-testid="delta-explainer"] table tbody tr').first()).toBeVisible();
       break;
