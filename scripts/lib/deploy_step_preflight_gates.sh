@@ -123,6 +123,13 @@ fi
 BUNDLE_VAR_bundle_root_leaf="$(printf '%s\n' "$_CI_INSTALL_VARS" | sed -n 's/^bundle_root_leaf=//p')"
 BUNDLE_VAR_install_suffix="$(printf '%s\n' "$_CI_INSTALL_VARS" | sed -n 's/^install_suffix=//p')"
 export BUNDLE_VAR_bundle_root_leaf BUNDLE_VAR_install_suffix
+if [[ -n "$BUNDLE_VAR_install_suffix" ]]; then
+  # Later steps read these two from the shell only (with live defaults): pin
+  # them to the values the rule table just checked (shell, then .env.local).
+  MIP_AI_GATEWAY_TABLE_PREFIX="$(deployment_control_value MIP_AI_GATEWAY_TABLE_PREFIX)"
+  MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE="$(deployment_control_value MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE)"
+  export MIP_AI_GATEWAY_TABLE_PREFIX MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE
+fi
 MIP_BUNDLE_ROOT_LEAF_RESOLVED="$TARGET"
 if [[ "$TARGET" == "dev" ]]; then
   MIP_BUNDLE_ROOT_LEAF_RESOLVED="$BUNDLE_VAR_bundle_root_leaf"

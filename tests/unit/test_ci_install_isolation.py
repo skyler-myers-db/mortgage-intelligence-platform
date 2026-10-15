@@ -12,6 +12,7 @@ install unchanged, and deploy-dev.yml / nightly.yml address the dev-ci install.
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -202,15 +203,20 @@ def test_the_block_runs_before_the_prompt_the_exports_and_the_first_mutation() -
     assert not [line for line in code_lines if "DRY_RUN" in line], "pure: it runs in DRY_RUN too"
 
 
-def _bash_block(env: dict[str, str], python: str = sys.executable) -> subprocess.CompletedProcess[str]:
+def _bash_block(
+    env: dict[str, str], python: str = sys.executable, dotenv: dict[str, str] | None = None, epilogue: str | None = None
+) -> subprocess.CompletedProcess[str]:
     bash = shutil.which("bash")
     assert bash
+    # The real helper reads the shell, then .env.local; ``dotenv`` stands in for the file.
+    arms = "".join(f"{name}) value={shlex.quote(value)} ;; " for name, value in (dotenv or {}).items())
     prelude = (
         "set -euo pipefail\nRED=''\nRST=''\nTARGET=\"${TARGET:-dev}\"\n"
-        "deployment_control_value() { local name=\"$1\"; printf '%s' \"${!name:-}\"; }\n"
+        "deployment_control_value() { local name=\"$1\" value; value=\"${!name:-}\"; "
+        f"if [[ -z \"$value\" ]]; then case \"$name\" in {arms}*) ;; esac; fi; printf '%s' \"$value\"; }}\n"
         f"PYTHON={python!r}\n"
     )
-    epilogue = '\nprintf "%s|%s|%s\\n" "$BUNDLE_VAR_bundle_root_leaf" "$BUNDLE_VAR_install_suffix" "$MIP_BUNDLE_ROOT_LEAF_RESOLVED"\n'
+    epilogue = epilogue or '\nprintf "%s|%s|%s\\n" "$BUNDLE_VAR_bundle_root_leaf" "$BUNDLE_VAR_install_suffix" "$MIP_BUNDLE_ROOT_LEAF_RESOLVED"\n'
     return subprocess.run(
         [bash, "-c", prelude + _block() + epilogue], cwd=ROOT, env={"PATH": "/usr/bin:/bin", **env},
         capture_output=True, text=True, check=False, timeout=60,
@@ -225,6 +231,22 @@ def test_the_block_exports_the_staging_values_and_refuses_without_echoing() -> N
     refused = _bash_block(_ci(MIP_LAKEBASE_INSTANCE="mip-app-state"))
     assert refused.returncode == 2
     assert "MIP_LAKEBASE_INSTANCE" in refused.stderr and "mip-app-state" not in refused.stderr
+
+
+def test_the_ci_install_pins_the_gateway_names_it_checked_for_the_later_steps() -> None:
+    """The later steps read these two from the shell only, falling back to the live defaults."""
+
+    names = ("MIP_AI_GATEWAY_TABLE_PREFIX", "MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE")
+    env = _ci()
+    checked = {name: env.pop(name) for name in names}
+    epilogue = '\nprintf "%s|%s\\n" "$(printenv MIP_AI_GATEWAY_TABLE_PREFIX)" "$(printenv MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE)"\n'
+
+    result = _bash_block(env, dotenv=checked, epilogue=epilogue)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1] == "|".join(checked[name] for name in names), "exported as checked"
+
+    operator = _bash_block({}, python="/usr/bin/false", dotenv=checked, epilogue=epilogue)
+    assert operator.returncode == 0 and operator.stdout.strip() == "|", "an operator run exports nothing new"
 
 
 def test_an_operator_run_never_starts_python_and_keeps_the_live_root() -> None:
