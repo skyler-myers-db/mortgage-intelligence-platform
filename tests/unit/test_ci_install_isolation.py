@@ -94,6 +94,25 @@ def test_the_pinned_live_genie_space_is_refused(capsys: pytest.CaptureFixture[st
     assert isolation.pinned_live_genie_space() == LIVE_GENIE
 
 
+@pytest.mark.parametrize(
+    "family", ["mip.audit.mortgage_growth_supervisor_proxy", "`MIP`.audit.proxy_family", "other_catalog.audit.proxy_family"]
+)
+def test_a_gateway_model_family_outside_the_staging_catalog_is_refused(family: str, capsys: pytest.CaptureFixture[str]) -> None:
+    """An explicit live family would register and archive Gateway models in the live install's catalog."""
+
+    code, out, err = _run(_ci(MIP_AI_GATEWAY_AGENT_MODEL_FAMILY=family), capsys)
+
+    assert (code, out) == (2, "")
+    assert "MIP_AI_GATEWAY_AGENT_MODEL_FAMILY" in err and family not in err
+
+
+@pytest.mark.parametrize("family", ["", "mip_pr105_staging.audit.proxy_family", "`MIP_PR105_STAGING`.audit.proxy_family"])
+def test_an_unset_or_staging_catalog_model_family_passes(family: str, capsys: pytest.CaptureFixture[str]) -> None:
+    assert _run(_ci(MIP_AI_GATEWAY_AGENT_MODEL_FAMILY=family), capsys)[0] == 0
+    operator = {"MIP_AI_GATEWAY_AGENT_MODEL_FAMILY": "mip.audit.mortgage_growth_supervisor_proxy"}
+    assert _run(operator, capsys)[0] == 0, "an operator run is unchanged"
+
+
 def test_an_operator_run_on_the_live_root_passes_and_a_non_default_root_is_refused(capsys: pytest.CaptureFixture[str]) -> None:
     assert _run({}, capsys) == (0, "bundle_root_leaf=dev\ninstall_suffix=\n", "")
     assert _run({"MIP_BUNDLE_ROOT_LEAF": "dev"}, capsys)[0] == 0
@@ -232,6 +251,18 @@ def test_the_block_exports_the_staging_values_and_refuses_without_echoing() -> N
     refused = _bash_block(_ci(MIP_LAKEBASE_INSTANCE="mip-app-state"))
     assert refused.returncode == 2
     assert "MIP_LAKEBASE_INSTANCE" in refused.stderr and "mip-app-state" not in refused.stderr
+
+
+def test_the_block_checks_the_gateway_model_family_from_the_shell_and_from_env_local() -> None:
+    live_family = "mip.audit.mortgage_growth_supervisor_proxy"
+    for result in (
+        _bash_block(_ci(MIP_AI_GATEWAY_AGENT_MODEL_FAMILY=live_family)),
+        _bash_block(_ci(), dotenv={"MIP_AI_GATEWAY_AGENT_MODEL_FAMILY": live_family}),
+    ):
+        assert result.returncode == 2
+        assert "MIP_AI_GATEWAY_AGENT_MODEL_FAMILY" in result.stderr and live_family not in result.stderr
+    staging = _bash_block(_ci(MIP_AI_GATEWAY_AGENT_MODEL_FAMILY="mip_pr105_staging.audit.proxy_family"))
+    assert staging.returncode == 0, staging.stderr
 
 
 def test_the_ci_install_pins_the_gateway_names_it_checked_for_the_later_steps() -> None:

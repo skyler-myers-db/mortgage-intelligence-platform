@@ -1161,8 +1161,11 @@ scope `mip-runtime`.
   `MIP_LAKEBASE_SYNC_CATALOG`, `MIP_RUNTIME_SECRET_SCOPE`,
   `MIP_APP_ROLLBACK_SECRET_SCOPE`, `MIP_GENIE_SPACE_NAME`,
   `MIP_AI_GATEWAY_TABLE_PREFIX` or `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE`
-  that is unset or equal to its live default, or a `GENIE_SPACE_ID` equal to
-  the dev target's pinned live space. An operator run (no leaf) is unchanged.
+  that is unset or equal to its live default, a `GENIE_SPACE_ID` equal to
+  the dev target's pinned live space, or a set
+  `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY` outside `MIP_DEFAULT_CATALOG` (unset,
+  the deploy derives it from that catalog). An operator run (no leaf) is
+  unchanged.
   The CI rule is keyed on the `deploy-dev.yml` workflow ref or a present
   leaf, never on `GITHUB_ACTIONS` alone, so CI's own pytest is unaffected.
 - `converge_static_app_source --expected-root-leaf` checks the App source
@@ -1246,7 +1249,9 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    `MIP_APP_ROLLBACK_SECRET_SCOPE` and `MIP_AGENT_PROXY_SECRET_SCOPE` (both
    derived from the App name, as the preflight requires),
    `MIP_GENIE_SPACE_NAME`, `MIP_AI_GATEWAY_TABLE_PREFIX` and
-   `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE`.
+   `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE`; leave
+   `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY` unset or name a family in the staging
+   catalog.
 3. Rotate the environment's `DATABRICKS_HOST` / `DATABRICKS_TOKEN` (set
    2026-07-17, before the 2026-08-08 rebind) to the bootstrap target's
    workspace (step 1); `deploy.sh` already refuses a host outside the bundle
@@ -1263,7 +1268,8 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    `MIP_LAKEBASE_INSTANCE`, `MIP_LAKEBASE_SYNC_CATALOG`,
    `MIP_RUNTIME_SECRET_SCOPE`, `MIP_APP_ROLLBACK_SECRET_SCOPE`,
    `MIP_AGENT_PROXY_SECRET_SCOPE`, `MIP_GENIE_SPACE_NAME`,
-   `MIP_AI_GATEWAY_TABLE_PREFIX` and `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE`,
+   `MIP_AI_GATEWAY_TABLE_PREFIX` and `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE`
+   (and `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY` unset or in the staging catalog),
    and the secrets `DATABRICKS_HOST`, `DATABRICKS_TOKEN`,
    `DATABRICKS_WAREHOUSE_ID` and `GENIE_SPACE_ID`. Only `deploy-dev.yml`
    (whose dev environment shadows the repository level) and `nightly.yml`

@@ -114,6 +114,7 @@ elif ! _CI_INSTALL_VARS="$(
   MIP_GENIE_SPACE_NAME="$(deployment_control_value MIP_GENIE_SPACE_NAME)" \
   MIP_AI_GATEWAY_TABLE_PREFIX="$(deployment_control_value MIP_AI_GATEWAY_TABLE_PREFIX)" \
   MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE="$(deployment_control_value MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE)" \
+  MIP_AI_GATEWAY_AGENT_MODEL_FAMILY="$(deployment_control_value MIP_AI_GATEWAY_AGENT_MODEL_FAMILY)" \
   GENIE_SPACE_ID="$(deployment_control_value GENIE_SPACE_ID)" \
   MIP_DEPLOY_TARGET="$TARGET" "$PYTHON" -m tools.databricks.ci_install_isolation
 )"; then

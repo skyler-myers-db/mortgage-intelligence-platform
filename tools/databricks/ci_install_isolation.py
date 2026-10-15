@@ -14,8 +14,9 @@ any mutation:
   leaf; it sets ``dev-ci`` as a literal;
 - a non-default leaf is CI-only, and dev-target only;
 - with a non-default leaf every install-scoped name must be set and differ from
-  its live default, and GENIE_SPACE_ID must differ from the dev target's pinned
-  live space.
+  its live default, GENIE_SPACE_ID must differ from the dev target's pinned
+  live space, and an explicit MIP_AI_GATEWAY_AGENT_MODEL_FAMILY must sit in
+  MIP_DEFAULT_CATALOG (unset, the deploy derives it from that catalog).
 
 The CI rule is keyed on the deploy-dev workflow ref or a present leaf, never
 on GITHUB_ACTIONS alone, so CI's own pytest (which inherits
@@ -68,6 +69,12 @@ def pinned_live_genie_space(bundle: Path = REPO_ROOT / "databricks.yml") -> str:
     return pinned.group(1) if pinned else ""
 
 
+def _uc_name(part: str) -> str:
+    """A UC catalog name as Unity Catalog compares it: unquoted, case-insensitive."""
+
+    return part.strip().strip("`").casefold()
+
+
 def install_suffix(leaf: str) -> str:
     return "" if leaf == DEFAULT_LEAF else "_" + leaf.removeprefix(f"{DEFAULT_LEAF}-").replace("-", "_")
 
@@ -93,6 +100,9 @@ def resolve(env: Mapping[str, str], live_genie_space: str | None = None) -> tupl
         value = (env.get(name) or "").strip()
         if not value or value == live:
             raise Refused(f"{name} must name the CI staging install, not the live default")
+    family = (env.get("MIP_AI_GATEWAY_AGENT_MODEL_FAMILY") or "").strip()
+    if family and _uc_name(family.split(".", 1)[0]) != _uc_name(env.get("MIP_DEFAULT_CATALOG") or ""):
+        raise Refused("MIP_AI_GATEWAY_AGENT_MODEL_FAMILY must sit in MIP_DEFAULT_CATALOG; unset derives it from there")
     genie = (env.get("GENIE_SPACE_ID") or "").strip()
     pinned = pinned_live_genie_space() if live_genie_space is None else live_genie_space
     if not genie or genie == pinned:
