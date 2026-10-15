@@ -260,6 +260,12 @@ describe('every stylesheet', () => {
 });
 
 describe('PENDING_INTEGRATOR_WRAP', () => {
+  // Always present, so the suite still has a test once the integrator empties
+  // the list (an empty it.each registers nothing, and Vitest fails the suite).
+  it('names each sheet once, by its src/ path', () => {
+    expect(new Set(PENDING_INTEGRATOR_WRAP).size).toBe(PENDING_INTEGRATOR_WRAP.length);
+    for (const path of PENDING_INTEGRATOR_WRAP) expect(path).toMatch(/^src\/.+\.css$/);
+  });
   it.each(PENDING_INTEGRATOR_WRAP)('%s still exists unwrapped (remove the entry once the integrator wraps it)', (path) => {
     expect(existsSync(`${process.cwd()}/${path}`), `${path} exists`).toBe(true);
     expect(code(path), `${path} is wrapped: delete its PENDING_INTEGRATOR_WRAP entry`).not.toMatch(/@layer\b/);
