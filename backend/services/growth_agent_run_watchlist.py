@@ -106,10 +106,14 @@ def default_watchlist_name(run: dict[str, Any]) -> str:
 
     A custom segment run also names its mode and segments (the same label the
     custom workflow's own Save uses), so two custom watchlists over different
-    segments never share a name and overwrite each other.
+    segments never share a name and overwrite each other. States and segment
+    codes are SORTED (W5d growth-watchlists cut 4a), so the same scope picked
+    in another order names the same watchlist; the frontend's
+    canonicalWatchlistName shares tests/fixtures/watchlist_name_cases.json.
+    Names already stored are not migrated.
     """
 
-    states = states_from_monitor_criteria(run.get("criteria"))
+    states = sorted(states_from_monitor_criteria(run.get("criteria")))
     state_suffix = f" - {', '.join(states)}" if states else ""
     title = str(run.get("workflow_title") or "")
     if run.get("workflow_id") == _CUSTOM_WORKFLOW_ID:
@@ -118,7 +122,7 @@ def default_watchlist_name(run: dict[str, Any]) -> str:
         codes = filters.get("segment_codes")
         if isinstance(codes, list) and codes:
             mode = str(filters.get("segment_mode") or "any").upper()
-            segments = "+".join(str(code).upper() for code in codes)
+            segments = "+".join(sorted(str(code).upper() for code in codes))
             return f"{title} - {mode} - {segments}{state_suffix}"
     return f"{title}{state_suffix}"
 

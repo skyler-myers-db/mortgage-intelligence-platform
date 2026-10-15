@@ -18,7 +18,7 @@ import type {
 import { diffComposedPlans, planScopeChanged, type PlanDiff } from './ask-genie.compose-plan-diff';
 import { mergeExecutedPlan, useComposedPlanExecution } from './ask-genie.compose-plan-execute';
 import { parseGrowthAgentStateInput } from './ask-genie.growth-agent.helpers';
-import { useGrowthRunSave } from './ask-genie.growth-run-save';
+import { canonicalWatchlistName, useGrowthRunSave } from './ask-genie.growth-run-save';
 
 /**
  * Run one handler's request as a promise chain: `onValue` with the answer
@@ -184,13 +184,12 @@ export function useGrowthAgentWorkspace() {
     beginRun('workflows', saveMonitor ? `Saving ${workflow.title} as a watchlist` : `Running ${workflow.title}`);
     setLatestGrowthRun(null);
     setGrowthAgentError(null);
-    const stateSuffix = parsed.states.length > 0 ? ` - ${parsed.states.join(', ')}` : '';
     return settle(
       () => api.runGrowthAgentWorkflow(workflow.id, {
         states: parsed.states,
         save_monitor: saveMonitor,
         cadence: agentCadence,
-        monitor_name: saveMonitor ? `${workflow.title}${stateSuffix}` : null,
+        monitor_name: saveMonitor ? canonicalWatchlistName(workflow.title, parsed.states) : null,
       }),
       (result) => {
         showRun(result);
@@ -338,7 +337,6 @@ export function useGrowthAgentWorkspace() {
     beginRun('workflows', saveMonitor ? 'Saving the custom segment watchlist' : 'Running the custom segment workflow');
     setLatestGrowthRun(null);
     setGrowthAgentError(null);
-    const stateSuffix = parsed.states.length > 0 ? ` - ${parsed.states.join(', ')}` : '';
     return settle(
       () => api.runCustomGrowthAgentWorkflow({
         states: parsed.states,
@@ -347,7 +345,7 @@ export function useGrowthAgentWorkspace() {
         save_monitor: saveMonitor,
         cadence: agentCadence,
         monitor_name: saveMonitor
-          ? `Custom Segment Workflow - ${customMode.toUpperCase()} - ${customSegments.join('+').toUpperCase()}${stateSuffix}`
+          ? canonicalWatchlistName('Custom Segment Workflow', parsed.states, { mode: customMode, segmentCodes: customSegments })
           : null,
       }),
       (result) => {

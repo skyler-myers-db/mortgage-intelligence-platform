@@ -4,12 +4,16 @@
  * fields and patterns. The rendered behaviour is pinned in
  * ask-genie.growth-run-card.test.tsx and ask-genie.growth-agent.saved-watchlists.test.tsx.
  */
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// unit test reads the shared case table under Vitest only.
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../lib/api';
 import { CLIENT_FAILURE_MESSAGES } from '../lib/apiFailure';
 import {
   RUN_SAVE_FAILED_MESSAGE,
   RUN_SAVE_REFUSED_MESSAGE,
+  canonicalWatchlistName,
   isSavableGrowthRun,
   runSaveFailureMessage,
 } from './ask-genie.growth-run-save';
@@ -79,5 +83,37 @@ describe('isSavableGrowthRun', () => {
   ])('refuses %s', (_label, overrides) => {
     // 'live_analysis' is in the server's workflow Literal but not the TS union.
     expect(isSavableGrowthRun({ ...RUN, ...overrides } as unknown as SaveFields)).toBe(false);
+  });
+});
+
+interface WatchlistNameCase {
+  id: string;
+  title: string;
+  states: string[];
+  segment_codes: string[] | null;
+  segment_mode: string | null;
+  expected: string;
+}
+
+// W5d growth-watchlists cut 4a: the same table backend default_watchlist_name
+// reads (tests/unit/test_watchlist_canonical_name.py).
+const NAME_CASES = (JSON.parse(
+  readFileSync(new URL('../../../tests/fixtures/watchlist_name_cases.json', import.meta.url), 'utf8'),
+) as { cases: WatchlistNameCase[] }).cases;
+
+describe('canonicalWatchlistName', () => {
+  it.each(NAME_CASES.map((entry) => [entry.id, entry] as const))('%s', (_id, entry) => {
+    const custom = entry.segment_codes
+      ? { mode: entry.segment_mode ?? 'any', segmentCodes: entry.segment_codes }
+      : undefined;
+    expect(canonicalWatchlistName(entry.title, entry.states, custom)).toBe(entry.expected);
+  });
+
+  it('never reorders the caller\'s arrays', () => {
+    const states = ['TX', 'IL'];
+    const segmentCodes = ['listed', 'itm'];
+    canonicalWatchlistName('Custom Segment Workflow', states, { mode: 'any', segmentCodes });
+    expect(states).toEqual(['TX', 'IL']);
+    expect(segmentCodes).toEqual(['listed', 'itm']);
   });
 });

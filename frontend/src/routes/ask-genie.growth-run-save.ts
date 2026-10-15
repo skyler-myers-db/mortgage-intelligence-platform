@@ -59,6 +59,25 @@ export function runSaveFailureMessage(error: unknown): string {
   return RUN_SAVE_FAILED_MESSAGE;
 }
 
+/**
+ * A watchlist's name: the workflow title, a custom run's MODE and its
+ * +-joined segment codes, then the state scope. States and codes are SORTED
+ * (W5d growth-watchlists cut 4a), so the same scope picked in another order
+ * names the same watchlist; backend default_watchlist_name is the twin
+ * (tests/fixtures/watchlist_name_cases.json pins both).
+ */
+export function canonicalWatchlistName(
+  title: string,
+  states: readonly string[],
+  custom?: { mode: string; segmentCodes: readonly string[] },
+): string {
+  const sortedStates = [...states].sort();
+  const stateSuffix = sortedStates.length > 0 ? ` - ${sortedStates.join(', ')}` : '';
+  if (!custom || custom.segmentCodes.length === 0) return `${title}${stateSuffix}`;
+  const segments = custom.segmentCodes.map((code) => code.toUpperCase()).sort().join('+');
+  return `${title} - ${custom.mode.toUpperCase()} - ${segments}${stateSuffix}`;
+}
+
 interface RunSaveState {
   runId: string | null;
   pending: boolean;
