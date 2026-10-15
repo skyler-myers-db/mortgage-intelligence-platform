@@ -30,13 +30,6 @@
     },
     {
       "ecosystem": "npm",
-      "package": "oxlint",
-      "below": "1.86.0",
-      "reason": "frontend/oxlint-baseline.json records the installed oxlint and a new version names its jsx-a11y rules; tail T2 moves it with w5-compiler-lint",
-      "review_by": "2026-11-15"
-    },
-    {
-      "ecosystem": "npm",
       "package": "@playwright/test",
       "below": "1.64.0",
       "reason": "Held to the VRT image mcr.microsoft.com/playwright:v1.63.0-noble until the final W5e step (tail T3 moves both to 1.64.0 and v1.64.0-noble)",

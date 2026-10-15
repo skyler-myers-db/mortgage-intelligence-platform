@@ -1,5 +1,5 @@
 {
-  "oxlintVersion": "1.85.0",
+  "oxlintVersion": "1.86.0",
   "config": "frontend/.oxlintrc.json",
   "scope": "frontend/src",
   "policy": {
