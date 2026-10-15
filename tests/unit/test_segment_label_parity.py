@@ -29,7 +29,10 @@ from pathlib import Path
 from typing import Any
 
 from backend.services import economics_scatter, genie_context_scope, growth_agent_workflows, scoring
-from backend.services.repositories import databricks_genie_direct_responses, databricks_genie_strategy
+from backend.services.repositories import (
+    databricks_genie_direct_responses,
+    databricks_genie_strategy,
+)
 from backend.services.segment_labels import (
     ITM_RULE_LABEL,
     LEGACY_SEGMENT_NAMES,
@@ -69,10 +72,13 @@ def _docstring_nodes(tree: ast.AST) -> set[int]:
     ids: set[int] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
-            body = node.body
-            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
-                if isinstance(body[0].value.value, str):
-                    ids.add(id(body[0].value))
+            first = node.body[0] if node.body else None
+            if (
+                isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)
+            ):
+                ids.add(id(first.value))
     return ids
 
 

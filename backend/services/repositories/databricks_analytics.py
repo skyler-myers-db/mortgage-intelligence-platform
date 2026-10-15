@@ -51,7 +51,11 @@ from backend.services.repositories.databricks_economics_scatter import (
     equity_spread_overview,
 )
 from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD, source_display_label
-from backend.services.segment_labels import SEGMENT_DISPLAY_LABELS, segment_case_sql, segment_values_sql
+from backend.services.segment_labels import (
+    SEGMENT_DISPLAY_LABELS,
+    segment_case_sql,
+    segment_values_sql,
+)
 from backend.services.segment_predicates import compose_segment_predicate
 
 _ANALYTICS_SEGMENT_CODES = ("itm", "equity", "investor", "retention", "listed", "permit")
