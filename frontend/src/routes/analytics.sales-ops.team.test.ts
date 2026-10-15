@@ -14,6 +14,7 @@ const row = (group_key: string, calls: number, contacts: number, starts: number)
   contacts_reached: contacts,
   callbacks_scheduled: 0,
   applications_started: starts,
+  unique_leads_contacted: calls,
   unique_contacts_reached: contacts,
   unique_application_starts: starts,
   application_start_rate: 0,

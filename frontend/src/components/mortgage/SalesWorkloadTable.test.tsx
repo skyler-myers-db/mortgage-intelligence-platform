@@ -41,7 +41,7 @@ const RESPONSE: SalesWorkloadResponse = {
 };
 
 const CONVERSION = [
-  { group_key: 'LO02@summit.example', calls_attempted: 30, contacts_reached: 10, callbacks_scheduled: 1, applications_started: 3, unique_application_starts: 2, application_start_rate: 0.2 },
+  { group_key: 'LO02@summit.example', calls_attempted: 30, contacts_reached: 10, callbacks_scheduled: 1, applications_started: 3, unique_leads_contacted: 24, unique_contacts_reached: 9, unique_application_starts: 2, application_start_rate: 0.2 },
 ];
 
 let root: Root;
