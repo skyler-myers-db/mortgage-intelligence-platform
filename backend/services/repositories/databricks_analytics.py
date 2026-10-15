@@ -60,6 +60,7 @@ from backend.services.segment_predicates import compose_segment_predicate
 
 _ANALYTICS_SEGMENT_CODES = ("itm", "equity", "investor", "retention", "listed", "permit")
 
+
 def _date_text(value: object) -> str | None:
     if value is None:
         return None
