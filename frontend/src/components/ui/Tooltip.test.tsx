@@ -271,6 +271,35 @@ describe('Tooltip', () => {
     }
   });
 
+  // How it opened decides here, not where focus is: the focus fixup rule (a
+  // focused trigger turning natively disabled, hidden or inert) can move
+  // document focus to <body> with no focusout, so the keyboard-opened tooltip
+  // is still showing while its trigger no longer holds focus. happy-dom runs
+  // no fixup, so the test moves activeElement the way an engine's fixup does.
+  it('keyboard-opened, then its trigger loses focus without a focusout: Escape is still consumed', () => {
+    const lower = vi.fn(() => true);
+    const popLower = pushEscapeLayer(lower);
+    try {
+      render(<Pair />);
+      keyboardFocus(button('Toggle theme'));
+      expect(tooltip()?.textContent).toBe('Toggle theme');
+
+      const fixup = vi.spyOn(document, 'activeElement', 'get').mockReturnValue(document.body);
+      let event: KeyboardEvent;
+      try {
+        event = escape();
+      } finally {
+        fixup.mockRestore();
+      }
+
+      expect(tooltip()).toBeNull();
+      expect(lower).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(true);
+    } finally {
+      popLower();
+    }
+  });
+
   it('closes and pops its escape layer when the trigger unmounts', async () => {
     render(<Pair />);
     const base = escapeLayerCount();
