@@ -11,6 +11,7 @@ import { markUnrecordedWrite } from '../../lib/sessionStatus';
 import { decisionFailure } from '../../lib/mutations/outreach';
 import { intentFingerprint } from '../../lib/mutations/requestIds';
 import type { BulkRowReport } from './useLeadBulkRun';
+import { bulkRefusalCopy } from './bulkRefusalCopy';
 import { released, requestScopeParts, type BulkRejectRow, type DecisionWriteDeps } from './leadDecisionWrites';
 
 /**
@@ -54,7 +55,7 @@ export function rejectWithReport(
     (err: unknown): BulkRowReport => {
       const failure = decisionFailure(err);
       if (failure === 'aborted') return { outcome: 'aborted', message: null };
-      const message = err instanceof Error ? err.message : null;
+      const message = bulkRefusalCopy(err);
       // D-identity-review-a4: the user changed; nothing recorded (the run stops).
       if (err instanceof ApiError && err.reason === 'actor_changed') return { outcome: 'actor_changed', message };
       if (clientFailureReason(err) === 'session_expired') {
