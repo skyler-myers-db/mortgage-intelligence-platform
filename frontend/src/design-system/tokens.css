@@ -139,21 +139,38 @@
   --surface-key-shadow: rgba(0, 0, 0, 0.18);
   --text-on-solid: #FFFFFF;
 
-  --status-success-soft: rgba(16,185,129,0.14);
-  --status-success-soft-muted: rgba(16,185,129,0.12);
-  --status-success-line: rgba(16,185,129,0.32);
-  --status-success-line-strong: rgba(16,185,129,0.35);
+  /* Status tints (css-07; deviation:status-tint-scale). Each soft / line
+   * tint is its theme's --status-<tone>-base (the theme blocks below) mixed
+   * into transparent in OKLab at one step of a five-step alpha scale, so a
+   * tint follows its base colour in both themes instead of the light theme
+   * reusing the dark RGB. Dark bases are the RGB the prototype's rgba()
+   * literals carry (design_files/index.html:396-397, :412-417, :546-547,
+   * :638-644, :810-812), so every dark tint keeps its value except one
+   * merged step, --status-success-line 32% -> 30%. --tint-subtle (10%) is
+   * the one step outside the five: .btn--danger's --signal-danger text on
+   * its hover fill reads 4.56:1 on white at 10% and 4.44:1 at 12%
+   * (tokenContrast.test.ts). The inks stay hand-tuned per theme. */
+  --tint-subtle: 10%;
+  --tint-muted: 12%;
+  --tint-soft: 14%;
+  --tint-strong: 18%;
+  --tint-line: 30%;
+  --tint-line-strong: 35%;
+  --status-success-soft: color-mix(in oklab, var(--status-success-base) var(--tint-soft), transparent);
+  --status-success-soft-muted: color-mix(in oklab, var(--status-success-base) var(--tint-muted), transparent);
+  --status-success-line: color-mix(in oklab, var(--status-success-base) var(--tint-line), transparent);
+  --status-success-line-strong: color-mix(in oklab, var(--status-success-base) var(--tint-line-strong), transparent);
   --status-success-ink: #6EE7B7;
-  --status-warning-soft: rgba(245,158,11,0.14);
-  --status-warning-soft-muted: rgba(245,158,11,0.12);
-  --status-warning-soft-strong: rgba(245,158,11,0.18);
-  --status-warning-line: rgba(245,158,11,0.30);
-  --status-warning-line-strong: rgba(245,158,11,0.35);
+  --status-warning-soft: color-mix(in oklab, var(--status-warning-base) var(--tint-soft), transparent);
+  --status-warning-soft-muted: color-mix(in oklab, var(--status-warning-base) var(--tint-muted), transparent);
+  --status-warning-soft-strong: color-mix(in oklab, var(--status-warning-base) var(--tint-strong), transparent);
+  --status-warning-line: color-mix(in oklab, var(--status-warning-base) var(--tint-line), transparent);
+  --status-warning-line-strong: color-mix(in oklab, var(--status-warning-base) var(--tint-line-strong), transparent);
   --status-warning-ink: #FCD34D;
-  --status-danger-soft: rgba(239,68,68,0.14);
-  --status-danger-soft-muted: rgba(239,68,68,0.12);
-  --status-danger-soft-subtle: rgba(239,68,68,0.10);
-  --status-danger-line-strong: rgba(239,68,68,0.35);
+  --status-danger-soft: color-mix(in oklab, var(--status-danger-base) var(--tint-soft), transparent);
+  --status-danger-soft-muted: color-mix(in oklab, var(--status-danger-base) var(--tint-muted), transparent);
+  --status-danger-soft-subtle: color-mix(in oklab, var(--status-danger-base) var(--tint-subtle), transparent);
+  --status-danger-line-strong: color-mix(in oklab, var(--status-danger-base) var(--tint-line-strong), transparent);
   --status-danger-ink: #FCA5A5;
 
   --approval-bg: linear-gradient(90deg, rgba(245,158,11,0.08), rgba(245,158,11,0.02));
@@ -181,6 +198,12 @@
    Theme: DARK (default — stage/projector impact)
    ============================================================ */
 :root, [data-theme="dark"] {
+  /* Status tint bases (css-07): the prototype's status RGB. Danger is
+   * #EF4444, the literal the prototype's tints carry, not --signal-danger. */
+  --status-success-base: #10B981;
+  --status-warning-base: #F59E0B;
+  --status-danger-base: #EF4444;
+
   --bg-0: #04101F;   /* page — deepest */
   --bg-1: #071A2F;   /* surface */
   --bg-2: #0C2340;   /* raised card */
@@ -266,6 +289,13 @@
   --status-success-ink: #045D46;
   --status-warning-ink: #B45309;
   --status-danger-ink:  #B91C1C;
+  /* Status tint bases (css-07): the light signal hues, so the light theme's
+   * fills follow its own palette (they reused the dark RGB). Danger keeps the
+   * prototype's #EF4444: the light --signal-danger (#D42222, darkened for
+   * text) would put .btn--danger's own text at 4.42:1 on its hover fill. */
+  --status-success-base: var(--signal-success);
+  --status-warning-base: var(--signal-warning);
+  --status-danger-base: #EF4444;
 
   --accent:        #025080;
   --accent-hover:  #013354;
