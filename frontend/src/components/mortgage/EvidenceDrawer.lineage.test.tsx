@@ -25,6 +25,7 @@ declare const process: { cwd(): string };
 const appMocks = vi.hoisted(() => ({
   drawer: null as DrawerSource | null,
   setDrawer: vi.fn(),
+  canAccessAdmin: true,
 }));
 
 const apiMocks = vi.hoisted(() => ({
@@ -37,7 +38,7 @@ vi.mock('../AppContext', () => ({
   useApp: () => ({
     drawer: appMocks.drawer,
     setDrawer: appMocks.setDrawer,
-    canAccessAdmin: true,
+    canAccessAdmin: appMocks.canAccessAdmin,
   }),
 }));
 
@@ -205,6 +206,7 @@ describe('EvidenceDrawer lineage tab', () => {
       defaultOptions: { queries: { retry: false, gcTime: Infinity } },
     });
     appMocks.setDrawer.mockClear();
+    appMocks.canAccessAdmin = true;
     apiMocks.assetMetadata.mockResolvedValue({
       row_count: null,
       num_files: null,
@@ -462,6 +464,26 @@ describe('EvidenceDrawer lineage tab', () => {
 
   it('keeps governed explanations visible when metadata and lineage requests fail', async () => {
     apiMocks.assetMetadata.mockRejectedValue(new Error('metadata unavailable'));
+  // W5c drawer hand-off 15b: the metadata read is admin-only, so for a loan
+  // officer the query is disabled and stays `pending`; the Lineage tab used
+  // to say "Loading observed Unity Catalog relationships…" forever.
+  it('tells a non-admin who sees observed relationships, and never loads or calls the admin read', async () => {
+    appMocks.canAccessAdmin = false;
+    appMocks.drawer = MAPPED_SOURCE;
+    await render();
+    await openLineageTab();
+
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Observed Unity Catalog relationships are shown to administrators.');
+    expect(text).not.toContain('Loading observed Unity Catalog relationships');
+    expect(text).not.toContain('Observed relationships unavailable');
+    expect(apiMocks.assetMetadata).not.toHaveBeenCalled();
+    // The governed chain itself still renders for every role.
+    expect(document.querySelectorAll('.lineage-node__chip').length).toBeGreaterThan(0);
+    expect(text).toContain('From the governed lineage manifest (backend/resources/lineage_manifest.json, version 1).');
+    expect(text).toContain('Read top to bottom in the documented order.');
+  });
+
     apiMocks.lineageManifest.mockRejectedValue(new Error('manifest unavailable'));
     apiMocks.assetFreshness.mockRejectedValue(new Error('freshness unavailable'));
     appMocks.drawer = MAPPED_SOURCE;

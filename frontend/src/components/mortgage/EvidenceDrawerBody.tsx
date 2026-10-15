@@ -320,9 +320,9 @@ export function EvidenceDrawerBody() {
                   <div className="source-summary">
                     <p className="body flush">{lineageFamily.description}</p>
                     <p className="muted fs-12">
-                      Ordered semantics: arrows follow the family&apos;s documented
-                      derivation narrative. Adjacent nodes may be parallel co-inputs,
-                      not a claim that each object directly writes the next.
+                      Read top to bottom in the documented order. Steps side by side
+                      can be inputs to the same step; an arrow does not claim one table
+                      writes the next.
                     </p>
                   </div>
                   <div className="eyebrow mt-4 mb-2">{lineageFamily.title} — governed chain</div>
@@ -340,9 +340,8 @@ export function EvidenceDrawerBody() {
                   ))}
                   {lineageQuery.data && (
                     <div className="drawer__updated">
-                      Source of truth: {lineageQuery.data.manifest_path} (schema v
-                      {lineageQuery.data.schema_version}). Live relationships observed
-                      during the last 90 days are shown separately below when available.
+                      From the governed lineage manifest ({lineageQuery.data.manifest_path},
+                      version {lineageQuery.data.schema_version}).
                     </div>
                   )}
                 </>
@@ -366,12 +365,15 @@ export function EvidenceDrawerBody() {
                 </div>
               )}
 
-              {d.assetKey && metadataQuery.isPending && (
+              {/* The metadata read is admin-only (enabled: canAccessAdmin), so a
+                  non-admin's query is disabled and stays `pending` forever:
+                  gate on the role and on a fetch actually in flight. */}
+              {d.assetKey && canAccessAdmin && metadataQuery.isLoading && (
                 <div className="source-card" role="status" aria-live="polite">
                   Loading observed Unity Catalog relationships…
                 </div>
               )}
-              {d.assetKey && metadataQuery.isError && (
+              {d.assetKey && canAccessAdmin && metadataQuery.isError && (
                 <div className="source-card source-card--warning">
                   Observed relationships unavailable. The governed manifest remains primary.
                 </div>
@@ -379,6 +381,11 @@ export function EvidenceDrawerBody() {
               {metadata && (
                 <>
                   <div className="eyebrow mt-5 mb-2">
+              {d.assetKey && !canAccessAdmin && (
+                <div className="source-card source-card--subtle" role="status">
+                  Observed Unity Catalog relationships are shown to administrators.
+                </div>
+              )}
                     Observed Unity Catalog relationships - supplemental
                   </div>
                   <p className="muted fs-12">
