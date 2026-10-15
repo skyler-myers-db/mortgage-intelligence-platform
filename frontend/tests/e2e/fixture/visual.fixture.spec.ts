@@ -52,9 +52,8 @@
  */
 import type { Locator, Page } from '@playwright/test';
 import type { AppDriver, FixtureAccent, FixtureTheme } from './app';
-import { enterState, prepareState, type FixtureState } from './fixtureStates';
-import type { HomeSummary, LeadSummary, SessionResponse } from '../../../src/types';
-import { REQUEST_BATCH_ID } from './data/approvalRequests';
+import { enterState, prepareState, statePath, type FixtureState } from './fixtureStates';
+import type { HomeSummary, SessionResponse } from '../../../src/types';
 import { provenanceSingleAnswer } from './data/genieProvenance';
 import { GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
 import { RATE_MOVE_HOME_SUMMARY } from './data/homeAnswer';
@@ -144,7 +143,7 @@ interface Loaded {
 async function load(app: AppDriver, mockApi: MockApi, target: FixtureRoute, theme: FixtureTheme, state: FixtureState = 'default'): Promise<Loaded> {
   await app.setTheme(theme);
   prepareState(mockApi, state, target.name);
-  await app.gotoRoute(target.path);
+  await app.gotoRoute(statePath(target.path, state));
   return { naturalLoad: markNaturalLoad(mockApi) };
 }
 
@@ -202,6 +201,9 @@ for (const theme of FIXTURE_THEMES) {
       // R (W5d w5-print-glossary-sales-manager): the account menu and glossary search.
       { route: 'home', state: 'identity-menu' },
       { route: 'glossary', state: 'glossary-search' },
+      // U (W5e w5-lexicon-copy, W5d lq deferral 9): the request-scoped queue
+      // whose borrowers were all decided, on its own URL (statePath).
+      { route: 'lead-queue', state: 'request-scoped-empty' },
     ];
     for (const { route: name, state } of SHELL_STATES) {
       test(`${name} · ${state}`, async ({ app, mockApi, page }) => {
@@ -371,21 +373,6 @@ for (const theme of FIXTURE_THEMES) {
     });
 
     // E: compact density.
-    // U (W5e w5-lexicon-copy, W5d lq deferral 9): an approval request whose
-    // borrowers were all decided, withdrawn or expired. Its natural load is
-    // the scoped GET /api/leads; nothing after it is an audited read.
-    test('lead-queue · request-scoped empty', async ({ app, mockApi, page }) => {
-      mockApi.register<LeadSummary[]>('GET', '/api/leads', () =>
-        json<LeadSummary[]>([], { headers: { 'X-Total-Matching': '0', 'X-Returned-Rows': '0' } }),
-      );
-      await app.setTheme(theme);
-      await app.gotoRoute(`/lead-queue?approval_request_batch=${REQUEST_BATCH_ID}`);
-      const naturalLoad = markNaturalLoad(mockApi);
-      await expect(page.locator('#main-content .empty__title')).toHaveText('No open borrowers left in this approval request.');
-      await check(page, 'lead-queue', theme, 'request-scoped-empty');
-      expectNoAuditedReadSince(mockApi, naturalLoad, 'lead-queue · request-scoped empty');
-    });
-
     test('lead-queue · compact density', async ({ app, mockApi, page }) => {
       await app.setDensity('compact');
       const { naturalLoad } = await load(app, mockApi, route('lead-queue'), theme);

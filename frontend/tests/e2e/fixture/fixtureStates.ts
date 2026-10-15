@@ -4,9 +4,10 @@
  * an axe verdict and a pixel baseline describe the same DOM.
  *
  * Two kinds:
- *  - LOAD states (`degraded`, `empty`, `read-failed`, `stale-note`) change what the
- *    route's natural load receives, so `prepareState` registers their
- *    fixture BEFORE navigation;
+ *  - LOAD states (`degraded`, `empty`, `read-failed`, `stale-note`,
+ *    `request-scoped-empty`) change what the route's natural load receives,
+ *    so `prepareState` registers their fixture BEFORE navigation; a state
+ *    with its own URL (`statePath`) loads that URL instead of the route's;
  *  - OVERLAY states (`evidence-drawer`, `command-palette`, `genie`,
  *    `filter-menu`, `expanded-row`, `triage`, `delta-explainer`,
  *    `evidence-how-we-got`, `evidence-under-the-hood`, and the W5d
@@ -31,7 +32,7 @@ import type { AppDriver } from './app';
 import { WAREHOUSE_OUTAGE_503 } from './data/errorSurfaces';
 import { registerFollowUps } from './data/followUps';
 import { HEALTH_OK } from './data/shell';
-import { NON_APPROVER_SESSION, REQUESTED_IDS, batchView, registerApprovalRequestStore } from './data/approvalRequests';
+import { NON_APPROVER_SESSION, REQUESTED_IDS, REQUEST_BATCH_ID, batchView, registerApprovalRequestStore } from './data/approvalRequests';
 import { json, type MockApi } from './mockApi';
 import { expect } from './test';
 
@@ -59,7 +60,25 @@ export type FixtureState =
   // W5d w5-followups-snooze: an eligible actor's Follow-ups tray, open.
   | 'followups-tray'
   | 'identity-menu'
-  | 'glossary-search';
+  | 'glossary-search'
+  // U (W5e w5-lexicon-copy, W5d lq deferral 9): an approval request whose
+  // borrowers were all decided, withdrawn or expired (its own URL, statePath).
+  | 'request-scoped-empty';
+
+/**
+ * States whose natural load is their own URL, not the route's. The
+ * request-scoped queue loads /lead-queue?approval_request_batch=<id>: its one
+ * scoped GET /api/leads IS the natural load, so nothing after it is an
+ * audited read (navigating there after the route's load would be one).
+ */
+const STATE_PATHS: Readonly<Partial<Record<FixtureState, string>>> = {
+  'request-scoped-empty': `/lead-queue?approval_request_batch=${REQUEST_BATCH_ID}`,
+};
+
+/** The URL a scan or a capture of `state` loads: the state's own, else the route's. */
+export function statePath(routePath: string, state: FixtureState): string {
+  return STATE_PATHS[state] ?? routePath;
+}
 
 /** The reads `read-failed` fails, per route name (routes.ts). */
 export const READ_FAILED_ENDPOINTS: Readonly<Record<string, readonly string[]>> = {
@@ -116,7 +135,7 @@ export function prepareState(mockApi: MockApi, state: FixtureState, routeName?: 
     registerApprovalRequestStore(mockApi, { seed: batchView(REQUESTED_IDS.slice(0, 1), true) });
   } else if (state === 'followups-tray') {
     registerFollowUps(mockApi);
-  } else if (state === 'empty') {
+  } else if (state === 'empty' || state === 'request-scoped-empty') {
     mockApi.register<LeadSummary[]>('GET', '/api/leads', () =>
       json<LeadSummary[]>([], { headers: { 'X-Total-Matching': '0', 'X-Returned-Rows': '0' } }),
     );
@@ -231,6 +250,9 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
       await expect(menu.getByRole('menuitemradio').first()).toBeFocused();
       break;
     }
+    case 'request-scoped-empty':
+      await expect(page.locator('#main-content .empty__title')).toHaveText('No open borrowers left in this approval request.');
+      break;
     case 'glossary-search': {
       // W5d critic-07: the glossary filtered by ?q= (matching reads nothing).
       await page.getByLabel('Search the glossary').fill('equity');

@@ -19,7 +19,10 @@
  *  - the teal, navy and red accents on Home, Lead Queue and Borrower 360,
  *    default and evidence drawer, both themes (bright is everything above);
  *  - W5d w5-sales-loop: the Sales ops manager view (30-day period) and the
- *    Distribution Board's dry-run plan, both themes.
+ *    Distribution Board's dry-run plan, both themes;
+ *  - W5e w5-lexicon-copy (W5d lq deferral 9): the request-scoped Lead Queue
+ *    whose borrowers were all decided (`request-scoped-empty`, loaded on
+ *    its own URL through `statePath`), both themes.
  *
  * The ratchet (axe.ts KNOWN_VIOLATIONS) is validated against this matrix at
  * load: every entry names a scan that runs here, in each theme and accent it
@@ -29,14 +32,17 @@
 import type { FixtureTheme } from './app';
 import { KNOWN_VIOLATIONS, expectAxeClean, validateKnownViolations, type AxeAccent, type AxeScanTarget } from './axe';
 import { registerBoard } from './data/salesLoop';
-import { OVERLAY_STATES, enterState, prepareState, type FixtureState } from './fixtureStates';
+import { OVERLAY_STATES, enterState, prepareState, statePath, type FixtureState } from './fixtureStates';
 import { FIXTURE_ROUTES, FIXTURE_THEMES, type FixtureRoute } from './routes';
 import { expect, test } from './test';
 import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
 
 const OVERLAY_ROUTES = new Set(['home', 'lead-queue', 'borrower-360-detail', 'offer-orchestrator-detail', 'ask-genie']);
 const EXTRA_STATES: Readonly<Record<string, readonly FixtureState[]>> = {
-  'lead-queue': ['filter-menu', 'expanded-row', 'read-failed', 'triage', 'approval-requests', 'my-approval-requests', 'request-approval-form'],
+  'lead-queue': [
+    'filter-menu', 'expanded-row', 'read-failed', 'triage', 'approval-requests', 'my-approval-requests', 'request-approval-form',
+    'request-scoped-empty',
+  ],
   home: ['degraded', 'delta-explainer', 'evidence-how-we-got', 'evidence-under-the-hood', 'followups-tray', 'identity-menu'],
   'segment-intelligence': ['read-failed', 'stale-note'],
   'admin-config': ['run-dialog-open'],
@@ -84,7 +90,7 @@ for (const { route, state, theme, accent } of SCANS) {
     await app.setTheme(theme);
     if (accent !== 'bright') await app.setAccent(accent);
     prepareState(mockApi, state, route.name);
-    await app.gotoRoute(route.path);
+    await app.gotoRoute(statePath(route.path, state));
     const naturalLoad = markNaturalLoad(mockApi);
     await expect(page.locator('html')).toHaveAttribute('data-accent', accent);
     // Scan the state once the reads it started have landed, so every run
