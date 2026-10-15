@@ -159,8 +159,8 @@ export default function SalesWorkloadTable({ workload, days, conversion }: Sales
         <td className="num">{formatCount(row.capacity_per_day)}</td>
         <td className="num">{formatCount(row.open_count)}</td>
         <td className="num">{formatCount(row.stale_count)}</td>
-        <td><Change current={row.assigned_count} previous={row.previous_assigned_count} versus={versus} /></td>
-        <td><Change current={row.worked_count} previous={row.previous_worked_count} versus={versus} /></td>
+        <td className="num"><Change current={row.assigned_count} previous={row.previous_assigned_count} versus={versus} /></td>
+        <td className="num"><Change current={row.worked_count} previous={row.previous_worked_count} versus={versus} /></td>
         <td className="num">{starts === null ? UNKNOWN_VALUE : formatCount(starts)}</td>
         <td className="num">{rate === null ? UNKNOWN_VALUE : formatPercent(rate, 1)}</td>
       </tr>

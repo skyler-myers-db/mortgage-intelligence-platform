@@ -125,6 +125,15 @@ describe('SalesWorkloadTable', () => {
     expect(cells('Summit LO 03').slice(7)).toEqual(['—', '—']);
   });
 
+  it('sets every numeric column in the numeric cell face its header carries', async () => {
+    await render();
+    const numeric = [...document.querySelectorAll('thead th')].map((th) => th.classList.contains('num'));
+    expect(numeric).toEqual([false, false, true, true, true, true, true, true, true]);
+    for (const tr of document.querySelectorAll('tbody tr')) {
+      expect([...tr.querySelectorAll('td')].map((td) => td.classList.contains('num'))).toEqual(numeric);
+    }
+  });
+
   it('shows skeletons, never a zero, before the read settles', async () => {
     await render(null, { isError: false, error: null, data: undefined });
     expect(document.querySelectorAll('tbody .skeleton').length).toBe(3);
