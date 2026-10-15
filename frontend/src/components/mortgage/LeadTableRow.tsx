@@ -10,7 +10,7 @@ import { ConfidenceMeter } from './ConfidenceMeter';
 import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { RowPreview } from './LeadRowPreview';
 import { LeadRowWorkflowPanel } from './LeadRowWorkflowPanel';
-import { LEAD_TABLE_COLUMNS, type LeadTableColumnKey, type LeadTableView } from './LeadTable.columns';
+import { useLeadTableColumns, type LeadTableColumnKey, type LeadTableView } from './LeadTable.columns';
 import { LeadTableOverflowChip } from './LeadTableOverflowChip';
 import {
   LeadAssignmentCell,
@@ -145,7 +145,7 @@ export function LeadTableRow({
     gated && APPROVER_ROLE_STATUS_ID,
     approvalActionsDisabled && 'campaign-binding-status',
   );
-  const columns = LEAD_TABLE_COLUMNS[view];
+  const columns = useLeadTableColumns(view);
   const offerLabel = offerDisplayLabel(lead.recommended_offer_code, lead.recommended_offer);
   const decisionPending = pendingDecision !== null;
   const [primarySegment, ...moreSegments] = lead.segment_codes;

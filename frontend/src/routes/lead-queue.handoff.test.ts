@@ -122,6 +122,11 @@ describe('buildPortfolioBuilderUrlFromQueue', () => {
     expect(handoff('sort=equity&dir=asc&row=B-0000000000001&view=sales').notCarried).toEqual([]);
   });
 
+  it('never lists the hidden columns, the none sentinel included', () => {
+    expect(handoff('hide=segments,rate&state=IL').notCarried).toEqual([]);
+    expect(handoff('hide=none').notCarried).toEqual([]);
+  });
+
   it('never lists the Triage deck mode (D-approval-flow-a2)', () => {
     expect(handoff('mode=triage&state=IL').notCarried).toEqual([]);
   });

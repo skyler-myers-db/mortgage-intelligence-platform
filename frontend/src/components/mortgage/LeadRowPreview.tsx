@@ -1,4 +1,4 @@
-import { useId, useRef, type CSSProperties } from 'react';
+import { useId, useRef, useState, type CSSProperties } from 'react';
 import { Link } from 'react-router';
 import type { LeadSummary } from '../../types';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
@@ -17,6 +17,7 @@ import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { ScoreAnatomyGate } from './ScoreAnatomyGate';
 import { ScoreBadge } from './ScoreBadge';
 import { lazyModule, useLazyModule } from './useLazyModule';
+import { leadCountQueryOptions } from '../../lib/apiClients/leadCount';
 import { dispositionLabel, outreachLabel } from './LeadTable.logic';
 
 // A row's Decision receipt renders only after a decision in this session, so
@@ -40,6 +41,10 @@ const RECEIPT_CHUNK = lazyModule(() => import('./DecisionReceipt'));
 const BANNER_CHUNK = lazyModule<{ default: unknown; ApprovalBanner?: typeof ApprovalBannerComponent }>(
   () => OfferOrchestratorRoute.preload(),
 );
+// "More like this" (wow-power-2, deviation:more-like-this): its own chunk,
+// loaded on the click only, never on expand or hover. This chunk carries the
+// trigger and this loader only.
+const SIMILAR_CHUNK = lazyModule(() => import('./SimilarCohortPanel'));
 
 /**
  * id of the expanded row's receipt block: the queue's "View receipt" toast
@@ -111,8 +116,12 @@ export function RowPreview({
   approvalGate?: RowPreviewApprovalGate | null;
   offerSearch?: string;
 }) {
-  const { setLastBorrowerId, saveLead, isLeadSaved, actorEmail } = useApp();
+  const { setLastBorrowerId, saveLead, isLeadSaved, actorEmail, canApprove } = useApp();
   const gateRef = useRef<HTMLDivElement | null>(null);
+  const [similarOpen, setSimilarOpen] = useState(false);
+  const similarId = useId();
+  const similarChunk = useLazyModule(SIMILAR_CHUNK, similarOpen);
+  const SimilarCohortPanel = similarChunk.module?.SimilarCohortPanel;
   const receiptChunk = useLazyModule(RECEIPT_CHUNK, Boolean(decisionReceipt?.auditEventId));
   const DecisionReceipt = receiptChunk.module?.DecisionReceipt;
   const ApprovalBanner = useLazyModule(BANNER_CHUNK, approvalGate !== null).module?.ApprovalBanner;
@@ -271,6 +280,16 @@ export function RowPreview({
               Build offer
             </Link>
             <Button
+              variant="ghost"
+              size="sm"
+              aria-expanded={similarOpen}
+              aria-controls={similarOpen ? similarId : undefined}
+              onClick={() => setSimilarOpen((open) => !open)}
+              data-testid={`lead-more-like-this-${lead.borrower_id}`}
+            >
+              More like this
+            </Button>
+            <Button
               variant={saved ? 'ghost' : 'default'}
               size="sm"
               icon={saved ? 'check' : 'tag'}
@@ -280,6 +299,13 @@ export function RowPreview({
               {saved ? 'Saved' : 'Save lead'}
             </Button>
           </div>
+          {similarOpen && (SimilarCohortPanel ? (
+            <SimilarCohortPanel id={similarId} lead={lead} canApprove={canApprove === true} countOptions={leadCountQueryOptions} />
+          ) : (
+            <p id={similarId} className="muted fs-12 mt-2 flush" role="status">
+              {similarChunk.failed ? 'More like this could not load; reload the page.' : 'Loading…'}
+            </p>
+          ))}
         </div>
         {approvalGate && ApprovalBanner && (
           <div ref={gateRef} className="mt-3" data-testid={`lead-row-approval-${lead.borrower_id}`}>

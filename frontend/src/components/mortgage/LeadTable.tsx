@@ -10,7 +10,7 @@ import { loadedExportTruncatedOf, planLeadCsvExport } from './LeadTable.csvPlan'
 import { leadExportNotice } from './LeadExportNotice';
 import { useLeadCsvExport } from './useLeadCsvExport';
 import { LEAD_VIRTUALIZATION_THRESHOLD, leadRowEstimatePx } from './LeadTable.constants';
-import { leadTableColumnCount, leadTableColumns } from './LeadTable.columns';
+import { leadTableClassName, leadTableSortLabel, useLeadTableColumns } from './LeadTable.columns';
 import { keepsServerOrder, sortValue, verifiedCampaignBinding } from './LeadTable.logic';
 import { LeadTableBody } from './LeadTableBody';
 import { useStableRowCallbacks } from './LeadTable.rowCallbacks';
@@ -171,8 +171,8 @@ export function LeadTable({
   // Focus is never scrolled under the sticky thead or the pinned Approval
   // column (a11y-v2; the sticky route nav is 38-focus-clearance.css's).
   useTableScrollClearance(tableWrapRef, view);
-  const columns = leadTableColumns(view);
-  const columnCount = leadTableColumnCount(view);
+  const columns = useLeadTableColumns(view);
+  const columnCount = columns.length;
   // Sort and expanded row: owned by the parent when it passes the change
   // handler (the Lead Queue keeps both in the URL, audit shell-03), else here.
   const [ownExpanded, setOwnExpanded] = useState<string | null>(null);
@@ -622,7 +622,7 @@ export function LeadTable({
           : undefined}
       >
         <table
-          className={`tbl lead-table__table lead-table__table--${view}`}
+          className={leadTableClassName(view, columns)}
           aria-rowcount={sortedLeads.length + 1 + (hasExpandedRow ? 1 : 0)}
         >
           <LeadTableHead
@@ -773,7 +773,7 @@ export function LeadTable({
         totalMatching={totalMatching}
         truncatedAt={truncatedAt}
         sortKey={sortKey}
-        sortLabel={columns.find((column) => column.sortKey === sortKey)?.label ?? sortKey}
+        sortLabel={leadTableSortLabel(view, sortKey)}
         sortScope={sortScope}
         sortedCount={sortedLeads.length}
         onResetSort={() => toggleSort('rank')}

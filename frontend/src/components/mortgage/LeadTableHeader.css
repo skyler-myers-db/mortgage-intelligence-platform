@@ -1,0 +1,77 @@
+/* ============================================================
+   RANKED-TABLE HEADER HINT ROW (W5c C2, moved and re-keyed in W5e;
+   12.3 R2-N2). deviation:ranked-table-header-hint-row
+   With the Console open at 1440x900 the header's keyboard hint ran under
+   the title only, beside the action row, and wrapped (header 83 -> 101px).
+   From a 960px `main` container the header is a two-row grid: the title in
+   row 1, the hint in row 2 spanning under the actions too, the actions
+   spanning both rows from the top, so the header keeps one hint line and
+   its 83px height. Keyed on the header's own block class
+   (`.lead-table__header`, LeadTableHeader.tsx) with plain class selectors,
+   so it applies on the Lead Queue AND Segment Intelligence (it was scoped
+   to the Lead Queue's painted route in W5c): no `:has()` (a `:has()`
+   subject re-styled ~2,300 elements per table scroll,
+   focus-clearance-cost.fixture.spec.ts) and no route scope. Rides the
+   LeadTable chunk's CSS. Prototype: the subtitle sits under the title only
+   and the actions are centred (design_files/Module 0 Prototype.html:1993-2006).
+   ============================================================ */
+@container main (min-width: 960px) {
+  .lead-table__header.surface__hdr--split {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: var(--sp-3);
+    row-gap: 0;
+  }
+  .lead-table__header .surface__hdr-main,
+  .lead-table__header .surface__hdr-main > div:not(.surface__icon) {
+    display: contents;
+  }
+  .lead-table__header .surface__hdr-main .surface__icon {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    align-self: center;
+  }
+  .lead-table__header .surface__hdr-main > div:not(.surface__icon) > :first-child {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+  }
+  .lead-table__header .surface__hdr-main > div:not(.surface__icon) > .muted {
+    grid-column: 2 / span 2;
+    grid-row: 2;
+  }
+  .lead-table__header .lead-table__header-actions {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    align-self: start;
+  }
+}
+
+/* ============================================================
+   COMPACT HEADER ACTIONS (W5e). deviation:lead-table-hide-columns
+   The Lead Queue's HIDE pill sits after VIEW (`.lead-table__hide-slot`,
+   the route's slot). Up to a 1219px `main` (the Console open at 1440x900)
+   the full actions left the title row too little room: an approver's
+   Triage entry and "Approval requests" (or its failed-read Retry) wrapped
+   the title and the header grew 83 -> 95px (approval-requests.fixture.spec.ts
+   (j) and (l)). There the Shortcuts button is its `?` keycap, VIEW shows
+   its value and HIDE its name: each word stays in the control's accessible
+   name (visually hidden, never display:none) and hidden columns still mark
+   the HIDE pill active. Keyed on the header's modifier, so a header without
+   the slot (Segment Intelligence) keeps its words.
+   ============================================================ */
+.lead-table__hide-slot { display: contents; }
+.lead-table__shortcuts-key { display: none; }
+@container main (max-width: 1219px) {
+  .lead-table__header--hide-slot .lead-table__shortcuts-label,
+  .lead-table__header--hide-slot .lead-table__header-actions > .filter-root .filter__label,
+  .lead-table__header--hide-slot .lead-table__hide-slot .filter__value {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .lead-table__header--hide-slot .lead-table__shortcuts-key { display: inline-block; }
+}

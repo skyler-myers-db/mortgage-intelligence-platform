@@ -30,16 +30,35 @@ pending or failed state; it must not claim success.
   authorization as the ranked list (admin gate, assignee visibility, cohort
   replay) but return totals or the actor's own views only, never resolve the
   audit store, and write no row. The Lead Queue reads facet counts only when a
-  person opens a filter menu, and the saved views only when the panel opens.
+  person opens a filter menu, the saved views only when the panel opens, and
+  the match count only while a person types in the open filter omnibox
+  (debounced, recognized readings only) and once when "More like this" opens
+  (a borrower's reviewed pattern: segment, product, state, relationship, score
+  band; never sub-state geography or an id). Both count queries are built from
+  an allowlist (`frontend/src/lib/leadCountQuery.ts`), so neither ever carries
+  `borrower_ids`, an approval-request scope, a cohort or a Growth Agent proof,
+  and the omnibox's typed text is never stored, put in a URL or sent anywhere
+  (unrecognized text reaches Genie only as a composer prefill on a click).
   Count and facets refuse `borrower_ids` (422): an aggregate over named
   borrowers would read their attributes with no `VIEW_LEADS` row, so a read of
   named borrowers is the audited list only, and the Lead Queue shows a borrower
   list's menus without counts.
 - Saving and deleting a view write `SAVE_QUEUE_VIEW` / `DELETE_QUEUE_VIEW` in
   the same Lakebase statement as the change (deletes are soft). The audit
-  metadata carries the view id, the SHA-256 of its canonical params and the
-  request id, never the view name or the params. The name passes the same
+  metadata carries the view id, a keyed fingerprint of its canonical params
+  (an HMAC of their SHA-256 under the saved-view domain, like the ledger and
+  `VIEW_LEADS` copies; omitted outside local/test when no key is configured)
+  and the request id, never the view name or the params. The name passes the same
   public-text policy as a campaign name and a refusal never echoes it.
+- Column visibility (`?view=` and `?hide=`) is display state: it never reaches
+  `/api/leads`, the leads query key, the export filters or the Growth Agent
+  proof, and a change reads nothing. Which saved view is the actor's default
+  (its columns apply when a queue URL names none; it never injects a filter)
+  and the three most recently opened views live in the actor-scoped
+  PRIVATE_LOCAL browser key `mip.leadQueue.savedViews.v1` (lib/actorScope:
+  read only under the actor's own stamp, removed on an actor change). It holds
+  view ids, names and canonical params, the same public-safe text the actor's
+  saved views already hold, and is never sent anywhere.
 
 ## Source Truth
 

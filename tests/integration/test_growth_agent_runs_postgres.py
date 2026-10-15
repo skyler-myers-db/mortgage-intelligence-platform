@@ -18,6 +18,14 @@ its series through three index-backed arms instead of one OR join. The
 pin proves each arm's index scan under a generic plan with sequential scans
 disabled. On PG16 with statistics the OR join itself plans a BitmapOr (no Seq
 Scan), so the pin is on the arms' own index scans, as the brief allows.
+
+W5e (w5-lead-queue-columns, wow-ai-4 series link record): a FOURTH arm reads
+``growth_agent_watchlist_run_links`` (a run saved into an existing watchlist
+name) through the links' primary key, then the run's. With no link rows the
+four arms still return exactly the OR join's rows; a linked run stays in the
+series after the next Run now. Merge gates: this four-arm EXPLAIN (no Seq Scan
+on growth_agent_runs or the links table) and the twice-applied block in
+test_growth_agent_run_links_postgres.py.
 """
 
 from __future__ import annotations
@@ -432,16 +440,76 @@ def test_each_series_arm_is_an_index_scan_and_none_scans_the_runs_table(conn_kwa
             "'Daily refi brief', CASE WHEN g % 10 = 0 THEN 'failed' ELSE 'completed' END, g % 90, 50 + g % 40, "
             "'/lead-queue', TIMESTAMPTZ '2026-09-01' + g * INTERVAL '1 minute' FROM generate_series(1, 6000) AS g"
         )
+        # Link rows for the plan's statistics (W5e): a few runs saved into the
+        # watchlist, as a re-save into an existing name produces.
+        conn.execute(
+            "INSERT INTO mip_app.growth_agent_watchlist_run_links (monitor_id, run_id, actor_email) "
+            "SELECT %s, run_id, actor_email FROM mip_app.growth_agent_runs "
+            "WHERE actor_email = 'lo@example.com' AND monitor_id IS NULL ORDER BY created_at LIMIT 3",
+            (monitor_id,),
+        )
         conn.execute("ANALYZE mip_app.growth_agent_runs")
         conn.execute("ANALYZE mip_app.growth_agent_monitors")
+        conn.execute("ANALYZE mip_app.growth_agent_watchlist_run_links")
         plan = _generic_plan(conn, WATCHLIST_SUMMARY_SQL)
         base_plan = _generic_plan(conn, _BASE_WATCHLIST_SUMMARY_SQL)
 
     assert "Seq Scan on growth_agent_runs" not in plan, plan
+    assert "Seq Scan on growth_agent_watchlist_run_links" not in plan, plan
     assert "Index Scan using idx_growth_agent_runs_monitor_created on growth_agent_runs" in plan, plan
-    assert plan.count("Index Scan using growth_agent_runs_pkey on growth_agent_runs") == 2, plan
-    for arm in (r"\(monitor_id = w_\d+\.monitor_id\)", r"\(run_id = w_\d+\.seed_run_id\)", r"\(run_id = w_\d+\.last_run_id\)"):
+    # The seed, the last run and the linked run, each through the run_id primary key.
+    assert plan.count("Index Scan using growth_agent_runs_pkey on growth_agent_runs") == 3, plan
+    assert re.search(r"Index (Only )?Scan using growth_agent_watchlist_run_links_pkey on growth_agent_watchlist_run_links", plan), plan
+    for arm in (
+        r"\(monitor_id = w_\d+\.monitor_id\)",
+        r"\(run_id = w_\d+\.seed_run_id\)",
+        r"\(run_id = w_\d+\.last_run_id\)",
+        r"\(run_id = l\.run_id\)",
+    ):
         assert re.search(rf"Index Cond: {arm}", plan), (arm, plan)
     # Non-vacuity: the 32e5d382 OR join never plans these three index scans
     # (on PG16 it is one BitmapOr filtered row by row).
     assert "Index Scan using growth_agent_runs_pkey on growth_agent_runs" not in base_plan, base_plan
+
+
+def test_a_run_saved_into_an_existing_watchlist_stays_in_the_series_after_the_next_run_now(
+    conn_kwargs: dict[str, str],
+) -> None:
+    # wow-ai-4 (W5e): the save path cannot tag an append-only run with the
+    # watchlist's monitor_id; it writes a link row instead (RUN_LINK_INSERT_SQL
+    # as shipped), so the run keeps its place once a later Run now replaces it
+    # as the watchlist's last_run_id.
+    from backend.services.growth_agent_run_watchlist import RUN_LINK_INSERT_SQL
+
+    seed_run, monitor_id = _upgraded_with_a_saved_watchlist(conn_kwargs)
+    with psycopg.connect(**conn_kwargs) as conn:
+        saved = insert_run(conn, actionable_total=45, avg_score=72.0, created_at="2026-09-21T09:00:00Z")
+        conn.execute(
+            "UPDATE mip_app.growth_agent_monitors SET last_run_id = %s WHERE monitor_id = %s", (saved, monitor_id)
+        )
+        conn.execute(RUN_LINK_INSERT_SQL, {"monitor_id": monitor_id, "run_id": saved, "actor_email": _ACTOR})
+        # A re-save of the same pair is a no-op.
+        conn.execute(RUN_LINK_INSERT_SQL, {"monitor_id": monitor_id, "run_id": saved, "actor_email": _ACTOR})
+        later = insert_run(
+            conn, actionable_total=50, avg_score=73.0, created_at="2026-09-22T09:00:00Z", monitor_id=monitor_id
+        )
+        conn.execute(
+            "UPDATE mip_app.growth_agent_monitors SET last_run_id = %s WHERE monitor_id = %s", (later, monitor_id)
+        )
+        links = conn.execute(
+            "SELECT count(*) FROM mip_app.growth_agent_watchlist_run_links WHERE monitor_id = %s", (monitor_id,)
+        ).fetchone()
+        assert links is not None and links[0] == 1
+
+    with psycopg.connect(**conn_kwargs, row_factory=dict_row) as conn:
+        params = {"actor_email": _ACTOR, "limit": 20, "points": 8}
+        rows = conn.execute(WATCHLIST_SUMMARY_SQL, params).fetchall()
+        oracle = conn.execute(_BASE_WATCHLIST_SUMMARY_SQL, params).fetchall()
+    series = {briefing.monitor_id: briefing for briefing in briefings_from_rows(rows)}[monitor_id]
+    assert series.run_count == 3
+    assert series.recent_actionable_totals == [40, 45, 50]
+    assert (series.actionable_total, series.previous_actionable_total, series.actionable_delta) == (50, 45, 5)
+    # Non-vacuity: without the link arm (the OR join) the saved run has left the series.
+    oracle_series = {briefing.monitor_id: briefing for briefing in briefings_from_rows(oracle)}[monitor_id]
+    assert oracle_series.recent_actionable_totals == [40, 50]
+    assert seed_run

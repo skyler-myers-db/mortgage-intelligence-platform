@@ -19,6 +19,8 @@ import {
   savedViewDraft,
 } from './lead-queue.savedViews';
 import { LeadQueueViews } from './lead-queue.views';
+import { readSavedViewPrefs, setDefaultSavedView } from './lead-queue.savedViewPrefs';
+import { installLocalStorage } from '../test/installLocalStorage';
 
 vi.mock('../lib/configOptionsQuery', () => {
   const STABLE = { data: { target_lender_refs: ['All', 'Competitor B'] }, isError: false };
@@ -44,6 +46,8 @@ function view(id: string, name: string, params: string): SavedView {
 }
 
 beforeEach(() => {
+  installLocalStorage();
+  setDefaultSavedView(null);
   calls = [];
   views = [view('11111111-1111-4111-8111-111111111111', 'IL pending', 'approval_status=pending&state=IL')];
   respond = (call) => {
@@ -140,6 +144,14 @@ describe('saved-view helpers', () => {
     expect(saveErrorCopy(error(503, 'Lakebase down'))).toBe(SAVED_VIEW_COPY.unavailable);
     expect(saveErrorCopy(new Error('boom'))).toBe(SAVED_VIEW_COPY.unavailable);
   });
+
+  it('reads a 409 actor_changed as the actor binding, never as a duplicate, limit or changed list', () => {
+    const refused = new ApiError(SAVED_VIEW_COPY.duplicate, {
+      path: '/api/v1/workspace/saved-views', status: 409, reason: 'actor_changed',
+    });
+    expect(saveErrorCopy(refused)).toBe(SAVED_VIEW_COPY.actorChanged);
+    expect(SAVED_VIEW_COPY.actorChanged).toBe('Nothing was recorded. This tab resets for the new user.');
+  });
 });
 
 describe('Saved views panel', () => {
@@ -207,7 +219,7 @@ describe('Saved views panel', () => {
         };
       });
     };
-    const remove = document.querySelector<HTMLButtonElement>('.lead-queue-saved-views__item .filter__remove')!;
+    const remove = document.querySelector<HTMLButtonElement>('.lead-queue-saved-views__item button[aria-label^="Delete saved view"]')!;
     expect(remove.getAttribute('aria-label')).toBe('Delete saved view: IL pending');
     await act(async () => remove.click());
     expect(remove.getAttribute('aria-disabled')).toBe('true');
@@ -221,6 +233,71 @@ describe('Saved views panel', () => {
     ]);
     expect(document.querySelector('.lead-queue-saved-views__link')).toBeNull();
     expect(byTestId('lead-queue-saved-views-panel')!.textContent).toContain('No saved views yet.');
+  });
+
+  it('a save or delete refused 409 actor_changed says nothing was recorded', async () => {
+    await mountAt('state=IL');
+    await open();
+    respond = (call) => (call.method === 'GET'
+      ? json({ saved_views: views })
+      : json({ detail: 'Actor changed', reason: 'actor_changed' }, 409));
+    await typeName('IL pending 2');
+    await save();
+    const panel = byTestId('lead-queue-saved-views-panel')!;
+    expect(panel.querySelector('.field__error')?.textContent).toBe(SAVED_VIEW_COPY.actorChanged);
+    const remove = document.querySelector<HTMLButtonElement>('.lead-queue-saved-views__item button[aria-label^="Delete saved view"]')!;
+    await act(async () => remove.click());
+    await settle();
+    const errors = [...panel.querySelectorAll('.field__error')].map((element) => element.textContent);
+    expect(errors.filter((text) => text === SAVED_VIEW_COPY.actorChanged)).toHaveLength(2);
+    expect(panel.textContent).not.toContain(SAVED_VIEW_COPY.deleteFailed);
+  });
+
+  it('marks one view as my default (aria-pressed, a Default note), saves its columns, and a second press clears it', async () => {
+    const OPS = '33333333-3333-4333-8333-333333333333';
+    views = [...views, view(OPS, 'Ops desk', 'hide=rate&state=TX&view=sales-ops')];
+    await mountAt('state=IL');
+    await open();
+    const toggles = () => [...document.querySelectorAll<HTMLButtonElement>('[data-testid="lead-queue-saved-views-default"]')];
+    expect(toggles().map((toggle) => toggle.getAttribute('aria-pressed'))).toEqual(['false', 'false']);
+    expect(toggles()[1].getAttribute('aria-label')).toBe('Use as my default: Ops desk');
+    await act(async () => toggles()[1].click());
+    expect(toggles().map((toggle) => toggle.getAttribute('aria-pressed'))).toEqual(['false', 'true']);
+    const note = document.getElementById(toggles()[1].getAttribute('aria-describedby')!);
+    expect(note?.textContent).toBe('Default');
+    expect(readSavedViewPrefs().defaultView).toEqual({ id: OPS, name: 'Ops desk', params: 'hide=rate&state=TX&view=sales-ops' });
+    // The queue names no columns, so the default's apply: a new view saves them (never its filters).
+    expect(calls.map((call) => call.method)).toEqual(['GET']);
+    await typeName('IL ops columns');
+    await save();
+    expect(calls[1].body).toEqual({ name: 'IL ops columns', params: 'state=IL&view=sales-ops&hide=rate' });
+
+    await act(async () => toggles()[2].click());
+    expect(readSavedViewPrefs().defaultView).toBeNull();
+    expect(toggles().every((toggle) => toggle.getAttribute('aria-pressed') === 'false')).toBe(true);
+  });
+
+  it('records a followed view as recent, and forgets a deleted one', async () => {
+    await mountAt('state=TX');
+    await open();
+    await act(async () => document.querySelector<HTMLAnchorElement>('.lead-queue-saved-views__link')!.click());
+    expect(readSavedViewPrefs().recent.map((entry) => entry.name)).toEqual(['IL pending']);
+    await open();
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="lead-queue-saved-views-default"]')!.click());
+    expect(readSavedViewPrefs().defaultView?.name).toBe('IL pending');
+    const remove = document.querySelector<HTMLButtonElement>('.lead-queue-saved-views__item button[aria-label^="Delete saved view"]')!;
+    await act(async () => remove.click());
+    await settle();
+    expect(readSavedViewPrefs()).toEqual({ defaultView: null, recent: [] });
+  });
+
+  it('reconciles the preferences with a successful list read (no extra request)', async () => {
+    setDefaultSavedView({ id: '99999999-9999-4999-8999-999999999999', name: 'Gone', params: 'state=CA' });
+    views = [view('11111111-1111-4111-8111-111111111111', 'IL pending (renamed)', 'approval_status=pending&state=IL')];
+    await mountAt('');
+    await open();
+    expect(readSavedViewPrefs().defaultView).toBeNull();
+    expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual(['GET /api/v1/workspace/saved-views']);
   });
 
   it('says Saved views unavailable with an explicit Retry and no alert role', async () => {

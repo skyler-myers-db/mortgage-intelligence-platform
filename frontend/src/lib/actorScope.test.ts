@@ -120,7 +120,9 @@ afterEach(() => {
 
 describe('registry', () => {
   it('classifies every store key, and the in-flight key the shell reads', () => {
-    expect(ACTOR_SCOPE_REGISTRY.PRIVATE_LOCAL).toEqual([PINNED_INSIGHTS_KEY, GENIE_CONVERSATION_STORAGE_KEY]);
+    expect(ACTOR_SCOPE_REGISTRY.PRIVATE_LOCAL).toEqual([
+      PINNED_INSIGHTS_KEY, GENIE_CONVERSATION_STORAGE_KEY, 'mip.leadQueue.savedViews.v1',
+    ]);
     expect(ACTOR_SCOPE_REGISTRY.PRIVATE_SESSION).toEqual([
       GENIE_CONVERSATION_TURNS_KEY,
       GENIE_IN_FLIGHT_TURN_KEY,

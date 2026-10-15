@@ -64,6 +64,8 @@ _APP_ROLE_TABLE_PRIVILEGES: dict[str, tuple[str, ...]] = {
     "lead_snoozes": ("SELECT", "INSERT", "UPDATE"),
     # Composed-plan execute progress (genie-09 part 4): upserted, never deleted.
     "growth_agent_plan_progress": ("SELECT", "INSERT", "UPDATE"),
+    # Watchlist series links (wow-ai-4, W5e): insert-only, never updated or deleted.
+    "growth_agent_watchlist_run_links": ("SELECT", "INSERT"),
 }
 
 _APP_ROLE_SEQUENCE_PRIVILEGES: dict[str, tuple[str, ...]] = {

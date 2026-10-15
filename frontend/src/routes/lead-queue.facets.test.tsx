@@ -169,7 +169,7 @@ describe('Lead Queue facet counts', () => {
     expect(listbox()!.getAttribute('aria-busy')).toBeNull();
   });
 
-  it('marks the listbox busy while the counts load', async () => {
+  it('marks the count status busy (never the listbox) while the counts load', async () => {
     vi.stubGlobal('fetch', (path: string) => {
       facetCalls.push(path);
       return new Promise<Response>(() => undefined);
@@ -177,7 +177,8 @@ describe('Lead Queue facet counts', () => {
     await mountAt('');
     await toggle('STATE');
     expect(facetCalls).toHaveLength(1);
-    expect(listbox()!.getAttribute('aria-busy')).toBe('true');
+    expect(listbox()!.hasAttribute('aria-busy')).toBe(false);
+    expect(document.querySelector('[role="status"].sr-only')?.getAttribute('aria-busy')).toBe('true');
     expect(listbox()!.querySelector('.filter-menu__count')).toBeNull();
   });
 

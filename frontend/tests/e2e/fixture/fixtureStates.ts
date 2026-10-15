@@ -59,7 +59,12 @@ export type FixtureState =
   // W5d w5-followups-snooze: an eligible actor's Follow-ups tray, open.
   | 'followups-tray'
   | 'identity-menu'
-  | 'glossary-search';
+  | 'glossary-search'
+  // W5e w5-lead-queue-columns: the HIDE menu, the filter omnibox with its
+  // readings and count, and an expanded row's More like this panel.
+  | 'hide-menu'
+  | 'omnibox'
+  | 'more-like-this';
 
 /** The reads `read-failed` fails, per route name (routes.ts). */
 export const READ_FAILED_ENDPOINTS: Readonly<Record<string, readonly string[]>> = {
@@ -229,6 +234,24 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
       const menu = page.getByRole('menu', { name: 'Account' });
       await expect(menu).toBeVisible();
       await expect(menu.getByRole('menuitemradio').first()).toBeFocused();
+      break;
+    }
+    case 'hide-menu':
+      await app.openFilterMenu('HIDE');
+      break;
+    case 'omnibox': {
+      // Opening it and typing reads only the audit-free count.
+      await page.getByTestId('lead-queue-omnibox').click();
+      const input = page.getByTestId('lead-queue-omnibox-input');
+      await expect(input).toBeFocused();
+      await input.fill('TX heloc zyrplax');
+      await expect(page.locator('.lead-queue-omnibox__count')).toHaveText(/borrowers? match/);
+      break;
+    }
+    case 'more-like-this': {
+      const row = await app.expandFirstLeadRow();
+      await row.getByRole('button', { name: 'More like this' }).click();
+      await expect(row.locator('.similar-cohort [role="status"]')).toHaveText(/match this pattern/);
       break;
     }
     case 'glossary-search': {

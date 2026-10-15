@@ -7,9 +7,14 @@
    lead-queue.filterTools.css, so the placeholder shown while this chunk
    loads is already placed. Tokens only.
    ============================================================ */
+/* At the 25-view limit the list scrolls inside its own block (tables-06
+   nit), so the View name field and Save stay above the 900px fold; its
+   links stay focusable and scroll into view inside it. */
 .lead-queue-saved-views__list {
   display: flex;
   flex-direction: column;
+  max-block-size: calc(var(--sp-16) * 4);
+  overflow-y: auto;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -29,6 +34,16 @@
 .lead-queue-saved-views__link:focus-visible {
   outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: calc(-1 * var(--focus-ring-width));
+}
+/* "Use as my default" (W5e, tables-05 step 2): the row's check toggle is
+   muted until pressed; the pressed one, and its "Default" note, take the
+   accent ink. */
+.lead-queue-saved-views__default { color: var(--text-3); }
+.lead-queue-saved-views__default.is-default { color: var(--accent-ink); }
+.lead-queue-saved-views__default-note {
+  flex-shrink: 0;
+  font-size: var(--fs-11);
+  color: var(--accent-ink);
 }
 .lead-queue-saved-views__item .filter__remove[aria-disabled="true"] {
   opacity: 0.4;

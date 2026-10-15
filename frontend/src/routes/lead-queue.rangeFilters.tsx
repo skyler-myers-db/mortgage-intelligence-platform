@@ -10,8 +10,12 @@
  * A value commits ONLY on blur or Enter: one URL write per commit (so one
  * GET /api/leads), none per keystroke and none when the value is unchanged;
  * an empty field clears its param. An out-of-range value clamps and says so
- * in the Field notice; an at-least above its at-most is a Field error and is
- * not written. A Genie cohort or a Growth Agent handoff carries its own
+ * in the Field notice (an in-range value that only rounds says that
+ * instead); an at-least above its at-most is a Field error and is not
+ * written. A URL that already holds an inverted pair (a hand-edited or old
+ * link: the request drops both, sanitizeLeadBounds) shows that error on
+ * both fields at once, and fixing either clears it. A Genie cohort or a
+ * Growth Agent handoff carries its own
  * thresholds, so the inputs are disabled while either is in the URL.
  */
 import { useId, useState, type KeyboardEvent } from 'react';
@@ -42,6 +46,11 @@ export const LEAD_RANGE_INPUTS: readonly RangeInputSpec[] = [
 export const RANGE_INVERTED_ERROR = 'The at-least value must not be above the at-most value.';
 export const RANGE_NOT_A_NUMBER_ERROR = 'Enter a whole number.';
 
+/** The notice for an in-range value that was only rounded (tables-06 nit). */
+export function rangeRoundedNotice(value: number): string {
+  return `Rounded to a whole number; set to ${formatCount(value)}.`;
+}
+
 export type RangeCommit =
   | { kind: 'write'; next: URLSearchParams; notice: string | null; committed: string }
   | { kind: 'unchanged'; notice: string | null; committed: string }
@@ -66,7 +75,8 @@ export function rangeCommit(searchParams: URLSearchParams, key: LeadBoundFilterK
     if (!Number.isFinite(value)) return { kind: 'error', error: RANGE_NOT_A_NUMBER_ERROR };
     const { min, max } = LEAD_BOUND_LIMITS[leadBoundDimension(key)];
     next = Math.min(max, Math.max(min, Math.round(value)));
-    if (next !== value) notice = `Allowed range is ${formatCount(min)} to ${formatCount(max)}; set to ${formatCount(next)}.`;
+    if (value < min || value > max) notice = `Allowed range is ${formatCount(min)} to ${formatCount(max)}; set to ${formatCount(next)}.`;
+    else if (next !== value) notice = rangeRoundedNotice(next);
     const twin = parseLeadBound(twinOf(key), searchParams.get(twinOf(key)));
     const inverted = twin !== undefined && (key.startsWith('min_') ? next > twin : next < twin);
     if (inverted) return { kind: 'error', error: RANGE_INVERTED_ERROR };
@@ -77,6 +87,14 @@ export function rangeCommit(searchParams: URLSearchParams, key: LeadBoundFilterK
   if (next === undefined) params.delete(key);
   else params.set(key, committed);
   return { kind: 'write', next: params, notice, committed };
+}
+
+/** Both bounds of `key`'s dimension parse from the URL and the at-least is above the at-most. */
+export function urlRangeInverted(searchParams: URLSearchParams, key: LeadBoundFilterKey): boolean {
+  const dimension = leadBoundDimension(key);
+  const low = parseLeadBound(`min_${dimension}`, searchParams.get(`min_${dimension}`));
+  const high = parseLeadBound(`max_${dimension}`, searchParams.get(`max_${dimension}`));
+  return low !== undefined && high !== undefined && low > high;
 }
 
 export function LeadQueueRangeFilters() {
@@ -149,6 +167,8 @@ function LeadQueueRangeInput({
   if (valid !== message) setMessage(valid);
   const text = draft !== null && draft.against === committed ? draft.text : committed;
   const { min, max } = LEAD_BOUND_LIMITS[leadBoundDimension(spec.key)];
+  // An inverted pair already in the URL is applied as nothing; say so on load.
+  const urlError = urlRangeInverted(searchParams, spec.key) ? RANGE_INVERTED_ERROR : null;
 
   const commit = () => {
     // Nothing typed, typed against a URL that has since moved, or this
@@ -179,7 +199,7 @@ function LeadQueueRangeInput({
       className="lead-queue-range__field"
       label={spec.label}
       notice={message?.notice ?? null}
-      error={message?.error ?? null}
+      error={message?.error ?? urlError}
     >
       {(control) => (
         <input

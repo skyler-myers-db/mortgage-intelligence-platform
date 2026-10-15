@@ -27,6 +27,7 @@ from backend.services.audit_export_receipt import (
 from backend.services.audit_fingerprint import (
     AUDIT_LEDGER_FINGERPRINT_DOMAIN,
     LEAD_VIEW_FINGERPRINT_DOMAIN,
+    SAVED_VIEW_FINGERPRINT_DOMAIN,
     keyed_filter_fingerprint,
     keyed_filter_fingerprint_candidates,
 )
@@ -78,6 +79,19 @@ def test_the_domains_are_separated(keyed_a: None) -> None:
     assert keyed_filter_fingerprint(plain, domain=AUDIT_LEDGER_FINGERPRINT_DOMAIN) != keyed_filter_fingerprint(
         plain, domain=LEAD_VIEW_FINGERPRINT_DOMAIN
     )
+
+
+def test_the_saved_view_domain_is_separated_from_the_ledger_and_lead_view_domains(keyed_a: None) -> None:
+    # SAVE_QUEUE_VIEW (W5e, 12.4 #11 NB-e) keys under its own domain, so a
+    # stored saved-view fingerprint never equals the VIEW_AUDIT_LEDGER /
+    # AUDIT_EXPORT or VIEW_LEADS copy of the same digest.
+    plain = _plain(FILTERS)
+    saved = keyed_filter_fingerprint(plain, domain=SAVED_VIEW_FINGERPRINT_DOMAIN)
+
+    assert saved is not None and saved != plain
+    assert saved != keyed_filter_fingerprint(plain, domain=AUDIT_LEDGER_FINGERPRINT_DOMAIN)
+    assert saved != keyed_filter_fingerprint(plain, domain=LEAD_VIEW_FINGERPRINT_DOMAIN)
+    assert len({AUDIT_LEDGER_FINGERPRINT_DOMAIN, LEAD_VIEW_FINGERPRINT_DOMAIN, SAVED_VIEW_FINGERPRINT_DOMAIN}) == 3
 
 
 def test_the_keyed_value_passes_the_audit_value_policy(keyed_a: None) -> None:

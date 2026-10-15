@@ -1,0 +1,56 @@
+/* ============================================================
+   HIDDEN COLUMNS (tables-05 step 2, W5e). deviation:lead-table-hide-columns
+   The Lead Queue's HIDE pill (`?hide=`) removes hideable columns from the
+   colgroup, the header and every row (LeadTable.columns.ts). Each hidden
+   column subtracts its fixed width (03-score-and-table.css) from the view's
+   floor width (LeadTable.css), so a narrower table scrolls less behind the
+   pinned Approval column and Primary offer takes the room. Pure class
+   selectors: no JS-written custom property and no :has(). The properties
+   are registered <length>s that do not inherit, so each resolves on the
+   table only. The floor rules use two classes, so they win over
+   LeadTable.css's one-class floor whichever sheet loads first. Prototype:
+   a fixed column set (design_files/Module 0 Prototype.html:2013-2023).
+   ============================================================ */
+@property --lead-table-hidden-location { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --lead-table-hidden-relationship { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --lead-table-hidden-assigned { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --lead-table-hidden-outreach { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --lead-table-hidden-last-touch { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --lead-table-hidden-segments { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --lead-table-hidden-equity { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --lead-table-hidden-rate { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --lead-table-hidden-status { syntax: '<length>'; inherits: false; initial-value: 0px; }
+
+.lead-table__table--hide-location { --lead-table-hidden-location: 104px; }
+.lead-table__table--hide-relationship { --lead-table-hidden-relationship: 148px; }
+.lead-table__table--hide-assigned { --lead-table-hidden-assigned: 124px; }
+.lead-table__table--hide-outreach { --lead-table-hidden-outreach: 112px; }
+.lead-table__table--hide-last-touch { --lead-table-hidden-last-touch: 120px; }
+.lead-table__table--hide-segments { --lead-table-hidden-segments: 150px; }
+.lead-table__table--hide-equity { --lead-table-hidden-equity: 76px; }
+.lead-table__table--hide-rate { --lead-table-hidden-rate: 112px; }
+.lead-table__table--hide-status { --lead-table-hidden-status: 150px; }
+
+.lead-table__table--hiding.lead-table__table--default {
+  min-inline-size: calc(
+    1278px
+    - var(--lead-table-hidden-location, 0px)
+    - var(--lead-table-hidden-segments, 0px)
+    - var(--lead-table-hidden-equity, 0px)
+    - var(--lead-table-hidden-rate, 0px)
+    - var(--lead-table-hidden-status, 0px)
+  );
+}
+.lead-table__table--hiding.lead-table__table--sales-ops {
+  min-inline-size: calc(
+    1632px
+    - var(--lead-table-hidden-location, 0px)
+    - var(--lead-table-hidden-relationship, 0px)
+    - var(--lead-table-hidden-assigned, 0px)
+    - var(--lead-table-hidden-outreach, 0px)
+    - var(--lead-table-hidden-last-touch, 0px)
+    - var(--lead-table-hidden-segments, 0px)
+    - var(--lead-table-hidden-equity, 0px)
+    - var(--lead-table-hidden-rate, 0px)
+  );
+}

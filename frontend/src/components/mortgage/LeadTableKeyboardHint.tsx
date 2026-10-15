@@ -38,7 +38,10 @@ export function LeadTableShortcutsButton({ singleKeysOn }: { singleKeysOn: boole
       aria-keyshortcuts={singleKeysOn ? '?' : undefined}
       data-testid="lead-shortcuts-open"
     >
-      Shortcuts
+      {/* The word, or in the Lead Queue's compact header its `?` keycap
+          (LeadTableHeader.css); the aria-label names it either way. */}
+      <span className="lead-table__shortcuts-label">Shortcuts</span>
+      <kbd className="lead-table__shortcuts-key" aria-hidden="true">?</kbd>
     </button>
   );
 }

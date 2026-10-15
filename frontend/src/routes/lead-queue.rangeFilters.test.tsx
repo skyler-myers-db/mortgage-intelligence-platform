@@ -9,7 +9,9 @@ import { act, useEffect } from 'react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { mount } from '../test/render';
-import { LeadQueueRangeFilters, RANGE_INVERTED_ERROR, rangeCommit } from './lead-queue.rangeFilters';
+import { LeadQueueRangeFilters, RANGE_INVERTED_ERROR, rangeCommit, rangeRoundedNotice } from './lead-queue.rangeFilters';
+import { leadQueueActiveFilterChips } from './lead-queue.activeFilters';
+import { parsePortfolioCriteria } from './lead-queue.filters';
 
 const searches: string[] = [];
 
@@ -118,6 +120,57 @@ describe('LeadQueueRangeFilters', () => {
     expect(score.getAttribute('aria-invalid')).toBeNull();
     await blur(score);
     expect(searches[searches.length - 1]).toBe('?max_opportunity_score=50&min_opportunity_score=40');
+  });
+
+  it('says an inverted URL pair applies nothing: both fields carry the error on load, and fixing one clears it', async () => {
+    await mountAt('?min_opportunity_score=91&max_opportunity_score=90&min_rate_spread_bps=10');
+    const low = input('min_opportunity_score');
+    const high = input('max_opportunity_score');
+    const errorOf = (element: HTMLInputElement) => (element.getAttribute('aria-describedby') ?? '')
+      .split(' ').map((id) => document.getElementById(id)?.textContent);
+    for (const element of [low, high]) {
+      expect(element.getAttribute('aria-invalid')).toBe('true');
+      expect(errorOf(element)).toContain(RANGE_INVERTED_ERROR);
+    }
+    // The other dimension is untouched, and nothing was written on load.
+    expect(input('min_rate_spread_bps').getAttribute('aria-invalid')).toBeNull();
+    expect(writes()).toBe(0);
+    // The hero chips agree: the request drops both, so no SCORE chip claims a range.
+    const chips = leadQueueActiveFilterChips({
+      portfolioCriteria: parsePortfolioCriteria(new URLSearchParams('min_opportunity_score=91&max_opportunity_score=90'), []),
+      outreachStatus: 'any', agedDays: null, zipFilters: [], cityFilters: [], countyFilters: [], borrowerIdFilters: [],
+    });
+    expect(chips.map((chip) => chip.key)).not.toContain('opportunity_score');
+
+    await type(low, '80');
+    await blur(low);
+    expect(searches[searches.length - 1]).toBe('?min_opportunity_score=80&max_opportunity_score=90&min_rate_spread_bps=10');
+    expect(low.getAttribute('aria-invalid')).toBeNull();
+    expect(high.getAttribute('aria-invalid')).toBeNull();
+  });
+
+  it('says an in-range value was rounded, and keeps the clamp notice for out-of-range values', () => {
+    expect(rangeCommit(new URLSearchParams(), 'min_opportunity_score', '7.5')).toMatchObject({
+      kind: 'write', committed: '8', notice: rangeRoundedNotice(8),
+    });
+    expect(rangeRoundedNotice(8)).toBe('Rounded to a whole number; set to 8.');
+    expect(rangeCommit(new URLSearchParams(), 'max_opportunity_score', '150')).toMatchObject({
+      notice: 'Allowed range is 0 to 100; set to 100.',
+    });
+    expect(rangeCommit(new URLSearchParams(), 'max_opportunity_score', '100.4')).toMatchObject({
+      notice: 'Allowed range is 0 to 100; set to 100.',
+    });
+    expect(rangeCommit(new URLSearchParams(), 'min_rate_spread_bps', '-25')).toMatchObject({ notice: null });
+  });
+
+  it('shows the rounding notice in the field', async () => {
+    await mountAt('');
+    const score = input('min_opportunity_score');
+    await type(score, '7.5');
+    await blur(score);
+    expect(searches[searches.length - 1]).toBe('?min_opportunity_score=8');
+    const notice = document.getElementById(score.getAttribute('aria-describedby')!.split(' ')[0]);
+    expect(notice?.textContent).toBe('Rounded to a whole number; set to 8.');
   });
 
   it('disables every input with a hint beside a Genie cohort or a Growth Agent proof', async () => {

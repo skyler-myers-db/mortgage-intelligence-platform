@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useExitPresence } from '../../hooks/useExitRetained';
 import { formatCount } from '../../lib/formatters';
 import { Icon } from '../Icon';
@@ -27,9 +27,11 @@ import { menuSpaceStyle, useMenuPlacement } from './useMenuPlacement';
  * Option counts (audit tables-06): inside a FilterFacetContext provider an
  * open menu may show a count beside each option. The count is aria-hidden
  * and linked by aria-describedby, so each option's accessible name stays its
- * label; the listbox is aria-busy while counts load, and a failed read shows
- * a dash with a polite "Counts unavailable". With no provider the DOM is
- * unchanged. deviation:filter-menu-facet-counts
+ * label. The polite sr-only status region (not the listbox: a busy listbox
+ * hides its options from some screen readers) is aria-busy while counts
+ * load; it mounts empty and fills "Counts unavailable" after the first
+ * paint, so a failed read is announced, with a dash per option. With no
+ * provider the DOM is unchanged. deviation:filter-menu-facet-counts
  *
  * Exit (motion-01 item 2e, deviation:menu-exit-motion): a closed menu stays
  * mounted, `is-closing`, aria-hidden and inert, until its fade ends
@@ -106,7 +108,6 @@ export function FilterSelect({ label, value, options, onChange }: FilterSelectPr
           style={menuSpaceStyle(menuLayout)}
           role="listbox"
           aria-label={label}
-          aria-busy={counts?.status === 'loading' || undefined}
           aria-hidden={closing || undefined}
           inert={closing}
           tabIndex={-1}
@@ -148,9 +149,26 @@ export function FilterSelect({ label, value, options, onChange }: FilterSelectPr
           })}
         </div>
       )}
-      {open && counts && (
-        <span className="sr-only" role="status">{counts.status === 'error' ? 'Counts unavailable' : ''}</span>
-      )}
+      {open && counts && <FacetCountsStatus status={counts.status} />}
     </div>
+  );
+}
+
+/**
+ * The menu's polite count status. A live region inserted already filled is
+ * not reliably announced, so it mounts empty and its text lands one frame
+ * later (a rAF-scheduled update, never a synchronous setState in the effect).
+ */
+function FacetCountsStatus({ status }: { status: 'loading' | 'ready' | 'error' }) {
+  const text = status === 'error' ? 'Counts unavailable' : '';
+  const [shown, setShown] = useState('');
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => setShown(text));
+    return () => window.cancelAnimationFrame(frame);
+  }, [text]);
+  return (
+    <span className="sr-only" role="status" aria-busy={status === 'loading' || undefined}>
+      {shown}
+    </span>
   );
 }

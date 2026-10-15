@@ -1,0 +1,51 @@
+/* ============================================================
+   FILTER OMNIBOX (W5e; wow-power-6). deviation:filter-omnibox
+   A compact `.filter` pill first in the Lead Queue filter row
+   (design_files/index.html:822-838 pill family) and a `.filter-menu`
+   popover anchored under it, absolutely positioned so the filter row never
+   grows or wraps. The popover's chips reuse the `.filter` pill, its input
+   the `.form-input` control. Tokens only. Rides the route chunk with the
+   pill (the popover's markup loads lazily; its placement is already here).
+   ============================================================ */
+.lead-queue-omnibox { position: relative; flex-shrink: 0; }
+.lead-queue-omnibox__pill kbd { margin-inline-start: var(--sp-1); }
+.filter-menu.lead-queue-omnibox__panel {
+  inline-size: calc(var(--sp-16) * 6);
+  max-inline-size: calc(100cqi - var(--sp-4));
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  white-space: normal;
+}
+.lead-queue-omnibox__input { inline-size: 100%; }
+.lead-queue-omnibox__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+.lead-queue-omnibox__chip { cursor: default; }
+.lead-queue-omnibox__chip:active { translate: none; }
+.lead-queue-omnibox__unrecognized,
+.lead-queue-omnibox__count,
+.lead-queue-omnibox__status {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--text-3);
+}
+.lead-queue-omnibox__count { color: var(--text-2); min-block-size: 1lh; }
+.lead-queue-omnibox__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+/* The core filter row has no room for the pill's word and keycap at 1440px
+   (Console open or closed; Linux Chromium draws the mono values wider): they
+   would push Clear all onto a second line and the table under the fold. Up
+   to a 1480px `main` the pill is its icon; its name stays on the button
+   (aria-label "Filter leads") and its tooltip names the F key. */
+@container main (max-width: 1480px) {
+  .lead-queue-omnibox__label,
+  .lead-queue-omnibox__pill kbd { display: none; }
+}
