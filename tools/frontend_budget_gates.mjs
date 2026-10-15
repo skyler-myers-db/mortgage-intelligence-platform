@@ -481,8 +481,15 @@ export const budgets = {
   // toast moved out first), w5-sales-loop -0.39 (mutations/sales moved to
   // the shared salesUndoToasts chunk), the rest hash churn. 1.0% gzip
   // left: ~5% headroom restored on all three.
-  maxLazyJsBytes: 155 * KiB, // actual 146.86 (leadsQuery chunk = LeadTable, wave-5d integration)
-  maxLazyJsGzipBytes: 51 * KiB, // actual 48.52 (leadsQuery chunk = LeadTable, wave-5d integration)
+  // wave-5e integration, at the w5-lead-table-compile merge (its pre-
+  // authorised compile emission): leadsQuery 146.97 -> 170.92 raw / 48.59 ->
+  // 57.61 gzip / 40.99 -> 47.80 br (one host, archive builds): wire-types
+  // +0.06 br, analytics + lead-queue-columns +0.85 (the HIDE columns, the
+  // compact header, More like this), lead-table-compile +5.90 (the compiled
+  // keyboard flow +4.6 measured isolated; revoke, distribution opener, print
+  // de-virtualization, status chips +1.3). ~5% headroom, then T1c judged here.
+  maxLazyJsBytes: 180 * KiB, // actual 170.92 (leadsQuery chunk = LeadTable, w5e lead-table-compile merge)
+  maxLazyJsGzipBytes: 61 * KiB, // actual 57.61 (leadsQuery chunk = LeadTable, w5e lead-table-compile merge)
   // Re-baselined 2026-09-24 for audit bundle-05 / css-v2 (lane
   // w2-build-currency): the seven static @fontsource faces (7 woff2 + their
   // 7 never-requested woff twins, 215.42 KiB) became one variable woff2 each
@@ -562,7 +569,7 @@ export const budgets = {
   // +0.26, followups-snooze +0.06; see initialCssBytes), 3.1% left. ~5%.
   initialCssBrBytes: 27 * KiB, // actual 25.20 (wave-5d integration; 24.88 at W5c)
   totalJsBrBytes: 684 * KiB, // actual 650.74 (148 chunks, wave-5d integration; see totalJsBytes)
-  maxLazyJsBrBytes: 43 * KiB, // actual 40.89 (leadsQuery = LeadTable chunk, wave-5d integration; see maxLazyJsBytes)
+  maxLazyJsBrBytes: 51 * KiB, // actual 47.80 (leadsQuery = LeadTable chunk, w5e lead-table-compile merge; see maxLazyJsBytes)
   // What a navigation to each route fetches beyond the initial closure: the
   // route chunk plus its static imports, JS + CSS, brotli q11. Keyed by the
   // manifest's source path; every route module must have an entry and every
