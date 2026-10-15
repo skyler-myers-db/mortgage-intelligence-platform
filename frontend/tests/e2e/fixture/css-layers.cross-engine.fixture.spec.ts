@@ -142,19 +142,22 @@ for (const theme of FIXTURE_THEMES) {
     });
 
     test('every route loads only layered style rules; font faces stay top level', async ({ app, mockApi, page }) => {
-      test.setTimeout(240_000);
+      // Twenty-two natural loads in one test: generous for a loaded runner.
+      test.setTimeout(480_000);
       await app.setTheme(theme);
       const pending = pendingSelectors();
-      const problems: string[] = [];
       let exempt = 0;
       for (const route of FIXTURE_ROUTES) {
         await app.gotoRoute(route.path);
         const natural = markNaturalLoad(mockApi);
+        const problems: string[] = [];
         for (const selector of await unlayeredRules(page)) {
           if (selector.startsWith('@font-face') || !selectorParts(selector).every((part) => pending.has(part))) {
-            problems.push(`${route.name}: ${selector}`);
+            problems.push(selector);
           } else exempt += 1;
         }
+        // Soft, per route: a later route's load failure cannot hide one found here.
+        expect.soft(problems, `${route.name}: unlayered rules`).toEqual([]);
         expectNoAuditedReadSince(mockApi, natural, route.name);
       }
       if (PENDING_INTEGRATOR_WRAP.length > 0) {
@@ -163,7 +166,6 @@ for (const theme of FIXTURE_THEMES) {
           description: `${exempt} unlayered rules exempted as declared by PENDING_INTEGRATOR_WRAP sheets (src/test/cssLayerMap.ts); none once the integrator wraps them`,
         });
       } else expect(exempt).toBe(0);
-      expect(problems).toEqual([]);
     });
   });
 }
