@@ -424,9 +424,9 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
     )
     # RBAC negative path is NOT exercised here. The Databricks Apps edge
     # strips and re-injects ``X-Forwarded-Email`` / ``X-Forwarded-Groups``
-    # from the authenticated bearer identity, so a client running as
-    # skyler (an allow-listed admin) cannot forge a non-admin identity
-    # from outside the edge. The 403 path is covered by
+    # from the authenticated bearer identity, so a client running as an
+    # allow-listed admin cannot forge a non-admin identity from outside
+    # the edge. The 403 path is covered by
     # ``tests/unit/test_admin_rbac.py::test_admin_rejects_non_admin_group``
     # and related unit tests that inject headers directly into the
     # TestClient. Running an external negative probe would require
