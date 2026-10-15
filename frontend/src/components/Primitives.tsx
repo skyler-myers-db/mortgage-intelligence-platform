@@ -33,11 +33,7 @@ export function Chip({
 }: PropsWithChildren<ChipLead & {
   variant?: 'success' | 'warning' | 'danger' | 'neutral';
   className?: string;
-  /**
-   * Optional native `title` tooltip. Used by the "Refreshed …" chip to
-   * surface the unambiguous ISO-UTC form on hover so operators in
-   * different timezones can disambiguate a Slack screenshot. R5-19.
-   */
+  /** @deprecated Use `tooltip` (ui/Tooltip, audit critic-08). A native title is mouse-only; this passthrough is removed in the W5e integrator residual commit. */
   title?: string;
   /**
    * Design-system tooltip (ui/Tooltip, critic-08). A chip is a non-focusable
@@ -94,7 +90,9 @@ interface BtnProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   // capture the underlying <button> (e.g. LeadTable focus restoration)
   // without wrapping the primitive in forwardRef.
   ref?: Ref<HTMLButtonElement>;
-  /** Design-system tooltip (ui/Tooltip, critic-08); additive beside `title`. */
+  /** @deprecated Use `tooltip` (critic-08); removed in the W5e integrator residual commit. */
+  title?: string;
+  /** Design-system tooltip (ui/Tooltip, critic-08); replaces the deprecated `title`. */
   tooltip?: ReactNode;
   /** A keyboard shortcut shown in the tooltip's `<kbd>`. */
   tooltipShortcut?: string;
@@ -163,7 +161,12 @@ export function EvidenceChip({
   source,
   onClick,
   title,
-}: PropsWithChildren<{ source?: DrawerSource; onClick?: () => void; title?: string }>) {
+}: PropsWithChildren<{
+  source?: DrawerSource;
+  onClick?: () => void;
+  /** @deprecated The evidence hover card (useEvidenceHoverCard) carries the source; use it, not a native title (audit critic-08). A native title is mouse-only; this passthrough is removed in the W5e integrator residual commit. */
+  title?: string;
+}>) {
   // Keyed read (runtime-05): a drawer open or a row expand elsewhere does not re-render every chip.
   const { setDrawer, showEvidence } = useApp('setDrawer', 'showEvidence');
   // Hooks must run before any early return; the hover card is a no-op
