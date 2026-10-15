@@ -337,5 +337,11 @@
     stroke: Highlight;
     stroke-width: 2;
   }
+  /* W5e css-cascade review: in the modes layer, 33-contrast-modes'
+     `.zip-tile { border: 1px solid CanvasText }` now outranks 08-map's
+     populated-tile hover edge by layer, so a hovered ZIP tile only lifted.
+     The same restore as the map regions: a selected tile already edges in
+     Highlight (33), and a hovered populated one does again. */
+  .zip-tile.zip-tile[data-populated]:hover { border-color: Highlight; }
 }
 }

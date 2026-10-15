@@ -323,6 +323,33 @@ test.describe('the rung without geometry (always)', () => {
     expect(await page.evaluate(() => document.activeElement === document.body)).toBe(false);
   });
 
+  test('forced colours: a hovered populated ZIP tile edges in Highlight, as a selected one does', async ({ app, page }) => {
+    // W5e css-cascade review: under layering 33-contrast-modes' CanvasText
+    // tile edge outranked 08-map's hover edge; USChoroplethMap.css restores it
+    // in the modes layer. Home always draws the plain tiles.
+    await app.gotoRoute('/');
+    await drill(page, 'il');
+    const tile = page.locator('#main-content ul.zip-tiles .zip-tile[data-populated]').first();
+    await expect(tile).toBeVisible();
+    await page.emulateMedia({ forcedColors: 'active' });
+    const system = (keyword: string) =>
+      page.evaluate((value) => {
+        const probe = document.createElement('span');
+        probe.style.color = value;
+        document.body.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      }, keyword);
+    const [highlight, canvasText] = [await system('Highlight'), await system('CanvasText')];
+    expect(highlight, 'precondition: two distinct system colours').not.toBe(canvasText);
+    const edge = () => tile.evaluate((el) => getComputedStyle(el).borderTopColor);
+    await page.mouse.move(0, 0);
+    await expect.poll(edge, 'at rest').toBe(canvasText);
+    await tile.hover();
+    await expect.poll(edge, 'hovered').toBe(highlight);
+  });
+
   test('while no geometry is committed, a ZIP drill shows the plain tiles and no failure line', async ({ app, page }) => {
     test.skip(GEOMETRY_COMMITTED, 'only while the operator build is pending');
     await app.gotoRoute(SEGMENTS);
