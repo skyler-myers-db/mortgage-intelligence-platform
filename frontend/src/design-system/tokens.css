@@ -443,21 +443,41 @@
  * avoid the pseudo-class/attribute-selector specificity tie that would
  * otherwise let source order pick the comfortable values even when the
  * user toggled to compact.
+ *
+ * Control scale (responsive-09 items 1-2; deviation:density-control-scale):
+ * --control-h sizes .btn and .filter, --chip-h sizes .chip, --cell-pad-y the
+ * table header cells. The block padding of each is a fixed fraction of its
+ * height token (.btn 1/4, .filter 3/16, .chip 1/8), so comfortable
+ * reproduces the prototype literals exactly (8px / 6px / 3px, min 32px /
+ * 24px; design_files/index.html:378-384, :403-411, :826-832) and compact
+ * shortens the controls without a line-height dependence. Compact keeps
+ * every interactive control >= 24px tall (WCAG 2.2 2.5.8): .btn 24px min
+ * (33.5px with its label), .filter 29px. --chip-h stays 24px in compact: a
+ * chip that is a control (a removable filter chip) would drop under 24px.
  */
 :root {
   --row-h: 44px;
   --pad-card: 20px;
   --gap-grid: 18px;
+  --control-h: var(--sp-8);
+  --chip-h: var(--sp-6);
+  --cell-pad-y: var(--sp-3);
 }
 :root[data-density="compact"] {
   --row-h: 36px;
   --pad-card: 16px;
   --gap-grid: 14px;
+  --control-h: var(--sp-6);
+  --chip-h: var(--sp-6);
+  --cell-pad-y: var(--sp-2);
 }
 :root[data-density="comfortable"] {
   --row-h: 44px;
   --pad-card: 20px;
   --gap-grid: 18px;
+  --control-h: var(--sp-8);
+  --chip-h: var(--sp-6);
+  --cell-pad-y: var(--sp-3);
 }
 }
 

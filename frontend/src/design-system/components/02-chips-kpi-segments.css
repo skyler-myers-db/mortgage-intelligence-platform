@@ -1,15 +1,17 @@
 /* ============================================================
    CHIPS
    ============================================================ */
+/* Block size from the density scale (deviation:density-control-scale):
+   3px / 24px, as the prototype's literals; compact keeps it. */
 .chip {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 3px 8px; border-radius: var(--r-pill);
+  padding: calc(var(--chip-h) / 8) 8px; border-radius: var(--r-pill);
   background: var(--chip-bg); border: 1px solid var(--chip-line);
   color: var(--chip-text); font-size: var(--fs-11); font-weight: 500;
   font-family: var(--font-mono); letter-spacing: 0.02em;
   white-space: nowrap;
   min-inline-size: 0;
-  min-block-size: var(--sp-6);
+  min-block-size: var(--chip-h);
   max-inline-size: 100%;
   overflow: hidden;
   text-overflow: ellipsis;

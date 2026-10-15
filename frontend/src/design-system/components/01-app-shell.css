@@ -616,10 +616,12 @@
 /* ============================================================
    BUTTONS
    ============================================================ */
+/* Block size from the density scale (deviation:density-control-scale):
+   8px / 32px at comfortable, as the prototype's literals. */
 .btn {
   display: inline-flex; align-items: center; gap: var(--sp-2);
-  padding: 8px 14px; border-radius: var(--r-md);
-  min-block-size: var(--sp-8);
+  padding: calc(var(--control-h) / 4) 14px; border-radius: var(--r-md);
+  min-block-size: var(--control-h);
   font-family: var(--font-sans); font-size: var(--fs-13); font-weight: 500;
   letter-spacing: var(--tracking-body);
   border: 1px solid var(--line-2); background: transparent; color: var(--text-1);
