@@ -73,7 +73,7 @@ export function SavedGrowthAgentMonitors({
                   }}
                   disabled={actionsDisabled || monitorPending !== null || inactive}
                   aria-disabled={actionsDisabled || monitorPending !== null || inactive}
-                  title={inactive ? 'Only active watchlists can be rerun.' : undefined}
+                  tooltip={inactive ? 'Only active watchlists can be rerun.' : undefined}
                 >
                   {monitorPending === monitor.monitor_id ? 'Running…' : 'Run now'}
                 </Button>
@@ -86,7 +86,7 @@ export function SavedGrowthAgentMonitors({
                   }}
                   disabled={actionsDisabled || draftPending !== null || cannotDraft}
                   aria-disabled={actionsDisabled || draftPending !== null || cannotDraft}
-                  title={cannotDraft ? 'Drafts require an active watchlist with a completed run.' : undefined}
+                  tooltip={cannotDraft ? 'Drafts require an active watchlist with a completed run.' : undefined}
                 >
                   {draftPending === monitor.monitor_id ? 'Drafting…' : 'Draft Slack/Teams'}
                 </Button>

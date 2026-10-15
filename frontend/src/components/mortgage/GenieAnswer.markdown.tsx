@@ -3,6 +3,7 @@ import { parseGenieMarkdownBlocks, tokenizeGenieInline } from '../../lib/genieAn
 import { splitSourceLinks } from '../../lib/genieSourceLinks';
 import { SOURCE_LINE_RE } from '../../lib/ucAssetLinks';
 import { markFigures, useGenieFigures, type GenieFigureMarks } from './GenieAnswerFigures';
+import { Tooltip } from '../ui/Tooltip';
 
 /** Phrases Genie commonly uses to restate the question before answering. */
 const RESTATEMENT_LEADERS = [
@@ -61,16 +62,11 @@ export function renderSourceLinks(
     part.kind === 'text' ? (
       markFigures(part.text, figures)
     ) : (
-      <a
-        key={`uc-${key++}`}
-        className="uc-asset-link"
-        href={part.href}
-        target="_blank"
-        rel="noopener noreferrer"
-        title={`Open ${part.text} in Databricks Catalog Explorer`}
-      >
-        {part.text}
-      </a>
+      <Tooltip key={`uc-${key++}`} content={`Open ${part.text} in Databricks Catalog Explorer`}>
+        <a className="uc-asset-link" href={part.href} target="_blank" rel="noopener noreferrer">
+          {part.text}
+        </a>
+      </Tooltip>
     ),
   );
 }

@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import type { Borrower360 } from '../../types';
 import { Icon } from '../Icon';
+import { Tooltip } from '../ui/Tooltip';
 import { buildBorrowerStory } from '../../lib/borrowerStory';
 import { SurfaceTitle } from '../Primitives';
 
@@ -37,15 +38,13 @@ export function BorrowerStoryCard({ borrower }: { borrower: Borrower360 }) {
 
         <div className="borrower-story__claims" aria-label="Figures grounded in the dossier">
           {story.claims.map((claim) => (
-            <span
-              key={`${claim.label}-${claim.token}`}
-              className={`borrower-story__claim${claim.verified ? '' : ' borrower-story__claim--unverified'}`}
-              title={`${claim.label}: ${claim.token} (from ${String(claim.field)})`}
-            >
-              <Icon name={claim.verified ? 'check' : 'cross'} size={9} />
-              <span className="borrower-story__claim-label">{claim.label}</span>
-              <span className="borrower-story__claim-token mono">{claim.token}</span>
-            </span>
+            <Tooltip key={`${claim.label}-${claim.token}`} content={`${claim.label}: ${claim.token} (from ${String(claim.field)})`}>
+              <span className={`borrower-story__claim${claim.verified ? '' : ' borrower-story__claim--unverified'}`}>
+                <Icon name={claim.verified ? 'check' : 'cross'} size={9} />
+                <span className="borrower-story__claim-label">{claim.label}</span>
+                <span className="borrower-story__claim-token mono">{claim.token}</span>
+              </span>
+            </Tooltip>
           ))}
         </div>
 

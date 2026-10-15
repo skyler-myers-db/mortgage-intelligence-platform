@@ -231,7 +231,7 @@ export function ComposePlanCard({
       </div>
 
       <div className="chip-row growth-agent-run__trace">
-        <Chip variant="warning" icon="sparkle" title={response.model_endpoint ?? undefined}>
+        <Chip variant="warning" icon="sparkle">
           Model-composed ({DATABRICKS_AGENT_RESPONSES_LABEL}
           {response.model_endpoint ? `, endpoint=${response.model_endpoint}` : ''})
         </Chip>

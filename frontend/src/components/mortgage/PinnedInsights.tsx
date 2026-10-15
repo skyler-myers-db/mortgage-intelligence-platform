@@ -1,5 +1,6 @@
 import { Link } from 'react-router';
 import { Icon } from '../Icon';
+import { Tooltip } from '../ui/Tooltip';
 import { usePinnedInsights } from '../../lib/pinnedInsights';
 
 /**
@@ -37,15 +38,16 @@ export function PinnedInsights() {
                 </div>
               )}
             </div>
-            <button
-              type="button"
-              className="pinned-insights__unpin"
-              onClick={() => unpin(pin.id)}
-              aria-label={`Unpin: ${pin.question}`}
-              title="Unpin"
-            >
-              <Icon name="cross" size={12} />
-            </button>
+            <Tooltip content="Unpin">
+              <button
+                type="button"
+                className="pinned-insights__unpin"
+                onClick={() => unpin(pin.id)}
+                aria-label={`Unpin: ${pin.question}`}
+              >
+                <Icon name="cross" size={12} />
+              </button>
+            </Tooltip>
           </li>
         ))}
       </ul>

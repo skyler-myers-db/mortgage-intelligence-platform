@@ -10,6 +10,7 @@ import { Icon } from '../components/Icon';
 import { Field } from '../components/ui/Field';
 import { Skeleton } from '../components/ui/Skeleton';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
+import { Tooltip } from '../components/ui/Tooltip';
 import { Reveal } from '../components/fx/Reveal';
 import { descriptorFor, drawerForAsset } from '../lib/drawerSources';
 import { offerDisplayLabel, offerRationale, offerShortDescription } from '../lib/offerLanguage';
@@ -636,7 +637,7 @@ function DraftOutreachPanel({
                 disabled={approving || draftSavePending || !channelAvailable}
                 aria-disabled={!channelAvailable || undefined}
                 aria-describedby={!channelAvailable ? channelRestrictionNoteId : undefined}
-                title={!channelAvailable
+                tooltip={!channelAvailable
                   ? `${label} is unavailable because this campaign has no saved audited ${label} variant.`
                   : undefined}
               >
@@ -645,14 +646,12 @@ function DraftOutreachPanel({
             );
           })}
           {canAccessAdmin ? (
-            <Link
-              className="chip chip--neutral offer-cadence-link"
-              to="/admin-config#offer-rules"
-              title="Open governed offer rules for follow-up cadence context"
-            >
-              <Icon name="link" size={10} />
-              <span className="chip__label">LO call follow-up within 5 days</span>
-            </Link>
+            <Tooltip content="Open governed offer rules for follow-up cadence context">
+              <Link className="chip chip--neutral offer-cadence-link" to="/admin-config#offer-rules">
+                <Icon name="link" size={10} />
+                <span className="chip__label">LO call follow-up within 5 days</span>
+              </Link>
+            </Tooltip>
           ) : (
             <Chip variant="neutral">LO call follow-up within 5 days</Chip>
           )}

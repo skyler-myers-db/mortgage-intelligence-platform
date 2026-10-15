@@ -4,6 +4,7 @@ import { formatTimestamp } from '../../lib/time';
 import type { DrawerSource } from '../AppContext';
 import { Chip, EvidenceChip } from '../Primitives';
 import { Icon } from '../Icon';
+import { Tooltip } from '../ui/Tooltip';
 import { catalogExplorerUrl } from '../../lib/ucAssetLinks';
 import { GenieClaimsList, GenieClaimsMetric, shownClaims } from './GenieAnswerClaims';
 
@@ -53,21 +54,22 @@ export function GenieProofPanel({
               const drawer = drawerForAsset(asset);
               const explorerUrl = catalogExplorerUrl(workspaceHost, asset);
               const explorerLink = explorerUrl ? (
-                <a
-                  className="chip chip--neutral uc-asset-link"
-                  href={explorerUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label={`Open ${asset} in Catalog Explorer`}
-                  title={`Open ${asset} in Databricks Catalog Explorer`}
-                >
-                  {/* Drawer-mapped assets keep the in-app evidence chip as the
-                      primary action; this is the escape hatch to the workspace.
-                      Unmapped assets get the asset name on the link itself so
-                      the previously inert chip becomes reachable. */}
-                  {!drawer && <span className="chip__label">{asset}</span>}
-                  <Icon name="export" size={10} />
-                </a>
+                <Tooltip content={`Open ${asset} in Databricks Catalog Explorer`}>
+                  <a
+                    className="chip chip--neutral uc-asset-link"
+                    href={explorerUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`Open ${asset} in Catalog Explorer`}
+                  >
+                    {/* Drawer-mapped assets keep the in-app evidence chip as the
+                        primary action; this is the escape hatch to the workspace.
+                        Unmapped assets get the asset name on the link itself so
+                        the previously inert chip becomes reachable. */}
+                    {!drawer && <span className="chip__label">{asset}</span>}
+                    <Icon name="export" size={10} />
+                  </a>
+                </Tooltip>
               ) : null;
               return (
                 <span key={asset} className="genie-proof__asset">
@@ -76,11 +78,7 @@ export function GenieProofPanel({
                       {asset}
                     </EvidenceChip>
                   ) : (
-                    !explorerLink && (
-                      <Chip variant="neutral" title={`Source: ${asset}`}>
-                        {asset}
-                      </Chip>
-                    )
+                    !explorerLink && <Chip variant="neutral">{asset}</Chip>
                   )}
                   {explorerLink}
                 </span>

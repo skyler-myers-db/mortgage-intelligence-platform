@@ -126,7 +126,7 @@ describe('Chip and Button tooltip prop', () => {
       button.focus();
     });
     const tip = document.body.querySelector('[role="tooltip"]:not([hidden])');
-    expect(tip?.textContent).toBe('Approve the draftA');
+    expect(tip?.textContent).toBe('Approve the draft (A)');
     expect(tip?.querySelector('kbd.tooltip__kbd')?.textContent).toBe('A');
   });
 

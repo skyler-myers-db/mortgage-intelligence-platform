@@ -8,6 +8,7 @@ import type {
 import { useApp } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
 import { Icon } from '../components/Icon';
+import { Tooltip } from '../components/ui/Tooltip';
 import { genieActionConfirmation, runGenieActionRequest } from '../components/mortgage/GenieChat.helpers';
 import { GenieAnnouncerRegion } from '../components/mortgage/GenieAnnouncerRegion';
 import { subscribeActorScope } from '../lib/actorScope';
@@ -439,16 +440,16 @@ export default function AskGenie() {
               </div>
               <div className="surface__body trusted-asset-list">
                 {trustedAssets.map((a) => (
-                  <button
-                    key={a.path}
-                    title={a.path}
-                    type="button"
-                    className={`trusted-asset trusted-asset--button${activeAssetPath === a.path ? ' is-active' : ''}`}
-                    onClick={() => scopeToTrustedAsset(a)}
-                    aria-pressed={activeAssetPath === a.path}
-                  >
-                    <div className="trusted-asset__label">{a.label}</div>
-                  </button>
+                  <Tooltip key={a.path} content={a.path}>
+                    <button
+                      type="button"
+                      className={`trusted-asset trusted-asset--button${activeAssetPath === a.path ? ' is-active' : ''}`}
+                      onClick={() => scopeToTrustedAsset(a)}
+                      aria-pressed={activeAssetPath === a.path}
+                    >
+                      <div className="trusted-asset__label">{a.label}</div>
+                    </button>
+                  </Tooltip>
                 ))}
               </div>
             </div>

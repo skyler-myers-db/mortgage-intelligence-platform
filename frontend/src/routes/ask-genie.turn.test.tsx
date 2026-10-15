@@ -9,6 +9,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { tooltipText } from '../test/tooltipText';
 import type { GenieLiveProgress } from '../lib/api';
 import type { GenieAnswer } from '../types';
 import {
@@ -126,7 +127,7 @@ describe('/ask-genie on the in-flight turn store', () => {
 
     const stop = controls.stop();
     expect(stop?.textContent?.trim()).toBe('Stop');
-    expect(stop?.title).toBe(
+    expect(tooltipText(stop)).toBe(
       'Stop waiting for this answer. Genie may still finish it on the server; the reply is discarded.',
     );
     await act(async () => {

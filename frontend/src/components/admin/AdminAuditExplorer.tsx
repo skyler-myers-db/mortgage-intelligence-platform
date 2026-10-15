@@ -25,6 +25,7 @@ import { useApp } from '../AppContext';
 import { Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
+import { Tooltip } from '../ui/Tooltip';
 import { PrintProvenance } from '../print/PrintProvenance';
 import { toastReceiptFailure } from '../print/receiptFailureToast';
 import { usePrintReceipt } from '../print/usePrintReceipt';
@@ -259,7 +260,6 @@ export function AdminAuditExplorer() {
             className="btn btn--ghost btn--sm"
             onClick={() => void copyValue(AUDIT_TABLE_CONTEXT, 'Table context')}
             aria-label="Copy Lakebase audit table context"
-            title="Copy Lakebase audit table name"
           >
             <Icon name="doc" size={12} />
             {copyState?.value === AUDIT_TABLE_CONTEXT && !copyState.failed
@@ -275,18 +275,19 @@ export function AdminAuditExplorer() {
             Exclude my ledger reads
           </label>
           {canAccessAdmin && (
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              onClick={exportCsv}
-              disabled={!events?.length || updating || csvPending}
-              aria-busy={csvPending || undefined}
-              aria-label={`Download page ${page + 1} of the audit explorer as CSV`}
-              title="Download the rows on this page as CSV"
-            >
-              <Icon name="export" size={12} />
-              Page CSV
-            </button>
+            <Tooltip content="Download the rows on this page as CSV">
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={exportCsv}
+                disabled={!events?.length || updating || csvPending}
+                aria-busy={csvPending || undefined}
+                aria-label={`Download page ${page + 1} of the audit explorer as CSV`}
+              >
+                <Icon name="export" size={12} />
+                Page CSV
+              </button>
+            </Tooltip>
           )}
           <button
             type="button"

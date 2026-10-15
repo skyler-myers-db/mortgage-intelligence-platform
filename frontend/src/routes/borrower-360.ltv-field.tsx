@@ -65,7 +65,7 @@ export function LtvEquityValue({ borrower }: { borrower: LtvFieldBorrower }) {
         <UnknownValue label="LTV and equity unknown" />
         {unreliable && (
           <div className="field__sub">
-            <Chip variant="warning" className="chip--compact" icon="info" title={LTV_UNRELIABLE_TITLE}>
+            <Chip variant="warning" className="chip--compact" icon="info" tooltip={LTV_UNRELIABLE_TITLE}>
               {LTV_UNRELIABLE_CHIP_LABEL}
             </Chip>
           </div>

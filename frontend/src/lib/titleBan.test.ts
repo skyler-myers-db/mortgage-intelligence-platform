@@ -123,7 +123,7 @@ describe('title ban wiring', { timeout: ESLINT_BUDGET_MS }, () => {
   });
 });
 
-describe('title ban selectors', () => {
+describe('title ban selectors', { timeout: ESLINT_BUDGET_MS }, () => {
   it('flags a DOM title on any lowercase element', () => {
     for (const tag of ['span', 'button', 'time', 'a', 'div', 'dd', 'svg']) {
       expect(titleHits(`const el = <${tag} title="x">y</${tag}>;`), tag).toHaveLength(1);
@@ -154,7 +154,7 @@ describe('title ban selectors', () => {
 /** "<owner lane> - <n> site(s) - <why>" */
 const ENTRY = /^(?<owner>[a-z0-9-]+(?: [a-z]+)?) - (?<count>\d+) sites? - (?<why>.{10,})$/;
 
-describe('TITLE_BAN_ALLOWLIST ratchet', () => {
+describe('TITLE_BAN_ALLOWLIST ratchet', { timeout: ESLINT_BUDGET_MS }, () => {
   it('lists only files that exist, each with an owner, a count and a reason', () => {
     for (const [file, reason] of Object.entries(config.TITLE_BAN_ALLOWLIST)) {
       expect(fs.existsSync(`${FRONTEND}${file}`), `${file} no longer exists: remove its entry`).toBe(true);

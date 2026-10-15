@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { Tooltip } from './Tooltip';
 import {
   DATE_UNKNOWN,
   formatDate,
@@ -103,8 +104,10 @@ export function Timestamp({
         ? formatDateTimeShort(value, { now: reference })
         : formatRelative(value, { now: reference, style: relativeStyle });
   return (
-    <time className={className} dateTime={dateTime} title={formatUtcTitle(value)}>
-      {label}
-    </time>
+    <Tooltip content={formatUtcTitle(value)}>
+      <time className={className} dateTime={dateTime}>
+        {label}
+      </time>
+    </Tooltip>
   );
 }

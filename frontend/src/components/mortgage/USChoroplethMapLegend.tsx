@@ -32,6 +32,7 @@ import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import type { RateSensitivityResponse } from '../../types/rateScenario';
 import { Chip, EvidenceChip } from '../Primitives';
 import { LazyStaleDataNote } from '../ui/StaleDataNote.lazy';
+import { Tooltip } from '../ui/Tooltip';
 import { RATE_COHORT_NOTE, type MapScenarioView, type RateScenarioIndex } from './rateScenario.logic';
 import { classRanges, formatBreak, type ChoroplethScale } from './USChoroplethMap.scale';
 import type { GeoRead } from './useChoroplethLiveFacts';
@@ -168,18 +169,15 @@ export function USChoroplethMapLegend({
           const label = formatBreak(value);
           // A break that prints like the one before it (a tie collapsed a
           // class, or compact rounding) is printed once: "1 1 2" read as a
-          // typo. The exact value stays in data-break and the title; the
+          // typo. The exact value stays in data-break and the tooltip; the
           // bar's accessible name lists the exact ranges.
           const repeat = index > 0 && formatBreak(scale.breaks[index - 1]) === label;
           return (
-            <span
-              key={index}
-              className={`map-legend__break map-legend__break--${index + 1}`}
-              data-break={value}
-              title={formatNumber(value)}
-            >
-              {repeat ? '' : label}
-            </span>
+            <Tooltip key={index} content={formatNumber(value)}>
+              <span className={`map-legend__break map-legend__break--${index + 1}`} data-break={value}>
+                {repeat ? '' : label}
+              </span>
+            </Tooltip>
           );
         })}
         <span className="map-legend__end map-legend__end--high">Higher</span>

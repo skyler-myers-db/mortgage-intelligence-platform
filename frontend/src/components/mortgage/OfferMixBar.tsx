@@ -1,6 +1,7 @@
 import { Fragment, useMemo } from 'react';
 import { Link } from 'react-router';
 import { EvidenceChip } from '../Primitives';
+import { Tooltip } from '../ui/Tooltip';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import {
   OFFER_MIX_LEGEND_ROWS,
@@ -123,9 +124,11 @@ export function OfferMixBar({
 
 function OfferLink({ slice, className }: { slice: OfferMixSlice; className: string }) {
   return (
-    <Link className={className} to={slice.href} title={`Opens ${slice.queueFilter} in the Lead Queue`}>
-      {slice.label}
-    </Link>
+    <Tooltip content={`Opens ${slice.queueFilter} in the Lead Queue`}>
+      <Link className={className} to={slice.href}>
+        {slice.label}
+      </Link>
+    </Tooltip>
   );
 }
 

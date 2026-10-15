@@ -209,11 +209,7 @@ export function CampaignSetupPanel({
                     </span>
                   );
                   return source ? (
-                    <EvidenceChip
-                      key={`${row.source_asset}:${row.label}`}
-                      source={source}
-                      title={`Inspect ${row.source_asset}`}
-                    >
+                    <EvidenceChip key={`${row.source_asset}:${row.label}`} source={source}>
                       {content}
                     </EvidenceChip>
                   ) : (

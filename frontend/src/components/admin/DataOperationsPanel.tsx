@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
+import { Tooltip } from '../ui/Tooltip';
 import { api } from '../../lib/api';
 import { DEFAULT_QUERY_STALE_MS } from '../../lib/queryClient';
 import { queryKeys } from '../../lib/queryKeys';
@@ -353,12 +354,8 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
                   <Chip variant={tone === 'ok' ? 'success' : tone === 'error' ? 'warning' : 'neutral'}>
                     {operationStatusLabel(job)}
                   </Chip>
-                  <button
-                    type="button"
-                    className="btn btn--ghost btn--sm"
-                    onClick={() => openRunConfirm(job)}
-                    disabled={disabled}
-                    title={
+                  <Tooltip
+                    content={
                       !job.configured
                         ? 'Job binding unavailable'
                         : cooldown > 0
@@ -366,9 +363,16 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
                           : `Start ${job.label}`
                     }
                   >
-                    <Icon name="play" size={12} />
-                    {busy ? 'Starting' : cooldown > 0 ? 'Wait' : 'Run'}
-                  </button>
+                    <button
+                      type="button"
+                      className="btn btn--ghost btn--sm"
+                      onClick={() => openRunConfirm(job)}
+                      disabled={disabled}
+                    >
+                      <Icon name="play" size={12} />
+                      {busy ? 'Starting' : cooldown > 0 ? 'Wait' : 'Run'}
+                    </button>
+                  </Tooltip>
                   {run?.run_page_url && (
                     <a
                       className="btn btn--ghost btn--sm"

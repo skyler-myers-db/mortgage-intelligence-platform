@@ -1,4 +1,5 @@
 import { useApp } from '../AppContext';
+import { Tooltip } from '../ui/Tooltip';
 
 /**
  * ConfidenceMeter — prototype `.conf` + `.conf__bars` BEM. Five bars; number
@@ -13,6 +14,9 @@ interface ConfidenceMeterProps {
   compact?: boolean;
 }
 
+const SIGNAL_STRENGTH_NOTE =
+  'Signal strength is a deterministic average of the five scoring sub-scores, not a statistical confidence interval.';
+
 export function ConfidenceMeter({ value, compact }: ConfidenceMeterProps) {
   // Keyed read (runtime-05): only the Console toggle re-renders the meter.
   const { showConfidence } = useApp('showConfidence');
@@ -20,22 +24,23 @@ export function ConfidenceMeter({ value, compact }: ConfidenceMeterProps) {
   const filled = Math.max(0, Math.min(5, Math.round(value / 20)));
   const tier = value >= 80 ? 'high' : value >= 60 ? 'med' : 'low';
   return (
-    <span
-      className={`conf conf--${tier}`}
-      title="Signal strength is a deterministic average of the five scoring sub-scores, not a statistical confidence interval."
-      aria-label={`Recommendation signal strength ${value} percent.`}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={value}
-      aria-valuetext={`Recommendation signal strength ${value} percent.`}
-      role="meter"
-    >
-      <span className="conf__bars">
-        {[0, 1, 2, 3, 4].map((i) => (
-          <span key={i} className={`conf__bar ${i < filled ? 'on' : ''}`} />
-        ))}
+    <Tooltip content={SIGNAL_STRENGTH_NOTE}>
+      <span
+        className={`conf conf--${tier}`}
+        aria-label={`Recommendation signal strength ${value} percent.`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={value}
+        aria-valuetext={`Recommendation signal strength ${value} percent.`}
+        role="meter"
+      >
+        <span className="conf__bars">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <span key={i} className={`conf__bar ${i < filled ? 'on' : ''}`} />
+          ))}
+        </span>
+        {!compact && <span>Signal {value}%</span>}
       </span>
-      {!compact && <span>Signal {value}%</span>}
-    </span>
+    </Tooltip>
   );
 }

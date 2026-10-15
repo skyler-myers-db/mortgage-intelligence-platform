@@ -14,6 +14,7 @@ import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { preloadIntentProps } from '../../lib/preloadIntent';
 import { lenderMarkUrl } from '../../lib/themePreference';
 import { formatTimeOfDay, formatTimestamp } from '../../lib/time';
+import { Tooltip } from '../ui/Tooltip';
 
 /**
  * Console — the right-side tweaks panel from the prototype. Theme, accent,
@@ -201,13 +202,11 @@ export function Console() {
                     className="audit"
                     key={`${event.created_at}-${event.event_type}-${index}`}
                   >
-                    <time
-                      className="audit__time mono"
-                      dateTime={event.created_at}
-                      title={formatTimestamp(event.created_at, { withSeconds: true })}
-                    >
-                      {formatTimeOfDay(event.created_at)}
-                    </time>
+                    <Tooltip content={formatTimestamp(event.created_at, { withSeconds: true })}>
+                      <time className="audit__time mono" dateTime={event.created_at}>
+                        {formatTimeOfDay(event.created_at)}
+                      </time>
+                    </Tooltip>
                     <div className={`audit__ico ${presentation.tone}`}>
                       <Icon name={presentation.icon} size={11} />
                     </div>

@@ -12,6 +12,7 @@ import { act, createRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tooltipText } from '../test/tooltipText';
 import type { GenieAnswer } from '../types';
 import { clearGenieTurns, setGenieTurns } from '../lib/genieConversationStore';
 
@@ -157,7 +158,7 @@ describe('AskGenieAnswerPanel composer controls', () => {
     // The latest turn is the last one in the thread, right above the composer.
     const regenerates = container.querySelectorAll<HTMLButtonElement>('button[aria-label="Regenerate answer"]');
     const regenerate = regenerates[regenerates.length - 1];
-    expect(regenerate.title).toContain('cannot rewrite its history');
+    expect(tooltipText(regenerate)).toContain('cannot rewrite its history');
     act(() => regenerate.click());
     expect(onAsk).toHaveBeenCalledWith('What is the approval trend over the last 30 days?');
 
@@ -165,7 +166,7 @@ describe('AskGenieAnswerPanel composer controls', () => {
     const helds = container.querySelectorAll<HTMLButtonElement>('button[aria-label="Regenerate answer"]');
     const held = helds[helds.length - 1];
     expect(held.disabled).toBe(true);
-    expect(held.title).toContain('still answering');
+    expect(tooltipText(held)).toContain('still answering');
   });
 
   it('labels each answer source in plain words, the governed path in its tooltip (flow-10)', () => {

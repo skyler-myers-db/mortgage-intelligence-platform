@@ -20,7 +20,10 @@
  * the Stop row / Stopped note GenieChatBody renders) live in the lazy
  * GenieTurnActions.css, out of the initial stylesheet.
  */
+import { Tooltip } from '../ui/Tooltip';
 import './GenieTurnActions.css';
+
+const ASK_AGAIN_TOOLTIP = 'Ask this question again as a new Genie turn';
 
 export const REGENERATE_TITLE =
   'Ask this question again as a new Genie turn. A Genie thread cannot rewrite its history, so the earlier answer stays.';
@@ -56,6 +59,9 @@ export function GenieTurnActions({
 }: GenieTurnActionsProps) {
   if (!question.trim()) return null;
   if (!onEdit && !onRegenerate && !onRetry && !onAskAgain) return null;
+  // One Tooltip per control, always mounted (a disabled re-ask names why,
+  // an enabled one what it does), so a turn starting never remounts a button.
+  const reAskTooltip = (enabled: string) => (disabled && disabledReason ? disabledReason : enabled);
   return (
     <div
       className={`genie__msg-actions${placement === 'question' ? ' genie__msg-actions--user' : ''}`}
@@ -63,52 +69,56 @@ export function GenieTurnActions({
       aria-label={placement === 'question' ? 'Question actions' : 'Answer actions'}
     >
       {onEdit && (
-        <button
-          type="button"
-          className="btn btn--ghost btn--sm"
-          onClick={() => onEdit(question)}
-          title="Load this question into the composer to edit it. Nothing is sent until you press Ask."
-          aria-label="Edit question"
-        >
-          Edit
-        </button>
+        <Tooltip content="Load this question into the composer to edit it. Nothing is sent until you press Ask.">
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => onEdit(question)}
+            aria-label="Edit question"
+          >
+            Edit
+          </button>
+        </Tooltip>
       )}
       {onRetry && (
-        <button
-          type="button"
-          className="btn btn--ghost btn--sm"
-          onClick={() => onRetry(question)}
-          disabled={disabled}
-          title={disabled ? (disabledReason ?? undefined) : 'Ask this question again as a new Genie turn'}
-          aria-label="Retry question"
-        >
-          Retry
-        </button>
+        <Tooltip content={reAskTooltip(ASK_AGAIN_TOOLTIP)}>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => onRetry(question)}
+            disabled={disabled}
+            aria-label="Retry question"
+          >
+            Retry
+          </button>
+        </Tooltip>
       )}
       {onRegenerate && (
-        <button
-          type="button"
-          className="btn btn--ghost btn--sm"
-          onClick={() => onRegenerate(question)}
-          disabled={disabled}
-          title={disabled ? (disabledReason ?? undefined) : REGENERATE_TITLE}
-          aria-label="Regenerate answer"
-        >
-          Regenerate
-        </button>
+        <Tooltip content={reAskTooltip(REGENERATE_TITLE)}>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => onRegenerate(question)}
+            disabled={disabled}
+            aria-label="Regenerate answer"
+          >
+            Regenerate
+          </button>
+        </Tooltip>
       )}
       {/* No aria-label: the accessible name is the visible "Ask again"
           (WCAG 2.5.3 Label in Name); the tooltip describes it. */}
       {onAskAgain && (
-        <button
-          type="button"
-          className="btn btn--ghost btn--sm"
-          onClick={() => onAskAgain(question)}
-          disabled={disabled}
-          title={disabled ? (disabledReason ?? undefined) : 'Ask this question again as a new Genie turn'}
-        >
-          Ask again
-        </button>
+        <Tooltip content={reAskTooltip(ASK_AGAIN_TOOLTIP)}>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => onAskAgain(question)}
+            disabled={disabled}
+          >
+            Ask again
+          </button>
+        </Tooltip>
       )}
     </div>
   );

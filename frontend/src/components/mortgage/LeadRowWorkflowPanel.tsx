@@ -66,7 +66,7 @@ export function LeadRowWorkflowPanel({
         <Field label="Contactability">
           {flags.length === 0 && <span className="muted fs-12">Eligible</span>}
           {flags.map((flag) => (
-            <Chip key={flag.key} variant={flag.variant} icon={flag.icon} title={flag.title}>
+            <Chip key={flag.key} variant={flag.variant} icon={flag.icon}>
               {flag.key === 'suppressed' && lead.suppression_reason
                 ? `${flag.label}: ${lead.suppression_reason}`
                 : flag.label}
@@ -82,7 +82,7 @@ export function LeadRowWorkflowPanel({
             <Chip variant="success">{lead.assigned_to_label ?? lead.assigned_to_email}</Chip>
           ) : <None />}
           {stage && (
-            <Chip variant={assignmentStatusVariant(lead.assignment_status)} title="Assignment lifecycle stage">
+            <Chip variant={assignmentStatusVariant(lead.assignment_status)}>
               {stage}
             </Chip>
           )}
@@ -138,7 +138,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 function EntryChip({ entry }: { entry: LeadStatusEntry }) {
-  return <Chip variant={entry.variant} title={entry.detail}>{entry.label}</Chip>;
+  return <Chip variant={entry.variant}>{entry.label}</Chip>;
 }
 
 function None() {

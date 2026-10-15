@@ -45,7 +45,6 @@ export function LeadComplianceChips({ lead }: { lead: LeadSummary }) {
           key={flag.key}
           variant={flag.variant}
           icon={flag.icon}
-          title={flag.title}
           className="chip--compact lead-table__flag"
         >
           {flag.label}
@@ -59,7 +58,7 @@ export function LeadComplianceChips({ lead }: { lead: LeadSummary }) {
 function StatusChip({ entry }: { entry: LeadStatusEntry }) {
   return (
     <>
-      <Chip variant={entry.variant} title={entry.detail} className="chip--compact">
+      <Chip variant={entry.variant} className="chip--compact">
         {entry.label}
       </Chip>
       {entry.qualifier && <span className="sr-only">, {entry.qualifier}</span>}

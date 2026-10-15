@@ -12,6 +12,7 @@ import {
 import { usePresenterMode } from '../../lib/presenterMode';
 import { ROUTES } from '../../lib/routeMeta';
 import { sessionQueryOptions, useAuditLedgerAccess } from '../../lib/sessionQuery';
+import { Tooltip } from '../ui/Tooltip';
 import { useAdminNavigationAccess } from './RouteNav';
 
 /**
@@ -32,6 +33,8 @@ import { useAdminNavigationAccess } from './RouteNav';
  */
 
 const M0 = { id: 0, name: 'Top-of-Funnel', desc: 'Lead generation + borrower segmentation (ships today).' } as const;
+/** The settings link's name: its title used to be its only name (critic-08). */
+const ADMIN_LABEL = 'Admin / settings';
 
 const NoRoadmap: ComponentType = () => null;
 // Two steps, as in lenderMarkLoader: when the stale-chunk listener cancels
@@ -76,18 +79,18 @@ export function Rail() {
   const followUps = useQuery(followUpsSummaryQueryOptions(followUpsSummaryEnabled(session.data, connection)));
   return (
     <nav className="rail" aria-label="Primary navigation" data-rum-target="nav">
-      <Link to="/" className="rail__brand" title="Entrada — Mortgage Intelligence Platform" aria-label="Entrada home">
-        <EntradaMark size={32} />
-      </Link>
-      <Link
-        to="/"
-        className="rail__item is-active"
-        title={`Module ${M0.id}: ${M0.name} — ${M0.desc}`}
-        aria-current="page"
-      >
-        <Icon name="target" size={18} className="ico" />
-        <span className="mod">M{M0.id}</span>
-      </Link>
+      <Tooltip content="Entrada — Mortgage Intelligence Platform">
+        <Link to="/" className="rail__brand" aria-label="Entrada home">
+          <EntradaMark size={32} />
+        </Link>
+      </Tooltip>
+      {/* The accessible name stays 'M0'; the module description is the tooltip (critic-08). */}
+      <Tooltip content={`Module ${M0.id}: ${M0.name} — ${M0.desc}`}>
+        <Link to="/" className="rail__item is-active" aria-current="page">
+          <Icon name="target" size={18} className="ico" />
+          <span className="mod">M{M0.id}</span>
+        </Link>
+      </Tooltip>
       {presenterMode && (
         <Suspense fallback={null}>
           <RailRoadmap />
@@ -104,20 +107,23 @@ export function Rail() {
           (design_files/Module 0 Prototype.html:1201-1202;
           deviation:rail-audit-ledger). */}
       {canReadLedger && (
-        <Link
-          to={ROUTES.auditLedger.pattern}
-          className="rail__item"
-          aria-label={ROUTES.auditLedger.name}
-          title={ROUTES.auditLedger.name}
-          aria-current={onLedger ? 'page' : undefined}
-        >
-          <Icon name="audit" size={16} />
-        </Link>
+        <Tooltip content={ROUTES.auditLedger.name}>
+          <Link
+            to={ROUTES.auditLedger.pattern}
+            className="rail__item"
+            aria-label={ROUTES.auditLedger.name}
+            aria-current={onLedger ? 'page' : undefined}
+          >
+            <Icon name="audit" size={16} />
+          </Link>
+        </Tooltip>
       )}
       {canAccessAdmin && (
-        <Link to="/admin-config" className="rail__item" title="Admin / settings">
-          <Icon name="settings" size={16} />
-        </Link>
+        <Tooltip content={ADMIN_LABEL}>
+          <Link to="/admin-config" className="rail__item" aria-label={ADMIN_LABEL}>
+            <Icon name="settings" size={16} />
+          </Link>
+        </Tooltip>
       )}
     </nav>
   );
