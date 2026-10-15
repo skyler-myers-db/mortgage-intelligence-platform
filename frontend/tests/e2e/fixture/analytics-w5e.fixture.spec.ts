@@ -82,9 +82,10 @@ test('no tab carries a DOM title attribute under main (critic-08)', async ({ app
     await app.gotoRoute(tab === 'executive' ? '/analytics' : `/analytics?view=${tab}`);
     await expect(page.locator('#main-content [data-analytics-skeleton]')).toHaveCount(0);
     await app.settle();
-    // The Timestamp's <time> keeps its absolute-UTC title by design (responsive-07);
-    // the shared Ask Genie icon button's title is w5-compiler-lint's residual.
-    const titled = await page.locator('#main-content [title]:not(time, .genie-ask-about)').evaluateAll((nodes) =>
+    // No exclusion since the W5e compiler-lint residual: the Timestamp's
+    // absolute UTC form and the Ask Genie icon button's prompt are ui/Tooltip
+    // descriptions now, never a native title.
+    const titled = await page.locator('#main-content [title]').evaluateAll((nodes) =>
       nodes.map((node) => `${node.tagName.toLowerCase()}.${node.className}`),
     );
     expect(titled, `${tab}: title attributes under main`).toEqual([]);

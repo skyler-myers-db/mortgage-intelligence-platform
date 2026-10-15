@@ -439,28 +439,7 @@ Audit critic-08, stack-07 items 3-5 and quality-10 steps 2-3 (W5e). Four gates, 
 
 On a list surface with dozens of rows prefer R1 wherever the row already shows the name. Tests read a tooltip through `src/test/tooltipText.ts` (unit) or `tests/e2e/fixture/tooltip.ts` (e2e), never `title`.
 
-`TITLE_BAN_ALLOWLIST` names each file that still carries a site, as `'<owner lane> - <n> sites - <why>'`. It only shrinks: `src/lib/titleBan.test.ts` fails when an entry's count is not its file's live hit count, so a migrated file leaves the list in the same change, and a new site in a listed file is caught. Never add an entry. The allowlist override keeps `FORMATTING_BAN` on for those files (never `'off'`), and disappears through its length guard once the list is empty. The integrator removes the deprecated Chip/Button/EvidenceChip `title` passthrough last and pins it with `frontend/src/components/Primitives.titleProp.test.tsx`:
-
-```tsx
-import { describe, expect, it } from 'vitest';
-import { Button, Chip, EvidenceChip } from './Primitives';
-
-// The title passthrough is gone (audit critic-08): `tsc -b` fails if one comes back.
-const removed = [
-  // @ts-expect-error Chip has no title prop; use tooltip.
-  <Chip key="chip" title="x">x</Chip>,
-  // @ts-expect-error Button omits the DOM title attribute; use tooltip.
-  <Button key="button" title="x">x</Button>,
-  // @ts-expect-error EvidenceChip has no title prop; the evidence hover card replaced it.
-  <EvidenceChip key="evidence" title="x">x</EvidenceChip>,
-];
-
-describe('the removed title passthrough', () => {
-  it('is a type error on all three primitives (tsc -b pins it)', () => {
-    expect(removed).toHaveLength(3);
-  });
-});
-```
+`TITLE_BAN_ALLOWLIST` named each file that still carried a site, as `'<owner lane> - <n> sites - <why>'`; it is shrink-only and EMPTY since the W5e integration (every owner lane migrated its own sites before the residual commit). `src/lib/titleBan.test.ts` fails when an entry's count is not its file's live hit count, so a new entry could only ever shrink; never add one. The allowlist override restates `FORMATTING_BAN` and `LEXICON_BAN` for its files (never `'off'`), and disappears through its length guard while the list is empty. The integrator removed the deprecated Chip/Button/EvidenceChip `title` passthrough in the same residual commit; `frontend/src/components/Primitives.titleProp.test.tsx` pins it with one `@ts-expect-error` per primitive, so `tsc -b` fails if a `title` prop comes back, and the compiler-lint fixture sweep's `EXPECTED_PENDING_TITLES` is empty (any native title on a swept route fails).
 
 **Typed lint.** One block in `eslint.config.js` runs `@typescript-eslint/no-floating-promises`, `no-misused-promises` and `no-base-to-string` at their default options (no `checksVoidReturn` exemption) through `projectService`, over production source only. Fix a hit in code: `void` only for a fire-and-forget whose rejection is handled inside (react-router's `navigate`), `.catch(handler)` otherwise, and an async JSX handler becomes `() => void run()` where `run` handles its own errors. Pre-existing hits in files other W5e lanes own live in `frontend/eslint-suppressions.json`, ESLint's native bulk suppressions, applied by the CLI from `frontend/` with no flag. It only shrinks: an unused entry fails `eslint .`; prune it with `npx eslint . --prune-suppressions` (from `frontend/`). A new hit is never suppressed, the file names only those three rules, and no script or CI step may pass `--pass-on-unpruned-suppressions` or `--suppressions-location` (`src/test/eslintSuppressions.test.ts`).
 

@@ -135,26 +135,7 @@ export const TITLE_BAN = [
 // change. Never add an entry: migrate the call site (the R1-R6 rules in
 // docs/testing.md "Lint depth"). The override block below keeps
 // FORMATTING_BAN on for these files; it never turns the rule off.
-export const TITLE_BAN_ALLOWLIST = {
-  "src/components/Primitives.tsx": "integrator residual - 2 sites - the deprecated Chip/EvidenceChip/Button title passthrough, removed once no call site passes title",
-  "src/components/mortgage/LeadTableRow.tsx": "w5-lead-table-compile - 6 sites - the file owner migrates its own sites (W5e)",
-  "src/components/mortgage/LeadTableStatusChips.tsx": "w5-lead-table-compile - 5 sites - the file owner migrates its own sites (W5e)",
-  "src/components/mortgage/DecisionReceipt.tsx": "w5-lead-table-compile - 1 site - the file owner migrates its own site (W5e)",
-  "src/components/mortgage/LeadTableBulkActions.tsx": "w5-lead-table-compile - 1 site - the file owner migrates its own site (W5e)",
-  "src/components/mortgage/LeadTableHeader.tsx": "w5-lead-queue-columns - 1 site - the file owner migrates its own site (W5e)",
-  "src/routes/lead-queue.filterBar.tsx": "w5-lead-queue-columns - 1 site - the file owner migrates its own site (W5e)",
-  "src/routes/borrower-360.tsx": "w5-lead-queue-columns - 2 sites - the synthetic-data note and the local Field; the file owner migrates its own sites (W5e)",
-  "src/routes/analytics.equity-scatter.tsx": "w5-analytics - 3 sites - the file owner migrates its own sites (W5e)",
-  "src/routes/analytics.charts.tsx": "w5-analytics - 1 site - the file owner migrates its own site (W5e)",
-  "src/routes/ask-genie.answer-panel.tsx": "w5-lexicon-copy - 6 sites - the file owner migrates its own sites (W5e)",
-  "src/routes/ask-genie.growth-agent.helpers.tsx": "w5-lexicon-copy - 2 sites - the file owner migrates its own sites (W5e)",
-  "src/components/mortgage/GenieAnswer.tsx": "w5-lexicon-copy - 2 sites - the file owner migrates its own sites (W5e)",
-  "src/components/mortgage/GenieAnswerToolbar.tsx": "w5-lexicon-copy - 2 sites - the file owner migrates its own sites (W5e)",
-  "src/routes/admin-config.tsx": "w5-lexicon-copy - 1 site - the file owner migrates its own site (W5e)",
-  "src/routes/portfolio-builder.governance.tsx": "w5-lexicon-copy - 1 site - the file owner migrates its own site (W5e)",
-  "src/components/mortgage/EvidenceDrawerBody.tsx": "w5-lexicon-copy - 2 sites - the file owner migrates its own sites (W5e)",
-  "src/components/mortgage/SegmentCard.tsx": "w5-lexicon-copy - 2 sites - the EvidenceChip title and the count title; the file owner migrates its own sites (W5e)",
-};
+export const TITLE_BAN_ALLOWLIST = {};
 
 // Typed lint (2026-09-21 audit quality-10 step 2, stack-07): three
 // type-aware rules over production source, at their default options (no

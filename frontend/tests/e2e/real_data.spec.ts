@@ -2064,9 +2064,10 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .locator('.surface', { hasText: /top state by listed borrower count/i })
       .first();
     await expect(answerSurface).toBeVisible({ timeout: 90_000 });
-    // flow-10 (2026-09-23): the source chip shows a plain label; the governed
-    // UC path lives in its title attribute.
-    await expect(answerSurface.locator('[title*="mip.gold.borrower_360"]').first()).toBeVisible();
+    // flow-10 (2026-09-23): the source chip shows a plain label. Since W5e
+    // (critic-08) it carries no native title; the evidence hover card and the
+    // drawer it opens carry the governed UC path, so the pin reads the label.
+    await expect(answerSurface.locator('.evidence-chip', { hasText: 'Borrower 360' }).first()).toBeVisible();
     await expect(answerSurface).toContainText(/average listing days on market/i);
     await expect(answerSurface.locator('.genie-answer__table tbody tr').first()).toBeVisible({
       timeout: 10_000,

@@ -5,10 +5,9 @@
  *  (a) critic-08, the Rail: keyboard focus on M0 opens #mip-tooltip with the
  *      module description; the admin link is named 'Admin / settings'; no
  *      element in .rail carries a native title.
- *  (b) a [title] sweep over ten routes: every native title left on screen
- *      comes from a component a TITLE_BAN_ALLOWLIST owner has not migrated
- *      yet. EXPECTED_PENDING_TITLES only shrinks; the integrator's residual
- *      commit empties it. SVG <title> elements and iframes are exempt.
+ *  (b) a [title] sweep over ten routes finds no native title: the
+ *      integrator's residual commit emptied EXPECTED_PENDING_TITLES and
+ *      TITLE_BAN_ALLOWLIST. SVG <title> elements and iframes are exempt.
  *  (c) a11y-05, the Console's recent activity on offer-orchestrator-detail:
  *      with 25 events it is a region named 'My recent activity', reachable
  *      by Tab and scrolled by the arrow keys; with 2 it takes no tab stop.
@@ -59,31 +58,12 @@ function registerMyEvents(mockApi: MockApi, count: number): void {
 }
 
 /**
- * Native titles the other W5e lanes still own on this branch, by route and
- * the selector of the element that carries them (eslint.config.js
- * TITLE_BAN_ALLOWLIST names the files). SHRINK-ONLY: a migrated site is
- * removed here in the same change; the integrator's residual commit empties
- * the list. A title outside it fails the sweep.
+ * Native titles still allowed, by route and the selector of the element that
+ * carries them. Emptied by the integrator's residual commit (W5e): every
+ * owner lane migrated its sites and eslint TITLE_BAN_ALLOWLIST is empty, so
+ * any native title on a swept route fails. SHRINK-ONLY; never add an entry.
  */
-const LEAD_TABLE_ROW_TITLES = [
-  // w5-lead-table-compile: LeadTableRow.tsx (6 sites).
-  '.lead-table__clip',
-  '.lead-table__city',
-  '.chip--segment',
-  '.lead-table__offer',
-  '.lead-table__reject',
-];
-const EXPECTED_PENDING_TITLES: Readonly<Record<string, readonly string[]>> = {
-  '/lead-queue': LEAD_TABLE_ROW_TITLES,
-  // w5-lead-queue-columns: borrower-360.tsx's local Field.
-  [`/borrower-360/${PRIMARY_BORROWER.borrower_id}`]: ['.field__value'],
-  // w5-lexicon-copy: ask-genie.answer-panel.tsx's source EvidenceChips (through the Primitives passthrough).
-  '/ask-genie': ['.evidence-chip'],
-  // w5-lexicon-copy: admin-config.tsx's rules version chip.
-  '/admin-config': ['.admin-rules-version'],
-  // w5-lexicon-copy: SegmentCard.tsx (the select button and its EvidenceChip); the lead table's rows.
-  '/segment-intelligence': ['.seg-card__select', '.evidence-chip', ...LEAD_TABLE_ROW_TITLES],
-};
+const EXPECTED_PENDING_TITLES: Readonly<Record<string, readonly string[]>> = {};
 
 const SWEPT_ROUTES = [
   '/',
