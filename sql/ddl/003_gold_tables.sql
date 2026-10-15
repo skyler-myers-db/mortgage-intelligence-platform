@@ -244,7 +244,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   second_pos_amount         BIGINT             COMMENT '2nd-lien balance passthrough; NULL or 0 both mean no active 2nd-lien. Feeds the equity segment clean-lien predicate.',
   second_pos_rate           DOUBLE             COMMENT 'S1.3: 2nd-lien note rate in PERCENT form (8.25, not 0.0825) after silver+gold source-quality bounding. NULL when missing/invalid.',
   second_pos_rate_spread_bps INT       NOT NULL COMMENT 'S1.3: fn_rate_spread(second_pos_rate_fraction, market_rate_fraction). 0 when the second rate is unknown.',
-  second_lien_itm           BOOLEAN   NOT NULL COMMENT 'S1.3 second_lien_itm segment flag: open 2nd position AND fn_in_the_money(second_pos_rate_spread_bps, equity_pct, governed thresholds). Consolidation-refi economics screen.',
+  second_lien_itm           BOOLEAN   NOT NULL COMMENT 'S1.3 second_lien_itm segment flag: open 2nd position AND fn_in_the_money(second_pos_rate_spread_bps, equity_pct, governed thresholds). In the Money rule on the second lien (consolidation).',
   heloc_open_date           DATE               COMMENT 'S1.3: latest OPEN equity-loan lien event date from silver.mortgage_events (is_equity_loan, no release_date).',
   heloc_draw_end_date       DATE               COMMENT 'S1.3: heloc_open_date + 120 months (standard 10-year draw period).',
   has_heloc_draw_ending     BOOLEAN   NOT NULL COMMENT 'S1.3 heloc_draw_to_payback segment flag: open equity-loan lien originated 102-126 months ago (standard 120-month draw ending within 18 months or ended within the last 6).',
@@ -489,7 +489,7 @@ TBLPROPERTIES (
 CREATE TABLE IF NOT EXISTS mip.gold.segment_population (
   segment_code    STRING    NOT NULL COMMENT 'itm / listed / permit / investor / equity / retention + S1.3 overlays second_lien_itm / heloc_draw_to_payback / home_equity_history / refi_propensity / itm_on_related_property / payoff_loss_leads / permit_activity. Matches SegmentCode Literal exactly; permit is the backward-compatible code for customer-facing HELOC Intent.',
   state           STRING    NOT NULL COMMENT '2-char state code from refreshed source coverage or "_ALL" for national rollup.',
-  name            STRING    NOT NULL COMMENT 'Static label per segment_code (e.g., "Prime Refi Candidates").',
+  name            STRING    NOT NULL COMMENT 'Static label per segment_code (e.g., "In the Money").',
   count           INT       NOT NULL COMMENT 'Member count for this (segment, state) cell.',
   delta_vs_prior  STRING    NOT NULL COMMENT 'Quarter-over-quarter delta as "+NN%" / "-NN%". Router maps to SegmentSummary.delta. "+0%" on first refresh.',
   avg_score       INT       NOT NULL COMMENT 'CAST(ROUND(AVG(opportunity_score)) AS INT) over the segment cell.',
@@ -955,7 +955,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.rate_sensitivity_rollup (
   scenario_market_rate_pct       DOUBLE             COMMENT 'scenario_market_rate_fraction in percent (6.30 == 6.30%), rounded to 6 places for display.',
   addressable_borrowers          BIGINT    NOT NULL COMMENT 'gold.borrower_360 rows in the state: the map addressable count. The same on every step.',
   rate_movable_borrowers         BIGINT    NOT NULL COMMENT 'Addressable borrowers with a gated note rate (active lien, bounded rate strictly inside 1%..15%): the only ones a scenario can move.',
-  in_the_money_borrowers         BIGINT    NOT NULL COMMENT 'Borrowers that clear the refi screen at this step: fn_in_the_money(fn_rate_spread(note, par + step / 10000), equity_pct, thresholds). Step 0 equals SUM(borrower_360.in_the_money).',
+  in_the_money_borrowers         BIGINT    NOT NULL COMMENT 'Borrowers in the money at this step: fn_in_the_money(fn_rate_spread(note, par + step / 10000), equity_pct, thresholds). Step 0 equals SUM(borrower_360.in_the_money).',
   min_spread_bps_applied         INT                COMMENT 'Rate-spread threshold (bps) of this refresh, carried from gold.borrower_360.min_spread_bps_applied.',
   min_equity_pct_applied         INT                COMMENT 'Equity threshold (pct) of this refresh, carried from gold.borrower_360.min_equity_pct_applied.',
   book_as_of                     TIMESTAMP NOT NULL COMMENT 'Refresh anchor of the book the grid was measured over (mip.ref.refresh_run_state).',
@@ -963,7 +963,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.rate_sensitivity_rollup (
 )
 USING DELTA
 CLUSTER BY (state)
-COMMENT 'Rate Lever scenario grid: per state and par-rate step (-100 .. +100 bps), the addressable borrowers that would clear this refresh refi screen under the canonical fn_rate_spread / fn_in_the_money rule re-run at par + step. A scenario, not a forecast. Built by mip_refresh_scores via gold_rate_sensitivity_rollup.sql; read by /api/v1/geo/rate-sensitivity.'
+COMMENT 'Rate Lever scenario grid: per state and par-rate step (-100 .. +100 bps), the addressable borrowers that would be in the money under the canonical fn_rate_spread / fn_in_the_money rule re-run at par + step. A scenario, not a forecast. Built by mip_refresh_scores via gold_rate_sensitivity_rollup.sql; read by /api/v1/geo/rate-sensitivity.'
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
   'delta.autoOptimize.optimizeWrite' = 'true',

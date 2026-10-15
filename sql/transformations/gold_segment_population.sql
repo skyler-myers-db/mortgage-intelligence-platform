@@ -232,7 +232,7 @@ prior AS (
 meta AS (
   SELECT * FROM (
     VALUES
-      ('itm',       'Prime Refi Candidates',    'Lien rate >= 75 bps above par and equity >= 15%.',                                      '#5CE1E6'),
+      ('itm',       'In the Money',             'Lien rate >= 75 bps above par and equity >= 15%.',                                      '#5CE1E6'),
       ('listed',    'Listed for Sale',          'Current active or under-contract Cotality MLS listing tied to CLIP.', '#F59E0B'),
       ('permit',    'HELOC Intent',             'Cotality HELOC propensity >= 700 with equity context. Filed Building Permits remain pending until a true permit source lands.', '#A78BFA'),
       ('investor',  'Investor / Multi-Property','Owner Link shows 2+ properties or repeat behavior.',                                    '#F472B6'),
@@ -307,7 +307,7 @@ LEFT JOIN channel_mix AS cmix USING (segment_code, state);
 -- statements in order.
 COMMENT ON COLUMN mip.gold.segment_population.segment_code IS 'itm / listed / permit / investor / equity / retention + S1.3 overlays second_lien_itm / heloc_draw_to_payback / home_equity_history / refi_propensity / itm_on_related_property / payoff_loss_leads / permit_activity. Matches SegmentCode Literal exactly; permit is the backward-compatible code for customer-facing HELOC Intent.';
 COMMENT ON COLUMN mip.gold.segment_population.state IS '2-char state code from refreshed source coverage or "_ALL" for national rollup.';
-COMMENT ON COLUMN mip.gold.segment_population.name IS 'Static label per segment_code (e.g., "Prime Refi Candidates").';
+COMMENT ON COLUMN mip.gold.segment_population.name IS 'Static label per segment_code (e.g., "In the Money").';
 COMMENT ON COLUMN mip.gold.segment_population.count IS 'Member count for this (segment, state) cell.';
 COMMENT ON COLUMN mip.gold.segment_population.delta_vs_prior IS 'Quarter-over-quarter delta as "+NN%" / "-NN%". Router maps to SegmentSummary.delta. "+0%" on first refresh.';
 COMMENT ON COLUMN mip.gold.segment_population.avg_score IS 'CAST(ROUND(AVG(opportunity_score)) AS INT) over the segment cell.';

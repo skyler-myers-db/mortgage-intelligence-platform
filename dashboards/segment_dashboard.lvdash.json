@@ -128,6 +128,17 @@
                           "condition": {
                             "operand": {
                               "type": "data-value",
+                              "value": "HELOC Intent"
+                            },
+                            "operator": "="
+                          },
+                          "backgroundColor": "#A78BFA",
+                          "foregroundColor": "#04101F"
+                        },
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
                               "value": "Home Equity Candidate"
                             },
                             "operator": "="
@@ -177,6 +188,17 @@
                             "operator": "="
                           },
                           "backgroundColor": "#C4B5FD",
+                          "foregroundColor": "#04101F"
+                        },
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "Prime Refi Candidates"
+                            },
+                            "operator": "="
+                          },
+                          "backgroundColor": "#5CE1E6",
                           "foregroundColor": "#04101F"
                         },
                         {
@@ -369,6 +391,10 @@
                     "type": "categorical",
                     "mappings": [
                       {
+                        "value": "HELOC Intent",
+                        "color": "#A78BFA"
+                      },
+                      {
                         "value": "Home Equity Candidate",
                         "color": "#2985DF"
                       },
@@ -387,6 +413,10 @@
                       {
                         "value": "Permit Activity",
                         "color": "#C4B5FD"
+                      },
+                      {
+                        "value": "Prime Refi Candidates",
+                        "color": "#5CE1E6"
                       },
                       {
                         "value": "Retention Risk",
@@ -512,6 +542,10 @@
                     "type": "categorical",
                     "mappings": [
                       {
+                        "value": "HELOC Intent",
+                        "color": "#A78BFA"
+                      },
+                      {
                         "value": "Home Equity Candidate",
                         "color": "#2985DF"
                       },
@@ -530,6 +564,10 @@
                       {
                         "value": "Permit Activity",
                         "color": "#C4B5FD"
+                      },
+                      {
+                        "value": "Prime Refi Candidates",
+                        "color": "#5CE1E6"
                       },
                       {
                         "value": "Retention Risk",
@@ -757,6 +795,10 @@
                     "type": "categorical",
                     "mappings": [
                       {
+                        "value": "HELOC Intent",
+                        "color": "#A78BFA"
+                      },
+                      {
                         "value": "Home Equity Candidate",
                         "color": "#2985DF"
                       },
@@ -775,6 +817,10 @@
                       {
                         "value": "Permit Activity",
                         "color": "#C4B5FD"
+                      },
+                      {
+                        "value": "Prime Refi Candidates",
+                        "color": "#5CE1E6"
                       },
                       {
                         "value": "Retention Risk",
