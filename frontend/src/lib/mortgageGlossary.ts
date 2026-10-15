@@ -13,7 +13,13 @@ export type GlossaryCategory =
 export interface GlossaryEntry {
   id: string;
   term: string;
+  /** Names shown under the term on /glossary (and searched). */
   aliases: string[];
+  /**
+   * Names that FIND the entry (glossary search, the command palette) but are
+   * never shown: a retired name a user may still type (critic-11).
+   */
+  searchAliases?: readonly string[];
   category: GlossaryCategory;
   short: string;
   appContext: string;
@@ -133,7 +139,9 @@ export const mortgageGlossary = {
   inTheMoney: {
     id: LEXICON.inTheMoney.glossaryId,
     term: LEXICON.inTheMoney.label,
-    aliases: [...LEXICON.inTheMoney.legacyAliases],
+    aliases: [LEXICON.inTheMoney.short, LEXICON.inTheMoney.prenominal],
+    // Retired names still find the term; /glossary never shows them.
+    searchAliases: LEXICON.inTheMoney.legacyAliases,
     category: 'scoring',
     short: 'A refinance-only economics screen: rate spread and equity both clear the configured thresholds.',
     appContext: 'It is not the same as a high-quality lead. Ranking also considers intent, relationship, fit, contactability, and evidence.',
@@ -351,7 +359,7 @@ export const mortgageGlossary = {
 
 export type GlossaryTermKey = keyof typeof mortgageGlossary;
 
-export const glossaryEntries = Object.values(mortgageGlossary).sort((a, b) =>
+export const glossaryEntries: GlossaryEntry[] = Object.values(mortgageGlossary).sort((a, b) =>
   a.term.localeCompare(b.term),
 );
 

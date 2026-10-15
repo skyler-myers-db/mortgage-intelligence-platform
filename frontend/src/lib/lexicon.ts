@@ -9,8 +9,10 @@
  * appears only inside "ITM on Related Property" or an <abbr>.
  *
  * This is the ONLY file exempt from eslint.config.js LEXICON_BAN: every
- * retired variant below is an INPUT alias (glossary search, legacy segment
- * name), never display text. Codes, columns and ids never change: `itm`,
+ * retired variant below is an INPUT alias (the glossary's search-only
+ * `searchAliases`, palette keywords, a legacy segment name), never display
+ * text; /glossary shows only "ITM" and "in-the-money" under the term
+ * (lexicon-copy.fixture.spec.ts scans it). Codes, columns and ids never change: `itm`,
  * `in_the_money`, `refi_economics_screen` and the glossary id `in-the-money`
  * all stay. backend/services/segment_labels.py is the server twin.
  */

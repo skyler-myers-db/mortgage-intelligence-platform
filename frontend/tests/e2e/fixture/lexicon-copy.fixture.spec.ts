@@ -6,8 +6,10 @@
  *    Ask Genie entry prefills the reviewed in-the-money prompt; Segments names
  *    the itm card "In the Money"; the Ask composer and its sample chip speak
  *    the prenominal form; a Genie answer's own "in-the-money" renders verbatim
- *    (the vocabulary rewrite is gone, live-first); and a DOM scan of every
- *    registry route finds no retired variant (/analytics* and /lead-queue are
+ *    (the vocabulary rewrite is gone, live-first); /glossary shows only the
+ *    current forms (the retired names are search-only); and a DOM scan of
+ *    every registry route, reading adjacent elements apart, finds no retired
+ *    variant (/analytics* and /lead-queue are
  *    skipped while eslint LEXICON_PENDING still names their parallel lanes'
  *    files: the integrator re-enables them when it empties that map).
  *  - flow-10: the Segments lede is ONE line with the Console open, and the
@@ -43,6 +45,25 @@ const PENDING_ROUTE = /^\/(analytics|lead-queue)/;
 
 function callsSince(mockApi: MockApi, from: number): string[] {
   return mockApi.calls.slice(from).map((call) => `${call.method} ${call.path}`);
+}
+
+/**
+ * The text a registry scan reads (runs in the page): every text node under
+ * `root`, one per line. textContent would join adjacent elements with no
+ * separator ("ITM" + "refi economics" = "ITMrefi economics"), so a retired
+ * name inside a chip, a cell or an alias span would lose its word boundary
+ * and slip past RETIRED. The campaign recommendation's audience line is
+ * GOVERNED text: the fair-lending screen accepts only its reviewed wording
+ * ("borrowers with refinance economics and usable home equity"; see
+ * tests/unit/test_segment_label_parity.py), so it is read separately.
+ */
+function scanText(root: Element): string {
+  const copy = root.cloneNode(true) as Element;
+  copy.querySelectorAll('.campaign-recommendation__audience').forEach((node) => node.remove());
+  const walker = document.createTreeWalker(copy, NodeFilter.SHOW_TEXT);
+  const lines: string[] = [];
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) lines.push(node.nodeValue ?? '');
+  return lines.join('\n');
 }
 
 function borrowerAnswer(): GenieResult {
@@ -96,7 +117,7 @@ for (const theme of THEMES) {
       await kpi.getByRole('button', { name: 'Ask Genie about this KPI: In the Money' }).click();
       const dialog = page.getByRole('dialog', { name: 'Genie chat' });
       await expect(dialog.getByRole('textbox', { name: 'Ask Genie' })).toHaveValue(ITM_KPI_PROMPT);
-      await expect(page.locator('#main-content')).not.toContainText(RETIRED);
+      expect(await page.locator('#main-content').evaluate(scanText)).not.toMatch(RETIRED);
     });
 
     test('Segments: the In the Money card, a one-line lede and the mode glossary links', async ({ app, page }) => {
@@ -188,21 +209,34 @@ test.describe('Genie cells and the registry scan', () => {
     expect(callsSince(mockApi, before), 'the chunk only: no dossier read, no audit row').toEqual([]);
   });
 
+  test('the scan reads adjacent elements apart, and /glossary shows no retired name', async ({ app, page }) => {
+    await app.gotoRoute('/glossary');
+    // Non-vacuity: two adjacent chips. textContent fuses them ("ITMrefi
+    // economics"), which hides the \b-anchored retired name; scanText must not.
+    await page.evaluate(() => {
+      document.body.insertAdjacentHTML('beforeend', '<div id="lexicon-scan-probe" hidden><span>ITM</span><span>refi economics</span></div>');
+    });
+    const probe = page.locator('#lexicon-scan-probe');
+    expect(await probe.evaluate((node) => node.textContent ?? ''), 'the fused reading this scan replaces').not.toMatch(RETIRED);
+    expect(await probe.evaluate(scanText), 'adjacent elements stay apart').toMatch(RETIRED);
+    await probe.evaluate((node) => node.remove());
+
+    // critic-11: the term shows only its current forms; the retired names
+    // are search-only (GlossaryEntry.searchAliases), so typing one still finds it.
+    const entry = page.locator('#main-content article#in-the-money');
+    await expect(entry.locator('.glossary-entry__aliases > span')).toHaveText(['ITM', 'in-the-money']);
+    expect(await page.locator('#main-content').evaluate(scanText)).not.toMatch(RETIRED);
+    await page.getByLabel('Search the glossary').fill('refi economics');
+    await expect(entry.locator('.glossary-entry__term')).toHaveText('In the Money');
+    await expect(entry.locator('.glossary-entry__aliases > span')).toHaveText(['ITM', 'in-the-money']);
+  });
+
   test('no registry route shows a retired In the Money variant', async ({ app, page }) => {
     // One test walks every registry route, so it gets the slow budget.
     test.slow();
     for (const route of FIXTURE_ROUTES.filter((entry) => !PENDING_ROUTE.test(entry.path))) {
       await app.gotoRoute(route.path);
-      // The campaign recommendation's audience line is GOVERNED text: the
-      // fair-lending screen accepts only its reviewed wording ("borrowers with
-      // refinance economics and usable home equity"; see
-      // tests/unit/test_segment_label_parity.py), so it is read separately.
-      const text = await page.locator('#main-content').evaluate((main) => {
-        const copy = main.cloneNode(true) as HTMLElement;
-        copy.querySelectorAll('.campaign-recommendation__audience').forEach((node) => node.remove());
-        return copy.textContent ?? '';
-      });
-      expect(text, route.name).not.toMatch(RETIRED);
+      expect(await page.locator('#main-content').evaluate(scanText), route.name).not.toMatch(RETIRED);
     }
   });
 });

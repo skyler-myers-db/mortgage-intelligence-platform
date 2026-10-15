@@ -25,6 +25,12 @@ describe('glossarySearch', () => {
     expect(matchesGlossaryQuery(ENTRY, glossaryQueryTokens('refi permit'))).toBe(false);
   });
 
+  it('matches a search-only alias, which the glossary never shows (critic-11)', () => {
+    const entry = { term: 'In the Money', aliases: ['ITM'], searchAliases: ['prime refi candidates'], short: 'An economics screen.' };
+    expect(matchesGlossaryQuery(entry, glossaryQueryTokens('prime refi'))).toBe(true);
+    expect(matchesGlossaryQuery({ ...entry, searchAliases: undefined }, glossaryQueryTokens('prime refi'))).toBe(false);
+  });
+
   it('matches every entry for a blank query', () => {
     expect(matchesGlossaryQuery(ENTRY, [])).toBe(true);
   });

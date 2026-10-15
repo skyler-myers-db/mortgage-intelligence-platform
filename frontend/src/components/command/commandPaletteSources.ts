@@ -109,7 +109,7 @@ export function glossaryRows(): PaletteSourceRow[] {
     label: entry.term,
     hint: entry.short,
     icon: 'doc',
-    keywords: entry.aliases,
+    keywords: [...entry.aliases, ...(entry.searchAliases ?? [])],
     to: `/glossary#${entry.id}`,
   }));
 }
