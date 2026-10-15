@@ -314,6 +314,17 @@
   --map-region-fill: #E4EDF4;
 }
 
+/* Paper prints a dark and a light session alike (print.css): one status
+ * tint base per tone in both themes, the prototype RGB the tints carried
+ * before css-07. Same specificity as the theme blocks and later in source. */
+@media print {
+  [data-theme] {
+    --status-success-base: #10B981;
+    --status-warning-base: #F59E0B;
+    --status-danger-base: #EF4444;
+  }
+}
+
 /* Light segment palette (deviation:segment-palette; segmentPalette.test.ts):
  * the core six clear dE 15 / CVD 6 and 3:1 on --bg-0..2; overlays keep hue. */
 [data-theme="light"] {
