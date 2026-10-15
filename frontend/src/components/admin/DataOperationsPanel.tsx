@@ -59,6 +59,48 @@ interface SourceSummary {
   note: string;
 }
 
+/** What the Run write sets and refreshes, passed in so the write itself lives outside the component. */
+interface RunOperationWriteState {
+  setOperationError: (message: string | null) => void;
+  setOperationLaunch: (launch: OperationLaunchResponse | null) => void;
+  setOperationRunningKey: (key: OperationJobKey | null) => void;
+  setConfirmingKey: (key: OperationJobKey | null) => void;
+  /** Start (or restart) the short post-launch poll window. */
+  startPolling: () => void;
+  /** Refetch the job list and the source freshness the run will change. */
+  refresh: () => void;
+}
+
+/**
+ * Start one governed refresh job (runtime-03 / stack-09 compile move). The
+ * try/finally lives here, at module level, because React Compiler 1.0 bails
+ * out of a component that holds one (a Todo, facebook/react#34131); the
+ * panel's handler is a plain call, so the panel compiles. Pessimistic: the
+ * launch and the polling are set only after the server accepted the run, the
+ * error strings are unchanged, and the running key resets either way.
+ */
+async function runOperationWrite(jobKey: OperationJobKey, reason: OperationRunReason, state: RunOperationWriteState): Promise<void> {
+  state.setOperationError(null);
+  state.setOperationLaunch(null);
+  state.setOperationRunningKey(jobKey);
+  try {
+    const launch = await api.adminRunOperation<OperationLaunchResponse>({
+      job_key: jobKey,
+      confirm: true,
+      reason,
+      request_id: newRequestId(),
+    });
+    state.setConfirmingKey(null);
+    state.setOperationLaunch(launch);
+    state.startPolling();
+    state.refresh();
+  } catch (err) {
+    state.setOperationError(err instanceof Error ? err.message : 'Unable to start refresh job');
+  } finally {
+    state.setOperationRunningKey(null);
+  }
+}
+
 interface DataOperationsPanelProps {
   sources?: SourceSummary[];
   sourcesLoading?: boolean;
@@ -239,31 +281,24 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
     setOperationError(null);
   };
 
-  const runOperation = async (job: OperationJobStatus, reason: OperationRunReason) => {
-    if (!job.configured || operationRunningKey) return;
-    setOperationError(null);
-    setOperationLaunch(null);
-    setOperationRunningKey(job.key);
-    try {
-      const launch = await api.adminRunOperation<OperationLaunchResponse>({
-        job_key: job.key,
-        confirm: true,
-        reason,
-        request_id: newRequestId(),
-      });
-      setConfirmingKey(null);
-      setOperationLaunch(launch);
-      setOperationPolling(true);
-      setOperationPollGeneration((value) => value + 1);
-      void retryOperations();
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.adminSources(),
-      });
-    } catch (err) {
-      setOperationError(err instanceof Error ? err.message : 'Unable to start refresh job');
-    } finally {
-      setOperationRunningKey(null);
-    }
+  const runOperation = (job: OperationJobStatus, reason: OperationRunReason) => {
+    if (!job.configured || operationRunningKey) return Promise.resolve();
+    return runOperationWrite(job.key, reason, {
+      setOperationError,
+      setOperationLaunch,
+      setOperationRunningKey,
+      setConfirmingKey,
+      startPolling: () => {
+        setOperationPolling(true);
+        setOperationPollGeneration((value) => value + 1);
+      },
+      refresh: () => {
+        void retryOperations();
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.adminSources(),
+        });
+      },
+    });
   };
 
   return (

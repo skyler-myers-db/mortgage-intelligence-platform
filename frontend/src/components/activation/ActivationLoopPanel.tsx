@@ -32,6 +32,37 @@ function statusLabel(status: string): string {
   return status.replace(/_/g, ' ');
 }
 
+/** What the stage write sets, passed in so the write itself lives outside the component. */
+interface StageWriteState {
+  setStageError: (message: string | null) => void;
+  setStageResult: (activation: ActivationOutboxItem | null) => void;
+  setStaging: (staging: boolean) => void;
+  /** Refetch every activation read once the server recorded the stage. */
+  invalidate: () => Promise<void>;
+}
+
+/**
+ * Stage one approved lead (runtime-03 / stack-09 compile move). The try/finally
+ * lives here, at module level, because React Compiler 1.0 bails out of a
+ * component that holds one (a Todo, facebook/react#34131); the component's
+ * handler is a plain call, so the panel compiles. Pessimistic: the result is
+ * set only after the server returns it, and `staging` resets either way.
+ */
+async function stageActivationWrite(request: Parameters<typeof api.stageActivation>[0], state: StageWriteState): Promise<void> {
+  state.setStageError(null);
+  state.setStageResult(null);
+  state.setStaging(true);
+  try {
+    const result = await api.stageActivation(request);
+    state.setStageResult(result.activation);
+    await state.invalidate();
+  } catch (err) {
+    state.setStageError(err instanceof Error ? err.message : 'Unable to stage activation.');
+  } finally {
+    state.setStaging(false);
+  }
+}
+
 function formatWhen(value?: string | null): string {
   if (!value) return 'No timestamp';
   // lib/time parses naive-UTC wire strings correctly and attaches an
@@ -110,26 +141,23 @@ export function ActivationLoopPanel({
     && !staging,
   );
 
-  const stage = async () => {
-    if (!borrowerId || !selected || !approvalId) return;
-    setStageError(null);
-    setStageResult(null);
-    setStaging(true);
-    try {
-      const result = await api.stageActivation({
+  const stage = () => {
+    if (!borrowerId || !selected || !approvalId) return Promise.resolve();
+    return stageActivationWrite(
+      {
         borrower_id: borrowerId,
         destination_key: selected.destination_key,
         offer_code: offerCode ?? null,
         channel,
         approval_id: approvalId,
-      });
-      setStageResult(result.activation);
-      await queryClient.invalidateQueries({ queryKey: ['mip', 'activation'] });
-    } catch (err) {
-      setStageError(err instanceof Error ? err.message : 'Unable to stage activation.');
-    } finally {
-      setStaging(false);
-    }
+      },
+      {
+        setStageError,
+        setStageResult,
+        setStaging,
+        invalidate: () => queryClient.invalidateQueries({ queryKey: ['mip', 'activation'] }),
+      },
+    );
   };
 
   return (
