@@ -97,6 +97,13 @@ export const SESSION: SessionResponse = {
   can_read_audit: true,
   presenter_mode: false,
   actor_email: 'approver@summit-mortgage.example',
+  // What GET /session sends for this actor (backend/api/session.py):
+  // display_name_for keeps a separator-free local part as is, and an admin
+  // who approves holds the two tiers, most privileged first. The identity
+  // menu header renders both (W5d VRT review: without them it printed the
+  // email twice and no role chips, a header no live actor sees).
+  actor_display_name: 'approver',
+  role_labels: ['Administrator', 'Approver'],
   lender_name: LENDER_NAME,
   rum_enabled: false,
   // The deploy payload's default (D-audit-reads-d): the refusal card offers
@@ -120,7 +127,10 @@ export function serveActor(mockApi: MockApi, key: () => string | null, aliases?:
   mockApi.register('GET', '/api/session', () => {
     const k = key();
     const actor_email = k === null ? null : SESSION.actor_email;
-    return json<SessionResponse>({ ...SESSION, actor_cache_key: k, actor_cache_key_aliases: [], actor_email });
+    // No forwarded identity: the server derives no display name and, with no
+    // capability, no role label (display_name_for / role_labels_for).
+    const signedOut = k === null ? { actor_display_name: null, role_labels: [] } : {};
+    return json<SessionResponse>({ ...SESSION, ...signedOut, actor_cache_key: k, actor_cache_key_aliases: [], actor_email });
   });
   mockApi.register('GET', '/api/health', () => {
     const k = key();
