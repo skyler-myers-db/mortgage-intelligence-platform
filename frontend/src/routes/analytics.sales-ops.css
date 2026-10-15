@@ -53,3 +53,11 @@
 @media (forced-colors: active) {
   .sales-ops-period .segmented button.is-active { border-color: Highlight; }
 }
+/* The workload table's frame while its chunk loads (W5e critic-10 6c): about
+   the header, the note and three officer rows, so nothing below it moves. */
+.sales-ops-workload-pending {
+  display: block;
+  margin-block-start: var(--sp-4);
+  block-size: calc(var(--sp-16) * 3);
+  border-radius: var(--r-md);
+}

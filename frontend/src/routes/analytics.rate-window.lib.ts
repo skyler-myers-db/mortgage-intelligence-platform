@@ -103,8 +103,6 @@ export interface RateWindowModel {
   rate: { min: number; max: number; ticks: number[] };
   itm: { max: number; ticks: number[] };
   xTicks: RateWindowXTick[];
-  /** Accessible description of the chart image: every number the marks draw. */
-  ariaLabel: string;
 }
 
 /**
@@ -199,15 +197,6 @@ export function buildRateWindowModel(response: RateWindowResponse): RateWindowMo
   const spreadText = bps === null
     ? 'The fixed-rate book is empty, so there is no median note rate to compare against.'
     : spreadSentence(bps);
-  const ariaLabel = [
-    `${RATE_WINDOW_TITLE}.`,
-    `30-year fixed ${formatRatePct(current.marketPct)} in the week of ${current.week}` +
-      (bookMedianPct === null ? '.' : ` against a book median note rate of ${formatRatePct(bookMedianPct)}.`),
-    spreadText,
-    threshold ? `${threshold.label}.` : null,
-    itmSentence,
-  ].filter((part): part is string => part !== null).join(' ');
-
   return {
     points,
     current,
@@ -223,6 +212,5 @@ export function buildRateWindowModel(response: RateWindowResponse): RateWindowMo
     rate: { min: rateTicks[0], max: rateTicks[rateTicks.length - 1], ticks: rateTicks },
     itm: { max: itmTicks[itmTicks.length - 1], ticks: itmTicks },
     xTicks: buildXTicks(points),
-    ariaLabel,
   };
 }

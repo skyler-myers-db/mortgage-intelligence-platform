@@ -2,7 +2,8 @@
 // budget; the analytics route family opts out. Keep this section explicit.
 'use no memo';
 
-import { useId, useMemo, useState, type CSSProperties } from 'react';
+import { useId, useMemo, type CSSProperties } from 'react';
+import { ChartFrame } from '../components/charts/ChartFrame';
 import { EvidenceChip } from '../components/Primitives';
 import { api } from '../lib/api';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
@@ -53,6 +54,13 @@ export function useRateWindowQuery(enabled = true) {
  * `.rate-window` is an app-extension BEM block: the prototype has no time
  * series chart, so it composes prototype primitives (.surface, .btn,
  * .analytics-table) with the existing analytics chart chrome.
+ *
+ * On the chart kit (bundle-06 / stack-v3, W5e item 6): the two panels sit in
+ * one ChartFrame, whose figcaption carries the spread and in-the-money
+ * sentences, whose described group names the panels (they no longer carry
+ * their own role="img"), whose one "View as table" toggle swaps in the table
+ * twin, and whose notice is the as-of disclosure. The book band is fixed
+ * data ink (deviation:rate-window-band-ink, analytics.rate-window.css).
  */
 export function RateWindowSection({ filtersActive = false }: { filtersActive?: boolean }) {
   const query = useRateWindowQuery();
@@ -64,24 +72,20 @@ export function RateWindowSection({ filtersActive = false }: { filtersActive?: b
 }
 
 export function RateWindowPanel({ data, filtersActive = false }: { data: RateWindowResponse; filtersActive?: boolean }) {
-  const [showTable, setShowTable] = useState(false);
   const model = useMemo(() => buildRateWindowModel(data), [data]);
   const bookAsOf = data.book_as_of ? formatTimestamp(data.book_as_of) : null;
+  const asOf = (
+    <span data-testid="rate-window-asof">
+      Today&#39;s book{bookAsOf ? ` (as of ${bookAsOf})` : ''} against the historical rate: the band and the
+      in-the-money count are measured over the current fixed-rate book and applied to every week, not the book as
+      it stood that week. Fixed-rate first liens only, across every state and segment: the filters above do not
+      change this panel.
+    </span>
+  );
   return (
     <section className="surface analytics-section rate-window" data-testid="rate-window" aria-labelledby="rate-window-title">
       <div className="surface__hdr surface__hdr--split">
-        <div>
-          <h2 className="h-3" id="rate-window-title">{RATE_WINDOW_TITLE}</h2>
-          {model ? (
-            <p className="analytics-panel-note rate-window__summary" data-testid="rate-window-summary">
-              <strong>{model.spreadSentence}</strong> {model.itmSentence}
-            </p>
-          ) : (
-            <p className="analytics-panel-note rate-window__summary" data-testid="rate-window-summary">
-              No weeks in the rate window yet: the gold refresh job (mip_refresh_scores) builds it on its next run.
-            </p>
-          )}
-        </div>
+        <h2 className="h-3" id="rate-window-title">{RATE_WINDOW_TITLE}</h2>
         <div className="rate-window__actions">
           {filtersActive && (
             <span className="chip chip--warning" data-testid="rate-window-unfiltered">
@@ -89,26 +93,27 @@ export function RateWindowPanel({ data, filtersActive = false }: { data: RateWin
             </span>
           )}
           <EvidenceChip source={DRAWER_SOURCES.rateWindow}>Weekly rates + today&#39;s book</EvidenceChip>
-          {model && (
-            <button
-              type="button"
-              className="btn btn--sm"
-              data-testid="rate-window-view-toggle"
-              onClick={() => setShowTable((value) => !value)}
-            >
-              {showTable ? 'View as chart' : 'View as table'}
-            </button>
-          )}
         </div>
       </div>
       <div className="surface__body">
-        {model && (showTable ? <RateWindowTable model={model} /> : <RateWindowCharts model={model} />)}
-        <p className="muted fs-12 rate-window__asof" data-testid="rate-window-asof">
-          Today&#39;s book{bookAsOf ? ` (as of ${bookAsOf})` : ''} against the historical rate: the band and the
-          in-the-money count are measured over the current fixed-rate book and applied to every week, not the book as
-          it stood that week. Fixed-rate first liens only, across every state and segment: the filters above do not
-          change this panel.
-        </p>
+        {model ? (
+          <ChartFrame
+            title={RATE_WINDOW_TITLE}
+            summary={`${model.spreadSentence} ${model.itmSentence}`}
+            table={<RateWindowTable model={model} />}
+            notice={asOf}
+          >
+            <RateWindowCharts model={model} />
+          </ChartFrame>
+        ) : (
+          <>
+            {/* No weeks yet: nothing to frame, so the message stays outside it. */}
+            <p className="analytics-panel-note rate-window__summary" data-testid="rate-window-summary">
+              No weeks in the rate window yet: the gold refresh job (mip_refresh_scores) builds it on its next run.
+            </p>
+            <p className="muted fs-12">{asOf}</p>
+          </>
+        )}
       </div>
     </section>
   );
@@ -138,7 +143,7 @@ function RateWindowCharts({ model }: { model: RateWindowModel }) {
   const thresholdY = model.threshold ? rateY(model, model.threshold.ratePct) : null;
   const refLabelBelow = thresholdY !== null && thresholdY < REF_LABEL_MIN_Y_PCT;
   return (
-    <div className="rate-window__panels" role="img" aria-label={model.ariaLabel}>
+    <div className="rate-window__panels">
       <div className="rate-window__panel rate-window__panel--rates" data-testid="rate-window-rates">
         <p className="rate-window__panel-title">30-year fixed vs. the book&#39;s note rates</p>
         <div className="analytics-chart">

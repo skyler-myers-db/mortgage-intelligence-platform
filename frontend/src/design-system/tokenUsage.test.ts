@@ -109,6 +109,8 @@ describe('every referenced custom property resolves (css-04 / motion-04)', () =>
     '--bar-w', '--point-x', '--point-y',
     // The measured route nav on `.main` (useRouteNavDock; registered with @property, so never unset).
     '--route-nav-block',
+    // Analytics (W5e): a floored funnel mark's hatch fill and a scatter guide's position.
+    '--floor-fill', '--guide-pos',
   ];
   /** Read with a fallback on purpose: TSX sets them on some elements only. */
   const TSX_SET_WITH_FALLBACK = [

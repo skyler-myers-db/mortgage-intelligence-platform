@@ -69,6 +69,35 @@ def test_any_authenticated_role_reads_the_proof(
     assert audit.list(limit=100) == []
 
 
+@pytest.mark.parametrize(
+    ("kpi", "measure"),
+    [
+        ("analytics.addressable", "addressable_borrowers"),
+        ("analytics.in_the_money", "in_the_money_borrowers"),
+        ("analytics.primary_offer_paths", "offer_recommended_borrowers"),
+        ("analytics.approved", "approved_borrowers"),
+    ],
+)
+def test_the_executive_kpi_proofs_are_audit_free_fixed_text(
+    audit: InMemoryAuditStore,
+    no_sql: None,
+    kpi: str,
+    measure: str,
+) -> None:
+    # W5e w5-analytics item 8B: the Executive cards' reproduce SQL, the same
+    # private, no-store, audit-free route; no new route.
+    response = TestClient(app).get(f"/api/v1/kpi-proof?kpi={kpi}", headers=LOAN_OFFICER)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["kpi"] == kpi
+    assert body["measure_column"] == measure
+    assert body["params"] == []
+    assert "mip.gold.borrower_lifecycle_state" in body["relations"]
+    assert response.headers["cache-control"] == "private, no-store"
+    assert audit.list(limit=100) == []
+
+
 def test_the_compat_prefix_answers_too(no_sql: None) -> None:
     response = TestClient(app).get("/api/kpi-proof?kpi=funnel.population", headers=LOAN_OFFICER)
 

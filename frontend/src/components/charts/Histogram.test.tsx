@@ -11,7 +11,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HIGH_OPPORTUNITY_SCORE_LABEL } from '../../lib/opportunityScore';
 import type { ExecutiveAnalyticsResponse } from '../../types';
-import { ScoreDistribution } from '../../routes/analytics.sections';
+import { ScoreDistribution } from '../../routes/analytics.executive';
 import { Histogram, binIsPast, ruleLabelSide, type HistogramBin } from './Histogram';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

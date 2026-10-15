@@ -1,3 +1,35 @@
+/* The scatter's tip (deviation:scatter-guides-tooltip): the kit's
+   .analytics-chart__tip chrome inside the pointer-events:none markers layer,
+   painted above the markers. The guide labels name the governed In the Money
+   thresholds beside their dashed lines, in the data-guide ink (--text-3). */
+.analytics-scatter__tip { z-index: var(--z-raised-4); }
+/* The labels' layer spans exactly the plot, like the markers layer. */
+.analytics-scatter__guides {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 0;
+  block-size: var(--analytics-chart-h);
+  pointer-events: none;
+}
+.analytics-scatter__guide-label {
+  position: absolute;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.analytics-scatter__guide-label--equity {
+  inset-block-start: var(--sp-1);
+  inset-inline-start: var(--guide-pos);
+  transform: translateX(var(--sp-1));
+}
+.analytics-scatter__guide-label--spread {
+  inset-block-start: var(--guide-pos);
+  inset-inline-end: var(--sp-1);
+  transform: translateY(calc(-100% - var(--sp-1)));
+}
 .analytics-scatter__cluster {
   position: absolute;
   inset-inline-start: var(--dot-x);

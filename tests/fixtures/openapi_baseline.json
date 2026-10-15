@@ -12321,7 +12321,11 @@
               "home.high_opportunity",
               "home.primary_offer_paths",
               "funnel.population",
-              "funnel.high_opportunity"
+              "funnel.high_opportunity",
+              "analytics.addressable",
+              "analytics.in_the_money",
+              "analytics.primary_offer_paths",
+              "analytics.approved"
             ],
             "title": "Kpi",
             "type": "string"
@@ -17728,6 +17732,123 @@
           "lost_to_competitor"
         ],
         "title": "SalesTopCompetitorRow",
+        "type": "object"
+      },
+      "SalesWorkloadResponse": {
+        "description": "Every in-scope loan officer, for a period and the same span before it.",
+        "properties": {
+          "from_date": {
+            "title": "From Date",
+            "type": "string"
+          },
+          "previous_from_date": {
+            "title": "Previous From Date",
+            "type": "string"
+          },
+          "previous_to_date": {
+            "title": "Previous To Date",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/SalesWorkloadRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "stale_days": {
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Stale Days",
+            "type": "integer"
+          },
+          "to_date": {
+            "title": "To Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_date",
+          "to_date",
+          "previous_from_date",
+          "previous_to_date",
+          "stale_days",
+          "rows"
+        ],
+        "title": "SalesWorkloadResponse",
+        "type": "object"
+      },
+      "SalesWorkloadRow": {
+        "description": "One loan officer's load.",
+        "properties": {
+          "assigned_count": {
+            "minimum": 0.0,
+            "title": "Assigned Count",
+            "type": "integer"
+          },
+          "capacity_per_day": {
+            "maximum": 250.0,
+            "minimum": 0.0,
+            "title": "Capacity Per Day",
+            "type": "integer"
+          },
+          "display_label": {
+            "title": "Display Label",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "open_count": {
+            "minimum": 0.0,
+            "title": "Open Count",
+            "type": "integer"
+          },
+          "previous_assigned_count": {
+            "minimum": 0.0,
+            "title": "Previous Assigned Count",
+            "type": "integer"
+          },
+          "previous_worked_count": {
+            "minimum": 0.0,
+            "title": "Previous Worked Count",
+            "type": "integer"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "stale_count": {
+            "minimum": 0.0,
+            "title": "Stale Count",
+            "type": "integer"
+          },
+          "worked_count": {
+            "minimum": 0.0,
+            "title": "Worked Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "email",
+          "display_label",
+          "capacity_per_day",
+          "open_count",
+          "stale_count",
+          "assigned_count",
+          "worked_count",
+          "previous_assigned_count",
+          "previous_worked_count"
+        ],
+        "title": "SalesWorkloadRow",
         "type": "object"
       },
       "SavedDraft": {
@@ -25861,7 +25982,11 @@
                 "home.high_opportunity",
                 "home.primary_offer_paths",
                 "funnel.population",
-                "funnel.high_opportunity"
+                "funnel.high_opportunity",
+                "analytics.addressable",
+                "analytics.in_the_money",
+                "analytics.primary_offer_paths",
+                "analytics.approved"
               ],
               "title": "Kpi",
               "type": "string"
@@ -30449,6 +30574,72 @@
           }
         },
         "summary": "Sales Team",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/sales/workload": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_sales_workload_sales_workload",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "From",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "To",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stale_days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "maximum": 30,
+              "minimum": 1,
+              "title": "Stale Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesWorkloadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sales Workload",
         "tags": [
           "sales"
         ]
@@ -37071,7 +37262,11 @@
                 "home.high_opportunity",
                 "home.primary_offer_paths",
                 "funnel.population",
-                "funnel.high_opportunity"
+                "funnel.high_opportunity",
+                "analytics.addressable",
+                "analytics.in_the_money",
+                "analytics.primary_offer_paths",
+                "analytics.approved"
               ],
               "title": "Kpi",
               "type": "string"
@@ -41617,6 +41812,71 @@
           }
         },
         "summary": "Sales Team",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/sales/workload": {
+      "get": {
+        "operationId": "get_api_v1_sales_workload_sales_workload",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "From",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "To",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stale_days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "maximum": 30,
+              "minimum": 1,
+              "title": "Stale Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesWorkloadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sales Workload",
         "tags": [
           "sales"
         ]

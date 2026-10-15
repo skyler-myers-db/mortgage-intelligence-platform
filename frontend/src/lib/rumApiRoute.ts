@@ -53,6 +53,8 @@ export const API_ROUTE_SEGMENTS = [
   'zip-rollups',
   // Follow-ups tray and its snooze (D-shell-deviations-a, wow-power-3).
   'followups', 'snooze',
+  // The Sales ops per-officer workload (W5e w5-analytics, critic-10 6c).
+  'workload',
 ] as const;
 
 const KNOWN_SEGMENTS: ReadonlySet<string> = new Set(API_ROUTE_SEGMENTS);

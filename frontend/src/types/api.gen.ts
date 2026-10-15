@@ -1753,7 +1753,7 @@ export interface ResponseSchemas {
   /** The statement behind one KPI card and how to read its number. */
   KpiProofResponse: {
     databricks_sql_url: string | null;
-    kpi: "home.addressable_population" | "home.in_the_money" | "home.high_opportunity" | "home.primary_offer_paths" | "funnel.population" | "funnel.high_opportunity";
+    kpi: "home.addressable_population" | "home.in_the_money" | "home.high_opportunity" | "home.primary_offer_paths" | "funnel.population" | "funnel.high_opportunity" | "analytics.addressable" | "analytics.in_the_money" | "analytics.primary_offer_paths" | "analytics.approved";
     measure_column: string;
     note: string;
     params: ResponseSchemas['KpiProofParam'][];
@@ -2454,6 +2454,28 @@ export interface ResponseSchemas {
   SalesTopCompetitorRow: {
     competitor_lender_label: string;
     lost_to_competitor: number;
+  };
+  /** Every in-scope loan officer, for a period and the same span before it. */
+  SalesWorkloadResponse: {
+    from_date: string;
+    previous_from_date: string;
+    previous_to_date: string;
+    rows: ResponseSchemas['SalesWorkloadRow'][];
+    stale_days: number;
+    to_date: string;
+  };
+  /** One loan officer's load. */
+  SalesWorkloadRow: {
+    assigned_count: number;
+    capacity_per_day: number;
+    display_label: string;
+    email: string;
+    open_count: number;
+    previous_assigned_count: number;
+    previous_worked_count: number;
+    region: string | null;
+    stale_count: number;
+    worked_count: number;
   };
   SavedDraft: {
     body: string;
@@ -4061,7 +4083,7 @@ export interface ApiOperations {
   "GET /api/v1/kpi-proof": {
     pathParams: Record<string, never>;
     query: {
-      kpi: "home.addressable_population" | "home.in_the_money" | "home.high_opportunity" | "home.primary_offer_paths" | "funnel.population" | "funnel.high_opportunity";
+      kpi: "home.addressable_population" | "home.in_the_money" | "home.high_opportunity" | "home.primary_offer_paths" | "funnel.population" | "funnel.high_opportunity" | "analytics.addressable" | "analytics.in_the_money" | "analytics.primary_offer_paths" | "analytics.approved";
     };
     headers: Record<string, never>;
     body: never;
@@ -4472,6 +4494,17 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['SalesTeamMember'][];
+  };
+  "GET /api/v1/sales/workload": {
+    pathParams: Record<string, never>;
+    query: {
+      from: string;
+      to: string;
+      stale_days?: number;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['SalesWorkloadResponse'];
   };
   "GET /api/v1/segments": {
     pathParams: Record<string, never>;

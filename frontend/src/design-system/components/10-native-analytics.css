@@ -86,6 +86,13 @@
   translate: calc(var(--bar-pct, 0%) - 100%) 0;
   transition: translate var(--dur-base) var(--ease-standard);
 }
+/* A floored bar (D-dataviz-geo-a, deviation:funnel-floored-marks): drawn
+   at the minimum length, so it is outlined in the data ink instead of
+   filled, and the panel note says so. */
+.analytics-bars__fill--floored {
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 1px var(--accent-data);
+}
 .analytics-bars__value {
   justify-self: end;
   color: var(--text-1);
@@ -123,6 +130,22 @@
   fill: var(--accent-data);
   transition: fill var(--dur-fast) var(--ease);
 }
+/* Floored stages and the ribbons into them (D-dataviz-geo-a,
+   deviation:funnel-floored-marks): drawn at the minimum thickness, so they
+   paint a hatch pattern (--floor-fill, set per chart by analytics.charts.tsx)
+   instead of the solid data ink. Author CSS beats the SVG fill attribute. */
+.funnel-sankey__bar--floored { fill: var(--floor-fill); }
+.funnel-sankey__ribbon--floored { fill: var(--floor-fill); }
+.funnel-sankey__hatch-bg { fill: color-mix(in oklab, var(--accent-data) 30%, var(--bg-2)); }
+.funnel-sankey__hatch-line {
+  stroke: var(--accent-data);
+  stroke-width: 2;
+}
+.funnel-sankey__hatch-bg--ribbon { fill: color-mix(in oklab, var(--accent-data) 14%, var(--bg-2)); }
+.funnel-sankey__hatch-line--ribbon {
+  stroke-opacity: 0.45;
+  stroke-width: 1.5;
+}
 .funnel-sankey__count {
   fill: var(--text-1);
   font-family: var(--font-mono);
@@ -150,6 +173,9 @@
 .funnel-sankey__node:focus-visible .funnel-sankey__bar {
   fill: color-mix(in oklab, var(--accent-data) 80%, var(--text-1));
 }
+/* A floored stage keeps its hatch on hover and focus (the focus stroke
+   below still marks focus). */
+.funnel-sankey__node:is(:hover, :focus-visible) .funnel-sankey__bar--floored { fill: var(--floor-fill); }
 .funnel-sankey__node:hover .funnel-sankey__label,
 .funnel-sankey__node:focus-visible .funnel-sankey__label {
   fill: var(--accent-ink);
@@ -181,6 +207,24 @@
   .funnel-sankey--enter .funnel-sankey__ribbon {
     opacity: 1;
     animation: none;
+  }
+}
+/* Forced colours keep the floored encoding: a dashed CanvasText edge on the
+   stage, a Canvas / CanvasText hatch and a dashed outline on the bar. */
+@media (forced-colors: active) {
+  .funnel-sankey__bar--floored.funnel-sankey__bar--floored {
+    forced-color-adjust: none;
+    stroke: CanvasText;
+    stroke-dasharray: 3 2;
+  }
+  .funnel-sankey__hatch-bg,
+  .funnel-sankey__hatch-line { forced-color-adjust: none; }
+  .funnel-sankey__hatch-bg { fill: Canvas; }
+  .funnel-sankey__hatch-line { stroke: CanvasText; }
+  .analytics-bars__fill--floored.analytics-bars__fill--floored {
+    forced-color-adjust: none;
+    background: Canvas;
+    border: 1px dashed CanvasText;
   }
 }
 .analytics-chart-panel--scatter {
@@ -343,7 +387,7 @@
   border-bottom: 1px solid var(--line-2);
 }
 .analytics-scatter__guide {
-  stroke: var(--line-1);
+  stroke: var(--text-3);
   stroke-dasharray: 2 3;
 }
 .analytics-scatter__points {

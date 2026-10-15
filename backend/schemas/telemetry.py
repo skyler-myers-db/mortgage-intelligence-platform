@@ -171,6 +171,8 @@ RUM_API_ROUTE_SEGMENTS = frozenset({
     "zip-rollups",
     # Follow-ups tray and its snooze (D-shell-deviations-a, wow-power-3).
     "followups", "snooze",
+    # The Sales ops per-officer workload (W5e w5-analytics, critic-10 6c).
+    "workload",
 })
 RUM_API_ROUTE_ID_SEGMENT = ":id"
 

@@ -19,7 +19,10 @@
  *      the server refuses as started shows the client copy, not the server's;
  *  (f) the custom range at the keyboard: an ArrowUp or a typed year stays a
  *      draft (focus kept, URL untouched, Custom kept), an unreadable draft
- *      shows its inline error, and Enter applies a readable one in place.
+ *      shows its inline error, and Enter applies a readable one in place;
+ *      a preset pressed over a dirty draft writes one history entry, keeps
+ *      focus on the preset and never applies the draft (W5e C11; the WebKit
+ *      twin is sales-period-preset.webkit.fixture.spec.ts).
  *
  * Every write is registered per test (mockApi.register); the default
  * registry is unchanged.
@@ -47,6 +50,7 @@ import {
 import { json, type FixtureReply, type MockApi } from './mockApi';
 import { centerPixel, contrastRatio, renderedColors, type Rgb } from './renderedColor';
 import { FIXTURE_THEMES } from './routes';
+import { expectPresetPressOverDirtyDraft } from './salesPeriodPreset';
 import { expect, test } from './test';
 import { expectNoAuditedReadSince, expectNoSurfaceOverflow } from './visual';
 
@@ -116,6 +120,27 @@ test.describe('(a) the sales manager view', () => {
     await expect(conversion.locator('.split-row').nth(0)).toContainText(LOAN_OFFICERS[0].display_label);
     await expect(conversion.locator('.split-row').nth(1)).toHaveText(`${LOAN_OFFICERS[1].display_label}0 calls`);
     await expect(conversion.locator('[title]')).toHaveCount(0);
+
+    // W5e (critic-10 6b): the team row states its change against the
+    // previous 30 days, from the cohort reads.
+    const team = page.getByTestId('sales-team-comparison');
+    await expect(team.locator('.kpi')).toHaveCount(4);
+    await expect(team.locator('.kpi__delta').first()).toContainText('vs previous 30 days');
+    // W5e (critic-10 6c): the workload lists every in-scope officer, sorts by
+    // a numeric header with aria-sort, links each officer into the Lead
+    // Queue's assigned_to filter and never shows an email.
+    const workload = page.getByTestId('sales-workload');
+    await expect(workload.locator('tbody tr')).toHaveCount(LOAN_OFFICERS.length);
+    // A sortable header is named by its button (LeadTableHead's pattern).
+    await expect(workload.getByRole('columnheader', { name: 'Sort by Open', exact: true })).toHaveAttribute('aria-sort', 'descending');
+    const stale = workload.getByRole('columnheader', { name: 'Sort by Stale', exact: true });
+    await stale.getByRole('button').click();
+    await expect(stale).toHaveAttribute('aria-sort', 'descending');
+    await expect(workload.getByRole('columnheader', { name: 'Sort by Open', exact: true })).toHaveAttribute('aria-sort', 'none');
+    const first = workload.locator('tbody tr').first().locator('a');
+    await expect(first).toHaveAttribute('href', /^\/lead-queue\?assigned_to=[^&]+%40summit\.example$/);
+    await expect(workload).not.toContainText('@summit.example');
+    await expect(workload.locator('[title]')).toHaveCount(0);
 
     await openBoard(page);
     await app.settle();
@@ -391,5 +416,9 @@ test.describe('(f) the custom range at the keyboard (Chromium fires change per k
     await expect(from).toBeFocused();
     await expect(period.locator('.field__error')).toHaveCount(0);
     await expect(page.locator('.sales-ops-card .eyebrow').filter({ hasText: 'Conversion Jul 2 to Jul 10' })).toBeVisible();
+  });
+
+  test('a preset pressed over a dirty draft writes one history entry and keeps focus on the preset', async ({ app, page }) => {
+    await expectPresetPressOverDirtyDraft(app, page);
   });
 });

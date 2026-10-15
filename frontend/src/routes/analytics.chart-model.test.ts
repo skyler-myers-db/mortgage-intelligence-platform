@@ -72,7 +72,7 @@ describe('summaries', () => {
   it('counts the spread screen only when it sits on a bin edge', () => {
     const aligned = histogramModel(SPREAD, SPREAD_BUCKET_BPS, 75);
     expect(spreadSummary(aligned, { min_spread_bps: 75, reason: null })).toBe(
-      '1,000 borrowers plotted between -100 and 400 bps; most common 0–24 bps. 80 (8.0%) sit at or past the 75 bps refi screen.',
+      '1,000 borrowers plotted between -100 and 400 bps; most common 0–24 bps. 80 (8.0%) sit at or past the 75 bps In the Money spread threshold.',
     );
     const straddled = histogramModel(SPREAD, SPREAD_BUCKET_BPS, 60);
     expect(spreadSummary(straddled, { min_spread_bps: 60, reason: null })).toBe(

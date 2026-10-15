@@ -10,8 +10,8 @@ import {
   type ReactNode,
 } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Icon } from '../components/Icon';
-import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
+import { AsyncStatus } from '../components/ui/AsyncState';
+import { Tooltip } from '../components/ui/Tooltip';
 import { type UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
 import { useFirstAppearance } from '../lib/useFirstAppearance';
 import { CountChart } from '../components/charts/CountChart';
@@ -25,6 +25,7 @@ import {
   categoricalTickIndexes,
   funnelStageDisplayLabel,
   formatConversionPct,
+  formatShareOfAddressable,
   formatShortDate,
   leadQueueHrefForFunnelStage,
   pct,
@@ -33,19 +34,36 @@ import {
 } from './analytics.lib';
 import { AnalyticsSkeleton, ANALYTICS_SKELETONS, type AnalyticsSkeletonShape } from './analytics.skeleton';
 
+/**
+ * An Analytics panel's four states (2026-09-21 audit states-04, states-03,
+ * states-v2). Data keeps its stable-refresh region; a first load reserves the
+ * loaded shape; warming and failure render the shared AsyncStatus vocabulary
+ * (the calm bannered status under a DegradedBanner, whose recovery refetches
+ * these reads; never the transport message); `empty` shows only for a
+ * settled, measured zero, never on the previous filters' placeholder rows.
+ */
 export function LoadState<T>({
   query,
   title,
   skeleton = ANALYTICS_SKELETONS.panel,
+  isEmpty,
+  empty = null,
   children,
 }: {
   query: UseWarmingUpRetryResult<T>;
+  /** The panel's name, sentence case; also the failure's subject. */
   title: string;
   /** The loaded view's shape, reserved while it loads (analytics.skeleton.tsx). */
   skeleton?: AnalyticsSkeletonShape;
+  /** True for a payload with nothing in it. */
+  isEmpty?: (data: T) => boolean;
+  empty?: ReactNode;
   children: (data: T) => ReactNode;
 }) {
   if (query.data) {
+    if (isEmpty?.(query.data) && !query.isPlaceholderData && query.error === null && query.warmingUp === null) {
+      return <>{empty}</>;
+    }
     const updating = query.isFetching || Boolean(query.warmingUp);
     return (
       <div
@@ -61,28 +79,16 @@ export function LoadState<T>({
       </div>
     );
   }
-  if (query.warmingUp) {
-    return <WarmingUpBlock state={query.warmingUp} title={title} compact />;
-  }
-  if (query.error) {
-    return (
-      <div className="surface surface--danger">
-        <div className="surface__hdr surface__hdr--split">
-          <div className="surface__hdr-main">
-            <div className="surface__icon"><Icon name="info" size={14} /></div>
-            <h2 className="h-3">{title}</h2>
-          </div>
-          <button type="button" className="btn btn--sm" onClick={query.manualRetry}>
-            Retry
-          </button>
-        </div>
-        <div className="surface__body body">
-          {query.error.message || 'Analytics are unavailable.'}
-        </div>
-      </div>
-    );
-  }
-  return <AnalyticsSkeleton title={title} shape={skeleton} />;
+  const status = <AsyncStatus query={query} subject={title} compact />;
+  // A failure: AsyncFailure's copy and its one Retry.
+  if (query.error) return status;
+  // Warming: the block (it steps aside under the banner), the slot kept.
+  return (
+    <>
+      {query.warmingUp ? status : null}
+      <AnalyticsSkeleton title={title} shape={skeleton} reserve={Boolean(query.warmingUp)} />
+    </>
+  );
 }
 
 export function SectionHeader({ title, action }: { title: string; action?: ReactNode }) {
@@ -94,18 +100,25 @@ export function SectionHeader({ title, action }: { title: string; action?: React
   );
 }
 
-export function ScopeChip({ children, title }: { children: ReactNode; title?: string }) {
-  return (
-    <span className="chip chip--neutral analytics-scope-chip" title={title}>
+/**
+ * A panel's scope chip. Its optional `detail` (for example the source table)
+ * is the design-system Tooltip, never a DOM title (critic-08).
+ */
+export function ScopeChip({ children, detail }: { children: ReactNode; detail?: string }) {
+  const chip = (
+    <span className="chip chip--neutral analytics-scope-chip">
       <span className="chip__label">{children}</span>
     </span>
   );
+  return detail ? <Tooltip content={detail}>{chip}</Tooltip> : chip;
 }
 
 /**
  * A non-zero bar shorter than this share of the largest draws at it, so it
  * stays visible; a zero draws no fill (dataviz-03, 2026-09-21 audit). The
  * scale stays linear, and Bars says "not to scale" whenever it floors one.
+ * Linear, final (D-dataviz-geo-a, ruled 2026-09-30): a floored bar is drawn
+ * outlined, not filled, and says it is not to scale (deviation:funnel-floored-marks).
  */
 export const BAR_FLOOR_PCT = 2;
 
@@ -125,20 +138,25 @@ export function Bars<T>({
   const max = Math.max(1, ...rows.map(value));
   if (rows.length === 0) return <div className="analytics-empty">No rows returned.</div>;
   const barPct = (rowValue: number) => (rowValue > 0 ? Math.max(BAR_FLOOR_PCT, pct(rowValue, max)) : 0);
+  // Floored: a non-zero bar drawn longer than its linear share.
+  const floored = (rowValue: number) => barPct(rowValue) > pct(rowValue, max);
   const bars = (
     <div className="analytics-bars">
       {rows.map((row) => {
         const rowValue = value(row);
+        const isFloored = floored(rowValue);
         const node = (
           <>
             <span className="analytics-bars__label">{label(row)}</span>
             <span className="analytics-bars__track" aria-hidden="true">
               <span
-                className="analytics-bars__fill"
+                className={isFloored ? 'analytics-bars__fill analytics-bars__fill--floored' : 'analytics-bars__fill'}
+                data-to-scale={isFloored ? 'false' : undefined}
                 style={{ '--bar-pct': `${barPct(rowValue)}%` } as CSSProperties}
               />
             </span>
             <span className="analytics-bars__value num">{formatCompact(rowValue)}</span>
+            {isFloored && <span className="sr-only">, drawn at minimum length, not to scale</span>}
             {sublabel && <span className="analytics-bars__sub">{sublabel(row)}</span>}
           </>
         );
@@ -155,12 +173,11 @@ export function Bars<T>({
       })}
     </div>
   );
-  // Floored: some non-zero bar is drawn longer than its linear share.
-  return rows.some((row) => barPct(value(row)) > pct(value(row), max)) ? (
+  return rows.some((row) => floored(value(row))) ? (
     <>
       {bars}
       <p className="analytics-panel-note" data-testid="bars-scale-note">
-        Not to scale: bars under {BAR_FLOOR_PCT}% of the largest are drawn at a minimum length. The printed values are exact.
+        {`Not to scale: outlined bars are under ${BAR_FLOOR_PCT}% of the largest and are drawn at a minimum length. The printed values are exact.`}
       </p>
     </>
   ) : bars;
@@ -179,7 +196,7 @@ export function FunnelBars({ stages, leadParams = {} }: { stages: FunnelStage[];
 
 /**
  * FunnelSankey (re-audit Buyer-Wow #5) — the value story at a glance: the
- * activation stages (addressable, refi economics, high-opportunity, approved,
+ * activation stages (addressable, In the Money, high-opportunity, approved,
  * actioned) rendered as connected ribbons. Pure client-side SVG over the SAME
  * FunnelStage[] the Pipeline Metrics bars use — no new data, fully
  * deterministic. Each stage is a keyboard-focusable link to its slice of
@@ -195,11 +212,10 @@ export function FunnelBars({ stages, leadParams = {} }: { stages: FunnelStage[];
  * minimum visible thickness on the unchanged linear scale, and the chart
  * says "not to scale" whenever it does that.
  *
- * Scale (dataviz-03, integrator decision, wave 4b): the LINEAR scale is kept
- * on purpose. Equal-height stage columns on a disclosed sqrt/log share scale
- * await the owner (report section 10, item 10), and the visual-08 verifier
- * holds that a sqrt funnel misstates the proportions it draws. The Pipeline
- * Metrics Bars keep the same linear scale with their own not-to-scale floor.
+ * Scale (dataviz-03, ruled 2026-09-30): linear, final. A sqrt or log scale
+ * would draw sizes that contradict the printed shares; floored stages and
+ * their ribbons are hatched and say so. See report 12.4 #7.
+ * deviation:funnel-floored-marks (the hatch and the outlined bars).
  */
 export function FunnelSankey({
   stages,
@@ -225,6 +241,8 @@ export function FunnelSankey({
     );
   }
 
+  // A ribbon INTO a floored stage is drawn at that stage's minimum thickness.
+  const clampedOrders = new Set(model.nodes.filter((node) => node.clamped).map((node) => node.stageOrder));
   const go = (node: (typeof model.nodes)[number]) =>
     navigate(leadQueueHrefForFunnelStage({ stage: node.stage, stage_order: node.stageOrder }, leadParams));
   const onKey = (node: (typeof model.nodes)[number]) => (e: ReactKeyboardEvent<SVGGElement>) => {
@@ -242,7 +260,7 @@ export function FunnelSankey({
       aria-label={
         'Activation funnel — each stage is its share of the addressable population, not a conversion '
         + 'from the stage before it; only Approved to Actioned is nested. Each stage links to its '
-        + `borrowers in the lead queue.${model.notToScale ? ' Ribbon thickness is not to scale for the smaller stages.' : ''}`
+        + `borrowers in the lead queue.${model.notToScale ? ' Hatched stages and the ribbons into them are not to scale.' : ''}`
       }
       preserveAspectRatio="xMidYMid meet"
     >
@@ -251,23 +269,41 @@ export function FunnelSankey({
           <stop offset="0%" stopColor="var(--accent-data)" stopOpacity="0.5" />
           <stop offset="100%" stopColor="var(--seg-itm)" stopOpacity="0.28" />
         </linearGradient>
+        {/* The hatch for a floored stage and the ribbon into it; colours
+            come from the classes only (10-native-analytics.css). */}
+        <pattern id={`fs-floor-${gradientId}`} patternUnits="userSpaceOnUse" width={5} height={5} patternTransform="rotate(45)">
+          <rect className="funnel-sankey__hatch-bg" width={5} height={5} />
+          <line className="funnel-sankey__hatch-line" x1={0} y1={0} x2={0} y2={5} />
+        </pattern>
+        <pattern id={`fs-ribbon-floor-${gradientId}`} patternUnits="userSpaceOnUse" width={5} height={5} patternTransform="rotate(45)">
+          <rect className="funnel-sankey__hatch-bg funnel-sankey__hatch-bg--ribbon" width={5} height={5} />
+          <line className="funnel-sankey__hatch-line funnel-sankey__hatch-line--ribbon" x1={0} y1={0} x2={0} y2={5} />
+        </pattern>
       </defs>
-      {model.ribbons.map((ribbon, index) => (
-        <path
-          key={`${ribbon.fromOrder}-${ribbon.toOrder}`}
-          className="funnel-sankey__ribbon"
-          d={ribbon.path}
-          fill={`url(#fs-${gradientId})`}
-          style={{ '--ribbon-i': index } as CSSProperties}
-        />
-      ))}
+      {model.ribbons.map((ribbon, index) => {
+        const into = clampedOrders.has(ribbon.toOrder);
+        return (
+          <path
+            key={`${ribbon.fromOrder}-${ribbon.toOrder}`}
+            className={into ? 'funnel-sankey__ribbon funnel-sankey__ribbon--floored' : 'funnel-sankey__ribbon'}
+            d={ribbon.path}
+            fill={`url(#fs-${gradientId})`}
+            data-to-scale={into ? 'false' : undefined}
+            style={{
+              '--ribbon-i': index,
+              ...(into ? { '--floor-fill': `url(#fs-ribbon-floor-${gradientId})` } : {}),
+            } as CSSProperties}
+          />
+        );
+      })}
       {model.nodes.map((node) => {
         const stageLabel = funnelStageDisplayLabel({ stage: node.stage, stage_order: node.stageOrder });
         // Two kinds of ratio, never confused: every stage's share of the
         // addressable superset, and a conversion ONLY where the model says
         // SQL nests the stage inside a parent (Approved → Actioned).
-        const sharePct = formatConversionPct(node.shareOfAddressable);
-        const share = sharePct ? `${sharePct} of addressable` : null;
+        const share = node.shareOfAddressable === null
+          ? null
+          : formatShareOfAddressable(node.count, model.addressableCount);
         const convPct = node.nestedIn ? formatConversionPct(node.conversion) : null;
         const conv = convPct && node.nestedIn
           ? `${convPct} of ${funnelStageDisplayLabel(node.nestedIn).toLowerCase()}`
@@ -280,12 +316,14 @@ export function FunnelSankey({
             className="funnel-sankey__node"
             role="link"
             tabIndex={0}
-            aria-label={`${stageLabel}: ${[`${formatCount(node.count)} borrowers`, ...lines].join(', ')}. Open in lead queue.`}
+            aria-label={`${stageLabel}: ${[`${formatCount(node.count)} borrowers`, ...lines].join(', ')}${node.clamped ? ' (drawn at minimum size, not to scale)' : ''}. Open in lead queue.`}
             onClick={() => go(node)}
             onKeyDown={onKey(node)}
           >
             <rect
-              className="funnel-sankey__bar"
+              className={node.clamped ? 'funnel-sankey__bar funnel-sankey__bar--floored' : 'funnel-sankey__bar'}
+              data-to-scale={node.clamped ? 'false' : undefined}
+              style={node.clamped ? ({ '--floor-fill': `url(#fs-floor-${gradientId})` } as CSSProperties) : undefined}
               x={node.xCenter - 8}
               y={node.yTop}
               width={16}
@@ -326,8 +364,8 @@ export function FunnelSankey({
       {chart}
       {model.notToScale && (
         <p className="analytics-panel-note" data-testid="funnel-sankey-scale-note">
-          Not to scale: stages too small to see in proportion are drawn at a minimum ribbon thickness.
-          The printed counts and shares of addressable are exact.
+          Not to scale: hatched stages are too small to draw in proportion and are shown at a minimum
+          thickness. The printed counts and shares of addressable are exact.
         </p>
       )}
     </>

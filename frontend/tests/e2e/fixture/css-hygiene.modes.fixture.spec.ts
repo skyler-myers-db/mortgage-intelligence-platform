@@ -190,6 +190,21 @@ test.describe('forced colors (css-06 / a11y-10 / responsive-v3)', () => {
         });
         expect(styles).toEqual(['solid', 'dashed', 'dotted']);
       });
+
+      // W5e w5-analytics (D-dataviz-geo-a): a floored funnel stage keeps its
+      // not-to-scale cue once forced, and a floored bar keeps its outline.
+      test('a floored Sankey stage strokes CanvasText with a dash, and a floored bar is outlined', async ({ app, page }) => {
+        await app.gotoRoute('/analytics');
+        const bar = page.locator('#main-content .funnel-sankey__bar--floored').first();
+        await expect(bar).toBeAttached();
+        const canvasText = await asComputedRgb(page, 'CanvasText');
+        const stage = await bar.evaluate((el) => ({ stroke: getComputedStyle(el).stroke, dash: getComputedStyle(el).strokeDasharray }));
+        expect(stage.stroke).toBe(canvasText);
+        expect(stage.dash).not.toBe('none');
+        const fill = page.locator('#main-content .analytics-bars__fill--floored').first();
+        const edge = await fill.evaluate((el) => ({ style: getComputedStyle(el).borderTopStyle, color: getComputedStyle(el).borderTopColor }));
+        expect(edge).toEqual({ style: 'dashed', color: canvasText });
+      });
     });
   }
 });

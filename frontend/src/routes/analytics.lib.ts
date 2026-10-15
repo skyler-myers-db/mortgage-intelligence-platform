@@ -12,6 +12,7 @@ import type {
   TopBorrowerAnalyticsRow,
 } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
+import { segmentName } from '../lib/segmentMetadata';
 import { fixedAttr } from '../lib/fixedPrecision';
 import { formatCompact, formatCount, formatPercent } from '../lib/formatters';
 import { formatDate } from '../lib/time';
@@ -37,15 +38,15 @@ export function parseAnalyticsTab(value: string | null | undefined): AnalyticsTa
   return TABS.some((tab) => tab.id === value) ? (value as AnalyticsTab) : 'executive';
 }
 
-export const SEGMENT_FILTERS = [
+/** The filterable segments, in menu order; their labels are the governed names. */
+const SEGMENT_FILTER_CODES = ['itm', 'equity', 'investor', 'retention', 'listed', 'permit'] as const satisfies readonly SegmentCode[];
+
+// Labels come from lib/segmentMetadata (critic-11 / D-platform-process-g):
+// a segment rename lands here with no literal to chase.
+export const SEGMENT_FILTERS: ReadonlyArray<readonly [string, SegmentCode | null]> = [
   ['All segments', null],
-  ['Prime Refi Candidates', 'itm'],
-  ['Home Equity Candidate', 'equity'],
-  ['Investor / Multi-Property', 'investor'],
-  ['Retention Risk', 'retention'],
-  ['Listed for Sale', 'listed'],
-  ['HELOC Intent', 'permit'],
-] as const satisfies ReadonlyArray<readonly [string, SegmentCode | null]>;
+  ...SEGMENT_FILTER_CODES.map((code) => [segmentName(code), code] as const),
+];
 export const SEGMENT_CODE_TO_OPTION = Object.fromEntries(
   SEGMENT_FILTERS.filter(([, value]) => value !== null).map(([label, value]) => [value, label]),
 ) as Record<SegmentCode, string>;
@@ -151,7 +152,6 @@ export function leadQueueHrefForFunnelStage(
   const byLabel: Record<string, LeadFunnelStage> = {
     addressable: 'addressable',
     'in the money': 'in_the_money',
-    'refi economics': 'in_the_money',
     'high opportunity': 'high_opportunity',
     [HIGH_OPPORTUNITY_KPI_LABEL.toLowerCase()]: 'high_opportunity',
     'top-tier score': 'high_opportunity',
@@ -167,7 +167,7 @@ export function leadQueueHrefForFunnelStage(
 export function funnelStageDisplayLabel(row: Pick<FunnelStage, 'stage' | 'stage_order'>): string {
   const byOrder: Record<number, string> = {
     1: 'Addressable',
-    2: 'Refi economics',
+    2: 'In the Money',
     3: HIGH_OPPORTUNITY_KPI_LABEL,
     4: 'Primary offer selected',
     5: 'Approved',
@@ -374,7 +374,7 @@ export function analyticsHref(params: Record<string, RouteParamValue>): string {
 // over the population; every other stage is an independent SUM(CASE ...) over
 // those same rows (sql/transformations/gold_funnel_snapshot_daily.sql, and
 // DatabricksAnalyticsRepository._LIVE_FUNNEL_SQL for the filtered path). A
-// high-opportunity borrower need not pass the refi-economics screen and an
+// high-opportunity borrower need not be In the Money and an
 // approved borrower need not be high-opportunity, so "stage / previous stage"
 // is a ratio of unrelated counts, not a conversion. Addressable is the one
 // guaranteed superset, so every stage is labelled with its share of THAT.
@@ -434,6 +434,11 @@ export interface SankeyModel {
    * than one that says "not to scale".
    */
   notToScale: boolean;
+  /**
+   * The Addressable stage's count (the superset every share is of), or null
+   * when the stages carry no Addressable row (and in the empty model).
+   */
+  addressableCount: number | null;
 }
 
 // `minNodeHeight` (2026-09-21 audit, dataviz-03): at real magnitudes (5.16M,
@@ -443,6 +448,9 @@ export interface SankeyModel {
 // non-empty stage simply never draws thinner than this, with `notToScale`
 // disclosing it. An EMPTY stage keeps the thin `emptyNodeHeight` sliver: a
 // visible ribbon into a stage with zero borrowers would imply a flow.
+// Linear, final (2026-09-30): sqrt/log misstate proportions at live
+// magnitudes (sqrt draws 135K at 16% of addressable against a printed 2.6%,
+// log10 at 76%); floored marks disclose themselves (report 12.4 #7).
 export const SANKEY_VIEW = {
   width: 1000,
   height: 240,
@@ -459,7 +467,14 @@ export function buildFunnelSankeyModel(
 ): SankeyModel {
   const ordered = [...stages].sort((a, b) => a.stage_order - b.stage_order);
   const { width, height, padX, padY, nodeWidth, minNodeHeight, emptyNodeHeight } = view;
-  const empty: SankeyModel = { viewWidth: width, viewHeight: height, nodes: [], ribbons: [], notToScale: false };
+  const empty: SankeyModel = {
+    viewWidth: width,
+    viewHeight: height,
+    nodes: [],
+    ribbons: [],
+    notToScale: false,
+    addressableCount: null,
+  };
   if (ordered.length === 0) return empty;
 
   const maxCount = Math.max(...ordered.map((s) => Math.max(0, s.borrower_count)), 1);
@@ -526,6 +541,7 @@ export function buildFunnelSankeyModel(
     nodes,
     ribbons,
     notToScale: nodes.some((node) => node.clamped),
+    addressableCount: addressable,
   };
 }
 
@@ -544,4 +560,23 @@ export function formatConversionPct(conversion: number | null): string | null {
   // never mislabelled as a flatline. A true zero stage still shows "0.0%".
   if (pct > 0 && pct < 0.05) return '<0.1%';
   return pct >= 10 ? `${Math.round(pct)}%` : formatPercent(conversion, 1);
+}
+
+/**
+ * A stage's share of Addressable as a label (D-dataviz-geo-a, 2026-09-30;
+ * deviation:funnel-floored-marks):
+ * "2.6% of addressable" down to 0.1%, and below that "1 in 1,186
+ * addressable", since "<0.1%" hid the difference between 4,350 and 3
+ * borrowers in 5.16M. N is rounded from the two integers, never from the
+ * rounded share. Null (no label) when Addressable is missing, empty or not
+ * finite, or when the stage is larger than Addressable, which a subset can
+ * never be: a label there would report a data problem as a share.
+ */
+export function formatShareOfAddressable(count: number, addressable: number | null): string | null {
+  if (addressable === null || !Number.isFinite(addressable) || addressable <= 0) return null;
+  const share = count / addressable;
+  if (!Number.isFinite(share) || share < 0 || share > 1.0001) return null;
+  if (share === 0 || share >= 0.001) return `${formatConversionPct(share)} of addressable`;
+  const n = Math.round(addressable / count);
+  return `1 in ${n < 10_000 ? formatCount(n) : formatCompact(n)} addressable`;
 }

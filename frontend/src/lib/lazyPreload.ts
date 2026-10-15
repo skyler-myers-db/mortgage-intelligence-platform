@@ -81,10 +81,12 @@ export function lazyWithPreload<T extends ComponentType<unknown>>(
     return lazyImpl;
   };
 
+  // Props pass through, so a lazy view can take its data from its caller
+  // (the Analytics tab views; a route takes none).
   const Component: PreloadableComponent<T> = Object.assign(
-    function Preloadable() {
+    function Preloadable(props: object) {
       const [Impl] = useState(currentImpl);
-      return createElement(Impl);
+      return createElement(Impl, props);
     },
     { preload: load },
   );

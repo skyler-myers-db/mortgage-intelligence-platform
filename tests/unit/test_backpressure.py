@@ -450,3 +450,20 @@ def test_the_plan_progress_poll_has_its_own_lakebase_read_scope(path: str) -> No
     # The audited execute it polls beside stays a Lakebase mutation.
     execute = controller.classify("POST", path.replace("progress", "execute"))
     assert execute is not None and execute.scope == "mutation"
+
+
+# --- W5e w5-analytics (critic-10 6c): the Sales ops per-officer workload -------
+
+
+@pytest.mark.parametrize("path", ["/api/sales/workload", "/api/v1/sales/workload"])
+def test_the_sales_workload_is_a_lakebase_read_before_the_warehouse_prefix(path: str) -> None:
+    # One Lakebase read (roster, assignments, dispositions): the default read
+    # bucket and a Lakebase slot, never the '/api/sales' warehouse budget.
+    budget = BackpressureController().classify("GET", path)
+
+    assert budget is not None
+    assert (budget.scope, budget.dependency) == ("lakebase-read", "lakebase")
+    assert budget.requests_per_minute == settings.mip_rate_limit_default_per_minute
+    # Non-vacuity: the neighbouring conversion read keeps the prefix's warehouse class.
+    conversion = BackpressureController().classify("GET", path.replace("workload", "conversion"))
+    assert conversion is not None and conversion.dependency == "warehouse"

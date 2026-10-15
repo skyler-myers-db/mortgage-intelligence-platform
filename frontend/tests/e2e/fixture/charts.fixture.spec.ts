@@ -372,12 +372,12 @@ test.describe('analytics charts: governed histograms', () => {
     const ruleBox = await rule.boundingBox();
     if (!ruleBox) throw new Error('rule not painted');
     expect(Math.abs(ruleBox.x + ruleBox.width / 2 - (await tickCentre(figure, '100')))).toBeLessThanOrEqual(1);
-    await expect(figure.locator('.chart-hist__rule-label')).toHaveText('Refi screen ≥ 100 bps');
+    await expect(figure.locator('.chart-hist__rule-label')).toHaveText('In the Money spread ≥ 100 bps');
     const past = await figure.locator('rect.chart-hist__bar').evaluateAll((bars) => bars.map((bar) => bar.classList.contains('chart-hist__bar--past')));
     expect(past).toEqual(SPREAD_BUCKETS.map(([start]) => start >= 100));
     const pastCount = SPREAD_BUCKETS.filter(([start]) => start >= 100).reduce((total, [, n]) => total + n, 0);
     await expect(figure.locator('figcaption')).toContainText(`${count(pastCount)} (`);
-    await expect(figure.locator('figcaption')).toContainText('at or past the 100 bps refi screen');
+    await expect(figure.locator('figcaption')).toContainText('at or past the 100 bps In the Money spread threshold');
   });
 
   for (const [name, thresholds, notice] of [
@@ -543,6 +543,57 @@ test.describe('analytics charts: data ink (dataviz-09 / visual-08 item 3)', () =
       await app.gotoRoute('/analytics?view=signals');
       const line = figureOf(page, 'Evidence Events Per Day').locator('polyline');
       expect(await inkContrast(line, 'stroke'), 'evidence polyline').toBeGreaterThanOrEqual(3);
+    });
+  }
+});
+
+test.describe('analytics charts: floored marks (D-dataviz-geo-a)', () => {
+  /** The computed paint of an element's `property`. */
+  const paint = (target: Locator, property: 'fill' | 'stroke' | 'box-shadow') =>
+    target.evaluate((el, prop) => getComputedStyle(el).getPropertyValue(prop), property);
+
+  for (const theme of ['dark', 'light'] as const) {
+    test(`executive (${theme}): a floored stage paints its hatch at rest, hovered and keyboard-focused; floored bars are outlined`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/analytics');
+      const sankey = page.locator('#main-content svg.funnel-sankey');
+      await expect(sankey).toBeVisible();
+      const nodes = sankey.locator('.funnel-sankey__node');
+      const flooredNode = nodes.filter({ has: page.locator('.funnel-sankey__bar--floored') }).first();
+      const flooredBar = flooredNode.locator('.funnel-sankey__bar--floored');
+      await expect(flooredBar).toHaveAttribute('data-to-scale', 'false');
+      expect(await paint(flooredBar, 'fill'), 'at rest').toMatch(/^url\("?#fs-floor-/);
+      // A ribbon into a floored stage paints the ribbon hatch.
+      const flooredRibbon = sankey.locator('.funnel-sankey__ribbon--floored').first();
+      expect(await paint(flooredRibbon, 'fill')).toMatch(/^url\("?#fs-ribbon-floor-/);
+      // The hatch itself is visible ink: a non-transparent ground and a stroked line.
+      const hatchBg = sankey.locator('pattern[id^="fs-floor-"] .funnel-sankey__hatch-bg');
+      const hatchLine = sankey.locator('pattern[id^="fs-floor-"] .funnel-sankey__hatch-line');
+      for (const ink of [await paint(hatchBg, 'fill'), await paint(hatchLine, 'stroke')]) {
+        expect(ink).not.toMatch(/^(none|transparent|rgba\(0, 0, 0, 0\))$/);
+      }
+      const box = await flooredBar.boundingBox();
+      expect(box?.height ?? 0, 'drawn at the visible minimum').toBeGreaterThan(4);
+      // Hovered: the hatch stays (the unfloored hover ink does not replace it).
+      await flooredNode.hover();
+      expect(await paint(flooredBar, 'fill'), 'hovered').toMatch(/^url\(/);
+      // Keyboard-focused: Tab onto it from the stage before it; the focus ring
+      // strokes it and the hatch stays.
+      const index = await flooredNode.evaluate((node) => [...(node.parentElement?.querySelectorAll('.funnel-sankey__node') ?? [])].indexOf(node));
+      expect(index).toBeGreaterThan(0);
+      await page.mouse.move(0, 0);
+      await nodes.nth(index - 1).focus();
+      await page.keyboard.press('Tab');
+      await expect(flooredNode).toBeFocused();
+      expect(await flooredNode.evaluate((node) => node.matches(':focus-visible'))).toBe(true);
+      expect(await paint(flooredBar, 'fill'), 'keyboard-focused').toMatch(/^url\(/);
+      expect(await paint(flooredBar, 'stroke')).not.toBe('none');
+      // The Pipeline Metrics bars: a floored bar is outlined in the data ink, not filled.
+      const flooredFill = page.locator('#main-content .analytics-bars__fill--floored').first();
+      await expect(flooredFill).toHaveAttribute('data-to-scale', 'false');
+      expect(await paint(flooredFill, 'box-shadow')).toContain('inset');
+      await expect(page.getByTestId('bars-scale-note').first()).toContainText('outlined bars are under');
+      await expectAxeClean(page, { key: { route: 'analytics-executive', state: 'floored marks' }, theme, known: {}, include: '#main-content' });
     });
   }
 });

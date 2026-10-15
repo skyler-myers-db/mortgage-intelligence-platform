@@ -247,6 +247,12 @@ class BackpressureController:
             # Lakebase ledger read, never a warehouse call, so it must not
             # spend the expensive warehouse budget '/api/borrowers' gets below.
             return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
+        if method.upper() == "GET" and path == "/api/sales/workload":
+            # The per-officer workload (critic-10 6c, W5e w5-analytics): one
+            # Lakebase read of the roster, assignments and dispositions,
+            # never the warehouse, so it takes the default read bucket and a
+            # Lakebase slot instead of the '/api/sales' warehouse prefix below.
+            return RouteBudget("lakebase-read", settings.mip_rate_limit_default_per_minute, "lakebase")
         if self._BORROWER_ID_RE.match(path):
             return RouteBudget("borrower-dossier", settings.mip_rate_limit_expensive_per_minute, "warehouse")
         if method.upper() == "GET" and path.startswith("/api/assets/"):

@@ -46,7 +46,7 @@ test.describe('Executive activation funnel', () => {
     await expect(nodes).not.toHaveCount(0);
     // Every stage but Addressable itself states its share of addressable.
     await expect(shares).toHaveCount((await nodes.count()) - 1);
-    for (const text of await shares.allTextContents()) expect(text).toMatch(/^\d+(\.\d+)?% of addressable$/);
+    for (const text of await shares.allTextContents()) expect(text).toMatch(/^(\d+(\.\d+)?% of addressable|1 in [\d,.]+[KMB]? addressable)$/);
     // One nested pair, and it is the only conversion on the chart.
     await expect(conversions).toHaveCount(1);
     await expect(conversions).toHaveText(/^\d+(\.\d+)?% of approved$/);

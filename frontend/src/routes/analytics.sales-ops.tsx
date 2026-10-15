@@ -6,6 +6,8 @@ import { lazy, Suspense, useEffect, useId, useState, type ReactNode } from 'reac
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router';
 import { api } from '../lib/api';
+import { fetchSalesWorkload } from '../lib/apiClients/salesWorkload';
+import { preloadIntentProps } from '../lib/preloadIntent';
 import { queryKeys } from '../lib/queryKeys';
 import { loanOfficersOnly, useSalesRoster } from '../lib/salesRoster';
 import { Chip, SurfaceTitle } from '../components/Primitives';
@@ -23,10 +25,12 @@ import {
   normalizedParams,
   paramsForPeriod,
   periodEyebrow,
+  previousWindow,
   resolveSalesPeriod,
   type SalesPeriod,
   type SalesPeriodPreset,
 } from './analytics.sales-ops.period';
+import { SalesTeamComparison, teamTotals, type TeamTotals } from './analytics.sales-ops.team';
 import './analytics.sales-ops.css';
 
 /**
@@ -50,8 +54,12 @@ import './analytics.sales-ops.css';
 const DistributionBoard = lazy(() => import('../components/mortgage/DistributionBoard'));
 // Field and its stylesheet load only when a manager picks Custom.
 const SalesPeriodRange = lazy(() => import('../components/mortgage/SalesPeriodRange'));
+// The per-officer workload (critic-10 6c): its own chunk; the tab owns its read.
+const SalesWorkloadTable = lazy(() => import('../components/mortgage/SalesWorkloadTable'));
 /** GET /sales/conversion returns at most this many groups (its LIMIT 100). */
 const CONVERSION_ROW_CAP = 100;
+/** An officer the roster does not list: never the raw email. */
+const OFF_ROSTER_LABEL = 'Loan officer not on the current roster';
 
 function relativeIsoDate(days: number): string {
   const date = new Date();
@@ -95,6 +103,21 @@ function SalesPeriodControl({ period, onChange }: {
             type="button"
             className={preset.value === period.preset ? 'is-active' : undefined}
             aria-pressed={preset.value === period.preset}
+            // A preset chosen while a custom draft is dirty applies the
+            // preset only (one history entry). The press takes focus itself:
+            // WebKit never focuses a pressed button, so its native press
+            // blurred the date field with no relatedTarget and applied the
+            // draft first; preventDefault alone left focus in the field,
+            // which unmounts with Custom, dropping it to <body>. Focusing the
+            // preset here gives the field's blur the preset as relatedTarget
+            // (SalesPeriodRange skips the apply) and leaves focus on the
+            // pressed preset in every engine. A keyboard move onto a preset
+            // is not "leaving the range" either (SalesPeriodRange).
+            data-period-preset=""
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.currentTarget.focus();
+            }}
             onClick={() => onChange(preset.value, preset.value === 'custom' ? { from: period.from, to: period.to } : undefined)}
           >
             {preset.label}
@@ -148,17 +171,36 @@ export function SalesOpsSection() {
     outcomes: SalesOutcomeSummaryResponse | null;
     /** The outcome read's own failure, kept apart: it degrades one card only. */
     outcomesError: unknown;
+    /** The team totals for the period and the same span before it (critic-10 6b); null when that read failed. */
+    team: { current: TeamTotals | null; previous: TeamTotals | null };
   }>({
     queryKey: [...queryKeys.salesOps(), 'period', period.from, period.to],
     queryFn: async ({ signal }) => {
+      const previous = previousWindow(period);
+      // The cohort reads run beside the per-officer one; a failure there
+      // degrades the team row only (an em-dash, never a zero).
+      const teamResult = Promise.all([
+        api.salesConversion(period.from, period.to, 'cohort', signal),
+        api.salesConversion(previous.from, previous.to, 'cohort', signal),
+      ])
+        .then(([current, before]) => ({ current: teamTotals(current), previous: teamTotals(before) }))
+        .catch(() => ({ current: null, previous: null }));
       const conversion = await api.salesConversion(period.from, period.to, 'lo', signal);
       const outcomeResult = await api.salesOutcomeSummary(period.from, period.to, signal)
         .then((data) => ({ data, error: null as unknown }))
         .catch((error: unknown) => ({ data: null, error }));
-      return { period, conversion, outcomes: outcomeResult.data, outcomesError: outcomeResult.error };
+      return { period, conversion, outcomes: outcomeResult.data, outcomesError: outcomeResult.error, team: await teamResult };
     },
     placeholderData: keepPreviousData,
     staleTime: 30_000,
+  });
+  // The per-officer workload (critic-10 6c): read here so the GET starts with
+  // the tab, beside the table's chunk download rather than after it.
+  const workloadQuery = useQuery({
+    queryKey: queryKeys.salesWorkload(period.from, period.to),
+    queryFn: ({ signal }) => fetchSalesWorkload(period.from, period.to, signal),
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   });
 
   const salesTeam = salesTeamQuery.data ?? [];
@@ -202,14 +244,16 @@ export function SalesOpsSection() {
   const canDistribute = snapshotQuery.isSuccess && salesTeam.length > 0;
   // Conversion rows are grouped by LO EMAIL (`group_by: 'lo'`), which is an
   // internal identifier -- the queue shows every other LO reference as
-  // "Summit LO 01". Resolve through the roster the same page already loads,
-  // and fall back to the raw key when the roster has no entry (a manager or a
-  // deactivated LO can still own dispositions) so a name is never invented.
+  // "Summit LO 01". Resolve through the roster the same page already loads;
+  // an officer the roster does not list (a manager or a deactivated LO can
+  // still own dispositions) reads as the fixed label below, so the raw email
+  // never reaches the DOM as text, a title or an accessible name, and no
+  // name is invented (W5e C1, lexicon item 19b).
   const loanOfficerLabel = (groupKey: string): string => {
     const match = salesTeam.find(
       (member) => member.email.toLowerCase() === groupKey.trim().toLowerCase(),
     );
-    return match?.display_label ?? groupKey;
+    return match?.display_label ?? OFF_ROSTER_LABEL;
   };
   // Every in-scope loan officer (critic-10 6e): conversion() groups call
   // dispositions, so an officer with no calls in the period has no row. The
@@ -255,6 +299,12 @@ export function SalesOpsSection() {
       </div>
       <div className="surface__body">
         <SalesPeriodControl period={period} onChange={choosePeriod} />
+        <SalesTeamComparison
+          current={periodQuery.data?.team.current ?? null}
+          previous={periodQuery.data?.team.previous ?? null}
+          days={shownPeriod.days}
+          loading={periodLoading}
+        />
         {salesTeamError && (
           <div role="alert" className="status-callout status-callout--warning mb-3">
             Sales team unavailable: <ErrorBody error={salesTeamError} subject="the sales team" />
@@ -279,7 +329,12 @@ export function SalesOpsSection() {
                 Open stale queue
               </Link>
               {staleLeads.slice(0, 2).map((lead) => (
-                <Link key={lead.borrower_id} className="chip chip--neutral chip--compact" to={`/borrower-360/${lead.borrower_id}`}>
+                <Link
+                  key={lead.borrower_id}
+                  className="chip chip--neutral chip--compact"
+                  to={`/borrower-360/${lead.borrower_id}`}
+                  {...preloadIntentProps(`/borrower-360/${lead.borrower_id}`)}
+                >
                   {lead.borrower_id} · {lead.age_days}d
                 </Link>
               ))}
@@ -384,6 +439,16 @@ export function SalesOpsSection() {
             ) : null}
           </div>
         </div>
+        {/* deviation:sales-manager-comparison-workload: every in-scope officer's
+            load, its own audit-free Lakebase read; the fallback reserves the
+            table's height while its chunk loads. */}
+        <Suspense fallback={<div className="sales-ops-workload-pending skeleton" aria-hidden="true" />}>
+          <SalesWorkloadTable
+            workload={workloadQuery}
+            days={period.days}
+            conversion={periodQuery.isPlaceholderData ? null : (conversion?.rows ?? null)}
+          />
+        </Suspense>
       </div>
       {boardOpen && (
         <Suspense fallback={null}>
