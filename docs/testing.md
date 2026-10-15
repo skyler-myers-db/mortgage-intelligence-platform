@@ -313,7 +313,7 @@ Every stylesheet sits in a cascade layer (2026-09-21 audit css-05 / stack-v3 / b
 - `print`: each colocated sheet's `@media print` blocks, in place.
 - `reset`: reserved, empty.
 
-`frontend/src/test/cssLayerMap.ts` is the map both guards read: `INITIAL_COMPONENT_SHEETS`, `ROUTES_EXCEPTIONS` (a lazy sheet kept in components, with the reason), `COMPONENTS_BLOCKS` (a routes sheet that keeps one rule in an in-place `@layer components { }` block because a more specific initial rule, or a `:root` print override, must keep beating it) and `PENDING_INTEGRATOR_WRAP` (sheets another lane edits in the same wave, wrapped by the integrator at the merge).
+`frontend/src/test/cssLayerMap.json` is the map both guards read (the unit test through `cssLayerMap.ts`, the fixture spec with `node:fs`, since fixture files may only `import type` from `frontend/src`): `INITIAL_COMPONENT_SHEETS`, `ROUTES_EXCEPTIONS` (a lazy sheet kept in components, with the reason), `COMPONENTS_BLOCKS` (a routes sheet that keeps one rule in an in-place `@layer components { }` block because a more specific initial rule, or a `:root` print override, must keep beating it) and `PENDING_INTEGRATOR_WRAP` (sheets another lane edits in the same wave, wrapped by the integrator at the merge).
 
 **`@font-face` and `@property`.** Both stay outside any layer: fonts.css is imported unlayered, and a colocated sheet closes its layer block around an `@property` registration. A partial imported with `layer(components)` may register one inside the layer (01-app-shell.css's `--route-nav-block` / `--nav-clear`); the cross-engine spec proves Chromium and WebKit still register it.
 

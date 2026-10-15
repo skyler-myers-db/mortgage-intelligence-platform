@@ -20,12 +20,23 @@
 import fs from 'node:fs';
 import type { Locator, Page } from '@playwright/test';
 import type { GenieAnswer } from '../../../src/types';
-import { LAYER_MANIFEST, PENDING_INTEGRATOR_WRAP } from '../../../src/test/cssLayerMap';
 import { PRIMARY_BORROWER } from './data/borrowers';
 import { GENIE_QUESTION, genieAnswerFixture, registerGenieTurn } from './data/genieTurn';
 import { FIXTURE_ROUTES, FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
+
+/**
+ * src/test/cssLayerMap.json, the map cssLayers.test.ts reads too. Read with
+ * node:fs: fixture files may only `import type` from frontend/src.
+ */
+interface CssLayerMap {
+  manifest: string[];
+  pendingIntegratorWrap: string[];
+}
+const LAYER_MAP = JSON.parse(fs.readFileSync(`${process.cwd()}/src/test/cssLayerMap.json`, 'utf8')) as CssLayerMap;
+const LAYER_MANIFEST = LAYER_MAP.manifest;
+const PENDING_INTEGRATOR_WRAP = LAYER_MAP.pendingIntegratorWrap;
 
 /** A selector in a comparable shape: no whitespace, quotes or pseudo-element double colon. */
 const normalizeSelector = (selector: string): string =>
@@ -163,7 +174,7 @@ for (const theme of FIXTURE_THEMES) {
       if (PENDING_INTEGRATOR_WRAP.length > 0) {
         test.info().annotations.push({
           type: 'integrator-follow-up',
-          description: `${exempt} unlayered rules exempted as declared by PENDING_INTEGRATOR_WRAP sheets (src/test/cssLayerMap.ts); none once the integrator wraps them`,
+          description: `${exempt} unlayered rules exempted as declared by PENDING_INTEGRATOR_WRAP sheets (src/test/cssLayerMap.json); none once the integrator wraps them`,
         });
       } else expect(exempt).toBe(0);
     });
