@@ -58,7 +58,11 @@ ROSTER_ACTING_LIVE_TESTS: tuple[str, ...] = (
 )
 
 _ADDRESS_RE = re.compile(r"[A-Za-z0-9._%+{}$-]*@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
-_ACTOR_NAME_RE = re.compile(r"ACTOR|ADMIN|OPERATOR", re.IGNORECASE)
+# Names an acting identity: an actor, admin, operator or approver variable,
+# keyword or dict key, an assigner, or the edge identity header.
+_ACTOR_SLOT_RE = re.compile(
+    r"actor|admin|operator|approver|assigned_by|forwarded[-_]email", re.IGNORECASE
+)
 
 
 def _scanned_files() -> list[Path]:
@@ -124,17 +128,52 @@ def test_the_detector_sees_a_planted_address(line: str, expected: int) -> None:
     assert len(_real_domain_hits("tests/unit/planted.py", line)) == expected
 
 
-def _module_level_identity_constants(tree: ast.Module) -> list[str]:
-    names: list[str] = []
-    for node in tree.body:
-        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Constant):
-            continue
-        if not isinstance(node.value.value, str) or not _ADDRESS_RE.fullmatch(node.value.value):
-            continue
-        for target in node.targets:
-            if isinstance(target, ast.Name) and _ACTOR_NAME_RE.search(target.id):
-                names.append(target.id)
-    return names
+def _is_address_literal(node: ast.AST | None) -> bool:
+    return (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and _ADDRESS_RE.fullmatch(node.value) is not None
+    )
+
+
+def _slot_name(target: ast.expr) -> str | None:
+    if isinstance(target, ast.Name):
+        return target.id
+    if isinstance(target, ast.Attribute):
+        return target.attr
+    return None
+
+
+def _actor_identity_literals(tree: ast.AST) -> list[str]:
+    """Every address literal bound to an actor slot, at any depth.
+
+    A slot is an assignment target (module, function or attribute), a
+    keyword argument or a string dict key whose name matches
+    ``_ACTOR_SLOT_RE``. An f-string (a per-run synthetic actor) and an
+    address in another slot (an assignee such as ``assigned_to_email``)
+    are not actor identities.
+    """
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign | ast.AnnAssign) and _is_address_literal(node.value):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                name = _slot_name(target)
+                if name and _ACTOR_SLOT_RE.search(name):
+                    found.append(f"{node.lineno}: {name}")
+        elif isinstance(node, ast.keyword) and node.arg and _ACTOR_SLOT_RE.search(node.arg):
+            if _is_address_literal(node.value):
+                found.append(f"{node.value.lineno}: {node.arg}=")
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values, strict=True):
+                if (
+                    isinstance(key, ast.Constant)
+                    and isinstance(key.value, str)
+                    and _ACTOR_SLOT_RE.search(key.value)
+                    and _is_address_literal(value)
+                ):
+                    found.append(f"{key.lineno}: {key.value!r}")
+    return found
 
 
 def _live_test_files() -> list[Path]:
@@ -147,11 +186,11 @@ def test_live_tests_name_no_actor_identity() -> None:
     offenders: list[str] = []
     for path in [*files, ROOT / "tests" / "integration" / "test_approve_stress.py"]:
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        for name in _module_level_identity_constants(tree):
-            offenders.append(f"{path.relative_to(ROOT).as_posix()}: {name}")
+        for slot in _actor_identity_literals(tree):
+            offenders.append(f"{path.relative_to(ROOT).as_posix()}:{slot}")
     assert not offenders, (
         "live tests must resolve their actor via tests/integration/_live_actor.py, "
-        "never a module-level identity constant:\n" + "\n".join(offenders)
+        "never an identity literal in an actor slot:\n" + "\n".join(offenders)
     )
 
 
@@ -162,6 +201,26 @@ def test_roster_acting_live_tests_resolve_their_actor(rel: str) -> None:
     assert "resolve_live_admin_actor(" in text.split("import resolve_live_admin_actor", 1)[1]
 
 
-def test_the_constant_detector_sees_a_planted_actor() -> None:
-    planted = ast.parse('_ADMIN_ACTOR = "someone@summit.example"\n_SEEDED_LO_01 = "5555"\n')
-    assert _module_level_identity_constants(planted) == ["_ADMIN_ACTOR"]
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ('_ADMIN_ACTOR = "someone@summit.example"\n', ["1: _ADMIN_ACTOR"]),
+        ('_SEEDED_LO_01 = "5555"\n', []),
+        # Inline, inside a test function (the W5e fix-round gap).
+        ('def test_x():\n    admin_actor = "someone@summit.example"\n', ["2: admin_actor"]),
+        ('def test_x():\n    self.actor: str = "someone@summit.example"\n', ["2: actor"]),
+        ('def test_x(c):\n    c.approve(actor="someone@summit.example")\n', ["2: actor="]),
+        ('def test_x(c):\n    c.assign(assigned_by="someone@summit.example")\n', ["2: assigned_by="]),
+        (
+            'def test_x(c):\n    c.get("/", headers={"X-Forwarded-Email": "someone@summit.example"})\n',
+            ["2: 'X-Forwarded-Email'"],
+        ),
+        ('def test_x(c):\n    c.run({"actor": "someone@summit.example"})\n', ["2: 'actor'"]),
+        # Not actor identities: a per-run synthetic f-string, an assignee, a resolved actor.
+        ('def test_x():\n    actor = f"integration+{uuid4().hex}@summit.example"\n', []),
+        ('def test_x(c):\n    c.run({"assigned_to_email": "lo01@summit.example"})\n', []),
+        ("def test_x(c):\n    admin_actor = resolve_live_admin_actor(c)\n", []),
+    ],
+)
+def test_the_actor_slot_detector_sees_a_planted_actor(source: str, expected: list[str]) -> None:
+    assert _actor_identity_literals(ast.parse(source)) == expected

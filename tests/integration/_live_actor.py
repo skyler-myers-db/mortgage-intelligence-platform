@@ -3,9 +3,9 @@
 W5e NB-a / integrator correction C8. Live tests act against the roster
 that ``lakebase/seed_campaigns.sql`` seeds on the target Lakebase, and
 that deployed sample roster is not this repository's to rename from a
-test. So a live test never carries an identity literal
-(``tests/unit/test_synthetic_test_identities.py`` pins that for every
-``*_live.py`` file): it resolves its actor at test start instead.
+test. So a live test never binds an identity literal to an actor slot
+(``tests/unit/test_synthetic_test_identities.py`` pins that, at any depth,
+for every ``*_live.py`` file): it resolves its actor at test start instead.
 
 Resolution order:
 
