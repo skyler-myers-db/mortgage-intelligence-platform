@@ -22,8 +22,6 @@ vi.mock('../../lib/prefetch', async (importOriginal) => ({
 
 import { GenieCellLink } from './GenieCellLink';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const BORROWER_HREF = '/borrower-360/B-0000000000001';
 
 describe('GenieCellLink', () => {
