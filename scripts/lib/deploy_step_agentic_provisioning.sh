@@ -275,6 +275,23 @@ if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]]; then
       ;;
   esac
 fi
+# >>> install-scope-probe
+# W5e C7(c): the CI staging install (a non-empty install suffix) proves,
+# read-only, that its proxy and verifier hold no access on an object it does
+# not own BEFORE the first workspace-global compensation is armed. A refusal
+# exits 2 through the EXIT trap with AGENT_PROXY_ACCESS_MUTATED and
+# VERIFIER_GATEWAY_CUTOVER_MUTATED still 0, so no deny-all can run. The live
+# install (empty suffix) never runs this step.
+if [[ -n "${BUNDLE_VAR_install_suffix:-}" ]]; then
+  step "prove read-only that the CI install's proxy and verifier revokes stay inside this install"
+  run "$PYTHON" -m tools.databricks.install_scope check-proxy \
+    --application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+    --supervisor-endpoint "${MIP_AGENT_SUPERVISOR_ENDPOINT:-dry-run-supervisor-endpoint}" \
+    "${AGENT_PROXY_ACCESS_PRESERVE_ARGS[@]}"
+  run "$PYTHON" -m tools.databricks.install_scope check-warehouse \
+    --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+    --warehouse-id "$_GRANTS_WAREHOUSE_ID"
+fi
 if [[ -n "${_EXISTING_APP_ID:-}" && "$APP_UPGRADE_STATE" == "first_install" ]]; then
   step "stop the exact unsigned rebase App before legacy proxy ACL migration"
   run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
@@ -291,6 +308,7 @@ run converge_agent_proxy_boundary \
   "${MIP_AGENT_SUPERVISOR_ENDPOINT:-dry-run-supervisor-endpoint}" \
   "${MIP_AGENT_SUPERVISOR_ENDPOINT_ID:-dry-run-supervisor-endpoint-id}" \
   "${AGENT_PROXY_ACCESS_PRESERVE_ARGS[@]}"
+# <<< install-scope-probe
 step "provision the credential-versioned Supervisor proxy secret reference"
 run_with_agent_proxy_credentials \
   "$PYTHON" -m tools.databricks.provision_agent_proxy_secret \

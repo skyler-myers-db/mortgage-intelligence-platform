@@ -274,9 +274,11 @@ def grant_and_audit_agent_proxy_access(
     if missing:
         raise RuntimeError("reviewed Supervisor Agent is absent from global inventory")
     if not audit_only and active_install_suffix():
-        # The CI staging install: refuse (exit 2, nothing changed) before the
-        # first convergence if the proxy holds access outside this install's
+        # The CI staging install: refuse (exit 2) before this command's first
+        # convergence if the proxy holds access outside this install's
         # reviewed endpoints, which the obsolete-endpoint revoke would remove.
+        # A backstop: deploy.sh runs the same read-only check (install_scope
+        # check-proxy) before it arms the proxy compensation.
         assert_endpoint_revokes_owned(workspace, reviewed=reviewed_endpoints, application_id=proxy_id)
     _converge_supervisor_agent_acls(
         workspace,
@@ -487,7 +489,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--deployment-source-git-sha", required=True)
     parser.add_argument("--runtime-application-id")
     parser.add_argument("--expected-inventory-principal", required=True)
+    parser.add_argument("--install-owned-endpoint", action="append", default=[])
     args = parser.parse_args(argv)
+    if args.install_owned_endpoint and args.mode != "deny-all":
+        parser.error("--install-owned-endpoint is valid only with deny-all")
     workspace = WorkspaceClient()
     assert_single_writer = _deployment_lease_assertion(
         workspace,
@@ -499,6 +504,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode == "deny-all":
         if args.legacy_pinned_supervisor_endpoint:
             parser.error("--legacy-pinned-supervisor-endpoint is invalid with deny-all")
+        if active_install_suffix():
+            # The CI staging install (W5e C7c): deny-all revokes the proxy on
+            # every endpoint, Supervisor and Genie space, so refuse (exit 2,
+            # before any revoke) unless the proxy holds no endpoint access
+            # outside this install's own Supervisor endpoints.
+            owned = {str(name).strip() for name in args.install_owned_endpoint} - {""}
+            assert_endpoint_revokes_owned(workspace, reviewed=owned, application_id=args.application_id.strip())
         revoke_and_audit_agent_proxy_access(
             workspace,
             app_name=args.app_name,

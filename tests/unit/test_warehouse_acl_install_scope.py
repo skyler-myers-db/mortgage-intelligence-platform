@@ -5,7 +5,10 @@ tools/databricks/install_scope.py: with a non-empty install suffix
 CAN_USE convergence and the agent-proxy endpoint convergence refuse, with
 exit 2 and NO mutation, when the identity holds access on an object this
 install does not own. With an empty suffix (the live install, every operator
-deploy) both behave exactly as before. Refusals print counts only.
+deploy) both behave exactly as before. Refusals print counts only. The
+read-only ``check-proxy`` / ``check-warehouse`` probes deploy.sh runs before
+arming its compensations, and the guarded deny-all, are pinned here too; the
+deploy-layer ordering is pinned in test_install_scope_deploy_trap.py.
 """
 
 from __future__ import annotations
@@ -204,3 +207,94 @@ def test_the_live_proxy_convergence_is_unchanged(monkeypatch: pytest.MonkeyPatch
 
     _grant(_proxy_workspace())
     assert calls == ["supervisor", "genie", "endpoints"]
+
+
+# ------------------------------------- the read-only probes deploy.sh runs first
+
+
+def _probe(argv: list[str], workspace: SimpleNamespace) -> int:
+    return install_scope.main(argv, client_factory=lambda: workspace)
+
+
+def test_the_probes_skip_without_a_suffix_and_never_build_a_client(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.delenv(install_scope.INSTALL_SUFFIX_ENV, raising=False)
+
+    def no_client() -> SimpleNamespace:
+        raise AssertionError("the live install never reaches the workspace")
+
+    assert install_scope.main(["check-proxy", "--application-id", "p", "--supervisor-endpoint", "e"], client_factory=no_client) == 0
+    assert install_scope.main(["check-warehouse", "--application-id", "v", "--warehouse-id", "w"], client_factory=no_client) == 0
+    assert capsys.readouterr().out.count("skipped") == 2
+
+
+def test_check_proxy_refuses_outside_the_reviewed_set_and_accepts_the_converge_preserve_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(install_scope.INSTALL_SUFFIX_ENV, "_ci")
+    shared = _proxy_workspace()
+
+    with pytest.raises(InstallScopeRefusal) as refusal:
+        _probe(["check-proxy", "--application-id", "proxy-client", "--supervisor-endpoint", "ci-endpoint"], shared)
+    assert refusal.value.code == 2
+
+    preserve = [
+        "--preserve-supervisor-id", "blue-agent",
+        "--preserve-supervisor-endpoint", "live-endpoint",
+        "--preserve-supervisor-endpoint-id", "live-endpoint-id",
+        "--legacy-pinned-supervisor-endpoint", "live-endpoint",
+    ]
+    argv = ["check-proxy", "--application-id", "proxy-client", "--supervisor-endpoint", "ci-endpoint", *preserve]
+    assert _probe(argv, shared) == 0, "a preserved endpoint is reviewed, exactly as in the convergence"
+
+
+def test_check_warehouse_refuses_a_live_warehouse_with_no_mutation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(install_scope.INSTALL_SUFFIX_ENV, "_ci")
+    argv = ["check-warehouse", "--application-id", "verifier", "--warehouse-id", "wh-ci"]
+
+    shared = _client(_acl("verifier", "live-app"))
+    with pytest.raises(InstallScopeRefusal):
+        _probe(argv, shared)
+    assert shared.warehouses.mutations == []
+    assert _probe(argv, _client(_acl("live-app"))) == 0
+    with pytest.raises(InstallScopeRefusal):
+        _probe(["check-warehouse", "--application-id", "verifier", "--warehouse-id", "wh-missing"], _client(_acl()))
+
+
+def _deny_all(monkeypatch: pytest.MonkeyPatch, workspace: SimpleNamespace, owned: list[str], revoked: list[str]) -> list[str]:
+    monkeypatch.setattr(agent_proxy_access, "WorkspaceClient", lambda: workspace)
+    monkeypatch.setattr(agent_proxy_access, "_deployment_lease_assertion", lambda *_a, **_k: lambda: None)
+    monkeypatch.setattr(agent_proxy_access, "stopped_deployment_app_assertion", lambda _w: lambda: None)
+    monkeypatch.setattr(agent_proxy_access, "revoke_and_audit_agent_proxy_access", lambda *_a, **_k: revoked.append("deny-all"))
+    argv = [
+        "--mode", "deny-all", "--application-id", "proxy-client", "--app-name", "mip-app-staging",
+        "--deployment-lease-id", "11111111-1111-4111-8111-111111111111", "--deployment-source-git-sha", "a" * 40,
+        "--expected-inventory-principal", "operator@summit.example",
+        *(arg for name in owned for arg in ("--install-owned-endpoint", name)),
+    ]
+    assert agent_proxy_access.main(argv) == 0
+    return revoked
+
+
+def test_deny_all_refuses_in_a_suffixed_install_when_the_proxy_reaches_the_live_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(install_scope.INSTALL_SUFFIX_ENV, "_ci")
+    revoked: list[str] = []
+
+    with pytest.raises(InstallScopeRefusal) as refusal:
+        _deny_all(monkeypatch, _proxy_workspace(), ["ci-endpoint"], revoked)
+    assert refusal.value.code == 2
+    assert revoked == [], "no global revoke ran"
+
+
+def test_deny_all_runs_when_the_proxy_holds_only_this_install_and_unchanged_in_the_live_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    owned_only = SimpleNamespace(serving_endpoints=_endpoints({"ci-endpoint": [{"service_principal_name": "proxy-client"}], "live-endpoint": []}))
+    monkeypatch.setenv(install_scope.INSTALL_SUFFIX_ENV, "_ci")
+    assert _deny_all(monkeypatch, owned_only, ["ci-endpoint"], []) == ["deny-all"]
+
+    monkeypatch.delenv(install_scope.INSTALL_SUFFIX_ENV, raising=False)
+    assert _deny_all(monkeypatch, _proxy_workspace(), [], []) == ["deny-all"], "the live install's deny-all is unguarded, as before"
+
+
+def test_install_owned_endpoints_are_a_deny_all_argument_only() -> None:
+    with pytest.raises(SystemExit) as usage:
+        agent_proxy_access.main(["--mode", "audit", "--application-id", "p", "--app-name", "a", "--deployment-lease-id", "l",
+                                 "--deployment-source-git-sha", "s", "--expected-inventory-principal", "i",
+                                 "--install-owned-endpoint", "e"])
+    assert usage.value.code == 2
