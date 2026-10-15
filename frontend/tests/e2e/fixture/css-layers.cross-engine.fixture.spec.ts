@@ -152,9 +152,19 @@ for (const theme of FIXTURE_THEMES) {
       expect(first.order).toEqual([...LAYER_MANIFEST]);
     });
 
-    test('every route loads only layered style rules; font faces stay top level', async ({ app, mockApi, page }) => {
+    test('every route loads only layered style rules; font faces stay top level', async ({ app, browserName, hygiene, mockApi, page }) => {
       // Twenty-two natural loads in one test: generous for a loaded runner.
       test.setTimeout(480_000);
+      if (browserName === 'webkit') {
+        // Understood noise, not a CSS finding (W5e integration): settle() waits
+        // for the API, not for a route's speculative chunk preloads, and
+        // WebKit cancels the ones still in flight when the walk's page.goto
+        // leaves the route; Vite then dispatches vite:preloadError, which
+        // staleChunkRecovery reports as a 'preload' client error. Only the
+        // cancelled .js requests and that one report are allowed.
+        hygiene.allow('request-failed', /\/assets\/[\w.-]+\.js failed: cancelled$/);
+        hygiene.allow('console.error', /^\[mip\] client error \{source: preload, kind: chunk, errorName: TypeError, .*\} TypeError: Importing a module script failed\./);
+      }
       await app.setTheme(theme);
       const pending = pendingSelectors();
       let exempt = 0;
