@@ -1,0 +1,36 @@
+{
+  "auditReportVersion": 2,
+  "vulnerabilities": {
+    "example-parser": {
+      "name": "example-parser",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1100001,
+          "name": "example-parser",
+          "dependency": "example-parser",
+          "title": "@someone [x](http://evil) <script>",
+          "url": "https://github.com/advisories/GHSA-2234-5678-9cfg",
+          "severity": "moderate",
+          "range": "<1.2.3"
+        }
+      ],
+      "effects": ["vite"],
+      "range": "<1.2.3",
+      "nodes": ["node_modules/example-parser"],
+      "fixAvailable": true
+    },
+    "vite": {
+      "name": "vite",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": ["example-parser"],
+      "effects": [],
+      "range": "8.0.0 - 8.3.3",
+      "nodes": ["node_modules/vite"],
+      "fixAvailable": true
+    }
+  },
+  "metadata": {"vulnerabilities": {"info": 0, "low": 0, "moderate": 2, "high": 0, "critical": 0, "total": 2}}
+}

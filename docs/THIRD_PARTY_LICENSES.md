@@ -49,6 +49,7 @@ https://openfontlicense.org.
 | `@axe-core/playwright` / `axe-core` | Accessibility test automation | `MPL-2.0` | Dev/test only. No project files derive from or modify the MPL source. |
 | `hypothesis` | Python property/fuzz tests | `MPL-2.0` | Test only. No project files derive from or modify the MPL source. |
 | `lightningcss` | Vite/build-time CSS transform dependency | `MPL-2.0` | Build-time transitive dependency. No project files derive from or modify the MPL source. |
+| `rollup-plugin-visualizer` (7.1.1) and its dependencies (`open`, `yargs`, `source-map`, `picomatch`) | The bundle treemap (`npm --prefix frontend run build:analyze`, a CI PR artifact; audit quality-08) | `MIT` (transitive `MIT`, `ISC`, `BSD-3-Clause`) | Dev only: loaded only by `frontend/vite.analyze.config.ts` under `ANALYZE=1`, never by the production build, the browser bundle or the App source. |
 | `tools/geo`: `shapefile`, `d3-geo`, `d3-geo-projection`, `topojson-server`, `topojson-simplify` (plus `topojson-client`) and their dependencies | The operator-only ZCTA geometry build (`tools/geo/build_zcta_topojson.mjs`) | `BSD-3-Clause` / `ISC` (transitive `MIT`, `Unlicense`) | Operator-only, with its own `package.json` and lock: never installed by CI's app jobs or deploy, never in the browser build, excluded from the App source by `databricks.yml` `sync.exclude`. CI audits its lock (`npm --prefix tools/geo audit --audit-level=high`). |
 
 MPL-2.0 is file-level weak copyleft. Because these packages are consumed

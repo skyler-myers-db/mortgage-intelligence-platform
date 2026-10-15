@@ -1,0 +1,4 @@
+# The direct pins the report reads (a fixture copy of requirements.in's shape).
+databricks-sdk==0.103.0
+uvicorn[standard]==0.47.0
+PyJWT==2.15.0  # an explicit transitive floor

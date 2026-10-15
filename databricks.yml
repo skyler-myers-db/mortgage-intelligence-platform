@@ -99,7 +99,11 @@ targets:
       user_name: ${workspace.current_user.userName}
     workspace:
       host: *default_host
-      root_path: ~/.bundle/${bundle.name}/${bundle.target}
+      # The leaf defaults to `dev`, so the live install's root (and state)
+      # stays ~/.bundle/<bundle>/dev. Only the CI staging install
+      # (deploy-dev.yml, MIP_BUNDLE_ROOT_LEAF=dev-ci) gets its own root,
+      # refused anywhere else by tools/databricks/ci_install_isolation.py.
+      root_path: ~/.bundle/${bundle.name}/${var.bundle_root_leaf}
     variables:
       # The Databricks Apps bundle schema requires app Genie bindings to carry
       # a concrete space_id; it cannot resolve Genie spaces by name through a
@@ -286,7 +290,7 @@ resources:
 
   sql_warehouses:
     mip_serverless_sql:
-      name: mip_serverless_sql
+      name: mip_serverless_sql${var.install_suffix}
       warehouse_type: PRO
       enable_serverless_compute: true
       cluster_size: 2X-Small
@@ -1200,7 +1204,7 @@ resources:
     # and sql/ddl/silver_*.sql for column contracts; docs/data-contract-
     # module0.md §2 is authoritative.
     mip_feature_pipeline:
-      name: mip_feature_pipeline
+      name: mip_feature_pipeline${var.install_suffix}
       catalog: ${var.uc_catalog}
       schema: silver
       photon: true
@@ -1246,7 +1250,7 @@ resources:
   # resolve the path (making PR CI impossible without real secrets).
   experiments:
     mip_lead_scoring:
-      name: /mip-lead-scoring
+      name: /mip-lead-scoring${var.install_suffix}
 
 # Genie spaces (mortgage_lead_intelligence) are still provisioned out-of-
 # bundle via tools/databricks/provision_genie_space.py (see AGENTS.md).
@@ -1272,6 +1276,18 @@ variables:
     default: ""
   tenant_id:
     description: Lakebase namespace for the configured deployment's reviewed disclosures
+    default: ""
+  bundle_root_leaf:
+    description: >-
+      Last segment of the dev target's bundle root. `dev` is the live install;
+      only deploy-dev.yml's isolated CI staging install sets another value
+      (MIP_BUNDLE_ROOT_LEAF, checked by tools/databricks/ci_install_isolation.py).
+    default: dev
+  install_suffix:
+    description: >-
+      Appended to the workspace-unique display names (SQL warehouse, feature
+      pipeline, MLflow experiment). Empty for the live install; derived from
+      the bundle root leaf for the CI staging install.
     default: ""
   ai_gateway_verifier_client_id:
     description: >-

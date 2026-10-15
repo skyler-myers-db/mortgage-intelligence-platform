@@ -1,0 +1,74 @@
+{
+  "holds": [
+    {
+      "ecosystem": "npm",
+      "package": "typescript",
+      "below": "7.0.0",
+      "reason": "typescript-eslint 8.71.0 peers typescript below 6.1.0; TypeScript 7 waits for a typescript-eslint release that admits it (D-platform-process-a)",
+      "review_by": "2026-11-15"
+    },
+    {
+      "ecosystem": "npm",
+      "package": "vitest",
+      "below": "5.0.0",
+      "reason": "vitest 5 needs its own budget and VRT batch, and the browser-mode packages move with it; no peer range forces it (D-platform-process-a)",
+      "review_by": "2026-11-15"
+    },
+    {
+      "ecosystem": "npm",
+      "package": "@babel/core",
+      "below": "8.0.0",
+      "reason": "Babel 8 waits for React Compiler plugin compatibility (babel-plugin-react-compiler 1.0.0; D-platform-process-a)",
+      "review_by": "2026-11-15"
+    },
+    {
+      "ecosystem": "npm",
+      "package": "@tanstack/react-query",
+      "below": "5.104.0",
+      "reason": "W5b hold: with 5.104.0 the reduced-motion Console is still shown one macrotask after Close (shell-wayfinding fixture spec); tail T1b re-takes it after w5-test-harness-deps-report",
+      "review_by": "2026-11-15"
+    },
+    {
+      "ecosystem": "npm",
+      "package": "@tanstack/react-query-persist-client",
+      "below": "5.104.0",
+      "reason": "Lockstep with tanstack react-query: one query-core and one query-persist-client-core in the lock; tail T1b",
+      "review_by": "2026-11-15"
+    },
+    {
+      "ecosystem": "npm",
+      "package": "@tanstack/react-virtual",
+      "below": "3.14.0",
+      "reason": "W5b hold: virtual-core 3.17 adds 2.28 KiB br to the shared LeadTable lazy chunk; tail T1c re-takes it against the re-baselined maxLazy gate",
+      "review_by": "2026-11-15"
+    },
+    {
+      "ecosystem": "npm",
+      "package": "happy-dom",
+      "below": "20.14.0",
+      "reason": "W5b hold: 20.14.x calls CSSStyleDeclaration setProperty with a foreign this (the EvidenceHoverCard same-object proof); tail T1a re-takes 20.14.x; 21.x is a major",
+      "review_by": "2026-11-15"
+    },
+    {
+      "ecosystem": "npm",
+      "package": "oxlint",
+      "below": "1.86.0",
+      "reason": "frontend/oxlint-baseline.json records the installed oxlint and a new version names its jsx-a11y rules; tail T2 moves it with w5-compiler-lint",
+      "review_by": "2026-11-15"
+    },
+    {
+      "ecosystem": "npm",
+      "package": "@playwright/test",
+      "below": "1.64.0",
+      "reason": "Held to the VRT image mcr.microsoft.com/playwright:v1.63.0-noble until the final W5e step (tail T3 moves both to 1.64.0 and v1.64.0-noble)",
+      "review_by": "2026-11-15"
+    },
+    {
+      "ecosystem": "pypi",
+      "package": "databricks-sdk",
+      "below": "0.104.0",
+      "reason": "genie-03: no chat-mode Genie message cancel through 0.152.0 (only the agent-mode genie_cancel_response); a 0.103 to 0.152 jump needs a live deploy proof",
+      "review_by": "2026-11-15"
+    }
+  ]
+}

@@ -110,6 +110,12 @@ Frontend dependencies move in batches of exact pins (`npm install
 update`), and `npm --prefix frontend ci` must run clean on the result. Before
 a batch lands, check each of these:
 
+- **Read the current dependency-report issue first.** The open issue labelled
+  `dependency-report` (edited in place every Monday by
+  `.github/workflows/deps-report.yml`) lists the drift, the advisories, the
+  dated holds and waivers, and the workflow tool pins for the current
+  `main`; a batch starts from it. The holds themselves live in
+  `tools/dependency_holds.json` (see the W5e addendum below).
 - **react-router `UNSAFE_DataRouterContext`.** `UnsavedChangesGuard` reads
   this unstable export to detect a data router. It is pinned by
   `frontend/src/lib/dependencyContracts.test.ts`, together with
@@ -151,7 +157,8 @@ a batch lands, check each of these:
   that fire are fixed in the lane that owns the surface, or the bump is held;
   they are never added to the `KNOWN_VIOLATIONS` ratchet.
 - **Update signal.** Ruled 2026-09-30 (owner decision #7): a weekly report
-  workflow and no bots, built in W5d (`w5-test-harness-deps-report`); no bot
+  workflow and no bots, built in W5e (`w5-deps-report`) as
+  `.github/workflows/deps-report.yml` over `tools/deps_report`; no bot
   branch (existing contract, see `docs/modernization-todo.md`).
 
 Additional manual checks:
@@ -479,3 +486,49 @@ PR #267's second CI run turned the `npm --prefix frontend audit --audit-level=hi
 
 After `npm --prefix frontend ci` on the refreshed lock: `npm audit --audit-level=high` reports 0 vulnerabilities. The only other lock change is npm's dedupe re-hoisting `fast-json-stable-stringify` 2.1.0 once stylelint's tree left.
 
+## 2026-10-14 addendum: the weekly report and the dated holds (W5e)
+
+Audit quality-v2 / stack-10, decision D-platform-process-a, W5e lane
+`w5-deps-report`.
+
+- **The report.** `.github/workflows/deps-report.yml` runs every Monday at
+  13:17 UTC and on dispatch. Its `report` job (contents and actions read
+  only) runs `python -m tools.deps_report`, which reads the exact pins
+  (`npm view` with nothing installed; PyPI JSON for the direct requirements
+  of `requirements.in`, exact or range-pinned, at their `uv.lock` versions), `npm audit
+  --package-lock-only` at every severity, `pip-audit -r uv.lock --no-deps
+  --disable-pip --strict -f json`, the literal tool pins in every workflow,
+  the `Review date:` comments in `ci.yml`, the file-size allowlist expiries
+  and the hold dates. Its `publish` job (issues write only, no checkout, no
+  package code) re-validates the markdown and edits the one open
+  `dependency-report` issue in place. Every value in that public issue is
+  shape-checked and set in a code span; advisory titles and descriptions are
+  never rendered.
+- **What turns it red (exit 1).** An unignored npm high or critical
+  advisory, any pip-audit finding not ignored on `ci.yml`'s `run: pip-audit`
+  line, a `ci.yml` review date in the past, a file-size allowlist entry
+  expired or within 7 days, a hold whose `review_by` has passed, and a tool
+  pinned to two different literals with no unexpired `tool-literal` hold.
+  Drift alone never reds; a review date within 7 days is a warning. Exit 2
+  means a source could not be read (named under "Report error"). The live
+  release-gate section is informational and never changes the exit status.
+- **The holds are the source of truth.** `tools/dependency_holds.json` holds
+  every dated hold (`ecosystem` npm, pypi or tool-literal; `below` or
+  `literals`; `reason`; `review_by`). A held package renders as held, never
+  as pending. `tests/unit/test_dependency_pins.py` checks that every hold
+  names a pinned package whose pin is below its bound; an expired
+  `review_by` is the report's signal, not a test failure. The hold rows in
+  the W5b batch table above are the history; a new hold is a JSON row plus a
+  dated line here.
+- **Run it offline.** `python -m tools.deps_report --offline-fixtures
+  tests/fixtures/deps_report --today 2026-10-14 --json /tmp/deps.json
+  --markdown /tmp/deps.md` reads only the fixture directory (the hermetic dry
+  run `tests/unit/test_deps_report.py` pins byte for byte). Without
+  `--offline-fixtures` it reads the live registries, with `GITHUB_TOKEN` or
+  `GH_TOKEN` for the GitHub release lookups.
+- **The expected first runs are red.** The two `ci.yml` review dates (the
+  mlflow ignore, 2026-10-08, and the two oauthlib ignores, 2026-10-13) have
+  passed, so the first run exits 1 with two `review_date_past` lines. That
+  is the designed signal: this lane may not change the ignores, their proofs
+  or their dates, and a date bump is not a re-review. The re-review belongs
+  to the integrator's security pass right after the first run.

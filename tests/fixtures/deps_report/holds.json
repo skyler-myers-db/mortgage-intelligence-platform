@@ -1,0 +1,32 @@
+{
+  "holds": [
+    {
+      "ecosystem": "npm",
+      "package": "@babel/core",
+      "below": "8.0.0",
+      "reason": "Babel 8 waits for React Compiler plugin compatibility (fixture)",
+      "review_by": "2026-11-15"
+    },
+    {
+      "ecosystem": "npm",
+      "package": "@tanstack/react-query",
+      "below": "5.104.0",
+      "reason": "Fixture hold: the reduced-motion Console close (tail T1b)",
+      "review_by": "2026-11-15"
+    },
+    {
+      "ecosystem": "pypi",
+      "package": "databricks-sdk",
+      "below": "0.104.0",
+      "reason": "genie-03: no chat-mode message cancel (fixture)",
+      "review_by": "2026-11-15"
+    },
+    {
+      "ecosystem": "tool-literal",
+      "package": "gitleaks",
+      "literals": ["8.28.0", "8.30.1"],
+      "reason": "Synthetic split: align after an all-refs scan (fixture)",
+      "review_by": "2026-11-15"
+    }
+  ]
+}

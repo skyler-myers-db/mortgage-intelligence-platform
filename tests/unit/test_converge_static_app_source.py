@@ -246,3 +246,53 @@ def test_accepts_ambiguous_delete_only_after_proven_absence() -> None:
     client.workspace.delete.side_effect = delete
 
     _converge(client)
+
+
+# --- W5e w5-deps-report: the isolated CI staging install's bundle root leaf
+
+CI_SOURCE = f"/Workspace/Users/{PRINCIPAL}/.bundle/mortgage-intelligence-platform/dev-ci/files"
+
+
+def _workspace_at(api_root: str, manifests: set[str]) -> MagicMock:
+    present = set(manifests)
+    client = MagicMock()
+
+    def get_status(path: str) -> SimpleNamespace:
+        if path == f"{api_root}/frontend/dist/index.html":
+            return _file(path, size=42)
+        if path in present:
+            return _file(path)
+        raise ResourceDoesNotExist(path)
+
+    client.workspace.get_status.side_effect = get_status
+    client.workspace.delete.side_effect = lambda path, *, recursive: present.remove(path)
+    return client
+
+
+def test_the_ci_root_leaf_is_accepted_only_when_expected() -> None:
+    ci_root = CI_SOURCE.removeprefix("/Workspace")
+    client = _workspace_at(ci_root, {f"{ci_root}/package.json"})
+
+    converge_static_app_source(
+        client, source_code_path=CI_SOURCE, expected_principal=PRINCIPAL, expected_target=TARGET, expected_root_leaf="dev-ci"
+    )
+    assert client.workspace.delete.call_args_list == [call(f"{ci_root}/package.json", recursive=False)]
+
+    with pytest.raises(RuntimeError, match="does not match"):
+        _converge(_workspace(), source=CI_SOURCE)  # no leaf: the target's root only
+    with pytest.raises(RuntimeError, match="does not match"):
+        converge_static_app_source(
+            _workspace(), source_code_path=SOURCE, expected_principal=PRINCIPAL, expected_target=TARGET, expected_root_leaf="dev-ci"
+        )
+
+
+def test_without_a_root_leaf_the_live_source_path_is_unchanged() -> None:
+    client = _workspace()
+
+    _converge(client)  # exactly the base call: --expected-target dev, no leaf
+
+    for leaf in ("../dev", "", "dev/x"):
+        with pytest.raises(RuntimeError, match="root leaf is not canonical"):
+            converge_static_app_source(
+                client, source_code_path=SOURCE, expected_principal=PRINCIPAL, expected_target=TARGET, expected_root_leaf=leaf
+            )

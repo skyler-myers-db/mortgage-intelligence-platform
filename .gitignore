@@ -26,6 +26,9 @@ frontend/dist/
 # ships them.
 frontend/build-meta/
 frontend/sourcemaps/
+# The bundle treemap build (npm --prefix frontend run build:analyze, audit
+# quality-08): a PR artifact only, never App source or a release zip.
+frontend/bundle-analyze/
 # The deploy-time lender mark copy (tools/branding/lender_mark.py stage); the image never enters the repo.
 frontend/.branding-stage/
 coverage/

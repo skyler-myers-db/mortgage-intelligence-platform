@@ -1,0 +1,6 @@
+{
+  "expires": {
+    "backend/services/example_split_pending.py": "2026-10-22"
+  },
+  "_policy": "Synthetic fixture for tests/unit/test_deps_report.py: 8 days after 2026-10-14 (green), 7 days after 2026-10-15 (red)."
+}

@@ -1,0 +1,13 @@
+{
+  "dependencies": [
+    {"name": "databricks-sdk", "version": "0.103.0", "vulns": []},
+    {
+      "name": "oauthlib",
+      "version": "3.3.1",
+      "vulns": [
+        {"id": "PYSEC-2026-4114", "fix_versions": ["4.0.0"], "aliases": ["GHSA-xpv3-w29h-x7cv", "CVE-2026-49265"], "description": "@someone [x](http://evil)"}
+      ]
+    }
+  ],
+  "fixes": []
+}

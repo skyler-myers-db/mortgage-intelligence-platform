@@ -6,22 +6,33 @@ field vitals consume it), no stylelint until a patched braces exists (removed
 2026-10-06, GHSA-vfj7-8cjw-p6xm), the held
 majors (D-platform-process-a, review_by 2026-11-15; Playwright held to the VRT
 image), and one gitleaks version across the CI workflow.
+
+W5e (w5-deps-report): tools/dependency_holds.json is the source of truth for
+every dated hold (the weekly report renders a held package as held). The
+held majors below are derived from it, every hold must name a pinned package
+whose current pin is below its bound, and an expired ``review_by`` is NOT a
+failure here: the report owns that signal (exit 1, ``hold_review_passed``).
 """
 
 from __future__ import annotations
 
 import json
 import re
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_JSON = ROOT / "frontend" / "package.json"
 PACKAGE_LOCK = ROOT / "frontend" / "package-lock.json"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+HOLDS = ROOT / "tools" / "dependency_holds.json"
+REQUIREMENTS_IN = ROOT / "requirements.in"
+UV_LOCK = ROOT / "uv.lock"
 EXACT = re.compile(r"^\d+\.\d+\.\d+$")
 TANSTACK_PAIR = ("@tanstack/react-query", "@tanstack/react-query-persist-client")
 TANSTACK_CORES = ("@tanstack/query-core", "@tanstack/query-persist-client-core")
 HELD_MAJORS = {"typescript": 6, "vitest": 4, "@babel/core": 7}
+MAJOR_HOLDS = ("typescript", "vitest", "@babel/core")
 PLAYWRIGHT_PIN = "1.63.0"
 WEB_VITALS_PIN = "6.2.2"
 
@@ -32,6 +43,44 @@ def _package() -> dict:
 
 def _lock_packages() -> dict:
     return json.loads(PACKAGE_LOCK.read_text(encoding="utf-8"))["packages"]
+
+
+def _holds() -> list[dict]:
+    return json.loads(HOLDS.read_text(encoding="utf-8"))["holds"]
+
+
+def _version(value: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.match(r"\d+(?:\.\d+)*", value).group(0).split("."))
+
+
+def _python_pins(path: Path) -> dict[str, str]:
+    pins: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?==([^\s;#]+)", line.strip())
+        if match:
+            pins[re.sub(r"[-_.]+", "-", match.group(1)).lower()] = match.group(2)
+    return pins
+
+
+def hold_problems(holds: list[dict], npm_pins: dict[str, str], pypi_pins: dict[str, str]) -> list[str]:
+    """A hold must name a pinned package whose current pin is below its bound."""
+
+    problems: list[str] = []
+    for hold in holds:
+        keys = {"ecosystem", "package", "literals" if hold.get("ecosystem") == "tool-literal" else "below", "reason", "review_by"}
+        if set(hold) != keys:
+            problems.append(f"{hold.get('package')}: keys {sorted(hold)} are not the schema {sorted(keys)}")
+            continue
+        date.fromisoformat(hold["review_by"])  # a date, never a test of whether it has passed
+        if hold["ecosystem"] == "tool-literal":
+            continue
+        pins = npm_pins if hold["ecosystem"] == "npm" else pypi_pins
+        pinned = pins.get(hold["package"])
+        if pinned is None:
+            problems.append(f"{hold['package']}: no {hold['ecosystem']} pin to hold")
+        elif _version(pinned) >= _version(hold["below"]):
+            problems.append(f"{hold['package']}: pin {pinned} is not below {hold['below']}")
+    return problems
 
 
 def _all_deps(package: dict) -> dict[str, str]:
@@ -96,6 +145,39 @@ def test_the_held_majors_stay_held() -> None:
     for name, major in HELD_MAJORS.items():
         assert int(deps[name].split(".")[0]) == major, f"{name} {deps[name]} is held at {major}.x"
     assert deps["@playwright/test"] == PLAYWRIGHT_PIN
+
+
+def test_the_held_majors_are_the_holds_file_rows() -> None:
+    by_name = {hold["package"]: hold for hold in _holds()}
+
+    for name in MAJOR_HOLDS:
+        assert by_name[name]["ecosystem"] == "npm"
+        assert _version(by_name[name]["below"]) == (HELD_MAJORS[name] + 1, 0, 0), name
+    assert set(HELD_MAJORS) == set(MAJOR_HOLDS)
+
+
+def test_the_holds_file_has_exactly_the_schema_keys() -> None:
+    document = json.loads(HOLDS.read_text(encoding="utf-8"))
+
+    assert set(document) == {"holds"}
+    assert document["holds"], "the seeded holds are present"
+    assert {hold["ecosystem"] for hold in document["holds"]} <= {"npm", "pypi", "tool-literal"}
+
+
+def test_every_hold_names_a_pin_below_its_bound() -> None:
+    npm_pins = _all_deps(_package())
+    pypi_pins = {**_python_pins(REQUIREMENTS_IN), **_python_pins(UV_LOCK)}
+
+    assert hold_problems(_holds(), npm_pins, pypi_pins) == []
+
+
+def test_the_hold_rules_reject_planted_drift_and_accept_an_expired_date() -> None:
+    hold = {"ecosystem": "npm", "package": "vitest", "below": "5.0.0", "reason": "r", "review_by": "2000-01-01"}
+
+    assert hold_problems([hold], {"vitest": "4.1.11"}, {}) == [], "an expired review_by is the report's signal"
+    assert hold_problems([hold], {"vitest": "5.0.4"}, {}) != [], "a pin at or above its bound"
+    assert hold_problems([hold], {}, {}) != [], "a hold on an unpinned package"
+    assert hold_problems([{**hold, "extra": 1}], {"vitest": "4.1.11"}, {}) != [], "an unknown key"
 
 
 def test_both_gitleaks_version_literals_are_equal() -> None:

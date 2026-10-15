@@ -111,6 +111,13 @@ def test_the_bundle_delta_job_is_informational_and_token_free() -> None:
     assert "--report-only" in base and "--build-meta ../bundle-base/frontend/build-meta" in base and "--json ../bundle-base.json" in base
     assert any(run.startswith("node tools/check_frontend_budgets.mjs --report-only --base ../bundle-base.json") for run in runs)
     assert all("continue-on-error" not in step for step in job["steps"])
+    # W5e quality-08: the head treemap is a token-free PR artifact after the
+    # summary (tests/unit/test_bundle_treemap_contract.py pins its fields).
+    uploads = [step for step in job["steps"] if str(step.get("uses", "")).startswith("actions/upload-artifact@")]
+    assert [step["with"]["name"] for step in uploads] == ["bundle-treemap-${{ github.sha }}"]
+    assert runs.index("npm --prefix frontend run build:analyze") > next(
+        i for i, run in enumerate(runs) if run.startswith("node tools/check_frontend_budgets.mjs --report-only --base")
+    )
 
 
 def _playwright_perf_spec() -> re.Pattern[str]:

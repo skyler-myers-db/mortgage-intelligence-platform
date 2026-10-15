@@ -277,6 +277,19 @@ jobs:
           GITHUB_STEP_SUMMARY: /dev/null
       - name: Head vs base (step summary)
         run: node tools/check_frontend_budgets.mjs --report-only --base ../bundle-base.json
+      - name: Bundle treemap (head)
+        # Audit quality-08 (W5e w5-deps-report): rollup-plugin-visualizer over
+        # the head build, through frontend/vite.analyze.config.ts (ANALYZE=1
+        # only; it builds into the git-ignored frontend/bundle-analyze/, never
+        # frontend/dist). The production config never loads the plugin.
+        run: npm --prefix frontend run build:analyze
+      - name: Upload the bundle treemap
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundle-treemap-${{ github.sha }}
+          path: frontend/bundle-analyze/treemap.html
+          if-no-files-found: error
+          retention-days: 14
 
   bundle-syntax-check:
     # `databricks bundle validate` unavoidably performs a
