@@ -27,7 +27,7 @@ import { intentFingerprint, type IntentRequestIds } from '../../lib/mutations/re
 import type { CampaignBinding } from './LeadTable.logic';
 import type { RejectReasonCode } from './LeadTable.types';
 import type { BulkRowReport } from './useLeadBulkRun';
-import { bulkRefusalCopy } from './bulkRefusalCopy';
+import { BULK_UNRECORDED, bulkRefusalCopy } from './bulkRefusalCopy';
 import { toastWriteFailure, toastWriteRefusal } from './leadWriteFailureToast';
 
 /** A single-row approval with no reviewed draft: refused before any draft or POST. */
@@ -170,8 +170,9 @@ export function approveWithReport(
   }).then(
     (res): BulkRowReport => {
       if (!res.approved) {
-        if (!inBulk) toastWriteRefusal(`Couldn't approve ${borrowerId}`, 'The endpoint returned approved=false.');
-        return { outcome: 'backend', message: 'The endpoint returned approved=false.' };
+        // A 2xx that recorded nothing: the bulk copy, never the wire field (states-04).
+        if (!inBulk) toastWriteRefusal(`Couldn't approve ${borrowerId}`, BULK_UNRECORDED);
+        return { outcome: 'backend', message: BULK_UNRECORDED };
       }
       deps.requestIds.settle(intent);
       deps.onDecided(borrowerId, 'approved', res.audit_event_id ?? null);

@@ -50,6 +50,7 @@ import {
 import type { BulkDecisionContext, runBulkApprove, runBulkReject } from './leadBulkDecisions';
 import { pruneTo, rangeIds } from './LeadTable.selection';
 import { toastWriteFailure, toastWriteRefusal } from './leadWriteFailureToast';
+import { BULK_UNRECORDED } from './bulkRefusalCopy';
 
 /** The toast title's object when a gate refuses a selection, not one row. */
 const SELECTION_SUBJECT = 'the selected leads';
@@ -382,7 +383,7 @@ export function useLeadApprovalActions({
     }).then(
       (res) => {
         if (!res.rejected) {
-          toastWriteRefusal(`Couldn't reject ${borrowerId}`, 'The endpoint returned rejected=false.');
+          toastWriteRefusal(`Couldn't reject ${borrowerId}`, BULK_UNRECORDED);
           return false;
         }
         requestIds.settle(intent);
