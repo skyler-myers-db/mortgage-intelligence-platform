@@ -551,3 +551,4 @@ stays out.
 | Tail | Package | From | To | Outcome (W5e integration, 2026-10-15) | Lock changes on the merged tree |
 |---|---|---|---|---|---|
 | T1a | `happy-dom` | 20.10.3 | 20.14.6 | Applied after `w5-test-harness-deps-report` (its EvidenceHoverCard re-model): full vitest 612 files / 6,528 tests green on the installed tree; test-only, no bundle byte | `happy-dom` only |
+| T1b | `@tanstack/react-query` + `-persist-client` | 5.100.10 | 5.104.2 | Applied: test-harness C4 outcome (i), shell-wayfinding 21/21 and the re-expressed rAF probe 'closing hides the Console at once' 7/7 on 5.104.2; initial JS -0.19 KiB br | the two packages and `query-core` / `query-persist-client-core`, all 5.104.2 (one entry each) |

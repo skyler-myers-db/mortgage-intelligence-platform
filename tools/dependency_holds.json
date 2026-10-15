@@ -23,20 +23,6 @@
     },
     {
       "ecosystem": "npm",
-      "package": "@tanstack/react-query",
-      "below": "5.104.0",
-      "reason": "W5b hold: with 5.104.0 the reduced-motion Console is still shown one macrotask after Close (shell-wayfinding fixture spec); tail T1b re-takes it after w5-test-harness-deps-report",
-      "review_by": "2026-11-15"
-    },
-    {
-      "ecosystem": "npm",
-      "package": "@tanstack/react-query-persist-client",
-      "below": "5.104.0",
-      "reason": "Lockstep with tanstack react-query: one query-core and one query-persist-client-core in the lock; tail T1b",
-      "review_by": "2026-11-15"
-    },
-    {
-      "ecosystem": "npm",
       "package": "@tanstack/react-virtual",
       "below": "3.14.0",
       "reason": "W5b hold: virtual-core 3.17 adds 2.28 KiB br to the shared LeadTable lazy chunk; tail T1c re-takes it against the re-baselined maxLazy gate",
