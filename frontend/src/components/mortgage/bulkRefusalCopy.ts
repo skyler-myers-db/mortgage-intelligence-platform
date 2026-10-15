@@ -20,9 +20,10 @@ const BY_STATUS: Readonly<Record<number, string>> = {
   429: 'too many at once; retry soon',
 };
 
-const UNRECORDED = 'not recorded; retry it';
+/** Also the copy for a 2xx that did not record the decision (`rejected: false`). */
+export const BULK_UNRECORDED = 'not recorded; retry it';
 
 export function bulkRefusalCopy(err: unknown): string {
-  if (!(err instanceof ApiError)) return UNRECORDED;
-  return err.reason === 'session_expired' ? 'session ended; sign in again' : BY_STATUS[err.status ?? 0] || UNRECORDED;
+  if (!(err instanceof ApiError)) return BULK_UNRECORDED;
+  return err.reason === 'session_expired' ? 'session ended; sign in again' : BY_STATUS[err.status ?? 0] || BULK_UNRECORDED;
 }

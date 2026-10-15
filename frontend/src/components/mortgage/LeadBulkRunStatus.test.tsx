@@ -11,7 +11,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../lib/apiTransport';
 import type { ApproveResult, RejectResult } from '../../lib/apiTypes';
-import { bulkRefusalCopy } from './bulkRefusalCopy';
+import { BULK_UNRECORDED, bulkRefusalCopy } from './bulkRefusalCopy';
 import { rejectWithReport } from './leadBulkRejectWrite';
 import { approveWithReport, type DecisionWriteDeps } from './leadDecisionWrites';
 import { LeadBulkRunResult } from './LeadBulkRunStatus';
@@ -82,5 +82,19 @@ describe('bulk refusal copy reaches the rendered report, never the server text',
     const text = rendered('reject', report);
     expect(text).not.toContain(SERVER_TEXT);
     expect(text).toContain(bulkRefusalCopy(refusal(status)));
+  });
+
+  it('a bulk reject row the server answers without recording reads the fixed copy, never the wire flag', async () => {
+    const unrecorded = deps(refusal(500));
+    unrecorded.reject = vi.fn((): Promise<RejectResult> => Promise.resolve({ rejected: false }));
+    const report = await rejectWithReport(unrecorded, BORROWER, new AbortController().signal, {
+      bulkId: 'bulk-test-3',
+      reasonCode: 'low_intent',
+      note: 'Reviewed.',
+    });
+    expect(report).toEqual({ outcome: 'backend', message: BULK_UNRECORDED });
+    const text = rendered('reject', report);
+    expect(text).toContain(`refused: ${BULK_UNRECORDED}`);
+    expect(text).not.toMatch(/endpoint|rejected=false/i);
   });
 });

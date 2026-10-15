@@ -11,7 +11,7 @@ import { markUnrecordedWrite } from '../../lib/sessionStatus';
 import { decisionFailure } from '../../lib/mutations/outreach';
 import { intentFingerprint } from '../../lib/mutations/requestIds';
 import type { BulkRowReport } from './useLeadBulkRun';
-import { bulkRefusalCopy } from './bulkRefusalCopy';
+import { BULK_UNRECORDED, bulkRefusalCopy } from './bulkRefusalCopy';
 import { released, requestScopeParts, type BulkRejectRow, type DecisionWriteDeps } from './leadDecisionWrites';
 
 /**
@@ -47,7 +47,7 @@ export function rejectWithReport(
     approvalRequestBatchId: deps.approvalRequestBatchId ?? null,
   }).then(
     (res): BulkRowReport => {
-      if (!res.rejected) return { outcome: 'backend', message: 'The endpoint returned rejected=false.' };
+      if (!res.rejected) return { outcome: 'backend', message: BULK_UNRECORDED };
       deps.requestIds.settle(intent);
       deps.onDecided(borrowerId, 'rejected', res.audit_event_id ?? null);
       return { outcome: 'ok', message: null };
