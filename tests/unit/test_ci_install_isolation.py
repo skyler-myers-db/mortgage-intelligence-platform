@@ -11,6 +11,7 @@ install unchanged, and deploy-dev.yml / nightly.yml address the dev-ci install.
 
 from __future__ import annotations
 
+import itertools
 import re
 import shlex
 import shutil
@@ -266,3 +267,84 @@ def test_any_leaf_or_the_deploy_dev_ref_always_runs_the_rule_table() -> None:
     for env in ({"MIP_BUNDLE_ROOT_LEAF": "dev-ci"}, {"GITHUB_ACTIONS": "true", "GITHUB_WORKFLOW_REF": DEPLOY_DEV_REF}):
         consulted = _bash_block(env, python="/usr/bin/false")
         assert consulted.returncode == 2, f"{env} must reach the tool, which fails closed here"
+
+
+# ------------------------------------------ the bootstrap runbook (docs/deployment.md)
+
+DEPLOYMENT_DOC = ROOT / "docs" / "deployment.md"
+BOOTSTRAP_HEADING = "## CI staging install (deploy-dev.yml) and the release-gate bootstrap"
+IDENTITIES_HEADING = "### Per-run M2M identities"
+
+
+def _doc_section(heading: str) -> str:
+    """The section's lines up to the next heading of its level or higher, outside code fences."""
+
+    lines = DEPLOYMENT_DOC.read_text(encoding="utf-8").splitlines()
+    level = len(heading) - len(heading.lstrip("#"))
+    body: list[str] = []
+    fenced = False
+    for line in lines[lines.index(heading) + 1 :]:
+        if line.startswith("```"):
+            fenced = not fenced
+        elif not fenced and re.match(rf"#{{1,{level}}} ", line):
+            break
+        body.append(line)
+    return "\n".join(body)
+
+
+def _flat(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _numbered_item(block: str, number: int) -> str:
+    return block.split(f"\n{number}. ", 1)[1].split(f"\n{number + 1}. ", 1)[0]
+
+
+def test_the_runbook_states_the_reserved_identity_contract_and_defers_the_bootstrap() -> None:
+    """C7(b), round 2: CI-only identities cannot coexist with the reserved names in the anchor workspace."""
+
+    section = _doc_section(BOOTSTRAP_HEADING)
+    owner = section.split("**Owner steps", 1)[1].split("**Integrator steps", 1)[0]
+    integrator = section.split("**Integrator steps", 1)[1]
+    step1 = _flat(_numbered_item(owner, 1))
+
+    for anchor in (
+        "seven names in \"Per-run M2M identities\"",
+        "`tools/databricks/m2m_identity_contract.py` `IDENTITY_DEFAULTS`",
+        "`provision_m2m_oauth._find_existing_sp`",
+        "`agent_runtime_access.AGENT_RUNTIME_DISPLAY_NAME`",
+        "CI-only identities cannot coexist with them there",
+        "**Never create a second service principal with a reserved display name.**",
+        "(`Multiple service principals use reserved display name`)",
+        "forked-anchor (`pr105-host`)",
+        "makes the reserved names install-scoped",
+    ):
+        assert anchor in step1, anchor
+    assert "blocked in the anchor workspace" in _flat(section.split("**Why the CI install", 1)[0])
+    assert "never against the anchor workspace" in _flat(_numbered_item(owner, 8))
+    assert "Steps 4-6 run only on the forked-anchor target" in _flat(integrator.split("\n4. ", 1)[0])
+
+    flat = _flat(section)
+    assert "Give the CI install its own identities" not in flat
+    assert "CI-only service principal" not in flat
+    assert "(CI-only identities, confirmed)" not in flat
+    assert not re.search(r"(?i)\b(?:give|create|assign|use)\b[^.]{0,80}\bCI-only\b", flat), "no instruction to make CI-only identities"
+    for row in ("`reconcile_historical_agent_endpoints cleanup`", "`agent_runtime_access.audit_global_genie_access`",
+                "`audit_agent_runtime_foreign_uc_access`"):
+        assert row in section, f"workspace-global inventory row {row}"
+
+
+def test_every_reserved_identity_name_is_in_the_per_run_identities_table() -> None:
+    """The contract the runbook cites cannot drift from the code that enforces it."""
+
+    from tools.databricks.agent_runtime_access import AGENT_RUNTIME_DISPLAY_NAME
+    from tools.databricks.m2m_identity_contract import IDENTITY_DEFAULTS
+
+    lines = _doc_section(IDENTITIES_HEADING).splitlines()
+    first = next(index for index, line in enumerate(lines) if line.startswith("| "))
+    table = list(itertools.takewhile(lambda line: line.startswith("|"), lines[first:]))
+    named = [match for line in table[2:] for match in re.findall(r"^\| [^|]+ \| `([^`]+)` \|", line)]
+
+    assert sorted(named) == sorted(defaults.sp_name for defaults in IDENTITY_DEFAULTS.values())
+    assert len(named) == len(IDENTITY_DEFAULTS) == 7, "the runbook says seven"
+    assert IDENTITY_DEFAULTS["agent_runtime"].sp_name == AGENT_RUNTIME_DISPLAY_NAME
