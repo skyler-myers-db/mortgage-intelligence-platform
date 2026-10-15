@@ -34,6 +34,7 @@ import {
   genieSegmentPrompt,
   genieStartersForRoute,
   genieStatePrompt,
+  segmentPhrase,
   stateNameForCode,
 } from './genieContext';
 import templates from './genieContextTemplates.json';
@@ -145,6 +146,14 @@ describe('reviewed vocabulary', () => {
     }
     expect(genieSegmentPrompt('made_up')).toBeNull();
     expect(genieSegmentPrompt('')).toBeNull();
+  });
+
+  it('a segment reads as its phrase override, else its lower-cased name (phase-2 parity)', () => {
+    // critic-11: the server renders the same phrase (genie_context_scope.SEGMENT_PHRASES).
+    expect(segmentPhrase('itm')).toBe('in-the-money');
+    expect(segmentPhrase('equity')).toBe('home equity candidate');
+    expect(segmentPhrase('permit_activity')).toBeNull();
+    expect(segmentPhrase('made_up')).toBeNull();
   });
 
   it('a segment the guards refuse outright gets no prompt, alone or on a lead', () => {

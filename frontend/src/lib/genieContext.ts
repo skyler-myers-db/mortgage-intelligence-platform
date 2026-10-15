@@ -103,8 +103,10 @@ export function genieKpiPrompt(label: string): string | null {
  * lower case refuses none of them. The words are unchanged, so the vocabulary
  * contract holds. A code listed in `segmentsWithoutTemplates` has no prompt at
  * all (the JSON says why, and the Python battery keeps that list honest).
+ * Exported for its parity pin: `segmentPhraseByCode` is the phrase the
+ * server's phase-2 renderer shares (genie_context_scope.SEGMENT_PHRASES).
  */
-function segmentPhrase(code: string): string | null {
+export function segmentPhrase(code: string): string | null {
   if (Object.prototype.hasOwnProperty.call(SEGMENTS_WITHOUT_TEMPLATES, code)) return null;
   const segment = segmentByCode(code);
   if (!segment) return null;
