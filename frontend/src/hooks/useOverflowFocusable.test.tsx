@@ -30,12 +30,11 @@ class StubResizeObserver {
 }
 
 const sizes = { scroll: 100, client: 220 };
-let renders = 0;
 
-function Panel({ rows }: { rows: number }) {
+function Panel({ rows, onRender }: { rows: number; onRender?: () => void }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const scrolls = useOverflowFocusable(ref, rows);
-  renders += 1;
+  onRender?.();
   return (
     <div ref={ref} data-testid="panel" role="region" aria-label="Rows" tabIndex={scrolls ? 0 : undefined}>
       {Array.from({ length: rows }, (_, index) => <div key={index}>row {index}</div>)}
@@ -54,7 +53,6 @@ const live = () => observers.filter((entry) => !entry.disconnected);
 describe('useOverflowFocusable', () => {
   beforeEach(() => {
     observers = [];
-    renders = 0;
     sizes.scroll = 100;
     sizes.client = 220;
     vi.stubGlobal('ResizeObserver', StubResizeObserver);
@@ -95,11 +93,12 @@ describe('useOverflowFocusable', () => {
   });
 
   it('renders nothing on a resize that does not flip, and disconnects on unmount', async () => {
-    const { unmount } = await mount(<Panel rows={8} />);
-    const before = renders;
+    const onRender = vi.fn();
+    const { unmount } = await mount(<Panel rows={8} onRender={onRender} />);
+    const before = onRender.mock.calls.length;
     act(() => live()[0]?.callback());
     act(() => live()[0]?.callback());
-    expect(renders).toBe(before);
+    expect(onRender).toHaveBeenCalledTimes(before);
     unmount();
     expect(live()).toHaveLength(0);
   });
