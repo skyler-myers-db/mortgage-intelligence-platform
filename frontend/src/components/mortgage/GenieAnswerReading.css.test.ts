@@ -14,10 +14,14 @@ const stylesheet = (): string =>
 /** Declarations only: comments cite prototype lines. */
 const declarations = (): string => stylesheet().replace(/\/\*[\s\S]*?\*\//g, '');
 
-/** The body of the first rule whose selector list is exactly `selector`. */
+/**
+ * The body of the first rule whose selector list is exactly `selector`. A rule
+ * starts the file, follows a closing brace, or opens a block: the sheet's
+ * first rule follows its `@layer routes {` opener (css-05).
+ */
 function rule(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = new RegExp(`(?:^|\\})\\s*${escaped}\\s*\\{([^}]*)\\}`).exec(declarations());
+  const match = new RegExp(`(?:^|[{}])\\s*${escaped}\\s*\\{([^}]*)\\}`).exec(declarations());
   if (!match) throw new Error(`no rule for ${selector}`);
   return match[1];
 }
