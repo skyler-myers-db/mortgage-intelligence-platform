@@ -79,11 +79,11 @@ export function Rail() {
   const followUps = useQuery(followUpsSummaryQueryOptions(followUpsSummaryEnabled(session.data, connection)));
   return (
     <nav className="rail" aria-label="Primary navigation" data-rum-target="nav">
-      <Tooltip content="Entrada — Mortgage Intelligence Platform">
-        <Link to="/" className="rail__brand" aria-label="Entrada home">
-          <EntradaMark size={32} />
-        </Link>
-      </Tooltip>
+      {/* R1 (critic-08): 'Entrada home' names the brand link; its old title
+          was dropped, not moved to a Tooltip, under the W5e 0 KiB initial-JS cap. */}
+      <Link to="/" className="rail__brand" aria-label="Entrada home">
+        <EntradaMark size={32} />
+      </Link>
       {/* The accessible name stays 'M0'; the module description is the tooltip (critic-08). */}
       <Tooltip content={`Module ${M0.id}: ${M0.name} — ${M0.desc}`}>
         <Link to="/" className="rail__item is-active" aria-current="page">

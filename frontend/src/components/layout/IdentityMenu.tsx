@@ -10,7 +10,6 @@ import { preloadBestEffort } from '../../lib/lazyPreload';
 import { createIdlePreloader } from '../../lib/prefetch';
 import type { SessionResponse } from '../../types';
 import IdentityMenuPanel, { type IdentityView } from './IdentityMenuPanel';
-import { Tooltip } from '../ui/Tooltip';
 
 /**
  * The window event the "Keyboard shortcuts" item dispatches. The shortcut
@@ -143,31 +142,31 @@ export function IdentityMenu() {
         if (open && !rootRef.current?.contains(event.relatedTarget as Node | null)) setOpen(false);
       }}
     >
-      <Tooltip content={triggerLabel}>
-        <button
-          ref={triggerRef}
-          type="button"
-          className={`topbar__icon-btn identity-menu__trigger ${open ? 'is-active' : ''}`}
-          aria-haspopup="menu"
-          aria-expanded={open}
-          aria-controls={open ? menuId : undefined}
-          aria-label={triggerLabel}
-          onPointerEnter={warm}
-          onFocus={warm}
-          onClick={() => (open ? setOpen(false) : openAt(0))}
-          onKeyDown={(event) => {
-            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-              event.preventDefault();
-              openAt(event.key === 'ArrowDown' ? 0 : -1);
-            }
-          }}
-          data-testid="identity-menu-trigger"
-        >
-          {initials
-            ? <span className="identity-menu__avatar" aria-hidden="true">{initials}</span>
-            : <Icon name="account" size={15} />}
-        </button>
-      </Tooltip>
+      {/* R1 (critic-08): the old title repeated the aria-label; dropped, not moved to a
+          Tooltip, under the W5e 0 KiB initial-JS cap (the budget rule's step ii). */}
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`topbar__icon-btn identity-menu__trigger ${open ? 'is-active' : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        aria-label={triggerLabel}
+        onPointerEnter={warm}
+        onFocus={warm}
+        onClick={() => (open ? setOpen(false) : openAt(0))}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            openAt(event.key === 'ArrowDown' ? 0 : -1);
+          }
+        }}
+        data-testid="identity-menu-trigger"
+      >
+        {initials
+          ? <span className="identity-menu__avatar" aria-hidden="true">{initials}</span>
+          : <Icon name="account" size={15} />}
+      </button>
       {present && (
           <IdentityMenuPanel
             key={generation}
