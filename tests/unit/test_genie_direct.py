@@ -595,7 +595,7 @@ def test_direct_itm_state_breakdown_reconciles_lead_queue_action_subset() -> Non
             "best in-the-money borrowers in Illinois",
             "IL",
             "in_the_money = TRUE",
-            "Prime Refi Candidate borrowers",
+            "in-the-money borrowers",
         ),
     ],
 )
