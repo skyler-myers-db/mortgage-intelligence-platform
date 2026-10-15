@@ -21,8 +21,9 @@
  *  - W5d w5-sales-loop: the Sales ops manager view (30-day period) and the
  *    Distribution Board's dry-run plan, both themes;
  *  - W5e w5-lexicon-copy (W5d lq deferral 9): the request-scoped Lead Queue
- *    whose borrowers were all decided (`request-scoped-empty`, loaded on
- *    its own URL through `statePath`), both themes.
+ *    whose borrowers were all decided (`request-scoped-empty`) and the open
+ *    request's scope row over its rows (`request-scoped`), each loaded on
+ *    its own URL through `statePath`, both themes.
  *
  * The ratchet (axe.ts KNOWN_VIOLATIONS) is validated against this matrix at
  * load: every entry names a scan that runs here, in each theme and accent it
@@ -41,7 +42,7 @@ const OVERLAY_ROUTES = new Set(['home', 'lead-queue', 'borrower-360-detail', 'of
 const EXTRA_STATES: Readonly<Record<string, readonly FixtureState[]>> = {
   'lead-queue': [
     'filter-menu', 'expanded-row', 'read-failed', 'triage', 'approval-requests', 'my-approval-requests', 'request-approval-form',
-    'request-scoped-empty',
+    'request-scoped-empty', 'request-scoped',
   ],
   home: ['degraded', 'delta-explainer', 'evidence-how-we-got', 'evidence-under-the-hood', 'followups-tray', 'identity-menu'],
   'segment-intelligence': ['read-failed', 'stale-note'],

@@ -38,9 +38,10 @@
  *     and its watching line on Home and Segments, and a composed plan's
  *     card mid-progress                                               10
  *  U. W5e w5-lexicon-copy: the request-scoped Lead Queue whose
- *     borrowers are all decided (W5d lq deferral 9)                    2
+ *     borrowers are all decided, and with the request still open
+ *     (its scope row over the rows; W5d lq deferral 9)                 4
  *                                                                     --
- *                                                                    156
+ *                                                                    158
  *
  * Baselines are amd64-Linux renders from the pinned Playwright container:
  * this spec runs only with MIP_VRT=1 (playwright.config.ts) and refuses any
@@ -202,8 +203,10 @@ for (const theme of FIXTURE_THEMES) {
       { route: 'home', state: 'identity-menu' },
       { route: 'glossary', state: 'glossary-search' },
       // U (W5e w5-lexicon-copy, W5d lq deferral 9): the request-scoped queue
-      // whose borrowers were all decided, on its own URL (statePath).
+      // whose borrowers were all decided, and the open request's scope row
+      // over its rows, both on their own URL (statePath).
       { route: 'lead-queue', state: 'request-scoped-empty' },
+      { route: 'lead-queue', state: 'request-scoped' },
     ];
     for (const { route: name, state } of SHELL_STATES) {
       test(`${name} · ${state}`, async ({ app, mockApi, page }) => {
