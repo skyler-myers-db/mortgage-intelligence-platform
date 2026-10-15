@@ -12,6 +12,17 @@ interface GlossaryTermProps {
   className?: string;
 }
 
+/**
+ * The link's accessible name starts with what it SHOWS (WCAG 2.5.3 label in
+ * name): a speech user says "click Not in the money", not the entry's term.
+ * When the visible text is the term itself, the name stays term-first.
+ */
+function accessibleName(children: ReactNode, term: string, short: string): string {
+  const visible = typeof children === 'string' ? children.trim() : '';
+  const lead = visible && visible !== term ? `${visible}. ` : '';
+  return `${lead}${term}: ${short} Open glossary entry.`;
+}
+
 export function GlossaryTerm({ term, children, className }: GlossaryTermProps) {
   const entry = glossaryEntry(term);
   const tipId = useId();
@@ -20,7 +31,7 @@ export function GlossaryTerm({ term, children, className }: GlossaryTermProps) {
     <Link
       to={glossaryAnchor(term)}
       className={cls}
-      aria-label={`${entry.term}: ${entry.short} Open glossary entry.`}
+      aria-label={accessibleName(children, entry.term, entry.short)}
       aria-describedby={tipId}
     >
       <span>{children ?? entry.term}</span>
