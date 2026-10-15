@@ -215,8 +215,10 @@ describe('a failed save (states-04)', () => {
       dependency: 'lakebase',
       reason: 'retries_exhausted',
     }));
-    expect(forbidden).toBe('Save failed: Ask an administrator for access. Your name is kept; try again.');
-    expect(conflict).toBe('Save failed: Reload to read the current version. Your name is kept; try again.');
+    expect(forbidden).toBe('Save failed: you need access to save builds; ask an administrator. Your name is kept.');
+    expect(conflict).toBe(
+      'Save failed: the build or its message variants changed, or this save was already sent. Your name is kept: run the build again, then save.',
+    );
     expect(outage).toBe('Save failed: The app already retried; try again shortly. Your name is kept; try again.');
     for (const sentence of [forbidden, conflict, outage]) expect(sentence).not.toMatch(JARGON);
   });

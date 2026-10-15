@@ -6,6 +6,23 @@ import type { CampaignPerformanceFunnelResponse, PortfolioPreview } from '../typ
 import type { FootprintState } from './portfolio-builder.logic';
 import { formatCount, formatPercent, formatUsdCompact, pct, signedBpsLabel } from '../lib/formatters';
 import { SurfaceTitle } from '../components/Primitives';
+import { ApiError } from '../lib/apiTransport';
+
+/**
+ * A refused build save in words the operator can act on (W5b portfolio-forms
+ * review note): "try again" cannot fix a 403, and a create 409
+ * (backend/api/portfolio.py: the build or its message variants changed, or
+ * the save was already sent) needs a fresh run, never a reload. Any other
+ * failure keeps the shared vocabulary (null).
+ */
+export function saveRefusalCopy(error: unknown): string | null {
+  const status = error instanceof ApiError ? error.status : null;
+  if (status === 403) return 'Save failed: you need access to save builds; ask an administrator. Your name is kept.';
+  if (status === 409) {
+    return 'Save failed: the build or its message variants changed, or this save was already sent. Your name is kept: run the build again, then save.';
+  }
+  return null;
+}
 
 /**
  * GEO picker for step one of the product flow. It used to be a private

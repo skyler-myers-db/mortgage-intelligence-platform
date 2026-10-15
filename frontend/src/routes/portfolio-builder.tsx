@@ -20,6 +20,7 @@ import { useApp } from '../components/AppContext';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { AsyncStatus } from '../components/ui/AsyncState';
 import { DescribedErrorBody, preloadDescribedError } from '../components/ui/DescribedError';
+import { saveRefusalCopy } from './portfolio-builder.components';
 import { Field } from '../components/ui/Field';
 import { parseCampaignPrefill } from '../lib/campaignPrefill';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
@@ -323,13 +324,13 @@ export default function PortfolioBuilder() {
     // A failed save words its alert from the shared vocabulary chunk: load it with the intent.
     void preloadDescribedError();
   }, [buildDirty, buildInFlight, preview?.campaign_build_eligible]);
-
   // a11y-05: the save panel mounts only from the user's "Save build" click,
   // so its name field takes focus as it mounts (a callback ref, not the
   // autoFocus attribute jsx-a11y/no-autofocus bans).
   const focusOnOpen = useCallback((node: HTMLInputElement | null) => {
     node?.focus();
   }, []);
+
   const saving = createCampaign.isPending;
   const onConfirmSave = useCallback(async () => {
     const name = saveName.trim();
@@ -554,7 +555,7 @@ export default function PortfolioBuilder() {
               </Button>
               {saveFailed && (
                 <span className="save-build-form__error" role="alert">
-                  {saveValidationError ?? (
+                  {saveValidationError ?? saveRefusalCopy(saveError) ?? (
                     <>Save failed: <DescribedErrorBody error={saveError} subject="the build save" /> Your name is kept; try again.</>
                   )}
                 </span>

@@ -27,6 +27,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PortfolioPreview } from '../types';
 import { clearToasts, getToasts } from '../lib/toast';
+import { ApiError } from '../lib/apiTransport';
 
 // Vitest executes on Node, but the app tsconfig (correctly) carries no Node
 // globals — declare the one we use.
@@ -512,6 +513,31 @@ describe('PortfolioBuilder save-build flow', () => {
     expect(getToasts().map((toast) => [toast.tone, toast.title, toast.detail])).toEqual([
       ['success', 'Build saved', 'Distinct Illinois refinance cohort'],
     ]);
+  });
+
+  // W5b portfolio-forms review note: a 403 cannot be fixed by "try again",
+  // and a create 409 needs a fresh run; neither says "Reload".
+  it.each([
+    [403, 'Save failed: you need access to save builds; ask an administrator. Your name is kept.'],
+    [
+      409,
+      'Save failed: the build or its message variants changed, or this save was already sent. Your name is kept: run the build again, then save.',
+    ],
+  ])('words a %s save refusal so the next step is clear', async (status, expected) => {
+    portfolioPreview.mockResolvedValue(PREVIEW);
+    portfolioCreate.mockRejectedValueOnce(
+      new ApiError('campaign config is stale for this build', { path: '/api/portfolio', status }),
+    );
+    mount();
+    await waitUntil(() => !saveButton().disabled);
+    act(() => saveButton().click());
+    act(() => container.querySelector<HTMLButtonElement>('[data-testid="portfolio-save-confirm"]')!.click());
+    await waitUntil(() => container.querySelector('[role="alert"]') !== null);
+
+    const alert = container.querySelector('[role="alert"]')?.textContent ?? '';
+    expect(alert).toBe(expected);
+    expect(alert).not.toMatch(/reload|try again|stale for this build/i);
+    expect(container.querySelector('[data-testid="portfolio-save-name"]')).not.toBeNull();
   });
 
   function typeSaveName(value: string) {
