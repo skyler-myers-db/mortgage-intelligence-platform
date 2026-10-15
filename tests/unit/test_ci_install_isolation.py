@@ -353,7 +353,7 @@ def test_the_runbook_states_the_reserved_identity_contract_and_defers_the_bootst
         assert anchor in step1, anchor
     assert "blocked in the anchor workspace" in _flat(section.split("**Why the CI install", 1)[0])
     assert "never against the anchor workspace" in _flat(_numbered_item(owner, 8))
-    assert "Steps 4-6 run only on the forked-anchor target" in _flat(integrator.split("\n4. ", 1)[0])
+    assert "\n\nSteps 4-6 run only on the forked-anchor target" in integrator.split("\n4. ", 1)[0], "its own paragraph"
 
     flat = _flat(section)
     assert "Give the CI install its own identities" not in flat
