@@ -161,6 +161,11 @@ describe('RateWindowPanel', () => {
     expect(rows[0].textContent).toContain(WEEKS[0].week);
     expect(rows[rows.length - 1].textContent).toContain('(current)');
     expect(rows[rows.length - 1].textContent).toContain('1,956');
+    // The current print and the book median, which the retired model
+    // ariaLabel also carried, live in the frame: the plot's '6.22% now' and
+    // the current row here.
+    expect(rows[rows.length - 1].textContent).toContain('6.22%');
+    expect(rows[rows.length - 1].textContent).toContain('7.10%');
     // The summary and the as-of notice stay with the table view.
     expect(container.querySelector('figcaption.chart-frame__summary')?.textContent).toContain('88 bps below');
     expect(container.querySelector('[data-testid="rate-window-asof"]')).not.toBeNull();

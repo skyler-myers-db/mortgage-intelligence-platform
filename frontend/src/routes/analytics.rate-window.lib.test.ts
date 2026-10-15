@@ -89,12 +89,6 @@ describe('buildRateWindowModel', () => {
     expect(model.points.map((p) => p.x)).toEqual([0, 50, 100]);
     expect(model.xTicks[0]).toEqual({ x: 0, label: 'Mar 2026', anchor: 'start', minor: false });
     expect(model.xTicks[model.xTicks.length - 1]).toMatchObject({ x: 100, label: 'Apr 2026', anchor: 'end', minor: false });
-    // The image's accessible description carries every number the marks draw.
-    expect(model.ariaLabel).toContain('30-year fixed 6.22% in the week of 2026-04-13');
-    expect(model.ariaLabel).toContain('book median note rate of 7.10%');
-    expect(model.ariaLabel).toContain('88 bps below');
-    expect(model.ariaLabel).toContain('Spread screen: 75 bps below the book median (6.35%).');
-    expect(model.ariaLabel).toContain('1,956 of 48,210');
   });
 
   it('maps values top-down inside each panel with the baseline at the bottom', () => {
