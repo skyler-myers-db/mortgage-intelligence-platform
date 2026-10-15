@@ -212,7 +212,7 @@ You've just told them: (a) you can see the pipe, (b) we don't hide what's missin
 
 > *Navigate to Segments.*
 
-> **"Now we slice that universe into segments — and this is where the product gets defensible. Each segment is a testable definition, not an audience label. Prime Refi Candidates is rate spread of at least 75 basis points AND equity of at least 15 percent. Not 'high-intent' as a vibe — those exact thresholds, applied to those exact gold-table columns, every night."**
+> **"Now we slice that universe into segments — and this is where the product gets defensible. Each segment is a testable definition, not an audience label. In the Money is rate spread of at least 75 basis points AND equity of at least 15 percent. Not 'high-intent' as a vibe — those exact thresholds, applied to those exact gold-table columns, every night."**
 
 > *Point at Listed for Sale and HELOC Intent.*
 

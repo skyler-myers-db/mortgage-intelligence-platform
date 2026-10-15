@@ -6,7 +6,8 @@
  * one name is "In the Money", the prototype's and CLAUDE.md's vocabulary, in
  * three grammatical forms: the label ("In the Money"), the prose predicate
  * ("are in the money") and the prenominal ("in-the-money borrowers"). "ITM"
- * appears only inside "ITM on Related Property" or an <abbr>.
+ * appears only inside "ITM on Related Property", an <abbr>, or as the term's
+ * own alias chip on /glossary, the one page that defines the abbreviation.
  *
  * This is the ONLY file exempt from eslint.config.js LEXICON_BAN: every
  * retired variant below is an INPUT alias (the glossary's search-only

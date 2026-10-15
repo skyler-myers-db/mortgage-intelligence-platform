@@ -81,8 +81,10 @@ export function workflowIcon(workflowId: GrowthAgentWorkflowId) {
 export function renderSourceAssetChip(asset: string) {
   const source = drawerForAsset(asset);
   const label = friendlyAssetLabel(asset);
-  // Plain-English label on the surface; the fully-qualified UC id stays in the
-  // title tooltip (and remains visible in /admin-config + /data-estate detail).
+  // Plain-English label on the surface. An evidence chip opens the asset's
+  // governed drawer (no native title: its hover card names the source); a
+  // plain chip with no drawer source keeps the raw UC id in its Tooltip. Every
+  // id stays visible in /admin-config + /data-estate detail.
   if (source) return <EvidenceChip key={asset} source={source}>{label}</EvidenceChip>;
   return <Chip key={asset} variant="neutral" icon="db" tooltip={asset}>{label}</Chip>;
 }
