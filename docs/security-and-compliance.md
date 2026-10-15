@@ -503,3 +503,36 @@ a row is closed once and never deleted: the App role holds `SELECT`,
 `INSERT` and `UPDATE` only. The lifecycle sync's wake step (the bundle job
 runs as the deployer, which owns `mip_app`) writes only `woken_at` and
 `wake_reason`, under a `woken_at IS NULL` guard, and writes no audit row.
+
+## Segment display names and examiner reconstruction (2026-10-XX, W5e)
+
+critic-11 / D-platform-process-g. The economic-incentive rule that
+`fn_in_the_money` implements has one display name: **In the Money**. It is
+an economics screen (rate spread at or above the governed threshold AND
+equity at or above the governed threshold), not lead quality and not
+creditworthiness. It is staff vocabulary only: borrower-facing draft copy
+never carries it, by construction and by test
+(`tests/unit/test_outreach_no_internal_terms.py`).
+
+**Codes never changed; only display words did.** Historical Lakebase and
+`action_audit` rows are never rewritten, so an examiner reading a row
+written before this change maps the old display words through the stable
+code:
+
+| Stored text (before 2026-10-XX) | Code | Display name now |
+| --- | --- | --- |
+| Prime Refi Candidates / Prime Refi Candidate | `itm` (segment) | In the Money |
+| Prime refinance economics (Growth Agent trigger label) | `itm` | In the Money |
+| Refi economics / Refi Economics (KPI, funnel stage) | `in_the_money` (measure) | In the Money |
+| Refi economics screen (Home KPI, lineage title) | `in_the_money` / `refi_economics_screen` | In the Money |
+| Refinance economics screen / Refi screen (source chip, proof margin) | `fn_in_the_money` / `spread_screen` | In the Money rule |
+
+Every `GROWTH_AGENT_RUN` payload that names a segment label also carries its
+code in `result_filters` (`segment` or `segment_codes`), and no
+`RECOMMEND_OFFER` payload names a label without its code
+(`tests/unit/test_audit_payload_segment_code.py`), so a stored row is read by
+code, whatever display name was current when it was written.
+`backend/services/segment_labels.py` keeps the retired name as an input
+alias only (`LEGACY_SEGMENT_NAMES`); `tests/unit/test_segment_label_parity.py`
+keeps the gold, App and frontend names identical and the retired variants
+out of every shipped string.

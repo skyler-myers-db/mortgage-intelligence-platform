@@ -209,9 +209,9 @@ export const DRAWER_SOURCE_PROSE = {
 
   itm: {
     description:
-      'Refi screen: rate >= 75 bps above market and equity >= 15%; not the full score.',
+      'In the Money rule: rate >= 75 bps above market and equity >= 15%; not the full score.',
     definition:
-      'Borrowers who clear the refinance economics screen: their lien rate sits far enough above the current market rate, with enough equity, under the governed fn_in_the_money rule.',
+      'Borrowers who are in the money: their lien rate sits far enough above the current market rate, with enough equity, under the governed fn_in_the_money rule.',
     signals: [
       { label: 'KPI measure', source: 'portfolio_headline_metric_view.in_the_money', value: 'SUM' },
       { label: 'Par refi rate', source: 'market_rates_weekly.market_rate_fraction', value: 'latest' },
@@ -247,7 +247,7 @@ export const DRAWER_SOURCE_PROSE = {
 
   rateSensitivity: {
     description:
-      "Per state and par-rate step, the borrowers that clear this refresh's refi screen with fn_rate_spread and fn_in_the_money re-run at par plus the step. A scenario, not a forecast; rebuilt by the gold refresh, not on a schedule.",
+      "Per state and par-rate step, the borrowers in the money with fn_rate_spread and fn_in_the_money re-run at par plus the step. A scenario, not a forecast; rebuilt by the gold refresh, not on a schedule.",
     signals: [
       { label: 'Scenario grid', source: 'mip.gold.rate_sensitivity_rollup', value: 'state x step, per refresh' },
       { label: 'Book', source: 'mip.gold.borrower_360', value: 'state, equity, thresholds, base par' },
@@ -260,12 +260,12 @@ export const DRAWER_SOURCE_PROSE = {
 
   portfolioHeadlineView: {
     description:
-      'Borrower-grain semantic view defining every home headline KPI: marketable population, refi economics screen, high opportunity, offers available, and primary offer paths.',
+      'Borrower-grain semantic view defining every home headline KPI: marketable population, In the Money, high opportunity, offers available, and primary offer paths.',
     definition:
       'One row per borrower in the refreshed book; every headline count is a count or sum over this view.',
     signals: [
       { label: 'Addressable population', source: 'portfolio_headline_metric_view', value: 'COUNT(*)' },
-      { label: 'Refi economics screen', source: 'in_the_money', value: 'SUM' },
+      { label: 'In the Money', source: 'in_the_money', value: 'SUM' },
       { label: 'High opportunity', source: 'is_high_opportunity', value: 'fn_high_opportunity' },
       { label: 'Offers available', source: 'offer_available', value: 'non-null offer' },
       { label: 'Primary offer paths', source: 'offer_recommended', value: 'actionable lane' },
@@ -364,7 +364,7 @@ export const DRAWER_SOURCE_PROSE = {
     signals: [
       { label: 'KPI measure', source: 'portfolio_headline_metric_view.offer_recommended', value: 'SUM' },
       { label: 'Offers available', source: 'portfolio_headline_metric_view.offer_available', value: 'non-null offer' },
-      { label: 'Rate spread', source: 'borrower_360.rate_spread_bps', value: 'refi economics' },
+      { label: 'Rate spread', source: 'borrower_360.rate_spread_bps', value: 'In the Money rule' },
       { label: 'Equity', source: 'borrower_360.equity_pct', value: 'product fit' },
       { label: 'HELOC intent', source: 'borrower_360.has_heloc_propensity_trigger', value: 'trigger' },
       { label: 'Permit activity', source: 'borrower_360.has_permit', value: 'filed permit only' },

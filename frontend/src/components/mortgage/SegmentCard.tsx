@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import type { SegmentSummary } from '../../types';
 import { Icon } from '../Icon';
 import { EvidenceChip } from '../Primitives';
@@ -59,7 +59,7 @@ import { formatCount } from '../../lib/formatters';
  * pinned to its row, the reconcile slot always renders, and the title
  * reserves two lines, so row counts and offsets match across cards. To fit
  * the prototype's proportions the description clamps to two lines (the full
- * text stays in the DOM and on the select button's `title`), the reconcile
+ * text stays in the DOM as the select button's description), the reconcile
  * note is one line, `avg` sits beside the count so the meta row keeps the
  * evidence chip and the Ask Genie entry on one line, and each facet is one
  * share bar (SegmentFacetBar). The headline count never wraps: when a six- to
@@ -87,6 +87,8 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
   const presentation = segmentByCode(segment.code);
   const displayName = presentation?.name ?? segment.name;
   const displayDescription = presentation?.description ?? segment.description;
+  // critic-08: the select button is described by the card's visible line.
+  const descriptionId = useId();
   const displayColor = presentation?.color ?? segment.color;
   const prev = useRef<boolean | undefined>(selected);
   const [emanateKey, setEmanateKey] = useState<number>(selected ? 1 : 0);
@@ -101,7 +103,7 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
   // Addressable-vs-contactable reconciliation. `count` is the whole
   // addressable population; the Lead Queue this card links to applies the
   // contact-eligibility predicate, so it shows a strict subset — live
-  // 2026-08-11 that was 3,217 of 74,335 for Prime Refi (23x). Stating one
+  // 2026-08-11 that was 3,217 of 74,335 for In the Money (23x). Stating one
   // number and navigating to the other reads as a broken link, so the card
   // states the relationship. Same idiom as `.zip-tiles__reconcile` on the
   // map's ZIP drill. Null (an older payload) renders nothing rather than a
@@ -152,7 +154,7 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
           className="seg-card__select"
           onClick={activate}
           aria-pressed={selected ?? false}
-          title={displayDescription}
+          aria-describedby={descriptionId}
           aria-label={
             showsReconcile
               ? `Select ${displayName} segment — ${formatCount(segment.count)} borrowers, ${formatCount(contactable)} contactable`
@@ -199,7 +201,7 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
           </div>
         )}
       </div>
-      <div className="seg-card__sub">{displayDescription}</div>
+      <div className="seg-card__sub" id={descriptionId}>{displayDescription}</div>
       <div className="seg-card__meta">
         {gated || hasNoBorrowers ? null : deltaIsFirstSnapshot ? (
           // One line beside the evidence chip and Ask Genie at the 1440
@@ -216,7 +218,7 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
           </span>
         )}
         <span className="seg-card__evidence">
-          <EvidenceChip source={evidenceSource} title={`Evidence for ${displayName}`}>
+          <EvidenceChip source={evidenceSource}>
             evidence
           </EvidenceChip>
         </span>

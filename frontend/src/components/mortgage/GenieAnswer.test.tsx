@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { designCss } from '../../test/designCss';
 import { stripQuestionRestatement } from './GenieAnswer';
 import { strategySegmentLabel } from './GenieAnswerCharts';
-import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
 import {
   coerceMeasure,
   findMeasureColumn,
@@ -83,16 +82,6 @@ describe('stripQuestionRestatement', () => {
   });
 });
 
-describe('normalizeGenieAnswerLanguage', () => {
-  it('replaces refinance jargon with the product term users see elsewhere', () => {
-    const out = normalizeGenieAnswerLanguage(
-      'There are 55,037 in-the-money borrowers. The top ZIPs have in-the-money refinance candidates.',
-    );
-    expect(out).toContain('borrowers passing the refinance-economics screen');
-    expect(out).not.toContain('in-the-money');
-  });
-});
-
 describe('inferChartFromRows', () => {
   it('treats ZIP columns as categorical identifiers and borrowers as the measure', () => {
     const rows = [
@@ -133,7 +122,7 @@ describe('inferChartFromRows', () => {
     expect(chart?.valueCol).toBe('borrowers');
     expect(chart?.rows.map((row) => row.label)).toEqual([
       'HELOC Intent',
-      'Prime Refi Candidates',
+      'In the Money',
     ]);
   });
 
@@ -167,9 +156,9 @@ describe('Genie table display labels', () => {
     expect(humanizeKey('segment_code')).toBe('Cohort');
     expect(humanizeKey('segment_codes')).toBe('Cohorts');
     expect(formatCell('segment_code', 'permit')).toBe('HELOC Intent');
-    expect(formatCell('segment_code', 'itm')).toBe('Prime Refi Candidates');
+    expect(formatCell('segment_code', 'itm')).toBe('In the Money');
     expect(formatCell('segment_codes', ['permit', 'equity'])).toBe('HELOC Intent, Home Equity Candidate');
-    expect(formatCell('segment_codes', '["itm", "permit"]')).toBe('Prime Refi Candidates, HELOC Intent');
+    expect(formatCell('segment_codes', '["itm", "permit"]')).toBe('In the Money, HELOC Intent');
     expect(formatCell('segment_code', 'retention-risk')).toBe('Unknown segment');
     expect(formatCell('segment_codes', ['retention-risk', 'made_up'])).toBe('Unknown segment');
   });

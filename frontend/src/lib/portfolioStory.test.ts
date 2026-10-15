@@ -28,7 +28,7 @@ describe('buildPortfolioStory', () => {
     // the prose must not claim the governed "marketable" subset.
     expect(prose).toContain('Your addressable book stands at');
     expect(prose).not.toContain('marketable');
-    // Locale-grouped counts and the derived refinance-economics share all appear.
+    // Locale-grouped counts and the derived in-the-money share all appear.
     expect(prose).toContain('5,156,184');
     expect(prose).toContain('111,726');
     expect(prose).toContain('2.2%'); // 111,726 / 5,156,184 = 2.167% → 2.2%
@@ -45,7 +45,7 @@ describe('buildPortfolioStory', () => {
     // typewriter stand-in. The verifier must be indifferent to the dash.
     const s = buildPortfolioStory(preview());
     const prose = s.sentences.join(' ');
-    expect(prose).toContain('pass the refinance-economics screen — 2.2% of the book');
+    expect(prose).toContain('are in the money — 2.2% of the book');
     expect(prose).not.toContain('--');
     expect(s.allVerified).toBe(true);
     expect(s.unverifiedTokens).toEqual([]);
@@ -55,8 +55,8 @@ describe('buildPortfolioStory', () => {
     const s = buildPortfolioStory(preview());
     const byLabel = Object.fromEntries(s.claims.map((c) => [c.label, c.sourceKey]));
     expect(byLabel['Addressable population']).toBe('population');
-    expect(byLabel['Refi-economics screen']).toBe('itm');
-    expect(byLabel['Refi-economics share']).toBe('itm');
+    expect(byLabel['In the Money']).toBe('itm');
+    expect(byLabel['In-the-money share']).toBe('itm');
     expect(byLabel['Opportunity score 75+ count']).toBe('leadScore');
     expect(byLabel['Primary offer paths']).toBe('nbo');
     expect(s.claims.every((c) => c.verified)).toBe(true);

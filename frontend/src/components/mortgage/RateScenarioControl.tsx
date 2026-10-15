@@ -8,7 +8,7 @@
  * (Module 0 Prototype.html's map legend, ~L1860-1871, is a static class bar).
  * deviation:rate-change-as-numbers: under the headline, the whole book's
  * "Largest in-the-money gains / drops" clause, and a link that opens the
- * borrowers the move would bring onto (or take off) the refi screen in the
+ * borrowers the move would bring into (or take out of) the money in the
  * Lead Queue, by today's spread band (scenarioCohortLink; no count).
  * The control is a native `input[type=range]` in basis points of par move, so
  * the keyboard is the platform's own (arrows +/-1 step, PageUp / PageDown,
@@ -37,6 +37,7 @@ import type { RateLeverInputs } from './USChoroplethMapLegend';
 import { useWarmingBlockDefers } from './USChoroplethMap.warming';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { bpsLabel, formatCount, ratePct } from '../../lib/formatters';
+import { LEXICON } from '../../lib/lexicon';
 import { formatDate } from '../../lib/time';
 import { EvidenceChip } from '../Primitives';
 import { scenarioView, type RateScenarioIndex } from './rateScenario.logic';
@@ -160,8 +161,8 @@ function RateLever({ index, step, onStepChange, onStepCommit, scope, stateName }
         </div>
       )}
       <div className="rate-lever__meta">
-        Refi screen {typeof minSpread === 'number' ? bpsLabel(minSpread) : '—'} spread,{' '}
-        {typeof minEquity === 'number' ? `${formatCount(minEquity)}%` : '—'} equity · today&apos;s par{' '}
+        {LEXICON.inTheMoney.label}: spread ≥ {typeof minSpread === 'number' ? bpsLabel(minSpread) : '—'}, equity ≥{' '}
+        {typeof minEquity === 'number' ? `${formatCount(minEquity)}%` : '—'} · today&apos;s par{' '}
         {typeof response.base_market_rate_pct === 'number' ? ratePct(response.base_market_rate_pct) : '—'} · book as
         of <span className="rate-lever__date">{formatDate(response.provenance.book_as_of ?? null)}</span>
       </div>

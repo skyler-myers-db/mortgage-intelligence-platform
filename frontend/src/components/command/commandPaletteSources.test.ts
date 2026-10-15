@@ -7,6 +7,7 @@ import {
   PALETTE_PROVIDER_MAX,
   dataAssetRows,
   dedupePaletteBorrowers,
+  glossaryRows,
   paletteAssetGroup,
   paletteSourceGroups,
   rankPaletteRows,
@@ -59,6 +60,13 @@ describe('palette provider builders', () => {
     const rows = segmentRows();
     expect(rows.map((row) => row.label)).toEqual(SEGMENT_DEFINITIONS.map((definition) => segmentName(definition.code)));
     expect(rows[0].to).toBe(`/segment-intelligence?segment=${SEGMENT_DEFINITIONS[0].code}`);
+  });
+
+  it('glossary rows find a term by a search-only alias the glossary never shows (critic-11)', () => {
+    const row = glossaryRows().find((entry) => entry.id === 'glossary-in-the-money');
+    expect(row?.label).toBe('In the Money');
+    expect(row?.keywords).toEqual(expect.arrayContaining(['ITM', 'in-the-money', 'prime refi candidates']));
+    expect(rankPaletteRows(glossaryRows(), 'prime refi candidates').map((entry) => entry.id)).toContain('glossary-in-the-money');
   });
 
   it('data assets keep only assets with an asset page, each once', () => {

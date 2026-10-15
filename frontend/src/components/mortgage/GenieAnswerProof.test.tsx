@@ -189,7 +189,7 @@ describe('GenieProofPanel: figures verified against the rows (genie-10 phase 1)'
   });
 
   it.each<[Partial<GenieVerifiedClaim>, string]>([
-    [{ support: 'cell', column: 'in_the_money_borrowers' }, 'Matches a returned value in In The Money Borrowers'],
+    [{ support: 'cell', column: 'in_the_money_borrowers' }, 'Matches a returned value in In the Money Borrowers'],
     [{ support: 'cell', column: null }, 'Matches a returned value'],
     [{ support: 'row_count' }, 'The number of returned rows'],
     [{ support: 'sum', column: 'borrowers' }, 'The total of the returned Borrowers values'],

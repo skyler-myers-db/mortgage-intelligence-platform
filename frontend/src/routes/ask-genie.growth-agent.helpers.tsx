@@ -2,6 +2,7 @@ import { Chip, EvidenceChip } from '../components/Primitives';
 import { drawerForAsset } from '../lib/drawerSources';
 import { friendlyAssetLabel } from '../lib/assetLabels';
 import { isUspsStateCode } from '../lib/uspsStates';
+import { LEXICON } from '../lib/lexicon';
 import type {
   GrowthAgentSegmentCode,
   GrowthAgentWorkflowId,
@@ -25,7 +26,7 @@ const TRUSTED_ASSET_SUFFIXES: string[] = [
 ];
 
 export const CUSTOM_SEGMENTS: Array<{ code: GrowthAgentSegmentCode; label: string }> = [
-  { code: 'itm', label: 'Prime Refi Candidates' },
+  { code: 'itm', label: LEXICON.inTheMoney.label },
   { code: 'listed', label: 'Listed for Sale' },
   { code: 'permit', label: 'HELOC Intent' },
   { code: 'investor', label: 'Investor / Multi-Property' },
@@ -80,8 +81,10 @@ export function workflowIcon(workflowId: GrowthAgentWorkflowId) {
 export function renderSourceAssetChip(asset: string) {
   const source = drawerForAsset(asset);
   const label = friendlyAssetLabel(asset);
-  // Plain-English label on the surface; the fully-qualified UC id stays in the
-  // title tooltip (and remains visible in /admin-config + /data-estate detail).
-  if (source) return <EvidenceChip key={asset} source={source} title={asset}>{label}</EvidenceChip>;
-  return <Chip key={asset} variant="neutral" icon="db" title={asset}>{label}</Chip>;
+  // Plain-English label on the surface. An evidence chip opens the asset's
+  // governed drawer (no native title: its hover card names the source); a
+  // plain chip with no drawer source keeps the raw UC id in its Tooltip. Every
+  // id stays visible in /admin-config + /data-estate detail.
+  if (source) return <EvidenceChip key={asset} source={source}>{label}</EvidenceChip>;
+  return <Chip key={asset} variant="neutral" icon="db" tooltip={asset}>{label}</Chip>;
 }

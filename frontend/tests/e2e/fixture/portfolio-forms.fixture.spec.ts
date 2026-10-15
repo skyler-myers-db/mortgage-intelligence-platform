@@ -265,7 +265,10 @@ test.describe('portfolio failures in the buyer-safe vocabulary (states-04)', () 
 
     const conflict = app.degrade('/api/portfolio/create', SAVE_409);
     await openSaveAndSubmit(page, 'Summit IL refi cohort');
-    await expect(failure).toHaveText('Save failed: Reload to read the current version. Your name is kept; try again.');
+    // Item 19a: a 409 says what changed and what to do, never "Reload".
+    await expect(failure).toHaveText(
+      'Save failed: the build or its message variants changed, or this save was already sent. Your name is kept: run the build again, then save.',
+    );
     await expect(page.getByTestId('portfolio-save-name')).toHaveValue('Summit IL refi cohort');
     await expectBuyerSafe(page);
     await axe(page, 'save-conflict', 'dark');

@@ -237,7 +237,7 @@ describe('LeadTableRow one-line cells', () => {
   it('shows one segment chip and names the others on +n', () => {
     renderRow(quietLead);
     const segments = document.querySelector('.lead-table__segments') as HTMLElement;
-    expect([...segments.querySelectorAll('.chip__label')].map((el) => el.textContent)).toEqual(['Prime Refi Candidates', '+2']);
+    expect([...segments.querySelectorAll('.chip__label')].map((el) => el.textContent)).toEqual(['In the Money', '+2']);
     expect(segments.querySelector('.lead-table__more')?.getAttribute('aria-label')).toBe(
       '2 more segments: Segment: Home Equity Candidate, Segment: Listed for Sale',
     );

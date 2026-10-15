@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type {
   GenieActionSuggestion,
@@ -11,7 +11,6 @@ import { GenieActions } from './GenieAnswerActions';
 import { GenieAnswerToolbar } from './GenieAnswerToolbar';
 import { GenieAnswerSections, GenieRowsVisual } from './GenieAnswer.sections';
 import { MarkdownAnswer, stripQuestionRestatement } from './GenieAnswer.markdown';
-import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
 import { GenieProofPanel } from './GenieAnswerProof';
 import { GenieFigureScopes, genieFigureScopes } from './GenieAnswerFigures';
 import { GenieAnswerFeedback } from './GenieAnswerFeedback';
@@ -98,6 +97,7 @@ export function GenieAnswer({
   const workspaceHost = useWorkspaceHost();
   const { pins, pin, unpin } = usePinnedInsights();
   const [showProof, setShowProof] = useState(false);
+  const followUpHintId = useId();
   const proofDrawerRef = useRef<HTMLDialogElement | null>(null);
   const proofCloseRef = useRef<HTMLButtonElement | null>(null);
   const rows = Array.isArray(table_rows) ? table_rows : [];
@@ -105,7 +105,8 @@ export function GenieAnswer({
   // reports rather than every borrower in that geography.
   const cellCohort = answerCohortFromActions(actions);
   const chartColumns = rows[0] ? Object.keys(rows[0]) : [];
-  const cleanedAnswer = answer ? normalizeGenieAnswerLanguage(stripQuestionRestatement(answer)) : '';
+  // Genie's own words render verbatim (live-first): no vocabulary rewrite.
+  const cleanedAnswer = answer ? stripQuestionRestatement(answer) : '';
   // Deep-research sweep: each planned sub-analysis ships its own verified
   // prose, rows and chart plan. When they are present they ARE the answer
   // body — the top-level `answer` is the stitched narrative they were cut
@@ -217,12 +218,14 @@ export function GenieAnswer({
   // it. The heuristic table/chart layer above/below is unchanged.
   const nativeVizBadge = payload.native_visualization ? (
     <div className="genie-answer__native-viz">
-      <span
-        className="chip chip--neutral genie-answer__native-viz-chip"
-        title="Genie generated a native visualization for this answer; in-app native rendering activates when the workspace enables the Beta download API."
-      >
+      <span className="chip chip--neutral genie-answer__native-viz-chip">
         <Icon name="bolt" size={10} />
         <span className="chip__label">Native chart · Beta</span>
+        {/* critic-08: read, never hover-only. */}
+        <span className="sr-only">
+          : Genie generated a native visualization for this answer; in-app native rendering activates when the
+          workspace enables the Beta download API.
+        </span>
       </span>
     </div>
   ) : null;
@@ -414,6 +417,13 @@ export function GenieAnswer({
       )}
       {onFollowUp && effectiveFollowUps.length > 0 && (
         <div className="genie-answer__followups">
+          {/* critic-08: a disabled follow-up's reason is described, never a
+              hover-only title. The surface also shows it beside its composer. */}
+          {followUpDisabledReason && (
+            <span id={followUpHintId} className="sr-only">
+              {followUpDisabledReason}
+            </span>
+          )}
           {effectiveFollowUps.slice(0, 5).map((q) => (
             <button
               key={q}
@@ -421,7 +431,7 @@ export function GenieAnswer({
               className="filter filter--question"
               onClick={() => onFollowUp(q, liveConversationId ?? null)}
               disabled={Boolean(followUpDisabledReason)}
-              title={followUpDisabledReason ?? undefined}
+              aria-describedby={followUpDisabledReason ? followUpHintId : undefined}
             >
               <span className="filter__label">Ask</span>
               <span className="filter__value filter__value--question">{q}</span>

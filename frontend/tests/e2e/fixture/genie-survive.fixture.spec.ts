@@ -138,7 +138,9 @@ test.describe('mid-turn composer', () => {
     await expect(dialog.locator('#genie-composer-busy')).toContainText(/^Genie is still answering/);
     for (const chip of await chips.all()) {
       await expect(chip).toBeDisabled();
-      await expect(chip).toHaveAttribute('title', /^Genie is still answering/);
+      // critic-08: the reason is the chip's description, never a native title.
+      await expect(chip).toHaveAccessibleDescription(/^Genie is still answering/);
+      await expect(chip).not.toHaveAttribute('title', /.*/);
     }
 
     // Typing still works; Enter does not submit a second turn.

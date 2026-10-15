@@ -22,7 +22,7 @@ export interface SegmentDefinition {
 export const SEGMENT_DEFINITIONS: readonly SegmentDefinition[] = [
   {
     code: 'itm',
-    name: 'Prime Refi Candidates',
+    name: 'In the Money',
     color: 'var(--seg-itm)',
     description: 'Lien rate ≥ 75 bps above par and equity ≥ 15%.',
     icon: 'money',

@@ -33,7 +33,7 @@ function contactableClause(input: ScenarioSentenceInput): string {
 export function scenarioHeadline(input: ScenarioSentenceInput): string {
   const rate = ratePct(input.ratePct);
   if (input.step === 0) {
-    return `At today's 30-year par rate (${rate}), ${borrowers(input)} clear this refresh's refi screen${contactableClause(input)}`;
+    return `At today's 30-year par rate (${rate}), ${borrowers(input)} are in the money${contactableClause(input)}`;
   }
   const points = formatFixed(Math.abs(input.step) / 100, 2);
   const direction = input.step < 0 ? 'lower' : 'higher';
@@ -41,7 +41,7 @@ export function scenarioHeadline(input: ScenarioSentenceInput): string {
   const change = delta === 0
     ? 'the same as today'
     : `${formatCount(Math.abs(delta))} ${delta > 0 ? 'more' : 'fewer'} than today`;
-  return `If the 30-year par rate were ${points} points ${direction} (${rate}), ${borrowers(input)} would clear this refresh's refi screen: ${change}${contactableClause(input)}`;
+  return `If the 30-year par rate were ${points} points ${direction} (${rate}), ${borrowers(input)} would be in the money: ${change}${contactableClause(input)}`;
 }
 
 /** The slider's aria-valuetext: the rate, the move, and the count in one phrase. */
@@ -84,7 +84,7 @@ const SPREAD_BOUND = { min: -1000, max: 5000 } as const;
 
 /**
  * The map-side cohort handoff (wow-stage-1): the borrowers a par move would
- * bring onto (s < 0) or take off (s > 0) the refi screen, as TODAY's
+ * bring into (s < 0) or take out of (s > 0) the money, as TODAY's
  * integer spread band around the server's threshold T, in the Lead Queue.
  * It states no count: the queue applies contactability, and its rows are
  * today's par (RATE_COHORT_NOTE stays true). Null at step 0 or without T.
@@ -110,7 +110,7 @@ export function scenarioCohortLink(
   return {
     href: `/lead-queue?${params.toString()}`,
     label: gains
-      ? `Open borrowers within ${move} bps of the refi screen in the Lead Queue`
-      : `Open in-the-money borrowers within ${move} bps of dropping off the refi screen`,
+      ? `Open borrowers within ${move} bps of being in the money in the Lead Queue`
+      : `Open in-the-money borrowers within ${move} bps of falling out of the money`,
   };
 }

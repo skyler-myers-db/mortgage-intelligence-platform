@@ -4,9 +4,11 @@
  * an axe verdict and a pixel baseline describe the same DOM.
  *
  * Two kinds:
- *  - LOAD states (`degraded`, `empty`, `read-failed`, `stale-note`) change what the
- *    route's natural load receives, so `prepareState` registers their
- *    fixture BEFORE navigation;
+ *  - LOAD states (`degraded`, `empty`, `read-failed`, `stale-note`,
+ *    `request-scoped`, `request-scoped-empty`) change what the route's
+ *    natural load receives,
+ *    so `prepareState` registers their fixture BEFORE navigation; a state
+ *    with its own URL (`statePath`) loads that URL instead of the route's;
  *  - OVERLAY states (`evidence-drawer`, `command-palette`, `genie`,
  *    `filter-menu`, `expanded-row`, `triage`, `delta-explainer`,
  *    `evidence-how-we-got`, `evidence-under-the-hood`, and the W5d
@@ -31,8 +33,9 @@ import type { AppDriver } from './app';
 import { WAREHOUSE_OUTAGE_503 } from './data/errorSurfaces';
 import { registerFollowUps } from './data/followUps';
 import { HEALTH_OK } from './data/shell';
-import { NON_APPROVER_SESSION, REQUESTED_IDS, batchView, registerApprovalRequestStore } from './data/approvalRequests';
+import { NON_APPROVER_SESSION, REQUESTED_IDS, REQUESTER_LABEL, REQUEST_BATCH_ID, batchView, registerApprovalRequestStore } from './data/approvalRequests';
 import { APPROVED_LEAD, approvedLifecycle } from './data/revoke';
+import { LEADS } from './data/borrowers';
 import { json, type MockApi } from './mockApi';
 import { expect } from './test';
 
@@ -68,7 +71,29 @@ export type FixtureState =
   | 'more-like-this'
   // W5e w5-lead-table-compile (flow-v2): the approver's revoke panel on the
   // Approved row, after its one audit-free lifecycle read.
-  | 'lead-revoke-panel';
+  | 'lead-revoke-panel'
+  // V (W5e w5-lexicon-copy, W5d lq deferral 9): an approval request whose
+  // borrowers were all decided, withdrawn or expired (its own URL, statePath),
+  // and the same request still open: ApprovalRequestScopeRow over its rows.
+  | 'request-scoped-empty'
+  | 'request-scoped';
+
+/**
+ * States whose natural load is their own URL, not the route's. The
+ * request-scoped queue loads /lead-queue?approval_request_batch=<id>: its one
+ * scoped GET /api/leads IS the natural load, so nothing after it is an
+ * audited read (navigating there after the route's load would be one).
+ */
+const REQUEST_SCOPED_PATH = `/lead-queue?approval_request_batch=${REQUEST_BATCH_ID}`;
+const STATE_PATHS: Readonly<Partial<Record<FixtureState, string>>> = {
+  'request-scoped-empty': REQUEST_SCOPED_PATH,
+  'request-scoped': REQUEST_SCOPED_PATH,
+};
+
+/** The URL a scan or a capture of `state` loads: the state's own, else the route's. */
+export function statePath(routePath: string, state: FixtureState): string {
+  return STATE_PATHS[state] ?? routePath;
+}
 
 /** The reads `read-failed` fails, per route name (routes.ts). */
 export const READ_FAILED_ENDPOINTS: Readonly<Record<string, readonly string[]>> = {
@@ -127,7 +152,15 @@ export function prepareState(mockApi: MockApi, state: FixtureState, routeName?: 
     registerFollowUps(mockApi);
   } else if (state === 'lead-revoke-panel') {
     mockApi.register('GET', `/api/borrowers/${APPROVED_LEAD.borrower_id}/lifecycle`, () => json(approvedLifecycle()));
-  } else if (state === 'empty') {
+  } else if (state === 'request-scoped') {
+    // The approver's open request, and its scoped read answering only the
+    // request's open borrowers, as GET /api/leads does for the scope alone.
+    registerApprovalRequestStore(mockApi, { seed: batchView(REQUESTED_IDS, false) });
+    const rows = LEADS.filter((lead) => REQUESTED_IDS.includes(lead.borrower_id));
+    mockApi.register<LeadSummary[]>('GET', '/api/leads', () =>
+      json<LeadSummary[]>([...rows], { headers: { 'X-Total-Matching': String(rows.length), 'X-Returned-Rows': String(rows.length) } }),
+    );
+  } else if (state === 'empty' || state === 'request-scoped-empty') {
     mockApi.register<LeadSummary[]>('GET', '/api/leads', () =>
       json<LeadSummary[]>([], { headers: { 'X-Total-Matching': '0', 'X-Returned-Rows': '0' } }),
     );
@@ -202,7 +235,7 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
     }
     case 'delta-explainer': {
       // Home's refi trigger (WHY NOW): its chip's drawer explains the change (audit-free read).
-      const chip = page.locator('.home-answer .login-summary .home-answer__trigger', { hasText: 'refi screen' }).locator('.evidence-chip');
+      const chip = page.locator('.home-answer .login-summary .home-answer__trigger', { hasText: 'in-the-money borrowers' }).locator('.evidence-chip');
       const drawer = await app.openEvidenceDrawer(chip);
       await expect(drawer.locator('[data-testid="delta-explainer"] table tbody tr').first()).toBeVisible();
       break;
@@ -264,6 +297,17 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
       // The Approved row's Revoke opens the lazy panel; nothing is written until Confirm.
       await page.getByTestId(`lead-revoke-${APPROVED_LEAD.borrower_id}`).filter({ visible: true }).click();
       await expect(page.getByTestId('revoke-approval-panel').getByLabel('Reason for revoking')).toBeFocused();
+      break;
+    }
+    case 'request-scoped-empty':
+      await expect(page.locator('#main-content .empty__title')).toHaveText('No open borrowers left in this approval request.');
+      break;
+    case 'request-scoped': {
+      const scope = page.getByTestId('approval-request-scope').filter({ visible: true });
+      await expect(scope).toContainText(`${REQUESTER_LABEL} · ${REQUESTED_IDS.length} borrowers`);
+      for (const borrowerId of REQUESTED_IDS) {
+        await expect(page.getByTestId(`lead-approve-${borrowerId}`).filter({ visible: true })).toBeVisible();
+      }
       break;
     }
     case 'glossary-search': {

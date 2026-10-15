@@ -156,7 +156,7 @@ const SURFACES: readonly Surface[] = [
       const opener = main.getByRole('button', { name: 'Show proof' }).first();
       // Ask once per page: a reopen uses the answer already on screen.
       if ((await opener.count()) === 0) {
-        await main.getByRole('textbox', { name: 'Ask Genie — question' }).fill('Which states have the most prime refi candidates?');
+        await main.getByRole('textbox', { name: 'Ask Genie — question' }).fill('Which states have the most in-the-money borrowers?');
         await main.getByRole('button', { name: 'Ask Genie', exact: true }).click();
       }
       await expect(opener).toBeVisible({ timeout: 20_000 });

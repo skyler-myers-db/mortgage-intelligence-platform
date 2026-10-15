@@ -96,7 +96,7 @@ describe('whyNowTriggers', () => {
   it('reads a zero movement as "no change in", and falls back to the server label', () => {
     const [, flat, , unknown] = whyNowTriggers(SUMMARY);
     expect(`${flat.display}${flat.joiner}${flat.noun}`).toBe(
-      'no change in borrowers who pass the refi screen',
+      'no change in in-the-money borrowers',
     );
     expect(unknown.noun).toBe('future things');
   });

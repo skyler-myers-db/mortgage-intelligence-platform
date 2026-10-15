@@ -1,5 +1,4 @@
 import type { GenieAnswer as GenieAnswerShape } from '../types';
-import { normalizeGenieAnswerLanguage } from './genieAnswerLanguage';
 import type { PinnedInsight } from './pinnedInsights';
 
 /**
@@ -233,7 +232,7 @@ export function flattenGenieMarkdown(text: string, mode: GenieFlattenMode): stri
  * MarkdownAnswer, through flattenGenieMarkdown.
  */
 function toPlainSummary(s: string): string {
-  return flattenGenieMarkdown(normalizeGenieAnswerLanguage(s), 'single');
+  return flattenGenieMarkdown(s, 'single');
 }
 
 /** Truncate to a word boundary with an ellipsis, never mid-token, and trim any

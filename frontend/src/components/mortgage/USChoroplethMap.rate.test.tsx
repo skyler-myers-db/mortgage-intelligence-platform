@@ -522,7 +522,7 @@ describe('USChoroplethMap rate change as numbers', () => {
       'Largest in-the-money gains: Illinois +400 · Texas +100 · PR +1',
     );
     const link = [...document.querySelectorAll<HTMLAnchorElement>('.rate-lever a')].find((a) =>
-      a.textContent === 'Open borrowers within 50 bps of the refi screen in the Lead Queue');
+      a.textContent === 'Open borrowers within 50 bps of being in the money in the Lead Queue');
     expect(link?.getAttribute('href')).toBe('/lead-queue?min_rate_spread_bps=25&max_rate_spread_bps=74');
     // deviation:lever-cohort-link-wraps: the scoped class lets the sentence label wrap in the lever.
     expect(link?.className).toBe('btn btn--ghost btn--sm rate-lever__cohort');

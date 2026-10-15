@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type UIEvent } from 'react';
-import { Link } from 'react-router';
+import { GenieCellLink } from './GenieCellLink';
 import { formatCount } from '../../lib/formatters';
 import { genieCellHref, type GenieAnswerCohort } from '../../lib/genieCellLinks';
 import { formatCell, humanizeKey, isIdentifierColumn } from './GenieAnswer.logic';
@@ -131,9 +131,7 @@ export default function GenieAnswerAllRows({
         return (
           <td key={c} className={isNum ? 'num' : undefined}>
             {href ? (
-              <Link className="mono" to={href}>
-                {formatCell(c, v)}
-              </Link>
+              <GenieCellLink href={href}>{formatCell(c, v)}</GenieCellLink>
             ) : (
               formatCell(c, v)
             )}
@@ -145,7 +143,7 @@ export default function GenieAnswerAllRows({
   const spacer = (key: string, rowCount: number) =>
     rowCount > 0 ? (
       <tr key={key} className="genie-answer__all-rows-spacer" aria-hidden="true">
-        <td colSpan={columns.length} style={{ blockSize: rowCount * view.rowHeight }} />
+        <td colSpan={columns.length} aria-hidden="true" style={{ blockSize: rowCount * view.rowHeight }} />
       </tr>
     ) : null;
   const windowRows = Array.from({ length: end - start }, (_, offset) => renderRow(start + offset));

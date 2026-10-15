@@ -251,7 +251,9 @@ describe('Borrower 360 loaded dossier (W5d)', () => {
 
     expect(text()).toContain('In the Money check');
     expect(text()).toContain('In the Money rule.');
-    const chip = [...document.querySelectorAll('.chip')].find((node) => node.textContent?.startsWith('In the Money'));
+    const chip = [...document.querySelectorAll('.chip')].find(
+      (node) => node.textContent?.startsWith('In the Money') && node.querySelector('a.glossary-term') !== null,
+    );
     expect(chip?.querySelector('a.glossary-term')?.getAttribute('href')).toBe('/glossary#in-the-money');
     expect(text()).not.toMatch(BANNED_VARIANTS);
   });

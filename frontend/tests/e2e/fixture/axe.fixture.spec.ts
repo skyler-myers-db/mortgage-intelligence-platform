@@ -23,6 +23,10 @@
  *  - W5e w5-analytics: an Executive KPI drawer on How we got, a failed
  *    Executive Refresh's stale note, a focused scatter cell's tip and the
  *    Sales ops workload table, both themes.
+ *  - W5e w5-lexicon-copy (W5d lq deferral 9): the request-scoped Lead Queue
+ *    whose borrowers were all decided (`request-scoped-empty`) and the open
+ *    request's scope row over its rows (`request-scoped`), each loaded on
+ *    its own URL through `statePath`, both themes.
  *
  * The ratchet (axe.ts KNOWN_VIOLATIONS) is validated against this matrix at
  * load: every entry names a scan that runs here, in each theme and accent it
@@ -33,7 +37,7 @@ import type { FixtureTheme } from './app';
 import { KNOWN_VIOLATIONS, expectAxeClean, validateKnownViolations, type AxeAccent, type AxeScanTarget } from './axe';
 import { registerBoard } from './data/salesLoop';
 import { ANALYTICS_W5E_ROUTE, ANALYTICS_W5E_STATES, enterAnalyticsW5eState } from './analyticsW5eStates';
-import { OVERLAY_STATES, enterState, prepareState, type FixtureState } from './fixtureStates';
+import { OVERLAY_STATES, enterState, prepareState, statePath, type FixtureState } from './fixtureStates';
 import { FIXTURE_ROUTES, FIXTURE_THEMES, type FixtureRoute } from './routes';
 import { expect, test } from './test';
 import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
@@ -44,6 +48,8 @@ const EXTRA_STATES: Readonly<Record<string, readonly FixtureState[]>> = {
     'filter-menu', 'expanded-row', 'read-failed', 'triage', 'approval-requests', 'my-approval-requests', 'request-approval-form',
     // W5e w5-lead-queue-columns, then w5-lead-table-compile.
     'hide-menu', 'omnibox', 'more-like-this', 'lead-revoke-panel',
+    // W5e w5-lexicon-copy (W5d lq deferral 9).
+    'request-scoped-empty', 'request-scoped',
   ],
   home: ['degraded', 'delta-explainer', 'evidence-how-we-got', 'evidence-under-the-hood', 'followups-tray', 'identity-menu'],
   'segment-intelligence': ['read-failed', 'stale-note'],
@@ -92,7 +98,7 @@ for (const { route, state, theme, accent } of SCANS) {
     await app.setTheme(theme);
     if (accent !== 'bright') await app.setAccent(accent);
     prepareState(mockApi, state, route.name);
-    await app.gotoRoute(route.path);
+    await app.gotoRoute(statePath(route.path, state));
     const naturalLoad = markNaturalLoad(mockApi);
     await expect(page.locator('html')).toHaveAttribute('data-accent', accent);
     // Scan the state once the reads it started have landed, so every run

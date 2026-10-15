@@ -27,6 +27,7 @@ import { intentFingerprint, type IntentRequestIds } from '../../lib/mutations/re
 import type { CampaignBinding } from './LeadTable.logic';
 import type { RejectReasonCode } from './LeadTable.types';
 import type { BulkRowReport } from './useLeadBulkRun';
+import { bulkRefusalCopy } from './bulkRefusalCopy';
 import { toastWriteFailure, toastWriteRefusal } from './leadWriteFailureToast';
 
 /** A single-row approval with no reviewed draft: refused before any draft or POST. */
@@ -195,7 +196,7 @@ export function approveWithReport(
         return { outcome: 'backend', message: RELOAD_TO_APPROVE };
       }
       if (err instanceof OfferNotPreviewedError) return { outcome: 'backend', message: OFFER_NOT_PREVIEWED };
-      const message = err instanceof Error ? err.message : null;
+      const message = bulkRefusalCopy(err);
       // A single row's failure is a toast; a bulk row reports in the run.
       // states-08 item 3: a 429's Retry (live after its Retry-After) re-runs
       // the SAME write once: the intent is unsettled, so the request_id and

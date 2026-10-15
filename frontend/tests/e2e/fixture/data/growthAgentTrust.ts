@@ -51,7 +51,7 @@ const HASH = 'd'.repeat(64);
 
 /** Screen, gate, then hand off for review: the run stops at step 3. */
 export const REVIEWED_PLAN: ComposedPlan = {
-  objective_summary: 'Screen prime refinance economics, gate to eligible leads, then hand off for review.',
+  objective_summary: 'Screen in-the-money refinance, gate to eligible leads, then hand off for review.',
   steps: [
     { step_id: 'step-1', tool: 'fn_build_cohort', params: { states: [] }, rationale: 'Count the broad borrower cohort.' },
     {

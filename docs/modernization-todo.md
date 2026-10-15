@@ -1119,15 +1119,20 @@ built. What shipped (each with the full signoff loop):
 - **Slice 3** (merge 3ea1c50): personalized + compelling outreach DRAFT copy —
   a safe qualitative `_personalization_hook` + proof-backed `why_now` + a clear
   low-effort CTA per channel; still human-approved, no send. TILA/fair-lending
-  safe and STRUCTURALLY guarded: `_figure_safe_reason` drops any `why_now`
-  carrying a %/$/bps/rate before it reaches copy. Copy cluster extracted to
+  safe by STRUCTURE, enforced by test: `why_now`, the offer display text and
+  the segment codes are not composer inputs (the dead `_figure_safe_reason`
+  gate was removed 2026-10, W5e), and
+  `tests/unit/test_outreach_no_internal_terms.py` composes every channel x
+  offer x relationship x hook branch with adversarial figure- and
+  label-bearing inputs. Copy cluster extracted to
   `backend/services/outreach_copy.py` (kept outreach.py under the 1000-line
   monolith threshold).
 
 ### Signoff caught real issues (both fixed before merge)
 - QA BLOCK #1: figure-bearing `why_now` could leak a TILA trigger term into
-  borrower copy; the test was rigged with clean input. → structural
-  `_figure_safe_reason` guard + adversarial test (real fixture string).
+  borrower copy; the test was rigged with clean input. → `why_now` removed
+  from the composer's inputs + adversarial test (real fixture string); the
+  structural guarantee is test-enforced (test_outreach_no_internal_terms.py).
 - QA BLOCK #2: the change tripped the 1000-line monolith architecture test. →
   copy cluster extracted to a service module (1019 → 835 lines).
 

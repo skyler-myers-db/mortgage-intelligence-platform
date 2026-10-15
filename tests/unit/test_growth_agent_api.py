@@ -1103,7 +1103,7 @@ def test_growth_agent_due_monitor_run_refreshes_and_writes_review_drafts() -> No
     slack_summary, slack_route = drafts_by_channel["slack"]["body"].rsplit("Review: ", 1)
     assert slack_summary == (
         "5,394 eligible borrowers in IL Refi Watch. "
-        "The refinance-economics queue refreshed for loan-officer triage. "
+        "The in-the-money queue refreshed for loan-officer triage. "
     )
     assert _route_without_handoff(slack_route) == (
         "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL"
@@ -1116,7 +1116,7 @@ def test_growth_agent_due_monitor_run_refreshes_and_writes_review_drafts() -> No
         "Watchlist: IL Refi Watch",
         "Summary: The refinance watchlist is ready for rate-spread prioritization and ownership review.",
         "Eligible population: 5,394 borrowers",
-        "Operator action: Review the strongest refinance economics and assign the next owner.",
+        "Operator action: Review the strongest in-the-money borrowers and assign the next owner.",
     ]
     teams_route = teams_lines[5].removeprefix("MIP route: ")
     assert _route_without_handoff(teams_route) == (

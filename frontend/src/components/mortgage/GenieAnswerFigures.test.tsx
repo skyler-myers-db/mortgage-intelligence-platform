@@ -157,7 +157,7 @@ describe('GenieFigureMark', () => {
     expect(card!.getAttribute('aria-hidden')).toBe('true');
     expect(card!.querySelector('.evidence-hovercard__title')?.textContent).toBe(FIGURE_HOVER_TITLE);
     expect(card!.querySelector('.evidence-hovercard__signal-label')?.textContent).toBe('Column');
-    expect(card!.querySelector('.evidence-hovercard__signal-value')?.textContent).toBe('In The Money Borrowers');
+    expect(card!.querySelector('.evidence-hovercard__signal-value')?.textContent).toBe('In the Money Borrowers');
     expect(card!.querySelector('.evidence-hovercard__cta')?.textContent).toBe(FIGURE_HOVER_CTA);
     act(() => {
       mark.dispatchEvent(new MouseEvent('mouseleave'));

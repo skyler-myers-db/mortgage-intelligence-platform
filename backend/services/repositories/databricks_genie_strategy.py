@@ -21,15 +21,9 @@ from backend.services.repositories.databricks_genie_visualization import (
     _plan_genie_visualization,
 )
 from backend.services.scoring import offer_display_label
+from backend.services.segment_labels import labels_for
 
-_SEGMENT_DISPLAY_LABELS = {
-    "itm": "Prime Refi Candidates",
-    "equity": "Home Equity Candidate",
-    "investor": "Investor / Multi-Property",
-    "retention": "Retention Risk",
-    "listed": "Listed for Sale",
-    "permit": "HELOC Intent",
-}
+_SEGMENT_DISPLAY_LABELS = labels_for(("itm", "equity", "investor", "retention", "listed", "permit"))
 
 
 def _segment_display_label(value: object) -> str:

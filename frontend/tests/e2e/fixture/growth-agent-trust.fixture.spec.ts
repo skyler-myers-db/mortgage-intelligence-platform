@@ -69,7 +69,7 @@ test.describe('the plan the user reviewed is the plan that runs', () => {
     await compose(page);
     const run = card(page).getByRole('button', { name: 'Run this plan' });
     await expect(run).toBeEnabled();
-    await expect(card(page)).toContainText('Segments: Prime Refi Candidates, Listed for Sale · Match: any segment');
+    await expect(card(page)).toContainText('Segments: In the Money, Listed for Sale · Match: any segment');
     await expect(card(page)).toContainText('States: current coverage');
     expect(recorder.composeBodies).toHaveLength(1);
     expect(recorder.composeBodies[0]).not.toHaveProperty('execute');

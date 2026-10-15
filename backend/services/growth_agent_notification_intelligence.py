@@ -95,9 +95,9 @@ class NotificationIntelligence:
 
 _WORKFLOW_FALLBACKS: dict[str, tuple[str, str, str]] = {
     "daily_refi_brief": (
-        "The refinance-economics queue refreshed for loan-officer triage",
+        "The in-the-money queue refreshed for loan-officer triage",
         "The refinance watchlist is ready for rate-spread prioritization and ownership review",
-        "Review the strongest refinance economics and assign the next owner",
+        "Review the strongest in-the-money borrowers and assign the next owner",
     ),
     "borrower_dossier_review": (
         "The top-opportunity dossier queue refreshed for evidence review",

@@ -1381,7 +1381,7 @@ COMMENT ON COLUMN mip.gold.borrower_360.current_lender_ref IS 'Public-demo-safe 
 COMMENT ON COLUMN mip.gold.borrower_360.second_pos_amount IS '2nd-lien balance passthrough; NULL or 0 both mean no active 2nd-lien. Feeds the equity segment clean-lien predicate.';
 COMMENT ON COLUMN mip.gold.borrower_360.second_pos_rate IS 'S1.3: 2nd-lien note rate in PERCENT form (8.25, not 0.0825) after silver+gold source-quality bounding. NULL when missing/invalid.';
 COMMENT ON COLUMN mip.gold.borrower_360.second_pos_rate_spread_bps IS 'S1.3: fn_rate_spread(second_pos_rate_fraction, market_rate_fraction). 0 when the second rate is unknown.';
-COMMENT ON COLUMN mip.gold.borrower_360.second_lien_itm IS 'S1.3 second_lien_itm segment flag: open 2nd position AND fn_in_the_money(second_pos_rate_spread_bps, equity_pct, governed thresholds). Consolidation-refi economics screen.';
+COMMENT ON COLUMN mip.gold.borrower_360.second_lien_itm IS 'S1.3 second_lien_itm segment flag: open 2nd position AND fn_in_the_money(second_pos_rate_spread_bps, equity_pct, governed thresholds). In the Money rule on the second lien (consolidation).';
 COMMENT ON COLUMN mip.gold.borrower_360.heloc_open_date IS 'S1.3: latest OPEN equity-loan lien event date from silver.mortgage_events (is_equity_loan, no release_date).';
 COMMENT ON COLUMN mip.gold.borrower_360.heloc_draw_end_date IS 'S1.3: heloc_open_date + 120 months (standard 10-year draw period).';
 COMMENT ON COLUMN mip.gold.borrower_360.has_heloc_draw_ending IS 'S1.3 heloc_draw_to_payback segment flag: open equity-loan lien originated 102-126 months ago (standard 120-month draw ending within 18 months or ended within the last 6).';

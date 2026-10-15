@@ -43,6 +43,32 @@ export const FORMATTING_BAN = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// One name for the economic-incentive rule (2026-09-21 audit critic-11,
+// D-platform-process-g step 2): "In the Money". The retired variants ("Prime
+// Refi ...", "refi(nance) economics", "refi screen") are banned in string
+// literals, template text and JSX text; src/lib/lexicon.ts is their only home
+// (as input aliases). src/lib/lexiconBan.test.ts proves the selectors bite.
+const LEXICON_RE = String.raw`/\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b/i`;
+const LEXICON_MESSAGE =
+  "Retired name for the In the Money rule. Use LEXICON.inTheMoney from src/lib/lexicon.ts ('In the Money', 'in the money', 'in-the-money', 'In the Money rule').";
+export const LEXICON_BAN = [
+  { selector: `Literal[value=${LEXICON_RE}]`, message: LEXICON_MESSAGE },
+  { selector: `TemplateElement[value.raw=${LEXICON_RE}]`, message: LEXICON_MESSAGE },
+  { selector: `JSXText[value=${LEXICON_RE}]`, message: LEXICON_MESSAGE },
+];
+
+// Files that still hold a retired variant because another W5e lane renames
+// them in parallel (each merges before w5-lexicon-copy). SHRINK-ONLY:
+// lexiconBan.test.ts fails when an entry no longer reproduces a hit. The
+// integrator empties it at the w5-lexicon-copy merge.
+export const LEXICON_PENDING = {
+  "src/routes/analytics.lib.ts": "w5-analytics renames its 'Prime Refi Candidates' / 'refi economics' / 'Refi economics' literals.",
+  "src/routes/analytics.sections.tsx": "w5-analytics renames the Refi Economics KPI, the Refi screen rule label and the two table column labels.",
+  "src/routes/analytics.chart-model.ts": "w5-analytics renames the histogram summary's 'bps refi screen' sentence.",
+  "src/routes/lead-queue.filters.ts": "w5-lead-queue-columns renames the in_the_money filter chip label 'Refi economics'.",
+};
+
 // Files that still carry a banned call, each with why.
 // SHRINK-ONLY: src/lib/formattingBan.test.ts fails when an entry no longer
 // reproduces a violation, so a file that is migrated leaves this list in the
@@ -286,8 +312,10 @@ export default [
       ],
     },
   },
-  // The formatting contract (see FORMATTING_BAN above). Tests and test
-  // helpers may build expected strings however they like.
+  // The formatting contract (see FORMATTING_BAN above) and the lexicon (see
+  // LEXICON_BAN). Tests and test helpers may build expected strings however
+  // they like. Flat-config rule options REPLACE each other, so every block
+  // below restates the bans that still apply to its files.
   {
     files: ["src/**/*.{ts,tsx}"],
     ignores: [
@@ -295,15 +323,32 @@ export default [
       "src/mocks/**",
       "src/test/**",
       ...FORMATTING_HOMES,
+      "src/lib/lexicon.ts",
+      ...Object.keys(LEXICON_PENDING),
     ],
+    rules: {
+      "no-restricted-syntax": ["error", ...FORMATTING_BAN, ...LEXICON_BAN],
+    },
+  },
+  // The lexicon home and the pending files: the formatting contract only.
+  {
+    files: ["src/lib/lexicon.ts", ...Object.keys(LEXICON_PENDING)],
     rules: {
       "no-restricted-syntax": ["error", ...FORMATTING_BAN],
     },
   },
+  // The formatting homes: the lexicon only.
+  {
+    files: FORMATTING_HOMES,
+    rules: {
+      "no-restricted-syntax": ["error", ...LEXICON_BAN],
+    },
+  },
   // An empty `files` array throws in @eslint/config-array ("Expected value
   // to be a non-empty array") and would break ALL lint, so the override
-  // exists only while the allowlist has an entry.
+  // exists only while the allowlist has an entry. An allowlisted file keeps
+  // the lexicon ban.
   ...(Object.keys(FORMATTING_ALLOWLIST).length
-    ? [{ files: Object.keys(FORMATTING_ALLOWLIST), rules: { "no-restricted-syntax": "off" } }]
+    ? [{ files: Object.keys(FORMATTING_ALLOWLIST), rules: { "no-restricted-syntax": ["error", ...LEXICON_BAN] } }]
     : []),
 ];

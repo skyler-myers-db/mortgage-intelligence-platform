@@ -15,8 +15,8 @@ const COMPONENTS: ProofScoreComponent[] = [
 ];
 
 export const SAMPLE_MARGINS: ProofMargin[] = [
-  { key: 'spread_screen', label: 'Refi screen', value_text: 'Clears the refi screen by 13 bps', threshold: 'spread 88 bps · screen 75 bps', direction: 'clears', source: 'mip.gold.fn_in_the_money' },
-  { key: 'par_break_even', label: 'Par break-even', value_text: 'Drops below the refi screen if 30-year par rises 13 bps to 6.39%', threshold: 'par 6.26%', direction: 'flips', source: 'mip.gold.fn_rate_spread' },
+  { key: 'spread_screen', label: 'In the Money rule', value_text: 'Clears the In the Money rule by 13 bps', threshold: 'spread 88 bps · screen 75 bps', direction: 'clears', source: 'mip.gold.fn_in_the_money' },
+  { key: 'par_break_even', label: 'Par break-even', value_text: 'Drops below the In the Money rule if 30-year par rises 13 bps to 6.39%', threshold: 'par 6.26%', direction: 'flips', source: 'mip.gold.fn_rate_spread' },
   { key: 'equity_floor', label: 'Equity threshold', value_text: 'Clears the home-equity threshold by 11 pts', threshold: 'equity 46% · threshold 35%', direction: 'clears', source: 'mip.gold.fn_next_best_offer' },
   { key: 'offer_flip_equity', label: 'Offer change by equity', value_text: 'Becomes Refinance review at 34% equity', threshold: 'equity 46%', direction: 'flips', source: 'mip.gold.fn_next_best_offer' },
   { key: 'offer_flip_par', label: 'Offer change by par', value_text: 'Becomes Cash-out refinance review if par rises 13 bps to 6.39%', threshold: 'par 6.26%', direction: 'flips', source: 'mip.gold.fn_next_best_offer' },

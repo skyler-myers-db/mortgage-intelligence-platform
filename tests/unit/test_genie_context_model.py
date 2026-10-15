@@ -270,7 +270,7 @@ def test_the_deprecated_alias_renders_the_same_prompt() -> None:
     assert canonical.json() == alias.json()
     assert canonical.json() == {
         "prompt": (
-            "How many borrowers in Oklahoma are in the prime refi candidates segment and the "
+            "How many borrowers in Oklahoma are in the in-the-money segment and the "
             "heloc intent segment, and what is the average rate spread?"
         ),
         "withheld": None,
@@ -381,7 +381,7 @@ def test_a_no_state_pair_asks_across_the_coverage() -> None:
     )
 
     assert response.prompt == (
-        f"How many borrowers {COVERAGE_SCOPE} are in the prime refi candidates segment and the listed for sale "
+        f"How many borrowers {COVERAGE_SCOPE} are in the in-the-money segment and the listed for sale "
         "segment, and what is the average rate spread?"
     )
 
@@ -426,7 +426,7 @@ def test_a_state_beside_a_zip_stays_in_the_question(state: str) -> None:
         GenieContext(route="lead-queue", state=state, zip="60601", segment_codes=["itm", "equity"], segment_mode="all")
     )
     assert paired.prompt == (
-        f"How many borrowers in ZIP code 60601, {state} are in the prime refi candidates segment and the "
+        f"How many borrowers in ZIP code 60601, {state} are in the in-the-money segment and the "
         "home equity candidate segment, and what is the average rate spread?"
     )
     # Non-vacuity: the ZIP alone still renders without a state.
@@ -527,7 +527,7 @@ def test_a_matcher_hit_withholds_the_prompt_and_logs_no_value(
     extras = getattr(events[0], "mip_extras", {})
     assert extras == {"reason": "refused", "slots": ["segment_codes", "state", "county_fips"], "matcher": "protected"}
     logged = json.dumps(extras) + events[0].getMessage()
-    for value in ("Oklahoma", "Tulsa", "40143", "itm", "prime refi", "borrowers"):
+    for value in ("Oklahoma", "Tulsa", "40143", "itm", "in-the-money", "borrowers"):
         assert value not in logged
 
 
@@ -631,7 +631,7 @@ def test_an_assignee_filter_is_omitted_and_never_rendered() -> None:
     assert body["omitted"] == ["assignee"]
     assert body["withheld"] is None
     assert body["prompt"] == (
-        "How many borrowers in Texas are in the prime refi candidates segment, and what is the "
+        "How many borrowers in Texas are in the in-the-money segment, and what is the "
         "average rate spread?"
     )
     assert not re.search(r"\b(?:assign\w*|me|my|mine|owner|loan officer)\b", body["prompt"], re.IGNORECASE)

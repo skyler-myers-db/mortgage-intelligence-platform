@@ -214,7 +214,7 @@ describe('USChoroplethMapZctaLevel', () => {
       expect(path.getAttribute('class')).toMatch(/^map-region has-data lvl-[1-4]$/);
     }
     expect(unit('60611')?.getAttribute('aria-label')).toBe(
-      'ZIP 60611: 50 borrowers, average opportunity score 71, top segment Prime Refi Candidates',
+      'ZIP 60611: 50 borrowers, average opportunity score 71, top segment In the Money',
     );
     const context = [...document.querySelectorAll('path.map-region--context')];
     expect(context).toHaveLength(2);

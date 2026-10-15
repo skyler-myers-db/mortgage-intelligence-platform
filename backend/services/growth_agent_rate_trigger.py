@@ -201,7 +201,7 @@ def _scenario_detail(trigger: RateTrigger, metrics: dict[str, Any]) -> str:
         return f"The {trigger.step_bps:+d} bps step is not on today's scenario grid, so the counts are 0."
     return (
         f"Counts are the {trigger.step_bps:+d} bps scenario at today's {float(today):.2f}% par, not a "
-        f"forecast: {int(metrics['broad_total']):,} borrowers clear the refi screen, "
+        f"forecast: {int(metrics['broad_total']):,} borrowers are in the money, "
         f"{int(metrics['actionable_total']):,} of them contactable."
     )
 

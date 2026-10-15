@@ -16,6 +16,14 @@ import { openGenie } from '../../lib/genieOpen';
  *   - intersection  2+ segment chips in all-mode;
  *   - filtered      any other filtered zero; an unfiltered zero says what
  *                   the default view lists and offers no Clear.
+ *   - a request-scoped queue (`?approval_request_batch=`, W5d lq deferral 9)
+ *     whose ONLY filter is the request and that measures zero says the
+ *     request is done: every borrower in it was decided, withdrawn or
+ *     expired. Its one action clears the request. Beside any other filter
+ *     the zero may be that filter's (GET /api/leads intersects the request's
+ *     open borrowers with every other filter), so the filtered state answers
+ *     there instead. A request-scoped queue never offers a Genie Ask (a
+ *     request is a list of named borrowers, not a question).
  *
  * "Ask Genie" prefills (never submits) a REVIEWED prompt. Phase 1 renders it
  * client-side when the filters are one state and/or one segment. Phase 2
@@ -29,6 +37,13 @@ import { openGenie } from '../../lib/genieOpen';
  */
 
 const UNFILTERED_SECONDARY = 'The default view lists marketing-eligible borrowers only.';
+/** lead-queue.filters APPROVAL_REQUEST_BATCH_PARAM (not imported: this chunk stays off the route's filters module). */
+const REQUEST_SCOPE_PARAM = 'approval_request_batch';
+export const REQUEST_SCOPE_EMPTY = {
+  title: 'No open borrowers left in this approval request.',
+  secondary: 'Each one was decided, withdrawn or has expired.',
+  clear: 'Clear the request',
+} as const;
 const PROMPT_FILTER_PARAMS: ReadonlySet<string> = new Set(['state', 'states', 'segment', 'segment_codes', 'segment_mode']);
 /** Fixed copy: nothing about a withheld or failed render is improvised client-side. */
 export const GENIE_SCOPE_UNAVAILABLE_COPY = "Genie can't take this filter set as a question.";
@@ -145,11 +160,36 @@ interface LeadQueueEmptyStateProps {
   onClearFilters: () => void;
 }
 
-export function LeadQueueEmptyState({ filterParams, countyNoCoverage, intersection, onClearFilters }: LeadQueueEmptyStateProps) {
+/** True only when the approval request is the queue's sole filter: then a zero can only mean the request has no open borrowers left. */
+function requestScopeOnly(filterParams: URLSearchParams): boolean {
+  const keys = [...filterParams.keys()];
+  return keys.length > 0 && keys.every((key) => key === REQUEST_SCOPE_PARAM);
+}
+
+export function LeadQueueEmptyState(props: LeadQueueEmptyStateProps) {
+  if (!requestScopeOnly(props.filterParams)) return <FilteredQueueEmpty {...props} />;
+  return (
+    <EmptyState
+      cause="filtered"
+      title={REQUEST_SCOPE_EMPTY.title}
+      secondary={REQUEST_SCOPE_EMPTY.secondary}
+      actions={[
+        <button type="button" className="btn btn--sm" onClick={props.onClearFilters}>
+          {REQUEST_SCOPE_EMPTY.clear}
+        </button>,
+      ]}
+    />
+  );
+}
+
+function FilteredQueueEmpty({ filterParams, countyNoCoverage, intersection, onClearFilters }: LeadQueueEmptyStateProps) {
   const filtersActive = [...filterParams.keys()].length > 0;
   const cause = countyNoCoverage ? 'coverage' : intersection ? 'intersection' : 'filtered';
-  const prompt = cause === 'filtered' ? queueFilterGeniePrompt(filterParams) : null;
-  const context = cause !== 'coverage' && prompt === null ? genieContextFromQueueFilters(filterParams) : null;
+  // A request-scoped queue with another filter beside it never offers an Ask,
+  // whatever the two prompt builders would make of the rest of the filters.
+  const askable = !filterParams.has(REQUEST_SCOPE_PARAM);
+  const prompt = askable && cause === 'filtered' ? queueFilterGeniePrompt(filterParams) : null;
+  const context = askable && cause !== 'coverage' && prompt === null ? genieContextFromQueueFilters(filterParams) : null;
   const clearRef = useRef<HTMLButtonElement | null>(null);
   return (
     <EmptyState

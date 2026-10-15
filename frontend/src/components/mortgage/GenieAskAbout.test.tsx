@@ -31,7 +31,7 @@ vi.mock('../AppContext', () => ({
 
 const SEGMENT: SegmentSummary = {
   code: 'itm',
-  name: 'Prime Refi Candidates',
+  name: 'In the Money',
   count: 12_840,
   contactable: 1_286,
   delta: '+18%',
@@ -138,11 +138,11 @@ describe('Ask Genie about this', () => {
   it('a segment card asks about its registered segment, above the stretched select button', () => {
     render(<SegmentCard segment={SEGMENT} onClick={() => undefined} />);
     const button = askButton();
-    expect(button?.getAttribute('aria-label')).toBe('Ask Genie about this Prime Refi Candidates segment');
+    expect(button?.getAttribute('aria-label')).toBe('Ask Genie about this In the Money segment');
     expect(button?.title).toBe(`Ask Genie: ${genieSegmentPrompt('itm')}`);
     expect(button?.closest('.seg-card__ask')).not.toBeNull();
     act(() => button!.click());
-    expect(consumeGeniePrefill()).toBe('Which states have the most borrowers in the prime refi candidates segment?');
+    expect(consumeGeniePrefill()).toBe('Which states have the most in-the-money borrowers?');
   });
 
   it('a gated segment card has no entry point', () => {
@@ -157,7 +157,7 @@ describe('Ask Genie about this', () => {
     const prompt = (button?.title ?? '').replace(/^Ask Genie: /, '');
     expect(prompt).toBe(genieLeadPrompt({ segmentCodes: ['itm', 'equity'], stateCode: 'IL' }));
     expect(prompt).toContain('Illinois');
-    expect(prompt).toContain('prime refi candidates');
+    expect(prompt).toContain('in-the-money borrowers');
     for (const forbidden of ['B-0123456789ABC', 'Owner 012345', 'clip_demo', 'Chicago', '60611']) {
       expect(prompt).not.toContain(forbidden);
     }

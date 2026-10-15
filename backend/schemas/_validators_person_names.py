@@ -170,7 +170,7 @@ def _sentence_initial_place_strip_pattern(place_terms: tuple[str, ...]) -> re.Pa
 # Springs — city strings are sanctioned analytics output and borrower rows
 # carry the same values), governed mortgage-product phrases ("Purchase
 # Mortgage", "Cash-Out Refinance"), and governed segment display labels
-# ("Prime Refi Candidates", "Home Equity Candidate", "Retention Risk").
+# ("In the Money", "Home Equity Candidate", "Retention Risk").
 # Borrower names never ship; display identities are synthetic masked IDs.
 _NON_PERSON_TITLECASE_SUFFIXES = frozenset(
     {

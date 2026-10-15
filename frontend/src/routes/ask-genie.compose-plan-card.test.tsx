@@ -16,7 +16,7 @@ const FALLBACK_WORKFLOW: GrowthAgentWorkflow = {
   id: 'daily_refi_brief',
   title: 'Daily Refi Opportunity Brief',
   objective: 'Find borrowers with rate-spread economics worth reviewing today.',
-  trigger_label: 'Prime refinance economics',
+  trigger_label: 'In the Money',
   action_label: 'Open eligible refi subset',
   source_assets: ['mip.gold.borrower_360'],
   default_route: '/lead-queue?segment=itm',
@@ -253,7 +253,7 @@ describe('ComposePlanCard', () => {
     renderResponse(COMPOSED_SIGNED, runControls());
     const metas = Array.from(container.querySelectorAll('.growth-agent-step__meta')).map((node) => node.textContent);
     expect(metas).toContain('States: current coverage');
-    expect(metas).toContain('States: IL, TX · Segments: Prime Refi Candidates, Listed for Sale · Match: all segments');
+    expect(metas).toContain('States: IL, TX · Segments: In the Money, Listed for Sale · Match: all segments');
     expect(metas).toContain('Min score: 80');
   });
 

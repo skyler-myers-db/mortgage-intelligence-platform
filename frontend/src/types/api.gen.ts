@@ -173,7 +173,7 @@ export interface ResponseSchemas {
     label: string;
   };
   /**
-   * The refi screen this refresh applied, read from ``mip.gold.borrower_360``.
+   * The In the Money rule this refresh applied, read from ``mip.gold.borrower_360``.
    *
    * ``min_spread_bps`` / ``min_equity_pct`` are the ``*_applied`` columns when
    * every scored row carries one and the same value; the charts draw the
@@ -2258,7 +2258,7 @@ export interface ResponseSchemas {
     addressable: number;
     /** The contact-eligible subset of in_the_money at each step (live aggregate, clamped to in_the_money). None when not reported. */
     contactable_in_the_money: number[] | null;
-    /** Borrowers clearing the refi screen at each step, aligned to steps_bps; each <= addressable. */
+    /** Borrowers in the money at each step, aligned to steps_bps; each <= addressable. */
     in_the_money: number[];
     /** Addressable borrowers with a gated note rate (active lien, bounded rate strictly inside 1%..15%): the only ones a scenario can move. Never above addressable. */
     rate_movable: number;

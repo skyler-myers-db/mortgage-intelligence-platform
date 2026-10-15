@@ -40,6 +40,9 @@
  *  U. W5e w5-analytics: an Executive KPI drawer on How we got, a failed
  *     Executive Refresh with its stale note, a focused scatter cell's
  *     tip and the Sales ops workload table                              8
+ *  V. W5e w5-lexicon-copy: the request-scoped Lead Queue whose
+ *     borrowers are all decided, and with the request still open
+ *     (its scope row over the rows; W5d lq deferral 9)                 4
  *                                                                     --
  *                                                                    162
  *
@@ -53,7 +56,7 @@
  */
 import type { Locator, Page } from '@playwright/test';
 import type { AppDriver, FixtureAccent, FixtureTheme } from './app';
-import { enterState, prepareState, type FixtureState } from './fixtureStates';
+import { enterState, prepareState, statePath, type FixtureState } from './fixtureStates';
 import type { HomeSummary, SessionResponse } from '../../../src/types';
 import { provenanceSingleAnswer } from './data/genieProvenance';
 import { GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
@@ -148,7 +151,7 @@ interface Loaded {
 async function load(app: AppDriver, mockApi: MockApi, target: FixtureRoute, theme: FixtureTheme, state: FixtureState = 'default'): Promise<Loaded> {
   await app.setTheme(theme);
   prepareState(mockApi, state, target.name);
-  await app.gotoRoute(target.path);
+  await app.gotoRoute(statePath(target.path, state));
   return { naturalLoad: markNaturalLoad(mockApi) };
 }
 
@@ -209,12 +212,17 @@ for (const theme of FIXTURE_THEMES) {
       // R (W5d w5-print-glossary-sales-manager): the account menu and glossary search.
       { route: 'home', state: 'identity-menu', focusScope: (page) => page.getByRole('menu', { name: 'Account' }) },
       { route: 'glossary', state: 'glossary-search' },
-      // W5e w5-lead-queue-columns: the HIDE menu, the omnibox and More like this.
+      // W (W5e w5-lead-queue-columns): the HIDE menu, the omnibox and More like this.
       { route: 'lead-queue', state: 'hide-menu' },
       { route: 'lead-queue', state: 'omnibox' },
       { route: 'lead-queue', state: 'more-like-this' },
-      // W5e w5-lead-table-compile (flow-v2): the revoke panel (block letter: the integrator's).
+      // X (W5e w5-lead-table-compile, flow-v2): the revoke panel.
       { route: 'lead-queue', state: 'lead-revoke-panel' },
+      // V (W5e w5-lexicon-copy, W5d lq deferral 9): the request-scoped queue
+      // whose borrowers were all decided, and the open request's scope row
+      // over its rows, both on their own URL (statePath).
+      { route: 'lead-queue', state: 'request-scoped-empty' },
+      { route: 'lead-queue', state: 'request-scoped' },
     ];
     for (const { route: name, state, focusScope } of SHELL_STATES) {
       test(`${name} · ${state}`, async ({ app, mockApi, page }) => {

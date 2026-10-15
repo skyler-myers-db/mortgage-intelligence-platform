@@ -223,7 +223,7 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     };
     render(flat);
     expect(container.querySelector('.home-answer__trigger')?.textContent).toBe(
-      'no change in borrowers who pass the refi screen',
+      'no change in in-the-money borrowers',
     );
     expect(chips().map((chip) => chip.textContent)).toEqual(['no change']);
   });
@@ -233,7 +233,7 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     const [pct, count] = Array.from(container.querySelectorAll('.home-answer__trigger')).map((el) => el.textContent);
     // "+1.5% borrowers with ..." read as "1.5% of borrowers".
     expect(pct).toBe('+1.5% in borrowers with opportunity score 75+');
-    expect(count).toBe('+2,250 borrowers who pass the refi screen');
+    expect(count).toBe('+2,250 in-the-money borrowers');
   });
 
   it('first visit renders welcome copy, no delta language, no snapshot citation', () => {

@@ -269,7 +269,7 @@ def _objective_signal_summary(payload: GrowthAgentPromptRunRequest) -> str:
     signals: list[str] = []
     signal_terms: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
-            "refinance economics",
+            "in the money",
             ("refi", "refinance", "rate spread", "economic incentive", "prime"),
         ),
         ("listed purchase", ("listed", "listing", "for sale", "purchase")),

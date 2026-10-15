@@ -227,13 +227,13 @@ instructions: |
       48,396 in one answer and 1,173,260 in the next with no bridge): any
       answer citing a cohort count must name the filter that produced it in
       plain words — e.g. "48,396 = marketing-eligible, opt-in borrowers
-      passing the refinance-economics screen" vs "1,173,260 = all borrowers
+      who are in the money" vs "1,173,260 = all borrowers
       with equity above the cash-out floor, before eligibility filters."
       When two adjacent framings could both be read as "the" number, state
       both and the difference.
     - TEACH THE TERMS: the first time an answer uses opportunity score, rate
       spread, in-the-money, lock-in, or confidence, define it inline in one
-      clause ("opportunity score — a 0-100 blend of refinance economics,
+      clause ("opportunity score — a 0-100 blend of in-the-money economics,
       equity, listing, portfolio, retention, and propensity signals"). A
       Head of Growth reading the answer cold must not need a glossary.
     - LOAN AGE / loan vintage / seasoning semantics (re-audit 2026-06-11: a
@@ -291,6 +291,9 @@ instructions: |
       equity, rate-and-term refi ≥ 75 bps, top-tier opportunity score ≥ 75. Don't interpret
       "strong equity" as 70%+ — interpret it as ≥ 35% (the segment
       definition floor).
+    - Call the fn_in_the_money rule "In the Money" (rate spread ≥ threshold
+      AND equity ≥ threshold). It is an economics screen, not lead quality or
+      creditworthiness; never call it prime.
     - Count unique borrowers at the gold borrower grain. Do NOT answer
       "how many borrowers are in-the-money" with a segment-row rollup.
       Use mip.gold.borrower_360 WHERE in_the_money = TRUE, or use

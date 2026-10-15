@@ -69,6 +69,17 @@ async function banSeverity(file: string): Promise<number> {
   return 0;
 }
 
+/** Whether any FORMATTING_BAN selector is enforced on a file under the real config. */
+async function formattingBanActive(file: string): Promise<boolean> {
+  const resolved = (await eslint.calculateConfigForFile(`${FRONTEND}${file}`)) as {
+    rules?: Record<string, unknown>;
+  };
+  const entry = resolved.rules?.['no-restricted-syntax'];
+  if (!Array.isArray(entry)) return false;
+  const selectors = new Set(entry.slice(1).map((option) => (option as BanEntry).selector));
+  return config.FORMATTING_BAN.some((ban) => selectors.has(ban.selector));
+}
+
 /** Lint `code` with ONLY the formatting ban on; returns the matched messages. */
 function banViolations(code: string, filename = 'probe.tsx'): string[] {
   const linter = new Linter({ configType: 'flat' });
@@ -102,9 +113,10 @@ describe('formatting ban wiring', { timeout: ESLINT_BUDGET_MS }, () => {
   });
 
   it('exempts only the formatting homes and test code', async () => {
-    expect(await banSeverity('src/lib/formatters.ts')).toBe(0);
-    expect(await banSeverity('src/lib/time.ts')).toBe(0);
-    expect(await banSeverity('src/lib/fixedPrecision.ts')).toBe(0);
+    // The homes keep the lexicon ban (lexiconBan.test.ts), never this one.
+    expect(await formattingBanActive('src/lib/formatters.ts')).toBe(false);
+    expect(await formattingBanActive('src/lib/time.ts')).toBe(false);
+    expect(await formattingBanActive('src/lib/fixedPrecision.ts')).toBe(false);
     expect(await banSeverity('src/lib/formatters.test.ts')).toBe(0);
   });
 

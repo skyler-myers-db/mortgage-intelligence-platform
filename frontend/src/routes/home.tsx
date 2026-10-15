@@ -24,6 +24,7 @@ import { parseBackendTimestamp } from '../lib/time';
 import { Timestamp } from '../components/ui/Timestamp';
 import type { HomeSummary, KpiTrend, PortfolioPreview } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
+import { LEXICON } from '../lib/lexicon';
 import { ApprovalQueueBanner } from './home.approval-banner';
 import './home.css';
 
@@ -226,7 +227,7 @@ export default function Home() {
               evidence={{ asOf: preview?.data_refreshed_at ?? null, proofKey: 'home.addressable_population' }}
             />
             <KpiCard
-              label="Refi economics screen"
+              label={LEXICON.inTheMoney.label}
               valueAnimated={preview?.high_intent_leads ?? null}
               trend={preview?.trends?.high_intent_leads?.series}
               delta={formatDelta(preview?.trends?.high_intent_leads)}

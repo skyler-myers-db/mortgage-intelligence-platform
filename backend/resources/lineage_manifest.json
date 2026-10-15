@@ -71,7 +71,7 @@
     },
     {
       "id": "in_the_money",
-      "title": "Refi economics screen",
+      "title": "In the Money rule",
       "description": "Borrowers whose lien rate sits far enough above the market reference with enough equity: fn_rate_spread feeds fn_in_the_money, materialized on borrower_360 and summed by the headline metric view.",
       "nodes": [
         {
@@ -122,7 +122,7 @@
           "schema": "gold",
           "object": "fn_in_the_money",
           "label": "fn_in_the_money",
-          "note": "Canonical refi-economics screen over rate spread + equity thresholds."
+          "note": "Canonical In the Money rule over rate spread + equity thresholds."
         },
         {
           "id": "gold_borrower_360",

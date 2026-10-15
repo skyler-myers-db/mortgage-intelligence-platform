@@ -201,7 +201,7 @@ Run the talk track (dry-run):
 
 1. “These numbers show where to act before pipeline begins.”
 2. Build portfolio.
-3. Click Prime Refi Candidates.
+3. Click In the Money.
 4. Drill map county → ZIP → borrower.
 5. Open borrower 360.
 6. Explain evidence and score.

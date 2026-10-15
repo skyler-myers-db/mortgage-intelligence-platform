@@ -203,7 +203,7 @@ describe('LeadTable bulk run', () => {
 
     expect(approve).toHaveBeenCalledTimes(1);
     expect(q('[data-testid="lead-bulk-canary"]')?.textContent).toBe(
-      `Nothing else was sent: ${IDS[0]} was refused: bulk_rationale failed the governed text policy`,
+      `Nothing else was sent: ${IDS[0]} was refused: not recorded; retry it`,
     );
     expect(q('.bulk-actions__rationale input'), 'the gate stays open').not.toBeNull();
     expect(q<HTMLInputElement>('.bulk-actions__rationale input')!.value, 'with its rationale').toBe('Q3 retention sweep');

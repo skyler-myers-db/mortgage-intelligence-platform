@@ -148,7 +148,7 @@ test.describe('shell helpers', () => {
     // questions; every other route curates its own starters (genie-04).
     await app.gotoRoute('/ask-genie');
     const dialog = await app.openGenie();
-    await expect(dialog).toContainText('Which states have the most prime refi candidates?');
+    await expect(dialog).toContainText('Which states have the most in-the-money borrowers?');
   });
 
   test('openCommandPalette searches the fixture borrowers', async ({ app, page }) => {

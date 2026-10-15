@@ -3,6 +3,7 @@ import type { ActorAuditEventSummary } from '../../lib/apiTypes';
 import { assetHrefForSource } from '../../lib/drawerSources';
 import { glossaryEntries } from '../../lib/mortgageGlossary';
 import { QUEUE_MASKED_ID_RE } from '../../lib/queueContext';
+import { LEXICON } from '../../lib/lexicon';
 import { SEGMENT_DEFINITIONS, segmentIcon, segmentName } from '../../lib/segmentMetadata';
 import type { DataEstateResponse } from '../../types';
 import type { SavedView } from '../../types/leadFilters';
@@ -96,7 +97,8 @@ export function segmentRows(): PaletteSourceRow[] {
     label: segmentName(definition.code),
     hint: 'Segment',
     icon: segmentIcon(definition.code),
-    keywords: [definition.code, definition.description],
+    // critic-11: a retired name ("prime refi", "refi economics") still finds it.
+    keywords: [definition.code, definition.description, ...(definition.code === 'itm' ? LEXICON.inTheMoney.legacyAliases : [])],
     to: `/segment-intelligence?segment=${encodeURIComponent(definition.code)}`,
   }));
 }
@@ -107,7 +109,7 @@ export function glossaryRows(): PaletteSourceRow[] {
     label: entry.term,
     hint: entry.short,
     icon: 'doc',
-    keywords: entry.aliases,
+    keywords: [...entry.aliases, ...(entry.searchAliases ?? [])],
     to: `/glossary#${entry.id}`,
   }));
 }

@@ -16,7 +16,7 @@
   ],
   "instruction_override": [
     "What is the average rate spread across the in-the-money cohort?",
-    "Which states have the most prime refi candidates?"
+    "Which states have the most in-the-money borrowers?"
   ],
   "outreach_instruction": [
     "How many borrowers cleared the rate-spread threshold this week?",
@@ -39,7 +39,7 @@
     "Show the top borrowers across all segments and explain why each is a good candidate."
   ],
   "unknown": [
-    "Which states have the most prime refi candidates?",
+    "Which states have the most in-the-money borrowers?",
     "How many HELOC-intent borrowers have at least 40% equity?",
     "Which borrowers on our retention list have a competitor lien filed in the last 30 days?"
   ]

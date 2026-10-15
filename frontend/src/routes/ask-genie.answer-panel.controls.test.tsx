@@ -166,13 +166,13 @@ describe('AskGenieAnswerPanel composer controls', () => {
     expect(held.title).toContain('still answering');
   });
 
-  it('labels each answer source in plain words, the governed path in its tooltip (flow-10)', () => {
+  it('labels each answer source in plain words, the governed path in its hover card, never a title (flow-10, critic-08)', () => {
     render('');
     const chips = [...container.querySelectorAll<HTMLButtonElement>('.genie-thread .evidence-chip')];
     expect(chips).toHaveLength(2);
     for (const chip of chips) {
       expect(chip.textContent).toBe('Borrower 360');
-      expect(chip.title).toBe('mip.gold.borrower_360');
+      expect(chip.hasAttribute('title')).toBe(false);
     }
   });
 
@@ -221,7 +221,7 @@ describe('AskGenieAnswerPanel docked composer (visual-07)', () => {
             onAsk={onAsk}
             onNewThread={() => undefined}
             onLoadSession={() => undefined}
-            sampleQuestions={['Which states have the most prime refi candidates?']}
+            sampleQuestions={['Which states have the most in-the-money borrowers?']}
             onFollowUp={() => undefined}
             onAction={() => undefined}
             actionStatus={null}
@@ -239,7 +239,7 @@ describe('AskGenieAnswerPanel docked composer (visual-07)', () => {
     render('');
     const textarea = composer().querySelector('textarea')!;
     expect(textarea.getAttribute('aria-label')).toBe('Ask Genie — question');
-    expect(textarea.placeholder).toMatch(/prime refi candidates/);
+    expect(textarea.placeholder).toMatch(/in-the-money count by state/);
     expect(textarea.getAttribute('rows')).toBe('2');
     expect(composer().classList.contains('surface__ft')).toBe(true);
     const samples = container.querySelector('[aria-label="Suggested Genie questions"]')!;

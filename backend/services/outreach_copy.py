@@ -2,8 +2,9 @@
 
 Extracted from ``backend/api/outreach.py`` so the API router stays under the
 monolith threshold. This module owns the *authoring* of borrower-facing draft
-copy: offer-code normalization, the SAFE/QUALITATIVE personalization hook, the
-TILA numeric-trigger-term guard, and the channel-specific compose function.
+copy: offer-code normalization, the SAFE/QUALITATIVE personalization hook and
+the channel-specific compose function. TILA trigger terms and internal labels
+stay out structurally: the composer never reads ``why_now`` or display text.
 
 The product never sends messages; everything here produces draft copy for
 governed human review. No Lakebase / audit / scoring-write side effects live
@@ -95,27 +96,6 @@ def _personalization_hook(borrower: Any) -> str:
     return ""
 
 
-# Numeric financial figures that must never appear in authored borrower-facing
-# copy: a percent, a $ amount, an "N bps" spread, a bare rate like "6.5 rate",
-# or "APR". (The tenant disclosure block is governed copy and is composed
-# separately.) Used to gate `why_now` at the compose boundary.
-_TRIGGER_TERM_RE = re.compile(
-    r"\d+(?:\.\d+)?\s?%|\$\s?\d|\b\d+(?:\.\d+)?\s?bps\b|\b\d+(?:\.\d+)?\s?(?:rate|apr)\b|\bAPR\b",
-    re.IGNORECASE,
-)
-
-
-def _figure_safe_reason(text: str) -> str:
-    """Return `text` only if it carries NO numeric financial trigger term;
-    otherwise "" so the caller falls back to figure-free qualitative copy.
-
-    We suppress the whole phrase rather than scrub tokens, to avoid emitting
-    mangled fragments ("... bps spread and ... equity ...")."""
-    if not text:
-        return ""
-    return "" if _TRIGGER_TERM_RE.search(text) else text
-
-
 def _compose_outreach_body(
     *, borrower: Any, channel: str, disclosure: Any
 ) -> tuple[str | None, str]:
@@ -123,9 +103,8 @@ def _compose_outreach_body(
 
     This is still a draft; the product does not send messages. Copy is
     personalized on SAFE public-record signals via ``_personalization_hook``
-    (no numeric TILA trigger terms, no ECOA protected-class language), grounded
-    in the proof-backed ``why_now`` reason, and ends in a single low-effort
-    call to action. It avoids literal personalization placeholders and branches
+    (no numeric TILA trigger terms, no ECOA protected-class language) and ends
+    in a single low-effort call to action. It avoids literal personalization placeholders and branches
     on the governed borrower relationship flags so current customers do not
     receive cold acquisition language.
     """
@@ -135,13 +114,12 @@ def _compose_outreach_body(
     )
     is_customer = bool(getattr(borrower, "is_current_customer", False))
     is_competitor = bool(getattr(borrower, "is_competitor_lien", False))
-    # `why_now` is a proof-backed reason from the gold tables. Production copy is
-    # de-numericised, but we DEFENSE-IN-DEPTH guard the compose boundary: if it
-    # carries any numeric financial figure (a %, a $ amount, "N bps", a rate, or
-    # APR), we DROP it from borrower-facing copy rather than emit a TILA
-    # trigger term. The qualitative `hook` still carries personalization, so the
-    # message stays specific without a figure. Structural guarantee, not a
-    # convention — so a future template change can't silently leak a figure.
+    # `why_now`, the recommended-offer display text and the segment codes are
+    # NOT composer inputs: the copy below reads only the safe offer code, the
+    # two relationship flags and the qualitative `hook`. That is the guarantee
+    # that no internal term ("in the money", "ITM", a segment name) or numeric
+    # TILA trigger term reaches borrower-facing copy; it is structural, and
+    # tests/unit/test_outreach_no_internal_terms.py enforces it adversarially.
     hook = _personalization_hook(borrower)
     lender_name = (settings.mip_lender_name or "configured lender").strip() or "configured lender"
     sms_lender = _sms_lender_label(lender_name)

@@ -204,7 +204,7 @@ def _canonical_genie_answer(
     )
     geo_text = f" in {state_scope[0]} ({state_scope[1]})" if state_scope else ""
     answer = (
-        f"There are {count_int:,} borrowers passing the refinance-economics screen{geo_text} — meaning their current mortgage rate sits far enough above today\'s market, with enough home equity, that refinancing typically pays for itself. "
+        f"There are {count_int:,} borrowers who are in the money{geo_text} — meaning their current mortgage rate sits far enough above today\'s market, with enough home equity, that refinancing typically pays for itself. "
         f"This is a unique borrower count from {borrower_asset} at the "
         "gold borrower grain, so multi-segment borrowers are counted once."
     )

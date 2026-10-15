@@ -151,7 +151,7 @@ describe('SignalStack', () => {
     await until(() => text().includes('borrowers fire'));
     expect(text()).toContain('795 borrowers fire three or more signals at once. 92 of them are contactable.');
     expect(text()).toContain(
-      'Largest overlap: Prime Refi Candidates, HELOC Intent and Home Equity Candidate: 520 borrowers carry all three (61 contactable).',
+      'Largest overlap: In the Money, HELOC Intent and Home Equity Candidate: 520 borrowers carry all three (61 contactable).',
     );
     const link = [...document.querySelectorAll<HTMLAnchorElement>('.signal-stack a')].find((a) => a.textContent === 'Open in Lead Queue');
     expect(link?.getAttribute('href')).toBe('/lead-queue?segment_codes=itm%2Cpermit%2Cequity&segment_mode=all');
@@ -186,7 +186,7 @@ describe('SignalStack', () => {
     const columns = [...document.querySelectorAll<HTMLAnchorElement>('.signal-stack__column-link')];
     expect(columns).toHaveLength(4);
     expect(columns[0].getAttribute('aria-label')).toBe(
-      'Prime Refi Candidates and Home Equity Candidate: 2,100 borrowers carry exactly these signals, 2,715 carry at least these, 313 contactable. Open in Lead Queue',
+      'In the Money and Home Equity Candidate: 2,100 borrowers carry exactly these signals, 2,715 carry at least these, 313 contactable. Open in Lead Queue',
     );
     expect(columns[0].getAttribute('href')).toBe('/lead-queue?segment_codes=itm%2Cequity&segment_mode=all');
     expect(document.querySelector('.signal-stack__dots')?.getAttribute('aria-hidden')).toBe('true');
@@ -200,7 +200,7 @@ describe('SignalStack', () => {
     ]);
     const first = table?.querySelector('tbody tr');
     expect([...(first?.querySelectorAll('th, td') ?? [])].map((cell) => cell.textContent)).toEqual([
-      'Prime Refi Candidates', '9,305', '12,200', '1,206', 'Open',
+      'In the Money', '9,305', '12,200', '1,206', 'Open',
     ]);
     expect(table?.querySelector('[data-testid="signal-stack-total"]')?.textContent).toBe('12,200');
     expect(button('View as chart')).toBeDefined();

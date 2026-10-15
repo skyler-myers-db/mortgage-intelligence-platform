@@ -49,7 +49,11 @@ import { formatCount } from '../../lib/formatters';
 export type BulkRunKind = 'approve' | 'reject';
 export type BulkRowOutcome = 'ok' | 'backend' | 'network' | 'session_expired' | 'aborted' | 'duplicate' | 'actor_changed';
 
-/** How one row's write ended; `message` is the server's reason for a refusal. */
+/**
+ * How one row's write ended. `message` is FIXED copy for a refusal
+ * (bulkRefusalCopy, or a client constant), never the server's raw text
+ * (audit states-04).
+ */
 export interface BulkRowReport {
   outcome: BulkRowOutcome;
   message: string | null;

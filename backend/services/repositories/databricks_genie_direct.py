@@ -509,7 +509,7 @@ def direct_canonical_response(
             }
         ]
         answer = (
-            f"There are {count_int:,} borrowers passing the refinance-economics screen in {city_scope} "
+            f"There are {count_int:,} borrowers who are in the money in {city_scope} "
             f"within the current gold evaluation-share scope from {borrower_asset}. "
             "This is a city-scoped unique borrower count, not the overall share total."
         )
@@ -553,7 +553,7 @@ def direct_canonical_response(
         count_rows[0]["state"] = state_scope[1]
     geo_text = f" in {state_scope[0]} ({state_scope[1]})" if state_scope else ""
     answer = (
-        f"There are {count_int:,} borrowers passing the refinance-economics screen{geo_text}. "
+        f"There are {count_int:,} borrowers who are in the money{geo_text}. "
         f"This is a unique borrower count from {borrower_asset} at the "
         "gold borrower grain, so multi-segment borrowers are counted once. It is broader "
         "than the marketing-eligible Lead Queue or any eligible-only Segment page filter."
