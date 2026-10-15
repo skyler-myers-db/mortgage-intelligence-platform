@@ -60,14 +60,10 @@ export const LEXICON_BAN = [
 
 // Files that still hold a retired variant because another W5e lane renames
 // them in parallel (each merges before w5-lexicon-copy). SHRINK-ONLY:
-// lexiconBan.test.ts fails when an entry no longer reproduces a hit. The
-// integrator empties it at the w5-lexicon-copy merge.
-export const LEXICON_PENDING = {
-  "src/routes/analytics.lib.ts": "w5-analytics renames its 'Prime Refi Candidates' / 'refi economics' / 'Refi economics' literals.",
-  "src/routes/analytics.sections.tsx": "w5-analytics renames the Refi Economics KPI, the Refi screen rule label and the two table column labels.",
-  "src/routes/analytics.chart-model.ts": "w5-analytics renames the histogram summary's 'bps refi screen' sentence.",
-  "src/routes/lead-queue.filters.ts": "w5-lead-queue-columns renames the in_the_money filter chip label 'Refi economics'.",
-};
+// lexiconBan.test.ts fails when an entry no longer reproduces a hit. Emptied
+// by the integrator at the w5-lexicon-copy merge (2026-10-15); the export
+// stays because lexiconBan.test.ts reads it. Never add an entry.
+export const LEXICON_PENDING = {};
 
 // Files that still carry a banned call, each with why.
 // SHRINK-ONLY: src/lib/formattingBan.test.ts fails when an entry no longer

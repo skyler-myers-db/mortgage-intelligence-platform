@@ -241,7 +241,7 @@ test.describe('S4 home summary — pinned response cross-check', () => {
           families: [
             ['marketable_population', 'Marketable population'],
             ['opportunity_score', 'Opportunity score'],
-            ['in_the_money', 'Refi economics screen'],
+            ['in_the_money', 'In the Money'],
             ['next_best_offer', 'Primary offer path'],
           ].map(([id, title]) => ({
             id,
@@ -292,7 +292,7 @@ test.describe('S4 home summary — pinned response cross-check', () => {
       await drawer.getByRole('tab', { name: 'Lineage' }).click();
       const familyTitles: Record<string, string> = {
         high_opportunity: 'Opportunity score',
-        refi_economics_screen: 'Refi economics screen',
+        refi_economics_screen: 'In the Money',
         offers_available: 'Primary offer path',
       };
       await expect(drawer).toContainText(

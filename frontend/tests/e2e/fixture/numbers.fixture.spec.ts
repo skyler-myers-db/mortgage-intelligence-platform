@@ -21,10 +21,10 @@ test.describe('Home approval-queue banner', () => {
     await expect(banner.getByTestId('approval-queue-contactable')).toHaveText(fmt(TOTALS.contactableInTheMoney));
     await expect(banner.getByTestId('approval-queue-screen')).toHaveText(fmt(TOTALS.inTheMoney));
     await expect(banner).toContainText(
-      `${fmt(TOTALS.contactableInTheMoney)} contactable of ${fmt(TOTALS.inTheMoney)} borrowers passing the refinance-economics screen`,
+      `${fmt(TOTALS.contactableInTheMoney)} contactable of ${fmt(TOTALS.inTheMoney)} borrowers in the money`,
     );
     // M is the same figure the KPI card above it renders.
-    await expect(page.locator('.kpi', { hasText: 'Refi economics screen' }).locator('.kpi__value')).toHaveText(fmt(TOTALS.inTheMoney));
+    await expect(page.locator('.kpi', { hasText: 'In the Money' }).locator('.kpi__value')).toHaveText(fmt(TOTALS.inTheMoney));
 
     const link = banner.getByRole('link', { name: 'Open review queue' });
     await expect(link).toHaveAttribute('href', '/lead-queue?segment=itm');

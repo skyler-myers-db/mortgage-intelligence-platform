@@ -9,9 +9,8 @@
  *    (the vocabulary rewrite is gone, live-first); /glossary shows only the
  *    current forms (the retired names are search-only); and a DOM scan of
  *    every registry route, reading adjacent elements apart, finds no retired
- *    variant (/analytics* and /lead-queue are
- *    skipped while eslint LEXICON_PENDING still names their parallel lanes'
- *    files: the integrator re-enables them when it empties that map).
+ *    variant (/analytics* and /lead-queue included since the integrator
+ *    emptied eslint LEXICON_PENDING at the W5e merge).
  *  - flow-10: the Segments lede is ONE line with the Console open, and the
  *    hero's height is logged Console closed and open for the W5e hand-off;
  *    the Portfolio save guard speaks buyer words.
@@ -42,8 +41,6 @@ const ITM_KPI_PROMPT =
 const CHIP = 'Which states have the most in-the-money borrowers?';
 /** The example passes the real prompt guards (tests/unit/test_genie_context_templates.py). */
 const COMPOSER_PLACEHOLDER = 'Ask about your book, e.g. in-the-money count by state';
-/** Routes whose copy belongs to lanes that rename it in parallel (eslint LEXICON_PENDING). */
-const PENDING_ROUTE = /^\/(analytics|lead-queue)/;
 
 /** GET /api/leads measures zero (the request-scoped empty states). */
 function registerEmptyLeads(mockApi: MockApi): void {
@@ -253,7 +250,7 @@ test.describe('Genie cells and the registry scan', () => {
   test('no registry route shows a retired In the Money variant', async ({ app, page }) => {
     // One test walks every registry route, so it gets the slow budget.
     test.slow();
-    for (const route of FIXTURE_ROUTES.filter((entry) => !PENDING_ROUTE.test(entry.path))) {
+    for (const route of FIXTURE_ROUTES) {
       await app.gotoRoute(route.path);
       expect(await page.locator('#main-content').evaluate(scanText), route.name).not.toMatch(RETIRED);
     }

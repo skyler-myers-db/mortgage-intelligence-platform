@@ -201,7 +201,7 @@ test.describe('Lineage explorer — KPI to Catalog Explorer deep link', () => {
 
     // Click 1: the Refi-economics KPI's evidence chip opens the drawer.
     const kpiCard = page
-      .locator('.kpi', { has: page.getByText('Refi economics screen', { exact: true }) })
+      .locator('.kpi', { has: page.getByText('In the Money', { exact: true }) })
       .first();
     await expect(kpiCard).toBeVisible({ timeout: 10_000 });
     await kpiCard.locator('.evidence-chip').first().click();

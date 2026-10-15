@@ -595,7 +595,7 @@ test('Segment Intelligence keeps cards, Any/All controls, ranked list, and map a
   // The select button's accessible name is 'Select <segment> segment — N borrowers'.
   // The bare segment name also labels the card's Ask Genie button and any map
   // state whose top segment it is, so anchor on the prefix.
-  const refiCard = page.getByRole('button', { name: /^Select Prime Refi Candidates segment\b/i });
+  const refiCard = page.getByRole('button', { name: /^Select In the Money segment\b/i });
   await exerciseTransition('select first segment card', async () => {
     await refiCard.press('Enter');
     await expect(refiCard).toHaveAttribute('aria-pressed', 'true');

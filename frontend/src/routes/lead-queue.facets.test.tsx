@@ -196,7 +196,7 @@ describe('Lead Queue facet counts', () => {
   it('maps options to buckets per dimension', () => {
     const segment: LeadFacetsResponse = { dimension: 'segment', total_matching: 9, buckets: [{ value: 'itm', count: 4 }] };
     expect(facetCountForOption('segment', segment, 'All segments')).toBe(9);
-    expect(facetCountForOption('segment', segment, 'Prime Refi Candidates')).toBe(4);
+    expect(facetCountForOption('segment', segment, 'In the Money')).toBe(4);
     expect(facetCountForOption('segment', segment, '2 segments selected (any selected)')).toBeNull();
     const approval: LeadFacetsResponse = { dimension: 'approval', total_matching: 5, buckets: [{ value: 'pending', count: 5 }] };
     expect(facetCountForOption('approval', approval, 'Any approval')).toBe(5);

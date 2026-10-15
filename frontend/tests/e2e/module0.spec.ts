@@ -191,7 +191,7 @@ test.describe('Module 0 — golden path', () => {
     await page.goto('/segment-intelligence');
 
     for (const name of [
-      'Prime Refi Candidates',
+      'In the Money',
       'Listed for Sale',
       'HELOC Intent',
       'Investor / Multi-Property',
@@ -212,7 +212,7 @@ test.describe('Module 0 — golden path', () => {
 
     await page.getByText('Home Equity Candidate', { exact: true }).click();
     await expect(rankedHeader).toContainText(/segment filter: Listed for Sale or Home Equity Candidate/);
-    await expect(rankedHeader).toContainText(/any selected segment, de-duplicated/);
+    await expect(rankedHeader).toContainText(/any selected segment, counted once/);
     const anyUrl = new URL(page.url());
     expect((anyUrl.searchParams.get('segment_codes') ?? '').split(',').sort()).toEqual(['equity', 'listed']);
     expect(anyUrl.searchParams.get('segment_mode')).toBe('any');

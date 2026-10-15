@@ -225,7 +225,7 @@ describe('buildLeadCsv', () => {
     expect(csv).toContain('primary_offer');
     expect(csv).toContain('filed_permit_signal');
     expect(csv).toContain('Refinance + home-equity review');
-    expect(csv).toContain('Prime Refi Candidates');
+    expect(csv).toContain('In the Money');
     expect(csv).not.toContain('recommended_offer');
     expect(csv).not.toContain('has_permit');
     expect(csv).toContain(
