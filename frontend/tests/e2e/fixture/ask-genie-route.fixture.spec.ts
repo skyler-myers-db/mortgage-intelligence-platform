@@ -137,7 +137,7 @@ test.describe('docked composer (visual-07)', () => {
       await app.gotoRoute('/ask-genie');
       const input = composer(page);
       await expect(input).toBeVisible();
-      await expect(input).toHaveAttribute('placeholder', /in-the-money borrowers/);
+      await expect(input).toHaveAttribute('placeholder', /in-the-money count by state/);
       const box = await mustBox(input, 'composer textarea');
       const viewport = page.viewportSize()!;
       expect(box.y, 'composer top inside the viewport').toBeGreaterThanOrEqual(0);
@@ -230,7 +230,7 @@ test.describe('docked composer (visual-07)', () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await app.gotoRoute('/ask-genie');
     const input = composer(page);
-    await expect(input).toHaveAttribute('placeholder', /in-the-money borrowers/);
+    await expect(input).toHaveAttribute('placeholder', /in-the-money count by state/);
     // field-sizing sizes an empty box to its placeholder: the placeholder
     // must fit the two-line minimum, not grow the docked composer.
     const sizing = await input.evaluate((node) => ({

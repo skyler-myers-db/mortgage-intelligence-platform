@@ -39,7 +39,7 @@ const ITM_KPI_PROMPT =
   'How many borrowers across the current Cotality data coverage are currently in-the-money, and what is the average rate spread?';
 const CHIP = 'Which states have the most in-the-money borrowers?';
 /** The example passes the real prompt guards (tests/unit/test_genie_context_templates.py). */
-const COMPOSER_PLACEHOLDER = 'Ask about your book, e.g. show in-the-money borrowers by state';
+const COMPOSER_PLACEHOLDER = 'Ask about your book, e.g. in-the-money count by state';
 /** Routes whose copy belongs to lanes that rename it in parallel (eslint LEXICON_PENDING). */
 const PENDING_ROUTE = /^\/(analytics|lead-queue)/;
 
