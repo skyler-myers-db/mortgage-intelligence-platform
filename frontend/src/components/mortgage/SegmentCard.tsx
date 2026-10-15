@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import type { SegmentSummary } from '../../types';
 import { Icon } from '../Icon';
 import { EvidenceChip } from '../Primitives';
@@ -87,6 +87,8 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
   const presentation = segmentByCode(segment.code);
   const displayName = presentation?.name ?? segment.name;
   const displayDescription = presentation?.description ?? segment.description;
+  // critic-08: the select button is described by the card's visible line.
+  const descriptionId = useId();
   const displayColor = presentation?.color ?? segment.color;
   const prev = useRef<boolean | undefined>(selected);
   const [emanateKey, setEmanateKey] = useState<number>(selected ? 1 : 0);
@@ -152,7 +154,7 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
           className="seg-card__select"
           onClick={activate}
           aria-pressed={selected ?? false}
-          title={displayDescription}
+          aria-describedby={descriptionId}
           aria-label={
             showsReconcile
               ? `Select ${displayName} segment — ${formatCount(segment.count)} borrowers, ${formatCount(contactable)} contactable`
@@ -199,7 +201,7 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
           </div>
         )}
       </div>
-      <div className="seg-card__sub">{displayDescription}</div>
+      <div className="seg-card__sub" id={descriptionId}>{displayDescription}</div>
       <div className="seg-card__meta">
         {gated || hasNoBorrowers ? null : deltaIsFirstSnapshot ? (
           // One line beside the evidence chip and Ask Genie at the 1440
@@ -216,7 +218,7 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
           </span>
         )}
         <span className="seg-card__evidence">
-          <EvidenceChip source={evidenceSource} title={`Evidence for ${displayName}`}>
+          <EvidenceChip source={evidenceSource}>
             evidence
           </EvidenceChip>
         </span>

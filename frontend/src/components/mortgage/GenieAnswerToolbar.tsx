@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
+import { Tooltip } from '../ui/Tooltip';
 import { flattenGenieMarkdown } from '../../lib/genieAnswerText';
 import { formatCell, humanizeKey } from './GenieAnswer.logic';
 import { stripQuestionRestatement } from './GenieAnswer.markdown';
@@ -136,25 +137,23 @@ export function GenieAnswerToolbar({
   return (
     <div className="genie-answer__toolbar" role="group" aria-label="Copy this answer">
       {sql && (
+        <Tooltip content="Copy the governed SQL behind this answer">
+          <button type="button" className="btn btn--ghost btn--sm" onClick={() => void copy('SQL', sql)}>
+            <Icon name="doc" size={12} />
+            Copy SQL
+          </button>
+        </Tooltip>
+      )}
+      <Tooltip content="Copy the answer as plain text, every row included">
         <button
           type="button"
           className="btn btn--ghost btn--sm"
-          onClick={() => void copy('SQL', sql)}
-          title="Copy the governed SQL behind this answer"
+          onClick={() => void copy('answer', answerPlainText(payload))}
         >
           <Icon name="doc" size={12} />
-          Copy SQL
+          Copy answer
         </button>
-      )}
-      <button
-        type="button"
-        className="btn btn--ghost btn--sm"
-        onClick={() => void copy('answer', answerPlainText(payload))}
-        title="Copy the answer as plain text, every row included"
-      >
-        <Icon name="doc" size={12} />
-        Copy answer
-      </button>
+      </Tooltip>
       {/* Visible confirmation only, NOT a live region: each Genie surface
           owns exactly one persistent announcer (audit `a11y-06`), which
           speaks it through `onStatus`. An answer must not mount a second. */}

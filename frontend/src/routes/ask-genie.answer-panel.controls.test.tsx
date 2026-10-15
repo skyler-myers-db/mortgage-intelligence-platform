@@ -168,13 +168,13 @@ describe('AskGenieAnswerPanel composer controls', () => {
     expect(held.title).toContain('still answering');
   });
 
-  it('labels each answer source in plain words, the governed path in its tooltip (flow-10)', () => {
+  it('labels each answer source in plain words, the governed path in its hover card, never a title (flow-10, critic-08)', () => {
     render('');
     const chips = [...container.querySelectorAll<HTMLButtonElement>('.genie-thread .evidence-chip')];
     expect(chips).toHaveLength(2);
     for (const chip of chips) {
       expect(chip.textContent).toBe('Borrower 360');
-      expect(chip.title).toBe('mip.gold.borrower_360');
+      expect(chip.hasAttribute('title')).toBe(false);
     }
   });
 

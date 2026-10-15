@@ -205,21 +205,21 @@ function GenieThreadTurn({
             {chip.variant === 'warning' ? (
               // Degraded / governed refusal: warning chip with tooltip so the
               // user knows why no data is shown. Not clickable.
-              <Chip variant="warning" icon="info" title={chip.title}>
+              <Chip variant="warning" icon="info" tooltip={chip.title}>
                 {chip.label}
               </Chip>
             ) : drawerForSource ? (
               // Specific UC asset → open the matching drawer entry. Plain
               // label on the chip, the governed path in its tooltip (flow-10;
               // same as the workflow cards' source chips).
-              <EvidenceChip source={drawerForSource} title={chip.label}>
+              <EvidenceChip source={drawerForSource}>
                 {friendlyAssetLabel(chip.label)}
               </EvidenceChip>
             ) : (
               // Generic / unknown source → inert chip so a click doesn't open
               // the wrong drawer. (Prior code defaulted to NBO and was
               // misleading.)
-              <Chip variant="neutral" title={`Source: ${chip.label}`}>
+              <Chip variant="neutral" tooltip={`Source: ${chip.label}`}>
                 {friendlyAssetLabel(chip.label)}
               </Chip>
             )}
@@ -419,7 +419,7 @@ export function AskGenieAnswerPanel({
             icon="chat"
             onClick={onNewThread}
             disabled={inFlight !== null}
-            title={busyReason ?? undefined}
+            aria-describedby={busyReason ? BUSY_HINT_ID : undefined}
           >
             New thread
           </Button>
@@ -501,7 +501,7 @@ export function AskGenieAnswerPanel({
                 className="filter filter--question"
                 onClick={() => onAsk(q)}
                 disabled={inFlight !== null}
-                title={busyReason ?? undefined}
+                aria-describedby={busyReason ? BUSY_HINT_ID : undefined}
               >
                 <Icon name="sparkle" size={11} />
                 <span className="filter__text">{q}</span>
@@ -571,7 +571,7 @@ export function AskGenieAnswerPanel({
           icon="send"
           type="submit"
           disabled={!canAsk}
-          title={busyReason ?? undefined}
+          aria-describedby={busyReason ? BUSY_HINT_ID : undefined}
         >
           {inFlight ? 'Asking…' : 'Ask Genie'}
         </Button>

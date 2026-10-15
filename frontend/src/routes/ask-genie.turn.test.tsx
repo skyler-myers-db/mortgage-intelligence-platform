@@ -197,7 +197,7 @@ describe('/ask-genie on the in-flight turn store', () => {
     act(() => setTextAreaValue(controls.composer(), 'A route draft'));
     for (const chip of controls.sampleChips()) {
       expect(chip.disabled).toBe(true);
-      expect(chip.title).toBe(reason);
+      expect(document.getElementById(chip.getAttribute('aria-describedby') ?? '')?.textContent).toBe(reason);
     }
     for (const chip of controls.followUps()) expect(chip.disabled).toBe(true);
     expect(controls.ask().disabled).toBe(true);

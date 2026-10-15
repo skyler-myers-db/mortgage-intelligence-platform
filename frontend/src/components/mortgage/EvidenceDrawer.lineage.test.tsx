@@ -457,13 +457,13 @@ describe('EvidenceDrawer lineage tab', () => {
 
     const observedAsset = document.querySelector<HTMLElement>('.observed-lineage__asset');
     expect(observedAsset?.tagName).toBe('DIV');
-    expect(observedAsset?.getAttribute('title')).toContain(
+    // critic-08: the reason is text a screen reader reads, never a hover-only title.
+    expect(observedAsset?.hasAttribute('title')).toBe(false);
+    expect(observedAsset?.querySelector('.sr-only')?.textContent).toContain(
       'Catalog Explorer link unavailable',
     );
   });
 
-  it('keeps governed explanations visible when metadata and lineage requests fail', async () => {
-    apiMocks.assetMetadata.mockRejectedValue(new Error('metadata unavailable'));
   // W5c drawer hand-off 15b: the metadata read is admin-only, so for a loan
   // officer the query is disabled and stays `pending`; the Lineage tab used
   // to say "Loading observed Unity Catalog relationships…" forever.
@@ -484,6 +484,8 @@ describe('EvidenceDrawer lineage tab', () => {
     expect(text).toContain('Read top to bottom in the documented order.');
   });
 
+  it('keeps governed explanations visible when metadata and lineage requests fail', async () => {
+    apiMocks.assetMetadata.mockRejectedValue(new Error('metadata unavailable'));
     apiMocks.lineageManifest.mockRejectedValue(new Error('manifest unavailable'));
     apiMocks.assetFreshness.mockRejectedValue(new Error('freshness unavailable'));
     appMocks.drawer = MAPPED_SOURCE;

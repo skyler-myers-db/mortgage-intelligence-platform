@@ -83,6 +83,6 @@ export function renderSourceAssetChip(asset: string) {
   const label = friendlyAssetLabel(asset);
   // Plain-English label on the surface; the fully-qualified UC id stays in the
   // title tooltip (and remains visible in /admin-config + /data-estate detail).
-  if (source) return <EvidenceChip key={asset} source={source} title={asset}>{label}</EvidenceChip>;
-  return <Chip key={asset} variant="neutral" icon="db" title={asset}>{label}</Chip>;
+  if (source) return <EvidenceChip key={asset} source={source}>{label}</EvidenceChip>;
+  return <Chip key={asset} variant="neutral" icon="db" tooltip={asset}>{label}</Chip>;
 }

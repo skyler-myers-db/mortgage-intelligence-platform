@@ -6,6 +6,7 @@ import { useApp, type Accent, type Density } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
 import { ThemePreferenceControl } from '../components/layout/ThemePreferenceControl';
 import { Chip, SurfaceTitle } from '../components/Primitives';
+import { Tooltip } from '../components/ui/Tooltip';
 import { Icon } from '../components/Icon';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { DataOperationsPanel } from '../components/admin/DataOperationsPanel';
@@ -284,18 +285,19 @@ export default function AdminConfig() {
         <div className="surface" id="offer-rules" tabIndex={-1}>
           <div className="surface__hdr surface__hdr--split">
             <SurfaceTitle>Offer rules</SurfaceTitle>
-            <button
-              type="button"
-              className="chip chip--neutral admin-rules-version"
-              onClick={() => setRulesDetailsOpen((v) => !v)}
-              aria-expanded={rulesDetailsOpen}
-              aria-controls="admin-rules-version-detail"
-              disabled={!rules && !rulesError}
-              title="Show governed offer-rules version details"
-            >
-              <span className="chip__label">{rulesVersionLabel}</span>
-              <Icon name={rulesDetailsOpen ? 'up' : 'down'} size={10} />
-            </button>
+            <Tooltip content="Show governed offer-rules version details">
+              <button
+                type="button"
+                className="chip chip--neutral admin-rules-version"
+                onClick={() => setRulesDetailsOpen((v) => !v)}
+                aria-expanded={rulesDetailsOpen}
+                aria-controls="admin-rules-version-detail"
+                disabled={!rules && !rulesError}
+              >
+                <span className="chip__label">{rulesVersionLabel}</span>
+                <Icon name={rulesDetailsOpen ? 'up' : 'down'} size={10} />
+              </button>
+            </Tooltip>
           </div>
           <div className="surface__body admin-panel-body">
             <p className="body flush">

@@ -324,6 +324,12 @@ export default function PortfolioBuilder() {
     void preloadDescribedError();
   }, [buildDirty, buildInFlight, preview?.campaign_build_eligible]);
 
+  // a11y-05: the save panel mounts only from the user's "Save build" click,
+  // so its name field takes focus as it mounts (a callback ref, not the
+  // autoFocus attribute jsx-a11y/no-autofocus bans).
+  const focusOnOpen = useCallback((node: HTMLInputElement | null) => {
+    node?.focus();
+  }, []);
   const saving = createCampaign.isPending;
   const onConfirmSave = useCallback(async () => {
     const name = saveName.trim();
@@ -520,7 +526,7 @@ export default function PortfolioBuilder() {
                     value={saveName}
                     onChange={(e) => setSaveName(e.target.value)}
                     maxLength={80}
-                    autoFocus
+                    ref={focusOnOpen}
                     data-testid="portfolio-save-name"
                   />
                 )}

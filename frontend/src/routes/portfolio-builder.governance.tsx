@@ -4,6 +4,7 @@ import { Link } from 'react-router';
 import { useApp } from '../components/AppContext';
 import { Icon } from '../components/Icon';
 import { Button, SurfaceTitle } from '../components/Primitives';
+import { Tooltip } from '../components/ui/Tooltip';
 import { AsyncStatus, type AsyncQuery } from '../components/ui/AsyncState';
 import { Field } from '../components/ui/Field';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
@@ -67,9 +68,9 @@ export function CampaignBuildGuard({ preview }: { preview: PortfolioPreview }) {
         <Icon name="shield" size={16} />
       </div>
       <div className="approval__body">
-        <div className="approval__title">
         {/* flow-10: buyer words. Every string here is linted by
             routes/routeCopy.lint.test.tsx (no "preflight", no "treatment"). */}
+        <div className="approval__title">
           {eligible ? 'Ready to save as a campaign' : 'Narrow this build before saving it as a campaign'}
         </div>
         <div className="approval__sub">
@@ -81,14 +82,14 @@ export function CampaignBuildGuard({ preview }: { preview: PortfolioPreview }) {
             </>
           ) : overLimit ? (
             <>
-              This treatment preflight contains {formatCount(contactCount)} contacts,
-              above the governed {formatCount(limit)}-contact treatment limit. Narrow
-              geography, relationship, product, equity, or other filters, then run the build again.
+              This build has {formatCount(contactCount)} contacts, more than the {formatCount(limit)} a
+              saved campaign can hold. Narrow geography, relationship, product, equity or other filters,
+              then run the build again.
             </>
           ) : (
             <>
-              The server did not verify campaign-build eligibility for the governed{' '}
-              {formatCount(limit)}-contact limit. Run the build again before saving.
+              The server did not confirm this build fits the {formatCount(limit)} contacts a saved
+              campaign can hold. Run the build again before saving.
             </>
           )}
         </div>
@@ -232,9 +233,11 @@ export function SavedCampaignsPanel({ query }: { query: UseQueryResult<CampaignL
                             <span className={`chip ${selected.generationMode === 'supervisor' ? 'chip--success' : 'chip--neutral'} chip--compact`}>
                               {selected.generatorLabel}
                             </span>
-                            <span className="mono muted fs-11" title={campaign.campaign_id}>
-                              campaign {campaign.campaign_id.slice(0, 12)}
-                            </span>
+                            <Tooltip content={campaign.campaign_id}>
+                              <span className="mono muted fs-11">
+                                campaign {campaign.campaign_id.slice(0, 12)}
+                              </span>
+                            </Tooltip>
                             <span className={`chip ${selected.verifiedAtCreation ? 'chip--success' : 'chip--warning'} chip--compact`}>
                               {selected.verifiedAtCreation ? 'Verified at creation' : 'Saved copy only'}
                             </span>

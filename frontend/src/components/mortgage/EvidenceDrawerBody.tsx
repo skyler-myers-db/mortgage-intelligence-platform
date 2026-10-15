@@ -76,6 +76,8 @@ const LINEAGE_LAYER_LABELS: Record<LineageLayer, string> = {
  * fully-qualified `catalog.schema.object`. Keeping the table FQN to a single
  * slot per drawer is also what makes it addressable by an exact locator.
  */
+const CATALOG_LINK_UNAVAILABLE = ' (Catalog Explorer link unavailable: no workspace host configured)';
+
 function LineageManifestChip({
   node,
   display,
@@ -98,13 +100,16 @@ function LineageManifestChip({
       </a>
     );
   }
+  // critic-08: the reason is read, not hovered (the Lineage tab also states
+  // it once, visibly, for the whole chain). Beside the chip, not in it, so the
+  // chip's text stays the asset name its locators match.
   return (
-    <span
-      className="chip chip--neutral lineage-node__chip"
-      title="Catalog Explorer link unavailable — no workspace host configured"
-    >
-      <span className="lineage-node__name">{text}</span>
-    </span>
+    <>
+      <span className="chip chip--neutral lineage-node__chip">
+        <span className="lineage-node__name">{text}</span>
+      </span>
+      <span className="sr-only">{CATALOG_LINK_UNAVAILABLE}</span>
+    </>
   );
 }
 
@@ -140,11 +145,9 @@ function ObservedLineageAsset({ node }: { node: AssetLineageNode }) {
     );
   }
   return (
-    <div
-      className="lineage-node observed-lineage__asset"
-      title="Catalog Explorer link unavailable - no workspace host configured"
-    >
+    <div className="lineage-node observed-lineage__asset">
       {content}
+      <span className="sr-only">{CATALOG_LINK_UNAVAILABLE}</span>
     </div>
   );
 }
@@ -378,14 +381,14 @@ export function EvidenceDrawerBody() {
                   Observed relationships unavailable. The governed manifest remains primary.
                 </div>
               )}
-              {metadata && (
-                <>
-                  <div className="eyebrow mt-5 mb-2">
               {d.assetKey && !canAccessAdmin && (
                 <div className="source-card source-card--subtle" role="status">
                   Observed Unity Catalog relationships are shown to administrators.
                 </div>
               )}
+              {metadata && (
+                <>
+                  <div className="eyebrow mt-5 mb-2">
                     Observed Unity Catalog relationships - supplemental
                   </div>
                   <p className="muted fs-12">

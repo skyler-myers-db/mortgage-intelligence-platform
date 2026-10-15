@@ -143,7 +143,7 @@ export default function GenieAnswerAllRows({
   const spacer = (key: string, rowCount: number) =>
     rowCount > 0 ? (
       <tr key={key} className="genie-answer__all-rows-spacer" aria-hidden="true">
-        <td colSpan={columns.length} style={{ blockSize: rowCount * view.rowHeight }} />
+        <td colSpan={columns.length} aria-hidden="true" style={{ blockSize: rowCount * view.rowHeight }} />
       </tr>
     ) : null;
   const windowRows = Array.from({ length: end - start }, (_, offset) => renderRow(start + offset));
