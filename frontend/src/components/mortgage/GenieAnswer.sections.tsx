@@ -1,5 +1,5 @@
 import { lazy, Suspense, useId, useRef, useState } from 'react';
-import { Link } from 'react-router';
+import { GenieCellLink } from './GenieCellLink';
 import { Icon } from '../Icon';
 import { prefersReducedMotion } from './genieMotion';
 import type {
@@ -219,9 +219,7 @@ export function GenieRowsVisual({
                         return (
                           <td key={c} className={isNum ? 'num' : undefined}>
                             {href ? (
-                              <Link className="mono" to={href}>
-                                {formatCell(c, v)}
-                              </Link>
+                              <GenieCellLink href={href}>{formatCell(c, v)}</GenieCellLink>
                             ) : (
                               formatCell(c, v)
                             )}
