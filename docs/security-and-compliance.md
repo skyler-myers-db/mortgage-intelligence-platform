@@ -237,7 +237,8 @@ the pull request that ships the behaviour, never earlier.
 | Offer open (the approval surface) | `RECOMMEND_OFFER` | once per `POST /offers/recommend` (`offers.recommend_offer`): the approval-surface open record, carrying offer code, confidence, thresholds, `decision_inputs`, source freshness, evidence ids and subject CLIP | synchronous, fail-closed (503) |
 | Offer open (the approval surface) | `DRAFT_OUTREACH` | once per `POST /outreach/draft` (`outreach.draft_outreach`) | committed in the same transaction as the draft row, fail-closed |
 | Approve / Reject (`outreach.approve_outreach` / `outreach.reject_outreach`) | `APPROVE` / `OUTREACH_REJECT` | once per decision; an approve without `review_mode` is refused with 422 `Reload the app to approve` before any read or write (required since W5c) | committed with the approvals row, fail-closed; carries `decision_inputs` and the draft proof, `approval_request_batch_id` when the decision answers an approval request, and the client-declared `declared_lead_view_id` when taken from the paged Lead Queue |
-| Revoke (`outreach_revoke.revoke_outreach`) | `OUTREACH_REVOKE` | once per revoke | committed with the revoke's approvals row, fail-closed; the approve row is never changed |
+| Revoke (`outreach_revoke.revoke_outreach`) | `OUTREACH_REVOKE` | once per revoke; a rationale the governed text screen refuses writes `GOVERNED_TEXT_REFUSED` (surface `revoke`) instead, and a refused revoke (409 with its `reason`) writes nothing | committed with the revoke's approvals row, fail-closed; the approve row is never changed |
+| Lead Queue revoke panel lifecycle read (`GET /borrowers/{id}/lifecycle`, W5e) | none | only on an explicit open of 'Revoke' from an Approved row (never on hover, focus, prefetch or poll), to name the approval to revoke; the queue receipt's Revoke already knows it and reads nothing | audit-free (`require_active_team_member`, Lakebase workflow state) |
 | Assignment release, the Undo (`sales.release_lead_assignment`, `sales.release_distribution`) | `LEAD_UNASSIGN` (borrower entity; `borrower_id`, `assignment_id`, `assigned_to_email`, then `restored_assignment_id` + `restored_to_email` or a closed `restore_skipped_reason`) | once per released borrower; a replayed request id writes nothing and returns the original audit id | committed in the release transaction, fail-closed; the released row is kept (`released_at`), never deleted |
 | Distribution Board dry run (`POST /sales/distribute` with `dry_run`) | none | when the Board opens, or re-plans after a 409 | audit-free: writes no Lakebase row and no audit row; returns per-officer aggregates and a plan fingerprint, never a borrower id |
 | Queue-version poll (`workspace.read_queue_version`) | none | every poll | audit-free |
@@ -299,6 +300,18 @@ requests). It is outside the 2026-09-30 borrower-notes ruling. The Lead
 Queue reads the request list once per mount and after a decision, a create
 or a withdraw (audit-free Lakebase workflow state; never polled), and the
 request path never calls `/outreach/draft`.
+
+Revoke rationale: a decision rationale (governed), framed as O3 frames the
+request justification (W5e `w5-lead-table-compile`, correction C11). The
+Lead Queue's "Reason for revoking" is sent as `rationale` on
+`POST /outreach/revoke`, takes the same governed text screen and the same
+500-character cap as the approve and reject rationales, and is recorded on
+the `OUTREACH_REVOKE` row (and the revoke's approvals row) only. It is never
+a borrower note and never shown as one; the field's hint says to leave out
+personal details. A rationale the screen refuses writes
+`GOVERNED_TEXT_REFUSED` (surface `revoke`, owner ruling O1) and the route
+answers its fixed 422; the panel says the refusal was recorded only for
+that 422.
 
 A `VIEW_AUDIT_LEDGER` row (`backend/services/audit_ledger_reads.py`) carries
 only the closed `ledger_surface`, `has_cursor`, `returned_row_count`, the

@@ -1,15 +1,15 @@
 /**
- * react-hooks/set-state-in-effect is an ERROR for exactly the files the
- * wave-2 query-layer migration converted (audit stack-09), proven against
+ * react-hooks/set-state-in-effect is an ERROR for production sources
+ * repo-wide (audit quality-10 step 4 / stack-09 item 5, W5e), proven against
  * the real frontend/eslint.config.js the same way formattingBan.test.ts is.
  *
- * The rule stays 'off' repo-wide (its TODO is wave-5 lint-depth work),
- * so this pins both sides: the converted files are gated, and an unconverted
- * file is not, which is what catches a premature global flip.
+ * SET_STATE_IN_EFFECT_PENDING is shrink-only: each entry must still
+ * reproduce a hit (a fixed file leaves the list in the same change), none
+ * may be a file the W5e lead-table lane owns, and test files stay ungated.
  */
 // @ts-expect-error Frontend app types intentionally exclude Node globals; this
 // unit test reads eslint.config.js under Vitest only.
-import { existsSync, globSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { ESLint } from 'eslint';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -20,63 +20,70 @@ const CONFIG_URL = new URL('eslint.config.js', FRONTEND_URL);
 const RULE = 'react-hooks/set-state-in-effect';
 
 // Loading the config pulls in the typescript-eslint and react-hooks plugins;
-// on a loaded CI box that alone can pass the unit-test defaults.
-const ESLINT_BUDGET_MS = 60_000;
+// on a loaded CI box that alone can pass the unit-test defaults, and the
+// pending files include the largest Genie modules.
+const ESLINT_BUDGET_MS = 120_000;
 
-const CONVERTED = [
-  'src/components/mortgage/useLeadApprovalActions.ts',
-  'src/components/mortgage/useLeadSalesActions.ts',
-  'src/components/mortgage/ApprovalBanner.tsx',
-  'src/components/mortgage/GenieHistoryMenu.tsx',
-  'src/routes/lead-queue.tsx',
-  'src/lib/mutations/outreach.ts',
-  'src/lib/mutations/sales.ts',
-  'src/lib/mutations/requestIds.ts',
-  'src/components/mortgage/useLeadBulkRun.ts',
-  'src/components/mortgage/useLeadTableScroll.ts',
-  'src/components/mortgage/LeadTable.selection.ts',
-  // Wave 4a error-surfaces.
-  'src/routes/lead-queue.freshness.tsx',
-  'src/components/ui/AsyncState.tsx',
-  'src/components/ui/EmptyState.tsx',
-  'src/components/ui/FetchedAt.tsx',
-  'src/components/ui/RetryClock.tsx',
-  'src/lib/queueVersion.ts',
-  // Wave 4b workflow.
-  'src/routes/offer-orchestrator.tsx',
-  'src/routes/offer-orchestrator.queries.ts',
-  'src/routes/offer-orchestrator.sales-team.ts',
-  'src/routes/portfolio-builder.tsx',
-  'src/routes/portfolio-builder.governance.tsx',
-  'src/routes/portfolio-builder.campaign-setup.tsx',
-  'src/components/mortgage/QueuePager.tsx',
-  'src/components/ui/Field.tsx',
-  // Wave 4b genie-client.
-  'src/components/mortgage/GenieAnswerFeedback.tsx',
-  'src/components/layout/GenieDock.tsx',
-  'src/routes/ask-genie.deep-link.tsx',
-  // Wave 4b lead-queue.
-  'src/components/mortgage/LeadBulkRunFallback.tsx',
-  'src/components/mortgage/LeadTable.rowCallbacks.ts',
+/** A synchronous setState in an effect body: the rule's textbook hit. */
+const PLANTED = [
+  "import { useEffect, useState } from 'react';",
+  'export function usePlantedMirror(value: number): number {',
+  '  const [mirror, setMirror] = useState(value);',
+  '  useEffect(() => {',
+  '    setMirror(value);',
+  '  }, [value]);',
+  '  return mirror;',
+  '}',
+  '',
+].join('\n');
+
+/** Production files the W5e lead-table lane edits: never parked on the pending list. */
+const LANE_FILES = [
+  'src/components/mortgage/LeadTable.tsx',
   'src/components/mortgage/LeadTableBody.tsx',
-  'src/components/mortgage/leadWriteFailureToast.ts',
-  'src/components/mortgage/useTableScrollClearance.ts',
+  'src/components/mortgage/LeadTableRow.tsx',
+  'src/components/mortgage/LeadTableFooter.tsx',
+  'src/components/mortgage/LeadTableStatusChips.tsx',
+  'src/components/mortgage/LeadTableBulkActions.tsx',
+  'src/components/mortgage/LeadBulkApproveReview.tsx',
+  'src/components/mortgage/AssignmentLifecycleAdvance.tsx',
+  'src/components/mortgage/DecisionReceipt.tsx',
+  'src/components/mortgage/useLazyModule.ts',
+  'src/components/mortgage/useLeadTableCursor.ts',
+  'src/components/mortgage/useLeadTableHotkeys.ts',
+  'src/components/mortgage/useLeadTableKeyboardFlow.ts',
+  'src/components/mortgage/useLeadApproveReview.ts',
+  'src/components/mortgage/useLeadApprovalActions.ts',
+  'src/components/mortgage/useLeadCsvExport.ts',
+  'src/components/mortgage/leadDecisionWrites.ts',
+  'src/components/mortgage/leadDecisionToast.ts',
+  'src/components/mortgage/salesUndoToasts.ts',
+  'src/components/mortgage/salesUndoRun.ts',
+  'src/lib/mutations/outreach.ts',
 ];
 
-const NOT_YET_CONVERTED = [
+/** Production files the old wave-2/4 scope did NOT gate: the flip reaches them. */
+const EX_SCOPE = [
   'src/components/command/CommandPalette.tsx',
   'src/components/mortgage/LeadTable.tsx',
+  'src/components/mortgage/useLeadTableCursor.ts',
 ];
 
 let eslint: ESLint;
-let scope: string[];
+let strict: ESLint;
+let pending: Record<string, string>;
 
 beforeAll(async () => {
   const loaded: unknown = await import(/* @vite-ignore */ CONFIG_URL.href);
-  const exported = (loaded as { SET_STATE_IN_EFFECT_SCOPE?: unknown }).SET_STATE_IN_EFFECT_SCOPE;
-  if (!Array.isArray(exported)) throw new Error('eslint.config.js no longer exports SET_STATE_IN_EFFECT_SCOPE');
-  scope = exported as string[];
+  const exported = (loaded as { SET_STATE_IN_EFFECT_PENDING?: unknown }).SET_STATE_IN_EFFECT_PENDING;
+  if (exported === null || typeof exported !== 'object') {
+    throw new Error('eslint.config.js no longer exports SET_STATE_IN_EFFECT_PENDING');
+  }
+  pending = exported as Record<string, string>;
   eslint = new ESLint({ cwd: FRONTEND });
+  // The same config with the rule forced on everywhere: what each pending
+  // file would report once its override goes.
+  strict = new ESLint({ cwd: FRONTEND, overrideConfig: { rules: { [RULE]: 'error' } } });
 }, ESLINT_BUDGET_MS);
 
 async function severity(file: string): Promise<number> {
@@ -90,26 +97,47 @@ async function severity(file: string): Promise<number> {
   return 0;
 }
 
-describe('set-state-in-effect scope', { timeout: ESLINT_BUDGET_MS }, () => {
-  it('is an error for every converted file', async () => {
-    for (const file of CONVERTED) {
+async function ruleHits(linter: ESLint, text: string, file: string): Promise<number> {
+  const [result] = await linter.lintText(text, { filePath: `${FRONTEND}${file}` });
+  return result.messages.filter((message) => message.ruleId === RULE && message.severity === 2).length;
+}
+
+describe('set-state-in-effect is an error repo-wide', { timeout: ESLINT_BUDGET_MS }, () => {
+  it('a planted violation lints as an error in files the old scope never gated', async () => {
+    for (const file of EX_SCOPE) {
       expect(existsSync(`${FRONTEND}${file}`), `${file} is missing`).toBe(true);
       expect(await severity(file), file).toBe(2);
+      expect(await ruleHits(eslint, PLANTED, file), file).toBe(1);
     }
   });
 
-  it('stays off for files the migration has not reached (no global flip yet)', async () => {
-    for (const file of NOT_YET_CONVERTED) expect(await severity(file), file).toBe(0);
+  it('the lane files lint clean at error', async () => {
+    for (const file of LANE_FILES) {
+      expect(await severity(file), file).toBe(2);
+      const text = readFileSync(`${FRONTEND}${file}`, 'utf8') as string;
+      expect(await ruleHits(eslint, text, file), file).toBe(0);
+    }
+  });
+
+  it('every pending entry still reproduces a hit (a fixed file leaves the list)', async () => {
+    const files = Object.keys(pending);
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      expect(existsSync(`${FRONTEND}${file}`), `${file} is missing`).toBe(true);
+      expect(pending[file], file).toMatch(/^w5-[a-z0-9-]+( \(residual partition\))?$/);
+      expect(await severity(file), file).toBe(0);
+      const text = readFileSync(`${FRONTEND}${file}`, 'utf8') as string;
+      expect(await ruleHits(strict, text, file), `${file} no longer has a hit: remove its entry`).toBeGreaterThan(0);
+    }
+  });
+
+  it('parks no file this lane owns', () => {
+    for (const file of LANE_FILES) expect(Object.keys(pending), file).not.toContain(file);
   });
 
   it('never gates test files', async () => {
     expect(await severity('src/lib/mutations/outreach.test.ts')).toBe(0);
     expect(await severity('src/components/mortgage/ApprovalBanner.test.tsx')).toBe(0);
-  });
-
-  it('lists only patterns that match a source file', () => {
-    for (const pattern of scope) {
-      expect(globSync(pattern, { cwd: FRONTEND }).length, pattern).toBeGreaterThan(0);
-    }
+    expect(await ruleHits(eslint, PLANTED, 'src/components/mortgage/LeadTable.planted.test.tsx')).toBe(0);
   });
 });

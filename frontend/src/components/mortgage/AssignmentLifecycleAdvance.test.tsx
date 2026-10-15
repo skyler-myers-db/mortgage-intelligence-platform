@@ -120,6 +120,28 @@ describe('AssignmentLifecycleAdvance', () => {
     expect(mutationKeys()).toEqual([['mip', 'sales', 'lifecycle']]);
   });
 
+  // a11y-05: the chip stack carries no static-element click stopper. Its
+  // controls are buttons, which the row's toggle ignores (LeadTableRow), and
+  // each one still runs its own write.
+  it('lets an Advance click bubble as a button click and still writes once', async () => {
+    apiMocks.updateAssignmentStatus.mockResolvedValue({
+      assignment: { assignment_id: ASSIGNMENT_ID, status: 'contact_drafted' },
+    });
+    await act(async () => render('assigned'));
+    const reached: (Element | null)[] = [];
+    document.getElementById('root')!.addEventListener('click', (event) => {
+      reached.push(event.target instanceof Element ? event.target.closest('button') : null);
+    });
+
+    const advance = buttonByText('Mark contact drafted')!;
+    await act(async () => advance.click());
+    await settle();
+
+    expect(reached).toEqual([advance]);
+    expect(document.querySelector('.chip-stack')?.getAttribute('onclick')).toBeNull();
+    expect(apiMocks.updateAssignmentStatus).toHaveBeenCalledTimes(1);
+  });
+
   it('names every advance verb-first', async () => {
     for (const [status, label] of [
       ['assigned', 'Mark contact drafted'],

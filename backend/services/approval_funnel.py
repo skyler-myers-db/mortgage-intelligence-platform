@@ -145,11 +145,23 @@ SELECT
     (SELECT COUNT(*) FROM outcome_borrowers)  AS outcome_recorded
 """
 
+# A revoked approve leaves the recent list (flow-v2): an approve with a later
+# finalized revoke for the same borrower is excluded. A re-approve after the
+# revoke is newer than it, so it still lists; the 'ever approved' count above
+# is unchanged (a revoke appends, it never edits history).
 _RECENT_APPROVALS_SQL = """
-SELECT approval_id, borrower_id, offer_code, actor_email,
-       assigned_to_email, decided_at
-FROM mip_app.approvals
-WHERE action = 'approve'
+SELECT a.approval_id, a.borrower_id, a.offer_code, a.actor_email,
+       a.assigned_to_email, a.decided_at
+FROM mip_app.approvals a
+WHERE a.action = 'approve'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM mip_app.approvals r
+      WHERE r.borrower_id = a.borrower_id
+        AND r.action = 'revoke'
+        AND r.audit_event_id IS NOT NULL
+        AND r.decided_at >= a.decided_at
+  )
 ORDER BY decided_at DESC
 LIMIT %(limit)s
 """

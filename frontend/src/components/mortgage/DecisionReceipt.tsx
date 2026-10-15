@@ -34,6 +34,7 @@ import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip, SurfaceTitle } from '../Primitives';
 import { Skeleton } from '../ui/Skeleton';
+import { Tooltip } from '../ui/Tooltip';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { ScoreBadge } from './ScoreBadge';
 import {
@@ -46,6 +47,7 @@ import {
   type DecisionRouting,
 } from './DecisionReceipt.copy';
 import { copyAuditId, printReceipt } from './DecisionReceipt.actions';
+import { REVOKE_APPROVAL_EVENT, REVOKE_CAMPAIGN_BOUND, type RevokeApprovalRequest } from './LeadTable.constants';
 
 // The explorer loads this module on an expanded row and asks it whether the
 // row is a decision (AdminAuditExplorer.row.tsx).
@@ -119,7 +121,8 @@ interface ReceiptRow {
   label: string;
   value: string;
   mono?: boolean;
-  title?: string;
+  /** The full value of a sliced one, on the design-system tooltip (critic-08). */
+  tooltip?: string;
 }
 
 function receiptRows(receipt: DecisionReceiptPayload): ReceiptRow[] {
@@ -141,7 +144,7 @@ function receiptRows(receipt: DecisionReceiptPayload): ReceiptRow[] {
       label: 'Campaign · variant',
       value: `${receipt.campaign_id.slice(0, 12)} · ${receipt.variant_name ?? 'variant unnamed'}`,
       mono: true,
-      title: receipt.campaign_id,
+      tooltip: receipt.campaign_id,
     });
   }
   if (receipt.rationale_code) {
@@ -151,9 +154,9 @@ function receiptRows(receipt: DecisionReceiptPayload): ReceiptRow[] {
     rows.push({
       key: 'copy-hash',
       label: 'Copy hash (bound at approval)',
+      // Shown in full, so it needs no tooltip.
       value: receipt.copy_hash,
       mono: true,
-      title: receipt.copy_hash,
     });
   }
   if (receipt.copy_generation_id) {
@@ -220,7 +223,7 @@ export function DecisionReceipt({
   headingLevel = 2,
   className = '',
 }: DecisionReceiptProps) {
-  const { canAccessAdmin } = useApp();
+  const { canAccessAdmin, canApprove } = useApp();
   // The ledger opens for administrators and the read-only Auditor role
   // (D-audit-reads-c3), the same decision /audit-ledger's gate makes.
   const canReadLedger = useAuditLedgerAccess();
@@ -391,6 +394,7 @@ export function DecisionReceipt({
   }
 
   const receipt = query.data;
+  const revocable = decidedHere && compact && receipt.decision === 'approved' && Boolean(receipt.approval_id) && canApprove;
   // The seal needs a trusted, gap-free proof whose score is the one shown.
   const sealed = Boolean(
     score && cachedProof && proofSealHolds(cachedProof) && cachedProof.opportunity_score === score.opportunityScore,
@@ -424,18 +428,22 @@ export function DecisionReceipt({
             <p className="decision-receipt__routing" data-testid="decision-receipt-routing">{routingLine}</p>
           )}
           <dl className="decision-receipt__grid">
-            {rows.map((row, index) => (
-              <div key={row.key} className="decision-receipt__row" style={staggerIndex(index)}>
-                <dt className="field__label">{row.label}</dt>
+            {rows.map((row, index) => {
+              const value = (
                 <dd
                   className={`field__value${row.mono ? ' decision-receipt__value--mono' : ''}`}
-                  title={row.title}
                   data-receipt-field={row.key}
                 >
                   {row.value}
                 </dd>
-              </div>
-            ))}
+              );
+              return (
+                <div key={row.key} className="decision-receipt__row" style={staggerIndex(index)}>
+                  <dt className="field__label">{row.label}</dt>
+                  {row.tooltip ? <Tooltip content={row.tooltip}>{value}</Tooltip> : value}
+                </div>
+              );
+            })}
           </dl>
           <div className="decision-receipt__section" style={staggerIndex(evidenceIndex)}>
             <div className="eyebrow mb-2">{DECISION_RECEIPT_COPY.evidence}</div>
@@ -491,6 +499,23 @@ export function DecisionReceipt({
               >
                 {DECISION_RECEIPT_COPY.openExplorer}
               </Link>
+            )}
+            {/* flow-v2: only the Lead Queue's in-session receipt (decidedHere and compact) of an approval. */}
+            {/* flow-v2 (deviation:revoke-approval): the Lead Queue shell opens its revoke panel on this approval. */}
+            {revocable && !receipt.campaign_id && receipt.approval_id && receipt.borrower_id && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => window.dispatchEvent(new CustomEvent<RevokeApprovalRequest>(REVOKE_APPROVAL_EVENT, {
+                  detail: { borrowerId: receipt.borrower_id ?? '', approvalId: receipt.approval_id ?? '' },
+                }))}
+                data-testid="decision-receipt-revoke"
+              >
+                Revoke approval
+              </Button>
+            )}
+            {revocable && receipt.campaign_id && (
+              <span className="muted fs-12" data-testid="decision-receipt-revoke-bound">{REVOKE_CAMPAIGN_BOUND}</span>
             )}
           </div>
         </div>

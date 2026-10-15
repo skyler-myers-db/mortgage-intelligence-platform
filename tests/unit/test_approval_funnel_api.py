@@ -10,11 +10,13 @@ per-LO drill-down returns real per-officer counts with honest zero states.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
 from backend.main import app
+from backend.services.approval_funnel import clear_approval_funnel_cache
 from backend.services.scoring import is_high_opportunity
 from tests.fixtures import mock_population as mock_data
 from tests.fixtures.reviewed_approval import reviewed_approval
@@ -144,6 +146,33 @@ def test_approving_in_the_api_moves_the_funnel_immediately() -> None:
     assert approvals, "expected the approve decision to surface"
     assert approvals[0]["actor_email"] == "skyler@entrada.ai"
     assert approvals[0]["borrower_id"] == mock_data.BORROWERS[0].borrower_id
+
+
+def test_a_revoked_approve_leaves_the_recent_list_and_a_re_approve_lists(fake_lakebase_client) -> None:
+    """flow-v2: an approve with a later finalized revoke is out of the recent
+    approvals; a re-approve after the revoke is newer, so it lists again; the
+    'ever approved' stage is unchanged by the revoke (a revoke appends)."""
+    borrower_id = mock_data.BORROWERS[0].borrower_id
+    first = _approve(borrower_id)
+    approved_before = _stage(_funnel(), "approved")["borrower_count"]
+    fake_lakebase_client.approvals.append({
+        "approval_id": uuid4(),
+        "borrower_id": borrower_id,
+        "action": "revoke",
+        "actor_email": "skyler@entrada.ai",
+        "decided_at": datetime.now(UTC),
+        "audit_event_id": str(uuid4()),
+    })
+    clear_approval_funnel_cache()
+
+    revoked = _funnel()
+    assert [row["approval_id"] for row in revoked["approvals"]] == []
+    assert _stage(revoked, "approved")["borrower_count"] == approved_before
+
+    again = _approve(borrower_id)
+    relisted = _funnel()
+    assert [row["approval_id"] for row in relisted["approvals"]] == [again["approval_id"]]
+    assert first["approval_id"] != again["approval_id"]
 
 
 def test_lifecycle_and_outcome_stages_count_cumulatively() -> None:

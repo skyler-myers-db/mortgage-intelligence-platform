@@ -11,11 +11,15 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
+import { Tooltip } from '../ui/Tooltip';
 import type { GrowthAgentCohortVerification } from '../../lib/api';
 import { formatCount } from '../../lib/formatters';
+import { saveDataRequested } from '../../lib/prefetch';
+import { preloadRouteForPath } from '../../lib/routePreloaders';
 import type { CampaignBinding } from './LeadTable.logic';
 import type { CampaignBindingState } from './useLeadApprovalActions';
 import { APPROVER_ROLE_STATUS_ID } from './approverGate';
+import { REVOKE_CAMPAIGN_BOUND } from './LeadTable.constants';
 
 interface LeadTableStatusChipsProps {
   growthAgentVerification: GrowthAgentCohortVerification | null;
@@ -36,6 +40,18 @@ interface LeadTableStatusChipsProps {
   requestScopeRow?: ReactNode;
 }
 
+/**
+ * bundle-09 item 1: warm the Offer route CHUNK on intent (never a read:
+ * opening an offer writes audit rows), nothing while the browser asks to save
+ * data. Inline rather than lib/preloadIntent: importing that module here
+ * split it out of the Console's chunk into a shared one and added its name to
+ * the entry chunk's preload list (initial JS); both functions used here
+ * already ship in the entry chunk.
+ */
+function warmOfferRoute(path: string): void {
+  if (!saveDataRequested()) preloadRouteForPath(path);
+}
+
 export function LeadTableStatusChips({
   growthAgentVerification,
   campaignBindingState,
@@ -47,6 +63,12 @@ export function LeadTableStatusChips({
   requestPathOpen = false,
   requestScopeRow = null,
 }: LeadTableStatusChipsProps) {
+  const boundOfferHref = campaignBinding && expandedBorrowerId
+    ? `/offer-orchestrator/${encodeURIComponent(expandedBorrowerId)}?${new URLSearchParams({
+      campaign_id: campaignBinding.campaign_id,
+      variant_name: campaignBinding.variant_name,
+    }).toString()}`
+    : null;
   return (
     <>
       {requestScopeRow}
@@ -66,23 +88,24 @@ export function LeadTableStatusChips({
         <div className="table-success chip-row" role="status" data-testid="growth-agent-cohort-proof">
           <Chip variant="success" icon="shield">Verified Growth Agent cohort</Chip>
           <span className="num">{formatCount(growthAgentVerification.total)} borrowers</span>
-          <span className="mono" title={growthAgentVerification.cohortFingerprint}>
-            proof {growthAgentVerification.cohortFingerprint.slice(0, 12)}
-          </span>
-          <span title={growthAgentVerification.snapshotId}>
-            snapshot {growthAgentVerification.snapshotId}
-          </span>
-          <span className="mono" title={growthAgentVerification.runId}>
-            run {growthAgentVerification.runId.slice(0, 12)}
-          </span>
+          {/* Sliced ids carry the full value on the design-system tooltip (critic-08). */}
+          <Tooltip content={growthAgentVerification.cohortFingerprint}>
+            <span className="mono">proof {growthAgentVerification.cohortFingerprint.slice(0, 12)}</span>
+          </Tooltip>
+          <Tooltip content={growthAgentVerification.snapshotId}>
+            <span>snapshot {growthAgentVerification.snapshotId}</span>
+          </Tooltip>
+          <Tooltip content={growthAgentVerification.runId}>
+            <span className="mono">run {growthAgentVerification.runId.slice(0, 12)}</span>
+          </Tooltip>
         </div>
       )}
       {campaignBindingState === 'validating' && requestedCampaignBinding && (
         <div id="campaign-binding-status" className="table-neutral chip-row" role="status" aria-live="polite" data-testid="campaign-binding-status">
           <Chip variant="neutral" icon="shield">Validating campaign binding</Chip>
-          <span className="mono" title={requestedCampaignBinding.campaign_id}>
-            campaign {requestedCampaignBinding.campaign_id.slice(0, 12)}
-          </span>
+          <Tooltip content={requestedCampaignBinding.campaign_id}>
+            <span className="mono">campaign {requestedCampaignBinding.campaign_id.slice(0, 12)}</span>
+          </Tooltip>
           <span>variant {requestedCampaignBinding.variant_name}</span>
         </div>
       )}
@@ -95,17 +118,18 @@ export function LeadTableStatusChips({
       {campaignBinding && (
         <div className="table-success chip-row" role="status" data-testid="campaign-operational-provenance">
           <Chip variant="success" icon="shield">Campaign-bound outreach</Chip>
-          <span className="mono" title={campaignBinding.campaign_id}>
-            campaign {campaignBinding.campaign_id.slice(0, 12)}
-          </span>
+          <Tooltip content={campaignBinding.campaign_id}>
+            <span className="mono">campaign {campaignBinding.campaign_id.slice(0, 12)}</span>
+          </Tooltip>
           <span>variant {campaignBinding.variant_name}</span>
-          {expandedBorrowerId && (
+          {/* flow-v2: an approver's Revoke is hidden on a bound queue; this says why. */}
+          {approverGate === null && <span className="muted">{REVOKE_CAMPAIGN_BOUND}</span>}
+          {boundOfferHref && (
             <Link
               className="btn btn--primary btn--sm"
-              to={`/offer-orchestrator/${encodeURIComponent(expandedBorrowerId)}?${new URLSearchParams({
-                campaign_id: campaignBinding.campaign_id,
-                variant_name: campaignBinding.variant_name,
-              }).toString()}`}
+              to={boundOfferHref}
+              onPointerEnter={() => warmOfferRoute(boundOfferHref)}
+              onFocus={() => warmOfferRoute(boundOfferHref)}
             >
               Open bound offer
               <Icon name="chevright" size={12} />

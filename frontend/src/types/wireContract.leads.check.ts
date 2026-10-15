@@ -18,6 +18,7 @@ import type { RejectReasonCode } from '../components/mortgage/LeadTable.types';
 import type { ApproveResult, OutreachDraftResult, RejectResult } from '../lib/apiTypes';
 import type { ApprovalStatus, Borrower360, BorrowerLifecycle, BorrowerProof, LeadSummary, OfferRecommendation, OutreachStatus, ProofReproduceQuery, ProofScoreComponent, WhyPanel } from '../types';
 import type { ApprovalRequestWithdrawBody } from './approvalRequests';
+import type { OutreachRevokeRequest, OutreachRevokeResponse } from '../lib/apiClients/outreachRevoke';
 
 export type WireContractLeads = [
   // (i) schema-named hand types
@@ -65,4 +66,9 @@ export type WireContractLeads = [
   // Maker-checker approval requests (flow-02 / shell-06, W5d w5-lq-requests-binding).
   Expect<WireFits<ApprovalRequestWithdrawBody, ApiBody<'POST /api/v1/outreach/approval-requests/{batch_id}/withdraw'>>>,
   Expect<DeepNoPhantomKeys<ApprovalRequestWithdrawBody, ApiBody<'POST /api/v1/outreach/approval-requests/{batch_id}/withdraw'>>>,
+  // Revoke an approval (flow-v2, W5e w5-lead-table-compile).
+  Expect<WireFits<OutreachRevokeRequest, ApiRequest<'OutreachRevokeRequest'>>>,
+  Expect<DeepNoPhantomKeys<OutreachRevokeRequest, ApiRequest<'OutreachRevokeRequest'>>>,
+  Expect<WireFits<ApiResponse<'OutreachRevokeResponse'>, OutreachRevokeResponse>>,
+  Expect<NoPhantomKeys<OutreachRevokeResponse, ApiResponse<'OutreachRevokeResponse'>>>,
 ];

@@ -56,7 +56,7 @@ This tracker captures the remaining work to keep Module 0 aligned with modern we
 - [x] **React Compiler pilot**
   - [x] Add React Compiler through the current Vite 8 `reactCompilerPreset` path.
   - [x] Add React Hooks `recommended-latest` compiler-safety lint rules.
-  - Keep `react-hooks/set-state-in-effect` advisory-only until the remaining query-layer migration removes route-local state mirroring.
+  - [x] `react-hooks/set-state-in-effect` is an error for production sources repo-wide (W5e, audit quality-10 step 4 / stack-09 item 5); test files stay ungated. The files that still carried a hit on the W5e base sit on the shrink-only `SET_STATE_IN_EFFECT_PENDING` list in `frontend/eslint.config.js`, each with its owning lane; `src/lib/setStateInEffectScope.test.ts` fails when an entry no longer reproduces a hit.
   - Remove redundant manual memoization only where compiler coverage is proven.
   - Validation: frontend lint, focused Vitest, production build, bundle budget; deployed app passed route-performance timing/layout canaries with 12/12 tests and the expanded browser/device/accessibility matrix with 52/52 tests.
 

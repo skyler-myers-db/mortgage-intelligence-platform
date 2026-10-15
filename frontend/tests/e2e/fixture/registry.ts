@@ -23,6 +23,7 @@ import { salesWorkloadFixtures } from './data/salesLoop';
 import { segmentFixtures } from './data/segments';
 import { shellFixtures } from './data/shell';
 import { approvalRequestFixtures } from './data/approvalRequests';
+import { revokeFixtures } from './data/revoke';
 
 export function defaultFixtures(): FixtureEntry[] {
   return [
@@ -43,5 +44,7 @@ export function defaultFixtures(): FixtureEntry[] {
     ...approvalRequestFixtures,
     // W5d responsive-08: the PRINT_EXPORT receipt Export PDF waits for.
     ...printReceiptFixtures,
+    // W5e flow-v2: the revoke write (an explicit Confirm in the revoke panel only).
+    ...revokeFixtures,
   ];
 }

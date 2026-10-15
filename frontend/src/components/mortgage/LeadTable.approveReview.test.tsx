@@ -32,6 +32,7 @@ import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
 import { currentCommandSelection } from '../command/commandSelection';
 import { clearToasts, getToasts } from '../../lib/toast';
 import { DECISION_LEFT_LIST, _resetDecisionToastForTests } from './leadDecisionToast';
+import { ApiError as TransportApiError } from '../../lib/apiTransport';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -398,6 +399,58 @@ describe('LeadTable approve review', () => {
     expect(draftOutreach).toHaveBeenCalledTimes(1);
     expect(approve).not.toHaveBeenCalled();
     // Two waits on the lazy review, each up to 15 s on a loaded machine.
+  }, 40_000);
+
+  // states-08 (lq fix-round): an approve that failed with a 429 and then
+  // succeeded through the toast's Retry, after its countdown, raises the ONE
+  // decision toast: no cursor or Triage advance, no second toast.
+  it('a single approve recorded by its 429 Retry raises the one decision toast, with no advance', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-14T12:00:00Z'));
+      approve
+        .mockImplementationOnce(() => Promise.reject(new TransportApiError('Too many requests', {
+          path: '/api/outreach/approve', status: 429, retryAfterMs: 30_000,
+        })))
+        .mockImplementationOnce((borrowerId: string) => Promise.resolve({
+          approved: true, audit_event_id: `audit-${borrowerId}`, approval_id: 'apr-late',
+        }));
+      region().focus();
+      press('j');
+      press('a');
+      await waitForReview();
+      act(() => confirm().click());
+      await vi.waitFor(async () => {
+        await flush();
+        expect(getToasts().find((toast) => toast.action?.label === 'Retry')).toBeDefined();
+      }, { timeout: 15_000 });
+      const failure = getToasts().find((toast) => toast.action?.label === 'Retry')!;
+      expect(failure.title).toBe(`Couldn't approve ${IDS[0]}`);
+      expect(failure.actionReadyAt ?? 0).toBeGreaterThan(Date.now() + 29_000);
+      expect(setApproval).not.toHaveBeenCalled();
+      const cursorBefore = cursorId();
+
+      // The countdown runs out; the Retry re-sends the same write.
+      vi.setSystemTime(Date.now() + 30_001);
+      await act(async () => failure.action!.onAction());
+      await vi.waitFor(async () => {
+        await flush();
+        expect(setApproval).toHaveBeenCalledWith(IDS[0], 'approved');
+      }, { timeout: 15_000 });
+      await flush();
+
+      expect(approve).toHaveBeenCalledTimes(2);
+      const ids = approve.mock.calls.map((call) => (call[1] as { request_id: string }).request_id);
+      expect(ids[1]).toBe(ids[0]);
+      const decisions = getToasts().filter((toast) => toast.title === `Approved ${IDS[0]}`);
+      expect(decisions).toHaveLength(1);
+      expect([decisions[0].tone, decisions[0].auditEventId]).toEqual(['info', `audit-${IDS[0]}`]);
+      // Nothing else was raised: the 429 toast and the one decision toast.
+      expect(getToasts().filter((toast) => toast !== failure && toast !== decisions[0])).toEqual([]);
+      expect(cursorId()).toBe(cursorBefore);
+    } finally {
+      vi.useRealTimers();
+    }
   }, 40_000);
 
   describe('bulk gate', () => {

@@ -411,3 +411,25 @@
   white-space: nowrap;
   vertical-align: bottom;
 }
+
+/* responsive-08 (W5e): the Lead Queue on paper. useLeadTablePrint renders
+   every loaded row; print.css unclips .tbl-wrap and hides the buttons and the
+   expanded rows. Paper has no scroller behind the pinned Approval column, so
+   the column widths give way to the page (auto layout, no view minimum) and
+   the pin is a plain cell. Self-contained and unnested, so the integrator can
+   lift it into @layer print. */
+@media print {
+  .lead-table__table.lead-table__table--default,
+  .lead-table__table.lead-table__table--sales-ops {
+    min-inline-size: 0;
+    table-layout: auto;
+  }
+  .lead-table__table col {
+    width: auto;
+  }
+  .lead-table__table .lead-table__approval-header,
+  .lead-table__table .tbl-cell--approval {
+    position: static;
+    box-shadow: none;
+  }
+}

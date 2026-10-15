@@ -76,6 +76,16 @@ export function toastWriteFailure(title: string, error: unknown, subject: string
   });
 }
 
+/**
+ * These two functions, handed to a lazy module by the shell that already
+ * loaded this one: a lazy chunk importing this module split it out of its
+ * shared chunk and added a name to every route's preload list (W5e budget).
+ */
+export interface WriteFailureToasts {
+  toastWriteFailure: typeof toastWriteFailure;
+  describeWriteFailure: typeof describeWriteFailure;
+}
+
 /** A refusal before any request (the approver or campaign-binding gate, a decision on the wire). */
 export function toastWriteRefusal(title: string, detail: string): void {
   toast.error(title, { detail });

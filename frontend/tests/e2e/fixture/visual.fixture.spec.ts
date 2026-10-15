@@ -213,6 +213,8 @@ for (const theme of FIXTURE_THEMES) {
       { route: 'lead-queue', state: 'hide-menu' },
       { route: 'lead-queue', state: 'omnibox' },
       { route: 'lead-queue', state: 'more-like-this' },
+      // W5e w5-lead-table-compile (flow-v2): the revoke panel (block letter: the integrator's).
+      { route: 'lead-queue', state: 'lead-revoke-panel' },
     ];
     for (const { route: name, state, focusScope } of SHELL_STATES) {
       test(`${name} · ${state}`, async ({ app, mockApi, page }) => {

@@ -59,7 +59,7 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 import { LeadTable } from './LeadTable';
 import { LeadBulkRunProgressFallback, LeadBulkRunResultFallback } from './LeadBulkRunFallback';
 import { LeadBulkRunProgress, LeadBulkRunResult } from './LeadBulkRunStatus';
-import { LeadTableBulkActions, LeadTableBulkToast } from './LeadTableBulkActions';
+import { LeadTableBulkActions } from './LeadTableBulkActions';
 import type { BulkRunResult } from './useLeadBulkRun';
 
 const IDS = Array.from({ length: 6 }, (_, index) => `B-CHUNKFALLBK0${index + 1}`);
@@ -256,12 +256,5 @@ describe('bulk run lines name the run kind', () => {
     expect([own.getAttribute('aria-busy'), own.getAttribute('aria-disabled')]).toEqual(['true', 'true']);
     expect(other.disabled).toBe(true);
     expect(other.classList.contains('btn--loading')).toBe(false);
-  });
-
-  it('the unmount flash says rejected for a cut-short reject run', () => {
-    act(() => root.render(
-      <LeadTableBulkToast toast={{ ok: 2, fail: 0, network: 0, aborted: 1, kind: 'reject' }} onReviewRecentActivity={() => undefined} />,
-    ));
-    expect(container.querySelector('[data-testid="lead-bulk-toast"]')?.textContent).toContain('2 rejected');
   });
 });

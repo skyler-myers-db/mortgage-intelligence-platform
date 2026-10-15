@@ -10,13 +10,11 @@
  * paused on hover or focus, F8 reaches it).
  *
  * This module is static in the LeadTable chunk, so it is kept small: the
- * release itself, its copy and the 429 Retry toast live in salesUndoRun,
- * loaded when Undo is pressed or a write is rate-limited (a code-only warm-up
- * import runs while the toast is up). Undo is pessimistic: nothing on screen
- * changes before the 200 (salesUndoRun).
- *
- * TODO(W5e w5-lead-table-compile): fold toastSalesWriteFailure onto
- * leadWriteFailureToast's retry form once both lanes have merged.
+ * release itself and its copy live in salesUndoRun, loaded when Undo is
+ * pressed (a code-only warm-up import runs while the toast is up). A
+ * rate-limited write's Retry is the queue's one retry form,
+ * leadWriteFailureToast.toastWriteFailure (W5e, C5). Undo is pessimistic:
+ * nothing on screen changes before the 200 (salesUndoRun).
  */
 import type { QueryClient } from '@tanstack/react-query';
 import { ApiError, clientFailureReason } from '../../lib/apiTransport';
@@ -69,20 +67,13 @@ export function withRetry<T>(attempt: (retry: () => void) => T): T {
 }
 
 /**
- * A sales write that failed. A 429 that names a wait keeps a Retry, held
- * disabled behind the toast's countdown; `retry` re-runs the SAME intent (its
- * request id is not settled, so the server replays). Anything else is the
- * queue's ordinary write-failure toast.
+ * A sales write that failed: the queue's one write-failure toast. A 429 that
+ * names a wait keeps a Retry, held disabled behind the toast's countdown;
+ * `retry` re-runs the SAME intent (its request id is not settled, so the
+ * server replays). Anything else has no action.
  */
 export function toastSalesWriteFailure(title: string, error: unknown, subject: string, retry: () => void): void {
-  if (!isCountdown429(error)) {
-    toastWriteFailure(title, error, subject);
-    return;
-  }
-  loadRun().then(
-    (module) => module.raiseRetryToast(title, error, error.retryAfterMs, subject, retry),
-    () => toastWriteFailure(title, error, subject),
-  );
+  toastWriteFailure(title, error, subject, retry);
 }
 
 function assignedTitle(count: number): string {

@@ -3,8 +3,8 @@
  * table: single-row approve/reject, which row's reject panel is open, the
  * selection set feeding the bulk toolbar, the bulk runs' state and context
  * (the runs themselves ride the lazy bulk chunk: leadBulkDecisions), the
- * bulk toast lifecycle, and the post-bulk focus restore. Extracted from LeadTable.tsx (file-size gate,
- * plan item 2).
+ * cut-short run's one shell toast on remount, and the post-bulk focus
+ * restore. Extracted from LeadTable.tsx (file-size gate, plan item 2).
  *
  * The writes run on the governed outreach mutations (lib/mutations/outreach,
  * audit stack-09 / tables-05): pessimistic (a row reads Approved only after
@@ -13,7 +13,7 @@
  * remounted mid-write still knows the row is on the wire.
  */
 
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useEffectEvent, useRef, useState, type RefObject } from 'react';
 import type { QueryClient } from '@tanstack/react-query';
 import type { LeadSummary } from '../../types';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
@@ -36,7 +36,8 @@ import {
 import type { RejectReasonCode } from './LeadTable.types';
 import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { APPROVER_ROLE_REQUIRED } from './approverGate';
-import { clearCancelledBulk, readCancelledBulk } from './bulkApproveStash';
+import { clearCancelledBulk, readCancelledBulk, type CancelledBulkApprove } from './bulkApproveStash';
+import { toast } from '../../lib/toast';
 import { useLeadBulkRun, type BulkRunCanary, type BulkRunResult } from './useLeadBulkRun';
 import {
   approveWithReport as writeApprove,
@@ -49,21 +50,40 @@ import type { BulkDecisionContext, runBulkApprove, runBulkReject } from './leadB
 import { pruneTo, rangeIds } from './LeadTable.selection';
 import { toastWriteFailure, toastWriteRefusal } from './leadWriteFailureToast';
 
-const BULK_TOAST_DISMISS_MS = 4000;
-
 /** The toast title's object when a gate refuses a selection, not one row. */
 const SELECTION_SUBJECT = 'the selected leads';
 
 /** Verification state of a `?campaign_id=&variant_name=` URL binding. */
 export type CampaignBindingState = 'absent' | 'invalid' | 'verified' | 'validating';
 
-export interface BulkToast {
-  ok: number;
-  fail: number;
-  network: number;
-  aborted: number;
-  /** The run the unmount cut short: its rows were approved or rejected. */
-  kind: 'approve' | 'reject';
+/**
+ * The R5-21 partial-run restore (states-07 item 5b): ONE shell toast for a
+ * bulk run the last unmount cut short. Success when nothing failed or was
+ * cut; an error with the same copy when anything failed; and when rows were
+ * cut in flight (audit-ambiguous: the server may have committed them) an
+ * error whose one action opens Recent activity, never a blind retry.
+ */
+export function raiseCancelledBulkToast(
+  cancelled: CancelledBulkApprove & { fail?: number; network?: number },
+  openRecentActivity: (() => void) | undefined,
+): void {
+  const fail = cancelled.fail ?? 0;
+  const network = cancelled.network ?? 0;
+  const title = `${cancelled.ok} ${cancelled.kind === 'reject' ? 'rejected' : 'approved'}${fail > 0 ? `, ${fail} failed` : ''}`;
+  const detail = [
+    network > 0 ? `${network} network dropped; retry.` : '',
+    cancelled.aborted > 0 ? `${cancelled.aborted} cancelled in flight. Confirm the outcome in Recent activity.` : '',
+  ].filter(Boolean).join(' ') || null;
+  if (cancelled.aborted > 0) {
+    toast.error(title, {
+      detail,
+      action: openRecentActivity ? { label: 'Review recent activity', onAction: openRecentActivity } : null,
+    });
+  } else if (fail > 0 || network > 0) {
+    toast.error(title, { detail });
+  } else {
+    toast.success(title, { detail });
+  }
 }
 
 export type LeadDecisionOutcome = 'ok' | 'network' | 'backend' | 'aborted' | 'duplicate';
@@ -102,6 +122,10 @@ export interface UseLeadApprovalActionsInput {
   leadViewId?: string | null;
   /** The approval request a request-scoped queue answers (flow-02); every decision sends it. */
   approvalRequestBatchId?: string | null;
+  /** The Console's Recent activity: the cut-short run toast's action. */
+  openRecentActivity?: () => void;
+  /** Set by the keyboard flow: raise the decision toast for an approve its 429 Retry recorded. */
+  lateApprovedRef?: RefObject<((borrowerId: string) => void) | null>;
 }
 
 export function useLeadApprovalActions({
@@ -118,6 +142,8 @@ export function useLeadApprovalActions({
   bulkRuns,
   leadViewId = null,
   approvalRequestBatchId = null,
+  openRecentActivity,
+  lateApprovedRef,
 }: UseLeadApprovalActionsInput) {
   // A11y: the bulk-approve button is the launch point for the bulk flow.
   // After the action settles we restore focus deterministically — to this
@@ -170,18 +196,6 @@ export function useLeadApprovalActions({
     () => Promise.resolve(false),
   );
   const bulkRunIdsRef = useRef<ReadonlySet<string>>(new Set());
-  // R5-21: a run the last unmount cut short is flashed once on this mount
-  // (read in the initializer, so StrictMode's double render is safe; the
-  // effect below only removes the key). Aborted rows are audit-ambiguous: the
-  // server may have committed them, so the toast sends the operator to Recent
-  // activity instead of offering a blind retry. A run that finished reports
-  // through bulkRun.result instead.
-  const [bulkToast, setBulkToast] = useState<BulkToast | null>(() => {
-    const cancelled = readCancelledBulk();
-    return cancelled
-      ? { ok: cancelled.ok, fail: 0, network: 0, aborted: cancelled.aborted, kind: cancelled.kind }
-      : null;
-  });
   // A run the canary stopped at its first row: the reopened gate says which
   // row was refused and that nothing else was sent. Cleared by the next run.
   // The row a run's canary stopped at (the gate's line; its copy rides the bulk chunk).
@@ -272,6 +286,7 @@ export function useLeadApprovalActions({
       recordDecision(borrowerId, { auditEventId, decision });
     },
     stillDecidable: (borrowerId) => !isDecisionLocked(borrowerId) && eligibleRef.current.has(borrowerId),
+    onRetryApproved: (borrowerId) => lateApprovedRef?.current?.(borrowerId),
   };
   const approveWithReport = (
     borrowerId: string,
@@ -555,7 +570,6 @@ export function useLeadApprovalActions({
       approveBtnRef: bulkApproveBtnRef,
       begin: (ids) => {
         bulkRunIdsRef.current = new Set(ids);
-        setBulkToast(null);
         setBulkRunCanary(null);
       },
       end: () => {
@@ -599,22 +613,18 @@ export function useLeadApprovalActions({
     return Promise.resolve(false);
   }
 
-  // The bulkToast initializer read any partial run the previous mount left
-  // (R5-21: aborted ids are audit-ambiguous, so the toast offers Recent
-  // activity, never a retry). This mount has shown it: drop the key.
-  useEffect(() => {
+  // R5-21 / states-07 item 5b: a run the last unmount cut short is raised
+  // ONCE on this mount as a shell toast, and its key is dropped in the same
+  // step (so StrictMode's second effect run reads nothing). A run that
+  // finished reports through bulkRun.result instead.
+  const flashCancelledRun = useEffectEvent(() => {
+    const cancelled = readCancelledBulk();
     clearCancelledBulk();
-  }, []);
-
-  // A flashed run with nothing aborted (the unmount landed after its last
-  // POST returned) clears itself after 4 s, as before the run moved to
-  // useLeadBulkRun; an audit-ambiguous one (aborted > 0) stays until the
-  // operator opens Recent activity.
+    if (cancelled) raiseCancelledBulkToast(cancelled, openRecentActivity);
+  });
   useEffect(() => {
-    if (!bulkToast || bulkToast.aborted > 0) return undefined;
-    const timer = window.setTimeout(() => setBulkToast(null), BULK_TOAST_DISMISS_MS);
-    return () => window.clearTimeout(timer);
-  }, [bulkToast]);
+    flashCancelledRun();
+  }, []);
 
   /**
    * A row that must not be approved from an open review, read synchronously:
@@ -670,8 +680,6 @@ export function useLeadApprovalActions({
     bulkApproveBtnRef,
     bulkRationaleRef,
     bulkRationaleOpen,
-    bulkToast,
-    setBulkToast,
     bulkRunCanary,
     decisionReceipts,
     decisionAuditEventId: (borrowerId: string) => receiptIdsRef.current.get(borrowerId) ?? null,

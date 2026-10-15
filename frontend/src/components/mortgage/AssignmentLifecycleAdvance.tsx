@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { pushEscapeLayer } from '../../lib/escapeStack';
 import { useAdvanceAssignment, useRecordAssignmentOutcome } from '../../lib/mutations/sales';
@@ -80,13 +80,6 @@ export function AssignmentLifecycleAdvance({
   borrowerId: string;
   onAdvanced: (borrowerId: string, update: Partial<LeadSummary>) => void;
 }) {
-  // Budget trade (audit runtime-03, the wave-4b lane's budget cuts): its
-  // try/finally bailouts are fixed (the module helpers above), so it
-  // compiles cleanly without this line, which measured +0.35 KiB br on the
-  // LeadTable chunk for a control rendered once per expanded row. Delete it
-  // when the chunk has the room.
-  'use no memo';
-
   const queryClient = useQueryClient();
   const advanceMutation = useAdvanceAssignment(queryClient);
   const outcomeMutation = useRecordAssignmentOutcome(queryClient);
@@ -123,7 +116,6 @@ export function AssignmentLifecycleAdvance({
 
   const next = NEXT_STATUS[status];
   if (!next) return null;
-  const stop = (e: ReactMouseEvent) => e.stopPropagation();
 
   const moveTo = (nextPicker: Picker, focus: 'opener' | 'picker') => {
     focusNextRef.current = focus;
@@ -159,7 +151,7 @@ export function AssignmentLifecycleAdvance({
   };
 
   return (
-    <div className="chip-stack" onClick={stop} data-testid={`lifecycle-advance-${borrowerId}`}>
+    <div className="chip-stack" data-testid={`lifecycle-advance-${borrowerId}`}>
       {next !== 'outcome_recorded' ? (
         <Button
           variant="ghost"

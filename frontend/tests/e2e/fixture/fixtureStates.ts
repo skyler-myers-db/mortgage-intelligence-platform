@@ -32,6 +32,7 @@ import { WAREHOUSE_OUTAGE_503 } from './data/errorSurfaces';
 import { registerFollowUps } from './data/followUps';
 import { HEALTH_OK } from './data/shell';
 import { NON_APPROVER_SESSION, REQUESTED_IDS, batchView, registerApprovalRequestStore } from './data/approvalRequests';
+import { APPROVED_LEAD, approvedLifecycle } from './data/revoke';
 import { json, type MockApi } from './mockApi';
 import { expect } from './test';
 
@@ -64,7 +65,10 @@ export type FixtureState =
   // readings and count, and an expanded row's More like this panel.
   | 'hide-menu'
   | 'omnibox'
-  | 'more-like-this';
+  | 'more-like-this'
+  // W5e w5-lead-table-compile (flow-v2): the approver's revoke panel on the
+  // Approved row, after its one audit-free lifecycle read.
+  | 'lead-revoke-panel';
 
 /** The reads `read-failed` fails, per route name (routes.ts). */
 export const READ_FAILED_ENDPOINTS: Readonly<Record<string, readonly string[]>> = {
@@ -121,6 +125,8 @@ export function prepareState(mockApi: MockApi, state: FixtureState, routeName?: 
     registerApprovalRequestStore(mockApi, { seed: batchView(REQUESTED_IDS.slice(0, 1), true) });
   } else if (state === 'followups-tray') {
     registerFollowUps(mockApi);
+  } else if (state === 'lead-revoke-panel') {
+    mockApi.register('GET', `/api/borrowers/${APPROVED_LEAD.borrower_id}/lifecycle`, () => json(approvedLifecycle()));
   } else if (state === 'empty') {
     mockApi.register<LeadSummary[]>('GET', '/api/leads', () =>
       json<LeadSummary[]>([], { headers: { 'X-Total-Matching': '0', 'X-Returned-Rows': '0' } }),
@@ -252,6 +258,12 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
       const row = await app.expandFirstLeadRow();
       await row.getByRole('button', { name: 'More like this' }).click();
       await expect(row.locator('.similar-cohort [role="status"]')).toHaveText(/match this pattern/);
+      break;
+    }
+    case 'lead-revoke-panel': {
+      // The Approved row's Revoke opens the lazy panel; nothing is written until Confirm.
+      await page.getByTestId(`lead-revoke-${APPROVED_LEAD.borrower_id}`).filter({ visible: true }).click();
+      await expect(page.getByTestId('revoke-approval-panel').getByLabel('Reason for revoking')).toBeFocused();
       break;
     }
     case 'glossary-search': {

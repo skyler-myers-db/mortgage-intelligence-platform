@@ -103,6 +103,12 @@ vi.mock('../../lib/api', () => ({
 
 import { LeadTable } from './LeadTable';
 
+/** A design-system tooltip's text (ui/Tooltip's hidden description), or null. */
+function tooltipText(element: Element): string | null {
+  const id = element.getAttribute('data-tooltip');
+  return id ? document.getElementById(id)?.querySelector('[data-tooltip-text]')?.textContent ?? null : null;
+}
+
 // The review and the bulk review are lazy chunks: transform them once up
 // front so the in-test dynamic import resolves in a few microtasks.
 beforeAll(async () => {
@@ -698,8 +704,10 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       for (const btn of [approveBtn(), rejectBtn()]) {
         expect(btn).not.toBeNull();
         expect(btn!.disabled).toBe(true);
-        expect(btn!.getAttribute('title')).toBe('Requires approver role');
-        expect(btn!.getAttribute('aria-describedby')).toBe(status!.id);
+        // critic-08: the design-system tooltip, never a native title.
+        expect(btn!.hasAttribute('title')).toBe(false);
+        expect(tooltipText(btn!)).toBe('Requires approver role');
+        expect(btn!.getAttribute('aria-describedby')?.split(' ')[0]).toBe(status!.id);
         // A disabled, gated control must not advertise a live shortcut.
         expect(btn!.getAttribute('aria-keyshortcuts')).toBeNull();
       }
@@ -759,8 +767,9 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       const bulk = container.querySelector<HTMLButtonElement>('[data-testid="lead-bulk-approve"]');
       expect(bulk).not.toBeNull();
       expect(bulk!.disabled).toBe(true);
-      expect(bulk!.getAttribute('title')).toBe('Requires approver role');
-      expect(bulk!.getAttribute('aria-describedby')).toBe('approver-role-status');
+      expect(bulk!.hasAttribute('title')).toBe(false);
+      expect(tooltipText(bulk!)).toBe('Requires approver role');
+      expect(bulk!.getAttribute('aria-describedby')?.split(' ')[0]).toBe('approver-role-status');
       expect(container.querySelector('[data-testid="approver-role-status"]')?.textContent)
         .toContain('for this sign-in');
 

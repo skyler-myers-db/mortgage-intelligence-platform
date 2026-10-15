@@ -1,8 +1,8 @@
 /**
- * The Undo itself and the 429 Retry toast (audit states-07 item 1, states-08
- * item 3), LAZY: salesUndoToasts loads this module when Undo is pressed or a
- * write is rate-limited, so neither the copy nor the release mutations ride
- * in the LeadTable chunk.
+ * The Undo itself (audit states-07 item 1), LAZY: salesUndoToasts loads this
+ * module when Undo is pressed, so neither the copy nor the release mutations
+ * ride in the LeadTable chunk. A rate-limited Undo keeps its Retry through
+ * the queue's one retry form, toastWriteFailure (states-08 item 3; W5e C5).
  *
  *   - Pessimistic: nothing on screen changes before the 200. The rows are
  *     re-applied from the response (a restored row back to its officer, a
@@ -40,22 +40,6 @@ const RESTORE_SKIPPED_COPY: Readonly<Record<RestoreSkippedReason, string>> = {
   lead_not_contactable: 'The lead is no longer contactable, so it was not handed back.',
 };
 
-async function failureSentence(error: ApiError, subject: string): Promise<string | null> {
-  const module: typeof import('../ui/AsyncFailure') | undefined = await import('../ui/AsyncFailure');
-  return module ? module.failureSentence(error, subject) : null;
-}
-
-/** A rate-limited write: describeApiError's body, and a Retry held behind the countdown. */
-export function raiseRetryToast(title: string, error: ApiError, retryAfterMs: number, subject: string, retry: () => void): void {
-  const raise = (detail: string | null) => {
-    toast.error(title, { detail, action: { label: 'Retry', onAction: retry }, retryAfterMs });
-  };
-  failureSentence(error, subject).then(
-    (sentence) => raise(sentence || error.message || null),
-    () => raise(error.message || null),
-  );
-}
-
 function undoFailure(error: unknown, retry: () => void): void {
   if (!(error instanceof ApiError)) {
     toastWriteFailure(UNDO_FAILED, error, 'the undo');
@@ -66,11 +50,8 @@ function undoFailure(error: unknown, retry: () => void): void {
     toast.error(UNDO_FAILED, { detail: copy });
     return;
   }
-  if (error.status === 429 && error.retryAfterMs !== null && error.retryAfterMs > 0) {
-    raiseRetryToast(UNDO_FAILED, error, error.retryAfterMs, 'the undo', retry);
-    return;
-  }
-  toastWriteFailure(UNDO_FAILED, error, 'the undo');
+  // A 429 that names a wait keeps its Retry behind the countdown; anything else has no action.
+  toastWriteFailure(UNDO_FAILED, error, 'the undo', retry);
 }
 
 function officer(assignment: LeadAssignment): string {

@@ -360,3 +360,41 @@ def test_the_funnel_counts_a_revoked_approve_as_ever_approved_like_approve_then_
     # Documented, unchanged: the 'approved' stage is "ever approved".
     union = " ".join(approval_funnel._APPROVED_UNION_SQL.split())
     assert "WHERE action = 'approve'" in union and "revoke" not in union
+
+
+def _refusal_scenario(ledger: FakeApprovalLedger, kind: str) -> str:
+    """Arrange the ledger so the revoke of the returned approval id is refused with ``kind``."""
+    if kind == "not_current":
+        _approve(ledger)
+        return str(uuid4())
+    if kind == "campaign_bound":
+        return _approve(ledger, campaign_id="11111111-1111-4111-8111-111111111111")
+    approval_id = _approve(ledger)
+    after = ledger.now - timedelta(minutes=30)
+    if kind == "dispositioned":
+        ledger.dispositions.append({"borrower_id": BORROWER, "occurred_at": after})
+    elif kind == "outcome_recorded":
+        ledger.outcomes.append({"borrower_id": BORROWER, "occurred_at": after})
+    elif kind == "delivered":
+        ledger.outbox.append({"approval_id": approval_id, "status": "delivered"})
+    elif kind == "assignment_worked":
+        ledger.add_assignment(BORROWER, status="actioned")
+    return approval_id
+
+
+@pytest.mark.parametrize("kind", sorted(revoke_service.REVOKE_REFUSED_DETAIL))
+def test_every_revoke_refusal_is_the_house_409_with_its_reason_and_the_same_detail(
+    client: TestClient, ledger: FakeApprovalLedger, kind: str
+) -> None:
+    # flow-v2 (W5e): {detail, reason}, the sales._conflict shape, so the client
+    # reads ApiError.reason; the detail is byte-identical to the old body.
+    response = client.post(URL, json=_body(_refusal_scenario(ledger, kind)), headers=APPROVER)
+    assert response.status_code == 409
+    assert response.json() == {"detail": revoke_service.REVOKE_REFUSED_DETAIL[kind], "reason": kind}
+    assert ledger.audits == []
+
+
+def test_the_six_refusal_reasons_are_the_closed_set_the_client_maps() -> None:
+    assert sorted(revoke_service.REVOKE_REFUSED_DETAIL) == [
+        "assignment_worked", "campaign_bound", "delivered", "dispositioned", "not_current", "outcome_recorded",
+    ]

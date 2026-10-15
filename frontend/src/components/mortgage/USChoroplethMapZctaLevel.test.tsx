@@ -447,8 +447,23 @@ describe('USChoroplethMapZctaLevel', () => {
 
   it('through ZIP_AREAS: a keyboard drill parks focus on the loading stage while the chunk, then the geometry, loads, then hands it to the first ZIP area', async () => {
     const chunk = deferred<typeof RUNG_MODULE>();
-    vi.spyOn(ZCTA_LEVEL, 'current').mockReturnValue(null);
-    vi.spyOn(ZCTA_LEVEL, 'load').mockReturnValue(chunk.promise);
+    // A held chunk behind the LazyModule contract: useLazyModule reads the
+    // cache through the store (runtime-04 3(b)), so the double fills it and
+    // notifies its subscribers when the chunk lands.
+    let delivered: typeof RUNG_MODULE | null = null;
+    const listeners = new Set<() => void>();
+    vi.spyOn(ZCTA_LEVEL, 'current').mockImplementation(() => delivered);
+    vi.spyOn(ZCTA_LEVEL, 'subscribe').mockImplementation((listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    });
+    vi.spyOn(ZCTA_LEVEL, 'load').mockReturnValue(chunk.promise.then((module) => {
+      delivered = module;
+      for (const listener of [...listeners]) listener();
+      return module;
+    }));
     const geometry = deferred<ZctaGeometry>();
     geo.load.mockReturnValue(geometry.promise);
     const loadingStage = () => document.querySelector('.map-stage--zcta');
