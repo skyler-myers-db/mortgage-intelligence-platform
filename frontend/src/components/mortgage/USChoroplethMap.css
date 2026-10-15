@@ -98,9 +98,16 @@
 }
 /* A wide map's overlay legend would park the lever over the map itself: in
    rate mode it joins the flow under the stage, as it does for the ZIP grid. */
+/* In flow it overlays nothing, so it drops the overlay legend's
+   backdrop-filter (08-map.css): a blur of the plain surface behind it paints
+   nothing, while the filter made the legend its own compositor layer at a
+   fractional offset whose raster translation rounded the lever's text lines
+   differently from run to run on CI's Linux Chromium (the W5d PR's VRT
+   double run: Segments lever, both themes). */
 .map-wrap:has(.map-legend__lever) .map-legend {
   position: static;
   margin: 0 var(--sp-3) var(--sp-3);
+  backdrop-filter: none;
 }
 /* Under the stage (a narrow map), the lever takes the strip's full width. */
 @container map-wrap (max-width: 1100px) {

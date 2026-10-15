@@ -160,6 +160,27 @@ const COUNT = new Intl.NumberFormat('en-US');
 /** The fixture book draws 51 shapes and has borrowers in 8 states. */
 const SKIPPED = 51 - STATES.length;
 
+test.describe('the in-flow rate legend is not a compositor layer (W5d VRT determinism)', () => {
+  test('in rate mode the legend that holds the lever has no backdrop-filter; the overlay legend keeps its blur', async ({ app, page }) => {
+    for (const path of ['/?map_mode=rate&rate_step=-50', '/segment-intelligence?marketing_eligibility=Any&map_mode=rate&rate_step=-50']) {
+      await app.gotoRoute(path);
+      await expect(slider(page)).toBeVisible();
+      const legend = page.locator('#main-content .map-legend:has(.map-legend__lever)');
+      const style = await legend.evaluate((el) => {
+        const computed = getComputedStyle(el);
+        return { position: computed.position, backdrop: computed.backdropFilter };
+      });
+      expect(style, `${path}: the lever's legend sits in flow and is not a backdrop-filter layer`).toEqual({ position: 'static', backdrop: 'none' });
+    }
+    // Non-vacuity: the overlay legend over the map (no lever) keeps the blur.
+    await app.gotoRoute('/');
+    const overlay = page.locator('#main-content .map-legend').first();
+    await expect(overlay).toBeVisible();
+    await expect(page.locator('#main-content .map-legend__lever')).toHaveCount(0);
+    expect(await overlay.evaluate((el) => getComputedStyle(el).backdropFilter), 'the overlay legend blurs the map under it').toBe('blur(8px)');
+  });
+});
+
 test.describe('Escape backs out one level (dataviz-10)', () => {
   test('Escape hides the card, then leaves the ZIP level and focuses the state it left; Back returns to the drill', async ({ app, page }) => {
     await app.gotoRoute('/');
