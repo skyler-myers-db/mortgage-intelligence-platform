@@ -11,6 +11,7 @@
    --accent; and a --signal-danger marker when the open book already exceeds
    capacity. The bar's column widths are written on the bar itself (never a
    custom property on an ancestor, which would restyle the whole table). */
+@layer routes {
 
 .distribution-board {
   display: grid;
@@ -23,7 +24,11 @@
 }
 .distribution-board::backdrop { background: var(--surface-scrim); }
 
+}
+@layer components {
 .distribution-board__wrap { overflow-x: auto; }
+}
+@layer routes {
 .distribution-board__loading {
   display: grid;
   gap: var(--sp-2);
@@ -97,6 +102,8 @@
   translate: none;
 }
 
+}
+@layer modes {
 @media (forced-colors: active) {
   .distribution-board__actions .btn--primary[aria-disabled="true"]:not(.btn--loading) {
     color: GrayText;
@@ -106,4 +113,5 @@
   .distribution-board__seg--open { background: GrayText; box-shadow: none; }
   .distribution-board__seg--added { background: Highlight; forced-color-adjust: none; }
   .distribution-board__over { background: Mark; forced-color-adjust: none; }
+}
 }

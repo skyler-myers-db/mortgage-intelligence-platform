@@ -4,6 +4,7 @@
  * (design_files/Module 0 Prototype.html:2193-2201). deviation:watchlist-briefings.
  * Colocated with the lazy card, never in the initial stylesheet; tokens only.
  */
+@layer routes {
 .watchlist-briefings__scheduler {
   margin-inline-start: auto;
 }
@@ -60,4 +61,5 @@
 .watchlist-briefings__skeleton {
   block-size: calc(var(--sp-8) + var(--sp-2));
   border-radius: var(--r-sm);
+}
 }

@@ -16,6 +16,7 @@
    in its lazy chunk). The prototype legend (Module 0 Prototype.html
    ~L1860-1871) has no scenario control.
    ============================================================ */
+@layer routes {
 
 /* USPS labels on populated states. Sized in SVG user units (the Albers
    viewBox is ~975 wide, drawn at ~0.5-0.7x in the hero map), so the token
@@ -72,7 +73,11 @@
    pull the overlay legend out of its absolute corner (the container-query
    and ZIP / table rules that make it static are more specific and still
    win). */
+}
+@layer components {
 .map-legend.stable-refresh-region { position: absolute; }
+}
+@layer routes {
 
 /* Rate Lever host (audit wow-stage-1): the slot reserves the control's
    height so loading its chunk does not move the stage. The host is laid out
@@ -320,6 +325,8 @@
   .map-wrap:focus-within .map-legend__hint { opacity: 1; }
 }
 
+}
+@layer modes {
 /* css-hygiene review #2 (forced colours): the contrast-modes rule
    `.map-region.map-region { stroke: CanvasText }` ties the hover and selected
    strokes' specificity and wins on order, so a forced-colours user saw no
@@ -330,4 +337,5 @@
     stroke: Highlight;
     stroke-width: 2;
   }
+}
 }

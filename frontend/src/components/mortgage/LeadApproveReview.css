@@ -6,6 +6,7 @@
    subject and message under the title, so the icon and the actions
    top-align and the actions wrap under the copy on a narrow row.
    ============================================================ */
+@layer routes {
 .approval--review {
   align-items: flex-start;
   flex-wrap: wrap;
@@ -78,3 +79,4 @@
 }
 .lead-approve-dialog::backdrop { background: var(--surface-scrim); }
 .lead-approve-dialog > .approval--review { border-radius: var(--r-lg); }
+}

@@ -6,6 +6,7 @@
    the head is its `.approval` banner (design_files/index.html:634-651)
    inside a `.surface--elev` dialog shell, the same composition as the
    unsaved-changes dialog (32-feedback.css `.unsaved-dialog`). */
+@layer routes {
 
 .admin-run-dialog {
   display: grid;
@@ -54,4 +55,5 @@
   display: flex;
   justify-content: flex-end;
   gap: var(--sp-2);
+}
 }

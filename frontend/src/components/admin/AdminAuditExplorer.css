@@ -6,6 +6,7 @@
    Prototype.html:2198); these are app blocks beside the existing
    .filter-row / .chip-row primitives.
    ============================================================ */
+@layer routes {
 
 /* The header (deviation:audit-explorer-controls, deviation:print-export):
    five items beside the title block, Copy table context, the exclusion
@@ -52,4 +53,5 @@
   font-size: var(--fs-12);
   white-space: nowrap;
   cursor: pointer;
+}
 }

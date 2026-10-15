@@ -13,6 +13,7 @@
    the tokens.
    .score-margins is a new block for the deterministic margins list.
    ============================================================ */
+@layer routes {
 
 .score-spine__slice--economic,
 .score-spine__seg--economic { --score-spine-hue: var(--score-part-economic); }
@@ -168,6 +169,8 @@
   line-height: var(--lh-snug);
 }
 
+}
+@layer modes {
 /* Forced colours: the hues are gone, so every slice and swatch keeps a
  * CanvasText border on a Canvas fill and the visible labels carry the
  * meaning (not the weak 1px-hollow encoding css-hygiene flagged on
@@ -182,4 +185,5 @@
     background-color: Canvas;
     border: 1px solid CanvasText;
   }
+}
 }

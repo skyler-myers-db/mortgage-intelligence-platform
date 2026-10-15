@@ -4,6 +4,7 @@
  * deviation:stale-data-note. Colocated: it ships with the routes and the map
  * chunk that render it, never in the initial stylesheet.
  */
+@layer routes {
 .stale-note {
   margin: 0;
   white-space: normal;
@@ -30,3 +31,4 @@
 }
 .inline-flex:has(> .stale-note--compact) { max-inline-size: 100%; }
 .inline-flex:has(> .stale-note--compact) > :not(.stale-note--compact) { flex: none; }
+}

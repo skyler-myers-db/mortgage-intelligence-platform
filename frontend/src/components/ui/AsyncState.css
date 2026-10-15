@@ -4,6 +4,7 @@
  * has no async-state pattern). Colocated with the lazy component; the
  * callout itself keeps 13-route-composition.css.
  */
+@layer routes {
 .async-status__wait {
   display: inline-flex;
   align-items: center;
@@ -16,4 +17,5 @@
   gap: var(--sp-2);
   color: var(--text-3);
   font-size: var(--fs-11);
+}
 }

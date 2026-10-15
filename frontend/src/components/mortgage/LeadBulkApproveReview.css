@@ -8,6 +8,7 @@
    samples are shown, so a tall review never covers the table rows it is
    about.
    ============================================================ */
+@layer routes {
 .bulk-actions--samples { position: static; }
 .bulk-actions__review {
   flex: 1 0 100%;
@@ -112,4 +113,5 @@
 }
 @media (max-width: 40rem) {
   .bulk-actions__reject-fields { grid-template-columns: minmax(0, 1fr); }
+}
 }

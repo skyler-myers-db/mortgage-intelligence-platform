@@ -245,9 +245,11 @@
   color: var(--text-1);
 }
 .filter-root { position: relative; }
+/* Block padding from the density scale (deviation:density-control-scale):
+   6px at comfortable, as the prototype's literal. */
 .filter {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 6px 10px 6px 8px;
+  padding: calc(var(--control-h) * 3 / 16) 10px calc(var(--control-h) * 3 / 16) 8px;
   background: var(--bg-2); border: 1px solid var(--line-1);
   border-radius: var(--r-md);
   font-size: var(--fs-12); color: var(--text-2);

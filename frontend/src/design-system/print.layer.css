@@ -1,0 +1,10 @@
+/* print.css's cascade layer (css-05), at its old document position: last in
+   the initial stylesheet, so in the components layer, after every partial.
+   print.css decides what wins on paper by specificity: the overrides that
+   must beat a screen compound are prefixed with :root, the plain defaults
+   yield to more specific screen rules. A print layer above components and
+   routes would let every plain default win as well (21 rule pairs on the
+   captured states); this layer keeps the base cascade (docs/testing.md
+   "Cascade layers (css-05)"). Colocated sheets' own @media print blocks sit
+   in the print layer. print.css itself stays unwrapped. */
+@import "./print.css" layer(components);

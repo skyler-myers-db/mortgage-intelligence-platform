@@ -12,6 +12,7 @@
    light + bright (the evidence drawer tab took the same fix, audit a11y-01).
    The ring is the global :focus-visible one. Forced colors:
    components/33-contrast-modes.css. */
+@layer routes {
 .layout-tabs {
   display: flex;
   gap: var(--sp-1);
@@ -39,4 +40,5 @@
 .layout-tabs button.is-active {
   background: var(--accent-soft);
   color: var(--accent-ink);
+}
 }

@@ -6,6 +6,7 @@
    components.css, the same cascade position it had at the end of it.
    Tokens only: no literal colors or pixel values.
    ============================================================ */
+@layer routes {
 
 /* Answer toolbar (genie-06): Copy SQL / Copy answer under the data. A
    documented BEM extension of `.genie-answer`; the prototype's Genie bubble
@@ -44,4 +45,5 @@
   margin: var(--sp-1) 0 0;
   color: var(--text-3);
   font-size: var(--fs-11);
+}
 }

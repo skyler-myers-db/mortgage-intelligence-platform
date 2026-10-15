@@ -2,6 +2,7 @@
    BORROWER DECISION HISTORY (audit flow-04 phase 2)
    Lazy colocated sheet: it ships with the history chunk only.
    ============================================================ */
+@layer routes {
 
 /* deviation:borrower-decision-history — the prototype's .audit-panel is a
    260px scroller (design_files/Module 0 Prototype.html:1511-1522; here
@@ -19,3 +20,4 @@
 
 /* A receipt opened from a row spans the row's grid under it. */
 .audit__receipt { grid-column: 1 / -1; }
+}

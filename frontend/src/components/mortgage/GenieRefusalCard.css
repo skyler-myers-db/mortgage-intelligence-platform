@@ -22,6 +22,7 @@
    existing "Governed refusal" chip tone so the card reads as part of the
    same disclosure, not as a second answer.
    ============================================================ */
+@layer routes {
 .genie-answer__refusal {
   margin-top: var(--sp-3);
   padding: var(--sp-3);
@@ -128,4 +129,5 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2);
+}
 }

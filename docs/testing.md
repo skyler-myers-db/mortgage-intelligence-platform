@@ -320,6 +320,35 @@ npm --prefix frontend run build
 MIP_CROSS_ENGINE=1 E2E_FIXTURE_PORT=<port> npm --prefix frontend run e2e:fixture -- --project=fixture-webkit
 ```
 
+### Cascade layers (css-05)
+
+Every stylesheet sits in a cascade layer (2026-09-21 audit css-05 / stack-v3 / bundle-06). Layer precedence decides before specificity, so a lazy sheet can no longer win or lose by the order its chunk happened to load in.
+
+**The manifest and the order rule.** `frontend/src/design-system/layers.css` holds the one statement, `@layer reset, tokens, base, components, routes, modes, print;`, and `main.tsx` imports it FIRST, before `./appRouter`: the first `@layer` name in document order fixes its rank, and app.tsx's sheets load before tokens.css. Never declare an order anywhere else (cssLayers.test.ts fails on a second statement). The minifier (Lightning CSS) keeps the order but rewrites the statement (it merges same-named blocks into the place each name is first mentioned and keeps `@layer reset;` / `@layer routes;` for the names no block declares), so the served check reads the order of first mention, not the statement.
+
+**Which layer.**
+
+- `tokens` / `base`: tokens.css wraps its custom-property carriers and its element styles in place; `fonts.css` stays an unlayered `@import`, so `@font-face` stays top level.
+- `components`: the initial shell (app.transitions.css, EvidenceHoverCard.css, every components.css partial imported with `layer(components)`), then print.css through `print.layer.css` (its base position: print.css decides by specificity, `:root`-prefixed overrides beat screen compounds, plain defaults yield; a print layer above components and routes would let every default win). The blocks css-05 moved out of the initial sheet into lazy chunks (14-genie-markdown-and-proof.css, ProofPanels.css, asset.css, the chart chrome at the top of charts.css, the glossary layout at the top of glossary.css) keep `components`, the layer they cascaded in.
+- `routes`: every other lazy colocated sheet, wrapped in place (opener after the header comment, `}` last, inner bytes unchanged, no re-indent).
+- `modes`: 33-contrast-modes.css (`layer(modes)`) and each colocated sheet's forced-colors / prefers-contrast / prefers-reduced-transparency blocks, closed out of the sheet's main layer and reopened in place.
+- `print`: each colocated sheet's `@media print` blocks, in place.
+- `reset`: reserved, empty.
+
+`frontend/src/test/cssLayerMap.json` is the map both guards read (the unit test through `cssLayerMap.ts`, the fixture spec with `node:fs`, since fixture files may only `import type` from `frontend/src`): `INITIAL_COMPONENT_SHEETS`, `ROUTES_EXCEPTIONS` (a lazy sheet kept in components, with the reason), `COMPONENTS_BLOCKS` (a routes sheet that keeps one rule in an in-place `@layer components { }` block because a more specific initial rule, or a `:root` print override, must keep beating it) and `PENDING_INTEGRATOR_WRAP` (sheets another lane edits in the same wave, wrapped by the integrator at the merge).
+
+**`@font-face` and `@property`.** Both stay outside any layer: fonts.css is imported unlayered, and a colocated sheet closes its layer block around an `@property` registration. A partial imported with `layer(components)` may register one inside the layer (01-app-shell.css's `--route-nav-block` / `--nav-clear`); the cross-engine spec proves Chromium and WebKit still register it.
+
+**The gates.**
+
+- `src/design-system/cssLayers.test.ts` (source): the manifest and its import position; print.css only through print.layer.css; every partial's import layer and no partial wrapping itself; tokens.css holds only tokens and base blocks; every other sheet keeps nothing outside top-level `@layer` blocks but `@property`, in the layer the map assigns, with print and mode media only in print / modes blocks; no nested `@layer`, no `&` nesting; unique `@keyframes` / `@property` names; every PENDING path exists and is still unwrapped (wrap it and the test fails until its entry is deleted, so the set ends empty).
+- `tests/e2e/fixture/css-layers.cross-engine.fixture.spec.ts` (served CSSOM, fixture-chromium and fixture-webkit): the order, no unlayered style rule on any route's natural load (exempting exactly the selectors a PENDING sheet declares, annotated, until the set is empty), the !important winners (the reduced-motion reset, the forced-colors active-chip ink, print's reveal opacity), a layered `@property` still registered, and every moved block still styling its surface.
+- `tools/refactor_proof.py css ORIGINAL ENTRY --strip-layers` proves a wrap is a pure move: it drops the `@layer` statement and each in-place opener / closer line before the byte compare (`tests/unit/test_refactor_proof_css_layers.py`).
+
+**Injected style twins.** A spec's `page.addStyleTag()` rule is unlayered, so it now beats every layered normal declaration whatever its specificity, while an injected `!important` LOSES to any layered `!important` (important layers run in reverse). A twin that must out-rank a layered important rule injects it inside `@layer reset { ... }`, the first layer, whose importants beat every later layer's.
+
+**The differential recipe (a change that moves CSS between layers or files).** Two `git archive` trees (BASE at the merge base, PREVIEW at the head plus any pending wraps applied exactly as the integrator will), the same `node_modules`, each built and served by its own `vite preview`. An uncommitted capture spec derived from `visual.fixture.spec.ts` walks every VRT state (plus forced-colors, print, motion and screen passes over the routes the change touches) and dumps a hash of `getComputedStyle` for every element and its generated `::before` / `::after`, over every longhand and every custom property the CSS names, with running animations parked at time 0 and `url(#id)` references normalized (React `useId` values follow mount order). A BASE-vs-BASE rerun is the determinism control; any state that differs there is excluded and named. Capture the trees you compare in one window, concurrently or back to back: two captures of the same unchanged tree taken about two hours apart differed on 1,259 elements of three states, so a comparison across windows measures the clock, not the change. The same run can record, per state, which rules match which elements (every dynamic pseudo-class relaxed to true), so a static inversion scan can then evaluate any layer assignment offline: per element and longhand, the winner under the unlayered base cascade against the winner under the layers, in every consistent world over print, forced colors, contrast, transparency, motion, viewport widths, container queries and hover states.
+
 ### Surface overflow and audited reads
 
 `fixture/visual.ts` also holds two guards the VRT and axe specs apply to every state they enter:

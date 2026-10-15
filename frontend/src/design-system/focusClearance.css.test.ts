@@ -80,7 +80,7 @@ describe('focus clearance (a11y-v2)', () => {
     const imports = entry.split('\n').filter((line) => line.startsWith('@import'));
     const at37 = imports.findIndex((line) => line.includes('37-topbar-status.css'));
     expect(imports.filter((line) => line.includes('38-focus-clearance.css'))).toHaveLength(1);
-    expect(imports[at37 + 1]).toBe('@import "./components/38-focus-clearance.css";');
+    expect(imports[at37 + 1]).toBe('@import "./components/38-focus-clearance.css" layer(components);');
   });
 
   it('the ranked-borrower scroller sets the block clearance: the larger of the route nav\'s and the thead\'s, never as scroll-padding', () => {

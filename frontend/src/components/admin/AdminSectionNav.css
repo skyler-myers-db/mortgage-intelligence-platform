@@ -15,6 +15,7 @@
    38-focus-clearance.css, report 12.4 #5; a wrapped, docked nav included),
    and at the top of .main while the route nav is in flow (--nav-clear is
    0px then); below the route nav's --z-sticky. */
+@layer routes {
 
 /* The sections sit in one wrapper (the scroll-margin scope below), so the
    shell's direct-child surface rules (09-console-and-layout.css
@@ -58,11 +59,15 @@
     var(--bg-1);
   scrollbar-width: none;
 }
+}
+@layer modes {
 /* Forced colours keep the plain system background; the links stay
    reachable by Tab and by sideways scrolling. */
 @media (forced-colors: active) {
   .admin-section-nav { background-image: none; }
 }
+}
+@layer routes {
 
 .admin-section-nav__link {
   display: inline-flex;
@@ -99,4 +104,5 @@
   .admin-config-sections :where(:not(.tbl-wrap *, .filter-menu *)) {
     scroll-margin-block-start: calc(var(--nav-clear, 0px) + var(--sp-1) * 2 + var(--sp-8) + 1px);
   }
+}
 }

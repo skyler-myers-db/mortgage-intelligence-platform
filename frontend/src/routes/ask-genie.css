@@ -2,6 +2,7 @@
    Route-level on purpose: imported by routes/ask-genie.tsx so it ships in the
    route's lazy CSS chunk, not the initial stylesheet (same pattern as
    glossary.css and analytics.scatter.css). */
+@layer routes {
 
 /* Page tabs: the prototype's `.layout-tabs` tablist, placed in the hero's
    right slot as the prototype does at design_files/Module 0
@@ -109,4 +110,5 @@
     padding-inline-end: calc(var(--sp-12) + var(--sp-2));
   }
   .genie-composer .genie-composer__input { flex-basis: 100%; }
+}
 }

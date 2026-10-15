@@ -69,6 +69,9 @@ import { isGenieRouteAskVisible } from './useGenieAnnouncer';
 import { GenieHistoryMenu } from './GenieHistoryMenu';
 import { GenieChatBody } from './GenieChatBody';
 import { genieActionConfirmation, runGenieActionRequest, sourceAssetsFor } from './GenieChat.helpers';
+// The Genie markdown and proof styles load with the panel chunk, not the
+// initial sheet (css-05 step 2); /ask-genie imports the same partial.
+import '../../design-system/components/14-genie-markdown-and-proof.css';
 
 export {
   shouldPersistConversation,

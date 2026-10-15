@@ -1,5 +1,6 @@
 /* Verified figures in the Genie proof drawer (audit genie-10 phase 1).
    deviation:genie-figures-verified. Lazy: loaded with the proof panel. */
+@layer routes {
 .genie-claims__group + .genie-claims__group {
   margin-top: var(--sp-3);
 }
@@ -46,4 +47,5 @@
   .genie-claims__item {
     grid-template-columns: minmax(0, 1fr);
   }
+}
 }

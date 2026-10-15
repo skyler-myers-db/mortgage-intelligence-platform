@@ -20,10 +20,16 @@ exits 0 only when the move is verbatim.
       docstring and ``name = ctx.name`` prologue) is the original branch body
       verbatim. Also checks each helper body for names it can no longer see.
 
-  css ORIGINAL ENTRY
+  css ORIGINAL ENTRY [--strip-layers]
       Prove a CSS slicing: expanding ENTRY's ``@import`` lines in place must
       reproduce ORIGINAL byte for byte, and the class-selector inventory of
-      the slices must equal ORIGINAL's.
+      the entry's own text plus its slices must equal ORIGINAL's. An import
+      may carry a cascade layer (``@import "./x.css" layer(components);``).
+      ``--strip-layers`` (css-05) proves a layering is a pure move: before
+      the compare it drops every ``@layer a, b;`` statement line and every
+      ``@layer name {`` opener line together with its matching ``}`` line,
+      so a sheet wrapped in place (or split into several layer blocks in
+      place, with no re-indent) must reduce to ORIGINAL byte for byte.
 
 Usage from a repo root, comparing against the pre-split blob::
 
@@ -398,12 +404,18 @@ def cmd_branches(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------
 # css slicing
 
-_IMPORT_RE = re.compile(r"""^@import\s+(?:url\()?["']([^"']+)["']\)?\s*;\s*$""")
+_IMPORT_RE = re.compile(
+    r"""^@import\s+(?:url\()?["']([^"']+)["']\)?(?:\s+layer\(\s*[A-Za-z][\w-]*\s*\))?\s*;\s*$"""
+)
 _CLASS_RE = re.compile(r"\.(-?[_a-zA-Z][\w-]*)")
+_LAYER_STATEMENT_RE = re.compile(r"^@layer\s+[A-Za-z][\w-]*(?:\s*,\s*[A-Za-z][\w-]*)*\s*;\s*$")
+_LAYER_OPENER_RE = re.compile(r"^@layer\s+[A-Za-z][\w-]*\s*\{\s*$")
 
 
-def _expand_css(entry: Path) -> tuple[bytes, list[Path]]:
+def _expand_css(entry: Path) -> tuple[bytes, list[Path], str]:
+    """Return (expansion, slice paths, the entry's own non-import text)."""
     out = bytearray()
+    own: list[str] = []
     slices: list[Path] = []
     for raw in entry.read_bytes().split(b"\n"):
         line = raw.decode("utf-8")
@@ -413,16 +425,81 @@ def _expand_css(entry: Path) -> tuple[bytes, list[Path]]:
             slices.append(target)
             out += target.read_bytes()
         else:
+            own.append(line)
             out += raw + b"\n"
     # Every chunk was re-terminated with "\n", including the chunk after the
     # entry's final newline, so drop exactly one trailing newline.
-    return bytes(out[:-1]), slices
+    return bytes(out[:-1]), slices, "\n".join(own)
+
+
+def _strip_layers(text: str) -> str:
+    """Drop @layer statements and each @layer block's opener and closer lines.
+
+    The opener must be alone on its line and its matching ``}`` must close
+    the line it is on (the in-place wrap shape); anything else raises, so a
+    wrapper that also edited a rule line cannot reduce to the original.
+    """
+    lines = text.split("\n")
+    drop: set[int] = set()
+    depth = 0
+    open_at: list[int] = []  # brace depth at which each layer block opened
+    in_comment = False
+    for index, line in enumerate(lines):
+        if not in_comment and _LAYER_STATEMENT_RE.match(line):
+            drop.add(index)
+            continue
+        if not in_comment and _LAYER_OPENER_RE.match(line):
+            drop.add(index)
+            depth += 1
+            open_at.append(depth)
+            continue
+        quote = ""
+        position = 0
+        while position < len(line):
+            pair = line[position : position + 2]
+            char = line[position]
+            if in_comment:
+                if pair == "*/":
+                    in_comment = False
+                    position += 1
+            elif quote:
+                if char == "\\":
+                    position += 1
+                elif char == quote:
+                    quote = ""
+            elif pair == "/*":
+                in_comment = True
+                position += 1
+            elif char in "\"'":
+                quote = char
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                if open_at and open_at[-1] == depth:
+                    if line.strip() != "}":
+                        raise ValueError(f"line {index + 1}: a layer block closes on a line with other text: {line!r}")
+                    drop.add(index)
+                    open_at.pop()
+                depth -= 1
+            position += 1
+    if open_at:
+        raise ValueError(f"{len(open_at)} @layer block(s) never close")
+    return "\n".join(line for index, line in enumerate(lines) if index not in drop)
 
 
 def cmd_css(args: argparse.Namespace) -> int:
     original = args.original.read_bytes()
-    expanded, slices = _expand_css(args.entry)
+    expanded, slices, own_text = _expand_css(args.entry)
     failures: list[str] = []
+    if args.strip_layers:
+        try:
+            expanded = _strip_layers(expanded.decode("utf-8")).encode("utf-8")
+            own_text = _strip_layers(own_text)
+            original = _strip_layers(original.decode("utf-8")).encode("utf-8")
+        except ValueError as error:
+            print(f"FAIL: {error}", file=sys.stderr)
+            print("css proof FAILED", file=sys.stderr)
+            return 1
     print(f"slices: {len(slices)}")
     for path in slices:
         line_count = path.read_bytes().count(b"\n")
@@ -436,7 +513,7 @@ def cmd_css(args: argparse.Namespace) -> int:
         for line in list(difflib.unified_diff(before, after, "original", "expanded", lineterm="", n=1))[:80]:
             print(line)
     original_classes = set(_CLASS_RE.findall(original.decode("utf-8")))
-    slice_classes: set[str] = set()
+    slice_classes: set[str] = set(_CLASS_RE.findall(own_text))
     for path in slices:
         slice_classes.update(_CLASS_RE.findall(path.read_text(encoding="utf-8")))
     print(f"class inventory: original {len(original_classes)}, slices {len(slice_classes)}")
@@ -476,6 +553,11 @@ def _parse_args() -> argparse.Namespace:
     css = sub.add_parser("css", help="css slice proof")
     css.add_argument("original", type=Path)
     css.add_argument("entry", type=Path)
+    css.add_argument(
+        "--strip-layers",
+        action="store_true",
+        help="drop @layer statements and in-place @layer block wrappers before the compare (css-05)",
+    )
     css.set_defaults(func=cmd_css)
     return parser.parse_args()
 

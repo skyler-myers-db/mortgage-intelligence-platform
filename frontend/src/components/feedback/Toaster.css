@@ -12,6 +12,7 @@
    UA popover box, and where the Popover API is missing they place the same
    element as a fixed region on --z-toast. Bottom-centre keeps it clear of
    the Console rail and the docked Genie panel, which both anchor right. */
+@layer routes {
 .toast-region {
   position: fixed;
   inset: auto 0 var(--sp-6);
@@ -62,6 +63,9 @@
 @media (prefers-reduced-motion: reduce) {
   .toast { transition: none; }
 }
+}
+@layer print {
 @media print {
   .toast-region { display: none; }
+}
 }

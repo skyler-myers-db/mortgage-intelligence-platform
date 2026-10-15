@@ -7,8 +7,10 @@
  * `:root`, `[data-theme="x"]`, `[data-accent="x"]`, `:root[data-density="x"]`
  * and their compounds. Element/class rules (`body`, `.caps`, `:focus-visible`)
  * carry no custom properties and are ignored, as are at-rule blocks
- * (`@media`, `@import`). Cascade order follows CSS: higher specificity wins,
- * then later source order.
+ * (`@media`, `@import`). A `@layer tokens { ... }` block (css-05) is read as
+ * top level: tokens.css puts every carrier in the tokens layer, so layer
+ * order never decides between two of them. Cascade order follows CSS:
+ * higher specificity wins, then later source order.
  */
 // @ts-expect-error Frontend app types intentionally exclude Node globals; this
 // helper reads the token CSS text under Vitest only.
@@ -83,7 +85,15 @@ export function mediaBlocks(css: string, query: string): string[] {
   return blocks;
 }
 
-/** Top-level `selector { block }` pairs, skipping at-rules and statements. */
+const LAYER_BLOCK_RE = /^@layer\s+[A-Za-z][\w-]*$/;
+
+/**
+ * Top-level `selector { block }` pairs, skipping at-rules and statements.
+ * A cascade layer block (`@layer name { ... }`, css-05) is not a condition:
+ * its rules apply everywhere, so they count as top level and are returned in
+ * source order. Every other at-rule block (`@media`, `@supports`, ...) is
+ * still skipped; read those through `mediaBlocks`.
+ */
 export function topLevelRules(css: string): Array<{ selector: string; block: string }> {
   const text = stripComments(css);
   const rules: Array<{ selector: string; block: string }> = [];
@@ -103,7 +113,8 @@ export function topLevelRules(css: string): Array<{ selector: string; block: str
       j += 1;
     }
     const block = text.slice(open + 1, j - 1);
-    if (!selector.startsWith('@')) rules.push({ selector, block });
+    if (LAYER_BLOCK_RE.test(selector)) rules.push(...topLevelRules(block));
+    else if (!selector.startsWith('@')) rules.push({ selector, block });
     i = j;
   }
   return rules;
@@ -220,8 +231,23 @@ export class TokenCascade {
   }
 }
 
+/**
+ * `color-mix(in oklab, <color> <p>%, transparent)` (css-07's derived status
+ * tints): mixing with `transparent` interpolates premultiplied, and
+ * transparent's premultiplied channels are all zero, so the result is the
+ * colour's own channels with its alpha scaled by p.
+ */
+const TRANSPARENT_MIX_RE = /^color-mix\(\s*in\s+oklab\s*,\s*(.+?)\s+(\d+(?:\.\d+)?)%\s*,\s*transparent\s*\)$/i;
+
 export function parseColor(input: string): Rgba | null {
   const text = input.trim();
+  const mix = TRANSPARENT_MIX_RE.exec(text);
+  if (mix) {
+    const base = parseColor(mix[1]);
+    const share = Number(mix[2]) / 100;
+    if (!base || share < 0 || share > 1) return null;
+    return { ...base, a: base.a * share };
+  }
   const hex = /^#([0-9a-f]{3,8})$/i.exec(text);
   if (hex) {
     let digits = hex[1];

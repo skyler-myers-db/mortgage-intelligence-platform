@@ -7,6 +7,7 @@
      deviation:lead-queue-range-filters   score / spread inputs
      deviation:lead-queue-saved-views     the Saved views trigger
    ============================================================ */
+@layer routes {
 
 /* Option counts: a quiet mono figure at the row's end, before the check. */
 .filter-menu__count {
@@ -77,4 +78,5 @@
   padding: var(--sp-1) var(--sp-2);
   font-size: var(--fs-12);
   color: var(--text-3);
+}
 }

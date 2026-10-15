@@ -1,3 +1,8 @@
+// FIRST, before every module (css-05): the cascade layer order statement.
+// app.tsx's sheets (reached through ./appRouter) are already layered, and
+// the first @layer name in document order fixes its rank, so this import
+// must stay above ./appRouter (cssLayers.test.ts).
+import "./design-system/layers.css";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -13,7 +18,7 @@ import { setRumRouteSource } from "./lib/rumBridge";
 import { installStaleChunkRecovery } from "./lib/staleChunkRecovery";
 import "./design-system/tokens.css";
 import "./design-system/components.css";
-import "./design-system/print.css";
+import "./design-system/print.layer.css";
 
 // Errors React never sees (event handlers, timers, unawaited promises) go
 // through the same message-free report as the boundaries' catches. Installed

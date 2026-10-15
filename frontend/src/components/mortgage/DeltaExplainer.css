@@ -5,6 +5,7 @@
  * Increases paint the fixed data ink, decreases the tertiary text ink: a
  * change is accounting, never an alarm. Colocated with the lazy chunk.
  */
+@layer routes {
 .delta-explainer {
   display: grid;
   gap: var(--sp-2);
@@ -62,4 +63,5 @@
   color: var(--text-2);
   font-size: var(--fs-12);
   line-height: var(--lh-body);
+}
 }
