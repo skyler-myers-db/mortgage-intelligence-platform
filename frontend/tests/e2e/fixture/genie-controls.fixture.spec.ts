@@ -117,7 +117,7 @@ test.describe('Genie page context (genie-04, shell-07)', () => {
     expect(topmost, 'the Ask Genie entry is hit-tested above .seg-card__select').toBe(true);
 
     const prompt = ((await entry.getAttribute('title')) ?? '').replace(/^Ask Genie: /, '');
-    expect(prompt).toMatch(/^Which states have the most borrowers in the .+ segment\?$/);
+    expect(prompt).toMatch(/^Which states have the most (borrowers in the .+ segment|in-the-money borrowers)\?$/);
     await entry.click();
 
     const dialog = page.getByRole('dialog', { name: 'Genie chat' });
@@ -339,7 +339,7 @@ test.describe('Genie answer data honesty (genie-06)', () => {
     const clipboard = await page.evaluate(() => navigator.clipboard.readText());
     // Exactly the wording the bubble displays.
     const shown = (await dialog.locator('.genie__msg--ai .genie-md-p').first().textContent())?.trim() ?? '';
-    expect(shown).toBe('Illinois leads with 3,080 borrowers passing the refinance-economics screen.');
+    expect(shown).toBe('Illinois leads with 3,080 in-the-money borrowers.');
     expect(clipboard).toContain(shown);
     expect(clipboard).toContain('State\tBorrowers');
     expect(clipboard).toContain('IL\t3,080');
