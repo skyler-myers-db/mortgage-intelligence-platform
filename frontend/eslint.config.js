@@ -105,6 +105,108 @@ const FIXTURE_SRC_TYPE_ONLY = {
   message: "Fixture harness files may only `import type` from frontend/src.",
 };
 
+// ---------------------------------------------------------------------------
+// The title= ban (2026-09-21 audit critic-08). A native title is mouse-only:
+// it appears late, in OS chrome outside the design system, never on keyboard
+// focus or touch, and cannot show a shortcut, so the facts a reviewer needs
+// were effectively hidden. ui/Tooltip (and the Chip/Button `tooltip` prop)
+// replaces it. The second selector catches the five components that forward
+// `title` to the DOM. SVG <title> ELEMENTS and an iframe's required title are
+// untouched; other components' `title` props (PageShell, SectionHeader, ...)
+// are their own API and are caught where they render. Pinned by
+// src/lib/titleBan.test.ts; tools/lint_depth_probe.mjs embeds a copy.
+export const TITLE_BAN = [
+  {
+    selector: "JSXOpeningElement[name.name=/^[a-z]/]:not([name.name='iframe']) > JSXAttribute[name.name='title']",
+    message:
+      'A native title= is mouse-only, appears late in OS chrome and never on keyboard focus or touch (audit critic-08). Use <Tooltip> (ui/Tooltip), or the Chip/Button `tooltip` prop. An icon-only control also needs an aria-label.',
+  },
+  {
+    selector: "JSXOpeningElement[name.name=/^(Chip|Button|EvidenceChip|Link|NavLink)$/] > JSXAttribute[name.name='title']",
+    message:
+      'This component renders `title` as a native DOM title. Use the `tooltip` prop (Chip, Button), rely on the evidence hover card (EvidenceChip), or wrap the Link in <Tooltip>.',
+  },
+];
+
+// Files that still carry a title= site, each '<owner lane> - <n> sites - <why>'.
+// SHRINK-ONLY: src/lib/titleBan.test.ts fails when an entry no longer
+// reproduces a TITLE_BAN hit, so a migrated file leaves this list in the same
+// change. Never add an entry: migrate the call site (the R1-R6 rules in
+// docs/testing.md "Lint depth"). The override block below keeps
+// FORMATTING_BAN on for these files; it never turns the rule off.
+export const TITLE_BAN_ALLOWLIST = {
+  "src/components/Primitives.tsx": "integrator residual - 2 sites - the deprecated Chip/EvidenceChip/Button title passthrough, removed once no call site passes title",
+  "src/components/mortgage/LeadTableRow.tsx": "w5-lead-table-compile - 6 sites - the file owner migrates its own sites (W5e)",
+  "src/components/mortgage/LeadTableStatusChips.tsx": "w5-lead-table-compile - 5 sites - the file owner migrates its own sites (W5e)",
+  "src/components/mortgage/DecisionReceipt.tsx": "w5-lead-table-compile - 1 site - the file owner migrates its own site (W5e)",
+  "src/components/mortgage/LeadTableBulkActions.tsx": "w5-lead-table-compile - 1 site - the file owner migrates its own site (W5e)",
+  "src/components/mortgage/LeadTableHeader.tsx": "w5-lead-queue-columns - 1 site - the file owner migrates its own site (W5e)",
+  "src/routes/lead-queue.filterBar.tsx": "w5-lead-queue-columns - 1 site - the file owner migrates its own site (W5e)",
+  "src/routes/borrower-360.tsx": "w5-lead-queue-columns - 2 sites - the synthetic-data note and the local Field; the file owner migrates its own sites (W5e)",
+  "src/routes/analytics.equity-scatter.tsx": "w5-analytics - 3 sites - the file owner migrates its own sites (W5e)",
+  "src/routes/analytics.charts.tsx": "w5-analytics - 1 site - the file owner migrates its own site (W5e)",
+  "src/routes/ask-genie.answer-panel.tsx": "w5-lexicon-copy - 6 sites - the file owner migrates its own sites (W5e)",
+  "src/routes/ask-genie.growth-agent.helpers.tsx": "w5-lexicon-copy - 2 sites - the file owner migrates its own sites (W5e)",
+  "src/components/mortgage/GenieAnswer.tsx": "w5-lexicon-copy - 2 sites - the file owner migrates its own sites (W5e)",
+  "src/components/mortgage/GenieAnswerToolbar.tsx": "w5-lexicon-copy - 2 sites - the file owner migrates its own sites (W5e)",
+  "src/routes/admin-config.tsx": "w5-lexicon-copy - 1 site - the file owner migrates its own site (W5e)",
+  "src/routes/portfolio-builder.governance.tsx": "w5-lexicon-copy - 1 site - the file owner migrates its own site (W5e)",
+  "src/components/mortgage/EvidenceDrawerBody.tsx": "w5-lexicon-copy - 2 sites - the file owner migrates its own sites (W5e)",
+  "src/components/mortgage/SegmentCard.tsx": "w5-lexicon-copy - 2 sites - the EvidenceChip title and the count title; the file owner migrates its own sites (W5e)",
+  // w5-compiler-lint's own files: each entry leaves with its migration commit on this branch.
+  "src/components/admin/AdminAuditExplorer.row.tsx": "w5-compiler-lint - 5 sites - migrated on this branch",
+  "src/components/admin/AdminAuditExplorer.tsx": "w5-compiler-lint - 2 sites - migrated on this branch",
+  "src/components/admin/DataOperationsPanel.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/layout/Console.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/layout/IdentityMenu.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/layout/Rail.tsx": "w5-compiler-lint - 4 sites - migrated on this branch",
+  "src/components/ui/Timestamp.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/mortgage/ApprovalBanner.tsx": "w5-compiler-lint - 2 sites - migrated on this branch",
+  "src/components/mortgage/BorrowerStoryCard.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/mortgage/ConfidenceMeter.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/mortgage/DataEstatePanel.tsx": "w5-compiler-lint - 2 sites - migrated on this branch",
+  "src/components/mortgage/GenieAnswer.markdown.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/mortgage/GenieAnswerProof.tsx": "w5-compiler-lint - 2 sites - migrated on this branch",
+  "src/components/mortgage/GenieAskAbout.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/mortgage/GenieChat.tsx": "w5-compiler-lint - 5 sites - migrated on this branch",
+  "src/components/mortgage/GenieChatBody.tsx": "w5-compiler-lint - 3 sites - migrated on this branch",
+  "src/components/mortgage/GenieHistoryMenu.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/mortgage/GenieRefusalCard.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/mortgage/GenieTurnActions.tsx": "w5-compiler-lint - 4 sites - migrated on this branch",
+  "src/components/mortgage/GenieTurnNote.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/mortgage/HomeAnswerWho.tsx": "w5-compiler-lint - 2 sites - migrated on this branch",
+  "src/components/mortgage/LeadRowWorkflowPanel.tsx": "w5-compiler-lint - 3 sites - migrated on this branch",
+  "src/components/mortgage/LeadTableStatusSortMenu.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/mortgage/LeadTableWorkflowCells.tsx": "w5-compiler-lint - 2 sites - migrated on this branch",
+  "src/components/mortgage/OfferMixBar.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/mortgage/PinnedInsights.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/mortgage/ScoreBadge.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/mortgage/ScoreSpine.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/mortgage/TopLeadsQuickPick.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/mortgage/USChoroplethMapHeader.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/components/mortgage/USChoroplethMapLegend.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/routes/ask-genie.compose-plan-card.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/routes/ask-genie.growth-run-card.tsx": "w5-compiler-lint - 6 sites - migrated on this branch",
+  "src/routes/ask-genie.saved-monitors.tsx": "w5-compiler-lint - 2 sites - migrated on this branch",
+  "src/routes/ask-genie.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/routes/borrower-360.ltv-field.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+  "src/routes/offer-orchestrator.panels.tsx": "w5-compiler-lint - 2 sites - migrated on this branch",
+  "src/routes/offer-orchestrator.tsx": "w5-compiler-lint - 2 sites - migrated on this branch",
+  "src/routes/portfolio-builder.campaign-setup.tsx": "w5-compiler-lint - 1 site - migrated on this branch",
+};
+
+// Typed lint (2026-09-21 audit quality-10 step 2, stack-07): three
+// type-aware rules over production source, at their default options (no
+// checksVoidReturn exemption). Pre-existing hits in files other W5e lanes own
+// live in frontend/eslint-suppressions.json, ESLint's native bulk
+// suppressions: shrink-only (an unused entry fails `eslint .`), pinned by
+// src/test/eslintSuppressions.test.ts.
+export const TYPED_LINT_RULES = {
+  "@typescript-eslint/no-floating-promises": "error",
+  "@typescript-eslint/no-misused-promises": "error",
+  "@typescript-eslint/no-base-to-string": "error",
+};
+
 export default [
   {
     ignores: ["dist", "node_modules", "*.config.*", "tsconfig.tsbuildinfo"],
@@ -317,13 +419,36 @@ export default [
       ...FORMATTING_HOMES,
     ],
     rules: {
-      "no-restricted-syntax": ["error", ...FORMATTING_BAN],
+      "no-restricted-syntax": ["error", ...FORMATTING_BAN, ...TITLE_BAN],
     },
   },
+  // TITLE_BAN_ALLOWLIST files keep every other restricted-syntax ban (the
+  // formatting contract): flat-config options replace rather than merge, so
+  // the override restates the array without TITLE_BAN. Never 'off'. Guarded
+  // like the formatting override below: an empty `files` array throws.
+  ...(Object.keys(TITLE_BAN_ALLOWLIST).length
+    ? [
+        {
+          files: Object.keys(TITLE_BAN_ALLOWLIST),
+          ignores: ["src/**/*.test.{ts,tsx}"],
+          rules: { "no-restricted-syntax": ["error", ...FORMATTING_BAN] },
+        },
+      ]
+    : []),
   // An empty `files` array throws in @eslint/config-array ("Expected value
   // to be a non-empty array") and would break ALL lint, so the override
   // exists only while the allowlist has an entry.
   ...(Object.keys(FORMATTING_ALLOWLIST).length
     ? [{ files: Object.keys(FORMATTING_ALLOWLIST), rules: { "no-restricted-syntax": "off" } }]
     : []),
+  // Typed lint (see TYPED_LINT_RULES). projectService resolves each file's
+  // program from tsconfig.json; tests, src/test and src/mocks stay untyped.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/**/*.test.{ts,tsx}", "src/test/**", "src/mocks/**"],
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+    },
+    rules: { ...TYPED_LINT_RULES },
+  },
 ];
