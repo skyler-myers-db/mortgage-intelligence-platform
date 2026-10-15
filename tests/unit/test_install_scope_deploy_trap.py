@@ -142,6 +142,13 @@ def test_a_refusal_exits_with_no_proxy_convergence_and_no_deny_all_from_the_trap
 
 
 def test_the_probes_run_read_only_before_the_arm_and_the_first_convergence(tmp_path: Path) -> None:
+    """Order inside the marked block. An arm moved ABOVE the block is caught by
+    tests/unit/test_deploy_dev_workflow_contract.py::
+    test_agent_proxy_acl_lifecycle_is_bound_and_compensated_before_lease_release
+    (``AGENT_PROXY_ACCESS_MUTATED=1`` absent before the lease is armed); the two
+    tests together pin probe-before-arm.
+    """
+
     code, calls, err = _run(tmp_path)
 
     assert code == 0, err
