@@ -58,10 +58,10 @@ Segments are the core product vocabulary. Each is a *testable, explainable defin
 
 | Segment | Plain English | Status |
 |---|---|---|
-| **Prime Refi Candidates** | Rate spread ≥ 75 bps **and** equity ≥ 15%. The borrower is paying noticeably above market and has enough home equity to support a refi. | **Live when source readiness is green. Refresh the card count in the app.** |
+| **In the Money** | Rate spread ≥ 75 bps **and** equity ≥ 15%. The borrower is paying noticeably above market and has enough home equity to support a refi. | **Live when source readiness is green. Refresh the card count in the app.** |
 | **Home Equity Candidate** | Strong equity (≥ 35%) **and** no active second-position lien. Good HELOC or cash-out conversation. | **Live when source readiness is green. Refresh the card count in the app.** |
 | **Investor / Multi-Property** | Owner Link shows the same owner across 2+ properties or repeat transaction behavior. | **Live when source readiness is green. Refresh the card count in the app.** |
-| **Retention Risk** | Current customer with rate spread above the retention threshold. Lower bar than Prime Refi Candidates so we can reach out before they shop competitors. | **Synthetic-Summit dependent in this demo. Refresh the current count in the app.** |
+| **Retention Risk** | Current customer with rate spread above the retention threshold. Lower bar than In the Money so we can reach out before they shop competitors. | **Synthetic-Summit dependent in this demo. Refresh the current count in the app.** |
 | **Listed for Sale** | Home is actively on the market — purchase mortgage opportunity on the *next* home. | **Live — Cotality MLS listing activity** |
 | **HELOC Intent** | Cotality HELOC propensity indicates modeled renovation/cash-out appetite; filed permits remain a separate pending source. | **Live — Cotality HELOC propensity; filed permits pending** |
 
@@ -195,7 +195,7 @@ You've just told them: (a) you can see the pipe, (b) we don't hide what's missin
 5. Scroll to **Campaign setup** — Subject A/B + Body Angle A/B + eligible-only suppression + 30-day cap. Don't dwell; just acknowledge it exists.
 6. Click **Run build** (it's already implicit, but the click is the moment).
 7. Navigate to **Segment Intelligence**.
-8. Show the **six segment cards** at the top. Click Prime Refi Candidates and read the current live count from the card/table, not from this archive.
+8. Show the **six segment cards** at the top. Click In the Money and read the current live count from the card/table, not from this archive.
 9. Point at **Listed for Sale** and **HELOC Intent**. This is the Cotality moment: one is a live MLS trigger, the other is modeled propensity, and filed permits are still called out as pending. *Pause.*
 10. Below the cards, **the table populates with the top-ranked returned borrowers** for the selected segment. Point at the first current row only after confirming it opens in Borrower 360.
 11. Show the **US map on the right** — geography drill-down across the currently refreshed source coverage.
