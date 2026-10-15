@@ -561,9 +561,10 @@ test.describe('the Offer (shell-04 / flow-09, states-04, critic-04, motion-01, s
   test('P13: the docked nav plus the docked bar take at most two thirds of the scrollport', async ({ app, page }) => {
     // Measured 2026-10-07 (Chromium, 1440x640, Console and reject panel open):
     // nav 57 + bar 387.5 of a 584px scrollport (76%), over the two-thirds
-    // bound. Per the W5d Offer-cluster decision the bar keeps its 40rem rule
-    // in this lane and the share policy is deferred, not built here.
-    test.fixme(true, 'w5-compiler-lint · D-theme-nav-b / 12.4 #5 · the docked Offer bar with the reject panel open takes 387.5 of 584px at 1440x640');
+    // bound. W5e w5-compiler-lint cut the share policy (its cut order 6: it
+    // moves layout on the approval path, so cut rather than half-built); the
+    // bar keeps its 40rem rule until a post-wave Offer-cluster layout pass.
+    test.fixme(true, 'post-wave Offer-cluster layout pass · D-theme-nav-b / 12.4 #5 · the docked Offer bar with the reject panel open takes 387.5 of 584px at 1440x640');
     await openRejectAt640(app, page);
     const shares = await dockedShares(page);
     expect(shares.nav + shares.bar, `nav ${shares.nav} + bar ${shares.bar} of ${shares.scrollport}`)
