@@ -161,6 +161,44 @@ describe('LeadQueueEmptyState', () => {
     expect(genieMocks.openGenie).not.toHaveBeenCalled();
   });
 
+  // GET /api/leads intersects the request's open borrowers with every other
+  // filter, so beside one the zero may be that filter's: the request is not
+  // necessarily done, and the filtered state answers (still with no Ask).
+  const REQUEST = 'approval_request_batch=0b6f0c56-1f0e-4d2a-9c11-3f2e6a7b8c9d';
+  const expectFilteredRequestZero = () => {
+    expect(document.body.textContent).not.toContain('No open borrowers left in this approval request.');
+    expect(document.body.textContent).not.toContain('Each one was decided, withdrawn or has expired.');
+    expect(cause()).toBe('filtered');
+    expect(document.querySelector('.empty__title')?.textContent).toBe('No leads match this filter.');
+    expect(clear()?.textContent).toBe('Clear filters');
+    expect(document.querySelector('.genie-ask-about')).toBeNull();
+  };
+
+  it('a request-scoped zero beside a state filter is the filtered state with Clear filters and no Ask Genie', () => {
+    // Non-vacuity: the same state filter without the request offers an Ask.
+    renderEmpty('states=TX');
+    expect(ask()).not.toBeNull();
+
+    const onClearFilters = renderEmpty(`${REQUEST}&states=TX`);
+    expectFilteredRequestZero();
+    act(() => clear()?.click());
+    expect(onClearFilters).toHaveBeenCalledTimes(1);
+    expect(genieMocks.openGenie).not.toHaveBeenCalled();
+    expect(genieMocks.requestGenieContextScope).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a segment', 'segment=itm'],
+    // A ZIP alone takes the phase-2 (server-rendered) Ask; beside a request it must not.
+    ['a ZIP', 'zip=60601'],
+  ])('a request-scoped zero beside %s never says the request is done and offers no Ask', (_label, filter) => {
+    renderEmpty(filter);
+    expect(document.querySelector('.genie-ask-about')).not.toBeNull();
+
+    renderEmpty(`${REQUEST}&${filter}`);
+    expectFilteredRequestZero();
+  });
+
   it('a county with no ZIP coverage says so, with Clear filters and no Ask Genie', () => {
     renderEmpty('county=48201', { countyNoCoverage: true });
     expect(cause()).toBe('coverage');
