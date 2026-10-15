@@ -44,9 +44,11 @@ export async function expectPresetPressOverDirtyDraft(app: AppDriver, page: Page
   await expect(page).toHaveURL(/[?&]sales_period=7d(&|$)/);
   await expect(preset).toHaveAttribute('aria-pressed', 'true');
   await expect(period.locator('input[type="date"]')).toHaveCount(0);
+  // History first, so each failure names its own defect: two entries is
+  // WebKit's blur-apply, an unfocused preset is the preventDefault-only press.
+  expect(await historyLength(), 'the press wrote one history entry').toBe(before + 1);
   await expect(preset, 'focus stays on the pressed preset').toBeFocused();
   expect(await page.evaluate(() => document.activeElement === document.body), 'focus never drops to <body>').toBe(false);
-  expect(await historyLength(), 'the press wrote one history entry').toBe(before + 1);
 
   // Back returns to the range the URL held: the draft never applied.
   await page.goBack();
