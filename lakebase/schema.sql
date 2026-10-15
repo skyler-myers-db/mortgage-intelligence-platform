@@ -4441,11 +4441,12 @@ SELECT m.monitor_id, m.last_run_id, m.actor_email
    AND m.last_run_id IS DISTINCT FROM m.seed_run_id
 ON CONFLICT DO NOTHING;
 
--- PLACEHOLDER version: the W5e integrator dates it in merge order (a day after
--- 2026_10_14_growth_watchlists, so it sorts after it), here and in the tests.
+-- Dated at the W5e merge (2026-10-15, the landing date): the one W5e block. A
+-- day after 2026_10_14_growth_watchlists, so it sorts after it (on the same
+-- day '..._growth_watchlist_run_links' would sort lexically before it).
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
-    '2026_10_XX_growth_watchlist_run_links',
+    '2026_10_15_growth_watchlist_run_links',
     'Growth Agent watchlist run links: mip_app.growth_agent_watchlist_run_links (monitor_id, run_id) keeps a run saved into an existing watchlist name in its series; backfilled from untagged non-seed last_run_id; SELECT/INSERT only'
 )
 ON CONFLICT (version) DO NOTHING;
