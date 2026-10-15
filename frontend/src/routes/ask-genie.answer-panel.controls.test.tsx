@@ -241,7 +241,7 @@ describe('AskGenieAnswerPanel docked composer (visual-07)', () => {
     render('');
     const textarea = composer().querySelector('textarea')!;
     expect(textarea.getAttribute('aria-label')).toBe('Ask Genie — question');
-    expect(textarea.placeholder).toMatch(/in-the-money borrowers/);
+    expect(textarea.placeholder).toMatch(/in-the-money count by state/);
     expect(textarea.getAttribute('rows')).toBe('2');
     expect(composer().classList.contains('surface__ft')).toBe(true);
     const samples = container.querySelector('[aria-label="Suggested Genie questions"]')!;
