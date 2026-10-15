@@ -494,8 +494,8 @@ Audit quality-v2 / stack-10, decision D-platform-process-a, W5e lane
 - **The report.** `.github/workflows/deps-report.yml` runs every Monday at
   13:17 UTC and on dispatch. Its `report` job (contents and actions read
   only) runs `python -m tools.deps_report`, which reads the exact pins
-  (`npm view` with nothing installed; PyPI JSON for the direct pins of
-  `requirements.in` at their `uv.lock` versions), `npm audit
+  (`npm view` with nothing installed; PyPI JSON for the direct requirements
+  of `requirements.in`, exact or range-pinned, at their `uv.lock` versions), `npm audit
   --package-lock-only` at every severity, `pip-audit -r uv.lock --no-deps
   --disable-pip --strict -f json`, the literal tool pins in every workflow,
   the `Review date:` comments in `ci.yml`, the file-size allowlist expiries

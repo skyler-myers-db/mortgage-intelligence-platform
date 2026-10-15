@@ -30,6 +30,7 @@ from tools.deps_report import (
     live,
     load_holds,
     pins,
+    python,
     render,
     waivers,
 )
@@ -77,6 +78,26 @@ def test_a_held_package_renders_held_and_never_pending() -> None:
     assert drift_row("vitest", "4.1.11", "5.0.4", "2026-10-12", hold)["status"] == "held"
     assert drift_row("vitest", "4.1.11", "5.0.4", "2026-10-12", None)["status"] == "pending"
     assert drift_row("vitest", "4.1.11", "4.1.11", "", None)["status"] == "current"
+
+
+def test_range_pinned_direct_requirements_drift_at_their_locked_versions(tmp_path: Path) -> None:
+    requirements, lock = tmp_path / "requirements.in", tmp_path / "uv.lock"
+    requirements.write_text("databricks-sdk==0.103.0\npsycopg[binary]>=3.2.10,<3.4\nGitPython>=3.1.59,<4  # floor\nunresolved>=1\n# comment>=1\n")
+    lock.write_text("databricks-sdk==0.103.0\ngitpython==3.1.60\noauthlib==3.3.1\npsycopg==3.3.2\n")
+    fetched: list[str] = []
+
+    def fetch(name: str) -> dict[str, object]:
+        fetched.append(name)
+        return {"info": {"version": "9.9.9"}, "urls": []}
+
+    rows = python.package_rows(fetch, [], requirements, lock)
+
+    assert [(row["package"], row["pinned"]) for row in rows] == [
+        ("databricks-sdk", "0.103.0"), ("gitpython", "3.1.60"), ("psycopg", "3.3.2"),
+    ], "a transitive lock entry (oauthlib) and an unresolved range are never listed"
+    assert fetched == ["databricks-sdk", "gitpython", "psycopg"]
+    real = python.ranged_names(python.REQUIREMENTS_IN) - set(python.pins(python.REQUIREMENTS_IN))
+    assert {"gitpython", "pyasn1", "aiohttp", "pyarrow", "sqlparse", "thrift", "psycopg"} <= real
 
 
 def test_the_holds_file_is_schema_checked(tmp_path: Path) -> None:

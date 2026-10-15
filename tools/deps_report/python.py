@@ -1,9 +1,12 @@
-"""PyPI drift: the direct pins of requirements.in, at their uv.lock versions.
+"""PyPI drift: the direct requirements of requirements.in, at their uv.lock versions.
 
-Only ``name==version`` lines are read from either file; the lock is a
-pip-compile constraints file and is never regenerated here (its refresh is
-the narrow ``--upgrade-package`` method in docs/audits/supply-chain-audit.md).
-Names are PEP 503 normalised. Drift never turns the report red.
+The lock's ``name==version`` lines give every version. A direct requirement
+is an exact ``==`` pin of requirements.in, or a range-pinned one (``>=``,
+``<``, ``~=``...) that the lock resolves, shown at its locked version. The
+lock is a pip-compile constraints file and is never regenerated here (its
+refresh is the narrow ``--upgrade-package`` method in
+docs/audits/supply-chain-audit.md). Names are PEP 503 normalised. Drift never
+turns the report red.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from tools.deps_report import REPO_ROOT, SourceError, drift_row, hold_for
 REQUIREMENTS_IN = REPO_ROOT / "requirements.in"
 UV_LOCK = REPO_ROOT / "uv.lock"
 _PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?==([^\s;#]+)")
+_RANGED = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*(?:[<>!~]=?|===?)")
 PyPI = Callable[[str], dict[str, object]]
 
 
@@ -34,6 +38,12 @@ def pins(path: Path) -> dict[str, str]:
         if match:
             found[pep503(match.group(1))] = match.group(2)
     return found
+
+
+def ranged_names(path: Path) -> set[str]:
+    """Names of every requirement line carrying any version specifier."""
+
+    return {pep503(match.group(1)) for line in path.read_text(encoding="utf-8").splitlines() if (match := _RANGED.match(line.strip()))}
 
 
 def pypi_json(name: str) -> dict[str, object]:
@@ -52,8 +62,9 @@ def pypi_json(name: str) -> dict[str, object]:
 
 def package_rows(fetch: PyPI, holds: list[dict[str, object]], requirements: Path = REQUIREMENTS_IN, lock: Path = UV_LOCK) -> list[dict[str, str]]:
     locked, direct = pins(lock), pins(requirements)
+    ranged = ranged_names(requirements).intersection(locked)
     rows: list[dict[str, str]] = []
-    for name in sorted(direct):
+    for name in sorted(set(direct) | ranged):
         latest, published = _latest(fetch(name))
         pinned = locked.get(name) or direct[name]
         rows.append(drift_row(name, pinned, latest, published, hold_for(holds, "pypi", name)))
