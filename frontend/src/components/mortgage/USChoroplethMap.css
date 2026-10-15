@@ -118,7 +118,7 @@
    audit wow-ai-2) adds "Watch {level}" to the cohort link's actions row, and
    the W5d VRT review let the cohort link's sentence wrap inside the lever
    (deviation:lever-cohort-link-wraps) and kept the book date whole. Measured
-   on CI's Linux Chromium (PR #269 run 38654887884, geo-foundation and
+   on CI's Linux Chromium (the W5d PR's run 38654887884, geo-foundation and
    growth-watchlists [lever-slot] lines): the slider and the Watch button
    state at their longest are 296.5625px on Segments with the Console closed
    (229.375px on Home with it open, 214.22 / 198.03px watching, 175.19px in the
