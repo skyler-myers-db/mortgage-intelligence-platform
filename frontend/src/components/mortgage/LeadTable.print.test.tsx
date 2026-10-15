@@ -15,7 +15,6 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
-import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
 
 const api = vi.hoisted(() => ({
   draftOutreach: vi.fn(),
@@ -102,7 +101,6 @@ describe('LeadTable: printing the virtualized queue', () => {
 
   beforeEach(() => {
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     scrollToOffset.length = 0;
     fetchSpy = vi.fn(() => Promise.reject(new Error('no network in this test')));
     vi.stubGlobal('fetch', fetchSpy);

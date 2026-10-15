@@ -18,7 +18,6 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
-import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
 import { clearToasts } from '../../lib/toast';
 
 const session = vi.hoisted(() => ({ canApprove: true }));
@@ -124,7 +123,6 @@ describe('LeadTable: Revoke from the Approved row', () => {
 
   beforeEach(() => {
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     clearToasts();
     session.canApprove = true;
     revokeApproval.mockReset();

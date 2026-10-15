@@ -20,9 +20,6 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
-import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const statusCellRenders = vi.hoisted(() => [] as string[]);
 const appValues = vi.hoisted(() => ({
@@ -136,7 +133,6 @@ function render(search: string) {
 
 beforeEach(() => {
   installLocalStorage();
-  clearSingleKeyShortcutsPreference();
   statusCellRenders.length = 0;
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement('div');

@@ -21,7 +21,6 @@ import { readFileSync, readdirSync } from 'node:fs';
 import type { LeadSummary, SalesTeamMember } from '../../types';
 import { queryKeys } from '../../lib/queryKeys';
 import { installLocalStorage } from '../../test/installLocalStorage';
-import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
 
 declare const process: { cwd(): string };
 
@@ -125,7 +124,6 @@ describe('LeadTable: Plan distribution', () => {
 
   beforeEach(() => {
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     boards.length = 0;
     salesTeam.mockReset();
     container = document.createElement('div');

@@ -14,8 +14,6 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuditRollupResponse } from '../../lib/apiClients/audit';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const mocks = vi.hoisted(() => ({
   rollups: [] as AuditRollupResponse[],
   rollupCalls: 0,

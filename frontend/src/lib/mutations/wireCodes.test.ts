@@ -17,8 +17,6 @@ import { WireCodeRefusedError } from '../outreachWireCodes';
 import { useOfferApprove, useOfferReject, type OfferApproveVariables, type OfferRejectVariables } from './offer';
 import { useApproveLead, useRejectLead, type ApproveLeadVariables, type RejectLeadVariables } from './outreach';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const BORROWER = 'B-0000000000001';
 
 interface Sent {

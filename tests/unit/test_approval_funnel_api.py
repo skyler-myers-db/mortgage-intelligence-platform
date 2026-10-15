@@ -159,7 +159,7 @@ def test_a_revoked_approve_leaves_the_recent_list_and_a_re_approve_lists(fake_la
         "approval_id": uuid4(),
         "borrower_id": borrower_id,
         "action": "revoke",
-        "actor_email": "skyler@entrada.ai",
+        "actor_email": "operator@summit.example",
         "decided_at": datetime.now(UTC),
         "audit_event_id": str(uuid4()),
     })
