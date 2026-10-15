@@ -37,6 +37,7 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 }));
 
 import { clearToasts, getToasts } from '../../lib/toast';
+import { WireCodeRefusedError } from '../../lib/outreachWireCodes';
 import { useLeadApprovalActions } from './useLeadApprovalActions';
 import { runBulkApprove, runBulkReject } from './leadBulkDecisions';
 
@@ -68,11 +69,11 @@ const REVIEWED_DRAFT = {
 type Actions = ReturnType<typeof useLeadApprovalActions>;
 let actions: Actions | null = null;
 
-function Harness({ canApprove }: { canApprove: boolean }) {
+function Harness({ canApprove, rows = [LEAD, OTHER_LEAD] }: { canApprove: boolean; rows?: LeadSummary[] }) {
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
   const current = useLeadApprovalActions({
-    displayLeads: [LEAD, OTHER_LEAD],
-    leadsById: new Map([[BORROWER, LEAD], [OTHER, OTHER_LEAD]]),
+    displayLeads: rows,
+    leadsById: new Map(rows.map((row) => [row.borrower_id, row])),
     approvals: {},
     setApproval: vi.fn(),
     queryClient: new QueryClient(),
@@ -118,8 +119,8 @@ describe('useLeadApprovalActions approver gate', () => {
     actions = null;
   });
 
-  function mount(canApprove: boolean) {
-    act(() => root.render(<Harness canApprove={canApprove} />));
+  function mount(canApprove: boolean, rows?: LeadSummary[]) {
+    act(() => root.render(<Harness canApprove={canApprove} rows={rows} />));
     if (!actions) throw new Error('hook did not mount');
   }
 
@@ -180,6 +181,26 @@ describe('useLeadApprovalActions approver gate', () => {
     expect(apiMocks.draftOutreach).not.toHaveBeenCalled();
     expect(apiMocks.approve).not.toHaveBeenCalled();
     expect(getToasts()).toEqual([]);
+  });
+
+  it('refuses the review draft of a row whose offer code the approve route would refuse: no draft, so no DRAFT_OUTREACH row', async () => {
+    // W5e w5-wire-types A1 follow-up: the single-row review and a bulk gate's
+    // samples both draft through draftForApproval, so one refusal covers both.
+    mount(true, [{ ...LEAD, recommended_offer_code: 'mystery_offer' } as LeadSummary, OTHER_LEAD]);
+
+    let refusal: unknown;
+    await act(async () => {
+      refusal = await actions!.draftForApproval(BORROWER).catch((err: unknown) => err);
+    });
+
+    expect(refusal).toBeInstanceOf(WireCodeRefusedError);
+    expect((refusal as Error).message).not.toContain('mystery_offer');
+    expect(apiMocks.draftOutreach).not.toHaveBeenCalled();
+    // A reviewed code still drafts: the refusal is not a blanket off switch.
+    await act(async () => {
+      await actions!.draftForApproval(OTHER);
+    });
+    expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(1);
   });
 
   it('never runs a one-row bulk approve: no draft, no POST, no gate change', async () => {

@@ -27,6 +27,7 @@ import {
   useRejectLead,
 } from '../../lib/mutations/outreach';
 import { intentFingerprint, useIntentRequestIds } from '../../lib/mutations/requestIds';
+import { isWireOfferCode, WireCodeRefusedError } from '../../lib/outreachWireCodes';
 import {
   bulkActionFocusTarget,
   isLeadApprovalEligible,
@@ -249,8 +250,17 @@ export function useLeadApprovalActions({
     return passesDecisionGate('rejection', SELECTION_SUBJECT);
   }
 
-  /** The governed draft an approval certifies, under this table's campaign binding. */
+  /**
+   * The governed draft an approval certifies, under this table's campaign
+   * binding. A row whose offer code the approve route would refuse (outside
+   * the reviewed wire vocabulary) is refused here, before any I/O, so neither
+   * the single-row review nor a bulk gate's sample writes a DRAFT_OUTREACH
+   * row for an approve that could never be recorded (W5e w5-wire-types A1
+   * follow-up). The refusal never names the code.
+   */
   function draftForApproval(borrowerId: string, signal?: AbortSignal): Promise<OutreachDraftResult> {
+    const offerCode = leadsById.get(borrowerId)?.recommended_offer_code;
+    if (offerCode && !isWireOfferCode(offerCode)) return Promise.reject(new WireCodeRefusedError('approve', 'offer_code'));
     return draftGovernedCopy(borrowerId, campaignBinding, signal);
   }
 

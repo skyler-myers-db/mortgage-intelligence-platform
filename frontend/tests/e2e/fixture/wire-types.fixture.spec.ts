@@ -4,11 +4,12 @@
  * with no audited read beyond what the route loads or the person asks for:
  *
  * (a) a Lead Queue row whose recommended offer is a valid wire string the
- *     approve route refuses ('mystery_offer') is refused on Confirm with the
- *     route's own copy, 'Reload the app to approve'. Nothing more is sent:
- *     0 POST /api/outreach/approve, and no draft beyond the one the review
- *     generated when it opened (that review draft is its own explicit intent,
- *     made in useLeadApproveReview before any approve);
+ *     approve route refuses ('mystery_offer') is refused when its review
+ *     opens, before the review drafts (useLeadApprovalActions.draftForApproval,
+ *     the W5e integration's follow-up): the review reads 'Reload the app, then
+ *     try again.' with no Confirm, and nothing is sent: 0 POST
+ *     /api/outreach/draft (no DRAFT_OUTREACH row) and 0 POST
+ *     /api/outreach/approve;
  * (b) the audit-ledger explorer renders a rollup whose fail-closed
  *     event_type is null as 'Event type not recorded', never a default;
  * (c) Sales Ops renders the now-typed standup, conversion and outcome rows
@@ -24,7 +25,7 @@ import { registerBulkApprove, registerRankedQueue } from './data/queuePlace';
 import { json, type MockApi } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
-import { auditedReadsAfter, expectNoAuditedReadSince, markNaturalLoad } from './visual';
+import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
 
 const MYSTERY: LeadSummary = {
   ...LEADS.find((lead) => lead.borrower_id === PRIMARY_BORROWER.borrower_id)!,
@@ -49,21 +50,17 @@ for (const theme of FIXTURE_THEMES) {
 
     await page.getByTestId(`lead-select-${MYSTERY.borrower_id}`).check();
     await page.getByTestId('lead-bulk-approve').click();
-    const confirm = page.locator('dialog.lead-approve-dialog').getByTestId('lead-approve-review-confirm');
-    await expect(confirm).toBeFocused();
-    expect(echo.calls, 'the review drafts the row it shows, on its own explicit intent').toEqual([MYSTERY.borrower_id]);
-    const reviewDrafted = markNaturalLoad(mockApi);
-    expect(auditedReadsAfter(mockApi.calls, naturalLoad)).toHaveLength(1);
-
-    await page.keyboard.press('Enter');
-    const toast = toastRegion(page).locator('.toast', { hasText: `Couldn't approve ${MYSTERY.borrower_id}` });
-    await expect(toast).toContainText('Reload the app to approve');
-    await expect(toast).not.toContainText('mystery_offer');
+    const dialog = page.locator('dialog.lead-approve-dialog');
+    await expect(dialog.getByRole('alert')).toContainText('Reload the app, then try again.');
+    await expect(dialog.getByTestId('lead-approve-review-confirm')).toHaveCount(0);
+    await expect(dialog).not.toContainText('mystery_offer');
+    expect(echo.calls, 'the review drafts nothing for a code the route would refuse').toEqual([]);
     expect(tracker.bodies, 'no approve POST: refused before any I/O').toEqual([]);
     expect(posts(mockApi, '/api/outreach/approve')).toBe(0);
-    expect(posts(mockApi, '/api/outreach/draft'), 'the refusal drafts nothing more').toBe(1);
-    expectNoAuditedReadSince(mockApi, reviewDrafted, `refused approve · ${theme}`);
-    await expectAxeClean(page, { key: { route: 'lead-queue', state: 'wire-code-refused' }, theme, known: {}, include: 'section.toast-region' });
+    expect(posts(mockApi, '/api/outreach/draft'), 'no DRAFT_OUTREACH row').toBe(0);
+    expectNoAuditedReadSince(mockApi, naturalLoad, `refused approve · ${theme}`);
+    await expect(toastRegion(page).locator('.toast')).toHaveCount(0);
+    await expectAxeClean(page, { key: { route: 'lead-queue', state: 'wire-code-refused' }, theme, known: {}, include: 'dialog.lead-approve-dialog' });
   });
 
   test(`${theme}: (b) a rollup whose event type was not recorded reads as not recorded`, async ({ app, page, mockApi }) => {
