@@ -148,6 +148,19 @@ describe('LeadQueueEmptyState', () => {
     expect(genieMocks.openGenie).toHaveBeenCalledWith({ prompt: genieLeadPrompt({ segmentCodes: ['itm'], stateCode: 'TX' }) });
   });
 
+  // W5d lq deferral 9: an approval request whose borrowers are all decided.
+  it('a request-scoped zero says the request is done, offers Clear the request and no Genie Ask', () => {
+    const onClearFilters = renderEmpty('approval_request_batch=0b6f0c56-1f0e-4d2a-9c11-3f2e6a7b8c9d');
+    expect(document.querySelector('.empty__title')?.textContent).toBe('No open borrowers left in this approval request.');
+    expect(document.querySelector('.empty__copy')?.textContent).toBe('Each one was decided, withdrawn or has expired.');
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>('.empty__actions button')];
+    expect(buttons.map((button) => button.textContent)).toEqual(['Clear the request']);
+    expect(ask()).toBeNull();
+    act(() => buttons[0].click());
+    expect(onClearFilters).toHaveBeenCalledTimes(1);
+    expect(genieMocks.openGenie).not.toHaveBeenCalled();
+  });
+
   it('a county with no ZIP coverage says so, with Clear filters and no Ask Genie', () => {
     renderEmpty('county=48201', { countyNoCoverage: true });
     expect(cause()).toBe('coverage');
