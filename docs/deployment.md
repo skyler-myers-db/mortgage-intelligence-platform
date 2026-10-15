@@ -1162,12 +1162,25 @@ scope `mip-runtime`.
 
   | Step | Scope | With a non-empty install suffix |
   |---|---|---|
-  | `warehouse_acl.converge_exact_can_use` (verifier `CAN_USE`) | removes the identity's direct access on every other warehouse | refuses (exit 2, nothing changed) when the identity holds access on a warehouse without the suffix (`tools/databricks/install_scope.py`) |
-  | `agent_proxy_access` converge (Supervisor and Genie ACLs, then obsolete-endpoint revokes) | every Supervisor agent and serving endpoint | refuses before its first convergence when the proxy holds access on an endpoint outside the reviewed set |
-  | `agent_proxy_access --mode deny-all` (the failure compensation) | revokes the proxy on every endpoint, Supervisor and Genie space | not guarded: needs a CI-only proxy identity (owner step 1) |
+  | `install_scope check-proxy` and `check-warehouse` (`tools/databricks/install_scope.py`, read-only probes in step 10b) | the proxy's serving-endpoint ACLs; the verifier's warehouse ACLs | run before `AGENT_PROXY_ACCESS_MUTATED` or `VERIFIER_GATEWAY_CUTOVER_MUTATED` is armed and refuse (exit 2) when the identity holds access this install does not own. The deploy then exits through its EXIT trap with no workspace-global compensation armed: the trap stops and cleans up only this install's App and temporary grants, then releases the lease |
+  | `warehouse_acl.converge_exact_can_use` (verifier `CAN_USE`) | removes the identity's direct access on every other warehouse | backstop: repeats the warehouse check before the command's first mutation. A refusal this late exits after both compensations are armed: the proxy's deny-all is guarded (below), and the verifier's compensation revokes only this run's green Gateway and otherwise audits read-only |
+  | `agent_proxy_access` converge (Supervisor and Genie ACLs, then obsolete-endpoint revokes) | deactivates the proxy's membership on every non-reviewed Supervisor agent, converges its ACL on every Genie space, revokes it on every endpoint outside the reviewed set | backstop: repeats the endpoint check before its first convergence. The check reads serving endpoints only, so it covers the Supervisor and Genie steps indirectly: a proxy shared with the live install holds the live Supervisor endpoint |
+  | `agent_proxy_access --mode deny-all` (the failure compensation) | revokes the proxy on every endpoint, Supervisor and Genie space | refuses (exit 2, before any revoke) unless the proxy holds no endpoint access outside this install's own Supervisor endpoints (`--install-owned-endpoint`, passed by `deny_all_agent_proxy_access`); the compensation then fails loudly (exit 90, lease retained) |
   | `m2m_access_policy.revoke_can_query_on_obsolete_endpoint` (verifier) | endpoints outside the reviewed set | not guarded: needs a CI-only verifier identity (owner step 1) |
   | `assert_lakebase_role_scope`, `assert_no_warehouse_access`, the global M2M audits | the whole workspace, read-only | fail closed if a shared identity holds access elsewhere |
-  | step 4's foreign-UC audit | the metastore, read-only | fails on any foreign catalog granting to `account users` (owner step 8) |
+  | step 4's foreign-UC audit | the metastore, read-only | fails on any foreign catalog granting to `account users` (owner step 9) |
+
+  These guards are defense in depth, not a dispatch precondition: the
+  verifier's obsolete-endpoint revoke stays unguarded, so owner step 1
+  (CI-only identities, confirmed) is required before any `deploy-dev.yml`
+  dispatch.
+- `nightly.yml` declares no `environment:`, so it reads REPOSITORY-level
+  variables and secrets while `deploy-dev.yml` reads the `dev` environment's.
+  Its `bundle validate/run -t dev` address the dev-ci root through its
+  `BUNDLE_VAR_*` pins, but its `databricks apps get` `--git-sha` verify,
+  `BUNDLE_VAR_uc_catalog` and parity tests use the repository-level names, so
+  those must name the same CI staging install (owner step 6). Otherwise the
+  verify step fails fast against a different App.
 
 **Owner steps (never agent work).** Read-only checks of the current state
 (names and timestamps only):
@@ -1180,6 +1193,7 @@ gh api "repos/$R/environments/dev/deployment-branch-policies" --jq '.branch_poli
 gh api "repos/$R/environments/dev/secrets" --jq '.secrets[] | {name, updated_at}'
 gh api "repos/$R/environments/dev/variables" --jq '.variables[] | {name, updated_at}'
 gh api "repos/$R/actions/secrets" --jq '.secrets[] | {name, updated_at}'
+gh api "repos/$R/actions/variables" --jq '.variables[] | {name, updated_at}'
 gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workflow_runs[] | {id, head_branch, conclusion, updated_at}'
 ```
 
@@ -1204,12 +1218,26 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    with its own secret.
 5. Set staging `GENIE_SPACE_ID` and `DATABRICKS_WAREHOUSE_ID` secrets, never
    the live ones.
-6. Add `main` to the dev environment's deployment branch policy (today only
+6. Point the REPOSITORY-level names `nightly.yml` reads (it has no
+   `environment:`) at the same CI staging install as the dev environment:
+   the variables `MIP_APP_NAME`, `MIP_DEFAULT_CATALOG`,
+   `MIP_LAKEBASE_INSTANCE`, `MIP_LAKEBASE_SYNC_CATALOG`,
+   `MIP_RUNTIME_SECRET_SCOPE`, `MIP_APP_ROLLBACK_SECRET_SCOPE`,
+   `MIP_AGENT_PROXY_SECRET_SCOPE`, `MIP_GENIE_SPACE_NAME`,
+   `MIP_AI_GATEWAY_TABLE_PREFIX` and `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE`,
+   and the secrets `DATABRICKS_HOST`, `DATABRICKS_TOKEN`,
+   `DATABRICKS_WAREHOUSE_ID` and `GENIE_SPACE_ID`. Only `deploy-dev.yml`
+   (whose dev environment shadows the repository level) and `nightly.yml`
+   read these names. Compare names and `updated_at` in the repository-level
+   listings above against the dev environment's. If
+   the repository-level values must keep naming the live install, nightly
+   cannot certify the CI install: stop and decide before integrator step 5.
+7. Add `main` to the dev environment's deployment branch policy (today only
    `codex/intelligence-trust-ux`).
-7. Dispatch `deploy-dev.yml` on `main` with
+8. Dispatch `deploy-dev.yml` on `main` with
    `acknowledge_single_maintainer_break_glass=true` (or approve that exact
    dispatch in chat), then approve the pending deployment.
-8. Known step-4 blockers: the 2026-08-04 `invalid_client` for
+9. Known step-4 blockers: the 2026-08-04 `invalid_client` for
    `mip-agent-runtime-ci-sp` (an account M2M `service_principal_secrets.create()`
    reports success from the runner but the secret does not persist): re-mint
    or assign the CI service principal in the anchor workspace, or take the
@@ -1229,9 +1257,11 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    names unchanged.
 3. Dispatch `deploy-prod.yml` on `main` and record the expected FAIL
    (`no_green_run`).
-4. After the owner's dispatch and approval (owner step 7), watch
+4. After the owner's dispatch and approval (owner step 8), watch
    `deploy-dev.yml` to green.
-5. Dispatch `nightly.yml` on the same sha and watch it.
+5. Confirm owner step 6 (names and `updated_at` only: the repository-level
+   variables and secrets `nightly.yml` reads were set to the CI staging
+   install), then dispatch `nightly.yml` on the same sha and watch it.
 6. Repair stale `frontend/tests/e2e/real_data.spec.ts` assertions in a PR if
    it is red, then repeat 4-5; record the green run URL in the audit
    report; re-dispatch `deploy-prod.yml` and expect PASS.
