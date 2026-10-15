@@ -18,7 +18,10 @@
  *      the server refuses as started shows the client copy, not the server's;
  *  (f) the custom range at the keyboard: an ArrowUp or a typed year stays a
  *      draft (focus kept, URL untouched, Custom kept), an unreadable draft
- *      shows its inline error, and Enter applies a readable one in place.
+ *      shows its inline error, and Enter applies a readable one in place;
+ *      a preset pressed over a dirty draft writes one history entry, keeps
+ *      focus on the preset and never applies the draft (W5e C11; the WebKit
+ *      twin is sales-period-preset.webkit.fixture.spec.ts).
  *
  * Every write is registered per test (mockApi.register); the default
  * registry is unchanged.
@@ -45,6 +48,7 @@ import {
 } from './data/salesLoop';
 import { json, type FixtureReply, type MockApi } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
+import { expectPresetPressOverDirtyDraft } from './salesPeriodPreset';
 import { expect, test } from './test';
 import { expectNoAuditedReadSince } from './visual';
 
@@ -370,5 +374,9 @@ test.describe('(f) the custom range at the keyboard (Chromium fires change per k
     await expect(from).toBeFocused();
     await expect(period.locator('.field__error')).toHaveCount(0);
     await expect(page.locator('.sales-ops-card .eyebrow').filter({ hasText: 'Conversion Jul 2 to Jul 10' })).toBeVisible();
+  });
+
+  test('a preset pressed over a dirty draft writes one history entry and keeps focus on the preset', async ({ app, page }) => {
+    await expectPresetPressOverDirtyDraft(app, page);
   });
 });

@@ -104,11 +104,20 @@ function SalesPeriodControl({ period, onChange }: {
             className={preset.value === period.preset ? 'is-active' : undefined}
             aria-pressed={preset.value === period.preset}
             // A preset chosen while a custom draft is dirty applies the
-            // preset only: the press keeps focus in the range (no blur
-            // apply first, so one history entry), and a keyboard move onto
-            // a preset is not "leaving the range" (SalesPeriodRange).
+            // preset only (one history entry). The press takes focus itself:
+            // WebKit never focuses a pressed button, so its native press
+            // blurred the date field with no relatedTarget and applied the
+            // draft first; preventDefault alone left focus in the field,
+            // which unmounts with Custom, dropping it to <body>. Focusing the
+            // preset here gives the field's blur the preset as relatedTarget
+            // (SalesPeriodRange skips the apply) and leaves focus on the
+            // pressed preset in every engine. A keyboard move onto a preset
+            // is not "leaving the range" either (SalesPeriodRange).
             data-period-preset=""
-            onMouseDown={(event) => event.preventDefault()}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.currentTarget.focus();
+            }}
             onClick={() => onChange(preset.value, preset.value === 'custom' ? { from: period.from, to: period.to } : undefined)}
           >
             {preset.label}

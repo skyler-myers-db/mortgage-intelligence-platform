@@ -440,6 +440,21 @@ describe('Analytics Sales ops tab', () => {
       expect(apiMocks.salesStandup).toHaveBeenCalledTimes(1);
     });
 
+    // W5e C11: the press focuses the preset itself (WebKit never focuses a
+    // pressed button, and preventDefault alone dropped focus to <body> once
+    // Custom unmounted). The engine proof is sales-loop.fixture.spec.ts (f)
+    // and sales-period-preset.webkit.fixture.spec.ts.
+    it('a pressed preset takes focus itself and cancels the press default', async () => {
+      await renderView('/analytics?view=sales-ops');
+      const preset = periodButton('30 days') as HTMLButtonElement;
+      const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+      act(() => {
+        preset.dispatchEvent(press);
+      });
+      expect(press.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(preset);
+    });
+
     it('reads a custom range and normalises an invalid one to week to date with replace', async () => {
       await renderView('/analytics?view=sales-ops&sales_period=custom&sales_from=2026-01-05&sales_to=2026-01-20');
       expect(conversionWindows()).toEqual(['2026-01-05..2026-01-20']);
