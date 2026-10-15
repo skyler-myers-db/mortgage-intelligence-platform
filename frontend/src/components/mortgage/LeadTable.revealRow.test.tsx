@@ -26,12 +26,9 @@ import { RouterProvider } from 'react-router/dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
-import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
 import { parseLeadTablePlace, searchParamsWithLeadTablePlace } from '../../routes/lead-queue.filters';
 import { scrollStorageKey, writeOffsets } from '../../hooks/scrollOffsetStore';
 import { LEAD_TABLE_SCROLL_STORAGE_KEY } from './useLeadTableScroll';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const scrolledTo = vi.hoisted(() => [] as number[]);
 const offsetsSet = vi.hoisted(() => [] as number[]);
@@ -141,7 +138,6 @@ describe('LeadTable reveals the row the URL names', () => {
   beforeEach(() => {
     installLocalStorage();
     window.sessionStorage.clear();
-    clearSingleKeyShortcutsPreference();
     scrolledTo.length = 0;
     offsetsSet.length = 0;
     container = document.createElement('div');

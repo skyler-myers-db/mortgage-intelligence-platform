@@ -12,8 +12,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { RowPreview, leadReceiptAnchorId } from './LeadRowPreview';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 vi.mock('../Primitives', () => ({
   Button: ({ children, ...props }: { children: ReactNode }) => <button type="button" {...props}>{children}</button>,
   Chip: ({ children }: { children: ReactNode }) => <span>{children}</span>,

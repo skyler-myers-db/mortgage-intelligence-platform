@@ -11,8 +11,6 @@ import { auditEventHref } from '../lib/auditLinks';
 import type { GrowthAgentRunResponse } from '../types';
 import { GrowthAgentRunCard, type GrowthRunSaveControls } from './ask-genie.growth-run-card';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const SIGNED_GROWTH_HANDOFF = 'v1.non-admin-growth-agent-handoff.signature';
 
 const RUN: GrowthAgentRunResponse = {

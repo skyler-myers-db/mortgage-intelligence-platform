@@ -31,8 +31,6 @@ import type { LeadServerOrder, LeadsPagedPage } from '../lib/apiClients/leadsPag
 import type { LeadsRequest } from '../lib/leadsQuery';
 import type { LeadSummary } from '../types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const fetchMock = vi.hoisted(() => ({
   calls: [] as Array<{ cursor: string | null; order: { sort: string; dir: string } }>,
   next: [] as Array<() => Promise<unknown>>,

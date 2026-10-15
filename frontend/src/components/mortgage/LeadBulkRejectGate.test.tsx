@@ -21,9 +21,6 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
-import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const reject = vi.fn();
 const setApproval = vi.fn();
@@ -191,7 +188,6 @@ describe('LeadTable bulk Reject run', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     held = [];
     reject.mockImplementation((borrowerId: string, body: Record<string, unknown>) => new Promise((resolve, rejectPromise) => {
       held.push({

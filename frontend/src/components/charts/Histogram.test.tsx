@@ -14,8 +14,6 @@ import type { ExecutiveAnalyticsResponse } from '../../types';
 import { ScoreDistribution } from '../../routes/analytics.executive';
 import { Histogram, binIsPast, ruleLabelSide, type HistogramBin } from './Histogram';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const BINS: HistogramBin[] = [
   { start: 0, count: 1200 },
   { start: 25, count: 4300 },

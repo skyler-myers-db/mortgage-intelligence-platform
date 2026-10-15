@@ -19,8 +19,6 @@ import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import type { DrawerSource } from '../AppContext';
 import type { KpiProofResponse } from '../../lib/apiTypes';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const appMocks = vi.hoisted(() => ({ drawer: null as DrawerSource | null, setDrawer: vi.fn(), canAccessAdmin: false }));
 const apiMocks = vi.hoisted(() => ({
   assetMetadata: vi.fn(),

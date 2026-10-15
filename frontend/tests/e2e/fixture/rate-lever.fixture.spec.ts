@@ -472,7 +472,7 @@ test.describe('Rate Lever change as numbers and the cohort handoff', () => {
     await scrubTo(page, 2);
     const largest = page.getByTestId('rate-lever-largest');
     await expect(largest).toHaveText(/^Largest in-the-money gains: /);
-    const named = ((await largest.textContent()) ?? '').replace('Largest in-the-money gains: ', '').split(' · ').map((part) => part.replace(/ [+-][\d,]+$/, ''));
+    const named = ((await largest.textContent()) ?? '').replace('Largest in-the-money gains: ', '').split(' · ').map((part) => part.replace(/ [+−][\d,]+$/, ''));
     await page.getByRole('button', { name: 'View as table' }).click();
     const table = page.getByTestId('map-table');
     await table.getByRole('button', { name: /^In the money: change vs today/ }).click();

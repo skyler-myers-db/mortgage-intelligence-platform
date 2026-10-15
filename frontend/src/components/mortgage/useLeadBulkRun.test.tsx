@@ -36,8 +36,6 @@ import {
   type BulkRunResult,
 } from './useLeadBulkRun';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 type Run = ReturnType<typeof useLeadBulkRun>;
 let run: Run | null = null;
 

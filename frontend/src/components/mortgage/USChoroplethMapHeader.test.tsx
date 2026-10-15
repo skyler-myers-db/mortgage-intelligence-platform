@@ -27,8 +27,6 @@ vi.mock('./rateScenario.lazy', () => ({
 }));
 vi.mock('./GenieAskAbout', () => ({ GenieAskAbout: () => null }));
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 // The frontend tsconfig carries no Node typings; the test runner's process
 // reaches the rejection hook structurally (as in routePreloaders.home.test).
 interface RejectionEmitter {

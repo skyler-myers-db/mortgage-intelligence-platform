@@ -45,8 +45,6 @@ vi.mock('../AppContext', () => ({
 
 import { GenieChat } from './GenieChat';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const SIZE_KEY = 'mip-genie-chat-size-v1';
 const POSITION_KEY = 'mip-genie-chat-pos-v1';
 const VIEWPORT = { w: 1440, h: 900 };

@@ -190,7 +190,7 @@ def _agents() -> list[dict[str, str]]:
             "supervisor_agent_id": OLD_ID,
             "display_name": "Mortgage Growth Agent",
             "endpoint_name": OLD_ENDPOINT,
-            "creator": "skyler@entrada.ai",
+            "creator": "operator@summit.example",
             "create_time": "old-time",
         },
     ]
@@ -257,7 +257,7 @@ def _install_supervisor_journal(workspace: object) -> None:
             "old_id": OLD_ID,
             "old_endpoint": OLD_ENDPOINT,
             "old_endpoint_id": OLD_ENDPOINT_ID,
-            "old_creator": "skyler@entrada.ai",
+            "old_creator": "operator@summit.example",
             "old_create_time": "old-time",
         }
     )
@@ -287,7 +287,7 @@ def test_retire_rejects_missing_journal_before_any_acl_or_delete(
             old_id=OLD_ID,
             old_endpoint=OLD_ENDPOINT,
             old_endpoint_id=OLD_ENDPOINT_ID,
-            old_creator="skyler@entrada.ai",
+            old_creator="operator@summit.example",
             old_create_time="old-time",
             timeout_s=1,
             **_green_kwargs(),
@@ -306,7 +306,7 @@ def test_retire_rejects_partial_signed_journal_before_any_acl_or_delete(
             "canonical_name": "Mortgage Growth Agent",
             "old_id": OLD_ID,
             "old_endpoint": OLD_ENDPOINT,
-            "old_creator": "skyler@entrada.ai",
+            "old_creator": "operator@summit.example",
             "old_create_time": "old-time",
         }
     )
@@ -330,7 +330,7 @@ def test_retire_rejects_partial_signed_journal_before_any_acl_or_delete(
             old_id=OLD_ID,
             old_endpoint=OLD_ENDPOINT,
             old_endpoint_id=OLD_ENDPOINT_ID,
-            old_creator="skyler@entrada.ai",
+            old_creator="operator@summit.example",
             old_create_time="old-time",
             timeout_s=1,
             **_green_kwargs(),
@@ -364,7 +364,7 @@ def test_retire_rejects_tuple_mismatch_before_any_acl_or_delete(
             old_id=OLD_ID,
             old_endpoint=OLD_ENDPOINT,
             old_endpoint_id="attacker-selected-endpoint-id",
-            old_creator="skyler@entrada.ai",
+            old_creator="operator@summit.example",
             old_create_time="old-time",
             timeout_s=1,
             **_green_kwargs(),
@@ -397,7 +397,7 @@ def test_retire_rejects_unpinned_preserve_endpoint_before_any_acl(
             old_id=OLD_ID,
             old_endpoint=OLD_ENDPOINT,
             old_endpoint_id=OLD_ENDPOINT_ID,
-            old_creator="skyler@entrada.ai",
+            old_creator="operator@summit.example",
             old_create_time="old-time",
             preserve_endpoint=("unrelated-serving-endpoint",),
             timeout_s=1,
@@ -451,7 +451,7 @@ def test_prepare_then_retire_proves_green_and_deletes_only_pinned_old_id(
         lambda *_args, **_kwargs: (
             (_ for _ in ()).throw(ResourceDoesNotExist("deleted"))
             if deleted
-            else (OLD_ENDPOINT_ID, "skyler@entrada.ai")
+            else (OLD_ENDPOINT_ID, "operator@summit.example")
         ),
     )
 
@@ -472,7 +472,7 @@ def test_prepare_then_retire_proves_green_and_deletes_only_pinned_old_id(
         old_id=OLD_ID,
         old_endpoint=OLD_ENDPOINT,
         old_endpoint_id=OLD_ENDPOINT_ID,
-        old_creator="skyler@entrada.ai",
+        old_creator="operator@summit.example",
         old_create_time="old-time",
         timeout_s=1,
         **_green_kwargs(),
@@ -512,7 +512,7 @@ def test_cutover_refuses_changed_old_identity_before_revoke_or_delete(
     monkeypatch.setattr(
         cutover,
         "_endpoint_identity",
-        lambda *_args, **_kwargs: (OLD_ENDPOINT_ID, "skyler@entrada.ai"),
+        lambda *_args, **_kwargs: (OLD_ENDPOINT_ID, "operator@summit.example"),
     )
 
     workspace = _workspace()
@@ -524,7 +524,7 @@ def test_cutover_refuses_changed_old_identity_before_revoke_or_delete(
             old_id=OLD_ID,
             old_endpoint=OLD_ENDPOINT,
             old_endpoint_id=OLD_ENDPOINT_ID,
-            old_creator="skyler@entrada.ai",
+            old_creator="operator@summit.example",
             old_create_time="old-time",
             timeout_s=1,
             **_green_kwargs(),
@@ -756,7 +756,7 @@ def test_retire_cleans_pinned_orphan_after_interrupted_agent_delete(
         def get(self, name: str) -> object:
             if name != OLD_ENDPOINT or orphan_deleted:
                 raise ResourceDoesNotExist("deleted")
-            return SimpleNamespace(id=OLD_ENDPOINT_ID, creator="skyler@entrada.ai")
+            return SimpleNamespace(id=OLD_ENDPOINT_ID, creator="operator@summit.example")
 
         def delete(self, name: str) -> None:
             nonlocal orphan_deleted
@@ -792,7 +792,7 @@ def test_retire_cleans_pinned_orphan_after_interrupted_agent_delete(
         old_id=OLD_ID,
         old_endpoint=OLD_ENDPOINT,
         old_endpoint_id=OLD_ENDPOINT_ID,
-        old_creator="skyler@entrada.ai",
+        old_creator="operator@summit.example",
         old_create_time="old-time",
         timeout_s=1,
         **_green_kwargs(),
@@ -998,7 +998,7 @@ def _journal_workspace(*, endpoint_id: str = OLD_ENDPOINT_ID) -> object:
         def get(self, name: str) -> object:
             if name != OLD_ENDPOINT or endpoint_deleted:
                 raise ResourceDoesNotExist("missing")
-            return SimpleNamespace(id=endpoint_id, creator="skyler@entrada.ai")
+            return SimpleNamespace(id=endpoint_id, creator="operator@summit.example")
 
         def delete(self, name: str) -> None:
             nonlocal endpoint_deleted
@@ -1012,7 +1012,7 @@ def _journal_workspace(*, endpoint_id: str = OLD_ENDPOINT_ID) -> object:
                 SimpleNamespace(
                     name=OLD_ENDPOINT,
                     id=endpoint_id,
-                    creator="skyler@entrada.ai",
+                    creator="operator@summit.example",
                 )
             ]
 
@@ -1062,7 +1062,7 @@ def _pin_test_journal(
         canonical_name="Mortgage Growth Agent",
         old_id=OLD_ID,
         old_endpoint=OLD_ENDPOINT,
-        old_creator="skyler@entrada.ai",
+        old_creator="operator@summit.example",
         old_create_time="old-time",
     )
     workspace.serving_endpoints.delete(OLD_ENDPOINT)
@@ -1128,7 +1128,7 @@ def _stale_journal_workspace(
         endpoints[old_endpoint_name] = SimpleNamespace(
             name=old_endpoint_name,
             id=old_endpoint_id,
-            creator="skyler@entrada.ai",
+            creator="operator@summit.example",
         )
 
     class _Endpoints:
@@ -1377,7 +1377,7 @@ def test_cutover_journal_classifies_same_contract_retry_predecessor_as_stale() -
                 "supervisor_id": OLD_ID,
                 "endpoint": OLD_ENDPOINT,
                 "endpoint_id": OLD_ENDPOINT_ID,
-                "creator": "skyler@entrada.ai",
+                "creator": "operator@summit.example",
             },
             signed_blue_gateway_pin=gateway,
             signed_blue_supervisor_pin=supervisor,
@@ -1414,7 +1414,7 @@ def test_new_contract_roll_forward_classifies_preceding_release_journal_as_stale
                 "supervisor_id": OLD_ID,
                 "endpoint": OLD_ENDPOINT,
                 "endpoint_id": OLD_ENDPOINT_ID,
-                "creator": "skyler@entrada.ai",
+                "creator": "operator@summit.example",
             },
             signed_blue_gateway_pin=gateway,
             signed_blue_supervisor_pin=supervisor,
@@ -1997,7 +1997,7 @@ def test_cutover_journal_exports_immutable_endpoint_id(
         canonical_name="Mortgage Growth Agent",
         old_id=OLD_ID,
         old_endpoint=OLD_ENDPOINT,
-        old_creator="skyler@entrada.ai",
+        old_creator="operator@summit.example",
         old_create_time="old-time",
     )
     out_env = tmp_path / "cutover.env"
@@ -2013,7 +2013,7 @@ def test_cutover_journal_exports_immutable_endpoint_id(
     values = dict(line.split("=", 1) for line in exported.splitlines())
     assert shlex.split(values["MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON"]) == [
         (
-            '{"creator":"skyler@entrada.ai","endpoint":"mas-old-endpoint",'
+            '{"creator":"operator@summit.example","endpoint":"mas-old-endpoint",'
             '"endpoint_id":"old-endpoint-id","supervisor_id":"old-supervisor"}'
         )
     ]
@@ -2165,7 +2165,7 @@ def test_cutover_journal_rejects_runtime_home_tampering(
         canonical_name="Mortgage Growth Agent",
         old_id=OLD_ID,
         old_endpoint=OLD_ENDPOINT,
-        old_creator="skyler@entrada.ai",
+        old_creator="operator@summit.example",
         old_create_time="old-time",
     )
     path = journal_path(RUNTIME_ID)
@@ -2197,7 +2197,7 @@ def test_previous_key_journal_is_re_signed_under_current_deploy_key(
         canonical_name="Mortgage Growth Agent",
         old_id=OLD_ID,
         old_endpoint=OLD_ENDPOINT,
-        old_creator="skyler@entrada.ai",
+        old_creator="operator@summit.example",
         old_create_time="old-time",
     )
     assert workspace.workspace.upload_count == 1
@@ -2235,7 +2235,7 @@ def test_current_key_journal_refresh_does_not_rewrite(
         canonical_name="Mortgage Growth Agent",
         old_id=OLD_ID,
         old_endpoint=OLD_ENDPOINT,
-        old_creator="skyler@entrada.ai",
+        old_creator="operator@summit.example",
         old_create_time="old-time",
     )
 
@@ -2272,7 +2272,7 @@ def test_existing_journal_refuses_same_name_endpoint_with_different_immutable_id
         canonical_name="Mortgage Growth Agent",
         old_id=OLD_ID,
         old_endpoint=OLD_ENDPOINT,
-        old_creator="skyler@entrada.ai",
+        old_creator="operator@summit.example",
         old_create_time="old-time",
     )
     workspace.serving_endpoints = _journal_workspace(
@@ -2287,7 +2287,7 @@ def test_existing_journal_refuses_same_name_endpoint_with_different_immutable_id
             canonical_name="Mortgage Growth Agent",
             old_id=OLD_ID,
             old_endpoint=OLD_ENDPOINT,
-            old_creator="skyler@entrada.ai",
+            old_creator="operator@summit.example",
             old_create_time="old-time",
         )
 
@@ -2305,7 +2305,7 @@ def test_second_run_recovers_journal_for_exact_orphan_cleanup(
         canonical_name="Mortgage Growth Agent",
         old_id=OLD_ID,
         old_endpoint=OLD_ENDPOINT,
-        old_creator="skyler@entrada.ai",
+        old_creator="operator@summit.example",
         old_create_time="old-time",
     )
 
@@ -2863,7 +2863,7 @@ def test_legacy_old_supervisor_skips_revoke_before_pinned_deletion(
         old_id=OLD_ID,
         old_endpoint=OLD_ENDPOINT,
         old_endpoint_id=OLD_ENDPOINT_ID,
-        old_creator="skyler@entrada.ai",
+        old_creator="operator@summit.example",
         old_create_time="old-time",
         verifier_application_id="verifier-client",
         verifier_scim_id="verifier-scim-id",
@@ -3032,7 +3032,7 @@ def test_old_supervisor_lost_lease_blocks_acl_and_agent_delete(
             old_id=OLD_ID,
             old_endpoint=OLD_ENDPOINT,
             old_endpoint_id=OLD_ENDPOINT_ID,
-            old_creator="skyler@entrada.ai",
+            old_creator="operator@summit.example",
             old_create_time="old-time",
             timeout_s=1,
             **green,
@@ -3076,7 +3076,7 @@ def test_orphan_endpoint_lost_lease_blocks_delete(monkeypatch: pytest.MonkeyPatc
             old_id=OLD_ID,
             old_endpoint=OLD_ENDPOINT,
             old_endpoint_id=OLD_ENDPOINT_ID,
-            old_creator="skyler@entrada.ai",
+            old_creator="operator@summit.example",
             old_create_time="old-time",
             timeout_s=1,
             **green,
@@ -3085,7 +3085,7 @@ def test_orphan_endpoint_lost_lease_blocks_delete(monkeypatch: pytest.MonkeyPatc
     assert mutations == ["revoke"]
     assert cutover._endpoint_identity(workspace, OLD_ENDPOINT) == (
         OLD_ENDPOINT_ID,
-        "skyler@entrada.ai",
+        "operator@summit.example",
     )
 
 
@@ -3123,7 +3123,7 @@ def test_journal_persist_lost_lease_blocks_workspace_write(
             canonical_name="Mortgage Growth Agent",
             old_id=OLD_ID,
             old_endpoint=OLD_ENDPOINT,
-            old_creator="skyler@entrada.ai",
+            old_creator="operator@summit.example",
             old_create_time="old-time",
             assert_single_writer=lambda: (_ for _ in ()).throw(RuntimeError("lease lost")),
         )
@@ -3140,7 +3140,7 @@ def test_journal_refresh_lost_lease_blocks_rewrite(monkeypatch: pytest.MonkeyPat
         canonical_name="Mortgage Growth Agent",
         old_id=OLD_ID,
         old_endpoint=OLD_ENDPOINT,
-        old_creator="skyler@entrada.ai",
+        old_creator="operator@summit.example",
         old_create_time="old-time",
         assert_single_writer=_assert_lease,
     )

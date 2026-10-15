@@ -49,7 +49,7 @@ RECEIPT_ROUTE_V1 = "/api/v1/audit/receipt/{audit_event_id}"
 ALICE = "alice.approver@summit.example"
 BOB = "bob.approver@summit.example"
 CAROL = "carol.admin@summit.example"
-TEAM_MEMBER = "skyler@entrada.ai"
+TEAM_MEMBER = "operator@summit.example"
 
 # The write needs approver admission; in local/test the admin group is the
 # compatibility path. The reads below drop the group so the actor rule, not

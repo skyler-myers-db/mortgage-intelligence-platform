@@ -10,8 +10,6 @@ import { ApiError } from './api';
 
 type Resolver = (value: string) => void;
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function makeClient() {
   return new QueryClient({
     defaultOptions: {

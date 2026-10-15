@@ -32,7 +32,7 @@ from tests.fixtures import mock_population as mock_data
 from tests.fixtures.reviewed_approval import draft_proof
 
 client = TestClient(app)
-client.headers.update({"X-Forwarded-Email": "skyler@entrada.ai"})
+client.headers.update({"X-Forwarded-Email": "operator@summit.example"})
 
 
 def _approve_for_sales(borrower_id: str) -> None:

@@ -337,7 +337,7 @@ def test_runtime_rejects_human_owned_outer_gateway() -> None:
     class _CreatorEndpoints(_ServingEndpoints):
         def get(self, endpoint: str) -> object:
             details = super().get(endpoint)
-            details.creator = "skyler@entrada.ai"
+            details.creator = "operator@summit.example"
             return details
 
     settings = _settings(

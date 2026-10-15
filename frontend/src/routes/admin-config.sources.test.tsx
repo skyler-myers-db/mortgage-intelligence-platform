@@ -14,8 +14,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const SOURCES = [
   { name: 'Voluntary Lien', status: 'live', rows: 1200, last_updated: '2026-09-29 06:00:00', note: 'ok' },
   {

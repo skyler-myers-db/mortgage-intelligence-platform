@@ -296,7 +296,14 @@ describe('useEvidenceHoverCard', () => {
       expect(named).toHaveLength(1);
       const [, anchorName] = named[0];
       expect(anchorName).toMatch(/^--evidence-anchor[\w-]+$/);
-      expect(setProperty.mock.contexts[setProperty.mock.calls.findIndex(([name]) => name === 'anchor-name')]).toBe(anchor('a').style);
+      // The chip itself carries the name, and nothing else does (read off the
+      // DOM, not off the spy's call context, which happy-dom 20.14 binds to
+      // another object: W5b hold).
+      expect(anchor('a').style.getPropertyValue('anchor-name')).toBe(anchorName);
+      const carriers = [...document.querySelectorAll<HTMLElement>('*')].filter(
+        (element) => element.style.getPropertyValue('anchor-name') === anchorName,
+      );
+      expect(carriers).toEqual([anchor('a')]);
       expect((shown.style as CSSStyleDeclaration & { positionAnchor?: string }).positionAnchor).toBe(anchorName);
       expect(shown.style.top, 'no fixed coordinates in anchor mode').toBe('');
 
@@ -305,6 +312,7 @@ describe('useEvidenceHoverCard', () => {
 
       fire('blur-a');
       expect(card()).toBeNull();
+      expect(anchor('a').style.getPropertyValue('anchor-name'), 'the chip is unnamed once its card closes').toBe('');
       expect(removeProperty.mock.calls.filter(([name]) => name === 'anchor-name')).toHaveLength(1);
     });
 

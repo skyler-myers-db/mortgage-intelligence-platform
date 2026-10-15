@@ -28,13 +28,10 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
-import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
 import { currentCommandSelection } from '../command/commandSelection';
 import { clearToasts, getToasts } from '../../lib/toast';
 import { DECISION_LEFT_LIST, _resetDecisionToastForTests } from './leadDecisionToast';
 import { ApiError as TransportApiError } from '../../lib/apiTransport';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const draftOutreach = vi.fn();
 const approve = vi.fn();
@@ -58,7 +55,8 @@ vi.mock('../AppContext', () => ({
   }),
 }));
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: {
     draftOutreach: (...args: unknown[]) => draftOutreach(...args),
     approve: (...args: unknown[]) => approve(...args),
@@ -66,7 +64,6 @@ vi.mock('../../lib/api', () => ({
     auditReceipt: () => new Promise(() => {}),
     salesTeam: () => Promise.resolve({ members: [] }),
   },
-  ApiError: class extends Error {},
   isAbortError: () => false,
   isWarmingUpError: () => false,
 }));
@@ -147,7 +144,6 @@ describe('LeadTable approve review', () => {
     clearToasts();
     _resetDecisionToastForTests();
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     draftOutreach.mockImplementation((borrowerId: string) => Promise.resolve(draftFor(borrowerId)));
     approve.mockImplementation((borrowerId: string) => Promise.resolve({
       approved: true, audit_event_id: `audit-${borrowerId}`, approval_id: 'apr-1',

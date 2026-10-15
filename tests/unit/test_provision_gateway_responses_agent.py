@@ -3791,7 +3791,7 @@ def test_human_owned_legacy_gateway_creates_runtime_green_without_mutation(monke
         ),
     )
     legacy = SimpleNamespace(
-        creator="skyler@entrada.ai",
+        creator="operator@summit.example",
         pending_config=None,
         config=SimpleNamespace(served_entities=[]),
         tags=[],
@@ -3822,7 +3822,7 @@ def test_human_owned_legacy_gateway_creates_runtime_green_without_mutation(monke
     assert deployment.endpoint.startswith("mip-growth-agent-gateway-")
     assert len(serving.created) == 1
     assert serving.updated == []
-    assert legacy.creator == "skyler@entrada.ai"
+    assert legacy.creator == "operator@summit.example"
 
 
 def test_key_rotation_allocates_current_green_without_mutating_previous_blue(

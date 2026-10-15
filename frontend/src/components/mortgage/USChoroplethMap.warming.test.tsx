@@ -25,8 +25,6 @@ import { MapUnavailable } from './USChoroplethMapUnavailable';
 import { useWarmingBlockDefers, warmingBlockDefersToBanner } from './USChoroplethMap.warming';
 import type { GeoRead } from './useChoroplethLiveFacts';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const UP = { warehouse: 'up', lakebase: 'up', genie: 'up' };
 const CLOSED = { warehouse: 'closed', lakebase: 'closed', genie: 'closed' };
 const HEALTH: Record<string, HealthPayload> = {

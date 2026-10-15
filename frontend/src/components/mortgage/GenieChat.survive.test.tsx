@@ -69,8 +69,6 @@ vi.mock('../AppContext', () => ({
 
 import { GenieChat } from './GenieChat';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /** GenieChat reads `/api/genie/start` through the shared query (runtime-06):
  *  one client per test, retries off. */
 function testQueryClient(): QueryClient {

@@ -17,8 +17,6 @@ import type { LeadSummary } from '../../types';
 import { LeadTableRow } from './LeadTableRow';
 import { leadAssignmentEntries, leadComplianceFlags, leadWorkflowStates } from './LeadTable.status';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 vi.mock('../Primitives', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../Primitives')>();
   return {

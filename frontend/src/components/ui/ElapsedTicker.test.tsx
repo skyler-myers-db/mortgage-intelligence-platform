@@ -7,8 +7,6 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ElapsedTicker } from './ElapsedTicker';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 describe('ElapsedTicker', () => {
   let container: HTMLDivElement;
   let root: Root;

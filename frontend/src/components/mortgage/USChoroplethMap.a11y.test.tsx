@@ -21,8 +21,6 @@ import { USChoroplethMap } from './USChoroplethMap';
 import { MAP_DRILL_EXIT_ATTR, claimDrillFocus, drillExitOriginatedInMap } from './USChoroplethMap.a11y';
 import { EMPTY_MAP_SELECTION, type MapSelection, type MapSelectionChangeOptions } from './USChoroplethMap.selection';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const apiMocks = vi.hoisted(() => ({
   stateRollups: vi.fn(),
   zipRollups: vi.fn(),

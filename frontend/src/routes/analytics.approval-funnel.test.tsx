@@ -16,8 +16,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { DrawerSource } from '../components/AppContext';
 import type { ApprovalFunnelResponse, LoanOfficerFunnelDetailResponse } from '../types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const LO_01 = '55555555-5555-4555-8555-555555555501';
 const LO_02 = '55555555-5555-4555-8555-555555555502';
 
@@ -97,7 +95,7 @@ const LIVE_FUNNEL: ApprovalFunnelResponse = {
       approval_id: '44444444-4444-4444-8444-444444444441',
       borrower_id: 'B-48291',
       offer_code: 'refi_plus_heloc',
-      actor_email: 'skyler@entrada.ai',
+      actor_email: 'operator@summit.example',
       assigned_to_email: 'lo01@summit.example',
       decided_at: '2026-07-11T11:58:00Z',
     },
@@ -118,7 +116,7 @@ const LO_01_DETAIL: LoanOfficerFunnelDetailResponse = {
       loan_officer_email: 'lo01@summit.example',
       loan_officer_name: 'Summit LO 01',
       status: 'actioned',
-      assigned_by: 'skyler@entrada.ai',
+      assigned_by: 'operator@summit.example',
       assigned_at: '2026-07-11T09:00:00Z',
       status_updated_at: '2026-07-11T11:00:00Z',
       released_at: null,
@@ -318,7 +316,7 @@ describe('ApprovalFunnelSection', () => {
     await act(async () => renderSection());
     await settle();
 
-    expect(document.body.textContent).toContain('skyler@entrada.ai');
+    expect(document.body.textContent).toContain('operator@summit.example');
     expect(document.body.textContent).toContain('B-48291');
     expect(document.body.textContent).not.toContain('No approvals recorded yet');
   });

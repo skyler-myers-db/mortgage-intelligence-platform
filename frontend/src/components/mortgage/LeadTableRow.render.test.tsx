@@ -8,8 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { LeadTableRow } from './LeadTableRow';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 vi.mock('../Primitives', () => ({
   Button: ({ children, ...props }: { children: ReactNode }) => <button {...props}>{children}</button>,
   Chip: ({ children }: { children: ReactNode }) => <span>{children}</span>,
@@ -305,12 +303,13 @@ describe('LeadTableRow numeric rendering', () => {
     vi.clearAllMocks();
   });
 
-  it('renders a below-market spread as -422, never +-422', () => {
+  it('renders a below-market spread as −422, never +−422', () => {
     renderRow({ rate_spread_bps: -422 }, true);
 
-    expect(document.body.textContent).toContain('-422');
-    expect(document.body.textContent).not.toContain('+-422');
-    expect(document.body.textContent).toContain('-422 bps');
+    expect(document.body.textContent).toContain('−422');
+    expect(document.body.textContent).not.toContain('+−422');
+    expect(document.body.textContent).not.toContain('-422');
+    expect(document.body.textContent).toContain('−422 bps');
   });
 
   it('renders an at-market spread without a sign', () => {

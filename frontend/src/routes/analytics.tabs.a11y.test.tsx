@@ -20,8 +20,6 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TABS } from './analytics.lib';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 vi.mock('../lib/useWarmingUpRetry', () => ({
   useWarmingUpRetry: () => ({
     data: null,

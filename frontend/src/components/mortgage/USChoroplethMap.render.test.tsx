@@ -15,8 +15,6 @@ import type { StateRollupResponse, ZipRollupResponse } from '../../types';
 import { genieStatePrompt } from '../../lib/genieContext';
 import { consumeGeniePrefill, subscribeGenieOpenRequests } from '../../lib/genieOpen';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((res) => {

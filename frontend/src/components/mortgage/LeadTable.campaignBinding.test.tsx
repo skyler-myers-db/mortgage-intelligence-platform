@@ -10,8 +10,6 @@ import { RouterProvider } from 'react-router/dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CampaignSummary, LeadSummary } from '../../types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const campaign = vi.fn();
 const draftOutreach = vi.fn();
 const approve = vi.fn();
@@ -33,14 +31,14 @@ vi.mock('../AppContext', () => ({
   }),
 }));
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: {
     campaign: (...args: unknown[]) => campaign(...args),
     draftOutreach: (...args: unknown[]) => draftOutreach(...args),
     approve: (...args: unknown[]) => approve(...args),
     salesTeam: () => Promise.resolve({ members: [] }),
   },
-  ApiError: class extends Error {},
   isAbortError: () => false,
 }));
 

@@ -26,7 +26,7 @@ BORROWER_EVIDENCE_IDS = ["ev-001", "ev-002", "ev-003"]
 CAMPAIGN_A = "11111111-1111-4111-8111-111111111111"
 CAMPAIGN_B = "22222222-2222-4222-8222-222222222222"
 FOREIGN_CAMPAIGN = "33333333-3333-4333-8333-333333333333"
-OWNER = "skyler@entrada.ai"
+OWNER = "operator@summit.example"
 
 
 @pytest.fixture(autouse=True)
@@ -123,7 +123,7 @@ def _install_campaign_rows(
     campaign_owners = {
         CAMPAIGN_A: OWNER,
         CAMPAIGN_B: OWNER,
-        FOREIGN_CAMPAIGN: "foreign-owner@entrada.ai",
+        FOREIGN_CAMPAIGN: "foreign-owner@summit.example",
     }
     variants = {
         (CAMPAIGN_A, "Primary", "email"): {
@@ -1016,7 +1016,7 @@ def test_campaign_rejection_fails_closed_without_atomic_transaction(
         ("evidence_ids", ["ev-001"]),
         ("draft_body", "Please review this governed option. Reply to review your options."),
         ("draft_subject", "A different governed mortgage review"),
-        ("assigned_to_email", "loan.officer@entrada.ai"),
+        ("assigned_to_email", "loan.officer@summit.example"),
         ("follow_up_in_days", 7),
         ("bulk_id", "77777777-7777-4777-8777-777777777777"),
         ("bulk_rationale", "A different governed bulk rationale"),

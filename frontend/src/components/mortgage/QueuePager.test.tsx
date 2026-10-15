@@ -16,12 +16,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { formatCount } from '../../lib/formatters';
 import { KEYMAP_SCOPE_LABELS, listKeyBindings } from '../../lib/keymap';
-import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
+import { setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 import { MAX_QUEUE_CONTEXT_IDS, type QueueContext } from '../../lib/queueContext';
 import { offerPath } from '../../lib/routeMeta';
 import { QueuePager } from './QueuePager';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const IDS = ['B-0000000000001', 'B-0000000000002', 'B-0000000000003'];
 const QUEUE: QueueContext = { epoch: 'e1', search: '?state=IL', label: 'IL', ids: IDS };
@@ -51,7 +49,6 @@ describe('QueuePager', () => {
 
   beforeEach(() => {
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);

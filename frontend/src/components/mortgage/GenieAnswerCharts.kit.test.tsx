@@ -22,8 +22,6 @@ import { GenieBarChart } from './GenieBarChart';
 import { chartPointHrefs, GENIE_LEAD_QUEUE_DRILL_NOTE } from './GenieChartDrill';
 import { GenieLineChart } from './GenieLineChart';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const COHORT: GenieAnswerCohort = { segmentFilter: ['ITM'], segmentFilterMode: 'any' };
 const STATE_ROWS = [
   { state: 'IL', total_balance: 1_250_000 },

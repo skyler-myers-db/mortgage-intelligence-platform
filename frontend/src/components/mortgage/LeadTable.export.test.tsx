@@ -54,7 +54,8 @@ vi.mock('../AppContext', () => ({
   }),
 }));
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: {
     leadExportReceipt: vi.fn(async () => ({
       audit_event_id: 'evt-receipt-0001',
@@ -68,7 +69,6 @@ vi.mock('../../lib/api', () => ({
       recorded_at: '2026-09-21T00:00:00.000Z',
     })),
   },
-  ApiError: class extends Error {},
   isAbortError: () => false,
 }));
 

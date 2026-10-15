@@ -41,9 +41,9 @@ vi.mock('../AppContext', () => ({
   }),
 }));
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: {},
-  ApiError: class extends Error {},
   isAbortError: () => false,
 }));
 

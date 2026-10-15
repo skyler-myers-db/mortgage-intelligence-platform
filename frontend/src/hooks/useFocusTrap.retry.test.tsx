@@ -16,8 +16,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useFocusTrap } from './useFocusTrap';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /** The first `refusals` focus() calls on the initial target do nothing, like a hidden element. */
 function Panel({ open, refusals }: { open: boolean; refusals: number }) {
   const panelRef = useRef<HTMLDivElement | null>(null);

@@ -39,7 +39,8 @@ const campaignStatus = vi.fn();
 const salesCampaignPerformance = vi.fn();
 const campaignRecommendation = vi.fn();
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   api: {
     portfolioPreview: (...args: unknown[]) => portfolioPreview(...args),
     portfolioCreate: (...args: unknown[]) => portfolioCreate(...args),
@@ -48,7 +49,6 @@ vi.mock('../lib/api', () => ({
     salesCampaignPerformance: (...args: unknown[]) => salesCampaignPerformance(...args),
     campaignRecommendation: (...args: unknown[]) => campaignRecommendation(...args),
   },
-  ApiError: class extends Error {},
   isAbortError: () => false,
   isWarmingUpError: () => false,
 }));

@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { mount } from '../../test/render';
 import { listKeyBindings } from '../../lib/keymap';
-import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
+import { setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 
 vi.mock('../../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api')>()),
@@ -47,7 +47,6 @@ describe('Topbar / shortcut through the keymap', () => {
 
   beforeEach(async () => {
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     ({ container } = await mount(<QueryClientProvider client={queryClient}><MemoryRouter><Topbar /></MemoryRouter></QueryClientProvider>));
   });
 

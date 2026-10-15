@@ -18,8 +18,6 @@ import { createMipQueryClient } from '../../lib/queryClient';
 import type { StateRollupResponse } from '../../types';
 import { USChoroplethMap } from './USChoroplethMap';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const mocks = vi.hoisted(() => ({
   stateRollups: vi.fn(),
   zipRollups: vi.fn(),

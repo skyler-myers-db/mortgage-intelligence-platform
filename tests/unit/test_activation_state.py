@@ -38,7 +38,7 @@ def _approved_decision(
         "approval_id": approval_id,
         "borrower_id": borrower_id,
         "action": "approve",
-        "actor_email": "skyler@entrada.ai",
+        "actor_email": "operator@summit.example",
         "offer_code": offer_code,
         "campaign_id": campaign_id,
         "channel": channel,
@@ -78,7 +78,7 @@ def _campaign_proof_material(
     treatment_fingerprint = hashlib.sha256(fingerprint_material.encode("utf-8")).hexdigest()
     intent = {
         "action": "approve",
-        "actor": "skyler@entrada.ai",
+        "actor": "operator@summit.example",
         "borrower_id": borrower_id,
         "offer_code": offer_code,
         "channel": "email",
@@ -114,7 +114,7 @@ def _campaign_proof_material(
         "approval_id": approval_id,
         "borrower_id": borrower_id,
         "action": "approve",
-        "actor_email": "skyler@entrada.ai",
+        "actor_email": "operator@summit.example",
         "offer_code": offer_code,
         "campaign_id": campaign_id,
         "variant_name": "Benefit-led",
@@ -445,7 +445,7 @@ def test_campaign_delivery_guard_holds_transaction_through_delivery_body(
             campaign_id=campaign_id,
         ),
         campaign_proof=campaign_proof,
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
     ).activation
     client.conn.campaign_active = campaign_active
 
@@ -511,7 +511,7 @@ def test_campaign_delivery_guard_rejects_outbox_channel_substitution() -> None:
             campaign_id=campaign_id,
         ),
         campaign_proof=campaign_proof,
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
     ).activation
     assert client.conn.insert_params is not None
     client.conn.insert_params["channel"] = "sms"
@@ -560,7 +560,7 @@ def test_campaign_delivery_guard_rejects_outbox_offer_substitution() -> None:
             offer_code="refi",
         ),
         campaign_proof=campaign_proof,
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
     ).activation
     assert client.conn.insert_params is not None
     client.conn.insert_params["offer_code"] = "heloc"
@@ -607,7 +607,7 @@ def test_campaign_delivery_guard_cancels_when_newer_reject_wins_borrower_lock() 
             campaign_id=campaign_id,
         ),
         campaign_proof=campaign_proof,
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
     ).activation
     client.conn.latest_decision = {
         "approval_id": str(uuid4()),
@@ -663,7 +663,7 @@ def test_stage_borrower_writes_sanitized_outbox_payload_and_audit_metadata() -> 
             request_id=request_id,
         ),
         approved_decision=_approved_decision(approval_id, borrower.borrower_id),
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
     )
 
     assert result.activation.status == "dry_run"
@@ -725,7 +725,7 @@ def test_stage_borrower_derives_offer_and_campaign_from_approved_decision() -> N
             campaign_id=campaign_id,
         ),
         campaign_proof=campaign_proof,
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
     )
 
     assert result.activation.offer_code == "heloc"
@@ -787,7 +787,7 @@ def test_stage_borrower_rejects_inactive_campaign_under_transaction_lock() -> No
                 campaign_id=campaign_id,
             ),
             campaign_proof=campaign_proof,
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
         )
 
     statements = [sql for sql, _params in client.conn.executions]
@@ -826,7 +826,7 @@ def test_stage_borrower_rejects_approval_proof_changed_before_transaction_lock()
                 campaign_id=campaign_id,
             ),
             campaign_proof=campaign_proof,
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
         )
 
     statements = [sql for sql, _params in client.conn.executions]
@@ -855,7 +855,7 @@ def test_stage_borrower_rejects_client_offer_that_differs_from_approval() -> Non
             approved_decision=_approved_decision(
                 approval_id, borrower.borrower_id, offer_code="heloc"
             ),
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
         )
 
 
@@ -880,7 +880,7 @@ def test_stage_borrower_rejects_non_campaign_channel_substitution() -> None:
                 borrower.borrower_id,
                 channel="email",
             ),
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
         )
 
 
@@ -906,7 +906,7 @@ def test_stage_borrower_rejects_approval_superseded_before_insert() -> None:
                 request_id=str(uuid4()),
             ),
             approved_decision=_approved_decision(approval_id, borrower.borrower_id),
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
         )
 
     statements = [sql for sql, _params in client.conn.executions]
@@ -955,7 +955,7 @@ def test_stage_borrower_rejects_campaign_channel_substitution() -> None:
                 channel="email",
             ),
             campaign_proof=campaign_proof,
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
         )
 
 
@@ -975,7 +975,7 @@ def test_failed_activation_reuses_business_key_across_new_request_id() -> None:
             request_id=str(uuid4()),
         ),
         approved_decision=_approved_decision(approval_id, borrower.borrower_id),
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
     )
     assert client.conn.insert_params is not None
     client.conn.insert_params["status"] = "failed"
@@ -991,7 +991,7 @@ def test_failed_activation_reuses_business_key_across_new_request_id() -> None:
             request_id=str(uuid4()),
         ),
         approved_decision=_approved_decision(approval_id, borrower.borrower_id),
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
     )
 
     assert retried.activation.activation_id == first.activation.activation_id
@@ -1021,7 +1021,7 @@ def test_stage_borrower_uses_borrower_offer_when_approved_offer_is_null() -> Non
             request_id=str(uuid4()),
         ),
         approved_decision=_approved_decision(approval_id, borrower.borrower_id, offer_code=None),
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
     )
 
     assert result.activation.offer_code == borrower.recommended_offer_code
@@ -1051,7 +1051,7 @@ def test_stage_borrower_rejects_client_offer_when_approved_offer_is_null() -> No
             approved_decision=_approved_decision(
                 approval_id, borrower.borrower_id, offer_code=None
             ),
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
         )
 
 
@@ -1073,7 +1073,7 @@ def test_stage_borrower_rejects_mismatched_approved_decision_row() -> None:
                 request_id=str(uuid4()),
             ),
             approved_decision=_approved_decision(approval_id, "B-OTHER"),
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
         )
 
 
@@ -1096,7 +1096,7 @@ def test_stage_borrower_normalizes_raw_transaction_errors() -> None:
                 request_id=str(uuid4()),
             ),
             approved_decision=_approved_decision(approval_id, borrower.borrower_id),
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
         )
 
 
@@ -1121,7 +1121,7 @@ def test_stage_borrower_rechecks_conflicting_request_id_after_insert_race() -> N
         "channel": "email",
         "status": "dry_run",
         "request_id": request_id,
-        "created_by": "skyler@entrada.ai",
+        "created_by": "operator@summit.example",
         "payload_json": "{}",
         "delivery_metadata": "{}",
         "created_at": now,
@@ -1142,7 +1142,7 @@ def test_stage_borrower_rechecks_conflicting_request_id_after_insert_race() -> N
                 request_id=request_id,
             ),
             approved_decision=_approved_decision(approval_id, borrower.borrower_id),
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
         )
 
 
@@ -1167,7 +1167,7 @@ def test_stage_borrower_rechecks_conflicting_request_id_content_after_insert_rac
         "channel": "email",
         "status": "dry_run",
         "request_id": request_id,
-        "created_by": "skyler@entrada.ai",
+        "created_by": "operator@summit.example",
         "payload_json": "{}",
         "delivery_metadata": "{}",
         "created_at": now,
@@ -1190,5 +1190,5 @@ def test_stage_borrower_rechecks_conflicting_request_id_content_after_insert_rac
             approved_decision=_approved_decision(
                 approval_id, borrower.borrower_id, offer_code="refi"
             ),
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
         )

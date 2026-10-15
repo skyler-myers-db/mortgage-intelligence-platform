@@ -62,8 +62,6 @@ import { GENIE_CONVERSATION_ID_RE, genieConversationQueryKey } from './ask-genie
 import { GENIE_LINK_NOT_FOUND_COPY, GENIE_LINK_UNAVAILABLE_COPY } from '../components/mortgage/GenieConversationLinkState';
 import { GENIE_LINK_RETRY_FAILED_COPY } from '../components/mortgage/GenieConversationLinkState.copy';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 // Mounts the whole route plus a lazy chunk on a shared, often loaded machine.
 const TIMEOUT_MS = 30_000;
 

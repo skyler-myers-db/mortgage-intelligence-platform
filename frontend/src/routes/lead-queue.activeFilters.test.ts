@@ -27,9 +27,9 @@ describe('score and rate-spread chips (audit tables-06)', () => {
     expect(leadBoundChipValue('opportunity_score', { max_opportunity_score: '90' })).toBe('≤ 90');
     expect(leadBoundChipValue('opportunity_score', { min_opportunity_score: '70', max_opportunity_score: '90' })).toBe('70–90');
     expect(leadBoundChipValue('rate_spread_bps', { min_rate_spread_bps: '50' })).toBe('≥ +50 bps');
-    expect(leadBoundChipValue('rate_spread_bps', { max_rate_spread_bps: '-10' })).toBe('≤ -10 bps');
+    expect(leadBoundChipValue('rate_spread_bps', { max_rate_spread_bps: '-10' })).toBe('≤ −10 bps');
     expect(leadBoundChipValue('rate_spread_bps', { min_rate_spread_bps: '-25', max_rate_spread_bps: '1500' }))
-      .toBe('-25 bps – +1,500 bps');
+      .toBe('−25 bps – +1,500 bps');
     expect(leadBoundChipValue('opportunity_score', {})).toBeNull();
     expect(leadBoundChipValue('opportunity_score', undefined)).toBeNull();
   });

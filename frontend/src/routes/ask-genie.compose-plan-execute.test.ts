@@ -34,8 +34,6 @@ import {
   type ComposedPlanExecution,
 } from './ask-genie.compose-plan-execute';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const REQUEST: ExecutePlanRequest = {
   objective: 'Compose a refi growth plan for review.',
   states: ['IL'],

@@ -26,8 +26,6 @@ vi.mock('./lib/routePreloaders', async (importOriginal) => ({
 
 import { AdminRouteGate, AuditLedgerGate } from './app';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const SETTLE_ATTEMPTS = 300;
 const TEST_TIMEOUT_MS = 15_000;
 const EVENT_ID = '0f8fad5b-d9cb-469f-a165-70867728950e';

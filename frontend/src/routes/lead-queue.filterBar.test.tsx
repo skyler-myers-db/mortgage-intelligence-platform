@@ -15,8 +15,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const retryState = vi.hoisted(() => ({
   // One row: LeadTable mounts only for rows (a measured zero is an EmptyState).
   data: { leads: [{ borrower_id: 'B-0123456789ABC' }], totalMatching: 1, returnedRows: 1, truncatedAt: null },
@@ -100,8 +98,8 @@ vi.mock('../components/mortgage/LeadTable', () => ({
   ),
 }));
 
-vi.mock('../lib/api', () => ({
-  ApiError: class ApiError extends Error {},
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   api: apiMocks,
 }));
 
@@ -286,7 +284,7 @@ describe('Lead Queue filter bar', () => {
     const hero = byTestId('lead-queue-active-filters')!;
     expect([...hero.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))).toEqual([
       'Remove SCORE: 70–90 filter',
-      'Remove RATE SPREAD: ≥ -25 bps filter',
+      'Remove RATE SPREAD: ≥ −25 bps filter',
     ]);
     expect(byTestId('lead-queue-more-filters')?.getAttribute('aria-label')).toBe('More filters (2 active)');
     await act(async () => (hero.querySelector('button') as HTMLButtonElement).click());

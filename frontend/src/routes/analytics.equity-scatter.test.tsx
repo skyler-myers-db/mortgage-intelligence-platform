@@ -33,8 +33,6 @@ import {
   groupExactCoordinatePoints,
 } from './analytics.equity-scatter';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 declare const process: { cwd(): string };
 
 /** The refresh's governed In the Money thresholds (the economics payload's `thresholds`). */

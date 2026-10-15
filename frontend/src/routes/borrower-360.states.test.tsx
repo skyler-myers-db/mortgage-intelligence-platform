@@ -13,8 +13,6 @@ import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../lib/apiTransport';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const state = vi.hoisted(() => ({
   borrower: { data: null as unknown, warmingUp: null as unknown, error: null as unknown, manualRetry: vi.fn() },
   health: null as null | { health: { dependencies: Record<string, string> }; connection: string },

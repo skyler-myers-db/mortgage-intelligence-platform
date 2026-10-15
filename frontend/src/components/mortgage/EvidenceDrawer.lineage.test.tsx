@@ -20,8 +20,6 @@ import type { LineageLayer, LineageManifestResponse } from '../../types';
 
 declare const process: { cwd(): string };
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const appMocks = vi.hoisted(() => ({
   drawer: null as DrawerSource | null,
   setDrawer: vi.fn(),

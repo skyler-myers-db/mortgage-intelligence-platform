@@ -17,8 +17,6 @@ import { api, ApiError } from '../lib/api';
 import { preloadAsyncFailure } from '../components/ui/AsyncState';
 import AssetRoute from './asset';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const LEAK = 'statement_id=01ef PERMISSION_DENIED dbfs:/must-not-render';
 
 async function settle(): Promise<void> {

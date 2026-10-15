@@ -20,11 +20,11 @@ import type { AuditEventRow, DecisionReceipt as DecisionReceiptPayload } from '.
 
 const apiMocks = vi.hoisted(() => ({ auditReceipt: vi.fn(), borrowerProof: vi.fn() }));
 
-vi.mock('../../lib/api', () => {
+vi.mock('../../lib/api', async (importOriginal) => {
   class ApiError extends Error {
     status: number | null = null;
   }
-  return { api: apiMocks, ApiError };
+  return { ...(await importOriginal<typeof import('../../lib/api')>()), api: apiMocks, ApiError };
 });
 
 vi.mock('../AppContext', () => ({
@@ -38,7 +38,6 @@ import {
 } from '../mortgage/DecisionReceipt.copy';
 import { AuditEventTableRow, DECISION_RECEIPT_ACTION_NAMES, DECISION_RECEIPT_TYPES } from './AdminAuditExplorer.row';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.setConfig({ testTimeout: 30_000 });
 
 const APPROVE_ROW: AuditEventRow = {

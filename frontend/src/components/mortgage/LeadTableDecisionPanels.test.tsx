@@ -15,8 +15,6 @@ import type { SalesTeamMember } from '../../types';
 import { outreachMutationKeys } from '../../lib/mutations/outreach';
 import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const LO_A = 'lo.alpha@summit.example';
 const TEAM: SalesTeamMember[] = [
   { email: LO_A, display_label: 'Loan Officer A', role: 'loan_officer', region: 'Midwest', manager_email: null, capacity_per_day: 25, active: true },

@@ -26,8 +26,6 @@ import { PinnedInsights } from '../mortgage/PinnedInsights';
 import { AppShell } from './AppShell';
 import { ACTOR_RESET_NOTICE } from './useActorResetNotice';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /** Out of this suite for the reason AppShell.actorBoundary.test.tsx gives. */
 vi.mock('./GenieDock', () => ({ GenieDock: () => null }));
 

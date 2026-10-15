@@ -31,8 +31,6 @@ vi.mock('../../lib/apiClients/auditExplorer', () => ({
 import { ACTION_FILTER_LABEL, ALL_ACTIONS_OPTION, AuditFacetsProvider, actionFilterOptions } from './AdminAuditExplorer.facets';
 import { auditDayBoundary } from './AdminAuditExplorer.params';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 let container: HTMLDivElement;
 let root: Root;
 let client: QueryClient;

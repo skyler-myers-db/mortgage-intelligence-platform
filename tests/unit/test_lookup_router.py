@@ -89,7 +89,7 @@ def test_property_loan_lookup_hit() -> None:
         response = client.post(
             "/api/v1/lookup/property-loan",
             json={"address_line": _RAW_ADDRESS, "zip5": _ZIP},
-            headers={"X-Forwarded-Email": "skyler@entrada.ai"},
+            headers={"X-Forwarded-Email": "operator@summit.example"},
         )
     assert response.status_code == 200, response.text
     body = response.json()
@@ -109,7 +109,7 @@ def test_property_loan_lookup_miss() -> None:
         response = client.post(
             "/api/v1/lookup/property-loan",
             json={"address_line": _RAW_ADDRESS, "zip5": _ZIP},
-            headers={"X-Forwarded-Email": "skyler@entrada.ai"},
+            headers={"X-Forwarded-Email": "operator@summit.example"},
         )
     assert response.status_code == 200, response.text
     body = response.json()
@@ -131,7 +131,7 @@ def test_response_never_echoes_address_line() -> None:
         response = client.post(
             "/api/v1/lookup/property-loan",
             json={"address_line": _RAW_ADDRESS, "zip5": _ZIP},
-            headers={"X-Forwarded-Email": "skyler@entrada.ai"},
+            headers={"X-Forwarded-Email": "operator@summit.example"},
         )
     body = response.json()
     assert "address_line" not in body
@@ -165,7 +165,7 @@ def test_bad_zip_returns_422_without_echoing_value() -> None:
         response = client.post(
             "/api/v1/lookup/property-loan",
             json={"address_line": _RAW_ADDRESS, "zip5": "ABcde"},
-            headers={"X-Forwarded-Email": "skyler@entrada.ai"},
+            headers={"X-Forwarded-Email": "operator@summit.example"},
         )
     assert response.status_code == 422
     # Fixed detail; the submitted value is not reflected.
@@ -179,7 +179,7 @@ def test_wrong_length_zip_returns_422_shape_without_input_echo() -> None:
         response = client.post(
             "/api/v1/lookup/property-loan",
             json={"address_line": _RAW_ADDRESS, "zip5": "1"},
-            headers={"X-Forwarded-Email": "skyler@entrada.ai"},
+            headers={"X-Forwarded-Email": "operator@summit.example"},
         )
     assert response.status_code == 422
     body = response.json()
@@ -199,7 +199,7 @@ def test_short_address_returns_422() -> None:
         response = client.post(
             "/api/v1/lookup/property-loan",
             json={"address_line": "12", "zip5": _ZIP},
-            headers={"X-Forwarded-Email": "skyler@entrada.ai"},
+            headers={"X-Forwarded-Email": "operator@summit.example"},
         )
     assert response.status_code == 422
 
@@ -213,7 +213,7 @@ def test_compat_alias_path_is_reachable() -> None:
         response = client.post(
             "/api/lookup/property-loan",
             json={"address_line": _RAW_ADDRESS, "zip5": _ZIP},
-            headers={"X-Forwarded-Email": "skyler@entrada.ai"},
+            headers={"X-Forwarded-Email": "operator@summit.example"},
         )
     assert response.status_code == 200, response.text
 
@@ -227,7 +227,7 @@ def test_lookup_is_not_admin_gated() -> None:
         response = client.post(
             "/api/v1/lookup/property-loan",
             json={"address_line": _RAW_ADDRESS, "zip5": _ZIP},
-            headers={"X-Forwarded-Email": "loan.officer@entrada.ai"},
+            headers={"X-Forwarded-Email": "loan.officer@summit.example"},
         )
     assert response.status_code == 200, response.text
     assert response.json()["matched"] is False

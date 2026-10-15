@@ -6,7 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PinnedInsights } from './PinnedInsights';
-import { clearPinnedInsights, pinInsight } from '../../lib/pinnedInsights';
+import { pinInsight } from '../../lib/pinnedInsights';
 
 function installLocalStorage() {
   // Reuse a working localStorage if the environment already provides one
@@ -44,7 +44,6 @@ describe('PinnedInsights (Home card)', () => {
   let root: Root;
   beforeEach(() => {
     installLocalStorage();
-    clearPinnedInsights();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);

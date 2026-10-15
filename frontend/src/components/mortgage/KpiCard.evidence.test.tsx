@@ -15,8 +15,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { KpiCard } from './KpiCard';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const appMocks = vi.hoisted(() => ({ setDrawer: vi.fn() }));
 vi.mock('../AppContext', () => ({
   useApp: () => ({ setDrawer: appMocks.setDrawer, showEvidence: true }),

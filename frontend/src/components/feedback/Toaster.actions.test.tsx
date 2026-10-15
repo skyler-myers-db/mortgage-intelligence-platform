@@ -18,8 +18,6 @@ import { listKeyBindings } from '../../lib/keymap';
 import { clearToasts, getToasts, toast } from '../../lib/toast';
 import { SUCCESS_TOAST_MS, TOAST_REGION_SHORTCUT, Toaster } from './Toaster';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const session = { canAccessAdmin: true };
 vi.mock('../AppContext', () => ({ useApp: () => session }));
 vi.mock('../../lib/sessionQuery', () => ({ useAuditLedgerAccess: () => false }));

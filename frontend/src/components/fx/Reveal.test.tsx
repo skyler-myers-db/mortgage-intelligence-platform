@@ -12,8 +12,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Reveal } from './Reveal';
 import { __resetFirstAppearanceForTests } from '../../lib/useFirstAppearance';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 type IOCallback = (entries: Array<{ isIntersecting: boolean; target: Element }>) => void;
 
 const observers: Array<{ callback: IOCallback; observed: Element[] }> = [];

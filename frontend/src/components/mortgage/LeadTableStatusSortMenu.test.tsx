@@ -17,8 +17,6 @@ import { hasOpenOverlay } from '../../lib/keymap';
 import { installFakeCssTransition, runExitOn } from '../../test/runningExit';
 import { LeadTableStatusSortMenu } from './LeadTableStatusSortMenu';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 describe('LeadTableStatusSortMenu exit (motion-01 item 2e)', () => {
   let container: HTMLDivElement;
   let root: Root;

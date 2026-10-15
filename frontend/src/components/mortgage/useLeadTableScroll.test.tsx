@@ -11,8 +11,6 @@ import {
   type LeadTableVirtualScroll,
 } from './useLeadTableScroll';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * useLeadTableScroll — rendered-DOM contract for the Lead Queue's `.tbl-wrap`
  * scroller (audit runtime-08). The defect lived in the table's own scroller:

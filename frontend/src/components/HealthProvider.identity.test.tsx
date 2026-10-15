@@ -10,8 +10,6 @@ import { _resetSessionStatusForTests } from '../lib/sessionStatus';
 import { ACTOR_A, ACTOR_B } from '../test/actorKeys';
 import { HealthProvider, useHealth } from './HealthProvider';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * HealthProvider's `actorIdentity` (Genie residual #3): only a TRUSTED probe
  * may set it (lib/healthTrust), and it is replaced only when the key changes.

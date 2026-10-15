@@ -21,8 +21,6 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const approve = vi.fn();
 const reject = vi.fn();
 const draftOutreach = vi.fn();
@@ -44,13 +42,13 @@ vi.mock('../AppContext', () => ({
   }),
 }));
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: {
     approve: (...args: unknown[]) => approve(...args),
     reject: (...args: unknown[]) => reject(...args),
     draftOutreach: (...args: unknown[]) => draftOutreach(...args),
   },
-  ApiError: class extends Error {},
   isAbortError: () => false,
   isWarmingUpError: () => false,
 }));

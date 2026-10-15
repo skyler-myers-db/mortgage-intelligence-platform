@@ -41,8 +41,6 @@ import { GenieAnnouncerRegion } from './GenieAnnouncerRegion';
 import { observeStrongly } from './genieAnnouncer.test-support';
 import { __resetGenieAnnouncerForTests, isGenieRouteAskVisible } from './useGenieAnnouncer';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function stage(stageKey: string, label: string, terminal = false): GenieLiveProgress {
   return {
     status: terminal ? 'COMPLETED' : 'EXECUTING_QUERY',

@@ -16,8 +16,6 @@ import { createMipQueryClient } from '../../lib/queryClient';
 import type { GrowthAgentWatchlistBriefing, GrowthAgentWatchlistSummaryResponse } from '../../types/growthAgent';
 import WatchlistBriefings, { WATCHLIST_BRIEFING_ROWS } from './WatchlistBriefings';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const fetchMock = vi.fn();
 
 function briefing(index: number, overrides: Partial<GrowthAgentWatchlistBriefing> = {}): GrowthAgentWatchlistBriefing {

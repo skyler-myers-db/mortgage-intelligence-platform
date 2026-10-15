@@ -31,7 +31,6 @@ import { viewBoxAttr } from './useSvgViewBox';
 import type { ZctaArea, ZctaGeometry } from './zctaGeometry';
 import { fitZctaView } from './zctaLevel.logic';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 declare const process: { cwd(): string };
 
 const geo = vi.hoisted(() => ({ has: vi.fn(), load: vi.fn(), states: vi.fn() }));

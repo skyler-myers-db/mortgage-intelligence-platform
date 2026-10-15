@@ -29,11 +29,12 @@ const apiMocks = vi.hoisted(() => ({
 
 // The audit-free decision history (D-audit-reads-c2) stays pending: this suite counts its own reads.
 vi.mock('../lib/apiClients/borrowerDecisions', () => ({ borrowerDecisionsQuery: (id: string) => ({ queryKey: ['mip', 'borrower', id, 'decisions'], queryFn: () => new Promise(() => undefined) }) }));
-vi.mock('../lib/api', () => {
+vi.mock('../lib/api', async (importOriginal) => {
   class ApiError extends Error {
     status: number | null = null;
   }
   return {
+    ...(await importOriginal<typeof import('../lib/api')>()),
     api: apiMocks,
     ApiError,
     isAbortError: () => false,
@@ -71,8 +72,13 @@ vi.mock('../components/AppContext', () => ({
 vi.mock('../components/activation/ActivationLoopPanel', () => ({ ActivationLoopPanel: () => null }));
 
 import OfferOrchestrator from './offer-orchestrator';
+// The lib/api factory is async (it spreads the real module): the decision
+// receipt the route loads lazily would otherwise be handed the ORIGINAL
+// lib/api in a full-suite run (the PR #265 bypass: a real auditReceipt read
+// on the network). Loading its graph here gives it the mock; the route's
+// import() then resolves from the module cache.
+import '../components/mortgage/DecisionReceipt';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.setConfig({ testTimeout: 30_000 });
 
 const DECIDED_HERE = 'B-0000000000001';

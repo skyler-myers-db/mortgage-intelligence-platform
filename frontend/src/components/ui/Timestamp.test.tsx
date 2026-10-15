@@ -12,8 +12,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Timestamp } from './Timestamp';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const NOW = Date.parse('2026-07-14T15:00:00Z');
 
 let container: HTMLDivElement;

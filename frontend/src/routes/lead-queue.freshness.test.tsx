@@ -10,8 +10,6 @@ import { AssignmentLifecycleAdvance } from '../components/mortgage/AssignmentLif
 import { useLeadQueueFreshness } from './lead-queue.freshness';
 import { useRevokeApproval } from '../lib/mutations/outreach';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * The Lead Queue's freshness (audit states-09), driven through a real
  * QueryClient and the real queue-version poll with `fetch` stubbed: the

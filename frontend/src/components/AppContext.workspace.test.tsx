@@ -15,8 +15,6 @@ import { ApiError } from '../lib/apiTransport';
 import { WORKSPACE_WRITE_KEY } from '../lib/mutations/workspace';
 import type { SavedDraft, SavedLead } from '../types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const apiMocks = vi.hoisted(() => ({
   session: vi.fn(),
   workspace: vi.fn(),

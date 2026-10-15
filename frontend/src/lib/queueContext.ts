@@ -137,12 +137,6 @@ export function currentQueueContext(): QueueContext | null {
   return current();
 }
 
-/** Forget the in-memory copy until the next publish (tests). */
-export function clearQueueContext(): void {
-  snapshot = null;
-  emit();
-}
-
 /** The context a history entry carries, if its epoch is still the live one. */
 function fromLinkState(state: unknown, stored: QueueContext | null): QueueContext | null {
   if (!stored || !state || typeof state !== 'object') return null;

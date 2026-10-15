@@ -37,8 +37,6 @@ import { OfferReviewGrid } from './offer-orchestrator.panels';
 import { copyParagraphs } from './offer-orchestrator.preview';
 import type { OutreachChannel } from './offer-orchestrator.constants';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const BORROWER_ID = 'B-0000000000001';
 // 116 characters (the old input's maxLength was 120): about five times what it showed.
 const LONG_SUBJECT =

@@ -12,8 +12,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { useGenieTranscriptScroll, type GenieTranscriptScroll } from './useGenieTranscriptScroll';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 let scroll: GenieTranscriptScroll | null = null;
 
 function Transcript({ open, messages }: { open: boolean; messages: readonly string[] }) {

@@ -329,7 +329,7 @@ def test_write_suppression_audit_row_passes_metadata_allowlist() -> None:
     decision = SERVICE.evaluate(borrower)
     event = write_suppression_audit(
         store,
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
         borrower_id=borrower.borrower_id,
         decision=decision,
         surface="outreach_draft",

@@ -37,8 +37,6 @@ vi.mock('./EvidenceDrawerBody', () => new Promise(() => undefined));
 
 import { EvidenceDrawer } from './EvidenceDrawer';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const SOURCE: DrawerSource = {
   title: 'Lead population',
   short: 'mip.gold.lead_population',

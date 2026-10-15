@@ -11,11 +11,9 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { clearQueueContext, type QueueContext } from '../../lib/queueContext';
+import { type QueueContext } from '../../lib/queueContext';
 import { publishQueueContext } from '../../lib/queueContextPublish';
 import { Breadcrumbs } from './Breadcrumbs';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const IDS = ['B-0000000000001', 'B-0000000000002', 'B-0000000000003'];
 
@@ -31,7 +29,6 @@ describe('Breadcrumbs', () => {
 
   beforeEach(() => {
     window.sessionStorage.clear();
-    clearQueueContext();
     queue = publishQueueContext({ search: '?state=IL&segment=itm', label: 'IL · In the Money', ids: IDS });
     container = document.createElement('div');
     document.body.appendChild(container);

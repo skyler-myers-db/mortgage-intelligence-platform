@@ -20,8 +20,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const apiMocks = vi.hoisted(() => ({
   salesTeam: vi.fn(),
   portfolioPreview: vi.fn(),
@@ -75,12 +73,13 @@ vi.mock('../components/mortgage/PropertyLookupPanel', () => ({
   PropertyLookupPanel: () => null,
 }));
 
-vi.mock('../lib/api', () => {
+vi.mock('../lib/api', async (importOriginal) => {
   class ApiError extends Error {
     status: number | null = 503;
     validationIssues: unknown[] = [];
   }
   return {
+    ...(await importOriginal<typeof import('../lib/api')>()),
     ApiError,
     isAbortError: () => false,
     isWarmingUpError: (error: unknown) => Boolean(

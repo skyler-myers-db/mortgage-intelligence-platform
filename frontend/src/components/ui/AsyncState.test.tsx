@@ -8,8 +8,6 @@ import { ApiError } from '../../lib/apiTransport';
 import type { WarmingUpState } from '../../lib/useWarmingUpRetry';
 import { AsyncState, AsyncStatus, preloadAsyncFailure, type AsyncQuery } from './AsyncState';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const healthMocks = vi.hoisted(() => ({
   ctx: null as null | { health: { dependencies?: Record<string, string>; circuit_breakers?: Record<string, string> }; connection: string },
 }));

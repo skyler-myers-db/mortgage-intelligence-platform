@@ -25,8 +25,6 @@ import type { AssetFreshnessResponse } from '../../lib/apiTypes';
 
 declare const process: { cwd(): string };
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const appMocks = vi.hoisted(() => ({ drawer: null as DrawerSource | null, setDrawer: vi.fn(), canAccessAdmin: false }));
 const apiMocks = vi.hoisted(() => ({ assetMetadata: vi.fn(), lineageManifest: vi.fn(), assetFreshness: vi.fn() }));
 

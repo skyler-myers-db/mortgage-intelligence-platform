@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../test/installLocalStorage';
 import { mount } from '../test/render';
 import { listKeyBindings } from './keymap';
-import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from './keymapPreference';
+import { setSingleKeyShortcutsEnabled } from './keymapPreference';
 import { isPagerHotkeyInScope, usePagerHotkeys, type PagerHotkeyHandlers } from './usePagerHotkeys';
 
 function Dossier({ handlers }: { handlers: PagerHotkeyHandlers }) {
@@ -33,7 +33,6 @@ let outside: HTMLButtonElement;
 
 beforeEach(() => {
   installLocalStorage();
-  clearSingleKeyShortcutsPreference();
   next = vi.fn();
   previous = vi.fn();
   outside = document.createElement('button');

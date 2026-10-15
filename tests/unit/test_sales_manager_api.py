@@ -22,7 +22,7 @@ from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 from tests.fixtures.reviewed_approval import draft_proof
 
 client = TestClient(app)
-client.headers.update({"X-Forwarded-Email": "skyler@entrada.ai"})
+client.headers.update({"X-Forwarded-Email": "operator@summit.example"})
 
 
 def _borrower_id() -> str:
@@ -53,7 +53,7 @@ def _sales_ops_response(question: str):
     return sales_ops_genie_response(
         lakebase,
         borrowers,
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
         question=question,
         conversation_id=None,
     )
@@ -1356,7 +1356,7 @@ def test_genie_routes_sales_manager_lo_conversion_to_sales_ops_adapter() -> None
     app.dependency_overrides[get_lakebase_client] = lambda: isolated_lakebase
     app.dependency_overrides[get_audit_store] = lambda: isolated_audit
     isolated_client = TestClient(app)
-    isolated_client.headers.update({"X-Forwarded-Email": "skyler@entrada.ai"})
+    isolated_client.headers.update({"X-Forwarded-Email": "operator@summit.example"})
     borrower_id = mock_data.BORROWERS[2].borrower_id
     try:
         draft = isolated_client.post(
@@ -1471,7 +1471,7 @@ def test_genie_sales_aging_omits_approval_rows_without_live_borrower() -> None:
             "borrower_id": borrower_id,
             "action": "approve",
             "offer_code": "refi_plus_heloc",
-            "actor_email": "skyler@entrada.ai",
+            "actor_email": "operator@summit.example",
             "rationale": None,
             "decided_at": old - timedelta(minutes=i),
             "request_id": str(uuid4()),
@@ -1484,7 +1484,7 @@ def test_genie_sales_aging_omits_approval_rows_without_live_borrower() -> None:
             "borrower_id": live_borrower_id,
             "action": "approve",
             "offer_code": "refi_plus_heloc",
-            "actor_email": "skyler@entrada.ai",
+            "actor_email": "operator@summit.example",
             "rationale": None,
             "decided_at": live_old,
             "request_id": str(uuid4()),
@@ -1699,7 +1699,7 @@ def test_non_sales_actor_does_not_receive_sales_hydration() -> None:
 
     nonsales = TestClient(app)
     nonsales.headers.update({
-        "X-Forwarded-Email": "pat@entrada.ai",
+        "X-Forwarded-Email": "pat@summit.example",
         "X-Forwarded-Groups": "mip-admin",
     })
     borrower = nonsales.get(f"/api/borrowers/{borrower_id}")
@@ -1735,7 +1735,7 @@ def test_genie_lo_queue_answer_avoids_contact_field_language() -> None:
 def test_sales_audit_metadata_is_strictly_validated() -> None:
     store = InMemoryAuditStore()
     base = {
-        "actor": "skyler@entrada.ai",
+        "actor": "operator@summit.example",
         "action": "lead.disposition",
         "entity_type": "borrower",
         "entity_id": _borrower_id(),
@@ -1764,7 +1764,7 @@ def test_sales_audit_metadata_is_strictly_validated() -> None:
         )
     with pytest.raises(AuditMetadataValueViolation):
         store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="lead.distribute",
             entity_type="lead_queue",
             entity_id="_sales_distribution",
@@ -1778,7 +1778,7 @@ def test_sales_audit_metadata_is_strictly_validated() -> None:
         )
     with pytest.raises(AuditMetadataValueViolation):
         store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="lead.outcome",
             entity_type="borrower",
             entity_id=_borrower_id(),
@@ -1797,7 +1797,7 @@ def test_lead_outcome_audit_event_is_server_owned() -> None:
     response = client.post(
         "/api/audit/event",
         json={
-            "actor": "skyler@entrada.ai",
+            "actor": "operator@summit.example",
             "action": "lead.outcome",
             "entity_type": "borrower",
             "entity_id": _borrower_id(),

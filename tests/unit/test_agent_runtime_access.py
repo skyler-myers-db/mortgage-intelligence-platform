@@ -26,7 +26,7 @@ def test_current_runtime_identity_requires_exact_application_id() -> None:
 def test_runtime_creator_rejects_human_owner() -> None:
     with pytest.raises(RuntimeError, match="is not dedicated agent runtime"):
         access.assert_runtime_creator(
-            "skyler@entrada.ai",
+            "operator@summit.example",
             application_id="runtime-client",
             resource="managed Supervisor",
         )

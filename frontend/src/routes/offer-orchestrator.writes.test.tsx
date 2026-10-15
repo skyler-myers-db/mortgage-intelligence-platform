@@ -16,7 +16,7 @@ import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Borrower360, BorrowerLifecycle, OfferRecommendation, SalesTeamMember } from '../types';
 import type { OutreachDraftResult } from '../lib/apiTypes';
-import { clearQueueContext, storeQueueContext } from '../lib/queueContext';
+import { storeQueueContext } from '../lib/queueContext';
 import { isDecisionPending, outreachMutationKeys } from '../lib/mutations/outreach';
 import { queryKeys } from '../lib/queryKeys';
 
@@ -69,7 +69,6 @@ vi.mock('../components/activation/ActivationLoopPanel', () => ({ ActivationLoopP
 
 import OfferOrchestrator from './offer-orchestrator';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.setConfig({ testTimeout: 30_000 });
 
 const ID = 'B-0000000000001';
@@ -271,7 +270,6 @@ describe('Offer Orchestrator writes', () => {
     queryClient.clear();
     container.remove();
     navigate = null;
-    clearQueueContext();
     window.sessionStorage.clear();
   });
 

@@ -495,7 +495,7 @@ def test_creator_mismatch_builds_blue_green_replacement_without_touching_old(
         "supervisor_agent_id": "old-id",
         "display_name": "Mortgage Growth Agent",
         "endpoint_name": "mas-old",
-        "creator": "skyler@entrada.ai",
+        "creator": "operator@summit.example",
         "create_time": "old-time",
     }
     calls: list[tuple[list[str], object | None]] = []

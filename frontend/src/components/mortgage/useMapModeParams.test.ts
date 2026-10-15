@@ -20,8 +20,6 @@ import {
   type MapModeParams,
 } from './useMapModeParams';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 describe('map mode and step params', () => {
   it('parses a mode, falling back to borrowers for anything else', () => {
     expect(parseMapMode('rate')).toBe('rate');

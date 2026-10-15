@@ -20,8 +20,6 @@ vi.mock('../AppContext', () => ({
   useApp: () => ({ setDrawer: appMocks.setDrawer, showEvidence: true, showConfidence: true }),
 }));
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const STEPS = [-100, -75, -50, -25, 0, 25, 50, 75, 100];
 const RESPONSE: RateSensitivityResponse = {
   built: true,
@@ -245,7 +243,7 @@ describe('RateScenarioControl', () => {
     expect(link?.textContent).toBe('Open borrowers within 50 bps of the refi screen in the Lead Queue');
     expect(link?.getAttribute('href')).toBe('/lead-queue?min_rate_spread_bps=25&max_rate_spread_bps=74');
     change(25);
-    expect(document.querySelector('[data-testid="rate-lever-largest"]')?.textContent).toBe('Largest in-the-money drops: IL -200');
+    expect(document.querySelector('[data-testid="rate-lever-largest"]')?.textContent).toBe('Largest in-the-money drops: IL −200');
     expect(document.querySelector('.rate-lever a')?.getAttribute('href')).toBe(
       '/lead-queue?segment=itm&min_rate_spread_bps=75&max_rate_spread_bps=99',
     );

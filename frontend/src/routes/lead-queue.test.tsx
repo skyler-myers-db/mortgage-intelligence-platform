@@ -15,8 +15,6 @@ import {
 import type { SegmentCode } from '../types';
 import type { LeadExportContext } from '../components/mortgage/LeadTable';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /** A ranked row; the stubbed LeadTable reads only what the route hands it. */
 const ONE_LEAD = { borrower_id: 'B-0123456789ABC' } as never;
 
@@ -101,7 +99,8 @@ vi.mock('../components/mortgage/LeadTable', () => ({
   },
 }));
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   ApiError: class ApiError extends Error {
     path: string;
     status: number | null;

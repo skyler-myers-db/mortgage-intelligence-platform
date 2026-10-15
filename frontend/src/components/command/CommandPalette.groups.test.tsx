@@ -14,7 +14,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { OPEN_SHORTCUTS_EVENT, listKeyBindings, registerKeyBinding } from '../../lib/keymap';
-import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
+import { setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 import { segmentName } from '../../lib/segmentMetadata';
 import type { SavedLead } from '../../types/workspace';
 
@@ -76,7 +76,6 @@ let root: Root;
 beforeEach(() => {
   vi.clearAllMocks();
   installLocalStorage();
-  clearSingleKeyShortcutsPreference();
   app.admin = false;
   app.sessionStatus = 'ready';
   app.savedLeads = {};

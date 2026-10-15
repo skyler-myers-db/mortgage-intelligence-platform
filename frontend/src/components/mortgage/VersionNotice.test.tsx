@@ -8,8 +8,6 @@ import { designCss } from '../../test/designCss';
 import { HealthProvider } from '../HealthProvider';
 import { VersionNotice } from './VersionNotice';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * "A new version is available" (audit 2026-09-21 `bundle-01`, last part).
  *

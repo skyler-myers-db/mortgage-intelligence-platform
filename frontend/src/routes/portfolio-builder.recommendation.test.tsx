@@ -17,7 +17,8 @@ const campaigns = vi.fn();
 const salesCampaignPerformance = vi.fn();
 const appContextMocks = vi.hoisted(() => ({ canAccessAdmin: false }));
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   api: {
     portfolioPreview: (...args: unknown[]) => portfolioPreview(...args),
     portfolioCreate: (...args: unknown[]) => portfolioCreate(...args),
@@ -25,7 +26,6 @@ vi.mock('../lib/api', () => ({
     campaigns: (...args: unknown[]) => campaigns(...args),
     salesCampaignPerformance: (...args: unknown[]) => salesCampaignPerformance(...args),
   },
-  ApiError: class extends Error {},
   isAbortError: () => false,
   isWarmingUpError: () => false,
 }));
@@ -59,8 +59,6 @@ vi.mock('../components/AppContext', () => ({
 import PortfolioBuilder from './portfolio-builder';
 import { CAMPAIGN_DRAFT_KEY } from './portfolio-builder.draft';
 import { removeActorScoped } from '../lib/actorScope';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

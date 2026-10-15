@@ -6,8 +6,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EmptyState, type EmptyCause } from './EmptyState';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /** A measured zero, with its cause and at most two next steps (audit states-v2). */
 
 let root: Root;

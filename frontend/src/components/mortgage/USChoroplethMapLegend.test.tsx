@@ -20,8 +20,6 @@ vi.mock('../AppContext', () => ({
   useApp: () => ({ setDrawer: () => undefined, showEvidence: true, showConfidence: true }),
 }));
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 describe('USChoroplethMapLegend break row', () => {
   let root: Root;
 

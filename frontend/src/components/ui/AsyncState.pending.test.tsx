@@ -6,8 +6,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AsyncQuery } from './AsyncState';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 // The DegradedBanner already names the warehouse outage.
 vi.mock('../HealthProvider', () => ({
   useOptionalHealth: () => ({ health: { dependencies: { warehouse: 'down', lakebase: 'up', genie: 'up' } }, connection: 'online' }),

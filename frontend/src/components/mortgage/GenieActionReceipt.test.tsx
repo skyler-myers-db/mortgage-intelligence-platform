@@ -18,7 +18,7 @@ const apiMocks = vi.hoisted(() => ({ session: vi.fn(), genieAction: vi.fn(), gen
 
 vi.mock('../AppContext', () => ({ useApp: () => ({ setDrawer: vi.fn() }) }));
 
-vi.mock('../../lib/api', () => {
+vi.mock('../../lib/api', async (importOriginal) => {
   class ApiError extends Error {
     status: number | null;
 
@@ -27,7 +27,7 @@ vi.mock('../../lib/api', () => {
       this.status = opts.status ?? null;
     }
   }
-  return { api: apiMocks, ApiError };
+  return { ...(await importOriginal<typeof import('../../lib/api')>()), api: apiMocks, ApiError };
 });
 
 import * as transport from '../../lib/apiTransport';
@@ -39,8 +39,6 @@ import { GOVERNED_ACTION_SOURCE } from '../../lib/genieTurnOutcome';
 import { runGenieActionRequest } from './GenieChat.helpers';
 import { GenieActionReceipt } from './GenieActionReceipt';
 import { GenieAnswer as GenieAnswerView } from './GenieAnswer';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const EVENT = '0f1e2d3c-0000-4000-8000-0000000000e1';
 const MESSAGE = 'Saved 12 borrowers.';

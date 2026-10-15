@@ -12,8 +12,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalBanner } from './ApprovalBanner';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 type RejectionListener = (reason: unknown) => void;
 const nodeProcess = (globalThis as unknown as {
   process: { on(event: string, listener: RejectionListener): void; off(event: string, listener: RejectionListener): void };

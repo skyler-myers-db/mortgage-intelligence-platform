@@ -19,8 +19,6 @@ import App from './app';
  * or network; the route table, the Suspense and the ErrorBoundary are real.
  */
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 vi.mock('./components/layout/AppShell', () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="app-shell">{children}</div>

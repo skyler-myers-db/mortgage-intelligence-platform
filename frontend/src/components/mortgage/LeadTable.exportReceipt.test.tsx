@@ -61,7 +61,8 @@ vi.mock('../AppContext', () => ({
   }),
 }));
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: {
     leadExportReceipt: (declaration: LeadExportReceiptRequest) => {
       mocks.receiptCalls.push(declaration);

@@ -37,8 +37,6 @@ beforeAll(async () => {
   await preloadDescribedError();
 });
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const MATCH: PropertyLoanLookupResponse = {
   matched: true,
   match_basis: 'exact_normalized_address_zip',

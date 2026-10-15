@@ -13,7 +13,7 @@ from backend.services.loan_officer_state import (
 
 LO_01 = "55555555-5555-4555-8555-555555555501"
 LO_02 = "55555555-5555-4555-8555-555555555502"
-ADMIN = "skyler@entrada.ai"
+ADMIN = "operator@summit.example"
 BORROWER = "B-0000000000001"
 
 

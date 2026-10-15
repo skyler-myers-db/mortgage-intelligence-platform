@@ -118,7 +118,7 @@ class InProcessMockPortfolioRepository:
         return CampaignSummary(
             campaign_id=campaign_id,
             name="Synthetic campaign",
-            owner_email="skyler@entrada.ai",
+            owner_email="operator@summit.example",
             status="draft",
             treatment_state="ready",
             criteria={"marketing_eligibility": "Eligible only"},

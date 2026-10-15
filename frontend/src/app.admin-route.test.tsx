@@ -23,8 +23,6 @@ vi.mock('./lib/routePreloaders', async (importOriginal) => ({
 
 import { AdminRouteGate } from './app';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 // Bounded well inside the per-test timeout, so a gate that never settles
 // fails on its assertion instead of timing out mid-act and poisoning the
 // next test's render.

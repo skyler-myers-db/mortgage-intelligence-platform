@@ -12,8 +12,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { useTabs } from './useTabs';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 type View = 'math' | 'evidence' | 'lineage';
 const VIEWS: readonly View[] = ['math', 'evidence', 'lineage'];
 

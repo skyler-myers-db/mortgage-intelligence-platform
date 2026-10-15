@@ -12,8 +12,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RateWindowResponse } from '../types';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 let hookData: RateWindowResponse | null = null;
 let hookWarming: WarmingUpState | null = null;
 

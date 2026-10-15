@@ -148,7 +148,7 @@ class _FakeLakebaseClient:
     def __init__(self) -> None:
         self.sales_team: list[dict[str, Any]] = [
             {
-                "email": "skyler@entrada.ai",
+                "email": "operator@summit.example",
                 "display_label": "Entrada Demo Operator",
                 "role": "admin",
                 "manager_email": None,
@@ -160,7 +160,7 @@ class _FakeLakebaseClient:
                 "email": "lo01@summit.example",
                 "display_label": "Summit LO 01",
                 "role": "loan_officer",
-                "manager_email": "skyler@entrada.ai",
+                "manager_email": "operator@summit.example",
                 "region": "IL",
                 "capacity_per_day": 35,
                 "active": True,
@@ -169,7 +169,7 @@ class _FakeLakebaseClient:
                 "email": "lo02@summit.example",
                 "display_label": "Summit LO 02",
                 "role": "loan_officer",
-                "manager_email": "skyler@entrada.ai",
+                "manager_email": "operator@summit.example",
                 "region": "CA",
                 "capacity_per_day": 35,
                 "active": True,
@@ -542,7 +542,7 @@ class _FakeLakebaseClient:
             return {
                 "campaign_id": (params or {}).get("campaign_id", uuid4()),
                 "name": "Synthetic campaign",
-                "owner_email": "skyler@entrada.ai",
+                "owner_email": "operator@summit.example",
                 "status": "draft",
                 "criteria": {},
                 "suppression_policy": {"default": "eligible_only"},
@@ -979,7 +979,7 @@ class _FakeLakebaseClient:
                 {
                     "campaign_id": uuid4(),
                     "name": "Synthetic campaign",
-                    "owner_email": "skyler@entrada.ai",
+                    "owner_email": "operator@summit.example",
                     "status": "draft",
                     "criteria": {},
                     "suppression_policy": {"default": "eligible_only"},

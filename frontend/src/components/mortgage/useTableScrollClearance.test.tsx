@@ -25,8 +25,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AT_BLOCK_START_ATTR, TABLE_HEAD_BLOCK_VAR, useTableScrollClearance } from './useTableScrollClearance';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const sizes = { head: 44.4, pin: 156 };
 const observed: Element[] = [];
 let observerCallback: (() => void) | null = null;

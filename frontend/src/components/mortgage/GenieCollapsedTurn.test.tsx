@@ -15,8 +15,6 @@ import type { GenieAnswer as GenieAnswerShape } from '../../types';
 import { GenieCollapsedTurn } from './GenieCollapsedTurn';
 import { useGenieTurnCollapse } from './useGenieTurnCollapse';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function turn(n: number, overrides: Partial<GenieAnswerShape> = {}): GenieAnswerShape {
   return {
     answer: `Answer ${n}: **Illinois** leads with ${n},000 borrowers.`,

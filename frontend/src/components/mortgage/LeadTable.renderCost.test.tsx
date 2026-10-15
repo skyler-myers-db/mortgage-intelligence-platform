@@ -35,10 +35,7 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary, SalesTeamMember } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
-import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
 import type { LeadTableSort } from './LeadTable.types';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const app = vi.hoisted(() => ({
   density: 'comfortable' as 'comfortable' | 'compact',
@@ -228,7 +225,6 @@ describe('LeadTable render cost (runtime-04)', () => {
 
   beforeEach(() => {
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     app.density = 'comfortable';
     app.drawer = null;
     workflowCalls.length = 0;

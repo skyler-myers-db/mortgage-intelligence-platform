@@ -28,8 +28,6 @@ vi.mock('../mortgage/GenieChat', () => {
   return { ensureGenieLauncherSignal: signal.ensure, resumeGenieTurnFromSession: signal.resume };
 });
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const chat = { mounts: 0 };
 
 /** Each test re-imports the dock's module graph (vi.resetModules): a budget

@@ -22,8 +22,6 @@ import { EvidenceDrawer } from './EvidenceDrawer';
 import { LazyEvidenceDrawerBody } from './evidenceDrawerBodyLoader';
 import type { DrawerSource } from '../AppContext';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const appMocks = vi.hoisted(() => ({
   drawer: null as DrawerSource | null,
   setDrawer: vi.fn(),

@@ -38,6 +38,7 @@ from backend.services.lakebase import (
     get_lakebase_client,
 )
 from backend.services.loan_officer_state import LoanOfficerStateStore
+from tests.integration._live_actor import resolve_live_admin_actor
 
 _HAS_STATIC_CREDS = all(
     os.environ.get(k)
@@ -57,7 +58,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 _SEEDED_LO_01 = "55555555-5555-4555-8555-555555555501"
-_ADMIN_ACTOR = "skyler@entrada.ai"
 
 
 def _client_from_env() -> LakebaseClient:
@@ -96,6 +96,8 @@ def test_approval_moves_funnel_within_one_cache_ttl_and_per_lo_drill() -> None:
     # Idempotency proof for the S6 DDL appendix: two applies, both succeed.
     _apply_schema_and_seed(client)
     _apply_schema_and_seed(client)
+    # NB-a / C8: act as the target roster's admin, never a literal.
+    admin_actor = resolve_live_admin_actor(client)
 
     assert settings.mip_sales_state_cache_ttl_s > 0, (
         "the cache-TTL acceptance is only meaningful with the funnel cache on"
@@ -120,14 +122,14 @@ def test_approval_moves_funnel_within_one_cache_ttl_and_per_lo_drill() -> None:
         assignment, _ = lifecycle.assign_lead(
             borrower_id=borrower_id,
             loan_officer_id=_SEEDED_LO_01,
-            assigned_by=_ADMIN_ACTOR,
+            assigned_by=admin_actor,
             request_id=request_id,
         )
         for status in ("contact_drafted", "approved"):
             assignment, _ = lifecycle.transition_status(
                 assignment_id=assignment.assignment_id,
                 to_status=status,  # type: ignore[arg-type]
-                actor=_ADMIN_ACTOR,
+                actor=admin_actor,
             )
 
         # ACCEPTANCE: the approval is visible on the immediately-following
@@ -138,12 +140,12 @@ def test_approval_moves_funnel_within_one_cache_ttl_and_per_lo_drill() -> None:
         assignment, _ = lifecycle.transition_status(
             assignment_id=assignment.assignment_id,
             to_status="actioned",
-            actor=_ADMIN_ACTOR,
+            actor=admin_actor,
         )
         recorded, feedback_id, outcome_audit_id = lifecycle.record_outcome(
             assignment_id=assignment.assignment_id,
             outcome="success",
-            actor=_ADMIN_ACTOR,
+            actor=admin_actor,
             request_id=outcome_request_id,
         )
         assert recorded.status == "outcome_recorded"
@@ -194,7 +196,7 @@ def test_approval_moves_funnel_within_one_cache_ttl_and_per_lo_drill() -> None:
             """,
             {
                 "borrower_id": ledger_borrower,
-                "actor": _ADMIN_ACTOR,
+                "actor": admin_actor,
                 "request_id": str(uuid4()),
             },
         )
@@ -203,7 +205,7 @@ def test_approval_moves_funnel_within_one_cache_ttl_and_per_lo_drill() -> None:
             after_ledger = _workflow_counts(funnel)
             assert after_ledger["approved"] == after_outcome["approved"] + 1
             approvers = {row.actor_email for row in funnel.recent_approvals(limit=50)}
-            assert _ADMIN_ACTOR in approvers
+            assert admin_actor in approvers
         finally:
             with contextlib.suppress(Exception):
                 client.execute(

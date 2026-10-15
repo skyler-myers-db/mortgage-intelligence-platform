@@ -20,7 +20,8 @@ const portfolioPreview = vi.fn();
 const campaigns = vi.fn();
 const salesCampaignPerformance = vi.fn();
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   api: {
     portfolioPreview: (...args: unknown[]) => portfolioPreview(...args),
     portfolioCreate: vi.fn(),
@@ -28,7 +29,6 @@ vi.mock('../lib/api', () => ({
     campaigns: (...args: unknown[]) => campaigns(...args),
     salesCampaignPerformance: (...args: unknown[]) => salesCampaignPerformance(...args),
   },
-  ApiError: class extends Error {},
   isAbortError: () => false,
   isWarmingUpError: () => false,
 }));
@@ -60,8 +60,6 @@ vi.mock('../components/AppContext', () => ({
 }));
 
 import PortfolioBuilder from './portfolio-builder';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const PREVIEW = {
   marketable_population: 76_487,
@@ -123,6 +121,8 @@ describe('PortfolioBuilder population KPI', () => {
 
   it('labels the gated count marketable and cites the contact-eligible predicate', async () => {
     await mount();
+    // The spread factory's api mock answered (no async-factory bypass, PR #265).
+    expect(portfolioPreview).toHaveBeenCalled();
 
     const populationCard = [...container.querySelectorAll<HTMLElement>('.kpi')].find((card) =>
       card.querySelector('.kpi__label')?.textContent?.includes('population'),

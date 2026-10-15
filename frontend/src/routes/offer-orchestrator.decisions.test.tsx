@@ -74,7 +74,6 @@ vi.mock('../components/activation/ActivationLoopPanel', () => ({ ActivationLoopP
 
 import OfferOrchestrator from './offer-orchestrator';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.setConfig({ testTimeout: 30_000 });
 
 const ID = 'B-0000000000001';
