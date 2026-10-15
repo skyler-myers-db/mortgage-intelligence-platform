@@ -10,6 +10,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { eventuallyInAct, settleInAct } from '../../test/settleInAct';
+import { watchActWarnings } from '../../test/actWarnings';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { installFakeCssTransition, runExitOn } from '../../test/runningExit';
@@ -29,9 +30,11 @@ beforeAll(async () => {
 describe('ShortcutOverlay', () => {
   let container: HTMLDivElement;
   let root: Root;
+  let stopActWatch: () => string[];
   const offs: Array<() => void> = [];
 
   beforeEach(() => {
+    stopActWatch = watchActWarnings();
     installLocalStorage();
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -61,6 +64,9 @@ describe('ShortcutOverlay', () => {
     });
     act(() => root.unmount());
     container.remove();
+    // quality-06: every update this suite causes lands inside act. The host
+    // sets the loaded sheet in a `.then`, so an open runs in an async act.
+    expect(stopActWatch(), 'updates outside act(...)').toEqual([]);
   });
 
   const sheet = () => document.querySelector<HTMLElement>('[data-testid="shortcut-sheet"]');
@@ -72,7 +78,7 @@ describe('ShortcutOverlay', () => {
 
   it('opens on the mip:open-shortcuts event and lists the page scope before the global one', async () => {
     expect(OPEN_SHORTCUTS_EVENT).toBe('mip:open-shortcuts');
-    act(() => openShortcutOverlay());
+    await act(async () => openShortcutOverlay());
     const panel = await waitForSheet();
 
     // A native modal <dialog class="cmdk"> named by its heading (stack-05);
@@ -118,7 +124,7 @@ describe('ShortcutOverlay', () => {
         }));
       }
     });
-    act(() => openShortcutOverlay());
+    await act(async () => openShortcutOverlay());
     const panel = await waitForSheet();
     const groups = [...panel.querySelectorAll('.cmdk__group-label')].map((label) => label.textContent);
     expect(groups).toEqual(['Triage deck', 'Everywhere']);
@@ -151,7 +157,7 @@ describe('ShortcutOverlay', () => {
         }));
       }
     });
-    act(() => openShortcutOverlay());
+    await act(async () => openShortcutOverlay());
     const panel = await waitForSheet();
     const bulk = [...panel.querySelectorAll('.cmdk__row')].filter((row) => row.textContent?.includes('selected borrowers'));
     expect(bulk).toHaveLength(1);
@@ -168,7 +174,7 @@ describe('ShortcutOverlay', () => {
   });
 
   it('opens on ? and closes on Escape', async () => {
-    act(() => {
+    await act(async () => {
       document.body.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true, bubbles: true, cancelable: true }));
     });
     await waitForSheet();
@@ -188,7 +194,7 @@ describe('ShortcutOverlay', () => {
   it('keeps the closing sheet mounted, closed, aria-hidden and inert until the dialog exit ends', async () => {
     const uninstall = installFakeCssTransition();
     try {
-      act(() => openShortcutOverlay());
+      await act(async () => openShortcutOverlay());
       await waitForSheet();
       const dialog = document.querySelector<HTMLDialogElement>('dialog.cmdk');
       expect(dialog?.hasAttribute('open')).toBe(true);
@@ -201,7 +207,7 @@ describe('ShortcutOverlay', () => {
       expect(dialog?.getAttribute('aria-hidden')).toBe('true');
       expect(dialog?.hasAttribute('inert')).toBe(true);
 
-      act(() => openShortcutOverlay());
+      await act(async () => openShortcutOverlay());
       await eventuallyInAct(() => expect(dialog?.hasAttribute('open')).toBe(true));
       expect(document.querySelectorAll('dialog.cmdk')).toHaveLength(1);
       expect(dialog?.hasAttribute('aria-hidden')).toBe(false);
@@ -224,7 +230,7 @@ describe('ShortcutOverlay', () => {
       document.body.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true, bubbles: true, cancelable: true }));
     });
     expect(sheet()).toBeNull();
-    act(() => openShortcutOverlay());
+    await act(async () => openShortcutOverlay());
     const panel = await waitForSheet();
 
     expect(panel.querySelector('[data-testid="shortcut-sheet-off"]')?.textContent).toContain('Single-key shortcuts are off');
