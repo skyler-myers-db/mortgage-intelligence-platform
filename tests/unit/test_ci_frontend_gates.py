@@ -182,6 +182,20 @@ def test_the_oxlint_ratchet_runs_as_its_own_step_before_lint_and_inside_it() -> 
     assert (FRONTEND / "oxlint-baseline.json").is_file(), "the ratchet's baseline is committed"
 
 
+def test_the_typescript_strict_ratchet_runs_after_npm_ci_unconditionally() -> None:
+    """Audit stack-07 items 3-5: the production strict program is gated by file + code + count."""
+    steps = _jobs()["frontend-tests"]["steps"]
+    install = _step_index(steps, "npm --prefix frontend ci")
+    ratchet = _step_index(steps, "node tools/ts_strict_ratchet.mjs --check tools/ts_strict_ratchet_baseline.json")
+
+    assert steps[ratchet]["name"] == "TypeScript strict ratchet (audit stack-07)"
+    assert steps[ratchet]["run"].strip() == "node tools/ts_strict_ratchet.mjs --check tools/ts_strict_ratchet_baseline.json"
+    assert "if" not in steps[ratchet] and "continue-on-error" not in steps[ratchet]
+    assert install < ratchet
+    assert (ROOT / "tools" / "ts_strict_ratchet_baseline.json").is_file(), "the ratchet's baseline is committed"
+    assert (FRONTEND / "tsconfig.strict.json").is_file(), "the strict program is committed"
+
+
 def test_the_legacy_specs_are_typechecked_inside_the_lint_chain() -> None:
     """Audit stack-07 item 2 / quality-10 step 1: tests/e2e/*.ts typecheck with the fixture's options."""
     scripts = json.loads((FRONTEND / "package.json").read_text(encoding="utf-8"))["scripts"]

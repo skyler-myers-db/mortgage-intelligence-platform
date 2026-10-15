@@ -100,7 +100,8 @@ export function aggregate(hits, { cwd, root }) {
  */
 export function listedFileProblems(expected, listed) {
   const want = new Set(expected);
-  const got = new Set(listed.filter((file) => file.startsWith(`${SCOPE_REL}/`)));
+  // JSON modules (resolveJsonModule) are listed too; only TS source is compared.
+  const got = new Set(listed.filter((file) => file.startsWith(`${SCOPE_REL}/`) && /\.tsx?$/.test(file)));
   const missing = [...want].filter((file) => !got.has(file)).sort();
   const extra = [...got].filter((file) => !want.has(file)).sort();
   if (missing.length === 0 && extra.length === 0 && want.size > 0) return [];
