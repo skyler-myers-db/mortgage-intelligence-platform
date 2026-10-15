@@ -96,7 +96,7 @@ const BORROWER = {
   segment_codes: ['itm'],
   opportunity_score: 91,
   confidence: 0.94,
-  recommended_offer_code: 'rate_term_refi',
+  recommended_offer_code: 'refi',
   recommended_offer: 'Rate and term refinance review',
   why_now: 'Current lien rate exceeds the reviewed market threshold.',
   evidence_ids: ['ev-1'],
@@ -108,7 +108,7 @@ const BORROWER = {
 const RECOMMENDATION = {
   borrower_id: BORROWER_ID,
   source_refreshed_at: '2026-07-13T12:00:00Z',
-  offer_code: 'rate_term_refi',
+  offer_code: 'refi',
   offer_type: 'refi',
   product_label: 'Rate and term refinance review',
   confidence: 0.94,

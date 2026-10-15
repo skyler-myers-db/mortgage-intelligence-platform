@@ -1,3 +1,4 @@
+import type { ApiRequest, ApiResponse } from './api.gen';
 /**
  * Wire types of the audit-free Lead Queue aggregates and the user-saved
  * Lead Queue views (W5a, audit tables-06 / tables-09 phase 2). Each name is
@@ -8,46 +9,21 @@
 export type LeadFacetDimension = 'state' | 'segment' | 'product' | 'approval';
 
 /** GET /api/leads/count. */
-export interface LeadCountResponse {
-  total_matching: number;
-}
+export type LeadCountResponse = ApiResponse<'LeadCountResponse'>;
 
-export interface LeadFacetBucket {
-  /** A USPS code, a segment code, a product label or an approval state. */
-  value: string;
-  count: number;
-}
+export type LeadFacetBucket = ApiResponse<'LeadFacetBucket'>;
 
 /** GET /api/leads/facets?dimension=… */
-export interface LeadFacetsResponse {
-  dimension: LeadFacetDimension;
-  total_matching: number;
-  buckets: LeadFacetBucket[];
-}
+export type LeadFacetsResponse = ApiResponse<'LeadFacetsResponse'>;
 
 /** One saved Lead Queue view; `params` is the canonical query, no leading `?`. */
-export interface SavedView {
-  view_id: string;
-  name: string;
-  params: string;
-  created_at: string;
-  updated_at: string;
-}
+export type SavedView = ApiResponse<'SavedView'>;
 
 /** GET /api/workspace/saved-views. */
-export interface SavedViewListResponse {
-  saved_views: SavedView[];
-}
+export type SavedViewListResponse = ApiResponse<'SavedViewListResponse'>;
 
 /** POST /api/workspace/saved-views. */
-export interface SavedViewCreateRequest {
-  name: string;
-  params: string;
-}
+export type SavedViewCreateRequest = ApiRequest<'SavedViewCreateRequest'>;
 
 /** POST and DELETE /api/workspace/saved-views. */
-export interface SavedViewMutationResponse {
-  ok: boolean;
-  view_id: string;
-  audit_event_id: string | null;
-}
+export type SavedViewMutationResponse = ApiResponse<'SavedViewMutationResponse'>;

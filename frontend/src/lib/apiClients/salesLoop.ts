@@ -11,15 +11,13 @@
  * the server replays instead of writing twice. The dry run carries none and
  * writes nothing (no Lakebase row, no audit row).
  */
+import type { ApiRequest } from '../../types/api.gen';
 import type { LeadAssignment } from '../../types';
 import { postJson } from '../apiTransport';
 import type { DistributeLeadsRequest, DistributeLeadsResponse } from './sales';
 
 /** The `/api/leads/{id}/assignment/release` body. */
-export interface AssignmentReleaseRequest {
-  assignment_id: string;
-  request_id: string;
-}
+export type AssignmentReleaseRequest = ApiRequest<'AssignmentReleaseRequest'>;
 
 /** Why a release did not hand the lead back to the officer it replaced. */
 export type RestoreSkippedReason =
@@ -37,10 +35,7 @@ export interface AssignmentReleaseResponse {
 }
 
 /** The `/api/sales/distribute/release` body. */
-export interface DistributionReleaseRequest {
-  distribution_request_id: string;
-  request_id: string;
-}
+export type DistributionReleaseRequest = ApiRequest<'DistributionReleaseRequest'>;
 
 /** The `/api/sales/distribute/release` response. */
 export interface DistributionReleaseResponse {

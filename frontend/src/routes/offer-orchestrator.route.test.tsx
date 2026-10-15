@@ -112,7 +112,7 @@ const BORROWER = {
   rate_spread_bps: 125,
   opportunity_score: 91,
   confidence: 0.94,
-  recommended_offer_code: 'rate_term_refi',
+  recommended_offer_code: 'refi',
   recommended_offer: 'Rate and term refinance review',
   why_now: 'Current lien rate exceeds the reviewed market threshold.',
   evidence_ids: ['ev-1'],
@@ -142,7 +142,7 @@ const BORROWER = {
 const RECOMMENDATION: OfferRecommendation = {
   borrower_id: BORROWER_ID,
   source_refreshed_at: '2026-07-13T12:00:00Z',
-  offer_code: 'rate_term_refi',
+  offer_code: 'refi',
   offer_type: 'refi',
   product_label: 'Rate and term refinance review',
   confidence: 0.94,
@@ -164,7 +164,7 @@ const DRAFT = {
   response_hash: 'a'.repeat(64),
   source_refreshed_at: '2026-07-13T12:00:00Z',
   borrower_id: BORROWER_ID,
-  offer_code: 'rate_term_refi',
+  offer_code: 'refi',
   channel: 'email' as const,
   subject: 'Review your mortgage options',
   body: 'A licensed loan officer can review the available options with you.',
@@ -193,7 +193,7 @@ function ledgerReceipt(auditEventId: string): DecisionReceiptPayload {
     decision: rejected ? 'rejected' : 'approved',
     approval_id: rejected ? 'approval-reject-1' : 'approval-1',
     borrower_id: BORROWER_ID,
-    offer_code: 'rate_term_refi',
+    offer_code: 'refi',
     offer_label: 'Rate and term refinance review',
     campaign_id: null,
     variant_name: null,
@@ -345,7 +345,7 @@ describe('OfferOrchestrator route behavior', () => {
     apiMocks.draftOutreach.mockReturnValue(pendingDraft.promise);
     mount();
 
-    await waitUntil(() => container.textContent?.includes('Rate and term refinance review') === true);
+    await waitUntil(() => container.textContent?.includes('Refinance review') === true);
     await waitUntil(() => container.querySelector('[data-testid="draft-loading-note"]') !== null);
     expect(container.querySelector('[data-testid="draft-unavailable-note"]')).toBeNull();
     expect(container.textContent).not.toContain('Offer draft unavailable');
@@ -364,7 +364,7 @@ describe('OfferOrchestrator route behavior', () => {
     });
     await waitUntil(() => apiMocks.approve.mock.calls.length === 1);
     expect(apiMocks.approve.mock.calls[0][1]).toMatchObject({
-      offer_code: 'rate_term_refi',
+      offer_code: 'refi',
       evidence_ids: ['ev-1', 'ev-2'],
       draft_subject: DRAFT.subject,
       draft_body: DRAFT.body,
@@ -503,7 +503,7 @@ describe('OfferOrchestrator route behavior', () => {
       borrower_id: BORROWER_ID,
       generation_id: '11111111-1111-4111-8111-111111111111',
       response_hash: 'a'.repeat(64),
-      offer_code: 'rate_term_refi',
+      offer_code: 'refi',
       channel: 'email',
       subject: 'Saved operator subject',
       body: 'Saved operator body.',
@@ -603,7 +603,7 @@ describe('OfferOrchestrator route behavior', () => {
       borrower_id: BORROWER_ID,
       generation_id: DRAFT.generation_id,
       response_hash: DRAFT.response_hash,
-      offer_code: 'rate_term_refi',
+      offer_code: 'refi',
       channel: 'email',
       subject: 'email subject',
       body: 'email governed body',

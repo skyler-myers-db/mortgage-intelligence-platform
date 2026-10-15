@@ -41,7 +41,6 @@ export type WireContractAnalytics = [
   Expect<NoPhantomKeys<EvidenceDailyRow, ApiResponse<'EvidenceDailyRow'>>>,
   Expect<WireFits<ApiResponse<'GeographyAnalyticsResponse'>, GeographyAnalyticsResponse>>,
   Expect<NoPhantomKeys<GeographyAnalyticsResponse, ApiResponse<'GeographyAnalyticsResponse'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: direction is string on the wire but up | down | flat in the hand type
   Expect<WireFits<ApiResponse<'KpiTrend'>, KpiTrend>>,
   Expect<NoPhantomKeys<KpiTrend, ApiResponse<'KpiTrend'>>>,
   Expect<WireFits<ApiResponse<'RateSpreadBucket'>, RateSpreadBucket>>,

@@ -20,6 +20,7 @@
  */
 import { useMutation, type QueryClient } from '@tanstack/react-query';
 import type { CampaignSummary, PortfolioCreateResponse } from '../../types';
+import type { ApiRequest } from '../../types/api.gen';
 import { api } from '../api';
 import { queryKeys } from '../queryKeys';
 
@@ -36,12 +37,12 @@ export interface CampaignCreateConfig {
   send_window: Record<string, unknown>;
   holdout: Record<string, unknown>;
   roi_assumptions: Record<string, unknown>;
-  household_dedup: Record<string, unknown>;
+  household_dedup: ApiRequest<'HouseholdDedupConfig'>;
 }
 
 export interface CreateCampaignVariables {
   name: string;
-  criteria: Record<string, unknown>;
+  criteria: ApiRequest<'PortfolioCriteria'>;
   config: CampaignCreateConfig;
   requestId: string;
 }

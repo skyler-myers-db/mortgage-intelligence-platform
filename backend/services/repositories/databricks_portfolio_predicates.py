@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from backend.schemas.portfolio import (
     HouseholdDedupConfig,
@@ -209,7 +209,7 @@ def build_kpi_trend(points: list[tuple[str, float]]) -> KpiTrend:
             )
             break
     delta_pct = ((series[-1] - series[0]) / series[0]) * 100.0
-    direction = "up" if delta_pct > 0.5 else "down" if delta_pct < -0.5 else "flat"
+    direction: Literal["up", "down", "flat"] = "up" if delta_pct > 0.5 else "down" if delta_pct < -0.5 else "flat"
     return KpiTrend(
         series=series,
         delta_pct=round(delta_pct, 1),

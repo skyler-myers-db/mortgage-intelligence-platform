@@ -1,3 +1,4 @@
+import type { ApiResponse } from './api.gen';
 export interface SavedLead {
   borrower_id: string;
   city?: string | null;
@@ -12,17 +13,7 @@ export interface SavedLead {
 
 export type SavedLeadInput = Omit<SavedLead, 'saved_at' | 'updated_at'>;
 
-export interface SavedDraft {
-  borrower_id: string;
-  generation_id: string;
-  response_hash: string;
-  offer_code?: string | null;
-  channel: 'email' | 'sms' | 'direct_mail';
-  subject?: string | null;
-  body: string;
-  saved_at: string;
-  updated_at: string;
-}
+export type SavedDraft = ApiResponse<'SavedDraft'>;
 
 export type SavedDraftInput = Pick<
   SavedDraft,

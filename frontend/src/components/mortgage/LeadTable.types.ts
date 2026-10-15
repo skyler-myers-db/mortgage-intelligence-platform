@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { LeadSummary, SalesTeamMember } from '../../types';
+import type { ApiRequest } from '../../types/api.gen';
 import type { GrowthAgentCohortVerification } from '../../lib/api';
 import type { LeadTableView } from './LeadTable.columns';
 import type { ApprovalRequestBatchView } from '../../types/approvalRequests';
@@ -137,14 +138,8 @@ export interface LeadTableProps {
   requestScopeRow?: ReactNode;
 }
 
-export type RejectReasonCode =
-  | 'out_of_footprint'
-  | 'do_not_call'
-  | 'opt_out'
-  | 'fair_lending_review'
-  | 'low_intent'
-  | 'data_quality'
-  | 'other_with_text';
+/** The reject reasons the route accepts, from the generated wire contract (quality-04 P2). */
+export type RejectReasonCode = ApiRequest<'OutreachRejectRequest'>['rationale_code'];
 
 export type SortKey =
   | 'rank'

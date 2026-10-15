@@ -15,7 +15,19 @@ import type {
   PropertyLoanLookupRequest,
   PropertyLoanLookupResponse,
 } from '../../types';
+import type { ApiRequest, ApiResponse } from '../../types/api.gen';
 import { getJson, postJson } from '../apiTransport';
+
+/** GET /api/admin/capabilities: the honest capability snapshot (the generated wire type). */
+export type AdminCapabilitiesResponse = ApiResponse<'AdminCapabilitiesResponse'>;
+
+/** The POST /api/admin/operations/run body: the reviewed job keys and reasons only. */
+export interface AdminOperationRunBody {
+  job_key: ApiRequest<'AdminOperationRunRequest'>['job_key'];
+  confirm: true;
+  reason?: ApiRequest<'AdminOperationRunRequest'>['reason'];
+  request_id: string;
+}
 
 export const adminApi = {
   /**
@@ -43,19 +55,14 @@ export const adminApi = {
    * status. Drives the admin "Agentic capability readiness" panel. Rows
    * that aren't `claimable` render as roadmap, never as integrated.
    */
-  adminCapabilities: <T>(signal?: AbortSignal) =>
-    getJson<T>('/api/admin/capabilities?live=1', signal),
+  adminCapabilities: (signal?: AbortSignal) =>
+    getJson<AdminCapabilitiesResponse>('/api/admin/capabilities?live=1', signal),
 
   adminRunOperation: <T>(
-    payload: {
-      job_key: string;
-      confirm: true;
-      reason?: string | null;
-      request_id: string;
-    },
+    payload: AdminOperationRunBody,
     signal?: AbortSignal,
   ) =>
-    postJson<T, typeof payload>('/api/admin/operations/run', payload, signal),
+    postJson<T, AdminOperationRunBody>('/api/admin/operations/run', payload, signal),
 
   dataEstate: (signal?: AbortSignal) =>
     getJson<DataEstateResponse>('/api/data-estate', signal),

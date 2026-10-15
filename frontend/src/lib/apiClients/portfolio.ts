@@ -14,6 +14,7 @@ import type {
   PortfolioCreateResponse,
   PortfolioPreview,
 } from '../../types';
+import type { ApiRequest } from '../../types/api.gen';
 import {
   _newRequestId,
   getJson,
@@ -21,40 +22,40 @@ import {
   patchJson,
 } from '../apiTransport';
 
-/** The `/api/portfolio/preview` body. */
+/** The `/api/portfolio/preview` body. Criteria and dedup are the wire's closed key sets. */
 export interface PortfolioPreviewRequest {
-  criteria: Record<string, unknown>;
+  criteria: ApiRequest<'PortfolioCriteria'>;
   campaign_build_config?: {
     suppression_policy: Record<string, unknown>;
-    household_dedup: Record<string, unknown>;
+    household_dedup: ApiRequest<'HouseholdDedupConfig'>;
   };
 }
 
 /** The `/api/portfolio/campaign-recommendation` body. */
 export interface CampaignRecommendationRequest {
-  criteria: Record<string, unknown>;
+  criteria: ApiRequest<'PortfolioCriteria'>;
 }
 
 /** The `/api/portfolio/create` body as the client sends it. */
 export interface PortfolioCreateRequest {
   name: string;
-  criteria: Record<string, unknown>;
+  criteria: ApiRequest<'PortfolioCriteria'>;
   suppression_policy: Record<string, unknown>;
   message_variants: Record<string, unknown>[];
   channel_cascade: Record<string, unknown>[];
   send_window: Record<string, unknown>;
   holdout: Record<string, unknown>;
   roi_assumptions: Record<string, unknown>;
-  household_dedup: Record<string, unknown>;
+  household_dedup: ApiRequest<'HouseholdDedupConfig'>;
 }
 
 export const portfolioApi = {
   portfolioPreview: (
-    criteria: Record<string, unknown> = {},
+    criteria: ApiRequest<'PortfolioCriteria'> = {},
     signal?: AbortSignal,
     campaignBuildConfig?: {
       suppression_policy: Record<string, unknown>;
-      household_dedup: Record<string, unknown>;
+      household_dedup: ApiRequest<'HouseholdDedupConfig'>;
     },
   ) =>
     postJson<PortfolioPreview, PortfolioPreviewRequest>(
@@ -66,7 +67,7 @@ export const portfolioApi = {
     ),
 
   campaignRecommendation: (
-    criteria: Record<string, unknown> = {},
+    criteria: ApiRequest<'PortfolioCriteria'> = {},
     signal?: AbortSignal,
   ) =>
     postJson<CampaignRecommendationResponse, CampaignRecommendationRequest>(
@@ -77,7 +78,7 @@ export const portfolioApi = {
 
   portfolioCreate: (
     name: string,
-    criteria: Record<string, unknown> = {},
+    criteria: ApiRequest<'PortfolioCriteria'> = {},
     config: Partial<{
       suppression_policy: Record<string, unknown>;
       message_variants: Record<string, unknown>[];
@@ -85,7 +86,7 @@ export const portfolioApi = {
       send_window: Record<string, unknown>;
       holdout: Record<string, unknown>;
       roi_assumptions: Record<string, unknown>;
-      household_dedup: Record<string, unknown>;
+      household_dedup: ApiRequest<'HouseholdDedupConfig'>;
       request_id: string;
     }> = {},
     signal?: AbortSignal,

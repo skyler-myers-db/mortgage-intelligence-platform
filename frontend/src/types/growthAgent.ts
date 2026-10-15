@@ -1,14 +1,14 @@
-export type GrowthAgentWorkflowId =
-  | 'daily_refi_brief'
-  | 'borrower_dossier_review'
-  | 'listing_watch'
-  | 'competitor_recapture_monitor'
-  | 'high_equity_heloc_watch'
-  | 'branch_capacity_review'
-  | 'source_freshness_sentinel'
-  | 'custom_segment_watch'
-  /** Audit `wow-ai-2`: saved from the Rate Lever only; never a workflow card. */
-  | 'rate_trigger_watch';
+import type { ApiResponse } from './api.gen';
+
+/**
+ * Every workflow id the wire can carry (quality-04 P2): the reviewed
+ * workflows (including `rate_trigger_watch`, audit `wow-ai-2`: saved from the
+ * Rate Lever only, never a workflow card) plus the read-only
+ * `live_analysis` answer, which writes no run-ledger row.
+ */
+export type GrowthAgentWorkflowId = ApiResponse<'GrowthAgentWorkflow'>['id'];
+/** The reviewed workflows: every id except the read-only live analysis. */
+export type GrowthAgentReviewedWorkflowId = Exclude<GrowthAgentWorkflowId, 'live_analysis'>;
 
 export type GrowthAgentCadence = 'daily' | 'weekly';
 export type GrowthAgentSegmentCode = 'itm' | 'listed' | 'permit' | 'investor' | 'equity' | 'retention';
@@ -181,7 +181,7 @@ export interface PlanStepTrace {
 
 export interface ComposePlanResponse {
   status: 'composed' | 'degraded' | 'invalid';
-  planner: 'supervisor_composed';
+  planner: string;
   model_endpoint: string | null;
   plan: ComposedPlan | null;
   /**

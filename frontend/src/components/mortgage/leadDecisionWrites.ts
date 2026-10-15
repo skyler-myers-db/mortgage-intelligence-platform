@@ -15,6 +15,7 @@
 import type { LeadSummary } from '../../types';
 import { ApiError, clientFailureReason } from '../../lib/apiTransport';
 import { markUnrecordedWrite } from '../../lib/sessionStatus';
+import { RELOAD_TO_APPROVE, WireCodeRefusedError } from '../../lib/outreachWireCodes';
 import type { ApproveResult, OutreachDraftResult, RejectResult, ReviewMode } from '../../lib/apiTypes';
 import {
   decisionFailure,
@@ -181,6 +182,12 @@ export function approveWithReport(
       if (err instanceof ApiError && err.status === 409) extras.onConflict?.();
       // The drafted offer was never previewed: nothing was sent; the row
       // stays selected for an individual review.
+      // (A code the route would refuse, WireCodeRefusedError, is the same:
+      // nothing was sent; the code itself never reaches a toast or RUM.)
+      if (err instanceof WireCodeRefusedError) {
+        if (!inBulk) toastWriteRefusal(`Couldn't approve ${borrowerId}`, RELOAD_TO_APPROVE);
+        return { outcome: 'backend', message: RELOAD_TO_APPROVE };
+      }
       if (err instanceof OfferNotPreviewedError) return { outcome: 'backend', message: OFFER_NOT_PREVIEWED };
       const message = err instanceof Error ? err.message : null;
       // A single row's failure is a toast; a bulk row reports in the run.

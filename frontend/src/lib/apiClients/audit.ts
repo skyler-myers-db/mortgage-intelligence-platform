@@ -12,8 +12,11 @@ import { getJson } from '../apiTransport';
 /** One `/api/audit/rollups` row. */
 export interface AuditRollupResponse {
   bucket_start: string;
-  event_type: string;
+  /** Fail-closed: null when the row's event type was not recorded; a renderer never substitutes a default type. */
+  event_type: string | null;
   event_count: number;
+  group_by: 'event_type' | 'actor' | 'action';
+  group_key: string | null;
 }
 
 export const auditApi = {

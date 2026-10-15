@@ -301,6 +301,11 @@ export default [
               group: ["**/test/*"],
               message: "Production code must not import from src/test: those helpers are test-only.",
             },
+            // The e2e fixture data and wire bases (W5e w5-wire-types B3).
+            {
+              group: ["**/tests/**"],
+              message: "Production code must not import e2e fixture data: no mock fallback in the running app.",
+            },
           ],
         },
       ],

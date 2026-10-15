@@ -21,6 +21,9 @@ export type Expect<T extends true> = T;
 
 export type WireFits<W, H> = [W] extends [H] ? true : false;
 
+/** Exact type identity (a vocabulary list against its wire union, both ways). */
+export type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+
 export type Elem<T> = T extends readonly (infer E)[] ? E : T;
 
 /** The object shape of T (arrays and null unwrapped); `unknown`, an open wire value, has none. */

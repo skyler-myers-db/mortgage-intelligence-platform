@@ -9,7 +9,6 @@
 import type {
   GenieActionResult,
   GenieActionSuggestion,
-  GenieRefusalReason,
   GenieSessionDetail,
   GenieSessionSummary,
   GenieStartResult,
@@ -17,7 +16,6 @@ import type {
 import type {
   GenieResult,
   GenieFeedbackResult,
-  GenieRefusalReportResult,
   GenieSubmitResult,
   GenieLiveProgress,
 } from '../apiTypes';
@@ -79,14 +77,6 @@ export interface GenieFeedbackRequest {
   message_id: string;
   helpful: boolean;
   comment?: string;
-}
-
-/** The `/api/genie/refusal-report` body: hash-only, never the question. */
-export interface GenieRefusalReportRequest {
-  question_hash: string;
-  refusal_reason: GenieRefusalReason;
-  conversation_id: string | null;
-  message_id: string | null;
 }
 
 export const genieApi = {
@@ -208,29 +198,4 @@ export const genieApi = {
       { 'Idempotency-Key': requestId ?? crypto.randomUUID() },
     );
   },
-
-  /**
-   * Report a governed refusal as a false positive. Hash-only by contract
-   * (audit 2026-09-21 `genie-05`): the body carries the coarse family and the
-   * `refusal_report_hash` the refused turn returned, never the question.
-   */
-  genieRefusalReport: (
-    payload: {
-      question_hash: string;
-      refusal_reason: GenieRefusalReason;
-      conversation_id?: string | null;
-      message_id?: string | null;
-    },
-    signal?: AbortSignal,
-  ) =>
-    postJson<GenieRefusalReportResult, GenieRefusalReportRequest>(
-      '/api/genie/refusal-report',
-      {
-        question_hash: payload.question_hash,
-        refusal_reason: payload.refusal_reason,
-        conversation_id: payload.conversation_id ?? null,
-        message_id: payload.message_id ?? null,
-      },
-      signal,
-    ),
 };

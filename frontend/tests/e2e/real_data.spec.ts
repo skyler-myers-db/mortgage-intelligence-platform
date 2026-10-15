@@ -39,7 +39,7 @@ import {
 import {
   archiveLiveCampaign,
   reconcileGenieCampaignAction,
-} from '../../src/lib/liveCampaignProof';
+} from '../support/liveCampaignProof';
 import { EVIDENCE_DRAWER, openEvidenceDrawer } from './helpers';
 
 // Gate: skip everything unless E2E_LIVE=1 is set by the nightly workflow.

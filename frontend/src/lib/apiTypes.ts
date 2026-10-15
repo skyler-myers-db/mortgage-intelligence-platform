@@ -7,10 +7,9 @@
  * client file stays reviewable — `api.ts` re-exports every name here, which
  * is still the only import path consumers use.
  */
+import type { ApiResponse } from '../types/api.gen';
 import type {
-  CallDisposition,
   LeadSummary,
-  LeadAssignment,
   SegmentCode,
   GenieActionSuggestion,
   GenieRefusalReason,
@@ -35,8 +34,6 @@ export interface HealthHint {
 export interface HealthPayload {
   status: string;
   mode: string;
-  warehouse_id?: string | null;
-  app_env?: string;
   /**
    * `warehouse` / `lakebase` / `genie` -> a `DependencyState`. Plain strings
    * on purpose, like the backend's `dict[str, str]`: an unknown value must
@@ -65,7 +62,7 @@ export interface HealthPayload {
    * running process came from a bare deploy (treatment writes 503 and
    * status reports degraded). Absent on the anonymous liveness body.
    */
-  campaign_treatment_runtime?: string;
+  campaign_treatment_runtime?: string | null;
   /**
    * Commit the running backend was built from. Present only after a governed
    * scripts/deploy.sh promotion; bare deploys omit it. HealthProvider compares
@@ -338,15 +335,9 @@ export interface AnalyticsQueryOptions {
   days?: number | null;
 }
 
-export interface AssignmentResponse {
-  assignment: LeadAssignment;
-  audit_event_id?: string | null;
-}
+export type AssignmentResponse = ApiResponse<'AssignmentResponse'>;
 
-export interface DispositionResponse {
-  disposition: CallDisposition;
-  audit_event_id?: string | null;
-}
+export type DispositionResponse = ApiResponse<'DispositionResponse'>;
 
 export interface LeadsPageResult {
   leads: LeadSummary[];

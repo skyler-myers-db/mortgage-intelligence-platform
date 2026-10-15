@@ -12,7 +12,9 @@
  * 4. Save as watchlist saves exactly the run shown, with no second plan, and
  *    its confirmation takes focus;
  * 5. a saved watchlist says whether scheduled runs are on, per server state;
- * 7. the new surfaces are axe-clean in both themes.
+ * 7. the new surfaces are axe-clean in both themes;
+ * 8. a read-only live_analysis run renders with no Save as watchlist and
+ *    writes nothing beyond the run POST (W5e w5-wire-types A2).
  * (Case 6, the run history list, moved to W5b with genie-09 part 3.)
  *
  * 1440x900 (the harness default). The data modules record every request
@@ -26,18 +28,21 @@ import {
   DIGEST_RECOMPOSED,
   EXECUTE_PATTERN,
   HOME_PATTERN,
+  LIVE_ANALYSIS_RUN,
   RECOMPOSED_PLAN,
   composeReply,
   executedReply,
   homeWithScheduler,
   plannedRun,
   registerGrowthAgentTrust,
+  registerLiveAnalysisRun,
   registerRunWatchlistSave,
   saveReply,
 } from './data/growthAgentTrust';
 import type { MockApi } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
+import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
 
 const CARD = '[aria-label="Composed Growth Agent plan"]';
 const RUN_CARD = '[aria-label="Latest Growth Agent run"]';
@@ -227,6 +232,31 @@ test.describe('Save as watchlist and scheduled-run status', () => {
       const list = page.getByLabel('Saved Growth Agent watchlists');
       await expect(list).toContainText(`Daily interval · ${text}`);
       await expect(page.getByRole('main')).not.toContainText(/scheduler/i);
+    });
+  }
+});
+
+test.describe('the read-only live analysis (W5e w5-wire-types A2)', () => {
+  for (const theme of FIXTURE_THEMES) {
+    test(`${theme}: a live_analysis run renders, offers no Save as watchlist and writes nothing beyond the run`, async ({ app, page, mockApi }) => {
+      const recorder = registerLiveAnalysisRun(mockApi);
+      await app.setTheme(theme);
+      await app.gotoRoute('/ask-genie?tab=workflows');
+      const naturalLoad = markNaturalLoad(mockApi);
+      await commandBar(page).getByRole('button', { name: 'Plan reviewed workflow' }).click();
+
+      const runCard = page.locator(RUN_CARD);
+      await expect(runCard).toBeVisible();
+      await expect(runCard).toContainText(LIVE_ANALYSIS_RUN.workflow.title);
+      await expect(runCard).toContainText('No state written');
+      await expect(runCard).toContainText('Audit pending');
+      await expect(runCard.getByRole('button', { name: 'Save as watchlist' })).toHaveCount(0);
+
+      expect(recorder.runBodies).toHaveLength(1);
+      const writes = mockApi.calls.slice(naturalLoad).filter((call) => call.method !== 'GET');
+      expect(writes.map((call) => `${call.method} ${call.path}`)).toEqual([`POST ${AGENT_RUN_PATTERN}`]);
+      expectNoAuditedReadSince(mockApi, naturalLoad, `live analysis · ${theme}`);
+      await expectAxeClean(page, { key: { route: 'ask-genie', state: 'live-analysis-run' }, theme, known: {}, include: RUN_CARD });
     });
   }
 });

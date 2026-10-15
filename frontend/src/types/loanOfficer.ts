@@ -1,3 +1,4 @@
+import type { ApiResponse } from './api.gen';
 export interface SalesTeamMember {
   email: string;
   display_label: string;
@@ -16,27 +17,9 @@ export type AssignmentLifecycleStatus =
   | 'actioned'
   | 'outcome_recorded';
 
-export interface LoanOfficer {
-  loan_officer_id: string;
-  email: string;
-  display_name: string;
-  coverage_states: string[];
-  coverage_counties: string[];
-  active: boolean;
-}
+export type LoanOfficer = ApiResponse<'LoanOfficer'>;
 
-export interface LoanOfficerAssignment {
-  assignment_id: string;
-  borrower_id: string;
-  loan_officer_id?: string | null;
-  loan_officer_email: string;
-  loan_officer_name?: string | null;
-  status: AssignmentLifecycleStatus;
-  assigned_by: string;
-  assigned_at: string;
-  status_updated_at?: string | null;
-  released_at?: string | null;
-}
+export type LoanOfficerAssignment = ApiResponse<'LoanOfficerAssignment'>;
 
 export interface LeadAssignment {
   assignment_id: string;
