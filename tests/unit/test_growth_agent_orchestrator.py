@@ -360,7 +360,7 @@ def test_prompt_agent_supervisor_prompt_uses_inferred_state_and_refi_signal(
     body = response.json()
     assert len(calls) == 1
     assert "State scope: IL." in calls[0]["prompt"]
-    assert "Reviewed objective signals: refinance economics." in calls[0]["prompt"]
+    assert "Reviewed objective signals: in the money." in calls[0]["prompt"]
     assert "branch capacity" not in calls[0]["prompt"]
     assert prompt_text not in calls[0]["prompt"]
     assert body["execution_mode"] == "agent_framework"
