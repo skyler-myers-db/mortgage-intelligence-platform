@@ -61,6 +61,14 @@ ALLOWED_HITS: dict[tuple[str, str], int] = {
     ("frontend/src/lib/genieContextTemplates.json", "refi economics"): 2,
     # LEGACY_SEGMENT_NAMES: the retired display name, an input alias only.
     ("backend/services/segment_labels.py", "prime refi"): 1,
+    # The refi_plus_heloc campaign audience line is GOVERNED text: the fair-
+    # lending screen accepts only the closed reviewed list in
+    # marketing_selection_reviewed_workflows._REVIEWED_CAMPAIGN_AUDIENCE_DESCRIPTION
+    # (a guard this lane may not touch), and every "in the money" rewording
+    # is refused there (unreviewed_criterion / protected_class), which would
+    # 500 the campaign recommendation. Renaming it needs that reviewed list
+    # changed through the guard process first.
+    ("backend/services/campaign_intelligence.py", "refinance economics"): 1,
 }
 
 
