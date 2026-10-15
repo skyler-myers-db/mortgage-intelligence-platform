@@ -187,6 +187,8 @@ test.describe('Genie cells and the registry scan', () => {
   });
 
   test('no registry route shows a retired In the Money variant', async ({ app, page }) => {
+    // One test walks every registry route, so it gets the slow budget.
+    test.slow();
     for (const route of FIXTURE_ROUTES.filter((entry) => !PENDING_ROUTE.test(entry.path))) {
       await app.gotoRoute(route.path);
       // The campaign recommendation's audience line is GOVERNED text: the
