@@ -106,13 +106,19 @@ def build(sources: Sources, today: date) -> dict[str, object]:
             errors.append(exc.source)
             return default
 
-    holds = guarded(lambda: load_holds(sources.holds), [])
-    npm_rows = guarded(lambda: npm.package_rows(sources.npm_view, holds, npm.exact_pins(sources.package_json)), [])
-    pypi_rows = guarded(lambda: python.package_rows(sources.pypi, holds, sources.requirements_in, sources.uv_lock), [])
-    npm_adv = guarded(lambda: advisories.npm_findings(sources.npm_audit()), [])
-    pip_adv = guarded(lambda: advisories.pip_findings(sources.pip_audit(), advisories.ci_ignored_vulns(sources.ci_yml)), [])
+    holds: list[dict[str, object]] = guarded(lambda: load_holds(sources.holds), [])
+    npm_rows: list[dict[str, str]] = guarded(
+        lambda: npm.package_rows(sources.npm_view, holds, npm.exact_pins(sources.package_json)), []
+    )
+    pypi_rows: list[dict[str, str]] = guarded(
+        lambda: python.package_rows(sources.pypi, holds, sources.requirements_in, sources.uv_lock), []
+    )
+    npm_adv: list[dict[str, str]] = guarded(lambda: advisories.npm_findings(sources.npm_audit()), [])
+    pip_adv: list[dict[str, str]] = guarded(
+        lambda: advisories.pip_findings(sources.pip_audit(), advisories.ci_ignored_vulns(sources.ci_yml)), []
+    )
     literals = pins.collect(sources.workflows)
-    pin_rows = guarded(lambda: pins.pin_rows(literals, sources.releases), [])
+    pin_rows: list[dict[str, str]] = guarded(lambda: pins.pin_rows(literals, sources.releases), [])
     if any(row["status"] == "unavailable" for row in pin_rows):
         errors.append("github releases")
     empty: tuple[list[Signal], list[Signal], list[dict[str, str]]] = ([], [], [])

@@ -48,7 +48,8 @@ def live_section(
         return {"available": False, "error": type(exc).__name__, "release_sha": sha}
     age = data.get("age_days")
     run_sha = data.get("run_sha")
-    paths = [str(path) for path in data.get("paths") or []]
+    raw_paths = data.get("paths")
+    paths = [str(path) for path in raw_paths] if isinstance(raw_paths, list | tuple) else []
     changed = counts.get(str(run_sha)) if run_sha else None
     return {
         "available": True,

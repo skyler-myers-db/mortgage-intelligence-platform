@@ -116,6 +116,11 @@ def pin_rows(literals: list[dict[str, str]], releases: Releases) -> list[dict[st
     return rows
 
 
+def _held_literals(hold: dict[str, object]) -> set[str]:
+    held = hold.get("literals")
+    return {str(literal) for literal in held} if isinstance(held, list) else set()
+
+
 def mismatch_signals(literals: list[dict[str, str]], holds: list[dict[str, object]], today: date) -> list[Signal]:
     signals: list[Signal] = []
     for tool in sorted({item["tool"] for item in literals}):
@@ -125,7 +130,7 @@ def mismatch_signals(literals: list[dict[str, str]], holds: list[dict[str, objec
         covered = any(
             hold["ecosystem"] == "tool-literal"
             and hold["package"] == tool
-            and set(values) <= set(hold["literals"])
+            and set(values) <= _held_literals(hold)
             and date.fromisoformat(str(hold["review_by"])) >= today
             for hold in holds
         )
