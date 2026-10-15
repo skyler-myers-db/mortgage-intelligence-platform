@@ -49,6 +49,22 @@ export async function renderedColors(target: Locator): Promise<RenderedColors> {
   return target.evaluate((el) => {
     type Rgba = [number, number, number, number];
     const parse = (value: string): Rgba => {
+      // css-07: a color-mix() tint computes to oklab(); read it as sRGB.
+      const ok = /^oklab\(([-\d.e]+) ([-\d.e]+) ([-\d.e]+)(?: \/ ([\d.e]+))?\)$/.exec(value.trim());
+      if (ok) {
+        const [L, A, B] = [Number(ok[1]), Number(ok[2]), Number(ok[3])];
+        const lms = [L + 0.3963377774 * A + 0.2158037573 * B, L - 0.1055613458 * A - 0.0638541728 * B, L - 0.0894841775 * A - 1.291485548 * B].map((v) => v ** 3);
+        const linear = [
+          4.0767416621 * lms[0] - 3.3077115913 * lms[1] + 0.2309699292 * lms[2],
+          -1.2684380046 * lms[0] + 2.6097574011 * lms[1] - 0.3413193965 * lms[2],
+          -0.0041960863 * lms[0] - 0.7034186147 * lms[1] + 1.707614701 * lms[2],
+        ];
+        const [r, g, b] = linear.map((v) => {
+          const c = Math.min(1, Math.max(0, v));
+          return 255 * (c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055);
+        });
+        return [r, g, b, ok[4] === undefined ? 1 : Number(ok[4])];
+      }
       const match = /^rgba?\(([^)]+)\)$/.exec(value.trim());
       if (!match) throw new Error(`unparseable colour: ${value}`);
       const [r, g, b, a = '1'] = match[1].split(/[\s,/]+/).filter(Boolean);
