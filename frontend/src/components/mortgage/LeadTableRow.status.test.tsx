@@ -204,7 +204,7 @@ describe('LeadTableRow one-line cells', () => {
     expect(status().querySelector('.lead-table__more')?.getAttribute('aria-label')).not.toContain('DNC');
   });
 
-  it('shows Suppressed, also on an unresolved-owner row; the reason is the expanded row\'s text, never a title', () => {
+  it('shows Suppressed with no title, also on an unresolved-owner row (the reason is expanded-row text: LeadRowWorkflowPanel.compliance.test)', () => {
     renderRow({ ...quietLead, marketing_eligible: false, suppression_reason: 'opt_out' });
     const suppressed = status().querySelector('.lead-table__flag');
     expect(suppressed?.textContent).toBe('Suppressed');

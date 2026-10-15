@@ -82,9 +82,12 @@ describe('the expanded row\'s compliance source', () => {
     expect(document.body.textContent).toContain('Eligible');
   });
 
-  it('reads the eligibility source on a suppressed row, and falls back to the synthetic seed', () => {
+  it('reads the suppression reason and the eligibility source on a suppressed row, and falls back to the synthetic seed', () => {
     const lead = { ...BASE, dnc: false, marketing_eligible: false, suppression_reason: 'opt_out' } as LeadSummary;
     expect(renderPanel(lead)).toBe('Eligibility source: synthetic_seed');
+    // The queue row's Suppressed chip carries no title (critic-08 R1): its
+    // reason is this visible chip text in the expanded row.
+    expect([...document.querySelectorAll('.chip')].map((chip) => chip.textContent)).toContain('Suppressed: opt_out');
   });
 
   it('is the text the chips\' titles use (one helper)', () => {
