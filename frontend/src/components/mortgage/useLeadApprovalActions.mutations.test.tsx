@@ -407,7 +407,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     });
 
     expect(actions!.bulkRun.result?.failed).toEqual([
-      { borrowerId: IDS[4], outcome: 'backend', message: 'the server did not record it; retry it' },
+      { borrowerId: IDS[4], outcome: 'backend', message: 'not recorded; retry it' },
     ]);
     expect([...actions!.selectedIds]).toEqual([IDS[4]]);
     // Bulk rows report in the run's result, never a single-row toast.
@@ -570,16 +570,33 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     expect(settled, 'the toolbar keeps its rationale').toBe(false);
     expect(apiMocks.approve).toHaveBeenCalledTimes(1);
     expect(actions!.bulkRun.result?.canary).toEqual({
-      borrowerId: IDS[0], message: 'it did not pass the review checks; open it to review the draft and reason',
+      borrowerId: IDS[0], message: 'draft or reason failed the checks',
     });
     expect(actions!.bulkRationaleOpen).toBe(true);
     expect(actions!.bulkRunCanary).toEqual({
-      borrowerId: IDS[0], message: 'it did not pass the review checks; open it to review the draft and reason',
+      borrowerId: IDS[0], message: 'draft or reason failed the checks',
     });
     expect(bulkCanaryNotice(actions!.bulkRunCanary!)).toBe(
-      `Nothing else was sent: ${IDS[0]} was refused: it did not pass the review checks; open it to review the draft and reason`,
+      `Nothing else was sent: ${IDS[0]} was refused: draft or reason failed the checks`,
     );
     expect([...actions!.selectedIds].sort()).toEqual([...IDS].sort());
+  });
+
+  it('a canary that meets an ended session says to sign in, not to retry blind', async () => {
+    apiMocks.approve.mockRejectedValueOnce(
+      new ApiError('Your session ended. Reload to sign in.', { path: '/api/outreach/approve', status: 401, reason: 'session_expired' }),
+    );
+    mount();
+    act(() => actions!.toggleSelectAll());
+    await act(async () => {
+      await actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
+    });
+
+    expect(apiMocks.approve).toHaveBeenCalledTimes(1);
+    expect(actions!.bulkRun.result?.canary).toEqual({ borrowerId: IDS[0], message: 'session ended; sign in again' });
+    expect(bulkCanaryNotice(actions!.bulkRun.result!.canary!)).toBe(
+      `Nothing else was sent: ${IDS[0]} was refused: session ended; sign in again`,
+    );
   });
 
   it('flashes a cut-short reject run as rejected', () => {

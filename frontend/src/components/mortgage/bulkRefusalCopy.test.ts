@@ -14,15 +14,23 @@ function refused(status: number | null): ApiError {
 
 describe('bulkRefusalCopy', () => {
   it('names each refusal class in fixed words', () => {
-    expect(bulkRefusalCopy(refused(403))).toBe('your role cannot make this decision');
-    expect(bulkRefusalCopy(refused(409))).toBe('it changed after you selected it; review it on its own');
-    expect(bulkRefusalCopy(refused(422))).toBe('it did not pass the review checks; open it to review the draft and reason');
-    expect(bulkRefusalCopy(refused(429))).toBe('too many decisions at once; wait a minute, then retry it');
+    expect(bulkRefusalCopy(refused(403))).toBe('your role cannot decide it');
+    expect(bulkRefusalCopy(refused(409))).toBe('it changed; review it alone');
+    // A governed-text 422 carries no reason: the row's draft or the run's typed reason.
+    expect(bulkRefusalCopy(refused(422))).toBe('draft or reason failed the checks');
+    expect(bulkRefusalCopy(refused(429))).toBe('too many at once; retry soon');
+  });
+
+  it('an ended session says to sign in, whatever the status', () => {
+    for (const status of [401, null]) {
+      const ended = new ApiError('Your session ended. Reload to sign in.', { path: '/api/outreach/approve', status, reason: 'session_expired' });
+      expect(bulkRefusalCopy(ended)).toBe('session ended; sign in again');
+    }
   });
 
   it('reads a server failure, an unknown status and a non-API error as not recorded', () => {
     for (const err of [refused(500), refused(503), refused(418), refused(null), new Error(SERVER_TEXT), 'boom']) {
-      expect(bulkRefusalCopy(err)).toBe('the server did not record it; retry it');
+      expect(bulkRefusalCopy(err)).toBe('not recorded; retry it');
     }
   });
 
