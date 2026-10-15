@@ -106,9 +106,11 @@ for (const theme of THEMES) {
       await app.settle();
       const open = (await hero.boundingBox())?.height ?? 0;
       const lede = hero.locator('.lede');
+      // Lines = distinct line boxes of the lede's text (line-height may be 'normal').
       const lines = await lede.evaluate((element) => {
-        const style = getComputedStyle(element);
-        return Math.round(element.getBoundingClientRect().height / parseFloat(style.lineHeight));
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
       });
       test.info().annotations.push({ type: 'segments-hero-height', description: `${theme}: closed ${closed}px, open ${open}px` });
       console.log(`[segments-hero] ${theme} console closed ${closed}px, open ${open}px, lede lines ${lines}`);

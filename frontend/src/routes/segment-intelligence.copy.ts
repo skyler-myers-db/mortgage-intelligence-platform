@@ -10,11 +10,15 @@
  */
 import type { SegmentFilterMode } from '../lib/apiTypes';
 
-/** The hero lede: ONE line at 1440x900 with the Console open. */
+/**
+ * The hero lede: ONE line at 1440x900 with the Console open. `.proto-hero
+ * .lede` caps at 640px, and Linux Chromium draws Geist wider than macOS, so
+ * each stays under 80 characters (routeCopy.lint.test pins it).
+ */
 export function segmentsLede(hasSelectedSegments: boolean): string {
   return hasSelectedSegments
-    ? 'Cards, map and ranked table all show the cohort you picked, each borrower counted once.'
-    : 'Each card counts its own borrowers, so cards overlap. Pick cards to build one cohort.';
+    ? 'Cards, map and table all show the cohort you picked, each borrower once.'
+    : 'Cards overlap: each counts its own borrowers. Pick cards to build one cohort.';
 }
 
 /** The two halves of the mode help around its GlossaryTerm links. */

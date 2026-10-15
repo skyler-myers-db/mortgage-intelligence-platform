@@ -69,7 +69,8 @@ describe('route copy lint (flow-10)', () => {
   });
 
   it('keeps the Segments lede short enough for one line at 1440 with the Console open', () => {
-    for (const selected of [true, false]) expect(segmentsLede(selected).length).toBeLessThanOrEqual(90);
+    // .proto-hero .lede caps at 640px; Linux draws Geist ~6% wider than macOS.
+    for (const selected of [true, false]) expect(segmentsLede(selected).length).toBeLessThanOrEqual(80);
   });
 
   it.each(GUARD_STATES)('the Portfolio save guard, %s, is in buyer words', (_label, preview) => {
