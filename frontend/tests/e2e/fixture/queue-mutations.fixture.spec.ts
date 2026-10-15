@@ -335,7 +335,10 @@ test.describe('(f) placeholder rows never export under the new filters', () => {
 
     const exportButton = page.getByTestId('lead-export');
     await expect(exportButton).toHaveAttribute('aria-disabled', 'true');
-    await expect(exportButton).toHaveAttribute('title', 'Export waits for the rows of the current filters');
+    // The reason is the button's design-system tooltip description, never a
+    // DOM title (W5e lead-queue-columns moved it onto ui/Tooltip, critic-08).
+    await expect(exportButton).not.toHaveAttribute('title');
+    await expect(exportButton).toHaveAccessibleDescription(/Export waits for the rows of the current filters/);
     // aria-disabled, never native `disabled` (a focused control must keep focus).
     expect(await exportButton.evaluate((button) => (button as HTMLButtonElement).disabled)).toBe(false);
     // Every placeholder row is still the previous (national) cohort.
@@ -435,13 +438,29 @@ test.describe('(g) a re-entered queue never re-drafts a borrower whose approve i
 });
 
 test.describe('(h) the bulk toolbar fits with the Console open', () => {
-  /** Distinct rows the visible controls sit on (rounded tops). */
+  /**
+   * Lines the visible controls sit on: a control starts a new line only when
+   * it begins below the bottom of the line so far. (Bucketing rounded tops by
+   * 8px split one line in two when the toolbar moved 2px and the assignee
+   * label, 4px above the buttons, fell into another bucket.)
+   */
   async function controlLines(page: Page): Promise<number> {
     return page.locator('[data-testid="lead-bulk-actions"] .bulk-actions__controls').evaluate((row) => {
-      const tops = [...row.children]
-        .filter((child) => child.getBoundingClientRect().width > 0)
-        .map((child) => Math.round(child.getBoundingClientRect().top));
-      return new Set(tops.map((top) => Math.round(top / 8))).size;
+      const boxes = [...row.children]
+        .map((child) => child.getBoundingClientRect())
+        .filter((box) => box.width > 0)
+        .sort((a, b) => a.top - b.top);
+      let lines = 0;
+      let bottom = -Infinity;
+      for (const box of boxes) {
+        if (box.top >= bottom - 1) {
+          lines += 1;
+          bottom = box.bottom;
+        } else {
+          bottom = Math.max(bottom, box.bottom);
+        }
+      }
+      return lines;
     });
   }
 

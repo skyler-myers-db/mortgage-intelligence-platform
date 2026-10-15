@@ -128,19 +128,28 @@ export async function addScrollRoom(page: Page): Promise<void> {
   });
 }
 
-/** Scroll `.main` so `target` sits entirely behind the sticky route nav. */
+/**
+ * Scroll `.main` so `target` sits entirely behind the sticky route nav. A
+ * control clipped below the table's own scroller is out of view (a focus
+ * scrolls it whatever the margins): first bring it inside. Since W5e's More
+ * like this the expanded row's chip row wraps, which put its Approve below
+ * the 480px scroller (the same fix as lead-queue.fixture.spec.ts's helper).
+ */
 export async function behindRouteNav(page: Page, target: Locator): Promise<void> {
   await addScrollRoom(page);
   const covered = await target.evaluate((element) => {
     const main = element.closest<HTMLElement>('.main');
     const nav = main?.querySelector<HTMLElement>('.route-nav');
     if (!main || !nav || getComputedStyle(nav).position !== 'sticky') throw new Error('no sticky route nav');
+    const scroller = element.closest<HTMLElement>('.tbl-wrap');
+    if (scroller) scroller.scrollTop += Math.max(0, element.getBoundingClientRect().bottom - scroller.getBoundingClientRect().bottom);
     main.scrollTop += element.getBoundingClientRect().top - (nav.getBoundingClientRect().top + 2);
     const box = element.getBoundingClientRect();
     const band = nav.getBoundingClientRect();
-    return box.top >= band.top && box.bottom <= band.bottom;
+    const inScroller = !scroller || box.bottom <= scroller.getBoundingClientRect().bottom + 0.5;
+    return box.top >= band.top && box.bottom <= band.bottom && inScroller;
   });
-  expect(covered, 'precondition: the control sits behind the route nav').toBe(true);
+  expect(covered, 'precondition: the control sits behind the route nav (inside its scroller)').toBe(true);
 }
 
 /** The control's top edge below the route nav's bottom edge (negative: under it). */
