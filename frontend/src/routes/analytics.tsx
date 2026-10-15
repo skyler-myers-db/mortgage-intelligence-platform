@@ -279,7 +279,9 @@ export default function AnalyticsRoute() {
     if (tab !== 'executive') params.set('view', tab);
     setSearchParams(params);
   };
-  const emptyTab = (active: boolean) => <AnalyticsEmpty filtersActive={active} onClearFilters={clearFilters} />;
+  const emptyTab = (active: boolean, windowDays?: number) => (
+    <AnalyticsEmpty filtersActive={active} onClearFilters={clearFilters} windowDays={windowDays} />
+  );
 
   return (
     <PageShell
@@ -422,7 +424,7 @@ export default function AnalyticsRoute() {
           title="Signal analytics"
           skeleton={ANALYTICS_SKELETONS.signals}
           isEmpty={isEmptySignals}
-          empty={emptyTab(filtersActive)}
+          empty={emptyTab(filtersActive, days)}
         >
           {(data) => <SignalsView data={data} filterParams={{ states, segmentCodes, days, ...leadParams }} />}
         </LoadState>

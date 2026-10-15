@@ -69,9 +69,21 @@ export const isEmptySignals = (data: SignalAnalyticsResponse): boolean =>
 /**
  * The empty tab: the filters matched nobody (with the one recovery, Clear
  * filters), or the book itself is empty because the first refresh has not
- * landed.
+ * landed. A windowed read (Signals, `windowDays`) says its window instead:
+ * an empty default evidence window is not a missing refresh.
  */
-export function AnalyticsEmpty({ filtersActive, onClearFilters }: { filtersActive: boolean; onClearFilters: () => void }) {
+export function AnalyticsEmpty({
+  filtersActive,
+  onClearFilters,
+  windowDays,
+}: {
+  filtersActive: boolean;
+  onClearFilters: () => void;
+  windowDays?: number;
+}) {
+  const dayZeroTitle = windowDays === undefined
+    ? 'No borrowers yet: the first data refresh has not landed.'
+    : `No evidence events in the last ${windowDays} days.`;
   return filtersActive ? (
     <EmptyState
       cause="filtered"
@@ -83,6 +95,6 @@ export function AnalyticsEmpty({ filtersActive, onClearFilters }: { filtersActiv
       ]}
     />
   ) : (
-    <EmptyState cause="day-zero" title="No borrowers yet: the first data refresh has not landed." />
+    <EmptyState cause="day-zero" title={dayZeroTitle} />
   );
 }

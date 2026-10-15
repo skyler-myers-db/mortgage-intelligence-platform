@@ -92,6 +92,7 @@ const NOW = Date.now();
 const EXECUTIVE = { totals: { addressable_borrowers: 89_553, snapshot_date: '2026-10-13' } };
 const ZERO_EXECUTIVE = { totals: { addressable_borrowers: 0, snapshot_date: '2026-10-13' } };
 const EMPTY_GEOGRAPHY = { state_opportunities: [], state_avm_values: [], top_zips: [] };
+const EMPTY_SIGNALS = { evidence_daily: [], evidence_by_signal: [], evidence_examples: [] };
 
 function settled(data: unknown, at: number): ReadState {
   return { data, error: null, isFetching: false, isPlaceholderData: false, dataUpdatedAt: at };
@@ -218,6 +219,14 @@ describe('Analytics tab states', () => {
     const empty = document.querySelector('[data-empty-cause="filtered"]');
     expect(empty?.textContent).toContain('No borrowers match these filters.');
     expect([...(empty?.querySelectorAll('button') ?? [])].map((button) => button.textContent)).toEqual(['Clear filters']);
+  });
+
+  it('an empty default Signals window names the window, not a missing refresh', async () => {
+    reads.state.set('signals', settled(EMPTY_SIGNALS, NOW));
+    await render('/analytics?view=signals');
+    const empty = document.querySelector('[data-empty-cause="day-zero"]');
+    expect(empty?.textContent).toContain('No evidence events in the last 30 days.');
+    expect(empty?.textContent).not.toContain('first data refresh');
   });
 
   it('never shows the empty state over placeholder rows, a failure or a first load', async () => {
