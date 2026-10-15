@@ -13,7 +13,7 @@ import { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 // The panel chunk imports cold (its graph transforms on first use): slow under a loaded full run.
 vi.setConfig({ testTimeout: 60_000 });
 import type { ReactNode } from 'react';
@@ -58,6 +58,12 @@ vi.mock('../components/mortgage/BorrowerStoryCard', () => ({ BorrowerStoryCard: 
 vi.mock('../components/mortgage/TriggerTimeline', () => ({ TriggerTimeline: () => null }));
 vi.mock('../components/mortgage/BorrowerProofDrawer', () => ({ BorrowerProofDrawer: () => null }));
 vi.mock('../components/mortgage/BorrowerTruthFlags', () => ({ BorrowerTruthFlags: () => null }));
+// The lazy Decision history would read through the stubbed fetch below, whose
+// count body is not a history: under a loaded full run it landed first and
+// crashed the route (DecisionList read .length of undefined), so the panel
+// never showed. It is not this file's subject; the other dossier parts are
+// stubbed the same way.
+vi.mock('../components/mortgage/BorrowerDecisionHistory', () => ({ BorrowerDecisionHistory: () => null }));
 vi.mock('../components/mortgage/TopLeadsQuickPick', () => ({ TopLeadsQuickPick: () => null }));
 vi.mock('../components/mortgage/ScoreBadge', () => ({ ScoreBadge: () => null }));
 vi.mock('../components/mortgage/ConfidenceMeter', () => ({ ConfidenceMeter: () => null }));
@@ -114,6 +120,11 @@ function borrower(overrides: Partial<Borrower360Type> = {}): Borrower360Type {
 let container: HTMLDivElement;
 let root: Root;
 let calls: string[] = [];
+
+// Warm the panel chunk so the click resolves from the module cache.
+beforeAll(async () => {
+  await import('../components/mortgage/SimilarCohortPanel');
+});
 
 beforeEach(() => {
   calls = [];
