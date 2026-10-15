@@ -107,7 +107,7 @@ const FIXTURE_SRC_TYPE_ONLY = {
 
 export default [
   {
-    ignores: ["dist", "node_modules", "*.config.*", "tsconfig.tsbuildinfo"],
+    ignores: ["dist", "bundle-analyze", "node_modules", "*.config.*", "tsconfig.tsbuildinfo"],
   },
   {
     files: ["src/**/*.{ts,tsx}"],

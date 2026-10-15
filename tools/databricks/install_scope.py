@@ -85,7 +85,7 @@ def assert_warehouse_revokes_owned(
     if unowned:
         raise InstallScopeRefusal(
             f"the identity holds access on {unowned} SQL warehouse(s) this install does not own; "
-            "give the CI staging install its own identity"
+            "see docs/deployment.md \"CI staging install\": the reserved-identity contract keeps a CI install out of the anchor workspace"
         )
 
 
@@ -109,7 +109,7 @@ def assert_endpoint_revokes_owned(client: Any, *, reviewed: Collection[str], app
     if unowned:
         raise InstallScopeRefusal(
             f"the agent proxy holds access on {unowned} serving endpoint(s) outside this install's reviewed set; "
-            "give the CI staging install its own proxy identity"
+            "see docs/deployment.md \"CI staging install\": the reserved-identity contract keeps a CI install out of the anchor workspace"
         )
 
 
