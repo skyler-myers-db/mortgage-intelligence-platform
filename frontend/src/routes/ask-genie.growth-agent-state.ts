@@ -173,6 +173,14 @@ export function useGrowthAgentWorkspace() {
 
   function runGrowthAgentWorkflow(workflow: GrowthAgentWorkflow, saveMonitor: boolean): Promise<void> {
     setRunOrigin('workflows');
+    // Only reviewed workflows run: the read-only live analysis answer is not
+    // one (its run route answers 404), so it is never sent.
+    const workflowId = workflow.id;
+    if (workflowId === 'live_analysis') {
+      setLatestGrowthRun(null);
+      setGrowthAgentError('A live analysis answer is not a reviewed workflow, so it cannot be run or saved here.');
+      return Promise.resolve();
+    }
     const parsed = parseGrowthAgentStateInput(agentStateText);
     if (parsed.invalid.length > 0) {
       setLatestGrowthRun(null);
@@ -185,7 +193,7 @@ export function useGrowthAgentWorkspace() {
     setLatestGrowthRun(null);
     setGrowthAgentError(null);
     return settle(
-      () => api.runGrowthAgentWorkflow(workflow.id, {
+      () => api.runGrowthAgentWorkflow(workflowId, {
         states: parsed.states,
         save_monitor: saveMonitor,
         cadence: agentCadence,

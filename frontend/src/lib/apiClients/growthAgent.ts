@@ -19,9 +19,8 @@ import type {
   GrowthAgentPromptRunRequest,
   GrowthAgentRunRequest,
   GrowthAgentRunResponse,
-  GrowthAgentWorkflowId,
 } from '../../types';
-import type { ExecutePlanRequest } from '../../types/growthAgent';
+import type { ExecutePlanRequest, GrowthAgentReviewedWorkflowId } from '../../types/growthAgent';
 import { _newRequestId, getJson, postJson } from '../apiTransport';
 
 export const growthAgentApi = {
@@ -83,8 +82,10 @@ export const growthAgentApi = {
     );
   },
 
+  // A reviewed workflow only: the route answers 404 to the read-only
+  // live_analysis id (backend/api/growth_agent.py _WORKFLOWS has no entry).
   runGrowthAgentWorkflow: (
-    workflowId: GrowthAgentWorkflowId,
+    workflowId: GrowthAgentReviewedWorkflowId,
     payload: GrowthAgentRunRequest = {},
     signal?: AbortSignal,
   ) => {
