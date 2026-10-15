@@ -749,7 +749,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       /segment filter: In the Money or Home Equity Candidate/,
       { timeout: 45_000 },
     );
-    await expect(rankedHeader).toContainText(/any selected segment, de-duplicated/);
+    await expect(rankedHeader).toContainText(/any selected segment, counted once/);
   });
 
   test('segment match-all mode narrows to borrowers in every selected segment', async ({ page }) => {
