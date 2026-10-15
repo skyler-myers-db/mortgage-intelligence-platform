@@ -11,7 +11,6 @@ import { GenieActions } from './GenieAnswerActions';
 import { GenieAnswerToolbar } from './GenieAnswerToolbar';
 import { GenieAnswerSections, GenieRowsVisual } from './GenieAnswer.sections';
 import { MarkdownAnswer, stripQuestionRestatement } from './GenieAnswer.markdown';
-import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
 import { GenieProofPanel } from './GenieAnswerProof';
 import { GenieFigureScopes, genieFigureScopes } from './GenieAnswerFigures';
 import { GenieAnswerFeedback } from './GenieAnswerFeedback';
@@ -105,7 +104,8 @@ export function GenieAnswer({
   // reports rather than every borrower in that geography.
   const cellCohort = answerCohortFromActions(actions);
   const chartColumns = rows[0] ? Object.keys(rows[0]) : [];
-  const cleanedAnswer = answer ? normalizeGenieAnswerLanguage(stripQuestionRestatement(answer)) : '';
+  // Genie's own words render verbatim (live-first): no vocabulary rewrite.
+  const cleanedAnswer = answer ? stripQuestionRestatement(answer) : '';
   // Deep-research sweep: each planned sub-analysis ships its own verified
   // prose, rows and chart plan. When they are present they ARE the answer
   // body — the top-level `answer` is the stitched narrative they were cut

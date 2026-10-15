@@ -2,6 +2,7 @@ import { Chip, EvidenceChip } from '../components/Primitives';
 import { drawerForAsset } from '../lib/drawerSources';
 import { friendlyAssetLabel } from '../lib/assetLabels';
 import { isUspsStateCode } from '../lib/uspsStates';
+import { LEXICON } from '../lib/lexicon';
 import type {
   GrowthAgentSegmentCode,
   GrowthAgentWorkflowId,
@@ -25,7 +26,7 @@ const TRUSTED_ASSET_SUFFIXES: string[] = [
 ];
 
 export const CUSTOM_SEGMENTS: Array<{ code: GrowthAgentSegmentCode; label: string }> = [
-  { code: 'itm', label: 'Prime Refi Candidates' },
+  { code: 'itm', label: LEXICON.inTheMoney.label },
   { code: 'listed', label: 'Listed for Sale' },
   { code: 'permit', label: 'HELOC Intent' },
   { code: 'investor', label: 'Investor / Multi-Property' },

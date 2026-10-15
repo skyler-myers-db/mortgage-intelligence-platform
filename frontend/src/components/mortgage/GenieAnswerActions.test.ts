@@ -24,7 +24,7 @@ describe('actionPreview', () => {
     expect(preview).toEqual([
       '6 ZIPs: 60610, 60611, 60612, 60613, 60614…',
       'States: IL',
-      'Segments: Prime Refi Candidates, HELOC Intent (all selected segments)',
+      'Segments: In the Money, HELOC Intent (all selected segments)',
       'Target lien holder: Summit Mortgage',
       '2 borrowers bound by ID',
       '1,250 result rows',

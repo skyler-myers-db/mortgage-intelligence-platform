@@ -85,7 +85,7 @@ describe('signal stack logic', () => {
   });
 
   it('names the signals and points the evidence at the gold table', () => {
-    expect(signalNames(['itm', 'permit', 'equity'])).toBe('Prime Refi Candidates, HELOC Intent and Home Equity Candidate');
+    expect(signalNames(['itm', 'permit', 'equity'])).toBe('In the Money, HELOC Intent and Home Equity Candidate');
     expect(signalNames(['listed'])).toBe('Listed for Sale');
     const source = signalStackEvidenceSource({ source: 's', contactable_source: 'c', refreshed_at: '2026-07-14 12:00:00', note: 'n' });
     expect(source).toMatchObject({

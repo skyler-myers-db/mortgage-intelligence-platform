@@ -89,7 +89,7 @@ export function useGrowthAgentWorkspace() {
   const [agentStateText, setAgentStateText] = useState('');
   const [agentCadence, setAgentCadence] = useState<GrowthAgentCadence>('daily');
   const [agentPrompt, setAgentPrompt] = useState(
-    'Find prime refinance and listed-for-sale opportunities across current coverage.',
+    'Find In the Money and listed-for-sale opportunities across current coverage.',
   );
   const [promptAgentPending, setPromptAgentPending] = useState(false);
   const [growthAgentPending, setGrowthAgentPending] = useState<GrowthAgentWorkflowId | null>(null);

@@ -667,7 +667,7 @@ export default function PortfolioBuilder() {
       </div>
 
       {/* Projected economics (re-audit #4 Buyer-Wow #7): only once a real
-          build with refinance-economics leads exists — never on day-zero or an
+          build with in-the-money leads exists — never on day-zero or an
           empty cohort, where a dollar headline would be misleading. */}
       {!isDayZero(preview) && (preview?.high_intent_leads ?? 0) > 0 && (
         <RoiProjector
@@ -710,7 +710,7 @@ export default function PortfolioBuilder() {
           <div className="lead-cta__body">
             <div className="lead-cta__title">
               {formatCount(preview.high_intent_leads)} borrower
-              {preview.high_intent_leads === 1 ? '' : 's'} pass the refinance-economics screen for the current filters.
+              {preview.high_intent_leads === 1 ? ' is' : 's are'} in the money for the current filters.
             </div>
             <div className="lead-cta__sub">
               Open the lead queue to review evidence and approve outreach per borrower.

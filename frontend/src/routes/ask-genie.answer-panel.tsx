@@ -145,7 +145,7 @@ const BUSY_HINT_ID = 'ask-genie-busy';
  * composer over the empty state. The empty state above it already names what
  * Genie answers about.
  */
-export const COMPOSER_PLACEHOLDER = 'Ask about your book, e.g. prime refi candidates by state';
+export const COMPOSER_PLACEHOLDER = 'Ask about your book, e.g. in-the-money borrowers by state';
 
 /** A question bubble's id on the route, by turn index: a collapsed turn's
  *  toggle is described by it (the floating panel uses `genie-panel-q-<n>`). */

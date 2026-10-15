@@ -123,7 +123,7 @@ const TRIGGER_COPY: Record<string, TriggerCopy> = {
     href: measureQueueHref('offers_recommended'),
   },
   refi_economics_screen: {
-    noun: 'borrowers who pass the refi screen',
+    noun: 'in-the-money borrowers',
     href: measureQueueHref('refi_economics_screen'),
   },
   high_opportunity: {

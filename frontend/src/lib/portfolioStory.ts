@@ -1,6 +1,7 @@
 import type { PortfolioPreview } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from './opportunityScore';
 import { formatCount, formatFixed } from './formatters';
+import { LEXICON } from './lexicon';
 
 /**
  * The briefing line of Home's answer band (components/mortgage/
@@ -88,8 +89,8 @@ export function buildPortfolioStory(preview: PortfolioPreview | null | undefined
     return token;
   };
 
-  // Derived refinance-economics share of the book -- an insight the bare KPI
-  // cards don't show. Grounded in marketable + refi-economics count, verified against the
+  // Derived in-the-money share of the book -- an insight the bare KPI
+  // cards don't show. Grounded in marketable + in-the-money count, verified against the
   // computed ratio.
   const pct = (highIntent / marketable) * 100;
   const pctToken = `${formatFixed(pct, pct < 10 ? 1 : 0)}%`;
@@ -109,9 +110,9 @@ export function buildPortfolioStory(preview: PortfolioPreview | null | undefined
 
   // A real em dash, not the ASCII " -- " stand-in: this sentence is buyer-
   // facing prose on the landing screen (2026-09-21 audit, visual-06).
-  let s2 = `${register(intToken(highIntent), 'Refi-economics screen', 'itm', highIntent)} pass the refinance-economics screen — ${register(
+  let s2 = `${register(intToken(highIntent), LEXICON.inTheMoney.label, 'itm', highIntent)} are in the money — ${register(
     pctToken,
-    'Refi-economics share',
+    'In-the-money share',
     'itm',
     pct,
   )} of the book`;

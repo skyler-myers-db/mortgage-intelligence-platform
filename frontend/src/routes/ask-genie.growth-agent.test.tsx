@@ -105,7 +105,7 @@ describe('AskGenie Growth Agent route panel', () => {
     act(() => button(/^Plan reviewed workflow$/).click());
     await waitUntil(() => runMortgageGrowthAgent.mock.calls.length === 1);
     expect(runMortgageGrowthAgent.mock.calls[0][0]).toEqual({
-      prompt: 'Find prime refinance and listed-for-sale opportunities across current coverage.',
+      prompt: 'Find In the Money and listed-for-sale opportunities across current coverage.',
       states: [],
       save_monitor: false,
       cadence: 'daily',
@@ -365,7 +365,7 @@ describe('AskGenie Growth Agent route panel', () => {
     await waitUntil(() => container.textContent?.includes('Build a custom segment workflow') ?? false);
 
     act(() => button(/^Listed for Sale$/).click());
-    act(() => button(/^Prime Refi Candidates$/).click());
+    act(() => button(/^In the Money$/).click());
     expect(button(/^Run custom$/).disabled).toBe(true);
     expect(button(/^Save custom watchlist$/).disabled).toBe(true);
 

@@ -92,7 +92,7 @@ describe('RoiProjector', () => {
     expect(container.textContent).toContain('Application start → submitted50.0%');
     expect(container.textContent).toContain('Submitted → funded50.0%');
     expect(container.textContent).toContain('Expected origination volume$19.2M');
-    expect(container.textContent).toContain('Average refi-economics balance$320K');
+    expect(container.textContent).toContain('Average in-the-money balance$320K');
     expect(container.textContent).not.toContain('$432K');
   });
 

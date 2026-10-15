@@ -64,7 +64,7 @@ const SWEEP = payload({
     section({
       title: 'Who to call first',
       question: 'Which cohorts are largest?',
-      answer: 'Prime refi candidates dominate the marketable population.',
+      answer: 'In-the-money borrowers dominate the marketable population.',
       table_rows: [
         { segment_code: 'itm', marketable_borrowers: 620 },
         { segment_code: 'equity', marketable_borrowers: 410 },
@@ -114,7 +114,7 @@ describe('GenieAnswer deep-research sections', () => {
     ]);
     expect(container.textContent).toContain('Refinance demand concentrates in three states.');
     expect(container.textContent).toContain('Texas leads with 900 in-the-money borrowers.');
-    expect(container.textContent).toContain('Prime refi candidates dominate the marketable population.');
+    expect(container.textContent).toContain('In-the-money borrowers dominate the marketable population.');
   });
 
   it('does not repeat the stitched top-level answer body', () => {

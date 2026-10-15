@@ -105,7 +105,7 @@ describe('buildMapCard (D-dataviz-geo-d1)', () => {
       name: 'ZIP 77002, Texas',
       count: 1200,
       avgScore: 82,
-      topSegment: 'Prime Refi Candidates',
+      topSegment: 'In the Money',
       sourceHint: SOURCE_ZIP,
       overlay: undefined,
     });

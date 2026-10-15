@@ -215,7 +215,7 @@ describe('Growth Agent compose, review, run', () => {
 
     expect(composeMortgageGrowthAgentPlan).toHaveBeenCalledTimes(1);
     expect(composeMortgageGrowthAgentPlan.mock.calls[0][0]).toEqual({ objective: OBJECTIVE, states: ['IL'] });
-    expect(card()?.textContent).toContain('States: IL · Segments: Prime Refi Candidates · Match: any segment');
+    expect(card()?.textContent).toContain('States: IL · Segments: In the Money · Match: any segment');
 
     act(() => button(/^Run this plan$/).click());
     await waitUntil(() => executeComposedGrowthAgentPlan.mock.calls.length === 1);
@@ -299,7 +299,7 @@ describe('Growth Agent compose, review, run', () => {
       'Changed',
       'Added',
     ]);
-    expect(changes?.textContent).toContain('Was: States: IL · Segments: Prime Refi Candidates · Match: any segment');
+    expect(changes?.textContent).toContain('Was: States: IL · Segments: In the Money · Match: any segment');
     expect(changes?.textContent).not.toContain('The objective or state scope changed');
     expect(composeMortgageGrowthAgentPlan).toHaveBeenCalledTimes(2);
     expect(composeMortgageGrowthAgentPlan.mock.calls[1][0]).toEqual({ objective: OBJECTIVE, states: ['IL'] });

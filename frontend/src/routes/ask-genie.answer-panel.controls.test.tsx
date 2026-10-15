@@ -223,7 +223,7 @@ describe('AskGenieAnswerPanel docked composer (visual-07)', () => {
             onAsk={onAsk}
             onNewThread={() => undefined}
             onLoadSession={() => undefined}
-            sampleQuestions={['Which states have the most prime refi candidates?']}
+            sampleQuestions={['Which states have the most in-the-money borrowers?']}
             onFollowUp={() => undefined}
             onAction={() => undefined}
             actionStatus={null}
@@ -241,7 +241,7 @@ describe('AskGenieAnswerPanel docked composer (visual-07)', () => {
     render('');
     const textarea = composer().querySelector('textarea')!;
     expect(textarea.getAttribute('aria-label')).toBe('Ask Genie — question');
-    expect(textarea.placeholder).toMatch(/prime refi candidates/);
+    expect(textarea.placeholder).toMatch(/in-the-money borrowers/);
     expect(textarea.getAttribute('rows')).toBe('2');
     expect(composer().classList.contains('surface__ft')).toBe(true);
     const samples = container.querySelector('[aria-label="Suggested Genie questions"]')!;

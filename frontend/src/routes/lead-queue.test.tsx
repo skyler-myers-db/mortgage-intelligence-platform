@@ -401,7 +401,7 @@ describe('LeadQueue filter state', () => {
     expect(document.querySelector('button[aria-label="STATE: 2 states selected"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="SEGMENT: 2 segments selected (any selected)"]')).toBeTruthy();
     expect(document.querySelector('[aria-label="Active segment filters"]')?.textContent)
-      .toContain('Prime Refi CandidatesHome Equity Candidate');
+      .toContain('In the MoneyHome Equity Candidate');
     expect(document.querySelector('button[aria-label="RELATIONSHIP: Competitor customer"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="PRODUCT: HELOC"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="OWNER LINK: Portfolio investor (5+)"]')).toBeTruthy();
@@ -589,7 +589,7 @@ describe('segment chip add/remove state (S8)', () => {
       { code: 'investor', label: 'Investor / Multi-Property' },
     ]);
     expect(segmentFilterChips('itm' as SegmentCode, [])).toEqual([
-      { code: 'itm', label: 'Prime Refi Candidates' },
+      { code: 'itm', label: 'In the Money' },
     ]);
     expect(segmentFilterChips(undefined, [])).toEqual([]);
   });

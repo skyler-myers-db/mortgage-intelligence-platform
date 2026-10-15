@@ -1,7 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
-import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
 import { flattenGenieMarkdown } from '../../lib/genieAnswerText';
 import { formatCell, humanizeKey } from './GenieAnswer.logic';
 import { stripQuestionRestatement } from './GenieAnswer.markdown';
@@ -55,7 +54,7 @@ export function answerPlainText(payload: GenieAnswerShape): string {
       parts.push([title, body, rows].filter(Boolean).join('\n'));
     }
   } else if ((payload.answer ?? '').trim()) {
-    parts.push(plainText(normalizeGenieAnswerLanguage(stripQuestionRestatement(payload.answer))));
+    parts.push(plainText(stripQuestionRestatement(payload.answer)));
   }
   if (sections.length === 0 && Array.isArray(payload.table_rows) && payload.table_rows.length > 0) {
     parts.push(rowsAsText(payload.table_rows));

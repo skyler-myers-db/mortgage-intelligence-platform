@@ -22,7 +22,7 @@ const RUN: SaveFields = {
     id: 'daily_refi_brief',
     title: 'Daily Refi Opportunity Brief',
     objective: 'Find borrowers with rate-spread economics worth reviewing today.',
-    trigger_label: 'Prime refinance economics',
+    trigger_label: 'In the Money',
     action_label: 'Open eligible refi subset',
     source_assets: ['mip.gold.borrower_360'],
     default_route: '/lead-queue?segment=itm',

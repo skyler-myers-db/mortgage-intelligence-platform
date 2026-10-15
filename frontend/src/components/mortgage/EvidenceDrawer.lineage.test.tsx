@@ -110,7 +110,7 @@ const MANIFEST: LineageManifestResponse = {
   families: [
     {
       id: 'in_the_money',
-      title: 'Refi economics screen',
+      title: 'In the Money rule',
       description: 'Rate spread + equity screen traced end to end.',
       nodes: [
         {
@@ -128,7 +128,7 @@ const MANIFEST: LineageManifestResponse = {
           object_type: 'function',
           fqn: 'mip.gold.fn_in_the_money',
           label: 'fn_in_the_money',
-          note: 'Canonical refi-economics screen.',
+          note: 'Canonical In the Money rule.',
           catalog_explorer_url: `${WORKSPACE}/explore/data/functions/mip/gold/fn_in_the_money`,
         },
         {
@@ -146,9 +146,9 @@ const MANIFEST: LineageManifestResponse = {
 };
 
 const MAPPED_SOURCE: DrawerSource = {
-  title: 'Refinance economics screen',
+  title: 'In the Money rule',
   short: 'Rate + equity screen',
-  description: 'Refi screen evidence.',
+  description: 'In the Money rule evidence.',
   assetKey: 'borrower_360',
   assetPath: 'mip.gold.borrower_360',
   lineageFamily: 'in_the_money',

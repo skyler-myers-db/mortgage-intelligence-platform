@@ -70,7 +70,7 @@ describe('buildMapTableRows (d2 step 0 characterization)', () => {
       name: 'California',
       count: 1600,
       avgScore: 70,
-      topSegment: 'Prime Refi Candidates',
+      topSegment: 'In the Money',
       contactable: 160,
       extra: undefined,
       cls: 4,
@@ -167,7 +167,7 @@ describe('buildMapTableRows (d2 step 0 characterization)', () => {
     const facts = { ...STATE_FACTS, pr: rollup('PR', 300) };
     const borrowers = buildMapTableRows(inputs({ stateFacts: facts })).offMap;
     expect(borrowers).toEqual([
-      { id: 'pr', name: 'PR', count: 300, avgScore: 70, topSegment: 'Prime Refi Candidates', contactable: 30, extra: undefined, cls: null },
+      { id: 'pr', name: 'PR', count: 300, avgScore: 70, topSegment: 'In the Money', contactable: 30, extra: undefined, cls: null },
     ]);
     expect(offMapCaption(borrowers, 'count')).toBe('Includes 300 in PR (not drawn on the map)');
 

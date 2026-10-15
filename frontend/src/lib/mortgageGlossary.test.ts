@@ -70,10 +70,10 @@ describe('mortgage glossary', () => {
     expect(mortgageGlossary.evidenceConfidence.appContext).toMatch(/separate from signal strength/i);
   });
 
-  it('distinguishes refinance economics from opportunity score and primary offer', () => {
+  it('distinguishes In the Money from opportunity score and primary offer', () => {
     expect(mortgageGlossary.inTheMoney.short).toMatch(/refinance-only economics screen/i);
     expect(mortgageGlossary.inTheMoney.appContext).toMatch(/not the same as a high-quality lead/i);
-    expect(mortgageGlossary.opportunityScore.appContext).toMatch(/broader than refinance economics/i);
+    expect(mortgageGlossary.opportunityScore.appContext).toMatch(/broader than In the Money/i);
     expect(mortgageGlossary.nextBestOffer.term).toBe('Primary offer');
   });
 

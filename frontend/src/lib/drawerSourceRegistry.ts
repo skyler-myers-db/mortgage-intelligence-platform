@@ -181,7 +181,9 @@ export const DRAWER_SOURCES = defineDrawerSources({
   },
 
   itm: {
-    title: 'Refinance economics screen',
+    // LEXICON.inTheMoney.ruleLabel, spelled out: this index is in the shell
+    // chunk and lexicon.ts is not.
+    title: 'In the Money rule',
     lineageFamily: 'in_the_money',
     short: 'Rate + equity screen',
     // Governed anchor (2026-06-11): the high-intent KPI sums the

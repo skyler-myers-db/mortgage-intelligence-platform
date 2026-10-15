@@ -37,10 +37,11 @@ describe('buildPinFromAnswer summary', () => {
   it('flattens markdown in the summary (the Home card renders text, not markdown)', () => {
     const md = 'Illinois (**IL**) leads with **55,037** in-the-money borrowers';
     const pin = buildPinFromAnswer(answer({ metric_value: null }), md, 'Q');
-    expect(pin.summary).toBe('Illinois (IL) leads with 55,037 borrowers passing the refinance-economics screen');
+    expect(pin.summary).toBe('Illinois (IL) leads with 55,037 in-the-money borrowers');
     expect(pin.summary).not.toContain('**');
     expect(pin.summary).not.toContain('`');
-    expect(pin.summary).not.toContain('in-the-money');
+    // Genie's own words, verbatim (live-first): no vocabulary rewrite.
+    expect(pin.summary).toContain('in-the-money');
   });
 
   it('collapses newlines/bullets and code spans into a single clean line', () => {

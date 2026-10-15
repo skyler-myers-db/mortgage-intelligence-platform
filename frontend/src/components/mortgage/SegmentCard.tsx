@@ -101,7 +101,7 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
   // Addressable-vs-contactable reconciliation. `count` is the whole
   // addressable population; the Lead Queue this card links to applies the
   // contact-eligibility predicate, so it shows a strict subset — live
-  // 2026-08-11 that was 3,217 of 74,335 for Prime Refi (23x). Stating one
+  // 2026-08-11 that was 3,217 of 74,335 for In the Money (23x). Stating one
   // number and navigating to the other reads as a broken link, so the card
   // states the relationship. Same idiom as `.zip-tiles__reconcile` on the
   // map's ZIP drill. Null (an older payload) renders nothing rather than a

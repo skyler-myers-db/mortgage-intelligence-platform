@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { LEXICON } from './lexicon';
 import { HIGH_OPPORTUNITY_SCORE_LABEL } from './opportunityScore';
 
 export type GlossaryCategory =
@@ -130,9 +131,9 @@ export const mortgageGlossary = {
     proof: 'Proof opens the origination-channel evidence drawer citing mip.first_party.loan_applications funded rows.',
   },
   inTheMoney: {
-    id: 'in-the-money',
-    term: 'In-the-money',
-    aliases: ['ITM', 'refi economics'],
+    id: LEXICON.inTheMoney.glossaryId,
+    term: LEXICON.inTheMoney.label,
+    aliases: [...LEXICON.inTheMoney.legacyAliases],
     category: 'scoring',
     short: 'A refinance-only economics screen: rate spread and equity both clear the configured thresholds.',
     appContext: 'It is not the same as a high-quality lead. Ranking also considers intent, relationship, fit, contactability, and evidence.',
@@ -179,9 +180,9 @@ export const mortgageGlossary = {
     term: 'ITM on Related Property',
     aliases: ['related property ITM'],
     category: 'scoring',
-    short: 'Owner Link shows another related property is in-the-money.',
+    short: 'Owner Link shows another related property is in the money.',
     appContext: 'Lets outreach reference related-property economics without raw IDs.',
-    proof: 'Proof shows Owner Link and related ITM count.',
+    proof: 'Proof shows Owner Link and the related in-the-money property count.',
   },
   payoffLoss: {
     id: 'payoff-loss',
@@ -216,7 +217,7 @@ export const mortgageGlossary = {
     aliases: ['lead score', `score ${HIGH_OPPORTUNITY_SCORE_LABEL}`],
     category: 'scoring',
     short: 'A 0-100 ranking score for how strong the borrower is for review.',
-    appContext: `A score of ${HIGH_OPPORTUNITY_SCORE_LABEL} marks strong review candidates. It is broader than refinance economics because it also considers intent, fit, relationship, and evidence.`,
+    appContext: `A score of ${HIGH_OPPORTUNITY_SCORE_LABEL} marks strong review candidates. It is broader than In the Money because it also considers intent, fit, relationship, and evidence.`,
     proof: 'Proof shows the five weighted sub-scores that make up the final score.',
   },
   ownerLink: {

@@ -227,7 +227,7 @@ export function RoiProjector({
           <div className="roi-projector__headline-label">
             {scenarioMode === 'baseline' ? 'benchmark fundings' : 'manual scenario fundings'}
             <span className="muted">
-              {' '}from {formatCount(preview.high_intent_leads)} refinance-economics leads
+              {' '}from {formatCount(preview.high_intent_leads)} in-the-money leads
             </span>
           </div>
         </div>
@@ -269,7 +269,7 @@ export function RoiProjector({
         </div>
 
         <div className="roi-projector__derived">
-          <RoiStat label="Average refi-economics balance" value={formatUsdCompact(preview.avg_high_intent_lien_balance_usd)} />
+          <RoiStat label="Average in-the-money balance" value={formatUsdCompact(preview.avg_high_intent_lien_balance_usd)} />
           <RoiStat label="Average modeled equity" value={pct(preview.avg_equity_pct)} />
           <RoiStat label="Average rate spread" value={preview.avg_rate_spread_bps == null ? '—' : signedBpsLabel(preview.avg_rate_spread_bps)} />
           <RoiStat label="Lead → reached" value={projection.rates == null ? 'Not qualified' : formatPercent(projection.rates.reachRate)} />
