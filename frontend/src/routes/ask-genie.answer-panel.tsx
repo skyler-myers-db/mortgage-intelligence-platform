@@ -139,13 +139,15 @@ const EMPTY_STATE_SOURCE_CHIPS = 3;
 const BUSY_HINT_ID = 'ask-genie-busy';
 
 /**
- * Composer placeholder, in the reviewed segment vocabulary. Short enough to
+ * Composer placeholder, in the reviewed segment vocabulary. Its example is
+ * one the prompt guards accept as typed (tests/unit/
+ * test_genie_context_templates.py reads it from here). Short enough to
  * fit the composer's two empty lines on a phone: `field-sizing: content`
  * sizes an empty box to its placeholder, and a longer one grew the docked
  * composer over the empty state. The empty state above it already names what
  * Genie answers about.
  */
-export const COMPOSER_PLACEHOLDER = 'Ask about your book, e.g. in-the-money borrowers by state';
+export const COMPOSER_PLACEHOLDER = 'Ask about your book, e.g. show in-the-money borrowers by state';
 
 /** A question bubble's id on the route, by turn index: a collapsed turn's
  *  toggle is described by it (the floating panel uses `genie-panel-q-<n>`). */

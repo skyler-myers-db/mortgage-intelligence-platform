@@ -50,6 +50,8 @@ from backend.services.genie_sales_ops import _sales_ops_question_kind
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_PATH = ROOT / "frontend" / "src" / "lib" / "genieContextTemplates.json"
 SEGMENT_REGISTRY_PATH = ROOT / "frontend" / "src" / "lib" / "segmentMetadata.ts"
+ANSWER_PANEL_PATH = ROOT / "frontend" / "src" / "routes" / "ask-genie.answer-panel.tsx"
+_COMPOSER_PLACEHOLDER_RE = re.compile(r"export const COMPOSER_PLACEHOLDER = '([^']+)';")
 
 _PROMPT_MATCHERS: tuple[tuple[str, Callable[[str], object]], ...] = (
     ("protected", protected_prompt_match),
@@ -151,6 +153,29 @@ def test_the_battery_bites_on_a_protected_class_prompt() -> None:
     """Non-vacuity: the same fixture and matchers refuse a fair-lending prompt."""
 
     assert _intercepted("Which states have the most elderly borrowers?") != []
+
+
+def _composer_example() -> str:
+    """The example the Ask composer's placeholder teaches, exactly as a user would type it."""
+
+    match = _COMPOSER_PLACEHOLDER_RE.search(ANSWER_PANEL_PATH.read_text(encoding="utf-8"))
+    assert match is not None, "COMPOSER_PLACEHOLDER literal not found"
+    _, marker, example = match.group(1).partition("e.g. ")
+    assert marker and example, match.group(1)
+    return example
+
+
+def test_the_ask_composer_example_passes_the_real_prompt_guards() -> None:
+    """critic-11 / item 22: the Ask page never teaches a question Genie refuses.
+
+    The placeholder is not prefilled, but its example is what a user copies.
+    """
+
+    example = _composer_example()
+    assert "in-the-money" in example, example  # the parse reads the real literal
+    assert _intercepted(example) == []
+    assert GenieMessageRequest(question=example).question == example
+    assert _sales_ops_question_kind(example) is None
 
 
 def test_every_fixed_prompt_passes_the_real_prompt_guards() -> None:

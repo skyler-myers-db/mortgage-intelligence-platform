@@ -36,6 +36,8 @@ const RETIRED = /\bprime\b|\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\b
 const ITM_KPI_PROMPT =
   'How many borrowers across the current Cotality data coverage are currently in-the-money, and what is the average rate spread?';
 const CHIP = 'Which states have the most in-the-money borrowers?';
+/** The example passes the real prompt guards (tests/unit/test_genie_context_templates.py). */
+const COMPOSER_PLACEHOLDER = 'Ask about your book, e.g. show in-the-money borrowers by state';
 /** Routes whose copy belongs to lanes that rename it in parallel (eslint LEXICON_PENDING). */
 const PENDING_ROUTE = /^\/(analytics|lead-queue)/;
 
@@ -133,7 +135,7 @@ for (const theme of THEMES) {
 
     test('Ask: the composer placeholder and sample chip use in-the-money', async ({ app, page }) => {
       await app.gotoRoute('/ask-genie');
-      await expect(page.getByRole('textbox', { name: 'Ask Genie — question' })).toHaveAttribute('placeholder', /in-the-money borrowers by state/);
+      await expect(page.getByRole('textbox', { name: 'Ask Genie — question' })).toHaveAttribute('placeholder', COMPOSER_PLACEHOLDER);
       await expect(page.locator('#main-content').getByRole('button', { name: CHIP })).toBeVisible();
     });
 
