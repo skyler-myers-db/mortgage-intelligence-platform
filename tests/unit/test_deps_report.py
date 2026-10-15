@@ -166,14 +166,16 @@ def test_the_real_empty_allowlist_parses_green() -> None:
     assert not [s for s in gate_signals if s.code == "allowlist_expiring"]
 
 
-def test_the_real_ci_review_dates_are_red_on_2026_10_14_and_green_a_week_earlier() -> None:
-    late, _warn, _rows = waivers.waiver_signals(date(2026, 10, 14), [], REAL_CI, waivers.ALLOWLIST)
-    early, warnings, _rows = waivers.waiver_signals(date(2026, 10, 7), [], REAL_CI, waivers.ALLOWLIST)
+def test_the_real_ci_review_dates_are_red_after_their_dates_and_warn_within_a_week() -> None:
+    # The W5e integration's security re-review (2026-10-15) re-checked both
+    # ignores and moved their dates (mlflow 2026-11-15, oauthlib 2026-11-01).
+    late, _warn, _rows = waivers.waiver_signals(date(2026, 11, 16), [], REAL_CI, waivers.ALLOWLIST)
+    early, warnings, _rows = waivers.waiver_signals(date(2026, 10, 31), [], REAL_CI, waivers.ALLOWLIST)
 
-    assert [(s.code, s.detail) for s in late] == [("review_date_past", "2026-10-08"), ("review_date_past", "2026-10-13")]
+    assert [(s.code, s.detail) for s in late] == [("review_date_past", "2026-11-15"), ("review_date_past", "2026-11-01")]
     assert all(s.subject.startswith(".github/workflows/ci.yml:") for s in late)
     assert early == []
-    assert [s.code for s in warnings] == ["review_date_soon", "review_date_soon"], "within 7 days warns"
+    assert [(s.code, s.detail) for s in warnings] == [("review_date_soon", "2026-11-01")], "within 7 days warns"
 
 
 def test_a_passed_hold_review_by_is_the_gate() -> None:

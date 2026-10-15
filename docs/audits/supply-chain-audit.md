@@ -532,6 +532,18 @@ Audit quality-v2 / stack-10, decision D-platform-process-a, W5e lane
   is the designed signal: this lane may not change the ignores, their proofs
   or their dates, and a date bump is not a re-review. The re-review belongs
   to the integrator's security pass right after the first run.
+- **Re-reviewed at the W5e integration (2026-10-15).** GHSA-h7x2-h6g9-p789:
+  `first_patched_version` is still null and the range still ends at 3.15.2
+  (advisory last updated 2026-08-31); the `mlflow (server|gateway)` grep still
+  returns nothing, so the ignore stays (next review 2026-11-15). The two
+  oauthlib advisories: 4.0.0 is still the only patched release; the
+  connector's main branch now admits `oauthlib >=3.1.0,<5.0.0`
+  (databricks-sql-python#964, closed as completed 2026-10-06), but no release
+  past 4.6.0 (which still caps `<4.0.0`) exists and the repo pins 4.4.0, so
+  both ignores stay (next review 2026-11-01, when the first connector release
+  past 4.6.0 is the trigger). Both proofs and dates are written at the
+  `ci.yml` call site; the first deps-report run is no longer red on
+  `review_date_past`.
 
 ### W5e dependency tails (stacked on `ux/w5e-deps-report-tail`, never merged as a branch)
 
