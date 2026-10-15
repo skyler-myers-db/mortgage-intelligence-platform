@@ -44,9 +44,40 @@ export function normalizeRule(code) {
   return match ? `jsx-a11y/${match[1]}` : null;
 }
 
-/** Rules the config sets to "error" (the only enabled severity it may use). */
+/**
+ * The ONE reviewed rule option (W5e a11y-05): a scrollable `role="region"`
+ * must take keyboard focus (WCAG 2.1.1, axe scrollable-region-focusable), so
+ * `region` joins the rule's interactive roles. Setting `roles` replaces the
+ * default ['tabpanel'], which EvidenceDrawerBody's focusable tabpanel relies
+ * on, so it stays. Any other option on any rule is drift.
+ */
+export const REVIEWED_RULE_OPTIONS = {
+  'jsx-a11y/no-noninteractive-tabindex': { roles: ['tabpanel', 'region'] },
+};
+
+/** Canonical JSON (sorted object keys, ordered arrays) for an exact deep-equal. */
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** A rule's level: 'error', 'off', or ['error', <exactly its REVIEWED_RULE_OPTIONS entry>]. */
+function isReviewedOptionLevel(rule, level) {
+  return Array.isArray(level)
+    && level.length === 2
+    && level[0] === 'error'
+    && Object.hasOwn(REVIEWED_RULE_OPTIONS, rule)
+    && canonical(level[1]) === canonical(REVIEWED_RULE_OPTIONS[rule]);
+}
+
+/** Rules the config sets to "error" (the only enabled severity it may use), with or without the reviewed option. */
 export function enabledRules(config) {
-  return Object.keys(config?.rules ?? {}).filter((rule) => config.rules[rule] === 'error').sort();
+  return Object.keys(config?.rules ?? {})
+    .filter((rule) => config.rules[rule] === 'error' || isReviewedOptionLevel(rule, config.rules[rule]))
+    .sort();
 }
 
 /** Config drift problems; every name in `installed` (the oxlint's jsx-a11y rules) must be named. */
@@ -64,7 +95,13 @@ export function validateConfig(config, installed = []) {
   }
   for (const [rule, level] of Object.entries(config?.rules ?? {})) {
     if (!rule.startsWith('jsx-a11y/')) problems.push(`${rule}: only jsx-a11y rules may be configured`);
-    if (level !== 'error' && level !== 'off') problems.push(`${rule}: level must be "error" or "off"`);
+    if (level !== 'error' && level !== 'off' && !isReviewedOptionLevel(rule, level)) {
+      problems.push(
+        Object.hasOwn(REVIEWED_RULE_OPTIONS, rule)
+          ? `${rule}: level must be "error", "off" or ["error", ${JSON.stringify(REVIEWED_RULE_OPTIONS[rule])}] (the reviewed option)`
+          : `${rule}: level must be "error" or "off"`,
+      );
+    }
   }
   if (enabledRules(config).length === 0) problems.push('no jsx-a11y rule is enabled');
   for (const rule of installed) {

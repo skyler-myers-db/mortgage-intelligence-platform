@@ -41,6 +41,8 @@ const EXTRA_STATES: Readonly<Record<string, readonly FixtureState[]>> = {
   'segment-intelligence': ['read-failed', 'stale-note'],
   'admin-config': ['run-dialog-open'],
   glossary: ['glossary-search'],
+  // W5e a11y-05: the Console's activity region (scrollable-region-focusable).
+  'offer-orchestrator-detail': ['console'],
 };
 const ACCENT_ROUTES = new Set(['home', 'lead-queue', 'borrower-360-detail']);
 const SWEPT_ACCENTS: readonly AxeAccent[] = ['teal', 'navy', 'red'];

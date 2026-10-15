@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { parseGenieMarkdownBlocks, tokenizeGenieInline } from '../../lib/genieAnswerText';
 import { splitSourceLinks } from '../../lib/genieSourceLinks';
 import { SOURCE_LINE_RE } from '../../lib/ucAssetLinks';
@@ -120,12 +120,23 @@ function renderInlineMd(text: string, workspaceHost?: string | null, figures: Ge
 
 /** Verbatim narrative text: a prose pipe table (labelled) or a fenced block. */
 function NarrativePre({ lines, narrative }: { lines: string[]; narrative: boolean }) {
+  const captionId = useId();
+  const text = lines.join('\n');
   return (
     <figure className="genie-md-pre">
-      {narrative && <figcaption className="genie-md-pre__label">As written in Genie&apos;s narrative</figcaption>}
-      {/* Focusable so a keyboard can scroll a wide table sideways inside it
-          (axe scrollable-region-focusable). */}
-      <pre tabIndex={0}>{lines.join('\n')}</pre>
+      {narrative && (
+        <figcaption id={captionId} className="genie-md-pre__label">
+          As written in Genie&apos;s narrative
+        </figcaption>
+      )}
+      {/* A named region, focusable so a keyboard can scroll a wide table
+          sideways inside it (axe scrollable-region-focusable; a11y-05). Two
+          literal branches: oxlint reads only a literal role. */}
+      {narrative ? (
+        <pre role="region" aria-labelledby={captionId} tabIndex={0}>{text}</pre>
+      ) : (
+        <pre role="region" aria-label="Verbatim text from the answer" tabIndex={0}>{text}</pre>
+      )}
     </figure>
   );
 }

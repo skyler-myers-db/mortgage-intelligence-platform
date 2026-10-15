@@ -86,6 +86,12 @@ describe('ShortcutOverlay', () => {
     // The sheet's own `?` binding is listed with the rest.
     expect(panel.textContent).toContain('Show keyboard shortcuts');
     expect(panel.querySelector('[data-testid="shortcut-sheet-off"]')).toBeNull();
+    // a11y-05: the list scrolls on a short viewport, so it is a named,
+    // focusable region (unconditionally: it sits in a modal).
+    const list = panel.querySelector<HTMLElement>('.cmdk__list');
+    expect(list?.getAttribute('role')).toBe('region');
+    expect(list?.getAttribute('aria-label')).toBe('Shortcut list');
+    expect(list?.tabIndex).toBe(0);
   });
 
   it('lists the Triage deck first; the suspended table registers nothing (D-approval-flow-a2)', async () => {

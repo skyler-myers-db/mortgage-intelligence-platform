@@ -380,7 +380,7 @@ describe('MarkdownAnswer figure marks', () => {
     [
       'Breakdown:\n| State | Borrowers |\n|---|---|\n| IL | 1,204 |\nThe *largest* cohort is 1,204 borrowers; mip.gold.lead_scores_2026 and _5_ stay.\n```\nSELECT 5\n```',
       HOST,
-      '<p class="genie-md-p genie-md-p--first"><span>Breakdown:</span></p><figure class="genie-md-pre"><figcaption class="genie-md-pre__label">As written in Genie\'s narrative</figcaption><pre tabindex="0">| State | Borrowers |\n|---|---|\n| IL | 1,204 |</pre></figure><p class="genie-md-p"><span>The </span><em>largest</em><span> cohort is 1,204 borrowers; mip.gold.lead_scores_2026 and _5_ stay.</span></p><figure class="genie-md-pre"><pre tabindex="0">SELECT 5</pre></figure>',
+      '<p class="genie-md-p genie-md-p--first"><span>Breakdown:</span></p><figure class="genie-md-pre"><figcaption id="_ID_" class="genie-md-pre__label">As written in Genie\'s narrative</figcaption><pre role="region" aria-labelledby="_ID_" tabindex="0">| State | Borrowers |\n|---|---|\n| IL | 1,204 |</pre></figure><p class="genie-md-p"><span>The </span><em>largest</em><span> cohort is 1,204 borrowers; mip.gold.lead_scores_2026 and _5_ stay.</span></p><figure class="genie-md-pre"><pre role="region" aria-label="Verbatim text from the answer" tabindex="0">SELECT 5</pre></figure>',
     ],
     [
       'The book holds $1.2B across 3,410 loans, +350 bps over par, with 5Source: mip.gold.borrower_360 cited.',
@@ -397,8 +397,21 @@ describe('MarkdownAnswer figure marks', () => {
     expect(tooltipText(link)).toBe('Open mip.gold.borrower_360 in Databricks Catalog Explorer');
   });
 
-  // React useId values (the Tooltip's description id) depend on render
-  // order, so they compare as _ID_.
+  it('makes a verbatim block a named, focusable region: the caption names a narrative table (a11y-05)', () => {
+    act(() => root.render(<MarkdownAnswer text={'Breakdown:\n| State | Borrowers |\n|---|---|\n| IL | 1,204 |\n```\nSELECT 5\n```'} />));
+    const [narrative, fenced] = Array.from(container.querySelectorAll('pre'));
+    expect(narrative?.getAttribute('role')).toBe('region');
+    expect(narrative?.tabIndex).toBe(0);
+    const caption = container.querySelector('figcaption');
+    expect(narrative?.getAttribute('aria-labelledby')).toBe(caption?.id);
+    expect(caption?.textContent).toBe("As written in Genie's narrative");
+    expect(fenced?.getAttribute('role')).toBe('region');
+    expect(fenced?.getAttribute('aria-label')).toBe('Verbatim text from the answer');
+    expect(fenced?.tabIndex).toBe(0);
+  });
+
+  // React useId values (the Tooltip's description id, the region's caption
+  // id) depend on render order, so they compare as _ID_.
   it.each(BASE_HTML)('renders %j byte-identically to the base without a provider', (text, workspaceHost, html) => {
     act(() => root.render(<MarkdownAnswer text={text} workspaceHost={workspaceHost} />));
     expect(container.innerHTML.replace(/_r_[0-9a-z]+_/g, '_ID_')).toBe(html);

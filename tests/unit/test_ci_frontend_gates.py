@@ -225,13 +225,21 @@ def test_oxlint_is_an_exact_pin_and_its_config_names_only_jsx_a11y_rules() -> No
     assert set(config["categories"].values()) == {"off"}, "no category may enable a non-jsx-a11y rule"
     assert config["rules"], "every rule is named explicitly"
     assert all(rule.startswith("jsx-a11y/") for rule in config["rules"])
-    assert set(config["rules"].values()) <= {"error", "off"}
+    # Every level is "error" or "off", except the ONE reviewed option (W5e
+    # a11y-05): role="region" scrollers take a tab stop; tabpanel stays.
+    reviewed = {"jsx-a11y/no-noninteractive-tabindex": ["error", {"roles": ["tabpanel", "region"]}]}
+    for rule, level in config["rules"].items():
+        if isinstance(level, list):
+            assert reviewed.get(rule) == level, f"{rule}: {level!r} is not the reviewed option"
+        else:
+            assert level in {"error", "off"}, f"{rule}: {level!r}"
+    assert config["rules"]["jsx-a11y/no-noninteractive-tabindex"] == reviewed["jsx-a11y/no-noninteractive-tabindex"]
 
-    # A rule turned off carries its one-line reason in docs/testing.md.
+    # A rule turned off, or carrying the reviewed option, has its one-line reason in docs/testing.md.
     testing_doc = (ROOT / "docs" / "testing.md").read_text(encoding="utf-8")
     for rule, level in config["rules"].items():
-        if level == "off":
-            assert f"`{rule}`" in testing_doc, f"{rule} is off without a reason in docs/testing.md"
+        if level == "off" or isinstance(level, list):
+            assert f"`{rule}`" in testing_doc, f"{rule} is off or optioned without a reason in docs/testing.md"
 
 
 def test_the_fixture_job_checks_the_built_dist_with_the_require_flag() -> None:

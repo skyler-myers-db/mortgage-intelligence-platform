@@ -59,7 +59,10 @@ export type FixtureState =
   // W5d w5-followups-snooze: an eligible actor's Follow-ups tray, open.
   | 'followups-tray'
   | 'identity-menu'
-  | 'glossary-search';
+  | 'glossary-search'
+  // W5e w5-compiler-lint (a11y-05): the Console open, its recent-activity
+  // region loaded (the Console's own audit-free my-events read).
+  | 'console';
 
 /** The reads `read-failed` fails, per route name (routes.ts). */
 export const READ_FAILED_ENDPOINTS: Readonly<Record<string, readonly string[]>> = {
@@ -229,6 +232,13 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
       const menu = page.getByRole('menu', { name: 'Account' });
       await expect(menu).toBeVisible();
       await expect(menu.getByRole('menuitemradio').first()).toBeFocused();
+      break;
+    }
+    case 'console': {
+      // Opened exactly as headings.fixture.spec.ts opens it.
+      const consolePanel = await app.openConsole();
+      await expect(consolePanel.getByRole('heading', { name: 'Console', level: 2 })).toBeVisible();
+      await expect(consolePanel.getByRole('region', { name: 'My recent activity' })).toBeVisible();
       break;
     }
     case 'glossary-search': {

@@ -369,6 +369,10 @@ Rules set to `off`, each with its reason:
 
 - `jsx-a11y/prefer-tag-over-role`: its only remedy swaps a `div role="status|group|dialog|region|img|button"` for a native tag, which contradicts the prototype markup contract (`design_files/Module 0 Prototype.html` renders `div.genie role="dialog"`, `aside.tweaks role="dialog"` and `div.approval role="region"`; `design_files/Design System.html` renders `div.theme-toggle role="group"` and `role="button"` segment cards) and moves BEM selectors and VRT pixels. On 2026-09-25 it reported 159 hits in 81 files (80 of them `role="status"`).
 
+The one reviewed rule option (W5e a11y-05; `REVIEWED_RULE_OPTIONS` in `tools/oxlint_ratchet_baseline.mjs`, which accepts exactly this array value and nothing else):
+
+- `jsx-a11y/no-noninteractive-tabindex`: `["error", { "roles": ["tabpanel", "region"] }]`. A scrollable `role="region"` must take keyboard focus (WCAG 2.1.1; axe `scrollable-region-focusable`), so `region` joins the rule's interactive roles; `roles` replaces the default `["tabpanel"]`, which EvidenceDrawerBody's focusable tabpanel needs, so it stays. Only a LITERAL `role="region"` counts (oxlint cannot read an expression role), and a role-less `tabIndex` on a non-interactive element is still an error. The four focusable scrollers are the Console's `.audit-panel` (a tab stop only while it overflows, `hooks/useOverflowFocusable.ts`), the `?` sheet's `.cmdk__list`, the Triage deck's draft copy and Genie's verbatim `<pre>`.
+
 ### Fixture contract (every body against the backend's response model)
 
 `tsc` checks a fixture payload only against the frontend's hand-written types, which can drift from the backend. `tests/unit/test_e2e_fixture_contract.py` closes that gap: every body the harness can serve is validated against the real FastAPI response model of the route the app would call, so a fixture UI cannot pass while the wire contract has moved.
