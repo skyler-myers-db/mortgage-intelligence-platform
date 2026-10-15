@@ -244,7 +244,7 @@ def test_the_board_commit_re_plans_on_the_transaction_cursor(conn_kwargs: dict[s
     assert store.active_borrower_ids(BORROWERS) == {BORROWERS[0], BORROWERS[1]}
 
 
-def test_the_workload_counts_open_stale_assigned_and_worked_in_both_windows(conn_kwargs: dict[str, str]) -> None:
+def test_the_workload_counts_open_stale_assigned_and_worked_in_both_windows(conn_kwargs: dict[str, str], admin: str) -> None:
     # W5e w5-analytics item 10 (critic-10 6c): the EXACT workload statement on
     # PostgreSQL. Rows are placed relative to now() so each falls in a known
     # window: the period is the last 7 days, the previous one the 7 before.
@@ -270,7 +270,7 @@ def test_the_workload_counts_open_stale_assigned_and_worked_in_both_windows(conn
                 "INSERT INTO mip_app.lead_assignments (borrower_id, assigned_to_email, assigned_by, assigned_at, released_at) "
                 "VALUES (%(bid)s, %(lo)s, %(by)s, now() - make_interval(days => %(days)s), "
                 "CASE WHEN %(released)s THEN now() - interval '1 day' END)",
-                {"bid": borrower_id, "lo": LO1, "by": ADMIN, "days": days_ago, "released": released},
+                {"bid": borrower_id, "lo": LO1, "by": admin, "days": days_ago, "released": released},
             )
         for borrower_id, days_ago in [(ids[0], 1), (ids[0], 1), (ids[2], 8)]:
             conn.execute(
