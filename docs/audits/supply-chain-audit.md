@@ -532,3 +532,22 @@ Audit quality-v2 / stack-10, decision D-platform-process-a, W5e lane
   is the designed signal: this lane may not change the ignores, their proofs
   or their dates, and a date bump is not a re-review. The re-review belongs
   to the integrator's security pass right after the first run.
+
+### W5e dependency tails (stacked on `ux/w5e-deps-report-tail`, never merged as a branch)
+
+Each tail is one commit whose lock was computed with `npm install <pkg>@<ver>
+--save-exact --package-lock-only --ignore-scripts`. The integrator RE-RAN that
+command on the merged tree (over a copy of its `frontend/package.json` +
+`package-lock.json` with no `node_modules`; never a cherry-picked lock hunk),
+ran `npm --prefix frontend ci` and the installed-tree gates, and applied the
+W5b hold rule: a tail that turns a gate red on another lane's files, adds more
+than +0.3 KiB br initial JS or +4.0 KiB br total JS, or breaks maxLazy is
+dropped and its hold row stays in `tools/dependency_holds.json` with a fresh
+dated reason (post-wave owner: the next dependency batch, tracked weekly by
+the report). `npm audit --package-lock-only --audit-level=high` is 0 on every
+applied lock, no tail adds a `micromatch` or `braces` path, and stylelint
+stays out.
+
+| Tail | Package | From | To | Outcome (W5e integration, 2026-10-15) | Lock changes on the merged tree |
+|---|---|---|---|---|---|
+| T1a | `happy-dom` | 20.10.3 | 20.14.6 | Applied after `w5-test-harness-deps-report` (its EvidenceHoverCard re-model): full vitest 612 files / 6,528 tests green on the installed tree; test-only, no bundle byte | `happy-dom` only |

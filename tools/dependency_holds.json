@@ -44,13 +44,6 @@
     },
     {
       "ecosystem": "npm",
-      "package": "happy-dom",
-      "below": "20.14.0",
-      "reason": "W5b hold: 20.14.x calls CSSStyleDeclaration setProperty with a foreign this (the EvidenceHoverCard same-object proof); tail T1a re-takes 20.14.x; 21.x is a major",
-      "review_by": "2026-11-15"
-    },
-    {
-      "ecosystem": "npm",
       "package": "oxlint",
       "below": "1.86.0",
       "reason": "frontend/oxlint-baseline.json records the installed oxlint and a new version names its jsx-a11y rules; tail T2 moves it with w5-compiler-lint",
