@@ -77,10 +77,12 @@ function pointerFocus(element: HTMLElement): void {
   });
 }
 
-function escape(): void {
+function escape(): KeyboardEvent {
+  const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
   act(() => {
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    window.dispatchEvent(event);
   });
+  return event;
 }
 
 function advance(ms: number): void {
@@ -185,7 +187,7 @@ describe('Tooltip', () => {
     expect(tooltip()).toBeNull();
   });
 
-  it('takes Escape before the layer below, keeps focus on the trigger and pops its layer', () => {
+  it('keyboard-opened: takes Escape before the layer below, keeps focus on the trigger and pops its layer', () => {
     const lower = vi.fn(() => true);
     const popLower = pushEscapeLayer(lower);
     try {
@@ -204,6 +206,66 @@ describe('Tooltip', () => {
 
       escape();
       expect(lower).toHaveBeenCalledTimes(1);
+    } finally {
+      popLower();
+    }
+  });
+
+  // W5e Escape decision (deviation:tooltip): a hover tooltip is incidental
+  // pointer state, so Escape closes it AND reaches the layer the user works in.
+  it('hover-opened over a lower accepting layer: one Escape closes both', () => {
+    const lower = vi.fn(() => true);
+    const popLower = pushEscapeLayer(lower);
+    try {
+      render(<Pair />);
+      const base = escapeLayerCount();
+      hover(button('Toggle theme'));
+      advance(SHOW_DELAY_MS);
+      expect(tooltip()).not.toBeNull();
+      expect(escapeLayerCount()).toBe(base + 1);
+
+      const event = escape();
+
+      expect(tooltip()).toBeNull();
+      expect(lower).toHaveBeenCalledTimes(1);
+      expect(event.defaultPrevented).toBe(true);
+      expect(escapeLayerCount()).toBe(base);
+    } finally {
+      popLower();
+    }
+  });
+
+  it('hover-opened with nothing below: closes and leaves the Escape to the page', () => {
+    render(<Pair />);
+    const base = escapeLayerCount();
+    hover(button('Toggle theme'));
+    advance(SHOW_DELAY_MS);
+    expect(tooltip()).not.toBeNull();
+
+    const event = escape();
+
+    expect(tooltip()).toBeNull();
+    expect(event.defaultPrevented).toBe(false);
+    expect(escapeLayerCount()).toBe(base);
+  });
+
+  it('a keyboard focus of the hovered trigger upgrades it: Escape is consumed again', () => {
+    const lower = vi.fn(() => true);
+    const popLower = pushEscapeLayer(lower);
+    try {
+      render(<Pair />);
+      const theme = button('Toggle theme');
+      hover(theme);
+      advance(SHOW_DELAY_MS);
+      keyboardFocus(theme);
+      expect(tooltip()?.textContent).toBe('Toggle theme');
+
+      const event = escape();
+
+      expect(tooltip()).toBeNull();
+      expect(lower).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(theme);
     } finally {
       popLower();
     }
@@ -268,7 +330,12 @@ describe('Tooltip', () => {
 
     keyboardFocus(trigger);
     expect(tooltip()?.querySelector('kbd.tooltip__kbd')?.textContent).toBe('⌘K');
-    expect(tooltip()?.textContent).toBe('Command palette⌘K');
+    // The separator is screen-reader-only: the popup reads exactly like the
+    // hidden description, 'Command palette (⌘K)', open or closed.
+    expect(tooltip()?.textContent).toBe(document.getElementById(descId)?.textContent);
+    expect(tooltip()?.textContent).toBe('Command palette (⌘K)');
+    const runs = Array.from(tooltip()?.querySelectorAll('.sr-only') ?? [], (node) => node.textContent);
+    expect(runs).toEqual([' (', ')']);
   });
 
   it('keeps the child ref and its own handlers', () => {

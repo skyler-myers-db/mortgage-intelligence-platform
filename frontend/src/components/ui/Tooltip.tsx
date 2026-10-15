@@ -22,7 +22,8 @@ import { createPortal } from 'react-dom';
  * Hover opens after the shared delay (at once inside the reopen grace), a
  * touch pointer never opens it, only keyboard-originated focus opens it at
  * once, it closes on pointer leave / blur / pointer down and on Escape (an
- * escapeStack layer while open; focus stays), and the trigger's
+ * escapeStack layer while open; a keyboard-opened tooltip consumes the key
+ * and focus stays, a hover one lets it reach the layer below), and the trigger's
  * `aria-describedby` points at the popup while it is open.
  */
 
