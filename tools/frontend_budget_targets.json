@@ -37,6 +37,26 @@
         "finding": "quality-08",
         "waiver": null
       },
+      "src/routes/analytics.approval-funnel.tsx": {
+        "targetKiB": null,
+        "finding": "quality-08",
+        "waiver": null
+      },
+      "src/routes/analytics.equity-scatter.tsx": {
+        "targetKiB": null,
+        "finding": "quality-08",
+        "waiver": null
+      },
+      "src/routes/analytics.sales-ops.tsx": {
+        "targetKiB": null,
+        "finding": "quality-08",
+        "waiver": null
+      },
+      "src/routes/analytics.sections.tsx": {
+        "targetKiB": null,
+        "finding": "quality-08",
+        "waiver": null
+      },
       "src/routes/analytics.tsx": {
         "targetKiB": null,
         "finding": "quality-08",
