@@ -59,7 +59,7 @@ import { formatCount } from '../../lib/formatters';
  * pinned to its row, the reconcile slot always renders, and the title
  * reserves two lines, so row counts and offsets match across cards. To fit
  * the prototype's proportions the description clamps to two lines (the full
- * text stays in the DOM and on the select button's `title`), the reconcile
+ * text stays in the DOM as the select button's description), the reconcile
  * note is one line, `avg` sits beside the count so the meta row keeps the
  * evidence chip and the Ask Genie entry on one line, and each facet is one
  * share bar (SegmentFacetBar). The headline count never wraps: when a six- to
