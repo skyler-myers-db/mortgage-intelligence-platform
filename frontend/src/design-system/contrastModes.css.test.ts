@@ -386,7 +386,9 @@ describe('prefers-reduced-transparency: reduce (responsive-v3)', () => {
   it('drops the blur on every selector that declares a backdrop-filter', () => {
     const blurred = sheets.flatMap(({ file, css }) =>
       topLevelRulesDeep(withoutMedia(css, REDUCED_TRANSPARENCY))
-        .filter((rule) => /backdrop-filter:\s*(?!none)/.test(rule.block))
+        // `\s*` must sit inside the lookahead: outside it, it backtracks to zero
+        // spaces and a `backdrop-filter: none` reset would count as a blur site.
+        .filter((rule) => /backdrop-filter:(?!\s*none\b)/.test(rule.block))
         .flatMap((rule) => rule.selector.split(',').map((part) => ({ file, selector: normalize(part) }))),
     );
     expect(blurred.length).toBeGreaterThanOrEqual(8);
