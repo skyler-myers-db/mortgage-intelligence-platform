@@ -12,7 +12,7 @@ import {
 import { Link, useNavigate } from 'react-router';
 import { Icon } from '../components/Icon';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
-import { type UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
+import type { UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
 import { useFirstAppearance } from '../lib/useFirstAppearance';
 import { CountChart } from '../components/charts/CountChart';
 import { utcDayScale } from '../components/charts/scales';
