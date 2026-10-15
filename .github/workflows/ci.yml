@@ -217,6 +217,14 @@ jobs:
         # directive. Its own step so the log names this gate; `npm run lint`
         # runs it again (under 1 s).
         run: npm --prefix frontend run lint:a11y
+      - name: TypeScript strict ratchet (audit stack-07)
+        # frontend/tsconfig.strict.json (the build config plus the strict
+        # flags that still have hits, noUncheckedIndexedAccess among them)
+        # over production files, compared with
+        # tools/ts_strict_ratchet_baseline.json by file + TS code + count.
+        # Fails on a new or grown hit, a stale entry (lower it with
+        # --ratchet), config drift and a TS suppression comment.
+        run: node tools/ts_strict_ratchet.mjs --check tools/ts_strict_ratchet_baseline.json
       - run: npm --prefix frontend run lint
       - run: npm --prefix frontend run test
       - run: npm --prefix frontend run build

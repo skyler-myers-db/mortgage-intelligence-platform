@@ -119,6 +119,45 @@ export function LeadApproveReview({
   }, [phase]);
   const busy = phase === 'drafting' || phase === 'submitting';
   const showCopy = (phase === 'ready' || phase === 'submitting') && draft !== null;
+  // The draft copy, shared by both wrappers below (one element, so the two
+  // literal branches cannot drift).
+  const copy = showCopy && draft ? (
+    <>
+      <dl className="approval__fields">
+        <div>
+          <dt className="field__label">Channel</dt>
+          <dd className="approval__field-value" data-testid="lead-approve-review-channel">Email</dd>
+        </div>
+        <div>
+          <dt className="field__label">Subject</dt>
+          <dd className="approval__field-value" data-testid="lead-approve-review-subject">{draft.subject}</dd>
+        </div>
+        <div>
+          <dt className="field__label">Message</dt>
+          <dd className="approval__field-value approval__message" data-testid="lead-approve-review-body">
+            {draft.body}
+          </dd>
+        </div>
+      </dl>
+      <div className="chip-row" aria-label="Disclosure and evidence">
+        <Chip variant="success" icon="shield">
+          Disclosure {draft.disclosure_version} · {draft.disclosure_state || 'state fallback'}
+        </Chip>
+        {draft.evidence_assets.map((asset, chipIndex) => {
+          const source = descriptorFor(asset);
+          return (
+            <EvidenceChip
+              key={asset}
+              source={source}
+              onClick={onInspectEvidence ? () => onInspectEvidence(source, chipIndex) : undefined}
+            >
+              {source.title}
+            </EvidenceChip>
+          );
+        })}
+      </div>
+    </>
+  ) : null;
   return (
     <form
       id={leadApproveReviewId(borrowerId)}
@@ -165,47 +204,17 @@ export function LeadApproveReview({
             </div>
           </div>
         )}
-        {showCopy && draft && (
-          <div
-            className="approval__copy"
-            role={copyRegionLabel ? 'region' : undefined}
-            aria-label={copyRegionLabel}
-          >
-            <dl className="approval__fields">
-              <div>
-                <dt className="field__label">Channel</dt>
-                <dd className="approval__field-value" data-testid="lead-approve-review-channel">Email</dd>
-              </div>
-              <div>
-                <dt className="field__label">Subject</dt>
-                <dd className="approval__field-value" data-testid="lead-approve-review-subject">{draft.subject}</dd>
-              </div>
-              <div>
-                <dt className="field__label">Message</dt>
-                <dd className="approval__field-value approval__message" data-testid="lead-approve-review-body">
-                  {draft.body}
-                </dd>
-              </div>
-            </dl>
-            <div className="chip-row" aria-label="Disclosure and evidence">
-              <Chip variant="success" icon="shield">
-                Disclosure {draft.disclosure_version} · {draft.disclosure_state || 'state fallback'}
-              </Chip>
-              {draft.evidence_assets.map((asset, chipIndex) => {
-                const source = descriptorFor(asset);
-                return (
-                  <EvidenceChip
-                    key={asset}
-                    source={source}
-                    onClick={onInspectEvidence ? () => onInspectEvidence(source, chipIndex) : undefined}
-                  >
-                    {source.title}
-                  </EvidenceChip>
-                );
-              })}
-            </div>
+        {/* With copyRegionLabel (the Triage deck's decision column) the copy is
+            its own scroll region and takes a tab stop (a11y-05; axe
+            scrollable-region-focusable). Two literal branches: oxlint cannot
+            read an expression role. */}
+        {copy && (copyRegionLabel ? (
+          <div className="approval__copy" role="region" aria-label={copyRegionLabel} tabIndex={0}>
+            {copy}
           </div>
-        )}
+        ) : (
+          <div className="approval__copy">{copy}</div>
+        ))}
         {error && phase === 'ready' && (
           <div className="status-callout status-callout--danger" role="alert">{error}</div>
         )}

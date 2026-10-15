@@ -9,6 +9,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tooltipText } from '../../test/tooltipText';
 import type { RateSensitivityResponse } from '../../types/rateScenario';
 import RateScenarioControl from './RateScenarioControl';
 import { buildChoroplethScale } from './USChoroplethMap.scale';
@@ -51,7 +52,7 @@ describe('USChoroplethMapLegend break row', () => {
     return [...document.querySelectorAll('.map-legend__break')].map((el) => ({
       text: el.textContent,
       value: Number(el.getAttribute('data-break')),
-      title: el.getAttribute('title'),
+      title: tooltipText(el),
     }));
   }
 

@@ -7,6 +7,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tooltipText } from '../test/tooltipText';
 import type {
   Borrower360,
   BorrowerLifecycle,
@@ -461,8 +462,10 @@ describe('OfferOrchestrator route behavior', () => {
     expect(email.disabled).toBe(false);
     expect(sms.disabled).toBe(true);
     expect(directMail.disabled).toBe(true);
-    expect(sms.getAttribute('aria-describedby')).toBe(channelRestriction?.id);
-    expect(directMail.getAttribute('aria-describedby')).toBe(channelRestriction?.id);
+    // The visible restriction note first, then the per-channel Tooltip reason (critic-08 R5).
+    expect(sms.getAttribute('aria-describedby')?.split(' ')[0]).toBe(channelRestriction?.id);
+    expect(directMail.getAttribute('aria-describedby')?.split(' ')[0]).toBe(channelRestriction?.id);
+    expect(tooltipText(sms)).toBe('SMS is unavailable because this campaign has no saved audited SMS variant.');
 
     act(() => sms.click());
     act(() => directMail.click());
@@ -545,8 +548,8 @@ describe('OfferOrchestrator route behavior', () => {
     expect(container.querySelector('[data-testid="approval-actor"]')).toBeNull();
     for (const label of ['Approve outreach', 'Reject']) {
       expect(button(label).disabled).toBe(true);
-      expect(button(label).getAttribute('aria-describedby')).toBe(reason!.id);
-      expect(button(label).getAttribute('title')).toBe('Requires approver role');
+      expect(button(label).getAttribute('aria-describedby')?.split(' ')[0]).toBe(reason!.id);
+      expect(tooltipText(button(label))).toBe('Requires approver role');
     }
 
     await act(async () => {

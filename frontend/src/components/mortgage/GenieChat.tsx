@@ -16,6 +16,7 @@ import { genieStartQueryOptions } from '../../lib/genieStartQuery';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
 import { Button } from '../Primitives';
+import { Tooltip } from '../ui/Tooltip';
 import {
   GENIE_CONVERSATION_RESET_EVENT,
   clearGenieConversationState,
@@ -487,7 +488,7 @@ export function GenieChat() {
           },
           confirmed,
         );
-        if (outcome.result.route) navigate(outcome.result.route);
+        if (outcome.result.route) void navigate(outcome.result.route);
       })
       .finally(() => setActionRunning(false));
   };
@@ -603,81 +604,81 @@ export function GenieChat() {
             header background start the drag; double-click re-docks.
             Children (avatar, title, close button) intercept clicks
             normally because the move guard checks e.target === header. */}
-        <div
-          className={`genie__hdr ${pos ? 'genie__hdr--dragging' : ''}`}
-          onPointerDown={onDragPointerDown}
-          onPointerMove={onDragPointerMove}
-          onPointerUp={onDragPointerUp}
-          onPointerCancel={onDragPointerUp}
-          onDoubleClick={onDragDoubleClick}
-          title={
-            pos
-              ? 'Drag to move · double-click to re-dock'
-              : 'Drag to undock · double-click to reset'
-          }
-        >
-          <div className="genie__avatar" />
-          <div className="genie-chat__drag-title">
-            <div className="genie__title">Ask Genie</div>
-            <div className="genie__sub">
-              Trusted Unity Catalog assets · {lender}
-              {pos ? ' · undocked' : ''}
+        <Tooltip content={pos ? 'Drag to move · double-click to re-dock' : 'Drag to undock · double-click to reset'}>
+          <div
+            className={`genie__hdr ${pos ? 'genie__hdr--dragging' : ''}`}
+            onPointerDown={onDragPointerDown}
+            onPointerMove={onDragPointerMove}
+            onPointerUp={onDragPointerUp}
+            onPointerCancel={onDragPointerUp}
+            onDoubleClick={onDragDoubleClick}
+          >
+            <div className="genie__avatar" />
+            <div className="genie-chat__drag-title">
+              <div className="genie__title">Ask Genie</div>
+              <div className="genie__sub">
+                Trusted Unity Catalog assets · {lender}
+                {pos ? ' · undocked' : ''}
+              </div>
             </div>
+            {/* Re-dock button — only visible when the panel is undocked.
+                Gives a discoverable affordance for users who haven't
+                learned the double-click shortcut. */}
+            {pos && (
+              <Tooltip content="Re-dock">
+                <button
+                  type="button"
+                  className="drawer__close"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDragDoubleClick();
+                  }}
+                  aria-label="Re-dock Genie panel to bottom-right"
+                >
+                  <Icon name="db" size={14} />
+                </button>
+              </Tooltip>
+            )}
+            <GenieHistoryMenu
+              open={historyOpen}
+              onToggle={setHistoryOpen}
+              onLoad={loadSession}
+              disabled={typing}
+            />
+            {/* "New thread" is now a labeled control, not an icon-only button:
+                it clears the persisted transcript, so the destructive intent
+                has to be readable. `.btn--ghost .btn--sm` per the design
+                system's existing button vocabulary. */}
+            <Tooltip content="New thread">
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm genie__new-thread"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  newConversation();
+                }}
+                disabled={typing}
+                aria-label="Start a new Genie thread"
+              >
+                <Icon name="chat" size={12} />
+                <span className="genie__new-thread-label">New thread</span>
+              </button>
+            </Tooltip>
+            <Tooltip content="Close" shortcut="Esc">
+              <button
+                className="drawer__close"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setGenieOpen(false);
+                }}
+                aria-label="Close Genie"
+                type="button"
+              >
+                <Icon name="close" size={14} />
+              </button>
+            </Tooltip>
           </div>
-          {/* Re-dock button — only visible when the panel is undocked.
-              Gives a discoverable affordance for users who haven't
-              learned the double-click shortcut. */}
-          {pos && (
-            <button
-              type="button"
-              className="drawer__close"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDragDoubleClick();
-              }}
-              aria-label="Re-dock Genie panel to bottom-right"
-              title="Re-dock"
-            >
-              <Icon name="db" size={14} />
-            </button>
-          )}
-          <GenieHistoryMenu
-            open={historyOpen}
-            onToggle={setHistoryOpen}
-            onLoad={loadSession}
-            disabled={typing}
-          />
-          {/* "New thread" is now a labeled control, not an icon-only button:
-              it clears the persisted transcript, so the destructive intent
-              has to be readable. `.btn--ghost .btn--sm` per the design
-              system's existing button vocabulary. */}
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm genie__new-thread"
-            onClick={(e) => {
-              e.stopPropagation();
-              newConversation();
-            }}
-            disabled={typing}
-            aria-label="Start a new Genie thread"
-            title="New thread"
-          >
-            <Icon name="chat" size={12} />
-            <span className="genie__new-thread-label">New thread</span>
-          </button>
-          <button
-            className="drawer__close"
-            onClick={(e) => {
-              e.stopPropagation();
-              setGenieOpen(false);
-            }}
-            aria-label="Close Genie"
-            title="Close (Esc)"
-            type="button"
-          >
-            <Icon name="close" size={14} />
-          </button>
-        </div>
+        </Tooltip>
         <GenieChatBody
           open={genieOpen}
           bodyRef={bodyRef}
@@ -723,7 +724,7 @@ export function GenieChat() {
             icon="send"
             aria-label="Ask"
             disabled={busyReason !== null}
-            title={busyReason ?? undefined}
+            tooltip={busyReason ?? undefined}
           >
             Ask
           </Button>

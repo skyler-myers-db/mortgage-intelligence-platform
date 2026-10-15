@@ -7,6 +7,7 @@ import { useApp } from '../AppContext';
 import { assetHrefForSource, descriptorFor, DRAWER_SOURCES } from '../../lib/drawerSources';
 import { formatTimestamp } from '../../lib/time';
 import { Skeleton } from '../ui/Skeleton';
+import { Tooltip } from '../ui/Tooltip';
 import { formatCount } from '../../lib/formatters';
 
 function statusLabel(status: DataEstateStatus): string {
@@ -153,14 +154,15 @@ function DataEstateLaneCard({
             <span className="data-estate__lane-copy">{lane.description}</span>
           </span>
         </div>
-        <button
-          type="button"
-          className={`chip chip--${chipVariant(lane.status)} data-estate__lane-proof`}
-          onClick={() => setDrawer(DRAWER_SOURCES.sourceReadiness)}
-          title={`Open source-readiness proof for ${lane.title}`}
-        >
-          <span className="chip__label">{laneStatusSummary(lane.status, lane.assets)}</span>
-        </button>
+        <Tooltip content={`Open source-readiness proof for ${lane.title}`}>
+          <button
+            type="button"
+            className={`chip chip--${chipVariant(lane.status)} data-estate__lane-proof`}
+            onClick={() => setDrawer(DRAWER_SOURCES.sourceReadiness)}
+          >
+            <span className="chip__label">{laneStatusSummary(lane.status, lane.assets)}</span>
+          </button>
+        </Tooltip>
       </div>
       <div className="data-estate__assets">
         {lane.assets.map((asset, index) => {
@@ -169,28 +171,29 @@ function DataEstateLaneCard({
           const assetExpanded = expandedAssetKey === assetKey;
           return (
             <div key={assetKey} className={`data-estate__asset-wrap ${assetExpanded ? 'is-expanded' : ''}`}>
-              <button
-                type="button"
-                className="data-estate__asset"
-                onClick={() => {
-                  setExpandedAssetKey(assetExpanded ? null : assetKey);
-                }}
-                aria-expanded={assetExpanded}
-                aria-controls={detailId}
-                title={`Show contract details for ${asset.label}`}
-              >
-                <div className="data-estate__asset-main">
-                  <span className={`status-dot status-dot--${statusDot(asset.status)}`} />
-                  <span>{asset.label}</span>
-                </div>
-                <div className="data-estate__asset-meta">
-                  {formatRows(asset.row_count) ?? statusLabel(asset.status)}
-                  {asset.synthetic_demo && (
-                    <span className="chip chip--neutral data-estate__asset-chip">demo synthetic</span>
-                  )}
-                  <Icon name={assetExpanded ? 'up' : 'down'} size={12} />
-                </div>
-              </button>
+              <Tooltip content={`Show contract details for ${asset.label}`}>
+                <button
+                  type="button"
+                  className="data-estate__asset"
+                  onClick={() => {
+                    setExpandedAssetKey(assetExpanded ? null : assetKey);
+                  }}
+                  aria-expanded={assetExpanded}
+                  aria-controls={detailId}
+                >
+                  <div className="data-estate__asset-main">
+                    <span className={`status-dot status-dot--${statusDot(asset.status)}`} />
+                    <span>{asset.label}</span>
+                  </div>
+                  <div className="data-estate__asset-meta">
+                    {formatRows(asset.row_count) ?? statusLabel(asset.status)}
+                    {asset.synthetic_demo && (
+                      <span className="chip chip--neutral data-estate__asset-chip">demo synthetic</span>
+                    )}
+                    <Icon name={assetExpanded ? 'up' : 'down'} size={12} />
+                  </div>
+                </button>
+              </Tooltip>
               {asset.catalog_explorer_url && (
                 <a
                   className="data-estate__asset-catalog"

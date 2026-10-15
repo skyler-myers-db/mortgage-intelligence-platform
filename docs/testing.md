@@ -420,6 +420,70 @@ Rules set to `off`, each with its reason:
 
 - `jsx-a11y/prefer-tag-over-role`: its only remedy swaps a `div role="status|group|dialog|region|img|button"` for a native tag, which contradicts the prototype markup contract (`design_files/Module 0 Prototype.html` renders `div.genie role="dialog"`, `aside.tweaks role="dialog"` and `div.approval role="region"`; `design_files/Design System.html` renders `div.theme-toggle role="group"` and `role="button"` segment cards) and moves BEM selectors and VRT pixels. On 2026-09-25 it reported 159 hits in 81 files (80 of them `role="status"`).
 
+The one reviewed rule option (W5e a11y-05; `REVIEWED_RULE_OPTIONS` in `tools/oxlint_ratchet_baseline.mjs`, which accepts exactly this array value and nothing else):
+
+- `jsx-a11y/no-noninteractive-tabindex`: `["error", { "roles": ["tabpanel", "region"] }]`. A scrollable `role="region"` must take keyboard focus (WCAG 2.1.1; axe `scrollable-region-focusable`), so `region` joins the rule's interactive roles; `roles` replaces the default `["tabpanel"]`, which EvidenceDrawerBody's focusable tabpanel needs, so it stays. Only a LITERAL `role="region"` counts (oxlint cannot read an expression role), and a role-less `tabIndex` on a non-interactive element is still an error. The four focusable scrollers are the Console's `.audit-panel` (a tab stop only while it overflows, `hooks/useOverflowFocusable.ts`), the `?` sheet's `.cmdk__list`, the Triage deck's draft copy and Genie's verbatim `<pre>`.
+
+### Lint depth (title ban, typed lint, strict TypeScript, BEM)
+
+Audit critic-08, stack-07 items 3-5 and quality-10 steps 2-3 (W5e). Four gates, each fail-closed and shrink-only. `npm --prefix frontend run lint` runs the first two and the BEM gate; CI runs the TypeScript ratchet as its own step.
+
+**The title= ban.** `TITLE_BAN` in `frontend/eslint.config.js` (in the formatting block's `no-restricted-syntax`, beside `FORMATTING_BAN`) makes a native `title=` on any lowercase JSX element an error, `iframe` excepted, and so is `title` on `Chip`, `Button`, `EvidenceChip`, `Link` and `NavLink`, which forward it to the DOM. SVG `<title>` elements and other components' `title` props (PageShell, SectionHeader, ...) are untouched. A native title is mouse-only, appears late in OS chrome and never on keyboard focus or touch; use `ui/Tooltip` or the Chip/Button `tooltip` prop. Migrate a site by these rules, keeping every existing `aria-label`:
+
+- **R1 redundant:** the title repeats the accessible name or visible text: delete it.
+- **R2 icon-only control:** the name goes in `aria-label` (add one if the title was the only name), plus `<Tooltip content={name}>`.
+- **R3 supplementary text on a focusable control or link:** `<Tooltip>`, or the Button `tooltip` prop.
+- **R4 supplementary text on a non-focusable element:** the Chip `tooltip` prop or `<Tooltip>`. A compliance fact must be visible text, never only a tooltip.
+- **R5 disabled reason on a natively disabled button:** the Button `tooltip` prop or `<Tooltip>`; keep native `disabled`. Prefer a Tooltip that stays mounted (a reason while held, the description otherwise): a conditional wrapper remounts the button when it flips. A control with no description of its own while enabled keeps the conditional wrapper rather than gain one: on a natively `disabled` control (the Genie composer's Ask button, the refusal card's follow-up chips) the flip already drops focus, so the remount loses nothing; an `aria-disabled` control stays focusable, so it keeps the wrapper only where the reason flips from a control elsewhere, not from its own activation (the map's rate toggle flips on a segment or portfolio filter change).
+- **R6 raw identifiers** (ids, hashes, the ISO time on `<time>`): R4. `<Timestamp>` already wraps its `<time>`.
+
+On a list surface with dozens of rows prefer R1 wherever the row already shows the name. Tests read a tooltip through `src/test/tooltipText.ts` (unit) or `tests/e2e/fixture/tooltip.ts` (e2e), never `title`.
+
+`TITLE_BAN_ALLOWLIST` names each file that still carries a site, as `'<owner lane> - <n> sites - <why>'`. It only shrinks: `src/lib/titleBan.test.ts` fails when an entry's count is not its file's live hit count, so a migrated file leaves the list in the same change, and a new site in a listed file is caught. Never add an entry. The allowlist override keeps `FORMATTING_BAN` on for those files (never `'off'`), and disappears through its length guard once the list is empty. The integrator removes the deprecated Chip/Button/EvidenceChip `title` passthrough last and pins it with `frontend/src/components/Primitives.titleProp.test.tsx`:
+
+```tsx
+import { describe, expect, it } from 'vitest';
+import { Button, Chip, EvidenceChip } from './Primitives';
+
+// The title passthrough is gone (audit critic-08): `tsc -b` fails if one comes back.
+const removed = [
+  // @ts-expect-error Chip has no title prop; use tooltip.
+  <Chip key="chip" title="x">x</Chip>,
+  // @ts-expect-error Button omits the DOM title attribute; use tooltip.
+  <Button key="button" title="x">x</Button>,
+  // @ts-expect-error EvidenceChip has no title prop; the evidence hover card replaced it.
+  <EvidenceChip key="evidence" title="x">x</EvidenceChip>,
+];
+
+describe('the removed title passthrough', () => {
+  it('is a type error on all three primitives (tsc -b pins it)', () => {
+    expect(removed).toHaveLength(3);
+  });
+});
+```
+
+**Typed lint.** One block in `eslint.config.js` runs `@typescript-eslint/no-floating-promises`, `no-misused-promises` and `no-base-to-string` at their default options (no `checksVoidReturn` exemption) through `projectService`, over production source only. Fix a hit in code: `void` only for a fire-and-forget whose rejection is handled inside (react-router's `navigate`), `.catch(handler)` otherwise, and an async JSX handler becomes `() => void run()` where `run` handles its own errors. Pre-existing hits in files other W5e lanes own live in `frontend/eslint-suppressions.json`, ESLint's native bulk suppressions, applied by the CLI from `frontend/` with no flag. It only shrinks: an unused entry fails `eslint .`; prune it with `npx eslint . --prune-suppressions` (from `frontend/`). A new hit is never suppressed, the file names only those three rules, and no script or CI step may pass `--pass-on-unpruned-suppressions` or `--suppressions-location` (`src/test/eslintSuppressions.test.ts`).
+
+**The TypeScript strict ratchet.** `frontend/tsconfig.json` (the build, `tsc -b`) targets ES2022 with `verbatimModuleSyntax`, `noImplicitReturns`, `noFallthroughCasesInSwitch`, `noUnusedLocals` and `noUnusedParameters`: every flag at zero over ALL of `src`. `frontend/tsconfig.strict.json` extends it with the flags that still have hits (`erasableSyntaxOnly`, `noImplicitOverride`, `noUncheckedIndexedAccess`) over production files only, and is not part of `tsc -b`:
+
+```bash
+node tools/ts_strict_ratchet.mjs --check tools/ts_strict_ratchet_baseline.json     # CI's 'TypeScript strict ratchet' step
+node tools/ts_strict_ratchet.mjs --ratchet tools/ts_strict_ratchet_baseline.json   # after a fix: only lowers
+```
+
+The baseline is keyed by file + TS code + count, never by line. `--check` fails on an unlisted or grown hit, a stale entry, another TypeScript version, config drift (every required flag on in one of the two configs, none false, ES2022, the exact production include/exclude) and a suppression comment in production code (`@ts-ignore` and `@ts-nocheck` anywhere, `@ts-expect-error` outside `src/types/wireContract.*.check.ts`); it fails closed when the program's listed files differ from its own enumeration. A TypeScript upgrade fails `--check` on VERSION alone until `--ratchet` records the installed version, so the change that bumps TypeScript (or the integrator, after `npm ci` on a merged lock) runs `--ratchet` in the same change, beside the oxlint `--ratchet`; it refuses while a hit is unlisted or grown, so a hit the new compiler adds is fixed in code first. Fix a new hit with narrowing, `?? fallback`, an early return or an explicit tuple type; a non-null assertion only with an invariant comment saying why the index exists. **Promotion rule:** a flag moves from `tsconfig.strict.json` into `tsconfig.json` once it is zero over production AND tests.
+
+**The BEM selector gate.** `tools/lint_css_literals.mjs` also fails on a class selector, in a rule prelude under `frontend/src/**/*.css`, that does not follow the prototype grammar `block(-word)*[__element(-word)*][--modifier(-word)*]` in lowercase ASCII. At-rule preludes (`@media`, `@supports`, `@layer`, `@keyframes` percentages, `@property`, ...), comments and strings are ignored. Never rename a prototype class to satisfy it: a departing class goes in `BEM_EXCEPTIONS` with a cite of a `design_files` line or a registered deviation id (`src/design-system/cssBemGrammar.test.ts` keeps each exception live and cited). It is dependency-free: stylelint stays out while its `braces` path has no patched release.
+
+**The probe.** Another worktree can see its hits before these gates reach it, with no baseline, allowlist or suppression applied:
+
+```bash
+git show ux/w5e-compiler-lint:tools/lint_depth_probe.mjs > "$TMPDIR/lint_depth_probe.mjs"
+node "$TMPDIR/lint_depth_probe.mjs" --repo <worktree> [--files <paths...>]
+```
+
+It lints with only `TITLE_BAN` and the three typed rules and runs tsc with all eight strict flags, loading every tool from `<repo>/frontend/node_modules`. `src/test/lintDepthProbe.test.ts` pins its embedded copies to `eslint.config.js` and `REQUIRED_FLAGS`.
+
 ### Fixture contract (every body against the backend's response model)
 
 `tsc` checks a fixture payload only against the frontend's hand-written types, which can drift from the backend. `tests/unit/test_e2e_fixture_contract.py` closes that gap: every body the harness can serve is validated against the real FastAPI response model of the route the app would call, so a fixture UI cannot pass while the wire contract has moved.

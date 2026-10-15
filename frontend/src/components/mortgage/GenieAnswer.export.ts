@@ -63,7 +63,9 @@ export function genieCsvCell(column: string, value: unknown): string {
   if (isIdentifierColumn(column)) return formatIdentifier(column, value);
   if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '';
   if (typeof value === 'object') return JSON.stringify(value);
-  return String(value);
+  if (typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+  // A JSON cell is a string here; nothing else (a function, a symbol) has a CSV form.
+  return typeof value === 'string' ? value : '';
 }
 
 /** The CSV text: `# key=value` provenance lines, the raw header, the rows. */

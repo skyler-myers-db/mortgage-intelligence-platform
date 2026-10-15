@@ -1,4 +1,4 @@
-import { Suspense, useEffect } from 'react';
+import { Suspense, useEffect, useRef } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { useApp, type Accent, type Density } from '../AppContext';
@@ -14,6 +14,8 @@ import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { preloadIntentProps } from '../../lib/preloadIntent';
 import { lenderMarkUrl } from '../../lib/themePreference';
 import { formatTimeOfDay, formatTimestamp } from '../../lib/time';
+import { Tooltip } from '../ui/Tooltip';
+import { useOverflowFocusable } from '../../hooks/useOverflowFocusable';
 
 /**
  * Console — the right-side tweaks panel from the prototype. Theme, accent,
@@ -70,6 +72,10 @@ export function Console() {
     gcTime: 0,
   });
   const recentActivity = activityQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  // The activity list scrolls inside a fixed max-height: a region that takes a
+  // tab stop only while it overflows (a11y-05; axe scrollable-region-focusable).
+  const activityPanelRef = useRef<HTMLDivElement | null>(null);
+  const activityScrolls = useOverflowFocusable(activityPanelRef, recentActivity.length);
 
   useEffect(() => {
     if (!consoleOpen || recentActivityFocusRequest < 1) return;
@@ -162,7 +168,7 @@ export function Console() {
           <div className="surface">
             <div className="surface__hdr">
               <Icon name="audit" size={14} className="tweaks__hdr-icon" />
-              <SurfaceTitle level={3}>My recent activity</SurfaceTitle>
+              <SurfaceTitle level={3} id="console-activity-title">My recent activity</SurfaceTitle>
               <div className="topbar__spacer" />
               <button
                 type="button"
@@ -173,7 +179,14 @@ export function Console() {
                 Refresh
               </button>
             </div>
-            <div className="audit-panel" aria-live="polite">
+            <div
+              ref={activityPanelRef}
+              className="audit-panel"
+              role="region"
+              aria-labelledby="console-activity-title"
+              tabIndex={activityScrolls ? 0 : undefined}
+              aria-live="polite"
+            >
               {activityQuery.isPending && (
                 <div className="audit-panel__pad audit-panel__message">Loading recent activity…</div>
               )}
@@ -201,13 +214,11 @@ export function Console() {
                     className="audit"
                     key={`${event.created_at}-${event.event_type}-${index}`}
                   >
-                    <time
-                      className="audit__time mono"
-                      dateTime={event.created_at}
-                      title={formatTimestamp(event.created_at, { withSeconds: true })}
-                    >
-                      {formatTimeOfDay(event.created_at)}
-                    </time>
+                    <Tooltip content={formatTimestamp(event.created_at, { withSeconds: true })}>
+                      <time className="audit__time mono" dateTime={event.created_at}>
+                        {formatTimeOfDay(event.created_at)}
+                      </time>
+                    </Tooltip>
                     <div className={`audit__ico ${presentation.tone}`}>
                       <Icon name={presentation.icon} size={11} />
                     </div>

@@ -142,6 +142,8 @@ export function IdentityMenu() {
         if (open && !rootRef.current?.contains(event.relatedTarget as Node | null)) setOpen(false);
       }}
     >
+      {/* R1 (critic-08): the old title repeated the aria-label; dropped, not moved to a
+          Tooltip, under the W5e 0 KiB initial-JS cap (the budget rule's step ii). */}
       <button
         ref={triggerRef}
         type="button"
@@ -150,7 +152,6 @@ export function IdentityMenu() {
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         aria-label={triggerLabel}
-        title={triggerLabel}
         onPointerEnter={warm}
         onFocus={warm}
         onClick={() => (open ? setOpen(false) : openAt(0))}

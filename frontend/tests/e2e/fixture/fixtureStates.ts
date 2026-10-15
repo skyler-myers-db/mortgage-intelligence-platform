@@ -76,7 +76,10 @@ export type FixtureState =
   // borrowers were all decided, withdrawn or expired (its own URL, statePath),
   // and the same request still open: ApprovalRequestScopeRow over its rows.
   | 'request-scoped-empty'
-  | 'request-scoped';
+  | 'request-scoped'
+  // W5e w5-compiler-lint (a11y-05): the Console open, its recent-activity
+  // region loaded (the Console's own audit-free my-events read).
+  | 'console';
 
 /**
  * States whose natural load is their own URL, not the route's. The
@@ -308,6 +311,13 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
       for (const borrowerId of REQUESTED_IDS) {
         await expect(page.getByTestId(`lead-approve-${borrowerId}`).filter({ visible: true })).toBeVisible();
       }
+      break;
+    }
+    case 'console': {
+      // Opened exactly as headings.fixture.spec.ts opens it.
+      const consolePanel = await app.openConsole();
+      await expect(consolePanel.getByRole('heading', { name: 'Console', level: 2 })).toBeVisible();
+      await expect(consolePanel.getByRole('region', { name: 'My recent activity' })).toBeVisible();
       break;
     }
     case 'glossary-search': {

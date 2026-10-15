@@ -329,7 +329,8 @@ describe('Triage deck', { timeout: 30_000 }, () => {
     press('a');
     await flush();
     expect(draftOutreach, 'A drafts exactly once').toHaveBeenCalledTimes(1);
-    expect(q('[role="region"][aria-label="Draft outreach for B-TRIAGE0000001"]')).not.toBeNull();
+    // a11y-05: the draft copy is its own scroll region and takes a tab stop.
+    expect(q<HTMLElement>('[role="region"][aria-label="Draft outreach for B-TRIAGE0000001"]')?.tabIndex).toBe(0);
 
     expect(enterOnConfirm().defaultPrevented).toBe(false);
     await flush();

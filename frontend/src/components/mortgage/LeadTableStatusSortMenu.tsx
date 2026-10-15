@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useExitPresence } from '../../hooks/useExitRetained';
 import { pushEscapeLayer } from '../../lib/escapeStack';
 import { Icon } from '../Icon';
+import { Tooltip } from '../ui/Tooltip';
 import { STATUS_SORT_OPTIONS } from './LeadTable.columns';
 import type { SortDir, SortKey } from './LeadTable.types';
 
@@ -130,34 +131,35 @@ export function LeadTableStatusSortMenu({
       className={`lead-table__status-header${open ? ' is-open' : ''}`}
       aria-sort={ariaSort}
     >
-      <button
-        ref={triggerRef}
-        type="button"
-        className="tbl__sort"
-        data-rum-target="sort"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
-        aria-label={active ? `Status, sorted by ${active.label}. Sort options` : 'Status. Sort options'}
-        title={active ? `Sorted by ${active.label}` : 'Sort by relationship, assignee or outreach'}
-        onClick={(event) => {
-          event.stopPropagation();
-          if (open) setOpen(false);
-          else openMenu();
-        }}
-        onKeyDown={(event) => {
-          if (!open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
-            event.preventDefault();
-            openMenu();
-          }
-        }}
-        data-testid="lead-status-sort"
-      >
-        <span>Status</span>
-        {active
-          ? <Icon name={sortDir === 'desc' ? 'down' : 'up'} size={10} />
-          : <Icon name="chevdown" size={10} />}
-      </button>
+      <Tooltip content={active ? `Sorted by ${active.label}` : 'Sort by relationship, assignee or outreach'}>
+        <button
+          ref={triggerRef}
+          type="button"
+          className="tbl__sort"
+          data-rum-target="sort"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-controls={open ? menuId : undefined}
+          aria-label={active ? `Status, sorted by ${active.label}. Sort options` : 'Status. Sort options'}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (open) setOpen(false);
+            else openMenu();
+          }}
+          onKeyDown={(event) => {
+            if (!open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+              event.preventDefault();
+              openMenu();
+            }
+          }}
+          data-testid="lead-status-sort"
+        >
+          <span>Status</span>
+          {active
+            ? <Icon name={sortDir === 'desc' ? 'down' : 'up'} size={10} />
+            : <Icon name="chevdown" size={10} />}
+        </button>
+      </Tooltip>
       {present && anchor && createPortal(
         <div
           ref={menuRef}

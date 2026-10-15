@@ -241,30 +241,30 @@ export function GrowthAgentRunCard({
       <div className="chip-row growth-agent-run__trace">
         <Chip variant="neutral" icon="sparkle">{executionModeLabel(run)}</Chip>
         <Chip variant="neutral" icon="audit">Owner: {workflowOwnerLabel(run.specialist_agent)}</Chip>
-        <Chip variant="neutral" icon="audit" title={run.trace_id ?? undefined}>
+        <Chip variant="neutral" icon="audit" tooltip={run.trace_id ?? undefined}>
           {traceLabel(run)} {traceDisplay(run.trace_id)}
         </Chip>
-        <Chip variant="neutral" icon="link" title={run.tool_result_hash ?? undefined}>
+        <Chip variant="neutral" icon="link" tooltip={run.tool_result_hash ?? undefined}>
           Hash {shortHash(run.tool_result_hash)}
         </Chip>
         <Chip
           variant={cohortProofAttached ? 'success' : 'warning'}
           icon="shield"
-          title={run.actionable_cohort_fingerprint ?? undefined}
+          tooltip={run.actionable_cohort_fingerprint ?? undefined}
         >
           {cohortProofAttached
             ? `Cohort proof ${shortHash(run.actionable_cohort_fingerprint)}`
             : 'Cohort proof unavailable'}
         </Chip>
         {run.actionable_snapshot_id && (
-          <Chip variant="neutral" icon="audit" title={run.actionable_snapshot_id}>
+          <Chip variant="neutral" icon="audit">
             Snapshot {run.actionable_snapshot_id}
           </Chip>
         )}
         <Chip
           variant={run.audit_event_id ? 'success' : 'warning'}
           icon="audit"
-          title={run.audit_event_id ?? undefined}
+          tooltip={run.audit_event_id ?? undefined}
         >
           {run.audit_event_id ? (
             // flow-04: administrators and auditors open the run's ledger row.
@@ -375,7 +375,7 @@ export function GrowthAgentRunCard({
                 <Chip
                   variant={chip.status === 'passed' ? 'success' : 'warning'}
                   icon="shield"
-                  title={publicAgentResponsesText(chip.detail)}
+                  tooltip={publicAgentResponsesText(chip.detail)}
                 >
                   {governanceStatusLabel(chip.status)}
                 </Chip>

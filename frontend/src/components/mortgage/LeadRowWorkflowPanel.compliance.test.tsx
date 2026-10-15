@@ -80,9 +80,12 @@ describe('the expanded row\'s compliance source', () => {
     expect(document.body.textContent).toContain('Eligible');
   });
 
-  it('reads the eligibility source on a suppressed row, and falls back to the synthetic seed', () => {
+  it('reads the suppression reason and the eligibility source on a suppressed row, and falls back to the synthetic seed', () => {
     const lead = { ...BASE, dnc: false, marketing_eligible: false, suppression_reason: 'opt_out' } as LeadSummary;
     expect(renderPanel(lead)).toBe('Eligibility source: synthetic_seed');
+    // The queue row's Suppressed chip carries no title (critic-08 R1): its
+    // reason is this visible chip text in the expanded row.
+    expect([...document.querySelectorAll('.chip')].map((chip) => chip.textContent)).toContain('Suppressed: opt_out');
   });
 
   it('is the text the chips\' titles use (one helper)', () => {
@@ -164,9 +167,13 @@ describe('the expanded row\'s lifecycle stepper (critic-06 item d)', () => {
     ]);
     expect(currentStep()).toBe('Approved');
     expect(list?.querySelectorAll('[aria-current]')).toHaveLength(1);
-    expect(list?.querySelectorAll('[title]')).toHaveLength(0);
-    // The stage chip stays the element the stage is read from.
-    expect(document.querySelector('[title="Assignment lifecycle stage"]')?.textContent).toBe('Approved');
+    // critic-08: no native title anywhere in the panel; the stage chip under
+    // "Assigned to" stays the element the stage is read from.
+    expect(document.querySelectorAll('.lead-row-workflow [title]')).toHaveLength(0);
+    const stageChip = [...document.querySelectorAll('.lead-row-workflow .chip')].find(
+      (chip) => !list?.contains(chip) && chip.textContent === 'Approved',
+    );
+    expect(stageChip).toBeDefined();
   });
 
   it('keeps the stepper at the terminal stage and hides it with no stage', async () => {

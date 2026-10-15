@@ -1,4 +1,4 @@
-import { useEffect, useId, type ElementType, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useId, useSyncExternalStore, type ElementType, type ReactElement, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 /**
@@ -22,7 +22,8 @@ import { createPortal } from 'react-dom';
  * Hover opens after the shared delay (at once inside the reopen grace), a
  * touch pointer never opens it, only keyboard-originated focus opens it at
  * once, it closes on pointer leave / blur / pointer down and on Escape (an
- * escapeStack layer while open; focus stays), and the trigger's
+ * escapeStack layer while open; a keyboard-opened tooltip consumes the key
+ * and focus stays, a hover one lets it reach the layer below), and the trigger's
  * `aria-describedby` points at the popup while it is open.
  */
 
@@ -42,6 +43,8 @@ export interface TooltipProps {
 /** The marker the shell puts on a trigger; the controller delegates on it. */
 export const TOOLTIP_TRIGGER_SELECTOR = '[data-tooltip]';
 
+const noSubscription = () => () => undefined;
+
 /** Load the delegated controller (cached after the first load; a failed load retries on the next mount). */
 function loadTooltipController(): void {
   import('./tooltipController').catch(() => undefined);
@@ -53,6 +56,9 @@ export function Tooltip({ content, shortcut, children }: TooltipProps) {
   // After the first paint, off the critical path; the shell is accessible
   // without the controller.
   useEffect(loadTooltipController, []);
+  // A server render (react-dom/server: unit tests render shells to static
+  // markup) cannot portal, so the hidden description is client-only.
+  const client = useSyncExternalStore(noSubscription, () => true, () => false);
   const Trigger = children.type as ElementType;
   const own = children.props['aria-describedby'];
   return (
@@ -63,7 +69,7 @@ export function Tooltip({ content, shortcut, children }: TooltipProps) {
         data-tooltip={descId}
         data-tooltip-shortcut={shortcut}
       />
-      {typeof document === 'undefined'
+      {!client || typeof document === 'undefined'
         ? null
         : createPortal(
             <span hidden id={descId}>

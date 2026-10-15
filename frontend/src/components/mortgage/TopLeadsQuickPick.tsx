@@ -4,6 +4,7 @@ import { api } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
 import { Icon } from '../Icon';
 import { SurfaceTitle } from '../Primitives';
+import { Tooltip } from '../ui/Tooltip';
 
 /**
  * "Today's top leads" — a compact quick-pick for the Borrower 360 and Offer
@@ -42,14 +43,14 @@ export function TopLeadsQuickPick({
       <div className="surface__body">
         <div className="chip-row">
           {leads.map((lead) => (
-            <Link
+            <Tooltip
               key={lead.borrower_id}
-              className="chip chip--neutral"
-              to={`${basePath}/${lead.borrower_id}`}
-              title={`${lead.display_name} · ${lead.city}, ${lead.state} · score ${lead.opportunity_score}`}
+              content={`${lead.display_name} · ${lead.city}, ${lead.state} · score ${lead.opportunity_score}`}
             >
-              <span className="chip__label">{lead.display_name} · {lead.opportunity_score}</span>
-            </Link>
+              <Link className="chip chip--neutral" to={`${basePath}/${lead.borrower_id}`}>
+                <span className="chip__label">{lead.display_name} · {lead.opportunity_score}</span>
+              </Link>
+            </Tooltip>
           ))}
         </div>
       </div>

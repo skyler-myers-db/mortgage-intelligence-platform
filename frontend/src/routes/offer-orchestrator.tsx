@@ -22,6 +22,7 @@ import { QueuePager } from '../components/mortgage/QueuePager';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Button, Chip } from '../components/Primitives';
+import { Tooltip } from '../components/ui/Tooltip';
 import { useApp } from '../components/AppContext';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import { approverGateReason } from '../components/mortgage/approverGate';
@@ -490,16 +491,16 @@ export default function OfferOrchestrator() {
           data-testid="offer-campaign-provenance"
         >
           <Chip variant="success" icon="shield">Campaign-bound draft</Chip>
-          <span className="mono" title={campaignBinding.campaign_id}>
-            campaign {campaignBinding.campaign_id.slice(0, 12)}
-          </span>
+          <Tooltip content={campaignBinding.campaign_id}>
+            <span className="mono">campaign {campaignBinding.campaign_id.slice(0, 12)}</span>
+          </Tooltip>
           <span>variant {campaignBinding.variant_name}</span>
           {draft.generatorLabel && <span>{draft.generatorLabel}</span>}
           {draft.generationMode && <span>{draft.generationMode.replace(/_/g, ' ')}</span>}
           {draftProof && (
-            <span className="mono" title={draftProof.responseHash}>
-              draft proof {draftProof.responseHash.slice(0, 12)}
-            </span>
+            <Tooltip content={draftProof.responseHash}>
+              <span className="mono">draft proof {draftProof.responseHash.slice(0, 12)}</span>
+            </Tooltip>
           )}
         </div>
       )}

@@ -280,7 +280,8 @@ describe('/ask-genie/:conversationId', () => {
       expect(apiMocks.genieSubmit).not.toHaveBeenCalled();
       expect(window.localStorage.getItem(GENIE_CONVERSATION_STORAGE_KEY)).toBe('conv-old');
       expect(getGenieTurns().map((turn) => turn.question)).toEqual(['An older thread']);
-      html.push(askPanel().innerHTML);
+      // useId values differ between two mounts; the structure and text may not.
+      html.push(askPanel().innerHTML.replace(/_r_[0-9a-z]+_/g, '_ID_'));
       act(() => root.unmount());
       root = createRoot(container);
     }

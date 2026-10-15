@@ -57,6 +57,7 @@ import { HOME_SUMMARY, PORTFOLIO_PREVIEW } from './data/portfolio';
 import { expectHomeGeographyPaired } from '../homeGeography';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
+import { tooltipText } from './tooltip';
 
 const FOLD = 900;
 /** HomeAnswerBand.css: below this WHO list width the place moves under the id. */
@@ -406,9 +407,9 @@ for (const theme of FIXTURE_THEMES) {
       // here) keeps its full text in a tooltip.
       for (const row of await rows.all()) {
         const place = row.locator('.home-answer__who-place');
-        await expect(place).toHaveAttribute('title', (await place.textContent()) ?? '');
+        expect(await tooltipText(place)).toBe((await place.textContent()) ?? '');
         const chip = row.locator('.chip');
-        await expect(chip).toHaveAttribute('title', (await chip.locator('.chip__label').textContent()) ?? '');
+        expect(await tooltipText(chip)).toBe((await chip.locator('.chip__label').textContent()) ?? '');
       }
     });
 

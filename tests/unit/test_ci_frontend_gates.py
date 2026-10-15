@@ -189,6 +189,20 @@ def test_the_oxlint_ratchet_runs_as_its_own_step_before_lint_and_inside_it() -> 
     assert (FRONTEND / "oxlint-baseline.json").is_file(), "the ratchet's baseline is committed"
 
 
+def test_the_typescript_strict_ratchet_runs_after_npm_ci_unconditionally() -> None:
+    """Audit stack-07 items 3-5: the production strict program is gated by file + code + count."""
+    steps = _jobs()["frontend-tests"]["steps"]
+    install = _step_index(steps, "npm --prefix frontend ci")
+    ratchet = _step_index(steps, "node tools/ts_strict_ratchet.mjs --check tools/ts_strict_ratchet_baseline.json")
+
+    assert steps[ratchet]["name"] == "TypeScript strict ratchet (audit stack-07)"
+    assert steps[ratchet]["run"].strip() == "node tools/ts_strict_ratchet.mjs --check tools/ts_strict_ratchet_baseline.json"
+    assert "if" not in steps[ratchet] and "continue-on-error" not in steps[ratchet]
+    assert install < ratchet
+    assert (ROOT / "tools" / "ts_strict_ratchet_baseline.json").is_file(), "the ratchet's baseline is committed"
+    assert (FRONTEND / "tsconfig.strict.json").is_file(), "the strict program is committed"
+
+
 def test_the_legacy_specs_are_typechecked_inside_the_lint_chain() -> None:
     """Audit stack-07 item 2 / quality-10 step 1: tests/e2e/*.ts typecheck with the fixture's options."""
     scripts = json.loads((FRONTEND / "package.json").read_text(encoding="utf-8"))["scripts"]
@@ -218,13 +232,21 @@ def test_oxlint_is_an_exact_pin_and_its_config_names_only_jsx_a11y_rules() -> No
     assert set(config["categories"].values()) == {"off"}, "no category may enable a non-jsx-a11y rule"
     assert config["rules"], "every rule is named explicitly"
     assert all(rule.startswith("jsx-a11y/") for rule in config["rules"])
-    assert set(config["rules"].values()) <= {"error", "off"}
+    # Every level is "error" or "off", except the ONE reviewed option (W5e
+    # a11y-05): role="region" scrollers take a tab stop; tabpanel stays.
+    reviewed = {"jsx-a11y/no-noninteractive-tabindex": ["error", {"roles": ["tabpanel", "region"]}]}
+    for rule, level in config["rules"].items():
+        if isinstance(level, list):
+            assert reviewed.get(rule) == level, f"{rule}: {level!r} is not the reviewed option"
+        else:
+            assert level in {"error", "off"}, f"{rule}: {level!r}"
+    assert config["rules"]["jsx-a11y/no-noninteractive-tabindex"] == reviewed["jsx-a11y/no-noninteractive-tabindex"]
 
-    # A rule turned off carries its one-line reason in docs/testing.md.
+    # A rule turned off, or carrying the reviewed option, has its one-line reason in docs/testing.md.
     testing_doc = (ROOT / "docs" / "testing.md").read_text(encoding="utf-8")
     for rule, level in config["rules"].items():
-        if level == "off":
-            assert f"`{rule}`" in testing_doc, f"{rule} is off without a reason in docs/testing.md"
+        if level == "off" or isinstance(level, list):
+            assert f"`{rule}`" in testing_doc, f"{rule} is off or optioned without a reason in docs/testing.md"
 
 
 def test_the_fixture_job_checks_the_built_dist_with_the_require_flag() -> None:

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
+import { Tooltip } from '../ui/Tooltip';
 import { api } from '../../lib/api';
 import { DEFAULT_QUERY_STALE_MS } from '../../lib/queryClient';
 import { queryKeys } from '../../lib/queryKeys';
@@ -56,6 +57,48 @@ interface SourceSummary {
   rows: number | null;
   last_updated: string | null;
   note: string;
+}
+
+/** What the Run write sets and refreshes, passed in so the write itself lives outside the component. */
+interface RunOperationWriteState {
+  setOperationError: (message: string | null) => void;
+  setOperationLaunch: (launch: OperationLaunchResponse | null) => void;
+  setOperationRunningKey: (key: OperationJobKey | null) => void;
+  setConfirmingKey: (key: OperationJobKey | null) => void;
+  /** Start (or restart) the short post-launch poll window. */
+  startPolling: () => void;
+  /** Refetch the job list and the source freshness the run will change. */
+  refresh: () => void;
+}
+
+/**
+ * Start one governed refresh job (runtime-03 / stack-09 compile move). The
+ * try/finally lives here, at module level, because React Compiler 1.0 bails
+ * out of a component that holds one (a Todo, facebook/react#34131); the
+ * panel's handler is a plain call, so the panel compiles. Pessimistic: the
+ * launch and the polling are set only after the server accepted the run, the
+ * error strings are unchanged, and the running key resets either way.
+ */
+async function runOperationWrite(jobKey: OperationJobKey, reason: OperationRunReason, state: RunOperationWriteState): Promise<void> {
+  state.setOperationError(null);
+  state.setOperationLaunch(null);
+  state.setOperationRunningKey(jobKey);
+  try {
+    const launch = await api.adminRunOperation<OperationLaunchResponse>({
+      job_key: jobKey,
+      confirm: true,
+      reason,
+      request_id: newRequestId(),
+    });
+    state.setConfirmingKey(null);
+    state.setOperationLaunch(launch);
+    state.startPolling();
+    state.refresh();
+  } catch (err) {
+    state.setOperationError(err instanceof Error ? err.message : 'Unable to start refresh job');
+  } finally {
+    state.setOperationRunningKey(null);
+  }
 }
 
 interface DataOperationsPanelProps {
@@ -238,31 +281,24 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
     setOperationError(null);
   };
 
-  const runOperation = async (job: OperationJobStatus, reason: OperationRunReason) => {
-    if (!job.configured || operationRunningKey) return;
-    setOperationError(null);
-    setOperationLaunch(null);
-    setOperationRunningKey(job.key);
-    try {
-      const launch = await api.adminRunOperation<OperationLaunchResponse>({
-        job_key: job.key,
-        confirm: true,
-        reason,
-        request_id: newRequestId(),
-      });
-      setConfirmingKey(null);
-      setOperationLaunch(launch);
-      setOperationPolling(true);
-      setOperationPollGeneration((value) => value + 1);
-      void retryOperations();
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.adminSources(),
-      });
-    } catch (err) {
-      setOperationError(err instanceof Error ? err.message : 'Unable to start refresh job');
-    } finally {
-      setOperationRunningKey(null);
-    }
+  const runOperation = (job: OperationJobStatus, reason: OperationRunReason) => {
+    if (!job.configured || operationRunningKey) return Promise.resolve();
+    return runOperationWrite(job.key, reason, {
+      setOperationError,
+      setOperationLaunch,
+      setOperationRunningKey,
+      setConfirmingKey,
+      startPolling: () => {
+        setOperationPolling(true);
+        setOperationPollGeneration((value) => value + 1);
+      },
+      refresh: () => {
+        void retryOperations();
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.adminSources(),
+        });
+      },
+    });
   };
 
   return (
@@ -353,12 +389,8 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
                   <Chip variant={tone === 'ok' ? 'success' : tone === 'error' ? 'warning' : 'neutral'}>
                     {operationStatusLabel(job)}
                   </Chip>
-                  <button
-                    type="button"
-                    className="btn btn--ghost btn--sm"
-                    onClick={() => openRunConfirm(job)}
-                    disabled={disabled}
-                    title={
+                  <Tooltip
+                    content={
                       !job.configured
                         ? 'Job binding unavailable'
                         : cooldown > 0
@@ -366,9 +398,16 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
                           : `Start ${job.label}`
                     }
                   >
-                    <Icon name="play" size={12} />
-                    {busy ? 'Starting' : cooldown > 0 ? 'Wait' : 'Run'}
-                  </button>
+                    <button
+                      type="button"
+                      className="btn btn--ghost btn--sm"
+                      onClick={() => openRunConfirm(job)}
+                      disabled={disabled}
+                    >
+                      <Icon name="play" size={12} />
+                      {busy ? 'Starting' : cooldown > 0 ? 'Wait' : 'Run'}
+                    </button>
+                  </Tooltip>
                   {run?.run_page_url && (
                     <a
                       className="btn btn--ghost btn--sm"

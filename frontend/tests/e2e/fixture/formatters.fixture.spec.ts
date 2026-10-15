@@ -18,6 +18,7 @@ import type { MockApi } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
+import { tooltipText } from './tooltip';
 
 const count = (value: number) => value.toLocaleString('en-US');
 
@@ -163,7 +164,7 @@ test.describe('the typographic minus on negative signed numbers', () => {
 });
 
 test.describe('one date contract', () => {
-  test('the Home freshness chip reads relative age with an absolute UTC title', async ({ app, page }) => {
+  test('the Home freshness chip reads relative age with the absolute UTC in its tooltip', async ({ app, page }) => {
     await app.gotoRoute('/');
     const chip = page.locator('.chip', { hasText: 'Refreshed' });
     await expect(chip).toHaveCount(1);
@@ -171,7 +172,9 @@ test.describe('one date contract', () => {
     await expect(time).toHaveText('3 hours ago');
     await expect(chip).toHaveText('Refreshed 3 hours ago');
     await expect(time).toHaveAttribute('datetime', '2026-07-14T12:00:00.000Z');
-    await expect(time).toHaveAttribute('title', 'Jul 14, 2026, 12:00 PM UTC');
+    // critic-08: a ui/Tooltip, never a native title.
+    await expect(time).not.toHaveAttribute('title', /.*/);
+    expect(await tooltipText(time)).toBe('Jul 14, 2026, 12:00 PM UTC');
   });
 
   test('the Analytics snapshot date is formatted, never the raw wire string', async ({ app, page }) => {
@@ -180,7 +183,7 @@ test.describe('one date contract', () => {
     await expect(page.locator('.kpi', { hasText: 'Addressable Borrowers' }).locator('.kpi__delta')).toHaveText('Snapshot Jul 14');
     const snapshot = main.locator('.analytics-panel-note time[datetime="2026-07-14"]');
     await expect(snapshot).toHaveText('Jul 14');
-    await expect(snapshot).toHaveAttribute('title', 'Jul 14, 2026');
+    expect(await tooltipText(snapshot)).toBe('Jul 14, 2026');
     await expect(main).not.toContainText('2026-07-14');
   });
 
@@ -219,7 +222,7 @@ test.describe('one date contract', () => {
     // design_files/Design System.html `.trig__when`: uppercase mono ("2D AGO").
     await expect(page.locator('.trig__when').first()).toHaveCSS('text-transform', 'uppercase');
     for (const item of await when.all()) {
-      await expect(item).toHaveAttribute('title', /^[A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2} [AP]M UTC$/);
+      expect(await tooltipText(item)).toMatch(/^[A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2} [AP]M UTC$/);
       await expect(item).toHaveAttribute('datetime', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     }
   });

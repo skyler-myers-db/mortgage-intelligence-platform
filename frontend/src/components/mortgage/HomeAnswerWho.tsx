@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { DrawerSource } from '../AppContext';
 import { EvidenceChip } from '../Primitives';
+import { Tooltip } from '../ui/Tooltip';
 import { api } from '../../lib/api';
 import {
   HOME_WHO_COUNT,
@@ -98,10 +99,16 @@ export function HomeAnswerWho() {
               <Link className="home-answer__who-row" to={borrowerQueueHref(row.borrower_id)}>
                 <span className="home-answer__rank num" aria-hidden="true">{row.rank_overall}</span>
                 <span className="home-answer__who-id">{row.borrower_id}</span>
-                <span className="home-answer__who-place" title={place}>{place}</span>
-                <span className="chip chip--neutral" title={offer}>
-                  <span className="chip__label">{offer}</span>
-                </span>
+                {/* A truncated place or offer keeps its full text in a tooltip
+                    (the link's accessible name carries it whole). */}
+                <Tooltip content={place}>
+                  <span className="home-answer__who-place">{place}</span>
+                </Tooltip>
+                <Tooltip content={offer}>
+                  <span className="chip chip--neutral">
+                    <span className="chip__label">{offer}</span>
+                  </span>
+                </Tooltip>
                 <span className={`score score--${band}`}>
                   <span className="score__dot" />
                   <span className="sr-only">Opportunity score </span>

@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { Tooltip } from './Tooltip';
 import {
   DATE_UNKNOWN,
   formatDate,
@@ -13,10 +14,12 @@ import {
  * Timestamp — the one way a screen shows a backend date or time
  * (2026-09-21 audit, responsive-07).
  *
- * Renders `<time dateTime={ISO} title={absolute UTC}>` around the lib/time
- * label, so every freshness chip, trigger row and dense cell carries a
- * machine-readable instant AND an unambiguous absolute tooltip, whatever the
- * visible form:
+ * Renders `<time dateTime={ISO}>` around the lib/time label, wrapped in a
+ * ui/Tooltip whose content is the absolute UTC form (a native `title` is
+ * banned, audit critic-08), so every freshness chip, trigger row and dense
+ * cell carries a machine-readable instant AND an unambiguous absolute
+ * tooltip (on hover, and as the hidden description), whatever the visible
+ * form:
  *   format="relative" (default)  "3 hours ago" · narrow "2d ago"
  *   format="date"                "Jul 14"  (year past 11 months)
  *   format="datetime"            "Jul 14, 8:00 AM EDT"
@@ -103,8 +106,10 @@ export function Timestamp({
         ? formatDateTimeShort(value, { now: reference })
         : formatRelative(value, { now: reference, style: relativeStyle });
   return (
-    <time className={className} dateTime={dateTime} title={formatUtcTitle(value)}>
-      {label}
-    </time>
+    <Tooltip content={formatUtcTitle(value)}>
+      <time className={className} dateTime={dateTime}>
+        {label}
+      </time>
+    </Tooltip>
   );
 }

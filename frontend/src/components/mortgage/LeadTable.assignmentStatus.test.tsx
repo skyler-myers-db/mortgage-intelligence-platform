@@ -160,9 +160,11 @@ describe('assignment lifecycle chip', () => {
     };
     renderRow(root, assigned, false);
     const status = document.querySelector(`[data-testid="lead-status-${baseLead.borrower_id}"]`);
-    // One chip: the assignee, with the stage in its title, never a stack.
+    // One chip: the assignee, with the stage spoken beside it, never a stack
+    // (and no native title: critic-08).
     expect([...(status?.querySelectorAll('.chip__label') ?? [])].map((el) => el.textContent)).toEqual(['Summit LO 01']);
-    expect(status?.querySelector('.chip')?.getAttribute('title')).toBe('Assigned to Summit LO 01 · Contact drafted');
+    expect(status?.querySelector('.chip')?.hasAttribute('title')).toBe(false);
+    expect(status?.querySelector('.sr-only')?.textContent).toBe(', Contact drafted');
     expect(document.querySelector(`[data-testid="lifecycle-advance-${baseLead.borrower_id}"]`)).toBeNull();
 
     renderRow(root, assigned, true);

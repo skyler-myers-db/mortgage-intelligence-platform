@@ -163,7 +163,8 @@ for (const theme of FIXTURE_THEMES) {
       await expect(palette).toBeFocused();
       await expect(popup(page)).toBeVisible();
       await expect(popup(page).locator('kbd.tooltip__kbd')).toHaveText(/^(⌘K|Ctrl K)$/);
-      await expect(popup(page)).toHaveText(/^Command palette(⌘K|Ctrl K)$/);
+      // The kbd sits between screen-reader-only ' (' and ')' (W5e): the popup reads like its description.
+      await expect(popup(page)).toHaveText(/^Command palette \((⌘K|Ctrl K)\)$/);
 
       await page.keyboard.press('Escape');
       await expect(popup(page)).toHaveCount(0);
