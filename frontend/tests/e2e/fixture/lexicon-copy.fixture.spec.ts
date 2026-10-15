@@ -20,7 +20,9 @@
  *  - bundle-09 item 1: hovering a Genie borrower cell fetches the Borrower 360
  *    chunk with ZERO /api calls.
  *  - W5d lq deferral 9: the request-scoped Lead Queue whose borrowers are all
- *    decided says so, offers "Clear the request" and no Genie Ask.
+ *    decided says so, offers "Clear the request" and no Genie Ask; beside
+ *    another filter its zero may be that filter's, so it is the filtered
+ *    state (Clear filters), still with no Genie Ask.
  * Each new surface is axe-clean (WCAG A/AA) in both themes.
  */
 import type { GenieResult, GenieSubmitResult } from '../../../src/lib/apiTypes';
@@ -42,6 +44,13 @@ const CHIP = 'Which states have the most in-the-money borrowers?';
 const COMPOSER_PLACEHOLDER = 'Ask about your book, e.g. in-the-money count by state';
 /** Routes whose copy belongs to lanes that rename it in parallel (eslint LEXICON_PENDING). */
 const PENDING_ROUTE = /^\/(analytics|lead-queue)/;
+
+/** GET /api/leads measures zero (the request-scoped empty states). */
+function registerEmptyLeads(mockApi: MockApi): void {
+  mockApi.register<LeadSummary[]>('GET', '/api/leads', () =>
+    json<LeadSummary[]>([], { headers: { 'X-Total-Matching': '0', 'X-Returned-Rows': '0' } }),
+  );
+}
 
 function callsSince(mockApi: MockApi, from: number): string[] {
   return mockApi.calls.slice(from).map((call) => `${call.method} ${call.path}`);
@@ -178,9 +187,7 @@ for (const theme of THEMES) {
     });
 
     test('a request-scoped queue whose borrowers are all decided says so, with Clear the request', async ({ app, mockApi, page }) => {
-      mockApi.register<LeadSummary[]>('GET', '/api/leads', () =>
-        json<LeadSummary[]>([], { headers: { 'X-Total-Matching': '0', 'X-Returned-Rows': '0' } }),
-      );
+      registerEmptyLeads(mockApi);
       await app.gotoRoute(`/lead-queue?approval_request_batch=${REQUEST_BATCH_ID}`);
       const empty = page.locator('#main-content .empty');
       await expect(empty.locator('.empty__title')).toHaveText('No open borrowers left in this approval request.');
@@ -188,6 +195,18 @@ for (const theme of THEMES) {
       await expect(empty.getByRole('button')).toHaveText(['Clear the request']);
       await expect(empty.getByRole('button', { name: /Ask Genie/ })).toHaveCount(0);
       await expectAxeClean(page, { key: { route: 'lead-queue', state: 'lexicon-request-scoped-empty' }, theme, known: {} });
+    });
+
+    test('a request-scoped queue that a state filter empties is the filtered state, never "request done"', async ({ app, mockApi, page }) => {
+      registerEmptyLeads(mockApi);
+      // GET /api/leads intersects the request's open borrowers with the state.
+      await app.gotoRoute(`/lead-queue?approval_request_batch=${REQUEST_BATCH_ID}&states=TX`);
+      const empty = page.locator('#main-content .empty');
+      await expect(empty.locator('.empty__title')).toHaveText('No leads match this filter.');
+      await expect(page.locator('#main-content')).not.toContainText('No open borrowers left in this approval request.');
+      await expect(empty.getByRole('button')).toHaveText(['Clear filters']);
+      await expect(empty.getByRole('button', { name: /Ask Genie/ })).toHaveCount(0);
+      await expectAxeClean(page, { key: { route: 'lead-queue', state: 'lexicon-request-scoped-filtered' }, theme, known: {} });
     });
   });
 }
