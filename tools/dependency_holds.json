@@ -29,13 +29,6 @@
       "review_by": "2026-11-30"
     },
     {
-      "ecosystem": "npm",
-      "package": "@playwright/test",
-      "below": "1.64.0",
-      "reason": "Held to the VRT image mcr.microsoft.com/playwright:v1.63.0-noble until the final W5e step (tail T3 moves both to 1.64.0 and v1.64.0-noble)",
-      "review_by": "2026-11-15"
-    },
-    {
       "ecosystem": "pypi",
       "package": "databricks-sdk",
       "below": "0.104.0",

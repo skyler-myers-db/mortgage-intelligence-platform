@@ -55,7 +55,7 @@ export const PERF_SPEC = /[\\/](perf-budget|interaction-budget)\.fixture\.spec\.
 //  - `*.firefox.fixture.spec.ts`, genie-pagehide and menu-presence-exit
 //    (.cross-engine) run in fixture-firefox-forced (forced colors on). Playwright
 //    Firefox does not start on the macOS 27 host: CI's Linux runners, or the
-//    pinned mcr.microsoft.com/playwright:v1.63.0-noble container, only.
+//    pinned mcr.microsoft.com/playwright:v1.64.0-noble container, only.
 // WebKit's Tab skips buttons and checkboxes on macOS/Linux defaults, so the
 // cross-engine walks move focus with element.focus() (fixture/focusWalk.ts).
 const crossEngineRun = fixtureE2E && process.env.MIP_CROSS_ENGINE === '1';

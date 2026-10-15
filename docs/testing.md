@@ -288,7 +288,7 @@ One analyze runs the WCAG 2.0/2.1/2.2 A and AA tags plus `best-practice`. A rule
 
 ### Accessibility-tree snapshots
 
-`fixture/aria-snapshots.fixture.spec.ts` pins the structure of keyboard-critical surfaces with Playwright's `toMatchAriaSnapshot`: roles, accessible names and states (expanded, selected), never classes or pixels. Today it covers the Lead Queue table header (every columnheader and sort control, with the `aria-sort` values pinned beside it because they are outside the snapshot vocabulary) and the STATE filter's expanded trigger and listbox, at 1440x900 in the dark theme only (the tree is theme-independent), and it asserts `expectNoAuditedReadSince`: opening a filter never re-reads `GET /leads`. Snapshots are **inline** in the spec, so a reviewer reads the expected tree in the diff; there are no `.aria.yml` files. Pin only what Linux Geist Mono widths cannot move (no virtualized rows, no truncated text). `toMatchAriaSnapshot` needs Playwright 1.49 or later; the repo pins `@playwright/test` 1.63.0 (Chromium 153), and the VRT image follows that pin. Update only deliberately, then review every rewritten literal:
+`fixture/aria-snapshots.fixture.spec.ts` pins the structure of keyboard-critical surfaces with Playwright's `toMatchAriaSnapshot`: roles, accessible names and states (expanded, selected), never classes or pixels. Today it covers the Lead Queue table header (every columnheader and sort control, with the `aria-sort` values pinned beside it because they are outside the snapshot vocabulary) and the STATE filter's expanded trigger and listbox, at 1440x900 in the dark theme only (the tree is theme-independent), and it asserts `expectNoAuditedReadSince`: opening a filter never re-reads `GET /leads`. Snapshots are **inline** in the spec, so a reviewer reads the expected tree in the diff; there are no `.aria.yml` files. Pin only what Linux Geist Mono widths cannot move (no virtualized rows, no truncated text). `toMatchAriaSnapshot` needs Playwright 1.49 or later; the repo pins `@playwright/test` 1.64.0 (Chromium 156; W5e tail T3), and the VRT image follows that pin. Update only deliberately, then review every rewritten literal:
 
 ```bash
 E2E_FIXTURE_PORT=<port> npm --prefix frontend run e2e:fixture -- aria-snapshots --update-snapshots --update-source-method=overwrite
@@ -313,7 +313,7 @@ The testMatch contract: a `*.cross-engine.fixture.spec.ts` runs in fixture-chrom
 
 **A known engine defect is a `test.fixme`, never a silent skip.** Its description names the owning lane and the finding id, for example `test.fixme(browserName === 'webkit', 'w5-approval-core · manual-check-2026-09-30 WebKit pinned-focus scroll: ...')`. The fixme list is the record; the owner lifts its fixme in the change that fixes the defect.
 
-**Firefox on the dev host.** Playwright Firefox 155 does not start on the macOS 27 host ("Could not find profile folder"), so the Firefox project runs on CI's Linux runners, or locally inside the pinned `mcr.microsoft.com/playwright:v1.63.0-noble` container. WebKit runs locally:
+**Firefox on the dev host.** Playwright's Firefox does not start on the macOS 27 host ("Could not find profile folder"), so the Firefox project runs on CI's Linux runners, or locally inside the pinned `mcr.microsoft.com/playwright:v1.64.0-noble` container (Playwright 1.64.0 ships Firefox 157; the host failure was recorded on 155 and is not yet re-checked on 157). WebKit runs locally:
 
 ```bash
 npm --prefix frontend run build

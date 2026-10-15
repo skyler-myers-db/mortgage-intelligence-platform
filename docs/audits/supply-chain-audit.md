@@ -129,7 +129,7 @@ a batch lands, check each of these:
   --only-issues`, and compare the summary with the previous batch.
 - **Playwright is held to the VRT container image.** `@playwright/test`
   stays at the version of the pinned visual-regression image
-  (`mcr.microsoft.com/playwright:v1.63.0-noble`; both the `e2e-visual`
+  (`mcr.microsoft.com/playwright:v1.64.0-noble` since W5e tail T3; both the `e2e-visual`
   `container.image` and its `MIP_VRT_IMAGE`, pinned by
   `tests/unit/test_ci_frontend_gates.py`). A Playwright bump moves the image
   in the same change, and the baselines are regenerated once, from that
@@ -554,3 +554,4 @@ stays out.
 | T1b | `@tanstack/react-query` + `-persist-client` | 5.100.10 | 5.104.2 | Applied: test-harness C4 outcome (i), shell-wayfinding 21/21 and the re-expressed rAF probe 'closing hides the Console at once' 7/7 on 5.104.2; initial JS -0.19 KiB br | the two packages and `query-core` / `query-persist-client-core`, all 5.104.2 (one entry each) |
 | T1c | `@tanstack/react-virtual` | 3.13.24 | 3.14.19 | HELD: `virtual-core` 3.19.4 adds +2.80 KiB br / +10.73 raw / +3.25 gzip to the leadsQuery (LeadTable) chunk, and its raw 181.65 KiB breaks the 180 KiB maxLazy gate re-baselined at the `w5-lead-table-compile` merge (br 50.50 of 51 and gzip 60.86 of 61 leave under 1%); lead-queue +2.83, segment-intelligence +2.78 KiB br | (not applied) `react-virtual` 3.14.19, `virtual-core` 3.14.0 -> 3.19.4 |
 | T2 | `oxlint` | 1.85.0 | 1.86.0 | Applied with `w5-compiler-lint`: `frontend/oxlint-baseline.json` re-recorded with `--ratchet` (it records the oxlint version; 6 files, no new, grown or suppressed hit); 1.86.0 lists 36 jsx-a11y rules and `.oxlintrc.json` names all 36, so no new rule to name; dev-only, no bundle byte | `oxlint` and all 19 `@oxlint/binding-*` platform entries, 1.86.0 |
+| T3 | `@playwright/test` | 1.63.0 | 1.64.0 | Applied LAST, with the `mcr.microsoft.com/playwright:v1.64.0-noble` VRT image (ci.yml `e2e-visual` container and `MIP_VRT_IMAGE`, test_dependency_pins, test-infra.fixture.spec.ts, the playwright.config.ts comment, docs/testing.md); 1.64.0 ships Chromium 156, Firefox 157 and WebKit 27.2; every e2e-visual baseline moves and is refreshed from the pinned-container CI actuals (orchestrator) | `@playwright/test`, `playwright`, `playwright-core`, 1.64.0 |

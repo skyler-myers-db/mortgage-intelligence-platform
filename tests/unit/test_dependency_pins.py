@@ -33,7 +33,7 @@ TANSTACK_PAIR = ("@tanstack/react-query", "@tanstack/react-query-persist-client"
 TANSTACK_CORES = ("@tanstack/query-core", "@tanstack/query-persist-client-core")
 HELD_MAJORS = {"typescript": 6, "vitest": 4, "@babel/core": 7}
 MAJOR_HOLDS = ("typescript", "vitest", "@babel/core")
-PLAYWRIGHT_PIN = "1.63.0"
+PLAYWRIGHT_PIN = "1.64.0"
 WEB_VITALS_PIN = "6.2.2"
 
 

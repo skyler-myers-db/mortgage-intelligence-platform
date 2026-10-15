@@ -4,8 +4,8 @@
  * its own test collection. No page is opened.
  *
  *  - The installed @playwright/test (and its playwright / playwright-core)
- *    is the exact package.json pin, 1.63.0, the version whose
- *    v1.63.0-noble image the e2e-visual job runs in.
+ *    is the exact package.json pin, 1.64.0, the version whose
+ *    v1.64.0-noble image the e2e-visual job runs in.
  *  - Nested `playwright test --list --reporter=json` runs (the
  *    runner.fixture.spec.ts spawn pattern; `--list` boots no web server)
  *    show what each CI step really collects: a PERF_SPEC spec only with
@@ -27,7 +27,7 @@ interface ListReport {
   errors: Array<{ message?: string }>;
 }
 
-const PLAYWRIGHT_PIN = '1.63.0';
+const PLAYWRIGHT_PIN = '1.64.0';
 const PERF_STEP_FILTER = ['perf-budget', 'interaction-budget'];
 
 function frontendDir(configFile: string | undefined): string {
@@ -60,7 +60,7 @@ function listCollected(dir: string, extraEnv: Record<string, string>, filters: s
   return { status: run.status, files: report.suites.map((suite) => suite.file.split(path.sep).join('/')) };
 }
 
-test('the installed @playwright/test is the package.json pin, 1.63.0', async ({}, testInfo) => {
+test('the installed @playwright/test is the package.json pin, 1.64.0', async ({}, testInfo) => {
   const dir = frontendDir(testInfo.config.configFile);
   const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as { devDependencies: Record<string, string> };
 
