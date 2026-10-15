@@ -220,6 +220,16 @@ export const mortgageGlossary = {
     appContext: `A score of ${HIGH_OPPORTUNITY_SCORE_LABEL} marks strong review candidates. It is broader than In the Money because it also considers intent, fit, relationship, and evidence.`,
     proof: 'Proof shows the five weighted sub-scores that make up the final score.',
   },
+  segmentMatchMode: {
+    id: 'segment-match-mode',
+    term: 'Segment match mode',
+    aliases: ['any selected', 'all selected', 'segment mode', 'cohort mode'],
+    category: 'scoring',
+    short: 'How picked segment cards combine into one cohort: Any selected or All selected.',
+    appContext:
+      'Any selected keeps a borrower who is in at least one picked segment and counts them once, even when they are in several (a de-duplicated union, or OR). All selected keeps only borrowers who are in every picked segment (the intersection, or AND). The cards, the map, the ranked table and the Lead Queue link all use the same mode.',
+    proof: 'Proof: the Lead Queue link carries the picked segment codes and segment_mode=any or all, and its total matches the cohort count.',
+  },
   ownerLink: {
     id: 'owner-link',
     term: 'Owner Link',

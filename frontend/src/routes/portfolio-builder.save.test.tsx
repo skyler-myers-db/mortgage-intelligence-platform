@@ -237,7 +237,7 @@ describe('PortfolioBuilder save-build flow', () => {
 
     const guard = container.querySelector('[data-testid="campaign-build-guard"]');
     expect(guard?.getAttribute('role')).toBe('status');
-    expect(guard?.textContent).toContain('7,973 of 10,000 maximum saved treatment contacts');
+    expect(guard?.textContent).toContain('7,973 of the 10,000 contacts a saved campaign can hold');
     expect(guard?.textContent).toContain('Save eligible');
     expect(portfolioPreview.mock.calls[0][2]).toEqual({
       suppression_policy: { default: 'eligible_only', frequency_cap_days: 30 },
@@ -261,7 +261,7 @@ describe('PortfolioBuilder save-build flow', () => {
 
     expect(saveButton().textContent).toContain('Save build');
     expect(container.querySelector('[data-testid="campaign-build-guard"]')?.textContent)
-      .toContain('10,000 of 10,000 maximum saved treatment contacts');
+      .toContain('10,000 of the 10,000 contacts a saved campaign can hold');
   });
 
   it('blocks a 10,001-contact preview and gives actionable refinement guidance', async () => {
@@ -278,13 +278,13 @@ describe('PortfolioBuilder save-build flow', () => {
     expect(saveButton().textContent).toContain('Refine before saving');
     const guard = container.querySelector('[data-testid="campaign-build-guard"]');
     expect(guard?.getAttribute('role')).toBe('alert');
-    expect(guard?.textContent).toContain('treatment preflight contains 10,001 contacts');
-    expect(guard?.textContent).toContain('Narrow geography, relationship, product, equity, or other filters');
+    expect(guard?.textContent).toContain('This build has 10,001 contacts, more than the 10,000');
+    expect(guard?.textContent).toContain('Narrow geography, relationship, product, equity or other filters');
     expect(guard?.textContent).toContain('Save blocked');
     expect(container.querySelector('[data-testid="portfolio-save-name"]')).toBeNull();
   });
 
-  it('re-runs treatment preflight with the current household-primary setting', async () => {
+  it('re-runs the save check with the current household-primary setting', async () => {
     portfolioPreview
       .mockResolvedValueOnce(PREVIEW)
       .mockResolvedValueOnce({
@@ -301,7 +301,7 @@ describe('PortfolioBuilder save-build flow', () => {
     await waitUntil(() => portfolioPreview.mock.calls.length >= 2);
     await waitUntil(() => (
       container.querySelector('[data-testid="campaign-build-guard"]')?.textContent
-        ?.includes('6,400 of 10,000') === true
+        ?.includes('6,400 of the 10,000') === true
     ));
 
     expect(portfolioPreview.mock.calls[1][2]).toEqual({

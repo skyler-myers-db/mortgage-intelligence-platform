@@ -40,6 +40,8 @@ const REQUIRED_TERMS = [
   'platformCapabilityStatus',
   // Genie refusal card link target (audit 2026-09-21 genie-05).
   'reviewedVocabulary',
+  // The Segments mode help's set definitions (flow-10).
+  'segmentMatchMode',
 ] as const;
 
 const PRINCIPLE_TERMS = [

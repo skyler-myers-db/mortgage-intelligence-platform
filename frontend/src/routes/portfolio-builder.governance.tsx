@@ -68,16 +68,16 @@ export function CampaignBuildGuard({ preview }: { preview: PortfolioPreview }) {
       </div>
       <div className="approval__body">
         <div className="approval__title">
-          {eligible
-            ? 'Governed saved-contact batch verified'
-            : 'Refine this build before saving a campaign'}
+        {/* flow-10: buyer words. Every string here is linted by
+            routes/routeCopy.lint.test.tsx (no "preflight", no "treatment"). */}
+          {eligible ? 'Ready to save as a campaign' : 'Narrow this build before saving it as a campaign'}
         </div>
         <div className="approval__sub">
           {eligible ? (
             <>
-              Server treatment preflight: {typeof contactCount === 'number' ? formatCount(contactCount) : 'verified'} of{' '}
-              {formatCount(limit)} maximum saved treatment contacts after suppression,
-              frequency-cap, and household-primary selection.
+              {typeof contactCount === 'number' ? `${formatCount(contactCount)} of` : 'Within'} the{' '}
+              {formatCount(limit)} contacts a saved campaign can hold, after opt-outs, contact-frequency
+              limits and one contact per household.
             </>
           ) : overLimit ? (
             <>
