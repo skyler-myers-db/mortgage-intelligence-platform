@@ -39,12 +39,15 @@
  *     card mid-progress                                               10
  *  U. W5e w5-analytics: an Executive KPI drawer on How we got, a failed
  *     Executive Refresh with its stale note, a focused scatter cell's
- *     tip and the Sales ops workload table                              8
+ *     tip and the Sales ops workload table                             8
  *  V. W5e w5-lexicon-copy: the request-scoped Lead Queue whose
  *     borrowers are all decided, and with the request still open
  *     (its scope row over the rows; W5d lq deferral 9)                 4
+ *  W. W5e w5-lead-queue-columns: the Lead Queue's HIDE menu, the
+ *     filter omnibox with its readings, a row's More like this         6
+ *  X. W5e w5-lead-table-compile: the approver's revoke panel           2
  *                                                                     --
- *                                                                    162
+ *                                                                    174
  *
  * Baselines are amd64-Linux renders from the pinned Playwright container:
  * this spec runs only with MIP_VRT=1 (playwright.config.ts) and refuses any
