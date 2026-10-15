@@ -217,6 +217,13 @@ def test_the_sanitizer_drops_any_value_outside_its_shape() -> None:
     assert render.run_url({"GITHUB_SERVER_URL": "https://evil.example", "GITHUB_REPOSITORY": "o/r", "GITHUB_RUN_ID": "42"}) is None
 
 
+def test_every_real_hold_reason_renders_as_text_not_dropped() -> None:
+    """A reason with '@' or '<' would render silently as '[value dropped]'."""
+
+    for hold in load_holds(HOLDS_FILE):
+        assert render.code(hold["reason"], "text") != render.DROPPED, hold["package"]
+
+
 def test_an_injected_advisory_title_never_reaches_the_report() -> None:
     markdown = render.render(cli.build(_offline(), TODAY))
 
@@ -297,6 +304,26 @@ def test_the_exit_codes(tmp_path: Path) -> None:
     assert code == 2, "a failed registry read is report_error"
     assert json.loads(out_json.read_text())["errors"] == ["pypi"]
     assert "## Report error" in out_md.read_text() and "could not read `pypi`" in out_md.read_text()
+
+
+def test_an_unexpected_failure_is_a_report_error_with_both_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def broken(*_args: object) -> dict[str, object]:
+        raise KeyError("boom-detail-https://evil.example")
+
+    monkeypatch.setattr(cli, "build", broken)
+    out_json, out_md = tmp_path / "r.json", tmp_path / "r.md"
+    code = cli.main(["--offline-fixtures", str(FIXTURES), "--today", "2026-10-01", "--json", str(out_json), "--markdown", str(out_md)], env={})
+
+    assert code == 2, "never 1: an internal failure is not a gate signal"
+    report = json.loads(out_json.read_text())
+    assert report["errors"] == [cli.INTERNAL_ERROR] and report["gate"] == [] and report["exit_code"] == 2
+    markdown = out_md.read_text()
+    assert "could not read `deps-report internal error`" in markdown
+    assert render.validate_markdown(markdown, None) == []
+    err = capsys.readouterr().err
+    assert "KeyError" in err and "evil" not in err and "evil" not in markdown
 
 
 def test_the_offline_dry_run_reproduces_the_pinned_markdown(tmp_path: Path) -> None:

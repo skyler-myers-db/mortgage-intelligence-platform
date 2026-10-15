@@ -85,12 +85,14 @@ def test_the_publish_job_holds_only_issues_write_and_runs_no_repository_code() -
     job = _workflow()["jobs"]["publish"]
     steps = job["steps"]
 
-    assert job["needs"] == "report" and job["if"] == "always()"
+    assert job["needs"] == "report"
+    assert job["if"] == "always() && needs.report.result != 'cancelled'", "a cancelled run keeps last week's body"
     assert job["permissions"] == {"issues": "write"}
     assert [_uses(s) for s in steps] == ["actions/download-artifact@v8", "actions/github-script@v9"]
     assert all("run" not in s for s in steps), "no shell step: no checkout, setup, pip or npm"
     script = steps[1]["with"]["script"]
     assert "Report withheld: output validation failed; see ${runUrl}" in script
+    assert "Report withheld: this run produced no report artifact; see ${runUrl}" in script, "a missing artifact says so"
     assert "issues.update" in script and "issues.create" in script
     assert "createComment" not in script, "never comments"
     assert "'Weekly dependency and release-signal report'" in script and "'dependency-report'" in script

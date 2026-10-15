@@ -86,7 +86,8 @@ jobs:
   publish:
     name: publish (one issue, edited in place)
     needs: report
-    if: always()
+    # A red report still publishes; a cancelled run keeps last week's body.
+    if: always() && needs.report.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -131,7 +132,10 @@ jobs:
               markdown = null;
             }
             const problems = markdown === null ? ['no report artifact'] : validate(markdown, runUrl);
-            const body = problems.length === 0 ? markdown : `Report withheld: output validation failed; see ${runUrl}`;
+            const withheld = markdown === null
+              ? `Report withheld: this run produced no report artifact; see ${runUrl}`
+              : `Report withheld: output validation failed; see ${runUrl}`;
+            const body = problems.length === 0 ? markdown : withheld;
             try {
               await github.rest.issues.getLabel({ owner, repo, name: LABEL });
             } catch (error) {

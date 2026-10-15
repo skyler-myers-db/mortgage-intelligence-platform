@@ -3,7 +3,9 @@
 Exit 0 green, 1 a gate signal (unignored npm high/critical, any unignored
 pip-audit finding, a past ci.yml review date, an allowlist entry expired or
 within 7 days, a passed hold review_by, an unheld literal mismatch), 2 when a
-source could not be read (named under 'Report error'). Both outputs are
+source could not be read (named under 'Report error') or the tool itself
+failed unexpectedly (the fixed source 'deps-report internal error', never a
+gate signal). Both outputs are
 written in every case, so the publish job always has a body to upsert. The
 live section never contributes. ``--offline-fixtures`` replaces every network
 read and every repository input with the files in DIR (the hermetic dry run
@@ -15,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time
@@ -36,6 +39,7 @@ from tools.deps_report import (
 )
 
 T = TypeVar("T")
+INTERNAL_ERROR = "deps-report internal error"
 
 
 @dataclass(frozen=True)
@@ -134,6 +138,26 @@ def build(sources: Sources, today: date) -> dict[str, object]:
     }
 
 
+def internal_error_report(today: date) -> dict[str, object]:
+    """The report for an unexpected failure: exit 2, a report error, never a gate signal."""
+
+    return {
+        "today": today.isoformat(),
+        "release_sha": "",
+        "exit_code": 2,
+        "errors": [INTERNAL_ERROR],
+        "gate": [],
+        "warnings": [],
+        "npm_advisories": [],
+        "pip_advisories": [],
+        "waivers": [],
+        "npm": [],
+        "pypi": [],
+        "pins": [],
+        "live": {"available": False, "error": "internal"},
+    }
+
+
 def main(argv: list[str] | None = None, env: dict[str, str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--json", dest="json_out", required=True)
@@ -143,9 +167,14 @@ def main(argv: list[str] | None = None, env: dict[str, str] | None = None) -> in
     args = parser.parse_args(argv)
     today = args.today or datetime.now(UTC).date()
     offline = args.offline_fixtures is not None
-    report = build(offline_sources(args.offline_fixtures) if offline else live_sources(), today)
     run = None if offline else render.run_url(dict(os.environ if env is None else env))
-    markdown = render.render(report, run)
+    try:
+        report = build(offline_sources(args.offline_fixtures) if offline else live_sources(), today)
+        markdown = render.render(report, run)
+    except Exception as exc:  # noqa: BLE001 - an unexpected failure is exit 2 with both outputs, never exit 1
+        print(f"deps-report: internal error ({type(exc).__name__})", file=sys.stderr)
+        report = internal_error_report(today)
+        markdown = render.render(report, run)
     for path, text in (
         (Path(args.json_out), json.dumps(report, indent=2, sort_keys=True, default=asdict) + "\n"),
         (Path(args.markdown_out), markdown),
