@@ -42,10 +42,11 @@ from backend.services.databricks_sql import DatabricksSqlColumnMissingError
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.gold_cache import AggregateCache, GoldAggregateCache
 from backend.services.resilience_breaker import DependencyDownError
+from backend.services.segment_labels import ITM_BORROWERS_LABEL
 
 #: measure -> (segment_code row of funnel_snapshot_daily, column, display label).
 MEASURE_COLUMNS: dict[str, tuple[str, str, str]] = {
-    "refi_economics_screen": ("_ALL", "in_the_money_borrowers", "refi candidates"),
+    "refi_economics_screen": ("_ALL", "in_the_money_borrowers", ITM_BORROWERS_LABEL),
     "high_opportunity": ("_ALL", "high_opportunity_borrowers", "high-opportunity"),
     "offers_recommended": ("_ALL", "offer_recommended_borrowers", "primary offer paths"),
     "listed_for_sale": ("listed", "addressable_borrowers", "listed for sale"),

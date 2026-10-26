@@ -54,7 +54,7 @@ const DELTA_SUMMARY: HomeSummary = {
   previous_visit_at: '2026-07-09T14:30:00+00:00',
   baseline_snapshot_at: '2026-07-09T06:00:00+00:00',
   headline:
-    'Since your last login: +1.5% high-opportunity, +2,250 refi candidates, +4,120 offers available.',
+    'Since your last login: +1.5% high-opportunity, +2,250 in-the-money borrowers, +4,120 offers available.',
   phrasing_source: 'deterministic',
   phrasing_fallback_reason: 'genie_not_configured',
   highlights: [
@@ -70,7 +70,7 @@ const DELTA_SUMMARY: HomeSummary = {
     },
     {
       measure: 'refi_economics_screen',
-      label: 'refi candidates',
+      label: 'in-the-money borrowers',
       display: '+2,250',
       value_token: '+2,250',
       current: 261400,

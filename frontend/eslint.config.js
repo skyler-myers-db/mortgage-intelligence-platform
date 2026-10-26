@@ -49,7 +49,7 @@ export const FORMATTING_BAN = [
 // Refi ...", "refi(nance) economics", "refi screen") are banned in string
 // literals, template text and JSX text; src/lib/lexicon.ts is their only home
 // (as input aliases). src/lib/lexiconBan.test.ts proves the selectors bite.
-const LEXICON_RE = String.raw`/\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b/i`;
+const LEXICON_RE = String.raw`/\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b|\brefi(?:nance)?[- ]candidates?\b/i`;
 const LEXICON_MESSAGE =
   "Retired name for the In the Money rule. Use LEXICON.inTheMoney from src/lib/lexicon.ts ('In the Money', 'in the money', 'in-the-money', 'In the Money rule').";
 export const LEXICON_BAN = [

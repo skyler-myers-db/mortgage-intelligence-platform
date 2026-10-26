@@ -451,7 +451,7 @@ test.describe('Borrower 360 (D-platform-process-g, bundle-09)', () => {
     const panel = page.locator('.surface', { hasText: 'In the Money check' }).first();
     await expect(panel).toBeVisible();
     await expect(panel).toContainText(/In the Money rule\./);
-    await expect(page.locator('#main-content')).not.toContainText(/\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b/i);
+    await expect(page.locator('#main-content')).not.toContainText(/\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b|\brefi(?:nance)?[- ]candidates?\b/i);
 
     // The natural load ends with the lazy decision history's own read; it can
     // trail the panel, so wait for it before counting what the hover adds.

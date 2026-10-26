@@ -77,7 +77,7 @@ def test_delta_summary_golden() -> None:
     # +1,310 / 86,900 = +1.5075% -> +1.5%. The fixture's snapshot predates
     # the event columns (None), so the two event measures are omitted.
     assert summary.headline == (
-        "Since your last login: +2,250 refi candidates, "
+        "Since your last login: +2,250 in-the-money borrowers, "
         "+1.5% high-opportunity, +4,525 primary offer paths."
     )
     assert [h.display for h in summary.highlights] == ["+2,250", "+1.5%", "+4,525"]
@@ -118,13 +118,13 @@ def test_event_measures_lead_the_sentence_once_their_baseline_has_a_reading() ->
     assert [h.label for h in summary.highlights] == [
         "listed for sale",
         "competitor liens",
-        "refi candidates",
+        "in-the-money borrowers",
         "high-opportunity",
         "primary offer paths",
     ]
     assert summary.headline == (
         "Since your last login: +50 listed for sale, -310 competitor liens, "
-        "+2,250 refi candidates, +1.5% high-opportunity, +4,525 primary offer paths."
+        "+2,250 in-the-money borrowers, +1.5% high-opportunity, +4,525 primary offer paths."
     )
     assert summary.highlights[0].current == 1_250
     assert summary.highlights[0].baseline == 1_200
@@ -178,7 +178,7 @@ def test_delta_summary_negative_and_zero_movements() -> None:
     summary = compose_home_summary(result)
     assert [h.display for h in summary.highlights] == ["no change", "-1.5%", "-315"]
     assert summary.headline == (
-        "Since your last login: no change in refi candidates, "
+        "Since your last login: no change in in-the-money borrowers, "
         "-1.5% high-opportunity, -315 primary offer paths."
     )
     # The delta itself is untouched -- only its rendering changed.
@@ -208,7 +208,7 @@ def test_zero_delta_never_reads_as_a_zero_total() -> None:
     summary = compose_home_summary(result)
 
     assert summary.headline == (
-        "Since your last login: no change in refi candidates, "
+        "Since your last login: no change in in-the-money borrowers, "
         "no change in high-opportunity, no change in primary offer paths."
     )
     # No bare "0" token anywhere in the sentence a reader could take for a

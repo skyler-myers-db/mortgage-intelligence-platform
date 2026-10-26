@@ -231,7 +231,7 @@ function dossier(inTheMoney: boolean): Borrower360Type {
   } as unknown as Borrower360Type;
 }
 
-const BANNED_VARIANTS = /\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b/i;
+const BANNED_VARIANTS = /\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b|\brefi(?:nance)?[- ]candidates?\b/i;
 
 describe('Borrower 360 loaded dossier (W5d)', () => {
   beforeEach(() => {

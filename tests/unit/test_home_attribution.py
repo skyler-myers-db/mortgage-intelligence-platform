@@ -37,7 +37,9 @@ from backend.services.home_attribution import (
     get_home_attribution_service,
     rate_facts,
 )
+from backend.services.home_summary import SUMMARY_DELTA_MEASURES
 from backend.services.resilience import DependencyDownError
+from backend.services.segment_labels import ITM_BORROWERS_LABEL
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 BASELINE = date(2026, 9, 1)
@@ -337,6 +339,22 @@ _MISSING_COMPETITOR_COLUMN = (
 
 def test_competitor_lien_maps_to_its_nullable_funnel_column() -> None:
     assert MEASURE_COLUMNS["competitor_lien"] == ("_ALL", "competitor_lien_borrowers", "competitor liens")
+
+
+def test_the_explainer_names_each_measure_as_the_drawer_title_does() -> None:
+    """critic-11's one-name rule across one click (W5e VRT review).
+
+    Home's WHY NOW trigger opens a drawer titled with the summary highlight's
+    label (``SUMMARY_DELTA_MEASURES``), and its Delta Explainer sentence reads
+    this response's label. They named the In the Money population twice
+    ("refi candidates") after the trigger said "in-the-money borrowers"; both
+    now read the lexicon's prenominal form.
+    """
+    summary_labels = {measure: label for measure, label, _style in SUMMARY_DELTA_MEASURES}
+    assert set(MEASURE_COLUMNS) <= set(summary_labels)
+    for measure, (_segment, _column, label) in MEASURE_COLUMNS.items():
+        assert label == summary_labels[measure], measure
+    assert MEASURE_COLUMNS["refi_economics_screen"][2] == ITM_BORROWERS_LABEL == "in-the-money borrowers"
 
 
 @pytest.mark.parametrize("measure", sorted(MEASURE_COLUMNS))

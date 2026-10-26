@@ -38,13 +38,14 @@ from backend.schemas.home_summary import (
 from backend.schemas.kpi_deltas import KpiDeltaResult
 from backend.services.observability import emit
 from backend.services.resilience import TTLCache
+from backend.services.segment_labels import ITM_BORROWERS_LABEL
 
 log = logging.getLogger(__name__)
 
 #: Delta measures the summary sentence calls out, in render order, with
 #: their display style: high-opportunity movement reads best as a percent
 #: ("+1.5% high-opportunity"), the other measures as signed counts
-#: ("+2,250 refi candidates"). The two EVENT measures lead (audit flow-05:
+#: ("+2,250 in-the-money borrowers"). The two EVENT measures lead (audit flow-05:
 #: WHY NOW cites events), and an event measure whose baseline snapshot
 #: predates its column has no delta and is omitted, never shown as 0.
 #: offers_recommended replaces offers_available: its predicate is exactly
@@ -54,7 +55,7 @@ log = logging.getLogger(__name__)
 SUMMARY_DELTA_MEASURES: tuple[tuple[str, str, str], ...] = (
     ("listed_for_sale", "listed for sale", "count"),
     ("competitor_lien", "competitor liens", "count"),
-    ("refi_economics_screen", "refi candidates", "count"),
+    ("refi_economics_screen", ITM_BORROWERS_LABEL, "count"),
     ("high_opportunity", "high-opportunity", "pct"),
     ("offers_recommended", "primary offer paths", "count"),
 )

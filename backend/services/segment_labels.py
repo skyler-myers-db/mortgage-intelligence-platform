@@ -39,6 +39,12 @@ SEGMENT_DISPLAY_LABELS: dict[str, str] = {
 
 ITM_RULE_LABEL = "In the Money rule"
 ITM_RULE_DESCRIPTION = "Borrowers who are in the money (spread and equity thresholds)."
+#: The prenominal form, the twin of the frontend ``LEXICON.inTheMoney.prenominal``.
+ITM_PRENOMINAL = "in-the-money"
+#: The population the rule selects, as a display label: Home's "since your
+#: last login" highlight, the drawer it opens and that drawer's Delta
+#: Explainer all name it this way, as the WHY NOW trigger does.
+ITM_BORROWERS_LABEL = f"{ITM_PRENOMINAL} borrowers"
 
 LEGACY_SEGMENT_NAMES: dict[str, str] = {"Prime Refi Candidates": "itm"}
 
@@ -83,6 +89,8 @@ def segment_case_sql(codes: Iterable[str], *, indent: str) -> str:
 
 
 __all__ = [
+    "ITM_BORROWERS_LABEL",
+    "ITM_PRENOMINAL",
     "ITM_RULE_DESCRIPTION",
     "ITM_RULE_LABEL",
     "LEGACY_SEGMENT_NAMES",

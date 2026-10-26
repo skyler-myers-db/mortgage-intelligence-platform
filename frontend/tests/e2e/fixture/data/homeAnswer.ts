@@ -99,7 +99,7 @@ export const MAX_HOME_SUMMARY: HomeSummary = {
   highlights: [
     { measure: 'listed_for_sale', label: 'listed for sale', display: '+11,412', value_token: '+11,412', current: LISTED, baseline: 50_000, delta: 11_412, delta_pct: 22.8 },
     { measure: 'competitor_lien', label: 'competitor liens', display: '-12,310', value_token: '-12,310', current: COMPETITOR_LIENS, baseline: 425_180, delta: -12_310, delta_pct: -2.9 },
-    { measure: 'refi_economics_screen', label: 'refi candidates', display: '+22,250', value_token: '+22,250', current: REFI_SCREEN, baseline: 52_525, delta: 22_250, delta_pct: 42.4 },
+    { measure: 'refi_economics_screen', label: 'in-the-money borrowers', display: '+22,250', value_token: '+22,250', current: REFI_SCREEN, baseline: 52_525, delta: 22_250, delta_pct: 42.4 },
     { measure: 'high_opportunity', label: 'high-opportunity', display: '+12.5%', value_token: '+12.5%', current: TOP_TIER, baseline: 34_588, delta: 4_324, delta_pct: 12.5 },
     { measure: 'offers_recommended', label: 'primary offer paths', display: '+111,190', value_token: '+111,190', current: LIVE_OFFER_PATHS, baseline: LIVE_OFFER_PATHS - 111_190, delta: 111_190, delta_pct: 992.9 },
   ],

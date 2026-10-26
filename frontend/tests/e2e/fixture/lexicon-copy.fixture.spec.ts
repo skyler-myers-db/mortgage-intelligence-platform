@@ -3,7 +3,10 @@
  * both themes:
  *
  *  - critic-11 / D-platform-process-g: Home's KPI reads "In the Money" and its
- *    Ask Genie entry prefills the reviewed in-the-money prompt; Segments names
+ *    Ask Genie entry prefills the reviewed in-the-money prompt; Home's WHY NOW
+ *    "in-the-money borrowers" trigger opens a drawer (title, Delta Explainer
+ *    sentence and caption) with the same name, never "refi candidates"
+ *    (the W5e VRT review's one-name miss); Segments names
  *    the itm card "In the Money"; the Ask composer and its sample chip speak
  *    the prenominal form; a Genie answer's own "in-the-money" renders verbatim
  *    (the vocabulary rewrite is gone, live-first); /glossary shows only the
@@ -35,10 +38,18 @@ import { FIXTURE_ROUTES } from './routes';
 import { expect, test } from './test';
 
 const THEMES: readonly FixtureTheme[] = ['dark', 'light'];
-const RETIRED = /\bprime\b|\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b/i;
+const RETIRED = /\bprime\b|\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b|\brefi(?:nance)?[- ]candidates?\b/i;
 const ITM_KPI_PROMPT =
   'How many borrowers across the current Cotality data coverage are currently in-the-money, and what is the average rate spread?';
 const CHIP = 'Which states have the most in-the-money borrowers?';
+/** The lexicon's prenominal population: WHY NOW's trigger and the server's highlight label. */
+const ITM_POPULATION = 'in-the-money borrowers';
+/**
+ * Linux Chromium sets text wider than macOS (charts.fixture.spec.ts's
+ * LINUX_TEXT_EMULATION): off Linux the drawer title is widened +0.5px a glyph,
+ * so its one-line fit holds on the CI renderer too.
+ */
+const LINUX_TEXT_EMULATION = '#evidence-drawer-title { letter-spacing: 0.5px; }';
 /** The example passes the real prompt guards (tests/unit/test_genie_context_templates.py). */
 const COMPOSER_PLACEHOLDER = 'Ask about your book, e.g. in-the-money count by state';
 
@@ -124,6 +135,40 @@ for (const theme of THEMES) {
       const dialog = page.getByRole('dialog', { name: 'Genie chat' });
       await expect(dialog.getByRole('textbox', { name: 'Ask Genie' })).toHaveValue(ITM_KPI_PROMPT);
       expect(await page.locator('#main-content').evaluate(scanText)).not.toMatch(RETIRED);
+    });
+
+    test('Home: the WHY NOW in-the-money trigger opens a drawer that keeps its name', async ({ app, page }) => {
+      await app.gotoRoute('/');
+      const trigger = page.locator('.home-answer .login-summary .home-answer__trigger', { hasText: ITM_POPULATION });
+      await expect(trigger.getByRole('link', { name: ITM_POPULATION, exact: true })).toBeVisible();
+      if (process.platform !== 'linux') await page.addStyleTag({ content: LINUX_TEXT_EMULATION });
+      const drawer = await app.openEvidenceDrawer(trigger.locator('.evidence-chip'));
+      const title = drawer.locator('#evidence-drawer-title');
+      await expect(title).toHaveText(`Since your last login — ${ITM_POPULATION}`);
+      // The new name is longer than the old one: the header title stays one
+      // line. Slack is the free space before the close button, whose
+      // margin-left: auto takes whatever the title leaves.
+      const fit = await title.evaluate((element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const rects = [...range.getClientRects()];
+        const header = element.closest('.drawer__hdr');
+        const close = header?.querySelector('.drawer__close');
+        const gap = header ? Number.parseFloat(getComputedStyle(header).columnGap) || 0 : 0;
+        const textRight = Math.max(...rects.map((rect) => rect.right));
+        return {
+          lines: new Set(rects.map((rect) => Math.round(rect.top))).size,
+          slack: close ? Math.round(close.getBoundingClientRect().left - gap - textRight) : Number.NaN,
+        };
+      });
+      console.log(`[delta-explainer-title] ${theme}: ${fit.lines} line, ${fit.slack}px slack`);
+      expect(fit.lines, 'the drawer title stays one line').toBe(1);
+      const explainer = drawer.getByTestId('delta-explainer');
+      await expect(explainer.locator('table tbody tr').first()).toBeVisible();
+      await expect(explainer).toContainText(new RegExp(`: \\+[\\d,]+ ${ITM_POPULATION}\\.`));
+      await expect(explainer.locator('table caption')).toHaveText(`Change in ${ITM_POPULATION} by state`);
+      // The drawer sits outside #main-content, so the registry scan never read it.
+      expect(await drawer.evaluate(scanText)).not.toMatch(RETIRED);
     });
 
     test('Segments: the In the Money card, a one-line lede and the mode glossary links', async ({ app, page }) => {

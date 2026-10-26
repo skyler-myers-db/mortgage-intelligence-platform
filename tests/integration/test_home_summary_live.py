@@ -178,7 +178,7 @@ def test_two_visits_produce_a_real_last_login_delta() -> None:
         assert [h.display for h in summary.highlights] == ["+1.5%", "+2,250", "+4,120"]
         assert summary.headline == (
             "Since your last login: +1.5% high-opportunity, "
-            "+2,250 refi candidates, +4,120 offers available."
+            "+2,250 in-the-money borrowers, +4,120 offers available."
         )
     finally:
         _cleanup(client, actor)
