@@ -2,9 +2,12 @@
  * @vitest-environment happy-dom
  *
  * The row preview's "More like this" entry (wow-power-2, W5e item 4c): a
- * ghost button beside "Build offer"; expanding the row reads nothing and
- * loads no panel; the click loads the panel chunk and reads ONE audit-free
- * count; a second click closes it. The Triage deck link is an approver's.
+ * ghost button on the preview's explore row beside "Ask Genie", out of the
+ * Primary offer card (whose three actions keep one line at 1440x900; the
+ * rendered geometry is lead-queue-layout-w5e.fixture.spec.ts); expanding the
+ * row reads nothing and loads no panel; the click loads the panel chunk and
+ * reads ONE audit-free count; a second click closes it. The Triage deck link
+ * is an approver's.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
@@ -87,10 +90,14 @@ const trigger = (container: HTMLElement) =>
   container.querySelector<HTMLButtonElement>(`[data-testid="lead-more-like-this-${LEAD.borrower_id}"]`)!;
 
 describe('RowPreview More like this', () => {
-  it('sits beside Build offer and reads nothing until it is clicked', async () => {
+  it('sits beside Ask Genie, out of the Primary offer card, and reads nothing until it is clicked', async () => {
     const container = await render();
-    const build = container.querySelector(`[data-testid="lead-build-offer-${LEAD.borrower_id}"]`)!;
-    expect(build.nextElementSibling).toBe(trigger(container));
+    const explore = trigger(container).closest('.chip-row');
+    expect(explore?.querySelector('.genie-ask-about'), 'on the explore row beside Ask Genie').not.toBeNull();
+    expect(trigger(container).closest('.preview-offer-card'), 'not in the Primary offer card').toBeNull();
+    const offerActions = [...(container.querySelector('.preview-offer-card .chip-row')?.children ?? [])]
+      .map((action) => action.textContent?.trim());
+    expect(offerActions, 'the Primary offer card keeps its three actions').toEqual(['Open Borrower 360', 'Build offer', 'Save lead']);
     expect(trigger(container).textContent).toBe('More like this');
     expect(trigger(container).getAttribute('aria-expanded')).toBe('false');
     expect(calls.filter((path) => path.includes('/leads/count'))).toEqual([]);

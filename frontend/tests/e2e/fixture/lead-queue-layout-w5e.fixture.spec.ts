@@ -12,6 +12,12 @@
  *      Status chip, and the icon-only Revoke's chevron centres on it (as
  *      bare inline siblings the textless button dropped the chip about 2px
  *      on Linux).
+ *  (3) The expanded row's Primary offer actions keep one line, Console
+ *      closed and open, with Linux Chromium's wider text emulated off Linux,
+ *      and the approval banner keeps its place: its "Approving as" line on
+ *      screen and its Approve reaching into view with the Console closed
+ *      ("More like this" as a fourth action wrapped the row, grew the card
+ *      38px and pushed both below the fold).
  */
 import type { Locator, Page } from '@playwright/test';
 import { FIXTURE_DENSITIES } from './app';
@@ -21,6 +27,14 @@ import { expect, test } from './test';
 
 /** The core FilterSelect pills (text pills: an uppercase label and a mono value). */
 const TEXT_PILLS = ['STATE', 'SEGMENT', 'RELATIONSHIP', 'PRODUCT', 'APPROVAL'] as const;
+
+/**
+ * Linux Chromium draws Geist and Geist Mono wider than macOS (whole-pixel
+ * advances); the extra letter-spacing over-approximates it on every button
+ * label of the expanded row, so a one-line fit measured here holds on CI.
+ * Applying it on Linux would double-count (followups-snooze.fixture.spec.ts).
+ */
+const LINUX_TEXT_EMULATION = '.tbl__expand-inner--lead .btn { letter-spacing: 0.5px; }';
 
 interface Box { top: number; bottom: number; height: number; centre: number }
 
@@ -33,6 +47,11 @@ async function box(target: Locator): Promise<Box> {
 
 function pill(page: Page, label: string): Locator {
   return page.locator(`.filter-row--lead-queue button[aria-haspopup="listbox"][aria-label^="${label}:"]`);
+}
+
+/** Distinct rounded tops of a flex row's items: one entry means one line. */
+async function lineTops(items: Locator): Promise<number[]> {
+  return items.evaluateAll((elements) => [...new Set(elements.map((el) => Math.round(el.getBoundingClientRect().top)))]);
 }
 
 async function expectOmniboxLinedUp(page: Page, phase: string): Promise<void> {
@@ -98,6 +117,34 @@ for (const theme of FIXTURE_THEMES) {
       expect(Math.abs(chip.centre - row.centre), `the Approved chip on the row's centre ${measured}`).toBeLessThanOrEqual(1);
       expect(Math.abs(chip.centre - status.centre), `the Approved chip level with the row's Status chip ${measured}`).toBeLessThanOrEqual(1);
       expect(Math.abs(chevron.centre - chip.centre), `Revoke's chevron centred on the chip ${measured}`).toBeLessThanOrEqual(1);
+    });
+  }
+
+  for (const phase of ['Console closed', 'Console open'] as const) {
+    test(`(3) the expanded row's offer actions keep one line and the approval banner keeps its place (${theme}, ${phase})`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/lead-queue');
+      if (phase === 'Console open') {
+        await app.openConsole();
+        await app.settle();
+      }
+      const row = await app.expandFirstLeadRow();
+      if (process.platform !== 'linux') await page.addStyleTag({ content: LINUX_TEXT_EMULATION });
+      const actions = row.locator('.preview-offer-card .chip-row > *');
+      await expect(actions.filter({ hasText: 'Save lead' })).toBeVisible();
+      expect(await actions.count(), 'the Primary offer card carries its actions').toBeGreaterThanOrEqual(3);
+      expect(await lineTops(actions), `${phase}: the Primary offer actions keep one line`).toHaveLength(1);
+      // More like this stays one click from the row, on the explore row beside Ask Genie.
+      const similar = row.getByRole('button', { name: 'More like this' });
+      await expect(similar).toBeVisible();
+      expect(await lineTops(row.locator('.chip-row:has([data-testid^="lead-more-like-this-"]) > *')), `${phase}: the explore row keeps one line`)
+        .toHaveLength(1);
+
+      if (phase === 'Console closed') {
+        const banner = row.getByTestId(/^lead-row-approval-/);
+        await expect(banner.getByTestId('approval-actor'), 'the banner names the approver on screen').toBeInViewport({ ratio: 1 });
+        await expect(banner.getByRole('button', { name: /^Approve/ }), 'the banner\'s Approve reaches into view').toBeInViewport();
+      }
     });
   }
 }
