@@ -38,6 +38,7 @@ import { APPROVED_LEAD, approvedLifecycle } from './data/revoke';
 import { LEADS } from './data/borrowers';
 import { json, type MockApi } from './mockApi';
 import { expect } from './test';
+import type { HeldFocus } from './visual';
 
 export const OVERLAY_STATES = ['evidence-drawer', 'command-palette', 'genie'] as const;
 
@@ -130,6 +131,39 @@ export const WAREHOUSE_DOWN_HEALTH: HealthPayload = {
   status: 'degraded',
   dependencies: { warehouse: 'down', lakebase: 'up', genie: 'up' },
 };
+
+/**
+ * The states whose open popover holds the focus that IS the state: their
+ * capture keeps focus within `scope` instead of blurring and asserts
+ * `popover` open before and after the screenshot (visual.ts HeldFocus).
+ * Every other state's capture blurs. safety-net.fixture.spec.ts (f) proves
+ * each entry: a plain park closes the popover, the held park keeps it.
+ *  - identity-menu: the account menu closes on a blur out of it
+ *    (IdentityMenu.tsx); its first item holds focus, so the menu is its own
+ *    scope;
+ *  - hide-menu: the HIDE listbox holds focus itself (MultiFilterSelect) and
+ *    closes on a focusout that leaves its `.filter-root`
+ *    (useListboxNavigation), so the scope is that root, which contains the
+ *    listbox and is not it. Not `.lead-table__hide-slot`: that wrapper is
+ *    display: contents, so it has no box and is never visible.
+ */
+export const HELD_FOCUS_STATES = {
+  'identity-menu': (page: Page): HeldFocus => {
+    const menu = page.getByRole('menu', { name: 'Account' });
+    return { scope: menu, popover: menu };
+  },
+  'hide-menu': (page: Page): HeldFocus => ({
+    scope: page.locator('.lead-table__hide-slot > .filter-root'),
+    popover: page.getByRole('listbox', { name: 'HIDE' }),
+  }),
+} as const satisfies Partial<Record<FixtureState, (page: Page) => HeldFocus>>;
+
+export type HeldFocusState = keyof typeof HELD_FOCUS_STATES;
+
+/** The popover a capture of `state` keeps focused, or undefined: that capture blurs. */
+export function heldFocus(page: Page, state: FixtureState): HeldFocus | undefined {
+  return Object.hasOwn(HELD_FOCUS_STATES, state) ? HELD_FOCUS_STATES[state as HeldFocusState](page) : undefined;
+}
 
 /**
  * Register a load state's fixture. Call before `app.gotoRoute`; a no-op for

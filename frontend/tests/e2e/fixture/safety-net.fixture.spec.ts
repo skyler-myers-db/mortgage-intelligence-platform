@@ -17,16 +17,21 @@
  *      open account menu closes on that blur, the defect that made the
  *      identity-menu baselines plain Home), keeps it only inside the popover
  *      a state names (the menu stays open on its first item), and fails a
- *      named popover that does not hold focus.
+ *      named popover that does not hold focus; every state whose capture
+ *      holds focus (HELD_FOCUS_STATES: the HIDE listbox) loses its popover
+ *      to the plain park and keeps it through the capture's own
+ *      pre-screenshot path, in both themes.
  *
- * The spec itself opens no audited read: it loads only /glossary and
- * page.setContent() documents, and (a) and (c) assert that.
+ * The spec itself opens no audited read: (a) and (c) load only /glossary and
+ * page.setContent() documents and assert that; (f)'s held states load their
+ * capture's route (Home, the Lead Queue) and assert none after its natural
+ * load.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
-import { FIXTURE_ACCENTS, FIXTURE_DENSITIES } from './app';
+import { FIXTURE_ACCENTS, FIXTURE_DENSITIES, type AppDriver } from './app';
 import {
   ADVISORY_TAG,
   WCAG_TAGS,
@@ -36,17 +41,22 @@ import {
   partitionByTags,
   type AxeScanContext,
 } from './axe';
-import { enterState } from './fixtureStates';
-import type { ApiCall } from './mockApi';
+import { HELD_FOCUS_STATES, enterState, type HeldFocusState } from './fixtureStates';
+import type { ApiCall, MockApi } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 import {
   auditedReadsAfter,
+  expectHeldAfterCapture,
+  expectNoAuditedReadSince,
   expectNoSurfaceOverflow,
+  markNaturalLoad,
   parkPointerAndBlur,
   pinnedVrtImage,
+  prepareCapture,
   surfaceOverflowProblems,
   vrtHostProblems,
+  type HeldFocus,
 } from './visual';
 
 const GLOSSARY = '/glossary';
@@ -312,4 +322,46 @@ test.describe('(f) the capture discipline', () => {
     await expect(search, 'the failed park left focus where it was').toBeFocused();
     expect(auditedReadsAfter(mockApi.calls, 0), 'this spec opens no audited read').toEqual([]);
   });
+
+  // Every state whose capture holds focus, on the route its capture loads
+  // (typed: a new HELD_FOCUS_STATES entry needs its route here, so none goes
+  // unproven). The rest of the matrix passes no `held`, so its park blurs.
+  const HELD_ROUTES: Readonly<Record<HeldFocusState, string>> = { 'identity-menu': '/', 'hide-menu': '/lead-queue' };
+  interface HeldCase {
+    state: string;
+    path: string;
+    held: (page: Page) => HeldFocus;
+    enter: (app: AppDriver, page: Page, mockApi: MockApi) => Promise<unknown>;
+  }
+  const HELD_CASES: readonly HeldCase[] = [
+    ...(Object.keys(HELD_ROUTES) as HeldFocusState[]).map((state): HeldCase => ({
+      state,
+      path: HELD_ROUTES[state],
+      held: HELD_FOCUS_STATES[state],
+      enter: (app, page) => enterState(app, page, state),
+    })),
+  ];
+  for (const theme of FIXTURE_THEMES) {
+    for (const { state, path, held, enter } of HELD_CASES) {
+      test(`${theme}: ${state} loses its popover to a plain park and keeps it through the capture's`, async ({ app, mockApi, page }) => {
+        await app.setTheme(theme);
+        await app.gotoRoute(path);
+        const naturalLoad = markNaturalLoad(mockApi);
+        const { scope, popover } = held(page);
+
+        // Control: the plain park every other capture takes closes the
+        // popover, so a blurring capture would show the plain route.
+        await enter(app, page, mockApi);
+        await expect(popover).toBeVisible();
+        await prepareCapture(page);
+        await expect(popover).toHaveCount(0);
+
+        // Held: open with focus inside its scope through the park, and after it.
+        await enter(app, page, mockApi);
+        await prepareCapture(page, { held: { scope, popover } });
+        await expectHeldAfterCapture({ scope, popover });
+        expectNoAuditedReadSince(mockApi, naturalLoad, `${state} (${theme})`);
+      });
+    }
+  }
 });
