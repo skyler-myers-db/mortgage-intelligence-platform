@@ -135,11 +135,13 @@
    state at their longest are 296.5625px on Segments with the Console closed
    (229.375px on Home with it open, 214.22 / 198.03px watching, 175.19px in the
    other layouts); the off-Linux emulation reads 263.5625px there, so it under-
-   measures this layout and only the Linux lines set the slot. 300px reserves
-   it with 3.4375px to spare, inside the tightness window.
-   geo-foundation.fixture.spec.ts logs every measurement and pins slot >= each
-   state everywhere, and slot - max < var(--sp-2) on Linux. */
-.map-legend__lever-slot { min-block-size: calc(var(--sp-16) * 5 - var(--sp-5)); }
+   measures this layout and only the Linux lines set the slot. W5e's lexicon
+   pass ("In the Money" for "the refi screen") shortened those sentences: the
+   W5e PR's first CI run measured the same layout at 280.375px (every other
+   state lower), so 284px reserves it with 3.625px to spare, inside the
+   tightness window. geo-foundation.fixture.spec.ts logs every measurement and
+   pins slot >= each state everywhere, and slot - max < var(--sp-2) on Linux. */
+.map-legend__lever-slot { min-block-size: calc(var(--sp-16) * 4 + var(--sp-6) + var(--sp-1)); }
 .map-wrap:has(.map-legend__lever) .map-levels {
   flex: 1 0 auto;
   min-block-size: calc(var(--sp-16) * 5);
