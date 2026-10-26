@@ -18,9 +18,19 @@
  *      screen and its Approve reaching into view with the Console closed
  *      ("More like this" as a fourth action wrapped the row, grew the card
  *      38px and pushed both below the fold).
+ *  (4) "More like this" shows what it opens: after the click its panel's
+ *      count line and links are wholly in the viewport and its trigger
+ *      stays there, in the queue's row preview (Console closed: the
+ *      approval banner's "Approving as" line and Approve in view too), in
+ *      the Triage deck (its Review stays in view) and on Borrower 360. On
+ *      the explore row at the table scroller's bottom edge the panel opened
+ *      wholly below the fold (count line at 958 of 900 in the queue, 1005 in
+ *      the deck), and on Borrower 360 its links did; only aria-expanded
+ *      changed on screen.
  */
 import type { Locator, Page } from '@playwright/test';
 import { FIXTURE_DENSITIES } from './app';
+import { PRIMARY_BORROWER } from './data/borrowers';
 import { APPROVED_LEAD } from './data/revoke';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
@@ -47,6 +57,45 @@ async function box(target: Locator): Promise<Box> {
 
 function pill(page: Page, label: string): Locator {
   return page.locator(`.filter-row--lead-queue button[aria-haspopup="listbox"][aria-label^="${label}:"]`);
+}
+
+/**
+ * An open More like this panel's own content is wholly on screen: its count
+ * line (the state's role=status) and its links, with room under them for a
+ * link's focus ring before the clip edge of every scroller they are in (the
+ * panel's scroll-margin-block-end); and the trigger the person clicked is
+ * still in view.
+ */
+async function expectSimilarPanelInView(trigger: Locator, panel: Locator, phase: string): Promise<void> {
+  await expect(panel.locator('[role="status"]'), `${phase}: the panel's count`).toHaveText(/match this pattern/);
+  await expect(panel.locator('[role="status"]'), `${phase}: the panel's count line is on screen`).toBeInViewport({ ratio: 1 });
+  const links = panel.getByRole('link');
+  expect(await links.count(), `${phase}: the panel carries its links`).toBeGreaterThanOrEqual(1);
+  for (const link of await links.all()) {
+    await expect(link, `${phase}: the panel's link "${await link.textContent()}" is on screen`).toBeInViewport({ ratio: 1 });
+  }
+  const ringRoom = await links.last().evaluate((link) => {
+    const root = getComputedStyle(document.documentElement);
+    const ring = parseFloat(root.getPropertyValue('--focus-ring-width')) + parseFloat(root.getPropertyValue('--focus-ring-offset'));
+    let clip = window.innerHeight;
+    for (let el = link.parentElement; el; el = el.parentElement) {
+      const style = getComputedStyle(el);
+      if (['auto', 'scroll', 'hidden', 'clip'].includes(style.overflowY)) {
+        clip = Math.min(clip, el.getBoundingClientRect().bottom - parseFloat(style.borderBottomWidth));
+      }
+    }
+    return clip - (link.getBoundingClientRect().bottom + ring);
+  });
+  expect(ringRoom, `${phase}: a focused link's ring clears the clip edge (${ringRoom}px to spare)`).toBeGreaterThanOrEqual(0);
+  // The reveal scrolls no further than the panel: the trigger is on screen
+  // and not under the table's sticky header or the docked route nav.
+  await expect(trigger, `${phase}: the trigger stays on screen`).toBeInViewport({ ratio: 1 });
+  const triggerOnTop = await trigger.evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return hit !== null && (hit === el || el.contains(hit));
+  });
+  expect(triggerOnTop, `${phase}: the trigger is the topmost paint at its centre`).toBe(true);
 }
 
 /** Distinct rounded tops of a flex row's items: one entry means one line. */
@@ -146,5 +195,45 @@ for (const theme of FIXTURE_THEMES) {
         await expect(banner.getByRole('button', { name: /^Approve/ }), 'the banner\'s Approve reaches into view').toBeInViewport();
       }
     });
+
+    test(`(4) More like this opens its panel in view in the row preview and the Triage deck (${theme}, ${phase})`, async ({ app, page }) => {
+      await app.setTheme(theme);
+      await app.gotoRoute('/lead-queue');
+      if (phase === 'Console open') {
+        await app.openConsole();
+        await app.settle();
+      }
+      const row = await app.expandFirstLeadRow();
+      if (process.platform !== 'linux') await page.addStyleTag({ content: LINUX_TEXT_EMULATION });
+      const trigger = row.getByRole('button', { name: 'More like this' });
+      await trigger.click();
+      await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+      await expectSimilarPanelInView(trigger, row.locator('.similar-cohort'), `${phase}, row preview`);
+      if (phase === 'Console closed') {
+        // The reveal scrolls the table no further than the panel: the banner stays.
+        const banner = row.getByTestId(/^lead-row-approval-/);
+        await expect(banner.getByTestId('approval-actor'), 'the banner still names the approver on screen').toBeInViewport({ ratio: 1 });
+        await expect(banner.getByRole('button', { name: /^Approve/ }), 'the banner\'s Approve is on screen').toBeInViewport({ ratio: 1 });
+      }
+
+      // The Triage deck shows the same preview, in `.main` (no table scroller).
+      await page.getByTestId('lead-triage-enter').click();
+      const card = page.locator('.triage__card');
+      await expect(card).toBeVisible();
+      const deckTrigger = card.getByRole('button', { name: 'More like this' });
+      await deckTrigger.click();
+      await expect(deckTrigger).toHaveAttribute('aria-expanded', 'true');
+      await expectSimilarPanelInView(deckTrigger, card.locator('.similar-cohort'), `${phase}, Triage deck`);
+      await expect(page.getByTestId('triage-review'), `${phase}: the deck's Review stays on screen`).toBeInViewport({ ratio: 1 });
+    });
   }
+
+  test(`(4) More like this opens its panel in view on Borrower 360 (${theme})`, async ({ app, page }) => {
+    await app.setTheme(theme);
+    await app.gotoRoute(`/borrower-360/${PRIMARY_BORROWER.borrower_id}`);
+    const trigger = page.getByTestId('borrower-more-like-this');
+    await trigger.click();
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    await expectSimilarPanelInView(trigger, page.locator('.similar-cohort'), 'Borrower 360');
+  });
 }

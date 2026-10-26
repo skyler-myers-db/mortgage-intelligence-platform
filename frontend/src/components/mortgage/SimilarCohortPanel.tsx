@@ -18,6 +18,14 @@
  * from. A failed count says "Count unavailable" and still offers the links.
  * Prototype: the Primary offer card and the row preview have no cohort
  * action (design_files/Module 0 Prototype.html:1981-1986).
+ *
+ * The panel opens under its trigger and scrolls itself into the nearest view
+ * as it mounts (`revealOpenedPanel`): at 1440x900 the row preview's trigger
+ * sits at the Lead Queue table scroller's bottom edge, and the Triage deck's
+ * and Borrower 360's at the viewport's, so the panel opened wholly or partly
+ * below the fold and the click looked like it did nothing. A mount happens
+ * only on the explicit open; the count arriving later changes no height (its
+ * line keeps one line box), so nothing scrolls again while it is open.
  */
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
@@ -28,6 +36,16 @@ import { leadPattern } from '../../lib/leadPattern';
 import './SimilarCohortPanel.css';
 
 const COUNT_STALE_MS = 60_000;
+
+/**
+ * The just-opened panel scrolls into the nearest view of each scroller it is
+ * in (the queue table's, then `.main`): no scroll when it is already in view,
+ * else the least that shows it, with `.similar-cohort`'s scroll-margin as air
+ * under its links. A callback ref, so it runs once, as the panel mounts.
+ */
+function revealOpenedPanel(element: HTMLDivElement | null): void {
+  element?.scrollIntoView?.({ block: 'nearest' });
+}
 
 export function SimilarCohortPanel({
   id,
@@ -51,7 +69,7 @@ export function SimilarCohortPanel({
   const search = pattern.params.toString();
   const total = count.data?.total_matching;
   return (
-    <div id={id} className="similar-cohort" role="group" aria-label="More like this" data-testid={`lead-similar-${lead.borrower_id}`}>
+    <div ref={revealOpenedPanel} id={id} className="similar-cohort" role="group" aria-label="More like this" data-testid={`lead-similar-${lead.borrower_id}`}>
       <div className="chip-row">
         {pattern.chips.map((chip) => (
           <span key={chip.label} className="filter similar-cohort__chip">

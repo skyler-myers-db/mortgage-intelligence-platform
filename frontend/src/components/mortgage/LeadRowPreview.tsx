@@ -47,6 +47,16 @@ const BANNER_CHUNK = lazyModule<{ default: unknown; ApprovalBanner?: typeof Appr
 const SIMILAR_CHUNK = lazyModule(() => import('./SimilarCohortPanel'));
 
 /**
+ * The panel's placeholder line ("Loading…", or the chunk's failure) scrolls
+ * into the nearest view as it mounts, as the panel itself does
+ * (SimilarCohortPanel revealOpenedPanel): at 1440x900 the explore row sits
+ * at the table scroller's bottom edge, so the line opened under the fold.
+ */
+function revealSimilarPlaceholder(element: HTMLParagraphElement | null): void {
+  element?.scrollIntoView?.({ block: 'nearest' });
+}
+
+/**
  * id of the expanded row's receipt block: the queue's "View receipt" toast
  * action opens the row and moves focus here (tabIndex -1).
  */
@@ -211,7 +221,9 @@ export function RowPreview({
             (deviation:more-like-this) sits beside it, both ghost `.btn--sm`
             of one block size, not in the Primary offer card: a fourth
             action there wrapped the card's row at 1440x900 and pushed the
-            approval banner's Approve below the fold. */}
+            approval banner's Approve below the fold. Here the row sits at
+            the table scroller's bottom edge at 1440x900, so what opens
+            under it scrolls itself into view. */}
         <div className="chip-row mt-2">
           <GenieAskAbout prompt={askPrompt} subject="borrower's segment and state" />
           <Button
@@ -228,7 +240,7 @@ export function RowPreview({
         {similarOpen && (SimilarCohortPanel ? (
           <SimilarCohortPanel id={similarId} lead={lead} canApprove={canApprove === true} countOptions={leadCountQueryOptions} />
         ) : (
-          <p id={similarId} className="muted fs-12 mt-2 flush" role="status">
+          <p ref={revealSimilarPlaceholder} id={similarId} className="muted fs-12 mt-2 flush" role="status">
             {similarChunk.failed ? 'More like this could not load; reload the page.' : 'Loading…'}
           </p>
         ))}
