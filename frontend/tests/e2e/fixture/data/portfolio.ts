@@ -102,7 +102,7 @@ export const HOME_SUMMARY: HomeSummary = {
   previous_visit_at: '2026-07-09T14:30:00+00:00',
   baseline_snapshot_at: '2026-07-09T06:00:00+00:00',
   headline:
-    'Since your last login: +44 listed for sale, -31 competitor liens, +2,250 refi candidates, +1.5% high-opportunity, +190 primary offer paths.',
+    'Since your last login: +44 listed for sale, -31 competitor liens, +2,250 in-the-money borrowers, +1.5% high-opportunity, +190 primary offer paths.',
   phrasing_source: 'deterministic',
   phrasing_fallback_reason: 'genie_not_configured',
   // SUMMARY_DELTA_MEASURES order (backend/services/home_summary.py, flow-05):
@@ -110,7 +110,7 @@ export const HOME_SUMMARY: HomeSummary = {
   highlights: [
     { measure: 'listed_for_sale', label: 'listed for sale', display: '+44', value_token: '+44', current: 1412, baseline: 1368, delta: 44, delta_pct: 3.2 },
     { measure: 'competitor_lien', label: 'competitor liens', display: '-31', value_token: '-31', current: 9870, baseline: 9901, delta: -31, delta_pct: -0.3 },
-    { measure: 'refi_economics_screen', label: 'refi candidates', display: '+2,250', value_token: '+2,250', current: TOTALS.inTheMoney, baseline: 10590, delta: 2250, delta_pct: 21.2 },
+    { measure: 'refi_economics_screen', label: 'in-the-money borrowers', display: '+2,250', value_token: '+2,250', current: TOTALS.inTheMoney, baseline: 10590, delta: 2250, delta_pct: 21.2 },
     { measure: 'high_opportunity', label: 'high-opportunity', display: '+1.5%', value_token: '+1.5%', current: TOTALS.highOpportunity, baseline: 4059, delta: 61, delta_pct: 1.5 },
     { measure: 'offers_recommended', label: 'primary offer paths', display: '+190', value_token: '+190', current: TOTALS.offersRecommended, baseline: 6060, delta: 190, delta_pct: 3.1 },
   ],
@@ -200,7 +200,7 @@ export const HOME_WATCHLIST_SUMMARY: GrowthAgentWatchlistSummaryResponse = {
 const ATTRIBUTION_CHANGES: Readonly<Record<string, number>> = { IL: 620, TX: 540, CA: 410, FL: 300, AZ: 180, WA: 90, CO: 40, GA: 20 };
 const ATTRIBUTION_UNATTRIBUTED = 30;
 const ATTRIBUTION_LABELS: Readonly<Record<HomeAttributionMeasure, string>> = {
-  refi_economics_screen: 'refi candidates',
+  refi_economics_screen: 'in-the-money borrowers',
   high_opportunity: 'high-opportunity',
   offers_recommended: 'primary offer paths',
   listed_for_sale: 'listed for sale',

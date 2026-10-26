@@ -34,6 +34,8 @@ from backend.services.repositories import (
     databricks_genie_strategy,
 )
 from backend.services.segment_labels import (
+    ITM_BORROWERS_LABEL,
+    ITM_PRENOMINAL,
     ITM_RULE_LABEL,
     LEGACY_SEGMENT_NAMES,
     SEGMENT_DISPLAY_LABELS,
@@ -42,6 +44,7 @@ from backend.services.segment_labels import (
 REPO = Path(__file__).resolve().parents[2]
 GOLD_META = REPO / "sql" / "transformations" / "gold_segment_population.sql"
 FRONTEND_REGISTRY = REPO / "frontend" / "src" / "lib" / "segmentMetadata.ts"
+FRONTEND_LEXICON = REPO / "frontend" / "src" / "lib" / "lexicon.ts"
 
 BAN_RE = re.compile(r"\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b", re.IGNORECASE)
 PRIME_RE = re.compile(r"\bprime\b", re.IGNORECASE)
@@ -195,6 +198,16 @@ def test_every_code_has_one_name_across_gold_app_and_frontend() -> None:
     assert SEGMENT_DISPLAY_LABELS["itm"] == "In the Money"
     assert ITM_RULE_LABEL == "In the Money rule"
     assert LEGACY_SEGMENT_NAMES == {"Prime Refi Candidates": "itm"}
+
+
+def test_the_prenominal_is_the_frontend_lexicon_twin() -> None:
+    """Home's In the Money population label reads the lexicon's prenominal form."""
+
+    match = re.search(r"prenominal:\s*'([^']+)'", FRONTEND_LEXICON.read_text(encoding="utf-8"))
+    assert match is not None
+    assert ITM_PRENOMINAL == match.group(1) == "in-the-money"
+    assert ITM_BORROWERS_LABEL == "in-the-money borrowers"
+    assert not BAN_RE.search(ITM_BORROWERS_LABEL)
 
 
 def test_every_consumer_keeps_its_key_set_and_reads_the_canonical_label() -> None:

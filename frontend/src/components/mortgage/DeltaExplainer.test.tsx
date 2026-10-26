@@ -37,7 +37,7 @@ function body(overrides: Partial<HomeSummaryAttributionResponse> = {}): HomeSumm
   const attributed = states.reduce((sum, row) => sum + row.change, 0);
   return {
     measure: 'refi_economics_screen',
-    label: 'refi candidates',
+    label: 'in-the-money borrowers',
     population: 'addressable',
     requested_baseline_date: '2026-09-01',
     baseline_snapshot_date: '2026-09-01',
