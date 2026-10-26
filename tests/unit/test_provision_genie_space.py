@@ -278,7 +278,8 @@ _IN_THE_MONEY_NAMING_LINE = (
     "It is an economics screen, not lead quality or creditworthiness; never call it prime."
 )
 _RETIRED_ITM_VARIANT_RE = re.compile(
-    r"\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b", re.IGNORECASE
+    r"\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b|\brefi(?:nance)?[- ]candidates?\b",
+    re.IGNORECASE,
 )
 
 

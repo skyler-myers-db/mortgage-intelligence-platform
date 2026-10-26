@@ -38,7 +38,7 @@ import { FIXTURE_ROUTES } from './routes';
 import { expect, test } from './test';
 
 const THEMES: readonly FixtureTheme[] = ['dark', 'light'];
-const RETIRED = /\bprime\b|\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b/i;
+const RETIRED = /\bprime\b|\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b|\brefi(?:nance)?[- ]candidates?\b/i;
 const ITM_KPI_PROMPT =
   'How many borrowers across the current Cotality data coverage are currently in-the-money, and what is the average rate spread?';
 const CHIP = 'Which states have the most in-the-money borrowers?';

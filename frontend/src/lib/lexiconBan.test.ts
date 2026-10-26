@@ -135,6 +135,12 @@ describe('lexicon ban selectors', { timeout: ESLINT_BUDGET_MS }, () => {
       ['const a = `x ${y} refi screen`;', 'template text'],
       ['const el = <p>Refi screen</p>;', 'JSX text'],
       ['const el = <KpiCard label="Refi economics screen" />;', 'JSX attribute string'],
+      // W5e VRT review: Home's since-last-login label named the In the Money
+      // population "refi candidates" and slipped past every scan.
+      ["const a = 'refi candidates';", 'refi candidates'],
+      ['const a = `Since your last login — ${label} refi candidates`;', 'refi candidates in template text'],
+      ["const a = 'Refinance candidate';", 'refinance candidate'],
+      ["const a = 'refi-candidates';", 'hyphenated refi candidates'],
     ];
     for (const [code, label] of cases) expect(lexiconHits(code), label).toHaveLength(1);
   });
@@ -143,12 +149,40 @@ describe('lexicon ban selectors', { timeout: ESLINT_BUDGET_MS }, () => {
     const allowed = [
       "const a = 'In the Money';",
       "const a = 'in-the-money';",
+      "const a = 'in-the-money borrowers';",
       "const a = 'refi_economics_screen';",
       "const a = 'ITM on Related Property';",
       "const a = 'Refi Propensity';",
       'const el = <p>In the Money rule</p>;',
     ];
     for (const code of allowed) expect(lexiconHits(code), code).toEqual([]);
+  });
+});
+
+/**
+ * The scans that re-implement LEXICON_RE outside eslint: rendered-DOM scans and
+ * the backend sweeps of shipped strings and of the Genie space. Each must carry
+ * every LEXICON_RE alternative verbatim (a copy may add more, as RETIRED adds
+ * `\bprime\b`), so widening the ban widens every scan in the same change.
+ */
+const LEXICON_RE_COPIES = [
+  'src/routes/borrower-360.states.test.tsx',
+  'src/routes/glossary.lexicon.test.tsx',
+  'tests/e2e/fixture/lexicon-copy.fixture.spec.ts',
+  'tests/e2e/fixture/print-glossary-sales-manager.fixture.spec.ts',
+  '../tests/unit/test_segment_label_parity.py',
+  '../tests/unit/test_provision_genie_space.py',
+];
+
+describe('LEXICON_RE copies', { timeout: ESLINT_BUDGET_MS }, () => {
+  it('every scan carries the ban\'s alternatives verbatim', () => {
+    const selector = config.LEXICON_BAN[0].selector;
+    const body = selector.slice(selector.indexOf('=/') + 2, selector.lastIndexOf('/i]'));
+    expect(body).toContain(String.raw`\brefi(?:nance)?[- ]candidates?\b`);
+    for (const entry of config.LEXICON_BAN) expect(entry.selector, entry.selector).toContain(`/${body}/i]`);
+    for (const file of LEXICON_RE_COPIES) {
+      expect(readFileSync(`${FRONTEND}${file}`, 'utf8') as string, file).toContain(body);
+    }
   });
 });
 

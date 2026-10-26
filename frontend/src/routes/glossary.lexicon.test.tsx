@@ -10,7 +10,7 @@ import GlossaryRoute from './glossary';
  * candidates", ...) are search-only (GlossaryEntry.searchAliases): typing one
  * still finds the term, but no alias chip ever displays one.
  */
-const RETIRED = /\bprime\b|\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b/i;
+const RETIRED = /\bprime\b|\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b|\brefi(?:nance)?[- ]candidates?\b/i;
 
 function render(entry: string): string {
   return renderToStaticMarkup(
