@@ -2065,8 +2065,12 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .first();
     await expect(answerSurface).toBeVisible({ timeout: 90_000 });
     // flow-10 (2026-09-23): the source chip shows a plain label. Since W5e
-    // (critic-08) it carries no native title; the evidence hover card and the
-    // drawer it opens carry the governed UC path, so the pin reads the label.
+    // (critic-08) it carries no native title, and its evidence hover card
+    // shows the registry title ('Borrower 360 feature set'), not the UC path,
+    // so this pin reads the label only. The governed mip.gold.* asset is
+    // listed in the answer's 'Show proof' drawer (Source UC assets); moving
+    // the path pin there is a release-gate step (4) repair (report 12.6),
+    // proven against the live app.
     await expect(answerSurface.locator('.evidence-chip', { hasText: 'Borrower 360' }).first()).toBeVisible();
     await expect(answerSurface).toContainText(/average listing days on market/i);
     await expect(answerSurface.locator('.genie-answer__table tbody tr').first()).toBeVisible({

@@ -553,8 +553,12 @@ test('Genie answers valid recommended and free-form questions without policy-blo
   await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
   await expect(page.getByText(/Policy blocked|Genie reconnecting|Genie is warming up/i)).toHaveCount(0, { timeout: 60_000 });
   // flow-10 (2026-09-23): source chips show a plain label. Since W5e
-  // (critic-08) they carry no native title; the evidence hover card and the
-  // drawer carry the governed UC path, so the pin reads the label.
+  // (critic-08) they carry no native title, and the evidence hover card
+  // shows the registry title ('Ranked lead population'), not the UC path,
+  // so this pin reads the label only. The governed mip.gold.* asset is
+  // listed in the answer's 'Show proof' drawer (Source UC assets); moving
+  // the path pin there is a release-gate step (4) repair (report 12.6),
+  // proven against the live app.
   await expect(page.locator('.evidence-chip', { hasText: 'Lead population' }).first()).toBeVisible({ timeout: 60_000 });
 });
 
