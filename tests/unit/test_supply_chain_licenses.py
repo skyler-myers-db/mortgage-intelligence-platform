@@ -109,6 +109,7 @@ def test_third_party_license_notice_covers_weak_copyleft_and_map_data() -> None:
         "@fontsource-variable/geist-mono",
         "OFL-1.1",
         "web-vitals",
+        "certifi",
     ):
         assert required in notice
 
