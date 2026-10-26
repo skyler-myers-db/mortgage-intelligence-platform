@@ -127,15 +127,21 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert "databricks-sql-connector==4.4.0" in requirements_in
     assert "boto3==1.43.50" in requirements_in
     assert "pg8000==1.31.5" in requirements_in
-    assert "gitpython>=3.1.59,<4" in requirements_in
+    assert "gitpython>=3.2.1,<4" in requirements_in
     assert "cryptography==50.0.1" in requirements_in
-    assert "aiohttp>=3.14.3" in requirements_in
+    assert "aiohttp>=3.14.4" in requirements_in
     assert "pyasn1>=0.6.4,<1" in requirements_in
     assert "sqlparse>=0.6.0,<1" in requirements_in
     assert "thrift>=0.24.0,<0.25" in requirements_in
     assert "multidict==6.9.1" in requirements_in
     assert "werkzeug==3.1.9" in requirements_in
     assert "mako==1.4.2" in requirements_in
+    assert "certifi==2026.10.23" in requirements_in
+    assert "graphql-core==3.2.12" in requirements_in
+    assert "pillow==13.0.0" in requirements_in
+    assert "opentelemetry-api>=1.45.1,<2" in requirements_in
+    assert "opentelemetry-sdk>=1.45.1,<2" in requirements_in
+    assert "opentelemetry-exporter-otlp>=1.45.1,<2" in requirements_in
     for required_pin in (
         "boto3==1.43.50",
         "uvicorn==0.47.0",
@@ -145,15 +151,21 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
         "multidict==6.9.1",
         "werkzeug==3.1.9",
         "mako==1.4.2",
-        "gitpython==3.1.62",
+        "gitpython==3.2.1",
         "cryptography==50.0.1",
         "mlflow==3.16.0",
         "pyarrow==25.0.0",
-        "aiohttp==3.14.3",
+        "aiohttp==3.14.5",
+        "yarl==1.25.1",
         "pyasn1==0.6.4",
         "pg8000==1.31.5",
         "psycopg==3.3.4",
-        "opentelemetry-sdk==1.41.1",
+        "opentelemetry-api==1.45.1",
+        "opentelemetry-sdk==1.45.1",
+        "opentelemetry-exporter-otlp==1.45.1",
+        "certifi==2026.10.23",
+        "graphql-core==3.2.12",
+        "pillow==13.0.0",
         "sqlparse==0.6.0",
         "thrift==0.24.0",
     ):

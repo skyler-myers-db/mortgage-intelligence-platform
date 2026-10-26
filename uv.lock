@@ -2,7 +2,7 @@
 #    uv pip compile requirements.in --python-version 3.11 --format requirements.txt --output-file uv.lock
 aiohappyeyeballs==2.6.2
     # via aiohttp
-aiohttp==3.14.3
+aiohttp==3.14.5
     # via
     #   -r requirements.in
     #   mlflow
@@ -40,8 +40,9 @@ cachetools==6.2.6
     # via
     #   mlflow-skinny
     #   mlflow-tracing
-certifi==2026.4.22
+certifi==2026.10.23
     # via
+    #   -r requirements.in
     #   httpcore
     #   httpx
     #   requests
@@ -98,7 +99,7 @@ frozenlist==1.8.0
     #   aiosignal
 gitdb==4.0.12
     # via gitpython
-gitpython==3.1.62
+gitpython==3.2.1
     # via
     #   -r requirements.in
     #   mlflow-skinny
@@ -110,8 +111,9 @@ googleapis-common-protos==1.75.0
     #   opentelemetry-exporter-otlp-proto-http
 graphene==3.4.3
     # via mlflow
-graphql-core==3.2.11
+graphql-core==3.2.12
     # via
+    #   -r requirements.in
     #   graphene
     #   graphql-relay
 graphql-relay==3.2.0
@@ -141,9 +143,7 @@ idna==3.15
     #   requests
     #   yarl
 importlib-metadata==8.7.1
-    # via
-    #   mlflow-skinny
-    #   opentelemetry-api
+    # via mlflow-skinny
 iniconfig==2.3.0
     # via pytest
 itsdangerous==2.2.0
@@ -204,39 +204,48 @@ oauthlib==3.3.1
     # via databricks-sql-connector
 openpyxl==3.1.5
     # via databricks-sql-connector
-opentelemetry-api==1.41.1
+opentelemetry-api==1.45.1
     # via
+    #   -r requirements.in
     #   mlflow-skinny
     #   mlflow-tracing
+    #   opentelemetry-exporter-http-transport
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
-opentelemetry-exporter-otlp==1.41.1
+opentelemetry-exporter-http-transport==0.66b1
+    # via opentelemetry-exporter-otlp-proto-http
+opentelemetry-exporter-otlp==1.45.1
     # via -r requirements.in
-opentelemetry-exporter-otlp-proto-common==1.41.1
+opentelemetry-exporter-otlp-common==0.66b1
     # via
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
-opentelemetry-exporter-otlp-proto-grpc==1.41.1
+opentelemetry-exporter-otlp-proto-common==1.45.1
+    # via
+    #   opentelemetry-exporter-otlp-proto-grpc
+    #   opentelemetry-exporter-otlp-proto-http
+opentelemetry-exporter-otlp-proto-grpc==1.45.1
     # via opentelemetry-exporter-otlp
-opentelemetry-exporter-otlp-proto-http==1.41.1
+opentelemetry-exporter-otlp-proto-http==1.45.1
     # via opentelemetry-exporter-otlp
-opentelemetry-proto==1.41.1
+opentelemetry-proto==1.45.1
     # via
     #   mlflow-skinny
     #   mlflow-tracing
     #   opentelemetry-exporter-otlp-proto-common
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
-opentelemetry-sdk==1.41.1
+opentelemetry-sdk==1.45.1
     # via
     #   -r requirements.in
     #   mlflow-skinny
     #   mlflow-tracing
+    #   opentelemetry-exporter-otlp-common
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
-opentelemetry-semantic-conventions==0.62b1
+opentelemetry-semantic-conventions==0.66b1
     # via opentelemetry-sdk
 packaging==25.0
     # via
@@ -254,7 +263,7 @@ pathspec==1.1.1
     # via mypy
 pg8000==1.31.5
     # via -r requirements.in
-pillow==12.3.0
+pillow==13.0.0
     # via
     #   -r requirements.in
     #   matplotlib
@@ -345,6 +354,7 @@ requests==2.34.2
     #   databricks-sql-connector
     #   docker
     #   mlflow-skinny
+    #   opentelemetry-exporter-http-transport
     #   opentelemetry-exporter-otlp-proto-http
 ruff==0.8.6
     # via -r requirements.in
@@ -440,7 +450,7 @@ werkzeug==3.1.9
     #   -r requirements.in
     #   flask
     #   flask-cors
-yarl==1.24.2
+yarl==1.25.1
     # via aiohttp
 zipp==3.23.1
     # via importlib-metadata
