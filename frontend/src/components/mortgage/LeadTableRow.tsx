@@ -10,10 +10,16 @@ import { ConfidenceMeter } from './ConfidenceMeter';
 import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { RowPreview } from './LeadRowPreview';
 import { LeadRowWorkflowPanel } from './LeadRowWorkflowPanel';
-import { useLeadTableColumns, type LeadTableColumnKey, type LeadTableView } from './LeadTable.columns';
+import {
+  leadTableComplianceInBorrowerCell,
+  useLeadTableColumns,
+  type LeadTableColumnKey,
+  type LeadTableView,
+} from './LeadTable.columns';
 import { LeadTableOverflowChip } from './LeadTableOverflowChip';
 import {
   LeadAssignmentCell,
+  LeadComplianceChips,
   LeadRelationshipCell,
   LeadStatusCell,
   LeadWorkflowFieldCell,
@@ -170,6 +176,10 @@ export function LeadTableRow({
     approvalActionsDisabled && 'campaign-binding-status',
   );
   const columns = useLeadTableColumns(view);
+  // A hidden Status (Review) or Relationship (Sales ops) cell would take the
+  // DNC / Suppressed / Owner-unresolved caveats with it: the Borrower cell,
+  // which is never hideable, carries them instead.
+  const complianceInBorrowerCell = leadTableComplianceInBorrowerCell(view, columns);
   const offerLabel = offerDisplayLabel(lead.recommended_offer_code, lead.recommended_offer);
   const decisionPending = pendingDecision !== null;
   const [primarySegment, ...moreSegments] = lead.segment_codes;
@@ -228,6 +238,7 @@ export function LeadTableRow({
             <span className="mono muted lead-table__clip">Property ref unavailable</span>
           )}
         </button>
+        {complianceInBorrowerCell && <LeadComplianceChips lead={lead} inBorrowerCell />}
       </td>
     ),
     location: () => (

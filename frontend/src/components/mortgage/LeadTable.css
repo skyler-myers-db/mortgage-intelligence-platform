@@ -139,6 +139,13 @@
   gap: var(--sp-1);
 }
 .lead-table__flag { flex-shrink: 0; }
+/* A hidden Status / Relationship cell moves the caveats into the Borrower
+   cell (LeadTable.columns.ts, leadTableComplianceInBorrowerCell): their own
+   line under the borrower id and property ref, never dropped. */
+.lead-table__flags--borrower {
+  display: flex;
+  margin-block-start: var(--sp-1);
+}
 .lead-table__empty { color: var(--text-3); }
 
 /* Status header menu: the `.filter-menu` dropdown, portalled to <body> and

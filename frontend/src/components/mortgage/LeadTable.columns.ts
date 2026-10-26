@@ -22,7 +22,9 @@ import './LeadTable.columns.css';
  * a view's hideable columns can be hidden through `?hide=` (the route's HIDE
  * pill). The selection, row expand, Borrower, Primary offer (it carries the
  * rules evidence chip), Score, Signal and Approval columns are never
- * hideable: evidence, confidence and the approval gate always render. One
+ * hideable: evidence, confidence and the approval gate always render, and
+ * the compliance caveats move into the Borrower cell when their host cell is
+ * hidden (leadTableComplianceInBorrowerCell). One
  * hidden set (LeadTableHiddenColumnsContext) feeds the colgroup, the header
  * and every row, so a header can never sit over the wrong cell. Segment
  * Intelligence provides no set and keeps the full view.
@@ -137,6 +139,25 @@ const TOKEN_OF_KEY: ReadonlyMap<LeadTableColumnKey, LeadTableHideToken> = new Ma
 /** The column's `?hide=` token, or null when the column is never hideable. */
 export function leadTableHideToken(key: LeadTableColumnKey): LeadTableHideToken | null {
   return TOKEN_OF_KEY.get(key) ?? null;
+}
+
+/**
+ * The cell that hosts a row's compliance caveats (DNC, Suppressed, Owner
+ * unresolved; LeadComplianceChips) in each view: the merged Status cell in
+ * Review, Relationship in Sales ops. Both are hideable, and a hidden set can
+ * be saved, made the actor's default and shared by link, so when the host is
+ * hidden the never-hideable Borrower cell carries the caveats instead: no
+ * hidden set can take a compliance signal out of the row.
+ */
+const COMPLIANCE_HOST: Record<LeadTableView, LeadTableColumnKey> = {
+  default: 'status',
+  'sales-ops': 'relationship',
+};
+
+/** True when `columns` lack the view's compliance host, so the Borrower cell renders the caveats. */
+export function leadTableComplianceInBorrowerCell(view: LeadTableView, columns: readonly LeadTableColumn[]): boolean {
+  const host = COMPLIANCE_HOST[view];
+  return !columns.some((column) => column.key === host);
 }
 
 /** The view's hideable columns, in column order. */

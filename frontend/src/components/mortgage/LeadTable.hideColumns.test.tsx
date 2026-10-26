@@ -11,7 +11,10 @@
  *    right after the VIEW pill;
  *  - the context value is interned on the hide VALUE, so an unrelated
  *    re-render with an equal `?hide=` re-renders no row's Status cell (a
- *    renderCost-style counting wrapper), while a real change does.
+ *    renderCost-style counting wrapper), while a real change does;
+ *  - no hidden set drops a compliance caveat: with the view's host cell
+ *    (Status in Review, Relationship in Sales ops) hidden, every DNC /
+ *    Suppressed / Owner-unresolved chip renders in the Borrower cell.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, useEffect, useState } from 'react';
@@ -91,12 +94,25 @@ const LEADS = IDS.map((borrowerId, index) => ({
   evidence_ids: ['ev-1'],
   approval_status: 'pending',
 })) as unknown as LeadSummary[];
+/** One row per compliance caveat, plus a row that carries two (and the plain LEADS[0]). */
+const FLAGGED = [
+  { ...LEADS[0], borrower_id: 'B-HIDEFLAGGED01', dnc: true, marketing_eligible: false },
+  { ...LEADS[1], borrower_id: 'B-HIDEFLAGGED02', marketing_eligible: false, suppression_reason: 'opt_out' },
+  { ...LEADS[2], borrower_id: 'B-HIDEFLAGGED03', has_unresolved_owner: true, marketing_eligible: false },
+  LEADS[0],
+] as unknown as LeadSummary[];
+const FLAG_LABELS: Record<string, string[]> = {
+  'B-HIDEFLAGGED01': ['DNC'],
+  'B-HIDEFLAGGED02': ['Suppressed'],
+  'B-HIDEFLAGGED03': ['Owner unresolved', 'Suppressed'],
+  [IDS[0]!]: [],
+};
 const noop = (_view: LeadTableView) => undefined;
 
 let setTick: ((value: number) => void) | null = null;
 
 /** The route's derivation: a NEW URLSearchParams every render, as useSearchParams hands out. */
-function Harness({ search }: { search: string }) {
+function Harness({ search, leads = LEADS }: { search: string; leads?: LeadSummary[] }) {
   'use no memo';
 
   const [tick, setTickState] = useState(0);
@@ -108,7 +124,7 @@ function Harness({ search }: { search: string }) {
     <div data-tick={tick}>
       <LeadTableHiddenColumnsContext.Provider value={state.hidden}>
         <LeadTableHeaderSlotContext.Provider value={<span data-testid="hide-slot">HIDE</span>}>
-          <LeadTable leads={LEADS} view={state.view} onViewChange={noop} />
+          <LeadTable leads={leads} view={state.view} onViewChange={noop} />
         </LeadTableHeaderSlotContext.Provider>
       </LeadTableHiddenColumnsContext.Provider>
     </div>
@@ -119,12 +135,12 @@ let container: HTMLDivElement;
 let root: Root;
 let queryClient: QueryClient;
 
-function render(search: string) {
+function render(search: string, leads?: LeadSummary[]) {
   act(() => {
     root.render(
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={['/lead-queue']}>
-          <Harness search={search} />
+          <Harness search={search} leads={leads} />
         </MemoryRouter>
       </QueryClientProvider>,
     );
@@ -200,5 +216,30 @@ describe('hidden columns on the rendered table', () => {
 
     render('hide=segments');
     expect(new Set(statusCellRenders), 'non-vacuity: a real hide change re-renders the rows').toEqual(new Set(IDS));
+  });
+});
+
+describe('compliance caveats under any hidden set', () => {
+  const flagsIn = (row: Element) => [...row.querySelectorAll('.lead-table__flag')].map((chip) => chip.textContent?.trim() ?? '');
+
+  it.each([
+    ['', 'status', false],
+    ['hide=status', null, true],
+    ['hide=location,segments,equity,rate,status', null, true],
+    ['view=sales-ops', 'relationship', false],
+    ['view=sales-ops&hide=relationship', null, true],
+    ['view=sales-ops&hide=location,relationship,assigned,outreach,last-touch,segments,equity,rate', null, true],
+  ] as const)('?%s: every DNC / Suppressed / Owner-unresolved row keeps its chips, once', (search, host, inBorrower) => {
+    render(search, FLAGGED);
+    const rendered = rows();
+    expect(rendered.map((row) => row.dataset.borrowerRow).sort()).toEqual(Object.keys(FLAG_LABELS).sort());
+    const labels = headerLabels();
+    expect(labels.includes('Status') || labels.includes('Relationship'), 'precondition: the host header matches the case').toBe(host !== null);
+    for (const row of rendered) {
+      const id = row.dataset.borrowerRow!;
+      expect(flagsIn(row), id).toEqual(FLAG_LABELS[id]);
+      const borrowerCell = row.querySelector(':scope > td.is-primary')!;
+      expect(flagsIn(borrowerCell), `${id}: caveats in the Borrower cell`).toEqual(inBorrower ? FLAG_LABELS[id] : []);
+    }
   });
 });

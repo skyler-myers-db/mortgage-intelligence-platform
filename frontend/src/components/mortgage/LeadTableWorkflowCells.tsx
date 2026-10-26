@@ -35,11 +35,19 @@ export function LeadEmptyCell({ spoken }: { spoken: string }) {
   );
 }
 
-export function LeadComplianceChips({ lead }: { lead: LeadSummary }) {
+/**
+ * The row's compliance caveats. `inBorrowerCell` is the placement when the
+ * view's host cell (Status / Relationship) is hidden: the caveats take their
+ * own line under the borrower id (leadTableComplianceInBorrowerCell).
+ */
+export function LeadComplianceChips({ lead, inBorrowerCell = false }: { lead: LeadSummary; inBorrowerCell?: boolean }) {
   const flags = leadComplianceFlags(lead);
   if (flags.length === 0) return null;
   return (
-    <span className="lead-table__flags" data-testid={`lead-compliance-${lead.borrower_id}`}>
+    <span
+      className={inBorrowerCell ? 'lead-table__flags lead-table__flags--borrower' : 'lead-table__flags'}
+      data-testid={`lead-compliance-${lead.borrower_id}`}
+    >
       {flags.map((flag) => (
         <Chip
           key={flag.key}
