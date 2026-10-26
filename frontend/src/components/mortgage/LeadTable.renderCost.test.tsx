@@ -17,9 +17,10 @@
  *     free-text notes are retired, D-shell-deviations-g2) or the bulk gate's
  *     shared rationale re-renders that form only. The table's renders are counted through
  *     useLeadTableFillHeight, which the shell calls once per render.
- *   - The shell's row callbacks keep one identity (slice 3; the shell itself
- *     stays 'use no memo' under the lane's budget cut 5, so this is
- *     useStableRowCallbacks plus targeted memoization, not the compiler):
+ *   - The shell's row callbacks keep one identity (slice 3:
+ *     useStableRowCallbacks plus targeted memoization; these pins predate
+ *     the shell's compile in W5e w5-lead-table-compile and still hold on the
+ *     compiled shell):
  *     a row expand, or an unrelated AppContext change, re-derives no other
  *     borrower's workflow states (a counting partial mock of
  *     leadWorkflowStates, which every row's Status cell calls) and

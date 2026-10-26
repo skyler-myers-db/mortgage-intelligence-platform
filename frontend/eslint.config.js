@@ -79,8 +79,10 @@ export const FORMATTING_ALLOWLIST = {};
 // an effect body renders twice for one change. Derive the value during
 // render, or set state from an event, a callback or a subscription.
 // SHRINK-ONLY: the files that still carried a hit on the W5e base, each
-// with the W5e lane that owns its fix (w5-compiler-lint for the residual
-// partition). src/lib/setStateInEffectScope.test.ts fails when an entry no
+// with the W5e lane that held it (w5-compiler-lint for the residual
+// partition). The W5e lanes are done: the 13 that remain belong to the
+// post-W5 lint-depth burn-down (report 12.3, w5-compiler-lint row); the
+// values keep the w5- shape setStateInEffectScope.test pins. src/lib/setStateInEffectScope.test.ts fails when an entry no
 // longer reproduces a hit, so a fixed file leaves this list in the same
 // change. Never add an entry: fix the effect.
 export const SET_STATE_IN_EFFECT_PENDING = {

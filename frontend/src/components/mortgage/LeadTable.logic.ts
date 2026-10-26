@@ -181,8 +181,12 @@ export function isLeadApprovalEligible(
 /**
  * The rows with this session's revokes applied (flow-v2): a revoked
  * borrower reads approval_status 'pending' and outreach_status 'none', as
- * the server does after the revoke, until the stale-marked queue is read
- * again. The SAME array when nothing is revoked, so the sort and the
+ * the server does after the revoke. The overlay lasts for the session (the
+ * revoke mutation's gcTime is Infinity), not only until the stale-marked
+ * queue is read again, so a later re-approval by another approver is not
+ * reflected here until a reload (the session-long revocation overlay, a
+ * post-W5 approval-ledger follow-up in report 12.3). The SAME array when
+ * nothing is revoked, so the sort and the
  * virtualizer keys keep their identity. Eligibility, selection, the approval
  * cell, the CSV export and Triage all read these rows.
  */

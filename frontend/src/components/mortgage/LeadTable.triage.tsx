@@ -17,9 +17,10 @@
  *     eligible row, in the table's current sort. Entry keeps the selection,
  *     so the click's order and the mount's are the same.
  *
- * Budget (LeadTable chunk): plain helpers the (uncompiled) table calls; the
- * table keeps the few state cells itself, so nothing here carries a
- * compiler memo cache.
+ * Budget (LeadTable chunk): plain helpers the table calls (the shell is
+ * compiled since W5e w5-lead-table-compile); the table keeps the few state
+ * cells itself, and nothing here is a component or hook, so nothing here
+ * carries a compiler memo cache of its own.
  */
 import type { ComponentType } from 'react';
 import type { LeadSummary } from '../../types';

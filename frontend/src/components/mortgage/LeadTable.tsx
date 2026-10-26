@@ -203,7 +203,7 @@ export function LeadTable({
     salesTeam,
     queryClient,
   });
-  // flow-v2: this session's revokes read pending until the stale-marked queue is read again.
+  // flow-v2: this session's revokes read pending for the rest of the session (see applyRevocations).
   const revokedIds = useRevokedBorrowers(queryClient);
   // Memoized like the sort below, so the compiler preserves that memo (runtime-04).
   const displayLeads = useMemo(() => applyRevocations(sales.displayLeads, revokedIds), [sales.displayLeads, revokedIds]);
