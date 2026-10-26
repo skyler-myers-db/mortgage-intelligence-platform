@@ -164,10 +164,21 @@ for (const theme of FIXTURE_THEMES) {
         // cancelled .js requests and that one report are allowed. WebKit
         // spells the cancel per port: "cancelled" on macOS, "Load request
         // cancelled" on Linux (CI run 40311237233, 9 chunks in one walk).
-        // Any other failure text, or a 404 chunk's "Failed to load
+        // The same leave also cancels a route's CSS preloads (Vite then
+        // reports "Unable to preload CSS", errorName Error) and any read the
+        // route still has in flight, e.g. Borrower 360's audit-free
+        // /decisions GET (PR #270's confirming run 40378010376: 5 .css
+        // preloads, 1 API GET). A cancel is never a server or chunk failure;
+        // only that exact WebKit cancel text, on same-origin GETs to
+        // /assets/ (js, css and the static images/fonts the shell preloads) or
+        // /api/v1/*, and those two preload reports are allowed. macOS WebKit
+        // additionally reports a cancelled health probe as a pageerror ('Fetch
+        // API cannot load ... due to access control checks'); that is not
+        // allowed here and has not been seen on CI's Linux WebKit. Any other failure text, or a 404 chunk's "Failed to load
         // resource" console error, still fails the walk.
-        hygiene.allow('request-failed', /^GET \S+\/assets\/[\w.-]+\.js failed: (?:Load request )?cancelled$/);
+        hygiene.allow('request-failed', /^GET https?:\/\/(?:127\.0\.0\.1|localhost):\d+\/(?:assets\/[\w.-]+\.(?:js|css|webp|png|svg|woff2)|api\/v1\/[\w./?=&%-]+) failed: (?:Load request )?cancelled$/);
         hygiene.allow('console.error', /^\[mip\] client error \{source: preload, kind: chunk, errorName: TypeError, .*\} TypeError: Importing a module script failed\./);
+        hygiene.allow('console.error', /^\[mip\] client error \{source: preload, kind: chunk, errorName: Error, .*\} Error: Unable to preload CSS for https?:\/\/(?:127\.0\.0\.1|localhost):\d+\/assets\/[\w.-]+\.css /);
       }
       await app.setTheme(theme);
       const pending = pendingSelectors();
