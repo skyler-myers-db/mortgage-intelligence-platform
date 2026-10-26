@@ -283,6 +283,12 @@
   align-items: center;
   gap: var(--sp-1);
 }
+/* An Approved row's chip and its Revoke (deviation:revoke-approval), centred
+   on one axis like the Approve / Reject pair; no gap, so the pin's slack holds. */
+.lead-table__approval-state {
+  display: inline-flex;
+  align-items: center;
+}
 .lead-table__reject {
   padding: var(--sp-1) var(--sp-2);
 }

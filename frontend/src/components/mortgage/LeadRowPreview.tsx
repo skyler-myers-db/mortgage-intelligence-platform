@@ -47,6 +47,16 @@ const BANNER_CHUNK = lazyModule<{ default: unknown; ApprovalBanner?: typeof Appr
 const SIMILAR_CHUNK = lazyModule(() => import('./SimilarCohortPanel'));
 
 /**
+ * The panel's placeholder line ("Loading…", or the chunk's failure) scrolls
+ * into the nearest view as it mounts, as the panel itself does
+ * (SimilarCohortPanel revealOpenedPanel): at 1440x900 the explore row sits
+ * at the table scroller's bottom edge, so the line opened under the fold.
+ */
+function revealSimilarPlaceholder(element: HTMLParagraphElement | null): void {
+  element?.scrollIntoView?.({ block: 'nearest' });
+}
+
+/**
  * id of the expanded row's receipt block: the queue's "View receipt" toast
  * action opens the row and moves focus here (tabIndex -1).
  */
@@ -203,14 +213,37 @@ export function RowPreview({
             );
           })}
         </div>
-        {/* "Ask Genie about this borrower's segment and state" (genie-04):
-            the prompt names the registered segment and the federal state
-            only -- never the masked id, the property ref or a contact field. */}
-        {askPrompt && (
-          <div className="chip-row mt-2">
-            <GenieAskAbout prompt={askPrompt} subject="borrower's segment and state" />
-          </div>
-        )}
+        {/* The preview's explore row, under the Segments chips. "Ask Genie
+            about this borrower's segment and state" (genie-04): the prompt
+            names the registered segment and the federal state only -- never
+            the masked id, the property ref or a contact field; it renders
+            nothing without a reviewed prompt. "More like this"
+            (deviation:more-like-this) sits beside it, both ghost `.btn--sm`
+            of one block size, not in the Primary offer card: a fourth
+            action there wrapped the card's row at 1440x900 and pushed the
+            approval banner's Approve below the fold. Here the row sits at
+            the table scroller's bottom edge at 1440x900, so what opens
+            under it scrolls itself into view. */}
+        <div className="chip-row mt-2">
+          <GenieAskAbout prompt={askPrompt} subject="borrower's segment and state" />
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-expanded={similarOpen}
+            aria-controls={similarOpen ? similarId : undefined}
+            onClick={() => setSimilarOpen((open) => !open)}
+            data-testid={`lead-more-like-this-${lead.borrower_id}`}
+          >
+            More like this
+          </Button>
+        </div>
+        {similarOpen && (SimilarCohortPanel ? (
+          <SimilarCohortPanel id={similarId} lead={lead} canApprove={canApprove === true} countOptions={leadCountQueryOptions} />
+        ) : (
+          <p ref={revealSimilarPlaceholder} id={similarId} className="muted fs-12 mt-2 flush" role="status">
+            {similarChunk.failed ? 'More like this could not load; reload the page.' : 'Loading…'}
+          </p>
+        ))}
       </div>
 
       <div>
@@ -280,16 +313,6 @@ export function RowPreview({
               Build offer
             </Link>
             <Button
-              variant="ghost"
-              size="sm"
-              aria-expanded={similarOpen}
-              aria-controls={similarOpen ? similarId : undefined}
-              onClick={() => setSimilarOpen((open) => !open)}
-              data-testid={`lead-more-like-this-${lead.borrower_id}`}
-            >
-              More like this
-            </Button>
-            <Button
               variant={saved ? 'ghost' : 'default'}
               size="sm"
               icon={saved ? 'check' : 'tag'}
@@ -299,13 +322,6 @@ export function RowPreview({
               {saved ? 'Saved' : 'Save lead'}
             </Button>
           </div>
-          {similarOpen && (SimilarCohortPanel ? (
-            <SimilarCohortPanel id={similarId} lead={lead} canApprove={canApprove === true} countOptions={leadCountQueryOptions} />
-          ) : (
-            <p id={similarId} className="muted fs-12 mt-2 flush" role="status">
-              {similarChunk.failed ? 'More like this could not load; reload the page.' : 'Loading…'}
-            </p>
-          ))}
         </div>
         {approvalGate && ApprovalBanner && (
           <div ref={gateRef} className="mt-3" data-testid={`lead-row-approval-${lead.borrower_id}`}>

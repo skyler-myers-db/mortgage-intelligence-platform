@@ -5,7 +5,8 @@
  * the pattern's chips, ONE audit-free GET /api/leads/count without a borrower
  * list, links only ('Open in Lead Queue'; 'Open as Triage deck' for an
  * approver), no POST and no approve, assign or batch control; a failed
- * count says 'Count unavailable' and keeps the links.
+ * count says 'Count unavailable' and keeps the links. It scrolls itself into
+ * the nearest view once, as it mounts.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
@@ -85,6 +86,29 @@ describe('SimilarCohortPanel', () => {
     const container = await render(false);
     expect(container.querySelector('[data-testid="lead-similar-open-triage"]')).toBeNull();
     expect(container.querySelector('[data-testid="lead-similar-open-queue"]')).not.toBeNull();
+  });
+
+  it('scrolls itself into the nearest view once, as it mounts, and not again when the count lands', async () => {
+    // The rendered geometry (the panel on screen at 1440x900 in the queue,
+    // the Triage deck and Borrower 360) is lead-queue-layout-w5e.fixture.spec.ts (4).
+    const reveal = vi.fn();
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView');
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      writable: true,
+      value: function scrollIntoViewSpy(this: Element, options?: ScrollIntoViewOptions) {
+        reveal(this, options);
+      },
+    });
+    try {
+      const container = await render(true);
+      expect(container.querySelector('[role="status"]')?.textContent).toBe('41 borrowers match this pattern');
+      expect(reveal).toHaveBeenCalledTimes(1);
+      expect(reveal).toHaveBeenCalledWith(container.querySelector('.similar-cohort'), { block: 'nearest' });
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, 'scrollIntoView', original);
+      else Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+    }
   });
 
   it('says Count unavailable and keeps the links when the count fails', async () => {
