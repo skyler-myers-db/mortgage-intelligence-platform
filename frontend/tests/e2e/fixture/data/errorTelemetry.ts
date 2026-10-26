@@ -108,6 +108,54 @@ export async function retireChunk(page: Page, chunkPrefix: string): Promise<void
   );
 }
 
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Fail every request for one hashed chunk until `restore()`. A lazy chunk is
+ * fetched twice: Vite's preload helper adds a `<link rel=modulepreload>` for
+ * it, then `import()` loads it. Chromium 153 (Playwright 1.63) and the WebKit
+ * build here keep a failed module fetch, so failing only the FIRST request
+ * failed the import too; Chromium 156 (Playwright 1.64) does not, and the
+ * import fetched its own copy (W5e CI run 40311237233). Keep the chunk down
+ * until the test has seen the failure it causes.
+ */
+export async function takeChunkDown(page: Page, chunkPrefix: string): Promise<{ aborted: () => number; restore: () => void }> {
+  let down = true;
+  let aborted = 0;
+  await page.route(new RegExp(`/assets/${escapeRegExp(chunkPrefix)}-[^/]+\\.js$`), async (route: Route) => {
+    if (!down) {
+      await route.continue();
+      return;
+    }
+    aborted += 1;
+    await route.abort();
+  });
+  return {
+    aborted: () => aborted,
+    restore: () => {
+      down = false;
+    },
+  };
+}
+
+/**
+ * Give one chunk's `<link rel=modulepreload>` a module-map key of its own (a
+ * URL fragment: the request is the same), so a failed preload never fails
+ * the import: Chromium 156's behaviour, emulated on every engine and
+ * version. Install before the navigation.
+ */
+export async function fetchModulePreloadApart(page: Page, chunkPrefix: string): Promise<void> {
+  await page.addInitScript((prefix) => {
+    const append = Node.prototype.appendChild;
+    Node.prototype.appendChild = function appendChild<T extends Node>(this: Node, node: T): T {
+      if (node instanceof HTMLLinkElement && node.rel === 'modulepreload' && node.href.includes(`/assets/${prefix}-`)) {
+        node.href = `${node.href}#modulepreload`;
+      }
+      return append.call(this, node) as T;
+    };
+  }, chunkPrefix);
+}
+
 /** Hold one hashed chunk until `release()`; returns the release function. */
 export async function holdChunk(page: Page, chunkPrefix: string): Promise<() => void> {
   let release: () => void = () => undefined;

@@ -23,11 +23,15 @@
  *      approver, no POST and no approve control;
  *  (g) the filter-panel fixes: the inverted URL pair error on load, the
  *      rounding notice, 25 saved views with the form above the fold, a
- *      chunk-failure Retry that recovers, and the facet status announced.
+ *      chunk-failure Retry that recovers, and the facet status announced;
+ *      the same Retry where the import fetches the chunk apart from its
+ *      failed modulepreload (Chromium 156, emulated on every engine).
  */
 import type { Page } from '@playwright/test';
 import type { SavedView, SavedViewListResponse } from '../../../src/types/leadFilters';
-import { spendStaleChunkReload } from './data/errorTelemetry';
+import type { AppDriver } from './app';
+import { fetchModulePreloadApart, spendStaleChunkReload, takeChunkDown } from './data/errorTelemetry';
+import type { Hygiene } from './hygiene';
 import { SNAPSHOT_AT } from './data/reference';
 import { json, type MockApi } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
@@ -51,6 +55,39 @@ async function headerAndCells(page: Page) {
     const rows = [...table.querySelectorAll(rowSelector.replace('table.lead-table__table ', ''))].map((row) => row.querySelectorAll(':scope > td').length);
     return { header, cols, rows };
   }, ROWS);
+}
+
+const SAVED_VIEWS_CHUNK = 'lead-queue.savedViews';
+
+/**
+ * The Saved views panel chunk is down on the first open, and the slot says
+ * so with a Retry. The chunk comes back once that is on screen; Retry
+ * re-attempts the import: a browser that kept the failed module fetch fails
+ * it again, and the same button then offers Reload, which recovers (the
+ * queue's state is its URL). Ends with the panel open.
+ */
+async function openSavedViewsThroughChunkRetry(app: AppDriver, page: Page, hygiene: Hygiene): Promise<void> {
+  hygiene.allow('request-failed', /lead-queue\.savedViews-[^/]+\.js/);
+  hygiene.allow('console.error', /\[mip\] client error/);
+  hygiene.allow('console.error', /Failed to load resource|Failed to fetch dynamically imported module/);
+  const chunk = await takeChunkDown(page, SAVED_VIEWS_CHUNK);
+  await app.gotoRoute('/lead-queue');
+  await spendStaleChunkReload(page);
+  await page.getByTestId('lead-queue-saved-views').click();
+  const retry = page.getByTestId('lead-queue-saved-views-retry');
+  await expect(retry).toHaveText('Retry');
+  chunk.restore();
+  await retry.click();
+  const panel = page.getByTestId('lead-queue-saved-views-panel');
+  await expect(panel.or(retry.filter({ hasText: 'Reload' }))).toBeVisible();
+  if (!(await panel.isVisible())) {
+    await expect(retry).toBeFocused();
+    await retry.click();
+    await app.settle();
+    await expect(page).toHaveURL(/\/lead-queue$/);
+    await page.getByTestId('lead-queue-saved-views').click();
+  }
+  await expect(panel).toBeVisible();
 }
 
 async function stubClipboard(page: Page): Promise<void> {
@@ -253,37 +290,7 @@ test('(g) the filter-panel fixes: inverted pair, rounding, 25 views above the fo
     updated_at: SNAPSHOT_AT,
   }));
   mockApi.register<SavedViewListResponse>('GET', '/api/workspace/saved-views', () => json<SavedViewListResponse>({ saved_views: views }));
-  // The panel chunk fails ONCE. Retry re-attempts the import; a browser that
-  // kept the failed module fetch fails it again, and the same button then
-  // offers Reload, which recovers (the queue's state is its URL).
-  hygiene.allow('request-failed', /lead-queue\.savedViews-[^/]+\.js/);
-  hygiene.allow('console.error', /\[mip\] client error/);
-  hygiene.allow('console.error', /Failed to load resource|Failed to fetch dynamically imported module/);
-  let failed = false;
-  await page.route(/\/assets\/lead-queue\.savedViews-[^/]+\.js$/, async (route) => {
-    if (!failed) {
-      failed = true;
-      await route.abort();
-    } else {
-      await route.continue();
-    }
-  });
-  await app.gotoRoute('/lead-queue');
-  await spendStaleChunkReload(page);
-  await page.getByTestId('lead-queue-saved-views').click();
-  const retry = page.getByTestId('lead-queue-saved-views-retry');
-  await expect(retry).toHaveText('Retry');
-  await retry.click();
-  const panel = page.getByTestId('lead-queue-saved-views-panel');
-  await expect(panel.or(retry.filter({ hasText: 'Reload' }))).toBeVisible();
-  if (!(await panel.isVisible())) {
-    await expect(retry).toBeFocused();
-    await retry.click();
-    await app.settle();
-    await expect(page).toHaveURL(/\/lead-queue$/);
-    await page.getByTestId('lead-queue-saved-views').click();
-  }
-  await expect(panel).toBeVisible();
+  await openSavedViewsThroughChunkRetry(app, page, hygiene);
   const save = page.getByTestId('lead-queue-saved-views-save');
   const fold = page.viewportSize()?.height ?? 900;
   expect(((await save.boundingBox())?.y ?? fold) + ((await save.boundingBox())?.height ?? 0)).toBeLessThanOrEqual(fold);
@@ -295,4 +302,13 @@ test('(g) the filter-panel fixes: inverted pair, rounding, 25 views above the fo
   await expect(status).toHaveText('Counts unavailable');
   await expect(page.getByRole('listbox', { name: 'STATE' })).not.toHaveAttribute('aria-busy', 'true');
   restore();
+});
+
+test('(g) the chunk Retry holds where the import fetches the chunk apart from its failed modulepreload', async ({ app, page, hygiene }) => {
+  // A stale-chunk reload and possibly a page Reload: the slow budget, not a retry.
+  test.slow();
+  // CI's Chromium 156 (Playwright 1.64) does this natively; emulated here so
+  // every engine and version runs the path that failed W5e CI run 40311237233.
+  await fetchModulePreloadApart(page, SAVED_VIEWS_CHUNK);
+  await openSavedViewsThroughChunkRetry(app, page, hygiene);
 });

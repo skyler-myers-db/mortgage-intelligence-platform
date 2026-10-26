@@ -18,6 +18,14 @@ export const LEAD_TABLE_FILL_VAR = '--lead-table-fill-block';
  * write happens in the next animation frame, never inside the observer
  * callback, so it cannot start a ResizeObserver loop; setting the same value
  * again is a no-op, so the measurement converges.
+ *
+ * Screen only: print.css lays `<main>` out unclipped, so a frame in print
+ * media measured the paper (26,879px for 600 rows) and wrote it here. Back on
+ * the screen the scroller stayed unclipped until a screen frame re-measured
+ * it, and an `afterprint` that ran first had the virtualized queue's restore
+ * (useLeadTablePrint) clamp to that empty scroll range: the table came back
+ * at the top (W5e CI run 40311237233). The screen's value stays through a
+ * print.
  */
 export function useLeadTableFillHeight(wrapRef: RefObject<HTMLElement | null>, enabled: boolean): void {
   useLayoutEffect(() => {
@@ -26,8 +34,10 @@ export function useLeadTableFillHeight(wrapRef: RefObject<HTMLElement | null>, e
     const main = wrap.closest<HTMLElement>('main');
     const surface = wrap.closest<HTMLElement>('.surface');
     if (!main || !surface) return undefined;
+    const print = typeof window.matchMedia === 'function' ? window.matchMedia('print') : null;
 
     const measure = () => {
+      if (print?.matches) return;
       const wrapBox = wrap.getBoundingClientRect();
       const topInMain = wrapBox.top - main.getBoundingClientRect().top + main.scrollTop;
       const below = surface.getBoundingClientRect().bottom - wrapBox.bottom;

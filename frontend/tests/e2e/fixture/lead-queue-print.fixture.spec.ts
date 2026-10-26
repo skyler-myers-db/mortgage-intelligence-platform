@@ -6,7 +6,9 @@
  * keeps a window. `beforeprint` opens it (every loaded row in the DOM, no
  * spacer), print media lays the table out unclipped and inside the page's
  * inline size with identical ink in dark and light, and `afterprint`
- * re-windows and restores the scroller's offset. The whole path makes no
+ * re-windows and restores the scroller's offset (the scroller keeps its
+ * screen fill height through the print, so the restore has a scroll range
+ * however soon afterprint follows the screen layout). The whole path makes no
  * request at all: no read, no refetch, no audit row (a Ctrl/Cmd-P of the
  * queue stays unaudited, as ruled).
  */
@@ -86,6 +88,23 @@ async function afterPrint(page: Page): Promise<void> {
   await page.evaluate(() => window.dispatchEvent(new Event('afterprint')));
 }
 
+/**
+ * Resolves after three animation frames: a ResizeObserver delivery and the
+ * frame the fill-height measurement waits for (useLeadTableFillHeight) have
+ * both run.
+ */
+async function threeFrames(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    let left = 3;
+    const tick = () => {
+      left -= 1;
+      if (left === 0) resolve();
+      else requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }));
+}
+
 test.describe('the virtualized Lead Queue prints every loaded row (responsive-08)', () => {
   // 600 rows mount at once on beforeprint: a deliberately heavy render.
   test.slow();
@@ -103,6 +122,10 @@ test.describe('the virtualized Lead Queue prints every loaded row (responsive-08
     });
     await expect.poll(() => wrap.evaluate((element) => element.scrollTop)).toBeGreaterThan(1_500);
     const saved = await wrap.evaluate((element) => element.scrollTop);
+    // The scroller's height to the fold of <main>, measured for the screen.
+    const fillHeight = () => wrap.evaluate((element) => element.style.getPropertyValue('--lead-table-fill-block'));
+    const screenFill = await fillHeight();
+    expect(screenFill, 'the screen measured the scroller').toMatch(/^\d+px$/);
     const naturalLoad = markNaturalLoad(mockApi);
 
     await beforePrint(page);
@@ -120,6 +143,12 @@ test.describe('the virtualized Lead Queue prints every loaded row (responsive-08
     expect(fit.table, 'the table is no wider than its surface on paper').toBeLessThanOrEqual(fit.surface + 1);
     const pinned = await page.locator('.lead-table__table .tbl-cell--approval').first().evaluate((cell) => getComputedStyle(cell).position);
     expect(pinned, 'paper has no scroller behind the pin').toBe('static');
+    // Frames ran in print media. Had the paper height of <main> (26,879px)
+    // become the fill height, the scroller would come back from the print
+    // unclipped, and an afterprint that beat the next screen frame restored
+    // into an empty scroll range: the top (W5e CI run 40311237233).
+    await threeFrames(page);
+    expect(await fillHeight(), 'the paper layout leaves the screen fill height alone').toBe(screenFill);
 
     // The browser lays the page out for the screen again, then fires afterprint.
     await page.emulateMedia({ media: 'screen' });
