@@ -18,7 +18,8 @@
  * layout), on either side of the focus events; the
  * rendered proof in both engines is
  * approval-core-pinned-focus.cross-engine.fixture.spec.ts, and the
- * lead-queue.fixture.spec.ts ZERO_PIN_MARGIN twin in Chromium.
+ * UNDO_PIN_CLEARANCE twins (lead-queue.fixture.spec.ts in Chromium,
+ * queue-clearance.cross-engine in both engines).
  */
 import { act, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';

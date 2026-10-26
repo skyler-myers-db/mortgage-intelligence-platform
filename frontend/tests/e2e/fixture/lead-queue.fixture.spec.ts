@@ -60,6 +60,7 @@ import {
   registerWideFootprint,
 } from './data/leadQueue';
 import { VIRTUAL_QUEUE, registerVirtualQueue } from './data/queueKeyboard';
+import { UNDO_PIN_CLEARANCE } from './focusWalk';
 import { DNC_LEAD, QUEUE_LAYOUT_LEADS, registerQueueLayoutLeads } from './data/queueLayout';
 import { json, type MockApi } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
@@ -412,8 +413,6 @@ async function gapBelowRouteNav(target: Locator): Promise<number> {
   ));
 }
 
-/** Zeroes the pinned controls' own scroll-margin (LeadTable.css), leaving the scroller's padding. */
-const ZERO_PIN_MARGIN = '.lead-table__table .tbl-cell--approval * { scroll-margin-inline: 0px !important; }';
 /** 38-focus-clearance.css's nav margin, put back on the in-place listbox's options. */
 const NAV_MARGIN_ON_MENU = '.filter-menu__item { scroll-margin-block-start: 61px !important; }';
 
@@ -671,11 +670,11 @@ test.describe('(b) keyboard focus is never hidden under sticky chrome', () => {
     expect(idInView, 'the row\'s borrower id is still inside the scrollport').toBe(true);
   });
 
-  test('non-vacuity: with the pinned controls\' margin zeroed, a focus on one scrolls the table to its end (the margin is what keeps Chromium still)', async ({ app, mockApi, page }) => {
+  test('non-vacuity: with the pinned controls\' clearance undone, a focus on one scrolls the table to its end (the clearance is what keeps Chromium still)', async ({ app, mockApi, page }) => {
     registerQueueLayoutLeads(mockApi);
     await app.gotoRoute('/lead-queue');
     await app.openConsole();
-    await page.addStyleTag({ content: ZERO_PIN_MARGIN });
+    await page.addStyleTag({ content: UNDO_PIN_CLEARANCE });
     const overflow = await tableWrap(page).evaluate((wrap) => wrap.scrollWidth - wrap.clientWidth);
     expect(overflow).toBeGreaterThan(40);
     for (const testId of [`lead-approve-${ELIGIBLE}`, `lead-reject-${ELIGIBLE}`]) {
@@ -694,9 +693,10 @@ test.describe('(b) keyboard focus is never hidden under sticky chrome', () => {
       expect(offsets.synchronous, 'the scroller\'s inline-end padding "reveals" a control already in view').toBeGreaterThan(overflow - 2);
       // Chromium reveals inside focus(), before the focus events, so the
       // pinned-focus guard (which keeps the focus-time offset, never a
-      // recorded one: stale on Linux) leaves this scroll: the margin, not
-      // the guard, is Chromium's protection.
-      expect(offsets.settled, 'the scroll stands without the margin').toBeGreaterThan(overflow - 2);
+      // recorded one: stale on Linux) leaves this scroll: the clearance (the
+      // margin, or the padding dropped while the pin has focus), not the
+      // guard, is Chromium's protection.
+      expect(offsets.settled, 'the scroll stands without the clearance').toBeGreaterThan(overflow - 2);
     }
   });
 

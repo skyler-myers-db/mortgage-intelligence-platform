@@ -317,6 +317,23 @@
   scroll-margin-inline: calc(var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset))
     calc(-1 * (var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset)));
 }
+/* That margin is Chromium's fix only. WebKit 26 reveals a focused pinned
+   control whenever the scroller has this inline-end padding, whatever the
+   control's scroll-margin (0, -160px and -600px measured, W5e): the table
+   went to its far end (scrollLeft 142 -> 284) after focus() returned, in a
+   later task or rendering update, so it could land after
+   useTableScrollClearance's frame restore, and the guard's scroll-event
+   restore waited on an event Linux WebKit dispatches late (CI: still 284
+   two frames on). Without the padding neither engine scrolls for a pinned
+   control. So the scroller drops it while focus is in the pin, where it has
+   no job: only the focused element is revealed, the pin is in view by
+   construction, and a focus that leaves the pin for a row control has the
+   padding back before its reveal. The :has() is on the scroller itself and
+   the padding is not inherited, so a focus change re-styles that one
+   element. */
+.tbl-wrap:has(> .lead-table__table .tbl-cell--approval:focus-within) {
+  scroll-padding-inline-end: 0;
+}
 /* J / K scroll the cursor row into view: the same clearance, plus a little
    air at each end. */
 .lead-table__table tr[data-borrower-row] {

@@ -25,7 +25,11 @@ const LATE_REVEAL_FRAMES = 5;
  * 0 -> 284 with the Console open; manual check 2026-09-30), although the
  * column is sticky and the control was already in view: the row's borrower
  * id then slid out of sight. Chromium does not while LeadTable.css's
- * scroll-margin holds, so there this is a no-op.
+ * scroll-margin holds, so there this is a no-op. Since W5e the sheet also
+ * drops the scroller's inline-end padding while focus is in the pin, which
+ * is what WebKit reveals against, so WebKit does not scroll either; this
+ * guard is the fallback for an engine that still does (it lost the race on
+ * Linux WebKit, whose scroll event can land after the late reveal frames).
  *
  * The offset to keep is the one the reader had before the focus: the offset
  * at a key or pointer press inside the table (capture) within the last
