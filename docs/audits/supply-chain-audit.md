@@ -50,6 +50,16 @@ this remediation pass.
   `.github/workflows/ci.yml`): a high or critical advisory fails CI;
   moderate and low advisories in dev-only tooling are tolerated and reviewed
   at the next dependency batch.
+- Backend `pip-audit`, 2026-10-26, after the aiohttp, certifi, gitpython,
+  graphql-core, mlflow, OpenTelemetry and pillow bumps (see the 2026-10-26
+  addendum below): CI's command, now `pip-audit -r requirements.txt --strict
+  --ignore-vuln GHSA-xpv3-w29h-x7cv --ignore-vuln GHSA-hj66-6f7g-4r5v`,
+  reports no known vulnerabilities from the default PyPI service (1 ignored)
+  and none from `-s osv` (2 ignored). Over the `uv.lock` pins with no
+  ignores, both services report only oauthlib 3.3.1, under the PYSEC aliases
+  of the two ignored ids (PyPI: PYSEC-2026-4114; OSV: PYSEC-2026-4113 and
+  PYSEC-2026-4114). The GHSA-h7x2-h6g9-p789 ignore is retired: mlflow 3.17.2
+  carries its fix.
 - Backend `pip-audit`, 2026-10-06, after the multidict, werkzeug and mako
   pins (see the 2026-10-06 addendum below): CI's command, `pip-audit -r
   requirements.txt --strict` with its three ignores, reports no known
@@ -104,7 +114,7 @@ npm --prefix frontend audit --audit-level=high      # the CI gate
 npm --prefix frontend audit --audit-level=moderate  # advisory local read; not a gate
 npm --prefix frontend run test -- USChoroplethMap
 npm --prefix frontend run build
-./.venv/bin/pip-audit -r requirements.txt --strict --ignore-vuln GHSA-h7x2-h6g9-p789 --ignore-vuln GHSA-xpv3-w29h-x7cv --ignore-vuln GHSA-hj66-6f7g-4r5v
+./.venv/bin/pip-audit -r requirements.txt --strict --ignore-vuln GHSA-xpv3-w29h-x7cv --ignore-vuln GHSA-hj66-6f7g-4r5v
 ./.venv/bin/python -m pytest -q tests/unit/test_supply_chain_licenses.py
 ./.venv/bin/python -m pytest -q tests/unit/test_error_sanitizer.py tests/unit/test_health_endpoint.py
 ```
@@ -578,3 +588,99 @@ stays out.
 | T2 | `oxlint` | 1.85.0 | 1.86.0 | Applied with `w5-compiler-lint`: `frontend/oxlint-baseline.json` re-recorded with `--ratchet` (it records the oxlint version; 6 files, no new, grown or suppressed hit); 1.86.0 lists 36 jsx-a11y rules and `.oxlintrc.json` names all 36, so no new rule to name; dev-only, no bundle byte | `oxlint` and all 19 `@oxlint/binding-*` platform entries, 1.86.0 |
 | T3 | `@playwright/test` | 1.63.0 | 1.64.0 | Applied LAST, with the `mcr.microsoft.com/playwright:v1.64.0-noble` VRT image (ci.yml `e2e-visual` container and `MIP_VRT_IMAGE`, test_dependency_pins, test-infra.fixture.spec.ts, the playwright.config.ts comment, docs/testing.md); 1.64.0 ships Chromium 156, Firefox 157 and WebKit 27.2; every e2e-visual baseline moves and is refreshed from the pinned-container CI actuals (orchestrator) | `@playwright/test`, `playwright`, `playwright-core`, 1.64.0 |
 | T4 | `vite`, `vitest`, `happy-dom`, `zod` (transitive) | 8.3.2, 4.1.11, 20.14.6, 4.3.6 | 8.3.5, 4.1.12, 21.0.4, 4.6.7 | Applied at the W5e fix round (2026-10-26) to clear the five dev-only advisories above, re-run lock-only on the merged tree: `npm install vite@8.3.5 vitest@4.1.12 --save-exact --save-dev --package-lock-only --ignore-scripts`, `npm update zod --package-lock-only --ignore-scripts` (eslint-plugin-react-hooks admits `^4.0.0`, so no override), then `npm install happy-dom@21.0.4 --save-exact --save-dev --package-lock-only --ignore-scripts` (a major: full vitest 630 files / 6,833 tests green on the installed tree, so no hold). vitest stays inside its `below 5.0.0` hold. Budgets on the merged tree: initial JS 147.68 KiB br (147.79 before, with the compliance-caveat fix in the same build), total JS 687.66, leadsQuery 47.98 br / 171.29 raw; every gate passes | `vite` 8.3.5, `rolldown` and its 15 `@rolldown/binding-*` entries 1.2.12 -> 1.2.15, `@oxc-project/types` 0.155.0, `postcss` 8.5.31, `nanoid` 3.3.20; `vitest` and its seven `@vitest/*` packages 4.1.12, `chai` 6.3.0, `tinyrainbow` 3.2.0; `happy-dom` 21.0.4; `zod` 4.6.7; nothing added or removed (291 entries), no `micromatch` / `braces` path, stylelint stays out |
+
+## 2026-10-26 addendum: the October Python advisories, and the GHSA-h7x2-h6g9-p789 ignore retired
+
+Advisories published 2026-10-19 to 2026-10-23 turned the security job's
+pip-audit step red on the W5e PR #270 (CI run 40311237233): `Found 52 known
+vulnerabilities, ignored 1 in 7 packages`. `main` at 5e0fbe2c fails the same
+way. Re-running CI's command with `-s osv` found 56 (2 ignored): four more
+pillow ids, all fixed by the same release. Every finding has a patched
+release that resolves cleanly, so all of them are pins, not ignores.
+
+| Advisory | Package | First patched | Action |
+|---|---|---|---|
+| GHSA-5wr8-gcqf-gqf3, GHSA-2g87-pp6c-29x5, GHSA-9xw5-w5jj-pvcg (high); GHSA-pqxq-w44r-73xw, GHSA-6cjc-53gc-5rqm, GHSA-f9xw-jh8m-3mwq (medium); GHSA-494j-54xm-rwp3, GHSA-gx76-c99x-2c96 (low) | `aiohttp` 3.14.3 | 3.14.4 | Floor `aiohttp>=3.14.4`; the lock takes 3.14.5. 3.14.4 requires `yarl>=1.25.1`, so `yarl` moves 1.24.2 -> 1.25.1 with it. Transitive through mlflow. |
+| PYSEC-2026-4320 (GHSA-6q48-6c7w-9gw2): the bundle still trusted the emSign roots whose intermediate CA keys were compromised | `certifi` 2026.4.22 | 2026.10.19 | `certifi==2026.10.23` (the latest bundle). Transitive through requests, httpx and httpcore. |
+| GHSA-83vg-56qc-22m7 (high): a submodule's `.git` path was validated only after cloning into it | `gitpython` 3.1.62 | 3.2.1 | Floor `gitpython>=3.2.1,<4`. Transitive through mlflow-skinny; 3.2.0 drops Python 3.7 and hardens command and config parsing. |
+| GHSA-vj8h-fx38-h3vc, GHSA-r77w-qph3-7vf8 (high): quadratic `OverlappingFieldsCanBeMerged` validation; comment tokens bypass `max_tokens` | `graphql-core` 3.2.11 | 3.2.12 (3.3.0rc1 on the 3.3 line) | `graphql-core==3.2.12`. Transitive through graphene and graphql-relay (mlflow's tracking-server GraphQL API); graphene caps it `<3.3`, so 3.2.12 is the reachable fix. OSV's record names only 3.3.0rc1 as the fix, but both services are silent on 3.2.12. |
+| GHSA-wqmh-qccw-pqwf (high): FileStore trace IDs allow path traversal; GHSA-2wqp-q3c6-ccj5 (medium): SSRF through third-party scorer kwargs | `mlflow` 3.16.0 | 3.17.2; 3.17.0 | `mlflow==3.17.2`, with `mlflow-skinny` and `mlflow-tracing` (exact pins of mlflow). `GATEWAY_MODEL_REQUIREMENTS` in `backend/agents/gateway_contract.py` (the gateway model's serving environment) moves with it, as it did for 3.16.0, so the gateway proxy source hash changes and the next deploy registers a new gateway model version. |
+| GHSA-xcq7-p3pf-p88h (medium): unbounded `tracestate` parsing | `opentelemetry-api` 1.41.1 | 1.45.1 | Floors `opentelemetry-api`, `-sdk` and `-exporter-otlp` `>=1.45.1,<2`. The SDK pins the API to its own version, so the family moves together: api, sdk, exporter-otlp, exporter-otlp-proto-grpc, -proto-http, -proto-common and proto 1.41.1 -> 1.45.1, semantic-conventions 0.62b1 -> 0.66b1, and two new Apache-2.0 distributions, `opentelemetry-exporter-otlp-common` and `opentelemetry-exporter-http-transport` (0.66b1). |
+| 37 ids on PyPI's feed, 41 on OSV (12 of them GitHub-reviewed) | `pillow` 12.3.0 | 13.0.0 (the only fixed release for every id) | `pillow==13.0.0`. Transitive through matplotlib (via mlflow, `pillow>=9`). Pillow 13 needs Python 3.11, which `pyproject.toml` already requires. |
+
+- **The fix versions come from the advisories.** `gh api /advisories/<id>`
+  reports a `first_patched_version` for every non-pillow GHSA id above, and
+  each matches the table; the 12 GitHub-reviewed pillow advisories all name
+  13.0.0, and pip-audit lists 13.0.0 as the only fix for all 41 OSV ids.
+  Listing GitHub advisories by package (`gh api
+  '/advisories?ecosystem=pip&affects=<pkg>@<version>'`) for every new pin
+  returns none; the same query on the old pins returns the ids above (the
+  control).
+- **GHSA-h7x2-h6g9-p789 is retired, not re-dated.** MLflow 3.17.0's release
+  notes list "Validate gateway secret `api_base` to prevent SSRF
+  (GHSA-h7x2-h6g9-p789)" (mlflow#25761). In the installed 3.17.2,
+  `_create_gateway_secret` and `_update_gateway_secret` route `auth_config`
+  through `_validate_gateway_secret_auth_config`, whose
+  `_validate_gateway_api_base` admits public HTTPS only by default (a
+  `169.254.169.254` or `10.x` `api_base` raises `MlflowException`, a public
+  HTTPS one passes), and `raw_proxy` calls `_enable_upstream_ssrf_protection`
+  before proxying; 3.16.0 has none of the three (AST-compared across both
+  installs). The advisory still names no `first_patched_version` and marks
+  `>=3.13.0,<=3.15.2`, so pip-audit is silent on 3.17.2 with or without the
+  ignore. CI now carries two ignores, both oauthlib (review date 2026-11-01,
+  unchanged).
+- **No first-party code imports aiohttp, git, certifi or graphql.** The
+  first-party importers of the bumped packages are
+  `backend/services/observability.py` (OpenTelemetry), 15 modules that import
+  mlflow, and the dev-only `tools/render_brand_icons.py` (Pillow). Every
+  dotted `mlflow.*`, `opentelemetry.*` and `PIL.*` name the repo uses resolves
+  with importlib on the new pins, the same set as on the old ones (the six
+  `mlflow.*` names that do not resolve on either side are tag and span
+  attribute keys such as `mlflow.ownerEmail`, not API; a made-up name fails).
+  Every name the installed consumers (mlflow, graphene, graphql-relay,
+  aiohttp, matplotlib, requests, httpx, botocore, google-auth and others)
+  import from the bumped packages resolves the same way.
+- **Behaviour checks at the broken layer.** The OTLP wiring sequence in
+  `backend/services/observability.py` (OTLP HTTP log exporter,
+  `LoggerProvider`, `LoggingHandler`, `BatchLogRecordProcessor`, `Resource`)
+  runs on 1.45.1 and emits the same single `LoggingHandler`
+  DeprecationWarning 1.41.1 already did, so `log_export=otlp` does not fall
+  back to stdout. `tools/render_brand_icons.py` renders byte-identical PNGs
+  on Pillow 13.0.0 and 12.3.0 with DeprecationWarnings as errors, equal to the
+  committed `favicon.png` and `apple-touch-icon.png`. mlflow 3.17's
+  changelog adds a schema upgrade for self-hosted SQL tracking servers; the
+  repo tracks to `databricks`, and the sqlite registry in
+  `tests/integration/test_gateway_mlflow_registry.py` migrates on 3.17.2.
+- **Lock refresh, in two steps that equal one.** `uv pip compile
+  requirements.in --python-version 3.11 --format requirements.txt
+  --output-file uv.lock` with `--upgrade-package` for aiohttp, certifi,
+  gitpython, graphql-core, pillow and the eight OpenTelemetry distributions
+  above, then `--upgrade-package mlflow --upgrade-package mlflow-skinny
+  --upgrade-package mlflow-tracing`. The result is byte-identical to a single
+  run with all of them. Only the packages in the table, `yarl` and the two new
+  OpenTelemetry distributions change version; `importlib-metadata` only
+  loses its opentelemetry-api provenance line. `requirements.txt` (`-c
+  uv.lock` + `-r requirements.in`) is unchanged, and
+  test_supply_chain_licenses pins the new literals in both files.
+- **Proof** (CI's literal command, run through the symlink-forcing driver
+  with pip-audit 2.9.0): before the change, the PyPI run reproduces CI's 52
+  findings in 7 packages exactly (1 ignored), and `-s osv` reports 56 (2
+  ignored). After it, `No known vulnerabilities found, 1 ignored` (PyPI) and
+  `No known vulnerabilities found, 2 ignored` (`-s osv`), with the three-
+  and the two-ignore command alike. An installed-mode read of a private
+  Python 3.11 venv built from the new `requirements.txt` agrees on both
+  services, and the same read of a venv built from the old one reproduces the
+  52. A targeted pytest battery (44 files: the mlflow-, OpenTelemetry- and
+  deploy-payload-importing suites, the gateway, agent-eval, observability,
+  health, capabilities, supply-chain, pins and deps-report tests, and
+  `tests/integration/test_gateway_mlflow_registry.py`) gives the same result
+  on the old tree with the old venv and on the new tree with the new venv:
+  1,704 passed and the same 19 failures, all in
+  `test_deploy_dev_workflow_contract.py`'s bash harnesses, which fail
+  identically on the unchanged tree under macOS bash 3.2 (`set -u` on an
+  empty array) and are not dependency-related.
+- **Licences.** No changed package changes licence (aiohttp's metadata moves
+  the same `Apache-2.0 AND MIT` into `License-Expression`); the two new
+  OpenTelemetry distributions are Apache-2.0 like the rest of the family.
+  `certifi` (MPL-2.0) becomes a direct pin, so `docs/THIRD_PARTY_LICENSES.md`
+  now lists it.

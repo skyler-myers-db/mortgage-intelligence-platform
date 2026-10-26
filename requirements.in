@@ -16,13 +16,16 @@ databricks-sql-connector==4.4.0
 # mlflow.genai.evaluate is missing so "MLflow Agent Evaluation" cannot be
 # claimed from local scorer metrics alone.
 # Pinned exactly. A range let the resolver backtrack to mlflow 3.2.0 (24
-# advisories) in order to satisfy a newer cryptography; 3.16.0 is the first
+# advisories) in order to satisfy a newer cryptography; 3.16.0 was the first
 # release whose bound (cryptography<51) admits the 50.x fix for
-# PYSEC-2026-3552. It does NOT close GHSA-h7x2-h6g9-p789 -- its
-# _create_gateway_secret handler is byte-identical to 3.15.1's and the
-# advisory has no patched release -- so ci.yml keeps that ignore with its
-# server-side unreachability proof.
-mlflow==3.16.0
+# PYSEC-2026-3552. 3.17.2 (2026-10-26) keeps that bound and closes
+# GHSA-wqmh-qccw-pqwf (FileStore trace-ID path traversal, first patched in
+# 3.17.2) and GHSA-2wqp-q3c6-ccj5 (scorer-endpoint SSRF, first patched in
+# 3.17.0). 3.17.0 also ships the GHSA-h7x2-h6g9-p789 fix (gateway secret
+# api_base validation, mlflow#25761), so ci.yml no longer ignores it. The
+# pin moves with GATEWAY_MODEL_REQUIREMENTS in
+# backend/agents/gateway_contract.py (the gateway model's serving env).
+mlflow==3.17.2
 # MLflow's Unity Catalog registration path reads the newly created model
 # artifacts back from the metastore's S3 storage before marking a version
 # ready. The plain ``mlflow`` extra does not install the AWS artifact client,
@@ -42,12 +45,17 @@ cryptography==50.0.1
 # and GHSA-94p4-4cq8-9g67.
 # MLflow and google-auth pull these transitively; pin the reviewed fixes so a
 # lock refresh cannot silently restore the vulnerable releases.
-gitpython>=3.1.59,<4  # 3.1.57 added GHSA-3f7w-8rr8-f37f; 3.1.59 adds PYSEC-2026-3785/3786/3787/3788
+gitpython>=3.2.1,<4  # 3.1.57 added GHSA-3f7w-8rr8-f37f; 3.1.59 adds PYSEC-2026-3785/3786/3787/3788; 3.2.1 adds GHSA-83vg-56qc-22m7
 pyasn1>=0.6.4,<1
-# Security floor for PYSEC-2026-3545/PYSEC-2026-3546/PYSEC-2026-3547. MLflow
-# pulls aiohttp transitively; keep the reviewed fix explicit so a lock
-# refresh cannot silently restore the vulnerable release.
-aiohttp>=3.14.3
+# Security floor for PYSEC-2026-3545/PYSEC-2026-3546/PYSEC-2026-3547, raised
+# to 3.14.4 for the eight advisories published 2026-10-19/20, each first
+# patched in 3.14.4: GHSA-5wr8-gcqf-gqf3, GHSA-2g87-pp6c-29x5,
+# GHSA-9xw5-w5jj-pvcg (high); GHSA-pqxq-w44r-73xw, GHSA-6cjc-53gc-5rqm,
+# GHSA-f9xw-jh8m-3mwq (medium); GHSA-494j-54xm-rwp3, GHSA-gx76-c99x-2c96
+# (low). 3.14.4 requires yarl>=1.25.1, so yarl moves with it. MLflow pulls
+# aiohttp transitively; keep the reviewed fix explicit so a lock refresh
+# cannot silently restore the vulnerable release.
+aiohttp>=3.14.4
 # Security floor for PYSEC-2026-113. MLflow pulls pyarrow transitively and a
 # resolver backtrack dropped it to 21.0.0; hold the reviewed version.
 pyarrow>=24.0.0
@@ -67,6 +75,12 @@ pyjwt==2.15.0
 # urllib3 is transitive (requests, botocore, databricks-sdk); keep the fix
 # explicit so a lock refresh cannot reintroduce the vulnerable release.
 urllib3==2.8.0
+# Security floor for PYSEC-2026-4320 (GHSA-6q48-6c7w-9gw2, published
+# 2026-10-20, fixed in 2026.10.19): the bundle still trusted the emSign root
+# CAs whose intermediate CA keys were compromised. certifi is transitive
+# (requests, httpx, httpcore); keep the fixed bundle explicit so a lock
+# refresh cannot reintroduce 2026.4.22.
+certifi==2026.10.23
 # Security floor for GHSA-54p9-h82j-f925 (first patched in 6.9.1, published
 # 2026-10-05): a reference leak in the C extension's items-view `|` and `-`.
 # multidict is transitive (aiohttp, which caps it <7, and yarl); keep the fix
@@ -84,10 +98,22 @@ werkzeug==3.1.9
 # catches up. mako is transitive (alembic, via mlflow); 1.4 needs Python>=3.10
 # and MarkupSafe>=2.0, both already met.
 mako==1.4.2
-# Security floor for PYSEC-2026-2253 through PYSEC-2026-2257. Matplotlib
-# depends on Pillow; keep the transitive fix explicit so lock refreshes cannot
-# silently reintroduce the vulnerable image decoder.
-pillow==12.3.0
+# Security floor for GHSA-vj8h-fx38-h3vc (quadratic OverlappingFieldsCanBeMerged
+# validation) and GHSA-r77w-qph3-7vf8 (comment tokens bypass the parser's
+# max_tokens), both high, published 2026-10-22 and first patched in 3.2.12 on
+# the 3.2 line. graphql-core is transitive (graphene and graphql-relay, via
+# mlflow's tracking-server GraphQL API); graphene caps it <3.3, so 3.2.12 is
+# the reachable fix. Keep it explicit so a lock refresh cannot reintroduce
+# 3.2.11.
+graphql-core==3.2.12
+# Security floor for PYSEC-2026-2253 through PYSEC-2026-2257, raised to
+# 13.0.0 (2026-10-26) for the 37 advisories pip-audit's PyPI feed lists
+# against 12.3.0 (41 on OSV); 13.0.0 is the only fixed release for every one.
+# Pillow 13 needs Python>=3.11, which pyproject.toml already requires.
+# Matplotlib (via mlflow) depends on Pillow; the only first-party importer is
+# the dev-only tools/render_brand_icons.py. Keep the transitive fix explicit
+# so lock refreshes cannot silently reintroduce the vulnerable image decoder.
+pillow==13.0.0
 # Security floor for PYSEC-2026-3696/3697/3698/3699 and GHSA-cfqr-cjx5-5jcm.
 # mlflow-skinny pulls sqlparse transitively and admits anything <1; keep the
 # reviewed fix explicit so a lock refresh cannot silently restore 0.5.x.
@@ -116,5 +142,11 @@ hypothesis==6.123.7
 # MIP_OTEL_ENDPOINT, but the deployed App image must carry these wheels so
 # turning on a collector results in log_export=otlp instead of a safe
 # stdout-only fallback.
-opentelemetry-sdk>=1.27,<2
-opentelemetry-exporter-otlp>=1.27,<2
+# Security floor for GHSA-xcq7-p3pf-p88h (unbounded tracestate parsing in
+# opentelemetry-api <=1.45.0, first patched in 1.45.1, published 2026-10-22).
+# The SDK pins the API to its own version, so the api/sdk/exporter family
+# moves together at 1.45.1 (semantic-conventions 0.66b1; 1.45 also splits out
+# opentelemetry-exporter-otlp-common and opentelemetry-exporter-http-transport).
+opentelemetry-api>=1.45.1,<2
+opentelemetry-sdk>=1.45.1,<2
+opentelemetry-exporter-otlp>=1.45.1,<2
