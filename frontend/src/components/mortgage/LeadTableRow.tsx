@@ -315,19 +315,28 @@ export function LeadTableRow({
     status: () => <LeadStatusCell lead={lead} onExpand={expand} />,
     approval: () => (
       <td className="tbl-cell--approval" data-testid={`lead-approval-cell-${lead.borrower_id}`}>
-        {approval === 'approved' && <Chip variant="success" icon="check">Approved</Chip>}
-        {approval === 'approved' && canRevoke && onRevoke && REVOCABLE_OUTREACH.has(lead.outreach_status ?? 'none') && (
-          <Button
-            variant="ghost"
-            size="sm"
-            icon="down"
-            className="lead-table__revoke"
-            loading={pendingDecision === 'revoke'}
-            tooltip="Revoke approval"
-            aria-label={`Revoke approval for ${lead.borrower_id}`}
-            onClick={() => onRevoke(lead.borrower_id)}
-            data-testid={`lead-revoke-${lead.borrower_id}`}
-          />
+        {/* One centring box for the chip and its icon-only Revoke
+            (deviation:revoke-approval): as bare inline siblings the textless
+            button's synthesized baseline deepened the line box and dropped
+            the chip below the row's centre. Not the approval-actions box: a
+            click on the chip still expands the row, and no gap is added. */}
+        {approval === 'approved' && (
+          <div className="lead-table__approval-state">
+            <Chip variant="success" icon="check">Approved</Chip>
+            {canRevoke && onRevoke && REVOCABLE_OUTREACH.has(lead.outreach_status ?? 'none') && (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="down"
+                className="lead-table__revoke"
+                loading={pendingDecision === 'revoke'}
+                tooltip="Revoke approval"
+                aria-label={`Revoke approval for ${lead.borrower_id}`}
+                onClick={() => onRevoke(lead.borrower_id)}
+                data-testid={`lead-revoke-${lead.borrower_id}`}
+              />
+            )}
+          </div>
         )}
         {approval === 'rejected' && <Chip variant="danger" icon="cross">Rejected</Chip>}
         {approval === 'hold' && <Chip variant="warning" icon="shield">Hold</Chip>}
