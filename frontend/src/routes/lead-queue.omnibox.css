@@ -45,9 +45,22 @@
    (Console open or closed; Linux Chromium draws the mono values wider): they
    would push Clear all onto a second line and the table under the fold. Up
    to a 1480px `main` the pill is its icon; its name stays on the button
-   (aria-label "Filter leads") and its tooltip names the F key. */
+   (aria-label "Filter leads") and its tooltip names the F key.
+   The word stays in the flow as an invisible, zero-width strut: its one line
+   box gives the icon-only pill the text pills' block size in every density
+   (the padding and the line both follow --control-h and the inherited
+   line-height), so it lines up with STATE in the flex-start row and the
+   popover, hung from its bottom edge, clears the whole row. A `display: none`
+   word left the icon alone (25px beside 32px pills, 22px beside 29px in
+   compact) and the popover painted over the pills' bottom borders. */
 @container main (max-width: 1480px) {
-  .lead-queue-omnibox__label,
+  .lead-queue-omnibox__pill { gap: 0; }
+  .lead-queue-omnibox__label {
+    inline-size: 0;
+    overflow: hidden;
+    visibility: hidden;
+    white-space: nowrap;
+  }
   .lead-queue-omnibox__pill kbd { display: none; }
 }
 }
