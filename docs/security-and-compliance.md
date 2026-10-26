@@ -504,7 +504,7 @@ a row is closed once and never deleted: the App role holds `SELECT`,
 runs as the deployer, which owns `mip_app`) writes only `woken_at` and
 `wake_reason`, under a `woken_at IS NULL` guard, and writes no audit row.
 
-## Segment display names and examiner reconstruction (2026-10-XX, W5e)
+## Segment display names and examiner reconstruction (2026-10-26, W5e)
 
 critic-11 / D-platform-process-g. The economic-incentive rule that
 `fn_in_the_money` implements has one display name: **In the Money**. It is
@@ -516,10 +516,12 @@ never carries it, by construction and by test
 
 **Codes never changed; only display words did.** Historical Lakebase and
 `action_audit` rows are never rewritten, so an examiner reading a row
-written before this change maps the old display words through the stable
+written before this change (the W5e dev deploy of 2026-10-26, main
+`8eea6174`, deployment `01f1d187674d1942baac5b6da43b5b4e`; the gold
+`segment_population` rename landed the same day) maps the old display words through the stable
 code:
 
-| Stored text (before 2026-10-XX) | Code | Display name now |
+| Stored text (before 2026-10-26) | Code | Display name now |
 | --- | --- | --- |
 | Prime Refi Candidates / Prime Refi Candidate | `itm` (segment) | In the Money |
 | Prime refinance economics (Growth Agent trigger label) | `itm` | In the Money |
