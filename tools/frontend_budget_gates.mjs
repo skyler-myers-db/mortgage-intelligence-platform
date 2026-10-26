@@ -142,8 +142,10 @@ export const budgets = {
   // raw and 2.9% gzip left; an initial-chunk regression is made lazy.
   // wave-5e integration (2026-10-15): 535.59 -> 535.47 raw / 171.11 -> 171.13
   // gzip on one host (W5d's 535.35 / 171.01 was another build). Not raised.
-  initialJsBytes: 558 * KiB, // actual 535.47 (8 chunks, wave-5e integration)
-  initialJsGzipBytes: 176 * KiB, // actual 171.13 (wave-5e integration)
+  // W5e fix rounds 1-2 (2026-10-26): 535.47 -> 535.36 raw / 171.13 ->
+  // 171.14 gzip (tail T4's dependency bumps; no initial-chunk source change).
+  initialJsBytes: 558 * KiB, // actual 535.36 (8 chunks, wave-5e fix round 2)
+  initialJsGzipBytes: 176 * KiB, // actual 171.14 (wave-5e fix round 2)
   // Bumped 2026-06-11 for the re-audit #4 Buyer-Wow tranche: ⌘K command
   // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
   // sleek one-time KPI entrance (.kpi__value--enter / .spark__line--draw),
@@ -459,8 +461,13 @@ export const budgets = {
   // tooltip wraps). Tail T1c (react-virtual 3.14.19, +2.68) is HELD.
   // Totals 2232.30 raw / 796.77 gzip / 688.36 br (+37.12; the lane overages
   // are accepted with this attribution, 12.4 #11). ~5% headroom.
-  totalJsBytes: 2344 * KiB, // actual 2232.30 (wave-5e integration)
-  totalJsGzipBytes: 837 * KiB, // actual 796.77 (wave-5e integration)
+  // W5e fix rounds 1-2 (2026-10-26): 2232.30 -> 2231.74 raw / 796.77 ->
+  // 796.15 gzip / 688.36 -> 687.59 br: fix round 1 (tail T4's dependency
+  // bumps; the Borrower cell's compliance caveats under HIDE) 687.66 br,
+  // fix round 2 687.59 (the Analytics threshold notice copy; the -0.07 is
+  // hash churn).
+  totalJsBytes: 2344 * KiB, // actual 2231.74 (wave-5e fix round 2)
+  totalJsGzipBytes: 837 * KiB, // actual 796.15 (wave-5e fix round 2)
   // Re-baselined 2026-09-23 for wave 1c (lane queue-keyboard-review): the
   // shared LeadTable chunk (Lead Queue + Segment Intelligence) grew from
   // 92.96 / 29.59 to 105.51 / 33.56 with the keyboard triage that must be
@@ -517,8 +524,12 @@ export const budgets = {
   // de-virtualization, status chips +1.3). ~5% headroom, then T1c judged here.
   // Final W5e tree: 171.03 raw / 57.66 gzip / 47.87 br (test-harness, T1b,
   // css-cascade, lexicon +0.06 and compiler-lint +0.04 after the re-baseline).
-  maxLazyJsBytes: 180 * KiB, // actual 171.03 (leadsQuery chunk = LeadTable, wave-5e integration)
-  maxLazyJsGzipBytes: 61 * KiB, // actual 57.66 (leadsQuery chunk = LeadTable, wave-5e integration)
+  // W5e fix round 1 (2026-10-26): 171.03 -> 171.29 raw / 57.66 -> 57.81 gzip
+  // / 47.87 -> 47.98 br (the Borrower cell keeps DNC / Suppressed /
+  // Owner-unresolved when Status or Relationship is hidden; tail T4);
+  // fix round 2 left the chunk's raw bytes unchanged (47.92 br, hash churn).
+  maxLazyJsBytes: 180 * KiB, // actual 171.29 (leadsQuery chunk = LeadTable, wave-5e fix round 2)
+  maxLazyJsGzipBytes: 61 * KiB, // actual 57.81 (leadsQuery chunk = LeadTable, wave-5e fix round 2)
   // Re-baselined 2026-09-24 for audit bundle-05 / css-v2 (lane
   // w2-build-currency): the seven static @fontsource faces (7 woff2 + their
   // 7 never-requested woff twins, 215.42 KiB) became one variable woff2 each
@@ -595,7 +606,10 @@ export const budgets = {
   // entries), lexicon-copy +0.02, compiler-lint +0.11 (the Tooltip
   // server-render guard and Rail wraps). 147.75 -> 147.79 (+0.04, inside the
   // pool). The gate is HELD at 152.
-  initialJsBrBytes: 152 * KiB, // actual 147.79 (8 chunks, wave-5e integration)
+  // W5e fix rounds 1-2 (2026-10-26): 147.79 -> 147.68 (fix round 1, tail
+  // T4's dependency bumps) -> 147.64 (fix round 2, hash churn; no initial
+  // source changed). The gate is HELD at 152.
+  initialJsBrBytes: 152 * KiB, // actual 147.64 (8 chunks, wave-5e fix round 2)
   // wave-4b integration: 24.17 -> 24.32 br (see initialCssBytes), which left
   // 2.7%. Re-baselined to ~5%.
   // wave-5b integration: 24.53 -> 24.74 br (theme-white-label +0.23: the
@@ -607,8 +621,8 @@ export const budgets = {
   // wave-5e integration: ratcheted DOWN, 25.22 -> 23.83 (css-cascade -1.52,
   // analytics +0.13; see initialCssBytes). ~5% headroom.
   initialCssBrBytes: 26 * KiB, // actual 23.83 (wave-5e integration)
-  totalJsBrBytes: 723 * KiB, // actual 688.36 (wave-5e integration; see totalJsBytes)
-  maxLazyJsBrBytes: 51 * KiB, // actual 47.87 (leadsQuery = LeadTable chunk; re-baselined at the w5e lead-table-compile merge, see maxLazyJsBytes)
+  totalJsBrBytes: 723 * KiB, // actual 687.59 (wave-5e fix round 2; see totalJsBytes)
+  maxLazyJsBrBytes: 51 * KiB, // actual 47.92 (leadsQuery = LeadTable chunk; re-baselined at the w5e lead-table-compile merge, fix round 2 measured, see maxLazyJsBytes)
   // What a navigation to each route fetches beyond the initial closure: the
   // route chunk plus its static imports, JS + CSS, brotli q11. Keyed by the
   // manifest's source path; every route module must have an entry and every
