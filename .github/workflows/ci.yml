@@ -46,7 +46,10 @@ jobs:
     # the cap with no failure: main 6b7f9689 (38535004676) and PR #269
     # (38563619204) in the serial step, 38565698599 at 99% of the parallel
     # step. 25 leaves ~9 min of headroom on a slow runner.
-    timeout-minutes: 25
+    # W5e (+609 tests, +2.7%) and the Python lock refresh: PR #270's five runs
+    # took 13m46s-22m09s (40311237233 22m09s, 40378010376 13m46s, the last
+    # green run 21m15s), so 25 left as little as 3 min. 35 restores ~13 min.
+    timeout-minutes: 35
     services:
       # Disposable PostgreSQL for the DSN-gated real-SQL contracts (audit
       # genie-01 item 4); only the serial step below is given its DSN.
@@ -511,7 +514,11 @@ jobs:
     # The harness (1,276+ tests on 4 workers, ~28 min by W5c) and the single-worker
     # perf/interaction budgets share this job; 30 min cancelled run 38519015417
     # mid-suite on 2026-10-14. W5d/W5e add more specs; shard before this is reached.
-    timeout-minutes: 50
+    # It was reached: PR #270's runs took 26m-48m09s (the merged head's green
+    # run 48m09s of 50; 40369973337 39m59s), so the cap is 70 until the
+    # sharded fixture-harness job (a routed post-W5 deps-report notBuilt item)
+    # lands and brings each shard back under 30.
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
