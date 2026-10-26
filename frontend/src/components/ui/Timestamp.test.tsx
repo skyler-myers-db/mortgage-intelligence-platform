@@ -58,6 +58,24 @@ describe('Timestamp', () => {
     expect(dateTime.textContent).toMatch(/^Jul 14, \d{1,2}:00 [AP]M \S+$/);
   });
 
+  it('renders a calendar date in the date-time form as the date, with no invented clock', () => {
+    // W5e: the Analytics Executive drawer's "Data as of" took the date-only
+    // snapshot_date through format="datetime" and printed the day before at 8:00 PM.
+    render(<Timestamp value="2026-07-14" format="datetime" now={NOW} />);
+    const time = container.querySelector('time');
+    expect(time?.textContent).toBe('Jul 14');
+    expect(time?.getAttribute('dateTime')).toBe('2026-07-14');
+    expect(tooltipText(time)).toBe('Jul 14, 2026');
+  });
+
+  it('renders a sentence label for an age under the "now" bucket, keeping the <time>', () => {
+    render(<Timestamp value={NOW - 20_000} nowLabel="just now" now={NOW} />);
+    const time = container.querySelector('time');
+    expect(time?.textContent).toBe('just now');
+    expect(time?.getAttribute('dateTime')).toBe('2026-07-14T14:59:40.000Z');
+    expect(tooltipText(time)).toBe('Jul 14, 2026, 2:59 PM UTC');
+  });
+
   it('renders the prototype trigger form in the narrow style', () => {
     render(<Timestamp value="2026-07-12T15:00:00Z" relativeStyle="narrow" now={NOW} />);
     expect(container.querySelector('time')?.textContent).toBe('2d ago');

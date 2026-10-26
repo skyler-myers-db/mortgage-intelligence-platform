@@ -57,7 +57,9 @@ for (const theme of FIXTURE_THEMES) {
       await expect(how).toContainText('Borrowers who are in the money');
       await expect(how.locator('.chip')).toHaveText(['in_the_money = TRUE']);
       await expect(how.locator('time')).toBeVisible();
-      await expect(how).toContainText('Data as of');
+      // Home passes the refresh instant: its as-of keeps the clock (the
+      // Analytics cards' date-only snapshot shows the date alone).
+      await expect(how.locator('.evidence-proof__asof')).toHaveText('Data as of Jul 14, 8:00 AM EDT');
       await expect(drawer.locator('.source-freshness')).toHaveText('Fresh');
       await expect(drawer.getByTestId('evidence-freshness-foot')).toHaveText(/^Last refresh .+ · via UC Gold Borrower 360$/);
       await expect(drawer).not.toContainText('Admin-only freshness');
