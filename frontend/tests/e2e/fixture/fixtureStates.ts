@@ -26,7 +26,7 @@
  * countdown ticks) while /api/health stays OK, so no DegradedBanner names the
  * outage. The bannered outage is error-surfaces.fixture.spec.ts's.
  */
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import type { HealthPayload } from '../../../src/lib/apiTypes';
 import type { LeadSummary, SessionResponse } from '../../../src/types';
 import type { AppDriver } from './app';
@@ -38,6 +38,7 @@ import { APPROVED_LEAD, approvedLifecycle } from './data/revoke';
 import { LEADS } from './data/borrowers';
 import { json, type MockApi } from './mockApi';
 import { expect } from './test';
+import type { HeldFocus } from './visual';
 
 export const OVERLAY_STATES = ['evidence-drawer', 'command-palette', 'genie'] as const;
 
@@ -130,6 +131,57 @@ export const WAREHOUSE_DOWN_HEALTH: HealthPayload = {
   status: 'degraded',
   dependencies: { warehouse: 'down', lakebase: 'up', genie: 'up' },
 };
+
+/**
+ * The states whose open popover holds the focus that IS the state: their
+ * capture keeps focus within `scope` instead of blurring and asserts
+ * `popover` open before and after the screenshot (visual.ts HeldFocus).
+ * Every other state's capture blurs. safety-net.fixture.spec.ts (f) proves
+ * each entry: a plain park closes the popover, the held park keeps it.
+ *  - identity-menu: the account menu closes on a blur out of it
+ *    (IdentityMenu.tsx); its first item holds focus, so the menu is its own
+ *    scope;
+ *  - hide-menu: the HIDE listbox holds focus itself (MultiFilterSelect) and
+ *    closes on a focusout that leaves its `.filter-root`
+ *    (useListboxNavigation), so the scope is that root, which contains the
+ *    listbox and is not it. Not `.lead-table__hide-slot`: that wrapper is
+ *    display: contents, so it has no box and is never visible.
+ */
+export const HELD_FOCUS_STATES = {
+  'identity-menu': (page: Page): HeldFocus => {
+    const menu = page.getByRole('menu', { name: 'Account' });
+    return { scope: menu, popover: menu };
+  },
+  'hide-menu': (page: Page): HeldFocus => ({
+    scope: page.locator('.lead-table__hide-slot > .filter-root'),
+    popover: page.getByRole('listbox', { name: 'HIDE' }),
+  }),
+} as const satisfies Partial<Record<FixtureState, (page: Page) => HeldFocus>>;
+
+export type HeldFocusState = keyof typeof HELD_FOCUS_STATES;
+
+/** The popover a capture of `state` keeps focused, or undefined: that capture blurs. */
+export function heldFocus(page: Page, state: FixtureState): HeldFocus | undefined {
+  return Object.hasOwn(HELD_FOCUS_STATES, state) ? HELD_FOCUS_STATES[state as HeldFocusState](page) : undefined;
+}
+
+/**
+ * The state's own content a capture of `state` must hold wholly inside the
+ * viewport (visual.ts CaptureOptions.inViewport). more-like-this's panel opens
+ * under the Primary offer card's actions, past the 900px fold, so enterState
+ * scrolls it in: its match count (the line enterState waits for), the
+ * contactable note and the queue / Triage deck links must all be on screen.
+ */
+export function stateInViewport(page: Page, state: FixtureState): Locator[] {
+  if (state !== 'more-like-this') return [];
+  const panel = page.locator('table.tbl tbody tr.tbl__expand').first().locator('.similar-cohort');
+  return [
+    panel.locator('.similar-cohort__count'),
+    panel.locator('.similar-cohort__note'),
+    panel.getByRole('link', { name: 'Open in Lead Queue' }),
+    panel.getByRole('link', { name: 'Open as Triage deck' }),
+  ];
+}
 
 /**
  * Register a load state's fixture. Call before `app.gotoRoute`; a no-op for
@@ -293,7 +345,15 @@ export async function enterState(app: AppDriver, page: Page, state: FixtureState
     case 'more-like-this': {
       const row = await app.expandFirstLeadRow();
       await row.getByRole('button', { name: 'More like this' }).click();
-      await expect(row.locator('.similar-cohort [role="status"]')).toHaveText(/match this pattern/);
+      const panel = row.locator('.similar-cohort');
+      await expect(panel.locator('[role="status"]')).toHaveText(/match this pattern/);
+      // The panel opens past the 900px fold (stateInViewport): bring it on
+      // screen, as stale-note does, so a capture holds its count, note and
+      // links. Centered, not scrollIntoViewIfNeeded's nearest edge: the row
+      // scrolls inside the table's 480px `.tbl-wrap`, so a nearest scroll
+      // leaves the links flush on its clipped bottom edge (0px slack, and a
+      // rounded scroll offset on another renderer would clip them).
+      await panel.evaluate((element) => element.scrollIntoView({ block: 'center', behavior: 'instant' }));
       break;
     }
     case 'lead-revoke-panel': {
