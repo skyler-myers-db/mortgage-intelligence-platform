@@ -249,6 +249,10 @@ test.describe('the read-only live analysis (W5e w5-wire-types A2)', () => {
       await expect(runCard).toBeVisible();
       await expect(runCard).toContainText(LIVE_ANALYSIS_RUN.workflow.title);
       await expect(runCard).toContainText('No state written');
+      // 'Audit pending' reflects the response, not the ledger: the server does
+      // write a growth_agent.live_analysis audit row
+      // (growth_agent_live_analysis.py) but never returns its id, so the run's
+      // audit_event_id is null. A fix that returns the id moves this pin.
       await expect(runCard).toContainText('Audit pending');
       await expect(runCard.getByRole('button', { name: 'Save as watchlist' })).toHaveCount(0);
 

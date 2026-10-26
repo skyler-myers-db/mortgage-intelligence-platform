@@ -5,8 +5,8 @@
  *  - per-tab chunks (bundle-06): the Executive default loads no other tab's
  *    module; Economics loads the sections and scatter chunks; hovering a tab
  *    warms its chunk and starts no read;
- *  - no DOM title attribute under main on any tab (critic-08), apart from the
- *    Timestamp's `<time>` UTC title;
+ *  - no DOM title attribute under main on any tab (critic-08), with no
+ *    exclusion: the Timestamp's UTC form is a ui/Tooltip description;
  *  - the scatter tip on hover and on keyboard focus (dataviz-07 a);
  *  - the index-0 tip a pointer press made hides on pointerleave (item 4);
  *  - FetchedAt: Refresh issues exactly one GET per read, nothing audited
