@@ -233,7 +233,13 @@ export const ZERO_TABLE_BLOCK_MARGIN = '.lead-table__table tr, .lead-table__tabl
 export const ZERO_TABLE_CLEARANCE = `${ZERO_TABLE_BLOCK_MARGIN} .tbl-wrap { scroll-padding: 0px !important; }`;
 /** 38-focus-clearance.css's mechanism: the nav's size as scroll-margin on what is outside it. */
 export const ZERO_NAV_MARGIN = '.main * { scroll-margin-block-start: 0px !important; }';
-/** Zeroes the pinned controls' own scroll-margin (LeadTable.css), leaving the scroller's padding. */
-export const ZERO_PIN_MARGIN = '.lead-table__table .tbl-cell--approval * { scroll-margin-inline: 0px !important; }';
+/**
+ * Undoes both of LeadTable.css's pinned-control clearances: zeroes the
+ * controls' own scroll-margin (Chromium's) and keeps the scroller's
+ * inline-end padding while focus is in the pin (which the sheet drops; that
+ * is what keeps WebKit still, and Chromium too).
+ */
+export const UNDO_PIN_CLEARANCE = '.lead-table__table .tbl-cell--approval * { scroll-margin-inline: 0px !important; }'
+  + ' .tbl-wrap:has(> .lead-table__table) { scroll-padding-inline-end: calc(var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset)) !important; }';
 /** --focus-ring-width + --focus-ring-offset (tokens.css). */
 export const FOCUS_RING_ROOM = 4;

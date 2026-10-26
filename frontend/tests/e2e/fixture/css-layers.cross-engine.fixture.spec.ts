@@ -161,8 +161,12 @@ for (const theme of FIXTURE_THEMES) {
         // WebKit cancels the ones still in flight when the walk's page.goto
         // leaves the route; Vite then dispatches vite:preloadError, which
         // staleChunkRecovery reports as a 'preload' client error. Only the
-        // cancelled .js requests and that one report are allowed.
-        hygiene.allow('request-failed', /\/assets\/[\w.-]+\.js failed: cancelled$/);
+        // cancelled .js requests and that one report are allowed. WebKit
+        // spells the cancel per port: "cancelled" on macOS, "Load request
+        // cancelled" on Linux (CI run 40311237233, 9 chunks in one walk).
+        // Any other failure text, or a 404 chunk's "Failed to load
+        // resource" console error, still fails the walk.
+        hygiene.allow('request-failed', /^GET \S+\/assets\/[\w.-]+\.js failed: (?:Load request )?cancelled$/);
         hygiene.allow('console.error', /^\[mip\] client error \{source: preload, kind: chunk, errorName: TypeError, .*\} TypeError: Importing a module script failed\./);
       }
       await app.setTheme(theme);
