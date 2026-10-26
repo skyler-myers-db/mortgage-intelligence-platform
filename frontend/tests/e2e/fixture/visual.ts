@@ -8,7 +8,8 @@
  *    starts and names tools/update_visual_baselines.sh.
  *  - capture: the capture discipline (pointer parked off every hover target,
  *    focus blurred unless the state under test names the open popover whose
- *    focus it is, a soft toHaveScreenshot so one test reports every diff).
+ *    focus it is, content a state scrolls in asserted on screen, a soft
+ *    toHaveScreenshot so one test reports every diff).
  *  - expectNoSurfaceOverflow: no `.surface` may scroll sideways; what did on
  *    the base branch sits in the dated KNOWN_SURFACE_OVERFLOW ratchet.
  *  - the audited-read guard: no state a spec enters after a route's natural
@@ -171,18 +172,27 @@ export interface CaptureOptions {
    * Without it the park blurs, as every other capture does.
    */
   held?: HeldFocus;
+  /**
+   * The state's own content that opens past the first screen until the state
+   * scrolls it in (more-like-this's count, note and links): each must lie
+   * wholly inside the viewport right before the screenshot.
+   */
+  inViewport?: readonly Locator[];
 }
 
 /**
  * Everything capture() does before its screenshot: the park (blurring unless
- * `held` keeps focus), then the held popover asserted. safety-net.fixture.spec.ts
- * (f) runs it off the pinned host, so the framing of a capture is proven where
- * the VRT cannot run.
+ * `held` keeps focus), then the held popover and the framed content asserted.
+ * safety-net.fixture.spec.ts (f) runs it off the pinned host, so the framing
+ * of a capture is proven where the VRT cannot run.
  */
-export async function prepareCapture(page: Page, options: Pick<CaptureOptions, 'held'> = {}): Promise<void> {
+export async function prepareCapture(page: Page, options: Pick<CaptureOptions, 'held' | 'inViewport'> = {}): Promise<void> {
   await parkPointerAndBlur(page, { keepFocusWithin: options.held?.scope });
   if (options.held) {
     await expect(options.held.popover, 'the popover under test is open at capture time').toBeVisible();
+  }
+  for (const content of options.inViewport ?? []) {
+    await expect(content, "the state's own content is on screen at capture time").toBeInViewport({ ratio: 1 });
   }
 }
 

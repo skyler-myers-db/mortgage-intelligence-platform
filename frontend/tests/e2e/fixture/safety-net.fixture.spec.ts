@@ -21,12 +21,14 @@
  *      holds focus (HELD_FOCUS_STATES, ANALYTICS_W5E_HELD_FOCUS: the HIDE
  *      listbox, the scatter cell's tip) loses its popover to the plain park
  *      and keeps it through the capture's own pre-screenshot path, in both
- *      themes.
+ *      themes; and more-like-this's capture finds its panel's count, note
+ *      and links on screen (they open past the 900px fold), Console closed
+ *      and open, at Linux text widths.
  *
  * The spec itself opens no audited read: (a) and (c) load only /glossary and
- * page.setContent() documents and assert that; (f)'s held states load their
- * capture's route (Home, the Lead Queue, Economics) and assert none after
- * its natural load.
+ * page.setContent() documents and assert that; (f)'s held and framed states
+ * load their capture's route (Home, the Lead Queue, Economics) and assert
+ * none after its natural load.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -43,7 +45,7 @@ import {
   partitionByTags,
   type AxeScanContext,
 } from './axe';
-import { HELD_FOCUS_STATES, enterState, type HeldFocusState } from './fixtureStates';
+import { HELD_FOCUS_STATES, enterState, stateInViewport, type HeldFocusState } from './fixtureStates';
 import type { ApiCall, MockApi } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
@@ -369,6 +371,28 @@ test.describe('(f) the capture discipline', () => {
         await prepareCapture(page, { held: { scope, popover } });
         await expectHeldAfterCapture({ scope, popover });
         expectNoAuditedReadSince(mockApi, naturalLoad, `${state} (${theme})`);
+      });
+    }
+  }
+
+  // Linux Chromium sets Geist Mono about 6% wider (segments-cards'
+  // LINUX_TEXT_EMULATION). Off Linux every glyph in the expanded row is
+  // widened past that, so the row's wraps (the Primary offer card's actions)
+  // reach at least their CI height and the framing keeps its slack there.
+  const EXPANDED_ROW_LINUX_TEXT = '.tbl__expand, .tbl__expand * { letter-spacing: 0.5px; }';
+  for (const theme of FIXTURE_THEMES) {
+    for (const consoleOpen of [false, true]) {
+      test(`${theme}: more-like-this brings its panel's count, note and links on screen${consoleOpen ? ', Console open' : ''}`, async ({ app, mockApi, page }) => {
+        await app.setTheme(theme);
+        await app.gotoRoute('/lead-queue');
+        const naturalLoad = markNaturalLoad(mockApi);
+        if (process.platform !== 'linux') await page.addStyleTag({ content: EXPANDED_ROW_LINUX_TEXT });
+        if (consoleOpen) await app.openConsole();
+        await enterState(app, page, 'more-like-this');
+        const content = stateInViewport(page, 'more-like-this');
+        expect(content, 'the count, the note and both links').toHaveLength(4);
+        await prepareCapture(page, { inViewport: content });
+        expectNoAuditedReadSince(mockApi, naturalLoad, `more-like-this (${theme})`);
       });
     }
   }

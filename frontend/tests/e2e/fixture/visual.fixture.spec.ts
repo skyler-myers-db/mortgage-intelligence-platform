@@ -59,7 +59,7 @@
  */
 import type { Locator, Page } from '@playwright/test';
 import type { AppDriver, FixtureAccent, FixtureTheme } from './app';
-import { enterState, heldFocus, prepareState, statePath, type FixtureState } from './fixtureStates';
+import { enterState, heldFocus, prepareState, stateInViewport, statePath, type FixtureState } from './fixtureStates';
 import type { HomeSummary, SessionResponse } from '../../../src/types';
 import { provenanceSingleAnswer } from './data/genieProvenance';
 import { GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
@@ -139,12 +139,13 @@ async function check(
   routeName: string,
   theme: FixtureTheme,
   state: string,
-  options: { file?: string; mask?: Locator[]; held?: HeldFocus } = {},
+  options: { file?: string; mask?: Locator[]; held?: HeldFocus; inViewport?: readonly Locator[] } = {},
 ): Promise<void> {
   await expectNoSurfaceOverflow(page, { route: routeName, state, theme });
   await capture(page, options.file ?? `${routeName}--${theme}--${state}.png`, {
     mask: options.mask,
     held: options.held,
+    inViewport: options.inViewport,
   });
 }
 
@@ -190,7 +191,8 @@ for (const theme of FIXTURE_THEMES) {
     // the open popover whose focus IS the state: capture keeps focus inside
     // its scope instead of blurring (the account menu and the HIDE listbox
     // close on a blur out of them) and asserts it open before and after the
-    // screenshot. Every other state blurs.
+    // screenshot. Every other state blurs. stateInViewport names the content
+    // a state scrolls in (more-like-this), asserted on screen at capture time.
     const SHELL_STATES: ReadonlyArray<{ route: string; state: FixtureState }> = [
       { route: 'home', state: 'evidence-drawer' },
       { route: 'home', state: 'command-palette' },
@@ -219,7 +221,8 @@ for (const theme of FIXTURE_THEMES) {
       { route: 'home', state: 'identity-menu' },
       { route: 'glossary', state: 'glossary-search' },
       // W (W5e w5-lead-queue-columns): the HIDE menu, the omnibox and More
-      // like this; hide-menu holds focus (HELD_FOCUS_STATES).
+      // like this; hide-menu holds focus (HELD_FOCUS_STATES), more-like-this
+      // scrolls its panel in (stateInViewport).
       { route: 'lead-queue', state: 'hide-menu' },
       { route: 'lead-queue', state: 'omnibox' },
       { route: 'lead-queue', state: 'more-like-this' },
@@ -237,7 +240,7 @@ for (const theme of FIXTURE_THEMES) {
         await enterState(app, page, state);
         // A held popover is still open after the capture, focus inside its
         // scope (capture): the baseline shows the popover, not the plain route.
-        await check(page, name, theme, state, { held: heldFocus(page, state) });
+        await check(page, name, theme, state, { held: heldFocus(page, state), inViewport: stateInViewport(page, state) });
         expectNoAuditedReadSince(mockApi, naturalLoad, `${name} · ${state}`);
       });
     }
