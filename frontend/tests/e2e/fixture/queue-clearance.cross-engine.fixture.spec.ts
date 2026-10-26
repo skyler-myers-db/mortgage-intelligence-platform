@@ -101,6 +101,10 @@ async function settledScrollLeftAfterPinnedFocus(page: Page, borrowerId: string,
  * two frames (WebKit reveals at the next rendering update, so its sync read is
  * always the start). A capture listener on window runs before any listener on
  * the scroller itself, so a scroll-event or rAF restore cannot hide the peak.
+ * useTableScrollClearance's guard is held off for the probe (its focusin never
+ * reaches the scroller): its microtask restore could undo WebKit's reveal in
+ * the step that made it (the reject leg read 0 in 1-5 of 20 macOS runs, a
+ * "scroll 0" event after; 40 of 40 legs reached the end with it held off).
  */
 async function scrollLeftReachedByPinnedFocus(page: Page, borrowerId: string, start: number): Promise<Array<{ sync: number; peak: number }>> {
   return tableWrap(page).evaluate(async (wrap, { id, left }) => {
@@ -126,7 +130,10 @@ async function scrollLeftReachedByPinnedFocus(page: Page, borrowerId: string, st
         };
         requestAnimationFrame(sample);
       });
+      const holdGuard = (event: Event) => event.stopPropagation();
+      window.addEventListener('focusin', holdGuard, { capture: true });
       control.focus();
+      window.removeEventListener('focusin', holdGuard, { capture: true });
       const sync = wrap.scrollLeft;
       await sampled;
       window.removeEventListener('scroll', onScroll, { capture: true });
