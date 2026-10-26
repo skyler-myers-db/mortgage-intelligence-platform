@@ -92,8 +92,8 @@ export function scoreSummary(model: HistogramModel, totals: { addressable_borrow
 export function thresholdNotice(thresholds: Pick<AnalyticsThresholds, 'min_spread_bps' | 'reason'>): string | null {
   if (thresholds.min_spread_bps !== null) return null;
   return thresholds.reason === 'not_uniform'
-    ? 'No single refi-screen threshold applies to this refresh.'
-    : 'The refi-screen threshold is not built in this refresh.';
+    ? 'No single In the Money spread threshold applies to this refresh.'
+    : 'The In the Money spread threshold is not built in this refresh.';
 }
 
 /**

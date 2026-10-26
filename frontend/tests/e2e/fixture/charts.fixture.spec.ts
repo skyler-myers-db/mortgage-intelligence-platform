@@ -4,7 +4,7 @@
  * foundation, rendered against the fixture harness at 1440x900.
  *
  * Pins the rendered layer: 1-2-5 axes on every numeric tick label; the two
- * distributions as histograms whose refi-screen rule and 75+ label come from
+ * distributions as histograms whose In the Money rule and 75+ label come from
  * governed values; the keyboard cursor and the table twin.
  */
 import type { Locator, Page } from '@playwright/test';
@@ -361,7 +361,7 @@ test.describe('analytics charts: governed histograms', () => {
     await expect(figure.locator('rect.chart-hist__bar')).toHaveCount(SCORE_BUCKETS.length);
   });
 
-  test('economics: the refi-screen rule sits at the payload threshold and partitions by lower edge', async ({ app, mockApi, page }) => {
+  test('economics: the In the Money rule sits at the payload threshold and partitions by lower edge', async ({ app, mockApi, page }) => {
     mockApi.register('GET', '/api/analytics/economics', () =>
       json(economicsBody({ ...ECONOMICS_THRESHOLDS, min_spread_bps: 100, min_equity_pct: 25 })),
     );
@@ -381,8 +381,8 @@ test.describe('analytics charts: governed histograms', () => {
   });
 
   for (const [name, thresholds, notice] of [
-    ['not built', THRESHOLDS_NOT_BUILT, 'The refi-screen threshold is not built in this refresh.'],
-    ['not uniform', THRESHOLDS_NOT_UNIFORM, 'No single refi-screen threshold applies to this refresh.'],
+    ['not built', THRESHOLDS_NOT_BUILT, 'The In the Money spread threshold is not built in this refresh.'],
+    ['not uniform', THRESHOLDS_NOT_UNIFORM, 'No single In the Money spread threshold applies to this refresh.'],
   ] as const) {
     test(`economics: a ${name} screen draws no rule and says why`, async ({ app, mockApi, page }) => {
       mockApi.register('GET', '/api/analytics/economics', () => json(economicsBody(thresholds)));

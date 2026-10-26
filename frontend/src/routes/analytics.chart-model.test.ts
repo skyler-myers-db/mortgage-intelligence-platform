@@ -83,10 +83,10 @@ describe('summaries', () => {
   it('says the screen is not built only when every row is null, and no single value when rows disagree', () => {
     const model = histogramModel(SPREAD, SPREAD_BUCKET_BPS, null);
     expect(spreadSummary(model, { min_spread_bps: null, reason: 'not_built' })).toContain(
-      'The refi-screen threshold is not built in this refresh.',
+      'The In the Money spread threshold is not built in this refresh.',
     );
     const disagreeing = spreadSummary(model, { min_spread_bps: null, reason: 'not_uniform' });
-    expect(disagreeing).toContain('No single refi-screen threshold applies to this refresh.');
+    expect(disagreeing).toContain('No single In the Money spread threshold applies to this refresh.');
     expect(disagreeing).not.toContain('not built');
     expect(thresholdNotice({ min_spread_bps: 75, reason: null })).toBeNull();
   });

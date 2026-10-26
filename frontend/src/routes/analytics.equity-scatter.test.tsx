@@ -684,8 +684,8 @@ describe('Equity scatter tooltip, guides and markers (W5e: dataviz-07 a, dataviz
         expect(container.querySelectorAll('.analytics-scatter__guide-label')).toHaveLength(0);
         expect(container.querySelector('[data-testid="scatter-guide-legend"]')?.textContent).toBe(
           thresholds.reason === 'not_uniform'
-            ? 'No single refi-screen threshold applies to this refresh.'
-            : 'The refi-screen threshold is not built in this refresh.',
+            ? 'No single In the Money spread threshold applies to this refresh.'
+            : 'The In the Money spread threshold is not built in this refresh.',
         );
       } finally {
         unmount();
