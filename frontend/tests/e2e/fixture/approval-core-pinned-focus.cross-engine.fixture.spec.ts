@@ -20,10 +20,14 @@
  * first, focus() each pinned control at the middle of the overflow and at
  * scrollLeft 0; two frames later scrollLeft is where it started (+-1), and
  * the table never left it on the way: a window capture-phase scroll listener
- * (it runs before any listener on the scroller, so no restore can hide a
- * move), a frame chain queued before focus() and a timer chain read it for
- * PEAK_WINDOW_MS. The non-vacuity twins, which show an engine does scroll
- * there without the clearance, are the pinned-controls non-vacuity tests in
+ * (ahead of the guard's scroll-event restore), a frame chain queued before
+ * focus() (ahead of its frame restore) and a timer chain read it for
+ * PEAK_WINDOW_MS. With the padding rule removed, WebKit failed this 5 of 5
+ * runs (settled 142, peak 284). A reveal the guard undoes inside its own
+ * frame can still pass every observer unseen (the reject leg at scrollLeft
+ * 0, sometimes, on macOS); the approve legs were seen every time. The
+ * non-vacuity twins, which show an engine does scroll there without the
+ * clearance, are the pinned-controls non-vacuity tests in
  * queue-clearance.cross-engine and lead-queue.fixture.spec.ts.
  */
 import type { Locator, Page } from '@playwright/test';
