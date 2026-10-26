@@ -116,7 +116,6 @@ def test_the_holds_file_is_schema_checked(tmp_path: Path) -> None:
 
 def test_the_ignore_vulns_are_parsed_from_the_real_ci_yml() -> None:
     assert advisories.ci_ignored_vulns(REAL_CI) == [
-        "GHSA-h7x2-h6g9-p789",
         "GHSA-xpv3-w29h-x7cv",
         "GHSA-hj66-6f7g-4r5v",
     ]
@@ -169,10 +168,12 @@ def test_the_real_empty_allowlist_parses_green() -> None:
 def test_the_real_ci_review_dates_are_red_after_their_dates_and_warn_within_a_week() -> None:
     # The W5e integration's security re-review (2026-10-15) re-checked both
     # ignores and moved their dates (mlflow 2026-11-15, oauthlib 2026-11-01).
+    # The mlflow ignore retired on 2026-10-26 (mlflow 3.17.2 ships the
+    # GHSA-h7x2-h6g9-p789 fix), so the oauthlib date is the one left.
     late, _warn, _rows = waivers.waiver_signals(date(2026, 11, 16), [], REAL_CI, waivers.ALLOWLIST)
     early, warnings, _rows = waivers.waiver_signals(date(2026, 10, 31), [], REAL_CI, waivers.ALLOWLIST)
 
-    assert [(s.code, s.detail) for s in late] == [("review_date_past", "2026-11-15"), ("review_date_past", "2026-11-01")]
+    assert [(s.code, s.detail) for s in late] == [("review_date_past", "2026-11-01")]
     assert all(s.subject.startswith(".github/workflows/ci.yml:") for s in late)
     assert early == []
     assert [(s.code, s.detail) for s in warnings] == [("review_date_soon", "2026-11-01")], "within 7 days warns"

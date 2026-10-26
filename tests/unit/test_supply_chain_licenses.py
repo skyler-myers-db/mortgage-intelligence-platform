@@ -136,6 +136,7 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert "multidict==6.9.1" in requirements_in
     assert "werkzeug==3.1.9" in requirements_in
     assert "mako==1.4.2" in requirements_in
+    assert "mlflow==3.17.2" in requirements_in
     assert "certifi==2026.10.23" in requirements_in
     assert "graphql-core==3.2.12" in requirements_in
     assert "pillow==13.0.0" in requirements_in
@@ -153,7 +154,7 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
         "mako==1.4.2",
         "gitpython==3.2.1",
         "cryptography==50.0.1",
-        "mlflow==3.16.0",
+        "mlflow==3.17.2",
         "pyarrow==25.0.0",
         "aiohttp==3.14.5",
         "yarl==1.25.1",

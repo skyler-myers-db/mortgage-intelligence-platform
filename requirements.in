@@ -16,13 +16,16 @@ databricks-sql-connector==4.4.0
 # mlflow.genai.evaluate is missing so "MLflow Agent Evaluation" cannot be
 # claimed from local scorer metrics alone.
 # Pinned exactly. A range let the resolver backtrack to mlflow 3.2.0 (24
-# advisories) in order to satisfy a newer cryptography; 3.16.0 is the first
+# advisories) in order to satisfy a newer cryptography; 3.16.0 was the first
 # release whose bound (cryptography<51) admits the 50.x fix for
-# PYSEC-2026-3552. It does NOT close GHSA-h7x2-h6g9-p789 -- its
-# _create_gateway_secret handler is byte-identical to 3.15.1's and the
-# advisory has no patched release -- so ci.yml keeps that ignore with its
-# server-side unreachability proof.
-mlflow==3.16.0
+# PYSEC-2026-3552. 3.17.2 (2026-10-26) keeps that bound and closes
+# GHSA-wqmh-qccw-pqwf (FileStore trace-ID path traversal, first patched in
+# 3.17.2) and GHSA-2wqp-q3c6-ccj5 (scorer-endpoint SSRF, first patched in
+# 3.17.0). 3.17.0 also ships the GHSA-h7x2-h6g9-p789 fix (gateway secret
+# api_base validation, mlflow#25761), so ci.yml no longer ignores it. The
+# pin moves with GATEWAY_MODEL_REQUIREMENTS in
+# backend/agents/gateway_contract.py (the gateway model's serving env).
+mlflow==3.17.2
 # MLflow's Unity Catalog registration path reads the newly created model
 # artifacts back from the metastore's S3 storage before marking a version
 # ready. The plain ``mlflow`` extra does not install the AWS artifact client,
