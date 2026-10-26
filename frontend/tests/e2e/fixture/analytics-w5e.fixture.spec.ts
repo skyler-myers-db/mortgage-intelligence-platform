@@ -11,7 +11,8 @@
  *  - the index-0 tip a pointer press made hides on pointerleave (item 4);
  *  - FetchedAt: Refresh issues exactly one GET per read, nothing audited
  *    across load, tab switches, Refresh and borrower-link focus (states-09);
- *  - a failed Refresh keeps the data and shows the stale note;
+ *  - a failed Refresh keeps the data and shows the stale note, the grid gap
+ *    above and below it (W5e: it sat flush on the KPI row);
  *  - a restored snapshot says how old it is while its fresh read runs, and a
  *    failed first refresh of it shows the real failure (delivery-05);
  *  - the hero keeps its height across the first load, placeholder data and
@@ -47,6 +48,36 @@ function gets(mockApi: MockApi, suffix: string): number {
 }
 
 const hero = (page: Page) => page.locator('.proto-hero__actions [data-testid="fetched-at"]');
+
+/**
+ * The stale note's distance to the filter row above it and to the tab's
+ * first panel below it, and the --gap-grid they should both equal.
+ */
+async function staleNoteGaps(page: Page, panel: string): Promise<{ above: number; below: number; gap: number }> {
+  const note = page.locator('#main-content [data-testid="stale-data-note"]');
+  await expect(note).toHaveCount(1);
+  return note.evaluate((el, panelSelector) => {
+    const filters = el.previousElementSibling;
+    const first = el.parentElement?.querySelector(panelSelector);
+    if (!filters?.classList.contains('analytics-filters') || !first) {
+      throw new Error(`the note is not between the filter row and ${panelSelector}`);
+    }
+    const box = el.getBoundingClientRect();
+    return {
+      above: box.top - filters.getBoundingClientRect().bottom,
+      below: first.getBoundingClientRect().top - box.bottom,
+      gap: Number.parseFloat(getComputedStyle(el).getPropertyValue('--gap-grid')),
+    };
+  }, panel);
+}
+
+/** A manual Refresh of the tab fails over the data on screen, so its stale note shows. */
+async function failRefresh(app: { settle(): Promise<void> }, mockApi: MockApi, page: Page, tab: 'executive' | 'economics'): Promise<void> {
+  mockApi.degrade(`/api/analytics/${tab}`, { status: 500, method: 'GET', body: { detail: `fixture: ${tab} refresh failed` } });
+  await hero(page).getByRole('button', { name: `Refresh ${tab} analytics` }).click();
+  await expect(page.locator('#main-content [data-testid="stale-data-note"]')).toHaveCount(1);
+  await app.settle();
+}
 
 test.describe('per-tab chunks (bundle-06)', () => {
   test('the Executive default loads no other tab module; Economics loads the sections and scatter chunks', async ({ app, page }) => {
@@ -167,6 +198,32 @@ test.describe('fetch age, Refresh and the stale note (states-09)', () => {
     await expect(page.locator('#main-content [data-testid="stale-data-note"]')).toHaveCount(1);
     await expect(page.locator('#main-content .funnel-sankey')).toBeVisible();
     await expect(page.locator('#main-content')).not.toContainText('fixture: executive refresh failed');
+  });
+
+  test('the stale note keeps the grid gap above and below it, Console closed and open', async ({ app, mockApi, page }) => {
+    // W5e: it sat flush on the KPI row (the filter row's margin above it,
+    // nothing below). Economics' first panel brings its own top margin: the
+    // two collapse to one gap rather than doubling.
+    await app.gotoRoute('/analytics');
+    await expect(page.locator('#main-content .funnel-sankey')).toBeVisible();
+    await failRefresh(app, mockApi, page, 'executive');
+    const closed = await staleNoteGaps(page, '.kpi-row');
+    expect(closed.gap, '--gap-grid resolves').toBeGreaterThan(0);
+    expect(closed.above, 'filter row to note, Console closed').toBeCloseTo(closed.gap, 0);
+    expect(closed.below, 'note to KPI row, Console closed').toBeCloseTo(closed.gap, 0);
+
+    await app.openConsole();
+    await app.settle();
+    const open = await staleNoteGaps(page, '.kpi-row');
+    expect(open.above, 'filter row to note, Console open').toBeCloseTo(open.gap, 0);
+    expect(open.below, 'note to KPI row, Console open').toBeCloseTo(open.gap, 0);
+
+    await app.gotoRoute('/analytics?view=economics');
+    await expect(page.locator('#main-content [data-testid="equity-spread-scatter"]')).toBeVisible();
+    await failRefresh(app, mockApi, page, 'economics');
+    const economics = await staleNoteGaps(page, '.analytics-grid');
+    expect(economics.above, 'filter row to note, Economics').toBeCloseTo(economics.gap, 0);
+    expect(economics.below, 'note to the first panel, Economics').toBeCloseTo(economics.gap, 0);
   });
 
   test('the hero keeps its height across the first load, placeholder data and the loaded state', async ({ page }) => {
