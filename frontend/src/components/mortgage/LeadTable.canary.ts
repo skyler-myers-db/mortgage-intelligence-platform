@@ -9,7 +9,7 @@
  * (the reject gate for a reject run, the approve gate otherwise). Any
  * selection change retires it for good, even a change back.
  *
- * Plain helpers over a capture the (uncompiled) LeadTable keeps in state.
+ * Plain helpers over a capture the LeadTable keeps in state.
  * They ride the lazy bulk chunk (LeadBulkApproveReview re-exports them):
  * a canary exists only after a bulk run, which loaded that chunk, so the
  * shared LeadTable chunk carries none of this.
