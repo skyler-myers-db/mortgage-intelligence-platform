@@ -18,20 +18,22 @@
  *      identity-menu baselines plain Home), keeps it only inside the popover
  *      a state names (the menu stays open on its first item), and fails a
  *      named popover that does not hold focus; every state whose capture
- *      holds focus (HELD_FOCUS_STATES: the HIDE listbox) loses its popover
- *      to the plain park and keeps it through the capture's own
- *      pre-screenshot path, in both themes.
+ *      holds focus (HELD_FOCUS_STATES, ANALYTICS_W5E_HELD_FOCUS: the HIDE
+ *      listbox, the scatter cell's tip) loses its popover to the plain park
+ *      and keeps it through the capture's own pre-screenshot path, in both
+ *      themes.
  *
  * The spec itself opens no audited read: (a) and (c) load only /glossary and
  * page.setContent() documents and assert that; (f)'s held states load their
- * capture's route (Home, the Lead Queue) and assert none after its natural
- * load.
+ * capture's route (Home, the Lead Queue, Economics) and assert none after
+ * its natural load.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
 import { FIXTURE_ACCENTS, FIXTURE_DENSITIES, type AppDriver } from './app';
+import { ANALYTICS_W5E_HELD_FOCUS, ANALYTICS_W5E_ROUTE, ANALYTICS_W5E_STATES, enterAnalyticsW5eState } from './analyticsW5eStates';
 import {
   ADVISORY_TAG,
   WCAG_TAGS,
@@ -340,6 +342,12 @@ test.describe('(f) the capture discipline', () => {
       held: HELD_FOCUS_STATES[state],
       enter: (app, page) => enterState(app, page, state),
     })),
+    ...ANALYTICS_W5E_STATES.flatMap((state): HeldCase[] => {
+      const held = ANALYTICS_W5E_HELD_FOCUS[state];
+      return held
+        ? [{ state, path: ANALYTICS_W5E_ROUTE[state].path, held, enter: (app, page, mockApi) => enterAnalyticsW5eState(app, page, mockApi, state) }]
+        : [];
+    }),
   ];
   for (const theme of FIXTURE_THEMES) {
     for (const { state, path, held, enter } of HELD_CASES) {

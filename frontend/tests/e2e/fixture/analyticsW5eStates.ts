@@ -11,12 +11,14 @@
  *  - `sales-ops-workload`: the Sales ops per-officer workload table.
  *
  * Each entry names the route path to load and returns the region to scan or
- * capture.
+ * capture. `economics-scatter-tip` is the one whose capture keeps focus
+ * (ANALYTICS_W5E_HELD_FOCUS); the other three blur.
  */
 import type { Locator, Page } from '@playwright/test';
 import type { AppDriver } from './app';
 import type { MockApi } from './mockApi';
 import { expect } from './test';
+import type { HeldFocus } from './visual';
 
 export type AnalyticsW5eState = 'executive-evidence' | 'executive-stale' | 'economics-scatter-tip' | 'sales-ops-workload';
 
@@ -33,6 +35,20 @@ export const ANALYTICS_W5E_ROUTE: Readonly<Record<AnalyticsW5eState, { route: st
   'executive-stale': { route: 'analytics-executive', path: '/analytics' },
   'economics-scatter-tip': { route: 'analytics-economics', path: '/analytics?view=economics' },
   'sales-ops-workload': { route: 'analytics-sales-ops', path: '/analytics?view=sales-ops' },
+};
+
+/**
+ * The states whose capture keeps focus (fixtureStates.ts HELD_FOCUS_STATES'
+ * idiom, proven by safety-net.fixture.spec.ts (f)). The scatter tip follows
+ * the focused density cell and unmounts on its blur (useScatterTip's onBlur,
+ * analytics.scatter-overlay.tsx), so the capture keeps focus within the cells'
+ * `.analytics-scatter__points` group, which renders the tip too.
+ */
+export const ANALYTICS_W5E_HELD_FOCUS: Readonly<Partial<Record<AnalyticsW5eState, (page: Page) => HeldFocus>>> = {
+  'economics-scatter-tip': (page) => {
+    const points = page.locator('#main-content .analytics-scatter__points', { has: page.locator('.analytics-scatter__bin') });
+    return { scope: points, popover: points.getByTestId('scatter-tip') };
+  },
 };
 
 /** The first Executive KPI card's evidence chip (Addressable Borrowers). */

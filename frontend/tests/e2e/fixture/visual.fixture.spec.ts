@@ -69,7 +69,7 @@ import { composeReply, executedReply, EXECUTE_PATTERN, registerGrowthAgentTrust 
 import { PLAN_PROGRESS_PATTERN, PROGRESS_SEQUENCE, registerRateWatch } from './data/growthWatchlists';
 import { registerPagedQueue } from './data/leadPages';
 import { registerBoard } from './data/salesLoop';
-import { ANALYTICS_W5E_ROUTE, ANALYTICS_W5E_STATES, enterAnalyticsW5eState } from './analyticsW5eStates';
+import { ANALYTICS_W5E_HELD_FOCUS, ANALYTICS_W5E_ROUTE, ANALYTICS_W5E_STATES, enterAnalyticsW5eState } from './analyticsW5eStates';
 import { PRESENTER_SESSION } from './data/shell';
 import { json, type MockApi } from './mockApi';
 import { FIXTURE_ROUTES, FIXTURE_THEMES, type FixtureRoute } from './routes';
@@ -325,12 +325,14 @@ for (const theme of FIXTURE_THEMES) {
     // U (W5e w5-analytics): the Executive KPI evidence drawer, a failed
     // Refresh's stale note, the scatter tip and the workload table. None
     // opens an audited read (the KPI proof and the workload are audit-free).
+    // The scatter tip unmounts on its cell's blur, so that capture keeps
+    // focus in the cells' group (ANALYTICS_W5E_HELD_FOCUS); the rest blur.
     for (const state of ANALYTICS_W5E_STATES) {
       const target = ANALYTICS_W5E_ROUTE[state];
       test(`analytics · ${state}`, async ({ app, mockApi, page }) => {
         const { naturalLoad } = await load(app, mockApi, route(target.route), theme);
         await enterAnalyticsW5eState(app, page, mockApi, state);
-        await check(page, target.route, theme, state);
+        await check(page, target.route, theme, state, { held: ANALYTICS_W5E_HELD_FOCUS[state]?.(page) });
         expectNoAuditedReadSince(mockApi, naturalLoad, `analytics · ${state}`);
       });
     }

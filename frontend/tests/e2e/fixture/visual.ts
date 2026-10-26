@@ -83,9 +83,10 @@ export interface ParkOptions {
    * The open popover the state under test opened and whose roving focus IS
    * that state (HeldFocus.scope): the account menu (block R) closes when focus
    * leaves it (IdentityMenu's onBlur), so a blur would capture the plain
-   * route; so does the HIDE listbox (block W). Focus is kept only when it is
-   * inside this element, and the park fails when it is not, so no other focus
-   * ring survives by accident. Every other park blurs.
+   * route; so do the HIDE listbox (block W) and the scatter cell's tip (block
+   * U). Focus is kept only when it is inside this element, and the park fails
+   * when it is not, so no other focus ring survives by accident. Every other
+   * park blurs.
    */
   keepFocusWithin?: Locator;
 }
@@ -144,7 +145,8 @@ export async function parkPointerAndBlur(page: Page, options: ParkOptions = {}):
 
 /**
  * A state whose open popover holds the focus that IS the state, so its capture
- * keeps focus instead of blurring (fixtureStates.ts HELD_FOCUS_STATES).
+ * keeps focus instead of blurring (fixtureStates.ts HELD_FOCUS_STATES,
+ * analyticsW5eStates.ts ANALYTICS_W5E_HELD_FOCUS).
  */
 export interface HeldFocus {
   /** ParkOptions.keepFocusWithin: contains the focused element and is not it. */
