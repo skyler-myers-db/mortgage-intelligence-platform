@@ -11,6 +11,16 @@ this remediation pass.
 
 - Browser-shipped production dependencies have no known commercial-use license
   blockers.
+- Frontend `npm audit`, 2026-10-26, after W5e tail T4 (below): 0
+  advisories at any level across the 291 lock entries, read with
+  `--package-lock-only` and on the installed tree at the `--audit-level=high`
+  gate. Before T4 the same lock (and main's at 5e0fbe2c) reported 5
+  dev-only advisories published 2026-10-20 to 2026-10-23, after every W5e
+  commit: 3 high (happy-dom GHSA-834v-8h66-3h79; vite 8.3.0-8.3.2 via its
+  bundled launch-editor and server.fs advisories; zod below 4.6.6,
+  GHSA-mrhx-c7xc-m3w5, transitive through eslint-plugin-react-hooks) and 2
+  moderate (vitest and @vitest/mocker 4.1.11). This is a dated result, not
+  a standing claim.
 - Frontend `npm audit`, 2026-10-01, after the W5b dependency batch (see the
   2026-10-01 W5b addendum below), read from the refreshed lock with
   `npm audit --package-lock-only`: 0 advisories at any level (0 low, 0
@@ -567,3 +577,4 @@ stays out.
 | T1c | `@tanstack/react-virtual` | 3.13.24 | 3.14.19 | HELD: `virtual-core` 3.19.4 adds +2.80 KiB br / +10.73 raw / +3.25 gzip to the leadsQuery (LeadTable) chunk, and its raw 181.65 KiB breaks the 180 KiB maxLazy gate re-baselined at the `w5-lead-table-compile` merge (br 50.50 of 51 and gzip 60.86 of 61 leave under 1%); lead-queue +2.83, segment-intelligence +2.78 KiB br | (not applied) `react-virtual` 3.14.19, `virtual-core` 3.14.0 -> 3.19.4 |
 | T2 | `oxlint` | 1.85.0 | 1.86.0 | Applied with `w5-compiler-lint`: `frontend/oxlint-baseline.json` re-recorded with `--ratchet` (it records the oxlint version; 6 files, no new, grown or suppressed hit); 1.86.0 lists 36 jsx-a11y rules and `.oxlintrc.json` names all 36, so no new rule to name; dev-only, no bundle byte | `oxlint` and all 19 `@oxlint/binding-*` platform entries, 1.86.0 |
 | T3 | `@playwright/test` | 1.63.0 | 1.64.0 | Applied LAST, with the `mcr.microsoft.com/playwright:v1.64.0-noble` VRT image (ci.yml `e2e-visual` container and `MIP_VRT_IMAGE`, test_dependency_pins, test-infra.fixture.spec.ts, the playwright.config.ts comment, docs/testing.md); 1.64.0 ships Chromium 156, Firefox 157 and WebKit 27.2; every e2e-visual baseline moves and is refreshed from the pinned-container CI actuals (orchestrator) | `@playwright/test`, `playwright`, `playwright-core`, 1.64.0 |
+| T4 | `vite`, `vitest`, `happy-dom`, `zod` (transitive) | 8.3.2, 4.1.11, 20.14.6, 4.3.6 | 8.3.5, 4.1.12, 21.0.4, 4.6.7 | Applied at the W5e fix round (2026-10-26) to clear the five dev-only advisories above, re-run lock-only on the merged tree: `npm install vite@8.3.5 vitest@4.1.12 --save-exact --save-dev --package-lock-only --ignore-scripts`, `npm update zod --package-lock-only --ignore-scripts` (eslint-plugin-react-hooks admits `^4.0.0`, so no override), then `npm install happy-dom@21.0.4 --save-exact --save-dev --package-lock-only --ignore-scripts` (a major: full vitest 630 files / 6,833 tests green on the installed tree, so no hold). vitest stays inside its `below 5.0.0` hold. Budgets on the merged tree: initial JS 147.68 KiB br (147.79 before, with the compliance-caveat fix in the same build), total JS 687.66, leadsQuery 47.98 br / 171.29 raw; every gate passes | `vite` 8.3.5, `rolldown` and its 15 `@rolldown/binding-*` entries 1.2.12 -> 1.2.15, `@oxc-project/types` 0.155.0, `postcss` 8.5.31, `nanoid` 3.3.20; `vitest` and its seven `@vitest/*` packages 4.1.12, `chai` 6.3.0, `tinyrainbow` 3.2.0; `happy-dom` 21.0.4; `zod` 4.6.7; nothing added or removed (291 entries), no `micromatch` / `braces` path, stylelint stays out |
