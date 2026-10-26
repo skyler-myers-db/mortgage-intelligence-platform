@@ -48,6 +48,18 @@ describe('StaleDataNote', () => {
     expect(el?.querySelector('time')?.getAttribute('dateTime')).toBe('2026-10-01T09:00:00.000Z');
   });
 
+  it('says "just now" for a read under a minute old, never "last read now"', () => {
+    // W5e: a manual Refresh that fails right after the page loaded.
+    render(NOW);
+    const el = note();
+    expect(el?.textContent).toBe(
+      'Showing counts last read just now. The latest refresh failed; the counts update on a later refresh once the warehouse responds.',
+    );
+    expect(el?.querySelector('time')?.getAttribute('dateTime')).toBe('2026-10-01T12:00:00.000Z');
+    act(() => root.render(<StaleDataNote lastGoodAt={NOW - 20_000} compact />));
+    expect(note()?.querySelector('.chip__label')?.textContent).toBe('Refresh failed; counts from just now.');
+  });
+
   it('uses an absolute date and time past 24 hours, and accepts epoch ms', () => {
     render(Date.parse('2026-09-29T08:00:00Z'));
     const text = note()?.textContent ?? '';

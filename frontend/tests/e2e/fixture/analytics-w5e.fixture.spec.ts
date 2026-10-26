@@ -196,6 +196,8 @@ test.describe('fetch age, Refresh and the stale note (states-09)', () => {
     mockApi.degrade('/api/analytics/executive', { status: 500, method: 'GET', body: { detail: 'fixture: executive refresh failed' } });
     await hero(page).getByRole('button', { name: 'Refresh executive analytics' }).click();
     await expect(page.locator('#main-content [data-testid="stale-data-note"]')).toHaveCount(1);
+    // The last good read is the page's own load, under a minute old (W5e: "last read now.").
+    await expect(page.locator('#main-content [data-testid="stale-data-note"]')).toContainText('Showing counts last read just now.');
     await expect(page.locator('#main-content .funnel-sankey')).toBeVisible();
     await expect(page.locator('#main-content')).not.toContainText('fixture: executive refresh failed');
   });

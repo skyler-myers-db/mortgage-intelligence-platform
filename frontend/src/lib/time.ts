@@ -221,6 +221,12 @@ export interface RelativeOptions {
   locale?: string;
   /** `'narrow'` reads "2d ago" (the prototype's `.trig__when`); default `'long'`. */
   style?: RelativeStyle;
+  /**
+   * The label for the zero bucket (under 45 seconds) in place of Intl's
+   * "now": a sentence such as the stale note's "last read just now" needs
+   * the adverb, while a label ("Fetched now") keeps Intl's word.
+   */
+  nowLabel?: string;
 }
 
 /**
@@ -237,7 +243,7 @@ export function formatRelative(value: TimestampInput, opts: RelativeOptions = {}
   const diff = parsed.getTime() - nowMs(opts.now);
   const abs = Math.abs(diff);
   const rtf = relativeTimeFormat(locale, style);
-  if (abs < 45_000) return rtf.format(0, 'second');
+  if (abs < 45_000) return opts.nowLabel ?? rtf.format(0, 'second');
   if (abs < 45 * MINUTE_MS) return rtf.format(Math.round(diff / MINUTE_MS), 'minute');
   if (abs < 22 * HOUR_MS) return rtf.format(Math.round(diff / HOUR_MS), 'hour');
   if (abs < 26 * DAY_MS) return rtf.format(Math.round(diff / DAY_MS), 'day');

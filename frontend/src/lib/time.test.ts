@@ -194,6 +194,15 @@ describe('formatRelative', () => {
     expect(formatRelative(undefined, { now: NOW })).toBe(DATE_UNKNOWN);
   });
 
+  it('takes a sentence label for the "now" bucket only', () => {
+    // The stale note's "last read just now" (W5e: it read "last read now.").
+    const justNow = { now: NOW, nowLabel: 'just now' } as const;
+    expect(formatRelative(ago(20_000), justNow)).toBe('just now');
+    expect(formatRelative(NOW, justNow)).toBe('just now');
+    expect(formatRelative(ago(12 * MIN), justNow)).toBe('12 minutes ago');
+    expect(formatRelative(ago(20_000), { now: NOW })).toBe('now');
+  });
+
   it('builds each Intl formatter once, not once per call', () => {
     formatRelative(SNAPSHOT, { now: NOW, style: 'short' });
     formatTimestamp(SNAPSHOT, { timeZone: 'Asia/Tokyo' });
