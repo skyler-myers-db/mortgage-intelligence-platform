@@ -180,6 +180,20 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     )
 
 
+def test_the_gateway_serving_env_pins_are_the_requirements_in_pins() -> None:
+    """GATEWAY_MODEL_REQUIREMENTS is the registered gateway model's serving
+    environment. Its mlflow, databricks-sdk and cryptography pins travel with
+    the App's, so a security bump in requirements.in cannot leave the served
+    model on the vulnerable release (mlflow 3.16.0 -> 3.17.2 on 2026-10-26)."""
+    from backend.agents.gateway_contract import GATEWAY_MODEL_REQUIREMENTS
+
+    requirement_lines = set((ROOT / "requirements.in").read_text(encoding="utf-8").splitlines())
+
+    assert {pin.split("==")[0] for pin in GATEWAY_MODEL_REQUIREMENTS} == {"mlflow", "databricks-sdk", "cryptography"}
+    for pin in GATEWAY_MODEL_REQUIREMENTS:
+        assert pin in requirement_lines, f"gateway serving env pins {pin}, requirements.in does not"
+
+
 def _npm_audit_gate_levels(text: str) -> set[str]:
     """Every `--audit-level` the text runs as a gate.
 
