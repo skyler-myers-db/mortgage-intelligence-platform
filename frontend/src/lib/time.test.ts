@@ -83,6 +83,13 @@ describe('formatTimestamp', () => {
     expect(formatTimestamp(null, UTC)).toBe(TIMESTAMP_UNAVAILABLE);
     expect(formatTimestamp('nonsense', UTC)).toBe(TIMESTAMP_UNAVAILABLE);
   });
+
+  it('renders a calendar date as its date, never UTC midnight in the viewer zone', () => {
+    // W5e: the Analytics Executive drawer's date-only as-of read
+    // "Jul 13, 8:00 PM EDT" for a Jul 14 snapshot.
+    expect(formatTimestamp('2026-07-14', { timeZone: 'America/New_York' })).toBe('Jul 14, 2026');
+    expect(formatTimestamp('2026-07-14', { ...UTC, withYear: false })).toBe('Jul 14');
+  });
 });
 
 describe('formatTimeOfDay', () => {
@@ -138,6 +145,15 @@ describe('formatDateTimeShort', () => {
 
   it('includes the year for a stale instant', () => {
     expect(formatDateTimeShort('2025-06-01T12:00:00Z', { now: NOW, timeZone: 'UTC' })).toBe('Jun 1, 2025, 12:00 PM UTC');
+  });
+
+  it('renders a calendar date as the date alone, in any viewer zone', () => {
+    // A gold snapshot_date has no clock: the dense form must not invent one
+    // (or move it to the day before west of UTC).
+    for (const timeZone of ['America/New_York', 'America/Los_Angeles', 'UTC', 'Asia/Tokyo']) {
+      expect(formatDateTimeShort('2026-07-14', { now: NOW, timeZone })).toBe('Jul 14');
+    }
+    expect(formatDateTimeShort('2025-06-01', { now: NOW, timeZone: 'America/New_York' })).toBe('Jun 1, 2025');
   });
 
   it('renders the unknown glyph, not the raw wire text, for a bad value', () => {

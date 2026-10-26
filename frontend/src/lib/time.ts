@@ -20,6 +20,7 @@
  *                                                 ("2026-07-14") is never shifted
  *   formatDateTimeShort  "Jul 14, 8:00 AM EDT"    dense cells; zone always attached
  *   formatTimestamp      "Jul 14, 2026, 8:00 AM EDT"
+ *                        (both render a calendar date as its date: no clock)
  *   formatRelative       "3 hours ago" / "yesterday" / "5 months ago"
  *   formatUtcTitle       "Jul 14, 2026, 12:00 PM UTC"  the absolute tooltip
  * The short forms include the year once the instant is more than 11 months
@@ -100,11 +101,24 @@ export const TIMESTAMP_UNAVAILABLE = 'timestamp unavailable';
 /** What the short forms render for a missing or unparseable value. */
 export const DATE_UNKNOWN = '—';
 
-/** "Jun 11, 2026, 3:32 AM UTC" — date + time + explicit short zone name. */
+/**
+ * "Jun 11, 2026, 3:32 AM UTC" — date + time + explicit short zone name.
+ *
+ * A calendar date ("2026-07-14", a gold `snapshot_date`) has no clock to
+ * show, so it renders as `formatDate` does ("Jul 14, 2026"). Read as an
+ * instant it was UTC midnight, which a New York viewer saw as
+ * "Jul 13, 8:00 PM EDT": the day before, at a time nothing recorded (the
+ * Analytics Executive drawer's as-of, W5e). `formatDateTimeShort` and
+ * `<Timestamp format="datetime">` go through here, so neither can invent one.
+ */
 export function formatTimestamp(
   value: TimestampInput,
   opts: FormatTimestampOptions = {},
 ): string {
+  if (calendarDate(value)) {
+    const { locale, withYear = true, now } = opts;
+    return formatDate(value, { locale, withYear, now });
+  }
   const parsed = parseBackendTimestamp(value);
   if (!parsed) return TIMESTAMP_UNAVAILABLE;
   const { timeZone, locale = DEFAULT_LOCALE, withSeconds = false, withYear = true, now } = opts;

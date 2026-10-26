@@ -22,7 +22,7 @@ import {
  * form:
  *   format="relative" (default)  "3 hours ago" · narrow "2d ago"
  *   format="date"                "Jul 14"  (year past 11 months)
- *   format="datetime"            "Jul 14, 8:00 AM EDT"
+ *   format="datetime"            "Jul 14, 8:00 AM EDT"  (a calendar date: "Jul 14")
  * A missing or unparseable value renders the fallback as plain text, never a
  * `<time>` claiming an instant it does not have.
  *

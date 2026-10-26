@@ -107,6 +107,7 @@ export interface DrawerSource {
   value?: string;
   definition?: string;
   predicates?: readonly string[];
+  /** A refresh instant (Home's data_refreshed_at), or a calendar date (a gold snapshot_date), shown as a date alone. */
   asOf?: string | null;
   /**
    * The registry entry this source came from (lib/drawerSourceRegistry),

@@ -17,7 +17,7 @@
  *  - the hero keeps its height across the first load, placeholder data and
  *    the loaded state;
  *  - an Executive KPI drawer leads with "How we got {value}" and one GET
- *    /api/kpi-proof (flow-06).
+ *    /api/kpi-proof (flow-06), its as-of the snapshot's calendar date.
  */
 import type { Page } from '@playwright/test';
 import { expectAxeClean } from './axe';
@@ -269,6 +269,11 @@ test.describe('Executive KPI evidence (flow-06)', () => {
       const how = drawer.locator('[data-testid="evidence-how-we-got"]');
       await expect(how.getByRole('heading', { level: 3 })).toHaveText(/^How we got [\d,]+$/);
       await expect(how).toContainText('Every borrower in the addressable book');
+      // The as-of is the card's own snapshot date: a calendar date gains no
+      // clock (W5e: it read "Jul 13, 8:00 PM EDT" under "Snapshot Jul 14").
+      await expect(page.locator('#main-content .kpi-row .kpi').first()).toContainText('Snapshot Jul 14');
+      await expect(how.locator('.evidence-proof__asof')).toHaveText('Data as of Jul 14');
+      await expect(how.locator('.evidence-proof__asof time')).toHaveAttribute('datetime', '2026-07-14');
       await drawer.getByRole('tab', { name: 'Under the hood' }).click();
       await expect(drawer.locator('[data-testid="evidence-kpi-proof"] .proof-sql-card__sql')).toContainText('borrower_lifecycle_state');
       await app.settle();

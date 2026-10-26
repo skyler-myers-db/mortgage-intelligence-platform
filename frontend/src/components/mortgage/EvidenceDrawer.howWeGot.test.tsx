@@ -130,6 +130,17 @@ describe('EvidenceDrawer How we got and Under the hood', () => {
     expect(apiMocks.kpiProof).toHaveBeenCalledWith('home.in_the_money', expect.anything());
   });
 
+  it('states a date-only as-of as its date, never a clock the snapshot does not carry', async () => {
+    // W5e: the Analytics Executive cards pass the gold snapshot_date
+    // ("2026-07-14"); read as an instant it printed "Jul 13, 8:00 PM EDT"
+    // under a "Snapshot Jul 14" card.
+    await render({ ...ITM_KPI, asOf: '2026-07-14', proofKey: 'analytics.in_the_money' });
+
+    const asOf = howWeGot()?.querySelector('.evidence-proof__asof');
+    expect(asOf?.textContent).toBe('Data as of Jul 14');
+    expect(asOf?.querySelector('time')?.getAttribute('datetime')).toBe('2026-07-14');
+  });
+
   it('renders no How-we-got block and asks no proof for a source without a value', async () => {
     await render(DRAWER_SOURCES.itm);
 
