@@ -712,6 +712,41 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     expect(setApproval).not.toHaveBeenCalled();
   });
 
+  // A 2xx that recorded nothing (approved / rejected false) reads the bulk
+  // "not recorded" copy in the single-row toast, never the wire field
+  // (states-04; leadDecisionWrites' approve branch, the hook's reject branch).
+  it('a 2xx approve that recorded nothing toasts "not recorded; retry it", never the wire field, and decides nothing', async () => {
+    apiMocks.approve.mockResolvedValueOnce({ approved: false });
+    mount();
+    let outcome: string | undefined;
+    await act(async () => {
+      outcome = await actions!.approveLead(BORROWER, undefined, {}, draft('gen-unrecorded'));
+    });
+    await flush();
+    expect(outcome).toBe('backend');
+    expect(getToasts().map((toast) => [toast.tone, toast.title, toast.detail])).toEqual([
+      ['error', `Couldn't approve ${BORROWER}`, 'not recorded; retry it'],
+    ]);
+    expect(JSON.stringify(getToasts())).not.toMatch(/approved=false|endpoint/i);
+    expect(setApproval).not.toHaveBeenCalled();
+  });
+
+  it('a 2xx reject that recorded nothing toasts "not recorded; retry it", never the wire field, and decides nothing', async () => {
+    apiMocks.reject.mockResolvedValueOnce({ rejected: false });
+    mount();
+    let rejected: boolean | undefined;
+    await act(async () => {
+      rejected = await actions!.rejectLead(BORROWER, 'low_intent', 'No intent');
+    });
+    await flush();
+    expect(rejected).toBe(false);
+    expect(getToasts().map((toast) => [toast.tone, toast.title, toast.detail])).toEqual([
+      ['error', `Couldn't reject ${BORROWER}`, 'not recorded; retry it'],
+    ]);
+    expect(JSON.stringify(getToasts())).not.toMatch(/rejected=false|endpoint/i);
+    expect(setApproval).not.toHaveBeenCalled();
+  });
+
   it('sends one reject POST for a double submit and replays its request_id after a failure', async () => {
     let releaseReject: (value: unknown) => void = () => undefined;
     apiMocks.reject
