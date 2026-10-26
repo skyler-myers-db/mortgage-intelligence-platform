@@ -20,6 +20,8 @@ always applied to the rate-spread histogram and the equity x spread scatter
 """
 from __future__ import annotations
 
+from backend.services.segment_labels import labels_for
+
 EQUITY_BIN_PCT: int = 5
 SPREAD_BIN_BPS: int = 25
 
@@ -39,14 +41,7 @@ EQUITY_SPREAD_SOURCE_TABLE: str = "mip.gold.equity_spread_points"
 
 # Display labels for the dot's primary segment code. Mirrors the label CASE
 # used across the analytics SQL surfaces (segment overview / by-state).
-SEGMENT_DISPLAY_LABELS: dict[str, str] = {
-    "itm": "Prime Refi Candidates",
-    "equity": "Home Equity Candidate",
-    "investor": "Investor / Multi-Property",
-    "listed": "Listed for Sale",
-    "permit": "HELOC Intent",
-    "retention": "Retention Risk",
-}
+SEGMENT_DISPLAY_LABELS: dict[str, str] = labels_for(("itm", "equity", "investor", "listed", "permit", "retention"))
 UNSEGMENTED_LABEL: str = "None / Unsegmented"
 
 

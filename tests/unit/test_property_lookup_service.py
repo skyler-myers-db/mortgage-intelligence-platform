@@ -72,7 +72,7 @@ def test_lookup_hit_masks_and_links_and_audits() -> None:
     result = lookup_property_loan(
         sql,
         audit,
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
         address_line=_RAW_ADDRESS,
         zip5=_ZIP,
     )
@@ -119,7 +119,7 @@ def test_lookup_miss_returns_unmatched_and_audits() -> None:
     result = lookup_property_loan(
         sql,
         audit,
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
         address_line=_RAW_ADDRESS,
         zip5=_ZIP,
     )
@@ -151,7 +151,7 @@ def test_audit_never_contains_raw_address_and_hash_is_truncated() -> None:
     lookup_property_loan(
         sql,
         audit,
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
         address_line=_RAW_ADDRESS,
         zip5=_ZIP,
     )
@@ -185,7 +185,7 @@ def test_lookup_hit_without_borrower_link_still_returns_loan() -> None:
     result = lookup_property_loan(
         sql,
         audit,
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
         address_line=_RAW_ADDRESS,
         zip5=_ZIP,
     )
@@ -214,7 +214,7 @@ def test_miss_entity_id_uses_hmac_token_not_plain_hash() -> None:
     lookup_property_loan(
         sql,
         audit,
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
         address_line=_RAW_ADDRESS,
         zip5=_ZIP,
     )
@@ -238,7 +238,7 @@ def test_unicode_zip_digits_normalize_identically_for_hash_and_audit() -> None:
     lookup_property_loan(
         sql,
         audit,
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
         address_line=_RAW_ADDRESS,
         zip5="\uff17\uff15\uff10\uff14\uff13",  # fullwidth 75043
     )

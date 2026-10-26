@@ -15,8 +15,6 @@ import { act, type ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 // Every api.* call is recorded: the banner, its Approve and its Reject make none.
 const apiCalls = vi.hoisted(() => [] as string[]);
 vi.mock('../../lib/api', async (importOriginal) => ({

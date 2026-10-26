@@ -48,7 +48,7 @@ export interface EquitySpreadOverview {
 }
 
 /**
- * The refi screen this refresh applied (backend AnalyticsThresholds,
+ * The In the Money rule this refresh applied (backend AnalyticsThresholds,
  * dataviz-06): the values every scored row agrees on, else null with the
  * reason. The spread histogram's rule and the scatter guides draw from here,
  * never from a frontend constant.

@@ -17,6 +17,7 @@ import {
   formatUsd,
   formatUsdCompact,
   ltvPct,
+  MINUS_SIGN,
   pct,
   rangeLabel,
   ratePct,
@@ -27,11 +28,47 @@ import {
   signedPct,
 } from './formatters';
 
+// responsive-04: every signed formatter prints U+2212 for a negative value.
+// The char-code checks are the proof (U+2212 and U+002D look alike in source).
+describe('typographic minus (U+2212)', () => {
+  it('exports the minus sign as U+2212', () => {
+    expect(MINUS_SIGN).toHaveLength(1);
+    expect(MINUS_SIGN.charCodeAt(0)).toBe(0x2212);
+  });
+
+  it.each([
+    ['signedBps', () => signedBps(-422)],
+    ['signedBpsLabel', () => signedBpsLabel(-422)],
+    ['signedPct', () => signedPct(-1.5)],
+    ['signedCount', () => signedCount(-1234)],
+  ])('%s leads a negative value with U+2212 and prints no hyphen-minus', (_name, render) => {
+    const out = render();
+    expect(out.charCodeAt(0)).toBe(0x2212);
+    expect(out).not.toContain('-');
+  });
+
+  it.each([
+    ['signedBps', () => signedBps(-0.4), '0'],
+    ['signedCount', () => signedCount(-0.4), '0'],
+    ['signedPct', () => signedPct(-0.04), '0.0%'],
+  ])('%s still prints an unsigned zero for a value that rounds to zero', (_name, render, zero) => {
+    expect(render()).toBe(zero);
+    expect(render()).not.toContain(MINUS_SIGN);
+  });
+
+  it('leaves positive values and the unsigned formatters unchanged', () => {
+    expect(signedBps(180)).toBe('+180');
+    expect(signedCount(1234)).toBe('+1,234');
+    // Unsigned currency keeps Intl's own sign before the symbol.
+    expect(formatUsd(-1_250).charCodeAt(0)).toBe(45);
+  });
+});
+
 describe('signedBps', () => {
   it('prefixes a positive spread and never double-signs a negative one', () => {
     expect(signedBps(180)).toBe('+180');
     // The C1 defect: `+{value}` on a signed field rendered "+-422".
-    expect(signedBps(-422)).toBe('-422');
+    expect(signedBps(-422)).toBe('−422');
   });
 
   it('renders an at-market spread without a sign', () => {
@@ -42,7 +79,7 @@ describe('signedBps', () => {
 
   it('rounds to whole basis points', () => {
     expect(signedBps(167.4)).toBe('+167');
-    expect(signedBps(-167.6)).toBe('-168');
+    expect(signedBps(-167.6)).toBe('−168');
   });
 
   it('renders an em dash for a non-finite value rather than NaN', () => {
@@ -52,10 +89,10 @@ describe('signedBps', () => {
 });
 
 describe('signedCount', () => {
-  it('signs a change in a population with grouping and an ASCII minus', () => {
+  it('signs a change in a population with grouping and the typographic minus', () => {
     expect(signedCount(1234)).toBe('+1,234');
-    expect(signedCount(-1234)).toBe('-1,234');
-    expect(signedCount(-1234).charCodeAt(0)).toBe(45);
+    expect(signedCount(-1234)).toBe('−1,234');
+    expect(signedCount(-1234).charCodeAt(0)).toBe(0x2212);
   });
 
   it('prints zero, and anything that rounds to zero, without a sign', () => {
@@ -66,7 +103,7 @@ describe('signedCount', () => {
 
   it('rounds half up to a whole count', () => {
     expect(signedCount(2.5)).toBe('+3');
-    expect(signedCount(-2.6)).toBe('-3');
+    expect(signedCount(-2.6)).toBe('−3');
   });
 
   it('renders the unknown glyph for a missing or non-finite value', () => {
@@ -79,7 +116,7 @@ describe('signedCount', () => {
 describe('signedBpsLabel', () => {
   it('carries the unit on every branch', () => {
     expect(signedBpsLabel(180)).toBe('+180 bps');
-    expect(signedBpsLabel(-422)).toBe('-422 bps');
+    expect(signedBpsLabel(-422)).toBe('−422 bps');
     expect(signedBpsLabel(0)).toBe('0 bps');
   });
 
@@ -355,7 +392,7 @@ describe('percent formatters', () => {
 
   it('signs a KPI delta through Intl signDisplay, never "-0.0%"', () => {
     expect(signedPct(3.24)).toBe('+3.2%');
-    expect(signedPct(-1.5)).toBe('-1.5%');
+    expect(signedPct(-1.5)).toBe('−1.5%');
     expect(signedPct(0)).toBe('0.0%');
     // The hand-rolled `${sign}${pct.toFixed(1)}%` printed "-0.0%" here.
     expect(signedPct(-0.04)).toBe('0.0%');
@@ -366,7 +403,7 @@ describe('percent formatters', () => {
 describe('basis points', () => {
   it('signs the value through Intl signDisplay and groups it', () => {
     expect(signedBps(1_250)).toBe('+1,250');
-    expect(signedBps(-1_250)).toBe('-1,250');
+    expect(signedBps(-1_250)).toBe('−1,250');
     expect(signedBpsLabel(167.4)).toBe('+167 bps');
   });
 

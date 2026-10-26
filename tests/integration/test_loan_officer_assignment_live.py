@@ -30,6 +30,7 @@ from backend.services.lakebase import (
     get_lakebase_client,
 )
 from backend.services.loan_officer_state import LoanOfficerStateStore
+from tests.integration._live_actor import resolve_live_admin_actor
 
 _HAS_STATIC_CREDS = all(
     os.environ.get(k)
@@ -49,7 +50,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 _SEEDED_LO_01 = "55555555-5555-4555-8555-555555555501"
-_ADMIN_ACTOR = "skyler@entrada.ai"
 
 
 def _client_from_env() -> LakebaseClient:
@@ -83,6 +83,8 @@ def test_loan_officer_assignment_audit_round_trip() -> None:
     # Idempotency proof: two consecutive applies must both succeed.
     _apply_schema_and_seed(client)
     _apply_schema_and_seed(client)
+    # NB-a / C8: act as the target roster's admin, never a literal.
+    admin_actor = resolve_live_admin_actor(client)
 
     store = LoanOfficerStateStore(client)
     officers = store.list_officers()
@@ -99,7 +101,7 @@ def test_loan_officer_assignment_audit_round_trip() -> None:
         assignment, assign_audit_id = store.assign_lead(
             borrower_id=borrower_id,
             loan_officer_id=_SEEDED_LO_01,
-            assigned_by=_ADMIN_ACTOR,
+            assigned_by=admin_actor,
             request_id=request_id,
         )
         assert assignment.status == "assigned"
@@ -117,7 +119,7 @@ def test_loan_officer_assignment_audit_round_trip() -> None:
         advanced, status_audit_id = store.transition_status(
             assignment_id=assignment.assignment_id,
             to_status="contact_drafted",
-            actor=_ADMIN_ACTOR,
+            actor=admin_actor,
         )
         assert advanced.status == "contact_drafted"
         assert status_audit_id

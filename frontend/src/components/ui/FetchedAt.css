@@ -4,6 +4,7 @@
  * freshness control); colocated, never in the initial stylesheet.
  * deviation:home-fetched-at
  */
+@layer routes {
 .fetched-at {
   display: inline-flex;
   align-items: center;
@@ -19,4 +20,5 @@
   color: var(--accent-ink);
   font-size: var(--fs-11);
   font-weight: 600;
+}
 }

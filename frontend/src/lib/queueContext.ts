@@ -39,8 +39,12 @@ export const QUEUE_MASKED_ID_RE = /^B-[0-9A-Z]{13}$/;
  */
 
 export const QUEUE_CONTEXT_STORAGE_KEY = 'mip.queueContext';
-/** More than the queue ever loads at once; bounds what history state carries. */
-export const MAX_QUEUE_CONTEXT_IDS = 1000;
+/**
+ * Everything the paged Lead Queue can load (tables-02 residual: ten 500-row
+ * pages, LEAD_MAX_PAGES), so the pager never stops short of a loaded row;
+ * still a bound on what history state carries (about 80 KB of masked ids).
+ */
+export const MAX_QUEUE_CONTEXT_IDS = 5000;
 const MAX_LABEL_CHARS = 160;
 const MAX_SEARCH_CHARS = 4000;
 
@@ -131,12 +135,6 @@ export function storeQueueContext(next: QueueContext): void {
 /** The live context of this tab (the storage epoch writers keep). */
 export function currentQueueContext(): QueueContext | null {
   return current();
-}
-
-/** Forget the in-memory copy until the next publish (tests). */
-export function clearQueueContext(): void {
-  snapshot = null;
-  emit();
 }
 
 /** The context a history entry carries, if its epoch is still the live one. */

@@ -13,7 +13,6 @@ import { MASKED_BORROWER_ID_RE } from './routeMeta';
 import {
   QUEUE_CONTEXT_STORAGE_KEY,
   QUEUE_MASKED_ID_RE,
-  clearQueueContext,
   queueCrumbLabel,
   queueHref,
   resolveQueueContext,
@@ -26,12 +25,21 @@ const IDS = ['B-0000000000001', 'B-0000000000002', 'B-0000000000003'];
 describe('queue context', () => {
   beforeEach(() => {
     window.sessionStorage.clear();
-    clearQueueContext();
   });
 
   it('filters on the canonical masked-id shape (kept local to stay out of a chunk split)', () => {
     expect(QUEUE_MASKED_ID_RE.source).toBe(MASKED_BORROWER_ID_RE.source);
     expect(QUEUE_MASKED_ID_RE.flags).toBe(MASKED_BORROWER_ID_RE.flags);
+  });
+
+  it('carries every row the paged queue can load: ten 500-row pages (tables-02), and no more', () => {
+    const loaded = Array.from({ length: 5001 }, (_, index) => `B-${String(index + 1).padStart(13, '0')}`);
+    const context = publishQueueContext({ search: '?state=IL', label: 'IL', ids: loaded });
+    expect(context?.ids).toHaveLength(5000);
+    expect(context?.ids[4999]).toBe(loaded[4999]);
+    // Row 4,000 (page 8) still pages from its dossier; row 5,001 is past the cap.
+    expect(resolveQueueContext({ queue: context! }, loaded[3999])?.search).toBe('?state=IL');
+    expect(resolveQueueContext({ queue: context! }, loaded[5000])).toBeNull();
   });
 
   it('keeps only masked borrower ids, in rank order', () => {

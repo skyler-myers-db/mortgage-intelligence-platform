@@ -24,6 +24,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tooltipText } from '../../test/tooltipText';
 import type { GenieLiveProgress, GenieSubmitResult } from '../../lib/api';
 import { clearGenieConversationState } from '../../lib/genieConversation';
 import { clearGenieTurns, getGenieTurns } from '../../lib/genieConversationStore';
@@ -77,8 +78,6 @@ vi.mock('../AppContext', () => ({
 }));
 
 import { GenieChat } from './GenieChat';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const START: GenieStartResult = {
   conversation_id: null,
@@ -376,7 +375,7 @@ describe('floating Genie conversational controls', () => {
       '.genie__msg--ai button[aria-label="Regenerate answer"]',
     );
     expect(regenerate).not.toBeNull();
-    expect(regenerate!.title).toContain('cannot rewrite its history');
+    expect(tooltipText(regenerate)).toContain('cannot rewrite its history');
     armInlineAnswer(answer({ answer: 'Second answer: 101 borrowers.' }));
     await click(regenerate!);
     await waitUntil(() => container.textContent?.includes('Second answer') ?? false);

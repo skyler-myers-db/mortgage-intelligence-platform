@@ -12,9 +12,10 @@
  * the lazy control chunk (best effort: a failed warm is swallowed); no API
  * call is made until it is picked.
  */
-import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
+import { Tooltip } from '../ui/Tooltip';
 import { genieStatePrompt } from '../../lib/genieContext';
 import { GenieAskAbout } from './GenieAskAbout';
 import { claimDrillFocus, drillExitOriginatedInMap } from './USChoroplethMap.a11y';
@@ -95,7 +96,6 @@ export function USChoroplethMapHeader({
   // disables itself must not send focus, and the scroll, down to the map.
   // Focus the user still holds elsewhere is never taken (claimDrillFocus).
   const usCrumbRef = useRef<HTMLButtonElement | null>(null);
-  const rateReasonId = useId();
   // A speculative warm: a failed fetch is swallowed here (the pick itself
   // shows the lever's "could not load" line), never an unhandled rejection.
   const warmRateControl = () => {
@@ -175,15 +175,13 @@ export function USChoroplethMapHeader({
         <div className="map-overlay-toggle" role="group" aria-label="Map coloring">
           {COLOR_MODES.map(([value, label]) => {
             const blocked = value === 'rate' && !rateAvailable;
-            return (
+            const button = (
               <button
                 key={value}
                 type="button"
                 className={`filter filter--compact ${mode === value ? 'is-active' : ''}`}
                 aria-pressed={mode === value}
                 aria-disabled={blocked || undefined}
-                aria-describedby={blocked ? rateReasonId : undefined}
-                title={blocked ? RATE_UNAVAILABLE_REASON : undefined}
                 onClick={() => {
                   if (!blocked) setMode(value);
                 }}
@@ -193,12 +191,17 @@ export function USChoroplethMapHeader({
                 <span className="filter__value">{label}</span>
               </button>
             );
+            // The reason (R5): the Tooltip's hidden description is the
+            // aria-describedby the sr-only span used to carry, and the popup
+            // shows it on hover and keyboard focus (the button stays focusable).
+            return blocked ? (
+              <Tooltip key={value} content={RATE_UNAVAILABLE_REASON}>
+                {button}
+              </Tooltip>
+            ) : (
+              button
+            );
           })}
-          {!rateAvailable && (
-            <span id={rateReasonId} className="sr-only">
-              {RATE_UNAVAILABLE_REASON}
-            </span>
-          )}
         </div>
         {zoomControls}
         {/* The label names the view it switches to (the rate-window pattern:

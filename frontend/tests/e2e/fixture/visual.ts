@@ -8,7 +8,8 @@
  *    starts and names tools/update_visual_baselines.sh.
  *  - capture: the capture discipline (pointer parked off every hover target,
  *    focus blurred unless the state under test names the open popover whose
- *    focus it is, a soft toHaveScreenshot so one test reports every diff).
+ *    focus it is, content a state scrolls in asserted on screen, a soft
+ *    toHaveScreenshot so one test reports every diff).
  *  - expectNoSurfaceOverflow: no `.surface` may scroll sideways; what did on
  *    the base branch sits in the dated KNOWN_SURFACE_OVERFLOW ratchet.
  *  - the audited-read guard: no state a spec enters after a route's natural
@@ -81,10 +82,12 @@ const INTERACTIVE = `${HOVER_TARGETS}, input, select, textarea, label, summary, 
 export interface ParkOptions {
   /**
    * The open popover the state under test opened and whose roving focus IS
-   * that state: the account menu (block R) closes when focus leaves it
-   * (IdentityMenu's onBlur), so a blur would capture the plain route. Focus is
-   * kept only when it is inside this element, and the park fails when it is
-   * not, so no other focus ring survives by accident. Every other park blurs.
+   * that state (HeldFocus.scope): the account menu (block R) closes when focus
+   * leaves it (IdentityMenu's onBlur), so a blur would capture the plain
+   * route; so do the HIDE listbox (block W) and the scatter cell's tip (block
+   * U). Focus is kept only when it is inside this element, and the park fails
+   * when it is not, so no other focus ring survives by accident. Every other
+   * park blurs.
    */
   keepFocusWithin?: Locator;
 }
@@ -141,6 +144,18 @@ export async function parkPointerAndBlur(page: Page, options: ParkOptions = {}):
   expect(hovered, 'a capture must not show a hovered control').toEqual([]);
 }
 
+/**
+ * A state whose open popover holds the focus that IS the state, so its capture
+ * keeps focus instead of blurring (fixtureStates.ts HELD_FOCUS_STATES,
+ * analyticsW5eStates.ts ANALYTICS_W5E_HELD_FOCUS).
+ */
+export interface HeldFocus {
+  /** ParkOptions.keepFocusWithin: contains the focused element and is not it. */
+  scope: Locator;
+  /** What that focus keeps open (the scope itself when it is the popover). */
+  popover: Locator;
+}
+
 export interface CaptureOptions {
   /** Capture one element instead of the viewport. */
   element?: Locator;
@@ -151,21 +166,49 @@ export interface CaptureOptions {
    */
   mask?: Locator[];
   /**
-   * The open popover whose focus is the state under test (ParkOptions): kept
-   * focused, and asserted visible right before the screenshot.
+   * The open popover whose focus is the state under test: focus is kept
+   * within its scope (ParkOptions), the popover is asserted visible right
+   * before the screenshot, and still open, focus inside the scope, after it.
+   * Without it the park blurs, as every other capture does.
    */
-  keepFocusWithin?: Locator;
+  held?: HeldFocus;
+  /**
+   * The state's own content that opens past the first screen until the state
+   * scrolls it in (more-like-this's count, note and links): each must lie
+   * wholly inside the viewport right before the screenshot.
+   */
+  inViewport?: readonly Locator[];
+}
+
+/**
+ * Everything capture() does before its screenshot: the park (blurring unless
+ * `held` keeps focus), then the held popover and the framed content asserted.
+ * safety-net.fixture.spec.ts (f) runs it off the pinned host, so the framing
+ * of a capture is proven where the VRT cannot run.
+ */
+export async function prepareCapture(page: Page, options: Pick<CaptureOptions, 'held' | 'inViewport'> = {}): Promise<void> {
+  await parkPointerAndBlur(page, { keepFocusWithin: options.held?.scope });
+  if (options.held) {
+    await expect(options.held.popover, 'the popover under test is open at capture time').toBeVisible();
+  }
+  for (const content of options.inViewport ?? []) {
+    await expect(content, "the state's own content is on screen at capture time").toBeInViewport({ ratio: 1 });
+  }
+}
+
+/** After the screenshot: the held popover survived it, focus still inside its scope. */
+export async function expectHeldAfterCapture(held: HeldFocus): Promise<void> {
+  await expect(held.popover, 'the popover under test survives the capture').toBeVisible();
+  await expect(held.scope.locator(':focus'), 'focus is still inside the popover scope').toHaveCount(1);
 }
 
 /** Soft screenshot assertion after the capture discipline, so one test reports every diff. */
 export async function capture(page: Page, name: string, options: CaptureOptions = {}): Promise<void> {
-  await parkPointerAndBlur(page, { keepFocusWithin: options.keepFocusWithin });
-  if (options.keepFocusWithin) {
-    await expect(options.keepFocusWithin, 'the popover under test is open at capture time').toBeVisible();
-  }
+  await prepareCapture(page, options);
   const screenshot = options.mask ? { mask: options.mask } : {};
   if (options.element) await expect.soft(options.element).toHaveScreenshot(name, screenshot);
   else await expect.soft(page).toHaveScreenshot(name, screenshot);
+  if (options.held) await expectHeldAfterCapture(options.held);
 }
 
 /** Scroll `.main` (the app's scroll container) down by one viewport of itself and let two frames paint. */

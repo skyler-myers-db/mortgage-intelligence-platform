@@ -6,6 +6,7 @@
    with the analytics chart chrome (.analytics-chart__*) and tokens.
    Two stacked panels share one x-axis; never a dual axis.
    ============================================================ */
+@layer routes {
 /* The spread-screen ink (line, label, legend swatch). --status-warning-ink
    (a pale amber) is defined once, for the dark surfaces, and measured 1.44:1 as
    label text and as the line on the light theme's white panel (WCAG 1.4.3
@@ -14,22 +15,21 @@
    (02-chips-kpi-segments.css), which would read as the market line
    (--accent) or the median (--text-3). At 45% it measures 6.79:1 on white
    and 5.19:1 over the book band the label can sit on.
-   The data ink (market line, in-the-money line, current print) is the
-   shared --accent-data (tokens.css, wave 4), the AA-tuned accent ink in
-   every theme x accent pair. The band fill follows the accent: the default
-   `bright` accent overrides the light theme's navy --accent with the bright
-   blue (1.91:1 on white, audit visual-08 / dataviz-09), so the light theme
-   gives the book band a fill that reads on white (1.31:1, the dark band's
-   1.35:1) instead of the 1.09:1 --accent-soft. */
+   The data ink (market line, in-the-money line, current print) is
+   --accent-data: fixed per theme and decoupled from [data-accent]
+   (D-dataviz-geo-c1), so a red or teal accent never repaints the data.
+   The book band is data ink too, a 16% wash of --accent-data in both
+   themes (deviation:rate-window-band-ink, W5e w5-analytics item 6); it no
+   longer follows the accent through --accent-soft / --accent-ink. */
 .rate-window {
   --rate-window-screen-ink: var(--status-warning-ink);
   --rate-window-data-ink: var(--accent-data);
-  --rate-window-band-fill: var(--accent-soft);
+  --rate-window-band-fill: color-mix(in oklab, var(--accent-data) 16%, transparent);
 }
 [data-theme="light"] .rate-window {
   --rate-window-screen-ink: color-mix(in oklab, var(--signal-warning) 45%, var(--text-1));
   --rate-window-data-ink: var(--accent-data);
-  --rate-window-band-fill: color-mix(in oklab, var(--accent-ink) 16%, transparent);
+  --rate-window-band-fill: color-mix(in oklab, var(--accent-data) 16%, transparent);
 }
 .rate-window__actions {
   display: flex;
@@ -176,9 +176,6 @@
 .rate-window__swatch--median { background: var(--text-3); }
 .rate-window__swatch--band { block-size: var(--sp-2); background: var(--rate-window-band-fill); }
 .rate-window__swatch--threshold { background: var(--rate-window-screen-ink); }
-.rate-window__asof {
-  margin-top: var(--sp-3);
-}
 /* A narrow plot (phone, Console open on a small laptop) cannot fit six
    month labels or the full reference label: keep the first, central and
    last month, and name the screen by its rate alone (the detail stays in the
@@ -208,3 +205,4 @@
   }
 }
 /* The chart is static: no mark animates, so reduced motion needs no override. */
+}

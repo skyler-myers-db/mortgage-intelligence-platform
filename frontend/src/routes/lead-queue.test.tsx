@@ -15,8 +15,6 @@ import {
 import type { SegmentCode } from '../types';
 import type { LeadExportContext } from '../components/mortgage/LeadTable';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /** A ranked row; the stubbed LeadTable reads only what the route hands it. */
 const ONE_LEAD = { borrower_id: 'B-0123456789ABC' } as never;
 
@@ -101,7 +99,8 @@ vi.mock('../components/mortgage/LeadTable', () => ({
   },
 }));
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   ApiError: class ApiError extends Error {
     path: string;
     status: number | null;
@@ -401,7 +400,7 @@ describe('LeadQueue filter state', () => {
     expect(document.querySelector('button[aria-label="STATE: 2 states selected"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="SEGMENT: 2 segments selected (any selected)"]')).toBeTruthy();
     expect(document.querySelector('[aria-label="Active segment filters"]')?.textContent)
-      .toContain('Prime Refi CandidatesHome Equity Candidate');
+      .toContain('In the MoneyHome Equity Candidate');
     expect(document.querySelector('button[aria-label="RELATIONSHIP: Competitor customer"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="PRODUCT: HELOC"]')).toBeTruthy();
     expect(document.querySelector('button[aria-label="OWNER LINK: Portfolio investor (5+)"]')).toBeTruthy();
@@ -434,7 +433,7 @@ describe('LeadQueue filter state', () => {
     await settle();
 
     expect(document.querySelector('button[aria-label="SEGMENT: 2 segments selected (all selected)"]')).toBeTruthy();
-    expect(document.body.textContent).toContain('Intersection — every borrower is in all selected segments.');
+    expect(document.body.textContent).toContain('Borrowers in every selected segment.');
   });
 
   it('collapses the analytics-drilldown scope strip when no drilldown params are present', async () => {
@@ -547,7 +546,7 @@ describe('LeadQueue filter state', () => {
     expect(chipRow!.querySelectorAll('.chip').length).toBe(2);
     expect(chipRow!.textContent).toContain('Refi Propensity');
     expect(chipRow!.textContent).toContain('Investor / Multi-Property');
-    expect(chipRow!.textContent).toContain('Intersection');
+    expect(chipRow!.textContent).toContain('Borrowers in every selected segment.');
 
     const removeInvestor = document.querySelector(
       'button[aria-label="Remove Investor / Multi-Property segment filter"]',
@@ -563,7 +562,7 @@ describe('LeadQueue filter state', () => {
     expect(document.querySelector('button[aria-label="SEGMENT: Refi Propensity"]')).toBeTruthy();
     const remainingRow = document.querySelector('[aria-label="Active segment filters"]');
     expect(remainingRow!.querySelectorAll('.chip').length).toBe(1);
-    expect(remainingRow!.textContent).not.toContain('Intersection');
+    expect(remainingRow!.textContent).not.toContain('Borrowers in every selected segment.');
     // Unrelated filters survive the chip removal.
     expect(document.querySelector('button[aria-label="STATE: IL"]')).toBeTruthy();
 
@@ -589,7 +588,7 @@ describe('segment chip add/remove state (S8)', () => {
       { code: 'investor', label: 'Investor / Multi-Property' },
     ]);
     expect(segmentFilterChips('itm' as SegmentCode, [])).toEqual([
-      { code: 'itm', label: 'Prime Refi Candidates' },
+      { code: 'itm', label: 'In the Money' },
     ]);
     expect(segmentFilterChips(undefined, [])).toEqual([]);
   });

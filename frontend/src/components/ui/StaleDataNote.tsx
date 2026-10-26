@@ -34,13 +34,20 @@ interface StaleDataNoteProps {
 }
 
 const NEXT_REFRESH = 'update on a later refresh once the warehouse responds.';
+/**
+ * The age under the relative form's "now" bucket (a manual Refresh that
+ * failed right after the page loaded, the usual way Home's and Analytics'
+ * notes appear): the sentence reads "last read just now", never Intl's bare
+ * "last read now". The <time> and its absolute tooltip stay.
+ */
+const JUST_NOW = 'just now';
 
 export function StaleDataNote({ lastGoodAt, compact = false }: StaleDataNoteProps) {
   const now = useMinuteClock();
   if (lastGoodAt === null) return null;
   const at = typeof lastGoodAt === 'number' ? lastGoodAt : Date.parse(lastGoodAt);
   if (!Number.isFinite(at)) return null;
-  const age = <Timestamp value={lastGoodAt} format={now - at > DAY_MS ? 'datetime' : 'relative'} now={now} />;
+  const age = <Timestamp value={lastGoodAt} format={now - at > DAY_MS ? 'datetime' : 'relative'} now={now} nowLabel={JUST_NOW} />;
   if (compact) {
     return (
       <p role="status" className="chip chip--warning stale-note stale-note--compact" data-testid="stale-data-note">

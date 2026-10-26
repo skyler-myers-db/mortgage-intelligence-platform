@@ -34,6 +34,7 @@ import {
   genieSegmentPrompt,
   genieStartersForRoute,
   genieStatePrompt,
+  segmentPhrase,
   stateNameForCode,
 } from './genieContext';
 import templates from './genieContextTemplates.json';
@@ -120,6 +121,7 @@ describe('reviewed vocabulary', () => {
       'Addressable population',
       'Addressable Borrowers',
       'Marketable population',
+      'In the Money',
       'Refi economics screen',
       'Refi Economics',
       'Opportunity score 75+',
@@ -144,6 +146,14 @@ describe('reviewed vocabulary', () => {
     }
     expect(genieSegmentPrompt('made_up')).toBeNull();
     expect(genieSegmentPrompt('')).toBeNull();
+  });
+
+  it('a segment reads as its phrase override, else its lower-cased name (phase-2 parity)', () => {
+    // critic-11: the server renders the same phrase (genie_context_scope.SEGMENT_PHRASES).
+    expect(segmentPhrase('itm')).toBe('in-the-money');
+    expect(segmentPhrase('equity')).toBe('home equity candidate');
+    expect(segmentPhrase('permit_activity')).toBeNull();
+    expect(segmentPhrase('made_up')).toBeNull();
   });
 
   it('a segment the guards refuse outright gets no prompt, alone or on a lead', () => {
@@ -188,7 +198,7 @@ describe('reviewed vocabulary', () => {
     }
     // The first REGISTERED segment names the prompt; unknown codes are skipped.
     expect(genieLeadPrompt({ segmentCodes: ['made_up', 'itm'], stateCode: 'IL' })).toBe(
-      'How many borrowers in Illinois are in the prime refi candidates segment, and what is the average rate spread?',
+      'How many in-the-money borrowers are in Illinois, and what is the average rate spread?',
     );
     // No registered segment: the state template stands in.
     expect(genieLeadPrompt({ segmentCodes: [], stateCode: 'IL' })).toBe(genieStatePrompt('IL'));

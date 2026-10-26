@@ -41,10 +41,8 @@ vi.mock('../../lib/apiClients/assets', () => ({
   assetsApi: { assetFreshness: apiMocks.freshness },
 }));
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const PLAIN: DrawerSource = {
-  title: 'Since your last login — refi candidates',
+  title: 'Since your last login — in-the-money borrowers',
   short: 'portfolio_headline_metric_view.refi_economics_screen',
   assetKey: 'portfolio_headline_metric_view',
   assetPath: 'mip.semantics.portfolio_headline_metric_view',
@@ -96,7 +94,7 @@ describe('EvidenceDrawer Delta Explainer slot', () => {
     });
     apiMocks.attribution.mockResolvedValue({
       data: {
-        measure: 'refi_economics_screen', label: 'refi candidates', population: 'addressable',
+        measure: 'refi_economics_screen', label: 'in-the-money borrowers', population: 'addressable',
         requested_baseline_date: '2026-09-01', baseline_snapshot_date: '2026-09-01', current_snapshot_date: '2026-09-30',
         nearest_snapshot: false, baseline_total: 100, current_total: 120, total_change: 20,
         states: [{ state: 'TX', baseline_count: 40, current_count: 60, change: 20 }], unattributed_change: 0,

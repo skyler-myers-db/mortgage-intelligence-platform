@@ -16,9 +16,7 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
-import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+import { setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 
 const draftOutreach = vi.fn();
 const approve = vi.fn();
@@ -40,7 +38,8 @@ vi.mock('../AppContext', () => ({
   }),
 }));
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: {
     draftOutreach: (...args: unknown[]) => draftOutreach(...args),
     approve: (...args: unknown[]) => approve(...args),
@@ -49,7 +48,6 @@ vi.mock('../../lib/api', () => ({
     auditReceipt: () => new Promise(() => {}),
     salesTeam: () => Promise.resolve({ members: [] }),
   },
-  ApiError: class extends Error {},
   isAbortError: () => false,
   isWarmingUpError: () => false,
 }));
@@ -95,7 +93,6 @@ describe('LeadTable keyboard row cursor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     reject.mockResolvedValue({ rejected: true, audit_event_id: 'audit-reject' });
     container = document.createElement('div');
     document.body.appendChild(container);

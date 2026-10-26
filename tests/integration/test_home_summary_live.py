@@ -124,7 +124,7 @@ def test_two_visits_produce_a_real_last_login_delta() -> None:
     client = _client_from_env()
     _apply_schema(client)
 
-    actor = f"integration-s4+{uuid4().hex[:12]}@entrada.ai"
+    actor = f"integration-s4+{uuid4().hex[:12]}@summit.example"
     first_visit_at = datetime.now(UTC) - timedelta(minutes=30)
     _cleanup(client, actor)
     try:
@@ -178,7 +178,7 @@ def test_two_visits_produce_a_real_last_login_delta() -> None:
         assert [h.display for h in summary.highlights] == ["+1.5%", "+2,250", "+4,120"]
         assert summary.headline == (
             "Since your last login: +1.5% high-opportunity, "
-            "+2,250 refi candidates, +4,120 offers available."
+            "+2,250 in-the-money borrowers, +4,120 offers available."
         )
     finally:
         _cleanup(client, actor)

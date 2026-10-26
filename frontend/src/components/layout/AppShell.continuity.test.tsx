@@ -9,8 +9,6 @@ import { api } from '../../lib/api';
 import { AppShell } from './AppShell';
 import { PageShell } from './PageShell';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * Route continuity, proven on the REAL AppShell (audit 2026-09-21 `shell-03`,
  * `stack-03`, `motion-v1`, `critic-v1`, `a11y-03`).

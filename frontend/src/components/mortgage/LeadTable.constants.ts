@@ -68,3 +68,24 @@ export const DISPOSITION_OPTIONS: { outcome: CallDisposition['outcome']; label: 
   { outcome: 'not_now', label: 'Not now' },
   { outcome: 'dead', label: 'Dead lead' },
 ];
+
+/**
+ * Campaign-bound approvals are not revocable in v1 (flow-v2; the delegated
+ * owner default): the Lead Queue's campaign provenance row, the queue
+ * receipt and the revoke 409 copy (REVOKE_REFUSAL_COPY) say it in one
+ * sentence. Here, in this shared chunk, so the queue never loads the receipt
+ * chunk to read it.
+ */
+export const REVOKE_CAMPAIGN_BOUND = "Campaign-bound approvals can't be revoked in this release.";
+
+/**
+ * The queue receipt's 'Revoke approval' asks the Lead Queue shell to open its
+ * revoke panel on the receipt's approval (flow-v2): a window event, so the
+ * receipt chunk imports nothing of the queue (LeadTable.revoke listens).
+ */
+export const REVOKE_APPROVAL_EVENT = 'mip:revoke-approval';
+
+export interface RevokeApprovalRequest {
+  borrowerId: string;
+  approvalId: string;
+}

@@ -14,8 +14,6 @@ import { leadQueueFilterParams } from '../../routes/lead-queue.activeFilters';
 import { SEGMENT_CODES } from '../../routes/lead-queue.filters';
 import { LeadQueueEmptyState, queueFilterGeniePrompt } from './LeadQueueEmptyState';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const genieMocks = vi.hoisted(() => ({ openGenie: vi.fn(), requestGenieContextScope: vi.fn() }));
 vi.mock('../../lib/genieOpen', () => ({ openGenie: genieMocks.openGenie }));
 vi.mock('../../lib/apiClients/genieContextScope', () => ({ requestGenieContextScope: genieMocks.requestGenieContextScope }));
@@ -148,6 +146,57 @@ describe('LeadQueueEmptyState', () => {
     expect(genieMocks.openGenie).toHaveBeenCalledWith({ prompt: genieLeadPrompt({ segmentCodes: ['itm'], stateCode: 'TX' }) });
   });
 
+  // W5d lq deferral 9: an approval request whose borrowers are all decided.
+  it('a request-scoped zero says the request is done, offers Clear the request and no Genie Ask', () => {
+    const onClearFilters = renderEmpty('approval_request_batch=0b6f0c56-1f0e-4d2a-9c11-3f2e6a7b8c9d');
+    expect(document.querySelector('.empty__title')?.textContent).toBe('No open borrowers left in this approval request.');
+    expect(document.querySelector('.empty__copy')?.textContent).toBe('Each one was decided, withdrawn or has expired.');
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>('.empty__actions button')];
+    expect(buttons.map((button) => button.textContent)).toEqual(['Clear the request']);
+    expect(ask()).toBeNull();
+    act(() => buttons[0].click());
+    expect(onClearFilters).toHaveBeenCalledTimes(1);
+    expect(genieMocks.openGenie).not.toHaveBeenCalled();
+  });
+
+  // GET /api/leads intersects the request's open borrowers with every other
+  // filter, so beside one the zero may be that filter's: the request is not
+  // necessarily done, and the filtered state answers (still with no Ask).
+  const REQUEST = 'approval_request_batch=0b6f0c56-1f0e-4d2a-9c11-3f2e6a7b8c9d';
+  const expectFilteredRequestZero = () => {
+    expect(document.body.textContent).not.toContain('No open borrowers left in this approval request.');
+    expect(document.body.textContent).not.toContain('Each one was decided, withdrawn or has expired.');
+    expect(cause()).toBe('filtered');
+    expect(document.querySelector('.empty__title')?.textContent).toBe('No leads match this filter.');
+    expect(clear()?.textContent).toBe('Clear filters');
+    expect(document.querySelector('.genie-ask-about')).toBeNull();
+  };
+
+  it('a request-scoped zero beside a state filter is the filtered state with Clear filters and no Ask Genie', () => {
+    // Non-vacuity: the same state filter without the request offers an Ask.
+    renderEmpty('states=TX');
+    expect(ask()).not.toBeNull();
+
+    const onClearFilters = renderEmpty(`${REQUEST}&states=TX`);
+    expectFilteredRequestZero();
+    act(() => clear()?.click());
+    expect(onClearFilters).toHaveBeenCalledTimes(1);
+    expect(genieMocks.openGenie).not.toHaveBeenCalled();
+    expect(genieMocks.requestGenieContextScope).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a segment', 'segment=itm'],
+    // A ZIP alone takes the phase-2 (server-rendered) Ask; beside a request it must not.
+    ['a ZIP', 'zip=60601'],
+  ])('a request-scoped zero beside %s never says the request is done and offers no Ask', (_label, filter) => {
+    renderEmpty(filter);
+    expect(document.querySelector('.genie-ask-about')).not.toBeNull();
+
+    renderEmpty(`${REQUEST}&${filter}`);
+    expectFilteredRequestZero();
+  });
+
   it('a county with no ZIP coverage says so, with Clear filters and no Ask Genie', () => {
     renderEmpty('county=48201', { countyNoCoverage: true });
     expect(cause()).toBe('coverage');
@@ -182,7 +231,7 @@ describe('LeadQueueEmptyState', () => {
   }
 
   it('a click sends ONE closed-code POST and prefills (never submits) the server prompt', async () => {
-    const prompt = 'How many borrowers across the current Cotality data coverage are in the prime refi candidates segment and the home equity candidate segment, and what is the average rate spread?';
+    const prompt = 'How many borrowers across the current Cotality data coverage are in the in-the-money segment and the home equity candidate segment, and what is the average rate spread?';
     let resolve: (value: unknown) => void = () => {};
     genieMocks.requestGenieContextScope.mockImplementation(() => new Promise((done) => { resolve = done; }));
     renderEmpty('segment_codes=itm,equity&segment_mode=all', { intersection: true });

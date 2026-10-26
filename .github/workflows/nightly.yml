@@ -22,7 +22,9 @@ name: live validation (on demand)
 # when a green run of this workflow on main certifies runtime-equivalent code,
 # is at most 14 days old, and its parity, Playwright and simulated-drill jobs
 # all succeeded; the two verify_deployed_app_contract commit checks below are
-# what make a green run certify its own commit.
+# what make a green run certify its own commit. Its bundle commands address the
+# isolated CI staging install that deploy-dev.yml deploys (bundle root leaf
+# dev-ci, name suffix _ci), never the live install's state.
 #
 # On failure: a GitHub issue is created with the failing job name + a
 # link to the run. Slack/PagerDuty integration is deliberately deferred
@@ -71,6 +73,8 @@ env:
   BUNDLE_VAR_lakebase_catalog_name: ${{ vars.MIP_LAKEBASE_SYNC_CATALOG || 'mip_app_state' }}
   BUNDLE_VAR_lakebase_database_name: ${{ vars.LAKEBASE_DATABASE || secrets.LAKEBASE_DATABASE || 'mip_app_state' }}
   BUNDLE_VAR_runtime_secret_scope: ${{ vars.MIP_RUNTIME_SECRET_SCOPE || 'mip-runtime' }}
+  BUNDLE_VAR_bundle_root_leaf: dev-ci
+  BUNDLE_VAR_install_suffix: _ci
   MIP_AI_GATEWAY_AGENT_MODEL_FAMILY: ${{ vars.MIP_AI_GATEWAY_AGENT_MODEL_FAMILY }}
   MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE: ${{ vars.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE }}
   MIP_AI_GATEWAY_TABLE_PREFIX: ${{ vars.MIP_AI_GATEWAY_TABLE_PREFIX }}

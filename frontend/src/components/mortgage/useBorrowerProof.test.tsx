@@ -22,8 +22,6 @@ import { invalidateOperationalQueries, queryKeys } from '../../lib/queryKeys';
 import type { BorrowerProof } from '../../types';
 import { useBorrowerProof } from './useBorrowerProof';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function proofFor(borrowerId: string): BorrowerProof {
   const formula = { label: 'f', expression: 'e', result: 'r', source: null };
   return {

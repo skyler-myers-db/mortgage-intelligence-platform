@@ -2,6 +2,7 @@ import type { AnimationEventHandler } from 'react';
 import type { GenieTurnNote as GenieTurnNoteShape } from '../../lib/genieInFlightTurn';
 import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
+import { Tooltip } from '../ui/Tooltip';
 import { GenieTurnActions } from './GenieTurnActions';
 import './GenieTurnActions.css';
 
@@ -82,16 +83,17 @@ export const GENIE_RESUMING_LABEL = 'Resuming your last question…';
 export function GenieStopRow({ onStop }: { onStop: () => void }) {
   return (
     <div className="genie__turn-controls">
-      <button
-        type="button"
-        className="btn btn--ghost btn--sm"
-        onClick={onStop}
-        aria-label={GENIE_STOP_LABEL}
-        title="Stop waiting for this answer. Genie may still finish it on the server; the reply is discarded."
-      >
-        <Icon name="cross" size={12} />
-        Stop
-      </button>
+      <Tooltip content="Stop waiting for this answer. Genie may still finish it on the server; the reply is discarded.">
+        <button
+          type="button"
+          className="btn btn--ghost btn--sm"
+          onClick={onStop}
+          aria-label={GENIE_STOP_LABEL}
+        >
+          <Icon name="cross" size={12} />
+          Stop
+        </button>
+      </Tooltip>
     </div>
   );
 }

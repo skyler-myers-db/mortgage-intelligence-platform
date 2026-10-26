@@ -11,8 +11,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OutreachDraftResult } from '../apiTypes';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const apiMocks = vi.hoisted(() => ({
   draftOutreach: vi.fn(),
   approve: vi.fn(),
@@ -20,7 +18,7 @@ const apiMocks = vi.hoisted(() => ({
   borrower: vi.fn(),
 }));
 
-vi.mock('../api', () => {
+vi.mock('../api', async (importOriginal) => {
   class ApiError extends Error {
     readonly status: number | null;
     readonly aborted: boolean;
@@ -31,11 +29,15 @@ vi.mock('../api', () => {
     }
   }
   return {
+    ...(await importOriginal<typeof import('../api')>()),
     api: apiMocks,
     ApiError,
     isAbortError: (err: unknown) => err instanceof ApiError && err.aborted,
   };
 });
+
+const revokeApproval = vi.hoisted(() => vi.fn());
+vi.mock('../apiClients/outreachRevoke', () => ({ revokeApproval }));
 
 import { ApiError } from '../api';
 import {
@@ -47,6 +49,8 @@ import {
   useApproveLead,
   usePendingDecisions,
   useRejectLead,
+  useRevokeApproval,
+  useRevokedBorrowers,
   type ApproveLeadVariables,
   type RejectLeadVariables,
 } from './outreach';
@@ -160,6 +164,7 @@ describe('outreach mutation keys (the W3 queue-place contract)', () => {
       all: ['mip', 'outreach'],
       approve: ['mip', 'outreach', 'approve'],
       reject: ['mip', 'outreach', 'reject'],
+      revoke: ['mip', 'outreach', 'revoke'],
     });
   });
 
@@ -179,6 +184,81 @@ describe('outreach mutation keys (the W3 queue-place contract)', () => {
     }
     expect(approve.options.mutationKey).toEqual(outreachMutationKeys.approve);
     expect(reject.options.mutationKey).toEqual(outreachMutationKeys.reject);
+  });
+});
+
+describe('the revoke mutation (flow-v2)', () => {
+  const REVOKE = {
+    decision: 'revoke' as const,
+    borrowerId: BORROWER,
+    approvalId: '6f1c4d2e-8b3a-4c5d-9e6f-7a8b9c0d1e2f',
+    rationale: 'Mis-keyed offer.',
+    requestId: 'req-revoke-1',
+  };
+  const REVOKED = {
+    revoked: true, approval_id: 'rv-1', revoked_approval_id: REVOKE.approvalId, audit_event_id: 'audit-rv-1',
+    released_assignment_id: null,
+  };
+
+  it('is keyed, pessimistic, never retried or paused, kept for the session, and sends the exact body', async () => {
+    revokeApproval.mockResolvedValue(REVOKED);
+    const latest = mountHook(() => useRevokeApproval(client));
+    await act(async () => {
+      await latest().mutateAsync(REVOKE);
+    });
+    const [revoke] = client.getMutationCache().getAll();
+    expect(revoke.options.mutationKey).toEqual(outreachMutationKeys.revoke);
+    expect(revoke.options.networkMode).toBe('always');
+    expect(revoke.options.retry).toBe(false);
+    expect(revoke.options.gcTime).toBe(Infinity);
+    expect(revoke.options.onMutate).toBeUndefined();
+    expect(revokeApproval).toHaveBeenCalledWith({
+      borrower_id: BORROWER, approval_id: REVOKE.approvalId, rationale: REVOKE.rationale, request_id: 'req-revoke-1',
+    });
+  });
+
+  it('stale-marks the audited reads after a revoke, never an active refetch', async () => {
+    revokeApproval.mockResolvedValue(REVOKED);
+    apiMocks.borrower.mockResolvedValue({ borrower_id: BORROWER });
+    const latest = mountHook(() => {
+      useQuery({ queryKey: queryKeys.borrower(BORROWER), queryFn: () => apiMocks.borrower(BORROWER) }, client);
+      return useRevokeApproval(client);
+    });
+    await flush();
+    const reads = apiMocks.borrower.mock.calls.length;
+    await act(async () => {
+      await latest().mutateAsync(REVOKE);
+    });
+    await flush();
+    expect(client.getQueryState(queryKeys.borrower(BORROWER))?.isInvalidated).toBe(true);
+    expect(apiMocks.borrower.mock.calls.length).toBe(reads);
+  });
+
+  it('a revoke on the wire is a pending decision for its row, and a success is the session record', async () => {
+    const wire = deferred<typeof REVOKED>();
+    revokeApproval.mockReturnValue(wire.promise);
+    const latest = mountHook(() => ({
+      revoke: useRevokeApproval(client),
+      pending: usePendingDecisions(client),
+      revoked: useRevokedBorrowers(client),
+    }));
+    act(() => latest().revoke.mutate(REVOKE));
+    await flush();
+    expect(latest().pending.get(BORROWER)).toBe('revoke');
+    expect(latest().revoked).toEqual([]);
+    const before = latest().revoked;
+    await act(async () => wire.resolve(REVOKED));
+    await flush();
+    expect(latest().pending.has(BORROWER)).toBe(false);
+    expect(latest().revoked).toEqual([BORROWER]);
+    expect(latest().revoked).not.toBe(before);
+    // A refused revoke (revoked=false) and a failure are not revocations.
+    revokeApproval.mockResolvedValueOnce({ ...REVOKED, revoked: false });
+    await act(async () => {
+      await latest().revoke.mutateAsync({ ...REVOKE, borrowerId: OTHER, requestId: 'req-revoke-2' });
+    });
+    await flush();
+    expect(latest().revoked).toEqual([BORROWER]);
   });
 });
 

@@ -14,6 +14,7 @@
    the dot's default fill is zero-specificity (`:where`) as well, so it can
    never outrank them wherever the sheet lands.
    ============================================================ */
+@layer components {
 
 /* The card is a `popover="manual"` element in the top layer: reset the UA
    popover box (inset, margin, overflow, colours; Toaster.css does the
@@ -103,6 +104,9 @@
 @media (prefers-reduced-motion: reduce) {
   .evidence-hovercard { animation: none; transition: none; }
 }
+}
+@layer print {
 @media print {
   .evidence-hovercard { display: none; }
+}
 }

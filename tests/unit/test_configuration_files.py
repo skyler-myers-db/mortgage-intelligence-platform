@@ -102,6 +102,18 @@ def test_bundle_resource_names_are_parameterized_for_isolated_staging():
     assert "run_as:\n      user_name: ${workspace.current_user.userName}" in dev_match.group("body")
 
 
+def test_workspace_unique_names_take_the_install_suffix_and_render_live_by_default():
+    """W5e (D-platform-process-b step 7): the CI staging install suffixes the
+    three workspace-unique display names; the empty default keeps the live
+    install's names byte for byte."""
+    content = (REPO / "databricks.yml").read_text(encoding="utf-8")
+
+    for name in ("mip_serverless_sql", "mip_feature_pipeline", "/mip-lead-scoring"):
+        assert f"\n      name: {name}${{var.install_suffix}}\n" in content, name
+        assert f"\n      name: {name}\n" not in content, f"{name} must carry the suffix"
+    assert re.search(r'(?ms)^  install_suffix:.*?default: ""$', content)
+
+
 def test_dev_bundle_pins_real_genie_space_for_signed_deploy():
     """The dev target must not inherit the CI placeholder for app binding.
 

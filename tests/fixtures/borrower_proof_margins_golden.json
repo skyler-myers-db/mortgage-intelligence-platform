@@ -25,8 +25,8 @@
       "margins": [
         {
           "key": "spread_screen",
-          "label": "Refi screen",
-          "value_text": "Clears the refi screen by 13 bps",
+          "label": "In the Money rule",
+          "value_text": "Clears the In the Money rule by 13 bps",
           "threshold": "spread 88 bps · screen 75 bps",
           "direction": "clears",
           "source": "mip.gold.fn_in_the_money"
@@ -34,7 +34,7 @@
         {
           "key": "par_break_even",
           "label": "Par break-even",
-          "value_text": "Drops below the refi screen if 30-year par rises 13 bps to 5.01%",
+          "value_text": "Drops below the In the Money rule if 30-year par rises 13 bps to 5.01%",
           "threshold": "par 4.88%",
           "direction": "flips",
           "source": "mip.gold.fn_rate_spread"
@@ -89,8 +89,8 @@
       "margins": [
         {
           "key": "spread_screen",
-          "label": "Refi screen",
-          "value_text": "38 bps below the refi screen",
+          "label": "In the Money rule",
+          "value_text": "38 bps below the In the Money rule",
           "threshold": "spread 37 bps · screen 75 bps",
           "direction": "short",
           "source": "mip.gold.fn_in_the_money"
@@ -98,7 +98,7 @@
         {
           "key": "par_break_even",
           "label": "Par break-even",
-          "value_text": "Clears the refi screen if 30-year par falls 38 bps to 4.50%",
+          "value_text": "Clears the In the Money rule if 30-year par falls 38 bps to 4.50%",
           "threshold": "par 4.88%",
           "direction": "flips",
           "source": "mip.gold.fn_rate_spread"
@@ -153,8 +153,8 @@
       "margins": [
         {
           "key": "spread_screen",
-          "label": "Refi screen",
-          "value_text": "Clears the refi screen by 17 bps",
+          "label": "In the Money rule",
+          "value_text": "Clears the In the Money rule by 17 bps",
           "threshold": "spread 88 bps · screen 71 bps",
           "direction": "clears",
           "source": "mip.gold.fn_in_the_money"
@@ -162,7 +162,7 @@
         {
           "key": "par_break_even",
           "label": "Par break-even",
-          "value_text": "Drops below the refi screen if 30-year par rises 17 bps to 5.04%",
+          "value_text": "Drops below the In the Money rule if 30-year par rises 17 bps to 5.04%",
           "threshold": "par 4.88%",
           "direction": "flips",
           "source": "mip.gold.fn_rate_spread"
@@ -217,8 +217,8 @@
       "margins": [
         {
           "key": "spread_screen",
-          "label": "Refi screen",
-          "value_text": "Clears the refi screen by 16 bps",
+          "label": "In the Money rule",
+          "value_text": "Clears the In the Money rule by 16 bps",
           "threshold": "spread 88 bps · screen 72 bps",
           "direction": "clears",
           "source": "mip.gold.fn_in_the_money"
@@ -226,7 +226,7 @@
         {
           "key": "par_break_even",
           "label": "Par break-even",
-          "value_text": "Drops below the refi screen if 30-year par rises 17 bps to 5.04%",
+          "value_text": "Drops below the In the Money rule if 30-year par rises 17 bps to 5.04%",
           "threshold": "par 4.88%",
           "direction": "flips",
           "source": "mip.gold.fn_rate_spread"
@@ -281,8 +281,8 @@
       "margins": [
         {
           "key": "spread_screen",
-          "label": "Refi screen",
-          "value_text": "9 bps below the refi screen",
+          "label": "In the Money rule",
+          "value_text": "9 bps below the In the Money rule",
           "threshold": "spread 62 bps · screen 71 bps",
           "direction": "short",
           "source": "mip.gold.fn_in_the_money"
@@ -290,7 +290,7 @@
         {
           "key": "par_break_even",
           "label": "Par break-even",
-          "value_text": "Clears the refi screen if 30-year par falls 9 bps to 4.79%",
+          "value_text": "Clears the In the Money rule if 30-year par falls 9 bps to 4.79%",
           "threshold": "par 4.88%",
           "direction": "flips",
           "source": "mip.gold.fn_rate_spread"
@@ -345,8 +345,8 @@
       "margins": [
         {
           "key": "spread_screen",
-          "label": "Refi screen",
-          "value_text": "Meets the refi screen exactly",
+          "label": "In the Money rule",
+          "value_text": "Meets the In the Money rule exactly",
           "threshold": "spread 11 bps · screen 11 bps",
           "direction": "clears",
           "source": "mip.gold.fn_in_the_money"
@@ -354,7 +354,7 @@
         {
           "key": "par_break_even",
           "label": "Par break-even",
-          "value_text": "Drops below the refi screen if 30-year par rises 1 bp to 6.27%",
+          "value_text": "Drops below the In the Money rule if 30-year par rises 1 bp to 6.27%",
           "threshold": "par 6.26%",
           "direction": "flips",
           "source": "mip.gold.fn_rate_spread"
@@ -409,8 +409,8 @@
       "margins": [
         {
           "key": "spread_screen",
-          "label": "Refi screen",
-          "value_text": "Clears the refi screen by 113 bps",
+          "label": "In the Money rule",
+          "value_text": "Clears the In the Money rule by 113 bps",
           "threshold": "spread 188 bps · screen 75 bps",
           "direction": "clears",
           "source": "mip.gold.fn_in_the_money"
@@ -473,8 +473,8 @@
       "margins": [
         {
           "key": "spread_screen",
-          "label": "Refi screen",
-          "value_text": "Clears the refi screen by 87 bps",
+          "label": "In the Money rule",
+          "value_text": "Clears the In the Money rule by 87 bps",
           "threshold": "spread 162 bps · screen 75 bps",
           "direction": "clears",
           "source": "mip.gold.fn_in_the_money"
@@ -482,7 +482,7 @@
         {
           "key": "par_break_even",
           "label": "Par break-even",
-          "value_text": "Drops below the refi screen if 30-year par rises 88 bps to 5.76%",
+          "value_text": "Drops below the In the Money rule if 30-year par rises 88 bps to 5.76%",
           "threshold": "par 4.88%",
           "direction": "flips",
           "source": "mip.gold.fn_rate_spread"
@@ -537,8 +537,8 @@
       "margins": [
         {
           "key": "spread_screen",
-          "label": "Refi screen",
-          "value_text": "75 bps below the refi screen",
+          "label": "In the Money rule",
+          "value_text": "75 bps below the In the Money rule",
           "threshold": "spread 0 bps · screen 75 bps",
           "direction": "short",
           "source": "mip.gold.fn_in_the_money"
@@ -601,8 +601,8 @@
       "margins": [
         {
           "key": "spread_screen",
-          "label": "Refi screen",
-          "value_text": "75 bps below the refi screen",
+          "label": "In the Money rule",
+          "value_text": "75 bps below the In the Money rule",
           "threshold": "spread 0 bps · screen 75 bps",
           "direction": "short",
           "source": "mip.gold.fn_in_the_money"
@@ -665,8 +665,8 @@
       "margins": [
         {
           "key": "spread_screen",
-          "label": "Refi screen",
-          "value_text": "75 bps below the refi screen",
+          "label": "In the Money rule",
+          "value_text": "75 bps below the In the Money rule",
           "threshold": "spread 0 bps · screen 75 bps",
           "direction": "short",
           "source": "mip.gold.fn_in_the_money"
@@ -729,8 +729,8 @@
       "margins": [
         {
           "key": "spread_screen",
-          "label": "Refi screen",
-          "value_text": "Clears the refi screen by 15 bps",
+          "label": "In the Money rule",
+          "value_text": "Clears the In the Money rule by 15 bps",
           "threshold": "spread 90 bps · screen 75 bps",
           "direction": "clears",
           "source": "mip.gold.fn_in_the_money"
@@ -793,8 +793,8 @@
       "margins": [
         {
           "key": "spread_screen",
-          "label": "Refi screen",
-          "value_text": "Clears the refi screen by 13 bps",
+          "label": "In the Money rule",
+          "value_text": "Clears the In the Money rule by 13 bps",
           "threshold": "spread 88 bps · screen 75 bps",
           "direction": "clears",
           "source": "mip.gold.fn_in_the_money"
@@ -857,8 +857,8 @@
       "margins": [
         {
           "key": "spread_screen",
-          "label": "Refi screen",
-          "value_text": "Clears the refi screen by 13 bps",
+          "label": "In the Money rule",
+          "value_text": "Clears the In the Money rule by 13 bps",
           "threshold": "spread 88 bps · screen 75 bps",
           "direction": "clears",
           "source": "mip.gold.fn_in_the_money"
@@ -866,7 +866,7 @@
         {
           "key": "par_break_even",
           "label": "Par break-even",
-          "value_text": "Drops below the refi screen if 30-year par rises 13 bps to 5.01%",
+          "value_text": "Drops below the In the Money rule if 30-year par rises 13 bps to 5.01%",
           "threshold": "par 4.88%",
           "direction": "flips",
           "source": "mip.gold.fn_rate_spread"
@@ -921,8 +921,8 @@
       "margins": [
         {
           "key": "spread_screen",
-          "label": "Refi screen",
-          "value_text": "Spread is 25 bps under the refi screen's spread minimum; equity is 5 pts under its 15% minimum",
+          "label": "In the Money rule",
+          "value_text": "Spread is 25 bps under the In the Money rule's spread minimum; equity is 5 pts under its 15% minimum",
           "threshold": "spread 50 bps · screen 75 bps · equity 10% · screen 15%",
           "direction": "short",
           "source": "mip.gold.fn_in_the_money"
@@ -930,7 +930,7 @@
         {
           "key": "par_break_even",
           "label": "Par break-even",
-          "value_text": "No par move within ±100 bps clears the refi screen; equity is under its minimum",
+          "value_text": "No par move within ±100 bps clears the In the Money rule; equity is under its minimum",
           "threshold": "par 4.88%",
           "direction": "holds",
           "source": "mip.gold.fn_rate_spread"
@@ -963,7 +963,7 @@
     },
     {
       "id": "spread_clears_equity_short",
-      "note": "Spread over its minimum, equity under its own: in_the_money is False, so the row does not clear the refi screen and no par move inside the grid makes it (the dossier chip reads 'Below refi screen').",
+      "note": "Spread over its minimum, equity under its own: in_the_money is False, so the row does not clear the In the Money rule and no par move inside the grid makes it (the dossier chip reads 'Not in the money').",
       "row": {
         "current_rate": 6.625,
         "market_rate_fraction": 0.05745,
@@ -985,8 +985,8 @@
       "margins": [
         {
           "key": "spread_screen",
-          "label": "Refi screen",
-          "value_text": "Spread clears the refi screen's spread minimum by 13 bps; equity is 5 pts under its 15% minimum",
+          "label": "In the Money rule",
+          "value_text": "Spread clears the In the Money rule's spread minimum by 13 bps; equity is 5 pts under its 15% minimum",
           "threshold": "spread 88 bps · screen 75 bps · equity 10% · screen 15%",
           "direction": "short",
           "source": "mip.gold.fn_in_the_money"
@@ -994,7 +994,7 @@
         {
           "key": "par_break_even",
           "label": "Par break-even",
-          "value_text": "No par move within ±100 bps clears the refi screen; equity is under its minimum",
+          "value_text": "No par move within ±100 bps clears the In the Money rule; equity is under its minimum",
           "threshold": "par 5.75%",
           "direction": "holds",
           "source": "mip.gold.fn_rate_spread"

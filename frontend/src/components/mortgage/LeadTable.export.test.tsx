@@ -54,7 +54,8 @@ vi.mock('../AppContext', () => ({
   }),
 }));
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api')>()),
   api: {
     leadExportReceipt: vi.fn(async () => ({
       audit_event_id: 'evt-receipt-0001',
@@ -68,7 +69,6 @@ vi.mock('../../lib/api', () => ({
       recorded_at: '2026-09-21T00:00:00.000Z',
     })),
   },
-  ApiError: class extends Error {},
   isAbortError: () => false,
 }));
 
@@ -198,6 +198,11 @@ describe('LeadTable CSV export', () => {
     });
   }
 
+  // The reason is the button's ui/Tooltip description (critic-08), never a DOM title.
+  const description = (element: Element) => (element.getAttribute('aria-describedby') ?? '')
+    .split(' ')
+    .map((id) => document.getElementById(id)?.textContent ?? '')
+    .join(' ');
   const exportButton = () => {
     const button = container.querySelector<HTMLButtonElement>('[data-testid="lead-export"]');
     if (!button) throw new Error('export button not rendered');
@@ -232,7 +237,8 @@ describe('LeadTable CSV export', () => {
 
     expect(exportButton().disabled).toBe(true);
     expect(exportButton().getAttribute('aria-label')).toBe('Export 0 leads as CSV');
-    expect(exportButton().getAttribute('title')).toContain('marketing-eligibility gate');
+    expect(exportButton().hasAttribute('title')).toBe(false);
+    expect(description(exportButton())).toContain('marketing-eligibility gate');
 
     await act(async () => {
       exportButton().click();
@@ -506,7 +512,8 @@ describe('LeadTable CSV export', () => {
 
       expect(exportButton().disabled).toBe(false);
       expect(exportButton().getAttribute('aria-disabled')).toBe('true');
-      expect(exportButton().getAttribute('title')).toBe(reason);
+      expect(exportButton().hasAttribute('title')).toBe(false);
+      expect(description(exportButton())).toContain(reason);
       await act(async () => {
         exportButton().click();
       });

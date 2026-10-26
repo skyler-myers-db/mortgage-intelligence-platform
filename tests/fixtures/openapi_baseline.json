@@ -1215,7 +1215,7 @@
         "type": "object"
       },
       "AnalyticsThresholds": {
-        "description": "The refi screen this refresh applied, read from ``mip.gold.borrower_360``.\n\n``min_spread_bps`` / ``min_equity_pct`` are the ``*_applied`` columns when\nevery scored row carries one and the same value; the charts draw the\nscreen from here, never from a frontend constant. A field is None when\nno single governed value exists. ``reason`` is None when both values are\npresent; otherwise ``not_uniform`` when either column disagrees across\nthe refresh (MIN != MAX, or NULL on some rows only), else ``not_built``\n(every row NULL, or no rows).",
+        "description": "The In the Money rule this refresh applied, read from ``mip.gold.borrower_360``.\n\n``min_spread_bps`` / ``min_equity_pct`` are the ``*_applied`` columns when\nevery scored row carries one and the same value; the charts draw the\nscreen from here, never from a frontend constant. A field is None when\nno single governed value exists. ``reason`` is None when both values are\npresent; otherwise ``not_uniform`` when either column disagrees across\nthe refresh (MIN != MAX, or NULL on some rows only), else ``not_built``\n(every row NULL, or no rows).",
         "properties": {
           "min_equity_pct": {
             "anyOf": [
@@ -10006,7 +10006,7 @@
         "properties": {
           "capabilities": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/AdminCapability"
             },
             "title": "Capabilities",
             "type": "array"
@@ -12321,7 +12321,11 @@
               "home.high_opportunity",
               "home.primary_offer_paths",
               "funnel.population",
-              "funnel.high_opportunity"
+              "funnel.high_opportunity",
+              "analytics.addressable",
+              "analytics.in_the_money",
+              "analytics.primary_offer_paths",
+              "analytics.approved"
             ],
             "title": "Kpi",
             "type": "string"
@@ -12404,6 +12408,11 @@
           },
           "direction": {
             "default": "flat",
+            "enum": [
+              "up",
+              "down",
+              "flat"
+            ],
             "title": "Direction",
             "type": "string"
           },
@@ -16588,7 +16597,7 @@
             "title": "Contactable In The Money"
           },
           "in_the_money": {
-            "description": "Borrowers clearing the refi screen at each step, aligned to steps_bps; each <= addressable.",
+            "description": "Borrowers in the money at each step, aligned to steps_bps; each <= addressable.",
             "items": {
               "type": "integer"
             },
@@ -17320,7 +17329,7 @@
           },
           "rows": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SalesConversionRow"
             },
             "title": "Rows",
             "type": "array"
@@ -17339,6 +17348,148 @@
         "title": "SalesConversionResponse",
         "type": "object"
       },
+      "SalesConversionRow": {
+        "description": "One conversion group: a loan officer, or the single all_cohorts group.",
+        "properties": {
+          "application_start_rate": {
+            "title": "Application Start Rate",
+            "type": "number"
+          },
+          "applications_started": {
+            "title": "Applications Started",
+            "type": "integer"
+          },
+          "callbacks_scheduled": {
+            "title": "Callbacks Scheduled",
+            "type": "integer"
+          },
+          "calls_attempted": {
+            "title": "Calls Attempted",
+            "type": "integer"
+          },
+          "contacts_reached": {
+            "title": "Contacts Reached",
+            "type": "integer"
+          },
+          "group_key": {
+            "title": "Group Key",
+            "type": "string"
+          },
+          "unique_application_starts": {
+            "title": "Unique Application Starts",
+            "type": "integer"
+          },
+          "unique_contacts_reached": {
+            "title": "Unique Contacts Reached",
+            "type": "integer"
+          },
+          "unique_leads_contacted": {
+            "title": "Unique Leads Contacted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "group_key",
+          "calls_attempted",
+          "contacts_reached",
+          "callbacks_scheduled",
+          "applications_started",
+          "unique_leads_contacted",
+          "unique_contacts_reached",
+          "unique_application_starts",
+          "application_start_rate"
+        ],
+        "title": "SalesConversionRow",
+        "type": "object"
+      },
+      "SalesOutcomeLoRow": {
+        "description": "Outcome counts for one assigned loan officer (or unassigned).",
+        "properties": {
+          "lo_email": {
+            "title": "Lo Email",
+            "type": "string"
+          },
+          "outcomes": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Outcomes",
+            "type": "object"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lo_email",
+          "outcomes",
+          "total"
+        ],
+        "title": "SalesOutcomeLoRow",
+        "type": "object"
+      },
+      "SalesOutcomeSourceRow": {
+        "description": "Outcome counts for one source system.",
+        "properties": {
+          "outcomes": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Outcomes",
+            "type": "object"
+          },
+          "source_system": {
+            "title": "Source System",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source_system",
+          "outcomes",
+          "total"
+        ],
+        "title": "SalesOutcomeSourceRow",
+        "type": "object"
+      },
+      "SalesOutcomeSourceStatus": {
+        "description": "One outcome feed's configuration status and its outcome count in the window.",
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "outcome_count": {
+            "title": "Outcome Count",
+            "type": "integer"
+          },
+          "source_system": {
+            "title": "Source System",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_system",
+          "display_name",
+          "status",
+          "configured",
+          "outcome_count"
+        ],
+        "title": "SalesOutcomeSourceStatus",
+        "type": "object"
+      },
       "SalesOutcomeSummaryResponse": {
         "properties": {
           "applications_submitted": {
@@ -17347,14 +17498,14 @@
           },
           "by_lo": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SalesOutcomeLoRow"
             },
             "title": "By Lo",
             "type": "array"
           },
           "by_source_system": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SalesOutcomeSourceRow"
             },
             "title": "By Source System",
             "type": "array"
@@ -17377,7 +17528,7 @@
           },
           "source_statuses": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SalesOutcomeSourceStatus"
             },
             "title": "Source Statuses",
             "type": "array"
@@ -17388,7 +17539,7 @@
           },
           "top_competitors": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SalesTopCompetitorRow"
             },
             "title": "Top Competitors",
             "type": "array"
@@ -17429,6 +17580,33 @@
         "title": "SalesOutcomeSummaryResponse",
         "type": "object"
       },
+      "SalesStandupLoRow": {
+        "description": "One loan officer's call dispositions on the standup day.",
+        "properties": {
+          "calls_logged": {
+            "title": "Calls Logged",
+            "type": "integer"
+          },
+          "lo_email": {
+            "title": "Lo Email",
+            "type": "string"
+          },
+          "outcomes": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Outcomes",
+            "type": "object"
+          }
+        },
+        "required": [
+          "lo_email",
+          "outcomes",
+          "calls_logged"
+        ],
+        "title": "SalesStandupLoRow",
+        "type": "object"
+      },
       "SalesStandupResponse": {
         "properties": {
           "applications_started": {
@@ -17437,7 +17615,7 @@
           },
           "by_lo": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/SalesStandupLoRow"
             },
             "title": "By Lo",
             "type": "array"
@@ -17535,6 +17713,142 @@
           "display_label"
         ],
         "title": "SalesTeamMember",
+        "type": "object"
+      },
+      "SalesTopCompetitorRow": {
+        "description": "A public competitor label and its lost-to-competitor count.",
+        "properties": {
+          "competitor_lender_label": {
+            "title": "Competitor Lender Label",
+            "type": "string"
+          },
+          "lost_to_competitor": {
+            "title": "Lost To Competitor",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "competitor_lender_label",
+          "lost_to_competitor"
+        ],
+        "title": "SalesTopCompetitorRow",
+        "type": "object"
+      },
+      "SalesWorkloadResponse": {
+        "description": "Every in-scope loan officer, for a period and the same span before it.",
+        "properties": {
+          "from_date": {
+            "title": "From Date",
+            "type": "string"
+          },
+          "previous_from_date": {
+            "title": "Previous From Date",
+            "type": "string"
+          },
+          "previous_to_date": {
+            "title": "Previous To Date",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/SalesWorkloadRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "stale_days": {
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Stale Days",
+            "type": "integer"
+          },
+          "to_date": {
+            "title": "To Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_date",
+          "to_date",
+          "previous_from_date",
+          "previous_to_date",
+          "stale_days",
+          "rows"
+        ],
+        "title": "SalesWorkloadResponse",
+        "type": "object"
+      },
+      "SalesWorkloadRow": {
+        "description": "One loan officer's load.",
+        "properties": {
+          "assigned_count": {
+            "minimum": 0.0,
+            "title": "Assigned Count",
+            "type": "integer"
+          },
+          "capacity_per_day": {
+            "maximum": 250.0,
+            "minimum": 0.0,
+            "title": "Capacity Per Day",
+            "type": "integer"
+          },
+          "display_label": {
+            "title": "Display Label",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "open_count": {
+            "minimum": 0.0,
+            "title": "Open Count",
+            "type": "integer"
+          },
+          "previous_assigned_count": {
+            "minimum": 0.0,
+            "title": "Previous Assigned Count",
+            "type": "integer"
+          },
+          "previous_worked_count": {
+            "minimum": 0.0,
+            "title": "Previous Worked Count",
+            "type": "integer"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "stale_count": {
+            "minimum": 0.0,
+            "title": "Stale Count",
+            "type": "integer"
+          },
+          "worked_count": {
+            "minimum": 0.0,
+            "title": "Worked Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "email",
+          "display_label",
+          "capacity_per_day",
+          "open_count",
+          "stale_count",
+          "assigned_count",
+          "worked_count",
+          "previous_assigned_count",
+          "previous_worked_count"
+        ],
+        "title": "SalesWorkloadRow",
         "type": "object"
       },
       "SavedDraft": {
@@ -25668,7 +25982,11 @@
                 "home.high_opportunity",
                 "home.primary_offer_paths",
                 "funnel.population",
-                "funnel.high_opportunity"
+                "funnel.high_opportunity",
+                "analytics.addressable",
+                "analytics.in_the_money",
+                "analytics.primary_offer_paths",
+                "analytics.approved"
               ],
               "title": "Kpi",
               "type": "string"
@@ -30256,6 +30574,72 @@
           }
         },
         "summary": "Sales Team",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/sales/workload": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_sales_workload_sales_workload",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "From",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "To",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stale_days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "maximum": 30,
+              "minimum": 1,
+              "title": "Stale Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesWorkloadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sales Workload",
         "tags": [
           "sales"
         ]
@@ -36878,7 +37262,11 @@
                 "home.high_opportunity",
                 "home.primary_offer_paths",
                 "funnel.population",
-                "funnel.high_opportunity"
+                "funnel.high_opportunity",
+                "analytics.addressable",
+                "analytics.in_the_money",
+                "analytics.primary_offer_paths",
+                "analytics.approved"
               ],
               "title": "Kpi",
               "type": "string"
@@ -41424,6 +41812,71 @@
           }
         },
         "summary": "Sales Team",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/sales/workload": {
+      "get": {
+        "operationId": "get_api_v1_sales_workload_sales_workload",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "From",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "To",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stale_days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "maximum": 30,
+              "minimum": 1,
+              "title": "Stale Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesWorkloadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sales Workload",
         "tags": [
           "sales"
         ]

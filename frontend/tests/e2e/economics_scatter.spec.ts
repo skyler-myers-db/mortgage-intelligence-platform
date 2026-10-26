@@ -211,7 +211,7 @@ test.describe('S7 economics scatter — bins → dot → Borrower 360 → draft 
           points: returnedIds.map((borrowerId, index) => ({
             borrower_id: borrowerId,
             display_name: `Owner ${index}`,
-            segment: 'Prime Refi Candidates',
+            segment: 'In the Money',
             state: 'IL',
             equity_pct: 42,
             rate_spread_bps: 88,

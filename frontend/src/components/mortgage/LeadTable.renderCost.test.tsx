@@ -17,9 +17,10 @@
  *     free-text notes are retired, D-shell-deviations-g2) or the bulk gate's
  *     shared rationale re-renders that form only. The table's renders are counted through
  *     useLeadTableFillHeight, which the shell calls once per render.
- *   - The shell's row callbacks keep one identity (slice 3; the shell itself
- *     stays 'use no memo' under the lane's budget cut 5, so this is
- *     useStableRowCallbacks plus targeted memoization, not the compiler):
+ *   - The shell's row callbacks keep one identity (slice 3:
+ *     useStableRowCallbacks plus targeted memoization; these pins predate
+ *     the shell's compile in W5e w5-lead-table-compile and still hold on the
+ *     compiled shell):
  *     a row expand, or an unrelated AppContext change, re-derives no other
  *     borrower's workflow states (a counting partial mock of
  *     leadWorkflowStates, which every row's Status cell calls) and
@@ -35,10 +36,7 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary, SalesTeamMember } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
-import { clearSingleKeyShortcutsPreference } from '../../lib/keymapPreference';
 import type { LeadTableSort } from './LeadTable.types';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const app = vi.hoisted(() => ({
   density: 'comfortable' as 'comfortable' | 'compact',
@@ -228,7 +226,6 @@ describe('LeadTable render cost (runtime-04)', () => {
 
   beforeEach(() => {
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     app.density = 'comfortable';
     app.drawer = null;
     workflowCalls.length = 0;

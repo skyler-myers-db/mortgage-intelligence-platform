@@ -54,8 +54,6 @@ import {
   usePrintReceipt,
 } from './usePrintReceipt';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const REQUEST: PrintReceiptRequest = { surface: 'borrower_360', borrower_id: 'B-0000000000001', row_count: 1 };
 const RECEIPT: PrintReceipt = {
   audit_event_id: '6f2a9c1e-3b4d-4e5f-8a6b-7c8d9e0f1a2b',

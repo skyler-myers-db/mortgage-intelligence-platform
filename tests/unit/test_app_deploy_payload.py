@@ -284,12 +284,12 @@ def test_payload_does_not_bootstrap_current_user_admin(monkeypatch) -> None:
     dev = build_payload(
         source_code_path="/Workspace/app/files",
         target="dev",
-        current_user_email="skyler@entrada.ai",
+        current_user_email="operator@summit.example",
     )
     prod = build_payload(
         source_code_path="/Workspace/app/files",
         target="prod",
-        current_user_email="skyler@entrada.ai",
+        current_user_email="operator@summit.example",
     )
 
     assert "MIP_ADMIN_EMAILS" not in _env_map(dev)

@@ -37,8 +37,17 @@
  *  T. W5d w5-growth-watchlists: the Rate Lever's "Watch this level" row
  *     and its watching line on Home and Segments, and a composed plan's
  *     card mid-progress                                               10
+ *  U. W5e w5-analytics: an Executive KPI drawer on How we got, a failed
+ *     Executive Refresh with its stale note, a focused scatter cell's
+ *     tip and the Sales ops workload table                             8
+ *  V. W5e w5-lexicon-copy: the request-scoped Lead Queue whose
+ *     borrowers are all decided, and with the request still open
+ *     (its scope row over the rows; W5d lq deferral 9)                 4
+ *  W. W5e w5-lead-queue-columns: the Lead Queue's HIDE menu, the
+ *     filter omnibox with its readings, a row's More like this         6
+ *  X. W5e w5-lead-table-compile: the approver's revoke panel           2
  *                                                                     --
- *                                                                    154
+ *                                                                    174
  *
  * Baselines are amd64-Linux renders from the pinned Playwright container:
  * this spec runs only with MIP_VRT=1 (playwright.config.ts) and refuses any
@@ -50,7 +59,7 @@
  */
 import type { Locator, Page } from '@playwright/test';
 import type { AppDriver, FixtureAccent, FixtureTheme } from './app';
-import { enterState, prepareState, type FixtureState } from './fixtureStates';
+import { enterState, heldFocus, prepareState, stateInViewport, statePath, type FixtureState } from './fixtureStates';
 import type { HomeSummary, SessionResponse } from '../../../src/types';
 import { provenanceSingleAnswer } from './data/genieProvenance';
 import { GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
@@ -60,6 +69,7 @@ import { composeReply, executedReply, EXECUTE_PATTERN, registerGrowthAgentTrust 
 import { PLAN_PROGRESS_PATTERN, PROGRESS_SEQUENCE, registerRateWatch } from './data/growthWatchlists';
 import { registerPagedQueue } from './data/leadPages';
 import { registerBoard } from './data/salesLoop';
+import { ANALYTICS_W5E_HELD_FOCUS, ANALYTICS_W5E_ROUTE, ANALYTICS_W5E_STATES, enterAnalyticsW5eState } from './analyticsW5eStates';
 import { PRESENTER_SESSION } from './data/shell';
 import { json, type MockApi } from './mockApi';
 import { FIXTURE_ROUTES, FIXTURE_THEMES, type FixtureRoute } from './routes';
@@ -72,6 +82,7 @@ import {
   expectNoSurfaceOverflow,
   markNaturalLoad,
   scrollMainBy,
+  type HeldFocus,
 } from './visual';
 
 // Guard in a hook, not at module load, so `--list` still collects the
@@ -128,12 +139,13 @@ async function check(
   routeName: string,
   theme: FixtureTheme,
   state: string,
-  options: { file?: string; mask?: Locator[]; keepFocusWithin?: Locator } = {},
+  options: { file?: string; mask?: Locator[]; held?: HeldFocus; inViewport?: readonly Locator[] } = {},
 ): Promise<void> {
   await expectNoSurfaceOverflow(page, { route: routeName, state, theme });
   await capture(page, options.file ?? `${routeName}--${theme}--${state}.png`, {
     mask: options.mask,
-    keepFocusWithin: options.keepFocusWithin,
+    held: options.held,
+    inViewport: options.inViewport,
   });
 }
 
@@ -144,7 +156,7 @@ interface Loaded {
 async function load(app: AppDriver, mockApi: MockApi, target: FixtureRoute, theme: FixtureTheme, state: FixtureState = 'default'): Promise<Loaded> {
   await app.setTheme(theme);
   prepareState(mockApi, state, target.name);
-  await app.gotoRoute(target.path);
+  await app.gotoRoute(statePath(target.path, state));
   return { naturalLoad: markNaturalLoad(mockApi) };
 }
 
@@ -175,11 +187,13 @@ for (const theme of FIXTURE_THEMES) {
       });
     }
 
-    // C: shell states. `focusScope` names the open popover whose roving focus
-    // IS the state: capture keeps focus inside it instead of blurring (the
-    // account menu closes on a blur out of it, IdentityMenu.tsx), and the
-    // test asserts it is still open after the capture. Every other state blurs.
-    const SHELL_STATES: ReadonlyArray<{ route: string; state: FixtureState; focusScope?: (page: Page) => Locator }> = [
+    // C: shell states. A state in HELD_FOCUS_STATES (fixtureStates.ts) names
+    // the open popover whose focus IS the state: capture keeps focus inside
+    // its scope instead of blurring (the account menu and the HIDE listbox
+    // close on a blur out of them) and asserts it open before and after the
+    // screenshot. Every other state blurs. stateInViewport names the content
+    // a state scrolls in (more-like-this), asserted on screen at capture time.
+    const SHELL_STATES: ReadonlyArray<{ route: string; state: FixtureState }> = [
       { route: 'home', state: 'evidence-drawer' },
       { route: 'home', state: 'command-palette' },
       { route: 'home', state: 'genie' },
@@ -203,20 +217,30 @@ for (const theme of FIXTURE_THEMES) {
       { route: 'lead-queue', state: 'my-approval-requests' },
       { route: 'lead-queue', state: 'request-approval-form' },
       // R (W5d w5-print-glossary-sales-manager): the account menu and glossary search.
-      { route: 'home', state: 'identity-menu', focusScope: (page) => page.getByRole('menu', { name: 'Account' }) },
+      // identity-menu holds focus (HELD_FOCUS_STATES).
+      { route: 'home', state: 'identity-menu' },
       { route: 'glossary', state: 'glossary-search' },
+      // W (W5e w5-lead-queue-columns): the HIDE menu, the omnibox and More
+      // like this; hide-menu holds focus (HELD_FOCUS_STATES), more-like-this
+      // scrolls its panel in (stateInViewport).
+      { route: 'lead-queue', state: 'hide-menu' },
+      { route: 'lead-queue', state: 'omnibox' },
+      { route: 'lead-queue', state: 'more-like-this' },
+      // X (W5e w5-lead-table-compile, flow-v2): the revoke panel.
+      { route: 'lead-queue', state: 'lead-revoke-panel' },
+      // V (W5e w5-lexicon-copy, W5d lq deferral 9): the request-scoped queue
+      // whose borrowers were all decided, and the open request's scope row
+      // over its rows, both on their own URL (statePath).
+      { route: 'lead-queue', state: 'request-scoped-empty' },
+      { route: 'lead-queue', state: 'request-scoped' },
     ];
-    for (const { route: name, state, focusScope } of SHELL_STATES) {
+    for (const { route: name, state } of SHELL_STATES) {
       test(`${name} · ${state}`, async ({ app, mockApi, page }) => {
         const { naturalLoad } = await load(app, mockApi, route(name), theme, state);
         await enterState(app, page, state);
-        const scope = focusScope?.(page);
-        await check(page, name, theme, state, { keepFocusWithin: scope });
-        if (scope) {
-          // Still open, focus inside it: the baseline shows the popover, not the plain route.
-          await expect(scope, `${name} · ${state}: the popover under test survives the capture`).toBeVisible();
-          await expect(scope.locator(':focus')).toHaveCount(1);
-        }
+        // A held popover is still open after the capture, focus inside its
+        // scope (capture): the baseline shows the popover, not the plain route.
+        await check(page, name, theme, state, { held: heldFocus(page, state), inViewport: stateInViewport(page, state) });
         expectNoAuditedReadSince(mockApi, naturalLoad, `${name} · ${state}`);
       });
     }
@@ -300,6 +324,21 @@ for (const theme of FIXTURE_THEMES) {
       await check(page, 'analytics-sales-ops', theme, 'distribution-board');
       expectNoAuditedReadSince(mockApi, naturalLoad, 'analytics-sales-ops · distribution board');
     });
+
+    // U (W5e w5-analytics): the Executive KPI evidence drawer, a failed
+    // Refresh's stale note, the scatter tip and the workload table. None
+    // opens an audited read (the KPI proof and the workload are audit-free).
+    // The scatter tip unmounts on its cell's blur, so that capture keeps
+    // focus in the cells' group (ANALYTICS_W5E_HELD_FOCUS); the rest blur.
+    for (const state of ANALYTICS_W5E_STATES) {
+      const target = ANALYTICS_W5E_ROUTE[state];
+      test(`analytics · ${state}`, async ({ app, mockApi, page }) => {
+        const { naturalLoad } = await load(app, mockApi, route(target.route), theme);
+        await enterAnalyticsW5eState(app, page, mockApi, state);
+        await check(page, target.route, theme, state, { held: ANALYTICS_W5E_HELD_FOCUS[state]?.(page) });
+        expectNoAuditedReadSince(mockApi, naturalLoad, `analytics · ${state}`);
+      });
+    }
 
     // P (W5d w5-palette-offer-sales-loop, shell-07): the palette's provider
     // groups for a typed query (Pages & actions, Saved views, Segments,

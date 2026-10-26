@@ -6,6 +6,7 @@ import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { isAbortError } from '../lib/apiTransport';
 import { PageShell } from '../components/layout/PageShell';
 import { LeadTable, type LeadExportContext } from '../components/mortgage/LeadTable';
+import { LeadTableHeaderSlotContext, LeadTableHiddenColumnsContext } from '../components/mortgage/LeadTable.columns';
 import { Chip } from '../components/Primitives';
 import { AsyncState } from '../components/ui/AsyncState';
 import { DescribedErrorBody } from '../components/ui/DescribedError';
@@ -26,6 +27,8 @@ import { ApprovalRequestScopeRow } from '../components/mortgage/ApprovalRequestS
 import { useLeadQueueFreshness } from './lead-queue.freshness';
 import { LeadQueueFilterBar, LeadQueueHeroFilterChips } from './lead-queue.filterBar';
 import { LeadQueueViews } from './lead-queue.views';
+import { leadQueueColumns, searchParamsWithLeadTableColumns, useLeadQueueColumnState } from './lead-queue.columns';
+import { LeadQueueHideSlot } from './lead-queue.hideSlot';
 import { buildPortfolioBuilderUrlFromQueue } from './lead-queue.handoff';
 import { copyLink } from '../lib/copyLink';
 import {
@@ -42,7 +45,6 @@ import {
   CONTACTABILITY_FILTER_OPTIONS,
   CONSENT_FILTER_OPTIONS,
   GROWTH_AGENT_PROOF_PARAMS,
-  LEAD_TABLE_VIEW_PARAM,
   LOAN_PRODUCT_FILTER_OPTIONS,
   ORIGINATION_CHANNEL_FILTER_OPTIONS,
   OWNER_LINK_FILTER_OPTIONS,
@@ -60,14 +62,13 @@ import {
   leadQueueShareParams,
   outreachFilterDisplayValue,
   parseLeadTablePlace,
-  parseLeadTableView,
   parseTriageMode,
   searchParamsAfterSegmentRemoval,
   searchParamsWithLeadTablePlace,
-  searchParamsWithLeadTableView,
   searchParamsWithTriageMode,
   searchWithoutTriageMode,
   segmentFilterChips,
+  type LeadQueueColumns,
   type LeadQueueExportFiltersInput,
   segmentFilterDisplayValue,
 } from './lead-queue.filters';
@@ -141,7 +142,12 @@ export default function LeadQueue() {
     () => buildPortfolioBuilderUrlFromQueue(searchParams, targetLenderOptions),
     [searchParams, targetLenderOptions],
   );
-  const tableView = parseLeadTableView(searchParams.get(LEAD_TABLE_VIEW_PARAM));
+  // The effective columns (lead-queue.columns.ts, tables-05 step 2): the
+  // URL's ?view= / ?hide=, else the actor's default saved view. Display
+  // state: a change pushes the URL and reads nothing.
+  const columnState = useLeadQueueColumnState(searchParams);
+  const tableView = columnState.view;
+  const writeColumns = (next: LeadQueueColumns) => setSearchParams(searchParamsWithLeadTableColumns(searchParams, next, columnState));
   const stateOptions = useMemo(() => {
     const states = footprint.ready && !footprint.usingFallback
       ? footprint.states.map((s) => s.state_code).sort()
@@ -400,7 +406,7 @@ export default function LeadQueue() {
   // params only. Never the address bar: that holds the open row, maybe an
   // assignee email and a Growth Agent proof bound to this session.
   const copyQueueLink = () => {
-    const share = leadQueueShareParams(searchParams, { ...filterInput, assignedTo: assignedParam });
+    const share = leadQueueShareParams(searchParams, { ...filterInput, assignedTo: assignedParam }, leadQueueColumns(columnState));
     void copyLink(`${window.location.origin}${pathname}${share.search}`, {
       success: 'Queue link copied',
       successDetail: share.omitted.length > 0
@@ -495,8 +501,8 @@ export default function LeadQueue() {
               {segmentChips.length > 1 && (
                 <span className="muted fs-11">
                   {segmentMode === 'all'
-                    ? 'Intersection — every borrower is in all selected segments.'
-                    : 'Union — borrowers in any selected segment, de-duplicated.'}
+                    ? 'Borrowers in every selected segment.'
+                    : 'Borrowers in any selected segment, each listed once.'}
                 </span>
               )}
             </div>
@@ -689,51 +695,61 @@ export default function LeadQueue() {
                 aria-busy={queueUpdating}
                 data-status={queueStatusLabel}
               >
-                <LeadTable
-                  leads={visibleLeads}
-                  totalMatching={page.totalMatching ?? null}
-                  truncatedAt={page.truncatedAt ?? null}
-                  growthAgentVerification={leadsPlaceholderData
-                    ? null
-                    : page.growthAgentVerification ?? null}
-                  paging={pages.paging}
-                  sortScope={order.sort === 'rank' && place.sort ? 'loaded' : 'server'}
-                  approvalRequests={approvalRequests}
-                  // The request chips and the scope row ride this route's chunk, not LeadTable's.
-                  requestChips={approvalRequests && <ApprovalRequestChips requests={approvalRequests} />}
-                  requestScopeRow={approvalRequests?.scope && (
-                    <ApprovalRequestScopeRow requests={approvalRequests} onClear={clearRequestScope} />
-                  )}
-                  exportContext={exportContext}
-                  salesTeam={salesTeam}
-                  view={tableView}
-                  onViewChange={(next) => setSearchParams(searchParamsWithLeadTableView(searchParams, next))}
-                  fillHeight
-                  restoreScroll
-                  headerStatus={freshness}
-                  campaignHandoff={campaignHandoff}
-                  // D-approval-flow-a2: entering is a new entry; leaving replaces it (Back never re-enters).
-                  triage={{
-                    mode: parseTriageMode(searchParams.get('mode')),
-                    onModeChange: (mode, row) => setSearchParams(
-                      searchParamsWithTriageMode(searchParams, mode, row), { replace: mode === null },
-                    ),
-                  }}
-                  // A sort (and Reset to rank) is a new history entry; expand and
-                  // collapse replace the current one, so Back leaves the queue.
-                  sort={place.sort}
-                  onSortChange={(next) => setSearchParams(
-                    searchParamsWithLeadTablePlace(searchParams, { sort: next, row: expandedRow }),
-                  )}
-                  expandedId={expandedRow}
-                  onExpandedChange={(borrowerId) => {
-                    setRequestedRow({ row: borrowerId, against: searchParams });
-                    setSearchParams(
-                      searchParamsWithLeadTablePlace(searchParams, { row: borrowerId }),
-                      { replace: true },
-                    );
-                  }}
-                />
+                <LeadTableHiddenColumnsContext.Provider value={columnState.hidden}>
+                  <LeadTableHeaderSlotContext.Provider value={(
+                    <LeadQueueHideSlot
+                      view={tableView}
+                      hidden={columnState.hidden}
+                      onChange={(hidden) => writeColumns({ view: tableView, hidden })}
+                    />
+                  )}>
+                    <LeadTable
+                      leads={visibleLeads}
+                      totalMatching={page.totalMatching ?? null}
+                      truncatedAt={page.truncatedAt ?? null}
+                      growthAgentVerification={leadsPlaceholderData
+                        ? null
+                        : page.growthAgentVerification ?? null}
+                      paging={pages.paging}
+                      sortScope={order.sort === 'rank' && place.sort ? 'loaded' : 'server'}
+                      approvalRequests={approvalRequests}
+                      // The request chips and the scope row ride this route's chunk, not LeadTable's.
+                      requestChips={approvalRequests && <ApprovalRequestChips requests={approvalRequests} />}
+                      requestScopeRow={approvalRequests?.scope && (
+                        <ApprovalRequestScopeRow requests={approvalRequests} onClear={clearRequestScope} />
+                      )}
+                      exportContext={exportContext}
+                      salesTeam={salesTeam}
+                      view={tableView}
+                      onViewChange={(next) => writeColumns({ view: next, hidden: [...columnState.hidden] })}
+                      fillHeight
+                      restoreScroll
+                      headerStatus={freshness}
+                      campaignHandoff={campaignHandoff}
+                      // D-approval-flow-a2: entering is a new entry; leaving replaces it (Back never re-enters).
+                      triage={{
+                        mode: parseTriageMode(searchParams.get('mode')),
+                        onModeChange: (mode, row) => setSearchParams(
+                          searchParamsWithTriageMode(searchParams, mode, row), { replace: mode === null },
+                        ),
+                      }}
+                      // A sort (and Reset to rank) is a new history entry; expand and
+                      // collapse replace the current one, so Back leaves the queue.
+                      sort={place.sort}
+                      onSortChange={(next) => setSearchParams(
+                        searchParamsWithLeadTablePlace(searchParams, { sort: next, row: expandedRow }),
+                      )}
+                      expandedId={expandedRow}
+                      onExpandedChange={(borrowerId) => {
+                        setRequestedRow({ row: borrowerId, against: searchParams });
+                        setSearchParams(
+                          searchParamsWithLeadTablePlace(searchParams, { row: borrowerId }),
+                          { replace: true },
+                        );
+                      }}
+                    />
+                  </LeadTableHeaderSlotContext.Provider>
+                </LeadTableHiddenColumnsContext.Provider>
               </div>
             </>
           )}

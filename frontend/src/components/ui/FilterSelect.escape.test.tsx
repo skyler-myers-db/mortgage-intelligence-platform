@@ -16,8 +16,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { escapeLayerCount, pushEscapeLayer } from '../../lib/escapeStack';
 import { FilterSelect } from './FilterSelect';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 describe('FilterSelect Escape handling', () => {
   let container: HTMLDivElement;
   let root: Root;

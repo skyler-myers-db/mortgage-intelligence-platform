@@ -6,6 +6,7 @@
    widths and the Approval pin live in
    design-system/components/03-score-and-table.css.
    ============================================================ */
+@layer routes {
 
 /* Width below which each view scrolls horizontally behind the pinned
    Approval column: the sum of the fixed column widths
@@ -24,6 +25,8 @@
    (useLeadTableFillHeight measures it into --lead-table-fill-block), and is
    floored at the prototype's 480px. The viewport calc is only the value
    before the first measurement. */
+}
+@layer components {
 .tbl-wrap.tbl-wrap--fill {
   max-height: none;
   max-block-size: max(
@@ -31,6 +34,8 @@
     var(--lead-table-fill-block, calc(100dvh - var(--shell-topbar-h, var(--sp-12)) - var(--sp-16) * 3))
   );
 }
+}
+@layer routes {
 
 /* The VIEW preset pill keeps its label and value on one line when the
    Console narrows the header ("Sales / ops" wrapped). */
@@ -134,6 +139,13 @@
   gap: var(--sp-1);
 }
 .lead-table__flag { flex-shrink: 0; }
+/* A hidden Status / Relationship cell moves the caveats into the Borrower
+   cell (LeadTable.columns.ts, leadTableComplianceInBorrowerCell): their own
+   line under the borrower id and property ref, never dropped. */
+.lead-table__flags--borrower {
+  display: flex;
+  margin-block-start: var(--sp-1);
+}
 .lead-table__empty { color: var(--text-3); }
 
 /* Status header menu: the `.filter-menu` dropdown, portalled to <body> and
@@ -255,6 +267,7 @@
    whose box is in view, whatever its inline-end margin (measured), so a
    control under the pin stayed there; only a padded view that the control
    lies wholly outside of makes a focus reveal it. */
+}
 /* The thead size is registered NON-inherited: its one consumer,
    --tbl-focus-clear, is computed on this same element, and as an ordinary
    (inherited) custom property each measured write re-styled every row of
@@ -276,6 +289,7 @@
   inherits: true;
   initial-value: 0px;
 }
+@layer routes {
 .tbl-wrap:has(> .lead-table__table) {
   --tbl-head-block-size: var(--row-h);
   --tbl-pin-inline-size: 156px;
@@ -302,6 +316,23 @@
 .lead-table__table .tbl-cell--approval * {
   scroll-margin-inline: calc(var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset))
     calc(-1 * (var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset)));
+}
+/* That margin is Chromium's fix only. WebKit 26 reveals a focused pinned
+   control whenever the scroller has this inline-end padding, whatever the
+   control's scroll-margin (0, -160px and -600px measured, W5e): the table
+   went to its far end (scrollLeft 142 -> 284) after focus() returned, in a
+   later task or rendering update, so it could land after
+   useTableScrollClearance's frame restore, and the guard's scroll-event
+   restore waited on an event Linux WebKit dispatches late (CI: still 284
+   two frames on). Without the padding neither engine scrolls for a pinned
+   control. So the scroller drops it while focus is in the pin, where it has
+   no job: only the focused element is revealed, the pin is in view by
+   construction, and a focus that leaves the pin for a row control has the
+   padding back before its reveal. The :has() is on the scroller itself and
+   the padding is not inherited, so a focus change re-styles that one
+   element. */
+.tbl-wrap:has(> .lead-table__table .tbl-cell--approval:focus-within) {
+  scroll-padding-inline-end: 0;
 }
 /* J / K scroll the cursor row into view: the same clearance, plus a little
    air at each end. */
@@ -410,4 +441,29 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   vertical-align: bottom;
+}
+
+}
+@layer print {
+/* responsive-08 (W5e): the Lead Queue on paper. useLeadTablePrint renders
+   every loaded row; print.css unclips .tbl-wrap and hides the buttons and the
+   expanded rows. Paper has no scroller behind the pinned Approval column, so
+   the column widths give way to the page (auto layout, no view minimum) and
+   the pin is a plain cell. Self-contained and unnested, so the integrator can
+   lift it into @layer print. */
+@media print {
+  .lead-table__table.lead-table__table--default,
+  .lead-table__table.lead-table__table--sales-ops {
+    min-inline-size: 0;
+    table-layout: auto;
+  }
+  .lead-table__table col {
+    width: auto;
+  }
+  .lead-table__table .lead-table__approval-header,
+  .lead-table__table .tbl-cell--approval {
+    position: static;
+    box-shadow: none;
+  }
+}
 }

@@ -175,7 +175,8 @@ test.describe('analytics executive: why-now rate window', () => {
     await expect(panel.getByTestId('rate-window-itm').locator('svg polyline.rate-window__itm-line')).toHaveCount(1);
 
     // The sentence is computed from the fixture's own numbers (7.10% median vs 6.22% print).
-    const summary = panel.getByTestId('rate-window-summary');
+    // On the chart kit (W5e w5-analytics item 6) the sentences are the ChartFrame figcaption.
+    const summary = panel.locator('figcaption.chart-frame__summary');
     await expect(summary).toContainText(RATE_WINDOW_EXPECTED.spreadSentence);
     await expect(summary).toContainText(RATE_WINDOW_EXPECTED.itmSentence);
 

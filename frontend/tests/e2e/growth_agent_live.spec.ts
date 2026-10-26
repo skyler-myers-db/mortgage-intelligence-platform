@@ -248,8 +248,10 @@ test('Growth Agent run, saved watchlist, and Lead Queue handoff are live and rec
 
   await expect(page.getByText('Mortgage Growth Agent').first()).toBeVisible();
   await expect(page.getByText('Borrower Dossier Review')).toBeVisible();
-  await expect(page.getByText('Draft-only handoffs · no auto-send')).toBeVisible();
-  await expect(page.getByText('Audit checked after each run')).toBeVisible();
+  // The posture chips left the tab (24928f241); its intro states the same
+  // human-review posture: no auto-send, a reviewed Lead Queue handoff.
+  await expect(page.getByText('Nothing is sent without human approval.')).toBeVisible();
+  await expect(page.getByText('opens them in the Lead Queue for review')).toBeVisible();
 
   const stateScope = page.getByLabel('Growth Agent state scope');
   let workflowPostCount = 0;
@@ -332,7 +334,7 @@ test('Growth Agent run, saved watchlist, and Lead Queue handoff are live and rec
   await expect(
     page.locator('.growth-agent-run__section').filter({ hasText: 'Policy checks' }).first(),
   ).toBeVisible();
-  await expect(page.getByLabel('Growth Agent governance proof')).toContainText('PII-safe output');
+  await expect(page.getByLabel('Growth Agent governance proof')).toContainText('Human approval required');
   await expect(page.getByText(new RegExp(`Run correlation ${run.trace_id.slice(-12)}`, 'i'))).toBeVisible();
   await expect(page.getByText(new RegExp(`Hash ${run.tool_result_hash.slice(0, 12)}`))).toBeVisible();
   // Saved watchlists live on their own tab of /ask-genie (audit 2026-09-21 visual-07).
@@ -608,7 +610,7 @@ test('natural-language dossier and data-ops specialists use governed traces and 
   );
   expect(dossierRun.policy_checks.map((check) => check.label)).not.toContain('Dossier privacy');
   await expect(page.getByText(/Owner:\s*Borrower dossier lens/)).toBeVisible();
-  await expect(page.getByLabel('Growth Agent governance proof')).toContainText('PII-safe output');
+  await expect(page.getByLabel('Growth Agent governance proof')).toContainText('Human approval required');
   await expectLeadQueueHandoffMatchesActionableTotal(request, dossierRun);
   await expectAuditRowMatchesGrowthRun(request, dossierRun);
 

@@ -17,14 +17,16 @@
  *   }));
  *
  * This gate parses every src/**\/*.{test,test-support}.{ts,tsx} with the
- * TypeScript compiler, finds each vi.mock / vi.doMock whose specifier resolves
- * (relative to that file) to src/lib/api, and fails with file:line unless:
+ * TypeScript compiler, finds each vi.mock / vi.doMock whose specifier (a
+ * string, or the `import('...')` form) resolves (relative to that file) to
+ * src/lib/api, and fails with file:line unless:
  *   - there is no factory (an automock keeps every export name), or
  *   - the returned object spreads the real module: `...(await importOriginal())`
- *     or `...(await vi.importActual(...))`, or an identifier bound to either
- *     in the factory body, or
- *   - the returned object defines ApiError (the wave-4 criterion; tightening
- *     it to "must spread" is wave 5, see docs/testing.md).
+ *     or `...(await vi.importActual('<a specifier that resolves to
+ *     src/lib/api>'))`, or an identifier bound to either in the factory body.
+ * Defining ApiError is no longer enough (the wave-4 criterion, tightened to
+ * "must spread" in W5e): such a factory still leaves isAbortError,
+ * isWarmingUpError, dependencyLabel and the rest undefined.
  * PENDING_PARTIAL_API_MOCKS is shrink-only: each entry must still fail.
  *
  * Node environment: parses sources, never runs them.
@@ -81,27 +83,46 @@ function unwrap(node: ts.Expression): ts.Expression {
   return current;
 }
 
-/** `await importOriginal(...)` (the factory's own parameter) or `await vi.importActual(...)`. */
-function isRealModuleLoad(node: ts.Expression, importOriginal: string | null): boolean {
+/** The module a mock or importActual names: a string, or the `import('...')` form. */
+function specifierText(node: ts.Expression | undefined): string | null {
+  if (!node) return null;
+  if (ts.isStringLiteralLike(node)) return node.text;
+  if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+    const [argument] = node.arguments;
+    return argument && ts.isStringLiteralLike(argument) ? argument.text : null;
+  }
+  return null;
+}
+
+/**
+ * `await importOriginal(...)` (the factory's own parameter), or
+ * `await vi.importActual('<spec>')` whose spec resolves, relative to `file`,
+ * to src/lib/api: the real module of a SIBLING (`../lib/apiTypes`) is not it.
+ */
+function isRealModuleLoad(node: ts.Expression, importOriginal: string | null, file: string): boolean {
   const expression = unwrap(node);
   if (!ts.isAwaitExpression(expression)) return false;
   const call = unwrap(expression.expression);
   if (!ts.isCallExpression(call)) return false;
   const callee = call.expression;
   if (ts.isIdentifier(callee)) return importOriginal !== null && callee.text === importOriginal;
-  return (
-    ts.isPropertyAccessExpression(callee) &&
-    ts.isIdentifier(callee.expression) &&
-    callee.expression.text === 'vi' &&
-    callee.name.text === 'importActual'
-  );
+  if (
+    !ts.isPropertyAccessExpression(callee) ||
+    !ts.isIdentifier(callee.expression) ||
+    callee.expression.text !== 'vi' ||
+    callee.name.text !== 'importActual'
+  ) {
+    return false;
+  }
+  const spec = specifierText(call.arguments[0]);
+  return spec !== null && resolveSpecifier(file, spec) === TARGET;
 }
 
 /** Names bound, anywhere in the factory body, to a real-module load. */
-function realModuleBindings(body: ts.Node, importOriginal: string | null): Set<string> {
+function realModuleBindings(body: ts.Node, importOriginal: string | null, file: string): Set<string> {
   const bound = new Set<string>();
   const visit = (node: ts.Node): void => {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && isRealModuleLoad(node.initializer, importOriginal)) {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && isRealModuleLoad(node.initializer, importOriginal, file)) {
       bound.add(node.name.text);
     }
     ts.forEachChild(node, visit);
@@ -140,20 +161,20 @@ function propertyName(member: ts.ObjectLiteralElementLike): string | null {
   return null;
 }
 
-function classifyFactory(factory: ts.Expression | undefined): Verdict {
+function classifyFactory(factory: ts.Expression | undefined, file: string): Verdict {
   if (!factory) return 'automock';
   const fn = unwrap(factory);
   if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) return 'bare';
   const first = fn.parameters[0];
   const importOriginal = first && ts.isIdentifier(first.name) ? first.name.text : null;
-  const bound = realModuleBindings(fn.body, importOriginal);
+  const bound = realModuleBindings(fn.body, importOriginal, file);
   const objects = returnedObjects(fn);
   if (objects.length === 0) return 'bare';
   const spreads = (object: ts.ObjectLiteralExpression): boolean =>
     object.properties.some((member) => {
       if (!ts.isSpreadAssignment(member)) return false;
       const spread = unwrap(member.expression);
-      return isRealModuleLoad(spread, importOriginal) || (ts.isIdentifier(spread) && bound.has(spread.text));
+      return isRealModuleLoad(spread, importOriginal, file) || (ts.isIdentifier(spread) && bound.has(spread.text));
     });
   if (objects.every(spreads)) return 'spread';
   if (objects.every((object) => object.properties.some((member) => propertyName(member) === 'ApiError'))) return 'api-error';
@@ -174,9 +195,10 @@ function apiMocksIn(file: string, text: string): ApiMock[] {
       (node.expression.name.text === 'mock' || node.expression.name.text === 'doMock')
     ) {
       const [specifier, factory] = node.arguments;
-      if (specifier && ts.isStringLiteralLike(specifier) && resolveSpecifier(file, specifier.text) === TARGET) {
+      const spec = specifierText(specifier);
+      if (spec !== null && resolveSpecifier(file, spec) === TARGET) {
         const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
-        mocks.push({ file, line: line + 1, verdict: classifyFactory(factory) });
+        mocks.push({ file, line: line + 1, verdict: classifyFactory(factory, file) });
       }
     }
     ts.forEachChild(node, visit);
@@ -193,9 +215,19 @@ function testSources(): Array<{ file: string; text: string }> {
     .map((entry) => ({ file: `src/${entry}`, text: readFileSync(`${SRC_ROOT}${entry}`, 'utf8') as string }));
 }
 
+/** Only an automock or a spread of the real module keeps every lib/api export. */
+const isFailing = (mock: ApiMock): boolean => mock.verdict === 'bare' || mock.verdict === 'api-error';
+
+function offenderMessage(mock: ApiMock): string {
+  const fix = 'spread (await importOriginal<typeof import(...)>())';
+  return mock.verdict === 'api-error'
+    ? `${mock.file}:${mock.line} defines ApiError but omits the other exports: ${fix}`
+    : `${mock.file}:${mock.line} replaces the whole module: ${fix}`;
+}
+
 describe('lib/api mocks keep the real module (bde112b0)', () => {
   const mocks = testSources().flatMap(({ file, text }) => apiMocksIn(file, text));
-  const failing = mocks.filter((mock) => mock.verdict === 'bare');
+  const failing = mocks.filter(isFailing);
 
   it('finds the repo-wide mock population (non-vacuity)', () => {
     expect(mocks.length).toBeGreaterThanOrEqual(100);
@@ -229,10 +261,54 @@ describe('lib/api mocks keep the real module (bde112b0)', () => {
     expect(verdict('src/routes/x.test.tsx', "vi.mock('../lib/api', factory);")).toEqual(['bare']);
   });
 
-  it('every lib/api factory spreads the real module or defines ApiError', () => {
-    const offenders = failing
-      .filter((mock) => !(mock.file in PENDING_PARTIAL_API_MOCKS))
-      .map((mock) => `${mock.file}:${mock.line} replaces the whole module: spread (await importOriginal<typeof import(...)>())`);
+  it('fails a factory that only defines ApiError, naming what it omits (W5e)', () => {
+    const [mock] = apiMocksIn('src/routes/x.test.tsx', "vi.mock('../lib/api', () => ({ ApiError: class extends Error {}, api }));");
+    expect(mock.verdict).toBe('api-error');
+    expect(isFailing(mock)).toBe(true);
+    expect(offenderMessage(mock)).toBe(
+      'src/routes/x.test.tsx:1 defines ApiError but omits the other exports: spread (await importOriginal<typeof import(...)>())',
+    );
+  });
+
+  it('counts vi.importActual only when its specifier resolves to lib/api (W5e)', () => {
+    const verdict = (file: string, text: string): Verdict[] => apiMocksIn(file, text).map((mock) => mock.verdict);
+    // The real module of a sibling is not lib/api.
+    expect(
+      verdict('src/routes/x.test.tsx', "vi.mock('../lib/api', async () => ({ ...(await vi.importActual('../lib/apiTypes')), api }));"),
+    ).toEqual(['bare']);
+    expect(
+      verdict('src/routes/x.test.tsx', "vi.mock('../lib/api', async () => ({ ...(await vi.importActual('../lib/api')), api }));"),
+    ).toEqual(['spread']);
+    // Resolved relative to the file, and through a bound name.
+    expect(
+      verdict(
+        'src/components/mortgage/x.test.tsx',
+        "vi.mock('../../lib/api', async () => { const real = await vi.importActual('../lib/api'); return { ...real, api }; });",
+      ),
+    ).toEqual(['bare']);
+    expect(
+      verdict(
+        'src/components/mortgage/x.test.tsx',
+        "vi.mock('../../lib/api', async () => { const real = await vi.importActual('../../lib/api'); return { ...real, api }; });",
+      ),
+    ).toEqual(['spread']);
+  });
+
+  it('detects the vi.mock(import(...)) and vi.doMock(import(...)) forms (W5e)', () => {
+    const verdict = (file: string, text: string): Verdict[] => apiMocksIn(file, text).map((mock) => mock.verdict);
+    expect(verdict('src/routes/x.test.tsx', "vi.mock(import('../lib/api'), () => ({ api }));")).toEqual(['bare']);
+    expect(verdict('src/lib/x.test.ts', "vi.doMock(import('./api'), () => ({ ApiError: class extends Error {}, api }));")).toEqual([
+      'api-error',
+    ]);
+    expect(
+      verdict('src/routes/x.test.tsx', "vi.doMock(import('../lib/api'), async (importOriginal) => ({ ...(await importOriginal()), api }));"),
+    ).toEqual(['spread']);
+    expect(verdict('src/routes/x.test.tsx', "vi.mock(import('../lib/api'));")).toEqual(['automock']);
+    expect(verdict('src/routes/x.test.tsx', "vi.mock(import('../lib/apiTypes'), () => ({ x: 1 }));")).toEqual([]);
+  });
+
+  it('every lib/api factory spreads the real module', () => {
+    const offenders = failing.filter((mock) => !(mock.file in PENDING_PARTIAL_API_MOCKS)).map(offenderMessage);
     expect(offenders).toEqual([]);
   });
 

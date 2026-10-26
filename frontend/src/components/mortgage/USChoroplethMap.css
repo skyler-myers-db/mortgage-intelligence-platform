@@ -16,6 +16,7 @@
    in its lazy chunk). The prototype legend (Module 0 Prototype.html
    ~L1860-1871) has no scenario control.
    ============================================================ */
+@layer routes {
 
 /* USPS labels on populated states. Sized in SVG user units (the Albers
    viewBox is ~975 wide, drawn at ~0.5-0.7x in the hero map), so the token
@@ -72,7 +73,11 @@
    pull the overlay legend out of its absolute corner (the container-query
    and ZIP / table rules that make it static are more specific and still
    win). */
+}
+@layer components {
 .map-legend.stable-refresh-region { position: absolute; }
+}
+@layer routes {
 
 /* Rate Lever host (audit wow-stage-1): the slot reserves the control's
    height so loading its chunk does not move the stage. The host is laid out
@@ -130,11 +135,13 @@
    state at their longest are 296.5625px on Segments with the Console closed
    (229.375px on Home with it open, 214.22 / 198.03px watching, 175.19px in the
    other layouts); the off-Linux emulation reads 263.5625px there, so it under-
-   measures this layout and only the Linux lines set the slot. 300px reserves
-   it with 3.4375px to spare, inside the tightness window.
-   geo-foundation.fixture.spec.ts logs every measurement and pins slot >= each
-   state everywhere, and slot - max < var(--sp-2) on Linux. */
-.map-legend__lever-slot { min-block-size: calc(var(--sp-16) * 5 - var(--sp-5)); }
+   measures this layout and only the Linux lines set the slot. W5e's lexicon
+   pass ("In the Money" for "the refi screen") shortened those sentences: the
+   W5e PR's first CI run measured the same layout at 280.375px (every other
+   state lower), so 284px reserves it with 3.625px to spare, inside the
+   tightness window. geo-foundation.fixture.spec.ts logs every measurement and
+   pins slot >= each state everywhere, and slot - max < var(--sp-2) on Linux. */
+.map-legend__lever-slot { min-block-size: calc(var(--sp-16) * 4 + var(--sp-6) + var(--sp-1)); }
 .map-wrap:has(.map-legend__lever) .map-levels {
   flex: 1 0 auto;
   min-block-size: calc(var(--sp-16) * 5);
@@ -320,6 +327,8 @@
   .map-wrap:focus-within .map-legend__hint { opacity: 1; }
 }
 
+}
+@layer modes {
 /* css-hygiene review #2 (forced colours): the contrast-modes rule
    `.map-region.map-region { stroke: CanvasText }` ties the hover and selected
    strokes' specificity and wins on order, so a forced-colours user saw no
@@ -330,4 +339,11 @@
     stroke: Highlight;
     stroke-width: 2;
   }
+  /* W5e css-cascade review: in the modes layer, 33-contrast-modes'
+     `.zip-tile { border: 1px solid CanvasText }` now outranks 08-map's
+     populated-tile hover edge by layer, so a hovered ZIP tile only lifted.
+     The same restore as the map regions: a selected tile already edges in
+     Highlight (33), and a hovered populated one does again. */
+  .zip-tile.zip-tile[data-populated]:hover { border-color: Highlight; }
+}
 }

@@ -41,7 +41,7 @@ test('leads with the three-plus headline and the largest overlap, linked into th
   await expect(stack(page).getByRole('heading', { level: 2, name: 'Signal stack' })).toBeVisible();
   await expect(stack(page)).toContainText('795 borrowers fire three or more signals at once. 92 of them are contactable.');
   await expect(stack(page)).toContainText(
-    'Largest overlap: Prime Refi Candidates, HELOC Intent and Home Equity Candidate: 520 borrowers carry all three (61 contactable).',
+    'Largest overlap: In the Money, HELOC Intent and Home Equity Candidate: 520 borrowers carry all three (61 contactable).',
   );
   await expect(stack(page)).toContainText(
     'Whole book, six core segments; not narrowed by the filters below. The Lead Queue lists only contact-eligible borrowers scoring 50 or more.',
@@ -56,7 +56,7 @@ test('leads with the three-plus headline and the largest overlap, linked into th
   await expect(columns).toHaveCount(SEGMENT_COMBINATIONS.combinations.filter((row) => row.signal_count >= 2).length);
   await expect(columns.first()).toHaveAttribute('href', '/lead-queue?segment_codes=itm%2Cequity&segment_mode=all');
   await expect(columns.first()).toHaveAccessibleName(
-    'Prime Refi Candidates and Home Equity Candidate: 2,100 borrowers carry exactly these signals, 2,715 carry at least these, 313 contactable. Open in Lead Queue',
+    'In the Money and Home Equity Candidate: 2,100 borrowers carry exactly these signals, 2,715 carry at least these, 313 contactable. Open in Lead Queue',
   );
   await columns.first().hover();
   await button(page, 'View as table').click();

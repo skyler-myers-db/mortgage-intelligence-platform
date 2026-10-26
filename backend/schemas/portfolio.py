@@ -177,7 +177,7 @@ class KpiTrend(BaseModel):
 
     series: list[float]
     delta_pct: float | None = None
-    direction: str = "flat"  # "up" | "down" | "flat"
+    direction: Literal["up", "down", "flat"] = "flat"
     comparison_label: str | None = None
     note: str | None = None
 

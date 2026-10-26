@@ -56,7 +56,7 @@ This tracker captures the remaining work to keep Module 0 aligned with modern we
 - [x] **React Compiler pilot**
   - [x] Add React Compiler through the current Vite 8 `reactCompilerPreset` path.
   - [x] Add React Hooks `recommended-latest` compiler-safety lint rules.
-  - Keep `react-hooks/set-state-in-effect` advisory-only until the remaining query-layer migration removes route-local state mirroring.
+  - [x] `react-hooks/set-state-in-effect` is an error for production sources repo-wide (W5e, audit quality-10 step 4 / stack-09 item 5); test files stay ungated. The files that still carried a hit on the W5e base sit on the shrink-only `SET_STATE_IN_EFFECT_PENDING` list in `frontend/eslint.config.js`, each with its owning lane; `src/lib/setStateInEffectScope.test.ts` fails when an entry no longer reproduces a hit.
   - Remove redundant manual memoization only where compiler coverage is proven.
   - Validation: frontend lint, focused Vitest, production build, bundle budget; deployed app passed route-performance timing/layout canaries with 12/12 tests and the expanded browser/device/accessibility matrix with 52/52 tests.
 
@@ -159,6 +159,7 @@ This tracker captures the remaining work to keep Module 0 aligned with modern we
   - Dependabot version-update config was removed to preserve the repo contract that `main` stays the only persistent branch unless a human creates a bounded feature branch.
   - Dependency updates remain manual, intentional feature-branch work covered by CI audit, lint, tests, build, bundle budget, source hygiene, and Playwright gates.
   - Validation: no `.github/dependabot.yml` is present; `git ls-remote --heads origin` shows no Dependabot branches; `gh pr list --state open` shows no Dependabot PRs.
+  - 2026-09-30 ruling (D-platform-process-a, audit quality-v2 / stack-10): a weekly report, yes; Renovate and Dependabot, no. Reasons: bot branches break the main-only contract; the security job checks out every ref and gitleaks scans every fetched ref, so each bot branch would join every main scan; a bot PR could never merge without a person anyway, because every batch re-baselines the byte budgets, regenerates VRT in the pinned Playwright image, walks the upgrade checklist and refreshes `uv.lock` only with `--upgrade-package`. Built in W5e (`w5-deps-report`): `.github/workflows/deps-report.yml` (Mondays 13:17 UTC and on dispatch) runs `tools/deps_report` in a read-only job and edits ONE issue labelled `dependency-report` from an issues-only job that runs no repository code. Dated holds live in `tools/dependency_holds.json`; `tests/unit/test_dependency_update_policy.py` pins the no-bot rule and the workflow's permissions.
 
 - [x] **Interaction-affordance polish**
   - [x] Make Home data-estate lane chips and asset rows expandable/clickable with contract status, row count, freshness, governed object, proof status, and lineage drawer access using existing `/api/data-estate` data only.
@@ -1118,15 +1119,20 @@ built. What shipped (each with the full signoff loop):
 - **Slice 3** (merge 3ea1c50): personalized + compelling outreach DRAFT copy —
   a safe qualitative `_personalization_hook` + proof-backed `why_now` + a clear
   low-effort CTA per channel; still human-approved, no send. TILA/fair-lending
-  safe and STRUCTURALLY guarded: `_figure_safe_reason` drops any `why_now`
-  carrying a %/$/bps/rate before it reaches copy. Copy cluster extracted to
+  safe by STRUCTURE, enforced by test: `why_now`, the offer display text and
+  the segment codes are not composer inputs (the dead `_figure_safe_reason`
+  gate was removed 2026-10, W5e), and
+  `tests/unit/test_outreach_no_internal_terms.py` composes every channel x
+  offer x relationship x hook branch with adversarial figure- and
+  label-bearing inputs. Copy cluster extracted to
   `backend/services/outreach_copy.py` (kept outreach.py under the 1000-line
   monolith threshold).
 
 ### Signoff caught real issues (both fixed before merge)
 - QA BLOCK #1: figure-bearing `why_now` could leak a TILA trigger term into
-  borrower copy; the test was rigged with clean input. → structural
-  `_figure_safe_reason` guard + adversarial test (real fixture string).
+  borrower copy; the test was rigged with clean input. → `why_now` removed
+  from the composer's inputs + adversarial test (real fixture string); the
+  structural guarantee is test-enforced (test_outreach_no_internal_terms.py).
 - QA BLOCK #2: the change tripped the 1000-line monolith architecture test. →
   copy cluster extracted to a service module (1019 → 835 lines).
 

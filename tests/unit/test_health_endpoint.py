@@ -465,7 +465,7 @@ def test_health_authenticated_returns_runtime_status_only(
     # test_health_workspace_host.py.
     monkeypatch.setattr(health_mod.settings, "databricks_host", None)
 
-    res = client.get("/api/health", headers={"X-Forwarded-Email": "skyler@entrada.ai"})
+    res = client.get("/api/health", headers={"X-Forwarded-Email": "operator@summit.example"})
     assert res.status_code == 200
     body = res.json()
     assert set(body.keys()) == {
@@ -489,8 +489,8 @@ def test_health_authenticated_returns_runtime_status_only(
     assert "log_export" not in body
     assert "fallback_identity_fallbacks_total" not in body
     assert body["actor_cache_key"].startswith("actor_")
-    assert "skyler" not in body["actor_cache_key"].lower()
-    assert "entrada" not in body["actor_cache_key"].lower()
+    assert "operator" not in body["actor_cache_key"].lower()
+    assert "summit" not in body["actor_cache_key"].lower()
 
 
 def test_authenticated_health_surfaces_deployed_git_sha(
@@ -566,7 +566,7 @@ def test_authenticated_health_surfaces_deployed_git_sha(
     assert "deployment_lease_id" not in anon.json()
     assert "agent_gateway_binding_sha256" not in anon.json()
 
-    auth = client.get("/api/health", headers={"X-Forwarded-Email": "skyler@entrada.ai"})
+    auth = client.get("/api/health", headers={"X-Forwarded-Email": "operator@summit.example"})
     assert auth.status_code == 200
     assert auth.json()["git_sha"] == "abc123def456"
     assert auth.json()["deployment_lease_id"] == "11111111-1111-4111-8111-111111111111"
@@ -745,7 +745,7 @@ def test_health_actor_cache_key_changes_by_actor(
     monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
 
     first = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"}).json()
-    second = client.get("/api/health", headers={"X-Forwarded-Email": "skyler@entrada.ai"}).json()
+    second = client.get("/api/health", headers={"X-Forwarded-Email": "operator@summit.example"}).json()
 
     assert first["actor_cache_key"].startswith("actor_")
     assert second["actor_cache_key"].startswith("actor_")

@@ -89,7 +89,21 @@ converge_signed_blue_agent_proxy_boundary() {
 }
 
 deny_all_agent_proxy_access() {
-  local failed=0
+  local failed=0 denied=0
+  local -a owned_args=()
+  # W5e C7(c): in the CI staging install (a non-empty install suffix) deny-all
+  # refuses, exit 2 and no revoke, unless the proxy holds no endpoint access
+  # outside this install's own Supervisor endpoints, named here. Exit 2 also
+  # covers a run that never started (a missing signing key, a usage error):
+  # nothing was revoked in either case.
+  if [[ -n "${BUNDLE_VAR_install_suffix:-}" ]]; then
+    if [[ -n "${MIP_AGENT_SUPERVISOR_ENDPOINT:-}" ]]; then
+      owned_args+=(--install-owned-endpoint "$MIP_AGENT_SUPERVISOR_ENDPOINT")
+    fi
+    if [[ -n "${MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT:-}" ]]; then
+      owned_args+=(--install-owned-endpoint "$MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT")
+    fi
+  fi
   run_with_proof_signing_authority \
     "$PYTHON" -m tools.databricks.agent_proxy_access \
     --mode deny-all \
@@ -100,7 +114,15 @@ deny_all_agent_proxy_access() {
       "${MIP_DEPLOYMENT_SOURCE_GIT_SHA:?deployment source is required}" \
     --application-id "${DATABRICKS_AGENT_PROXY_CLIENT_ID:?agent-proxy identity is required}" \
     --expected-inventory-principal "${DEPLOY_INVENTORY_PRINCIPAL:?inventory principal is required}" \
-    || failed=1
+    ${owned_args[@]+"${owned_args[@]}"} \
+    || denied=$?
+  if [[ "$denied" -ne 0 ]]; then
+    failed=1
+    if [[ "$denied" -eq 2 && -n "${BUNDLE_VAR_install_suffix:-}" ]]; then
+      echo "${RED}[deploy] CI install agent-proxy deny-all refused before any revoke, or did not start (exit 2); compensation is unproven.${RST}" >&2
+      return 1
+    fi
+  fi
   run_with_account_identity \
     run_with_agent_proxy_credentials \
       "$PYTHON" -m tools.databricks.verify_agent_proxy_identity_boundary \

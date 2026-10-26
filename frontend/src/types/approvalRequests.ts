@@ -1,3 +1,4 @@
+import type { ApiRequest, ApiResponse } from './api.gen';
 /**
  * Maker-checker approval requests (audit flow-02 / shell-06, D-approval-flow-c):
  * hand types named after backend/schemas/approval_request.py, each paired with
@@ -14,54 +15,19 @@ export type ApprovalRequestSkipReason = 'not_found' | 'not_contactable' | 'alrea
 export type ApprovalRequestRowState = 'open' | 'approved' | 'rejected' | 'decided_outside' | 'withdrawn' | 'expired';
 
 /** POST /outreach/approval-requests. */
-export interface ApprovalRequestCreate {
-  borrower_ids: string[];
-  /** The governed justification, at most 500 characters ("Reason for the request"). */
-  rationale: string;
-  /** One UUID per intent: a retry of the same content replays the stored answer. */
-  request_key: string;
-}
+export type ApprovalRequestCreate = ApiRequest<'ApprovalRequestCreate'>;
 
-export interface ApprovalRequestSkip {
-  borrower_id: string;
-  reason: ApprovalRequestSkipReason;
-}
+export type ApprovalRequestSkip = ApiResponse<'ApprovalRequestSkip'>;
 
-export interface ApprovalRequestCreated {
-  batch_id: string;
-  audit_event_id: string;
-  requested: string[];
-  skipped: ApprovalRequestSkip[];
-}
+export type ApprovalRequestCreated = ApiResponse<'ApprovalRequestCreated'>;
 
-export interface ApprovalRequestRow {
-  borrower_id: string;
-  state: ApprovalRequestRowState;
-  approval_id: string | null;
-}
+export type ApprovalRequestRow = ApiResponse<'ApprovalRequestRow'>;
 
-export interface ApprovalRequestBatchView {
-  batch_id: string;
-  /** A readable label derived from the requester's identity; never an email. */
-  requested_by_display: string | null;
-  is_mine: boolean;
-  rationale: string;
-  created_at: string;
-  requested_by: string | null;
-  rows: ApprovalRequestRow[];
-}
+export type ApprovalRequestBatchView = ApiResponse<'ApprovalRequestBatchView'>;
 
-export interface ApprovalRequestList {
-  scope: ApprovalRequestScope;
-  batches: ApprovalRequestBatchView[];
-}
+export type ApprovalRequestList = ApiResponse<'ApprovalRequestList'>;
 
-export interface ApprovalRequestWithdrawn {
-  batch_id: string;
-  withdrawn_now: number;
-  already_closed: number;
-  audit_event_id: string | null;
-}
+export type ApprovalRequestWithdrawn = ApiResponse<'ApprovalRequestWithdrawn'>;
 
 /**
  * The withdraw POST takes no body (the operation's body is `never`); the

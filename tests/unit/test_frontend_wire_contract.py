@@ -27,6 +27,7 @@ import json
 import re
 from functools import cache
 
+from tests.unit import frontend_wire_aliases as aliases
 from tests.unit import frontend_wire_contract as wire
 from tests.unit import frontend_wire_raw_sites as wire_raw
 from tests.unit import frontend_wire_source as source
@@ -40,45 +41,16 @@ BINDING_EXEMPT: dict[str, str] = {
     "frontend/src/lib/apiClients/admin.ts:adminRules:1": _ADMIN_PASSTHROUGH,
     "frontend/src/lib/apiClients/admin.ts:adminSources:1": _ADMIN_PASSTHROUGH,
     "frontend/src/lib/apiClients/admin.ts:adminOperations:1": _ADMIN_PASSTHROUGH,
-    "frontend/src/lib/apiClients/admin.ts:adminCapabilities:1": _ADMIN_PASSTHROUGH,
     "frontend/src/lib/apiClients/admin.ts:adminRunOperation:1": (
-        f"{_ADMIN_PASSTHROUGH}; typeof payload body: request pair via Parameters<> in wireContract.admin.check.ts"
+        f"{_ADMIN_PASSTHROUGH}; the response only (the AdminOperationRunBody body is bound by its pair)"
     ),
     "frontend/src/lib/bootPrime.ts:usableJson:1": "T is inferred from the fallback transport call, which is itself bound",
 }
 
-# The W5c / W5d lanes a wire-drift entry may name as its P2 owner (closed set).
-DRIFT_OWNER_LANES = frozenset(
-    {
-        "w5-lead-queue-paging",
-        "w5-dossier-decisions",
-        "w5-refusal-capture-sales",
-        "w5-genie-stop-context",
-        "w5-shell-nav-followups",
-        "w5-field-vitals",
-        "w5-zcta-watchlist",
-        "w5-evidence-drawer",
-        "w5-lq-requests-binding",
-        "w5-print-glossary-sales-manager",
-        "w5-palette-offer-sales-loop",
-        "w5-wire-types",
-        "w5-test-harness-deps-report",
-        "w5-css-cascade",
-        "w5-lexicon-copy",
-        "w5-compiler-lint",
-        "w5-gold-slot-cache",
-        "w5-actor-binding",
-        "w5-sales-loop",
-        "w5-followups-snooze",
-        "w5-genie-context-deeplink",
-        "w5-genie-provenance-tiles",
-        "w5-growth-watchlists",
-        "w5-analytics",
-        "w5-lead-queue-columns",
-        "w5-lead-table-compile",
-        "w5-deps-report",
-    }
-)
+# Zero wire drift is pinned (W5e w5-wire-types A9, integrator decision 2): every
+# P2 entry was fixed at its cause, so no lane may own a new one. Any directive
+# fails as an unknown owner lane; fix the drift in the schema or the hand type.
+DRIFT_OWNER_LANES: frozenset[str] = frozenset()
 # A drift touching one of these names the record's fail-closed rule.
 FAIL_CLOSED_FIELDS = (
     "approval_status",
@@ -127,9 +99,22 @@ def test_every_schema_named_hand_type_has_its_pair() -> None:
     sides = {side for side, _, _ in named}
     print(f"schema-named hand types: {len(named)} ({sorted(sides)})")
 
+    covered = aliases.alias_coverage(project)
+    print(f"generated aliases counted as coverage: {len(covered)}")
+
     assert {"response", "request"} <= sides
     assert checks.unresolved == []
-    assert wire.missing_coverage(named, checks.pairs) == []
+    assert wire.missing_coverage(named, checks.pairs, covered) == []
+
+
+def test_every_indexed_vocabulary_has_its_widening_guard() -> None:
+    """D-api-types-a3 P3: `export type X = ApiResponse<'S'>['f']` needs `Expect<string extends X ? false : true>`."""
+
+    project, _, checks, _ = _state()
+    vocabularies = aliases.indexed_vocabularies(project)
+    print(f"indexed vocabularies: {len(vocabularies)}")
+
+    assert aliases.unguarded_vocabularies(project, checks.files) == []
 
 
 def test_every_network_call_site_is_bound_or_exempt() -> None:
@@ -242,6 +227,18 @@ def test_check_files_hold_only_dated_owner_tagged_drift_directives() -> None:
                 assert f"fail-closed field {field}" in m.group(3), f"{name}:{number}: say 'fail-closed field {field}'"
         entries += 1
     print(f"wire-drift entries: {entries}")
+
+
+def test_no_wire_drift_remains() -> None:
+    """quality-04 P2 is complete: the check files hold no wire-drift entry at all."""
+
+    found = [f"{name}:{number}" for name, number, raw, _ in _check_file_lines() if "@ts-expect-error" in raw]
+
+    assert found == [], (
+        "zero wire drift is pinned (W5e integrator decision 2): fix a new drift at its cause, "
+        "in the backend schema or the hand type, never with a @ts-expect-error entry"
+    )
+    assert not DRIFT_OWNER_LANES, "DRIFT_OWNER_LANES stays empty: no lane owns a drift entry"
 
 
 def test_check_files_hold_no_any_and_no_assertion() -> None:

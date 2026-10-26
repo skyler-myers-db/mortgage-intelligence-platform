@@ -22,11 +22,11 @@ export {
   type LeadCsvExportPlan,
 } from './LeadTable.csvPlan';
 
-function csvValue(raw: unknown): string {
+function csvValue(raw: string | number | boolean | null | undefined): string {
   if (raw === null || raw === undefined) return '';
   if (typeof raw === 'boolean') return raw ? 'true' : 'false';
   if (typeof raw === 'number') return Number.isFinite(raw) ? String(raw) : '';
-  return String(raw);
+  return raw;
 }
 
 /** The confirmation line: the real row count, scope, order and exclusions. */

@@ -96,7 +96,7 @@ def test_user_visit_write_and_previous_visit_round_trip() -> None:
     client = _client_from_env()
     _apply_schema(client)
 
-    actor = f"integration-s3+{uuid4().hex[:12]}@entrada.ai"
+    actor = f"integration-s3+{uuid4().hex[:12]}@summit.example"
     tracker = VisitTracker(lambda: client, window_s=60.0)
     assert tracker.maybe_claim(actor) is True
     tracker.record_visit(actor)

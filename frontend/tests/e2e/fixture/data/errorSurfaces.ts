@@ -71,12 +71,12 @@ export const TRANSPORT_JARGON = /Failed to fetch|Service Unavailable|Internal Se
 /**
  * The reviewed prompt the Lead Queue's measured zero prefills for
  * ?state=TX&segment=itm: lib/genieContext.ts genieLeadPrompt over
- * genieContextTemplates.json `leadTemplate`, with the federal state name and
- * the registry's segment name lower-cased (segmentMetadata: "Prime Refi
- * Candidates"). Restated here because fixture code never loads src at runtime.
+ * genieContextTemplates.json's itm `leadTemplate` (segmentTemplatesByCode),
+ * with the federal state name. Restated here because fixture code never
+ * loads src at runtime.
  */
 export const TX_ITM_PROMPT =
-  'How many borrowers in Texas are in the prime refi candidates segment, and what is the average rate spread?';
+  'How many in-the-money borrowers are in Texas, and what is the average rate spread?';
 
 /** The error bodies above, in the exporter's record shape (non-2xx: routing and the synthetic guard only). */
 export function contractSamples(): ContractSample[] {

@@ -22,8 +22,6 @@ import {
   type ViewBox,
 } from './useSvgViewBox';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const FIT: ViewBox = { x: 100, y: 100, w: 40, h: 30 };
 const BOUNDS: ViewBox = { x: 0, y: 0, w: 400, h: 300 };
 

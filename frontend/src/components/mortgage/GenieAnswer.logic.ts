@@ -3,6 +3,7 @@ import type {
   GenieVisualization,
 } from '../../types';
 import { currency, formatCount, formatFixed } from '../../lib/formatters';
+import { LEXICON } from '../../lib/lexicon';
 import { safeSegmentName } from '../../lib/segmentMetadata';
 
 export const MAX_TABLE_ROWS = 10;
@@ -272,7 +273,7 @@ function distinctLabelChart(
   return chart;
 }
 
-/** "in_the_money_flag" -> "In The Money" — the flag name as a cohort label. */
+/** "in_the_money_flag" -> "In the Money" — the flag name as a cohort label. */
 function flagCohortName(column: string): string {
   return humanizeKey(column).replace(/\s+Flag$/i, '');
 }
@@ -281,7 +282,7 @@ function flagCohortName(column: string): string {
  * A table that is only flags plus a measure describes cohorts, not
  * categories: each row's identity is the COMBINATION of flags that are
  * true. Compose that combination into the bar label so a co-occurrence
- * sweep reads as "In The Money · Equity" instead of "true".
+ * sweep reads as "In the Money · Equity" instead of "true".
  */
 function chartFromFlagCohorts(
   rows: Array<Record<string, unknown>>,
@@ -418,7 +419,13 @@ function inferChart(
 export function humanizeKey(k: string): string {
   const override = HUMANIZED_KEY_LABELS[k.toLowerCase()];
   if (override) return override;
-  return k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  // Title case would read "In The Money"; the lexicon's label keeps "the"
+  // lower-case wherever the column names the rule (in_the_money, its flag
+  // and its counts).
+  return k
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace(/\bIn The Money\b/g, LEXICON.inTheMoney.label);
 }
 
 /** A Genie numeric value: whole numbers grouped, fractions at two decimals. */

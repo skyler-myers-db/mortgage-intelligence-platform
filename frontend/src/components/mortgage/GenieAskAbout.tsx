@@ -1,5 +1,6 @@
 import { openGenie } from '../../lib/genieOpen';
 import { Icon } from '../Icon';
+import { Tooltip } from '../ui/Tooltip';
 
 /**
  * "Ask Genie about this" entry point (audit 2026-09-21 `genie-04`, phase 1).
@@ -38,15 +39,16 @@ export function GenieAskAbout({ prompt, subject, variant = 'text' }: GenieAskAbo
     .filter(Boolean)
     .join(' ');
   return (
-    <button
-      type="button"
-      className={className}
-      aria-label={`Ask Genie about this ${subject}`}
-      title={`Ask Genie: ${prompt}`}
-      onClick={() => openGenie({ prompt })}
-    >
-      <Icon name="sparkle" size={12} />
-      {variant === 'text' && 'Ask Genie'}
-    </button>
+    <Tooltip content={`Ask Genie: ${prompt}`}>
+      <button
+        type="button"
+        className={className}
+        aria-label={`Ask Genie about this ${subject}`}
+        onClick={() => openGenie({ prompt })}
+      >
+        <Icon name="sparkle" size={12} />
+        {variant === 'text' && 'Ask Genie'}
+      </button>
+    </Tooltip>
   );
 }

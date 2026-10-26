@@ -10,8 +10,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChartFrame } from './ChartFrame';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 describe('ChartFrame', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -66,9 +64,9 @@ describe('ChartFrame', () => {
     expect(live).toHaveLength(1);
     expect(live[0].textContent).toBe('45-49: 18,800 borrowers');
     expect(container.querySelector('.chart-frame__notice')).toBeNull();
-    render({ notice: 'The refi-screen threshold is not built in this refresh.' });
+    render({ notice: 'The In the Money spread threshold is not built in this refresh.' });
     expect(container.querySelector('.chart-frame__notice')?.textContent).toBe(
-      'The refi-screen threshold is not built in this refresh.',
+      'The In the Money spread threshold is not built in this refresh.',
     );
   });
 

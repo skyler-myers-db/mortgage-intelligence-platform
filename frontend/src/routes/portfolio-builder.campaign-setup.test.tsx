@@ -22,8 +22,6 @@ import {
 import { CampaignSetupPanel } from './portfolio-builder.campaign-setup';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 let root: Root;
 
 const CACHED_RECOMMENDATION: CampaignRecommendationResponse = {

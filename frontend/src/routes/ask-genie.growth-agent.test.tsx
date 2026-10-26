@@ -3,7 +3,8 @@
  */
 
 import { act } from 'react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { settleInAct } from '../test/settleInAct';
 import type { GrowthAgentRunResponse } from '../types';
 import {
   HOME,
@@ -20,11 +21,19 @@ import {
   runMortgageGrowthAgent,
   setNativeValue,
   stateInput,
-  waitUntil,
+  waitUntil as waitUntilPolled,
 } from './ask-genie.growth-agent.test-support';
+
+/** Yield inside act first, so updates the last synchronous act started land in scope (quality-06). */
+async function waitUntil(condition: () => boolean): Promise<void> {
+  await settleInAct(1);
+  await waitUntilPolled(condition);
+}
 
 describe('AskGenie Growth Agent route panel', () => {
   registerGrowthAgentRoutePanelHooks();
+  // A run's late answers land inside act before the support's unmount (quality-06).
+  afterEach(() => settleInAct());
 
   it('renders governed workflows and blocks invalid state scopes before posting', async () => {
     mount();
@@ -105,7 +114,7 @@ describe('AskGenie Growth Agent route panel', () => {
     act(() => button(/^Plan reviewed workflow$/).click());
     await waitUntil(() => runMortgageGrowthAgent.mock.calls.length === 1);
     expect(runMortgageGrowthAgent.mock.calls[0][0]).toEqual({
-      prompt: 'Find prime refinance and listed-for-sale opportunities across current coverage.',
+      prompt: 'Find In the Money and listed-for-sale opportunities across current coverage.',
       states: [],
       save_monitor: false,
       cadence: 'daily',
@@ -365,7 +374,7 @@ describe('AskGenie Growth Agent route panel', () => {
     await waitUntil(() => container.textContent?.includes('Build a custom segment workflow') ?? false);
 
     act(() => button(/^Listed for Sale$/).click());
-    act(() => button(/^Prime Refi Candidates$/).click());
+    act(() => button(/^In the Money$/).click());
     expect(button(/^Run custom$/).disabled).toBe(true);
     expect(button(/^Save custom watchlist$/).disabled).toBe(true);
 

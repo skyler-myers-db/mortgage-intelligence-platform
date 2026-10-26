@@ -69,8 +69,6 @@ import { clearGenieTurns, getGenieTurns } from '../lib/genieConversationStore';
 import { __resetGenieTurnStoreForTests } from '../lib/genieInFlightTurn';
 import AskGenie from './ask-genie';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const HOME: GrowthAgentHomeResponse = { workflows: [], monitors: [], capabilities: [] };
 const START: GenieStartResult = {
   conversation_id: null,

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { LEXICON } from './lexicon';
 import { HIGH_OPPORTUNITY_SCORE_LABEL } from './opportunityScore';
 
 export type GlossaryCategory =
@@ -12,7 +13,13 @@ export type GlossaryCategory =
 export interface GlossaryEntry {
   id: string;
   term: string;
+  /** Names shown under the term on /glossary (and searched). */
   aliases: string[];
+  /**
+   * Names that FIND the entry (glossary search, the command palette) but are
+   * never shown: a retired name a user may still type (critic-11).
+   */
+  searchAliases?: readonly string[];
   category: GlossaryCategory;
   short: string;
   appContext: string;
@@ -130,9 +137,11 @@ export const mortgageGlossary = {
     proof: 'Proof opens the origination-channel evidence drawer citing mip.first_party.loan_applications funded rows.',
   },
   inTheMoney: {
-    id: 'in-the-money',
-    term: 'In-the-money',
-    aliases: ['ITM', 'refi economics'],
+    id: LEXICON.inTheMoney.glossaryId,
+    term: LEXICON.inTheMoney.label,
+    aliases: [LEXICON.inTheMoney.short, LEXICON.inTheMoney.prenominal],
+    // Retired names still find the term; /glossary never shows them.
+    searchAliases: LEXICON.inTheMoney.legacyAliases,
     category: 'scoring',
     short: 'A refinance-only economics screen: rate spread and equity both clear the configured thresholds.',
     appContext: 'It is not the same as a high-quality lead. Ranking also considers intent, relationship, fit, contactability, and evidence.',
@@ -179,9 +188,9 @@ export const mortgageGlossary = {
     term: 'ITM on Related Property',
     aliases: ['related property ITM'],
     category: 'scoring',
-    short: 'Owner Link shows another related property is in-the-money.',
+    short: 'Owner Link shows another related property is in the money.',
     appContext: 'Lets outreach reference related-property economics without raw IDs.',
-    proof: 'Proof shows Owner Link and related ITM count.',
+    proof: 'Proof shows Owner Link and the related in-the-money property count.',
   },
   payoffLoss: {
     id: 'payoff-loss',
@@ -216,8 +225,18 @@ export const mortgageGlossary = {
     aliases: ['lead score', `score ${HIGH_OPPORTUNITY_SCORE_LABEL}`],
     category: 'scoring',
     short: 'A 0-100 ranking score for how strong the borrower is for review.',
-    appContext: `A score of ${HIGH_OPPORTUNITY_SCORE_LABEL} marks strong review candidates. It is broader than refinance economics because it also considers intent, fit, relationship, and evidence.`,
+    appContext: `A score of ${HIGH_OPPORTUNITY_SCORE_LABEL} marks strong review candidates. It is broader than In the Money because it also considers intent, fit, relationship, and evidence.`,
     proof: 'Proof shows the five weighted sub-scores that make up the final score.',
+  },
+  segmentMatchMode: {
+    id: 'segment-match-mode',
+    term: 'Segment match mode',
+    aliases: ['any selected', 'all selected', 'segment mode', 'cohort mode'],
+    category: 'scoring',
+    short: 'How picked segment cards combine into one cohort: Any selected or All selected.',
+    appContext:
+      'Any selected keeps a borrower who is in at least one picked segment and counts them once, even when they are in several (a de-duplicated union, or OR). All selected keeps only borrowers who are in every picked segment (the intersection, or AND). The cards, the map, the ranked table and the Lead Queue link all use the same mode.',
+    proof: 'Proof: the Lead Queue link carries the picked segment codes and segment_mode=any or all, and its total matches the cohort count.',
   },
   ownerLink: {
     id: 'owner-link',
@@ -340,7 +359,7 @@ export const mortgageGlossary = {
 
 export type GlossaryTermKey = keyof typeof mortgageGlossary;
 
-export const glossaryEntries = Object.values(mortgageGlossary).sort((a, b) =>
+export const glossaryEntries: GlossaryEntry[] = Object.values(mortgageGlossary).sort((a, b) =>
   a.term.localeCompare(b.term),
 );
 

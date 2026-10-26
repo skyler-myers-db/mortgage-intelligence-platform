@@ -8,28 +8,10 @@
  * is precomputed in mip.gold.segment_combination_rollup; contactable is a
  * live subset (null = not reported, never zero).
  */
-import type { SegmentCode } from '../types';
+import type { ApiResponse } from './api.gen';
 
-export interface SegmentCombination {
-  /** The exact set, distinct and in core order. */
-  segment_codes: SegmentCode[];
-  signal_count: number;
-  addressable: number;
-  contactable?: number | null;
-}
+export type SegmentCombination = ApiResponse<'SegmentCombination'>;
 
-export interface SegmentCombinationProvenance {
-  source: string;
-  contactable_source: string;
-  refreshed_at?: string | null;
-  note: string;
-}
+export type SegmentCombinationProvenance = ApiResponse<'SegmentCombinationProvenance'>;
 
-export interface SegmentCombinationResponse {
-  /** False until the gold refresh has built the table. */
-  built: boolean;
-  core_codes: SegmentCode[];
-  /** Largest addressable first, then by combination key. */
-  combinations: SegmentCombination[];
-  provenance: SegmentCombinationProvenance;
-}
+export type SegmentCombinationResponse = ApiResponse<'SegmentCombinationResponse'>;

@@ -42,8 +42,6 @@ import { GenieAnswer } from './GenieAnswer';
 import { GenieRefusalCard } from './GenieRefusalCard';
 import { REFUSAL_CAPTURE_DISCLOSURE } from './GenieRefusalReportConfirm';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const QUESTION = 'Which zyrplax borrowers are eligible for a HELOC?';
 const HASH = 'a'.repeat(64);
 

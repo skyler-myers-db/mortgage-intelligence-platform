@@ -15,8 +15,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DrawerSource } from '../components/AppContext';
 import type { HomeSummary } from '../types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const PREVIEW = {
   marketable_population: 12,
   high_intent_leads: 7,
@@ -38,7 +36,7 @@ const SUMMARY: HomeSummary = {
   previous_visit_at: '2026-07-09T14:30:00+00:00',
   baseline_snapshot_at: '2026-07-09T06:00:00+00:00',
   headline:
-    'Since your last login: +1.5% high-opportunity, +2,250 refi candidates, +4,120 offers available.',
+    'Since your last login: +1.5% high-opportunity, +2,250 in-the-money borrowers, +4,120 offers available.',
   phrasing_source: 'deterministic',
   phrasing_fallback_reason: 'genie_not_configured',
   highlights: [
@@ -54,7 +52,7 @@ const SUMMARY: HomeSummary = {
     },
     {
       measure: 'refi_economics_screen',
-      label: 'refi candidates',
+      label: 'in-the-money borrowers',
       display: '+2,250',
       value_token: '+2,250',
       current: 261400,

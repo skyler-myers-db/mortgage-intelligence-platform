@@ -72,7 +72,7 @@ describe('summaries', () => {
   it('counts the spread screen only when it sits on a bin edge', () => {
     const aligned = histogramModel(SPREAD, SPREAD_BUCKET_BPS, 75);
     expect(spreadSummary(aligned, { min_spread_bps: 75, reason: null })).toBe(
-      '1,000 borrowers plotted between -100 and 400 bps; most common 0–24 bps. 80 (8.0%) sit at or past the 75 bps refi screen.',
+      '1,000 borrowers plotted between -100 and 400 bps; most common 0–24 bps. 80 (8.0%) sit at or past the 75 bps In the Money spread threshold.',
     );
     const straddled = histogramModel(SPREAD, SPREAD_BUCKET_BPS, 60);
     expect(spreadSummary(straddled, { min_spread_bps: 60, reason: null })).toBe(
@@ -83,10 +83,10 @@ describe('summaries', () => {
   it('says the screen is not built only when every row is null, and no single value when rows disagree', () => {
     const model = histogramModel(SPREAD, SPREAD_BUCKET_BPS, null);
     expect(spreadSummary(model, { min_spread_bps: null, reason: 'not_built' })).toContain(
-      'The refi-screen threshold is not built in this refresh.',
+      'The In the Money spread threshold is not built in this refresh.',
     );
     const disagreeing = spreadSummary(model, { min_spread_bps: null, reason: 'not_uniform' });
-    expect(disagreeing).toContain('No single refi-screen threshold applies to this refresh.');
+    expect(disagreeing).toContain('No single In the Money spread threshold applies to this refresh.');
     expect(disagreeing).not.toContain('not built');
     expect(thresholdNotice({ min_spread_bps: 75, reason: null })).toBeNull();
   });

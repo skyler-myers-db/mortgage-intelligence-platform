@@ -15,8 +15,6 @@ import { pickPlan } from './GenieAnswer.logic';
 import { GenieRowsVisual } from './GenieAnswer.sections';
 import type { GenieAnswer } from '../../types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const WIDE_ROWS = Array.from({ length: 120 }, (_, i) => ({
   state: ['IL', 'TX', 'OH', 'FL'][i % 4],
   county_name: `County ${String(i + 1).padStart(3, '0')}`,

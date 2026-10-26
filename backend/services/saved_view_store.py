@@ -41,7 +41,9 @@ class SavedViewConflict(Exception):
 class SavedViewStore(Protocol):
     def list(self, *, actor: str) -> list[SavedView]: ...
 
-    def create(self, *, actor: str, name: str, params: str, filter_fingerprint: str) -> SavedViewMutationResponse: ...
+    def create(
+        self, *, actor: str, name: str, params: str, filter_fingerprint: str | None
+    ) -> SavedViewMutationResponse: ...
 
     def delete(self, *, actor: str, view_id: str) -> SavedViewMutationResponse | None: ...
 
@@ -172,7 +174,9 @@ class LakebaseSavedViewStore:
         )
         return [view for row in rows if (view := _view_from_row(row)) is not None]
 
-    def create(self, *, actor: str, name: str, params: str, filter_fingerprint: str) -> SavedViewMutationResponse:
+    def create(
+        self, *, actor: str, name: str, params: str, filter_fingerprint: str | None
+    ) -> SavedViewMutationResponse:
         view_id = str(uuid4())
         request_id = str(uuid4())
         name_key = name.casefold()

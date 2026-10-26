@@ -21,8 +21,6 @@ import { RouteErrorBoundary } from './ErrorBoundaryRoute';
  * commits, so the cache reports nothing. Both cases are pinned below.
  */
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const BORROWER_ID = 'B-0TESTBORROWER';
 const ROUTE_KEY = ['mip', 'borrower', BORROWER_ID] as const;
 const SHELL_KEY = ['mip', 'health'] as const;

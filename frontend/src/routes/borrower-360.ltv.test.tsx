@@ -12,10 +12,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tooltipText } from '../test/tooltipText';
 import type { ReactNode } from 'react';
 import type { Borrower360 as Borrower360Type } from '../types';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const state = vi.hoisted(() => ({ borrower: null as unknown }));
 
@@ -28,11 +27,11 @@ vi.mock('../lib/useWarmingUpRetry', () => ({
   }),
 }));
 
-vi.mock('../lib/api', () => {
+vi.mock('../lib/api', async (importOriginal) => {
   class ApiError extends Error {
     status = 500;
   }
-  return { api: { borrower: vi.fn(), borrowerLifecycle: vi.fn() }, ApiError };
+  return { ...(await importOriginal<typeof import('../lib/api')>()), api: { borrower: vi.fn(), borrowerLifecycle: vi.fn() }, ApiError };
 });
 
 vi.mock('../components/AppContext', () => ({
@@ -183,7 +182,7 @@ describe('Borrower 360 LTV / Equity field', () => {
     mount(borrower({ ltv: null, ltv_basis_is_unreliable: true, equity_estimate: 0 }));
     const chip = ltvField().querySelector('.chip.chip--warning.chip--compact');
     expect(chip?.textContent).toBe('LTV basis unreliable');
-    expect(chip?.getAttribute('title')).toContain('no trustworthy basis');
+    expect(tooltipText(chip)).toContain('no trustworthy basis');
     expect(ltvField().textContent).toContain('Withheld, not zero');
     // The raw facts the API keeps publishing stay on the dossier.
     expect(container.textContent).toContain('$625,000');

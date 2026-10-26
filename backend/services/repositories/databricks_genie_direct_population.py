@@ -80,8 +80,8 @@ def _direct_itm_count_avg_spread(ctx: _DirectContext) -> GenieMessageResponse | 
         f"{avg_spread_float:,.1f} bps" if avg_spread_float is not None else "not available"
     )
     answer = (
-        f"Across the current Cotality coverage, {count_int:,} borrowers pass the "
-        f"refinance-economics screen. Their average rate spread is {spread_text}. "
+        f"Across the current Cotality coverage, {count_int:,} borrowers are "
+        f"in the money. Their average rate spread is {spread_text}. "
         f"This is calculated at the unique borrower grain from {borrower_asset}; "
         "it is broader than the marketing-eligible Lead Queue or any eligible-only "
         "Segment page filter."
@@ -137,8 +137,8 @@ def _direct_itm_share(ctx: _DirectContext) -> GenieMessageResponse | None:
     ]
     share_text = f"{share_float:,.2f}%" if share_float is not None else "not available"
     answer = (
-        f"{count_int:,} of {total_int:,} borrowers pass the refinance-economics "
-        f"screen, or {share_text} of the current borrower coverage. This uses "
+        f"{count_int:,} of {total_int:,} borrowers are in the money, "
+        f"or {share_text} of the current borrower coverage. This uses "
         f"{borrower_asset} at unique borrower grain and is broader than the "
         "marketing-eligible Lead Queue subset."
     )

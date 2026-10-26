@@ -20,12 +20,13 @@ In one Lakebase transaction it:
 Never called: the planner, the metrics loader, the SQL warehouse, the
 composer.
 
-Series gap (wow-ai-4, for the W5b briefing card): runs are append-only, so a
-run saved here into an EXISTING watchlist name cannot be tagged with that
-watchlist's ``monitor_id``. ``WATCHLIST_SUMMARY_SQL`` still counts it while it
-is the watchlist's ``last_run_id``; after the next Run now it leaves the
-series, so "change since the previous run" skips it. Closing that needs a
-link record, not an UPDATE of the run.
+Series link (wow-ai-4, W5e): runs are append-only, so a run saved here into
+an EXISTING watchlist name cannot be tagged with that watchlist's
+``monitor_id``. After a NEW upsert (never on a replay), the same transaction
+inserts one ``growth_agent_watchlist_run_links`` row (monitor_id, run_id), and
+``WATCHLIST_SUMMARY_SQL``'s fourth arm reads it, so the run stays in the
+watchlist's series after the next Run now and "change since the previous
+run" counts it. No run row is updated.
 """
 
 from __future__ import annotations
@@ -61,6 +62,14 @@ RUN_NOT_FOUND_DETAIL = "growth-agent run not found"
 RUN_SAVE_CONFLICT_DETAIL = "This run changed or did not complete; run it again before saving."
 _CUSTOM_WORKFLOW_ID = "custom_segment_watch"
 
+# The series link of a run saved into a watchlist (insert-only; a re-save of
+# the same pair is a no-op).
+RUN_LINK_INSERT_SQL = """
+INSERT INTO mip_app.growth_agent_watchlist_run_links (monitor_id, run_id, actor_email)
+VALUES (%(monitor_id)s, %(run_id)s, %(actor_email)s)
+ON CONFLICT (monitor_id, run_id) DO NOTHING
+"""
+
 
 def save_run_as_watchlist(
     lakebase: LakebaseClient,
@@ -91,6 +100,12 @@ def save_run_as_watchlist(
             monitor_row = replay if replay is not None else _upsert(
                 conn, key=key, run=run, payload=payload, run_id=run_id
             )
+            if replay is None:
+                _execute(
+                    conn,
+                    RUN_LINK_INSERT_SQL,
+                    {"monitor_id": str(monitor_row["monitor_id"]), "run_id": str(run_id), "actor_email": actor},
+                )
     except HTTPException as exc:
         emit(log, "growth_agent_run_watchlist_saved", outcome=f"refused_{exc.status_code}")
         raise
@@ -106,10 +121,14 @@ def default_watchlist_name(run: dict[str, Any]) -> str:
 
     A custom segment run also names its mode and segments (the same label the
     custom workflow's own Save uses), so two custom watchlists over different
-    segments never share a name and overwrite each other.
+    segments never share a name and overwrite each other. States and segment
+    codes are SORTED (W5d growth-watchlists cut 4a), so the same scope picked
+    in another order names the same watchlist; the frontend's
+    canonicalWatchlistName shares tests/fixtures/watchlist_name_cases.json.
+    Names already stored are not migrated.
     """
 
-    states = states_from_monitor_criteria(run.get("criteria"))
+    states = sorted(states_from_monitor_criteria(run.get("criteria")))
     state_suffix = f" - {', '.join(states)}" if states else ""
     title = str(run.get("workflow_title") or "")
     if run.get("workflow_id") == _CUSTOM_WORKFLOW_ID:
@@ -118,7 +137,7 @@ def default_watchlist_name(run: dict[str, Any]) -> str:
         codes = filters.get("segment_codes")
         if isinstance(codes, list) and codes:
             mode = str(filters.get("segment_mode") or "any").upper()
-            segments = "+".join(str(code).upper() for code in codes)
+            segments = "+".join(sorted(str(code).upper() for code in codes))
             return f"{title} - {mode} - {segments}{state_suffix}"
     return f"{title}{state_suffix}"
 
@@ -183,6 +202,15 @@ def _upsert(
     return monitor_row
 
 
+def _execute(conn: Any, sql: str, params: dict[str, Any]) -> None:
+    execute = getattr(conn, "execute", None)
+    if callable(execute):
+        execute(sql, params)
+        return
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+
+
 def _fetchone(conn: Any, sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
     execute = getattr(conn, "execute", None)
     if callable(execute):
@@ -195,6 +223,7 @@ def _fetchone(conn: Any, sql: str, params: dict[str, Any]) -> dict[str, Any] | N
 
 
 __all__ = [
+    "RUN_LINK_INSERT_SQL",
     "RUN_NOT_FOUND_DETAIL",
     "RUN_SAVE_CONFLICT_DETAIL",
     "default_watchlist_name",

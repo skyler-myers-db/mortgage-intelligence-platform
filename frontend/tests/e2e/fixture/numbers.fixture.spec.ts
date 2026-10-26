@@ -21,10 +21,10 @@ test.describe('Home approval-queue banner', () => {
     await expect(banner.getByTestId('approval-queue-contactable')).toHaveText(fmt(TOTALS.contactableInTheMoney));
     await expect(banner.getByTestId('approval-queue-screen')).toHaveText(fmt(TOTALS.inTheMoney));
     await expect(banner).toContainText(
-      `${fmt(TOTALS.contactableInTheMoney)} contactable of ${fmt(TOTALS.inTheMoney)} borrowers passing the refinance-economics screen`,
+      `${fmt(TOTALS.contactableInTheMoney)} contactable of ${fmt(TOTALS.inTheMoney)} borrowers in the money`,
     );
     // M is the same figure the KPI card above it renders.
-    await expect(page.locator('.kpi', { hasText: 'Refi economics screen' }).locator('.kpi__value')).toHaveText(fmt(TOTALS.inTheMoney));
+    await expect(page.locator('.kpi', { hasText: 'In the Money' }).locator('.kpi__value')).toHaveText(fmt(TOTALS.inTheMoney));
 
     const link = banner.getByRole('link', { name: 'Open review queue' });
     await expect(link).toHaveAttribute('href', '/lead-queue?segment=itm');
@@ -46,7 +46,7 @@ test.describe('Executive activation funnel', () => {
     await expect(nodes).not.toHaveCount(0);
     // Every stage but Addressable itself states its share of addressable.
     await expect(shares).toHaveCount((await nodes.count()) - 1);
-    for (const text of await shares.allTextContents()) expect(text).toMatch(/^\d+(\.\d+)?% of addressable$/);
+    for (const text of await shares.allTextContents()) expect(text).toMatch(/^(\d+(\.\d+)?% of addressable|1 in [\d,.]+[KMB]? addressable)$/);
     // One nested pair, and it is the only conversion on the chart.
     await expect(conversions).toHaveCount(1);
     await expect(conversions).toHaveText(/^\d+(\.\d+)?% of approved$/);

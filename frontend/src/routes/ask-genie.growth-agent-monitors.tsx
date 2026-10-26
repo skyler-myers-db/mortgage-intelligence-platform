@@ -67,8 +67,8 @@ export function GrowthAgentMonitorsPanel({ agent, onOpenRoute, onOpenWorkflows }
           monitorPending={agent.monitorPending}
           draftPending={agent.monitorDraftPending}
           actionsDisabled={agent.agentBusy}
-          onRun={agent.rerunGrowthAgentMonitor}
-          onDraft={agent.draftGrowthAgentMonitorNotifications}
+          onRun={(monitor) => void agent.rerunGrowthAgentMonitor(monitor)}
+          onDraft={(monitor) => void agent.draftGrowthAgentMonitorNotifications(monitor)}
           onOpen={onOpenRoute}
         />
       </div>

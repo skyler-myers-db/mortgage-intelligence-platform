@@ -178,6 +178,44 @@ export function isLeadApprovalEligible(
   return !localStatus && !isTerminalApproval(status);
 }
 
+/**
+ * The rows with this session's revokes applied (flow-v2): a revoked
+ * borrower reads approval_status 'pending' and outreach_status 'none', as
+ * the server does after the revoke. The overlay lasts for the session (the
+ * revoke mutation's gcTime is Infinity), not only until the stale-marked
+ * queue is read again, so a later re-approval by another approver is not
+ * reflected here until a reload (the session-long revocation overlay, a
+ * post-W5 approval-ledger follow-up in report 12.3). The SAME array when
+ * nothing is revoked, so the sort and the
+ * virtualizer keys keep their identity. Eligibility, selection, the approval
+ * cell, the CSV export and Triage all read these rows.
+ */
+export function applyRevocations(rows: LeadSummary[], revokedIds: readonly string[]): LeadSummary[] {
+  if (revokedIds.length === 0) return rows;
+  const revoked = new Set(revokedIds);
+  if (!rows.some((row) => revoked.has(row.borrower_id))) return rows;
+  return rows.map((row) => (revoked.has(row.borrower_id)
+    ? { ...row, approval_status: 'pending', outreach_status: 'none' }
+    : row));
+}
+
+/**
+ * A revoked borrower's receipt from this session is hidden, unless a newer
+ * local decision (an approve or reject after the revoke) set an override:
+ * that decision's receipt wins. Same record when nothing is hidden.
+ */
+export function withoutRevokedReceipts<T>(
+  receipts: Record<string, T>,
+  revokedIds: readonly string[],
+  approvals: Readonly<Record<string, string>>,
+): Record<string, T> {
+  const hidden = revokedIds.filter((id) => id in receipts && !(id in approvals));
+  if (hidden.length === 0) return receipts;
+  const next = { ...receipts };
+  for (const id of hidden) delete next[id];
+  return next;
+}
+
 export function dispositionLabel(outcome?: string | null): string {
   if (!outcome) return 'Untouched';
   return outcome.split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');

@@ -231,7 +231,7 @@ def test_health_reports_baseline_deploy_as_degraded(
     assert anon_body["status"] == "degraded"
 
     authenticated = client.get(
-        "/api/health", headers={"X-Forwarded-Email": "skyler@entrada.ai"}
+        "/api/health", headers={"X-Forwarded-Email": "operator@summit.example"}
     )
     assert authenticated.status_code == 200
     auth_body = authenticated.json()
@@ -249,7 +249,7 @@ def test_health_reports_enabled_after_promoted_snapshot(
     monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
 
     authenticated = client.get(
-        "/api/health", headers={"X-Forwarded-Email": "skyler@entrada.ai"}
+        "/api/health", headers={"X-Forwarded-Email": "operator@summit.example"}
     )
     assert authenticated.status_code == 200
     body = authenticated.json()

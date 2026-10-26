@@ -19,8 +19,6 @@ import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuditEventPage, AuditEventRow } from '../../lib/apiTypes';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 type PageFilters = Record<string, string | null | undefined>;
 
 const mocks = vi.hoisted(() => ({

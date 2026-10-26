@@ -27,6 +27,8 @@ import { _resetSessionStatusForTests, getSessionStatus, markSessionExpired } fro
 import { NOBODY, _resetActorScopeForTests } from '../../lib/actorScope';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { LeadBulkRunResult } from './LeadBulkRunStatus';
+import { ApiError } from '../../lib/apiTransport';
+import { bulkRefusalCopy } from './bulkRefusalCopy';
 import { readCancelledBulk } from './bulkApproveStash';
 import { bulkCanaryNotice, formatMinutesLeft } from './LeadBulkRunStatus.copy';
 import { bulkRunMinutesLeft, runBulk } from './leadBulkRunLoop';
@@ -35,8 +37,6 @@ import {
   type BulkRowReport,
   type BulkRunResult,
 } from './useLeadBulkRun';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 type Run = ReturnType<typeof useLeadBulkRun>;
 let run: Run | null = null;
@@ -136,6 +136,25 @@ describe('useLeadBulkRun', () => {
     expect(result).toMatchObject({ ok: 9, failed: [], skipped: [], notStarted: [], stopped: false, canary: null });
     expect(run!.progress).toBeNull();
     expect(run!.announcement).toBe('9 of 9 approved.');
+  });
+
+  // states-04 residual: a decide() that THROWS (the loop's own catch) reports
+  // fixed copy, and neither the report nor the canary line prints the
+  // server's raw sentence.
+  it('a thrown refusal reports fixed copy, never the server text', async () => {
+    const serverText = 'Approval requires the audited generated draft proof';
+    decide.mockImplementationOnce(() => Promise.reject(new ApiError(serverText, { path: '/api/outreach/approve', status: 422 })));
+    const done = start();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const result = await done;
+
+    expect(result?.canary?.message).toBe(bulkRefusalCopy(new ApiError(serverText, { path: '', status: 422 })));
+    const html = renderToStaticMarkup(<LeadBulkRunResult result={result!} onDismiss={() => undefined} />);
+    expect(html).not.toContain(serverText);
+    expect(bulkCanaryNotice(result!.canary!)).not.toContain(serverText);
   });
 
   it('a canary refusal stops the run: nothing else is sent, the rest are not started', async () => {

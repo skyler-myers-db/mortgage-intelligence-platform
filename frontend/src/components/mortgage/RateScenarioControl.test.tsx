@@ -20,8 +20,6 @@ vi.mock('../AppContext', () => ({
   useApp: () => ({ setDrawer: appMocks.setDrawer, showEvidence: true, showConfidence: true }),
 }));
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const STEPS = [-100, -75, -50, -25, 0, 25, 50, 75, 100];
 const RESPONSE: RateSensitivityResponse = {
   built: true,
@@ -113,7 +111,7 @@ describe('RateScenarioControl', () => {
     expect(document.querySelector('output')?.textContent).toBe('5.80%');
     expect(slider()?.getAttribute('aria-valuetext')).toBe('Par rate 5.80%, down 50 basis points: 1,600 borrowers in the money.');
     expect(document.querySelector('.rate-lever__sentence')?.textContent).toBe(
-      "If the 30-year par rate were 0.50 points lower (5.80%), 1,600 borrowers would clear this refresh's refi screen: 400 more than today; 160 of them are contactable.",
+      "If the 30-year par rate were 0.50 points lower (5.80%), 1,600 borrowers would be in the money: 400 more than today; 160 of them are contactable.",
     );
     // An off-grid value (a pointer between marks) snaps to the nearest step.
     change(60);
@@ -242,10 +240,10 @@ describe('RateScenarioControl', () => {
     change(-50);
     expect(document.querySelector('[data-testid="rate-lever-largest"]')?.textContent).toBe('Largest in-the-money gains: IL +400');
     const link = document.querySelector<HTMLAnchorElement>('.rate-lever a');
-    expect(link?.textContent).toBe('Open borrowers within 50 bps of the refi screen in the Lead Queue');
+    expect(link?.textContent).toBe('Open borrowers within 50 bps of being in the money in the Lead Queue');
     expect(link?.getAttribute('href')).toBe('/lead-queue?min_rate_spread_bps=25&max_rate_spread_bps=74');
     change(25);
-    expect(document.querySelector('[data-testid="rate-lever-largest"]')?.textContent).toBe('Largest in-the-money drops: IL -200');
+    expect(document.querySelector('[data-testid="rate-lever-largest"]')?.textContent).toBe('Largest in-the-money drops: IL −200');
     expect(document.querySelector('.rate-lever a')?.getAttribute('href')).toBe(
       '/lead-queue?segment=itm&min_rate_spread_bps=75&max_rate_spread_bps=99',
     );

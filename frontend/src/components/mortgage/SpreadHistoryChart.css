@@ -14,6 +14,7 @@
    --accent-soft measures 1.09:1 on the white panel. Imported by
    SpreadHistoryChart.tsx only, so it ships in the lazy proof chunk.
    ============================================================ */
+@layer routes {
 .spread-history {
   --spread-history-market-ink: var(--accent-data);
   --spread-history-screen-ink: var(--status-warning-ink);
@@ -149,4 +150,5 @@
 }
 @keyframes spread-history-fade {
   to { opacity: 1; }
+}
 }

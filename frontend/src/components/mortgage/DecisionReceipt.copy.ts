@@ -164,3 +164,7 @@ export function humanizeReasonCode(code: string): string {
   const known = REJECT_REASONS.find((reason) => reason.code === code);
   return known ? known.label : code.replace(/_/g, ' ');
 }
+
+// The revoke refusal copy (REVOKE_REFUSAL_COPY) lives with the lazy revoke
+// failure module (RevokeApprovalPanel.failure): importing it from here split
+// this module out of the receipt chunk (W5e budget).

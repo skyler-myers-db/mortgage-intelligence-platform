@@ -201,7 +201,7 @@ export function GenieChatBody({
             <Chip
               variant="warning"
               icon="info"
-              title={
+              tooltip={
                 m.payload.source === 'degraded'
                   ? 'The Genie answer path is temporarily unavailable. Live answers will resume after health recovers.'
                   : 'This answer intentionally stopped before displaying a live result.'
@@ -223,13 +223,13 @@ export function GenieChatBody({
                 // "default to NBO" routing was confusing per
                 // 2026-05-04 user feedback).
                 return (
-                  <Chip key={j} variant="neutral" title={`Source: ${s}`}>
+                  <Chip key={j} variant="neutral">
                     {s}
                   </Chip>
                 );
               }
               return (
-                <EvidenceChip key={j} source={drawer} title={`Source: ${s}`}>
+                <EvidenceChip key={j} source={drawer}>
                   {s}
                 </EvidenceChip>
               );

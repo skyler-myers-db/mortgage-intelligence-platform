@@ -45,7 +45,7 @@ class RateSensitivityState(BaseModel):
         ),
     )
     in_the_money: list[int] = Field(
-        description="Borrowers clearing the refi screen at each step, aligned to steps_bps; each <= addressable.",
+        description="Borrowers in the money at each step, aligned to steps_bps; each <= addressable.",
     )
     contactable_in_the_money: list[int] | None = Field(
         default=None,

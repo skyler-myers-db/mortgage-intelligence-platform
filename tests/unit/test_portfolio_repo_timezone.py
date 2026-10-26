@@ -243,7 +243,7 @@ class _CampaignListLakebase:
             {
                 "campaign_id": "11111111-1111-4111-8111-111111111111",
                 "name": "Maya QA CA recapture",
-                "owner_email": "skyler@entrada.ai",
+                "owner_email": "operator@summit.example",
                 "status": "draft",
                 "criteria": {},
                 "suppression_policy": {},
@@ -279,7 +279,7 @@ class _CampaignPatchLakebase:
         return {
             "campaign_id": "11111111-1111-4111-8111-111111111111",
             "name": "Maya QA CA recapture",
-            "owner_email": "skyler@entrada.ai",
+            "owner_email": "operator@summit.example",
             "status": status,
             "json_contract_version": 1,
             "treatment_state": self.treatment_state,
@@ -668,8 +668,8 @@ def test_campaign_list_is_fresh_lakebase_state_not_preview_cache(monkeypatch):
         _StubClient(_preview_row(), [_trend_row("2026-04-22T18:30:00")])
     )  # type: ignore[arg-type]
 
-    first = repo.list_campaigns(owner_email="skyler@entrada.ai")
-    second = repo.list_campaigns(owner_email="skyler@entrada.ai")
+    first = repo.list_campaigns(owner_email="operator@summit.example")
+    second = repo.list_campaigns(owner_email="operator@summit.example")
 
     assert len(first.campaigns) == len(second.campaigns) == 1
     assert len(lakebase.calls) == 2
@@ -723,7 +723,7 @@ def test_campaign_summary_round_trips_all_reviewed_genie_proof_fields() -> None:
         {
             "campaign_id": "11111111-1111-4111-8111-111111111111",
             "name": "Reviewed campaign",
-            "owner_email": "skyler@entrada.ai",
+            "owner_email": "operator@summit.example",
             "status": "draft",
             "json_contract_version": 1,
             "treatment_state": "ready",
@@ -751,7 +751,7 @@ def test_campaign_summary_replaces_unsafe_legacy_titlecase_name_without_echo(
         {
             "campaign_id": "11111111-1111-4111-8111-111111111111",
             "name": unsafe_name,
-            "owner_email": "skyler@entrada.ai",
+            "owner_email": "operator@summit.example",
             "status": "draft",
             "json_contract_version": 1,
             "criteria": {},
@@ -782,7 +782,7 @@ def test_campaign_summary_quarantines_rejected_legacy_criteria_instead_of_broade
         {
             "campaign_id": "11111111-1111-4111-8111-111111111111",
             "name": "Legacy campaign",
-            "owner_email": "skyler@entrada.ai",
+            "owner_email": "operator@summit.example",
             "status": "draft",
             "json_contract_version": 0,
             "criteria": {"borrower_name": "must never become an empty cohort"},
@@ -835,7 +835,7 @@ def test_campaign_summary_relational_variants_are_authoritative_and_verified_fro
         {
             "campaign_id": "11111111-1111-4111-8111-111111111111",
             "name": "Verified campaign",
-            "owner_email": "skyler@entrada.ai",
+            "owner_email": "operator@summit.example",
             "status": "draft",
             "criteria": {},
             "message_variants": [
@@ -871,7 +871,7 @@ def test_campaign_summary_projects_json_only_legacy_variants_as_unverified() -> 
         {
             "campaign_id": "11111111-1111-4111-8111-111111111111",
             "name": "Pre-upgrade campaign",
-            "owner_email": "skyler@entrada.ai",
+            "owner_email": "operator@summit.example",
             "status": "draft",
             "criteria": {"marketing_eligibility": "Eligible only"},
             "suppression_policy": {"default": "eligible_only"},
@@ -906,7 +906,7 @@ def test_campaign_summary_explicit_relational_empty_set_blocks_legacy_fallback()
         {
             "campaign_id": "11111111-1111-4111-8111-111111111111",
             "name": "Relational campaign",
-            "owner_email": "skyler@entrada.ai",
+            "owner_email": "operator@summit.example",
             "status": "draft",
             "criteria": {},
             "suppression_policy": {},
@@ -934,7 +934,7 @@ def test_campaign_summary_does_not_trust_duplicate_json_verification_claim() -> 
         {
             "campaign_id": "11111111-1111-4111-8111-111111111111",
             "name": "Unverified campaign",
-            "owner_email": "skyler@entrada.ai",
+            "owner_email": "operator@summit.example",
             "status": "draft",
             "criteria": {},
             "message_variants": [
@@ -969,7 +969,7 @@ def test_campaign_summary_omits_poisoned_legacy_variant_without_echoing_values(
         {
             "campaign_id": "11111111-1111-4111-8111-111111111111",
             "name": "Legacy campaign",
-            "owner_email": "skyler@entrada.ai",
+            "owner_email": "operator@summit.example",
             "status": "draft",
             "criteria": {},
             "suppression_policy": {},
@@ -1130,7 +1130,7 @@ def test_campaign_summary_quarantines_protected_copy_at_saved_campaign_read(
         {
             "campaign_id": "11111111-1111-4111-8111-111111111111",
             "name": "Governed campaign review",
-            "owner_email": "skyler@entrada.ai",
+            "owner_email": "operator@summit.example",
             "status": "draft",
             "json_contract_version": 1,
             "treatment_state": "ready",
@@ -1167,7 +1167,7 @@ def test_campaign_summary_omits_all_poisoned_json_fields_without_value_echo(
         {
             "campaign_id": "11111111-1111-4111-8111-111111111111",
             "name": "Poisoned campaign",
-            "owner_email": "skyler@entrada.ai",
+            "owner_email": "operator@summit.example",
             "status": "draft",
             "criteria": {"geography": poison},
             "suppression_policy": {
@@ -1233,7 +1233,7 @@ def test_campaign_list_excludes_archived_by_default(monkeypatch):
         _StubClient(_preview_row(), [_trend_row("2026-04-22T18:30:00")])
     )  # type: ignore[arg-type]
 
-    repo.list_campaigns(owner_email="skyler@entrada.ai")
+    repo.list_campaigns(owner_email="operator@summit.example")
     default_sql = str(lakebase.calls[-1]["sql"])
     # The default (status=None) branch hides archived; the SQL carries the
     # exclusion so the regression can't be silently removed.
@@ -1243,7 +1243,7 @@ def test_campaign_list_excludes_archived_by_default(monkeypatch):
     assert "COALESCE(" not in default_sql
     assert lakebase.calls[-1]["params"]["status"] is None
 
-    repo.list_campaigns(owner_email="skyler@entrada.ai", status="archived")
+    repo.list_campaigns(owner_email="operator@summit.example", status="archived")
     # Explicit status is passed through unchanged (audit/admin can still see
     # archived rows by asking for them).
     assert lakebase.calls[-1]["params"]["status"] == "archived"
@@ -2250,7 +2250,7 @@ def test_campaign_status_accepts_reviewed_eligible_only_policy_shapes(
     summary = repo.patch_status(
         "11111111-1111-4111-8111-111111111111",
         CampaignStatusPatchRequest(status="pending_review"),
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
     )
 
     assert summary.status == "pending_review"
@@ -2261,7 +2261,7 @@ def test_campaign_status_accepts_reviewed_eligible_only_policy_shapes(
     patch_call = patch_calls[0]
     assert "INSERT INTO mip_app.action_audit" in str(patch_call["sql"])
     assert "request_id" in str(patch_call["sql"])
-    assert patch_call["params"]["actor"] == "skyler@entrada.ai"
+    assert patch_call["params"]["actor"] == "operator@summit.example"
     assert str(patch_call["params"]["request_id"]).startswith("campaign-status-")
     metadata = json.loads(str(patch_call["params"]["metadata"]))
     assert metadata == {

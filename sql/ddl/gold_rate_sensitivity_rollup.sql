@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.rate_sensitivity_rollup (
   scenario_market_rate_pct       DOUBLE             COMMENT 'scenario_market_rate_fraction in percent (6.30 == 6.30%), rounded to 6 places for display.',
   addressable_borrowers          BIGINT    NOT NULL COMMENT 'gold.borrower_360 rows in the state: the map addressable count. The same on every step.',
   rate_movable_borrowers         BIGINT    NOT NULL COMMENT 'Addressable borrowers with a gated note rate (active lien, bounded rate strictly inside 1%..15%): the only ones a scenario can move.',
-  in_the_money_borrowers         BIGINT    NOT NULL COMMENT 'Borrowers that clear the refi screen at this step: fn_in_the_money(fn_rate_spread(note, par + step / 10000), equity_pct, thresholds). Step 0 equals SUM(borrower_360.in_the_money).',
+  in_the_money_borrowers         BIGINT    NOT NULL COMMENT 'Borrowers in the money at this step: fn_in_the_money(fn_rate_spread(note, par + step / 10000), equity_pct, thresholds). Step 0 equals SUM(borrower_360.in_the_money).',
   min_spread_bps_applied         INT                COMMENT 'Rate-spread threshold (bps) of this refresh, carried from gold.borrower_360.min_spread_bps_applied.',
   min_equity_pct_applied         INT                COMMENT 'Equity threshold (pct) of this refresh, carried from gold.borrower_360.min_equity_pct_applied.',
   book_as_of                     TIMESTAMP NOT NULL COMMENT 'Refresh anchor of the book the grid was measured over (mip.ref.refresh_run_state).',
@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.rate_sensitivity_rollup (
 )
 USING DELTA
 CLUSTER BY (state)
-COMMENT 'Rate Lever scenario grid: per state and par-rate step (-100 .. +100 bps), the addressable borrowers that would clear this refresh refi screen under the canonical fn_rate_spread / fn_in_the_money rule re-run at par + step. A scenario, not a forecast. Built by mip_refresh_scores via gold_rate_sensitivity_rollup.sql; read by /api/v1/geo/rate-sensitivity.'
+COMMENT 'Rate Lever scenario grid: per state and par-rate step (-100 .. +100 bps), the addressable borrowers that would be in the money under the canonical fn_rate_spread / fn_in_the_money rule re-run at par + step. A scenario, not a forecast. Built by mip_refresh_scores via gold_rate_sensitivity_rollup.sql; read by /api/v1/geo/rate-sensitivity.'
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
   'delta.autoOptimize.optimizeWrite' = 'true',

@@ -1,31 +1,42 @@
 /** @vitest-environment happy-dom */
 
-import { act } from 'react';
+import { act, type ReactElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 // @ts-expect-error Frontend app types intentionally exclude Node globals; this
 // unit test reads the design-system CSS text under Vitest only.
 import { readFileSync } from 'node:fs';
 // @ts-expect-error see node:fs note above.
 import { join } from 'node:path';
 import { designCss } from '../test/designCss';
+
+// bundle-09: borrower links warm the dossier CHUNK through lib/preloadIntent.
+const preload = vi.hoisted(() => ({ paths: [] as string[] }));
+vi.mock('../lib/routePreloaders', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/routePreloaders')>()),
+  preloadRouteForPath: (path: string) => {
+    preload.paths.push(path);
+  },
+}));
 import { escapeLayerCount, pushEscapeLayer } from '../lib/escapeStack';
+import { segmentName } from '../lib/segmentMetadata';
 import {
   SCORE_BAND_HIGH_MIN,
   SCORE_BAND_MED_MIN,
 } from '../lib/opportunityScore';
-import type { EquitySpreadOverview, EquitySpreadPointsResponse } from '../types';
+import type { AnalyticsThresholds, EquitySpreadOverview, EquitySpreadPointsResponse } from '../types';
 import {
   EquitySpreadBinsView,
   EquitySpreadPointsView,
   groupExactCoordinatePoints,
 } from './analytics.equity-scatter';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 declare const process: { cwd(): string };
+
+/** The refresh's governed In the Money thresholds (the economics payload's `thresholds`). */
+const THRESHOLDS: AnalyticsThresholds = { min_spread_bps: 75, min_equity_pct: 20, reason: null };
 
 const overview: EquitySpreadOverview = {
   bins: [
@@ -52,7 +63,7 @@ const drilldown: EquitySpreadPointsResponse = {
     {
       borrower_id: 'B-0000000000025',
       display_name: 'Owner 25',
-      segment: 'Prime Refi Candidates',
+      segment: segmentName('itm'),
       state: 'IL',
       equity_pct: 42,
       rate_spread_bps: 88,
@@ -105,7 +116,7 @@ describe('Equity versus rate spread score-band legend', () => {
   it('labels canonical score ranges and identifies overview colors as cell means', () => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <EquitySpreadBinsView overview={overview} onZoom={() => undefined} />
+        <EquitySpreadBinsView thresholds={THRESHOLDS} overview={overview} onZoom={() => undefined} />
       </MemoryRouter>,
     );
 
@@ -124,7 +135,7 @@ describe('Equity versus rate spread score-band legend', () => {
   it('identifies drilldown colors as individual borrower scores', () => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <EquitySpreadPointsView payload={drilldown} />
+        <EquitySpreadPointsView thresholds={THRESHOLDS} payload={drilldown} />
       </MemoryRouter>,
     );
 
@@ -146,7 +157,7 @@ describe('Equity versus rate spread score-band legend', () => {
 
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <EquitySpreadPointsView payload={collisionDrilldown} />
+        <EquitySpreadPointsView thresholds={THRESHOLDS} payload={collisionDrilldown} />
       </MemoryRouter>,
     );
     expect(html).toContain('analytics-scatter__cluster-marker score--high');
@@ -174,7 +185,7 @@ describe('Equity versus rate spread score-band legend', () => {
       act(() => {
         root.render(
           <MemoryRouter>
-            <EquitySpreadPointsView payload={dense} />
+            <EquitySpreadPointsView thresholds={THRESHOLDS} payload={dense} />
           </MemoryRouter>,
         );
       });
@@ -205,7 +216,7 @@ describe('Equity versus rate spread score-band legend', () => {
     };
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <EquitySpreadPointsView payload={capped} />
+        <EquitySpreadPointsView thresholds={THRESHOLDS} payload={capped} />
       </MemoryRouter>,
     );
 
@@ -223,7 +234,7 @@ describe('Equity versus rate spread score-band legend', () => {
     }));
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <EquitySpreadPointsView payload={{
+        <EquitySpreadPointsView thresholds={THRESHOLDS} payload={{
           ...drilldown,
           points,
           showing: points.length,
@@ -245,7 +256,7 @@ describe('Equity versus rate spread score-band legend', () => {
       act(() => {
         root.render(
           <MemoryRouter>
-            <EquitySpreadPointsView payload={collisionDrilldown} />
+            <EquitySpreadPointsView thresholds={THRESHOLDS} payload={collisionDrilldown} />
           </MemoryRouter>,
         );
       });
@@ -285,7 +296,7 @@ describe('Equity versus rate spread score-band legend', () => {
       act(() => {
         root.render(
           <MemoryRouter>
-            <EquitySpreadPointsView payload={collisionDrilldown} />
+            <EquitySpreadPointsView thresholds={THRESHOLDS} payload={collisionDrilldown} />
           </MemoryRouter>,
         );
       });
@@ -350,7 +361,7 @@ describe('Equity versus rate spread score-band legend', () => {
       act(() => {
         root.render(
           <MemoryRouter>
-            <EquitySpreadPointsView payload={collisionDrilldown} />
+            <EquitySpreadPointsView thresholds={THRESHOLDS} payload={collisionDrilldown} />
           </MemoryRouter>,
         );
       });
@@ -406,7 +417,7 @@ describe('Equity versus rate spread score-band legend', () => {
       act(() => {
         root.render(
           <MemoryRouter>
-            <EquitySpreadPointsView payload={collisionDrilldown} />
+            <EquitySpreadPointsView thresholds={THRESHOLDS} payload={collisionDrilldown} />
           </MemoryRouter>,
         );
       });
@@ -461,7 +472,7 @@ describe('Equity versus rate spread score-band legend', () => {
     try {
       act(() => root.render(
         <MemoryRouter>
-          <EquitySpreadPointsView payload={{
+          <EquitySpreadPointsView thresholds={THRESHOLDS} payload={{
             ...drilldown,
             points,
             showing: points.length,
@@ -492,5 +503,227 @@ describe('Equity versus rate spread score-band legend', () => {
     expect(css).toMatch(
       /@container main \(max-width: 640px\)[\s\S]*?\.analytics-scatter-wrap\s*\{[^}]*--analytics-chart-h:\s*calc\(var\(--sp-16\) \* 5\)/,
     );
+  });
+});
+
+/** Mount a scatter view into the document; returns its container and an unmount. */
+function mountScatter(ui: ReactElement): { container: HTMLElement; unmount: () => void } {
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(<MemoryRouter>{ui}</MemoryRouter>));
+  return {
+    container,
+    unmount: () => {
+      act(() => root.unmount());
+      container.remove();
+    },
+  };
+}
+
+const tipText = (container: HTMLElement) => {
+  const tip = container.querySelector('[data-testid="scatter-tip"]');
+  if (!tip) return null;
+  return {
+    label: tip.querySelector('.analytics-chart__tip-x')?.textContent ?? null,
+    detail: tip.querySelector('.analytics-chart__tip-y')?.textContent ?? null,
+    hidden: tip.getAttribute('aria-hidden'),
+  };
+};
+
+const pointer = (target: Element, type: 'pointerover' | 'pointerout', relatedTarget: Element | null = null) =>
+  act(() => {
+    target.dispatchEvent(new PointerEvent(type, { bubbles: true, relatedTarget }));
+  });
+
+describe('Equity scatter tooltip, guides and markers (W5e: dataviz-07 a, dataviz-06 b, critic-08, a11y-05)', () => {
+  it('carries no title attribute on any marker, bin, point or cluster', () => {
+    for (const ui of [
+      <EquitySpreadBinsView key="bins" thresholds={THRESHOLDS} overview={overview} onZoom={() => undefined} />,
+      <EquitySpreadPointsView key="points" thresholds={THRESHOLDS} payload={collisionDrilldown} />,
+    ]) {
+      const { container, unmount } = mountScatter(ui);
+      try {
+        expect(container.querySelectorAll('[data-scatter-marker]').length).toBeGreaterThan(0);
+        expect(container.querySelectorAll('[title]')).toHaveLength(0);
+      } finally {
+        unmount();
+      }
+    }
+  });
+
+  it('shows the bin tip on hover and on focus, with every fact also in the accessible name', () => {
+    const { container, unmount } = mountScatter(
+      <EquitySpreadBinsView thresholds={THRESHOLDS} overview={overview} onZoom={() => undefined} />,
+    );
+    try {
+      const bin = container.querySelector<HTMLButtonElement>('.analytics-scatter__bin')!;
+      expect(tipText(container)).toBeNull();
+      pointer(bin, 'pointerover');
+      expect(tipText(container)).toEqual({ label: '12 borrowers', detail: `mean score ${SCORE_BAND_HIGH_MIN} · 8 in the money`, hidden: 'true' });
+      expect(bin.getAttribute('aria-label')).toBe(
+        `12 borrowers near 40% equity and 75 bps spread, mean score ${SCORE_BAND_HIGH_MIN}, 8 in the money. Zoom in to load real borrowers.`,
+      );
+      pointer(bin, 'pointerout');
+      expect(tipText(container), 'pointerleave clears the tip').toBeNull();
+      act(() => bin.focus());
+      expect(tipText(container)?.label).toBe('12 borrowers');
+      // The tip never takes the pointer or focus: it sits in the markers
+      // layer (pointer-events: none) and is not focusable.
+      const tip = container.querySelector<HTMLElement>('[data-testid="scatter-tip"]')!;
+      expect(tip.closest('.analytics-scatter__points')).not.toBeNull();
+      expect(tip.querySelector('a, button, [tabindex]')).toBeNull();
+      // Leaving with the pointer does not hide the tip of the focused marker.
+      pointer(bin, 'pointerover');
+      pointer(bin, 'pointerout');
+      expect(tipText(container)?.label).toBe('12 borrowers');
+      act(() => bin.blur());
+      expect(tipText(container)).toBeNull();
+    } finally {
+      unmount();
+    }
+  });
+
+  it('names a point by borrower and a cluster by membership in the tip', () => {
+    const { container, unmount } = mountScatter(
+      <EquitySpreadPointsView thresholds={THRESHOLDS} payload={collisionDrilldown} />,
+    );
+    try {
+      const cluster = container.querySelector<HTMLButtonElement>('.analytics-scatter__cluster-marker')!;
+      act(() => cluster.focus());
+      expect(tipText(container)).toEqual({ label: '2 borrowers', detail: 'at the same coordinate', hidden: 'true' });
+      const dot = container.querySelector<HTMLAnchorElement>('a.analytics-scatter__dot')!;
+      pointer(dot, 'pointerover');
+      const point = collisionDrilldown.points[2];
+      expect(tipText(container)).toEqual({
+        label: point.display_name,
+        detail: `${point.segment} · ${point.state} · ${point.equity_pct}% equity · ${point.rate_spread_bps} bps · score ${point.opportunity_score}`,
+        hidden: 'true',
+      });
+      expect(dot.getAttribute('aria-label')).toContain(`${point.display_name}: ${point.segment}, ${point.state}, ${point.equity_pct}% equity`);
+      pointer(dot, 'pointerout');
+      // The cluster still holds focus, so its tip comes back.
+      expect(tipText(container)?.label).toBe('2 borrowers');
+    } finally {
+      unmount();
+    }
+  });
+
+  it('moves focus with the arrow keys, Home and End from each marker; the groups carry no handler', () => {
+    const { container, unmount } = mountScatter(
+      <EquitySpreadPointsView thresholds={THRESHOLDS} payload={collisionDrilldown} />,
+    );
+    try {
+      const group = container.querySelector<HTMLElement>('.analytics-scatter__points')!;
+      expect(group.getAttribute('role')).toBe('group');
+      expect(group.getAttribute('aria-label')).toBe('Borrower drilldown points');
+      const markers = [...container.querySelectorAll<HTMLElement>('[data-scatter-marker]')];
+      expect(markers).toHaveLength(2);
+      const press = (target: HTMLElement, key: string) =>
+        act(() => {
+          target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+        });
+      act(() => markers[0].focus());
+      press(markers[0], 'ArrowRight');
+      expect(document.activeElement).toBe(markers[1]);
+      press(markers[1], 'ArrowRight');
+      expect(document.activeElement, 'wraps').toBe(markers[0]);
+      press(markers[0], 'End');
+      expect(document.activeElement).toBe(markers[1]);
+      press(markers[1], 'Home');
+      expect(document.activeElement).toBe(markers[0]);
+      // A key pressed on the group itself (not a marker) moves nothing.
+      press(group, 'ArrowRight');
+      expect(document.activeElement).toBe(markers[0]);
+    } finally {
+      unmount();
+    }
+  });
+
+  it('draws the In the Money guides at the payload thresholds, inside the domain only', () => {
+    const { container, unmount } = mountScatter(
+      <EquitySpreadBinsView thresholds={THRESHOLDS} overview={overview} onZoom={() => undefined} />,
+    );
+    try {
+      const equity = container.querySelector('line.analytics-scatter__guide[data-guide="equity"]')!;
+      const spread = container.querySelector('line.analytics-scatter__guide[data-guide="spread"]')!;
+      // Overview layout: equity 0..105 (one bin past 100), spread -100..425.
+      expect(Number(equity.getAttribute('x1'))).toBeCloseTo((20 / 105) * 100, 6);
+      expect(Number(spread.getAttribute('y1'))).toBeCloseTo(100 - (175 / 525) * 100, 6);
+      expect(equity.getAttribute('vector-effect')).toBe('non-scaling-stroke');
+      const labels = [...container.querySelectorAll('.analytics-scatter__guide-label')].map((label) => label.textContent);
+      expect(labels).toEqual(['Equity ≥ 20%', 'Spread ≥ 75 bps']);
+      expect(container.querySelector('.analytics-scatter__guides')?.getAttribute('aria-hidden')).toBe('true');
+      expect(container.querySelector('[data-testid="scatter-guide-legend"]')?.textContent).toBe(
+        'Dashed lines: the In the Money thresholds (spread ≥ 75 bps, equity ≥ 20%) from this refresh.',
+      );
+    } finally {
+      unmount();
+    }
+    // A zoom window that excludes both thresholds draws neither line.
+    const zoom = mountScatter(<EquitySpreadPointsView thresholds={THRESHOLDS} payload={drilldown} />);
+    try {
+      // viewport equity 40-44, spread 75-99: the spread guide sits on its lower edge, the equity one is outside.
+      expect(zoom.container.querySelector('line[data-guide="equity"]')).toBeNull();
+      expect(zoom.container.querySelector('line[data-guide="spread"]')).not.toBeNull();
+    } finally {
+      zoom.unmount();
+    }
+  });
+
+  it('draws no guide and says why when the refresh carries no single threshold', () => {
+    for (const thresholds of [
+      { min_spread_bps: null, min_equity_pct: null, reason: 'not_uniform' },
+      { min_spread_bps: null, min_equity_pct: 20, reason: 'not_built' },
+    ] satisfies AnalyticsThresholds[]) {
+      const { container, unmount } = mountScatter(
+        <EquitySpreadBinsView thresholds={thresholds} overview={overview} onZoom={() => undefined} />,
+      );
+      try {
+        expect(container.querySelectorAll('.analytics-scatter__guide')).toHaveLength(0);
+        expect(container.querySelectorAll('.analytics-scatter__guide-label')).toHaveLength(0);
+        expect(container.querySelector('[data-testid="scatter-guide-legend"]')?.textContent).toBe(
+          thresholds.reason === 'not_uniform'
+            ? 'No single In the Money spread threshold applies to this refresh.'
+            : 'The In the Money spread threshold is not built in this refresh.',
+        );
+      } finally {
+        unmount();
+      }
+    }
+  });
+
+  it('recolours the guide to the data-guide ink, --text-3', () => {
+    const rule = /\.analytics-scatter__guide\s*\{([^}]*)\}/.exec(designCss())?.[1] ?? '';
+    expect(rule).toContain('stroke: var(--text-3)');
+  });
+});
+
+describe('Equity scatter borrower links (bundle-09)', () => {
+  it('warm the dossier chunk on focus and hover, and read nothing', () => {
+    preload.paths.length = 0;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const { container, unmount } = mountScatter(
+      <EquitySpreadPointsView thresholds={THRESHOLDS} payload={collisionDrilldown} />,
+    );
+    try {
+      const dot = container.querySelector<HTMLAnchorElement>('a.analytics-scatter__dot')!;
+      act(() => dot.focus());
+      expect(preload.paths).toEqual(['/borrower-360/B-0000000000003']);
+      pointer(dot, 'pointerover');
+      expect(preload.paths).toEqual(['/borrower-360/B-0000000000003', '/borrower-360/B-0000000000003']);
+      // The roving focus and the tip still run beside the warm-up.
+      expect(dot.getAttribute('tabindex')).toBe('0');
+      expect(tipText(container)?.label).toBe('Owner 3');
+      const marker = container.querySelector<HTMLButtonElement>('.analytics-scatter__cluster-marker')!;
+      act(() => marker.click());
+      const link = container.querySelector<HTMLAnchorElement>('.analytics-scatter__cluster-link')!;
+      act(() => link.focus());
+      expect(preload.paths[preload.paths.length - 1]).toBe('/borrower-360/B-0000000000002');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      unmount();
+      fetchSpy.mockRestore();
+    }
   });
 });

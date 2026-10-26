@@ -1,0 +1,21 @@
+{
+  "manifest": ["reset", "tokens", "base", "components", "routes", "modes", "print"],
+  "initialComponentSheets": [
+    "src/app.transitions.css",
+    "src/components/EvidenceHoverCard.css"
+  ],
+  "pendingIntegratorWrap": [],
+  "routesExceptions": {
+    "src/design-system/components/14-genie-markdown-and-proof.css": "moved out of the initial sheet (css-05 step 2); it cascaded in components, below every lazy sheet (the inversion scan finds no equal-specificity tie with partials 15-38 that loading later now flips)",
+    "src/routes/asset.css": "the .asset-* blocks moved out of 05-command-palette.css (css-05 step 2) keep the components layer they cascaded in, against the initial .tbl / .surface partials and any lazy sheet",
+    "src/components/mortgage/ProofPanels.css": "the .proof-* blocks moved out of 05-command-palette.css (css-05 step 2); EvidenceHowWeGot.css (.evidence-proof__sql) and ScoreSpine.css (.proof-component--focused) override them at equal specificity and must keep winning whatever order the chunks load in"
+  },
+  "componentsBlocks": {
+    "src/components/mortgage/LeadTable.css": ".tbl-wrap.tbl-wrap--fill's fill max-block-size must keep losing to print.css's :root :is(.tbl-wrap.tbl-wrap--fill, ...) max-block-size: none on paper, so the Lead Queue prints every loaded row unclipped",
+    "src/components/mortgage/USChoroplethMap.css": ".map-legend.stable-refresh-region (0,2,0) must keep losing to 08-map.css .map-wrap:has(.zip-tiles) .map-legend (static legend in the ZIP drill), as its own comment says",
+    "src/components/layout/FollowUpsTray.css": ".followups__snooze's display: flex must keep losing to print.css's :root :is(.btn, ...) display: none on paper (the snooze control is a .btn)",
+    "src/components/mortgage/DistributionBoard.css": ".distribution-board__wrap's overflow-x must keep losing to print.css's :root :is(.tbl-wrap, ...) overflow: visible on paper",
+    "src/components/charts/charts.css": "the .analytics-chart* chrome moved here from 10-native-analytics.css (css-05 step 2) keeps the components layer it cascaded in, so analytics.scatter.css and the kit rules after it still win",
+    "src/routes/glossary.css": "the glossary page layout moved here from 05-command-palette.css (css-05 step 2) keeps the components layer it cascaded in, below the route's own rules"
+  }
+}

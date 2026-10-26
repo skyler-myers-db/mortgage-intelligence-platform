@@ -7,11 +7,18 @@
  * gold snapshot (SNAPSHOT_AT, 12:00 UTC); fixture pages run in en-US and
  * America/New_York, so an unzoned or locally shifted timestamp would show.
  */
-import type { Borrower360, GeographyAnalyticsResponse } from '../../../src/types';
+import type { Page } from '@playwright/test';
+import type { Borrower360, GeographyAnalyticsResponse, LeadSummary } from '../../../src/types';
+import { KNOWN_VIOLATIONS, expectAxeClean } from './axe';
 import { analyticsFixtures } from './data/analytics';
 import { PRIMARY_BORROWER } from './data/borrowers';
+import { leadFixtures } from './data/leads';
 import { TOTALS } from './data/reference';
+import type { MockApi } from './mockApi';
+import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
+import { expectNoAuditedReadSince, markNaturalLoad } from './visual';
+import { tooltipText } from './tooltip';
 
 const count = (value: number) => value.toLocaleString('en-US');
 
@@ -20,7 +27,7 @@ const FORBIDDEN_NUMBER_SHAPES: ReadonlyArray<[RegExp, string]> = [
   [/\$-/, 'a sign after the currency symbol ("$-4.41M")'],
   [/\b\d+\.\d{2}[KMBT]\b/, 'a compact figure at two decimals ("18.08K")'],
   [/\b\d{4}[KMBT]\b/, 'a four-digit figure in a compact unit ("$1000K")'],
-  [/-0(\.0+)?%/, 'a negative zero percent ("-0.0%")'],
+  [/[-\u2212]0(\.0+)?%/, 'a negative zero percent ("-0.0%" or "\u22120.0%")'],
 ];
 
 async function expectNoForbiddenShapes(text: string, where: string): Promise<void> {
@@ -85,8 +92,79 @@ test.describe('one number contract across routes', () => {
   }
 });
 
+/**
+ * responsive-04 (W5e): the signed formatters print the typographic minus
+ * U+2212 for a negative value, on the painted page, in both themes. A
+ * negative number never shows the ASCII hyphen-minus directly before its
+ * digits (the prototype's "-$0.11" is a declared deviation,
+ * docs/prototype-deviations.md typographic-minus).
+ */
+const MINUS = '\u2212';
+const HYPHEN_BEFORE_DIGIT = /(^|[^\w])-\d/;
+const NEGATIVE_SPREAD_BPS = -422;
+
+async function serveNegativeSpread(mockApi: MockApi): Promise<void> {
+  const base = leadFixtures.find((entry) => entry.method === 'GET' && entry.pattern === '/api/leads');
+  if (!base) throw new Error('leads fixture missing');
+  mockApi.register<LeadSummary[]>('GET', '/api/leads', async (request) => {
+    const reply = await base.handler(request);
+    const rows = reply.body as LeadSummary[];
+    return { ...reply, body: rows.map((row, index) => (index === 0 ? { ...row, rate_spread_bps: NEGATIVE_SPREAD_BPS } : row)) };
+  });
+}
+
+/** The column index of a header cell, so a cell is read by its column, not by its text. */
+async function columnIndex(page: Page, table: string, name: string | RegExp): Promise<number> {
+  const header = page.locator(table).getByRole('columnheader', { name });
+  return header.evaluate((th) => [...(th.parentElement?.children ?? [])].indexOf(th));
+}
+
+test.describe('the typographic minus on negative signed numbers', () => {
+  for (const theme of FIXTURE_THEMES) {
+    test(`a below-market Lead Queue spread reads U+2212 (${theme})`, async ({ app, mockApi, page }) => {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await app.setTheme(theme);
+      await serveNegativeSpread(mockApi);
+      await app.gotoRoute('/lead-queue');
+      const loaded = markNaturalLoad(mockApi);
+      // The rate-spread cell, found by its magnitude so the assertion reads its sign.
+      const cell = page.locator('table.lead-table__table tbody td.num', { hasText: /^\D?422$/ });
+      await expect(cell).toHaveText(`${MINUS}422`);
+      const text = (await cell.textContent()) ?? '';
+      expect(text.charCodeAt(0), 'the spread leads with U+2212').toBe(0x2212);
+      expect(text, 'no ASCII hyphen-minus before the digits').not.toMatch(HYPHEN_BEFORE_DIGIT);
+      await expectAxeClean(page, { key: { route: 'lead-queue', state: 'negative-spread' }, theme, known: KNOWN_VIOLATIONS });
+      expectNoAuditedReadSince(mockApi, loaded, 'the negative-spread proof');
+    });
+
+    test(`a Rate Lever loss reads U+2212 in the change column and its total (${theme})`, async ({ app, mockApi, page }) => {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await app.setTheme(theme);
+      // A +50 bps par move moves borrowers OUT of the money: every change is a loss.
+      await app.gotoRoute('/?map_mode=rate&rate_step=50');
+      const loaded = markNaturalLoad(mockApi);
+      await expect(page.getByRole('slider', { name: 'Par rate move' })).toHaveValue('50');
+      await page.getByRole('button', { name: 'View as table' }).click();
+      const total = page.getByTestId('map-table-change-total');
+      await expect(total).toHaveText(new RegExp(`^${MINUS}[\\d,]+$`));
+      const index = await columnIndex(page, '[data-testid="map-table"]', 'In the money: change vs today');
+      const cells = (await page.locator('[data-testid="map-table"] tbody tr').evaluateAll(
+        (rows, column) => rows.map((row) => row.children[column]?.textContent ?? ''),
+        index,
+      )).filter((cell) => cell !== '' && cell !== '\u2014' && cell !== '0');
+      expect(cells.length, 'the scenario has losing rows').toBeGreaterThan(0);
+      for (const cell of cells) {
+        expect(cell.charCodeAt(0), `${cell} leads with U+2212`).toBe(0x2212);
+        expect(cell, `${cell} has no ASCII hyphen-minus before its digits`).not.toMatch(HYPHEN_BEFORE_DIGIT);
+      }
+      await expectAxeClean(page, { key: { route: 'home', state: 'rate-lever-loss' }, theme, known: KNOWN_VIOLATIONS, include: '.map-wrap' });
+      expectNoAuditedReadSince(mockApi, loaded, 'the rate-lever loss proof');
+    });
+  }
+});
+
 test.describe('one date contract', () => {
-  test('the Home freshness chip reads relative age with an absolute UTC title', async ({ app, page }) => {
+  test('the Home freshness chip reads relative age with the absolute UTC in its tooltip', async ({ app, page }) => {
     await app.gotoRoute('/');
     const chip = page.locator('.chip', { hasText: 'Refreshed' });
     await expect(chip).toHaveCount(1);
@@ -94,7 +172,9 @@ test.describe('one date contract', () => {
     await expect(time).toHaveText('3 hours ago');
     await expect(chip).toHaveText('Refreshed 3 hours ago');
     await expect(time).toHaveAttribute('datetime', '2026-07-14T12:00:00.000Z');
-    await expect(time).toHaveAttribute('title', 'Jul 14, 2026, 12:00 PM UTC');
+    // critic-08: a ui/Tooltip, never a native title.
+    await expect(time).not.toHaveAttribute('title', /.*/);
+    expect(await tooltipText(time)).toBe('Jul 14, 2026, 12:00 PM UTC');
   });
 
   test('the Analytics snapshot date is formatted, never the raw wire string', async ({ app, page }) => {
@@ -103,7 +183,7 @@ test.describe('one date contract', () => {
     await expect(page.locator('.kpi', { hasText: 'Addressable Borrowers' }).locator('.kpi__delta')).toHaveText('Snapshot Jul 14');
     const snapshot = main.locator('.analytics-panel-note time[datetime="2026-07-14"]');
     await expect(snapshot).toHaveText('Jul 14');
-    await expect(snapshot).toHaveAttribute('title', 'Jul 14, 2026');
+    expect(await tooltipText(snapshot)).toBe('Jul 14, 2026');
     await expect(main).not.toContainText('2026-07-14');
   });
 
@@ -142,7 +222,7 @@ test.describe('one date contract', () => {
     // design_files/Design System.html `.trig__when`: uppercase mono ("2D AGO").
     await expect(page.locator('.trig__when').first()).toHaveCSS('text-transform', 'uppercase');
     for (const item of await when.all()) {
-      await expect(item).toHaveAttribute('title', /^[A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2} [AP]M UTC$/);
+      expect(await tooltipText(item)).toMatch(/^[A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2} [AP]M UTC$/);
       await expect(item).toHaveAttribute('datetime', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     }
   });

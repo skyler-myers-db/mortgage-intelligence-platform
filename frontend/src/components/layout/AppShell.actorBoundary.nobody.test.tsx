@@ -31,8 +31,6 @@ import { useApp } from '../AppContext';
 import { PinnedInsights } from '../mortgage/PinnedInsights';
 import { AppShell } from './AppShell';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /** Out of this suite for the reason AppShell.actorBoundary.test.tsx gives;
  *  the shell's resume is modelled by calling resumeGenieTurnFromSession(). */
 vi.mock('./GenieDock', () => ({ GenieDock: () => null }));

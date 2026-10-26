@@ -176,7 +176,7 @@ line unless the proof drawer/source row shows a current comparison window.
 
 Route: Segments.
 
-Select "Prime Refi Candidates", then add "Home Equity Candidate", then clear filters.
+Select "In the Money", then add "Home Equity Candidate", then clear filters.
 
 Talk track:
 

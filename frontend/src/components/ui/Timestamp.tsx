@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { Tooltip } from './Tooltip';
 import {
   DATE_UNKNOWN,
   formatDate,
@@ -13,13 +14,15 @@ import {
  * Timestamp — the one way a screen shows a backend date or time
  * (2026-09-21 audit, responsive-07).
  *
- * Renders `<time dateTime={ISO} title={absolute UTC}>` around the lib/time
- * label, so every freshness chip, trigger row and dense cell carries a
- * machine-readable instant AND an unambiguous absolute tooltip, whatever the
- * visible form:
+ * Renders `<time dateTime={ISO}>` around the lib/time label, wrapped in a
+ * ui/Tooltip whose content is the absolute UTC form (a native `title` is
+ * banned, audit critic-08), so every freshness chip, trigger row and dense
+ * cell carries a machine-readable instant AND an unambiguous absolute
+ * tooltip (on hover, and as the hidden description), whatever the visible
+ * form:
  *   format="relative" (default)  "3 hours ago" · narrow "2d ago"
  *   format="date"                "Jul 14"  (year past 11 months)
- *   format="datetime"            "Jul 14, 8:00 AM EDT"
+ *   format="datetime"            "Jul 14, 8:00 AM EDT"  (a calendar date: "Jul 14")
  * A missing or unparseable value renders the fallback as plain text, never a
  * `<time>` claiming an instant it does not have.
  *
@@ -35,6 +38,8 @@ interface TimestampProps {
   format?: TimestampFormat;
   /** Relative form only; `'narrow'` is the prototype's `.trig__when` shape. */
   relativeStyle?: RelativeStyle;
+  /** Relative form only: the label under 45 seconds in place of "now" (lib/time formatRelative). */
+  nowLabel?: string;
   className?: string;
   /** Plain text rendered when the value is missing or unparseable. */
   fallback?: string;
@@ -88,6 +93,7 @@ export function Timestamp({
   value,
   format = 'relative',
   relativeStyle = 'long',
+  nowLabel,
   className,
   fallback = DATE_UNKNOWN,
   now,
@@ -101,10 +107,12 @@ export function Timestamp({
       ? formatDate(value, { now: reference })
       : format === 'datetime'
         ? formatDateTimeShort(value, { now: reference })
-        : formatRelative(value, { now: reference, style: relativeStyle });
+        : formatRelative(value, { now: reference, style: relativeStyle, nowLabel });
   return (
-    <time className={className} dateTime={dateTime} title={formatUtcTitle(value)}>
-      {label}
-    </time>
+    <Tooltip content={formatUtcTitle(value)}>
+      <time className={className} dateTime={dateTime}>
+        {label}
+      </time>
+    </Tooltip>
   );
 }

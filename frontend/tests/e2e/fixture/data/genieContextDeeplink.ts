@@ -22,14 +22,14 @@ import { genieAnswerFixture } from './genieTurn';
 /** Two shape-valid conversations (32 hex) the link moves between. */
 export const LINK_A_ID = '0a1b2c3d4e5f60718293a4b5c6d7e8f9';
 export const LINK_B_ID = 'f9e8d7c6b5a4938271605f4e3d2c1b0a';
-export const LINK_A_QUESTION = 'Which states lead on prime refi candidates?';
-export const LINK_A_ANSWER = 'Conversation A: three states lead the prime refi screen.';
+export const LINK_A_QUESTION = 'Which states lead on in-the-money borrowers?';
+export const LINK_A_ANSWER = 'Conversation A: three states lead on in-the-money borrowers.';
 export const LINK_B_QUESTION = 'How is home equity spread across the footprint?';
 export const LINK_B_ANSWER = 'Conversation B: equity concentrates in the coastal states.';
 
 /** What POST /api/genie/context-scope renders for an all-mode itm x equity intersection. */
 export const INTERSECTION_PROMPT =
-  'How many borrowers across the current Cotality data coverage are in the prime refi candidates segment ' +
+  'How many borrowers across the current Cotality data coverage are in the in-the-money segment ' +
   'and the home equity candidate segment, and what is the average rate spread?';
 export const INTERSECTION_SCOPE: GenieContextScopeResponse = { prompt: INTERSECTION_PROMPT, withheld: null, omitted: [] };
 /** What it renders for Texas with the assignee preset: the assignee is named, never rendered. */

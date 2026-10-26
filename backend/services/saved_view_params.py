@@ -3,7 +3,8 @@
 A saved view is a URL the actor could already share through Copy link, so
 its grammar is the Copy-link grammar (``leadQueueShareParams`` in
 ``frontend/src/routes/lead-queue.filters.ts``) minus the campaign binding:
-the Lead Queue filters, the sort and direction, and the column preset.
+the Lead Queue filters, the sort and direction, the column preset and the
+hidden columns (``hide``, W5e tables-05 step 2).
 Everything else is refused, not dropped -- the open row, an assignee email
 (only ``assigned_to=me`` resolves per viewer), the Growth Agent proof keys,
 ``campaign_id`` / ``variant_name``, every ``include_*`` switch, ``limit`` and
@@ -75,6 +76,24 @@ _FIVE_DIGITS = re.compile(r"\d{5}")
 _UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 _INTEGER = re.compile(r"-?\d{1,5}")
 
+#: The ``hide`` vocabulary, in column-model order. Mirrors
+#: LEAD_TABLE_HIDE_VOCABULARY in frontend/src/components/mortgage/LeadTable.columns.ts
+#: (tests/unit/test_saved_view_hide_tokens_parity.py parses it). A saved view
+#: never stores the ``none`` sentinel: that is a URL override of the actor's
+#: default view, and a saved view carries the effective columns.
+LEAD_TABLE_HIDE_TOKENS: tuple[str, ...] = (
+    "location",
+    "relationship",
+    "assigned",
+    "outreach",
+    "last-touch",
+    "segments",
+    "equity",
+    "rate",
+    "status",
+)
+_HIDE_ORDER = {token: index for index, token in enumerate(LEAD_TABLE_HIDE_TOKENS)}
+
 #: Every key a saved view may carry.
 SAVED_VIEW_PARAM_KEYS: frozenset[str] = frozenset(
     {
@@ -98,6 +117,7 @@ SAVED_VIEW_PARAM_KEYS: frozenset[str] = frozenset(
         "sort",
         "dir",
         "view",
+        "hide",
     }
     | _PORTFOLIO_KEYS
     | frozenset(_BOUND_RANGES)
@@ -106,6 +126,15 @@ SAVED_VIEW_PARAM_KEYS: frozenset[str] = frozenset(
 
 def _refuse() -> ValueError:
     return ValueError(SAVED_VIEW_PARAMS_REFUSED)
+
+
+def _canonical_hide(value: str) -> str:
+    """A non-empty comma list of distinct vocabulary tokens, re-emitted in column order."""
+
+    tokens = [part.strip() for part in value.split(",")]
+    if not tokens or any(token not in _HIDE_ORDER for token in tokens) or len(set(tokens)) != len(tokens):
+        raise _refuse()
+    return ",".join(sorted(tokens, key=_HIDE_ORDER.__getitem__))
 
 
 def _check_scalar(key: str, value: str) -> None:
@@ -137,6 +166,9 @@ def _check_scalar(key: str, value: str) -> None:
         ok = value in {"asc", "desc"}
     elif key == "view":
         ok = value == "sales-ops"
+    elif key == "hide":
+        _canonical_hide(value)
+        ok = True
     elif key in _BOUND_RANGES:
         low, high = _BOUND_RANGES[key]
         ok = _INTEGER.fullmatch(value) is not None and low <= int(value) <= high
@@ -214,7 +246,7 @@ def canonical_saved_view_params(raw: str) -> tuple[str, str]:
         if key not in SAVED_VIEW_PARAM_KEYS or key in pairs or not trimmed:
             raise _refuse()
         _check_scalar(key, trimmed)
-        pairs[key] = trimmed
+        pairs[key] = _canonical_hide(trimmed) if key == "hide" else trimmed
     _check_lists(pairs)
     _check_portfolio(pairs)
     _check_bounds(pairs)

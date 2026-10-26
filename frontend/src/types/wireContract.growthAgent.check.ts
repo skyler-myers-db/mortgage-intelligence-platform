@@ -12,12 +12,12 @@
 import type { ApiRequest, ApiResponse } from './api.gen';
 import type { DeepNoPhantomKeys, Expect, NoPhantomKeys, WireFits } from './wireContract.check';
 import type { ComposePlanRequest, ComposePlanResponse, ComposedPlan, ExecutePlanRequest, GrowthAgentCustomRunRequest, GrowthAgentDueMonitorRunRequest, GrowthAgentDueMonitorRunResponse, GrowthAgentGovernanceChip, GrowthAgentHomeResponse, GrowthAgentMonitor, GrowthAgentMonitorDraftRequest, GrowthAgentNotificationDraft, GrowthAgentPlanProgressResponse, GrowthAgentPolicyCheck, GrowthAgentPromptRunRequest, GrowthAgentRateWatchRequest, GrowthAgentRateWatchResponse, GrowthAgentRunRequest, GrowthAgentRunResponse, GrowthAgentRunSummary, GrowthAgentRunWatchlistRequest, GrowthAgentSchedulerStatus, GrowthAgentToolStep, GrowthAgentWatchlistBriefing, GrowthAgentWatchlistSummaryResponse, GrowthAgentWorkflow, PlanStep, PlanStepTrace } from './growthAgent';
+import type { GrowthAgentReviewedWorkflowId, GrowthAgentWorkflowId } from './growthAgent';
 
 export type WireContractGrowthAgent = [
   // (i) schema-named hand types
   Expect<WireFits<ComposePlanRequest, ApiRequest<'ComposePlanRequest'>>>,
   Expect<DeepNoPhantomKeys<ComposePlanRequest, ApiRequest<'ComposePlanRequest'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: planner is string on the wire but the literal supervisor_composed in the hand type
   Expect<WireFits<ApiResponse<'ComposePlanResponse'>, ComposePlanResponse>>,
   Expect<NoPhantomKeys<ComposePlanResponse, ApiResponse<'ComposePlanResponse'>>>,
   Expect<WireFits<ApiResponse<'ComposedPlan'>, ComposedPlan>>,
@@ -28,15 +28,12 @@ export type WireContractGrowthAgent = [
   Expect<DeepNoPhantomKeys<GrowthAgentCustomRunRequest, ApiRequest<'GrowthAgentCustomRunRequest'>>>,
   Expect<WireFits<GrowthAgentDueMonitorRunRequest, ApiRequest<'GrowthAgentDueMonitorRunRequest'>>>,
   Expect<DeepNoPhantomKeys<GrowthAgentDueMonitorRunRequest, ApiRequest<'GrowthAgentDueMonitorRunRequest'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: runs[].workflow.id can be live_analysis on the wire, which GrowthAgentWorkflowId omits
   Expect<WireFits<ApiResponse<'GrowthAgentDueMonitorRunResponse'>, GrowthAgentDueMonitorRunResponse>>,
   Expect<NoPhantomKeys<GrowthAgentDueMonitorRunResponse, ApiResponse<'GrowthAgentDueMonitorRunResponse'>>>,
   Expect<WireFits<ApiResponse<'GrowthAgentGovernanceChip'>, GrowthAgentGovernanceChip>>,
   Expect<NoPhantomKeys<GrowthAgentGovernanceChip, ApiResponse<'GrowthAgentGovernanceChip'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: workflows[].id can be live_analysis on the wire, which GrowthAgentWorkflowId omits
   Expect<WireFits<ApiResponse<'GrowthAgentHomeResponse'>, GrowthAgentHomeResponse>>,
   Expect<NoPhantomKeys<GrowthAgentHomeResponse, ApiResponse<'GrowthAgentHomeResponse'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: workflow_id can be live_analysis on the wire, which GrowthAgentWorkflowId omits
   Expect<WireFits<ApiResponse<'GrowthAgentMonitor'>, GrowthAgentMonitor>>,
   Expect<NoPhantomKeys<GrowthAgentMonitor, ApiResponse<'GrowthAgentMonitor'>>>,
   Expect<WireFits<GrowthAgentMonitorDraftRequest, ApiRequest<'GrowthAgentMonitorDraftRequest'>>>,
@@ -51,15 +48,12 @@ export type WireContractGrowthAgent = [
   Expect<DeepNoPhantomKeys<GrowthAgentPromptRunRequest, ApiRequest<'GrowthAgentPromptRunRequest'>>>,
   Expect<WireFits<GrowthAgentRateWatchRequest, ApiRequest<'GrowthAgentRateWatchRequest'>>>,
   Expect<DeepNoPhantomKeys<GrowthAgentRateWatchRequest, ApiRequest<'GrowthAgentRateWatchRequest'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-07 w5-wire-types: monitor.workflow_id can be live_analysis on the wire, which GrowthAgentWorkflowId omits
   Expect<WireFits<ApiResponse<'GrowthAgentRateWatchResponse'>, GrowthAgentRateWatchResponse>>,
   Expect<NoPhantomKeys<GrowthAgentRateWatchResponse, ApiResponse<'GrowthAgentRateWatchResponse'>>>,
   Expect<WireFits<GrowthAgentRunRequest, ApiRequest<'GrowthAgentRunRequest'>>>,
   Expect<DeepNoPhantomKeys<GrowthAgentRunRequest, ApiRequest<'GrowthAgentRunRequest'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: workflow.id can be live_analysis on the wire, which GrowthAgentWorkflowId omits
   Expect<WireFits<ApiResponse<'GrowthAgentRunResponse'>, GrowthAgentRunResponse>>,
   Expect<NoPhantomKeys<GrowthAgentRunResponse, ApiResponse<'GrowthAgentRunResponse'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: workflow_id can be live_analysis on the wire, which GrowthAgentWorkflowId omits
   Expect<WireFits<ApiResponse<'GrowthAgentRunSummary'>, GrowthAgentRunSummary>>,
   Expect<NoPhantomKeys<GrowthAgentRunSummary, ApiResponse<'GrowthAgentRunSummary'>>>,
   Expect<WireFits<GrowthAgentRunWatchlistRequest, ApiRequest<'GrowthAgentRunWatchlistRequest'>>>,
@@ -68,17 +62,17 @@ export type WireContractGrowthAgent = [
   Expect<NoPhantomKeys<GrowthAgentSchedulerStatus, ApiResponse<'GrowthAgentSchedulerStatus'>>>,
   Expect<WireFits<ApiResponse<'GrowthAgentToolStep'>, GrowthAgentToolStep>>,
   Expect<NoPhantomKeys<GrowthAgentToolStep, ApiResponse<'GrowthAgentToolStep'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: workflow_id can be live_analysis on the wire, which GrowthAgentWorkflowId omits
   Expect<WireFits<ApiResponse<'GrowthAgentWatchlistBriefing'>, GrowthAgentWatchlistBriefing>>,
   Expect<NoPhantomKeys<GrowthAgentWatchlistBriefing, ApiResponse<'GrowthAgentWatchlistBriefing'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: watchlists[].workflow_id can be live_analysis on the wire, which GrowthAgentWorkflowId omits
   Expect<WireFits<ApiResponse<'GrowthAgentWatchlistSummaryResponse'>, GrowthAgentWatchlistSummaryResponse>>,
   Expect<NoPhantomKeys<GrowthAgentWatchlistSummaryResponse, ApiResponse<'GrowthAgentWatchlistSummaryResponse'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: id can be live_analysis on the wire, which GrowthAgentWorkflowId omits
   Expect<WireFits<ApiResponse<'GrowthAgentWorkflow'>, GrowthAgentWorkflow>>,
   Expect<NoPhantomKeys<GrowthAgentWorkflow, ApiResponse<'GrowthAgentWorkflow'>>>,
   Expect<WireFits<ApiResponse<'PlanStep'>, PlanStep>>,
   Expect<NoPhantomKeys<PlanStep, ApiResponse<'PlanStep'>>>,
   Expect<WireFits<ApiResponse<'PlanStepTrace'>, PlanStepTrace>>,
   Expect<NoPhantomKeys<PlanStepTrace, ApiResponse<'PlanStepTrace'>>>,
+  // The workflow-id vocabularies stay closed unions (never widened to string).
+  Expect<string extends GrowthAgentWorkflowId ? false : true>,
+  Expect<string extends GrowthAgentReviewedWorkflowId ? false : true>,
 ];

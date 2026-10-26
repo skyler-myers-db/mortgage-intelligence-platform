@@ -11,8 +11,6 @@ import { designCss } from '../test/designCss';
 import { ErrorBoundary } from './ErrorBoundary';
 import { routeLabelForPath } from './ErrorBoundaryFallback';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const BORROWER_BEARING_MESSAGE = 'Cannot read score of borrower B-0TESTBORROWER';
 
 function Thrower({ error }: { error: unknown }): ReactNode {

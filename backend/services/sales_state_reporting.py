@@ -434,3 +434,126 @@ class _SalesStateReporting(_SalesStateCore):
                 for key, count in competitors.most_common(5)
             ],
         }
+
+    #: Per-officer workload (critic-10 6c): ONE Lakebase statement over the
+    #: active roster's loan officers, scoped by visible_lo_emails. Open is an
+    #: unreleased assignment (idx_lead_assignments_assignee, a partial index on
+    #: released_at IS NULL); stale is open, assigned at least stale_days ago,
+    #: with no disposition for that borrower since it was assigned (the
+    #: call_dispositions (borrower_id, occurred_at) index); assigned and worked
+    #: count each window (worked = distinct borrowers with a disposition by the
+    #: officer, idx_call_dispositions_lo). No new index; audit-free; never the
+    #: warehouse.
+    _WORKLOAD_SQL = """
+        WITH roster AS (
+            SELECT email, display_label, region, capacity_per_day
+            FROM mip_app.sales_team
+            WHERE active = true
+              AND role = 'loan_officer'
+              {scope}
+        ),
+        open_counts AS (
+            SELECT a.assigned_to_email AS email,
+                   COUNT(*) AS open_count,
+                   COUNT(*) FILTER (
+                     WHERE a.assigned_at <= now() - make_interval(days => %(stale_days)s)
+                       AND NOT EXISTS (
+                         SELECT 1
+                         FROM mip_app.call_dispositions d
+                         WHERE d.borrower_id = a.borrower_id
+                           AND d.occurred_at >= a.assigned_at
+                       )
+                   ) AS stale_count
+            FROM mip_app.lead_assignments a
+            JOIN roster r ON r.email = a.assigned_to_email
+            WHERE a.released_at IS NULL
+            GROUP BY a.assigned_to_email
+        ),
+        assigned_counts AS (
+            SELECT a.assigned_to_email AS email,
+                   COUNT(*) FILTER (
+                     WHERE a.assigned_at >= %(from_date)s::date
+                       AND a.assigned_at < (%(to_date)s::date + interval '1 day')
+                   ) AS assigned_count,
+                   COUNT(*) FILTER (
+                     WHERE a.assigned_at >= %(previous_from)s::date
+                       AND a.assigned_at < (%(previous_to)s::date + interval '1 day')
+                   ) AS previous_assigned_count
+            FROM mip_app.lead_assignments a
+            JOIN roster r ON r.email = a.assigned_to_email
+            WHERE a.assigned_at >= %(previous_from)s::date
+              AND a.assigned_at < (%(to_date)s::date + interval '1 day')
+            GROUP BY a.assigned_to_email
+        ),
+        worked_counts AS (
+            SELECT d.lo_email AS email,
+                   COUNT(DISTINCT d.borrower_id) FILTER (
+                     WHERE d.occurred_at >= %(from_date)s::date
+                       AND d.occurred_at < (%(to_date)s::date + interval '1 day')
+                   ) AS worked_count,
+                   COUNT(DISTINCT d.borrower_id) FILTER (
+                     WHERE d.occurred_at >= %(previous_from)s::date
+                       AND d.occurred_at < (%(previous_to)s::date + interval '1 day')
+                   ) AS previous_worked_count
+            FROM mip_app.call_dispositions d
+            JOIN roster r ON r.email = d.lo_email
+            WHERE d.occurred_at >= %(previous_from)s::date
+              AND d.occurred_at < (%(to_date)s::date + interval '1 day')
+            GROUP BY d.lo_email
+        )
+        SELECT r.email, r.display_label, r.region, r.capacity_per_day,
+               COALESCE(o.open_count, 0) AS open_count,
+               COALESCE(o.stale_count, 0) AS stale_count,
+               COALESCE(ac.assigned_count, 0) AS assigned_count,
+               COALESCE(w.worked_count, 0) AS worked_count,
+               COALESCE(ac.previous_assigned_count, 0) AS previous_assigned_count,
+               COALESCE(w.previous_worked_count, 0) AS previous_worked_count
+        FROM roster r
+        LEFT JOIN open_counts o ON o.email = r.email
+        LEFT JOIN assigned_counts ac ON ac.email = r.email
+        LEFT JOIN worked_counts w ON w.email = r.email
+        ORDER BY r.display_label ASC, r.email ASC
+        LIMIT 200
+    """
+
+    def workload(
+        self,
+        *,
+        from_date: str,
+        to_date: str,
+        previous_from: str,
+        previous_to: str,
+        stale_days: int,
+        visible_lo_emails: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        scope = "AND email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
+        rows = self._client.fetchall(
+            self._WORKLOAD_SQL.format(scope=scope),
+            {
+                "from_date": from_date,
+                "to_date": to_date,
+                "previous_from": previous_from,
+                "previous_to": previous_to,
+                "stale_days": int(stale_days),
+                "lo_emails": sorted(visible_lo_emails or []),
+            },
+            limit=200,
+        )
+        counts = (
+            "open_count",
+            "stale_count",
+            "assigned_count",
+            "worked_count",
+            "previous_assigned_count",
+            "previous_worked_count",
+        )
+        return [
+            {
+                "email": row.get("email"),
+                "display_label": row.get("display_label"),
+                "region": row.get("region"),
+                "capacity_per_day": int(row.get("capacity_per_day") or 0),
+                **{key: int(row.get(key) or 0) for key in counts},
+            }
+            for row in rows
+        ]

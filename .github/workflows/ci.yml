@@ -217,6 +217,14 @@ jobs:
         # directive. Its own step so the log names this gate; `npm run lint`
         # runs it again (under 1 s).
         run: npm --prefix frontend run lint:a11y
+      - name: TypeScript strict ratchet (audit stack-07)
+        # frontend/tsconfig.strict.json (the build config plus the strict
+        # flags that still have hits, noUncheckedIndexedAccess among them)
+        # over production files, compared with
+        # tools/ts_strict_ratchet_baseline.json by file + TS code + count.
+        # Fails on a new or grown hit, a stale entry (lower it with
+        # --ratchet), config drift and a TS suppression comment.
+        run: node tools/ts_strict_ratchet.mjs --check tools/ts_strict_ratchet_baseline.json
       - run: npm --prefix frontend run lint
       - run: npm --prefix frontend run test
       - run: npm --prefix frontend run build
@@ -277,6 +285,19 @@ jobs:
           GITHUB_STEP_SUMMARY: /dev/null
       - name: Head vs base (step summary)
         run: node tools/check_frontend_budgets.mjs --report-only --base ../bundle-base.json
+      - name: Bundle treemap (head)
+        # Audit quality-08 (W5e w5-deps-report): rollup-plugin-visualizer over
+        # the head build, through frontend/vite.analyze.config.ts (ANALYZE=1
+        # only; it builds into the git-ignored frontend/bundle-analyze/, never
+        # frontend/dist). The production config never loads the plugin.
+        run: npm --prefix frontend run build:analyze
+      - name: Upload the bundle treemap
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundle-treemap-${{ github.sha }}
+          path: frontend/bundle-analyze/treemap.html
+          if-no-files-found: error
+          retention-days: 14
 
   bundle-syntax-check:
     # `databricks bundle validate` unavoidably performs a
@@ -584,11 +605,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
-      image: mcr.microsoft.com/playwright:v1.63.0-noble
+      image: mcr.microsoft.com/playwright:v1.64.0-noble
       options: --ipc=host
     env:
       MIP_VRT: '1'
-      MIP_VRT_IMAGE: mcr.microsoft.com/playwright:v1.63.0-noble
+      MIP_VRT_IMAGE: mcr.microsoft.com/playwright:v1.64.0-noble
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -732,7 +753,7 @@ jobs:
           bandit -c .bandit -r backend tools jobs pipelines -x tests --severity-level high --confidence-level high -q
 
       - name: pip-audit (Python deps)
-        # Three advisories are ignored here. Each has its reachability and its
+        # Two advisories are ignored here. Each has its reachability and its
         # upstream status written at the call site and re-checked whenever
         # the list changes; an ignore without both is a bug.
         #
@@ -741,36 +762,25 @@ jobs:
         # cryptography<51 and requirements.in moved to 50.0.1. That ignore is
         # retired; the fix is installed.
         #
-        # GHSA-h7x2-h6g9-p789 (CVE-2026-71211, ignore added 2026-09-08) is an
-        # SSRF in MLflow's self-hosted tracking server: _create_gateway_secret
-        # (mlflow/server/handlers.py) stores auth_config.api_base unvalidated
-        # and the AI Gateway proxy (mlflow/server/gateway_api.py raw_proxy)
-        # later issues requests to it.
-        #   1. Unreachable. This repo never runs `mlflow server` or
-        #      `mlflow gateway`. mlflow is used as a client SDK
-        #      (mlflow.genai.evaluate, pyfunc packaging, UC model
-        #      registration) against the Databricks-managed tracking server,
-        #      which is not this package's server code. `grep -rE "mlflow
-        #      (server|gateway)|mlflow\.server"` over the repo returns nothing.
-        #   2. No fixed release exists. The advisory lists no patched version
-        #      and marks >=3.13.0,<=3.15.2 vulnerable. The pinned mlflow 3.16.0
-        #      postdates the advisory's last update (2026-08-31) and its
-        #      _create_gateway_secret handler is byte-identical to 3.15.1's,
-        #      so pip-audit's silence on 3.16.0 is a range artifact, not a
-        #      fix. The ignore stays so a later range extension cannot redden
-        #      CI for a finding whose proof is unchanged. Re-verified
-        #      2026-09-08 by AST-comparing the installed 3.15.1 and 3.16.0
-        #      copies: _create_gateway_secret is identical and raw_proxy
-        #      differs only in budget-accounting plumbing (no api_base
-        #      validation), so 3.16.0 carries the same code the advisory
-        #      describes.
-        # Remove this ignore when the advisory gains a first_patched_version,
-        # then move the mlflow pin to that release.
-        # Review date: 2026-10-08. Re-check with
-        #   gh api /advisories/GHSA-h7x2-h6g9-p789 --jq '.vulnerabilities[].first_patched_version'
-        # (null on 2026-09-08; advisory last updated 2026-08-31). If it is
-        # still null, re-confirm proofs 1 and 2 above and move this date
-        # forward; if it is set, retire the ignore and bump the pin instead.
+        # GHSA-h7x2-h6g9-p789 (CVE-2026-71211), the SSRF in MLflow's self-hosted
+        # tracking server (an unvalidated gateway-secret auth_config.api_base
+        # that raw_proxy later requests), was ignored here from 2026-09-08
+        # until 2026-10-26, when requirements.in moved to mlflow 3.17.2. That
+        # ignore is retired; the fix is installed:
+        #   - MLflow 3.17.0's release notes list "Validate gateway secret
+        #     api_base to prevent SSRF (GHSA-h7x2-h6g9-p789)" (mlflow#25761).
+        #   - In the installed 3.17.2, _create_gateway_secret and
+        #     _update_gateway_secret pass auth_config through
+        #     _validate_gateway_secret_auth_config, whose
+        #     _validate_gateway_api_base admits public HTTPS only by default
+        #     (a 169.254.169.254 or 10.x api_base raises MlflowException), and
+        #     raw_proxy calls _enable_upstream_ssrf_protection before it
+        #     proxies. 3.16.0 had none of the three.
+        # The advisory itself still lists no first_patched_version and marks
+        # >=3.13.0,<=3.15.2, so pip-audit is silent on 3.17.2 with or without
+        # the ignore. The path was never reachable here either: `grep -rE
+        # "mlflow (server|gateway)|mlflow\.server"` over backend, jobs, tools,
+        # pipelines and scripts still returns nothing.
         #
         # GHSA-xpv3-w29h-x7cv (CVE-2026-49265) and GHSA-hj66-6f7g-4r5v
         # (CVE-2026-49264) are two oauthlib 3.3.1 advisories, both published
@@ -809,9 +819,17 @@ jobs:
         # Remove both ignores when a databricks-sql-connector release admits
         # oauthlib 4 (then move both pins), or when the connector leaves the
         # lock.
-        # Review date: 2026-10-13. Re-check with
+        # Re-reviewed 2026-10-15 (W5e integration security re-review): both
+        # advisories still name only oauthlib 4.0.0 as patched; the
+        # connector's main branch now declares oauthlib >=3.1.0,<5.0.0
+        # (databricks-sql-python#964 closed as completed 2026-10-06), but the
+        # latest release, 4.6.0 (2026-09-24), still requires <4.0.0 and the
+        # repo pins 4.4.0, so the fix still cannot be installed; the import
+        # greps in proof 1 still return nothing. Next step: the first
+        # connector release past 4.6.0 (bump it, then oauthlib 4).
+        # Review date: 2026-11-01. Re-check with
         #   curl -s https://pypi.org/pypi/databricks-sql-connector/json | jq '.info.requires_dist'
-        run: pip-audit -r requirements.txt --strict --ignore-vuln GHSA-h7x2-h6g9-p789 --ignore-vuln GHSA-xpv3-w29h-x7cv --ignore-vuln GHSA-hj66-6f7g-4r5v
+        run: pip-audit -r requirements.txt --strict --ignore-vuln GHSA-xpv3-w29h-x7cv --ignore-vuln GHSA-hj66-6f7g-4r5v
 
       - name: npm audit (frontend prod + dev deps)
         # `--audit-level=high` means only high/critical CVEs fail the

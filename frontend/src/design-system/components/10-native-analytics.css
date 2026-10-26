@@ -86,6 +86,13 @@
   translate: calc(var(--bar-pct, 0%) - 100%) 0;
   transition: translate var(--dur-base) var(--ease-standard);
 }
+/* A floored bar (D-dataviz-geo-a, deviation:funnel-floored-marks): drawn
+   at the minimum length, so it is outlined in the data ink instead of
+   filled, and the panel note says so. */
+.analytics-bars__fill--floored {
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 1px var(--accent-data);
+}
 .analytics-bars__value {
   justify-self: end;
   color: var(--text-1);
@@ -123,6 +130,22 @@
   fill: var(--accent-data);
   transition: fill var(--dur-fast) var(--ease);
 }
+/* Floored stages and the ribbons into them (D-dataviz-geo-a,
+   deviation:funnel-floored-marks): drawn at the minimum thickness, so they
+   paint a hatch pattern (--floor-fill, set per chart by analytics.charts.tsx)
+   instead of the solid data ink. Author CSS beats the SVG fill attribute. */
+.funnel-sankey__bar--floored { fill: var(--floor-fill); }
+.funnel-sankey__ribbon--floored { fill: var(--floor-fill); }
+.funnel-sankey__hatch-bg { fill: color-mix(in oklab, var(--accent-data) 30%, var(--bg-2)); }
+.funnel-sankey__hatch-line {
+  stroke: var(--accent-data);
+  stroke-width: 2;
+}
+.funnel-sankey__hatch-bg--ribbon { fill: color-mix(in oklab, var(--accent-data) 14%, var(--bg-2)); }
+.funnel-sankey__hatch-line--ribbon {
+  stroke-opacity: 0.45;
+  stroke-width: 1.5;
+}
 .funnel-sankey__count {
   fill: var(--text-1);
   font-family: var(--font-mono);
@@ -150,6 +173,9 @@
 .funnel-sankey__node:focus-visible .funnel-sankey__bar {
   fill: color-mix(in oklab, var(--accent-data) 80%, var(--text-1));
 }
+/* A floored stage keeps its hatch on hover and focus (the focus stroke
+   below still marks focus). */
+.funnel-sankey__node:is(:hover, :focus-visible) .funnel-sankey__bar--floored { fill: var(--floor-fill); }
 .funnel-sankey__node:hover .funnel-sankey__label,
 .funnel-sankey__node:focus-visible .funnel-sankey__label {
   fill: var(--accent-ink);
@@ -183,167 +209,33 @@
     animation: none;
   }
 }
+/* Forced colours keep the floored encoding: a dashed CanvasText edge on the
+   stage, a Canvas / CanvasText hatch and a dashed outline on the bar. */
+@media (forced-colors: active) {
+  .funnel-sankey__bar--floored.funnel-sankey__bar--floored {
+    forced-color-adjust: none;
+    stroke: CanvasText;
+    stroke-dasharray: 3 2;
+  }
+  .funnel-sankey__hatch-bg,
+  .funnel-sankey__hatch-line { forced-color-adjust: none; }
+  .funnel-sankey__hatch-bg { fill: Canvas; }
+  .funnel-sankey__hatch-line { stroke: CanvasText; }
+  .analytics-bars__fill--floored.analytics-bars__fill--floored {
+    forced-color-adjust: none;
+    background: Canvas;
+    border: 1px dashed CanvasText;
+  }
+}
 .analytics-chart-panel--scatter {
   min-height: calc(var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-10));
-}
-.analytics-chart,
-.analytics-scatter-wrap {
-  position: relative;
-  --analytics-chart-h: calc(var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-12));
-  min-height: var(--analytics-chart-h);
-  padding-inline-start: var(--sp-10);
-}
-.analytics-scatter-wrap {
-  --analytics-chart-h: calc(var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16));
-}
-.analytics-chart__plot {
-  display: grid;
-  grid-template-columns: minmax(var(--sp-16), calc(var(--sp-16) + var(--sp-4))) minmax(0, 1fr);
-  gap: var(--sp-3);
-  min-height: var(--analytics-chart-h);
-}
-.analytics-chart__canvas {
-  position: relative;
-  min-width: 0;
-  min-height: var(--analytics-chart-h);
-  padding-block-end: var(--sp-6);
-}
-/* The y-tick column is exactly the plot's height, top-aligned, so each label
-   and its gridline share one --tick-pos space (dataviz-07). Stretched to the
-   canvas row, it took the x-tick band below the plot as well, and a label
-   landed up to about 30px below its gridline on the kit charts, the equity
-   scatter and the rate window's in-the-money panel. */
-.analytics-chart__y-ticks {
-  position: relative;
-  align-self: start;
-  block-size: var(--analytics-chart-h);
-  color: var(--text-1);
-  font-family: var(--font-mono);
-  font-size: var(--fs-12);
-  font-weight: 700;
-  z-index: var(--z-raised);
-}
-.analytics-chart__x-ticks {
-  position: absolute;
-  inset-inline: 0;
-  inset-block-end: 0;
-  min-block-size: var(--sp-5);
-  color: var(--text-1);
-  font-family: var(--font-mono);
-  font-size: var(--fs-12);
-  font-weight: 700;
-}
-.analytics-chart__tick {
-  position: absolute;
-  line-height: var(--lh-tight);
-  white-space: nowrap;
-}
-.analytics-chart__tick--y {
-  inset-inline-end: 0;
-  inset-block-start: var(--tick-pos);
-  transform: translateY(-50%);
-  inline-size: 100%;
-  padding-inline-end: var(--sp-2);
-  text-align: end;
-}
-.analytics-chart__tick--x {
-  inset-inline-start: var(--tick-pos);
-  inset-block-start: var(--sp-1);
-  transform: translateX(-50%);
-}
-.analytics-line-chart,
-.analytics-scatter {
-  width: 100%;
-  height: var(--analytics-chart-h);
-  overflow: hidden;
-}
-.analytics-chart__grid {
-  stroke: var(--line-1);
-}
-/* Pointer hover readout for the distribution line charts (Rate Spread,
-   Opportunity Score). The layer itself is transparent and aria-hidden; the
-   crosshair, dot, and tip are positioned in the same 0-100 percent space the
-   `preserveAspectRatio="none"` SVG uses, so they track the line at any
-   container width. */
-.analytics-chart__hover {
-  position: absolute;
-  inset-block-start: 0;
-  inset-inline: 0;
-  block-size: var(--analytics-chart-h);
-}
-.analytics-chart__crosshair,
-.analytics-chart__hover-dot,
-.analytics-chart__tip {
-  position: absolute;
-  inset-inline-start: var(--hover-x);
-  pointer-events: none;
-}
-.analytics-chart__crosshair {
-  inset-block: 0;
-  inline-size: 1px;
-  background: var(--line-2);
-}
-.analytics-chart__hover-dot,
-.analytics-chart__tip { inset-block-start: var(--hover-y); }
-.analytics-chart__hover-dot {
-  inline-size: var(--sp-2);
-  block-size: var(--sp-2);
-  border-radius: var(--r-pill);
-  background: var(--accent-data);
-  border: 1px solid var(--bg-1);
-  transform: translate(-50%, -50%);
-}
-.analytics-chart__tip {
-  transform: translate(var(--sp-3), calc(-100% - var(--sp-2)));
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-  padding: var(--sp-2);
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-md);
-  background: var(--bg-1);
-  box-shadow: var(--shadow-md);
-  white-space: nowrap;
-  z-index: var(--z-raised);
-}
-/* Past ~60% of the plot width the tip would overflow the surface; flip it to
-   the left of the crosshair instead. */
-.analytics-chart__tip--flip {
-  transform: translate(calc(-100% - var(--sp-3)), calc(-100% - var(--sp-2)));
-}
-.analytics-chart__tip-x {
-  color: var(--text-1);
-  font-family: var(--font-mono);
-  font-size: var(--fs-12);
-  font-weight: 600;
-}
-.analytics-chart__tip-y { color: var(--text-2); font-size: var(--fs-11); }
-.analytics-line-chart polyline {
-  fill: none;
-  stroke: var(--accent-data);
-  stroke-width: 2.4;
-}
-.analytics-chart__axis {
-  color: var(--text-2);
-  font-size: var(--fs-12);
-  font-weight: 600;
-}
-.analytics-chart__axis--x {
-  text-align: center;
-  margin-top: var(--sp-2);
-}
-.analytics-chart__axis--y {
-  position: absolute;
-  inset: 50% auto auto 0;
-  transform: translateY(-50%) rotate(-90deg);
-  transform-origin: left center;
 }
 .analytics-scatter {
   border-left: 1px solid var(--line-2);
   border-bottom: 1px solid var(--line-2);
 }
 .analytics-scatter__guide {
-  stroke: var(--line-1);
+  stroke: var(--text-3);
   stroke-dasharray: 2 3;
 }
 .analytics-scatter__points {

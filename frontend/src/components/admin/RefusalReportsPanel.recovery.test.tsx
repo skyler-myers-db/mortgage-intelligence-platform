@@ -20,8 +20,6 @@ import { ApiError } from '../../lib/api';
 import type { HealthPayload } from '../../lib/apiTypes';
 import { HealthProvider } from '../HealthProvider';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const api = vi.hoisted(() => ({ list: vi.fn(), question: vi.fn() }));
 vi.mock('../../lib/apiClients/refusalReports', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/apiClients/refusalReports')>()),

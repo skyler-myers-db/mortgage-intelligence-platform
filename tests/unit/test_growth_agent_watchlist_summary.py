@@ -183,8 +183,11 @@ def test_the_body_never_carries_route_criteria_or_actor(
 
 
 def test_the_sql_is_actor_scoped_and_selects_no_private_column() -> None:
-    # The watchlists CTE plus each of the series' three arms (monitor, seed, last run).
-    assert WATCHLIST_SUMMARY_SQL.count("actor_email = %(actor_email)s") == 4
+    # The watchlists CTE plus the series' four arms (monitor, seed, last run,
+    # and the linked runs, W5e), the link arm binding the link AND the run.
+    assert WATCHLIST_SUMMARY_SQL.count("actor_email = %(actor_email)s") == 6
+    assert "JOIN mip_app.growth_agent_watchlist_run_links AS l" in WATCHLIST_SUMMARY_SQL
+    assert WATCHLIST_SUMMARY_SQL.count("UNION\n") == 3 and "UNION ALL" not in WATCHLIST_SUMMARY_SQL
     final_select = WATCHLIST_SUMMARY_SQL.rsplit("SELECT", 1)[1].split("FROM", 1)[0]
     for column in ("route", "criteria", "actor_email", "seed_run_id", "last_run_id"):
         assert not re.search(rf"\b{column}\b", final_select), column

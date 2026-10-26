@@ -14,11 +14,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { eventuallyInAct } from '../../test/settleInAct';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DistributionPreview } from '../../lib/apiClients/sales';
 import { clearToasts, getToasts } from '../../lib/toast';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const apiMocks = vi.hoisted(() => ({ salesTeam: vi.fn() }));
 vi.mock('../../lib/api', async (importOriginal) => ({
@@ -73,7 +72,8 @@ let root: Root;
 let client: QueryClient;
 let closed = 0;
 
-const eventually = (assertion: () => void) => vi.waitFor(assertion, { timeout: 10_000 });
+// Polled between act-wrapped ticks, so the board's async updates commit inside act (quality-06).
+const eventually = (assertion: () => void) => eventuallyInAct(assertion);
 
 function Opener() {
   const [open, setOpen] = useState(false);

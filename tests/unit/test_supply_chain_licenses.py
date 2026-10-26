@@ -109,6 +109,7 @@ def test_third_party_license_notice_covers_weak_copyleft_and_map_data() -> None:
         "@fontsource-variable/geist-mono",
         "OFL-1.1",
         "web-vitals",
+        "certifi",
     ):
         assert required in notice
 
@@ -127,15 +128,22 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert "databricks-sql-connector==4.4.0" in requirements_in
     assert "boto3==1.43.50" in requirements_in
     assert "pg8000==1.31.5" in requirements_in
-    assert "gitpython>=3.1.59,<4" in requirements_in
+    assert "gitpython>=3.2.1,<4" in requirements_in
     assert "cryptography==50.0.1" in requirements_in
-    assert "aiohttp>=3.14.3" in requirements_in
+    assert "aiohttp>=3.14.4" in requirements_in
     assert "pyasn1>=0.6.4,<1" in requirements_in
     assert "sqlparse>=0.6.0,<1" in requirements_in
     assert "thrift>=0.24.0,<0.25" in requirements_in
     assert "multidict==6.9.1" in requirements_in
     assert "werkzeug==3.1.9" in requirements_in
     assert "mako==1.4.2" in requirements_in
+    assert "mlflow==3.17.2" in requirements_in
+    assert "certifi==2026.10.23" in requirements_in
+    assert "graphql-core==3.2.12" in requirements_in
+    assert "pillow==13.0.0" in requirements_in
+    assert "opentelemetry-api>=1.45.1,<2" in requirements_in
+    assert "opentelemetry-sdk>=1.45.1,<2" in requirements_in
+    assert "opentelemetry-exporter-otlp>=1.45.1,<2" in requirements_in
     for required_pin in (
         "boto3==1.43.50",
         "uvicorn==0.47.0",
@@ -145,15 +153,21 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
         "multidict==6.9.1",
         "werkzeug==3.1.9",
         "mako==1.4.2",
-        "gitpython==3.1.62",
+        "gitpython==3.2.1",
         "cryptography==50.0.1",
-        "mlflow==3.16.0",
+        "mlflow==3.17.2",
         "pyarrow==25.0.0",
-        "aiohttp==3.14.3",
+        "aiohttp==3.14.5",
+        "yarl==1.25.1",
         "pyasn1==0.6.4",
         "pg8000==1.31.5",
         "psycopg==3.3.4",
-        "opentelemetry-sdk==1.41.1",
+        "opentelemetry-api==1.45.1",
+        "opentelemetry-sdk==1.45.1",
+        "opentelemetry-exporter-otlp==1.45.1",
+        "certifi==2026.10.23",
+        "graphql-core==3.2.12",
+        "pillow==13.0.0",
         "sqlparse==0.6.0",
         "thrift==0.24.0",
     ):
@@ -164,6 +178,20 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert deploy.index("import boto3, mlflow") < deploy.index(
         "DEPLOY_INVENTORY_PRINCIPAL="
     )
+
+
+def test_the_gateway_serving_env_pins_are_the_requirements_in_pins() -> None:
+    """GATEWAY_MODEL_REQUIREMENTS is the registered gateway model's serving
+    environment. Its mlflow, databricks-sdk and cryptography pins travel with
+    the App's, so a security bump in requirements.in cannot leave the served
+    model on the vulnerable release (mlflow 3.16.0 -> 3.17.2 on 2026-10-26)."""
+    from backend.agents.gateway_contract import GATEWAY_MODEL_REQUIREMENTS
+
+    requirement_lines = set((ROOT / "requirements.in").read_text(encoding="utf-8").splitlines())
+
+    assert {pin.split("==")[0] for pin in GATEWAY_MODEL_REQUIREMENTS} == {"mlflow", "databricks-sdk", "cryptography"}
+    for pin in GATEWAY_MODEL_REQUIREMENTS:
+        assert pin in requirement_lines, f"gateway serving env pins {pin}, requirements.in does not"
 
 
 def _npm_audit_gate_levels(text: str) -> set[str]:

@@ -25,7 +25,7 @@ describe('Segment definitions', () => {
 
   it('uses a distinct presentation label for the strict refi-ready segment', () => {
     const refiReady = SEGMENT_DEFINITIONS.find((s) => s.code === 'itm');
-    expect(refiReady?.name).toBe('Prime Refi Candidates');
+    expect(refiReady?.name).toBe('In the Money');
     expect(refiReady?.description).toContain('75 bps');
     expect(refiReady?.description).toContain('15%');
   });
@@ -123,7 +123,7 @@ describe('SegmentCard', () => {
       count: 12,
       color: '#000000',
     });
-    expect(container.textContent).toContain('Prime Refi Candidates');
+    expect(container.textContent).toContain('In the Money');
     expect(container.textContent).toContain('Lien rate ≥ 75 bps above par and equity ≥ 15%.');
     expect(container.textContent).not.toContain('Legacy backend label.');
   });
@@ -233,7 +233,7 @@ describe('SegmentCard', () => {
     expect(select?.getAttribute('type')).toBe('button');
     expect(select?.getAttribute('aria-pressed')).toBe('false');
     expect(select?.getAttribute('aria-label')).toBe(
-      'Select Prime Refi Candidates segment — 12 borrowers',
+      'Select In the Money segment — 12 borrowers',
     );
 
     const chip = container.querySelector('.seg-card__facet-chip');

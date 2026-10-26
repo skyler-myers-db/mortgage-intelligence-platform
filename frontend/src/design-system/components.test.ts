@@ -16,6 +16,8 @@ const tokensCss = () => readFileSync(
   new URL('./tokens.css', import.meta.url),
   'utf8',
 );
+/** The `.proof-*` blocks, which load with the proof drawer's chunk (css-05 step 2). */
+const proofPanelsCss = () => featureStylesheets().find((sheet) => sheet.file === 'src/components/mortgage/ProofPanels.css')?.css ?? '';
 
 describe('layout containment contracts', () => {
   it('keeps component CSS free of hard-coded color literals', () => {
@@ -315,7 +317,7 @@ describe('layout containment contracts', () => {
   });
 
   it('uses readable accent ink for light-theme active and hover text', () => {
-    const css = designCss();
+    const css = designCss() + proofPanelsCss();
     const tokens = tokensCss();
 
     expect(tokens).toContain('[data-theme="light"][data-accent="bright"] { --accent-ink: #014E80; }');
@@ -484,7 +486,7 @@ describe('layout containment contracts', () => {
    * to the prototype, which defines none).
    */
   it('gives every interactive family a pressed state on the shared tokens', () => {
-    const css = designCss();
+    const css = designCss() + proofPanelsCss();
     const tokens = tokensCss();
     expect(tokens).toMatch(/--pressed-shift:\s*1px;/);
     expect(tokens).toMatch(/--pressed-scale:\s*0\.98;/);
@@ -586,14 +588,16 @@ describe('layout containment contracts', () => {
 
 describe('contrast-mode partial order (css-06 / a11y-10 / responsive-v3)', () => {
   // 33 overrides partials 01-32 at equal specificity, so it must come after
-  // all of them. Later partials (34+, other lanes) may follow it.
-  it('imports 33-contrast-modes.css after every partial it overrides', () => {
+  // all of them. Later partials (34+, other lanes) may follow it. Since
+  // css-05 the modes layer is what puts it above every components and routes
+  // rule (cssLayers.test.ts); the import position stays the pre-layer order.
+  it('imports 33-contrast-modes.css after every partial it overrides, into the modes layer', () => {
     const entry = readFileSync(join(process.cwd(), 'src/design-system/components.css'), 'utf8');
-    const imports = [...entry.matchAll(/@import\s+["']\.\/components\/(\d+)-[\w-]+\.css["'];/g)].map((match) => Number(match[1]));
+    const imports = [...entry.matchAll(/@import\s+["']\.\/components\/(\d+)-[\w-]+\.css["'](?:\s+layer\([\w-]+\))?;/g)].map((match) => Number(match[1]));
     const at = imports.indexOf(33);
     expect(at, '33-contrast-modes.css is imported').toBeGreaterThan(0);
     expect(imports.slice(at + 1).filter((n) => n <= 32), 'no 01-32 partial after 33').toEqual([]);
-    expect(entry).toMatch(/@import "\.\/components\/32-feedback\.css";\n@import "\.\/components\/33-contrast-modes\.css";/);
+    expect(entry).toMatch(/@import "\.\/components\/32-feedback\.css" layer\(components\);\n@import "\.\/components\/33-contrast-modes\.css" layer\(modes\);/);
   });
 });
 
@@ -797,7 +801,7 @@ describe('hover states promise only real clicks (motion-09)', () => {
   });
 
   it('gives a hovered or focused proof tab a lighter step than the selected tab', () => {
-    const rules = cssRules(designCss());
+    const rules = cssRules(proofPanelsCss());
     const activeAt = rules.findIndex((rule) => rule.selector === '.proof-tab.is-active');
     expect(rules[activeAt]?.block).toBe('border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)');
     const hoverAt = rules.findIndex((rule) => rule.selector.includes('.proof-tab:hover'));

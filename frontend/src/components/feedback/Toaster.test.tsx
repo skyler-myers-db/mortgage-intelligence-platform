@@ -17,8 +17,6 @@ import { pushModalLayer } from '../../lib/modalLayers';
 import { clearToasts, getToasts, toast } from '../../lib/toast';
 import { SUCCESS_TOAST_MS, Toaster } from './Toaster';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const session = { canAccessAdmin: true };
 vi.mock('../AppContext', () => ({ useApp: () => session }));
 // The ledger reader decision (D-audit-reads-c3): administrators and auditors.

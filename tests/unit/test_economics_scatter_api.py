@@ -264,7 +264,7 @@ def test_points_cache_keys_include_viewport() -> None:
 
 
 def test_segment_display_labels_cover_every_product_segment() -> None:
-    assert economics_scatter.segment_display_label("itm") == "Prime Refi Candidates"
+    assert economics_scatter.segment_display_label("itm") == "In the Money"
     assert economics_scatter.segment_display_label("equity") == "Home Equity Candidate"
     assert economics_scatter.segment_display_label(None) == economics_scatter.UNSEGMENTED_LABEL
     assert (

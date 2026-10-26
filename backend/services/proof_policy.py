@@ -101,6 +101,10 @@ def kpi_proof_relations() -> set[str]:
     return {
         qualify("semantics", "portfolio_headline_metric_view"),
         qualify("gold", "borrower_360"),
+        # The Executive KPIs' statement (_LIVE_FUNNEL_SQL) LEFT JOINs the gold
+        # lifecycle mirror for Approved / Actioned (W5e w5-analytics item 8B).
+        # The mirror is gold; nothing silver, first-party or raw is added.
+        qualify("gold", "borrower_lifecycle_state"),
     }
 
 

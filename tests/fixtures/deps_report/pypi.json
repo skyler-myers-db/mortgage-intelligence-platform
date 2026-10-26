@@ -1,0 +1,5 @@
+{
+  "databricks-sdk": {"info": {"version": "0.152.0"}, "urls": [{"upload_time_iso_8601": "2026-10-13T04:42:55.000000Z"}]},
+  "uvicorn": {"info": {"version": "0.54.0"}, "urls": [{"upload_time_iso_8601": "2026-09-25T11:00:00.000000Z"}]},
+  "pyjwt": {"info": {"version": "2.15.1"}, "urls": [{"upload_time_iso_8601": "2026-09-28T11:00:00.000000Z"}]}
+}

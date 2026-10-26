@@ -40,6 +40,9 @@ const DATA_MARK_SELECTORS = [
   '.genie-line__point',
   '.genie-bars__bar',
   '.chart-hist__bar--past',
+  // Floored marks (D-dataviz-geo-a): the hatch and the outline paint the data ink.
+  '.funnel-sankey__bar--floored',
+  '.analytics-bars__fill--floored',
 ];
 
 /** TSX sites that paint a data mark inline. The Genie line and bar charts
@@ -101,6 +104,15 @@ describe('data marks never paint the bare accent', () => {
     const inks = rules.flatMap((rule) => [...rule.block.matchAll(/--rate-window-data-ink:\s*([^;]+);/g)].map((match) => match[1].trim()));
     expect(inks.length).toBe(2);
     expect(new Set(inks)).toEqual(new Set(['var(--accent-data)']));
+  });
+
+  it('fills the rate window book band from --accent-data in both themes, never the accent (W5e item 6)', () => {
+    const fills = rules.flatMap((rule) => [...rule.block.matchAll(/--rate-window-band-fill:\s*([^;]+);/g)].map((match) => match[1].trim()));
+    expect(fills.length).toBe(2);
+    for (const fill of fills) {
+      expect(fill).toContain('var(--accent-data)');
+      expect(fill).not.toMatch(/var\(\s*--accent(?:-soft|-ink)?\s*[,)]/);
+    }
   });
 
   it('keeps the bare accent out of the TSX data-mark sites', () => {

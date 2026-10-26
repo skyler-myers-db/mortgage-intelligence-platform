@@ -11,6 +11,7 @@
    bubble). Shapes reuse `.btn .btn--ghost .btn--sm` and `.chip`; only
    placement is new. Tokens only: no literal colors or pixel values.
    ============================================================ */
+@layer routes {
 
 /* Turn controls under the progress bubble (Stop). */
 .genie__turn-controls {
@@ -45,4 +46,5 @@
   align-items: center;
   gap: var(--sp-2);
   color: var(--text-3);
+}
 }

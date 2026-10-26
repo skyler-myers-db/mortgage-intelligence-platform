@@ -111,8 +111,10 @@ describe('ApprovalBanner', () => {
     expect(buttons).toHaveLength(2);
     for (const attrs of buttons) {
       expect(attrs).toContain('disabled');
-      expect(attrs).toContain(`aria-describedby="${reasonId}"`);
-      expect(attrs).toContain('title="Requires approver role"');
+      // The visible reason first, then the Tooltip's description (critic-08: no native title).
+      expect(attrs).toMatch(new RegExp(`aria-describedby="${reasonId} tooltip-desc[^"]+"`));
+      expect(attrs).toContain('data-tooltip=');
+      expect(attrs).not.toContain('title=');
     }
   });
 

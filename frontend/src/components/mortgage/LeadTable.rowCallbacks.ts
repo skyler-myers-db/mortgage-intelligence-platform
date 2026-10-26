@@ -13,6 +13,8 @@ export interface LeadRowCallbacks {
   onFocusRow: (borrowerId: string) => void;
   /** Request approval for this row (flow-02): opens the lazy request form. */
   onRequestApproval: (borrowerId: string) => void;
+  /** Revoke this row's approval (flow-v2): opens the lazy revoke panel. */
+  onRevoke: (borrowerId: string) => void;
 }
 
 /**
@@ -39,6 +41,7 @@ export function useStableRowCallbacks(latest: LeadRowCallbacks): LeadRowCallback
     onAssignmentUpdate: (borrowerId, update) => latestRef.current.onAssignmentUpdate(borrowerId, update),
     onFocusRow: (borrowerId) => latestRef.current.onFocusRow(borrowerId),
     onRequestApproval: (borrowerId) => latestRef.current.onRequestApproval(borrowerId),
+    onRevoke: (borrowerId) => latestRef.current.onRevoke(borrowerId),
   }));
   return stable;
 }

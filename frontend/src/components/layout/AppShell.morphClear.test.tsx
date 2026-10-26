@@ -18,8 +18,6 @@ import { BORROWER_MORPH_NAME, borrowerMorphNameFor } from '../../lib/borrowerMor
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { AppShell } from './AppShell';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 // The dock's lazy resume import is out of this suite (see AppShell.actorBoundary.test.tsx).
 vi.mock('./GenieDock', () => ({ GenieDock: () => null }));
 

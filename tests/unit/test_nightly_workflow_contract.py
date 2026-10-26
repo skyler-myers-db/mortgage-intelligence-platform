@@ -18,8 +18,8 @@ import yaml
 REPO = Path(__file__).resolve().parents[2]
 NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
 REAL_DATA_SPEC = REPO / "frontend" / "tests" / "e2e" / "real_data.spec.ts"
-LIVE_CAMPAIGN_PROOF = REPO / "frontend" / "src" / "lib" / "liveCampaignProof.ts"
-LIVE_CAMPAIGN_PROOF_TEST = REPO / "frontend" / "src" / "lib" / "liveCampaignProof.test.ts"
+LIVE_CAMPAIGN_PROOF = REPO / "frontend" / "tests" / "support" / "liveCampaignProof.ts"
+LIVE_CAMPAIGN_PROOF_TEST = REPO / "frontend" / "tests" / "support" / "liveCampaignProof.test.ts"
 LIVE_HARDENING_SPEC = REPO / "frontend" / "tests" / "e2e" / "live_hardening_regressions.spec.ts"
 CONSOLE_LAYOUT_SPEC = REPO / "frontend" / "tests" / "e2e" / "console-layout.spec.ts"
 ECONOMICS_SCATTER_SPEC = REPO / "frontend" / "tests" / "e2e" / "economics_scatter.spec.ts"
@@ -102,6 +102,24 @@ def test_the_release_gate_jobs_and_git_sha_checks_exist() -> None:
     assert text.count('--git-sha "$GITHUB_SHA"') == 2
     assert text.count("python -m tools.verify_deployed_app_contract") >= 2
     assert "tools/live_validation_gate.py" in text.split("\non:", 1)[0]
+
+
+def test_bundle_commands_address_the_isolated_ci_staging_install() -> None:
+    """W5e (D-platform-process-b step 7): nightly's `bundle validate/run -t dev`
+    read the state deploy-dev.yml wrote under the dev-ci root, never the live
+    install's; the triggers and both --git-sha checks stay as they were."""
+
+    text = NIGHTLY.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(text)
+
+    assert workflow["env"]["BUNDLE_VAR_bundle_root_leaf"] == "dev-ci"
+    assert workflow["env"]["BUNDLE_VAR_install_suffix"] == "_ci"
+    assert "isolated CI staging install" in text.split("\non:", 1)[0]
+    assert list(workflow.get("on", workflow.get(True))) == ["workflow_dispatch"]
+    assert text.count('--git-sha "$GITHUB_SHA"') == 2
+    for job in workflow["jobs"].values():
+        for step in job.get("steps", []):
+            assert "BUNDLE_VAR_bundle_root_leaf" not in (step.get("env") or {}), "one top-level value only"
 
 
 def test_live_playwright_job_budgets_cold_app_and_serial_browser_matrix() -> None:

@@ -203,7 +203,7 @@ test.describe('Module 0 — theme / density / narrow canaries', () => {
 
     const grid = page.locator('.seg-grid').first();
     await expect(grid).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText('Prime Refi Candidates', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('In the Money', { exact: true }).first()).toBeVisible();
 
     const segCols = await grid.evaluate((el) => {
       return getComputedStyle(el).gridTemplateColumns

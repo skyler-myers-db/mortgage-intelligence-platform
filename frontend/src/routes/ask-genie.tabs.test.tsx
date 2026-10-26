@@ -28,6 +28,7 @@ import {
   waitUntil,
 } from './ask-genie.growth-agent.test-support';
 import { askGeniePanelId, parseAskGenieTab } from './ask-genie.tabs';
+import { ROUTE_COPY_BANS } from '../test/routeCopyBans';
 
 const MONITOR: GrowthAgentMonitor = {
   monitor_id: '22222222-2222-4222-8222-222222222222',
@@ -259,19 +260,7 @@ describe('/ask-genie page tabs', () => {
       expect(selectedTab().getAttribute('aria-controls')).toBe(askGeniePanelId(expectedTab));
 
       const visible = [container.querySelector('.proto-hero')?.textContent ?? '', activePanel().textContent ?? ''].join(' ');
-      for (const banned of [
-        /Conversation API/i,
-        /Agent Responses/i,
-        /capabilit/i,
-        /preflight/i,
-        /de-duplicat/i,
-        /\bsemantics\b/i,
-        /hand-editing/i,
-        /\bSQL\b/,
-        /\bUC\b/,
-        /Module 0/,
-        /scheduler/i,
-      ]) {
+      for (const banned of ROUTE_COPY_BANS) {
         expect(visible, `${path} shows ${banned}`).not.toMatch(banned);
       }
     },

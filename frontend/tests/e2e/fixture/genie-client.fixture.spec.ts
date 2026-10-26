@@ -259,7 +259,7 @@ test.describe('the conversation deep link (shell-03)', () => {
     await app.gotoRoute('/ask-genie');
     const naturalLoad = markNaturalLoad(mockApi);
     await askPanel(page).getByRole('button', { name: 'Genie conversation history' }).click();
-    await askPanel(page).getByRole('menuitem', { name: /Prime refi by state/ }).click();
+    await askPanel(page).getByRole('menuitem', { name: /In the Money by state/ }).click();
     await expect(page).toHaveURL(new RegExp(`/ask-genie/${GENIE_LINK_HEX_ID}$`));
     await expect(askPanel(page).locator('.genie__msg--user')).toHaveText([GENIE_LINK_QUESTION]);
     const detailReads = () => mockApi.calls.filter((call) => call.path.endsWith(`/genie/sessions/${GENIE_LINK_HEX_ID}`)).length;

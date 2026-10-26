@@ -31,8 +31,6 @@ import type { LeadServerOrder, LeadsPagedPage } from '../lib/apiClients/leadsPag
 import type { LeadsRequest } from '../lib/leadsQuery';
 import type { LeadSummary } from '../types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const fetchMock = vi.hoisted(() => ({
   calls: [] as Array<{ cursor: string | null; order: { sort: string; dir: string } }>,
   next: [] as Array<() => Promise<unknown>>,
@@ -239,6 +237,20 @@ describe('useLeadQueuePages', () => {
     expect(pages().paging.pagesLoaded).toBe(1);
     expect(pages().paging.nextError).toBe(false);
     expect(pages().error).toBeNull();
+  });
+
+  it('a later page refused 409 actor_changed is not a stale view: the loaded pages stay, no page-0 re-read', async () => {
+    fetchMock.next.push(answer(page(0)));
+    await mount();
+    fetchMock.next.push(fail(new ApiError('Actor changed', { path: '/api/leads', status: 409, reason: 'actor_changed' })));
+    await act(async () => pages().paging.loadNext());
+    await settle();
+    await settle();
+    expect(fetchMock.calls.map((call) => call.cursor)).toEqual([null, 'cur1.sig']);
+    expect(pages().paging.queueUpdated).toBe(false);
+    expect(pages().paging.nextError).toBe(true);
+    expect(pages().paging.pagesLoaded).toBe(1);
+    expect(pages().data?.leads).toHaveLength(500);
   });
 
   it('any other failed Load next keeps the loaded pages; Retry is one GET of the same page', async () => {

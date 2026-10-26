@@ -14,6 +14,7 @@ import { actorScopeStatus } from '../../lib/actorScope';
 import { isSessionExpired, markUnrecordedWrite } from '../../lib/sessionStatus';
 import { BULK_APPROVE_CONCURRENCY, MUTATION_BUDGET_PER_MINUTE } from './LeadTable.constants';
 import { stashCancelledBulk } from './bulkApproveStash';
+import { bulkRefusalCopy } from './bulkRefusalCopy';
 import {
   bulkRunSummary,
   bulkRunVerb,
@@ -95,7 +96,7 @@ export async function runBulk(engine: BulkRunEngine, spec: BulkRunSpec): Promise
       (report) => report,
       (error: unknown): BulkRowReport => ({
         outcome: 'backend',
-        message: error instanceof Error ? error.message : null,
+        message: bulkRefusalCopy(error),
       }),
     ).then((report) => {
       settled += 1;

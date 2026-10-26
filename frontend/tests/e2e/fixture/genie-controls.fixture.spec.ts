@@ -13,6 +13,7 @@ import type { AppDriver } from './app';
 import { PRIMARY_BORROWER } from './data/borrowers';
 import { json, type MockApi } from './mockApi';
 import { expect, test } from './test';
+import { tooltipText } from './tooltip';
 
 const ADDRESSABLE_KPI_PROMPT =
   'What is the addressable market size — how many eligible borrowers across the current Cotality data coverage?';
@@ -116,8 +117,8 @@ test.describe('Genie page context (genie-04, shell-07)', () => {
     });
     expect(topmost, 'the Ask Genie entry is hit-tested above .seg-card__select').toBe(true);
 
-    const prompt = ((await entry.getAttribute('title')) ?? '').replace(/^Ask Genie: /, '');
-    expect(prompt).toMatch(/^Which states have the most borrowers in the .+ segment\?$/);
+    const prompt = ((await tooltipText(entry)) ?? '').replace(/^Ask Genie: /, '');
+    expect(prompt).toMatch(/^Which states have the most (borrowers in the .+ segment|in-the-money borrowers)\?$/);
     await entry.click();
 
     const dialog = page.getByRole('dialog', { name: 'Genie chat' });
@@ -176,7 +177,7 @@ test.describe('Genie page context (genie-04, shell-07)', () => {
       'Show the top 10 borrowers by lead score across the current Cotality data coverage.',
     );
     // Not the server's identical global list.
-    await expect(dialog).not.toContainText('Which states have the most prime refi candidates?');
+    await expect(dialog).not.toContainText('Which states have the most in-the-money borrowers?');
     await expect(page.locator('.genie__msg--user')).toHaveCount(0);
   });
 });
@@ -271,7 +272,7 @@ test.describe('Genie conversational controls (genie-03)', () => {
     await expect(dialog).toContainText('First answer: 3,080 borrowers.');
 
     const regenerate = dialog.getByRole('button', { name: 'Regenerate answer' });
-    await expect(regenerate).toHaveAttribute('title', /cannot rewrite its history/);
+    expect(await tooltipText(regenerate)).toMatch(/cannot rewrite its history/);
     const questionActions = dialog.locator('.genie__msg-actions--user').first();
     await expect(questionActions).toHaveCSS('display', 'flex');
     await expect(questionActions).toHaveCSS('align-self', 'flex-end');
@@ -339,7 +340,7 @@ test.describe('Genie answer data honesty (genie-06)', () => {
     const clipboard = await page.evaluate(() => navigator.clipboard.readText());
     // Exactly the wording the bubble displays.
     const shown = (await dialog.locator('.genie__msg--ai .genie-md-p').first().textContent())?.trim() ?? '';
-    expect(shown).toBe('Illinois leads with 3,080 borrowers passing the refinance-economics screen.');
+    expect(shown).toBe('Illinois leads with 3,080 in-the-money borrowers.');
     expect(clipboard).toContain(shown);
     expect(clipboard).toContain('State\tBorrowers');
     expect(clipboard).toContain('IL\t3,080');

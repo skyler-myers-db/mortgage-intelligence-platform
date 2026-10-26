@@ -10,14 +10,14 @@ import { loadedExportTruncatedOf, planLeadCsvExport } from './LeadTable.csvPlan'
 import { leadExportNotice } from './LeadExportNotice';
 import { useLeadCsvExport } from './useLeadCsvExport';
 import { LEAD_VIRTUALIZATION_THRESHOLD, leadRowEstimatePx } from './LeadTable.constants';
-import { leadTableColumnCount, leadTableColumns } from './LeadTable.columns';
-import { keepsServerOrder, sortValue, verifiedCampaignBinding } from './LeadTable.logic';
+import { leadTableClassName, leadTableSortLabel, useLeadTableColumns } from './LeadTable.columns';
+import { applyRevocations, keepsServerOrder, sortValue, verifiedCampaignBinding, withoutRevokedReceipts } from './LeadTable.logic';
 import { LeadTableBody } from './LeadTableBody';
 import { useStableRowCallbacks } from './LeadTable.rowCallbacks';
 import { LeadTableHead } from './LeadTableHead';
 import { LeadTableHeader } from './LeadTableHeader';
 import { LeadTableFooter } from './LeadTableFooter';
-import { LeadTableBulkActions, LeadTableBulkToast } from './LeadTableBulkActions';
+import { LeadTableBulkActions } from './LeadTableBulkActions';
 import { LeadBulkRunProgressFallback, LeadBulkRunResultFallback } from './LeadBulkRunFallback';
 import { LeadTableStatusChips } from './LeadTableStatusChips';
 import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels';
@@ -25,6 +25,8 @@ import { LEAD_TABLE_KEYS } from './LeadTable.keymap';
 import { useLeadApprovalActions, type CampaignBindingState } from './useLeadApprovalActions';
 import { requestDecisionBatchId, useLeadTableRequests } from './LeadTable.requests';
 import { useLeadSalesActions } from './useLeadSalesActions';
+import { LeadDistributionBoard, useCanPlanDistribution } from './LeadTable.distribution';
+import { useLeadRevoke, WRITE_FAILURE_TOASTS } from './LeadTable.revoke';
 import { useLeadTableKeyboardFlow } from './useLeadTableKeyboardFlow';
 import { useLeadTableFillHeight } from './useLeadTableFillHeight';
 import { useTableScrollClearance } from './useTableScrollClearance';
@@ -39,6 +41,7 @@ import { approverGateReason } from './approverGate';
 import { ariaKeyShortcuts } from '../../lib/keymap';
 import { useSingleKeyShortcuts } from '../../lib/keymapPreference';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
+import { useRevokedBorrowers } from '../../lib/mutations/outreach';
 import type { LeadSummary } from '../../types';
 import type { LeadTableProps, LeadTableSort, SortDir, SortKey } from './LeadTable.types';
 import './LeadTable.css';
@@ -127,15 +130,10 @@ export function LeadTable({
   requestChips = null,
   requestScopeRow = null,
 }: LeadTableProps) {
-  // Budget trade (audit runtime-04 slice 3, cut 5 of the wave-4b lane): the
-  // compiled shell measured +2.63 KiB br on the LeadTable chunk (35.81 ->
-  // 38.44, over its 38 KiB gate). It stays uncompiled with targeted manual
-  // memoization instead: the sort and the id list (useMemo), the row
-  // callbacks (useStableRowCallbacks) and the virtualizer inputs
-  // (LeadTableBody). The chunk reads below rely on this pragma: compiled,
-  // `REVIEW_CHUNK.current()` would be memoized once (the 5451de15 defect).
-  'use no memo';
-
+  // Compiled (audit runtime-04 slice 3(b)): every lazy chunk is read through
+  // useLazyModule's external store, never a render-time `.current()` read
+  // that a memo cache would freeze (the 5451de15 defect). Callbacks may
+  // still call `.current()` / `.load()`: they run at event time.
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const campaignId = searchParams.get('campaign_id')?.trim() ?? '';
@@ -171,8 +169,8 @@ export function LeadTable({
   // Focus is never scrolled under the sticky thead or the pinned Approval
   // column (a11y-v2; the sticky route nav is 38-focus-clearance.css's).
   useTableScrollClearance(tableWrapRef, view);
-  const columns = leadTableColumns(view);
-  const columnCount = leadTableColumnCount(view);
+  const columns = useLeadTableColumns(view);
+  const columnCount = columns.length;
   // Sort and expanded row: owned by the parent when it passes the change
   // handler (the Lead Queue keeps both in the URL, audit shell-03), else here.
   const [ownExpanded, setOwnExpanded] = useState<string | null>(null);
@@ -205,7 +203,15 @@ export function LeadTable({
     salesTeam,
     queryClient,
   });
-  const { displayLeads, leadsById } = sales;
+  // flow-v2: this session's revokes read pending for the rest of the session (see applyRevocations).
+  const revokedIds = useRevokedBorrowers(queryClient);
+  // Memoized like the sort below, so the compiler preserves that memo (runtime-04).
+  const displayLeads = useMemo(() => applyRevocations(sales.displayLeads, revokedIds), [sales.displayLeads, revokedIds]);
+  const leadsById = useMemo(() => (displayLeads === sales.displayLeads
+    ? sales.leadsById
+    : new Map(displayLeads.map((lead) => [lead.borrower_id, lead]))), [displayLeads, sales.displayLeads, sales.leadsById]);
+  // flow-v2: the revoke panel slot (the Approved row's Revoke, the queue receipt's).
+  const revoke = useLeadRevoke(queryClient);
   // Audit runtime-04 slice 1: sorted once per (rows, sort), not on every
   // render; the id list is what the virtualizer keys rows by. A server sort
   // (the paged Lead Queue, tables-02) is already the rows' order.
@@ -255,6 +261,8 @@ export function LeadTable({
     onFreshEntry: requestReveal,
   });
 
+  // The decision toast for an approve a 429 Retry recorded (the flow publishes it).
+  const lateApprovedRef = useRef<((borrowerId: string) => void) | null>(null);
   const approval = useLeadApprovalActions({
     displayLeads,
     leadsById,
@@ -271,6 +279,8 @@ export function LeadTable({
     leadViewId: paging?.viewId ?? null,
     // A request-scoped queue (flow-02): every decision answers that request.
     approvalRequestBatchId: requestDecisionBatchId(approvalRequests),
+    openRecentActivity: openConsoleRecentActivity,
+    lateApprovedRef,
   });
   const requests = useLeadTableRequests({
     approvalRequests,
@@ -301,7 +311,7 @@ export function LeadTable({
     triage,
     hideTable: triageOn,
     active: triageActive,
-    Deck: (triageChunk.module ?? TRIAGE_CHUNK.current())?.TriageDeck ?? null,
+    Deck: triageChunk.module?.TriageDeck ?? null,
     failed: triageChunk.failed,
     blocked: sessionStatus === 'error' ? approverGate : null,
     approvedSignal: triageSignal,
@@ -359,6 +369,7 @@ export function LeadTable({
     // states-07 item 1: the approval result is a shell toast (the Toaster speaks it once).
     openRecentActivity: openConsoleRecentActivity,
     raiseDecisionToast: (input) => REVIEW_CHUNK.current()?.raiseDecisionToast(input),
+    lateApprovedRef,
   });
   const { review } = flow;
   const openReview = review.review;
@@ -396,18 +407,18 @@ export function LeadTable({
     BULK_REVIEW_CHUNK,
     approval.selectionCount > 1 || approval.headerCheckboxState.checked || approval.bulkApproving || bulkRun.result !== null,
   );
-  // The module cache is the truth: after one failed chunk load this hook's
-  // state stays failed, yet the next Approve re-imports the chunk and drafts
-  // (an audited DRAFT_OUTREACH write), so the review must render from the
-  // cache or that draft would sit unseen with no Cancel. LeadTable is
-  // 'use no memo', so this read is fresh on every render.
-  const reviewModule = reviewChunk.module ?? REVIEW_CHUNK.current();
+  // The module cache is the truth: after one failed chunk load, the next
+  // Approve re-imports the chunk and drafts (an audited DRAFT_OUTREACH
+  // write), so the review must render from the cache or that draft would sit
+  // unseen with no Cancel. useLazyModule subscribes to the cache, so a load
+  // through `REVIEW_CHUNK.load()` re-renders this compiled shell.
+  const reviewModule = reviewChunk.module;
   // Offline, a chunk that could not load is not a stale deploy: reloading
   // would fail too, so the failure copy says to reconnect instead.
   const online = useIsOnline();
   const ReviewInline = reviewModule?.LeadApproveReviewInline;
   const ReviewDialog = reviewModule?.LeadApproveReviewDialog;
-  const bulkModule = bulkChunk.module ?? BULK_REVIEW_CHUNK.current();
+  const bulkModule = bulkChunk.module;
   const BulkReview = bulkModule?.LeadBulkApproveReview;
   const BulkRejectGate = bulkModule?.LeadBulkRejectGate;
   const BulkCampaignHandoff = bulkModule?.LeadBulkCampaignHandoff;
@@ -455,6 +466,7 @@ export function LeadTable({
     onAssignmentUpdate: sales.applyLeadUpdate,
     onFocusRow: flow.focusRow,
     onRequestApproval: requests.openRow,
+    onRevoke: revoke.open,
   });
   // An Approve waiting on the review chunk (nothing drafted yet), or a
   // review whose chunk is still rendering in.
@@ -470,6 +482,9 @@ export function LeadTable({
     );
     void sales.assignSelected(mode, borrowerIds, approval.clearSelection);
   }
+  // "Plan distribution" (wow-power-5): the Board on the selection, managers only.
+  const canPlanDistribution = useCanPlanDistribution(actorEmail ?? null);
+  const [distributionIds, setDistributionIds] = useState<string[] | null>(null);
 
   /**
    * Export as CSV. The bytes are built client-side from the real /api/leads
@@ -566,6 +581,7 @@ export function LeadTable({
           onSubmit={(reasonCode, rationale) => void flow.submitReject(reasonCode, rationale)}
         />
       )}
+      {!triageOn && revoke.panel}
       {!triageOn && requests.rowForm}
       {!triageOn && sales.pendingDisposition && (
         <LeadDispositionPanel
@@ -622,7 +638,7 @@ export function LeadTable({
           : undefined}
       >
         <table
-          className={`tbl lead-table__table lead-table__table--${view}`}
+          className={leadTableClassName(view, columns)}
           aria-rowcount={sortedLeads.length + 1 + (hasExpandedRow ? 1 : 0)}
         >
           <LeadTableHead
@@ -650,7 +666,7 @@ export function LeadTable({
             approvals={approvals}
             selectedIds={approval.selectedIds}
             pendingDecisions={approval.pendingDecisions}
-            decisionReceipts={approval.decisionReceipts}
+            decisionReceipts={withoutRevokedReceipts(approval.decisionReceipts, revokedIds, approvals)}
             cursorId={flow.cursor.cursorId}
             campaignBindingBlocked={campaignBindingBlocked}
             approverGate={approverGate}
@@ -667,6 +683,7 @@ export function LeadTable({
             requestMarks={approvalRequests?.marks ?? null}
             canRequestApproval={requests.path !== null}
             requestBlockedReason={requests.path?.blockedReason ?? null}
+            canRevoke={approverGate === null && campaignBindingState === 'absent'}
           />
         </table>
       </div>
@@ -722,6 +739,9 @@ export function LeadTable({
           }}
           requestGate={requests.bulkForm}
           requestFormOpen={requests.bulkFormOpen}
+          planDistribution={canPlanDistribution ? {
+            onOpen: () => setDistributionIds([...approval.selectedIds].filter((id) => approval.selectableIds.includes(id))),
+          } : null}
           bulkRejectOpen={approval.bulkRejectOpen}
           onOpenBulkReject={flow.bulkRejectFromToolbar}
           bulkRejectBtnRef={approval.bulkRejectBtnRef}
@@ -752,28 +772,21 @@ export function LeadTable({
                 setSamplesShown(drafts.size > 0);
               }}
               onCoverageChange={(coverage) => setSamplesCoverAllOffers(coverage.complete)}
+              writeFailure={WRITE_FAILURE_TOASTS}
             />
           ) : null}
         />
       )}
+      <LeadDistributionBoard borrowerIds={distributionIds} onClose={() => setDistributionIds(null)} />
       {bulkRun.result && (BulkRunResult
         ? <BulkRunResult result={bulkRun.result} onDismiss={bulkRun.dismissResult} />
         : bulkChunk.failed && <LeadBulkRunResultFallback result={bulkRun.result} onDismiss={bulkRun.dismissResult} />)}
-      {approval.bulkToast && (
-        <LeadTableBulkToast
-          toast={approval.bulkToast}
-          onReviewRecentActivity={() => {
-            openConsoleRecentActivity();
-            approval.setBulkToast(null);
-          }}
-        />
-      )}
       {!triageOn && <LeadTableFooter
         loadedCount={leads.length}
         totalMatching={totalMatching}
         truncatedAt={truncatedAt}
         sortKey={sortKey}
-        sortLabel={columns.find((column) => column.sortKey === sortKey)?.label ?? sortKey}
+        sortLabel={leadTableSortLabel(view, sortKey)}
         sortScope={sortScope}
         sortedCount={sortedLeads.length}
         onResetSort={() => toggleSort('rank')}

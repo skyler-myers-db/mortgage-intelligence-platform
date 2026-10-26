@@ -199,6 +199,9 @@ Before generating SQL, classify the question into exactly one bucket:
     spread and ≥ 15% equity; HELOC eligible means ≥ 35% equity;
     rate-and-term refi means ≥ 75 bps; top-tier opportunity score means ≥ 75.
     Do not interpret "strong equity" as 70%+; use ≥ 35%, the segment floor.
+12. Call the fn_in_the_money rule "In the Money" (rate spread ≥ threshold
+    AND equity ≥ threshold). It is an economics screen, not lead quality or
+    creditworthiness; never call it prime.
 
 ## Trusted assets
 

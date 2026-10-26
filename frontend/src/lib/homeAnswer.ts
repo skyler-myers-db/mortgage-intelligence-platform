@@ -1,4 +1,5 @@
 import type { HomeSummary, HomeSummaryHighlight, RateWindowWeek, TopBorrowerAnalyticsRow } from '../types';
+import { LEXICON } from './lexicon';
 import { HIGH_OPPORTUNITY_SCORE_LABEL } from './opportunityScore';
 
 /**
@@ -122,8 +123,10 @@ const TRIGGER_COPY: Record<string, TriggerCopy> = {
     noun: 'borrowers with a primary offer path',
     href: measureQueueHref('offers_recommended'),
   },
+  // The server's highlight label for this measure is the same words
+  // (backend segment_labels.ITM_BORROWERS_LABEL), so the drawer it opens agrees.
   refi_economics_screen: {
-    noun: 'borrowers who pass the refi screen',
+    noun: `${LEXICON.inTheMoney.prenominal} borrowers`,
     href: measureQueueHref('refi_economics_screen'),
   },
   high_opportunity: {

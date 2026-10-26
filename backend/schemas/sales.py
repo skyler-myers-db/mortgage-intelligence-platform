@@ -465,6 +465,14 @@ class SalesAgingLead(BaseModel):
     latest_disposition_at: datetime | None = None
 
 
+class SalesStandupLoRow(BaseModel):
+    """One loan officer's call dispositions on the standup day."""
+
+    lo_email: str
+    outcomes: dict[str, int]
+    calls_logged: int
+
+
 class SalesStandupResponse(BaseModel):
     date: str
     calls_logged: int
@@ -472,14 +480,28 @@ class SalesStandupResponse(BaseModel):
     callbacks_scheduled: int
     applications_started: int
     dead_leads: int
-    by_lo: list[dict[str, object]]
+    by_lo: list[SalesStandupLoRow]
+
+
+class SalesConversionRow(BaseModel):
+    """One conversion group: a loan officer, or the single all_cohorts group."""
+
+    group_key: str
+    calls_attempted: int
+    contacts_reached: int
+    callbacks_scheduled: int
+    applications_started: int
+    unique_leads_contacted: int
+    unique_contacts_reached: int
+    unique_application_starts: int
+    application_start_rate: float
 
 
 class SalesConversionResponse(BaseModel):
     from_date: str
     to_date: str
     group_by: Literal["lo", "cohort"]
-    rows: list[dict[str, object]]
+    rows: list[SalesConversionRow]
 
 
 class CampaignPerformanceFunnelResponse(BaseModel):
@@ -493,6 +515,39 @@ class CampaignPerformanceFunnelResponse(BaseModel):
     methodology: Literal["same_borrower_nested_funnel"] = "same_borrower_nested_funnel"
 
 
+class SalesOutcomeSourceRow(BaseModel):
+    """Outcome counts for one source system."""
+
+    source_system: str
+    outcomes: dict[str, int]
+    total: int
+
+
+class SalesOutcomeSourceStatus(BaseModel):
+    """One outcome feed's configuration status and its outcome count in the window."""
+
+    source_system: str
+    display_name: str
+    status: str
+    configured: bool
+    outcome_count: int
+
+
+class SalesOutcomeLoRow(BaseModel):
+    """Outcome counts for one assigned loan officer (or unassigned)."""
+
+    lo_email: str
+    outcomes: dict[str, int]
+    total: int
+
+
+class SalesTopCompetitorRow(BaseModel):
+    """A public competitor label and its lost-to-competitor count."""
+
+    competitor_lender_label: str
+    lost_to_competitor: int
+
+
 class SalesOutcomeSummaryResponse(BaseModel):
     from_date: str
     to_date: str
@@ -504,7 +559,7 @@ class SalesOutcomeSummaryResponse(BaseModel):
     lost_to_competitor: int
     withdrawn: int
     not_qualified: int
-    by_source_system: list[dict[str, object]]
-    source_statuses: list[dict[str, object]]
-    by_lo: list[dict[str, object]]
-    top_competitors: list[dict[str, object]]
+    by_source_system: list[SalesOutcomeSourceRow]
+    source_statuses: list[SalesOutcomeSourceStatus]
+    by_lo: list[SalesOutcomeLoRow]
+    top_competitors: list[SalesTopCompetitorRow]

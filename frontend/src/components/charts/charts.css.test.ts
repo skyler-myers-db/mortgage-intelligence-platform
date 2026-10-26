@@ -37,12 +37,15 @@ describe('chart kit CSS (charts.css)', () => {
   });
 
   it("gives the shared y-tick column the plot's height, not the canvas row's, so each label sits on its gridline", () => {
-    const yTicks = rule(designCss(), '.analytics-chart__y-ticks');
+    const yTicks = rule(chartsCss, '.analytics-chart__y-ticks');
     expect(yTicks['align-self']).toBe('start');
     expect(yTicks['block-size']).toBe('var(--analytics-chart-h)');
     expect(yTicks).not.toHaveProperty('min-block-size');
-    // One rule for every consumer: the kit sheet no longer scopes its own.
-    expect(chartsCss).not.toContain('.analytics-chart__y-ticks');
+    // One rule for every consumer: the `.analytics-chart*` chrome lives in the
+    // kit sheet every chart loads with (css-05 / bundle-06), once, and no
+    // longer in the initial component CSS.
+    expect(chartsCss.match(/(?:^|[}\s])\.analytics-chart__y-ticks\s*\{/g)).toHaveLength(1);
+    expect(designCss()).not.toContain('.analytics-chart__y-ticks');
   });
 
   it('anchors the first x tick at the left edge and the last at the right edge', () => {

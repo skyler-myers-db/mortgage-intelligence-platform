@@ -32,6 +32,7 @@ import { api } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
 import { formatDate } from '../../lib/time';
 import { ratePct } from '../../lib/formatters';
+import { isRestoredSnapshot } from '../../lib/restoredQuery';
 import { useWarmingUpRetry, type UseWarmingUpRetryResult } from '../../lib/useWarmingUpRetry';
 import type { Borrower360, RateWindowResponse } from '../../types';
 import { Button, Chip } from '../Primitives';
@@ -169,7 +170,9 @@ function SpreadHistoryBody({
       </div>
     );
   }
-  if (!series.data) {
+  // A restored window (lib/queryPersist) waits for its fresh read: the
+  // borrower's history is drawn from current weeks only.
+  if (!series.data || (series.isFetching && isRestoredSnapshot(series.dataUpdatedAt))) {
     return (
       <div className="stack-sm" role="status" aria-busy="true" data-testid="spread-history-loading">
         <span className="sr-only">{COPY.loading}</span>

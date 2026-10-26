@@ -347,7 +347,7 @@ def compose_all_segments_brief(rows: list[dict[str, Any]], borrower_asset: str) 
     intro = (
         f"I ranked every marketing-eligible, opt-in borrower in "
         f"{borrower_asset}{refreshed_txt} by **opportunity score** — a "
-        "0-100 blend of refinance economics, home equity, listing "
+        "0-100 blend of in-the-money economics, home equity, listing "
         "activity, portfolio ownership, retention risk, and Cotality's "
         "behavioral propensity models — with rate-spread economics "
         f"breaking ties. {_brief_terms_txt(rows)} Here are the top "

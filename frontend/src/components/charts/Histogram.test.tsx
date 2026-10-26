@@ -11,10 +11,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HIGH_OPPORTUNITY_SCORE_LABEL } from '../../lib/opportunityScore';
 import type { ExecutiveAnalyticsResponse } from '../../types';
-import { ScoreDistribution } from '../../routes/analytics.sections';
+import { ScoreDistribution } from '../../routes/analytics.executive';
 import { Histogram, binIsPast, ruleLabelSide, type HistogramBin } from './Histogram';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const BINS: HistogramBin[] = [
   { start: 0, count: 1200 },
@@ -61,7 +59,7 @@ describe('Histogram', () => {
           bins={BINS}
           binWidth={25}
           threshold={60}
-          ruleLabel="Refi screen ≥ 60 bps"
+          ruleLabel="In the Money spread ≥ 60 bps"
           xLabel="Spread bps"
           yLabel="Borrowers"
           formatRange={(start) => `${start}–${start + 24} bps`}
@@ -106,17 +104,17 @@ describe('Histogram', () => {
     const rule = container.querySelector('line.chart-hist__rule');
     // 60 in [0, 100] is 60% of the plot, inside the 50-74 bin.
     expect(rule?.getAttribute('x1')).toBe('60.00');
-    expect(container.querySelector('.chart-hist__rule-label')?.textContent).toBe('Refi screen ≥ 60 bps');
+    expect(container.querySelector('.chart-hist__rule-label')?.textContent).toBe('In the Money spread ≥ 60 bps');
     expect(binIsPast(50, 60)).toBe(false);
     expect(binIsPast(75, 75)).toBe(true);
   });
 
   it('with no threshold draws no rule and no partition, and shows the notice', () => {
-    render({ threshold: null, ruleLabel: null, notice: 'The refi-screen threshold is not built in this refresh.' });
+    render({ threshold: null, ruleLabel: null, notice: 'The In the Money spread threshold is not built in this refresh.' });
     expect(container.querySelector('.chart-hist__rule')).toBeNull();
     expect(container.querySelector('.chart-hist__rule-label')).toBeNull();
     expect(bars().every((bar) => bar.classList.contains('chart-hist__bar--past'))).toBe(true);
-    expect(container.querySelector('.chart-frame__notice')?.textContent).toBe('The refi-screen threshold is not built in this refresh.');
+    expect(container.querySelector('.chart-frame__notice')?.textContent).toBe('The In the Money spread threshold is not built in this refresh.');
   });
 
   it('edge-anchors an x tick that sits on the plot edge', () => {

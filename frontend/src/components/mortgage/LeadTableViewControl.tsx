@@ -8,10 +8,12 @@ import {
 const OPTIONS = LEAD_TABLE_VIEWS.map((view) => LEAD_TABLE_VIEW_LABELS[view]);
 
 /**
- * Column-preset picker (audit tables-05, S part): Default is the prototype's
- * columns plus the merged Status cell; Sales ops adds Relationship, Assigned
- * to, Outreach and Last touch back as separate columns. The route owns the
- * value and persists it in `?view=` (lead-queue.filters.ts). It is the
+ * Column-preset picker (audit tables-05, S part): Review is the prototype's
+ * columns plus the merged Status cell (its URL value is absent, or
+ * 'default'); Sales ops adds Relationship, Assigned to, Outreach and Last
+ * touch back as separate columns. The route owns the value and persists it
+ * in `?view=` (lead-queue.filters.ts); the route's HIDE pill follows it
+ * (`?hide=`, LeadTableHideControl). It is the
  * prototype's `.filter` pill (design_files/index.html:826), not a new widget;
  * there is no drag-resize or column reorder.
  */

@@ -35,6 +35,7 @@ from backend.services.lakebase import (
     get_lakebase_client,
 )
 from backend.services.loan_officer_state import LoanOfficerStateStore
+from tests.integration._live_actor import resolve_live_admin_actor
 from tests.integration.test_gold_data_truth import _creds
 
 _HAS_STATIC_LAKEBASE = all(
@@ -56,7 +57,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 _SEEDED_LO_01 = "55555555-5555-4555-8555-555555555501"
-_ACTOR = "skyler@entrada.ai"
 
 
 def _lakebase_client() -> LakebaseClient:
@@ -119,6 +119,8 @@ def test_overlay_unattended_math_reconciles_and_reacts_to_assignment() -> None:
     sql = _sql_client()
     lakebase = _lakebase_client()
     store = LoanOfficerStateStore(lakebase)
+    # NB-a / C8: act as the target roster's admin, never a literal.
+    admin_actor = resolve_live_admin_actor(lakebase)
 
     # Pick a marketing-eligible borrower with full geo and NO active
     # assignment, so assign_lead cannot release someone else's work.
@@ -213,7 +215,7 @@ def test_overlay_unattended_math_reconciles_and_reacts_to_assignment() -> None:
         _assignment, _audit_id = store.assign_lead(
             borrower_id=borrower_id,
             loan_officer_id=_SEEDED_LO_01,
-            assigned_by=_ACTOR,
+            assigned_by=admin_actor,
         )
         after = {
             "state": unit("state"),
@@ -256,7 +258,7 @@ def test_overlay_unattended_math_reconciles_and_reacts_to_assignment() -> None:
         lakebase.execute(
             "DELETE FROM mip_app.lead_assignments "
             "WHERE borrower_id = %(borrower_id)s AND assigned_by = %(actor)s",
-            {"borrower_id": borrower_id, "actor": _ACTOR},
+            {"borrower_id": borrower_id, "actor": admin_actor},
         )
 
 

@@ -9,6 +9,7 @@
    Route-scoped: imported by home.tsx, so it ships with the lazy Home
    chunk instead of the initial stylesheet.
    ============================================================ */
+@layer routes {
 
 .home-stack {
   display: grid;
@@ -113,4 +114,5 @@
     align-items: center;
   }
   .home-hero__controls { justify-content: flex-start; }
+}
 }

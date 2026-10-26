@@ -30,6 +30,25 @@ export const OFFICERS: LoanOfficerFunnelRow[] = [
   { loan_officer_id: '4a2d3b0f-6c8e-4f9a-8b2c-3d4e5f6a7b82', display_name: 'Loan Officer B', email: 'lo.bravo@summit.example', assigned: 14, contact_drafted: 9, approved: 7, actioned: 4, outcome_recorded: 2, total_active: 36 },
 ];
 
+/** The day before SNAPSHOT_DATE: a cohort window ending earlier is the comparison window. */
+const PREVIOUS_WINDOW_ENDS_BEFORE = '2026-07-13';
+
+/** GET /sales/conversion?groupBy=cohort: the team totals, smaller for the previous window. */
+function cohortRow(previous: boolean): SalesConversionResponse['rows'][number] {
+  const [calls, contacts, starts] = previous ? [180, 66, 9] : [220, 74, 12];
+  return {
+    group_key: 'all_cohorts',
+    calls_attempted: calls,
+    contacts_reached: contacts + 7,
+    callbacks_scheduled: 17,
+    applications_started: starts + 2,
+    unique_leads_contacted: calls - 28,
+    unique_contacts_reached: contacts,
+    unique_application_starts: starts,
+    application_start_rate: Math.round((starts / contacts) * 10_000) / 10_000,
+  };
+}
+
 const LOAN_OFFICERS: LoanOfficer[] = OFFICERS.map((officer, index) => ({
   loan_officer_id: officer.loan_officer_id,
   email: officer.email,
@@ -119,7 +138,10 @@ export const salesOpsFixtures: FixtureEntry[] = [
       from_date: query.get('from') ?? '2026-07-08',
       to_date: query.get('to') ?? SNAPSHOT_DATE,
       group_by: query.get('groupBy') === 'cohort' ? 'cohort' : 'lo',
-      rows: OFFICERS.map((officer, index) => ({
+      // groupBy=cohort is ONE team row (backend conversion() groups by
+      // 'all_cohorts'); a window ending before the frozen day before today is
+      // the previous one, and smaller, so the team deltas are non-trivial.
+      rows: query.get('groupBy') === 'cohort' ? [cohortRow((query.get('to') ?? SNAPSHOT_DATE) < PREVIOUS_WINDOW_ENDS_BEFORE)] : OFFICERS.map((officer, index) => ({
         group_key: officer.email,
         calls_attempted: 120 - index * 20,
         contacts_reached: 48 - index * 9,

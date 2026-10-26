@@ -52,8 +52,6 @@ vi.mock('../components/AppContext', () => ({
 
 import PortfolioBuilder from './portfolio-builder';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const STATES = [
   { state_code: 'AZ', state_name: 'Arizona' },
   { state_code: 'IL', state_name: 'Illinois' },

@@ -3,7 +3,7 @@
  *
  * Mirrors backend/schemas/geo_rate_sensitivity.py. Per state and per step of
  * the par-rate grid (-100 .. +100 bps), the addressable borrowers that would
- * clear this refresh's refi screen if the 30-year par rate moved by that step:
+ * clear this refresh's In the Money rule if the 30-year par rate moved by that step:
  * read from `mip.gold.rate_sensitivity_rollup`, which the gold refresh builds
  * by re-running fn_rate_spread / fn_in_the_money at par + step. A scenario,
  * not a forecast.

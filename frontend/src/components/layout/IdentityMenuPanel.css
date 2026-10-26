@@ -8,6 +8,7 @@
    Prototype.html:1206-1243): the popup reuses the `.filter-menu` /
    `.filter-menu__item` dropdown primitives and adds only its header.
    ============================================================ */
+@layer routes {
 .identity-menu .identity-menu__panel {
   left: auto;
   inset-inline-end: 0;
@@ -66,3 +67,4 @@
   margin: var(--sp-1) 0;
 }
 .identity-menu .filter-menu__item { text-decoration: none; }
+}

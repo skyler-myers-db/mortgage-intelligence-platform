@@ -27,8 +27,6 @@ import { clearGenieTurns } from './genieConversationStore';
 import { __resetGenieTurnStoreForTests } from './genieInFlightTurn';
 import { __resetGenieAnnouncerForTests } from '../components/mortgage/useGenieAnnouncer';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 async function settle(): Promise<void> {
   await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
 }

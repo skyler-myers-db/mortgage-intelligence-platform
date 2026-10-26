@@ -3,7 +3,7 @@
  *
  * Route-level proof for the 2026-09-21 audit finding flow-v1.
  *
- * Home's "Approval queue" banner quoted the whole-book refinance-economics
+ * Home's "Approval queue" banner quoted the whole-book In the Money
  * screen while its button opened the contactable-only Lead Queue: live, 74,335
  * on the banner and 3,217 in the queue footer it linked to. This mounts the
  * HOME ROUTE with the real `useWarmingUpRetry` + react-query wiring and a
@@ -16,8 +16,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const apiMocks = vi.hoisted(() => ({
   portfolioPreview: vi.fn(),
   homeSummary: vi.fn(),
@@ -28,11 +26,12 @@ const apiMocks = vi.hoisted(() => ({
   leads: vi.fn(),
 }));
 
-vi.mock('../lib/api', () => {
+vi.mock('../lib/api', async (importOriginal) => {
   class ApiError extends Error {
     status = 500;
   }
   return {
+    ...(await importOriginal<typeof import('../lib/api')>()),
     api: apiMocks,
     ApiError,
     isAbortError: () => false,
@@ -139,7 +138,7 @@ describe('Home approval-queue banner reconciles with the queue it opens', () => 
   it('states the contactable count beside the whole-book screen, SegmentCard style', async () => {
     await mountHome();
     expect(bannerText()).toBe(
-      '3,217 contactable of 74,335 borrowers passing the refinance-economics screen. '
+      '3,217 contactable of 74,335 borrowers in the money. '
       + '159 approved and 3 in outreach in current lifecycle state.',
     );
     expect(banner().querySelector('[data-testid="approval-queue-contactable"]')?.textContent).toBe('3,217');
@@ -154,7 +153,7 @@ describe('Home approval-queue banner reconciles with the queue it opens', () => 
     expect(HOME_CONTACTABLE_PREVIEW_CRITERIA).toEqual({ marketing_eligibility: 'Eligible only' });
     // M is the same whole-book preview value the KPI row renders.
     const kpi = [...container.querySelectorAll('.kpi')].find(
-      (card) => card.querySelector('.kpi__label')?.textContent === 'Refi economics screen',
+      (card) => card.querySelector('.kpi__label')?.textContent === 'In the Money',
     );
     expect(kpi?.querySelector('.kpi__value')?.textContent).toBe('74,335');
     expect(banner().querySelector('[data-testid="approval-queue-screen"]')?.textContent).toBe('74,335');
@@ -183,7 +182,7 @@ describe('Home approval-queue banner reconciles with the queue it opens', () => 
     );
     await mountHome();
     expect(bannerText()).toBe(
-      '74,335 borrowers pass the refinance-economics screen across the whole book; the review queue lists '
+      '74,335 borrowers are in the money across the whole book; the review queue lists '
       + 'only the contactable subset. 159 approved and 3 in outreach in current lifecycle state.',
     );
     expect(banner().querySelector('[data-testid="approval-queue-contactable"]')).toBeNull();
@@ -195,7 +194,7 @@ describe('Home approval-queue banner reconciles with the queue it opens', () => 
     apiMocks.portfolioPreview.mockResolvedValue(previewPayload(CONTACTABLE_SCREEN));
     await mountHome();
     expect(bannerText()).toBe(
-      '3,217 borrowers pass the refinance-economics screen. 159 approved and 3 in outreach in current lifecycle state.',
+      '3,217 borrowers are in the money. 159 approved and 3 in outreach in current lifecycle state.',
     );
     expect(bannerText()).not.toContain('contactable of');
   });
@@ -206,14 +205,14 @@ describe('Home approval-queue banner reconciles with the queue it opens', () => 
     );
     await mountHome();
     expect(bannerText()).not.toContain('80,000');
-    expect(bannerText()).toContain('74,335 borrowers pass the refinance-economics screen.');
+    expect(bannerText()).toContain('74,335 borrowers are in the money.');
   });
 
   it('keeps the neutral copy while the whole-book preview has not loaded', async () => {
     apiMocks.portfolioPreview.mockImplementation(() => new Promise(() => {}));
     await mountHome();
     expect(bannerText()).toBe(
-      'Borrowers passing the refinance-economics screen are ready for loan-officer review.',
+      'Borrowers who are in the money are ready for loan-officer review.',
     );
   });
 });

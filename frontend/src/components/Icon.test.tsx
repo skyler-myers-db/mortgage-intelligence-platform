@@ -11,8 +11,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Icon, type IconName } from './Icon';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * Every glyph, as a `satisfies` table (wave-3 minor #135): adding an IconName
  * without a row here, or keeping a row for a removed name, fails `tsc`, so

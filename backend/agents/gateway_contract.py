@@ -66,7 +66,7 @@ GATEWAY_MODEL_CANONICAL_TAGS = frozenset(
     }
 )
 GATEWAY_MODEL_REQUIREMENTS = (
-    "mlflow==3.16.0",
+    "mlflow==3.17.2",
     "databricks-sdk==0.103.0",
     "cryptography==50.0.1",
 )

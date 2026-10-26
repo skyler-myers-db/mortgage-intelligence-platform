@@ -18,14 +18,13 @@
  * layout), on either side of the focus events; the
  * rendered proof in both engines is
  * approval-core-pinned-focus.cross-engine.fixture.spec.ts, and the
- * lead-queue.fixture.spec.ts ZERO_PIN_MARGIN twin in Chromium.
+ * UNDO_PIN_CLEARANCE twins (lead-queue.fixture.spec.ts in Chromium,
+ * queue-clearance.cross-engine in both engines).
  */
 import { act, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AT_BLOCK_START_ATTR, TABLE_HEAD_BLOCK_VAR, useTableScrollClearance } from './useTableScrollClearance';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const sizes = { head: 44.4, pin: 156 };
 const observed: Element[] = [];

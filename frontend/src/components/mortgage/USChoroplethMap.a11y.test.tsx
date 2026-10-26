@@ -21,8 +21,6 @@ import { USChoroplethMap } from './USChoroplethMap';
 import { MAP_DRILL_EXIT_ATTR, claimDrillFocus, drillExitOriginatedInMap } from './USChoroplethMap.a11y';
 import { EMPTY_MAP_SELECTION, type MapSelection, type MapSelectionChangeOptions } from './USChoroplethMap.selection';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const apiMocks = vi.hoisted(() => ({
   stateRollups: vi.fn(),
   zipRollups: vi.fn(),
@@ -129,7 +127,7 @@ describe('USChoroplethMap keyboard and screen-reader access (a11y-04)', () => {
   it('names every state with its count, average score and top segment', async () => {
     await renderMap();
     expect(path('il')?.getAttribute('aria-label')).toBe(
-      'Illinois: 21,480 marketable borrowers, average opportunity score 84, top segment Prime Refi Candidates',
+      'Illinois: 21,480 marketable borrowers, average opportunity score 84, top segment In the Money',
     );
     // No rollup: says so (in or outside the configured footprint), never a count.
     expect(path('in')?.getAttribute('aria-label')).toMatch(
@@ -183,7 +181,7 @@ describe('USChoroplethMap keyboard and screen-reader access (a11y-04)', () => {
     expect(buttons.some((b) => b.hasAttribute('role'))).toBe(false);
     expect(buttons.map((b) => b.getAttribute('tabindex'))).toEqual(['0', '-1']);
     expect(buttons[0].getAttribute('aria-label')).toBe(
-      'ZIP 77002: 1,200 borrowers, average opportunity score 82, top segment Prime Refi Candidates',
+      'ZIP 77002: 1,200 borrowers, average opportunity score 82, top segment In the Money',
     );
   });
 });
@@ -456,7 +454,7 @@ describe('populated-only roving and activation (dataviz-10, WCAG 2.1.1)', () => 
     });
     await waitFor(() => path('il')?.classList.contains('has-data'));
     expect(path('il')?.getAttribute('aria-label')).toBe(
-      'Illinois: 1,234,567 marketable borrowers, average opportunity score 72.5, top segment Prime Refi Candidates',
+      'Illinois: 1,234,567 marketable borrowers, average opportunity score 72.5, top segment In the Money',
     );
     const toggle = [...document.querySelectorAll('button')].find((b) => b.textContent === 'View as table');
     await act(async () => toggle?.click());

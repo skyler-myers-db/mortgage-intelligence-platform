@@ -17,8 +17,6 @@ vi.mock('../HealthProvider', () => ({ useWorkspaceHost: () => null }));
 
 import { GenieAnswer } from './GenieAnswer';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function payload(): GenieAnswerShape {
   return {
     answer: 'There are 124,946 borrowers.',

@@ -1,0 +1,33 @@
+{
+  "src/components/command/CommandPaletteDialog.tsx": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 3
+    }
+  },
+  "src/components/mortgage/GenieAnswer.logic.ts": {
+    "@typescript-eslint/no-base-to-string": {
+      "count": 3
+    }
+  },
+  "src/components/mortgage/GenieAnswerCharts.tsx": {
+    "@typescript-eslint/no-base-to-string": {
+      "count": 2
+    },
+    "@typescript-eslint/no-floating-promises": {
+      "count": 1
+    }
+  },
+  "src/routes/analytics.charts.tsx": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 1
+    },
+    "@typescript-eslint/no-misused-promises": {
+      "count": 1
+    }
+  },
+  "src/routes/ask-genie.growth-agent-panel.tsx": {
+    "@typescript-eslint/no-misused-promises": {
+      "count": 6
+    }
+  }
+}

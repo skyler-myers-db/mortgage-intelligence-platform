@@ -11,8 +11,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GenieAnswer as GenieAnswerShape } from '../../types';
 import { GenieAnswerToolbar, answerPlainText, answerSql } from './GenieAnswerToolbar';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const SQL = 'SELECT state, count(*) AS borrowers FROM mip.gold.borrower_360 GROUP BY state';
 
 function payload(overrides: Partial<GenieAnswerShape> = {}): GenieAnswerShape {
@@ -43,8 +41,9 @@ describe('answer plain text', () => {
     const text = answerPlainText(payload());
     expect(text.startsWith('1,600 borrowers')).toBe(true);
     // The wording the bubble displays, not the raw wire text.
-    expect(text).toContain('Texas leads with 900 borrowers passing the refinance-economics screen.');
-    expect(text).not.toContain('in-the-money');
+    expect(text).toContain('Texas leads with 900 in-the-money borrowers.');
+    // Genie's own words, verbatim (live-first): no vocabulary rewrite.
+    expect(text).toContain('in-the-money');
     expect(text).not.toContain('**');
     expect(text).not.toContain('`');
     // Tab-separated rows with humanized headers, all five columns present.

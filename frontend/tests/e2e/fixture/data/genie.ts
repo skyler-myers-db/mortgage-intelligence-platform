@@ -43,12 +43,12 @@ export const GENIE_LINK_HEX_ID = '01f0a1b2c3d4e5f60718293a4b5c6d7e';
 export const GENIE_LINK_UUID_ID = '01f0a1b2-c3d4-4e5f-8071-8293a4b5c6d7';
 /** Shape-valid but not the actor's: the backend answers 404 (or 403). */
 export const GENIE_LINK_FOREIGN_ID = '9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b';
-export const GENIE_LINK_QUESTION = 'Which states lead on prime refi candidates?';
-export const GENIE_LINK_ANSWER = 'Illinois leads the current footprint on prime refi candidates.';
+export const GENIE_LINK_QUESTION = 'Which states lead on in-the-money borrowers?';
+export const GENIE_LINK_ANSWER = 'Illinois leads the current footprint on in-the-money borrowers.';
 
 /** History rows whose ids ARE shape-valid, for a spec that loads one into the URL. */
 export const GENIE_LINK_HISTORY_SESSIONS: GenieSessionSummary[] = [
-  { conversation_id: GENIE_LINK_HEX_ID, title: 'Prime refi by state', last_activity_at: '2026-09-20T15:04:00Z', turn_count: 1 },
+  { conversation_id: GENIE_LINK_HEX_ID, title: 'In the Money by state', last_activity_at: '2026-09-20T15:04:00Z', turn_count: 1 },
 ];
 
 const TRUSTED_ASSETS = [
@@ -80,7 +80,7 @@ function workflow(
 
 export const GROWTH_AGENT_HOME: GrowthAgentHomeResponse = {
   workflows: [
-    workflow('daily_refi_brief', 'Daily refi brief', "Rank today's prime refi candidates and hand the cohort to the Lead Queue.", 'Rate spread >= 75 bps', 'Open cohort in Lead Queue', '/lead-queue?segment=itm'),
+    workflow('daily_refi_brief', 'Daily refi brief', "Rank today's in-the-money borrowers and hand the cohort to the Lead Queue.", 'Rate spread >= 75 bps', 'Open cohort in Lead Queue', '/lead-queue?segment=itm'),
     workflow('high_equity_heloc_watch', 'High-equity HELOC watch', 'Watch high-equity borrowers with HELOC propensity.', 'Equity >= 40%', 'Review HELOC cohort', '/lead-queue?segment=equity'),
     workflow('listing_watch', 'Listing watch', 'Surface borrowers with a new active listing.', 'Active MLS listing', 'Review listed cohort', '/lead-queue?segment=listed'),
   ],
@@ -120,7 +120,7 @@ export const genieFixtures: FixtureEntry[] = [
     json<GenieStartResult>({
       conversation_id: GENIE_CONVERSATION_ID,
       sample_questions: [
-        'Which states have the most prime refi candidates?',
+        'Which states have the most in-the-money borrowers?',
         'How many HELOC-intent borrowers have at least 40% equity?',
         'Show retention-risk borrowers with recent competitor lien activity.',
       ],

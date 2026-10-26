@@ -25,8 +25,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { LeadSummary } from '../../types';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const apiMocks = vi.hoisted(() => ({
   draftOutreach: vi.fn(),
   approve: vi.fn(),
@@ -269,10 +267,10 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     expect(bodies.find((body) => body.review_mode === 'bulk_sample')?.draft_generation_id).toBe('gen-sample');
     // Only the six unsampled rows drafted in the run.
     expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(6);
-    // A finished run reports through the run's result; the static toast is
-    // only the unmount stash (R5-21).
+    // A finished run reports through the run's result; the cut-short toast is
+    // only the unmount stash (R5-21, states-07 item 5b).
     expect(actions!.bulkRun.result).toMatchObject({ ok: 7, failed: [], skipped: [], notStarted: [], stopped: false });
-    expect(actions!.bulkToast).toBeNull();
+    expect(getToasts().filter((toast) => /^\d+ (approved|rejected)/.test(toast.title))).toEqual([]);
     expect(actions!.selectionCount).toBe(0);
   });
 
@@ -407,7 +405,7 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     });
 
     expect(actions!.bulkRun.result?.failed).toEqual([
-      { borrowerId: IDS[4], outcome: 'backend', message: 'Draft proof is stale.' },
+      { borrowerId: IDS[4], outcome: 'backend', message: 'not recorded; retry it' },
     ]);
     expect([...actions!.selectedIds]).toEqual([IDS[4]]);
     // Bulk rows report in the run's result, never a single-row toast.
@@ -470,7 +468,10 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     actions = null;
     root = createRoot(container);
     mount();
-    expect(actions!.bulkToast).toEqual({ ok: 0, fail: 0, network: 0, aborted: 7, kind: 'approve' });
+    // states-07 item 5b: ONE shell toast, audit-ambiguous rows sent to Recent activity.
+    expect(getToasts().map((toast) => [toast.tone, toast.title, toast.detail])).toEqual([
+      ['error', '0 approved', '7 cancelled in flight. Confirm the outcome in Recent activity.'],
+    ]);
     // Aborted rows are audit-ambiguous: nothing is re-selected for a retry.
     expect(actions!.selectionCount).toBe(0);
     expect(window.sessionStorage.getItem('mip.bulkApprove.lastCancelled')).toBeNull();
@@ -570,41 +571,56 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     expect(settled, 'the toolbar keeps its rationale').toBe(false);
     expect(apiMocks.approve).toHaveBeenCalledTimes(1);
     expect(actions!.bulkRun.result?.canary).toEqual({
-      borrowerId: IDS[0], message: 'bulk_rationale failed the governed text policy',
+      borrowerId: IDS[0], message: 'draft or reason failed the checks',
     });
     expect(actions!.bulkRationaleOpen).toBe(true);
     expect(actions!.bulkRunCanary).toEqual({
-      borrowerId: IDS[0], message: 'bulk_rationale failed the governed text policy',
+      borrowerId: IDS[0], message: 'draft or reason failed the checks',
     });
     expect(bulkCanaryNotice(actions!.bulkRunCanary!)).toBe(
-      `Nothing else was sent: ${IDS[0]} was refused: bulk_rationale failed the governed text policy`,
+      `Nothing else was sent: ${IDS[0]} was refused: draft or reason failed the checks`,
     );
     expect([...actions!.selectedIds].sort()).toEqual([...IDS].sort());
   });
 
-  it('flashes a cut-short reject run as rejected', () => {
-    window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 2, aborted: 1, kind: 'reject', ts: Date.now() }));
+  it('a canary that meets an ended session says to sign in, not to retry blind', async () => {
+    apiMocks.approve.mockRejectedValueOnce(
+      new ApiError('Your session ended. Reload to sign in.', { path: '/api/outreach/approve', status: 401, reason: 'session_expired' }),
+    );
     mount();
-    expect(actions!.bulkToast).toEqual({ ok: 2, fail: 0, network: 0, aborted: 1, kind: 'reject' });
+    act(() => actions!.toggleSelectAll());
+    await act(async () => {
+      await actions!.bulkApprove(lastRowSample(), 'Q3 refinance push');
+    });
+
+    expect(apiMocks.approve).toHaveBeenCalledTimes(1);
+    expect(actions!.bulkRun.result?.canary).toEqual({ borrowerId: IDS[0], message: 'session ended; sign in again' });
+    expect(bulkCanaryNotice(actions!.bulkRun.result!.canary!)).toBe(
+      `Nothing else was sent: ${IDS[0]} was refused: session ended; sign in again`,
+    );
   });
 
-  it('clears a flashed run with nothing aborted after 4 s, and keeps an aborted one until it is resolved', () => {
-    vi.useFakeTimers();
-    try {
-      window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 3, aborted: 0, ts: Date.now() }));
-      mount();
-      expect(actions!.bulkToast).toEqual({ ok: 3, fail: 0, network: 0, aborted: 0, kind: 'approve' });
-      act(() => vi.advanceTimersByTime(4000));
-      expect(actions!.bulkToast, 'nothing is ambiguous: no dismiss control needed').toBeNull();
+  it('raises a cut-short reject run as rejected, once', () => {
+    window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 2, aborted: 1, kind: 'reject', ts: Date.now() }));
+    mount();
+    expect(getToasts().map((toast) => [toast.tone, toast.title])).toEqual([['error', '2 rejected']]);
+  });
 
-      // Aborted rows may have committed: that flash waits for Recent activity.
-      window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 1, aborted: 2, ts: Date.now() }));
-      remount();
-      act(() => vi.advanceTimersByTime(60_000));
-      expect(actions!.bulkToast).toEqual({ ok: 1, fail: 0, network: 0, aborted: 2, kind: 'approve' });
-    } finally {
-      vi.useRealTimers();
-    }
+  it('raises a run with nothing cut as one success toast, an aborted one as an error, and each only once', () => {
+    window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 3, aborted: 0, ts: Date.now() }));
+    mount();
+    expect(getToasts().map((toast) => [toast.tone, toast.title, toast.detail, toast.action])).toEqual([
+      ['success', '3 approved', null, null],
+    ]);
+    expect(window.sessionStorage.getItem('mip.bulkApprove.lastCancelled')).toBeNull();
+    remount();
+    expect(getToasts(), 'the key went with the first mount: no second toast').toHaveLength(1);
+
+    // Aborted rows may have committed: an error, sent to Recent activity.
+    clearToasts();
+    window.sessionStorage.setItem('mip.bulkApprove.lastCancelled', JSON.stringify({ ok: 1, aborted: 2, ts: Date.now() }));
+    remount();
+    expect(getToasts().map((toast) => [toast.tone, toast.title])).toEqual([['error', '1 approved']]);
   });
 
   describe('a 429 Retry (states-08 item 3)', () => {
@@ -693,6 +709,41 @@ describe('useLeadApprovalActions on the outreach mutations', () => {
     await flush();
     expect(outcome).toBe('backend');
     expect(getToasts()).toEqual([]);
+    expect(setApproval).not.toHaveBeenCalled();
+  });
+
+  // A 2xx that recorded nothing (approved / rejected false) reads the bulk
+  // "not recorded" copy in the single-row toast, never the wire field
+  // (states-04; leadDecisionWrites' approve branch, the hook's reject branch).
+  it('a 2xx approve that recorded nothing toasts "not recorded; retry it", never the wire field, and decides nothing', async () => {
+    apiMocks.approve.mockResolvedValueOnce({ approved: false });
+    mount();
+    let outcome: string | undefined;
+    await act(async () => {
+      outcome = await actions!.approveLead(BORROWER, undefined, {}, draft('gen-unrecorded'));
+    });
+    await flush();
+    expect(outcome).toBe('backend');
+    expect(getToasts().map((toast) => [toast.tone, toast.title, toast.detail])).toEqual([
+      ['error', `Couldn't approve ${BORROWER}`, 'not recorded; retry it'],
+    ]);
+    expect(JSON.stringify(getToasts())).not.toMatch(/approved=false|endpoint/i);
+    expect(setApproval).not.toHaveBeenCalled();
+  });
+
+  it('a 2xx reject that recorded nothing toasts "not recorded; retry it", never the wire field, and decides nothing', async () => {
+    apiMocks.reject.mockResolvedValueOnce({ rejected: false });
+    mount();
+    let rejected: boolean | undefined;
+    await act(async () => {
+      rejected = await actions!.rejectLead(BORROWER, 'low_intent', 'No intent');
+    });
+    await flush();
+    expect(rejected).toBe(false);
+    expect(getToasts().map((toast) => [toast.tone, toast.title, toast.detail])).toEqual([
+      ['error', `Couldn't reject ${BORROWER}`, 'not recorded; retry it'],
+    ]);
+    expect(JSON.stringify(getToasts())).not.toMatch(/rejected=false|endpoint/i);
     expect(setApproval).not.toHaveBeenCalled();
   });
 

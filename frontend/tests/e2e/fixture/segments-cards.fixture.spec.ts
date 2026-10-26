@@ -459,7 +459,7 @@ test.describe('Segments filters live in the URL (flow-09)', () => {
     });
     await app.gotoRoute(`${ROUTE}?${deepLink.toString()}`);
 
-    await expect(cardSelect(page, 'Prime Refi Candidates')).toHaveAttribute('aria-pressed', 'true');
+    await expect(cardSelect(page, 'In the Money')).toHaveAttribute('aria-pressed', 'true');
     await expect(cardSelect(page, 'Home Equity Candidate')).toHaveAttribute('aria-pressed', 'true');
     await expect(cardSelect(page, 'Listed for Sale')).toHaveAttribute('aria-pressed', 'false');
     await expect(modeButton(page, 'All selected')).toHaveAttribute('aria-pressed', 'true');
@@ -535,7 +535,7 @@ test.describe('Segments filters live in the URL (flow-09)', () => {
     await page.getByRole('button', { name: 'Clear filters' }).click();
     await expect.poll(() => new URL(page.url()).search).toBe('');
     await expect(filterTrigger(page, 'CONSENT')).toHaveAttribute('aria-label', 'CONSENT: Any');
-    await expect(cardSelect(page, 'Prime Refi Candidates')).toHaveAttribute('aria-pressed', 'false');
+    await expect(cardSelect(page, 'In the Money')).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByRole('button', { name: 'Clear filters' })).toBeDisabled();
   });
 

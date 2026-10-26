@@ -18,11 +18,14 @@ vi.mock('../../lib/api', async () => {
   return { ...actual, api: { genieFeedback: vi.fn().mockResolvedValue({ accepted: true }) } };
 });
 vi.mock('../HealthProvider', () => ({ useWorkspaceHost: () => null }));
+const preloadRouteForPath = vi.hoisted(() => vi.fn());
+vi.mock('../../lib/routePreloaders', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/routePreloaders')>()),
+  preloadRouteForPath,
+}));
 
 import { GenieAnswer } from './GenieAnswer';
 import { GenieAnswerSections } from './GenieAnswer.sections';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const TOP_LEVEL_BODY = 'Stitched narrative that repeats every section verbatim.';
 
@@ -64,7 +67,7 @@ const SWEEP = payload({
     section({
       title: 'Who to call first',
       question: 'Which cohorts are largest?',
-      answer: 'Prime refi candidates dominate the marketable population.',
+      answer: 'In-the-money borrowers dominate the marketable population.',
       table_rows: [
         { segment_code: 'itm', marketable_borrowers: 620 },
         { segment_code: 'equity', marketable_borrowers: 410 },
@@ -114,7 +117,7 @@ describe('GenieAnswer deep-research sections', () => {
     ]);
     expect(container.textContent).toContain('Refinance demand concentrates in three states.');
     expect(container.textContent).toContain('Texas leads with 900 in-the-money borrowers.');
-    expect(container.textContent).toContain('Prime refi candidates dominate the marketable population.');
+    expect(container.textContent).toContain('In-the-money borrowers dominate the marketable population.');
   });
 
   it('does not repeat the stitched top-level answer body', () => {
@@ -419,5 +422,23 @@ describe('GenieAnswerSections preview (genie-01 phase 1b partial research)', () 
     renderBorrowerSections(false);
 
     expect(container.querySelectorAll('a.genie-board__card[href^="/borrower-360/B-"]')).toHaveLength(6);
+  });
+
+  // bundle-09 item 1: a table's masked borrower cell warms the Borrower 360
+  // CHUNK on keyboard focus or hover (GenieCellLink), never a data read.
+  it('warms the Borrower 360 chunk from a borrower cell on focus', () => {
+    preloadRouteForPath.mockClear();
+    renderBorrowerSections(false);
+    const cell = container.querySelector<HTMLAnchorElement>(
+      '.genie-answer__table a.mono[href="/borrower-360/B-0000000000001"]',
+    );
+    expect(cell).not.toBeNull();
+    act(() => cell!.focus());
+    expect(preloadRouteForPath).toHaveBeenCalledWith('/borrower-360/B-0000000000001');
+    const stateCell = container.querySelector<HTMLAnchorElement>('.genie-answer__table a.mono[href^="/lead-queue"]');
+    expect(stateCell).not.toBeNull();
+    preloadRouteForPath.mockClear();
+    act(() => stateCell!.focus());
+    expect(preloadRouteForPath).not.toHaveBeenCalled();
   });
 });

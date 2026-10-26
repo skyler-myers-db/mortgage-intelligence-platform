@@ -19,8 +19,6 @@ import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import type { DrawerSource } from '../AppContext';
 import type { KpiProofResponse } from '../../lib/apiTypes';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const appMocks = vi.hoisted(() => ({ drawer: null as DrawerSource | null, setDrawer: vi.fn(), canAccessAdmin: false }));
 const apiMocks = vi.hoisted(() => ({
   assetMetadata: vi.fn(),
@@ -121,7 +119,7 @@ describe('EvidenceDrawer How we got and Under the hood', () => {
     const heading = block?.querySelector('h3');
     expect(heading?.textContent).toBe('How we got 12,840');
     expect(heading?.className).toBe('h-4 evidence-proof__title');
-    expect(block?.textContent).toContain('Borrowers who clear the refinance economics screen');
+    expect(block?.textContent).toContain('Borrowers who are in the money');
     expect([...(block?.querySelectorAll('.chip') ?? [])].map((chip) => chip.textContent)).toEqual(['in_the_money = TRUE']);
     expect(block?.querySelector('time')?.getAttribute('datetime')).toBe('2026-07-14T08:00:00.000Z');
     expect(block?.textContent).toMatch(/^How we got 12,840.*Data as of Jul 14/);
@@ -130,6 +128,17 @@ describe('EvidenceDrawer How we got and Under the hood', () => {
     expect(panel?.firstElementChild).toBe(block);
     expect(apiMocks.kpiProof).toHaveBeenCalledTimes(1);
     expect(apiMocks.kpiProof).toHaveBeenCalledWith('home.in_the_money', expect.anything());
+  });
+
+  it('states a date-only as-of as its date, never a clock the snapshot does not carry', async () => {
+    // W5e: the Analytics Executive cards pass the gold snapshot_date
+    // ("2026-07-14"); read as an instant it printed "Jul 13, 8:00 PM EDT"
+    // under a "Snapshot Jul 14" card.
+    await render({ ...ITM_KPI, asOf: '2026-07-14', proofKey: 'analytics.in_the_money' });
+
+    const asOf = howWeGot()?.querySelector('.evidence-proof__asof');
+    expect(asOf?.textContent).toBe('Data as of Jul 14');
+    expect(asOf?.querySelector('time')?.getAttribute('datetime')).toBe('2026-07-14');
   });
 
   it('renders no How-we-got block and asks no proof for a source without a value', async () => {
@@ -182,7 +191,7 @@ describe('EvidenceDrawer How we got and Under the hood', () => {
     ].map((needle) => text.indexOf(needle));
     expect(order.every((index) => index >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
-    expect(panel.querySelector('.proof-sql-card__title')?.textContent).toBe('Refinance economics screen');
+    expect(panel.querySelector('.proof-sql-card__title')?.textContent).toBe('In the Money rule');
     expect(panel.querySelector('.proof-sql-card__hash')?.textContent).toBe('0123456789abcdef');
     expect(panel.querySelector('pre.proof-sql-card__sql')?.textContent).toBe(PROOF.sql);
     expect([...panel.querySelectorAll('.chip')].map((chip) => chip.textContent)).toEqual(PROOF.relations);

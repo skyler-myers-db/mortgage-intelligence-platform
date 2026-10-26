@@ -7,6 +7,7 @@
    only. Nothing renders until the read-back confirms the row; the
    one-shot stagger below plays on the finished receipt.
    ============================================================ */
+@layer routes {
 .decision-receipt { position: relative; }
 .decision-receipt--approved {
   border-color: color-mix(in oklab, var(--signal-success) 45%, var(--line-1));
@@ -115,6 +116,8 @@
    and flags <html data-print="decision-receipt">; only the clone prints,
    on the Canvas/CanvasText tokens print.css already sets. */
 .decision-receipt-print { display: none; }
+}
+@layer print {
 @media print {
   html[data-print="decision-receipt"] #root { display: none; }
   html[data-print="decision-receipt"] .decision-receipt-print {
@@ -130,4 +133,5 @@
   .decision-receipt--reveal .decision-receipt__row,
   .decision-receipt--reveal .decision-receipt__section,
   .decision-receipt--reveal .surface__ft { animation: none; }
+}
 }

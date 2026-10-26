@@ -140,6 +140,76 @@ function background(cascade: TokenCascade, pair: Pair): Rgba {
   return pair.base ? over(bg, cascade.color(pair.base)) : bg;
 }
 
+/**
+ * css-07 (deviation:status-tint-scale): the status soft / line tints derive
+ * from a per-theme --status-<tone>-base on a five-step alpha scale. The dark
+ * bases are the RGB of the prototype's rgba() literals, so every dark tint
+ * keeps its old value except the one declared merged step (success line
+ * 32% -> 30%). The danger hover fill keeps 10% (--tint-subtle): at 12% the
+ * .btn--danger text on it falls under AA in the light theme.
+ */
+const DARK_BASES: Record<string, Rgba> = {
+  '--status-success-base': { r: 16, g: 185, b: 129, a: 1 },
+  '--status-warning-base': { r: 245, g: 158, b: 11, a: 1 },
+  '--status-danger-base': { r: 239, g: 68, b: 68, a: 1 },
+};
+/** The literal each tint replaced, and the alpha it resolves to now (merges differ). */
+const DARK_TINTS: Record<string, { base: string; was: number; now: number }> = {
+  '--status-success-soft': { base: '--status-success-base', was: 0.14, now: 0.14 },
+  '--status-success-soft-muted': { base: '--status-success-base', was: 0.12, now: 0.12 },
+  '--status-success-line': { base: '--status-success-base', was: 0.32, now: 0.3 },
+  '--status-success-line-strong': { base: '--status-success-base', was: 0.35, now: 0.35 },
+  '--status-warning-soft': { base: '--status-warning-base', was: 0.14, now: 0.14 },
+  '--status-warning-soft-muted': { base: '--status-warning-base', was: 0.12, now: 0.12 },
+  '--status-warning-soft-strong': { base: '--status-warning-base', was: 0.18, now: 0.18 },
+  '--status-warning-line': { base: '--status-warning-base', was: 0.3, now: 0.3 },
+  '--status-warning-line-strong': { base: '--status-warning-base', was: 0.35, now: 0.35 },
+  '--status-danger-soft': { base: '--status-danger-base', was: 0.14, now: 0.14 },
+  '--status-danger-soft-muted': { base: '--status-danger-base', was: 0.12, now: 0.12 },
+  '--status-danger-soft-subtle': { base: '--status-danger-base', was: 0.1, now: 0.1 },
+  '--status-danger-line-strong': { base: '--status-danger-base', was: 0.35, now: 0.35 },
+};
+
+describe('derived status tints (css-07, deviation:status-tint-scale)', () => {
+  it('scales every tint on the five named steps plus the AA-bound subtle step', () => {
+    const cascade = new TokenCascade(css, { theme: 'dark', accent: 'bright' });
+    expect(['--tint-subtle', '--tint-muted', '--tint-soft', '--tint-strong', '--tint-line', '--tint-line-strong'].map((step) => cascade.resolve(step))).toEqual([
+      '10%',
+      '12%',
+      '14%',
+      '18%',
+      '30%',
+      '35%',
+    ]);
+    for (const tint of Object.keys(DARK_TINTS)) {
+      expect(cascade.raw(tint), tint).toMatch(/^color-mix\(in oklab, var\(--status-(?:success|warning|danger)-base\) var\(--tint-[a-z-]+\), transparent\)$/);
+    }
+  });
+
+  for (const accent of ACCENTS) {
+    it(`dark + ${accent}: the bases are the prototype RGB and every tint keeps its value but the merged success line`, () => {
+      const cascade = new TokenCascade(css, { theme: 'dark', accent });
+      for (const [base, rgb] of Object.entries(DARK_BASES)) expect(cascade.color(base), base).toEqual(rgb);
+      for (const [tint, { base, was, now }] of Object.entries(DARK_TINTS)) {
+        const color = cascade.color(tint);
+        expect({ r: color.r, g: color.g, b: color.b }, tint).toEqual({ r: DARK_BASES[base].r, g: DARK_BASES[base].g, b: DARK_BASES[base].b });
+        expect(color.a, `${tint} (was ${was})`).toBeCloseTo(now, 10);
+      }
+    });
+
+    it(`light + ${accent}: the success and warning tints follow the light signal hue, danger keeps the prototype RGB`, () => {
+      const cascade = new TokenCascade(css, { theme: 'light', accent });
+      expect(cascade.color('--status-danger-base')).toEqual(DARK_BASES['--status-danger-base']);
+      for (const tone of ['success', 'warning']) {
+        const signal = cascade.color(`--signal-${tone}`);
+        const soft = cascade.color(`--status-${tone}-soft`);
+        expect({ r: soft.r, g: soft.g, b: soft.b }, tone).toEqual({ r: signal.r, g: signal.g, b: signal.b });
+        expect(soft.a).toBeCloseTo(0.14, 10);
+      }
+    });
+  }
+});
+
 describe('design token contrast matrix (tokens.css, no browser)', () => {
   it('reads the real theme and accent lists from tokens.css', () => {
     expect(THEMES.sort()).toEqual(['dark', 'light']);

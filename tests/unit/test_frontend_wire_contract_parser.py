@@ -344,7 +344,16 @@ RAW_SHAPES = {
     "const_url": ("fetch(HEALTH_URL)", "GET /api/v1/health"),
     "post_init": ("fetch(apiPath('/telemetry/rum'), { method: 'POST', body })", "POST /api/v1/telemetry/rum"),
     "beacon": ("window.navigator.sendBeacon(apiPath('/telemetry/rum'), blob)", "POST /api/v1/telemetry/rum"),
-    "local_api_path": ("apiPath('/health')", "GET /api/v1/health"),
+    # W5e w5-wire-types B1 (a): EventSource and WebSocket constructions GET.
+    "event_source": ("new EventSource(apiPath('/health'))", "GET /api/v1/health"),
+    "window_event_source": ("new window.EventSource(`/api/health`)", "GET /api/v1/health"),
+    "web_socket": ("new WebSocket(apiPath('/health'))", "GET /api/v1/health"),
+    # B1 (b): bracket-qualified globals.
+    "bracket_window_fetch": ("window['fetch'](apiPath('/health'))", "GET /api/v1/health"),
+    "bracket_global_this_fetch": ("globalThis[\"fetch\"]('/api/v1/health', { signal })", "GET /api/v1/health"),
+    "bracket_self_fetch": ("self['fetch'](apiPath('/telemetry/rum'), { method: 'POST', body })", "POST /api/v1/telemetry/rum"),
+    "bracket_beacon": ("navigator['sendBeacon'](apiPath('/telemetry/rum'), blob)", "POST /api/v1/telemetry/rum"),
+    "window_bracket_beacon": ("window.navigator['sendBeacon'](apiPath('/telemetry/rum'), blob)", "POST /api/v1/telemetry/rum"),
 }
 
 
@@ -456,6 +465,162 @@ def test_a_local_api_path_url_binds_its_cast(tmp_path: Path) -> None:
 
     assert [(s.kind, s.helper) for s in sites] == [("raw", "apiPath"), ("cast", "json")]
     assert all(s.bound and s.operation == "GET /api/v1/health" for s in sites), [s.errors for s in sites]
+
+
+def _bound_sites(tmp_path: Path, module: str) -> dict[str, list[wire.Site]]:
+    project = _tree(tmp_path, {"client.ts": module, "types.ts": TYPES_MODULE})
+    pairs = [wire.Pair("response", (str(tmp_path / "types.ts"), "Health"), "ApiResponse", "HealthResponse", "x")]
+    sites = wire_raw.find_sites(project, OPS, [tmp_path / "client.ts"])
+    wire.bind_sites(project, sites, OPS, pairs)
+    grouped: dict[str, list[wire.Site]] = {}
+    for site in sites:
+        grouped.setdefault(site.name, []).append(site)
+    return grouped
+
+
+def test_a_typed_json_assignment_binds_like_a_cast(tmp_path: Path) -> None:
+    """B1 (c): `const x: H = await res.json()` and `x = await res.json()` (declared `let x: H`) are casts."""
+
+    grouped = _bound_sites(
+        tmp_path,
+        "import type { Health, Borrower360 } from './types';\n"
+        "async function typed() {\n"
+        "  // wire: 'GET /api/v1/health'\n"
+        "  const res = await fetch(apiPath('/health'));\n"
+        "  const body: Health = await res.json();\n"
+        "  return body;\n"
+        "}\n"
+        "async function assigned() {\n"
+        "  let body: Health;\n"
+        "  // wire: 'GET /api/v1/health'\n"
+        "  const res = await fetch(apiPath('/health'));\n"
+        "  body = await res.json();\n"
+        "  return body;\n"
+        "}\n"
+        "async function orphan(r: Response) {\n"
+        "  const body: Health = await r.json();\n"
+        "  return body;\n"
+        "}\n"
+        "async function wrongType() {\n"
+        "  // wire: 'GET /api/v1/health'\n"
+        "  const res = await fetch(apiPath('/health'));\n"
+        "  const body: Borrower360 = await res.json();\n"
+        "  return body;\n"
+        "}\n"
+        "export function apiPath(path: string): string {\n  return path;\n}\n",
+    )
+
+    for name in ("typed", "assigned"):
+        assert [(s.kind, s.bound) for s in grouped[name]] == [("raw", True), ("cast", True)], name
+        assert grouped[name][1].type_args == ["Health"]
+    assert [s.kind for s in grouped["orphan"]] == ["cast"]
+    assert "no annotated raw site" in grouped["orphan"][0].errors[0]
+    assert "is not bound to GET /api/v1/health" in grouped["wrongType"][1].errors[0]
+
+
+def test_same_named_local_path_consts_never_shadow_each_other(tmp_path: Path) -> None:
+    """B1 (d): a function-local const resolves within its function before module scope."""
+
+    grouped = _bound_sites(
+        tmp_path,
+        "async function health() {\n"
+        "  const PATH = '/api/health';\n"
+        "  // wire: 'GET /api/v1/health'\n"
+        "  return fetch(PATH);\n"
+        "}\n"
+        "async function search() {\n"
+        "  const PATH = '/api/borrowers/search';\n"
+        "  // wire: 'GET /api/v1/borrowers/search'\n"
+        "  return fetch(PATH);\n"
+        "}\n"
+        "async function bare() {\n"
+        "  const PATH = '/api/health';\n"
+        "  return fetch(PATH);\n"
+        "}\n",
+    )
+
+    assert grouped["health"][0].bound and grouped["health"][0].operation == "GET /api/v1/health"
+    assert grouped["search"][0].bound and grouped["search"][0].operation == "GET /api/v1/borrowers/search"
+    assert not grouped["bare"][0].bound and "without a `// wire:` annotation" in grouped["bare"][0].errors[0]
+
+
+def test_a_local_api_path_url_takes_its_method_from_the_fetch_that_sends_it(tmp_path: Path) -> None:
+    """B1 (e): an apiPath-only site's method is the consuming raw call's; unknown fails."""
+
+    grouped = _bound_sites(
+        tmp_path,
+        "async function bound(body: string) {\n"
+        "  // wire: 'POST /api/v1/telemetry/rum'\n"
+        "  const url = apiPath('/telemetry/rum');\n"
+        "  return fetch(url, { method: 'POST', body });\n"
+        "}\n"
+        "async function bare(body: string) {\n"
+        "  const url = apiPath('/telemetry/rum');\n"
+        "  return fetch(url, { method: 'POST', body });\n"
+        "}\n"
+        "async function mismatched() {\n"
+        "  // wire: 'POST /api/v1/telemetry/rum'\n"
+        "  const url = apiPath('/telemetry/rum');\n"
+        "  return fetch(url);\n"
+        "}\n"
+        "async function unconsumed() {\n"
+        "  // wire: 'GET /api/v1/health'\n"
+        "  const url = apiPath('/health');\n"
+        "  return url;\n"
+        "}\n"
+        "async function spread(init: RequestInit) {\n"
+        "  // wire: 'GET /api/v1/health'\n"
+        "  const url = apiPath('/health');\n"
+        "  return fetch(url, { ...init });\n"
+        "}\n"
+        "export function apiPath(path: string): string {\n  return path;\n}\n",
+    )
+
+    assert grouped["bound"][0].bound and grouped["bound"][0].operation == "POST /api/v1/telemetry/rum"
+    assert "without a `// wire:` annotation" in grouped["bare"][0].errors[-1]
+    assert any("the call sends GET" in error for error in grouped["mismatched"][0].errors)
+    for name in ("unconsumed", "spread"):
+        assert not grouped[name][0].bound
+        assert any("method not statically known" in error for error in grouped[name][0].errors), name
+
+
+def test_a_same_module_wrapper_call_is_a_raw_site(tmp_path: Path) -> None:
+    """B1 (f): a function forwarding a parameter into fetch( makes each API call of it a site."""
+
+    grouped = _bound_sites(
+        tmp_path,
+        "function send(url: string, body: string) {\n"
+        "  return fetch(url, { method: 'POST', body });\n"
+        "}\n"
+        "function read(url: string, init: RequestInit) {\n"
+        "  return fetch(url, init);\n"
+        "}\n"
+        "export function flush(body: string) {\n"
+        "  // wire: 'POST /api/v1/telemetry/rum'\n"
+        "  return send('/api/telemetry/rum', body);\n"
+        "}\n"
+        "export function bareFlush(body: string) {\n"
+        "  return send(`/api/telemetry/rum`, body);\n"
+        "}\n"
+        "export function wrongMethod(body: string) {\n"
+        "  // wire: 'GET /api/v1/telemetry/rum'\n"
+        "  return send('/api/telemetry/rum', body);\n"
+        "}\n"
+        "export function unknownMethod() {\n"
+        "  // wire: 'GET /api/v1/health'\n"
+        "  return read('/api/health', {});\n"
+        "}\n"
+        "export function notApi(body: string) {\n"
+        "  return send(someUrl, body);\n"
+        "}\n",
+    )
+
+    assert [(s.helper, s.bound) for s in grouped["flush"]] == [("send", True)]
+    assert grouped["flush"][0].operation == "POST /api/v1/telemetry/rum"
+    assert "without a `// wire:` annotation" in grouped["bareFlush"][0].errors[0]
+    assert any("the call sends POST" in error for error in grouped["wrongMethod"][0].errors)
+    assert any("method not statically known" in error for error in grouped["unknownMethod"][0].errors)
+    assert "notApi" not in grouped and "send" not in grouped and "read" not in grouped
 
 
 def test_a_schema_name_binds_alone_only_from_a_coverage_file(tmp_path: Path) -> None:

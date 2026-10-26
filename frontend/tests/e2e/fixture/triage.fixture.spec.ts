@@ -20,9 +20,8 @@
  *    stays mounted on the placeholder rows (GET /api/leads?state=TX held)
  *    and the settled rows only drop cards (brief 6.4);
  *  - axe is clean on the deck with the draft on screen, both themes: the
- *    draft copy is its own scroll region with no tabindex (the oxlint
- *    ratchet bans one), reachable through its evidence chips
- *    (scrollable-region-focusable).
+ *    draft copy is its own scroll region and takes a tab stop (W5e: the
+ *    reviewed oxlint region option; scrollable-region-focusable).
  */
 import type { Page } from '@playwright/test';
 import type { SessionResponse } from '../../../src/types';

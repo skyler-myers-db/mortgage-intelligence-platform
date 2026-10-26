@@ -7,6 +7,7 @@
  * exported `api` object in the original order. Consumers import `api` from
  * `../api` — never from this module.
  */
+import type { ApiRequest } from '../../types/api.gen';
 import type {
   Borrower360,
   BorrowerProof,
@@ -138,9 +139,7 @@ export const leadsPageApi = {
 };
 
 /** The `/api/offers/recommend` body. */
-export interface OfferRecommendRequest {
-  borrower_id: string;
-}
+export type OfferRecommendRequest = ApiRequest<'OfferRecommendRequest'>;
 
 export const borrowerApi = {
   borrower: (id: string, signal?: AbortSignal, fresh = false) =>

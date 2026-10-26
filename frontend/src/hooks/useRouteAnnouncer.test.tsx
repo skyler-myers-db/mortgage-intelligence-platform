@@ -7,8 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PageShell } from '../components/layout/PageShell';
 import { ROUTE_FOCUS_DEADLINE_MS, useRouteAnnouncer } from './useRouteAnnouncer';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * useRouteAnnouncer — rendered-DOM contract for "where am I?" after navigation.
  *

@@ -38,6 +38,7 @@
     "addressable population": "What is the addressable market size — how many eligible borrowers across the current Cotality data coverage?",
     "addressable borrowers": "What is the addressable market size — how many eligible borrowers across the current Cotality data coverage?",
     "marketable population": "How many eligible borrowers across the current Cotality data coverage clear the contactability screen, and which state leads?",
+    "in the money": "How many borrowers across the current Cotality data coverage are currently in-the-money, and what is the average rate spread?",
     "refi economics screen": "How many borrowers across the current Cotality data coverage are currently in-the-money, and what is the average rate spread?",
     "refi economics": "How many borrowers across the current Cotality data coverage are currently in-the-money, and what is the average rate spread?",
     "opportunity score 75+": "How many borrowers across the current Cotality data coverage have an opportunity score of 75+, and which state leads?",
@@ -48,6 +49,15 @@
   "segmentTemplate": "Which states have the most borrowers in the {segment} segment?",
   "stateTemplate": "Which 5 ZIP codes in {state} have the most in-the-money borrowers?",
   "leadTemplate": "How many borrowers in {state} are in the {segment} segment, and what is the average rate spread?",
+  "segmentTemplatesByCode": {
+    "itm": {
+      "segmentTemplate": "Which states have the most in-the-money borrowers?",
+      "leadTemplate": "How many in-the-money borrowers are in {state}, and what is the average rate spread?"
+    }
+  },
+  "segmentPhraseByCode": {
+    "itm": "in-the-money"
+  },
   "segmentsWithoutTemplates": {
     "permit_activity": "Gated until a Cotality permit source lands: the source-gap guard refuses every question about it, so offering one would be a dead end."
   },

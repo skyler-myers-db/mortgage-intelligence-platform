@@ -13,6 +13,7 @@ about.
 | `boto3` / `botocore` | MLflow Unity Catalog model-artifact access on AWS | `Apache-2.0` | Permissive. Required at runtime because MLflow loads the AWS artifact client dynamically during model registration. Preserve the upstream copyright, license, and NOTICE materials in distributions. |
 | `psycopg` / `psycopg-binary` | Lakebase PostgreSQL client | `LGPL-3.0-only` | Allowed for commercial use as an unmodified, dynamically loaded Python package. Include this notice and the LGPL license text/reference in distribution materials. |
 | `pg8000` / `scramp` / `asn1crypto` | Structured PostgreSQL authentication and replication-denial proof for Lakebase | `BSD-3-Clause` / `MIT-0` / `MIT` | Permissive. Preserve the upstream copyright and license notices in distributions. |
+| `certifi` | Mozilla CA bundle used for TLS verification by requests, httpx and botocore (pinned in `requirements.in` since 2026-10-26 for PYSEC-2026-4320) | `MPL-2.0` | Allowed for commercial use as an unmodified Python package. MPL-2.0 is file-level weak copyleft; the bundle ships unmodified, so the obligation is to keep its license notice with distributions. |
 | `us-atlas` | U.S. state TopoJSON for browser maps | `ISC` | Permissive. Replaced the prior no-commercial-use map package. |
 | `topojson-client` | Runtime TopoJSON-to-GeoJSON decoding | `ISC` | Permissive. |
 | U.S. Census Bureau 2020 cartographic boundary and relationship files (`cb_2020_us_zcta520_500k`, `cb_2020_us_state_500k`, `tab20_zcta520_county20_natl`) | Per-state ZCTA geometry for the map's ZIP rung, committed under `frontend/src/geo/zcta/` and shipped as hashed `frontend/dist` assets (W5c, audit `dataviz-01`) | Public domain (17 U.S.C. 105) | No license obligation; provenance and SHA-256 pins are kept in `frontend/src/geo/zcta/README.md` and its `manifest.json`. Shape-only: no demographic overlay ships on it. |
@@ -28,6 +29,9 @@ in their Python distributions and upstream source repositories.
 Apache-2.0 license and NOTICE materials for `web-vitals` (Google LLC) are
 included in its npm package and upstream source repository; once a browser
 build imports it, keep the NOTICE with distributions that ship that build.
+
+MPL-2.0 license text for `certifi` is included in its Python distribution and
+is available at https://www.mozilla.org/MPL/2.0/.
 
 BSD-3-Clause, MIT-0, and MIT license materials for `pg8000`, `scramp`, and
 `asn1crypto` are included in their Python distributions and upstream source
@@ -49,6 +53,7 @@ https://openfontlicense.org.
 | `@axe-core/playwright` / `axe-core` | Accessibility test automation | `MPL-2.0` | Dev/test only. No project files derive from or modify the MPL source. |
 | `hypothesis` | Python property/fuzz tests | `MPL-2.0` | Test only. No project files derive from or modify the MPL source. |
 | `lightningcss` | Vite/build-time CSS transform dependency | `MPL-2.0` | Build-time transitive dependency. No project files derive from or modify the MPL source. |
+| `rollup-plugin-visualizer` (7.1.1) and its dependencies (`open`, `yargs`, `source-map`, `picomatch`) | The bundle treemap (`npm --prefix frontend run build:analyze`, a CI PR artifact; audit quality-08) | `MIT` (transitive `MIT`, `ISC`, `BSD-3-Clause`) | Dev only: loaded only by `frontend/vite.analyze.config.ts` under `ANALYZE=1`, never by the production build, the browser bundle or the App source. |
 | `tools/geo`: `shapefile`, `d3-geo`, `d3-geo-projection`, `topojson-server`, `topojson-simplify` (plus `topojson-client`) and their dependencies | The operator-only ZCTA geometry build (`tools/geo/build_zcta_topojson.mjs`) | `BSD-3-Clause` / `ISC` (transitive `MIT`, `Unlicense`) | Operator-only, with its own `package.json` and lock: never installed by CI's app jobs or deploy, never in the browser build, excluded from the App source by `databricks.yml` `sync.exclude`. CI audits its lock (`npm --prefix tools/geo audit --audit-level=high`). |
 
 MPL-2.0 is file-level weak copyleft. Because these packages are consumed

@@ -10,6 +10,7 @@
 import type { Page } from '@playwright/test';
 import { genieAnswerFixture, genieDeepAnswerFixture, GENIE_QUESTION, registerGenieTurn } from './data/genieTurn';
 import { expect, test } from './test';
+import { tooltipText } from './tooltip';
 
 /** Matches one id among an element's space-separated aria-describedby ids. */
 function describedByToken(id: string): RegExp {
@@ -134,11 +135,13 @@ test.describe('mid-turn composer', () => {
 
     const ask = dialog.getByRole('button', { name: 'Ask', exact: true });
     await expect(ask).toBeDisabled();
-    await expect(ask).toHaveAttribute('title', /^Genie is still answering/);
+    expect(await tooltipText(ask)).toMatch(/^Genie is still answering/);
     await expect(dialog.locator('#genie-composer-busy')).toContainText(/^Genie is still answering/);
     for (const chip of await chips.all()) {
       await expect(chip).toBeDisabled();
-      await expect(chip).toHaveAttribute('title', /^Genie is still answering/);
+      // critic-08: the reason is the chip's description, never a native title.
+      await expect(chip).toHaveAccessibleDescription(/^Genie is still answering/);
+      await expect(chip).not.toHaveAttribute('title', /.*/);
     }
 
     // Typing still works; Enter does not submit a second turn.

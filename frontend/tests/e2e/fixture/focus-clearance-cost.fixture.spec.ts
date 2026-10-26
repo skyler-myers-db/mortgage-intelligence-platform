@@ -19,10 +19,24 @@
  *     mechanism itself.
  * What is asserted is how many elements Chromium re-styled (the
  * `elementCount` of its UpdateLayoutTree trace events): a count, not a
- * timing, so a loaded runner cannot flake it. It covers the style updates
- * of the frame lifecycle, not the ones a script forces by reading layout,
- * so the scroll's ratio understates the time ratio; the recalc time
- * (CDP RecalcStyleDuration) is logged beside it, never asserted.
+ * timing, so a loaded runner cannot flake it. The recalc time (CDP
+ * RecalcStyleDuration) is logged beside it, never asserted.
+ *
+ * The scroll's count sees only part of the work, so the scroll leg is
+ * judged by its EXCESS over no clearance, in units of `.main`'s subtree:
+ *   - `.main` is a size container (01-app-shell.css). On a step that swaps
+ *     rows (some removed, others inserted), Chromium resolves the styles
+ *     under it inside `.main`'s layout, which no UpdateLayoutTree counts.
+ *     The first step only appends rows (the overscan keeps the top ones),
+ *     so its style update is counted, and there the first shape re-styles
+ *     `.main`'s whole subtree: about one subtree of excess per pass. Its
+ *     per-shift cost shows in the logged time and in the insert leg.
+ *   - Work outside `.main` lands in every side's count alike: each queue
+ *     row's tooltips portal a hidden description into <body> (ui/Tooltip.tsx,
+ *     seven per row since W5e), about 950 element styles over the scroll.
+ *     As a ratio to no clearance, that diluted the first shape's one
+ *     subtree from 4.2x (W5d CI) to 1.83x (W5e CI, run 40311237233). The
+ *     excess cancels any such term.
  */
 import type { Browser, Page } from '@playwright/test';
 import { registerVirtualQueue } from './data/queueKeyboard';
@@ -44,6 +58,17 @@ const SCROLL_STEPS = 25;
 const SCROLL_STEP_PX = 240;
 const INSERTIONS = 10;
 
+/**
+ * The scroll leg's bounds on the excess over no clearance, as fractions of
+ * `.main`'s element count (~1230 on this route). The shipped rules may add a
+ * fifth of it (measured: under 50 elements either way); the first shape
+ * must add half (measured: about 0.9 on CI's Linux Chromium at W5e, 1.4 to
+ * 1.6 at W5d and on macOS), so a passing non-vacuity proves the first shape
+ * exceeds the shipped bound 2.5-fold.
+ */
+const SCROLL_EXCESS_BOUND = 1 / 5;
+const SCROLL_EXCESS_FIRST_SHAPE = 1 / 2;
+
 interface TraceEvent {
   name?: string;
   args?: { elementCount?: unknown };
@@ -58,20 +83,31 @@ interface StyleCost {
   scrollMs: number;
 }
 
-/** Delete the top-level rules that carry the clearance; returns how many. */
+/**
+ * Delete the style rules that carry the clearance; returns how many. The
+ * sheets are layered (css-05), so the walk descends into @layer blocks and
+ * other grouping rules (@media, @supports, @container) and deletes only the
+ * inner marker rules: deleting a top-level rule whose cssText merely
+ * contains the marker would now drop a whole layer block.
+ */
 async function deleteClearanceRules(page: Page): Promise<number> {
   return page.evaluate((marker) => {
-    let deleted = 0;
-    for (const sheet of [...document.styleSheets]) {
-      for (let index = sheet.cssRules.length - 1; index >= 0; index -= 1) {
-        const rule = sheet.cssRules[index];
-        if (!(rule instanceof CSSPropertyRule) && rule.cssText.includes(marker)) {
-          sheet.deleteRule(index);
-          deleted += 1;
-        }
+    const sweep = (owner: CSSStyleSheet | CSSGroupingRule): number => {
+      let deleted = 0;
+      for (let index = owner.cssRules.length - 1; index >= 0; index -= 1) {
+        const rule = owner.cssRules[index];
+        // A style rule first: with CSS nesting, CSSStyleRule is itself a
+        // CSSGroupingRule in current engines.
+        if (rule instanceof CSSStyleRule) {
+          if (rule.cssText.includes(marker)) {
+            owner.deleteRule(index);
+            deleted += 1;
+          }
+        } else if (rule instanceof CSSGroupingRule) deleted += sweep(rule);
       }
-    }
-    return deleted;
+      return deleted;
+    };
+    return [...document.styleSheets].reduce((sum, sheet) => sum + sweep(sheet), 0);
   }, CLEARANCE_MARKER);
 }
 
@@ -151,6 +187,10 @@ test('the route-nav clearance re-styles only what a scroll or an insertion chang
     .evaluate((element) => getComputedStyle(element).scrollMarginBlockStart);
   expect(await navMargin(), 'precondition: the clearance applies on this route').toBe('61px');
 
+  const mainElements = await page.locator('.main').evaluate((main) => main.querySelectorAll('*').length + 1);
+  expect(mainElements, 'precondition: the measured subtree holds the queue table')
+    .toBeGreaterThan(await page.locator('.main table.tbl *').count());
+
   // A warm-up pass, so each measured pass starts from the same state.
   await styleCost(browser, page);
   const shipped = await stableStyleCost(browser, page);
@@ -163,14 +203,17 @@ test('the route-nav clearance re-styles only what a scroll or an insertion chang
   expect(await navMargin(), 'the first shape applies too').toBe('61px');
   const ancestorHas = await stableStyleCost(browser, page);
 
+  const excess = (cost: StyleCost) => cost.scroll - without.scroll;
   const report = (cost: StyleCost) => `scroll ${cost.scroll} (${cost.scrollMs} ms), insert ${cost.insert}`;
-  const counts = `shipped ${report(shipped)}; without ${report(without)}; ancestor :has ${report(ancestorHas)}`;
+  const counts = `shipped ${report(shipped)}; without ${report(without)}; ancestor :has ${report(ancestorHas)};`
+    + ` scroll excess shipped ${excess(shipped)}, ancestor :has ${excess(ancestorHas)} of a ${mainElements}-element .main`;
   console.log(`[focus-clearance-cost] re-styled elements: ${counts}`);
   expect(without.scroll, `non-vacuity: the scroll re-styled rows (${counts})`).toBeGreaterThan(0);
   expect(without.insert, `non-vacuity: each insertion re-styled something (${counts})`).toBeGreaterThanOrEqual(INSERTIONS);
-  expect(shipped.scroll / without.scroll, `the shipped clearance: scroll (${counts})`).toBeLessThanOrEqual(1.5);
+  expect(excess(shipped), `the shipped clearance: scroll (${counts})`).toBeLessThanOrEqual(mainElements * SCROLL_EXCESS_BOUND);
   expect(shipped.insert / without.insert, `the shipped clearance: insert (${counts})`).toBeLessThanOrEqual(1.5);
-  expect(ancestorHas.scroll / without.scroll, `non-vacuity: the first shape's scroll blow-up (${counts})`).toBeGreaterThan(2);
+  expect(excess(ancestorHas), `non-vacuity: the first shape's scroll re-styles .main's subtree (${counts})`)
+    .toBeGreaterThanOrEqual(mainElements * SCROLL_EXCESS_FIRST_SHAPE);
   expect(ancestorHas.insert / without.insert, `non-vacuity: the first shape's insert blow-up (${counts})`).toBeGreaterThan(20);
 });
 

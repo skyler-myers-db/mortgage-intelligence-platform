@@ -1,15 +1,19 @@
 /** @vitest-environment happy-dom */
 
+import { act, type ReactElement } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { preloadAsyncFailure } from '../components/ui/AsyncState';
 import type { UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
 import { designCss } from '../test/designCss';
 import { histogramModel } from './analytics.chart-model';
-import { BAR_FLOOR_PCT, Bars, HistogramTable, LoadState } from './analytics.charts';
+import type { FunnelStage } from '../types';
+import { BAR_FLOOR_PCT, Bars, FunnelBars, HistogramTable, LoadState, ScopeChip } from './analytics.charts';
 
 /** Rendered `--bar-pct` of each bar fill, and the not-to-scale note, in the DOM Bars produces. */
-function renderBars(values: number[]): { pcts: string[]; note: string | null } {
+function renderBars(values: number[]): { pcts: string[]; note: string | null; host: HTMLElement } {
   const host = document.createElement('div');
   host.innerHTML = renderToStaticMarkup(
     <MemoryRouter>
@@ -19,22 +23,68 @@ function renderBars(values: number[]): { pcts: string[]; note: string | null } {
   return {
     pcts: [...host.querySelectorAll<HTMLElement>('.analytics-bars__fill')].map((fill) => fill.style.getPropertyValue('--bar-pct')),
     note: host.querySelector('[data-testid="bars-scale-note"]')?.textContent ?? null,
+    host,
   };
+}
+
+/** Per row: whether its fill is floored, its data-to-scale, and its screen-reader suffix. */
+function flooredRows(host: HTMLElement) {
+  return [...host.querySelectorAll('.analytics-bars__row')].map((row) => ({
+    floored: row.querySelector('.analytics-bars__fill')?.classList.contains('analytics-bars__fill--floored') ?? false,
+    toScale: row.querySelector('.analytics-bars__fill')?.getAttribute('data-to-scale') ?? null,
+    suffix: row.querySelector('.sr-only')?.textContent ?? null,
+  }));
 }
 
 describe('Bars scale (dataviz-03)', () => {
   it('floors a tiny non-zero bar at BAR_FLOOR_PCT and says the bars are not to scale', () => {
-    const { pcts, note } = renderBars([5_160_000, 4_350, 23, 0]);
+    const { pcts, note, host } = renderBars([5_160_000, 4_350, 23, 0]);
     expect(pcts).toEqual(['100%', `${BAR_FLOOR_PCT}%`, `${BAR_FLOOR_PCT}%`, '0%']);
     expect(note).toBe(
-      `Not to scale: bars under ${BAR_FLOOR_PCT}% of the largest are drawn at a minimum length. The printed values are exact.`,
+      `Not to scale: outlined bars are under ${BAR_FLOOR_PCT}% of the largest and are drawn at a minimum length. The printed values are exact.`,
     );
+    // D-dataviz-geo-a: the floored rows say so, the others do not (a zero
+    // draws no fill, so it is not floored either).
+    const suffix = ', drawn at minimum length, not to scale';
+    expect(flooredRows(host)).toEqual([
+      { floored: false, toScale: null, suffix: null },
+      { floored: true, toScale: 'false', suffix },
+      { floored: true, toScale: 'false', suffix },
+      { floored: false, toScale: null, suffix: null },
+    ]);
+  });
+
+  it('keeps Primary offer selected unfloored among the six Pipeline Metrics stages', () => {
+    const stage = (stage: string, stage_order: number, borrower_count: number): FunnelStage => ({
+      stage,
+      stage_order,
+      borrower_count,
+      source: 'mip.gold.borrower_360',
+    });
+    const host = document.createElement('div');
+    host.innerHTML = renderToStaticMarkup(
+      <MemoryRouter>
+        <FunnelBars
+          stages={[
+            stage('Addressable', 1, 5_160_000),
+            stage('In the Money', 2, 135_520),
+            stage('Opportunity Score 75+', 3, 4_350),
+            stage('Primary Offer Selected', 4, 4_467_395),
+            stage('Approved', 5, 23),
+            stage('Actioned', 6, 3),
+          ]}
+        />
+      </MemoryRouter>,
+    );
+    // In the Money (2.6%) and Primary offer selected (87%) draw to scale.
+    expect(flooredRows(host).map((row) => row.floored)).toEqual([false, false, true, false, true, true]);
   });
 
   it('draws every bar at its linear share, zero as no fill, and adds no note when none is floored', () => {
-    const { pcts, note } = renderBars([400, 100, 0]);
+    const { pcts, note, host } = renderBars([400, 100, 0]);
     expect(pcts).toEqual(['100%', '25%', '0%']);
     expect(note).toBeNull();
+    expect(flooredRows(host).some((row) => row.floored || row.suffix !== null)).toBe(false);
   });
 
   it('keeps no CSS minimum width that would floor a bar behind the note', () => {
@@ -123,5 +173,121 @@ describe('LoadState stale-while-refreshing contract', () => {
 
     expect(html).not.toContain('stable-refresh-status');
     expect(html).not.toContain('aria-busy');
+  });
+});
+
+describe('LoadState shared states (states-04, states-v2)', () => {
+  beforeAll(async () => {
+    await preloadAsyncFailure();
+  });
+
+  const view = (overrides: Partial<UseWarmingUpRetryResult<{ value: number }>>, extra: { empty?: boolean } = {}) => {
+    const host = document.body.appendChild(document.createElement('div'));
+    const root = createRoot(host);
+    act(() => root.render(
+      <LoadState
+        query={query(overrides)}
+        title="Executive analytics"
+        isEmpty={extra.empty === undefined ? undefined : (data) => data.value === 0}
+        empty={<p data-testid="empty-slot">Empty</p>}
+      >
+        {(data) => <div data-testid="loaded">Value {data.value}</div>}
+      </LoadState>,
+    ));
+    return { host, done: () => { act(() => root.unmount()); host.remove(); } };
+  };
+
+  it('never prints the transport message, and its Retry is the shared failure one', () => {
+    const retry = vi.fn();
+    const { host, done } = view({ data: null, error: new Error('500 Internal Server Error'), manualRetry: retry });
+    try {
+      expect(host.textContent).not.toContain('500 Internal Server Error');
+      expect(host.querySelector('[data-async-status]')).not.toBeNull();
+      const button = [...host.querySelectorAll('button')].find((item) => item.textContent?.includes('Retry'));
+      act(() => button?.click());
+      expect(retry).toHaveBeenCalledTimes(1);
+      expect(host.querySelector('.surface--danger')).toBeNull();
+    } finally {
+      done();
+    }
+  });
+
+  it('keeps the skeleton beside the warming block, as a hidden shape that is never busy', () => {
+    const { host, done } = view({
+      data: null,
+      warmingUp: { dependency: 'warehouse', label: 'Warehouse warming up', attempt: 1, maxAttempts: 6, correlationId: null },
+    });
+    try {
+      const skeleton = host.querySelector('[data-analytics-skeleton]');
+      expect(skeleton).not.toBeNull();
+      expect(host.textContent).toContain('Warehouse warming up');
+      // The warming status speaks; a warm-up that outlasts the page is not an endless busy region.
+      expect(host.querySelectorAll('[aria-busy="true"]')).toHaveLength(0);
+      expect(skeleton?.getAttribute('aria-hidden')).toBe('true');
+      expect(skeleton?.getAttribute('role')).toBeNull();
+    } finally {
+      done();
+    }
+  });
+
+  it('shows the empty slot only for a settled, measured zero', () => {
+    const settled = view({ data: { value: 0 } }, { empty: true });
+    try {
+      expect(settled.host.querySelector('[data-testid="empty-slot"]')).not.toBeNull();
+      expect(settled.host.querySelector('[data-testid="loaded"]')).toBeNull();
+    } finally {
+      settled.done();
+    }
+    for (const overrides of [
+      { data: { value: 0 }, isPlaceholderData: true },
+      { data: { value: 0 }, error: new Error('refresh failed') },
+      { data: { value: 0 }, warmingUp: { dependency: 'warehouse', label: 'Warehouse warming up', attempt: 1, maxAttempts: 6, correlationId: null } },
+    ] satisfies Array<Partial<UseWarmingUpRetryResult<{ value: number }>>>) {
+      const shown = view(overrides, { empty: true });
+      try {
+        expect(shown.host.querySelector('[data-testid="empty-slot"]'), JSON.stringify(Object.keys(overrides))).toBeNull();
+      } finally {
+        shown.done();
+      }
+    }
+    const nonEmpty = view({ data: { value: 3 } }, { empty: true });
+    try {
+      expect(nonEmpty.host.querySelector('[data-testid="loaded"]')).not.toBeNull();
+    } finally {
+      nonEmpty.done();
+    }
+  });
+});
+
+describe('ScopeChip (critic-08)', () => {
+  const render = (ui: ReactElement) => {
+    const host = document.body.appendChild(document.createElement('div'));
+    const root = createRoot(host);
+    act(() => root.render(ui));
+    return { host, done: () => { act(() => root.unmount()); host.remove(); } };
+  };
+
+  it('carries its detail as a tooltip description, never a DOM title', () => {
+    const { host, done } = render(<ScopeChip detail="mip.gold.evidence_events">Evidence events</ScopeChip>);
+    try {
+      const chip = host.querySelector<HTMLElement>('.analytics-scope-chip')!;
+      expect(document.querySelectorAll('[title]')).toHaveLength(0);
+      expect(chip.hasAttribute('data-tooltip')).toBe(true);
+      const description = document.getElementById(chip.getAttribute('aria-describedby') ?? '');
+      expect(description?.textContent).toBe('mip.gold.evidence_events');
+    } finally {
+      done();
+    }
+  });
+
+  it('renders the bare chip without a detail', () => {
+    const { host, done } = render(<ScopeChip>Top 25</ScopeChip>);
+    try {
+      const chip = host.querySelector<HTMLElement>('.analytics-scope-chip')!;
+      expect(chip.hasAttribute('data-tooltip')).toBe(false);
+      expect(host.querySelectorAll('[title]')).toHaveLength(0);
+    } finally {
+      done();
+    }
   });
 });

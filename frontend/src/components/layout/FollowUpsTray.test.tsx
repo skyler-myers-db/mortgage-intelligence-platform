@@ -217,13 +217,13 @@ describe('the Follow-ups tray', () => {
     expect(links[1].getAttribute('href')).toBe('/lead-queue?assigned_to=me');
   });
 
-  it('caps the queue handoff at 20 ids and says so', async () => {
-    const due = Array.from({ length: 23 }, (_, index) => item({ borrower_id: id(index + 1), due_at: '2026-10-07T20:00:00Z' }));
+  it('caps the queue handoff at the queue parse cap (50 ids) and says so', async () => {
+    const due = Array.from({ length: 53 }, (_, index) => item({ borrower_id: id(index + 1), due_at: '2026-10-07T20:00:00Z' }));
     const { tray } = await openTray(due);
     const [handoff] = [...tray.querySelectorAll<HTMLAnchorElement>('.followups__foot a')];
-    expect(handoff.textContent).toBe('Work the first 20 due items in the queue');
+    expect(handoff.textContent).toBe('Work the first 50 due items in the queue');
     const ids = new URLSearchParams(handoff.getAttribute('href')?.split('?')[1]).get('borrower_ids')?.split(',');
-    expect(ids).toHaveLength(20);
+    expect(ids).toHaveLength(50);
   });
 
   it('omits the queue handoff when nothing is due', async () => {

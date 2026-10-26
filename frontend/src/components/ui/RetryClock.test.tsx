@@ -6,8 +6,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Countdown, WaitClock, formatWait, secondsUntil } from './RetryClock';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /** The wait clocks (audit states-08 part 4), under fake timers. */
 
 let root: Root;

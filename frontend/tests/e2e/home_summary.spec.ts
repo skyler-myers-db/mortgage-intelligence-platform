@@ -58,7 +58,7 @@ const PINNED_SUMMARY: SummaryPayload = {
   previous_visit_at: '2026-07-09T14:30:00+00:00',
   baseline_snapshot_at: '2026-07-09T06:00:00+00:00',
   headline:
-    'Since your last login: +1.5% high-opportunity, +2,250 refi candidates, +4,120 offers available.',
+    'Since your last login: +1.5% high-opportunity, +2,250 in-the-money borrowers, +4,120 offers available.',
   phrasing_source: 'deterministic',
   phrasing_fallback_reason: 'genie_not_configured',
   highlights: [
@@ -74,7 +74,7 @@ const PINNED_SUMMARY: SummaryPayload = {
     },
     {
       measure: 'refi_economics_screen',
-      label: 'refi candidates',
+      label: 'in-the-money borrowers',
       display: '+2,250',
       value_token: '+2,250',
       current: 261400,
@@ -241,7 +241,7 @@ test.describe('S4 home summary — pinned response cross-check', () => {
           families: [
             ['marketable_population', 'Marketable population'],
             ['opportunity_score', 'Opportunity score'],
-            ['in_the_money', 'Refi economics screen'],
+            ['in_the_money', 'In the Money'],
             ['next_best_offer', 'Primary offer path'],
           ].map(([id, title]) => ({
             id,
@@ -292,7 +292,7 @@ test.describe('S4 home summary — pinned response cross-check', () => {
       await drawer.getByRole('tab', { name: 'Lineage' }).click();
       const familyTitles: Record<string, string> = {
         high_opportunity: 'Opportunity score',
-        refi_economics_screen: 'Refi economics screen',
+        refi_economics_screen: 'In the Money',
         offers_available: 'Primary offer path',
       };
       await expect(drawer).toContainText(

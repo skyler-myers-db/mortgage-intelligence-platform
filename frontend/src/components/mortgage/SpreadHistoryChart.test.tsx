@@ -309,6 +309,26 @@ describe('SpreadHistoryChart', () => {
     expect(loading?.querySelector('.skeleton, [class*="skeleton"]')).not.toBeNull();
   });
 
+  // W5e w5-analytics (delivery-05, the W5a ruling): a window restored from
+  // the persisted snapshot (its dataUpdatedAt predates this document) is the
+  // last session's weeks; the chart waits for the fresh read instead.
+  it('shows its skeleton, not a restored window, while the fresh read is in flight', async () => {
+    let land: (value: RateWindowResponse) => void = () => undefined;
+    apiMocks.analyticsRateWindow.mockImplementationOnce(() => new Promise<RateWindowResponse>((resolve) => { land = resolve; }));
+    client.setQueryData(queryKeys.borrower(BORROWER_ID), dossier());
+    client.setQueryData(queryKeys.analytics('rate-window'), RATE_WINDOW, { updatedAt: performance.timeOrigin - 3_600_000 });
+    await render();
+    expect(apiMocks.analyticsRateWindow).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[data-testid="spread-history-loading"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="spread-history-svg"]')).toBeNull();
+    await act(async () => {
+      land(RATE_WINDOW);
+    });
+    await settle();
+    expect(document.querySelector('[data-testid="spread-history-loading"]')).toBeNull();
+    expect(document.querySelector('[data-testid="spread-history-svg"]')).not.toBeNull();
+  });
+
   it('never breaks the dossier refetch an approve triggers while the chart is mounted', async () => {
     function DossierObserver() {
       useQuery({ queryKey: queryKeys.borrower(BORROWER_ID), queryFn: () => apiMocks.borrower(BORROWER_ID) });

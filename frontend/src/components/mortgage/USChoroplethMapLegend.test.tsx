@@ -9,6 +9,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tooltipText } from '../../test/tooltipText';
 import type { RateSensitivityResponse } from '../../types/rateScenario';
 import RateScenarioControl from './RateScenarioControl';
 import { buildChoroplethScale } from './USChoroplethMap.scale';
@@ -19,8 +20,6 @@ import type { GeoRead } from './useChoroplethLiveFacts';
 vi.mock('../AppContext', () => ({
   useApp: () => ({ setDrawer: () => undefined, showEvidence: true, showConfidence: true }),
 }));
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('USChoroplethMapLegend break row', () => {
   let root: Root;
@@ -53,7 +52,7 @@ describe('USChoroplethMapLegend break row', () => {
     return [...document.querySelectorAll('.map-legend__break')].map((el) => ({
       text: el.textContent,
       value: Number(el.getAttribute('data-break')),
-      title: el.getAttribute('title'),
+      title: tooltipText(el),
     }));
   }
 

@@ -15,5 +15,5 @@
     "resolveJsonModule": true,
     "jsx": "react-jsx"
   },
-  "include": ["./*.ts", "../../playwright.config.ts", "../../src/vite-env.d.ts"]
+  "include": ["./*.ts", "../support/**/*.ts", "../../playwright.config.ts", "../../src/vite-env.d.ts"]
 }

@@ -4,10 +4,12 @@ A plain ``sha256`` of a filter set is a dictionary target: the Lead Queue and
 ledger filters come from small vocabularies (states, segments, statuses, a few
 hundred staff emails), so anyone holding a ledger export could hash candidate
 filter sets and learn which assignee or cohort a reader looked at. The copies
-the ledger STORES (VIEW_AUDIT_LEDGER, AUDIT_EXPORT and VIEW_LEADS
-``filter_fingerprint``) are therefore an HMAC-SHA256 of that plain digest under
-a server key, so a stored value can be compared with another stored value but
-never reproduced offline.
+the ledger STORES (VIEW_AUDIT_LEDGER, AUDIT_EXPORT, VIEW_LEADS and, since W5e,
+SAVE_QUEUE_VIEW ``filter_fingerprint``) are therefore an HMAC-SHA256 of that
+plain digest under a server key, so a stored value can be compared with
+another stored value but never reproduced offline. Each surface keys under its
+own domain: AUDIT_LEDGER (the ledger reads and their exports),
+LEAD_VIEW (VIEW_LEADS) and SAVED_VIEW (SAVE_QUEUE_VIEW).
 
 The key derives the way ``audit_pagination._cursor_secret`` does: the
 ``MIP_GENIE_ACTION_SECRET_CURRENT`` secret (then the legacy secret), separated
@@ -32,6 +34,7 @@ from backend.config.settings import settings
 
 AUDIT_LEDGER_FINGERPRINT_DOMAIN = b"mip.audit.filter_fingerprint.v1\x00"
 LEAD_VIEW_FINGERPRINT_DOMAIN = b"mip.leads.filter_fingerprint.v1\x00"
+SAVED_VIEW_FINGERPRINT_DOMAIN = b"mip.saved_view.filter_fingerprint.v1\x00"
 
 _LOCAL_KEY = secrets.token_bytes(32)
 _LOCAL_APP_ENVS = frozenset({"local", "test", "testing", "pytest"})

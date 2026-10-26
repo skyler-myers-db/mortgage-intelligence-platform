@@ -10,6 +10,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tooltipText } from '../../test/tooltipText';
 import { USChoroplethMapHeader, type MapColorMode } from './USChoroplethMapHeader';
 
 const lazyMocks = vi.hoisted(() => ({ load: vi.fn(), fail: false }));
@@ -26,8 +27,6 @@ vi.mock('./rateScenario.lazy', () => ({
   },
 }));
 vi.mock('./GenieAskAbout', () => ({ GenieAskAbout: () => null }));
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // The frontend tsconfig carries no Node typings; the test runner's process
 // reaches the rejection hook structurally (as in routePreloaders.home.test).
@@ -123,7 +122,8 @@ describe('USChoroplethMapHeader colouring toggle', () => {
     expect(rate?.getAttribute('aria-disabled')).toBe('true');
     expect(rate?.getAttribute('aria-pressed')).toBe('false');
     expect(rate?.hasAttribute('disabled')).toBe(false); // stays focusable
-    expect(rate?.getAttribute('title')).toBe(REASON);
+    expect(rate?.hasAttribute('title')).toBe(false);
+    expect(tooltipText(rate)).toBe(REASON);
     const describedBy = rate?.getAttribute('aria-describedby') ?? '';
     expect(document.getElementById(describedBy)?.textContent).toBe(REASON);
     act(() => rate?.focus());

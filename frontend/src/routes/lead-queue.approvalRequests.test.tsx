@@ -20,7 +20,6 @@ import type { ApprovalRequestList } from '../types/approvalRequests';
 import type { LeadTableApprovalRequests } from '../components/mortgage/LeadTable.types';
 import { installLocalStorage } from '../test/installLocalStorage';
 import { mount } from '../test/render';
-import { clearSingleKeyShortcutsPreference } from '../lib/keymapPreference';
 import { approvalRequestsApi } from '../lib/apiClients/approvalRequests';
 import { deriveApprovalRequests, useLeadQueueApprovalRequests } from './lead-queue.approvalRequests';
 
@@ -47,7 +46,8 @@ vi.mock('../components/AppContext', () => ({
   }),
 }));
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   api: {
     draftOutreach: (...args: unknown[]) => draftOutreach(...args),
     reject: (...args: unknown[]) => reject(...args),
@@ -56,7 +56,6 @@ vi.mock('../lib/api', () => ({
     auditReceipt: () => new Promise(() => {}),
     salesTeam: () => Promise.resolve({ members: [] }),
   },
-  ApiError: class extends Error {},
   isAbortError: () => false,
   isWarmingUpError: () => false,
 }));
@@ -167,7 +166,6 @@ async function expandRow(id: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   installLocalStorage();
-  clearSingleKeyShortcutsPreference();
   app.state = { canApprove: false, sessionStatus: 'ready', approvals: {} };
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   reject.mockResolvedValue({ rejected: true, audit_event_id: 'audit-r' });

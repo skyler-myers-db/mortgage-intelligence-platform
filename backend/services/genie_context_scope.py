@@ -69,9 +69,11 @@ log = logging.getLogger(__name__)
 
 #: Segment code -> the lower-cased registry name a template interpolates (the
 #: phase-1 ``genieContext.segmentPhrase`` rule: title case reads as a person
-#: name to the prose heuristic). Parity-tested against ``segmentMetadata.ts``.
+#: name to the prose heuristic), or the ``segmentPhraseByCode`` override of
+#: genieContextTemplates.json (itm: "in-the-money", critic-11). Parity-tested
+#: against ``segmentMetadata.ts`` plus that override.
 SEGMENT_PHRASES: Final[Mapping[str, str]] = {
-    "itm": "prime refi candidates",
+    "itm": "in-the-money",
     "listed": "listed for sale",
     "permit": "heloc intent",
     "investor": "investor / multi-property",

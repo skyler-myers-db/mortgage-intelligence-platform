@@ -8,6 +8,10 @@ from databricks.sdk.service.sql import (
     WarehouseAccessControlRequest,
     WarehousePermissionLevel,
 )
+from tools.databricks.install_scope import (
+    active_install_suffix,
+    assert_warehouse_revokes_owned,
+)
 
 _LEVEL_RANK = {
     "CAN_VIEW": 1,
@@ -106,8 +110,14 @@ def converge_exact_can_use(
     warehouse_id: str,
     service_principal: str,
     effective_group_names: set[str],
+    install_suffix: str | None = None,
 ) -> None:
     """Grant exact direct CAN_USE and remove direct access to every other warehouse.
+
+    With a non-empty install suffix (the isolated CI staging install; read
+    from BUNDLE_VAR_install_suffix unless given), it first refuses, with exit
+    2 and no mutation, when the identity holds access on a warehouse this
+    install does not own (tools/databricks/install_scope.py).
 
     The workspace-visible group postflight is intentionally not described as an
     authoritative identity proof. Automatic identity management can hide nested
@@ -118,9 +128,15 @@ def converge_exact_can_use(
     if not target:
         raise ValueError("warehouse_id is required")
 
-    listed_ids = {_warehouse_id(warehouse) for warehouse in client.warehouses.list()}
+    listed = {_warehouse_id(warehouse): str(getattr(warehouse, "name", "") or "") for warehouse in client.warehouses.list()}
+    listed_ids = set(listed)
     if target not in listed_ids:
         raise RuntimeError(f"target SQL warehouse {target!r} was not returned by the workspace")
+    suffix = active_install_suffix() if install_suffix is None else install_suffix
+    if suffix:
+        assert_warehouse_revokes_owned(
+            client, warehouses=listed, target=target, service_principal=service_principal, suffix=suffix
+        )
 
     for candidate_id in sorted(listed_ids - {target}):
         permissions = client.warehouses.get_permissions(candidate_id)

@@ -24,6 +24,7 @@
        (a third only within a few px of the floor at Linux text widths), so
        beside the title they stay about two lines deep, and a row narrower
        than that moves them onto their own line under the title. */
+@layer routes {
 .proto-hero__actions:has(> .b360-export-pdf) {
   flex: 1 1 0;
   flex-wrap: wrap;
@@ -38,4 +39,5 @@
   .proto-hero__actions:has(> .b360-export-pdf) {
     justify-content: flex-start;
   }
+}
 }

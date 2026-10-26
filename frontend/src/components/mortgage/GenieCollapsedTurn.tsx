@@ -2,7 +2,6 @@ import { useId, type ReactNode } from 'react';
 import type { GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
 import { answerDigest } from '../../lib/genieAnswerText';
-import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
 import { stripQuestionRestatement } from './GenieAnswer.markdown';
 import './GenieAnswerReading.css';
 
@@ -39,7 +38,7 @@ export function GenieCollapsedTurn({
   children: ReactNode;
 }) {
   const digestId = useId();
-  const cleaned = payload.answer ? normalizeGenieAnswerLanguage(stripQuestionRestatement(payload.answer)) : '';
+  const cleaned = payload.answer ? stripQuestionRestatement(payload.answer) : '';
   const describedBy = [questionId, expanded ? null : digestId].filter(Boolean).join(' ');
   return (
     <div className={`genie-collapse${expanded ? ' is-expanded' : ''}`}>

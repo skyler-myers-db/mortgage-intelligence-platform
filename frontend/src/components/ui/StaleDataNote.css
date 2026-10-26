@@ -4,6 +4,7 @@
  * deviation:stale-data-note. Colocated: it ships with the routes and the map
  * chunk that render it, never in the initial stylesheet.
  */
+@layer routes {
 .stale-note {
   margin: 0;
   white-space: normal;
@@ -18,6 +19,18 @@
   margin-block-start: var(--sp-1);
   max-inline-size: calc(var(--sp-16) * 5);
 }
+/* Under the Analytics filter row (routes/analytics.tsx), between it and the
+   tab's first panel: the grid gap below as well as above (W5e: it sat flush
+   on the KPI row). Block-level, so the gap is the margin alone, with no line
+   box strut, and it collapses with a first panel's own top margin
+   (Economics, Geography) instead of doubling. Here and not in
+   10-native-analytics.css: that partial cascades in the components layer,
+   under this layer's `.stale-note { margin: 0 }`. */
+.analytics-filters + .stale-note {
+  display: flex;
+  inline-size: fit-content;
+  margin-block-end: var(--gap-grid);
+}
 /* Beside a header (Segment Intelligence's ranked table, next to FetchedAt):
    one chip-high line that gives way before its neighbours, so the header
    row never grows; the visible label ellipsizes, the full sentence stays in
@@ -30,3 +43,4 @@
 }
 .inline-flex:has(> .stale-note--compact) { max-inline-size: 100%; }
 .inline-flex:has(> .stale-note--compact) > :not(.stale-note--compact) { flex: none; }
+}

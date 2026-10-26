@@ -1,8 +1,172 @@
 /* Chart kit (components/charts; 2026-09-21 audit dataviz-07 step 2,
    dataviz-10). App-extension BEM: the prototype draws no charts beyond its
    KPI sparklines, so the frame is new; its axes, grid and tooltip reuse the
-   `.analytics-chart__*` chrome of 10-native-analytics.css. Tokens only.
+   `.analytics-chart__*` chrome, which opens this sheet. Tokens only.
    Lazy: ChartFrame.tsx is the one importer. */
+@layer components {
+/* The `.analytics-chart*` chrome, verbatim from 10-native-analytics.css
+   (css-05 / bundle-06): every consumer (CountChart, GenieLineChart,
+   GenieBarChart, the rate window and the equity scatter through
+   analytics.charts) renders inside ChartFrame, so it loads with this lazy
+   kit sheet instead of the initial one. It keeps the components layer it
+   cascaded in (cssLayerMap.ts COMPONENTS_BLOCKS), so the lazy analytics
+   sheets that override it (analytics.scatter.css's container rules) still
+   win whatever order the chunks load in, and the kit's own routes rules
+   after it still win as well. */
+.analytics-chart,
+.analytics-scatter-wrap {
+  position: relative;
+  --analytics-chart-h: calc(var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-12));
+  min-height: var(--analytics-chart-h);
+  padding-inline-start: var(--sp-10);
+}
+.analytics-scatter-wrap {
+  --analytics-chart-h: calc(var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16) + var(--sp-16));
+}
+.analytics-chart__plot {
+  display: grid;
+  grid-template-columns: minmax(var(--sp-16), calc(var(--sp-16) + var(--sp-4))) minmax(0, 1fr);
+  gap: var(--sp-3);
+  min-height: var(--analytics-chart-h);
+}
+.analytics-chart__canvas {
+  position: relative;
+  min-width: 0;
+  min-height: var(--analytics-chart-h);
+  padding-block-end: var(--sp-6);
+}
+/* The y-tick column is exactly the plot's height, top-aligned, so each label
+   and its gridline share one --tick-pos space (dataviz-07). Stretched to the
+   canvas row, it took the x-tick band below the plot as well, and a label
+   landed up to about 30px below its gridline on the kit charts, the equity
+   scatter and the rate window's in-the-money panel. */
+.analytics-chart__y-ticks {
+  position: relative;
+  align-self: start;
+  block-size: var(--analytics-chart-h);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  font-weight: 700;
+  z-index: var(--z-raised);
+}
+.analytics-chart__x-ticks {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: 0;
+  min-block-size: var(--sp-5);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  font-weight: 700;
+}
+.analytics-chart__tick {
+  position: absolute;
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+}
+.analytics-chart__tick--y {
+  inset-inline-end: 0;
+  inset-block-start: var(--tick-pos);
+  transform: translateY(-50%);
+  inline-size: 100%;
+  padding-inline-end: var(--sp-2);
+  text-align: end;
+}
+.analytics-chart__tick--x {
+  inset-inline-start: var(--tick-pos);
+  inset-block-start: var(--sp-1);
+  transform: translateX(-50%);
+}
+.analytics-line-chart,
+.analytics-scatter {
+  width: 100%;
+  height: var(--analytics-chart-h);
+  overflow: hidden;
+}
+.analytics-chart__grid {
+  stroke: var(--line-1);
+}
+/* Pointer hover readout for the distribution line charts (Rate Spread,
+   Opportunity Score). The layer itself is transparent and aria-hidden; the
+   crosshair, dot, and tip are positioned in the same 0-100 percent space the
+   `preserveAspectRatio="none"` SVG uses, so they track the line at any
+   container width. */
+.analytics-chart__hover {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 0;
+  block-size: var(--analytics-chart-h);
+}
+.analytics-chart__crosshair,
+.analytics-chart__hover-dot,
+.analytics-chart__tip {
+  position: absolute;
+  inset-inline-start: var(--hover-x);
+  pointer-events: none;
+}
+.analytics-chart__crosshair {
+  inset-block: 0;
+  inline-size: 1px;
+  background: var(--line-2);
+}
+.analytics-chart__hover-dot,
+.analytics-chart__tip { inset-block-start: var(--hover-y); }
+.analytics-chart__hover-dot {
+  inline-size: var(--sp-2);
+  block-size: var(--sp-2);
+  border-radius: var(--r-pill);
+  background: var(--accent-data);
+  border: 1px solid var(--bg-1);
+  transform: translate(-50%, -50%);
+}
+.analytics-chart__tip {
+  transform: translate(var(--sp-3), calc(-100% - var(--sp-2)));
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-md);
+  white-space: nowrap;
+  z-index: var(--z-raised);
+}
+/* Past ~60% of the plot width the tip would overflow the surface; flip it to
+   the left of the crosshair instead. */
+.analytics-chart__tip--flip {
+  transform: translate(calc(-100% - var(--sp-3)), calc(-100% - var(--sp-2)));
+}
+.analytics-chart__tip-x {
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+.analytics-chart__tip-y { color: var(--text-2); font-size: var(--fs-11); }
+.analytics-line-chart polyline {
+  fill: none;
+  stroke: var(--accent-data);
+  stroke-width: 2.4;
+}
+.analytics-chart__axis {
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+.analytics-chart__axis--x {
+  text-align: center;
+  margin-top: var(--sp-2);
+}
+.analytics-chart__axis--y {
+  position: absolute;
+  inset: 50% auto auto 0;
+  transform: translateY(-50%) rotate(-90deg);
+  transform-origin: left center;
+}
+}
+@layer routes {
 .chart-frame {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -87,6 +251,8 @@
   transform: translateX(calc(-100% - var(--sp-1)));
 }
 
+}
+@layer modes {
 /* Forced colours (a11y-10 / responsive-v3): bins are non-text data marks,
    so they keep their encoding in system colours. Past = solid CanvasText;
    the rest = Canvas with a CanvasText edge; the rule stays CanvasText. */
@@ -103,4 +269,5 @@
     forced-color-adjust: none;
     stroke: CanvasText;
   }
+}
 }

@@ -43,6 +43,28 @@ export const FORMATTING_BAN = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// One name for the economic-incentive rule (2026-09-21 audit critic-11,
+// D-platform-process-g step 2): "In the Money". The retired variants ("Prime
+// Refi ...", "refi(nance) economics", "refi screen") are banned in string
+// literals, template text and JSX text; src/lib/lexicon.ts is their only home
+// (as input aliases). src/lib/lexiconBan.test.ts proves the selectors bite.
+const LEXICON_RE = String.raw`/\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b|\brefi(?:nance)?[- ]candidates?\b/i`;
+const LEXICON_MESSAGE =
+  "Retired name for the In the Money rule. Use LEXICON.inTheMoney from src/lib/lexicon.ts ('In the Money', 'in the money', 'in-the-money', 'In the Money rule').";
+export const LEXICON_BAN = [
+  { selector: `Literal[value=${LEXICON_RE}]`, message: LEXICON_MESSAGE },
+  { selector: `TemplateElement[value.raw=${LEXICON_RE}]`, message: LEXICON_MESSAGE },
+  { selector: `JSXText[value=${LEXICON_RE}]`, message: LEXICON_MESSAGE },
+];
+
+// Files that still hold a retired variant because another W5e lane renames
+// them in parallel (each merges before w5-lexicon-copy). SHRINK-ONLY:
+// lexiconBan.test.ts fails when an entry no longer reproduces a hit. Emptied
+// by the integrator at the w5-lexicon-copy merge (2026-10-15); the export
+// stays because lexiconBan.test.ts reads it. Never add an entry.
+export const LEXICON_PENDING = {};
+
 // Files that still carry a banned call, each with why.
 // SHRINK-ONLY: src/lib/formattingBan.test.ts fails when an entry no longer
 // reproduces a violation, so a file that is migrated leaves this list in the
@@ -52,51 +74,32 @@ export const FORMATTING_BAN = [
 // now; the export stays because formattingBan.test.ts reads it.
 export const FORMATTING_ALLOWLIST = {};
 
-// Files where react-hooks/set-state-in-effect is already an error (see the
-// block after the main config). Grow it as files leave effect-driven state.
-export const SET_STATE_IN_EFFECT_SCOPE = [
-  "src/components/mortgage/useLeadApprovalActions.ts",
-  "src/components/mortgage/useLeadSalesActions.ts",
-  "src/components/mortgage/ApprovalBanner.tsx",
-  "src/components/mortgage/GenieHistoryMenu.tsx",
-  "src/routes/lead-queue.tsx",
-  "src/lib/mutations/*.ts",
-  // Wave 3 queue-place: new hooks born on the query layer.
-  "src/components/mortgage/useLeadBulkRun.ts",
-  "src/components/mortgage/useLeadTableScroll.ts",
-  "src/components/mortgage/LeadTable.selection.ts",
-  // Wave 4a error-surfaces: the shared async-state surfaces and the queue's
-  // version poll, born without effect-driven state (each proven with
-  // `eslint --rule 'react-hooks/set-state-in-effect: error'`, zero hits).
-  "src/routes/lead-queue.freshness.tsx",
-  "src/components/ui/AsyncState.tsx",
-  "src/components/ui/EmptyState.tsx",
-  "src/components/ui/FetchedAt.tsx",
-  "src/components/ui/RetryClock.tsx",
-  "src/lib/queueVersion.ts",
-  // Wave 4b workflow: Offer and Portfolio on the query layer, the queue pager
-  // and the Field primitive (each proven with the rule at error, zero hits).
-  "src/routes/offer-orchestrator.tsx",
-  "src/routes/offer-orchestrator.queries.ts",
-  "src/routes/offer-orchestrator.sales-team.ts",
-  "src/routes/portfolio-builder.tsx",
-  "src/routes/portfolio-builder.governance.tsx",
-  "src/routes/portfolio-builder.campaign-setup.tsx",
-  "src/components/mortgage/QueuePager.tsx",
-  "src/components/ui/Field.tsx",
-  // Wave 4b genie-client: the named set (GenieChat.tsx stays out: its open
-  // effect still sets state).
-  "src/components/mortgage/GenieAnswerFeedback.tsx",
-  "src/components/layout/GenieDock.tsx",
-  "src/routes/ask-genie.deep-link.tsx",
-  // Wave 4b lead-queue: the modules it created (each proven at error, zero
-  // hits; the lane named none, so the integrator proved them at merge).
-  "src/components/mortgage/LeadBulkRunFallback.tsx",
-  "src/components/mortgage/LeadTable.rowCallbacks.ts",
-  "src/components/mortgage/LeadTableBody.tsx",
-  "src/components/mortgage/leadWriteFailureToast.ts",
-  "src/components/mortgage/useTableScrollClearance.ts",
-];
+// react-hooks/set-state-in-effect is an ERROR for production sources repo-wide
+// (audit quality-10 step 4 / stack-09 item 5, W5e): a synchronous setState in
+// an effect body renders twice for one change. Derive the value during
+// render, or set state from an event, a callback or a subscription.
+// SHRINK-ONLY: the files that still carried a hit on the W5e base, each
+// with the W5e lane that held it (w5-compiler-lint for the residual
+// partition). The W5e lanes are done: the 13 that remain belong to the
+// post-W5 lint-depth burn-down (report 12.3, w5-compiler-lint row); the
+// values keep the w5- shape setStateInEffectScope.test pins. src/lib/setStateInEffectScope.test.ts fails when an entry no
+// longer reproduces a hit, so a fixed file leaves this list in the same
+// change. Never add an entry: fix the effect.
+export const SET_STATE_IN_EFFECT_PENDING = {
+  "src/components/AppContext.tsx": "w5-compiler-lint (residual partition)",
+  "src/components/activation/ActivationLoopPanel.tsx": "w5-compiler-lint",
+  "src/components/feedback/Toaster.tsx": "w5-compiler-lint",
+  "src/components/mortgage/EvidenceDrawer.tsx": "w5-compiler-lint (residual partition)",
+  "src/components/mortgage/GenieChat.tsx": "w5-compiler-lint",
+  "src/components/mortgage/GenieProgress.tsx": "w5-compiler-lint (residual partition)",
+  "src/components/mortgage/GenieRefusalCard.tsx": "w5-compiler-lint",
+  "src/components/mortgage/TriageDeck.tsx": "w5-compiler-lint (residual partition)",
+  "src/components/mortgage/useGenieWindow.ts": "w5-compiler-lint (residual partition)",
+  "src/components/ui/useMenuPlacement.ts": "w5-compiler-lint (residual partition)",
+  "src/hooks/useRoutePending.ts": "w5-compiler-lint (residual partition)",
+  "src/routes/admin-config.tsx": "w5-lexicon-copy",
+  "src/routes/ask-genie.tsx": "w5-compiler-lint",
+};
 
 /** Fixture harness files may import TYPES from frontend/src, never runtime code. */
 const FIXTURE_SRC_TYPE_ONLY = {
@@ -105,9 +108,52 @@ const FIXTURE_SRC_TYPE_ONLY = {
   message: "Fixture harness files may only `import type` from frontend/src.",
 };
 
+// ---------------------------------------------------------------------------
+// The title= ban (2026-09-21 audit critic-08). A native title is mouse-only:
+// it appears late, in OS chrome outside the design system, never on keyboard
+// focus or touch, and cannot show a shortcut, so the facts a reviewer needs
+// were effectively hidden. ui/Tooltip (and the Chip/Button `tooltip` prop)
+// replaces it. The second selector catches the five components that forward
+// `title` to the DOM. SVG <title> ELEMENTS and an iframe's required title are
+// untouched; other components' `title` props (PageShell, SectionHeader, ...)
+// are their own API and are caught where they render. Pinned by
+// src/lib/titleBan.test.ts; tools/lint_depth_probe.mjs embeds a copy.
+export const TITLE_BAN = [
+  {
+    selector: "JSXOpeningElement[name.name=/^[a-z]/]:not([name.name='iframe']) > JSXAttribute[name.name='title']",
+    message:
+      'A native title= is mouse-only, appears late in OS chrome and never on keyboard focus or touch (audit critic-08). Use <Tooltip> (ui/Tooltip), or the Chip/Button `tooltip` prop. An icon-only control also needs an aria-label.',
+  },
+  {
+    selector: "JSXOpeningElement[name.name=/^(Chip|Button|EvidenceChip|Link|NavLink)$/] > JSXAttribute[name.name='title']",
+    message:
+      'This component renders `title` as a native DOM title. Use the `tooltip` prop (Chip, Button), rely on the evidence hover card (EvidenceChip), or wrap the Link in <Tooltip>.',
+  },
+];
+
+// Files that still carry a title= site, each '<owner lane> - <n> sites - <why>'.
+// SHRINK-ONLY: src/lib/titleBan.test.ts fails when an entry no longer
+// reproduces a TITLE_BAN hit, so a migrated file leaves this list in the same
+// change. Never add an entry: migrate the call site (the R1-R6 rules in
+// docs/testing.md "Lint depth"). The override block below keeps
+// FORMATTING_BAN on for these files; it never turns the rule off.
+export const TITLE_BAN_ALLOWLIST = {};
+
+// Typed lint (2026-09-21 audit quality-10 step 2, stack-07): three
+// type-aware rules over production source, at their default options (no
+// checksVoidReturn exemption). Pre-existing hits in files other W5e lanes own
+// live in frontend/eslint-suppressions.json, ESLint's native bulk
+// suppressions: shrink-only (an unused entry fails `eslint .`), pinned by
+// src/test/eslintSuppressions.test.ts.
+export const TYPED_LINT_RULES = {
+  "@typescript-eslint/no-floating-promises": "error",
+  "@typescript-eslint/no-misused-promises": "error",
+  "@typescript-eslint/no-base-to-string": "error",
+};
+
 export default [
   {
-    ignores: ["dist", "node_modules", "*.config.*", "tsconfig.tsbuildinfo"],
+    ignores: ["dist", "bundle-analyze", "node_modules", "*.config.*", "tsconfig.tsbuildinfo"],
   },
   {
     files: ["src/**/*.{ts,tsx}"],
@@ -134,15 +180,8 @@ export default [
     rules: {
       ...tsPlugin.configs.recommended.rules,
       ...reactHooks.configs["recommended-latest"].rules,
-      // The current route layer still has legitimate external-system sync
-      // effects while the remaining query-layer migration is in progress.
-      // Keep compiler-safety rules on, but do not fail CI on this advisory
-      // rule until those effects are converted to query/mutation ownership.
-      // TODO(2026-07-15, audit P2-14): re-enable after the post-Summit
-      // query-layer migration (tracked in docs/modernization-todo.md
-      // alongside the LeadTable/analytics 'use no memo' pragmas — same
-      // root cause, same removal slice).
-      "react-hooks/set-state-in-effect": "off",
+      // See SET_STATE_IN_EFFECT_PENDING above (test files: the block below).
+      "react-hooks/set-state-in-effect": "error",
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
       // Re-audit #4 (2026-06-12): the Portfolio Builder save used to call
       // window.prompt() — a synchronous native dialog that froze the
@@ -165,18 +204,21 @@ export default [
       ],
     },
   },
-  // The files the query-layer migration has converted (wave 2, audit
-  // stack-09): their writes run on useMutation and their reads on useQuery,
-  // so a synchronous setState in an effect body is a regression here. The
-  // repo-wide flip (and the TODO above) is wave-5 lint-depth work.
-  // src/lib/setStateInEffectScope.test.ts pins exactly this scope.
+  // react-hooks/set-state-in-effect gates production code only: a test's
+  // harness component may drive state from an effect. The pending files
+  // (SET_STATE_IN_EFFECT_PENDING) stay off until their owners fix them;
+  // src/lib/setStateInEffectScope.test.ts pins both.
   {
-    files: SET_STATE_IN_EFFECT_SCOPE,
-    ignores: ["src/**/*.test.{ts,tsx}"],
+    files: ["src/**/*.test.{ts,tsx}"],
     rules: {
-      "react-hooks/set-state-in-effect": "error",
+      "react-hooks/set-state-in-effect": "off",
     },
   },
+  // An empty `files` array throws in @eslint/config-array, so the override
+  // exists only while the pending list has an entry.
+  ...(Object.keys(SET_STATE_IN_EFFECT_PENDING).length
+    ? [{ files: Object.keys(SET_STATE_IN_EFFECT_PENDING), rules: { "react-hooks/set-state-in-effect": "off" } }]
+    : []),
   // Credential-free e2e fixture harness. Linted at the same bar as src, and
   // it may import TYPES from src (so fixtures are checked against the app's
   // own response contracts) but never runtime code: the harness must drive
@@ -301,13 +343,20 @@ export default [
               group: ["**/test/*"],
               message: "Production code must not import from src/test: those helpers are test-only.",
             },
+            // The e2e fixture data and wire bases (W5e w5-wire-types B3).
+            {
+              group: ["**/tests/**"],
+              message: "Production code must not import e2e fixture data: no mock fallback in the running app.",
+            },
           ],
         },
       ],
     },
   },
-  // The formatting contract (see FORMATTING_BAN above). Tests and test
-  // helpers may build expected strings however they like.
+  // The formatting contract (see FORMATTING_BAN above) and the lexicon (see
+  // LEXICON_BAN). Tests and test helpers may build expected strings however
+  // they like. Flat-config rule options REPLACE each other, so every block
+  // below restates the bans that still apply to its files.
   {
     files: ["src/**/*.{ts,tsx}"],
     ignores: [
@@ -315,15 +364,57 @@ export default [
       "src/mocks/**",
       "src/test/**",
       ...FORMATTING_HOMES,
+      "src/lib/lexicon.ts",
+      ...Object.keys(LEXICON_PENDING),
     ],
     rules: {
-      "no-restricted-syntax": ["error", ...FORMATTING_BAN],
+      "no-restricted-syntax": ["error", ...FORMATTING_BAN, ...LEXICON_BAN, ...TITLE_BAN],
     },
   },
+  // The lexicon home and the pending files: the formatting contract and the
+  // title ban.
+  {
+    files: ["src/lib/lexicon.ts", ...Object.keys(LEXICON_PENDING)],
+    rules: {
+      "no-restricted-syntax": ["error", ...FORMATTING_BAN, ...TITLE_BAN],
+    },
+  },
+  // The formatting homes: the lexicon and the title ban.
+  {
+    files: FORMATTING_HOMES,
+    rules: {
+      "no-restricted-syntax": ["error", ...LEXICON_BAN, ...TITLE_BAN],
+    },
+  },
+  // TITLE_BAN_ALLOWLIST files keep every other restricted-syntax ban (the
+  // formatting contract and the lexicon): flat-config options replace rather
+  // than merge, so the override restates the array without TITLE_BAN. Never
+  // 'off'. Guarded like the formatting override below: an empty `files`
+  // array throws.
+  ...(Object.keys(TITLE_BAN_ALLOWLIST).length
+    ? [
+        {
+          files: Object.keys(TITLE_BAN_ALLOWLIST),
+          ignores: ["src/**/*.test.{ts,tsx}"],
+          rules: { "no-restricted-syntax": ["error", ...FORMATTING_BAN, ...LEXICON_BAN] },
+        },
+      ]
+    : []),
   // An empty `files` array throws in @eslint/config-array ("Expected value
   // to be a non-empty array") and would break ALL lint, so the override
-  // exists only while the allowlist has an entry.
+  // exists only while the allowlist has an entry. An allowlisted file keeps
+  // the lexicon and title bans.
   ...(Object.keys(FORMATTING_ALLOWLIST).length
-    ? [{ files: Object.keys(FORMATTING_ALLOWLIST), rules: { "no-restricted-syntax": "off" } }]
+    ? [{ files: Object.keys(FORMATTING_ALLOWLIST), rules: { "no-restricted-syntax": ["error", ...LEXICON_BAN, ...TITLE_BAN] } }]
     : []),
+  // Typed lint (see TYPED_LINT_RULES). projectService resolves each file's
+  // program from tsconfig.json; tests, src/test and src/mocks stay untyped.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/**/*.test.{ts,tsx}", "src/test/**", "src/mocks/**"],
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+    },
+    rules: { ...TYPED_LINT_RULES },
+  },
 ];

@@ -25,8 +25,6 @@ import { installLocalStorage } from '../../test/installLocalStorage';
 import { useApp } from '../AppContext';
 import { AppShell } from './AppShell';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * The only removals of the seeded Genie in-flight record this suite may see
  * are the identity boundary's. Since wave 4b, GenieDock resumes a

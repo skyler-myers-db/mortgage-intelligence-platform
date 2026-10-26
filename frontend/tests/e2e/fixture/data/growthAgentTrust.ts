@@ -26,6 +26,7 @@ import type {
   GrowthAgentSchedulerState,
   GrowthAgentWatchlistSummaryResponse,
 } from '../../../../src/types/growthAgent';
+import type { ApiResponse } from '../../../../src/types/api.gen';
 import type { ContractSample } from '../contractSamples';
 import type { MockApi } from '../mockApi';
 import { growthRunFixture } from './askGenieRoute';
@@ -50,7 +51,7 @@ const HASH = 'd'.repeat(64);
 
 /** Screen, gate, then hand off for review: the run stops at step 3. */
 export const REVIEWED_PLAN: ComposedPlan = {
-  objective_summary: 'Screen prime refinance economics, gate to eligible leads, then hand off for review.',
+  objective_summary: 'Screen in-the-money refinance, gate to eligible leads, then hand off for review.',
   steps: [
     { step_id: 'step-1', tool: 'fn_build_cohort', params: { states: [] }, rationale: 'Count the broad borrower cohort.' },
     {
@@ -208,6 +209,88 @@ export function plannedRun(): GrowthAgentRunResponse {
   };
 }
 
+/**
+ * POST /agent/run when no reviewed workflow matched: the read-only live
+ * analysis (growth_agent_live_analysis.py). Typed with the generated
+ * presence view, so every key the server serializes is here: no monitor, no
+ * audit_event_id (the analysis writes no run-ledger row), a 32-hex result
+ * hash, and the 'No state written' policy check. It can never be saved as a
+ * watchlist (isSavableGrowthRun).
+ */
+export const LIVE_ANALYSIS_RUN = {
+  workflow: {
+    id: 'live_analysis',
+    title: 'Live analysis',
+    objective: 'Summarize the refreshed coverage by state.',
+    trigger_label: 'No reviewed workflow matched; the live space analyzed the objective itself.',
+    action_label: 'Review the governed analysis; no state was written.',
+    source_assets: [BORROWER_360],
+    proof_points: [
+      "Every figure comes from Genie's own governed SQL over trusted assets.",
+      'The full answer, generated SQL, and process trace are in Ask Genie.',
+    ],
+    default_route: '/ask-genie',
+    cadence_options: ['daily', 'weekly'],
+  },
+  run_id: '1a2b3c4d-5e6f-4a0b-8c1d-2e3f4a5b6c7d',
+  monitor: null,
+  specialist_agent: 'structured_data_agent',
+  execution_mode: 'genie_conversation',
+  trace_kind: 'genie_conversation',
+  planner_label: 'Live Genie analysis (read-only fallback)',
+  trace_id: 'agent-trace-0f1e2d3c-4b5a-4968-8776-655443322110',
+  tool_result_hash: 'e'.repeat(32),
+  actionable_cohort_fingerprint: null,
+  actionable_snapshot_id: null,
+  broad_label: 'Broad opportunity',
+  actionable_label: 'Eligible subset',
+  broad_total: 6,
+  actionable_total: 0,
+  broad_avg_score: null,
+  actionable_avg_score: null,
+  avg_rate_spread_bps: null,
+  avg_equity_pct: null,
+  route: '/ask-genie',
+  criteria: { prompt: 'Summarize the refreshed coverage by state.' },
+  source_assets: [BORROWER_360],
+  tool_steps: [
+    {
+      label: 'live',
+      status: 'completed',
+      detail: 'The objective ran as a governed live Genie analysis.',
+      source_asset: null,
+      tool_name: null,
+      result_hash: null,
+    },
+  ],
+  policy_checks: [
+    { label: 'Prompt guard battery', status: 'passed', detail: 'Fair-lending, PII, scope, and injection screens cleared.' },
+    { label: 'Governed answer pipeline', status: 'passed', detail: 'SQL trust policy, claims verification, and PII redaction applied.' },
+    { label: 'No state written', status: 'passed', detail: 'Read-only analysis; campaigns, monitors, and Lead Queue were not modified.' },
+  ],
+  governance_chips: [],
+  interpreted_intent: 'Read-only live analysis (no reviewed workflow matched).',
+  agent_reasoning: 'Six states hold governed rows in the current refresh.',
+  genie_conversation_id: 'fixture-conversation-live-0001',
+  genie_message_id: 'fixture-message-live-0001',
+  genie_question_hash: HASH,
+  genie_sql_hash: null,
+  genie_row_count: null,
+  genie_trusted_assets: [],
+  audit_event_id: null,
+  created_at: null,
+} satisfies ApiResponse<'GrowthAgentRunResponse'>;
+
+/** Register POST /agent/run answering the live analysis, recording every body. */
+export function registerLiveAnalysisRun(mockApi: MockApi): { readonly runBodies: GrowthAgentPromptRunRequest[] } {
+  const runBodies: GrowthAgentPromptRunRequest[] = [];
+  mockApi.register<GrowthAgentRunResponse>('POST', AGENT_RUN_PATTERN, (request) => {
+    runBodies.push(request.body as GrowthAgentPromptRunRequest);
+    return { body: LIVE_ANALYSIS_RUN };
+  });
+  return { runBodies };
+}
+
 /** POST /runs/:runId/monitors 200: the watchlist built from the stored run. */
 export function saveReply(run: GrowthAgentRunResponse = plannedRun(), cadence: GrowthAgentMonitor['cadence'] = 'daily'): GrowthAgentMonitor {
   return {
@@ -343,6 +426,7 @@ export function contractSamples(): ContractSample[] {
     post('PLAN_CONFLICT', EXECUTE_PATTERN, PLAN_CONFLICT, 409),
     { source: 'RUNS_LIST', method: 'GET', pattern: RUNS_PATTERN, path: RUNS_PATTERN, query: 'limit=20', status: 200, body: RUNS_LIST },
     { source: 'plannedRun()', method: 'POST', pattern: AGENT_RUN_PATTERN, path: AGENT_RUN_PATTERN, query: '', status: 200, body: plannedRun() },
+    { source: 'LIVE_ANALYSIS_RUN', method: 'POST', pattern: AGENT_RUN_PATTERN, path: AGENT_RUN_PATTERN, query: '', status: 200, body: LIVE_ANALYSIS_RUN },
     { ...post('saveReply()', RUN_SAVE_PATTERN, saveReply()), path: RUN_SAVE_PATTERN.replace(':runId', CONTRACT_RUN_ID) },
     { ...post('SAVE_CONFLICT', RUN_SAVE_PATTERN, SAVE_CONFLICT, 409), path: RUN_SAVE_PATTERN.replace(':runId', CONTRACT_RUN_ID) },
     { source: 'WATCHLIST_SUMMARY', method: 'GET', pattern: WATCHLIST_SUMMARY_PATTERN, path: WATCHLIST_SUMMARY_PATTERN, query: 'limit=20', status: 200, body: WATCHLIST_SUMMARY },

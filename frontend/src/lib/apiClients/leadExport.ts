@@ -1,3 +1,4 @@
+import type { ApiRequest } from '../../types/api.gen';
 /**
  * Audited Lead Queue CSV export: the receipt contract and the two digests the
  * browser computes before it asks for one (audit tables-08, wave 1a).
@@ -16,23 +17,7 @@ export interface LeadExportPlanLike {
   rows: ReadonlyArray<{ borrower_id: string }>;
 }
 
-export interface LeadExportReceiptRequest {
-  scope: LeadExportScope;
-  row_count: number;
-  /** SHA-256 (hex) of the exact CSV text handed to the download. */
-  csv_sha256: string;
-  /** Masked borrower ids in file order. */
-  borrower_ids: string[];
-  /** SHA-256 (hex) of `JSON.stringify(borrower_ids)`; verified server-side. */
-  borrower_ids_sha256: string;
-  /** The queue's query parameters (the CSV's `# filters=` line); fingerprinted server-side. */
-  filters: Record<string, string>;
-  /** How many borrowers matched (the CSV's `# matching_rows=` line); sent only when known. */
-  matching_row_count?: number;
-  /** The paged Lead Queue view the file was built from, and its loaded pages (client-declared). */
-  lead_view_id?: string;
-  pages_loaded?: number;
-}
+export type LeadExportReceiptRequest = ApiRequest<'LeadExportReceiptRequest'>;
 
 export interface LeadExportReceipt {
   audit_event_id: string;

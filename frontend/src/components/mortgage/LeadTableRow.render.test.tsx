@@ -8,8 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { LeadTableRow } from './LeadTableRow';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 vi.mock('../Primitives', () => ({
   Button: ({ children, ...props }: { children: ReactNode }) => <button {...props}>{children}</button>,
   Chip: ({ children }: { children: ReactNode }) => <span>{children}</span>,
@@ -305,12 +303,13 @@ describe('LeadTableRow numeric rendering', () => {
     vi.clearAllMocks();
   });
 
-  it('renders a below-market spread as -422, never +-422', () => {
+  it('renders a below-market spread as −422, never +−422', () => {
     renderRow({ rate_spread_bps: -422 }, true);
 
-    expect(document.body.textContent).toContain('-422');
-    expect(document.body.textContent).not.toContain('+-422');
-    expect(document.body.textContent).toContain('-422 bps');
+    expect(document.body.textContent).toContain('−422');
+    expect(document.body.textContent).not.toContain('+−422');
+    expect(document.body.textContent).not.toContain('-422');
+    expect(document.body.textContent).toContain('−422 bps');
   });
 
   it('renders an at-market spread without a sign', () => {
@@ -343,17 +342,20 @@ describe('LeadTableRow numeric rendering', () => {
     renderRow({ clip: 'clip_ref_d8b9f5890b66' });
 
     const cell = document.querySelector('.lead-table__clip');
-    // Ellipsis truncation is CSS; the title is what keeps the ref readable
-    // once it no longer wraps onto a second line.
-    expect(cell?.getAttribute('title')).toBe('clip_ref_d8b9f5890b66');
+    // Ellipsis truncation is CSS; the design-system tooltip (critic-08, no
+    // native title) is what keeps the ref readable once it no longer wraps.
+    expect(cell?.hasAttribute('title')).toBe(false);
+    const tip = cell?.getAttribute('data-tooltip');
+    expect(tip && document.getElementById(tip)?.textContent).toBe('clip_ref_d8b9f5890b66');
     expect(cell?.textContent).toBe('clip_ref_d8b9f5890b66');
   });
 
-  it('does not put an unavailable-ref placeholder in the title', () => {
+  it('does not put an unavailable-ref placeholder in a tooltip', () => {
     renderRow({ clip: '' });
 
     const cell = document.querySelector('.lead-table__clip');
     expect(cell?.getAttribute('title')).toBeNull();
+    expect(cell?.hasAttribute('data-tooltip')).toBe(false);
     expect(cell?.textContent).toBe('Property ref unavailable');
   });
 });

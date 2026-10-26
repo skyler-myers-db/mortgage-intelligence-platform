@@ -16,8 +16,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DrawerSource } from '../AppContext';
 import type { HomeSummary } from '../../types';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const setDrawer = vi.fn();
 let showEvidence = true;
 vi.mock('../AppContext', () => ({
@@ -29,6 +27,8 @@ vi.mock('../AppContext', () => ({
 const rate = vi.hoisted(() => ({
   data: null as unknown,
   error: null as Error | null,
+  isFetching: false,
+  dataUpdatedAt: null as number | null,
   calls: [] as Array<{ key: string; enabled: boolean }>,
 }));
 vi.mock('../../lib/useWarmingUpRetry', () => ({
@@ -39,9 +39,9 @@ vi.mock('../../lib/useWarmingUpRetry', () => ({
       warmingUp: null,
       error: rate.error,
       manualRetry: () => undefined,
-      isFetching: false,
+      isFetching: rate.isFetching,
       isPlaceholderData: false,
-      dataUpdatedAt: null,
+      dataUpdatedAt: rate.dataUpdatedAt,
       errorUpdatedAt: null,
     };
   },
@@ -54,7 +54,7 @@ const DELTA_SUMMARY: HomeSummary = {
   previous_visit_at: '2026-07-09T14:30:00+00:00',
   baseline_snapshot_at: '2026-07-09T06:00:00+00:00',
   headline:
-    'Since your last login: +1.5% high-opportunity, +2,250 refi candidates, +4,120 offers available.',
+    'Since your last login: +1.5% high-opportunity, +2,250 in-the-money borrowers, +4,120 offers available.',
   phrasing_source: 'deterministic',
   phrasing_fallback_reason: 'genie_not_configured',
   highlights: [
@@ -70,7 +70,7 @@ const DELTA_SUMMARY: HomeSummary = {
     },
     {
       measure: 'refi_economics_screen',
-      label: 'refi candidates',
+      label: 'in-the-money borrowers',
       display: '+2,250',
       value_token: '+2,250',
       current: 261400,
@@ -152,6 +152,8 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     showEvidence = true;
     rate.data = null;
     rate.error = null;
+    rate.isFetching = false;
+    rate.dataUpdatedAt = null;
     rate.calls = [];
   });
 
@@ -221,7 +223,7 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     };
     render(flat);
     expect(container.querySelector('.home-answer__trigger')?.textContent).toBe(
-      'no change in borrowers who pass the refi screen',
+      'no change in in-the-money borrowers',
     );
     expect(chips().map((chip) => chip.textContent)).toEqual(['no change']);
   });
@@ -231,7 +233,7 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     const [pct, count] = Array.from(container.querySelectorAll('.home-answer__trigger')).map((el) => el.textContent);
     // "+1.5% borrowers with ..." read as "1.5% of borrowers".
     expect(pct).toBe('+1.5% in borrowers with opportunity score 75+');
-    expect(count).toBe('+2,250 borrowers who pass the refi screen');
+    expect(count).toBe('+2,250 in-the-money borrowers');
   });
 
   it('first visit renders welcome copy, no delta language, no snapshot citation', () => {
@@ -310,13 +312,13 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     const rows = Array.from(container.querySelectorAll('.home-answer__trigger'));
     expect(rows).toHaveLength(4);
     expect(rows[0].getAttribute('data-testid')).toBe('why-now-rate-move');
-    expect(rows[0].textContent).toBe('-40 bps 30-year par rate since your last visit (from 6.70% to 6.30%)');
+    expect(rows[0].textContent).toBe('−40 bps 30-year par rate since your last visit (from 6.70% to 6.30%)');
     expect(rows[0].querySelector('a')?.getAttribute('href')).toBe('/analytics');
     act(() => chips()[0].click());
     const source = setDrawer.mock.calls[0][0] as DrawerSource;
     expect(source.assetPath).toBe('mip.gold.rate_window_weekly');
     expect(source.lineageFamily).toBe('rate_spread');
-    expect((source.signals ?? []).slice(0, 3).map((signal) => signal.value)).toEqual(['6.70%', '6.30%', '-40 bps']);
+    expect((source.signals ?? []).slice(0, 3).map((signal) => signal.value)).toEqual(['6.70%', '6.30%', '−40 bps']);
     expect((source.signals ?? [])[0].source).toContain('MORTGAGE30US');
   });
 
@@ -359,5 +361,27 @@ describe('LastLoginSummary (the answer band WHY NOW column)', () => {
     expect(triggerLink(0)).toBe('/lead-queue?purchase_intent=Listed+for+sale');
     expect(triggerLink(1)).toBe('/lead-queue?lender_relationship=Competitor+customer');
     expect(triggerLink(2)).toBe('/lead-queue?funnel_stage=offer_recommended');
+  });
+
+  // W5e w5-analytics (delivery-05, the W5a ruling): a rate window restored
+  // from the persisted snapshot is the last session's prints. No "since your
+  // last visit" row comes from it while its fresh read is in flight.
+  it('holds back the rate move from a restored window until its fresh read lands', () => {
+    rate.data = RATE_WINDOW;
+    rate.dataUpdatedAt = performance.timeOrigin - 3_600_000;
+    rate.isFetching = true;
+    render(DELTA_SUMMARY);
+    expect(container.querySelector('[data-testid="why-now-rate-move"]')).toBeNull();
+    // The triggers render as before.
+    expect(chips().map((chip) => chip.textContent)).toEqual(['+1.5%', '+2,250', '+4,120']);
+    // The fresh read lands (a fetch of this document): the row returns.
+    rate.isFetching = false;
+    rate.dataUpdatedAt = performance.timeOrigin + 1_000;
+    render(DELTA_SUMMARY);
+    expect(container.querySelector('[data-testid="why-now-rate-move"]')).not.toBeNull();
+    // A window this document fetched shows even while a refetch runs.
+    rate.isFetching = true;
+    render(DELTA_SUMMARY);
+    expect(container.querySelector('[data-testid="why-now-rate-move"]')).not.toBeNull();
   });
 });

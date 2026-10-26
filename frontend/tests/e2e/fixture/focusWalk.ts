@@ -128,19 +128,28 @@ export async function addScrollRoom(page: Page): Promise<void> {
   });
 }
 
-/** Scroll `.main` so `target` sits entirely behind the sticky route nav. */
+/**
+ * Scroll `.main` so `target` sits entirely behind the sticky route nav. A
+ * control clipped below the table's own scroller is out of view (a focus
+ * scrolls it whatever the margins): first bring it inside. Since W5e's More
+ * like this the expanded row's chip row wraps, which put its Approve below
+ * the 480px scroller (the same fix as lead-queue.fixture.spec.ts's helper).
+ */
 export async function behindRouteNav(page: Page, target: Locator): Promise<void> {
   await addScrollRoom(page);
   const covered = await target.evaluate((element) => {
     const main = element.closest<HTMLElement>('.main');
     const nav = main?.querySelector<HTMLElement>('.route-nav');
     if (!main || !nav || getComputedStyle(nav).position !== 'sticky') throw new Error('no sticky route nav');
+    const scroller = element.closest<HTMLElement>('.tbl-wrap');
+    if (scroller) scroller.scrollTop += Math.max(0, element.getBoundingClientRect().bottom - scroller.getBoundingClientRect().bottom);
     main.scrollTop += element.getBoundingClientRect().top - (nav.getBoundingClientRect().top + 2);
     const box = element.getBoundingClientRect();
     const band = nav.getBoundingClientRect();
-    return box.top >= band.top && box.bottom <= band.bottom;
+    const inScroller = !scroller || box.bottom <= scroller.getBoundingClientRect().bottom + 0.5;
+    return box.top >= band.top && box.bottom <= band.bottom && inScroller;
   });
-  expect(covered, 'precondition: the control sits behind the route nav').toBe(true);
+  expect(covered, 'precondition: the control sits behind the route nav (inside its scroller)').toBe(true);
 }
 
 /** The control's top edge below the route nav's bottom edge (negative: under it). */
@@ -224,7 +233,13 @@ export const ZERO_TABLE_BLOCK_MARGIN = '.lead-table__table tr, .lead-table__tabl
 export const ZERO_TABLE_CLEARANCE = `${ZERO_TABLE_BLOCK_MARGIN} .tbl-wrap { scroll-padding: 0px !important; }`;
 /** 38-focus-clearance.css's mechanism: the nav's size as scroll-margin on what is outside it. */
 export const ZERO_NAV_MARGIN = '.main * { scroll-margin-block-start: 0px !important; }';
-/** Zeroes the pinned controls' own scroll-margin (LeadTable.css), leaving the scroller's padding. */
-export const ZERO_PIN_MARGIN = '.lead-table__table .tbl-cell--approval * { scroll-margin-inline: 0px !important; }';
+/**
+ * Undoes both of LeadTable.css's pinned-control clearances: zeroes the
+ * controls' own scroll-margin (Chromium's) and keeps the scroller's
+ * inline-end padding while focus is in the pin (which the sheet drops; that
+ * is what keeps WebKit still, and Chromium too).
+ */
+export const UNDO_PIN_CLEARANCE = '.lead-table__table .tbl-cell--approval * { scroll-margin-inline: 0px !important; }'
+  + ' .tbl-wrap:has(> .lead-table__table) { scroll-padding-inline-end: calc(var(--tbl-pin-inline-size) + var(--focus-ring-width) + var(--focus-ring-offset)) !important; }';
 /** --focus-ring-width + --focus-ring-offset (tokens.css). */
 export const FOCUS_RING_ROOM = 4;

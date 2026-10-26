@@ -29,11 +29,12 @@ const apiMocks = vi.hoisted(() => ({
 
 // The audit-free decision history (D-audit-reads-c2) stays pending: this suite counts its own reads.
 vi.mock('../lib/apiClients/borrowerDecisions', () => ({ borrowerDecisionsQuery: (id: string) => ({ queryKey: ['mip', 'borrower', id, 'decisions'], queryFn: () => new Promise(() => undefined) }) }));
-vi.mock('../lib/api', () => {
+vi.mock('../lib/api', async (importOriginal) => {
   class ApiError extends Error {
     status: number | null = null;
   }
   return {
+    ...(await importOriginal<typeof import('../lib/api')>()),
     api: apiMocks,
     ApiError,
     isAbortError: () => false,
@@ -71,8 +72,13 @@ vi.mock('../components/AppContext', () => ({
 vi.mock('../components/activation/ActivationLoopPanel', () => ({ ActivationLoopPanel: () => null }));
 
 import OfferOrchestrator from './offer-orchestrator';
+// The lib/api factory is async (it spreads the real module): the decision
+// receipt the route loads lazily would otherwise be handed the ORIGINAL
+// lib/api in a full-suite run (the PR #265 bypass: a real auditReceipt read
+// on the network). Loading its graph here gives it the mock; the route's
+// import() then resolves from the module cache.
+import '../components/mortgage/DecisionReceipt';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.setConfig({ testTimeout: 30_000 });
 
 const DECIDED_HERE = 'B-0000000000001';
@@ -93,7 +99,7 @@ function borrower(id: string): Borrower360 {
     rate_spread_bps: 125,
     opportunity_score: 91,
     confidence: 0.94,
-    recommended_offer_code: 'rate_term_refi',
+    recommended_offer_code: 'refi',
     recommended_offer: 'Rate and term refinance review',
     why_now: 'Current lien rate exceeds the reviewed market threshold.',
     evidence_ids: ['ev-1'],
@@ -125,7 +131,7 @@ function recommendation(id: string): OfferRecommendation {
   return {
     borrower_id: id,
     source_refreshed_at: SNAPSHOT,
-    offer_code: 'rate_term_refi',
+    offer_code: 'refi',
     offer_type: 'refi',
     product_label: 'Rate and term refinance review',
     confidence: 0.94,
@@ -151,7 +157,7 @@ function ledgerReceipt(auditEventId: string): DecisionReceiptPayload {
     decision: 'approved',
     approval_id: earlier ? 'approval-earlier' : 'approval-here',
     borrower_id: earlier ? DECIDED_EARLIER : DECIDED_HERE,
-    offer_code: 'rate_term_refi',
+    offer_code: 'refi',
     offer_label: 'Rate and term refinance review',
     campaign_id: null,
     variant_name: null,
@@ -192,7 +198,7 @@ describe('OfferOrchestrator approval routing line', () => {
       response_hash: 'a'.repeat(64),
       source_refreshed_at: SNAPSHOT,
       borrower_id: id,
-      offer_code: 'rate_term_refi',
+      offer_code: 'refi',
       channel,
       subject: 'Review your mortgage options',
       body: 'A licensed loan officer can review the available options with you.',

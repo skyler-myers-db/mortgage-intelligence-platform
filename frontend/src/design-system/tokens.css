@@ -3,106 +3,9 @@
    Design Tokens — prototype port plus app accessibility extensions
    ============================================================ */
 
-/* ---------- Webfonts (2026-09-21 audit bundle-05 / css-v2) ----------
- * Geist and Geist Mono ship as ONE variable woff2 each (wght 100-900): the
- * latin subset of @fontsource-variable/geist and geist-mono 5.3.0 (OFL-1.1).
- * Any weight the CSS asks for (650, 800) renders as asked instead of snapping
- * to a static file. The faces are written here rather than imported from the
- * package CSS so the family names stay the prototype's ('Geist',
- * 'Geist Mono'; design_files/index.html:42-43), only woff2 ships, and
- * vite.config.ts's font-preload plugin finds exactly these two files.
- * unicode-range is copied verbatim from the package's own wght.css latin face.
- */
-@font-face {
-  font-family: 'Geist';
-  font-style: normal;
-  font-weight: 100 900;
-  font-display: swap;
-  src: url('@fontsource-variable/geist/files/geist-latin-wght-normal.woff2') format('woff2');
-  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
-}
+@import "./fonts.css";
 
-@font-face {
-  font-family: 'Geist Mono';
-  font-style: normal;
-  font-weight: 100 900;
-  font-display: swap;
-  src: url('@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2') format('woff2');
-  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
-}
-
-/* Metric-matched fallbacks: while the webfonts load (font-display: swap),
- * text paints in a local face scaled to Geist's metrics, so the swap does not
- * reflow the page. Liberation Sans / Mono are metric twins of Arial / Courier
- * New (Linux CI). Computed once from the font tables:
- *   Geist 5.3.0 (wght default 400): unitsPerEm 1000, hhea ascender 1005,
- *     descender -295, lineGap 0; English-letter-frequency-weighted average
- *     advance (a-z + space) 465.42 = 0.46542 em.
- *   Arial: unitsPerEm 2048, same weighted average advance 903.45 = 0.44114 em.
- *   size-adjust = 0.46542 / 0.44114 = 105.50%; ascent-override =
- *     1.005 / 1.0550 = 95.26%; descent-override = 0.295 / 1.0550 = 27.96%.
- *   Geist Mono 5.3.0: unitsPerEm 1000, same hhea; every advance 600 = 0.6 em.
- *   Courier New: unitsPerEm 2048, advance 1229 = 0.60010 em.
- *   size-adjust = 0.6 / 0.6001 = 99.98%; ascent-override = 1.005 / 0.9998 =
- *     100.52%; descent-override = 0.295 / 0.9998 = 29.50%.
- * Bold (600-900) gets a real local bold face, not a bold synthesized from the
- * regular one (which set the e2e sample 4.6% narrower than Geist 700). Same
- * weighted average, per-glyph advances at each wght instance:
- *   Geist wght 600 0.48594 em, 650 0.49106 em, 700 0.49619 em; Arial Bold
- *     0.47693 em. Matched at 650, the middle of the 600-700 range the partials
- *     set bold text in, so 600 and 700 each land ~1% off:
- *   size-adjust = 0.49106 / 0.47693 = 102.96%; ascent-override = 1.005 /
- *     1.0296 = 97.61%; descent-override = 0.295 / 1.0296 = 28.65% (the same
- *     line box as the regular face).
- *   Geist Mono keeps 0.6 em at every weight and Courier New Bold keeps 1229
- *     units, so the mono bold face repeats the regular overrides.
- * Each fallback carries its webfont's latin unicode-range, so it only stands
- * in for glyphs Geist will replace; a glyph outside it (the → ≥ Δ ▲ ▼ the UI
- * prints) skips both faces and keeps the system face, instead of rendering
- * in Arial scaled 105.5% or in Courier New.
- */
-@font-face {
-  font-family: 'Geist Fallback';
-  src: local('Arial'), local('Liberation Sans');
-  size-adjust: 105.5%;
-  ascent-override: 95.26%;
-  descent-override: 27.96%;
-  line-gap-override: 0%;
-  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
-}
-
-@font-face {
-  font-family: 'Geist Fallback';
-  font-weight: 600 900;
-  src: local('Arial Bold'), local('Liberation Sans Bold');
-  size-adjust: 102.96%;
-  ascent-override: 97.61%;
-  descent-override: 28.65%;
-  line-gap-override: 0%;
-  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
-}
-
-@font-face {
-  font-family: 'Geist Mono Fallback';
-  src: local('Courier New'), local('Liberation Mono');
-  size-adjust: 99.98%;
-  ascent-override: 100.52%;
-  descent-override: 29.5%;
-  line-gap-override: 0%;
-  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
-}
-
-@font-face {
-  font-family: 'Geist Mono Fallback';
-  font-weight: 600 900;
-  src: local('Courier New Bold'), local('Liberation Mono Bold');
-  size-adjust: 99.98%;
-  ascent-override: 100.52%;
-  descent-override: 29.5%;
-  line-gap-override: 0%;
-  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
-}
-
+@layer tokens {
 :root {
   /* ---------- Brand (Entrada AI) ---------- */
   --entrada-navy:   #025080;
@@ -139,7 +42,7 @@
    * ink; light values are new (the prototype never drew segments on white).
    * Dark hexes mirror the gold registry (gold_segment_population.sql meta
    * VALUES; tests/unit/test_segment_palette_parity.py). */
-  --seg-itm:        #5CE1E6;  /* Prime Refi Candidates — teal */
+  --seg-itm:        #5CE1E6;  /* In the Money — teal */
   --seg-listed:     #F59E0B;  /* Listed for Sale — amber */
   --seg-permit:     #A78BFA;  /* HELOC Intent — violet */
   --seg-investor:   #F472B6;  /* Investor / Multi-Property — rose */
@@ -236,21 +139,38 @@
   --surface-key-shadow: rgba(0, 0, 0, 0.18);
   --text-on-solid: #FFFFFF;
 
-  --status-success-soft: rgba(16,185,129,0.14);
-  --status-success-soft-muted: rgba(16,185,129,0.12);
-  --status-success-line: rgba(16,185,129,0.32);
-  --status-success-line-strong: rgba(16,185,129,0.35);
+  /* Status tints (css-07; deviation:status-tint-scale). Each soft / line
+   * tint is its theme's --status-<tone>-base (the theme blocks below) mixed
+   * into transparent in OKLab at one step of a five-step alpha scale, so a
+   * tint follows its base colour in both themes instead of the light theme
+   * reusing the dark RGB. Dark bases are the RGB the prototype's rgba()
+   * literals carry (design_files/index.html:396-397, :412-417, :546-547,
+   * :638-644, :810-812), so every dark tint keeps its value except one
+   * merged step, --status-success-line 32% -> 30%. --tint-subtle (10%) is
+   * the one step outside the five: .btn--danger's --signal-danger text on
+   * its hover fill reads 4.56:1 on white at 10% and 4.44:1 at 12%
+   * (tokenContrast.test.ts). The inks stay hand-tuned per theme. */
+  --tint-subtle: 10%;
+  --tint-muted: 12%;
+  --tint-soft: 14%;
+  --tint-strong: 18%;
+  --tint-line: 30%;
+  --tint-line-strong: 35%;
+  --status-success-soft: color-mix(in oklab, var(--status-success-base) var(--tint-soft), transparent);
+  --status-success-soft-muted: color-mix(in oklab, var(--status-success-base) var(--tint-muted), transparent);
+  --status-success-line: color-mix(in oklab, var(--status-success-base) var(--tint-line), transparent);
+  --status-success-line-strong: color-mix(in oklab, var(--status-success-base) var(--tint-line-strong), transparent);
   --status-success-ink: #6EE7B7;
-  --status-warning-soft: rgba(245,158,11,0.14);
-  --status-warning-soft-muted: rgba(245,158,11,0.12);
-  --status-warning-soft-strong: rgba(245,158,11,0.18);
-  --status-warning-line: rgba(245,158,11,0.30);
-  --status-warning-line-strong: rgba(245,158,11,0.35);
+  --status-warning-soft: color-mix(in oklab, var(--status-warning-base) var(--tint-soft), transparent);
+  --status-warning-soft-muted: color-mix(in oklab, var(--status-warning-base) var(--tint-muted), transparent);
+  --status-warning-soft-strong: color-mix(in oklab, var(--status-warning-base) var(--tint-strong), transparent);
+  --status-warning-line: color-mix(in oklab, var(--status-warning-base) var(--tint-line), transparent);
+  --status-warning-line-strong: color-mix(in oklab, var(--status-warning-base) var(--tint-line-strong), transparent);
   --status-warning-ink: #FCD34D;
-  --status-danger-soft: rgba(239,68,68,0.14);
-  --status-danger-soft-muted: rgba(239,68,68,0.12);
-  --status-danger-soft-subtle: rgba(239,68,68,0.10);
-  --status-danger-line-strong: rgba(239,68,68,0.35);
+  --status-danger-soft: color-mix(in oklab, var(--status-danger-base) var(--tint-soft), transparent);
+  --status-danger-soft-muted: color-mix(in oklab, var(--status-danger-base) var(--tint-muted), transparent);
+  --status-danger-soft-subtle: color-mix(in oklab, var(--status-danger-base) var(--tint-subtle), transparent);
+  --status-danger-line-strong: color-mix(in oklab, var(--status-danger-base) var(--tint-line-strong), transparent);
   --status-danger-ink: #FCA5A5;
 
   --approval-bg: linear-gradient(90deg, rgba(245,158,11,0.08), rgba(245,158,11,0.02));
@@ -278,6 +198,12 @@
    Theme: DARK (default — stage/projector impact)
    ============================================================ */
 :root, [data-theme="dark"] {
+  /* Status tint bases (css-07): the prototype's status RGB. Danger is
+   * #EF4444, the literal the prototype's tints carry, not --signal-danger. */
+  --status-success-base: #10B981;
+  --status-warning-base: #F59E0B;
+  --status-danger-base: #EF4444;
+
   --bg-0: #04101F;   /* page — deepest */
   --bg-1: #071A2F;   /* surface */
   --bg-2: #0C2340;   /* raised card */
@@ -363,6 +289,13 @@
   --status-success-ink: #045D46;
   --status-warning-ink: #B45309;
   --status-danger-ink:  #B91C1C;
+  /* Status tint bases (css-07): the light signal hues, so the light theme's
+   * fills follow its own palette (they reused the dark RGB). Danger keeps the
+   * prototype's #EF4444: the light --signal-danger (#D42222, darkened for
+   * text) would put .btn--danger's own text at 4.42:1 on its hover fill. */
+  --status-success-base: var(--signal-success);
+  --status-warning-base: var(--signal-warning);
+  --status-danger-base: #EF4444;
 
   --accent:        #025080;
   --accent-hover:  #013354;
@@ -379,6 +312,17 @@
     radial-gradient(600px 400px at 80% 70%, rgba(92,225,230,0.08), transparent 60%),
     #F8FBFD;
   --map-region-fill: #E4EDF4;
+}
+
+/* Paper prints a dark and a light session alike (print.css): one status
+ * tint base per tone in both themes, the prototype RGB the tints carried
+ * before css-07. Same specificity as the theme blocks and later in source. */
+@media print {
+  [data-theme] {
+    --status-success-base: #10B981;
+    --status-warning-base: #F59E0B;
+    --status-danger-base: #EF4444;
+  }
 }
 
 /* Light segment palette (deviation:segment-palette; segmentPalette.test.ts):
@@ -510,23 +454,45 @@
  * avoid the pseudo-class/attribute-selector specificity tie that would
  * otherwise let source order pick the comfortable values even when the
  * user toggled to compact.
+ *
+ * Control scale (responsive-09 items 1-2; deviation:density-control-scale):
+ * --control-h sizes .btn and .filter, --chip-h sizes .chip, --cell-pad-y the
+ * table header cells. The block padding of each is a fixed fraction of its
+ * height token (.btn 1/4, .filter 3/16, .chip 1/8), so comfortable
+ * reproduces the prototype literals exactly (8px / 6px / 3px, min 32px /
+ * 24px; design_files/index.html:378-384, :403-411, :826-832) and compact
+ * shortens the controls without a line-height dependence. Compact keeps
+ * every interactive control >= 24px tall (WCAG 2.2 2.5.8): .btn 24px min
+ * (33.5px with its label), .filter 29px. --chip-h stays 24px in compact: a
+ * chip that is a control (a removable filter chip) would drop under 24px.
  */
 :root {
   --row-h: 44px;
   --pad-card: 20px;
   --gap-grid: 18px;
+  --control-h: var(--sp-8);
+  --chip-h: var(--sp-6);
+  --cell-pad-y: var(--sp-3);
 }
 :root[data-density="compact"] {
   --row-h: 36px;
   --pad-card: 16px;
   --gap-grid: 14px;
+  --control-h: var(--sp-6);
+  --chip-h: var(--sp-6);
+  --cell-pad-y: var(--sp-2);
 }
 :root[data-density="comfortable"] {
   --row-h: 44px;
   --pad-card: 20px;
   --gap-grid: 18px;
+  --control-h: var(--sp-8);
+  --chip-h: var(--sp-6);
+  --cell-pad-y: var(--sp-3);
+}
 }
 
+@layer base {
 /* ============================================================
    Base element styles
    ============================================================ */
@@ -591,7 +557,9 @@ input[type="checkbox"] {
 .num  { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
 .divider { height: 1px; background: var(--line-1); }
 .vdivider { width: 1px; background: var(--line-1); }
+}
 
+@layer tokens {
 /* ---------- Layering (z-index scale) ----------
  * Every z-index in component CSS reads one of these (components.test.ts
  * fails on a numeric literal outside this file). Values are the ones the
@@ -834,3 +802,4 @@ input[type="checkbox"] {
  * --z-topbar-menu, which lives inside the topbar's own context.
  */
 :root { --z-tray: 55; }
+}

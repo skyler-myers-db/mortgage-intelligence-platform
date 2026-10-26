@@ -27,6 +27,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PortfolioPreview } from '../types';
 import { clearToasts, getToasts } from '../lib/toast';
+import { ApiError } from '../lib/apiTransport';
 
 // Vitest executes on Node, but the app tsconfig (correctly) carries no Node
 // globals — declare the one we use.
@@ -39,7 +40,8 @@ const campaignStatus = vi.fn();
 const salesCampaignPerformance = vi.fn();
 const campaignRecommendation = vi.fn();
 
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api')>()),
   api: {
     portfolioPreview: (...args: unknown[]) => portfolioPreview(...args),
     portfolioCreate: (...args: unknown[]) => portfolioCreate(...args),
@@ -48,7 +50,6 @@ vi.mock('../lib/api', () => ({
     salesCampaignPerformance: (...args: unknown[]) => salesCampaignPerformance(...args),
     campaignRecommendation: (...args: unknown[]) => campaignRecommendation(...args),
   },
-  ApiError: class extends Error {},
   isAbortError: () => false,
   isWarmingUpError: () => false,
 }));
@@ -237,7 +238,7 @@ describe('PortfolioBuilder save-build flow', () => {
 
     const guard = container.querySelector('[data-testid="campaign-build-guard"]');
     expect(guard?.getAttribute('role')).toBe('status');
-    expect(guard?.textContent).toContain('7,973 of 10,000 maximum saved treatment contacts');
+    expect(guard?.textContent).toContain('7,973 of the 10,000 contacts a saved campaign can hold');
     expect(guard?.textContent).toContain('Save eligible');
     expect(portfolioPreview.mock.calls[0][2]).toEqual({
       suppression_policy: { default: 'eligible_only', frequency_cap_days: 30 },
@@ -261,7 +262,7 @@ describe('PortfolioBuilder save-build flow', () => {
 
     expect(saveButton().textContent).toContain('Save build');
     expect(container.querySelector('[data-testid="campaign-build-guard"]')?.textContent)
-      .toContain('10,000 of 10,000 maximum saved treatment contacts');
+      .toContain('10,000 of the 10,000 contacts a saved campaign can hold');
   });
 
   it('blocks a 10,001-contact preview and gives actionable refinement guidance', async () => {
@@ -278,13 +279,13 @@ describe('PortfolioBuilder save-build flow', () => {
     expect(saveButton().textContent).toContain('Refine before saving');
     const guard = container.querySelector('[data-testid="campaign-build-guard"]');
     expect(guard?.getAttribute('role')).toBe('alert');
-    expect(guard?.textContent).toContain('treatment preflight contains 10,001 contacts');
-    expect(guard?.textContent).toContain('Narrow geography, relationship, product, equity, or other filters');
+    expect(guard?.textContent).toContain('This build has 10,001 contacts, more than the 10,000');
+    expect(guard?.textContent).toContain('Narrow geography, relationship, product, equity or other filters');
     expect(guard?.textContent).toContain('Save blocked');
     expect(container.querySelector('[data-testid="portfolio-save-name"]')).toBeNull();
   });
 
-  it('re-runs treatment preflight with the current household-primary setting', async () => {
+  it('re-runs the save check with the current household-primary setting', async () => {
     portfolioPreview
       .mockResolvedValueOnce(PREVIEW)
       .mockResolvedValueOnce({
@@ -301,7 +302,7 @@ describe('PortfolioBuilder save-build flow', () => {
     await waitUntil(() => portfolioPreview.mock.calls.length >= 2);
     await waitUntil(() => (
       container.querySelector('[data-testid="campaign-build-guard"]')?.textContent
-        ?.includes('6,400 of 10,000') === true
+        ?.includes('6,400 of the 10,000') === true
     ));
 
     expect(portfolioPreview.mock.calls[1][2]).toEqual({
@@ -512,6 +513,31 @@ describe('PortfolioBuilder save-build flow', () => {
     expect(getToasts().map((toast) => [toast.tone, toast.title, toast.detail])).toEqual([
       ['success', 'Build saved', 'Distinct Illinois refinance cohort'],
     ]);
+  });
+
+  // W5b portfolio-forms review note: a 403 cannot be fixed by "try again",
+  // and a create 409 needs a fresh run; neither says "Reload".
+  it.each([
+    [403, 'Save failed: you need access to save builds; ask an administrator. Your name is kept.'],
+    [
+      409,
+      'Save failed: the build or its message variants changed, or this save was already sent. Your name is kept: run the build again, then save.',
+    ],
+  ])('words a %s save refusal so the next step is clear', async (status, expected) => {
+    portfolioPreview.mockResolvedValue(PREVIEW);
+    portfolioCreate.mockRejectedValueOnce(
+      new ApiError('campaign config is stale for this build', { path: '/api/portfolio', status }),
+    );
+    mount();
+    await waitUntil(() => !saveButton().disabled);
+    act(() => saveButton().click());
+    act(() => container.querySelector<HTMLButtonElement>('[data-testid="portfolio-save-confirm"]')!.click());
+    await waitUntil(() => container.querySelector('[role="alert"]') !== null);
+
+    const alert = container.querySelector('[role="alert"]')?.textContent ?? '';
+    expect(alert).toBe(expected);
+    expect(alert).not.toMatch(/reload|try again|stale for this build/i);
+    expect(container.querySelector('[data-testid="portfolio-save-name"]')).not.toBeNull();
   });
 
   function typeSaveName(value: string) {

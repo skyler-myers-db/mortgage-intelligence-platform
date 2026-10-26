@@ -57,8 +57,8 @@ export const SEGMENT_MODE_OPTIONS: ReadonlyArray<{
   label: string;
   description: string;
 }> = [
-  { mode: 'any', label: 'Any selected', description: 'OR · de-duped' },
-  { mode: 'all', label: 'All selected', description: 'AND · intersection' },
+  { mode: 'any', label: 'Any selected', description: 'in at least one' },
+  { mode: 'all', label: 'All selected', description: 'in every one' },
 ];
 
 export const VALID_SEGMENT_CODES: readonly SegmentCode[] = [

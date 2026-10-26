@@ -19,8 +19,6 @@ import {
   RejectRationalePanel,
 } from './offer-orchestrator.panels';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 describe('OfferReviewGrid message intelligence', () => {
   let container: HTMLDivElement;
   let root: Root;

@@ -19,8 +19,6 @@ vi.mock('../mortgage/DecisionReceipt', () => {
 
 import { AuditEventTableRow } from './AdminAuditExplorer.row';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const APPROVE_ROW: AuditEventRow = {
   event_id: '6f2a9c1e-3b4d-4e5f-8a6b-7c8d9e0f1a2b',
   actor: 'ledger.approver@summit.example',

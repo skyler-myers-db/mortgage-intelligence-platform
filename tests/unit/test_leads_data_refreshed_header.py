@@ -34,7 +34,7 @@ from backend.services.repositories.databricks_shared import (
 from tests.fixtures import mock_population as mock_data
 
 client = TestClient(app)
-client.headers.update({"X-Forwarded-Email": "skyler@entrada.ai"})
+client.headers.update({"X-Forwarded-Email": "operator@summit.example"})
 
 HEADER = "X-Data-Refreshed-At"
 

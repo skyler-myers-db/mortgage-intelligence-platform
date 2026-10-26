@@ -97,7 +97,7 @@ export function useAskGenieTab(): [AskGenieTab, (next: AskGenieTab, input?: AskG
         // Back to the entry the pass was pushed from, which carries no pass.
         if (next === origin) {
           latestRef.current = { tab: next, passOrigin: null };
-          navigate(-1);
+          void navigate(-1);
           return;
         }
         latestRef.current = { tab: next, passOrigin: origin };

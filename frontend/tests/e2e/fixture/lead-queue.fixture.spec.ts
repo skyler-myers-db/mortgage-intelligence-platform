@@ -60,6 +60,7 @@ import {
   registerWideFootprint,
 } from './data/leadQueue';
 import { VIRTUAL_QUEUE, registerVirtualQueue } from './data/queueKeyboard';
+import { UNDO_PIN_CLEARANCE } from './focusWalk';
 import { DNC_LEAD, QUEUE_LAYOUT_LEADS, registerQueueLayoutLeads } from './data/queueLayout';
 import { json, type MockApi } from './mockApi';
 import { FIXTURE_THEMES } from './routes';
@@ -384,7 +385,9 @@ async function addScrollRoom(page: Page): Promise<void> {
 /**
  * Scroll `.main` so `target` sits entirely behind the sticky route nav. The
  * browser counts a control there as in view, so without a clearance a focus
- * leaves it hidden under the nav.
+ * leaves it hidden under the nav. A control clipped below the table's own
+ * scroller is out of view (a focus scrolls it whatever the margins): first
+ * bring it inside (the expanded row's Approve, since its chip row wraps).
  */
 async function behindRouteNav(page: Page, target: Locator): Promise<void> {
   await addScrollRoom(page);
@@ -392,12 +395,15 @@ async function behindRouteNav(page: Page, target: Locator): Promise<void> {
     const main = element.closest<HTMLElement>('.main');
     const nav = main?.querySelector<HTMLElement>('.route-nav');
     if (!main || !nav || getComputedStyle(nav).position !== 'sticky') throw new Error('no sticky route nav');
+    const scroller = element.closest<HTMLElement>('.tbl-wrap');
+    if (scroller) scroller.scrollTop += Math.max(0, element.getBoundingClientRect().bottom - scroller.getBoundingClientRect().bottom);
     main.scrollTop += element.getBoundingClientRect().top - (nav.getBoundingClientRect().top + 2);
     const box = element.getBoundingClientRect();
     const band = nav.getBoundingClientRect();
-    return box.top >= band.top && box.bottom <= band.bottom;
+    const inScroller = !scroller || box.bottom <= scroller.getBoundingClientRect().bottom + 0.5;
+    return box.top >= band.top && box.bottom <= band.bottom && inScroller;
   });
-  expect(covered, 'precondition: the control sits behind the route nav').toBe(true);
+  expect(covered, 'precondition: the control sits behind the route nav (inside its scroller)').toBe(true);
 }
 
 /** The control's top edge below the route nav's bottom edge (negative: under it). */
@@ -407,8 +413,6 @@ async function gapBelowRouteNav(target: Locator): Promise<number> {
   ));
 }
 
-/** Zeroes the pinned controls' own scroll-margin (LeadTable.css), leaving the scroller's padding. */
-const ZERO_PIN_MARGIN = '.lead-table__table .tbl-cell--approval * { scroll-margin-inline: 0px !important; }';
 /** 38-focus-clearance.css's nav margin, put back on the in-place listbox's options. */
 const NAV_MARGIN_ON_MENU = '.filter-menu__item { scroll-margin-block-start: 61px !important; }';
 
@@ -666,11 +670,11 @@ test.describe('(b) keyboard focus is never hidden under sticky chrome', () => {
     expect(idInView, 'the row\'s borrower id is still inside the scrollport').toBe(true);
   });
 
-  test('non-vacuity: with the pinned controls\' margin zeroed, a focus on one scrolls the table to its end (the margin is what keeps Chromium still)', async ({ app, mockApi, page }) => {
+  test('non-vacuity: with the pinned controls\' clearance undone, a focus on one scrolls the table to its end (the clearance is what keeps Chromium still)', async ({ app, mockApi, page }) => {
     registerQueueLayoutLeads(mockApi);
     await app.gotoRoute('/lead-queue');
     await app.openConsole();
-    await page.addStyleTag({ content: ZERO_PIN_MARGIN });
+    await page.addStyleTag({ content: UNDO_PIN_CLEARANCE });
     const overflow = await tableWrap(page).evaluate((wrap) => wrap.scrollWidth - wrap.clientWidth);
     expect(overflow).toBeGreaterThan(40);
     for (const testId of [`lead-approve-${ELIGIBLE}`, `lead-reject-${ELIGIBLE}`]) {
@@ -689,9 +693,10 @@ test.describe('(b) keyboard focus is never hidden under sticky chrome', () => {
       expect(offsets.synchronous, 'the scroller\'s inline-end padding "reveals" a control already in view').toBeGreaterThan(overflow - 2);
       // Chromium reveals inside focus(), before the focus events, so the
       // pinned-focus guard (which keeps the focus-time offset, never a
-      // recorded one: stale on Linux) leaves this scroll: the margin, not
-      // the guard, is Chromium's protection.
-      expect(offsets.settled, 'the scroll stands without the margin').toBeGreaterThan(overflow - 2);
+      // recorded one: stale on Linux) leaves this scroll: the clearance (the
+      // margin, or the padding dropped while the pin has focus), not the
+      // guard, is Chromium's protection.
+      expect(offsets.settled, 'the scroll stands without the clearance').toBeGreaterThan(overflow - 2);
     }
   });
 

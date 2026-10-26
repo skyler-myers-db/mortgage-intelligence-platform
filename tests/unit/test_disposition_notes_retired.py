@@ -31,7 +31,7 @@ from tests.fixtures.reviewed_approval import reviewed_approval
 
 ROOT = Path(__file__).resolve().parents[2]
 client = TestClient(app)
-client.headers.update({"X-Forwarded-Email": "skyler@entrada.ai"})
+client.headers.update({"X-Forwarded-Email": "operator@summit.example"})
 LO = "lo01@summit.example"
 
 
@@ -60,10 +60,10 @@ def test_no_backend_string_still_reads_or_writes_the_disposition_note() -> None:
 def test_the_schema_has_no_notes_field_and_refuses_any_notes_key() -> None:
     assert "notes" not in DispositionRequest.model_fields
     assert "notes" not in CallDisposition.model_fields
-    assert DispositionRequest(lo_email="lo@entrada.ai", outcome="connected").model_dump().keys() >= {"lo_email"}
+    assert DispositionRequest(lo_email="lo@summit.example", outcome="connected").model_dump().keys() >= {"lo_email"}
     for value in (None, "", "   ", "Discussed refinance options.", 5):
         with pytest.raises(ValidationError) as caught:
-            DispositionRequest.model_validate({"lo_email": "lo@entrada.ai", "outcome": "connected", "notes": value})
+            DispositionRequest.model_validate({"lo_email": "lo@summit.example", "outcome": "connected", "notes": value})
         assert [error["type"] for error in caught.value.errors()] == ["extra_forbidden"]
 
 

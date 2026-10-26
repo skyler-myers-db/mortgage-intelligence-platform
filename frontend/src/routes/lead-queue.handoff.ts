@@ -22,6 +22,7 @@ import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFil
 import type { LeadTableCampaignHandoff } from '../components/mortgage/LeadTable.types';
 import {
   GROWTH_AGENT_PROOF_PARAMS,
+  LEAD_TABLE_HIDE_PARAM,
   LEAD_TABLE_PLACE_PARAMS,
   LEAD_TABLE_VIEW_PARAM,
   parsePortfolioCriteria,
@@ -119,8 +120,10 @@ const NOT_CARRIED_LABELS: Readonly<Record<string, string>> = {
 /** Portfolio filters the queue reads that Portfolio Builder has no control for. */
 const QUEUE_ONLY_PORTFOLIO_KEYS: ReadonlySet<string> = new Set(['loan_product', 'origination_channel']);
 
-/** Not filters: where the reader is in the table, its column preset and the Triage deck. */
-const NEVER_LISTED: ReadonlySet<string> = new Set([...LEAD_TABLE_PLACE_PARAMS, LEAD_TABLE_VIEW_PARAM, TRIAGE_MODE_PARAM]);
+/** Not filters: where the reader is in the table, its column preset and hidden columns, and the Triage deck. */
+const NEVER_LISTED: ReadonlySet<string> = new Set([
+  ...LEAD_TABLE_PLACE_PARAMS, LEAD_TABLE_VIEW_PARAM, LEAD_TABLE_HIDE_PARAM, TRIAGE_MODE_PARAM,
+]);
 
 function queueStates(searchParams: URLSearchParams): string[] {
   const raw = searchParams.get('states') ?? searchParams.get('state') ?? '';

@@ -22,6 +22,7 @@
 import type { BorrowerProof, ProofScoreComponentKey } from '../../types';
 import { formatFixed } from '../../lib/formatters';
 import { Icon } from '../Icon';
+import { Tooltip } from '../ui/Tooltip';
 import { SCORE_ANATOMY_COPY } from './scoreAnatomy.copy';
 import { SCORE_PART_MODIFIER, SCORE_PART_ORDER, SCORE_SPINE_COPY } from './scoreSpine.copy';
 import { proofSealHolds } from './useBorrowerProof';
@@ -47,17 +48,19 @@ export function ScoreSpine({ proof, onOpenComponent }: ScoreSpineProps) {
     <div className="score-spine" data-testid="score-spine">
       {parts.length > 0 && (
         <>
-          <div className="score-spine__bar" aria-hidden="true" title={SCORE_SPINE_COPY.spineCaption}>
-            {parts.map((part) => (
-              <span
-                key={part.key}
-                className={`score-spine__slice score-spine__slice--${SCORE_PART_MODIFIER[part.key]}`}
-                style={{ inlineSize: sliceWidth(part.weighted_points) }}
-                data-part={part.key}
-                onClick={() => onOpenComponent(part.key)}
-              />
-            ))}
-          </div>
+          <Tooltip content={SCORE_SPINE_COPY.spineCaption}>
+            <div className="score-spine__bar" aria-hidden="true">
+              {parts.map((part) => (
+                <span
+                  key={part.key}
+                  className={`score-spine__slice score-spine__slice--${SCORE_PART_MODIFIER[part.key]}`}
+                  style={{ inlineSize: sliceWidth(part.weighted_points) }}
+                  data-part={part.key}
+                  onClick={() => onOpenComponent(part.key)}
+                />
+              ))}
+            </div>
+          </Tooltip>
           <div className="score-spine__segs">
             {parts.map((part) => (
               <button

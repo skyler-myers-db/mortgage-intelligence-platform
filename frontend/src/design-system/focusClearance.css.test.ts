@@ -18,7 +18,8 @@ import { featureStylesheets } from '../test/featureCss';
  *     scroll-margin at the block start (the larger of the nav's clearance
  *     and the sticky thead's), and whose scroller clears the pinned
  *     Approval column with scroll-padding at the inline end, cancelled on
- *     the pin's own controls. Rendered proof: the focus-obscured walk in
+ *     the pin's own controls and dropped while focus is in the pin.
+ *     Rendered proof: the focus-obscured walk in
  *     tests/e2e/fixture/lead-queue.fixture.spec.ts. The in-place filter
  *     listboxes are left out of the nav's margin, and every :has() stays on
  *     `.main` itself (cost proof: focus-clearance-cost.fixture.spec.ts).
@@ -80,7 +81,7 @@ describe('focus clearance (a11y-v2)', () => {
     const imports = entry.split('\n').filter((line) => line.startsWith('@import'));
     const at37 = imports.findIndex((line) => line.includes('37-topbar-status.css'));
     expect(imports.filter((line) => line.includes('38-focus-clearance.css'))).toHaveLength(1);
-    expect(imports[at37 + 1]).toBe('@import "./components/38-focus-clearance.css";');
+    expect(imports[at37 + 1]).toBe('@import "./components/38-focus-clearance.css" layer(components);');
   });
 
   it('the ranked-borrower scroller sets the block clearance: the larger of the route nav\'s and the thead\'s, never as scroll-padding', () => {
@@ -136,6 +137,11 @@ describe('focus clearance (a11y-v2)', () => {
     expect(inPin).toMatch(new RegExp(
       String.raw`scroll-margin-inline:\s*calc\(\s*${PIN_CLEAR}\s*\)\s*calc\(\s*-1\s*\*\s*\(\s*${PIN_CLEAR}\s*\)\s*\);`,
     ));
+  });
+
+  it('drops that padding while focus is in the pin, so WebKit (which reveals against it whatever the margin) never scrolls the table sideways either', () => {
+    const inPinFocus = block(leadTableCss(), '.tbl-wrap:has(> .lead-table__table .tbl-cell--approval:focus-within)');
+    expect(inPinFocus.trim()).toMatch(/^scroll-padding-inline-end:\s*0;$/);
   });
 
   it('keeps the shell stylesheet\'s `.tbl-wrap` as it was (the clearance ships in the lazy sheet)', () => {

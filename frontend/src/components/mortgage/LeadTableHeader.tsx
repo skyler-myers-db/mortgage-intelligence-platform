@@ -1,14 +1,16 @@
-import { useId, type ReactNode } from 'react';
+import { useContext, useId, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Icon } from '../Icon';
 import { Button, SurfaceTitle } from '../Primitives';
 import { auditEventHref } from '../../lib/auditLinks';
 import { formatCount } from '../../lib/formatters';
+import { useAuditLedgerAccess } from '../../lib/sessionQuery';
 import { LeadTableKeyboardHint, LeadTableShortcutsButton } from './LeadTableKeyboardHint';
 import { LeadTableViewControl } from './LeadTableViewControl';
-import type { LeadTableView } from './LeadTable.columns';
+import { LeadTableHeaderSlotContext, type LeadTableView } from './LeadTable.columns';
 import type { LeadCsvExportState } from './useLeadCsvExport';
 import type { TriageEntry } from './LeadTable.triage';
+import './LeadTableHeader.css';
 
 export interface LeadTableHeaderProps {
   headerStatus?: ReactNode;
@@ -70,6 +72,9 @@ export function LeadTableHeader({
   'use no memo';
 
   const exporting = exportState.status === 'pending';
+  // The Lead Queue's HIDE pill (tables-05 step 2): the route provides it, so
+  // its code rides the route chunk, not this one.
+  const hideControl = useContext(LeadTableHeaderSlotContext);
   const scopeNoteId = useId();
   const triageNoteId = useId();
   const partial = csvExportTruncatedOf !== null;
@@ -79,8 +84,13 @@ export function LeadTableHeader({
   // it without growing the header (LeadTable.css,
   // deviation:lead-table-title-row-clearance).
   const titleRow = Boolean(headerStatus || triageEntry || requestChips);
+  // `.lead-table__header` keys the two-row hint grid on both routes
+  // (LeadTableHeader.css, deviation:ranked-table-header-hint-row); the HIDE
+  // slot's modifier keys the compact actions in a narrow `main`
+  // (deviation:lead-table-hide-columns).
+  const modifiers = `${titleRow ? ' lead-table__header--title-row' : ''}${hideControl ? ' lead-table__header--hide-slot' : ''}`;
   return (
-    <div className={`surface__hdr surface__hdr--split${titleRow ? ' lead-table__header--title-row' : ''}`}>
+    <div className={`surface__hdr surface__hdr--split lead-table__header${modifiers}`}>
       <div className="surface__hdr-main">
         <div className="surface__icon">
           <Icon name="user" size={14} />
@@ -130,18 +140,13 @@ export function LeadTableHeader({
       <div className="lead-table__header-actions">
         <LeadTableShortcutsButton singleKeysOn={singleKeysOn} />
         {onViewChange && <LeadTableViewControl view={view} onChange={onViewChange} />}
+        {hideControl && <span className="lead-table__hide-slot">{hideControl}</span>}
         {exportState.status === 'done' && (
-          <span className="muted fs-12" data-testid="lead-export-receipt">
-            Exported {formatCount(exportState.rowCount)} {exportState.rowCount === 1 ? 'row' : 'rows'}
-            {' · audit '}
-            {canAccessAdmin ? (
-              <Link className="mono" to={auditEventHref(exportState.receipt.audit_event_id)}>
-                {exportState.receipt.audit_event_id}
-              </Link>
-            ) : (
-              <span className="mono">{exportState.receipt.audit_event_id}</span>
-            )}
-          </span>
+          <LeadExportReceiptLine
+            rowCount={exportState.rowCount}
+            auditEventId={exportState.receipt.audit_event_id}
+            canAccessAdmin={canAccessAdmin}
+          />
         )}
         <Button
           size="sm"
@@ -158,7 +163,9 @@ export function LeadTableHeader({
             ? 'Recording the export in the audit ledger'
             : `Export ${formatCount(csvExportCount)} ${exportNoun} as CSV`}
           aria-describedby={partial ? scopeNoteId : undefined}
-          title={exportBlockedReason ?? (csvExportCount === 0 && csvExportExcluded > 0
+          // A design-system tooltip, never a DOM title (critic-08): the
+          // reason is the button's description.
+          tooltip={exportBlockedReason ?? (csvExportCount === 0 && csvExportExcluded > 0
             ? 'Every row in scope is excluded by the marketing-eligibility gate'
             : undefined)}
         >
@@ -173,5 +180,35 @@ export function LeadTableHeader({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * "Exported N rows · audit <id>" (flow-04 / critic-03): the id links to its
+ * ledger row for anyone who may read the ledger (an administrator or a
+ * read-only auditor, the same decision require_audit_reader makes), else it
+ * is the plain id. Its own component, mounted only once an export is done,
+ * so the header reads the session only then.
+ */
+function LeadExportReceiptLine({
+  rowCount,
+  auditEventId,
+  canAccessAdmin,
+}: {
+  rowCount: number;
+  auditEventId: string;
+  canAccessAdmin: boolean;
+}) {
+  const ledgerReader = useAuditLedgerAccess();
+  return (
+    <span className="muted fs-12" data-testid="lead-export-receipt">
+      Exported {formatCount(rowCount)} {rowCount === 1 ? 'row' : 'rows'}
+      {' · audit '}
+      {canAccessAdmin || ledgerReader ? (
+        <Link className="mono" to={auditEventHref(auditEventId)}>{auditEventId}</Link>
+      ) : (
+        <span className="mono">{auditEventId}</span>
+      )}
+    </span>
   );
 }

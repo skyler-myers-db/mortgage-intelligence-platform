@@ -16,11 +16,8 @@ import { NOBODY } from '../../lib/actorScope';
 import { registerKeyBinding } from '../../lib/keymap';
 import {
   SINGLE_KEY_SHORTCUTS_STORAGE_KEY,
-  clearSingleKeyShortcutsPreference,
   singleKeyShortcutsEnabled,
 } from '../../lib/keymapPreference';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('../AppContext', () => ({
   useApp: () => ({
@@ -66,7 +63,6 @@ describe('Console single-key shortcuts switch', () => {
 
   beforeEach(async () => {
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);

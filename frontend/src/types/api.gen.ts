@@ -173,7 +173,7 @@ export interface ResponseSchemas {
     label: string;
   };
   /**
-   * The refi screen this refresh applied, read from ``mip.gold.borrower_360``.
+   * The In the Money rule this refresh applied, read from ``mip.gold.borrower_360``.
    *
    * ``min_spread_bps`` / ``min_equity_pct`` are the ``*_applied`` columns when
    * every scored row carries one and the same value; the charts draw the
@@ -1459,7 +1459,7 @@ export interface ResponseSchemas {
     status: "passed" | "review_required" | "roadmap" | "not_provisioned" | "not_attached";
   };
   GrowthAgentHomeResponse: {
-    capabilities: { [key: string]: unknown }[];
+    capabilities: ResponseSchemas['AdminCapability'][];
     monitors: ResponseSchemas['GrowthAgentMonitor'][];
     scheduler_state: "active" | "paused" | "unavailable";
     workflows: ResponseSchemas['GrowthAgentWorkflow'][];
@@ -1753,7 +1753,7 @@ export interface ResponseSchemas {
   /** The statement behind one KPI card and how to read its number. */
   KpiProofResponse: {
     databricks_sql_url: string | null;
-    kpi: "home.addressable_population" | "home.in_the_money" | "home.high_opportunity" | "home.primary_offer_paths" | "funnel.population" | "funnel.high_opportunity";
+    kpi: "home.addressable_population" | "home.in_the_money" | "home.high_opportunity" | "home.primary_offer_paths" | "funnel.population" | "funnel.high_opportunity" | "analytics.addressable" | "analytics.in_the_money" | "analytics.primary_offer_paths" | "analytics.approved";
     measure_column: string;
     note: string;
     params: ResponseSchemas['KpiProofParam'][];
@@ -1773,7 +1773,7 @@ export interface ResponseSchemas {
   KpiTrend: {
     comparison_label: string | null;
     delta_pct: number | null;
-    direction: string;
+    direction: "up" | "down" | "flat";
     note: string | null;
     series: number[];
   };
@@ -2258,7 +2258,7 @@ export interface ResponseSchemas {
     addressable: number;
     /** The contact-eligible subset of in_the_money at each step (live aggregate, clamped to in_the_money). None when not reported. */
     contactable_in_the_money: number[] | null;
-    /** Borrowers clearing the refi screen at each step, aligned to steps_bps; each <= addressable. */
+    /** Borrowers in the money at each step, aligned to steps_bps; each <= addressable. */
     in_the_money: number[];
     /** Addressable borrowers with a gated note rate (active lien, bounded rate strictly inside 1%..15%): the only ones a scenario can move. Never above addressable. */
     rate_movable: number;
@@ -2375,28 +2375,66 @@ export interface ResponseSchemas {
   SalesConversionResponse: {
     from_date: string;
     group_by: "lo" | "cohort";
-    rows: { [key: string]: unknown }[];
+    rows: ResponseSchemas['SalesConversionRow'][];
     to_date: string;
+  };
+  /** One conversion group: a loan officer, or the single all_cohorts group. */
+  SalesConversionRow: {
+    application_start_rate: number;
+    applications_started: number;
+    callbacks_scheduled: number;
+    calls_attempted: number;
+    contacts_reached: number;
+    group_key: string;
+    unique_application_starts: number;
+    unique_contacts_reached: number;
+    unique_leads_contacted: number;
+  };
+  /** Outcome counts for one assigned loan officer (or unassigned). */
+  SalesOutcomeLoRow: {
+    lo_email: string;
+    outcomes: { [key: string]: number };
+    total: number;
+  };
+  /** Outcome counts for one source system. */
+  SalesOutcomeSourceRow: {
+    outcomes: { [key: string]: number };
+    source_system: string;
+    total: number;
+  };
+  /** One outcome feed's configuration status and its outcome count in the window. */
+  SalesOutcomeSourceStatus: {
+    configured: boolean;
+    display_name: string;
+    outcome_count: number;
+    source_system: string;
+    status: string;
   };
   SalesOutcomeSummaryResponse: {
     applications_submitted: number;
-    by_lo: { [key: string]: unknown }[];
-    by_source_system: { [key: string]: unknown }[];
+    by_lo: ResponseSchemas['SalesOutcomeLoRow'][];
+    by_source_system: ResponseSchemas['SalesOutcomeSourceRow'][];
     closed_funded: number;
     from_date: string;
     lost_to_competitor: number;
     not_qualified: number;
-    source_statuses: { [key: string]: unknown }[];
+    source_statuses: ResponseSchemas['SalesOutcomeSourceStatus'][];
     to_date: string;
-    top_competitors: { [key: string]: unknown }[];
+    top_competitors: ResponseSchemas['SalesTopCompetitorRow'][];
     total_outcomes: number;
     unique_applications_submitted: number;
     unique_closed_funded: number;
     withdrawn: number;
   };
+  /** One loan officer's call dispositions on the standup day. */
+  SalesStandupLoRow: {
+    calls_logged: number;
+    lo_email: string;
+    outcomes: { [key: string]: number };
+  };
   SalesStandupResponse: {
     applications_started: number;
-    by_lo: { [key: string]: unknown }[];
+    by_lo: ResponseSchemas['SalesStandupLoRow'][];
     callbacks_scheduled: number;
     calls_logged: number;
     contacts_reached: number;
@@ -2411,6 +2449,33 @@ export interface ResponseSchemas {
     manager_email: string | null;
     region: string | null;
     role: "loan_officer" | "sales_manager" | "admin";
+  };
+  /** A public competitor label and its lost-to-competitor count. */
+  SalesTopCompetitorRow: {
+    competitor_lender_label: string;
+    lost_to_competitor: number;
+  };
+  /** Every in-scope loan officer, for a period and the same span before it. */
+  SalesWorkloadResponse: {
+    from_date: string;
+    previous_from_date: string;
+    previous_to_date: string;
+    rows: ResponseSchemas['SalesWorkloadRow'][];
+    stale_days: number;
+    to_date: string;
+  };
+  /** One loan officer's load. */
+  SalesWorkloadRow: {
+    assigned_count: number;
+    capacity_per_day: number;
+    display_label: string;
+    email: string;
+    open_count: number;
+    previous_assigned_count: number;
+    previous_worked_count: number;
+    region: string | null;
+    stale_count: number;
+    worked_count: number;
   };
   SavedDraft: {
     body: string;
@@ -4018,7 +4083,7 @@ export interface ApiOperations {
   "GET /api/v1/kpi-proof": {
     pathParams: Record<string, never>;
     query: {
-      kpi: "home.addressable_population" | "home.in_the_money" | "home.high_opportunity" | "home.primary_offer_paths" | "funnel.population" | "funnel.high_opportunity";
+      kpi: "home.addressable_population" | "home.in_the_money" | "home.high_opportunity" | "home.primary_offer_paths" | "funnel.population" | "funnel.high_opportunity" | "analytics.addressable" | "analytics.in_the_money" | "analytics.primary_offer_paths" | "analytics.approved";
     };
     headers: Record<string, never>;
     body: never;
@@ -4429,6 +4494,17 @@ export interface ApiOperations {
     headers: Record<string, never>;
     body: never;
     ok: ResponseSchemas['SalesTeamMember'][];
+  };
+  "GET /api/v1/sales/workload": {
+    pathParams: Record<string, never>;
+    query: {
+      from: string;
+      to: string;
+      stale_days?: number;
+    };
+    headers: Record<string, never>;
+    body: never;
+    ok: ResponseSchemas['SalesWorkloadResponse'];
   };
   "GET /api/v1/segments": {
     pathParams: Record<string, never>;

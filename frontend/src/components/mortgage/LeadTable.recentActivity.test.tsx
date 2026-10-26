@@ -8,8 +8,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+import { clearToasts, getToasts } from '../../lib/toast';
 
 const { openConsoleRecentActivity } = vi.hoisted(() => ({
   openConsoleRecentActivity: vi.fn(),
@@ -58,6 +57,7 @@ describe('LeadTable ambiguous bulk recovery', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearToasts();
     sessionStorage.setItem(
       'mip.bulkApprove.lastCancelled',
       JSON.stringify({ ok: 2, aborted: 1, ts: Date.now() }),
@@ -73,7 +73,7 @@ describe('LeadTable ambiguous bulk recovery', () => {
     sessionStorage.clear();
   });
 
-  it('opens Console recent activity instead of directing operators to the Admin audit log', async () => {
+  it('raises ONE shell toast that opens Console recent activity (states-07 item 5b), never the Admin audit log', async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -90,17 +90,19 @@ describe('LeadTable ambiguous bulk recovery', () => {
       await Promise.resolve();
     });
 
-    const toast = container.querySelector<HTMLElement>('[data-testid="lead-bulk-toast"]');
-    expect(toast).not.toBeNull();
-    expect(toast?.textContent).toContain('Confirm the outcome in Recent activity.');
-    expect(toast?.textContent?.toLowerCase()).not.toContain('audit log');
-
-    const review = [...(toast?.querySelectorAll('button') ?? [])]
-      .find((button) => button.textContent?.trim() === 'Review recent activity');
-    expect(review).toBeDefined();
-    act(() => review?.click());
-
-    expect(openConsoleRecentActivity).toHaveBeenCalledTimes(1);
+    // Exactly one announcement: the shell toast, no inline banner beside it.
     expect(container.querySelector('[data-testid="lead-bulk-toast"]')).toBeNull();
+    expect(container.querySelectorAll('[role="status"]').length).toBe(
+      container.querySelectorAll('[data-testid="lead-cursor-status"], [data-testid="lead-bulk-run-status"]').length,
+    );
+    const toasts = getToasts();
+    expect(toasts).toHaveLength(1);
+    const [toast] = toasts;
+    expect([toast.tone, toast.title]).toEqual(['error', '2 approved']);
+    expect(toast.detail).toBe('1 cancelled in flight. Confirm the outcome in Recent activity.');
+    expect(`${toast.title} ${toast.detail}`.toLowerCase()).not.toContain('audit log');
+    expect(toast.action?.label).toBe('Review recent activity');
+    act(() => toast.action!.onAction());
+    expect(openConsoleRecentActivity).toHaveBeenCalledTimes(1);
   });
 });

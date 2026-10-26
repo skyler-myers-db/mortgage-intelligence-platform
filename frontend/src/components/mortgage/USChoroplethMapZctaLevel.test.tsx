@@ -31,7 +31,6 @@ import { viewBoxAttr } from './useSvgViewBox';
 import type { ZctaArea, ZctaGeometry } from './zctaGeometry';
 import { fitZctaView } from './zctaLevel.logic';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 declare const process: { cwd(): string };
 
 const geo = vi.hoisted(() => ({ has: vi.fn(), load: vi.fn(), states: vi.fn() }));
@@ -215,7 +214,7 @@ describe('USChoroplethMapZctaLevel', () => {
       expect(path.getAttribute('class')).toMatch(/^map-region has-data lvl-[1-4]$/);
     }
     expect(unit('60611')?.getAttribute('aria-label')).toBe(
-      'ZIP 60611: 50 borrowers, average opportunity score 71, top segment Prime Refi Candidates',
+      'ZIP 60611: 50 borrowers, average opportunity score 71, top segment In the Money',
     );
     const context = [...document.querySelectorAll('path.map-region--context')];
     expect(context).toHaveLength(2);
@@ -447,8 +446,23 @@ describe('USChoroplethMapZctaLevel', () => {
 
   it('through ZIP_AREAS: a keyboard drill parks focus on the loading stage while the chunk, then the geometry, loads, then hands it to the first ZIP area', async () => {
     const chunk = deferred<typeof RUNG_MODULE>();
-    vi.spyOn(ZCTA_LEVEL, 'current').mockReturnValue(null);
-    vi.spyOn(ZCTA_LEVEL, 'load').mockReturnValue(chunk.promise);
+    // A held chunk behind the LazyModule contract: useLazyModule reads the
+    // cache through the store (runtime-04 3(b)), so the double fills it and
+    // notifies its subscribers when the chunk lands.
+    let delivered: typeof RUNG_MODULE | null = null;
+    const listeners = new Set<() => void>();
+    vi.spyOn(ZCTA_LEVEL, 'current').mockImplementation(() => delivered);
+    vi.spyOn(ZCTA_LEVEL, 'subscribe').mockImplementation((listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    });
+    vi.spyOn(ZCTA_LEVEL, 'load').mockReturnValue(chunk.promise.then((module) => {
+      delivered = module;
+      for (const listener of [...listeners]) listener();
+      return module;
+    }));
     const geometry = deferred<ZctaGeometry>();
     geo.load.mockReturnValue(geometry.promise);
     const loadingStage = () => document.querySelector('.map-stage--zcta');

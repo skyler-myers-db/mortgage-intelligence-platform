@@ -35,7 +35,8 @@ interface Verdict {
 }
 interface Diagnostic { code?: string; filename: string; message: string; severity?: string; labels?: Array<{ span: { line: number } }> }
 interface Run { diagnostics: Diagnostic[]; fileCount: number; ruleCount: number; measured: Files; lines: Record<string, Array<number | null>> }
-interface Config { plugins: string[]; categories: Record<string, string>; rules: Record<string, string>; ignorePatterns: string[] }
+type RuleLevel = string | [string, Record<string, unknown>];
+interface Config { plugins: string[]; categories: Record<string, string>; rules: Record<string, RuleLevel>; ignorePatterns: string[] }
 interface RatchetOptions { version: string; suppressions?: Suppression[]; moves?: Array<{ from: string; to: string }>; recorded?: string }
 
 const evaluate = tool.evaluateBaseline as (measured: Files, baseline: Baseline, options?: { version: string; suppressions?: Suppression[] }) => Verdict;
@@ -319,6 +320,48 @@ describe('a real run of the pinned oxlint with the committed config', () => {
     expect(files.length, 'non-vacuity: the scope enumerates the tree').toBeGreaterThan(300);
     expect(files.some((file) => file.endsWith('.d.ts')), 'a declaration file is linted and counted').toBe(true);
     expect(runOxlint({ targets: ['src'], cwd: FRONTEND_DIR, root: FRONTEND_DIR, expected: files }).fileCount).toBe(files.length);
+  }, OXLINT_TIMEOUT_MS);
+
+  // W5e a11y-05: the ONE reviewed rule option. role="region" scrollers are
+  // focusable by design; tabpanel (the rule's default) stays.
+  const TABINDEX = 'jsx-a11y/no-noninteractive-tabindex';
+  const withLevel = (level: unknown): Config => ({ ...config, rules: { ...config.rules, [TABINDEX]: level as RuleLevel } });
+
+  it('accepts exactly the reviewed no-noninteractive-tabindex option, and counts it as enabled', () => {
+    expect(tool.REVIEWED_RULE_OPTIONS).toEqual({ [TABINDEX]: { roles: ['tabpanel', 'region'] } });
+    expect(config.rules[TABINDEX]).toEqual(['error', { roles: ['tabpanel', 'region'] }]);
+    expect(validateConfig(config, installedRules())).toEqual([]);
+    expect(enabledRules(config)).toContain(TABINDEX);
+    expect(enabledRules(config)).toHaveLength(Object.values(config.rules).filter((level) => level !== 'off').length);
+    expect(validateConfig(withLevel('error'), installedRules()), 'the plain level stays valid').toEqual([]);
+  }, OXLINT_TIMEOUT_MS);
+
+  it('is drift for any other option: another role list, an extra key, another rule, another severity', () => {
+    const installed = installedRules();
+    const drifted: Config[] = [
+      withLevel(['error', { roles: ['tabpanel'] }]),
+      withLevel(['error', { roles: ['tabpanel', 'region', 'group'] }]),
+      withLevel(['error', { roles: ['region', 'tabpanel'] }]),
+      withLevel(['error', { roles: ['tabpanel', 'region'], tags: [] }]),
+      withLevel(['error', { roles: ['tabpanel', 'region'], allowExpressionValues: false }]),
+      withLevel(['warn', { roles: ['tabpanel', 'region'] }]),
+      withLevel(['error']),
+      { ...config, rules: { ...config.rules, [ALT]: ['error', { roles: ['tabpanel', 'region'] }] } },
+    ];
+    for (const candidate of drifted) {
+      const problems = validateConfig(candidate, installed);
+      expect(problems, JSON.stringify(candidate.rules[TABINDEX])).toHaveLength(1);
+      expect(problems[0]).toMatch(/level must be "error"/);
+    }
+  }, OXLINT_TIMEOUT_MS);
+
+  it('lets a role="region" scroller take a tab stop, and still flags a role-less one', () => {
+    const region = lint('export function Probe() {\n  return <div role="region" aria-label="Rows" tabIndex={0}>x</div>;\n}\n');
+    expect(region.measured).toEqual({});
+    const panel = lint('export function Probe() {\n  return <div role="tabpanel" aria-label="Rows" tabIndex={0}>x</div>;\n}\n');
+    expect(panel.measured, 'tabpanel, the rule default, stays allowed').toEqual({});
+    const bare = lint('export function Probe() {\n  return <div tabIndex={0}>x</div>;\n}\n');
+    expect(bare.measured).toEqual({ 'probe.tsx': { [TABINDEX]: 1 } });
   }, OXLINT_TIMEOUT_MS);
 
   it('fails closed on a config error', () => {

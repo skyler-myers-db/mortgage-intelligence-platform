@@ -8,8 +8,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const { myAuditEvents, appContext } = vi.hoisted(() => ({
   myAuditEvents: vi.fn(),
   appContext: {
@@ -138,6 +136,13 @@ describe('Console actor-scoped recent activity', () => {
     expect(appContext.acknowledgeRecentActivityFocus).toHaveBeenCalledTimes(1);
     expect(activity?.textContent).toContain('My recent activity');
     expect(activity?.textContent).toContain('Outreach approved');
+    // a11y-05: the scroller is a region named by its title; it takes a tab
+    // stop only while it overflows (happy-dom lays nothing out, so here it
+    // fits; the fixture spec drives the overflowing case).
+    const panel = activity?.querySelector<HTMLElement>('.audit-panel');
+    expect(panel?.getAttribute('role')).toBe('region');
+    expect(document.getElementById(panel?.getAttribute('aria-labelledby') ?? '')?.textContent).toBe('My recent activity');
+    expect(panel?.hasAttribute('tabindex')).toBe(false);
     expect(activity?.textContent).toContain('B-AAAAAAAAAAAA1');
     expect(container.textContent).not.toContain('private.operator@example.com');
     expect(container.textContent).not.toContain('private.borrower@example.com');

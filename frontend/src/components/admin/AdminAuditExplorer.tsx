@@ -25,6 +25,7 @@ import { useApp } from '../AppContext';
 import { Chip, SurfaceTitle } from '../Primitives';
 import { Icon } from '../Icon';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
+import { Tooltip } from '../ui/Tooltip';
 import { PrintProvenance } from '../print/PrintProvenance';
 import { toastReceiptFailure } from '../print/receiptFailureToast';
 import { usePrintReceipt } from '../print/usePrintReceipt';
@@ -83,11 +84,8 @@ function ErrorBody(props: ErrorBodyProps) {
   );
 }
 
-interface AuditRollupRow {
-  bucket_start: string;
-  event_type: string;
-  event_count: number;
-}
+/** The rollups client's row (lib/apiClients/audit AuditRollupResponse): event_type is fail-closed nullable. */
+type AuditRollupRow = Awaited<ReturnType<typeof api.auditRollups>>[number];
 
 interface AuditCopyState {
   value: string;
@@ -156,7 +154,7 @@ export function AdminAuditExplorer() {
 
   const applyFilters = (next: AuditExplorerFilters) => {
     const params = serializeAuditExplorerFilters(next, searchParams).toString();
-    navigate(
+    void navigate(
       { search: params ? `?${params}` : '', hash: location.hash },
       { preventScrollReset: true },
     );
@@ -259,7 +257,6 @@ export function AdminAuditExplorer() {
             className="btn btn--ghost btn--sm"
             onClick={() => void copyValue(AUDIT_TABLE_CONTEXT, 'Table context')}
             aria-label="Copy Lakebase audit table context"
-            title="Copy Lakebase audit table name"
           >
             <Icon name="doc" size={12} />
             {copyState?.value === AUDIT_TABLE_CONTEXT && !copyState.failed
@@ -275,18 +272,19 @@ export function AdminAuditExplorer() {
             Exclude my ledger reads
           </label>
           {canAccessAdmin && (
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              onClick={exportCsv}
-              disabled={!events?.length || updating || csvPending}
-              aria-busy={csvPending || undefined}
-              aria-label={`Download page ${page + 1} of the audit explorer as CSV`}
-              title="Download the rows on this page as CSV"
-            >
-              <Icon name="export" size={12} />
-              Page CSV
-            </button>
+            <Tooltip content="Download the rows on this page as CSV">
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={exportCsv}
+                disabled={!events?.length || updating || csvPending}
+                aria-busy={csvPending || undefined}
+                aria-label={`Download page ${page + 1} of the audit explorer as CSV`}
+              >
+                <Icon name="export" size={12} />
+                Page CSV
+              </button>
+            </Tooltip>
           )}
           <button
             type="button"
@@ -354,11 +352,13 @@ export function AdminAuditExplorer() {
           {!rollupsWarming && !rollupsError && (
             <div className="admin-rollups__grid">
               {(rollups ?? []).slice(0, 6).map((row) => (
-                <div key={`${row.bucket_start}-${row.event_type}`} className="admin-rollup">
+                <div key={`${row.bucket_start}-${row.event_type ?? 'unrecorded'}`} className="admin-rollup">
                   <span className="fs-12">
-                    {auditEventLabel({ event_type: row.event_type, action: row.event_type })}
+                    {row.event_type === null
+                      ? 'Event type not recorded'
+                      : auditEventLabel({ event_type: row.event_type, action: row.event_type })}
                   </span>
-                  <span className="mono muted fs-11">{row.event_type}</span>
+                  <span className="mono muted fs-11">{row.event_type ?? '—'}</span>
                   <strong>{formatCount(row.event_count)}</strong>
                   <span className="muted fs-11">{formatAuditTimestamp(row.bucket_start)}</span>
                 </div>

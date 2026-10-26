@@ -10,13 +10,13 @@ import { formatCount } from '../lib/formatters';
  * Home's "Refinance review queue" banner — prototype `.approval` BEM, unchanged.
  *
  * Title (audit flow-v1, wave 3): it was "Approval queue", but it counts the
- * contactable refinance-economics screen, not genuinely pending approvals
+ * contactable In the Money count, not genuinely pending approvals
  * (that needs an audit-free pending count, wave 4; Home must never call
  * GET /api/leads). The title now names what it counts and what the button
  * opens. Offer Orchestrator's ApprovalBanner keeps "Approval queue".
  *
  * Addressable-vs-contactable reconciliation (2026-09-21 audit, flow-v1). The
- * banner quoted the whole-book refinance-economics screen
+ * banner quoted the whole-book In the Money count
  * (`high_intent_leads` from the `marketing_eligibility: 'Any'` preview) and
  * its button opened `/lead-queue?segment=itm`, which applies the
  * contact-eligibility predicate by default ("Eligible only"). On live gold
@@ -29,7 +29,7 @@ import { formatCount } from '../lib/formatters';
  * So the banner states both, in the SegmentCard idiom ("N contactable of M
  * ..."), and it never un-filters the queue: contactability is governed.
  *
- *   M = `screenCount` — the SAME preview value the "Refi economics screen" KPI
+ *   M = `screenCount` — the SAME preview value the "In the Money" KPI
  *       card above it renders, so the two cannot disagree.
  *   N = the same `/api/portfolio/preview` aggregate under 'Eligible only':
  *       SUM(in_the_money) with `eligible_sql_predicate()` applied. One
@@ -61,7 +61,7 @@ export function requestHomeContactablePreview(signal?: AbortSignal) {
 }
 
 interface ApprovalQueueBannerProps {
-  /** Whole-book refinance-economics screen (M); null while Home's preview loads. */
+  /** Whole-book In the Money count (M); null while Home's preview loads. */
   screenCount: number | null;
   approvedCount: number;
   inOutreachCount: number;
@@ -89,21 +89,21 @@ export function ApprovalQueueBanner({ screenCount, approvedCount, inOutreachCoun
 
   let body: ReactNode;
   if (screenCount === null) {
-    body = 'Borrowers passing the refinance-economics screen are ready for loan-officer review.';
+    body = 'Borrowers who are in the money are ready for loan-officer review.';
   } else if (showsReconcile) {
     body = (
       <>
         <span className="num" data-testid="approval-queue-contactable">{formatCount(contactable)}</span>
         {' '}contactable of{' '}
         <span className="num" data-testid="approval-queue-screen">{formatCount(screenCount)}</span>
-        {' '}borrowers passing the refinance-economics screen. {lifecycle}
+        {' '}borrowers in the money. {lifecycle}
       </>
     );
   } else if (contactable !== null) {
     body = (
       <>
         <span className="num" data-testid="approval-queue-screen">{formatCount(screenCount)}</span>
-        {' '}borrowers pass the refinance-economics screen. {lifecycle}
+        {' '}borrowers are in the money. {lifecycle}
       </>
     );
   } else {
@@ -113,7 +113,7 @@ export function ApprovalQueueBanner({ screenCount, approvedCount, inOutreachCoun
     body = (
       <>
         <span className="num" data-testid="approval-queue-screen">{formatCount(screenCount)}</span>
-        {' '}borrowers pass the refinance-economics screen across the whole book; the review queue
+        {' '}borrowers are in the money across the whole book; the review queue
         lists only the contactable subset. {lifecycle}
       </>
     );

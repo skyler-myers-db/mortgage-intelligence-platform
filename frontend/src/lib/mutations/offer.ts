@@ -26,6 +26,7 @@ import type { SavedDraft, SavedDraftInput } from '../../types';
 import { api } from '../api';
 import type { ApproveResult, RejectResult } from '../apiTypes';
 import { invalidateOperationalQueries } from '../queryKeys';
+import { wireOfferCodeOrNull, wireRejectReasonCode } from '../outreachWireCodes';
 import { invalidateApprovalRequests, outreachMutationKeys } from './outreach';
 
 export type OfferChannel = 'email' | 'sms' | 'direct_mail';
@@ -81,7 +82,12 @@ export function useOfferApprove(queryClient: QueryClient) {
   return useMutation<ApproveResult, Error, OfferApproveVariables>(
     {
       mutationKey: outreachMutationKeys.approve,
-      mutationFn: ({ borrowerId, requestId, body }) => api.approve(borrowerId, { ...body, request_id: requestId }),
+      // The offer code is narrowed before any I/O (WireCodeRefusedError: nothing sent).
+      mutationFn: async ({ borrowerId, requestId, body }) => api.approve(borrowerId, {
+        ...body,
+        offer_code: wireOfferCodeOrNull(body.offer_code, 'approve'),
+        request_id: requestId,
+      }),
       networkMode: 'always',
       retry: false,
       onSuccess: (result) => {
@@ -99,7 +105,13 @@ export function useOfferReject(queryClient: QueryClient) {
   return useMutation<RejectResult, Error, OfferRejectVariables>(
     {
       mutationKey: outreachMutationKeys.reject,
-      mutationFn: ({ borrowerId, requestId, body }) => api.reject(borrowerId, { ...body, request_id: requestId }),
+      // Both codes are narrowed before any I/O (WireCodeRefusedError: nothing sent).
+      mutationFn: async ({ borrowerId, requestId, body }) => api.reject(borrowerId, {
+        ...body,
+        offer_code: wireOfferCodeOrNull(body.offer_code, 'reject'),
+        rationale_code: wireRejectReasonCode(body.rationale_code),
+        request_id: requestId,
+      }),
       networkMode: 'always',
       retry: false,
       onSuccess: (result) => {

@@ -116,7 +116,7 @@ test.describe('genie-10 phase 2: figures that match one returned cell', () => {
       await expect(card).toHaveAttribute('aria-hidden', 'true');
       await expect(card.locator('.evidence-hovercard__title')).toHaveText('Matches a returned value');
       await expect(card.locator('.evidence-hovercard__signal')).toContainText('Column');
-      await expect(card.locator('.evidence-hovercard__signal-value')).toHaveText('In The Money');
+      await expect(card.locator('.evidence-hovercard__signal-value')).toHaveText('In the Money');
       await expect(card.locator('.evidence-hovercard__cta')).toHaveText('Listed under Verified figures in the proof');
       await expectAxeClean(page, { key: { route: 'ask-genie', state: 'genie-figure-hover' }, theme, known: KNOWN_VIOLATIONS, include: '#main-content' });
 
@@ -124,7 +124,7 @@ test.describe('genie-10 phase 2: figures that match one returned cell', () => {
       await expect(drawer).toContainText('3 of 3 answer figures verified');
       const labels = drawer.locator('.genie-claims__derivation');
       await expect(labels).toHaveText([
-        'Matches a returned value in In The Money',
+        'Matches a returned value in In the Money',
         'Derived from the returned rows (an average, range, change or running total)',
         'A threshold the returned values satisfy',
       ]);

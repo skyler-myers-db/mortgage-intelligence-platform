@@ -171,7 +171,7 @@ def test_campaign_text_still_refuses_pii(text: str) -> None:
 )
 def test_disposition_notes_are_retired_and_refused(note: str) -> None:
     with pytest.raises(ValidationError) as caught:
-        DispositionRequest.model_validate({"lo_email": "lo@entrada.ai", "outcome": "connected", "notes": note})
+        DispositionRequest.model_validate({"lo_email": "lo@summit.example", "outcome": "connected", "notes": note})
     assert [error["type"] for error in caught.value.errors()] == ["extra_forbidden"]
 
 

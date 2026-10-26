@@ -30,16 +30,35 @@ pending or failed state; it must not claim success.
   authorization as the ranked list (admin gate, assignee visibility, cohort
   replay) but return totals or the actor's own views only, never resolve the
   audit store, and write no row. The Lead Queue reads facet counts only when a
-  person opens a filter menu, and the saved views only when the panel opens.
+  person opens a filter menu, the saved views only when the panel opens, and
+  the match count only while a person types in the open filter omnibox
+  (debounced, recognized readings only) and once when "More like this" opens
+  (a borrower's reviewed pattern: segment, product, state, relationship, score
+  band; never sub-state geography or an id). Both count queries are built from
+  an allowlist (`frontend/src/lib/leadCountQuery.ts`), so neither ever carries
+  `borrower_ids`, an approval-request scope, a cohort or a Growth Agent proof,
+  and the omnibox's typed text is never stored, put in a URL or sent anywhere
+  (unrecognized text reaches Genie only as a composer prefill on a click).
   Count and facets refuse `borrower_ids` (422): an aggregate over named
   borrowers would read their attributes with no `VIEW_LEADS` row, so a read of
   named borrowers is the audited list only, and the Lead Queue shows a borrower
   list's menus without counts.
 - Saving and deleting a view write `SAVE_QUEUE_VIEW` / `DELETE_QUEUE_VIEW` in
   the same Lakebase statement as the change (deletes are soft). The audit
-  metadata carries the view id, the SHA-256 of its canonical params and the
-  request id, never the view name or the params. The name passes the same
+  metadata carries the view id, a keyed fingerprint of its canonical params
+  (an HMAC of their SHA-256 under the saved-view domain, like the ledger and
+  `VIEW_LEADS` copies; omitted outside local/test when no key is configured)
+  and the request id, never the view name or the params. The name passes the same
   public-text policy as a campaign name and a refusal never echoes it.
+- Column visibility (`?view=` and `?hide=`) is display state: it never reaches
+  `/api/leads`, the leads query key, the export filters or the Growth Agent
+  proof, and a change reads nothing. Which saved view is the actor's default
+  (its columns apply when a queue URL names none; it never injects a filter)
+  and the three most recently opened views live in the actor-scoped
+  PRIVATE_LOCAL browser key `mip.leadQueue.savedViews.v1` (lib/actorScope:
+  read only under the actor's own stamp, removed on an actor change). It holds
+  view ids, names and canonical params, the same public-safe text the actor's
+  saved views already hold, and is never sent anywhere.
 
 ## Source Truth
 
@@ -180,6 +199,7 @@ tier; neither implies the other.
 | `POST /audit/event` | no | no | no | no | yes |
 | Asset freshness (band, last refresh, basis; `GET /assets/{key}/freshness`) | yes | yes | yes | yes | yes |
 | KPI reproduce SQL (`GET /kpi-proof`) | yes | yes | yes | yes | yes |
+| Sales ops per-officer workload (`GET /sales/workload`, W5e) | no (403) | a `sales_manager` (own loan officers) or roster `admin` (all); a loan officer is 403 | only if also a sales manager or roster admin | only if also a sales manager or roster admin | only if also a sales manager or roster admin |
 | `/admin/*` (rules 410, operations run, force-degraded, settings, asset metadata) | no | no | no | no | yes |
 | Lead Queue marketing override and `include_suppressed_for_analytics` | no | no | no | no | yes |
 | Follow-ups due tray and Snooze (`GET /sales/followups/summary`, `GET /sales/followups`, `POST /leads/{id}/snooze`) | no (the summary reads `eligible: false`; the list and the snooze answer 403) | yes (active roster member): the actor's own items only | yes: the actor's own items only | only if also on the sales roster | yes (an administrator is an approver): the actor's own items only |
@@ -217,7 +237,8 @@ the pull request that ships the behaviour, never earlier.
 | Offer open (the approval surface) | `RECOMMEND_OFFER` | once per `POST /offers/recommend` (`offers.recommend_offer`): the approval-surface open record, carrying offer code, confidence, thresholds, `decision_inputs`, source freshness, evidence ids and subject CLIP | synchronous, fail-closed (503) |
 | Offer open (the approval surface) | `DRAFT_OUTREACH` | once per `POST /outreach/draft` (`outreach.draft_outreach`) | committed in the same transaction as the draft row, fail-closed |
 | Approve / Reject (`outreach.approve_outreach` / `outreach.reject_outreach`) | `APPROVE` / `OUTREACH_REJECT` | once per decision; an approve without `review_mode` is refused with 422 `Reload the app to approve` before any read or write (required since W5c) | committed with the approvals row, fail-closed; carries `decision_inputs` and the draft proof, `approval_request_batch_id` when the decision answers an approval request, and the client-declared `declared_lead_view_id` when taken from the paged Lead Queue |
-| Revoke (`outreach_revoke.revoke_outreach`) | `OUTREACH_REVOKE` | once per revoke | committed with the revoke's approvals row, fail-closed; the approve row is never changed |
+| Revoke (`outreach_revoke.revoke_outreach`) | `OUTREACH_REVOKE` | once per revoke; a rationale the governed text screen refuses writes `GOVERNED_TEXT_REFUSED` (surface `revoke`) instead, and a refused revoke (409 with its `reason`) writes nothing | committed with the revoke's approvals row, fail-closed; the approve row is never changed |
+| Lead Queue revoke panel lifecycle read (`GET /borrowers/{id}/lifecycle`, W5e) | none | only on an explicit open of 'Revoke' from an Approved row (never on hover, focus, prefetch or poll), to name the approval to revoke; the queue receipt's Revoke already knows it and reads nothing | audit-free (`require_active_team_member`, Lakebase workflow state) |
 | Assignment release, the Undo (`sales.release_lead_assignment`, `sales.release_distribution`) | `LEAD_UNASSIGN` (borrower entity; `borrower_id`, `assignment_id`, `assigned_to_email`, then `restored_assignment_id` + `restored_to_email` or a closed `restore_skipped_reason`) | once per released borrower; a replayed request id writes nothing and returns the original audit id | committed in the release transaction, fail-closed; the released row is kept (`released_at`), never deleted |
 | Distribution Board dry run (`POST /sales/distribute` with `dry_run`) | none | when the Board opens, or re-plans after a 409 | audit-free: writes no Lakebase row and no audit row; returns per-officer aggregates and a plan fingerprint, never a borrower id |
 | Queue-version poll (`workspace.read_queue_version`) | none | every poll | audit-free |
@@ -249,6 +270,8 @@ the pull request that ships the behaviour, never earlier.
 | Admin SSE ingress probe (`admin_sse_probe.sse_probe`, `admin_sse_probe.sse_probe_outcome`) | none | admin-only transport diagnostic (delivery-04) | audit-free; reads no UC or Lakebase data |
 | Genie context scope (`genie_context_routes.genie_context_scope`) | none | only on an explicit "Ask Genie" click in an empty Lead Queue; never on render, hover, focus or prefetch | audit-free (renders a reviewed prompt from closed codes; the scope is audited later inside the submitted question's `question_hash`) |
 | KPI proof (`kpi_proof.get_kpi_proof`) | none | when a KPI's evidence drawer opens; reads nothing | audit-free (fixed governed SQL text, gold and semantics relations only) |
+| Executive KPI proofs (`kpi_proof.get_kpi_proof`, keys `analytics.addressable`, `analytics.in_the_money`, `analytics.primary_offer_paths`, `analytics.approved`, W5e) | none | when an Analytics Executive KPI's evidence drawer opens with no tab filter active (a filtered card carries no proof); reads nothing | audit-free (fixed text: the unfiltered `_LIVE_FUNNEL_SQL` over gold `borrower_360` and the gold lifecycle mirror `borrower_lifecycle_state`, the one relation W5e appended to `kpi_proof_relations`) |
+| Sales ops per-officer workload (`sales_workload.sales_workload`, W5e) | none | when the Sales ops tab shows a period (stale after 30 s; never polled, refetched on focus or prefetched; refetched after a Distribution Board commit) | audit-free (one Lakebase read of the roster, assignments and dispositions; staff aggregates, no borrower row or borrower id; never the warehouse; `private, no-store`) |
 | Evidence drawer freshness (`asset_freshness.get_asset_freshness`) | none | when an evidence drawer opens on a mapped asset; never on hover, prefetch or poll | audit-free (one `gold.source_readiness` row; schema internals stay on the admin metadata read) |
 | Admin Field performance (`admin_field_performance.field_performance`) | none | when Administration opens, and on an explicit Refresh or 7/28-day change; never polled or refetched on focus | audit-free (admin-only; day-grain browser RUM aggregates, no borrower data) |
 
@@ -277,6 +300,18 @@ requests). It is outside the 2026-09-30 borrower-notes ruling. The Lead
 Queue reads the request list once per mount and after a decision, a create
 or a withdraw (audit-free Lakebase workflow state; never polled), and the
 request path never calls `/outreach/draft`.
+
+Revoke rationale: a decision rationale (governed), framed as O3 frames the
+request justification (W5e `w5-lead-table-compile`, correction C11). The
+Lead Queue's "Reason for revoking" is sent as `rationale` on
+`POST /outreach/revoke`, takes the same governed text screen and the same
+500-character cap as the approve and reject rationales, and is recorded on
+the `OUTREACH_REVOKE` row (and the revoke's approvals row) only. It is never
+a borrower note and never shown as one; the field's hint says to leave out
+personal details. A rationale the screen refuses writes
+`GOVERNED_TEXT_REFUSED` (surface `revoke`, owner ruling O1) and the route
+answers its fixed 422; the panel says the refusal was recorded only for
+that 422.
 
 A `VIEW_AUDIT_LEDGER` row (`backend/services/audit_ledger_reads.py`) carries
 only the closed `ledger_surface`, `has_cursor`, `returned_row_count`, the
@@ -468,3 +503,36 @@ a row is closed once and never deleted: the App role holds `SELECT`,
 `INSERT` and `UPDATE` only. The lifecycle sync's wake step (the bundle job
 runs as the deployer, which owns `mip_app`) writes only `woken_at` and
 `wake_reason`, under a `woken_at IS NULL` guard, and writes no audit row.
+
+## Segment display names and examiner reconstruction (2026-10-XX, W5e)
+
+critic-11 / D-platform-process-g. The economic-incentive rule that
+`fn_in_the_money` implements has one display name: **In the Money**. It is
+an economics screen (rate spread at or above the governed threshold AND
+equity at or above the governed threshold), not lead quality and not
+creditworthiness. It is staff vocabulary only: borrower-facing draft copy
+never carries it, by construction and by test
+(`tests/unit/test_outreach_no_internal_terms.py`).
+
+**Codes never changed; only display words did.** Historical Lakebase and
+`action_audit` rows are never rewritten, so an examiner reading a row
+written before this change maps the old display words through the stable
+code:
+
+| Stored text (before 2026-10-XX) | Code | Display name now |
+| --- | --- | --- |
+| Prime Refi Candidates / Prime Refi Candidate | `itm` (segment) | In the Money |
+| Prime refinance economics (Growth Agent trigger label) | `itm` | In the Money |
+| Refi economics / Refi Economics (KPI, funnel stage) | `in_the_money` (measure) | In the Money |
+| Refi economics screen (Home KPI, lineage title) | `in_the_money` / `refi_economics_screen` | In the Money |
+| Refinance economics screen / Refi screen (source chip, proof margin) | `fn_in_the_money` / `spread_screen` | In the Money rule |
+
+Every `GROWTH_AGENT_RUN` payload that names a segment label also carries its
+code in `result_filters` (`segment` or `segment_codes`), and no
+`RECOMMEND_OFFER` payload names a label without its code
+(`tests/unit/test_audit_payload_segment_code.py`), so a stored row is read by
+code, whatever display name was current when it was written.
+`backend/services/segment_labels.py` keeps the retired name as an input
+alias only (`LEGACY_SEGMENT_NAMES`); `tests/unit/test_segment_label_parity.py`
+keeps the gold, App and frontend names identical and the retired variants
+out of every shipped string.

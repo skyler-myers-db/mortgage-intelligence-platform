@@ -183,7 +183,7 @@ test.describe('Module 0 demo visual baselines', () => {
   test('Ask Genie empty state is polished at desktop and mobile widths', async ({ page }) => {
     await page.goto('/ask-genie');
     const main = page.locator('#main-content');
-    await expect(main.getByText('Ready for governed analysis')).toBeVisible();
+    await expect(main.getByText('Ask about your book — coverage, segments, borrowers, market shifts.')).toBeVisible();
     const desktopGrid = page.locator('.layoutA-grid');
     await expect(desktopGrid).toBeVisible();
     const desktopChildren = await desktopGrid.locator(':scope > *').evaluateAll((nodes) =>
@@ -203,7 +203,7 @@ test.describe('Module 0 demo visual baselines', () => {
     }
 
     await page.setViewportSize({ width: 390, height: 844 });
-    await expect(main.getByText('Ready for governed analysis')).toBeVisible();
+    await expect(main.getByText('Ask about your book — coverage, segments, borrowers, market shifts.')).toBeVisible();
     const mobileGrid = page.locator('.layoutA-grid');
     const gridBox = await mobileGrid.boundingBox();
     const directChildren = mobileGrid.locator(':scope > *');
@@ -220,7 +220,7 @@ test.describe('Module 0 demo visual baselines', () => {
 
     const longPrompt = Array.from(
       { length: 20 },
-      () => 'Compare prime refi candidates, HELOC candidates, listings, evidence provenance, and lender overlays for the current filtered population.',
+      () => 'Compare in-the-money borrowers, HELOC candidates, listings, evidence provenance, and lender overlays for the current filtered population.',
     ).join(' ');
     const questionBox = page.locator('textarea[aria-label="Ask Genie — question"]');
     await questionBox.fill(longPrompt);

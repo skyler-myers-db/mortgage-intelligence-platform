@@ -13,8 +13,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { DailyEvidenceTotal } from './analytics.lib';
 import { DailyEvidenceLineChart } from './analytics.charts';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /** May 1, 2 and 5: two days are missing between the second and third rows. */
 const GAPPED: DailyEvidenceTotal[] = [
   { event_date: '2026-05-01', event_count: 40 },

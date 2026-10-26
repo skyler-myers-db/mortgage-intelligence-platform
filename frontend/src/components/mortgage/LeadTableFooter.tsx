@@ -55,9 +55,6 @@ export function LeadTableFooter({
   onResetSort,
   paging = null,
 }: LeadTableFooterProps) {
-  // The shell's compile posture (audit runtime-04, cut 5), as in LeadTableHeader.
-  'use no memo';
-
   // "Loaded k more": derived when the SAME view gains a page (no effect, no
   // timer). A new view (a filter, sort or Refresh) announces nothing here.
   const viewId = paging?.viewId ?? null;

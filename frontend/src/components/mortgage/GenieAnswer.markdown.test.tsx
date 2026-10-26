@@ -12,14 +12,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { MarkdownAnswer, isSectionHeading, isSourceFootnote } from './GenieAnswer.markdown';
 import { GenieFigureScopes } from './GenieAnswerFigures';
+import { tooltipText } from '../../test/tooltipText';
 // Load the lazy mark's module graph (EvidenceHoverCard and its imports) at
 // file load, as GenieAnswerFigures.test.tsx does, so its first transform is
 // not charged to the first figure-mark test's timeout. renderScoped still
 // awaits the import to let React.lazy settle.
 import './GenieFigureMark';
 import type { GenieVerifiedClaim } from '../../types';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const SWEEP_ANSWER = [
   'I asked the governed space to plan this request itself; it decomposed the question into 8 sub-analyses.',
@@ -364,7 +363,7 @@ describe('MarkdownAnswer figure marks', () => {
     [
       'Illinois leads with **48,396** in-the-money borrowers, ahead of Texas at 10,914 (a 48.3% share).\n\nSource: mip.gold.borrower_360.',
       HOST,
-      '<p class="genie-md-p genie-md-p--first"><span>Illinois leads with </span><strong>48,396</strong><span> in-the-money borrowers, ahead of Texas at 10,914 (a 48.3% share).</span></p><p class="genie-md-p genie-md-p--source"><span>Source: <a class="uc-asset-link" href="https://dbc-test.cloud.databricks.com/explore/data/mip/gold/borrower_360" target="_blank" rel="noopener noreferrer" title="Open mip.gold.borrower_360 in Databricks Catalog Explorer">mip.gold.borrower_360</a>.</span></p>',
+      '<p class="genie-md-p genie-md-p--first"><span>Illinois leads with </span><strong>48,396</strong><span> in-the-money borrowers, ahead of Texas at 10,914 (a 48.3% share).</span></p><p class="genie-md-p genie-md-p--source"><span>Source: <a class="uc-asset-link" href="https://dbc-test.cloud.databricks.com/explore/data/mip/gold/borrower_360" target="_blank" rel="noopener noreferrer" aria-describedby="tooltip-desc_ID_" data-tooltip="tooltip-desc_ID_">mip.gold.borrower_360</a>.</span></p>',
     ],
     [
       'I asked the governed space to plan this request itself; it decomposed the question into 8 sub-analyses.\n\n**Which segments lead?**\n\nThe in-the-money segment leads with **1,204** borrowers at an average score of 71.',
@@ -379,17 +378,40 @@ describe('MarkdownAnswer figure marks', () => {
     [
       'Breakdown:\n| State | Borrowers |\n|---|---|\n| IL | 1,204 |\nThe *largest* cohort is 1,204 borrowers; mip.gold.lead_scores_2026 and _5_ stay.\n```\nSELECT 5\n```',
       HOST,
-      '<p class="genie-md-p genie-md-p--first"><span>Breakdown:</span></p><figure class="genie-md-pre"><figcaption class="genie-md-pre__label">As written in Genie\'s narrative</figcaption><pre tabindex="0">| State | Borrowers |\n|---|---|\n| IL | 1,204 |</pre></figure><p class="genie-md-p"><span>The </span><em>largest</em><span> cohort is 1,204 borrowers; mip.gold.lead_scores_2026 and _5_ stay.</span></p><figure class="genie-md-pre"><pre tabindex="0">SELECT 5</pre></figure>',
+      '<p class="genie-md-p genie-md-p--first"><span>Breakdown:</span></p><figure class="genie-md-pre"><figcaption id="_ID_" class="genie-md-pre__label">As written in Genie\'s narrative</figcaption><pre role="region" aria-labelledby="_ID_" tabindex="0">| State | Borrowers |\n|---|---|\n| IL | 1,204 |</pre></figure><p class="genie-md-p"><span>The </span><em>largest</em><span> cohort is 1,204 borrowers; mip.gold.lead_scores_2026 and _5_ stay.</span></p><figure class="genie-md-pre"><pre role="region" aria-label="Verbatim text from the answer" tabindex="0">SELECT 5</pre></figure>',
     ],
     [
       'The book holds $1.2B across 3,410 loans, +350 bps over par, with 5Source: mip.gold.borrower_360 cited.',
       HOST,
-      '<p class="genie-md-p genie-md-p--first"><span>The book holds $1.2B across 3,410 loans, +350 bps over par, with 5Source: <a class="uc-asset-link" href="https://dbc-test.cloud.databricks.com/explore/data/mip/gold/borrower_360" target="_blank" rel="noopener noreferrer" title="Open mip.gold.borrower_360 in Databricks Catalog Explorer">mip.gold.borrower_360</a> cited.</span></p>',
+      '<p class="genie-md-p genie-md-p--first"><span>The book holds $1.2B across 3,410 loans, +350 bps over par, with 5Source: <a class="uc-asset-link" href="https://dbc-test.cloud.databricks.com/explore/data/mip/gold/borrower_360" target="_blank" rel="noopener noreferrer" aria-describedby="tooltip-desc_ID_" data-tooltip="tooltip-desc_ID_">mip.gold.borrower_360</a> cited.</span></p>',
     ],
   ];
 
+  it('names a Catalog Explorer source link in a design-system tooltip, never a native title (critic-08)', () => {
+    act(() => root.render(<MarkdownAnswer text="Source: mip.gold.borrower_360." workspaceHost={HOST} />));
+    const link = container.querySelector('a.uc-asset-link');
+    expect(link?.textContent).toBe('mip.gold.borrower_360');
+    expect(link?.hasAttribute('title')).toBe(false);
+    expect(tooltipText(link)).toBe('Open mip.gold.borrower_360 in Databricks Catalog Explorer');
+  });
+
+  it('makes a verbatim block a named, focusable region: the caption names a narrative table (a11y-05)', () => {
+    act(() => root.render(<MarkdownAnswer text={'Breakdown:\n| State | Borrowers |\n|---|---|\n| IL | 1,204 |\n```\nSELECT 5\n```'} />));
+    const [narrative, fenced] = Array.from(container.querySelectorAll('pre'));
+    expect(narrative?.getAttribute('role')).toBe('region');
+    expect(narrative?.tabIndex).toBe(0);
+    const caption = container.querySelector('figcaption');
+    expect(narrative?.getAttribute('aria-labelledby')).toBe(caption?.id);
+    expect(caption?.textContent).toBe("As written in Genie's narrative");
+    expect(fenced?.getAttribute('role')).toBe('region');
+    expect(fenced?.getAttribute('aria-label')).toBe('Verbatim text from the answer');
+    expect(fenced?.tabIndex).toBe(0);
+  });
+
+  // React useId values (the Tooltip's description id, the region's caption
+  // id) depend on render order, so they compare as _ID_.
   it.each(BASE_HTML)('renders %j byte-identically to the base without a provider', (text, workspaceHost, html) => {
     act(() => root.render(<MarkdownAnswer text={text} workspaceHost={workspaceHost} />));
-    expect(container.innerHTML).toBe(html);
+    expect(container.innerHTML.replace(/_r_[0-9a-z]+_/g, '_ID_')).toBe(html);
   });
 });

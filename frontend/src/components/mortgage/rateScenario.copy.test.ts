@@ -6,7 +6,7 @@ describe('rateScenario.copy', () => {
   it('states today at step 0', () => {
     expect(
       scenarioHeadline({ step: 0, ratePct: 6.3, inTheMoney: 991_931, today: 991_931, contactable: 40_100, scopeName: null }),
-    ).toBe("At today's 30-year par rate (6.30%), 991,931 borrowers clear this refresh's refi screen; 40,100 of them are contactable.");
+    ).toBe("At today's 30-year par rate (6.30%), 991,931 borrowers are in the money; 40,100 of them are contactable.");
     expect(scenarioValueText({ step: 0, ratePct: 6.3, inTheMoney: 991_931 })).toBe(
       "Par rate 6.30%, today's rate: 991,931 borrowers in the money.",
     );
@@ -16,7 +16,7 @@ describe('rateScenario.copy', () => {
     expect(
       scenarioHeadline({ step: -50, ratePct: 5.8, inTheMoney: 1_204_331, today: 991_931, contactable: 46_100, scopeName: null }),
     ).toBe(
-      "If the 30-year par rate were 0.50 points lower (5.80%), 1,204,331 borrowers would clear this refresh's refi screen: 212,400 more than today; 46,100 of them are contactable.",
+      "If the 30-year par rate were 0.50 points lower (5.80%), 1,204,331 borrowers would be in the money: 212,400 more than today; 46,100 of them are contactable.",
     );
     expect(scenarioValueText({ step: -50, ratePct: 5.8, inTheMoney: 1_204_331 })).toBe(
       'Par rate 5.80%, down 50 basis points: 1,204,331 borrowers in the money.',
@@ -27,7 +27,7 @@ describe('rateScenario.copy', () => {
     expect(
       scenarioHeadline({ step: 25, ratePct: 6.55, inTheMoney: 800, today: 1_000, contactable: 30, scopeName: 'Texas' }),
     ).toBe(
-      "If the 30-year par rate were 0.25 points higher (6.55%), 800 borrowers in Texas would clear this refresh's refi screen: 200 fewer than today; 30 of them are contactable.",
+      "If the 30-year par rate were 0.25 points higher (6.55%), 800 borrowers in Texas would be in the money: 200 fewer than today; 30 of them are contactable.",
     );
     expect(scenarioValueText({ step: 25, ratePct: 6.55, inTheMoney: 800 })).toBe(
       'Par rate 6.55%, up 25 basis points: 800 borrowers in the money.',
@@ -38,11 +38,11 @@ describe('rateScenario.copy', () => {
     expect(
       scenarioHeadline({ step: 75, ratePct: 7.05, inTheMoney: 1, today: 1, contactable: null, scopeName: null }),
     ).toBe(
-      "If the 30-year par rate were 0.75 points higher (7.05%), 1 borrower would clear this refresh's refi screen: the same as today.",
+      "If the 30-year par rate were 0.75 points higher (7.05%), 1 borrower would be in the money: the same as today.",
     );
     expect(
       scenarioHeadline({ step: 0, ratePct: 6.3, inTheMoney: 12, today: 12, contactable: null, scopeName: null }),
-    ).toBe("At today's 30-year par rate (6.30%), 12 borrowers clear this refresh's refi screen.");
+    ).toBe("At today's 30-year par rate (6.30%), 12 borrowers are in the money.");
   });
 });
 
@@ -58,7 +58,7 @@ describe('largestChanges (wow-stage-1)', () => {
 
   it('names the three largest drops for a par rise', () => {
     expect(largestChanges({ tx: -1_234, fl: -980, ca: -870, il: -12 }, nameOf, 50)).toBe(
-      'Largest in-the-money drops: Texas -1,234 · Florida -980 · California -870',
+      'Largest in-the-money drops: Texas −1,234 · Florida −980 · California −870',
     );
   });
 
@@ -95,14 +95,14 @@ describe('scenarioCohortLink (wow-stage-1 map-side cohort handoff)', () => {
   it('opens the band a par fall brings onto the screen, below today\'s threshold', () => {
     const link = scenarioCohortLink(-50, 75, null);
     expect(link?.href).toBe('/lead-queue?min_rate_spread_bps=25&max_rate_spread_bps=74');
-    expect(link?.label).toBe('Open borrowers within 50 bps of the refi screen in the Lead Queue');
+    expect(link?.label).toBe('Open borrowers within 50 bps of being in the money in the Lead Queue');
     expect(bounds(link?.href ?? '')).toEqual({ min: 25, max: 74, segment: null, state: null });
   });
 
   it('opens the in-the-money band a par rise takes off the screen, scoped to a drilled state', () => {
     const link = scenarioCohortLink(25, 75, { id: 'tx' });
     expect(link?.href).toBe('/lead-queue?segment=itm&min_rate_spread_bps=75&max_rate_spread_bps=99&state=TX');
-    expect(link?.label).toBe('Open in-the-money borrowers within 25 bps of dropping off the refi screen');
+    expect(link?.label).toBe('Open in-the-money borrowers within 25 bps of falling out of the money');
     expect(bounds(link?.href ?? '')).toEqual({ min: 75, max: 99, segment: 'itm', state: 'TX' });
   });
 
@@ -112,7 +112,7 @@ describe('scenarioCohortLink (wow-stage-1 map-side cohort handoff)', () => {
     expect(scenarioCohortLink(-25, undefined, null)).toBeNull();
     // The label names the move, never a borrower count.
     expect(scenarioCohortLink(-100, 75, null)?.label).toBe(
-      'Open borrowers within 100 bps of the refi screen in the Lead Queue',
+      'Open borrowers within 100 bps of being in the money in the Lead Queue',
     );
   });
 

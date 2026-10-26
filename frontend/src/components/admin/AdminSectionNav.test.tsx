@@ -7,8 +7,6 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ADMIN_SECTIONS, AdminSectionNav, type AdminStatusItem } from './AdminSectionNav';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * Administration's status row and section nav (audit critic-09): a static
  * row of status chips, router anchor links to every section in page order,

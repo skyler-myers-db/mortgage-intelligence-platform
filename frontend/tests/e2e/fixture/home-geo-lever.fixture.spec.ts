@@ -68,7 +68,7 @@ test.describe('WHY NOW leads with the par move since the last visit', () => {
     // First, then the two event measures, in the server's order.
     await expect(triggers(page).first()).toHaveAttribute('data-testid', 'why-now-rate-move');
     // data/rateWindow.ts: the week of the 2026-01-15 visit printed 6.41%, the latest (2026-04-13) 6.22%.
-    await expect(rate.locator('.evidence-chip')).toHaveText('-19 bps');
+    await expect(rate.locator('.evidence-chip')).toHaveText('−19 bps');
     await expect(rate.getByRole('link', { name: '30-year par rate since your last visit (from 6.41% to 6.22%)' }))
       .toHaveAttribute('href', '/analytics');
     await expect(triggers(page).nth(1).getByRole('link')).toHaveText('borrowers with a listed home');

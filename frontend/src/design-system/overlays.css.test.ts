@@ -16,10 +16,17 @@ import { featureStylesheets } from '../test/featureCss';
 /** Declarations only: comments cite prototype selectors and line numbers. */
 const css = (): string => designCss().replace(/\/\*[\s\S]*?\*\//g, '');
 
+/**
+ * The proof drawer's `.proof-*` blocks load with its lazy chunk, from
+ * components/mortgage/ProofPanels.css (css-05 step 2), not the partials.
+ */
+const proofCss = (): string =>
+  (featureStylesheets().find((sheet) => sheet.file === 'src/components/mortgage/ProofPanels.css')?.css ?? '').replace(/\/\*[\s\S]*?\*\//g, '');
+
 /** The first top-level block whose selector list is exactly `selector`. */
-function block(selector: string): string {
+function block(selector: string, source: string = css()): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = new RegExp(`(?:^|[}\\n])\\s*${escaped}\\s*\\{([^}]*)\\}`).exec(css());
+  const match = new RegExp(`(?:^|[}\\n])\\s*${escaped}\\s*\\{([^}]*)\\}`).exec(source);
   expect(match, `${selector} is declared`).not.toBeNull();
   return match![1];
 }
@@ -51,7 +58,7 @@ describe('the evidence and proof drawers are native modal dialogs', () => {
     const widthRules = [...css().matchAll(/([^{}]+)\{[^}]*\bwidth:/g)].map((match) => match[1].trim());
     const drawerWidthRules = widthRules.filter((selector) => /\.drawer\b/.test(selector) && selector !== '.drawer');
     expect(drawerWidthRules).toEqual([]);
-    expect(block('.proof-drawer')).toMatch(/width:\s*min\(760px,\s*100vw\)/);
+    expect(block('.proof-drawer', proofCss())).toMatch(/width:\s*min\(760px,\s*100vw\)/);
     expect(block('.genie-proof-drawer')).toMatch(/width:\s*560px;/);
   });
 
@@ -119,8 +126,8 @@ describe('the borrower offer mock is a modal dialog with the prototype scrim as 
 
 describe('drawer and proof tabs ease their selection (motion-08, tab slice)', () => {
   it('transitions the tab fill and ink on --dur-fast / --ease', () => {
-    for (const selector of ['.drawer__tab', '.proof-tab']) {
-      expect(block(selector), selector).toMatch(
+    for (const [selector, source] of [['.drawer__tab', css()], ['.proof-tab', proofCss()]] as const) {
+      expect(block(selector, source), selector).toMatch(
         /transition:\s*background-color var\(--dur-fast\) var\(--ease\),\s*color var\(--dur-fast\) var\(--ease\)/,
       );
     }

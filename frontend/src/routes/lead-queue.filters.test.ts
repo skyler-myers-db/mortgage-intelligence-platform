@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  KNOWN_QUEUE_PARAMS,
+  LEAD_TABLE_HIDE_PARAM,
+  leadTableHideParamValue,
+  parseBorrowerIds,
+  parseLeadTableHide,
   APPROVAL_REQUEST_BATCH_PARAM,
   LEAD_BOUND_FILTER_KEYS,
   LEAD_BOUND_LIMITS,
@@ -30,6 +35,7 @@ import {
 import { hasLeadQueueFilters, searchParamsCleared } from './lead-queue.activeFilters';
 import { leadsRequestFromSearchParams } from './lead-queue.request';
 import { leadsQuery } from '../lib/leadsQuery';
+import { MAX_QUEUE_BORROWER_IDS } from '../lib/queueBorrowerIds';
 
 describe('lead queue effective workflow filters', () => {
   it('shows Approved when the approved funnel stage is driving the filter', () => {
@@ -53,7 +59,7 @@ describe('lead queue effective workflow filters', () => {
 describe('lead queue drilldown display labels', () => {
   it('shows every analytics funnel stage as a user-facing filter value', () => {
     expect(funnelStageDisplayValue('addressable')).toBe('Addressable');
-    expect(funnelStageDisplayValue('in_the_money')).toBe('Refi economics');
+    expect(funnelStageDisplayValue('in_the_money')).toBe('In the Money');
     expect(funnelStageDisplayValue('high_opportunity')).toBe('Opportunity score 75+');
     expect(funnelStageDisplayValue('offer_recommended')).toBe('Primary offer selected');
     expect(funnelStageDisplayValue('approved')).toBe('Approved');
@@ -420,5 +426,43 @@ describe('the approval-request scope param (flow-02 / shell-06, D-approval-flow-
     expect(key(`approval_request_batch=${ID}`)).not.toBe(key(''));
     expect(key(`approval_request_batch=${ID}`)).toContain(ID);
     expect(key(`approval_request_batch=${ID}&cohort_id=c1`)).toBe(key('cohort_id=c1'));
+  });
+});
+
+describe('the borrower_ids hand-off cap (W5d follow-ups deferral)', () => {
+  const ids = (count: number) => Array.from({ length: count }, (_, index) => `B-${String(index).padStart(13, '0')}`);
+
+  it('keeps a 50-id deep link whole and truncates the 51st id client-side', () => {
+    expect(MAX_QUEUE_BORROWER_IDS).toBe(50);
+    expect(parseBorrowerIds(ids(50).join(','))).toEqual(ids(50));
+    expect(parseBorrowerIds(ids(51).join(','))).toEqual(ids(50));
+  });
+
+  it('counts only valid, de-duplicated ids toward the cap', () => {
+    const raw = ['not-an-id', ...ids(50), ids(50)[0], 'B-ZZZZZZZZZZZZZ'].join(',');
+    expect(parseBorrowerIds(raw)).toEqual(ids(50));
+  });
+});
+
+describe('the ?hide= grammar (tables-05 step 2)', () => {
+  it('reads vocabulary tokens in column order, de-duplicated and lower-cased; none and junk name none', () => {
+    expect(LEAD_TABLE_HIDE_PARAM).toBe('hide');
+    expect(parseLeadTableHide('rate,SEGMENTS,rate, location ')).toEqual(['location', 'segments', 'rate']);
+    expect(parseLeadTableHide('none')).toEqual([]);
+    expect(parseLeadTableHide('borrower,score,approval,offer,confidence,zyrplax')).toEqual([]);
+    expect(parseLeadTableHide(null)).toEqual([]);
+  });
+
+  it("writes only the view's hideable tokens, or nothing", () => {
+    expect(leadTableHideParamValue('default', ['rate', 'relationship', 'segments'])).toBe('segments,rate');
+    expect(leadTableHideParamValue('sales-ops', ['status', 'assigned'])).toBe('assigned');
+    expect(leadTableHideParamValue('default', [])).toBeNull();
+  });
+
+  it('is a known queue param, so Copy link never counts it as unrecognized', () => {
+    expect(KNOWN_QUEUE_PARAMS).toContain('hide');
+    const share = leadQueueShareParams(new URLSearchParams('state=IL&hide=none'), { stateFilter: 'IL' });
+    expect(share.search).toBe('?state=IL');
+    expect(share.omitted).toEqual([]);
   });
 });

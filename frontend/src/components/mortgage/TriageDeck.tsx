@@ -46,7 +46,7 @@ export interface TriageDeckProps {
   approval: ReturnType<typeof useLeadApprovalActions>;
   leadsById: ReadonlyMap<string, LeadSummary>;
   approvals: Record<string, 'approved' | 'rejected'>;
-  /** The review chunk, read by the (uncompiled) table, never by the deck. */
+  /** The review chunk, read by the table, never by the deck. */
   ReviewInline: ComponentType<LeadApproveReviewProps> | null;
   actorEmail: string | null;
   campaignBinding: CampaignBinding | null;

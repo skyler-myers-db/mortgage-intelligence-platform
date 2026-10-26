@@ -17,8 +17,6 @@ import type { LeadSummary } from '../../types';
 import { LeadTableRow } from './LeadTableRow';
 import { leadAssignmentEntries, leadComplianceFlags, leadWorkflowStates } from './LeadTable.status';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 vi.mock('../Primitives', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../Primitives')>();
   return {
@@ -204,11 +202,11 @@ describe('LeadTableRow one-line cells', () => {
     expect(status().querySelector('.lead-table__more')?.getAttribute('aria-label')).not.toContain('DNC');
   });
 
-  it('shows Suppressed with its reason on the chip title, also on an unresolved-owner row', () => {
+  it('shows Suppressed with no title, also on an unresolved-owner row (the reason is expanded-row text: LeadRowWorkflowPanel.compliance.test)', () => {
     renderRow({ ...quietLead, marketing_eligible: false, suppression_reason: 'opt_out' });
     const suppressed = status().querySelector('.lead-table__flag');
     expect(suppressed?.textContent).toBe('Suppressed');
-    expect(suppressed?.getAttribute('title')).toBe('Suppressed: opt_out (eligibility source: synthetic_seed)');
+    expect(suppressed?.hasAttribute('title')).toBe(false);
 
     // "Owner unresolved" names the cause; the suppression itself must still
     // read "Suppressed" in-row (the CONTACTABILITY "Suppressed only" filter
@@ -218,7 +216,7 @@ describe('LeadTableRow one-line cells', () => {
     renderRow(unresolved);
     const flags = [...status().querySelectorAll('.lead-table__flag')];
     expect(flags.map((flag) => flag.textContent)).toEqual(['Owner unresolved', 'Suppressed']);
-    expect(flags[1].getAttribute('title')).toBe('Suppressed: unresolved_owner (eligibility source: synthetic_seed)');
+    expect(flags[1].hasAttribute('title')).toBe(false);
     // Compliance flags never fold into +n.
     expect(status().querySelector('.lead-table__more')).toBeNull();
 
@@ -239,7 +237,7 @@ describe('LeadTableRow one-line cells', () => {
   it('shows one segment chip and names the others on +n', () => {
     renderRow(quietLead);
     const segments = document.querySelector('.lead-table__segments') as HTMLElement;
-    expect([...segments.querySelectorAll('.chip__label')].map((el) => el.textContent)).toEqual(['Prime Refi Candidates', '+2']);
+    expect([...segments.querySelectorAll('.chip__label')].map((el) => el.textContent)).toEqual(['In the Money', '+2']);
     expect(segments.querySelector('.lead-table__more')?.getAttribute('aria-label')).toBe(
       '2 more segments: Segment: Home Equity Candidate, Segment: Listed for Sale',
     );

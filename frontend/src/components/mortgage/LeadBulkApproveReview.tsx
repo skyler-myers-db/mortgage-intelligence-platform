@@ -1,13 +1,14 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useEffectEvent, useId, useRef, useState } from 'react';
 import type { LeadSummary } from '../../types';
 import type { OutreachDraftResult } from '../../lib/apiTypes';
-import { isAbortError } from '../../lib/api';
+import { ApiError, isAbortError } from '../../lib/api';
 import { formatCount } from '../../lib/formatters';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 import { Button, Chip } from '../Primitives';
 import { offerCounts } from './LeadBulkApproveReview.counts';
 import { bulkSampleCoverage } from './LeadBulkApproveReview.coverage';
 import { stratifiedSampleIds } from './LeadBulkApproveReview.sampler';
+import type { WriteFailureToasts } from './leadWriteFailureToast';
 import './LeadBulkApproveReview.css';
 
 // A bulk run's progress and report ride this lazy chunk too (tables-07),
@@ -46,6 +47,15 @@ export { offerCounts } from './LeadBulkApproveReview.counts';
  */
 export const BULK_SAMPLE_SIZE = 3;
 
+/** The one toast for sample drafts the server rate-limited (states-08 item 3 slice 6c). */
+export const SAMPLE_DRAFTS_THROTTLED = "Couldn't draft the sample previews";
+const SAMPLE_FAILED = 'The draft could not be generated.';
+
+/** A 429 that names its wait: its sample can be retried once the countdown ends. */
+function isThrottled(err: unknown): err is ApiError {
+  return err instanceof ApiError && err.status === 429 && (err.retryAfterMs ?? 0) > 0;
+}
+
 interface BulkSample {
   borrowerId: string;
   status: 'loading' | 'ready' | 'error';
@@ -66,6 +76,8 @@ export interface LeadBulkApproveReviewProps {
   onSamplesChange: (drafts: ReadonlyMap<string, OutreachDraftResult>) => void;
   /** Whether every offer in the run has a ready sample; sent only when it changes. */
   onCoverageChange?: (coverage: BulkSampleCoverageChange) => void;
+  /** The queue's write-failure toast and sentence, handed in by the shell (W5e budget: no shared-chunk import here). */
+  writeFailure: WriteFailureToasts;
 }
 
 const NO_COVERAGE: BulkSampleCoverageChange = { complete: false, missingOfferLabels: [] };
@@ -76,10 +88,12 @@ export function LeadBulkApproveReview({
   draftForApproval,
   onSamplesChange,
   onCoverageChange,
+  writeFailure,
 }: LeadBulkApproveReviewProps) {
   const noteId = useId();
   const [samples, setSamples] = useState<BulkSample[]>([]);
   const controllersRef = useRef<Set<AbortController>>(new Set());
+  const liveRef = useRef(true);
   const order = new Map(leads.map((lead, index) => [lead.borrower_id, index]));
   // A sample stays bound only while its row is still in the run.
   const liveSamples = samples
@@ -111,16 +125,21 @@ export function LeadBulkApproveReview({
     onSamplesChangeRef.current = onSamplesChange;
     onCoverageChangeRef.current = onCoverageChange;
   }, [onSamplesChange, onCoverageChange]);
+  // readyDrafts and the coverage are derived from these keys' inputs; the
+  // keys are their identity, so a keystroke elsewhere reports nothing. The
+  // report reads this render's values (an Effect Event, runtime-03).
+  const report = useEffectEvent(() => {
+    onSamplesChange(readyDrafts);
+    onCoverageChange?.({ complete: coverage.complete, missingOfferLabels });
+  });
   useEffect(() => {
-    onSamplesChangeRef.current(readyDrafts);
-    onCoverageChangeRef.current?.({ complete: coverage.complete, missingOfferLabels });
-    // readyDrafts and the coverage are derived from these keys' inputs; the
-    // keys are their identity, so a keystroke elsewhere reports nothing.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    report();
   }, [readyKey, coverageKey]);
   useEffect(() => {
     const controllers = controllersRef.current;
+    liveRef.current = true;
     return () => {
+      liveRef.current = false;
       for (const ctrl of controllers) ctrl.abort();
       onSamplesChangeRef.current(new Map());
       onCoverageChangeRef.current?.(NO_COVERAGE);
@@ -129,9 +148,20 @@ export function LeadBulkApproveReview({
 
   function preview() {
     if (loading || targets.length === 0 || !canStartApproval()) return;
+    draftSamples([...targets], true);
+  }
+
+  /**
+   * Draft these samples (each one writes a DRAFT_OUTREACH row). Samples the
+   * server rate-limited with a Retry-After raise ONE toast whose Retry, live
+   * once the countdown ends, re-requests only those samples, once
+   * (`retryable` is false for that retry's own run).
+   */
+  function draftSamples(ids: string[], retryable: boolean) {
     const ctrl = new AbortController();
     controllersRef.current.add(ctrl);
-    const ids = [...targets];
+    const throttled: string[] = [];
+    let throttle: ApiError | null = null;
     setSamples((current) => [
       ...current.filter((sample) => !ids.includes(sample.borrowerId)),
       ...ids.map((borrowerId): BulkSample => ({ borrowerId, status: 'loading', draft: null, error: null })),
@@ -144,7 +174,18 @@ export function LeadBulkApproveReview({
     let pending = ids.length;
     const done = () => {
       pending -= 1;
-      if (pending === 0) controllersRef.current.delete(ctrl);
+      if (pending > 0) return;
+      controllersRef.current.delete(ctrl);
+      if (throttle === null || ctrl.signal.aborted) return;
+      const retryIds = [...throttled];
+      const retry = retryable
+        ? () => {
+            // Once, and only while this gate is open and may still draft.
+            if (!liveRef.current || !canStartApproval()) return;
+            draftSamples(retryIds, false);
+          }
+        : undefined;
+      writeFailure.toastWriteFailure(SAMPLE_DRAFTS_THROTTLED, throttle, 'the sample drafts', retry);
     };
     for (const borrowerId of ids) {
       draftForApproval(borrowerId, ctrl.signal)
@@ -153,8 +194,15 @@ export function LeadBulkApproveReview({
         })
         .catch((err: unknown) => {
           if (ctrl.signal.aborted || isAbortError(err)) return;
-          const message = err instanceof Error ? err.message : 'The draft could not be generated.';
-          settle(borrowerId, { status: 'error', error: message });
+          if (isThrottled(err)) {
+            throttled.push(borrowerId);
+            // (Not `??=`: React Compiler 1.0 bails out on it.)
+            if (throttle === null) throttle = err;
+          }
+          // describeApiError's sentence, never the raw message.
+          return writeFailure.describeWriteFailure(err instanceof ApiError ? err : null, 'the sample draft').then((sentence) => {
+            if (!ctrl.signal.aborted) settle(borrowerId, { status: 'error', error: sentence ?? SAMPLE_FAILED });
+          });
         })
         .finally(done);
     }

@@ -176,7 +176,7 @@ def _specific_top_borrower_intent_label(intent: str) -> str:
         "listed": "listed-for-sale purchase",
         "investor": "Investor / Multi-Property",
         "retention": "retention-risk",
-        "refi": "Prime Refi Candidate",
+        "refi": "in-the-money",
     }.get(intent, "specific-intent")
 
 

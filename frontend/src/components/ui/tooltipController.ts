@@ -13,13 +13,17 @@
  *  - Focus opens at once, but only keyboard-originated focus
  *    (`:focus-visible`, and never right after a pointer press).
  *  - It closes on pointer leave, blur, any pointer press, Escape (an
- *    escapeStack layer while open, so Esc closes it before any lower layer
- *    and focus stays on the trigger), a trigger unmount (a MutationObserver
+ *    escapeStack layer while open: it always closes first; a keyboard-opened
+ *    or focused-trigger tooltip consumes the key and focus stays, a hover
+ *    tooltip declines so the same Escape reaches the layer below), a
+ *    trigger unmount (a MutationObserver
  *    runs only while a tooltip is open or pending; the pending timer is
  *    cleared too) and, in rect mode, scroll or resize. The exit fades over
  *    the popup's own transition.
  *  - While open the trigger's `aria-describedby` names the popup in place of
- *    its hidden description; closing restores it.
+ *    its hidden description; closing restores it. A shortcut's `<kbd>` sits
+ *    between screen-reader-only ' (' and ')', so the popup's text equals the
+ *    description's ('Command palette (⌘K)').
  */
 import { exitTransitionMs } from '../../hooks/useExitRetained';
 import { pushEscapeLayer } from '../../lib/escapeStack';
@@ -46,6 +50,8 @@ let timer: number | null = null;
 let finishTimer: number | null = null;
 let popEscape: (() => void) | null = null;
 let lastModality: 'keyboard' | 'pointer' | null = null;
+/** How the showing tooltip opened; a later keyboard focus of its trigger upgrades 'hover'. */
+let openedBy: 'keyboard' | 'hover' = 'hover';
 /** Watches for the open or pending trigger leaving the document (an unmount). */
 let watcher: MutationObserver | null = null;
 
@@ -99,7 +105,15 @@ function onMove(): void {
   close();
 }
 
-function show(trigger: HTMLElement): void {
+/** A screen-reader-only run, so the popup reads like the description: 'Command palette (⌘K)'. */
+function srOnly(text: string): HTMLSpanElement {
+  const span = document.createElement('span');
+  span.className = 'sr-only';
+  span.textContent = text;
+  return span;
+}
+
+function show(trigger: HTMLElement, by: 'keyboard' | 'hover'): void {
   clearPending();
   const description = document.getElementById(trigger.dataset.tooltip ?? '');
   if (!trigger.isConnected || !description) return;
@@ -114,12 +128,13 @@ function show(trigger: HTMLElement): void {
     const kbd = document.createElement('kbd');
     kbd.className = 'tooltip__kbd';
     kbd.textContent = shortcut;
-    tip.append(kbd);
+    tip.append(srOnly(' ('), kbd, srOnly(')'));
   }
   tip.className = 'tooltip';
   tip.removeAttribute('style');
   tip.hidden = false;
   if (tip.showPopover && !tip.matches(':popover-open')) tip.showPopover();
+  openedBy = current === trigger && openedBy === 'keyboard' ? 'keyboard' : by;
   current = trigger;
   swapDescribedBy(trigger, description.id, TOOLTIP_POPUP_ID);
   releaseAnchor();
@@ -137,9 +152,17 @@ function show(trigger: HTMLElement): void {
     window.addEventListener('scroll', onMove, true);
     window.addEventListener('resize', onMove);
   }
+  // Escape decision (deviation:tooltip; W5e, reviewed): Escape always
+  // closes the tooltip (WCAG 1.4.13 dismissible), but it CONSUMES the key
+  // (focus stays) only when the tooltip opened from the keyboard or its
+  // trigger holds focus. A hover tooltip is incidental pointer state, not a
+  // layer the user works in, so it declines and the same Escape also reaches
+  // the layer below (a drawer, the Genie panel, a modal): no double Escape.
+  // escapeStack's one-key-one-layer rule still protects working layers.
   popEscape ??= pushEscapeLayer(() => {
+    const consume = openedBy === 'keyboard' || (current?.contains(document.activeElement) ?? false);
     close();
-    return true;
+    return consume;
   });
   watch();
 }
@@ -186,11 +209,11 @@ function onPointerOver(event: PointerEvent): void {
   if (!trigger || event.pointerType === 'touch' || trigger === current || trigger === pending) return;
   clearPending();
   if (current || inReopenGrace()) {
-    show(trigger);
+    show(trigger, 'hover');
     return;
   }
   pending = trigger;
-  timer = window.setTimeout(() => show(trigger), SHOW_DELAY_MS);
+  timer = window.setTimeout(() => show(trigger, 'hover'), SHOW_DELAY_MS);
   watch();
 }
 
@@ -209,7 +232,7 @@ function onPointerDown(): void {
 
 function onFocusIn(event: FocusEvent): void {
   const trigger = triggerOf(event.target);
-  if (trigger && trigger === event.target && keyboardFocus(trigger)) show(trigger);
+  if (trigger && trigger === event.target && keyboardFocus(trigger)) show(trigger, 'keyboard');
 }
 
 function onFocusOut(event: FocusEvent): void {

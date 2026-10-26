@@ -7,6 +7,7 @@
    queue from a dossier is additive; it composes the prototype `.btn`
    (design_files/index.html) with the token vocabulary only.
    ============================================================ */
+@layer routes {
 .queue-pager {
   display: flex;
   flex-wrap: wrap;
@@ -23,3 +24,4 @@
 }
 .queue-pager__scope { color: var(--text-3); }
 .queue-pager__prev-icon { transform: scaleX(-1); }
+}

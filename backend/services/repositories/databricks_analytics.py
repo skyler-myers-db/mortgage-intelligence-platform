@@ -51,7 +51,14 @@ from backend.services.repositories.databricks_economics_scatter import (
     equity_spread_overview,
 )
 from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD, source_display_label
+from backend.services.segment_labels import (
+    SEGMENT_DISPLAY_LABELS,
+    segment_case_sql,
+    segment_values_sql,
+)
 from backend.services.segment_predicates import compose_segment_predicate
+
+_ANALYTICS_SEGMENT_CODES = ("itm", "equity", "investor", "retention", "listed", "permit")
 
 
 def _date_text(value: object) -> str | None:
@@ -382,12 +389,7 @@ class DatabricksAnalyticsRepository:
     _SEGMENT_OVERVIEW_SQL = (
         "WITH segment_dim AS ( "
         "  SELECT * FROM VALUES "
-        "    ('itm', 'Prime Refi Candidates', 'Borrowers passing the refinance economics screen.'), "
-        "    ('equity', 'Home Equity Candidate', 'Borrowers with clean equity capacity.'), "
-        "    ('investor', 'Investor / Multi-Property', 'Borrowers linked to investor or multi-property signals.'), "
-        "    ('retention', 'Retention Risk', 'Current-customer retention opportunities.'), "
-        "    ('listed', 'Listed for Sale', 'Current active or under-contract Cotality MLS listing.'), "
-        "    ('permit', 'HELOC Intent', 'High Cotality HELOC propensity; filed permit source remains pending.') "
+        f"{segment_values_sql(_ANALYTICS_SEGMENT_CODES, indent='    ')} "
         "  AS segment_dim(segment_code, name, description) "
         "), filtered AS ( "
         "  SELECT b.*, COALESCE(ls.approval_status, 'pending') AS lifecycle_approval_status, "
@@ -445,12 +447,7 @@ class DatabricksAnalyticsRepository:
         "  state AS state, "
         "  segment_code AS segment_code, "
         "  CASE "
-        "    WHEN segment_code = 'itm' THEN 'Prime Refi Candidates' "
-        "    WHEN segment_code = 'equity' THEN 'Home Equity Candidate' "
-        "    WHEN segment_code = 'investor' THEN 'Investor / Multi-Property' "
-        "    WHEN segment_code = 'retention' THEN 'Retention Risk' "
-        "    WHEN segment_code = 'listed' THEN 'Listed for Sale' "
-        "    WHEN segment_code = 'permit' THEN 'HELOC Intent' "
+        f"{segment_case_sql(_ANALYTICS_SEGMENT_CODES, indent='    ')}"
         "    ELSE segment_code "
         "  END AS segment_name, "
         "  COUNT(*) AS borrower_count "
@@ -478,12 +475,7 @@ class DatabricksAnalyticsRepository:
         "    state, "
         "    segment_code, "
         "    CASE "
-        "      WHEN segment_code = 'itm' THEN 'Prime Refi Candidates' "
-        "      WHEN segment_code = 'equity' THEN 'Home Equity Candidate' "
-        "      WHEN segment_code = 'investor' THEN 'Investor / Multi-Property' "
-        "      WHEN segment_code = 'retention' THEN 'Retention Risk' "
-        "      WHEN segment_code = 'listed' THEN 'Listed for Sale' "
-        "      WHEN segment_code = 'permit' THEN 'HELOC Intent' "
+        f"{segment_case_sql(_ANALYTICS_SEGMENT_CODES, indent='      ')}"
         "      ELSE segment_code "
         "    END AS segment_name, "
         "    borrower_count, "
@@ -594,7 +586,7 @@ class DatabricksAnalyticsRepository:
             )
             stages = [
                 FunnelStage(stage="Addressable", stage_order=1, borrower_count=totals.addressable_borrowers, source=_POPULATION_SOURCE),
-                FunnelStage(stage="Refi Economics", stage_order=2, borrower_count=totals.in_the_money_borrowers, source=_POPULATION_SOURCE),
+                FunnelStage(stage=SEGMENT_DISPLAY_LABELS["itm"], stage_order=2, borrower_count=totals.in_the_money_borrowers, source=_POPULATION_SOURCE),
                 FunnelStage(stage="Opportunity Score 75+", stage_order=3, borrower_count=totals.high_opportunity_borrowers, source=_POPULATION_SOURCE),
                 FunnelStage(stage="Primary Offer Selected", stage_order=4, borrower_count=totals.offer_recommended_borrowers, source=_POPULATION_SOURCE),
                 # The two workflow stages are the ones that can trail the

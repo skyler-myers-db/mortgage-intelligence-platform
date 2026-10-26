@@ -236,7 +236,7 @@ def test_lead_score_matches_exact_oracle_on_half_boundary_lattice() -> None:
 
 def test_itm_ruleset_label_matches_lineage_drawer_title() -> None:
     """The RowPreview chip should not imply a different source than the drawer."""
-    assert source_display_label("rules.itm_v3") == "Refinance economics screen"
+    assert source_display_label("rules.itm_v3") == "In the Money rule"
 
 
 # ---------------------------------------------------------------------------

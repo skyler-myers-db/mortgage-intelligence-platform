@@ -23,6 +23,7 @@ import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
+import { Tooltip } from '../ui/Tooltip';
 import type { AuditEventRow } from '../../lib/apiTypes';
 import { auditCorrelationHref, auditEventHref } from '../../lib/auditLinks';
 import { borrower360Path, isMaskedBorrowerId } from '../../lib/genieCellLinks';
@@ -153,7 +154,6 @@ export function AuditEventTableRow({
             aria-expanded={expanded}
             aria-controls={detailId}
             aria-label={`${expanded ? 'Collapse' : 'Expand'} audit event ${event.event_id}`}
-            title={`${expanded ? 'Collapse' : 'Expand'} event details`}
           >
             <Icon name={expanded ? 'chevdown' : 'chevright'} size={13} />
           </button>
@@ -161,7 +161,7 @@ export function AuditEventTableRow({
         <td className="is-primary">
           <div>{label}</div>
           <div className="chip-row">
-            <Chip variant="neutral" className="mono" title="Raw event code in the ledger">{code}</Chip>
+            <Chip variant="neutral" className="mono">{code}</Chip>
             {event.action !== code && <span className="mono muted fs-11">{event.action}</span>}
           </div>
         </td>
@@ -180,11 +180,12 @@ export function AuditEventTableRow({
           )}
         </td>
         <td>{event.actor}</td>
-        <td>
-          <time dateTime={event.created_at} title={event.created_at}>
-            {formatAuditTimestamp(event.created_at)}
-          </time>
-        </td>
+        {/* The cell is the trigger (the popup portals to <body>, so the row stays valid). */}
+        <Tooltip content={event.created_at}>
+          <td>
+            <time dateTime={event.created_at}>{formatAuditTimestamp(event.created_at)}</time>
+          </td>
+        </Tooltip>
       </tr>
       {expanded && (
         <tr className="tbl__expand">
@@ -201,7 +202,6 @@ export function AuditEventTableRow({
                     className="btn btn--ghost btn--sm"
                     onClick={() => onCopy(event.event_id, 'Event ID')}
                     aria-label={`Copy event ID ${event.event_id}`}
-                    title="Copy event ID"
                   >
                     <Icon name="doc" size={12} />
                     {copiedValue === event.event_id ? 'Copied event ID' : 'Copy event ID'}
@@ -211,7 +211,6 @@ export function AuditEventTableRow({
                     className="btn btn--ghost btn--sm"
                     onClick={() => onCopy(auditRecordQuery(event.event_id), 'Lakebase record query')}
                     aria-label={`Copy Lakebase query for audit event ${event.event_id}`}
-                    title="Copy a query for this Lakebase row"
                   >
                     <Icon name="db" size={12} />
                     {copiedValue === auditRecordQuery(event.event_id)

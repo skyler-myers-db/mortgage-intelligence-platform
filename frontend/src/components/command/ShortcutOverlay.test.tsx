@@ -9,11 +9,13 @@
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { eventuallyInAct, settleInAct } from '../../test/settleInAct';
+import { watchActWarnings } from '../../test/actWarnings';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { installFakeCssTransition, runExitOn } from '../../test/runningExit';
 import { OPEN_SHORTCUTS_EVENT, openShortcutOverlay, registerKeyBinding } from '../../lib/keymap';
-import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
+import { setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 import { ShortcutOverlayHost } from './ShortcutOverlayHost';
 import { leadTableHotkeys } from '../mortgage/LeadTable.keymap';
 import { triageHotkeys } from '../mortgage/TriageDeck.keys';
@@ -28,11 +30,12 @@ beforeAll(async () => {
 describe('ShortcutOverlay', () => {
   let container: HTMLDivElement;
   let root: Root;
+  let stopActWatch: () => string[];
   const offs: Array<() => void> = [];
 
   beforeEach(() => {
+    stopActWatch = watchActWarnings();
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -53,22 +56,29 @@ describe('ShortcutOverlay', () => {
     act(() => root.render(<ShortcutOverlayHost />));
   });
 
-  afterEach(() => {
-    while (offs.length > 0) offs.pop()?.();
+  afterEach(async () => {
+    // The sheet's exit and the host's chunk resolution settle inside act.
+    await settleInAct();
+    act(() => {
+      while (offs.length > 0) offs.pop()?.();
+    });
     act(() => root.unmount());
     container.remove();
+    // quality-06: every update this suite causes lands inside act. The host
+    // sets the loaded sheet in a `.then`, so an open runs in an async act.
+    expect(stopActWatch(), 'updates outside act(...)').toEqual([]);
   });
 
   const sheet = () => document.querySelector<HTMLElement>('[data-testid="shortcut-sheet"]');
 
   async function waitForSheet(): Promise<HTMLElement> {
-    await vi.waitFor(() => expect(sheet()).not.toBeNull(), { timeout: 10_000 });
+    await eventuallyInAct(() => expect(sheet()).not.toBeNull());
     return sheet()!;
   }
 
   it('opens on the mip:open-shortcuts event and lists the page scope before the global one', async () => {
     expect(OPEN_SHORTCUTS_EVENT).toBe('mip:open-shortcuts');
-    act(() => openShortcutOverlay());
+    await act(async () => openShortcutOverlay());
     const panel = await waitForSheet();
 
     // A native modal <dialog class="cmdk"> named by its heading (stack-05);
@@ -86,6 +96,12 @@ describe('ShortcutOverlay', () => {
     // The sheet's own `?` binding is listed with the rest.
     expect(panel.textContent).toContain('Show keyboard shortcuts');
     expect(panel.querySelector('[data-testid="shortcut-sheet-off"]')).toBeNull();
+    // a11y-05: the list scrolls on a short viewport, so it is a named,
+    // focusable region (unconditionally: it sits in a modal).
+    const list = panel.querySelector<HTMLElement>('.cmdk__list');
+    expect(list?.getAttribute('role')).toBe('region');
+    expect(list?.getAttribute('aria-label')).toBe('Shortcut list');
+    expect(list?.tabIndex).toBe(0);
   });
 
   it('lists the Triage deck first; the suspended table registers nothing (D-approval-flow-a2)', async () => {
@@ -106,13 +122,15 @@ describe('ShortcutOverlay', () => {
     expect(deckKeys.length, 'at most four sheet rows').toBeLessThanOrEqual(4);
     // The fixture's table binding stands in for a page whose deck is open;
     // drop it so only the deck and the global scope remain.
-    offs.shift()?.();
-    for (const hotkey of deckKeys) {
-      offs.push(registerKeyBinding({
-        id: hotkey.id, scope: 'triage', keys: hotkey.keys, description: hotkey.description, run: vi.fn(),
-      }));
-    }
-    act(() => openShortcutOverlay());
+    act(() => {
+      offs.shift()?.();
+      for (const hotkey of deckKeys) {
+        offs.push(registerKeyBinding({
+          id: hotkey.id, scope: 'triage', keys: hotkey.keys, description: hotkey.description, run: vi.fn(),
+        }));
+      }
+    });
+    await act(async () => openShortcutOverlay());
     const panel = await waitForSheet();
     const groups = [...panel.querySelectorAll('.cmdk__group-label')].map((label) => label.textContent);
     expect(groups).toEqual(['Triage deck', 'Everywhere']);
@@ -134,16 +152,18 @@ describe('ShortcutOverlay', () => {
       openBulkGate,
       openBulkRejectGate,
     });
-    for (const hotkey of hotkeys) {
-      offs.push(registerKeyBinding({
-        id: `sheet-${hotkey.id}`,
-        scope: 'lead-queue',
-        keys: hotkey.keys,
-        description: hotkey.description,
-        run: (event) => hotkey.run(event, null),
-      }));
-    }
-    act(() => openShortcutOverlay());
+    act(() => {
+      for (const hotkey of hotkeys) {
+        offs.push(registerKeyBinding({
+          id: `sheet-${hotkey.id}`,
+          scope: 'lead-queue',
+          keys: hotkey.keys,
+          description: hotkey.description,
+          run: (event) => hotkey.run(event, null),
+        }));
+      }
+    });
+    await act(async () => openShortcutOverlay());
     const panel = await waitForSheet();
     const bulk = [...panel.querySelectorAll('.cmdk__row')].filter((row) => row.textContent?.includes('selected borrowers'));
     expect(bulk).toHaveLength(1);
@@ -160,7 +180,7 @@ describe('ShortcutOverlay', () => {
   });
 
   it('opens on ? and closes on Escape', async () => {
-    act(() => {
+    await act(async () => {
       document.body.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true, bubbles: true, cancelable: true }));
     });
     await waitForSheet();
@@ -180,7 +200,7 @@ describe('ShortcutOverlay', () => {
   it('keeps the closing sheet mounted, closed, aria-hidden and inert until the dialog exit ends', async () => {
     const uninstall = installFakeCssTransition();
     try {
-      act(() => openShortcutOverlay());
+      await act(async () => openShortcutOverlay());
       await waitForSheet();
       const dialog = document.querySelector<HTMLDialogElement>('dialog.cmdk');
       expect(dialog?.hasAttribute('open')).toBe(true);
@@ -193,8 +213,8 @@ describe('ShortcutOverlay', () => {
       expect(dialog?.getAttribute('aria-hidden')).toBe('true');
       expect(dialog?.hasAttribute('inert')).toBe(true);
 
-      act(() => openShortcutOverlay());
-      await vi.waitFor(() => expect(dialog?.hasAttribute('open')).toBe(true));
+      await act(async () => openShortcutOverlay());
+      await eventuallyInAct(() => expect(dialog?.hasAttribute('open')).toBe(true));
       expect(document.querySelectorAll('dialog.cmdk')).toHaveLength(1);
       expect(dialog?.hasAttribute('aria-hidden')).toBe(false);
 
@@ -210,13 +230,13 @@ describe('ShortcutOverlay', () => {
   });
 
   it('marks single-key shortcuts Off (and says why) while the Console switch is off', async () => {
-    setSingleKeyShortcutsEnabled(false);
+    act(() => setSingleKeyShortcutsEnabled(false));
     // `?` itself is a single-key shortcut: it is off too, the event still opens.
     act(() => {
       document.body.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true, bubbles: true, cancelable: true }));
     });
     expect(sheet()).toBeNull();
-    act(() => openShortcutOverlay());
+    await act(async () => openShortcutOverlay());
     const panel = await waitForSheet();
 
     expect(panel.querySelector('[data-testid="shortcut-sheet-off"]')?.textContent).toContain('Single-key shortcuts are off');

@@ -74,7 +74,6 @@ vi.mock('../components/activation/ActivationLoopPanel', () => ({ ActivationLoopP
 
 import OfferOrchestrator from './offer-orchestrator';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.setConfig({ testTimeout: 30_000 });
 
 const A = 'B-0000000000001';
@@ -95,7 +94,7 @@ function borrower(id: string, score = 91): Borrower360 {
     rate_spread_bps: 125,
     opportunity_score: score,
     confidence: 0.94,
-    recommended_offer_code: 'rate_term_refi',
+    recommended_offer_code: 'refi',
     recommended_offer: 'Rate and term refinance review',
     why_now: 'Current lien rate exceeds the reviewed market threshold.',
     evidence_ids: ['ev-1'],
@@ -127,7 +126,7 @@ function recommendation(id: string, refreshedAt = SNAPSHOT): OfferRecommendation
   return {
     borrower_id: id,
     source_refreshed_at: refreshedAt,
-    offer_code: 'rate_term_refi',
+    offer_code: 'refi',
     offer_type: 'refi',
     product_label: 'Rate and term refinance review',
     confidence: 0.94,
@@ -151,7 +150,7 @@ function draft(id: string, channel: OutreachDraftResult['channel']): OutreachDra
     borrower_id: id,
     campaign_id: null,
     variant_name: null,
-    offer_code: 'rate_term_refi',
+    offer_code: 'refi',
     channel,
     subject: channel === 'sms' ? null : 'Review your mortgage options',
     body: `${channel} governed body`,
@@ -406,7 +405,7 @@ describe('Offer Orchestrator read-count table (audit parity with the effect it r
       borrower_id: A,
       generation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       response_hash: 'a'.repeat(64),
-      offer_code: 'rate_term_refi',
+      offer_code: 'refi',
       channel: 'email',
       subject: 'Review your mortgage options',
       body: 'email governed body',

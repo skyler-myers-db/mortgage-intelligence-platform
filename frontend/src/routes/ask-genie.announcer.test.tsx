@@ -32,8 +32,6 @@ import { __resetGenieTurnStoreForTests, startGenieTurn } from '../lib/genieInFli
 import { __resetGenieAnnouncerForTests } from '../components/mortgage/useGenieAnnouncer';
 import { observeStrongly } from '../components/mortgage/genieAnnouncer.test-support';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const LIVE = '[role="status"], [role="alert"], [aria-live]';
 
 describe('/ask-genie announcer', () => {

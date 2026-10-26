@@ -97,7 +97,7 @@ def test_summary_delta_shape_and_actor_resolution() -> None:
         "no change",
     ]
     assert body["headline"] == (
-        "Since your last login: +2,250 refi candidates, "
+        "Since your last login: +2,250 in-the-money borrowers, "
         "+1.5% high-opportunity, no change in primary offer paths."
     )
     # flow-05: the response carries the event measures' keys (null without a reading).

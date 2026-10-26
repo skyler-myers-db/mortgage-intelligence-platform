@@ -43,7 +43,10 @@ def test_every_snapshot_converges_static_source_immediately_before_activation() 
         '  run "$PYTHON" -m tools.databricks.converge_static_app_source \\\n'
         '    --source-code-path "$APP_SOURCE_PATH" \\\n'
         '    --expected-principal "$APP_CURRENT_USER" \\\n'
-        '    --expected-target "$TARGET"\n'
+        '    --expected-target "$TARGET" \\\n'
+        # W5e (D-platform-process-b step 7): the resolved bundle root leaf; it
+        # is the target itself for every install but the CI staging one.
+        '    --expected-root-leaf "${MIP_BUNDLE_ROOT_LEAF_RESOLVED:-$TARGET}"\n'
         '  run databricks apps deploy "$APP_NAME"'
     ) in function_body
 

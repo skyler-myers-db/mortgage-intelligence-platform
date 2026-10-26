@@ -16,7 +16,7 @@ vi.mock('../AppContext', () => ({ useApp: () => ({ setDrawer: vi.fn() }) }));
 
 import { GenieAnswer } from './GenieAnswer';
 import { refusalRephraseChips } from './genieRefusal';
-import { PINNED_INSIGHTS_KEY, clearPinnedInsights } from '../../lib/pinnedInsights';
+import { PINNED_INSIGHTS_KEY } from '../../lib/pinnedInsights';
 
 function payload(overrides: Partial<GenieAnswerShape> = {}): GenieAnswerShape {
   return {
@@ -72,7 +72,6 @@ describe('GenieAnswer pin + fallback', () => {
   let root: Root;
   beforeEach(() => {
     installLocalStorage();
-    clearPinnedInsights();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);

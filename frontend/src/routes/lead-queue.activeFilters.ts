@@ -3,6 +3,7 @@ import { formatCount, signedBpsLabel } from '../lib/formatters';
 import {
   FUNNEL_STAGE_LABELS,
   LEAD_BOUND_FILTER_KEYS,
+  LEAD_TABLE_HIDE_PARAM,
   LEAD_TABLE_PLACE_PARAMS,
   LEAD_TABLE_VIEW_PARAM,
   parseLeadBound,
@@ -145,12 +146,12 @@ export function searchParamsWithoutFilter(
 }
 
 /**
- * Display state, not filters: the column preset, the table place (sort,
- * direction, expanded row) and the Triage deck mode. They never enable Clear
- * all and survive it.
+ * Display state, not filters: the column preset and hidden columns, the
+ * table place (sort, direction, expanded row) and the Triage deck mode. They
+ * never enable Clear all and survive it.
  */
 const DISPLAY_PARAMS: ReadonlySet<string> = new Set([
-  LEAD_TABLE_VIEW_PARAM, ...LEAD_TABLE_PLACE_PARAMS, TRIAGE_MODE_PARAM,
+  LEAD_TABLE_VIEW_PARAM, LEAD_TABLE_HIDE_PARAM, ...LEAD_TABLE_PLACE_PARAMS, TRIAGE_MODE_PARAM,
 ]);
 
 /** True when the URL carries anything but the column preset and the table place. */

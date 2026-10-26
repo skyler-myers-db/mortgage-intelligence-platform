@@ -21,8 +21,6 @@ vi.mock('../HealthProvider', () => ({ useWorkspaceHost: () => null }));
 
 import { GOVERNED_ACTION_SOURCE, GenieAnswer } from './GenieAnswer';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function payload(overrides: Partial<GenieAnswerShape> = {}): GenieAnswerShape {
   return {
     answer: 'Texas leads with 900 in-the-money borrowers.',

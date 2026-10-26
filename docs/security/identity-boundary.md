@@ -52,7 +52,7 @@ On resolution the gate replays queued updaters against the post-clear values (op
 
 | Class | Keys | Rule |
 |---|---|---|
-| PRIVATE_LOCAL | `mip.pinnedInsights`, `mip.genie.conversationId` | through the gate only; removed by rows 1/3/4 |
+| PRIVATE_LOCAL | `mip.pinnedInsights`, `mip.genie.conversationId`, `mip.leadQueue.savedViews.v1` (the Lead Queue default and recent saved views, W5e) | through the gate only; removed by rows 1/3/4 |
 | PRIVATE_SESSION | `mip-genie-conversation-v1`, `mip.genie.inFlightTurn`, `mip.queueContext`, `mip.bulkApprove.lastCancelled`, `mip.queryCache.v1`, `mip.portfolio.campaignDraft.v1` (registered by w5-portfolio-forms) | same; the bulk-approve stash goes through the guarded accessors and is cleared only while the gate is open |
 | ACTOR_PREFERENCE_LOCAL | `mip.shortcuts.singleKey` | a per-actor map, never cleared |
 | DEVICE_LOCAL | `mip.theme`, `mip.accent`, `mip.density`, `mip.consoleOpen`, `mip-genie-chat-size-v1`, `mip-genie-chat-pos-v1`; pre-registered `mip.themeChosen`, `mip.accentChosen` | device preferences, not actor data |

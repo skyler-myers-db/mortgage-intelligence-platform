@@ -1,0 +1,26 @@
+/* ============================================================
+   Cascade layer order (2026-09-21 audit css-05 / stack-v3 / bundle-06).
+   The ONE place the order is declared. main.tsx imports this sheet before
+   every other module, so this statement is the first rule of the initial
+   stylesheet and fixes the order for every sheet after it, lazy chunks
+   included (the first @layer name in document order fixes its rank).
+   Later layers win normal declarations; !important runs the other way.
+     reset      reserved, empty
+     tokens     tokens.css custom-property carriers
+     base       tokens.css element styles
+     components the initial shell: app.transitions.css, EvidenceHoverCard.css,
+                every components.css partial but 33, then print.css
+                (print.layer.css says why); also the blocks css-05 moved
+                out of the initial sheet into lazy chunks, which keep the
+                layer they cascaded in
+     routes     every lazy colocated sheet
+     modes      33-contrast-modes.css and each colocated sheet's
+                forced-colors / prefers-contrast / reduced-transparency
+                blocks, in place
+     print      each colocated sheet's @media print blocks, in place
+   @font-face (fonts.css) and @property stay outside any layer. The
+   exceptions (a lazy rule a more specific initial rule must keep beating)
+   are listed with their reasons in src/test/cssLayerMap.ts.
+   docs/testing.md "Cascade layers (css-05)"; cssLayers.test.ts.
+   ============================================================ */
+@layer reset, tokens, base, components, routes, modes, print;

@@ -13,8 +13,6 @@ import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../lib/apiTransport';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const state = vi.hoisted(() => ({
   borrower: { data: null as unknown, warmingUp: null as unknown, error: null as unknown, manualRetry: vi.fn() },
   health: null as null | { health: { dependencies: Record<string, string> }; connection: string },
@@ -233,7 +231,7 @@ function dossier(inTheMoney: boolean): Borrower360Type {
   } as unknown as Borrower360Type;
 }
 
-const BANNED_VARIANTS = /\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b/i;
+const BANNED_VARIANTS = /\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b|\brefi(?:nance)?[- ]candidates?\b/i;
 
 describe('Borrower 360 loaded dossier (W5d)', () => {
   beforeEach(() => {
@@ -253,7 +251,9 @@ describe('Borrower 360 loaded dossier (W5d)', () => {
 
     expect(text()).toContain('In the Money check');
     expect(text()).toContain('In the Money rule.');
-    const chip = [...document.querySelectorAll('.chip')].find((node) => node.textContent?.startsWith('In the Money'));
+    const chip = [...document.querySelectorAll('.chip')].find(
+      (node) => node.textContent?.startsWith('In the Money') && node.querySelector('a.glossary-term') !== null,
+    );
     expect(chip?.querySelector('a.glossary-term')?.getAttribute('href')).toBe('/glossary#in-the-money');
     expect(text()).not.toMatch(BANNED_VARIANTS);
   });

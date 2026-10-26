@@ -27,9 +27,9 @@ describe('score and rate-spread chips (audit tables-06)', () => {
     expect(leadBoundChipValue('opportunity_score', { max_opportunity_score: '90' })).toBe('≤ 90');
     expect(leadBoundChipValue('opportunity_score', { min_opportunity_score: '70', max_opportunity_score: '90' })).toBe('70–90');
     expect(leadBoundChipValue('rate_spread_bps', { min_rate_spread_bps: '50' })).toBe('≥ +50 bps');
-    expect(leadBoundChipValue('rate_spread_bps', { max_rate_spread_bps: '-10' })).toBe('≤ -10 bps');
+    expect(leadBoundChipValue('rate_spread_bps', { max_rate_spread_bps: '-10' })).toBe('≤ −10 bps');
     expect(leadBoundChipValue('rate_spread_bps', { min_rate_spread_bps: '-25', max_rate_spread_bps: '1500' }))
-      .toBe('-25 bps – +1,500 bps');
+      .toBe('−25 bps – +1,500 bps');
     expect(leadBoundChipValue('opportunity_score', {})).toBeNull();
     expect(leadBoundChipValue('opportunity_score', undefined)).toBeNull();
   });
@@ -71,6 +71,15 @@ describe('the Triage deck mode is display state (D-approval-flow-a2)', () => {
     expect(hasLeadQueueFilters(new URLSearchParams('mode=triage&row=B-0000000000001&view=sales-ops'))).toBe(false);
     expect(leadQueueFilterParams(new URLSearchParams('mode=triage&state=IL')).toString()).toBe('state=IL');
     expect(searchParamsCleared(new URLSearchParams('mode=triage&state=IL')).toString()).toBe('mode=triage');
+  });
+});
+
+describe('hidden columns are display state (tables-05 step 2)', () => {
+  it('never enable Clear all and survive it, the none sentinel included', () => {
+    expect(hasLeadQueueFilters(new URLSearchParams('hide=segments,rate&view=sales-ops'))).toBe(false);
+    expect(hasLeadQueueFilters(new URLSearchParams('hide=none'))).toBe(false);
+    expect(leadQueueFilterParams(new URLSearchParams('hide=rate&state=IL')).toString()).toBe('state=IL');
+    expect(searchParamsCleared(new URLSearchParams('state=IL&hide=none&view=sales-ops')).toString()).toBe('hide=none&view=sales-ops');
   });
 });
 

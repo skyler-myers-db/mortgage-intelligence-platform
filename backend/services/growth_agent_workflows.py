@@ -22,6 +22,7 @@ from backend.schemas.growth_agent_objective_intent import (
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.eligibility import eligible_sql_predicate
 from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
+from backend.services.segment_labels import labels_for
 
 RateTriggerDirection = Literal["at_or_below", "at_or_above"]
 
@@ -90,14 +91,8 @@ EVIDENCE_EVENTS = qualify("gold", "evidence_events")
 BORROWER_LIFECYCLE_STATE = qualify("gold", "borrower_lifecycle_state")
 SOURCE_READINESS = qualify("gold", "source_readiness")
 
-SEGMENT_LABELS: dict[str, str] = {
-    "itm": "Prime Refi Candidates",
-    "listed": "Listed for Sale",
-    "permit": "HELOC Intent",
-    "investor": "Investor / Multi-Property",
-    "equity": "Home Equity Candidate",
-    "retention": "Retention Risk",
-}
+# The six codes that gate custom_workflow's 422; labels from segment_labels.
+SEGMENT_LABELS: dict[str, str] = labels_for(("itm", "listed", "permit", "investor", "equity", "retention"))
 
 CUSTOM_WORKFLOW_ID: GrowthAgentWorkflowId = "custom_segment_watch"
 CUSTOM_WORKFLOW_TITLE = "Custom Segment Workflow"
@@ -111,13 +106,13 @@ WORKFLOWS: dict[GrowthAgentWorkflowId, GrowthAgentWorkflowDef] = {
         id="daily_refi_brief",
         title="Daily Refi Opportunity Brief",
         objective="Find borrowers with rate-spread economics worth reviewing today.",
-        trigger_label="Prime refinance economics",
+        trigger_label="In the Money",
         action_label="Open eligible refi subset",
         source_assets=(BORROWER_360, LEAD_POPULATION, EVIDENCE_EVENTS),
         proof_points=(
             "Broad count uses borrower_360.in_the_money.",
             "Actionable count requires Lead Queue eligibility and opt-in.",
-            "The route opens only the eligible Prime Refi Candidate subset.",
+            "The route opens only the eligible in-the-money subset.",
         ),
         broad_predicate="b.in_the_money = TRUE",
         actionable_predicate="array_contains(b.segment_codes, 'itm')",

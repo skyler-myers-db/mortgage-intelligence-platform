@@ -20,11 +20,10 @@ import type { LineageLayer, LineageManifestResponse } from '../../types';
 
 declare const process: { cwd(): string };
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const appMocks = vi.hoisted(() => ({
   drawer: null as DrawerSource | null,
   setDrawer: vi.fn(),
+  canAccessAdmin: true,
 }));
 
 const apiMocks = vi.hoisted(() => ({
@@ -37,7 +36,7 @@ vi.mock('../AppContext', () => ({
   useApp: () => ({
     drawer: appMocks.drawer,
     setDrawer: appMocks.setDrawer,
-    canAccessAdmin: true,
+    canAccessAdmin: appMocks.canAccessAdmin,
   }),
 }));
 
@@ -110,7 +109,7 @@ const MANIFEST: LineageManifestResponse = {
   families: [
     {
       id: 'in_the_money',
-      title: 'Refi economics screen',
+      title: 'In the Money rule',
       description: 'Rate spread + equity screen traced end to end.',
       nodes: [
         {
@@ -128,7 +127,7 @@ const MANIFEST: LineageManifestResponse = {
           object_type: 'function',
           fqn: 'mip.gold.fn_in_the_money',
           label: 'fn_in_the_money',
-          note: 'Canonical refi-economics screen.',
+          note: 'Canonical In the Money rule.',
           catalog_explorer_url: `${WORKSPACE}/explore/data/functions/mip/gold/fn_in_the_money`,
         },
         {
@@ -146,9 +145,9 @@ const MANIFEST: LineageManifestResponse = {
 };
 
 const MAPPED_SOURCE: DrawerSource = {
-  title: 'Refinance economics screen',
+  title: 'In the Money rule',
   short: 'Rate + equity screen',
-  description: 'Refi screen evidence.',
+  description: 'In the Money rule evidence.',
   assetKey: 'borrower_360',
   assetPath: 'mip.gold.borrower_360',
   lineageFamily: 'in_the_money',
@@ -205,6 +204,7 @@ describe('EvidenceDrawer lineage tab', () => {
       defaultOptions: { queries: { retry: false, gcTime: Infinity } },
     });
     appMocks.setDrawer.mockClear();
+    appMocks.canAccessAdmin = true;
     apiMocks.assetMetadata.mockResolvedValue({
       row_count: null,
       num_files: null,
@@ -455,9 +455,31 @@ describe('EvidenceDrawer lineage tab', () => {
 
     const observedAsset = document.querySelector<HTMLElement>('.observed-lineage__asset');
     expect(observedAsset?.tagName).toBe('DIV');
-    expect(observedAsset?.getAttribute('title')).toContain(
+    // critic-08: the reason is text a screen reader reads, never a hover-only title.
+    expect(observedAsset?.hasAttribute('title')).toBe(false);
+    expect(observedAsset?.querySelector('.sr-only')?.textContent).toContain(
       'Catalog Explorer link unavailable',
     );
+  });
+
+  // W5c drawer hand-off 15b: the metadata read is admin-only, so for a loan
+  // officer the query is disabled and stays `pending`; the Lineage tab used
+  // to say "Loading observed Unity Catalog relationships…" forever.
+  it('tells a non-admin who sees observed relationships, and never loads or calls the admin read', async () => {
+    appMocks.canAccessAdmin = false;
+    appMocks.drawer = MAPPED_SOURCE;
+    await render();
+    await openLineageTab();
+
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Observed Unity Catalog relationships are shown to administrators.');
+    expect(text).not.toContain('Loading observed Unity Catalog relationships');
+    expect(text).not.toContain('Observed relationships unavailable');
+    expect(apiMocks.assetMetadata).not.toHaveBeenCalled();
+    // The governed chain itself still renders for every role.
+    expect(document.querySelectorAll('.lineage-node__chip').length).toBeGreaterThan(0);
+    expect(text).toContain('From the governed lineage manifest (backend/resources/lineage_manifest.json, version 1).');
+    expect(text).toContain('Read top to bottom in the documented order.');
   });
 
   it('keeps governed explanations visible when metadata and lineage requests fail', async () => {

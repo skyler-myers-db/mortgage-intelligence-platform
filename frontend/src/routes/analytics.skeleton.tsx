@@ -34,6 +34,8 @@ export const ANALYTICS_SKELETONS = {
   economics: { rows: ['split-wide-left'] },
   segments: { rows: ['full', 'split', 'full'] },
   signals: { rows: ['full', 'full', 'full'] },
+  /** The live funnel's stage cards, then who approved what and the per-officer table. */
+  approvalFunnel: { rows: ['full', 'full', 'full'] },
 } as const satisfies Record<string, AnalyticsSkeletonShape>;
 
 function SkeletonPanel({
@@ -64,14 +66,24 @@ function SkeletonPanel({
   );
 }
 
-export function AnalyticsSkeleton({ title, shape }: { title: string; shape: AnalyticsSkeletonShape }) {
+/**
+ * `reserve`: the shape only, beside a status that already speaks (a warming
+ * panel's AsyncStatus). It is hidden from assistive technology and never
+ * aria-busy, so a long warm-up is not an endless busy region (on base the
+ * warming block stood alone; the reserved shape keeps its slot).
+ */
+export function AnalyticsSkeleton({ title, shape, reserve = false }: { title: string; shape: AnalyticsSkeletonShape; reserve?: boolean }) {
   const online = useIsOnline();
   // The dashboard's title goes on the first panel of the first row.
   const panel = (key: string, className: string, first: boolean) => (
     <SkeletonPanel key={key} title={first ? title : null} online={online} className={className} />
   );
   return (
-    <div className="analytics-skeleton" role="status" aria-busy={online} data-analytics-skeleton="">
+    <div
+      className="analytics-skeleton"
+      {...(reserve ? { 'aria-hidden': true } : { role: 'status', 'aria-busy': online })}
+      data-analytics-skeleton=""
+    >
       {shape.kpis ? (
         <div className="kpi-row" aria-hidden="true">
           {Array.from({ length: shape.kpis }, (_, index) => (

@@ -38,8 +38,6 @@ import { GenieVerifiedReveal } from './GenieVerifiedReveal';
 import { GenieFigureScopes } from './GenieAnswerFigures';
 import { FIGURE_HOVER_CTA, FIGURE_HOVER_TITLE } from './GenieFigureMark';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 function cell(token: string, occurrences: number, column: string | null, section: string | null = null): GenieVerifiedClaim {
   return { token, kind: 'number', derivation: 'returned_value', support: 'cell', column, occurrences, section };
 }
@@ -159,7 +157,7 @@ describe('GenieFigureMark', () => {
     expect(card!.getAttribute('aria-hidden')).toBe('true');
     expect(card!.querySelector('.evidence-hovercard__title')?.textContent).toBe(FIGURE_HOVER_TITLE);
     expect(card!.querySelector('.evidence-hovercard__signal-label')?.textContent).toBe('Column');
-    expect(card!.querySelector('.evidence-hovercard__signal-value')?.textContent).toBe('In The Money Borrowers');
+    expect(card!.querySelector('.evidence-hovercard__signal-value')?.textContent).toBe('In the Money Borrowers');
     expect(card!.querySelector('.evidence-hovercard__cta')?.textContent).toBe(FIGURE_HOVER_CTA);
     act(() => {
       mark.dispatchEvent(new MouseEvent('mouseleave'));

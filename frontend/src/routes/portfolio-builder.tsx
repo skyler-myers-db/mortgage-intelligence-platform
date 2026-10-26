@@ -20,6 +20,7 @@ import { useApp } from '../components/AppContext';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { AsyncStatus } from '../components/ui/AsyncState';
 import { DescribedErrorBody, preloadDescribedError } from '../components/ui/DescribedError';
+import { saveRefusalCopy } from './portfolio-builder.components';
 import { Field } from '../components/ui/Field';
 import { parseCampaignPrefill } from '../lib/campaignPrefill';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
@@ -323,6 +324,12 @@ export default function PortfolioBuilder() {
     // A failed save words its alert from the shared vocabulary chunk: load it with the intent.
     void preloadDescribedError();
   }, [buildDirty, buildInFlight, preview?.campaign_build_eligible]);
+  // a11y-05: the save panel mounts only from the user's "Save build" click,
+  // so its name field takes focus as it mounts (a callback ref, not the
+  // autoFocus attribute jsx-a11y/no-autofocus bans).
+  const focusOnOpen = useCallback((node: HTMLInputElement | null) => {
+    node?.focus();
+  }, []);
 
   const saving = createCampaign.isPending;
   const onConfirmSave = useCallback(async () => {
@@ -520,7 +527,7 @@ export default function PortfolioBuilder() {
                     value={saveName}
                     onChange={(e) => setSaveName(e.target.value)}
                     maxLength={80}
-                    autoFocus
+                    ref={focusOnOpen}
                     data-testid="portfolio-save-name"
                   />
                 )}
@@ -548,7 +555,7 @@ export default function PortfolioBuilder() {
               </Button>
               {saveFailed && (
                 <span className="save-build-form__error" role="alert">
-                  {saveValidationError ?? (
+                  {saveValidationError ?? saveRefusalCopy(saveError) ?? (
                     <>Save failed: <DescribedErrorBody error={saveError} subject="the build save" /> Your name is kept; try again.</>
                   )}
                 </span>
@@ -667,7 +674,7 @@ export default function PortfolioBuilder() {
       </div>
 
       {/* Projected economics (re-audit #4 Buyer-Wow #7): only once a real
-          build with refinance-economics leads exists — never on day-zero or an
+          build with in-the-money leads exists — never on day-zero or an
           empty cohort, where a dollar headline would be misleading. */}
       {!isDayZero(preview) && (preview?.high_intent_leads ?? 0) > 0 && (
         <RoiProjector
@@ -710,7 +717,7 @@ export default function PortfolioBuilder() {
           <div className="lead-cta__body">
             <div className="lead-cta__title">
               {formatCount(preview.high_intent_leads)} borrower
-              {preview.high_intent_leads === 1 ? '' : 's'} pass the refinance-economics screen for the current filters.
+              {preview.high_intent_leads === 1 ? ' is' : 's are'} in the money for the current filters.
             </div>
             <div className="lead-cta__sub">
               Open the lead queue to review evidence and approve outreach per borrower.

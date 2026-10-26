@@ -56,7 +56,7 @@ interface ErrorBoundaryState {
 }
 
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = {
+  override state: ErrorBoundaryState = {
     error: null,
     hasError: false,
     resetKey: this.props.resetKey,
@@ -84,7 +84,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     else window.location.reload();
   };
 
-  render() {
+  override render() {
     if (!this.state.hasError) return this.props.children;
     const surface = (
       <ErrorSurface

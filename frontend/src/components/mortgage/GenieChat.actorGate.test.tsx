@@ -69,8 +69,6 @@ vi.mock('../AppContext', () => ({
 
 import { GenieChat } from './GenieChat';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const A_CONVERSATION = 'conv-of-a';
 const A_LATER_CONVERSATION = 'conv-of-a-later';
 /** No bootstrap conversation: the stored id is the only one there is. */

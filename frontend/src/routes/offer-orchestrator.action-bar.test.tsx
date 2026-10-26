@@ -16,8 +16,6 @@ import type { SalesTeamMember } from '../types';
 import { ACTION_BAR_BLOCK_SIZE_PROPERTY, OfferActionBar, type OfferActionBarProps } from './offer-orchestrator.action-bar';
 import { RejectRationalePanel } from './offer-orchestrator.panels';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const TEAM: SalesTeamMember[] = [
   {
     email: 'lo.one@summit.example',

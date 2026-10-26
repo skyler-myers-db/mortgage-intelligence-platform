@@ -113,7 +113,10 @@ export function ShortcutOverlay({ open, dialogRef, onClose }: ShortcutOverlayPro
             Turn them back on in the Console.
           </p>
         )}
-        <div className="cmdk__list">
+        {/* The list scrolls below about 840px of height: a focusable region
+            (a11y-05; axe scrollable-region-focusable). Unconditional: it sits
+            in a modal, and the sheet is in the initial chunk (no measuring hook). */}
+        <div className="cmdk__list" role="region" aria-label="Shortcut list" tabIndex={0}>
           {SCOPE_ORDER.filter((scope) => grouped.has(scope)).map((scope) => {
             const headingId = `${titleId}-${scope}`;
             return (

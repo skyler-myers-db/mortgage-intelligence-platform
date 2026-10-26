@@ -64,7 +64,7 @@ vi.mock('react-router', async () => {
 import { GenieChat } from '../components/mortgage/GenieChat';
 import AskGenie from './ask-genie';
 
-export const QUESTION = 'Which states have the most prime refi candidates?';
+export const QUESTION = 'Which states have the most in-the-money borrowers?';
 export const SAMPLE = 'How many borrowers are in the money?';
 
 export const START: GenieStartResult = {
@@ -99,7 +99,7 @@ export function progress(terminal: boolean, label = 'Running the governed query'
 export function answer(overrides: Partial<GenieAnswer> = {}): GenieAnswer {
   return {
     answer: 'Illinois leads with 3,080 candidates.',
-    question: 'Which states have the most prime refi candidates?',
+    question: 'Which states have the most in-the-money borrowers?',
     source: 'genie',
     trusted_assets: ['mip.gold.borrower_360'],
     conversation_id: 'conv-1',

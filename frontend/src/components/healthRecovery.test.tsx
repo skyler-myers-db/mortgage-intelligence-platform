@@ -17,8 +17,6 @@ import {
   type DependencyHealth,
 } from './healthRecovery';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * Recovery refetch (audit 2026-09-21 `states-03`).
  *

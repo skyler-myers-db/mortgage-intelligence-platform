@@ -16,7 +16,7 @@ import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Borrower360, BorrowerLifecycle, OfferRecommendation, SalesTeamMember } from '../types';
 import type { OutreachDraftResult } from '../lib/apiTypes';
-import { clearQueueContext, storeQueueContext } from '../lib/queueContext';
+import { storeQueueContext } from '../lib/queueContext';
 import { isDecisionPending, outreachMutationKeys } from '../lib/mutations/outreach';
 import { queryKeys } from '../lib/queryKeys';
 
@@ -69,7 +69,6 @@ vi.mock('../components/activation/ActivationLoopPanel', () => ({ ActivationLoopP
 
 import OfferOrchestrator from './offer-orchestrator';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.setConfig({ testTimeout: 30_000 });
 
 const ID = 'B-0000000000001';
@@ -98,7 +97,7 @@ const BORROWER = {
   rate_spread_bps: 125,
   opportunity_score: 91,
   confidence: 0.94,
-  recommended_offer_code: 'rate_term_refi',
+  recommended_offer_code: 'refi',
   recommended_offer: 'Rate and term refinance review',
   why_now: 'Current lien rate exceeds the reviewed market threshold.',
   evidence_ids: ['ev-1'],
@@ -128,7 +127,7 @@ const BORROWER = {
 const RECOMMENDATION: OfferRecommendation = {
   borrower_id: ID,
   source_refreshed_at: SNAPSHOT,
-  offer_code: 'rate_term_refi',
+  offer_code: 'refi',
   offer_type: 'refi',
   product_label: 'Rate and term refinance review',
   confidence: 0.94,
@@ -149,7 +148,7 @@ function draftFor(channel: OutreachDraftResult['channel'], campaign?: { campaign
     borrower_id: ID,
     campaign_id: campaign?.campaign_id ?? null,
     variant_name: campaign?.variant_name ?? null,
-    offer_code: 'rate_term_refi',
+    offer_code: 'refi',
     channel,
     subject: channel === 'sms' ? null : `${channel} subject`,
     body: `${channel} governed body`,
@@ -167,7 +166,7 @@ function draftFor(channel: OutreachDraftResult['channel'], campaign?: { campaign
 
 /** The pre-port approve body for the email draft (offer-orchestrator.tsx before wave 4b). */
 const GOLDEN_EMAIL_APPROVE = {
-  offer_code: 'rate_term_refi',
+  offer_code: 'refi',
   evidence_ids: ['ev-1', 'ev-2'],
   draft_subject: 'email subject',
   draft_body: 'email governed body',
@@ -185,7 +184,7 @@ const GOLDEN_EMAIL_APPROVE = {
 
 /** SMS: no subject (null, never ''), channel 'sms', no routing chosen. */
 const GOLDEN_SMS_APPROVE = {
-  offer_code: 'rate_term_refi',
+  offer_code: 'refi',
   evidence_ids: ['ev-1', 'ev-2'],
   draft_subject: null,
   draft_body: 'sms governed body',
@@ -201,7 +200,7 @@ const GOLDEN_SMS_APPROVE = {
 };
 
 const GOLDEN_CAMPAIGN_APPROVE = {
-  offer_code: 'rate_term_refi',
+  offer_code: 'refi',
   evidence_ids: ['ev-1', 'ev-2'],
   draft_subject: 'email subject',
   draft_body: 'email governed body',
@@ -217,7 +216,7 @@ const GOLDEN_CAMPAIGN_APPROVE = {
 };
 
 const GOLDEN_OTHER_REJECT = {
-  offer_code: 'rate_term_refi',
+  offer_code: 'refi',
   evidence_ids: ['ev-1', 'ev-2'],
   channel: 'email',
   rationale_code: 'other_with_text',
@@ -271,7 +270,6 @@ describe('Offer Orchestrator writes', () => {
     queryClient.clear();
     container.remove();
     navigate = null;
-    clearQueueContext();
     window.sessionStorage.clear();
   });
 

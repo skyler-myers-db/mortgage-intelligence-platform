@@ -171,6 +171,20 @@ def test_crud_is_owner_scoped_and_audited_in_the_same_statement(conn_kwargs: dic
     assert rows == {"n": 2}
 
 
+def test_hidden_columns_round_trip_and_a_save_without_a_fingerprint(conn_kwargs: dict[str, str]) -> None:
+    # W5e: a view keeps its hidden columns (canonical, column order), and a
+    # deployment with no fingerprint key writes the audited row without one.
+    store = _migrated(conn_kwargs)
+    params, _digest = canonical_saved_view_params("state=TX&view=sales-ops&hide=rate,assigned")
+    saved = store.create(actor=ALICE, name="Ops columns", params=params, filter_fingerprint=None)
+    [view] = store.list(actor=ALICE)
+    assert view.params == "hide=assigned%2Crate&state=TX&view=sales-ops"
+    [audit] = _audit_rows(conn_kwargs, saved.view_id)
+    assert audit["event_type"] == "SAVE_QUEUE_VIEW"
+    assert "filter_fingerprint" not in audit["metadata"]
+    assert audit["metadata"]["saved_view_id"] == saved.view_id
+
+
 def test_a_live_duplicate_and_the_limit_are_refused(conn_kwargs: dict[str, str]) -> None:
     store = _migrated(conn_kwargs)
     store.create(actor=ALICE, name="TX refi", params=PARAMS, filter_fingerprint=FINGERPRINT)

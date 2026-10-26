@@ -1,7 +1,3 @@
-// React Compiler memo caches add enough code here to breach the strict bundle
-// budget; the analytics route family opts out. Keep this section explicit.
-'use no memo';
-
 import { Fragment, useState } from 'react';
 import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
@@ -23,6 +19,7 @@ import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 import { ADDRESSABLE_POPULATION_KPI_LABEL } from '../lib/populationLabels';
 import { formatTimestamp } from '../lib/time';
 import { offerDisplayLabel } from '../lib/offerLanguage';
+import { preloadIntentProps } from '../lib/preloadIntent';
 import type {
   ApprovalFunnelResponse,
   ApprovalFunnelStage,
@@ -33,6 +30,7 @@ import type {
 import type { KpiProofKey } from '../lib/apiTypes';
 import { formatConversionPct } from './analytics.lib';
 import { DataTable, LoadState } from './analytics.charts';
+import { ANALYTICS_SKELETONS } from './analytics.skeleton';
 import { formatCount } from '../lib/formatters';
 
 /**
@@ -136,8 +134,11 @@ function WhoApprovedWhat({ data }: { data: ApprovalFunnelResponse }) {
               {
                 key: 'borrower',
                 label: 'Borrower',
+                // The dossier chunk warms on intent; VIEW_BORROWER stays click-only (bundle-09).
                 render: (row) => (
-                  <Link className="mono" to={`/borrower-360/${row.borrower_id}`}>{row.borrower_id}</Link>
+                  <Link className="mono" to={`/borrower-360/${row.borrower_id}`} {...preloadIntentProps(`/borrower-360/${row.borrower_id}`)}>
+                    {row.borrower_id}
+                  </Link>
                 ),
               },
               { key: 'offer', label: 'Offer', render: (row) => offerDisplayLabel(row.offer_code) },
@@ -197,7 +198,9 @@ function LoanOfficerDrill({ loanOfficerId }: { loanOfficerId: string }) {
               key: 'borrower',
               label: 'Borrower',
               render: (row) => (
-                <Link className="mono" to={`/borrower-360/${row.borrower_id}`}>{row.borrower_id}</Link>
+                <Link className="mono" to={`/borrower-360/${row.borrower_id}`} {...preloadIntentProps(`/borrower-360/${row.borrower_id}`)}>
+                  {row.borrower_id}
+                </Link>
               ),
             },
             {
@@ -315,7 +318,7 @@ export function ApprovalFunnelSection() {
     },
   );
   return (
-    <LoadState query={funnel} title="Approval funnel">
+    <LoadState query={funnel} title="Approval funnel" skeleton={ANALYTICS_SKELETONS.approvalFunnel}>
       {(data) => (
         <>
           <section className="surface analytics-section">

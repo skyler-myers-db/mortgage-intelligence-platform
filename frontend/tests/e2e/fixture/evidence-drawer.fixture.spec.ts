@@ -54,10 +54,12 @@ for (const theme of FIXTURE_THEMES) {
 
       const how = drawer.locator('[data-testid="evidence-how-we-got"]');
       await expect(how.getByRole('heading', { level: 3 })).toHaveText(/^How we got [\d,]+$/);
-      await expect(how).toContainText('Borrowers who clear the refinance economics screen');
+      await expect(how).toContainText('Borrowers who are in the money');
       await expect(how.locator('.chip')).toHaveText(['in_the_money = TRUE']);
       await expect(how.locator('time')).toBeVisible();
-      await expect(how).toContainText('Data as of');
+      // Home passes the refresh instant: its as-of keeps the clock (the
+      // Analytics cards' date-only snapshot shows the date alone).
+      await expect(how.locator('.evidence-proof__asof')).toHaveText('Data as of Jul 14, 8:00 AM EDT');
       await expect(drawer.locator('.source-freshness')).toHaveText('Fresh');
       await expect(drawer.getByTestId('evidence-freshness-foot')).toHaveText(/^Last refresh .+ · via UC Gold Borrower 360$/);
       await expect(drawer).not.toContainText('Admin-only freshness');
@@ -128,7 +130,7 @@ for (const theme of FIXTURE_THEMES) {
     test('(f) since-last-login numbers keep their Delta Explainer; competitor liens are not snapshotted', async ({ app, page }) => {
       await app.gotoRoute('/');
       const why = page.locator('.home-answer .login-summary');
-      const refi = why.locator('.home-answer__trigger', { hasText: 'refi screen' }).locator('.evidence-chip');
+      const refi = why.locator('.home-answer__trigger', { hasText: 'in-the-money borrowers' }).locator('.evidence-chip');
       let drawer = await app.openEvidenceDrawer(refi);
       await expect(drawer.locator('[data-testid="delta-explainer"] table tbody tr').first()).toBeVisible();
       await expect(drawer.locator('[data-testid="evidence-how-we-got"] h3')).toHaveText(/^How we got \+/);

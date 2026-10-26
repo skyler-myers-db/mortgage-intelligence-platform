@@ -13,10 +13,9 @@ import type { ApiBody, ApiOk, ApiRequest, ApiResponse } from './api.gen';
 import type { DeepNoPhantomKeys, Expect, NoPhantomKeys, WireFits } from './wireContract.check';
 import type { FootprintPayload } from '../components/FootprintProvider';
 import type { HealthPayload as BannerHealthPayload } from '../components/mortgage/DegradedBanner';
-import type { adminApi } from '../lib/apiClients/admin';
+import type { AdminOperationRunBody, adminApi } from '../lib/apiClients/admin';
 import type { AuditRollupResponse } from '../lib/apiClients/audit';
 import type { RefusalReportFamilyCount, RefusalReportItem, RefusalReportListResponse, RefusalReportQuestionResponse } from '../lib/apiClients/refusalReports';
-import type { FieldPerformanceCell, FieldPerformanceResponse } from '../lib/apiClients/fieldPerformance';
 import type { PrintReceipt, PrintReceiptRequest } from '../lib/apiClients/printReceipt';
 import type { AuditExportReceipt, AuditExportReceiptRequest, AuditFacetsResponse, AuditFacetValue } from '../lib/apiClients/auditExplorer';
 import type { ActorAuditEventPage, ActorAuditEventSummary, AuditEventPage, AuditEventRow, DecisionReceipt, HealthPayload as LibHealthPayload } from '../lib/apiTypes';
@@ -27,7 +26,6 @@ import type { LineageManifestResponse } from './lineage';
 
 export type WireContractAdmin = [
   // (i) schema-named hand types
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: fail-closed field event_type is string | null on the wire but string in the hand row type
   Expect<WireFits<ApiResponse<'AuditRollupResponse'>, AuditRollupResponse>>,
   Expect<NoPhantomKeys<AuditRollupResponse, ApiResponse<'AuditRollupResponse'>>>,
   Expect<WireFits<ApiResponse<'ActorAuditEventPage'>, ActorAuditEventPage>>,
@@ -70,10 +68,6 @@ export type WireContractAdmin = [
   Expect<NoPhantomKeys<KpiProofResponse, ApiResponse<'KpiProofResponse'>>>,
   Expect<WireFits<ApiResponse<'KpiProofParam'>, KpiProofParam>>,
   Expect<NoPhantomKeys<KpiProofParam, ApiResponse<'KpiProofParam'>>>,
-  Expect<WireFits<ApiResponse<'FieldPerformanceResponse'>, FieldPerformanceResponse>>,
-  Expect<NoPhantomKeys<FieldPerformanceResponse, ApiResponse<'FieldPerformanceResponse'>>>,
-  Expect<WireFits<ApiResponse<'FieldPerformanceCell'>, FieldPerformanceCell>>,
-  Expect<NoPhantomKeys<FieldPerformanceCell, ApiResponse<'FieldPerformanceCell'>>>,
   Expect<WireFits<ApiResponse<'PrintReceipt'>, PrintReceipt>>,
   Expect<NoPhantomKeys<PrintReceipt, ApiResponse<'PrintReceipt'>>>,
   Expect<WireFits<PrintReceiptRequest, ApiRequest<'PrintReceiptRequest'>>>,
@@ -93,15 +87,14 @@ export type WireContractAdmin = [
   Expect<NoPhantomKeys<FootprintPayload, ApiOk<'GET /api/v1/config/footprint'>>>,
   Expect<WireFits<ApiResponse<'AuditEvent'>, AuditEventRow>>,
   Expect<NoPhantomKeys<AuditEventRow, ApiResponse<'AuditEvent'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: campaign_treatment_runtime is string | null on the wire but string in lib/apiTypes HealthPayload
   Expect<WireFits<ApiResponse<'HealthResponse'>, LibHealthPayload>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: lib/apiTypes HealthPayload declares warehouse_id and app_env, which HealthResponse does not
   Expect<NoPhantomKeys<LibHealthPayload, ApiResponse<'HealthResponse'>>>,
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: status, dependencies and circuit_breakers values are plain strings on the wire but literal unions in DegradedBanner HealthPayload
   Expect<WireFits<ApiResponse<'HealthResponse'>, BannerHealthPayload>>,
   Expect<NoPhantomKeys<BannerHealthPayload, ApiResponse<'HealthResponse'>>>,
-  // the adminRunOperation egress check (the site stays BINDING_EXEMPT)
-  // @ts-expect-error wire-drift quality-04 2026-10-01 w5-wire-types: job_key and reason are plain strings in the adminRunOperation payload but closed literal unions in AdminOperationRunRequest
+  // the adminRunOperation body: bound through its pair; the egress check reads the
+  // client's own parameter (only the response passthrough stays BINDING_EXEMPT)
+  Expect<WireFits<AdminOperationRunBody, ApiBody<'POST /api/v1/admin/operations/run'>>>,
+  Expect<DeepNoPhantomKeys<AdminOperationRunBody, ApiBody<'POST /api/v1/admin/operations/run'>>>,
   Expect<WireFits<Parameters<typeof adminApi['adminRunOperation']>[0], ApiBody<'POST /api/v1/admin/operations/run'>>>,
   Expect<DeepNoPhantomKeys<Parameters<typeof adminApi['adminRunOperation']>[0], ApiBody<'POST /api/v1/admin/operations/run'>>>,
 ];

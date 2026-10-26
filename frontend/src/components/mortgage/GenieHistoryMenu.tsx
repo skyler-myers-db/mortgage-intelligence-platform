@@ -6,6 +6,7 @@ import { queryKeys } from '../../lib/queryKeys';
 import { formatTimestamp } from '../../lib/time';
 import type { GenieTurn } from '../../lib/genieConversationStore';
 import { Icon } from '../Icon';
+import { Tooltip } from '../ui/Tooltip';
 import './GenieHistoryMenu.css';
 
 /**
@@ -146,21 +147,22 @@ export function GenieHistoryMenu({
 
   return (
     <div className="genie-history">
-      <button
-        ref={toggleRef}
-        type="button"
-        className="drawer__close"
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggle(!open);
-        }}
-        disabled={disabled}
-        aria-expanded={open}
-        aria-label="Genie conversation history"
-        title="History"
-      >
-        <Icon name="audit" size={14} />
-      </button>
+      <Tooltip content="History">
+        <button
+          ref={toggleRef}
+          type="button"
+          className="drawer__close"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle(!open);
+          }}
+          disabled={disabled}
+          aria-expanded={open}
+          aria-label="Genie conversation history"
+        >
+          <Icon name="audit" size={14} />
+        </button>
+      </Tooltip>
       {shownGeneration !== null && (
         <GenieHistoryRows
           key={shownGeneration}

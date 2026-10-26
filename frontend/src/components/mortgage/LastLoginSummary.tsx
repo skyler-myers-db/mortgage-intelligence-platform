@@ -9,6 +9,7 @@ import { rateMoveSinceVisit, whyNowTriggers, type RateMoveSinceVisit } from '../
 import { loginSummaryDrawerSource, rateMoveDrawerSource } from '../../lib/loginSummaryDrawerSource';
 import { ratePct, signedBpsLabel } from '../../lib/formatters';
 import { formatTimestamp } from '../../lib/time';
+import { isRestoredSnapshot } from '../../lib/restoredQuery';
 
 /**
  * WHY NOW — the S4 "since your last login" summary as the answer band's
@@ -82,7 +83,10 @@ export function LastLoginSummary({
     enabled: rateEnabled,
     staleTime: 60_000,
   });
-  const rateMove = rateEnabled ? rateMoveSinceVisit(rateWindow.data?.weeks, previousVisitAt) : null;
+  // A restored rate window (lib/queryPersist) is the last session's snapshot:
+  // no "rate moved" claim from it while its fresh read is in flight.
+  const heldBack = rateWindow.isFetching && isRestoredSnapshot(rateWindow.dataUpdatedAt);
+  const rateMove = rateEnabled && !heldBack ? rateMoveSinceVisit(rateWindow.data?.weeks, previousVisitAt) : null;
 
   return (
     <section

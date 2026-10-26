@@ -18,8 +18,6 @@ import { installFakeCssTransition, runExitOn } from '../../test/runningExit';
 import { FilterSelect } from './FilterSelect';
 import { TYPEAHEAD_RESET_MS } from './useListboxNavigation';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const STATES = ['All states', 'IL', 'TX', 'CA', 'FL', 'AZ', 'WA', 'CO', 'GA'];
 const changes = vi.fn<(next: string) => void>();
 

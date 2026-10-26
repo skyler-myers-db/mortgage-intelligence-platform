@@ -13,6 +13,7 @@
    well, the SMS bubble takes the prototype's outbound chat bubble
    (`.genie__msg--user`, design_files/index.html:742) and the To line the
    prototype `.chip`. Tokens only. */
+@layer routes {
 .certified-copy {
   display: flex;
   flex-direction: column;
@@ -111,3 +112,4 @@
 
 /* Not the copy that would be approved (loading, failed, saving). */
 .certified-copy [aria-disabled="true"] { color: var(--text-3); }
+}

@@ -52,6 +52,7 @@ import {
 import type { StateRollup, ZipRollup } from '../../types';
 import type { RateSensitivityResponse } from '../../types/rateScenario';
 import { rateScenarioApi } from '../../lib/apiClients/rateScenario';
+import { reportClientError } from '../../lib/clientErrorLog';
 import type { UsaSvgMap } from './USChoroplethMap.utils';
 import { loadUsaStateMap } from './USStateMapData';
 
@@ -142,9 +143,16 @@ export function useChoroplethLiveFacts({
   // own code-split chunk instead of the main bundle.
   useEffect(() => {
     let cancelled = false;
-    loadUsaStateMap().then((map) => {
-      if (!cancelled) setUsaMap(map);
-    });
+    // A failed load is reported as the unhandled rejection it used to be;
+    // the loader drops it, so the next mount retries (USStateMapData).
+    loadUsaStateMap().then(
+      (map) => {
+        if (!cancelled) setUsaMap(map);
+      },
+      (error: unknown) => {
+        reportClientError('rejection', error);
+      },
+    );
     return () => {
       cancelled = true;
     };

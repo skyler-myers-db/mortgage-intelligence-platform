@@ -12,6 +12,7 @@
    stylesheet (USChoroplethMap.css): the legend draws them before this
    chunk arrives, and after it failed to load.
    ============================================================ */
+@layer routes {
 .rate-lever {
   display: grid;
   gap: var(--sp-1);
@@ -108,4 +109,5 @@
 .rate-lever__watch-error {
   flex-basis: 100%;
   color: var(--status-danger-ink);
+}
 }

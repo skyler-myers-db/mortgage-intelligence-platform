@@ -53,8 +53,8 @@ describe('flag columns are neither labels nor measures', () => {
 
     expect(chart?.valueCol).toBe('borrowers');
     expect(chart?.rows).toEqual([
-      { label: 'In The Money · Equity', value: 4120 },
-      { label: 'In The Money', value: 3180 },
+      { label: 'In the Money · Equity', value: 4120 },
+      { label: 'In the Money', value: 3180 },
       { label: 'Equity · Investor', value: 990 },
       { label: 'No flags', value: 610 },
     ]);

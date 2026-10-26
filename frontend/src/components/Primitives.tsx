@@ -25,7 +25,6 @@ export function Chip({
   icon,
   leading,
   className,
-  title,
   tooltip,
   tooltipShortcut,
   onRemove,
@@ -33,12 +32,6 @@ export function Chip({
 }: PropsWithChildren<ChipLead & {
   variant?: 'success' | 'warning' | 'danger' | 'neutral';
   className?: string;
-  /**
-   * Optional native `title` tooltip. Used by the "Refreshed …" chip to
-   * surface the unambiguous ISO-UTC form on hover so operators in
-   * different timezones can disambiguate a Slack screenshot. R5-19.
-   */
-  title?: string;
   /**
    * Design-system tooltip (ui/Tooltip, critic-08). A chip is a non-focusable
    * span, so it gets the hover tooltip plus a hidden description.
@@ -58,7 +51,7 @@ export function Chip({
 }>) {
   const cls = ['chip', variant ? `chip--${variant}` : '', className ?? ''].filter(Boolean).join(' ');
   const chip = (
-    <span className={cls} title={title}>
+    <span className={cls}>
       {leading ?? (icon && <Icon name={icon} size={10} />)}
       <span className="chip__label">{children}</span>
       {onRemove && (
@@ -85,7 +78,8 @@ export function Chip({
 type ButtonVariant = 'primary' | 'ghost' | 'danger' | 'success' | 'default';
 type ButtonSize = 'default' | 'sm';
 
-interface BtnProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+// No `title` (audit critic-08): a native title is mouse-only; use `tooltip`.
+interface BtnProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'title'> {
   variant?: ButtonVariant;
   size?: ButtonSize;
   icon?: IconName;
@@ -94,7 +88,7 @@ interface BtnProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   // capture the underlying <button> (e.g. LeadTable focus restoration)
   // without wrapping the primitive in forwardRef.
   ref?: Ref<HTMLButtonElement>;
-  /** Design-system tooltip (ui/Tooltip, critic-08); additive beside `title`. */
+  /** Design-system tooltip (ui/Tooltip, critic-08); replaces the deprecated `title`. */
   tooltip?: ReactNode;
   /** A keyboard shortcut shown in the tooltip's `<kbd>`. */
   tooltipShortcut?: string;
@@ -162,8 +156,10 @@ export function EvidenceChip({
   children,
   source,
   onClick,
-  title,
-}: PropsWithChildren<{ source?: DrawerSource; onClick?: () => void; title?: string }>) {
+}: PropsWithChildren<{
+  source?: DrawerSource;
+  onClick?: () => void;
+}>) {
   // Keyed read (runtime-05): a drawer open or a row expand elsewhere does not re-render every chip.
   const { setDrawer, showEvidence } = useApp('setDrawer', 'showEvidence');
   // Hooks must run before any early return; the hover card is a no-op
@@ -175,10 +171,8 @@ export function EvidenceChip({
     else if (source) setDrawer(source);
   };
   // Re-audit #4 Buyer-Wow #8: the rich hover/focus micro-preview
-  // (useEvidenceHoverCard) replaces the old native `title` auto-tooltip. We
-  // still honor an explicit `title` override if a caller passed one; the
-  // auto source-tooltip is gone (the card carries that info now).
-  const fallbackTitle = title;
+  // (useEvidenceHoverCard) replaced the native `title` auto-tooltip, and the
+  // explicit `title` override is gone too (audit critic-08, W5e).
   // Visible freshness dot: no hover required. Missing updatedAt renders
   // no dot (NOT a grey placeholder, per design spec).
   const bucket = freshnessBucket(source?.updatedAt);
@@ -188,7 +182,6 @@ export function EvidenceChip({
         type="button"
         className="evidence-chip"
         onClick={handle}
-        title={fallbackTitle}
         ref={anchorRef}
         {...anchorHandlers}
       >

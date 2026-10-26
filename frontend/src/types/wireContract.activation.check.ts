@@ -11,15 +11,12 @@
  */
 import type { ApiRequest, ApiResponse } from './api.gen';
 import type { DeepNoPhantomKeys, Expect, NoPhantomKeys, WireFits } from './wireContract.check';
-import type { ActivationStageRequest } from '../lib/apiClients/activation';
 import type { RumEvent } from '../lib/rum';
 import type { ActivationDestination, ActivationOutboxItem, ActivationStageResponse, ActivationSummary } from '../types';
-import type { PropertyLoanLookupLoan, PropertyLoanLookupRequest, PropertyLoanLookupResponse } from './propertyLookup';
+import type { PropertyLoanLookupResponse } from './propertyLookup';
 
 export type WireContractActivation = [
   // (i) schema-named hand types
-  Expect<WireFits<ActivationStageRequest, ApiRequest<'ActivationStageRequest'>>>,
-  Expect<DeepNoPhantomKeys<ActivationStageRequest, ApiRequest<'ActivationStageRequest'>>>,
   Expect<WireFits<ApiResponse<'ActivationDestination'>, ActivationDestination>>,
   Expect<NoPhantomKeys<ActivationDestination, ApiResponse<'ActivationDestination'>>>,
   Expect<WireFits<ApiResponse<'ActivationOutboxItem'>, ActivationOutboxItem>>,
@@ -28,10 +25,6 @@ export type WireContractActivation = [
   Expect<NoPhantomKeys<ActivationStageResponse, ApiResponse<'ActivationStageResponse'>>>,
   Expect<WireFits<ApiResponse<'ActivationSummary'>, ActivationSummary>>,
   Expect<NoPhantomKeys<ActivationSummary, ApiResponse<'ActivationSummary'>>>,
-  Expect<WireFits<ApiResponse<'PropertyLoanLookupLoan'>, PropertyLoanLookupLoan>>,
-  Expect<NoPhantomKeys<PropertyLoanLookupLoan, ApiResponse<'PropertyLoanLookupLoan'>>>,
-  Expect<WireFits<PropertyLoanLookupRequest, ApiRequest<'PropertyLoanLookupRequest'>>>,
-  Expect<DeepNoPhantomKeys<PropertyLoanLookupRequest, ApiRequest<'PropertyLoanLookupRequest'>>>,
   Expect<WireFits<ApiResponse<'PropertyLoanLookupResponse'>, PropertyLoanLookupResponse>>,
   Expect<NoPhantomKeys<PropertyLoanLookupResponse, ApiResponse<'PropertyLoanLookupResponse'>>>,
   // (ii) bound call sites whose type argument is not schema-named

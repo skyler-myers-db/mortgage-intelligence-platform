@@ -56,8 +56,6 @@ vi.mock('../AppContext', () => ({
 
 import { GenieChat } from './GenieChat';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const START: GenieStartResult = { conversation_id: 'conv-bootstrap', trusted_assets: [], sample_questions: [] };
 const ROUTE_ID = '0123456789abcdef0123456789abcdef';
 const PANEL_ID = 'fedcba9876543210fedcba9876543210';

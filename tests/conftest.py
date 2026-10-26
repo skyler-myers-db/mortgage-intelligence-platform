@@ -148,7 +148,7 @@ class _FakeLakebaseClient:
     def __init__(self) -> None:
         self.sales_team: list[dict[str, Any]] = [
             {
-                "email": "skyler@entrada.ai",
+                "email": "operator@summit.example",
                 "display_label": "Entrada Demo Operator",
                 "role": "admin",
                 "manager_email": None,
@@ -160,7 +160,7 @@ class _FakeLakebaseClient:
                 "email": "lo01@summit.example",
                 "display_label": "Summit LO 01",
                 "role": "loan_officer",
-                "manager_email": "skyler@entrada.ai",
+                "manager_email": "operator@summit.example",
                 "region": "IL",
                 "capacity_per_day": 35,
                 "active": True,
@@ -169,7 +169,7 @@ class _FakeLakebaseClient:
                 "email": "lo02@summit.example",
                 "display_label": "Summit LO 02",
                 "role": "loan_officer",
-                "manager_email": "skyler@entrada.ai",
+                "manager_email": "operator@summit.example",
                 "region": "CA",
                 "capacity_per_day": 35,
                 "active": True,
@@ -542,7 +542,7 @@ class _FakeLakebaseClient:
             return {
                 "campaign_id": (params or {}).get("campaign_id", uuid4()),
                 "name": "Synthetic campaign",
-                "owner_email": "skyler@entrada.ai",
+                "owner_email": "operator@summit.example",
                 "status": "draft",
                 "criteria": {},
                 "suppression_policy": {"default": "eligible_only"},
@@ -635,6 +635,19 @@ class _FakeLakebaseClient:
                 :limit
             ]
         if "FROM mip_app.approvals" in sql and "ORDER BY decided_at DESC" in sql:
+            # The funnel's recent list drops an approve with a later finalized
+            # revoke for the same borrower (flow-v2, the NOT EXISTS arm).
+            revoke_aware = "r.action = 'revoke'" in sql
+
+            def _revoked(approve: dict[str, Any]) -> bool:
+                return revoke_aware and any(
+                    other.get("borrower_id") == approve.get("borrower_id")
+                    and other.get("action") == "revoke"
+                    and other.get("audit_event_id") is not None
+                    and other["decided_at"] >= approve["decided_at"]
+                    for other in self.approvals
+                )
+
             rows = [
                 {
                     "approval_id": row.get("approval_id"),
@@ -645,7 +658,7 @@ class _FakeLakebaseClient:
                     "decided_at": row.get("decided_at"),
                 }
                 for row in self.approvals
-                if row.get("action") == "approve"
+                if row.get("action") == "approve" and not _revoked(row)
             ]
             rows.sort(key=lambda r: r["decided_at"], reverse=True)
             return rows[:limit]
@@ -966,7 +979,7 @@ class _FakeLakebaseClient:
                 {
                     "campaign_id": uuid4(),
                     "name": "Synthetic campaign",
-                    "owner_email": "skyler@entrada.ai",
+                    "owner_email": "operator@summit.example",
                     "status": "draft",
                     "criteria": {},
                     "suppression_policy": {"default": "eligible_only"},

@@ -58,8 +58,6 @@ import {
   GENIE_EXPORT_NOT_RECORDED,
 } from './GenieAnswer.export';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const RECEIPT: GenieAnswerExportReceipt = {
   audit_event_id: 'evt-1',
   event_type: 'GENIE_ANSWER_EXPORT',

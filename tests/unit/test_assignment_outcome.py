@@ -18,7 +18,7 @@ from backend.schemas.loan_officer import ASSIGNMENT_OUTCOMES
 from tests.fixtures import mock_population as mock_data
 
 client = TestClient(app)
-client.headers.update({"X-Forwarded-Email": "skyler@entrada.ai"})
+client.headers.update({"X-Forwarded-Email": "operator@summit.example"})
 
 LO_01 = "55555555-5555-4555-8555-555555555501"
 

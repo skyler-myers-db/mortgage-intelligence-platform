@@ -1,0 +1,39 @@
+{
+  "holds": [
+    {
+      "ecosystem": "npm",
+      "package": "typescript",
+      "below": "7.0.0",
+      "reason": "typescript-eslint 8.71.0 peers typescript below 6.1.0; TypeScript 7 waits for a typescript-eslint release that admits it (D-platform-process-a)",
+      "review_by": "2026-11-15"
+    },
+    {
+      "ecosystem": "npm",
+      "package": "vitest",
+      "below": "5.0.0",
+      "reason": "vitest 5 needs its own budget and VRT batch, and the browser-mode packages move with it; no peer range forces it (D-platform-process-a)",
+      "review_by": "2026-11-15"
+    },
+    {
+      "ecosystem": "npm",
+      "package": "@babel/core",
+      "below": "8.0.0",
+      "reason": "Babel 8 waits for React Compiler plugin compatibility (babel-plugin-react-compiler 1.0.0; D-platform-process-a)",
+      "review_by": "2026-11-15"
+    },
+    {
+      "ecosystem": "npm",
+      "package": "@tanstack/react-virtual",
+      "below": "3.14.0",
+      "reason": "W5e hold (2026-10-15, tail T1c on the merged tree): virtual-core 3.19.4 adds +2.80 KiB br, +10.73 raw to leadsQuery; raw 181.65 breaks the 180 KiB maxLazy gate set at the lead-table-compile merge",
+      "review_by": "2026-11-30"
+    },
+    {
+      "ecosystem": "pypi",
+      "package": "databricks-sdk",
+      "below": "0.104.0",
+      "reason": "genie-03: no chat-mode Genie message cancel through 0.152.0 (only the agent-mode genie_cancel_response); a 0.103 to 0.152 jump needs a live deploy proof",
+      "review_by": "2026-11-15"
+    }
+  ]
+}

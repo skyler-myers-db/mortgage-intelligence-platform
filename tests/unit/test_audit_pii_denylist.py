@@ -106,7 +106,7 @@ def test_in_memory_store_rejects_pii_payload() -> None:
     store = InMemoryAuditStore()
     with pytest.raises(AuditPIIError):
         store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="view_borrower_360",
             entity_type="borrower",
             entity_id="B-1",
@@ -117,7 +117,7 @@ def test_in_memory_store_rejects_pii_payload() -> None:
 def test_in_memory_store_accepts_clean_payload() -> None:
     store = InMemoryAuditStore()
     event = store.write(
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
         action="view_borrower_360",
         entity_type="borrower",
         entity_id="B-1",
@@ -141,7 +141,7 @@ def test_lakebase_store_rejects_pii_payload_before_insert() -> None:
     store = LakebaseAuditStore(client=client)
     with pytest.raises(AuditPIIError):
         store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="view_borrower_360",
             entity_type="borrower",
             entity_id="B-1",
@@ -406,7 +406,7 @@ def test_audit_stores_reject_case_variant_campaign_metadata_before_persisting() 
     store = InMemoryAuditStore()
     with pytest.raises(AuditMetadataValueViolation):
         store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="draft_outreach",
             entity_type="outreach_draft",
             entity_id="B-48291",
@@ -414,7 +414,7 @@ def test_audit_stores_reject_case_variant_campaign_metadata_before_persisting() 
         )
     with pytest.raises(AuditMetadataValueViolation):
         store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="draft_outreach",
             entity_type="outreach_draft",
             entity_id="B-48291",
@@ -425,7 +425,7 @@ def test_audit_stores_reject_case_variant_campaign_metadata_before_persisting() 
     lakebase_store = LakebaseAuditStore(client=client)
     with pytest.raises(AuditMetadataValueViolation):
         lakebase_store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="draft_outreach",
             entity_type="outreach_draft",
             entity_id="B-48291",
@@ -438,7 +438,7 @@ def test_audit_store_rejects_name_shaped_top_level_columns() -> None:
     store = InMemoryAuditStore()
     with pytest.raises(AuditMetadataValueViolation):
         store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="view.custom",
             entity_type="lead_queue",
             entity_id="Jane Smith",
@@ -446,7 +446,7 @@ def test_audit_store_rejects_name_shaped_top_level_columns() -> None:
         )
     with pytest.raises(AuditMetadataValueViolation):
         store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="John Smith",
             entity_type="lead_queue",
             entity_id="manual",
@@ -458,7 +458,7 @@ def test_audit_store_server_action_overrides_payload_action() -> None:
     store = InMemoryAuditStore()
 
     event = store.write(
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
         action="view.custom",
         entity_type="lead_queue",
         entity_id="manual",
@@ -474,7 +474,7 @@ def test_audit_store_accepts_uuid_with_phone_like_digit_run() -> None:
     store = InMemoryAuditStore()
 
     event = store.write(
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
         action="outreach.reject",
         entity_type="approval",
         entity_id="94e455bb-5fed-4745-82db-0b8606194175",
@@ -489,7 +489,7 @@ def test_in_memory_store_scrubs_allowed_free_text_before_persisting() -> None:
     store = InMemoryAuditStore()
 
     event = store.write(
-        actor="skyler@entrada.ai",
+        actor="operator@summit.example",
         action="outreach.approve",
         entity_type="approval",
         entity_id="94e455bb-5fed-4745-82db-0b8606194175",
@@ -520,7 +520,7 @@ def test_in_memory_store_rejects_unlisted_metadata_key() -> None:
     store = InMemoryAuditStore()
     with pytest.raises(AuditPIIError):
         store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="outreach.approve",
             entity_type="approval",
             entity_id="uuid-123",
@@ -533,7 +533,7 @@ def test_in_memory_store_rejects_nested_pii_under_allowed_container() -> None:
     store = InMemoryAuditStore()
     with pytest.raises(AuditPIIError) as info:
         store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="run_genie",
             entity_type="genie",
             entity_id="manual",
@@ -551,7 +551,7 @@ def test_in_memory_store_rejects_nested_free_text_address_value() -> None:
     store = InMemoryAuditStore()
     with pytest.raises(AuditPIIError) as info:
         store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="run_genie",
             entity_type="genie",
             entity_id="manual",
@@ -566,7 +566,7 @@ def test_in_memory_store_rejects_pii_in_growth_agent_proof_lists(container: str,
     store = InMemoryAuditStore()
     with pytest.raises(AuditMetadataValueViolation):
         store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="view.custom",
             entity_type="genie",
             entity_id="manual",
@@ -589,7 +589,7 @@ def test_lakebase_store_rejects_unlisted_key_before_insert() -> None:
     store = LakebaseAuditStore(client=client)
     with pytest.raises(AuditPIIError):
         store.write(
-            actor="skyler@entrada.ai",
+            actor="operator@summit.example",
             action="outreach.approve",
             entity_type="approval",
             entity_id="uuid-123",

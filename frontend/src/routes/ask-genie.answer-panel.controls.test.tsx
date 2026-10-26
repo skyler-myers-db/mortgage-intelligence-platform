@@ -12,6 +12,7 @@ import { act, createRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tooltipText } from '../test/tooltipText';
 import type { GenieAnswer } from '../types';
 import { clearGenieTurns, setGenieTurns } from '../lib/genieConversationStore';
 
@@ -34,8 +35,6 @@ vi.mock('../lib/api', async () => {
 
 import { __resetGenieTurnStoreForTests, getGenieTurnSnapshot, startGenieTurn } from '../lib/genieInFlightTurn';
 import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 function answer(text: string, id: string): GenieAnswer {
   return {
@@ -157,7 +156,7 @@ describe('AskGenieAnswerPanel composer controls', () => {
     // The latest turn is the last one in the thread, right above the composer.
     const regenerates = container.querySelectorAll<HTMLButtonElement>('button[aria-label="Regenerate answer"]');
     const regenerate = regenerates[regenerates.length - 1];
-    expect(regenerate.title).toContain('cannot rewrite its history');
+    expect(tooltipText(regenerate)).toContain('cannot rewrite its history');
     act(() => regenerate.click());
     expect(onAsk).toHaveBeenCalledWith('What is the approval trend over the last 30 days?');
 
@@ -165,16 +164,16 @@ describe('AskGenieAnswerPanel composer controls', () => {
     const helds = container.querySelectorAll<HTMLButtonElement>('button[aria-label="Regenerate answer"]');
     const held = helds[helds.length - 1];
     expect(held.disabled).toBe(true);
-    expect(held.title).toContain('still answering');
+    expect(tooltipText(held)).toContain('still answering');
   });
 
-  it('labels each answer source in plain words, the governed path in its tooltip (flow-10)', () => {
+  it('labels each answer source in plain words, the governed path in its hover card, never a title (flow-10, critic-08)', () => {
     render('');
     const chips = [...container.querySelectorAll<HTMLButtonElement>('.genie-thread .evidence-chip')];
     expect(chips).toHaveLength(2);
     for (const chip of chips) {
       expect(chip.textContent).toBe('Borrower 360');
-      expect(chip.title).toBe('mip.gold.borrower_360');
+      expect(chip.hasAttribute('title')).toBe(false);
     }
   });
 
@@ -223,7 +222,7 @@ describe('AskGenieAnswerPanel docked composer (visual-07)', () => {
             onAsk={onAsk}
             onNewThread={() => undefined}
             onLoadSession={() => undefined}
-            sampleQuestions={['Which states have the most prime refi candidates?']}
+            sampleQuestions={['Which states have the most in-the-money borrowers?']}
             onFollowUp={() => undefined}
             onAction={() => undefined}
             actionStatus={null}
@@ -241,7 +240,7 @@ describe('AskGenieAnswerPanel docked composer (visual-07)', () => {
     render('');
     const textarea = composer().querySelector('textarea')!;
     expect(textarea.getAttribute('aria-label')).toBe('Ask Genie — question');
-    expect(textarea.placeholder).toMatch(/prime refi candidates/);
+    expect(textarea.placeholder).toMatch(/in-the-money count by state/);
     expect(textarea.getAttribute('rows')).toBe('2');
     expect(composer().classList.contains('surface__ft')).toBe(true);
     const samples = container.querySelector('[aria-label="Suggested Genie questions"]')!;

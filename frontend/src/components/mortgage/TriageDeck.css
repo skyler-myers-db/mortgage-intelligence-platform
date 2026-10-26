@@ -5,6 +5,7 @@
    Prototype.html:1888-1990. `.triage` is a new block; every control inside
    is a prototype `.btn`, `.chip` or `.approval`.
    ============================================================ */
+@layer routes {
 .triage {
   display: flex;
   flex-direction: column;
@@ -101,4 +102,5 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .triage__card { animation: none; }
+}
 }

@@ -2,17 +2,16 @@
  * @vitest-environment happy-dom
  *
  * <Timestamp> contract (2026-09-21 audit, responsive-07): a `<time>` with a
- * machine-readable `dateTime` and an absolute-UTC `title` around the lib/time
- * label. The rendered freshness chip is pinned at the page layer by
+ * machine-readable `dateTime` and the absolute UTC in a ui/Tooltip (critic-08,
+ * W5e: never a native `title`) around the lib/time label. The rendered freshness chip is pinned at the page layer by
  * tests/e2e/fixture/formatters.fixture.spec.ts.
  */
 
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tooltipText } from '../../test/tooltipText';
 import { Timestamp } from './Timestamp';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const NOW = Date.parse('2026-07-14T15:00:00Z');
 
@@ -36,12 +35,13 @@ function render(node: ReactNode): void {
 }
 
 describe('Timestamp', () => {
-  it('renders relative age inside <time dateTime title={absolute UTC}>', () => {
+  it('renders relative age inside <time dateTime>, the absolute UTC in its Tooltip', () => {
     render(<Timestamp value="2026-07-14 12:00:00" now={NOW} />);
     const time = container.querySelector('time');
     expect(time?.textContent).toBe('3 hours ago');
     expect(time?.getAttribute('dateTime')).toBe('2026-07-14T12:00:00.000Z');
-    expect(time?.getAttribute('title')).toBe('Jul 14, 2026, 12:00 PM UTC');
+    expect(time?.hasAttribute('title')).toBe(false);
+    expect(tooltipText(time)).toBe('Jul 14, 2026, 12:00 PM UTC');
   });
 
   it('renders the short date and date-time forms', () => {
@@ -54,8 +54,26 @@ describe('Timestamp', () => {
     const [date, dateTime] = Array.from(container.querySelectorAll('time'));
     expect(date.textContent).toBe('Jul 14');
     expect(date.getAttribute('dateTime')).toBe('2026-07-14');
-    expect(date.getAttribute('title')).toBe('Jul 14, 2026');
+    expect(tooltipText(date)).toBe('Jul 14, 2026');
     expect(dateTime.textContent).toMatch(/^Jul 14, \d{1,2}:00 [AP]M \S+$/);
+  });
+
+  it('renders a calendar date in the date-time form as the date, with no invented clock', () => {
+    // W5e: the Analytics Executive drawer's "Data as of" took the date-only
+    // snapshot_date through format="datetime" and printed the day before at 8:00 PM.
+    render(<Timestamp value="2026-07-14" format="datetime" now={NOW} />);
+    const time = container.querySelector('time');
+    expect(time?.textContent).toBe('Jul 14');
+    expect(time?.getAttribute('dateTime')).toBe('2026-07-14');
+    expect(tooltipText(time)).toBe('Jul 14, 2026');
+  });
+
+  it('renders a sentence label for an age under the "now" bucket, keeping the <time>', () => {
+    render(<Timestamp value={NOW - 20_000} nowLabel="just now" now={NOW} />);
+    const time = container.querySelector('time');
+    expect(time?.textContent).toBe('just now');
+    expect(time?.getAttribute('dateTime')).toBe('2026-07-14T14:59:40.000Z');
+    expect(tooltipText(time)).toBe('Jul 14, 2026, 2:59 PM UTC');
   });
 
   it('renders the prototype trigger form in the narrow style', () => {

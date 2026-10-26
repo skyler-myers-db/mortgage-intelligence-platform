@@ -169,7 +169,7 @@ describe('Lead Queue facet counts', () => {
     expect(listbox()!.getAttribute('aria-busy')).toBeNull();
   });
 
-  it('marks the listbox busy while the counts load', async () => {
+  it('marks the count status busy (never the listbox) while the counts load', async () => {
     vi.stubGlobal('fetch', (path: string) => {
       facetCalls.push(path);
       return new Promise<Response>(() => undefined);
@@ -177,7 +177,8 @@ describe('Lead Queue facet counts', () => {
     await mountAt('');
     await toggle('STATE');
     expect(facetCalls).toHaveLength(1);
-    expect(listbox()!.getAttribute('aria-busy')).toBe('true');
+    expect(listbox()!.hasAttribute('aria-busy')).toBe(false);
+    expect(document.querySelector('[role="status"].sr-only')?.getAttribute('aria-busy')).toBe('true');
     expect(listbox()!.querySelector('.filter-menu__count')).toBeNull();
   });
 
@@ -195,7 +196,7 @@ describe('Lead Queue facet counts', () => {
   it('maps options to buckets per dimension', () => {
     const segment: LeadFacetsResponse = { dimension: 'segment', total_matching: 9, buckets: [{ value: 'itm', count: 4 }] };
     expect(facetCountForOption('segment', segment, 'All segments')).toBe(9);
-    expect(facetCountForOption('segment', segment, 'Prime Refi Candidates')).toBe(4);
+    expect(facetCountForOption('segment', segment, 'In the Money')).toBe(4);
     expect(facetCountForOption('segment', segment, '2 segments selected (any selected)')).toBeNull();
     const approval: LeadFacetsResponse = { dimension: 'approval', total_matching: 5, buckets: [{ value: 'pending', count: 5 }] };
     expect(facetCountForOption('approval', approval, 'Any approval')).toBe(5);

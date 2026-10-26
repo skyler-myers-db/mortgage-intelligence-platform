@@ -67,7 +67,11 @@ interface ApprovalBannerProps {
   borrowerId?: string | null;
 }
 
-const PENDING_LINE = { approve: 'Approval being recorded…', reject: 'Rejection being recorded…' } as const;
+const PENDING_LINE = {
+  approve: 'Approval being recorded…',
+  reject: 'Rejection being recorded…',
+  revoke: 'Revocation being recorded…',
+} as const;
 
 export function ApprovalBanner({
   text,
@@ -149,7 +153,7 @@ export function ApprovalBanner({
           icon="cross"
           disabled={buttonsDisabled || Boolean(rejectDisabled)}
           aria-describedby={gated ? gateId : undefined}
-          title={approverGate ?? undefined}
+          tooltip={approverGate ?? undefined}
         >
           Reject
         </Button>
@@ -160,7 +164,7 @@ export function ApprovalBanner({
           icon="check"
           disabled={buttonsDisabled || Boolean(approveDisabled)}
           aria-describedby={gated ? gateId : undefined}
-          title={approverGate ?? undefined}
+          tooltip={approverGate ?? undefined}
         >
           {/* The caller's own write swaps the label; a decision from another
               surface is told by the status line, the button keeps its name. */}

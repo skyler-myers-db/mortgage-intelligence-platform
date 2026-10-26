@@ -46,8 +46,6 @@ function mockMarkChunk(mode: ChunkMode): void {
   });
 }
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /** The first import transforms the renderer's module graph: allow for a loaded machine. */
 vi.setConfig({ testTimeout: 30_000 });
 

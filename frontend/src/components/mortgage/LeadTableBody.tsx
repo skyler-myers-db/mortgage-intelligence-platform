@@ -7,6 +7,7 @@ import { isLeadApprovalEligible, isLeadSelectableForSalesOps, isTerminalApproval
 import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { LeadTableRow } from './LeadTableRow';
 import { useLeadTableInitialOffset, type LeadTableVirtualScroll } from './useLeadTableScroll';
+import { useLeadTablePrint } from './useLeadTablePrint';
 import type { OutreachDecision } from '../../lib/mutations/outreach';
 import type { LeadRowCallbacks } from './LeadTable.rowCallbacks';
 import type { ApprovalRequestMark } from './LeadTable.types';
@@ -57,6 +58,8 @@ export interface LeadTableBodyProps {
   /** The request path is open, and its blocked reason (primitives: rows keep identical props). */
   canRequestApproval?: boolean;
   requestBlockedReason?: string | null;
+  /** An approver on an unbound queue may revoke an Approved row (flow-v2). */
+  canRevoke?: boolean;
 }
 
 /**
@@ -73,9 +76,11 @@ export interface LeadTableBodyProps {
  * React Compiler cannot memoize (the incompatible-library advisory), and
  * the virtualizer re-renders this component on every window change. Keeping
  * it here means a scroll re-renders only this body, never the shell, and it
- * leaves the shell (LeadTable) compilable: it compiles clean once its own
- * 'use no memo' goes, which stays for now as the lane's budget cut 5 (the
- * compiled shell measured +2.63 KiB br on the LeadTable chunk).
+ * leaves the shell (LeadTable) compiled (runtime-04 slice 3(b), W5e).
+ *
+ * A print opens the window (useLeadTablePrint, responsive-08): between
+ * `beforeprint` and `afterprint` the virtualizer is off and every loaded row
+ * renders, so paper carries the whole loaded queue.
  *
  * Nothing here creates a per-row closure: every row callback comes from the
  * shell, so a compiled LeadTableRow gets identical props and its memo cache
@@ -112,10 +117,14 @@ export function LeadTableBody({
   requestMarks = null,
   canRequestApproval = false,
   requestBlockedReason = null,
+  canRevoke = false,
 }: LeadTableBodyProps) {
   'use no memo';
 
   const hasExpandedRow = expandedRowIndex >= 0;
+  // While printing, every loaded row renders (no window, no spacers).
+  const printing = useLeadTablePrint({ virtualized, tableWrapRef, virtualScrollRef });
+  const windowed = virtualized && !printing;
   // Stable virtualizer inputs: an inline getItemKey is a virtual-core memo
   // dependency, so a new one on every render rebuilt all 500 measurements.
   // The row estimate follows the density (responsive-09 item 3).
@@ -139,7 +148,7 @@ export function LeadTableBody({
   // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
-    enabled: virtualized,
+    enabled: windowed,
     estimateSize,
     getItemKey,
     getScrollElement: () => tableWrapRef.current,
@@ -150,10 +159,10 @@ export function LeadTableBody({
   // shell's scroll restore reads the virtualizer while it is on.
   useLayoutEffect(() => {
     scrollToIndexRef.current = (index) => rowVirtualizer.scrollToIndex(index, { align: 'auto' });
-    virtualScrollRef.current = virtualized ? rowVirtualizer : null;
+    virtualScrollRef.current = windowed ? rowVirtualizer : null;
   });
-  const virtualItems = virtualized ? rowVirtualizer.getVirtualItems() : [];
-  const visibleRows = virtualized
+  const virtualItems = windowed ? rowVirtualizer.getVirtualItems() : [];
+  const visibleRows = windowed
     ? virtualItems.map((item) => ({
         lead: rows[item.index],
         virtualIndex: item.index,
@@ -166,7 +175,7 @@ export function LeadTableBody({
 
   return (
     <>
-      {virtualized && topSpacerHeight > 0 && (
+      {windowed && topSpacerHeight > 0 && (
         <tbody aria-hidden="true">
           <tr aria-hidden="true" className="lead-table__virtual-spacer">
             <td aria-hidden="true" colSpan={columnCount} style={{ height: topSpacerHeight }} />
@@ -190,8 +199,8 @@ export function LeadTableBody({
         return (
           <tbody
             key={lead.borrower_id}
-            data-index={virtualized ? virtualIndex : undefined}
-            ref={virtualized ? rowVirtualizer.measureElement : undefined}
+            data-index={windowed ? virtualIndex : undefined}
+            ref={windowed ? rowVirtualizer.measureElement : undefined}
           >
             <LeadTableRow
               lead={lead}
@@ -227,11 +236,13 @@ export function LeadTableBody({
               canRequestApproval={canRequestApproval}
               requestBlockedReason={requestBlockedReason}
               onRequestApproval={rowCallbacks.onRequestApproval}
+              canRevoke={canRevoke}
+              onRevoke={rowCallbacks.onRevoke}
             />
           </tbody>
         );
       })}
-      {virtualized && bottomSpacerHeight > 0 && (
+      {windowed && bottomSpacerHeight > 0 && (
         <tbody aria-hidden="true">
           <tr aria-hidden="true" className="lead-table__virtual-spacer">
             <td aria-hidden="true" colSpan={columnCount} style={{ height: bottomSpacerHeight }} />

@@ -2,22 +2,17 @@
 // Keep this route explicit: chart-scale derivations use targeted useMemo below.
 'use no memo';
 
-import { useMemo } from 'react';
-import { HIGH_OPPORTUNITY_SCORE_LABEL, HIGH_OPPORTUNITY_THRESHOLD } from '../lib/opportunityScore';
+import { Suspense, useMemo } from 'react';
 import { Link } from 'react-router';
 import { GlossaryTerm } from '../components/GlossaryTerm';
-import { KpiCard } from '../components/mortgage/KpiCard';
 import { Histogram } from '../components/charts/Histogram';
 import { friendlyAssetLabel } from '../lib/assetLabels';
 import { formatCompact, formatCount, formatFixed, formatUsdCompact, pct, signedBpsLabel } from '../lib/formatters';
 import { offerDisplayLabel } from '../lib/offerLanguage';
-import { formatDate, formatTimestamp } from '../lib/time';
-import { Timestamp } from '../components/ui/Timestamp';
+import { preloadIntentProps } from '../lib/preloadIntent';
 import type {
   EconomicsAnalyticsResponse,
   EvidenceBySignalRow,
-  ExecutiveAnalyticsResponse,
-  ExecutiveProvenance,
   GeographyAnalyticsResponse,
   SegmentAnalyticsResponse,
   SegmentByStateRow,
@@ -33,7 +28,6 @@ import type {
 } from '../types';
 import {
   analyticsHref,
-  activationFunnelStages,
   borrowerDisplay,
   buildDailyEvidenceTotals,
   leadQueueHref,
@@ -45,87 +39,45 @@ import {
   Bars,
   DailyEvidenceLineChart,
   DataTable,
-  FunnelBars,
-  FunnelSankey,
   HistogramTable,
   ScopeChip,
   SectionHeader,
 } from './analytics.charts';
 import {
-  SCORE_BUCKET_WIDTH,
   SPREAD_BUCKET_BPS,
   formatBinRange,
   histogramModel,
-  scoreSummary,
   spreadSummary,
   thresholdNotice,
 } from './analytics.chart-model';
-import { EquitySpreadScatter } from './analytics.equity-scatter';
-import { RateWindowSection } from './analytics.rate-window';
+import { lazyView } from './analytics.lazyView';
 import type { AnalyticsQueryOptions } from '../lib/api';
 
-/**
- * Provenance for the executive funnel. Stages 1-4 aggregate borrower_360;
- * Approved and Actioned read the gold lifecycle MIRROR of Lakebase, which the
- * Approval funnel tab reads directly. The mirror can trail by one sync — that
- * is by design, and the two tabs are never reconciled to match. Publishing the
- * sources and the mirror's as-of boundary is what lets someone comparing the
- * tabs see why a number differs instead of guessing which one is broken.
- */
-export function ExecutiveProvenanceNote({
-  provenance,
-  leadParams,
-}: {
-  provenance: ExecutiveProvenance;
-  leadParams: LenderFilterParams;
-}) {
+// The scatter is its own chunk (W5e item 2b): Geography, Segments and Signals
+// never download it, and Economics loads it beside its read.
+const EquitySpreadScatter = lazyView(() => import('./analytics.equity-scatter').then((module) => module.EquitySpreadScatter));
+
+/** Warm the scatter chunk (the Economics tab's own preload). */
+export const preloadEquityScatter = (): Promise<unknown> => EquitySpreadScatter.preload();
+
+/** The scatter panel's frame while its chunk loads: the loaded panel's height, so nothing below moves. */
+function EquitySpreadScatterPending() {
   return (
-    <p className="analytics-panel-note">
-      Stages 1&ndash;4 from <span className="mono">{provenance.population_source}</span>
-      {provenance.snapshot_date ? <> (snapshot <Timestamp value={provenance.snapshot_date} format="date" />)</> : null}. Approved and
-      Actioned from <span className="mono">{provenance.workflow_source}</span>, the gold mirror of
-      Lakebase
-      {provenance.lifecycle_synced_at ? <>, synced {formatTimestamp(provenance.lifecycle_synced_at)}</> : null}.
-      The <Link to={analyticsHref({ view: 'approval-funnel', ...leadParams })}>Approval funnel</Link> tab
-      reads the Lakebase approval tables directly and is exact, so a higher count there means this
-      mirror is one sync behind &mdash; by design, not a discrepancy.
-    </p>
+    <section className="surface analytics-section" aria-busy="true">
+      <div className="surface__hdr">
+        <h2 className="h-3">Equity vs Rate Spread</h2>
+      </div>
+      <div className="surface__body analytics-chart-panel analytics-chart-panel--scatter">
+        <span className="skeleton analytics-skeleton__chart" aria-hidden="true" />
+      </div>
+    </section>
   );
 }
 
-const scoreRange = (start: number) => formatBinRange(start, SCORE_BUCKET_WIDTH);
 const spreadRange = (start: number) => formatBinRange(start, SPREAD_BUCKET_BPS, 'bps');
 
 /**
- * Opportunity scores as a histogram (dataviz-06). The rule sits at the pinned
- * high-opportunity threshold, and its label carries the governed
- * high-opportunity count from the executive totals, never re-summed bins.
- */
-export function ScoreDistribution({ data }: { data: ExecutiveAnalyticsResponse }) {
-  const model = histogramModel(
-    data.score_distribution.map((row) => ({ start: row.score_bucket, count: row.borrower_count })),
-    SCORE_BUCKET_WIDTH,
-    HIGH_OPPORTUNITY_THRESHOLD,
-  );
-  const pastLabel = `Score ${HIGH_OPPORTUNITY_SCORE_LABEL}`;
-  return (
-    <Histogram
-      title="Opportunity Score Distribution"
-      summary={scoreSummary(model, data.totals)}
-      bins={model.bins}
-      binWidth={SCORE_BUCKET_WIDTH}
-      threshold={HIGH_OPPORTUNITY_THRESHOLD}
-      ruleLabel={`${HIGH_OPPORTUNITY_SCORE_LABEL} · ${formatCount(data.totals.high_opportunity_borrowers)} borrowers`}
-      xLabel="Opportunity score"
-      yLabel="Borrowers"
-      formatRange={scoreRange}
-      table={<HistogramTable model={model} rangeLabel="Opportunity score" pastLabel={pastLabel} formatRange={scoreRange} />}
-    />
-  );
-}
-
-/**
- * Rate spreads as a histogram with the refresh's governed refi screen
+ * Rate spreads as a histogram with the refresh's governed In the Money spread threshold
  * (data.thresholds, dataviz-06): no rule and a notice when the refresh
  * carries no single screen.
  */
@@ -144,7 +96,7 @@ export function SpreadDistribution({ data }: { data: EconomicsAnalyticsResponse 
       bins={model.bins}
       binWidth={SPREAD_BUCKET_BPS}
       threshold={threshold}
-      ruleLabel={threshold === null ? null : `Refi screen ≥ ${formatCount(threshold)} bps`}
+      ruleLabel={threshold === null ? null : `In the Money spread ≥ ${formatCount(threshold)} bps`}
       xLabel="Spread bps"
       yLabel="Borrowers"
       formatRange={spreadRange}
@@ -157,72 +109,6 @@ export function SpreadDistribution({ data }: { data: EconomicsAnalyticsResponse 
         />
       }
     />
-  );
-}
-
-export function ExecutiveView({
-  data,
-  leadParams,
-  filtersActive = false,
-}: {
-  data: ExecutiveAnalyticsResponse;
-  leadParams: LenderFilterParams;
-  /** The tab's state / segment / lender filters narrow the KPIs; the rate window says it ignores them. */
-  filtersActive?: boolean;
-}) {
-  return (
-    <>
-      <div className="kpi-row">
-        <KpiCard label="Addressable Borrowers" value={formatCount(data.totals.addressable_borrowers)} delta={data.totals.snapshot_date ? `Snapshot ${formatDate(data.totals.snapshot_date)}` : undefined} deltaDir="flat" />
-        <KpiCard label="Refi Economics" value={formatCount(data.totals.in_the_money_borrowers)} delta={`${formatCount(data.totals.high_opportunity_borrowers)} score ${HIGH_OPPORTUNITY_SCORE_LABEL}`} deltaDir="up" />
-        <KpiCard label="Primary Offer Paths" value={formatCount(data.totals.offer_recommended_borrowers)} delta="Offer path assigned" deltaDir="up" />
-        <KpiCard label="Approved Outreach" value={formatCount(data.totals.approved_borrowers)} delta={`${formatCount(data.totals.actioned_borrowers)} actioned`} deltaDir="flat" />
-      </div>
-      <RateWindowSection filtersActive={filtersActive} />
-      <section className="surface analytics-section">
-        <div className="surface__hdr surface__hdr--split">
-          <div>
-            <h2 className="h-3">Activation funnel</h2>
-            <p className="analytics-panel-note">
-              Each stage is an independent cut of the addressable book, shown as its
-              share of addressable &mdash; not a conversion from the stage before it. A
-              high-opportunity borrower need not pass the refi-economics screen, and an
-              approved borrower need not be high-opportunity. Only Approved &rarr; Actioned
-              is nested, so only it carries a conversion.
-              Offer-path coverage remains in Pipeline Metrics because nearly every
-              borrower receives a governed branch, including nurture.
-            </p>
-          </div>
-          <Link className="btn btn--sm" to={leadQueueHref(leadParams)}>Open queue</Link>
-        </div>
-        <div className="surface__body">
-          <FunnelSankey stages={activationFunnelStages(data.stages)} leadParams={leadParams} />
-        </div>
-      </section>
-      <div className="layoutA-grid analytics-grid">
-        <section className="surface">
-          <div className="surface__hdr surface__hdr--split">
-            <h2 className="h-3">Opportunity Score Distribution</h2>
-            <Link className="btn btn--sm" to={leadQueueHref(leadParams)}>Open queue</Link>
-          </div>
-          <div className="surface__body analytics-chart-panel">
-            <ScoreDistribution data={data} />
-          </div>
-        </section>
-        <section className="surface">
-          <div className="surface__hdr surface__hdr--split">
-            <div>
-              <h2 className="h-3">Pipeline Metrics</h2>
-              <ExecutiveProvenanceNote provenance={data.provenance} leadParams={leadParams} />
-            </div>
-            <ScopeChip>Exact figures</ScopeChip>
-          </div>
-          <div className="surface__body">
-            <FunnelBars stages={data.stages} leadParams={leadParams} />
-          </div>
-        </section>
-      </div>
-    </>
   );
 }
 
@@ -257,7 +143,7 @@ export function GeographyView({ data, leadParams }: { data: GeographyAnalyticsRe
         </section>
       </div>
       <section className="surface analytics-section">
-        <div className="surface__hdr"><h2 className="h-3">Top ZIPs by Refi Economics</h2></div>
+        <div className="surface__hdr"><h2 className="h-3">Top ZIPs by In the Money borrowers</h2></div>
         <div className="surface__body">
           <DataTable<TopZipOpportunityRow>
             rows={data.top_zips}
@@ -265,7 +151,7 @@ export function GeographyView({ data, leadParams }: { data: GeographyAnalyticsRe
             columns={[
               { key: 'zip', label: 'ZIP', render: (row) => <Link to={leadQueueHref({ state: row.state, zip: row.zip, ...leadParams })}>{row.zip}</Link> },
               { key: 'place', label: 'Market', render: (row) => `${row.city ?? 'Unknown'}, ${row.state}` },
-              { key: 'itm', label: 'Refi economics', render: (row) => formatCount(row.in_the_money_borrowers) },
+              { key: 'itm', label: 'In the Money', render: (row) => formatCount(row.in_the_money_borrowers) },
               { key: 'score', label: 'Avg opportunity score', render: (row) => row.mean_opportunity_score },
               { key: 'spread', label: 'Avg rate spread', render: (row) => signedBpsLabel(row.mean_rate_spread_bps) },
             ]}
@@ -317,7 +203,16 @@ export function EconomicsView({
               rows={data.top_borrowers}
               getKey={(row) => row.borrower_id}
               columns={[
-                { key: 'borrower', label: 'Borrower', render: (row) => <Link to={`/borrower-360/${row.borrower_id}`}>{borrowerDisplay(row)}</Link> },
+                {
+                  key: 'borrower',
+                  label: 'Borrower',
+                  // The dossier CHUNK warms on intent; its audited read stays click-only (bundle-09).
+                  render: (row) => (
+                    <Link to={`/borrower-360/${row.borrower_id}`} {...preloadIntentProps(`/borrower-360/${row.borrower_id}`)}>
+                      {borrowerDisplay(row)}
+                    </Link>
+                  ),
+                },
                 { key: 'score', label: 'Score', render: (row) => row.opportunity_score },
                 { key: 'spread', label: 'Spread', render: (row) => signedBpsLabel(row.rate_spread_bps) },
                 { key: 'offer', label: 'Offer', render: (row) => offerDisplayLabel(null, row.recommended_offer) },
@@ -326,11 +221,14 @@ export function EconomicsView({
           </div>
         </section>
       </div>
-      <EquitySpreadScatter
-        overview={data.equity_spread}
-        filters={filters}
-        filterCriteria={filterCriteria}
-      />
+      <Suspense fallback={<EquitySpreadScatterPending />}>
+        <EquitySpreadScatter
+          overview={data.equity_spread}
+          thresholds={data.thresholds}
+          filters={filters}
+          filterCriteria={filterCriteria}
+        />
+      </Suspense>
     </>
   );
 }
@@ -356,7 +254,7 @@ export function SegmentsView({ data, leadParams }: { data: SegmentAnalyticsRespo
               { key: 'segment', label: 'Segment', render: (row) => <Link to={leadQueueHref({ segment: row.segment_code, ...leadParams })}>{row.name}</Link> },
               { key: 'borrowers', label: 'Borrowers', render: (row) => formatCount(row.borrower_count) },
               { key: 'score', label: 'Avg Score', render: (row) => row.mean_opportunity_score },
-              { key: 'itm', label: 'Refi economics', render: (row) => formatCount(row.in_the_money_borrowers) },
+              { key: 'itm', label: 'In the Money', render: (row) => formatCount(row.in_the_money_borrowers) },
               { key: 'approval', label: 'Approval', render: (row) => pct(row.approval_rate) },
             ]}
           />
@@ -413,7 +311,15 @@ function EvidenceExamplesTable({ rows }: { rows: SignalEvidenceExample[] }) {
       rows={rows}
       getKey={(row, idx) => `${row.borrower_id}-${row.signal_type}-${row.timestamp}-${idx}`}
       columns={[
-        { key: 'borrower', label: 'Borrower', render: (row) => <Link to={`/borrower-360/${row.borrower_id}`}>{borrowerDisplay(row)}</Link> },
+        {
+          key: 'borrower',
+          label: 'Borrower',
+          render: (row) => (
+            <Link to={`/borrower-360/${row.borrower_id}`} {...preloadIntentProps(`/borrower-360/${row.borrower_id}`)}>
+              {borrowerDisplay(row)}
+            </Link>
+          ),
+        },
         { key: 'signal', label: 'Signal', render: (row) => signalLabel(row.signal_type) },
         { key: 'value', label: 'Value', render: (row) => row.signal_value },
         { key: 'confidence', label: 'Evidence confidence', render: (row) => formatFixed(row.confidence, 3) },
@@ -422,11 +328,6 @@ function EvidenceExamplesTable({ rows }: { rows: SignalEvidenceExample[] }) {
     />
   );
 }
-
-// MultiFilterSelect moved to components/ui (2026-09-21 audit a11y-v1) so the
-// Portfolio Builder state picker shares it; re-exported so analytics imports
-// keep resolving here.
-export { MultiFilterSelect } from '../components/ui/MultiFilterSelect';
 
 export function SignalsView({
   data,
@@ -466,7 +367,7 @@ export function SignalsView({
               trailing decimal is the mean <GlossaryTerm term="evidenceConfidence" /> (0–1).
             </p>
           </div>
-          <ScopeChip title="mip.gold.evidence_events">Evidence events</ScopeChip>
+          <ScopeChip detail="mip.gold.evidence_events">Evidence events</ScopeChip>
         </div>
         <div className="surface__body">
           <Bars<EvidenceBySignalRow>

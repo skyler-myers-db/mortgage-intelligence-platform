@@ -1,3 +1,4 @@
+import type { ApiRequest, ApiResponse } from './api.gen';
 import type { SegmentCode } from '../types';
 
 /**
@@ -12,22 +13,9 @@ import type { SegmentCode } from '../types';
  * localStorage, no query params).
  */
 
-export interface PropertyLoanLookupRequest {
-  /** Street address the caller typed (4–200 chars). Never persisted/echoed. */
-  address_line: string;
-  /** 5 ASCII digits. */
-  zip5: string;
-  city?: string | null;
-  state?: string | null;
-}
+export type PropertyLoanLookupRequest = ApiRequest<'PropertyLoanLookupRequest'>;
 
-export interface PropertyLoanLookupLoan {
-  lender_brand?: string | null;
-  current_rate: number;
-  current_lien_balance: number;
-  has_open_lien: boolean;
-  ltv: number;
-}
+export type PropertyLoanLookupLoan = ApiResponse<'PropertyLoanLookupLoan'>;
 
 export interface PropertyLoanLookupResponse {
   matched: boolean;

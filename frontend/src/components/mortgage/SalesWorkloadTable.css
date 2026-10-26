@@ -1,0 +1,36 @@
+/*
+ * The per-officer workload (critic-10 6c; deviation:sales-manager-comparison-workload):
+ * the prototype's .tbl (design_files/index.html:595) inside the Sales ops
+ * surface. Colocated with the lazy SalesWorkloadTable chunk, never in the
+ * initial stylesheet. No print or contrast-mode block.
+ */
+@layer routes {
+.sales-workload {
+  margin-block-start: var(--sp-4);
+}
+.sales-workload__note {
+  margin: var(--sp-1) 0 var(--sp-2);
+}
+.sales-workload__wrap {
+  overflow-x: auto;
+}
+/* Rows are not clickable here (the officer link is the one action). */
+.sales-workload__tbl tbody tr {
+  cursor: default;
+}
+.sales-workload__delta {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+}
+/* The change against the previous span, in the KPI delta's ink. */
+.sales-workload__delta.is-up {
+  color: var(--signal-success);
+}
+.sales-workload__delta.is-down {
+  color: var(--signal-danger);
+}
+.sales-workload__status {
+  display: block;
+}
+}

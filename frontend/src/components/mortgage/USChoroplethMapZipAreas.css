@@ -7,6 +7,7 @@
    App-added (the prototype has neither): .map-stage--zcta (the ZIP areas'
    loading stage) and .zip-tiles__status (the tiles' fallback line).
    ============================================================ */
+@layer routes {
 
 /* motion-10: the ZCTA rung tweens its viewBox from the national view, so the
    keyed level settle (map-level-in, 08-map.css) must not run under it, from
@@ -23,4 +24,5 @@
    map's clipping box, so its ring is drawn inside, as on .map-stage--status. */
 .map-stage--zcta:focus-visible {
   outline-offset: calc(-1 * var(--focus-ring-width));
+}
 }

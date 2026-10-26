@@ -50,6 +50,8 @@ from backend.services.genie_sales_ops import _sales_ops_question_kind
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_PATH = ROOT / "frontend" / "src" / "lib" / "genieContextTemplates.json"
 SEGMENT_REGISTRY_PATH = ROOT / "frontend" / "src" / "lib" / "segmentMetadata.ts"
+ANSWER_PANEL_PATH = ROOT / "frontend" / "src" / "routes" / "ask-genie.answer-panel.tsx"
+_COMPOSER_PLACEHOLDER_RE = re.compile(r"export const COMPOSER_PLACEHOLDER = '([^']+)';")
 
 _PROMPT_MATCHERS: tuple[tuple[str, Callable[[str], object]], ...] = (
     ("protected", protected_prompt_match),
@@ -92,10 +94,32 @@ def _template(key: str) -> str:
 
 
 def _segment_phrases() -> dict[str, str]:
-    """The lower-cased segment names the frontend renders (see genieContext.ts)."""
+    """The phrase the frontend renders per code (see genieContext.ts segmentPhrase):
+    the ``segmentPhraseByCode`` override, else the lower-cased registry name."""
 
     excluded = _string_map("segmentsWithoutTemplates")
-    return {code: name.lower() for code, name in _segment_registry().items() if code not in excluded}
+    overrides = _string_map("segmentPhraseByCode")
+    return {
+        code: overrides.get(code, name.lower())
+        for code, name in _segment_registry().items()
+        if code not in excluded
+    }
+
+
+def _code_templates() -> dict[str, dict[str, str]]:
+    """``segmentTemplatesByCode``: the per-code sentences that replace the generic two."""
+
+    value = _templates()["segmentTemplatesByCode"]
+    assert isinstance(value, dict)
+    return {str(code): {str(k): str(v) for k, v in entry.items()} for code, entry in value.items()}
+
+
+def _segment_template_for(code: str) -> str:
+    return _code_templates().get(code, {}).get("segmentTemplate", _template("segmentTemplate"))
+
+
+def _lead_template_for(code: str) -> str:
+    return _code_templates().get(code, {}).get("leadTemplate", _template("leadTemplate"))
 
 
 def _state_names() -> list[str]:
@@ -119,7 +143,7 @@ def test_the_segment_registry_parse_is_real() -> None:
     registry = _segment_registry()
     # The frontend registry carries the six core segments plus the overlays.
     assert len(registry) >= 12
-    assert registry["itm"] == "Prime Refi Candidates"
+    assert registry["itm"] == "In the Money"
     assert "permit_activity" in registry
     for code in _string_map("segmentsWithoutTemplates"):
         assert code in registry, code
@@ -131,6 +155,29 @@ def test_the_battery_bites_on_a_protected_class_prompt() -> None:
     assert _intercepted("Which states have the most elderly borrowers?") != []
 
 
+def _composer_example() -> str:
+    """The example the Ask composer's placeholder teaches, exactly as a user would type it."""
+
+    match = _COMPOSER_PLACEHOLDER_RE.search(ANSWER_PANEL_PATH.read_text(encoding="utf-8"))
+    assert match is not None, "COMPOSER_PLACEHOLDER literal not found"
+    _, marker, example = match.group(1).partition("e.g. ")
+    assert marker and example, match.group(1)
+    return example
+
+
+def test_the_ask_composer_example_passes_the_real_prompt_guards() -> None:
+    """critic-11 / item 22: the Ask page never teaches a question Genie refuses.
+
+    The placeholder is not prefilled, but its example is what a user copies.
+    """
+
+    example = _composer_example()
+    assert "in-the-money" in example, example  # the parse reads the real literal
+    assert _intercepted(example) == []
+    assert GenieMessageRequest(question=example).question == example
+    assert _sales_ops_question_kind(example) is None
+
+
 def test_every_fixed_prompt_passes_the_real_prompt_guards() -> None:
     fixed = {**_string_map("starters"), **_string_map("kpiPrompts")}
     failures = {key: hits for key, prompt in fixed.items() if (hits := _intercepted(prompt))}
@@ -139,11 +186,23 @@ def test_every_fixed_prompt_passes_the_real_prompt_guards() -> None:
         assert GenieMessageRequest(question=prompt).question == prompt
 
 
+def test_the_itm_overrides_are_real() -> None:
+    """critic-11: itm renders its own prenominal sentences, never 'the in the money segment'."""
+
+    assert _segment_phrases()["itm"] == "in-the-money"
+    assert _segment_template_for("itm") == "Which states have the most in-the-money borrowers?"
+    lead = _lead_template_for("itm").replace("{state}", "Texas")
+    assert lead == "How many in-the-money borrowers are in Texas, and what is the average rate spread?"
+    assert set(_code_templates()) <= set(_segment_phrases())
+    # The legacy KPI keys stay beside the canonical one, all on one prompt.
+    kpi = _string_map("kpiPrompts")
+    assert kpi["in the money"] == kpi["refi economics screen"] == kpi["refi economics"]
+
+
 def test_every_segment_prompt_passes_the_real_prompt_guards() -> None:
-    template = _template("segmentTemplate")
     failures: dict[str, list[str]] = {}
     for code, phrase in _segment_phrases().items():
-        prompt = template.replace("{segment}", phrase)
+        prompt = _segment_template_for(code).replace("{segment}", phrase)
         if hits := _intercepted(prompt):
             failures[code] = hits
         GenieMessageRequest(question=prompt)
@@ -153,8 +212,10 @@ def test_every_segment_prompt_passes_the_real_prompt_guards() -> None:
 @pytest.mark.parametrize("state", _state_names())
 def test_every_state_and_lead_prompt_passes_the_real_prompt_guards(state: str) -> None:
     prompts = [_template("stateTemplate").replace("{state}", state)]
-    lead = _template("leadTemplate").replace("{state}", state)
-    prompts.extend(lead.replace("{segment}", phrase) for phrase in _segment_phrases().values())
+    prompts.extend(
+        _lead_template_for(code).replace("{state}", state).replace("{segment}", phrase)
+        for code, phrase in _segment_phrases().items()
+    )
     failures = {prompt: hits for prompt in prompts if (hits := _intercepted(prompt))}
     assert failures == {}
     for prompt in prompts:
@@ -186,11 +247,11 @@ def _reachable_prompts() -> dict[str, str]:
         prompts[f"kpiPrompts.{key}"] = prompt
     phrases = _segment_phrases()
     for code, phrase in phrases.items():
-        prompts[f"segmentTemplate.{code}"] = _template("segmentTemplate").replace("{segment}", phrase)
+        prompts[f"segmentTemplate.{code}"] = _segment_template_for(code).replace("{segment}", phrase)
     for state in _state_names():
         prompts[f"stateTemplate.{state}"] = _template("stateTemplate").replace("{state}", state)
-        lead = _template("leadTemplate").replace("{state}", state)
         for code, phrase in phrases.items():
+            lead = _lead_template_for(code).replace("{state}", state)
             prompts[f"leadTemplate.{state}.{code}"] = lead.replace("{segment}", phrase)
     return prompts
 

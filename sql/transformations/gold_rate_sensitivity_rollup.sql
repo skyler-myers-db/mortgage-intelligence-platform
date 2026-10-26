@@ -162,7 +162,7 @@ COMMENT ON COLUMN mip.gold.rate_sensitivity_rollup.scenario_market_rate_fraction
 COMMENT ON COLUMN mip.gold.rate_sensitivity_rollup.scenario_market_rate_pct IS 'scenario_market_rate_fraction in percent (6.30 == 6.30%), rounded to 6 places for display.';
 COMMENT ON COLUMN mip.gold.rate_sensitivity_rollup.addressable_borrowers IS 'gold.borrower_360 rows in the state: the map addressable count. The same on every step.';
 COMMENT ON COLUMN mip.gold.rate_sensitivity_rollup.rate_movable_borrowers IS 'Addressable borrowers with a gated note rate (active lien, bounded rate strictly inside 1%..15%): the only ones a scenario can move.';
-COMMENT ON COLUMN mip.gold.rate_sensitivity_rollup.in_the_money_borrowers IS 'Borrowers that clear the refi screen at this step: fn_in_the_money(fn_rate_spread(note, par + step / 10000), equity_pct, thresholds). Step 0 equals SUM(borrower_360.in_the_money).';
+COMMENT ON COLUMN mip.gold.rate_sensitivity_rollup.in_the_money_borrowers IS 'Borrowers in the money at this step: fn_in_the_money(fn_rate_spread(note, par + step / 10000), equity_pct, thresholds). Step 0 equals SUM(borrower_360.in_the_money).';
 COMMENT ON COLUMN mip.gold.rate_sensitivity_rollup.min_spread_bps_applied IS 'Rate-spread threshold (bps) of this refresh, carried from gold.borrower_360.min_spread_bps_applied.';
 COMMENT ON COLUMN mip.gold.rate_sensitivity_rollup.min_equity_pct_applied IS 'Equity threshold (pct) of this refresh, carried from gold.borrower_360.min_equity_pct_applied.';
 COMMENT ON COLUMN mip.gold.rate_sensitivity_rollup.book_as_of IS 'Refresh anchor of the book the grid was measured over (mip.ref.refresh_run_state).';

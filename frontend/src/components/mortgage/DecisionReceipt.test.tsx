@@ -16,7 +16,7 @@ const apiMocks = vi.hoisted(() => ({
   session: vi.fn(),
 }));
 
-vi.mock('../../lib/api', () => {
+vi.mock('../../lib/api', async (importOriginal) => {
   // Same constructor shape as the real ApiError (message, { path, status }).
   class ApiError extends Error {
     status: number | null;
@@ -26,7 +26,7 @@ vi.mock('../../lib/api', () => {
       this.status = opts.status ?? null;
     }
   }
-  return { api: apiMocks, ApiError };
+  return { ...(await importOriginal<typeof import('../../lib/api')>()), api: apiMocks, ApiError };
 });
 
 const appMocks = vi.hoisted(() => ({
@@ -47,8 +47,6 @@ import { ApiError } from '../../lib/api';
 import { auditEventHref } from '../../lib/auditLinks';
 import { DecisionReceipt } from './DecisionReceipt';
 import { PRINT_HOST_CLASS } from './DecisionReceipt.actions';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const AUDIT_ID = '5b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d';
 const RECEIPT_PATH = `/api/v1/audit/receipt/${AUDIT_ID}`;

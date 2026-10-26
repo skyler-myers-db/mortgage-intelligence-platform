@@ -11,17 +11,18 @@
  * WebKit defect found by the 2026-09-30 manual check: element.focus() on a
  * pinned (position: sticky, inline-end) Approve / Reject scrolled .tbl-wrap
  * to its end (scrollLeft 0 -> 284 with the Console open); the pinned
- * controls' scroll-margin stops it only in Chromium. w5-approval-core's guard
- * in useTableScrollClearance.ts restores the offset after WebKit's reveal,
- * and the invariance test below now runs in both engines.
+ * controls' scroll-margin stops it only in Chromium. WebKit reveals against
+ * the scroller's inline-end padding, so LeadTable.css drops it while focus is
+ * in the pin (W5e fix); w5-approval-core's guard in useTableScrollClearance.ts
+ * stays as the fallback, and the invariance test below runs in both engines.
  */
 import type { Locator, Page } from '@playwright/test';
 import { LEADS, PRIMARY_BORROWER } from './data/borrowers';
 import { DNC_LEAD, registerQueueLayoutLeads } from './data/queueLayout';
 import {
   FOCUS_RING_ROOM,
+  UNDO_PIN_CLEARANCE,
   ZERO_NAV_MARGIN,
-  ZERO_PIN_MARGIN,
   ZERO_TABLE_BLOCK_MARGIN,
   ZERO_TABLE_CLEARANCE,
   addScrollRoom,
@@ -100,6 +101,10 @@ async function settledScrollLeftAfterPinnedFocus(page: Page, borrowerId: string,
  * two frames (WebKit reveals at the next rendering update, so its sync read is
  * always the start). A capture listener on window runs before any listener on
  * the scroller itself, so a scroll-event or rAF restore cannot hide the peak.
+ * useTableScrollClearance's guard is held off for the probe (its focusin never
+ * reaches the scroller): its microtask restore could undo WebKit's reveal in
+ * the step that made it (the reject leg read 0 in 1-5 of 20 macOS runs, a
+ * "scroll 0" event after; 40 of 40 legs reached the end with it held off).
  */
 async function scrollLeftReachedByPinnedFocus(page: Page, borrowerId: string, start: number): Promise<Array<{ sync: number; peak: number }>> {
   return tableWrap(page).evaluate(async (wrap, { id, left }) => {
@@ -125,7 +130,10 @@ async function scrollLeftReachedByPinnedFocus(page: Page, borrowerId: string, st
         };
         requestAnimationFrame(sample);
       });
+      const holdGuard = (event: Event) => event.stopPropagation();
+      window.addEventListener('focusin', holdGuard, { capture: true });
       control.focus();
+      window.removeEventListener('focusin', holdGuard, { capture: true });
       const sync = wrap.scrollLeft;
       await sampled;
       window.removeEventListener('scroll', onScroll, { capture: true });
@@ -389,7 +397,7 @@ test.describe('focus() walks never stop under sticky chrome (a11y-v2)', () => {
     expect(await tableWrap(page).evaluate((wrap) => wrap.scrollLeft), 'the row\'s borrower id stays in view').toBeLessThanOrEqual(1);
   });
 
-  test('non-vacuity: with the pinned controls\' margin zeroed, a focus on one scrolls the table to its end', async ({ app, browserName, mockApi, page }) => {
+  test('non-vacuity: with the pinned controls\' clearance undone, a focus on one scrolls the table to its end', async ({ app, browserName, mockApi, page }) => {
     test.skip(
       browserName === 'webkit' && process.platform === 'linux',
       'Linux WebKit never reveals a focused pinned control (the defect is macOS WebKit\'s; W5a CI reached 0), so this twin cannot be non-vacuous there; the invariance test above still runs in every engine',
@@ -397,7 +405,7 @@ test.describe('focus() walks never stop under sticky chrome (a11y-v2)', () => {
     registerQueueLayoutLeads(mockApi);
     await app.gotoRoute('/lead-queue');
     await app.openConsole();
-    await page.addStyleTag({ content: ZERO_PIN_MARGIN });
+    await page.addStyleTag({ content: UNDO_PIN_CLEARANCE });
     const overflow = await consoleOverflow(page);
     expect(overflow).toBeGreaterThan(40);
     for (const { sync, peak } of await scrollLeftReachedByPinnedFocus(page, ELIGIBLE, 0)) {

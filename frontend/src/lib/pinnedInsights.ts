@@ -118,12 +118,6 @@ export function unpinInsight(id: string): void {
   update((pins) => pins.filter((p) => p.id !== id));
 }
 
-/** Remove every pin (tests). Production never calls it: the actor gate
- *  removes the key itself on an actor change. */
-export function clearPinnedInsights(): void {
-  update(() => null);
-}
-
 export function usePinnedInsights() {
   const pins = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return { pins, pin: pinInsight, unpin: unpinInsight };

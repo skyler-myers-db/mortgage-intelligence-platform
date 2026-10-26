@@ -52,6 +52,15 @@ import {
   type ChipFilterKey,
 } from './segment-intelligence.filters';
 import { formatCount } from '../lib/formatters';
+import { GlossaryTerm } from '../components/GlossaryTerm';
+import {
+  rankedHeaderModeSuffix,
+  rankedScopeCopy,
+  SEGMENT_MODE_HELP,
+  segmentCountScopeCopy,
+  segmentFilterHint,
+  segmentsLede,
+} from './segment-intelligence.copy';
 
 /**
  * Segment Intelligence — prototype composition: segment cards across the top
@@ -271,17 +280,11 @@ export default function SegmentIntelligence() {
   const rankedScopeEyebrow = hasSelectedSegments
     ? 'Ranked borrowers · selected segment cohort'
     : 'Ranked borrowers · full eligible queue';
-  // The "cards are standalone memberships / don't add up" explanation lives once
-  // at the segment cards (segmentCountScopeCopy); the ranked-table copy stays
-  // scope-only to avoid repeating it on one screen.
-  const rankedScopeCopy = hasSelectedSegments
-    ? 'Showing the highest-ranked returned rows for the selected, de-duplicated segment cohort and geography drill-downs.'
-    : 'No segment card is selected, so the table shows the full ranked lead queue after the secondary filters.';
-  const segmentCountScopeCopy = hasSelectedSegments
-    ? segmentMode === 'all'
-      ? 'Card counts now show borrowers inside the All-selected intersection. Each selected card count should match the same unique borrower cohort.'
-      : 'Card counts now show borrowers inside the Any-selected OR cohort. The cohort is de-duplicated before counting.'
-    : 'Card counts are standalone segment memberships after filters. Borrowers can belong to more than one segment, so do not add the cards together.';
+  // The "cards overlap / don't add up" explanation lives once at the segment
+  // cards (segmentCountScopeCopy); the ranked-table copy stays scope-only to
+  // avoid repeating it on one screen. Words: segment-intelligence.copy.ts.
+  const rankedScope = rankedScopeCopy(hasSelectedSegments);
+  const segmentCountScope = segmentCountScopeCopy(hasSelectedSegments, segmentMode);
 
   const writeSegmentSearchParams = useCallback(
     (segments: SegmentCode[], mode: SegmentFilterMode) => {
@@ -351,9 +354,7 @@ export default function SegmentIntelligence() {
             }`
           : `Borrower segments · ${hasSelectedSegments ? 'selected cohort counts' : 'standalone counts'}`
       }
-      lede={hasSelectedSegments
-        ? 'Card counts, the map, and the ranked table are using the same selected segment mode. Any selected is a de-duplicated OR cohort; All selected is the borrower intersection.'
-        : 'Cards show standalone segment membership counts after filters. Select cards, then choose Any selected for a de-duplicated OR cohort or All selected for borrowers in every selected segment.'}
+      lede={segmentsLede(hasSelectedSegments)}
       heroRight={
         <Button
           size="sm"
@@ -414,7 +415,10 @@ export default function SegmentIntelligence() {
           <div>
             <div className="eyebrow">Selected segments</div>
             <div className="muted fs-12">
-              Any selected is a de-duplicated OR cohort. All selected is the AND intersection where each borrower must appear in every selected segment.
+              <GlossaryTerm term="segmentMatchMode">Any selected</GlossaryTerm>
+              {SEGMENT_MODE_HELP.any}
+              <GlossaryTerm term="segmentMatchMode">All selected</GlossaryTerm>
+              {SEGMENT_MODE_HELP.all}
             </div>
             {totalMatching !== null && (
               <div className="segment-mode-control__total">
@@ -516,12 +520,7 @@ export default function SegmentIntelligence() {
         <div
           className="filter-row__hint filter-row__hint--full muted"
         >
-          {segmentCountScopeCopy}{' '}
-          Selected cards {segmentMode === 'all' ? 'must all match the same borrower' : 'stack into one de-duplicated OR cohort'} for the table, map, and lead-queue drilldown.
-          Listed-for-sale is
-          backed by live Cotality MLS rows. HELOC intent is
-          backed by Cotality HELOC propensity; filed building-permit records
-          remain a separate pending source.
+          {segmentCountScope} {segmentFilterHint(segmentMode)}
         </div>
       </div>
 
@@ -543,11 +542,7 @@ export default function SegmentIntelligence() {
             {activeSegs.length > 0 && (
               <span className="muted fs-14">
                 · segment filter: {selectedSegmentLabel}
-                {activeSegs.length > 1
-                  ? segmentMode === 'all'
-                    ? ' · all selected segments'
-                    : ' · any selected segment, de-duplicated'
-                  : ''}
+                {activeSegs.length > 1 ? rankedHeaderModeSuffix(segmentMode) : ''}
               </span>
             )}
             <span
@@ -564,7 +559,7 @@ export default function SegmentIntelligence() {
           )}
           {truncatedAt && (
             <div className="muted fs-14">
-              {rankedScopeCopy}
+              {rankedScope}
             </div>
           )}
           {(mapSelection.state || mapSelection.county || mapSelection.zip) && (

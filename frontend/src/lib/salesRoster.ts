@@ -26,12 +26,20 @@ export function assignableReviewers(members: SalesTeamMember[]): SalesTeamMember
   ));
 }
 
-/** The roster through one shared cache entry, narrowed by `select`. */
-export function useSalesRoster<T>(select: (members: SalesTeamMember[]) => T) {
+/**
+ * The roster through one shared cache entry, narrowed by `select`. With
+ * `fetch: false` the observer only reads what another observer of the entry
+ * cached and never requests it (the Lead Queue's Plan-distribution gate).
+ */
+export function useSalesRoster<T>(
+  select: (members: SalesTeamMember[]) => T,
+  { fetch = true }: { fetch?: boolean } = {},
+) {
   return useQuery({
     queryKey: queryKeys.salesRoster(),
     queryFn: ({ signal }) => api.salesTeam(signal),
     select,
     staleTime: 60_000,
+    enabled: fetch,
   });
 }

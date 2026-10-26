@@ -80,22 +80,7 @@ describe('Chip and Button tooltip prop', () => {
     expect(chip.querySelector('.chip__label')?.textContent).toBe('DNC');
   });
 
-  it('keeps the chip title passthrough exactly as before', async () => {
-    const { container } = await mount(
-      <>
-        <Chip title="2026-09-29T06:00:00Z">Refreshed</Chip>
-        <Chip title="legacy" tooltip="New tooltip">Both</Chip>
-      </>,
-    );
-    const [plain, both] = [...container.querySelectorAll<HTMLElement>('span.chip')];
-
-    expect(plain?.getAttribute('title')).toBe('2026-09-29T06:00:00Z');
-    expect(plain?.hasAttribute('aria-describedby')).toBe(false);
-    expect(both?.getAttribute('title')).toBe('legacy');
-    expect(describedText(both!)).toBe('New tooltip');
-  });
-
-  it('gives a button a keyboard-reachable tooltip with a shortcut, keeping its ref and title', async () => {
+  it('gives a button a keyboard-reachable tooltip with a shortcut, keeping its ref and no native title', async () => {
     let captured: HTMLButtonElement | null = null;
     function WithRef() {
       const ref = useRef<HTMLButtonElement>(null);
@@ -106,7 +91,6 @@ describe('Chip and Button tooltip prop', () => {
             captured = element;
           }}
           aria-label="Approve"
-          title="legacy title"
           tooltip="Approve the draft"
           tooltipShortcut="A"
         >
@@ -118,7 +102,8 @@ describe('Chip and Button tooltip prop', () => {
     const button = container.querySelector<HTMLButtonElement>('button.btn')!;
 
     expect(captured).toBe(button);
-    expect(button.getAttribute('title')).toBe('legacy title');
+    // The deprecated title passthrough is gone (Primitives.titleProp.test.tsx pins the type).
+    expect(button.hasAttribute('title')).toBe(false);
     expect(describedText(button)).toBe('Approve the draft (A)');
 
     act(() => {
@@ -126,7 +111,7 @@ describe('Chip and Button tooltip prop', () => {
       button.focus();
     });
     const tip = document.body.querySelector('[role="tooltip"]:not([hidden])');
-    expect(tip?.textContent).toBe('Approve the draftA');
+    expect(tip?.textContent).toBe('Approve the draft (A)');
     expect(tip?.querySelector('kbd.tooltip__kbd')?.textContent).toBe('A');
   });
 

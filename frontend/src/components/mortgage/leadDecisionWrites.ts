@@ -15,6 +15,7 @@
 import type { LeadSummary } from '../../types';
 import { ApiError, clientFailureReason } from '../../lib/apiTransport';
 import { markUnrecordedWrite } from '../../lib/sessionStatus';
+import { RELOAD_TO_APPROVE, WireCodeRefusedError } from '../../lib/outreachWireCodes';
 import type { ApproveResult, OutreachDraftResult, RejectResult, ReviewMode } from '../../lib/apiTypes';
 import {
   decisionFailure,
@@ -26,6 +27,7 @@ import { intentFingerprint, type IntentRequestIds } from '../../lib/mutations/re
 import type { CampaignBinding } from './LeadTable.logic';
 import type { RejectReasonCode } from './LeadTable.types';
 import type { BulkRowReport } from './useLeadBulkRun';
+import { BULK_UNRECORDED, bulkRefusalCopy } from './bulkRefusalCopy';
 import { toastWriteFailure, toastWriteRefusal } from './leadWriteFailureToast';
 
 /** A single-row approval with no reviewed draft: refused before any draft or POST. */
@@ -89,6 +91,12 @@ export interface DecisionWriteDeps {
    * this mount, not in a bulk run, still eligible): a 429's Retry re-checks it.
    */
   stillDecidable?: (borrowerId: string) => boolean;
+  /**
+   * A single approve that succeeded through its 429 Retry (states-08): the
+   * review had already reported the failure, so the table raises the one
+   * decision toast now, with no cursor or Triage advance.
+   */
+  onRetryApproved?: (borrowerId: string) => void;
 }
 
 /** A 429 Retry that found the row decided meanwhile: nothing is sent. */
@@ -162,8 +170,9 @@ export function approveWithReport(
   }).then(
     (res): BulkRowReport => {
       if (!res.approved) {
-        if (!inBulk) toastWriteRefusal(`Couldn't approve ${borrowerId}`, 'The endpoint returned approved=false.');
-        return { outcome: 'backend', message: 'The endpoint returned approved=false.' };
+        // A 2xx that recorded nothing: the bulk copy, never the wire field (states-04).
+        if (!inBulk) toastWriteRefusal(`Couldn't approve ${borrowerId}`, BULK_UNRECORDED);
+        return { outcome: 'backend', message: BULK_UNRECORDED };
       }
       deps.requestIds.settle(intent);
       deps.onDecided(borrowerId, 'approved', res.audit_event_id ?? null);
@@ -181,8 +190,14 @@ export function approveWithReport(
       if (err instanceof ApiError && err.status === 409) extras.onConflict?.();
       // The drafted offer was never previewed: nothing was sent; the row
       // stays selected for an individual review.
+      // (A code the route would refuse, WireCodeRefusedError, is the same:
+      // nothing was sent; the code itself never reaches a toast or RUM.)
+      if (err instanceof WireCodeRefusedError) {
+        if (!inBulk) toastWriteRefusal(`Couldn't approve ${borrowerId}`, RELOAD_TO_APPROVE);
+        return { outcome: 'backend', message: RELOAD_TO_APPROVE };
+      }
       if (err instanceof OfferNotPreviewedError) return { outcome: 'backend', message: OFFER_NOT_PREVIEWED };
-      const message = err instanceof Error ? err.message : null;
+      const message = bulkRefusalCopy(err);
       // A single row's failure is a toast; a bulk row reports in the run.
       // states-08 item 3: a 429's Retry (live after its Retry-After) re-runs
       // the SAME write once: the intent is unsettled, so the request_id and
@@ -192,7 +207,9 @@ export function approveWithReport(
           toastWriteRefusal(`Couldn't approve ${borrowerId}`, DECIDED_SINCE);
           return;
         }
-        void approveWithReport(deps, borrowerId, undefined, extras, reviewedDraft);
+        void approveWithReport(deps, borrowerId, undefined, extras, reviewedDraft).then((report) => {
+          if (report.outcome === 'ok') deps.onRetryApproved?.(borrowerId);
+        });
       };
       if (!inBulk) toastWriteFailure(`Couldn't approve ${borrowerId}`, err, 'the approval', retry);
       // The session ended mid-click (on the draft step or the approve POST):

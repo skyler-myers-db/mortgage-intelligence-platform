@@ -239,7 +239,7 @@ test.describe('(4)-(5) bulk Reject and the canary', () => {
     await page.getByTestId('lead-bulk-approve').click();
 
     await expect(page.getByTestId('lead-bulk-canary')).toHaveText(
-      `Nothing else was sent: ${SIX_IDS[0]} was refused: bulk_rationale failed the governed text policy`,
+      `Nothing else was sent: ${SIX_IDS[0]} was refused: draft or reason failed the checks`,
     );
     await expect(page.getByTestId('lead-bulk-result')).toContainText('Nothing else was sent.');
     expect(tracker.bodies.map((body) => body.borrower_id)).toEqual([SIX_IDS[0]]);

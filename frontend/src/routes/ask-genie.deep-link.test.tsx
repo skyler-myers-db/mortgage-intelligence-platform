@@ -62,8 +62,6 @@ import { GENIE_CONVERSATION_ID_RE, genieConversationQueryKey } from './ask-genie
 import { GENIE_LINK_NOT_FOUND_COPY, GENIE_LINK_UNAVAILABLE_COPY } from '../components/mortgage/GenieConversationLinkState';
 import { GENIE_LINK_RETRY_FAILED_COPY } from '../components/mortgage/GenieConversationLinkState.copy';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 // Mounts the whole route plus a lazy chunk on a shared, often loaded machine.
 const TIMEOUT_MS = 30_000;
 
@@ -282,7 +280,8 @@ describe('/ask-genie/:conversationId', () => {
       expect(apiMocks.genieSubmit).not.toHaveBeenCalled();
       expect(window.localStorage.getItem(GENIE_CONVERSATION_STORAGE_KEY)).toBe('conv-old');
       expect(getGenieTurns().map((turn) => turn.question)).toEqual(['An older thread']);
-      html.push(askPanel().innerHTML);
+      // useId values differ between two mounts; the structure and text may not.
+      html.push(askPanel().innerHTML.replace(/_r_[0-9a-z]+_/g, '_ID_'));
       act(() => root.unmount());
       root = createRoot(container);
     }

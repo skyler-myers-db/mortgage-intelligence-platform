@@ -127,7 +127,7 @@ _CASES: dict[str, tuple[dict[str, Any], str]] = {
         {"current_rate": 6.625, "market_rate_fraction": 0.05745, "rate_spread_bps": 88, "equity_pct": 10,
          "recommended_offer_code": "nurture"},
         "Spread over its minimum, equity under its own: in_the_money is False, so the row does not clear the "
-        "refi screen and no par move inside the grid makes it (the dossier chip reads 'Below refi screen').",
+        "In the Money rule and no par move inside the grid makes it (the dossier chip reads 'Not in the money').",
     ),
 }
 
@@ -181,7 +181,7 @@ def test_golden_pins_the_behaviours_the_cases_name() -> None:
     clears = _golden_margins("clears_refi_plus_heloc")
     assert [clears[key]["direction"] for key in clears] == ["clears", "flips", "clears", "flips", "flips"]
     assert clears["par_break_even"]["value_text"] == (
-        "Drops below the refi screen if 30-year par rises 13 bps to 5.01%"
+        "Drops below the In the Money rule if 30-year par rises 13 bps to 5.01%"
     )
     assert _golden_margins("short_heloc")["spread_screen"]["direction"] == "short"
     odd = _golden_margins("half_bps_odd_min_spread")["par_break_even"]["value_text"]
@@ -205,11 +205,11 @@ def test_golden_pins_the_behaviours_the_cases_name() -> None:
     equity_short = _golden_margins("spread_clears_equity_short")
     assert equity_short["spread_screen"]["direction"] == "short"
     assert equity_short["spread_screen"]["value_text"] == (
-        "Spread clears the refi screen's spread minimum by 13 bps; equity is 5 pts under its 15% minimum"
+        "Spread clears the In the Money rule's spread minimum by 13 bps; equity is 5 pts under its 15% minimum"
     )
     assert equity_short["par_break_even"]["direction"] == "holds"
     assert equity_short["par_break_even"]["value_text"] == (
-        "No par move within ±100 bps clears the refi screen; equity is under its minimum"
+        "No par move within ±100 bps clears the In the Money rule; equity is under its minimum"
     )
 
 
@@ -301,8 +301,8 @@ def test_refi_screen_margins_agree_with_in_the_money(row_id: str, row: dict[str,
 
     assert (screen.direction == "clears") == passes, row_id
     if not passes:
-        assert "Clears the refi screen" not in screen.value_text, row_id
-        assert "Meets the refi screen" not in screen.value_text, row_id
+        assert "Clears the In the Money rule" not in screen.value_text, row_id
+        assert "Meets the In the Money rule" not in screen.value_text, row_id
 
     if isinstance(margins_module._par_gate(row, inputs), str):
         assert break_even.direction == "unavailable", row_id
@@ -310,8 +310,8 @@ def test_refi_screen_margins_agree_with_in_the_money(row_id: str, row: dict[str,
     expected = _first_screen_flip(row, inputs)
     if expected is None:
         assert break_even.direction == "holds", row_id
-        assert "Clears the refi screen if" not in break_even.value_text, row_id
-        assert "Drops below the refi screen if" not in break_even.value_text, row_id
+        assert "Clears the In the Money rule if" not in break_even.value_text, row_id
+        assert "Drops below the In the Money rule if" not in break_even.value_text, row_id
         return
     assert break_even.direction == "flips", row_id
     move = _PAR_MOVE.search(break_even.value_text)

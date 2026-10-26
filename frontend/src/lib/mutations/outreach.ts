@@ -34,9 +34,12 @@ import {
   type Mutation,
   type QueryClient,
 } from '@tanstack/react-query';
+import { useMemo } from 'react';
 import { api, ApiError, isAbortError } from '../api';
 import type { ApproveResult, OutreachDraftResult, RejectResult, ReviewMode } from '../apiTypes';
 import { invalidateOperationalQueries, queryKeys } from '../queryKeys';
+import { wireOfferCodeOrNull, wireRejectReasonCode } from '../outreachWireCodes';
+import { revokeApproval, type OutreachRevokeResponse } from '../apiClients/outreachRevoke';
 
 /**
  * Refetch the ACTIVE approval-request list (only a mounted Lead Queue reads
@@ -65,6 +68,7 @@ export const outreachMutationKeys = {
   all: ['mip', 'outreach'] as const,
   approve: ['mip', 'outreach', 'approve'] as const,
   reject: ['mip', 'outreach', 'reject'] as const,
+  revoke: ['mip', 'outreach', 'revoke'] as const,
 };
 
 /** A verified `?campaign_id=&variant_name=` binding (LeadTable.logic's CampaignBinding). */
@@ -73,7 +77,8 @@ export interface OutreachCampaignBinding {
   variant_name: string;
 }
 
-export type OutreachDecision = 'approve' | 'reject';
+/** A revoke on the wire disables its row's decision controls too (flow-v2). */
+export type OutreachDecision = 'approve' | 'reject' | 'revoke';
 
 export interface ApproveLeadVariables {
   decision: 'approve';
@@ -179,6 +184,9 @@ export async function draftForApproval(
 }
 
 async function approveLeadRequest(variables: ApproveLeadVariables): Promise<ApproveResult> {
+  // A row offer the route would refuse (WireCodeRefusedError): refused before
+  // the draft, so no DRAFT_OUTREACH row and no approve POST.
+  if (variables.offerCode) wireOfferCodeOrNull(variables.offerCode, 'approve');
   const draft = variables.reviewedDraft
     ?? await draftForApproval(variables.borrowerId, variables.campaignBinding, variables.signal);
   // The in-run offer check: an unsampled row whose drafted offer the gate
@@ -187,11 +195,13 @@ async function approveLeadRequest(variables: ApproveLeadVariables): Promise<Appr
     const offerCode = draft.offer_code ?? variables.offerCode ?? '';
     if (!variables.coveredOfferCodes.has(offerCode)) throw new OfferNotPreviewedError(offerCode);
   }
+  // The drafted (or row) code, narrowed before the approve POST; an absent one stays null.
+  const offerCode = wireOfferCodeOrNull(draft.offer_code ?? variables.offerCode, 'approve');
   return api.approve(
     variables.borrowerId,
     {
       evidence_ids: variables.evidenceIds,
-      offer_code: draft.offer_code ?? variables.offerCode,
+      offer_code: offerCode,
       draft_subject: draft.subject?.trim() ?? '',
       draft_body: draft.body,
       draft_generation_id: draft.generation_id,
@@ -212,11 +222,12 @@ async function approveLeadRequest(variables: ApproveLeadVariables): Promise<Appr
   );
 }
 
-function rejectLeadRequest(variables: RejectLeadVariables): Promise<RejectResult> {
+async function rejectLeadRequest(variables: RejectLeadVariables): Promise<RejectResult> {
+  // Both codes narrowed before any I/O (WireCodeRefusedError: nothing sent).
   const body = {
     evidence_ids: variables.evidenceIds,
-    offer_code: variables.offerCode,
-    rationale_code: variables.rationaleCode,
+    offer_code: wireOfferCodeOrNull(variables.offerCode, 'reject'),
+    rationale_code: wireRejectReasonCode(variables.rationaleCode),
     rationale: variables.rationale,
     campaign_id: variables.campaignBinding?.campaign_id ?? null,
     variant_name: variables.campaignBinding?.variant_name ?? null,
@@ -265,7 +276,7 @@ function decisionOf(variables: unknown): { borrowerId: string; decision: Outreac
   if (typeof variables !== 'object' || variables === null) return null;
   const { borrowerId, decision } = variables as Partial<DecisionVariables>;
   if (typeof borrowerId !== 'string') return null;
-  if (decision !== 'approve' && decision !== 'reject') return null;
+  if (decision !== 'approve' && decision !== 'reject' && decision !== 'revoke') return null;
   return { borrowerId, decision };
 }
 
@@ -313,4 +324,67 @@ export function decisionFailure(error: unknown): DecisionFailure {
   if (isAbortError(error)) return 'aborted';
   if (error instanceof ApiError && error.status === null) return 'network';
   return 'backend';
+}
+
+export interface RevokeApprovalVariables {
+  decision: 'revoke';
+  borrowerId: string;
+  /** The approval being revoked (the lifecycle's or the receipt's approval_id). */
+  approvalId: string;
+  rationale: string;
+  /** One per intent (useIntentRequestIds), reused on a retry. */
+  requestId: string;
+}
+
+function revokeApprovalRequest(variables: RevokeApprovalVariables): Promise<OutreachRevokeResponse> {
+  return revokeApproval({
+    borrower_id: variables.borrowerId,
+    approval_id: variables.approvalId,
+    rationale: variables.rationale,
+    request_id: variables.requestId,
+  });
+}
+
+/**
+ * Revoke an approval (flow-v2), pessimistic like approve and reject: no
+ * onMutate, no setQueryData, nothing reads "revoked" before the 200. A
+ * success invalidates through invalidateAfterDecision (the audited reads
+ * stale-marked only, never an active refetch). gcTime Infinity: the
+ * session's record of what it revoked (useRevokedBorrowers) outlives the
+ * panel; an actor change clears the MutationCache and resets the document.
+ */
+export function useRevokeApproval(queryClient: QueryClient) {
+  return useMutation<OutreachRevokeResponse, Error, RevokeApprovalVariables>(
+    {
+      mutationKey: outreachMutationKeys.revoke,
+      mutationFn: revokeApprovalRequest,
+      networkMode: 'always',
+      retry: false,
+      gcTime: Infinity,
+      onSuccess: (result) => {
+        if (result.revoked) invalidateAfterDecision(queryClient);
+      },
+    },
+    queryClient,
+  );
+}
+
+function selectRevokedBorrower(mutation: Mutation<unknown, Error, unknown, unknown>): string | null {
+  const found = decisionOf(mutation.state.variables);
+  const data = mutation.state.data as Partial<OutreachRevokeResponse> | undefined;
+  return found?.decision === 'revoke' && data?.revoked === true ? found.borrowerId : null;
+}
+
+/**
+ * The borrowers this session revoked, from the MutationCache (successful
+ * revokes only, in submission order). One array identity per change, so
+ * the table's derived rows recompute only when a revoke lands.
+ */
+export function useRevokedBorrowers(queryClient: QueryClient): readonly string[] {
+  // useMutationState shares structure, so `selected` keeps its identity until a revoke lands.
+  const selected = useMutationState(
+    { filters: { mutationKey: outreachMutationKeys.revoke, status: 'success' }, select: selectRevokedBorrower },
+    queryClient,
+  );
+  return useMemo(() => selected.filter((borrowerId): borrowerId is string => borrowerId !== null), [selected]);
 }

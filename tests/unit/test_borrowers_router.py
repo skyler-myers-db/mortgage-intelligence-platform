@@ -45,7 +45,7 @@ def test_borrowers_router_search_and_lifecycle_surfaces() -> None:
 
     lifecycle = client.get(
         "/api/borrowers/B-48291/lifecycle",
-        headers={"X-Forwarded-Email": "skyler@entrada.ai"},
+        headers={"X-Forwarded-Email": "operator@summit.example"},
     )
     assert lifecycle.status_code == 200
     assert "approval_status" in lifecycle.json()

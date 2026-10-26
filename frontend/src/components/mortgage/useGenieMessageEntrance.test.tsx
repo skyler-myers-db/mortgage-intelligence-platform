@@ -12,8 +12,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { GenieTurnNote } from '../../lib/genieInFlightTurn';
 import { useGenieMessageEntrance } from './useGenieMessageEntrance';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /** Renders each note the way a surface does: entering or not, by identity. */
 function Harness({ notes }: { notes: readonly GenieTurnNote[] }) {
   const entrance = useGenieMessageEntrance({ isVisible: () => true, inFlight: null, notes });

@@ -9,6 +9,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { tooltipText } from '../test/tooltipText';
 import type { GenieLiveProgress } from '../lib/api';
 import type { GenieAnswer } from '../types';
 import {
@@ -38,8 +39,6 @@ import { clearGenieTurns, getGenieTurns, setGenieTurns } from '../lib/genieConve
 import { __resetGenieTurnStoreForTests, __setGenieTurnLockForTests } from '../lib/genieInFlightTurn';
 import { __resetGenieAnnouncerForTests } from '../components/mortgage/useGenieAnnouncer';
 import { observeStrongly } from '../components/mortgage/genieAnnouncer.test-support';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const TIMEOUT_MS = 30_000;
 
@@ -126,7 +125,7 @@ describe('/ask-genie on the in-flight turn store', () => {
 
     const stop = controls.stop();
     expect(stop?.textContent?.trim()).toBe('Stop');
-    expect(stop?.title).toBe(
+    expect(tooltipText(stop)).toBe(
       'Stop waiting for this answer. Genie may still finish it on the server; the reply is discarded.',
     );
     await act(async () => {
@@ -197,7 +196,7 @@ describe('/ask-genie on the in-flight turn store', () => {
     act(() => setTextAreaValue(controls.composer(), 'A route draft'));
     for (const chip of controls.sampleChips()) {
       expect(chip.disabled).toBe(true);
-      expect(chip.title).toBe(reason);
+      expect(document.getElementById(chip.getAttribute('aria-describedby') ?? '')?.textContent).toBe(reason);
     }
     for (const chip of controls.followUps()) expect(chip.disabled).toBe(true);
     expect(controls.ask().disabled).toBe(true);

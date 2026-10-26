@@ -900,6 +900,18 @@ app's work and record only, and the copy keeps "Genie may keep the question
 as context". `tests/unit/test_genie_cancel.py` fails on an SDK that adds a
 cancel method, which forces the decision then.
 
+Decision, 2026-10-14 (W5e `w5-deps-report`, genie-03 residual): no
+`databricks-sdk` bump. The newest release, 0.152.0 (published 2026-10-13),
+adds exactly one cancel to `GenieAPI`, `genie_cancel_response(agent_id,
+conversation_id, response_id)`: the agent-mode response cancel above, not a
+chat-mode message cancel. So a bump would bring this app no Genie-side
+cancel, and a 0.103.0 -> 0.152.0 jump touches every Databricks surface and
+needs a live deploy proof of its own. The pin is held below 0.104.0 in
+`tools/dependency_holds.json` (review_by 2026-11-15), and the tripwire now
+admits exactly that reviewed agent-mode method, and only while its signature
+carries `agent_id`; any other cancel-named method still fails it. The copy
+"Genie may keep the question as context" is unchanged.
+
 ### Genie context scope (genie-04 phase 2, W5d)
 
 `POST /api/v1/genie/context-scope` renders a closed Lead Queue context
@@ -1132,7 +1144,24 @@ revoke clears the sales-state cache and enqueues the lifecycle sync with
 reason `revocation`; the sync, `lifecycle_for` and the activation delivery
 guard read the borrower as pending / none / superseded. The funnel's
 "approved" stage counts borrowers ever approved, so a revoked approval still
-counts there, exactly like approve-then-reject.
+counts there, exactly like approve-then-reject; its recent-approvals list
+(W5e) leaves out an approve with a later finalized revoke for the same
+borrower, and a re-approve after the revoke lists again.
+
+A refused revoke answers the house 409 shape (W5e, as `sales._conflict`):
+`{"detail": <fixed sentence>, "reason": <code>}`, the detail byte-identical
+to the earlier body, and nothing is written. The client reads `reason` and
+shows one closed sentence per code (`REVOKE_REFUSAL_COPY`), never the raw
+detail:
+
+| `reason` | Refused because |
+| --- | --- |
+| `not_current` | the named approval is no longer the borrower's current, finalized decision |
+| `campaign_bound` | the approval is campaign-bound (not revocable in v1; the Lead Queue hides the action and says why) |
+| `dispositioned` | a call disposition was logged since the approval |
+| `outcome_recorded` | a lead outcome was recorded since the approval |
+| `delivered` | the approval's outreach was delivered |
+| `assignment_worked` | the active assignment was already worked (`actioned`, `outcome_recorded`) |
 
 Queue version: the change signal now reads six ledgers (approvals,
 assignments, call dispositions, loan-officer outcomes, activation delivery
@@ -1330,3 +1359,18 @@ The saved-watchlist scheduler state (`growth_agent_scheduler_state_unavailable`,
 `exc_type` only) is served stale-while-refresh: a stale answer is returned at
 once while at most one background refresh runs, so a slow Jobs API never holds
 Home or Saved monitors; the event fires once per failed lookup.
+
+## 15. Sales ops per-officer workload (W5e)
+
+Audit 2026-09-21 `critic-10` item 6c (W5e w5-analytics). `GET
+/api/v1/sales/workload?from&to&stale_days` is one Lakebase statement over
+the active roster, `lead_assignments` and `call_dispositions` (no warehouse
+statement); it writes no audit row and answers `private, no-store`. It takes
+the `lakebase-read` backpressure class (the default read bucket and a
+Lakebase slot) through an early return placed before the sales warehouse
+prefix, like the Follow-ups summary in section 13. Browser RUM
+reports its template under the closed `workload` route segment
+(`backend/schemas/telemetry.py` `RUM_API_ROUTE_SEGMENTS`, mirrored in
+`frontend/src/lib/rumApiRoute.ts`), never the dates or an email. A Lakebase
+failure answers 503 with the governed dependency detail; the table shows the
+shared failure copy and no zero.

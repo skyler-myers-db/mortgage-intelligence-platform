@@ -271,6 +271,34 @@ def test_genie_in_the_money_threshold_matches_module0_contract() -> None:
     assert "in-the-money\n      ≥ 50 bps spread" not in space_text
 
 
+# critic-11 / D-platform-process-g step 6: the space names the rule the way
+# the App does, and never in a retired variant.
+_IN_THE_MONEY_NAMING_LINE = (
+    'Call the fn_in_the_money rule "In the Money" (rate spread ≥ threshold AND equity ≥ threshold). '
+    "It is an economics screen, not lead quality or creditworthiness; never call it prime."
+)
+_RETIRED_ITM_VARIANT_RE = re.compile(
+    r"\bprime[- ]refi\w*|\brefi(?:nance)?[- ]economics\b|\brefi screen\b|\brefi(?:nance)?[- ]candidates?\b",
+    re.IGNORECASE,
+)
+
+
+def _flowed(text: str) -> str:
+    """Instruction prose re-flowed to single spaces (both files wrap it)."""
+
+    return re.sub(r"\s+", " ", text)
+
+
+def test_genie_space_and_mirror_name_the_in_the_money_rule() -> None:
+    space_text = pgs.SPACE_YAML.read_text(encoding="utf-8")
+    mirror_text = (REPO_ROOT / "genie" / "instructions.md").read_text(encoding="utf-8")
+
+    assert _IN_THE_MONEY_NAMING_LINE in _flowed(space_text)
+    assert _IN_THE_MONEY_NAMING_LINE in _flowed(mirror_text)
+    assert _RETIRED_ITM_VARIANT_RE.findall(space_text) == []
+    assert _RETIRED_ITM_VARIANT_RE.findall(mirror_text) == []
+
+
 def test_genie_source_gap_questions_are_no_sql_redirects() -> None:
     space_text = pgs.SPACE_YAML.read_text(encoding="utf-8")
     mirror_text = (REPO_ROOT / "genie" / "instructions.md").read_text(encoding="utf-8")

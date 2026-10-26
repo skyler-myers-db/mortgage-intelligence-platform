@@ -10,6 +10,10 @@ from typing import Any
 import pytest
 
 from backend.services import saved_view_store as store_module
+from backend.services.audit_fingerprint import (
+    SAVED_VIEW_FINGERPRINT_DOMAIN,
+    keyed_filter_fingerprint,
+)
 from backend.services.saved_view_params import canonical_saved_view_params
 from backend.services.saved_view_store import (
     SAVED_VIEW_LIMIT,
@@ -19,7 +23,9 @@ from backend.services.saved_view_store import (
 
 ACTOR = "alice.lo@summit.example"
 NAME = "My CA recapture queue"
-PARAMS, FINGERPRINT = canonical_saved_view_params("state=CA&segment=retention")
+PARAMS, _DIGEST = canonical_saved_view_params("state=CA&segment=retention")
+# What the route passes: the SAVED_VIEW-domain HMAC of the digest (12.4 #11).
+FINGERPRINT = keyed_filter_fingerprint(_DIGEST, domain=SAVED_VIEW_FINGERPRINT_DOMAIN)
 
 
 class _Client:
@@ -89,6 +95,18 @@ def test_create_writes_the_row_and_metadata_without_the_name_or_params() -> None
     rendered = params["metadata"]
     assert "recapture" not in rendered.lower()
     assert "retention" not in rendered and "state" not in rendered
+
+
+def test_create_without_a_fingerprint_omits_the_key_and_still_writes_the_row() -> None:
+    client = _Client(fetchone=[{"view_id": "x", "audit_id": "a-1"}])
+    result = LakebaseSavedViewStore(client).create(  # type: ignore[arg-type]
+        actor=ACTOR, name=NAME, params=PARAMS, filter_fingerprint=None
+    )
+    assert result.ok is True
+    [(_sql, params)] = client.statements
+    metadata = json.loads(params["metadata"])
+    assert "filter_fingerprint" not in metadata
+    assert metadata["saved_view_id"] == result.view_id
 
 
 @pytest.mark.parametrize(

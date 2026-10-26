@@ -20,7 +20,7 @@ export const OFFER_LANGUAGE: Record<string, OfferLanguage> = {
   },
   heloc: {
     label: 'Home-equity line review',
-    short: 'Equity and HELOC intent support an equity-credit conversation; refinance economics are weaker.',
+    short: 'Equity and HELOC intent support an equity-credit conversation; the borrower is not in the money.',
     rationale: 'Home-equity signals suggest a conversation about available equity may be useful without replacing the first mortgage.',
     borrowerBenefit: 'The borrower can explore access to home equity without replacing the first mortgage.',
   },

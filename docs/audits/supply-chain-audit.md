@@ -11,6 +11,16 @@ this remediation pass.
 
 - Browser-shipped production dependencies have no known commercial-use license
   blockers.
+- Frontend `npm audit`, 2026-10-26, after W5e tail T4 (below): 0
+  advisories at any level across the 291 lock entries, read with
+  `--package-lock-only` and on the installed tree at the `--audit-level=high`
+  gate. Before T4 the same lock (and main's at 5e0fbe2c) reported 5
+  dev-only advisories published 2026-10-20 to 2026-10-23, after every W5e
+  commit: 3 high (happy-dom GHSA-834v-8h66-3h79; vite 8.3.0-8.3.2 via its
+  bundled launch-editor and server.fs advisories; zod below 4.6.6,
+  GHSA-mrhx-c7xc-m3w5, transitive through eslint-plugin-react-hooks) and 2
+  moderate (vitest and @vitest/mocker 4.1.11). This is a dated result, not
+  a standing claim.
 - Frontend `npm audit`, 2026-10-01, after the W5b dependency batch (see the
   2026-10-01 W5b addendum below), read from the refreshed lock with
   `npm audit --package-lock-only`: 0 advisories at any level (0 low, 0
@@ -40,6 +50,16 @@ this remediation pass.
   `.github/workflows/ci.yml`): a high or critical advisory fails CI;
   moderate and low advisories in dev-only tooling are tolerated and reviewed
   at the next dependency batch.
+- Backend `pip-audit`, 2026-10-26, after the aiohttp, certifi, gitpython,
+  graphql-core, mlflow, OpenTelemetry and pillow bumps (see the 2026-10-26
+  addendum below): CI's command, now `pip-audit -r requirements.txt --strict
+  --ignore-vuln GHSA-xpv3-w29h-x7cv --ignore-vuln GHSA-hj66-6f7g-4r5v`,
+  reports no known vulnerabilities from the default PyPI service (1 ignored)
+  and none from `-s osv` (2 ignored). Over the `uv.lock` pins with no
+  ignores, both services report only oauthlib 3.3.1, under the PYSEC aliases
+  of the two ignored ids (PyPI: PYSEC-2026-4114; OSV: PYSEC-2026-4113 and
+  PYSEC-2026-4114). The GHSA-h7x2-h6g9-p789 ignore is retired: mlflow 3.17.2
+  carries its fix.
 - Backend `pip-audit`, 2026-10-06, after the multidict, werkzeug and mako
   pins (see the 2026-10-06 addendum below): CI's command, `pip-audit -r
   requirements.txt --strict` with its three ignores, reports no known
@@ -94,7 +114,7 @@ npm --prefix frontend audit --audit-level=high      # the CI gate
 npm --prefix frontend audit --audit-level=moderate  # advisory local read; not a gate
 npm --prefix frontend run test -- USChoroplethMap
 npm --prefix frontend run build
-./.venv/bin/pip-audit -r requirements.txt --strict --ignore-vuln GHSA-h7x2-h6g9-p789 --ignore-vuln GHSA-xpv3-w29h-x7cv --ignore-vuln GHSA-hj66-6f7g-4r5v
+./.venv/bin/pip-audit -r requirements.txt --strict --ignore-vuln GHSA-xpv3-w29h-x7cv --ignore-vuln GHSA-hj66-6f7g-4r5v
 ./.venv/bin/python -m pytest -q tests/unit/test_supply_chain_licenses.py
 ./.venv/bin/python -m pytest -q tests/unit/test_error_sanitizer.py tests/unit/test_health_endpoint.py
 ```
@@ -110,6 +130,12 @@ Frontend dependencies move in batches of exact pins (`npm install
 update`), and `npm --prefix frontend ci` must run clean on the result. Before
 a batch lands, check each of these:
 
+- **Read the current dependency-report issue first.** The open issue labelled
+  `dependency-report` (edited in place every Monday by
+  `.github/workflows/deps-report.yml`) lists the drift, the advisories, the
+  dated holds and waivers, and the workflow tool pins for the current
+  `main`; a batch starts from it. The holds themselves live in
+  `tools/dependency_holds.json` (see the W5e addendum below).
 - **react-router `UNSAFE_DataRouterContext`.** `UnsavedChangesGuard` reads
   this unstable export to detect a data router. It is pinned by
   `frontend/src/lib/dependencyContracts.test.ts`, together with
@@ -123,7 +149,7 @@ a batch lands, check each of these:
   --only-issues`, and compare the summary with the previous batch.
 - **Playwright is held to the VRT container image.** `@playwright/test`
   stays at the version of the pinned visual-regression image
-  (`mcr.microsoft.com/playwright:v1.63.0-noble`; both the `e2e-visual`
+  (`mcr.microsoft.com/playwright:v1.64.0-noble` since W5e tail T3; both the `e2e-visual`
   `container.image` and its `MIP_VRT_IMAGE`, pinned by
   `tests/unit/test_ci_frontend_gates.py`). A Playwright bump moves the image
   in the same change, and the baselines are regenerated once, from that
@@ -151,7 +177,8 @@ a batch lands, check each of these:
   that fire are fixed in the lane that owns the surface, or the bump is held;
   they are never added to the `KNOWN_VIOLATIONS` ratchet.
 - **Update signal.** Ruled 2026-09-30 (owner decision #7): a weekly report
-  workflow and no bots, built in W5d (`w5-test-harness-deps-report`); no bot
+  workflow and no bots, built in W5e (`w5-deps-report`) as
+  `.github/workflows/deps-report.yml` over `tools/deps_report`; no bot
   branch (existing contract, see `docs/modernization-todo.md`).
 
 Additional manual checks:
@@ -479,3 +506,181 @@ PR #267's second CI run turned the `npm --prefix frontend audit --audit-level=hi
 
 After `npm --prefix frontend ci` on the refreshed lock: `npm audit --audit-level=high` reports 0 vulnerabilities. The only other lock change is npm's dedupe re-hoisting `fast-json-stable-stringify` 2.1.0 once stylelint's tree left.
 
+## 2026-10-14 addendum: the weekly report and the dated holds (W5e)
+
+Audit quality-v2 / stack-10, decision D-platform-process-a, W5e lane
+`w5-deps-report`.
+
+- **The report.** `.github/workflows/deps-report.yml` runs every Monday at
+  13:17 UTC and on dispatch. Its `report` job (contents and actions read
+  only) runs `python -m tools.deps_report`, which reads the exact pins
+  (`npm view` with nothing installed; PyPI JSON for the direct requirements
+  of `requirements.in`, exact or range-pinned, at their `uv.lock` versions), `npm audit
+  --package-lock-only` at every severity, `pip-audit -r uv.lock --no-deps
+  --disable-pip --strict -f json`, the literal tool pins in every workflow,
+  the `Review date:` comments in `ci.yml`, the file-size allowlist expiries
+  and the hold dates. Its `publish` job (issues write only, no checkout, no
+  package code) re-validates the markdown and edits the one open
+  `dependency-report` issue in place. Every value in that public issue is
+  shape-checked and set in a code span; advisory titles and descriptions are
+  never rendered.
+- **What turns it red (exit 1).** An unignored npm high or critical
+  advisory, any pip-audit finding not ignored on `ci.yml`'s `run: pip-audit`
+  line, a `ci.yml` review date in the past, a file-size allowlist entry
+  expired or within 7 days, a hold whose `review_by` has passed, and a tool
+  pinned to two different literals with no unexpired `tool-literal` hold.
+  Drift alone never reds; a review date within 7 days is a warning. Exit 2
+  means a source could not be read (named under "Report error"). The live
+  release-gate section is informational and never changes the exit status.
+- **The holds are the source of truth.** `tools/dependency_holds.json` holds
+  every dated hold (`ecosystem` npm, pypi or tool-literal; `below` or
+  `literals`; `reason`; `review_by`). A held package renders as held, never
+  as pending. `tests/unit/test_dependency_pins.py` checks that every hold
+  names a pinned package whose pin is below its bound; an expired
+  `review_by` is the report's signal, not a test failure. The hold rows in
+  the W5b batch table above are the history; a new hold is a JSON row plus a
+  dated line here.
+- **Run it offline.** `python -m tools.deps_report --offline-fixtures
+  tests/fixtures/deps_report --today 2026-10-14 --json /tmp/deps.json
+  --markdown /tmp/deps.md` reads only the fixture directory (the hermetic dry
+  run `tests/unit/test_deps_report.py` pins byte for byte). Without
+  `--offline-fixtures` it reads the live registries, with `GITHUB_TOKEN` or
+  `GH_TOKEN` for the GitHub release lookups.
+- **The expected first runs are red.** The two `ci.yml` review dates (the
+  mlflow ignore, 2026-10-08, and the two oauthlib ignores, 2026-10-13) have
+  passed, so the first run exits 1 with two `review_date_past` lines. That
+  is the designed signal: this lane may not change the ignores, their proofs
+  or their dates, and a date bump is not a re-review. The re-review belongs
+  to the integrator's security pass right after the first run.
+- **Re-reviewed at the W5e integration (2026-10-15).** GHSA-h7x2-h6g9-p789:
+  `first_patched_version` is still null and the range still ends at 3.15.2
+  (advisory last updated 2026-08-31); the `mlflow (server|gateway)` grep still
+  returns nothing, so the ignore stays (next review 2026-11-15). The two
+  oauthlib advisories: 4.0.0 is still the only patched release; the
+  connector's main branch now admits `oauthlib >=3.1.0,<5.0.0`
+  (databricks-sql-python#964, closed as completed 2026-10-06), but no release
+  past 4.6.0 (which still caps `<4.0.0`) exists and the repo pins 4.4.0, so
+  both ignores stay (next review 2026-11-01, when the first connector release
+  past 4.6.0 is the trigger). Both proofs and dates are written at the
+  `ci.yml` call site; the first deps-report run is no longer red on
+  `review_date_past`.
+
+### W5e dependency tails (stacked on `ux/w5e-deps-report-tail`, never merged as a branch)
+
+Each tail is one commit whose lock was computed with `npm install <pkg>@<ver>
+--save-exact --package-lock-only --ignore-scripts`. The integrator RE-RAN that
+command on the merged tree (over a copy of its `frontend/package.json` +
+`package-lock.json` with no `node_modules`; never a cherry-picked lock hunk),
+ran `npm --prefix frontend ci` and the installed-tree gates, and applied the
+W5b hold rule: a tail that turns a gate red on another lane's files, adds more
+than +0.3 KiB br initial JS or +4.0 KiB br total JS, or breaks maxLazy is
+dropped and its hold row stays in `tools/dependency_holds.json` with a fresh
+dated reason (post-wave owner: the next dependency batch, tracked weekly by
+the report). `npm audit --package-lock-only --audit-level=high` is 0 on every
+applied lock, no tail adds a `micromatch` or `braces` path, and stylelint
+stays out.
+
+| Tail | Package | From | To | Outcome (W5e integration, 2026-10-15) | Lock changes on the merged tree |
+|---|---|---|---|---|---|
+| T1a | `happy-dom` | 20.10.3 | 20.14.6 | Applied after `w5-test-harness-deps-report` (its EvidenceHoverCard re-model): full vitest 612 files / 6,528 tests green on the installed tree; test-only, no bundle byte | `happy-dom` only |
+| T1b | `@tanstack/react-query` + `-persist-client` | 5.100.10 | 5.104.2 | Applied: test-harness C4 outcome (i), shell-wayfinding 21/21 and the re-expressed rAF probe 'closing hides the Console at once' 7/7 on 5.104.2; initial JS -0.19 KiB br | the two packages and `query-core` / `query-persist-client-core`, all 5.104.2 (one entry each) |
+| T1c | `@tanstack/react-virtual` | 3.13.24 | 3.14.19 | HELD: `virtual-core` 3.19.4 adds +2.80 KiB br / +10.73 raw / +3.25 gzip to the leadsQuery (LeadTable) chunk, and its raw 181.65 KiB breaks the 180 KiB maxLazy gate re-baselined at the `w5-lead-table-compile` merge (br 50.50 of 51 and gzip 60.86 of 61 leave under 1%); lead-queue +2.83, segment-intelligence +2.78 KiB br | (not applied) `react-virtual` 3.14.19, `virtual-core` 3.14.0 -> 3.19.4 |
+| T2 | `oxlint` | 1.85.0 | 1.86.0 | Applied with `w5-compiler-lint`: `frontend/oxlint-baseline.json` re-recorded with `--ratchet` (it records the oxlint version; 6 files, no new, grown or suppressed hit); 1.86.0 lists 36 jsx-a11y rules and `.oxlintrc.json` names all 36, so no new rule to name; dev-only, no bundle byte | `oxlint` and all 19 `@oxlint/binding-*` platform entries, 1.86.0 |
+| T3 | `@playwright/test` | 1.63.0 | 1.64.0 | Applied LAST, with the `mcr.microsoft.com/playwright:v1.64.0-noble` VRT image (ci.yml `e2e-visual` container and `MIP_VRT_IMAGE`, test_dependency_pins, test-infra.fixture.spec.ts, the playwright.config.ts comment, docs/testing.md); 1.64.0 ships Chromium 156, Firefox 157 and WebKit 27.2; every e2e-visual baseline moves and is refreshed from the pinned-container CI actuals (orchestrator) | `@playwright/test`, `playwright`, `playwright-core`, 1.64.0 |
+| T4 | `vite`, `vitest`, `happy-dom`, `zod` (transitive) | 8.3.2, 4.1.11, 20.14.6, 4.3.6 | 8.3.5, 4.1.12, 21.0.4, 4.6.7 | Applied at the W5e fix round (2026-10-26) to clear the five dev-only advisories above, re-run lock-only on the merged tree: `npm install vite@8.3.5 vitest@4.1.12 --save-exact --save-dev --package-lock-only --ignore-scripts`, `npm update zod --package-lock-only --ignore-scripts` (eslint-plugin-react-hooks admits `^4.0.0`, so no override), then `npm install happy-dom@21.0.4 --save-exact --save-dev --package-lock-only --ignore-scripts` (a major: full vitest 630 files / 6,833 tests green on the installed tree, so no hold). vitest stays inside its `below 5.0.0` hold. Budgets on the merged tree: initial JS 147.68 KiB br (147.79 before, with the compliance-caveat fix in the same build), total JS 687.66, leadsQuery 47.98 br / 171.29 raw; every gate passes | `vite` 8.3.5, `rolldown` and its 15 `@rolldown/binding-*` entries 1.2.12 -> 1.2.15, `@oxc-project/types` 0.155.0, `postcss` 8.5.31, `nanoid` 3.3.20; `vitest` and its seven `@vitest/*` packages 4.1.12, `chai` 6.3.0, `tinyrainbow` 3.2.0; `happy-dom` 21.0.4; `zod` 4.6.7; nothing added or removed (291 entries), no `micromatch` / `braces` path, stylelint stays out |
+
+## 2026-10-26 addendum: the October Python advisories, and the GHSA-h7x2-h6g9-p789 ignore retired
+
+Advisories published 2026-10-19 to 2026-10-23 turned the security job's
+pip-audit step red on the W5e PR #270 (CI run 40311237233): `Found 52 known
+vulnerabilities, ignored 1 in 7 packages`. `main` at 5e0fbe2c fails the same
+way. Re-running CI's command with `-s osv` found 56 (2 ignored): four more
+pillow ids, all fixed by the same release. Every finding has a patched
+release that resolves cleanly, so all of them are pins, not ignores.
+
+| Advisory | Package | First patched | Action |
+|---|---|---|---|
+| GHSA-5wr8-gcqf-gqf3, GHSA-2g87-pp6c-29x5, GHSA-9xw5-w5jj-pvcg (high); GHSA-pqxq-w44r-73xw, GHSA-6cjc-53gc-5rqm, GHSA-f9xw-jh8m-3mwq (medium); GHSA-494j-54xm-rwp3, GHSA-gx76-c99x-2c96 (low) | `aiohttp` 3.14.3 | 3.14.4 | Floor `aiohttp>=3.14.4`; the lock takes 3.14.5. 3.14.4 requires `yarl>=1.25.1`, so `yarl` moves 1.24.2 -> 1.25.1 with it. Transitive through mlflow. |
+| PYSEC-2026-4320 (GHSA-6q48-6c7w-9gw2): the bundle still trusted the emSign roots whose intermediate CA keys were compromised | `certifi` 2026.4.22 | 2026.10.19 | `certifi==2026.10.23` (the latest bundle). Transitive through requests, httpx and httpcore. |
+| GHSA-83vg-56qc-22m7 (high): a submodule's `.git` path was validated only after cloning into it | `gitpython` 3.1.62 | 3.2.1 | Floor `gitpython>=3.2.1,<4`. Transitive through mlflow-skinny; 3.2.0 drops Python 3.7 and hardens command and config parsing. |
+| GHSA-vj8h-fx38-h3vc, GHSA-r77w-qph3-7vf8 (high): quadratic `OverlappingFieldsCanBeMerged` validation; comment tokens bypass `max_tokens` | `graphql-core` 3.2.11 | 3.2.12 (3.3.0rc1 on the 3.3 line) | `graphql-core==3.2.12`. Transitive through graphene and graphql-relay (mlflow's tracking-server GraphQL API); graphene caps it `<3.3`, so 3.2.12 is the reachable fix. OSV's record names only 3.3.0rc1 as the fix, but both services are silent on 3.2.12. |
+| GHSA-wqmh-qccw-pqwf (high): FileStore trace IDs allow path traversal; GHSA-2wqp-q3c6-ccj5 (medium): SSRF through third-party scorer kwargs | `mlflow` 3.16.0 | 3.17.2; 3.17.0 | `mlflow==3.17.2`, with `mlflow-skinny` and `mlflow-tracing` (exact pins of mlflow). `GATEWAY_MODEL_REQUIREMENTS` in `backend/agents/gateway_contract.py` (the gateway model's serving environment) moves with it, as it did for 3.16.0, so the gateway proxy source hash changes and the next deploy registers a new gateway model version. |
+| GHSA-xcq7-p3pf-p88h (medium): unbounded `tracestate` parsing | `opentelemetry-api` 1.41.1 | 1.45.1 | Floors `opentelemetry-api`, `-sdk` and `-exporter-otlp` `>=1.45.1,<2`. The SDK pins the API to its own version, so the family moves together: api, sdk, exporter-otlp, exporter-otlp-proto-grpc, -proto-http, -proto-common and proto 1.41.1 -> 1.45.1, semantic-conventions 0.62b1 -> 0.66b1, and two new Apache-2.0 distributions, `opentelemetry-exporter-otlp-common` and `opentelemetry-exporter-http-transport` (0.66b1). |
+| 37 ids on PyPI's feed, 41 on OSV (12 of them GitHub-reviewed) | `pillow` 12.3.0 | 13.0.0 (the only fixed release for every id) | `pillow==13.0.0`. Transitive through matplotlib (via mlflow, `pillow>=9`). Pillow 13 needs Python 3.11, which `pyproject.toml` already requires. |
+
+- **The fix versions come from the advisories.** `gh api /advisories/<id>`
+  reports a `first_patched_version` for every non-pillow GHSA id above, and
+  each matches the table; the 12 GitHub-reviewed pillow advisories all name
+  13.0.0, and pip-audit lists 13.0.0 as the only fix for all 41 OSV ids.
+  Listing GitHub advisories by package (`gh api
+  '/advisories?ecosystem=pip&affects=<pkg>@<version>'`) for every new pin
+  returns none; the same query on the old pins returns the ids above (the
+  control).
+- **GHSA-h7x2-h6g9-p789 is retired, not re-dated.** MLflow 3.17.0's release
+  notes list "Validate gateway secret `api_base` to prevent SSRF
+  (GHSA-h7x2-h6g9-p789)" (mlflow#25761). In the installed 3.17.2,
+  `_create_gateway_secret` and `_update_gateway_secret` route `auth_config`
+  through `_validate_gateway_secret_auth_config`, whose
+  `_validate_gateway_api_base` admits public HTTPS only by default (a
+  `169.254.169.254` or `10.x` `api_base` raises `MlflowException`, a public
+  HTTPS one passes), and `raw_proxy` calls `_enable_upstream_ssrf_protection`
+  before proxying; 3.16.0 has none of the three (AST-compared across both
+  installs). The advisory still names no `first_patched_version` and marks
+  `>=3.13.0,<=3.15.2`, so pip-audit is silent on 3.17.2 with or without the
+  ignore. CI now carries two ignores, both oauthlib (review date 2026-11-01,
+  unchanged).
+- **No first-party code imports aiohttp, git, certifi or graphql.** The
+  first-party importers of the bumped packages are
+  `backend/services/observability.py` (OpenTelemetry), 15 modules that import
+  mlflow, and the dev-only `tools/render_brand_icons.py` (Pillow). Every
+  dotted `mlflow.*`, `opentelemetry.*` and `PIL.*` name the repo uses resolves
+  with importlib on the new pins, the same set as on the old ones (the six
+  `mlflow.*` names that do not resolve on either side are tag and span
+  attribute keys such as `mlflow.ownerEmail`, not API; a made-up name fails).
+  Every name the installed consumers (mlflow, graphene, graphql-relay,
+  aiohttp, matplotlib, requests, httpx, botocore, google-auth and others)
+  import from the bumped packages resolves the same way.
+- **Behaviour checks at the broken layer.** The OTLP wiring sequence in
+  `backend/services/observability.py` (OTLP HTTP log exporter,
+  `LoggerProvider`, `LoggingHandler`, `BatchLogRecordProcessor`, `Resource`)
+  runs on 1.45.1 and emits the same single `LoggingHandler`
+  DeprecationWarning 1.41.1 already did, so `log_export=otlp` does not fall
+  back to stdout. `tools/render_brand_icons.py` renders byte-identical PNGs
+  on Pillow 13.0.0 and 12.3.0 with DeprecationWarnings as errors, equal to the
+  committed `favicon.png` and `apple-touch-icon.png`. mlflow 3.17's
+  changelog adds a schema upgrade for self-hosted SQL tracking servers; the
+  repo tracks to `databricks`, and the sqlite registry in
+  `tests/integration/test_gateway_mlflow_registry.py` migrates on 3.17.2.
+- **Lock refresh, in two steps that equal one.** `uv pip compile
+  requirements.in --python-version 3.11 --format requirements.txt
+  --output-file uv.lock` with `--upgrade-package` for aiohttp, certifi,
+  gitpython, graphql-core, pillow and the eight OpenTelemetry distributions
+  above, then `--upgrade-package mlflow --upgrade-package mlflow-skinny
+  --upgrade-package mlflow-tracing`. The result is byte-identical to a single
+  run with all of them. Only the packages in the table, `yarl` and the two new
+  OpenTelemetry distributions change version; `importlib-metadata` only
+  loses its opentelemetry-api provenance line. `requirements.txt` (`-c
+  uv.lock` + `-r requirements.in`) is unchanged, and
+  test_supply_chain_licenses pins the new literals in both files.
+- **Proof** (CI's literal command, run through the symlink-forcing driver
+  with pip-audit 2.9.0): before the change, the PyPI run reproduces CI's 52
+  findings in 7 packages exactly (1 ignored), and `-s osv` reports 56 (2
+  ignored). After it, `No known vulnerabilities found, 1 ignored` (PyPI) and
+  `No known vulnerabilities found, 2 ignored` (`-s osv`), with the three-
+  and the two-ignore command alike. An installed-mode read of a private
+  Python 3.11 venv built from the new `requirements.txt` agrees on both
+  services, and the same read of a venv built from the old one reproduces the
+  52. A targeted pytest battery (44 files: the mlflow-, OpenTelemetry- and
+  deploy-payload-importing suites, the gateway, agent-eval, observability,
+  health, capabilities, supply-chain, pins and deps-report tests, and
+  `tests/integration/test_gateway_mlflow_registry.py`) gives the same result
+  on the old tree with the old venv and on the new tree with the new venv:
+  1,704 passed and the same 19 failures, all in
+  `test_deploy_dev_workflow_contract.py`'s bash harnesses, which fail
+  identically on the unchanged tree under macOS bash 3.2 (`set -u` on an
+  empty array) and are not dependency-related.
+- **Licences.** No changed package changes licence (aiohttp's metadata moves
+  the same `Apache-2.0 AND MIT` into `License-Expression`); the two new
+  OpenTelemetry distributions are Apache-2.0 like the rest of the family.
+  `certifi` (MPL-2.0) becomes a direct pin, so `docs/THIRD_PARTY_LICENSES.md`
+  now lists it.

@@ -1,0 +1,50 @@
+{
+  "_doc": "Canonical watchlist names (W5d growth-watchlists cut 4a): read by tests/unit/test_watchlist_canonical_name.py (backend default_watchlist_name) and frontend/src/routes/ask-genie.growth-run-save.test.ts (canonicalWatchlistName). States and segment codes are sorted, so one scope picked in any order names one watchlist.",
+  "cases": [
+    {
+      "id": "reviewed-no-states",
+      "workflow_id": "daily_refi_brief",
+      "title": "Daily Refi Opportunity Brief",
+      "states": [],
+      "segment_codes": null,
+      "segment_mode": null,
+      "expected": "Daily Refi Opportunity Brief"
+    },
+    {
+      "id": "reviewed-states-unsorted",
+      "workflow_id": "listing_watch",
+      "title": "Listed-for-Sale Purchase Watch",
+      "states": ["TX", "IL", "CA"],
+      "segment_codes": null,
+      "segment_mode": null,
+      "expected": "Listed-for-Sale Purchase Watch - CA, IL, TX"
+    },
+    {
+      "id": "custom-any-unsorted",
+      "workflow_id": "custom_segment_watch",
+      "title": "Custom Segment Workflow",
+      "states": ["TX", "IL"],
+      "segment_codes": ["listed", "itm"],
+      "segment_mode": "any",
+      "expected": "Custom Segment Workflow - ANY - ITM+LISTED - IL, TX"
+    },
+    {
+      "id": "custom-same-scope-other-order",
+      "workflow_id": "custom_segment_watch",
+      "title": "Custom Segment Workflow",
+      "states": ["IL", "TX"],
+      "segment_codes": ["itm", "listed"],
+      "segment_mode": "any",
+      "expected": "Custom Segment Workflow - ANY - ITM+LISTED - IL, TX"
+    },
+    {
+      "id": "custom-all-three",
+      "workflow_id": "custom_segment_watch",
+      "title": "Custom Segment Workflow",
+      "states": [],
+      "segment_codes": ["retention", "equity", "permit"],
+      "segment_mode": "all",
+      "expected": "Custom Segment Workflow - ALL - EQUITY+PERMIT+RETENTION"
+    }
+  ]
+}

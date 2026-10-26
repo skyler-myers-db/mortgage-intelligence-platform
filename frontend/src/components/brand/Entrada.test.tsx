@@ -12,8 +12,6 @@ import {
   wordmarkWidthForHeight,
 } from './Entrada';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 /**
  * Audit bundle-v1: every page drew the wordmark from an unhashed /brand path
  * (no Cache-Control) with a `height` only, so the header shifted when the

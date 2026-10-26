@@ -5,6 +5,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { settleInAct } from '../test/settleInAct';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GenieAnswer, GenieStartResult, GrowthAgentHomeResponse } from '../types';
@@ -62,8 +63,6 @@ vi.mock('react-router', async () => {
 import { clearGenieTurns } from '../lib/genieConversationStore';
 import { __resetGenieTurnStoreForTests } from '../lib/genieInFlightTurn';
 import AskGenie from './ask-genie';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const HOME: GrowthAgentHomeResponse = {
   workflows: [],
@@ -133,7 +132,10 @@ describe('Ask Genie conversation continuity', () => {
     root = createRoot(container);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // The last answer resolves after each case's final wait: let it render
+    // inside act (quality-06), then unmount.
+    await settleInAct();
     act(() => root.unmount());
     container.remove();
     // The turn lives in a module-level store that outlives the route.
@@ -157,6 +159,9 @@ describe('Ask Genie conversation continuity', () => {
 
   async function waitUntil(condition: () => boolean, timeoutMs = 10_000) {
     const startedAt = Date.now();
+    // Always yield inside act first: what the last synchronous act set in
+    // motion (a resolved mock, a re-render) lands in scope (quality-06).
+    await settleInAct(1);
     while (!condition()) {
       if (Date.now() - startedAt > timeoutMs) throw new Error('waitUntil timeout');
       await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));

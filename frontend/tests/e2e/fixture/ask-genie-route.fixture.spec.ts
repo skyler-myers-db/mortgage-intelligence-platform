@@ -137,7 +137,7 @@ test.describe('docked composer (visual-07)', () => {
       await app.gotoRoute('/ask-genie');
       const input = composer(page);
       await expect(input).toBeVisible();
-      await expect(input).toHaveAttribute('placeholder', /prime refi candidates/);
+      await expect(input).toHaveAttribute('placeholder', /in-the-money count by state/);
       const box = await mustBox(input, 'composer textarea');
       const viewport = page.viewportSize()!;
       expect(box.y, 'composer top inside the viewport').toBeGreaterThanOrEqual(0);
@@ -145,7 +145,7 @@ test.describe('docked composer (visual-07)', () => {
       const ask = page.locator('form.genie-composer').getByRole('button', { name: 'Ask Genie', exact: true });
       await expect(ask).toHaveClass(/btn--primary/);
       await expect(ask).toBeDisabled();
-      await input.fill('Which states have the most prime refi candidates?');
+      await input.fill('Which states have the most in-the-money borrowers?');
       await expect(ask).toBeEnabled();
     });
   }
@@ -230,7 +230,7 @@ test.describe('docked composer (visual-07)', () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await app.gotoRoute('/ask-genie');
     const input = composer(page);
-    await expect(input).toHaveAttribute('placeholder', /prime refi candidates/);
+    await expect(input).toHaveAttribute('placeholder', /in-the-money count by state/);
     // field-sizing sizes an empty box to its placeholder: the placeholder
     // must fit the two-line minimum, not grow the docked composer.
     const sizing = await input.evaluate((node) => ({
@@ -274,7 +274,7 @@ test.describe('docked composer (visual-07)', () => {
     await app.gotoRoute('/ask-genie');
     await expect(launcher).toBeVisible();
     await composer(page).fill(
-      'Which states have the most prime refi candidates, and how many of them are current customers with at least forty percent equity and a recent listing?',
+      'Which states have the most in-the-money borrowers, and how many of them are current customers with at least forty percent equity and a recent listing?',
     );
     const fab = await mustBox(launcher, 'launcher');
     const dock = await mustBox(page.locator('form.genie-composer'), 'composer');
@@ -440,7 +440,7 @@ test.describe('focus is never hidden behind a sticky bar (WCAG 2.2 SC 2.4.11)', 
     { what: 'an empty composer', draft: '' },
     {
       what: 'an eight-line draft',
-      draft: Array.from({ length: 8 }, (_, line) => `Line ${line + 1} of a follow-up about prime refi candidates`).join('\n'),
+      draft: Array.from({ length: 8 }, (_, line) => `Line ${line + 1} of a follow-up about in-the-money borrowers`).join('\n'),
     },
   ];
   for (const { what, draft } of drafts) {

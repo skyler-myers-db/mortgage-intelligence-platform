@@ -7,6 +7,7 @@
    GenieAnswerToolbar.css precedent). Tokens only: no literal colors or
    pixel values.
    ============================================================ */
+@layer routes {
 
 /* Real headings (genie-08): an h3/h4 carrying the paragraph classes renders
    exactly like the <p> it replaced once the UA bold is reset; a bold-only
@@ -221,4 +222,5 @@
   .genie-collapse__toggle svg { transition: none; }
   .genie__msg--entering,
   .genie-thread__answer--entering { animation: none; }
+}
 }

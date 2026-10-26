@@ -13,8 +13,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CountChart, type CountChartPoint } from './CountChart';
 import type { Scale } from './scales';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const POINTS: CountChartPoint[] = [
   { x: 0, count: 4, label: 'May 1' },
   { x: 50, count: 9, label: 'May 3' },

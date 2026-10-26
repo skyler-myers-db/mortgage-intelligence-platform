@@ -6,6 +6,7 @@ import { genieRefusalReportApi, type GenieRefusalReportRequest } from '../../lib
 import { glossaryAnchor } from '../../lib/mortgageGlossary';
 import { useRefusalTextCapture } from '../../lib/optionalQueryReads';
 import { Icon } from '../Icon';
+import { Tooltip } from '../ui/Tooltip';
 import { lazyModule, useLazyModule } from './useLazyModule';
 import {
   GENIE_REFUSAL_FAMILIES,
@@ -191,20 +192,29 @@ export function GenieRefusalCard({
           role="group"
           aria-label="Ask this instead"
         >
-          {chips.map((chip) => (
-            <button
-              key={chip}
-              type="button"
-              className="filter filter--question"
-              onClick={() => onFollowUp(chip)}
-              disabled={Boolean(followUpDisabledReason)}
-              title={followUpDisabledReason ?? undefined}
-              data-testid="genie-refusal-chip"
-            >
-              <span className="filter__label">Ask</span>
-              <span className="filter__value filter__value--question">{chip}</span>
-            </button>
-          ))}
+          {chips.map((chip) => {
+            const button = (
+              <button
+                key={chip}
+                type="button"
+                className="filter filter--question"
+                onClick={() => onFollowUp(chip)}
+                disabled={Boolean(followUpDisabledReason)}
+                data-testid="genie-refusal-chip"
+              >
+                <span className="filter__label">Ask</span>
+                <span className="filter__value filter__value--question">{chip}</span>
+              </button>
+            );
+            // The disabled reason (R5): native disabled stays, the Tooltip says why.
+            return followUpDisabledReason ? (
+              <Tooltip key={chip} content={followUpDisabledReason}>
+                {button}
+              </Tooltip>
+            ) : (
+              button
+            );
+          })}
         </div>
       )}
       <div className="genie-answer__refusal-actions">

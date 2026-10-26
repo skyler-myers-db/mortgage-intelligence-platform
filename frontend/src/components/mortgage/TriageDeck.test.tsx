@@ -32,14 +32,12 @@ import type { LeadSummary } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import { ApiError } from '../../lib/apiTransport';
 import { clearToasts, getToasts } from '../../lib/toast';
-import { clearSingleKeyShortcutsPreference, setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
+import { setSingleKeyShortcutsEnabled } from '../../lib/keymapPreference';
 import {
   parseTriageMode,
   searchParamsWithLeadTablePlace,
   searchParamsWithTriageMode,
 } from '../../routes/lead-queue.filters';
-
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const store = vi.hoisted(() => {
   let state: Record<string, 'approved' | 'rejected'> = {};
@@ -215,7 +213,6 @@ describe('Triage deck', { timeout: 30_000 }, () => {
     session.sessionStatus = 'ready';
     session.canAccessAdmin = true;
     installLocalStorage();
-    clearSingleKeyShortcutsPreference();
     draftOutreach.mockImplementation((borrowerId: string) => Promise.resolve(draftFor(borrowerId)));
     approve.mockImplementation((borrowerId: string) => Promise.resolve({
       approved: true, audit_event_id: `audit-${borrowerId}`, approval_id: 'apr-1',
@@ -332,7 +329,8 @@ describe('Triage deck', { timeout: 30_000 }, () => {
     press('a');
     await flush();
     expect(draftOutreach, 'A drafts exactly once').toHaveBeenCalledTimes(1);
-    expect(q('[role="region"][aria-label="Draft outreach for B-TRIAGE0000001"]')).not.toBeNull();
+    // a11y-05: the draft copy is its own scroll region and takes a tab stop.
+    expect(q<HTMLElement>('[role="region"][aria-label="Draft outreach for B-TRIAGE0000001"]')?.tabIndex).toBe(0);
 
     expect(enterOnConfirm().defaultPrevented).toBe(false);
     await flush();

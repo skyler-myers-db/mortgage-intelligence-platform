@@ -13,7 +13,7 @@
  * window of rows in the DOM: a cursor row outside it is brought in with the
  * virtualizer's `scrollToIndex`, then scrolled fully into view once rendered.
  */
-import { useEffect, useEffectEvent, useState, type RefObject } from 'react';
+import { useEffect, useEffectEvent, useRef, useState, type RefObject } from 'react';
 import type { LeadSummary } from '../../types';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 
@@ -61,14 +61,6 @@ export function useLeadTableCursor({
   initialCursorId = null,
   onMove,
 }: UseLeadTableCursorInput) {
-  // Budget trade (audit runtime-03 / runtime-04, the wave-4b lane's cut 4):
-  // the bailout this hook had is fixed, so it compiles cleanly without this
-  // line, but the LeadTable shell that calls it stays uncompiled (cut 5), so
-  // nothing reads its memoized values and the memo caches only cost bytes
-  // (the family compile measured +0.58 KiB br on the LeadTable chunk).
-  // Delete this line once the shell compiles.
-  'use no memo';
-
   const [cursorId, setCursorState] = useState<string | null>(initialCursorId);
   /** Every move goes through here, so the flow hears it synchronously. */
   function setCursorId(borrowerId: string) {
@@ -77,8 +69,12 @@ export function useLeadTableCursor({
   }
   const [announcement, setAnnouncement] = useState('');
   // A decision to advance from, resolved after the render that carries the
-  // decided row's new state (so "next pending" reads fresh approvals).
-  const [advanceFrom, setAdvanceFrom] = useState<string | null>(null);
+  // decided row's new state (so "next pending" reads fresh approvals). One
+  // object per request, so the same row decided twice advances twice; the
+  // effect marks the request it consumed in a ref (no setState in an effect:
+  // react-hooks/set-state-in-effect).
+  const [advanceRequest, setAdvanceRequest] = useState<{ from: string } | null>(null);
+  const consumedAdvanceRef = useRef<{ from: string } | null>(null);
   const cursorIndex = cursorId === null
     ? -1
     : sortedLeads.findIndex((lead) => lead.borrower_id === cursorId);
@@ -139,7 +135,7 @@ export function useLeadTableCursor({
 
   /** After an approve / reject write RETURNED ok: the next pending row. */
   function advanceAfter(decidedId: string) {
-    setAdvanceFrom(decidedId);
+    setAdvanceRequest({ from: decidedId });
   }
 
   // The advance reads this render's rows and approvals (an Effect Event), but
@@ -155,11 +151,11 @@ export function useLeadTableCursor({
   // Runs after the render that carries the decision (its approval state and
   // the request land in one batch), so the rows it reads are fresh.
   useEffect(() => {
-    if (advanceFrom === null) return;
+    if (advanceRequest === null || consumedAdvanceRef.current === advanceRequest) return;
     // A one-shot request, consumed after the decision's render.
-    setAdvanceFrom(null);
-    advanceToNextPending(advanceFrom);
-  }, [advanceFrom]);
+    consumedAdvanceRef.current = advanceRequest;
+    advanceToNextPending(advanceRequest.from);
+  }, [advanceRequest]);
 
   return {
     cursorId: cursorIndex >= 0 ? cursorId : null,

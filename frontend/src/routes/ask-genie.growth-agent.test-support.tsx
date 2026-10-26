@@ -92,14 +92,13 @@ vi.mock('react-router', async () => {
 
 import AskGenie from './ask-genie';
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.setConfig({ testTimeout: 20_000, hookTimeout: 20_000 });
 
 export const WORKFLOW: GrowthAgentWorkflow = {
   id: 'daily_refi_brief',
   title: 'Daily Refi Opportunity Brief',
   objective: 'Find borrowers with rate-spread economics worth reviewing today.',
-  trigger_label: 'Prime refinance economics',
+  trigger_label: 'In the Money',
   action_label: 'Open eligible refi subset',
   source_assets: [
     'mip.gold.borrower_360',
@@ -110,7 +109,7 @@ export const WORKFLOW: GrowthAgentWorkflow = {
   proof_points: [
     'Broad count uses borrower_360.in_the_money.',
     'Actionable count requires Lead Queue eligibility and opt-in.',
-    'The route opens only the eligible Prime Refi Candidate subset.',
+    'The route opens only the eligible in-the-money subset.',
   ],
   cadence_options: ['daily', 'weekly'],
 };
@@ -298,7 +297,7 @@ export function registerGrowthAgentRoutePanelHooks() {
         ...WORKFLOW,
         id: 'custom_segment_watch',
         title: 'Custom Segment Workflow',
-        trigger_label: 'Prime Refi Candidates or Listed for Sale segment screen',
+        trigger_label: 'In the Money or Listed for Sale segment screen',
         action_label: 'Open eligible custom subset',
       },
       specialist_agent: 'campaign_agent',

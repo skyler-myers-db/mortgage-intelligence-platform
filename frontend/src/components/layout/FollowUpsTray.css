@@ -19,6 +19,7 @@
    withheld row's closed reason, or the open Snooze group, on its own line
    below. The meta line takes the full row, so the due time never rides up
    beside a short reason. */
+@layer routes {
 .followups {
   position: fixed;
   inset: auto;
@@ -113,7 +114,11 @@
   font-size: var(--fs-12);
   color: var(--text-2);
 }
+}
+@layer components {
 .followups__snooze { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+}
+@layer routes {
 .followups__snooze.btn { flex-basis: auto; }
 .followups__hint { flex-basis: 100%; margin: 0; font-size: var(--fs-11); color: var(--text-3); }
 .followups__empty { margin: 0; padding: var(--sp-3) 0; font-size: var(--fs-12); color: var(--text-2); }
@@ -136,4 +141,5 @@
 .followups { transition: opacity var(--dur-fast) var(--ease), translate var(--dur-fast) var(--ease); }
 @media (prefers-reduced-motion: reduce) {
   .followups { transition: none; }
+}
 }

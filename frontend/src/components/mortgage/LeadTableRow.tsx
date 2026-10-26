@@ -10,10 +10,16 @@ import { ConfidenceMeter } from './ConfidenceMeter';
 import type { LeadDecisionReceipt } from './DecisionReceipt';
 import { RowPreview } from './LeadRowPreview';
 import { LeadRowWorkflowPanel } from './LeadRowWorkflowPanel';
-import { LEAD_TABLE_COLUMNS, type LeadTableColumnKey, type LeadTableView } from './LeadTable.columns';
+import {
+  leadTableComplianceInBorrowerCell,
+  useLeadTableColumns,
+  type LeadTableColumnKey,
+  type LeadTableView,
+} from './LeadTable.columns';
 import { LeadTableOverflowChip } from './LeadTableOverflowChip';
 import {
   LeadAssignmentCell,
+  LeadComplianceChips,
   LeadRelationshipCell,
   LeadStatusCell,
   LeadWorkflowFieldCell,
@@ -21,6 +27,11 @@ import {
 import { APPROVER_ROLE_STATUS_ID, describedBy } from './approverGate';
 import { ScoreBadge } from './ScoreBadge';
 import type { ApprovalRequestMark } from './LeadTable.types';
+import { Tooltip } from '../ui/Tooltip';
+import type { OutreachDecision } from '../../lib/mutations/outreach';
+
+/** Outreach still revocable (flow-v2): none or queued (an absent status reads as none). */
+const REVOCABLE_OUTREACH: ReadonlySet<string> = new Set(['none', 'queued']);
 
 interface LeadTableRowProps {
   lead: LeadSummary;
@@ -44,7 +55,7 @@ interface LeadTableRowProps {
    * (audit stack-09). Either one disables both buttons; only an approve
    * reads "Approving…".
    */
-  pendingDecision?: 'approve' | 'reject' | null;
+  pendingDecision?: OutreachDecision | null;
   /** The audit row this row's decision wrote; the expanded preview reads it back. */
   decisionReceipt?: LeadDecisionReceipt | null;
   /** The keyboard cursor is on this row (audit tables-03): A / R / X / Enter act here. */
@@ -68,6 +79,12 @@ interface LeadTableRowProps {
   canRequestApproval?: boolean;
   requestBlockedReason?: string | null;
   onRequestApproval?: (borrowerId: string) => void;
+  /**
+   * An approver on an unbound queue (flow-v2; deviation:revoke-approval):
+   * an Approved row whose outreach is none or queued offers Revoke.
+   */
+  canRevoke?: boolean;
+  onRevoke?: (borrowerId: string) => void;
   onToggleRow: (lead: LeadSummary, isOpen: boolean) => void;
   /** `range`: Shift was held (audit tables-07): select from the anchor to this row. */
   onToggleSelect: (borrowerId: string, range: boolean) => void;
@@ -85,6 +102,14 @@ interface LeadTableRowProps {
 function ignoreChange(): void {
   // The row checkbox toggles in onClick (see the select cell).
 }
+
+/**
+ * A click on (or inside) one of these never toggles the row (audit a11y-05):
+ * every in-row control acts alone, and the row needs no static-element click
+ * stoppers. The select cell and the approval-actions box are their controls'
+ * hit areas, so a click in their padding stays a no-op, as it was.
+ */
+const ROW_TOGGLE_IGNORED ='a, button, input, select, textarea, label, .tbl-cell--select, .lead-table__approval-actions';
 
 const SEGMENT_SOURCE = {
   title: 'Segment membership',
@@ -123,6 +148,8 @@ export function LeadTableRow({
   canRequestApproval = false,
   requestBlockedReason = null,
   onRequestApproval,
+  canRevoke = false,
+  onRevoke,
   onToggleRow,
   onToggleSelect,
   onApprove,
@@ -131,8 +158,11 @@ export function LeadTableRow({
   onAssignmentUpdate,
   onFocusRow,
 }: LeadTableRowProps) {
-  const stop = (e: ReactMouseEvent) => e.stopPropagation();
-  const toggleRow = () => onToggleRow(lead, isOpen);
+  const toggleRow = (event: ReactMouseEvent<HTMLTableRowElement>) => {
+    const control = event.target instanceof Element ? event.target.closest(ROW_TOGGLE_IGNORED) : null;
+    if (control !== null && event.currentTarget.contains(control)) return;
+    onToggleRow(lead, isOpen);
+  };
   const expand = () => {
     if (!isOpen) onToggleRow(lead, isOpen);
   };
@@ -145,14 +175,18 @@ export function LeadTableRow({
     gated && APPROVER_ROLE_STATUS_ID,
     approvalActionsDisabled && 'campaign-binding-status',
   );
-  const columns = LEAD_TABLE_COLUMNS[view];
+  const columns = useLeadTableColumns(view);
+  // A hidden Status (Review) or Relationship (Sales ops) cell would take the
+  // DNC / Suppressed / Owner-unresolved caveats with it: the Borrower cell,
+  // which is never hideable, carries them instead.
+  const complianceInBorrowerCell = leadTableComplianceInBorrowerCell(view, columns);
   const offerLabel = offerDisplayLabel(lead.recommended_offer_code, lead.recommended_offer);
   const decisionPending = pendingDecision !== null;
   const [primarySegment, ...moreSegments] = lead.segment_codes;
 
   const cells: Record<LeadTableColumnKey, () => ReactNode> = {
     select: () => (
-      <td className="tbl-cell--select" onClick={stop}>
+      <td className="tbl-cell--select">
         <input
           type="checkbox"
           aria-label={`Select lead ${lead.borrower_id}`}
@@ -194,19 +228,24 @@ export function LeadTableRow({
         >
           <span className="mono lead-table__borrower">{lead.borrower_id}</span>
           {/* One opaque token — it truncates with an ellipsis rather than
-              wrapping mid-identifier, so the full ref rides on `title`. */}
-          <span
-            className="mono muted lead-table__clip"
-            title={lead.clip && lead.clip.length > 0 ? lead.clip : undefined}
-          >
-            {lead.clip && lead.clip.length > 0 ? lead.clip : 'Property ref unavailable'}
-          </span>
+              wrapping mid-identifier, so the full ref rides on the
+              design-system tooltip (critic-08; no native title). */}
+          {lead.clip && lead.clip.length > 0 ? (
+            <Tooltip content={lead.clip}>
+              <span className="mono muted lead-table__clip">{lead.clip}</span>
+            </Tooltip>
+          ) : (
+            <span className="mono muted lead-table__clip">Property ref unavailable</span>
+          )}
         </button>
+        {complianceInBorrowerCell && <LeadComplianceChips lead={lead} inBorrowerCell />}
       </td>
     ),
     location: () => (
       <td className="lead-table__location">
-        <div className="lead-table__city" title={`${lead.city}, ${lead.state}`}>{lead.city}, {lead.state}</div>
+        <Tooltip content={`${lead.city}, ${lead.state}`}>
+          <div className="lead-table__city">{lead.city}, {lead.state}</div>
+        </Tooltip>
         <div className="muted mono lead-table__zip">{lead.zip}</div>
       </td>
     ),
@@ -222,13 +261,14 @@ export function LeadTableRow({
       <td>
         <div className="lead-table__line lead-table__segments">
           {primarySegment && (
-            <span
-              className="chip chip--segment chip--compact"
-              style={{ '--chip-hue': segmentColor(primarySegment) } as CSSProperties}
-              title={safeSegmentName(primarySegment) ?? 'Unknown segment'}
-            >
-              <span className="chip__label">{safeSegmentName(primarySegment) ?? 'Unknown segment'}</span>
-            </span>
+            <Tooltip content={safeSegmentName(primarySegment) ?? 'Unknown segment'}>
+              <span
+                className="chip chip--segment chip--compact"
+                style={{ '--chip-hue': segmentColor(primarySegment) } as CSSProperties}
+              >
+                <span className="chip__label">{safeSegmentName(primarySegment) ?? 'Unknown segment'}</span>
+              </span>
+            </Tooltip>
           )}
           <LeadTableOverflowChip
             items={moreSegments.map((code) => ({ field: 'Segment', value: safeSegmentName(code) ?? 'Unknown segment' }))}
@@ -250,7 +290,9 @@ export function LeadTableRow({
     offer: () => (
       <td>
         <div className="lead-table__line">
-          <span className="mono fs-12 text-1 lead-table__offer" title={offerLabel}>{offerLabel}</span>
+          <Tooltip content={offerLabel}>
+            <span className="mono fs-12 text-1 lead-table__offer">{offerLabel}</span>
+          </Tooltip>
           {/* The prototype's in-row chip is a short rule tag
               (design_files/Module 0 Prototype.html:2052, `nbo_v3`): "rules"
               on screen, the full source name for assistive tech. */}
@@ -273,20 +315,42 @@ export function LeadTableRow({
     status: () => <LeadStatusCell lead={lead} onExpand={expand} />,
     approval: () => (
       <td className="tbl-cell--approval" data-testid={`lead-approval-cell-${lead.borrower_id}`}>
-        {approval === 'approved' && <Chip variant="success" icon="check">Approved</Chip>}
+        {/* One centring box for the chip and its icon-only Revoke
+            (deviation:revoke-approval): as bare inline siblings the textless
+            button's synthesized baseline deepened the line box and dropped
+            the chip below the row's centre. Not the approval-actions box: a
+            click on the chip still expands the row, and no gap is added. */}
+        {approval === 'approved' && (
+          <div className="lead-table__approval-state">
+            <Chip variant="success" icon="check">Approved</Chip>
+            {canRevoke && onRevoke && REVOCABLE_OUTREACH.has(lead.outreach_status ?? 'none') && (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="down"
+                className="lead-table__revoke"
+                loading={pendingDecision === 'revoke'}
+                tooltip="Revoke approval"
+                aria-label={`Revoke approval for ${lead.borrower_id}`}
+                onClick={() => onRevoke(lead.borrower_id)}
+                data-testid={`lead-revoke-${lead.borrower_id}`}
+              />
+            )}
+          </div>
+        )}
         {approval === 'rejected' && <Chip variant="danger" icon="cross">Rejected</Chip>}
         {approval === 'hold' && <Chip variant="warning" icon="shield">Hold</Chip>}
         {!approval && !isApprovalEligible && <Chip variant="warning" icon="shield">Not actionable</Chip>}
         {!approval && isApprovalEligible && requestMark?.tone === 'warning' && requestMark.node}
         {!approval && isApprovalEligible && requestMark?.tone !== 'warning' && (
-          <div className="lead-table__approval-actions" onClick={stop}>
+          <div className="lead-table__approval-actions">
             <Button
               variant="primary"
               size="sm"
               icon="check"
               disabled={gated || approvalActionsDisabled || decisionPending}
               aria-describedby={decisionDescribedBy}
-              title={approverGate ?? undefined}
+              tooltip={approverGate ?? undefined}
               onClick={(e) => {
                 e.stopPropagation();
                 onApprove(lead.borrower_id);
@@ -308,7 +372,7 @@ export function LeadTableRow({
               loading={pendingDecision === 'reject'}
               aria-label={`Reject ${lead.borrower_id}`}
               aria-keyshortcuts={rowKeys && !gated ? 'R' : undefined}
-              title={approverGate ?? 'Reject'}
+              tooltip={approverGate ?? 'Reject'}
               disabled={gated || approvalActionsDisabled || pendingDecision === 'approve'}
               aria-describedby={decisionDescribedBy}
               onClick={(e) => {

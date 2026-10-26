@@ -74,7 +74,11 @@ export interface ActorScopeEvent {
 /** The owner stamp of an area whose private data belongs to no actor. */
 export const NOBODY = '~nobody';
 
-const PRIVATE_LOCAL = Object.freeze(['mip.pinnedInsights', 'mip.genie.conversationId'] as const);
+const PRIVATE_LOCAL = Object.freeze([
+  'mip.pinnedInsights',
+  'mip.genie.conversationId',
+  'mip.leadQueue.savedViews.v1',
+] as const);
 const PRIVATE_SESSION = Object.freeze([
   'mip-genie-conversation-v1',
   'mip.genie.inFlightTurn',
