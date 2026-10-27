@@ -812,6 +812,46 @@ def test_the_owner_steps_name_the_bundle_host_and_pin_exactly() -> None:
         assert row in section, f"workspace-global inventory row {row}"
 
 
+WORKFLOWS_README = ROOT / ".github" / "workflows" / "README.md"
+
+
+def _readme_row(text: str, name: str) -> str:
+    rows = [line for line in text.splitlines() if line.startswith(f"| `{name}` |")]
+    assert len(rows) == 1, name
+    return rows[0]
+
+
+def test_the_workflow_readme_and_fork_steps_match_the_ci_only_workflows() -> None:
+    """Post-W5 review: the secrets/variables map and the fork steps describe the workflows as built.
+
+    deploy-dev.yml and nightly.yml address only the pr105-host target, whose
+    host anchor configure-workspace.sh never rebinds, and both refuse the live
+    catalog fallbacks through the shared metastore.
+    """
+
+    readme = WORKFLOWS_README.read_text(encoding="utf-8")
+    flat = _flat(readme)
+    host = yaml.safe_load(BUNDLE.read_text(encoding="utf-8"))["targets"][CI_TARGET]["workspace"]["host"]
+
+    assert "talks to the real dev Databricks workspace" not in flat
+    assert "the CI staging install on the forked-anchor `pr105-host` target" in flat
+    assert f"The `{CI_TARGET}` CI staging workspace URL, `{host}`" in _readme_row(readme, "DATABRICKS_HOST")
+    catalog = _readme_row(readme, "MIP_DEFAULT_CATALOG")
+    assert "Defaults to `mip`" not in catalog
+    assert "refuses an unset value or any UC spelling of a live catalog" in catalog
+    sync = _readme_row(readme, "MIP_LAKEBASE_SYNC_CATALOG")
+    assert "Defaults to `mip_app_state`" not in sync and "both workflows refuse it" in sync
+    assert "`deploy-dev.yml` refuses each name in the isolation rule table's `LIVE_DEFAULTS`" in flat
+
+    fork = _flat(DEPLOYMENT_DOC.read_text(encoding="utf-8").split("2. For a customer fork", 1)[1].split("\n3. ", 1)[0])
+    assert "the repository or environment configuration used by GitHub Actions must identify" not in fork
+    assert "`deploy-dev.yml` and `nightly.yml` are Entrada CI only" in fork
+    assert "never rebound by `scripts/configure-workspace.sh`" in fork
+    assert "A fork deploys with `./scripts/deploy.sh -t dev`." in fork
+    configure = (ROOT / "scripts" / "configure-workspace.sh").read_text(encoding="utf-8")
+    assert "&default_host" in configure and "ci_staging_host" not in configure, "the fork helper rebinds one anchor"
+
+
 GRANTS_DOC = ROOT / "docs" / "security" / "GRANTS.md"
 RUNBOOK = ROOT / "docs" / "runbook.md"
 

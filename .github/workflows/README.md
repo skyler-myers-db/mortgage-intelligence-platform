@@ -16,7 +16,10 @@ fixtures that explicitly install in-process repositories where needed.
 No real workspace is touched.
 
 The live validation workflow (`nightly.yml`, retained under its historical
-filename) intentionally talks to the real dev Databricks workspace so drift
+filename) intentionally talks to a real Databricks workspace: the CI staging
+install on the forked-anchor `pr105-host` target, the same install
+`deploy-dev.yml` deploys (docs/deployment.md, "CI staging install"), once the
+repository-level names point there (owner step 6). It runs there so drift
 between the SQL UDFs + Python scoring mirrors, Lakebase, Genie, deployed-app
 auth, and the degraded-banner proof is caught before a release. It is manual
 only because the refresh jobs, Genie prompts, and browser matrix burn real
@@ -101,7 +104,7 @@ var.
 
 | Secret | What it is | How to obtain |
 |---|---|---|
-| `DATABRICKS_HOST` | Workspace URL (e.g. `https://<id>.cloud.databricks.com`). | Databricks UI → workspace URL in browser address bar. |
+| `DATABRICKS_HOST` | The `pr105-host` CI staging workspace URL, `https://dbc-149e560d-e056.cloud.databricks.com` (the `&ci_staging_host` anchor in `databricks.yml`), never the live workspace. | `deploy-dev.yml` refuses any other host before its first workspace call. In `nightly.yml`, parity-live's bundle validate refuses it, but kill-drill-simulated still reads whatever host this names (docs/deployment.md, owner step 6). |
 | `DATABRICKS_TOKEN` | Workspace-admin Personal Access Token used as the principal-pinned full-inventory/deployment authority. It is not reused as an app bearer or treated as the product app-admin identity. | Databricks UI → User Settings → Developer → Access Tokens → Generate new token. Confirm `current-user me` contains the `admins` group; rotate every 90 days (see `docs/runbook.md` §5). |
 | `DATABRICKS_WAREHOUSE_ID` | ID of the dev serverless SQL warehouse. Same value `databricks bundle validate` resolves from `databricks.yml`. | Databricks UI → SQL Warehouses → click the warehouse → copy from URL or Connection Details. |
 | `GENIE_SPACE_ID` | Mortgage Lead Intelligence Genie Space ID. | Databricks UI → Genie → open the space → copy ID from URL. Also tracked at `genie/space_id.txt`. |
@@ -141,14 +144,20 @@ Secrets and variables → Actions → Variables** before `deploy-dev.yml` runs. 
 workflow fails closed if both are empty, so dev deploys do not implicitly grant
 app-admin access to the Databricks PAT owner.
 
+The "Defaults to" values below are the workflows' fallbacks, which are the
+live install's names. `deploy-dev.yml` refuses each name in the isolation rule
+table's `LIVE_DEFAULTS` (`tools/databricks/ci_install_isolation.py`) left unset
+or at its live default, and `nightly.yml` refuses the two catalog names, so set
+each to the CI staging install's value (docs/deployment.md, owner step 6).
+
 | Variable | What it is | Notes |
 |---|---|---|
 | `MIP_ADMIN_EMAILS` | Comma-separated app-admin email allowlist for the dev app. | Use when a named operator must access `/api/v1/admin/*`. |
 | `MIP_ADMIN_GROUP_NAME` | Optional local/test compatibility group name. | Deployed automation uses the exact `MIP_ADMIN_IDENTITIES` value derived from `DATABRICKS_ADMIN_CLIENT_ID`; group headers are not authoritative in sandbox/production. |
-| `MIP_DEFAULT_CATALOG` | Target Unity Catalog name. | Defaults to `mip`; deploy and every nightly proof/render step use the same value. |
+| `MIP_DEFAULT_CATALOG` | Target Unity Catalog name. | Required. The workflow fallback `mip` is the live catalog, and the `pr105-host` workspace shares the live install's metastore, so the isolation rule table (`tools/databricks/ci_install_isolation.py`) refuses an unset value or any UC spelling of a live catalog, in `deploy-dev.yml`'s preflight and in `nightly.yml`'s first job. Deploy and every nightly proof/render step use the same value. |
 | `MIP_APP_NAME` | Bundle-managed Databricks App name. | Defaults to `mip-app`; use a unique DNS-style value for every isolated staging/customer workspace. |
 | `MIP_LAKEBASE_INSTANCE` | Bundle-managed Lakebase instance name. | Defaults to `mip-app-state`; it must match `LAKEBASE_INSTANCE_NAME` if that compatibility alias is also set. |
-| `MIP_LAKEBASE_SYNC_CATALOG` | Bundle-managed Lakebase synced-table catalog. | Defaults to `mip_app_state`; use a unique Unity Catalog identifier outside the established dev installation. |
+| `MIP_LAKEBASE_SYNC_CATALOG` | Bundle-managed Lakebase synced-table catalog. | Required. The workflow fallback `mip_app_state` is the live catalog; both workflows refuse it like `MIP_DEFAULT_CATALOG`. |
 | `LAKEBASE_DATABASE` | Database inside the Lakebase instance that owns `mip_app`. | Defaults to `mip_app_state`; it must match `MIP_LAKEBASE_DATABASE_NAME` if that compatibility alias is also set. |
 | `MIP_GENIE_SPACE_NAME` | Human-readable governed Genie space title. | Defaults to `Mortgage Lead Intelligence`; use an environment-qualified title when several spaces share an account. |
 | `MIP_RUNTIME_SECRET_SCOPE` | Databricks secret scope for App runtime bindings. | Defaults to `mip-runtime`; isolate it per deployment. |

@@ -127,9 +127,13 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
 ./scripts/configure-workspace.sh https://<customer-workspace>.cloud.databricks.com
 ```
 
-   The `databricks.yml` host anchor, `DATABRICKS_HOST`, and the repository or
-   environment configuration used by GitHub Actions must identify that same
-   workspace. Before the first deployment into an isolated workspace, run:
+   The `databricks.yml` host anchor and `DATABRICKS_HOST` must identify that
+   same workspace. `deploy-dev.yml` and `nightly.yml` are Entrada CI only:
+   both address the `pr105-host` target, whose `&ci_staging_host` anchor
+   names Entrada's CI staging workspace and is never rebound by
+   `scripts/configure-workspace.sh`, so a fork's `deploy-dev.yml` run fails
+   closed at its host check. A fork deploys with `./scripts/deploy.sh -t dev`.
+   Before the first deployment into an isolated workspace, run:
 
 ```bash
 python tools/databricks/bundle_env.py validate -t dev
