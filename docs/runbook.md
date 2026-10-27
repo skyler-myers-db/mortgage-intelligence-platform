@@ -1268,56 +1268,55 @@ row.
    the two paths. Fix: see §11's identity-fallback note — governance
    regression, route accordingly.
 
-### R4-08 Map won't drill from state to county
+### R4-08 Map won't drill from state to ZIP
 
-**Symptom:** the user clicks a state on the footprint map and the
-county layer hangs on "Loading counties…" or shows no data.
+**Symptom:** the user clicks a state on the map and the ZIP layer hangs on
+its loading line, shows no data, or shows ZIP tiles instead of ZIP-area
+polygons.
+
+The map drills state → ZIP (PR #182). The county grain is retired: the
+Cotality share carries one county FIPS per state, so `gold.county_rollup`
+emits a NULL `fips_5` and `/api/v1/geo/county-rollups` answers an empty list
+by design. An empty county list is not this incident.
 
 **Likely causes, in order:**
 
-1. **`/api/v1/geo/county-rollups` is 503** — warehouse down, warehouse
-   breaker open, or `mip.gold.county_rollup` empty.
+1. **`/api/v1/geo/zip-rollups` is 503, or `mip.gold.zip_rollup` is empty or
+   stale** — warehouse down, warehouse breaker open, or gold not rebuilt.
 
    Confirm:
    ```bash
    curl -s -o /dev/null -w '%{http_code}\n' \
-     "$MIP_APP_URL/api/v1/geo/county-rollups?state=IL"
+     "$MIP_APP_URL/api/v1/geo/zip-rollups?state=IL"
    curl -s "$MIP_APP_URL/api/v1/health" \
      | jq '{warehouse_dep: .dependencies.warehouse, warehouse_breaker: .circuit_breakers.warehouse}'
    databricks api post /api/2.0/sql/statements \
-     --json '{"statement":"SELECT state_code, COUNT(*) AS n FROM mip.gold.county_rollup GROUP BY state_code","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
+     --json '{"statement":"SELECT state, COUNT(*) AS zips, MAX(snapshot_date) AS snapshot FROM mip.gold.zip_rollup GROUP BY state","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
    ```
-   Empty per-state counts ⇒ gold table was never built. Fix:
-   `databricks bundle run mip_refresh_scores -t dev` (the rollup is
-   part of the chain in §4 step 7). Warehouse down ⇒ §1.1.
+   Warehouse down ⇒ §1.1. Empty or stale per-state rows ⇒ rebuild gold with
+   the governed `./scripts/deploy.sh -t dev` or, where that run is NO-GO, the
+   "Interim refresh (governed deploy NO-GO)" procedure (§4). **Never
+   `databricks bundle run` or `run-now` the deployed `mip_refresh_scores`,
+   and never press Admin → Rebuild scoring snapshot, on an install whose
+   deployed jobs predate the current bundle:** a stale gold job still carrying
+   `publish_fn_*` tasks republishes the three reviewed Growth Agent functions
+   and drops their `EXECUTE` grants.
 
-2. **Session footprint context out of sync with gold** — the user's
-   footprint list includes a state that isn't actually in
-   `mip.gold.county_rollup`. Clicking it returns 200 with an empty
-   `counties: []` and the map shows no features.
+2. **The drill does not reconcile** — for the drilled state,
+   `sum(zip.addressable_borrowers)` differs from
+   `state.addressable - state.zip_unassigned_count`, so the ZIP and state
+   rows come from different rebuilds (a partial gold run). Confirm with
+   `GET /api/v1/geo/state-rollups` and `GET /api/v1/geo/zip-rollups?state=XX`;
+   `tools/verify_live.py` and `scripts/smoke_live.sh` run the same check on
+   the largest populated state. Fix: one complete gold rebuild, as in cause 1.
 
-   Confirm:
-   ```bash
-   curl -s "$MIP_APP_URL/api/v1/portfolio/preview" | jq '.footprint'
-   ```
-   Cross-check discovered states/counties against the SQL query above. The app
-   should disclose whatever county coverage is present after the latest gold
-   refresh; if the session shows a different state set, route the drift to
-   data-modeler and do not record the demo until gold/UI coverage agrees.
-
-3. **`/us-counties.json` TopoJSON returning HTML** — the SPA catch-all
-   route is serving `index.html` at that asset path instead of the
-   static TopoJSON. This was fixed in the Cycle-8 post-merge round and
-   shouldn't recur, but check first because it masquerades as a county
-   rollup bug.
-
-   Confirm:
-   ```bash
-   curl -s -I "$MIP_APP_URL/us-counties.json" | grep -i content-type
-   curl -s "$MIP_APP_URL/us-counties.json" | head -c 80
-   ```
-   Expect `application/json` and a leading `{`. If you see `text/html`
-   or `<!doctype`, the static-file mount in `backend/runtime.py`
-   regressed. Fix: redeploy (`./scripts/deploy.sh`) and verify the
-   frontend build's `frontend/dist/us-counties.json` is present in the
-   bundle sync.
+3. **The ZIP-area geometry did not load** — the ZIP rows arrive but the map
+   shows ZIP tiles, its fallback, instead of polygons. Each state's geometry
+   is a hashed static asset built from `frontend/src/geo/zcta/<USPS>.topo.json`
+   and fetched once from `/assets/` on the first drill into that state (no API
+   call, no audit row). Confirm in the browser's network panel that the
+   state's `.topo` asset answers 200 with JSON. An HTML answer means the SPA
+   catch-all served `index.html` instead (the static mount in
+   `backend/runtime.py` regressed); a 404 means the App source lacks the
+   built asset. Fix: redeploy the App payload from a full frontend build
+   (`./scripts/deploy.sh`, or the payload deploy path the install uses).

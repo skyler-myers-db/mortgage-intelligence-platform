@@ -827,6 +827,11 @@ GEO_DRILL_DEFECTS = [
         id="county-row-four-digit-fips",
     ),
     pytest.param(
+        {"counties": _drill_counties(rollups=[{"fips_5": "1703A", "state": "IL"}])},
+        _COUNTY_FLAG + "county row without a 5-digit fips_5: 1 row(s), first '1703A'",
+        id="county-row-non-numeric-fips",
+    ),
+    pytest.param(
         {"counties": _drill_counties(rollups=[{"fips_5": "17031", "state": "WI"}])},
         _COUNTY_FLAG + "county row outside IL: 1 row(s), first 'WI'",
         id="county-row-other-state",

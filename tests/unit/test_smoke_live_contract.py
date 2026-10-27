@@ -421,6 +421,11 @@ SMOKE_GEO_REFUSALS = [
         id="county-row-four-digit-fips",
     ),
     pytest.param(
+        {"counties": _smoke_counties(rollups=[{"fips_5": "1703A", "state": "IL"}])},
+        _COUNTY_REFUSED,
+        id="county-row-non-numeric-fips",
+    ),
+    pytest.param(
         {"counties": _smoke_counties(rollups=[{"fips_5": "17031", "state": "WI"}])},
         _COUNTY_REFUSED,
         id="county-row-other-state",
@@ -511,3 +516,26 @@ def test_smoke_geo_drill_captures_the_state_counts_before_the_zip_probe() -> Non
     text = SMOKE_SCRIPT.read_text(encoding="utf-8")
     assert "county_fips=" not in text
     assert "SMOKE_FIPS" not in text
+
+
+def test_the_runbook_map_drill_playbook_is_state_to_zip_and_never_runs_the_stale_gold_job() -> None:
+    runbook = (REPO / "docs" / "runbook.md").read_text(encoding="utf-8")
+    start = runbook.index("### R4-08 Map won't drill from state to ZIP")
+    end = runbook.find("\n### ", start + 1)
+    section = " ".join(runbook[start : end if end != -1 else None].split())
+
+    assert "Map won't drill from state to county" not in runbook, "the retired county drill playbook is gone"
+    for retired in ("Loading counties", "us-counties.json", "county-rollups?state=IL"):
+        assert retired not in section, retired
+    assert "`/api/v1/geo/zip-rollups` is 503, or `mip.gold.zip_rollup` is empty or stale" in section
+    assert "`sum(zip.addressable_borrowers)` differs from `state.addressable - state.zip_unassigned_count`" in section
+    assert '"Interim refresh (governed deploy NO-GO)" procedure' in section
+    assert (
+        "**Never `databricks bundle run` or `run-now` the deployed `mip_refresh_scores`, and never press Admin → "
+        "Rebuild scoring snapshot, on an install whose deployed jobs predate the current bundle:**"
+    ) in section
+    assert "bundle run mip_refresh_scores" not in section, "no fix tells an operator to run the deployed gold job"
+    # docs/testing.md: only verify_live probes the Lead Queue deep link.
+    testing = " ".join((REPO / "docs" / "testing.md").read_text(encoding="utf-8").split())
+    assert "`verify_live` alone also probes the Lead Queue deep link, by `state` + `zip`, never `county`;" in testing
+    assert "`smoke_live.sh` has no Lead Queue geo probe." in testing
