@@ -167,10 +167,10 @@ describe('virtual screen reader: Lead Queue table and approval gate', () => {
     const minus = row.filter((phrase) => phrase.includes('−35'));
     expect(minus.length).toBeGreaterThan(0);
     expect(row.some((phrase) => phrase.includes('-35'))).toBe(false);
-    // The score badge's sentence is TEXT the cursor reads, one phrase, not a
-    // name on its role-less span (which ARIA 1.2 prohibits and real screen
-    // readers drop); the shown number is hidden, so it is not read twice.
-    expect(row).toContain('Opportunity score 88. Scores of 75+ are the strongest review candidates.');
+    // The score badge is a named IMAGE, one phrase, not a name on a role-less
+    // span (which ARIA 1.2 prohibits and real screen readers drop); its
+    // children are presentational, so the shown number is not read twice.
+    expect(row.some((phrase) => phrase.startsWith('image, Opportunity score 88. Scores of 75+ are the strongest review candidates.'))).toBe(true);
     expect(row).not.toContain('88');
 
     const approveButton = document.querySelector<HTMLButtonElement>(`[data-testid="lead-approve-${IDS[0]}"]`)!;

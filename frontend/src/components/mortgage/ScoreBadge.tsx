@@ -12,13 +12,19 @@ export function ScoreBadge({ value }: { value: number }) {
   const tier = scoreBand(value);
   return (
     <Tooltip content={SCORE_NOTE}>
-      {/* The sentence is visually hidden text, not an aria-label: ARIA 1.2
-          prohibits a name on a role-less span, and screen readers that honour
-          the rule read only the bare number. One hidden run, with the shown
-          number hidden from assistive tech, so it is read as one phrase. */}
-      <span className={`score score--${tier}`}>
+      {/* role="img": ARIA 1.2 prohibits a name on a role-less span, and
+          screen readers that honour the rule read only the bare number. An
+          image is named and reads as one phrase, and the badge's text stays
+          the bare number that other readers of `.score` parse (the live
+          segment_intersection_live.spec.ts ranks rows by it). An image's
+          children are presentational in browsers; aria-hidden says so for
+          readers that walk into it anyway, so the number is not read twice. */}
+      <span
+        className={`score score--${tier}`}
+        role="img"
+        aria-label={`Opportunity score ${value}. Scores of ${HIGH_OPPORTUNITY_SCORE_LABEL} are the strongest review candidates.`}
+      >
         <span className="score__dot" />
-        <span className="sr-only">{`Opportunity score ${value}. Scores of ${HIGH_OPPORTUNITY_SCORE_LABEL} are the strongest review candidates.`}</span>
         <span aria-hidden="true">{value}</span>
       </span>
     </Tooltip>
