@@ -22,11 +22,14 @@ from __future__ import annotations
 
 import fnmatch
 import subprocess
+import zipfile
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+
+from tools import release_hygiene
 
 ROOT = Path(__file__).resolve().parents[2]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
@@ -224,6 +227,22 @@ def test_blob_reports_stay_out_of_git_and_the_app_source() -> None:
     # .gitignore, like playwright-report/ and test-results/.
     ignored = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert "blob-report/" in ignored
+
+
+def test_the_release_source_zip_refuses_a_blob_report(tmp_path: Path) -> None:
+    # Belt and braces, like playwright-report/ and test-results/: the source
+    # package starts from `git archive`, but its hygiene check and cleanup
+    # list name the blob folder too.
+    archive = tmp_path / "source.zip"
+    with zipfile.ZipFile(archive, "w") as zipped:
+        zipped.writestr("mip/frontend/blob-report/report-1.zip", b"PK")
+        zipped.writestr("mip/frontend/src/main.tsx", b"")
+    findings = release_hygiene.inspect_zip(str(archive))
+    assert [(finding.path, finding.reason) for finding in findings] == [
+        ("mip/frontend/blob-report/report-1.zip", "banned directory or path segment: blob-report")
+    ]
+    package = (ROOT / "scripts" / "package_source.sh").read_text(encoding="utf-8")
+    assert '"$STAGE/frontend/blob-report"' in package
 
 
 def test_docs_name_the_sharded_jobs_and_the_report_artifact() -> None:
