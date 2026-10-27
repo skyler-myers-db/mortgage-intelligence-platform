@@ -57,10 +57,6 @@ function revealSimilarPlaceholder(element: HTMLParagraphElement | null): void {
   element?.scrollIntoView?.({ block: 'nearest' });
 }
 
-// The receipt block's id lives with the table (the keyboard flow focuses it),
-// so the flow imports nothing of this lazy chunk (LeadRowExpanded).
-export { leadReceiptAnchorId };
-
 /**
  * The expanded row's approval gate (audit tables-01): the prototype's
  * ApprovalBanner under the Primary offer card (design_files/Module 0

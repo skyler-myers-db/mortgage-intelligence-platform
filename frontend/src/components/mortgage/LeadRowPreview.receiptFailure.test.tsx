@@ -10,7 +10,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { act, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
-import { RowPreview, leadReceiptAnchorId } from './LeadRowPreview';
+import { RowPreview } from './LeadRowPreview';
+import { leadReceiptAnchorId } from './LeadRowPreview.ids';
 
 vi.mock('../Primitives', () => ({
   Button: ({ children, ...props }: { children: ReactNode }) => <button type="button" {...props}>{children}</button>,
