@@ -24,6 +24,9 @@ REPO = Path(__file__).resolve().parents[2]
 BUNDLE = REPO / "databricks.yml"
 DEV_PREFIX = "[dev someone] "  # synthetic stand-in for the CLI's `[dev <short user name>] ` prefix
 SUFFIXES = ("", "_ci")  # the live install and the CI staging install
+# The forked-anchor CI staging target (deploy-dev.yml only); its install always
+# carries the `_ci` suffix and its own workspace's /Shared.
+CI_TARGET = "pr105-host"
 
 
 def _cli_presets_name(name: str, prefix: str) -> str:
@@ -81,7 +84,7 @@ def test_every_target_renders_one_valid_path_directly_under_shared(suffix: str) 
     declared = bundle["resources"]["experiments"]["mip_lead_scoring"]["name"]
     name = declared.replace("${var.install_suffix}", suffix)
 
-    assert set(bundle["targets"]) == {"dev", "prod", "ci"}
+    assert set(bundle["targets"]) == {"dev", "prod", "ci", CI_TARGET}
     for target_name, target in bundle["targets"].items():
         prefix = _target_prefix(target)
         rendered = _cli_presets_name(name, prefix)
@@ -93,8 +96,19 @@ def test_every_target_renders_one_valid_path_directly_under_shared(suffix: str) 
         assert posixpath.basename(rendered) == f"{prefix}mip-lead-scoring{suffix}", target_name
 
 
-def test_the_dev_target_is_the_only_prefixed_one() -> None:
+def test_the_dev_class_targets_are_the_only_prefixed_ones() -> None:
     targets = _bundle()["targets"]
 
-    assert _target_prefix(targets["dev"]) == DEV_PREFIX
+    # pr105-host is development mode too: the CLI prefixes with its deploying
+    # principal's short name, which DEV_PREFIX stands in for.
+    assert _target_prefix(targets["dev"]) == DEV_PREFIX and _target_prefix(targets[CI_TARGET]) == DEV_PREFIX
     assert _target_prefix(targets["prod"]) == "" and _target_prefix(targets["ci"]) == ""
+
+
+def test_the_ci_staging_target_renders_its_suffixed_experiment_under_its_own_shared() -> None:
+    bundle = _bundle()
+    declared = bundle["resources"]["experiments"]["mip_lead_scoring"]["name"]
+    name = declared.replace("${var.install_suffix}", "_ci")
+
+    rendered = _cli_presets_name(name, _target_prefix(bundle["targets"][CI_TARGET]))
+    assert rendered == f"/Shared/{DEV_PREFIX}mip-lead-scoring_ci"

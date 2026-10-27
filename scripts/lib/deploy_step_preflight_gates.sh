@@ -127,12 +127,15 @@ fi
 # confirmation prompt, the BUNDLE_VAR exports and any mutation: deploy-dev.yml
 # must use its own bundle root (MIP_BUNDLE_ROOT_LEAF) and staging names, and a
 # non-default root is CI-only (tools/databricks/ci_install_isolation.py, which
-# names only variables on refusal). The names are read as the gates below read
-# them (shell, then .env.local); an unset name falls back to its live default,
-# so the tool refuses it. An operator run (no leaf, not deploy-dev.yml)
-# resolves to the live root without Python: the tool's answer for that input.
+# names only variables on refusal). deploy-dev.yml deploys only to the
+# forked-anchor pr105-host target, which is deploy-dev.yml-only. The names are
+# read as the gates below read them (shell, then .env.local); an unset name
+# falls back to its live default, so the tool refuses it. An operator run (no
+# leaf, not pr105-host, not deploy-dev.yml) resolves to the live root without
+# Python: the tool's answer for that input.
 _CI_INSTALL_LEAF="$(deployment_control_value MIP_BUNDLE_ROOT_LEAF)"
-if [[ -z "$_CI_INSTALL_LEAF" && "${GITHUB_WORKFLOW_REF:-}" != *"/.github/workflows/deploy-dev.yml@"* ]]; then
+if [[ -z "$_CI_INSTALL_LEAF" && "$TARGET" != "pr105-host" && \
+      "${GITHUB_WORKFLOW_REF:-}" != *"/.github/workflows/deploy-dev.yml@"* ]]; then
   _CI_INSTALL_VARS=$'bundle_root_leaf=dev\ninstall_suffix='
 elif ! _CI_INSTALL_VARS="$(
   MIP_BUNDLE_ROOT_LEAF="$_CI_INSTALL_LEAF" \
@@ -163,7 +166,7 @@ if [[ -n "$BUNDLE_VAR_install_suffix" ]]; then
   export MIP_AI_GATEWAY_TABLE_PREFIX MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE
 fi
 MIP_BUNDLE_ROOT_LEAF_RESOLVED="$TARGET"
-if [[ "$TARGET" == "dev" ]]; then
+if [[ "$TARGET_CLASS" == "dev" ]]; then
   MIP_BUNDLE_ROOT_LEAF_RESOLVED="$BUNDLE_VAR_bundle_root_leaf"
 fi
 unset _CI_INSTALL_VARS _CI_INSTALL_LEAF
@@ -581,7 +584,7 @@ fi
 
 APP_RUNTIME_ENV="${APP_ENV:-}"
 if [[ -z "$APP_RUNTIME_ENV" ]]; then
-  if [[ "$TARGET" == "dev" ]]; then
+  if [[ "$TARGET_CLASS" == "dev" ]]; then
     APP_RUNTIME_ENV="sandbox"
   else
     APP_RUNTIME_ENV="$TARGET"

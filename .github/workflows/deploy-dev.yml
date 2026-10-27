@@ -15,7 +15,7 @@ on:
         type: boolean
         default: false
       remediate_foreign_catalog_bindings:
-        description: "One-time reviewed isolation of foreign catalogs from the MIP workspace"
+        description: "Refused on pr105-host: rewrites catalog bindings for the whole shared metastore; leave false"
         type: boolean
         default: false
       repair_normal_credential:
@@ -363,7 +363,11 @@ jobs:
           # this run never uploads into or shares state with the live
           # install. scripts/deploy.sh refuses this workflow without it, and
           # refuses any live-default name beside it (D-platform-process-b
-          # step 7; tools/databricks/ci_install_isolation.py).
+          # step 7; tools/databricks/ci_install_isolation.py). The root and
+          # suffix are defence in depth on the forked-anchor pr105-host
+          # target's own workspace, but the catalog names checked beside it
+          # are the primary UC isolation: that workspace shares the live
+          # install's metastore.
           MIP_BUNDLE_ROOT_LEAF: dev-ci
           MIP_REBASE_UNVERIFIED_APP: ${{ inputs.rebase_unverified_app && '1' || '0' }}
           MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS: ${{ inputs.remediate_foreign_catalog_bindings && '1' || '0' }}
@@ -379,7 +383,15 @@ jobs:
           SALESFORCE_SECURITY_TOKEN: ${{ secrets.SALESFORCE_SECURITY_TOKEN }}
         run: |
           set -euo pipefail
-          args=(-t dev --no-confirm)
+          # The forked-anchor CI staging target only, never `dev`: its own
+          # workspace host binds this run's auth to the staging workspace,
+          # where the reserved identities are resolved by name (unassigned
+          # in the live workspace by owner invariant; the UC metastore is
+          # shared, docs/deployment.md "CI staging install").
+          # scripts/deploy.sh and tools/databricks/bundle_env.py refuse this
+          # workflow on any other target
+          # (tools/databricks/ci_install_isolation.py).
+          args=(-t pr105-host --no-confirm)
           if [ "${{ inputs.skip_silver }}" = "true" ]; then
             args+=(--skip-silver)
           fi

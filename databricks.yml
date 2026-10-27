@@ -23,9 +23,11 @@ bundle:
 # explicit comment + SE checklist on the `prod` target below.
 #
 # DRY-up (audit R5-24, 2026-04-23): a YAML anchor on this root-level host
-# is the single source of truth. All four `workspace.host:` fields across
-# targets dereference `*default_host`. Variables cannot be used here (see
-# above), so an anchor is the correct primitive. A customer forking the
+# is the single source of truth. Every `workspace.host:` field across the
+# deployable targets dereferences `*default_host`; only the CI-only
+# `pr105-host` target carries its own `&ci_staging_host` (Entrada's CI
+# staging workspace, refused outside deploy-dev.yml). Variables cannot be
+# used here (see above), so an anchor is the correct primitive. A customer forking the
 # repo now edits EXACTLY ONE line to rebind the host. `make
 # check-workspace-host` (Makefile) greps for the literal outside this
 # anchor and fails if it finds one — a forkability safeguard so an SE
@@ -101,8 +103,9 @@ targets:
       host: *default_host
       # The leaf defaults to `dev`, so the live install's root (and state)
       # stays ~/.bundle/<bundle>/dev. Only the CI staging install
-      # (deploy-dev.yml, MIP_BUNDLE_ROOT_LEAF=dev-ci) gets its own root,
-      # refused anywhere else by tools/databricks/ci_install_isolation.py.
+      # (deploy-dev.yml, MIP_BUNDLE_ROOT_LEAF=dev-ci) gets its own root, and
+      # only on the forked-anchor `pr105-host` target below:
+      # tools/databricks/ci_install_isolation.py refuses it anywhere else.
       root_path: ~/.bundle/${bundle.name}/${var.bundle_root_leaf}
     variables:
       # The Databricks Apps bundle schema requires app Genie bindings to carry
@@ -112,8 +115,10 @@ targets:
       # space in this target workspace so post-bootstrap resource recovery
       # through the signed scripts/deploy.sh command of record
       # never reaches Apps with the placeholder and returns the opaque 403
-      # "Can View" permission error.
-      genie_space_id: 01f18188d7a41311abe3d99932b5aa9a
+      # "Can View" permission error. The pin must name a space in the
+      # *default_host workspace: tools/databricks/ci_install_isolation.py
+      # refuses a CI staging GENIE_SPACE_ID equal to it.
+      genie_space_id: 01f13d4968af1b249dc388fd5b18b195
 
   prod:
     mode: production
@@ -159,6 +164,31 @@ targets:
     workspace:
       host: *default_host
       root_path: /Workspace/ci-placeholder/.bundle/${bundle.name}/${bundle.target}
+  # Forked-anchor CI staging target (post-W5, D-platform-process-b step 7).
+  # deploy-dev.yml deploys ONLY here and never to `dev`: the CI staging
+  # install gets its own workspace host, so scripts/deploy.sh's host check
+  # binds its auth to that workspace, which separates the workspace-scoped
+  # objects (App, warehouse, endpoints, Genie, secret scopes, Lakebase, the
+  # `users` group) and resolves the seven reserved identities by name there.
+  # It does NOT separate Unity Catalog: that workspace shares the live
+  # install's metastore, so the rule table's distinct catalog names are the
+  # primary UC isolation. Service principals are account-level, so keeping
+  # each workspace's reserved principals out of the other is an owner
+  # invariant (docs/deployment.md, "CI staging install"). Its own YAML anchor
+  # (not `*default_host`) keeps scripts/configure-workspace.sh and
+  # `make check-workspace-host` single-anchor for customer forks. A dev-class
+  # install otherwise (development mode, sandbox runtime, Summit demo feeds),
+  # still under its own root leaf and `_ci` names. CI-only:
+  # tools/databricks/ci_install_isolation.py refuses it outside deploy-dev.yml
+  # and refuses a host equal to the dev target's. No Genie pin: the governed
+  # space is resolved by MIP_GENIE_SPACE_NAME in that workspace at deploy time.
+  pr105-host:
+    mode: development
+    run_as:
+      user_name: ${workspace.current_user.userName}
+    workspace:
+      host: &ci_staging_host https://dbc-149e560d-e056.cloud.databricks.com
+      root_path: ~/.bundle/${bundle.name}/${var.bundle_root_leaf}
 
 resources:
   # Slice 5 real-data migration: self-contained Lakebase provisioning.
@@ -1375,9 +1405,10 @@ variables:
     default: ""
   bundle_root_leaf:
     description: >-
-      Last segment of the dev target's bundle root. `dev` is the live install;
-      only deploy-dev.yml's isolated CI staging install sets another value
-      (MIP_BUNDLE_ROOT_LEAF, checked by tools/databricks/ci_install_isolation.py).
+      Last segment of the dev-class targets' bundle root. `dev` is the live
+      install; only deploy-dev.yml's isolated CI staging install on the
+      forked-anchor pr105-host target sets another value (MIP_BUNDLE_ROOT_LEAF,
+      checked by tools/databricks/ci_install_isolation.py).
     default: dev
   install_suffix:
     description: >-

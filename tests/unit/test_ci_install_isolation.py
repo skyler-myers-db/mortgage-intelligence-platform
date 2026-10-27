@@ -7,6 +7,9 @@ table, the marked preflight block in scripts/lib/deploy_step_preflight_gates.sh
 runs it before the confirmation prompt and any mutation, databricks.yml gives
 the dev target a root leaf and an install suffix whose defaults render the live
 install unchanged, and deploy-dev.yml / nightly.yml address the dev-ci install.
+Post-W5: that install lives only on the forked-anchor ``pr105-host`` target,
+whose own workspace host keeps it off the live install's workspace and
+identities; deploy-dev.yml may deploy nowhere else.
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.fixtures.deploy_script import deploy_entrypoint_text
+from tests.fixtures.deploy_script import deploy_contract_text, deploy_entrypoint_text
 from tools.databricks import ci_install_isolation as isolation
 from tools.databricks import converge_static_app_source as converge
 
@@ -33,7 +36,7 @@ DEPLOY_DEV = ROOT / ".github" / "workflows" / "deploy-dev.yml"
 NIGHTLY = ROOT / ".github" / "workflows" / "nightly.yml"
 DEPLOY_DEV_REF = "o/r/.github/workflows/deploy-dev.yml@refs/heads/main"
 CI_REF = "o/r/.github/workflows/ci.yml@refs/heads/main"
-LIVE_GENIE = "01f18188d7a41311abe3d99932b5aa9a"
+LIVE_GENIE = "01f13d4968af1b249dc388fd5b18b195"
 STAGING = {
     "MIP_APP_NAME": "mip-app-pr105-staging",
     "MIP_DEFAULT_CATALOG": "mip_pr105_staging",
@@ -48,8 +51,21 @@ STAGING = {
 }
 
 
+CI_TARGET = "pr105-host"
+
+
 def _ci(**extra: str) -> dict[str, str]:
-    return {"GITHUB_ACTIONS": "true", "GITHUB_WORKFLOW_REF": DEPLOY_DEV_REF, "MIP_BUNDLE_ROOT_LEAF": "dev-ci", **STAGING, **extra}
+    """deploy-dev.yml's deploy step: its ref, its literal leaf, the CI target, staging names."""
+
+    return {
+        "GITHUB_ACTIONS": "true",
+        "GITHUB_WORKFLOW_REF": DEPLOY_DEV_REF,
+        "MIP_BUNDLE_ROOT_LEAF": "dev-ci",
+        "MIP_DEPLOY_TARGET": CI_TARGET,
+        "TARGET": CI_TARGET,
+        **STAGING,
+        **extra,
+    }
 
 
 def _run(env: dict[str, str], capsys: pytest.CaptureFixture[str]) -> tuple[int, str, str]:
@@ -87,11 +103,70 @@ def test_each_live_default_name_is_refused_by_name_without_its_value(name: str, 
             assert value not in err, "a refusal never echoes the value"
 
 
+@pytest.mark.parametrize("name", isolation.UC_CATALOG_NAMES)
+@pytest.mark.parametrize(
+    "value",
+    ["mip", "mip_app_state", "MIP", "`Mip_App_State`", " `mip` "],
+    ids=["live-catalog", "live-sync-catalog", "case", "backticked-case", "padded-backticked"],
+)
+def test_neither_ci_catalog_may_name_a_live_catalog_in_the_shared_metastore(
+    name: str, value: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """pr105-host shares the live metastore: the catalog names are the primary UC isolation.
+
+    Covers the crossed names (a CI sync catalog `mip`, a CI default catalog
+    `mip_app_state`) and every spelling Unity Catalog resolves to a live catalog,
+    none of which equals that variable's own live default byte for byte.
+    """
+
+    code, out, err = _run(_ci(**{name: value}), capsys)
+
+    assert (code, out) == (2, "")
+    assert err.startswith(f"[ci-install-isolation] refused: {name} ") and value.strip() not in err.split(name, 1)[1]
+
+
+def test_the_staging_catalog_names_pass_the_shared_metastore_check(capsys: pytest.CaptureFixture[str]) -> None:
+    assert {isolation.LIVE_DEFAULTS[name] for name in isolation.UC_CATALOG_NAMES} == {"mip", "mip_app_state"}
+    assert _run(_ci(MIP_DEFAULT_CATALOG="mip_ci", MIP_LAKEBASE_SYNC_CATALOG="mip_app_state_ci"), capsys)[0] == 0
+
+
 def test_the_pinned_live_genie_space_is_refused(capsys: pytest.CaptureFixture[str]) -> None:
     code, _out, err = _run(_ci(GENIE_SPACE_ID=LIVE_GENIE), capsys)
 
     assert code == 2 and "GENIE_SPACE_ID" in err and LIVE_GENIE not in err
     assert isolation.pinned_live_genie_space() == LIVE_GENIE
+
+
+@pytest.mark.parametrize("flag", ["1", "true", " 1 "])
+def test_foreign_catalog_remediation_is_refused_on_the_forked_anchor_target(
+    flag: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Round 2 (post-W5 review): remediation rewrites bindings metastore-wide, and pr105-host shares the metastore.
+
+    Dispatched from deploy-dev.yml it would ISOLATE catalogs and drop the
+    workspace bindings the policy omits for every team on the shared metastore,
+    the live install's share catalogs included, after signing its own manifest
+    in the same run. The rule table refuses it before any mutation.
+    """
+
+    code, out, err = _run(_ci(MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=flag), capsys)
+
+    assert (code, out) == (2, "") and isolation.REMEDIATION_FLAG in err
+    assert _run(_ci(MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS="0"), capsys)[0] == 0, "the workflow's off value passes"
+    assert _run({"MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS": "1"}, capsys)[0] == 0, "an operator dev run is unchanged"
+    owner = _doc_section(BOOTSTRAP_HEADING).split("**Owner steps", 1)[1].split("**Integrator steps", 1)[0]
+    assert "The rule table refuses it on `pr105-host` (exit 2, before any mutation)." in _flat(_numbered_item(owner, 8))
+    workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
+    dispatch = workflow[True]["workflow_dispatch"]["inputs"]["remediate_foreign_catalog_bindings"]
+    assert dispatch["default"] is False and dispatch["description"].startswith(f"Refused on {CI_TARGET}")
+
+
+def test_the_shell_block_passes_the_remediation_flag_to_the_rule_table() -> None:
+    """The preflight block's Python inherits the workflow's step env, so the refusal fires in deploy.sh too."""
+
+    refused = _bash_block(_ci(MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS="1"))
+    assert refused.returncode == 2 and isolation.REMEDIATION_FLAG in refused.stderr
+    assert _bash_block(_ci(MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS="0")).returncode == 0
 
 
 @pytest.mark.parametrize(
@@ -135,10 +210,149 @@ def test_ci_pytest_and_other_workflows_keep_the_live_rule(capsys: pytest.Capture
     assert _run({"GITHUB_ACTIONS": "true"}, capsys)[0] == 0
 
 
-def test_the_staging_install_is_dev_target_only(capsys: pytest.CaptureFixture[str]) -> None:
-    code, _out, err = _run(_ci(MIP_DEPLOY_TARGET="prod"), capsys)
+@pytest.mark.parametrize("target", ["dev", "prod", "", "ci"])
+def test_deploy_dev_deploys_only_to_the_forked_anchor_target(target: str, capsys: pytest.CaptureFixture[str]) -> None:
+    """Post-W5: never the anchor workspace, whatever the leaf and names."""
 
-    assert code == 2 and "dev-target only" in err
+    for env in (_ci(MIP_DEPLOY_TARGET=target), {"GITHUB_ACTIONS": "true", "GITHUB_WORKFLOW_REF": DEPLOY_DEV_REF, "MIP_DEPLOY_TARGET": target}):
+        code, out, err = _run(env, capsys)
+        assert (code, out) == (2, ""), env
+        assert f"use -t {CI_TARGET}" in err
+    assert isolation.CI_TARGET == CI_TARGET
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"MIP_DEPLOY_TARGET": CI_TARGET},
+        {"MIP_DEPLOY_TARGET": CI_TARGET, "MIP_BUNDLE_ROOT_LEAF": "dev-ci", **STAGING},
+        {"MIP_DEPLOY_TARGET": CI_TARGET, "GITHUB_ACTIONS": "true", "GITHUB_WORKFLOW_REF": CI_REF},
+        {"MIP_DEPLOY_TARGET": CI_TARGET, "GITHUB_ACTIONS": "true", "MIP_BUNDLE_ROOT_LEAF": "dev-ci", **STAGING},
+    ],
+    ids=["operator", "operator-with-leaf", "other-workflow", "actions-without-the-deploy-dev-ref"],
+)
+def test_the_forked_anchor_target_is_deploy_dev_only(env: dict[str, str], capsys: pytest.CaptureFixture[str]) -> None:
+    code, out, err = _run(env, capsys)
+
+    assert (code, out) == (2, "")
+    assert "deploy-dev.yml only" in err
+
+
+def test_a_non_default_leaf_on_the_dev_target_is_refused_in_any_workflow(capsys: pytest.CaptureFixture[str]) -> None:
+    code, out, err = _run({"GITHUB_ACTIONS": "true", "GITHUB_WORKFLOW_REF": CI_REF, "MIP_BUNDLE_ROOT_LEAF": "dev-ci", **STAGING}, capsys)
+
+    assert (code, out) == (2, "")
+    assert f"{CI_TARGET}-target only" in err
+
+
+@pytest.mark.parametrize(
+    "hosts",
+    [
+        {"dev": "https://live.example", CI_TARGET: "https://live.example"},
+        {"dev": "https://live.example", CI_TARGET: ""},
+        {"dev": "https://live.example"},
+    ],
+    ids=["same-host-as-dev", "empty-host", "no-ci-target"],
+)
+def test_the_forked_anchor_target_must_name_its_own_workspace_host(hosts: dict[str, str]) -> None:
+    with pytest.raises(isolation.Refused, match="must anchor its own workspace host"):
+        isolation.resolve(_ci(), hosts=hosts)
+    assert isolation.resolve(_ci(), hosts={"dev": "https://live.example", CI_TARGET: "https://staging.example"}) == ("dev-ci", "_ci")
+
+
+_HOST_BUNDLE = """\
+workspace:
+  host: &default_host https://live.example
+targets:
+  dev:
+    workspace:
+      host: *default_host
+  {ci}:
+    workspace:
+      host: {host}
+"""
+
+
+@pytest.mark.parametrize(
+    "variant",
+    ["HTTPS://LIVE.EXAMPLE", "https://live.example/", "HTTPS://LIVE.EXAMPLE/", "'  https://live.example//  '"],
+    ids=["case", "trailing-slash", "case-and-slash", "padded-double-slash"],
+)
+def test_a_spelling_variant_of_the_dev_host_is_still_the_dev_host(variant: str, tmp_path: Path) -> None:
+    """target_hosts() normalizes what databricks.yml spells, so a variant cannot pass as another workspace."""
+
+    bundle = tmp_path / "databricks.yml"
+    bundle.write_text(_HOST_BUNDLE.format(ci=CI_TARGET, host=variant), encoding="utf-8")
+
+    hosts = isolation.target_hosts(bundle)
+    assert hosts == {"dev": "https://live.example", CI_TARGET: "https://live.example"}
+    with pytest.raises(isolation.Refused, match="must anchor its own workspace host"):
+        isolation.resolve(_ci(), hosts=hosts)
+
+    bundle.write_text(_HOST_BUNDLE.format(ci=CI_TARGET, host="https://staging.example/"), encoding="utf-8")
+    assert isolation.resolve(_ci(), hosts=isolation.target_hosts(bundle)) == ("dev-ci", "_ci"), "a real second host passes"
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "https://live.example:443",
+        "http://live.example",
+        "https://live.example/?o=2543889327043640",
+        "https://live.example/some/path",
+        "live.example",
+        "https://user@LIVE.example:8443/",
+    ],
+    ids=["explicit-port", "http-scheme", "query-string", "path", "no-scheme", "userinfo-and-port"],
+)
+def test_a_url_spelling_of_the_dev_host_is_still_the_dev_host(variant: str, tmp_path: Path) -> None:
+    """Round 2 (post-W5 review): the rule table compares hostnames, not URL strings.
+
+    A scheme, port, path, query or userinfo never makes a second workspace. An
+    alias DNS name for the live workspace is out of a static check's reach;
+    owner step 8's `metastores current` workspace id is that proof.
+    """
+
+    bundle = tmp_path / "databricks.yml"
+    bundle.write_text(_HOST_BUNDLE.format(ci=CI_TARGET, host=variant), encoding="utf-8")
+
+    with pytest.raises(isolation.Refused, match="must anchor its own workspace host"):
+        isolation.resolve(_ci(), hosts=isolation.target_hosts(bundle))
+
+
+@pytest.mark.parametrize(
+    "hosts",
+    [
+        {"dev": "https://[live.example", CI_TARGET: "https://staging.example"},
+        {"dev": "https://live.example", CI_TARGET: "https://[staging.example"},
+        {"dev": "", CI_TARGET: "https://staging.example"},
+        {CI_TARGET: "https://staging.example"},
+    ],
+    ids=["unparseable-dev", "unparseable-ci", "empty-dev", "no-dev-target"],
+)
+def test_a_host_that_names_no_workspace_is_refused(hosts: dict[str, str]) -> None:
+    """Fail closed: an unparseable or missing host on either side is never 'a different workspace'."""
+
+    with pytest.raises(isolation.Refused, match="must anchor its own workspace host"):
+        isolation.resolve(_ci(), hosts=hosts)
+
+
+def test_the_bundle_gives_the_forked_anchor_target_its_own_host_and_keeps_the_rest_anchored() -> None:
+    text = BUNDLE.read_text(encoding="utf-8")
+    hosts = isolation.target_hosts()
+    data = yaml.safe_load(text)
+
+    assert hosts[CI_TARGET] and hosts[CI_TARGET] != hosts["dev"], "never the live install's workspace"
+    assert {hosts[name] for name in ("dev", "prod", "ci")} == {data["workspace"]["host"].rstrip("/").casefold()}
+    targets = text.split("\ntargets:\n", 1)[1].split("\nresources:\n", 1)[0]
+    assert targets.count("      host: *default_host\n") == 3, "dev, prod and ci keep the single customer-fork anchor"
+    ci_literal = data["targets"][CI_TARGET]["workspace"]["host"]
+    assert text.count(ci_literal) == 1 and f"host: &ci_staging_host {ci_literal}\n" in text, "one literal, on its own anchor"
+    ci_target = data["targets"][CI_TARGET]
+    assert ci_target["mode"] == "development" and "profile" not in ci_target["workspace"]
+    assert ci_target["workspace"]["root_path"] == "~/.bundle/${bundle.name}/${var.bundle_root_leaf}"
+    assert "genie_space_id" not in (ci_target.get("variables") or {}), "resolved by governed name, never pinned"
+    assert isolation.pinned_live_genie_space() == LIVE_GENIE, "the dev pin is still found before the new target"
 
 
 # ---------------------------------------------------- constants and the bundle
@@ -198,6 +412,20 @@ def test_the_workflows_address_the_dev_ci_install() -> None:
         if step.get("name") == "Deploy dev Databricks App"
     )
     assert deploy_step["env"]["MIP_BUNDLE_ROOT_LEAF"] == "dev-ci", "a literal, not a var"
+    assert f"args=(-t {CI_TARGET} --no-confirm)" in deploy_step["run"]
+    assert './scripts/deploy.sh "${args[@]}"' in deploy_step["run"]
+
+
+def test_the_workflows_never_address_the_anchor_workspace_targets() -> None:
+    """deploy-dev.yml deploys, and nightly.yml validates and runs jobs, on pr105-host only."""
+
+    deploy_dev = DEPLOY_DEV.read_text(encoding="utf-8")
+    nightly = NIGHTLY.read_text(encoding="utf-8")
+    anchor = re.compile(r"(?:-t|--target)[ =](?:dev|prod|ci)\b")
+    assert not anchor.search(deploy_dev) and not anchor.search(nightly)
+    bundle_commands = re.findall(r"databricks bundle (?:validate|run [a-z_]+) -t (\S+)", nightly)
+    assert len(bundle_commands) == 4 and set(bundle_commands) == {CI_TARGET}
+    assert deploy_dev.count(f"-t {CI_TARGET}") == 1
     nightly_env = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))["env"]
     assert nightly_env["BUNDLE_VAR_bundle_root_leaf"] == "dev-ci" != isolation.DEFAULT_LEAF
     assert nightly_env["BUNDLE_VAR_install_suffix"] == isolation.install_suffix("dev-ci") == "_ci"
@@ -223,6 +451,14 @@ def test_the_block_runs_before_the_prompt_the_exports_and_the_first_mutation() -
     assert not [line for line in code_lines if "DRY_RUN" in line], "pure: it runs in DRY_RUN too"
 
 
+def _target_class_lines() -> str:
+    """deploy.sh's own TARGET_CLASS assignment, run verbatim in the block's prelude."""
+
+    text = deploy_entrypoint_text()
+    start = text.index('TARGET_CLASS="$TARGET"\n')
+    return text[start : text.index("\nfi\n", start) + 4]
+
+
 def _bash_block(
     env: dict[str, str], python: str = sys.executable, dotenv: dict[str, str] | None = None, epilogue: str | None = None
 ) -> subprocess.CompletedProcess[str]:
@@ -231,7 +467,7 @@ def _bash_block(
     # The real helper reads the shell, then .env.local; ``dotenv`` stands in for the file.
     arms = "".join(f"{name}) value={shlex.quote(value)} ;; " for name, value in (dotenv or {}).items())
     prelude = (
-        "set -euo pipefail\nRED=''\nRST=''\nTARGET=\"${TARGET:-dev}\"\n"
+        "set -euo pipefail\nRED=''\nRST=''\nTARGET=\"${TARGET:-dev}\"\n" + _target_class_lines() +
         "deployment_control_value() { local name=\"$1\" value; value=\"${!name:-}\"; "
         f"if [[ -z \"$value\" ]]; then case \"$name\" in {arms}*) ;; esac; fi; printf '%s' \"$value\"; }}\n"
         f"PYTHON={python!r}\n"
@@ -290,14 +526,79 @@ def test_an_operator_run_never_starts_python_and_keeps_the_live_root() -> None:
     assert prod.stdout.strip() == "dev||prod", "a prod converge keeps --expected-root-leaf prod"
 
 
-def test_any_leaf_or_the_deploy_dev_ref_always_runs_the_rule_table() -> None:
-    """The Python-free path is only for 'no leaf and not deploy-dev.yml'."""
+def test_any_leaf_the_deploy_dev_ref_or_the_forked_anchor_target_always_runs_the_rule_table() -> None:
+    """The Python-free path is only for 'no leaf, not pr105-host and not deploy-dev.yml'."""
 
     local_leaf = _bash_block({"MIP_BUNDLE_ROOT_LEAF": "dev-ci", **STAGING})
     assert local_leaf.returncode == 2 and "CI-only" in local_leaf.stderr, "a leaf outside CI is refused"
-    for env in ({"MIP_BUNDLE_ROOT_LEAF": "dev-ci"}, {"GITHUB_ACTIONS": "true", "GITHUB_WORKFLOW_REF": DEPLOY_DEV_REF}):
+    local_ci_target = _bash_block({"TARGET": CI_TARGET})
+    assert local_ci_target.returncode == 2 and "deploy-dev.yml only" in local_ci_target.stderr, "an operator never reaches pr105-host"
+    for env in (
+        {"MIP_BUNDLE_ROOT_LEAF": "dev-ci"},
+        {"GITHUB_ACTIONS": "true", "GITHUB_WORKFLOW_REF": DEPLOY_DEV_REF},
+        {"TARGET": CI_TARGET},
+    ):
         consulted = _bash_block(env, python="/usr/bin/false")
         assert consulted.returncode == 2, f"{env} must reach the tool, which fails closed here"
+
+
+# The weekly scheduled refresh keys on the literal dev target ON PURPOSE: only
+# the live install (target dev, empty install_suffix) may unpause
+# mip_scheduled_refresh or ask the postflight for its deployer recipient, the
+# same rule as tools/databricks/scheduled_refresh_posture.is_live_install. A
+# TARGET_CLASS there would treat pr105-host as the live install. These two
+# blocks, and exactly these lines in them, are the only literal-target
+# decisions allowed after the allowlist; tests/unit/test_refresh_schedule_contract.py
+# proves pr105-host stays PAUSED with no recipients.
+LIVE_INSTALL_ONLY_BLOCKS = (
+    ("# >>> scheduled-refresh", "# <<< scheduled-refresh"),
+    ("# Step 9c: weekly scheduled refresh postflight", "unset _SCHEDULED_REFRESH_ARGS\n"),
+)
+LIVE_INSTALL_ONLY_LINES = (
+    'if [[ "$TARGET" == "dev" ]]; then',
+    'if [[ "$TARGET" != "dev" && "$_SCHEDULED_REFRESH" == "on" ]]; then',
+    'if [[ "$TARGET" == "dev" && "$_SCHEDULED_REFRESH" == "on" && -z "$BUNDLE_VAR_install_suffix" ]]; then',
+    'if [[ "$TARGET" == "dev" && -z "${BUNDLE_VAR_install_suffix:-}" ]]; then',
+)
+
+
+def _literal_target_lines(text: str) -> list[str]:
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if '"$TARGET" == "dev"' in line or '"$TARGET" != "dev"' in line
+    ]
+
+
+def test_every_dev_class_decision_reads_the_target_class() -> None:
+    """The sandbox runtime, the demo-feed default/refusal and the root leaf treat pr105-host as dev.
+
+    Read across every sourced file (deploy_contract_text expands the reviewed
+    libraries too), so a later `"$TARGET" == "dev"` in any of them is caught,
+    outside the two live-install-only scheduled-refresh blocks above.
+    """
+
+    full = deploy_contract_text()
+    text = full[full.index('TARGET_CLASS="$TARGET"\n') :]  # after the target allowlist
+    exempt: list[str] = []
+    for start, end in LIVE_INSTALL_ONLY_BLOCKS:
+        assert text.count(start) == 1, start
+        begin = text.index(start)
+        finish = text.index(end, begin) + len(end)
+        exempt.extend(_literal_target_lines(text[begin:finish]))
+        text = text[:begin] + text[finish:]
+    assert sorted(exempt) == sorted(LIVE_INSTALL_ONLY_LINES), "the exemption covers exactly the live-install lines"
+    assert _literal_target_lines(text) == []
+    assert text.count('"$TARGET_CLASS" == "dev"') == 3 and text.count('"$TARGET_CLASS" != "dev"') == 1
+    assert '  if [[ "$TARGET_CLASS" == "dev" ]]; then\n    APP_RUNTIME_ENV="sandbox"\n' in text
+    assert '  if [[ "$TARGET_CLASS" == "dev" ]]; then\n    DEMO_FEEDS_FROM_ENV=1\n' in text
+    assert 'if [[ "$TARGET_CLASS" == "dev" ]]; then\n  MIP_BUNDLE_ROOT_LEAF_RESOLVED="$BUNDLE_VAR_bundle_root_leaf"\n' in text
+
+
+def test_the_deploy_dev_block_refuses_the_dev_target() -> None:
+    refused = _bash_block(_ci(TARGET="dev"))
+
+    assert refused.returncode == 2 and f"use -t {CI_TARGET}" in refused.stderr
 
 
 # ------------------------------------------ the bootstrap runbook (docs/deployment.md)
@@ -331,8 +632,13 @@ def _numbered_item(block: str, number: int) -> str:
     return block.split(f"\n{number}. ", 1)[1].split(f"\n{number + 1}. ", 1)[0]
 
 
-def test_the_runbook_states_the_reserved_identity_contract_and_defers_the_bootstrap() -> None:
-    """C7(b), round 2: CI-only identities cannot coexist with the reserved names in the anchor workspace."""
+def test_the_runbook_states_the_reserved_identity_contract_and_the_forked_anchor_resolution() -> None:
+    """C7(b), round 2: CI-only identities cannot coexist with the reserved names in one workspace.
+
+    Post-W5: the bootstrap is no longer deferred. The forked-anchor target is
+    built, the owner steps name its workspace host exactly as databricks.yml
+    does, and the dispatch step says the workflow can only deploy there.
+    """
 
     section = _doc_section(BOOTSTRAP_HEADING)
     owner = section.split("**Owner steps", 1)[1].split("**Integrator steps", 1)[0]
@@ -347,13 +653,33 @@ def test_the_runbook_states_the_reserved_identity_contract_and_defers_the_bootst
         "CI-only identities cannot coexist with them there",
         "**Never create a second service principal with a reserved display name.**",
         "(`Multiple service principals use reserved display name`)",
-        "forked-anchor (`pr105-host`)",
-        "makes the reserved names install-scoped",
+        "Resolution (built): the forked-anchor (`pr105-host`) target",
+        "chosen over a change that makes the reserved names install-scoped",
+        "The CI install's identities are the seven reserved principals of the `pr105-host` workspace",
     ):
         assert anchor in step1, anchor
-    assert "blocked in the anchor workspace" in _flat(section.split("**Why the CI install", 1)[0])
-    assert "never against the anchor workspace" in _flat(_numbered_item(owner, 8))
+    status = _flat(section.split("**Why the CI install", 1)[0])
+    assert "**Status: the forked-anchor `pr105-host` target is built" in status
+    assert "blocked in the anchor workspace" in status, "the W5e history stays stated"
+    dispatch = _flat(_numbered_item(owner, 10))
+    assert f"can only deploy `-t {CI_TARGET}`, so it never runs against the anchor workspace" in dispatch
+    assert "acknowledge_single_maintainer_break_glass=true" in dispatch
     assert "\n\nSteps 4-6 run only on the forked-anchor target" in integrator.split("\n4. ", 1)[0], "its own paragraph"
+    assert f"`{CI_TARGET}`" in section and "exact remaining steps" in _flat(owner)
+
+
+def test_the_owner_steps_name_the_bundle_host_and_pin_exactly() -> None:
+    """The doc cannot drift from databricks.yml: the staging host and the live Genie pin."""
+
+    section = _doc_section(BOOTSTRAP_HEADING)
+    owner = section.split("**Owner steps", 1)[1].split("**Integrator steps", 1)[0]
+    host = yaml.safe_load(BUNDLE.read_text(encoding="utf-8"))["targets"][CI_TARGET]["workspace"]["host"]
+
+    assert f"must equal `{host}`" in _flat(_numbered_item(owner, 3))
+    assert f"`DATABRICKS_HOST` (the `{CI_TARGET}` host)" in _flat(_numbered_item(owner, 6))
+    assert f"pin `{isolation.pinned_live_genie_space()}`" in _flat(_numbered_item(owner, 5))
+    assert "remediate_foreign_catalog_bindings=true" in _flat(_numbered_item(owner, 8))
+    assert [number for number in range(1, 12) if f"\n{number}. " in owner] == list(range(1, 11)), "ten owner steps"
 
     flat = _flat(section)
     assert "Give the CI install its own identities" not in flat
@@ -363,6 +689,146 @@ def test_the_runbook_states_the_reserved_identity_contract_and_defers_the_bootst
     for row in ("`reconcile_historical_agent_endpoints cleanup`", "`agent_runtime_access.audit_global_genie_access`",
                 "`audit_agent_runtime_foreign_uc_access`"):
         assert row in section, f"workspace-global inventory row {row}"
+
+
+GRANTS_DOC = ROOT / "docs" / "security" / "GRANTS.md"
+RUNBOOK = ROOT / "docs" / "runbook.md"
+
+
+def test_the_runbook_never_presents_the_forked_anchor_as_a_separate_metastore_or_account() -> None:
+    """Round 1 (post-W5 review): pr105-host shares the live metastore and account.
+
+    Read-only paychex reads (2026-10-27) put `mip_pr105_staging`, another team's
+    catalog and the OPEN live catalogs on the live metastore. So catalog-name
+    isolation is primary, step 8's UC changes are metastore-wide, and identity
+    separation is an owner invariant, not a structural guarantee. The old
+    overclaims stay out of the bootstrap section and of the runbook's recovery
+    section (round 2: the live App has no governed recovery path today).
+    """
+
+    section = _doc_section(BOOTSTRAP_HEADING)
+    flat = _flat(section) + " " + _flat(_runbook_recovery())
+    owner = section.split("**Owner steps", 1)[1].split("**Integrator steps", 1)[0]
+    step1, step2, step8 = (_flat(_numbered_item(owner, number)) for number in (1, 2, 8))
+
+    assert "Shared: the live workspace's Unity Catalog metastore and the Databricks account" in flat
+    assert "primary Unity Catalog isolation, never defence in depth, and must never be relaxed" in flat
+    for name in isolation.UC_CATALOG_NAMES:
+        assert f"`{name}`" in flat.split("primary Unity Catalog isolation", 1)[1].split("**Isolation rules", 1)[0]
+    assert "**Owner invariant: each workspace keeps its own reserved principals.**" in step1
+    assert "no code checks it" in step1 and "`2543889327043640`" in step1
+    assert "name neither live catalog (`mip`, `mip_app_state`)" in step2
+    assert "must return the live workspace's `metastore_id`" in step8
+    assert "metastore-wide" in step8 and "including the share catalogs the live install reads" in step8
+    assert "the Unity Catalog changes in step 8 are metastore-wide" in _flat(owner.split("\n1. ", 1)[0])
+    assert "waits on the owner steps below, then integrator steps 1-6" in flat
+    assert "render in integrator step 2 has never run" in flat
+
+    for overclaim in (
+        "Identities follow the host",
+        "never the live install's",
+        "read its own catalogs",
+        "stay as defence in depth",
+        "never against the live workspace",
+        "run as the live install's own seven",
+        "mutable only from",
+        "recovers through an operator",
+        "bootstrap mints",
+        "integrator steps 4-6",
+    ):
+        assert overclaim not in flat, overclaim
+
+
+def _runbook_recovery() -> str:
+    """docs/runbook.md section 1.2's stopped-App recovery, up to section 1.3."""
+
+    runbook = RUNBOOK.read_text(encoding="utf-8")
+    start = runbook.index("If the Lakebase instance or App is stopped")
+    return runbook[start : runbook.index("### 1.3", start)]
+
+
+def test_the_step8_blockers_are_counted_by_privilege_class_never_named() -> None:
+    """Round 2 (post-W5 review B3): no third-party person or other team's catalog in the product docs.
+
+    The step names the two OPEN blockers by count and privilege class and hands
+    the owner a read-only inventory that finds them, and their owners, at run
+    time. Every backticked lower-case token in the step is a platform, product
+    or API name from the allowlist, so a catalog or a user handle cannot creep
+    back in.
+    """
+
+    owner = _doc_section(BOOTSTRAP_HEADING).split("**Owner steps", 1)[1].split("**Integrator steps", 1)[0]
+    raw = _numbered_item(owner, 8)
+    step8 = _flat(raw)
+
+    assert "the two known blockers, two `OPEN` catalogs owned by other teams" in step8
+    assert "grant `account users` `ALL_PRIVILEGES` and `BROWSE` respectively" in step8
+    for probe in (
+        "databricks catalogs list -o json",
+        'select(.isolation_mode == "OPEN")',
+        'databricks grants get catalog "$catalog" -o json',
+        'select(.principal == "account users")',
+    ):
+        assert probe in raw, probe
+    assert "on a `pr105-host` credential" in step8
+    assert not re.search(r"\bowner [a-z]+\.[a-z]+", step8), "no user handle"
+    allowed = {"samples", "system", "users", "install_scope", "metastore_id", "workspace_id"}
+    tokens = set(re.findall(r"`([a-z_]+)`", raw))
+    assert tokens <= allowed, sorted(tokens - allowed)
+
+
+def test_the_live_app_has_no_governed_recovery_path_and_escalates_to_the_owner() -> None:
+    """Round 2 (post-W5 review B2, B1): the docs never present a NO-GO path as the live App's recovery.
+
+    deploy-dev.yml recovers only the CI staging install. The live App's command
+    of record, an operator ``./scripts/deploy.sh -t dev``, is NO-GO today (no
+    reserved principals in the live workspace, deploy.sh never creates one, the
+    governed creation tool's only sink is this repository's secrets), so the
+    runbook escalates to the owner instead of starting it.
+    """
+
+    section = _doc_section(BOOTSTRAP_HEADING)
+    flat = _flat(section)
+    owner = section.split("**Owner steps", 1)[1].split("**Integrator steps", 1)[0]
+    step1 = _flat(_numbered_item(owner, 1))
+    recovery = _flat(_runbook_recovery())
+
+    live = flat.split("**The live install is outside this bootstrap, and its governed deploy is NO-GO.**", 1)[1]
+    live = live.split("**Why the CI install", 1)[0]
+    assert "`scripts/deploy.sh` never creates one" in live and "`--expected-application-id`" in live
+    assert "Deploying or recovering the live App is therefore an owner-only decision." in live
+    assert "Never start `./scripts/deploy.sh -t dev` against the live workspace during an incident" in live
+
+    for sink in (
+        "`provision_m2m_oauth --pre-app-bootstrap --set-gh-secrets`",
+        "repository-level Actions secrets (`gh secret set --repo`)",
+        "`MIP_M2M_GITHUB_REPOSITORY`",
+        "in this repository they belong to the CI install",
+        "It stays out of scope until that design is reviewed.",
+        "Compare the two listings, never a stored `*_CLIENT_ID`",
+    ):
+        assert sink in step1, sink
+
+    whole = _flat(DEPLOYMENT_DOC.read_text(encoding="utf-8"))
+    assert "`./scripts/deploy.sh -t dev` or dispatch `deploy-dev.yml`" not in whole, "not equivalent first installs"
+    assert "dispatch `deploy-dev.yml` for the CI staging install, which deploys only the `pr105-host` target" in whole
+
+    assert recovery.index("**The live dev App**") < recovery.index("**The CI staging install**")
+    assert recovery.index("**The CI staging install**") < recovery.index("gh workflow run deploy-dev.yml")
+    for anchor in (
+        "No governed path recovers it today.",
+        "is NO-GO on the live workspace",
+        "\"The live install is outside this bootstrap, and its governed deploy is NO-GO\"",
+        "Do not start that deploy during an incident",
+        "Escalate to the owner",
+        "is an owner-only decision",
+        "so it can never deploy or recover the live dev App",
+    ):
+        assert anchor in recovery, anchor
+    grants = _flat(GRANTS_DOC.read_text(encoding="utf-8"))
+    assert "acts on that workspace's catalogs" not in grants
+    assert "shares the live install's Unity Catalog metastore" in grants
+    assert "must keep the live workspace bound" in grants
 
 
 def test_every_reserved_identity_name_is_in_the_per_run_identities_table() -> None:

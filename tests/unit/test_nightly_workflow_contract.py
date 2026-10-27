@@ -131,10 +131,10 @@ def test_live_playwright_job_budgets_cold_app_and_serial_browser_matrix() -> Non
 def test_live_validation_refreshes_live_snapshot_before_live_parity() -> None:
     text = NIGHTLY.read_text(encoding="utf-8")
 
-    validate_pos = text.index("databricks bundle validate -t dev --profile DEFAULT")
-    fred_pos = text.index("databricks bundle run mip_fred_rates_ingest -t dev --profile DEFAULT")
-    silver_pos = text.index("databricks bundle run mip_refresh_silver -t dev --profile DEFAULT")
-    gold_pos = text.index("databricks bundle run mip_refresh_scores -t dev --profile DEFAULT")
+    validate_pos = text.index("databricks bundle validate -t pr105-host --profile DEFAULT")
+    fred_pos = text.index("databricks bundle run mip_fred_rates_ingest -t pr105-host --profile DEFAULT")
+    silver_pos = text.index("databricks bundle run mip_refresh_silver -t pr105-host --profile DEFAULT")
+    gold_pos = text.index("databricks bundle run mip_refresh_scores -t pr105-host --profile DEFAULT")
     parity_pos = text.index("pytest -q tests/integration/test_sql_python_parity.py")
     segment_pos = text.index("pytest tests/integration/test_segment_count_parity.py -q --tb=short")
     intersection_pos = text.index(
@@ -259,7 +259,7 @@ def test_live_validation_refresh_steps_use_real_dev_bundle_profile() -> None:
         assert "DATABRICKS_AUTH_TYPE: pat" in block
         assert "BUNDLE_VAR_sql_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}" in block
         assert "BUNDLE_VAR_genie_space_id: ${{ secrets.GENIE_SPACE_ID }}" in block
-        assert "-t dev --profile DEFAULT" in block
+        assert "-t pr105-host --profile DEFAULT" in block, "the forked-anchor CI staging target"
 
 
 def test_live_validation_renders_dev_demo_feeds_for_bundle_validation() -> None:

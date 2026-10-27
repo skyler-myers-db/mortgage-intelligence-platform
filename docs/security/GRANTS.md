@@ -518,7 +518,17 @@ gh workflow run deploy-dev.yml --ref "$BRANCH" \
 ```
 
 That workflow supplies the separated workspace, account-SCIM, runtime, and
-proof-signing authorities. `scripts/deploy.sh` acquires the signed App lease and
+proof-signing authorities. Since post-W5 it deploys only the CI staging install
+on the forked-anchor `pr105-host` target (docs/deployment.md, "CI staging
+install"). That workspace shares the live install's Unity Catalog metastore,
+and a catalog's isolation mode and workspace bindings are metastore-level
+state: this remediation sets each catalog the policy names `ISOLATED` with
+exactly the policy's bindings, so every workspace the policy does not bind
+loses that catalog, the live workspace and every other team's included. A
+policy entry for a catalog the live install reads (`mip`, `mip_app_state`, the
+share catalog `cotality_mortgage_data`) must keep the live workspace bound, and
+the bootstrap never dispatches this remediation (docs/deployment.md, owner
+step 8). `scripts/deploy.sh` acquires the signed App lease and
 starts its parent-PID-fenced heartbeat. It requires an existing stable App,
 stops the exact immutable App identity before any recovery or fresh catalog
 write, and then runs `snapshot`, `apply`, and `verify`. A signed immutable

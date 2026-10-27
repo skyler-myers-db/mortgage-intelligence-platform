@@ -26,6 +26,13 @@ trap only stops and cleans up this install's own App. The checks inside the
 convergences stay as backstops, and ``agent_proxy_access --mode deny-all``
 repeats the endpoint check in a suffixed install, so a later backstop refusal
 cannot become the global revoke either.
+
+The verifier's obsolete-endpoint revoke (``m2m_access_policy.
+revoke_can_query_on_obsolete_endpoint``, reached through
+``m2m_gateway_access_convergence``) is guarded the same way: in a suffixed
+install it repeats the ``check-warehouse`` proof before the Gateway
+convergence's first grant and again before each revoke
+(``assert_verifier_revokes_owned``).
 """
 
 from __future__ import annotations
@@ -113,6 +120,41 @@ def assert_endpoint_revokes_owned(client: Any, *, reviewed: Collection[str], app
         )
 
 
+def check_warehouse_owned(client: Any, *, application_id: str, warehouse_id: str, suffix: str) -> None:
+    """The ``check-warehouse`` probe: the target is listed and no other unsuffixed warehouse grants the identity."""
+
+    listed = warehouse_names(client)
+    target = warehouse_id.strip()
+    if target not in listed:
+        raise InstallScopeRefusal("the target SQL warehouse was not returned by the workspace")
+    assert_warehouse_revokes_owned(
+        client, warehouses=listed, target=target, service_principal=application_id.strip(), suffix=suffix
+    )
+
+
+def assert_verifier_revokes_owned(client: Any, *, application_id: str, warehouse_id: str | None, suffix: str) -> None:
+    """Refuse the verifier's obsolete-endpoint revoke unless the verifier is this install's own (post-W5).
+
+    Serving endpoints carry no install-scoped name, and a verifier shared with
+    another install holds that install's Gateway; ``obsolete`` here means every
+    reserved-family endpoint outside this install's green and preserved ones,
+    so the revoke would cut the other install off. An endpoint's creator cannot
+    tell the installs apart either: shared identities include the agent
+    runtime that creates both installs' endpoints. The verifier's
+    install-scoped witness is its warehouse ACL, the same one ``check-warehouse``
+    reads: a shared verifier holds the other install's unsuffixed warehouse
+    grant. No warehouse to prove against is itself a refusal.
+    """
+
+    target = str(warehouse_id or "").strip()
+    if not target:
+        raise InstallScopeRefusal(
+            "the verifier's obsolete-endpoint revoke needs this install's SQL warehouse (--warehouse-id) "
+            "to prove the verifier is this install's own"
+        )
+    check_warehouse_owned(client, application_id=application_id, warehouse_id=target, suffix=suffix)
+
+
 def warehouse_names(client: Any) -> dict[str, str]:
     """Every listed warehouse id mapped to its display name (ids are required)."""
 
@@ -159,13 +201,7 @@ def main(argv: list[str] | None = None, *, client_factory: Callable[[], Any] = W
         reviewed = {args.supervisor_endpoint.strip(), args.preserve_supervisor_endpoint.strip()} - {""}
         assert_endpoint_revokes_owned(client, reviewed=reviewed, application_id=args.application_id.strip())
     else:
-        listed = warehouse_names(client)
-        target = args.warehouse_id.strip()
-        if target not in listed:
-            raise InstallScopeRefusal("the target SQL warehouse was not returned by the workspace")
-        assert_warehouse_revokes_owned(
-            client, warehouses=listed, target=target, service_principal=args.application_id.strip(), suffix=suffix
-        )
+        check_warehouse_owned(client, application_id=args.application_id, warehouse_id=args.warehouse_id, suffix=suffix)
     print(f"[install-scope] {args.command}: PASS (read-only)")
     return 0
 

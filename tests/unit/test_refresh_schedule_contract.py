@@ -21,6 +21,7 @@ from tests.fixtures.deploy_script import deploy_entrypoint_text
 from tools import verify_live_source_readiness as readiness
 from tools.databricks import bundle_env
 from tools.databricks import scheduled_refresh_posture as posture
+from tools.databricks.ci_install_isolation import CI_TARGET
 
 ROOT = Path(__file__).resolve().parents[2]
 PREFLIGHT = ROOT / "scripts" / "lib" / "deploy_step_preflight_gates.sh"
@@ -449,3 +450,64 @@ def test_bundle_env_refuses_an_unpause_outside_the_live_install(
     code, calls = _bundle_env_main(monkeypatch, tmp_path, env, target=target)
 
     assert code == 2 and calls == [], "refused before the CLI runs"
+
+
+# ------------------- the forked-anchor CI staging target (pr105-host) stays PAUSED
+
+
+def _postflight_args(target: str, install_suffix: str) -> list[str]:
+    """The step-9c argument list deploy.sh builds for verify_scheduled_refresh_state."""
+
+    bash = shutil.which("bash")
+    assert bash
+    text = deploy_entrypoint_text()
+    start = text.index("_SCHEDULED_REFRESH_ARGS=(--expect")
+    snippet = text[start : text.index('run "$PYTHON" -m tools.databricks.verify_scheduled_refresh_state', start)]
+    script = (
+        "set -euo pipefail\n"
+        f"TARGET='{target}'\nTARGET_CLASS=dev\nBUNDLE_VAR_install_suffix='{install_suffix}'\n"
+        "BUNDLE_VAR_scheduled_refresh_pause_status=PAUSED\n"
+        + snippet
+        + 'printf "%s\\n" "${_SCHEDULED_REFRESH_ARGS[@]}"\n'
+    )
+    completed = subprocess.run(
+        [bash, "-c", script], env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=False, timeout=60
+    )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout.splitlines()
+
+
+@pytest.mark.parametrize("suffix", ["_ci", ""])
+def test_the_forked_anchor_ci_target_stays_paused_and_mails_nobody(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, suffix: str
+) -> None:
+    """pr105-host is dev-class (deploy.sh sets TARGET_CLASS=dev) but never the live install.
+
+    The scheduled-refresh checks key on the literal dev target, so neither its
+    `_ci` install nor even an empty suffix can unpause the job, ask the
+    postflight for the deployer recipient, or be written any recipient.
+    """
+
+    dev_class = {"TARGET_CLASS": "dev"}
+    assert _result(_bash_block(CI_TARGET, suffix, env=dev_class)) == "RESULT=PAUSED"
+    assert _result(_bash_block(CI_TARGET, suffix, env={**dev_class, "MIP_SCHEDULED_REFRESH": "off"})) == "RESULT=PAUSED"
+    refused = _bash_block(CI_TARGET, suffix, env={**dev_class, "MIP_SCHEDULED_REFRESH": "on"})
+    assert refused.returncode == 2 and "RESULT=" not in refused.stdout
+    assert "MIP_SCHEDULED_REFRESH=on is honoured only for the dev target's live install" in refused.stderr
+
+    assert _postflight_args(CI_TARGET, suffix) == ["--expect", "PAUSED"], "never --live-install"
+    assert posture.failure_recipients(target=CI_TARGET, install_suffix=suffix) == []
+    with pytest.raises(ValueError, match=posture.PAUSE_ENV):
+        posture.check_pause_status({posture.PAUSE_ENV: "UNPAUSED"}, target=CI_TARGET, install_suffix=suffix)
+
+    leaf = {"MIP_BUNDLE_ROOT_LEAF": "dev-ci"} if suffix else {}
+    code, calls = _bundle_env_main(monkeypatch, tmp_path, leaf, target=CI_TARGET)
+    assert code == 0 and len(calls) == 1
+    assert _written_recipients(tmp_path, CI_TARGET) == []
+    code, calls = _bundle_env_main(monkeypatch, tmp_path, {**leaf, posture.PAUSE_ENV: "UNPAUSED"}, target=CI_TARGET)
+    assert code == 2 and calls == [], "refused before the CLI runs"
+
+
+def test_the_postflight_control_still_asks_the_live_install_for_its_recipient() -> None:
+    assert _postflight_args("dev", "") == ["--expect", "PAUSED", "--live-install"]
+    assert _postflight_args("dev", "_ci") == ["--expect", "PAUSED"]

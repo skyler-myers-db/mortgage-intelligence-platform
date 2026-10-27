@@ -83,10 +83,24 @@ psql "host=$LAKEBASE_HOST user=$LAKEBASE_USER dbname=$LAKEBASE_DATABASE sslmode=
   -c "SELECT 1"
 ```
 
-If the Lakebase instance or App is stopped, recover it only through the
-governed deployment workflow. That workflow keeps the App stopped while it
-reconciles the exact Lakebase roles, runs the migration and grant postflight,
-and activates source only after those checks pass:
+If the Lakebase instance or App is stopped, first establish which install it
+belongs to:
+
+- **The live dev App** (`mip-app` in the anchor workspace). No governed path
+  recovers it today. Its command of record, an operator
+  `./scripts/deploy.sh -t dev`, is NO-GO on the live workspace
+  (docs/deployment.md, "The live install is outside this bootstrap, and its
+  governed deploy is NO-GO"). The workspace holds none of the seven reserved
+  principals, the deploy never creates one, and a failed first governed run
+  leaves the App stopped. Do not start that deploy during an incident, and do
+  not dispatch the workflow below for the live App. Escalate to the owner:
+  any live-App recovery, including a manual restart or payload redeploy, is
+  an owner-only decision.
+- **The CI staging install** (the forked-anchor `pr105-host` target,
+  docs/deployment.md, "CI staging install"). Recover it only through the
+  governed deployment workflow below. That workflow keeps the App stopped
+  while it reconciles the exact Lakebase roles, runs the migration and grant
+  postflight, and activates source only after those checks pass:
 
 ```bash
 BRANCH="$(git branch --show-current)"
@@ -109,8 +123,10 @@ fi
 gh run watch "$RUN_ID" --exit-status
 ```
 
-The GitHub workflow above is dev-only. Do not transpose it to a customer or
-production workspace: production recovery requires its separately reviewed
+The GitHub workflow above is dev-only. Since post-W5 it deploys only the CI
+staging install on the forked-anchor `pr105-host` target in its own workspace,
+so it can never deploy or recover the live dev App.
+Do not transpose it to a customer or production workspace: production recovery requires its separately reviewed
 environment contract and change-controlled `scripts/deploy.sh -t prod`
 invocation. A failed pre-capture rebase remains unsigned and therefore requires
 `REBASE_UNVERIFIED_APP=true` again on its next explicitly approved recovery;

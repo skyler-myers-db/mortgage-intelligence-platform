@@ -48,8 +48,32 @@ def test_deploy_script_rejects_nonmutable_target_before_preflight(target: str) -
     )
 
     assert result.returncode == 2
-    assert "target must be exactly dev or prod" in result.stderr
+    assert "target must be exactly dev, prod or pr105-host" in result.stderr
     assert "step 1" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("target", "target_class"),
+    (("dev", "dev"), ("prod", "prod"), ("pr105-host", "dev")),
+)
+def test_deploy_script_target_parse_maps_the_forked_anchor_target_to_the_dev_class(
+    target: str, target_class: str
+) -> None:
+    """Post-W5: only the argument parse runs here (it ends before any helper or step)."""
+
+    text = deploy_entrypoint_text()
+    parse = text[text.index("DRY_RUN=0\n") : text.index("# Pretty-print helpers")]
+    result = subprocess.run(
+        ["bash", "-c", parse + 'printf "%s|%s\\n" "$TARGET" "$TARGET_CLASS"\n', "deploy.sh", "-t", target],
+        cwd=REPO,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1] == f"{target}|{target_class}"
 
 
 @pytest.mark.parametrize(

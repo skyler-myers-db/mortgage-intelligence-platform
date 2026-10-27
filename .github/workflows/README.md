@@ -36,7 +36,9 @@ reference. After approval, that run builds the reviewed commit, creates an
 ephemeral `.env.local` containing only non-secret app configuration, passes
 runtime secrets to the provisioning step through the process environment,
 seeds a temporary `DEFAULT` Databricks CLI profile, runs
-`scripts/deploy.sh -t dev --no-confirm`, and keeps the deployed app smoke test
+`scripts/deploy.sh -t pr105-host --no-confirm` (the forked-anchor CI staging
+target in its own workspace; never `-t dev`, see docs/deployment.md "CI staging
+install"), and keeps the deployed app smoke test
 enabled unless the operator explicitly selects `skip_smoke`. Run it before live
 validation when the code under review changes app, bundle, job, SQL, or frontend
 behavior. The workflow shares a single non-cancelling concurrency lane
