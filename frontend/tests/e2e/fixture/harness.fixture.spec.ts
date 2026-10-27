@@ -7,6 +7,7 @@
  * with a readable message. That a test which does NOT opt out fails on the
  * same input is pinned in hygieneGate.fixture.spec.ts.
  */
+import type { ActorAuditEventPage } from '../../../src/lib/apiTypes';
 import { SCORE_BUCKETS } from './data/analytics';
 import { BORROWERS, LEADS, MASKED_BORROWER_ID, PRIMARY_BORROWER } from './data/borrowers';
 import { PORTFOLIO_PREVIEW } from './data/portfolio';
@@ -151,11 +152,19 @@ test.describe('shell helpers', () => {
     await expect(dialog).toContainText('Which states have the most in-the-money borrowers?');
   });
 
-  test('openCommandPalette searches the fixture borrowers', async ({ app, page }) => {
+  test('openCommandPalette searches the fixture borrowers', async ({ app, mockApi, page }) => {
+    // No recents: the default my-events lists this borrower under "Recent
+    // borrowers", which dedupes it out of the live Borrowers group, and a
+    // non-exact 'Borrowers' name matched both groups once a debounced prefix
+    // answer filled the live one. With no recents the live search is the only
+    // group that can show it, and the exact name picks that group alone.
+    mockApi.register<ActorAuditEventPage>('GET', '/api/audit/my-events', () =>
+      json<ActorAuditEventPage>({ items: [], next_cursor: null }));
     await app.gotoRoute('/glossary');
     const palette = await app.openCommandPalette();
     await page.keyboard.type(PRIMARY_BORROWER.borrower_id);
-    await expect(palette.getByRole('group', { name: 'Borrowers' })).toContainText(PRIMARY_BORROWER.borrower_id);
+    await expect(palette.getByRole('group', { name: 'Borrowers', exact: true })).toContainText(PRIMARY_BORROWER.borrower_id);
+    await expect(palette.getByRole('group', { name: 'Recent borrowers', exact: true })).toHaveCount(0);
   });
 
   test('expandFirstLeadRow opens the first ranked borrower preview', async ({ app }) => {

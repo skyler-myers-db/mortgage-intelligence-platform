@@ -8,7 +8,7 @@
  * the timing (a Stop mid-turn needs a turn that never finishes).
  */
 import type { Locator, Page } from '@playwright/test';
-import type { GenieLiveProgress, GenieResult, GenieSubmitResult } from '../../../src/lib/apiTypes';
+import type { ActorAuditEventPage, GenieLiveProgress, GenieResult, GenieSubmitResult } from '../../../src/lib/apiTypes';
 import type { AppDriver } from './app';
 import { PRIMARY_BORROWER } from './data/borrowers';
 import { json, type MockApi } from './mockApi';
@@ -147,13 +147,18 @@ test.describe('Genie page context (genie-04, shell-07)', () => {
   });
 
   test('the palette: a masked borrower id + Enter opens its dossier, never a Genie prefill', async ({ app, mockApi, page }) => {
+    // No recents, so the live borrower search is the only group that can show
+    // the id (a recent would dedupe it out of the live group), and the exact
+    // name never also matches "Recent borrowers" (harness.fixture.spec.ts).
+    mockApi.register<ActorAuditEventPage>('GET', '/api/audit/my-events', () =>
+      json<ActorAuditEventPage>({ items: [], next_cursor: null }));
     await app.gotoRoute('/');
     const palette = await app.openCommandPalette();
     await palette.getByRole('combobox').fill(PRIMARY_BORROWER.borrower_id);
     // Once the borrower search lands, the borrower is the first (active)
     // option and the Genie row is the fallback after it. (Before it lands,
     // Enter is held on the Genie row; CommandPalette.test.tsx pins that.)
-    await expect(palette.getByRole('group', { name: 'Borrowers' })).toContainText(PRIMARY_BORROWER.borrower_id);
+    await expect(palette.getByRole('group', { name: 'Borrowers', exact: true })).toContainText(PRIMARY_BORROWER.borrower_id);
     const options = palette.getByRole('option');
     await expect(options.first()).toHaveAttribute('aria-selected', 'true');
     await expect(options.first()).not.toContainText('Ask Genie');
