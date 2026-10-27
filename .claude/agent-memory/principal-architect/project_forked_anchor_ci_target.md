@@ -6,7 +6,7 @@ metadata:
 ---
 
 The CI staging install (deploy-dev.yml) moved to a bundle target `pr105-host`
-with its own `&ci_staging_host` anchor (branch post-w5/forked-anchor-target,
+with its own `&ci_staging_host` anchor (branch post-w5/forked-anchor-target-r,
 2026-10-27). deploy.sh's workspace-auth bind refuses any host but the
 target's, and the reserved SPs are resolved by name in that workspace.
 
@@ -54,9 +54,10 @@ both installs' endpoints, so creator cannot separate them.
 **Round-2 review lessons (2026-10-27):**
 - Never name other teams' catalogs or people (catalog owners) in product
   docs/tests: count them by privilege class and give the read-only inventory
-  command instead; pin with a backticked-token allowlist.
+  command instead; pin with the sha256 digest scan in
+  tests/unit/test_no_third_party_names.py, never a plaintext list.
 - The live dev App has NO governed deploy/recovery path (readiness NO-GO):
-  deploy.sh never creates principals, and provision_m2m_oauth's only sink is
+  deploy.sh never creates a reserved principal, and provision_m2m_oauth's only sink is
   repo-level GitHub secrets that belong to the CI install. Never write "the
   live App recovers through deploy.sh"; route to the owner.
 - A dict merge `{**env, KEY: x}` was the only guard that the checked target
