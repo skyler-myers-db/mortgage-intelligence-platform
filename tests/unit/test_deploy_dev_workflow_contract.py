@@ -4131,6 +4131,24 @@ def test_admin_and_nightly_jobs_cannot_replace_reviewed_growth_agent_functions()
     assert "mip_refresh_scores" in nightly_jobs
     assert nightly_jobs.isdisjoint(publisher_jobs)
 
+    # The weekly mip_scheduled_refresh runs unattended: nothing it reaches
+    # through run_job_task (transitively) may publish a reviewed function.
+    scheduled_closure: set[str] = set()
+    pending = ["mip_scheduled_refresh"]
+    while pending:
+        job_name = pending.pop()
+        if job_name in scheduled_closure:
+            continue
+        scheduled_closure.add(job_name)
+        for task in jobs[job_name].get("tasks", []):
+            job_ref = task.get("run_job_task", {}).get("job_id", "")
+            if job_ref:
+                match = re.fullmatch(r"\$\{resources\.jobs\.([a-z0-9_]+)\.id\}", job_ref)
+                assert match, job_ref
+                pending.append(match.group(1))
+    assert "mip_refresh_scores" in scheduled_closure
+    assert scheduled_closure.isdisjoint(publisher_jobs), scheduled_closure & publisher_jobs
+
 
 def test_workflow_bundle_target_inventory_handles_shell_boundaries() -> None:
     continued = {

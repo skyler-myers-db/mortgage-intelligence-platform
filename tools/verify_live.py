@@ -712,7 +712,10 @@ def main() -> int:
         "--max-source-age-days",
         type=int,
         default=DEFAULT_MAX_SOURCE_AGE_DAYS,
-        help="flag a source whose checked_at is older than this many days (default 3)",
+        help=(
+            "flag a source whose checked_at is older than this many days (default "
+            f"{DEFAULT_MAX_SOURCE_AGE_DAYS}: the dev weekly cadence + 1 day; pass your install's cadence + 1)"
+        ),
     )
     args = ap.parse_args()
     if args.max_source_age_days < 1:

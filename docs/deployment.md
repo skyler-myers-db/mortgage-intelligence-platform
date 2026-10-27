@@ -1050,6 +1050,18 @@ cadence and confirms the target writes to an isolated catalog; otherwise
 multiple bundle targets can contend on the same Unity Catalog tables and burn
 avoidable compute.
 
+The one exception: the dev target's live install runs the weekly
+`mip_scheduled_refresh` (FRED → gold → lifecycle → KPI, Fridays 06:00
+America/Chicago). `MIP_SCHEDULED_REFRESH=off` pauses it. The CI staging install
+and `prod` always ship it paused, and `-t prod` refuses
+`MIP_SCHEDULED_REFRESH=on`. Its failure email goes to the deploying user on the
+live install only. The schedule reaches the workspace only through the bundle
+apply of a GO governed `./scripts/deploy.sh -t dev` run, and that run was NO-GO
+on the dev workspace on 2026-10-27. See `docs/runbook.md`, "Weekly scheduled
+refresh (dev live install)", for the GO conditions, the risks (static-share
+decay, the treatment-table DDL race, silent re-pause, the piecewise-render trap,
+a shared catalog) and the read-only checks.
+
 The App binds the Growth Agent scheduler job read-only (App resource
 `growth_agent_scheduler_job`, permission `CAN_VIEW`, env
 `MIP_GROWTH_AGENT_SCHEDULER_JOB_ID`), so Home and Saved monitors say whether

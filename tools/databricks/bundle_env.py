@@ -23,6 +23,9 @@ Mapping (env -> BUNDLE_VAR_*):
   MIP_RUNTIME_SECRET_SCOPE -> BUNDLE_VAR_runtime_secret_scope
   MIP_BUNDLE_ROOT_LEAF    -> BUNDLE_VAR_bundle_root_leaf (default dev; CI staging only)
   (derived from the leaf) -> BUNDLE_VAR_install_suffix ('' for dev)
+  (dev live install only) -> scheduled_refresh_failure_recipients, written to
+                             .databricks/bundle/<target>/variable-overrides.json
+                             (tools/databricks/scheduled_refresh_posture.py)
 
 Usage:
   python tools/databricks/bundle_env.py validate -t dev
@@ -60,12 +63,19 @@ from backend.schemas.lender_identity import (  # noqa: E402
     validate_public_lender_identity,
 )
 from tools import render_sql  # noqa: E402
-from tools.databricks import ci_install_isolation  # noqa: E402
+from tools.databricks import (  # noqa: E402
+    ci_install_isolation,
+    scheduled_refresh_posture,
+)
 from tools.databricks.workspace_auth import (  # noqa: E402
     strip_app_facing_workspace_auth,
 )
 
 ENV_LOCAL = REPO / ".env.local"
+# The bundle root the CLI loads (it holds .databricks/bundle/<target>/
+# variable-overrides.json). Like render_sql's output, it is this checkout
+# unless DATABRICKS_BUNDLE_ROOT names another root.
+BUNDLE_ROOT = REPO
 
 PLACEHOLDER = "00000000PLACEHOLDER"
 _APP_OR_INSTANCE_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
@@ -552,6 +562,20 @@ def main() -> int:
         return 2
     env["BUNDLE_VAR_bundle_root_leaf"] = root_leaf
     env["BUNDLE_VAR_install_suffix"] = ci_install_isolation.install_suffix(root_leaf)
+    # mip_scheduled_refresh runs and mails only on the dev target's live
+    # install: refuse an UNPAUSED export anywhere else, and write the failure
+    # recipients (a complex variable, which no BUNDLE_VAR_ export can carry)
+    # into the bundle's variable-overrides.json before every CLI call.
+    try:
+        scheduled_refresh_status = scheduled_refresh_posture.apply(
+            env,
+            target=target,
+            install_suffix=env["BUNDLE_VAR_install_suffix"],
+            bundle_root=Path(env.get("DATABRICKS_BUNDLE_ROOT") or BUNDLE_ROOT),
+        )
+    except (OSError, ValueError) as exc:
+        print(f"[bundle_env] {exc}", file=sys.stderr)
+        return 2
 
     catalog = str(env.get("MIP_DEFAULT_CATALOG") or "mip").strip()
     if _UC_IDENTIFIER.fullmatch(catalog) is None:
@@ -604,6 +628,7 @@ def main() -> int:
         f"lakebase_database={resource_names['lakebase_database_name']}",
         file=sys.stderr,
     )
+    print(f"[bundle_env] {scheduled_refresh_status}", file=sys.stderr)
     print(
         "[bundle_env] "
         f"render_sql catalog={catalog} processed={processed} written={written} "
