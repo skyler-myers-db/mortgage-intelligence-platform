@@ -116,8 +116,22 @@ def test_operator_docs_explain_app_refresh_default_and_paused_schedules() -> Non
         "a venv built outside the checkout and selected with `MIP_DEPLOY_PYTHON`",
         "`MIP_REBASE_UNVERIFIED_APP=1` once",
         "no Genie space that the App service principal reaches through a group grant",
+        # Two GO items are enforced by step 0's read-only pre-stop probe since it landed.
+        "Step 0's read-only pre-stop probe lists every such grant (also for the agent-runtime and "
+        "verifier service principals) and refuses before the App stop.",
+        "Accept that by exporting `MIP_RETIRE_HUMAN_SUPERVISOR=<supervisor id>` in the operator shell for "
+        "the run, or rename it off the canonical name first. Without either, step 0's pre-stop probe "
+        "refuses before the App stop;",
+        # The deployer-is-a-user check is the one GO read the probe does not make yet.
+        "where that read belongs, checks Supervisor retirement and Genie group grants but not the "
+        "deployer's user name. Until it does, check the deploying identity is a user before a GO run.",
     ):
         assert phrase in flat_runbook, phrase
+    for stale in (
+        "The runtime and verifier audits refuse it at cutover, after the App is stopped.",
+        "the pre-stop probe step it belongs in has not landed",
+    ):
+        assert stale not in flat_runbook, stale
     for doc in (flat_deployment, flat_runbook):
         assert "no other operator action" not in doc.lower()
 
