@@ -423,7 +423,7 @@ test.describe('controlled, deep-linkable drill (dataviz-04)', () => {
   // Segment Intelligence draws a drilled state's committed ZCTA polygons
   // (W5c dataviz-01, deviation:zcta-level); Home keeps the ZIP tiles. A
   // cleared drill leaves neither ZIP stage behind.
-  const texasZipAreas = (page: Page) => page.locator('svg.map-zcta[aria-label="ZIP areas in Texas"]');
+  const texasZipAreas = (page: Page) => page.getByRole('group', { name: 'ZIP areas in Texas', exact: true });
   const anyZipStage = (page: Page) => page.locator('ul.zip-tiles, svg.map-zcta');
 
   test('drilling TX puts ?geo_state=TX in the URL and Back restores the national view', async ({ app, page }) => {
