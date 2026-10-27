@@ -903,9 +903,23 @@ _OPERATOR_LIVE_DEPLOY = r"`?(?:\./)?scripts/deploy\.sh`? -t dev`?"
 # A recovery verb that reaches the operator deploy, or an un-negated dispatch for the live App, in one sentence.
 _LIVE_RECOVERY_OVERCLAIMS = (
     re.compile(r"(?i)\b(?:recover|restor|restart|redeploy|repair)\w*\b[^.]{0,80}?(?:" + _OPERATOR_LIVE_DEPLOY + ")"),
-    re.compile(r"(?i)(?<!not )\bdispatch\b (?:the )?(?:workflow|`?deploy-dev(?:\.yml)?`?)[^.]{0,60}?\bfor the live\b"),
+    re.compile(
+        r"(?i)(?<!not )(?<!never )(?<!n't )\bdispatch\b (?:the )?(?:workflow|`?deploy-dev(?:\.yml)?`?)"
+        r"[^.]{0,60}?\bfor the live\b"
+    ),
     re.compile(r"(?i)\brecovers? through an operator\b"),
 )
+# Post-W5 review (mutants R3, R4): any sentence holding both an operator
+# deploy and recovery vocabulary, in either order and whatever the verb, is an
+# overclaim. No sentence in the bootstrap section or the runbook recovery
+# needs both; a negation does not excuse one (rephrase with "start").
+_OPERATOR_LIVE_DEPLOY_RE = re.compile(r"(?i)(?:\./)?scripts/deploy\.sh`? -t dev\b")
+_RECOVERY_VOCABULARY = re.compile(
+    r"(?i)\b(?:recover|restor|restart|redeploy|repair|reviv|resurrect)\w*"
+    r"|\b(?:bring|brings|bringing|brought|get|gets|getting|got)\b[^.]{0,40}?\bback\b"
+)
+# Sentence ends in flattened Markdown: end punctuation, whitespace, then a capital after optional markup.
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+(?=[`*\"'(\[]*[A-Z])")
 
 
 def assert_no_live_recovery_overclaim(text: str) -> None:
@@ -914,6 +928,9 @@ def assert_no_live_recovery_overclaim(text: str) -> None:
     for pattern in _LIVE_RECOVERY_OVERCLAIMS:
         match = pattern.search(text)
         assert match is None, match.group(0) if match else ""
+    for sentence in _SENTENCE_BREAK.split(" ".join(text.split())):
+        both = _OPERATOR_LIVE_DEPLOY_RE.search(sentence) and _RECOVERY_VOCABULARY.search(sentence)
+        assert not both, sentence
 
 
 @pytest.mark.parametrize(
@@ -925,11 +942,31 @@ def assert_no_live_recovery_overclaim(text: str) -> None:
         "Do not start that deploy during an incident, and dispatch the workflow below for the live App.",
         "Dispatch deploy-dev.yml for the live App.",
         "The live App recovers through an operator.",
+        "Run `./scripts/deploy.sh -t dev` to recover the live dev App.",
+        "An operator brings the live App back with `./scripts/deploy.sh -t dev`.",
+        "Get the live App back up: ./scripts/deploy.sh -t dev.",
+        "To restore service, an operator runs scripts/deploy.sh -t dev from a clean checkout.",
     ],
 )
 def test_the_live_recovery_overclaim_ban_catches_paraphrases(overclaim: str) -> None:
     with pytest.raises(AssertionError):
         assert_no_live_recovery_overclaim(overclaim)
+
+
+@pytest.mark.parametrize(
+    "negated",
+    [
+        "Never dispatch the workflow below for the live App.",
+        "Do not start that deploy during an incident, and do not dispatch the workflow below for the live App.",
+        "Don't dispatch deploy-dev.yml for the live App.",
+        "Never start `./scripts/deploy.sh -t dev` against the live workspace during an incident; escalate to the owner.",
+        "No governed path recovers it today. Its command of record, an operator `./scripts/deploy.sh -t dev`, is NO-GO.",
+    ],
+)
+def test_the_live_recovery_overclaim_ban_lets_the_refusals_through(negated: str) -> None:
+    """The ban's controls: the refusals the docs actually use, and the 'Never dispatch' false positive."""
+
+    assert_no_live_recovery_overclaim(negated)
 
 
 def test_the_live_app_has_no_governed_recovery_path_and_escalates_to_the_owner() -> None:
