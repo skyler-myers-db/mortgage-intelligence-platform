@@ -454,3 +454,63 @@ def test_bundle_env_refuses_an_unpause_outside_the_live_install(
     code, calls = _bundle_env_main(monkeypatch, tmp_path, env, target=target)
 
     assert code == 2 and calls == [], "refused before the CLI runs"
+
+
+def test_bundle_env_writes_the_overrides_under_databricks_bundle_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The CLI reads variable-overrides.json under DATABRICKS_BUNDLE_ROOT when that names another root."""
+    other_root = tmp_path / "other-bundle-root"
+    other_root.mkdir()
+
+    code, calls = _bundle_env_main(
+        monkeypatch, tmp_path, {"DATABRICKS_BUNDLE_ROOT": str(other_root), posture.PAUSE_ENV: "UNPAUSED"}
+    )
+
+    assert code == 0 and len(calls) == 1
+    assert _written_recipients(other_root) == ["${workspace.current_user.userName}"]
+    assert not posture.overrides_path(tmp_path, "dev").exists(), "never the default root's file"
+
+
+# ------------------------------------- docs/runbook.md: the interim refresh
+
+
+def test_the_runbook_pins_the_interim_refresh_and_its_never_run_now_warning() -> None:
+    runbook = (ROOT / "docs" / "runbook.md").read_text(encoding="utf-8")
+    start = runbook.index("### Interim refresh (governed deploy NO-GO)")
+    section = " ".join(runbook[start : runbook.index("\n## ", start)].split())
+    flat_runbook = " ".join(runbook.split())
+
+    # The warning that keeps a stale deployed job from dropping the reviewed grants.
+    for phrase in (
+        "**Never `run-now`, unpause or Admin-trigger the deployed gold job (`mip_refresh_scores`) or the deployed "
+        "lifecycle job (`mip_sync_lifecycle_state`) on an install whose job definitions predate the current bundle.**",
+        "which drops the App, agent-runtime and agent-proxy `EXECUTE` grants",
+        "**Rebuild scoring snapshot** runs the deployed gold job",
+        "Never run-now the deployed lifecycle job instead.",
+    ):
+        assert phrase in section, phrase
+    # The recipe's load-bearing steps, in order.
+    order = [
+        "1. **FRED.** First prove that the deployed `mip_fred_rates_ingest` equals main's",
+        "2. **Grant snapshot, before.**",
+        "3. **Gold.**",
+        "Never include a `publish_fn_*` task",
+        "opens with a `TEMP VIEW`",
+        "databricks jobs submit --no-wait",
+        '"idempotency_token": "<unique per refresh>"',
+        "4. **Grant snapshot, after, and a strict diff.**",
+        "So does an object whose effective `EXECUTE` cannot be read on either side",
+        "5. **Rate alignment.**",
+        "6. **Lifecycle.**",
+        "7. **KPI.**",
+        "Probe each App endpoint twice and read the second answer.",
+        "only a real Genie turn or an App restart closes it",
+    ]
+    positions = [section.index(phrase) for phrase in order]
+    assert positions == sorted(positions), "the steps keep their order"
+    assert "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1 python tools/render_sql.py" in section
+    # The interleaving note next to the same-job collision.
+    assert "Do not start a governed deploy (or the interim refresh below) within about an hour of Friday 06:00 CT" in (
+        flat_runbook
+    )
