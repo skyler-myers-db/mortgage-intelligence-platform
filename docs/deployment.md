@@ -1287,7 +1287,16 @@ scope `mip-runtime`.
   (`tests/unit/test_bundle_experiment_path.py`). On paychex the bundle state
   holds the experiment at `/Shared/mip/[dev <user>] lead-scoring`,
   so the first governed bundle apply is expected to rename it to the new name.
-  That apply has not been run or planned.
+  That apply has not been run or planned. A read-only `experiments
+  get-by-name` on 2026-10-27 found nothing at the new dev name, so the rename
+  has no collision to fail on. For rollback, record the rename as a change
+  the listed rollback steps do not undo. It keeps the experiment id, runs and
+  models, and no repo code reads the experiment by name. Reversing it is an
+  owner-run rename by id (`databricks experiments update-experiment
+  <experiment id> --new-name '/Shared/mip/[dev <user>] lead-scoring'`), and
+  the next bundle apply from this tree renames it again. At the new path the
+  experiment inherits the ACL of `/Shared` itself rather than of
+  `/Shared/mip`; whether that ACL is acceptable is an owner decision.
 - `deploy-dev.yml` sets `MIP_BUNDLE_ROOT_LEAF: dev-ci` as a literal in the
   deploy step, so the CI install lives under `~/.bundle/<bundle>/dev-ci` and
   its names end in `_ci`. `nightly.yml` sets
