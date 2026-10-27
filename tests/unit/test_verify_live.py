@@ -528,3 +528,349 @@ def test_the_cli_threads_the_threshold_into_the_flags(monkeypatch: pytest.Monkey
     assert verify_live.main() == 0
     assert seen["days"] == 9
     assert "within 9 d" in out.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# The live geo drill (post-W5 live-gate-geo-drill): largest populated state ->
+# its ZIPs, the Lead Queue deep link by state + ZIP, and the county endpoint
+# probed only as a retired-grain shape contract whose empty answer passes.
+# ---------------------------------------------------------------------------
+
+
+def _drill_states(**overrides: object) -> dict[str, Any]:
+    # verify_live's cohort shape with CA first: the filtered state SQL has no
+    # ORDER BY, so CA was the old first-row pick on 2026-10-26.
+    payload: dict[str, Any] = {
+        "rollups": [
+            {"state": "CA", "addressable": 104, "zip_unassigned_count": 0},
+            {"state": "IL", "addressable": 751, "zip_unassigned_count": 3},
+            {"state": "FL", "addressable": 259, "zip_unassigned_count": 0},
+        ],
+        "snapshot_date": None,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _drill_zip(zip_code: object, borrowers: object, state: object = "IL") -> dict[str, Any]:
+    return {"zip": zip_code, "state": state, "county_fips_5": None, "addressable_borrowers": borrowers}
+
+
+def _drill_zips(**overrides: object) -> dict[str, Any]:
+    # 751 - 3 unassigned = 748 borrowers on the ZIP layer.
+    payload: dict[str, Any] = {
+        "state": "IL",
+        "fips_5": None,
+        "rollups": [_drill_zip("60628", 690), _drill_zip("60617", 29), _drill_zip("60601", 29)],
+        "snapshot_date": None,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _drill_counties(**overrides: object) -> dict[str, Any]:
+    payload: dict[str, Any] = {"state": "IL", "rollups": [], "snapshot_date": None, "scope_note": None}
+    payload.update(overrides)
+    return payload
+
+
+class _GeoProbe:
+    """A `verify_live.probe` stand-in: canned 200 payloads per endpoint, every path recorded."""
+
+    def __init__(self, payloads: dict[str, Any], failing: frozenset[str] = frozenset()) -> None:
+        self.payloads = payloads
+        self.failing = failing
+        self.paths: list[str] = []
+
+    def __call__(self, base: str, token: str, name: str, method: str, path: str, **_: Any) -> ProbeResult:
+        self.paths.append(path)
+        endpoint = urllib.parse.urlsplit(path).path
+        if endpoint in self.failing:
+            return ProbeResult(name=name, method=method, path=path, status=503, ok=False, error="unavailable")
+        payload = self.payloads[endpoint]
+        if isinstance(payload, list):
+            return ProbeResult(
+                name=name,
+                method=method,
+                path=path,
+                status=200,
+                ok=True,
+                sample=payload[0] if payload else [],
+                top_keys=[f"[array len={len(payload)}]"],
+            )
+        return ProbeResult(
+            name=name, method=method, path=path, status=200, ok=True, sample=payload, top_keys=sorted(payload)
+        )
+
+    def query(self, endpoint: str) -> dict[str, list[str]]:
+        [path] = [p for p in self.paths if urllib.parse.urlsplit(p).path == endpoint]
+        return urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+
+
+def _drill(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    states: Any = None,
+    zips: Any = None,
+    counties: Any = None,
+    failing: frozenset[str] = frozenset(),
+) -> tuple[_GeoProbe, list[ProbeResult]]:
+    fake = _GeoProbe(
+        {
+            "/api/geo/state-rollups": _drill_states() if states is None else states,
+            "/api/geo/zip-rollups": _drill_zips() if zips is None else zips,
+            "/api/geo/county-rollups": _drill_counties() if counties is None else counties,
+            "/api/leads": [{"borrower_id": "B-0000000000AA1"}],
+        },
+        failing,
+    )
+
+    def no_direct_reads(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the drill reads only through probe(), so every checked payload is the recorded one")
+
+    monkeypatch.setattr(verify_live, "probe", fake)
+    monkeypatch.setattr(urllib.request, "urlopen", no_direct_reads)
+    return fake, verify_live._geo_drill_probes("https://app.example", "test-token")
+
+
+def test_geo_drill_targets_the_largest_populated_state_then_its_zips(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake, results = _drill(monkeypatch)
+
+    assert [urllib.parse.urlsplit(path).path for path in fake.paths] == [
+        "/api/geo/state-rollups",
+        "/api/geo/zip-rollups",
+        "/api/geo/county-rollups",
+        "/api/leads",
+    ]
+    assert [r.name for r in results] == [
+        "geo.state_rollups.filtered",
+        "geo.zip_rollups.filtered",
+        "geo.county_rollups.retired_grain",
+        "leads.filtered_geo",
+    ]
+    zip_query = fake.query("/api/geo/zip-rollups")
+    assert zip_query["state"] == ["IL"] and "county_fips" not in zip_query
+    assert fake.query("/api/geo/county-rollups")["state"] == ["IL"]
+    leads = fake.query("/api/leads")
+    assert leads["state"] == ["IL"] and leads["zip"] == ["60628"]
+    assert "county" not in leads and "county_fips" not in leads
+    for query in (zip_query, leads):
+        assert query["segment_codes"] == ["itm,equity"] and query["segment_mode"] == ["all"]
+        assert query["min_equity_pct_label"] == ["≥ 25%"]
+
+
+def test_a_clean_drill_with_the_empty_county_answer_raises_no_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    _, results = _drill(monkeypatch)
+
+    assert collect_red_flags(results) == []
+
+
+def test_a_county_row_with_a_five_digit_fips_raises_no_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    _, results = _drill(monkeypatch, counties=_drill_counties(rollups=[{"fips_5": "17031", "state": "IL"}]))
+
+    assert collect_red_flags(results) == []
+
+
+def test_the_drill_breaks_size_ties_by_state_then_zip(monkeypatch: pytest.MonkeyPatch) -> None:
+    states = _drill_states(
+        rollups=[
+            {"state": "TX", "addressable": 751, "zip_unassigned_count": 0},
+            {"state": "IL", "addressable": 751, "zip_unassigned_count": 3},
+        ]
+    )
+    zips = _drill_zips(rollups=[_drill_zip("60628", 374), _drill_zip("60617", 374)])
+
+    fake, results = _drill(monkeypatch, states=states, zips=zips)
+
+    assert fake.query("/api/geo/zip-rollups")["state"] == ["IL"]
+    assert fake.query("/api/leads")["zip"] == ["60617"]
+    assert collect_red_flags(results) == []
+
+
+@pytest.mark.parametrize(
+    ("payloads", "flag"),
+    [
+        ({"zips": _drill_zips(rollups=[])}, "geo.zip_rollups.filtered: `rollups` returned empty array"),
+        ({"zips": _drill_zips(rollups=[])}, "geo.zip_rollups.filtered: no ZIP row with addressable borrowers for IL"),
+        (
+            {"zips": _drill_zips(rollups=[])},
+            "geo.drill_target.zip: status=0 error=no filtered ZIP rollup with addressable borrowers for IL",
+        ),
+        (
+            {"zips": _drill_zips(rollups=[_drill_zip("60628", 719), _drill_zip("6061", 29)])},
+            "geo.zip_rollups.filtered: ZIP row without a 5-digit zip: 1 row(s), first '6061'",
+        ),
+        (
+            {"zips": _drill_zips(rollups=[_drill_zip("60628", 719), _drill_zip("6061A", 29)])},
+            "geo.zip_rollups.filtered: ZIP row without a 5-digit zip: 1 row(s), first '6061A'",
+        ),
+        (
+            {"zips": _drill_zips(rollups=[_drill_zip("60628", 719), _drill_zip(60617, 29)])},
+            "geo.zip_rollups.filtered: ZIP row without a 5-digit zip: 1 row(s), first 60617",
+        ),
+        (
+            {"zips": _drill_zips(rollups=[_drill_zip("60628", 719), _drill_zip("60617\n", 29)])},
+            "geo.zip_rollups.filtered: ZIP row without a 5-digit zip: 1 row(s), first '60617\\n'",
+        ),
+        (
+            {"zips": _drill_zips(rollups=[_drill_zip("60628", 748), _drill_zip("75201", 0, "TX")])},
+            "geo.zip_rollups.filtered: ZIP row outside IL: 1 row(s), first 'TX'",
+        ),
+        (
+            {"zips": _drill_zips(state="TX")},
+            "geo.zip_rollups.filtered: envelope state 'TX' is not the drilled IL",
+        ),
+        (
+            {"zips": _drill_zips(rollups=[_drill_zip("60628", 0)])},
+            "geo.zip_rollups.filtered: no ZIP row with addressable borrowers for IL",
+        ),
+        ({"zips": _drill_zips(rollups=None)}, "geo.zip_rollups.filtered: `rollups` is not an array"),
+        (
+            {"counties": _drill_counties(rollups=[{"fips_5": "", "state": "IL"}])},
+            "geo.county_rollups.retired_grain: county row without a 5-digit fips_5: 1 row(s), first ''",
+        ),
+        (
+            {"counties": _drill_counties(rollups=[{"fips_5": None, "state": "IL"}])},
+            "geo.county_rollups.retired_grain: county row without a 5-digit fips_5: 1 row(s), first None",
+        ),
+        (
+            {"counties": _drill_counties(rollups=[{"fips_5": "17031", "state": "WI"}])},
+            "geo.county_rollups.retired_grain: county row outside IL: 1 row(s), first 'WI'",
+        ),
+        (
+            {"counties": _drill_counties(state="CA")},
+            "geo.county_rollups.retired_grain: envelope state 'CA' is not the drilled 'IL'",
+        ),
+        ({"counties": _drill_counties(rollups=None)}, "geo.county_rollups.retired_grain: `rollups` is not an array"),
+        (
+            {"zips": _drill_zips(rollups=[_drill_zip("60628", 690), _drill_zip("60617", 30), _drill_zip("60601", 29)])},
+            "geo.drill_reconciliation: IL does not reconcile: sum(zip.addressable_borrowers)=749, "
+            "expected state.addressable 751 - state.zip_unassigned_count 3 = 748",
+        ),
+        (
+            {
+                "states": _drill_states(
+                    rollups=[{"state": "IL", "addressable": 751}, {"state": "CA", "addressable": 104}]
+                )
+            },
+            "geo.drill_reconciliation: IL state row lacks a whole addressable or zip_unassigned_count "
+            "(addressable=751, zip_unassigned_count=None)",
+        ),
+        (
+            {"zips": _drill_zips(rollups=[_drill_zip("60628", 719), _drill_zip("60617", "29")])},
+            "geo.drill_reconciliation: cannot sum the IL ZIP layer: a row lacks a whole addressable_borrowers",
+        ),
+    ],
+    ids=[
+        "empty-zip-list-generic",
+        "empty-zip-list-no-populated",
+        "empty-zip-list-no-target",
+        "four-digit-zip",
+        "non-numeric-zip",
+        "numeric-zip-not-a-string",
+        "zip-with-trailing-newline",
+        "zip-row-from-another-state",
+        "zip-envelope-other-state",
+        "no-populated-zip",
+        "zip-rollups-not-an-array",
+        "county-row-empty-fips",
+        "county-row-null-fips",
+        "county-row-other-state",
+        "county-envelope-other-state",
+        "county-rollups-not-an-array",
+        "broken-invariant",
+        "state-row-without-zip-unassigned",
+        "string-zip-count",
+    ],
+)
+def test_each_geo_drill_defect_raises_its_flag(
+    monkeypatch: pytest.MonkeyPatch, payloads: dict[str, Any], flag: str
+) -> None:
+    _, results = _drill(monkeypatch, **payloads)
+
+    flags = collect_red_flags(results)
+
+    assert flag in flags, flags
+
+
+def test_an_empty_zip_layer_sends_no_lead_queue_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake, results = _drill(monkeypatch, zips=_drill_zips(rollups=[]))
+
+    assert all(urllib.parse.urlsplit(path).path != "/api/leads" for path in fake.paths)
+    assert results[-1].name == "geo.drill_target.zip" and not results[-1].ok
+
+
+@pytest.mark.parametrize(
+    ("states", "failing", "reason"),
+    [
+        (
+            _drill_states(rollups=[{"state": "IL", "addressable": 0, "zip_unassigned_count": 0}]),
+            frozenset(),
+            "no filtered state rollup with addressable borrowers",
+        ),
+        (_drill_states(rollups=[]), frozenset(), "no filtered state rollup with addressable borrowers"),
+        (_drill_states(rollups=None), frozenset(), "filtered state rollups carried no `rollups` array"),
+        (
+            _drill_states(rollups=[{"state": "il", "addressable": 751, "zip_unassigned_count": 3}]),
+            frozenset(),
+            "filtered state rollup row state='il' addressable=751 lacks a 2-letter state or a whole addressable count",
+        ),
+        (
+            _drill_states(
+                rollups=[
+                    {"state": "CA", "addressable": 104, "zip_unassigned_count": 0},
+                    {"state": "IL", "addressable": "751", "zip_unassigned_count": 3},
+                ]
+            ),
+            frozenset(),
+            "filtered state rollup row state='IL' addressable='751' lacks a 2-letter state or a whole addressable count",
+        ),
+        (_drill_states(), frozenset({"/api/geo/state-rollups"}), "filtered state rollups probe failed"),
+    ],
+    ids=[
+        "no-populated-state",
+        "no-state-rows",
+        "rollups-not-an-array",
+        "lowercase-state",
+        "string-addressable",
+        "state-probe-failed",
+    ],
+)
+def test_a_state_payload_without_a_clean_target_stops_the_drill(
+    monkeypatch: pytest.MonkeyPatch, states: dict[str, Any], failing: frozenset[str], reason: str
+) -> None:
+    fake, results = _drill(monkeypatch, states=states, failing=failing)
+
+    assert len(fake.paths) == 1
+    assert results[-1].name == "geo.drill_target.state"
+    assert not results[-1].ok and results[-1].error == reason
+    assert f"geo.drill_target.state: status=0 error={reason}" in collect_red_flags(results)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["geo.county_rollups.filtered", "geo.zip_rollups.filtered", "geo.state_rollups.filtered"],
+)
+def test_the_empty_rollups_waiver_is_scoped_to_the_retired_county_probe(name: str) -> None:
+    flags = collect_red_flags(
+        [ProbeResult(name=name, method="GET", path="/api/geo/x?state=IL", status=200, ok=True, sample={"rollups": []})]
+    )
+
+    assert f"{name}: `rollups` returned empty array" in flags
+
+
+def test_the_retired_county_probe_keeps_every_other_empty_array_flag() -> None:
+    flags = collect_red_flags(
+        [
+            ProbeResult(
+                name="geo.county_rollups.retired_grain",
+                method="GET",
+                path="/api/geo/county-rollups?state=IL",
+                status=200,
+                ok=True,
+                sample={"state": "IL", "rollups": [], "rows": []},
+            )
+        ]
+    )
+
+    assert flags == ["geo.county_rollups.retired_grain: `rows` returned empty array"]
