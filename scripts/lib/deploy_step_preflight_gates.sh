@@ -731,3 +731,20 @@ PYEOF
   fi
   echo "  Gateway model attestation: separated model-provenance key configured"
 fi
+
+# >>> runtime secret pre-stop check >>>
+# Step 0a stops the App before the bundle-apply step provisions mip-runtime.
+# Plan that provisioning read-only here, while the App still serves: a stored
+# Cotality ID-mask value that differs from (or cannot be compared with) the
+# configured one refuses now, not after the stop (full_deploy_readiness.md
+# 3.7). The tool names keys only, never values or fingerprints.
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  if ! "$PYTHON" -m tools.databricks.provision_runtime_secrets --check \
+      --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"; then
+    echo "${RED}[deploy] the runtime secret plan was refused before the App stop (see above).${RST}" >&2
+    exit 2
+  fi
+else
+  echo "[deploy] would check (read-only): tools.databricks.provision_runtime_secrets --check --scope ${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"
+fi
+# <<< runtime secret pre-stop check <<<
