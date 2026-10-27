@@ -176,6 +176,27 @@ def test_every_job_waits_on_the_uc_catalog_isolation_guard() -> None:
     assert env["BUNDLE_VAR_lakebase_catalog_name"] == env["MIP_LAKEBASE_SYNC_CATALOG"]
 
 
+def test_the_header_says_which_jobs_a_wrong_repository_host_reaches() -> None:
+    """Post-W5 review: a mismatched DATABRICKS_HOST does not stop every job.
+
+    The host refusal is parity-live's bundle validate step. kill-drill-simulated
+    needs only the UC-catalog guard and boots a backend with the repository
+    host, so the header must not claim the CLI stops it.
+    """
+
+    text = NIGHTLY.read_text(encoding="utf-8")
+    header = " ".join(line.lstrip("# ") for line in text.split("\non:", 1)[0].splitlines())
+    workflow = yaml.safe_load(text)
+    drill = workflow["jobs"]["kill-drill-simulated"]
+
+    assert "before any job runs" not in header
+    assert "parity-live and everything after it fail at its bundle validate step" in header
+    assert "kill-drill-simulated needs only the UC-catalog guard and still reads whatever host the repository names" in header
+    assert _needs(drill) == {GUARD_JOB}, "the header's claim about the drill holds"
+    validate = [s for s in workflow["jobs"]["parity-live"]["steps"] if "bundle validate" in str(s.get("run", ""))]
+    assert len(validate) == 1 and "-t pr105-host" in validate[0]["run"]
+
+
 def test_live_playwright_job_budgets_cold_app_and_serial_browser_matrix() -> None:
     workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
 

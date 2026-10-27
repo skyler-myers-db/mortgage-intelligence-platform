@@ -26,8 +26,11 @@ name: live validation (on demand)
 # isolated CI staging install that deploy-dev.yml deploys (the forked-anchor
 # pr105-host target in its own workspace, bundle root leaf dev-ci, name suffix
 # _ci), never the live install's workspace or state. The repository-level
-# DATABRICKS_HOST must therefore be that target's host, or the CLI refuses the
-# profile/target host mismatch before any job runs.
+# DATABRICKS_HOST must therefore be that target's host (docs/deployment.md,
+# owner step 6). If it names another workspace, parity-live and everything
+# after it fail at its bundle validate step (the CLI refuses the
+# profile/target host mismatch), but kill-drill-simulated needs only the
+# UC-catalog guard and still reads whatever host the repository names.
 #
 # On failure: a GitHub issue is created with the failing job name + a
 # link to the run. Slack/PagerDuty integration is deliberately deferred
