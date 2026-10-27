@@ -26,6 +26,16 @@ comparable.
 
 ``--check`` builds the same plan read-only (no scope creation, no write), so
 ``scripts/deploy.sh`` can refuse before it stops the App.
+
+Every CLI mode first proves the workspace it is about to call is the install's.
+Run by hand, the SDK's default resolution falls back to the ``~/.databrickscfg``
+DEFAULT profile, which can name another workspace; this tool never binds the
+``.env.local`` host or token itself. The resolved host must equal every
+configured install host (``DATABRICKS_HOST`` in the shell or ``.env.local``,
+and ``MIP_DATABRICKS_WORKSPACE_HOST``, which deploy.sh exports once it has
+bound the deployer), and at least one must be configured; otherwise the run
+refuses with exit 2 before any workspace call. Each summary line names the
+resolved host, which is not a secret.
 """
 
 from __future__ import annotations
@@ -40,6 +50,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
 
@@ -97,10 +108,16 @@ MASK_ENV = "MIP_COTALITY_ID_MASK_SECRET"
 MASK_KEY = ENV_TO_KEY[MASK_ENV]
 DISABLED_PREVIOUS_PREFIX = "disabled."
 EXIT_REFUSED = 2
+HOST_ENV = "DATABRICKS_HOST"
+DEPLOY_HOST_ENV = "MIP_DATABRICKS_WORKSPACE_HOST"
 
 
 class RuntimeSecretChangeRefused(ValueError):
     """The run would replace a stored value the install depends on."""
+
+
+class WorkspaceHostRefused(ValueError):
+    """The SDK resolved a workspace that is not (provably) the install's."""
 
 
 class EmptySecretValue(Exception):
@@ -152,6 +169,75 @@ def _item_name(item: Any, attribute: str) -> str:
     if isinstance(item, dict):
         return str(item.get(attribute) or "")
     return str(getattr(item, attribute, "") or "")
+
+
+def _normalized_host(value: str) -> str:
+    """``scheme://host[:port]`` lowercased, as the SDK normalizes a host; "" if unusable.
+
+    No path, query or user info survives, so the result is safe to print.
+    """
+
+    text = value.strip()
+    if not text:
+        return ""
+    if "://" not in text:
+        text = f"https://{text}"
+    try:
+        parts = urlsplit(text)
+        port = parts.port
+    except ValueError:
+        return ""
+    if not parts.hostname:
+        return ""
+    netloc = parts.hostname if port in (None, 443) else f"{parts.hostname}:{port}"
+    return f"{parts.scheme.lower()}://{netloc}"
+
+
+def _install_hosts() -> tuple[tuple[str, str], ...]:
+    """Each configured name for the install's workspace, as (source, raw value)."""
+
+    dotenv = _dotenv_config()
+    candidates = (
+        (f"{HOST_ENV} (shell)", os.environ.get(HOST_ENV, "")),
+        (f"{DEPLOY_HOST_ENV} (shell)", os.environ.get(DEPLOY_HOST_ENV, "")),
+        (f"{HOST_ENV} (.env.local)", dotenv.get(HOST_ENV, "")),
+    )
+    return tuple((source, value) for source, value in candidates if value.strip())
+
+
+def bound_workspace(client: Any | None = None) -> tuple[Any, str]:
+    """The workspace client and its resolved host, proven to be the install's.
+
+    Runs before any workspace call. A secret read in the wrong workspace leaves
+    getSecret audit entries there and returns a verdict about the wrong install.
+    """
+
+    workspace = client if client is not None else WorkspaceClient()
+    config_host = getattr(getattr(workspace, "config", None), "host", None)
+    resolved = _normalized_host(str(config_host or ""))
+    if not resolved:
+        raise WorkspaceHostRefused(
+            "the Databricks SDK resolved no workspace host. Nothing was read or written."
+        )
+    install = _install_hosts()
+    if not install:
+        raise WorkspaceHostRefused(
+            f"no install workspace host is configured to check {resolved} against. Set "
+            f"{HOST_ENV} in .env.local (deploy.sh requires it) or in the shell. "
+            "Nothing was read or written."
+        )
+    mismatched = [
+        f"{source} names {_normalized_host(value) or 'an unparsable host'}"
+        for source, value in install
+        if _normalized_host(value) != resolved
+    ]
+    if mismatched:
+        raise WorkspaceHostRefused(
+            f"the Databricks SDK resolved workspace {resolved}, but {'; '.join(mismatched)}. "
+            "Pin the install's identity (for example DATABRICKS_CONFIG_PROFILE=<install "
+            "profile>) and run again. Nothing was read or written."
+        )
+    return workspace, resolved
 
 
 def _validated_values() -> dict[str, str]:
@@ -324,7 +410,7 @@ def retire_previous_secret(
 ) -> bool:
     """Invalidate the previous key while preserving the required App resource."""
 
-    workspace = client or WorkspaceClient()
+    workspace = client if client is not None else bound_workspace()[0]
     scopes = {_item_name(item, "name") for item in workspace.secrets.list_scopes()}
     if scope not in scopes:
         workspace.secrets.create_scope(scope=scope)
@@ -345,7 +431,8 @@ def check_runtime_secrets(
     """Build the provisioning plan without creating the scope or writing a key."""
 
     values = _validated_values()
-    return plan_runtime_secrets(values, scope=scope, workspace=client or WorkspaceClient())
+    workspace = client if client is not None else bound_workspace()[0]
+    return plan_runtime_secrets(values, scope=scope, workspace=workspace)
 
 
 def provision_runtime_secrets(
@@ -354,7 +441,7 @@ def provision_runtime_secrets(
     client: WorkspaceClient | None = None,
 ) -> ProvisionedRuntimeSecrets:
     values = _validated_values()
-    workspace = client or WorkspaceClient()
+    workspace = client if client is not None else bound_workspace()[0]
     plan = plan_runtime_secrets(values, scope=scope, workspace=workspace)
     if not plan.scope_exists:
         workspace.secrets.create_scope(scope=scope)
@@ -387,26 +474,33 @@ def main(argv: list[str] | None = None) -> int:
         help="read-only: build the provisioning plan and refuse exactly as a write run would",
     )
     args = parser.parse_args(argv)
+    try:
+        workspace, host = bound_workspace()
+    except ValueError as exc:
+        print(f"[runtime-secrets] refused: {exc}", file=sys.stderr)
+        return EXIT_REFUSED
     if args.retire_previous:
-        existed = retire_previous_secret(scope=args.scope)
+        existed = retire_previous_secret(scope=args.scope, client=workspace)
         state = "replaced" if existed else "disabled binding created"
-        print(f"previous runtime verification key: {state}")
+        print(f"previous runtime verification key in {args.scope} on {host}: {state}")
         return 0
     try:
         if args.check:
-            plan = check_runtime_secrets(scope=args.scope)
+            plan = check_runtime_secrets(scope=args.scope, client=workspace)
             print(
-                f"runtime secret plan for {args.scope}: write {_key_list(plan.write_keys)}; "
+                f"runtime secret plan for {args.scope} on {host}: "
+                f"write {_key_list(plan.write_keys)}; "
                 f"keep {_key_list(plan.kept)} (read-only check, nothing written)"
             )
             _print_notes(plan.notes)
             return 0
-        result = provision_runtime_secrets(scope=args.scope)
+        result = provision_runtime_secrets(scope=args.scope, client=workspace)
     except ValueError as exc:
-        print(f"[runtime-secrets] refused: {exc}", file=sys.stderr)
+        print(f"[runtime-secrets] refused on {host}: {exc}", file=sys.stderr)
         return EXIT_REFUSED
     print(
-        f"runtime secret bindings ready: {len(result.written) + len(result.kept)} keys "
+        f"runtime secret bindings ready in {args.scope} on {host}: "
+        f"{len(result.written) + len(result.kept)} keys "
         f"(written: {_key_list(result.written)}; kept: {_key_list(result.kept)})"
     )
     _print_notes(result.notes)

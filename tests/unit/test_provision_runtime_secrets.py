@@ -54,6 +54,8 @@ ALL_TEST_SECRETS = (
     PREVIOUS_SECRET,
 )
 LEAK_WINDOW = 8
+INSTALL_HOST = "https://dbc-synthetic-install.cloud.databricks.com"
+OTHER_HOST = "https://dbc-synthetic-other.cloud.databricks.com"
 DEFAULT_WRITTEN_KEYS = tuple(subject.ENV_TO_KEY.values())
 SALESFORCE_KEYS = (
     "salesforce-client-secret",
@@ -65,8 +67,15 @@ SALESFORCE_KEYS = (
 @pytest.fixture(autouse=True)
 def _hermetic_secret_config(monkeypatch) -> None:
     monkeypatch.setattr(subject, "ENV_LOCAL", subject.REPO / ".missing-test-env")
-    for name in (*subject.ENV_TO_KEY, subject.PREVIOUS_KID_ENV):
+    for name in (
+        *subject.ENV_TO_KEY,
+        subject.PREVIOUS_KID_ENV,
+        subject.HOST_ENV,
+        "DATABRICKS_CONFIG_PROFILE",
+    ):
         monkeypatch.delenv(name, raising=False)
+    # deploy.sh exports the host it bound the deployer to; CLI tests resolve it.
+    monkeypatch.setenv(subject.DEPLOY_HOST_ENV, INSTALL_HOST)
 
 
 class _Secrets:
@@ -126,8 +135,8 @@ class _Secrets:
         self.values.pop(key, None)
 
 
-def _client(secrets_api: _Secrets) -> SimpleNamespace:
-    return SimpleNamespace(secrets=secrets_api)
+def _client(secrets_api: _Secrets, host: str | None = INSTALL_HOST) -> SimpleNamespace:
+    return SimpleNamespace(secrets=secrets_api, config=SimpleNamespace(host=host))
 
 
 def _required(monkeypatch, *, mask: str = MASK_SECRET) -> None:
@@ -452,7 +461,10 @@ def test_cli_refusal_exits_2_with_names_only(monkeypatch, capsys) -> None:
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err.count("[runtime-secrets] refused: mip-runtime/cotality-id-mask-v1") == 2
+    assert (
+        captured.err.count(f"[runtime-secrets] refused on {INSTALL_HOST}: mip-runtime/cotality-id-mask-v1")
+        == 2
+    )
     _assert_names_only(captured.err, digests)
     assert secrets_api.puts == []
 
@@ -469,7 +481,8 @@ def test_cli_check_reports_key_names_and_writes_nothing(monkeypatch, capsys) -> 
 
     out = capsys.readouterr().out
     assert out == (
-        "runtime secret plan for mip-runtime: write genie-action-current, genie-action-previous; "
+        f"runtime secret plan for mip-runtime on {INSTALL_HOST}: "
+        "write genie-action-current, genie-action-previous; "
         "keep cotality-id-mask-v1, salesforce-client-secret, salesforce-password, "
         "salesforce-security-token (read-only check, nothing written)\n"
     )
@@ -567,3 +580,177 @@ def test_the_cli_prints_the_current_key_note_in_both_modes(monkeypatch, capsys) 
     assert out.count(f"runtime secret note: {NO_GRACE}\n") == 2
     assert out.index("(read-only check, nothing written)\n") < out.index("runtime secret note:")
     _assert_names_only(out, digests)
+
+
+# ------------------------------------------- the workspace the CLI is about to call
+#
+# Run by hand, WorkspaceClient() resolves the SDK default chain (process env,
+# then the ~/.databrickscfg DEFAULT profile), which can name another, shared
+# workspace (post-W5 L3 verifier item L3-G2). Every CLI mode proves the
+# resolved host is the install's before its first workspace call.
+
+
+class _Untouchable:
+    """A Secrets API that fails the test on any call."""
+
+    def __getattr__(self, name: str):
+        raise AssertionError(f"workspace call {name} before the host was proven")
+
+
+def _resolving(monkeypatch, host: str | None) -> None:
+    monkeypatch.setattr(
+        subject,
+        "WorkspaceClient",
+        lambda: _client(_Untouchable(), host=host),  # type: ignore[arg-type]
+    )
+
+
+def _env_local(monkeypatch, tmp_path, text: str) -> None:
+    env_local = tmp_path / ".env.local"
+    env_local.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(subject, "ENV_LOCAL", env_local)
+
+
+HOST_SOURCE_LABELS = {
+    "shell-host": "DATABRICKS_HOST (shell)",
+    "deploy-host": "MIP_DATABRICKS_WORKSPACE_HOST (shell)",
+    "env-local-host": "DATABRICKS_HOST (.env.local)",
+}
+
+
+@pytest.mark.parametrize(
+    "argv", (["--check"], [], ["--retire-previous"]), ids=("check", "write", "retire")
+)
+@pytest.mark.parametrize("source", tuple(HOST_SOURCE_LABELS))
+def test_a_workspace_other_than_the_install_refuses_before_any_call(
+    monkeypatch, tmp_path, capsys, argv: list[str], source: str
+) -> None:
+    _required(monkeypatch)
+    if source == "shell-host":
+        monkeypatch.setenv(subject.HOST_ENV, INSTALL_HOST)
+        monkeypatch.delenv(subject.DEPLOY_HOST_ENV)
+    elif source == "env-local-host":
+        monkeypatch.delenv(subject.DEPLOY_HOST_ENV)
+        _env_local(monkeypatch, tmp_path, f"DATABRICKS_HOST={INSTALL_HOST}\n")
+    # The SDK fell back to a profile that names another workspace.
+    _resolving(monkeypatch, OTHER_HOST)
+
+    assert subject.main(argv) == subject.EXIT_REFUSED == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        f"[runtime-secrets] refused: the Databricks SDK resolved workspace {OTHER_HOST}, "
+        f"but {HOST_SOURCE_LABELS[source]} names {INSTALL_HOST}. Pin the install's identity "
+        "(for example DATABRICKS_CONFIG_PROFILE=<install profile>) and run again. "
+        "Nothing was read or written.\n"
+    )
+
+
+def test_every_configured_install_host_must_agree(monkeypatch, capsys) -> None:
+    """deploy.sh's bound host agreeing does not excuse a shell host naming another."""
+    _required(monkeypatch)
+    monkeypatch.setenv(subject.HOST_ENV, OTHER_HOST)
+    _resolving(monkeypatch, INSTALL_HOST)
+
+    assert subject.main(["--check"]) == 2
+
+    err = capsys.readouterr().err
+    assert f"DATABRICKS_HOST (shell) names {OTHER_HOST}" in err
+    assert "MIP_DATABRICKS_WORKSPACE_HOST" not in err, "only the disagreeing source is named"
+
+
+def test_no_configured_install_host_refuses(monkeypatch, capsys) -> None:
+    _required(monkeypatch)
+    monkeypatch.delenv(subject.DEPLOY_HOST_ENV)
+    _resolving(monkeypatch, INSTALL_HOST)
+
+    assert subject.main(["--check"]) == 2
+
+    assert capsys.readouterr().err == (
+        "[runtime-secrets] refused: no install workspace host is configured to check "
+        f"{INSTALL_HOST} against. Set DATABRICKS_HOST in .env.local (deploy.sh requires it) "
+        "or in the shell. Nothing was read or written.\n"
+    )
+
+
+@pytest.mark.parametrize("resolved", (None, "", "https://"), ids=("none", "empty", "no-hostname"))
+def test_an_unresolved_workspace_host_refuses(monkeypatch, capsys, resolved: str | None) -> None:
+    _required(monkeypatch)
+    _resolving(monkeypatch, resolved)
+
+    assert subject.main(["--check"]) == 2
+
+    assert "the Databricks SDK resolved no workspace host" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "configured",
+    (
+        "dbc-synthetic-install.cloud.databricks.com",
+        "https://DBC-Synthetic-Install.cloud.databricks.com/",
+        "https://dbc-synthetic-install.cloud.databricks.com:443",
+        "  https://dbc-synthetic-install.cloud.databricks.com/?o=1  ",
+    ),
+    ids=("no-scheme", "case-and-slash", "default-port", "padding-and-query"),
+)
+def test_an_equivalent_spelling_of_the_install_host_is_accepted(
+    monkeypatch, capsys, configured: str
+) -> None:
+    _required(monkeypatch)
+    monkeypatch.setenv(subject.HOST_ENV, configured)
+    secrets_api = _Secrets()
+    monkeypatch.setattr(subject, "WorkspaceClient", lambda: _client(secrets_api))
+
+    assert subject.main(["--check"]) == 0
+
+    assert capsys.readouterr().out.startswith(
+        f"runtime secret plan for mip-runtime on {INSTALL_HOST}: "
+    )
+
+
+def test_a_refused_host_prints_neither_user_info_nor_path(monkeypatch, capsys) -> None:
+    _required(monkeypatch)
+    monkeypatch.setenv(
+        subject.HOST_ENV, "https://operator:synthetic-tok3n@other.example:8443/x?o=7"
+    )
+    monkeypatch.setenv(subject.DEPLOY_HOST_ENV, "https://bad-port.example:notaport")
+    _resolving(monkeypatch, INSTALL_HOST)
+
+    assert subject.main([]) == 2
+
+    err = capsys.readouterr().err
+    assert "DATABRICKS_HOST (shell) names https://other.example:8443" in err
+    assert "MIP_DATABRICKS_WORKSPACE_HOST (shell) names an unparsable host" in err
+    for fragment in ("operator", "synthetic-tok3n", "/x", "o=7", "notaport"):
+        assert fragment not in err
+
+
+def test_the_write_and_retire_summaries_name_the_resolved_host(monkeypatch, capsys) -> None:
+    _required(monkeypatch)
+    secrets_api = _Secrets()
+    monkeypatch.setattr(subject, "WorkspaceClient", lambda: _client(secrets_api))
+
+    assert subject.main([]) == 0
+    assert subject.main(["--retire-previous"]) == 0
+
+    assert capsys.readouterr().out == (
+        f"runtime secret bindings ready in mip-runtime on {INSTALL_HOST}: 6 keys "
+        "(written: cotality-id-mask-v1, genie-action-current, genie-action-previous, "
+        "salesforce-client-secret, salesforce-password, salesforce-security-token; kept: none)\n"
+        f"previous runtime verification key in mip-runtime on {INSTALL_HOST}: replaced\n"
+    )
+
+
+def test_the_unbound_default_client_is_host_checked_too(monkeypatch) -> None:
+    """A programmatic caller without a client gets the same proof as the CLI."""
+    _required(monkeypatch)
+    _resolving(monkeypatch, OTHER_HOST)
+
+    for call in (
+        subject.check_runtime_secrets,
+        subject.provision_runtime_secrets,
+        subject.retire_previous_secret,
+    ):
+        with pytest.raises(subject.WorkspaceHostRefused, match="resolved workspace"):
+            call()
