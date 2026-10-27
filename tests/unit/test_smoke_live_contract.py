@@ -318,81 +318,175 @@ _ZIP_LAYER_REFUSED = "geo zip rollups for state=IL are not a populated, in-state
 _COUNTY_REFUSED = "geo county rollups broke the retired-grain contract for state=IL"
 _STATE_ROW_REFUSED = "geo state rollups did not carry exactly one row with whole addressable and zip_unassigned_count for state=IL"
 _STATE_SHAPE_REFUSED = "geo state rollups carried a row without a 2-letter state and a whole addressable count"
+_IL_ROW = {"state": "IL", "addressable": 21428, "zip_unassigned_count": 2}
 
 
-@pytest.mark.parametrize(
-    ("payloads", "refusal"),
-    [
-        ({"zips": _smoke_zips(rollups=[])}, _ZIP_LAYER_REFUSED),
-        ({"zips": _smoke_zips(rollups=[_smoke_zip_row("6062", 21426)])}, _ZIP_LAYER_REFUSED),
-        ({"zips": _smoke_zips(rollups=[_smoke_zip_row("6062A", 21426)])}, _ZIP_LAYER_REFUSED),
-        ({"zips": _smoke_zips(rollups=[_smoke_zip_row(60628, 21426)])}, _ZIP_LAYER_REFUSED),
-        ({"zips": _smoke_zips(rollups=[_smoke_zip_row("60628\n", 21426)])}, _ZIP_LAYER_REFUSED),
-        (
-            {"zips": _smoke_zips(rollups=[_smoke_zip_row("60628", 21426), _smoke_zip_row("75201", 0, "TX")])},
-            _ZIP_LAYER_REFUSED,
-        ),
-        ({"zips": _smoke_zips(rollups=[_smoke_zip_row("60628", 0)])}, _ZIP_LAYER_REFUSED),
-        ({"zips": _smoke_zips(state="TX")}, _ZIP_LAYER_REFUSED),
-        ({"counties": _smoke_counties(rollups=[{"fips_5": "", "state": "IL"}])}, _COUNTY_REFUSED),
-        ({"counties": _smoke_counties(rollups=[{"fips_5": None, "state": "IL"}])}, _COUNTY_REFUSED),
-        ({"counties": _smoke_counties(rollups=[{"fips_5": "1703", "state": "IL"}])}, _COUNTY_REFUSED),
-        ({"counties": _smoke_counties(state="CA")}, _COUNTY_REFUSED),
-        ({"counties": _smoke_counties(rollups=None)}, _COUNTY_REFUSED),
-        (
-            {"zips": _smoke_zips(rollups=[_smoke_zip_row("60628", 21000), _smoke_zip_row("60617", 427)])},
-            "geo drill does not reconcile for state=IL: sum(zip.addressable_borrowers)=21427, "
-            "expected state.addressable 21428 - state.zip_unassigned_count 2",
-        ),
-        ({"states": _smoke_states(rollups=[{"state": "IL", "addressable": 21428}])}, _STATE_ROW_REFUSED),
-        (
-            {
-                "states": _smoke_states(
-                    rollups=[
-                        {"state": "IL", "addressable": 21428, "zip_unassigned_count": 2},
-                        {"state": "IL", "addressable": 21428, "zip_unassigned_count": 2},
-                    ]
-                )
-            },
-            _STATE_ROW_REFUSED,
-        ),
-        (
-            {"states": _smoke_states(rollups=[{"state": "IL", "addressable": 0, "zip_unassigned_count": 0}])},
-            "geo state rollups did not include a populated state",
-        ),
-        ({"states": _smoke_states(rollups=[])}, "geo state rollups returned no filtered rows"),
-        (
-            {"states": _smoke_states(rollups=[{"state": "il", "addressable": 21428, "zip_unassigned_count": 2}])},
-            _STATE_SHAPE_REFUSED,
-        ),
-        (
-            {"states": _smoke_states(rollups=[{"state": "IL", "addressable": "21428", "zip_unassigned_count": 2}])},
-            _STATE_SHAPE_REFUSED,
-        ),
-    ],
-    ids=[
-        "empty-zip-list",
-        "four-digit-zip",
-        "non-numeric-zip",
-        "numeric-zip-not-a-string",
-        "zip-with-trailing-newline",
-        "zip-row-from-another-state",
-        "no-populated-zip",
-        "zip-envelope-other-state",
-        "county-row-empty-fips",
-        "county-row-null-fips",
-        "county-row-four-digit-fips",
-        "county-envelope-other-state",
-        "county-rollups-not-an-array",
-        "broken-invariant",
-        "state-row-without-zip-unassigned",
-        "duplicate-target-state-rows",
-        "no-populated-state",
-        "no-state-rows",
-        "lowercase-state",
-        "string-addressable",
-    ],
-)
+def _unreconciled(total: int) -> str:
+    return (
+        f"geo drill does not reconcile for state=IL: sum(zip.addressable_borrowers)={total}, "
+        "expected state.addressable 21428 - state.zip_unassigned_count 2"
+    )
+
+
+# Every bad shape the smoke geo block refuses. The ids are the shared bad-shape
+# vocabulary: tests/unit/test_verify_live.py refuses the same list (pinned there).
+SMOKE_GEO_REFUSALS = [
+    # The ZIP layer: populated, in-state, 5-digit ZIPs, whole counts.
+    pytest.param({"zips": _smoke_zips(rollups=[])}, _ZIP_LAYER_REFUSED, id="empty-zip-list"),
+    pytest.param({"zips": _smoke_zips(rollups=None)}, _ZIP_LAYER_REFUSED, id="zip-rollups-not-an-array"),
+    pytest.param(
+        {"zips": _smoke_zips(rollups=[_smoke_zip_row("60628", 21000), _smoke_zip_row("60617", 426), "60601"])},
+        _ZIP_LAYER_REFUSED,
+        id="non-object-zip-row",
+    ),
+    pytest.param({"zips": _smoke_zips(rollups=[_smoke_zip_row("6062", 21426)])}, _ZIP_LAYER_REFUSED, id="four-digit-zip"),
+    pytest.param(
+        {"zips": _smoke_zips(rollups=[_smoke_zip_row("6062A", 21426)])}, _ZIP_LAYER_REFUSED, id="non-numeric-zip"
+    ),
+    pytest.param(
+        {"zips": _smoke_zips(rollups=[_smoke_zip_row(60628, 21426)])}, _ZIP_LAYER_REFUSED, id="numeric-zip-not-a-string"
+    ),
+    pytest.param(
+        {"zips": _smoke_zips(rollups=[_smoke_zip_row("60628\n", 21426)])},
+        _ZIP_LAYER_REFUSED,
+        id="zip-with-trailing-newline",
+    ),
+    pytest.param(
+        {"zips": _smoke_zips(rollups=[_smoke_zip_row("60628", 21426), _smoke_zip_row("75201", 0, "TX")])},
+        _ZIP_LAYER_REFUSED,
+        id="zip-row-from-another-state",
+    ),
+    pytest.param({"zips": _smoke_zips(state="TX")}, _ZIP_LAYER_REFUSED, id="zip-envelope-other-state"),
+    pytest.param({"zips": _smoke_zips(rollups=[_smoke_zip_row("60628", 0)])}, _ZIP_LAYER_REFUSED, id="no-populated-zip"),
+    # Each count case sums to the reconciling 21,426, so only the
+    # whole-count conjuncts can refuse it.
+    pytest.param(
+        {"zips": _smoke_zips(rollups=[_smoke_zip_row("60628", 21000), _smoke_zip_row("60617", "426")])},
+        _ZIP_LAYER_REFUSED,
+        id="string-zip-count",
+    ),
+    pytest.param(
+        {
+            "zips": _smoke_zips(
+                rollups=[
+                    _smoke_zip_row("60628", 21000),
+                    _smoke_zip_row("60617", 427),
+                    _smoke_zip_row("60601", -1),
+                ]
+            )
+        },
+        _ZIP_LAYER_REFUSED,
+        id="negative-zip-count",
+    ),
+    pytest.param(
+        {
+            "zips": _smoke_zips(
+                rollups=[
+                    _smoke_zip_row("60628", 21000),
+                    _smoke_zip_row("60617", 425.5),
+                    _smoke_zip_row("60601", 0.5),
+                ]
+            )
+        },
+        _ZIP_LAYER_REFUSED,
+        id="fractional-zip-count",
+    ),
+    pytest.param(
+        {
+            "zips": _smoke_zips(
+                rollups=[
+                    _smoke_zip_row("60628", 21000),
+                    _smoke_zip_row("60617", 425),
+                    _smoke_zip_row("60601", True),
+                ]
+            )
+        },
+        _ZIP_LAYER_REFUSED,
+        id="boolean-zip-count",
+    ),
+    # The retired county grain: empty passes; any row is in-state with a 5-digit FIPS.
+    pytest.param(
+        {"counties": _smoke_counties(rollups=[{"fips_5": "", "state": "IL"}])},
+        _COUNTY_REFUSED,
+        id="county-row-empty-fips",
+    ),
+    pytest.param(
+        {"counties": _smoke_counties(rollups=[{"fips_5": None, "state": "IL"}])},
+        _COUNTY_REFUSED,
+        id="county-row-null-fips",
+    ),
+    pytest.param(
+        {"counties": _smoke_counties(rollups=[{"fips_5": "1703", "state": "IL"}])},
+        _COUNTY_REFUSED,
+        id="county-row-four-digit-fips",
+    ),
+    pytest.param(
+        {"counties": _smoke_counties(rollups=[{"fips_5": "17031", "state": "WI"}])},
+        _COUNTY_REFUSED,
+        id="county-row-other-state",
+    ),
+    pytest.param({"counties": _smoke_counties(state="CA")}, _COUNTY_REFUSED, id="county-envelope-other-state"),
+    pytest.param({"counties": _smoke_counties(rollups=None)}, _COUNTY_REFUSED, id="county-rollups-not-an-array"),
+    pytest.param({"counties": _smoke_counties(rollups=["17031"])}, _COUNTY_REFUSED, id="non-object-county-row"),
+    # The reconciliation: 21,428 - 2 = 21,426 exactly, so it refuses both directions.
+    pytest.param(
+        {"zips": _smoke_zips(rollups=[_smoke_zip_row("60628", 21000), _smoke_zip_row("60617", 427)])},
+        _unreconciled(21427),
+        id="broken-invariant-over-sum",
+    ),
+    pytest.param(
+        {"zips": _smoke_zips(rollups=[_smoke_zip_row("60628", 21000), _smoke_zip_row("60617", 400)])},
+        _unreconciled(21400),
+        id="broken-invariant-under-sum",
+    ),
+    pytest.param(
+        {"states": _smoke_states(rollups=[{"state": "IL", "addressable": 21428}])},
+        _STATE_ROW_REFUSED,
+        id="state-row-without-zip-unassigned",
+    ),
+    pytest.param(
+        {"states": _smoke_states(rollups=[_IL_ROW, dict(_IL_ROW)])},
+        _STATE_ROW_REFUSED,
+        id="duplicate-target-state-rows",
+    ),
+    # The drill target: every state row has a 2-letter state and a whole count.
+    pytest.param(
+        {"states": _smoke_states(rollups=[{"state": "IL", "addressable": 0, "zip_unassigned_count": 0}])},
+        "geo state rollups did not include a populated state",
+        id="no-populated-state",
+    ),
+    pytest.param({"states": _smoke_states(rollups=[])}, "geo state rollups returned no filtered rows", id="no-state-rows"),
+    pytest.param(
+        {"states": _smoke_states(rollups=None)},
+        "geo state rollups returned no filtered rows",
+        id="state-rollups-not-an-array",
+    ),
+    pytest.param(
+        {"states": _smoke_states(rollups=[{"state": "il", "addressable": 21428, "zip_unassigned_count": 2}])},
+        _STATE_SHAPE_REFUSED,
+        id="lowercase-state",
+    ),
+    pytest.param(
+        {"states": _smoke_states(rollups=[{"state": "IL", "addressable": "21428", "zip_unassigned_count": 2}])},
+        _STATE_SHAPE_REFUSED,
+        id="string-addressable",
+    ),
+    # A malformed row that is not the target still refuses the whole payload.
+    pytest.param(
+        {"states": _smoke_states(rollups=[{"state": "CA", "addressable": -1, "zip_unassigned_count": 0}, _IL_ROW])},
+        _STATE_SHAPE_REFUSED,
+        id="negative-state-addressable",
+    ),
+    pytest.param(
+        {"states": _smoke_states(rollups=[{"state": "CA", "addressable": 3455.5, "zip_unassigned_count": 0}, _IL_ROW])},
+        _STATE_SHAPE_REFUSED,
+        id="fractional-state-addressable",
+    ),
+]
+SMOKE_GEO_REFUSAL_IDS = tuple(str(case.id) for case in SMOKE_GEO_REFUSALS)
+
+
+@pytest.mark.parametrize(("payloads", "refusal"), SMOKE_GEO_REFUSALS)
 def test_smoke_geo_drill_refuses_each_bad_shape(
     tmp_path: Path, payloads: dict[str, dict[str, Any]], refusal: str
 ) -> None:
@@ -401,6 +495,8 @@ def test_smoke_geo_drill_refuses_each_bad_shape(
     assert result.returncode == 1, (result.returncode, result.stderr)
     assert f"[smoke] {refusal}" in result.stderr, result.stderr
     assert "GEO_DRILL_PASSED" not in result.stdout
+    # Every refusal dumps the payload it refused, so an operator can read it.
+    assert (tmp_path / "out.json").read_text(encoding="utf-8") in result.stderr
 
 
 def test_smoke_geo_drill_captures_the_state_counts_before_the_zip_probe() -> None:

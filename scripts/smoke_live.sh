@@ -673,6 +673,7 @@ if ! jq -e \
   echo "[smoke] geo drill does not reconcile for state=$SMOKE_STATE:" \
     "sum(zip.addressable_borrowers)=$SMOKE_ZIP_TOTAL, expected state.addressable" \
     "$SMOKE_STATE_ADDRESSABLE - state.zip_unassigned_count $SMOKE_STATE_ZIP_UNASSIGNED" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
   exit 1
 fi
 echo "[smoke] ok · geo drill $SMOKE_STATE -> ZIP reconciles" \
