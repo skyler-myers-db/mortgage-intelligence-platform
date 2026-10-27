@@ -827,19 +827,19 @@ Steps:
      `003_gold_tables.sql`, `capture_refresh_timestamp` (it records this run's
      `refresh_at`) and `ctas_property_owner_bridge`.
    - **The demo feeds** as ONE `sql_task` run on the bundle root's render of
-     that file, which keeps one session. That file must equal the scratch
-     render byte for byte; when it differs, stop, because this procedure
-     uploads only step 1's FRED files:
+     that file, which keeps one session:
      `databricks jobs submit --no-wait --json '{"run_name": "interim-refresh-demo-feeds", "idempotency_token": "<unique per refresh>", "tasks": [{"task_key": "seed_demo_first_party_feeds", "sql_task": {"warehouse_id": "<warehouse>", "file": {"path": "<bundle root>/sql/_rendered/transformations/demo_first_party_feeds.sql", "source": "WORKSPACE"}}}]}'`.
      Poll `databricks jobs get-run <run_id>` until it terminates, and require
      `SUCCESS`. The idempotency token makes a retried submit return the same
-     run, never a second one.
+     run, never a second one. The bundle root's file must equal the scratch
+     render byte for byte; when it differs, stop, because this procedure
+     uploads only step 1's FRED files.
    - **B**, every statement after that task, through the Statements API.
 
    Before executing, prove that A, the demo file and B together equal the
    planned statement list in order (compare statement hashes), with the plan
-   computed after step 2's skips. On a failure,
-   stop and resume from the failing statement; never improvise one.
+   computed after step 2's skips. On a failure, stop and resume from the
+   failing statement; never improvise one.
 4. **Grant snapshot, after, and a strict diff.** Read `SHOW GRANTS` again on
    every touched object and diff it against step 2. Any added, removed or
    changed row fails. So does an object whose effective `EXECUTE` cannot be

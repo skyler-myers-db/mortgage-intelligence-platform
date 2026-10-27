@@ -498,8 +498,8 @@ def test_the_runbook_pins_the_interim_refresh_and_its_never_run_now_warning() ->
         "It changes data and, only when step 1 finds a FRED source file that differs from main's render, that "
         "file under the bundle root; never a job definition, grant, ACL,",
         "Step 4's verifier was substituted on 2026-10-27",
-        "That file must equal the scratch render byte for byte; when it differs, stop, because this procedure "
-        "uploads only step 1's FRED files",
+        "The bundle root's file must equal the scratch render byte for byte; when it differs, stop, because this "
+        "procedure uploads only step 1's FRED files.",
         "the `init_fn_*` statements step 2 did not skip (eleven at most)",
         "with the plan computed after step 2's skips",
         "the verifier cannot run or fails by design. Record its output, never hand-grant, and treat the strict "
