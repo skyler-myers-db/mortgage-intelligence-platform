@@ -1012,7 +1012,12 @@ def test_grants_gives_foreign_catalog_remediation_no_ci_command_of_record() -> N
     grants = _flat(raw)
 
     assert "The command of record is the manual `deploy-dev` workflow" not in grants
-    assert "**Foreign-catalog remediation has no CI command of record (post-W5, 2026-10-27).**" in grants
+    heading = "**Foreign-catalog remediation has no CI command of record (post-W5, 2026-10-27).**"
+    assert heading in grants
+    # No sentence after the negated heading may name a command of record for
+    # it, however paraphrased (post-W5 review, mutation G5).
+    paragraph = grants.split(heading, 1)[1].split("When an owner-approved run does reach it", 1)[0]
+    assert "command of record" not in paragraph.lower()
     assert (
         "a dispatch with `remediate_foreign_catalog_bindings=true` exits 2 in the `scripts/deploy.sh` "
         "preflight, before any mutation"
