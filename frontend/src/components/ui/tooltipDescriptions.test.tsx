@@ -253,4 +253,15 @@ describe('tooltip descriptions', () => {
     expect(accessibleDescription(byLabel('Reject B2'))).toBe('Reject');
     second.remove();
   });
+
+  it('puts a shared node something detached back into the host on its next holder', async () => {
+    await mount(<Tooltip content="Reject"><button type="button" aria-label="Reject B1">r</button></Tooltip>);
+    document.getElementById(descriptionId('Reject'))?.remove();
+
+    await mount(<Tooltip content="Reject"><button type="button" aria-label="Reject B2">r</button></Tooltip>);
+
+    expect(document.getElementById(descriptionId('Reject'))?.parentElement).toBe(host());
+    expect(accessibleDescription(byLabel('Reject B1'))).toBe('Reject');
+    expect(accessibleDescription(byLabel('Reject B2'))).toBe('Reject');
+  });
 });

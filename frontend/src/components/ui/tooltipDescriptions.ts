@@ -72,12 +72,17 @@ export function descriptionHost(): HTMLDivElement {
   return host;
 }
 
+/** Put the host (back) at the end of <body>: something may have emptied <body> under it (a test's teardown). */
+function attachHost(): HTMLDivElement {
+  const element = descriptionHost();
+  if (!element.isConnected) document.body.append(element);
+  return element;
+}
+
 /** Keep the host in <body> while anything uses it; returns the release. */
 export function retainHost(): () => void {
-  const element = descriptionHost();
+  const element = attachHost();
   hostUsers += 1;
-  // Re-attached when something emptied <body> under it (a test's teardown).
-  if (!element.isConnected) document.body.append(element);
   let released = false;
   return () => {
     if (released) return;
@@ -107,14 +112,11 @@ function createNode(id: string, text: string, shortcut: string | undefined): HTM
 export function retainDescription(text: string, shortcut?: string): () => void {
   const id = descriptionId(text, shortcut);
   let entry = entries.get(id);
-  if (entry) {
-    // Re-attached when something emptied <body> under it (a test's teardown).
-    if (!entry.node.isConnected) document.body.append(descriptionHost());
-  } else {
+  if (!entry) {
     entry = { node: createNode(id, text, shortcut), users: 0, releaseHost: retainHost() };
     entries.set(id, entry);
-    descriptionHost().append(entry.node);
   }
+  if (!entry.node.isConnected) attachHost().append(entry.node);
   const held = entry;
   held.users += 1;
   let released = false;
