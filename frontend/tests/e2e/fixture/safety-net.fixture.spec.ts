@@ -170,14 +170,28 @@ const PROBE = `<!doctype html><html lang="en"><head><title>axe probe</title></he
 <h3>Skips a heading level (best-practice only)</h3>
 <p>Plain text.</p></main></body></html>`;
 
+/** PROBE plus a role-less div with text that `attributes` may name. */
+const withChipRow = (attributes: string) => PROBE.replace(
+  '<p>Plain text.</p>',
+  `<p>Plain text.</p><div class="probe-chip-row" ${attributes}><span>Rate spread</span></div>`,
+);
+
 test.describe('(b) the axe ratchet over real axe results', () => {
   test('an unlabeled button is unrecorded, a stale entry is stale, best-practice is advisory, nodes are pinned', async ({ page }) => {
-    await page.setContent(PROBE);
+    await page.setContent(withChipRow('aria-label="Message evidence"'));
     const results = await new AxeBuilder({ page }).withTags([...WCAG_TAGS, ADVISORY_TAG]).analyze();
     const { gating, advisory } = partitionByTags(results.violations);
     expect(gating.map((violation) => violation.id)).toContain('button-name');
     expect(advisory.map((violation) => violation.id)).toContain('heading-order');
     expect(gating.map((violation) => violation.id)).not.toContain('heading-order');
+    // A name on a role-less div with text: axe files it as NEEDS REVIEW, never
+    // as a violation (the premise of prohibitedNamesNeedingReview).
+    expect(results.violations.map((violation) => violation.id)).not.toContain('aria-prohibited-attr');
+    const flagged = prohibitedNamesNeedingReview(results);
+    expect(flagged).toHaveLength(1);
+    // axe's target is the shortest unique selector: resolve it.
+    const flaggedSelector = (flagged[0] ?? '').replace(/ \([^)]*\)$/, '');
+    expect(await page.locator(flaggedSelector).getAttribute('class')).toBe('probe-chip-row');
     for (const violation of advisory) expect(violation.tags.some((tag) => (WCAG_TAGS as readonly string[]).includes(tag))).toBe(false);
 
     const context: AxeScanContext = {
@@ -220,24 +234,15 @@ test.describe('(b) the axe ratchet over real axe results', () => {
     expect(testInfo.attachments.map((attachment) => attachment.name)).toContain('axe-best-practice.json');
   });
 
-  test('a name on a role-less div with text is needs-review in axe and fails the gate; role="group" passes', async ({ page }) => {
-    const named = (attributes: string) => PROBE.replace(
-      '<button type="button" class="probe-unlabeled"></button>',
-      `<div class="probe-chip-row" ${attributes}><span>Rate spread</span></div>`,
-    );
-    await page.setContent(named('aria-label="Message evidence"'));
-    const results = await new AxeBuilder({ page }).withTags([...WCAG_TAGS, ADVISORY_TAG]).analyze();
-    // The premise: axe files it under incomplete, never under violations.
-    expect(results.violations.map((violation) => violation.id)).not.toContain('aria-prohibited-attr');
-    const flagged = prohibitedNamesNeedingReview(results);
-    expect(flagged).toHaveLength(1);
-    // axe's target is the shortest unique selector ("div" on this page): resolve it.
-    const selector = (flagged[0] ?? '').replace(/ \([^)]*\)$/, '');
-    expect(await page.locator(selector).getAttribute('class')).toBe('probe-chip-row');
+  test('that needs-review name fails the gate; the same div as role="group" passes', async ({ page }) => {
+    // The raw premise is asserted in the first probe above (the one raw scan
+    // e2eSourceGates allows this file); here only the helper scans.
+    const withoutButton = (html: string) => html.replace('<button type="button" class="probe-unlabeled"></button>', '');
+    await page.setContent(withoutButton(withChipRow('aria-label="Message evidence"')));
     await expect(expectAxeClean(page, { key: { route: 'probe', state: 'named-div' }, theme: 'dark', known: {} }))
       .rejects.toThrow(/names on a role that prohibits one/);
 
-    await page.setContent(named('role="group" aria-label="Message evidence"'));
+    await page.setContent(withoutButton(withChipRow('role="group" aria-label="Message evidence"')));
     await expectAxeClean(page, { key: { route: 'probe', state: 'named-group' }, theme: 'dark', known: {} });
   });
 });
