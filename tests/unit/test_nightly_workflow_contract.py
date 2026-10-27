@@ -9,6 +9,7 @@ the scoring job.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import textwrap
 from pathlib import Path
@@ -122,6 +123,80 @@ def test_bundle_commands_address_the_isolated_ci_staging_install() -> None:
             assert "BUNDLE_VAR_bundle_root_leaf" not in (step.get("env") or {}), "one top-level value only"
 
 
+GUARD_JOB = "ci-install-isolation"
+CATALOG_ENV = ("MIP_DEFAULT_CATALOG", "MIP_LAKEBASE_SYNC_CATALOG", "BUNDLE_VAR_uc_catalog", "BUNDLE_VAR_lakebase_catalog_name")
+# A status check function that lets a job run after a failed need (`!cancelled()` included).
+STATUS_FUNCTION = re.compile(r"\b(?:always|failure|cancelled)\s*\(")
+
+
+def _needs(job: dict) -> set[str]:
+    needs = job.get("needs") or []
+    return {needs} if isinstance(needs, str) else set(needs)
+
+
+def test_every_job_waits_on_the_uc_catalog_isolation_guard() -> None:
+    """Post-W5 review: nightly can never touch a live catalog through the shared metastore.
+
+    The guard job runs the rule table's UC-catalog check on the workflow-level
+    names, and every other job needs it, directly or transitively, so a
+    refusal skips every job that reads or writes Unity Catalog.
+    """
+
+    workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
+    jobs = workflow["jobs"]
+    guard = jobs[GUARD_JOB]
+
+    assert list(jobs)[0] == GUARD_JOB, "the first job"
+    runs = [step["run"] for step in guard["steps"] if "run" in step]
+    assert runs == ["python -m tools.databricks.ci_install_isolation uc-catalogs"]
+    assert not guard.get("needs") and "if" not in guard
+    for step in guard["steps"]:
+        assert not set(CATALOG_ENV) & set(step.get("env") or {}), "checks the names every job uses"
+    assert not set(CATALOG_ENV) & set(guard.get("env") or {})
+
+    def closure(name: str) -> set[str]:
+        direct = _needs(jobs[name])
+        return direct.union(*(closure(parent) for parent in direct)) if direct else set()
+
+    for name, job in jobs.items():
+        if name != GUARD_JOB:
+            assert GUARD_JOB in closure(name), name
+            for scope in (job, *job.get("steps", [])):
+                assert not set(CATALOG_ENV) & set(scope.get("env") or {}), f"{name} overrides a catalog name"
+        # A job-level status function runs the job after a failed or skipped
+        # need, so `needs` alone would not stop it once the guard refuses
+        # (post-W5 review, mutant N7). Only the issue filer may use one.
+        if name != "notify-on-failure":
+            assert not STATUS_FUNCTION.search(str(job.get("if", ""))), f"{name} runs past a refused guard"
+    notify = jobs["notify-on-failure"]
+    assert GUARD_JOB in _needs(notify) and f"needs.{GUARD_JOB}.result == 'failure'" in notify["if"]
+
+    env = workflow["env"]
+    assert env["BUNDLE_VAR_uc_catalog"] == env["MIP_DEFAULT_CATALOG"], "the bundle reads the checked name"
+    assert env["BUNDLE_VAR_lakebase_catalog_name"] == env["MIP_LAKEBASE_SYNC_CATALOG"]
+
+
+def test_the_header_says_which_jobs_a_wrong_repository_host_reaches() -> None:
+    """Post-W5 review: a mismatched DATABRICKS_HOST does not stop every job.
+
+    The host refusal is parity-live's bundle validate step. kill-drill-simulated
+    needs only the UC-catalog guard and boots a backend with the repository
+    host, so the header must not claim the CLI stops it.
+    """
+
+    text = NIGHTLY.read_text(encoding="utf-8")
+    header = " ".join(line.lstrip("# ") for line in text.split("\non:", 1)[0].splitlines())
+    workflow = yaml.safe_load(text)
+    drill = workflow["jobs"]["kill-drill-simulated"]
+
+    assert "before any job runs" not in header
+    assert "parity-live and everything after it fail at its bundle validate step" in header
+    assert "kill-drill-simulated needs only the UC-catalog guard and still reads whatever host the repository names" in header
+    assert _needs(drill) == {GUARD_JOB}, "the header's claim about the drill holds"
+    validate = [s for s in workflow["jobs"]["parity-live"]["steps"] if "bundle validate" in str(s.get("run", ""))]
+    assert len(validate) == 1 and "-t pr105-host" in validate[0]["run"]
+
+
 def test_live_playwright_job_budgets_cold_app_and_serial_browser_matrix() -> None:
     workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
 
@@ -131,10 +206,10 @@ def test_live_playwright_job_budgets_cold_app_and_serial_browser_matrix() -> Non
 def test_live_validation_refreshes_live_snapshot_before_live_parity() -> None:
     text = NIGHTLY.read_text(encoding="utf-8")
 
-    validate_pos = text.index("databricks bundle validate -t dev --profile DEFAULT")
-    fred_pos = text.index("databricks bundle run mip_fred_rates_ingest -t dev --profile DEFAULT")
-    silver_pos = text.index("databricks bundle run mip_refresh_silver -t dev --profile DEFAULT")
-    gold_pos = text.index("databricks bundle run mip_refresh_scores -t dev --profile DEFAULT")
+    validate_pos = text.index("databricks bundle validate -t pr105-host --profile DEFAULT")
+    fred_pos = text.index("databricks bundle run mip_fred_rates_ingest -t pr105-host --profile DEFAULT")
+    silver_pos = text.index("databricks bundle run mip_refresh_silver -t pr105-host --profile DEFAULT")
+    gold_pos = text.index("databricks bundle run mip_refresh_scores -t pr105-host --profile DEFAULT")
     parity_pos = text.index("pytest -q tests/integration/test_sql_python_parity.py")
     segment_pos = text.index("pytest tests/integration/test_segment_count_parity.py -q --tb=short")
     intersection_pos = text.index(
@@ -259,7 +334,7 @@ def test_live_validation_refresh_steps_use_real_dev_bundle_profile() -> None:
         assert "DATABRICKS_AUTH_TYPE: pat" in block
         assert "BUNDLE_VAR_sql_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}" in block
         assert "BUNDLE_VAR_genie_space_id: ${{ secrets.GENIE_SPACE_ID }}" in block
-        assert "-t dev --profile DEFAULT" in block
+        assert "-t pr105-host --profile DEFAULT" in block, "the forked-anchor CI staging target"
 
 
 def test_live_validation_renders_dev_demo_feeds_for_bundle_validation() -> None:
