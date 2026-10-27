@@ -61,8 +61,9 @@ audit `dataviz-01`), pinned by the same test:
   served same-origin by `backend/services/static_assets.py`. Nothing is
   fetched from the Census Bureau at deploy time or at runtime. Since the
   approved build (2026-10-26) that is 153 files and about 25 MiB of the
-  upload (51 states, each with its `.br` and `.gz`), and the build's
-  precompression step spends about a minute of brotli on them.
+  upload (51 states, each with its `.br` and `.gz`). Their brotli 11 is
+  about a minute of CPU, which `tools/precompress_assets.mjs` spreads over
+  Node's thread pool (about 18 s wall on an 8-core machine).
 - **`tools/geo/**`**: the operator-only geometry tool, with its own
   `package.json` and lock. It never runs in CI or deploy, and a nested npm
   manifest has no place in the App source tree.
