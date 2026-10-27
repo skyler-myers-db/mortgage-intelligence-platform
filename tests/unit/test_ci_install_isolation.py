@@ -188,7 +188,7 @@ def test_the_default_leaf_renders_the_live_root_and_names_byte_for_byte() -> Non
     assert [name.replace("${var.install_suffix}", "") for name in names] == [
         "mip_serverless_sql",
         "mip_feature_pipeline",
-        "/mip-lead-scoring",
+        "/Shared/mip-lead-scoring",
     ], "an empty suffix renders the live names unchanged"
 
 

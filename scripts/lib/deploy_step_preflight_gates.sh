@@ -31,6 +31,37 @@ echo "  python:     ${PYTHON}"
 echo "  target:     ${TARGET}"
 echo "  dry-run:    ${DRY_RUN}"
 
+# >>> deploy interpreter pins: check >>>
+# A drifted mlflow, databricks-sdk or databricks-sql-connector registers and
+# serves a stack CI never proved (full_deploy_readiness.md 3.12), so the
+# interpreter's installed closure must equal the requirements.txt pins
+# (uv.lock). tools/python_deps_check.py exits 0 pinned, 10 drift (it prints the
+# remedy); anything else is a hard error. A dry run reports and continues; a
+# real run refuses with exit 2 before any workspace call. Isolated
+# shell-contract copies carry no tool: a dry run skips, a real run refuses.
+PYTHON_DEPS_STATE="skipped"
+if [[ -f tools/python_deps_check.py ]]; then
+  _python_deps_rc=0
+  "$PYTHON" -m tools.python_deps_check || _python_deps_rc=$?
+  case "$_python_deps_rc" in
+    0) PYTHON_DEPS_STATE="pinned" ;;
+    10) PYTHON_DEPS_STATE="drifted" ;;
+    *) PYTHON_DEPS_STATE="error" ;;
+  esac
+  unset _python_deps_rc
+fi
+echo "  python deps: ${PYTHON_DEPS_STATE}"
+if [[ "$DRY_RUN" -eq 0 && "$PYTHON_DEPS_STATE" != "pinned" ]]; then
+  case "$PYTHON_DEPS_STATE" in
+    drifted) echo "${RED}[deploy] ${PYTHON} does not match the requirements.txt pins; apply the fix above.${RST}" >&2 ;;
+    error) echo "${RED}[deploy] the deploy-interpreter pin check failed; ${PYTHON} cannot be proven pinned.${RST}" >&2 ;;
+    *) echo "${RED}[deploy] tools/python_deps_check.py is not in this tree; ${PYTHON} cannot be proven pinned.${RST}" >&2 ;;
+  esac
+  echo "  select a pinned interpreter with MIP_DEPLOY_PYTHON (docs/deployment.md, \"Deploy interpreter\")." >&2
+  exit 2
+fi
+# <<< deploy interpreter pins: check <<<
+
 if [[ "$DRY_RUN" -eq 0 ]]; then
   # Unity Catalog model registration validates the uploaded artifact through
   # the metastore's cloud storage before the version becomes ready. Fail before
@@ -736,3 +767,20 @@ PYEOF
   fi
   echo "  Gateway model attestation: separated model-provenance key configured"
 fi
+
+# >>> runtime secret pre-stop check >>>
+# Step 0a stops the App before the bundle-apply step provisions mip-runtime.
+# Plan that provisioning read-only here, while the App still serves: a stored
+# Cotality ID-mask value that differs from (or cannot be compared with) the
+# configured one refuses now, not after the stop (full_deploy_readiness.md
+# 3.7). The tool names keys only, never values or fingerprints.
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  if ! "$PYTHON" -m tools.databricks.provision_runtime_secrets --check \
+      --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"; then
+    echo "${RED}[deploy] the runtime secret plan was refused before the App stop (see above).${RST}" >&2
+    exit 2
+  fi
+else
+  echo "[deploy] would check (read-only): tools.databricks.provision_runtime_secrets --check --scope ${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"
+fi
+# <<< runtime secret pre-stop check <<<

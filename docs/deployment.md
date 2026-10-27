@@ -178,6 +178,55 @@ main checkout shared by agent worktrees) looks like a private install, so a
 from a checkout that owns its `node_modules` and that nothing else links to,
 or answer no at the prompt and refresh the shared install deliberately.
 
+### Deploy interpreter
+
+`deploy.sh` runs every repo tool with one interpreter. By default that is
+`.venv/bin/python` in the checkout, or `python3` when there is no `.venv` (the
+Makefile convention). `MIP_DEPLOY_PYTHON` selects another one, such as a venv
+built only for deploys outside the checkout. Set it in the shell, not in
+`.env.local`: `.env.local` is parsed with this interpreter. It must be an
+absolute path to an executable that reports Python 3. A relative, missing,
+directory or non-executable value exits 2 without running anything. An
+absolute executable is run once, as
+`<path> -c 'import sys; print(sys.version_info[0])'`, and exits 2 unless it
+prints `3`.
+
+Step 0 then runs `python -m tools.python_deps_check`. It compares the
+interpreter with the `requirements.txt` pins (`-c uv.lock` plus
+`-r requirements.in`):
+
+- the interpreter must be the Python minor that `uv.lock` was compiled for
+  (3.11);
+- every requirement must be installed;
+- every package that pip would install for this interpreter, and that
+  `uv.lock` pins, must equal its pin exactly (PEP 440 equality, so a patch,
+  post-release or local-label difference is drift).
+
+A package that pip would install but that `uv.lock` does not pin is printed as
+an `unpinned:` note and never fails the check, because it has no pin to equal.
+`uv.lock` is resolved for one platform, not universally, so a platform-specific
+dependency is the usual case: on the Linux x86_64 runner that `deploy-dev.yml`
+uses, sqlalchemy pulls in greenlet, which the lock does not pin.
+
+This covers mlflow (which registers the Gateway model), databricks-sdk,
+databricks-sql-connector and every transitive pin, not only `import boto3,
+mlflow`. A dry run reports the result (`python deps: pinned`, `drifted`,
+`error` or `skipped`) and continues. A real run refuses anything but `pinned`
+with exit 2, before the first workspace call. On drift, the tool prints the
+problems and this remedy:
+
+```bash
+python3.11 -m venv "$HOME/.venvs/mip-deploy"
+"$HOME/.venvs/mip-deploy/bin/python" -m pip install -r <checkout>/requirements.txt
+export MIP_DEPLOY_PYTHON="$HOME/.venvs/mip-deploy/bin/python"
+./scripts/deploy.sh -t dev
+```
+
+Keep the venv outside the checkout. The exact-source gate fails on any
+untracked path that `.gitignore` does not cover: the default `.venv/` is
+ignored and passes, but a new name such as `.venv-deploy/` would fail it.
+Never re-sync a venv that other sessions share to make a deploy pass.
+
 ### Per-run M2M identities
 
 Live app validation and agent ownership use seven service principals and store only their OAuth
@@ -800,6 +849,83 @@ existing action confirmations and one-hour generated-copy/cohort provenance
 tokens can expire. The previous key is verification-only; new tokens always
 use the current key.
 
+The provisioner (`tools/databricks/provision_runtime_secrets.py`) decides every
+write before it makes one, and it never silently replaces two kinds of
+existing key:
+
+- **The Cotality ID mask.** If `cotality-id-mask-v1` already exists in the
+  scope, the configured `MIP_COTALITY_ID_MASK_SECRET` must equal it as the
+  runtime reads it (UTF-8, surrounding whitespace stripped). The provisioner
+  compares HMAC-SHA256 fingerprints of the two values under a per-run random
+  salt and prints neither value nor fingerprint. If they differ, or if the
+  stored value cannot be read, the run refuses with exit 2 before it writes
+  anything. The Secrets API returns a value outside a notebook only to a
+  workspace admin with READ on the scope (a normal user gets `BAD_REQUEST`),
+  so the deploying identity must be a workspace admin, as `deploy.sh`
+  already requires. Each read leaves a `getSecret` entry in the workspace
+  audit log. Writing a different mask would re-key every masked borrower id
+  and orphan the `B-…` ids already stored in Lakebase campaigns, approvals,
+  audit, watchlists and snoozes. To fix a refusal, set the value the install
+  already uses. A deliberate re-key is an owner-run data migration. A deploy
+  never does it. An equal mask is kept and not rewritten.
+- **Salesforce credentials.** When a `SALESFORCE_*` input is unset, an
+  existing `salesforce-*` key is kept. The disabled sentinel is written only
+  when the key is absent, because the App's static resource binding needs a
+  backing key. A configured value still replaces the key. The App payload
+  binds the `salesforce-*` keys into the runtime only when the instance URL,
+  client id, username, external-id field, client secret and password inputs
+  are all set for that deploy (`settings.salesforce_configured` needs the
+  same set at runtime), and it binds the security token only when its own
+  input is set. For the three secret inputs, "set" means the same thing to
+  the provisioner and to the payload: a placeholder (such as `<password>`
+  or `changeme`) counts as unset in both. So a key kept because its input is
+  unset or a placeholder is never bound and cannot re-enable the connector
+  (`tests/unit/test_salesforce_secret_binding_parity.py`). Unsetting the
+  inputs disables the connector but no longer
+  clears the stored credentials. To revoke them deliberately, set the secret
+  inputs to the replacement values, or have the owner delete the keys
+  (`databricks secrets delete-secret mip-runtime <key>`); the next deploy then
+  writes the disabled sentinel.
+
+`genie-action-current` is compared the same way but never refuses, because a
+rotation is an operator's call. The plan prints one names-only note:
+`unchanged`; `rotated` (the configured previous key equals the stored value,
+so it stays valid for the grace period); `changed with no grace key`
+(outstanding action confirmations and provenance tokens stop verifying); or
+`not compared` with the error code. The note is report-only: no deploy step
+reads it, and nothing refuses on it. A fingerprint pre-check that covers the
+current key is therefore the owner reading that note; only the mask
+comparison is enforced.
+
+Before its first workspace call, every mode of the tool (`--check`, the
+write run, `--retire-previous`) proves which workspace it is about to call.
+`WorkspaceClient()` resolves the Databricks SDK's default chain: process
+environment first, then the `~/.databrickscfg` DEFAULT profile, which may name
+a different, shared workspace. The tool never binds the `.env.local` host or
+token itself. Instead, the resolved host must equal every configured install
+host: `DATABRICKS_HOST` in the shell or in `.env.local`, and
+`MIP_DATABRICKS_WORKSPACE_HOST`, which `deploy.sh` exports once it has bound
+the deployer. At least one of them must be set. Otherwise the tool exits 2,
+names the resolved host and each disagreeing source, and reads nothing. Hosts
+compare as `scheme://host[:port]`, lowercased. Every summary line names the
+resolved host (`runtime secret plan for mip-runtime on https://…: …`).
+
+`deploy.sh` runs the same plan read-only (`--check`: no scope creation, no
+write) at the end of step 0. That is after it binds the deployer's workspace
+identity, before the signed workspace lease, and before step 0a stops the
+App, so a refusal leaves the App serving. To run the check by hand before a
+deploy, pin the install's identity so the SDK cannot fall back to DEFAULT:
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<install profile> \
+  python tools/databricks/provision_runtime_secrets.py \
+  --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}" --check
+```
+
+Confirm that the host on the printed plan line is the install's workspace
+before you act on the result. Pin the profile the same way for
+`--retire-previous`.
+
 After that bounded grace period, remove
 `MIP_GENIE_ACTION_SECRET_PREVIOUS` and
 `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` from the deployment environment and
@@ -809,7 +935,8 @@ payload:
 ```bash
 unset MIP_GENIE_ACTION_SECRET_PREVIOUS
 unset MIP_GENIE_ACTION_SECRET_PREVIOUS_KID
-python tools/databricks/provision_runtime_secrets.py \
+DATABRICKS_CONFIG_PROFILE=<install profile> \
+  python tools/databricks/provision_runtime_secrets.py \
   --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}" \
   --retire-previous
 ./scripts/deploy.sh -t dev
@@ -973,8 +1100,14 @@ The dev deploy workflow accepts the non-secret connector values as GitHub
 environment variables and the client secret, integration-user password, and
 optional security token as GitHub environment secrets. `deploy.sh` writes
 those secret values directly to the `mip-runtime` Databricks secret scope and
-the App payload uses `value_from` bindings. A partial connector remains
-honestly staged and cannot claim delivery.
+the App payload uses `value_from` bindings. An unset value never replaces a
+key that already exists in the scope; only an absent key gets the disabled
+sentinel that the static App binding needs. A kept key is never bound: the
+payload binds a secret only when every required connector input is set for
+that deploy, and a placeholder secret input counts as unset. Revoking stored
+credentials is a deliberate replacement or an owner-approved key delete (see
+the `provision_runtime_secrets.py` notes under "Databricks App"). A partial connector
+remains honestly staged and cannot claim delivery.
 
 ## Optional OTLP log export
 
@@ -1162,7 +1295,24 @@ scope `mip-runtime`.
   workspace-unique display names (the SQL warehouse, the feature pipeline,
   the MLflow experiment) end in `${var.install_suffix}`. With the defaults
   the live install renders exactly as before; the prod and ci targets are
-  unchanged.
+  unchanged. The experiment is `/Shared/mip-lead-scoring${var.install_suffix}`.
+  The CLI rewrites every experiment name as `dir + "/" + name_prefix + base`
+  in every target, so a workspace-root name rendered as `//…`. One level under
+  `/Shared` renders `/Shared/[dev <user>] mip-lead-scoring` for dev and
+  `/Shared/mip-lead-scoring` for prod and ci
+  (`tests/unit/test_bundle_experiment_path.py`). On paychex the bundle state
+  holds the experiment at `/Shared/mip/[dev <user>] lead-scoring`,
+  so the first governed bundle apply is expected to rename it to the new name.
+  That apply has not been run or planned. A read-only `experiments
+  get-by-name` on 2026-10-27 found nothing at the new dev name, so the rename
+  has no collision to fail on. For rollback, record the rename as a change
+  the listed rollback steps do not undo. It keeps the experiment id, runs and
+  models, and no repo code reads the experiment by name. Reversing it is an
+  owner-run rename by id (`databricks experiments update-experiment
+  <experiment id> --new-name '/Shared/mip/[dev <user>] lead-scoring'`), and
+  the next bundle apply from this tree renames it again. At the new path the
+  experiment inherits the ACL of `/Shared` itself rather than of
+  `/Shared/mip`; whether that ACL is acceptable is an owner decision.
 - `deploy-dev.yml` sets `MIP_BUNDLE_ROOT_LEAF: dev-ci` as a literal in the
   deploy step, so the CI install lives under `~/.bundle/<bundle>/dev-ci` and
   its names end in `_ci`. `nightly.yml` sets

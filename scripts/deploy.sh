@@ -293,11 +293,23 @@ fi
 # -----------------------------------------------------------------------------
 # Resolve python interpreter (same convention as the Makefile)
 # -----------------------------------------------------------------------------
-if [[ -x .venv/bin/python ]]; then
+# >>> deploy interpreter >>>
+# MIP_DEPLOY_PYTHON selects a dedicated interpreter (a venv built from
+# requirements.txt outside the checkout). Shell only: .env.local is parsed with
+# this interpreter. Step 0 then proves its packages equal the pins.
+if [[ -n "${MIP_DEPLOY_PYTHON:-}" ]]; then
+  if [[ "$MIP_DEPLOY_PYTHON" != /* || ! -f "$MIP_DEPLOY_PYTHON" || ! -x "$MIP_DEPLOY_PYTHON" ]] || \
+     [[ "$("$MIP_DEPLOY_PYTHON" -c 'import sys; print(sys.version_info[0])' 2>/dev/null)" != 3 ]]; then
+    echo "${RED}[deploy] MIP_DEPLOY_PYTHON='${MIP_DEPLOY_PYTHON}' is not the absolute path of an executable Python 3.${RST}" >&2
+    exit 2
+  fi
+  PYTHON="$MIP_DEPLOY_PYTHON"
+elif [[ -x .venv/bin/python ]]; then
   PYTHON=".venv/bin/python"
 else
   PYTHON="python3"
 fi
+# <<< deploy interpreter <<<
 
 same_identity_casefold() {
   "$PYTHON" - "$1" "$2" <<'PYEOF'

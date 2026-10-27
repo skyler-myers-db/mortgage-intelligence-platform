@@ -1333,17 +1333,20 @@ resources:
       file_path: dashboards/segment_dashboard.lvdash.json
       warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
 
-  # Keep the experiment directly under the workspace root. Nested experiment
-  # paths require a separately-created parent directory, which breaks a fresh
-  # zero-click bundle apply. Under `mode: development` (the dev target), DAB
-  # automatically prefixes the experiment name with `[dev <username>]`
-  # to sandbox per-user experiments — so we don't need a manual
-  # `${workspace.current_user.userName}` template that would force
-  # `bundle validate` to authenticate against the workspace just to
-  # resolve the path (making PR CI impossible without real secrets).
+  # Keep the experiment one level under /Shared, which exists in every
+  # workspace. A deeper path needs a separately-created parent directory and
+  # breaks a fresh zero-click bundle apply; a workspace-root name renders
+  # invalid. The CLI's presets step rewrites every experiment name, in every
+  # target and mode, as `dir + "/" + name_prefix + base`, so `/mip-lead-scoring`
+  # rendered `//[dev <user>] mip-lead-scoring` (dev) and `//mip-lead-scoring`
+  # (prod, ci): CLI v1.10.0, read-only `bundle validate`, 2026-10-27. Under
+  # `mode: development` the prefix `[dev <user>] ` sandboxes per-user names, so
+  # no `${workspace.current_user.userName}` template is needed (it would make
+  # `bundle validate -t ci` authenticate). Pinned by
+  # tests/unit/test_bundle_experiment_path.py.
   experiments:
     mip_lead_scoring:
-      name: /mip-lead-scoring${var.install_suffix}
+      name: /Shared/mip-lead-scoring${var.install_suffix}
 
 # Genie spaces (mortgage_lead_intelligence) are still provisioned out-of-
 # bundle via tools/databricks/provision_genie_space.py (see AGENTS.md).
