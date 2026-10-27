@@ -17,6 +17,14 @@
  * finishes or interrupts a stage announcement is unverified; and the proof
  * dialog's inert page (showModal). The a11y-06 audit asks for one NVDA and
  * one VoiceOver pass over both Genie surfaces: still open (VPAT).
+ *
+ * A reader quirk in the transcript: entering the panel speaks "dialog, Genie
+ * chat, key shortcuts Escape" twice in a row (genie-panel.txt). GenieChat.tsx
+ * renders ONE role="dialog"; the virtual cursor stops on that focusable
+ * (tabIndex -1) panel element and then announces entering it again at its
+ * first child. The native <dialog>s in the other transcripts (evidence
+ * drawer, palette) are spoken once. Whether a real reader repeats it is for
+ * the NVDA / VoiceOver pass.
  */
 import { act } from 'react';
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
