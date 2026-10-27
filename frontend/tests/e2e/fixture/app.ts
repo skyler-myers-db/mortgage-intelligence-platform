@@ -213,6 +213,10 @@ export class AppDriver {
     await expect(toggle).toHaveAttribute('aria-expanded', 'true');
     const expanded = this.page.locator('table.tbl tbody tr.tbl__expand').first();
     await expect(expanded).toBeVisible();
+    // The preview and workflow strip are a lazy chunk (LeadTableRow.expanded):
+    // wait for it to land, so a one-shot read (axe, a measure) sees the real
+    // preview, never its status line; a failed chunk keeps the line and fails here.
+    await expect(expanded.locator('[data-testid^="lead-preview-pending-"]'), 'the expanded body landed').toHaveCount(0);
     return expanded;
   }
 

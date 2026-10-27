@@ -33,7 +33,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, useEffect, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary, SalesTeamMember } from '../../types';
 import { installLocalStorage } from '../../test/installLocalStorage';
 import type { LeadTableSort } from './LeadTable.types';
@@ -140,6 +140,7 @@ vi.mock('./useLeadTableFillHeight', () => ({
 
 import { LeadTable } from './LeadTable';
 import { LEAD_EXPANDED_PREVIEW_ESTIMATE_PX } from './LeadTable.constants';
+import { preloadLeadRowExpanded } from './LeadTableRow.expanded';
 
 const IDS = ['B-RENDERCOST001', 'B-RENDERCOST002', 'B-RENDERCOST003', 'B-RENDERCOST004'];
 
@@ -208,6 +209,12 @@ function Harness({ sort, expandedId = null }: { sort: LeadTableSort | null; expa
     </div>
   );
 }
+
+// The expanded row's body (preview + workflow strip) is a lazy chunk
+// (LeadTableRow.expanded): loaded into its module cache up front, so an open
+// row renders it synchronously, as a warmed queue does; the cold load and
+// its failure are LeadTableRow.expanded.test.tsx's.
+beforeAll(() => preloadLeadRowExpanded(), 60_000);
 
 describe('LeadTable render cost (runtime-04)', () => {
   let container: HTMLDivElement;

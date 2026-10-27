@@ -8,8 +8,7 @@ import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip } from '../Primitives';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import type { LeadDecisionReceipt } from './DecisionReceipt';
-import { RowPreview } from './LeadRowPreview';
-import { LeadRowWorkflowPanel } from './LeadRowWorkflowPanel';
+import { LeadRowExpandedSlot } from './LeadTableRow.expanded';
 import {
   leadTableComplianceInBorrowerCell,
   useLeadTableColumns,
@@ -412,7 +411,8 @@ export function LeadTableRow({
         <tr className="tbl__expand" aria-rowindex={resolvedAriaRowIndex + 1}>
           <td colSpan={columns.length}>
             {reviewSlot}
-            <RowPreview
+            {/* The preview and the workflow strip: their own chunk (LeadTableRow.expanded). */}
+            <LeadRowExpandedSlot
               lead={lead}
               approval={approval}
               decisionReceipt={decisionReceipt}
@@ -427,9 +427,6 @@ export function LeadTableRow({
                     requestBlockedReason,
                   }
                 : null}
-            />
-            <LeadRowWorkflowPanel
-              lead={lead}
               salesBusy={salesBusy}
               salesTeamCount={salesTeamCount}
               onOpenDisposition={onOpenDisposition}

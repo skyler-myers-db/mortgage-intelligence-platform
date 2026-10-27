@@ -466,6 +466,11 @@ export const budgets = {
   // bumps; the Borrower cell's compliance caveats under HIDE) 687.66 br,
   // fix round 2 687.59 (the Analytics threshold notice copy; the -0.07 is
   // hash churn).
+  // Post-W5 (2026-10-26, leadtable-chunk-react-virtual; archive builds on one
+  // host, where base 550dcf97 measures 687.58 br): the expanded row's body as
+  // its own lazy chunk +2.71 (the chunk 7.56, leadsQuery -5.23, rolldown's
+  // ConfidenceMeter split +0.10 net), then tail T1c +2.73 (virtual-core
+  // 3.19.4): 2246.72 raw / 801.85 gzip / 693.02 br. Gates unchanged.
   totalJsBytes: 2344 * KiB, // actual 2231.74 (wave-5e fix round 2)
   totalJsGzipBytes: 837 * KiB, // actual 796.15 (wave-5e fix round 2)
   // Re-baselined 2026-09-23 for wave 1c (lane queue-keyboard-review): the
@@ -528,6 +533,11 @@ export const budgets = {
   // / 47.87 -> 47.98 br (the Borrower cell keeps DNC / Suppressed /
   // Owner-unresolved when Status or Relationship is hidden; tail T4);
   // fix round 2 left the chunk's raw bytes unchanged (47.92 br, hash churn).
+  // Post-W5 (2026-10-26, leadtable-chunk-react-virtual; one host, where base
+  // 550dcf97 measures 171.54 raw / 57.91 gzip / 47.99 br): the expanded row's
+  // body (RowPreview, LeadRowWorkflowPanel, AssignmentLifecycleAdvance) moves
+  // to its own lazy chunk (150.53 / 51.04 / 42.76), then tail T1c lands
+  // (+10.72 / +3.13 / +2.75): 161.25 raw / 54.17 gzip / 45.51 br. Gates unchanged.
   maxLazyJsBytes: 180 * KiB, // actual 171.29 (leadsQuery chunk = LeadTable, wave-5e fix round 2)
   maxLazyJsGzipBytes: 61 * KiB, // actual 57.81 (leadsQuery chunk = LeadTable, wave-5e fix round 2)
   // Re-baselined 2026-09-24 for audit bundle-05 / css-v2 (lane

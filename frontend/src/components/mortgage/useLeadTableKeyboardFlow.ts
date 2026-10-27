@@ -22,7 +22,7 @@ import { pushEscapeLayer } from '../../lib/escapeStack';
 import { publishCommandSelection, type CommandVerb } from '../command/commandSelection';
 import { isLeadApprovalEligible, isLeadSelectableForSalesOps, isTerminalApproval } from './LeadTable.logic';
 import { isInsideLeadApproveReview, leadApproveReviewId } from './LeadApproveReview.ids';
-import { leadReceiptAnchorId } from './LeadRowPreview';
+import { leadReceiptAnchorId } from './LeadRowPreview.ids';
 import type { DecisionToastInput } from './leadDecisionToast';
 import type { RejectReasonCode } from './LeadTable.types';
 import type { useLeadApprovalActions } from './useLeadApprovalActions';

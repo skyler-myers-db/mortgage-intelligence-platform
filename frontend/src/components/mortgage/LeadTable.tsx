@@ -30,6 +30,7 @@ import { useLeadRevoke, WRITE_FAILURE_TOASTS } from './LeadTable.revoke';
 import { useLeadTableKeyboardFlow } from './useLeadTableKeyboardFlow';
 import { useLeadTableFillHeight } from './useLeadTableFillHeight';
 import { useTableScrollClearance } from './useTableScrollClearance';
+import { preloadLeadRowExpanded, preloadLeadRowExpandedOnIdle } from './LeadTableRow.expanded';
 import type { CapturedCanary } from './LeadTable.canary';
 import {
   TRIAGE_CHUNK, enterTriage, renderTriageDeck, triageEntry, triageFlowInput,
@@ -401,6 +402,14 @@ export function LeadTable({
   // Load the review chunk once the reader engages with rows (the draft is
   // requested only on Approve); the bulk review chunk once rows are selected.
   const reviewChunk = useLazyModule(REVIEW_CHUNK, openReview !== null || flow.cursor.cursorId !== null || expanded !== null || triageActive);
+  // The expanded row's body (preview + workflow strip) is its own chunk: warm
+  // it on idle after the first paint, and once the cursor lands on a row, so
+  // an expand rarely waits on it (LeadTableRow.expanded). Code only.
+  useEffect(() => preloadLeadRowExpandedOnIdle(), []);
+  const cursorEngaged = flow.cursor.cursorId !== null;
+  useEffect(() => {
+    if (cursorEngaged) void preloadLeadRowExpanded();
+  }, [cursorEngaged]);
   const bulkRun = approval.bulkRun;
   // The bulk chunk also carries a run's progress and report (tables-07).
   const bulkChunk = useLazyModule(
