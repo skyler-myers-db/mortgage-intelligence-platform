@@ -31,12 +31,15 @@
  *     so its style update is counted, and there the first shape re-styles
  *     `.main`'s whole subtree: about one subtree of excess per pass. Its
  *     per-shift cost shows in the logged time and in the insert leg.
- *   - Work outside `.main` lands in every side's count alike: each queue
- *     row's tooltips portal a hidden description into <body> (ui/Tooltip.tsx,
- *     seven per row since W5e), about 950 element styles over the scroll.
- *     As a ratio to no clearance, that diluted the first shape's one
- *     subtree from 4.2x (W5d CI) to 1.83x (W5e CI, run 40311237233). The
- *     excess cancels any such term.
+ *   - Work outside `.main` lands in every side's count alike. At W5e each
+ *     queue row's seven tooltips portalled a styled hidden description into
+ *     <body>, about 950 element styles over the scroll; as a ratio to no
+ *     clearance, that diluted the first shape's one subtree from 4.2x (W5d
+ *     CI) to 1.83x (W5e CI, run 40311237233). The descriptions are now
+ *     shared and never styled (ui/tooltipDescriptions.ts, pinned by
+ *     tooltip-descriptions.fixture.spec.ts; no clearance's scroll fell from
+ *     1459 to 495 on macOS chromium-1243), and the excess still cancels any
+ *     such term.
  */
 import type { Browser, Page } from '@playwright/test';
 import { registerVirtualQueue } from './data/queueKeyboard';
