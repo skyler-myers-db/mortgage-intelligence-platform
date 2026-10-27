@@ -13,7 +13,9 @@
  *    mounted trigger carried, e.g. a new row's property ref.
  *  - ONE hidden host. Every description, shared or not (a trigger whose
  *    content is a React node portals its own), lives in a single
- *    `<div hidden data-tooltip-descriptions>` at the end of <body>. Its
+ *    `<div hidden data-tooltip-descriptions>`, appended to <body> when it
+ *    is attached (portals attached later, such as the tooltip popup and
+ *    modal roots, follow it, so it is not always <body>'s last child). Its
  *    descendants are never styled (a `display: none` subtree), so adding
  *    or removing one costs no style recalc; each description also keeps its
  *    own `hidden`. The host leaves <body> with its last user.
@@ -97,7 +99,7 @@ export function descriptionHost(): HTMLDivElement {
   return host;
 }
 
-/** Put the host (back) at the end of <body>: something may have emptied <body> under it (a test's teardown). */
+/** Append the host (back) to <body> when it is detached: something may have emptied <body> under it (a test's teardown). */
 function attachHost(): HTMLDivElement {
   const element = descriptionHost();
   if (!element.isConnected) document.body.append(element);
