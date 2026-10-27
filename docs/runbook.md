@@ -594,6 +594,16 @@ It also verifies Cotality property/owner identifiers are masked on the
 lead and borrower payloads. Any non-200 response, unmasked identifier, or
 non-up dependency exits non-zero and prints the failing call.
 
+The geo step drills the map the way the UI does, state -> ZIP: it takes
+the largest populated state from `/geo/state-rollups`, requires a
+populated, in-state, 5-digit-ZIP layer from `/geo/zip-rollups?state=`,
+and requires the drill to reconcile exactly
+(`sum(zip.addressable_borrowers) == state.addressable -
+state.zip_unassigned_count`). `/geo/county-rollups` is the retired county
+grain: it must answer 200 for the drilled state and never ship a row
+without a 5-digit `fips_5`; its empty list is expected (see
+`docs/testing.md`, "Live endpoint verifier").
+
 This is the operator's "is real UC actually reachable from this laptop"
 check — run it after §4 deploy-from-scratch and after any cred rotation.
 
