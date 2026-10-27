@@ -13,9 +13,11 @@ this remediation pass.
   blockers.
 - Frontend `npm audit`, 2026-10-27, on the post-W5 integration lock (Part A
   plus the live-gate, scheduled-refresh and deploy-hardening lanes): 0
-  advisories at any level across 305 lock entries (19 prod, 287 dev, 46
-  optional), read with `npm audit --package-lock-only` and at the
-  `--audit-level=high` gate. Main's lock at 550dcf97 reads 0 across 290. The
+  advisories at any level across 305 lock entries (npm's metadata `total`;
+  19 prod, 287 dev, 46 optional), read with `npm audit --package-lock-only`
+  and at the `--audit-level=high` gate. Main's lock at 550dcf97 reads 0
+  across 290 by the same `total`; the lines below count prod plus dev, which
+  is 291 for that lock and 306 for this one. The
   15 added entries are all dev-only, from the screen-reader lane's
   `@guidepup/virtual-screen-reader` 0.33.0 and its tree
   (`@testing-library/dom` 10.4.2, `@testing-library/user-event` 14.6.7,
