@@ -150,8 +150,13 @@ def test_every_job_waits_on_the_uc_catalog_isolation_guard() -> None:
     runs = [step["run"] for step in guard["steps"] if "run" in step]
     assert runs == ["python -m tools.databricks.ci_install_isolation uc-catalogs"]
     assert not guard.get("needs") and "if" not in guard
+    # A refused guard must fail its job: continue-on-error (job or step) or a
+    # step-level `if` would report success and let every job run past it
+    # (post-W5 review, mutants C5/C6/C9).
+    assert "continue-on-error" not in guard, "a refused guard would pass"
     for step in guard["steps"]:
         assert not set(CATALOG_ENV) & set(step.get("env") or {}), "checks the names every job uses"
+        assert "continue-on-error" not in step and "if" not in step, step.get("name") or step.get("uses")
     assert not set(CATALOG_ENV) & set(guard.get("env") or {})
 
     def closure(name: str) -> set[str]:
