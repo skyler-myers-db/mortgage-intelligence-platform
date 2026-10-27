@@ -1,8 +1,10 @@
 name: ci
 
-# Slice 9 CI -- PR + push workflow. Every job below runs in parallel; in-progress
-# runs on the same ref are cancelled by `concurrency` so rapid pushes only
-# burn one runner per branch. Everything here is credential-free; the
+# Slice 9 CI -- PR + push workflow. Every job below runs in parallel except
+# the `e2e-fixture` gate, which waits for `e2e-fixture-shard` and
+# `e2e-fixture-perf` (`needs:`) and merges their reports; in-progress runs on
+# the same ref are cancelled by `concurrency` so rapid pushes only burn one
+# runner per branch. Everything here is credential-free; the
 # nightly workflow (nightly.yml) handles live-UC checks with secrets.
 #
 # Secret policy: this workflow MUST NOT reference any repo secrets. Anyone
