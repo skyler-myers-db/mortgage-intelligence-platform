@@ -595,11 +595,18 @@ That run is GO only when all of these hold:
   audits refuse it at cutover, after the App is stopped. Revoke the grant with
   the space owner's consent; never exempt the group in the audits;
 - a smoke script whose geo-drill probe checks the shipped state → ZIP drill,
-  not the retired county grain;
-- `mip-runtime` mask and current secret fingerprints that match the operator's
-  values, and the `SALESFORCE_*` values supplied or their loss accepted;
-- a dedicated venv built from `requirements.txt` at the interpreter path
-  `deploy.sh` actually uses (a separately named venv is never picked up);
+  not the retired county grain (`scripts/smoke_live.sh` does since the
+  post-W5 live geo gate);
+- a configured `MIP_COTALITY_ID_MASK_SECRET` equal to the stored
+  `cotality-id-mask-v1` (step 0 refuses a mismatch before the App stop), the
+  owner's read of the report-only `genie-action-current` note, and the
+  `SALESFORCE_*` values supplied or the connector accepted as disabled: an
+  unset or placeholder input keeps the stored `salesforce-*` key but leaves it
+  unbound (`docs/deployment.md`, the `provision_runtime_secrets.py` notes);
+- a deploy interpreter whose packages equal the `requirements.txt` pins: the
+  checkout's `.venv/bin/python`, or a venv built outside the checkout and
+  selected with `MIP_DEPLOY_PYTHON`. Step 0 refuses pin drift with exit 2
+  (`docs/deployment.md`, "Deploy interpreter");
 - the owner's decision on a human-created Supervisor that holds the canonical
   name: the first agentic cutover retires it and deletes its serving endpoint,
   which cannot be undone (`docs/deployment.md`, the first migration from a

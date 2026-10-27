@@ -112,7 +112,8 @@ def test_operator_docs_explain_app_refresh_default_and_paused_schedules() -> Non
         "**Piecewise-render trap.**",
         "**Shared catalog.**",
         "**Postflight failure (step 9c).**",
-        "the `SALESFORCE_*` values supplied or their loss accepted",
+        "the `SALESFORCE_*` values supplied or the connector accepted as disabled",
+        "a venv built outside the checkout and selected with `MIP_DEPLOY_PYTHON`",
         "`MIP_REBASE_UNVERIFIED_APP=1` once",
         "no Genie space that the App service principal reaches through a group grant",
     ):
