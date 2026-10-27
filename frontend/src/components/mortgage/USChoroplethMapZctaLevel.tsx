@@ -70,9 +70,9 @@ import './USChoroplethMapZctaLevel.css';
 /**
  * 'tiles': the host draws the fallback tiles under its status line (no file
  * for this state, or a geometry read that failed its retries). 'absent': no
- * state's geometry is committed at all (the approved operator build is still
- * pending), so nothing failed and the host draws the plain tiles with no
- * status line (W5c integration; the zcta review's deploy-order concern).
+ * state's geometry is committed at all (as before the approved operator
+ * build of 2026-10-26), so nothing failed and the host draws the plain tiles
+ * with no status line (W5c integration; the zcta review's deploy-order concern).
  */
 export type ZipRung = 'polygons' | 'tiles' | 'absent';
 

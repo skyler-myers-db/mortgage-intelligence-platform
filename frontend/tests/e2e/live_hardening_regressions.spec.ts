@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { clickDialogBackdrop, evidenceDrawer, openEvidenceDrawer } from './helpers';
+import { expectZipAreasPainted, segmentZipAreas } from './segmentZipAreas';
 
 const LIVE = process.env.E2E_LIVE === '1';
 test.skip(!LIVE, 'Set E2E_LIVE=1 to run live hardening regression checks.');
@@ -495,8 +496,10 @@ test('segment any/all API counts are de-duplicated and intersection-safe', async
 // FIPS per state, so county_fips_5 is NULL everywhere and the county level
 // was removed — a test asserting live county fills would assert a fiction.
 // The intent survives at the level that exists: a segment-filtered state
-// drill must land on real ZIP tiles carrying real fill tiers.
-test('state drilldown lands on ZIP tiles with live segment-filtered fills', async ({ page, request }) => {
+// drill must land on real ZIPs carrying real fill tiers. Since the approved
+// ZCTA geometry (W5c dataviz-01, deviation:zcta-level) Segment Intelligence
+// draws them as ZIP-area polygons, not tiles (segmentZipAreas.ts).
+test('state drilldown lands on ZIP areas with live segment-filtered fills', async ({ page, request }) => {
   const query = 'segment_codes=itm,listed&segment_mode=any';
   const states = await getJson<{ rollups: StateRollup[] }>(request, `/api/geo/state-rollups?${query}`);
   const candidates = states.rollups
@@ -525,14 +528,11 @@ test('state drilldown lands on ZIP tiles with live segment-filtered fills', asyn
   await page.locator('path.map-region', { hasText: '' }).first().waitFor({ state: 'visible', timeout: 45_000 });
   await page.locator(`path[aria-label^="${selected!.stateName}:"]`).click();
 
-  const tiles = page.locator('.zip-tiles');
-  await expect(tiles, `ZIP tiles for ${selected!.stateName}`).toBeVisible({ timeout: 45_000 });
-  await expect(tiles).toHaveAttribute('aria-label', `ZIPs in ${selected!.stateName}`);
-  const firstTile = page.locator('.zip-tile').first();
-  await expect(firstTile).toHaveClass(/zip-tile--lvl-[1-4]/);
-  // A real ZIP with a real count, not an em-dash placeholder.
-  await expect(firstTile.locator('.zip-tile__code')).toHaveText(/^\d{5}$/);
-  await expect(firstTile.locator('.zip-tile__count')).not.toHaveText('—');
+  const zipAreas = segmentZipAreas(page, selected!.stateName);
+  await expect(zipAreas, `ZIP areas in ${selected!.stateName}`).toBeVisible({ timeout: 45_000 });
+  // Every ZIP area with borrowers: a real ZIP on the ramp with a real count,
+  // not a placeholder.
+  await expectZipAreasPainted(zipAreas, `ZIP areas in ${selected!.stateName}`);
 });
 
 test('Genie answers valid recommended and free-form questions without policy-blocking', async ({ page, request }) => {

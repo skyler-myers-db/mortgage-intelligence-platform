@@ -7,16 +7,18 @@
  *    belt: an inlined file would ride in the ZCTA chunk);
  *  - each state box sits within 2 units of the us-atlas box per edge, and
  *    each ZCTA box inside its state box grown by 15 units (one projection);
+ *    an edge that a 1:500k islet or a cross-line ZCTA moves is pinned to its
+ *    measured value instead (ISLET_EDGES, CROSS_LINE_ZCTA_EDGES);
  *  - the geometry query key is never persisted.
  *
- * Until the operator build is committed the manifest checks are skipped with
- * 'geometry not committed: operator build pending'. The loader and the path
- * builder are proven on a synthetic topology either way.
+ * The approved operator build is committed (2026-10-26), so a missing
+ * manifest fails this file. The loader and the path builder are proven on a
+ * synthetic topology as well.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error Frontend app types intentionally exclude Node globals; this
 // test reads the committed manifest under Vitest only.
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 // @ts-expect-error see node:fs note above.
 import { join } from 'node:path';
 import { feature as topoFeature } from 'topojson-client';
@@ -43,10 +45,44 @@ interface ManifestFile {
 }
 
 const MANIFEST = join(process.cwd(), 'src', 'geo', 'zcta', 'manifest.json') as string;
-const committed = existsSync(MANIFEST) as boolean;
-const manifest = committed
-  ? (JSON.parse(readFileSync(MANIFEST, 'utf8') as string) as { files: Record<string, ManifestFile> })
-  : null;
+const manifest = JSON.parse(readFileSync(MANIFEST, 'utf8') as string) as { files: Record<string, ManifestFile> };
+
+/** One box edge pinned to its measured value; edge order is [x0, y0, x1, y1]. */
+interface EdgePin {
+  edge: 0 | 1 | 2 | 3;
+  at: number;
+  why: string;
+}
+
+/**
+ * State-box edges that a 1:500k islet moves past the 2-unit tolerance: the
+ * Census 500k state outline keeps islets that us-atlas's 1:10m generalization
+ * drops. Each is pinned to its measured value at the approved build
+ * (2026-10-26); the state's other three edges keep the tolerance, so a
+ * projection error still fails.
+ */
+const ISLET_EDGES: Readonly<Record<string, EdgePin>> = {
+  // us-atlas's HI x0 is 216.21; Ka'ula (21.65 N, 160.54 W) projects at 209.881.
+  HI: { edge: 0, at: 209.881, why: "Ka'ula Island, west of Ni'ihau" },
+};
+
+/**
+ * ZCTA-box edges that a cross-line ZCTA moves past the 15-unit pad: a ZCTA
+ * is drawn in every state it has land in, so one that lies mostly in a
+ * neighbour widens the state's ZCTA box. Pinned like ISLET_EDGES; the other
+ * three edges keep the pad.
+ */
+const CROSS_LINE_ZCTA_EDGES: Readonly<Record<string, EdgePin>> = {
+  // Overshoot past the state edge in units, land parts from the 2020 relationship file.
+  // 17.46 west of ID's 148.866.
+  ID: { edge: 0, at: 131.403, why: '97910, mostly Malheur County, OR, with 776 km2 of land in Owyhee County, ID' },
+  // 16.91 north of NE's 201.03.
+  NE: { edge: 1, at: 184.125, why: '57735, mostly Fall River County, SD, with 44 km2 of land in Sioux County, NE' },
+  // 20.54 west of SD's 365.293.
+  SD: { edge: 0, at: 344.752, why: '82701, mostly Weston County, WY, with 366 km2 of land in Custer and Pennington Counties, SD' },
+  // 15.01 south of UT's 327.962.
+  UT: { edge: 3, at: 342.975, why: '86044, mostly Coconino County, AZ, with 934 km2 of land in San Juan County, UT' },
+};
 
 /** us-atlas's own box per uppercase USPS code, in the same Albers-1300 space. */
 function atlasBoxes(): Record<string, [number, number, number, number]> {
@@ -60,8 +96,8 @@ function atlasBoxes(): Record<string, [number, number, number, number]> {
   return boxes;
 }
 
-describe.skipIf(!committed)('the committed ZCTA manifest (geometry not committed: operator build pending)', () => {
-  const files = manifest?.files ?? {};
+describe('the committed ZCTA manifest', () => {
+  const files = manifest.files;
   const atlas = atlasBoxes();
 
   it('gives every us-atlas state a hashed same-origin URL, never an inlined one', () => {
@@ -80,11 +116,19 @@ describe.skipIf(!committed)('the committed ZCTA manifest (geometry not committed
   it('shares us-atlas projection: state boxes within 2 units, ZCTA boxes inside their state', () => {
     for (const [name, file] of Object.entries(files)) {
       const usps = name.replace('.topo.json', '');
-      const [ax0, ay0, ax1, ay1] = atlas[usps];
-      const [sx0, sy0, sx1, sy1] = file.state_bbox;
-      expect([sx0 - ax0, sy0 - ay0, sx1 - ax1, sy1 - ay1].every((edge) => Math.abs(edge) <= 2), name).toBe(true);
-      const [zx0, zy0, zx1, zy1] = file.zcta_bbox;
-      expect(zx0 >= sx0 - 15 && zy0 >= sy0 - 15 && zx1 <= sx1 + 15 && zy1 <= sy1 + 15, name).toBe(true);
+      const box = atlas[usps];
+      const islet = ISLET_EDGES[usps];
+      file.state_bbox.forEach((value, edge) => {
+        if (islet?.edge === edge) expect(value, `${name} state edge ${edge}: ${islet.why}`).toBeCloseTo(islet.at, 3);
+        else expect(Math.abs(value - box[edge]), `${name} state edge ${edge}`).toBeLessThanOrEqual(2);
+      });
+      const crossLine = CROSS_LINE_ZCTA_EDGES[usps];
+      file.zcta_bbox.forEach((value, edge) => {
+        // x0 / y0 may sit up to 15 below the state's; x1 / y1 up to 15 above.
+        const beyond = edge < 2 ? file.state_bbox[edge] - value : value - file.state_bbox[edge];
+        if (crossLine?.edge === edge) expect(value, `${name} ZCTA edge ${edge}: ${crossLine.why}`).toBeCloseTo(crossLine.at, 3);
+        else expect(beyond, `${name} ZCTA edge ${edge}`).toBeLessThanOrEqual(15);
+      });
     }
   });
 });

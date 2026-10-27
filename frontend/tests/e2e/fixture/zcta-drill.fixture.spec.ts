@@ -19,17 +19,29 @@
  *    its Lead Queue action, no status line, no rung load); a keyboard drill
  *    holds focus on the loading stage while the rung loads; a geometry read
  *    that fails (or a state with no file) falls back to the densest-ZIP
- *    tiles with their status line; while no geometry is committed at all,
- *    a drill shows the plain tiles with no status line (nothing failed).
+ *    tiles with their status line; with no geometry committed at all, a
+ *    drill would show the plain tiles with no status line (nothing failed).
+ *  - The nightly live specs' Segments drills (real_data, live_hardening,
+ *    demo_visual) assert the polygon stage through tests/e2e/segmentZipAreas.ts;
+ *    the same helpers run here on the fixture build, on every change.
  *
- * Every polygon-dependent case is a fixme until the approved operator build
- * commits frontend/src/geo/zcta (it lifts itself once manifest.json exists).
+ * The approved operator build committed frontend/src/geo/zcta on 2026-10-26,
+ * so every polygon-dependent case runs; each would turn back into a fixme
+ * (and the no-geometry case run) only if manifest.json disappeared, which
+ * tests/unit/test_zcta_geometry_manifest.py fails.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Page, Request } from '@playwright/test';
 import type { ZipRollupResponse } from '../../../src/types';
 import type { FixtureTheme } from './app';
+import {
+  ZIP_STAGE,
+  clickPopulatedZipArea,
+  expectMapHeaderClear,
+  expectZipAreasPainted,
+  segmentZipAreas,
+} from '../segmentZipAreas';
 import { expectAxeClean } from './axe';
 import { emptyZipRollupsFixture } from './data/mapEncoding';
 import { json } from './mockApi';
@@ -38,7 +50,7 @@ import { auditedReadsAfter, markNaturalLoad } from './visual';
 
 const GEO_DIR = path.resolve(process.cwd(), 'src', 'geo', 'zcta');
 const GEOMETRY_COMMITTED = fs.existsSync(path.join(GEO_DIR, 'manifest.json'));
-const PENDING = 'geometry not committed: operator build pending';
+const NO_GEOMETRY = 'no ZCTA geometry committed (frontend/src/geo/zcta/manifest.json is missing)';
 const SEGMENTS = '/segment-intelligence?marketing_eligibility=Any';
 const THEMES: readonly FixtureTheme[] = ['dark', 'light'];
 const TILE_STATUS = 'ZIP boundaries could not load; showing the densest ZIPs as tiles.';
@@ -103,7 +115,7 @@ function manifestStateBox(usps: string): number[] {
 
 test.describe('ZIP areas (needs the committed geometry)', () => {
   test.beforeEach(() => {
-    test.fixme(!GEOMETRY_COMMITTED, PENDING);
+    test.fixme(!GEOMETRY_COMMITTED, NO_GEOMETRY);
   });
 
   for (const theme of THEMES) {
@@ -247,6 +259,52 @@ test.describe('ZIP areas (needs the committed geometry)', () => {
     expect(outline.stroke).toBe(outline.canvasText);
   });
 
+  // The nightly live suite's Segments drills, on the fixture build: the
+  // same helpers (tests/e2e/segmentZipAreas.ts) the live specs call.
+  test('the live Segments drill (real_data, live_hardening): segment-filtered ZIP areas, a clear header, and a ZIP area opens its filtered Lead Queue', async ({ app, mockApi, page }) => {
+    await app.gotoRoute(SEGMENTS);
+    for (const title of ['In the Money', 'Home Equity Candidate']) {
+      await page.locator('.seg-card', { hasText: title }).locator('.seg-card__select').click();
+    }
+    await expect.poll(() => new URL(page.url()).searchParams.get('segment_codes')).toBe('itm,equity');
+    await app.settle();
+    await drill(page, 'il');
+    await expect(page.locator(ZIP_STAGE).first()).toBeVisible();
+    const zipAreas = segmentZipAreas(page, 'Illinois');
+    await expect(zipAreas).toBeVisible();
+    const rollupCall = mockApi.calls.filter((call) => call.path === '/api/geo/zip-rollups').at(-1);
+    const sent = new URLSearchParams(rollupCall?.search ?? '');
+    expect(sent.get('segment_codes')).toBe('itm,equity');
+    expect(sent.get('segment_mode')).toBe('any');
+    await expectZipAreasPainted(zipAreas, 'ZIP areas in Illinois');
+    await expectMapHeaderClear(page, zipAreas, 'segment ZIP map');
+
+    const zip = await clickPopulatedZipArea(page, zipAreas);
+    await expect(page).toHaveURL(/\/lead-queue\?/);
+    const url = new URL(page.url());
+    expect(url.searchParams.get('state')).toBe('IL');
+    expect(url.searchParams.get('county')).toBeNull();
+    expect(url.searchParams.get('zip')).toBe(zip);
+    expect(url.searchParams.get('segment_mode')).toBe('any');
+    expect(url.searchParams.get('segment_codes')).toBe('itm,equity');
+    await app.settle();
+    const leads = new URLSearchParams(mockApi.calls.filter((call) => call.path === '/api/leads').at(-1)?.search ?? '');
+    expect(leads.get('zip')).toBe(zip);
+    expect(leads.get('segment_codes')).toBe('itm,equity');
+  });
+
+  test('the live ZIP-layer header check (demo_visual): the header clears the ZIP areas from 1440 to 1024px', async ({ app, page }) => {
+    await app.gotoRoute(SEGMENTS);
+    await drill(page, 'tx');
+    const zipAreas = segmentZipAreas(page, 'Texas');
+    await expect(zipAreas).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Fit to the populated ZIP areas' })).toBeVisible();
+    for (const width of [1440, 1280, 1150, 1024]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expectMapHeaderClear(page, zipAreas, `segment ZIP map ${width}px`);
+    }
+  });
+
   test('report-only: TX drill-to-paint at 4x CPU', async ({ app, browserName, page }) => {
     test.skip(browserName !== 'chromium', 'CPU throttling is a Chromium DevTools protocol call');
     await app.gotoRoute(SEGMENTS);
@@ -351,7 +409,9 @@ test.describe('the rung without geometry (always)', () => {
   });
 
   test('while no geometry is committed, a ZIP drill shows the plain tiles and no failure line', async ({ app, page }) => {
-    test.skip(GEOMETRY_COMMITTED, 'only while the operator build is pending');
+    // The 'absent' rung (USChoroplethMapZctaLevel); the vitest case 'reports
+    // absent, not tiles' covers it while the geometry is committed.
+    test.skip(GEOMETRY_COMMITTED, 'runs only on a tree with no ZCTA geometry committed');
     await app.gotoRoute(SEGMENTS);
     await drill(page, 'il');
     await expect(page.locator('#main-content ul.zip-tiles')).toBeVisible();
@@ -362,7 +422,7 @@ test.describe('the rung without geometry (always)', () => {
 
   test('a geometry read that fails falls back to the densest-ZIP tiles with their status line', async ({ app, hygiene, page }) => {
     // With no geometry committed no read is made (the case above): this one needs a file to fail.
-    test.fixme(!GEOMETRY_COMMITTED, PENDING);
+    test.fixme(!GEOMETRY_COMMITTED, NO_GEOMETRY);
     // The aborted geometry reads (the first try and its two retries) are the point of the test.
     hygiene.allow('request-failed', /\/assets\/[A-Z]{2}\.topo-[^/]+\.json failed: net::ERR_FAILED/);
     hygiene.allow('console.error', /Failed to load resource: net::ERR_FAILED \(http:\/\/[^)]+\/assets\/[A-Z]{2}\.topo-/);

@@ -600,16 +600,20 @@ test.describe('Runtime-06: the map keeps the previous cohort, visibly', () => {
         } satisfies ZipRollupResponse,
       };
     });
+    // A ZIP unit in either ZIP stage: Segments draws the committed ZCTA
+    // polygons (W5c dataviz-01) and falls back to the tiles, so the stale
+    // first state must show in neither.
+    const zipUnit = (zip: string) => page.locator(`.map-wrap [data-map-unit="${zip}"]`);
     await app.gotoRoute('/segment-intelligence?geo_state=IL');
-    await expect(page.locator('button.zip-tile[data-map-unit="60611"]')).toBeVisible();
+    await expect(zipUnit('60611').and(page.locator('[data-populated]'))).toBeVisible();
     await page.locator('.map-crumbs__trail').getByRole('button', { name: 'US' }).click();
     await page.locator('path.map-region[data-map-unit="tx"]').click();
     await expect(page.locator('.map-wrap')).toContainText('ZIPs in Texas');
-    await expect(page.locator('button.zip-tile[data-map-unit="60611"]')).toHaveCount(0);
+    await expect(zipUnit('60611')).toHaveCount(0);
     await expect(page.locator('.map-levels.is-updating')).toHaveCount(0);
     release();
-    await expect(page.locator('button.zip-tile[data-map-unit="77002"]')).toBeVisible();
-    await expect(page.locator('button.zip-tile[data-map-unit="60611"]')).toHaveCount(0);
+    await expect(zipUnit('77002').and(page.locator('[data-populated]'))).toBeVisible();
+    await expect(zipUnit('60611')).toHaveCount(0);
   });
 });
 

@@ -270,8 +270,8 @@ for (const theme of FIXTURE_THEMES) {
     });
 
     // M (W5c w5-zcta-watchlist, dataviz-01): the Segments map drilled to
-    // Illinois, its ZIP areas as committed ZCTA polygons (the tile fallback
-    // with its status line until the operator build is committed).
+    // Illinois, its ZIP areas as the committed ZCTA polygons (the approved
+    // operator build, 2026-10-26).
     test('segment-intelligence · zcta drill', async ({ app, mockApi, page }) => {
       const { naturalLoad } = await load(app, mockApi, route('segment-intelligence'), theme);
       await page.locator('path[data-map-unit="il"]').click();
