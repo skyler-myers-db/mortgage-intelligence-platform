@@ -211,6 +211,36 @@ describe('tooltip descriptions', () => {
     for (const id of ids) expect(id).not.toMatch(/\s/);
   });
 
+  it('is defined for a lone surrogate: no throw, still injective, and a well-formed text keeps its id', async () => {
+    // encodeURIComponent throws a URIError on a lone UTF-16 surrogate (text
+    // cut inside an emoji); the id must not, since render computes it.
+    const pairs: Array<[string, string | undefined]> = [
+      ['Emoji cut \uD83D', undefined],
+      ['Emoji cut \uDE00', undefined],
+      ['Emoji cut \uDE00\uD83D', undefined],
+      ['Emoji cut ', undefined],
+      ['Emoji cut %uD83D', undefined],
+      ['Emoji cut %25uD83D', undefined],
+      ['Emoji cut \uD83D\uDE00', undefined],
+      ['Close', '\uD83D'],
+      ['Close', undefined],
+    ];
+    const ids = pairs.map(([text, shortcut]) => descriptionId(text, shortcut));
+
+    expect(new Set(ids).size).toBe(pairs.length);
+    for (const id of ids) expect(id).not.toMatch(/\s/);
+    expect(descriptionId('Emoji cut \uD83D')).toBe('tooltip-desc-Emoji%20cut%20%uD83D');
+    expect(descriptionId('Emoji cut \uD83D\uDE00')).toBe(`tooltip-desc-${encodeURIComponent('Emoji cut \uD83D\uDE00')}`);
+
+    await mount(
+      <Tooltip content={'Emoji cut \uD83D'}>
+        <button type="button" aria-label="cut">c</button>
+      </Tooltip>,
+    );
+    expect(accessibleDescription(byLabel('cut'))).toBe('Emoji cut \uD83D');
+    expect(descriptions()).toHaveLength(1);
+  });
+
   it('a React-node content keeps its own description, in the same host', async () => {
     await mount(
       <>

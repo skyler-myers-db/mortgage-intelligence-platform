@@ -45,17 +45,42 @@ let host: HTMLDivElement | null = null;
 let hostUsers = 0;
 
 /**
- * The id of the shared description for `text` (and `shortcut`): pure and
- * injective. encodeURIComponent never emits whitespace (ids must have none,
- * `aria-describedby` is a space-separated list) and always escapes `@`, so
- * the `@` before an encoded shortcut cannot come from the text: 'a@b' with
- * no shortcut is `…a%40b`, 'a' with shortcut 'b' is `…a@b`. A per-trigger
- * description's id (`tooltip-desc_r_…_`, React's useId) never starts with
- * this prefix's hyphen.
+ * encodeURIComponent for ANY string. It throws a URIError on a lone UTF-16
+ * surrogate (a string cut inside an emoji); such a code unit is written as
+ * `%u` plus its four hex digits instead. That token cannot come from
+ * encodeURIComponent (it writes `%` only before two hex digits, and a
+ * literal `%` as `%25`), so the encoding stays injective, and it holds no
+ * whitespace. A well-formed string encodes exactly as before.
+ */
+function encodeIdPart(value: string): string {
+  try {
+    return encodeURIComponent(value);
+  } catch {
+    let encoded = '';
+    // for...of walks code points: a pair is one step, a lone surrogate its own.
+    for (const point of value) {
+      const unit = point.charCodeAt(0);
+      encoded += point.length === 1 && unit >= 0xd800 && unit <= 0xdfff
+        ? `%u${unit.toString(16).toUpperCase()}`
+        : encodeURIComponent(point);
+    }
+    return encoded;
+  }
+}
+
+/**
+ * The id of the shared description for `text` (and `shortcut`): pure,
+ * injective and defined for every string (encodeIdPart). The encoding never
+ * emits whitespace (ids must have none, `aria-describedby` is a
+ * space-separated list) and always escapes `@`, so the `@` before an encoded
+ * shortcut cannot come from the text: 'a@b' with no shortcut is `…a%40b`,
+ * 'a' with shortcut 'b' is `…a@b`. A per-trigger description's id
+ * (`tooltip-desc_r_…_`, React's useId) never starts with this prefix's
+ * hyphen.
  */
 export function descriptionId(text: string, shortcut?: string): string {
-  const id = `tooltip-desc-${encodeURIComponent(text)}`;
-  return shortcut ? `${id}@${encodeURIComponent(shortcut)}` : id;
+  const id = `tooltip-desc-${encodeIdPart(text)}`;
+  return shortcut ? `${id}@${encodeIdPart(shortcut)}` : id;
 }
 
 /**
