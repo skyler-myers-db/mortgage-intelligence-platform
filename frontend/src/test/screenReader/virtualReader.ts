@@ -5,16 +5,17 @@
  * speaks as a committed golden transcript beside the suites
  * (`transcripts/<flow>.txt`, written by `toMatchFileSnapshot`). A transcript
  * that changes fails the suite: review the new text, then update it on
- * purpose with `npm --prefix frontend run test -- src/test/screenReader -u`. CI never writes one
- * (Vitest refuses to create or rewrite a snapshot under `CI`).
+ * purpose with `npm --prefix frontend run test -- src/test/screenReader -u`.
+ * CI never writes one (Vitest refuses to create or rewrite a snapshot under
+ * `CI`).
  *
  * The reader builds its tree from the DOM through the W3C mappings (ACCNAME,
  * HTML-AAM, CORE-AAM, WAI-ARIA 1.2). It is NOT a real screen reader, and every
  * suite here states what it cannot model; the short list:
  *
  *   - Pronunciation. It speaks the text it is given: U+2212 stays the "−"
- *     character. NVDA, JAWS and VoiceOver map U+2212 to the word "minus" in
- *     their own symbol tables; that reading is unverified here.
+ *     character. NVDA, JAWS and VoiceOver are expected to read U+2212 as
+ *     "minus" from their own symbol tables; that reading is unverified here.
  *   - aria-activedescendant. The reader never moves to the active option on
  *     an arrow key; it speaks "active descendant, <name>" only as part of
  *     the focused combobox's own phrase (`reportFocus()` re-reads it).
