@@ -1299,8 +1299,8 @@ found that it cannot deploy the live App by any supported path today:
   `scripts/deploy.sh` never creates one: it always passes
   `--expected-application-id`, and `provision_m2m_oauth` then refuses a
   missing principal.
-- The only governed creation path cannot serve the live install from this
-  repository (owner step 1).
+- The only path that mints a usable credential cannot serve the live
+  install from this repository (owner step 1).
 - The live App has no signed rollback record, so a first governed run stops
   it at step 0a and leaves it stopped if any later gate fails; on 2026-10-26
   two gates would have failed after that point.
@@ -1570,11 +1570,17 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    The live install has no seven of its own: on 2026-10-27 the live workspace
    held none of the seven names, only the App's own `app-<id> mip-app`
    principal. None can be created for it under this design.
-   `scripts/deploy.sh` never creates a principal: it always passes
+   `scripts/deploy.sh` never creates a reserved principal: it always passes
    `--expected-application-id`, and `provision_m2m_oauth` then refuses a
-   missing one. The only governed creation path is
-   `provision_m2m_oauth --pre-app-bootstrap --set-gh-secrets`. It sends each
-   role's client id and one-shot secret only to a GitHub repository's
+   missing one. (The temporary Lakebase bootstrap principals a deploy
+   creates and deletes are not reserved identities.) Outside the deploy, a
+   `provision_m2m_oauth` run without `--expected-application-id` can create
+   a reserved principal, but with `--no-mint-secret` that principal has no
+   secret. The only path that mints a usable credential, for a new
+   principal or a rotation, is `--set-gh-secrets` with a reviewed `--gh-repo`;
+   the governed creation run is
+   `provision_m2m_oauth --pre-app-bootstrap --set-gh-secrets`. That sink sends
+   each role's client id and one-shot secret only to a GitHub repository's
    repository-level Actions secrets (`gh secret set --repo`): the reviewed
    `origin`, or the repository `MIP_M2M_GITHUB_REPOSITORY` names. The secret
    names are fixed per role (`IDENTITY_DEFAULTS`), and in this repository they

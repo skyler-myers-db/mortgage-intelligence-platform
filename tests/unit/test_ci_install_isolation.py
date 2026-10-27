@@ -937,6 +937,11 @@ def test_the_live_app_has_no_governed_recovery_path_and_escalates_to_the_owner()
     assert "Deploying or recovering the live App is therefore an owner-only decision." in live
     assert "Never start `./scripts/deploy.sh -t dev` against the live workspace during an incident" in live
 
+    assert "`scripts/deploy.sh` never creates a reserved principal" in step1
+    assert "The only path that mints a usable credential, for a new principal or a rotation, is `--set-gh-secrets`" in step1
+    assert "The only path that mints a usable credential cannot serve the live install" in live
+    for loose in ("never creates a principal", "only governed creation path"):
+        assert loose not in flat, loose
     for sink in (
         "`provision_m2m_oauth --pre-app-bootstrap --set-gh-secrets`",
         "repository-level Actions secrets (`gh secret set --repo`)",
