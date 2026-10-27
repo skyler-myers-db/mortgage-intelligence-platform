@@ -915,6 +915,40 @@ def test_no_tracked_file_names_a_third_party_handle_or_catalog() -> None:
     assert hits == [], hits
 
 
+# An operator deploy of the live install, however it is spelled in prose.
+_OPERATOR_LIVE_DEPLOY = r"`?(?:\./)?scripts/deploy\.sh`? -t dev`?"
+# A recovery verb that reaches the operator deploy, or an un-negated dispatch for the live App, in one sentence.
+_LIVE_RECOVERY_OVERCLAIMS = (
+    re.compile(r"(?i)\b(?:recover|restor|restart|redeploy|repair)\w*\b[^.]{0,80}?(?:" + _OPERATOR_LIVE_DEPLOY + ")"),
+    re.compile(r"(?i)(?<!not )\bdispatch\b (?:the )?(?:workflow|`?deploy-dev(?:\.yml)?`?)[^.]{0,60}?\bfor the live\b"),
+    re.compile(r"(?i)\brecovers? through an operator\b"),
+)
+
+
+def assert_no_live_recovery_overclaim(text: str) -> None:
+    """No sentence presents an operator deploy or a dispatch as the live App's recovery."""
+
+    for pattern in _LIVE_RECOVERY_OVERCLAIMS:
+        match = pattern.search(text)
+        assert match is None, match.group(0) if match else ""
+
+
+@pytest.mark.parametrize(
+    "overclaim",
+    [
+        "so it can never deploy or recover the live dev App, which an operator recovers with `./scripts/deploy.sh -t dev`.",
+        "Restart it with `./scripts/deploy.sh -t dev`.",
+        "Redeploy the live App: run ./scripts/deploy.sh -t dev now.",
+        "Do not start that deploy during an incident, and dispatch the workflow below for the live App.",
+        "Dispatch deploy-dev.yml for the live App.",
+        "The live App recovers through an operator.",
+    ],
+)
+def test_the_live_recovery_overclaim_ban_catches_paraphrases(overclaim: str) -> None:
+    with pytest.raises(AssertionError):
+        assert_no_live_recovery_overclaim(overclaim)
+
+
 def test_the_live_app_has_no_governed_recovery_path_and_escalates_to_the_owner() -> None:
     """Round 2 (post-W5 review B2, B1): the docs never present a NO-GO path as the live App's recovery.
 
@@ -966,8 +1000,10 @@ def test_the_live_app_has_no_governed_recovery_path_and_escalates_to_the_owner()
         "Escalate to the owner",
         "is an owner-only decision",
         "so it can never deploy or recover the live dev App",
+        "Do not start that deploy during an incident, and do not dispatch the workflow below for the live App.",
     ):
         assert anchor in recovery, anchor
+    assert_no_live_recovery_overclaim(flat + " " + recovery)
     grants = _flat(GRANTS_DOC.read_text(encoding="utf-8"))
     assert "acts on that workspace's catalogs" not in grants
     assert "shares the live install's Unity Catalog metastore" in grants
