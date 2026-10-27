@@ -102,6 +102,7 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 }));
 
 import { LeadTable } from './LeadTable';
+import { preloadLeadRowExpanded } from './LeadTableRow.expanded';
 
 /** A design-system tooltip's text (ui/Tooltip's hidden description), or null. */
 function tooltipText(element: Element): string | null {
@@ -110,10 +111,14 @@ function tooltipText(element: Element): string | null {
 }
 
 // The review and the bulk review are lazy chunks: transform them once up
-// front so the in-test dynamic import resolves in a few microtasks.
+// front so the in-test dynamic import resolves in a few microtasks. The
+// expanded row's body (LeadTableRow.expanded) is loaded into its module cache,
+// so an expanded row renders its preview synchronously, as a warmed queue
+// does (the cold load is LeadTableRow.expanded.test.tsx's).
 beforeAll(async () => {
   await import('./LeadApproveReview');
   await import('./LeadBulkApproveReview');
+  await preloadLeadRowExpanded();
 }, 60_000);
 
 function lead(borrowerId: string): LeadSummary {

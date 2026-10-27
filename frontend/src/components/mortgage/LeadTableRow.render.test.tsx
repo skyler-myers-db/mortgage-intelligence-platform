@@ -4,9 +4,10 @@
 
 import { createRoot, type Root } from 'react-dom/client';
 import { act, type ReactNode } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LeadSummary } from '../../types';
 import { LeadTableRow } from './LeadTableRow';
+import { preloadLeadRowExpanded } from './LeadTableRow.expanded';
 
 vi.mock('../Primitives', () => ({
   Button: ({ children, ...props }: { children: ReactNode }) => <button {...props}>{children}</button>,
@@ -60,6 +61,12 @@ const lead: LeadSummary = {
   approval_status: 'pending',
   outreach_status: 'queued',
 };
+
+// The expanded row's body (preview + workflow strip) is a lazy chunk
+// (LeadTableRow.expanded): loaded into its module cache up front, so an open
+// row renders it synchronously, as a warmed queue does; the cold load and
+// its failure are LeadTableRow.expanded.test.tsx's.
+beforeAll(() => preloadLeadRowExpanded(), 60_000);
 
 describe('LeadTableRow display fallbacks', () => {
   let root: Root;

@@ -19,6 +19,7 @@ import { ScoreBadge } from './ScoreBadge';
 import { lazyModule, useLazyModule } from './useLazyModule';
 import { leadCountQueryOptions } from '../../lib/apiClients/leadCount';
 import { dispositionLabel, outreachLabel } from './LeadTable.logic';
+import { leadReceiptAnchorId } from './LeadRowPreview.ids';
 
 // A row's Decision receipt renders only after a decision in this session, so
 // it loads then (its shared interaction chunk) instead of riding in the Lead
@@ -56,13 +57,9 @@ function revealSimilarPlaceholder(element: HTMLParagraphElement | null): void {
   element?.scrollIntoView?.({ block: 'nearest' });
 }
 
-/**
- * id of the expanded row's receipt block: the queue's "View receipt" toast
- * action opens the row and moves focus here (tabIndex -1).
- */
-export function leadReceiptAnchorId(borrowerId: string): string {
-  return `lead-receipt-${borrowerId}`;
-}
+// The receipt block's id lives with the table (the keyboard flow focuses it),
+// so the flow imports nothing of this lazy chunk (LeadRowExpanded).
+export { leadReceiptAnchorId };
 
 /**
  * The expanded row's approval gate (audit tables-01): the prototype's
