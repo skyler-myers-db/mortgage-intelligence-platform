@@ -22,4 +22,5 @@
 - [Dead \b after a quoted literal](project_dead_word_boundary_after_quote.md) — `'cash_out'\b` never matches; it silently killed the SQL product reader and made a bad heuristic look load-bearing
 - [App SQL is gold-only](project_app_sql_gold_only.md) — no silver/raw in App-executed SQL (live-only 403); precompute into gold; keep LEFT JOIN on "non-NULL only" gold tables
 - [Permission refusal fails fast](project_permission_denied_fail_fast.md) — kind permission_denied, retryable False, breaker success; TABLE_OR_VIEW_NOT_FOUND still retried
-- [DAB complex variable channels](project_dab_complex_variable_channels.md) — CLI 1.10 refuses BUNDLE_VAR_/--var for list vars; variable-overrides.json is the only per-install channel
+- [DAB complex variable channels](project_dab_complex_variable_channels.md) — CLI 1.10 refuses BUNDLE_VAR_/--var for list vars; overrides.json is the only per-install channel; CLI default-queues every job
+- [Mutation harness DEFAULT profile](feedback_mutation_harness_default_profile.md) — a bare WorkspaceClient() in a mutation run hits DEFAULT=pr105; set DATABRICKS_CONFIG_FILE=/nonexistent
