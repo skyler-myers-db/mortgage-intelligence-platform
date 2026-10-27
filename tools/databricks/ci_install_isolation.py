@@ -26,7 +26,7 @@ mutating subcommands:
 - ``CI_TARGET`` is deploy-dev.yml-only, and a non-default leaf is CI-only and
   ``CI_TARGET``-only (the dev target keeps the live root);
 - ``CI_TARGET``'s workspace hostname must be set and differ from the dev target's
-  (scheme, port, path and query never make a second workspace);
+  (scheme, port, path, query and a trailing dot never make a second workspace);
 - with a non-default leaf every install-scoped name must be set and differ from
   its live default, neither UC catalog name (``UC_CATALOG_NAMES``) may name
   either live catalog in any UC spelling, GENIE_SPACE_ID must differ from the
@@ -116,15 +116,20 @@ def target_hosts(bundle: Path = REPO_ROOT / "databricks.yml") -> dict[str, str]:
 
 
 def _host_key(url: str) -> str:
-    """The workspace hostname a host URL names: scheme, port, path and query are not a second workspace."""
+    """The workspace hostname a host URL names: scheme, port, path and query are not a second workspace.
+
+    Nor is the absolute (trailing-dot) spelling of a hostname: DNS and TLS
+    resolve ``host.`` to ``host``, so the dot is dropped before comparing.
+    """
 
     value = url.strip()
     if not value:
         return ""
     try:
-        return (urlsplit(value if "://" in value else f"https://{value}").hostname or "").casefold()
+        hostname = urlsplit(value if "://" in value else f"https://{value}").hostname or ""
     except ValueError:  # an unparseable host names no workspace; the caller refuses it
         return ""
+    return hostname.rstrip(".").casefold()
 
 
 def _uc_name(part: str) -> str:

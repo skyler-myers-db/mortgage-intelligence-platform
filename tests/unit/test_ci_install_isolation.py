@@ -302,13 +302,30 @@ def test_a_spelling_variant_of_the_dev_host_is_still_the_dev_host(variant: str, 
         "https://live.example/some/path",
         "live.example",
         "https://user@LIVE.example:8443/",
+        "https://live.example.",
+        "https://live.example./",
+        "https://LIVE.example.:443",
+        "live.example.",
+        "https://live.example..",
     ],
-    ids=["explicit-port", "http-scheme", "query-string", "path", "no-scheme", "userinfo-and-port"],
+    ids=[
+        "explicit-port",
+        "http-scheme",
+        "query-string",
+        "path",
+        "no-scheme",
+        "userinfo-and-port",
+        "trailing-dot",
+        "trailing-dot-slash",
+        "trailing-dot-uppercase-port",
+        "trailing-dot-no-scheme",
+        "double-trailing-dot",
+    ],
 )
 def test_a_url_spelling_of_the_dev_host_is_still_the_dev_host(variant: str, tmp_path: Path) -> None:
     """Round 2 (post-W5 review): the rule table compares hostnames, not URL strings.
 
-    A scheme, port, path, query or userinfo never makes a second workspace. An
+    A scheme, port, path, query, userinfo or trailing dot never makes a second workspace. An
     alias DNS name for the live workspace is out of a static check's reach;
     owner step 8's `metastores current` workspace id is that proof.
     """
@@ -327,8 +344,9 @@ def test_a_url_spelling_of_the_dev_host_is_still_the_dev_host(variant: str, tmp_
         {"dev": "https://live.example", CI_TARGET: "https://[staging.example"},
         {"dev": "", CI_TARGET: "https://staging.example"},
         {CI_TARGET: "https://staging.example"},
+        {"dev": "https://live.example", CI_TARGET: "https://."},
     ],
-    ids=["unparseable-dev", "unparseable-ci", "empty-dev", "no-dev-target"],
+    ids=["unparseable-dev", "unparseable-ci", "empty-dev", "no-dev-target", "dot-only-ci"],
 )
 def test_a_host_that_names_no_workspace_is_refused(hosts: dict[str, str]) -> None:
     """Fail closed: an unparseable or missing host on either side is never 'a different workspace'."""

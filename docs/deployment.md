@@ -1429,10 +1429,10 @@ from the live workspace on 2026-10-27 (agents never call `pr105-host`):
   `pr105-host`, or without a non-default leaf; `pr105-host` outside
   `deploy-dev.yml`; a non-default leaf outside GitHub Actions or on any target
   but `pr105-host`; a `pr105-host` whose resolved hostname is empty,
-  unparseable or the dev target's (a scheme, port, path or query never makes
-  a second workspace; an alias DNS name for the live workspace is beyond a
-  static check, and owner step 8's `metastores current` workspace id is that
-  proof); a malformed leaf; and, with a non-default leaf, any of
+  unparseable or the dev target's (a scheme, port, path, query or trailing
+  dot never makes a second workspace; an alias DNS name for the live
+  workspace is beyond a static check, and owner step 8's `metastores current`
+  workspace id is that proof); a malformed leaf; and, with a non-default leaf, any of
   `MIP_APP_NAME`, `MIP_DEFAULT_CATALOG`, `MIP_LAKEBASE_INSTANCE`,
   `MIP_LAKEBASE_SYNC_CATALOG`, `MIP_RUNTIME_SECRET_SCOPE`,
   `MIP_APP_ROLLBACK_SECRET_SCOPE`, `MIP_GENIE_SPACE_NAME`,
