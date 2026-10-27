@@ -27,6 +27,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import pytest
 
@@ -280,6 +281,24 @@ def test_the_tool_pins_exactly_the_three_census_sources() -> None:
     # Pinned at the approved build (2026-10-26); the tool refuses an unpinned source.
     for source in sources:
         assert re.fullmatch(r"[0-9a-f]{64}", str(source["sha256"])), source["name"]
+
+
+def test_the_tool_downloads_only_from_the_census_host_and_never_follows_a_redirect() -> None:
+    # The SHA-256 pins already fail closed on content; these make the host
+    # rule explicit (the tool's dependencies are operator-only, so this reads
+    # the source instead of importing it).
+    source = TOOL.read_text(encoding="utf-8")
+    assert "export const SOURCE_HOST = 'www2.census.gov';" in source
+    assert {urlparse(url).hostname for url in CENSUS_URLS.values()} == {"www2.census.gov"}
+    download = source[source.index("async function download(") :]
+    download = download[: download.index("\n}\n")]
+    assert "const problem = sourceUrlProblem(source.url);" in download
+    assert "if (problem) throw new Error(" in download
+    assert "await fetch(source.url, { redirect: 'error' })" in download
+    assert download.count("fetch(") == 1
+    checker = source[source.index("export function sourceUrlProblem(") :]
+    checker = checker[: checker.index("\n}\n")]
+    assert "parsed.protocol === 'https:'" in checker and "parsed.hostname === SOURCE_HOST" in checker
 
 
 def test_ci_audits_the_geo_tool_lock_at_high() -> None:

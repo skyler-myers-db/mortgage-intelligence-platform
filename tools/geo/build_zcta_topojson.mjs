@@ -150,10 +150,30 @@ export function sourceDirProblem(sourceDir, root = repoRoot) {
     : null;
 }
 
+/** The one host the approved sources come from; a download goes nowhere else. */
+export const SOURCE_HOST = 'www2.census.gov';
+
+/** Why `url` may not be downloaded (not HTTPS on SOURCE_HOST), or null. */
+export function sourceUrlProblem(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return `${url} is not a URL`;
+  }
+  return parsed.protocol === 'https:' && parsed.hostname === SOURCE_HOST && parsed.port === ''
+    ? null
+    : `${url} is not an https://${SOURCE_HOST}/ URL`;
+}
+
 async function download(sources, sourceDir) {
   mkdirSync(sourceDir, { recursive: true });
   for (const source of sources) {
-    const response = await fetch(source.url);
+    const problem = sourceUrlProblem(source.url);
+    if (problem) throw new Error(`download refused: ${problem}`);
+    // The approved fetches answered 200 with no redirect; a redirect now is a
+    // change of host or path the operator has not reviewed, so it fails.
+    const response = await fetch(source.url, { redirect: 'error' });
     if (!response.ok) throw new Error(`download failed: ${source.url} answered ${response.status}`);
     writeFileSync(path.join(sourceDir, fileOf(source)), Buffer.from(await response.arrayBuffer()));
     console.log(`downloaded ${source.url}`);
