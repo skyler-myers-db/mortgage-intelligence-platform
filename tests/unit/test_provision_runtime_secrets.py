@@ -489,6 +489,14 @@ NO_GRACE = (
         # A blank stored key equals the blank (unset) previous input: still no grace.
         ("  \n", "", NO_GRACE),
     ),
+    ids=(
+        "unchanged",
+        "unchanged-after-strip",
+        "rotated-with-grace",
+        "changed-no-previous",
+        "changed-previous-differs",
+        "blank-stored-no-previous",
+    ),
 )
 def test_a_stored_current_key_is_compared_and_noted_but_never_refused(
     monkeypatch, stored: str, previous: str, note: str
@@ -514,6 +522,7 @@ def test_a_stored_current_key_is_compared_and_noted_but_never_refused(
         (None, PermissionError("denied"), "PermissionError"),
         ("", None, "EmptySecretValue"),
     ),
+    ids=("permission-error", "empty-value"),
 )
 def test_an_unreadable_current_key_is_noted_and_still_written(
     monkeypatch, raw: str | None, error: Exception | None, reason: str
