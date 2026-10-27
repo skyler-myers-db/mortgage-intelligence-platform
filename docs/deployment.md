@@ -59,7 +59,10 @@ audit `dataviz-01`), pinned by the same test:
   files with `.br`/`.gz` siblings, emitted by the `npm --prefix frontend run
   build` step `scripts/deploy.sh` already runs (precompression included) and
   served same-origin by `backend/services/static_assets.py`. Nothing is
-  fetched from the Census Bureau at deploy time or at runtime.
+  fetched from the Census Bureau at deploy time or at runtime. Since the
+  approved build (2026-10-26) that is 153 files and about 25 MiB of the
+  upload (51 states, each with its `.br` and `.gz`), and the build's
+  precompression step spends about a minute of brotli on them.
 - **`tools/geo/**`**: the operator-only geometry tool, with its own
   `package.json` and lock. It never runs in CI or deploy, and a nested npm
   manifest has no place in the App source tree.

@@ -13,7 +13,10 @@ export const lazyModuleBudgets = {
   // The ZCTA polygon rung (JS + CSS, 2 files), loaded on a Segments ZIP
   // drill only. Measured 6.71 (the lane's 6.42-6.68 plus the
   // integration's 'absent' outcome); the record target is 8 KiB br.
-  'src/components/mortgage/USChoroplethMapZctaLevel.tsx': 8 * KiB, // actual 6.71
+  // post-W5 zcta-geometry (2026-10-26): 6.72 -> 7.50 with the committed
+  // geometry, whose 51 hashed asset URLs fill the eager glob map (raw
+  // 17.62 -> 20.95); the JSON itself is a separate asset, never in the chunk.
+  'src/components/mortgage/USChoroplethMapZctaLevel.tsx': 8 * KiB, // actual 7.50
   // The presenter-only M1-M4 roadmap slots (w5-shell-nav-followups);
   // a customer session never requests it.
   'src/components/layout/RailRoadmap.tsx': 1 * KiB, // actual 0.54
