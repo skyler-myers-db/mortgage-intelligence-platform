@@ -4,15 +4,19 @@ The report (audit a11y-08) rates every WCAG 2.2 Level A and AA success
 criterion, plus 4.1.1 with its WCAG 2.2 note, with one of the four VPAT
 terms; its summary table is the count of those rows; every file it cites
 exists, so evidence cannot rot into a dangling claim; every virtual
-screen-reader transcript is cited; and the Evaluation Methods section keeps
-saying which assistive-technology passes were NOT done.
+screen-reader transcript is cited; the Evaluation Methods section keeps
+saying which assistive-technology passes were NOT done; the numbers it
+states (oxlint rules and baseline hits, the empty axe ratchet, tool
+versions) match the files they come from; and every open item is dated.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 VPAT = ROOT / "docs" / "accessibility" / "VPAT.md"
@@ -166,3 +170,85 @@ def test_the_evaluation_methods_say_what_was_not_done() -> None:
         assert bullet in not_done, f"the not-done list must keep {bullet!r}"
     assert "U+2212" in methods and "minus" in methods
     assert "self-assessment" in _text()
+
+
+_NUMBER_WORDS = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+}
+
+
+def _number(word: str) -> int:
+    return int(word) if word.isdigit() else _NUMBER_WORDS[word.lower()]
+
+
+def _frontend_json(name: str) -> dict[str, Any]:
+    loaded = json.loads((ROOT / "frontend" / name).read_text(encoding="utf-8"))
+    assert isinstance(loaded, dict)
+    return loaded
+
+
+def test_the_oxlint_numbers_match_the_config_and_the_baseline() -> None:
+    methods = _section(_text(), "Evaluation methods used")
+    rules = re.search(r"runs all (\d+) enabled jsx-a11y rules of oxlint ([\d.]+)", methods)
+    hits = re.search(r"(\w+) accepted hits remain in (\w+) files", methods)
+    assert rules and hits, "the report states the oxlint rule count, version and baseline size"
+
+    configured: dict[str, Any] = _frontend_json(".oxlintrc.json")["rules"]
+    enabled = [
+        name
+        for name, setting in configured.items()
+        if name.startswith("jsx-a11y/") and (setting if isinstance(setting, str) else setting[0]) != "off"
+    ]
+    assert int(rules.group(1)) == len(enabled)
+
+    baseline = _frontend_json("oxlint-baseline.json")
+    assert rules.group(2) == baseline["oxlintVersion"]
+    files: dict[str, dict[str, int]] = baseline["files"]
+    assert _number(hits.group(2)) == len(files)
+    assert _number(hits.group(1)) == sum(count for by_rule in files.values() for count in by_rule.values())
+
+
+def test_the_axe_ratchet_the_report_calls_empty_is_empty() -> None:
+    methods = _section(_text(), "Evaluation methods used")
+    assert "(`KNOWN_VIOLATIONS` in `axe.ts`) is empty" in methods
+
+    axe = (ROOT / "frontend" / "tests" / "e2e" / "fixture" / "axe.ts").read_text(encoding="utf-8")
+    body = re.search(r"export const KNOWN_VIOLATIONS: KnownViolations = \{(.*?)\n\};", axe, re.DOTALL)
+    assert body, "KNOWN_VIOLATIONS is declared in axe.ts"
+    code = "\n".join(line for line in body.group(1).splitlines() if not line.strip().startswith("//"))
+    assert code.strip() == "", "the report says no axe violation is accepted, but KNOWN_VIOLATIONS has an entry"
+    # The report also says the needs-review prohibited-name check gates every scan.
+    assert "prohibitedNamesNeedingReview" in methods
+    assert "expect(prohibitedNamesNeedingReview(results)" in axe
+
+
+def test_the_cited_tool_versions_are_the_pinned_ones() -> None:
+    text = _text()
+    pins = json.loads((ROOT / "frontend" / "package.json").read_text(encoding="utf-8"))["devDependencies"]
+    for package in ("@axe-core/playwright", "@guidepup/virtual-screen-reader"):
+        stated = re.search(rf"`{re.escape(package)}` (\d+\.\d+\.\d+)", text)
+        assert stated, f"the report names the {package} version"
+        assert stated.group(1) == pins[package], f"{package}: the report says {stated.group(1)}, package.json pins {pins[package]}"
+
+
+def test_every_open_item_carries_a_target_date() -> None:
+    # Audit a11y-08 asked for a dated roadmap: an undated open item is a promise with no date.
+    items = re.findall(r"^\d+\. \*\*.+$", _section(_text(), "Open items for a person"), re.MULTILINE)
+
+    assert len(items) >= 9
+    assert [item[:60] for item in items if not re.search(r"\b(?:target|decide by) \d{4}-\d{2}-\d{2}\b", item)] == []

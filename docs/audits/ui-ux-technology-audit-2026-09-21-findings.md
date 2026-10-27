@@ -1696,6 +1696,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Tech:** ITI VPAT 2.5 INT (confirm current edition before publishing); manual AT passes plus axe evidence from a11y-05.
 - **Verifier:** grep over docs/ and README finds no VPAT, ACR, EN 301 549 or accessibility statement; the cross-browser audit (:215) cites RFP demand. VPAT 2.5 web-verified current. But an honest ACR needs manual AT passes over ~55 criteria on 11 routes: L, not M.
 
+**Post-wave status.** 2026-10-27 (post-w5/screen-reader-vpat): `docs/accessibility/VPAT.md` is the Module 0 report, a VPAT 2.5 WCAG-edition self-assessment (WCAG 2.2 A and AA, 56 rows) rated from the axe, oxlint, contrast, forced-colors, keyboard and virtual screen-reader evidence in the repo, with a dated roadmap of open items. Not done, and listed there with target dates: the accessibility contact (item 1), the NVDA + Chrome and VoiceOver + Safari passes (items 2 and 3), JAWS and mobile (item 4) and testing with people who use assistive technology (item 5). The virtual pass's 27 prohibited names are fixed and gated (src/test/ariaProhibitedNames.test.ts and the axe gate's needs-review check).
+
 ### `a11y-v1` Portfolio Builder state picker is mouse-only (keyboard users cannot choose states)
 
 `high` · `defect` · effort `S` · verifier-added
