@@ -136,6 +136,41 @@ from tests.fixtures.in_process_repos import (
 )
 
 
+# The operator's ``.env.local`` at the root of the checkout under test. A test
+# once ran deploy-dev.yml's credential step with ``cwd`` at the repo root and
+# truncated it (``> .env.local``). The guard below fingerprints it with
+# ``os.lstat`` only and never opens it: its values are the operator's secrets.
+_OPERATOR_ENV_LOCAL = Path(__file__).resolve().parents[1] / ".env.local"
+
+
+def _stat_fingerprint(path: Path) -> tuple[int, int, int, int] | None:
+    """(inode, size, mtime_ns, mode) of ``path``, or None when it is absent. Never reads it."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    return (st.st_ino, st.st_size, st.st_mtime_ns, st.st_mode)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _operator_env_local_is_untouched() -> Iterator[None]:
+    """Fail the session when any test created, replaced, rewrote or removed <repo>/.env.local.
+
+    Write a test's ``.env.local`` under ``tmp_path`` (or monkeypatch the
+    tool's ``ENV_LOCAL``), never at the repo root.
+    """
+    before = _stat_fingerprint(_OPERATOR_ENV_LOCAL)
+    yield
+    after = _stat_fingerprint(_OPERATOR_ENV_LOCAL)
+    if after != before:
+        change = "created" if before is None else "removed" if after is None else "rewrote or replaced"
+        pytest.fail(
+            f"this test session {change} {_OPERATOR_ENV_LOCAL} (os.stat fingerprint changed). A test must write "
+            "its .env.local under tmp_path or monkeypatch ENV_LOCAL, never at the repo root.",
+            pytrace=False,
+        )
+
+
 class _FakeLakebaseClient:
     """Test-only Lakebase stand-in.
 

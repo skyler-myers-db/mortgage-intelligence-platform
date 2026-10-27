@@ -5139,13 +5139,20 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
         "DATABRICKS_ACCOUNT_CLIENT_ID": "account-client",
         "DATABRICKS_ACCOUNT_CLIENT_SECRET": "account-secret",
     }
+    # The step writes ``.env.local`` (``> .env.local``) into its working
+    # directory. Run it in a scratch checkout, never the repo root, where it
+    # would truncate the operator's real file; PYTHONPATH keeps the real
+    # ``python -m tools.databricks.agent_proxy_credential_bundle`` importable.
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
     result = subprocess.run(
         ["bash", "-c", _workflow_run_block(DEPLOY_DEV, "Configure Databricks dev credentials")],
-        cwd=REPO,
+        cwd=checkout,
         env={
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "HOME": str(home),
             "CHILD_ENV_LOG": str(log),
+            "PYTHONPATH": str(REPO),
             **required,
         },
         text=True,
@@ -5154,6 +5161,8 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+    # stat only: the step wrote its .env.local into the scratch checkout.
+    assert (checkout / ".env.local").stat().st_mode & 0o777 == 0o600
     child = _read_env_log(log)
     for client_id in (
         "DATABRICKS_CLIENT_ID",
