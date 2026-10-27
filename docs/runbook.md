@@ -736,7 +736,9 @@ predates the current bundle. For example, a gold job that still carries
   header shows the 8-day threshold (the 7-day cadence plus 1) with the basis
   `mip_scheduled_refresh job <id> is UNPAUSED on the weekly cron`. A header
   that still reads `fail-closed` (3 days) means the job was not read back
-  `UNPAUSED` on that cron.
+  `UNPAUSED` on that cron, or that the workspace holds more than one
+  `mip_scheduled_refresh` (another deployer's dev install, say), which leaves
+  this install's unproven.
 
 ### Interim refresh (governed deploy NO-GO)
 

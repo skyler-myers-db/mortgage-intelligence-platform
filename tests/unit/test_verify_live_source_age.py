@@ -10,7 +10,9 @@ reaches a workspace.
 
 from __future__ import annotations
 
+import json
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -108,18 +110,43 @@ def test_only_the_orchestrator_unpaused_on_the_weekly_cron_proves_the_schedule(j
     assert readiness.scheduled_refresh_threshold(_jobs(job)).days == 3
 
 
+@pytest.mark.parametrize(
+    "other_pause_status",
+    ["UNPAUSED", "PAUSED"],
+    ids=["two-live-orchestrators", "a-live-and-a-paused-orchestrator"],
+)
+def test_more_than_one_orchestrator_in_the_workspace_keeps_three_days(other_pause_status: str) -> None:
+    # The jobs list is workspace-wide: another deployer's dev install (or a
+    # prod install) proves nothing about the install under test.
+    mine = _job("[dev someone] mip_scheduled_refresh", {**_WEEKLY, "pause_status": "UNPAUSED"}, 11)
+    other = _job("mip_scheduled_refresh", {**_WEEKLY, "pause_status": other_pause_status}, 12)
+    threshold = readiness.scheduled_refresh_threshold(_jobs(*_other_jobs(), mine, other))
+
+    assert threshold.days == 3
+    assert threshold.basis == (
+        "fail-closed: 2 mip_scheduled_refresh jobs in the workspace (ids 11, 12); which one is this install's is unproven"
+    )
+
+
 def test_the_jobs_list_is_one_read_only_cli_call_with_the_operators_profile(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[list[str]] = []
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+    live = json.dumps([_job("mip_scheduled_refresh", {**_WEEKLY, "pause_status": "UNPAUSED"}, 7)])
 
     def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        calls.append(argv)
-        assert kwargs["check"] is True and kwargs["timeout"] > 0
-        return subprocess.CompletedProcess(argv, 0, stdout='[{"job_id": 7, "settings": {"name": "x"}}]', stderr="")
+        # Record only: an assertion raised in here would be swallowed by the
+        # resolver's fail-closed handler and read as a plain 3.
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, stdout=live, stderr="")
 
     monkeypatch.setattr(readiness.subprocess, "run", fake_run)
 
-    assert readiness.resolve_max_source_age_days("ops").days == 3
-    assert calls == [["databricks", "jobs", "list", "-p", "ops", "-o", "json"]]
+    # 8 proves the fake's answer was parsed, not swallowed as an error.
+    assert readiness.resolve_max_source_age_days("ops").days == 8
+    assert [argv for argv, _ in calls] == [["databricks", "jobs", "list", "-p", "ops", "-o", "json"]]
+    ((_, kwargs),) = calls
+    assert kwargs["check"] is True and kwargs["timeout"] > 0
+    # Outside the repo root, where the bundle context could refuse another workspace's profile.
+    assert kwargs["cwd"] == tempfile.gettempdir()
 
 
 def _main_with_jobs(
@@ -197,6 +224,9 @@ def test_the_operator_docs_describe_the_fail_closed_default() -> None:
 
     assert "The default fails closed at 3 days. It widens to 8 days" in testing
     assert "An absent job, a `PAUSED` one, another cron or a jobs list that cannot be read keeps 3." in testing
+    assert "shows exactly one `mip_scheduled_refresh` job" in testing
+    assert "So does more than one such job: the list is workspace-wide" in testing
+    assert "or that the workspace holds more than one `mip_scheduled_refresh`" in runbook
     assert "its default threshold fails closed at 3 days and widens to 8 (the 7-day cadence plus 1) only when" in runbook
     assert "falls back to its fail-closed 3-day threshold" in runbook
     for doc in (testing, runbook):
