@@ -11,6 +11,19 @@ this remediation pass.
 
 - Browser-shipped production dependencies have no known commercial-use license
   blockers.
+- Frontend `npm audit`, 2026-10-27, on the post-W5 integration lock (Part A
+  plus the live-gate, scheduled-refresh and deploy-hardening lanes): 0
+  advisories at any level across 305 lock entries (19 prod, 287 dev, 46
+  optional), read with `npm audit --package-lock-only` and at the
+  `--audit-level=high` gate. Main's lock at 550dcf97 reads 0 across 290. The
+  15 added entries are all dev-only, from the screen-reader lane's
+  `@guidepup/virtual-screen-reader` 0.33.0 and its tree
+  (`@testing-library/dom` 10.4.2, `@testing-library/user-event` 14.6.7,
+  `aria-query`, `@types/aria-query`, `dom-accessibility-api`, `html-aria`,
+  `pretty-format` 27.5.1, `react-is` 17.0.2, `lz-string`, `dequal`,
+  `@babel/runtime` and three nested copies); nothing was removed, and the only
+  other version change is the T1c re-take below. This is a dated result, not
+  a standing claim.
 - Frontend `npm audit`, 2026-10-26, after tail T1c (`@tanstack/react-virtual`
   3.14.19, the T1c re-take row below): 0 advisories at any level across the
   same 291 lock entries (19 prod, 272 dev, 46 optional; nothing added or
