@@ -164,6 +164,7 @@ def resume_stale_journal_retirement(
         workspace,
         app_name=app_name,
         canonical_name=journal["canonical_name"],
+        runtime_application_id=runtime_application_id,
         old_id=(supervisor_pin or {}).get("supervisor_id"),
         old_endpoint=(supervisor_pin or {}).get("endpoint"),
         old_endpoint_id=(supervisor_pin or {}).get("endpoint_id"),

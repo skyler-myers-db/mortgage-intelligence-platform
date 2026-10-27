@@ -621,6 +621,11 @@ rename the Supervisor replacement. The durable journal also resumes
 Gateway-only cleanup after interruption. Unexpected tools, examples,
 instructions, duplicate names, creator drift, model/source/inference drift, or
 a changed old identity stop the cutover before the destructive step.
+The first migration from a Supervisor that a person (or any principal other
+than the configured agent-runtime service principal) created deletes that
+Supervisor and its serving endpoint permanently, so it runs only when the
+operator names it: `export MIP_RETIRE_HUMAN_SUPERVISOR=<supervisor id>` (see
+[Pre-stop probes](#pre-stop-probes-read-only-before-step-0a)).
 Each immutable proxy model version also carries an Ed25519 contract
 attestation binding its source hash, Supervisor object ID, managed Supervisor
 endpoint ID, runtime application ID, upstream name, Genie space, catalog functions,
@@ -968,6 +973,117 @@ restore, prior app snapshots, source-regression rollback via
 `git checkout <prior-good-sha>`, Genie space re-provisioning, audit archival,
 and governed-action HMAC key rotation, use
 [`docs/disaster-recovery.md`](disaster-recovery.md).
+
+### Pre-stop probes (read-only, before step 0a)
+
+Step 0a stops the existing App, and on the unsigned rebase path also
+quarantines its access. Without a signed blue record any later failure leaves
+the App stopped. Right after the per-run M2M credential checks, and before the
+signed lease or any other workspace mutation, `./scripts/deploy.sh` runs
+`tools/databricks/deploy_prestop_probes.py` as the workspace-admin deployer. It
+performs only GET/list calls and lists every refusal in one pass (exit 2,
+nothing changed, the App not stopped by this run) for these failures, which
+would otherwise surface only after step 0a. A read the probe cannot complete
+(an unreadable Genie ACL, an App read error other than "not found", a SCIM or
+Supervisor listing error, a non-admin deployer) exits non-zero with that error
+instead; either way the deploy stops before the signed lease. The `deploy-dev`
+workflow runs the same probe and never sets `MIP_RETIRE_HUMAN_SUPERVISOR`, so
+expect a CI deploy to refuse here, before step 0a, on any workspace whose Genie
+spaces grant `users` (directly or through `/Workspace/Shared`) or that holds a
+non-runtime canonical Supervisor. Those runs used to refuse at the same audits
+after the stop.
+
+- **Supervisor retirement.** If a Supervisor holds the canonical name
+  (`MIP_AGENT_SUPERVISOR_NAME`, default `Mortgage Growth Agent`) and its
+  creator is not the configured agent-runtime service principal, a successful
+  deploy replaces it and later deletes it and its serving endpoint. That cannot
+  be undone and is not covered by any rollback step. The probe refuses unless
+  `MIP_RETIRE_HUMAN_SUPERVISOR=<supervisor id>` names that exact Supervisor; a
+  boolean or another id is refused. `pin_journal` re-checks the same
+  acknowledgement before the destructive tuple is signed into the cutover
+  journal, so it also holds if the canonical name changes hands after the
+  probe, and the retirement step checks it once more before its first
+  mutation (normal, captured-cleanup and stale-journal paths), so a journal
+  pinned by earlier code or under another canonical name is never retired
+  unacknowledged. That last check also covers a run that finds the pinned
+  Supervisor already gone but its serving endpoint still there: an endpoint the
+  agent-runtime service principal did not create is never deleted
+  unacknowledged. The probe cannot see that orphan case, so it refuses at the
+  retirement step instead. Set it in the operator shell for the migrating run,
+  and again for any run that resumes that retirement, including one that only
+  deletes the orphan endpoint. It is not a `.env.local` setting and CI never
+  sets it. To keep the Supervisor instead, rename it off the canonical name to a
+  name outside the reserved runtime replacement names (a renamed Supervisor is
+  neither pinned nor deleted) and remove the App service principal's access to
+  its serving endpoint, which the global serving audit would otherwise refuse.
+  A runtime-owned canonical Supervisor needs no acknowledgement. A non-runtime
+  canonical Supervisor that lacks any part of the identity the cutover journal
+  pins (id, serving endpoint, creator or create time) is refused even when
+  acknowledged, because `pin_journal` would refuse it after step 0a; it needs
+  manual governance review. A `MIP_AGENT_SUPERVISOR_NAME` with leading or
+  trailing whitespace is refused too: the planner matches the name exactly
+  while the cutover journal strips it, so the two could disagree on which
+  Supervisor is replaced.
+- **Reserved replacement names.** The Supervisor planner picks a Supervisor on
+  a reserved runtime replacement name (`<canonical name> [mip-agent-runtime]`,
+  or `<canonical name> [mip-agent-runtime-<12-hex contract hash>]` with an
+  optional `-mq1` suffix) as the green candidate, and refuses it after step 0a
+  when the agent-runtime service principal did not create it. The contract hash
+  depends on the governed Genie space, which is provisioned later, so the probe
+  refuses every non-runtime Supervisor on any reserved name. Rename it to a
+  name outside the reserved names; a renamed Supervisor is never pinned or
+  deleted.
+- **Genie grants.** The global Genie audits refuse every Genie space,
+  the governed one included, that grants any permission to a group the App,
+  agent-runtime or verifier service principal belongs to. The probe applies the
+  same group rule to every space visible to the admin and lists each offending
+  space, group and permission with its source: direct on the space, or
+  inherited from a parent object (the permission's `inherited_from_object`,
+  named as `/Workspace/Shared` when it is that folder). It names each space by
+  its id only, never by its title, because on a shared workspace the list
+  includes other teams' spaces and the refusal reaches deploy and CI logs.
+  Membership is the
+  workspace-SCIM direct and nested groups plus the system `users` group, which
+  every workspace principal joins (so a space granting `users`, directly or
+  through its folder, is always refused). The fix depends on the source:
+  - A direct grant: remove it on the space, with the space owner's consent.
+  - An inherited grant cannot be removed on the space. With the space owner's
+    consent, move the space out of that folder into one that does not grant the
+    group (or let the owner trash a space nobody needs). Change the folder's own
+    ACL only after that folder owner's governance review: `/Workspace/Shared`
+    grants `users` by default, and changing it affects every workspace user's
+    shared content. On a shared workspace, expect several spaces to inherit
+    `users` from `/Workspace/Shared`.
+  - For a group other than the system `users` group, removing the service
+    principal from that group also works.
+
+  The verifier's audit (`--forbid-all-genie`) also refuses any grant to the
+  verifier service principal itself on any Genie space, which needs no
+  governed space id, so the probe lists and refuses those too. Remove a direct
+  one on the space. An inherited one comes from the verifier's own grant on the
+  named folder: remove that grant there with the folder owner's consent (it
+  changes only the verifier's access) or move the space. Never add an exemption
+  to the audits instead.
+- **Unresolvable audited principals.** If the agent-runtime or verifier
+  application ID does not match exactly one workspace service principal, or the
+  existing App has no complete service principal identity, the probe cannot
+  read that principal's groups, so it refuses it (add the missing service
+  principal, or remove the duplicate) in the same pass as the other refusals.
+  It still lists every `users` grant for it, since every principal joins that
+  group once it exists.
+
+The probe is an early refusal, not a replacement for the post-stop audits.
+Those still read each target's own `/Me` groups, which can include
+account-level nested groups that workspace SCIM does not show, and they still
+check the App's and agent-runtime's direct grants against the governed space.
+A resumed or stale cutover journal whose canonical name differs from
+`MIP_AGENT_SUPERVISOR_NAME` is invisible to the probe: its retirement still
+refuses without the acknowledgement, but at the retirement step rather than
+before step 0a. When such a journal also pins an old Gateway, the retirement
+step handles that Gateway first: it deletes it only when the agent-runtime
+service principal created it, and otherwise only revokes the App's and
+verifier's access. That step is the reviewed path whatever happens to the
+Supervisor, so the unacknowledged refusal comes after it.
 
 ## Presenter mode (demo workspaces only)
 

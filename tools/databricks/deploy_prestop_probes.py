@@ -1,0 +1,408 @@
+"""Read-only deploy probes that refuse before step 0a stops the live App.
+
+Step 0a of ``scripts/deploy.sh`` stops the existing App (and, on the unsigned
+rebase path, quarantines its access). With no signed blue record a later
+failure leaves the App stopped. These late failures are visible to a
+workspace admin before any mutation, so this probe refuses them up front:
+
+1. **Supervisor retirement.** A canonical-name Supervisor whose creator is not
+   the configured agent-runtime service principal is replaced, pinned and then
+   permanently deleted with its serving endpoint. That needs the operator to
+   name it: ``MIP_RETIRE_HUMAN_SUPERVISOR=<supervisor id>``
+   (``supervisor_retirement_ack``). It must also carry the complete identity
+   the cutover journal pins (id, endpoint, creator, create time), or
+   ``pin_journal`` refuses it after step 0a whatever the acknowledgement.
+2. **Reserved replacement names.** The Supervisor planner
+   (``agentic_supervisor_endpoint.supervisor_candidates``) selects a Supervisor
+   on a reserved runtime replacement name (the legacy `` [mip-agent-runtime]``
+   suffix or a contract-hashed `` [mip-agent-runtime-<hash>]`` name) as the
+   green candidate and then refuses it when the runtime SP did not create it.
+   The current contract hash needs the governed Genie space, which is not
+   known this early, so every non-runtime Supervisor on a reserved name is
+   refused. Renaming it out of the reserved names is the remedy.
+3. **Genie grants.** The global Genie audits
+   (``agent_runtime_access._assert_no_genie_access`` and
+   ``_assert_exact_genie_can_run``) refuse every Genie space, the governed one
+   included, that grants any permission to a group the audited service
+   principal belongs to. The probe applies that same group clause to the App,
+   agent-runtime and verifier service principals. The verifier audit
+   (``--forbid-all-genie``) also refuses every grant to the verifier itself,
+   which needs no governed space id, so the probe refuses those too. Direct
+   App and agent-runtime grants are judged against the governed space, which
+   is provisioned later, so they stay with the post-stop audits.
+
+Group membership is resolved the way the audits' admin-side fallback resolves
+it (``m2m_access_policy.resolve_effective_groups``), plus the system ``users``
+group: Databricks adds every workspace principal to it, including an App
+service principal a first install has not created yet. A runtime or verifier
+application ID that does not resolve to exactly one SCIM id (or an existing
+App without a complete identity) is refused in the same pass and still
+audited for ``users``; ``prestop_genie_grants`` names each grant's source and
+builds the remedy for direct and inherited grants. The post-stop audits
+still read each target's own ``/Me`` projection, which can also carry
+account-level nested groups workspace SCIM does not show, so this probe is an
+early refusal, not a replacement for those audits. It changes no exemption
+rule and performs only GET/list calls.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import Any
+
+from databricks.sdk.errors import NotFound, ResourceDoesNotExist
+from tools.databricks.agent_runtime_access import _field, _text
+from tools.databricks.prestop_genie_grants import (
+    genie_acls,
+    genie_group_grants,
+    genie_group_remedy,
+    shared_folder_names,
+    verifier_genie_grants,
+    verifier_genie_remedy,
+)
+from tools.databricks.supervisor_agent_contract import (
+    RUNTIME_REPLACEMENT_PREFIX,
+    RUNTIME_REPLACEMENT_SUFFIX,
+)
+from tools.databricks.supervisor_retirement_ack import (
+    ACKNOWLEDGEMENT_ENV,
+    is_runtime_created,
+    supervisor_retirement_acknowledgement,
+    supervisor_retirement_refusal,
+)
+
+SYSTEM_USERS_GROUP = "users"
+# The identity pin_journal signs for a replaced Supervisor; a gap fails after step 0a.
+PINNED_SUPERVISOR_FIELDS = ("supervisor_agent_id", "endpoint_name", "creator", "create_time")
+_REPLACEMENT_HASH = r"[0-9a-f]{12}"
+
+
+def is_reserved_replacement_name(name: str, canonical_name: str) -> bool:
+    """Whether ``name`` is one of ``canonical_name``'s reserved runtime replacement names."""
+
+    if name == f"{canonical_name}{RUNTIME_REPLACEMENT_SUFFIX}":
+        return True
+    pattern = (
+        re.escape(canonical_name)
+        + re.escape(RUNTIME_REPLACEMENT_PREFIX)
+        + _REPLACEMENT_HASH
+        + r"\](?:-mq1)?"
+    )
+    return re.fullmatch(pattern, name) is not None
+
+
+def supervisor_retirement_refusals(
+    agents: list[dict[str, Any]],
+    *,
+    canonical_name: str,
+    runtime_application_id: str,
+    acknowledgement: str,
+) -> tuple[list[str], list[str]]:
+    """Return ``(refusals, notes)`` for the canonical-name Supervisor."""
+
+    name = canonical_name.strip()
+    if not name:
+        raise ValueError("canonical Supervisor name is required")
+    if name != canonical_name:
+        # The planner matches display names exactly and the cutover journal
+        # strips them, so a padded name could select one Supervisor and pin
+        # another; the probe cannot say which would be retired.
+        return [
+            f"the canonical Supervisor name {canonical_name!r} (MIP_AGENT_SUPERVISOR_NAME) "
+            "has leading or trailing whitespace. The Supervisor planner matches display "
+            "names exactly while the cutover journal strips them, so the deploy could "
+            "select a different Supervisor than the one it pins. Remove the whitespace, "
+            "then re-run."
+        ], []
+    matches = [row for row in agents if row.get("display_name") == name]
+    if len(matches) > 1:
+        return [
+            f"multiple Supervisor agents use the canonical name {name!r}; manual "
+            "governance review is required before any deploy can select one"
+        ], []
+    if not matches:
+        notes = [f"no Supervisor holds the canonical name {name!r}; nothing will be retired"]
+        if acknowledgement:
+            notes.append(f"{ACKNOWLEDGEMENT_ENV} is set but unused")
+        return [], notes
+    canonical = matches[0]
+    supervisor_id = str(canonical.get("supervisor_agent_id") or "").strip()
+    creator = canonical.get("creator")
+    if is_runtime_created(creator, runtime_application_id=runtime_application_id):
+        return [], [f"canonical Supervisor {supervisor_id} is runtime-owned; blue/green applies"]
+    missing = [field for field in PINNED_SUPERVISOR_FIELDS if not _text(canonical.get(field))]
+    if missing:
+        return [
+            f"the canonical Supervisor {name!r} ({supervisor_id or 'no id'}) was not created "
+            "by the configured agent-runtime service principal and has an incomplete "
+            f"immutable identity (missing {', '.join(missing)}). The cutover journal cannot "
+            "pin it, so the deploy would refuse after step 0a whatever "
+            f"{ACKNOWLEDGEMENT_ENV} says; manual governance review is required."
+        ], []
+    refusal = supervisor_retirement_refusal(
+        supervisor_id=supervisor_id,
+        creator=creator,
+        runtime_application_id=runtime_application_id,
+        acknowledgement=acknowledgement,
+        endpoint=str(canonical.get("endpoint_name") or "").strip(),
+        canonical_name=name,
+    )
+    if refusal is not None:
+        return [refusal], []
+    return [], [
+        f"{ACKNOWLEDGEMENT_ENV} acknowledges the permanent deletion of Supervisor "
+        f"{supervisor_id} and its serving endpoint after the green cutover"
+    ]
+
+
+def reserved_replacement_refusals(
+    agents: list[dict[str, Any]],
+    *,
+    canonical_name: str,
+    runtime_application_id: str,
+) -> list[str]:
+    """Refuse a non-runtime Supervisor that holds a reserved replacement name."""
+
+    name = canonical_name.strip()
+    refusals: list[str] = []
+    for row in agents:
+        display_name = str(row.get("display_name") or "")
+        if not is_reserved_replacement_name(display_name, name):
+            continue
+        creator = row.get("creator")
+        if is_runtime_created(creator, runtime_application_id=runtime_application_id):
+            continue
+        refusals.append(
+            f"Supervisor {_text(row.get('supervisor_agent_id')) or '<no id>'!r} holds the "
+            f"reserved runtime replacement name {display_name!r} but was created by "
+            f"{_text(creator) or '<missing>'!r}, not by the configured agent-runtime service "
+            f"principal {runtime_application_id.strip()!r}. The Supervisor planner selects a "
+            "reserved name as the green candidate and refuses this creator after step 0a. "
+            "Rename it to a name outside the reserved replacement names (it is neither "
+            "pinned nor deleted), then re-run."
+        )
+    return refusals
+
+
+class PrincipalResolutionError(RuntimeError):
+    """An audited principal does not resolve to exactly one workspace SCIM id."""
+
+
+@dataclass(frozen=True)
+class AuditedPrincipals:
+    """SCIM ids by label, plus each principal the probe could not resolve and why."""
+
+    resolved: dict[str, str]
+    unresolved: dict[str, str]
+    notes: tuple[str, ...]
+
+
+def _scim_id(workspace: Any, *, label: str, application_id: str) -> str:
+    """Resolve one audited application ID to its SCIM id, naming the principal."""
+
+    application = application_id.strip()
+    if not application:
+        raise ValueError(f"the {label} application ID is required")
+    escaped = application.replace("\\", "\\\\").replace('"', '\\"')
+    matches = [
+        principal
+        for principal in workspace.service_principals.list(filter=f'applicationId eq "{escaped}"')
+        if _text(_field(principal, "application_id")) == application
+    ]
+    if len(matches) != 1:
+        remedy = "add it to this workspace" if not matches else "remove the duplicates"
+        raise PrincipalResolutionError(
+            f"expected exactly one {label} service principal for {application!r}, "
+            f"found {len(matches)}; {remedy}"
+        )
+    principal_id = _text(_field(matches[0], "id"))
+    if not principal_id:
+        raise PrincipalResolutionError(
+            f"the {label} service principal {application!r} has no SCIM id; manual "
+            "identity review is required"
+        )
+    return principal_id
+
+
+def principal_effective_groups(
+    workspace: Any,
+    *,
+    scim_id: str,
+    resolve_groups: Callable[..., Mapping[str, str]],
+) -> frozenset[str]:
+    """Workspace-visible direct and nested groups plus the system ``users`` group."""
+
+    groups = {str(name) for name in resolve_groups(workspace, sp_id=scim_id).values()}
+    groups.add(SYSTEM_USERS_GROUP)
+    return frozenset(groups)
+
+
+def audited_principals(
+    workspace: Any,
+    *,
+    app_name: str,
+    runtime_application_id: str,
+    verifier_application_id: str,
+) -> AuditedPrincipals:
+    """Resolve each audited principal's SCIM id; a not-yet-created App is skipped.
+
+    A principal that does not resolve to exactly one SCIM id is returned as
+    unresolved, so the caller can refuse it alongside every other refusal
+    instead of stopping at the first identity gap. Any read error propagates.
+    """
+
+    notes: list[str] = []
+    resolved: dict[str, str] = {}
+    unresolved: dict[str, str] = {}
+    try:
+        app = workspace.apps.get(app_name)
+    except (NotFound, ResourceDoesNotExist):
+        app = None
+        notes.append(f"App {app_name!r} does not exist yet; its future SP joins 'users'")
+    if app is not None:
+        app_client_id = _text(_field(app, "service_principal_client_id"))
+        app_scim_id = _text(_field(app, "service_principal_id"))
+        if app_client_id and app_scim_id:
+            resolved[f"App SP {app_client_id}"] = app_scim_id
+        else:
+            unresolved[f"App {app_name!r} SP"] = (
+                f"existing App {app_name!r} has an incomplete identity; manual identity "
+                "review is required"
+            )
+    for label, application_id in (
+        ("agent-runtime", runtime_application_id),
+        ("verifier", verifier_application_id),
+    ):
+        key = f"{label} SP {application_id}"
+        try:
+            resolved[key] = _scim_id(workspace, label=label, application_id=application_id)
+        except PrincipalResolutionError as exc:
+            unresolved[key] = str(exc)
+    return AuditedPrincipals(resolved=resolved, unresolved=unresolved, notes=tuple(notes))
+
+
+def run_probes(
+    workspace: Any,
+    *,
+    app_name: str,
+    runtime_application_id: str,
+    verifier_application_id: str,
+    canonical_name: str,
+    acknowledgement: str,
+    list_agents: Callable[[], list[dict[str, Any]]],
+    resolve_groups: Callable[..., Mapping[str, str]],
+) -> tuple[list[str], list[str]]:
+    """Run every probe and return every refusal at once, plus informational notes."""
+
+    agents = list_agents()
+    refusals, notes = supervisor_retirement_refusals(
+        agents,
+        canonical_name=canonical_name,
+        runtime_application_id=runtime_application_id,
+        acknowledgement=acknowledgement,
+    )
+    refusals.extend(
+        reserved_replacement_refusals(
+            agents,
+            canonical_name=canonical_name,
+            runtime_application_id=runtime_application_id,
+        )
+    )
+    principals = audited_principals(
+        workspace,
+        app_name=app_name,
+        runtime_application_id=runtime_application_id,
+        verifier_application_id=verifier_application_id,
+    )
+    notes.extend(principals.notes)
+    refusals.extend(
+        f"cannot read the {label}'s group memberships: {reason}, then re-run. The probe "
+        "refuses rather than pass a principal it could not audit."
+        for label, reason in principals.unresolved.items()
+    )
+    effective = {
+        label: principal_effective_groups(
+            workspace, scim_id=scim_id, resolve_groups=resolve_groups
+        )
+        for label, scim_id in principals.resolved.items()
+    }
+    # An unresolved principal joins the system 'users' group once it exists, so
+    # every 'users' grant is still listed for it.
+    effective.update(
+        {label: frozenset({SYSTEM_USERS_GROUP}) for label in principals.unresolved}
+    )
+    acls = genie_acls(workspace)
+    grants = genie_group_grants(workspace, effective_groups=effective, acls=acls)
+    verifier_grants = verifier_genie_grants(
+        acls, verifier_application_id=verifier_application_id
+    )
+    folders = shared_folder_names(workspace, [*grants, *verifier_grants])
+    if grants:
+        refusals.append(
+            "the global Genie audits run after step 0a stops the App and refuse these "
+            "group grants: "
+            + "; ".join(grant.describe(folders) for grant in grants)
+            + ". "
+            + genie_group_remedy(grants)
+        )
+    if verifier_grants:
+        refusals.append(
+            "the verifier's global Genie audit (--forbid-all-genie) runs after step 0a "
+            "and refuses every Genie grant to the verifier: "
+            + "; ".join(grant.describe(folders) for grant in verifier_grants)
+            + ". "
+            + verifier_genie_remedy(verifier_grants)
+        )
+    return refusals, notes
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--app-name", required=True)
+    parser.add_argument("--expected-inventory-principal", required=True)
+    parser.add_argument("--runtime-application-id", required=True)
+    parser.add_argument("--verifier-application-id", required=True)
+    parser.add_argument("--supervisor-name", required=True)
+    args = parser.parse_args(argv)
+
+    from databricks.sdk import WorkspaceClient
+    from tools.databricks.audit_global_m2m_access import (
+        assert_workspace_admin_inventory_identity,
+    )
+    from tools.databricks.m2m_access_policy import resolve_effective_groups
+    from tools.databricks.provision_agentic_resources import _supervisor_agents
+
+    workspace = WorkspaceClient()
+    assert_workspace_admin_inventory_identity(
+        workspace, expected_principal=args.expected_inventory_principal
+    )
+    refusals, notes = run_probes(
+        workspace,
+        app_name=args.app_name,
+        runtime_application_id=args.runtime_application_id,
+        verifier_application_id=args.verifier_application_id,
+        canonical_name=args.supervisor_name,
+        acknowledgement=supervisor_retirement_acknowledgement(),
+        list_agents=_supervisor_agents,
+        resolve_groups=resolve_effective_groups,
+    )
+    for note in notes:
+        print(f"[mip-prestop] {note}")
+    if refusals:
+        for refusal in refusals:
+            print(f"[mip-prestop] REFUSED: {refusal}", file=sys.stderr)
+        print(
+            "[mip-prestop] nothing was changed and the App was not stopped by this run.",
+            file=sys.stderr,
+        )
+        return 2
+    print("[mip-prestop] pre-stop probes passed (read-only)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
