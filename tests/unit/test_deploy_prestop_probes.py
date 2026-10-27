@@ -1116,6 +1116,22 @@ def test_the_operator_contract_is_documented() -> None:
     assert "A `MIP_AGENT_SUPERVISOR_NAME` with leading or trailing whitespace is refused" in flat
 
 
+def test_the_runbook_go_list_points_at_the_pre_stop_probe() -> None:
+    # The scheduled-refresh GO list kept the Genie grant and the human-created
+    # Supervisor as manual owner pre-checks that failed after the App stop;
+    # with the probe they refuse before it, and the remedy follows the source.
+    runbook = " ".join((REPO / "docs" / "runbook.md").read_text(encoding="utf-8").split())
+
+    assert "The runtime and verifier audits refuse it at cutover, after the App is stopped." not in runbook
+    assert "Step 0's read-only pre-stop probe lists every such grant" in runbook
+    assert "inherited from `/Workspace/Shared`" in runbook
+    assert (
+        "Accept that by exporting `MIP_RETIRE_HUMAN_SUPERVISOR=<supervisor id>` in the "
+        "operator shell for the run"
+    ) in runbook
+    assert "Without either, step 0's pre-stop probe refuses before the App stop" in runbook
+
+
 def _heading_indexes(lines: list[str]) -> list[int]:
     fenced = False
     headings: list[int] = []

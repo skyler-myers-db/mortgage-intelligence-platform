@@ -591,9 +591,12 @@ That run is GO only when all of these hold:
   audit), each one resolved with its catalog owner;
 - no unrelated serving-endpoint grant on the App service principal;
 - no Genie space that the App service principal reaches through a group grant,
-  such as workspace `users` on another team's space. The runtime and verifier
-  audits refuse it at cutover, after the App is stopped. Revoke the grant with
-  the space owner's consent; never exempt the group in the audits;
+  such as workspace `users` on another team's space, granted on the space or
+  inherited from `/Workspace/Shared`. Step 0's read-only pre-stop probe lists
+  every such grant (also for the agent-runtime and verifier service principals)
+  and refuses before the App stop. Resolve each one by its source with the
+  space owner's consent (`docs/deployment.md`, "Pre-stop probes"); never exempt
+  the group in the audits;
 - a smoke script whose geo-drill probe checks the shipped state → ZIP drill,
   not the retired county grain (`scripts/smoke_live.sh` does since the
   post-W5 live geo gate);
@@ -610,8 +613,10 @@ That run is GO only when all of these hold:
 - the owner's decision on a human-created Supervisor that holds the canonical
   name: the first agentic cutover retires it and deletes its serving endpoint,
   which cannot be undone (`docs/deployment.md`, the first migration from a
-  human-owned Supervisor). Accept that, or rename it off the canonical name
-  first;
+  human-owned Supervisor). Accept that by exporting
+  `MIP_RETIRE_HUMAN_SUPERVISOR=<supervisor id>` in the operator shell for the
+  run, or rename it off the canonical name first. Without either, step 0's
+  pre-stop probe refuses before the App stop;
 - an accepted App outage of 3.5 to 6 hours, with quarantine.
 
 The first signed install over an existing unsigned App also exports
