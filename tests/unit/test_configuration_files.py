@@ -78,7 +78,7 @@ def test_databricks_yml_contains_required_resource_names():
         "mip_segment_dashboard",
         "mortgage_lead_intelligence",
         "mip_app_state",
-        "/mip-lead-scoring",
+        "/Shared/mip-lead-scoring",
         "mip",
         "raw,silver,gold,semantics,app,audit",
     ]:
@@ -108,7 +108,7 @@ def test_workspace_unique_names_take_the_install_suffix_and_render_live_by_defau
     install's names byte for byte."""
     content = (REPO / "databricks.yml").read_text(encoding="utf-8")
 
-    for name in ("mip_serverless_sql", "mip_feature_pipeline", "/mip-lead-scoring"):
+    for name in ("mip_serverless_sql", "mip_feature_pipeline", "/Shared/mip-lead-scoring"):
         assert f"\n      name: {name}${{var.install_suffix}}\n" in content, name
         assert f"\n      name: {name}\n" not in content, f"{name} must carry the suffix"
     assert re.search(r'(?ms)^  install_suffix:.*?default: ""$', content)
