@@ -191,8 +191,15 @@ interpreter with the `requirements.txt` pins (`-c uv.lock` plus
 - the interpreter must be the Python minor that `uv.lock` was compiled for
   (3.11);
 - every requirement must be installed;
-- every package that pip would install for this interpreter must equal its
-  `uv.lock` pin.
+- every package that pip would install for this interpreter, and that
+  `uv.lock` pins, must equal its pin exactly (PEP 440 equality, so a patch,
+  post-release or local-label difference is drift).
+
+A package that pip would install but that `uv.lock` does not pin is printed as
+an `unpinned:` note and never fails the check, because it has no pin to equal.
+`uv.lock` is resolved for one platform, not universally, so a platform-specific
+dependency is the usual case: on the Linux x86_64 runner that `deploy-dev.yml`
+uses, sqlalchemy pulls in greenlet, which the lock does not pin.
 
 This covers mlflow (which registers the Gateway model), databricks-sdk,
 databricks-sql-connector and every transitive pin, not only `import boto3,
@@ -208,9 +215,10 @@ export MIP_DEPLOY_PYTHON="$HOME/.venvs/mip-deploy/bin/python"
 ./scripts/deploy.sh -t dev
 ```
 
-Keep the venv outside the checkout, because an untracked directory in the
-checkout fails the exact-source gate. Never re-sync a venv that other sessions
-share to make a deploy pass.
+Keep the venv outside the checkout. The exact-source gate fails on any
+untracked path that `.gitignore` does not cover: the default `.venv/` is
+ignored and passes, but a new name such as `.venv-deploy/` would fail it.
+Never re-sync a venv that other sessions share to make a deploy pass.
 
 ### Per-run M2M identities
 
@@ -843,17 +851,42 @@ existing key:
   runtime reads it (UTF-8, surrounding whitespace stripped). The provisioner
   compares HMAC-SHA256 fingerprints of the two values under a per-run random
   salt and prints neither value nor fingerprint. If they differ, or if the
-  stored value cannot be read (the deploying identity needs READ on the
-  scope), the run refuses with exit 2 before it writes anything. Writing a
-  different mask would re-key every masked borrower id and orphan the `B-…`
-  ids already stored in Lakebase campaigns, approvals, audit, watchlists and
-  snoozes. To fix a refusal, set the value the install already uses. A
+  stored value cannot be read, the run refuses with exit 2 before it writes
+  anything. The Secrets API returns a value outside a notebook only to a
+  workspace admin with READ on the scope (a normal user gets `BAD_REQUEST`),
+  so the deploying identity must be a workspace admin, as `deploy.sh`
+  already requires. Each read leaves a `getSecret` entry in the workspace
+  audit log. Writing a different mask would re-key every masked borrower id
+  and orphan the `B-…` ids already stored in Lakebase campaigns, approvals,
+  audit, watchlists and snoozes. To fix a refusal, set the value the install already uses. A
   deliberate re-key is an owner-run data migration. A deploy never does it.
   An equal mask is kept and not rewritten.
 - **Salesforce credentials.** When a `SALESFORCE_*` input is unset, an
   existing `salesforce-*` key is kept. The disabled sentinel is written only
   when the key is absent, because the App's static resource binding needs a
-  backing key. A configured value still replaces the key.
+  backing key. A configured value still replaces the key. The App payload
+  binds the `salesforce-*` keys into the runtime only when the instance URL,
+  client id, username, external-id field, client secret and password inputs
+  are all non-empty for that deploy (`settings.salesforce_configured` needs
+  the same set at runtime), and it binds the security token only when its
+  own input is set. So a key kept because its input is unset is never bound
+  and cannot re-enable the connector. One edge: a placeholder secret
+  input (such as `<password>` or `changeme`) counts as unset for the
+  provisioner, which keeps the stored key, but as non-empty for the payload,
+  which then binds that stored key. Supply real values or leave the secret
+  inputs empty. Unsetting the inputs disables the connector but no longer
+  clears the stored credentials. To revoke them deliberately, set the secret
+  inputs to the replacement values, or have the owner delete the keys
+  (`databricks secrets delete-secret mip-runtime <key>`); the next deploy then
+  writes the disabled sentinel.
+
+`genie-action-current` is compared the same way but never refuses, because a
+rotation is an operator's call. The plan prints one names-only note:
+`unchanged`; `rotated` (the configured previous key equals the stored value,
+so it stays valid for the grace period); `changed with no grace key`
+(outstanding action confirmations and provenance tokens stop verifying); or
+`not compared` with the error code. Together with the mask check, that note
+answers the fingerprint pre-check for the mask and the current key.
 
 `deploy.sh` runs the same plan read-only (`--check`: no scope creation, no
 write) at the end of step 0. That is before the signed workspace lease and
@@ -1040,8 +1073,12 @@ optional security token as GitHub environment secrets. `deploy.sh` writes
 those secret values directly to the `mip-runtime` Databricks secret scope and
 the App payload uses `value_from` bindings. An unset value never replaces a
 key that already exists in the scope; only an absent key gets the disabled
-sentinel that the static App binding needs. A partial connector remains
-honestly staged and cannot claim delivery.
+sentinel that the static App binding needs. A kept key is bound into the
+runtime only when every required connector input is non-empty for that
+deploy, and revoking stored credentials is a deliberate replacement or an
+owner-approved key delete (see the `provision_runtime_secrets.py` notes under
+"Databricks App", including the placeholder edge). A partial connector
+remains honestly staged and cannot claim delivery.
 
 ## Optional OTLP log export
 
