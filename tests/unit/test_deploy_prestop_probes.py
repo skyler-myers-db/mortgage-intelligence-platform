@@ -736,6 +736,53 @@ def test_a_mixed_grant_lists_both_sources_and_both_remedies() -> None:
     assert genie_grants.INHERITED_GRANT_REMEDY in refusal
 
 
+def test_direct_and_inherited_group_grants_on_different_spaces_get_both_remedies() -> None:
+    # The shared-workspace shape: some spaces grant 'users' directly, others
+    # inherit it from /Workspace/Shared, and no single space holds both. The
+    # remedy is chosen across every listed grant, so each kind must survive
+    # into the one refusal; a per-kind all() would drop both.
+    workspace = _ReadOnlyWorkspace(
+        acls={
+            **{
+                f"direct-{index}": _acl(_group("users", ("CAN_RUN", False)))
+                for index in range(3)
+            },
+            **{
+                f"inherited-{index}": _acl(_group("users", ("CAN_MANAGE", SHARED_DIRECTORY)))
+                for index in range(3)
+            },
+        },
+        app=_app(),
+    )
+
+    refusals, _ = _run(workspace, [])
+
+    assert len(refusals) == 1
+    refusal = refusals[0]
+    assert refusal.count("Genie space ") == 6
+    assert genie_grants.DIRECT_GROUP_REMEDY in refusal
+    assert genie_grants.INHERITED_GRANT_REMEDY in refusal
+    assert {method for method, _ in workspace.calls} == {"GET"}
+
+
+def test_direct_and_inherited_verifier_grants_on_different_spaces_get_both_remedies() -> None:
+    workspace = _ReadOnlyWorkspace(
+        acls={
+            "direct": _acl(_principal(VERIFIER_ID, ("CAN_RUN", False))),
+            "inherited": _acl(_principal(VERIFIER_ID, ("CAN_VIEW", SHARED_DIRECTORY))),
+        },
+        app=_app(),
+    )
+
+    refusals, _ = _run(workspace, [])
+
+    assert len(refusals) == 1
+    refusal = refusals[0]
+    assert refusal.count("Genie space ") == 2
+    assert genie_grants.DIRECT_VERIFIER_REMEDY in refusal
+    assert genie_grants.INHERITED_VERIFIER_REMEDY in refusal
+
+
 def test_an_inherited_verifier_grant_names_its_folder_and_is_not_sent_to_the_space() -> None:
     refusal, _ = _genie_refusal(_acl(_principal(VERIFIER_ID, ("CAN_VIEW", SHARED_DIRECTORY))))
 
