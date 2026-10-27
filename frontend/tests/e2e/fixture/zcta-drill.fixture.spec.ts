@@ -22,8 +22,10 @@
  *    tiles with their status line; while no geometry is committed at all,
  *    a drill shows the plain tiles with no status line (nothing failed).
  *
- * Every polygon-dependent case is a fixme until the approved operator build
- * commits frontend/src/geo/zcta (it lifts itself once manifest.json exists).
+ * The approved operator build committed frontend/src/geo/zcta on 2026-10-26,
+ * so every polygon-dependent case runs; each would turn back into a fixme
+ * (and the no-geometry case run) only if manifest.json disappeared, which
+ * tests/unit/test_zcta_geometry_manifest.py fails.
  */
 import fs from 'node:fs';
 import path from 'node:path';

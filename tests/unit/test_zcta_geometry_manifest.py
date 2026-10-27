@@ -14,10 +14,10 @@ copy is checked the same way as the committed one:
 * ``manifest.sources`` equals the tool's three pinned URLs and hashes, and the
   manifest is not a fixture-pinned test build.
 
-Until the operator build is approved and committed, the committed-geometry
-case skips with 'geometry not committed: operator build pending'; every other
-case (the checker on a synthetic scratch copy, its mutation controls, the tool
-pins, the CI audit, the package isolation) runs now.
+The approved operator build is committed (2026-10-26), so the committed-geometry
+case fails closed: a missing manifest or file is a failure, never a skip. The
+other cases (the checker on a synthetic scratch copy, its mutation controls,
+the tool pins, the CI audit, the package isolation) need no geometry.
 """
 
 from __future__ import annotations
@@ -54,7 +54,6 @@ CENSUS_URLS = {
 TOOL_ONLY_PACKAGES = ("d3-geo", "d3-geo-projection", "shapefile", "topojson-server", "topojson-simplify")
 _SOURCE_RE = re.compile(r"name: '(\w+)',\s*url: '([^']+)',\s*sha256: (null|'[0-9a-f]{64}')")
 _BLOCKED_LICENSE_TERMS = ("agpl", "gpl", "lgpl", "cc-by-nc", "noncommercial", "commons clause")
-_SKIP_REASON = "geometry not committed: operator build pending"
 
 
 def tool_sources() -> list[dict[str, str | None]]:
@@ -250,8 +249,7 @@ def test_the_checker_refuses_a_file_over_the_limits(tmp_path: Path) -> None:
 
 
 def test_the_committed_geometry_matches_its_manifest_and_the_tool_pins() -> None:
-    if not (GEO_DIR / "manifest.json").is_file() and not list(GEO_DIR.glob("*.topo.json")):
-        pytest.skip(_SKIP_REASON)
+    # Fail closed since the approved build: a missing manifest is a problem, not a skip.
     assert geometry_problems(GEO_DIR, tool_sources()) == []
 
 
@@ -264,6 +262,9 @@ def test_the_geometry_dir_documents_provenance_and_the_overlay_boundary() -> Non
     assert "17 U.S.C. 105" in readme
     for url in CENSUS_URLS.values():
         assert url in readme
+    # The README's provenance table carries the tool's pins, so the two never drift.
+    for source in tool_sources():
+        assert str(source["sha256"]) in readme, source["name"]
     attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()
     assert "frontend/src/geo/zcta/*.topo.json linguist-generated=true" in attributes
 
@@ -274,9 +275,9 @@ def test_the_geometry_dir_documents_provenance_and_the_overlay_boundary() -> Non
 def test_the_tool_pins_exactly_the_three_census_sources() -> None:
     sources = tool_sources()
     assert [(source["name"], source["url"]) for source in sources] == list(CENSUS_URLS.items())
-    # Unpinned (None) until the first approved download; the tool refuses it then.
+    # Pinned at the approved build (2026-10-26); the tool refuses an unpinned source.
     for source in sources:
-        assert source["sha256"] is None or re.fullmatch(r"[0-9a-f]{64}", str(source["sha256"]))
+        assert re.fullmatch(r"[0-9a-f]{64}", str(source["sha256"])), source["name"]
 
 
 def test_ci_audits_the_geo_tool_lock_at_high() -> None:
