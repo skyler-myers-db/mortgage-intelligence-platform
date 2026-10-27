@@ -11,6 +11,7 @@ banner
 navigation, Breadcrumb
 search
 main
+region, Notifications
 navigation, Primary navigation
 
 ## Navigate to a borrower (route announcer + h1 focus)
@@ -23,4 +24,7 @@ image, Entrada
 Mortgage Intelligence Platform
 end of main
 button, Open Genie
+region, Notifications
+status
+end of region, Notifications
 end of document

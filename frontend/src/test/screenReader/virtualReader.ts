@@ -5,7 +5,7 @@
  * speaks as a committed golden transcript beside the suites
  * (`transcripts/<flow>.txt`, written by `toMatchFileSnapshot`). A transcript
  * that changes fails the suite: review the new text, then update it on
- * purpose with `npx vitest run src/test/screenReader -u`. CI never writes one
+ * purpose with `npm --prefix frontend run test -- src/test/screenReader -u`. CI never writes one
  * (Vitest refuses to create or rewrite a snapshot under `CI`).
  *
  * The reader builds its tree from the DOM through the W3C mappings (ACCNAME,
@@ -39,7 +39,8 @@
  */
 import { virtual } from '@guidepup/virtual-screen-reader';
 import { act } from 'react';
-import { afterEach, expect } from 'vitest';
+import { afterEach, beforeEach, expect } from 'vitest';
+import { installLocalStorage } from '../installLocalStorage';
 
 /**
  * happy-dom holds each MutationObserver callback only through a WeakRef, so a
@@ -160,6 +161,18 @@ export async function walkLandmarks(limit = 30): Promise<void> {
   }
   throw new Error(`walkLandmarks: no landmark came round again in ${limit} moves`);
 }
+
+// Every walk starts from the default persisted UI state: in a full-suite
+// worker happy-dom's storage is real and another suite's leftovers (an open
+// Console, a moved Genie panel) would change what the reader hears.
+beforeEach(() => {
+  installLocalStorage();
+  try {
+    window.sessionStorage.clear();
+  } catch {
+    /* no session storage in this environment */
+  }
+});
 
 afterEach(async () => {
   await virtual.stop();

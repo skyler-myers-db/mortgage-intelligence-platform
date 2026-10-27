@@ -19,7 +19,7 @@
 import { act, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppShell } from '../../components/layout/AppShell';
 import { PageShell } from '../../components/layout/PageShell';
 import { mount } from '../render';
@@ -36,6 +36,15 @@ function NavigateProbe() {
 }
 
 let queryClient: QueryClient;
+
+// The shell fetches the Toaster chunk as soon as it mounts (ShellToaster), so
+// the app at rest has its "Notifications" region. Transform the chunk once up
+// front and wait for the region below, or the walk would race the lazy load
+// (it did: a full-suite run, with the chunk already transformed, read the
+// region and an isolated run did not).
+beforeAll(async () => {
+  await import('../../components/feedback/Toaster');
+}, 60_000);
 
 beforeEach(() => {
   window.sessionStorage.clear();
@@ -64,6 +73,10 @@ async function renderShell() {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  await vi.waitFor(async () => {
+    await settle(1);
+    expect(document.querySelector('section.toast-region[aria-label="Notifications"]'), 'the shell toast region').not.toBeNull();
+  }, { timeout: 10_000 });
   await settle();
   return mounted;
 }
