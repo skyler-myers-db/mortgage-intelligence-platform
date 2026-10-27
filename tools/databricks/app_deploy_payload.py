@@ -181,6 +181,21 @@ def _env_value(key: str, dotenv: dict[str, str]) -> str:
     return (os.environ.get(key) or dotenv.get(key) or "").strip()
 
 
+def _salesforce_input(key: str, dotenv: dict[str, str]) -> str:
+    """A connector input; a placeholder secret (``changeme``, ``<password>``) is unset.
+
+    provision_runtime_secrets keeps an existing ``salesforce-*`` key when its
+    input is unset, and it reads unset through ``runtime_secret_text``. The
+    binder must use that same notion, or a template placeholder would bind the
+    stored credential of an earlier deploy into the running App.
+    """
+
+    value = _env_value(key, dotenv)
+    if key in SALESFORCE_SECRET_ENVS:
+        return runtime_secret_text(value) or ""
+    return value
+
+
 def _append_value(env_vars: list[dict[str, str]], name: str, value: str) -> None:
     if value != "":
         env_vars.append({"name": name, "value": value})
@@ -386,10 +401,12 @@ def build_payload(
         )
         _append_value(env_vars, PREVIOUS_SECRET_KID_ENV, previous_secret_kid)
 
-    salesforce_configured = all(_env_value(name, dotenv) for name in SALESFORCE_REQUIRED_VARS)
+    salesforce_configured = all(
+        _salesforce_input(name, dotenv) for name in SALESFORCE_REQUIRED_VARS
+    )
     if salesforce_configured:
         for name in sorted(SALESFORCE_SECRET_ENVS):
-            if name == "SALESFORCE_SECURITY_TOKEN" and not _env_value(name, dotenv):
+            if name == "SALESFORCE_SECURITY_TOKEN" and not _salesforce_input(name, dotenv):
                 continue
             env_vars.append({"name": name, "value_from": SECRET_RESOURCE_BINDINGS[name]})
 
