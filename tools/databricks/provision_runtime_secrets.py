@@ -18,6 +18,12 @@ Two kinds of existing key are never silently replaced:
   sentinel is written only when the key is absent, because the App's static
   resource declaration needs a backing key.
 
+An existing ``genie-action-current`` is compared the same way but never
+refuses: the plan only notes whether the configured key is unchanged, a
+rotation with the stored value kept as the grace key, a change with no grace
+key (outstanding action and provenance tokens stop verifying), or not
+comparable.
+
 ``--check`` builds the same plan read-only (no scope creation, no write), so
 ``scripts/deploy.sh`` can refuse before it stops the App.
 """
@@ -83,6 +89,7 @@ OPTIONAL_RESOURCE_ENVS = frozenset(
     {"SALESFORCE_CLIENT_SECRET", "SALESFORCE_PASSWORD", "SALESFORCE_SECURITY_TOKEN"}
 )
 CURRENT_ENV = "MIP_GENIE_ACTION_SECRET_CURRENT"
+CURRENT_KEY = ENV_TO_KEY[CURRENT_ENV]
 PREVIOUS_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS"
 PREVIOUS_KID_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"
 PREVIOUS_KEY = ENV_TO_KEY[PREVIOUS_ENV]
@@ -107,6 +114,7 @@ class RuntimeSecretPlan:
     scope_exists: bool
     writes: tuple[tuple[str, str], ...] = field(repr=False)
     kept: tuple[str, ...]
+    notes: tuple[str, ...] = ()
 
     @property
     def write_keys(self) -> tuple[str, ...]:
@@ -117,6 +125,7 @@ class RuntimeSecretPlan:
 class ProvisionedRuntimeSecrets:
     written: tuple[str, ...]
     kept: tuple[str, ...]
+    notes: tuple[str, ...] = ()
 
 
 def _dotenv_config() -> dict[str, str]:
@@ -233,6 +242,28 @@ def _require_unchanged_mask(workspace: Any, *, scope: str, configured: str) -> N
         )
 
 
+def _current_key_note(workspace: Any, *, scope: str, current: str, previous: str) -> str:
+    """Report-only. A rotation is an operator's call, so a change never refuses."""
+
+    try:
+        unchanged, kept_as_grace = _stored_equals(
+            workspace, scope=scope, key=CURRENT_KEY, configured=(current, previous)
+        )
+    except Exception as exc:
+        return f"{CURRENT_KEY}: not compared ({_unreadable_reason(exc)})"
+    if unchanged:
+        return f"{CURRENT_KEY}: unchanged"
+    if previous and kept_as_grace:
+        return (
+            f"{CURRENT_KEY}: rotated; the stored value stays valid as {PREVIOUS_KEY} "
+            "for the grace period"
+        )
+    return (
+        f"{CURRENT_KEY}: changed with no grace key; outstanding action confirmations "
+        "and provenance tokens stop verifying"
+    )
+
+
 def plan_runtime_secrets(
     values: dict[str, str],
     *,
@@ -250,6 +281,16 @@ def plan_runtime_secrets(
     )
     if MASK_KEY in existing:
         _require_unchanged_mask(workspace, scope=scope, configured=values[MASK_ENV])
+    notes: list[str] = []
+    if CURRENT_KEY in existing:
+        notes.append(
+            _current_key_note(
+                workspace,
+                scope=scope,
+                current=values[CURRENT_ENV],
+                previous=values[PREVIOUS_ENV],
+            )
+        )
 
     writes: list[tuple[str, str]] = []
     kept: list[str] = []
@@ -271,7 +312,9 @@ def plan_runtime_secrets(
         if not value:
             continue
         writes.append((key, value))
-    return RuntimeSecretPlan(scope_exists=scope_exists, writes=tuple(writes), kept=tuple(kept))
+    return RuntimeSecretPlan(
+        scope_exists=scope_exists, writes=tuple(writes), kept=tuple(kept), notes=tuple(notes)
+    )
 
 
 def retire_previous_secret(
@@ -317,11 +360,16 @@ def provision_runtime_secrets(
         workspace.secrets.create_scope(scope=scope)
     for key, value in plan.writes:
         workspace.secrets.put_secret(scope=scope, key=key, string_value=value)
-    return ProvisionedRuntimeSecrets(written=plan.write_keys, kept=plan.kept)
+    return ProvisionedRuntimeSecrets(written=plan.write_keys, kept=plan.kept, notes=plan.notes)
 
 
 def _key_list(keys: tuple[str, ...]) -> str:
     return ", ".join(keys) if keys else "none"
+
+
+def _print_notes(notes: tuple[str, ...]) -> None:
+    for note in notes:
+        print(f"runtime secret note: {note}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -351,6 +399,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"runtime secret plan for {args.scope}: write {_key_list(plan.write_keys)}; "
                 f"keep {_key_list(plan.kept)} (read-only check, nothing written)"
             )
+            _print_notes(plan.notes)
             return 0
         result = provision_runtime_secrets(scope=args.scope)
     except ValueError as exc:
@@ -360,6 +409,7 @@ def main(argv: list[str] | None = None) -> int:
         f"runtime secret bindings ready: {len(result.written) + len(result.kept)} keys "
         f"(written: {_key_list(result.written)}; kept: {_key_list(result.kept)})"
     )
+    _print_notes(result.notes)
     return 0
 
 

@@ -464,3 +464,86 @@ def test_cli_check_reports_key_names_and_writes_nothing(monkeypatch, capsys) -> 
     )
     assert secrets_api.puts == []
 
+
+# --------------------------------------- the genie-action-current note (report-only)
+
+NO_GRACE = (
+    "genie-action-current: changed with no grace key; outstanding action confirmations "
+    "and provenance tokens stop verifying"
+)
+
+
+@pytest.mark.parametrize(
+    ("stored", "previous", "note"),
+    (
+        (CURRENT_SECRET, "", "genie-action-current: unchanged"),
+        (f"{CURRENT_SECRET}\n", "", "genie-action-current: unchanged"),
+        (
+            PREVIOUS_SECRET,
+            PREVIOUS_SECRET,
+            "genie-action-current: rotated; the stored value stays valid as "
+            "genie-action-previous for the grace period",
+        ),
+        (OTHER_CURRENT_SECRET, "", NO_GRACE),
+        (OTHER_CURRENT_SECRET, PREVIOUS_SECRET, NO_GRACE),
+        # A blank stored key equals the blank (unset) previous input: still no grace.
+        ("  \n", "", NO_GRACE),
+    ),
+)
+def test_a_stored_current_key_is_compared_and_noted_but_never_refused(
+    monkeypatch, stored: str, previous: str, note: str
+) -> None:
+    _required(monkeypatch)
+    if previous:
+        monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_PREVIOUS", previous)
+        monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_PREVIOUS_KID", "v1")
+    secrets_api = _Secrets(stored={"genie-action-current": stored})
+    digests = _record_fingerprints(monkeypatch)
+
+    plan = subject.check_runtime_secrets(client=_client(secrets_api))
+
+    assert plan.notes == (note,)
+    assert secrets_api.gets == ["genie-action-current"] and secrets_api.puts == []
+    assert "genie-action-current" in plan.write_keys
+    _assert_names_only(note, digests)
+
+
+@pytest.mark.parametrize(
+    ("raw", "error", "reason"),
+    (
+        (None, PermissionError("denied"), "PermissionError"),
+        ("", None, "EmptySecretValue"),
+    ),
+)
+def test_an_unreadable_current_key_is_noted_and_still_written(
+    monkeypatch, raw: str | None, error: Exception | None, reason: str
+) -> None:
+    _required(monkeypatch)
+    secrets_api = _Secrets(
+        scope_exists=True,
+        keys=("genie-action-current",),
+        raw_stored=None if raw is None else {"genie-action-current": raw},
+        get_error=error,
+    )
+
+    result = subject.provision_runtime_secrets(client=_client(secrets_api))
+
+    assert result.notes == (f"genie-action-current: not compared ({reason})",)
+    assert (subject.DEFAULT_SCOPE, "genie-action-current", CURRENT_SECRET) in secrets_api.puts
+
+
+def test_the_cli_prints_the_current_key_note_in_both_modes(monkeypatch, capsys) -> None:
+    _required(monkeypatch)
+    secrets_api = _Secrets(
+        stored={"cotality-id-mask-v1": MASK_SECRET, "genie-action-current": OTHER_CURRENT_SECRET}
+    )
+    monkeypatch.setattr(subject, "WorkspaceClient", lambda: _client(secrets_api))
+    digests = _record_fingerprints(monkeypatch)
+
+    assert subject.main(["--check"]) == 0
+    assert subject.main([]) == 0
+
+    out = capsys.readouterr().out
+    assert out.count(f"runtime secret note: {NO_GRACE}\n") == 2
+    assert out.index("(read-only check, nothing written)\n") < out.index("runtime secret note:")
+    _assert_names_only(out, digests)
