@@ -8,7 +8,9 @@
  *      change made through the Console survives a reload;
  *  (b) axe.ts's pure partition, fed REAL axe results: an unlabeled button is
  *      unrecorded, a synthetic entry that does not reproduce is stale, a
- *      best-practice-only rule is advisory, and node pinning holds;
+ *      best-practice-only rule is advisory, and node pinning holds; a name
+ *      on a role-less div with text, which axe files as needs-review, fails
+ *      the gate, and the same div as role="group" passes;
  *  (c) expectNoSurfaceOverflow flags an injected 2000px child, passes the
  *      clean page, and fails a stale ratchet entry;
  *  (d) the audited-read guard, as a pure check over ApiCall lists;
@@ -43,6 +45,7 @@ import {
   expectAxeClean,
   nodesOutside,
   partitionByTags,
+  prohibitedNamesNeedingReview,
   type AxeScanContext,
 } from './axe';
 import { HELD_FOCUS_STATES, enterState, stateInViewport, type HeldFocusState } from './fixtureStates';
@@ -215,6 +218,27 @@ test.describe('(b) the axe ratchet over real axe results', () => {
     const note = testInfo.annotations.find((annotation) => annotation.type === 'axe-best-practice');
     expect(note?.description).toContain('heading-order');
     expect(testInfo.attachments.map((attachment) => attachment.name)).toContain('axe-best-practice.json');
+  });
+
+  test('a name on a role-less div with text is needs-review in axe and fails the gate; role="group" passes', async ({ page }) => {
+    const named = (attributes: string) => PROBE.replace(
+      '<button type="button" class="probe-unlabeled"></button>',
+      `<div class="probe-chip-row" ${attributes}><span>Rate spread</span></div>`,
+    );
+    await page.setContent(named('aria-label="Message evidence"'));
+    const results = await new AxeBuilder({ page }).withTags([...WCAG_TAGS, ADVISORY_TAG]).analyze();
+    // The premise: axe files it under incomplete, never under violations.
+    expect(results.violations.map((violation) => violation.id)).not.toContain('aria-prohibited-attr');
+    const flagged = prohibitedNamesNeedingReview(results);
+    expect(flagged).toHaveLength(1);
+    // axe's target is the shortest unique selector ("div" on this page): resolve it.
+    const selector = (flagged[0] ?? '').replace(/ \([^)]*\)$/, '');
+    expect(await page.locator(selector).getAttribute('class')).toBe('probe-chip-row');
+    await expect(expectAxeClean(page, { key: { route: 'probe', state: 'named-div' }, theme: 'dark', known: {} }))
+      .rejects.toThrow(/names on a role that prohibits one/);
+
+    await page.setContent(named('role="group" aria-label="Message evidence"'));
+    await expectAxeClean(page, { key: { route: 'probe', state: 'named-group' }, theme: 'dark', known: {} });
   });
 });
 
