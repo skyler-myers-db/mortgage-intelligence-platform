@@ -14,7 +14,9 @@
  * re-announced as invalid with the failure as its description, and the
  * alert read in place by the virtual cursor. Whether NVDA / VoiceOver speak
  * the inserted alert is an open item for the person's pass (VPAT). The
- * reader also never speaks a <textarea>'s typed text.
+ * reader's FOCUS announcement leaves out a <textarea>'s typed text (it
+ * carries input and select values only); its virtual cursor does read the
+ * text, which React mirrors into the textarea's content.
  *
  * Found by this pass and fixed with it: the wrapping <label> holds the hint
  * too, so the field's name used to be "Reason for the request Say why these
@@ -29,10 +31,14 @@ import { approvalRequestsApi } from '../../lib/apiClients/approvalRequests';
 import { ApiError } from '../../lib/apiTransport';
 import { clearToasts } from '../../lib/toast';
 import { mount } from '../render';
-import { expectTranscript, nextUntil, press, reportFocus, settle, startReader } from './virtualReader';
+import { expectTranscript, nextUntil, press, registerReaderHooks, reportFocus, settle, startReader } from './virtualReader';
 import { REQUEST_FAILURE_COPY, RequestApprovalForm } from '../../components/mortgage/RequestApprovalForm';
 
+registerReaderHooks();
+
 const IDS = ['B-REQFORM000001', 'B-REQFORM000002'];
+/** Synthetic reason text the walk types into the field. */
+const REASON = 'Spring refinance review for the Illinois cohort.';
 
 beforeAll(async () => {
   await import('../../components/ui/AsyncFailure');
@@ -80,7 +86,7 @@ describe('virtual screen reader: form validation', () => {
 
     const failed = await reader.step('Write a reason and send; the server refuses it (governed text, 422)', async () => {
       await act(async () => {
-        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field(), 'Spring refinance review for the Illinois cohort.');
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field(), REASON);
         field().dispatchEvent(new Event('input', { bubbles: true }));
       });
       await act(async () => send().click());
@@ -105,8 +111,9 @@ describe('virtual screen reader: form validation', () => {
       await reportFocus();
     });
     // Named by its label alone (the hint is said once, as the description,
-    // with the failure after it). The reader never speaks a <textarea>'s typed
-    // text (it models input and select values only); a real reader does.
+    // with the failure after it). The focus phrase leaves out the textarea's
+    // typed text (the reader puts input and select values only in it); a real
+    // reader says it on focus. The virtual cursor reads it on the next step.
     expect(invalid.at(-1)).toBe(
       `textbox, Reason for the request, Say why these borrowers; leave out personal details. ${REQUEST_FAILURE_COPY.governed}, invalid, required`,
     );
@@ -114,6 +121,7 @@ describe('virtual screen reader: form validation', () => {
     const read = await reader.step('Read on to the alert with the virtual cursor', async () => {
       await nextUntil(/^end of alert/);
     });
+    expect(read[0]).toBe(REASON);
     expect(read.slice(-3)).toEqual(['alert', REQUEST_FAILURE_COPY.governed, 'end of alert']);
 
     await expectTranscript('form-validation', reader);

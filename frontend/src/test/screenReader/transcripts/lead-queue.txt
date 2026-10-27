@@ -173,7 +173,8 @@ status
 end of region, Notifications
 end of dialog, Review the outreach for B-REVIEW0000001
 
-## Confirm approval (Enter on the focused Confirm)
+## Focus Confirm approval and press Enter
+button, Confirm approval, key shortcuts Enter
 region, Ranked borrowers table scroll region, key shortcuts J ArrowDown K ArrowUp Enter X
 polite: Approved B-REVIEW0000001Audit event audit-B-REVIEW0000001View receipt
 polite: Row 2 of 2: B-REVIEW0000002, Chicago, IL, Refinance review, score 88, pending.

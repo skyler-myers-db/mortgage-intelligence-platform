@@ -18,7 +18,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { ApiError } from '../../lib/apiTransport';
 import { clearToasts, getToasts } from '../../lib/toast';
 import { mount } from '../../test/render';
-import { reportFocus, startReader } from '../../test/screenReader/virtualReader';
+import { reportFocus, startReader, stopReader } from '../../test/screenReader/virtualReader';
 import { AppStoreContext, createAppStore, type AppStore } from '../appStore';
 import { RATIONALE_GOVERNED_REFUSAL } from '../../lib/apiClients/approvalRequests';
 import { useRevokeApproval } from '../../lib/mutations/outreach';
@@ -156,9 +156,13 @@ describe('RevokeApprovalPanel: the form', () => {
     // also holds the hint, which once made the name "Reason for revoking
     // Leave out personal details." with the hint read again as the description.
     const reader = await startReader();
-    const spoken = await reader.step('report the focused reason field', reportFocus);
-    expect(document.activeElement).toBe(field());
-    expect(spoken).toEqual([`textbox, Reason for revoking, ${REVOKE_COPY.hint}, required`]);
+    try {
+      const spoken = await reader.step('report the focused reason field', reportFocus);
+      expect(document.activeElement).toBe(field());
+      expect(spoken).toEqual([`textbox, Reason for revoking, ${REVOKE_COPY.hint}, required`]);
+    } finally {
+      await stopReader();
+    }
   });
 
   it('an empty Confirm moves focus to the reason and sends nothing', async () => {

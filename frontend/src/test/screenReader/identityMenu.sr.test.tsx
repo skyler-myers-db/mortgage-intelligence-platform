@@ -14,7 +14,7 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type { SessionResponse } from '../../types';
 import { mount } from '../render';
-import { expectTranscript, press, reportFocus, settle, startReader } from './virtualReader';
+import { expectTranscript, press, registerReaderHooks, reportFocus, settle, startReader } from './virtualReader';
 
 const { appContext } = vi.hoisted(() => ({
   appContext: { themePreference: 'system', setThemePreference: vi.fn() },
@@ -31,6 +31,8 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 }));
 
 import { IdentityMenu } from '../../components/layout/IdentityMenu';
+
+registerReaderHooks();
 
 /** Synthetic actor (no real person): the fixture harness's approver shape. */
 const SESSION: SessionResponse = {

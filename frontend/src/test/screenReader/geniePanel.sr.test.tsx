@@ -8,7 +8,8 @@
  *
  * What this pins is the a11y-06 contract as a reader hears it: the panel's
  * ONE persistent polite announcer speaks stage changes and "Answer ready"
- * (never the 1-second elapsed ticker), the answer is read in place, and
+ * (never the 1-second elapsed ticker: useGenieAnnouncer.test.tsx proves that
+ * over seconds of fake time), the answer is read in place, and
  * "Show proof" opens a named dialog whose provenance (trust, rows, latency,
  * source Unity Catalog assets, the SQL) is readable, with focus handed back.
  *
@@ -28,7 +29,7 @@ import { createMipQueryClient } from '../../lib/queryClient';
 import type { GenieAnswer, GenieStartResult } from '../../types';
 import { __resetGenieAnnouncerForTests } from '../../components/mortgage/useGenieAnnouncer';
 import { mount } from '../render';
-import { expectTranscript, nextUntil, settle, startReader } from './virtualReader';
+import { expectTranscript, nextUntil, registerReaderHooks, settle, startReader } from './virtualReader';
 
 const mocks = vi.hoisted(() => ({
   genieAction: vi.fn(),
@@ -65,6 +66,8 @@ vi.mock('../../components/AppContext', () => ({
 }));
 
 import { GenieChat } from '../../components/mortgage/GenieChat';
+
+registerReaderHooks();
 
 const START: GenieStartResult = { conversation_id: null, trusted_assets: ['mip.gold.borrower_360'], sample_questions: [] };
 const SUBMITTED: GenieSubmitResult = {
@@ -192,6 +195,10 @@ describe('virtual screen reader: Genie panel answer and provenance', () => {
     });
     const announcer = document.querySelector('[data-genie-announcer]')!;
     expect(announcer.getAttribute('role')).toBe('status');
+    // A weak check: this step lasts milliseconds, so only a misplaced first
+    // "0s" could trip it. Silence over seconds of a held stage is proven with
+    // fake timers in components/mortgage/useGenieAnnouncer.test.tsx ("speaks
+    // each stage change once, and nothing while the stage holds").
     expect(asked.every((phrase) => !/\d+\s*s\b/.test(phrase)), 'no elapsed-seconds ticker is spoken').toBe(true);
 
     const landed = await reader.step('The answer lands', async () => {

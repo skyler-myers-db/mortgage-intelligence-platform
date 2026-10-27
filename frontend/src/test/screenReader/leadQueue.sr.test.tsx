@@ -28,7 +28,7 @@ import type { LeadSummary } from '../../types';
 import { clearToasts } from '../../lib/toast';
 import { installLocalStorage } from '../installLocalStorage';
 import { mount } from '../render';
-import { expectTranscript, nextUntil, previousForm, reportFocus, settle, startReader } from './virtualReader';
+import { expectTranscript, nextUntil, press, previousForm, registerReaderHooks, reportFocus, settle, startReader } from './virtualReader';
 
 const draftOutreach = vi.fn();
 const approve = vi.fn();
@@ -69,6 +69,8 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 
 import { LeadTable } from '../../components/mortgage/LeadTable';
 import { Toaster } from '../../components/feedback/Toaster';
+
+registerReaderHooks();
 
 beforeAll(async () => {
   await import('../../components/mortgage/LeadApproveReview');
@@ -203,11 +205,23 @@ describe('virtual screen reader: Lead Queue table and approval gate', () => {
     // The disclosure chip is read as four text runs; joined, it is the chip's text.
     expect(review.join(' ')).toContain('Disclosure fixture-2026-07 · IL');
 
-    const confirmed = await reader.step('Confirm approval (Enter on the focused Confirm)', async () => {
-      const confirm = document.querySelector<HTMLButtonElement>('[data-testid="lead-approve-review-confirm"]')!;
-      await act(async () => confirm.click());
+    const confirm = document.querySelector<HTMLButtonElement>('[data-testid="lead-approve-review-confirm"]')!;
+    const confirmed = await reader.step('Focus Confirm approval and press Enter', async () => {
+      // Focus is still on Confirm from the gate step, but the virtual cursor
+      // read on to "end of dialog". Re-announcing the focused element brings
+      // the cursor back to it (NVDA+Tab); press() then keys Enter on it
+      // through user-event, whose Enter on a button activates it.
+      await act(async () => confirm.focus());
+      await settle();
+      await reportFocus();
+      await press('Enter');
       await settle(8);
     });
+    expect(document.activeElement === confirm || !confirm.isConnected).toBe(true);
+    const onConfirm = confirmed.findIndex((phrase) => /^button, Confirm approval/.test(phrase));
+    const approvedAt = confirmed.findIndex((phrase) => phrase.startsWith(`polite: Approved ${IDS[0]}`));
+    expect(onConfirm).toBeGreaterThanOrEqual(0);
+    expect(approvedAt).toBeGreaterThan(onConfirm);
     expect(approve).toHaveBeenCalledTimes(1);
     // The shell toast's polite region speaks the approval once. The reader
     // reads an atomic region's textContent, so its block children run together

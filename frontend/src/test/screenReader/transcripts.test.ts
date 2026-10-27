@@ -1,11 +1,7 @@
 // @ts-expect-error Frontend app types intentionally exclude Node globals; this
 // test reads the committed transcripts under Vitest only.
 import { readdirSync, readFileSync } from 'node:fs';
-// @ts-expect-error see node:fs note above.
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-
-declare const process: { cwd(): string };
 
 /**
  * The committed virtual screen-reader transcripts (virtualReader.ts) stay in
@@ -17,7 +13,10 @@ declare const process: { cwd(): string };
  * suite; each is a real walk (named steps, at least one spoken phrase).
  */
 
-const DIR = join(process.cwd(), 'src', 'test', 'screenReader');
+// Resolved from this file, not the working directory, so the test reads the
+// same tree whether Vitest runs from frontend/ or the repository root.
+const DIR = decodeURIComponent(new URL('./', import.meta.url).pathname);
+const join = (...parts: string[]): string => parts.join('/').replace(/\/{2,}/g, '/');
 
 function suiteNames(): string[] {
   const names: string[] = [];
@@ -51,6 +50,17 @@ describe('virtual screen-reader transcripts', () => {
       expect(text.endsWith('\n'), `${name}.txt ends with a newline`).toBe(true);
       const phrases = text.split('\n').filter((line) => line !== '' && !line.startsWith('## '));
       expect(phrases.length, `${name}.txt holds spoken phrases`).toBeGreaterThan(0);
+    }
+  });
+
+  it('every walk registers the reader hooks (clean storage before, reader stopped after)', () => {
+    // The hooks are explicit (virtualReader.ts registerReaderHooks), so a
+    // suite that forgot them would leak a running reader into the next file.
+    const suites = (readdirSync(DIR) as string[]).filter((entry) => entry.endsWith('.sr.test.tsx'));
+    expect(suites.length).toBeGreaterThan(0);
+    for (const file of suites) {
+      const text = readFileSync(join(DIR, file), 'utf8') as string;
+      expect(text, `${file} calls registerReaderHooks() at module level`).toMatch(/^registerReaderHooks\(\);$/m);
     }
   });
 });

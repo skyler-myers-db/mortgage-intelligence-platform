@@ -23,7 +23,10 @@
  *     spoken, so an alert element inserted into a non-live parent is silent
  *     here although browsers raise an alert event for it. The suites assert
  *     such alerts on the DOM instead.
- *   - A <textarea>'s typed text. Only input and select values are spoken.
+ *   - A <textarea>'s typed text in its FOCUS announcement: the focus phrase
+ *     carries input and select values only. The virtual cursor does read
+ *     the text when it moves through the field, because React mirrors a
+ *     textarea's value into its text content (form-validation.txt).
  *   - Native modality. Only `aria-modal="true"` limits the virtual cursor; a
  *     `<dialog>` opened with showModal() (the drawer, the palette, the review)
  *     is announced on entry but the page behind it stays readable here. The
@@ -34,6 +37,7 @@
  *
  * Use it from a happy-dom suite:
  *
+ *   registerReaderHooks();          // once, at the top of the suite
  *   const reader = await startReader();
  *   await reader.step('Tab to the skip link', async () => { ... });
  *   await expectTranscript('shell', reader);
@@ -163,21 +167,31 @@ export async function walkLandmarks(limit = 30): Promise<void> {
   throw new Error(`walkLandmarks: no landmark came round again in ${limit} moves`);
 }
 
-// Every walk starts from the default persisted UI state: in a full-suite
-// worker happy-dom's storage is real and another suite's leftovers (an open
-// Console, a moved Genie panel) would change what the reader hears.
-beforeEach(() => {
-  installLocalStorage();
-  try {
-    window.sessionStorage.clear();
-  } catch {
-    /* no session storage in this environment */
-  }
-});
-
-afterEach(async () => {
+/** Turn the reader off (it clears its spoken log and stops observing). */
+export async function stopReader(): Promise<void> {
   await virtual.stop();
-});
+}
+
+/**
+ * Register the walk hooks in the CALLING suite: every walk starts from the
+ * default persisted UI state (in a full-suite worker happy-dom's storage is
+ * real, and another suite's leftovers, an open Console or a moved Genie
+ * panel, would change what the reader hears), and the reader is stopped
+ * after each test. Explicit, so importing a helper from this module adds no
+ * hook to a suite that did not ask for one; a one-off use outside the
+ * screen-reader suites calls `stopReader()` itself.
+ */
+export function registerReaderHooks(): void {
+  beforeEach(() => {
+    installLocalStorage();
+    try {
+      window.sessionStorage.clear();
+    } catch {
+      /* no session storage in this environment */
+    }
+  });
+  afterEach(stopReader);
+}
 
 /** Move the virtual cursor one item forward (a screen reader's "next item"). */
 export async function next(): Promise<void> {

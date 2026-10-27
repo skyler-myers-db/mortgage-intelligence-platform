@@ -1,4 +1,4 @@
-## Open the drawer from its evidence chip
+## Open the drawer (source set, a stand-in opener button focused)
 dialog, Lead population
 button, Close drawer
 
@@ -31,5 +31,5 @@ end of dialog, Lead population
 tab, Overview, selected, 1 control, position 1, set size 3
 tab, Lineage, selected, 1 control, position 2, set size 3
 
-## Escape closes the drawer; focus returns to the chip
+## Escape closes the drawer; focus returns to the stand-in opener
 button, Lead population evidence

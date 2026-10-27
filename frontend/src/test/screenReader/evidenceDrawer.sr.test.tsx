@@ -17,7 +17,7 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DrawerSource } from '../../components/AppContext';
 import { mount, type Mounted } from '../render';
-import { expectTranscript, nextUntil, settle, startReader } from './virtualReader';
+import { expectTranscript, nextUntil, registerReaderHooks, settle, startReader } from './virtualReader';
 
 const appMocks = vi.hoisted(() => ({
   drawer: null as DrawerSource | null,
@@ -42,6 +42,8 @@ vi.mock('../../lib/apiClients/assets', () => ({
 
 import { EvidenceDrawer } from '../../components/mortgage/EvidenceDrawer';
 import { LazyEvidenceDrawerBody } from '../../components/mortgage/evidenceDrawerBodyLoader';
+
+registerReaderHooks();
 
 const SOURCE: DrawerSource = {
   title: 'Lead population',
@@ -101,7 +103,11 @@ describe('virtual screen reader: evidence drawer', () => {
     const mounted = await render();
     const reader = await startReader();
 
-    const open = await reader.step('Open the drawer from its evidence chip', async () => {
+    // The drawer opens from AppContext's drawer source (mocked here); a plain
+    // button stands in for the evidence chip that would set it, so focus has
+    // an opener to return to. Opening from a real chip and focus returning to
+    // it: tests/e2e/fixture/overlays.fixture.spec.ts.
+    const open = await reader.step('Open the drawer (source set, a stand-in opener button focused)', async () => {
       appMocks.drawer = SOURCE;
       await render(mounted);
     });
@@ -131,7 +137,7 @@ describe('virtual screen reader: evidence drawer', () => {
     expect(now.getAttribute('aria-selected')).toBe('true');
     expect(tabs.at(-1)).toMatch(/^tab, .*, selected/);
 
-    const close = await reader.step('Escape closes the drawer; focus returns to the chip', async () => {
+    const close = await reader.step('Escape closes the drawer; focus returns to the stand-in opener', async () => {
       await act(async () => {
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
       });

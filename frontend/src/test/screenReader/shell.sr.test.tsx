@@ -23,7 +23,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { AppShell } from '../../components/layout/AppShell';
 import { PageShell } from '../../components/layout/PageShell';
 import { mount } from '../render';
-import { expectTranscript, press, readToEnd, reportFocus, settle, startReader, walkLandmarks } from './virtualReader';
+import { expectTranscript, press, readToEnd, registerReaderHooks, reportFocus, settle, startReader, walkLandmarks } from './virtualReader';
+
+registerReaderHooks();
 
 let navigate: NavigateFunction;
 

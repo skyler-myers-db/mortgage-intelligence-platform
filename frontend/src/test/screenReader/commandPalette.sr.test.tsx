@@ -15,7 +15,7 @@ import { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { mount } from '../render';
-import { expectTranscript, nextUntil, reportFocus, settle, startReader } from './virtualReader';
+import { expectTranscript, nextUntil, registerReaderHooks, reportFocus, settle, startReader } from './virtualReader';
 
 const navigate = vi.fn();
 vi.mock('react-router', () => ({ useNavigate: () => navigate }));
@@ -44,6 +44,8 @@ vi.mock('../../lib/api', async (importOriginal) => ({
 vi.mock('../../lib/routePreloaders', () => ({ preloadRouteForPath: () => undefined }));
 
 import { CommandPalette, loadCommandPaletteDialog } from '../../components/command/CommandPalette';
+
+registerReaderHooks();
 
 beforeAll(async () => {
   await loadCommandPaletteDialog();
