@@ -58,7 +58,9 @@ export function PageShell({
           </div>
         )}
         {children}
-        <footer className="page-footer" aria-label="Product footer">
+        {/* Inside <main> a footer is a generic element, not contentinfo, and
+            ARIA 1.2 prohibits a name on a generic: it carries none. */}
+        <footer className="page-footer">
           {/* Wordmark always renders the official two-tone brand asset.
               The footer's muted character comes from container opacity
               (set in components.css .page-footer), not from a different
