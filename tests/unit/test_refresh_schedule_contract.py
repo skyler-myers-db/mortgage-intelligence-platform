@@ -88,6 +88,33 @@ def test_operator_docs_explain_app_refresh_default_and_paused_schedules() -> Non
     assert "ships `PAUSED` in every bundle target" in dashboards
     assert "auto-UNPAUSES" not in dashboards
 
+    # The one exception, and how it lands (data-freshness design + adversarial corrections).
+    flat_deployment = " ".join(deployment.split())
+    flat_runbook = " ".join(runbook.split())
+    assert (
+        "The one exception: the dev target's live install runs the weekly `mip_scheduled_refresh` "
+        "(FRED → gold → lifecycle → KPI, Fridays 06:00 America/Chicago). `MIP_SCHEDULED_REFRESH=off` pauses it."
+    ) in flat_deployment
+    assert "only through the bundle apply of a GO governed `./scripts/deploy.sh -t dev` run" in flat_deployment
+    assert "### Weekly scheduled refresh (dev live install)" in runbook
+    for phrase in (
+        "Run **Refresh market rates** only together with **Rebuild scoring snapshot**.",
+        "The schedule reaches a workspace only through the bundle apply inside a full governed "
+        "`./scripts/deploy.sh -t dev` run.",
+        "Step 0a stops and quarantines the live App before the bundle apply",
+        "**Static-share decay, not freshness.**",
+        "The new FRED rate is real freshness; this drain is decay.",
+        "11 weekly prints (13 August to 22 October 2026)",
+        "**Treatment-table DDL race.**",
+        "**Silent re-pause.**",
+        "on the live install only",
+    ):
+        assert phrase in flat_runbook, phrase
+    for doc in (flat_deployment, flat_runbook):
+        assert "no other operator action" not in doc.lower()
+
+
+# --------------------------------------------- mip_scheduled_refresh (bundle)
 
 
 def _bundle() -> dict:

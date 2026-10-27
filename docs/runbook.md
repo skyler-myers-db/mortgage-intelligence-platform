@@ -515,6 +515,10 @@ customer workspace and document the approved cadence. The Growth Agent
 scheduler is draft-only: it creates Slack/Teams review drafts and never sends
 messages.
 
+Run **Refresh market rates** only together with **Rebuild scoring snapshot**.
+A FRED run on its own re-creates the audit C1 stale-rate skew (gold keeps
+scoring against the old rate) until gold runs again.
+
 **No manual UI step is required after the one-time credential/account
 prerequisites are satisfied.** The previous runbook called for
 opening the Databricks UI to rebind the Genie space's trusted assets
@@ -529,6 +533,118 @@ will show `0` / `NULL` / "pending" by design — specifically the
 as operators use the app). This is documented in
 [`docs/dashboards.md`](dashboards.md) — read it before explaining the
 blanks to a reviewer.
+
+### Weekly scheduled refresh (dev live install)
+
+The one exception to the paused default is `mip_scheduled_refresh` on the dev
+target's **live** install. It is one job that runs the existing jobs in the
+deploy order, each through `run_job_task` so every child keeps its single
+definition and its own `PAUSED` schedule:
+
+1. `mip_fred_rates_ingest` (FRED MORTGAGE30US into `silver.market_rates_weekly`);
+2. `mip_refresh_scores` (the gold CTAS chain);
+3. `mip_sync_lifecycle_state` (sparse lifecycle MERGE plus the daily funnel snapshot);
+4. `mip_kpi_snapshot` (one `kpi_snapshots` row per day);
+5. after gold, a SELECT-only outcome gate
+   (`sql/transformations/assert_scheduled_refresh_outcome.sql`): gold scored at
+   silver's `is_latest` rate, and that rate is a FRED print within 14 days.
+
+It runs Fridays 06:00 America/Chicago, the morning after FRED prints
+MORTGAGE30US. Avoid demos between 06:00 and 06:30 CT on Fridays. Silver
+(`mip_refresh_silver`) is not in the chain, because the Cotality eval share is
+static. `mip_init_catalog_schemas`, the only job that publishes the three
+reviewed Growth Agent functions, is never reachable from it.
+
+How it is switched on:
+
+- `databricks.yml` declares `scheduled_refresh_pause_status` with the default
+  `PAUSED`, and no target sets it.
+- The `scripts/deploy.sh` preflight exports `UNPAUSED` only for `-t dev` on the
+  default bundle root (empty `install_suffix`). `MIP_SCHEDULED_REFRESH=off`
+  (shell or `.env.local`) keeps it paused. The CI staging install
+  (`deploy-dev.yml`, leaf `dev-ci`) is always paused. `-t prod` is always
+  paused and refuses `MIP_SCHEDULED_REFRESH=on`: a prod cadence is a customer
+  decision that needs a reviewed change. `tools/databricks/bundle_env.py`
+  refuses an `UNPAUSED` export for any other install.
+- A failed run emails the deploying user, on the live install only.
+  `bundle_env.py` writes that recipient into
+  `.databricks/bundle/dev/variable-overrides.json`, because the CLI refuses a
+  `BUNDLE_VAR_` export for a list variable. The `dev-ci` leaf and prod get no
+  recipient: the CI deployer is a service principal whose user name is an
+  application id, not an email address.
+
+**How it lands.** The schedule reaches a workspace only through the bundle
+apply inside a full governed `./scripts/deploy.sh -t dev` run. A Jobs-UI
+unpause is reverted by the next deploy, and there is no other delivery path.
+That run is GO only when all of these hold: a clean checkout at `origin/main`;
+the per-run M2M identities and both signing keys in the operator's shell (see
+`docs/deployment.md`, "Per-run M2M identities"); no foreign catalog that grants
+`account users` (the step-4 foreign-UC audit); no unrelated serving-endpoint
+access on the App service principal; a green smoke run; `mip-runtime` secret
+fingerprints that match the operator's values; a dedicated venv built from
+`requirements.txt`; and an accepted App outage. Step 0a stops and quarantines
+the live App before the bundle apply, so a later failure without a signed
+last-good record leaves the App stopped. On 2026-10-27 that run was NO-GO on
+the dev workspace. Until a GO run applies the job, the workspace keeps its
+older job definitions and `checked_at` stays stale, and `tools/verify_live.py`
+keeps flagging it. That flag is correct.
+
+Never unpause, `run-now` or Admin-trigger a deployed child job whose definition
+predates the current bundle. For example, a gold job that still carries
+`publish_fn_*` tasks republishes the reviewed functions and drops their
+`EXECUTE` grants.
+
+**Risks and residuals:**
+
+- **Static-share decay, not freshness.** The Cotality eval share has not
+  changed since 2026-06-12. Each weekly run re-anchors gold's time-relative
+  windows (the 12-month listing window, the 365-day evidence windows, loan age)
+  on that frozen snapshot, so Listed-for-Sale and the evidence windows drain a
+  little every week. Measured on dev on 2026-10-26: about 4% fewer
+  listed-for-sale borrowers at the first Friday run, about 12% fewer by late
+  January 2027, and none by about June 2027 unless the share is re-delivered.
+  The new FRED rate is real freshness; this drain is decay.
+- **FRED gap.** On 2026-10-26 the dev `is_latest` MORTGAGE30US row was the week
+  of 2026-08-03, so 11 weekly prints (13 August to 22 October 2026) were
+  missing. The first FRED plus gold refresh picks them up. Expect In-the-Money,
+  rate spreads, segment counts and the rate window to move.
+- **Treatment-table DDL race.** The FRED job's `init_ddl` task runs
+  `001_catalogs_schemas.sql`, which re-asserts
+  `ALTER TABLE <catalog>.audit.campaign_treatment_snapshot SET TBLPROPERTIES`
+  (a new Delta commit). `scripts/deploy.sh` runs that DDL only after it
+  quiesces App treatment writes. The App pins a treatment materialization with
+  `DESCRIBE HISTORY ... LIMIT 1` right after its append. A scheduled run that
+  races a materialization can pin the ALTER's version, or fail the append with
+  a metadata conflict. The Admin **Refresh market rates** button already has
+  this exposure; the schedule makes it weekly and unattended. Do not
+  materialize campaign treatments around Friday 06:00 CT, and re-check any
+  materialization that ran then. Moving the treatment DDL out of FRED's
+  `init_ddl` is an open follow-up.
+- **Silent re-pause.** Any bundle apply outside `scripts/deploy.sh` resolves the
+  variable to its `PAUSED` default and re-pauses the schedule without an error.
+  The repo does not support such an apply. Dev then goes stale silently until
+  the 8-day `verify_live` flag fires. Re-run the governed deploy to restore it.
+- **Collision with a deploy.** The orchestrator queues its own runs. Of its
+  children, only the lifecycle job enables queueing, so a FRED, gold or KPI run
+  that a deploy holds at Friday 06:00 can make the scheduled child run skip.
+  That fails the chain and sends the failure email; re-run the orchestrator
+  after the deploy.
+- **Run-as identity.** Scheduled runs execute as the dev run-as user (the
+  deploying user). If that identity loses access, runs fail and the email
+  fires.
+- **Numbers move weekly**, as the "follow current refreshed coverage" posture
+  intends.
+- **Cost.** About $1.35 to $1.9 per run at list price (warehouse time for
+  gold plus serverless jobs), about $6 to $8 a month.
+
+**Verify after a GO deploy** (read-only):
+
+- `databricks jobs list --name "[dev <user>] mip_scheduled_refresh"` shows the
+  schedule `UNPAUSED`.
+- `SELECT MAX(refresh_at) FROM mip.ref.refresh_run_state` returns the deploy
+  time, then each Friday's run time.
+- `tools/verify_live.py` shows no `checked_at is stale` flag. Its default
+  threshold is 8 days, the 7-day cadence plus 1.
 
 ---
 
