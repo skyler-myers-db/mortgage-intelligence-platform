@@ -1003,9 +1003,12 @@ after the stop.
   acknowledgement before the destructive tuple is signed into the cutover
   journal, so it also holds if the canonical name changes hands after the
   probe, and the retirement step checks it once more before its first
-  mutation (normal, captured-cleanup and stale-journal paths), so a journal
-  pinned by earlier code or under another canonical name is never retired
-  unacknowledged. That last check also covers a run that finds the pinned
+  Supervisor or serving-endpoint mutation (normal, captured-cleanup and
+  stale-journal paths), so a journal pinned by earlier code or under another
+  canonical name is never retired unacknowledged. On all three paths the
+  pinned old-Gateway step runs before that check: it revokes the App's and
+  the verifier's access and deletes the Gateway only when the agent-runtime
+  service principal created it. That last check also covers a run that finds the pinned
   Supervisor already gone but its serving endpoint still there: an endpoint the
   agent-runtime service principal did not create is never deleted
   unacknowledged. The probe cannot see that orphan case, so it refuses at the

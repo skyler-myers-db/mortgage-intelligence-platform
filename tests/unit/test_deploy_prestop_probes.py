@@ -1114,6 +1114,12 @@ def test_the_operator_contract_is_documented() -> None:
     assert "including one that only deletes the orphan endpoint" in flat
     assert "orphan endpoint after the Supervisor is gone needs no acknowledgement" not in flat
     assert "A `MIP_AGENT_SUPERVISOR_NAME` with leading or trailing whitespace is refused" in flat
+    # The retirement step's re-check guards the Supervisor and its endpoint,
+    # not the old-Gateway step, which runs first on every path (post-W5 review).
+    assert "checks it once more before its first Supervisor or serving-endpoint mutation" in flat
+    assert "On all three paths the pinned old-Gateway step runs before that check" in flat
+    assert "deletes the Gateway only when the agent-runtime service principal created it" in flat
+    assert "checks it once more before its first mutation" not in flat
 
 
 def test_the_runbook_go_list_points_at_the_pre_stop_probe() -> None:
