@@ -371,6 +371,8 @@ def _executable(path: Path, body: str) -> Path:
 
 
 def test_the_override_sits_in_the_entrypoint_before_any_python_use() -> None:
+    # The raw file, not deploy_entrypoint_text(), on purpose: the block must live in
+    # deploy.sh itself, ahead of the first sourced lib, which the expansion would hide.
     entrypoint = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
     assert entrypoint.count(INTERP_START) == 1
