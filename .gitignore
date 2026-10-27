@@ -38,6 +38,8 @@ coverage.xml
 /mlruns/
 playwright-report/
 test-results/
+# Playwright blob reports (a sharded fixture-harness run; ci.yml e2e-fixture-shard).
+blob-report/
 /dist/
 
 # Databricks

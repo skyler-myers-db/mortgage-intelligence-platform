@@ -129,7 +129,7 @@ The app runs on live Unity Catalog + Lakebase; there is no mock-mode runtime pat
 
 ## Fixture harness (credential-free e2e)
 
-`frontend/tests/e2e/fixture/` renders every route of the **production build** in Chromium with no backend and no credentials. It is the rendered-layer gate for UI work: a layout, theme, or interaction fix ships with a `*.fixture.spec.ts` assertion here. It runs on every pull request (`e2e-fixture` job in `.github/workflows/ci.yml`).
+`frontend/tests/e2e/fixture/` renders every route of the **production build** in Chromium with no backend and no credentials. It is the rendered-layer gate for UI work: a layout, theme, or interaction fix ships with a `*.fixture.spec.ts` assertion here. It runs on every pull request, sharded in `.github/workflows/ci.yml` (see "Sharding in CI" below); the check is "e2e (fixture harness, every route)".
 
 It is test infrastructure only. Nothing under `frontend/src` imports it, and the running app still has no mock path. The harness may `import type` from `frontend/src` (ESLint enforces type-only), so fixture payloads are checked against the app's own response types by `npm --prefix frontend run lint`.
 
@@ -151,9 +151,32 @@ npm --prefix frontend run e2e:fixture:ci                     # CI posture: forbi
 | `MIP_VRT=1` | unset | Collects `visual.fixture.spec.ts` (every other fixture run ignores it) and writes artifacts to `test-results/vrt` and `playwright-report/vrt`. Only the `e2e-visual` CI job and `tools/update_visual_baselines.sh` set it; see "Visual regression". |
 | `MIP_VRT_IMAGE` | unset | The Playwright image the run is inside. The VRT refuses to capture unless it is `mcr.microsoft.com/playwright:v<installed @playwright/test>-noble` on linux/x64. |
 | `MIP_CROSS_ENGINE=1` | unset | Replaces fixture-chromium with the two cross-engine projects, `fixture-webkit` (`*.cross-engine.fixture.spec.ts` and `*.webkit.fixture.spec.ts`) and `fixture-firefox-forced` (`*.firefox.fixture.spec.ts` and `genie-pagehide.cross-engine`), and writes to `test-results/cross-engine` and `playwright-report/cross-engine`. Only the `e2e-cross-engine` CI job sets it; see "Cross-engine projects". A Playwright harness variable, not an app setting. |
-| `MIP_PERF=1` | unset | Collects the `PERF_SPEC` specs, `perf-budget.fixture.spec.ts` (bundle-08) and `interaction-budget.fixture.spec.ts` (runtime-09), and writes to `test-results/perf` and `playwright-report/perf`. Only the single-worker "Run the perf and interaction budgets" step of the `e2e-fixture` CI job sets it, with the file filters `perf-budget interaction-budget` (without them MIP_PERF=1 also collects every normal fixture spec). See "Perf budget". |
+| `MIP_PERF=1` | unset | Collects the `PERF_SPEC` specs, `perf-budget.fixture.spec.ts` (bundle-08) and `interaction-budget.fixture.spec.ts` (runtime-09), and writes to `test-results/perf` and `playwright-report/perf`. Only the single-worker "Run the perf and interaction budgets" step of the `e2e-fixture-perf` CI job sets it, with the file filters `perf-budget interaction-budget` (without them MIP_PERF=1 also collects every normal fixture spec). See "Perf budget". |
 
 Fixture pages run at 1440x900, `prefers-reduced-motion: reduce`, locale `en-US`, timezone `America/New_York`, with `Date` frozen at `2026-07-14T15:00:00Z` (`test.use({ fixtureNow: null })` restores the real clock). Rebuild after changing anything under `frontend/src`; the harness never rebuilds for you.
+
+### Sharding in CI
+
+The harness outgrew one job: by W5e its 1,690 tests on 4 workers took 25-37 min (PRs #270-#272), and the job's cap had grown to 70 min. CI now runs it as three jobs:
+
+| Job | Check name | What it does |
+| --- | --- | --- |
+| `e2e-fixture-shard` | e2e (fixture harness, shard i/4) | A `fail-fast: false` matrix of 4. Each shard builds, installs Chromium and runs `e2e:fixture:ci -- --shard=i/4 --reporter=list,github,blob` on 4 workers, then uploads `frontend/blob-report` as `e2e-fixture-blob-<i>` (pass or fail) and, when it failed, `frontend/test-results` as `e2e-fixture-results-<i>`. |
+| `e2e-fixture-perf` | e2e (fixture perf + interaction budgets, single worker) | The built-dist checks (`MIP_REQUIRE_FRONTEND_DIST=1`) and the `PERF_SPEC` budgets on one worker, never sharded; uploads `perf-calibration-<run id>-<attempt>` and, on failure, `e2e-fixture-perf-report`. |
+| `e2e-fixture` | e2e (fixture harness, every route) | The gate, under the unsharded job's check name. Runs after both (`if: !cancelled()`, so a failed shard cannot skip it), merges the blobs with `playwright merge-reports --reporter=dot,html` into `frontend/playwright-report`, and fails unless all 4 blobs arrived, every shard passed and the perf job passed. On failure it uploads `e2e-fixture-playwright-report` (the merged HTML report plus every failing shard's `test-results/`), the same artifact name and folders as before. |
+
+`playwright merge-reports` exits 0 even when the merged report holds failures, so the gate checks the needed jobs' results itself; `tests/unit/test_ci_fixture_sharding.py` runs that step's shell against each outcome. `--shard` splits the list by test count, not time: replaying three CI runs' per-test durations over each shard's `--list` put every shard at 21-27% of the suite (the slowest 7.4-10.3 min), so each shard's cap is 25 min. When a shard nears it, add one to the matrix (`shard: [1, 2, 3, 4, 5]`) and set `E2E_FIXTURE_SHARD_TOTAL` to match; the pin test fails until both move.
+
+Reproduce one shard, or the merge, locally:
+
+```bash
+E2E_FIXTURE_PORT=5191 npm --prefix frontend run e2e:fixture -- --shard=2/4             # the tests shard 2 runs
+npm --prefix frontend run e2e:fixture -- --list --shard=2/4                             # just its list
+E2E_FIXTURE_PORT=5191 npm --prefix frontend run e2e:fixture -- --shard=2/4 --reporter=blob
+(cd frontend && npx playwright merge-reports --reporter=html blob-report)               # blob-report/ is gitignored
+```
+
+The blob reporter empties `blob-report/` at the start of every run, so to merge several local shards give each its own `PLAYWRIGHT_BLOB_OUTPUT_DIR` and copy the zips into one folder first.
 
 ### Failure artifacts
 
@@ -360,7 +383,7 @@ Every stylesheet sits in a cascade layer (2026-09-21 audit css-05 / stack-v3 / b
 
 ### Perf budget
 
-`PERF_SPEC` in `playwright.config.ts` collects the specs that measure timing: `perf-budget.fixture.spec.ts` (LCP and TBT of cold, throttled loads; bundle-08) and `interaction-budget.fixture.spec.ts` (Lead Queue interactions; runtime-09, owned by the W4b lead-queue lane, which names its spec exactly that). They run only in the single-worker step "Run the perf and interaction budgets (single worker)" of the `e2e-fixture` job and are ignored by every other run:
+`PERF_SPEC` in `playwright.config.ts` collects the specs that measure timing: `perf-budget.fixture.spec.ts` (LCP and TBT of cold, throttled loads; bundle-08) and `interaction-budget.fixture.spec.ts` (Lead Queue interactions; runtime-09, owned by the W4b lead-queue lane, which names its spec exactly that). They run only in the single-worker step "Run the perf and interaction budgets (single worker)" of the `e2e-fixture-perf` job, on a runner of their own and never sharded, and are ignored by every other run:
 
 ```bash
 MIP_PERF=1 npm --prefix frontend run e2e:fixture:ci -- perf-budget interaction-budget --workers=1
@@ -372,7 +395,7 @@ The contract for a `PERF_SPEC` spec: until its ceilings are calibrated from at l
 
 **The null-ceiling contract (runtime-09, quality-08).** Each spec declares one ceiling per metric, and `null` means report-only: `INTERACTION_CEILINGS_MS` in `interaction-budget.fixture.spec.ts` (`j`, `expand`, `keystroke`, all null) and `CEILINGS` in `perf-budget.fixture.spec.ts` (LCP, TBT and CLS per route; Borrower 360 and every CLS are null). The report test gates every non-null median (`<= ceiling`) and logs `gating: ...` or `report-only`. CLS is the largest session window (1 s gap, 5 s cap) of layout-shift entries without recent input, over the same span as TBT.
 
-**Calibration.** Every perf run writes `test-results/perf/calibration/<name>.json` (`fixture/calibration.ts`: `{name, spec, medians, samples, run: {sha, runId, runAttempt, runnerOs, imageOs}}`, numbers and CI metadata only, never a borrower id or rendered text), and the `e2e-fixture` job uploads them, pass or fail, as `perf-calibration-<run id>-<attempt>` (30 days). To set or lower a ceiling, the integrator (never a lane) downloads three reference-runner runs of ONE sha and runs the tool, which prints the literal and the runs it cites and never edits a spec:
+**Calibration.** Every perf run writes `test-results/perf/calibration/<name>.json` (`fixture/calibration.ts`: `{name, spec, medians, samples, run: {sha, runId, runAttempt, runnerOs, imageOs}}`, numbers and CI metadata only, never a borrower id or rendered text), and the `e2e-fixture-perf` job uploads them, pass or fail, as `perf-calibration-<run id>-<attempt>` (30 days). To set or lower a ceiling, the integrator (never a lane) downloads three reference-runner runs of ONE sha and runs the tool, which prints the literal and the runs it cites and never edits a spec:
 
 ```bash
 gh run download <run id> -n perf-calibration-<run id>-<attempt> -D /tmp/cal/<run id>   # three runs, one sha
@@ -490,7 +513,7 @@ node tools/export_e2e_fixtures.mjs --out /tmp/e2e-fixtures.json          # inspe
 MIP_REQUIRE_FIXTURE_CONTRACT=1 pytest -q tests/unit/test_e2e_fixture_contract.py
 ```
 
-`tests/unit/test_frontend_build_artifacts.py` has the same kind of switch: its served-layer and build-meta checks skip where `frontend/dist` is not built, and `MIP_REQUIRE_FRONTEND_DIST=1` (set by the `e2e-fixture` job right after its build) turns those skips into failures.
+`tests/unit/test_frontend_build_artifacts.py` has the same kind of switch: its served-layer and build-meta checks skip where `frontend/dist` is not built, and `MIP_REQUIRE_FRONTEND_DIST=1` (set by the `e2e-fixture-perf` job right after its build) turns those skips into failures.
 
 ### Generated API types
 
