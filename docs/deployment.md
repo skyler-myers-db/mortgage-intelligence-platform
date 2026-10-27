@@ -858,9 +858,9 @@ existing key:
   already requires. Each read leaves a `getSecret` entry in the workspace
   audit log. Writing a different mask would re-key every masked borrower id
   and orphan the `B-…` ids already stored in Lakebase campaigns, approvals,
-  audit, watchlists and snoozes. To fix a refusal, set the value the install already uses. A
-  deliberate re-key is an owner-run data migration. A deploy never does it.
-  An equal mask is kept and not rewritten.
+  audit, watchlists and snoozes. To fix a refusal, set the value the install
+  already uses. A deliberate re-key is an owner-run data migration. A deploy
+  never does it. An equal mask is kept and not rewritten.
 - **Salesforce credentials.** When a `SALESFORCE_*` input is unset, an
   existing `salesforce-*` key is kept. The disabled sentinel is written only
   when the key is absent, because the App's static resource binding needs a
@@ -885,18 +885,39 @@ rotation is an operator's call. The plan prints one names-only note:
 `unchanged`; `rotated` (the configured previous key equals the stored value,
 so it stays valid for the grace period); `changed with no grace key`
 (outstanding action confirmations and provenance tokens stop verifying); or
-`not compared` with the error code. Together with the mask check, that note
-answers the fingerprint pre-check for the mask and the current key.
+`not compared` with the error code. The note is report-only: no deploy step
+reads it, and nothing refuses on it. A fingerprint pre-check that covers the
+current key is therefore the owner reading that note; only the mask
+comparison is enforced.
+
+Before its first workspace call, every mode of the tool (`--check`, the
+write run, `--retire-previous`) proves which workspace it is about to call.
+`WorkspaceClient()` resolves the Databricks SDK's default chain: process
+environment first, then the `~/.databrickscfg` DEFAULT profile, which may name
+a different, shared workspace. The tool never binds the `.env.local` host or
+token itself. Instead, the resolved host must equal every configured install
+host: `DATABRICKS_HOST` in the shell or in `.env.local`, and
+`MIP_DATABRICKS_WORKSPACE_HOST`, which `deploy.sh` exports once it has bound
+the deployer. At least one of them must be set. Otherwise the tool exits 2,
+names the resolved host and each disagreeing source, and reads nothing. Hosts
+compare as `scheme://host[:port]`, lowercased. Every summary line names the
+resolved host (`runtime secret plan for mip-runtime on https://…: …`).
 
 `deploy.sh` runs the same plan read-only (`--check`: no scope creation, no
-write) at the end of step 0. That is before the signed workspace lease and
-before step 0a stops the App, so a refusal leaves the App serving. Run the
-check by hand before a deploy with:
+write) at the end of step 0. That is after it binds the deployer's workspace
+identity, before the signed workspace lease, and before step 0a stops the
+App, so a refusal leaves the App serving. To run the check by hand before a
+deploy, pin the install's identity so the SDK cannot fall back to DEFAULT:
 
 ```bash
-python tools/databricks/provision_runtime_secrets.py \
+DATABRICKS_CONFIG_PROFILE=<install profile> \
+  python tools/databricks/provision_runtime_secrets.py \
   --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}" --check
 ```
+
+Confirm that the host on the printed plan line is the install's workspace
+before you act on the result. Pin the profile the same way for
+`--retire-previous`.
 
 After that bounded grace period, remove
 `MIP_GENIE_ACTION_SECRET_PREVIOUS` and
@@ -907,7 +928,8 @@ payload:
 ```bash
 unset MIP_GENIE_ACTION_SECRET_PREVIOUS
 unset MIP_GENIE_ACTION_SECRET_PREVIOUS_KID
-python tools/databricks/provision_runtime_secrets.py \
+DATABRICKS_CONFIG_PROFILE=<install profile> \
+  python tools/databricks/provision_runtime_secrets.py \
   --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}" \
   --retire-previous
 ./scripts/deploy.sh -t dev
