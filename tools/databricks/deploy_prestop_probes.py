@@ -107,6 +107,17 @@ def supervisor_retirement_refusals(
     name = canonical_name.strip()
     if not name:
         raise ValueError("canonical Supervisor name is required")
+    if name != canonical_name:
+        # The planner matches display names exactly and the cutover journal
+        # strips them, so a padded name could select one Supervisor and pin
+        # another; the probe cannot say which would be retired.
+        return [
+            f"the canonical Supervisor name {canonical_name!r} (MIP_AGENT_SUPERVISOR_NAME) "
+            "has leading or trailing whitespace. The Supervisor planner matches display "
+            "names exactly while the cutover journal strips them, so the deploy could "
+            "select a different Supervisor than the one it pins. Remove the whitespace, "
+            "then re-run."
+        ], []
     matches = [row for row in agents if row.get("display_name") == name]
     if len(matches) > 1:
         return [

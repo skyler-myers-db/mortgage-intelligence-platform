@@ -179,6 +179,30 @@ def test_an_acknowledgement_differing_only_in_case_is_refused() -> None:
     assert f"names {HUMAN_ID.upper()!r}, not this Supervisor" in refusals[0]
 
 
+@pytest.mark.parametrize("padded", [f" {CANONICAL}", f"{CANONICAL} ", f"{CANONICAL}\n"])
+@pytest.mark.parametrize(
+    ("creator", "acknowledgement"), [(RUNTIME_ID, ""), ("operator@summit.example", HUMAN_ID)]
+)
+def test_a_whitespace_padded_canonical_name_is_refused(
+    padded: str, creator: str, acknowledgement: str
+) -> None:
+    # The planner matches the raw name and the journal strips it, so a padded
+    # MIP_AGENT_SUPERVISOR_NAME must not pass on the stripped name's verdict,
+    # whether that Supervisor is runtime-owned or acknowledged.
+    refusals, notes = probes.supervisor_retirement_refusals(
+        [_human_canonical(creator=creator)],
+        canonical_name=padded,
+        runtime_application_id=RUNTIME_ID,
+        acknowledgement=acknowledgement,
+    )
+
+    assert notes == []
+    assert len(refusals) == 1
+    assert f"the canonical Supervisor name {padded!r} (MIP_AGENT_SUPERVISOR_NAME)" in refusals[0]
+    assert "has leading or trailing whitespace" in refusals[0]
+    assert "Remove the whitespace, then re-run." in refusals[0]
+
+
 # --- Reserved replacement names ------------------------------------------------
 
 GOVERNED_SPACE = "01f13d4968af1b249dc388fd5b18b195"
@@ -1058,6 +1082,7 @@ def test_the_operator_contract_is_documented() -> None:
     assert "an endpoint the agent-runtime service principal did not create is never deleted unacknowledged" in flat
     assert "including one that only deletes the orphan endpoint" in flat
     assert "orphan endpoint after the Supervisor is gone needs no acknowledgement" not in flat
+    assert "A `MIP_AGENT_SUPERVISOR_NAME` with leading or trailing whitespace is refused" in flat
 
 
 def _heading_indexes(lines: list[str]) -> list[int]:

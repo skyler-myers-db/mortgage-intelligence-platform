@@ -1009,7 +1009,10 @@ instead; either way the deploy stops before the signed lease.
   canonical Supervisor that lacks any part of the identity the cutover journal
   pins (id, serving endpoint, creator or create time) is refused even when
   acknowledged, because `pin_journal` would refuse it after step 0a; it needs
-  manual governance review.
+  manual governance review. A `MIP_AGENT_SUPERVISOR_NAME` with leading or
+  trailing whitespace is refused too: the planner matches the name exactly
+  while the cutover journal strips it, so the two could disagree on which
+  Supervisor is replaced.
 - **Reserved replacement names.** The Supervisor planner picks a Supervisor on
   a reserved runtime replacement name (`<canonical name> [mip-agent-runtime]`,
   or `<canonical name> [mip-agent-runtime-<12-hex contract hash>]` with an
