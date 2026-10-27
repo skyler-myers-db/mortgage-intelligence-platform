@@ -69,11 +69,16 @@ def test_no_target_overrides_the_experiment_so_the_root_name_is_what_every_targe
         assert not overrides, f"target {target_name} overrides the experiment"
 
 
+def test_the_declared_name_is_one_level_under_shared_and_takes_the_install_suffix() -> None:
+    declared = _bundle()["resources"]["experiments"]["mip_lead_scoring"]["name"]
+
+    assert declared == "/Shared/mip-lead-scoring${var.install_suffix}"
+
+
 @pytest.mark.parametrize("suffix", SUFFIXES)
 def test_every_target_renders_one_valid_path_directly_under_shared(suffix: str) -> None:
     bundle = _bundle()
     declared = bundle["resources"]["experiments"]["mip_lead_scoring"]["name"]
-    assert declared == "/Shared/mip-lead-scoring${var.install_suffix}"
     name = declared.replace("${var.install_suffix}", suffix)
 
     assert set(bundle["targets"]) == {"dev", "prod", "ci"}
