@@ -73,10 +73,18 @@ class _Run:
         return SimpleNamespace(returncode=0)
 
 
+BUNDLE_ROOT = "bundle-root"  # under tmp_path
+
+
 @pytest.fixture
 def run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _Run:
     for name in _AMBIENT:
         monkeypatch.delenv(name, raising=False)
+    # bundle_env.main() writes the bundle's variable-overrides.json (the
+    # scheduled-refresh recipients) before every CLI call: keep it out of the
+    # checkout, as tests/unit/test_workspace_auth.py does.
+    monkeypatch.setattr(bundle_env, "BUNDLE_ROOT", tmp_path / BUNDLE_ROOT)
+    monkeypatch.delenv("DATABRICKS_BUNDLE_ROOT", raising=False)
     env_local = tmp_path / ".env.local"
     env_local.write_text(
         "DATABRICKS_WAREHOUSE_ID=warehouse-id\n"
@@ -95,6 +103,32 @@ def run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _Run:
 
     monkeypatch.setattr(bundle_env, "_resolve_governed_genie_space_id", resolve)
     return state
+
+
+def _repo_overrides() -> dict[str, tuple[int, int] | None]:
+    """(mtime_ns, size) of each target's variable-overrides.json in the real checkout, or None."""
+
+    root = Path(bundle_env.REPO) / ".databricks" / "bundle"
+    snapshot: dict[str, tuple[int, int] | None] = {}
+    for target in ("dev", "prod", CI_TARGET):
+        path = root / target / "variable-overrides.json"
+        snapshot[target] = (path.stat().st_mtime_ns, path.stat().st_size) if path.exists() else None
+    return snapshot
+
+
+def test_the_isolation_tests_write_overrides_only_under_tmp(
+    monkeypatch: pytest.MonkeyPatch, run: _Run, tmp_path: Path
+) -> None:
+    """The fixture keeps bundle_env's overrides write out of the checkout (post-W5 integration fix)."""
+
+    before = _repo_overrides()
+    _deploy_dev(monkeypatch)
+    assert _main(monkeypatch, *DEPLOY, "-t", CI_TARGET) == 0
+    assert _main(monkeypatch, "validate", "-t", "dev") == 0
+
+    assert (tmp_path / BUNDLE_ROOT / ".databricks" / "bundle" / CI_TARGET / "variable-overrides.json").is_file()
+    assert (tmp_path / BUNDLE_ROOT / ".databricks" / "bundle" / "dev" / "variable-overrides.json").is_file()
+    assert _repo_overrides() == before, "the real checkout's overrides are untouched"
 
 
 def _main(monkeypatch: pytest.MonkeyPatch, *args: str) -> int:
