@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from tests.unit.test_smoke_live_contract import SMOKE_GEO_REFUSAL_IDS
 from tools import verify_live
 from tools.verify_live import (
     APPROVE_DRAFT_UNAVAILABLE,
@@ -687,102 +688,170 @@ def test_the_drill_breaks_size_ties_by_state_then_zip(monkeypatch: pytest.Monkey
     assert collect_red_flags(results) == []
 
 
-@pytest.mark.parametrize(
-    ("payloads", "flag"),
-    [
-        ({"zips": _drill_zips(rollups=[])}, "geo.zip_rollups.filtered: `rollups` returned empty array"),
-        ({"zips": _drill_zips(rollups=[])}, "geo.zip_rollups.filtered: no ZIP row with addressable borrowers for IL"),
-        (
-            {"zips": _drill_zips(rollups=[])},
-            "geo.drill_target.zip: status=0 error=no filtered ZIP rollup with addressable borrowers for IL",
-        ),
-        (
-            {"zips": _drill_zips(rollups=[_drill_zip("60628", 719), _drill_zip("6061", 29)])},
-            "geo.zip_rollups.filtered: ZIP row without a 5-digit zip: 1 row(s), first '6061'",
-        ),
-        (
-            {"zips": _drill_zips(rollups=[_drill_zip("60628", 719), _drill_zip("6061A", 29)])},
-            "geo.zip_rollups.filtered: ZIP row without a 5-digit zip: 1 row(s), first '6061A'",
-        ),
-        (
-            {"zips": _drill_zips(rollups=[_drill_zip("60628", 719), _drill_zip(60617, 29)])},
-            "geo.zip_rollups.filtered: ZIP row without a 5-digit zip: 1 row(s), first 60617",
-        ),
-        (
-            {"zips": _drill_zips(rollups=[_drill_zip("60628", 719), _drill_zip("60617\n", 29)])},
-            "geo.zip_rollups.filtered: ZIP row without a 5-digit zip: 1 row(s), first '60617\\n'",
-        ),
-        (
-            {"zips": _drill_zips(rollups=[_drill_zip("60628", 748), _drill_zip("75201", 0, "TX")])},
-            "geo.zip_rollups.filtered: ZIP row outside IL: 1 row(s), first 'TX'",
-        ),
-        (
-            {"zips": _drill_zips(state="TX")},
-            "geo.zip_rollups.filtered: envelope state 'TX' is not the drilled IL",
-        ),
-        (
-            {"zips": _drill_zips(rollups=[_drill_zip("60628", 0)])},
-            "geo.zip_rollups.filtered: no ZIP row with addressable borrowers for IL",
-        ),
-        ({"zips": _drill_zips(rollups=None)}, "geo.zip_rollups.filtered: `rollups` is not an array"),
-        (
-            {"counties": _drill_counties(rollups=[{"fips_5": "", "state": "IL"}])},
-            "geo.county_rollups.retired_grain: county row without a 5-digit fips_5: 1 row(s), first ''",
-        ),
-        (
-            {"counties": _drill_counties(rollups=[{"fips_5": None, "state": "IL"}])},
-            "geo.county_rollups.retired_grain: county row without a 5-digit fips_5: 1 row(s), first None",
-        ),
-        (
-            {"counties": _drill_counties(rollups=[{"fips_5": "17031", "state": "WI"}])},
-            "geo.county_rollups.retired_grain: county row outside IL: 1 row(s), first 'WI'",
-        ),
-        (
-            {"counties": _drill_counties(state="CA")},
-            "geo.county_rollups.retired_grain: envelope state 'CA' is not the drilled 'IL'",
-        ),
-        ({"counties": _drill_counties(rollups=None)}, "geo.county_rollups.retired_grain: `rollups` is not an array"),
-        (
-            {"zips": _drill_zips(rollups=[_drill_zip("60628", 690), _drill_zip("60617", 30), _drill_zip("60601", 29)])},
-            "geo.drill_reconciliation: IL does not reconcile: sum(zip.addressable_borrowers)=749, "
-            "expected state.addressable 751 - state.zip_unassigned_count 3 = 748",
-        ),
-        (
-            {
-                "states": _drill_states(
-                    rollups=[{"state": "IL", "addressable": 751}, {"state": "CA", "addressable": 104}]
-                )
-            },
-            "geo.drill_reconciliation: IL state row lacks a whole addressable or zip_unassigned_count "
-            "(addressable=751, zip_unassigned_count=None)",
-        ),
-        (
-            {"zips": _drill_zips(rollups=[_drill_zip("60628", 719), _drill_zip("60617", "29")])},
-            "geo.drill_reconciliation: cannot sum the IL ZIP layer: a row lacks a whole addressable_borrowers",
-        ),
-    ],
-    ids=[
-        "empty-zip-list-generic",
-        "empty-zip-list-no-populated",
-        "empty-zip-list-no-target",
-        "four-digit-zip",
-        "non-numeric-zip",
-        "numeric-zip-not-a-string",
-        "zip-with-trailing-newline",
-        "zip-row-from-another-state",
-        "zip-envelope-other-state",
-        "no-populated-zip",
-        "zip-rollups-not-an-array",
-        "county-row-empty-fips",
-        "county-row-null-fips",
-        "county-row-other-state",
-        "county-envelope-other-state",
-        "county-rollups-not-an-array",
-        "broken-invariant",
-        "state-row-without-zip-unassigned",
-        "string-zip-count",
-    ],
-)
+_ZIP_FLAG = "geo.zip_rollups.filtered: "
+_COUNTY_FLAG = "geo.county_rollups.retired_grain: "
+_IL_STATE_ROW = {"state": "IL", "addressable": 751, "zip_unassigned_count": 3}
+
+
+def _unreconciled(total: int) -> str:
+    return (
+        f"geo.drill_reconciliation: IL does not reconcile: sum(zip.addressable_borrowers)={total}, "
+        "expected state.addressable 751 - state.zip_unassigned_count 3 = 748"
+    )
+
+
+# Every recorded-payload defect and the flag it raises. The ids are the shared
+# bad-shape vocabulary with tests/unit/test_smoke_live_contract.py (pinned below).
+GEO_DRILL_DEFECTS = [
+    # The ZIP layer: populated, in-state, 5-digit ZIPs, whole counts.
+    pytest.param({"zips": _drill_zips(rollups=[])}, _ZIP_FLAG + "`rollups` returned empty array", id="empty-zip-list"),
+    pytest.param(
+        {"zips": _drill_zips(rollups=[])},
+        _ZIP_FLAG + "no ZIP row with addressable borrowers for IL",
+        id="empty-zip-list-no-populated",
+    ),
+    pytest.param(
+        {"zips": _drill_zips(rollups=[])},
+        "geo.drill_target.zip: status=0 error=no filtered ZIP rollup with addressable borrowers for IL",
+        id="empty-zip-list-no-target",
+    ),
+    pytest.param({"zips": _drill_zips(rollups=None)}, _ZIP_FLAG + "`rollups` is not an array", id="zip-rollups-not-an-array"),
+    pytest.param(
+        {"zips": _drill_zips(rollups=[_drill_zip("60628", 690), _drill_zip("60617", 29), _drill_zip("60601", 29), "60602"])},
+        _ZIP_FLAG + "a ZIP rollup row is not an object",
+        id="non-object-zip-row",
+    ),
+    pytest.param(
+        {"zips": _drill_zips(rollups=[_drill_zip("60628", 719), _drill_zip("6061", 29)])},
+        _ZIP_FLAG + "ZIP row without a 5-digit zip: 1 row(s), first '6061'",
+        id="four-digit-zip",
+    ),
+    pytest.param(
+        {"zips": _drill_zips(rollups=[_drill_zip("60628", 719), _drill_zip("6061A", 29)])},
+        _ZIP_FLAG + "ZIP row without a 5-digit zip: 1 row(s), first '6061A'",
+        id="non-numeric-zip",
+    ),
+    pytest.param(
+        {"zips": _drill_zips(rollups=[_drill_zip("60628", 719), _drill_zip(60617, 29)])},
+        _ZIP_FLAG + "ZIP row without a 5-digit zip: 1 row(s), first 60617",
+        id="numeric-zip-not-a-string",
+    ),
+    pytest.param(
+        {"zips": _drill_zips(rollups=[_drill_zip("60628", 719), _drill_zip("60617\n", 29)])},
+        _ZIP_FLAG + "ZIP row without a 5-digit zip: 1 row(s), first '60617\\n'",
+        id="zip-with-trailing-newline",
+    ),
+    pytest.param(
+        {"zips": _drill_zips(rollups=[_drill_zip("60628", 748), _drill_zip("75201", 0, "TX")])},
+        _ZIP_FLAG + "ZIP row outside IL: 1 row(s), first 'TX'",
+        id="zip-row-from-another-state",
+    ),
+    pytest.param(
+        {"zips": _drill_zips(state="TX")},
+        _ZIP_FLAG + "envelope state 'TX' is not the drilled IL",
+        id="zip-envelope-other-state",
+    ),
+    pytest.param(
+        {"zips": _drill_zips(rollups=[_drill_zip("60628", 0)])},
+        _ZIP_FLAG + "no ZIP row with addressable borrowers for IL",
+        id="no-populated-zip",
+    ),
+    pytest.param(
+        {"zips": _drill_zips(rollups=[_drill_zip("60628", 719), _drill_zip("60617", "29")])},
+        "geo.drill_reconciliation: cannot sum the IL ZIP layer: a row lacks a whole addressable_borrowers",
+        id="string-zip-count",
+    ),
+    # Each count case below sums to the reconciling 748, so only whole_count
+    # can refuse it.
+    pytest.param(
+        {
+            "zips": _drill_zips(
+                rollups=[_drill_zip("60628", 690), _drill_zip("60617", 30), _drill_zip("60601", 29), _drill_zip("60602", -1)]
+            )
+        },
+        _ZIP_FLAG + "ZIP row without a whole addressable_borrowers: 1 row(s), first -1",
+        id="negative-zip-count",
+    ),
+    pytest.param(
+        {
+            "zips": _drill_zips(
+                rollups=[_drill_zip("60628", 690), _drill_zip("60617", 29), _drill_zip("60601", 28.5), _drill_zip("60602", 0.5)]
+            )
+        },
+        _ZIP_FLAG + "ZIP row without a whole addressable_borrowers: 2 row(s), first 28.5",
+        id="fractional-zip-count",
+    ),
+    pytest.param(
+        {
+            "zips": _drill_zips(
+                rollups=[_drill_zip("60628", 690), _drill_zip("60617", 29), _drill_zip("60601", 28), _drill_zip("60602", True)]
+            )
+        },
+        _ZIP_FLAG + "ZIP row without a whole addressable_borrowers: 1 row(s), first True",
+        id="boolean-zip-count",
+    ),
+    # The retired county grain: empty passes; any row is in-state with a 5-digit FIPS.
+    pytest.param(
+        {"counties": _drill_counties(rollups=[{"fips_5": "", "state": "IL"}])},
+        _COUNTY_FLAG + "county row without a 5-digit fips_5: 1 row(s), first ''",
+        id="county-row-empty-fips",
+    ),
+    pytest.param(
+        {"counties": _drill_counties(rollups=[{"fips_5": None, "state": "IL"}])},
+        _COUNTY_FLAG + "county row without a 5-digit fips_5: 1 row(s), first None",
+        id="county-row-null-fips",
+    ),
+    pytest.param(
+        {"counties": _drill_counties(rollups=[{"fips_5": "1703", "state": "IL"}])},
+        _COUNTY_FLAG + "county row without a 5-digit fips_5: 1 row(s), first '1703'",
+        id="county-row-four-digit-fips",
+    ),
+    pytest.param(
+        {"counties": _drill_counties(rollups=[{"fips_5": "17031", "state": "WI"}])},
+        _COUNTY_FLAG + "county row outside IL: 1 row(s), first 'WI'",
+        id="county-row-other-state",
+    ),
+    pytest.param(
+        {"counties": _drill_counties(state="CA")},
+        _COUNTY_FLAG + "envelope state 'CA' is not the drilled 'IL'",
+        id="county-envelope-other-state",
+    ),
+    pytest.param(
+        {"counties": _drill_counties(rollups=None)},
+        _COUNTY_FLAG + "`rollups` is not an array",
+        id="county-rollups-not-an-array",
+    ),
+    pytest.param(
+        {"counties": _drill_counties(rollups=["17031"])},
+        _COUNTY_FLAG + "a county rollup row is not an object",
+        id="non-object-county-row",
+    ),
+    # The reconciliation: 751 - 3 = 748 exactly, so it flags both directions.
+    pytest.param(
+        {"zips": _drill_zips(rollups=[_drill_zip("60628", 690), _drill_zip("60617", 30), _drill_zip("60601", 29)])},
+        _unreconciled(749),
+        id="broken-invariant-over-sum",
+    ),
+    pytest.param(
+        {"zips": _drill_zips(rollups=[_drill_zip("60628", 690), _drill_zip("60617", 29), _drill_zip("60601", 28)])},
+        _unreconciled(747),
+        id="broken-invariant-under-sum",
+    ),
+    pytest.param(
+        {"states": _drill_states(rollups=[{"state": "IL", "addressable": 751}, {"state": "CA", "addressable": 104}])},
+        "geo.drill_reconciliation: IL state row lacks a whole addressable or zip_unassigned_count "
+        "(addressable=751, zip_unassigned_count=None)",
+        id="state-row-without-zip-unassigned",
+    ),
+    pytest.param(
+        {"states": _drill_states(rollups=[_IL_STATE_ROW, dict(_IL_STATE_ROW)])},
+        "geo.drill_reconciliation: expected exactly one filtered state rollup row for 'IL', found 2",
+        id="duplicate-target-state-rows",
+    ),
+]
+
+
+@pytest.mark.parametrize(("payloads", "flag"), GEO_DRILL_DEFECTS)
 def test_each_geo_drill_defect_raises_its_flag(
     monkeypatch: pytest.MonkeyPatch, payloads: dict[str, Any], flag: str
 ) -> None:
@@ -800,42 +869,76 @@ def test_an_empty_zip_layer_sends_no_lead_queue_probe(monkeypatch: pytest.Monkey
     assert results[-1].name == "geo.drill_target.zip" and not results[-1].ok
 
 
-@pytest.mark.parametrize(
-    ("states", "failing", "reason"),
-    [
-        (
-            _drill_states(rollups=[{"state": "IL", "addressable": 0, "zip_unassigned_count": 0}]),
-            frozenset(),
-            "no filtered state rollup with addressable borrowers",
+def test_the_lead_queue_zip_comes_from_the_drilled_state_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A larger out-of-state row is flagged, and it never becomes the deep link.
+    zips = _drill_zips(rollups=[_drill_zip("60628", 748), _drill_zip("75201", 900, "TX")])
+
+    fake, results = _drill(monkeypatch, zips=zips)
+
+    assert fake.query("/api/leads")["zip"] == ["60628"]
+    assert _ZIP_FLAG + "ZIP row outside IL: 1 row(s), first 'TX'" in collect_red_flags(results)
+
+
+def _bad_state_row(addressable: object) -> str:
+    return (
+        f"filtered state rollup row state='CA' addressable={addressable!r} "
+        "lacks a 2-letter state or a whole addressable count"
+    )
+
+
+GEO_DRILL_TARGET_REFUSALS = [
+    pytest.param(
+        _drill_states(rollups=[{"state": "IL", "addressable": 0, "zip_unassigned_count": 0}]),
+        frozenset(),
+        "no filtered state rollup with addressable borrowers",
+        id="no-populated-state",
+    ),
+    pytest.param(
+        _drill_states(rollups=[]), frozenset(), "no filtered state rollup with addressable borrowers", id="no-state-rows"
+    ),
+    pytest.param(
+        _drill_states(rollups=None),
+        frozenset(),
+        "filtered state rollups carried no `rollups` array",
+        id="state-rollups-not-an-array",
+    ),
+    pytest.param(
+        _drill_states(rollups=[{"state": "il", "addressable": 751, "zip_unassigned_count": 3}]),
+        frozenset(),
+        "filtered state rollup row state='il' addressable=751 lacks a 2-letter state or a whole addressable count",
+        id="lowercase-state",
+    ),
+    pytest.param(
+        _drill_states(
+            rollups=[
+                {"state": "CA", "addressable": 104, "zip_unassigned_count": 0},
+                {"state": "IL", "addressable": "751", "zip_unassigned_count": 3},
+            ]
         ),
-        (_drill_states(rollups=[]), frozenset(), "no filtered state rollup with addressable borrowers"),
-        (_drill_states(rollups=None), frozenset(), "filtered state rollups carried no `rollups` array"),
-        (
-            _drill_states(rollups=[{"state": "il", "addressable": 751, "zip_unassigned_count": 3}]),
-            frozenset(),
-            "filtered state rollup row state='il' addressable=751 lacks a 2-letter state or a whole addressable count",
-        ),
-        (
-            _drill_states(
-                rollups=[
-                    {"state": "CA", "addressable": 104, "zip_unassigned_count": 0},
-                    {"state": "IL", "addressable": "751", "zip_unassigned_count": 3},
-                ]
-            ),
-            frozenset(),
-            "filtered state rollup row state='IL' addressable='751' lacks a 2-letter state or a whole addressable count",
-        ),
-        (_drill_states(), frozenset({"/api/geo/state-rollups"}), "filtered state rollups probe failed"),
-    ],
-    ids=[
-        "no-populated-state",
-        "no-state-rows",
-        "rollups-not-an-array",
-        "lowercase-state",
-        "string-addressable",
-        "state-probe-failed",
-    ],
-)
+        frozenset(),
+        "filtered state rollup row state='IL' addressable='751' lacks a 2-letter state or a whole addressable count",
+        id="string-addressable",
+    ),
+    # A malformed row that is not the target still refuses the whole payload.
+    pytest.param(
+        _drill_states(rollups=[{"state": "CA", "addressable": -1, "zip_unassigned_count": 0}, _IL_STATE_ROW]),
+        frozenset(),
+        _bad_state_row(-1),
+        id="negative-state-addressable",
+    ),
+    pytest.param(
+        _drill_states(rollups=[{"state": "CA", "addressable": 103.5, "zip_unassigned_count": 0}, _IL_STATE_ROW]),
+        frozenset(),
+        _bad_state_row(103.5),
+        id="fractional-state-addressable",
+    ),
+    pytest.param(
+        _drill_states(), frozenset({"/api/geo/state-rollups"}), "filtered state rollups probe failed", id="state-probe-failed"
+    ),
+]
+
+
+@pytest.mark.parametrize(("states", "failing", "reason"), GEO_DRILL_TARGET_REFUSALS)
 def test_a_state_payload_without_a_clean_target_stops_the_drill(
     monkeypatch: pytest.MonkeyPatch, states: dict[str, Any], failing: frozenset[str], reason: str
 ) -> None:
@@ -845,6 +948,20 @@ def test_a_state_payload_without_a_clean_target_stops_the_drill(
     assert results[-1].name == "geo.drill_target.state"
     assert not results[-1].ok and results[-1].error == reason
     assert f"geo.drill_target.state: status=0 error={reason}" in collect_red_flags(results)
+
+
+# verify_live-only ids: the extra flags it raises for the empty-ZIP payload,
+# and a failed state probe (smoke's own probe() exits on any non-200 before
+# its geo checks run).
+VERIFY_LIVE_ONLY_GEO_IDS = frozenset({"empty-zip-list-no-populated", "empty-zip-list-no-target", "state-probe-failed"})
+
+
+def test_smoke_and_verify_live_refuse_the_same_geo_bad_shapes() -> None:
+    verify_ids = [str(case.id) for case in (*GEO_DRILL_DEFECTS, *GEO_DRILL_TARGET_REFUSALS)]
+    assert len(verify_ids) == len(set(verify_ids))
+    assert VERIFY_LIVE_ONLY_GEO_IDS.issubset(verify_ids)
+    assert len(SMOKE_GEO_REFUSAL_IDS) == len(set(SMOKE_GEO_REFUSAL_IDS))
+    assert set(SMOKE_GEO_REFUSAL_IDS) == set(verify_ids) - VERIFY_LIVE_ONLY_GEO_IDS
 
 
 @pytest.mark.parametrize(
