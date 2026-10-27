@@ -181,8 +181,11 @@ or answer no at the prompt and refresh the shared install deliberately.
 Makefile convention). `MIP_DEPLOY_PYTHON` selects another one, such as a venv
 built only for deploys outside the checkout. Set it in the shell, not in
 `.env.local`: `.env.local` is parsed with this interpreter. It must be an
-absolute path to an executable that reports Python 3. Any other value exits 2
-before the path is run.
+absolute path to an executable that reports Python 3. A relative, missing,
+directory or non-executable value exits 2 without running anything. An
+absolute executable is run once, as
+`<path> -c 'import sys; print(sys.version_info[0])'`, and exits 2 unless it
+prints `3`.
 
 Step 0 then runs `python -m tools.python_deps_check`. It compares the
 interpreter with the `requirements.txt` pins (`-c uv.lock` plus
