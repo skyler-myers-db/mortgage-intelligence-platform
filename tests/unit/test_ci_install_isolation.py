@@ -162,7 +162,7 @@ def test_the_uc_catalog_check_runs_alone_for_nightly(
     code = isolation.main(catalogs, ["uc-catalogs"])
     captured = capsys.readouterr()
     if refused is None:
-        assert (code, captured.err) == (0, "") and "uc-catalogs: ok" in captured.out
+        assert (code, captured.out) == (0, "") and "uc-catalogs: ok" in captured.err
     else:
         assert code == 2 and refused in captured.err and captured.out == ""
         for value in catalogs.values():
@@ -173,6 +173,63 @@ def test_the_uc_catalog_check_runs_alone_for_nightly(
     doc = _flat(_doc_section(BOOTSTRAP_HEADING))
     assert "Its first job, `ci-install-isolation`, runs the rule table's UC-catalog row" in doc
     assert "and every other job needs it" in doc
+
+
+_REPAIR_HOSTS = {"dev": "https://live.example", CI_TARGET: "https://staging.example"}
+
+
+def _repair(**extra: str) -> dict[str, str]:
+    """deploy-dev.yml's credential-repair step: its ref, the staging host and the staging App."""
+
+    return {
+        "GITHUB_ACTIONS": "true",
+        "GITHUB_WORKFLOW_REF": DEPLOY_DEV_REF,
+        "DATABRICKS_HOST": "https://staging.example",
+        "MIP_APP_NAME": STAGING["MIP_APP_NAME"],
+        **extra,
+    }
+
+
+@pytest.mark.parametrize(
+    "host", ["https://staging.example", "https://STAGING.example/", "staging.example", "https://staging.example.:443"]
+)
+def test_the_credential_repair_runs_only_on_the_staging_workspace_host(host: str) -> None:
+    isolation.check_credential_repair(_repair(DATABRICKS_HOST=host), hosts=_REPAIR_HOSTS)
+
+
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"DATABRICKS_HOST": "https://live.example"}, "DATABRICKS_HOST"),
+        ({"DATABRICKS_HOST": "https://live.example.:443/"}, "DATABRICKS_HOST"),
+        ({"DATABRICKS_HOST": ""}, "DATABRICKS_HOST"),
+        ({"DATABRICKS_HOST": "https://[staging.example"}, "DATABRICKS_HOST"),
+        ({"MIP_APP_NAME": "mip-app"}, "MIP_APP_NAME"),
+        ({"MIP_APP_NAME": " "}, "MIP_APP_NAME"),
+        ({"GITHUB_WORKFLOW_REF": CI_REF}, "deploy-dev.yml"),
+        ({"GITHUB_ACTIONS": ""}, "deploy-dev.yml"),
+    ],
+    ids=["live-host", "live-host-spelling", "no-host", "unparseable-host", "live-app", "blank-app", "ci-ref", "not-actions"],
+)
+def test_the_credential_repair_refuses_the_live_workspace_and_app(override: dict[str, str], reason: str) -> None:
+    """deploy-dev.yml's repair rotates an OAuth secret before, and outside, deploy.sh's preflight."""
+
+    with pytest.raises(isolation.Refused, match=reason):
+        isolation.check_credential_repair(_repair(**override), hosts=_REPAIR_HOSTS)
+    with pytest.raises(isolation.Refused, match="must anchor its own workspace host"):
+        isolation.check_credential_repair(_repair(), hosts={"dev": "https://live.example", CI_TARGET: "https://live.example."})
+
+
+def test_the_credential_repair_gate_is_the_workflow_steps_first_command() -> None:
+    workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
+    repair = next(step for step in workflow["jobs"]["deploy"]["steps"] if step.get("name") == "Repair normal operator OAuth credential")
+    commands = [line for line in repair["run"].splitlines() if line.strip() and not line.lstrip().startswith("#")]
+
+    assert commands[:2] == ["set -euo pipefail", "python -m tools.databricks.ci_install_isolation repair-credential"]
+    assert repair["env"]["MIP_APP_NAME"] == "${{ vars.MIP_APP_NAME }}", "no live mip-app fallback"
+    assert "repair-credential" in isolation.CHECKS
+    doc = _flat(_doc_section(BOOTSTRAP_HEADING))
+    assert "first runs `python -m tools.databricks.ci_install_isolation repair-credential`" in doc
 
 
 @pytest.mark.parametrize("flag", ["1", "true", " 1 "])

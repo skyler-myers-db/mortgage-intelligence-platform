@@ -1459,6 +1459,14 @@ from the live workspace on 2026-10-27 (agents never call `pr105-host`):
   target. `validate`, `plan` and `summary` are unchanged. It does not gate
   `databricks bundle run` (`nightly.yml` runs `pr105-host` jobs directly) or
   a raw CLI bundle deployment, which the deploy contract retires.
+- `deploy-dev.yml`'s `repair_normal_credential` step rotates the normal
+  identity's OAuth secret into GitHub before, and outside,
+  `scripts/deploy.sh` and its preflight. It first runs
+  `python -m tools.databricks.ci_install_isolation repair-credential`, which
+  refuses (exit 2, before any workspace call) outside `deploy-dev.yml`, a
+  `DATABRICKS_HOST` whose hostname is not the `pr105-host` target's, and a
+  `MIP_APP_NAME` that is unset or the live `mip-app`; the step's
+  `MIP_APP_NAME` has no `mip-app` fallback.
 - `converge_static_app_source --expected-root-leaf` checks the App source
   path against the resolved leaf (default: the target, i.e. as before).
 - **Workspace-global steps** (the root and names do not isolate identities).

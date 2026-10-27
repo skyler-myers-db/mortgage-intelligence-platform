@@ -50,6 +50,11 @@ leaf) print ``dev`` and ''.
 spelling. nightly.yml runs it before any other job, because its catalog
 names fall back to the live ones when the repository variables are unset and
 the CI staging workspace shares the live metastore.
+
+``repair-credential`` gates deploy-dev.yml's normal-credential repair, which
+rotates an OAuth secret before, and outside, scripts/deploy.sh: deploy-dev.yml
+only, ``DATABRICKS_HOST`` naming ``CI_TARGET``'s workspace host (never the dev
+target's), and ``MIP_APP_NAME`` set and not the live App.
 """
 
 from __future__ import annotations
@@ -144,6 +149,30 @@ def _uc_name(part: str) -> str:
     return part.strip().strip("`").casefold()
 
 
+def ci_workspace_host(hosts: Mapping[str, str] | None = None) -> str:
+    """``CI_TARGET``'s workspace hostname, refused unless it is set and differs from the dev target's."""
+
+    resolved = target_hosts() if hosts is None else hosts
+    ci_host = _host_key(resolved.get(CI_TARGET, ""))
+    dev_host = _host_key(resolved.get(DEFAULT_TARGET, ""))
+    if not ci_host or not dev_host or ci_host == dev_host:
+        raise Refused(f"the {CI_TARGET} target must anchor its own workspace host, never the dev target's")
+    return ci_host
+
+
+def check_credential_repair(env: Mapping[str, str], hosts: Mapping[str, str] | None = None) -> None:
+    """deploy-dev.yml's normal-credential repair touches only the CI staging install's workspace and App."""
+
+    in_actions = env.get("GITHUB_ACTIONS") == "true"
+    if not (in_actions and DEPLOY_DEV_WORKFLOW in (env.get("GITHUB_WORKFLOW_REF") or "")):
+        raise Refused("the normal-credential repair runs only in deploy-dev.yml")
+    if _host_key(env.get("DATABRICKS_HOST") or "") != ci_workspace_host(hosts):
+        raise Refused(f"DATABRICKS_HOST must be the {CI_TARGET} target's workspace host, never the live workspace")
+    app = (env.get("MIP_APP_NAME") or "").strip()
+    if not app or app == LIVE_DEFAULTS["MIP_APP_NAME"]:
+        raise Refused("MIP_APP_NAME must name the CI staging install, not the live default")
+
+
 def check_uc_catalogs(env: Mapping[str, str]) -> None:
     """The rule table's primary UC isolation: each catalog name set, and neither a live catalog."""
 
@@ -191,11 +220,7 @@ def resolve(
             f"{REMEDIATION_FLAG} rewrites catalog bindings metastore-wide and the CI staging install shares the "
             "live metastore: never remediate from deploy-dev.yml"
         )
-    resolved = target_hosts() if hosts is None else hosts
-    ci_host = _host_key(resolved.get(CI_TARGET, ""))
-    dev_host = _host_key(resolved.get(DEFAULT_TARGET, ""))
-    if not ci_host or not dev_host or ci_host == dev_host:
-        raise Refused(f"the {CI_TARGET} target must anchor its own workspace host, never the dev target's")
+    ci_workspace_host(hosts)
     for name, live in LIVE_DEFAULTS.items():
         value = (env.get(name) or "").strip()
         if not value or value == live:
@@ -214,6 +239,7 @@ def resolve(
 # Single-row checks for callers outside scripts/deploy.sh's preflight.
 CHECKS: dict[str, Callable[[Mapping[str, str]], None]] = {
     "uc-catalogs": check_uc_catalogs,
+    "repair-credential": check_credential_repair,
 }
 
 
@@ -229,7 +255,8 @@ def main(env: Mapping[str, str] | None = None, argv: Sequence[str] = ()) -> int:
         except Refused as refusal:
             print(f"[ci-install-isolation] refused: {refusal}", file=sys.stderr)
             return 2
-        print(f"[ci-install-isolation] {argv[0]}: ok")
+        # stderr, like a refusal: a workflow step's stdout stays its own.
+        print(f"[ci-install-isolation] {argv[0]}: ok", file=sys.stderr)
         return 0
     try:
         leaf, suffix = resolve(source)

@@ -266,11 +266,19 @@ jobs:
           MIP_AI_GATEWAY_PROOF_SIGNING_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}
           MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY }}
           MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS: ${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}
-          MIP_APP_NAME: ${{ vars.MIP_APP_NAME || 'mip-app' }}
+          # No live `mip-app` fallback: unset fails closed below.
+          MIP_APP_NAME: ${{ vars.MIP_APP_NAME }}
           MIP_DEPLOYMENT_SOURCE_GIT_SHA: ${{ github.sha }}
           MIP_M2M_GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # This step rotates an OAuth secret before, and outside,
+          # scripts/deploy.sh and its isolation preflight. So first, before
+          # any workspace call: deploy-dev.yml only, DATABRICKS_HOST must be
+          # the forked-anchor pr105-host target's workspace (never the dev
+          # target's live workspace), and MIP_APP_NAME must name the CI
+          # staging App (tools/databricks/ci_install_isolation.py).
+          python -m tools.databricks.ci_install_isolation repair-credential
           missing=""
           for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_CLIENT_ID \
                    GH_TOKEN MIP_AI_GATEWAY_PROOF_SIGNING_KEY MIP_APP_NAME \
