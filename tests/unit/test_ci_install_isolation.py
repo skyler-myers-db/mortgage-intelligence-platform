@@ -235,10 +235,12 @@ def test_foreign_catalog_remediation_is_refused_on_the_forked_anchor_target(
 ) -> None:
     """Round 2 (post-W5 review): remediation rewrites bindings metastore-wide, and pr105-host shares the metastore.
 
-    Dispatched from deploy-dev.yml it would ISOLATE catalogs and drop the
-    workspace bindings the policy omits for every team on the shared metastore,
-    the live install's share catalogs included, after signing its own manifest
-    in the same run. The rule table refuses it before any mutation.
+    Dispatched from deploy-dev.yml it would flip catalogs to ISOLATED and then
+    re-bind every other metastore workspace, after signing its own manifest in
+    the same run. Between those two calls (or after a killed run, which
+    recovery never reopens) every other workspace on the shared metastore
+    loses those catalogs, the live install's share catalogs included. The
+    rule table refuses it before any mutation.
     """
 
     code, out, err = _run(_ci(MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=flag), capsys)
@@ -247,7 +249,16 @@ def test_foreign_catalog_remediation_is_refused_on_the_forked_anchor_target(
     assert _run(_ci(MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS="0"), capsys)[0] == 0, "the workflow's off value passes"
     assert _run({"MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS": "1"}, capsys)[0] == 0, "an operator dev run is unchanged"
     owner = _doc_section(BOOTSTRAP_HEADING).split("**Owner steps", 1)[1].split("**Integrator steps", 1)[0]
-    assert "The rule table refuses it on `pr105-host` (exit 2, before any mutation)." in _flat(_numbered_item(owner, 8))
+    step8 = _flat(_numbered_item(owner, 8))
+    assert "The rule table refuses it on `pr105-host` (exit 2, before any mutation)." in step8
+    # Round 4 (post-W5 review B1): the signed manifest re-binds every other
+    # metastore workspace, so the hazard is the window between the isolate and
+    # re-bind calls, never a policy that leaves a workspace unbound.
+    assert (
+        "and between its isolate and re-bind calls (or after a killed run) every other workspace loses those "
+        "catalogs, the live install's share catalogs included."
+    ) in step8
+    assert "unbinding every workspace the policy omits" not in _flat(DEPLOYMENT_DOC.read_text(encoding="utf-8"))
     workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
     dispatch = workflow[True]["workflow_dispatch"]["inputs"]["remediate_foreign_catalog_bindings"]
     assert dispatch["default"] is False and dispatch["description"].startswith(f"Refused on {CI_TARGET}")
@@ -829,7 +840,7 @@ def test_the_runbook_never_presents_the_forked_anchor_as_a_separate_metastore_or
     assert "no code checks it" in step1 and "`2543889327043640`" in step1
     assert "name neither live catalog (`mip`, `mip_app_state`)" in step2
     assert "must return the live workspace's `metastore_id`" in step8
-    assert "metastore-wide" in step8 and "including the share catalogs the live install reads" in step8
+    assert "metastore-wide" in step8 and "the live install's share catalogs included" in step8
     assert "the Unity Catalog changes in step 8 are metastore-wide" in _flat(owner.split("\n1. ", 1)[0])
     assert "waits on the owner steps below, then integrator steps 1-6" in flat
     assert "render in integrator step 2 has never run" in flat
@@ -985,7 +996,7 @@ def test_the_live_app_has_no_governed_recovery_path_and_escalates_to_the_owner()
     grants = _flat(GRANTS_DOC.read_text(encoding="utf-8"))
     assert "acts on that workspace's catalogs" not in grants
     assert "shares the live install's Unity Catalog metastore" in grants
-    assert "must keep the live workspace bound" in grants
+    assert "every other workspace (the live one and every other team's) loses it" in grants
 
 
 def test_grants_gives_foreign_catalog_remediation_no_ci_command_of_record() -> None:
@@ -1008,6 +1019,23 @@ def test_grants_gives_foreign_catalog_remediation_no_ci_command_of_record() -> N
     ) in grants
     assert "The operator path, `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1 ./scripts/deploy.sh -t dev`, targets the live workspace, whose governed deploy is NO-GO" in grants
     assert "Any metastore-wide remediation is therefore an owner-only, separately reviewed decision" in grants
+    # Round 4 (post-W5 review B1): the owner decision rests on the blast radius
+    # the code has. foreign_catalog_binding_manifest refuses a policy that
+    # leaves any other metastore workspace unbound, so the hazard is the window
+    # between _apply_catalog's isolate and re-bind calls, which a killed run
+    # keeps open until a resumed recovery.
+    assert (
+        "this remediation flips each `OPEN` catalog the policy names to `ISOLATED` and then binds every other "
+        "metastore workspace `READ_WRITE`. The signed manifest refuses a policy that omits one of them, that "
+        "changes an already-`ISOLATED` catalog's bindings, or that binds the deploying workspace. At completion "
+        "only the deploying workspace (`pr105-host` from deploy-dev.yml) loses the catalog. Between each "
+        "catalog's flip and its re-binding, every other workspace (the live one and every other team's) loses "
+        "it. A run killed there stays in that narrower state until a resumed recovery, which never reopens. A "
+        "workspace assigned to the metastore later never sees the catalog."
+    ) in grants
+    assert "every workspace the policy does not bind loses that catalog" not in grants
+    assert "must keep the live workspace bound" not in grants, "the manifest already refuses an unbound workspace"
+    assert "Its signed manifest preserves every non-MIP metastore workspace as `READ_WRITE`" in grants, "consistency"
     # The dead dispatch never comes back as a runnable block, and the input
     # appears only beside its refusal.
     assert "-f remediate_foreign_catalog_bindings=true" not in raw

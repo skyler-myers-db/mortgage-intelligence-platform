@@ -516,12 +516,17 @@ dispatch with `remediate_foreign_catalog_bindings=true` exits 2 in the
 `scripts/deploy.sh` preflight, before any mutation. The refusal is
 deliberate. The `pr105-host` workspace shares the live install's Unity Catalog
 metastore, and a catalog's isolation mode and workspace bindings are
-metastore-level state: this remediation sets each catalog the policy names
-`ISOLATED` with exactly the policy's bindings, so every workspace the policy
-does not bind loses that catalog, the live workspace and every other team's
-included. A policy entry for a catalog the live install reads (`mip`,
-`mip_app_state`, the share catalog `cotality_mortgage_data`) must keep the live
-workspace bound. The operator path, `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1
+metastore-level state: this remediation flips each `OPEN` catalog the policy
+names to `ISOLATED` and then binds every other metastore workspace
+`READ_WRITE`. The signed manifest refuses a policy that omits one of them,
+that changes an already-`ISOLATED` catalog's bindings, or that binds the
+deploying workspace. At completion only the deploying workspace (`pr105-host`
+from deploy-dev.yml) loses the catalog. Between each catalog's flip and its
+re-binding, every other workspace (the live one and every other team's) loses
+it. A run killed there stays in that narrower state until a resumed recovery,
+which never reopens. A workspace assigned to the metastore later never sees the
+catalog. These are other teams' catalogs and metastore-level state. The
+operator path, `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1
 ./scripts/deploy.sh -t dev`, targets the live workspace, whose governed deploy
 is NO-GO (docs/deployment.md, "The live install is outside this bootstrap, and
 its governed deploy is NO-GO").

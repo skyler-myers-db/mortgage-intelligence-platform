@@ -1706,8 +1706,9 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
 
    Never dispatch with `remediate_foreign_catalog_bindings=true`: it sets
    catalogs ISOLATED and rewrites their workspace bindings metastore-wide,
-   unbinding every workspace the policy omits for every team, including the
-   share catalogs the live install reads. The rule table refuses it on
+   and between its isolate and re-bind calls (or after a killed run) every
+   other workspace loses those catalogs, the live install's share catalogs
+   included. The rule table refuses it on
    `pr105-host` (exit 2, before any mutation).
 9. Known step-4 blocker: the 2026-08-04 `invalid_client` for
    `mip-agent-runtime-ci-sp` (an account M2M `service_principal_secrets.create()`
