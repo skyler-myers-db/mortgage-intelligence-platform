@@ -1022,7 +1022,10 @@ instead; either way the deploy stops before the signed lease.
   same group rule to every space visible to the admin and lists each offending
   space, group and permission with its source: direct on the space, or
   inherited from a parent object (the permission's `inherited_from_object`,
-  named as `/Workspace/Shared` when it is that folder). Membership is the
+  named as `/Workspace/Shared` when it is that folder). It names each space by
+  its id only, never by its title, because on a shared workspace the list
+  includes other teams' spaces and the refusal reaches deploy and CI logs.
+  Membership is the
   workspace-SCIM direct and nested groups plus the system `users` group, which
   every workspace principal joins (so a space granting `users`, directly or
   through its folder, is always refused). The fix depends on the source:

@@ -8,6 +8,10 @@ itself. These helpers read every admin-visible Genie space's ACL once and list
 the grants those audits would refuse after step 0a. They perform only GET/list
 calls and change no exemption rule.
 
+A grant names its space by id only, never by title: the admin sees every
+team's spaces on a shared workspace, and the refusal reaches deploy stderr and
+CI logs, so another team's space title is never carried or printed.
+
 Each listed permission keeps where it comes from. A direct grant can be removed
 on the space; an inherited one (``inherited_from_object``, usually a workspace
 folder such as ``/Workspace/Shared``) cannot, and changing the parent folder's
@@ -104,7 +108,6 @@ def _granted_levels(entry: object) -> tuple[GrantedLevel, ...]:
 @dataclass(frozen=True)
 class _SpaceGrant:
     space_id: str
-    title: str
     granted: tuple[GrantedLevel, ...]
 
     @property
@@ -136,7 +139,7 @@ class GenieGroupGrant(_SpaceGrant):
 
     def describe(self, folders: Mapping[str, str] | None = None) -> str:
         return (
-            f"Genie space {self.space_id} ({self.title or 'untitled'}): group "
+            f"Genie space {self.space_id}: group "
             f"{self.group!r} holds {self._held(folders)}; reaches "
             f"{', '.join(self.principals)}"
         )
@@ -148,7 +151,7 @@ class VerifierGenieGrant(_SpaceGrant):
 
     def describe(self, folders: Mapping[str, str] | None = None) -> str:
         return (
-            f"Genie space {self.space_id} ({self.title or 'untitled'}): verifier service "
+            f"Genie space {self.space_id}: verifier service "
             f"principal {self.application_id!r} holds {self._held(folders)}"
         )
 
@@ -196,22 +199,24 @@ def shared_folder_names(workspace: Any, grants: Iterable[_SpaceGrant]) -> dict[s
     return {f"{_DIRECTORY_PREFIX}{object_id}": SHARED_FOLDER} if object_id else {}
 
 
-GenieAcl = tuple[str, str, object]
+GenieAcl = tuple[str, object]
 
 
 def genie_acls(workspace: Any) -> list[GenieAcl]:
-    """Read every admin-visible Genie space's ACL once: ``(space id, title, ACL)``."""
+    """Read every admin-visible Genie space's ACL once: ``(space id, ACL)``.
 
-    spaces = _genie_spaces(workspace)
+    The listing's titles are dropped here, so no refusal can print one.
+    """
+
     acls: list[GenieAcl] = []
-    for space_id in sorted(spaces):
+    for space_id in sorted(_genie_spaces(workspace)):
         try:
             permissions = workspace.api_client.do(
                 "GET", f"/api/2.0/permissions/genie/{space_id}"
             )
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"cannot inspect Genie ACL for {space_id!r}: {exc}") from exc
-        acls.append((space_id, spaces[space_id], permissions))
+        acls.append((space_id, permissions))
     return acls
 
 
@@ -226,7 +231,7 @@ def genie_group_grants(
     if not effective_groups:
         raise ValueError("at least one audited service principal is required")
     grants: list[GenieGroupGrant] = []
-    for space_id, title, permissions in genie_acls(workspace) if acls is None else acls:
+    for space_id, permissions in genie_acls(workspace) if acls is None else acls:
         for entry in _items(_field(permissions, "access_control_list")):
             group = _text(_field(entry, "group_name"))
             levels = _permission_levels(entry)
@@ -239,7 +244,6 @@ def genie_group_grants(
                 grants.append(
                     GenieGroupGrant(
                         space_id=space_id,
-                        title=title,
                         granted=_granted_levels(entry),
                         group=group,
                         principals=reached,
@@ -257,14 +261,13 @@ def verifier_genie_grants(
     if not application:
         raise ValueError("the verifier application ID is required")
     grants: list[VerifierGenieGrant] = []
-    for space_id, title, permissions in acls:
+    for space_id, permissions in acls:
         entry = _principal_entry(permissions, application_id=application)
         levels = _permission_levels(entry) if entry is not None else []
         if levels:
             grants.append(
                 VerifierGenieGrant(
                     space_id=space_id,
-                    title=title,
                     granted=_granted_levels(entry),
                     application_id=application,
                 )

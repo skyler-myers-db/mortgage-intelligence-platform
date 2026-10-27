@@ -303,6 +303,7 @@ class _ReadOnlyWorkspace:
         duplicate_principals: tuple[tuple[str, str], ...] = (),
         admin: str = "deployer@example.invalid",
         shared_folder: object = SHARED_DIRECTORY.rsplit("/", 1)[1],
+        titles: dict[str, str] | None = None,
     ) -> None:
         self._shared_folder = shared_folder
         self.calls: list[tuple[str, str]] = []
@@ -313,7 +314,7 @@ class _ReadOnlyWorkspace:
             *(principals if service_principals is None else service_principals).items(),
             *duplicate_principals,
         ]
-        titles = {space_id: f"Space {space_id}" for space_id in acls}
+        titles = titles or {space_id: f"Space {space_id}" for space_id in acls}
         pages = [
             {
                 "spaces": [{"space_id": space_id, "title": titles[space_id]}],
@@ -687,8 +688,8 @@ def test_any_genie_grant_to_the_verifier_is_refused_without_the_governed_space()
     assert len(refusals) == 1
     verifier = refusals[0]
     assert "--forbid-all-genie" in verifier
-    view = f"Genie space space-view (Space space-view): verifier service principal {VERIFIER_ID!r}"
-    mixed = f"Genie space space-mixed (Space space-mixed): verifier service principal {VERIFIER_ID!r}"
+    view = f"Genie space space-view: verifier service principal {VERIFIER_ID!r}"
+    mixed = f"Genie space space-mixed: verifier service principal {VERIFIER_ID!r}"
     assert f"{view} holds CAN_VIEW (inherited from an unnamed parent object)" in verifier
     # A direct CAN_RUN does not hide the inherited CAN_VIEW beside it.
     assert (
@@ -923,6 +924,37 @@ def test_main_resolves_each_principal_through_the_admin_scim_walk(
     )
 
 
+def test_refusals_name_genie_spaces_by_id_never_by_title(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # On a shared workspace the admin sees every team's spaces, and the refusal
+    # goes to deploy stderr and CI logs: name a space by its id, never its title.
+    import databricks.sdk
+
+    from tools.databricks import m2m_access_policy, provision_agentic_resources
+
+    workspace = _ReadOnlyWorkspace(
+        acls={
+            "space-one": _acl(_group("users", ("CAN_RUN", False))),
+            "space-two": _acl(_principal(VERIFIER_ID, ("CAN_VIEW", SHARED_DIRECTORY))),
+        },
+        app=_app(),
+        titles={"space-one": "Another Team Pipeline", "space-two": "Another Team Ledger"},
+    )
+    monkeypatch.setattr(databricks.sdk, "WorkspaceClient", lambda: workspace)
+    monkeypatch.setattr(provision_agentic_resources, "_supervisor_agents", lambda: [])
+    monkeypatch.setattr(m2m_access_policy, "resolve_effective_groups", _walk({}))
+    monkeypatch.delenv(ack.ACKNOWLEDGEMENT_ENV, raising=False)
+
+    rc = probes.main(_main_args())
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "Genie space space-one: group 'users' holds CAN_RUN" in captured.err
+    assert "Genie space space-two: verifier service principal" in captured.err
+    assert "Another Team" not in captured.out + captured.err
+
+
 def test_main_refuses_a_non_admin_inventory_principal(monkeypatch: pytest.MonkeyPatch) -> None:
     import databricks.sdk
 
@@ -1019,6 +1051,7 @@ def test_the_operator_contract_is_documented() -> None:
     assert "An inherited grant cannot be removed on the space." in doc
     assert "affects every workspace user's\n    shared content" in doc
     assert "on the space or on the folder it inherits from" not in doc
+    assert "names each space by\n  its id only, never by its title" in doc
 
 
 def _heading_indexes(lines: list[str]) -> list[int]:
