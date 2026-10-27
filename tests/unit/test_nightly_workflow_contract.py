@@ -9,6 +9,7 @@ the scoring job.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import textwrap
 from pathlib import Path
@@ -124,6 +125,8 @@ def test_bundle_commands_address_the_isolated_ci_staging_install() -> None:
 
 GUARD_JOB = "ci-install-isolation"
 CATALOG_ENV = ("MIP_DEFAULT_CATALOG", "MIP_LAKEBASE_SYNC_CATALOG", "BUNDLE_VAR_uc_catalog", "BUNDLE_VAR_lakebase_catalog_name")
+# A status check function that lets a job run after a failed need (`!cancelled()` included).
+STATUS_FUNCTION = re.compile(r"\b(?:always|failure|cancelled)\s*\(")
 
 
 def _needs(job: dict) -> set[str]:
@@ -160,6 +163,11 @@ def test_every_job_waits_on_the_uc_catalog_isolation_guard() -> None:
             assert GUARD_JOB in closure(name), name
             for scope in (job, *job.get("steps", [])):
                 assert not set(CATALOG_ENV) & set(scope.get("env") or {}), f"{name} overrides a catalog name"
+        # A job-level status function runs the job after a failed or skipped
+        # need, so `needs` alone would not stop it once the guard refuses
+        # (post-W5 review, mutant N7). Only the issue filer may use one.
+        if name != "notify-on-failure":
+            assert not STATUS_FUNCTION.search(str(job.get("if", ""))), f"{name} runs past a refused guard"
     notify = jobs["notify-on-failure"]
     assert GUARD_JOB in _needs(notify) and f"needs.{GUARD_JOB}.result == 'failure'" in notify["if"]
 
