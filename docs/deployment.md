@@ -1303,8 +1303,8 @@ found that it cannot deploy the live App by any supported path today:
   `scripts/deploy.sh` never creates one: it always passes
   `--expected-application-id`, and `provision_m2m_oauth` then refuses a
   missing principal.
-- The only path that mints a usable credential cannot serve the live
-  install from this repository (owner step 1).
+- The only path that mints a usable durable credential cannot serve the
+  live install from this repository (owner step 1).
 - The live App has no signed rollback record, so a first governed run stops
   it at step 0a and leaves it stopped if any later gate fails; on 2026-10-26
   two gates would have failed after that point.
@@ -1595,11 +1595,15 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    creates and deletes are not reserved identities.) Outside the deploy, a
    `provision_m2m_oauth` run without `--expected-application-id` can create
    a reserved principal, but with `--no-mint-secret` that principal has no
-   secret. The only path that mints a usable credential, for a new
+   secret. The only path that mints a usable durable credential, for a new
    principal or a rotation, is `--set-gh-secrets` with a reviewed `--gh-repo`;
    the governed creation run is
-   `provision_m2m_oauth --pre-app-bootstrap --set-gh-secrets`. That sink sends
-   each role's client id and one-shot secret only to a GitHub repository's
+   `provision_m2m_oauth --pre-app-bootstrap --set-gh-secrets`. (A deploy's
+   identity probes, `campaign_treatment_identity_probe` and
+   `identity_boundary_probes`, mint 300-second secrets for existing
+   principals and delete them after the probe; none is durable.) The
+   `--set-gh-secrets` sink sends each role's client id and one-shot secret
+   only to a GitHub repository's
    repository-level Actions secrets (`gh secret set --repo`): the reviewed
    `origin`, or the repository `MIP_M2M_GITHUB_REPOSITORY` names. The secret
    names are fixed per role (`IDENTITY_DEFAULTS`), and in this repository they

@@ -1032,8 +1032,15 @@ def test_the_live_app_has_no_governed_recovery_path_and_escalates_to_the_owner()
     assert "Never start `./scripts/deploy.sh -t dev` against the live workspace during an incident" in live
 
     assert "`scripts/deploy.sh` never creates a reserved principal" in step1
-    assert "The only path that mints a usable credential, for a new principal or a rotation, is `--set-gh-secrets`" in step1
-    assert "The only path that mints a usable credential cannot serve the live install" in live
+    assert "The only path that mints a usable durable credential, for a new principal or a rotation, is `--set-gh-secrets`" in step1
+    assert "The only path that mints a usable durable credential cannot serve the live install" in live
+    # Deploy-time identity probes do mint (and delete) 300-second secrets, so
+    # the claim holds only for durable credentials (post-W5 review).
+    assert "mint 300-second secrets for existing principals and delete them after the probe; none is durable." in step1
+    assert not re.search(r"mints a usable credential", flat), "every such claim says durable"
+    for probe in ("campaign_treatment_identity_probe", "identity_boundary_probes"):
+        source = (ROOT / "tools" / "databricks" / f"{probe}.py").read_text(encoding="utf-8")
+        assert re.search(r'_TEMPORARY\w*LIFETIME = "300s"', source), f"{probe}: the doc's 300-second claim"
     for loose in ("never creates a principal", "only governed creation path"):
         assert loose not in flat, loose
     for sink in (
