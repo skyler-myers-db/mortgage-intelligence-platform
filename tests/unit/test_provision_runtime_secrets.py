@@ -669,7 +669,7 @@ def test_no_configured_install_host_refuses(monkeypatch, capsys) -> None:
 
     assert capsys.readouterr().err == (
         "[runtime-secrets] refused: no install workspace host is configured to check "
-        f"{INSTALL_HOST} against. Set DATABRICKS_HOST in .env.local (deploy.sh requires it) "
+        f"{INSTALL_HOST} against. Set DATABRICKS_HOST in .env.local (deploy.sh documents it as required) "
         "or in the shell. Nothing was read or written.\n"
     )
 
@@ -707,6 +707,31 @@ def test_an_equivalent_spelling_of_the_install_host_is_accepted(
     assert capsys.readouterr().out.startswith(
         f"runtime secret plan for mip-runtime on {INSTALL_HOST}: "
     )
+
+
+@pytest.mark.parametrize(
+    ("resolved", "configured"),
+    (
+        (f"{INSTALL_HOST}.other.example", INSTALL_HOST),
+        (INSTALL_HOST, f"{INSTALL_HOST}.other.example"),
+        (INSTALL_HOST, INSTALL_HOST.replace("https://", "http://")),
+        (INSTALL_HOST.replace("https://", "http://"), INSTALL_HOST),
+    ),
+    ids=("resolved-extends-configured", "configured-extends-resolved", "http-configured", "http-resolved"),
+)
+def test_a_lookalike_of_the_install_host_refuses(
+    monkeypatch, capsys, resolved: str, configured: str
+) -> None:
+    """Hosts compare by strict equality: no prefix match, and the scheme counts."""
+    _required(monkeypatch)
+    monkeypatch.setenv(subject.DEPLOY_HOST_ENV, configured)
+    _resolving(monkeypatch, resolved)
+
+    assert subject.main(["--check"]) == 2
+
+    err = capsys.readouterr().err
+    assert f"the Databricks SDK resolved workspace {resolved}, " in err
+    assert f"MIP_DATABRICKS_WORKSPACE_HOST (shell) names {configured}." in err
 
 
 def test_a_refused_host_prints_neither_user_info_nor_path(monkeypatch, capsys) -> None:

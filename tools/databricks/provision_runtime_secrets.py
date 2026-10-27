@@ -34,8 +34,8 @@ DEFAULT profile, which can name another workspace; this tool never binds the
 configured install host (``DATABRICKS_HOST`` in the shell or ``.env.local``,
 and ``MIP_DATABRICKS_WORKSPACE_HOST``, which deploy.sh exports once it has
 bound the deployer), and at least one must be configured; otherwise the run
-refuses with exit 2 before any workspace call. Each summary line names the
-resolved host, which is not a secret.
+refuses with exit 2 before any Secrets API call (building the SDK client may
+already fetch a token from the resolved host). Each summary line names it.
 """
 
 from __future__ import annotations
@@ -208,7 +208,7 @@ def _install_hosts() -> tuple[tuple[str, str], ...]:
 def bound_workspace(client: Any | None = None) -> tuple[Any, str]:
     """The workspace client and its resolved host, proven to be the install's.
 
-    Runs before any workspace call. A secret read in the wrong workspace leaves
+    Runs before any Secrets API call. A secret read in the wrong workspace leaves
     getSecret audit entries there and returns a verdict about the wrong install.
     """
 
@@ -223,7 +223,7 @@ def bound_workspace(client: Any | None = None) -> tuple[Any, str]:
     if not install:
         raise WorkspaceHostRefused(
             f"no install workspace host is configured to check {resolved} against. Set "
-            f"{HOST_ENV} in .env.local (deploy.sh requires it) or in the shell. "
+            f"{HOST_ENV} in .env.local (deploy.sh documents it as required) or in the shell. "
             "Nothing was read or written."
         )
     mismatched = [

@@ -880,7 +880,11 @@ existing key:
   the provisioner and to the payload: a placeholder (such as `<password>`
   or `changeme`) counts as unset in both. So a key kept because its input is
   unset or a placeholder is never bound and cannot re-enable the connector
-  (`tests/unit/test_salesforce_secret_binding_parity.py`). Unsetting the
+  (`tests/unit/test_salesforce_secret_binding_parity.py`, through both the
+  shell and `.env.local`). A real secret shaped like a placeholder (it starts
+  with `<`, ends with `>`, or equals a placeholder word) is read the same way;
+  when the four non-secret inputs are set, the payload prints a names-only
+  `Salesforce notice:` naming each such input, never its value. Unsetting the
   inputs disables the connector but no longer
   clears the stored credentials. To revoke them deliberately, set the secret
   inputs to the replacement values, or have the owner delete the keys
@@ -897,8 +901,10 @@ reads it, and nothing refuses on it. A fingerprint pre-check that covers the
 current key is therefore the owner reading that note; only the mask
 comparison is enforced.
 
-Before its first workspace call, every mode of the tool (`--check`, the
+Before its first Secrets API call, every mode of the tool (`--check`, the
 write run, `--retire-previous`) proves which workspace it is about to call.
+Building the SDK client can already contact the resolved host for an OAuth
+token, but no secret is listed or read before the proof.
 `WorkspaceClient()` resolves the Databricks SDK's default chain: process
 environment first, then the `~/.databrickscfg` DEFAULT profile, which may name
 a different, shared workspace. The tool never binds the `.env.local` host or
