@@ -90,10 +90,11 @@ belongs to:
   recovers it today. Its command of record, an operator
   `./scripts/deploy.sh -t dev`, is NO-GO on the live workspace
   (docs/deployment.md, "The live install is outside this bootstrap, and its
-  governed deploy is NO-GO"). The workspace holds none of the seven reserved
-  principals, the deploy never creates one, and a failed first governed run
-  leaves the App stopped. Do not start that deploy during an incident, and do
-  not dispatch the workflow below for the live App. Escalate to the owner:
+  governed deploy is NO-GO"). A read-only listing on 2026-10-27 found none
+  of the seven reserved principals in the live workspace, the deploy never
+  creates one, and a failed first governed run leaves the App stopped. Do
+  not start that deploy during an incident, and do not dispatch the
+  workflow below for the live App. Escalate to the owner:
   any live-App recovery, including a manual restart or payload redeploy, is
   an owner-only decision.
 - **The CI staging install** (the forked-anchor `pr105-host` target,

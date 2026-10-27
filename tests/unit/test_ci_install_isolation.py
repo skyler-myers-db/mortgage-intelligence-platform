@@ -1004,6 +1004,8 @@ def test_the_live_app_has_no_governed_recovery_path_and_escalates_to_the_owner()
     ):
         assert anchor in recovery, anchor
     assert_no_live_recovery_overclaim(flat + " " + recovery)
+    assert "A read-only listing on 2026-10-27 found none of the seven reserved principals in the live workspace" in recovery
+    assert "The workspace holds none of the seven" not in recovery, "a dated finding, never an undated present fact"
     raw_recovery = _runbook_recovery()
     dispatch = raw_recovery[raw_recovery.index("gh workflow run deploy-dev.yml") : raw_recovery.index("# Fail closed unless")]
     assert "-f acknowledge_single_maintainer_break_glass=true" in dispatch, "or the run ends at refuse-unacknowledged"
