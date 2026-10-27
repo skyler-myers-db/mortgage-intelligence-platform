@@ -70,6 +70,7 @@ from tools.databricks.supervisor_agent_contract import (
 from tools.databricks.supervisor_creation_runtime import (
     assert_unique_live_supervisor_binding,
 )
+from tools.databricks.supervisor_retirement_ack import require_supervisor_retirement_acknowledgement
 
 
 def pin_journal(
@@ -83,6 +84,7 @@ def pin_journal(
     old_creator: str | None = None,
     old_create_time: str | None = None,
     old_gateway_endpoint: str | None = None,
+    retirement_acknowledgement: str | None = None,
 ) -> None:
     """Persist the destructive tuple in the runtime SP's server-owned home."""
 
@@ -94,6 +96,9 @@ def pin_journal(
         "canonical_name": canonical_name,
     }
     if old_id and old_endpoint and old_creator and old_create_time:
+        require_supervisor_retirement_acknowledgement(
+            old_id, old_creator, runtime_application_id, retirement_acknowledgement
+        )
         old = _agent_by_id(old_id)
         if old is None:
             raise RuntimeError("cannot pin a missing old Supervisor")
@@ -649,6 +654,7 @@ def retire(
         workspace,
         app_name=app_name,
         canonical_name=canonical_name,
+        runtime_application_id=runtime_application_id,
         old_id=old_id,
         old_endpoint=old_endpoint,
         old_endpoint_id=old_endpoint_id,

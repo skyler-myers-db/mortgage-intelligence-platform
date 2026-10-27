@@ -27,3 +27,4 @@
 - [Bundle experiment name rewrite](project_bundle_experiment_name_rewrite.md) — CLI rewrites dir+"/"+prefix+base in EVERY target; a root name renders "//name"; read rendered JSON, keep it under /Shared
 - [verify_scaffold makes a live call](project_verify_scaffold_live_call.md) — it runs `databricks apps get mip-app` from the repo cwd; run with the CLI off PATH in no-live-call lanes
 - [Runtime secret mask guard](project_runtime_secret_mask_guard.md) — mask change refuses, current key noted (report-only), unset/placeholder salesforce-* kept unbound; host proven first
+- [Pre-stop deploy probes](project_prestop_probes.md) — refuse before the lease; inherited Genie grants never sent to the space; resolver tests need a non-empty group

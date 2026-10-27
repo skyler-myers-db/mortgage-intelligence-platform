@@ -45,6 +45,7 @@ from tools.databricks.serving_query_group_access import (
     managed_query_group_external_id,
     managed_query_group_name,
 )
+from tools.databricks.supervisor_retirement_ack import UnacknowledgedSupervisorRetirement
 
 RUNTIME_ID = "runtime-client"
 NEW_ID = "new-supervisor"
@@ -410,6 +411,8 @@ def test_retire_rejects_unpinned_preserve_endpoint_before_any_acl(
 def test_prepare_then_retire_proves_green_and_deletes_only_pinned_old_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # The documented first migration: the operator named the human Supervisor.
+    monkeypatch.setenv("MIP_RETIRE_HUMAN_SUPERVISOR", OLD_ID)
     deleted = False
     events: list[str] = []
 
@@ -1064,6 +1067,7 @@ def _pin_test_journal(
         old_endpoint=OLD_ENDPOINT,
         old_creator="operator@summit.example",
         old_create_time="old-time",
+        retirement_acknowledgement=OLD_ID,
     )
     workspace.serving_endpoints.delete(OLD_ENDPOINT)
     return journal_path(RUNTIME_ID)
@@ -1605,6 +1609,36 @@ def test_stale_retirement_recovery_rejects_verifier_scim_drift_before_mutation(
     assert mutations == []
 
 
+def test_stale_retirement_recovery_re_checks_the_runtime_creator_before_deletion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A stale journal may predate pin_journal's acknowledgement check, so the
+    # retirement it resumes must judge the old creator against the runtime SP.
+    workspace = _stale_journal_workspace(old_endpoint_name=OLD_ENDPOINT)
+    _install_signed_blue_pin_env(monkeypatch)
+    retired: list[dict[str, object]] = []
+    monkeypatch.setattr(stale_recovery, "delete_pinned_gateway", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        stale_recovery,
+        "retire_pinned_supervisor",
+        lambda *_args, **kwargs: retired.append(kwargs),
+    )
+
+    stale_recovery.resume_stale_journal_retirement(
+        workspace,
+        runtime_application_id=RUNTIME_ID,
+        app_name="mip-app",
+        app_application_id="app-client",
+        verifier_application_id="verifier-client",
+        verifier_scim_id="verifier-scim-id",
+        proxy_application_id="proxy-client",
+        timeout_s=1,
+        assert_single_writer=_assert_lease,
+    )
+
+    assert [kwargs["runtime_application_id"] for kwargs in retired] == [RUNTIME_ID]
+
+
 def test_stale_clear_rejects_old_endpoint_omitted_from_list_but_live_by_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1999,6 +2033,7 @@ def test_cutover_journal_exports_immutable_endpoint_id(
         old_endpoint=OLD_ENDPOINT,
         old_creator="operator@summit.example",
         old_create_time="old-time",
+        retirement_acknowledgement=OLD_ID,
     )
     out_env = tmp_path / "cutover.env"
     cutover.export_journal(
@@ -2167,6 +2202,7 @@ def test_cutover_journal_rejects_runtime_home_tampering(
         old_endpoint=OLD_ENDPOINT,
         old_creator="operator@summit.example",
         old_create_time="old-time",
+        retirement_acknowledgement=OLD_ID,
     )
     path = journal_path(RUNTIME_ID)
     payload = json.loads(workspace.workspace.data[path])
@@ -2199,6 +2235,7 @@ def test_previous_key_journal_is_re_signed_under_current_deploy_key(
         old_endpoint=OLD_ENDPOINT,
         old_creator="operator@summit.example",
         old_create_time="old-time",
+        retirement_acknowledgement=OLD_ID,
     )
     assert workspace.workspace.upload_count == 1
 
@@ -2237,6 +2274,7 @@ def test_current_key_journal_refresh_does_not_rewrite(
         old_endpoint=OLD_ENDPOINT,
         old_creator="operator@summit.example",
         old_create_time="old-time",
+        retirement_acknowledgement=OLD_ID,
     )
 
     cutover.refresh_cutover_journal_attestation(
@@ -2260,6 +2298,85 @@ def test_missing_journal_refresh_is_a_noop() -> None:
     assert workspace.workspace.upload_count == 0
 
 
+def _pin_old_supervisor(
+    workspace: object, *, creator: str, acknowledgement: str | None
+) -> None:
+    cutover.pin_journal(
+        workspace,
+        assert_single_writer=_assert_lease,
+        runtime_application_id=RUNTIME_ID,
+        canonical_name="Mortgage Growth Agent",
+        old_id=OLD_ID,
+        old_endpoint=OLD_ENDPOINT,
+        old_creator=creator,
+        old_create_time="old-time",
+        retirement_acknowledgement=acknowledgement,
+    )
+
+
+@pytest.mark.parametrize(
+    ("acknowledgement", "reason"),
+    [
+        ("", "export MIP_RETIRE_HUMAN_SUPERVISOR=old-supervisor"),
+        ("1", "must be the Supervisor id itself, not a boolean"),
+        ("true", "must be the Supervisor id itself, not a boolean"),
+        ("other-supervisor", "names 'other-supervisor', not this Supervisor"),
+    ],
+)
+def test_pin_journal_refuses_unacknowledged_non_runtime_supervisor_before_pinning(
+    monkeypatch: pytest.MonkeyPatch,
+    acknowledgement: str,
+    reason: str,
+) -> None:
+    # Pinning makes the destructive tuple durable; a Supervisor the runtime SP
+    # did not create may only be pinned when the operator named its exact id.
+    workspace = _journal_workspace()
+    monkeypatch.setattr(cutover, "_supervisor_agents", _agents)
+    monkeypatch.setenv("MIP_RETIRE_HUMAN_SUPERVISOR", OLD_ID)
+
+    with pytest.raises(UnacknowledgedSupervisorRetirement, match=reason):
+        _pin_old_supervisor(
+            workspace, creator="operator@summit.example", acknowledgement=acknowledgement
+        )
+
+    assert workspace.workspace.upload_count == 0
+    assert journal_path(RUNTIME_ID) not in workspace.workspace.data
+
+
+def test_pin_journal_reads_the_operator_acknowledgement_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _journal_workspace()
+    monkeypatch.setattr(cutover, "_supervisor_agents", _agents)
+    monkeypatch.delenv("MIP_RETIRE_HUMAN_SUPERVISOR", raising=False)
+    with pytest.raises(UnacknowledgedSupervisorRetirement):
+        _pin_old_supervisor(workspace, creator="operator@summit.example", acknowledgement=None)
+    assert workspace.workspace.upload_count == 0
+
+    monkeypatch.setenv("MIP_RETIRE_HUMAN_SUPERVISOR", f" {OLD_ID} ")
+    _pin_old_supervisor(workspace, creator="operator@summit.example", acknowledgement=None)
+
+    assert workspace.workspace.upload_count == 1
+    assert json.loads(workspace.workspace.data[journal_path(RUNTIME_ID)])["old_id"] == OLD_ID
+
+
+def test_pin_journal_needs_no_acknowledgement_for_a_runtime_created_supervisor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _journal_workspace()
+    runtime_old = {**_agents()[1], "creator": RUNTIME_ID}
+    monkeypatch.setattr(cutover, "_supervisor_agents", lambda: [_agents()[0], runtime_old])
+    monkeypatch.setattr(
+        cutover, "_endpoint_identity", lambda _workspace, _name: (OLD_ENDPOINT_ID, RUNTIME_ID)
+    )
+    monkeypatch.delenv("MIP_RETIRE_HUMAN_SUPERVISOR", raising=False)
+
+    _pin_old_supervisor(workspace, creator=RUNTIME_ID, acknowledgement=None)
+
+    pinned = json.loads(workspace.workspace.data[journal_path(RUNTIME_ID)])
+    assert (pinned["old_id"], pinned["old_creator"]) == (OLD_ID, RUNTIME_ID)
+
+
 def test_existing_journal_refuses_same_name_endpoint_with_different_immutable_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2274,6 +2391,7 @@ def test_existing_journal_refuses_same_name_endpoint_with_different_immutable_id
         old_endpoint=OLD_ENDPOINT,
         old_creator="operator@summit.example",
         old_create_time="old-time",
+        retirement_acknowledgement=OLD_ID,
     )
     workspace.serving_endpoints = _journal_workspace(
         endpoint_id="replacement-endpoint-id"
@@ -2289,6 +2407,7 @@ def test_existing_journal_refuses_same_name_endpoint_with_different_immutable_id
             old_endpoint=OLD_ENDPOINT,
             old_creator="operator@summit.example",
             old_create_time="old-time",
+            retirement_acknowledgement=OLD_ID,
         )
 
 
@@ -2307,6 +2426,7 @@ def test_second_run_recovers_journal_for_exact_orphan_cleanup(
         old_endpoint=OLD_ENDPOINT,
         old_creator="operator@summit.example",
         old_create_time="old-time",
+        retirement_acknowledgement=OLD_ID,
     )
 
     # Simulate the prior run deleting the agent, then failing before orphan
@@ -2805,6 +2925,7 @@ def test_retired_endpoint_group_cleanup_refuses_live_endpoint() -> None:
 def test_legacy_old_supervisor_skips_revoke_before_pinned_deletion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("MIP_RETIRE_HUMAN_SUPERVISOR", OLD_ID)
     workspace = _journal_workspace()
     _install_supervisor_journal(workspace)
     agent_deleted = False
@@ -2997,6 +3118,7 @@ def test_old_supervisor_lost_lease_blocks_acl_and_agent_delete(
     fail_on: int,
     expected: list[str],
 ) -> None:
+    monkeypatch.setenv("MIP_RETIRE_HUMAN_SUPERVISOR", OLD_ID)
     mutations: list[str] = []
     checks = 0
 
@@ -3039,6 +3161,44 @@ def test_old_supervisor_lost_lease_blocks_acl_and_agent_delete(
         )
 
     assert mutations == expected
+
+
+def test_retire_refuses_an_unacknowledged_human_supervisor_before_any_supervisor_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The retire command judges the pinned creator against its own runtime id,
+    # so a journal pinned without pin_journal's check still needs the export.
+    # This journal pins no old Gateway. When one is pinned, retire() retires it
+    # first (deleting it only when the runtime SP created it, otherwise only
+    # revoking the App's and verifier's access), so the refusal then follows
+    # that Gateway step, which is the reviewed path whatever the Supervisor's fate.
+    monkeypatch.delenv("MIP_RETIRE_HUMAN_SUPERVISOR", raising=False)
+    mutations: list[str] = []
+    workspace = _journal_workspace()
+    _install_supervisor_journal(workspace)
+    monkeypatch.setattr(cutover, "_supervisor_agents", _agents)
+    monkeypatch.setattr(cutover, "_assert_green_path", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        cutover,
+        "revoke_managed_app_access",
+        lambda *_a, **_kw: mutations.append("revoke") or "managed",
+    )
+    monkeypatch.setattr(cutover, "_run_no_json", lambda _args: mutations.append("delete-agent"))
+
+    with pytest.raises(UnacknowledgedSupervisorRetirement, match="export MIP_RETIRE_HUMAN"):
+        cutover.retire(
+            workspace,
+            app_name="mip-app",
+            old_id=OLD_ID,
+            old_endpoint=OLD_ENDPOINT,
+            old_endpoint_id=OLD_ENDPOINT_ID,
+            old_creator="operator@summit.example",
+            old_create_time="old-time",
+            timeout_s=1,
+            **_green_kwargs(),
+        )
+
+    assert mutations == []
 
 
 def test_orphan_endpoint_lost_lease_blocks_delete(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3125,6 +3285,7 @@ def test_journal_persist_lost_lease_blocks_workspace_write(
             old_endpoint=OLD_ENDPOINT,
             old_creator="operator@summit.example",
             old_create_time="old-time",
+            retirement_acknowledgement=OLD_ID,
             assert_single_writer=lambda: (_ for _ in ()).throw(RuntimeError("lease lost")),
         )
 
@@ -3142,6 +3303,7 @@ def test_journal_refresh_lost_lease_blocks_rewrite(monkeypatch: pytest.MonkeyPat
         old_endpoint=OLD_ENDPOINT,
         old_creator="operator@summit.example",
         old_create_time="old-time",
+        retirement_acknowledgement=OLD_ID,
         assert_single_writer=_assert_lease,
     )
     old_verify = derive_gateway_proof_verify_key(SIGNING_KEY)
