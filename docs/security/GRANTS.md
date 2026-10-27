@@ -506,30 +506,30 @@ Because the excluded MIP workspace cannot enumerate foreign direct grants after
 convergence, the live postflight must separately use each retained bound
 workspace to prove its expected access and grant behavior.
 
-The command of record is the manual `deploy-dev` workflow with its one-time
-input, after the exact environment policy has been independently reviewed:
+**Foreign-catalog remediation has no CI command of record (post-W5,
+2026-10-27).** It used to be the manual `deploy-dev` workflow's one-time
+`remediate_foreign_catalog_bindings` input. Since post-W5 that workflow deploys
+only the CI staging install on the forked-anchor `pr105-host` target
+(docs/deployment.md, "CI staging install"), and the isolation rule table
+(`tools/databricks/ci_install_isolation.py`) refuses the input there: a
+dispatch with `remediate_foreign_catalog_bindings=true` exits 2 in the
+`scripts/deploy.sh` preflight, before any mutation. The refusal is
+deliberate. The `pr105-host` workspace shares the live install's Unity Catalog
+metastore, and a catalog's isolation mode and workspace bindings are
+metastore-level state: this remediation sets each catalog the policy names
+`ISOLATED` with exactly the policy's bindings, so every workspace the policy
+does not bind loses that catalog, the live workspace and every other team's
+included. A policy entry for a catalog the live install reads (`mip`,
+`mip_app_state`, the share catalog `cotality_mortgage_data`) must keep the live
+workspace bound. The operator path, `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1
+./scripts/deploy.sh -t dev`, targets the live workspace, whose governed deploy
+is NO-GO (docs/deployment.md, "The live install is outside this bootstrap, and
+its governed deploy is NO-GO").
+Any metastore-wide remediation is therefore an owner-only, separately reviewed
+decision, and the bootstrap never runs it (docs/deployment.md, owner step 8).
 
-```bash
-BRANCH="$(git branch --show-current)"
-gh workflow run deploy-dev.yml --ref "$BRANCH" \
-  -f remediate_foreign_catalog_bindings=true \
-  -f skip_silver=false \
-  -f skip_smoke=false
-```
-
-That workflow supplies the separated workspace, account-SCIM, runtime, and
-proof-signing authorities. Since post-W5 it deploys only the CI staging install
-on the forked-anchor `pr105-host` target (docs/deployment.md, "CI staging
-install"). That workspace shares the live install's Unity Catalog metastore,
-and a catalog's isolation mode and workspace bindings are metastore-level
-state: this remediation sets each catalog the policy names `ISOLATED` with
-exactly the policy's bindings, so every workspace the policy does not bind
-loses that catalog, the live workspace and every other team's included. A
-policy entry for a catalog the live install reads (`mip`, `mip_app_state`, the
-share catalog `cotality_mortgage_data`) must keep the live workspace bound, and
-the bootstrap never dispatches this remediation (docs/deployment.md, owner
-step 8). `scripts/deploy.sh` acquires the signed App lease and
-starts its parent-PID-fenced heartbeat. It requires an existing stable App,
+When an owner-approved run does reach it, `scripts/deploy.sh` acquires the
+signed App lease and starts its parent-PID-fenced heartbeat. It requires an existing stable App,
 stops the exact immutable App identity before any recovery or fresh catalog
 write, and then runs `snapshot`, `apply`, and `verify`. A signed immutable
 completion record is written only after the whole-policy verification passes.

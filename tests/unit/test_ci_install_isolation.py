@@ -831,6 +831,33 @@ def test_the_live_app_has_no_governed_recovery_path_and_escalates_to_the_owner()
     assert "must keep the live workspace bound" in grants
 
 
+def test_grants_gives_foreign_catalog_remediation_no_ci_command_of_record() -> None:
+    """Round 3 (post-W5 review G2/B1): GRANTS.md never names a refused dispatch as the command of record.
+
+    The rule table refuses the deploy-dev input on pr105-host (exit 2, before
+    any mutation), the operator path targets the NO-GO live workspace, so the
+    remediation is an owner-only, separately reviewed decision. The refusal
+    itself is pinned by test_foreign_catalog_remediation_is_refused_on_the_forked_anchor_target.
+    """
+
+    raw = GRANTS_DOC.read_text(encoding="utf-8")
+    grants = _flat(raw)
+
+    assert "The command of record is the manual `deploy-dev` workflow" not in grants
+    assert "**Foreign-catalog remediation has no CI command of record (post-W5, 2026-10-27).**" in grants
+    assert (
+        "a dispatch with `remediate_foreign_catalog_bindings=true` exits 2 in the `scripts/deploy.sh` "
+        "preflight, before any mutation"
+    ) in grants
+    assert "The operator path, `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1 ./scripts/deploy.sh -t dev`, targets the live workspace, whose governed deploy is NO-GO" in grants
+    assert "Any metastore-wide remediation is therefore an owner-only, separately reviewed decision" in grants
+    # The dead dispatch never comes back as a runnable block, and the input
+    # appears only beside its refusal.
+    assert "-f remediate_foreign_catalog_bindings=true" not in raw
+    for match in re.finditer(r"remediate_foreign_catalog_bindings=true", grants):
+        assert "exits 2" in grants[match.end() : match.end() + 20], "only next to the refusal"
+
+
 def test_every_reserved_identity_name_is_in_the_per_run_identities_table() -> None:
     """The contract the runbook cites cannot drift from the code that enforces it."""
 
