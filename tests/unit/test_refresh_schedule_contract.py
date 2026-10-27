@@ -18,6 +18,7 @@ import pytest
 import yaml
 
 from tests.fixtures.deploy_script import deploy_entrypoint_text
+from tools import verify_live_source_readiness as readiness
 from tools.databricks import bundle_env
 from tools.databricks import scheduled_refresh_posture as posture
 
@@ -172,6 +173,17 @@ def test_the_orchestrator_schedule_is_weekly_and_paused_by_a_variable_no_target_
     text = (ROOT / "databricks.yml").read_text(encoding="utf-8")
     assert text.count(f"{posture.PAUSE_VARIABLE}:") == 1, "declared once, set by no target"
     assert text.count(f"{posture.RECIPIENTS_VARIABLE}:") == 1, "declared once, set by no target"
+
+
+def test_the_cadence_constant_follows_the_weekly_cron() -> None:
+    cron = _bundle()["resources"]["jobs"][ORCHESTRATOR]["schedule"]["quartz_cron_expression"]
+    seconds, minutes, hours, day_of_month, month, day_of_week, *_year = cron.split()
+
+    assert all(field.isdigit() for field in (seconds, minutes, hours)), "one fixed time of day"
+    assert (day_of_month, month) == ("?", "*")
+    assert re.fullmatch(r"MON|TUE|WED|THU|FRI|SAT|SUN", day_of_week), "a single weekday is a 7-day cadence"
+    assert readiness.SCHEDULED_REFRESH_CADENCE_DAYS == 7
+    assert readiness.DEFAULT_MAX_SOURCE_AGE_DAYS == readiness.SCHEDULED_REFRESH_CADENCE_DAYS + 1 == 8
 
 
 # ------------------------------------------ the deploy.sh block (pause status)
