@@ -104,9 +104,9 @@ rules
 end of button, Primary offer rules
 end of cell, Refinance review Primary offer rules
 cell, Opportunity score 88. Scores of 75+ are the strongest review candidates.
-Opportunity score 88. Scores of 75+ are the strongest review candidates., Opportunity score ranks lead strength on a 0-100 scale. Scores of 75+ are the strongest review candidates and include economics, intent, fit, relationship, and evidence.
-88
-end, Opportunity score 88. Scores of 75+ are the strongest review candidates., Opportunity score ranks lead strength on a 0-100 scale. Scores of 75+ are the strongest review candidates and include economics, intent, fit, relationship, and evidence.
+Opportunity score ranks lead strength on a 0-100 scale. Scores of 75+ are the strongest review candidates and include economics, intent, fit, relationship, and evidence.
+Opportunity score 88. Scores of 75+ are the strongest review candidates.
+end, Opportunity score ranks lead strength on a 0-100 scale. Scores of 75+ are the strongest review candidates and include economics, intent, fit, relationship, and evidence.
 end of cell, Opportunity score 88. Scores of 75+ are the strongest review candidates.
 cell, Recommendation signal strength 80 percent.
 meter, Recommendation signal strength 80 percent., Signal strength is a deterministic average of the five scoring sub-scores, not a statistical confidence interval., min value 0, max value 100, current value Recommendation signal strength 80 percent.

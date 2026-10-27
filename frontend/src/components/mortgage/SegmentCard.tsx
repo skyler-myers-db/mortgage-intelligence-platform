@@ -171,8 +171,11 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
       </div>
       <div className="seg-card__count-row">
         {gated ? (
-          <div className="seg-card__count num seg-card__count--gated" aria-label={`Segment gated: source ${gateLabel}`}>
-            —
+          // Hidden text, not an aria-label: ARIA 1.2 prohibits a name on a
+          // role-less div, and the dash alone reads as nothing.
+          <div className="seg-card__count num seg-card__count--gated">
+            <span aria-hidden="true">—</span>
+            <span className="sr-only">{`Segment gated: source ${gateLabel}`}</span>
           </div>
         ) : (
           <div className="seg-card__count num">{formatCount(segment.count)}</div>

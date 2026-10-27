@@ -12,12 +12,14 @@ export function ScoreBadge({ value }: { value: number }) {
   const tier = scoreBand(value);
   return (
     <Tooltip content={SCORE_NOTE}>
-      <span
-        className={`score score--${tier}`}
-        aria-label={`Opportunity score ${value}. Scores of ${HIGH_OPPORTUNITY_SCORE_LABEL} are the strongest review candidates.`}
-      >
+      {/* The sentence is visually hidden text, not an aria-label: ARIA 1.2
+          prohibits a name on a role-less span, and screen readers that honour
+          the rule read only the bare number. One hidden run, with the shown
+          number hidden from assistive tech, so it is read as one phrase. */}
+      <span className={`score score--${tier}`}>
         <span className="score__dot" />
-        {value}
+        <span className="sr-only">{`Opportunity score ${value}. Scores of ${HIGH_OPPORTUNITY_SCORE_LABEL} are the strongest review candidates.`}</span>
+        <span aria-hidden="true">{value}</span>
       </span>
     </Tooltip>
   );
