@@ -113,6 +113,32 @@ def test_transitive_drift_is_named_with_both_versions_and_the_remedy(tmp_path: P
     assert lines[1:] == deps.remedy(deps.load_pins(tmp_path / "repo"), tmp_path / "repo")
 
 
+@pytest.mark.parametrize(
+    "installed",
+    (
+        # Patch level is where this repo's security pins live (mlflow 3.17.0 ->
+        # 3.17.2 for GHSA-wqmh-qccw-pqwf, cryptography 50.0.0 -> 50.0.1 for
+        # PYSEC-2026-3552), so a release[:2] or "compatible" compare is a hole.
+        "3.17.0",
+        "3.17.3",
+        "3.17.2.post1",
+        "3.17.2+local",
+        "3.17.2rc1",
+    ),
+)
+def test_a_version_that_differs_only_below_the_minor_is_drift(tmp_path: Path, installed: str) -> None:
+    code, lines = deps.check(_repo(tmp_path), _env({**INSTALLED, "mlflow-skinny": installed}))
+
+    assert (code, lines[0]) == (deps.EXIT_DRIFT, f"drift: mlflow-skinny installed {installed}, pinned 3.17.2")
+
+
+def test_an_equal_version_spelled_differently_is_pinned(tmp_path: Path) -> None:
+    # PEP 440 equality, not string equality: 3.17.2.0 is the pinned release.
+    code, lines = deps.check(_repo(tmp_path), _env({**INSTALLED, "mlflow-skinny": "3.17.2.0"}))
+
+    assert code == deps.EXIT_PINNED, lines
+
+
 def test_the_remedy_is_a_dedicated_venv_of_the_lock_python_selected_by_the_override(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     lines = deps.remedy(deps.load_pins(repo), repo)
