@@ -12,7 +12,7 @@
  * Substituted templates, regexes and strings under 6 characters are skipped.
  * Each literal must appear (case-insensitive, whitespace-normalized) in the
  * shipped-copy sources: frontend/src non-test, non-mocks .ts/.tsx/.json
- * (never the committed ZCTA geometry under src/geo/, whose 16 MB of
+ * (never the committed ZCTA geometry under src/geo/zcta/, whose 16 MB of
  * coordinates spell every comma-grouped count and carry no copy),
  * backend/**\/*.py and genie/**. Copy that only live DATA produces (a
  * borrower count, a server-built sentence) is listed in DATA_DERIVED_COPY
@@ -137,7 +137,7 @@ const isShippedFrontendSource = (path: string): boolean =>
   !path.includes('/src/test/') &&
   !path.includes('/src/mocks/') &&
   // Shape-only TopoJSON and its manifest: numbers, never copy (see the header).
-  !path.includes('/src/geo/');
+  !path.includes('/src/geo/zcta/');
 
 /**
  * The shipped-copy corpus, normalized, one string. It is raw source text,
