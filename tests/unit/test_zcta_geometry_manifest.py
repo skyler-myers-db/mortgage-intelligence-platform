@@ -143,7 +143,9 @@ def geometry_problems(
 
 # --- a synthetic scratch copy ---------------------------------------------
 
-_PINS = [{"name": name, "url": url, "sha256": f"{index:064x}"} for index, (name, url) in enumerate(CENSUS_URLS.items(), 1)]
+_PINS: list[dict[str, str | None]] = [
+    {"name": name, "url": url, "sha256": f"{index:064x}"} for index, (name, url) in enumerate(CENSUS_URLS.items(), 1)
+]
 
 
 def _square(arc: int) -> dict[str, Any]:
