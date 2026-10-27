@@ -84,6 +84,9 @@ def _sandbox(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
     env.update(
         {
             "APP_ENV": "local",
+            # A Python SDK client the dry run builds by mistake must fail
+            # offline, never resolve the developer's ~/.databrickscfg.
+            "DATABRICKS_CONFIG_FILE": str(tmp_path / "no-databrickscfg"),
             "DATABRICKS_STUB_LOG": str(log),
             "GENIE_SPACE_ID": "space-1",
             "DATABRICKS_AGENT_RUNTIME_CLIENT_ID": "dry-run-runtime-client-id",
