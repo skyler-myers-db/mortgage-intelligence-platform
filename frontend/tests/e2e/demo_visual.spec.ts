@@ -1,4 +1,5 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import { ZIP_STAGE, expectMapHeaderClear, segmentZipAreas } from './segmentZipAreas';
 
 const LIVE = process.env.E2E_LIVE === '1';
 test.skip(!LIVE, 'Set E2E_LIVE=1 to run demo visual regression checks.');
@@ -148,10 +149,12 @@ async function drillToZipLayer(page: Page, target: MapDrillTarget, segmentCodes:
   const zipResponse = page
     .waitForResponse(filteredGeoResponse(segmentCodes, '/api/geo/zip-rollups'), { timeout: 45_000 })
     .catch((error: Error) => error);
-  // One click: state -> ZIP tiles.
+  // One click: state -> the ZIP stage (Segments' ZIP areas, or Home's tiles;
+  // the caller asserts which). The ZCTA rung and its geometry load after the
+  // ZIP rollup, so the wait allows more than the tiles alone needed.
   await clickSvgRegion(page, state, target.stateName);
-  await expect(page.locator('.zip-tiles'), `${target.stateName} pointer click should drill into ZIPs`)
-    .toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(ZIP_STAGE).first(), `${target.stateName} pointer click should drill into ZIPs`)
+    .toBeVisible({ timeout: 30_000 });
   await expect(page.locator('.map-crumbs')).toContainText(target.stateName, { timeout: 5_000 });
   const zipResult = await zipResponse;
   if (zipResult instanceof Error) throw zipResult;
@@ -318,32 +321,16 @@ test.describe('Module 0 demo visual baselines', () => {
     await stateResponse;
     const target = await discoverMapDrillTarget(request, segmentCodes);
     await drillToZipLayer(page, target, segmentCodes);
-    await expect(page.locator('.zip-tiles')).toBeVisible({ timeout: 10_000 });
+    // Segment Intelligence draws the drilled state's committed ZCTA polygons
+    // (W5c dataviz-01, deviation:zcta-level), with the zoom row in the
+    // corner tray beside the chips.
+    const zipAreas = segmentZipAreas(page, target.stateName);
+    await expect(zipAreas, `ZIP areas in ${target.stateName}`).toBeVisible({ timeout: 10_000 });
 
     for (const width of [1440, 1280, 1150, 1024]) {
       await page.setViewportSize({ width, height: 900 });
-      const header = await page.locator('.map-hdr').boundingBox();
-      const zipGrid = await page.locator('.zip-tiles').boundingBox();
-      const crumbs = await page.locator('.map-crumbs').boundingBox();
-      const chips = await page.locator('.map-corner-chips').boundingBox();
-      expect(header, `map header should render at ${width}px`).toBeTruthy();
-      expect(zipGrid, `ZIP grid should render at ${width}px`).toBeTruthy();
-      if (header && zipGrid) {
-        expect(header.y + header.height, `map header should not overlap ZIP grid at ${width}px`).toBeLessThanOrEqual(
-          zipGrid.y + 1,
-        );
-      }
-      expect(crumbs, `map crumbs should render at ${width}px`).toBeTruthy();
-      expect(chips, `map chips should render at ${width}px`).toBeTruthy();
+      await expectMapHeaderClear(page, zipAreas, `segment ZIP map ${width}px`);
       await expectMapCornerIconsCompact(page, `segment ZIP map ${width}px`);
-      if (crumbs && chips) {
-        const separated =
-          crumbs.x + crumbs.width <= chips.x ||
-          chips.x + chips.width <= crumbs.x ||
-          crumbs.y + crumbs.height <= chips.y ||
-          chips.y + chips.height <= crumbs.y;
-        expect(separated, `map header overlays should not collide at ${width}px`).toBe(true);
-      }
     }
 
     await page.getByRole('button', { name: /^US$/ }).click();

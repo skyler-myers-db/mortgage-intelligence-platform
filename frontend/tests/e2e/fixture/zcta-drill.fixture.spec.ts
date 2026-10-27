@@ -21,6 +21,9 @@
  *    that fails (or a state with no file) falls back to the densest-ZIP
  *    tiles with their status line; with no geometry committed at all, a
  *    drill would show the plain tiles with no status line (nothing failed).
+ *  - The nightly live specs' Segments drills (real_data, live_hardening,
+ *    demo_visual) assert the polygon stage through tests/e2e/segmentZipAreas.ts;
+ *    the same helpers run here on the fixture build, on every change.
  *
  * The approved operator build committed frontend/src/geo/zcta on 2026-10-26,
  * so every polygon-dependent case runs; each would turn back into a fixme
@@ -32,6 +35,13 @@ import path from 'node:path';
 import type { Page, Request } from '@playwright/test';
 import type { ZipRollupResponse } from '../../../src/types';
 import type { FixtureTheme } from './app';
+import {
+  ZIP_STAGE,
+  clickPopulatedZipArea,
+  expectMapHeaderClear,
+  expectZipAreasPainted,
+  segmentZipAreas,
+} from '../segmentZipAreas';
 import { expectAxeClean } from './axe';
 import { emptyZipRollupsFixture } from './data/mapEncoding';
 import { json } from './mockApi';
@@ -247,6 +257,52 @@ test.describe('ZIP areas (needs the committed geometry)', () => {
       return { stroke: getComputedStyle(path).stroke, canvasText };
     });
     expect(outline.stroke).toBe(outline.canvasText);
+  });
+
+  // The nightly live suite's Segments drills, on the fixture build: the
+  // same helpers (tests/e2e/segmentZipAreas.ts) the live specs call.
+  test('the live Segments drill (real_data, live_hardening): segment-filtered ZIP areas, a clear header, and a ZIP area opens its filtered Lead Queue', async ({ app, mockApi, page }) => {
+    await app.gotoRoute(SEGMENTS);
+    for (const title of ['In the Money', 'Home Equity Candidate']) {
+      await page.locator('.seg-card', { hasText: title }).locator('.seg-card__select').click();
+    }
+    await expect.poll(() => new URL(page.url()).searchParams.get('segment_codes')).toBe('itm,equity');
+    await app.settle();
+    await drill(page, 'il');
+    await expect(page.locator(ZIP_STAGE).first()).toBeVisible();
+    const zipAreas = segmentZipAreas(page, 'Illinois');
+    await expect(zipAreas).toBeVisible();
+    const rollupCall = mockApi.calls.filter((call) => call.path === '/api/geo/zip-rollups').at(-1);
+    const sent = new URLSearchParams(rollupCall?.search ?? '');
+    expect(sent.get('segment_codes')).toBe('itm,equity');
+    expect(sent.get('segment_mode')).toBe('any');
+    await expectZipAreasPainted(zipAreas, 'ZIP areas in Illinois');
+    await expectMapHeaderClear(page, zipAreas, 'segment ZIP map');
+
+    const zip = await clickPopulatedZipArea(page, zipAreas);
+    await expect(page).toHaveURL(/\/lead-queue\?/);
+    const url = new URL(page.url());
+    expect(url.searchParams.get('state')).toBe('IL');
+    expect(url.searchParams.get('county')).toBeNull();
+    expect(url.searchParams.get('zip')).toBe(zip);
+    expect(url.searchParams.get('segment_mode')).toBe('any');
+    expect(url.searchParams.get('segment_codes')).toBe('itm,equity');
+    await app.settle();
+    const leads = new URLSearchParams(mockApi.calls.filter((call) => call.path === '/api/leads').at(-1)?.search ?? '');
+    expect(leads.get('zip')).toBe(zip);
+    expect(leads.get('segment_codes')).toBe('itm,equity');
+  });
+
+  test('the live ZIP-layer header check (demo_visual): the header clears the ZIP areas from 1440 to 1024px', async ({ app, page }) => {
+    await app.gotoRoute(SEGMENTS);
+    await drill(page, 'tx');
+    const zipAreas = segmentZipAreas(page, 'Texas');
+    await expect(zipAreas).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Fit to the populated ZIP areas' })).toBeVisible();
+    for (const width of [1440, 1280, 1150, 1024]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expectMapHeaderClear(page, zipAreas, `segment ZIP map ${width}px`);
+    }
   });
 
   test('report-only: TX drill-to-paint at 4x CPU', async ({ app, browserName, page }) => {
