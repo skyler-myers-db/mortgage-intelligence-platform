@@ -12,10 +12,13 @@ Fridays 06:00 America/Chicago: FRED -> gold -> lifecycle -> KPI), so
 ``checked_at`` stays fresh within ``DEFAULT_MAX_SOURCE_AGE_DAYS``, that cadence
 plus 1 day (8), unless the operator passes ``--max-source-age-days``; another
 install passes its own cadence plus 1. Silver stays on demand because the
-Cotality eval share is static. The schedule lands only through a governed
-``deploy.sh`` run, so until one reaches the dev workspace the flag stays
-expected. Each stale flag prints the measured age against the threshold, so a
-reader sees how stale, not only that it is.
+Cotality eval share is static. The schedule lands only through a GO governed
+``deploy.sh`` run. Until one does, ``checked_at`` on dev moves only when gold
+is rebuilt (a full governed ``deploy.sh`` run, or an operator-run interim
+refresh; one ran on 2026-10-27) and ages between rebuilds, so the flag fires
+once the last rebuild is older than the threshold. Each stale flag prints the
+measured age against the threshold, so a reader sees how stale, not only that
+it is.
 """
 
 from __future__ import annotations

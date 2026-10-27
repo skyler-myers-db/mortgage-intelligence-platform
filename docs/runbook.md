@@ -586,8 +586,13 @@ fingerprints that match the operator's values; a dedicated venv built from
 the live App before the bundle apply, so a later failure without a signed
 last-good record leaves the App stopped. On 2026-10-27 that run was NO-GO on
 the dev workspace. Until a GO run applies the job, the workspace keeps its
-older job definitions and `checked_at` stays stale, and `tools/verify_live.py`
-keeps flagging it. That flag is correct.
+older job definitions and nothing refreshes dev on a schedule. `checked_at`
+(gold's refresh anchor, the newest `mip.ref.refresh_run_state` row) moves only
+when gold is rebuilt: by a full governed `deploy.sh` run, or by an
+operator-run interim refresh of FRED and gold that leaves out every
+`publish_fn_*` task. One such interim refresh ran on 2026-10-27 and moved it to
+06:48 UTC that day. Between rebuilds it ages, and `tools/verify_live.py` flags
+it once it is more than 8 days old. That flag is correct.
 
 Never unpause, `run-now` or Admin-trigger a deployed child job whose definition
 predates the current bundle. For example, a gold job that still carries
@@ -604,10 +609,13 @@ predates the current bundle. For example, a gold job that still carries
   listed-for-sale borrowers at the first Friday run, about 12% fewer by late
   January 2027, and none by about June 2027 unless the share is re-delivered.
   The new FRED rate is real freshness; this drain is decay.
-- **FRED gap.** On 2026-10-26 the dev `is_latest` MORTGAGE30US row was the week
-  of 2026-08-03, so 11 weekly prints (13 August to 22 October 2026) were
-  missing. The first FRED plus gold refresh picks them up. Expect In-the-Money,
-  rate spreads, segment counts and the rate window to move.
+- **FRED gap (closed 2026-10-27).** On 2026-10-26 the dev `is_latest`
+  MORTGAGE30US row was the week of 2026-08-03, so 11 weekly prints (13 August
+  to 22 October 2026) were missing. The 2026-10-27 interim refresh loaded all
+  11: `is_latest` is now the week of 2026-10-19 (7.32%), and gold scores at
+  that rate. In-the-Money, rate spreads, segment counts and the rate window
+  moved with it. Until a GO deploy lands the schedule, each later Thursday
+  print reaches dev only through another FRED plus gold refresh.
 - **Treatment-table DDL race.** The FRED job's `init_ddl` task runs
   `001_catalogs_schemas.sql`, which re-asserts
   `ALTER TABLE <catalog>.audit.campaign_treatment_snapshot SET TBLPROPERTIES`
