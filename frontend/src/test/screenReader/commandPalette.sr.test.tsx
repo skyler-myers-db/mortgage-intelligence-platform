@@ -107,6 +107,8 @@ describe('virtual screen reader: command palette', () => {
       await nextUntil(/^listbox/);
       await nextUntil(/^end of listbox/);
     });
+    // The results listbox is named (ARIA 1.2; axe skips a combobox popup's listbox).
+    expect(list).toContain('listbox, Search results, orientated vertically');
     expect(list.some((phrase) => /^group, /.test(phrase))).toBe(true);
     expect(list.filter((phrase) => /^option, .*, selected/.test(phrase))).toHaveLength(1);
 

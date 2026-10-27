@@ -394,7 +394,9 @@ export function CommandPaletteDialog({ open, onClose: close }: CommandPaletteDia
           <kbd className="cmdk__hint">esc</kbd>
         </div>
 
-        <div className="cmdk__list" id="cmdk-listbox" role="listbox" ref={listRef}>
+        {/* ARIA 1.2 requires a listbox's name; axe skips a combobox popup's,
+            so commandPalette.sr.test.tsx pins it (VPAT 4.1.2). */}
+        <div className="cmdk__list" id="cmdk-listbox" role="listbox" aria-label="Search results" ref={listRef}>
           {/* The Genie row is a way out, not a match: the empty state still
               says so when nothing else matched. While the borrower search
               runs or after it failed, its status line shows instead (shell-07

@@ -7,7 +7,7 @@ combobox, Search borrowers, ZIPs, pages, and actions, has popup listbox, expande
 
 ## Read the listbox with the virtual cursor
 esc
-listbox, orientated vertically
+listbox, Search results, orientated vertically
 group, Pages and actions
 Pages & actions
 option, Home /, not selected, position 1, set size 13
@@ -64,7 +64,7 @@ What this page binds
 ?
 end of option, Keyboard shortcuts What this page binds ?, not selected, key shortcuts ?, position 13, set size 13
 end of group, Pages and actions
-end of listbox, orientated vertically
+end of listbox, Search results, orientated vertically
 
 ## Type a query nothing matches
 polite: Searching borrowers…
