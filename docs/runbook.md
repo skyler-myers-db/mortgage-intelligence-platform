@@ -571,18 +571,45 @@ How it is switched on:
   `.databricks/bundle/dev/variable-overrides.json`, because the CLI refuses a
   `BUNDLE_VAR_` export for a list variable. The `dev-ci` leaf and prod get no
   recipient: the CI deployer is a service principal whose user name is an
-  application id, not an email address.
+  application id, not an email address. The live install and the `dev-ci`
+  leaf share that file in one checkout (both are target `dev`), and
+  `bundle_env.py` rewrites it before every CLI call, so run one install's
+  bundle commands at a time per checkout. CI deploys `dev-ci` from its own
+  runner.
 
 **How it lands.** The schedule reaches a workspace only through the bundle
 apply inside a full governed `./scripts/deploy.sh -t dev` run. A Jobs-UI
 unpause is reverted by the next deploy, and there is no other delivery path.
-That run is GO only when all of these hold: a clean checkout at `origin/main`;
-the per-run M2M identities and both signing keys in the operator's shell (see
-`docs/deployment.md`, "Per-run M2M identities"); no foreign catalog that grants
-`account users` (the step-4 foreign-UC audit); no unrelated serving-endpoint
-access on the App service principal; a green smoke run; `mip-runtime` secret
-fingerprints that match the operator's values; a dedicated venv built from
-`requirements.txt`; and an accepted App outage. Step 0a stops and quarantines
+That run is GO only when all of these hold:
+
+- a clean checkout exactly at `origin/main`, the operator's own, with its own
+  `.env.local`;
+- the per-run M2M identities (the `DATABRICKS_*_CLIENT_*` and `ACCOUNT_*`
+  values) and both signing keys exported in the operator's shell (see
+  `docs/deployment.md`, "Per-run M2M identities");
+- no foreign catalog that grants `account users` (the step-4 foreign-UC
+  audit), each one resolved with its catalog owner;
+- no unrelated serving-endpoint grant on the App service principal;
+- no Genie space that the App service principal reaches through a group grant,
+  such as workspace `users` on another team's space. The runtime and verifier
+  audits refuse it at cutover, after the App is stopped. Revoke the grant with
+  the space owner's consent; never exempt the group in the audits;
+- a smoke script whose geo-drill probe checks the shipped state → ZIP drill,
+  not the retired county grain;
+- `mip-runtime` mask and current secret fingerprints that match the operator's
+  values, and the `SALESFORCE_*` values supplied or their loss accepted;
+- a dedicated venv built from `requirements.txt` at the interpreter path
+  `deploy.sh` actually uses (a separately named venv is never picked up);
+- the owner's decision on a human-created Supervisor that holds the canonical
+  name: the first agentic cutover retires it and deletes its serving endpoint,
+  which cannot be undone (`docs/deployment.md`, the first migration from a
+  human-owned Supervisor). Accept that, or rename it off the canonical name
+  first;
+- an accepted App outage of 3.5 to 6 hours, with quarantine.
+
+The first signed install over an existing unsigned App also exports
+`MIP_REBASE_UNVERIFIED_APP=1` once, and the flag comes off after the first
+signed capture (`docs/deployment.md`). Step 0a stops and quarantines
 the live App before the bundle apply, so a later failure without a signed
 last-good record leaves the App stopped. On 2026-10-27 that run was NO-GO on
 the dev workspace. Until a GO run applies the job, the workspace keeps its
@@ -640,7 +667,33 @@ predates the current bundle. For example, a gold job that still carries
   and sends the failure email; re-run the orchestrator after the deploy.
 - **Run-as identity.** Scheduled runs execute as the dev run-as user (the
   deploying user). If that identity loses access, runs fail and the email
-  fires.
+  fires. Deploy the live install as a user: with the schedule `UNPAUSED`, the
+  step 9c postflight refuses a failure recipient that is not an email address
+  (a service-principal deployer's application id).
+- **Piecewise-render trap.** The scheduled gold run reads the rendered SQL in
+  the bundle's `files/sql/_rendered/` tree. A piecewise upload of a render made
+  without `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1` (the stand-alone
+  `tools/render_sql.py` default is off) empties the Summit demo first-party
+  feeds at the next Friday run, unattended. Render every piecewise upload for
+  dev with `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1`; `deploy.sh` defaults it on
+  for `-t dev`. `tools/verify_live.py` detects the mistake as first-party
+  sources with `status=not_configured expected live/demo_synthetic`.
+- **Shared catalog.** The dev schedule rebuilds gold in the dev install's
+  catalog every week. If a prod install ever shares catalog `mip` in the same
+  workspace, it would rebuild prod's gold too. Give prod its own catalog
+  (for example `mip_prod`, see `docs/runbook-multi-catalog.md`), or set
+  `MIP_SCHEDULED_REFRESH=off` for dev.
+- **Postflight failure (step 9c).** Step 9c reads the stored job back after the
+  step-4 apply, the App promotion, the data refresh and the KPI snapshot,
+  while the deploy still holds the App's user access quarantined. The SDK
+  retries transient connection and timeout errors, so treat a failure as real:
+  the stored job is not what the deploy intended, or it cannot be read, and the
+  deploy stops there. If it reports `UNPAUSED` where `PAUSED` was expected,
+  pause `mip_scheduled_refresh` in the Jobs UI first (the next governed deploy
+  re-applies the intended state). Then fix the cause and re-run the governed
+  deploy, with `MIP_SCHEDULED_REFRESH=off` if the schedule itself is the
+  problem. The App follows the deploy's failure handling
+  (`docs/deployment.md`); without a signed last-good record it stays stopped.
 - **Numbers move weekly**, as the "follow current refreshed coverage" posture
   intends.
 - **Cost.** About $1.35 to $1.9 per run at list price (warehouse time for

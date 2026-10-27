@@ -108,6 +108,13 @@ def test_operator_docs_explain_app_refresh_default_and_paused_schedules() -> Non
         "**Treatment-table DDL race.**",
         "**Silent re-pause.**",
         "on the live install only",
+        # Design §7.1 risks and the full GO list (adversarial follow-ups).
+        "**Piecewise-render trap.**",
+        "**Shared catalog.**",
+        "**Postflight failure (step 9c).**",
+        "the `SALESFORCE_*` values supplied or their loss accepted",
+        "`MIP_REBASE_UNVERIFIED_APP=1` once",
+        "no Genie space that the App service principal reaches through a group grant",
     ):
         assert phrase in flat_runbook, phrase
     for doc in (flat_deployment, flat_runbook):

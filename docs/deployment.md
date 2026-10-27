@@ -1055,7 +1055,8 @@ live install only. The schedule reaches the workspace only through the bundle
 apply of a GO governed `./scripts/deploy.sh -t dev` run, and that run was NO-GO
 on the dev workspace on 2026-10-27. See `docs/runbook.md`, "Weekly scheduled
 refresh (dev live install)", for the GO conditions, the risks (static-share
-decay, the treatment-table DDL race, silent re-pause) and the read-only checks.
+decay, the treatment-table DDL race, silent re-pause, the piecewise-render trap,
+a shared catalog) and the read-only checks.
 
 The App binds the Growth Agent scheduler job read-only (App resource
 `growth_agent_scheduler_job`, permission `CAN_VIEW`, env
