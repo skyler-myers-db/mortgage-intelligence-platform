@@ -743,9 +743,14 @@ predates the current bundle. For example, a gold job that still carries
 Use this only on an install where the governed `./scripts/deploy.sh -t dev`
 is NO-GO (the GO list above) and dev data must move anyway. It rebuilds FRED
 and gold from the current `main` render with the App left running. It changes
-data only: no job definition, grant, ACL, secret, pipeline, dashboard, Genie
-space, App or Lakebase schema. It ran once, on 2026-10-27 (FRED 6.69% to 7.32%,
-In-the-Money 74,335 to 33,585, zero grant differences).
+data and, only when step 1 finds a FRED source file that differs from main's
+render, that file under the bundle root; never a job definition, grant, ACL,
+secret, pipeline, dashboard, Genie space, App or Lakebase schema. It ran once,
+on 2026-10-27 (FRED 6.69% to 7.32%, In-the-Money 74,335 to 33,585, zero grant
+differences, no upload). Step 4's verifier was substituted on 2026-10-27: that
+install had no agent-runtime or agent-proxy principal and no direct grants
+left on the reviewed functions, so the gate was the zero-difference grant diff
+plus the App SP's effective `EXECUTE`, as step 4 now prescribes.
 
 **Never `run-now`, unpause or Admin-trigger the deployed gold job
 (`mip_refresh_scores`) or the deployed lifecycle job (`mip_sync_lifecycle_state`)
@@ -755,9 +760,19 @@ on the three reviewed Growth Agent functions (`fn_build_cohort`,
 `fn_segment_counts`, `fn_lead_queue_url`), which drops the App, agent-runtime
 and agent-proxy `EXECUTE` grants. A stale lifecycle job still runs the retired
 `seed_default_state`. On such an install, press no Admin **Data operations**
-button either: **Rebuild scoring snapshot** runs the deployed gold job and
-**Sync workflow state** can queue the deployed lifecycle job. Rebuild gold with
-steps 2 to 4 below instead.
+button that runs a deployed job either: **Rebuild scoring snapshot** runs the
+deployed gold job, **Refresh market rates** runs the deployed FRED job without
+step 1's parity proof, and **Refresh source features** runs the deployed
+silver job. Rebuild gold with steps 2 to 4 below instead.
+
+**Sync workflow state** runs the warehouse lifecycle MERGE inside the App (the
+same work as step 6), not the deployed job. But an approve, reject or revoke
+whose warehouse MERGE fails falls back to run-now of the deployed
+`mip_sync_lifecycle_state` (`backend/services/job_trigger.py`,
+`trigger_lifecycle_sync`), and `MIP_LIFECYCLE_SYNC_MODE=job` sends every one of
+them there. On a stale install, keep that variable unset, avoid approvals while
+the warehouse is degraded, and check the App log for `lifecycle_sync_error`
+followed by `job_trigger_fired`.
 
 Before you start:
 
@@ -802,10 +817,13 @@ Steps:
    (`seed_demo_first_party_feeds`) opens with a `TEMP VIEW` that its CTAS read,
    so split the run in three:
    - **A**, every statement before that task, through the Statements API: the
-     eleven `init_fn_*`, `003_gold_tables.sql`, `capture_refresh_timestamp`
-     (it records this run's `refresh_at`) and `ctas_property_owner_bridge`.
+     `init_fn_*` statements step 2 did not skip (eleven at most),
+     `003_gold_tables.sql`, `capture_refresh_timestamp` (it records this run's
+     `refresh_at`) and `ctas_property_owner_bridge`.
    - **The demo feeds** as ONE `sql_task` run on the bundle root's render of
-     that file, which keeps one session:
+     that file, which keeps one session. That file must equal the scratch
+     render byte for byte; when it differs, stop, because this procedure
+     uploads only step 1's FRED files:
      `databricks jobs submit --no-wait --json '{"run_name": "interim-refresh-demo-feeds", "idempotency_token": "<unique per refresh>", "tasks": [{"task_key": "seed_demo_first_party_feeds", "sql_task": {"warehouse_id": "<warehouse>", "file": {"path": "<bundle root>/sql/_rendered/transformations/demo_first_party_feeds.sql", "source": "WORKSPACE"}}}]}'`.
      Poll `databricks jobs get-run <run_id>` until it terminates, and require
      `SUCCESS`. The idempotency token makes a retried submit return the same
@@ -813,7 +831,8 @@ Steps:
    - **B**, every statement after that task, through the Statements API.
 
    Before executing, prove that A, the demo file and B together equal the
-   planned statement list in order (compare statement hashes). On a failure,
+   planned statement list in order (compare statement hashes), with the plan
+   computed after step 2's skips. On a failure,
    stop and resume from the failing statement; never improvise one.
 4. **Grant snapshot, after, and a strict diff.** Read `SHOW GRANTS` again on
    every touched object and diff it against step 2. Any added, removed or
@@ -822,7 +841,14 @@ Steps:
    passed vacuously. Then run
    `python -m tools.databricks.verify_reviewed_function_execute_grants` with
    the App, agent-runtime and agent-proxy application ids, as
-   `scripts/lib/deploy_step_lakebase_and_uc_grants.sh` does.
+   `scripts/lib/deploy_step_lakebase_and_uc_grants.sh` does. It requires one
+   direct `EXECUTE` per consumer. If the reviewed functions already lack
+   direct `EXECUTE` grants (a stale `publish_fn_*` run dropped them) or the
+   agent-runtime or agent-proxy principal does not exist, the verifier cannot
+   run or fails by design. Record its output, never hand-grant, and treat the
+   strict before/after diff above plus the App SP's effective `EXECUTE` on
+   the three reviewed functions as the gate. Only the governed deploy restores
+   the direct grants.
 5. **Rate alignment.** Run `python -m tools.databricks.verify_market_rate_alignment
    --warehouse-id <warehouse> --catalog <catalog>`, as deploy step 8 does. Gold
    must score at silver's `is_latest` rate.

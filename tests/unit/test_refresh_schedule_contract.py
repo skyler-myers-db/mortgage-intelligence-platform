@@ -488,8 +488,42 @@ def test_the_runbook_pins_the_interim_refresh_and_its_never_run_now_warning() ->
         "which drops the App, agent-runtime and agent-proxy `EXECUTE` grants",
         "**Rebuild scoring snapshot** runs the deployed gold job",
         "Never run-now the deployed lifecycle job instead.",
+        # The Admin lifecycle button is in-process; the real job fallback is an approval's failed MERGE.
+        "**Sync workflow state** runs the warehouse lifecycle MERGE inside the App (the same work as step 6), "
+        "not the deployed job.",
+        "But an approve, reject or revoke whose warehouse MERGE fails falls back to run-now of the deployed "
+        "`mip_sync_lifecycle_state` (`backend/services/job_trigger.py`, `trigger_lifecycle_sync`)",
+        "check the App log for `lifecycle_sync_error` followed by `job_trigger_fired`.",
+        # What the procedure writes, and the verifier it could not run on 2026-10-27.
+        "It changes data and, only when step 1 finds a FRED source file that differs from main's render, that "
+        "file under the bundle root; never a job definition, grant, ACL,",
+        "Step 4's verifier was substituted on 2026-10-27",
+        "That file must equal the scratch render byte for byte; when it differs, stop, because this procedure "
+        "uploads only step 1's FRED files",
+        "the `init_fn_*` statements step 2 did not skip (eleven at most)",
+        "with the plan computed after step 2's skips",
+        "the verifier cannot run or fails by design. Record its output, never hand-grant, and treat the strict "
+        "before/after diff above plus the App SP's effective `EXECUTE` on the three reviewed functions as the "
+        "gate. Only the governed deploy restores the direct grants.",
     ):
         assert phrase in section, phrase
+    for retired in (
+        "**Sync workflow state** can queue the deployed lifecycle job",
+        "It changes data only:",
+        "the eleven `init_fn_*`",
+    ):
+        assert retired not in section, retired
+    # The lifecycle claims above stay true of the code they name.
+    admin = (ROOT / "backend" / "api" / "admin.py").read_text(encoding="utf-8")
+    lifecycle_branch = admin[admin.index('if payload.job_key == "lifecycle_sync":') :]
+    lifecycle_branch = lifecycle_branch[: lifecycle_branch.index("else:")]
+    assert "sync_lifecycle_state_via_warehouse()" in lifecycle_branch
+    assert "run_now" not in lifecycle_branch
+    trigger = (ROOT / "backend" / "services" / "job_trigger.py").read_text(encoding="utf-8")
+    sync = trigger[trigger.index("def trigger_lifecycle_sync(") : trigger.index("def _trigger_lifecycle_sync_job(")]
+    assert sync.index('"lifecycle_sync_error"') < sync.index("_trigger_lifecycle_sync_job(reason=f")
+    assert 'os.environ.get("MIP_LIFECYCLE_SYNC_MODE", "warehouse")' in sync
+    assert '"job_trigger_fired"' in trigger
     # The recipe's load-bearing steps, in order.
     order = [
         "1. **FRED.** First prove that the deployed `mip_fred_rates_ingest` equals main's",
