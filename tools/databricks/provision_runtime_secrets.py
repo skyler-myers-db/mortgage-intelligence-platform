@@ -10,7 +10,10 @@ Two kinds of existing key are never silently replaced:
   key exists, the configured value must equal the stored one as the runtime
   reads it. The two are compared as HMAC-SHA256 fingerprints under a per-run
   random salt; a difference, or a stored value that cannot be read, refuses
-  the whole run before any write. No value or fingerprint is printed.
+  the whole run before any write. No value or fingerprint is printed. The
+  Secrets API returns a value outside a notebook only to a workspace admin
+  with READ on the scope; deploy.sh already requires a workspace-admin
+  deployer.
 * ``salesforce-*`` keys are kept when their inputs are unset. The disabled
   sentinel is written only when the key is absent, because the App's static
   resource declaration needs a backing key.
@@ -79,6 +82,7 @@ STRONG_SECRET_ENVS = frozenset(
 OPTIONAL_RESOURCE_ENVS = frozenset(
     {"SALESFORCE_CLIENT_SECRET", "SALESFORCE_PASSWORD", "SALESFORCE_SECURITY_TOKEN"}
 )
+CURRENT_ENV = "MIP_GENIE_ACTION_SECRET_CURRENT"
 PREVIOUS_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS"
 PREVIOUS_KID_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"
 PREVIOUS_KEY = ENV_TO_KEY[PREVIOUS_ENV]
@@ -90,6 +94,10 @@ EXIT_REFUSED = 2
 
 class RuntimeSecretChangeRefused(ValueError):
     """The run would replace a stored value the install depends on."""
+
+
+class EmptySecretValue(Exception):
+    """The Secrets API answered without a value, so nothing can be compared."""
 
 
 @dataclass(frozen=True)
@@ -157,8 +165,8 @@ def _validated_values() -> dict[str, str]:
                 extra_placeholders=PLACEHOLDERS,
             )
     require_distinct_rotation_secrets(
-        values["MIP_GENIE_ACTION_SECRET_CURRENT"],
-        values["MIP_GENIE_ACTION_SECRET_PREVIOUS"] or None,
+        values[CURRENT_ENV],
+        values[PREVIOUS_ENV] or None,
         current_name="MIP_GENIE_ACTION_SECRET_CURRENT",
         previous_name="MIP_GENIE_ACTION_SECRET_PREVIOUS",
     )
@@ -173,25 +181,47 @@ def _stored_runtime_value(workspace: Any, *, scope: str, key: str) -> bytes:
     """The stored value as the runtime reads it (UTF-8, surrounding whitespace stripped)."""
 
     response = workspace.secrets.get_secret(scope=scope, key=key)
-    raw = base64.b64decode(_item_name(response, "value"), validate=True)
+    encoded = _item_name(response, "value")
+    if not encoded:
+        raise EmptySecretValue(f"{scope}/{key}")
+    raw = base64.b64decode(encoded, validate=True)
     return raw.decode("utf-8").strip().encode("utf-8")
 
 
-def _require_unchanged_mask(workspace: Any, *, scope: str, configured: str) -> None:
+def _stored_equals(
+    workspace: Any, *, scope: str, key: str, configured: tuple[str, ...]
+) -> tuple[bool, ...]:
+    """Whether the stored value equals each configured value, by salted fingerprint.
+
+    A read failure propagates; the caller decides whether doubt refuses.
+    """
+
     salt = secrets.token_bytes(32)
+    stored = _salted_fingerprint(_stored_runtime_value(workspace, scope=scope, key=key), salt)
+    return tuple(
+        hmac.compare_digest(stored, _salted_fingerprint(value.encode("utf-8"), salt))
+        for value in configured
+    )
+
+
+def _unreadable_reason(exc: Exception) -> str:
+    # The error code or class name only: an SDK message can echo request detail.
+    return str(getattr(exc, "error_code", None) or type(exc).__name__)
+
+
+def _require_unchanged_mask(workspace: Any, *, scope: str, configured: str) -> None:
     try:
-        stored = _stored_runtime_value(workspace, scope=scope, key=MASK_KEY)
+        (unchanged,) = _stored_equals(
+            workspace, scope=scope, key=MASK_KEY, configured=(configured,)
+        )
     except Exception as exc:  # any doubt refuses: never overwrite what cannot be compared
-        reason = getattr(exc, "error_code", None) or type(exc).__name__
         raise RuntimeSecretChangeRefused(
             f"{scope}/{MASK_KEY} exists, but its value could not be read to prove it "
-            f"unchanged ({reason}). The deploying identity needs READ on secret scope "
-            f"{scope}. Nothing was written."
+            f"unchanged ({_unreadable_reason(exc)}). The Secrets API returns a value "
+            "outside a notebook only to a workspace admin with READ on secret scope "
+            f"{scope}; deploy with such an identity. Nothing was written."
         ) from None
-    if not hmac.compare_digest(
-        _salted_fingerprint(stored, salt),
-        _salted_fingerprint(configured.encode("utf-8"), salt),
-    ):
+    if not unchanged:
         raise RuntimeSecretChangeRefused(
             f"{scope}/{MASK_KEY} holds a different value than the configured {MASK_ENV} "
             "(salted fingerprints compared; neither value is printed). Writing it would "

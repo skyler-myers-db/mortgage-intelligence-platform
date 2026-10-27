@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import re
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -35,7 +36,15 @@ def _test_secret(label: str) -> str:
 MASK_SECRET = _test_secret("mask")
 OTHER_MASK_SECRET = _test_secret("other-mask")
 CURRENT_SECRET = _test_secret("current")
+OTHER_CURRENT_SECRET = _test_secret("other-current")
 PREVIOUS_SECRET = _test_secret("previous")
+ALL_TEST_SECRETS = (
+    MASK_SECRET,
+    OTHER_MASK_SECRET,
+    CURRENT_SECRET,
+    OTHER_CURRENT_SECRET,
+    PREVIOUS_SECRET,
+)
 DEFAULT_WRITTEN_KEYS = tuple(subject.ENV_TO_KEY.values())
 SALESFORCE_KEYS = (
     "salesforce-client-secret",
@@ -119,6 +128,38 @@ def _required(monkeypatch, *, mask: str = MASK_SECRET) -> None:
 
 def _put_keys(secrets_api: _Secrets) -> list[str]:
     return [key for _scope, key, _value in secrets_api.puts]
+
+
+def _record_fingerprints(monkeypatch) -> list[bytes]:
+    """Every salted fingerprint the comparison computes, so a test can prove none leaks."""
+
+    digests: list[bytes] = []
+    real = subject._salted_fingerprint
+
+    def recording(value: bytes, salt: bytes) -> bytes:
+        digest = real(value, salt)
+        digests.append(digest)
+        return digest
+
+    monkeypatch.setattr(subject, "_salted_fingerprint", recording)
+    return digests
+
+
+def _assert_names_only(text: str, digests: list[bytes]) -> None:
+    """No configured or stored value and no fingerprint, in any common encoding."""
+
+    assert digests, "the comparison ran"
+    for digest in digests:
+        for form in (
+            digest.hex(),
+            base64.b64encode(digest).decode(),
+            base64.urlsafe_b64encode(digest).decode(),
+            repr(digest)[2:],
+        ):
+            assert form[:16] not in text
+    assert not re.search(r"[0-9a-fA-F]{16,}", text), "no hex digest of any kind"
+    for value in ALL_TEST_SECRETS:
+        assert value not in text and value[:12] not in text
 
 
 def test_provisions_required_values_without_previous_by_default(
@@ -267,17 +308,20 @@ def test_an_unchanged_mask_is_kept_and_never_rewritten(monkeypatch) -> None:
 
 def test_a_changed_mask_refuses_before_any_write_and_prints_no_value(monkeypatch) -> None:
     _required(monkeypatch)
-    secrets_api = _Secrets(stored={"cotality-id-mask-v1": OTHER_MASK_SECRET})
+    secrets_api = _Secrets(
+        stored={"cotality-id-mask-v1": OTHER_MASK_SECRET, "genie-action-current": CURRENT_SECRET}
+    )
+    digests = _record_fingerprints(monkeypatch)
 
     with pytest.raises(subject.RuntimeSecretChangeRefused) as refused:
         subject.provision_runtime_secrets(client=_client(secrets_api))
 
     assert secrets_api.puts == [] and secrets_api.created_scopes == []
+    assert secrets_api.gets == ["cotality-id-mask-v1"], "the refusal precedes every other read"
     message = str(refused.value)
     assert "mip-runtime/cotality-id-mask-v1 holds a different value" in message
     assert "Nothing was written." in message
-    for value in (MASK_SECRET, OTHER_MASK_SECRET):
-        assert value not in message and value[:12] not in message
+    _assert_names_only(message, digests)
 
 
 @pytest.mark.parametrize(
@@ -286,6 +330,8 @@ def test_a_changed_mask_refuses_before_any_write_and_prints_no_value(monkeypatch
         (None, PermissionError("denied"), "PermissionError"),
         ({"cotality-id-mask-v1": "not base64 !!"}, None, "Error"),
         ({"cotality-id-mask-v1": base64.b64encode(b"\xff\xfe").decode()}, None, "UnicodeDecodeError"),
+        # An answer without a value is unreadable, never "a different value".
+        ({"cotality-id-mask-v1": ""}, None, "EmptySecretValue"),
     ),
 )
 def test_a_mask_that_cannot_be_read_refuses_before_any_write(
@@ -306,6 +352,9 @@ def test_a_mask_that_cannot_be_read_refuses_before_any_write(
         subject.provision_runtime_secrets(client=_client(secrets_api))
 
     assert f"({reason})" in str(refused.value)
+    # get-secret answers outside a notebook only for a workspace admin
+    # (CLI v1.10.0 help: BAD_REQUEST for a normal user), so READ alone is not enough.
+    assert "only to a workspace admin with READ on secret scope mip-runtime" in str(refused.value)
     assert secrets_api.puts == []
 
 
@@ -385,14 +434,15 @@ def test_cli_refusal_exits_2_with_names_only(monkeypatch, capsys) -> None:
     secrets_api = _Secrets(stored={"cotality-id-mask-v1": OTHER_MASK_SECRET})
     monkeypatch.setattr(subject, "WorkspaceClient", lambda: _client(secrets_api))
 
+    digests = _record_fingerprints(monkeypatch)
+
     for argv in (["--check"], []):
         assert subject.main(argv) == subject.EXIT_REFUSED == 2
 
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err.count("[runtime-secrets] refused: mip-runtime/cotality-id-mask-v1") == 2
-    for value in (MASK_SECRET, OTHER_MASK_SECRET, CURRENT_SECRET):
-        assert value not in captured.err
+    _assert_names_only(captured.err, digests)
     assert secrets_api.puts == []
 
 
@@ -413,3 +463,4 @@ def test_cli_check_reports_key_names_and_writes_nothing(monkeypatch, capsys) -> 
         "salesforce-security-token (read-only check, nothing written)\n"
     )
     assert secrets_api.puts == []
+
