@@ -329,7 +329,10 @@ Three possible causes, in order of likelihood:
    verifies that exact permission.
 3. **Semantics views unbound.** Re-run
    `databricks bundle run mip_refresh_scores -t dev` — the
-   `refresh_semantics_views` task rebinds Genie's trusted assets.
+   `refresh_semantics_views` task rebinds Genie's trusted assets. Only where
+   the deployed jobs match the current bundle: on an install whose governed
+   deploy is NO-GO, never run it; use the runbook's "Interim refresh
+   (governed deploy NO-GO)".
 
 ### 7.5 App URL 404 or serves old JS after deployment
 

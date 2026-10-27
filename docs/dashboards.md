@@ -123,7 +123,11 @@ A healthy active workspace shows new snapshot rows when operators approve,
 reject, or explicitly run the lifecycle sync from Admin **Data operations**.
 If a customer-approved recurring cadence is unpaused, then
 `COUNT(DISTINCT snapshot_date)` should also advance by calendar day. If it
-stalls, re-run the job from the app or manually:
+stalls, press **Sync workflow state** in Admin **Data operations** (the same
+warehouse sync, run inside the App), or run the job. Run the job only where
+the deployed jobs match the current bundle: on an install whose governed
+deploy is NO-GO, never run it; use the runbook's "Interim refresh (governed
+deploy NO-GO)".
 
 ```bash
 databricks bundle run mip_sync_lifecycle_state -t dev
@@ -166,14 +170,17 @@ unpause it only after the customer approves a recurring cadence and the
 target writes to an isolated catalog.
 
 **On-demand refresh:** if you need to demo a partially-lit dashboard on day
-one, the same job can be run from Admin **Data operations** or by an operator
-with CLI access:
+one, press **Sync workflow state** in Admin **Data operations** (the same
+warehouse sync and funnel snapshot, run inside the App, not this job), or
+run the job with CLI access. Run the job only where the deployed jobs match
+the current bundle: on an install whose governed deploy is NO-GO, never run
+it; use the runbook's "Interim refresh (governed deploy NO-GO)".
 
 ```bash
 databricks bundle run mip_sync_lifecycle_state -t dev
 ```
 
-That runs `sync_from_lakebase` → `record_funnel_snapshot` in sequence, so
+The job runs `sync_from_lakebase` → `record_funnel_snapshot` in sequence, so
 legacy untouched default rows are pruned, and approvals already in
 Lakebase become visible on the dashboards within the run window.
 

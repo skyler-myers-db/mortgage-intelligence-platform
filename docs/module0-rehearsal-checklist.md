@@ -94,7 +94,10 @@ default whatever the OS scheme). Expect:
   ~1.2 s — that's the `mip.gold.borrower_dossier` CTAS (pre-joined
   borrower_360 × top-20 evidence events) replacing the old two-query
   fan-out. If you're seeing 3-second-plus dossier loads, the CTAS may
-  not have refreshed; re-run `databricks bundle run mip_refresh_scores -t dev`.
+  not have refreshed; re-run `databricks bundle run mip_refresh_scores -t dev`,
+  only where the deployed jobs match the current bundle: on an install
+  whose governed deploy is NO-GO, never run it; use the runbook's
+  "Interim refresh (governed deploy NO-GO)".
 
 If the DegradedBanner is showing, something upstream failed the `/api/v1/health`
 probe — step back to (2) and do not start the walkthrough.

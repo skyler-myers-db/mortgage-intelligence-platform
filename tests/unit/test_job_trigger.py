@@ -213,7 +213,11 @@ def test_double_failure_is_explicit_and_points_to_durable_source(
             "mode": "warehouse",
             "reason": "approval",
             "durable_source": "mip_app.approvals,mip_app.call_dispositions",
-            "repair_command": "databricks bundle run mip_sync_lifecycle_state -t <target>",
+            "repair_command": (
+                "Admin Data operations > Sync workflow state (the App's warehouse MERGE); "
+                "databricks bundle run mip_sync_lifecycle_state -t <target> only when the deployed job matches the "
+                "current bundle (docs/runbook.md, Interim refresh (governed deploy NO-GO))"
+            ),
         }
     ]
 

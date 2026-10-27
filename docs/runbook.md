@@ -500,6 +500,10 @@ and `/admin-config` exposes them under **Data operations**:
    snapshot. The bundle job is the durable retry path when the app's warehouse
    attempt fails.
 
+Buttons 1 to 3 run the deployed jobs. Press them only where the deployed jobs
+match the current bundle: on an install whose governed deploy is NO-GO, never
+run them; use "Interim refresh (governed deploy NO-GO)" below.
+
 Each operation is admin-only and writes a Lakebase audit row before compute.
 Job-backed operations refuse duplicate active runs and show the latest
 Databricks run state. Lifecycle sync executes the sparse warehouse MERGE
@@ -918,6 +922,10 @@ databricks bundle run mip_refresh_silver -t dev
 databricks bundle run mip_refresh_scores -t dev
 ```
 
+Re-run them only where the deployed jobs match the current bundle: on an
+install whose governed deploy is NO-GO, never run them; use "Interim refresh
+(governed deploy NO-GO)" in §4.
+
 For a session window where live refresh is impractical, **do not**
 silently fall back to mock data — the no-silent-mock posture is
 load-bearing. Instead: acknowledge on-stage that you're showing
@@ -1050,7 +1058,10 @@ number on the screen is right":
 The full report is [`docs/slice13-accuracy-report.md`](slice13-accuracy-report.md).
 
 **After any SQL-plane change** (silver, gold, UDF, metric view) the
-evidence above is only as fresh as the last warehouse refresh. Run:
+evidence above is only as fresh as the last warehouse refresh. Run the
+commands below only where the deployed jobs match the current bundle: on an
+install whose governed deploy is NO-GO, never run them; use "Interim refresh
+(governed deploy NO-GO)" in §4.
 
 ```bash
 databricks bundle run mip_refresh_silver        -t dev
@@ -1204,7 +1215,9 @@ recommended) render as `0` or `—` instead of the expected evaluation-share tot
      --json '{"statement":"SELECT COUNT(*) AS n, MAX(_refreshed_at) AS last_refresh FROM mip.gold.lead_population","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
    ```
    A zero count or a stale `last_refresh` confirms. Fix: re-run the
-   scoring chain from §4 step 7:
+   scoring chain from §4 step 10, only where the deployed jobs match the
+   current bundle: on an install whose governed deploy is NO-GO, never run
+   it; use "Interim refresh (governed deploy NO-GO)" in §4:
    ```bash
    databricks bundle run mip_refresh_scores -t dev
    ```

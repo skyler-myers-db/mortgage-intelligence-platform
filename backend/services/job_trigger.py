@@ -80,6 +80,17 @@ _log = logging.getLogger("mip.job_trigger")
 # job id at trigger time via ``WorkspaceClient.jobs.list(name=...)``.
 _LIFECYCLE_JOB_NAME = "mip_sync_lifecycle_state"
 
+# The operator repair named in ``lifecycle_sync_retry_unavailable``. The Admin
+# button is the App's own warehouse MERGE; the deployed job is safe to run only
+# when its definition matches the current bundle (a stale one still runs the
+# retired ``seed_default_state``): docs/runbook.md, "Interim refresh (governed
+# deploy NO-GO)".
+_LIFECYCLE_REPAIR_COMMAND = (
+    "Admin Data operations > Sync workflow state (the App's warehouse MERGE); "
+    f"databricks bundle run {_LIFECYCLE_JOB_NAME} -t <target> only when the deployed job matches the current "
+    "bundle (docs/runbook.md, Interim refresh (governed deploy NO-GO))"
+)
+
 # Cached job id + the monotonic timestamp at which it was resolved. Must
 # expire after ``_JOB_ID_TTL_SECONDS``: if an operator redeploys the
 # bundle (new job_id) or rotates SDK OAuth between process starts,
@@ -259,7 +270,7 @@ def trigger_lifecycle_sync(*, reason: str = "approval") -> None:
                 mode="warehouse",
                 reason=reason,
                 durable_source="mip_app.approvals,mip_app.call_dispositions",
-                repair_command="databricks bundle run mip_sync_lifecycle_state -t <target>",
+                repair_command=_LIFECYCLE_REPAIR_COMMAND,
             )
         else:
             emit(

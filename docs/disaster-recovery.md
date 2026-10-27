@@ -100,7 +100,9 @@ Symptoms:
 - Genie and Segment Intelligence disagree with the latest source-readiness row.
 - a nightly parity or live segment count gate fails after a refresh.
 
-Recovery:
+Recovery, only where the deployed jobs match the current bundle: on an
+install whose governed deploy is NO-GO, never run them; use the runbook's
+"Interim refresh (governed deploy NO-GO)".
 
 ```bash
 databricks warehouses start "$DATABRICKS_WAREHOUSE_ID"
