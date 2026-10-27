@@ -600,36 +600,100 @@ if [[ "$SKIP_CAPABILITIES" == "0" ]]; then
   fi
 fi
 
+# --- Geo drill: state -> ZIP (begin) ---------------------------------------
+# The map drills state -> ZIP (PR #182). The county grain is retired by
+# construction: gold.county_rollup emits a NULL fips_5 (audit C2, 2026-08-07),
+# so /geo/county-rollups is empty for every state. It is probed last, only as
+# a retired-grain shape contract. Every check here fails closed; the empty
+# county list is the one answer that passes by design.
 probe "geo state rollups" "$API_PREFIX/geo/state-rollups?segment_codes=itm,equity&segment_mode=all"
 if ! jq -e '.rollups | length > 0' /tmp/mip-smoke-out.json >/dev/null; then
   echo "[smoke] geo state rollups returned no filtered rows" >&2
   cat /tmp/mip-smoke-out.json >&2 || true
   exit 1
 fi
-SMOKE_STATE="$(jq -r '.rollups | map(select((.addressable // 0) > 0)) | .[0].state // empty' /tmp/mip-smoke-out.json)"
-if [[ -z "$SMOKE_STATE" ]]; then
+if ! jq -e '
+  .rollups | type == "array"
+  and all(.[];
+    ((.state // "") | type == "string" and test("\\A[A-Z]{2}\\z"))
+    and (.addressable | type == "number" and . >= 0 and . == floor))
+' /tmp/mip-smoke-out.json >/dev/null; then
+  echo "[smoke] geo state rollups carried a row without a 2-letter state and a whole addressable count" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
+# Deterministic drill target: the largest populated state, state as the
+# tie-break. The filtered state SQL has no ORDER BY, so ".[0]" was arbitrary.
+SMOKE_STATE="$(jq -r '
+  .rollups | map(select(.addressable > 0))
+  | sort_by(-.addressable, .state) | .[0].state // empty
+' /tmp/mip-smoke-out.json)" || SMOKE_STATE=""
+if [[ ! "$SMOKE_STATE" =~ ^[A-Z]{2}$ ]]; then
   echo "[smoke] geo state rollups did not include a populated state" >&2
   cat /tmp/mip-smoke-out.json >&2 || true
   exit 1
 fi
-probe "geo county rollups" "$API_PREFIX/geo/county-rollups?state=$SMOKE_STATE&segment_codes=itm,equity&segment_mode=all"
-if ! jq -e '.rollups | length > 0' /tmp/mip-smoke-out.json >/dev/null; then
-  echo "[smoke] geo county rollups returned no filtered rows for state=$SMOKE_STATE" >&2
+# Reconciliation inputs, captured before the ZIP probe overwrites the output
+# file. zip_unassigned_count is the state's borrowers with no 5-digit ZIP.
+SMOKE_STATE_ADDRESSABLE="$(jq -r --arg s "$SMOKE_STATE" '
+  [.rollups[] | select(.state == $s)]
+  | if length == 1 then .[0].addressable else empty end
+' /tmp/mip-smoke-out.json)" || SMOKE_STATE_ADDRESSABLE=""
+SMOKE_STATE_ZIP_UNASSIGNED="$(jq -r --arg s "$SMOKE_STATE" '
+  [.rollups[] | select(.state == $s)]
+  | if length == 1 then .[0].zip_unassigned_count else empty end
+' /tmp/mip-smoke-out.json)" || SMOKE_STATE_ZIP_UNASSIGNED=""
+if [[ ! "$SMOKE_STATE_ADDRESSABLE" =~ ^[0-9]+$ || ! "$SMOKE_STATE_ZIP_UNASSIGNED" =~ ^[0-9]+$ ]]; then
+  echo "[smoke] geo state rollups did not carry exactly one row with whole addressable and zip_unassigned_count for state=$SMOKE_STATE" >&2
   cat /tmp/mip-smoke-out.json >&2 || true
   exit 1
 fi
-SMOKE_FIPS="$(jq -r '.rollups | map(select((.addressable_borrowers // 0) > 0)) | .[0].fips_5 // empty' /tmp/mip-smoke-out.json)"
-if [[ -z "$SMOKE_FIPS" ]]; then
-  echo "[smoke] geo county rollups did not include fips_5" >&2
+probe "geo zip rollups" "$API_PREFIX/geo/zip-rollups?state=$SMOKE_STATE&segment_codes=itm,equity&segment_mode=all"
+if ! jq -e --arg s "$SMOKE_STATE" '
+  .state == $s
+  and (.rollups | type == "array" and length > 0)
+  and all(.rollups[];
+    .state == $s
+    and ((.zip // "") | type == "string" and test("\\A[0-9]{5}\\z"))
+    and (.addressable_borrowers | type == "number" and . >= 0 and . == floor))
+  and any(.rollups[]; .addressable_borrowers > 0)
+' /tmp/mip-smoke-out.json >/dev/null; then
+  echo "[smoke] geo zip rollups for state=$SMOKE_STATE are not a populated, in-state, 5-digit-ZIP layer" >&2
   cat /tmp/mip-smoke-out.json >&2 || true
   exit 1
 fi
-probe "geo zip rollups" "$API_PREFIX/geo/zip-rollups?county_fips=$SMOKE_FIPS&segment_codes=itm,equity&segment_mode=all"
-if ! jq -e '.rollups | length > 0' /tmp/mip-smoke-out.json >/dev/null; then
-  echo "[smoke] geo zip rollups returned no filtered rows for county_fips=$SMOKE_FIPS" >&2
+# The drill reconciles: every borrower with a ZIP lands on exactly one ZIP row.
+if ! jq -e \
+  --argjson addressable "$SMOKE_STATE_ADDRESSABLE" \
+  --argjson unassigned "$SMOKE_STATE_ZIP_UNASSIGNED" '
+  ([.rollups[].addressable_borrowers] | add) == ($addressable - $unassigned)
+' /tmp/mip-smoke-out.json >/dev/null; then
+  SMOKE_ZIP_TOTAL="$(jq -r '[.rollups[].addressable_borrowers] | add' /tmp/mip-smoke-out.json)" \
+    || SMOKE_ZIP_TOTAL="unreadable"
+  echo "[smoke] geo drill does not reconcile for state=$SMOKE_STATE:" \
+    "sum(zip.addressable_borrowers)=$SMOKE_ZIP_TOTAL, expected state.addressable" \
+    "$SMOKE_STATE_ADDRESSABLE - state.zip_unassigned_count $SMOKE_STATE_ZIP_UNASSIGNED" >&2
   cat /tmp/mip-smoke-out.json >&2 || true
   exit 1
 fi
+echo "[smoke] ok · geo drill $SMOKE_STATE -> ZIP reconciles" \
+  "($SMOKE_STATE_ADDRESSABLE addressable, $SMOKE_STATE_ZIP_UNASSIGNED without a 5-digit ZIP)"
+# Retired-grain contract: the county endpoint still answers 200 for the
+# drilled state and never ships a row without a 5-digit FIPS (the map would
+# join a polygon onto it). Empty is the expected answer today.
+probe "geo county rollups (retired grain)" "$API_PREFIX/geo/county-rollups?state=$SMOKE_STATE&segment_codes=itm,equity&segment_mode=all"
+if ! jq -e --arg s "$SMOKE_STATE" '
+  .state == $s
+  and (.rollups | type == "array")
+  and all(.rollups[];
+    .state == $s and ((.fips_5 // "") | type == "string" and test("\\A[0-9]{5}\\z")))
+' /tmp/mip-smoke-out.json >/dev/null; then
+  echo "[smoke] geo county rollups broke the retired-grain contract for state=$SMOKE_STATE" \
+    "(an empty list passes; every row needs this state and a 5-digit fips_5)" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
+# --- Geo drill: state -> ZIP (end) -----------------------------------------
 
 SMOKE_REQUEST_ID="$(new_request_id)"
 probe "outreach draft for approval" "$API_PREFIX/outreach/draft" POST \
