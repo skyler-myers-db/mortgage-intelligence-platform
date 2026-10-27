@@ -629,9 +629,13 @@ RUNTIME = "runtime-client"
 
 
 def _supervisor_retirement(
-    events: list[str], *, creator: str, agent_present: bool = True
+    events: list[str],
+    *,
+    creator: str,
+    agent_present: bool = True,
+    endpoint_present: bool = True,
 ) -> dict[str, object]:
-    state = {"agent": agent_present, "endpoint": True}
+    state = {"agent": agent_present, "endpoint": endpoint_present}
     old_agent = {
         "supervisor_agent_id": "old-supervisor",
         "display_name": "Mortgage Growth Agent",
@@ -732,13 +736,46 @@ def test_retirement_of_a_runtime_owned_supervisor_needs_no_acknowledgement(
     assert events == ["revoke-app", "lease", "delete-agent"]
 
 
-def test_orphan_cleanup_after_the_supervisor_is_gone_needs_no_acknowledgement(
+@pytest.mark.parametrize(
+    ("acknowledgement", "reason"),
+    [
+        (None, "export MIP_RETIRE_HUMAN_SUPERVISOR=old-supervisor"),
+        ("1", "must be the Supervisor id itself, not a boolean"),
+        ("other-supervisor", "names 'other-supervisor', not this Supervisor"),
+    ],
+)
+def test_orphan_endpoint_cleanup_refuses_an_unacknowledged_non_runtime_endpoint(
+    monkeypatch: pytest.MonkeyPatch, acknowledgement: str | None, reason: str
+) -> None:
+    # The Supervisor is gone (deleted by an earlier run or out of band), but its
+    # serving endpoint, created by the same non-runtime principal, would still
+    # be deleted permanently. That needs the same acknowledgement, before the
+    # first mutation, even though the pre-stop probe cannot see this case.
+    if acknowledgement is None:
+        monkeypatch.delenv(ack.ACKNOWLEDGEMENT_ENV, raising=False)
+    else:
+        monkeypatch.setenv(ack.ACKNOWLEDGEMENT_ENV, acknowledgement)
+    events: list[str] = []
+
+    with pytest.raises(ack.UnacknowledgedSupervisorRetirement) as refused:
+        retired.retire_pinned_supervisor(
+            **_supervisor_retirement(events, creator=HUMAN_CREATOR, agent_present=False)
+        )
+
+    message = str(refused.value)
+    assert reason in message
+    assert (
+        f"Supervisor 'old-supervisor' is already deleted, but its serving endpoint "
+        f"{ENDPOINT!r} remains; both were created by {HUMAN_CREATOR!r}"
+    ) in message
+    assert "permanently delete that orphan serving endpoint" in message
+    assert events == []
+
+
+def test_orphan_endpoint_cleanup_deletes_once_the_operator_names_the_supervisor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Once the Supervisor itself is deleted (acknowledged in its own run), a
-    # resumed cleanup of its orphan endpoint must not fail late on a missing
-    # export that the pre-stop probe cannot see.
-    monkeypatch.delenv(ack.ACKNOWLEDGEMENT_ENV, raising=False)
+    monkeypatch.setenv(ack.ACKNOWLEDGEMENT_ENV, "old-supervisor")
     events: list[str] = []
 
     retired.retire_pinned_supervisor(
@@ -746,3 +783,33 @@ def test_orphan_cleanup_after_the_supervisor_is_gone_needs_no_acknowledgement(
     )
 
     assert events == ["revoke-app", "lease", "delete-endpoint"]
+
+
+def test_orphan_endpoint_cleanup_of_a_runtime_owned_endpoint_needs_no_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(ack.ACKNOWLEDGEMENT_ENV, raising=False)
+    events: list[str] = []
+
+    retired.retire_pinned_supervisor(
+        **_supervisor_retirement(events, creator=RUNTIME, agent_present=False)
+    )
+
+    assert events == ["revoke-app", "lease", "delete-endpoint"]
+
+
+def test_a_retirement_with_nothing_left_to_delete_needs_no_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Supervisor and endpoint are both gone: only the deploy-owned query-group
+    # cleanup remains, and nothing a person created is deleted.
+    monkeypatch.delenv(ack.ACKNOWLEDGEMENT_ENV, raising=False)
+    events: list[str] = []
+
+    retired.retire_pinned_supervisor(
+        **_supervisor_retirement(
+            events, creator=HUMAN_CREATOR, agent_present=False, endpoint_present=False
+        )
+    )
+
+    assert events == []

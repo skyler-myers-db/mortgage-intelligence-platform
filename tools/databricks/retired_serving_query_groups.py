@@ -504,12 +504,17 @@ def retire_pinned_supervisor(
             raise RuntimeError(
                 "old Supervisor changed after provisioning; refusing destructive cutover"
             )
-        # Re-check the operator's acknowledgement before the first mutation of a
-        # deletion: a journal pinned by earlier code or resumed in a later run
-        # never passed pin_journal's check in this process.
-        require_supervisor_retirement_acknowledgement(
-            old_id, old_creator, runtime_application_id
-        )
+    # Re-check the operator's acknowledgement before the first mutation of a
+    # deletion: a journal pinned by earlier code or resumed in a later run never
+    # passed pin_journal's check in this process. Once the Supervisor is gone its
+    # endpoint (same pinned creator) is still deleted below, so that orphan
+    # needs the acknowledgement too unless the agent-runtime SP created it.
+    require_supervisor_retirement_acknowledgement(
+        old_id,
+        old_creator,
+        runtime_application_id,
+        orphan_endpoint="" if old is not None else old_endpoint,
+    )
     old_access_mode = revoke_app_access(
         workspace,
         app_name=app_name,

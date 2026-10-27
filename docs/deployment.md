@@ -991,14 +991,17 @@ instead; either way the deploy stops before the signed lease.
   boolean or another id is refused. `pin_journal` re-checks the same
   acknowledgement before the destructive tuple is signed into the cutover
   journal, so it also holds if the canonical name changes hands after the
-  probe, and the retirement step checks it once more right before it deletes
-  the pinned Supervisor (normal, captured-cleanup and stale-journal paths), so
-  a journal pinned by earlier code or under another canonical name is never
-  retired unacknowledged. Set it in the operator shell for the migrating run,
-  and again for any run that resumes that retirement while the old Supervisor
-  still exists; cleaning up its orphan endpoint after the Supervisor is gone
-  needs no acknowledgement. It is not a `.env.local` setting and CI never sets
-  it. To keep the Supervisor instead, rename it off the canonical name to a
+  probe, and the retirement step checks it once more before its first
+  mutation (normal, captured-cleanup and stale-journal paths), so a journal
+  pinned by earlier code or under another canonical name is never retired
+  unacknowledged. That last check also covers a run that finds the pinned
+  Supervisor already gone but its serving endpoint still there: an endpoint the
+  agent-runtime service principal did not create is never deleted
+  unacknowledged. The probe cannot see that orphan case, so it refuses at the
+  retirement step instead. Set it in the operator shell for the migrating run,
+  and again for any run that resumes that retirement, including one that only
+  deletes the orphan endpoint. It is not a `.env.local` setting and CI never
+  sets it. To keep the Supervisor instead, rename it off the canonical name to a
   name outside the reserved runtime replacement names (a renamed Supervisor is
   neither pinned nor deleted) and remove the App service principal's access to
   its serving endpoint, which the global serving audit would otherwise refuse.

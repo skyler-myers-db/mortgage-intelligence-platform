@@ -752,6 +752,9 @@ def test_green_path_passes_proxy_credential_binding_to_gateway_verifier(
 def test_retire_cleans_pinned_orphan_after_interrupted_agent_delete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # The Supervisor is already gone; deleting its non-runtime orphan endpoint
+    # needs the operator's acknowledgement in this run too.
+    monkeypatch.setenv("MIP_RETIRE_HUMAN_SUPERVISOR", OLD_ID)
     orphan_deleted = False
     events: list[tuple[str, bool]] = []
 
@@ -1492,6 +1495,9 @@ def test_fresh_process_preserves_stale_journal_while_old_endpoint_is_partial(
 def test_fresh_process_resumes_partial_stale_retirement_before_clear(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # The Supervisor is already gone; deleting its non-runtime orphan endpoint
+    # needs the operator's acknowledgement in this run too.
+    monkeypatch.setenv("MIP_RETIRE_HUMAN_SUPERVISOR", OLD_ID)
     workspace = _stale_journal_workspace(old_endpoint_name=OLD_ENDPOINT)
     _install_signed_blue_pin_env(monkeypatch)
     retired_group_calls: list[tuple[str, str]] = []
@@ -2415,6 +2421,9 @@ def test_second_run_recovers_journal_for_exact_orphan_cleanup(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    # The Supervisor is already gone; deleting its non-runtime orphan endpoint
+    # needs the operator's acknowledgement in this run too.
+    monkeypatch.setenv("MIP_RETIRE_HUMAN_SUPERVISOR", OLD_ID)
     workspace = _journal_workspace()
     monkeypatch.setattr(cutover, "_supervisor_agents", _agents)
     cutover.pin_journal(
@@ -2457,6 +2466,56 @@ def test_second_run_recovers_journal_for_exact_orphan_cleanup(
     assert pinned_path in workspace.workspace.data
     _clear_journal(workspace)
     assert pinned_path not in workspace.workspace.data
+
+
+def test_second_run_refuses_an_unacknowledged_orphan_endpoint_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # The prior run deleted the human-created Supervisor (acknowledged then) and
+    # stopped before its orphan endpoint. A resumed run without the
+    # acknowledgement must not delete that endpoint either.
+    workspace = _journal_workspace()
+    monkeypatch.setattr(cutover, "_supervisor_agents", _agents)
+    cutover.pin_journal(
+        workspace,
+        assert_single_writer=_assert_lease,
+        runtime_application_id=RUNTIME_ID,
+        canonical_name="Mortgage Growth Agent",
+        old_id=OLD_ID,
+        old_endpoint=OLD_ENDPOINT,
+        old_creator="operator@summit.example",
+        old_create_time="old-time",
+        retirement_acknowledgement=OLD_ID,
+    )
+    monkeypatch.setattr(cutover, "_supervisor_agents", lambda: [_agents()[0]])
+    monkeypatch.delenv("MIP_RETIRE_HUMAN_SUPERVISOR", raising=False)
+    out_env = tmp_path / "recovered.env"
+    cutover.export_journal(
+        workspace,
+        runtime_application_id=RUNTIME_ID,
+        out_env=out_env,
+    )
+    exported = dict(line.split("=", 1) for line in out_env.read_text(encoding="utf-8").splitlines())
+    monkeypatch.setattr(cutover, "_assert_green_path", lambda *_a, **_kw: None)
+
+    with pytest.raises(
+        UnacknowledgedSupervisorRetirement, match="is already deleted, but its serving endpoint"
+    ):
+        cutover.retire(
+            workspace,
+            app_name="mip-app",
+            old_id=exported["MIP_REPLACED_AGENT_SUPERVISOR_ID"],
+            old_endpoint=exported["MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT"],
+            old_endpoint_id=exported["MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT_ID"],
+            old_creator=exported["MIP_REPLACED_AGENT_SUPERVISOR_CREATOR"],
+            old_create_time=exported["MIP_REPLACED_AGENT_SUPERVISOR_CREATE_TIME"],
+            timeout_s=1,
+            **_green_kwargs(),
+        )
+
+    assert workspace.serving_endpoints.get(OLD_ENDPOINT).id == OLD_ENDPOINT_ID
+    assert journal_path(RUNTIME_ID) in workspace.workspace.data
 
 
 def test_gateway_only_cutover_journal_recovers_and_deletes_exact_old_runtime_endpoint(
@@ -3202,6 +3261,9 @@ def test_retire_refuses_an_unacknowledged_human_supervisor_before_any_supervisor
 
 
 def test_orphan_endpoint_lost_lease_blocks_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The Supervisor is already gone; deleting its non-runtime orphan endpoint
+    # needs the operator's acknowledgement in this run too.
+    monkeypatch.setenv("MIP_RETIRE_HUMAN_SUPERVISOR", OLD_ID)
     workspace = _journal_workspace()
     _install_supervisor_journal(workspace)
     mutations: list[str] = []

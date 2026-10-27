@@ -1052,6 +1052,12 @@ def test_the_operator_contract_is_documented() -> None:
     assert "affects every workspace user's\n    shared content" in doc
     assert "on the space or on the folder it inherits from" not in doc
     assert "names each space by\n  its id only, never by its title" in doc
+    # The orphan endpoint of an already-deleted Supervisor needs the same
+    # acknowledgement; the doc once promised the opposite.
+    flat = " ".join(doc.split())
+    assert "an endpoint the agent-runtime service principal did not create is never deleted unacknowledged" in flat
+    assert "including one that only deletes the orphan endpoint" in flat
+    assert "orphan endpoint after the Supervisor is gone needs no acknowledgement" not in flat
 
 
 def _heading_indexes(lines: list[str]) -> list[int]:

@@ -16,9 +16,11 @@ or blanket value can never acknowledge a different Supervisor. A runtime-owned
 Supervisor needs no acknowledgement: replacing it is the reviewed blue/green
 path. ``deploy_prestop_probes`` checks this read-only before step 0a stops the
 App; ``pin_journal`` re-checks it before the destructive tuple becomes durable;
-``retire_pinned_supervisor`` checks it again right before it deletes a pinned
-Supervisor that still exists, so a journal pinned by earlier code, resumed in a
-later run or recovered as stale is never retired unacknowledged.
+``retire_pinned_supervisor`` checks it again before its first mutation, both
+when the pinned Supervisor still exists and when only its orphan serving
+endpoint is left (the Supervisor and that endpoint share the pinned creator),
+so a journal pinned by earlier code, resumed in a later run or recovered as
+stale never deletes either one unacknowledged.
 """
 
 from __future__ import annotations
@@ -67,8 +69,13 @@ def supervisor_retirement_refusal(
     acknowledgement: str,
     endpoint: str = "",
     canonical_name: str = "",
+    orphan_endpoint: str = "",
 ) -> str | None:
-    """Return why retiring this Supervisor is refused, or ``None`` when allowed."""
+    """Return why retiring this Supervisor is refused, or ``None`` when allowed.
+
+    ``orphan_endpoint`` names the serving endpoint left behind once the pinned
+    Supervisor itself is gone; deleting it needs the same acknowledgement.
+    """
 
     if is_runtime_created(creator, runtime_application_id=runtime_application_id):
         return None
@@ -79,13 +86,22 @@ def supervisor_retirement_refusal(
     if ack == supervisor:
         return None
     creator_text = str(getattr(creator, "value", creator) or "").strip() or "<missing>"
-    endpoint_text = f" and its serving endpoint {endpoint!r}" if endpoint else ""
-    lines = [
-        f"Supervisor {supervisor!r} was created by {creator_text!r}, not by the configured "
-        f"agent-runtime service principal {runtime_application_id.strip()!r}.",
-        "The deploy would replace it and then permanently delete the Supervisor"
-        f"{endpoint_text}; this cannot be undone.",
-    ]
+    runtime_text = f"the configured agent-runtime service principal {runtime_application_id.strip()!r}"
+    if orphan_endpoint:
+        lines = [
+            f"Supervisor {supervisor!r} is already deleted, but its serving endpoint "
+            f"{orphan_endpoint!r} remains; both were created by {creator_text!r}, not by "
+            f"{runtime_text}.",
+            "The deploy would permanently delete that orphan serving endpoint; this cannot "
+            "be undone.",
+        ]
+    else:
+        endpoint_text = f" and its serving endpoint {endpoint!r}" if endpoint else ""
+        lines = [
+            f"Supervisor {supervisor!r} was created by {creator_text!r}, not by {runtime_text}.",
+            "The deploy would replace it and then permanently delete the Supervisor"
+            f"{endpoint_text}; this cannot be undone.",
+        ]
     if ack.casefold() in _BOOLEAN_LIKE:
         lines.append(f"{ACKNOWLEDGEMENT_ENV} must be the Supervisor id itself, not a boolean.")
     elif ack:
@@ -109,8 +125,14 @@ def require_supervisor_retirement_acknowledgement(
     creator: object,
     runtime_application_id: str,
     acknowledgement: str | None = None,
+    *,
+    orphan_endpoint: str = "",
 ) -> None:
-    """Fail closed unless a non-runtime Supervisor's retirement was acknowledged."""
+    """Fail closed unless a non-runtime Supervisor's retirement was acknowledged.
+
+    With ``orphan_endpoint`` the Supervisor is already gone and only its
+    serving endpoint would be deleted; that deletion needs the same id.
+    """
 
     refusal = supervisor_retirement_refusal(
         supervisor_id=supervisor_id,
@@ -121,6 +143,7 @@ def require_supervisor_retirement_acknowledgement(
             if acknowledgement is None
             else acknowledgement
         ),
+        orphan_endpoint=orphan_endpoint,
     )
     if refusal is not None:
         raise UnacknowledgedSupervisorRetirement(refusal)
