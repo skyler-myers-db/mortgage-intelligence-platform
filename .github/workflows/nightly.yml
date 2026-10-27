@@ -90,8 +90,31 @@ permissions:
   issues: write   # required for the auto-filed failure issue
 
 jobs:
+  ci-install-isolation:
+    # The first job: every other job needs it, directly or through
+    # parity-live. The pr105-host workspace shares the live install's Unity
+    # Catalog metastore, and this workflow's catalog names fall back to the
+    # live `mip` / `mip_app_state` when the repository variables are unset.
+    # The rule table's UC-catalog check refuses an unset catalog name or a
+    # live one in any UC spelling before any job reads or writes a catalog
+    # (tools/databricks/ci_install_isolation.py; docs/deployment.md owner
+    # step 6).
+    name: CI staging install isolation (UC catalogs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Refuse a live catalog through the shared metastore
+        # Reads the workflow-level MIP_DEFAULT_CATALOG and
+        # MIP_LAKEBASE_SYNC_CATALOG every job uses; never overridden here.
+        run: python -m tools.databricks.ci_install_isolation uc-catalogs
+
   parity-live:
     name: SQL<->Python + Lakebase + Genie live
+    needs: ci-install-isolation
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -1016,6 +1039,7 @@ jobs:
 
   kill-drill-simulated:
     name: Credential-kill drill (simulated targets)
+    needs: ci-install-isolation
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Simulated drills (genie / token / warehouse-sim / lakebase-sim)
@@ -1297,10 +1321,11 @@ jobs:
 
   notify-on-failure:
     name: File issue on failure
-    needs: [parity-live, playwright-e2e-live, kill-drill-simulated, genie-fuzz-standard, kill-drill-real-infra]
+    needs: [ci-install-isolation, parity-live, playwright-e2e-live, kill-drill-simulated, genie-fuzz-standard, kill-drill-real-infra]
     if: >-
       ${{
         always() && (
+          needs.ci-install-isolation.result == 'failure' ||
           needs.parity-live.result == 'failure' ||
           needs.playwright-e2e-live.result == 'failure' ||
           needs.kill-drill-simulated.result == 'failure' ||

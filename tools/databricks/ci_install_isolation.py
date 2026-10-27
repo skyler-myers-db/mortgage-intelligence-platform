@@ -44,6 +44,12 @@ Exit 0 prints ``bundle_root_leaf=<leaf>`` and ``install_suffix=<suffix>``
 ('' for dev, else '_' + the leaf's suffix with '-' as '_'); exit 2 prints a
 fixed reason naming only variables, never a value. Local operator runs (no
 leaf) print ``dev`` and ''.
+
+``uc-catalogs`` runs the table's Unity Catalog row on its own: both
+``UC_CATALOG_NAMES`` set, and neither naming a live catalog in any UC
+spelling. nightly.yml runs it before any other job, because its catalog
+names fall back to the live ones when the repository variables are unset and
+the CI staging workspace shares the live metastore.
 """
 
 from __future__ import annotations
@@ -51,7 +57,7 @@ from __future__ import annotations
 import os
 import re
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -138,6 +144,18 @@ def _uc_name(part: str) -> str:
     return part.strip().strip("`").casefold()
 
 
+def check_uc_catalogs(env: Mapping[str, str]) -> None:
+    """The rule table's primary UC isolation: each catalog name set, and neither a live catalog."""
+
+    live_catalogs = {_uc_name(LIVE_DEFAULTS[name]) for name in UC_CATALOG_NAMES}
+    for name in UC_CATALOG_NAMES:
+        value = _uc_name(env.get(name) or "")
+        if not value:
+            raise Refused(f"{name} must name the CI staging install's catalog")
+        if value in live_catalogs:
+            raise Refused(f"{name} names a live install catalog in the shared metastore")
+
+
 def install_suffix(leaf: str) -> str:
     return "" if leaf == DEFAULT_LEAF else "_" + leaf.removeprefix(f"{DEFAULT_LEAF}-").replace("-", "_")
 
@@ -182,10 +200,7 @@ def resolve(
         value = (env.get(name) or "").strip()
         if not value or value == live:
             raise Refused(f"{name} must name the CI staging install, not the live default")
-    live_catalogs = {_uc_name(LIVE_DEFAULTS[name]) for name in UC_CATALOG_NAMES}
-    for name in UC_CATALOG_NAMES:
-        if _uc_name(env.get(name) or "") in live_catalogs:
-            raise Refused(f"{name} names a live install catalog in the shared metastore")
+    check_uc_catalogs(env)
     family = (env.get("MIP_AI_GATEWAY_AGENT_MODEL_FAMILY") or "").strip()
     if family and _uc_name(family.split(".", 1)[0]) != _uc_name(env.get("MIP_DEFAULT_CATALOG") or ""):
         raise Refused("MIP_AI_GATEWAY_AGENT_MODEL_FAMILY must sit in MIP_DEFAULT_CATALOG; unset derives it from there")
@@ -196,9 +211,28 @@ def resolve(
     return leaf, install_suffix(leaf)
 
 
-def main(env: Mapping[str, str] | None = None) -> int:
+# Single-row checks for callers outside scripts/deploy.sh's preflight.
+CHECKS: dict[str, Callable[[Mapping[str, str]], None]] = {
+    "uc-catalogs": check_uc_catalogs,
+}
+
+
+def main(env: Mapping[str, str] | None = None, argv: Sequence[str] = ()) -> int:
+    source = os.environ if env is None else env
+    if argv:
+        check = CHECKS.get(argv[0]) if len(argv) == 1 else None
+        if check is None:
+            print(f"[ci-install-isolation] usage: ci_install_isolation.py [{'|'.join(CHECKS)}]", file=sys.stderr)
+            return 2
+        try:
+            check(source)
+        except Refused as refusal:
+            print(f"[ci-install-isolation] refused: {refusal}", file=sys.stderr)
+            return 2
+        print(f"[ci-install-isolation] {argv[0]}: ok")
+        return 0
     try:
-        leaf, suffix = resolve(os.environ if env is None else env)
+        leaf, suffix = resolve(source)
     except Refused as refusal:
         print(f"[ci-install-isolation] refused: {refusal}", file=sys.stderr)
         return 2
@@ -208,4 +242,4 @@ def main(env: Mapping[str, str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(argv=sys.argv[1:]))

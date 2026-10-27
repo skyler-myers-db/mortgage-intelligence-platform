@@ -140,6 +140,41 @@ def test_the_pinned_live_genie_space_is_refused(capsys: pytest.CaptureFixture[st
     assert isolation.pinned_live_genie_space() == LIVE_GENIE
 
 
+@pytest.mark.parametrize(
+    ("catalogs", "refused"),
+    [
+        ({"MIP_DEFAULT_CATALOG": "mip_pr105_staging", "MIP_LAKEBASE_SYNC_CATALOG": "mip_app_state_staging"}, None),
+        ({}, "MIP_DEFAULT_CATALOG"),
+        ({"MIP_DEFAULT_CATALOG": "mip_pr105_staging"}, "MIP_LAKEBASE_SYNC_CATALOG"),
+        ({"MIP_DEFAULT_CATALOG": "mip", "MIP_LAKEBASE_SYNC_CATALOG": "mip_app_state_staging"}, "MIP_DEFAULT_CATALOG"),
+        ({"MIP_DEFAULT_CATALOG": "`MIP`", "MIP_LAKEBASE_SYNC_CATALOG": "mip_app_state_staging"}, "MIP_DEFAULT_CATALOG"),
+        ({"MIP_DEFAULT_CATALOG": "mip_pr105_staging", "MIP_LAKEBASE_SYNC_CATALOG": "Mip_App_State"}, "MIP_LAKEBASE_SYNC_CATALOG"),
+        ({"MIP_DEFAULT_CATALOG": "mip_app_state", "MIP_LAKEBASE_SYNC_CATALOG": "mip_app_state_staging"}, "MIP_DEFAULT_CATALOG"),
+        ({"MIP_DEFAULT_CATALOG": " ", "MIP_LAKEBASE_SYNC_CATALOG": "mip_app_state_staging"}, "MIP_DEFAULT_CATALOG"),
+    ],
+    ids=["staging", "unset", "sync-unset", "live", "live-quoted-upper", "live-sync-mixed-case", "crossed", "blank"],
+)
+def test_the_uc_catalog_check_runs_alone_for_nightly(
+    catalogs: dict[str, str], refused: str | None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """nightly.yml's first job: the UC row of the rule table, with no leaf, target or CI ref needed."""
+
+    code = isolation.main(catalogs, ["uc-catalogs"])
+    captured = capsys.readouterr()
+    if refused is None:
+        assert (code, captured.err) == (0, "") and "uc-catalogs: ok" in captured.out
+    else:
+        assert code == 2 and refused in captured.err and captured.out == ""
+        for value in catalogs.values():
+            assert not value.strip() or value not in captured.err, "names the variable, never the value"
+    assert isolation.main(catalogs, ["no-such-check"]) == 2
+    assert isolation.main(catalogs, ["uc-catalogs", "extra"]) == 2
+    capsys.readouterr()
+    doc = _flat(_doc_section(BOOTSTRAP_HEADING))
+    assert "Its first job, `ci-install-isolation`, runs the rule table's UC-catalog row" in doc
+    assert "and every other job needs it" in doc
+
+
 @pytest.mark.parametrize("flag", ["1", "true", " 1 "])
 def test_foreign_catalog_remediation_is_refused_on_the_forked_anchor_target(
     flag: str, capsys: pytest.CaptureFixture[str]

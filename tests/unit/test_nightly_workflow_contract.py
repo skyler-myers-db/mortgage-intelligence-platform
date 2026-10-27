@@ -122,6 +122,52 @@ def test_bundle_commands_address_the_isolated_ci_staging_install() -> None:
             assert "BUNDLE_VAR_bundle_root_leaf" not in (step.get("env") or {}), "one top-level value only"
 
 
+GUARD_JOB = "ci-install-isolation"
+CATALOG_ENV = ("MIP_DEFAULT_CATALOG", "MIP_LAKEBASE_SYNC_CATALOG", "BUNDLE_VAR_uc_catalog", "BUNDLE_VAR_lakebase_catalog_name")
+
+
+def _needs(job: dict) -> set[str]:
+    needs = job.get("needs") or []
+    return {needs} if isinstance(needs, str) else set(needs)
+
+
+def test_every_job_waits_on_the_uc_catalog_isolation_guard() -> None:
+    """Post-W5 review: nightly can never touch a live catalog through the shared metastore.
+
+    The guard job runs the rule table's UC-catalog check on the workflow-level
+    names, and every other job needs it, directly or transitively, so a
+    refusal skips every job that reads or writes Unity Catalog.
+    """
+
+    workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
+    jobs = workflow["jobs"]
+    guard = jobs[GUARD_JOB]
+
+    assert list(jobs)[0] == GUARD_JOB, "the first job"
+    runs = [step["run"] for step in guard["steps"] if "run" in step]
+    assert runs == ["python -m tools.databricks.ci_install_isolation uc-catalogs"]
+    assert not guard.get("needs") and "if" not in guard
+    for step in guard["steps"]:
+        assert not set(CATALOG_ENV) & set(step.get("env") or {}), "checks the names every job uses"
+    assert not set(CATALOG_ENV) & set(guard.get("env") or {})
+
+    def closure(name: str) -> set[str]:
+        direct = _needs(jobs[name])
+        return direct.union(*(closure(parent) for parent in direct)) if direct else set()
+
+    for name, job in jobs.items():
+        if name != GUARD_JOB:
+            assert GUARD_JOB in closure(name), name
+            for scope in (job, *job.get("steps", [])):
+                assert not set(CATALOG_ENV) & set(scope.get("env") or {}), f"{name} overrides a catalog name"
+    notify = jobs["notify-on-failure"]
+    assert GUARD_JOB in _needs(notify) and f"needs.{GUARD_JOB}.result == 'failure'" in notify["if"]
+
+    env = workflow["env"]
+    assert env["BUNDLE_VAR_uc_catalog"] == env["MIP_DEFAULT_CATALOG"], "the bundle reads the checked name"
+    assert env["BUNDLE_VAR_lakebase_catalog_name"] == env["MIP_LAKEBASE_SYNC_CATALOG"]
+
+
 def test_live_playwright_job_budgets_cold_app_and_serial_browser_matrix() -> None:
     workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
 

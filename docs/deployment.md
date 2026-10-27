@@ -1499,6 +1499,13 @@ from the live workspace on 2026-10-27 (agents never call `pr105-host`):
   profile is written from the repository-level `DATABRICKS_HOST`, which must
   be the `pr105-host` host: the CLI refuses a profile whose host differs from
   the target's. Otherwise the verify step fails fast against a different App.
+  Its first job, `ci-install-isolation`, runs the rule table's UC-catalog row
+  (`python -m tools.databricks.ci_install_isolation uc-catalogs`) on the
+  workflow-level `MIP_DEFAULT_CATALOG` and `MIP_LAKEBASE_SYNC_CATALOG`, and
+  every other job needs it. Those names fall back to the live `mip` and
+  `mip_app_state` when the repository variables are unset, so an unset or
+  live catalog name (in any UC spelling) refuses the run before any job reads
+  or writes a catalog through the shared metastore.
 
 **Owner steps (never agent work).** These are the exact remaining steps. Each
 is a credential, identity, GitHub-settings or audited-consent action against
