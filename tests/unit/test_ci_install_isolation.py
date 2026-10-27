@@ -1135,6 +1135,18 @@ def test_grants_gives_foreign_catalog_remediation_no_ci_command_of_record() -> N
         assert "exits 2" in grants[match.end() : match.end() + 20], "only next to the refusal"
 
 
+def test_the_audit_record_points_its_superseded_bootstrap_order_at_the_deployment_doc() -> None:
+    """The W5e audit's 'waits for a forked-anchor target' order is history; a dated addendum says so."""
+
+    audit = (ROOT / "docs" / "audits" / "ui-ux-technology-audit-2026-09-21.md").read_text(encoding="utf-8")
+    waits = audit.index("it waits for a forked-anchor (pr105-host) target or install-scoped reserved names")
+    paragraph = audit[waits : audit.index("\n\n", waits)]
+
+    assert "Addendum (2026-10-27): the forked-anchor `pr105-host` target this paragraph waits for is now built" in paragraph
+    assert '"CI staging install (deploy-dev.yml) and the release-gate bootstrap"' in paragraph
+    assert f"## {BOOTSTRAP_HEADING.removeprefix('## ')}" in DEPLOYMENT_DOC.read_text(encoding="utf-8")
+
+
 def test_every_reserved_identity_name_is_in_the_per_run_identities_table() -> None:
     """The contract the runbook cites cannot drift from the code that enforces it."""
 
