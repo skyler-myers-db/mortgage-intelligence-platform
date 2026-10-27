@@ -980,7 +980,12 @@ nothing changed, the App not stopped by this run) for these failures, which
 would otherwise surface only after step 0a. A read the probe cannot complete
 (an unreadable Genie ACL, an App read error other than "not found", a SCIM or
 Supervisor listing error, a non-admin deployer) exits non-zero with that error
-instead; either way the deploy stops before the signed lease.
+instead; either way the deploy stops before the signed lease. The `deploy-dev`
+workflow runs the same probe and never sets `MIP_RETIRE_HUMAN_SUPERVISOR`, so
+expect a CI deploy to refuse here, before step 0a, on any workspace whose Genie
+spaces grant `users` (directly or through `/Workspace/Shared`) or that holds a
+non-runtime canonical Supervisor. Those runs used to refuse at the same audits
+after the stop.
 
 - **Supervisor retirement.** If a Supervisor holds the canonical name
   (`MIP_AGENT_SUPERVISOR_NAME`, default `Mortgage Growth Agent`) and its

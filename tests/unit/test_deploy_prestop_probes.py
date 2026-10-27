@@ -1086,6 +1086,12 @@ def test_dry_run_names_the_probe_without_running_it() -> None:
 
 def test_ci_never_acknowledges_a_supervisor_deletion() -> None:
     assert "MIP_RETIRE_HUMAN_SUPERVISOR" not in DEPLOY_DEV.read_text(encoding="utf-8")
+    # CI runs the same probe, so its pre-stop refusals are documented as expected.
+    flat = " ".join(DEPLOYMENT_DOC.read_text(encoding="utf-8").split())
+    assert (
+        "The `deploy-dev` workflow runs the same probe and never sets "
+        "`MIP_RETIRE_HUMAN_SUPERVISOR`, so expect a CI deploy to refuse here, before step 0a"
+    ) in flat
 
 
 def test_the_operator_contract_is_documented() -> None:
