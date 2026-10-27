@@ -223,9 +223,10 @@ run_job_with_retry databricks bundle run mip_kpi_snapshot -t "$TARGET"
 # -----------------------------------------------------------------------------
 # A validate cannot prove what the Jobs API stored: read the applied
 # mip_scheduled_refresh back and fail when its pause status differs from the
-# preflight decision, its failure email disagrees with the install, or its
-# live run_job_task closure is not exactly FRED -> gold -> lifecycle -> KPI
-# (never the reviewed-function publisher). The summary goes in as a here-string
+# preflight decision, its failure email disagrees with the install, its task
+# graph is not FRED -> gold -> lifecycle -> KPI plus the outcome gate after
+# gold, or its live run_job_task closure is not exactly those four jobs (never
+# the reviewed-function publisher). The summary goes in as a here-string
 # (no pipe to break); `run` skips it in a dry-run, whose offline summary has no
 # job ids.
 step "verify mip_scheduled_refresh — ${BUNDLE_VAR_scheduled_refresh_pause_status:-unset}, chain and failure email"
