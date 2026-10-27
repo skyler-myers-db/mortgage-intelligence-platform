@@ -1,0 +1,66 @@
+## Type the question and press Ask
+polite: Waiting for Genie response
+polite: Running the governed SQL
+
+## The answer lands
+polite: Verifying the answer against its rows
+polite: Answer ready
+
+## Read the answer with the virtual cursor
+status
+Answer ready
+end of status
+button, Open Genie
+dialog, Genie chat, key shortcuts Escape
+dialog, Genie chat, key shortcuts Escape
+button, Resize Genie panel (currently 420 by 640 pixels). Drag any edge or corner, or use arrow keys.
+Drag to undock · double-click to reset
+Ask Genie
+Trusted Unity Catalog assets ·
+Summit Mortgage
+button, Genie conversation history, History, not expanded
+button, Start a new Genie thread, New thread
+New thread
+end of button, Start a new Genie thread, New thread
+button, Close Genie, Close (Esc)
+end, Drag to undock · double-click to reset
+How many borrowers are in the money in Illinois?
+group, Question actions
+button, Edit question, Load this question into the composer to edit it. Nothing is sent until you press Ask.
+Edit
+end of button, Edit question, Load this question into the composer to edit it. Nothing is sent until you press Ask.
+end of group, Question actions
+note, Answer source: Databricks Genie Conversation API
+Databricks Genie Conversation API · verified SQL
+end of note, Answer source: Databricks Genie Conversation API
+button, Show proof, not expanded
+trusted
+paragraph
+There are 1,204 in-the-money borrowers in Illinois.
+end of paragraph
+
+## Focus Show proof
+button, Show proof, not expanded
+
+## Press Show proof: the provenance dialog opens
+dialog, Genie answer proof
+button, Close Genie proof
+
+## Read the provenance with the virtual cursor
+region, Genie proof
+Trust
+Trusted SELECT on curated assets
+Rows
+1
+Latency
+840 ms
+Source UC assets
+button, mip.gold.borrower_360
+Generated SQL
+SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 WHERE state = 'IL' AND in_the_money
+end of region, Genie proof
+end of dialog, Genie answer proof
+
+## Escape closes the proof; focus returns to its toggle
+dialog, Genie chat, key shortcuts Escape
+button, Show proof, not expanded

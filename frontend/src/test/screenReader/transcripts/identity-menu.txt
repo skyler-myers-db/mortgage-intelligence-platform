@@ -1,0 +1,15 @@
+## Tab to the account menu button
+button, Account menu, signed in as Jane Doe, not expanded, has popup menu
+
+## ArrowDown opens the menu on its first item
+menuitemradio, Dark, not checked, position 1, set size 3
+
+## ArrowDown through every item
+menuitemradio, Light, not checked, position 2, set size 3
+menuitemradio, System, checked, position 3, set size 3
+menuitem, Keyboard shortcuts, position 1, set size 2
+menuitem, Glossary, position 2, set size 2
+
+## Escape closes the menu onto its button; report focus once settled
+button, Account menu, signed in as Jane Doe, 1 control, expanded, has popup menu
+button, Account menu, signed in as Jane Doe, not expanded, has popup menu
