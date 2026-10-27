@@ -867,14 +867,14 @@ existing key:
   backing key. A configured value still replaces the key. The App payload
   binds the `salesforce-*` keys into the runtime only when the instance URL,
   client id, username, external-id field, client secret and password inputs
-  are all non-empty for that deploy (`settings.salesforce_configured` needs
-  the same set at runtime), and it binds the security token only when its
-  own input is set. So a key kept because its input is unset is never bound
-  and cannot re-enable the connector. One edge: a placeholder secret
-  input (such as `<password>` or `changeme`) counts as unset for the
-  provisioner, which keeps the stored key, but as non-empty for the payload,
-  which then binds that stored key. Supply real values or leave the secret
-  inputs empty. Unsetting the inputs disables the connector but no longer
+  are all set for that deploy (`settings.salesforce_configured` needs the
+  same set at runtime), and it binds the security token only when its own
+  input is set. For the three secret inputs, "set" means the same thing to
+  the provisioner and to the payload: a placeholder (such as `<password>`
+  or `changeme`) counts as unset in both. So a key kept because its input is
+  unset or a placeholder is never bound and cannot re-enable the connector
+  (`tests/unit/test_salesforce_secret_binding_parity.py`). Unsetting the
+  inputs disables the connector but no longer
   clears the stored credentials. To revoke them deliberately, set the secret
   inputs to the replacement values, or have the owner delete the keys
   (`databricks secrets delete-secret mip-runtime <key>`); the next deploy then
@@ -1073,11 +1073,11 @@ optional security token as GitHub environment secrets. `deploy.sh` writes
 those secret values directly to the `mip-runtime` Databricks secret scope and
 the App payload uses `value_from` bindings. An unset value never replaces a
 key that already exists in the scope; only an absent key gets the disabled
-sentinel that the static App binding needs. A kept key is bound into the
-runtime only when every required connector input is non-empty for that
-deploy, and revoking stored credentials is a deliberate replacement or an
-owner-approved key delete (see the `provision_runtime_secrets.py` notes under
-"Databricks App", including the placeholder edge). A partial connector
+sentinel that the static App binding needs. A kept key is never bound: the
+payload binds a secret only when every required connector input is set for
+that deploy, and a placeholder secret input counts as unset. Revoking stored
+credentials is a deliberate replacement or an owner-approved key delete (see
+the `provision_runtime_secrets.py` notes under "Databricks App"). A partial connector
 remains honestly staged and cannot claim delivery.
 
 ## Optional OTLP log export
