@@ -176,7 +176,7 @@ E2E_FIXTURE_PORT=5191 npm --prefix frontend run e2e:fixture -- --shard=2/4 --rep
 (cd frontend && npx playwright merge-reports --reporter=html blob-report)               # blob-report/ is gitignored
 ```
 
-The blob reporter empties `blob-report/` at the start of every run, so to merge several local shards give each its own `PLAYWRIGHT_BLOB_OUTPUT_DIR` and copy the zips into one folder first.
+The blob reporter replaces `blob-report/` when the run finishes: it empties the folder in `onEnd`, just before it writes the new zip (Playwright 1.64), so a run that dies before `onEnd` leaves the previous zip in place. To merge several local shards, give each its own `PLAYWRIGHT_BLOB_OUTPUT_DIR` and copy the zips into one folder first.
 
 ### Failure artifacts
 
