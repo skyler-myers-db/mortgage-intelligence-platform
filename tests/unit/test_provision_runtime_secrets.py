@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
 import subprocess
 import sys
@@ -30,7 +31,14 @@ def test_direct_execution_resolves_repository_imports() -> None:
 
 
 def _test_secret(label: str) -> str:
-    return f"{label}-" + ("x" * 32)
+    """A distinct, high-entropy synthetic value (43 URL-safe base64 characters).
+
+    Low-entropy fixtures (``label-xxxx…``) let a suffix or middle-slice leak
+    pass the window check below; these share no 8-character window.
+    """
+
+    digest = hashlib.sha256(f"mip-test-runtime-secret:{label}".encode()).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
 MASK_SECRET = _test_secret("mask")
@@ -45,6 +53,7 @@ ALL_TEST_SECRETS = (
     OTHER_CURRENT_SECRET,
     PREVIOUS_SECRET,
 )
+LEAK_WINDOW = 8
 DEFAULT_WRITTEN_KEYS = tuple(subject.ENV_TO_KEY.values())
 SALESFORCE_KEYS = (
     "salesforce-client-secret",
@@ -159,7 +168,9 @@ def _assert_names_only(text: str, digests: list[bytes]) -> None:
             assert form[:16] not in text
     assert not re.search(r"[0-9a-fA-F]{16,}", text), "no hex digest of any kind"
     for value in ALL_TEST_SECRETS:
-        assert value not in text and value[:12] not in text
+        for start in range(len(value) - LEAK_WINDOW + 1):
+            window = value[start : start + LEAK_WINDOW]
+            assert window not in text, f"an {LEAK_WINDOW}-character slice of a value leaked"
 
 
 def test_provisions_required_values_without_previous_by_default(
