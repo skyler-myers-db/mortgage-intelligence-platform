@@ -610,6 +610,16 @@ test.describe('Runtime-06: the map keeps the previous cohort, visibly', () => {
     await page.locator('path.map-region[data-map-unit="tx"]').click();
     await expect(page.locator('.map-wrap')).toContainText('ZIPs in Texas');
     await expect(zipUnit('60611')).toHaveCount(0);
+    // IL's ZIPs cannot exist in TX's polygons, so the line above cannot see a
+    // stale IL rollup painting TX's areas. While TX's rollup is held nothing
+    // may be painted, sampled over the hold rather than at its first frame (a
+    // count-0 passes before TX's geometry lands, and a stale paint needs it),
+    // and the drill must still be the empty loading stage: a stale rollup
+    // draws TX's polygons instead, with or without an Updating pill.
+    const painted = page.locator('.map-wrap [data-populated]').first();
+    const paintedWhileHeld = await painted.waitFor({ state: 'attached', timeout: 3_000 }).then(() => true, () => false);
+    expect(paintedWhileHeld, 'nothing painted while the TX rollup is held').toBe(false);
+    await expect(page.locator('.map-wrap .map-stage--empty'), 'the held drill is still the loading stage').toBeVisible();
     await expect(page.locator('.map-levels.is-updating')).toHaveCount(0);
     release();
     await expect(zipUnit('77002').and(page.locator('[data-populated]'))).toBeVisible();
