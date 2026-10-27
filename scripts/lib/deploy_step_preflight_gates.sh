@@ -138,6 +138,42 @@ fi
 unset _CI_INSTALL_VARS _CI_INSTALL_LEAF
 # <<< ci-install-isolation
 
+# >>> scheduled-refresh (data-freshness design 2026-10-26)
+# mip_scheduled_refresh's pause status is decided here, never in a bundle
+# target: the variable defaults to PAUSED. Only the dev target's LIVE install
+# (empty install_suffix) unpauses, by default; MIP_SCHEDULED_REFRESH=off opts
+# it out. The CI staging install is always PAUSED. prod is always PAUSED: a
+# prod cadence is a customer decision that needs a reviewed change here, so an
+# explicit `on` for prod is refused rather than ignored. Pure, so it also runs
+# in DRY_RUN. A Jobs-UI unpause is reverted by the next deploy, and any apply
+# outside this script re-pauses the live schedule; this switch is the durable
+# one (docs/runbook.md "Weekly scheduled refresh").
+if [[ "$TARGET" == "dev" ]]; then
+  _SCHEDULED_REFRESH="$(deployment_control_value MIP_SCHEDULED_REFRESH on)"
+else
+  _SCHEDULED_REFRESH="$(deployment_control_value MIP_SCHEDULED_REFRESH off)"
+fi
+case "$_SCHEDULED_REFRESH" in
+  on|off) ;;
+  *)
+    echo "${RED}[deploy] MIP_SCHEDULED_REFRESH must be on or off.${RST}" >&2
+    exit 2
+    ;;
+esac
+if [[ "$TARGET" != "dev" && "$_SCHEDULED_REFRESH" == "on" ]]; then
+  echo "${RED}[deploy] MIP_SCHEDULED_REFRESH=on is honoured only for the dev target's live install; ${TARGET} keeps mip_scheduled_refresh PAUSED.${RST}" >&2
+  exit 2
+fi
+if [[ "$TARGET" == "dev" && "$_SCHEDULED_REFRESH" == "on" && -z "$BUNDLE_VAR_install_suffix" ]]; then
+  BUNDLE_VAR_scheduled_refresh_pause_status=UNPAUSED
+else
+  BUNDLE_VAR_scheduled_refresh_pause_status=PAUSED
+fi
+export BUNDLE_VAR_scheduled_refresh_pause_status
+echo "  scheduled refresh: ${BUNDLE_VAR_scheduled_refresh_pause_status} (mip_scheduled_refresh, Fridays 06:00 America/Chicago)"
+unset _SCHEDULED_REFRESH
+# <<< scheduled-refresh
+
 if [[ "$DRY_RUN" -eq 0 && "$NO_CONFIRM" -eq 0 ]]; then
   read -r -p "About to DEPLOY to the ${TARGET} target. Continue? [y/N] " ans
   if [[ "$ans" != "y" && "$ans" != "Y" ]]; then

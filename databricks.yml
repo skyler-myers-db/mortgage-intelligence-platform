@@ -365,7 +365,8 @@ resources:
     # schemas) via SQL task against the serverless warehouse; Step 2 kicks
     # the pipeline. Daily on-demand in dev (no schedule); production can
     # enable a schedule_quartz_cron_expression once governance signs off on
-    # the full silver→gold chain.
+    # the full silver→gold chain. The weekly mip_scheduled_refresh chain
+    # leaves this job out on purpose: the Cotality eval share is static.
     mip_refresh_silver:
       name: mip_refresh_silver
       tags:
@@ -1011,7 +1012,9 @@ resources:
     # mip_sync_lifecycle_state / mip_fred_rates_ingest above); freshness on
     # the dev cadence comes from ./scripts/deploy.sh, which runs this job
     # after every gold refresh -- that run is also the first-install
-    # backfill, so kpi_snapshots is never empty after a zero-click deploy.
+    # backfill, so kpi_snapshots is never empty after a zero-click deploy --
+    # and, on the dev live install, from mip_scheduled_refresh's weekly
+    # chain (step 4). This job's own schedule stays PAUSED.
     mip_kpi_snapshot:
       name: mip_kpi_snapshot
       tags:
@@ -1153,6 +1156,9 @@ resources:
       # definition available for a customer-approved cadence, but ship every
       # target PAUSED by default. Operators normally refresh rates from Admin
       # → Data operations when FRED/source readiness says the row is stale.
+      # On the dev live install, mip_scheduled_refresh runs this job weekly as
+      # step 1 of its chain, ahead of gold; a standalone run re-creates the
+      # audit-C1 stale-rate skew until gold runs, so pair it with a gold refresh.
       schedule:
         quartz_cron_expression: "0 0 6 ? * FRI *"
         timezone_id: America/Chicago
@@ -1196,6 +1202,81 @@ resources:
               - "--table=${var.uc_catalog}.silver.market_rates_weekly"
           max_retries: 2
           retry_on_timeout: true
+
+    # Weekly scheduled refresh (2026-10-26 data-freshness design). ONE schedule
+    # chains the existing jobs in deploy.sh's order (FRED -> gold -> lifecycle
+    # mirror + funnel snapshot -> KPI snapshot) and ends in an outcome gate, so
+    # a standalone FRED run can never re-create the audit-C1 stale-rate skew and
+    # every child keeps its single definition (run_job_task, never a copy of the
+    # gold DAG). Silver is absent on purpose: the Cotality eval share is a
+    # static snapshot (provider lastModified 2026-06-12), so a weekly full
+    # refresh would only move ingest timestamps; re-anchoring gold on it makes
+    # the time-relative windows DECAY (docs/runbook.md "Weekly scheduled
+    # refresh"), which is not freshness.
+    # pause_status comes from var.scheduled_refresh_pause_status (default
+    # PAUSED, set by no target); only scripts/deploy.sh exports UNPAUSED, and
+    # only for the dev target's live install. An explicit UNPAUSED survives
+    # `mode: development` (CLI v1.10.0); any other apply re-pauses it.
+    # The failure email is var.scheduled_refresh_failure_recipients (default
+    # empty); tools/databricks/bundle_env.py fills it for the dev live install
+    # only, never the dev-ci leaf or prod.
+    # Never add a task that reaches mip_init_catalog_schemas (the reviewed
+    # Growth Agent function publisher): tests/unit/test_refresh_schedule_contract.py.
+    mip_scheduled_refresh:
+      name: mip_scheduled_refresh
+      tags:
+        solution: mortgage-intelligence-platform
+        module: module0
+        owner: entrada
+        slice: data-freshness
+      max_concurrent_runs: 1
+      queue:
+        enabled: true
+      timeout_seconds: 5400
+      health:
+        rules:
+          - metric: RUN_DURATION_SECONDS
+            op: GREATER_THAN
+            value: 2700
+      email_notifications:
+        on_failure: ${var.scheduled_refresh_failure_recipients}
+      schedule:
+        # Fridays 06:00 America/Chicago: FRED prints MORTGAGE30US on Thursdays.
+        # tools/verify_live_source_readiness.py pins its cadence to this cron.
+        quartz_cron_expression: "0 0 6 ? * FRI *"
+        timezone_id: America/Chicago
+        pause_status: ${var.scheduled_refresh_pause_status}
+      tasks:
+        - task_key: refresh_market_rates
+          description: "Run mip_fred_rates_ingest (FRED MORTGAGE30US into silver.market_rates_weekly)."
+          run_job_task:
+            job_id: ${resources.jobs.mip_fred_rates_ingest.id}
+        - task_key: refresh_gold_scores
+          description: "Run mip_refresh_scores against the rate the FRED step just published."
+          depends_on:
+            - task_key: refresh_market_rates
+          run_job_task:
+            job_id: ${resources.jobs.mip_refresh_scores.id}
+        - task_key: sync_lifecycle_state
+          description: "Run mip_sync_lifecycle_state (sparse lifecycle MERGE + funnel snapshot)."
+          depends_on:
+            - task_key: refresh_gold_scores
+          run_job_task:
+            job_id: ${resources.jobs.mip_sync_lifecycle_state.id}
+        - task_key: snapshot_headline_kpis
+          description: "Run mip_kpi_snapshot (one kpi_snapshots row per day)."
+          depends_on:
+            - task_key: sync_lifecycle_state
+          run_job_task:
+            job_id: ${resources.jobs.mip_kpi_snapshot.id}
+        - task_key: assert_refresh_outcome
+          description: "SELECT-only gate: gold scored at silver's is_latest rate, and that rate is a FRED print within 14 days."
+          depends_on:
+            - task_key: refresh_gold_scores
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/transformations/assert_scheduled_refresh_outcome.sql
 
   pipelines:
     # Slice 2 real-data migration: silver lift from cotality_mortgage_data.
@@ -1289,6 +1370,23 @@ variables:
       pipeline, MLflow experiment). Empty for the live install; derived from
       the bundle root leaf for the CI staging install.
     default: ""
+  scheduled_refresh_pause_status:
+    description: >-
+      Pause status of mip_scheduled_refresh's weekly schedule. PAUSED by
+      default and set by no target: scripts/deploy.sh exports UNPAUSED only
+      for the dev target's live install (empty install_suffix), and
+      MIP_SCHEDULED_REFRESH=off opts it out. The CI staging install and prod
+      stay PAUSED. Any apply outside scripts/deploy.sh re-pauses it.
+    default: PAUSED
+  scheduled_refresh_failure_recipients:
+    type: complex
+    description: >-
+      Failure-email recipients of mip_scheduled_refresh. Empty by default and
+      set by no target. The CLI refuses a BUNDLE_VAR_ export for a complex
+      variable, so tools/databricks/bundle_env.py writes it into the bundle's
+      .databricks/bundle/<target>/variable-overrides.json: the deploying user
+      for the dev target's live install, empty for the dev-ci leaf and prod.
+    default: []
   ai_gateway_verifier_client_id:
     description: >-
       Dedicated AI Gateway verifier service-principal client ID. The remote

@@ -14,6 +14,14 @@ from tools.databricks.workspace_auth import deployment_workspace_client
 REPO = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(autouse=True)
+def _bundle_overrides_in_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """bundle_env.main() writes the bundle's variable-overrides.json: keep it out of the checkout."""
+
+    monkeypatch.setattr(bundle_env, "BUNDLE_ROOT", tmp_path / "bundle-root")
+    monkeypatch.delenv("DATABRICKS_BUNDLE_ROOT", raising=False)
+
+
 def _recording_factory(calls: list[dict[str, Any]]) -> Any:
     def build(**kwargs: Any) -> object:
         calls.append(kwargs)
