@@ -534,6 +534,10 @@ resources:
         owner: entrada
         slice: slice13-accuracy
       max_concurrent_runs: 1
+      # Queued like every mip_scheduled_refresh child: a run that collides
+      # with a deploy's run of this job waits instead of being skipped.
+      queue:
+        enabled: true
       tasks:
         - task_key: init_fn_bounded_mortgage_rate
           description: "CREATE OR REPLACE mip.gold.fn_bounded_mortgage_rate before rate/equity CTAS."
@@ -1023,6 +1027,10 @@ resources:
         owner: entrada
         slice: s3-kpi-snapshots
       max_concurrent_runs: 1
+      # Queued like every mip_scheduled_refresh child: a run that collides
+      # with a deploy's run of this job waits instead of being skipped.
+      queue:
+        enabled: true
       schedule:
         quartz_cron_expression: "0 30 5 ? * * *"
         timezone_id: America/Chicago
@@ -1143,6 +1151,10 @@ resources:
         owner: entrada
         slice: module0-real-data-slice1
       max_concurrent_runs: 1
+      # Queued like every mip_scheduled_refresh child: a run that collides
+      # with a deploy's run of this job waits instead of being skipped.
+      queue:
+        enabled: true
       # Serverless Python task environment. Spark is attached automatically
       # for spark_python_task. Only stdlib is used by jobs/fred_rates_ingest.py
       # (urllib + csv), so no extra wheel dependencies are declared here.

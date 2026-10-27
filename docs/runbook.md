@@ -624,11 +624,12 @@ predates the current bundle. For example, a gold job that still carries
   variable to its `PAUSED` default and re-pauses the schedule without an error.
   The repo does not support such an apply. Dev then goes stale silently until
   the 8-day `verify_live` flag fires. Re-run the governed deploy to restore it.
-- **Collision with a deploy.** The orchestrator queues its own runs. Of its
-  children, only the lifecycle job enables queueing, so a FRED, gold or KPI run
-  that a deploy holds at Friday 06:00 can make the scheduled child run skip.
-  That fails the chain and sends the failure email; re-run the orchestrator
-  after the deploy.
+- **Collision with a deploy.** The orchestrator and all four children declare
+  `max_concurrent_runs: 1` with queueing, so a deploy that holds one at Friday
+  06:00 delays the chain instead of skipping it: the scheduled child run waits
+  in the queue for the deploy's run of the same job. Only a hold that pushes
+  the whole chain past the orchestrator's 5400 s (90 min) timeout fails the run
+  and sends the failure email; re-run the orchestrator after the deploy.
 - **Run-as identity.** Scheduled runs execute as the dev run-as user (the
   deploying user). If that identity loses access, runs fail and the email
   fires.

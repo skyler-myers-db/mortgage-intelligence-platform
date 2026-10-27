@@ -179,6 +179,24 @@ def test_the_orchestrator_never_reaches_silver_or_the_reviewed_function_publishe
             assert reviewed.search(path) is None, (job, task["task_key"])
 
 
+def test_every_chain_child_queues_so_a_deploy_delays_the_chain_instead_of_skipping_it() -> None:
+    """The runbook's collision risk rests on this: no child relies on the CLI's default queueing.
+
+    A child run that meets a deploy's run of the same job waits in the queue
+    (max_concurrent_runs 1); only a hold past the orchestrator's timeout fails
+    the chain.
+    """
+
+    jobs = _bundle()["resources"]["jobs"]
+    for _task_key, job in CHAIN:
+        assert jobs[job]["max_concurrent_runs"] == 1, job
+        assert jobs[job].get("queue") == {"enabled": True}, job
+    assert jobs[ORCHESTRATOR]["timeout_seconds"] == 5400
+    flat_runbook = " ".join((ROOT / "docs" / "runbook.md").read_text(encoding="utf-8").split())
+    assert "so a deploy that holds one at Friday 06:00 delays the chain instead of skipping it" in flat_runbook
+    assert "orchestrator's 5400 s (90 min) timeout" in flat_runbook
+
+
 def test_the_orchestrator_schedule_is_weekly_and_paused_by_a_variable_no_target_sets() -> None:
     bundle = _bundle()
     job = bundle["resources"]["jobs"][ORCHESTRATOR]
