@@ -1,5 +1,14 @@
-import { useEffect, useId, useSyncExternalStore, type ElementType, type ReactElement, type ReactNode } from 'react';
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useSyncExternalStore,
+  type ElementType,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 import { createPortal } from 'react-dom';
+import { descriptionHost, descriptionId, retainDescription, retainHost } from './tooltipDescriptions';
 
 /**
  * Tooltip — the design-system tooltip primitive (2026-09-21 audit critic-08;
@@ -14,7 +23,11 @@ import { createPortal } from 'react-dom';
  * page): THIS module only re-renders the child from its own type and
  * props (cloneElement without the key) with
  *  - `aria-describedby` = the child's existing ids MERGED with a persistent
- *    hidden description carrying the same text (accessible names untouched);
+ *    hidden description carrying the same text (accessible names untouched).
+ *    Plain-text content names the ONE shared description for that text
+ *    (ui/tooltipDescriptions.ts: ref-counted, in a single hidden host, so a
+ *    table of triggers costs one unstyled node per distinct text); a React
+ *    node portals its own description into the same host;
  *  - `data-tooltip` (the description id) and `data-tooltip-shortcut`.
  * Everything else lives in ui/tooltipController.ts, loaded after the first
  * paint: one delegated listener set and one `role="tooltip"`
@@ -51,13 +64,22 @@ function loadTooltipController(): void {
 }
 
 export function Tooltip({ content, shortcut, children }: TooltipProps) {
-  // React 19 ids (`_r_1_`) are valid element ids as they are.
-  const descId = `tooltip-desc${useId()}`;
+  // Plain text shares one description per distinct text; anything else gets
+  // its own (React 19 ids, `_r_1_`, are valid element ids as they are).
+  const text = typeof content === 'string' || typeof content === 'number' ? String(content) : null;
+  const ownId = `tooltip-desc${useId()}`;
+  const descId = text === null ? ownId : descriptionId(text, shortcut);
   // After the first paint, off the critical path; the shell is accessible
   // without the controller.
   useEffect(loadTooltipController, []);
+  // In the commit that mounts the trigger, before paint: its description
+  // exists whenever it does. A server render runs no effect.
+  useLayoutEffect(
+    () => (text === null ? retainHost() : retainDescription(text, shortcut)),
+    [text, shortcut],
+  );
   // A server render (react-dom/server: unit tests render shells to static
-  // markup) cannot portal, so the hidden description is client-only.
+  // markup) cannot portal, so a React-node description is client-only.
   const client = useSyncExternalStore(noSubscription, () => true, () => false);
   const Trigger = children.type as ElementType;
   const own = children.props['aria-describedby'];
@@ -69,14 +91,14 @@ export function Tooltip({ content, shortcut, children }: TooltipProps) {
         data-tooltip={descId}
         data-tooltip-shortcut={shortcut}
       />
-      {!client || typeof document === 'undefined'
+      {text !== null || !client || typeof document === 'undefined'
         ? null
         : createPortal(
-            <span hidden id={descId}>
+            <span hidden id={ownId}>
               <span data-tooltip-text="">{content}</span>
               {shortcut ? ` (${shortcut})` : null}
             </span>,
-            document.body,
+            descriptionHost(),
           )}
     </>
   );

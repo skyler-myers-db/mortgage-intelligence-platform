@@ -363,7 +363,7 @@ describe('MarkdownAnswer figure marks', () => {
     [
       'Illinois leads with **48,396** in-the-money borrowers, ahead of Texas at 10,914 (a 48.3% share).\n\nSource: mip.gold.borrower_360.',
       HOST,
-      '<p class="genie-md-p genie-md-p--first"><span>Illinois leads with </span><strong>48,396</strong><span> in-the-money borrowers, ahead of Texas at 10,914 (a 48.3% share).</span></p><p class="genie-md-p genie-md-p--source"><span>Source: <a class="uc-asset-link" href="https://dbc-test.cloud.databricks.com/explore/data/mip/gold/borrower_360" target="_blank" rel="noopener noreferrer" aria-describedby="tooltip-desc_ID_" data-tooltip="tooltip-desc_ID_">mip.gold.borrower_360</a>.</span></p>',
+      '<p class="genie-md-p genie-md-p--first"><span>Illinois leads with </span><strong>48,396</strong><span> in-the-money borrowers, ahead of Texas at 10,914 (a 48.3% share).</span></p><p class="genie-md-p genie-md-p--source"><span>Source: <a class="uc-asset-link" href="https://dbc-test.cloud.databricks.com/explore/data/mip/gold/borrower_360" target="_blank" rel="noopener noreferrer" aria-describedby="tooltip-desc-Open%20mip.gold.borrower_360%20in%20Databricks%20Catalog%20Explorer" data-tooltip="tooltip-desc-Open%20mip.gold.borrower_360%20in%20Databricks%20Catalog%20Explorer">mip.gold.borrower_360</a>.</span></p>',
     ],
     [
       'I asked the governed space to plan this request itself; it decomposed the question into 8 sub-analyses.\n\n**Which segments lead?**\n\nThe in-the-money segment leads with **1,204** borrowers at an average score of 71.',
@@ -383,7 +383,7 @@ describe('MarkdownAnswer figure marks', () => {
     [
       'The book holds $1.2B across 3,410 loans, +350 bps over par, with 5Source: mip.gold.borrower_360 cited.',
       HOST,
-      '<p class="genie-md-p genie-md-p--first"><span>The book holds $1.2B across 3,410 loans, +350 bps over par, with 5Source: <a class="uc-asset-link" href="https://dbc-test.cloud.databricks.com/explore/data/mip/gold/borrower_360" target="_blank" rel="noopener noreferrer" aria-describedby="tooltip-desc_ID_" data-tooltip="tooltip-desc_ID_">mip.gold.borrower_360</a> cited.</span></p>',
+      '<p class="genie-md-p genie-md-p--first"><span>The book holds $1.2B across 3,410 loans, +350 bps over par, with 5Source: <a class="uc-asset-link" href="https://dbc-test.cloud.databricks.com/explore/data/mip/gold/borrower_360" target="_blank" rel="noopener noreferrer" aria-describedby="tooltip-desc-Open%20mip.gold.borrower_360%20in%20Databricks%20Catalog%20Explorer" data-tooltip="tooltip-desc-Open%20mip.gold.borrower_360%20in%20Databricks%20Catalog%20Explorer">mip.gold.borrower_360</a> cited.</span></p>',
     ],
   ];
 
@@ -408,8 +408,10 @@ describe('MarkdownAnswer figure marks', () => {
     expect(fenced?.tabIndex).toBe(0);
   });
 
-  // React useId values (the Tooltip's description id, the region's caption
-  // id) depend on render order, so they compare as _ID_.
+  // React useId values (the region's caption id) depend on render order, so
+  // they compare as _ID_. The source link's tooltip names its text's shared
+  // description (ui/tooltipDescriptions.ts), whose id is a pure function of
+  // the text, so it compares exactly.
   it.each(BASE_HTML)('renders %j byte-identically to the base without a provider', (text, workspaceHost, html) => {
     act(() => root.render(<MarkdownAnswer text={text} workspaceHost={workspaceHost} />));
     expect(container.innerHTML.replace(/_r_[0-9a-z]+_/g, '_ID_')).toBe(html);
