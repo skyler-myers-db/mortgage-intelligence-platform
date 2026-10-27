@@ -1,0 +1,178 @@
+## Find the table and read its header row
+heading, Ranked borrowers, level 2
+J
+K
+move,
+Enter
+opens
+,
+A
+reviews then approves,
+R
+rejects
+in the focused table.
+Approving as
+approver.one@summit.example
+.
+button, Keyboard shortcuts, key shortcuts ?
+Shortcuts
+end of button, Keyboard shortcuts, key shortcuts ?
+button, Export 0 leads as CSV, Every row in scope is excluded by the marketing-eligibility gate, disabled
+Export 0 leads
+end of button, Export 0 leads as CSV, Every row in scope is excluded by the marketing-eligibility gate, disabled
+link, Skip table
+status
+status
+region, Ranked borrowers table scroll region, key shortcuts J ArrowDown K ArrowUp Enter X
+table, row count 3
+rowgroup
+row, Select all eligible leads Borrower Location Segments Equity Rate Δ (bps) Primary offer Score Signal Status Approval
+columnheader, Select all eligible leads
+checkbox, Select all eligible leads, not checked
+end of columnheader, Select all eligible leads
+columnheader
+columnheader, Borrower
+columnheader, Location
+columnheader, Segments
+columnheader, Equity, no defined sort order
+button, Sort by Equity, not pressed
+Equity
+end of button, Sort by Equity, not pressed
+end of columnheader, Equity, no defined sort order
+columnheader, Rate Δ (bps), no defined sort order
+button, Sort by Rate Δ (bps), not pressed
+Rate Δ (bps)
+end of button, Sort by Rate Δ (bps), not pressed
+end of columnheader, Rate Δ (bps), no defined sort order
+columnheader, Primary offer
+columnheader, Score, no defined sort order
+button, Sort by Score, not pressed
+Score
+end of button, Sort by Score, not pressed
+end of columnheader, Score, no defined sort order
+columnheader, Signal, no defined sort order
+button, Sort by Signal, not pressed
+Signal
+end of button, Sort by Signal, not pressed
+end of columnheader, Signal, no defined sort order
+columnheader, Status, no defined sort order
+button, Status. Sort options, Sort by relationship, assignee or outreach, not expanded, has popup menu
+Status
+end of button, Status. Sort options, Sort by relationship, assignee or outreach, not expanded, has popup menu
+end of columnheader, Status, no defined sort order
+columnheader, Approval
+end of row, Select all eligible leads Borrower Location Segments Equity Rate Δ (bps) Primary offer Score Signal Status Approval
+
+## Read the first borrower row
+end of rowgroup
+rowgroup
+row, Select lead B-REVIEW0000001 B-REVIEW0000001 clip_B-REVIEW0000001 Chicago, IL 60611 In the Money $250K −35 Refinance review Primary offer rules Opportunity score 88. Scores of 75+ are the strongest review candidates. Recommendation signal strength 80 percent. No workflow activity Approve, row index 2
+cell, Select lead B-REVIEW0000001
+checkbox, Select lead B-REVIEW0000001, not checked
+end of cell, Select lead B-REVIEW0000001
+cell
+cell, B-REVIEW0000001 clip_B-REVIEW0000001
+button, Toggle preview for lead B-REVIEW0000001, not expanded
+B-REVIEW0000001
+clip_B-REVIEW0000001
+clip_B-REVIEW0000001
+end, clip_B-REVIEW0000001
+end of button, Toggle preview for lead B-REVIEW0000001, not expanded
+end of cell, B-REVIEW0000001 clip_B-REVIEW0000001
+cell, Chicago, IL 60611
+Chicago, IL
+Chicago
+,
+IL
+end, Chicago, IL
+60611
+end of cell, Chicago, IL 60611
+cell, In the Money
+In the Money
+In the Money
+end, In the Money
+end of cell, In the Money
+cell, $250K
+cell, −35
+cell, Refinance review Primary offer rules
+Refinance review
+Refinance review
+end, Refinance review
+button, Primary offer rules
+Primary offer
+rules
+end of button, Primary offer rules
+end of cell, Refinance review Primary offer rules
+cell, Opportunity score 88. Scores of 75+ are the strongest review candidates.
+image, Opportunity score 88. Scores of 75+ are the strongest review candidates., Opportunity score ranks lead strength on a 0-100 scale. Scores of 75+ are the strongest review candidates and include economics, intent, fit, relationship, and evidence.
+end of cell, Opportunity score 88. Scores of 75+ are the strongest review candidates.
+cell, Recommendation signal strength 80 percent.
+meter, Recommendation signal strength 80 percent., Signal strength is a deterministic average of the five scoring sub-scores, not a statistical confidence interval., min value 0, max value 100, current value Recommendation signal strength 80 percent.
+end of cell, Recommendation signal strength 80 percent.
+cell, No workflow activity
+No workflow activity
+end of cell, No workflow activity
+cell, Approve
+button, Approve B-REVIEW0000001
+Approve
+end of button, Approve B-REVIEW0000001
+button, Reject B-REVIEW0000001, Reject
+end of cell, Approve
+end of row, Select lead B-REVIEW0000001 B-REVIEW0000001 clip_B-REVIEW0000001 Chicago, IL 60611 In the Money $250K −35 Refinance review Primary offer rules Opportunity score 88. Scores of 75+ are the strongest review candidates. Recommendation signal strength 80 percent. No workflow activity Approve, row index 2
+
+## Focus the row's Approve action
+button, Approve B-REVIEW0000001, key shortcuts A
+
+## Approve drafts the copy and opens the review gate
+dialog, Review the outreach for B-REVIEW0000001
+button, Confirm approval, key shortcuts Enter
+
+## Move back to the review form (previous form landmark)
+form, Review the outreach before approving B-REVIEW0000001
+
+## Read the review with the virtual cursor
+Review the outreach before approving
+B-REVIEW0000001
+Channel: Email. Approving certifies this exact subject and message.
+Approving as
+approver.one@summit.example
+.
+term
+Channel
+end of term
+definition
+Email
+end of definition
+term
+Subject
+end of term
+definition
+A quick review of your options (B-REVIEW0000001)
+end of definition
+term
+Message
+end of term
+definition
+Hello, A loan officer can walk you through the numbers for B-REVIEW0000001.
+end of definition
+group, Disclosure and evidence
+Disclosure
+fixture-2026-07
+·
+IL
+button, Borrower 360 feature set
+button, Market rate comparison
+end of group, Disclosure and evidence
+button, Cancel
+button, Confirm approval, key shortcuts Enter
+end of form, Review the outreach before approving B-REVIEW0000001
+region, Notifications
+status
+end of region, Notifications
+end of dialog, Review the outreach for B-REVIEW0000001
+
+## Focus Confirm approval and press Enter
+button, Confirm approval, key shortcuts Enter
+region, Ranked borrowers table scroll region, key shortcuts J ArrowDown K ArrowUp Enter X
+polite: Approved B-REVIEW0000001Audit event audit-B-REVIEW0000001View receipt
+polite: Row 2 of 2: B-REVIEW0000002, Chicago, IL, Refinance review, score 88, pending.

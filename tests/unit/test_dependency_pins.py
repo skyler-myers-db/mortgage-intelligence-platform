@@ -35,6 +35,10 @@ HELD_MAJORS = {"typescript": 6, "vitest": 4, "@babel/core": 7}
 MAJOR_HOLDS = ("typescript", "vitest", "@babel/core")
 PLAYWRIGHT_PIN = "1.64.0"
 WEB_VITALS_PIN = "6.2.2"
+VIRTUAL_READER = "@guidepup/virtual-screen-reader"
+VIRTUAL_READER_PIN = "0.33.0"
+FRONTEND_SRC = ROOT / "frontend" / "src"
+LICENCES = ROOT / "docs" / "THIRD_PARTY_LICENSES.md"
 
 
 def _package() -> dict:
@@ -126,6 +130,34 @@ def test_web_vitals_is_an_exact_production_dependency() -> None:
     entry = _lock_packages()["node_modules/web-vitals"]
     assert entry["version"] == WEB_VITALS_PIN and entry.get("dev") is not True
     assert entry["license"] == "Apache-2.0"
+
+
+def test_the_virtual_screen_reader_is_an_exact_test_only_pin_with_a_licence_row() -> None:
+    """The virtual screen-reader pass (frontend/src/test/screenReader,
+    docs/accessibility/VPAT.md) is a dev dependency at an exact pin, locked as
+    dev with its whole dependency tree, and imported only by test code: the
+    harness under src/test/ and *.test.* files, never production source."""
+    package = _package()
+    lock = _lock_packages()
+
+    assert package["devDependencies"].get(VIRTUAL_READER) == VIRTUAL_READER_PIN
+    assert VIRTUAL_READER not in package.get("dependencies", {})
+    entry = lock[f"node_modules/{VIRTUAL_READER}"]
+    assert entry["version"] == VIRTUAL_READER_PIN and entry.get("dev") is True and entry["license"] == "MIT"
+    for name in (*entry["dependencies"], "@testing-library/dom", "aria-query"):
+        dep = lock[f"node_modules/{name}"]
+        assert dep.get("dev") is True, f"{name} reaches the lock only through the test-only reader"
+    licences = LICENCES.read_text(encoding="utf-8")
+    assert re.search(rf"^\| `{re.escape(VIRTUAL_READER)}` \({re.escape(VIRTUAL_READER_PIN)}\).*\| `MIT`", licences, re.MULTILINE)
+
+    importers = sorted(
+        path.relative_to(FRONTEND_SRC).as_posix()
+        for path in FRONTEND_SRC.rglob("*.ts*")
+        if VIRTUAL_READER in path.read_text(encoding="utf-8")
+    )
+    assert importers, "the screen-reader harness imports the reader"
+    production = [path for path in importers if not (path.startswith("test/") or re.search(r"\.test\.tsx?$", path))]
+    assert production == [], f"production source must not import {VIRTUAL_READER}: {production}"
 
 
 def test_stylelint_waits_for_a_patched_braces() -> None:

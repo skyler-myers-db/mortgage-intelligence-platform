@@ -409,9 +409,10 @@ export default function SegmentIntelligence() {
 
       <div
         className="filter-row filter-row--spaced filter-row--stacked"
+        role="group"
         aria-label="Secondary borrower filters"
       >
-        <div className="segment-mode-control" aria-label="Selected segment match mode">
+        <div className="segment-mode-control" role="group" aria-label="Selected segment match mode">
           <div>
             <div className="eyebrow">Selected segments</div>
             <div className="muted fs-12">

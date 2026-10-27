@@ -1,0 +1,30 @@
+## Tab from the top of the page
+link, Skip to main content
+
+## Enter on the skip link (the browser then focuses #main-content)
+main
+
+## Landmarks from the top of the page (NVDA D / VoiceOver landmark rotor)
+document
+navigation, Primary navigation
+banner
+navigation, Breadcrumb
+search
+main
+region, Notifications
+navigation, Primary navigation
+
+## Navigate to a borrower (route announcer + h1 focus)
+heading, Borrower, level 1
+polite: Borrower 360 · B-0123456789ABC
+
+## Say-all of the borrower page from the heading
+dossier
+image, Entrada
+Mortgage Intelligence Platform
+end of main
+button, Open Genie
+region, Notifications
+status
+end of region, Notifications
+end of document

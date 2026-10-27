@@ -198,7 +198,7 @@ export function CampaignSetupPanel({
                   ))}
                 </dl>
               </section>
-              <div className="campaign-recommendation__evidence" aria-label="Recommendation evidence">
+              <div className="campaign-recommendation__evidence" role="group" aria-label="Recommendation evidence">
                 {recommendation.evidence.map((row) => {
                   const source = drawerForAsset(row.source_asset);
                   const content = (
@@ -216,6 +216,7 @@ export function CampaignSetupPanel({
                     <span
                       key={`${row.source_asset}:${row.label}`}
                       className="campaign-evidence"
+                      role="group"
                       aria-label={`${row.label}: evidence destination unavailable`}
                     >
                       <span>{row.label}</span>

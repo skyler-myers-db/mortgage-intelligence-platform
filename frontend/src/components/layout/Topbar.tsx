@@ -177,6 +177,7 @@ function SystemStatusPill({ status }: { status: SystemStatusView }) {
     <Tooltip content={status.tooltip}>
       <div
         className="topbar__pill"
+        role="group"
         aria-label={status.ariaLabel}
         data-testid="system-status-pill"
       >
@@ -419,6 +420,7 @@ export function Topbar() {
       <Tooltip content={`Configured tenant · ${lender}. Lender configuration is applied server-side.`}>
         <div
           className="topbar__pill"
+          role="group"
           aria-label={`Configured tenant: ${lender}`}
         >
           {lenderMarkUrl() ? (

@@ -139,7 +139,8 @@ export function LeadApproveReview({
           </dd>
         </div>
       </dl>
-      <div className="chip-row" aria-label="Disclosure and evidence">
+      {/* A named group: ARIA 1.2 prohibits aria-label on a role-less div. */}
+      <div className="chip-row" role="group" aria-label="Disclosure and evidence">
         <Chip variant="success" icon="shield">
           Disclosure {draft.disclosure_version} · {draft.disclosure_state || 'state fallback'}
         </Chip>

@@ -287,7 +287,7 @@ export function EvidenceDrawerBody() {
                 <div className="source-card" role="status">
                   <div className="eyebrow mb-2">{destination.label}</div>
                   <p className="body flush">{destination.description}</p>
-                  <div className="chip-row mt-3" aria-label="Lakebase operational records">
+                  <div className="chip-row mt-3" role="group" aria-label="Lakebase operational records">
                     {destination.objectPaths.map((path) => (
                       <span key={path} className="chip chip--neutral">{path}</span>
                     ))}
@@ -354,7 +354,7 @@ export function EvidenceDrawerBody() {
                 <div className="source-card">
                   <div className="eyebrow mb-2">{destination.label}</div>
                   <p className="body flush">{destination.description}</p>
-                  <div className="chip-row mt-3" aria-label="Lakebase operational records">
+                  <div className="chip-row mt-3" role="group" aria-label="Lakebase operational records">
                     {destination.objectPaths.map((path) => (
                       <span key={path} className="chip chip--neutral">{path}</span>
                     ))}
@@ -435,7 +435,7 @@ export function EvidenceDrawerBody() {
                 <div className="source-card">
                   <div className="eyebrow mb-2">{destination.label}</div>
                   <p className="body flush">{destination.description}</p>
-                  <div className="chip-row mt-3" aria-label={`${destination.label} records`}>
+                  <div className="chip-row mt-3" role="group" aria-label={`${destination.label} records`}>
                     {destination.objectPaths.map((path) => (
                       <span key={path} className="chip chip--neutral">{path}</span>
                     ))}

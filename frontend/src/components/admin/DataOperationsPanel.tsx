@@ -306,6 +306,7 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
       id="data-operations"
       className="surface mt-grid"
       tabIndex={-1}
+      role="region"
       aria-labelledby="data-operations-title"
     >
       <div className="surface__hdr surface__hdr--split">
@@ -334,7 +335,7 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
           </div>
         )}
         {!sourcesError && (
-          <div className="admin-rollups" aria-label="Data freshness snapshot">
+          <div className="admin-rollups" role="group" aria-label="Data freshness snapshot">
             <div className="admin-rollups__grid">
               <div className="admin-rollup">
                 <span className="admin-rollup__label">Usable sources</span>
@@ -356,7 +357,7 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
           </div>
         )}
         {!operationsError && operations && (
-          <div className="chip-row" aria-label="Recommended refresh order">
+          <div className="chip-row" role="group" aria-label="Recommended refresh order">
             {operations.jobs
               .slice()
               .sort((a, b) => a.run_order - b.run_order)
