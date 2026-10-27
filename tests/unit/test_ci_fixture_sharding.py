@@ -110,6 +110,14 @@ def test_the_gate_keeps_the_check_name_and_runs_after_a_failed_shard() -> None:
     assert all("continue-on-error" not in step for step in job["steps"])
 
 
+@pytest.mark.parametrize("name", [SHARD_JOB, PERF_JOB, GATE_JOB])
+def test_no_fixture_job_tolerates_its_own_failure(name: str) -> None:
+    # A job-level `continue-on-error: true` makes `needs.<job>.result` read
+    # `success` for a red job, so the gate below would go green over a red
+    # shard or a red perf run. The step-level pins above cannot see it.
+    assert "continue-on-error" not in _jobs()[name], f"{name}: no job-level continue-on-error"
+
+
 def test_the_gate_merges_every_blob_into_the_report_artifact() -> None:
     steps = _jobs()[GATE_JOB]["steps"]
     blobs_index, blobs = _step(steps, "Download the shard blob reports")
