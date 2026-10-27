@@ -42,7 +42,7 @@ export function LeadRowExpandedSlot(props: LeadRowExpandedProps) {
   // pending or failure state (it renders with its row).
   return (
     <p
-      className="tbl__expand-inner muted fs-12 flush"
+      className="tbl__expand-inner tbl__expand-inner--pinned muted fs-12 flush"
       role="status"
       data-testid={`lead-preview-pending-${props.lead.borrower_id}`}
     >

@@ -177,6 +177,8 @@ describe('the expanded row loads its body on the expand (LeadTableRow.expanded)'
     expect(line?.getAttribute('role')).toBe('status');
     expect(line?.textContent).toBe('Loading the preview…');
     expect(line?.closest('tr.tbl__expand')).not.toBeNull();
+    // Pinned to the scrollport's left edge like the preview it stands in for.
+    expect(line?.classList.contains('tbl__expand-inner--pinned')).toBe(true);
     expect(body(IDS[0])).toBeNull();
 
     await vi.waitFor(async () => {

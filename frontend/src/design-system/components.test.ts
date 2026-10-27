@@ -129,6 +129,9 @@ describe('layout containment contracts', () => {
     expect(css).toMatch(/\.tbl__expand-inner--lead\s*\{[^}]*left:\s*0;/s);
     expect(css).toMatch(/\.tbl__expand-inner--lead\s*\{[^}]*max-inline-size:\s*calc\(100cqw/s);
     expect(css).toMatch(/@container main \(max-width: 960px\)\s*\{[^}]*\.tbl__expand-inner--lead\s*\{\s*grid-template-columns:\s*1fr;/s);
+    // The expanded row's pending / failure line (its body is a lazy chunk)
+    // pins the same way, so a horizontally scrolled table still shows it.
+    expect(css).toMatch(/\.tbl__expand-inner--pinned\s*\{[^}]*position:\s*sticky;[^}]*left:\s*0;[^}]*max-inline-size:\s*calc\(100cqw/s);
   });
 
   it('makes proof affordance rows visibly interactive without layout shifts', () => {
