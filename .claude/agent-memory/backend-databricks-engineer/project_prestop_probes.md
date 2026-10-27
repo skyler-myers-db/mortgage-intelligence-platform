@@ -8,13 +8,17 @@ metadata:
 `tools/databricks/deploy_prestop_probes.py` (orchestration, Supervisor and
 principal checks) and `tools/databricks/prestop_genie_grants.py` (Genie ACL
 reads, per-source describe and remedies) run read-only from
-`deploy_step_automation_identities.sh`, after the M2M credential checks and
-before the signed lease and the first `APP_FAIL_CLOSED_ARMED=1`, so known
-post-step-0a failures refuse before the run stops the App (post-W5 lane L4,
-2026-10-27). `MIP_RETIRE_HUMAN_SUPERVISOR=<id>` (the exact, case-sensitive id,
-never a boolean) acknowledges deleting a canonical Supervisor the runtime SP
-did not create. It is checked three times: the probe, `pin_journal`, and
-`retire_pinned_supervisor` (only while the old agent still exists).
+`deploy_step_automation_identities.sh`, after `bind_deployment_workspace_auth`,
+the preflight tail's runtime-secret `--check` (it stays first) and the M2M
+credential checks, and before the signed lease, the first
+`APP_FAIL_CLOSED_ARMED=1` and every App stop, so known post-step-0a failures
+refuse before the run stops the App (post-W5 lane L4, rebuilt as L4R on the
+integration head, 2026-10-27). `MIP_RETIRE_HUMAN_SUPERVISOR=<id>` (the exact,
+case-sensitive id, never a boolean) acknowledges deleting a canonical
+Supervisor the runtime SP did not create. It is checked three times: the
+probe, `pin_journal`, and `retire_pinned_supervisor` before its first mutation,
+INCLUDING when the Supervisor is already gone and only its non-runtime orphan
+serving endpoint would be deleted (the probe cannot see that case).
 
 **Why:** with no signed blue, any failure after step 0a leaves the live App
 stopped; paychex has a user-created "Mortgage Growth Agent", six
@@ -38,6 +42,18 @@ a `/directories/<object id>` parent, which is `/Workspace/Shared`.
   puts ONE principal in a non-`users` group and asserts the call list.
 - `tools/databricks/cutover_agent_runtime_supervisor.py` sits at ~895 of the
   900-line hard limit (`>=900` fails): put new logic in a helper module.
+  `deploy_step_preflight_gates.sh` is ~786: new pre-stop checks go in
+  `deploy_step_automation_identities.sh` or a new step file in
+  `DEPLOY_STEP_SCRIPTS`.
+- Cross-object aggregation trap: per-space tests could not tell `any()` from
+  `all()` in the remedy choice (4 mutants survived 191 tests). Any rule that
+  aggregates over a list needs a test with HETEROGENEOUS members (a direct
+  grant on one space, an inherited one on another).
+- Refusals name Genie spaces by id only; `genie_acls` drops titles (other
+  teams' spaces reach CI logs). A padded `MIP_AGENT_SUPERVISOR_NAME` is refused
+  pre-stop (planner matches raw, journal strips).
+- Fixtures use synthetic ids only; a review once flagged six live workspace
+  ids (Supervisor, App SP client/SCIM, directory, two spaces) in this suite.
 - The probe refuses the WHOLE reserved family (`<canonical> [mip-agent-runtime]`,
   `<canonical> [mip-agent-runtime-<12hex>]` + optional `-mq1`) for non-runtime
   creators (any non-runtime SP or person), because the current contract hash
@@ -58,8 +74,9 @@ a `/directories/<object id>` parent, which is `/Workspace/Shared`.
 - Residuals left open: App SP access to unrelated serving endpoints
   (`mip-agent-gateway`) still fails post-stop; AIM-only nested groups are invisible
   pre-stop (no `/Me` read for runtime/verifier); a journal whose canonical name
-  differs from `MIP_AGENT_SUPERVISOR_NAME` refuses only at the retirement step,
-  after any pinned old Gateway step (retire() runs `_delete_pinned_gateway` first).
+  differs from `MIP_AGENT_SUPERVISOR_NAME`, or a resumed orphan-endpoint
+  cleanup, refuses only at the retirement step, after any pinned old Gateway
+  step (retire() runs `_delete_pinned_gateway` first).
 - In an isolated worktree, the harness refuses compound shell commands that mix
   `git`/`python -m pytest` with heredocs, variables or `$(...)`; put edits and
   loops in a scratchpad script and run plain commands, one per call.
