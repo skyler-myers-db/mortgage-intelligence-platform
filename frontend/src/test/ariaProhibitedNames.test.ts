@@ -28,8 +28,11 @@
  * Not covered, and why: header and footer (their role is banner/contentinfo
  * or generic depending on where they sit, which source cannot tell; the axe
  * gate's needs-review check in tests/e2e/fixture/axe.ts sees them in the
- * rendered page), and a name passed through a component's prop spread into a
- * div (the same axe check). Node environment: reads files only.
+ * rendered page); an `<a>` with no `href` (implicitly generic, so a name on
+ * it is prohibited, but this scan treats every `a` as a link; the same axe
+ * check, on the states it scans); and a name passed through a component's
+ * prop spread into a div (the same axe check). Node environment: reads
+ * files only.
  */
 // @ts-expect-error Frontend app types intentionally exclude Node globals; this
 // unit test reads the source tree under Vitest only.
