@@ -1037,6 +1037,31 @@ def test_the_probe_runs_read_only_before_the_lease_and_every_app_stop() -> None:
     assert probe < first_stop and probe < quarantine and probe < signed_blue
     assert probe < first_arm
     assert "APP_FAIL_CLOSED_ARMED=1" not in script[:steps]
+
+
+def test_the_probe_runs_after_deployer_auth_and_the_runtime_secret_check() -> None:
+    # The probe reads as the workspace-admin deployer, so the deployment
+    # workspace auth must be bound first. Step 0's runtime-secret plan stays the
+    # first pre-stop refusal in the preflight tail; the probe follows it, and
+    # nothing between the first step and the probe stops or quarantines the App.
+    script = deploy_entrypoint_text()
+    steps = script.index('step "preflight — check .env.local, databricks CLI, venv"')
+    bind = script.index("\nbind_deployment_workspace_auth\n", steps)
+    secret_check = script.index("tools.databricks.provision_runtime_secrets --check", steps)
+    probe = script.index(PROBE_CALL, steps)
+
+    assert steps < bind < secret_check < probe
+    assert script.count("tools.databricks.provision_runtime_secrets --check") == 2
+    assert script.rindex("tools.databricks.provision_runtime_secrets --check") < probe
+    before_probe = script[steps:probe]
+    for app_stop in (
+        "stop_app_fail_closed",
+        "--stop-app-for-mutation",
+        "--mode quarantine",
+        "apps stop",
+        "APP_FAIL_CLOSED_ARMED=1",
+    ):
+        assert app_stop not in before_probe, app_stop
     # No bounded authority wrapper: the probe needs neither the signing key nor
     # the account-SCIM credential, and never runs as an M2M identity.
     block = script[probe : script.index("\n  # The signed lease", probe)]
