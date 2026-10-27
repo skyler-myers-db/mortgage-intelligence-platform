@@ -2,7 +2,7 @@
 /**
  * Perf ceilings from reference-runner calibration (audit runtime-09,
  * quality-08). The PERF_SPEC specs write calibration/<name>.json on every
- * run (frontend/tests/e2e/fixture/calibration.ts), and the e2e-fixture CI job
+ * run (frontend/tests/e2e/fixture/calibration.ts), and the e2e-fixture-perf CI job
  * uploads them as `perf-calibration-<run id>-<attempt>`. Download three runs
  * of one sha and print the ceilings:
  *

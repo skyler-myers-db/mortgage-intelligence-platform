@@ -8,7 +8,7 @@ pinned fail-closed:
   perf-budget.fixture.spec.ts is committed);
 - the source-map upload errors when the build emitted no maps
   (tools/postbuild_artifacts.mjs moves them to frontend/sourcemaps/);
-- the e2e-fixture job re-runs tests/unit/test_frontend_build_artifacts.py
+- the e2e-fixture-perf job re-runs tests/unit/test_frontend_build_artifacts.py
   right after its build with ``MIP_REQUIRE_FRONTEND_DIST=1``, so the
   served-layer and build-meta checks fail rather than skip.
 
@@ -19,6 +19,10 @@ frontend-tests step before ``lint`` and the tail of the ``lint`` chain, with
 an exact pin and a jsx-a11y-only config; the single-worker perf step also
 collects interaction-budget, and PERF_SPEC matches exactly the two budget
 specs.
+
+Post-W5 the harness is sharded (tests/unit/test_ci_fixture_sharding.py):
+the perf step, its calibration upload and the built-dist check moved with
+the single-worker budgets into ``e2e-fixture-perf``, unchanged.
 
 The parse job (``playwright-offline``) runs the whole route-fulfilled
 layout-stability spec: a ``--grep`` there ran one of its five tests and hid
@@ -56,11 +60,13 @@ def _step_index(steps: list[dict[str, Any]], needle: str) -> int:
 
 
 PERF_STEP_RUN = "npm --prefix frontend run e2e:fixture:ci -- perf-budget interaction-budget --workers=1"
+# The single-worker budgets job beside the harness shards (never split).
+PERF_JOB = "e2e-fixture-perf"
 
 
 def test_the_perf_budget_step_is_unconditional() -> None:
     assert PERF_SPEC.is_file(), "the perf budget spec the step runs is committed"
-    steps = _jobs()["e2e-fixture"]["steps"]
+    steps = _jobs()[PERF_JOB]["steps"]
     perf = steps[_step_index(steps, "perf-budget interaction-budget --workers=1")]
 
     assert "if" not in perf, "the perf-budget step must not be guarded now that its spec exists"
@@ -75,7 +81,7 @@ def test_the_perf_budget_step_is_unconditional() -> None:
 
 def test_the_perf_calibration_is_uploaded_after_the_perf_step() -> None:
     """Audit runtime-09 / quality-08: every perf run's calibration JSON is an artifact."""
-    steps = _jobs()["e2e-fixture"]["steps"]
+    steps = _jobs()[PERF_JOB]["steps"]
     perf = _step_index(steps, PERF_STEP_RUN)
     upload = next(i for i, step in enumerate(steps) if step.get("name") == "Upload the perf calibration")
     assert upload == perf + 1, "the upload follows the perf step"
@@ -250,7 +256,7 @@ def test_oxlint_is_an_exact_pin_and_its_config_names_only_jsx_a11y_rules() -> No
 
 
 def test_the_fixture_job_checks_the_built_dist_with_the_require_flag() -> None:
-    steps = _jobs()["e2e-fixture"]["steps"]
+    steps = _jobs()[PERF_JOB]["steps"]
     build = _step_index(steps, "npm --prefix frontend run build")
     python = _step_index(steps, "actions/setup-python@")
     install = _step_index(steps, "pip install -r requirements.txt")

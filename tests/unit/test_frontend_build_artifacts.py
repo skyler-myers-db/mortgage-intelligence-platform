@@ -14,7 +14,7 @@ The static checks pin that wiring. The served-layer checks go through the
 real ``backend.main.app`` and skip when ``frontend/dist`` is not built, which
 is the case in the backend CI job (it runs before any frontend build); there
 the postbuild step's own dist scan, which runs inside every
-``npm run build``, is the fail-closed guard. CI's e2e-fixture job runs this
+``npm run build``, is the fail-closed guard. CI's e2e-fixture-perf job runs this
 file again right after its build with ``MIP_REQUIRE_FRONTEND_DIST=1``, where a
 missing dist or build-meta FAILS instead of skipping, so the served-layer
 checks can never go silently vacuous.

@@ -30,7 +30,7 @@ const NESTED_SPEC = /.*\.nested\.ts$/;
 // failure report.
 //
 // PERF_SPEC contract (audit runtime-09): a spec it collects measures timing,
-// so it runs ONLY in the single-worker perf step of the e2e-fixture CI job
+// so it runs ONLY in the single-worker perf step of the e2e-fixture-perf CI job
 // (MIP_PERF=1, `-- perf-budget interaction-budget --workers=1`; the filter is
 // required, because MIP_PERF=1 alone also collects every normal fixture
 // spec). Until its ceilings are calibrated from at least 3 reference-runner
@@ -105,8 +105,9 @@ const htmlReport = ['html', { open: 'never', outputFolder: htmlReportDir }] as c
  * production frontend and runs the route-fulfilled Growth Agent handoff
  * contract without booting the credential-gated backend. The nightly
  * workflow runs the live suite with real credentials against the deployed app.
- * The `e2e-fixture` job runs fixture mode (E2E_FIXTURE=1, above): every route
- * rendered against typed fixtures, with the hygiene gate on.
+ * The `e2e-fixture-shard` jobs run fixture mode (E2E_FIXTURE=1, above) as
+ * `--shard=i/N` blob runs: every route rendered against typed fixtures, with
+ * the hygiene gate on; the `e2e-fixture` job merges and gates them.
  */
 export default defineConfig({
   testDir: './tests/e2e',

@@ -1,7 +1,7 @@
 /**
  * Calibration output of the PERF_SPEC specs (audit runtime-09, quality-08):
  * each writes `<project outputDir>/calibration/<name>.json` (under
- * test-results/perf/ in the perf step), which the e2e-fixture CI job uploads
+ * test-results/perf/ in the perf step), which the e2e-fixture-perf CI job uploads
  * as `perf-calibration-<run id>-<attempt>`. tools/perf_ceilings.mjs turns
  * three such artifacts from distinct reference-runner runs of one sha into
  * ceilings; only the integrator sets a ceiling in a spec.

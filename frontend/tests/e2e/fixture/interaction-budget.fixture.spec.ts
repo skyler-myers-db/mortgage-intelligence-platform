@@ -37,7 +37,7 @@
  * the cursor moved, the row expanded, the textarea holds the typed text).
  * Every run writes calibration/interaction-budget.json (medians, samples and
  * the CI run's sha / run id / attempt / runner, numbers only), which the
- * e2e-fixture job uploads as perf-calibration-<run id>-<attempt>.
+ * e2e-fixture-perf job uploads as perf-calibration-<run id>-<attempt>.
  */
 import type { Page } from '@playwright/test';
 import { writeCalibration } from './calibration';
