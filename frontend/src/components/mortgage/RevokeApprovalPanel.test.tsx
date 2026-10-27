@@ -18,6 +18,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { ApiError } from '../../lib/apiTransport';
 import { clearToasts, getToasts } from '../../lib/toast';
 import { mount } from '../../test/render';
+import { reportFocus, startReader } from '../../test/screenReader/virtualReader';
 import { AppStoreContext, createAppStore, type AppStore } from '../appStore';
 import { RATIONALE_GOVERNED_REFUSAL } from '../../lib/apiClients/approvalRequests';
 import { useRevokeApproval } from '../../lib/mutations/outreach';
@@ -147,6 +148,17 @@ describe('RevokeApprovalPanel: the form', () => {
     expect(document.activeElement).toBe(field());
     // The receipt path knows the approval: no lifecycle read at all.
     expect(borrowerLifecycle).not.toHaveBeenCalled();
+  });
+
+  it('names the reason field by its label alone; the hint is said once, as its description', async () => {
+    await render();
+    // The virtual screen reader (src/test/screenReader): the wrapping <label>
+    // also holds the hint, which once made the name "Reason for revoking
+    // Leave out personal details." with the hint read again as the description.
+    const reader = await startReader();
+    const spoken = await reader.step('report the focused reason field', reportFocus);
+    expect(document.activeElement).toBe(field());
+    expect(spoken).toEqual([`textbox, Reason for revoking, ${REVOKE_COPY.hint}, required`]);
   });
 
   it('an empty Confirm moves focus to the reason and sends nothing', async () => {

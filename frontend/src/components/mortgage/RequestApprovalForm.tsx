@@ -166,12 +166,16 @@ export function RequestApprovalForm({ borrowerIds, onCancel, onRequested }: Requ
         <div className="muted fs-12">An approver decides; you cannot approve these yourself.</div>
       </div>
       <label className="decision-panel__field decision-panel__field--wide">
-        <span className="field__label">{REQUEST_REASON_LABEL}</span>
+        <span className="field__label" id={`${hintId}-label`}>{REQUEST_REASON_LABEL}</span>
+        {/* Named by the label text alone: the wrapping <label> also holds the
+            hint, which would otherwise be read twice, in the name and again
+            as the description (virtual screen-reader pass, form-validation.txt). */}
         <textarea
           ref={fieldRef}
           value={reason}
           required
           maxLength={REQUEST_REASON_MAX_LENGTH}
+          aria-labelledby={`${hintId}-label`}
           aria-invalid={failure !== null || undefined}
           aria-describedby={[hintId, overCap && capId, failure && failureId].filter(Boolean).join(' ')}
           onChange={(event) => setReason(event.target.value)}
