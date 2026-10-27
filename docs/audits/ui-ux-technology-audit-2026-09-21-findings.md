@@ -1289,7 +1289,7 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Verifier:** Confirmed ZIP_TILE_CAP=24, the tile grid, no zoom/pan, and prototype L1802-1835 drawing ZIP polygons. But live ZIP coverage is partial (IL 212 ZIPs; 677 rollup rows), ZIP is not ZCTA, and a PMTiles basemap cannot meet the 10 MB per-file cap or connect-src 'self'.
 - **Constraint conflict:** The optional MapLibre + PMTiles basemap is infeasible: a US basemap archive exceeds the Databricks Apps 10 MB per-file limit and external tile hosts are blocked by connect-src 'self'. Committing roughly 15-25 MB of all-state geometry (needed because coverage must follow the share dynamically) is an owner decision.
 
-**Wave-5 status.** W5c (2026-10-07): the ZCTA polygon rung is built (w5-zcta-watchlist; deviation:zcta-level): a fitted viewBox, pan and zoom, a drill tween and the tiles as the degraded fallback; the per-state geometry is committed by the approved operator build (pending at merge). Until it lands a Segments ZIP drill shows the plain tiles with no failure line (integrator, 2026-10-07).
+**Wave-5 status.** W5c (2026-10-07): the ZCTA polygon rung is built (w5-zcta-watchlist; deviation:zcta-level): a fitted viewBox, pan and zoom, a drill tween and the tiles as the degraded fallback; the per-state geometry is committed by the approved operator build (pending at merge). Until it lands a Segments ZIP drill shows the plain tiles with no failure line (integrator, 2026-10-07). Superseded 2026-10-26: the geometry is committed (`post-w5/zcta-geometry`; the post-wave ZCTA record in ui-ux-technology-audit-2026-09-21.md).
 
 ### `dataviz-02` Choropleth ramp, classes and legend fail basic encoding checks in both themes
 
