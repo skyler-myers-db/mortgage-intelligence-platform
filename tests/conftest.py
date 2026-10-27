@@ -120,6 +120,7 @@ from backend.services.workspace_store import (
     _reset_workspace_store_for_tests,
     get_workspace_store,
 )
+from tests.fixtures.env_local_guard import describe_change, stat_fingerprint
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 from tests.fixtures.in_memory_workspace_store import InMemoryWorkspaceStore
 from tests.fixtures.in_process_repos import (
@@ -139,17 +140,9 @@ from tests.fixtures.in_process_repos import (
 # The operator's ``.env.local`` at the root of the checkout under test. A test
 # once ran deploy-dev.yml's credential step with ``cwd`` at the repo root and
 # truncated it (``> .env.local``). The guard below fingerprints it with
-# ``os.lstat`` only and never opens it: its values are the operator's secrets.
+# ``os.lstat`` and ``os.stat`` (never opened): its values are the operator's
+# secrets, and the stat side sees a write through a symlinked .env.local.
 _OPERATOR_ENV_LOCAL = Path(__file__).resolve().parents[1] / ".env.local"
-
-
-def _stat_fingerprint(path: Path) -> tuple[int, int, int, int] | None:
-    """(inode, size, mtime_ns, mode) of ``path``, or None when it is absent. Never reads it."""
-    try:
-        st = os.lstat(path)
-    except FileNotFoundError:
-        return None
-    return (st.st_ino, st.st_size, st.st_mtime_ns, st.st_mode)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -157,16 +150,17 @@ def _operator_env_local_is_untouched() -> Iterator[None]:
     """Fail the session when any test created, replaced, rewrote or removed <repo>/.env.local.
 
     Write a test's ``.env.local`` under ``tmp_path`` (or monkeypatch the
-    tool's ``ENV_LOCAL``), never at the repo root.
+    tool's ``ENV_LOCAL``), never at the repo root. The fingerprint is
+    tests/fixtures/env_local_guard.py's os.lstat and os.stat pair.
     """
-    before = _stat_fingerprint(_OPERATOR_ENV_LOCAL)
+    before = stat_fingerprint(_OPERATOR_ENV_LOCAL)
     yield
-    after = _stat_fingerprint(_OPERATOR_ENV_LOCAL)
-    if after != before:
-        change = "created" if before is None else "removed" if after is None else "rewrote or replaced"
+    change = describe_change(before, stat_fingerprint(_OPERATOR_ENV_LOCAL))
+    if change is not None:
         pytest.fail(
-            f"this test session {change} {_OPERATOR_ENV_LOCAL} (os.stat fingerprint changed). A test must write "
-            "its .env.local under tmp_path or monkeypatch ENV_LOCAL, never at the repo root.",
+            f"this test session {change} {_OPERATOR_ENV_LOCAL} (its os.lstat and os.stat fingerprint, never "
+            "opened, changed). A test must write its .env.local under tmp_path or monkeypatch ENV_LOCAL, never "
+            "at the repo root.",
             pytrace=False,
         )
 
