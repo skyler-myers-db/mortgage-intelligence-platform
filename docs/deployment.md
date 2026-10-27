@@ -174,6 +174,44 @@ main checkout shared by agent worktrees) looks like a private install, so a
 from a checkout that owns its `node_modules` and that nothing else links to,
 or answer no at the prompt and refresh the shared install deliberately.
 
+### Deploy interpreter
+
+`deploy.sh` runs every repo tool with one interpreter. By default that is
+`.venv/bin/python` in the checkout, or `python3` when there is no `.venv` (the
+Makefile convention). `MIP_DEPLOY_PYTHON` selects another one, such as a venv
+built only for deploys outside the checkout. Set it in the shell, not in
+`.env.local`: `.env.local` is parsed with this interpreter. It must be an
+absolute path to an executable that reports Python 3. Any other value exits 2
+before the path is run.
+
+Step 0 then runs `python -m tools.python_deps_check`. It compares the
+interpreter with the `requirements.txt` pins (`-c uv.lock` plus
+`-r requirements.in`):
+
+- the interpreter must be the Python minor that `uv.lock` was compiled for
+  (3.11);
+- every requirement must be installed;
+- every package that pip would install for this interpreter must equal its
+  `uv.lock` pin.
+
+This covers mlflow (which registers the Gateway model), databricks-sdk,
+databricks-sql-connector and every transitive pin, not only `import boto3,
+mlflow`. A dry run reports the result (`python deps: pinned`, `drifted`,
+`error` or `skipped`) and continues. A real run refuses anything but `pinned`
+with exit 2, before the first workspace call. On drift, the tool prints the
+problems and this remedy:
+
+```bash
+python3.11 -m venv "$HOME/.venvs/mip-deploy"
+"$HOME/.venvs/mip-deploy/bin/python" -m pip install -r <checkout>/requirements.txt
+export MIP_DEPLOY_PYTHON="$HOME/.venvs/mip-deploy/bin/python"
+./scripts/deploy.sh -t dev
+```
+
+Keep the venv outside the checkout, because an untracked directory in the
+checkout fails the exact-source gate. Never re-sync a venv that other sessions
+share to make a deploy pass.
+
 ### Per-run M2M identities
 
 Live app validation and agent ownership use seven service principals and store only their OAuth
@@ -796,6 +834,37 @@ existing action confirmations and one-hour generated-copy/cohort provenance
 tokens can expire. The previous key is verification-only; new tokens always
 use the current key.
 
+The provisioner (`tools/databricks/provision_runtime_secrets.py`) decides every
+write before it makes one, and it never silently replaces two kinds of
+existing key:
+
+- **The Cotality ID mask.** If `cotality-id-mask-v1` already exists in the
+  scope, the configured `MIP_COTALITY_ID_MASK_SECRET` must equal it as the
+  runtime reads it (UTF-8, surrounding whitespace stripped). The provisioner
+  compares HMAC-SHA256 fingerprints of the two values under a per-run random
+  salt and prints neither value nor fingerprint. If they differ, or if the
+  stored value cannot be read (the deploying identity needs READ on the
+  scope), the run refuses with exit 2 before it writes anything. Writing a
+  different mask would re-key every masked borrower id and orphan the `B-…`
+  ids already stored in Lakebase campaigns, approvals, audit, watchlists and
+  snoozes. To fix a refusal, set the value the install already uses. A
+  deliberate re-key is an owner-run data migration. A deploy never does it.
+  An equal mask is kept and not rewritten.
+- **Salesforce credentials.** When a `SALESFORCE_*` input is unset, an
+  existing `salesforce-*` key is kept. The disabled sentinel is written only
+  when the key is absent, because the App's static resource binding needs a
+  backing key. A configured value still replaces the key.
+
+`deploy.sh` runs the same plan read-only (`--check`: no scope creation, no
+write) at the end of step 0. That is before the signed workspace lease and
+before step 0a stops the App, so a refusal leaves the App serving. Run the
+check by hand before a deploy with:
+
+```bash
+python tools/databricks/provision_runtime_secrets.py \
+  --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}" --check
+```
+
 After that bounded grace period, remove
 `MIP_GENIE_ACTION_SECRET_PREVIOUS` and
 `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` from the deployment environment and
@@ -969,7 +1038,9 @@ The dev deploy workflow accepts the non-secret connector values as GitHub
 environment variables and the client secret, integration-user password, and
 optional security token as GitHub environment secrets. `deploy.sh` writes
 those secret values directly to the `mip-runtime` Databricks secret scope and
-the App payload uses `value_from` bindings. A partial connector remains
+the App payload uses `value_from` bindings. An unset value never replaces a
+key that already exists in the scope; only an absent key gets the disabled
+sentinel that the static App binding needs. A partial connector remains
 honestly staged and cannot claim delivery.
 
 ## Optional OTLP log export
@@ -1146,7 +1217,15 @@ scope `mip-runtime`.
   workspace-unique display names (the SQL warehouse, the feature pipeline,
   the MLflow experiment) end in `${var.install_suffix}`. With the defaults
   the live install renders exactly as before; the prod and ci targets are
-  unchanged.
+  unchanged. The experiment is `/Shared/mip-lead-scoring${var.install_suffix}`.
+  The CLI rewrites every experiment name as `dir + "/" + name_prefix + base`
+  in every target, so a workspace-root name rendered as `//…`. One level under
+  `/Shared` renders `/Shared/[dev <user>] mip-lead-scoring` for dev and
+  `/Shared/mip-lead-scoring` for prod and ci
+  (`tests/unit/test_bundle_experiment_path.py`). On paychex the bundle state
+  holds the experiment at `/Shared/mip/[dev <user>] lead-scoring`,
+  so the first governed bundle apply is expected to rename it to the new name.
+  That apply has not been run or planned.
 - `deploy-dev.yml` sets `MIP_BUNDLE_ROOT_LEAF: dev-ci` as a literal in the
   deploy step, so the CI install lives under `~/.bundle/<bundle>/dev-ci` and
   its names end in `_ci`. `nightly.yml` sets
