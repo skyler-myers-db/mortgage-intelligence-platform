@@ -609,6 +609,30 @@ def test_missing_principals_are_refused_alongside_every_other_refusal() -> None:
     assert {method for method, _ in workspace.calls} == {"GET"}
 
 
+def test_a_service_principal_without_a_scim_id_is_refused_alongside_every_other_refusal() -> None:
+    # A blank SCIM id must never reach the group walk: the admin SCIM resolver
+    # exits on a blank id, which would end the run and drop every refusal the
+    # probe had already collected.
+    calls: list[str] = []
+    workspace = _ReadOnlyWorkspace(
+        acls={"space-two": _acl(_group("users", ("CAN_RUN", False)))},
+        app=_app(),
+        service_principals={RUNTIME_ID: "", VERIFIER_ID: "verifier-scim"},
+    )
+
+    refusals, _ = _run(workspace, [_human_canonical()], resolve_groups=_walk({}, calls))
+
+    assert len(refusals) == 3
+    assert "MIP_RETIRE_HUMAN_SUPERVISOR" in refusals[0]
+    assert refusals[1].startswith(
+        f"cannot read the agent-runtime SP {RUNTIME_ID}'s group memberships: the "
+        f"agent-runtime service principal {RUNTIME_ID!r} has no SCIM id; manual identity "
+        "review is required, then re-run."
+    )
+    assert f"agent-runtime SP {RUNTIME_ID}" in refusals[2] and "group 'users'" in refusals[2]
+    assert calls == ["100000000000004", "verifier-scim"]
+
+
 def test_a_scim_group_reaching_only_the_runtime_sp_is_refused_through_its_own_scim_id() -> None:
     calls: list[str] = []
     workspace = _runtime_readers_workspace()
