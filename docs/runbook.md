@@ -108,7 +108,10 @@ BRANCH="$(git branch --show-current)"
 # only for an approved legacy or failed pre-capture App expected to have no
 # signed record; the workflow re-proves that absence before any rebase mutation.
 REBASE_UNVERIFIED_APP=false
+# The break-glass acknowledgement is required: without it the run ends in the
+# refuse-unacknowledged job and deploys nothing.
 RUN_URL="$(gh workflow run deploy-dev.yml --ref "$BRANCH" \
+  -f acknowledge_single_maintainer_break_glass=true \
   -f skip_silver=true \
   -f skip_smoke=false \
   -f rebase_unverified_app="$REBASE_UNVERIFIED_APP" \

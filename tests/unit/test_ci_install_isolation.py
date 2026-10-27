@@ -1004,6 +1004,10 @@ def test_the_live_app_has_no_governed_recovery_path_and_escalates_to_the_owner()
     ):
         assert anchor in recovery, anchor
     assert_no_live_recovery_overclaim(flat + " " + recovery)
+    raw_recovery = _runbook_recovery()
+    dispatch = raw_recovery[raw_recovery.index("gh workflow run deploy-dev.yml") : raw_recovery.index("# Fail closed unless")]
+    assert "-f acknowledge_single_maintainer_break_glass=true" in dispatch, "or the run ends at refuse-unacknowledged"
+    assert "-f remediate_foreign_catalog_bindings=false" in dispatch
     grants = _flat(GRANTS_DOC.read_text(encoding="utf-8"))
     assert "acts on that workspace's catalogs" not in grants
     assert "shares the live install's Unity Catalog metastore" in grants
