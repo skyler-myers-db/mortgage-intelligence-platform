@@ -597,6 +597,26 @@ def test_payload_binds_salesforce_secrets_only_for_complete_idempotent_connector
     assert "SALESFORCE_PASSWORD" not in incomplete
 
 
+def test_kept_salesforce_keys_stay_unbound_while_the_secret_inputs_are_unset(
+    monkeypatch,
+) -> None:
+    """provision_runtime_secrets keeps an existing salesforce-* key whose input is
+    unset; the payload must leave that key unbound, so a kept credential never
+    re-enables the connector (docs/deployment.md, the runtime secret notes)."""
+    for name, value in {
+        "SALESFORCE_INSTANCE_URL": "https://summit.example.my.salesforce.com",
+        "SALESFORCE_CLIENT_ID": "connected-app-id",
+        "SALESFORCE_USERNAME": "mip-integration@example.com",
+        "SALESFORCE_EXTERNAL_ID_FIELD": "MIP_Activation_Id__c",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="prod"))
+
+    assert env["SALESFORCE_INSTANCE_URL"]["value"] == "https://summit.example.my.salesforce.com"
+    assert not set(app_deploy_payload.SALESFORCE_SECRET_ENVS) & set(env)
+
+
 @pytest.mark.parametrize("policy", ["activty", "OFF", "on", "Scheduled"])
 def test_payload_refuses_an_unknown_keep_warm_policy(monkeypatch, policy) -> None:
     """A typo must fail the payload, not the settings Literal at App boot."""
