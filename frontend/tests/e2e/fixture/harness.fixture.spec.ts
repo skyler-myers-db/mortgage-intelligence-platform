@@ -163,7 +163,12 @@ test.describe('shell helpers', () => {
     await app.gotoRoute('/glossary');
     const palette = await app.openCommandPalette();
     await page.keyboard.type(PRIMARY_BORROWER.borrower_id);
-    await expect(palette.getByRole('group', { name: 'Borrowers', exact: true })).toContainText(PRIMARY_BORROWER.borrower_id);
+    const borrowers = palette.getByRole('group', { name: 'Borrowers', exact: true });
+    await expect(borrowers).toContainText(PRIMARY_BORROWER.borrower_id);
+    // The full id's own answer: one row. A debounced prefix answer (the first
+    // characters match every fixture borrower) also shows this id, so the
+    // count is what proves the search for the typed id landed.
+    await expect(borrowers.getByRole('option')).toHaveCount(1);
     await expect(palette.getByRole('group', { name: 'Recent borrowers', exact: true })).toHaveCount(0);
   });
 
