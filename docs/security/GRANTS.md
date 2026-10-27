@@ -1319,8 +1319,12 @@ reporting `"silver_max_ingested_at": null`.
 3. Verify the space's trusted-assets list includes the three
    `mip.semantics.*` views (`lead_generation`, `segment_performance`,
    `borrower_opportunity`). If empty, re-run `mip_refresh_scores` (step
-   7 in [`docs/runbook.md`](../runbook.md) §4) — the `refresh_semantics_views`
-   task publishes them and the provisioning script rebinds.
+   10 in [`docs/runbook.md`](../runbook.md) §4) — the `refresh_semantics_views`
+   task publishes them and the provisioning script rebinds. Re-run it only
+   where the deployed jobs match the current bundle: on an install whose
+   governed deploy is NO-GO, never run it (a stale gold job drops the
+   reviewed functions' `EXECUTE` grants); use the runbook's "Interim refresh
+   (governed deploy NO-GO)".
 
 **SQL equivalent** (Genie permissions are workspace-level, not UC — no
 SQL form; use the UI or the Databricks REST API

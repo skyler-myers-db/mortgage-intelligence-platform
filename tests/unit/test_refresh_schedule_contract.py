@@ -571,18 +571,24 @@ def test_the_runbook_pins_the_interim_refresh_and_its_never_run_now_warning() ->
 _STALE_JOB_CAVEAT_EXEMPT = {
     ("runbook.md", "10. `databricks bundle run mip_refresh_scores -t dev` — CTAS chain:"),
 }
-_RUNS_GOLD_OR_LIFECYCLE_JOB = re.compile(r"bundle run\s+(?:mip_refresh_scores|mip_sync_lifecycle_state)\b")
+# Any verb that runs either deployed job: `bundle run`, `run-now` or a prose "re-run".
+_RUNS_GOLD_OR_LIFECYCLE_JOB = re.compile(
+    r"(?:bundle run|run-now|re-run)\W{0,3}(?:mip_refresh_scores|mip_sync_lifecycle_state)\b"
+)
+_DATED_DOC_DIRS = {"audits", "validation"}
 
 
 def test_every_operator_doc_that_runs_the_gold_or_lifecycle_job_carries_the_stale_job_caveat() -> None:
     """A stale deployed gold job drops the reviewed-function grants; a stale lifecycle job reseeds defaults.
 
-    Every operator doc (docs/*.md; docs/audits and docs/validation are dated
+    Every operator doc (docs/**/*.md; docs/audits and docs/validation are dated
     records) that tells an operator to run either job carries, within 12 lines,
     the NO-GO caveat and a pointer to the interim refresh.
     """
     checked: list[str] = []
-    for doc in sorted((ROOT / "docs").glob("*.md")):
+    for doc in sorted((ROOT / "docs").rglob("*.md")):
+        if doc.relative_to(ROOT / "docs").parts[0] in _DATED_DOC_DIRS:
+            continue
         lines = doc.read_text(encoding="utf-8").splitlines()
         for index, line in enumerate(lines):
             if not _RUNS_GOLD_OR_LIFECYCLE_JOB.search(line) or (doc.name, line.strip()) in _STALE_JOB_CAVEAT_EXEMPT:
@@ -592,8 +598,10 @@ def test_every_operator_doc_that_runs_the_gold_or_lifecycle_job_carries_the_stal
             assert "governed deploy is NO-GO, never run" in window, site
             assert "Interim refresh (governed deploy NO-GO)" in window, site
             checked.append(site)
-    # Non-vacuity: the nine sites this caveat was written for (2026-10-27).
-    assert len(checked) >= 9, checked
+    # Non-vacuity: the nine sites this caveat was written for (2026-10-27), plus
+    # GRANTS.md's Genie trusted-assets "re-run" (a sub-directory, prose verb).
+    assert len(checked) >= 10, checked
+    assert any(site.startswith("GRANTS.md:") for site in checked), checked
     runbook = " ".join((ROOT / "docs" / "runbook.md").read_text(encoding="utf-8").split())
     assert (
         "Buttons 1 to 3 run the deployed jobs. Press them only where the deployed jobs match the current bundle: on an "
