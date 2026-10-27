@@ -46,7 +46,11 @@ from tools.verify_live_geo_drill import (  # noqa: E402
 from tools.verify_live_rate_sensitivity import rate_sensitivity_flags  # noqa: E402
 from tools.verify_live_source_readiness import (  # noqa: E402
     DEFAULT_MAX_SOURCE_AGE_DAYS,
+    FAIL_CLOSED_MAX_SOURCE_AGE_DAYS,
+    SCHEDULED_REFRESH_MAX_SOURCE_AGE_DAYS,
+    SourceAgeThreshold,
     _source_readiness_flags,
+    resolve_max_source_age_days,
 )
 
 DEFAULT_BASE = "https://mip-app-2543889327043640.aws.databricksapps.com"
@@ -647,6 +651,7 @@ def render_markdown(
     *,
     profile: str = "DEFAULT",
     max_source_age_days: int = DEFAULT_MAX_SOURCE_AGE_DAYS,
+    threshold_basis: str = "",
 ) -> str:
     lines: list[str] = []
     lines.append("# E2E live verification — 2026-04-23")
@@ -655,7 +660,8 @@ def render_markdown(
     lines.append("")
     lines.append(f"Base URL: `{base}`  ")
     lines.append(f"Auth: `databricks auth token -p {profile}` (OAuth bearer of the profile's identity)  ")
-    lines.append(f"Source freshness: `checked_at` within {max_source_age_days} d (`--max-source-age-days`)  ")
+    basis = f"; {threshold_basis}" if threshold_basis else ""
+    lines.append(f"Source freshness: `checked_at` within {max_source_age_days} d (`--max-source-age-days`){basis}  ")
     lines.append(f"Synthetic test-id prefix: `{test_tag}`")
     lines.append("")
     lines.append("## Endpoint results")
@@ -711,14 +717,16 @@ def main() -> int:
     ap.add_argument(
         "--max-source-age-days",
         type=int,
-        default=DEFAULT_MAX_SOURCE_AGE_DAYS,
+        default=None,
         help=(
             "flag a source whose checked_at is older than this many days (default "
-            f"{DEFAULT_MAX_SOURCE_AGE_DAYS}: the dev weekly cadence + 1 day; pass your install's cadence + 1)"
+            f"{FAIL_CLOSED_MAX_SOURCE_AGE_DAYS}, fail-closed; {SCHEDULED_REFRESH_MAX_SOURCE_AGE_DAYS}, the weekly "
+            "cadence + 1 day, only when a read-only `databricks jobs list -p <profile>` shows "
+            "mip_scheduled_refresh UNPAUSED on its weekly cron)"
         ),
     )
     args = ap.parse_args()
-    if args.max_source_age_days < 1:
+    if args.max_source_age_days is not None and args.max_source_age_days < 1:
         ap.error("--max-source-age-days must be at least 1")
 
     try:
@@ -727,13 +735,20 @@ def main() -> int:
         print(f"OAuth token fetch failed: {exc}", file=sys.stderr)
         return 2
 
+    if args.max_source_age_days is None:
+        threshold = resolve_max_source_age_days(args.profile)
+    else:
+        threshold = SourceAgeThreshold(args.max_source_age_days, "set by --max-source-age-days")
+    print(f"[verify_live] source freshness threshold {threshold.days} d: {threshold.basis}", file=sys.stderr)
+
     results = run_probes(args.base_url, token)
     report = render_markdown(
         results,
         args.base_url,
         "B-TEST-*",
         profile=args.profile,
-        max_source_age_days=args.max_source_age_days,
+        max_source_age_days=threshold.days,
+        threshold_basis=threshold.basis,
     )
     with open(args.out, "w", encoding="utf-8") as fh:
         fh.write(report)
@@ -752,7 +767,7 @@ def main() -> int:
         for r in results
     ]
     print(json.dumps(summary, indent=2))
-    flags = collect_red_flags(results, max_source_age_days=args.max_source_age_days)
+    flags = collect_red_flags(results, max_source_age_days=threshold.days)
     if flags:
         print("Live verification red flags:", file=sys.stderr)
         for flag in flags:

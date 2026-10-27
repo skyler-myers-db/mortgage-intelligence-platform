@@ -236,7 +236,12 @@ def test_the_cadence_constant_follows_the_weekly_cron() -> None:
     assert (day_of_month, month) == ("?", "*")
     assert re.fullmatch(r"MON|TUE|WED|THU|FRI|SAT|SUN", day_of_week), "a single weekday is a 7-day cadence"
     assert readiness.SCHEDULED_REFRESH_CADENCE_DAYS == 7
-    assert readiness.DEFAULT_MAX_SOURCE_AGE_DAYS == readiness.SCHEDULED_REFRESH_CADENCE_DAYS + 1 == 8
+    assert readiness.SCHEDULED_REFRESH_MAX_SOURCE_AGE_DAYS == readiness.SCHEDULED_REFRESH_CADENCE_DAYS + 1 == 8
+    # verify_live proves the schedule live by this cron and time zone; the
+    # default stays fail-closed (tests/unit/test_verify_live_source_age.py).
+    schedule = _bundle()["resources"]["jobs"][ORCHESTRATOR]["schedule"]
+    assert (cron, schedule["timezone_id"]) == (readiness.SCHEDULED_REFRESH_CRON, readiness.SCHEDULED_REFRESH_TIMEZONE)
+    assert readiness.DEFAULT_MAX_SOURCE_AGE_DAYS == readiness.FAIL_CLOSED_MAX_SOURCE_AGE_DAYS == 3
 
 
 # ------------------------------------------ the deploy.sh block (pause status)

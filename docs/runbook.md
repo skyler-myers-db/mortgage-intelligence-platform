@@ -626,7 +626,10 @@ when gold is rebuilt: by a full governed `deploy.sh` run, or by an
 operator-run interim refresh of FRED and gold that leaves out every
 `publish_fn_*` task. One such interim refresh ran on 2026-10-27 and moved it to
 06:48 UTC that day. Between rebuilds it ages, and `tools/verify_live.py` flags
-it once it is more than 8 days old. That flag is correct.
+it once it is more than 3 days old: its default threshold fails closed at 3
+days and widens to 8 (the 7-day cadence plus 1) only when it reads
+`mip_scheduled_refresh` back `UNPAUSED` on the weekly cron. That flag is
+correct.
 
 Never unpause, `run-now` or Admin-trigger a deployed child job whose definition
 predates the current bundle. For example, a gold job that still carries
@@ -664,8 +667,10 @@ predates the current bundle. For example, a gold job that still carries
   `init_ddl` is an open follow-up.
 - **Silent re-pause.** Any bundle apply outside `scripts/deploy.sh` resolves the
   variable to its `PAUSED` default and re-pauses the schedule without an error.
-  The repo does not support such an apply. Dev then goes stale silently until
-  the 8-day `verify_live` flag fires. Re-run the governed deploy to restore it.
+  The repo does not support such an apply. Dev then goes stale without an
+  error; `tools/verify_live.py` reads the job back `PAUSED`, falls back to its
+  fail-closed 3-day threshold, and flags `checked_at` 3 days after the last
+  rebuild. Re-run the governed deploy to restore it.
 - **Collision with a deploy.** The orchestrator and all four children declare
   `max_concurrent_runs: 1` with queueing, so a deploy that holds one at Friday
   06:00 delays the chain instead of skipping it: the scheduled child run waits
@@ -712,8 +717,11 @@ predates the current bundle. For example, a gold job that still carries
   schedule `UNPAUSED`.
 - `SELECT MAX(refresh_at) FROM mip.ref.refresh_run_state` returns the deploy
   time, then each Friday's run time.
-- `tools/verify_live.py` shows no `checked_at is stale` flag. Its default
-  threshold is 8 days, the 7-day cadence plus 1.
+- `tools/verify_live.py` shows no `checked_at is stale` flag, and its report
+  header shows the 8-day threshold (the 7-day cadence plus 1) with the basis
+  `mip_scheduled_refresh job <id> is UNPAUSED on the weekly cron`. A header
+  that still reads `fail-closed` (3 days) means the job was not read back
+  `UNPAUSED` on that cron.
 
 ---
 

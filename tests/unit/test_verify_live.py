@@ -171,7 +171,7 @@ def test_verify_live_checks_admin_source_readiness_contract() -> None:
     assert "admin.sources: Voluntary Lien status=error expected live" in flags
     # The stale flag names the measured age against the threshold (W5e).
     assert any(
-        flag.startswith("admin.sources: MMA Mortgage Analytics checked_at is stale (") and flag.endswith(" d > 8 d)")
+        flag.startswith("admin.sources: MMA Mortgage Analytics checked_at is stale (") and flag.endswith(" d > 3 d)")
         for flag in flags
     ), flags
     assert "admin.sources: Building Permits cannot be live until the feed is loaded" in flags
@@ -499,17 +499,25 @@ def test_the_threshold_argument_moves_the_stale_boundary() -> None:
     nine_days = _admin_sources_checked(9)
 
     stale = [flag for flag in collect_red_flags(nine_days) if "checked_at is stale" in flag]
-    assert stale and all(flag.endswith("(9.0 d > 8 d)") for flag in stale), stale
+    assert stale and all(flag.endswith("(9.0 d > 3 d)") for flag in stale), stale
     assert collect_red_flags(nine_days, max_source_age_days=10) == []
     sixty_six = [flag for flag in collect_red_flags(_admin_sources_checked(66.2)) if "stale" in flag]
-    assert sixty_six and all(flag.endswith("(66 d > 8 d)") for flag in sixty_six), sixty_six
+    assert sixty_six and all(flag.endswith("(66 d > 3 d)") for flag in sixty_six), sixty_six
 
 
-def test_the_default_threshold_is_the_weekly_cadence_plus_one_day() -> None:
-    """A run that is one cadence old is fresh; one missed Friday is flagged."""
+def test_the_default_threshold_is_the_fail_closed_three_days() -> None:
+    """Without a proven live schedule, data older than 3 days is flagged (W5e's threshold)."""
 
-    assert not [flag for flag in collect_red_flags(_admin_sources_checked(7.5)) if "stale" in flag]
-    missed = [flag for flag in collect_red_flags(_admin_sources_checked(8.5)) if "stale" in flag]
+    assert not [flag for flag in collect_red_flags(_admin_sources_checked(2.5)) if "stale" in flag]
+    stale = [flag for flag in collect_red_flags(_admin_sources_checked(3.5)) if "stale" in flag]
+    assert stale and all(flag.endswith("(3.5 d > 3 d)") for flag in stale), stale
+
+
+def test_the_proven_schedule_threshold_is_the_weekly_cadence_plus_one_day() -> None:
+    """With the schedule proven live: one cadence old is fresh; one missed Friday is flagged."""
+
+    assert not [flag for flag in collect_red_flags(_admin_sources_checked(7.5), max_source_age_days=8) if "stale" in flag]
+    missed = [flag for flag in collect_red_flags(_admin_sources_checked(8.5), max_source_age_days=8) if "stale" in flag]
     assert missed and all(flag.endswith("(8.5 d > 8 d)") for flag in missed), missed
 
 
@@ -528,40 +536,19 @@ def test_the_cli_threads_the_threshold_into_the_flags(monkeypatch: pytest.Monkey
         seen["days"] = max_source_age_days
         return []
 
+    def no_jobs_read(profile: str) -> object:
+        raise AssertionError("an explicit --max-source-age-days reads no jobs")
+
     monkeypatch.setattr(verify_live, "get_oauth_token", lambda profile: "test-token")
     monkeypatch.setattr(verify_live, "run_probes", lambda base, token: [])
     monkeypatch.setattr(verify_live, "collect_red_flags", fake_collect)
+    monkeypatch.setattr(verify_live, "resolve_max_source_age_days", no_jobs_read)
     out = tmp_path / "report.md"
     monkeypatch.setattr("sys.argv", ["verify_live.py", "--out", str(out), "--max-source-age-days", "9"])
 
     assert verify_live.main() == 0
     assert seen["days"] == 9
-    assert "within 9 d" in out.read_text(encoding="utf-8")
-
-
-def test_the_cli_default_threshold_is_the_weekly_cadence_plus_one(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    seen: dict[str, int] = {}
-
-    def fake_collect(results: list[ProbeResult], *, max_source_age_days: int = 0) -> list[str]:
-        seen["days"] = max_source_age_days
-        return []
-
-    monkeypatch.setattr(verify_live, "get_oauth_token", lambda profile: "test-token")
-    monkeypatch.setattr(verify_live, "run_probes", lambda base, token: [])
-    monkeypatch.setattr(verify_live, "collect_red_flags", fake_collect)
-    out = tmp_path / "report.md"
-    monkeypatch.setattr("sys.argv", ["verify_live.py", "--out", str(out)])
-
-    assert verify_live.main() == 0
-    assert seen["days"] == 8
-    assert "within 8 d" in out.read_text(encoding="utf-8")
-
-    monkeypatch.setattr("sys.argv", ["verify_live.py", "--help"])
-    with pytest.raises(SystemExit):
-        verify_live.main()
-    assert "default 8: the dev weekly cadence + 1 day" in " ".join(capsys.readouterr().out.split())
+    assert "within 9 d (`--max-source-age-days`); set by --max-source-age-days" in out.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
