@@ -111,10 +111,21 @@ def build_resource_binding_payload(
     description = str(app.get("description") or "").strip()
     if description:
         payload["description"] = description
-    forbidden = {"source_code_path", "env_vars", "mode"} & payload.keys()
+    _assert_source_free(payload)
+    return payload
+
+
+# Fields that would select, activate or configure App source. ``apps update``
+# with any of them would no longer be a resource-binding-only change;
+# default_source_code_path in particular would repoint the App's default
+# source away from the governed per-release folder (app_release_contract).
+SOURCE_FIELDS = frozenset({"source_code_path", "default_source_code_path", "env_vars", "mode"})
+
+
+def _assert_source_free(payload: dict[str, Any]) -> None:
+    forbidden = SOURCE_FIELDS & payload.keys()
     if forbidden:
         raise ValueError(f"source-free App payload contains forbidden fields: {sorted(forbidden)}")
-    return payload
 
 
 def _assert_exact_transition(
