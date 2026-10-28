@@ -128,7 +128,7 @@ def render(report: dict[str, Any], run: str | None = None) -> str:
     npm_adv = [[code(a["package"], "npm"), advisory(a["id"]), code(a["severity"], "word"), "gate" if a["severity"] in ("high", "critical") else "informational"] for a in report["npm_advisories"]]
     pip_adv = [[code(a["package"], "pypi"), code(a["version"], "version"), advisory(a["id"]), "ignored in ci.yml" if a["ignored"] == "yes" else "gate"] for a in report["pip_advisories"]]
     lines += ["", "## Advisories", "", "npm audit over the lock (high and critical gate):", "", *_table(["Package", "Advisory", "Severity", "Effect"], npm_adv)]
-    lines += ["", "pip-audit over uv.lock:", "", *_table(["Package", "Version", "Advisory", "Effect"], pip_adv)]
+    lines += ["", "pip-audit over uv.lock and requirements-dev.lock:", "", *_table(["Package", "Version", "Advisory", "Effect"], pip_adv)]
     waiver_rows = [[code(w["kind"], "text"), code(w["subject"], *_SUBJECT_KINDS), code(w["date"], "date")] for w in report["waivers"]]
     lines += ["", "## Dated waivers and holds", "", *_table(["Kind", "Subject", "Date"], waiver_rows)]
     header = ["Package", "Pinned", "Latest", "Published", "Gap", "Status"]

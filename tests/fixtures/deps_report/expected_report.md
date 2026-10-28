@@ -19,7 +19,7 @@ npm audit over the lock (high and critical gate):
 |---|---|---|---|
 | `example-parser` | [`GHSA-2234-5678-9cfg`](https://github.com/advisories/GHSA-2234-5678-9cfg) | `moderate` | informational |
 
-pip-audit over uv.lock:
+pip-audit over uv.lock and requirements-dev.lock:
 
 | Package | Version | Advisory | Effect |
 |---|---|---|---|
@@ -54,6 +54,7 @@ pip-audit over uv.lock:
 |---|---|---|---|---|---|
 | `databricks-sdk` | `0.103.0` | `0.152.0` | `2026-10-13` | `major` | `held` `genie-03: no chat-mode message cancel (fixture)` until `2026-11-15` |
 | `pyjwt` | `2.15.0` | `2.15.1` | `2026-09-28` | `patch` | `pending` |
+| `ruff` | `0.8.6` | `0.14.2` | `2026-10-09` | `major` | `pending` |
 | `uvicorn` | `0.47.0` | `0.54.0` | `2026-09-25` | `major` | `pending` |
 
 ## Workflow tool pins

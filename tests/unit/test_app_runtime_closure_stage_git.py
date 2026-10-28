@@ -96,7 +96,7 @@ def test_stage_refuses_a_ref_whose_requirements_digest_is_stale(
     repo: Path, dist: Path, tmp_path: Path, changes: dict[str, str], case: str
 ) -> None:
     # The bytes of requirements.txt would not change, and a build that compares
-    # only those bytes (inferred from the 2026-10-28 log, not yet confirmed)
+    # only those bytes (the 2026-10-28 build logs, docs/deployment.md)
     # skips the reinstall, so the App would keep its old packages.
     write_files(repo, changes)
     git(repo, "commit", "-q", "-am", case)

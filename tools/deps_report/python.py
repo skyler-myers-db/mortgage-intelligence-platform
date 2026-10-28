@@ -1,9 +1,11 @@
-"""PyPI drift: the direct requirements of requirements.in, at their uv.lock versions.
+"""PyPI drift: the direct requirements of each input, at its lock's versions.
 
-The lock's ``name==version`` lines give every version. A direct requirement
-is an exact ``==`` pin of requirements.in, or a range-pinned one (``>=``,
-``<``, ``~=``...) that the lock resolves, shown at its locked version. The
-lock is a pip-compile constraints file and is never regenerated here (its
+Two sets: the App's requirements.in at uv.lock, then the CI/dev tools'
+requirements-dev.in at requirements-dev.lock (compiled against uv.lock), one
+row per package. The lock's ``name==version`` lines give every version. A
+direct requirement is an exact ``==`` pin of the input, or a range-pinned one
+(``>=``, ``<``, ``~=``...) that the lock resolves, shown at its locked
+version. Each lock is a pip-compile constraints file, never regenerated here (its
 refresh is the narrow ``--upgrade-package`` method in
 docs/audits/supply-chain-audit.md). Names are PEP 503 normalised. Drift never
 turns the report red.
@@ -22,6 +24,8 @@ from tools.deps_report import REPO_ROOT, SourceError, drift_row, hold_for
 
 REQUIREMENTS_IN = REPO_ROOT / "requirements.in"
 UV_LOCK = REPO_ROOT / "uv.lock"
+DEV_REQUIREMENTS_IN = REPO_ROOT / "requirements-dev.in"
+DEV_LOCK = REPO_ROOT / "requirements-dev.lock"
 _PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?==([^\s;#]+)")
 _RANGED = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*(?:[<>!~]=?|===?)")
 PyPI = Callable[[str], dict[str, object]]
@@ -69,6 +73,16 @@ def package_rows(fetch: PyPI, holds: list[dict[str, object]], requirements: Path
         pinned = locked.get(name) or direct[name]
         rows.append(drift_row(name, pinned, latest, published, hold_for(holds, "pypi", name)))
     return rows
+
+
+def all_package_rows(fetch: PyPI, holds: list[dict[str, object]], sets: list[tuple[Path, Path]]) -> list[dict[str, str]]:
+    """``package_rows`` over each (requirements, lock) set; the first set to list a package wins."""
+
+    rows: dict[str, dict[str, str]] = {}
+    for requirements, lock in sets:
+        for row in package_rows(fetch, holds, requirements, lock):
+            rows.setdefault(row["package"], row)
+    return [rows[name] for name in sorted(rows)]
 
 
 def _latest(payload: dict[str, object]) -> tuple[str, str]:

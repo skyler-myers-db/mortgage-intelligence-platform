@@ -47,6 +47,8 @@ class Sources:
     package_json: Path
     requirements_in: Path
     uv_lock: Path
+    dev_requirements_in: Path
+    dev_lock: Path
     ci_yml: Path
     workflows: Path
     allowlist: Path
@@ -62,7 +64,8 @@ class Sources:
 def live_sources() -> Sources:
     workflows = REPO_ROOT / ".github" / "workflows"
     return Sources(
-        npm.PACKAGE_JSON, python.REQUIREMENTS_IN, python.UV_LOCK, workflows / "ci.yml", workflows,
+        npm.PACKAGE_JSON, python.REQUIREMENTS_IN, python.UV_LOCK, python.DEV_REQUIREMENTS_IN, python.DEV_LOCK,
+        workflows / "ci.yml", workflows,
         waivers.ALLOWLIST, REPO_ROOT / "tools" / "dependency_holds.json",
         npm.npm_view, python.pypi_json, advisories.run_npm_audit, advisories.run_pip_audit,
         pins.github_release, lambda today: live.live_section(),
@@ -90,6 +93,7 @@ def offline_sources(directory: Path) -> Sources:
 
     return Sources(
         directory / "frontend_package.json", directory / "requirements_in.txt", directory / "uv_lock.txt",
+        directory / "requirements_dev_in.txt", directory / "dev_lock.txt",
         directory / "synthetic_ci.yml", directory, directory / "synthetic_allowlist.json", directory / "holds.json",
         table("npm_view.json"), table("pypi.json"), document("npm_audit.json"), document("pip_audit.json"),
         table("gh_releases.json"), live_fixture,
@@ -111,7 +115,10 @@ def build(sources: Sources, today: date) -> dict[str, object]:
         lambda: npm.package_rows(sources.npm_view, holds, npm.exact_pins(sources.package_json)), []
     )
     pypi_rows: list[dict[str, str]] = guarded(
-        lambda: python.package_rows(sources.pypi, holds, sources.requirements_in, sources.uv_lock), []
+        lambda: python.all_package_rows(
+            sources.pypi, holds, [(sources.requirements_in, sources.uv_lock), (sources.dev_requirements_in, sources.dev_lock)]
+        ),
+        [],
     )
     npm_adv: list[dict[str, str]] = guarded(lambda: advisories.npm_findings(sources.npm_audit()), [])
     pip_adv: list[dict[str, str]] = guarded(

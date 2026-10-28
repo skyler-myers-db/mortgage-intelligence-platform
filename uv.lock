@@ -22,12 +22,8 @@ anyio==4.14.2
     #   watchfiles
 asn1crypto==1.5.1
     # via scramp
-ast-serialize==0.5.0
-    # via mypy
 attrs==26.1.0
-    # via
-    #   aiohttp
-    #   hypothesis
+    # via aiohttp
 blinker==1.9.0
     # via flask
 boto3==1.43.50
@@ -59,8 +55,6 @@ cloudpickle==3.1.2
     # via mlflow-skinny
 contourpy==1.3.3
     # via matplotlib
-coverage==7.14.0
-    # via pytest-cov
 cryptography==50.0.1
     # via
     #   -r requirements.in
@@ -73,14 +67,8 @@ databricks-sdk==0.103.0
     #   -r requirements.in
     #   mlflow-skinny
     #   mlflow-tracing
-databricks-sql-connector==4.8.0
-    # via -r requirements.in
 docker==7.1.0
     # via mlflow
-et-xmlfile==2.0.0
-    # via openpyxl
-execnet==2.1.2
-    # via pytest-xdist
 fastapi==0.136.1
     # via
     #   -r requirements.in
@@ -134,8 +122,6 @@ httpx==0.28.1
     # via -r requirements.in
 huey==3.3.4
     # via mlflow
-hypothesis==6.123.7
-    # via -r requirements.in
 idna==3.15
     # via
     #   anyio
@@ -144,8 +130,6 @@ idna==3.15
     #   yarl
 importlib-metadata==8.7.1
     # via mlflow-skinny
-iniconfig==2.3.0
-    # via pytest
 itsdangerous==2.2.0
     # via flask
 jinja2==3.1.6
@@ -158,10 +142,6 @@ joblib==1.5.3
     # via scikit-learn
 kiwisolver==1.5.0
     # via matplotlib
-librt==0.11.0
-    # via mypy
-lz4==4.4.5
-    # via databricks-sql-connector
 mako==1.4.2
     # via
     #   -r requirements.in
@@ -185,10 +165,6 @@ multidict==6.9.1
     #   -r requirements.in
     #   aiohttp
     #   yarl
-mypy==2.1.0
-    # via -r requirements.in
-mypy-extensions==1.1.0
-    # via mypy
 narwhals==2.22.1
     # via scikit-learn
 numpy==2.4.5
@@ -200,12 +176,6 @@ numpy==2.4.5
     #   scikit-learn
     #   scipy
     #   skops
-oauthlib==4.0.0
-    # via
-    #   -r requirements.in
-    #   databricks-sql-connector
-openpyxl==3.1.5
-    # via databricks-sql-connector
 opentelemetry-api==1.45.1
     # via
     #   -r requirements.in
@@ -255,22 +225,15 @@ packaging==25.0
     #   matplotlib
     #   mlflow-skinny
     #   mlflow-tracing
-    #   pytest
     #   skops
 pandas==2.3.3
-    # via
-    #   databricks-sql-connector
-    #   mlflow
-pathspec==1.1.1
-    # via mypy
+    # via mlflow
 pg8000==1.31.5
     # via -r requirements.in
 pillow==13.0.0
     # via
     #   -r requirements.in
     #   matplotlib
-pluggy==1.6.0
-    # via pytest
 prettytable==3.18.0
     # via skops
 propcache==0.5.2
@@ -298,8 +261,6 @@ pyasn1==0.6.4
     #   pyasn1-modules
 pyasn1-modules==0.4.2
     # via google-auth
-pybreaker==1.4.1
-    # via databricks-sql-connector
 pycparser==3.0
     # via cffi
 pydantic==2.10.4
@@ -313,27 +274,11 @@ pydantic-core==2.27.2
     # via pydantic
 pydantic-settings==2.7.1
     # via -r requirements.in
-pygments==2.20.0
-    # via pytest
-pyjwt==2.15.0
-    # via
-    #   -r requirements.in
-    #   databricks-sql-connector
 pyparsing==3.3.2
     # via matplotlib
-pytest==9.0.3
-    # via
-    #   -r requirements.in
-    #   pytest-cov
-    #   pytest-xdist
-pytest-cov==6.0.0
-    # via -r requirements.in
-pytest-xdist==3.8.0
-    # via -r requirements.in
 python-dateutil==2.9.0.post0
     # via
     #   botocore
-    #   databricks-sql-connector
     #   graphene
     #   matplotlib
     #   pandas
@@ -353,13 +298,10 @@ pyyaml==6.0.3
 requests==2.34.2
     # via
     #   databricks-sdk
-    #   databricks-sql-connector
     #   docker
     #   mlflow-skinny
     #   opentelemetry-exporter-http-transport
     #   opentelemetry-exporter-otlp-proto-http
-ruff==0.8.6
-    # via -r requirements.in
 s3transfer==0.19.1
     # via boto3
 scikit-learn==1.9.0
@@ -379,8 +321,6 @@ skops==0.14.0
     # via mlflow
 smmap==5.0.3
     # via gitdb
-sortedcontainers==2.4.0
-    # via hypothesis
 sqlalchemy==2.0.51
     # via
     #   alembic
@@ -396,12 +336,6 @@ starlette==1.3.1
     #   mlflow-skinny
 threadpoolctl==3.6.0
     # via scikit-learn
-thrift==0.24.0
-    # via
-    #   -r requirements.in
-    #   databricks-sql-connector
-tomli==2.4.1
-    # via coverage
 typing-extensions==4.15.0
     # via
     #   aiohttp
@@ -412,7 +346,6 @@ typing-extensions==4.15.0
     #   graphene
     #   grpcio
     #   mlflow-skinny
-    #   mypy
     #   opentelemetry-api
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
@@ -432,7 +365,6 @@ urllib3==2.8.0
     # via
     #   -r requirements.in
     #   botocore
-    #   databricks-sql-connector
     #   docker
     #   requests
 uvicorn==0.47.0

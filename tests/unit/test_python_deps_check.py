@@ -253,8 +253,10 @@ def test_the_real_requirements_parse_and_pin_the_deploy_critical_packages() -> N
     }
 
     assert pins.python == (3, 11)
-    for name in ("mlflow", "databricks-sdk", "databricks-sql-connector", "boto3"):
+    for name in ("mlflow", "databricks-sdk", "boto3"):
         assert exact[name] == f"=={pins.lock[name]}", name
+    # Removed 2026-10-28: nothing imports databricks.sql (requirements.in header).
+    assert "databricks-sql-connector" not in exact and "databricks-sql-connector" not in pins.lock
 
 
 # ------------------------------------------------------------- the deploy wiring

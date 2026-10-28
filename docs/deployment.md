@@ -4,7 +4,7 @@
 
 ```bash
 cp .env.example .env.local
-pip install -r requirements.txt
+pip install -r requirements-dev.txt  # the App's requirements.txt plus the test tools
 npm --prefix frontend install
 npm --prefix frontend run dev
 uvicorn backend.main:app --reload
@@ -300,14 +300,16 @@ across deployments. `uv.lock` had changed; `requirements.txt` had not. Until
 2026-10-28 it was only the `-c uv.lock` and `-r requirements.in` include
 lines, byte-identical since 2026-05-17.
 
-What is inferred from that build log, and not yet confirmed: the build
-decides whether to reinstall by comparing `requirements.txt` with the previous
-deployment's copy, byte for byte, and does not follow the file's includes. If
-so, no lock refresh reached a running App since 2026-05-17, including the lock
-bumps since at least 2026-10-06 and their security floors (certifi, urllib3,
-PyJWT, oauthlib, mlflow and the rest). The first deploy after this change
-that carries a digest change confirms or refutes the inference (see "Verify
-the reinstall" below).
+What the next deploy confirmed: the build decides whether to reinstall by
+comparing `requirements.txt` with the previous deployment's copy and does not
+follow the file's includes. So no lock refresh reached a running App between
+2026-05-17 and 2026-10-28, including the lock bumps since at least 2026-10-06
+and their security floors (certifi, urllib3, PyJWT, oauthlib, mlflow and the
+rest). The deploy of main 32cc4384 (PR #275, 2026-10-28) changed only the
+digest comment described below, and its build ran pip (21 upgrades, among them
+oauthlib 4.0.0 and databricks-sql-connector 4.8.0). The App then logged
+`dependency_lock_check` with `outcome` `ok` and `requirements_digest`
+`current`.
 
 `requirements.txt` therefore starts with a generated comment carrying the
 sha256 of both included files:
@@ -350,28 +352,25 @@ also reports `python` and the `lock_python` that `uv.lock` was compiled for (a
 mismatch is `drift`, as it is for `tools/python_deps_check.py`), and
 `requirements_digest`: `current`, `stale`, `missing` or `unreadable`. The
 `remedy` follows the cause. A stale or missing digest can leave the bytes of
-`requirements.txt` unchanged, which the build is inferred to treat as no
-reason to reinstall, so restamp, commit and redeploy. A current digest with
+`requirements.txt` unchanged, which the build treats as no reason to
+reinstall, so restamp, commit and redeploy. A current digest with
 drift means the build skipped or failed the reinstall anyway, so restamping
 changes nothing: read the deployment build log and apply the fallback below.
 It reads `uv.lock`, `requirements.in` and `requirements.txt` from the App
 source root and walks the installed closure of `requirements.in` the way
 `tools/python_deps_check.py` does, so a pin that this interpreter never
-installs (tomli on Python 3.11) is not applicable rather than drift. It reads
+installs is not applicable rather than drift. It reads
 local files only and makes no network call. It never raises, so it cannot
 stop startup, and the lifespan runs it in a worker thread, off the event loop
 (about 0.3 s on a local interpreter). Run against a local interpreter built
-before PR #274, it reports `drift` for exactly databricks-sql-connector
+before PR #274, it reported `drift` for exactly databricks-sql-connector
 (locked 4.8.0, installed 4.4.0) and oauthlib (locked 4.0.0, installed 3.3.1),
-the same two packages that `tools/python_deps_check.py` names, with
-`requirements_digest` `current`. The event has not yet been seen in a deployed
-App.
+the same two packages that `tools/python_deps_check.py` named, with
+`requirements_digest` `current`.
 
-Whether a comment-only change defeats the skip is inferred from how the skip
-behaved (it appears keyed to `requirements.txt`, and that file never
-changed); it has not yet been observed, so confirm it on the next deploy that
-carries a digest change. If the build still skips (for example because it
-compares the file with comments stripped), the fallback is an include line
+A comment-only change did defeat the skip on the 32cc4384 deploy. If a later
+build skips anyway (for example because it starts comparing the file with
+comments stripped), the fallback is an include line
 whose path carries the digest, so the parsed file changes even with comments
 removed: commit the lock under a digest-named path and point the constraint
 at it (`-c locks/uv-<digest>.lock`). That line names no package. A
@@ -386,6 +385,64 @@ is not yet shown to be needed and it touches every reader:
 tool would have to write the lock copy and the line, and superseded
 digest-named locks would need pruning. `tools/python_deps_check.py` already
 follows whatever path the `-c` line names.
+
+### Runtime only: what the App installs and what CI adds
+
+Since 2026-10-28 `requirements.in` lists only what the App runs. The test,
+lint and type-check tools (pytest, pytest-cov, pytest-xdist, ruff, mypy,
+hypothesis) live in `requirements-dev.in`, pinned by `requirements-dev.lock`:
+
+| File | Read by | Holds |
+| --- | --- | --- |
+| `requirements.txt` | the Apps build, the deploy interpreter, `pip-audit` (through the dev file) | digest line, `-c uv.lock`, `-r requirements.in` |
+| `requirements.in` + `uv.lock` | the two above, `dependency_lock_check`, `python_deps_check` | the App's direct pins and their whole closure |
+| `requirements-dev.in` + `requirements-dev.lock` | CI and local development only | the dev tools and the part of their closure the App does not need |
+| `requirements-dev.txt` | `pip install -r requirements-dev.txt` in CI and locally | `-r requirements.txt`, `-c requirements-dev.lock`, `-r requirements-dev.in` |
+
+`requirements-dev.lock` is compiled with `uv.lock` as a constraint, so a
+package that both closures need (packaging, typing-extensions, attrs) carries
+the App's pin in both files. pip refuses two different constraints for one
+package, so `tests/unit/test_requirements_dev_split.py` fails when a narrow
+`uv.lock` bump of a shared package has not been carried into the dev lock.
+Refresh either lock the same narrow way:
+
+```bash
+uv pip compile requirements.in --python-version 3.11 --format requirements.txt \
+  --output-file uv.lock --upgrade-package <pkg>
+uv pip compile requirements-dev.in -c uv.lock --python-version 3.11 \
+  --format requirements.txt --output-file requirements-dev.lock --upgrade-package <pkg>
+python tools/requirements_digest.py --write   # only uv.lock and requirements.in are digested
+```
+
+A dev-only bump never touches `uv.lock` or `requirements.in`, so it leaves the
+digest line alone and never makes the App reinstall. Every workflow job that
+runs pytest, ruff or mypy installs `requirements-dev.txt` (the same test
+pins this), and CI's `pip-audit -r requirements-dev.txt --strict` audits both
+sets in one run.
+
+The same change removed databricks-sql-connector 4.8.0, which nothing here
+imports, together with the floors that existed only for its closure (oauthlib,
+thrift, PyJWT). Warehouse reads go through the Statement Execution REST API
+with stdlib `urllib` (`backend/services/databricks_sql.py`). The proof is
+an offline import of every module under `backend/` (435, including
+`backend.main` and `backend.runtime`), `jobs/` (18) and `tools/` (272), run in
+a venv built from the old `requirements.txt` with an import hook installed.
+None of them loaded or even tried to import `databricks.sql`, oauthlib,
+thrift, lz4, pybreaker, openpyxl or jwt. All of them still import in a venv
+built from the new runtime-only `requirements.txt`.
+`docs/audits/supply-chain-audit.md` keeps the full record.
+
+**A removed requirement stays installed in the running App.** The Apps build
+runs `pip install -r requirements.txt` into the environment that persists
+across deployments, and pip never uninstalls what a requirements file stops
+naming. The first deploy after this change therefore shows a pip run (the
+digest changed) in which every runtime pin is already satisfied, because no
+version moved. The connector, its closure and the old test tools stay on disk,
+unimported. `dependency_lock_check` walks only what
+`requirements.in` reaches, so it reports `ok` with them present. The App
+image is runtime-only for every package it resolves from the files here,
+but the leftover wheels only go away when the App's environment is
+recreated.
 
 ## Databricks App
 
@@ -513,10 +570,9 @@ an `unpinned:` note and never fails the check, because it has no pin to equal.
 dependency is the usual case: on the Linux x86_64 runner that `deploy-dev.yml`
 uses, sqlalchemy pulls in greenlet, which the lock does not pin.
 
-This covers mlflow (which registers the Gateway model), databricks-sdk,
-databricks-sql-connector and every transitive pin, not only `import boto3,
-mlflow`. A dry run reports the result (`python deps: pinned`, `drifted`,
-`error` or `skipped`) and continues. A real run refuses anything but `pinned`
+This covers mlflow (which registers the Gateway model), databricks-sdk and
+every transitive pin, not only `import boto3, mlflow`. A dry run reports the
+result (`python deps: pinned`, `drifted`, `error` or `skipped`) and continues. A real run refuses anything but `pinned`
 with exit 2, before the first workspace call. On drift, the tool prints the
 problems and this remedy:
 

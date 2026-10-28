@@ -5,10 +5,10 @@ Why: on 2026-10-28 the Databricks Apps build logged "Requirements have not
 changed. Skipping installation." for a deploy whose uv.lock had changed but
 whose requirements.txt (only the ``-c uv.lock`` / ``-r requirements.in``
 include lines) had not, and the App kept its old packages; its Python
-environment persists across deployments. Inferred from that build log, and to
-be confirmed by the first deploy after this change: the build compares
-requirements.txt with the previous deployment's copy and does not follow its
-includes (docs/deployment.md, "App Python dependencies"). A generated first
+environment persists across deployments. The build compares requirements.txt
+with the previous deployment's copy and does not follow its includes; the
+deploy of 32cc4384 confirmed that a change to this comment line alone makes it
+reinstall (docs/deployment.md, "App Python dependencies"). A generated first
 line carrying the digest of both included files turns every lock or input
 change into a requirements.txt change:
 

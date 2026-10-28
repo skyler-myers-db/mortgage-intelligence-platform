@@ -18,8 +18,8 @@ requirements.in (or ``stale``, ``missing``, ``unreadable``), and an outcome:
   nothing, or the check itself failed (``reason`` says which).
 
 The ``remedy`` follows the cause. A stale or missing digest can leave the bytes
-of requirements.txt unchanged, which the build is inferred (2026-10-28 build log,
-not yet confirmed) to treat as no reason to reinstall: restamp and redeploy. A
+of requirements.txt unchanged, which the build treats as no reason to
+reinstall (2026-10-28 build logs, docs/deployment.md): restamp and redeploy. A
 current digest with drift means
 the build skipped or failed the reinstall anyway, so restamping changes
 nothing: read the deployment build log, then the digest-named ``-c`` fallback
@@ -28,10 +28,12 @@ in docs/deployment.md.
 Which pins apply follows tools/python_deps_check.py, the deploy preflight: walk
 the installed closure of requirements.in, evaluating every requirement's
 markers and extras for this interpreter. A lock entry that nothing reached
-needs is not applicable, never drift. tomli is the standing example: uv.lock
-pins it for coverage, whose requirement holds only below Python 3.11.0a6. A pin
-line carrying its own marker (a universal lock) counts only where the marker
-holds.
+needs is not applicable, never drift: for example a pin whose only requirer
+is marker-false on this Python (tomli via coverage below 3.11.0a6, which now
+sits in requirements-dev.lock). A pin line carrying its own marker (a
+universal lock) counts only where the marker holds. An installed package that
+requirements.in no longer reaches is never read, so the wheels a removed
+requirement left in the persisted environment do not count as drift.
 
 Local reads only: three bounded files plus importlib.metadata. No network, and
 it never raises. The lifespan runs it in a worker thread, off the event loop.

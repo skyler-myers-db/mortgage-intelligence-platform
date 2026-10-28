@@ -2,8 +2,8 @@
 """Does the deploy interpreter match the requirements.txt pins?
 
 scripts/deploy.sh step 0 asks this before any workspace call
-(full_deploy_readiness.md 3.12: a drifted mlflow, databricks-sdk or
-databricks-sql-connector registers and serves a stack CI never proved).
+(full_deploy_readiness.md 3.12: a drifted mlflow or databricks-sdk
+registers and serves a stack CI never proved).
 requirements.txt is ``-c uv.lock`` plus ``-r requirements.in``; uv.lock pins
 the whole resolved closure for one Python minor (its ``--python-version``
 header). The check walks the installed closure of requirements.in, with each
