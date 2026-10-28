@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import gzip
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -146,6 +147,21 @@ def test_stage_refuses_a_symlinked_directory_in_the_dist(
     out = tmp_path / "out"
 
     with pytest.raises(closure.StageError, match="symlink: assets/linked"):
+        closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
+
+    assert nothing_written(tmp_path, out)
+
+
+@pytest.mark.parametrize("folder", [".git/objects", "assets/.cache"])
+def test_stage_refuses_an_empty_hidden_directory_in_the_dist(
+    repo: Path, dist: Path, tmp_path: Path, folder: str
+) -> None:
+    # The copy keeps empty directories, so the review of the copy sees them.
+    (dist / folder).mkdir(parents=True)
+    out = tmp_path / "out"
+    outer = folder.split("/")[0] if folder.startswith(".") else folder
+
+    with pytest.raises(closure.StageError, match=re.escape(f"hidden path: {outer}/")):
         closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
 
     assert nothing_written(tmp_path, out)

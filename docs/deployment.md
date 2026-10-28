@@ -224,7 +224,8 @@ no file name, comment, extra field or header CRC, as Node's `zlib.gzip` in
 `brotli` module is installed. Without it a `.br` cannot be checked, so `stage`
 leaves every `.br` out, says how many, and the App serves the checked `.gz`.
 `backend/main.py` serves any real file under `frontend/dist`, so anywhere in
-the dist a dot segment (`.env`, `.vite/`), a `*.map` in any letter case,
+the dist a dot segment (`.env`, `.vite/`, an empty `.git/objects` or
+`assets/.cache` directory), a `*.map` in any letter case,
 `build-manifest.json`, `build-modules.json`, Python junk, a symlink, or a JS,
 CSS or HTML file with a `sourceMappingURL` comment anywhere in it is refused
 too.

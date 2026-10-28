@@ -28,7 +28,8 @@ build. It allows only what a governed build emits:
   postbuild_artifacts.mjs refuses an unvalidated one at build time).
 
 It refuses, anywhere in the dist: a symlink, a path segment that starts with
-``.`` (``.env``, ``.vite/``, ``.DS_Store``), ``__pycache__`` and ``*.pyc``, a
+``.`` (``.env``, ``.vite/``, ``.DS_Store``, an empty ``.git/objects``),
+``__pycache__`` and ``*.pyc``, a
 ``*.map`` in any letter case, ``build-manifest.json`` or ``build-modules.json``,
 and a JS, CSS or HTML file carrying a ``sourceMappingURL`` comment anywhere in
 it. ``app_runtime_closure stage`` reviews a private copy (``snapshot``) and
@@ -125,11 +126,12 @@ def gzip_header_is_bare(data: bytes) -> bool:
     return data[: len(GZIP_BARE_HEADER)] == GZIP_BARE_HEADER
 
 
-def _walk(dist: Path) -> tuple[list[str], list[str]]:
-    """Every file under ``dist`` (relative, POSIX) and every symlink found."""
+def _walk(dist: Path) -> tuple[list[str], list[str], list[str]]:
+    """Every file, symlink and directory under ``dist`` (relative, POSIX)."""
 
     files: list[str] = []
     links: list[str] = []
+    folders: list[str] = []
     for current, dirs, names in os.walk(dist):
         for name in sorted(dirs + names):
             path = Path(current) / name
@@ -138,8 +140,24 @@ def _walk(dist: Path) -> tuple[list[str], list[str]]:
                 links.append(relpath)
             elif path.is_file():
                 files.append(relpath)
+            elif path.is_dir():
+                folders.append(relpath)
         dirs[:] = [name for name in dirs if not (Path(current) / name).is_symlink()]
-    return sorted(files), sorted(links)
+    return sorted(files), sorted(links), sorted(folders)
+
+
+def _is_hidden(relpath: str) -> bool:
+    return any(part.startswith(".") for part in PurePosixPath(relpath).parts)
+
+
+def _hidden_folders(folders: list[str], files: list[str]) -> list[str]:
+    """Hidden directories that hold no file (``.git/objects``), outermost only.
+
+    A hidden directory that holds a file is refused through that file.
+    """
+
+    empty = [d for d in folders if _is_hidden(d) and not any(f.startswith(f"{d}/") for f in files)]
+    return [d for d in empty if not any(d.startswith(f"{outer}/") for outer in empty)]
 
 
 def snapshot(dist: Path, target: Path) -> list[str]:
@@ -173,7 +191,7 @@ def _refused_name(relpath: str) -> str | None:
 
     parts = PurePosixPath(relpath).parts
     folded = relpath.lower()
-    if any(part.startswith(".") for part in parts):
+    if _is_hidden(relpath):
         return "hidden path"
     if any(part.lower() in PYTHON_JUNK for part in parts) or folded.endswith(
         PYTHON_JUNK_SUFFIXES
@@ -246,9 +264,10 @@ def review_dist(
     ``brotli`` checks each ``.br``; without it every ``.br`` is ``omitted``.
     """
 
-    files, links = _walk(dist)
+    files, links, folders = _walk(dist)
     present = set(files)
     problems = [f"symlink: {relpath}" for relpath in links]
+    problems += [f"hidden path: {folder}/" for folder in _hidden_folders(folders, files)]
     if REQUIRED_SHELL not in present:
         problems.append(f"no {REQUIRED_SHELL}: build the frontend first")
     omitted: list[str] = []

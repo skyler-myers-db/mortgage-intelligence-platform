@@ -260,6 +260,33 @@ def test_a_name_with_more_than_one_compression_suffix_is_refused(
     assert review.problems == (f"more than one compression suffix: {relpath}",)
 
 
+@pytest.mark.parametrize(
+    ("folders", "problems"),
+    [
+        ((".git/objects",), ("hidden path: .git/",)),
+        (("assets/.cache",), ("hidden path: assets/.cache/",)),
+        ((".cache", "assets/.tmp/inner"), ("hidden path: .cache/", "hidden path: assets/.tmp/")),
+    ],
+)
+def test_an_empty_hidden_directory_is_refused_once_at_its_outermost_dot_segment(
+    tmp_path: Path, folders: tuple[str, ...], problems: tuple[str, ...]
+) -> None:
+    # It holds no file to refuse, but "a dot segment anywhere" means anywhere.
+    dist = _dist(tmp_path)
+    for folder in folders:
+        (dist / folder).mkdir(parents=True)
+
+    assert _review(dist).problems == problems
+
+
+def test_an_empty_ordinary_directory_is_not_a_problem(tmp_path: Path) -> None:
+    # The control for the hidden-directory rule.
+    dist = _dist(tmp_path)
+    (dist / "assets" / "empty").mkdir()
+
+    assert _review(dist).problems == ()
+
+
 def test_without_a_brotli_decoder_every_br_is_left_out_and_reported(tmp_path: Path) -> None:
     review = _review(_dist(tmp_path), brotli=None)
 
