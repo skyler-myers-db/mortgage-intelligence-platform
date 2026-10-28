@@ -20,8 +20,8 @@ outcome:
   nothing, or the check itself failed (``reason`` says which).
 
 The ``remedy`` follows the cause. A stale or missing digest can leave the bytes
-of requirements.txt unchanged, which the build is inferred (2026-10-28 build log,
-not yet confirmed) to treat as no reason to reinstall: restamp and redeploy. A
+of requirements.txt unchanged, which the build treats as no reason to
+reinstall (confirmed 2026-10-28): restamp and redeploy. A
 current digest with drift means
 the build skipped or failed the reinstall anyway, so restamping changes
 nothing: read the deployment build log, then the digest-named ``-c`` fallback

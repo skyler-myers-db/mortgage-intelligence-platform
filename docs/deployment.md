@@ -300,14 +300,13 @@ across deployments. `uv.lock` had changed; `requirements.txt` had not. Until
 2026-10-28 it was only the `-c uv.lock` and `-r requirements.in` include
 lines, byte-identical since 2026-05-17.
 
-What is inferred from that build log, and not yet confirmed: the build
-decides whether to reinstall by comparing `requirements.txt` with the previous
-deployment's copy, byte for byte, and does not follow the file's includes. If
-so, no lock refresh reached a running App since 2026-05-17, including the lock
-bumps since at least 2026-10-06 and their security floors (certifi, urllib3,
-PyJWT, oauthlib, mlflow and the rest). The first deploy after this change
-that carries a digest change confirms or refutes the inference (see "Verify
-the reinstall" below).
+Confirmed on 2026-10-28: the build decides whether to reinstall by
+comparing `requirements.txt` with the previous deployment's copy and does not
+follow the file's includes. The first deploy whose only change to the file
+was the digest line below reinstalled, upgrading 21 packages (oauthlib 3.3.1
+to 4.0.0, databricks-sql-connector 4.4.0 to 4.8.0, certifi, mlflow,
+OpenTelemetry and the rest). Before it, no lock refresh had reached a running
+App since 2026-05-17.
 
 `requirements.txt` therefore starts with a generated comment carrying the
 sha256 of both included files:
@@ -353,8 +352,8 @@ also reports `python` and the `lock_python` that `uv.lock` was compiled for (a
 mismatch is `drift`, as it is for `tools/python_deps_check.py`), and
 `requirements_digest`: `current`, `stale`, `missing` or `unreadable`. The
 `remedy` follows the cause. A stale or missing digest can leave the bytes of
-`requirements.txt` unchanged, which the build is inferred to treat as no
-reason to reinstall, so restamp, commit and redeploy. A current digest with
+`requirements.txt` unchanged, which the build treats as no reason to
+reinstall, so restamp, commit and redeploy. A current digest with
 drift means the build skipped or failed the reinstall anyway, so restamping
 changes nothing: read the deployment build log and apply the fallback below.
 It reads `uv.lock`, `requirements.in` and `requirements.txt` from the App
@@ -367,15 +366,15 @@ stop startup, and the lifespan runs it in a worker thread, off the event loop
 before PR #274, it reports `drift` for exactly databricks-sql-connector
 (locked 4.8.0, installed 4.4.0) and oauthlib (locked 4.0.0, installed 3.3.1),
 the same two packages that `tools/python_deps_check.py` names, with
-`requirements_digest` `current`. It was first seen in a deployed App on
-2026-10-28 (paychex, a deploy of main 32cc4384), where it reported `ok` with
-`unpinned` 1; the next section is that finding.
+`requirements_digest` `current`. On the first deploy that carried it
+(2026-10-28) it reported `ok`: 137 pins checked, none drifted,
+`requirements_digest` `current`. It also reported `unpinned` 1, which the next
+section names and closes.
 
-Whether a comment-only change defeats the skip is inferred from how the skip
-behaved (it appears keyed to `requirements.txt`, and that file never
-changed); it has not yet been observed, so confirm it on the next deploy that
-carries a digest change. If the build still skips (for example because it
-compares the file with comments stripped), the fallback is an include line
+A comment-only change defeats the skip: the 2026-10-28 deploy that added
+only the digest line reinstalled. If a future build stops honouring comment
+changes (for example because it compares the file with comments stripped),
+the fallback is an include line
 whose path carries the digest, so the parsed file changes even with comments
 removed: commit the lock under a digest-named path and point the constraint
 at it (`-c locks/uv-<digest>.lock`). That line names no package. A
