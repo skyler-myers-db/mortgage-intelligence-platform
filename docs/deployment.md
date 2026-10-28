@@ -86,6 +86,307 @@ Two operational facts to know before assembling any ad-hoc App source tree
   frontend build must therefore include those root `tests/fixtures/` files,
   or the build fails with TS2307.
 
+## Emergency recovery: a slim per-release App source folder
+
+**Emergency recovery only. The command of record is `./scripts/deploy.sh -t
+dev`.** A slim folder is for the case that path cannot finish, such as a start
+window that expires while the App compute downloads the bundle files root. A
+deploy from a slim folder bypasses three governed steps, and `stage` replaces
+only part of one of them:
+
+- **Signed promotion.** None of `./scripts/deploy.sh`'s signed workspace lease
+  or signed blue proof steps run, so its rollback path holds no signed record
+  of the slim deployment.
+- **`tools/databricks/converge_static_app_source.py`.** The governed check of
+  the uploaded tree (a non-empty `frontend/dist/index.html`, no root Node
+  manifests) does not run against the uploaded folder.
+- **The in-process frontend build and its postbuild gate**
+  (`tools/postbuild_artifacts.mjs`). `stage` takes a dist built elsewhere. It
+  applies its own allowlist to that dist (below), but it cannot prove the
+  JavaScript was built from `--ref`; only the `frontend/public` files are
+  compared byte for byte.
+
+Why it exists: the App compute downloads every file under the deployment's
+source path again at start, at about 10 files/s, inside the 10-minute start
+window (measured 2026-10-28). The bundle files root (`<bundle root>/dev/files`) only
+grows, because `workspace import-dir` and piecewise uploads never delete. It
+held 6,018 files when a deployment from it was recorded FAILED. A folder with
+only the App's runtime closure is about 1,200 files (481 tracked plus 694
+`frontend/dist` files on `ab6235e0`, the 209 `.br` files included once `stage`
+has checked them), or about 970 when no `node` is on `PATH` to check them and
+`stage` leaves them out.
+
+`tools/databricks/app_runtime_closure.py` is the single source of truth for
+that closure. It holds the upload set (`app.yaml`, `requirements.txt`,
+`requirements.in`, `uv.lock`, `backend/`, `jobs/`, `lakebase/` and a prebuilt
+`frontend/dist/`) and the files the read nets find the backend reading
+outside `backend/`. `python -m tools.databricks.app_runtime_closure list`
+prints each entry with its reader. Two entries are optional and are never in git:
+
+- `genie/space_id.txt`: the space id comes from the environment.
+- `sql/_rendered/...`: `backend/services/lifecycle_sync.py` falls back to
+  `sql/transformations/gold_funnel_snapshot_daily.sql` and substitutes the
+  catalog itself (it resolves both against its source root, not the working
+  directory). A slim folder always takes this fallback. That file has no
+  feed toggle and the fallback's `mip.`-to-catalog swap matches the
+  renderer's, so the result is the same today; the difference predates the
+  slim folder.
+
+Two static scans of `backend/` and the first-party modules it imports guard
+the closure. They are a tripwire for accidental reads outside `backend/`, not a
+proof that none exists. The flow scan (`tests/fixtures/app_runtime_reads.py`)
+follows path values rooted in a bare `__file__` or the working directory, and
+strings passed into first-party functions it can name, to the code that reads
+them. Anything it cannot follow (a library call, an f-string, a function
+returned to callers it cannot see) counts as a read of the whole subtree under
+the value, so an escaping repo root can never be covered. The roots it is
+known not to follow (`backend.__file__`, `sys.modules[__name__].__file__`,
+`globals()["__file__"]` and other lookups by name, `__spec__`, any
+`co_filename`, a frame from `sys._getframe`, `inspect.currentframe`,
+`inspect.stack` or the other frame helpers the scan lists, the `origin` or
+`submodule_search_locations` read on a `find_spec` call or on a name bound to
+one, `inspect.getfile`, `sys.argv`, `sys.path`, `importlib.resources.files`,
+`pkgutil.get_data`) are reported as unhandled wherever they appear in those
+forms; the same roots reached another way are residuals (below). The literal
+sweep (`tests/fixtures/app_runtime_literals.py`) follows nothing. It flags a string literal that names a repo path outside
+`backend/` by its own text (a `/` path such as `"docs/a.md"`, or a dotted
+string naming a tracked first-party module such as `"tools.x"`), or by the
+path call, `/` join or environment default around it. A bare name such as
+`"docs"` passed into a function is not flagged by the sweep; only the flow
+scan follows it. `tests/unit/test_app_runtime_closure_reads.py` fails when
+either finds a read the closure does not cover (a literal may instead be
+reviewed in that test, with a reason), or when a closure entry is no longer
+read, and `tests/unit/test_app_runtime_read_shapes.py` pins the shapes each
+net catches.
+
+The scans are static, and their residual list is known, not complete. These
+are the shapes known to escape both nets (`RESIDUALS` in
+`tests/unit/test_app_runtime_read_residuals.py` pins each one, so a net that
+learns one fails loudly until it moves to the caught shapes):
+
+- a first-party callee the flow scan cannot name (a method reached through an
+  object, a function passed as a value), which is assumed to read only under
+  the path it receives;
+- a bare top-level name with no `/` handed to a library loader
+  (`StaticFiles(directory="docs")`, `jinja2.FileSystemLoader("docs")`) or to
+  any other call that is neither a path constructor nor a first-party function
+  the scan can name (bare names are not swept: the backend uses `"lakebase"`
+  and `"genie"` as dependency labels hundreds of times);
+- a bare top-level name held in a container (`{"k": "docs"}["k"]`,
+  `["docs"][0]`) or in a named tuple that a loop walks (a loop over a literal
+  tuple or list is followed);
+- a working-directory path built with `str.format`, `%` or `str.join` from
+  parts that hold no `/` (`"{}/{}".format("docs", name)`,
+  `"/".join(["docs", name])`, `os.sep.join(...)`); a `__file__` root
+  formatted into a string still counts as a read of the whole repository;
+- a starred argument to a path constructor or `os.path.join`
+  (`os.path.join(*["docs", "x.md"])`, `Path(*parts)`);
+- a path read from an environment variable with no default;
+- `getattr`, `exec`, `eval` and a module named by a computed string;
+- a module or frame file reached through a helper the scan does not list
+  (`traceback.extract_tb(...)[0].filename`, `logging.getLogger().findCaller()`,
+  `pkgutil.get_loader(...).get_filename()`), or a `find_spec` result whose
+  `origin` is read through an alias, a walrus, an attribute (`self.spec`) or
+  a parameter;
+- the working directory reached without `os.getcwd`, `Path.cwd` or a string:
+  `os.getcwdb()`, and `os.listdir()` or `os.scandir()` with no argument;
+- a `nonlocal` name bound two or more scopes up;
+- a folder name the scan cannot read as a string: keywords unpacked with
+  `**{...}` into a first-party function, a computed string (`"DOCS".lower()`),
+  a bytes path (`open(b"docs/x.md")`) or a library keyword
+  (`subprocess.run(..., cwd=DOCS)`).
+
+No backend read uses those shapes today. An AST pass over `backend/` and
+`jobs/sync_lifecycle_state.py` on 2026-10-28 found no starred argument,
+container subscript, `str.format` or `%` path, environment read without a
+default, library loader, `exec`, `eval` or loop over a named tuple feeding a
+path call; its two `" / ".join` calls build display labels, its one computed
+`find_spec(name)` is a presence check for `databricks.sdk`, and none of its
+dynamic `getattr` calls is passed to a path call. A grep the same day found
+no `extract_tb`, `findCaller`, `get_loader`, `getcwdb`, `nonlocal`,
+argument-less `listdir` or `scandir`, `.origin`, `cwd=` or bytes path, and its
+`**{...}` uses build dicts, model fields and scoring arguments, never a path.
+The readers that matter degrade silently when their file is missing (`county_names` returns `{}`, the
+Genie space-id fallback returns `None`), so a new App read outside `backend/`
+must use the shapes the scans follow, a module-level constant rooted in
+`Path(__file__)` plus literal segments
+(`ROOT = Path(__file__).resolve().parents[2]`, then
+`ROOT / "sql" / "x.sql"`), and must be added to `READS` in
+`tools/databricks/app_runtime_closure.py`.
+
+`tests/unit/test_app_runtime_closure_stage.py` holds the closure to its file
+budget: 1,300 staged files, about 130 s of download, of which at most 600 are
+tracked and the rest is the dist allowance.
+
+```bash
+npm --prefix frontend run build    # or reuse a dist built from the same commit
+python -m tools.databricks.app_runtime_closure stage \
+  --ref <sha> --dist frontend/dist --out <new empty directory>
+```
+
+`stage` builds the folder from `git archive <sha>`, so no untracked or
+uncommitted repo file ships, and adds the given dist. The dist may hold only
+what a governed build emits (`tools/databricks/app_runtime_dist.py`):
+`index.html`, `index.home.html`, one `branding/lender-mark.png` or `.webp`,
+exactly the `frontend/public` files tracked at `<sha>`, byte for byte, and
+under `assets/` only Vite's flat hashed names, `<name>-<8-character
+hash>.<ext>` with `<ext>` one of js, css, json, webp, png, svg, woff2, woff or
+wasm (the naming follows `frontend/vite.config.ts`, and
+`tests/unit/test_app_runtime_closure_dist.py` fails when that config changes
+it). Vite copies `public/` verbatim, so an untracked, edited or missing public
+file is refused. The `/assets` route serves a `.br` or `.gz` sibling in place
+of the asset to a client that accepts the encoding, so a compressed file may
+carry exactly one `.gz` or `.br` suffix, each `.gz` must decompress to exactly
+its source's bytes and carry a bare gzip header (FLG 0: no file name,
+comment, extra field or header CRC, as Node's `zlib.gzip` in
+`tools/precompress_assets.mjs` writes it), and each `.br` must decode to
+exactly its source's bytes too, with no bytes after the stream. `stage`
+checks each `.br` with `node` on `PATH`
+(`tools/databricks/app_runtime_brotli.py`: `zlib.brotliDecompressSync` with
+the output capped one byte past the source and every input byte consumed,
+the paths passed as arguments, each process time-bound), ships it only when
+it matches, and refuses the whole dist when one does not or when the checker
+itself fails. It never uses the `brotli` Python module, even when it is
+installed, because that decoder has no output cap. Without `node`, `stage`
+leaves every `.br` out, says how many, and the App serves the checked `.gz`.
+A `node` too old for the check (its `node:` imports need Node 16, and the
+frontend build asks for 22.22 or later) refuses every `.br` rather
+than leaving it out; run `stage` with the `node` the build used.
+`backend/main.py` serves any real file under `frontend/dist`, so anywhere in
+the dist a dot segment (`.env`, `.vite/`, an empty `.git/objects` or
+`assets/.cache` directory), a `*.map` in any letter case,
+`build-manifest.json`, `build-modules.json`, Python junk, a symlink, or a JS,
+CSS or HTML file with a `sourceMappingURL` comment anywhere in it is refused
+too.
+
+The `assets/` rule checks name shape, compression integrity and gzip header
+flags only, never what an asset contains: a hashed `.js` built from another
+commit, or edited after the build, passes it. The dist must therefore come
+from the governed build of the same ref, `npm --prefix frontend run build` run
+on a checkout of `<sha>` (it also runs the `tools/postbuild_artifacts.mjs`
+gate); only the `frontend/public` files are compared with `<sha>` byte for
+byte.
+
+Before it writes anything, `stage` also refuses a symlink, a submodule or a
+hidden path (a segment starting with `.`, such as `backend/.env.local`)
+tracked at `<sha>`, a missing required entry, a `requirements.txt` whose
+deps-digest line does not match `uv.lock` and `requirements.in` at `<sha>`
+(next section), an `--out` that is not empty, and an `--out` inside `--dist`
+or around it (compared by device and inode, so a symlink, `..`, another letter
+case on a case-insensitive volume or a macOS firmlink cannot hide it). It
+then copies the dist into a temporary sibling of `--out` without following symlinks, reviews the
+copy and ships the copy, so a dist that changes after the review cannot
+change what ships. It refuses more than 600 tracked files or 1,300 in all,
+adds the tracked files and renames the folder into place, so a refusal or a
+failure partway leaves `--out` as it was. It prints the file count and exits
+2 on any refusal. It makes no Databricks call. Upload the
+folder to a new per-release folder, `<bundle root>/dev/app-src/<short sha>`,
+and never into one that is already used. The piecewise payload deploy then
+names that folder as the deployment's `source_code_path`.
+
+The governed `./scripts/deploy.sh -t dev` path is unchanged. It still promotes
+from the bundle files root (`source_code_path: .` in `databricks.yml`), so a
+governed deploy after a slim one points `source_code_path` back at the files
+root, with all of its files. Per-release folders build up under `app-src/`
+until an owner removes them. Nothing in the repository deletes them.
+
+## App Python dependencies: the deps-digest line
+
+What was observed: the 2026-10-28 deploy that carried PR #274
+(databricks-sql-connector 4.4.0 to 4.8.0, oauthlib 3.3.1 to 4.0.0) logged
+`Requirements have not changed. Skipping installation.` in its Apps build and
+kept the Python environment the App compute already had, which persists
+across deployments. `uv.lock` had changed; `requirements.txt` had not. Until
+2026-10-28 it was only the `-c uv.lock` and `-r requirements.in` include
+lines, byte-identical since 2026-05-17.
+
+What is inferred from that build log, and not yet confirmed: the build
+decides whether to reinstall by comparing `requirements.txt` with the previous
+deployment's copy, byte for byte, and does not follow the file's includes. If
+so, no lock refresh reached a running App since 2026-05-17, including the lock
+bumps since at least 2026-10-06 and their security floors (certifi, urllib3,
+PyJWT, oauthlib, mlflow and the rest). The first deploy after this change
+that carries a digest change confirms or refutes the inference (see "Verify
+the reinstall" below).
+
+`requirements.txt` therefore starts with a generated comment carrying the
+sha256 of both included files:
+
+```text
+# deps-digest: uv.lock sha256=<64 hex> requirements.in sha256=<64 hex>
+-c uv.lock
+-r requirements.in
+```
+
+Every change to `uv.lock` or `requirements.in` ends with
+`python tools/requirements_digest.py --write`, which rewrites only that line.
+Both files are hashed with CRLF folded to LF, and `.gitattributes` checks all
+three out with `eol=lf`, so a `core.autocrlf` checkout computes the same
+digest. Three gates run `--check`'s comparison, because the repo has no
+required CI checks:
+
+- `tests/unit/test_requirements_digest.py` in CI, which fails with the remedy
+  when the line is stale or missing;
+- `./scripts/deploy.sh` step 0, right after the interpreter pin check: a dry
+  run reports `requirements digest: stale` and continues, a real run refuses
+  with exit 2 before any workspace call;
+- `app_runtime_closure stage`, which recomputes the line from the blobs at
+  `--ref` and refuses a ref whose `requirements.txt` digest line is stale or
+  missing.
+
+pip, pip-audit and `tools/python_deps_check.py` all skip comment lines, so
+they read the file as before.
+
+**Verify the reinstall on every deploy that changes the digest.** The App's
+deployment build log must show pip output (`Collecting ...`, `Successfully
+installed ...`) instead of `Requirements have not changed. Skipping
+installation.` The App's own boot log then carries one `dependency_lock_check`
+event (logger `mip-runtime`, emitted by
+`backend/services/dependency_lock_check.py` from the FastAPI lifespan). It
+reports `outcome` `ok`, `drift` or `lock_unreadable`, with `pins_checked`,
+`not_applicable`, `unpinned`, `drifted_count` and a `drifted` list of
+`{name, locked, installed}` (`installed` is null for a missing package). It
+also reports `python` and the `lock_python` that `uv.lock` was compiled for (a
+mismatch is `drift`, as it is for `tools/python_deps_check.py`), and
+`requirements_digest`: `current`, `stale`, `missing` or `unreadable`. The
+`remedy` follows the cause. A stale or missing digest can leave the bytes of
+`requirements.txt` unchanged, which the build is inferred to treat as no
+reason to reinstall, so restamp, commit and redeploy. A current digest with
+drift means the build skipped or failed the reinstall anyway, so restamping
+changes nothing: read the deployment build log and apply the fallback below.
+It reads `uv.lock`, `requirements.in` and `requirements.txt` from the App
+source root and walks the installed closure of `requirements.in` the way
+`tools/python_deps_check.py` does, so a pin that this interpreter never
+installs (tomli on Python 3.11) is not applicable rather than drift. It reads
+local files only and makes no network call. It never raises, so it cannot
+stop startup, and the lifespan runs it in a worker thread, off the event loop
+(about 0.3 s on a local interpreter). Run against a local interpreter built
+before PR #274, it reports `drift` for exactly databricks-sql-connector
+(locked 4.8.0, installed 4.4.0) and oauthlib (locked 4.0.0, installed 3.3.1),
+the same two packages that `tools/python_deps_check.py` names, with
+`requirements_digest` `current`. The event has not yet been seen in a deployed
+App.
+
+Whether a comment-only change defeats the skip is inferred from how the skip
+behaved (it appears keyed to `requirements.txt`, and that file never
+changed); it has not yet been observed, so confirm it on the next deploy that
+carries a digest change. If the build still skips (for example because it
+compares the file with comments stripped), the fallback is an include line
+whose path carries the digest, so the parsed file changes even with comments
+removed: commit the lock under a digest-named path and point the constraint
+at it (`-c locks/uv-<digest>.lock`). That line names no package. A
+marker-false requirement such as `mip-deps-digest==0+<hex>; python_version <
+"3"` would also change the parsed file, but it puts a package name that is
+not on PyPI into `requirements.txt`, which invites name squatting and
+dependency confusion and may be looked up by `pip-audit` or the deps report,
+so it is not the fallback. The `-c` carrier is not implemented, because it
+is not yet shown to be needed and it touches every reader:
+`backend/services/dependency_lock_check.py` reads `uv.lock` by name,
+`tests/unit/test_supply_chain_licenses.py` asserts `-c uv.lock`, the digest
+tool would have to write the lock copy and the line, and superseded
+digest-named locks would need pruning. `tools/python_deps_check.py` already
+follows whatever path the `-c` line names.
+
 ## Databricks App
 
 1. Fill `.env.local` with workspace, warehouse, lender/runtime values, and the

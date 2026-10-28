@@ -97,7 +97,10 @@ def _workspace_token(host: str) -> str:
 def main() -> None:
     _load_local_env()
     from backend.config.settings import settings
-    from backend.services.lifecycle_sync import sync_lifecycle_state_via_warehouse
+    from backend.services.lifecycle_sync import (
+        RENDERED_FUNNEL_SQL,
+        sync_lifecycle_state_via_warehouse,
+    )
 
     parser = argparse.ArgumentParser(
         description="Mirror Lakebase approvals/outreach state into UC gold without a Spark job."
@@ -112,11 +115,10 @@ def main() -> None:
         default=os.environ.get("LAKEBASE_DATABASE", "mip_app_state"),
     )
     parser.add_argument("--timeout-s", type=int, default=50)
-    parser.add_argument(
-        "--funnel-sql",
-        type=Path,
-        default=Path("sql/_rendered/transformations/gold_funnel_snapshot_daily.sql"),
-    )
+    # The source-root rendered file, not a cwd-relative path: run from another
+    # folder, a cwd path would be missing and the sync would quietly fall back
+    # to the un-rendered funnel SQL.
+    parser.add_argument("--funnel-sql", type=Path, default=RENDERED_FUNNEL_SQL)
     parser.add_argument("--skip-funnel", action="store_true")
     args = parser.parse_args()
     deployer_bound = any(

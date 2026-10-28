@@ -62,6 +62,40 @@ if [[ "$DRY_RUN" -eq 0 && "$PYTHON_DEPS_STATE" != "pinned" ]]; then
 fi
 # <<< deploy interpreter pins: check <<<
 
+# >>> requirements digest: check >>>
+# On 2026-10-28 the Databricks Apps build skipped the reinstall for a lock bump
+# that left requirements.txt unchanged, and the App kept its old wheels. That
+# it reinstalls only when the bytes of requirements.txt change, never following
+# the -c uv.lock / -r requirements.in includes, is inferred from that build log
+# and is to be confirmed by the first deploy after the change, so a lock bump
+# needs a restamp (docs/deployment.md, "App Python dependencies: the
+# deps-digest line").
+# tools/requirements_digest.py exits 0 current and 1 stale (it prints the
+# remedy); anything else is a hard error. A dry run reports and continues; a
+# real run refuses with exit 2 before any workspace call. Isolated
+# shell-contract copies carry no tool: a dry run skips, a real run refuses.
+REQUIREMENTS_DIGEST_STATE="skipped"
+if [[ -f tools/requirements_digest.py ]]; then
+  _requirements_digest_rc=0
+  "$PYTHON" -m tools.requirements_digest --check || _requirements_digest_rc=$?
+  case "$_requirements_digest_rc" in
+    0) REQUIREMENTS_DIGEST_STATE="current" ;;
+    1) REQUIREMENTS_DIGEST_STATE="stale" ;;
+    *) REQUIREMENTS_DIGEST_STATE="error" ;;
+  esac
+  unset _requirements_digest_rc
+fi
+echo "  requirements digest: ${REQUIREMENTS_DIGEST_STATE}"
+if [[ "$DRY_RUN" -eq 0 && "$REQUIREMENTS_DIGEST_STATE" != "current" ]]; then
+  case "$REQUIREMENTS_DIGEST_STATE" in
+    stale) echo "${RED}[deploy] requirements.txt's deps-digest line is stale, so the Apps build can skip the dependency reinstall; apply the fix above and commit.${RST}" >&2 ;;
+    error) echo "${RED}[deploy] the requirements digest check failed; requirements.txt cannot be proven current.${RST}" >&2 ;;
+    *) echo "${RED}[deploy] tools/requirements_digest.py is not in this tree; requirements.txt cannot be proven current.${RST}" >&2 ;;
+  esac
+  exit 2
+fi
+# <<< requirements digest: check <<<
+
 if [[ "$DRY_RUN" -eq 0 ]]; then
   # Unity Catalog model registration validates the uploaded artifact through
   # the metastore's cloud storage before the version becomes ready. Fail before

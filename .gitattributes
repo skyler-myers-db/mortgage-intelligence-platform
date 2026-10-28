@@ -1,1 +1,5 @@
 frontend/src/geo/zcta/*.topo.json linguist-generated=true
+# requirements.txt carries the sha256 of the other two (tools/requirements_digest.py).
+uv.lock text eol=lf
+requirements.in text eol=lf
+requirements.txt text eol=lf
