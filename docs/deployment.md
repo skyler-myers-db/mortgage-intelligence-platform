@@ -1317,7 +1317,7 @@ avoidable compute.
 The one exception: the dev target's live install runs the weekly
 `mip_scheduled_refresh` (FRED → gold → lifecycle → KPI, Fridays 06:00
 America/Chicago). `MIP_SCHEDULED_REFRESH=off` pauses it. The CI staging install
-and `prod` always ship it paused, and `-t prod` refuses
+and `prod` always ship it paused, and `-t prod` and `-t pr105-host` refuse
 `MIP_SCHEDULED_REFRESH=on`. Its failure email goes to the deploying user on the
 live install only. The schedule reaches the workspace only through the bundle
 apply of a GO governed `./scripts/deploy.sh -t dev` run, and that run was NO-GO

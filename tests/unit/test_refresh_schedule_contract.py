@@ -126,13 +126,22 @@ def test_operator_docs_explain_app_refresh_default_and_paused_schedules() -> Non
         # The deployer-is-a-user check is the one GO read the probe does not make yet.
         "where that read belongs, checks Supervisor retirement and Genie group grants but not the "
         "deployer's user name. Until it does, check the deploying identity is a user before a GO run.",
+        # The CI staging install is its own target (pr105-host) since the forked anchor: the
+        # preflight refuses `on` for every target but dev, and each target has its own file.
+        "Every other target is always paused and refuses `MIP_SCHEDULED_REFRESH=on` (exit 2): the CI "
+        "staging install (`deploy-dev.yml`, target `pr105-host`, leaf `dev-ci`)",
+        "`.databricks/bundle/<target>/variable-overrides.json` (`dev` for the live install)",
     ):
         assert phrase in flat_runbook, phrase
     for stale in (
         "The runtime and verifier audits refuse it at cutover, after the App is stopped.",
         "the pre-stop probe step it belongs in has not landed",
+        "(both are target `dev`)",
+        "share that file in one checkout",
     ):
         assert stale not in flat_runbook, stale
+    assert "`-t prod` and `-t pr105-host` refuse `MIP_SCHEDULED_REFRESH=on`" in flat_deployment
+    assert "and `-t prod` refuses `MIP_SCHEDULED_REFRESH=on`" not in flat_deployment
     for doc in (flat_deployment, flat_runbook):
         assert "no other operator action" not in doc.lower()
 
