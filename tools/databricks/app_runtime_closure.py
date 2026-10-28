@@ -46,7 +46,8 @@ build metadata, and exactly the ``frontend/public`` files tracked at REF; a
 ``.br`` it cannot check is left out and reported). Before
 it writes anything, it refuses junk files, a hidden path (a segment starting
 with ``.``), a symlink or submodule tracked at
-REF, a missing required entry, a requirements.txt whose deps-digest line does
+REF, a missing required entry, an ``--out`` inside ``--dist`` or around it
+(both resolved first), a requirements.txt whose deps-digest line does
 not match uv.lock and requirements.in at REF (the Apps build would skip the
 reinstall) and a non-empty ``--out``. It then copies the dist into a
 temporary sibling of ``--out``, reviews that copy (the copy is what ships),
@@ -374,15 +375,27 @@ def _write(repo: Path, tracked: _Tracked, dist: Path, work: Path) -> StageResult
     return plan
 
 
+def _check_apart(dist: Path, out: Path) -> None:
+    """Refuse an ``--out`` inside ``--dist`` (the copy would copy itself) or around it."""
+
+    resolved_dist, resolved_out = dist.resolve(), out.resolve()
+    if resolved_out == resolved_dist or resolved_dist in resolved_out.parents:
+        raise StageError(f"--out {out} is inside --dist {dist}; stage into a separate folder")
+    if resolved_out in resolved_dist.parents:
+        raise StageError(f"--dist {dist} is inside --out {out}; stage into a separate folder")
+
+
 def stage(*, repo: Path, ref: str, dist: Path, out: Path) -> StageResult:
     """Write the closure at ``ref`` plus ``dist`` into the empty ``out``.
 
-    The git side is checked before anything is written. The dist is copied
-    into a temporary sibling of ``out`` and that copy is reviewed and shipped,
-    so the review and the shipped bytes cannot diverge; any refusal removes the
-    temporary folder and leaves ``out`` as it was.
+    ``out`` and ``dist`` must not contain each other. The git side is checked
+    before anything is written. The dist is copied into a temporary sibling of
+    ``out`` and that copy is reviewed and shipped, so the review and the
+    shipped bytes cannot diverge; any refusal removes the temporary folder and
+    leaves ``out`` as it was.
     """
 
+    _check_apart(dist, out)
     tracked = _plan(repo, ref)
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise StageError(f"--out {out} exists and is not an empty directory")

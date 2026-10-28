@@ -223,3 +223,40 @@ def test_the_tracked_closure_stays_under_its_file_budget() -> None:
         f"{tracked} tracked closure files exceed {closure.MAX_TRACKED_FILES}: trim the "
         "closure or re-measure the start window before raising the budget"
     )
+
+
+@pytest.mark.parametrize(
+    ("layout", "message"),
+    [
+        ("out_inside_dist", "--out {out} is inside --dist {dist}"),
+        ("out_is_dist", "--out {out} is inside --dist {dist}"),
+        ("out_inside_dist_via_symlink", "--out {out} is inside --dist {dist}"),
+        ("out_inside_dist_via_dotdot", "--out {out} is inside --dist {dist}"),
+        ("dist_inside_out", "--dist {dist} is inside --out {out}"),
+    ],
+)
+def test_the_cli_refuses_an_out_and_a_dist_that_contain_each_other(
+    repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str], layout: str, message: str
+) -> None:
+    # Copying a dist into a folder inside itself walks its own copy; refuse
+    # before anything is written, with exit 2 and no traceback.
+    if layout == "dist_inside_out":
+        out = tmp_path / "out"
+        dist = make_dist(out)
+    else:
+        dist = make_dist(tmp_path)
+        (tmp_path / "link").symlink_to(dist)
+        out = {
+            "out_inside_dist": dist / "out",
+            "out_is_dist": dist,
+            "out_inside_dist_via_symlink": tmp_path / "link" / "out",
+            "out_inside_dist_via_dotdot": tmp_path / "elsewhere" / ".." / "dist" / "out",
+        }[layout]
+    before = files_under(tmp_path)
+    args = ["--repo", str(repo), "stage", "--ref", "HEAD", "--dist", str(dist), "--out", str(out)]
+
+    assert closure.main(args) == 2
+
+    err = capsys.readouterr().err
+    assert err == f"refused: {message.format(out=out, dist=dist)}; stage into a separate folder\n"
+    assert files_under(tmp_path) == before

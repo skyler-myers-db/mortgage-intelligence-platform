@@ -234,8 +234,9 @@ Before it writes anything, `stage` also refuses a symlink, a submodule or a
 hidden path (a segment starting with `.`, such as `backend/.env.local`)
 tracked at `<sha>`, a missing required entry, a `requirements.txt` whose
 deps-digest line does not match `uv.lock` and `requirements.in` at `<sha>`
-(next section), and an `--out` that is not empty. It then copies the dist
-into a temporary sibling of `--out` without following symlinks, reviews the
+(next section), an `--out` that is not empty, and an `--out` inside `--dist`
+or around it (both resolved first, so a symlink or `..` cannot hide it). It
+then copies the dist into a temporary sibling of `--out` without following symlinks, reviews the
 copy and ships the copy, so a dist that changes after the review cannot
 change what ships. It refuses more than 600 tracked files or 1,300 in all,
 adds the tracked files and renames the folder into place, so a refusal or a
