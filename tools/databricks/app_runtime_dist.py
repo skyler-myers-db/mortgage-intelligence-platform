@@ -13,7 +13,8 @@ build. It allows only what a governed build emits:
 * ``assets/<name>-<hash>.<ext>``, the flat, hashed Vite output, with ``<ext>``
   one of ``ASSET_EXTENSIONS`` (``HASHED_ASSET`` below; how it follows from
   frontend/vite.config.ts is pinned by tests/unit/test_app_runtime_closure_dist.py);
-* a ``.gz`` beside such an asset that decompresses to exactly its bytes and
+* a ``.gz`` (exactly one compression suffix) beside such an asset that
+  decompresses to exactly its bytes and
   whose gzip header is bare (FLG 0: no file name, comment, extra field or
   header CRC, as Node's zlib.gzip writes it), and a ``.br`` that decodes to
   exactly its bytes too (tools/precompress_assets.mjs). Without the optional
@@ -190,7 +191,10 @@ def _compressed(
 ) -> str | None:
     """None for a ``.gz``/``.br`` that decodes to its hashed source."""
 
-    source = relpath.removesuffix(GZIP_SUFFIX).removesuffix(BROTLI_SUFFIX)
+    suffix = GZIP_SUFFIX if relpath.endswith(GZIP_SUFFIX) else BROTLI_SUFFIX
+    source = relpath.removesuffix(suffix)
+    if source.endswith((GZIP_SUFFIX, BROTLI_SUFFIX)):
+        return "more than one compression suffix"
     if not HASHED_ASSET.match(source):
         return "not a governed build output"
     if source not in present:

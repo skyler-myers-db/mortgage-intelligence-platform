@@ -240,6 +240,26 @@ def test_a_bare_gzip_header_built_by_hand_is_accepted(tmp_path: Path) -> None:
     assert review.problems == ()
 
 
+@pytest.mark.parametrize(
+    ("relpath", "data"),
+    [
+        # precompress_assets.mjs writes one suffix. static_assets.py serves
+        # <name> + ".gz" in place of <name>, so a GET of app-....js.br that
+        # accepts gzip would get this file, which is not that .br at all.
+        ("assets/app-DnQ3_k-1.js.br.gz", gz(APP_JS)),
+        ("assets/app-DnQ3_k-1.js.gz.br", BROTLI_MAGIC + gz(APP_JS)),
+        ("assets/app-DnQ3_k-1.js.gz.gz", gz(gz(APP_JS))),
+        ("assets/app-DnQ3_k-1.js.br.br", BROTLI_MAGIC + BROTLI_MAGIC + APP_JS),
+    ],
+)
+def test_a_name_with_more_than_one_compression_suffix_is_refused(
+    tmp_path: Path, relpath: str, data: bytes
+) -> None:
+    review = _review(_dist(tmp_path, {relpath: data}))
+
+    assert review.problems == (f"more than one compression suffix: {relpath}",)
+
+
 def test_without_a_brotli_decoder_every_br_is_left_out_and_reported(tmp_path: Path) -> None:
     review = _review(_dist(tmp_path), brotli=None)
 
