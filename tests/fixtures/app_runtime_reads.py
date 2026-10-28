@@ -10,14 +10,15 @@ relative ``Path("...")``, ``open("...")``, ``os.path.join("...")`` or
 ``os.path.abspath(".")``, which the App resolves against its source root), or at a string constant, f-string or
 ``os.environ.get`` default fed to one of those. The scan follows it, to a fixed
 point over every scanned module, through ``/``, ``.parent``, ``.parents[N]``,
-``joinpath``, ``with_name``, ``resolve()``, ``str()``, ``or``/``if``, names,
-tuple targets, walrus and ``/=``, function returns, call arguments (path values
+``joinpath``, ``with_name``, ``resolve()``, ``str()``, ``or``/``if``, names
+(a ``global`` or ``nonlocal`` name binds in its outer scope), tuple targets,
+walrus and ``/=``, function returns, call arguments (path values
 and strings) into first-party functions (including imported ones and
 ``self.method``), parameter defaults,
 attributes assigned on ``self``, ``cls`` or a class body (also when read
 through an imported first-party object, ``settings.root``), names and module
-attributes imported from other first-party modules, containers, and ``for``
-loops. Each value ends at a consumer, which decides what is read:
+attributes imported from other first-party modules (relative imports
+included), containers, and ``for`` loops. Each value ends at a consumer, which decides what is read:
 
 * a read or test (``read_text``, ``exists``, ``open(p)``, ``.name``, a
   comparison, a bare statement) reads exactly that path;
@@ -87,8 +88,10 @@ from tests.fixtures.app_runtime_paths import (
     SPEC_ATTRS,
     Ref,
     Scope,
+    absolute_module,
     glob_prefix,
     join_ref,
+    module_package,
     subtree,
 )
 
@@ -123,13 +126,15 @@ def _dotted_name(relfile: str) -> str:
 MODULE_LOADERS = frozenset({"import_module", "__import__", "find_spec", "run_module"})
 
 
-def _imported_names(tree: ast.Module) -> Iterator[tuple[str, int]]:
+def _imported_names(tree: ast.Module, package: str) -> Iterator[tuple[str, int]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             yield from ((alias.name, node.lineno) for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            yield node.module, node.lineno
-            yield from ((f"{node.module}.{a.name}", node.lineno) for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = absolute_module(package, node.level, node.module)
+            if base:
+                yield base, node.lineno
+                yield from ((f"{base}.{a.name}", node.lineno) for a in node.names)
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute | ast.Name):
             callee = node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id
             first = node.args[0] if node.args else None
@@ -154,8 +159,9 @@ def scan(root: Path, package: str = "backend") -> ScanResult:
         tree = ast.parse((root / relfile).read_text(encoding="utf-8"), filename=relfile)
         result.scanned.append(relfile)
         result.trees[relfile] = tree
-        world.modules[_dotted_name(relfile)] = ModuleFlow(world, relfile, _dotted_name(relfile), tree)
-        for name, line in _imported_names(tree):
+        dotted = _dotted_name(relfile)
+        world.modules[dotted] = ModuleFlow(world, relfile, dotted, tree)
+        for name, line in _imported_names(tree, module_package(relfile, dotted)):
             if name.split(".")[0] not in top_levels:
                 continue
             target = _module_file(root, name)

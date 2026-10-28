@@ -26,12 +26,14 @@ from tests.fixtures.app_runtime_paths import (
     Ref,
     Scope,
     StrValue,
+    absolute_module,
     attr_chain,
     bounded,
     const_int,
     glob_prefix,
     join,
     join_ref,
+    module_package,
     subtree,
     up,
 )
@@ -74,6 +76,9 @@ class ModuleFlow:
         self.strings: dict[Scope, dict[str, set[StrValue]]] = {}
         self.returns: dict[str, set[Ref]] = {}
         self.imports: dict[str, str] = {}  # local alias -> canonical dotted name
+        self.package = module_package(relfile, dotted)
+        # (function scope, name) -> the scope a `global` / `nonlocal` name binds in
+        self.rebound: dict[Scope, dict[str, Scope]] = {}
         self.loaded: set[str] = set()
         self.handled_file_nodes: set[int] = set()
         self.cache: dict[int, set[Ref]] = {}
@@ -93,9 +98,13 @@ class ModuleFlow:
                 for alias in node.names:
                     local = alias.asname or alias.name.split(".")[0]
                     self.imports[local] = alias.name if alias.asname else local
-            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                for alias in node.names:
-                    self.imports[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+            elif isinstance(node, ast.ImportFrom):
+                base = absolute_module(self.package, node.level, node.module)
+                for alias in node.names if base else ():
+                    self.imports[alias.asname or alias.name] = f"{base}.{alias.name}"
+            elif isinstance(node, ast.Global | ast.Nonlocal):
+                outer = () if isinstance(node, ast.Global) else scope[:-1]
+                self.rebound.setdefault(scope, {}).update(dict.fromkeys(node.names, outer))
             elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
                 self.loaded.add(node.id)
             elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
@@ -379,6 +388,7 @@ class ModuleFlow:
               strings: set[StrValue], *, in_class: bool = False) -> None:
         world = self.world
         if isinstance(target, ast.Name):
+            scope = self.rebound.get(scope, {}).get(target.id, scope)
             if refs:
                 world.grow(self.bindings.setdefault(scope, {}), target.id, refs)
             if strings:
@@ -436,8 +446,10 @@ class ModuleFlow:
                 self._bind_defaults(node, (*scope, node.name), scope)
             elif isinstance(node, ast.Call):
                 self._bind_call(node, scope)
-            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                self.world.imported.update((node.module, alias.name) for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                base = absolute_module(self.package, node.level, node.module)
+                if base:
+                    self.world.imported.update((base, alias.name) for alias in node.names)
 
     def _bind_defaults(self, node: ast.FunctionDef | ast.AsyncFunctionDef, inner: Scope,
                        outer: Scope) -> None:

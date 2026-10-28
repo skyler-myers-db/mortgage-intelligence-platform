@@ -147,6 +147,24 @@ def attr_chain(node: ast.AST) -> str | None:
     return None
 
 
+def module_package(relfile: str, dotted: str) -> str:
+    """The package a module's relative imports resolve against."""
+
+    return dotted if relfile.endswith("__init__.py") else dotted.rpartition(".")[0]
+
+
+def absolute_module(package: str, level: int, module: str | None) -> str | None:
+    """``from {"." * level}{module} import ...`` in ``package``, as an absolute name."""
+
+    if level == 0:
+        return module
+    parts = package.split(".") if package else []
+    if level - 1 > len(parts):
+        return None
+    base = parts[: len(parts) - (level - 1)]
+    return ".".join([*base, module] if module else base) or None
+
+
 def glob_prefix(pattern: str) -> str:
     parts: list[str] = []
     for part in pattern.split("/"):

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures.app_runtime_paths import absolute_module, module_package
 from tests.fixtures.app_runtime_reads import outside_reads, scan
 from tests.fixtures.app_runtime_shape_tree import flow_reads, literal_reads, make_tree
 
@@ -212,6 +213,46 @@ CAUGHT: dict[str, tuple[str, str | None, str | None]] = {
         DOCS = "docs"
         X = (Path(os.path.realpath(".")) / DOCS / "x2.md").read_text()
         """, "docs/x2.md", None),
+    # A root bound through `global` or `nonlocal`, and names reached through
+    # relative imports (round 4).
+    "global_rebinding": ("""
+        DOCS = "docs"
+        ROOT = None
+
+        def init():
+            global ROOT
+            ROOT = Path(__file__).resolve().parents[2]
+
+        def read():
+            return (ROOT / DOCS / "g1.md").read_text()
+        """, "docs/g1.md", None),
+    "nonlocal_rebinding": ("""
+        DOCS = "docs"
+
+        def read():
+            root = None
+
+            def bind():
+                nonlocal root
+                root = Path(__file__).resolve().parents[2]
+
+            bind()
+            return (root / DOCS / "n1.md").read_text()
+        """, "docs/n1.md", None),
+    "relative_import": ("""
+        from .paths import DOCS, REPO_ROOT
+
+        def read():
+            return (REPO_ROOT / DOCS / "r1.md").read_text()
+        """, "docs/r1.md", None),
+    "relative_module_import": ("""
+        from . import paths
+
+        def read():
+            return (paths.REPO_ROOT / paths.DOCS / "r2.md").read_text()
+        """, "docs/r2.md", None),
+    "relative_import_outside_backend": (
+        "from jobs.rel_job import read", "docs/rel.md", "docs/rel.md"),
     # A bare top-level name reaching a path constructor only through a
     # first-party parameter: no '/' and no path context, so only the flow
     # scan can see it.
@@ -312,6 +353,25 @@ def test_the_minimal_tree_alone_reads_nothing_outside_backend(tmp_path: Path) ->
     assert result.unhandled_file_uses == []
     assert outside_reads(result) == {}
     assert literal_reads(root, result) == set()
+
+
+@pytest.mark.parametrize(
+    ("relfile", "level", "module", "expected"),
+    [
+        ("backend/services/fake.py", 1, "paths", "backend.services.paths"),
+        ("backend/services/fake.py", 1, None, "backend.services"),
+        ("backend/services/fake.py", 2, "roots", "backend.roots"),
+        ("backend/services/__init__.py", 1, "paths", "backend.services.paths"),
+        ("backend/services/fake.py", 0, "jobs.x", "jobs.x"),
+        ("backend/services/fake.py", 4, "x", None),
+    ],
+)
+def test_relative_imports_resolve_against_the_importing_package(
+    relfile: str, level: int, module: str | None, expected: str | None
+) -> None:
+    dotted = relfile.removesuffix(".py").removesuffix("/__init__").replace("/", ".")
+
+    assert absolute_module(module_package(relfile, dotted), level, module) == expected
 
 
 def test_the_home_folder_is_not_a_repo_read(tmp_path: Path) -> None:

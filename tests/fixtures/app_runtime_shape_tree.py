@@ -2,7 +2,8 @@
 
 The module under test is backend/services/fake.py, so ``parents[2]`` is the
 repo root; backend/roots.py exports a root for the cross-module shapes and
-backend/services/paths.py a settings object holding path values. Each
+backend/services/paths.py a root, a folder name and a settings object
+holding path values. Each
 shape reads something under docs/, which no closure entry covers, so a caught
 read shows up as uncovered. The flow scan is tests/fixtures/app_runtime_reads.py
 and the literal sweep is tests/fixtures/app_runtime_literals.py. Used by
@@ -26,6 +27,9 @@ ROOT_MODULE = "from pathlib import Path\n\nREPO_ROOT = Path(__file__).resolve().
 SETTINGS_MODULE = """\
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DOCS = "docs"
+
 
 class Settings:
     root = Path(__file__).resolve().parents[2]
@@ -42,6 +46,9 @@ JOB = (
     "def run():\n"
     '    return (Path(__file__).resolve().parents[1] / "docs" / "job.md").read_text()\n'
 )
+# A job module reached only through a relative import of another job module.
+REL_JOB = "from .rel_helper import read\n"
+REL_HELPER = JOB.replace("def run", "def read").replace("job.md", "rel.md")
 
 
 def make_tree(tmp_path: Path, source: str) -> Path:
@@ -55,6 +62,8 @@ def make_tree(tmp_path: Path, source: str) -> Path:
         "tools/fake_tool.py": "thing = 1\n",
         "tools/pkg/__init__.py": "",
         "jobs/fake_job.py": JOB,
+        "jobs/rel_job.py": REL_JOB,
+        "jobs/rel_helper.py": REL_HELPER,
         "docs/README.md": "x\n",
     }
     for relpath, text in files.items():
