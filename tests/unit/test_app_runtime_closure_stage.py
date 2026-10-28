@@ -178,13 +178,16 @@ def test_list_prints_every_entry_and_the_tracked_files(
 def test_exactly_the_two_never_tracked_entries_are_optional() -> None:
     # stage skips a missing optional entry and refuses a missing required one,
     # so a reader file wrongly marked optional would be dropped from a slim
-    # folder without a word. docs/deployment.md names exactly these two.
+    # folder without a word. docs/deployment.md names exactly these two, and
+    # neither is tracked at HEAD or staged in the index.
     optional = {entry.path for entry in closure.CLOSURE if not entry.required}
 
     assert optional == {
         "genie/space_id.txt",
         "sql/_rendered/transformations/gold_funnel_snapshot_daily.sql",
     }
+    assert git(ROOT, "ls-tree", "-r", "--name-only", "HEAD", "--", *sorted(optional)) == ""
+    assert git(ROOT, "ls-files", "--", *sorted(optional)) == ""
 
 
 def test_stage_of_head_carries_every_tracked_closure_file(tmp_path: Path) -> None:
