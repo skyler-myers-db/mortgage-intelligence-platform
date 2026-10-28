@@ -50,6 +50,26 @@ UNHANDLED: tuple[tuple[str, str], ...] = (
     ("resources_function_import", (
         'from importlib.resources import as_file\nX = as_file')),
     ("pkgutil_get_data", 'import pkgutil\nX = pkgutil.get_data("backend", "x")'),
+    # Round 4: a module's file by name, a frame's or code object's file, and a
+    # find_spec result's paths.
+    ("globals_file", 'DOCS = "docs"\nX = Path(globals()["__file__"]).parents[2] / DOCS'),
+    ("vars_file", 'X = Path(vars()["__file__"]).parents[2]'),
+    ("f_globals_get_file", (
+        'import sys\nX = Path(sys.modules[__name__].__dict__.get("__file__")).parent')),
+    ("getattr_file", 'import backend\nX = Path(getattr(backend, "__file__")).parent'),
+    ("sys_getframe", (
+        "import sys\nX = Path(sys._getframe().f_code.co_filename).parents[2]")),
+    ("inspect_currentframe", (
+        "import inspect\nX = Path(inspect.currentframe().f_code.co_filename).parents[2]")),
+    ("inspect_stack", "import inspect\nX = Path(inspect.stack()[0].filename).parents[2]"),
+    ("code_object_filename", (
+        "def f():\n    return 1\n\nX = Path(f.__code__.co_filename).parents[2]")),
+    ("find_spec_origin", (
+        'import importlib.util\n'
+        'X = Path(importlib.util.find_spec("backend").origin).parents[1]')),
+    ("find_spec_bound_search_locations", (
+        'import importlib.util\nSPEC = importlib.util.find_spec("backend")\n'
+        "X = Path(SPEC.submodule_search_locations[0]).parent")),
 )
 
 
@@ -63,16 +83,23 @@ def test_a_flow_the_scan_cannot_bound_is_unhandled(tmp_path: Path, shape: str, s
 
 def test_names_that_only_look_like_unfollowed_roots_are_not_reported(tmp_path: Path) -> None:
     # The control for the root rules: a local `files`, an `argv` attribute of
-    # a first-party class and a `path` key are not the module roots they echo.
+    # a first-party class and a `path` key are not the module roots they echo;
+    # a find_spec presence test (capabilities._module_present) and an `origin`
+    # or `loader` that is not on a find_spec result read no file.
     source = """
+        import importlib.util
+
         files = ["a.md"]
         X = files[0]
 
         class Options:
             argv = []
             path = "x"
+            origin = "https://example.invalid"
+            loader = None
 
-        Y = Options.argv, Options.path, {"__file__": 1}
+        Y = Options.argv, Options.path, {"__file__": 1}, Options.origin, Options.loader
+        PRESENT = importlib.util.find_spec("json") is not None
         """
 
     assert scan(make_tree(tmp_path, source)).unhandled_file_uses == []

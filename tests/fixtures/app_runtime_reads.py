@@ -33,12 +33,17 @@ loops. Each value ends at a consumer, which decides what is read:
   unhandled, and its subtree counts as read.
 
 A root it does not follow is reported as unhandled wherever it is referenced
-(app_runtime_paths.ROOT_DUNDERS and ROOT_REFS): a module attribute
-``__file__`` (``backend.__file__``, ``sys.modules[__name__].__file__``),
-``__spec__``, ``__loader__``, ``__path__``, ``__cached__``,
-``inspect.getfile`` and its siblings, ``sys.argv``, ``sys.path``,
-``os.curdir``, and the ``importlib.resources``, ``pkgutil.get_data`` and
-``pkg_resources`` data helpers.
+(app_runtime_paths.ROOT_DUNDERS, ROOT_ATTRS, SPEC_ATTRS and ROOT_REFS): a
+module attribute ``__file__`` (``backend.__file__``,
+``sys.modules[__name__].__file__``) or one looked up by name
+(``globals()["__file__"]``, ``vars()["__file__"]``,
+``getattr(m, "__file__")``), ``__spec__``, ``__loader__``, ``__path__``,
+``__cached__``, any ``co_filename``, a frame (``sys._getframe``,
+``inspect.currentframe``, ``inspect.stack`` and their siblings), the
+``origin``, ``submodule_search_locations``, ``cached`` or ``loader`` of a
+``find_spec`` result, ``inspect.getfile`` and its siblings, ``sys.argv``,
+``sys.path``, ``os.curdir``, and the ``importlib.resources``,
+``pkgutil.get_data`` and ``pkg_resources`` data helpers.
 
 A path value bound to a name nothing loads counts as read where it is bound.
 
@@ -76,8 +81,10 @@ from tests.fixtures.app_runtime_flow import ModuleFlow, World
 from tests.fixtures.app_runtime_paths import (
     DIR_CALLS,
     OPEN_CALLS,
+    ROOT_ATTRS,
     ROOT_DUNDERS,
     ROOT_REFS,
+    SPEC_ATTRS,
     Ref,
     Scope,
     glob_prefix,
@@ -208,17 +215,58 @@ def _classify(module: ModuleFlow, result: ScanResult) -> None:
     result.unhandled_file_uses.extend(_unfollowed_roots(module))
 
 
+def _is_find_spec(module: ModuleFlow, node: ast.AST | None) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    return (module.canon(node.func) or "").rsplit(".", 1)[-1] == "find_spec"
+
+
+def _spec_names(module: ModuleFlow) -> set[str]:
+    """Names bound to a ``find_spec(...)`` result anywhere in the module."""
+
+    names: set[str] = set()
+    for node, _ in module.nodes:
+        targets: list[ast.expr] = []
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+        elif isinstance(node, ast.AnnAssign | ast.NamedExpr):
+            targets = [node.target]
+        if targets and _is_find_spec(module, getattr(node, "value", None)):
+            names.update(t.id for t in targets if isinstance(t, ast.Name))
+    return names
+
+
+def _root_label(module: ModuleFlow, node: ast.AST, specs: set[str]) -> str | None:  # noqa: PLR0911
+    if isinstance(node, ast.Attribute):
+        if node.attr in ROOT_DUNDERS:
+            return f"module {node.attr}"
+        if node.attr in ROOT_ATTRS:
+            return node.attr
+        receiver = node.value
+        on_spec = _is_find_spec(module, receiver) or (
+            isinstance(receiver, ast.Name) and receiver.id in specs)
+        if node.attr in SPEC_ATTRS and on_spec:
+            return f"find_spec {node.attr}"
+    if isinstance(node, ast.Name) and node.id in ROOT_DUNDERS - {"__file__"}:
+        return node.id
+    if isinstance(node, ast.Name | ast.Attribute) and module.canon(node) in ROOT_REFS:
+        return module.canon(node)
+    if isinstance(node, ast.Constant) and node.value in ROOT_DUNDERS:
+        # A module attribute looked up by name: globals()["__file__"],
+        # vars(m)["__file__"], frame.f_globals.get("__file__"), getattr(m, ...).
+        parent = module.parents.get(id(node))
+        keyed = isinstance(parent, ast.Subscript) and parent.slice is node
+        if keyed or (isinstance(parent, ast.Call) and node in parent.args):
+            return f"{node.value} by name"
+    return None
+
+
 def _unfollowed_roots(module: ModuleFlow) -> Iterator[str]:
     """Every reference to a root the scan does not follow (paths.ROOT_*)."""
 
+    specs = _spec_names(module)
     for node, _ in module.nodes:
-        label = None
-        if isinstance(node, ast.Attribute) and node.attr in ROOT_DUNDERS:
-            label = f"module {node.attr}"
-        elif isinstance(node, ast.Name) and node.id in ROOT_DUNDERS - {"__file__"}:
-            label = node.id
-        elif isinstance(node, ast.Name | ast.Attribute) and module.canon(node) in ROOT_REFS:
-            label = module.canon(node)
+        label = _root_label(module, node, specs)
         if label is not None:
             yield f"{module.file}:{getattr(node, 'lineno', 0)} ({label})"
 

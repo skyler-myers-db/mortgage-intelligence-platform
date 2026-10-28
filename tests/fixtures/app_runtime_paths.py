@@ -44,13 +44,23 @@ GLOB_CHARS = frozenset("*?[")
 # Roots the scan does not follow. Each names a file or folder of the running
 # App without going through a bare ``__file__`` or the cwd: a module's own
 # path (``backend.__file__``, ``sys.modules[__name__].__file__``,
-# ``__spec__.origin``, ``inspect.getfile``), the script path (``sys.argv``),
-# an import root (``sys.path``) or a package's resource root
-# (``importlib.resources.files``). A reference to one is reported as
+# ``globals()["__file__"]``, ``__spec__.origin``, ``inspect.getfile``, a
+# code object's ``co_filename``, a frame from ``sys._getframe`` or
+# ``inspect.currentframe``, a ``find_spec`` result's ``origin``), the script
+# path (``sys.argv``), an import root (``sys.path``) or a package's resource
+# root (``importlib.resources.files``). A reference to one is reported as
 # unhandled, as a bare ``__file__`` outside the path constructors is.
 ROOT_DUNDERS = frozenset({"__file__", "__spec__", "__loader__", "__path__", "__cached__"})
+ROOT_ATTRS = frozenset({"co_filename"})  # any code object's source file
+# Attributes of a ModuleSpec that name files, flagged on a find_spec result.
+SPEC_ATTRS = frozenset({"origin", "submodule_search_locations", "cached", "loader"})
+FRAME_REFS = frozenset({
+    "sys._getframe", "sys._current_frames", "inspect.currentframe", "inspect.stack",
+    "inspect.trace", "inspect.getouterframes", "inspect.getinnerframes",
+    "inspect.getframeinfo", "traceback.extract_stack", "traceback.walk_stack",
+})
 ROOT_REFS = frozenset({
-    "sys.argv", "sys.path", "os.curdir",
+    "sys.argv", "sys.path", "os.curdir", *FRAME_REFS,
     "inspect.getfile", "inspect.getsourcefile", "inspect.getabsfile",
     *(f"importlib.resources.{name}" for name in (
         "files", "as_file", "path", "contents", "is_resource", "read_text", "read_binary",
