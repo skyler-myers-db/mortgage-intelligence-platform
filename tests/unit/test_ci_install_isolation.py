@@ -953,11 +953,20 @@ _LIVE_RECOVERY_OVERCLAIMS = (
 # deploy and recovery vocabulary, in either order and whatever the verb, is an
 # overclaim. No sentence in the bootstrap section or the runbook recovery
 # needs both; a negation does not excuse one (rephrase with "start").
-_OPERATOR_LIVE_DEPLOY_RE = re.compile(r"(?i)(?:\./)?scripts/deploy\.sh`? -t dev\b")
-_RECOVERY_VOCABULARY = re.compile(
-    r"(?i)\b(?:recover|restor|restart|redeploy|repair|reviv|resurrect)\w*"
-    r"|\b(?:bring|brings|bringing|brought|get|gets|getting|got)\b[^.]{0,40}?\bback\b"
+# Post-W5 review (L5R): also the bare `deploy.sh`, `--target dev`/`--target=dev`,
+# and `make deploy-dev`, whose recipe runs `./scripts/deploy.sh` (target dev).
+_OPERATOR_LIVE_DEPLOY_RE = re.compile(
+    r"(?i)(?:(?:\./)?scripts/)?\bdeploy\.sh`? (?:-t|--target)[ =]dev\b|\bmake deploy-dev\b"
 )
+_RECOVERY_VOCABULARY = re.compile(
+    r"(?i)\b(?:recover|restor|restart|re-?deploy|repair|reviv|resurrect)\w*"
+    r"|\b(?:bring|brings|bringing|brought|get|gets|getting|got|come|comes|coming|came)\b[^.]{0,40}?\bback\b"
+    r"|\broll(?:s|ed|ing)?\b[^.]{0,40}?\bforward\b"
+)
+# A dispatch or the deploy-dev workflow named beside the live App and recovery
+# vocabulary, in any order (post-W5 review: "Restore the live App: dispatch ...").
+_LIVE_APP_RE = re.compile(r"(?i)\blive (?:dev )?App\b")
+_DISPATCH_RE = re.compile(r"(?i)\bdispatch\w*\b|\bdeploy-dev(?:\.yml)?\b")
 # Sentence ends in flattened Markdown: end punctuation, whitespace, then a capital after optional markup.
 _SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+(?=[`*\"'(\[]*[A-Z])")
 
@@ -971,6 +980,8 @@ def assert_no_live_recovery_overclaim(text: str) -> None:
     for sentence in _SENTENCE_BREAK.split(" ".join(text.split())):
         both = _OPERATOR_LIVE_DEPLOY_RE.search(sentence) and _RECOVERY_VOCABULARY.search(sentence)
         assert not both, sentence
+        dispatched = _LIVE_APP_RE.search(sentence) and _DISPATCH_RE.search(sentence)
+        assert not (dispatched and _RECOVERY_VOCABULARY.search(sentence)), sentence
 
 
 @pytest.mark.parametrize(
@@ -986,6 +997,14 @@ def assert_no_live_recovery_overclaim(text: str) -> None:
         "An operator brings the live App back with `./scripts/deploy.sh -t dev`.",
         "Get the live App back up: ./scripts/deploy.sh -t dev.",
         "To restore service, an operator runs scripts/deploy.sh -t dev from a clean checkout.",
+        # Post-W5 review (L5R) survivors: other spellings of the live deploy and of recovery.
+        "An operator recovers the live dev App with `make deploy-dev`.",
+        "An operator restores the live dev App with `deploy.sh -t dev`.",
+        "Recover the live App with `scripts/deploy.sh --target dev`.",
+        "The live App comes back once an operator runs `./scripts/deploy.sh -t dev`.",
+        "An operator re-deploys the live App with `./scripts/deploy.sh -t dev`.",
+        "An operator rolls the live App forward with `./scripts/deploy.sh -t dev`.",
+        "Restore the live App: dispatch deploy-dev.yml.",
     ],
 )
 def test_the_live_recovery_overclaim_ban_catches_paraphrases(overclaim: str) -> None:
@@ -1001,6 +1020,9 @@ def test_the_live_recovery_overclaim_ban_catches_paraphrases(overclaim: str) -> 
         "Don't dispatch deploy-dev.yml for the live App.",
         "Never start `./scripts/deploy.sh -t dev` against the live workspace during an incident; escalate to the owner.",
         "No governed path recovers it today. Its command of record, an operator `./scripts/deploy.sh -t dev`, is NO-GO.",
+        # Production and the CI staging target are not the live dev install.
+        "To restore production, an operator runs `scripts/deploy.sh -t prod`.",
+        "deploy-dev.yml recovers only the CI staging install.",
     ],
 )
 def test_the_live_recovery_overclaim_ban_lets_the_refusals_through(negated: str) -> None:
