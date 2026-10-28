@@ -83,7 +83,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--source-code-path",
         required=True,
-        help="Workspace source path uploaded by the signed deploy resource phase.",
+        help=(
+            "The per-release App source folder scripts/deploy.sh publishes, "
+            "<bundle root>/app-src/<release id>."
+        ),
     )
     parser.add_argument(
         "--endpoint",

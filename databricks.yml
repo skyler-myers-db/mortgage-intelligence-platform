@@ -40,6 +40,11 @@ workspace:
 # artifacts) but the Databricks App runtime needs those files at `/` so
 # the FastAPI SPA fallback serves the React bundle. `scripts/deploy.sh`
 # performs the frontend build before its selector-bounded resource apply.
+# The App itself no longer runs from this upload: deploy.sh promotes a
+# per-release folder, <bundle root>/app-src/<release id>, with its own copy
+# of the dist (docs/deployment.md "Governed per-release App source").
+# frontend/dist/** stays synced while a deployment made before that may
+# still name the files root.
 #
 # 2026-05-04: also include `sql/_rendered/**`. The render_sql tool writes
 # UC-catalog-substituted SQL into `sql/_rendered/` (gitignored — never
@@ -72,9 +77,10 @@ sync:
   # with or without local sync-snapshot state. Residual exposure is deploys
   # from checkouts predating this block (that is how the manifests returned
   # to the paychex tree on 2026-08-05) and App promotions outside
-  # scripts/deploy.sh; the governed path closes both by running
-  # tools/databricks/converge_static_app_source.py right before every
-  # promotion. Full story: docs/deployment.md "App source contract".
+  # scripts/deploy.sh; the governed path closes both: the per-release folder
+  # it promotes never carries the manifests, and it runs
+  # tools/databricks/converge_static_app_source.py (release mode) right
+  # before every promotion. Full story: docs/deployment.md "App source contract".
   exclude:
     - /package.json
     - /package-lock.json
@@ -227,6 +233,10 @@ resources:
     mip_app:
       name: ${var.app_name}
       description: Mortgage Intelligence Platform — Module 0 (Top-of-Funnel Lead Generation & Borrower Segmentation).
+      # Required by the bundle schema and the deployment bind, and never
+      # activated: scripts/deploy.sh step 5 requires it to resolve to
+      # workspace.file_path, derives <bundle root>/app-src from that, and
+      # promotes the per-release folder it publishes there.
       source_code_path: .
       # App resource bindings. On deploy, Databricks Apps injects env
       # vars for each binding so the backend has everything it needs

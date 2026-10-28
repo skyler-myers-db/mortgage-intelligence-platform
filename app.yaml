@@ -11,10 +11,11 @@
 #          SUCCEEDS) and recompiles frontend/dist from the uploaded
 #          frontend/src, replacing the prebuilt bundle. That silent rebuild
 #          is what kept reverting a dist-only hotfix on 2026-08-05.
-#          Enforced twice: databricks.yml sync.exclude (upload filter +
-#          server-side delete on current CLI) and
-#          tools/databricks/converge_static_app_source.py immediately before
-#          every governed App promotion. Contract details:
+#          Enforced three ways: databricks.yml sync.exclude (upload filter +
+#          server-side delete on current CLI), the per-release App source
+#          folder scripts/deploy.sh stages and publishes (it never carries a
+#          root manifest), and tools/databricks/converge_static_app_source.py
+#          immediately before every governed App promotion. Contract details:
 #          docs/deployment.md "App source contract".
 # Env:     workspace identity + resource bindings (see databricks.yml
 #          `resources.apps.mip_app.resources`) are surfaced here as env

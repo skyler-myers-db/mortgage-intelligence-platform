@@ -161,6 +161,43 @@ def test_deployment_doc_pins_the_prebuilt_app_source_contract() -> None:
         assert 'docs/deployment.md "App source contract"' in surface
 
 
+def test_deployment_doc_pins_the_governed_per_release_app_source() -> None:
+    from tools.databricks import app_release_prune, app_release_source
+
+    deployment = _read(ROOT / "docs" / "deployment.md")
+    section = deployment[
+        deployment.index("## Governed per-release App source") : deployment.index(
+            "## Emergency recovery: a slim per-release App source folder"
+        )
+    ]
+    for required in (
+        "`<bundle root>/app-src/<release id>`",
+        "`<commit[:12]>-<digest[:12]>`",
+        "app_runtime_closure\n   check --ref <sha>",
+        "--require-brotli-check",
+        "tools.databricks.app_release_source publish",
+        "create-only",
+        "Rollback does not depend on these folders.",
+        "Transitional exposure.",
+        "verify-deployment",
+        "Not yet observed live",
+    ):
+        assert required in section, required
+    # The documented retention and budget are the code's.
+    assert app_release_prune.KEEP_PREVIOUS == 2 and "the two newest other release folders" in section
+    assert f"At most {app_release_prune.MAX_DELETIONS} folders go per run." in section
+    assert f"at most\n   {app_release_source.MAX_FILES:,} files" in section
+    # The emergency recipe no longer claims the governed path promotes the files root.
+    recovery = deployment[deployment.index("## Emergency recovery") : deployment.index("## App Python dependencies")]
+    assert "The governed `./scripts/deploy.sh -t dev` path is unchanged." not in recovery
+    assert "Nothing in the repository deletes them." not in recovery
+    assert "app_release_contract release-id" in recovery
+    contract = deployment[deployment.index("## App source contract") : deployment.index("## Governed per-release App source")]
+    assert "Enforcement is three-layer" in contract and "release mode" in contract
+    bundle = _read(ROOT / "databricks.yml")
+    assert "source_code_path: .\n" in bundle and "app-src/<release id>" in bundle
+
+
 def test_deployment_doc_documents_the_optional_lender_co_branding() -> None:
     """Audit responsive-10 / 12.4 #9: the three .env.local controls, the
     never-commit rule and the fail-safe; the derived hash is not an operator
