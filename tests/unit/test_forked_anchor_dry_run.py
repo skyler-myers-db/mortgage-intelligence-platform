@@ -133,6 +133,31 @@ def test_the_deploy_dev_dry_run_addresses_only_the_forked_anchor_target(tmp_path
     sources = [command for command in commands if "converge_static_app_source" in command]
     assert sources and all(command.endswith(f"--expected-target {CI_TARGET} --expected-root-leaf dev-ci") for command in sources)
     assert f"deployment bind mip_app {STAGING['MIP_APP_NAME']} -t {CI_TARGET}" in out
+    # The per-release App source: preflight checks the closure for real (git
+    # only), step 1 prints the stage, step 5 the publish, and every
+    # activation's converge names the one release folder of the dry run.
+    assert "app runtime closure: current" in out
+    sha = re.search(r"exact source: ([0-9a-f]{40}) ", out).group(1)
+    release = f"{sha[:12]}-dry-run"
+    stage = [command for command in commands if "app_runtime_closure stage" in command]
+    assert stage == [
+        f".venv/bin/python -m tools.databricks.app_runtime_closure stage --ref {sha} --dist frontend/dist "
+        "--out .databricks/app-release/source --manifest-out .databricks/app-release/manifest.json "
+        "--require-brotli-check"
+    ]
+    publish = [command for command in commands if "app_release_source publish" in command]
+    assert len(publish) == 1 and f"--release-id {release} " in publish[0]
+    assert publish[0].endswith(f"--expected-target {CI_TARGET} --expected-root-leaf dev-ci")
+    folder = f"/Workspace/dry-run/mortgage-intelligence-platform/app-src/{release}"
+    # A first-install dry run: the first-install and Agent Evaluation activations.
+    assert len(sources) == 2 and all(
+        f"--source-code-path {folder} --release-id {release} --release-manifest "
+        f".databricks/app-release/manifest.json --expected-git-sha {sha} " in command
+        for command in sources
+    )
+    prune = [command for command in commands if "app_release_prune" in command]
+    assert len(prune) == 1 and f"--expected-app-id dry-run-app-id --current-release {release} " in prune[0]
+    assert prune[0].endswith(f"--expected-target {CI_TARGET} --expected-root-leaf dev-ci")
 
 
 def test_an_operator_dry_run_of_the_forked_anchor_target_is_refused(tmp_path: Path) -> None:

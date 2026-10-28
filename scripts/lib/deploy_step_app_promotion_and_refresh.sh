@@ -67,6 +67,9 @@ deploy_app_snapshot() {
   assert_expected_app_identity "$APP_NAME"
   run "$PYTHON" -m tools.databricks.converge_static_app_source \
     --source-code-path "$APP_SOURCE_PATH" \
+    --release-id "$APP_RELEASE_ID" \
+    --release-manifest "$APP_RELEASE_MANIFEST" \
+    --expected-git-sha "$APP_GIT_SHA" \
     --expected-principal "$APP_CURRENT_USER" \
     --expected-target "$TARGET" \
     --expected-root-leaf "${MIP_BUNDLE_ROOT_LEAF_RESOLVED:-$TARGET}"
@@ -122,18 +125,23 @@ capture_last_good_app() {
   set +a
 }
 
+# The bundle files root (workspace.file_path) is where the per-release folder
+# root is derived from: <bundle root>/app-src is its sibling. The bundle's own
+# apps.mip_app.source_code_path (`.`) must still resolve to that root; it is
+# never activated. When it names anything else, the line is empty and the
+# deploy stops here.
 if [[ "$DRY_RUN" -eq 0 ]]; then
   APP_BUNDLE_SUMMARY="$(mktemp -t mip-bundle-summary.XXXXXX.json)"
   databricks bundle summary -t "$TARGET" -o json > "$APP_BUNDLE_SUMMARY"
-  APP_DEPLOY_META="$("$PYTHON" -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); ws=data.get("workspace") or {}; print((data.get("resources") or {}).get("apps", {}).get("mip_app", {}).get("source_code_path") or ws.get("file_path") or ""); print((ws.get("current_user") or {}).get("userName") or "")' "$APP_BUNDLE_SUMMARY")"
+  APP_DEPLOY_META="$("$PYTHON" -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); ws=data.get("workspace") or {}; files=ws.get("file_path") or ""; app=(data.get("resources") or {}).get("apps", {}).get("mip_app", {}).get("source_code_path") or files; print(files if app == files else ""); print((ws.get("current_user") or {}).get("userName") or "")' "$APP_BUNDLE_SUMMARY")"
 else
   APP_DEPLOY_META=$'/Workspace/dry-run/mortgage-intelligence-platform\ndry-run-deployer@example.invalid'
   APP_BUNDLE_SUMMARY="/tmp/mip-dry-run-bundle-summary.json"
 fi
-APP_SOURCE_PATH="$(printf '%s\n' "$APP_DEPLOY_META" | sed -n '1p')"
+APP_BUNDLE_FILES_PATH="$(printf '%s\n' "$APP_DEPLOY_META" | sed -n '1p')"
 APP_CURRENT_USER="$(printf '%s\n' "$APP_DEPLOY_META" | sed -n '2p')"
-if [[ -z "$APP_SOURCE_PATH" ]]; then
-  echo "${RED}[deploy] bundle summary did not expose the uploaded app source path.${RST}" >&2
+if [[ -z "$APP_BUNDLE_FILES_PATH" ]]; then
+  echo "${RED}[deploy] bundle summary did not expose the bundle files root, or apps.mip_app.source_code_path is not it.${RST}" >&2
   exit 1
 fi
 if [[ -z "$APP_CURRENT_USER" || \
@@ -141,6 +149,30 @@ if [[ -z "$APP_CURRENT_USER" || \
   echo "${RED}[deploy] bundle identity does not match the preflighted workspace-admin inventory principal.${RST}" >&2
   exit 1
 fi
+
+# >>> app release source: publish >>>
+# After the Lakebase migration and reviewed-grant proofs, before the first
+# activation: publish the folder step 1 staged to <bundle root>/app-src/<id>
+# (tools/databricks/app_release_source.py). Every local check runs before any
+# workspace call; then one create-only AUTO import per file (an object that
+# exists is reused only with equal bytes), an exact listing and a sha256
+# download of every file. It never overwrites or deletes, so a re-run of the
+# same release uploads nothing. A failure here restores signed blue on an
+# upgrade and leaves a first install stopped and quiesced. APP_SOURCE_PATH is
+# assigned only here: all three activations promote this one folder, and
+# converge re-checks it against the manifest before each of them.
+step "publish App release source ${APP_RELEASE_ID} (create-only, byte-verified)"
+run "$PYTHON" -m tools.databricks.app_release_source publish \
+  --release-id "$APP_RELEASE_ID" \
+  --stage-dir "$APP_RELEASE_STAGE_ROOT/source" \
+  --manifest "$APP_RELEASE_MANIFEST" \
+  --files-root "$APP_BUNDLE_FILES_PATH" \
+  --expected-commit "$SOURCE_GIT_SHA" \
+  --expected-principal "$APP_CURRENT_USER" \
+  --expected-target "$TARGET" \
+  --expected-root-leaf "${MIP_BUNDLE_ROOT_LEAF_RESOLVED:-$TARGET}"
+APP_SOURCE_PATH="${APP_BUNDLE_FILES_PATH%/files}/app-src/${APP_RELEASE_ID}"
+# <<< app release source: publish <<<
 
 # Roll-forward env continuity (external audits 2026-07-07 tripped on this
 # twice): the first snapshot deploy used to ship WITHOUT the agentic env,

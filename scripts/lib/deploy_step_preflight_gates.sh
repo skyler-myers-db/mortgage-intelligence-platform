@@ -95,6 +95,38 @@ if [[ "$DRY_RUN" -eq 0 && "$REQUIREMENTS_DIGEST_STATE" != "current" ]]; then
 fi
 # <<< requirements digest: check <<<
 
+# >>> app runtime closure: check >>>
+# Step 1 stages the App source from `git archive` of this commit (tools/
+# databricks/app_runtime_closure.py), and a refusal there would stop and
+# quiesce the App. Run its git-side refusals (junk, hidden, symlink or
+# notebook-shaped tracked files, a missing required entry, a stale deps-digest
+# line, the tracked-file allowance) here, with no dist and no workspace call,
+# so an unstageable commit is refused before the lease. Exit codes: 0 current,
+# 2 refused (it prints why); anything else is a hard error. A dry run reports
+# and continues; a real run refuses with exit 2. Isolated shell-contract
+# copies carry no tool: a dry run skips, a real run refuses.
+APP_RUNTIME_CLOSURE_STATE="skipped"
+if [[ -f tools/databricks/app_runtime_closure.py ]]; then
+  _app_runtime_closure_rc=0
+  "$PYTHON" -m tools.databricks.app_runtime_closure check --ref "$SOURCE_GIT_SHA" || _app_runtime_closure_rc=$?
+  case "$_app_runtime_closure_rc" in
+    0) APP_RUNTIME_CLOSURE_STATE="current" ;;
+    2) APP_RUNTIME_CLOSURE_STATE="refused" ;;
+    *) APP_RUNTIME_CLOSURE_STATE="error" ;;
+  esac
+  unset _app_runtime_closure_rc
+fi
+echo "  app runtime closure: ${APP_RUNTIME_CLOSURE_STATE}"
+if [[ "$DRY_RUN" -eq 0 && "$APP_RUNTIME_CLOSURE_STATE" != "current" ]]; then
+  case "$APP_RUNTIME_CLOSURE_STATE" in
+    refused) echo "${RED}[deploy] the App runtime closure at ${SOURCE_GIT_SHA} cannot be staged; fix the refusal above and commit.${RST}" >&2 ;;
+    error) echo "${RED}[deploy] the App runtime closure check failed; ${SOURCE_GIT_SHA} cannot be proven stageable.${RST}" >&2 ;;
+    *) echo "${RED}[deploy] tools/databricks/app_runtime_closure.py is not in this tree; the App source cannot be proven stageable.${RST}" >&2 ;;
+  esac
+  exit 2
+fi
+# <<< app runtime closure: check <<<
+
 if [[ "$DRY_RUN" -eq 0 ]]; then
   # Unity Catalog model registration validates the uploaded artifact through
   # the metastore's cloud storage before the version becomes ready. Fail before

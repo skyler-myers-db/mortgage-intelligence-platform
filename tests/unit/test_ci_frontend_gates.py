@@ -45,6 +45,7 @@ FRONTEND = ROOT / "frontend"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 PERF_SPEC = ROOT / "frontend" / "tests" / "e2e" / "fixture" / "perf-budget.fixture.spec.ts"
 BUILD_ARTIFACTS_TEST = "tests/unit/test_frontend_build_artifacts.py"
+RELEASE_STAGE_TEST = "tests/unit/test_app_release_built_dist.py"
 LAYOUT_STABILITY_SPEC = "tests/e2e/layout-stability.spec.ts"
 
 
@@ -264,6 +265,10 @@ def test_the_fixture_job_checks_the_built_dist_with_the_require_flag() -> None:
 
     assert build < python < install < check
     assert steps[check]["env"]["MIP_REQUIRE_FRONTEND_DIST"] == "1"
+    # The same required-dist step stages that dist as deploy.sh step 1 does.
+    assert (ROOT / RELEASE_STAGE_TEST).is_file()
+    assert _step_index(steps, RELEASE_STAGE_TEST) == check
+    assert steps[check]["run"].split() == ["pytest", "-q", BUILD_ARTIFACTS_TEST, RELEASE_STAGE_TEST]
 
 
 def test_the_parse_job_runs_the_whole_layout_stability_spec() -> None:

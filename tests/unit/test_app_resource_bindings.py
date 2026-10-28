@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from tools.databricks import app_resource_bindings as bindings
 from tools.databricks.app_resource_bindings import (
     _assert_exact_transition,
     build_resource_binding_payload,
@@ -187,3 +188,14 @@ def test_verify_update_preserves_existing_deployment_and_compute() -> None:
             before=before,
             require_stopped_without_deployment=False,
         )
+
+
+@pytest.mark.parametrize("field", ["source_code_path", "default_source_code_path", "env_vars", "mode"])
+def test_a_source_free_payload_never_carries_a_source_field(field: str) -> None:
+    payload = {"name": "mip-app", "resources": [], field: "x"}
+
+    with pytest.raises(ValueError, match=f"forbidden fields: \\['{field}'\\]"):
+        bindings._assert_source_free(payload)
+    bindings._assert_source_free({"name": "mip-app", "resources": []})
+    expected = {"source_code_path", "default_source_code_path", "env_vars", "mode"}
+    assert expected == bindings.SOURCE_FIELDS

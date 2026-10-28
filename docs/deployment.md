@@ -32,8 +32,11 @@ dist-only hotfix kept reverting on the paychex dev workspace on 2026-08-05
 (~5 hours of debugging): the tree still carried a stale root manifest, so
 every deployment rebuilt the old sources over the freshly-synced dist.
 
-Enforcement is two-layer, pinned by
-`tests/unit/test_static_app_bundle_contract.py`:
+Since the governed per-release App source (next section), the App runs from
+an immutable `<bundle root>/app-src/<release id>` folder, never from the bundle
+files root. Enforcement is three-layer, pinned by
+`tests/unit/test_static_app_bundle_contract.py` and
+`tests/unit/test_app_release_deploy_contract.py`:
 
 1. **`databricks.yml` `sync.exclude`** keeps `/package.json` and
    `/package-lock.json` out of bundle uploads. Verified on Databricks CLI
@@ -43,13 +46,29 @@ Enforcement is two-layer, pinned by
    sync-snapshot state. The exclusion cannot protect a tree that only ever
    receives deploys from checkouts predating it — the 2026-08-05 paychex
    re-upload came from an old-lineage worktree whose `databricks.yml` had
-   neither this exclusion nor the current workspace-host anchor.
-2. **`tools/databricks/converge_static_app_source.py`** runs inside
-   `scripts/deploy.sh` immediately before the App promotion: it requires a
-   non-empty `frontend/dist/index.html` in the uploaded tree and deletes any
-   root Node manifests that reached it by other means. It is also the
-   governed way to clean a stale tree by hand — it validates the exact
-   bundle-files path shape and touches nothing but the two manifest files.
+   neither this exclusion nor the current workspace-host anchor. It still
+   matters: jobs read the bundle files root (`files/`), and a deployment made
+   before the per-release folder may still name it.
+2. **The release folder never carries one.** `app_runtime_closure.py stage`
+   copies only the App's runtime closure, which has no root Node manifest,
+   and `app_release_source.py publish` refuses a staged folder that holds a
+   root `package.json` or `package-lock.json` before any workspace call.
+3. **`tools/databricks/converge_static_app_source.py` in release mode** runs
+   inside `scripts/deploy.sh` immediately before each of the three
+   activations (first install, the cutover, the Agent Evaluation redeploy).
+   The source path must be exactly `<bundle root>/app-src/<release id>` for
+   the deploy commit and the authenticated bundle identity; the manifest must
+   be staged for that commit with that id, which must recompute from its
+   files; an exact recursive listing must show the manifest's paths, each a
+   FILE of the manifest's size; and the manifest must hold a non-empty
+   `frontend/dist/index.html`. A root Node manifest in the folder is refused,
+   never deleted: a release folder is immutable. Each root manifest name is
+   also probed with `get_status`, so an empty directory under that name, which
+   a recursive listing never shows, is refused too. Its files-root mode (no
+   release arguments) is the governed way to clean a stale bundle files root
+   by hand: it requires a non-empty `frontend/dist/index.html`, validates the
+   exact bundle-files path shape and deletes nothing but the two root
+   manifest files.
 
 `sync.exclude` also keeps two geometry trees out of the App source (W5c,
 audit `dataviz-01`), pinned by the same test:
@@ -86,20 +105,179 @@ Two operational facts to know before assembling any ad-hoc App source tree
   frontend build must therefore include those root `tests/fixtures/` files,
   or the build fails with TS2307.
 
+## Governed per-release App source
+
+`./scripts/deploy.sh` promotes the App from one immutable folder per release,
+`<bundle root>/app-src/<release id>`, never from the bundle files root. Why:
+the App compute downloads every file under the deployment's source path again
+at start, at about 10 files/s, inside the 10-minute start window (measured
+2026-10-28), and the bundle files root only grows (it held 6,018 files when a
+deployment from it was recorded FAILED). A release folder holds only the App's
+runtime closure, about 1,180 files.
+
+`<bundle root>` is `/Workspace/Users/<deploy principal>/.bundle/mortgage-intelligence-platform/<leaf>`,
+where `<leaf>` is the target (or the CI install's `dev-ci`). `app-src/` is a
+sibling of `files/` that bundle sync never touches. The release id is
+`<commit[:12]>-<digest[:12]>`, where the digest is the sha256 of one
+`<path>\t<size>\t<sha256>\n` line per staged file in path order
+(`tools/databricks/app_release_contract.py`), so the same bytes of the same
+commit always name the same folder.
+
+The flow, every step in `scripts/deploy.sh`:
+
+1. **Preflight** (step 0): `python -m tools.databricks.app_runtime_closure
+   check --ref <sha>` runs the git-side refusals and the tracked-file
+   allowance with no dist and no workspace call, so a commit whose tracked
+   files step 1 could not stage is refused (exit 2) before the lease. The
+   dist-side refusals (the dist allowlist, the `.br` check, the total file
+   budget) can only run at step 1, after the build; CI's built-dist test
+   catches them before merge. A dry run reports `app runtime closure: <state>`
+   and continues.
+2. **Stage** (step 1, after the frontend build): `stage --ref <sha> --dist
+   frontend/dist --out .databricks/app-release/source --manifest-out
+   .databricks/app-release/manifest.json --require-brotli-check`, then
+   `python -m tools.databricks.app_release_contract release-id` reads the id
+   back from the manifest. The stage root is gitignored; only a real run
+   clears it. `--require-brotli-check` refuses a host with no `node` instead
+   of shipping gzip only.
+3. **Publish** (step 5, after the Lakebase migration and the reviewed-grant
+   proofs, before the first activation): `python -m
+   tools.databricks.app_release_source publish` runs every local check first
+   (the manifest, the bundle identity, the stage folder byte for byte, at most
+   1,300 files and none over 10 MiB, `app.yaml`, `requirements.txt` and a
+   non-empty `frontend/dist/index.html` present, no root Node manifest, no
+   notebook-shaped file), then makes one create-only workspace AUTO import per
+   file. An object that already exists is reused only when its bytes are equal;
+   other bytes are refused and nothing is overwritten. It then requires an exact
+   recursive listing (each object a FILE of the manifest's size) and downloads
+   every file to compare its sha256. It never deletes, so a re-run of the same
+   release uploads nothing.
+4. **Converge** before each of the three activations (release mode, see
+   "App source contract"), then the Apps deployment names the release folder
+   as its `source_code_path`. The platform copies the folder into the
+   deployment's own `/src/` snapshot (`deployment_artifacts.source_code_path`),
+   which is what the signed capture records.
+5. **Prune** (the last step, best effort): see Retention below.
+
+A dry run prints the stage, publish and prune commands without running them,
+uses the release id `<sha12>-dry-run` and the source path
+`/Workspace/dry-run/mortgage-intelligence-platform/app-src/<sha12>-dry-run`,
+and makes no Databricks call.
+
+Where a failure lands:
+
+| Where it fails | What happens to the App |
+|---|---|
+| Preflight check | Exit 2 before the lease; the App is untouched. |
+| Step-1 stage or release id | Like a failed frontend build: an existing App is stopped and quiesced (Lakebase access is not yet proven). CI's built-dist test makes a dist-side refusal unlikely. |
+| Step-5 publish | Upgrade: signed blue is restored. First install: stopped and quiesced. At most one partial content-addressed folder is left; the next run of the same bytes completes it when every object left there is absent or byte-equal, or a later green run prunes it. An object left with other bytes (an ambiguous upload) makes every publish of that release id refuse, because publish never overwrites, until a green run of another commit prunes the folder or an owner removes it. |
+| Converge before an activation | Upgrade: signed blue is restored. First install: stopped and quiesced. |
+| Prune | A warning only; the release stays live. |
+
+**Retention.** `tools/databricks/app_release_prune.py` runs only after a green
+capture (never on the rollback branch) and deletes, as the deploy identity
+through the SDK, only DIRECTORY children of the exact `<bundle root>/app-src`
+whose names are release ids. It keeps the current release (which must be the
+App's active deployment source), the folder of the signed rollback record's
+deployment, the folder the App's `default_source_code_path` names,
+the two newest other release folders the App's deployments reference (every
+page of the deployment listing, newest first) and any folder a listed deployment's
+`/src/` snapshot lies in. The rollback record's source and the App's default
+source keep a folder by any path segment that is its release id, so a
+trailing slash, a missing `/Workspace` prefix or another case of the
+principal still keeps it. Before each delete it re-asserts the signed
+deployment lease, re-reads the App (no pending deployment, the active one
+still the current release, and neither it nor the App's default source naming
+the folder) and re-reads the folder; after it, the folder must be gone, and a
+delete it cannot reconcile stops the run. At most 20 folders go per run.
+No delete starts once 10 minutes have passed since the run began. An
+uncertainty in the reads before the first delete skips the run and deletes
+nothing: no lease, a failed App or deployment read, another App id, a pending
+deployment, an active deployment that is not the current release or is missing
+from the listing, a listed deployment without a source or a `create_time`, an
+unlisted rollback deployment, or a release root that cannot be listed. One the
+re-check before a later delete finds (a lost lease, a new pending deployment,
+the time budget spent) stops the run there and deletes nothing more; each
+folder already deleted was proven unreferenced by its own re-check. `files/`, `/src/`
+snapshots, names that are not release ids (such as a legacy
+`app-src/<short sha>` folder) and plain files are never touched. Steady state
+is at most three folders; a folder published but never deployed lives until
+the next green run. This assumes one governed App per bundle root, which the
+single `apps.mip_app` binding enforces. The deploy never asks an operator to
+delete workspace folders.
+
+**Rollback does not depend on these folders.** A signed record stores the
+deployment's `/src/` snapshot and a restore redeploys that snapshot, so a
+prune can never break a rollback.
+
+**Transitional exposure.** On an install whose signed blue was deployed from
+the bundle files root, the first upgrade after this change can still start
+that blue (`apps start` before the cutover) and, if it rolls back, restore that
+same large snapshot; either can miss the start window. The exposure ends after
+the first green capture of a release folder.
+
+**How to verify a live install.** `databricks apps get <app>`: the
+`active_deployment.source_code_path` ends in `/app-src/<release id>` and its
+`deployment_artifacts.source_code_path` is a `/src/` snapshot. Then, read-only:
+
+```bash
+python -m tools.databricks.app_release_source verify-deployment \
+  --app-name <app> --manifest .databricks/app-release/manifest.json \
+  --release-id <release id>
+```
+
+It requires that snapshot to hold exactly the manifest's files and compares
+every sha256: the bytes the running App uses. It is not wired into
+`scripts/deploy.sh`.
+
+**Observed on the emergency path** (dev App, 2026-10-28). One deployment
+from a slim folder named by the earlier emergency recipe (uploaded with
+`databricks workspace import-dir` into a legacy `app-src/<short sha>`
+folder, not published under a release id with publish's SDK upload) was
+read back after it SUCCEEDED with `remote_files`, `compare_listing` and
+`verify_hashes` (`tools/databricks/app_release_source.py`), against the
+manifest `stage --manifest-out` writes for the same commit and dist (its
+staged folder equals the uploaded one byte for byte, 1,177 files):
+
+- the workspace list API returned `/Users/...` paths for every object;
+- every object, both `.html` files included, was a FILE;
+- after the activation the folder still held exactly the manifest's paths,
+  sizes and sha256, so that activation wrote no file into its
+  `source_code_path` folder (a recursive listing never shows a directory,
+  so an added empty directory would not show);
+- the deployment's `/src/` snapshot held exactly the manifest's files, every
+  sha256 equal;
+- the platform set `App.default_source_code_path` to that deployment's
+  source folder; prune keeps the folder that path names when its name is a
+  release id.
+
+**Not yet observed live** (each fails closed): that publish's SDK upload
+with format AUTO keeps every closure file type, `.html` included, as a FILE
+(the observation above used the CLI's `import-dir`; publish's listing
+refuses anything else); that the second and third activations of one run
+also write nothing into the release folder (if one did, the exact-listing
+converge before the next would refuse the deploy: signed blue restored on
+an upgrade, a first install stopped and quiesced); that the step-5 bundle
+summary's `resources.apps.mip_app.source_code_path` equals
+`workspace.file_path` on the CLI the run uses (step 5 requires it); and how
+`default_source_code_path` behaves on `apps start` and in a source-free App
+resource payload (which may not carry it). The first governed
+`deploy-dev.yml` run on the CI install is the proof.
+
 ## Emergency recovery: a slim per-release App source folder
 
 **Emergency recovery only. The command of record is `./scripts/deploy.sh -t
-dev`.** A slim folder is for the case that path cannot finish, such as a start
-window that expires while the App compute downloads the bundle files root. A
-deploy from a slim folder bypasses three governed steps, and `stage` replaces
-only part of one of them:
+dev`, which now stages, publishes and promotes a per-release folder itself
+(previous section).** A hand-made slim folder is for the case that path cannot
+run at all. A deploy from it bypasses three governed steps, and `stage`
+replaces only part of one of them:
 
 - **Signed promotion.** None of `./scripts/deploy.sh`'s signed workspace lease
   or signed blue proof steps run, so its rollback path holds no signed record
   of the slim deployment.
-- **`tools/databricks/converge_static_app_source.py`.** The governed check of
-  the uploaded tree (a non-empty `frontend/dist/index.html`, no root Node
-  manifests) does not run against the uploaded folder.
+- **`tools/databricks/converge_static_app_source.py`.** The governed
+  release-mode check of the uploaded folder against its manifest runs only if
+  the operator runs it by hand before the payload deploy.
 - **The in-process frontend build and its postbuild gate**
   (`tools/postbuild_artifacts.mjs`). `stage` takes a dist built elsewhere. It
   applies its own allowlist to that dist (below), but it cannot prove the
@@ -108,7 +286,7 @@ only part of one of them:
 
 Why it exists: the App compute downloads every file under the deployment's
 source path again at start, at about 10 files/s, inside the 10-minute start
-window (measured 2026-10-28). The bundle files root (`<bundle root>/dev/files`) only
+window (measured 2026-10-28). The bundle files root (`<bundle root>/files`) only
 grows, because `workspace import-dir` and piecewise uploads never delete. It
 held 6,018 files when a deployment from it was recorded FAILED. A folder with
 only the App's runtime closure is about 1,200 files (481 tracked plus 694
@@ -279,16 +457,30 @@ copy and ships the copy, so a dist that changes after the review cannot
 change what ships. It refuses more than 600 tracked files or 1,300 in all,
 adds the tracked files and renames the folder into place, so a refusal or a
 failure partway leaves `--out` as it was. It prints the file count and exits
-2 on any refusal. It makes no Databricks call. Upload the
-folder to a new per-release folder, `<bundle root>/dev/app-src/<short sha>`,
-and never into one that is already used. The piecewise payload deploy then
-names that folder as the deployment's `source_code_path`.
+2 on any refusal. It makes no Databricks call. Stage with a manifest and
+read the governed release id from it:
 
-The governed `./scripts/deploy.sh -t dev` path is unchanged. It still promotes
-from the bundle files root (`source_code_path: .` in `databricks.yml`), so a
-governed deploy after a slim one points `source_code_path` back at the files
-root, with all of its files. Per-release folders build up under `app-src/`
-until an owner removes them. Nothing in the repository deletes them.
+```bash
+python -m tools.databricks.app_runtime_closure stage --ref <sha> \
+  --dist frontend/dist --out <new empty directory> \
+  --manifest-out <new file beside it> --require-brotli-check
+python -m tools.databricks.app_release_contract release-id \
+  --manifest <that file> --expected-commit <sha>
+```
+
+Upload the folder under that governed name,
+`<bundle root>/app-src/<release id>` ("Governed per-release App source"), with
+`python -m tools.databricks.app_release_source publish` and the flags
+`scripts/deploy.sh` step 5 passes (create-only, byte-verified), never with
+`workspace import-dir` and never into a folder that is already used: a folder
+under the governed name whose bytes differ makes the governed publish of that
+commit refuse at step 5. The piecewise payload deploy then names that folder
+as the deployment's `source_code_path`.
+
+A later governed run of the same commit and dist reuses a folder published
+this way, and governed prune retires it once no retained deployment
+references it. Legacy `app-src/<short sha>` folders are not release ids, so
+prune never touches them: they stay owner cleanup.
 
 ## App Python dependencies: the deps-digest line
 
@@ -321,7 +513,7 @@ Every change to `uv.lock` or `requirements.in` ends with
 `python tools/requirements_digest.py --write`, which rewrites only that line.
 Both files are hashed with CRLF folded to LF, and `.gitattributes` checks all
 three out with `eol=lf`, so a `core.autocrlf` checkout computes the same
-digest. Three gates run `--check`'s comparison, because the repo has no
+digest. Four gates run `--check`'s comparison, because the repo has no
 required CI checks:
 
 - `tests/unit/test_requirements_digest.py` in CI, which fails with the remedy
@@ -331,7 +523,10 @@ required CI checks:
   with exit 2 before any workspace call;
 - `app_runtime_closure stage`, which recomputes the line from the blobs at
   `--ref` and refuses a ref whose `requirements.txt` digest line is stale or
-  missing.
+  missing;
+- `app_runtime_closure check --ref`, the same blob-side comparison in
+  `./scripts/deploy.sh` step 0, before the lease: a dry run reports
+  `app runtime closure: <state>`, a real run refuses with exit 2.
 
 pip, pip-audit and `tools/python_deps_check.py` all skip comment lines, so
 they read the file as before.
@@ -581,8 +776,9 @@ python tools/databricks/bundle_env.py plan -t dev
 
 3. Run the deployment script. It builds the frontend, provisions Genie if
    needed, validates/plans/deploys the direct bundle through the env-aware wrapper,
-   promotes the uploaded source to the running Databricks App, and runs
-   the refresh/smoke steps.
+   publishes the staged per-release App source folder and promotes it to the
+   running Databricks App ("Governed per-release App source"), and runs the
+   refresh/smoke steps.
 
 ```bash
 ./scripts/deploy.sh -t dev
@@ -1808,6 +2004,15 @@ The app runs on live Unity Catalog + Lakebase in every environment — there is 
   stdout-only or transport-only instead of treating local mocked OTLP
   tests as external collector proof.
 - Frontend build passes (`npm --prefix frontend run build`).
+- The deploy's App release lines are present: `app runtime closure: current`
+  in preflight; a stage of at most 1,300 files with every `.br` checked; the
+  publish line (`... uploaded, ... already present with equal bytes; listing
+  and sha256 verified`); `[static-app-source] release <id> matches its
+  manifest` before each activation; and an `[app-release-prune]` report (or
+  its warning) at the end.
+- `databricks apps get <app>` shows `active_deployment.source_code_path` under
+  `<bundle root>/app-src/` and its `deployment_artifacts.source_code_path` as a
+  `/src/` snapshot ("Governed per-release App source").
 - Python tests pass (`pytest -q`).
 - Talk track rehearsed.
 - Live evidence is certified, never asserted. A customer release is the
@@ -2076,6 +2281,42 @@ from the live workspace on 2026-10-27 (agents never call `pr105-host`):
   `mip_app_state` when the repository variables are unset, so an unset or
   live catalog name (in any UC spelling) refuses the run before any job reads
   or writes a catalog through the shared metastore.
+
+**The App release folder on the CI install.** With `MIP_BUNDLE_ROOT_LEAF=dev-ci`
+the release lives at
+`/Workspace/Users/<CI deploy principal>/.bundle/mortgage-intelligence-platform/dev-ci/app-src/<release id>`
+("Governed per-release App source"). `deploy-dev.yml` needs no change: it
+already sets up Node 22, which the build and the `.br` check use, and installs
+`requirements.txt`, which brings the SDK; a shallow checkout is enough for
+`git archive`. Publish, converge and prune each validate the principal, the
+target and the `dev-ci` leaf. The stage root goes away with the runner, and
+the first run is a first install, so prune has nothing to delete. First-run
+checklist for the owner-triggered run:
+
+- the publish line counts at most 1,300 files, with the upload and verify
+  wall time and no 429 at 8 workers;
+- every activation SUCCEEDED and no `[BUILD]` log shows an npm step; the
+  first activation's `[BUILD]` log shows a pip install (a first install has
+  no previous `requirements.txt`), later activations of the same release are
+  expected to print `Requirements have not changed. Skipping installation.`
+  ("App Python dependencies"), and the boot `dependency_lock_check` is ok
+  after each;
+- `active_deployment.source_code_path` ends in `/dev-ci/app-src/<release id>`
+  and `deployment_artifacts.source_code_path` is a `/src/` snapshot;
+- `verify-deployment` matches the run's manifest. The runner's stage root is
+  gone after the run, so re-stage the same commit from a fresh build with the
+  runner's Node major and use that manifest only if its release id equals the
+  one in the run's publish line (equal ids mean equal bytes; a local rebuild
+  with one Node version reproduced the id on 2026-10-28);
+- step 5 printed the bundle files root, and the converge before each later
+  activation passed (the Apps deployment wrote nothing into the release
+  folder);
+- the signed capture passes and the prune report is present and says what it
+  kept (and deleted), not `skipped: the deployment lease is not proven held`
+  (prune runs under plain `run`, not the proof-signing authority);
+- `default_source_code_path` is recorded before and after the resource update
+  and after activation;
+- a second run of the same commit uploads nothing.
 
 **Owner steps (never agent work).** These are the exact remaining steps. Each
 is a credential, identity, GitHub-settings or audited-consent action against
