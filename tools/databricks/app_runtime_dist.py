@@ -28,7 +28,9 @@ It refuses, anywhere in the dist: a symlink, a path segment that starts with
 ``.`` (``.env``, ``.vite/``, ``.DS_Store``), ``__pycache__`` and ``*.pyc``, a
 ``*.map`` in any letter case, ``build-manifest.json`` or ``build-modules.json``,
 and a JS, CSS or HTML file carrying a ``sourceMappingURL`` comment anywhere in
-it.
+it. ``app_runtime_closure stage`` reviews a private copy (``snapshot``) and
+ships that copy, so a dist that changes after the review cannot change what
+ships.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ from __future__ import annotations
 import importlib
 import os
 import re
+import shutil
 import zlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -125,6 +128,32 @@ def _walk(dist: Path) -> tuple[list[str], list[str]]:
                 files.append(relpath)
         dirs[:] = [name for name in dirs if not (Path(current) / name).is_symlink()]
     return sorted(files), sorted(links)
+
+
+def snapshot(dist: Path, target: Path) -> list[str]:
+    """Copy ``dist`` into ``target`` without following a symlink.
+
+    A symlink is copied as a symlink, so ``review_dist`` of the copy refuses it.
+    Returns a problem for each entry that is neither a file, a directory nor a
+    symlink (a FIFO, a socket), which is not copied.
+    """
+
+    problems: list[str] = []
+    if not dist.is_dir():
+        return problems
+    for current, dirs, names in os.walk(dist):
+        base = Path(current)
+        here = target / base.relative_to(dist)
+        here.mkdir(parents=True, exist_ok=True)
+        for name in sorted(dirs + names):
+            source, copy = base / name, here / name
+            if source.is_symlink():
+                copy.symlink_to(os.readlink(source))
+            elif name in names and source.is_file():
+                shutil.copyfile(source, copy, follow_symlinks=False)
+            elif name in names:
+                problems.append(f"not a regular file: {copy.relative_to(target).as_posix()}")
+    return problems
 
 
 def _refused_name(relpath: str) -> str | None:

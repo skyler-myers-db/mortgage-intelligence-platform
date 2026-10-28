@@ -30,9 +30,11 @@ build metadata, and exactly the ``frontend/public`` files tracked at REF; a
 it writes anything, it refuses junk files, a symlink or submodule tracked at
 REF, a missing required entry, a requirements.txt whose deps-digest line does
 not match uv.lock and requirements.in at REF (the Apps build would skip the
-reinstall), a non-empty ``--out`` and a folder over its file budgets. It
-writes into a temporary sibling of ``--out`` and renames it into place, so a
-failure while writing leaves ``--out`` as it was. It never calls Databricks.
+reinstall) and a non-empty ``--out``. It then copies the dist into a
+temporary sibling of ``--out``, reviews that copy (the copy is what ships),
+refuses a folder over its file budgets, adds the tracked files and renames
+the folder into place, so any refusal or failure leaves ``--out`` as it was.
+It never calls Databricks.
 """
 
 from __future__ import annotations
@@ -50,7 +52,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from tools import requirements_digest
-from tools.databricks.app_runtime_dist import brotli_decoder, review_dist
+from tools.databricks.app_runtime_dist import brotli_decoder, review_dist, snapshot
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIST_PATH = "frontend/dist"
@@ -235,26 +237,52 @@ def _check_digest(blobs: Mapping[str, bytes], ref: str) -> None:
         )
 
 
-def _dist_files(
-    repo: Path, commit: str, dist: Path, names: Sequence[str]
-) -> tuple[list[str], list[str]]:
-    """The dist's files to stage and the ``.br`` files left out unchecked.
+@dataclass(frozen=True)
+class _Tracked:
+    """The git side of a stage: everything decided before any file is written."""
 
-    Refuses unless the dist holds only governed build output for ``commit``;
-    ``names`` are the ``frontend/public`` files tracked at ``commit``.
+    commit: str
+    files: tuple[str, ...]
+    skipped: tuple[str, ...]
+    pathspecs: tuple[str, ...]
+    public: tuple[str, ...]  # frontend/public files tracked at the commit
+
+
+def _copy_dist(repo: Path, tracked: _Tracked, dist: Path, copy: Path) -> tuple[list[str], list[str]]:
+    """Copy ``dist`` to ``copy``, review the copy, and drop what is left out.
+
+    Returns the copy's files to stage and the ``.br`` files left out
+    unchecked. Refuses unless the copy holds only governed build output for
+    the commit. The copy, not ``dist``, is what ships.
     """
 
-    blobs = _blobs(repo, commit, names)
-    public = {name.removeprefix(f"{PUBLIC_PATH}/"): blobs[name] for name in names}
-    review = review_dist(dist, public, brotli=brotli_decoder())
-    if review.problems:
-        shown = "; ".join(review.problems[:5])
-        more = f" (+{len(review.problems) - 5} more)" if len(review.problems) > 5 else ""
+    problems = snapshot(dist, copy)
+    blobs = _blobs(repo, tracked.commit, tracked.public)
+    public = {name.removeprefix(f"{PUBLIC_PATH}/"): blobs[name] for name in tracked.public}
+    review = review_dist(copy, public, brotli=brotli_decoder())
+    problems += review.problems
+    if problems:
+        shown = "; ".join(problems[:5])
+        more = f" (+{len(problems) - 5} more)" if len(problems) > 5 else ""
         raise StageError(f"--dist {dist} is not a governed build output: {shown}{more}")
+    for relpath in review.omitted:
+        (copy / relpath).unlink()
+    for relpath in review.files:
+        (copy / relpath).chmod(0o644)
     return list(review.files), list(review.omitted)
 
 
-def _plan(repo: Path, ref: str, dist: Path) -> tuple[StageResult, list[str]]:
+def _check_budgets(plan: StageResult) -> None:
+    if len(plan.tracked) > MAX_TRACKED_FILES:
+        raise StageError(
+            f"{len(plan.tracked)} tracked closure files exceed the {MAX_TRACKED_FILES}-file "
+            "allowance: trim the closure or re-measure the start window"
+        )
+    if plan.total > MAX_STAGED_FILES:
+        raise StageError(f"{plan.total} files exceed the {MAX_STAGED_FILES}-file budget")
+
+
+def _plan(repo: Path, ref: str) -> _Tracked:
     commit = _commit(repo, ref)
     modes = _modes(repo, commit, [*(entry.path for entry in TRACKED_ENTRIES), PUBLIC_PATH])
     refused = sorted(
@@ -280,17 +308,8 @@ def _plan(repo: Path, ref: str, dist: Path) -> tuple[StageResult, list[str]]:
         raise StageError(f"junk tracked at {ref}: {', '.join(junk[:5])}")
     digest_inputs = (requirements_digest.REQUIREMENTS_TXT, *requirements_digest.DIGESTED_FILES)
     _check_digest(_blobs(repo, commit, digest_inputs), ref)
-    staged, unchecked = _dist_files(repo, commit, dist, public)
-    plan = StageResult(commit, tuple(tracked), tuple(staged), tuple(skipped), tuple(unchecked))
-    if len(plan.tracked) > MAX_TRACKED_FILES:
-        raise StageError(
-            f"{len(plan.tracked)} tracked closure files exceed the {MAX_TRACKED_FILES}-file "
-            "allowance: trim the closure or re-measure the start window"
-        )
-    if plan.total > MAX_STAGED_FILES:
-        raise StageError(f"{plan.total} files exceed the {MAX_STAGED_FILES}-file budget")
-    pathspecs = [path for path, names in found.items() if names]
-    return plan, pathspecs
+    pathspecs = tuple(path for path, names in found.items() if names)
+    return _Tracked(commit, tuple(tracked), tuple(skipped), pathspecs, tuple(public))
 
 
 def _extract(archive: bytes, out: Path, expected: set[str]) -> None:
@@ -314,28 +333,33 @@ def _extract(archive: bytes, out: Path, expected: set[str]) -> None:
         raise StageError("git archive did not produce the planned file set")
 
 
-def _write(
-    repo: Path, plan: StageResult, pathspecs: Sequence[str], dist: Path, work: Path
-) -> None:
-    archive = _git(repo, "archive", "--format=tar", plan.commit, "--", *pathspecs)
+def _write(repo: Path, tracked: _Tracked, dist: Path, work: Path) -> StageResult:
+    staged, unchecked = _copy_dist(repo, tracked, dist, work / DIST_PATH)
+    plan = StageResult(
+        tracked.commit, tracked.files, tuple(staged), tracked.skipped, tuple(unchecked)
+    )
+    _check_budgets(plan)
+    archive = _git(repo, "archive", "--format=tar", plan.commit, "--", *tracked.pathspecs)
     _extract(archive, work, set(plan.tracked))
-    for relpath in plan.dist:
-        target = work / DIST_PATH / relpath
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(dist / relpath, target)
-        target.chmod(0o644)
+    return plan
 
 
 def stage(*, repo: Path, ref: str, dist: Path, out: Path) -> StageResult:
-    """Write the closure at ``ref`` plus ``dist`` into the empty ``out``."""
+    """Write the closure at ``ref`` plus ``dist`` into the empty ``out``.
 
-    plan, pathspecs = _plan(repo, ref, dist)
+    The git side is checked before anything is written. The dist is copied
+    into a temporary sibling of ``out`` and that copy is reviewed and shipped,
+    so the review and the shipped bytes cannot diverge; any refusal removes the
+    temporary folder and leaves ``out`` as it was.
+    """
+
+    tracked = _plan(repo, ref)
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise StageError(f"--out {out} exists and is not an empty directory")
     out.parent.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix=f".{out.name}.staging-", dir=out.parent))
     try:
-        _write(repo, plan, pathspecs, dist, work)
+        plan = _write(repo, tracked, dist, work)
         # POSIX rename replaces an empty directory and fails on a non-empty one.
         work.rename(out)
     except BaseException:

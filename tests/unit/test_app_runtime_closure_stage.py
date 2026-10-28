@@ -14,12 +14,14 @@ import io
 import os
 import subprocess
 import tarfile
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 
 from tools import requirements_digest as digest
 from tools.databricks import app_runtime_closure as closure
+from tools.databricks.app_runtime_dist import Decoder, DistReview
 
 ROOT = Path(__file__).resolve().parents[2]
 INPUTS = {"requirements.in": "fastapi\n", "uv.lock": "fastapi==1.0\n"}
@@ -225,6 +227,43 @@ def test_stage_leaves_out_a_br_it_cannot_check_and_says_so(
     assert "left out 1 .br files" in capsys.readouterr().out
 
 
+def test_stage_ships_the_dist_copy_it_reviewed_not_the_live_directory(
+    repo: Path, dist: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A writer that swaps a .gz in the live dist right after the review must
+    # not change what ships: stage reviews a private copy and ships that copy.
+    real_review = closure.review_dist
+    reviewed: list[Path] = []
+
+    def review_then_swap(
+        path: Path, public: Mapping[str, bytes], *, brotli: Decoder | None = None
+    ) -> DistReview:
+        review = real_review(path, public, brotli=brotli)
+        reviewed.append(path)
+        (dist / GZ_NAME).write_bytes(gzip.compress(b"alert('swapped');\n", mtime=0))
+        return review
+
+    monkeypatch.setattr(closure, "review_dist", review_then_swap)
+    out = tmp_path / "out"
+
+    closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
+
+    assert reviewed and dist not in reviewed
+    assert gzip.decompress((out / "frontend/dist" / GZ_NAME).read_bytes()) == APP_JS.encode()
+
+
+def test_stage_refuses_a_dist_entry_that_is_not_a_regular_file(
+    repo: Path, dist: Path, tmp_path: Path
+) -> None:
+    os.mkfifo(dist / "assets" / "pipe-DnQ3_k-1.js")
+    out = tmp_path / "out"
+
+    with pytest.raises(closure.StageError, match="not a regular file: assets/pipe-DnQ3_k-1.js"):
+        closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
+
+    assert _nothing_written(tmp_path, out)
+
+
 def test_stage_refuses_a_dist_built_from_another_commit(
     repo: Path, dist: Path, tmp_path: Path
 ) -> None:
@@ -298,6 +337,22 @@ def test_stage_refuses_an_unbuilt_dist_and_a_symlink(
     os.symlink(dist / "index.html", dist / "assets" / "link.html")
     with pytest.raises(closure.StageError, match="symlink: assets/link.html"):
         closure.stage(repo=repo, ref="HEAD", dist=dist, out=tmp_path / "b")
+
+
+def test_stage_refuses_a_symlinked_directory_in_the_dist(
+    repo: Path, dist: Path, tmp_path: Path
+) -> None:
+    # The copy keeps the link as a link, so the review of the copy sees it.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret-DnQ3_k-1.js").write_text("x\n", encoding="utf-8")
+    os.symlink(outside, dist / "assets" / "linked")
+    out = tmp_path / "out"
+
+    with pytest.raises(closure.StageError, match="symlink: assets/linked"):
+        closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
+
+    assert _nothing_written(tmp_path, out)
 
 
 def _nothing_written(tmp_path: Path, out: Path) -> bool:

@@ -183,10 +183,13 @@ too.
 Before it writes anything, `stage` also refuses a symlink or submodule
 tracked at `<sha>`, a missing required entry, a `requirements.txt` whose
 deps-digest line does not match `uv.lock` and `requirements.in` at `<sha>`
-(next section), more than 600 tracked files or 1,300 in all, and an `--out`
-that is not empty. It writes into a temporary sibling of `--out` and renames
-it into place, so a failure partway leaves `--out` as it was. It prints the
-file count and exits 2 on any refusal. It makes no Databricks call. Upload the
+(next section), and an `--out` that is not empty. It then copies the dist
+into a temporary sibling of `--out` without following symlinks, reviews the
+copy and ships the copy, so a dist that changes after the review cannot
+change what ships. It refuses more than 600 tracked files or 1,300 in all,
+adds the tracked files and renames the folder into place, so a refusal or a
+failure partway leaves `--out` as it was. It prints the file count and exits
+2 on any refusal. It makes no Databricks call. Upload the
 folder to a new per-release folder, `<bundle root>/dev/app-src/<short sha>`,
 and never into one that is already used. The piecewise payload deploy then
 names that folder as the deployment's `source_code_path`.
