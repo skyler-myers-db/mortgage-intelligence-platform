@@ -126,7 +126,8 @@ reader. Two entries are optional and are never in git:
 - `genie/space_id.txt`: the space id comes from the environment.
 - `sql/_rendered/...`: `backend/services/lifecycle_sync.py` falls back to
   `sql/transformations/gold_funnel_snapshot_daily.sql` and substitutes the
-  catalog itself. A slim folder always takes this fallback. That file has no
+  catalog itself (it resolves both against its source root, not the working
+  directory). A slim folder always takes this fallback. That file has no
   feed toggle and the fallback's `mip.`-to-catalog swap matches the
   renderer's, so the result is the same today; the difference predates the
   slim folder.

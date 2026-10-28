@@ -144,11 +144,11 @@ READS: tuple[ClosureEntry, ...] = (
     ClosureEntry("tests/eval/scorers.py", "read", True, "services/capabilities.py (exists)"),
     ClosureEntry(
         "sql/_rendered/transformations/gold_funnel_snapshot_daily.sql", "read", False,
-        "services/lifecycle_sync.py, cwd-relative (rendered at deploy, never in git)",
+        "services/lifecycle_sync.py, from the source root (rendered at deploy, never in git)",
     ),
     ClosureEntry(
         "sql/transformations/gold_funnel_snapshot_daily.sql", "read", True,
-        "services/lifecycle_sync.py, cwd-relative fallback",
+        "services/lifecycle_sync.py, fallback from the source root",
     ),
 )
 CLOSURE: tuple[ClosureEntry, ...] = UPLOAD + READS
