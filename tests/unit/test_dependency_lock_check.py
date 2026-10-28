@@ -9,6 +9,7 @@ nothing reaches (tomli on Python 3.11) is not applicable rather than drift.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -20,7 +21,7 @@ from packaging.markers import default_environment
 import backend.main as main_module
 from backend.config.settings import settings
 from backend.services import dependency_lock_check as check
-from tools import python_deps_check
+from tools import python_deps_check, requirements_digest
 
 ROOT = Path(__file__).resolve().parents[2]
 UNIVERSAL_LOCK = """\
@@ -189,7 +190,8 @@ def test_missing_oversized_or_empty_inputs_are_lock_unreadable(
 
 def test_the_real_tree_agrees_with_the_deploy_preflight() -> None:
     # Same interpreter, same files: the boot event and tools/python_deps_check
-    # must name the same drifted packages (none on a fresh install).
+    # must name the same drifted packages (none on a fresh install) and agree
+    # on whether this Python is the one uv.lock is compiled for.
     result = check.check_dependency_lock()
     findings = python_deps_check.problems(
         python_deps_check.load_pins(ROOT), python_deps_check.current_environment()
@@ -203,6 +205,84 @@ def test_the_real_tree_agrees_with_the_deploy_preflight() -> None:
     assert result.outcome in {"ok", "drift"}
     assert {d.name for d in result.drifted} == preflight
     assert result.pins_checked == findings.checked - result.unpinned
+    python_problem = any(line.startswith("python:") for line in findings.problems)
+    assert (result.python != result.lock_python) is python_problem
+    assert result.requirements_digest == "current"
+
+
+def _texts(root: Path) -> tuple[str, str]:
+    return (
+        (root / "uv.lock").read_text(encoding="utf-8"),
+        (root / "requirements.in").read_text(encoding="utf-8"),
+    )
+
+
+@pytest.mark.parametrize("variant", ["real", "bumped", "crlf"])
+def test_the_boot_digest_line_is_the_stamping_tools_line(tmp_path: Path, variant: str) -> None:
+    # tools/ is not in the App source, so the boot check restates the format.
+    for name in ("uv.lock", "requirements.in"):
+        data = (ROOT / name).read_bytes()
+        if variant == "bumped" and name == "uv.lock":
+            data += b"# bumped\n"
+        if variant == "crlf":
+            data = data.replace(b"\n", b"\r\n")
+        (tmp_path / name).write_bytes(data)
+
+    assert check.expected_digest_line(*_texts(tmp_path)) == requirements_digest.digest_line(
+        tmp_path
+    )
+
+
+def test_the_digest_state_of_requirements_txt() -> None:
+    lock, reqs = _texts(ROOT)
+    line = check.expected_digest_line(lock, reqs)
+    includes = "-c uv.lock\n-r requirements.in\n"
+
+    assert check.digest_state(f"{line}\n{includes}", lock, reqs) == "current"
+    assert check.digest_state(f"{line}\n{includes}", lock + "# bumped\n", reqs) == "stale"
+    assert check.digest_state(includes, lock, reqs) == "missing"
+    assert check.digest_state(None, lock, reqs) == "unreadable"
+
+
+HEADER = "#    uv pip compile requirements.in --python-version 3.11 -o uv.lock\n"
+
+
+@pytest.mark.parametrize(("python", "outcome"), [("3.11", "ok"), ("3.12", "drift")])
+def test_a_python_other_than_the_locks_is_drift(
+    tmp_path: Path, python: str, outcome: str
+) -> None:
+    (tmp_path / "uv.lock").write_text(f"{HEADER}fastapi==1.0\n", encoding="utf-8")
+    (tmp_path / "requirements.in").write_text("fastapi\n", encoding="utf-8")
+    env = _env({"fastapi": "1.0"}, {}, python_version=python)
+
+    result = check.check_dependency_lock(
+        lock_file=tmp_path / "uv.lock", requirements_in=tmp_path / "requirements.in",
+        requirements_txt=tmp_path / "requirements.txt", environment=env,
+    )
+
+    assert (result.outcome, result.python, result.lock_python) == (outcome, python, "3.11")
+    assert result.drifted == ()
+    assert (result.reason is not None) is (outcome == "drift")
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        (check.LockCheck("ok", requirements_digest="current"), None),
+        (check.LockCheck("lock_unreadable"), check.REMEDY_SOURCE),
+        (check.LockCheck("drift", requirements_digest="stale"), check.REMEDY_RESTAMP),
+        (check.LockCheck("drift", requirements_digest="missing"), check.REMEDY_RESTAMP),
+        (check.LockCheck("drift", requirements_digest="current"), check.REMEDY_REINSTALL),
+        (
+            check.LockCheck("drift", python="3.12", lock_python="3.11",
+                            requirements_digest="current"),
+            check.REMEDY_PYTHON,
+        ),
+    ],
+)
+def test_the_remedy_follows_the_cause(result: check.LockCheck, expected: str | None) -> None:
+    # Restamping cannot help when the digest is already current.
+    assert check.remedy(result) == expected
 
 
 def _events(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
@@ -212,14 +292,17 @@ def _events(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
 def test_the_event_carries_the_counts_and_the_drift(
     caplog: pytest.LogCaptureFixture, tmp_path: Path
 ) -> None:
-    (tmp_path / "uv.lock").write_text("fastapi==1.0\noauthlib==4.0.0\n", encoding="utf-8")
+    lock = f"{HEADER}fastapi==1.0\noauthlib==4.0.0\n"
+    (tmp_path / "uv.lock").write_text(lock, encoding="utf-8")
     (tmp_path / "requirements.in").write_text("fastapi\noauthlib\n", encoding="utf-8")
+    stamp = check.expected_digest_line(lock, "fastapi\noauthlib\n")
+    (tmp_path / "requirements.txt").write_text(f"{stamp}\n-c uv.lock\n", encoding="utf-8")
     env = _env({"fastapi": "1.0", "oauthlib": "3.3.1"}, {})
 
     with caplog.at_level(logging.INFO, logger="mip-runtime"):
         check.log_dependency_lock_check(
             lock_file=tmp_path / "uv.lock", requirements_in=tmp_path / "requirements.in",
-            environment=env,
+            requirements_txt=tmp_path / "requirements.txt", environment=env,
         )
 
     [event] = _events(caplog)
@@ -227,7 +310,9 @@ def test_the_event_carries_the_counts_and_the_drift(
     assert (event.levelno, event.__dict__["mip_outcome"]) == (logging.WARNING, "drift")
     assert extras["pins_checked"] == 2 and extras["drifted_count"] == 1
     assert extras["drifted"] == [{"name": "oauthlib", "locked": "4.0.0", "installed": "3.3.1"}]
-    assert extras["remedy"] == check.REMEDY
+    assert (extras["python"], extras["lock_python"]) == ("3.11", "3.11")
+    assert extras["requirements_digest"] == "current"
+    assert extras["remedy"] == check.REMEDY_REINSTALL
 
 
 def test_the_event_never_raises(caplog: pytest.LogCaptureFixture) -> None:
@@ -243,21 +328,46 @@ def test_the_event_never_raises(caplog: pytest.LogCaptureFixture) -> None:
     assert [e.__dict__["mip_outcome"] for e in _events(caplog)] == ["lock_unreadable"]
 
 
+def _live_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(main_module, "_running_under_pytest", lambda: False)
+    monkeypatch.setattr(type(settings), "require_databricks_creds", lambda _self: None)
+    monkeypatch.setattr(settings, "mip_warehouse_keep_warm", "off")
+    for name in ("check_trust_boundary_at_startup", "_warm_warehouse",
+                 "prime_warehouse_state_client", "_warm_lakebase", "_warm_hot_lead_cache",
+                 "warm_governed_place_dimension"):
+        monkeypatch.setattr(main_module, name, lambda: None)
+    monkeypatch.setattr(main_module.lifecycle_run_watch, "enable_foreign_run_watch", lambda: None)
+
+
 @pytest.mark.parametrize("live", [True, False])
 def test_the_live_lifespan_logs_exactly_one_event(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, live: bool
 ) -> None:
     if live:
-        monkeypatch.setattr(main_module, "_running_under_pytest", lambda: False)
-        monkeypatch.setattr(type(settings), "require_databricks_creds", lambda _self: None)
-        monkeypatch.setattr(settings, "mip_warehouse_keep_warm", "off")
-        for name in ("check_trust_boundary_at_startup", "_warm_warehouse",
-                     "prime_warehouse_state_client", "_warm_lakebase", "_warm_hot_lead_cache",
-                     "warm_governed_place_dimension"):
-            monkeypatch.setattr(main_module, name, lambda: None)
-        monkeypatch.setattr(main_module.lifecycle_run_watch, "enable_foreign_run_watch", lambda: None)
+        _live_lifespan(monkeypatch)
 
     with caplog.at_level(logging.INFO, logger="mip-runtime"), TestClient(main_module.app):
         pass
 
     assert len(_events(caplog)) == (1 if live else 0)
+
+
+def test_the_lifespan_runs_the_check_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    # It reads three files and walks package metadata (0.2-0.3 s measured).
+    seen: list[bool] = []
+
+    def record() -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            seen.append(False)
+        else:
+            seen.append(True)
+
+    monkeypatch.setattr(main_module, "log_dependency_lock_check", record)
+    _live_lifespan(monkeypatch)
+
+    with TestClient(main_module.app):
+        pass
+
+    assert seen == [False], "the check ran on the event loop thread"

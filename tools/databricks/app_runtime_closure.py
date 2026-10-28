@@ -83,7 +83,10 @@ class ClosureEntry:
 
 UPLOAD: tuple[ClosureEntry, ...] = (
     ClosureEntry("app.yaml", "upload", True, "Databricks Apps: runs python -m backend.runtime"),
-    ClosureEntry("requirements.txt", "upload", True, "Databricks Apps build: pip install -r"),
+    ClosureEntry(
+        "requirements.txt", "upload", True,
+        "Databricks Apps build: pip install -r; services/dependency_lock_check.py at boot",
+    ),
     ClosureEntry(
         "requirements.in", "upload", True,
         "requirements.txt -r include; services/dependency_lock_check.py at boot",

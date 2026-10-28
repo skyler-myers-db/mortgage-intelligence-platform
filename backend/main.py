@@ -295,8 +295,9 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _log_campaign_treatment_runtime_state()
     if not _running_under_pytest():
         # One dependency_lock_check line: installed packages vs uv.lock (the
-        # Apps build can skip the reinstall). Local reads only; never raises.
-        log_dependency_lock_check()
+        # Apps build can skip the reinstall). Local reads only; never raises;
+        # off the event loop, since it walks package metadata.
+        await asyncio.to_thread(log_dependency_lock_check)
     if looks_like_databricks_app_deploy():
         # Governance invariant: the ambient App identity must be the exact
         # LOGIN-only OAuth role, and PostgreSQL's replication protocol must

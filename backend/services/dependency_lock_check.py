@@ -5,12 +5,23 @@ The Databricks Apps build can skip the dependency reinstall (docs/deployment.md,
 environment persists across deployments, so a deploy can run new code on old
 wheels. At startup the App emits ONE ``dependency_lock_check`` event on the
 ``mip-runtime`` logger: how many uv.lock pins it checked, every drifted package
-as name / locked / installed (installed is null when missing), and an outcome:
+as name / locked / installed (installed is null when missing), the running
+``python`` and the ``lock_python`` uv.lock was compiled for, whether
+requirements.txt's ``requirements_digest`` line is ``current`` with uv.lock and
+requirements.in (or ``stale``, ``missing``, ``unreadable``), and an outcome:
 
 * ``ok``: every package the App's requirements reach equals its uv.lock pin;
-* ``drift``: at least one does not, or one is missing;
+* ``drift``: at least one does not, one is missing, or the running Python is
+  not the one uv.lock is compiled for (tools/python_deps_check.py counts that
+  as a problem too);
 * ``lock_unreadable``: uv.lock or requirements.in is missing, oversized or pins
   nothing, or the check itself failed (``reason`` says which).
+
+The ``remedy`` follows the cause. A stale or missing digest means the build had
+no reason to reinstall: restamp and redeploy. A current digest with drift means
+the build skipped or failed the reinstall anyway, so restamping changes
+nothing: read the deployment build log, then the marker-false fallback in
+docs/deployment.md.
 
 Which pins apply follows tools/python_deps_check.py, the deploy preflight: walk
 the installed closure of requirements.in, evaluating every requirement's
@@ -20,18 +31,19 @@ pins it for coverage, whose requirement holds only below Python 3.11.0a6. A pin
 line carrying its own marker (a universal lock) counts only where the marker
 holds.
 
-Local reads only: two bounded files plus importlib.metadata. No network, and
-it never raises.
+Local reads only: three bounded files plus importlib.metadata. No network, and
+it never raises. The lifespan runs it in a worker thread, off the event loop.
 """
 
 from __future__ import annotations
 
+import hashlib
 import importlib.metadata as metadata
 import logging
 import re
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -45,15 +57,31 @@ log = logging.getLogger("mip-runtime")
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 LOCK_FILE = SOURCE_ROOT / "uv.lock"
 REQUIREMENTS_IN = SOURCE_ROOT / "requirements.in"
+REQUIREMENTS_TXT = SOURCE_ROOT / "requirements.txt"
 MAX_FILE_BYTES = 1_048_576
 MAX_PACKAGES = 2_000
 MAX_LOGGED_DRIFT = 50
-REMEDY = "python tools/requirements_digest.py --write, then redeploy"
+# tools/requirements_digest.py owns this line; tools/ is not in the App source,
+# so the format is restated here and a test pins the two to the same output.
+DIGEST_PREFIX = "# deps-digest:"
+REMEDY_RESTAMP = "python tools/requirements_digest.py --write, commit, then redeploy"
+REMEDY_REINSTALL = (
+    "the deps-digest line is current, so the Apps build skipped or failed the reinstall: "
+    "read the deployment build log, then docs/deployment.md (App Python dependencies) "
+    "for the marker-false fallback"
+)
+REMEDY_PYTHON = "the App runtime Python is not uv.lock's --python-version: recompile uv.lock"
+REMEDY_SOURCE = (
+    "the App source must carry uv.lock, requirements.in and requirements.txt "
+    "(tools/databricks/app_runtime_closure.py)"
+)
+_LOCK_PYTHON = re.compile(r"--python-version\s+(\d+\.\d+)\b")
 _PIN = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?==(?P<version>[^\s;\\]+)"
     r"\s*(?:;\s*(?P<marker>[^\\]+?))?\s*\\?$"
 )
 Outcome = Literal["ok", "drift", "lock_unreadable"]
+DigestState = Literal["current", "stale", "missing", "unreadable"]
 
 
 @dataclass(frozen=True)
@@ -79,6 +107,9 @@ class LockCheck:
     unpinned: int = 0
     drifted: tuple[Drift, ...] = ()
     reason: str | None = None
+    python: str | None = None
+    lock_python: str | None = None
+    requirements_digest: DigestState | None = None
 
 
 @dataclass(frozen=True)
@@ -227,10 +258,30 @@ def _read(path: Path) -> str | None:
         return None
 
 
+def expected_digest_line(lock_text: str, requirements_text: str) -> str:
+    """tools/requirements_digest.digest_line_for over text read with universal newlines."""
+
+    parts = [
+        f"{name} sha256={hashlib.sha256(text.encode('utf-8')).hexdigest()}"
+        for name, text in (("uv.lock", lock_text), ("requirements.in", requirements_text))
+    ]
+    return f"{DIGEST_PREFIX} {' '.join(parts)}"
+
+
+def digest_state(requirements_txt: str | None, lock_text: str, requirements_text: str) -> DigestState:
+    if requirements_txt is None:
+        return "unreadable"
+    first = requirements_txt.splitlines()[0] if requirements_txt else ""
+    if first == expected_digest_line(lock_text, requirements_text):
+        return "current"
+    return "stale" if first.startswith(DIGEST_PREFIX) else "missing"
+
+
 def check_dependency_lock(
     *,
     lock_file: Path = LOCK_FILE,
     requirements_in: Path = REQUIREMENTS_IN,
+    requirements_txt: Path = REQUIREMENTS_TXT,
     environment: InstalledEnvironment | None = None,
 ) -> LockCheck:
     lock_text, requirements_text = _read(lock_file), _read(requirements_in)
@@ -241,13 +292,38 @@ def check_dependency_lock(
     if not pins:
         return LockCheck("lock_unreadable", reason=f"{lock_file.name} pins nothing")
     env = environment or current_environment()
-    return compute_drift(pins, parse_requirements(requirements_text), env)
+    result = compute_drift(pins, parse_requirements(requirements_text), env)
+    header = _LOCK_PYTHON.search(lock_text)
+    lock_python = header.group(1) if header else None
+    python = env.markers.get("python_version")
+    mismatch = lock_python is not None and python != lock_python
+    return replace(
+        result,
+        outcome="drift" if mismatch else result.outcome,
+        reason=f"python {python}, uv.lock is compiled for {lock_python}" if mismatch else result.reason,
+        python=python,
+        lock_python=lock_python,
+        requirements_digest=digest_state(_read(requirements_txt), lock_text, requirements_text),
+    )
+
+
+def remedy(result: LockCheck) -> str | None:
+    """What an operator does about ``result``; None when nothing is wrong."""
+
+    if result.outcome == "ok":
+        return None
+    if result.outcome == "lock_unreadable":
+        return REMEDY_SOURCE
+    if result.lock_python is not None and result.python != result.lock_python:
+        return REMEDY_PYTHON
+    return REMEDY_REINSTALL if result.requirements_digest == "current" else REMEDY_RESTAMP
 
 
 def log_dependency_lock_check(
     *,
     lock_file: Path = LOCK_FILE,
     requirements_in: Path = REQUIREMENTS_IN,
+    requirements_txt: Path = REQUIREMENTS_TXT,
     environment: InstalledEnvironment | None = None,
 ) -> LockCheck:
     """Emit the one ``dependency_lock_check`` event; never raises."""
@@ -255,7 +331,10 @@ def log_dependency_lock_check(
     start = time.monotonic()
     try:
         result = check_dependency_lock(
-            lock_file=lock_file, requirements_in=requirements_in, environment=environment
+            lock_file=lock_file,
+            requirements_in=requirements_in,
+            requirements_txt=requirements_txt,
+            environment=environment,
         )
     except Exception as exc:  # noqa: BLE001 -- a startup diagnostic must not block startup
         result = LockCheck("lock_unreadable", reason=f"check failed: {type(exc).__name__}")
@@ -276,6 +355,9 @@ def log_dependency_lock_check(
             for d in result.drifted[:MAX_LOGGED_DRIFT]
         ],
         reason=result.reason,
-        remedy=None if result.outcome == "ok" else REMEDY,
+        python=result.python,
+        lock_python=result.lock_python,
+        requirements_digest=result.requirements_digest,
+        remedy=remedy(result),
     )
     return result
