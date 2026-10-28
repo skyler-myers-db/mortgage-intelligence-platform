@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import gzip
 import subprocess
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from tools import requirements_digest as digest
-from tools.databricks.app_runtime_brotli import decoder_verifier
+from tools.databricks.app_runtime_brotli import BrotliVerifier, Pair
 
 ROOT = Path(__file__).resolve().parents[2]
 INPUTS = {"requirements.in": "fastapi\n", "uv.lock": "fastapi==1.0\n"}
@@ -61,15 +62,30 @@ GZ_NAME = "assets/app-DnQ3_k-1.js.gz"
 
 
 def fake_brotli(data: bytes) -> bytes:
-    """A stand-in decoder: tests never need the optional brotli module."""
+    """A stand-in decoder for the ``fake-br:`` streams these tests write."""
 
     if not data.startswith(BROTLI_MAGIC.encode()):
         raise ValueError("not a fake brotli stream")
     return data.removeprefix(BROTLI_MAGIC.encode())
 
 
-# The optional brotli module is not a dependency and node may be absent; this
-# stand-in makes every stage test independent of either.
+def decoder_verifier(decode: Callable[[bytes], bytes], method: str) -> BrotliVerifier:
+    """A test checker that decodes in this process; production uses only node."""
+
+    def check(pairs: Sequence[Pair]) -> list[bool]:
+        verdicts: list[bool] = []
+        for compressed, source in pairs:
+            try:
+                verdicts.append(decode(compressed.read_bytes()) == source.read_bytes())
+            except ValueError:
+                verdicts.append(False)
+        return verdicts
+
+    return BrotliVerifier(method, check)
+
+
+# node may be absent; this stand-in makes every stage test independent of it
+# (tests/unit/test_app_runtime_brotli.py tests the node checker itself).
 FAKE_VERIFIER = decoder_verifier(fake_brotli, "a test decoder")
 
 

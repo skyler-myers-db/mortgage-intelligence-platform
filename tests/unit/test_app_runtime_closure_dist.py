@@ -13,7 +13,6 @@ decodes to, and the ``frontend/public`` blobs tracked at the staged ref.
 from __future__ import annotations
 
 import gzip
-import importlib.util
 import os
 import re
 import zlib
@@ -21,9 +20,9 @@ from pathlib import Path
 
 import pytest
 
-from tools.databricks import app_runtime_brotli as brotli_rules
+from tests.fixtures.app_runtime_stage_repo import decoder_verifier
 from tools.databricks import app_runtime_dist as dist_rules
-from tools.databricks.app_runtime_brotli import BrotliCheckError, BrotliVerifier, decoder_verifier
+from tools.databricks.app_runtime_brotli import BrotliCheckError, BrotliVerifier
 from tools.databricks.app_runtime_dist import DistReview, review_dist
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -34,7 +33,7 @@ BROTLI_MAGIC = b"fake-br:"
 
 
 def fake_brotli(data: bytes) -> bytes:
-    """A stand-in decoder: tests never need the optional brotli module."""
+    """A stand-in decoder: these tests never need node."""
 
     if not data.startswith(BROTLI_MAGIC):
         raise ValueError("not a fake brotli stream")
@@ -311,7 +310,7 @@ def test_a_checker_that_fails_is_a_refusal_not_an_omission(tmp_path: Path) -> No
     assert review.omitted == ()
 
 
-def test_without_a_brotli_decoder_every_br_is_left_out_and_reported(tmp_path: Path) -> None:
+def test_without_a_brotli_checker_every_br_is_left_out_and_reported(tmp_path: Path) -> None:
     review = _review(_dist(tmp_path), brotli=None)
 
     assert review.problems == ()
@@ -319,16 +318,10 @@ def test_without_a_brotli_decoder_every_br_is_left_out_and_reported(tmp_path: Pa
     assert review.files == tuple(sorted(set(GOVERNED) - {"assets/app-DnQ3_k-1.js.br"}))
 
 
-def test_without_a_brotli_decoder_a_br_beside_junk_is_still_refused(tmp_path: Path) -> None:
+def test_without_a_brotli_checker_a_br_beside_junk_is_still_refused(tmp_path: Path) -> None:
     review = _review(_dist(tmp_path, {"assets/creds.txt.br": b"x"}), brotli=None)
 
     assert review.problems == ("not a governed build output: assets/creds.txt.br",)
-
-
-def test_the_brotli_decoder_is_the_optional_module_or_none() -> None:
-    installed = importlib.util.find_spec("brotli") is not None
-
-    assert (brotli_rules.brotli_decoder() is not None) == installed
 
 
 def _vite_templates() -> set[str]:

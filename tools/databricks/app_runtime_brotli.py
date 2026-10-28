@@ -3,11 +3,11 @@
 The App's ``/assets`` route serves ``<asset>.br`` in place of ``<asset>`` to a
 client that accepts brotli (backend/services/static_assets.py), so
 ``app_runtime_closure stage`` ships a ``.br`` only when it has decoded it and
-compared the bytes. ``brotli_verifier`` picks the first checker available:
+compared the bytes. ``brotli_verifier`` returns the one checker it trusts:
 
-* the optional ``brotli`` Python module (not a repo dependency);
-* else ``node`` on PATH, the runtime that wrote the files
-  (tools/precompress_assets.mjs): one short-lived process per batch decodes
+* ``node`` on PATH, the runtime that wrote the files
+  (tools/precompress_assets.mjs) and that the governed frontend build already
+  needs: one short-lived process per batch decodes
   each file with ``zlib.brotliDecompressSync`` (``maxOutputLength`` one byte
   over the source, so a large expansion stops early instead of filling
   memory), requires the stream to use every input byte (node stops at the end
@@ -15,8 +15,16 @@ compared the bytes. ``brotli_verifier`` picks the first checker available:
   source inside node, and prints one JSON boolean per file. The paths travel
   as argv after ``--``, never inside the script, and each process is
   time-bound;
-* else none, and stage leaves every ``.br`` out (the App then serves the
-  checked ``.gz``).
+* without ``node``, none, and stage leaves every ``.br`` out (the App then
+  serves the checked ``.gz``).
+
+The optional ``brotli`` Python module is deliberately not used, even when it
+is installed: ``brotli.decompress`` has no output cap, so a hostile ``.br``
+would inflate without bound in this process, and its handling of bytes after
+the stream cannot be tested here (it is not a repo dependency). A node too
+old for this script (``zlib.brotliDecompressSync`` arrived in Node 10.16;
+the frontend's engines field asks for 22.22 or later) fails every check,
+which is a refusal, not an omission.
 
 A file that does not decode to its source is a refusal, never an omission.
 A checker that cannot finish (node exits non-zero, times out or prints
@@ -26,7 +34,6 @@ turns into a refusal as well.
 
 from __future__ import annotations
 
-import importlib
 import json
 import os
 import shutil
@@ -34,9 +41,7 @@ import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
-Decoder = Callable[[bytes], bytes]
 Pair = tuple[Path, Path]  # (the .br file, its source)
 
 NODE_TIMEOUT_S = 120
@@ -83,31 +88,6 @@ class BrotliVerifier:
     check: Callable[[Sequence[Pair]], list[bool]]
 
 
-def brotli_decoder() -> Decoder | None:
-    """``brotli.decompress`` when the optional module is installed."""
-
-    try:
-        module = importlib.import_module("brotli")
-    except ImportError:
-        return None
-    return cast(Decoder, module.decompress)
-
-
-def decoder_verifier(decode: Decoder, method: str = "the brotli module") -> BrotliVerifier:
-    """A verifier that decodes in this process with ``decode``."""
-
-    def check(pairs: Sequence[Pair]) -> list[bool]:
-        verdicts: list[bool] = []
-        for compressed, source in pairs:
-            try:
-                verdicts.append(decode(compressed.read_bytes()) == source.read_bytes())
-            except Exception:  # noqa: BLE001 -- any decoder error is a mismatch
-                verdicts.append(False)
-        return verdicts
-
-    return BrotliVerifier(method, check)
-
-
 def _node_batch(node: str, batch: Sequence[Pair]) -> list[bool]:
     argv = [str(path) for pair in batch for path in pair]
     env = {key: value for key, value in os.environ.items() if not key.startswith("NODE_")}
@@ -146,10 +126,7 @@ def node_verifier(node: str) -> BrotliVerifier:
 
 
 def brotli_verifier() -> BrotliVerifier | None:
-    """The brotli module, else ``node`` on PATH, else None (every .br left out)."""
+    """``node`` on PATH, else None (every .br left out); never the brotli module."""
 
-    decode = brotli_decoder()
-    if decode is not None:
-        return decoder_verifier(decode)
     node = shutil.which("node")
     return node_verifier(node) if node else None

@@ -1,16 +1,20 @@
-"""Each staged .br is checked against its source: the brotli module, else node.
+"""Each staged .br is checked against its source with node, never in process.
 
 tools/databricks/app_runtime_brotli.py. The App serves ``<asset>.br`` in place
 of ``<asset>`` to a client accepting brotli, so a .br ships only after it has
 been decoded and compared byte for byte. The node checker gets its paths as
-argv, bounds the decoded size, runs time-bound, and any failure of its own is
-an error, never a verdict.
+argv, bounds the decoded size, requires the stream to consume every input
+byte, runs time-bound, and any failure of its own is an error, never a
+verdict. The optional brotli Python module is never used: it has no output
+cap.
 """
 
 from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -19,7 +23,6 @@ from tools.databricks import app_runtime_brotli as brotli_rules
 from tools.databricks.app_runtime_brotli import (
     BrotliCheckError,
     brotli_verifier,
-    decoder_verifier,
     node_verifier,
 )
 
@@ -122,14 +125,14 @@ def test_a_node_that_fails_is_an_error_not_a_verdict(
         node_verifier(str(fake)).check([_pair(tmp_path / "d", "app.js", b"x")])
 
 
-def test_the_checker_is_the_module_then_node_then_none(
+def test_the_checker_is_node_on_path_or_none_even_with_the_brotli_module(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(brotli_rules, "brotli_decoder", lambda: bytes)
-    module = brotli_verifier()
-    assert module is not None and module.method == "the brotli module"
-
-    monkeypatch.setattr(brotli_rules, "brotli_decoder", lambda: None)
+    # An installed brotli module must not be picked: brotli.decompress has no
+    # output cap, so a hostile .br would inflate without bound in process.
+    module = types.ModuleType("brotli")
+    module.decompress = bytes  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "brotli", module)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "node").write_text("#!/bin/sh\n", encoding="utf-8")
@@ -140,15 +143,3 @@ def test_the_checker_is_the_module_then_node_then_none(
 
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     assert brotli_verifier() is None
-
-
-def test_an_in_process_decoder_error_is_a_mismatch(tmp_path: Path) -> None:
-    def decode(data: bytes) -> bytes:
-        if data == b"raise":
-            raise ValueError("bad stream")
-        return data
-
-    verifier = decoder_verifier(decode)
-    pairs = [_pair(tmp_path, "a.js", APP_JS), _pair(tmp_path, "b.js", b"raise")]
-
-    assert verifier.check(pairs) == [True, False]

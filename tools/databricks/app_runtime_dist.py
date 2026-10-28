@@ -18,10 +18,9 @@ build. It allows only what a governed build emits:
   whose gzip header is bare (FLG 0: no file name, comment, extra field or
   header CRC, as Node's zlib.gzip writes it), and a ``.br`` that decodes to
   exactly its bytes too (tools/precompress_assets.mjs). A ``.br`` is decoded by
-  the ``brotli`` module or, without it, by ``node``
-  (tools/databricks/app_runtime_brotli.py); with neither it cannot be checked,
-  so it is left out of the folder and reported, and the App serves the
-  checked ``.gz`` instead. One that fails the check is refused;
+  ``node`` (tools/databricks/app_runtime_brotli.py); without it a ``.br``
+  cannot be checked, so it is left out of the folder and reported, and the App
+  serves the checked ``.gz`` instead. One that fails the check is refused;
 * exactly the ``frontend/public`` files tracked at the staged ref, all of
   them, byte for byte: Vite copies ``public/`` verbatim to the dist root, so an
   untracked, edited or missing public file means the dist was not built from

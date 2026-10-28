@@ -173,7 +173,7 @@ NODE = shutil.which("node")
 
 
 def _real_br(dist: Path, monkeypatch: pytest.MonkeyPatch, *, damage: str = "") -> None:
-    """Swap the fake .br for a node-made one and use the real checker, module absent."""
+    """Swap the fake .br for a node-made one and use the real checker."""
 
     assert NODE is not None
     compress = ("process.stdout.write(require('node:zlib').brotliCompressSync("
@@ -185,7 +185,6 @@ def _real_br(dist: Path, monkeypatch: pytest.MonkeyPatch, *, damage: str = "") -
     elif damage == "trailing":  # decodes to its source, then carries a payload
         data += b"MIP_SECRET=abc123\n"
     (dist / "assets" / "app-DnQ3_k-1.js.br").write_bytes(data)
-    monkeypatch.setattr(brotli_rules, "brotli_decoder", lambda: None)
     monkeypatch.setattr(closure, "brotli_verifier", brotli_rules.brotli_verifier)
 
 
@@ -224,11 +223,10 @@ def test_stage_refuses_a_br_that_is_not_exactly_its_source_stream(
     assert nothing_written(tmp_path, out)
 
 
-def test_stage_leaves_out_every_br_without_the_module_or_node(
+def test_stage_leaves_out_every_br_without_node(
     repo: Path, dist: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(brotli_rules, "brotli_decoder", lambda: None)
     monkeypatch.setattr(closure, "brotli_verifier", brotli_rules.brotli_verifier)
     git_only = tmp_path / "git-only"  # PATH keeps git and loses node
     git_only.mkdir()
