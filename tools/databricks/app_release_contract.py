@@ -144,6 +144,14 @@ def release_path(
     return path
 
 
+def release_id_in(path: object) -> str:
+    """The id of a well-formed release folder path of any principal and leaf."""
+    if type(path) is not str:
+        raise ReleaseContractError("App release path is not a governed per-release folder")
+    _check_release_shape(path)
+    return PurePosixPath(path).parts[8]
+
+
 def release_id_of(
     path: object, *, principal: str, target: str, root_leaf: str | None = None
 ) -> str | None:
