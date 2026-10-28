@@ -383,6 +383,30 @@ def test_relative_imports_resolve_against_the_importing_package(
     assert absolute_module(module_package(relfile, dotted), level, module) == expected
 
 
+@pytest.mark.parametrize(
+    "import_line",
+    ["from .docroot import DOCS_DIR", "from backend.services.docroot import DOCS_DIR"],
+)
+def test_a_root_imported_by_name_is_not_also_an_unused_binding(
+    tmp_path: Path, import_line: str
+) -> None:
+    # docroot.py binds DOCS_DIR and never loads it. A path bound to a name
+    # nothing loads counts as read where it is bound ("docs"), unless another
+    # module imports that name; a relative import must count as that import
+    # too, or the scan reports a "docs" read nobody makes. Exact equality,
+    # because membership cannot see the extra read.
+    root = make_tree(tmp_path, f'{import_line}\nX = (DOCS_DIR / "rr.md").read_text()')
+    (root / "backend" / "services" / "docroot.py").write_text(
+        'from pathlib import Path\n\nDOCS_DIR = Path(__file__).resolve().parents[2] / "docs"\n',
+        encoding="utf-8",
+    )
+
+    result = scan(root)
+
+    assert result.unhandled_file_uses == []
+    assert flow_reads(result) == {"docs/rr.md"}
+
+
 def test_the_home_folder_is_not_a_repo_read(tmp_path: Path) -> None:
     # The control for the os.path cwd rule: expanduser("~/...") names the
     # home folder, not a path under the source root.
