@@ -217,20 +217,28 @@ def _texts(root: Path) -> tuple[str, str]:
     )
 
 
-@pytest.mark.parametrize("variant", ["real", "bumped", "crlf"])
+@pytest.mark.parametrize("variant", ["real", "bumped", "crlf", "lone_cr"])
 def test_the_boot_digest_line_is_the_stamping_tools_line(tmp_path: Path, variant: str) -> None:
-    # tools/ is not in the App source, so the boot check restates the format.
+    # tools/ is not in the App source, so the boot check restates the format;
+    # it reads the files as the boot does, and the tool stamps requirements.txt.
     for name in ("uv.lock", "requirements.in"):
         data = (ROOT / name).read_bytes()
         if variant == "bumped" and name == "uv.lock":
             data += b"# bumped\n"
         if variant == "crlf":
             data = data.replace(b"\n", b"\r\n")
+        if variant == "lone_cr":
+            data += b"# a lone\rCR\n"
         (tmp_path / name).write_bytes(data)
+    (tmp_path / "requirements.txt").write_text("-c uv.lock\n-r requirements.in\n", encoding="utf-8")
+    requirements_digest.write(tmp_path)
 
-    assert check.expected_digest_line(*_texts(tmp_path)) == requirements_digest.digest_line(
-        tmp_path
+    result = check.check_dependency_lock(
+        lock_file=tmp_path / "uv.lock", requirements_in=tmp_path / "requirements.in",
+        requirements_txt=tmp_path / "requirements.txt", environment=_env({}, {}),
     )
+
+    assert result.requirements_digest == "current"
 
 
 def test_the_digest_state_of_requirements_txt() -> None:

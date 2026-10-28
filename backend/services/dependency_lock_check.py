@@ -250,19 +250,30 @@ def current_environment() -> InstalledEnvironment:
 
 
 def _read(path: Path) -> str | None:
+    """The file's text with its line endings as written (no newline translation).
+
+    The digest folds only CRLF, as tools/requirements_digest.py does, so the
+    text must reach it untranslated: universal newlines would also turn a lone
+    CR into LF and hash bytes the stamping tool never hashed.
+    """
+
     try:
         if not path.is_file() or path.stat().st_size > MAX_FILE_BYTES:
             return None
-        return path.read_text(encoding="utf-8")
+        return path.read_bytes().decode("utf-8")
     except (OSError, UnicodeDecodeError):
         return None
 
 
+def _lf_sha256(text: str) -> str:
+    return hashlib.sha256(text.replace("\r\n", "\n").encode("utf-8")).hexdigest()
+
+
 def expected_digest_line(lock_text: str, requirements_text: str) -> str:
-    """tools/requirements_digest.digest_line_for over text read with universal newlines."""
+    """tools/requirements_digest.digest_line_for: sha256 with only CRLF folded to LF."""
 
     parts = [
-        f"{name} sha256={hashlib.sha256(text.encode('utf-8')).hexdigest()}"
+        f"{name} sha256={_lf_sha256(text)}"
         for name, text in (("uv.lock", lock_text), ("requirements.in", requirements_text))
     ]
     return f"{DIGEST_PREFIX} {' '.join(parts)}"
