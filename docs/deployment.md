@@ -147,9 +147,9 @@ persists on the App compute across deployments. It does not follow the file's
 `requirements.txt` was only those two lines, byte-identical since 2026-05-17,
 so no lock refresh reached a running App: the deploy that carried PR #274
 (databricks-sql-connector 4.4.0 to 4.8.0, oauthlib 3.3.1 to 4.0.0) skipped
-installation, and the security floors locked since at least 2026-10-06
-(certifi, urllib3, PyJWT, oauthlib, mlflow and the rest) were never
-installed.
+installation, and lock bumps since at least 2026-10-06, security floors
+included (certifi, urllib3, PyJWT, oauthlib, mlflow and the rest), did not
+reach the running App.
 
 `requirements.txt` therefore starts with a generated comment carrying the
 sha256 of both included files:
@@ -170,8 +170,25 @@ before.
 **Verify the reinstall on every deploy that changes the digest.** The App's
 deployment build log must show pip output (`Collecting ...`, `Successfully
 installed ...`) instead of `Requirements have not changed. Skipping
-installation.` Whether a comment-only change defeats the skip is inferred from
-how the skip behaved (it is keyed to `requirements.txt`, and that file never
+installation.` The App's own boot log then carries one `dependency_lock_check`
+event (logger `mip-runtime`, emitted by
+`backend/services/dependency_lock_check.py` from the FastAPI lifespan). It
+reports `outcome` `ok`, `drift` or `lock_unreadable`, with `pins_checked`,
+`not_applicable`, `unpinned`, `drifted_count` and a `drifted` list of
+`{name, locked, installed}` (`installed` is null for a missing package). It
+reads `uv.lock` and `requirements.in` from the App source root and walks the
+installed closure of `requirements.in` the way `tools/python_deps_check.py`
+does, so a pin that this interpreter never installs (tomli on Python 3.11) is
+not applicable rather than drift. It reads local files only and makes no
+network call. It never raises, so it cannot stop startup, and it took about
+0.3 s on a local interpreter. Run against a local interpreter
+built before PR #274, it reports `drift` for exactly databricks-sql-connector
+(locked 4.8.0, installed 4.4.0) and oauthlib (locked 4.0.0, installed 3.3.1),
+the same two packages that `tools/python_deps_check.py` names. The event has
+not yet been seen in a deployed App.
+
+Whether a comment-only change defeats the skip is inferred from how the skip
+behaved (it is keyed to `requirements.txt`, and that file never
 changed); it has not yet been observed, so confirm it on the next deploy that
 carries a digest change. If the build still skips (for example because it
 compares the file with comments stripped), the fallback is a requirement line

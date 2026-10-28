@@ -35,6 +35,7 @@ from backend.services.campaign_treatment_runtime import (
     CAMPAIGN_TREATMENT_RUNTIME_MARKER_ENV,
     campaign_treatment_runtime_enabled,
 )
+from backend.services.dependency_lock_check import log_dependency_lock_check
 from backend.services.genie_place_dimension import warm_governed_place_dimension
 from backend.services.genie_refusal_text_retention import refusal_text_purge_loop
 from backend.services.health_probes import prime_warehouse_state_client
@@ -292,6 +293,10 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # _running_under_pytest()/MIP_BYPASS_STARTUP_CHECKS reach), so a baseline
     # deploy degrades treatment writes instead of killing the process.
     _log_campaign_treatment_runtime_state()
+    if not _running_under_pytest():
+        # One dependency_lock_check line: installed packages vs uv.lock (the
+        # Apps build can skip the reinstall). Local reads only; never raises.
+        log_dependency_lock_check()
     if looks_like_databricks_app_deploy():
         # Governance invariant: the ambient App identity must be the exact
         # LOGIN-only OAuth role, and PostgreSQL's replication protocol must

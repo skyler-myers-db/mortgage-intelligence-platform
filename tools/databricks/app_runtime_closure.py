@@ -65,8 +65,14 @@ class ClosureEntry:
 UPLOAD: tuple[ClosureEntry, ...] = (
     ClosureEntry("app.yaml", "upload", True, "Databricks Apps: runs python -m backend.runtime"),
     ClosureEntry("requirements.txt", "upload", True, "Databricks Apps build: pip install -r"),
-    ClosureEntry("requirements.in", "upload", True, "requirements.txt -r include"),
-    ClosureEntry("uv.lock", "upload", True, "requirements.txt -c include"),
+    ClosureEntry(
+        "requirements.in", "upload", True,
+        "requirements.txt -r include; services/dependency_lock_check.py at boot",
+    ),
+    ClosureEntry(
+        "uv.lock", "upload", True,
+        "requirements.txt -c include; services/dependency_lock_check.py at boot",
+    ),
     ClosureEntry("backend", "upload", True, "the FastAPI App"),
     ClosureEntry("jobs", "upload", True, "staged upload set; lifecycle_sync imports a job module"),
     ClosureEntry("lakebase", "upload", True, "staged upload set (schema and seed SQL)"),
