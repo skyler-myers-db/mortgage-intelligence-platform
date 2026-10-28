@@ -343,6 +343,18 @@ downloading without `POST /audit/export-receipt`) is closed by W5d
 `w5-print-glossary-sales-manager`: the download waits for its `AUDIT_EXPORT`
 row, as in the table above.
 
+Receipt entity ids (2026-10-28). `PRINT_EXPORT`, `AUDIT_EXPORT` and
+`LEAD_EXPORT` name their row `print-` / `export-` plus the letter image of the
+row's own `filter_fingerprint` (`backend/services/audit_entity_ids.py`: the
+first 24 hex characters with `0-9a-f` mapped onto `a-p`, the image the
+`geniehash-` and `growthprompt-` ids already use), so an auditor derives the id
+from the stored fingerprint. The id used to embed the raw first 16 hex
+characters, which held a ten-digit run about 1.4% of the time; the audit-id
+PII guard refused it as a phone number and the receipt answered 422 (for the
+unkeyed `LEAD_EXPORT` fingerprint, the same filter sets in every deployment,
+`states=KS` among them). The guard is unchanged. Rows written earlier keep the
+hex form; nothing joins on the id.
+
 ### Printing and the explorer's exclusion (W5d)
 
 - **`PRINT_EXPORT`** (`backend/services/print_receipt.py`) is a server-owned

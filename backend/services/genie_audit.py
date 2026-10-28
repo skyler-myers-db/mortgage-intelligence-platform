@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 
 from backend.schemas.common import validate_public_audit_identifier_or_none
+from backend.services.audit_entity_ids import audit_safe_letters
 from backend.services.genie_answers import GenieMessageResponse
 
 
@@ -14,22 +15,11 @@ def audit_safe_letter_digest(seed: str) -> str:
     ``entity_id`` is a top-level audit column and runs the PII identifier
     validator, which rejects long digit runs -- a plain hex digest trips it
     often enough to be a reliability problem. Shared with the growth-agent
-    refusal record so both surfaces build ids the same way.
+    refusal record so both surfaces build ids the same way; the letter image
+    itself (``audit_entity_ids.audit_safe_letters``) also names the receipts.
     """
 
     return audit_safe_letters(hashlib.sha256(seed.encode("utf-8")).hexdigest())
-
-
-def audit_safe_letters(sha256_hex: str) -> str:
-    """Letter image of a SHA-256 hex digest: ``audit_safe_letter_digest``'s body.
-
-    A caller that holds only ``sha256(seed)`` (a hash-only refusal report
-    holds the full digest of the refused question) reproduces exactly the
-    id ``audit_safe_letter_digest(seed)`` built, without the seed.
-    """
-
-    table = str.maketrans("0123456789abcdef", "abcdefghijklmnop")
-    return sha256_hex[:24].translate(table)
 
 
 def _public_safe_entity_id(candidate: str | None, *, seed: str) -> str | None:
