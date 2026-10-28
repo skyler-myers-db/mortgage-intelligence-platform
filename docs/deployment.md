@@ -342,9 +342,12 @@ installed ...`) instead of `Requirements have not changed. Skipping
 installation.` The App's own boot log then carries one `dependency_lock_check`
 event (logger `mip-runtime`, emitted by
 `backend/services/dependency_lock_check.py` from the FastAPI lifespan). It
-reports `outcome` `ok`, `drift` or `lock_unreadable`, with `pins_checked`,
-`not_applicable`, `unpinned`, `drifted_count` and a `drifted` list of
-`{name, locked, installed}` (`installed` is null for a missing package). It
+reports `outcome` `ok`, `drift` or `lock_unreadable`, with `pins_total`,
+`pins_checked`, `not_applicable` and `unpinned` and the package names behind
+those two counts (`not_applicable_names`, `unpinned_names`: sorted, at most 50
+each, so a count above the list's length means the list was cut),
+`drifted_count` and a `drifted` list of `{name, locked, installed}`
+(`installed` is null for a missing package). It
 also reports `python` and the `lock_python` that `uv.lock` was compiled for (a
 mismatch is `drift`, as it is for `tools/python_deps_check.py`), and
 `requirements_digest`: `current`, `stale`, `missing` or `unreadable`. The
@@ -365,7 +368,8 @@ before PR #274, it reported `drift` for exactly databricks-sql-connector
 the same two packages that `tools/python_deps_check.py` named, with
 `requirements_digest` `current`. On the first deploy that carried it
 (2026-10-28) it reported `ok`: 137 pins checked, none drifted,
-`requirements_digest` `current`.
+`requirements_digest` `current`. It also reported `unpinned` 1, which the next
+section names and closes.
 
 A comment-only change defeats the skip: the 2026-10-28 deploy that added
 only the digest line reinstalled. If a future build stops honouring comment
@@ -407,12 +411,19 @@ package, so `tests/unit/test_requirements_dev_split.py` fails when a narrow
 Refresh either lock the same narrow way:
 
 ```bash
-uv pip compile requirements.in --python-version 3.11 --format requirements.txt \
+uv pip compile requirements.in --python-version 3.11 \
+  --python-platform x86_64-manylinux_2_28 --format requirements.txt \
   --output-file uv.lock --upgrade-package <pkg>
 uv pip compile requirements-dev.in -c uv.lock --python-version 3.11 \
-  --format requirements.txt --output-file requirements-dev.lock --upgrade-package <pkg>
+  --python-platform x86_64-manylinux_2_28 --format requirements.txt \
+  --output-file requirements-dev.lock --upgrade-package <pkg>
 python tools/requirements_digest.py --write   # only uv.lock and requirements.in are digested
 ```
+
+Both locks are compiled for the App's platform (next section). The dev
+closure has no machine-keyed dependency today: compiled for
+`aarch64-apple-darwin` and for `x86_64-manylinux_2_28`, it pins the same 20
+packages at the same versions.
 
 A dev-only bump never touches `uv.lock` or `requirements.in`, so it leaves the
 digest line alone and never makes the App reinstall. Every workflow job that
@@ -436,13 +447,76 @@ built from the new runtime-only `requirements.txt`.
 runs `pip install -r requirements.txt` into the environment that persists
 across deployments, and pip never uninstalls what a requirements file stops
 naming. The first deploy after this change therefore shows a pip run (the
-digest changed) in which every runtime pin is already satisfied, because no
-version moved. The connector, its closure and the old test tools stay on disk,
-unimported. `dependency_lock_check` walks only what
+digest changed) in which this change moves no runtime version. The
+connector, its closure and the old test tools stay on disk, unimported. `dependency_lock_check` walks only what
 `requirements.in` reaches, so it reports `ok` with them present. The App
 image is runtime-only for every package it resolves from the files here,
 but the leftover wheels only go away when the App's environment is
 recreated.
+
+## App Python dependencies: the lock's platform
+
+What was observed: the 2026-10-28 paychex deploy of main 32cc4384 logged
+`dependency_lock_check` with `outcome` `ok`, `pins_total` 138, `pins_checked`
+137, `not_applicable` 1 and `unpinned` 1, and the event did not yet name
+either package. Replaying the walk offline reproduces all four numbers. Install
+the deployed `requirements.txt` for Linux x86_64 into a directory
+(`uv pip install --target <dir> --python-platform x86_64-manylinux_2_28
+--python-version 3.11 -r requirements.txt`), then run `compute_drift` over
+that directory's package metadata with Linux x86_64 markers. The
+not-applicable entry was tomli, which coverage required only below Python
+3.11.0a6 and which has lived in `requirements-dev.lock` since the split above.
+The unpinned package is greenlet. sqlalchemy (via mlflow) requires greenlet only where
+`platform_machine` is `x86_64`, `aarch64`, `ppc64le`, `amd64` or `win32`.
+`uv.lock` was compiled on Apple Silicon (`arm64`) with `--python-version 3.11`
+and no platform, and uv then resolves for the compiling machine. So the lock
+never pinned greenlet, and pip installed whichever greenlet was newest at
+build time, on the App and on every CI runner.
+
+`uv.lock` is therefore compiled for the App's platform. A refresh still names
+the packages it moves (docs/audits/supply-chain-audit.md, "Python lock
+refresh"):
+
+```bash
+uv pip compile requirements.in --python-version 3.11 \
+  --python-platform x86_64-manylinux_2_28 --format requirements.txt \
+  --output-file uv.lock [--upgrade-package <package> ...]
+python tools/requirements_digest.py --write
+```
+
+`x86_64-manylinux_2_28` is Linux x86_64 with glibc 2.28 as the floor for
+wheel selection, so the resolver never picks a release whose only Linux wheels
+need a newer glibc. uv takes the existing output file's pins as preferences,
+so adding the flag moved no pin. The lock gained `greenlet==3.5.6` and a new
+header line, and nothing else changed. pip-audit over the new lock (PyPI and
+OSV feeds) reports no known vulnerabilities.
+
+Why one platform and not `--universal`: resolved for each platform from this
+lock, macOS arm64 is the lock minus greenlet, and macOS x86_64 and Linux
+aarch64 are the lock exactly. One Linux x86_64 resolution therefore pins every
+closure that runs this code: the App, CI's ubuntu runners, `deploy-dev.yml`
+and local Macs. A universal lock adds forked pins and marker lines (Windows-only
+colorama and the like) for packages this repo never installs. It would also
+need `tools/python_deps_check.py` to accept marker lines, because that tool
+refuses anything but a bare `name==version` pin.
+
+What each environment reports:
+
+- The App and CI (Linux x86_64): `unpinned` 0 and nothing is not
+  applicable (`pins_total` 114, `pins_checked` 114, since the runtime-only
+  split; 139 and 138 with tomli before it).
+- A Mac on Apple Silicon: greenlet is not applicable (`pins_checked` 113).
+  pip ignores a constraint for a package nothing requires, and
+  `tools/python_deps_check.py` still exits 0.
+- `tests/unit/test_dependency_lock_check.py` replays a clean install of the
+  real lock with Linux x86_64 and macOS arm64 markers. It fails if any reached
+  package is unpinned or if the lock's header loses the platform flag. Against
+  the 32cc4384 lock, it fails on Linux and names greenlet.
+
+**Verify on the next deploy:** the `dependency_lock_check` event reports
+`unpinned` 0, `unpinned_names` `[]` and `not_applicable_names` `[]`. A
+non-empty `unpinned_names` names a dependency that the App's platform needs
+and the lock lacks. Recompile with the command above, restamp and redeploy.
 
 ## Databricks App
 
@@ -566,9 +640,11 @@ interpreter with the `requirements.txt` pins (`-c uv.lock` plus
 
 A package that pip would install but that `uv.lock` does not pin is printed as
 an `unpinned:` note and never fails the check, because it has no pin to equal.
-`uv.lock` is resolved for one platform, not universally, so a platform-specific
-dependency is the usual case: on the Linux x86_64 runner that `deploy-dev.yml`
-uses, sqlalchemy pulls in greenlet, which the lock does not pin.
+`uv.lock` is resolved for one platform, the App's Linux x86_64 ("App Python
+dependencies: the lock's platform" above). So the Linux x86_64 runner that
+`deploy-dev.yml` uses prints no note, and an Apple Silicon Mac needs a subset
+of the lock (everything but greenlet). A note names a dependency the lock's
+platform does not need.
 
 This covers mlflow (which registers the Gateway model), databricks-sdk and
 every transitive pin, not only `import boto3, mlflow`. A dry run reports the

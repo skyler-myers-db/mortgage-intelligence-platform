@@ -5,10 +5,12 @@ The Databricks Apps build can skip the dependency reinstall (docs/deployment.md,
 environment persists across deployments, so a deploy can run new code on old
 wheels. At startup the App emits ONE ``dependency_lock_check`` event on the
 ``mip-runtime`` logger: how many uv.lock pins it checked, every drifted package
-as name / locked / installed (installed is null when missing), the running
-``python`` and the ``lock_python`` uv.lock was compiled for, whether
-requirements.txt's ``requirements_digest`` line is ``current`` with uv.lock and
-requirements.in (or ``stale``, ``missing``, ``unreadable``), and an outcome:
+as name / locked / installed (installed is null when missing), the names
+behind the ``unpinned`` and ``not_applicable`` counts (sorted, at most 50
+each), the running ``python`` and the ``lock_python`` uv.lock was compiled for,
+whether requirements.txt's ``requirements_digest`` line is ``current`` with
+uv.lock and requirements.in (or ``stale``, ``missing``, ``unreadable``), and an
+outcome:
 
 * ``ok``: every package the App's requirements reach equals its uv.lock pin;
 * ``drift``: at least one does not, one is missing, or the running Python is
@@ -29,11 +31,16 @@ Which pins apply follows tools/python_deps_check.py, the deploy preflight: walk
 the installed closure of requirements.in, evaluating every requirement's
 markers and extras for this interpreter. A lock entry that nothing reached
 needs is not applicable, never drift: for example a pin whose only requirer
-is marker-false on this Python (tomli via coverage below 3.11.0a6, which now
-sits in requirements-dev.lock). A pin line carrying its own marker (a
-universal lock) counts only where the marker holds. An installed package that
-requirements.in no longer reaches is never read, so the wheels a removed
-requirement left in the persisted environment do not count as drift.
+is marker-false on this Python. A pin line carrying its own marker (a
+universal lock) counts only where the marker holds, and its package is named
+not applicable only when none of its lines does. A reached package uv.lock
+does not pin is unpinned: named, never drift. uv.lock is compiled for the
+App's Linux x86_64 platform, so on the App nothing is unpinned, and on Apple
+Silicon greenlet is not applicable (sqlalchemy requires it only where
+``platform_machine`` is x86_64, aarch64, ppc64le, amd64 or win32, never
+arm64). An installed package that requirements.in no longer reaches is never
+read, so the wheels a removed requirement left in the persisted environment
+do not count as drift.
 
 Local reads only: three bounded files plus importlib.metadata. No network, and
 it never raises. The lifespan runs it in a worker thread, off the event loop.
@@ -65,6 +72,7 @@ REQUIREMENTS_TXT = SOURCE_ROOT / "requirements.txt"
 MAX_FILE_BYTES = 1_048_576
 MAX_PACKAGES = 2_000
 MAX_LOGGED_DRIFT = 50
+MAX_LOGGED_NAMES = 50
 # tools/requirements_digest.py owns this line; tools/ is not in the App source,
 # so the format is restated here and a test pins the two to the same output.
 DIGEST_PREFIX = "# deps-digest:"
@@ -110,6 +118,8 @@ class LockCheck:
     not_applicable: int = 0
     unpinned: int = 0
     drifted: tuple[Drift, ...] = ()
+    not_applicable_names: tuple[str, ...] = ()
+    unpinned_names: tuple[str, ...] = ()
     reason: str | None = None
     python: str | None = None
     lock_python: str | None = None
@@ -179,14 +189,14 @@ def compute_drift(
     from packaging.requirements import InvalidRequirement, Requirement
 
     lock: dict[str, str] = {}
-    excluded = 0
+    excluded: list[str] = []
     for pin in pins:
         try:
             applies = pin.marker is None or _holds(Marker(pin.marker), env.markers, ("",))
         except InvalidMarker:
             applies = True
         if not applies:
-            excluded += 1
+            excluded.append(pin.name)
         else:
             lock.setdefault(pin.name, pin.version)
 
@@ -223,13 +233,17 @@ def compute_drift(
                     for dep in parsed(env.requires(name))
                     if _holds(dep.marker, env.markers, (extra,))
                 )
+    unreached, unpinned = lock.keys() - reached, reached - lock.keys()
     return LockCheck(
         outcome="drift" if drifted else "ok",
         pins_total=len(pins),
         pins_checked=len(reached & lock.keys()),
-        not_applicable=excluded + len(lock.keys() - reached),
-        unpinned=len(reached - lock.keys()),
+        not_applicable=len(excluded) + len(unreached),
+        unpinned=len(unpinned),
         drifted=tuple(sorted(drifted, key=lambda d: d.name)),
+        # A forked package with one applying line was checked, so it is not named.
+        not_applicable_names=tuple(sorted((set(excluded) - lock.keys()) | unreached)),
+        unpinned_names=tuple(sorted(unpinned)),
         reason=None if len(reached) < MAX_PACKAGES else f"walk stopped at {MAX_PACKAGES}",
     )
 
@@ -363,7 +377,9 @@ def log_dependency_lock_check(
         pins_total=result.pins_total,
         pins_checked=result.pins_checked,
         not_applicable=result.not_applicable,
+        not_applicable_names=list(result.not_applicable_names[:MAX_LOGGED_NAMES]),
         unpinned=result.unpinned,
+        unpinned_names=list(result.unpinned_names[:MAX_LOGGED_NAMES]),
         drifted_count=len(result.drifted),
         drifted=[
             {"name": d.name, "locked": d.locked, "installed": d.installed}

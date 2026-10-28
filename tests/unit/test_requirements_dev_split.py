@@ -28,7 +28,7 @@ DEV_TXT = ROOT / "requirements-dev.txt"
 DEV_TOOLS = ("pytest", "pytest-cov", "pytest-xdist", "ruff", "mypy", "hypothesis")
 DEV_COMPILE = (
     "uv pip compile requirements-dev.in -c uv.lock --python-version 3.11 "
-    "--format requirements.txt --output-file requirements-dev.lock"
+    "--python-platform x86_64-manylinux_2_28 --format requirements.txt --output-file requirements-dev.lock"
 )
 DEV_INSTALL = "pip install -r requirements-dev.txt"
 _DEV_TOOL_RUN = re.compile(r"(?:^|[\s;&|(])(?:python -m )?(?:pytest|ruff|mypy)\s")
@@ -59,7 +59,8 @@ def test_the_dev_lock_is_compiled_against_uv_lock_and_agrees_on_every_shared_pin
     shared = runtime_lock.keys() & dev_lock.keys()
 
     assert header == f"#    {DEV_COMPILE}"
-    assert "--python-version 3.11" in UV_LOCK.read_text(encoding="utf-8").splitlines()[1]
+    # The same Python and platform as uv.lock (the App's Linux x86_64 closure).
+    assert "--python-version 3.11 --python-platform x86_64-manylinux_2_28" in UV_LOCK.read_text(encoding="utf-8").splitlines()[1]
     # pip refuses two different constraints for one package, so a narrow
     # uv.lock bump of a shared package must recompile the dev lock too.
     assert {"packaging", "typing-extensions"} <= shared
