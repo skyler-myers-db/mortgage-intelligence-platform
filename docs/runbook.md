@@ -448,7 +448,8 @@ That single invocation executes:
    postflight. This runs only after the live database binding has provisioned
    the App role and before any App source activation.
 7. The script publishes the per-release App source folder it staged
-   (`<bundle root>/app-src/<release id>`, create-only and byte-verified) and
+   (`/Workspace/Users/<deployer>/.bundle/mortgage-intelligence-platform/<target>/app-src/<release id>`,
+   a sibling of the bundle files root; create-only and byte-verified) and
    submits its generated, governed App deployment payload to promote that
    folder only after Lakebase migration and treatment constraints have
    converged (docs/deployment.md "Governed per-release App source"). Operators

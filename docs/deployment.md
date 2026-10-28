@@ -231,22 +231,25 @@ every sha256: the bytes the running App uses. It is not wired into
 `scripts/deploy.sh`.
 
 **Observed on the emergency path** (dev App, 2026-10-28). One deployment
-from a slim release folder uploaded with `databricks workspace import-dir`
-(the recipe below, not publish's SDK upload) was read back after it
-SUCCEEDED with this section's own `remote_files`, `compare_listing` and
-`verify_hashes`, against the manifest `stage --manifest-out` writes for the
-same commit and dist (its staged folder equals the uploaded one byte for
-byte, 1,177 files):
+from a slim folder that predates this section's naming (uploaded with
+`databricks workspace import-dir` into a legacy `app-src/<short sha>`
+folder, not published under a release id with publish's SDK upload) was
+read back after it SUCCEEDED with `remote_files`, `compare_listing` and
+`verify_hashes` (`tools/databricks/app_release_source.py`), against the
+manifest `stage --manifest-out` writes for the same commit and dist (its
+staged folder equals the uploaded one byte for byte, 1,177 files):
 
 - the workspace list API returned `/Users/...` paths for every object;
 - every object, both `.html` files included, was a FILE;
-- after the activation the release folder still held exactly the
-  manifest's paths, sizes and sha256, so that activation wrote nothing into
-  its `source_code_path` folder;
+- after the activation the folder still held exactly the manifest's paths,
+  sizes and sha256, so that activation wrote no file into its
+  `source_code_path` folder (a recursive listing never shows a directory,
+  so an added empty directory would not show);
 - the deployment's `/src/` snapshot held exactly the manifest's files, every
   sha256 equal;
 - the platform set `App.default_source_code_path` to that deployment's
-  release folder, which is why prune keeps the folder it names.
+  source folder; prune keeps the folder that path names when its name is a
+  release id.
 
 **Not yet observed live** (each fails closed): that publish's SDK upload
 with format AUTO keeps every closure file type, `.html` included, as a FILE
@@ -510,7 +513,7 @@ Every change to `uv.lock` or `requirements.in` ends with
 `python tools/requirements_digest.py --write`, which rewrites only that line.
 Both files are hashed with CRLF folded to LF, and `.gitattributes` checks all
 three out with `eol=lf`, so a `core.autocrlf` checkout computes the same
-digest. Three gates run `--check`'s comparison, because the repo has no
+digest. Four gates run `--check`'s comparison, because the repo has no
 required CI checks:
 
 - `tests/unit/test_requirements_digest.py` in CI, which fails with the remedy
@@ -520,7 +523,10 @@ required CI checks:
   with exit 2 before any workspace call;
 - `app_runtime_closure stage`, which recomputes the line from the blobs at
   `--ref` and refuses a ref whose `requirements.txt` digest line is stale or
-  missing.
+  missing;
+- `app_runtime_closure check --ref`, the same blob-side comparison in
+  `./scripts/deploy.sh` step 0, before the lease: a dry run reports
+  `app runtime closure: <state>`, a real run refuses with exit 2.
 
 pip, pip-audit and `tools/python_deps_check.py` all skip comment lines, so
 they read the file as before.
@@ -770,8 +776,9 @@ python tools/databricks/bundle_env.py plan -t dev
 
 3. Run the deployment script. It builds the frontend, provisions Genie if
    needed, validates/plans/deploys the direct bundle through the env-aware wrapper,
-   promotes the uploaded source to the running Databricks App, and runs
-   the refresh/smoke steps.
+   publishes the staged per-release App source folder and promotes it to the
+   running Databricks App ("Governed per-release App source"), and runs the
+   refresh/smoke steps.
 
 ```bash
 ./scripts/deploy.sh -t dev
@@ -2288,8 +2295,12 @@ checklist for the owner-triggered run:
 
 - the publish line counts at most 1,300 files, with the upload and verify
   wall time and no 429 at 8 workers;
-- every activation SUCCEEDED, its `[BUILD]` log shows a pip install and no
-  npm step, and the boot `dependency_lock_check` is ok;
+- every activation SUCCEEDED and no `[BUILD]` log shows an npm step; the
+  first activation's `[BUILD]` log shows a pip install (a first install has
+  no previous `requirements.txt`), later activations of the same release are
+  expected to print `Requirements have not changed. Skipping installation.`
+  ("App Python dependencies"), and the boot `dependency_lock_check` is ok
+  after each;
 - `active_deployment.source_code_path` ends in `/dev-ci/app-src/<release id>`
   and `deployment_artifacts.source_code_path` is a `/src/` snapshot;
 - `verify-deployment` matches the run's manifest. The runner's stage root is
