@@ -13,7 +13,9 @@ from pydantic import SecretStr, ValidationError
 from backend.config.settings import settings
 from backend.main import app
 from backend.schemas.common import validate_public_audit_identifier_or_none
+from backend.schemas.portfolio import project_public_campaign_json_field
 from backend.services.audit_store import get_audit_store
+from backend.services.campaign_targeting import campaign_treatment_fingerprint
 from backend.services.campaign_treatment import CampaignTreatmentCreateResult
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.genie_actions import (
@@ -1706,6 +1708,69 @@ def test_genie_create_draft_campaign_persists_full_cohort_criteria(
     assert criteria["result_filters"]["zips"] == ["60617", "60628"]
     assert criteria["result_filters"]["segment_codes"] == ["itm"]
     assert criteria["sql_hash"] == "abc123"
+
+
+class _DirectTrustedSqlDraftRepo(_DraftCampaignRepo):
+    """A trusted-SQL rescue turn: no Genie conversation, so ``conversation_id``
+    is ``""`` exactly as databricks_genie_direct mints it."""
+
+    def respond(
+        self,
+        question: str,
+        conversation_id: str | None = None,
+    ) -> GenieMessageResponse:
+        return super().respond(question, conversation_id).model_copy(
+            update={"conversation_id": ""}
+        )
+
+
+def test_genie_draft_from_a_trusted_sql_turn_stores_criteria_its_proof_can_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The writer stores ``conversation_id: ""`` for a conversation-less
+    turn; the public projection (which the decision proof fingerprints
+    against the contract hashed over these raw criteria) must return them
+    unchanged, or every trusted-SQL draft is unlistable and unapprovable."""
+    lakebase = _RecordingLakebase()
+    coordinator = _RecordingTreatmentCoordinator()
+    monkeypatch.setattr(
+        "backend.services.genie_actions._campaign_treatment_coordinator",
+        lambda _lakebase: coordinator,
+    )
+    prior_repo = app.dependency_overrides.get(get_genie_answer_repository)
+    prior_lakebase = app.dependency_overrides.get(get_lakebase_client)
+    app.dependency_overrides[get_genie_answer_repository] = _DirectTrustedSqlDraftRepo
+    app.dependency_overrides[get_lakebase_client] = lambda: lakebase
+    try:
+        payload = _confirmed_payload_for_action("create_draft_campaign")
+        assert payload["conversation_id"] == ""
+        res = client.post("/api/genie/actions", json=payload, headers=ACTOR_HEADERS)
+    finally:
+        if prior_repo is None:
+            app.dependency_overrides.pop(get_genie_answer_repository, None)
+        else:
+            app.dependency_overrides[get_genie_answer_repository] = prior_repo
+        if prior_lakebase is None:
+            app.dependency_overrides.pop(get_lakebase_client, None)
+        else:
+            app.dependency_overrides[get_lakebase_client] = prior_lakebase
+
+    assert res.status_code == 200
+    spec = coordinator.specs[0]
+    stored = json.loads(json.dumps(spec.criteria))  # type: ignore[attr-defined]
+    assert stored["source"] == "trusted_sql"
+    assert stored["conversation_id"] == ""
+    projected = project_public_campaign_json_field("criteria", json.loads(json.dumps(stored)))
+    assert projected == stored
+    contract = {
+        "json_contract_version": 1,
+        "suppression_policy": spec.suppression_policy,  # type: ignore[attr-defined]
+        "holdout": spec.holdout,  # type: ignore[attr-defined]
+        "household_dedup": spec.household_dedup.model_dump(mode="json"),  # type: ignore[attr-defined]
+    }
+    assert campaign_treatment_fingerprint(
+        criteria=projected, **contract
+    ) == campaign_treatment_fingerprint(criteria=spec.criteria, **contract)  # type: ignore[attr-defined]
 
 
 def test_genie_campaign_sql_keeps_action_audit_append_only() -> None:
