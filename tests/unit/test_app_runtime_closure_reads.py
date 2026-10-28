@@ -26,7 +26,12 @@ from pathlib import Path
 
 import pytest
 
-from tests.fixtures.app_runtime_literals import PathLiteral, sweep, top_level_names
+from tests.fixtures.app_runtime_literals import (
+    PathLiteral,
+    module_paths,
+    sweep,
+    top_level_names,
+)
 from tests.fixtures.app_runtime_reads import ScanResult, outside_reads, scan
 from tools.databricks import app_runtime_closure as closure
 
@@ -81,7 +86,7 @@ def real_scan() -> ScanResult:
 
 @pytest.fixture(scope="module")
 def real_literals(real_scan: ScanResult) -> list[PathLiteral]:
-    return sweep(real_scan.trees, top_level_names(ROOT))
+    return sweep(real_scan.trees, top_level_names(ROOT), modules=module_paths(ROOT))
 
 
 def test_every_backend_read_outside_backend_is_in_the_closure(real_scan: ScanResult) -> None:
@@ -144,7 +149,8 @@ def test_fake_reads_in_a_copy_of_the_real_backend_are_caught_by_both_nets(
     (tmp_path / "docs").mkdir()
     clean = scan(tmp_path)
     assert _uncovered(outside_reads(clean)) == {}  # the control: a clean copy
-    assert _unreviewed(sweep(clean.trees, top_level_names(tmp_path))) == []
+    modules = module_paths(tmp_path)
+    assert _unreviewed(sweep(clean.trees, top_level_names(tmp_path), modules=modules)) == []
     for name, source in FAKE_READERS.items():
         (tmp_path / "backend" / "services" / name).write_text(
             "from pathlib import Path\n\n" + source, encoding="utf-8"
@@ -154,5 +160,5 @@ def test_fake_reads_in_a_copy_of_the_real_backend_are_caught_by_both_nets(
 
     expected = {"docs/fake_constant.md", "docs/fake_import.md"}
     assert set(_uncovered(outside_reads(result))) == expected
-    literals = _unreviewed(sweep(result.trees, top_level_names(tmp_path)))
+    literals = _unreviewed(sweep(result.trees, top_level_names(tmp_path), modules=modules))
     assert {literal.key() for literal in literals} == expected

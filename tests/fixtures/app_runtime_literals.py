@@ -16,15 +16,36 @@ context:
 Docstrings and other bare string statements are skipped. A flagged literal is
 extended through the constant segments joined after it, so ``ROOT / "frontend"
 / "dist"`` is ``frontend/dist``; a non-constant tail, an f-string or a glob
-makes it a subtree (``docs/**``). tests/unit/test_app_runtime_closure_reads.py
-requires each one to be covered by the closure or listed, with a reason, in
-its reviewed allowlist.
+makes it a subtree (``docs/**``).
+
+It also flags, in any context, a dotted string that names a tracked
+first-party module outside the package (``"tools.x"``, ``"tools.x:main"``,
+``"tools.x.func"``), as passed to ``__import__``, ``find_spec``,
+``run_module`` or ``python -m``. The name is resolved against the tracked
+``.py`` files (``module_paths``): the longest prefix of at least two segments
+that is a module (``tools/x.py``) or a folder of modules (``tools/sub/**``) is
+the read. Resolving matters: event names such as ``"genie.run_query"`` share
+a top-level name with genie/, which holds no Python, so they can never be
+imports and are not flagged.
+
+tests/unit/test_app_runtime_closure_reads.py requires each flagged literal to
+be covered by the closure or listed, with a reason, in its reviewed allowlist.
+
+What neither this sweep nor the flow scan sees: a bare top-level name with no
+``/`` (``"docs"``) that reaches a path only through a first-party function
+parameter, a library loader (``StaticFiles(directory="docs")``,
+``jinja2.FileSystemLoader("docs")``) or any call this sweep does not know as a
+path context; a path built with ``str.format`` or ``%``; a path read from an
+environment variable with no default; and a module named by a computed
+string. Bare names are not flagged because they are everywhere in the backend
+as dependency labels (``"lakebase"``, ``"genie"``).
 """
 
 from __future__ import annotations
 
 import ast
 import posixpath
+import re
 import subprocess
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
@@ -34,6 +55,7 @@ _PATH_CALLS = frozenset({"Path", "PurePath", "PosixPath", "PurePosixPath", "open
                          "glob", "rglob"})
 _ENV_CALLS = frozenset({"environ.get", "getenv", "environ.setdefault"})
 _GLOB_CHARS = frozenset("*?[")
+_DOTTED = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$")
 
 
 @dataclass(frozen=True)
@@ -57,6 +79,39 @@ def top_level_names(root: Path) -> frozenset[str]:
         listing = ""
     names = {name.split("/")[0] for name in listing.split("\0") if name}
     return frozenset(names or (path.name for path in root.iterdir()))
+
+
+def module_paths(root: Path) -> dict[str, PathLiteral]:
+    """Each dotted first-party module or package name -> the read it names.
+
+    From the tracked ``.py`` files (git), else every ``.py`` under ``root``:
+    ``tools/a/b.py`` gives ``tools.a.b`` -> ``tools/a/b.py`` and ``tools.a`` ->
+    ``tools/a/**``. ``origin`` is left empty for the sweep to fill.
+    """
+
+    try:
+        listing = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z", "--", "*.py"],
+            capture_output=True, check=True,
+        ).stdout.decode("utf-8")
+        files = [name for name in listing.split("\0") if name]
+    except (OSError, subprocess.CalledProcessError):
+        files = []
+    if not files:
+        files = [path.relative_to(root).as_posix() for path in root.rglob("*.py")]
+    found: dict[str, PathLiteral] = {}
+    for name in sorted(files):
+        parts = name.removesuffix(".py").split("/")
+        if parts[-1] == "__init__":
+            parts = parts[:-1]
+        else:
+            if len(parts) >= 2:
+                found[".".join(parts)] = PathLiteral("", name, False)
+            parts = parts[:-1]
+        for depth in range(2, len(parts) + 1):
+            package = parts[:depth]
+            found.setdefault(".".join(package), PathLiteral("", "/".join(package), True))
+    return found
 
 
 def _dotted(node: ast.AST) -> str:
@@ -85,8 +140,10 @@ def _env_default(call: ast.Call, node: ast.AST) -> bool:
 
 
 class _Sweep:
-    def __init__(self, relfile: str, tree: ast.Module, top_levels: frozenset[str]) -> None:
+    def __init__(self, relfile: str, tree: ast.Module, top_levels: frozenset[str],
+                 modules: Mapping[str, PathLiteral]) -> None:
         self.file, self.tree, self.top_levels = relfile, tree, top_levels
+        self.modules = modules
         self.parents: dict[int, ast.AST] = {}
         for node in ast.walk(tree):
             for child in ast.iter_child_nodes(node):
@@ -133,10 +190,28 @@ class _Sweep:
                 continue
             return path, False
 
+    def _module(self, node: ast.AST, text: str) -> PathLiteral | None:
+        """The module read a dotted string names, if it names a tracked one."""
+
+        name = text.split(":", 1)[0]
+        if not _DOTTED.match(name) or name.split(".", 1)[0] not in self.top_levels:
+            return None
+        parts = name.split(".")
+        for depth in range(len(parts), 1, -1):
+            found = self.modules.get(".".join(parts[:depth]))
+            if found is not None:
+                return PathLiteral(f"{self.file}:{getattr(node, 'lineno', 0)}", found.path,
+                                   found.subtree)
+        return None
+
     def literals(self) -> Iterator[PathLiteral]:
         for node in ast.walk(self.tree):
             text, dynamic = self._text(node)
             if text is None:
+                continue
+            module = None if dynamic else self._module(node, text)
+            if module is not None:
+                yield module
                 continue
             text = text.removeprefix("./")
             if text.split("/")[0] not in self.top_levels or not self._in_path_context(node, text):
@@ -164,12 +239,17 @@ class _Sweep:
 
 
 def sweep(
-    trees: Mapping[str, ast.Module], top_levels: Iterable[str], package: str = "backend"
+    trees: Mapping[str, ast.Module], top_levels: Iterable[str], package: str = "backend",
+    modules: Mapping[str, PathLiteral] | None = None,
 ) -> list[PathLiteral]:
-    """Every path literal in ``trees`` under a top-level name other than ``package``."""
+    """Every path literal in ``trees`` under a top-level name other than ``package``.
+
+    ``modules`` (``module_paths``) resolves dotted module strings; without it
+    none is flagged.
+    """
 
     names = frozenset(top_levels) - {package}
     found: list[PathLiteral] = []
     for relfile, tree in sorted(trees.items()):
-        found.extend(_Sweep(relfile, tree, names).literals())
+        found.extend(_Sweep(relfile, tree, names, modules or {}).literals())
     return found

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.fixtures.app_runtime_literals import sweep, top_level_names
+from tests.fixtures.app_runtime_literals import module_paths, sweep, top_level_names
 from tests.fixtures.app_runtime_reads import ScanResult, outside_reads, scan
 from tools.databricks import app_runtime_closure as closure
 
@@ -32,6 +32,7 @@ def _tree(tmp_path: Path, source: str) -> Path:
         + textwrap.dedent(source).strip() + "\n",
         "backend/roots.py": ROOT_MODULE,
         "tools/fake_tool.py": "thing = 1\n",
+        "tools/pkg/__init__.py": "",
         "jobs/fake_job.py": JOB,
         "docs/README.md": "x\n",
     }
@@ -49,11 +50,13 @@ def _flow(result: ScanResult) -> set[str]:
 
 
 def _literals(root: Path, result: ScanResult) -> set[str]:
-    return {literal.key() for literal in sweep(result.trees, top_level_names(root))}
+    literals = sweep(result.trees, top_level_names(root), modules=module_paths(root))
+    return {literal.key() for literal in literals}
 
 
-# shape -> (source, what the flow scan reports, what the literal sweep reports)
-SHAPES: dict[str, tuple[str, str, str | None]] = {
+# shape -> (source, what the flow scan reports, what the literal sweep reports);
+# None: that net does not see the shape (at least one of the two must).
+SHAPES: dict[str, tuple[str, str | None, str | None]] = {
     # Shapes the backend uses today.
     "parents_chain": (
         'X = (Path(__file__).resolve().parents[2] / "docs" / "a.md").read_text()',
@@ -95,7 +98,30 @@ SHAPES: dict[str, tuple[str, str, str | None]] = {
     "tools_import": ("from tools.fake_tool import thing", "tools/fake_tool.py", None),
     "import_module": (
         'import importlib\nX = importlib.import_module("tools.fake_tool")',
-        "tools/fake_tool.py", None),
+        "tools/fake_tool.py", "tools/fake_tool.py"),
+    # Dotted first-party module strings: the flow scan loads the module a
+    # literal names; the sweep flags the string wherever it sits.
+    "dunder_import": (
+        'X = __import__("tools.fake_tool")', "tools/fake_tool.py", "tools/fake_tool.py"),
+    "find_spec": (
+        'import importlib.util\nX = importlib.util.find_spec("tools.fake_tool")',
+        "tools/fake_tool.py", "tools/fake_tool.py"),
+    "run_module": (
+        'import runpy\nX = runpy.run_module("tools.fake_tool")',
+        "tools/fake_tool.py", "tools/fake_tool.py"),
+    "python_dash_m": (
+        'import sys\nX = subprocess.run([sys.executable, "-m", "tools.fake_tool"])',
+        None, "tools/fake_tool.py"),
+    "module_name_held_in_a_constant": ("""
+        import importlib
+
+        MODULE = "tools.fake_tool"
+
+        def load():
+            return importlib.import_module(MODULE)
+        """, None, "tools/fake_tool.py"),
+    "entry_point_string": ('X = "tools.fake_tool:main"', None, "tools/fake_tool.py"),
+    "package_string": ('X = "tools.pkg.inner"', None, "tools/pkg/**"),
     "transitive": ("from jobs.fake_job import run", "docs/job.md", "docs/job.md"),
     "escape_above_root": (
         'X = Path(__file__).resolve().parents[3] / "outside.txt"', "../outside.txt", None),
@@ -241,7 +267,9 @@ def test_each_net_catches_each_read_shape(tmp_path: Path, shape: str) -> None:
     result = scan(root)
 
     assert result.unhandled_file_uses == []
-    assert flow in _flow(result)
+    assert flow is not None or literal is not None
+    if flow is not None:
+        assert flow in _flow(result)
     if literal is not None:
         assert literal in _literals(root, result)
 
@@ -325,6 +353,21 @@ def test_a_path_value_inside_backend_may_escape(tmp_path: Path) -> None:
 
     assert result.unhandled_file_uses == []
     assert outside_reads(result) == {}
+
+
+def test_dotted_strings_that_name_no_tracked_module_are_not_literals(tmp_path: Path) -> None:
+    # The control for the dotted-module rule: event names under a top-level
+    # name without that module (genie/ holds no Python here or in the repo),
+    # a missing module, the package's own modules and a dotted file name.
+    source = """
+        EVENTS = ("genie.run_query", "docs.readme", "tools.missing_module", "uv.lock")
+        OWN = "backend.roots"
+        """
+    root = _tree(tmp_path, source)
+    (root / "genie").mkdir()
+    (root / "genie" / "sample_questions.md").write_text("- q\n", encoding="utf-8")
+
+    assert _literals(root, scan(root)) == set()
 
 
 def test_doc_strings_and_bare_strings_are_not_literals(tmp_path: Path) -> None:

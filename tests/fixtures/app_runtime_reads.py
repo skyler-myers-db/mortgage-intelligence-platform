@@ -101,6 +101,10 @@ def _dotted_name(relfile: str) -> str:
     return relfile.removesuffix(".py").removesuffix("/__init__").replace("/", ".")
 
 
+# Calls that load the module their literal first argument names.
+MODULE_LOADERS = frozenset({"import_module", "__import__", "find_spec", "run_module"})
+
+
 def _imported_names(tree: ast.Module) -> Iterator[tuple[str, int]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -112,7 +116,7 @@ def _imported_names(tree: ast.Module) -> Iterator[tuple[str, int]]:
             callee = node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id
             first = node.args[0] if node.args else None
             literal = first.value if isinstance(first, ast.Constant) else None
-            if callee == "import_module" and isinstance(literal, str):
+            if callee in MODULE_LOADERS and isinstance(literal, str):
                 yield literal, node.lineno
 
 
