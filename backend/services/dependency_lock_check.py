@@ -20,8 +20,8 @@ requirements.in (or ``stale``, ``missing``, ``unreadable``), and an outcome:
 The ``remedy`` follows the cause. A stale or missing digest means the build had
 no reason to reinstall: restamp and redeploy. A current digest with drift means
 the build skipped or failed the reinstall anyway, so restamping changes
-nothing: read the deployment build log, then the marker-false fallback in
-docs/deployment.md.
+nothing: read the deployment build log, then the digest-named ``-c`` fallback
+in docs/deployment.md.
 
 Which pins apply follows tools/python_deps_check.py, the deploy preflight: walk
 the installed closure of requirements.in, evaluating every requirement's
@@ -68,7 +68,7 @@ REMEDY_RESTAMP = "python tools/requirements_digest.py --write, commit, then rede
 REMEDY_REINSTALL = (
     "the deps-digest line is current, so the Apps build skipped or failed the reinstall: "
     "read the deployment build log, then docs/deployment.md (App Python dependencies) "
-    "for the marker-false fallback"
+    "for the digest-named -c fallback"
 )
 REMEDY_PYTHON = "the App runtime Python is not uv.lock's --python-version: recompile uv.lock"
 REMEDY_SOURCE = (

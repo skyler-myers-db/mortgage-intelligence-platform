@@ -300,14 +300,21 @@ Whether a comment-only change defeats the skip is inferred from how the skip
 behaved (it is keyed to `requirements.txt`, and that file never
 changed); it has not yet been observed, so confirm it on the next deploy that
 carries a digest change. If the build still skips (for example because it
-compares the file with comments stripped), the fallback is a requirement line
-that pip ignores through a false marker but that is not a comment, such as
-`mip-deps-digest==0+<hex>; python_version < "3"`. It is not implemented,
-because it is not yet shown to be needed and it touches every reader:
-`tools/python_deps_check.py` rejects any line that is not `-c`/`-r`, the
-digest tool would have to write it, and `pip-audit -r requirements.txt
---strict` must be shown to skip a marker-false requirement that does not
-exist on PyPI.
+compares the file with comments stripped), the fallback is an include line
+whose path carries the digest, so the parsed file changes even with comments
+removed: commit the lock under a digest-named path and point the constraint
+at it (`-c locks/uv-<digest>.lock`). That line names no package. A
+marker-false requirement such as `mip-deps-digest==0+<hex>; python_version <
+"3"` would also change the parsed file, but it puts a package name that is
+not on PyPI into `requirements.txt`, which invites name squatting and
+dependency confusion and may be looked up by `pip-audit` or the deps report,
+so it is not the fallback. The `-c` carrier is not implemented, because it
+is not yet shown to be needed and it touches every reader:
+`backend/services/dependency_lock_check.py` reads `uv.lock` by name,
+`tests/unit/test_supply_chain_licenses.py` asserts `-c uv.lock`, the digest
+tool would have to write the lock copy and the line, and superseded
+digest-named locks would need pruning. `tools/python_deps_check.py` already
+follows whatever path the `-c` line names.
 
 ## Databricks App
 
