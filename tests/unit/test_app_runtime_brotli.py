@@ -11,6 +11,7 @@ cap.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -143,3 +144,12 @@ def test_the_checker_is_node_on_path_or_none_even_with_the_brotli_module(
 
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     assert brotli_verifier() is None
+
+
+@pytest.mark.skipif(os.environ.get("CI") != "true", reason="only CI must run the node checks")
+def test_ci_has_node_so_the_node_backed_checks_run() -> None:
+    # Every node-backed test here and in test_app_runtime_closure_stage_dist.py
+    # skips without node. node is the only production .br checker, so in CI a
+    # missing node must fail loudly instead of skipping them all (ci.yml's
+    # backend job installs it with actions/setup-node).
+    assert shutil.which("node") is not None, "node is not on PATH in CI"

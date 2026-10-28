@@ -80,7 +80,9 @@ jobs:
       - uses: actions/setup-node@v6
         # For tests/unit/test_e2e_fixture_contract.py (audit quality-09): the
         # e2e fixture exporter runs on bare Node (>= 22.18, type stripping),
-        # with no npm ci and no node_modules.
+        # with no npm ci and no node_modules. The .br checks of
+        # tests/unit/test_app_runtime_brotli.py need node too, and fail under
+        # CI=true when it is missing.
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install dependencies
