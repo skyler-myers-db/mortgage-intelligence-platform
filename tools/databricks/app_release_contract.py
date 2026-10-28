@@ -51,6 +51,12 @@ _SEGMENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 _MANIFEST_KEYS = frozenset({"version", "commit", "release_id", "files"})
 _ENTRY_KEYS = frozenset({"path", "size", "sha256"})
 _CHUNK = 1 << 20
+NOTEBOOK_SUFFIXES = (".ipynb", ".dbc", ".rmd")
+NOTEBOOK_HEADERS = (
+    "# databricks notebook source",
+    "-- databricks notebook source",
+    "// databricks notebook source",
+)
 
 
 class ReleaseContractError(RuntimeError):
@@ -198,6 +204,23 @@ def check_relpath(path: object) -> str:
     ):
         raise ReleaseContractError(f"manifest path is not canonical: {path!r}")
     return path
+
+
+def notebook_shape(relpath: str, data: bytes) -> str | None:
+    """Why a workspace AUTO import could make this file a notebook, else None.
+
+    AUTO imports a notebook from its extension or its first line, and drops
+    the extension (tools/databricks/app_release_source.py uploads with AUTO,
+    the repo's workspace-file convention). ``.Rmd`` is refused too, although
+    no closure file has it, because AUTO's handling of it is unobserved.
+    """
+    if relpath.casefold().endswith(NOTEBOOK_SUFFIXES):
+        return f"{relpath} (a notebook file type)"
+    head = data.lstrip().removeprefix(b"\xef\xbb\xbf").lstrip()[:256]
+    first = head.decode("utf-8", "replace").split("\n", 1)[0].strip().casefold()
+    if first.startswith(NOTEBOOK_HEADERS):
+        return f"{relpath} (a Databricks notebook header)"
+    return None
 
 
 def _check_entries(entries: Iterable[ManifestEntry]) -> tuple[ManifestEntry, ...]:

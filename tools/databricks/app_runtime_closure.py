@@ -37,7 +37,13 @@ holding only this closure is about 1,200 files (about 970 when the .br files
 are left out because no ``node`` is on PATH to check them).
 
   python -m tools.databricks.app_runtime_closure list [--files [--ref REF]]
-  python -m tools.databricks.app_runtime_closure stage --ref REF --dist DIR --out DIR
+  python -m tools.databricks.app_runtime_closure check --ref REF
+  python -m tools.databricks.app_runtime_closure stage --ref REF --dist DIR --out DIR \
+      [--manifest-out FILE] [--require-brotli-check]
+
+``check`` runs every git-side refusal below plus the tracked-file allowance,
+with no dist and no Databricks call (deploy.sh preflight runs it on the
+deploy commit, so an unstageable commit is refused before the lease).
 
 ``stage`` builds the folder from ``git archive REF`` (tracked files only, so
 untracked optional entries are skipped and reported) plus the given prebuilt
@@ -50,7 +56,10 @@ the in-process ``brotli`` module, which has no output cap); one that fails is
 refused, and without ``node`` every ``.br`` is left out and reported. Before
 it writes anything, it refuses junk files, a hidden path (a segment starting
 with ``.``), a symlink or submodule tracked at
-REF, a missing required entry, an ``--out`` inside ``--dist`` or around it
+REF, a tracked file a workspace AUTO import would turn into a notebook
+(``.ipynb``, ``.dbc``, ``.Rmd`` or a ``Databricks notebook source`` first
+line; tools/databricks/app_release_contract.notebook_shape), a missing
+required entry, an ``--out`` inside ``--dist`` or around it
 (compared by file identity, so a symlink, ``..``, another letter case or a
 firmlink cannot hide it), a requirements.txt whose deps-digest line does
 not match uv.lock and requirements.in at REF (the Apps build can then skip
@@ -59,25 +68,32 @@ confirmed) and a non-empty ``--out``. It then copies the dist into a
 temporary sibling of ``--out``, reviews that copy (the copy is what ships),
 refuses a folder over its file budgets, adds the tracked files and renames
 the folder into place, so any refusal or failure leaves ``--out`` as it was.
-It never calls Databricks.
+``--manifest-out`` (a new file outside ``--out`` and ``--dist``) records the
+staged files, their sizes and sha256 and the release id
+(tools/databricks/app_release_contract.py) after checking that they are
+exactly the tracked files plus the reviewed dist. ``--require-brotli-check``
+refuses before writing anything when no ``.br`` checker is on PATH, so a
+governed run never quietly ships gzip only. It never calls Databricks.
 """
 
 from __future__ import annotations
 
 import argparse
 import io
+import os
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from tools import requirements_digest
-from tools.databricks.app_runtime_brotli import brotli_verifier
+from tools.databricks import app_release_contract as release
+from tools.databricks.app_runtime_brotli import BrotliVerifier, brotli_verifier
 from tools.databricks.app_runtime_dist import DistReview, review_dist, snapshot
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -171,6 +187,7 @@ class StageResult:
     unchecked_brotli: tuple[str, ...] = ()
     verified_brotli: tuple[str, ...] = ()
     brotli_method: str = ""
+    manifest: release.Manifest | None = None
 
     @property
     def total(self) -> int:
@@ -282,7 +299,9 @@ class _Tracked:
     public: tuple[str, ...]  # frontend/public files tracked at the commit
 
 
-def _copy_dist(repo: Path, tracked: _Tracked, dist: Path, copy: Path) -> DistReview:
+def _copy_dist(
+    repo: Path, tracked: _Tracked, dist: Path, copy: Path, brotli: BrotliVerifier | None
+) -> DistReview:
     """Copy ``dist`` to ``copy``, review the copy, and drop what is left out.
 
     Returns the review: the copy's files to stage, the ``.br`` files checked
@@ -293,7 +312,7 @@ def _copy_dist(repo: Path, tracked: _Tracked, dist: Path, copy: Path) -> DistRev
     problems = snapshot(dist, copy)
     blobs = _blobs(repo, tracked.commit, tracked.public)
     public = {name.removeprefix(f"{PUBLIC_PATH}/"): blobs[name] for name in tracked.public}
-    review = review_dist(copy, public, brotli=brotli_verifier())
+    review = review_dist(copy, public, brotli=brotli)
     problems += review.problems
     if problems:
         shown = "; ".join(problems[:5])
@@ -306,12 +325,16 @@ def _copy_dist(repo: Path, tracked: _Tracked, dist: Path, copy: Path) -> DistRev
     return review
 
 
-def _check_budgets(plan: StageResult) -> None:
-    if len(plan.tracked) > MAX_TRACKED_FILES:
+def _check_tracked_budget(tracked: int) -> None:
+    if tracked > MAX_TRACKED_FILES:
         raise StageError(
-            f"{len(plan.tracked)} tracked closure files exceed the {MAX_TRACKED_FILES}-file "
+            f"{tracked} tracked closure files exceed the {MAX_TRACKED_FILES}-file "
             "allowance: trim the closure or re-measure the start window"
         )
+
+
+def _check_budgets(plan: StageResult) -> None:
+    _check_tracked_budget(len(plan.tracked))
     if plan.total > MAX_STAGED_FILES:
         raise StageError(f"{plan.total} files exceed the {MAX_STAGED_FILES}-file budget")
 
@@ -346,8 +369,15 @@ def _plan(repo: Path, ref: str) -> _Tracked:
             f"hidden path tracked at {ref} (a dotfile never belongs in the App source): "
             f"{', '.join(hidden[:5])}"
         )
+    blobs = _blobs(repo, commit, tracked)
+    notebooks = [shape for name in tracked if (shape := release.notebook_shape(name, blobs[name]))]
+    if notebooks:
+        raise StageError(
+            f"tracked at {ref}, a workspace AUTO import would make a notebook of: "
+            f"{', '.join(notebooks[:5])}"
+        )
     digest_inputs = (requirements_digest.REQUIREMENTS_TXT, *requirements_digest.DIGESTED_FILES)
-    _check_digest(_blobs(repo, commit, digest_inputs), ref)
+    _check_digest({name: blobs[name] for name in digest_inputs}, ref)
     pathspecs = tuple(path for path, names in found.items() if names)
     return _Tracked(commit, tuple(tracked), tuple(skipped), pathspecs, tuple(public))
 
@@ -373,8 +403,10 @@ def _extract(archive: bytes, out: Path, expected: set[str]) -> None:
         raise StageError("git archive did not produce the planned file set")
 
 
-def _write(repo: Path, tracked: _Tracked, dist: Path, work: Path) -> StageResult:
-    review = _copy_dist(repo, tracked, dist, work / DIST_PATH)
+def _write(
+    repo: Path, tracked: _Tracked, dist: Path, work: Path, brotli: BrotliVerifier | None
+) -> StageResult:
+    review = _copy_dist(repo, tracked, dist, work / DIST_PATH, brotli)
     plan = StageResult(
         tracked.commit, tracked.files, review.files, tracked.skipped, review.omitted,
         review.verified, review.brotli_method,
@@ -420,30 +452,99 @@ def _check_apart(dist: Path, out: Path) -> None:
         raise StageError(f"--dist {dist} is inside --out {out}; stage into a separate folder")
 
 
-def stage(*, repo: Path, ref: str, dist: Path, out: Path) -> StageResult:
+def _check_manifest_out(manifest_out: Path, *, out: Path, dist: Path) -> None:
+    """A new file outside ``--out`` (it would ship) and ``--dist``."""
+
+    if os.path.lexists(manifest_out):
+        raise StageError(f"--manifest-out {manifest_out} already exists")
+    try:
+        target = manifest_out.resolve()
+        folders = (out.resolve(), dist.resolve())
+    except (OSError, RuntimeError) as exc:
+        raise StageError(f"cannot resolve --manifest-out {manifest_out}: {exc}") from exc
+    if any(folder == target or folder in target.parents for folder in folders) or any(
+        _contains(folder, manifest_out.parent) for folder in (out, dist)
+    ):
+        raise StageError(
+            f"--manifest-out {manifest_out} is inside --out or --dist; write it beside them"
+        )
+
+
+def _manifest(work: Path, plan: StageResult) -> list[release.ManifestEntry]:
+    """The staged folder's entries, which must be exactly the tracked files plus the dist."""
+
+    try:
+        entries = release.manifest_entries(work)
+    except release.ReleaseContractError as exc:
+        raise StageError(f"the staged folder cannot be manifested: {exc}") from exc
+    expected = set(plan.tracked) | {f"{DIST_PATH}/{name}" for name in plan.dist}
+    if {entry.path for entry in entries} != expected:
+        raise StageError("the staged folder is not exactly the tracked files plus the dist")
+    return list(entries)
+
+
+def stage(
+    *,
+    repo: Path,
+    ref: str,
+    dist: Path,
+    out: Path,
+    manifest_out: Path | None = None,
+    require_brotli_check: bool = False,
+) -> StageResult:
     """Write the closure at ``ref`` plus ``dist`` into the empty ``out``.
 
     ``out`` and ``dist`` must not contain each other. The git side is checked
     before anything is written. The dist is copied into a temporary sibling of
     ``out`` and that copy is reviewed and shipped, so the review and the
     shipped bytes cannot diverge; any refusal removes the temporary folder and
-    leaves ``out`` as it was.
+    leaves ``out`` as it was. ``manifest_out`` is written beside the folder,
+    from the reviewed copy, after the rename.
     """
 
     _check_apart(dist, out)
+    if manifest_out is not None:
+        _check_manifest_out(manifest_out, out=out, dist=dist)
+    brotli = brotli_verifier()
+    if require_brotli_check and brotli is None:
+        raise StageError(
+            "--require-brotli-check: no .br checker (node) is on PATH, so the .br files "
+            "cannot be checked; install the governed Node or drop the flag"
+        )
     tracked = _plan(repo, ref)
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise StageError(f"--out {out} exists and is not an empty directory")
     out.parent.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix=f".{out.name}.staging-", dir=out.parent))
+    pending: Path | None = None
     try:
-        plan = _write(repo, tracked, dist, work)
+        plan = _write(repo, tracked, dist, work, brotli)
+        if require_brotli_check and plan.unchecked_brotli:
+            raise StageError("--require-brotli-check: a .br file was left out unchecked")
+        if manifest_out is not None:
+            manifest_out.parent.mkdir(parents=True, exist_ok=True)
+            pending = manifest_out.with_name(f".{manifest_out.name}.pending-{os.getpid()}")
+            written = release.write_manifest(pending, commit=plan.commit, entries=_manifest(work, plan))
+            plan = replace(plan, manifest=written)
         # POSIX rename replaces an empty directory and fails on a non-empty one.
         work.rename(out)
+        if pending is not None and manifest_out is not None:
+            pending.rename(manifest_out)
+            pending = None
     except BaseException:
         shutil.rmtree(work, ignore_errors=True)
+        if pending is not None:
+            pending.unlink(missing_ok=True)
         raise
     return plan
+
+
+def check(*, repo: Path, ref: str) -> tuple[str, int]:
+    """The git side of ``stage`` plus the tracked-file allowance: (commit, tracked files)."""
+
+    tracked = _plan(repo, ref)
+    _check_tracked_budget(len(tracked.files))
+    return tracked.commit, len(tracked.files)
 
 
 def _list(args: argparse.Namespace) -> int:
@@ -458,8 +559,20 @@ def _list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _check(args: argparse.Namespace) -> int:
+    commit, count = check(repo=args.repo, ref=args.ref)
+    print(
+        f"closure at {args.ref} ({commit[:8]}) is stageable: {count} tracked files within "
+        f"the {MAX_TRACKED_FILES}-file allowance"
+    )
+    return 0
+
+
 def _stage(args: argparse.Namespace) -> int:
-    result = stage(repo=args.repo, ref=args.ref, dist=args.dist, out=args.out)
+    result = stage(
+        repo=args.repo, ref=args.ref, dist=args.dist, out=args.out,
+        manifest_out=args.manifest_out, require_brotli_check=args.require_brotli_check,
+    )
     print(
         f"staged {result.total} files into {args.out}: {len(result.tracked)} from "
         f"{args.ref} ({result.commit[:8]}) + {len(result.dist)} from {args.dist}"
@@ -476,6 +589,8 @@ def _stage(args: argparse.Namespace) -> int:
             f"left out {len(result.unchecked_brotli)} .br files: without node on PATH they "
             "cannot be checked against their source, so the App serves their .gz"
         )
+    if result.manifest is not None:
+        print(f"manifest {args.manifest_out}: release {result.manifest.release_id}")
     return 0
 
 
@@ -486,13 +601,20 @@ def main(argv: list[str] | None = None) -> int:
     listing = commands.add_parser("list", help="print the closure entries (or files)")
     listing.add_argument("--files", action="store_true", help="tracked files at --ref")
     listing.add_argument("--ref", default="HEAD")
+    checking = commands.add_parser("check", help="the git-side refusals, without a dist")
+    checking.add_argument("--ref", required=True)
     staging = commands.add_parser("stage", help="build a slim per-release source folder")
     staging.add_argument("--ref", required=True)
     staging.add_argument("--dist", type=Path, required=True, help="a built frontend/dist")
     staging.add_argument("--out", type=Path, required=True, help="a new or empty directory")
+    staging.add_argument("--manifest-out", type=Path, help="write the release manifest here")
+    staging.add_argument(
+        "--require-brotli-check", action="store_true", help="refuse when no .br checker is on PATH"
+    )
     args = parser.parse_args(argv)
+    commands_by_name = {"list": _list, "check": _check, "stage": _stage}
     try:
-        return _list(args) if args.command == "list" else _stage(args)
+        return commands_by_name[args.command](args)
     except StageError as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2

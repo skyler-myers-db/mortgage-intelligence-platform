@@ -332,3 +332,29 @@ def test_the_cli_prints_the_id_and_exits_2_on_any_refusal(
     path.write_text(path.read_text(encoding="utf-8").replace('"size": 6', '"size": 7'), encoding="utf-8")
     assert contract.main([*args, COMMIT]) == 2
     assert "does not recompute" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("relpath", "data", "notebook"),
+    [
+        ("a.ipynb", b"{}", True),
+        ("a.IPYNB", b"{}", True),
+        ("a.dbc", b"", True),
+        ("a.Rmd", b"", True),
+        ("a.py", b"# Databricks notebook source\n", True),
+        ("a.sql", b"-- Databricks notebook source\r\nselect 1", True),
+        ("a.scala", b"// Databricks notebook source", True),
+        ("a.r", b"\xef\xbb\xbf# databricks notebook source\n", True),
+        ("a.py", b"\n\n   # Databricks notebook source\n", True),
+        ("a.txt", b"# Databricks notebook source\n", True),
+        ("a.py", b"X = 1\n# Databricks notebook source\n", False),
+        ("a.py", b"# Databricks notebooks are elsewhere\n", False),
+        ("a.html", b"<html></html>", False),
+        ("a.js.br", b"\x8b\x00\x80\xff", False),
+        ("a.json", b"", False),
+    ],
+)
+def test_notebook_shape_flags_what_auto_import_could_make_a_notebook(
+    relpath: str, data: bytes, notebook: bool
+) -> None:
+    assert (contract.notebook_shape(relpath, data) is not None) is notebook
