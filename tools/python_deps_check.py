@@ -5,11 +5,14 @@ scripts/deploy.sh step 0 asks this before any workspace call
 (full_deploy_readiness.md 3.12: a drifted mlflow, databricks-sdk or
 databricks-sql-connector registers and serves a stack CI never proved).
 requirements.txt is ``-c uv.lock`` plus ``-r requirements.in``; uv.lock pins
-the whole resolved closure for one Python minor (its ``--python-version``
-header). The check walks the installed closure of requirements.in, with each
-package's markers and extras evaluated for this interpreter as pip evaluates
-them, and compares every reached package with its uv.lock pin. A lock entry
-that this interpreter never needs (a marker excludes it) is not required.
+the whole resolved closure for one Python minor and the App's platform (its
+``--python-version`` and ``--python-platform x86_64-manylinux_2_28`` header;
+docs/deployment.md, "App Python dependencies: the lock's platform"). On Apple
+Silicon that closure is the lock minus greenlet. The check walks the installed
+closure of requirements.in, with each package's markers and extras evaluated
+for this interpreter as pip evaluates them, and compares every reached package
+with its uv.lock pin. A lock entry that this interpreter never needs (a marker
+excludes it) is not required.
 
 Exit codes are distinct so the caller never mistakes an error for drift:
   0   pinned: the interpreter is the lock's Python minor, every requirement
