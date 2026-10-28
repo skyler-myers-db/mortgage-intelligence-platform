@@ -44,7 +44,7 @@ The app uses live Cotality public-record, lien, ownership, valuation, MLS listin
 cp .env.example .env.local
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt  # the App's requirements.txt plus pytest, ruff, mypy
 npm --prefix frontend install
 npm --prefix frontend run dev
 uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000

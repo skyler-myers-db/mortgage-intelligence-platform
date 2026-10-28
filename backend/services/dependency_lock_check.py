@@ -30,15 +30,17 @@ in docs/deployment.md.
 Which pins apply follows tools/python_deps_check.py, the deploy preflight: walk
 the installed closure of requirements.in, evaluating every requirement's
 markers and extras for this interpreter. A lock entry that nothing reached
-needs is not applicable, never drift. tomli is the standing example: uv.lock
-pins it for coverage, whose requirement holds only below Python 3.11.0a6. A pin
-line carrying its own marker (a universal lock) counts only where the marker
-holds, and its package is named not applicable only when none of its lines
-does. A reached package uv.lock does not pin is unpinned: named, never drift.
-uv.lock is compiled for the App's Linux x86_64 platform, so on the App nothing
-is unpinned, and on Apple Silicon greenlet is not applicable (sqlalchemy
-requires it only where ``platform_machine`` is x86_64, aarch64, ppc64le, amd64
-or win32, never arm64).
+needs is not applicable, never drift: for example a pin whose only requirer
+is marker-false on this Python. A pin line carrying its own marker (a
+universal lock) counts only where the marker holds, and its package is named
+not applicable only when none of its lines does. A reached package uv.lock
+does not pin is unpinned: named, never drift. uv.lock is compiled for the
+App's Linux x86_64 platform, so on the App nothing is unpinned, and on Apple
+Silicon greenlet is not applicable (sqlalchemy requires it only where
+``platform_machine`` is x86_64, aarch64, ppc64le, amd64 or win32, never
+arm64). An installed package that requirements.in no longer reaches is never
+read, so the wheels a removed requirement left in the persisted environment
+do not count as drift.
 
 Local reads only: three bounded files plus importlib.metadata. No network, and
 it never raises. The lifespan runs it in a worker thread, off the event loop.

@@ -32,8 +32,8 @@ echo "  target:     ${TARGET}"
 echo "  dry-run:    ${DRY_RUN}"
 
 # >>> deploy interpreter pins: check >>>
-# A drifted mlflow, databricks-sdk or databricks-sql-connector registers and
-# serves a stack CI never proved (full_deploy_readiness.md 3.12), so the
+# A drifted mlflow or databricks-sdk registers and serves a stack CI never
+# proved (full_deploy_readiness.md 3.12), so the
 # interpreter's installed closure must equal the requirements.txt pins
 # (uv.lock). tools/python_deps_check.py exits 0 pinned, 10 drift (it prints the
 # remedy); anything else is a hard error. A dry run reports and continues; a

@@ -1,9 +1,10 @@
-"""Advisories: npm audit over the lock and pip-audit over uv.lock.
+"""Advisories: npm audit over the lock and pip-audit over uv.lock and requirements-dev.lock.
 
 ``npm --prefix frontend audit --package-lock-only --json`` needs no
 node_modules; high and critical are the gate (CI's ``--audit-level=high``),
-moderate and low are informational. ``pip-audit -r uv.lock --no-deps
---disable-pip --strict -f json`` is the documented lock form; every finding
+moderate and low are informational. ``pip-audit -r uv.lock -r
+requirements-dev.lock --no-deps --disable-pip --strict -f json`` is the
+documented lock form (a package both locks pin is audited once); every finding
 is marked ignored or unignored against the ``--ignore-vuln`` ids of ci.yml's
 ``run: pip-audit`` line, and an unignored one is the gate. Only ids,
 packages, versions and severities leave this module: never a title, a
@@ -48,7 +49,7 @@ def run_npm_audit() -> object:
 
 
 def run_pip_audit() -> object:
-    argv = ["pip-audit", "-r", "uv.lock", "--no-deps", "--disable-pip", "--strict", "-f", "json"]
+    argv = ["pip-audit", "-r", "uv.lock", "-r", "requirements-dev.lock", "--no-deps", "--disable-pip", "--strict", "-f", "json"]
     return _json_command(argv, "pip-audit")
 
 

@@ -259,7 +259,7 @@ def test_the_fixture_job_checks_the_built_dist_with_the_require_flag() -> None:
     steps = _jobs()[PERF_JOB]["steps"]
     build = _step_index(steps, "npm --prefix frontend run build")
     python = _step_index(steps, "actions/setup-python@")
-    install = _step_index(steps, "pip install -r requirements.txt")
+    install = _step_index(steps, "pip install -r requirements-dev.txt")
     check = _step_index(steps, BUILD_ARTIFACTS_TEST)
 
     assert build < python < install < check
