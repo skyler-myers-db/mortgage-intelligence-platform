@@ -41,6 +41,27 @@ SINK_ATTRS = frozenset({
 })
 SUBTREE_ATTRS = frozenset({"walk"})
 GLOB_CHARS = frozenset("*?[")
+# Roots the scan does not follow. Each names a file or folder of the running
+# App without going through a bare ``__file__`` or the cwd: a module's own
+# path (``backend.__file__``, ``sys.modules[__name__].__file__``,
+# ``__spec__.origin``, ``inspect.getfile``), the script path (``sys.argv``),
+# an import root (``sys.path``) or a package's resource root
+# (``importlib.resources.files``). A reference to one is reported as
+# unhandled, as a bare ``__file__`` outside the path constructors is.
+ROOT_DUNDERS = frozenset({"__file__", "__spec__", "__loader__", "__path__", "__cached__"})
+ROOT_REFS = frozenset({
+    "sys.argv", "sys.path", "os.curdir",
+    "inspect.getfile", "inspect.getsourcefile", "inspect.getabsfile",
+    *(f"importlib.resources.{name}" for name in (
+        "files", "as_file", "path", "contents", "is_resource", "read_text", "read_binary",
+        "open_text", "open_binary",
+    )),
+    "importlib_resources.files",
+    "pkgutil.get_data",
+    *(f"pkg_resources.{name}" for name in (
+        "resource_filename", "resource_string", "resource_stream", "resource_listdir",
+    )),
+})
 
 
 

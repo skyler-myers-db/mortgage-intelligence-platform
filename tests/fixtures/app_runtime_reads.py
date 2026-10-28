@@ -30,6 +30,14 @@ loops. Each value ends at a consumer, which decides what is read:
   calling a path, ``__file__`` outside the path constructors) is reported as
   unhandled, and its subtree counts as read.
 
+A root it does not follow is reported as unhandled wherever it is referenced
+(app_runtime_paths.ROOT_DUNDERS and ROOT_REFS): a module attribute
+``__file__`` (``backend.__file__``, ``sys.modules[__name__].__file__``),
+``__spec__``, ``__loader__``, ``__path__``, ``__cached__``,
+``inspect.getfile`` and its siblings, ``sys.argv``, ``sys.path``,
+``os.curdir``, and the ``importlib.resources``, ``pkgutil.get_data`` and
+``pkg_resources`` data helpers.
+
 A path value bound to a name nothing loads counts as read where it is bound.
 
 Known residuals, each a shape no backend module uses today: a first-party
@@ -57,6 +65,8 @@ from tests.fixtures.app_runtime_flow import ModuleFlow, World
 from tests.fixtures.app_runtime_paths import (
     DIR_CALLS,
     OPEN_CALLS,
+    ROOT_DUNDERS,
+    ROOT_REFS,
     Ref,
     Scope,
     glob_prefix,
@@ -180,6 +190,22 @@ def _classify(module: ModuleFlow, result: ScanResult) -> None:
         if isinstance(node, ast.Name) and node.id == "__file__"
         and id(node) not in module.handled_file_nodes
     )
+    result.unhandled_file_uses.extend(_unfollowed_roots(module))
+
+
+def _unfollowed_roots(module: ModuleFlow) -> Iterator[str]:
+    """Every reference to a root the scan does not follow (paths.ROOT_*)."""
+
+    for node, _ in module.nodes:
+        label = None
+        if isinstance(node, ast.Attribute) and node.attr in ROOT_DUNDERS:
+            label = f"module {node.attr}"
+        elif isinstance(node, ast.Name) and node.id in ROOT_DUNDERS - {"__file__"}:
+            label = node.id
+        elif isinstance(node, ast.Name | ast.Attribute) and module.canon(node) in ROOT_REFS:
+            label = module.canon(node)
+        if label is not None:
+            yield f"{module.file}:{getattr(node, 'lineno', 0)} ({label})"
 
 
 def _record_string_read(module: ModuleFlow, call: ast.Call, scope: Scope, result: ScanResult) -> None:

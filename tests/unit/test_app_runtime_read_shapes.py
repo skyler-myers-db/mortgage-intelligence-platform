@@ -254,6 +254,34 @@ def test_each_net_catches_each_read_shape(tmp_path: Path, shape: str) -> None:
         ("file_into_a_helper", "import helper\nX = helper.locate(__file__)"),
         ("unknown_path_attribute", "X = Path(__file__).resolve().parents[2].frobnicate"),
         ("modulo_assign", 'def f():\n    root = Path(__file__).parent\n    root %= "x"'),
+        # Roots other than a bare __file__ or the cwd, with the top-level
+        # segment held in a name, so the literal sweep cannot see it either.
+        ("module_attribute_file", (
+            'import backend\nDOCS = "docs"\n'
+            'X = (Path(backend.__file__).parent / DOCS / "q1.md").read_text()')),
+        ("sys_modules_file", (
+            'import sys\nDOCS = "docs"\n'
+            'X = Path(sys.modules[__name__].__file__).parents[2] / DOCS')),
+        ("spec_origin", 'DOCS = "docs"\nX = Path(__spec__.origin).parents[2] / DOCS'),
+        ("loader", "X = Path(__loader__.get_filename()).parents[2]"),
+        ("package_path", "X = Path(__path__[0]).parent"),
+        ("cached", "X = Path(__cached__).parents[3]"),
+        ("inspect_getfile", (
+            "import inspect\n\ndef f():\n    return 1\n\n"
+            "X = Path(inspect.getfile(f)).parents[2]")),
+        ("inspect_getsourcefile_imported", (
+            "from inspect import getsourcefile\nX = Path(getsourcefile(Path)).parent")),
+        ("sys_argv", 'import sys\nDOCS = "docs"\nX = Path(sys.argv[0]).parents[1] / DOCS'),
+        ("sys_path", 'import sys\nDOCS = "docs"\nX = Path(sys.path[0]) / DOCS'),
+        ("os_curdir", 'DOCS = "docs"\nX = Path(os.curdir) / DOCS'),
+        ("importlib_resources_files", (
+            'import importlib.resources\nDOCS = "docs"\n'
+            'X = importlib.resources.files("backend") / ".." / DOCS')),
+        ("resources_module_alias", (
+            'from importlib import resources\nX = resources.files("backend")')),
+        ("resources_function_import", (
+            'from importlib.resources import as_file\nX = as_file')),
+        ("pkgutil_get_data", 'import pkgutil\nX = pkgutil.get_data("backend", "x")'),
     ],
 )
 def test_a_flow_the_scan_cannot_bound_is_unhandled(tmp_path: Path, shape: str, source: str) -> None:
@@ -263,11 +291,29 @@ def test_a_flow_the_scan_cannot_bound_is_unhandled(tmp_path: Path, shape: str, s
     assert all(use.startswith("backend/services/fake.py:") for use in result.unhandled_file_uses)
 
 
+def test_names_that_only_look_like_unfollowed_roots_are_not_reported(tmp_path: Path) -> None:
+    # The control for the root rules: a local `files`, an `argv` attribute of
+    # a first-party class and a `path` key are not the module roots they echo.
+    source = """
+        files = ["a.md"]
+        X = files[0]
+
+        class Options:
+            argv = []
+            path = "x"
+
+        Y = Options.argv, Options.path, {"__file__": 1}
+        """
+
+    assert scan(_tree(tmp_path, source)).unhandled_file_uses == []
+
+
 def test_the_minimal_tree_alone_reads_nothing_outside_backend(tmp_path: Path) -> None:
     root = _tree(tmp_path, 'X = Path(__file__).with_name("sibling.json").read_text()')
 
     result = scan(root)
 
+    assert result.unhandled_file_uses == []
     assert outside_reads(result) == {}
     assert _literals(root, result) == set()
 
