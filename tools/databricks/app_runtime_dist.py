@@ -17,9 +17,11 @@ build. It allows only what a governed build emits:
   decompresses to exactly its bytes and
   whose gzip header is bare (FLG 0: no file name, comment, extra field or
   header CRC, as Node's zlib.gzip writes it), and a ``.br`` that decodes to
-  exactly its bytes too (tools/precompress_assets.mjs). Without the optional
-  ``brotli`` module a ``.br`` cannot be checked, so it is left out of the
-  folder and reported, and the App serves the checked ``.gz`` instead;
+  exactly its bytes too (tools/precompress_assets.mjs). A ``.br`` is decoded by
+  the ``brotli`` module or, without it, by ``node``
+  (tools/databricks/app_runtime_brotli.py); with neither it cannot be checked,
+  so it is left out of the folder and reported, and the App serves the
+  checked ``.gz`` instead. One that fails the check is refused;
 * exactly the ``frontend/public`` files tracked at the staged ref, all of
   them, byte for byte: Vite copies ``public/`` verbatim to the dist root, so an
   untracked, edited or missing public file means the dist was not built from
@@ -39,15 +41,15 @@ ships.
 
 from __future__ import annotations
 
-import importlib
 import os
 import re
 import shutil
 import zlib
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import cast
+
+from tools.databricks.app_runtime_brotli import BrotliCheckError, BrotliVerifier
 
 SHELLS = frozenset({"index.html", "index.home.html"})
 REQUIRED_SHELL = "index.html"
@@ -78,29 +80,23 @@ BRANDING_MARK = re.compile(r"^branding/lender-mark\.(png|webp)$")
 SOURCE_MAP_COMMENT = re.compile(rb"(?://|/\*)[ \t]*[#@][ \t]*sourceMappingURL=")
 SOURCE_MAP_CHECKED = frozenset({".js", ".mjs", ".css", ".html"})
 
-# A .br the review cannot decode (no brotli module): left out, not refused.
-UNCHECKED = "unchecked"
-
-Decoder = Callable[[bytes], bytes]
+# A .br whose name and source passed: the brotli verifier decides it.
+PENDING = "pending"
 
 
 @dataclass(frozen=True)
 class DistReview:
-    """The dist-relative files to stage, what is left out, and every refusal."""
+    """The dist-relative files to stage, what is left out, and every refusal.
+
+    ``verified`` lists the ``.br`` files checked against their sources (they
+    are in ``files``); ``omitted`` the ones left out unchecked.
+    """
 
     files: tuple[str, ...]
     problems: tuple[str, ...]
     omitted: tuple[str, ...] = ()
-
-
-def brotli_decoder() -> Decoder | None:
-    """``brotli.decompress`` when the optional module is installed."""
-
-    try:
-        module = importlib.import_module("brotli")
-    except ImportError:
-        return None
-    return cast(Decoder, module.decompress)
+    verified: tuple[str, ...] = ()
+    brotli_method: str = ""
 
 
 def gzip_decodes_to(data: bytes, source: bytes) -> bool:
@@ -204,10 +200,8 @@ def _refused_name(relpath: str) -> str | None:
     return None
 
 
-def _compressed(
-    dist: Path, relpath: str, present: set[str], brotli: Decoder | None
-) -> str | None:
-    """None for a ``.gz``/``.br`` that decodes to its hashed source."""
+def _compressed(dist: Path, relpath: str, present: set[str]) -> str | None:
+    """None for a ``.gz`` that decodes to its hashed source; PENDING for a ``.br``."""
 
     suffix = GZIP_SUFFIX if relpath.endswith(GZIP_SUFFIX) else BROTLI_SUFFIX
     source = relpath.removesuffix(suffix)
@@ -217,24 +211,18 @@ def _compressed(
         return "not a governed build output"
     if source not in present:
         return "compressed file without its source"
-    if relpath.endswith(BROTLI_SUFFIX) and brotli is None:
-        return UNCHECKED
+    if relpath.endswith(BROTLI_SUFFIX):
+        return PENDING
     data, original = (dist / relpath).read_bytes(), (dist / source).read_bytes()
-    if relpath.endswith(GZIP_SUFFIX):
-        same = gzip_decodes_to(data, original)
-        if same and not gzip_header_is_bare(data):
-            return "gzip header carries an optional field (FLG must be 0)"
-    else:
-        try:
-            same = brotli is not None and brotli(data) == original
-        except Exception:  # noqa: BLE001 -- any decoder error is a mismatch
-            same = False
-    return None if same else "compressed file does not decode to its source"
+    if not gzip_decodes_to(data, original):
+        return "compressed file does not decode to its source"
+    if not gzip_header_is_bare(data):
+        return "gzip header carries an optional field (FLG must be 0)"
+    return None
 
 
 def _classify(
-    dist: Path, relpath: str, public: Mapping[str, bytes], present: set[str],
-    brotli: Decoder | None,
+    dist: Path, relpath: str, public: Mapping[str, bytes], present: set[str]
 ) -> str | None:
     """None for an allowed build output, else the reason it is refused."""
 
@@ -244,7 +232,7 @@ def _classify(
     if relpath in SHELLS or BRANDING_MARK.match(relpath) or HASHED_ASSET.match(relpath):
         return None
     if relpath.startswith(ASSETS_PREFIX) and relpath.endswith((GZIP_SUFFIX, BROTLI_SUFFIX)):
-        return _compressed(dist, relpath, present, brotli)
+        return _compressed(dist, relpath, present)
     return "not a governed build output"
 
 
@@ -254,14 +242,35 @@ def _source_map_comment(dist: Path, relpath: str) -> bool:
     return SOURCE_MAP_COMMENT.search((dist / relpath).read_bytes()) is not None
 
 
+def _verify_brotli(
+    dist: Path, pending: list[str], brotli: BrotliVerifier
+) -> tuple[list[str], list[str]]:
+    """The ``.br`` files that decode to their sources, and a problem per other one."""
+
+    pairs = [(dist / relpath, dist / relpath.removesuffix(BROTLI_SUFFIX)) for relpath in pending]
+    try:
+        verdicts = brotli.check(pairs)
+    except BrotliCheckError as exc:
+        return [], [f"could not check the .br files with {brotli.method}: {exc}"]
+    if len(verdicts) != len(pending):
+        return [], [f"could not check the .br files with {brotli.method}: wrong verdict count"]
+    verified = [relpath for relpath, same in zip(pending, verdicts, strict=True) if same]
+    problems = [
+        f"compressed file does not decode to its source: {relpath}"
+        for relpath, same in zip(pending, verdicts, strict=True) if not same
+    ]
+    return verified, problems
+
+
 def review_dist(
-    dist: Path, public: Mapping[str, bytes], *, brotli: Decoder | None = None
+    dist: Path, public: Mapping[str, bytes], *, brotli: BrotliVerifier | None = None
 ) -> DistReview:
     """Review ``dist`` against the ``frontend/public`` blobs tracked at the ref.
 
     ``public`` maps each tracked public file's path relative to
     ``frontend/public`` (its path in the dist) to its bytes at the ref.
-    ``brotli`` checks each ``.br``; without it every ``.br`` is ``omitted``.
+    ``brotli`` checks every ``.br`` whose name passed; one that does not decode
+    to its source is a problem. Without it every ``.br`` is ``omitted``.
     """
 
     files, links, folders = _walk(dist)
@@ -270,11 +279,11 @@ def review_dist(
     problems += [f"hidden path: {folder}/" for folder in _hidden_folders(folders, files)]
     if REQUIRED_SHELL not in present:
         problems.append(f"no {REQUIRED_SHELL}: build the frontend first")
-    omitted: list[str] = []
+    pending: list[str] = []
     for relpath in files:
-        reason = _refused_name(relpath) or _classify(dist, relpath, public, present, brotli)
-        if reason == UNCHECKED:
-            omitted.append(relpath)
+        reason = _refused_name(relpath) or _classify(dist, relpath, public, present)
+        if reason == PENDING:
+            pending.append(relpath)
             continue
         if reason is None and _source_map_comment(dist, relpath):
             reason = "sourceMappingURL comment"
@@ -287,6 +296,14 @@ def review_dist(
     branding = [relpath for relpath in files if relpath.startswith(BRANDING_PREFIX)]
     if len(branding) > 1:
         problems.append(f"branding/ must hold one lender mark, found {len(branding)} files")
+    verified: list[str] = []
+    omitted: list[str] = pending if brotli is None else []
+    if pending and brotli is not None:
+        verified, failed = _verify_brotli(dist, pending, brotli)
+        problems += failed
     left_out = set(omitted)
     kept = tuple(relpath for relpath in files if relpath not in left_out)
-    return DistReview(files=kept, problems=tuple(problems), omitted=tuple(omitted))
+    return DistReview(
+        files=kept, problems=tuple(problems), omitted=tuple(omitted), verified=tuple(verified),
+        brotli_method=brotli.method if brotli is not None and pending else "",
+    )

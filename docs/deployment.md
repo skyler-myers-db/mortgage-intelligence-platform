@@ -112,8 +112,9 @@ window (measured 2026-10-28). The bundle files root (`<bundle root>/dev/files`) 
 grows, because `workspace import-dir` and piecewise uploads never delete. It
 held 6,018 files when a deployment from it was recorded FAILED. A folder with
 only the App's runtime closure is about 1,200 files (481 tracked plus 694
-`frontend/dist` files on `ab6235e0`), or about 970 when `stage` leaves the
-209 `.br` files out because the `brotli` module is not installed.
+`frontend/dist` files on `ab6235e0`, the 209 `.br` files included once `stage`
+has checked them), or about 970 when neither the `brotli` module nor `node` is
+available to check them and `stage` leaves them out.
 
 `tools/databricks/app_runtime_closure.py` is the single source of truth for
 that closure. It holds the upload set (`app.yaml`, `requirements.txt`,
@@ -218,11 +219,18 @@ wasm (the naming follows `frontend/vite.config.ts`, and
 it). Vite copies `public/` verbatim, so an untracked, edited or missing public
 file is refused. The `/assets` route serves a `.br` or `.gz` sibling in place
 of the asset to a client that accepts the encoding, so a compressed file may
-carry exactly one `.gz` or `.br` suffix, each `.gz` must decompress to exactly its source's bytes and carry a bare gzip header (FLG 0:
-no file name, comment, extra field or header CRC, as Node's `zlib.gzip` in
-`tools/precompress_assets.mjs` writes it), and so must each `.br` when the
-`brotli` module is installed. Without it a `.br` cannot be checked, so `stage`
-leaves every `.br` out, says how many, and the App serves the checked `.gz`.
+carry exactly one `.gz` or `.br` suffix, each `.gz` must decompress to exactly
+its source's bytes and carry a bare gzip header (FLG 0: no file name,
+comment, extra field or header CRC, as Node's `zlib.gzip` in
+`tools/precompress_assets.mjs` writes it), and each `.br` must decode to
+exactly its source's bytes too. `stage` checks each `.br` with the `brotli`
+Python module or, when it is not installed, with `node` on `PATH`
+(`tools/databricks/app_runtime_brotli.py`: `zlib.brotliDecompressSync` with
+the output capped one byte past the source, the paths passed as arguments,
+each process time-bound), ships it only when it matches, and refuses the
+whole dist when one does not or when the checker itself fails. With neither
+the module nor `node`, `stage` leaves every `.br` out, says how many, and the
+App serves the checked `.gz`.
 `backend/main.py` serves any real file under `frontend/dist`, so anywhere in
 the dist a dot segment (`.env`, `.vite/`, an empty `.git/objects` or
 `assets/.cache` directory), a `*.map` in any letter case,

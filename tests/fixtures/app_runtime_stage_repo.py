@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 from tools import requirements_digest as digest
+from tools.databricks.app_runtime_brotli import decoder_verifier
 
 ROOT = Path(__file__).resolve().parents[2]
 INPUTS = {"requirements.in": "fastapi\n", "uv.lock": "fastapi==1.0\n"}
@@ -65,6 +66,11 @@ def fake_brotli(data: bytes) -> bytes:
     if not data.startswith(BROTLI_MAGIC.encode()):
         raise ValueError("not a fake brotli stream")
     return data.removeprefix(BROTLI_MAGIC.encode())
+
+
+# The optional brotli module is not a dependency and node may be absent; this
+# stand-in makes every stage test independent of either.
+FAKE_VERIFIER = decoder_verifier(fake_brotli, "a test decoder")
 
 
 def git(repo: Path, *args: str) -> str:

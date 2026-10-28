@@ -20,11 +20,11 @@ import pytest
 
 from tests.fixtures.app_runtime_stage_repo import (
     APP_JS,
+    FAKE_VERIFIER,
     GZ_NAME,
     ROOT,
     TRACKED,
     dist_names,
-    fake_brotli,
     files_under,
     git,
     make_dist,
@@ -32,14 +32,13 @@ from tests.fixtures.app_runtime_stage_repo import (
     write_files,
 )
 from tools.databricks import app_runtime_closure as closure
-from tools.databricks.app_runtime_dist import Decoder, DistReview
+from tools.databricks.app_runtime_brotli import BrotliVerifier
+from tools.databricks.app_runtime_dist import DistReview
 
 
 @pytest.fixture(autouse=True)
 def brotli(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The optional brotli module is not a dependency; a stand-in decoder makes
-    # every test independent of whether it happens to be installed.
-    monkeypatch.setattr(closure, "brotli_decoder", lambda: fake_brotli)
+    monkeypatch.setattr(closure, "brotli_verifier", lambda: FAKE_VERIFIER)
 
 
 @pytest.fixture
@@ -90,7 +89,7 @@ def test_stage_leaves_out_a_br_it_cannot_check_and_says_so(
     repo: Path, dist: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(closure, "brotli_decoder", lambda: None)
+    monkeypatch.setattr(closure, "brotli_verifier", lambda: None)
     out = tmp_path / "out"
     args = ["--repo", str(repo), "stage", "--ref", "HEAD", "--dist", str(dist)]
 
@@ -109,7 +108,7 @@ def test_stage_ships_the_dist_copy_it_reviewed_not_the_live_directory(
     reviewed: list[Path] = []
 
     def review_then_swap(
-        path: Path, public: Mapping[str, bytes], *, brotli: Decoder | None = None
+        path: Path, public: Mapping[str, bytes], *, brotli: BrotliVerifier | None = None
     ) -> DistReview:
         review = real_review(path, public, brotli=brotli)
         reviewed.append(path)

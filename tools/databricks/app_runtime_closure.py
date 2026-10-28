@@ -32,7 +32,7 @@ Why a slim folder: the App compute re-downloads every source file, at about
 grows (``workspace import-dir`` never deletes) and reached 6,018 files on
 2026-10-28, when a deployment from it was recorded FAILED. A per-release folder
 holding only this closure is about 1,200 files (about 970 when the .br files
-are left out unchecked).
+are left out because neither the brotli module nor node can check them).
 
   python -m tools.databricks.app_runtime_closure list [--files [--ref REF]]
   python -m tools.databricks.app_runtime_closure stage --ref REF --dist DIR --out DIR
@@ -42,8 +42,10 @@ untracked optional entries are skipped and reported) plus the given prebuilt
 ``frontend/dist``, which must hold only governed build output
 (tools/databricks/app_runtime_dist.py: Vite's hashed asset names, a ``.gz``
 or ``.br`` only when it decodes to its source, no dotfiles, source maps or
-build metadata, and exactly the ``frontend/public`` files tracked at REF; a
-``.br`` it cannot check is left out and reported). Before
+build metadata, and exactly the ``frontend/public`` files tracked at REF). A
+``.br`` is checked with the ``brotli`` module or else ``node``
+(tools/databricks/app_runtime_brotli.py); one that fails is refused, and with
+neither checker every ``.br`` is left out and reported. Before
 it writes anything, it refuses junk files, a hidden path (a segment starting
 with ``.``), a symlink or submodule tracked at
 REF, a missing required entry, an ``--out`` inside ``--dist`` or around it
@@ -71,7 +73,8 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from tools import requirements_digest
-from tools.databricks.app_runtime_dist import brotli_decoder, review_dist, snapshot
+from tools.databricks.app_runtime_brotli import brotli_verifier
+from tools.databricks.app_runtime_dist import DistReview, review_dist, snapshot
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIST_PATH = "frontend/dist"
@@ -162,6 +165,8 @@ class StageResult:
     dist: tuple[str, ...]
     skipped_optional: tuple[str, ...]
     unchecked_brotli: tuple[str, ...] = ()
+    verified_brotli: tuple[str, ...] = ()
+    brotli_method: str = ""
 
     @property
     def total(self) -> int:
@@ -273,18 +278,18 @@ class _Tracked:
     public: tuple[str, ...]  # frontend/public files tracked at the commit
 
 
-def _copy_dist(repo: Path, tracked: _Tracked, dist: Path, copy: Path) -> tuple[list[str], list[str]]:
+def _copy_dist(repo: Path, tracked: _Tracked, dist: Path, copy: Path) -> DistReview:
     """Copy ``dist`` to ``copy``, review the copy, and drop what is left out.
 
-    Returns the copy's files to stage and the ``.br`` files left out
-    unchecked. Refuses unless the copy holds only governed build output for
-    the commit. The copy, not ``dist``, is what ships.
+    Returns the review: the copy's files to stage, the ``.br`` files checked
+    and those left out unchecked. Refuses unless the copy holds only governed
+    build output for the commit. The copy, not ``dist``, is what ships.
     """
 
     problems = snapshot(dist, copy)
     blobs = _blobs(repo, tracked.commit, tracked.public)
     public = {name.removeprefix(f"{PUBLIC_PATH}/"): blobs[name] for name in tracked.public}
-    review = review_dist(copy, public, brotli=brotli_decoder())
+    review = review_dist(copy, public, brotli=brotli_verifier())
     problems += review.problems
     if problems:
         shown = "; ".join(problems[:5])
@@ -294,7 +299,7 @@ def _copy_dist(repo: Path, tracked: _Tracked, dist: Path, copy: Path) -> tuple[l
         (copy / relpath).unlink()
     for relpath in review.files:
         (copy / relpath).chmod(0o644)
-    return list(review.files), list(review.omitted)
+    return review
 
 
 def _check_budgets(plan: StageResult) -> None:
@@ -365,9 +370,10 @@ def _extract(archive: bytes, out: Path, expected: set[str]) -> None:
 
 
 def _write(repo: Path, tracked: _Tracked, dist: Path, work: Path) -> StageResult:
-    staged, unchecked = _copy_dist(repo, tracked, dist, work / DIST_PATH)
+    review = _copy_dist(repo, tracked, dist, work / DIST_PATH)
     plan = StageResult(
-        tracked.commit, tracked.files, tuple(staged), tracked.skipped, tuple(unchecked)
+        tracked.commit, tracked.files, review.files, tracked.skipped, review.omitted,
+        review.verified, review.brotli_method,
     )
     _check_budgets(plan)
     archive = _git(repo, "archive", "--format=tar", plan.commit, "--", *tracked.pathspecs)
@@ -431,10 +437,15 @@ def _stage(args: argparse.Namespace) -> int:
     )
     if result.skipped_optional:
         print(f"skipped optional (absent at {args.ref}): {', '.join(result.skipped_optional)}")
+    if result.verified_brotli:
+        print(
+            f"checked {len(result.verified_brotli)} .br files against their sources with "
+            f"{result.brotli_method}: all shipped"
+        )
     if result.unchecked_brotli:
         print(
-            f"left out {len(result.unchecked_brotli)} .br files: without the brotli module "
-            "they cannot be checked against their source, so the App serves their .gz"
+            f"left out {len(result.unchecked_brotli)} .br files: with neither the brotli module "
+            "nor node they cannot be checked against their source, so the App serves their .gz"
         )
     return 0
 

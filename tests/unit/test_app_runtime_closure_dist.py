@@ -21,8 +21,10 @@ from pathlib import Path
 
 import pytest
 
+from tools.databricks import app_runtime_brotli as brotli_rules
 from tools.databricks import app_runtime_dist as dist_rules
-from tools.databricks.app_runtime_dist import Decoder, DistReview, review_dist
+from tools.databricks.app_runtime_brotli import BrotliCheckError, BrotliVerifier, decoder_verifier
+from tools.databricks.app_runtime_dist import DistReview, review_dist
 
 ROOT = Path(__file__).resolve().parents[2]
 PUBLIC = {"us-counties.json": b"{}\n", "theme-boot.js": b"boot();\n"}
@@ -37,6 +39,9 @@ def fake_brotli(data: bytes) -> bytes:
     if not data.startswith(BROTLI_MAGIC):
         raise ValueError("not a fake brotli stream")
     return data.removeprefix(BROTLI_MAGIC)
+
+
+FAKE_VERIFIER = decoder_verifier(fake_brotli, "a test decoder")
 
 
 def gz(data: bytes) -> bytes:
@@ -89,7 +94,8 @@ def _dist(tmp_path: Path, extra: dict[str, bytes] | None = None) -> Path:
 
 
 def _review(
-    dist: Path, public: dict[str, bytes] = PUBLIC, brotli: Decoder | None = fake_brotli
+    dist: Path, public: dict[str, bytes] = PUBLIC,
+    brotli: BrotliVerifier | None = FAKE_VERIFIER,
 ) -> DistReview:
     return review_dist(dist, public, brotli=brotli)
 
@@ -287,6 +293,24 @@ def test_an_empty_ordinary_directory_is_not_a_problem(tmp_path: Path) -> None:
     assert _review(dist).problems == ()
 
 
+def test_each_checked_br_is_listed_as_verified(tmp_path: Path) -> None:
+    review = _review(_dist(tmp_path))
+
+    assert review.verified == ("assets/app-DnQ3_k-1.js.br",)
+    assert review.brotli_method == "a test decoder"
+    assert "assets/app-DnQ3_k-1.js.br" in review.files
+
+
+def test_a_checker_that_fails_is_a_refusal_not_an_omission(tmp_path: Path) -> None:
+    def broken(pairs: object) -> list[bool]:
+        raise BrotliCheckError("node exited 3: boom")
+
+    review = _review(_dist(tmp_path), brotli=BrotliVerifier("node", broken))
+
+    assert review.problems == ("could not check the .br files with node: node exited 3: boom",)
+    assert review.omitted == ()
+
+
 def test_without_a_brotli_decoder_every_br_is_left_out_and_reported(tmp_path: Path) -> None:
     review = _review(_dist(tmp_path), brotli=None)
 
@@ -304,7 +328,7 @@ def test_without_a_brotli_decoder_a_br_beside_junk_is_still_refused(tmp_path: Pa
 def test_the_brotli_decoder_is_the_optional_module_or_none() -> None:
     installed = importlib.util.find_spec("brotli") is not None
 
-    assert (dist_rules.brotli_decoder() is not None) == installed
+    assert (brotli_rules.brotli_decoder() is not None) == installed
 
 
 def _vite_templates() -> set[str]:

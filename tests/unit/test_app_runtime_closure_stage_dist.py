@@ -10,28 +10,30 @@ from __future__ import annotations
 import gzip
 import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from tests.fixtures.app_runtime_stage_repo import (
+    APP_JS,
     BROTLI_MAGIC,
+    FAKE_VERIFIER,
     GZ_NAME,
-    fake_brotli,
     git,
     make_dist,
     make_repo,
     nothing_written,
     write_files,
 )
+from tools.databricks import app_runtime_brotli as brotli_rules
 from tools.databricks import app_runtime_closure as closure
 
 
 @pytest.fixture(autouse=True)
 def brotli(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The optional brotli module is not a dependency; a stand-in decoder makes
-    # every test independent of whether it happens to be installed.
-    monkeypatch.setattr(closure, "brotli_decoder", lambda: fake_brotli)
+    monkeypatch.setattr(closure, "brotli_verifier", lambda: FAKE_VERIFIER)
 
 
 @pytest.fixture
@@ -165,3 +167,74 @@ def test_stage_refuses_an_empty_hidden_directory_in_the_dist(
         closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
 
     assert nothing_written(tmp_path, out)
+
+
+NODE = shutil.which("node")
+
+
+def _real_br(dist: Path, monkeypatch: pytest.MonkeyPatch, *, corrupt: bool = False) -> None:
+    """Swap the fake .br for a node-made one and use the real checker, module absent."""
+
+    assert NODE is not None
+    compress = ("process.stdout.write(require('node:zlib').brotliCompressSync("
+                "require('node:fs').readFileSync(0)))")
+    data = subprocess.run([NODE, "-e", compress], input=APP_JS.encode(), capture_output=True,
+                          check=True).stdout
+    if corrupt:
+        data = data[:10] + bytes([data[10] ^ 0xFF]) + data[11:]
+    (dist / "assets" / "app-DnQ3_k-1.js.br").write_bytes(data)
+    monkeypatch.setattr(brotli_rules, "brotli_decoder", lambda: None)
+    monkeypatch.setattr(closure, "brotli_verifier", brotli_rules.brotli_verifier)
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not on PATH")
+def test_stage_checks_each_br_with_node_and_ships_it(
+    repo: Path, dist: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _real_br(dist, monkeypatch)
+    out = tmp_path / "out"
+    args = ["--repo", str(repo), "stage", "--ref", "HEAD", "--dist", str(dist), "--out", str(out)]
+
+    assert closure.main(args) == 0
+
+    assert (out / "frontend/dist/assets/app-DnQ3_k-1.js.br").read_bytes() == (
+        dist / "assets/app-DnQ3_k-1.js.br").read_bytes()
+    assert "checked 1 .br files against their sources with node: all shipped" in (
+        capsys.readouterr().out)
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not on PATH")
+def test_stage_refuses_a_corrupted_br_that_node_cannot_decode_to_its_source(
+    repo: Path, dist: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _real_br(dist, monkeypatch, corrupt=True)
+    out = tmp_path / "out"
+    args = ["--repo", str(repo), "stage", "--ref", "HEAD", "--dist", str(dist), "--out", str(out)]
+
+    assert closure.main(args) == 2
+
+    err = capsys.readouterr().err
+    assert "compressed file does not decode to its source: assets/app-DnQ3_k-1.js.br" in err
+    assert "Traceback" not in err
+    assert nothing_written(tmp_path, out)
+
+
+def test_stage_leaves_out_every_br_without_the_module_or_node(
+    repo: Path, dist: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(brotli_rules, "brotli_decoder", lambda: None)
+    monkeypatch.setattr(closure, "brotli_verifier", brotli_rules.brotli_verifier)
+    git_only = tmp_path / "git-only"  # PATH keeps git and loses node
+    git_only.mkdir()
+    (git_only / "git").symlink_to(shutil.which("git") or "git")
+    monkeypatch.setenv("PATH", str(git_only))
+    out = tmp_path / "out"
+    args = ["--repo", str(repo), "stage", "--ref", "HEAD", "--dist", str(dist), "--out", str(out)]
+
+    assert closure.main(args) == 0
+
+    assert not (out / "frontend/dist/assets/app-DnQ3_k-1.js.br").exists()
+    assert "left out 1 .br files" in capsys.readouterr().out

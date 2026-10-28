@@ -15,10 +15,10 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures.app_runtime_stage_repo import (
+    FAKE_VERIFIER,
     INCLUDES,
     ROOT,
     STAMP,
-    fake_brotli,
     git,
     make_dist,
     make_repo,
@@ -30,9 +30,7 @@ from tools.databricks import app_runtime_closure as closure
 
 @pytest.fixture(autouse=True)
 def brotli(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The optional brotli module is not a dependency; a stand-in decoder makes
-    # every test independent of whether it happens to be installed.
-    monkeypatch.setattr(closure, "brotli_decoder", lambda: fake_brotli)
+    monkeypatch.setattr(closure, "brotli_verifier", lambda: FAKE_VERIFIER)
 
 
 @pytest.fixture
