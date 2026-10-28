@@ -94,7 +94,9 @@ def real_literals(real_scan: ScanResult) -> list[PathLiteral]:
     return sweep(real_scan.trees, top_level_names(ROOT), modules=module_paths(ROOT))
 
 
-def test_every_backend_read_outside_backend_is_in_the_closure(real_scan: ScanResult) -> None:
+def test_each_read_the_flow_scan_finds_outside_backend_is_in_the_closure(
+    real_scan: ScanResult,
+) -> None:
     assert real_scan.unhandled_file_uses == [], "teach tests/fixtures/app_runtime_reads.py"
     assert _uncovered(outside_reads(real_scan)) == {}
 
