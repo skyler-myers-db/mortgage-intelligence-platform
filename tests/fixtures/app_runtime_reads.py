@@ -18,7 +18,8 @@ and strings) into first-party functions (including imported ones and
 attributes assigned on ``self``, ``cls`` or a class body (also when read
 through an imported first-party object, ``settings.root``), names and module
 attributes imported from other first-party modules (relative imports
-included), containers, and ``for`` loops. Each value ends at a consumer, which decides what is read:
+included), containers, and ``for`` loops (a loop over a literal tuple or list
+of strings binds each string). Each value ends at a consumer, which decides what is read:
 
 * a read or test (``read_text``, ``exists``, ``open(p)``, ``.name``, a
   comparison, a bare statement) reads exactly that path;

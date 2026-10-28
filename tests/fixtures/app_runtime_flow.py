@@ -439,7 +439,10 @@ class ModuleFlow:
                 self._bind(node.target, scope, self.resolve(node.value, scope),
                            self.strings_of(node.value, scope))
             elif isinstance(node, ast.For | ast.AsyncFor | ast.comprehension):
-                self._bind(node.target, scope, self.resolve(node.iter, scope), set())
+                loop = node.iter
+                strings = set().union(*(self.strings_of(e, scope) for e in loop.elts)) if (
+                    isinstance(loop, ast.Tuple | ast.List | ast.Set)) else set()
+                self._bind(node.target, scope, self.resolve(loop, scope), strings)
             elif isinstance(node, ast.Return) and node.value is not None and scope:
                 self.world.grow(self.returns, scope[-1], self.resolve(node.value, scope))
             elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):

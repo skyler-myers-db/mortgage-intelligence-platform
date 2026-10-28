@@ -253,6 +253,15 @@ CAUGHT: dict[str, tuple[str, str | None, str | None]] = {
         """, "docs/r2.md", None),
     "relative_import_outside_backend": (
         "from jobs.rel_job import read", "docs/rel.md", "docs/rel.md"),
+    # A loop variable over a literal tuple of names carries their strings
+    # (round 4; a loop over a NAME bound to the tuple is a known residual).
+    "loop_variable_over_literal_names": ("""
+        def read():
+            for folder in ("docs",):
+                return (Path(folder) / "l1.md").read_text()
+        """, "docs/l1.md", None),
+    "comprehension_over_literal_names": (
+        'X = [(Path(f) / "l2.md").read_text() for f in ["docs"]]', "docs/l2.md", None),
     # A bare top-level name reaching a path constructor only through a
     # first-party parameter: no '/' and no path context, so only the flow
     # scan can see it.

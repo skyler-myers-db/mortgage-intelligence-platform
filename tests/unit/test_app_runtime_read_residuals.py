@@ -119,6 +119,17 @@ RESIDUALS: dict[str, str] = {
     "env_var_without_a_default": 'X = Path(os.environ["MIP_DOCS"]).read_text()',
     "computed_module_name": (
         'import importlib\nX = getattr(importlib.import_module("tools" + ".fake_tool"), "thing")'),
+    # Round 4: a path joined with str.join, a starred argument, and a bare
+    # top-level name held in a container or a named tuple a loop walks.
+    "str_join_from_the_cwd": 'def read(n):\n    return open("/".join(["docs", n])).read()',
+    "os_sep_join_from_the_cwd": 'X = open(os.sep.join(["docs", "x.md"])).read()',
+    "starred_os_path_join": 'X = open(os.path.join(*["docs", "x.md"])).read()',
+    "starred_name_into_path": 'PARTS = ("docs", "x.md")\nX = Path(*PARTS).read_text()',
+    "starred_tuple_into_path": 'X = Path(*("docs", "x.md")).read_text()',
+    "dict_value_held_name": 'X = (Path({"k": "docs"}["k"]) / "x.md").read_text()',
+    "list_item_held_name": 'X = (Path(["docs"][0]) / "x.md").read_text()',
+    "loop_over_a_named_tuple": (
+        'NAMES = ("docs",)\nX = [(Path(n) / "x.md").read_text() for n in NAMES]'),
     "callee_reached_through_an_object": """
         class Reader:
             def read(self, folder):
