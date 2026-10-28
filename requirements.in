@@ -6,12 +6,18 @@ pydantic-settings==2.7.1
 python-dotenv==1.2.2
 httpx==0.28.1
 databricks-sdk==0.103.0
-# 4.4.0 is the first non-yanked release that admits thrift 0.24.0 (4.2.6 and
-# 4.3.0 cap thrift<0.23; 4.2.7 capped it <0.24 and was yanked). No first-party
-# module imports databricks.sql -- backend/services/databricks_sql.py drives
-# the warehouse through the REST Statement Execution API -- so the bump changes
-# installed wheels only.
-databricks-sql-connector==4.4.0
+# 4.8.0 is the first release that admits oauthlib 4 (4.0.0 through 4.6.0 cap
+# oauthlib<4.0.0); 4.4.0 was the first non-yanked release that admitted thrift
+# 0.24.0. No first-party module imports databricks.sql --
+# backend/services/databricks_sql.py drives the warehouse through the REST
+# Statement Execution API -- so the bump changes installed wheels only.
+databricks-sql-connector==4.8.0
+# Security floor for GHSA-3jp2-3mrg-2vxc, GHSA-xpv3-w29h-x7cv and
+# GHSA-hj66-6f7g-4r5v, all fixed only in oauthlib 4.0.0.
+# databricks-sql-connector (its only consumer) admits >=3.1.0,<5.0.0 from
+# 4.8.0; the explicit floor keeps the contract first-party so a future
+# connector pin cannot drag oauthlib back.
+oauthlib>=4.0.0,<5
 # Required by tools/databricks/run_agent_eval.py. Deploy fails closed if
 # mlflow.genai.evaluate is missing so "MLflow Agent Evaluation" cannot be
 # claimed from local scorer metrics alone.

@@ -115,10 +115,11 @@ def test_the_holds_file_is_schema_checked(tmp_path: Path) -> None:
 
 
 def test_the_ignore_vulns_are_parsed_from_the_real_ci_yml() -> None:
-    assert advisories.ci_ignored_vulns(REAL_CI) == [
-        "GHSA-xpv3-w29h-x7cv",
-        "GHSA-hj66-6f7g-4r5v",
-    ]
+    # The two oauthlib ignores retired on 2026-10-28 (oauthlib 4.0.0 through
+    # databricks-sql-connector 4.8.0); the synthetic fixture keeps the parser
+    # exercised on a line that carries one.
+    assert advisories.ci_ignored_vulns(REAL_CI) == []
+    assert advisories.ci_ignored_vulns(FIXTURES / "synthetic_ci.yml") == ["GHSA-xpv3-w29h-x7cv"]
 
 
 def test_pip_findings_match_ignores_by_id_or_alias_and_unignored_is_the_gate() -> None:
@@ -165,18 +166,14 @@ def test_the_real_empty_allowlist_parses_green() -> None:
     assert not [s for s in gate_signals if s.code == "allowlist_expiring"]
 
 
-def test_the_real_ci_review_dates_are_red_after_their_dates_and_warn_within_a_week() -> None:
-    # The W5e integration's security re-review (2026-10-15) re-checked both
-    # ignores and moved their dates (mlflow 2026-11-15, oauthlib 2026-11-01).
-    # The mlflow ignore retired on 2026-10-26 (mlflow 3.17.2 ships the
-    # GHSA-h7x2-h6g9-p789 fix), so the oauthlib date is the one left.
-    late, _warn, _rows = waivers.waiver_signals(date(2026, 11, 16), [], REAL_CI, waivers.ALLOWLIST)
-    early, warnings, _rows = waivers.waiver_signals(date(2026, 10, 31), [], REAL_CI, waivers.ALLOWLIST)
-
-    assert [(s.code, s.detail) for s in late] == [("review_date_past", "2026-11-01")]
-    assert all(s.subject.startswith(".github/workflows/ci.yml:") for s in late)
-    assert early == []
-    assert [(s.code, s.detail) for s in warnings] == [("review_date_soon", "2026-11-01")], "within 7 days warns"
+def test_the_real_ci_has_no_review_date_once_every_ignore_retired() -> None:
+    # The mlflow ignore retired on 2026-10-26 (mlflow 3.17.2) and the two
+    # oauthlib ignores on 2026-10-28 (oauthlib 4.0.0), and each took its
+    # review date with it, so no date can red or warn.
+    assert waivers.review_dates(REAL_CI) == []
+    late, warnings, _rows = waivers.waiver_signals(date(2026, 11, 16), [], REAL_CI, waivers.ALLOWLIST)
+    assert [s for s in late if s.code == "review_date_past"] == []
+    assert [s for s in warnings if s.code == "review_date_soon"] == []
 
 
 def test_a_passed_hold_review_by_is_the_gate() -> None:
