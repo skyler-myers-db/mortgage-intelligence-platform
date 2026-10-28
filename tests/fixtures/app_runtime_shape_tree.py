@@ -1,7 +1,8 @@
 """A minimal repo tree for pinning what each App read net sees.
 
 The module under test is backend/services/fake.py, so ``parents[2]`` is the
-repo root; backend/roots.py exports a root for the cross-module shapes. Each
+repo root; backend/roots.py exports a root for the cross-module shapes and
+backend/services/paths.py a settings object holding path values. Each
 shape reads something under docs/, which no closure entry covers, so a caught
 read shows up as uncovered. The flow scan is tests/fixtures/app_runtime_reads.py
 and the literal sweep is tests/fixtures/app_runtime_literals.py. Used by
@@ -20,6 +21,22 @@ from tests.fixtures.app_runtime_reads import ScanResult, outside_reads
 from tools.databricks import app_runtime_closure as closure
 
 ROOT_MODULE = "from pathlib import Path\n\nREPO_ROOT = Path(__file__).resolve().parents[1]\n"
+# A settings-style module: a class whose body and __init__ hold path values,
+# exported as an instance (backend/config/settings.py's shape).
+SETTINGS_MODULE = """\
+from pathlib import Path
+
+
+class Settings:
+    root = Path(__file__).resolve().parents[2]
+    docs_dir = "docs"
+
+    def __init__(self):
+        self.data_root = Path(__file__).resolve().parents[2]
+
+
+settings = Settings()
+"""
 JOB = (
     "from pathlib import Path\n\n"
     "def run():\n"
@@ -34,6 +51,7 @@ def make_tree(tmp_path: Path, source: str) -> Path:
         "backend/services/fake.py": "import os\nimport subprocess\nfrom pathlib import Path\n\n"
         + textwrap.dedent(source).strip() + "\n",
         "backend/roots.py": ROOT_MODULE,
+        "backend/services/paths.py": SETTINGS_MODULE,
         "tools/fake_tool.py": "thing = 1\n",
         "tools/pkg/__init__.py": "",
         "jobs/fake_job.py": JOB,

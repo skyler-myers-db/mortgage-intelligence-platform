@@ -14,7 +14,8 @@ point over every scanned module, through ``/``, ``.parent``, ``.parents[N]``,
 tuple targets, walrus and ``/=``, function returns, call arguments (path values
 and strings) into first-party functions (including imported ones and
 ``self.method``), parameter defaults,
-attributes assigned on ``self``, ``cls`` or a class body, names and module
+attributes assigned on ``self``, ``cls`` or a class body (also when read
+through an imported first-party object, ``settings.root``), names and module
 attributes imported from other first-party modules, containers, and ``for``
 loops. Each value ends at a consumer, which decides what is read:
 

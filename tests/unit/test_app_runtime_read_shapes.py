@@ -161,6 +161,48 @@ CAUGHT: dict[str, tuple[str, str | None, str | None]] = {
             def read(self):
                 return self.read_under(root=Path(__file__).resolve().parents[2])
         """, "docs/v.md", "docs/v.md"),
+    # Attributes of an imported first-party object (round 4): a settings
+    # instance, its class, a module attribute chain, an attribute set in
+    # __init__ and a string attribute. "docs" sits in a name, so only the flow
+    # scan can see these.
+    "imported_instance_attribute": ("""
+        from backend.services.paths import settings
+
+        D = "docs"
+
+        def read():
+            return (settings.root / D / "a2.md").read_text()
+        """, "docs/a2.md", None),
+    "imported_class_attribute": ("""
+        from backend.services.paths import Settings
+
+        D = "docs"
+
+        def read():
+            return (Settings.root / D / "a3.md").read_text()
+        """, "docs/a3.md", None),
+    "imported_module_attribute_chain": ("""
+        from backend.services import paths
+
+        D = "docs"
+
+        def read():
+            return (paths.settings.root / D / "a4.md").read_text()
+        """, "docs/a4.md", None),
+    "imported_init_attribute": ("""
+        from backend.services.paths import settings
+
+        D = "docs"
+
+        def read():
+            return (settings.data_root / D / "a5.md").read_text()
+        """, "docs/a5.md", None),
+    "imported_string_attribute": ("""
+        from backend.services.paths import settings
+
+        def read():
+            return (Path(settings.docs_dir) / "a6.md").read_text()
+        """, "docs/a6.md", None),
     # A bare top-level name reaching a path constructor only through a
     # first-party parameter: no '/' and no path context, so only the flow
     # scan can see it.

@@ -108,6 +108,15 @@ class ModuleFlow:
         head = attr_chain(node)
         return head is not None and head.split(".")[0] in self.imports
 
+    def _first_party(self, node: ast.AST) -> bool:
+        """``node`` names something inside a scanned module (``settings.root``)."""
+
+        dotted = self.canon(node)
+        if dotted is None:
+            return False
+        parts = dotted.split(".")
+        return any(".".join(parts[:depth]) in self.world.modules for depth in range(1, len(parts)))
+
     def canon(self, node: ast.AST) -> str | None:
         dotted = attr_chain(node)
         if dotted is None:
@@ -163,8 +172,8 @@ class ModuleFlow:
             target = self.world.split(dotted) if dotted else None
             if target is not None:
                 return set(target[0].bindings.get((), {}).get(target[1], set()))
-            if self._is_import(node):
-                return set()  # an attribute of an imported module or class: sys.path, ...
+            if self._is_import(node) and not self._first_party(node):
+                return set()  # an attribute of a library module or class: sys.path, ...
             return set(self.world.attrs.get(node.attr, set()))
         if isinstance(node, ast.Subscript):
             if isinstance(node.value, ast.Attribute) and node.value.attr == "parents":
@@ -280,7 +289,7 @@ class ModuleFlow:
             target = self.world.split(dotted) if dotted else None
             if target is not None:
                 return set(target[0].strings.get((), {}).get(target[1], set()))
-            if self._is_import(node):
+            if self._is_import(node) and not self._first_party(node):
                 return set()
             return set(self.world.attr_strings.get(node.attr, set()))
         if isinstance(node, ast.BoolOp):
