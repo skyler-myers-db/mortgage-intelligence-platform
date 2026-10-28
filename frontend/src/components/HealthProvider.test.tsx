@@ -130,6 +130,19 @@ describe('shouldPollFast', () => {
     ).toBe(true);
   });
 
+  it('shows a budget-degraded Genie as degraded but keeps the slow cadence', () => {
+    // 2026-10-28: a spend budget does not refill on a 3-second timescale.
+    const payload = {
+      status: 'degraded' as const,
+      mode: 'live',
+      dependencies: { ...allUp.dependencies, genie: 'degraded' },
+      dependency_reasons: { genie: 'BUDGET_EXCEEDED' },
+      circuit_breakers: allUp.circuit_breakers,
+    };
+    expect(computeDegraded(payload)).toBe(true);
+    expect(shouldPollFast(payload)).toBe(false);
+  });
+
   it('stays on the slow cadence before the first probe resolves and when healthy', () => {
     expect(shouldPollFast(null)).toBe(false);
     expect(shouldPollFast({ status: 'ok', mode: 'live', ...allUp })).toBe(false);
@@ -203,6 +216,22 @@ describe('applyDownUpDebounce', () => {
     // At t=8500 — finally past the new window.
     const r5 = applyDownUpDebounce(RAW_UP, r4.next, 8500, 5000);
     expect(r5.payload.dependencies?.warehouse).toBe('up');
+  });
+
+  it('a budget-degraded Genie passes through at once and is not masked by a prior up', () => {
+    const rawDegraded = {
+      status: 'degraded' as const,
+      mode: 'live',
+      dependencies: { warehouse: 'up', lakebase: 'up', genie: 'degraded' },
+    };
+    const priorUp = { genie: { filtered: 'up' as const, pendingUpSince: null } };
+    const r1 = applyDownUpDebounce(rawDegraded, priorUp, 1000, 5000);
+    expect(r1.payload.dependencies?.genie).toBe('degraded');
+    expect(r1.next.genie).toEqual({ filtered: 'degraded', pendingUpSince: null });
+    // A later successful turn clears it at once: degraded → up is not a flap.
+    const r2 = applyDownUpDebounce(RAW_UP, r1.next, 1500, 5000);
+    expect(r2.payload.dependencies?.genie).toBe('up');
+    expect(r2.next.genie?.pendingUpSince).toBeNull();
   });
 
   it('debounceMs=0 disables the debounce (instant flips both directions)', () => {

@@ -78,6 +78,7 @@ from backend.services.audit_store import (
 )
 from backend.services.databricks_sql import _reset_sql_client_for_tests
 from backend.services.genie_client import _reset_genie_client_for_tests
+from backend.services.genie_turn_outcome import _reset_genie_turn_outcome_for_tests
 from backend.services.home_summary import (
     HomeSummaryService,
     get_home_summary_service,
@@ -1599,6 +1600,7 @@ def _reset_runtime_singletons_for_tests() -> None:
     _reset_sql_client_for_tests()
     _reset_lakebase_client_for_tests()
     _reset_genie_client_for_tests()
+    _reset_genie_turn_outcome_for_tests()
     _reset_audit_store_for_tests()
     _reset_workspace_store_for_tests()
     _reset_admin_rules_service_for_tests()

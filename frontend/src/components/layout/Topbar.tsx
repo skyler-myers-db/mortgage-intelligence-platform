@@ -83,6 +83,11 @@ export interface SystemStatusView {
 
 const AMBER = 'dot amber';
 
+/** A degraded dependency's backend reason (`BUDGET_EXCEEDED`) as tooltip text. */
+function reasonSuffix(reason: string | undefined): string {
+  return reason ? ` (${reason.toLowerCase().replace(/_/g, ' ')})` : '';
+}
+
 function statusView(
   label: SystemStatusLabel,
   dotClass: string,
@@ -120,6 +125,7 @@ export function systemStatusViewModel(
     );
   }
   const deps = health?.dependencies ?? {};
+  const reasons = health?.dependency_reasons ?? {};
   const breakers = health?.circuit_breakers ?? {};
   const depEntries = [
     ['warehouse', deps.warehouse],
@@ -133,7 +139,7 @@ export function systemStatusViewModel(
     (s) => s === 'open' || s === 'half_open',
   );
   const dependencySummary = hasDependencyDetails
-    ? depEntries.map(([name, state]) => `${name}=${state ?? 'not reported'}`).join(' · ')
+    ? depEntries.map(([name, state]) => `${name}=${state ?? 'not reported'}${reasonSuffix(reasons[name])}`).join(' · ')
     : 'dependency details not reported';
   const breakerSummary = Object.entries(breakers)
     .map(([k, v]) => `${k}=${v}`)
