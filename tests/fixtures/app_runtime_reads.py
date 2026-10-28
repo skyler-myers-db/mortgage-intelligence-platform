@@ -11,8 +11,9 @@ App resolves against its source root), or at a string constant, f-string or
 ``os.environ.get`` default fed to one of those. The scan follows it, to a fixed
 point over every scanned module, through ``/``, ``.parent``, ``.parents[N]``,
 ``joinpath``, ``with_name``, ``resolve()``, ``str()``, ``or``/``if``, names,
-tuple targets, walrus and ``/=``, function returns, call arguments into first-party
-functions (including imported ones and ``self.method``), parameter defaults,
+tuple targets, walrus and ``/=``, function returns, call arguments (path values
+and strings) into first-party functions (including imported ones and
+``self.method``), parameter defaults,
 attributes assigned on ``self``, ``cls`` or a class body, names and module
 attributes imported from other first-party modules, containers, and ``for``
 loops. Each value ends at a consumer, which decides what is read:
@@ -43,10 +44,8 @@ A path value bound to a name nothing loads counts as read where it is bound.
 Known residuals, each a shape no backend module uses today: a first-party
 callee the scan cannot name (a method reached through an object, a function
 passed as a value) is assumed to read only under the path it receives, so a
-callee that walks up from it is not seen; a string that reaches a path
-constructor only through a function parameter is not followed (the literal
-sweep is the net for those); ``getattr``, ``exec`` and ``importlib`` with a
-computed name are invisible.
+callee that walks up from it is not seen; ``getattr``, ``exec`` and
+``importlib`` with a computed name are invisible.
 
 The scan is split by responsibility: app_runtime_paths.py (path values and
 pure helpers), app_runtime_flow.py (resolution and binding to a fixed point),

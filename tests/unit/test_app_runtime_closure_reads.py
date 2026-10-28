@@ -125,9 +125,11 @@ def test_an_added_entry_nothing_reads_is_reported(real_scan: ScanResult) -> None
     assert _unreferenced((*closure.READS, stale), outside_reads(real_scan)) == [stale.path]
 
 
-# Two fake readers dropped into a copy of the real backend: a module-level path
-# nothing in the module loads, and the SOURCE_ROOT that dependency_lock_check
-# exports, imported by another module.
+# Fake readers dropped into a copy of the real backend: a module-level path
+# nothing in the module loads, the SOURCE_ROOT that dependency_lock_check
+# exports, imported by another module, and a bare "docs" that reaches a path
+# only through a parameter (the flow scan's alone: the sweep does not flag a
+# bare name).
 FAKE_READERS = {
     "zz_fake_constant.py": (
         'NOTES = Path(__file__).resolve().parents[2] / "docs" / "fake_constant.md"\n'
@@ -137,10 +139,16 @@ FAKE_READERS = {
         "def read():\n"
         '    return (SOURCE_ROOT / "docs" / "fake_import.md").read_text()\n'
     ),
+    "zz_fake_param.py": (
+        "def _read(folder, name):\n"
+        "    return (Path(folder) / name).read_text()\n\n"
+        "def load():\n"
+        '    return _read("docs", "fake_param.md")\n'
+    ),
 }
 
 
-def test_fake_reads_in_a_copy_of_the_real_backend_are_caught_by_both_nets(
+def test_fake_reads_in_a_copy_of_the_real_backend_are_caught(
     tmp_path: Path,
 ) -> None:
     ignore = shutil.ignore_patterns("__pycache__")
@@ -158,7 +166,7 @@ def test_fake_reads_in_a_copy_of_the_real_backend_are_caught_by_both_nets(
 
     result = scan(tmp_path)
 
-    expected = {"docs/fake_constant.md", "docs/fake_import.md"}
-    assert set(_uncovered(outside_reads(result))) == expected
+    swept = {"docs/fake_constant.md", "docs/fake_import.md"}
+    assert set(_uncovered(outside_reads(result))) == swept | {"docs/fake_param.md"}
     literals = _unreviewed(sweep(result.trees, top_level_names(tmp_path), modules=modules))
-    assert {literal.key() for literal in literals} == expected
+    assert {literal.key() for literal in literals} == swept

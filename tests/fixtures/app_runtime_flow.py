@@ -442,7 +442,11 @@ class ModuleFlow:
         for arg in (*call.args, *(kw.value for kw in call.keywords)):
             value = arg.value if isinstance(arg, ast.Starred) else arg
             refs = self.resolve(value, scope)
-            if not refs:
+            strings = self.strings_of(value, scope)
+            if not refs and not strings:
                 continue
             for module, inner, param in self.param_targets(call, arg) or []:
-                self.world.grow(module.bindings.setdefault(inner, {}), param, refs)
+                if refs:
+                    self.world.grow(module.bindings.setdefault(inner, {}), param, refs)
+                if strings:
+                    self.world.grow(module.strings.setdefault(inner, {}), param, strings)

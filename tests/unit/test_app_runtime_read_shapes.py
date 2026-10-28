@@ -200,6 +200,24 @@ SHAPES: dict[str, tuple[str, str | None, str | None]] = {
             def read(self):
                 return self.read_under(root=Path(__file__).resolve().parents[2])
         """, "docs/v.md", "docs/v.md"),
+    # A bare top-level name reaching a path constructor only through a
+    # first-party parameter: no '/' and no path context, so only the flow
+    # scan can see it.
+    "string_into_a_parameter": ("""
+        def _read(folder, name):
+            return (Path(folder) / name).read_text()
+
+        def load():
+            return _read("docs", "runbook.md")
+        """, "docs/runbook.md", None),
+    "string_keyword_into_a_method": ("""
+        class Reader:
+            def read(self, *, folder):
+                return open(os.path.join(folder, "kw.md")).read()
+
+            def load(self):
+                return self.read(folder="docs")
+        """, "docs/kw.md", None),
     "glob_from_root": (
         'X = [p.read_text() for p in Path(__file__).resolve().parents[2].glob("docs/*.md")]',
         "docs/**", "docs/**"),
