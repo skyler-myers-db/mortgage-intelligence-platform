@@ -86,6 +86,53 @@ Two operational facts to know before assembling any ad-hoc App source tree
   frontend build must therefore include those root `tests/fixtures/` files,
   or the build fails with TS2307.
 
+## App Python dependencies: the deps-digest line
+
+The Databricks Apps build decides whether to reinstall Python packages by
+comparing `requirements.txt` with the previous deployment's copy. When the
+bytes are equal it logs `Requirements have not changed. Skipping
+installation.` and keeps the Python environment it already has, which
+persists on the App compute across deployments. It does not follow the file's
+`-c uv.lock` and `-r requirements.in` includes. Until 2026-10-28
+`requirements.txt` was only those two lines, byte-identical since 2026-05-17,
+so no lock refresh reached a running App: the deploy that carried PR #274
+(databricks-sql-connector 4.4.0 to 4.8.0, oauthlib 3.3.1 to 4.0.0) skipped
+installation, and the security floors locked since at least 2026-10-06
+(certifi, urllib3, PyJWT, oauthlib, mlflow and the rest) were never
+installed.
+
+`requirements.txt` therefore starts with a generated comment carrying the
+sha256 of both included files:
+
+```text
+# deps-digest: uv.lock sha256=<64 hex> requirements.in sha256=<64 hex>
+-c uv.lock
+-r requirements.in
+```
+
+Every change to `uv.lock` or `requirements.in` ends with
+`python tools/requirements_digest.py --write`, which rewrites only that line.
+`tests/unit/test_requirements_digest.py` runs `--check` in CI and fails with
+that remedy when the line is stale or missing. pip, pip-audit and
+`tools/python_deps_check.py` all skip comment lines, so they read the file as
+before.
+
+**Verify the reinstall on every deploy that changes the digest.** The App's
+deployment build log must show pip output (`Collecting ...`, `Successfully
+installed ...`) instead of `Requirements have not changed. Skipping
+installation.` Whether a comment-only change defeats the skip is inferred from
+how the skip behaved (it is keyed to `requirements.txt`, and that file never
+changed); it has not yet been observed, so confirm it on the next deploy that
+carries a digest change. If the build still skips (for example because it
+compares the file with comments stripped), the fallback is a requirement line
+that pip ignores through a false marker but that is not a comment, such as
+`mip-deps-digest==0+<hex>; python_version < "3"`. It is not implemented,
+because it is not yet shown to be needed and it touches every reader:
+`tools/python_deps_check.py` rejects any line that is not `-c`/`-r`, the
+digest tool would have to write it, and `pip-audit -r requirements.txt
+--strict` must be shown to skip a marker-false requirement that does not
+exist on PyPI.
+
 ## Databricks App
 
 1. Fill `.env.local` with workspace, warehouse, lender/runtime values, and the

@@ -118,7 +118,9 @@ this remediation pass.
   `topojson-client@3.1.0` (`ISC`) adapter path.
 - `requirements.in` carries the direct Python dependency contract, `uv.lock`
   pins the transitive resolution, and `requirements.txt` installs through that
-  lock as a constraint file.
+  lock as a constraint file. Its generated first line carries the sha256 of
+  both files (`tools/requirements_digest.py`), so the Databricks Apps build
+  reinstalls when either changes.
 - `docs/THIRD_PARTY_LICENSES.md` tracks the weak-copyleft and attribution
   obligations that procurement teams are likely to ask about.
 
@@ -142,6 +144,7 @@ npm --prefix frontend audit --audit-level=moderate  # advisory local read; not a
 npm --prefix frontend run test -- USChoroplethMap
 npm --prefix frontend run build
 ./.venv/bin/pip-audit -r requirements.txt --strict
+./.venv/bin/python tools/requirements_digest.py --check
 ./.venv/bin/python -m pytest -q tests/unit/test_supply_chain_licenses.py
 ./.venv/bin/python -m pytest -q tests/unit/test_error_sanitizer.py tests/unit/test_health_endpoint.py
 ```
@@ -149,6 +152,24 @@ npm --prefix frontend run build
 `tests/unit/test_supply_chain_licenses.py` pins this section to CI: the
 `--audit-level` named as the gate here must be the one ci.yml runs, and every
 advisory ci.yml ignores must be named in this document.
+
+Python lock refresh. A refresh moves only the named packages, and it always
+ends by restamping `requirements.txt`:
+
+```bash
+uv pip compile requirements.in --python-version 3.11 --format requirements.txt \
+  --output-file uv.lock --upgrade-package <package> [--upgrade-package <package> ...]
+python tools/requirements_digest.py --write
+```
+
+The last step is not optional. The Databricks Apps build compares only the
+bytes of `requirements.txt` and does not follow its `-c uv.lock` or
+`-r requirements.in` includes, so without the new digest line the running App
+keeps its old packages (docs/deployment.md, "App Python dependencies: the
+deps-digest line"). `tests/unit/test_requirements_digest.py` fails CI when the
+line is stale. The dated "Lock refresh" entries in the addenda below record
+what each batch ran at the time. Every refresh before 2026-10-28 predates the
+digest line.
 
 ## Dependency upgrade checklist
 
