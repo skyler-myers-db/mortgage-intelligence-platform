@@ -149,6 +149,24 @@ def test_only_an_exact_release_folder_of_this_bundle_root_has_an_id(path: str | 
     assert contract.release_id_of(path, principal=PRINCIPAL, target="dev") is None
 
 
+def test_release_id_in_reads_any_principal_and_leaf_but_only_the_exact_release_shape() -> None:
+    """verify-deployment reads a deployment's release id with it; only the path
+    shape guards it, because the principal and leaf are not known there."""
+    release = _release()
+    assert contract.release_id_in(release) == RELEASE_ID
+    assert contract.release_id_in(_release(leaf="dev-ci").replace(PRINCIPAL, "ci-sp")) == RELEASE_ID
+    for bad in (
+        f"{release}/extra",  # a tenth segment
+        release.replace(f"/{PRINCIPAL}/", "/../"),  # a dot-dot principal
+        release.replace("/dev/app-src/", "/../app-src/"),  # a dot-dot leaf
+        f"{release}/",
+        release.replace("/app-src/", "/src/"),
+        None,
+    ):
+        with pytest.raises(contract.ReleaseContractError, match="governed per-release folder"):
+            contract.release_id_in(bad)
+
+
 def test_a_release_path_is_never_an_immutable_snapshot_for_rollback() -> None:
     # A rollback record must name the platform's /src/ snapshot, never a
     # release folder; capture still accepts a release folder as its candidate.
