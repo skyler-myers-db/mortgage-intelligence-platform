@@ -143,6 +143,7 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert "opentelemetry-api>=1.45.1,<2" in requirements_in
     assert "opentelemetry-sdk>=1.45.1,<2" in requirements_in
     assert "opentelemetry-exporter-otlp>=1.45.1,<2" in requirements_in
+    assert "opentelemetry-instrumentation-logging>=0.66b1,<1" in requirements_in
     for required_pin in (
         "boto3==1.43.50",
         "uvicorn==0.47.0",
@@ -162,6 +163,7 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
         "opentelemetry-api==1.45.1",
         "opentelemetry-sdk==1.45.1",
         "opentelemetry-exporter-otlp==1.45.1",
+        "opentelemetry-instrumentation-logging==0.66b1",
         "certifi==2026.10.23",
         "graphql-core==3.2.12",
         "pillow==13.0.0",

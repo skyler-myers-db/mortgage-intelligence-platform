@@ -580,12 +580,18 @@ def _install_otel_handler_if_configured(root: logging.Logger, level_value: int) 
 
     When the env var IS set:
 
-    * If ``opentelemetry-sdk`` + ``opentelemetry-exporter-otlp`` aren't
-      importable we log a ``WARNING`` (via the stdlib root, which is
-      already wired with :class:`StructuredFormatter`) and keep serving
-      traffic. A missing-but-optional exporter must NOT crash the app.
+    * If ``opentelemetry-sdk``, ``opentelemetry-exporter-otlp`` or
+      ``opentelemetry-instrumentation-logging`` aren't importable we log a
+      ``WARNING`` (via the stdlib root, which is already wired with
+      :class:`StructuredFormatter`) and keep serving traffic. A
+      missing-but-optional exporter must NOT crash the app.
     * On success we register the handler at module scope so tests can
       introspect it.
+
+    The handler comes from ``opentelemetry-instrumentation-logging``: the
+    SDK's own ``opentelemetry.sdk._logs.LoggingHandler`` is deprecated since
+    1.41.1 and warns on construction, which a warnings-as-errors runtime
+    turned into ``otel_exporter_wiring_failed``.
 
     We deliberately avoid importing the ``opentelemetry`` packages at
     module import time -- importing them is the expensive part on cold
@@ -605,7 +611,8 @@ def _install_otel_handler_if_configured(root: logging.Logger, level_value: int) 
         from opentelemetry.exporter.otlp.proto.http._log_exporter import (
             OTLPLogExporter,
         )
-        from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+        from opentelemetry.instrumentation.logging.handler import LoggingHandler
+        from opentelemetry.sdk._logs import LoggerProvider
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
         from opentelemetry.sdk.resources import Resource
     except ImportError as exc:
@@ -644,7 +651,11 @@ def _install_otel_handler_if_configured(root: logging.Logger, level_value: int) 
         exporter = OTLPLogExporter(endpoint=endpoint, headers=headers or None)
         provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
         set_logger_provider(provider)
-        handler = LoggingHandler(level=level_value, logger_provider=provider)
+        # ``log_code_attributes`` keeps the code.file.path / code.function.name
+        # / code.line.number attributes the SDK handler always attached.
+        handler = LoggingHandler(
+            level=level_value, logger_provider=provider, log_code_attributes=True
+        )
         handler.setFormatter(StructuredFormatter())
         root.addHandler(handler)
         _OTEL_HANDLER = handler

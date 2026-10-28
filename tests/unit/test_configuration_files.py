@@ -294,6 +294,7 @@ def test_runtime_requirements_include_otlp_exporter_wheels():
 
     assert any(line.startswith("opentelemetry-sdk") for line in lines)
     assert any(line.startswith("opentelemetry-exporter-otlp") for line in lines)
+    assert any(line.startswith("opentelemetry-instrumentation-logging") for line in lines)
 
 
 def test_governed_deploy_wires_otlp_without_global_app_yaml_secret():
