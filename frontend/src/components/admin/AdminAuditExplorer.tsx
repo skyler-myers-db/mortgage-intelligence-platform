@@ -242,6 +242,7 @@ export function AdminAuditExplorer() {
       className="surface mt-grid"
       id="audit"
       tabIndex={-1}
+      role="region"
       aria-labelledby="audit-explorer-title"
     >
       <div className="surface__hdr surface__hdr--split surface__hdr--audit">
@@ -380,6 +381,7 @@ export function AdminAuditExplorer() {
         {events !== null && !error && (
           <div
             className={`admin-audit-list stable-refresh-region stable-refresh-region--table mt-3 ${updating ? 'is-updating' : ''}`}
+            role="group"
             aria-label="Audit event table"
             aria-busy={updating}
             data-status={statusLabel}
@@ -421,7 +423,7 @@ export function AdminAuditExplorer() {
                     : 'No audit rows match these filters.'}
               </div>
             )}
-            <div className="section-actions admin-audit-pagination" aria-label="Audit result pages">
+            <div className="section-actions admin-audit-pagination" role="group" aria-label="Audit result pages">
               <button
                 type="button"
                 className="btn btn--ghost btn--sm"

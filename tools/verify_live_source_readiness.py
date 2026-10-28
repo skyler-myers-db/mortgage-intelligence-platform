@@ -6,21 +6,145 @@ be live with a row count, ``last_updated`` and a fresh ``checked_at``; every
 first-party source is live or a disclosed synthetic demo feed; the pending
 Building Permits feed is never reported live.
 
-Data-age decision (W5b deploy follow-up, decided W5e): ``checked_at`` stays
-fresh only within ``DEFAULT_MAX_SOURCE_AGE_DAYS`` (3) unless the operator
-passes ``--max-source-age-days``. On dev the flag is expected: only a full
-``deploy.sh`` run or a refresh job moves ``checked_at``, and a scheduled dev
-refresh was rejected (metered, and it would only move timestamps). Each stale
-flag prints the measured age against the threshold, so a reader sees how
-stale, not only that it is.
+Data-age decision (data-freshness design 2026-10-26, fail-closed since the
+post-W5 round 2): ``checked_at`` stays fresh within
+``FAIL_CLOSED_MAX_SOURCE_AGE_DAYS`` (3, W5e's threshold) unless the weekly
+schedule is proven live. :func:`resolve_max_source_age_days` reads the jobs of
+the operator's own profile (a read-only ``databricks jobs list``, the same CLI
+profile whose OAuth token the probes use) and widens the threshold to
+``SCHEDULED_REFRESH_MAX_SOURCE_AGE_DAYS``, the weekly cadence plus 1 day (8),
+only when exactly one ``mip_scheduled_refresh`` job exists, with an
+``UNPAUSED`` schedule on the bundle's weekly cron (databricks.yml, Fridays
+06:00 America/Chicago: FRED -> gold -> lifecycle -> KPI). An absent job, a
+``PAUSED`` one, another cron, more than one such job in the workspace, or a
+jobs list that cannot be read keeps 3. ``--max-source-age-days``
+overrides both. The schedule lands only through a GO governed ``deploy.sh``
+run; until one does, ``checked_at`` on dev moves only when gold is rebuilt (a
+full governed ``deploy.sh`` run, or an operator-run interim refresh) and the
+3-day flag fires between rebuilds. Silver stays on demand because the Cotality
+eval share is static. Each stale flag prints the measured age against the
+threshold, so a reader sees how stale, not only that it is.
 """
 
 from __future__ import annotations
 
+import json
+import re
+import subprocess
+import tempfile
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-DEFAULT_MAX_SOURCE_AGE_DAYS = 3
+#: The threshold whenever the weekly schedule is not proven live (W5e).
+FAIL_CLOSED_MAX_SOURCE_AGE_DAYS = 3
+#: mip_scheduled_refresh's cadence and cron on the dev live install
+#: (databricks.yml). tests/unit/test_refresh_schedule_contract.py pins the
+#: cron, its time zone and this cadence together.
+SCHEDULED_REFRESH_CADENCE_DAYS = 7
+SCHEDULED_REFRESH_CRON = "0 0 6 ? * FRI *"
+SCHEDULED_REFRESH_TIMEZONE = "America/Chicago"
+SCHEDULED_REFRESH_MAX_SOURCE_AGE_DAYS = SCHEDULED_REFRESH_CADENCE_DAYS + 1
+#: Every default in this module is the fail-closed one.
+DEFAULT_MAX_SOURCE_AGE_DAYS = FAIL_CLOSED_MAX_SOURCE_AGE_DAYS
+#: The job's bundle name, bare or with the ``mode: development`` prefix
+#: (``[dev <user>] ``). Only the job id is ever reported, never the prefix.
+_SCHEDULED_REFRESH_JOB_NAME = re.compile(r"(?:\[dev [^\]]+\] )?mip_scheduled_refresh")
+_JOBS_LIST_TIMEOUT_S = 120
+
+
+@dataclass(frozen=True)
+class SourceAgeThreshold:
+    """The data-age threshold verify_live applies, and why (printed in the report)."""
+
+    days: int
+    basis: str
+
+
+def scheduled_refresh_threshold(list_jobs: Callable[[], Any]) -> SourceAgeThreshold:
+    """8 days only when the one ``mip_scheduled_refresh`` is read back UNPAUSED on the weekly cron; else 3.
+
+    ``list_jobs`` returns the Jobs API list (``[{"job_id", "settings": {...}}]``).
+    Any exception or unexpected shape is an unreadable list and keeps the
+    fail-closed threshold. So does more than one candidate: the jobs list is
+    workspace-wide, and another install's (or another deployer's dev)
+    orchestrator would prove nothing about the install under test.
+    """
+
+    fail_closed = FAIL_CLOSED_MAX_SOURCE_AGE_DAYS
+    try:
+        jobs = list_jobs()
+    except Exception as exc:  # noqa: BLE001 - an unreadable jobs list fails closed
+        return SourceAgeThreshold(fail_closed, f"fail-closed: the jobs list is unreadable ({type(exc).__name__})")
+    if not isinstance(jobs, list):
+        return SourceAgeThreshold(fail_closed, "fail-closed: the jobs list is unreadable (not a JSON list)")
+    candidates = [
+        job
+        for job in jobs
+        if isinstance(job, dict)
+        and isinstance(job.get("settings"), dict)
+        and _SCHEDULED_REFRESH_JOB_NAME.fullmatch(str(job["settings"].get("name") or ""))
+    ]
+    if not candidates:
+        return SourceAgeThreshold(fail_closed, "fail-closed: no mip_scheduled_refresh job in the workspace")
+    if len(candidates) > 1:
+        ids = ", ".join(str(job.get("job_id")) for job in candidates)
+        return SourceAgeThreshold(
+            fail_closed,
+            f"fail-closed: {len(candidates)} mip_scheduled_refresh jobs in the workspace (ids {ids}); "
+            "which one is this install's is unproven",
+        )
+    (job,) = candidates
+    schedule = job["settings"].get("schedule")
+    if (
+        isinstance(schedule, dict)
+        and schedule.get("pause_status") == "UNPAUSED"
+        and schedule.get("quartz_cron_expression") == SCHEDULED_REFRESH_CRON
+        and schedule.get("timezone_id") == SCHEDULED_REFRESH_TIMEZONE
+    ):
+        return SourceAgeThreshold(
+            SCHEDULED_REFRESH_MAX_SOURCE_AGE_DAYS,
+            f"mip_scheduled_refresh job {job.get('job_id')} is UNPAUSED on the weekly cron (cadence + 1 day)",
+        )
+    return SourceAgeThreshold(
+        fail_closed,
+        f"fail-closed: mip_scheduled_refresh is not UNPAUSED on the weekly cron ({_schedule_label(schedule)})",
+    )
+
+
+def _schedule_label(schedule: Any) -> str:
+    if schedule is None:
+        return "unscheduled"
+    if not isinstance(schedule, dict):
+        return "unreadable schedule"
+    status = str(schedule.get("pause_status") or "no pause status")
+    return "UNPAUSED on another cron" if status == "UNPAUSED" else status
+
+
+def _cli_jobs_list(profile: str) -> Any:
+    """The read-only ``databricks jobs list`` of ``profile`` (the CLI pages through every job).
+
+    It runs from the system temp directory: from the repo root the CLI would
+    load the bundle context (databricks.yml), whose host can refuse a profile
+    for another workspace.
+    """
+
+    result = subprocess.run(
+        ["databricks", "jobs", "list", "-p", profile, "-o", "json"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=_JOBS_LIST_TIMEOUT_S,
+        cwd=tempfile.gettempdir(),
+    )
+    return json.loads(result.stdout)
+
+
+def resolve_max_source_age_days(profile: str) -> SourceAgeThreshold:
+    """The default threshold for ``profile``'s workspace: see :func:`scheduled_refresh_threshold`."""
+
+    return scheduled_refresh_threshold(lambda: _cli_jobs_list(profile))
 
 
 def _source_readiness_flags(rows: list[Any], *, max_age_days: int = DEFAULT_MAX_SOURCE_AGE_DAYS) -> list[str]:

@@ -347,6 +347,30 @@ describe('Tooltip', () => {
     expect(genie.getAttribute('aria-describedby')).toBe(`launcher-status ${descId}`);
   });
 
+  // One shared description per text (ui/tooltipDescriptions.ts): the open
+  // trigger points at the popup, its siblings stay on the shared node.
+  it('opening one of several triggers that share a description leaves the others on it', () => {
+    render(
+      <>
+        <Tooltip content="Reject"><button type="button" aria-label="Reject A">a</button></Tooltip>
+        <Tooltip content="Reject"><button type="button" aria-label="Reject B">b</button></Tooltip>
+      </>,
+    );
+    const a = button('Reject A');
+    const b = button('Reject B');
+    const shared = a.getAttribute('aria-describedby') ?? '';
+    expect(b.getAttribute('aria-describedby')).toBe(shared);
+
+    keyboardFocus(a);
+    expect(tooltip()?.textContent).toBe('Reject');
+    expect(a.getAttribute('aria-describedby')).toBe(TOOLTIP_POPUP_ID);
+    expect(b.getAttribute('aria-describedby')).toBe(shared);
+
+    act(() => a.blur());
+    expect(a.getAttribute('aria-describedby')).toBe(shared);
+    expect(document.getElementById(shared)?.textContent).toBe('Reject');
+  });
+
   it('renders the shortcut in a kbd slot and in the description', () => {
     render(
       <Tooltip content="Command palette" shortcut="⌘K">

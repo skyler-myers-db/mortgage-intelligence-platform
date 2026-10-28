@@ -236,8 +236,29 @@ export async function expectAxeClean(page: Page, options: ExpectAxeCleanOptions)
   const label = `${knownKey(options.key, '*')} (${options.theme}/${accent})`;
   expect(verdict.unrecorded, `unrecorded axe violations on ${label}`).toEqual([]);
   expect(verdict.stale, 'ratchet: recorded violations that no longer reproduce').toEqual([]);
+  expect(prohibitedNamesNeedingReview(results), `names on a role that prohibits one on ${label} (axe needs-review)`).toEqual([]);
   expect(results.passes.length, 'axe evaluated the page').toBeGreaterThan(0);
   return results;
+}
+
+/**
+ * The aria-prohibited-attr results axe files as NEEDS REVIEW, one
+ * `selector (impact)` per node. ARIA 1.2 prohibits aria-label and
+ * aria-labelledby on a generic (a role-less div or span) and on a few other
+ * roles; axe calls that a violation only while the element has no text, and
+ * needs-review while it has some, because the text is still read. Screen
+ * readers that follow the rule drop the name either way, so a 4.1.2 gap
+ * hid in the needs-review list (the post-W5 screen-reader pass found 27:
+ * the topbar pills, the score badge, the evidence drawer's record rows and
+ * panels on Admin, Analytics, Offer, Portfolio and Segments). It gates
+ * like a violation, with no ratchet: fix the element (a role that permits a
+ * name, or visually hidden text). src/test/ariaProhibitedNames.test.ts holds
+ * the source tree to the same rule. Pure.
+ */
+export function prohibitedNamesNeedingReview(results: Pick<AxeResults, 'incomplete'>): string[] {
+  return results.incomplete
+    .filter((result) => result.id === 'aria-prohibited-attr')
+    .flatMap((result) => result.nodes.map((node) => `${node.target.join(' ')} (${result.impact ?? 'n/a'})`));
 }
 
 async function reportAdvisory(context: AxeScanContext, advisory: readonly AxeViolation[]): Promise<void> {

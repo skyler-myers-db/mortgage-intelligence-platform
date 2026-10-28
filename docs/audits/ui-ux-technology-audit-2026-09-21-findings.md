@@ -1289,7 +1289,7 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Verifier:** Confirmed ZIP_TILE_CAP=24, the tile grid, no zoom/pan, and prototype L1802-1835 drawing ZIP polygons. But live ZIP coverage is partial (IL 212 ZIPs; 677 rollup rows), ZIP is not ZCTA, and a PMTiles basemap cannot meet the 10 MB per-file cap or connect-src 'self'.
 - **Constraint conflict:** The optional MapLibre + PMTiles basemap is infeasible: a US basemap archive exceeds the Databricks Apps 10 MB per-file limit and external tile hosts are blocked by connect-src 'self'. Committing roughly 15-25 MB of all-state geometry (needed because coverage must follow the share dynamically) is an owner decision.
 
-**Wave-5 status.** W5c (2026-10-07): the ZCTA polygon rung is built (w5-zcta-watchlist; deviation:zcta-level): a fitted viewBox, pan and zoom, a drill tween and the tiles as the degraded fallback; the per-state geometry is committed by the approved operator build (pending at merge). Until it lands a Segments ZIP drill shows the plain tiles with no failure line (integrator, 2026-10-07).
+**Wave-5 status.** W5c (2026-10-07): the ZCTA polygon rung is built (w5-zcta-watchlist; deviation:zcta-level): a fitted viewBox, pan and zoom, a drill tween and the tiles as the degraded fallback; the per-state geometry is committed by the approved operator build (pending at merge). Until it lands a Segments ZIP drill shows the plain tiles with no failure line (integrator, 2026-10-07). Superseded 2026-10-26: the geometry is committed (`post-w5/zcta-geometry`; the post-wave ZCTA record in ui-ux-technology-audit-2026-09-21.md).
 
 ### `dataviz-02` Choropleth ramp, classes and legend fail basic encoding checks in both themes
 
@@ -1695,6 +1695,8 @@ Subgrid and color-scheme status come from my own knowledge. Data correctness was
 - **Recommendation:** After the Level A fixes land, publish a WCAG-edition VPAT 2.5 ACR first (move to INT with 508 and EN 301 549 only when a federal or EU buyer asks), rated honestly with 'Partially Supports' and a dated roadmap. Record NVDA+Chrome and VoiceOver+Safari passes; JAWS needs a licence. Add an accessibility contact and link it from Glossary.
 - **Tech:** ITI VPAT 2.5 INT (confirm current edition before publishing); manual AT passes plus axe evidence from a11y-05.
 - **Verifier:** grep over docs/ and README finds no VPAT, ACR, EN 301 549 or accessibility statement; the cross-browser audit (:215) cites RFP demand. VPAT 2.5 web-verified current. But an honest ACR needs manual AT passes over ~55 criteria on 11 routes: L, not M.
+
+**Post-wave status.** 2026-10-27 (post-w5/screen-reader-vpat): `docs/accessibility/VPAT.md` is the Module 0 report, a VPAT 2.5 WCAG-edition self-assessment (WCAG 2.2 A and AA, 56 rows) rated from the axe, oxlint, contrast, forced-colors, keyboard and virtual screen-reader evidence in the repo, with a dated roadmap of open items. Not done, and listed there with target dates: the accessibility contact (item 1), the NVDA + Chrome and VoiceOver + Safari passes (items 2 and 3), JAWS and mobile (item 4) and testing with people who use assistive technology (item 5). The virtual pass's 27 prohibited names are fixed and gated (src/test/ariaProhibitedNames.test.ts and the axe gate's needs-review check).
 
 ### `a11y-v1` Portfolio Builder state picker is mouse-only (keyboard users cannot choose states)
 

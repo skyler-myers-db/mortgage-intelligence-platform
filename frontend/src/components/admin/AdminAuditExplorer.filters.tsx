@@ -258,6 +258,7 @@ export function AuditAppliedFilterChips({ applied, summary, onRemove, emptiedFoc
     <div
       ref={laneRef}
       className={`audit-filter-chip-lane chip-row mt-3 ${active ? '' : 'is-empty'}`}
+      role="group"
       aria-label="Applied audit filters"
       aria-hidden={!active}
     >

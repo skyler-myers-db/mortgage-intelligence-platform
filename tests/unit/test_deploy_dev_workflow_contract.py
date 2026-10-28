@@ -27,6 +27,7 @@ from tests.fixtures.deploy_script import (
     deploy_contract_text,
     deploy_entrypoint_text,
 )
+from tools.databricks import ci_install_isolation as ci_isolation
 from tools.databricks import lakebase_oauth_role_bootstrap_admission as admission
 from tools.databricks import lakebase_oauth_role_bootstrap_orchestration as orchestration
 
@@ -48,8 +49,32 @@ def test_deploy_script_rejects_nonmutable_target_before_preflight(target: str) -
     )
 
     assert result.returncode == 2
-    assert "target must be exactly dev or prod" in result.stderr
+    assert "target must be exactly dev, prod or pr105-host" in result.stderr
     assert "step 1" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("target", "target_class"),
+    (("dev", "dev"), ("prod", "prod"), ("pr105-host", "dev")),
+)
+def test_deploy_script_target_parse_maps_the_forked_anchor_target_to_the_dev_class(
+    target: str, target_class: str
+) -> None:
+    """Post-W5: only the argument parse runs here (it ends before any helper or step)."""
+
+    text = deploy_entrypoint_text()
+    parse = text[text.index("DRY_RUN=0\n") : text.index("# Pretty-print helpers")]
+    result = subprocess.run(
+        ["bash", "-c", parse + 'printf "%s|%s\\n" "$TARGET" "$TARGET_CLASS"\n', "deploy.sh", "-t", target],
+        cwd=REPO,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1] == f"{target}|{target_class}"
 
 
 @pytest.mark.parametrize(
@@ -4131,6 +4156,24 @@ def test_admin_and_nightly_jobs_cannot_replace_reviewed_growth_agent_functions()
     assert "mip_refresh_scores" in nightly_jobs
     assert nightly_jobs.isdisjoint(publisher_jobs)
 
+    # The weekly mip_scheduled_refresh runs unattended: nothing it reaches
+    # through run_job_task (transitively) may publish a reviewed function.
+    scheduled_closure: set[str] = set()
+    pending = ["mip_scheduled_refresh"]
+    while pending:
+        job_name = pending.pop()
+        if job_name in scheduled_closure:
+            continue
+        scheduled_closure.add(job_name)
+        for task in jobs[job_name].get("tasks", []):
+            job_ref = task.get("run_job_task", {}).get("job_id", "")
+            if job_ref:
+                match = re.fullmatch(r"\$\{resources\.jobs\.([a-z0-9_]+)\.id\}", job_ref)
+                assert match, job_ref
+                pending.append(match.group(1))
+    assert "mip_refresh_scores" in scheduled_closure
+    assert scheduled_closure.isdisjoint(publisher_jobs), scheduled_closure & publisher_jobs
+
 
 def test_workflow_bundle_target_inventory_handles_shell_boundaries() -> None:
     continued = {
@@ -5121,13 +5164,20 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
         "DATABRICKS_ACCOUNT_CLIENT_ID": "account-client",
         "DATABRICKS_ACCOUNT_CLIENT_SECRET": "account-secret",
     }
+    # The step writes ``.env.local`` (``> .env.local``) into its working
+    # directory. Run it in a scratch checkout, never the repo root, where it
+    # would truncate the operator's real file; PYTHONPATH keeps the real
+    # ``python -m tools.databricks.agent_proxy_credential_bundle`` importable.
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
     result = subprocess.run(
         ["bash", "-c", _workflow_run_block(DEPLOY_DEV, "Configure Databricks dev credentials")],
-        cwd=REPO,
+        cwd=checkout,
         env={
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "HOME": str(home),
             "CHILD_ENV_LOG": str(log),
+            "PYTHONPATH": str(REPO),
             **required,
         },
         text=True,
@@ -5136,6 +5186,8 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+    # stat only: the step wrote its .env.local into the scratch checkout.
+    assert (checkout / ".env.local").stat().st_mode & 0o777 == 0o600
     child = _read_env_log(log)
     for client_id in (
         "DATABRICKS_CLIENT_ID",
@@ -7256,7 +7308,7 @@ def test_dev_workflow_credential_repair_is_explicit_bounded_and_non_deploying() 
         "MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS": (
             "${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}"
         ),
-        "MIP_APP_NAME": "${{ vars.MIP_APP_NAME || 'mip-app' }}",
+        "MIP_APP_NAME": "${{ vars.MIP_APP_NAME }}",
         "MIP_DEPLOYMENT_SOURCE_GIT_SHA": "${{ github.sha }}",
         "MIP_M2M_GITHUB_REPOSITORY": "${{ github.repository }}",
     }
@@ -7266,6 +7318,11 @@ def test_dev_workflow_credential_repair_is_explicit_bounded_and_non_deploying() 
     assert "export MIP_AI_GATEWAY_PROOF_VERIFY_KEY" in repair["run"]
     assert "MIP_AI_GATEWAY_PROOF_SIGNING_KEY is invalid" in repair["run"]
     repair_preflight = repair["run"].partition("python -m tools.databricks.provision_m2m_oauth")[0]
+    # The isolation gate is the step's first command, before any workspace call.
+    assert repair["run"].splitlines()[:2] == ["set -euo pipefail", "# This step rotates an OAuth secret before, and outside,"]
+    assert [line for line in repair["run"].splitlines() if line and not line.startswith("#")][1] == (
+        "python -m tools.databricks.ci_install_isolation repair-credential"
+    )
 
     def encoded_seed(byte: int) -> str:
         return base64.urlsafe_b64encode(bytes([byte]) * 32).rstrip(b"=").decode()
@@ -7276,11 +7333,15 @@ def test_dev_workflow_credential_repair_is_explicit_bounded_and_non_deploying() 
         previous_verify_key: str = "",
         historical_verify_keys: str = "",
         post_preflight: str,
+        overrides: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        overrides = overrides or {}
         preflight_env = {
             **os.environ,
             "PATH": f"{Path(sys.executable).parent}:{os.environ['PATH']}",
-            "DATABRICKS_HOST": "https://example.invalid",
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_WORKFLOW_REF": "o/r/.github/workflows/deploy-dev.yml@refs/heads/main",
+            "DATABRICKS_HOST": ci_isolation.target_hosts()[ci_isolation.CI_TARGET],
             "DATABRICKS_TOKEN": "test-token",
             "DATABRICKS_CLIENT_ID": "test-client-id",
             "GH_TOKEN": "test-github-token",
@@ -7290,6 +7351,7 @@ def test_dev_workflow_credential_repair_is_explicit_bounded_and_non_deploying() 
             "MIP_APP_NAME": "test-app",
             "MIP_DEPLOYMENT_SOURCE_GIT_SHA": "a" * 40,
             "MIP_M2M_GITHUB_REPOSITORY": "owner/repo",
+            **overrides,
         }
         return subprocess.run(
             ["bash", "-c", repair_preflight + post_preflight],
@@ -7332,6 +7394,20 @@ def test_dev_workflow_credential_repair_is_explicit_bounded_and_non_deploying() 
     assert "::error::MIP_AI_GATEWAY_PROOF_SIGNING_KEY is invalid" in invalid_probe.stdout
     assert "PROVISION_SENTINEL" not in invalid_probe.stdout
     assert invalid_signing_key not in invalid_probe.stdout + invalid_probe.stderr
+    for refused_env in (
+        {"DATABRICKS_HOST": ci_isolation.target_hosts()["dev"]},
+        {"MIP_APP_NAME": "mip-app"},
+        {"MIP_APP_NAME": ""},
+        {"GITHUB_WORKFLOW_REF": "o/r/.github/workflows/ci.yml@refs/heads/main"},
+    ):
+        refused_probe = run_preflight(
+            signing_key=current_signing_key,
+            post_preflight="\nprintf 'PROVISION_SENTINEL\\n'\n",
+            overrides=refused_env,
+        )
+        assert refused_probe.returncode == 2, (refused_env, refused_probe.stderr)
+        assert "[ci-install-isolation] refused" in refused_probe.stderr
+        assert "PROVISION_SENTINEL" not in refused_probe.stdout, refused_env
     assert deploy_steps[0]["if"] == "${{ !inputs.repair_normal_credential }}"
     assert _continued_command_tokens(repair["run"], "tools.databricks.provision_m2m_oauth") == [
         "python",

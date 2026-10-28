@@ -1,0 +1,35 @@
+## Open the drawer (source set, a stand-in opener button focused)
+dialog, Lead population
+button, Close drawer
+
+## Read the drawer with the virtual cursor
+tablist, Evidence detail views, orientated horizontally
+tab, Overview, selected, 1 control, position 1, set size 3
+tab, Lineage, not selected, position 2, set size 3
+tab, Under the hood, not selected, position 3, set size 3
+end of tablist, Evidence detail views, orientated horizontally
+tabpanel, Overview
+Fresh
+live
+Unity Catalog
+paragraph
+Governed borrower candidates used by Module 0 lead ranking.
+end of paragraph
+paragraph
+Updated within 7 days.
+end of paragraph
+Used in Module 0
+Ranked borrower table
+Governed assets
+status
+Governed assets not mapped. No local lineage is substituted.
+end of status
+end of tabpanel, Overview
+end of dialog, Lead population
+
+## ArrowRight on the selected tab moves to the next tab
+tab, Overview, selected, 1 control, position 1, set size 3
+tab, Lineage, selected, 1 control, position 2, set size 3
+
+## Escape closes the drawer; focus returns to the stand-in opener
+button, Lead population evidence

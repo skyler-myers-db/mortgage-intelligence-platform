@@ -8,16 +8,27 @@ user drills into that state on Segment Intelligence, as a hashed,
 same-origin `/assets/<USPS>.topo-<hash>.json`; nothing is fetched from the
 Census Bureau at deploy time or at runtime.
 
-Status: the operator build is pending. Until the files are committed, every
-drill falls back to the densest-ZIP tiles with a status line.
+Status: committed by the approved operator build (2026-10-26). A drill whose
+geometry read fails falls back to the densest-ZIP tiles with a status line.
 
 ## Provenance
 
-| Source | URL | SHA-256 |
-|---|---|---|
-| ZCTA cartographic boundaries, 1:500,000 (2020) | https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_zcta520_500k.zip | pinned in the tool's `SOURCES` and recorded in `manifest.json` `sources` at the approved build |
-| ZCTA-to-county relationship file (2020) | https://www2.census.gov/geo/docs/maps-data/data/rel2020/zcta520/tab20_zcta520_county20_natl.txt | as above |
-| State cartographic boundaries, 1:500,000 (2020) | https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_state_500k.zip | as above |
+Vintage: the 2020 decennial census geography (ZCTA5 2020, `zcta520`), in the
+Census Bureau's 2020 cartographic boundary release (GENZ2020) and its 2020
+relationship files. Downloaded once on 2026-10-26, each over HTTPS straight
+from www2.census.gov (HTTP 200, no redirect, the bytes equal to the served
+Content-Length), then reviewed and pinned in the tool's `SOURCES`:
+
+| Source | URL | Bytes | Last-Modified | SHA-256 |
+|---|---|---|---|---|
+| ZCTA cartographic boundaries, 1:500,000 (2020) | https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_zcta520_500k.zip | 66,655,314 | 2023-05-19 | `c69a4ede8aebebfc7ed3a98a9075c6aaa1b75d514a129bc5c662fd806d2f3d17` |
+| ZCTA-to-county relationship file (2020) | https://www2.census.gov/geo/docs/maps-data/data/rel2020/zcta520/tab20_zcta520_county20_natl.txt | 6,821,287 | 2021-12-09 | `3ed41278d637dc249e0323306f68be8a6c234e3090f4de88ef328dee71aeaaaf` |
+| State cartographic boundaries, 1:500,000 (2020) | https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_state_500k.zip | 3,548,589 | 2023-05-19 | `dcc877984a3e4d59c1ee8d068b6681517c545e0c1827b7e78a7c2c7cbb167da6` |
+
+The review: both archives test clean (`unzip -t`), each holds one shapefile
+set in NAD83 geographic coordinates with ISO metadata naming the 2020
+release, the ZCTA set has 33,791 records and the state set 56, and the
+relationship file carries the three columns the tool reads.
 
 The tool refuses any source whose SHA-256 does not match its pin, and refuses
 an unpinned source. `manifest.json` records the three hashes, the dependency
@@ -25,6 +36,23 @@ versions (from `tools/geo/package-lock.json`), the projection, the
 simplification weight, the quantization and, per file, the ZCTA count, bytes,
 SHA-256, arc point count and both bounding boxes.
 `tests/unit/test_zcta_geometry_manifest.py` checks every one against the files.
+
+## The committed build
+
+Weight 0.003 (the tool's `DEFAULT_WEIGHT`, with the sweep that chose it),
+quantization 1e5, us-atlas's Albers-1300 projection. 51 files, 16,260,305
+bytes (15.51 MiB) in all; the largest is TX at 1,114,173 bytes (1.06 MiB) and
+101,976 arc points, the smallest DC at 9,762 bytes. 33,782 ZCTA drawings:
+33,642 distinct ZCTAs, 137 of them drawn in more than one state. The 149
+ZCTAs the projection drops are all in Puerto Rico, the U.S. Virgin Islands,
+Guam, the Northern Mariana Islands and American Samoa, none of which has a
+file. A rebuild from the pinned sources is byte-identical.
+
+Two kinds of real geography sit outside the browser test's box tolerances and
+are pinned edge by edge in `zctaGeometry.test.ts`: Ka'ula Island, in HI's
+1:500k outline but not in us-atlas's 1:10m one, and four cross-line ZCTAs
+whose box runs well into a neighbour (97910 in ID, 57735 in NE, 82701 in SD,
+86044 in UT).
 
 ## Public domain
 

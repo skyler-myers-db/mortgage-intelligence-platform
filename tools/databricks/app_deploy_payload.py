@@ -181,6 +181,40 @@ def _env_value(key: str, dotenv: dict[str, str]) -> str:
     return (os.environ.get(key) or dotenv.get(key) or "").strip()
 
 
+def _salesforce_input(key: str, dotenv: dict[str, str]) -> str:
+    """A connector input; a placeholder secret (``changeme``, ``<password>``) is unset.
+
+    provision_runtime_secrets keeps an existing ``salesforce-*`` key when its
+    input is unset, and it reads unset through ``runtime_secret_text``. The
+    binder must use that same notion, or a template placeholder would bind the
+    stored credential of an earlier deploy into the running App.
+    """
+
+    value = _env_value(key, dotenv)
+    if key in SALESFORCE_SECRET_ENVS:
+        return runtime_secret_text(value) or ""
+    return value
+
+
+def _salesforce_placeholder_notice(dotenv: dict[str, str]) -> str | None:
+    """Names only: a set secret input that reads as a placeholder while the connector is configured.
+
+    A real secret shaped like a template value (``<...>``, ``...>``, or a
+    placeholder word) counts as unset in both this binder and the provisioner,
+    so its key stays unbound and nothing else would say why.
+    """
+
+    if not all(_env_value(name, dotenv) for name in SALESFORCE_REQUIRED_VARS if name not in SALESFORCE_SECRET_ENVS):
+        return None
+    names = sorted(name for name in SALESFORCE_SECRET_ENVS if _env_value(name, dotenv) and not _salesforce_input(name, dotenv))
+    if not names:
+        return None
+    return (
+        f"Salesforce notice: {', '.join(names)} read as a template placeholder (a <...> value or a placeholder "
+        "word), so each counts as unset and its salesforce-* key is not bound. Supply the real value if it is one."
+    )
+
+
 def _append_value(env_vars: list[dict[str, str]], name: str, value: str) -> None:
     if value != "":
         env_vars.append({"name": name, "value": value})
@@ -386,10 +420,14 @@ def build_payload(
         )
         _append_value(env_vars, PREVIOUS_SECRET_KID_ENV, previous_secret_kid)
 
-    salesforce_configured = all(_env_value(name, dotenv) for name in SALESFORCE_REQUIRED_VARS)
+    if salesforce_notice := _salesforce_placeholder_notice(dotenv):
+        print(salesforce_notice, file=sys.stderr)
+    salesforce_configured = all(
+        _salesforce_input(name, dotenv) for name in SALESFORCE_REQUIRED_VARS
+    )
     if salesforce_configured:
         for name in sorted(SALESFORCE_SECRET_ENVS):
-            if name == "SALESFORCE_SECURITY_TOKEN" and not _env_value(name, dotenv):
+            if name == "SALESFORCE_SECURITY_TOKEN" and not _salesforce_input(name, dotenv):
                 continue
             env_vars.append({"name": name, "value_from": SECRET_RESOURCE_BINDINGS[name]})
 

@@ -34,10 +34,23 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from tools.verify_live_geo_drill import (  # noqa: E402
+    COUNTY_PROBE,
+    EMPTY_ALLOWED_PROBES,
+    STATE_PROBE,
+    ZIP_PROBE,
+    geo_drill_flags,
+    pick_drill_state,
+    pick_drill_zip,
+)
 from tools.verify_live_rate_sensitivity import rate_sensitivity_flags  # noqa: E402
 from tools.verify_live_source_readiness import (  # noqa: E402
     DEFAULT_MAX_SOURCE_AGE_DAYS,
+    FAIL_CLOSED_MAX_SOURCE_AGE_DAYS,
+    SCHEDULED_REFRESH_MAX_SOURCE_AGE_DAYS,
+    SourceAgeThreshold,
     _source_readiness_flags,
+    resolve_max_source_age_days,
 )
 
 DEFAULT_BASE = "https://mip-app-2543889327043640.aws.databricksapps.com"
@@ -447,6 +460,14 @@ def run_probes(base: str, token: str) -> list[ProbeResult]:
 
 
 def _geo_drill_probes(base: str, token: str) -> list[ProbeResult]:
+    """Drill the map the way the UI does: largest populated state -> its ZIPs.
+
+    The county grain is retired (``tools/verify_live_geo_drill.py``), so the
+    county endpoint is probed only as a shape contract and the Lead Queue deep
+    link carries ``state`` + ``zip`` and no ``county``. The payload checks,
+    the reconciliation included, run in ``collect_red_flags`` on exactly the
+    payloads recorded here.
+    """
     criteria = {
         "segment_codes": "itm,equity",
         "segment_mode": "all",
@@ -455,106 +476,49 @@ def _geo_drill_probes(base: str, token: str) -> list[ProbeResult]:
         "min_equity_pct_label": "≥ 25%",
     }
     state_path = "/api/geo/state-rollups?" + urllib.parse.urlencode(criteria)
-    results = [probe(base, token, "geo.state_rollups.filtered", "GET", state_path)]
+    state_probe = probe(base, token, STATE_PROBE, "GET", state_path)
+    results = [state_probe]
 
-    state_code: str | None = None
-    try:
-        state_payload = get_json(base, token, state_path)
-        rollups = state_payload.get("rollups") if isinstance(state_payload, dict) else None
-        if isinstance(rollups, list):
-            for row in rollups:
-                if isinstance(row, dict) and int(row.get("addressable") or 0) > 0:
-                    state_code = str(row.get("state") or "").upper()
-                    break
-    except Exception as exc:  # noqa: BLE001
+    if state_probe.ok:
+        state_code, reason = pick_drill_state(state_probe.sample)
+    else:
+        state_code, reason = None, "filtered state rollups probe failed"
+    if state_code is None:
+        results.append(_drill_target_failure("geo.drill_target.state", state_path, str(reason)))
+        return results
+
+    geo_params = {"state": state_code, **criteria}
+    zip_path = "/api/geo/zip-rollups?" + urllib.parse.urlencode(geo_params)
+    zip_probe = probe(base, token, ZIP_PROBE, "GET", zip_path)
+    results.append(zip_probe)
+    county_path = "/api/geo/county-rollups?" + urllib.parse.urlencode(geo_params)
+    results.append(probe(base, token, COUNTY_PROBE, "GET", county_path))
+
+    zip_code = pick_drill_zip(zip_probe.sample, state_code) if zip_probe.ok else None
+    if zip_code is None:
         results.append(
-            ProbeResult(
-                name="geo.drill_target.state",
-                method="INFO",
-                path=state_path,
-                status=0,
-                latency_ms=0.0,
-                ok=False,
-                error=f"could not discover filtered state target: {exc}",
+            _drill_target_failure(
+                "geo.drill_target.zip",
+                zip_path,
+                f"no filtered ZIP rollup with addressable borrowers for {state_code}",
             )
         )
         return results
 
-    if not state_code:
-        results.append(
-            ProbeResult(
-                name="geo.drill_target.state",
-                method="INFO",
-                path=state_path,
-                status=0,
-                latency_ms=0.0,
-                ok=False,
-                error="no filtered state rollup with addressable borrowers",
-            )
-        )
-        return results
-
-    county_params = {"state": state_code, **criteria}
-    county_path = "/api/geo/county-rollups?" + urllib.parse.urlencode(county_params)
-    results.append(probe(base, token, "geo.county_rollups.filtered", "GET", county_path))
-
-    county_fips: str | None = None
-    try:
-        county_payload = get_json(base, token, county_path)
-        rollups = county_payload.get("rollups") if isinstance(county_payload, dict) else None
-        if isinstance(rollups, list):
-            for row in rollups:
-                if isinstance(row, dict) and int(row.get("addressable_borrowers") or 0) > 0:
-                    county_fips = str(row.get("fips_5") or "")
-                    break
-    except Exception as exc:  # noqa: BLE001
-        results.append(
-            ProbeResult(
-                name="geo.drill_target.county",
-                method="INFO",
-                path=county_path,
-                status=0,
-                latency_ms=0.0,
-                ok=False,
-                error=f"could not discover filtered county target: {exc}",
-            )
-        )
-        return results
-
-    if not county_fips:
-        results.append(
-            ProbeResult(
-                name="geo.drill_target.county",
-                method="INFO",
-                path=county_path,
-                status=0,
-                latency_ms=0.0,
-                ok=False,
-                error=f"no filtered county rollup with addressable borrowers for {state_code}",
-            )
-        )
-        return results
-
-    zip_params = {"county_fips": county_fips, **criteria}
-    zip_path = "/api/geo/zip-rollups?" + urllib.parse.urlencode(zip_params)
-    results.append(probe(base, token, "geo.zip_rollups.filtered", "GET", zip_path))
     results.append(
         probe(
             base,
             token,
             "leads.filtered_geo",
             "GET",
-            "/api/leads?"
-            + urllib.parse.urlencode(
-                {
-                    "state": state_code,
-                    "county": county_fips,
-                    **criteria,
-                }
-            ),
+            "/api/leads?" + urllib.parse.urlencode({"state": state_code, "zip": zip_code, **criteria}),
         )
     )
     return results
+
+
+def _drill_target_failure(name: str, path: str, error: str) -> ProbeResult:
+    return ProbeResult(name=name, method="INFO", path=path, status=0, latency_ms=0.0, ok=False, error=error)
 
 
 APPROVE_PATH = "/api/outreach/approve"
@@ -653,6 +617,8 @@ def collect_red_flags(
     if rate_sensitivity is not None and rate_sensitivity.ok:
         flags.extend(_rate_sensitivity_flags(rate_sensitivity.sample))
 
+    flags.extend(geo_drill_flags(results))
+
     for r in results:
         if not r.ok:
             detail = r.error[:160] if r.error else "payload sanity check failed"
@@ -664,6 +630,10 @@ def collect_red_flags(
         if r.ok and isinstance(r.sample, dict):
             for key in ("rows", "leads", "items", "rollups", "segments"):
                 value = r.sample.get(key)
+                # The retired county grain answers [] by design; its rows,
+                # when any, are checked by geo_drill_flags.
+                if key == "rollups" and r.name in EMPTY_ALLOWED_PROBES:
+                    continue
                 if isinstance(value, list) and len(value) == 0:
                     flags.append(f"{r.name}: `{key}` returned empty array")
     return flags
@@ -681,6 +651,7 @@ def render_markdown(
     *,
     profile: str = "DEFAULT",
     max_source_age_days: int = DEFAULT_MAX_SOURCE_AGE_DAYS,
+    threshold_basis: str = "",
 ) -> str:
     lines: list[str] = []
     lines.append("# E2E live verification — 2026-04-23")
@@ -689,7 +660,8 @@ def render_markdown(
     lines.append("")
     lines.append(f"Base URL: `{base}`  ")
     lines.append(f"Auth: `databricks auth token -p {profile}` (OAuth bearer of the profile's identity)  ")
-    lines.append(f"Source freshness: `checked_at` within {max_source_age_days} d (`--max-source-age-days`)  ")
+    basis = f"; {threshold_basis}" if threshold_basis else ""
+    lines.append(f"Source freshness: `checked_at` within {max_source_age_days} d (`--max-source-age-days`){basis}  ")
     lines.append(f"Synthetic test-id prefix: `{test_tag}`")
     lines.append("")
     lines.append("## Endpoint results")
@@ -745,11 +717,16 @@ def main() -> int:
     ap.add_argument(
         "--max-source-age-days",
         type=int,
-        default=DEFAULT_MAX_SOURCE_AGE_DAYS,
-        help="flag a source whose checked_at is older than this many days (default 3)",
+        default=None,
+        help=(
+            "flag a source whose checked_at is older than this many days (default "
+            f"{FAIL_CLOSED_MAX_SOURCE_AGE_DAYS}, fail-closed; {SCHEDULED_REFRESH_MAX_SOURCE_AGE_DAYS}, the weekly "
+            "cadence + 1 day, only when a read-only `databricks jobs list -p <profile>` shows "
+            "mip_scheduled_refresh UNPAUSED on its weekly cron)"
+        ),
     )
     args = ap.parse_args()
-    if args.max_source_age_days < 1:
+    if args.max_source_age_days is not None and args.max_source_age_days < 1:
         ap.error("--max-source-age-days must be at least 1")
 
     try:
@@ -758,13 +735,20 @@ def main() -> int:
         print(f"OAuth token fetch failed: {exc}", file=sys.stderr)
         return 2
 
+    if args.max_source_age_days is None:
+        threshold = resolve_max_source_age_days(args.profile)
+    else:
+        threshold = SourceAgeThreshold(args.max_source_age_days, "set by --max-source-age-days")
+    print(f"[verify_live] source freshness threshold {threshold.days} d: {threshold.basis}", file=sys.stderr)
+
     results = run_probes(args.base_url, token)
     report = render_markdown(
         results,
         args.base_url,
         "B-TEST-*",
         profile=args.profile,
-        max_source_age_days=args.max_source_age_days,
+        max_source_age_days=threshold.days,
+        threshold_basis=threshold.basis,
     )
     with open(args.out, "w", encoding="utf-8") as fh:
         fh.write(report)
@@ -783,7 +767,7 @@ def main() -> int:
         for r in results
     ]
     print(json.dumps(summary, indent=2))
-    flags = collect_red_flags(results, max_source_age_days=args.max_source_age_days)
+    flags = collect_red_flags(results, max_source_age_days=threshold.days)
     if flags:
         print("Live verification red flags:", file=sys.stderr)
         for flag in flags:

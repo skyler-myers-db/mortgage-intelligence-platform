@@ -83,10 +83,25 @@ psql "host=$LAKEBASE_HOST user=$LAKEBASE_USER dbname=$LAKEBASE_DATABASE sslmode=
   -c "SELECT 1"
 ```
 
-If the Lakebase instance or App is stopped, recover it only through the
-governed deployment workflow. That workflow keeps the App stopped while it
-reconciles the exact Lakebase roles, runs the migration and grant postflight,
-and activates source only after those checks pass:
+If the Lakebase instance or App is stopped, first establish which install it
+belongs to:
+
+- **The live dev App** (`mip-app` in the anchor workspace). No governed path
+  recovers it today. Its command of record, an operator
+  `./scripts/deploy.sh -t dev`, is NO-GO on the live workspace
+  (docs/deployment.md, "The live install is outside this bootstrap, and its
+  governed deploy is NO-GO"). A read-only listing on 2026-10-27 found none
+  of the seven reserved principals in the live workspace, the deploy never
+  creates one, and a failed first governed run leaves the App stopped. Do
+  not start that deploy during an incident, and do not dispatch the
+  workflow below for the live App. Escalate to the owner:
+  any live-App recovery, including a manual restart or payload redeploy, is
+  an owner-only decision.
+- **The CI staging install** (the forked-anchor `pr105-host` target,
+  docs/deployment.md, "CI staging install"). Recover it only through the
+  governed deployment workflow below. That workflow keeps the App stopped
+  while it reconciles the exact Lakebase roles, runs the migration and grant
+  postflight, and activates source only after those checks pass:
 
 ```bash
 BRANCH="$(git branch --show-current)"
@@ -94,7 +109,10 @@ BRANCH="$(git branch --show-current)"
 # only for an approved legacy or failed pre-capture App expected to have no
 # signed record; the workflow re-proves that absence before any rebase mutation.
 REBASE_UNVERIFIED_APP=false
+# The break-glass acknowledgement is required: without it the run ends in the
+# refuse-unacknowledged job and deploys nothing.
 RUN_URL="$(gh workflow run deploy-dev.yml --ref "$BRANCH" \
+  -f acknowledge_single_maintainer_break_glass=true \
   -f skip_silver=true \
   -f skip_smoke=false \
   -f rebase_unverified_app="$REBASE_UNVERIFIED_APP" \
@@ -109,8 +127,10 @@ fi
 gh run watch "$RUN_ID" --exit-status
 ```
 
-The GitHub workflow above is dev-only. Do not transpose it to a customer or
-production workspace: production recovery requires its separately reviewed
+The GitHub workflow above is dev-only. Since post-W5 it deploys only the CI
+staging install on the forked-anchor `pr105-host` target in its own workspace,
+so it can never deploy or recover the live dev App.
+Do not transpose it to a customer or production workspace: production recovery requires its separately reviewed
 environment contract and change-controlled `scripts/deploy.sh -t prod`
 invocation. A failed pre-capture rebase remains unsigned and therefore requires
 `REBASE_UNVERIFIED_APP=true` again on its next explicitly approved recovery;
@@ -500,6 +520,10 @@ and `/admin-config` exposes them under **Data operations**:
    snapshot. The bundle job is the durable retry path when the app's warehouse
    attempt fails.
 
+Buttons 1 to 3 run the deployed jobs. Press them only where the deployed jobs
+match the current bundle: on an install whose governed deploy is NO-GO, never
+run them; use "Interim refresh (governed deploy NO-GO)" below.
+
 Each operation is admin-only and writes a Lakebase audit row before compute.
 Job-backed operations refuse duplicate active runs and show the latest
 Databricks run state. Lifecycle sync executes the sparse warehouse MERGE
@@ -515,6 +539,10 @@ customer workspace and document the approved cadence. The Growth Agent
 scheduler is draft-only: it creates Slack/Teams review drafts and never sends
 messages.
 
+Run **Refresh market rates** only together with **Rebuild scoring snapshot**.
+A FRED run on its own re-creates the audit C1 stale-rate skew (gold keeps
+scoring against the old rate) until gold runs again.
+
 **No manual UI step is required after the one-time credential/account
 prerequisites are satisfied.** The previous runbook called for
 opening the Databricks UI to rebind the Genie space's trusted assets
@@ -529,6 +557,358 @@ will show `0` / `NULL` / "pending" by design — specifically the
 as operators use the app). This is documented in
 [`docs/dashboards.md`](dashboards.md) — read it before explaining the
 blanks to a reviewer.
+
+### Weekly scheduled refresh (dev live install)
+
+The one exception to the paused default is `mip_scheduled_refresh` on the dev
+target's **live** install. It is one job that runs the existing jobs in the
+deploy order, each through `run_job_task` so every child keeps its single
+definition and its own `PAUSED` schedule:
+
+1. `mip_fred_rates_ingest` (FRED MORTGAGE30US into `silver.market_rates_weekly`);
+2. `mip_refresh_scores` (the gold CTAS chain);
+3. `mip_sync_lifecycle_state` (sparse lifecycle MERGE plus the daily funnel snapshot);
+4. `mip_kpi_snapshot` (one `kpi_snapshots` row per day);
+5. after gold, a SELECT-only outcome gate
+   (`sql/transformations/assert_scheduled_refresh_outcome.sql`): gold scored at
+   silver's `is_latest` rate, and that rate is a FRED print within 14 days.
+
+It runs Fridays 06:00 America/Chicago, the morning after FRED prints
+MORTGAGE30US. Avoid demos between 06:00 and 06:30 CT on Fridays. Silver
+(`mip_refresh_silver`) is not in the chain, because the Cotality eval share is
+static. `mip_init_catalog_schemas`, the only job that publishes the three
+reviewed Growth Agent functions, is never reachable from it.
+
+How it is switched on:
+
+- `databricks.yml` declares `scheduled_refresh_pause_status` with the default
+  `PAUSED`, and no target sets it.
+- The `scripts/deploy.sh` preflight exports `UNPAUSED` only for `-t dev` on the
+  default bundle root (empty `install_suffix`). `MIP_SCHEDULED_REFRESH=off`
+  (shell or `.env.local`) keeps it paused. Every other target is always
+  paused and refuses `MIP_SCHEDULED_REFRESH=on` (exit 2): the CI staging
+  install (`deploy-dev.yml`, target `pr105-host`, leaf `dev-ci`) and
+  `-t prod`, where a cadence is a customer decision that needs a reviewed
+  change. `tools/databricks/bundle_env.py` refuses an `UNPAUSED` export for
+  any other install.
+- A failed run emails the deploying user, on the live install only.
+  `bundle_env.py` writes that recipient into the target's
+  `.databricks/bundle/<target>/variable-overrides.json` (`dev` for the live
+  install), because the CLI refuses a `BUNDLE_VAR_` export for a list
+  variable, and rewrites it before every CLI call. The CI staging install and
+  prod get no recipient: the CI deployer is a service principal whose user
+  name is an application id, not an email address. The CI install writes its
+  own `pr105-host` file on its own runner.
+
+**How it lands.** The schedule reaches a workspace only through the bundle
+apply inside a full governed `./scripts/deploy.sh -t dev` run. A Jobs-UI
+unpause is reverted by the next deploy, and there is no other delivery path.
+That run is GO only when all of these hold:
+
+- a clean checkout exactly at `origin/main`, the operator's own, with its own
+  `.env.local`;
+- the per-run M2M identities (the `DATABRICKS_*_CLIENT_*` and `ACCOUNT_*`
+  values) and both signing keys exported in the operator's shell (see
+  `docs/deployment.md`, "Per-run M2M identities");
+- no foreign catalog that grants `account users` (the step-4 foreign-UC
+  audit), each one resolved with its catalog owner;
+- no unrelated serving-endpoint grant on the App service principal;
+- no Genie space that the App service principal reaches through a group grant,
+  such as workspace `users` on another team's space, granted on the space or
+  inherited from `/Workspace/Shared`. Step 0's read-only pre-stop probe lists
+  every such grant (also for the agent-runtime and verifier service principals)
+  and refuses before the App stop. Resolve each one by its source with the
+  space owner's consent (`docs/deployment.md`, "Pre-stop probes"); never exempt
+  the group in the audits;
+- a smoke script whose geo-drill probe checks the shipped state → ZIP drill,
+  not the retired county grain (`scripts/smoke_live.sh` does since the
+  post-W5 live geo gate);
+- a configured `MIP_COTALITY_ID_MASK_SECRET` equal to the stored
+  `cotality-id-mask-v1` (step 0 refuses a mismatch before the App stop), the
+  owner's read of the report-only `genie-action-current` note, and the
+  `SALESFORCE_*` values supplied or the connector accepted as disabled: an
+  unset or placeholder input keeps the stored `salesforce-*` key but leaves it
+  unbound (`docs/deployment.md`, the `provision_runtime_secrets.py` notes);
+- a deploy interpreter whose packages equal the `requirements.txt` pins: the
+  checkout's `.venv/bin/python`, or a venv built outside the checkout and
+  selected with `MIP_DEPLOY_PYTHON`. Step 0 refuses pin drift with exit 2
+  (`docs/deployment.md`, "Deploy interpreter");
+- the owner's decision on a human-created Supervisor that holds the canonical
+  name: the first agentic cutover retires it and deletes its serving endpoint,
+  which cannot be undone (`docs/deployment.md`, the first migration from a
+  human-owned Supervisor). Accept that by exporting
+  `MIP_RETIRE_HUMAN_SUPERVISOR=<supervisor id>` in the operator shell for the
+  run, or rename it off the canonical name first. Without either, step 0's
+  pre-stop probe refuses before the App stop;
+- an accepted App outage of 3.5 to 6 hours, with quarantine.
+
+The first signed install over an existing unsigned App also exports
+`MIP_REBASE_UNVERIFIED_APP=1` once, and the flag comes off after the first
+signed capture (`docs/deployment.md`). Step 0a stops and quarantines
+the live App before the bundle apply, so a later failure without a signed
+last-good record leaves the App stopped. On 2026-10-27 that run was NO-GO on
+the dev workspace. Until a GO run applies the job, the workspace keeps its
+older job definitions and nothing refreshes dev on a schedule. `checked_at`
+(gold's refresh anchor, the newest `mip.ref.refresh_run_state` row) moves only
+when gold is rebuilt: by a full governed `deploy.sh` run, or by an
+operator-run interim refresh of FRED and gold that leaves out every
+`publish_fn_*` task. One such interim refresh ran on 2026-10-27 and moved it to
+06:48 UTC that day. Between rebuilds it ages, and `tools/verify_live.py` flags
+it once it is more than 3 days old: its default threshold fails closed at 3
+days and widens to 8 (the 7-day cadence plus 1) only when it reads
+`mip_scheduled_refresh` back `UNPAUSED` on the weekly cron. That flag is
+correct.
+
+Never unpause, `run-now` or Admin-trigger a deployed child job whose definition
+predates the current bundle. For example, a gold job that still carries
+`publish_fn_*` tasks republishes the reviewed functions and drops their
+`EXECUTE` grants.
+
+**Risks and residuals:**
+
+- **Static-share decay, not freshness.** The Cotality eval share has not
+  changed since 2026-06-12. Each weekly run re-anchors gold's time-relative
+  windows (the 12-month listing window, the 365-day evidence windows, loan age)
+  on that frozen snapshot, so Listed-for-Sale and the evidence windows drain a
+  little every week. Measured on dev on 2026-10-26: about 4% fewer
+  listed-for-sale borrowers at the first Friday run, about 12% fewer by late
+  January 2027, and none by about June 2027 unless the share is re-delivered.
+  The new FRED rate is real freshness; this drain is decay.
+- **FRED gap (closed 2026-10-27).** On 2026-10-26 the dev `is_latest`
+  MORTGAGE30US row was the week of 2026-08-03, so 11 weekly prints (13 August
+  to 22 October 2026) were missing. The 2026-10-27 interim refresh loaded all
+  11: `is_latest` is now the week of 2026-10-19 (7.32%), and gold scores at
+  that rate. In-the-Money, rate spreads, segment counts and the rate window
+  moved with it. Until a GO deploy lands the schedule, each later Thursday
+  print reaches dev only through another FRED plus gold refresh.
+- **Treatment-table DDL race.** The FRED job's `init_ddl` task runs
+  `001_catalogs_schemas.sql`, which re-asserts
+  `ALTER TABLE <catalog>.audit.campaign_treatment_snapshot SET TBLPROPERTIES`
+  (a new Delta commit). `scripts/deploy.sh` runs that DDL only after it
+  quiesces App treatment writes. The App pins a treatment materialization with
+  `DESCRIBE HISTORY ... LIMIT 1` right after its append. A scheduled run that
+  races a materialization can pin the ALTER's version, or fail the append with
+  a metadata conflict. The Admin **Refresh market rates** button already has
+  this exposure; the schedule makes it weekly and unattended. Do not
+  materialize campaign treatments around Friday 06:00 CT, and re-check any
+  materialization that ran then. Moving the treatment DDL out of FRED's
+  `init_ddl` is an open follow-up.
+- **Silent re-pause.** Any bundle apply outside `scripts/deploy.sh` resolves the
+  variable to its `PAUSED` default and re-pauses the schedule without an error.
+  The repo does not support such an apply. Dev then goes stale without an
+  error; `tools/verify_live.py` reads the job back `PAUSED`, falls back to its
+  fail-closed 3-day threshold, and flags `checked_at` 3 days after the last
+  rebuild. Re-run the governed deploy to restore it.
+- **Collision with a deploy.** The orchestrator and all four children declare
+  `max_concurrent_runs: 1` with queueing, so a deploy that holds one at Friday
+  06:00 delays the chain instead of skipping it: the scheduled child run waits
+  in the queue for the deploy's run of the same job. Only a hold that pushes
+  the whole chain past the orchestrator's 5400 s (90 min) timeout fails the run
+  and sends the failure email; re-run the orchestrator after the deploy.
+- **Cross-job interleaving.** The queue serializes runs of the same job only.
+  A governed deploy that overlaps a running chain interleaves with it across
+  jobs: the deploy's step-6 `mip_refresh_silver` full refresh while scheduled
+  gold reads silver, its step-9 `tools.sync_lifecycle_warehouse` MERGE beside
+  the scheduled `mip_sync_lifecycle_state`, and its step-4 apply replacing
+  child job definitions mid-chain. Do not start a governed deploy (or the
+  interim refresh below) within about an hour of Friday 06:00 CT, and check
+  that no `mip_scheduled_refresh` run is active
+  (`databricks jobs list-runs --job-id <id> --active-only`) before starting.
+- **Run-as identity.** Scheduled runs execute as the dev run-as user (the
+  deploying user). If that identity loses access, runs fail and the email
+  fires. Deploy the live install as a user: with the schedule `UNPAUSED`, the
+  step 9c postflight refuses a failure recipient that is not an email address
+  (a service-principal deployer's application id).
+  That refusal comes after the App promotion, and nothing predicts it yet: it
+  needs a live read of the bound deployer's user name. The preflight's
+  scheduled-refresh block stays pure so it also runs in a dry run, and step
+  0's read-only pre-stop probe (`tools/databricks/deploy_prestop_probes.py`),
+  where that read belongs, checks Supervisor retirement and Genie group grants
+  but not the deployer's user name. Until it does, check the deploying
+  identity is a user before a GO run.
+- **Piecewise-render trap.** The scheduled gold run reads the rendered SQL in
+  the bundle's `files/sql/_rendered/` tree. A piecewise upload of a render made
+  without `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1` (the stand-alone
+  `tools/render_sql.py` default is off) empties the Summit demo first-party
+  feeds at the next Friday run, unattended. Render every piecewise upload for
+  dev with `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1`; `deploy.sh` defaults it on
+  for `-t dev`. `tools/verify_live.py` detects the mistake as first-party
+  sources with `status=not_configured expected live/demo_synthetic`.
+- **Shared catalog.** The dev schedule rebuilds gold in the dev install's
+  catalog every week. If a prod install ever shares catalog `mip` in the same
+  workspace, it would rebuild prod's gold too. Give prod its own catalog
+  (for example `mip_prod`, see `docs/runbook-multi-catalog.md`), or set
+  `MIP_SCHEDULED_REFRESH=off` for dev.
+- **Postflight failure (step 9c).** Step 9c reads the stored job back after the
+  step-4 apply, the App promotion, the data refresh and the KPI snapshot,
+  while the deploy still holds the App's user access quarantined. The SDK
+  retries transient connection and timeout errors, so treat a failure as real:
+  the stored job is not what the deploy intended, or it cannot be read, and the
+  deploy stops there. If it reports `UNPAUSED` where `PAUSED` was expected,
+  pause `mip_scheduled_refresh` in the Jobs UI first (the next governed deploy
+  re-applies the intended state). Then fix the cause and re-run the governed
+  deploy, with `MIP_SCHEDULED_REFRESH=off` if the schedule itself is the
+  problem. The App follows the deploy's failure handling
+  (`docs/deployment.md`); without a signed last-good record it stays stopped.
+- **Numbers move weekly**, as the "follow current refreshed coverage" posture
+  intends.
+- **Cost.** About $1.35 to $1.9 per run at list price (warehouse time for
+  gold plus serverless jobs), about $6 to $8 a month.
+
+**Verify after a GO deploy** (read-only):
+
+- `databricks jobs list --name "[dev <user>] mip_scheduled_refresh"` shows the
+  schedule `UNPAUSED`.
+- `SELECT MAX(refresh_at) FROM mip.ref.refresh_run_state` returns the deploy
+  time, then each Friday's run time.
+- `tools/verify_live.py` shows no `checked_at is stale` flag, and its report
+  header shows the 8-day threshold (the 7-day cadence plus 1) with the basis
+  `mip_scheduled_refresh job <id> is UNPAUSED on the weekly cron`. A header
+  that still reads `fail-closed` (3 days) means the job was not read back
+  `UNPAUSED` on that cron, or that the workspace holds more than one
+  `mip_scheduled_refresh` (another deployer's dev install, say), which leaves
+  this install's unproven.
+
+### Interim refresh (governed deploy NO-GO)
+
+Use this only on an install where the governed `./scripts/deploy.sh -t dev`
+is NO-GO (the GO list above) and dev data must move anyway. It rebuilds FRED
+and gold from the current `main` render with the App left running. It changes
+data and, only when step 1 finds a FRED source file that differs from main's
+render, that file under the bundle root; never a job definition, grant, ACL,
+secret, pipeline, dashboard, Genie space, App or Lakebase schema. It ran once,
+on 2026-10-27 (FRED 6.69% to 7.32%, In-the-Money 74,335 to 33,585, zero grant
+differences, no upload). Step 4's verifier was substituted on 2026-10-27: that
+install had no agent-runtime or agent-proxy principal and no direct grants
+left on the reviewed functions, so the gate was the zero-difference grant diff
+plus the App SP's effective `EXECUTE`, as step 4 now prescribes.
+
+**Never `run-now`, unpause or Admin-trigger the deployed gold job
+(`mip_refresh_scores`) or the deployed lifecycle job (`mip_sync_lifecycle_state`)
+on an install whose job definitions predate the current bundle.** A stale gold
+job that still carries `publish_fn_*` tasks runs `CREATE OR REPLACE FUNCTION`
+on the three reviewed Growth Agent functions (`fn_build_cohort`,
+`fn_segment_counts`, `fn_lead_queue_url`), which drops the App, agent-runtime
+and agent-proxy `EXECUTE` grants. A stale lifecycle job still runs the retired
+`seed_default_state`. On such an install, press no Admin **Data operations**
+button that runs a deployed job either: **Rebuild scoring snapshot** runs the
+deployed gold job, **Refresh market rates** runs the deployed FRED job without
+step 1's parity proof, and **Refresh source features** runs the deployed
+silver job. Rebuild gold with steps 2 to 4 below instead.
+
+**Sync workflow state** runs the warehouse lifecycle MERGE inside the App (the
+same work as step 6), not the deployed job. But an approve, reject or revoke
+whose warehouse MERGE fails falls back to run-now of the deployed
+`mip_sync_lifecycle_state` (`backend/services/job_trigger.py`,
+`trigger_lifecycle_sync`), and `MIP_LIFECYCLE_SYNC_MODE=job` sends every one of
+them there. On a stale install, keep that variable unset, avoid approvals while
+the warehouse is degraded, and check the App log for `lifecycle_sync_error`
+followed by `job_trigger_fired`.
+
+Before you start:
+
+- Take a `git archive` of `origin/main` into a scratch directory, never the
+  operator's checkout.
+- Have the install's CLI profile, its SQL warehouse id and its bundle root
+  (`/Workspace/Users/<deployer>/.bundle/mortgage-intelligence-platform/dev/files`).
+- Render in the scratch tree with
+  `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1 python tools/render_sql.py`. The
+  stand-alone default is off and would empty the Summit demo feeds (the
+  piecewise-render trap above).
+- Do not start within about an hour of Friday 06:00 CT once the schedule is
+  live (cross-job interleaving above).
+
+Steps:
+
+1. **FRED.** First prove that the deployed `mip_fred_rates_ingest` equals
+   main's: the same four tasks (`init_ddl`, `init_silver_ddl`, `seed_if_empty`,
+   `refresh_from_fred`), dependencies and source paths (`databricks jobs get
+   <id>` against `databricks.yml`). Also prove every file it reads under the
+   bundle root is byte-equal to the scratch render (`databricks workspace
+   export` round trip, then `cmp`). Upload the render of any file that
+   differs, then round-trip it again. Its `init_ddl` re-ALTERs
+   `<catalog>.audit.campaign_treatment_snapshot` (the treatment-table DDL race
+   above), so read `DESCRIBE HISTORY` on that table first and confirm no
+   treatment materialization is in flight. Then `databricks jobs run-now <id>`
+   and wait for `SUCCESS`. Prove silver's `is_latest` MORTGAGE30US row moved to
+   the newest Thursday print.
+2. **Grant snapshot, before.** For every object step 3 re-creates (functions,
+   tables, views, metric views), save `SHOW GRANTS ON <object>`. For an
+   `init_fn_*` function or a view with an object-level grant, compare the live
+   body (`DESCRIBE FUNCTION EXTENDED`, the view text) with the render. Skip the
+   statement when it is unchanged. Stop when it changed, because a re-create
+   drops the grant. Skip unchanged views and metric views.
+3. **Gold.** Execute main's `mip_refresh_scores` SQL tasks from the scratch
+   render (38 tasks in `databricks.yml`) in a topological order of their
+   `depends_on`, one statement per Statements API call
+   (`POST /api/2.0/sql/statements` on the warehouse). Never include a
+   `publish_fn_*` task or a `fn_build_cohort`, `fn_segment_counts` or
+   `fn_lead_queue_url` file. The Statements API runs each statement in its own
+   session, and `transformations/demo_first_party_feeds.sql`
+   (`seed_demo_first_party_feeds`) opens with a `TEMP VIEW` that its CTAS read,
+   so split the run in three:
+   - **A**, every statement before that task, through the Statements API: the
+     `init_fn_*` statements step 2 did not skip (eleven at most),
+     `003_gold_tables.sql`, `capture_refresh_timestamp` (it records this run's
+     `refresh_at`) and `ctas_property_owner_bridge`.
+   - **The demo feeds** as ONE `sql_task` run on the bundle root's render of
+     that file, which keeps one session:
+     `databricks jobs submit --no-wait --json '{"run_name": "interim-refresh-demo-feeds", "idempotency_token": "<unique per refresh>", "tasks": [{"task_key": "seed_demo_first_party_feeds", "sql_task": {"warehouse_id": "<warehouse>", "file": {"path": "<bundle root>/sql/_rendered/transformations/demo_first_party_feeds.sql", "source": "WORKSPACE"}}}]}'`.
+     Poll `databricks jobs get-run <run_id>` until it terminates, and require
+     `SUCCESS`. The idempotency token makes a retried submit return the same
+     run, never a second one. The bundle root's file must equal the scratch
+     render byte for byte; when it differs, stop, because this procedure
+     uploads only step 1's FRED files.
+   - **B**, every statement after that task, through the Statements API.
+
+   Before executing, prove that A, the demo file and B together equal the
+   planned statement list in order (compare statement hashes), with the plan
+   computed after step 2's skips. On a failure, stop and resume from the
+   failing statement; never improvise one.
+4. **Grant snapshot, after, and a strict diff.** Read `SHOW GRANTS` again on
+   every touched object and diff it against step 2. Any added, removed or
+   changed row fails. So does an object whose effective `EXECUTE` cannot be
+   read on either side: two unreadable snapshots compare equal, and once that
+   passed vacuously. Then run
+   `python -m tools.databricks.verify_reviewed_function_execute_grants` with
+   the App, agent-runtime and agent-proxy application ids, as
+   `scripts/lib/deploy_step_lakebase_and_uc_grants.sh` does. It requires one
+   direct `EXECUTE` per consumer. If the reviewed functions already lack
+   direct `EXECUTE` grants (a stale `publish_fn_*` run dropped them) or the
+   agent-runtime or agent-proxy principal does not exist, the verifier cannot
+   run or fails by design. Record its output, never hand-grant, and treat the
+   strict before/after diff above plus the App SP's effective `EXECUTE` on
+   the three reviewed functions as the gate. Only the governed deploy restores
+   the direct grants.
+5. **Rate alignment.** Run `python -m tools.databricks.verify_market_rate_alignment
+   --warehouse-id <warehouse> --catalog <catalog>`, as deploy step 8 does. Gold
+   must score at silver's `is_latest` rate.
+6. **Lifecycle.** Run `python -m tools.sync_lifecycle_warehouse --catalog
+   <catalog> --lakebase-instance <instance> --lakebase-database <database>`, as
+   deploy step 9 does. If it needs a credential you do not hold, record the
+   step as skipped. Never run-now the deployed lifecycle job instead.
+7. **KPI.** Run-now the deployed `mip_kpi_snapshot` only after proving that its
+   one task (`snapshot_headline_kpis`) and its source equal main's. Otherwise
+   skip it and record why.
+
+**Post-refresh proofs** (read-only, GET requests only):
+
+- `SELECT MAX(refresh_at) FROM <catalog>.ref.refresh_run_state` is this run's
+  step-3 time, and `gold.source_readiness` shows FRED and the core sources
+  `live`.
+- Probe each App endpoint twice and read the second answer. The gold read
+  cache is stale-while-revalidate, so the first hit per hot key can return the
+  pre-refresh numbers while it refreshes in the background.
+- `/api/v1/health` can stay `degraded` with the Genie breaker `half_open`
+  after the refresh. The health ping bypasses the breaker, so only a real
+  Genie turn or an App restart closes it. That is not a refresh failure.
+- The state to ZIP drill reconciles for the drilled states:
+  `sum(zip.addressable_borrowers) == state.addressable - state.zip_unassigned_count`
+  (`GET /api/v1/geo/state-rollups` and `/api/v1/geo/zip-rollups?state=XX`).
+- Record before and after numbers for In-the-Money, rate spread,
+  Listed-for-Sale and the segment counts, so the moved numbers are explained.
+  A rate shift moves In-the-Money, and the static share drains Listed-for-Sale
+  a little at each refresh.
 
 ---
 
@@ -567,6 +947,10 @@ databricks bundle run mip_refresh_silver -t dev
 databricks bundle run mip_refresh_scores -t dev
 ```
 
+Re-run them only where the deployed jobs match the current bundle: on an
+install whose governed deploy is NO-GO, never run them; use "Interim refresh
+(governed deploy NO-GO)" in §4.
+
 For a session window where live refresh is impractical, **do not**
 silently fall back to mock data — the no-silent-mock posture is
 load-bearing. Instead: acknowledge on-stage that you're showing
@@ -593,6 +977,16 @@ for `/api/v1/health` to go green, then exercises `/api/v1/portfolio/preview`,
 It also verifies Cotality property/owner identifiers are masked on the
 lead and borrower payloads. Any non-200 response, unmasked identifier, or
 non-up dependency exits non-zero and prints the failing call.
+
+The geo step drills the map the way the UI does, state -> ZIP: it takes
+the largest populated state from `/geo/state-rollups`, requires a
+populated, in-state, 5-digit-ZIP layer from `/geo/zip-rollups?state=`,
+and requires the drill to reconcile exactly
+(`sum(zip.addressable_borrowers) == state.addressable -
+state.zip_unassigned_count`). `/geo/county-rollups` is the retired county
+grain: it must answer 200 for the drilled state and never ship a row
+without a 5-digit `fips_5`; its empty list is expected (see
+`docs/testing.md`, "Live endpoint verifier").
 
 This is the operator's "is real UC actually reachable from this laptop"
 check — run it after §4 deploy-from-scratch and after any cred rotation.
@@ -689,7 +1083,10 @@ number on the screen is right":
 The full report is [`docs/slice13-accuracy-report.md`](slice13-accuracy-report.md).
 
 **After any SQL-plane change** (silver, gold, UDF, metric view) the
-evidence above is only as fresh as the last warehouse refresh. Run:
+evidence above is only as fresh as the last warehouse refresh. Run the
+commands below only where the deployed jobs match the current bundle: on an
+install whose governed deploy is NO-GO, never run them; use "Interim refresh
+(governed deploy NO-GO)" in §4.
 
 ```bash
 databricks bundle run mip_refresh_silver        -t dev
@@ -843,7 +1240,9 @@ recommended) render as `0` or `—` instead of the expected evaluation-share tot
      --json '{"statement":"SELECT COUNT(*) AS n, MAX(_refreshed_at) AS last_refresh FROM mip.gold.lead_population","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
    ```
    A zero count or a stale `last_refresh` confirms. Fix: re-run the
-   scoring chain from §4 step 7:
+   scoring chain from §4 step 10, only where the deployed jobs match the
+   current bundle: on an install whose governed deploy is NO-GO, never run
+   it; use "Interim refresh (governed deploy NO-GO)" in §4:
    ```bash
    databricks bundle run mip_refresh_scores -t dev
    ```
@@ -935,56 +1334,55 @@ row.
    the two paths. Fix: see §11's identity-fallback note — governance
    regression, route accordingly.
 
-### R4-08 Map won't drill from state to county
+### R4-08 Map won't drill from state to ZIP
 
-**Symptom:** the user clicks a state on the footprint map and the
-county layer hangs on "Loading counties…" or shows no data.
+**Symptom:** the user clicks a state on the map and the ZIP layer hangs on
+its loading line, shows no data, or shows ZIP tiles instead of ZIP-area
+polygons.
+
+The map drills state → ZIP (PR #182). The county grain is retired: the
+Cotality share carries one county FIPS per state, so `gold.county_rollup`
+emits a NULL `fips_5` and `/api/v1/geo/county-rollups` answers an empty list
+by design. An empty county list is not this incident.
 
 **Likely causes, in order:**
 
-1. **`/api/v1/geo/county-rollups` is 503** — warehouse down, warehouse
-   breaker open, or `mip.gold.county_rollup` empty.
+1. **`/api/v1/geo/zip-rollups` is 503, or `mip.gold.zip_rollup` is empty or
+   stale** — warehouse down, warehouse breaker open, or gold not rebuilt.
 
    Confirm:
    ```bash
    curl -s -o /dev/null -w '%{http_code}\n' \
-     "$MIP_APP_URL/api/v1/geo/county-rollups?state=IL"
+     "$MIP_APP_URL/api/v1/geo/zip-rollups?state=IL"
    curl -s "$MIP_APP_URL/api/v1/health" \
      | jq '{warehouse_dep: .dependencies.warehouse, warehouse_breaker: .circuit_breakers.warehouse}'
    databricks api post /api/2.0/sql/statements \
-     --json '{"statement":"SELECT state_code, COUNT(*) AS n FROM mip.gold.county_rollup GROUP BY state_code","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
+     --json '{"statement":"SELECT state, COUNT(*) AS zips, MAX(snapshot_date) AS snapshot FROM mip.gold.zip_rollup GROUP BY state","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
    ```
-   Empty per-state counts ⇒ gold table was never built. Fix:
-   `databricks bundle run mip_refresh_scores -t dev` (the rollup is
-   part of the chain in §4 step 7). Warehouse down ⇒ §1.1.
+   Warehouse down ⇒ §1.1. Empty or stale per-state rows ⇒ rebuild gold with
+   the governed `./scripts/deploy.sh -t dev` or, where that run is NO-GO, the
+   "Interim refresh (governed deploy NO-GO)" procedure (§4). **Never
+   `databricks bundle run` or `run-now` the deployed `mip_refresh_scores`,
+   and never press Admin → Rebuild scoring snapshot, on an install whose
+   deployed jobs predate the current bundle:** a stale gold job still carrying
+   `publish_fn_*` tasks republishes the three reviewed Growth Agent functions
+   and drops their `EXECUTE` grants.
 
-2. **Session footprint context out of sync with gold** — the user's
-   footprint list includes a state that isn't actually in
-   `mip.gold.county_rollup`. Clicking it returns 200 with an empty
-   `counties: []` and the map shows no features.
+2. **The drill does not reconcile** — for the drilled state,
+   `sum(zip.addressable_borrowers)` differs from
+   `state.addressable - state.zip_unassigned_count`, so the ZIP and state
+   rows come from different rebuilds (a partial gold run). Confirm with
+   `GET /api/v1/geo/state-rollups` and `GET /api/v1/geo/zip-rollups?state=XX`;
+   `tools/verify_live.py` and `scripts/smoke_live.sh` run the same check on
+   the largest populated state. Fix: one complete gold rebuild, as in cause 1.
 
-   Confirm:
-   ```bash
-   curl -s "$MIP_APP_URL/api/v1/portfolio/preview" | jq '.footprint'
-   ```
-   Cross-check discovered states/counties against the SQL query above. The app
-   should disclose whatever county coverage is present after the latest gold
-   refresh; if the session shows a different state set, route the drift to
-   data-modeler and do not record the demo until gold/UI coverage agrees.
-
-3. **`/us-counties.json` TopoJSON returning HTML** — the SPA catch-all
-   route is serving `index.html` at that asset path instead of the
-   static TopoJSON. This was fixed in the Cycle-8 post-merge round and
-   shouldn't recur, but check first because it masquerades as a county
-   rollup bug.
-
-   Confirm:
-   ```bash
-   curl -s -I "$MIP_APP_URL/us-counties.json" | grep -i content-type
-   curl -s "$MIP_APP_URL/us-counties.json" | head -c 80
-   ```
-   Expect `application/json` and a leading `{`. If you see `text/html`
-   or `<!doctype`, the static-file mount in `backend/runtime.py`
-   regressed. Fix: redeploy (`./scripts/deploy.sh`) and verify the
-   frontend build's `frontend/dist/us-counties.json` is present in the
-   bundle sync.
+3. **The ZIP-area geometry did not load** — the ZIP rows arrive but the map
+   shows ZIP tiles, its fallback, instead of polygons. Each state's geometry
+   is a hashed static asset built from `frontend/src/geo/zcta/<USPS>.topo.json`
+   and fetched once from `/assets/` on the first drill into that state (no API
+   call, no audit row). Confirm in the browser's network panel that the
+   state's `.topo` asset answers 200 with JSON. An HTML answer means the SPA
+   catch-all served `index.html` instead (the static mount in
+   `backend/runtime.py` regressed); a 404 means the App source lacks the
+   built asset. Fix: redeploy the App payload from a full frontend build
+   (`./scripts/deploy.sh`, or the payload deploy path the install uses).

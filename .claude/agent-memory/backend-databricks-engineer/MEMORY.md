@@ -22,3 +22,9 @@
 - [Dead \b after a quoted literal](project_dead_word_boundary_after_quote.md) — `'cash_out'\b` never matches; it silently killed the SQL product reader and made a bad heuristic look load-bearing
 - [App SQL is gold-only](project_app_sql_gold_only.md) — no silver/raw in App-executed SQL (live-only 403); precompute into gold; keep LEFT JOIN on "non-NULL only" gold tables
 - [Permission refusal fails fast](project_permission_denied_fail_fast.md) — kind permission_denied, retryable False, breaker success; TABLE_OR_VIEW_NOT_FOUND still retried
+- [DAB complex variable channels](project_dab_complex_variable_channels.md) — CLI 1.10 refuses BUNDLE_VAR_/--var for list vars; overrides.json is the only per-install channel; CLI default-queues every job
+- [Mutation harness DEFAULT profile](feedback_mutation_harness_default_profile.md) — a bare WorkspaceClient() in a mutation run hits DEFAULT=pr105; set DATABRICKS_CONFIG_FILE=/nonexistent
+- [Bundle experiment name rewrite](project_bundle_experiment_name_rewrite.md) — CLI rewrites dir+"/"+prefix+base in EVERY target; a root name renders "//name"; read rendered JSON, keep it under /Shared
+- [verify_scaffold makes a live call](project_verify_scaffold_live_call.md) — it runs `databricks apps get mip-app` from the repo cwd; run with the CLI off PATH in no-live-call lanes
+- [Runtime secret mask guard](project_runtime_secret_mask_guard.md) — mask change refuses, current key noted (report-only), unset/placeholder salesforce-* kept unbound; host proven first
+- [Pre-stop deploy probes](project_prestop_probes.md) — refuse before the lease; orphan endpoint needs the ack too; aggregation tests need mixed members

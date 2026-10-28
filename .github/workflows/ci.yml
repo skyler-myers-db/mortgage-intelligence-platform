@@ -1,8 +1,10 @@
 name: ci
 
-# Slice 9 CI -- PR + push workflow. Every job below runs in parallel; in-progress
-# runs on the same ref are cancelled by `concurrency` so rapid pushes only
-# burn one runner per branch. Everything here is credential-free; the
+# Slice 9 CI -- PR + push workflow. Every job below runs in parallel except
+# the `e2e-fixture` gate, which waits for `e2e-fixture-shard` and
+# `e2e-fixture-perf` (`needs:`) and merges their reports; in-progress runs on
+# the same ref are cancelled by `concurrency` so rapid pushes only burn one
+# runner per branch. Everything here is credential-free; the
 # nightly workflow (nightly.yml) handles live-UC checks with secrets.
 #
 # Secret policy: this workflow MUST NOT reference any repo secrets. Anyone
@@ -497,7 +499,7 @@ jobs:
           npx playwright test tests/e2e/growth_agent_handoff_fixture.spec.ts
           E2E_LAYOUT_MOCK=1 npx playwright test tests/e2e/layout-stability.spec.ts --workers=1
 
-  e2e-fixture:
+  e2e-fixture-shard:
     # Rendered-layer gate that needs no credentials (audit quality-03,
     # quality-09, quality-v1). E2E_FIXTURE=1 makes playwright.config.ts run
     # ONLY tests/e2e/fixture/*.fixture.spec.ts against `vite preview` of the
@@ -505,20 +507,91 @@ jobs:
     # registry and the backend is never booted. Each test fails on an uncaught
     # page error, a console.error, a violation of the production CSP, a failed
     # request, or an API call with no registered fixture.
-    name: e2e (fixture harness, every route)
+    #
+    # Sharded (post-W5). One job used to run the whole harness and the perf
+    # budgets: Wave 4b's 948 tests took 17 min, and by W5e the 1,690 tests on
+    # 4 workers took 25m24s-37m11s in the harness step alone (8 runs across
+    # PRs #270-#272 and their merges; the 48m09s job also lost 7m25s to a
+    # slow Chromium install), so its cap had grown from 20 to 70.
+    # `--shard=i/N` splits the test list by COUNT, not time; replaying the
+    # per-test durations of three of those runs (40418388288, 40401070488,
+    # 40393351692) over each shard's `--list` puts the 4 shards at 21-27% of
+    # the suite each, the slowest at 7.4-10.3 min.
+    # Each shard writes a blob report, and the e2e-fixture job below merges
+    # them into the one HTML report and gates on every shard. The perf budgets
+    # run in e2e-fixture-perf, on one worker, never split.
+    name: e2e (fixture harness, shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
-    # Wave 4b (2026-09-29): the suite grew to 948 tests and the single-worker
-    # perf step now also runs the Lead Queue interaction budget (a 500-row
-    # queue at 4x CPU). Measured on run 36639466070: setup 4 min, harness
-    # 17 min, then the job hit the old 20-minute cap inside the perf step.
-    # The harness (1,276+ tests on 4 workers, ~28 min by W5c) and the single-worker
-    # perf/interaction budgets share this job; 30 min cancelled run 38519015417
-    # mid-suite on 2026-10-14. W5d/W5e add more specs; shard before this is reached.
-    # It was reached: PR #270's runs took 26m-48m09s (the merged head's green
-    # run 48m09s of 50; 40369973337 39m59s), so the cap is 70 until the
-    # sharded fixture-harness job (a routed post-W5 deps-report notBuilt item)
-    # lands and brings each shard back under 30.
-    timeout-minutes: 70
+    # Slowest shard (10.3 min) + the slowest setup seen (8.6 min, with that
+    # 7m25s Chromium install) is ~19 min; 25 keeps headroom for both at once
+    # and for suite growth. A shard nearing it means add one to the matrix.
+    timeout-minutes: 25
+    strategy:
+      # Every shard finishes, so the merged report holds every failure.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend deps
+        run: |
+          if [ -f frontend/package-lock.json ]; then
+            npm --prefix frontend ci
+          else
+            npm --prefix frontend install --no-audit --no-fund
+          fi
+      - name: Build production frontend
+        run: npm --prefix frontend run build
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run the fixture harness (one shard)
+        # --reporter replaces the config's list + github + html for this run:
+        # the shard keeps list and github and writes blob-report/report-<i>.zip
+        # (failure screenshots, traces and error context inside) instead of a
+        # partial HTML report.
+        env:
+          E2E_FIXTURE_WORKERS: '4'
+        run: npm --prefix frontend run e2e:fixture:ci -- --shard=${{ matrix.shard }}/${{ strategy.job-total }} --reporter=list,github,blob
+      - name: Upload the shard's blob report
+        # Pass or fail: the merge needs every shard's blob. overwrite: a
+        # re-run shard replaces its earlier blob instead of failing on the name.
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-fixture-blob-${{ matrix.shard }}
+          path: frontend/blob-report
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+      - name: Upload the shard's test results
+        # The raw test-results/<test>/ folders, merged into the report
+        # artifact beside the HTML report, as the unsharded job uploaded them.
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-fixture-results-${{ matrix.shard }}
+          path: frontend/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+          overwrite: true
+
+  e2e-fixture-perf:
+    # The fixture harness's timing budgets and built-dist checks. Never
+    # sharded: the PERF_SPEC specs measure timing, so they run alone on one
+    # worker of their own runner, beside the shards rather than after them.
+    # Measured in the unsharded job (same 8 runs): setup 1.6-9.7 min (the
+    # high end is the slow Chromium install), the built-dist pytest 5-9 s, the
+    # perf step 1m23s-1m47s. 15 is the worst of those together (~12 min) plus
+    # headroom.
+    name: e2e (fixture perf + interaction budgets, single worker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -554,20 +627,16 @@ jobs:
       - name: Install Chromium
         working-directory: frontend
         run: npx playwright install --with-deps chromium
-      - name: Run the fixture harness
-        env:
-          E2E_FIXTURE_WORKERS: '4'
-        run: npm --prefix frontend run e2e:fixture:ci
       - name: Run the perf and interaction budgets (single worker)
         # The specs playwright.config.ts's PERF_SPEC collects measure timing,
         # so they run alone on one worker and only here (MIP_PERF=1; every
         # other run ignores them): perf-budget.fixture.spec.ts (calibrated on
-        # this runner, gating) and interaction-budget.fixture.spec.ts (audit
-        # runtime-09, W4b lead-queue; report-only until 3 runner medians
-        # calibrate it). The file filters are required: MIP_PERF=1 alone
-        # also collects every normal fixture spec. A filter that matches no
-        # file yet adds nothing. Artifacts go to test-results/perf and
-        # playwright-report/perf, which the upload below already covers.
+        # the reference runner, gating) and interaction-budget.fixture.spec.ts
+        # (audit runtime-09, W4b lead-queue; report-only until 3 runner
+        # medians calibrate it). The file filters are required: MIP_PERF=1
+        # alone also collects every normal fixture spec. A filter that matches
+        # no file yet adds nothing. Artifacts go to test-results/perf and
+        # playwright-report/perf, which the uploads below cover.
         env:
           MIP_PERF: '1'
         run: npm --prefix frontend run e2e:fixture:ci -- perf-budget interaction-budget --workers=1
@@ -583,6 +652,90 @@ jobs:
           path: frontend/test-results/perf/calibration/*.json
           if-no-files-found: warn
           retention-days: 30
+      - name: Upload the perf report
+        # Synthetic fixture data only, like the harness report.
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-fixture-perf-report
+          path: |
+            frontend/playwright-report/perf
+            frontend/test-results/perf
+          if-no-files-found: ignore
+          retention-days: 7
+
+  e2e-fixture:
+    # The fixture harness's gate, under the check name the unsharded job had:
+    # it merges the shards' blob reports into one HTML report, then fails
+    # unless every shard passed and reported and the perf job passed.
+    # `playwright merge-reports` exits 0 even when the merged report holds
+    # failures (it fails only on a reporter error), so the results of the
+    # needed jobs are checked explicitly. `!cancelled()`, not the default
+    # success(): a shard failure would otherwise SKIP this job, and a skipped
+    # job reads as passing.
+    name: e2e (fixture harness, every route)
+    needs: [e2e-fixture-shard, e2e-fixture-perf]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    # Setup is checkout + a cached npm ci (3-5 s in the unsharded job) and
+    # the merge itself takes seconds; 10 is generous.
+    timeout-minutes: 10
+    env:
+      # The length of e2e-fixture-shard's matrix; tests/unit/
+      # test_ci_fixture_sharding.py pins the two together.
+      E2E_FIXTURE_SHARD_TOTAL: '4'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend deps
+        run: |
+          if [ -f frontend/package-lock.json ]; then
+            npm --prefix frontend ci
+          else
+            npm --prefix frontend install --no-audit --no-fund
+          fi
+      - name: Download the shard blob reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: e2e-fixture-blob-*
+          path: frontend/blob-report
+          merge-multiple: true
+      - name: Download the shard test results
+        # Only failing shards upload one; matching none downloads nothing.
+        uses: actions/download-artifact@v8
+        with:
+          pattern: e2e-fixture-results-*
+          path: frontend/test-results
+          merge-multiple: true
+      - name: Merge the shard reports into one HTML report
+        working-directory: frontend
+        run: npx playwright merge-reports --reporter=dot,html blob-report
+      - name: Every shard passed and reported
+        working-directory: frontend
+        env:
+          SHARD_RESULT: ${{ needs.e2e-fixture-shard.result }}
+          PERF_RESULT: ${{ needs.e2e-fixture-perf.result }}
+        run: |
+          status=0
+          shopt -s nullglob
+          blobs=(blob-report/*.zip)
+          if [ "${#blobs[@]}" -ne "$E2E_FIXTURE_SHARD_TOTAL" ]; then
+            echo "::error::expected $E2E_FIXTURE_SHARD_TOTAL shard blob reports, found ${#blobs[@]}"
+            status=1
+          fi
+          if [ "$SHARD_RESULT" != success ]; then
+            echo "::error::fixture harness shards: $SHARD_RESULT (merged report: the e2e-fixture-playwright-report artifact)"
+            status=1
+          fi
+          if [ "$PERF_RESULT" != success ]; then
+            echo "::error::fixture perf + interaction budgets: $PERF_RESULT (see e2e-fixture-perf)"
+            status=1
+          fi
+          exit "$status"
       - name: Upload Playwright report
         # Safe to publish: every borrower, id and draft in this suite is
         # synthetic fixture data. (The live suite in nightly.yml does NOT

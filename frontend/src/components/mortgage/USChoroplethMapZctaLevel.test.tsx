@@ -400,7 +400,7 @@ describe('USChoroplethMapZctaLevel', () => {
     expect(handlers.onView).toHaveBeenLastCalledWith({ polygons: false, busy: false, controls: null, caption: null, cardNote: null });
   });
 
-  it('reports absent, not tiles, while no state has committed geometry (the operator build is pending)', async () => {
+  it('reports absent, not tiles, while no state has committed geometry', async () => {
     geo.has.mockReturnValue(false);
     geo.states.mockReturnValue([]);
     await render();

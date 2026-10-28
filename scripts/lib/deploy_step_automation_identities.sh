@@ -187,6 +187,22 @@ PYEOF
   export MIP_ADMIN_IDENTITIES
   export MIP_AI_GATEWAY_VERIFIER_CLIENT_ID="$DATABRICKS_VERIFIER_CLIENT_ID"
   export BUNDLE_VAR_ai_gateway_verifier_client_id="$DATABRICKS_VERIFIER_CLIENT_ID"
+  # Read-only pre-stop probes. Step 0a stops (and on the unsigned rebase path
+  # quarantines) the existing App, and with no signed blue a later failure
+  # leaves it stopped. These failures are visible to the workspace admin now,
+  # before the lease or any other mutation: retiring a canonical Supervisor
+  # the agent-runtime SP did not create without the operator naming it in
+  # MIP_RETIRE_HUMAN_SUPERVISOR (or with an incomplete identity), a
+  # non-runtime Supervisor on a reserved replacement name, a Genie space
+  # granting a group the App, agent-runtime or verifier SP belongs to, and any
+  # Genie grant to the verifier. Refuse here, before this run stops the App.
+  step "pre-stop probes: Supervisor retirement acknowledgement and Genie group grants"
+  run "$PYTHON" -m tools.databricks.deploy_prestop_probes \
+    --app-name "$_GRANTS_APP_NAME" \
+    --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+    --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+    --supervisor-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}"
   # The signed lease is the first persistent workspace mutation. A contender
   # must lose here before it can revoke stale grants or alter shared resources.
   APP_LEASE_RECOVERY_ENV="$(mktemp -t mip-app-lease-recovery.XXXXXX.env)"
@@ -385,6 +401,8 @@ else:
 else
   export MIP_APP_DEPLOYMENT_LEASE_ID="dry-run-deployment-lease"
   echo "  app automation: normal/admin Bearer mint deferred by --dry-run"
+  step "pre-stop probes: Supervisor retirement acknowledgement and Genie group grants"
+  echo "  would probe read-only: the creator of Supervisor '${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}' (MIP_RETIRE_HUMAN_SUPERVISOR) and Genie group grants"
   step "prove or create the deterministic owned App rollback secret scope"
   echo "  would prove/create: scope ${APP_ROLLBACK_SECRET_SCOPE}"
 fi

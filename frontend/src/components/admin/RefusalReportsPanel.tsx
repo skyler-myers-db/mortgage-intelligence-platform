@@ -100,7 +100,7 @@ function FamilyCounts({ family }: { family: GenieRefusalReason | null }) {
   const counts = first.data?.family_counts ?? [];
   if (counts.length === 0) return null;
   return (
-    <div className="chip-row" aria-label="Reports per refusal family">
+    <div className="chip-row" role="group" aria-label="Reports per refusal family">
       {counts.map((row) => (
         <Chip key={row.refusal_reason} variant="neutral">
           {GENIE_REFUSAL_FAMILIES[row.refusal_reason].title} · {row.count}

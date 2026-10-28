@@ -506,20 +506,35 @@ Because the excluded MIP workspace cannot enumerate foreign direct grants after
 convergence, the live postflight must separately use each retained bound
 workspace to prove its expected access and grant behavior.
 
-The command of record is the manual `deploy-dev` workflow with its one-time
-input, after the exact environment policy has been independently reviewed:
+**Foreign-catalog remediation has no CI command of record (post-W5,
+2026-10-27).** It used to be the manual `deploy-dev` workflow's one-time
+`remediate_foreign_catalog_bindings` input. Since post-W5 that workflow deploys
+only the CI staging install on the forked-anchor `pr105-host` target
+(docs/deployment.md, "CI staging install"), and the isolation rule table
+(`tools/databricks/ci_install_isolation.py`) refuses the input there: a
+dispatch with `remediate_foreign_catalog_bindings=true` exits 2 in the
+`scripts/deploy.sh` preflight, before any mutation. The refusal is
+deliberate. The `pr105-host` workspace shares the live install's Unity Catalog
+metastore, and a catalog's isolation mode and workspace bindings are
+metastore-level state: this remediation flips each `OPEN` catalog the policy
+names to `ISOLATED` and then binds every other metastore workspace
+`READ_WRITE`. The signed manifest refuses a policy that omits one of them,
+that changes an already-`ISOLATED` catalog's bindings, or that binds the
+deploying workspace. At completion only the deploying workspace (`pr105-host`
+from deploy-dev.yml) loses the catalog. Between each catalog's flip and its
+re-binding, every other workspace (the live one and every other team's) loses
+it. A run killed there stays in that narrower state until a resumed recovery,
+which never reopens. A workspace assigned to the metastore later never sees the
+catalog. These are other teams' catalogs and metastore-level state. The
+operator path, `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1
+./scripts/deploy.sh -t dev`, targets the live workspace, whose governed deploy
+is NO-GO (docs/deployment.md, "The live install is outside this bootstrap, and
+its governed deploy is NO-GO").
+Any metastore-wide remediation is therefore an owner-only, separately reviewed
+decision, and the bootstrap never runs it (docs/deployment.md, owner step 8).
 
-```bash
-BRANCH="$(git branch --show-current)"
-gh workflow run deploy-dev.yml --ref "$BRANCH" \
-  -f remediate_foreign_catalog_bindings=true \
-  -f skip_silver=false \
-  -f skip_smoke=false
-```
-
-That workflow supplies the separated workspace, account-SCIM, runtime, and
-proof-signing authorities. `scripts/deploy.sh` acquires the signed App lease and
-starts its parent-PID-fenced heartbeat. It requires an existing stable App,
+When an owner-approved run does reach it, `scripts/deploy.sh` acquires the
+signed App lease and starts its parent-PID-fenced heartbeat. It requires an existing stable App,
 stops the exact immutable App identity before any recovery or fresh catalog
 write, and then runs `snapshot`, `apply`, and `verify`. A signed immutable
 completion record is written only after the whole-policy verification passes.
@@ -1304,8 +1319,12 @@ reporting `"silver_max_ingested_at": null`.
 3. Verify the space's trusted-assets list includes the three
    `mip.semantics.*` views (`lead_generation`, `segment_performance`,
    `borrower_opportunity`). If empty, re-run `mip_refresh_scores` (step
-   7 in [`docs/runbook.md`](../runbook.md) §4) — the `refresh_semantics_views`
-   task publishes them and the provisioning script rebinds.
+   10 in [`docs/runbook.md`](../runbook.md) §4) — the `refresh_semantics_views`
+   task publishes them and the provisioning script rebinds. Re-run it only
+   where the deployed jobs match the current bundle: on an install whose
+   governed deploy is NO-GO, never run it (a stale gold job drops the
+   reviewed functions' `EXECUTE` grants); use the runbook's "Interim refresh
+   (governed deploy NO-GO)".
 
 **SQL equivalent** (Genie permissions are workspace-level, not UC — no
 SQL form; use the UI or the Databricks REST API

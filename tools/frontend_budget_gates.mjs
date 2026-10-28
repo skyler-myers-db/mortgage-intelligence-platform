@@ -144,8 +144,9 @@ export const budgets = {
   // gzip on one host (W5d's 535.35 / 171.01 was another build). Not raised.
   // W5e fix rounds 1-2 (2026-10-26): 535.47 -> 535.36 raw / 171.13 ->
   // 171.14 gzip (tail T4's dependency bumps; no initial-chunk source change).
-  initialJsBytes: 558 * KiB, // actual 535.36 (8 chunks, wave-5e fix round 2)
-  initialJsGzipBytes: 176 * KiB, // actual 171.14 (wave-5e fix round 2)
+  // Post-W5 integration: 535.45 -> 536.87 raw / 171.18 -> 171.74 gzip. Held.
+  initialJsBytes: 558 * KiB, // actual 536.87 (8 chunks, post-W5 integration)
+  initialJsGzipBytes: 176 * KiB, // actual 171.74 (post-W5 integration)
   // Bumped 2026-06-11 for the re-audit #4 Buyer-Wow tranche: ⌘K command
   // palette (.cmdk*), portal evidence hover-card (.evidence-hovercard*),
   // sleek one-time KPI entrance (.kpi__value--enter / .spark__line--draw),
@@ -208,7 +209,7 @@ export const budgets = {
   // blocks left the shell sheet for their lazy chunks; css-07 tint scale),
   // w5-analytics +0.86 (the floored-mark hatch and forced block in
   // 10-native-analytics). ~5% headroom.
-  initialCssBytes: 170 * KiB, // actual 161.34 (wave-5e integration)
+  initialCssBytes: 170 * KiB, // actual 161.50 (post-W5 integration; see initialCssBrBytes)
   // Re-baselined 2026-09-08 for the Genie thread view + deep-research
   // sections slice. The 25 KiB gzip gate had drifted to 4 bytes above the
   // measured artifact (25,596 B) — the next CSS line from anyone would have
@@ -227,7 +228,7 @@ export const budgets = {
   // wave-5d integration: 29.80 -> 30.31 (the same two lanes), 2.2% left. ~5%.
   // wave-5e integration: ratcheted DOWN, 30.33 -> 28.44 (w5-css-cascade, see
   // initialCssBytes). ~5% headroom.
-  initialCssGzipBytes: 30 * KiB, // actual 28.44 (wave-5e integration)
+  initialCssGzipBytes: 30 * KiB, // actual 28.46 (post-W5 integration)
   // Re-baselined 2026-07-10 for the UX declutter slice (batches 1-2). total JS
   // was red on main (990.51 > 990.00); restored ~5% headroom over the measured
   // actual per this file's policy. Batch 2 (asset-label helper, top-leads
@@ -466,8 +467,12 @@ export const budgets = {
   // bumps; the Borrower cell's compliance caveats under HIDE) 687.66 br,
   // fix round 2 687.59 (the Analytics threshold notice copy; the -0.07 is
   // hash churn).
-  totalJsBytes: 2344 * KiB, // actual 2231.74 (wave-5e fix round 2)
-  totalJsGzipBytes: 837 * KiB, // actual 796.15 (wave-5e fix round 2)
+  // Post-W5 integration (br per merge step, one host, base 687.58): leadtable
+  // +5.44 (the cut ~+2.5, not the +2.71 above, whose parts sum to +2.43; then
+  // T1c), tooltip +0.31, vpat -0.22 (churn), zcta +1.21 (ZCTA rung +0.77),
+  // follow-ups -0.11: 2252.06 raw / 803.45 gzip / 694.21 br; 4.1% left, held.
+  totalJsBytes: 2344 * KiB, // actual 2252.06 (post-W5 integration)
+  totalJsGzipBytes: 837 * KiB, // actual 803.45 (post-W5 integration)
   // Re-baselined 2026-09-23 for wave 1c (lane queue-keyboard-review): the
   // shared LeadTable chunk (Lead Queue + Segment Intelligence) grew from
   // 92.96 / 29.59 to 105.51 / 33.56 with the keyboard triage that must be
@@ -528,8 +533,14 @@ export const budgets = {
   // / 47.87 -> 47.98 br (the Borrower cell keeps DNC / Suppressed /
   // Owner-unresolved when Status or Relationship is hidden; tail T4);
   // fix round 2 left the chunk's raw bytes unchanged (47.92 br, hash churn).
-  maxLazyJsBytes: 180 * KiB, // actual 171.29 (leadsQuery chunk = LeadTable, wave-5e fix round 2)
-  maxLazyJsGzipBytes: 61 * KiB, // actual 57.81 (leadsQuery chunk = LeadTable, wave-5e fix round 2)
+  // Post-W5 (2026-10-26, leadtable-chunk-react-virtual; one host, where base
+  // 550dcf97 measures 171.54 raw / 57.91 gzip / 47.99 br): the expanded row's
+  // body (RowPreview, LeadRowWorkflowPanel, AssignmentLifecycleAdvance) moves
+  // to its own lazy chunk (150.53 / 51.04 / 42.76), then tail T1c lands
+  // (+10.72 / +3.13 / +2.75): 161.25 raw / 54.17 gzip / 45.51 br. Ratcheted
+  // DOWN per rule 2 at the post-W5 integration (161.28 / 54.19 / 45.38), ~5%.
+  maxLazyJsBytes: 170 * KiB, // actual 161.28 (leadsQuery chunk = LeadTable, post-W5 integration)
+  maxLazyJsGzipBytes: 57 * KiB, // actual 54.19 (leadsQuery chunk = LeadTable, post-W5 integration)
   // Re-baselined 2026-09-24 for audit bundle-05 / css-v2 (lane
   // w2-build-currency): the seven static @fontsource faces (7 woff2 + their
   // 7 never-requested woff twins, 215.42 KiB) became one variable woff2 each
@@ -609,7 +620,10 @@ export const budgets = {
   // W5e fix rounds 1-2 (2026-10-26): 147.79 -> 147.68 (fix round 1, tail
   // T4's dependency bumps) -> 147.64 (fix round 2, hash churn; no initial
   // source changed). The gate is HELD at 152.
-  initialJsBrBytes: 152 * KiB, // actual 147.64 (8 chunks, wave-5e fix round 2)
+  // Post-W5 integration (per merge, br, one host; base 550dcf97 147.71): tooltip
+  // +0.39 (the description store; over recent 0.15-0.30 lane caps), leadtable
+  // -0.04, vpat +0.01, harness and zcta 0, follow-ups +0.04. 148.11; HELD at 152.
+  initialJsBrBytes: 152 * KiB, // actual 148.11 (8 chunks, post-W5 integration)
   // wave-4b integration: 24.17 -> 24.32 br (see initialCssBytes), which left
   // 2.7%. Re-baselined to ~5%.
   // wave-5b integration: 24.53 -> 24.74 br (theme-white-label +0.23: the
@@ -620,9 +634,10 @@ export const budgets = {
   // +0.26, followups-snooze +0.06; see initialCssBytes), 3.1% left. ~5%.
   // wave-5e integration: ratcheted DOWN, 25.22 -> 23.83 (css-cascade -1.52,
   // analytics +0.13; see initialCssBytes). ~5% headroom.
-  initialCssBrBytes: 26 * KiB, // actual 23.83 (wave-5e integration)
-  totalJsBrBytes: 723 * KiB, // actual 687.59 (wave-5e fix round 2; see totalJsBytes)
-  maxLazyJsBrBytes: 51 * KiB, // actual 47.92 (leadsQuery = LeadTable chunk; re-baselined at the w5e lead-table-compile merge, fix round 2 measured, see maxLazyJsBytes)
+  // Post-W5 integration: 23.83 -> 23.88 (the expanded row's pinned pending line).
+  initialCssBrBytes: 26 * KiB, // actual 23.88 (post-W5 integration)
+  totalJsBrBytes: 723 * KiB, // actual 694.21 (post-W5 integration; see totalJsBytes)
+  maxLazyJsBrBytes: 48 * KiB, // actual 45.38 (leadsQuery = LeadTable chunk; ratcheted DOWN at the post-W5 integration, see maxLazyJsBytes)
   // What a navigation to each route fetches beyond the initial closure: the
   // route chunk plus its static imports, JS + CSS, brotli q11. Keyed by the
   // manifest's source path; every route module must have an entry and every
@@ -739,7 +754,8 @@ export const budgets = {
     // palette-offer-sales-loop +0.23, the shared search). ~5% headroom.
     // wave-5e: 42.34 -> 44.19 (lead-queue-columns +0.73 More like this;
     // lexicon +0.62; lead-table-compile +0.37; the rest +0.13). ~5%.
-    'src/routes/borrower-360.tsx': 47 * KiB, // actual 44.19
+    // post-W5: 44.08 -> 44.24 (the ConfidenceMeter chunk split, +0.14). Held.
+    'src/routes/borrower-360.tsx': 47 * KiB, // actual 44.24
     // w4 pre-cut: 8.42 -> 8.99 on the CI (Linux) build, which measures ~0.1
     // KiB br more per route than the macOS builds these gates were set on;
     // SurfaceTitle folded into the shared Primitives chunk adds ~0.1 (a
@@ -793,7 +809,8 @@ export const budgets = {
     // and the shared LeadTable chunk; lead-queue-columns +4.10: HIDE columns,
     // the omnibox pill, the compact header; wire-types +0.27; lexicon +0.19;
     // css-cascade +0.17; compiler-lint +0.15). ~5%.
-    'src/routes/lead-queue.tsx': 110 * KiB, // actual 103.90
+    // post-W5: 104.01 -> 96.51 (the expanded row's body went lazy). Ratcheted DOWN.
+    'src/routes/lead-queue.tsx': 102 * KiB, // actual 96.51
     // wave-5a (w5-filters-saved-views): the Saved views panel, a lazy route
     // module whose closure statically reaches the lead-queue chunk.
     // wave-5b: 82.79 -> 85.17, the lead-queue closure's growth above.
@@ -803,7 +820,8 @@ export const budgets = {
     // (lq +4.16, sales +0.97, deeplink +0.62, palette +0.31). ~5% headroom.
     // wave-5e: 95.51 -> 107.13, the lead-queue closure's growth above (and
     // lead-queue-columns +4.45 here). ~5%.
-    'src/routes/lead-queue.savedViews.tsx': 113 * KiB, // actual 107.13
+    // post-W5: 107.25 -> 99.74, the lead-queue closure's cut above. Ratcheted DOWN.
+    'src/routes/lead-queue.savedViews.tsx': 105 * KiB, // actual 99.74
     // w4 pre-cut: 3.93 (wave 3) -> 4.00 on the CI build (see glossary above).
     // wave-5b: 4.18 -> 4.26 (theme-white-label +0.07). Gate unchanged.
     'src/routes/not-found.tsx': 5 * KiB, // actual 4.26 (macOS build)
@@ -865,6 +883,7 @@ export const budgets = {
     // LeadTable chunk; lexicon +5.62: GlossaryTerm, mortgageGlossary and the
     // lexicon chunk for the mode links; lead-queue-columns +1.72; analytics
     // +0.57; wire-types +0.32; the rest +0.19). ~5%.
-    'src/routes/segment-intelligence.tsx': 128 * KiB, // actual 121.39
+    // post-W5: 121.39 -> 116.90 (the LeadTable cut). Ratcheted DOWN per rule 2.
+    'src/routes/segment-intelligence.tsx': 123 * KiB, // actual 116.90
   },
 };

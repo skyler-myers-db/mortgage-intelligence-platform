@@ -36,7 +36,7 @@ export function BorrowerStoryCard({ borrower }: { borrower: Borrower360 }) {
       <div className="surface__body" data-testid="borrower-story-body">
         <p className="borrower-story__narrative">{story.sentences.join(' ')}</p>
 
-        <div className="borrower-story__claims" aria-label="Figures grounded in the dossier">
+        <div className="borrower-story__claims" role="group" aria-label="Figures grounded in the dossier">
           {story.claims.map((claim) => (
             <Tooltip key={`${claim.label}-${claim.token}`} content={`${claim.label}: ${claim.token} (from ${String(claim.field)})`}>
               <span className={`borrower-story__claim${claim.verified ? '' : ' borrower-story__claim--unverified'}`}>

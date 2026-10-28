@@ -353,6 +353,13 @@ describe('SegmentCard', () => {
     // One line per row (review round 2): the state chip beside the count,
     // the source in the reconcile row, the evidence chip alone in the meta.
     expect(container.querySelector('.seg-card__count-row .seg-card__gate')?.textContent).toBe('not connected');
+    // The suppressed count says why in text a screen reader reads, never in a
+    // name on the role-less count div (ARIA 1.2 prohibits it there): the dash
+    // is hidden from assistive tech and the reason is visually hidden text.
+    const count = container.querySelector<HTMLElement>('.seg-card__count--gated');
+    expect(count?.hasAttribute('aria-label')).toBe(false);
+    expect(count?.querySelector('[aria-hidden="true"]')?.textContent).toBe('—');
+    expect(count?.querySelector('.sr-only')?.textContent).toBe('Segment gated: source not connected');
     expect(container.querySelector('.seg-card__reconcile-slot .seg-card__source')?.textContent).toBe('Building Permits');
     const meta = container.querySelector('.seg-card__meta');
     expect(meta?.children).toHaveLength(1);

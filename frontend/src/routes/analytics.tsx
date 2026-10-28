@@ -319,7 +319,7 @@ export default function AnalyticsRoute() {
       </div>
       <div {...tabs.panelProps(tab)}>
       {tab !== 'sales-ops' && tab !== 'approval-funnel' && (
-      <div className="filter-row filter-row--spaced analytics-filters" aria-label="Analytics filters">
+      <div className="filter-row filter-row--spaced analytics-filters" role="group" aria-label="Analytics filters">
         <MultiFilterSelect
           label="State"
           allLabel="All states"

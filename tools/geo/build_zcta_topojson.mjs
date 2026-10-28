@@ -55,22 +55,28 @@ const repoRoot = path.resolve(toolDir, '..', '..');
  * approved download prints each computed hash, the operator reviews it and
  * pins it here, and only then does a build run.
  * tests/unit/test_zcta_geometry_manifest.py reads these lines.
+ *
+ * Pinned at the approved build (2026-10-26) from one direct HTTPS download of
+ * each URL (HTTP 200, no redirect; bytes equal to the served Content-Length):
+ * zcta 66,655,314 bytes, Last-Modified 2023-05-19; relationship 6,821,287
+ * bytes, 2021-12-09; state 3,548,589 bytes, 2023-05-19. Provenance is in
+ * frontend/src/geo/zcta/README.md.
  */
 export const SOURCES = [
   {
     name: 'zcta',
     url: 'https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_zcta520_500k.zip',
-    sha256: null,
+    sha256: 'c69a4ede8aebebfc7ed3a98a9075c6aaa1b75d514a129bc5c662fd806d2f3d17',
   },
   {
     name: 'relationship',
     url: 'https://www2.census.gov/geo/docs/maps-data/data/rel2020/zcta520/tab20_zcta520_county20_natl.txt',
-    sha256: null,
+    sha256: '3ed41278d637dc249e0323306f68be8a6c234e3090f4de88ef328dee71aeaaaf',
   },
   {
     name: 'state',
     url: 'https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_state_500k.zip',
-    sha256: null,
+    sha256: 'dcc877984a3e4d59c1ee8d068b6681517c545e0c1827b7e78a7c2c7cbb167da6',
   },
 ];
 
@@ -86,8 +92,18 @@ export const FIPS_TO_USPS = {
 };
 
 export const PROJECTION = { name: 'geoAlbersUsa', scale: 1300, translate: [487.5, 305] };
-/** The one planar weight (triangle area, Albers-1300 units squared); tuned at the first approved build. */
-export const DEFAULT_WEIGHT = 0.0001;
+/**
+ * The one planar weight (triangle area, Albers-1300 units squared; one unit is
+ * about 4.9 km, so 0.003 is a triangle of about 0.07 km2). Tuned at the first
+ * approved build (2026-10-26) as the finest swept weight that leaves at least
+ * 10% headroom under every limit. Measured on the pinned sources (largest file TX):
+ *   0.0001  TX 2.07 MiB / 235,823 pts, all 30.2 MiB  (fails all three limits)
+ *   0.001   TX 1.43 MiB / 148,903 pts, all 20.6 MiB  (fails points and total)
+ *   0.002   TX 1.18 MiB / 117,358 pts, all 17.2 MiB  (2% points headroom)
+ *   0.003   TX 1.06 MiB / 101,976 pts, all 15.5 MiB  (chosen: 15% / 29% / 22%)
+ *   0.005   TX 0.93 MiB /  85,314 pts, all 13.6 MiB
+ */
+export const DEFAULT_WEIGHT = 0.003;
 export const QUANTIZATION = 1e5;
 const MIB = 1024 * 1024;
 export const LIMITS = { fileBytes: 1.5 * MIB, arcPoints: 120_000, totalBytes: 20 * MIB };
@@ -134,10 +150,30 @@ export function sourceDirProblem(sourceDir, root = repoRoot) {
     : null;
 }
 
+/** The one host the approved sources come from; a download goes nowhere else. */
+export const SOURCE_HOST = 'www2.census.gov';
+
+/** Why `url` may not be downloaded (not HTTPS on SOURCE_HOST), or null. */
+export function sourceUrlProblem(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return `${url} is not a URL`;
+  }
+  return parsed.protocol === 'https:' && parsed.hostname === SOURCE_HOST && parsed.port === ''
+    ? null
+    : `${url} is not an https://${SOURCE_HOST}/ URL`;
+}
+
 async function download(sources, sourceDir) {
   mkdirSync(sourceDir, { recursive: true });
   for (const source of sources) {
-    const response = await fetch(source.url);
+    const problem = sourceUrlProblem(source.url);
+    if (problem) throw new Error(`download refused: ${problem}`);
+    // The approved fetches answered 200 with no redirect; a redirect now is a
+    // change of host or path the operator has not reviewed, so it fails.
+    const response = await fetch(source.url, { redirect: 'error' });
     if (!response.ok) throw new Error(`download failed: ${source.url} answered ${response.status}`);
     writeFileSync(path.join(sourceDir, fileOf(source)), Buffer.from(await response.arrayBuffer()));
     console.log(`downloaded ${source.url}`);

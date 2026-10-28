@@ -213,12 +213,14 @@ export default function RevokeApprovalPanel({
       )}
       {ready && (
         <label className="decision-panel__field decision-panel__field--wide">
-          <span className="field__label">Reason for revoking</span>
+          <span className="field__label" id={`${hintId}-label`}>Reason for revoking</span>
+          {/* Named by the label text alone; the hint in the same <label> is the description. */}
           <textarea
             ref={fieldRef}
             value={reason}
             required
             maxLength={500}
+            aria-labelledby={`${hintId}-label`}
             aria-invalid={failure !== null || undefined}
             aria-describedby={hintId}
             aria-errormessage={failure ? `${hintId}-failure` : undefined}

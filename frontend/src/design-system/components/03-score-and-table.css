@@ -121,6 +121,15 @@
   left: 0;
   max-inline-size: calc(100cqw - 2 * var(--pad-card));
 }
+/* The expanded row's pending / failure line (LeadRowExpandedSlot,
+   deviation:lead-row-preview-pending) stands in for the preview, so it pins
+   to the scrollport's left edge the same way: on a table scrolled
+   horizontally it stays in view instead of rendering past the edge. */
+.tbl__expand-inner--pinned {
+  position: sticky;
+  left: 0;
+  max-inline-size: calc(100cqw - 2 * var(--pad-card));
+}
 @container main (max-width: 1280px) {
   .tbl__expand-inner--lead { grid-template-columns: 1.1fr 1fr; }
 }

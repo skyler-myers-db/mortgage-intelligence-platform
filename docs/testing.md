@@ -69,7 +69,9 @@ The live suite (`nightly.yml`, `live validation (on demand)`) stays `workflow_di
 
 ### Live endpoint verifier (`tools/verify_live.py`)
 
-`tools/verify_live.py` probes a deployed app with the operator's own OAuth bearer (`databricks auth token -p <profile>`); its report header names the profile, never an identity. Its `outreach.approve.real` probe is an **audited approval write on dev**: it approves one real borrower's draft and writes one APPROVE row, so it runs only when an operator invokes the tool explicitly, never from `nightly.yml` or any scheduled job. It certifies the audited draft the `outreach.draft` probe just produced: the body carries that draft's `body`, `subject`, `offer_code`, `channel`, `campaign_id`, `variant_name` and its proof (`generation_id`, `response_hash`, `source_refreshed_at`) verbatim, with `review_mode: "individual"`. When the draft probe failed or its proof is missing, no approve is sent and the probe reports `draft unavailable: approve not attempted (no audited draft proof)`. Data age: a source whose `checked_at` is older than `--max-source-age-days` (default 3) is flagged with its measured age (`checked_at is stale (66 d > 3 d)`), and the threshold is printed in the report header. On dev the flag is expected: only a full `deploy.sh` run or a refresh job moves `checked_at`, and a scheduled dev refresh was rejected (W5e) because it is metered and would only move timestamps. `tests/unit/test_verify_live.py` pins the approve body, the no-draft refusal and the threshold.
+`tools/verify_live.py` probes a deployed app with the operator's own OAuth bearer (`databricks auth token -p <profile>`); its report header names the profile, never an identity. Its `outreach.approve.real` probe is an **audited approval write on dev**: it approves one real borrower's draft and writes one APPROVE row, so it runs only when an operator invokes the tool explicitly, never from `nightly.yml` or any scheduled job. It certifies the audited draft the `outreach.draft` probe just produced: the body carries that draft's `body`, `subject`, `offer_code`, `channel`, `campaign_id`, `variant_name` and its proof (`generation_id`, `response_hash`, `source_refreshed_at`) verbatim, with `review_mode: "individual"`. When the draft probe failed or its proof is missing, no approve is sent and the probe reports `draft unavailable: approve not attempted (no audited draft proof)`. Data age: a source whose `checked_at` is older than the threshold is flagged with its measured age (`checked_at is stale (66 d > 3 d)`), and the report header prints the threshold and its basis. The default fails closed at 3 days. It widens to 8 days, the dev live install's weekly `mip_scheduled_refresh` cadence (Fridays 06:00 America/Chicago) plus 1 day, only when a read-only `databricks jobs list -p <profile>` (the profile whose OAuth token the probes use, run from the system temp directory so the repo's bundle context cannot refuse it) shows exactly one `mip_scheduled_refresh` job, with an `UNPAUSED` schedule on that weekly cron, so one missed Friday run is flagged by Saturday. An absent job, a `PAUSED` one, another cron or a jobs list that cannot be read keeps 3. So does more than one such job: the list is workspace-wide, and another deployer's install proves nothing about this one. `--max-source-age-days` overrides both; another install passes its own cadence plus 1. The schedule lands only through a GO governed `deploy.sh` run (`docs/runbook.md`, "Weekly scheduled refresh (dev live install)"). Until one does, `checked_at` on dev moves only when gold is rebuilt, by a full governed `deploy.sh` run or an operator-run interim refresh (one ran on 2026-10-27), and ages between rebuilds, so the flag fires once the last rebuild is more than 3 days old. `tests/unit/test_verify_live.py` pins the approve body, the no-draft refusal and the thresholds; `tests/unit/test_verify_live_source_age.py` pins the fail-closed default (absent, `PAUSED`, unreadable or more than one => 3; the one job `UNPAUSED` on the weekly cron => 8); `tests/unit/test_refresh_schedule_contract.py` pins the cadence, cron and time zone to the bundle.
+
+Geo drill (both `tools/verify_live.py` and `scripts/smoke_live.sh`): the gate drills the map the way the UI does (PR #182), state -> ZIP. The drill target is the largest populated state in the filtered state rollups (state code as the tie-break; the filtered state SQL has no ORDER BY, so a first-row pick was arbitrary). The ZIP answer for that state must be a non-empty list of in-state rows, each with a 5-digit `zip` and a whole `addressable_borrowers`, at least one above zero, and the drill must reconcile exactly: `sum(zip.addressable_borrowers) == state.addressable - state.zip_unassigned_count`, with the state values taken from the same state payload the target came from. The county grain is retired (audit C2: `gold.county_rollup` emits a NULL `fips_5`), so `/geo/county-rollups` is probed only as a shape contract: it must answer 200 for the drilled state, and every row it ships needs that state and a 5-digit `fips_5`. Its empty list is the one answer that passes by design; `verify_live` waives the empty-`rollups` flag for exactly that probe name (`geo.county_rollups.retired_grain`) and key. `verify_live` alone also probes the Lead Queue deep link, by `state` + `zip`, never `county`; `smoke_live.sh` has no Lead Queue geo probe. Every other check fails closed. `tests/unit/test_verify_live.py` pins each refusal on the recorded payloads, and `tests/unit/test_smoke_live_contract.py` executes the smoke script's own geo block (between its `Geo drill: state -> ZIP` begin and end markers) with a stubbed `probe`. Both suites refuse the same named bad shapes, the reconciliation in both directions (an over-sum and an under-sum); `test_smoke_and_verify_live_refuse_the_same_geo_bad_shapes` pins the two id lists equal, apart from three verify_live-only ids (two extra flags it raises on the empty-ZIP payload, and a failed state probe, which smoke's own `probe` refuses before its geo checks run). Both live tools write audit rows, so neither runs in `ci.yml` or `nightly.yml`: `smoke_live.sh` runs as step 13 of `scripts/deploy.sh` (including the `workflow_dispatch` `deploy-dev.yml` run, unless `skip_smoke` is set), and `verify_live.py` only when an operator invokes it.
 
 ### Real-PostgreSQL contracts
 
@@ -129,7 +131,7 @@ The app runs on live Unity Catalog + Lakebase; there is no mock-mode runtime pat
 
 ## Fixture harness (credential-free e2e)
 
-`frontend/tests/e2e/fixture/` renders every route of the **production build** in Chromium with no backend and no credentials. It is the rendered-layer gate for UI work: a layout, theme, or interaction fix ships with a `*.fixture.spec.ts` assertion here. It runs on every pull request (`e2e-fixture` job in `.github/workflows/ci.yml`).
+`frontend/tests/e2e/fixture/` renders every route of the **production build** in Chromium with no backend and no credentials. It is the rendered-layer gate for UI work: a layout, theme, or interaction fix ships with a `*.fixture.spec.ts` assertion here. It runs on every pull request, sharded in `.github/workflows/ci.yml` (see "Sharding in CI" below); the check is "e2e (fixture harness, every route)".
 
 It is test infrastructure only. Nothing under `frontend/src` imports it, and the running app still has no mock path. The harness may `import type` from `frontend/src` (ESLint enforces type-only), so fixture payloads are checked against the app's own response types by `npm --prefix frontend run lint`.
 
@@ -151,9 +153,32 @@ npm --prefix frontend run e2e:fixture:ci                     # CI posture: forbi
 | `MIP_VRT=1` | unset | Collects `visual.fixture.spec.ts` (every other fixture run ignores it) and writes artifacts to `test-results/vrt` and `playwright-report/vrt`. Only the `e2e-visual` CI job and `tools/update_visual_baselines.sh` set it; see "Visual regression". |
 | `MIP_VRT_IMAGE` | unset | The Playwright image the run is inside. The VRT refuses to capture unless it is `mcr.microsoft.com/playwright:v<installed @playwright/test>-noble` on linux/x64. |
 | `MIP_CROSS_ENGINE=1` | unset | Replaces fixture-chromium with the two cross-engine projects, `fixture-webkit` (`*.cross-engine.fixture.spec.ts` and `*.webkit.fixture.spec.ts`) and `fixture-firefox-forced` (`*.firefox.fixture.spec.ts` and `genie-pagehide.cross-engine`), and writes to `test-results/cross-engine` and `playwright-report/cross-engine`. Only the `e2e-cross-engine` CI job sets it; see "Cross-engine projects". A Playwright harness variable, not an app setting. |
-| `MIP_PERF=1` | unset | Collects the `PERF_SPEC` specs, `perf-budget.fixture.spec.ts` (bundle-08) and `interaction-budget.fixture.spec.ts` (runtime-09), and writes to `test-results/perf` and `playwright-report/perf`. Only the single-worker "Run the perf and interaction budgets" step of the `e2e-fixture` CI job sets it, with the file filters `perf-budget interaction-budget` (without them MIP_PERF=1 also collects every normal fixture spec). See "Perf budget". |
+| `MIP_PERF=1` | unset | Collects the `PERF_SPEC` specs, `perf-budget.fixture.spec.ts` (bundle-08) and `interaction-budget.fixture.spec.ts` (runtime-09), and writes to `test-results/perf` and `playwright-report/perf`. Only the single-worker "Run the perf and interaction budgets" step of the `e2e-fixture-perf` CI job sets it, with the file filters `perf-budget interaction-budget` (without them MIP_PERF=1 also collects every normal fixture spec). See "Perf budget". |
 
 Fixture pages run at 1440x900, `prefers-reduced-motion: reduce`, locale `en-US`, timezone `America/New_York`, with `Date` frozen at `2026-07-14T15:00:00Z` (`test.use({ fixtureNow: null })` restores the real clock). Rebuild after changing anything under `frontend/src`; the harness never rebuilds for you.
+
+### Sharding in CI
+
+The harness outgrew one job: by W5e its 1,690 tests on 4 workers took 25-37 min (PRs #270-#272), and the job's cap had grown to 70 min. CI now runs it as three jobs:
+
+| Job | Check name | What it does |
+| --- | --- | --- |
+| `e2e-fixture-shard` | e2e (fixture harness, shard i/4) | A `fail-fast: false` matrix of 4. Each shard builds, installs Chromium and runs `e2e:fixture:ci -- --shard=i/4 --reporter=list,github,blob` on 4 workers, then uploads `frontend/blob-report` as `e2e-fixture-blob-<i>` (pass or fail) and, when it failed, `frontend/test-results` as `e2e-fixture-results-<i>`. |
+| `e2e-fixture-perf` | e2e (fixture perf + interaction budgets, single worker) | The built-dist checks (`MIP_REQUIRE_FRONTEND_DIST=1`) and the `PERF_SPEC` budgets on one worker, never sharded; uploads `perf-calibration-<run id>-<attempt>` and, on failure, `e2e-fixture-perf-report`. |
+| `e2e-fixture` | e2e (fixture harness, every route) | The gate, under the unsharded job's check name. Runs after both (`if: !cancelled()`, so a failed shard cannot skip it), merges the blobs with `playwright merge-reports --reporter=dot,html` into `frontend/playwright-report`, and fails unless all 4 blobs arrived, every shard passed and the perf job passed. On failure it uploads `e2e-fixture-playwright-report` (the merged HTML report plus every failing shard's `test-results/`), the same artifact name and folders as before. |
+
+`playwright merge-reports` exits 0 even when the merged report holds failures, so the gate checks the needed jobs' results itself; `tests/unit/test_ci_fixture_sharding.py` runs that step's shell against each outcome. `--shard` splits the list by test count, not time: replaying three CI runs' per-test durations over each shard's `--list` put every shard at 21-27% of the suite (the slowest 7.4-10.3 min), so each shard's cap is 25 min. When a shard nears it, add one to the matrix (`shard: [1, 2, 3, 4, 5]`) and set `E2E_FIXTURE_SHARD_TOTAL` to match; the pin test fails until both move.
+
+Reproduce one shard, or the merge, locally:
+
+```bash
+E2E_FIXTURE_PORT=5191 npm --prefix frontend run e2e:fixture -- --shard=2/4             # the tests shard 2 runs
+npm --prefix frontend run e2e:fixture -- --list --shard=2/4                             # just its list
+E2E_FIXTURE_PORT=5191 npm --prefix frontend run e2e:fixture -- --shard=2/4 --reporter=blob
+(cd frontend && npx playwright merge-reports --reporter=html blob-report)               # blob-report/ is gitignored
+```
+
+The blob reporter replaces `blob-report/` when the run finishes: it empties the folder in `onEnd`, just before it writes the new zip (Playwright 1.64), so a run that dies before `onEnd` leaves the previous zip in place. To merge several local shards, give each its own `PLAYWRIGHT_BLOB_OUTPUT_DIR` and copy the zips into one folder first.
 
 ### Failure artifacts
 
@@ -277,7 +302,7 @@ The flow for a change that moves pixels on purpose: run the script, review every
 await expectAxeClean(page, { key: { route: 'home', state: 'default' }, theme, accent, known: KNOWN_VIOLATIONS });
 ```
 
-One analyze runs the WCAG 2.0/2.1/2.2 A and AA tags plus `best-practice`. A rule with any WCAG tag gates at every impact, minor included; a best-practice-only rule is advisory: it is attached as `axe-best-practice.json` with one annotation and never fails. Nothing is excluded and no rule is disabled. The matrix scans the default state of every `routes.ts` route in both themes, the evidence drawer, command palette and Genie panel on the five core routes, the filter menu and an expanded row on Lead Queue, the degraded Home, the non-bannered failed read (`read-failed`) on Lead Queue and Segment Intelligence, and the teal / navy / red accents (`app.setAccent`) on Home, Lead Queue and Borrower 360.
+One analyze runs the WCAG 2.0/2.1/2.2 A and AA tags plus `best-practice`. A rule with any WCAG tag gates at every impact, minor included; a best-practice-only rule is advisory: it is attached as `axe-best-practice.json` with one annotation and never fails. Nothing is excluded and no rule is disabled. One needs-review result gates too: `aria-prohibited-attr` (`aria-label` or `aria-labelledby` on a role that prohibits a name, such as a role-less div or span). axe calls it a violation only while the element has no text, but screen readers drop the name either way; fix the element with a role that permits a name (`group`, `region`) or move the words into `.sr-only` text. `src/test/ariaProhibitedNames.test.ts` holds every non-test `.tsx` to the same rule at the source, for the states no scan opens. The matrix scans the default state of every `routes.ts` route in both themes, the evidence drawer, command palette and Genie panel on the five core routes, the filter menu and an expanded row on Lead Queue, the degraded Home, the non-bannered failed read (`read-failed`) on Lead Queue and Segment Intelligence, and the teal / navy / red accents (`app.setAccent`) on Home, Lead Queue and Borrower 360.
 
 `KNOWN_VIOLATIONS` is a ratchet keyed `route|state|rule`: each entry names the finding that owns the fix, the date, the themes and accents it reproduces in (accents default to `['bright']`) and a selector every violating node must match. An entry that stops reproducing fails as stale, so a fix retires its entry in the same change, and a key that names no scanned state fails the spec at load. Record a new violation only node-pinned and under a register id (or a new slug named in the commit); never add an exclusion. The live spec uses the same helper with an empty `LIVE_KNOWN_VIOLATIONS`, so it takes the same tags and fails on moderate and minor findings too.
 
@@ -293,6 +318,18 @@ One analyze runs the WCAG 2.0/2.1/2.2 A and AA tags plus `best-practice`. A rule
 ```bash
 E2E_FIXTURE_PORT=<port> npm --prefix frontend run e2e:fixture -- aria-snapshots --update-snapshots --update-source-method=overwrite
 ```
+
+### Virtual screen-reader transcripts
+
+`frontend/src/test/screenReader/` drives `@guidepup/virtual-screen-reader` (an exact devDependency) over the real components in Vitest (happy-dom) and records what it speaks, step by step, as committed golden transcripts in `transcripts/<flow>.txt`: the shell's skip link, landmarks and route announcement, the Lead Queue table, a row's actions and the approval review, the evidence drawer, the command palette, the identity menu, the Genie panel's answer and provenance, and a form with validation errors. Each suite also asserts the phrases a user needs (names, roles, states, live-region text), and `transcripts.test.ts` keeps one golden per suite. `docs/accessibility/VPAT.md` cites them; `tests/unit/test_vpat_contract.py` fails when a cited file or transcript goes missing.
+
+The harness is `virtualReader.ts`: `registerReaderHooks()` once at the top of a suite (clean storage before each walk, the reader stopped after it; `transcripts.test.ts` checks every suite calls it), `startReader()`, `reader.step(title, action)`, `next` / `nextUntil` / `previousForm` / `walkLandmarks` for the virtual cursor, `press` and `reportFocus` for focus, and `expectTranscript(name, reader)`. A changed transcript fails the suite; review the new text, then rewrite it on purpose (CI never writes one):
+
+```bash
+npm --prefix frontend run test -- src/test/screenReader -u
+```
+
+The reader is a model, not a screen reader, and each suite's header says what it cannot show: pronunciation (U+2212 stays the "−" character), `aria-activedescendant` (re-read the combobox with `reportFocus()`), an inserted `role="alert"` element (pin it on the DOM), native `showModal()` modality, a `<textarea>`'s typed text in its focus announcement (the virtual cursor does read it), speech queueing, and layout. NVDA, JAWS and VoiceOver passes still need a person (VPAT open items).
 
 ### Forced colors: automated in Chromium and Firefox
 
@@ -360,7 +397,7 @@ Every stylesheet sits in a cascade layer (2026-09-21 audit css-05 / stack-v3 / b
 
 ### Perf budget
 
-`PERF_SPEC` in `playwright.config.ts` collects the specs that measure timing: `perf-budget.fixture.spec.ts` (LCP and TBT of cold, throttled loads; bundle-08) and `interaction-budget.fixture.spec.ts` (Lead Queue interactions; runtime-09, owned by the W4b lead-queue lane, which names its spec exactly that). They run only in the single-worker step "Run the perf and interaction budgets (single worker)" of the `e2e-fixture` job and are ignored by every other run:
+`PERF_SPEC` in `playwright.config.ts` collects the specs that measure timing: `perf-budget.fixture.spec.ts` (LCP and TBT of cold, throttled loads; bundle-08) and `interaction-budget.fixture.spec.ts` (Lead Queue interactions; runtime-09, owned by the W4b lead-queue lane, which names its spec exactly that). They run only in the single-worker step "Run the perf and interaction budgets (single worker)" of the `e2e-fixture-perf` job, on a runner of their own and never sharded, and are ignored by every other run:
 
 ```bash
 MIP_PERF=1 npm --prefix frontend run e2e:fixture:ci -- perf-budget interaction-budget --workers=1
@@ -372,7 +409,7 @@ The contract for a `PERF_SPEC` spec: until its ceilings are calibrated from at l
 
 **The null-ceiling contract (runtime-09, quality-08).** Each spec declares one ceiling per metric, and `null` means report-only: `INTERACTION_CEILINGS_MS` in `interaction-budget.fixture.spec.ts` (`j`, `expand`, `keystroke`, all null) and `CEILINGS` in `perf-budget.fixture.spec.ts` (LCP, TBT and CLS per route; Borrower 360 and every CLS are null). The report test gates every non-null median (`<= ceiling`) and logs `gating: ...` or `report-only`. CLS is the largest session window (1 s gap, 5 s cap) of layout-shift entries without recent input, over the same span as TBT.
 
-**Calibration.** Every perf run writes `test-results/perf/calibration/<name>.json` (`fixture/calibration.ts`: `{name, spec, medians, samples, run: {sha, runId, runAttempt, runnerOs, imageOs}}`, numbers and CI metadata only, never a borrower id or rendered text), and the `e2e-fixture` job uploads them, pass or fail, as `perf-calibration-<run id>-<attempt>` (30 days). To set or lower a ceiling, the integrator (never a lane) downloads three reference-runner runs of ONE sha and runs the tool, which prints the literal and the runs it cites and never edits a spec:
+**Calibration.** Every perf run writes `test-results/perf/calibration/<name>.json` (`fixture/calibration.ts`: `{name, spec, medians, samples, run: {sha, runId, runAttempt, runnerOs, imageOs}}`, numbers and CI metadata only, never a borrower id or rendered text), and the `e2e-fixture-perf` job uploads them, pass or fail, as `perf-calibration-<run id>-<attempt>` (30 days). To set or lower a ceiling, the integrator (never a lane) downloads three reference-runner runs of ONE sha and runs the tool, which prints the literal and the runs it cites and never edits a spec:
 
 ```bash
 gh run download <run id> -n perf-calibration-<run id>-<attempt> -D /tmp/cal/<run id>   # three runs, one sha
@@ -490,7 +527,7 @@ node tools/export_e2e_fixtures.mjs --out /tmp/e2e-fixtures.json          # inspe
 MIP_REQUIRE_FIXTURE_CONTRACT=1 pytest -q tests/unit/test_e2e_fixture_contract.py
 ```
 
-`tests/unit/test_frontend_build_artifacts.py` has the same kind of switch: its served-layer and build-meta checks skip where `frontend/dist` is not built, and `MIP_REQUIRE_FRONTEND_DIST=1` (set by the `e2e-fixture` job right after its build) turns those skips into failures.
+`tests/unit/test_frontend_build_artifacts.py` has the same kind of switch: its served-layer and build-meta checks skip where `frontend/dist` is not built, and `MIP_REQUIRE_FRONTEND_DIST=1` (set by the `e2e-fixture-perf` job right after its build) turns those skips into failures.
 
 ### Generated API types
 

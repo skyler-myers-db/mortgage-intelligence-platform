@@ -309,7 +309,16 @@ test.describe('route performance and layout canaries', () => {
     if ((await firstButton.getAttribute('aria-expanded')) !== 'true') {
       await firstButton.click();
     }
-    await expect(page.locator('.tbl__expand').first()).toBeVisible({ timeout: 10_000 });
+    const expanded = page.locator('.tbl__expand').first();
+    await expect(expanded).toBeVisible({ timeout: 10_000 });
+    // The preview is a lazy chunk (LeadTableRow.expanded): wait for it to
+    // render and give its reads the same settle as the intent checks above,
+    // so this covers the preview's reads even when the chunk was cold.
+    await expect(
+      expanded.locator('[data-testid^="lead-preview-pending-"]'),
+      'the expanded preview landed',
+    ).toHaveCount(0, { timeout: 10_000 });
+    await page.waitForTimeout(500);
     expect(borrowerReads, 'row expansion preview must not read the governed borrower dossier').toEqual([]);
 
     const navigationResponse = page.waitForResponse((response) => {

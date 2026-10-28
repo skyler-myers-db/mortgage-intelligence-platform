@@ -41,6 +41,12 @@ import {
   reconcileGenieCampaignAction,
 } from '../support/liveCampaignProof';
 import { EVIDENCE_DRAWER, openEvidenceDrawer } from './helpers';
+import {
+  ZIP_STAGE,
+  clickPopulatedZipArea,
+  expectMapHeaderClear,
+  segmentZipAreas,
+} from './segmentZipAreas';
 
 // Gate: skip everything unless E2E_LIVE=1 is set by the nightly workflow.
 const LIVE = process.env.E2E_LIVE === '1';
@@ -562,29 +568,39 @@ async function discoverMapDrillTarget(
   };
 }
 
+/**
+ * One pointer click from the national map into the state's ZIP stage, on
+ * either route: Home draws the ZIP tiles, Segment Intelligence the committed
+ * ZCTA polygons (segmentZipAreas.ts). Each caller asserts its own stage.
+ * Only a click that missed the painted state is retried (the drill never
+ * reached the URL); a drill that landed then waits for its ZIP rollup and,
+ * on Segments, the ZCTA rung and its geometry, which outlast a retry window
+ * (and a retry would look for a national state that is no longer drawn).
+ */
 async function drillStateToZips(page: Page, target: MapDrillTarget) {
   const map = page.locator('.map-wrap').first();
   const state = map.getByRole('button', { name: new RegExp(`^${escapeRegExp(target.stateName)}:`) }).first();
-  const zipTiles = page.locator('.zip-tiles');
+  const drilled = new RegExp(`[?&]geo_state=${escapeRegExp(target.state)}(&|$)`);
+  let landed = false;
   let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < 3 && !landed; attempt += 1) {
     await bringMapIntoViewport(page);
     await expectMapIdle(page, 'state');
     await clickSvgRegion(page, state, target.stateName);
     try {
-      await expect(
-        zipTiles,
-        `${target.stateName} pointer click should drill straight into ZIPs`,
-      ).toBeVisible({ timeout: 5_000 });
-      await expect(page.locator('.map-crumbs')).toContainText(target.stateName, {
+      await expect(page, `${target.stateName} pointer click should drill straight into ZIPs`).toHaveURL(drilled, {
         timeout: 5_000,
       });
-      return;
+      landed = true;
     } catch (error) {
       lastError = error;
     }
   }
-  throw lastError;
+  if (!landed) throw lastError;
+  await expect(page.locator(ZIP_STAGE).first(), `${target.stateName} ZIP stage should render`).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.locator('.map-crumbs')).toContainText(target.stateName, { timeout: 5_000 });
 }
 
 async function bringMapIntoViewport(page: Page) {
@@ -837,43 +853,26 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await drillStateToZips(page, target);
     await zipResponse;
 
-    await expect(page.locator('.zip-tiles')).toBeVisible({ timeout: 10_000 });
-	    const crumbs = await page.locator('.map-crumbs').boundingBox();
-	    const chips = await page.locator('.map-corner-chips').boundingBox();
-	    const header = await page.locator('.map-hdr').boundingBox();
-	    const zipGrid = await page.locator('.zip-tiles').boundingBox();
-	    expect(crumbs, 'map crumbs should render').toBeTruthy();
-	    expect(chips, 'map corner chips should render').toBeTruthy();
-	    expect(header, 'map header should render').toBeTruthy();
-	    expect(zipGrid, 'ZIP grid should render').toBeTruthy();
-	    if (crumbs && chips) {
-	      const separated =
-	        crumbs.x + crumbs.width <= chips.x ||
-	        chips.x + chips.width <= crumbs.x ||
-	        crumbs.y + crumbs.height <= chips.y ||
-	        chips.y + chips.height <= crumbs.y;
-	      expect(separated, 'map breadcrumbs and corner chips must not overlap').toBe(true);
-	    }
-	    if (header && zipGrid) {
-	      expect(
-	        header.y + header.height,
-	        'map header must not visually overlap ZIP tiles',
-	      ).toBeLessThanOrEqual(zipGrid.y + 1);
-	    }
+    // Segment Intelligence draws the drilled state's committed ZCTA polygons
+    // (W5c dataviz-01, deviation:zcta-level); Home keeps the tiles (below).
+    const zipAreas = segmentZipAreas(page, target.stateName);
+    await expect(zipAreas, `ZIP areas in ${target.stateName}`).toBeVisible({ timeout: 10_000 });
+    await expectMapHeaderClear(page, zipAreas, 'segment ZIP map');
     await expectMapCornerIconsCompact(page, 'segment ZIP map');
 
-	    const leadsResponse = page.waitForResponse(filteredGeoResponse('/api/leads'));
-	    await page.locator('.zip-tile').first().click();
-	    await leadsResponse;
-	    const url = new URL(page.url());
-	    expect(url.pathname).toBe('/lead-queue');
+    const leadsResponse = page.waitForResponse(filteredGeoResponse('/api/leads'));
+    const zip = await clickPopulatedZipArea(page, zipAreas);
+    await leadsResponse;
+    const url = new URL(page.url());
+    expect(url.pathname).toBe('/lead-queue');
     expect(url.searchParams.get('state')).toBe(target.state);
-    // No county param: the ZIP tile deep-links by state + ZIP, the only
+    // No county param: the ZIP area deep-links by state + ZIP, the only
     // two geography keys the share can actually answer.
     expect(url.searchParams.get('county')).toBeNull();
     expect(url.searchParams.get('segment_mode')).toBe('any');
     expect(url.searchParams.get('segment_codes')).toContain('equity');
     expect(url.searchParams.get('zip')).toMatch(/^\d{5}$/);
+    expect(url.searchParams.get('zip'), 'the clicked ZIP area').toBe(zip);
   });
 
   test('segment secondary filters are forwarded to live geo rollups', async ({ page }) => {

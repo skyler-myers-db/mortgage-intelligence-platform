@@ -110,6 +110,7 @@ def test_third_party_license_notice_covers_weak_copyleft_and_map_data() -> None:
         "OFL-1.1",
         "web-vitals",
         "certifi",
+        "@guidepup/virtual-screen-reader",
     ):
         assert required in notice
 

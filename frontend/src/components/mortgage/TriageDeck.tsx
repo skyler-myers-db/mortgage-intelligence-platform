@@ -10,7 +10,11 @@ import { Icon } from '../Icon';
 import { Button, SurfaceTitle } from '../Primitives';
 import type { LeadApproveReviewProps } from './LeadApproveReview';
 import type { LeadTableTriageState } from './LeadTable.triage';
-import { RowPreview } from './LeadRowPreview';
+// Through the expanded row's chunk entry, so the preview ships in ONE chunk
+// with the queue's expanded body: a direct './LeadRowPreview' import split it
+// into a chunk of its own shared by both lazy entries (+0.63 KiB br total JS
+// and a second request per expand, measured 2026-10-26).
+import { RowPreview } from './LeadRowExpanded';
 import { triageHotkeys, type TriageKeymapActions } from './TriageDeck.keys';
 import type { CampaignBinding } from './LeadTable.logic';
 import type { RejectReasonCode } from './LeadTable.types';

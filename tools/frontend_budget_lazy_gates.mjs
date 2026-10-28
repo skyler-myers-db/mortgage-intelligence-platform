@@ -13,7 +13,10 @@ export const lazyModuleBudgets = {
   // The ZCTA polygon rung (JS + CSS, 2 files), loaded on a Segments ZIP
   // drill only. Measured 6.71 (the lane's 6.42-6.68 plus the
   // integration's 'absent' outcome); the record target is 8 KiB br.
-  'src/components/mortgage/USChoroplethMapZctaLevel.tsx': 8 * KiB, // actual 6.71
+  // post-W5 zcta-geometry (2026-10-26): 6.72 -> 7.50 with the committed
+  // geometry, whose 51 hashed asset URLs fill the eager glob map (raw
+  // 17.62 -> 20.95); the JSON itself is a separate asset, never in the chunk.
+  'src/components/mortgage/USChoroplethMapZctaLevel.tsx': 8 * KiB, // actual 7.51 (post-W5 integration)
   // The presenter-only M1-M4 roadmap slots (w5-shell-nav-followups);
   // a customer session never requests it.
   'src/components/layout/RailRoadmap.tsx': 1 * KiB, // actual 0.54
@@ -53,8 +56,15 @@ export const lazyModuleBudgets = {
   'src/components/mortgage/RevokeApprovalPanel.tsx': 3 * KiB, // actual 2.70 (lead-table-compile)
   'src/components/mortgage/RevokeApprovalPanel.failure.ts': 2 * KiB, // actual 1.14 (lead-table-compile)
   'src/components/mortgage/SimilarCohortPanel.tsx': 2 * KiB, // actual 1.76 (lead-queue-columns)
-  'src/components/mortgage/LeadQueueOmniboxPopover.tsx': 4 * KiB, // actual 3.68 (the omnibox + filterGrammar chunk)
+  // post-W5: 3.70 -> 3.86-3.88 (2 files): the LeadTable cut put leadCount in
+  // its own chunk, which the popover shares with LeadRowExpanded. 0.12 left.
+  'src/components/mortgage/LeadQueueOmniboxPopover.tsx': 4 * KiB, // actual 3.88 (the omnibox + filterGrammar chunk)
   'src/components/mortgage/LeadTableHideControl.tsx': 3 * KiB, // actual 2.17 (lead-queue-columns)
   'src/components/mortgage/EvidenceDrawerBody.tsx': 18 * KiB, // actual 16.30 (carries ProofPanels.css)
   'src/components/mortgage/ScoreAnatomy.tsx': 20 * KiB, // actual 19.03 (carries ProofPanels.css)
+  // post-W5 integration (2026-10-27): the expanded Lead Queue row's body
+  // (leadtable-chunk-react-virtual), warmed on idle and on row engagement;
+  // 7 files (the chunk, ConfidenceMeter, leadCount, CSS). Measured 12.85-12.93
+  // across the merge steps + ~5%, whole KiB.
+  'src/components/mortgage/LeadRowExpanded.tsx': 14 * KiB, // actual 12.91
 };

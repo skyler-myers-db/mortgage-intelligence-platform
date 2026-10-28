@@ -585,14 +585,14 @@ function DraftOutreachPanel({
             )}
             {draftStrategy && <p className="body flush">{draftStrategy}</p>}
             {draftEvidence.length > 0 && (
-              <div className="chip-row" aria-label="Message evidence">
+              <div className="chip-row" role="group" aria-label="Message evidence">
                 {draftEvidence.map((item) => (
                   <Chip key={item} variant="neutral">{item}</Chip>
                 ))}
               </div>
             )}
             {draftEvidenceAssets.length > 0 && (
-              <div className="chip-row" aria-label="Message source assets">
+              <div className="chip-row" role="group" aria-label="Message source assets">
                 {draftEvidenceAssets.map((asset) => {
                   const source = drawerForAsset(asset);
                   return source ? (

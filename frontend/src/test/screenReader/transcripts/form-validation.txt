@@ -1,0 +1,27 @@
+## The form opens with focus in its reason field
+textbox, Reason for the request, Say why these borrowers; leave out personal details., required
+
+## Tab to Send request while the reason is empty
+button, Cancel
+button, Send request, disabled
+
+## Press Send request: nothing is sent and focus returns to the field
+textbox, Reason for the request, Say why these borrowers; leave out personal details., required
+
+## Write a reason and send; the server refuses it (governed text, 422)
+
+## Return to the field: it is invalid and described by the failure
+textbox, Reason for the request, Say why these borrowers; leave out personal details. The reason was refused by the governed text policy, and the refusal was recorded. Rewrite it without personal details or protected-class language., invalid, required
+
+## Read on to the alert with the virtual cursor
+Spring refinance review for the Illinois cohort.
+end of textbox, Reason for the request, Say why these borrowers; leave out personal details. The reason was refused by the governed text policy, and the refusal was recorded. Rewrite it without personal details or protected-class language., invalid, required
+Say why these borrowers; leave out personal details.
+button, Cancel
+button, Send request
+paragraph
+Nothing is sent. An approver reviews each borrower's copy before anything is approved.
+end of paragraph
+alert
+The reason was refused by the governed text policy, and the refusal was recorded. Rewrite it without personal details or protected-class language.
+end of alert

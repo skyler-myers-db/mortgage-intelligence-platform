@@ -40,6 +40,7 @@ rm -rf \
   "$STAGE/frontend/node_modules" \
   "$STAGE/frontend/dist" \
   "$STAGE/frontend/test-results" \
+  "$STAGE/frontend/blob-report" \
   "$STAGE/playwright-report" \
   "$STAGE/test-results" \
   "$STAGE/coverage" \

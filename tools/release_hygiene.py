@@ -23,6 +23,7 @@ BANNED_DIR_NAMES = {
     ".venv",
     ".vscode",
     "__pycache__",
+    "blob-report",
     "coverage",
     "mlruns",
     "node_modules",

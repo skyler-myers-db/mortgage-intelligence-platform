@@ -23,6 +23,20 @@ Mapping (env -> BUNDLE_VAR_*):
   MIP_RUNTIME_SECRET_SCOPE -> BUNDLE_VAR_runtime_secret_scope
   MIP_BUNDLE_ROOT_LEAF    -> BUNDLE_VAR_bundle_root_leaf (default dev; CI staging only)
   (derived from the leaf) -> BUNDLE_VAR_install_suffix ('' for dev)
+  (dev live install only) -> scheduled_refresh_failure_recipients, written to
+                             .databricks/bundle/<target>/variable-overrides.json
+                             (tools/databricks/scheduled_refresh_posture.py)
+
+The mutating subcommands (``deploy``, ``deployment``) first apply the CI
+staging install's isolation rule table (tools/databricks/ci_install_isolation.py,
+the same table scripts/deploy.sh's preflight runs) to the exact names, leaf,
+target and governed Genie id they would hand the CLI, and refuse with exit 2,
+naming variables only. So through this helper the forked-anchor
+``pr105-host`` target is deployable and bindable only from deploy-dev.yml,
+and deploy-dev.yml can deploy or bind no other target. It does not gate
+``databricks bundle run`` (nightly.yml runs pr105-host jobs directly) or a
+raw CLI bundle deployment, which the deploy contract retires but nothing
+here can stop.
 
 Usage:
   python tools/databricks/bundle_env.py validate -t dev
@@ -60,12 +74,19 @@ from backend.schemas.lender_identity import (  # noqa: E402
     validate_public_lender_identity,
 )
 from tools import render_sql  # noqa: E402
-from tools.databricks import ci_install_isolation  # noqa: E402
+from tools.databricks import (  # noqa: E402
+    ci_install_isolation,
+    scheduled_refresh_posture,
+)
 from tools.databricks.workspace_auth import (  # noqa: E402
     strip_app_facing_workspace_auth,
 )
 
 ENV_LOCAL = REPO / ".env.local"
+# The bundle root the CLI loads (it holds .databricks/bundle/<target>/
+# variable-overrides.json). Like render_sql's output, it is this checkout
+# unless DATABRICKS_BUNDLE_ROOT names another root.
+BUNDLE_ROOT = REPO
 
 PLACEHOLDER = "00000000PLACEHOLDER"
 _APP_OR_INSTANCE_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
@@ -73,7 +94,13 @@ _UC_IDENTIFIER = re.compile(r"[a-z_][a-z0-9_]{0,254}\Z")
 _EXACT_RESOURCE_SELECTOR = re.compile(
     r"(?P<kind>[a-z_][a-z0-9_]*)\.(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]*)\Z"
 )
-_MUTABLE_BUNDLE_TARGETS = frozenset({"dev", "prod"})
+# pr105-host is the forked-anchor CI staging target: deployable and bindable
+# here only once the isolation rule table (ci_install_isolation.resolve) has
+# accepted the run.
+_MUTABLE_BUNDLE_TARGETS = frozenset({"dev", "prod", ci_install_isolation.CI_TARGET})
+_MUTATING_SUBCOMMANDS = frozenset({"deploy", "deployment"})
+# Summit demo first-party feeds default on, and are allowed, for dev-class targets.
+_DEV_CLASS_TARGETS = frozenset({"dev", ci_install_isolation.CI_TARGET})
 
 
 def _is_real(value: str | None) -> bool:
@@ -141,7 +168,7 @@ def _validate_non_app_deploy_selectors(args: list[str]) -> str | None:
             "target and exact --select values are allowed"
         )
     if target not in _MUTABLE_BUNDLE_TARGETS:
-        return "bundle deploy target must be exactly dev or prod"
+        return "bundle deploy target must be exactly dev, prod or pr105-host"
     if not selectors:
         return (
             "unrestricted bundle deploy is forbidden because it can activate "
@@ -197,7 +224,7 @@ def _validate_app_deployment_command(
         positional.append(argument)
         index += 1
     if target not in _MUTABLE_BUNDLE_TARGETS:
-        return "bundle deployment target must be exactly dev or prod"
+        return "bundle deployment target must be exactly dev, prod or pr105-host"
     expected = ["mip_app", expected_app_name] if action == "bind" else ["mip_app"]
     if positional != expected:
         return (
@@ -216,7 +243,7 @@ def _truthy(raw: str | None) -> bool:
 def _demo_feeds_allowed_for_target(*, target: str, enabled: bool, env: dict[str, str]) -> bool:
     if not enabled:
         return True
-    if target == "dev":
+    if target in _DEV_CLASS_TARGETS:
         return True
     return _truthy(env.get("MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD"))
 
@@ -231,7 +258,7 @@ def _demo_first_party_flag_for_target(env: dict[str, str], *, target: str) -> st
     raw = env.get("MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS")
     if raw:
         return raw
-    return "1" if target == "dev" else "0"
+    return "1" if target in _DEV_CLASS_TARGETS else "0"
 
 
 def _deployment_resource_names(env: dict[str, str]) -> dict[str, str]:
@@ -273,6 +300,23 @@ def _deployment_resource_names(env: dict[str, str]) -> dict[str, str]:
         "lakebase_catalog_name": catalog_name,
         "lakebase_database_name": database_name,
     }
+
+
+def _isolation_refusal(env: dict[str, str], *, target: str) -> str | None:
+    """The CI isolation rule table's verdict on what a mutating subcommand would bind.
+
+    The rule table checks the target this command hands the CLI, never an
+    ambient ``MIP_DEPLOY_TARGET``: the ambient value is dropped before the CLI
+    target is added, so no merge order can let it win.
+    """
+
+    scoped = {name: value for name, value in env.items() if name != "MIP_DEPLOY_TARGET"}
+    scoped["MIP_DEPLOY_TARGET"] = target
+    try:
+        ci_install_isolation.resolve(scoped)
+    except ci_install_isolation.Refused as refusal:
+        return f"refusing: the CI staging install is not isolated from the live install: {refusal}"
+    return None
 
 
 def _genie_workspace_client(env: dict[str, str]) -> Any:
@@ -445,6 +489,13 @@ def main() -> int:
         if deployment_error is not None:
             print(f"[bundle_env] {deployment_error}", file=sys.stderr)
             return 2
+    if subcmd in _MUTATING_SUBCOMMANDS:
+        # Pure and before any workspace call; repeated below on the governed
+        # Genie id this command would actually bind.
+        isolation_error = _isolation_refusal(env, target=target)
+        if isolation_error is not None:
+            print(f"[bundle_env] {isolation_error}", file=sys.stderr)
+            return 2
     warehouse = env.get("DATABRICKS_WAREHOUSE_ID")
     genie = env.get("GENIE_SPACE_ID")
     verifier_client_id = env.get("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID")
@@ -477,6 +528,11 @@ def main() -> int:
             )
         genie = governed_genie
         env["GENIE_SPACE_ID"] = governed_genie
+        if subcmd in _MUTATING_SUBCOMMANDS:
+            isolation_error = _isolation_refusal(env, target=target)
+            if isolation_error is not None:
+                print(f"[bundle_env] {isolation_error}", file=sys.stderr)
+                return 2
 
     if subcmd in {"plan", "summary", "deploy", "deployment"}:
         missing = []
@@ -544,14 +600,28 @@ def main() -> int:
         return 2
     env["MIP_RUNTIME_SECRET_SCOPE"] = runtime_secret_scope
     env["BUNDLE_VAR_runtime_secret_scope"] = runtime_secret_scope
-    # The bundle root leaf's shape only; scripts/deploy.sh's preflight
-    # (tools/databricks/ci_install_isolation.py) owns the isolation rules.
+    # The bundle root leaf's shape only for the read-only subcommands; the
+    # mutating ones passed the isolation rule table above on these same values.
     root_leaf = str(env.get("MIP_BUNDLE_ROOT_LEAF") or ci_install_isolation.DEFAULT_LEAF).strip()
     if re.fullmatch(r"dev(?:-[a-z0-9]{1,20})?", root_leaf) is None:
         print("[bundle_env] MIP_BUNDLE_ROOT_LEAF is invalid", file=sys.stderr)
         return 2
     env["BUNDLE_VAR_bundle_root_leaf"] = root_leaf
     env["BUNDLE_VAR_install_suffix"] = ci_install_isolation.install_suffix(root_leaf)
+    # mip_scheduled_refresh runs and mails only on the dev target's live
+    # install: refuse an UNPAUSED export anywhere else, and write the failure
+    # recipients (a complex variable, which no BUNDLE_VAR_ export can carry)
+    # into the bundle's variable-overrides.json before every CLI call.
+    try:
+        scheduled_refresh_status = scheduled_refresh_posture.apply(
+            env,
+            target=target,
+            install_suffix=env["BUNDLE_VAR_install_suffix"],
+            bundle_root=Path(env.get("DATABRICKS_BUNDLE_ROOT") or BUNDLE_ROOT),
+        )
+    except (OSError, ValueError) as exc:
+        print(f"[bundle_env] {exc}", file=sys.stderr)
+        return 2
 
     catalog = str(env.get("MIP_DEFAULT_CATALOG") or "mip").strip()
     if _UC_IDENTIFIER.fullmatch(catalog) is None:
@@ -604,6 +674,7 @@ def main() -> int:
         f"lakebase_database={resource_names['lakebase_database_name']}",
         file=sys.stderr,
     )
+    print(f"[bundle_env] {scheduled_refresh_status}", file=sys.stderr)
     print(
         "[bundle_env] "
         f"render_sql catalog={catalog} processed={processed} written={written} "

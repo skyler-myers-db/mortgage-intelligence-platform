@@ -380,7 +380,7 @@ export default function AdminConfig() {
 
         {/* Audit ledger — a link card: the explorer has its own page
             (D-audit-reads-c3), and Admin reads nothing from the ledger. */}
-        <div className="surface" id="audit" tabIndex={-1} aria-labelledby="admin-audit-ledger-title">
+        <div className="surface" id="audit" tabIndex={-1} role="region" aria-labelledby="admin-audit-ledger-title">
           <div className="surface__hdr">
             <SurfaceTitle id="admin-audit-ledger-title">Audit ledger</SurfaceTitle>
           </div>
@@ -471,7 +471,7 @@ export default function AdminConfig() {
 
       {/* Field performance: the fallback keeps the panel's block size, so
           the sections below never move while its chunk loads. */}
-      <div className="surface field-perf" id="field-performance" tabIndex={-1} aria-labelledby="admin-field-performance-title">
+      <div className="surface field-perf" id="field-performance" tabIndex={-1} role="region" aria-labelledby="admin-field-performance-title">
         <Suspense fallback={<FieldPerformanceReserve />}>
           <FieldPerformancePanel />
         </Suspense>

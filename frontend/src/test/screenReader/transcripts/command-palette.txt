@@ -1,0 +1,75 @@
+## ⌘K opens the palette with focus in its combobox
+dialog, Command palette
+combobox, Search borrowers, ZIPs, pages, and actions, has popup listbox, expanded, active descendant Home /, 1 control
+
+## ArrowDown twice, then report focus (the active option is in the combobox phrase)
+combobox, Search borrowers, ZIPs, pages, and actions, has popup listbox, expanded, active descendant Segment Intelligence /segment-intelligence, 1 control
+
+## Read the listbox with the virtual cursor
+esc
+listbox, Search results, orientated vertically
+group, Pages and actions
+Pages & actions
+option, Home /, not selected, position 1, set size 13
+Home
+/
+end of option, Home /, not selected, position 1, set size 13
+option, Portfolio Builder /portfolio-builder, not selected, position 2, set size 13
+Portfolio Builder
+/portfolio-builder
+end of option, Portfolio Builder /portfolio-builder, not selected, position 2, set size 13
+option, Segment Intelligence /segment-intelligence, selected, position 3, set size 13
+Segment Intelligence
+/segment-intelligence
+end of option, Segment Intelligence /segment-intelligence, selected, position 3, set size 13
+option, Lead Queue /lead-queue, not selected, position 4, set size 13
+Lead Queue
+/lead-queue
+end of option, Lead Queue /lead-queue, not selected, position 4, set size 13
+option, Borrower 360 /borrower-360, not selected, position 5, set size 13
+Borrower 360
+/borrower-360
+end of option, Borrower 360 /borrower-360, not selected, position 5, set size 13
+option, Offer Orchestrator /offer-orchestrator, not selected, position 6, set size 13
+Offer Orchestrator
+/offer-orchestrator
+end of option, Offer Orchestrator /offer-orchestrator, not selected, position 6, set size 13
+option, Analytics /analytics, not selected, position 7, set size 13
+Analytics
+/analytics
+end of option, Analytics /analytics, not selected, position 7, set size 13
+option, Ask Genie /ask-genie, not selected, position 8, set size 13
+Ask Genie
+/ask-genie
+end of option, Ask Genie /ask-genie, not selected, position 8, set size 13
+option, Glossary /glossary, not selected, position 9, set size 13
+Glossary
+/glossary
+end of option, Glossary /glossary, not selected, position 9, set size 13
+option, Open Genie panel Floating assistant, not selected, position 10, set size 13
+Open Genie panel
+Floating assistant
+end of option, Open Genie panel Floating assistant, not selected, position 10, set size 13
+option, Toggle theme Light / dark, not selected, position 11, set size 13
+Toggle theme
+Light / dark
+end of option, Toggle theme Light / dark, not selected, position 11, set size 13
+option, Toggle Console Theme · accent · density, not selected, position 12, set size 13
+Toggle Console
+Theme · accent · density
+end of option, Toggle Console Theme · accent · density, not selected, position 12, set size 13
+option, Keyboard shortcuts What this page binds ?, not selected, key shortcuts ?, position 13, set size 13
+Keyboard shortcuts
+What this page binds
+?
+end of option, Keyboard shortcuts What this page binds ?, not selected, key shortcuts ?, position 13, set size 13
+end of group, Pages and actions
+end of listbox, Search results, orientated vertically
+
+## Type a query nothing matches
+polite: Searching borrowers…
+polite: No pages, actions, or borrowers match “zzqx”.
+
+## Escape closes the palette onto the opener
+button, Opener
+polite: 

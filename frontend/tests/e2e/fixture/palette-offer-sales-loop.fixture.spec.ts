@@ -71,7 +71,9 @@ const callsTo = (mockApi: MockApi, path: string, since = 0): ApiCall[] =>
 
 const palette = (page: Page) => page.getByRole('dialog', { name: 'Command palette' });
 const paletteInput = (page: Page) => palette(page).getByRole('combobox');
-const group = (page: Page, name: string) => palette(page).getByRole('group', { name });
+// Exact: a substring name would let 'Borrowers' also match 'Recent borrowers'
+// (and pass on a recents row), as the harness palette test once did.
+const group = (page: Page, name: string) => palette(page).getByRole('group', { name, exact: true });
 
 async function openPalette(page: Page): Promise<void> {
   await page.keyboard.press('ControlOrMeta+k');

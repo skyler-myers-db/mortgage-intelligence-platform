@@ -1,0 +1,958 @@
+{
+  "dependencies": {
+    "d3-geo": "3.1.1",
+    "d3-geo-projection": "4.0.0",
+    "shapefile": "0.6.6",
+    "topojson-client": "3.1.0",
+    "topojson-server": "3.0.1",
+    "topojson-simplify": "3.0.3"
+  },
+  "files": {
+    "AK.topo.json": {
+      "arc_point_count": 31593,
+      "bytes": 360439,
+      "sha256": "624c577f48e46dc8a6263a9e300bfa2cc2b3b50803f19c1e2c50f86c3b5df1e9",
+      "state_bbox": [
+        -57.665,
+        464.317,
+        202.942,
+        604.319
+      ],
+      "zcta_bbox": [
+        -13.122,
+        464.661,
+        200.99,
+        603.276
+      ],
+      "zcta_count": 245
+    },
+    "AL.topo.json": {
+      "arc_point_count": 32965,
+      "bytes": 389333,
+      "sha256": "9f723e156eada7b6af166bfe622c0ccfbe844ac87b36ef96d4df1027430f7aff",
+      "state_bbox": [
+        641.532,
+        379.663,
+        710.801,
+        492.581
+      ],
+      "zcta_bbox": [
+        638.803,
+        379.663,
+        710.801,
+        492.581
+      ],
+      "zcta_count": 658
+    },
+    "AR.topo.json": {
+      "arc_point_count": 28464,
+      "bytes": 336557,
+      "sha256": "9681ecc9cf7169f88c36aa1cc2163f641ecfa9d9a81eb51a71828fccf653dce6",
+      "state_bbox": [
+        522.991,
+        352.234,
+        613.732,
+        434.68
+      ],
+      "zcta_bbox": [
+        522.991,
+        350.101,
+        613.732,
+        434.68
+      ],
+      "zcta_count": 620
+    },
+    "AZ.topo.json": {
+      "arc_point_count": 24568,
+      "bytes": 277595,
+      "sha256": "6b4730b7f255e761552d7607bf5689b413e3717b915da6aef06143a4d965eb51",
+      "state_bbox": [
+        142.317,
+        313.304,
+        264.638,
+        456.252
+      ],
+      "zcta_bbox": [
+        142.317,
+        313.304,
+        265.757,
+        456.252
+      ],
+      "zcta_count": 420
+    },
+    "CA.topo.json": {
+      "arc_point_count": 75707,
+      "bytes": 878968,
+      "sha256": "f23b017afa7f95a455d7a22531c35a021ea8cc115f83b65b8f375b53f2a5f68c",
+      "state_bbox": [
+        18.484,
+        159.952,
+        162.766,
+        407.217
+      ],
+      "zcta_bbox": [
+        18.484,
+        159.952,
+        162.766,
+        407.217
+      ],
+      "zcta_count": 1808
+    },
+    "CO.topo.json": {
+      "arc_point_count": 24171,
+      "bytes": 284934,
+      "sha256": "c7f01ebf6e0540a6f5a350a12ca7007225a3bf4fb264c601709d6d9414b94824",
+      "state_bbox": [
+        264.638,
+        237.163,
+        395.323,
+        340.697
+      ],
+      "zcta_bbox": [
+        262.683,
+        232.019,
+        398.168,
+        340.697
+      ],
+      "zcta_count": 530
+    },
+    "CT.topo.json": {
+      "arc_point_count": 4578,
+      "bytes": 75012,
+      "sha256": "70ec2aeacb0f534bd531bd69807cf26b567daffb9f7c0f64f0f75a6facb17d61",
+      "state_bbox": [
+        871.148,
+        177.683,
+        902.211,
+        208.299
+      ],
+      "zcta_bbox": [
+        871.148,
+        177.683,
+        902.211,
+        208.299
+      ],
+      "zcta_count": 288
+    },
+    "DC.topo.json": {
+      "arc_point_count": 426,
+      "bytes": 9762,
+      "sha256": "e13578098e62504751f39f71cccf5ccab0508ba0dd0e4accec72cb9f75bd6f13",
+      "state_bbox": [
+        825.886,
+        265.356,
+        829.68,
+        269.917
+      ],
+      "zcta_bbox": [
+        825.886,
+        265.356,
+        829.68,
+        269.917
+      ],
+      "zcta_count": 57
+    },
+    "DE.topo.json": {
+      "arc_point_count": 2157,
+      "bytes": 30042,
+      "sha256": "53a1fec870c3f6004ac1d223c596be4ea4b959921ee5ae365c9d00e5b23b495b",
+      "state_bbox": [
+        844.855,
+        241.051,
+        863.711,
+        272.508
+      ],
+      "zcta_bbox": [
+        844.811,
+        241.051,
+        863.711,
+        274.401
+      ],
+      "zcta_count": 70
+    },
+    "FL.topo.json": {
+      "arc_point_count": 31903,
+      "bytes": 404772,
+      "sha256": "4690de36da74abb2139af826672851af31f17ff31269fe69f810cf955a7adab5",
+      "state_bbox": [
+        660.272,
+        464.685,
+        824.073,
+        606.24
+      ],
+      "zcta_bbox": [
+        660.272,
+        464.685,
+        823.986,
+        606.15
+      ],
+      "zcta_count": 1013
+    },
+    "GA.topo.json": {
+      "arc_point_count": 36419,
+      "bytes": 429230,
+      "sha256": "2c355d37870460ed4928c2a02c9ba1f50c718c9f003943e5bad78b218f3353b6",
+      "state_bbox": [
+        689.238,
+        373.668,
+        787.052,
+        476.048
+      ],
+      "zcta_bbox": [
+        689.238,
+        373.668,
+        787.052,
+        476.048
+      ],
+      "zcta_count": 752
+    },
+    "HI.topo.json": {
+      "arc_point_count": 3989,
+      "bytes": 48481,
+      "sha256": "e2ff164b2417408ed6609fb8e3d7ff1a3e724bde38fd666955abc8e3613defa5",
+      "state_bbox": [
+        209.881,
+        528.151,
+        332.262,
+        603.301
+      ],
+      "zcta_bbox": [
+        226.064,
+        528.151,
+        332.262,
+        603.301
+      ],
+      "zcta_count": 97
+    },
+    "IA.topo.json": {
+      "arc_point_count": 27777,
+      "bytes": 356729,
+      "sha256": "1548d20e397df5e51ef0aa30ce0600bcd764daee0c1ca62b330bc4a52b107e4f",
+      "state_bbox": [
+        487.443,
+        193.284,
+        596.063,
+        264.803
+      ],
+      "zcta_bbox": [
+        485.031,
+        193.299,
+        596.063,
+        264.803
+      ],
+      "zcta_count": 972
+    },
+    "ID.topo.json": {
+      "arc_point_count": 25514,
+      "bytes": 270011,
+      "sha256": "84e020f63960e9b2e8838dcf12b2f15f49cdb5b9af4434df025a0f284f76c71a",
+      "state_bbox": [
+        148.866,
+        35.903,
+        256.02,
+        209.567
+      ],
+      "zcta_bbox": [
+        131.403,
+        35.903,
+        255.962,
+        209.567
+      ],
+      "zcta_count": 287
+    },
+    "IL.topo.json": {
+      "arc_point_count": 38528,
+      "bytes": 510303,
+      "sha256": "21fddb9eba5ee17e6c3f4ec0b5781d00cc8da1e8457e27b7efaa9307f780ebd6",
+      "state_bbox": [
+        575.079,
+        212.378,
+        646.867,
+        340.259
+      ],
+      "zcta_bbox": [
+        575.079,
+        212.378,
+        646.867,
+        340.259
+      ],
+      "zcta_count": 1397
+    },
+    "IN.topo.json": {
+      "arc_point_count": 24823,
+      "bytes": 321956,
+      "sha256": "bb013727fa92bd1e4930d32623de4fb05f81cf0be8231c4710b5950c2478b63d",
+      "state_bbox": [
+        637.958,
+        223.922,
+        693.774,
+        320.254
+      ],
+      "zcta_bbox": [
+        637.958,
+        223.922,
+        693.774,
+        320.254
+      ],
+      "zcta_count": 807
+    },
+    "KS.topo.json": {
+      "arc_point_count": 20589,
+      "bytes": 262684,
+      "sha256": "f0c4f7cff803c2348d336c54d44461aad424b63b5e5b882e81de807ec052a03d",
+      "state_bbox": [
+        389.651,
+        271.869,
+        522.824,
+        344.008
+      ],
+      "zcta_bbox": [
+        389.651,
+        270.582,
+        522.824,
+        344.008
+      ],
+      "zcta_count": 710
+    },
+    "KY.topo.json": {
+      "arc_point_count": 33514,
+      "bytes": 403211,
+      "sha256": "fac6b6ea55f471e29db009fac9ecc8b6b52c98a79a2e39e097ab27b014e57076",
+      "state_bbox": [
+        613.995,
+        283.179,
+        747.156,
+        351.518
+      ],
+      "zcta_bbox": [
+        613.468,
+        283.179,
+        747.156,
+        356.652
+      ],
+      "zcta_count": 782
+    },
+    "LA.topo.json": {
+      "arc_point_count": 25712,
+      "bytes": 304766,
+      "sha256": "3ae4b12d3b4632035840382b8106afc3a21a0167a276a947b58f4fac96582fae",
+      "state_bbox": [
+        535.017,
+        433.078,
+        639.046,
+        523.608
+      ],
+      "zcta_bbox": [
+        535.017,
+        430.717,
+        636.589,
+        522.924
+      ],
+      "zcta_count": 540
+    },
+    "MA.topo.json": {
+      "arc_point_count": 8582,
+      "bytes": 140057,
+      "sha256": "2bf9a786c3fd45eec8b77f6266ff6d3576ae1e6a1c4f0073b8e25841ae1c7b3a",
+      "state_bbox": [
+        870.613,
+        154.75,
+        933.096,
+        190.509
+      ],
+      "zcta_bbox": [
+        870.613,
+        154.75,
+        933.096,
+        190.509
+      ],
+      "zcta_count": 540
+    },
+    "MD.topo.json": {
+      "arc_point_count": 13608,
+      "bytes": 185079,
+      "sha256": "ef1c1104592246f62ea401ad091c198d5dc0f7e4b127a5a425835310ca69ec92",
+      "state_bbox": [
+        782.283,
+        244.601,
+        863.807,
+        285.502
+      ],
+      "zcta_bbox": [
+        782.283,
+        244.601,
+        863.807,
+        285.083
+      ],
+      "zcta_count": 478
+    },
+    "ME.topo.json": {
+      "arc_point_count": 11615,
+      "bytes": 160296,
+      "sha256": "e868cb10c25d6294dd0a29329cb268cf3aaaa17f150a581323a60d8f090ddeb4",
+      "state_bbox": [
+        890.887,
+        45.543,
+        957.524,
+        151.518
+      ],
+      "zcta_bbox": [
+        889.919,
+        45.543,
+        957.524,
+        151.518
+      ],
+      "zcta_count": 427
+    },
+    "MI.topo.json": {
+      "arc_point_count": 35236,
+      "bytes": 430362,
+      "sha256": "051368fab6b6d42c1c25bba1ffd9f11d3fe6bde100eab4dddd19b34eec48928d",
+      "state_bbox": [
+        585.322,
+        83.199,
+        721.535,
+        227.549
+      ],
+      "zcta_bbox": [
+        585.322,
+        99.679,
+        721.535,
+        227.549
+      ],
+      "zcta_count": 993
+    },
+    "MN.topo.json": {
+      "arc_point_count": 32810,
+      "bytes": 388901,
+      "sha256": "2888893064a8a5feb873806e5f65c7c561c4b76309ecaf75389ccf4b94206797",
+      "state_bbox": [
+        479.352,
+        62.156,
+        597.513,
+        195.264
+      ],
+      "zcta_bbox": [
+        476.433,
+        62.156,
+        597.513,
+        198.788
+      ],
+      "zcta_count": 887
+    },
+    "MO.topo.json": {
+      "arc_point_count": 40790,
+      "bytes": 484793,
+      "sha256": "e169a8ab6f297b8425715710345612584cbb05963f16ee9e033a9e3afe8057d7",
+      "state_bbox": [
+        501.871,
+        259.571,
+        621.835,
+        363.963
+      ],
+      "zcta_bbox": [
+        501.871,
+        256.276,
+        621.835,
+        363.963
+      ],
+      "zcta_count": 1040
+    },
+    "MS.topo.json": {
+      "arc_point_count": 24176,
+      "bytes": 281810,
+      "sha256": "94ae12b69f24858a5cc7041dec8c5a57dc6846c5a3cb5249858a74936453b1a6",
+      "state_bbox": [
+        581.98,
+        383.984,
+        646.509,
+        495.477
+      ],
+      "zcta_bbox": [
+        581.98,
+        381.237,
+        646.431,
+        495.477
+      ],
+      "zcta_count": 428
+    },
+    "MT.topo.json": {
+      "arc_point_count": 27148,
+      "bytes": 293166,
+      "sha256": "659af861a77bcaefd58659cd2128ae03f539486c0a7d7abf29199092c5cb8256",
+      "state_bbox": [
+        193.259,
+        39.045,
+        376.853,
+        155.727
+      ],
+      "zcta_bbox": [
+        193.259,
+        39.045,
+        382.081,
+        166.355
+      ],
+      "zcta_count": 373
+    },
+    "NC.topo.json": {
+      "arc_point_count": 37071,
+      "bytes": 442900,
+      "sha256": "de7e2a84dd3840f0d023214297fb25a5a638c8ae0a98b4fb5f419ad6a4936163",
+      "state_bbox": [
+        712.633,
+        315.928,
+        871.281,
+        386.108
+      ],
+      "zcta_bbox": [
+        712.633,
+        315.928,
+        871.281,
+        386.108
+      ],
+      "zcta_count": 853
+    },
+    "ND.topo.json": {
+      "arc_point_count": 14863,
+      "bytes": 182825,
+      "sha256": "ac26399230920e4d841b2b9909074193204b88472efed43ced3c183351921607",
+      "state_bbox": [
+        371.08,
+        65.688,
+        489.281,
+        139.881
+      ],
+      "zcta_bbox": [
+        367.222,
+        65.14,
+        489.281,
+        146.654
+      ],
+      "zcta_count": 400
+    },
+    "NE.topo.json": {
+      "arc_point_count": 18133,
+      "bytes": 226222,
+      "sha256": "f797cf8daa01363069d177d93a6a0a03c0518235ef408e50bf7b964d373fc45b",
+      "state_bbox": [
+        361.424,
+        201.03,
+        509.935,
+        275.245
+      ],
+      "zcta_bbox": [
+        358.288,
+        184.125,
+        509.935,
+        277.538
+      ],
+      "zcta_count": 592
+    },
+    "NH.topo.json": {
+      "arc_point_count": 4565,
+      "bytes": 70645,
+      "sha256": "db22fc280c64c53304f2aa3826d0946046e35c4482b5fb8f7698e48f28498b75",
+      "state_bbox": [
+        880.573,
+        102.399,
+        912.168,
+        164.847
+      ],
+      "zcta_bbox": [
+        880.573,
+        101.116,
+        912.168,
+        164.847
+      ],
+      "zcta_count": 247
+    },
+    "NJ.topo.json": {
+      "arc_point_count": 10653,
+      "bytes": 169006,
+      "sha256": "054394104deaf6e447aca61aae0377b017fc7cd18bd4877a571c6d1cb76f74bf",
+      "state_bbox": [
+        849.179,
+        204.015,
+        873.172,
+        259.199
+      ],
+      "zcta_bbox": [
+        849.179,
+        204.015,
+        873.172,
+        259.199
+      ],
+      "zcta_count": 598
+    },
+    "NM.topo.json": {
+      "arc_point_count": 25543,
+      "bytes": 282996,
+      "sha256": "6f76bc3d8c59a71de6496fe8c535be60d4e0f9094e8be710aef3e406efdb921d",
+      "state_bbox": [
+        246.824,
+        327.962,
+        372.471,
+        458.385
+      ],
+      "zcta_bbox": [
+        246.824,
+        324.04,
+        372.471,
+        458.385
+      ],
+      "zcta_count": 379
+    },
+    "NV.topo.json": {
+      "arc_point_count": 13862,
+      "bytes": 151339,
+      "sha256": "836506db5faea8f19a84e1759e9142f8198dcc9f313547b4a30329ce286451b4",
+      "state_bbox": [
+        83.298,
+        179.156,
+        197.756,
+        356.185
+      ],
+      "zcta_bbox": [
+        83.935,
+        177.89,
+        196.428,
+        356.185
+      ],
+      "zcta_count": 182
+    },
+    "NY.topo.json": {
+      "arc_point_count": 47262,
+      "bytes": 633972,
+      "sha256": "8b51c2b28b93c5afa904729726edd8ba8a04c4b089378d0c0bde6d6e67ac7d72",
+      "state_bbox": [
+        767.51,
+        117.824,
+        903.244,
+        221.507
+      ],
+      "zcta_bbox": [
+        767.51,
+        117.866,
+        903.244,
+        221.507
+      ],
+      "zcta_count": 1826
+    },
+    "OH.topo.json": {
+      "arc_point_count": 35538,
+      "bytes": 469988,
+      "sha256": "ce303c36297650159acb3bbde9fa82f2ffcf02754a1fb4ecc85ff4f1712d645b",
+      "state_bbox": [
+        685.815,
+        208.958,
+        761.108,
+        295.113
+      ],
+      "zcta_bbox": [
+        685.815,
+        208.958,
+        761.108,
+        295.113
+      ],
+      "zcta_count": 1233
+    },
+    "OK.topo.json": {
+      "arc_point_count": 25489,
+      "bytes": 303028,
+      "sha256": "b9587fb79dd050fe8dd537c93fa6c87724884d40a976cbf3f27f78769ea1875f",
+      "state_bbox": [
+        371.624,
+        339.353,
+        526.793,
+        421.219
+      ],
+      "zcta_bbox": [
+        371.624,
+        339.353,
+        536.377,
+        421.219
+      ],
+      "zcta_count": 666
+    },
+    "OR.topo.json": {
+      "arc_point_count": 37466,
+      "bytes": 400689,
+      "sha256": "9d79dc75753bd49a29435f334c72be612d64545a1b647e2089cca4d6ba3760a8",
+      "state_bbox": [
+        31.025,
+        67.397,
+        175.658,
+        190.727
+      ],
+      "zcta_bbox": [
+        31.025,
+        68.638,
+        175.658,
+        194.402
+      ],
+      "zcta_count": 430
+    },
+    "PA.topo.json": {
+      "arc_point_count": 45900,
+      "bytes": 631666,
+      "sha256": "b8aa2ab1059a50e72d2a02597a39cb0f13f54b6c8f60a69feeb879982a7135df",
+      "state_bbox": [
+        756.138,
+        192.141,
+        860.682,
+        259.886
+      ],
+      "zcta_bbox": [
+        756.138,
+        192.141,
+        860.682,
+        259.886
+      ],
+      "zcta_count": 1833
+    },
+    "RI.topo.json": {
+      "arc_point_count": 1602,
+      "bytes": 25147,
+      "sha256": "e2876ed0113137f655bf8597f0da5971b41827d09c24812e67951483ad395335",
+      "state_bbox": [
+        898.78,
+        176.006,
+        912.785,
+        196.219
+      ],
+      "zcta_bbox": [
+        898.78,
+        176.006,
+        912.785,
+        196.219
+      ],
+      "zcta_count": 81
+    },
+    "SC.topo.json": {
+      "arc_point_count": 20593,
+      "bytes": 247804,
+      "sha256": "14796c7cb6acc3f475e8ef80f42f3f98eb54ab3aec081d563b7fdd4924e0d15f",
+      "state_bbox": [
+        731.215,
+        364.75,
+        822.617,
+        434.558
+      ],
+      "zcta_bbox": [
+        731.215,
+        364.75,
+        822.617,
+        434.258
+      ],
+      "zcta_count": 424
+    },
+    "SD.topo.json": {
+      "arc_point_count": 16619,
+      "bytes": 197254,
+      "sha256": "29ef15fe1e245d4cdb5f1dff9b6a86fb88b2ead6e99da823c2e14021bb3e0a33",
+      "state_bbox": [
+        365.293,
+        134.303,
+        490.83,
+        218.518
+      ],
+      "zcta_bbox": [
+        344.752,
+        124.068,
+        497.19,
+        224.195
+      ],
+      "zcta_count": 401
+    },
+    "TN.topo.json": {
+      "arc_point_count": 31272,
+      "bytes": 367630,
+      "sha256": "abcf4c1c887b720dcd9f6de18551584b59d3b51bd5ad7b48e500c7739fe74ff2",
+      "state_bbox": [
+        602.804,
+        333.359,
+        755.969,
+        386.738
+      ],
+      "zcta_bbox": [
+        602.945,
+        333.359,
+        755.969,
+        386.732
+      ],
+      "zcta_count": 641
+    },
+    "TX.topo.json": {
+      "arc_point_count": 101976,
+      "bytes": 1114173,
+      "sha256": "9e7e90e1e86958422b681e9a228882f6d6ee351e25c5854cfecabe24b913b4b3",
+      "state_bbox": [
+        294.329,
+        350.714,
+        546.309,
+        597.696
+      ],
+      "zcta_bbox": [
+        294.329,
+        345.091,
+        546.309,
+        597.696
+      ],
+      "zcta_count": 1992
+    },
+    "UT.topo.json": {
+      "arc_point_count": 22253,
+      "bytes": 244355,
+      "sha256": "0275c5631e85c14a19eb19fbe0b9adf15d5806202c9d8c36a9c0ee379f0a8d13",
+      "state_bbox": [
+        176.023,
+        201.06,
+        277.096,
+        327.962
+      ],
+      "zcta_bbox": [
+        177.501,
+        193.648,
+        276.684,
+        342.975
+      ],
+      "zcta_count": 303
+    },
+    "VA.topo.json": {
+      "arc_point_count": 34916,
+      "bytes": 428060,
+      "sha256": "674b104f72292b917bb9771762fe70a582a72f9a98aef65ecc96d3f857488f4c",
+      "state_bbox": [
+        719.768,
+        259.121,
+        862.494,
+        338.73
+      ],
+      "zcta_bbox": [
+        719.768,
+        259.121,
+        862.494,
+        340.495
+      ],
+      "zcta_count": 907
+    },
+    "VT.topo.json": {
+      "arc_point_count": 6355,
+      "bytes": 90565,
+      "sha256": "b3ef07779bac078ad323db4eab5e3cf0b9166a68d707f44d9d35582f520174fd",
+      "state_bbox": [
+        857.503,
+        110.368,
+        888.083,
+        167.688
+      ],
+      "zcta_bbox": [
+        857.503,
+        110.368,
+        888.083,
+        167.688
+      ],
+      "zcta_count": 265
+    },
+    "WA.topo.json": {
+      "arc_point_count": 25597,
+      "bytes": 311738,
+      "sha256": "8ee34c15b681bc593c1e56aa65652e63645d1af8cf7ec08a0b762d5f78cc4399",
+      "state_bbox": [
+        63.08,
+        12.976,
+        183.592,
+        102.361
+      ],
+      "zcta_bbox": [
+        63.08,
+        12.976,
+        186.174,
+        102.361
+      ],
+      "zcta_count": 606
+    },
+    "WI.topo.json": {
+      "arc_point_count": 31311,
+      "bytes": 378068,
+      "sha256": "a6178570579e5ee9e78e9d2dc75aa285b1704a7f4b01d24f0b9598c873c53ac3",
+      "state_bbox": [
+        547.402,
+        111.515,
+        644.22,
+        215.38
+      ],
+      "zcta_bbox": [
+        547.402,
+        111.515,
+        644.22,
+        215.38
+      ],
+      "zcta_count": 783
+    },
+    "WV.topo.json": {
+      "arc_point_count": 25195,
+      "bytes": 321767,
+      "sha256": "054ae88adc2d26c2259f3b0fd62308e411f77c5d8d9c30f0d949fc34c8289a4c",
+      "state_bbox": [
+        733.174,
+        239.16,
+        813.907,
+        320.09
+      ],
+      "zcta_bbox": [
+        733.174,
+        239.16,
+        813.907,
+        322.269
+      ],
+      "zcta_count": 741
+    },
+    "WY.topo.json": {
+      "arc_point_count": 23770,
+      "bytes": 249219,
+      "sha256": "0b0889e7ef1ba1f9d1e35e42777b52ec7b3336fd6c969b95622d8e96437d0cc2",
+      "state_bbox": [
+        243.549,
+        142.043,
+        369.065,
+        246.546
+      ],
+      "zcta_bbox": [
+        244.124,
+        142.043,
+        377.584,
+        254.671
+      ],
+      "zcta_count": 180
+    }
+  },
+  "generated_by": "tools/geo/build_zcta_topojson.mjs",
+  "projection": {
+    "name": "geoAlbersUsa",
+    "scale": 1300,
+    "translate": [
+      487.5,
+      305
+    ]
+  },
+  "quantization": 100000,
+  "sources": [
+    {
+      "name": "zcta",
+      "sha256": "c69a4ede8aebebfc7ed3a98a9075c6aaa1b75d514a129bc5c662fd806d2f3d17",
+      "url": "https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_zcta520_500k.zip"
+    },
+    {
+      "name": "relationship",
+      "sha256": "3ed41278d637dc249e0323306f68be8a6c234e3090f4de88ef328dee71aeaaaf",
+      "url": "https://www2.census.gov/geo/docs/maps-data/data/rel2020/zcta520/tab20_zcta520_county20_natl.txt"
+    },
+    {
+      "name": "state",
+      "sha256": "dcc877984a3e4d59c1ee8d068b6681517c545e0c1827b7e78a7c2c7cbb167da6",
+      "url": "https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_state_500k.zip"
+    }
+  ],
+  "weight": 0.003
+}

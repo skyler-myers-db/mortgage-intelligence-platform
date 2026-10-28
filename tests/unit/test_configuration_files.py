@@ -78,7 +78,7 @@ def test_databricks_yml_contains_required_resource_names():
         "mip_segment_dashboard",
         "mortgage_lead_intelligence",
         "mip_app_state",
-        "/mip-lead-scoring",
+        "/Shared/mip-lead-scoring",
         "mip",
         "raw,silver,gold,semantics,app,audit",
     ]:
@@ -108,7 +108,7 @@ def test_workspace_unique_names_take_the_install_suffix_and_render_live_by_defau
     install's names byte for byte."""
     content = (REPO / "databricks.yml").read_text(encoding="utf-8")
 
-    for name in ("mip_serverless_sql", "mip_feature_pipeline", "/mip-lead-scoring"):
+    for name in ("mip_serverless_sql", "mip_feature_pipeline", "/Shared/mip-lead-scoring"):
         assert f"\n      name: {name}${{var.install_suffix}}\n" in content, name
         assert f"\n      name: {name}\n" not in content, f"{name} must carry the suffix"
     assert re.search(r'(?ms)^  install_suffix:.*?default: ""$', content)
@@ -127,8 +127,24 @@ def test_dev_bundle_pins_real_genie_space_for_signed_deploy():
     assert dev_match, "databricks.yml must define a dev target before prod."
 
     dev_body = dev_match.group("body")
-    assert "genie_space_id: 01f18188d7a41311abe3d99932b5aa9a" in dev_body
+    assert "genie_space_id: 01f13d4968af1b249dc388fd5b18b195" in dev_body
     assert "genie_space_id: 00000000PLACEHOLDER" not in dev_body
+
+
+def test_dev_genie_pin_is_the_live_workspace_space_not_the_retired_staging_pin():
+    """Post-W5 forked-anchor lane: the dev pin names the live space on *default_host.
+
+    441588f6 moved the host anchor to the retired staging workspace and, in the
+    same diff, swapped this pin to that workspace's space (01f18188...).
+    ace044d6 rebound the anchor to the live workspace but left the pin, so the
+    CI isolation guard compared GENIE_SPACE_ID against a space that does not
+    exist on the live host (a read-only get-space there returns not found),
+    while the live "Mortgage Lead Intelligence" space is 01f13d49....
+    """
+    content = (REPO / "databricks.yml").read_text(encoding="utf-8")
+
+    assert "01f18188d7a41311abe3d99932b5aa9a" not in content, "the retired staging-workspace pin"
+    assert content.count("genie_space_id: 01f13d4968af1b249dc388fd5b18b195") == 1
 
 
 def test_python_jobs_receive_bundle_catalog_variable():

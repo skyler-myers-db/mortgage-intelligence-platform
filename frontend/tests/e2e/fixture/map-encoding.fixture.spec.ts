@@ -420,6 +420,12 @@ test.describe('assignment overlay freshness (dataviz-04)', () => {
 });
 
 test.describe('controlled, deep-linkable drill (dataviz-04)', () => {
+  // Segment Intelligence draws a drilled state's committed ZCTA polygons
+  // (W5c dataviz-01, deviation:zcta-level); Home keeps the ZIP tiles. A
+  // cleared drill leaves neither ZIP stage behind.
+  const texasZipAreas = (page: Page) => page.getByRole('group', { name: 'ZIP areas in Texas', exact: true });
+  const anyZipStage = (page: Page) => page.locator('ul.zip-tiles, svg.map-zcta');
+
   test('drilling TX puts ?geo_state=TX in the URL and Back restores the national view', async ({ app, page }) => {
     await app.setTheme('light');
     await app.gotoRoute('/');
@@ -445,13 +451,13 @@ test.describe('controlled, deep-linkable drill (dataviz-04)', () => {
     await app.gotoRoute('/segment-intelligence?geo_state=TX');
 
     const total = page.locator('.segment-mode-control__total .num');
-    await expect(page.getByRole('list', { name: 'ZIPs in Texas' })).toBeVisible();
+    await expect(texasZipAreas(page)).toBeVisible();
     await expect(page.locator('.chip', { hasText: 'state: TX' })).toBeVisible();
     await expect(total).toHaveText((texas?.contactable ?? 0).toLocaleString('en-US'));
 
     await page.getByRole('button', { name: 'Clear geography' }).click();
     await expect(page).not.toHaveURL(/geo_state=/);
-    await expect(page.locator('ul.zip-tiles')).toHaveCount(0);
+    await expect(anyZipStage(page)).toHaveCount(0);
     await expect(page.locator('path[data-map-unit="tx"]')).toBeVisible();
     await expect(page.locator('.chip', { hasText: 'state: TX' })).toHaveCount(0);
     await expect(total).toHaveText(TOTALS.contactable.toLocaleString('en-US'));
@@ -467,7 +473,7 @@ test.describe('controlled, deep-linkable drill (dataviz-04)', () => {
     test(`the hero's Clear filters (${how}) ends the drill without pulling focus or scroll to the map`, async ({ app, page }) => {
       await app.setTheme('dark');
       await app.gotoRoute('/segment-intelligence?geo_state=TX');
-      await expect(page.getByRole('list', { name: 'ZIPs in Texas' })).toBeVisible();
+      await expect(texasZipAreas(page)).toBeVisible();
       const main = page.locator('.main');
       await main.evaluate((el) => { el.scrollTop = 0; });
 
@@ -479,7 +485,7 @@ test.describe('controlled, deep-linkable drill (dataviz-04)', () => {
         await clear.click();
       }
       await expect(page).not.toHaveURL(/geo_state=/);
-      await expect(page.locator('ul.zip-tiles')).toHaveCount(0);
+      await expect(anyZipStage(page)).toHaveCount(0);
       await expect(page.locator('path[data-map-unit="tx"]')).toBeVisible();
       await expect(page.locator('.map-crumbs__trail').getByRole('button', { name: 'US' })).not.toBeFocused();
       // Let any late focus claim (the drill ends in an effect) land before measuring.

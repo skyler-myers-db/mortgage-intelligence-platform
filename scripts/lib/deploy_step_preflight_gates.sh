@@ -31,6 +31,37 @@ echo "  python:     ${PYTHON}"
 echo "  target:     ${TARGET}"
 echo "  dry-run:    ${DRY_RUN}"
 
+# >>> deploy interpreter pins: check >>>
+# A drifted mlflow, databricks-sdk or databricks-sql-connector registers and
+# serves a stack CI never proved (full_deploy_readiness.md 3.12), so the
+# interpreter's installed closure must equal the requirements.txt pins
+# (uv.lock). tools/python_deps_check.py exits 0 pinned, 10 drift (it prints the
+# remedy); anything else is a hard error. A dry run reports and continues; a
+# real run refuses with exit 2 before any workspace call. Isolated
+# shell-contract copies carry no tool: a dry run skips, a real run refuses.
+PYTHON_DEPS_STATE="skipped"
+if [[ -f tools/python_deps_check.py ]]; then
+  _python_deps_rc=0
+  "$PYTHON" -m tools.python_deps_check || _python_deps_rc=$?
+  case "$_python_deps_rc" in
+    0) PYTHON_DEPS_STATE="pinned" ;;
+    10) PYTHON_DEPS_STATE="drifted" ;;
+    *) PYTHON_DEPS_STATE="error" ;;
+  esac
+  unset _python_deps_rc
+fi
+echo "  python deps: ${PYTHON_DEPS_STATE}"
+if [[ "$DRY_RUN" -eq 0 && "$PYTHON_DEPS_STATE" != "pinned" ]]; then
+  case "$PYTHON_DEPS_STATE" in
+    drifted) echo "${RED}[deploy] ${PYTHON} does not match the requirements.txt pins; apply the fix above.${RST}" >&2 ;;
+    error) echo "${RED}[deploy] the deploy-interpreter pin check failed; ${PYTHON} cannot be proven pinned.${RST}" >&2 ;;
+    *) echo "${RED}[deploy] tools/python_deps_check.py is not in this tree; ${PYTHON} cannot be proven pinned.${RST}" >&2 ;;
+  esac
+  echo "  select a pinned interpreter with MIP_DEPLOY_PYTHON (docs/deployment.md, \"Deploy interpreter\")." >&2
+  exit 2
+fi
+# <<< deploy interpreter pins: check <<<
+
 if [[ "$DRY_RUN" -eq 0 ]]; then
   # Unity Catalog model registration validates the uploaded artifact through
   # the metastore's cloud storage before the version becomes ready. Fail before
@@ -96,12 +127,15 @@ fi
 # confirmation prompt, the BUNDLE_VAR exports and any mutation: deploy-dev.yml
 # must use its own bundle root (MIP_BUNDLE_ROOT_LEAF) and staging names, and a
 # non-default root is CI-only (tools/databricks/ci_install_isolation.py, which
-# names only variables on refusal). The names are read as the gates below read
-# them (shell, then .env.local); an unset name falls back to its live default,
-# so the tool refuses it. An operator run (no leaf, not deploy-dev.yml)
-# resolves to the live root without Python: the tool's answer for that input.
+# names only variables on refusal). deploy-dev.yml deploys only to the
+# forked-anchor pr105-host target, which is deploy-dev.yml-only. The names are
+# read as the gates below read them (shell, then .env.local); an unset name
+# falls back to its live default, so the tool refuses it. An operator run (no
+# leaf, not pr105-host, not deploy-dev.yml) resolves to the live root without
+# Python: the tool's answer for that input.
 _CI_INSTALL_LEAF="$(deployment_control_value MIP_BUNDLE_ROOT_LEAF)"
-if [[ -z "$_CI_INSTALL_LEAF" && "${GITHUB_WORKFLOW_REF:-}" != *"/.github/workflows/deploy-dev.yml@"* ]]; then
+if [[ -z "$_CI_INSTALL_LEAF" && "$TARGET" != "pr105-host" && \
+      "${GITHUB_WORKFLOW_REF:-}" != *"/.github/workflows/deploy-dev.yml@"* ]]; then
   _CI_INSTALL_VARS=$'bundle_root_leaf=dev\ninstall_suffix='
 elif ! _CI_INSTALL_VARS="$(
   MIP_BUNDLE_ROOT_LEAF="$_CI_INSTALL_LEAF" \
@@ -132,11 +166,47 @@ if [[ -n "$BUNDLE_VAR_install_suffix" ]]; then
   export MIP_AI_GATEWAY_TABLE_PREFIX MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE
 fi
 MIP_BUNDLE_ROOT_LEAF_RESOLVED="$TARGET"
-if [[ "$TARGET" == "dev" ]]; then
+if [[ "$TARGET_CLASS" == "dev" ]]; then
   MIP_BUNDLE_ROOT_LEAF_RESOLVED="$BUNDLE_VAR_bundle_root_leaf"
 fi
 unset _CI_INSTALL_VARS _CI_INSTALL_LEAF
 # <<< ci-install-isolation
+
+# >>> scheduled-refresh (data-freshness design 2026-10-26)
+# mip_scheduled_refresh's pause status is decided here, never in a bundle
+# target: the variable defaults to PAUSED. Only the dev target's LIVE install
+# (empty install_suffix) unpauses, by default; MIP_SCHEDULED_REFRESH=off opts
+# it out. The CI staging install is always PAUSED. prod is always PAUSED: a
+# prod cadence is a customer decision that needs a reviewed change here, so an
+# explicit `on` for prod is refused rather than ignored. Pure, so it also runs
+# in DRY_RUN. A Jobs-UI unpause is reverted by the next deploy, and any apply
+# outside this script re-pauses the live schedule; this switch is the durable
+# one (docs/runbook.md "Weekly scheduled refresh").
+if [[ "$TARGET" == "dev" ]]; then
+  _SCHEDULED_REFRESH="$(deployment_control_value MIP_SCHEDULED_REFRESH on)"
+else
+  _SCHEDULED_REFRESH="$(deployment_control_value MIP_SCHEDULED_REFRESH off)"
+fi
+case "$_SCHEDULED_REFRESH" in
+  on|off) ;;
+  *)
+    echo "${RED}[deploy] MIP_SCHEDULED_REFRESH must be on or off.${RST}" >&2
+    exit 2
+    ;;
+esac
+if [[ "$TARGET" != "dev" && "$_SCHEDULED_REFRESH" == "on" ]]; then
+  echo "${RED}[deploy] MIP_SCHEDULED_REFRESH=on is honoured only for the dev target's live install; ${TARGET} keeps mip_scheduled_refresh PAUSED.${RST}" >&2
+  exit 2
+fi
+if [[ "$TARGET" == "dev" && "$_SCHEDULED_REFRESH" == "on" && -z "$BUNDLE_VAR_install_suffix" ]]; then
+  BUNDLE_VAR_scheduled_refresh_pause_status=UNPAUSED
+else
+  BUNDLE_VAR_scheduled_refresh_pause_status=PAUSED
+fi
+export BUNDLE_VAR_scheduled_refresh_pause_status
+echo "  scheduled refresh: ${BUNDLE_VAR_scheduled_refresh_pause_status} (mip_scheduled_refresh, Fridays 06:00 America/Chicago)"
+unset _SCHEDULED_REFRESH
+# <<< scheduled-refresh
 
 if [[ "$DRY_RUN" -eq 0 && "$NO_CONFIRM" -eq 0 ]]; then
   read -r -p "About to DEPLOY to the ${TARGET} target. Continue? [y/N] " ans
@@ -514,7 +584,7 @@ fi
 
 APP_RUNTIME_ENV="${APP_ENV:-}"
 if [[ -z "$APP_RUNTIME_ENV" ]]; then
-  if [[ "$TARGET" == "dev" ]]; then
+  if [[ "$TARGET_CLASS" == "dev" ]]; then
     APP_RUNTIME_ENV="sandbox"
   else
     APP_RUNTIME_ENV="$TARGET"
@@ -700,3 +770,20 @@ PYEOF
   fi
   echo "  Gateway model attestation: separated model-provenance key configured"
 fi
+
+# >>> runtime secret pre-stop check >>>
+# Step 0a stops the App before the bundle-apply step provisions mip-runtime.
+# Plan that provisioning read-only here, while the App still serves: a stored
+# Cotality ID-mask value that differs from (or cannot be compared with) the
+# configured one refuses now, not after the stop (full_deploy_readiness.md
+# 3.7). The tool names keys only, never values or fingerprints.
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  if ! "$PYTHON" -m tools.databricks.provision_runtime_secrets --check \
+      --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"; then
+    echo "${RED}[deploy] the runtime secret plan was refused before the App stop (see above).${RST}" >&2
+    exit 2
+  fi
+else
+  echo "[deploy] would check (read-only): tools.databricks.provision_runtime_secrets --check --scope ${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"
+fi
+# <<< runtime secret pre-stop check <<<
