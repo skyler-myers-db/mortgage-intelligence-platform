@@ -37,6 +37,12 @@ and a JS, CSS or HTML file carrying a ``sourceMappingURL`` comment anywhere in
 it. ``app_runtime_closure stage`` reviews a private copy (``snapshot``) and
 ships that copy, so a dist that changes after the review cannot change what
 ships.
+
+The ``assets/`` rule checks name shape, compression integrity and gzip header
+flags only, never asset content: a hashed ``.js`` built from another commit
+passes it. Only the ``frontend/public`` files are compared with the ref, so the
+dist must come from the governed build (``npm --prefix frontend run build``)
+of the same ref.
 """
 
 from __future__ import annotations

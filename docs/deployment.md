@@ -238,6 +238,14 @@ the dist a dot segment (`.env`, `.vite/`, an empty `.git/objects` or
 CSS or HTML file with a `sourceMappingURL` comment anywhere in it is refused
 too.
 
+The `assets/` rule checks name shape, compression integrity and gzip header
+flags only, never what an asset contains: a hashed `.js` built from another
+commit, or edited after the build, passes it. The dist must therefore come
+from the governed build of the same ref, `npm --prefix frontend run build` run
+on a checkout of `<sha>` (it also runs the `tools/postbuild_artifacts.mjs`
+gate); only the `frontend/public` files are compared with `<sha>` byte for
+byte.
+
 Before it writes anything, `stage` also refuses a symlink, a submodule or a
 hidden path (a segment starting with `.`, such as `backend/.env.local`)
 tracked at `<sha>`, a missing required entry, a `requirements.txt` whose
