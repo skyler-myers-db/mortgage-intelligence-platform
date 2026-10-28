@@ -24,7 +24,10 @@ neither it nor the App's default source naming the candidate) and re-derives
 the candidate's path; then it deletes
 recursively and requires the folder to be gone. A delete whose outcome is
 ambiguous is reconciled by reading the folder back; one that cannot be
-reconciled stops the run. At most MAX_DELETIONS folders go per run.
+reconciled stops the run. At most MAX_DELETIONS folders go per run, and no
+delete starts once TIME_BUDGET_SECONDS have passed since the run began (each
+SDK call carries its own timeout), so a throttled workspace cannot hold a
+green deploy open.
 
 Anything uncertain skips the whole run and deletes nothing (exit 0): no
 lease or a lease that is not held, an App or deployment read that fails, an
@@ -43,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -56,6 +60,7 @@ from tools.databricks import app_release_contract as contract
 
 KEEP_PREVIOUS = 2
 MAX_DELETIONS = 20
+TIME_BUDGET_SECONDS = 600
 PREFIX = "[app-release-prune]"
 
 
@@ -305,8 +310,15 @@ def _recheck(
     return status
 
 
-def prune(workspace: Any, target: Target, *, lease_check: Callable[[], None]) -> PruneReport:
+def prune(
+    workspace: Any,
+    target: Target,
+    *,
+    lease_check: Callable[[], None],
+    clock: Callable[[], float] = time.monotonic,
+) -> PruneReport:
     """Delete unreferenced release folders, or skip and delete nothing."""
+    started = clock()
     report = PruneReport()
     try:
         try:
@@ -326,6 +338,10 @@ def prune(workspace: Any, target: Target, *, lease_check: Callable[[], None]) ->
     for index, name in enumerate(candidates[:MAX_DELETIONS]):
         if name in report.kept:
             continue
+        if clock() - started >= TIME_BUDGET_SECONDS:
+            report.skipped = f"stopped before {name}: the {TIME_BUDGET_SECONDS} s time budget is spent"
+            report.left = candidates[index:]
+            return report
         api = contract.api_path(target.release_path(name))
         try:
             status = _recheck(workspace, target, lease_check, api)

@@ -184,7 +184,8 @@ principal still keeps it. Before each delete it re-asserts the signed
 deployment lease, re-reads the App (no pending deployment, the active one
 still the current release, and neither it nor the App's default source naming
 the folder) and re-reads the folder; after it, the folder must be gone, and a
-delete it cannot reconcile stops the run. At most 20 folders go per run. Any
+delete it cannot reconcile stops the run. At most 20 folders go per run.
+No delete starts once 10 minutes have passed since the run began. Any
 uncertainty skips the whole run and deletes nothing: no lease, a failed App or
 deployment read, another App id, a pending deployment, an active deployment
 that is not the current release or is missing from the listing, a listed

@@ -2,11 +2,11 @@
 
 Every rule in the tool's docstring has a test here: what is kept (current,
 rollback record and App default source in any spelling, KEEP_PREVIOUS newest
-previous, a folder holding a snapshot),
-what is never touched (files/, names that are not release ids, plain files),
-the per-delete re-checks, the MAX_DELETIONS cap, reconciliation of an
-ambiguous delete, and each uncertainty that skips the run and deletes
-nothing. tests/fixtures/fake_workspace.py is the workspace.
+previous, a folder holding a snapshot), what is never touched (files/, names
+that are not release ids, plain files), the per-delete re-checks, the
+MAX_DELETIONS cap, the time budget, reconciliation of an ambiguous delete,
+and each uncertainty that skips the run and deletes nothing.
+tests/fixtures/fake_workspace.py is the workspace.
 """
 
 from __future__ import annotations
@@ -208,6 +208,18 @@ def test_at_most_max_deletions_per_run() -> None:
     assert _run(client).deleted == [rid(n) for n in range(120, 125)]
 
 
+def test_no_delete_starts_once_the_time_budget_is_spent() -> None:
+    client = _world(old=5)
+    ticks = iter([0.0, prune.TIME_BUDGET_SECONDS - 1.0, float(prune.TIME_BUDGET_SECONDS)])
+
+    report = prune.prune(client, _target(), lease_check=_held, clock=lambda: next(ticks))
+
+    assert report.deleted == [rid(1)]
+    assert report.skipped == f"stopped before {rid(2)}: the 600 s time budget is spent"
+    assert report.left == [rid(2), rid(3)]
+    assert client.workspace.ops("delete") == [api(rid(1))]
+
+
 def test_a_missing_release_root_means_nothing_to_prune() -> None:
     client = _world(old=0)
     del client.workspace.nodes[api(CURRENT)]
@@ -402,5 +414,5 @@ def test_the_cli_exits_1_when_a_delete_cannot_be_reconciled(
 
 
 def test_the_retention_constants_and_the_typed_listing() -> None:
-    assert (prune.KEEP_PREVIOUS, prune.MAX_DELETIONS) == (2, 20)
+    assert (prune.KEEP_PREVIOUS, prune.MAX_DELETIONS, prune.TIME_BUDGET_SECONDS) == (2, 20, 600)
     assert FakeWorkspaceClient().workspace.get_status("/").object_type is ObjectType.DIRECTORY
