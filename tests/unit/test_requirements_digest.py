@@ -120,6 +120,27 @@ def test_write_stamps_a_legacy_two_line_file_and_drops_stray_digest_lines(
     assert text == f"{digest.digest_line(root)}\n-c uv.lock\n-r requirements.in\n"
 
 
+def test_a_crlf_checkout_computes_and_checks_the_lf_digest(tmp_path: Path) -> None:
+    # A core.autocrlf checkout must neither fail --check nor --write a digest
+    # that is wrong for every LF checkout.
+    root = _copy_tree(tmp_path)
+    for name in FILES:
+        path = root / name
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+
+    assert digest.digest_line(root) == digest.digest_line(ROOT)
+    assert _run("--check", root=root).returncode == 0
+
+
+def test_gitattributes_checks_the_three_files_out_with_lf() -> None:
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "check-attr", "eol", "--", *FILES],
+        capture_output=True, text=True, check=True,
+    )
+
+    assert result.stdout.splitlines() == [f"{name}: eol: lf" for name in FILES]
+
+
 def test_the_deploy_preflight_pin_check_still_reads_the_stamped_file() -> None:
     # tools/python_deps_check.load_pins rejects any requirements.txt line that
     # is not -c/-r; the stamp must reach it as a comment.

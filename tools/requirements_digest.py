@@ -14,7 +14,9 @@ files turns every lock or input change into a requirements.txt change:
   python tools/requirements_digest.py --check   # exit 1, with the remedy, when stale
 
 The line is a comment, so pip, pip-audit and tools/python_deps_check.py read
-requirements.txt exactly as before.
+requirements.txt exactly as before. Both files are hashed with CRLF folded to
+LF, so a checkout with ``core.autocrlf`` computes the digest an LF checkout
+commits (.gitattributes also pins the three files to ``eol=lf``).
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ import argparse
 import hashlib
 import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -37,14 +40,21 @@ EXIT_CURRENT = 0
 EXIT_STALE = 1
 
 
+def _lf_sha256(data: bytes) -> str:
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+
+
+def digest_line_for(contents: Mapping[str, bytes]) -> str:
+    """The first line requirements.txt must carry for these file contents."""
+
+    parts = [f"{name} sha256={_lf_sha256(contents[name])}" for name in DIGESTED_FILES]
+    return f"{PREFIX} {' '.join(parts)}"
+
+
 def digest_line(root: Path) -> str:
     """The first line requirements.txt must carry for the files under ``root``."""
 
-    parts = [
-        f"{name} sha256={hashlib.sha256((root / name).read_bytes()).hexdigest()}"
-        for name in DIGESTED_FILES
-    ]
-    return f"{PREFIX} {' '.join(parts)}"
+    return digest_line_for({name: (root / name).read_bytes() for name in DIGESTED_FILES})
 
 
 def render(current: str, line: str) -> str:
