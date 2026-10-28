@@ -57,13 +57,28 @@ def test_node_passes_only_a_br_that_decodes_to_exactly_its_source(tmp_path: Path
         _pair(tmp_path, "good.js", good),
         _pair(tmp_path, "other.js", node_brotli(b"alert('swapped');\n")),
         _pair(tmp_path, "corrupt.js", _corrupt(good)),
-        # Decodes to 64x its source: cut off one byte past the source length.
+        # Decodes to 64x its source: a mismatch with or without the output
+        # cap (the cap bounds memory, never a verdict; pinned below).
         _pair(tmp_path, "expanding.js", node_brotli(APP_JS * 64)),
         _pair(tmp_path, "prefix.js", node_brotli(APP_JS[:-1])),
         _pair(tmp_path, "not-brotli.js", b"not a brotli stream"),
+        # A good stream followed by more bytes: node stops at the end of the
+        # first stream, so each decodes to exactly its source unless the
+        # check also requires every input byte to be consumed.
+        _pair(tmp_path, "trailing.js", good + b"SECRET=abc123 trailing junk"),
+        _pair(tmp_path, "twice.js", good + good),
+        _pair(tmp_path, "one-more-byte.js", good + b"\x00"),
     ]
 
-    assert node_verifier(NODE or "").check(pairs) == [True, False, False, False, False, False]
+    assert node_verifier(NODE or "").check(pairs) == [
+        True, False, False, False, False, False, False, False, False]
+
+
+def test_node_caps_the_decoded_size_one_byte_past_the_source() -> None:
+    # The cap never changes a verdict (an expansion is a mismatch anyway); it
+    # stops a hostile .br from inflating without bound inside the check. Only
+    # a gigabyte-scale stream could show it through behaviour, so pin the text.
+    assert "maxOutputLength: source.length + 1," in brotli_rules.NODE_CHECK
 
 
 @needs_node

@@ -172,7 +172,7 @@ def test_stage_refuses_an_empty_hidden_directory_in_the_dist(
 NODE = shutil.which("node")
 
 
-def _real_br(dist: Path, monkeypatch: pytest.MonkeyPatch, *, corrupt: bool = False) -> None:
+def _real_br(dist: Path, monkeypatch: pytest.MonkeyPatch, *, damage: str = "") -> None:
     """Swap the fake .br for a node-made one and use the real checker, module absent."""
 
     assert NODE is not None
@@ -180,8 +180,10 @@ def _real_br(dist: Path, monkeypatch: pytest.MonkeyPatch, *, corrupt: bool = Fal
                 "require('node:fs').readFileSync(0)))")
     data = subprocess.run([NODE, "-e", compress], input=APP_JS.encode(), capture_output=True,
                           check=True).stdout
-    if corrupt:
+    if damage == "corrupt":
         data = data[:10] + bytes([data[10] ^ 0xFF]) + data[11:]
+    elif damage == "trailing":  # decodes to its source, then carries a payload
+        data += b"MIP_SECRET=abc123\n"
     (dist / "assets" / "app-DnQ3_k-1.js.br").write_bytes(data)
     monkeypatch.setattr(brotli_rules, "brotli_decoder", lambda: None)
     monkeypatch.setattr(closure, "brotli_verifier", brotli_rules.brotli_verifier)
@@ -205,11 +207,12 @@ def test_stage_checks_each_br_with_node_and_ships_it(
 
 
 @pytest.mark.skipif(NODE is None, reason="node is not on PATH")
-def test_stage_refuses_a_corrupted_br_that_node_cannot_decode_to_its_source(
+@pytest.mark.parametrize("damage", ["corrupt", "trailing"])
+def test_stage_refuses_a_br_that_is_not_exactly_its_source_stream(
     repo: Path, dist: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    capsys: pytest.CaptureFixture[str], damage: str,
 ) -> None:
-    _real_br(dist, monkeypatch, corrupt=True)
+    _real_br(dist, monkeypatch, damage=damage)
     out = tmp_path / "out"
     args = ["--repo", str(repo), "stage", "--ref", "HEAD", "--dist", str(dist), "--out", str(out)]
 

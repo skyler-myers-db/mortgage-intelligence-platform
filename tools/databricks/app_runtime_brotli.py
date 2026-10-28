@@ -9,7 +9,9 @@ compared the bytes. ``brotli_verifier`` picks the first checker available:
 * else ``node`` on PATH, the runtime that wrote the files
   (tools/precompress_assets.mjs): one short-lived process per batch decodes
   each file with ``zlib.brotliDecompressSync`` (``maxOutputLength`` one byte
-  over the source, so a large expansion is cut off), compares it with the
+  over the source, so a large expansion stops early instead of filling
+  memory), requires the stream to use every input byte (node stops at the end
+  of the first stream and ignores what follows), compares the output with the
   source inside node, and prints one JSON boolean per file. The paths travel
   as argv after ``--``, never inside the script, and each process is
   time-bound;
@@ -50,10 +52,16 @@ for (let i = 0; i + 1 < args.length; i += 2) {
   let same = false;
   try {
     const source = fs.readFileSync(args[i + 1]);
-    const decoded = zlib.brotliDecompressSync(fs.readFileSync(args[i]), {
+    const input = fs.readFileSync(args[i]);
+    // info: the engine counts the input bytes it consumed. Decoding stops at
+    // the end of the first brotli stream and ignores the rest, so a file
+    // with bytes after its stream (a second stream, appended text) would
+    // otherwise decode to its source and ship.
+    const result = zlib.brotliDecompressSync(input, {
+      info: true,
       maxOutputLength: source.length + 1,
     });
-    same = decoded.equals(source);
+    same = result.engine.bytesWritten === input.length && result.buffer.equals(source);
   } catch (error) {
     same = false;
   }
