@@ -795,12 +795,13 @@ jobs:
         # JSONP callback injection), were ignored here from 2026-09-29 until
         # 2026-10-28. Both were unreachable (nothing here imports oauthlib or
         # databricks.sql; the connector's auth/oauth.py uses only the client
-        # side) and could not be fixed, because every databricks-sql-connector
-        # release through 4.6.0 required oauthlib<4.0.0. On 2026-10-27 a third
+        # side) and could not be fixed while the pinned connector line, 4.0.0
+        # through 4.6.0, required oauthlib<4.0.0. On 2026-10-27 a third
         # one, GHSA-3jp2-3mrg-2vxc (high: DeviceCodeGrant does not validate
         # device_code, also server side), reached pip-audit's feed.
-        # databricks-sql-connector 4.8.0 (2026-10-24) admits oauthlib
-        # >=3.1.0,<5.0.0, so requirements.in moved to it plus an oauthlib
+        # databricks-sql-connector 4.7.0 (2026-10-20) was the first release to
+        # admit oauthlib >=3.1.0,<5.0.0, so requirements.in moved to the
+        # latest, 4.8.0 (2026-10-24), plus an oauthlib
         # >=4.0.0,<5 floor, and uv.lock to oauthlib 4.0.0, the patched release
         # for all three. Both ignores are retired; the fix is installed. The
         # connector's oauth module still imports WebApplicationClient and

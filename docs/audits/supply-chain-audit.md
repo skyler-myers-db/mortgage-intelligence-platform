@@ -706,14 +706,19 @@ oauthlib 4.0.0.
 | GHSA-3jp2-3mrg-2vxc (high): device-flow bearer token without a valid `device_code` | `oauthlib` 3.3.1 | 4.0.0 | Fixed: `oauthlib==4.0.0` through `databricks-sql-connector==4.8.0`. |
 | GHSA-xpv3-w29h-x7cv (medium), GHSA-hj66-6f7g-4r5v (medium) | `oauthlib` 3.3.1 | 4.0.0 | Fixed the same way; both CI ignores (review date 2026-11-01) are retired. |
 
-- **The fix became installable on 2026-10-24.** databricks-sql-connector
-  4.8.0 is the first release that requires `oauthlib>=3.1.0,<5.0.0`; every
-  release from 4.0.0 through 4.6.0 required `<4.0.0` (the 2026-10-15
-  re-review's "next step"). `requirements.in` moves the connector
-  4.4.0 -> 4.8.0 and adds an `oauthlib>=4.0.0,<5` security floor, so a future
-  connector pin cannot drag oauthlib back. 4.8.0 keeps 4.4.0's other
-  requirements, with `thrift<0.26` instead of `<0.25`; the first-party
-  `thrift>=0.24.0,<0.25` floor holds the lock at 0.24.0.
+- **The fix became installable on 2026-10-20.** databricks-sql-connector
+  4.7.0 (2026-10-20) is the first release that requires
+  `oauthlib>=3.1.0,<5.0.0`; every release from 4.0.0 through 4.6.0 required
+  `<4.0.0`. 4.7.0 is the release the 2026-10-15 re-review named as its
+  trigger ("the first connector release past 4.6.0"), and it arrived before
+  that review's 2026-11-01 date. `requirements.in` moves the connector
+  4.4.0 -> 4.8.0 (2026-10-24, the latest release; it adds kernel and
+  locked-dependency updates over 4.7.0) and adds an `oauthlib>=4.0.0,<5`
+  security floor, so a future connector pin cannot drag oauthlib back.
+  4.8.0's non-extra requirements equal 4.4.0's except `oauthlib<5` and
+  `thrift<0.26` (both from 4.7.0); the first-party `thrift>=0.24.0,<0.25`
+  floor holds the lock at 0.24.0. Only the `kernel` extra (not installed)
+  moves further.
 - **Lock refresh, narrow.** `uv pip compile requirements.in --python-version
   3.11 --format requirements.txt --output-file uv.lock --upgrade-package
   databricks-sql-connector --upgrade-package oauthlib` moves exactly two
