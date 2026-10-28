@@ -62,6 +62,22 @@ UNHANDLED: tuple[tuple[str, str], ...] = (
     ("inspect_currentframe", (
         "import inspect\nX = Path(inspect.currentframe().f_code.co_filename).parents[2]")),
     ("inspect_stack", "import inspect\nX = Path(inspect.stack()[0].filename).parents[2]"),
+    # Each frame helper and find_spec attribute alone, with no co_filename or
+    # origin beside it, so dropping its table entry fails its own row.
+    ("sys_getframe_alone", "import sys\nX = sys._getframe()"),
+    ("sys_current_frames_alone", "import sys\nX = sys._current_frames()"),
+    ("inspect_currentframe_alone", "import inspect\nX = inspect.currentframe()"),
+    ("inspect_trace_alone", "import inspect\nX = inspect.trace()"),
+    ("inspect_getouterframes_alone", "import inspect\nX = inspect.getouterframes(None)"),
+    ("inspect_getinnerframes_alone", "import inspect\nX = inspect.getinnerframes(None)"),
+    ("inspect_getframeinfo_alone", "import inspect\nX = inspect.getframeinfo(None)"),
+    ("traceback_extract_stack_alone", "import traceback\nX = traceback.extract_stack()"),
+    ("traceback_walk_stack_alone", "import traceback\nX = list(traceback.walk_stack(None))"),
+    ("find_spec_cached_alone", (
+        'import importlib.util\nX = importlib.util.find_spec("backend").cached')),
+    ("find_spec_loader_alone", (
+        'import importlib.util\n'
+        'X = Path(importlib.util.find_spec("backend").loader.get_filename())')),
     ("code_object_filename", (
         "def f():\n    return 1\n\nX = Path(f.__code__.co_filename).parents[2]")),
     ("find_spec_origin", (
@@ -228,6 +244,39 @@ RESIDUALS: dict[str, str] = {
     "computed_string_method": 'X = (Path("DOCS".lower()) / "m1.md").read_text()',
     "bytes_path_literal": 'X = open(b"docs/u1.md").read()',
     "library_cwd_keyword": 'DOCS = "docs"\nX = subprocess.run(["cat", "u2.md"], cwd=DOCS)',
+    # exec, eval, and a first-party function passed as a value (the bullets
+    # name each shape, so each has its own row).
+    "exec_code": 'DOCS = "docs"\nexec("X = open(DOCS + chr(47) + \'e1.md\').read()")',
+    "eval_code": 'DOCS = "docs"\nX = eval("open")(DOCS + "/e2.md")',
+    "eval_path": 'D = "docs"\nX = (Path(eval("D")) / "e3.md").read_text()',
+    "function_as_value": """
+        D = "docs"
+
+        def _read(folder):
+            return (Path(folder) / "f1.md").read_text()
+
+        READER = _read
+        X = READER(D)
+        """,
+    "function_in_a_dict": """
+        D = "docs"
+
+        def _read(folder):
+            return (Path(folder) / "f2.md").read_text()
+
+        HOOKS = {"r": _read}
+        X = HOOKS["r"](D)
+        """,
+    "getattr_module_function": """
+        import importlib
+
+        D = "docs"
+
+        def _read(folder):
+            return (Path(folder) / "f3.md").read_text()
+
+        X = getattr(importlib.import_module(__name__), "_read")(D)
+        """,
 }
 
 

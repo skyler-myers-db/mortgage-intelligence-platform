@@ -213,6 +213,14 @@ CAUGHT: dict[str, tuple[str, str | None, str | None]] = {
         DOCS = "docs"
         X = (Path(os.path.realpath(".")) / DOCS / "x2.md").read_text()
         """, "docs/x2.md", None),
+    "normpath_of_the_cwd": ("""
+        DOCS = "docs"
+        X = open(os.path.join(os.path.normpath("."), DOCS, "x3.md")).read()
+        """, "docs/x3.md", None),
+    "expanduser_of_the_cwd": ("""
+        DOCS = "docs"
+        X = open(os.path.join(os.path.expanduser("."), DOCS, "x4.md")).read()
+        """, "docs/x4.md", None),
     # A root bound through `global` or `nonlocal`, and names reached through
     # relative imports (round 4).
     "global_rebinding": ("""
