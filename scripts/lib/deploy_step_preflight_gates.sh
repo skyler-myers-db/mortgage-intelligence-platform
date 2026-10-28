@@ -65,10 +65,10 @@ fi
 # >>> requirements digest: check >>>
 # On 2026-10-28 the Databricks Apps build skipped the reinstall for a lock bump
 # that left requirements.txt unchanged, and the App kept its old wheels. It
-# reinstalls only when requirements.txt changes, never following the
-# -c uv.lock / -r requirements.in includes (the 32cc4384 deploy confirmed that
-# a digest-only change is enough), so a lock bump needs a restamp
-# (docs/deployment.md, "App Python dependencies: the deps-digest line").
+# reinstalls only when the bytes of requirements.txt change, never following
+# the -c uv.lock / -r requirements.in includes (confirmed the same day by the
+# first deploy carrying the digest line), so a lock bump needs a restamp (docs/deployment.md, "App Python dependencies: the
+# deps-digest line").
 # tools/requirements_digest.py exits 0 current and 1 stale (it prints the
 # remedy); anything else is a hard error. A dry run reports and continues; a
 # real run refuses with exit 2 before any workspace call. Isolated

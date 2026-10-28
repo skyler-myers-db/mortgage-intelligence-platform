@@ -95,9 +95,9 @@ def test_stage_refuses_a_ref_missing_a_required_entry(
 def test_stage_refuses_a_ref_whose_requirements_digest_is_stale(
     repo: Path, dist: Path, tmp_path: Path, changes: dict[str, str], case: str
 ) -> None:
-    # The bytes of requirements.txt would not change, and a build that compares
-    # only those bytes (the 2026-10-28 build logs, docs/deployment.md)
-    # skips the reinstall, so the App would keep its old packages.
+    # The bytes of requirements.txt would not change, and the build compares
+    # only those bytes (confirmed 2026-10-28), so it would skip the reinstall
+    # and the App would keep its old packages.
     write_files(repo, changes)
     git(repo, "commit", "-q", "-am", case)
     out = tmp_path / "out"

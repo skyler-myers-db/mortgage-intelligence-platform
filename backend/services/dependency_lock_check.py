@@ -19,7 +19,7 @@ requirements.in (or ``stale``, ``missing``, ``unreadable``), and an outcome:
 
 The ``remedy`` follows the cause. A stale or missing digest can leave the bytes
 of requirements.txt unchanged, which the build treats as no reason to
-reinstall (2026-10-28 build logs, docs/deployment.md): restamp and redeploy. A
+reinstall (confirmed 2026-10-28): restamp and redeploy. A
 current digest with drift means
 the build skipped or failed the reinstall anyway, so restamping changes
 nothing: read the deployment build log, then the digest-named ``-c`` fallback

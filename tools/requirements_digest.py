@@ -6,9 +6,8 @@ changed. Skipping installation." for a deploy whose uv.lock had changed but
 whose requirements.txt (only the ``-c uv.lock`` / ``-r requirements.in``
 include lines) had not, and the App kept its old packages; its Python
 environment persists across deployments. The build compares requirements.txt
-with the previous deployment's copy and does not follow its includes; the
-deploy of 32cc4384 confirmed that a change to this comment line alone makes it
-reinstall (docs/deployment.md, "App Python dependencies"). A generated first
+with the previous deployment's copy and does not follow its includes
+(confirmed the same day: the first deploy carrying this line reinstalled) (docs/deployment.md, "App Python dependencies"). A generated first
 line carrying the digest of both included files turns every lock or input
 change into a requirements.txt change:
 

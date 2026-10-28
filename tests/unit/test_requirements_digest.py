@@ -1,10 +1,10 @@
 """requirements.txt carries the digest of uv.lock and requirements.in.
 
 The Databricks Apps build skipped the reinstall on 2026-10-28 for a deploy
-whose uv.lock changed but whose requirements.txt did not: it compares
+whose uv.lock changed but whose requirements.txt did not; it compares
 requirements.txt with the previous deployment's copy and never follows the
-``-c uv.lock`` / ``-r requirements.in`` includes (the 32cc4384 deploy confirmed
-that a digest-only change makes it reinstall). The generated first line
+``-c uv.lock`` / ``-r requirements.in`` includes (confirmed the same day by the
+first deploy carrying the digest line). The generated first line
 (tools/requirements_digest.py) makes every lock or input change a
 requirements.txt change. These tests are the CI gate that keeps the stamp
 current, and they prove the stamp leaves every requirements.txt reader intact.

@@ -300,16 +300,13 @@ across deployments. `uv.lock` had changed; `requirements.txt` had not. Until
 2026-10-28 it was only the `-c uv.lock` and `-r requirements.in` include
 lines, byte-identical since 2026-05-17.
 
-What the next deploy confirmed: the build decides whether to reinstall by
+Confirmed on 2026-10-28: the build decides whether to reinstall by
 comparing `requirements.txt` with the previous deployment's copy and does not
-follow the file's includes. So no lock refresh reached a running App between
-2026-05-17 and 2026-10-28, including the lock bumps since at least 2026-10-06
-and their security floors (certifi, urllib3, PyJWT, oauthlib, mlflow and the
-rest). The deploy of main 32cc4384 (PR #275, 2026-10-28) changed only the
-digest comment described below, and its build ran pip (21 upgrades, among them
-oauthlib 4.0.0 and databricks-sql-connector 4.8.0). The App then logged
-`dependency_lock_check` with `outcome` `ok` and `requirements_digest`
-`current`.
+follow the file's includes. The first deploy whose only change to the file
+was the digest line below reinstalled, upgrading 21 packages (oauthlib 3.3.1
+to 4.0.0, databricks-sql-connector 4.4.0 to 4.8.0, certifi, mlflow,
+OpenTelemetry and the rest). Before it, no lock refresh had reached a running
+App since 2026-05-17.
 
 `requirements.txt` therefore starts with a generated comment carrying the
 sha256 of both included files:
@@ -366,11 +363,14 @@ stop startup, and the lifespan runs it in a worker thread, off the event loop
 before PR #274, it reported `drift` for exactly databricks-sql-connector
 (locked 4.8.0, installed 4.4.0) and oauthlib (locked 4.0.0, installed 3.3.1),
 the same two packages that `tools/python_deps_check.py` named, with
+`requirements_digest` `current`. On the first deploy that carried it
+(2026-10-28) it reported `ok`: 137 pins checked, none drifted,
 `requirements_digest` `current`.
 
-A comment-only change did defeat the skip on the 32cc4384 deploy. If a later
-build skips anyway (for example because it starts comparing the file with
-comments stripped), the fallback is an include line
+A comment-only change defeats the skip: the 2026-10-28 deploy that added
+only the digest line reinstalled. If a future build stops honouring comment
+changes (for example because it compares the file with comments stripped),
+the fallback is an include line
 whose path carries the digest, so the parsed file changes even with comments
 removed: commit the lock under a digest-named path and point the constraint
 at it (`-c locks/uv-<digest>.lock`). That line names no package. A
