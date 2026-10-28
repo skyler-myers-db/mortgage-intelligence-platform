@@ -31,14 +31,11 @@ imports and are not flagged.
 tests/unit/test_app_runtime_closure_reads.py requires each flagged literal to
 be covered by the closure or listed, with a reason, in its reviewed allowlist.
 
-What neither this sweep nor the flow scan sees: a bare top-level name with no
-``/`` (``"docs"``) that reaches a path only through a first-party function
-parameter, a library loader (``StaticFiles(directory="docs")``,
-``jinja2.FileSystemLoader("docs")``) or any call this sweep does not know as a
-path context; a path built with ``str.format`` or ``%``; a path read from an
-environment variable with no default; and a module named by a computed
-string. Bare names are not flagged because they are everywhere in the backend
-as dependency labels (``"lakebase"``, ``"genie"``).
+This sweep follows nothing, so it flags only what is visible in the literal
+itself or in the call or operator around it: a bare top-level name with no
+``/`` (``"docs"``) passed to a first-party function is not flagged here (the
+flow scan follows it into the parameter). The residuals neither net sees are
+listed in tests/fixtures/app_runtime_reads.py.
 """
 
 from __future__ import annotations

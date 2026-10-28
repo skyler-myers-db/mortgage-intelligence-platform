@@ -10,8 +10,11 @@ imports guard the list:
 * the flow scan (tests/fixtures/app_runtime_reads.py) follows every path value
   to the consumer that reads it, and counts anything it cannot follow as a
   read of the whole subtree;
-* the literal sweep (tests/fixtures/app_runtime_literals.py) flags every
-  string literal that names a repo path, whatever flow it sits in.
+* the literal sweep (tests/fixtures/app_runtime_literals.py) follows nothing
+  and flags each string literal that names a repo path by its own text (a
+  ``/`` path, or a dotted first-party module) or by the path call or ``/``
+  join around it. A bare name such as ``"docs"`` passed through a parameter
+  is the flow scan's to follow, not the sweep's.
 
 Every read and every literal must be covered by the closure (or, for a
 literal, reviewed below with a reason), and every closure ``read`` entry must

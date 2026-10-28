@@ -337,6 +337,41 @@ def test_a_flow_the_scan_cannot_bound_is_unhandled(tmp_path: Path, shape: str, s
     assert all(use.startswith("backend/services/fake.py:") for use in result.unhandled_file_uses)
 
 
+# The documented residuals: shapes NEITHER net sees (tests/fixtures/app_runtime_reads.py,
+# tools/databricks/app_runtime_closure.py and docs/deployment.md list them). If
+# a net learns one, move it to SHAPES and drop it from those three lists.
+RESIDUALS: dict[str, str] = {
+    "library_loader": (
+        'from starlette.staticfiles import StaticFiles\nX = StaticFiles(directory="docs")'),
+    "template_loader": 'import jinja2\nX = jinja2.FileSystemLoader("docs")',
+    "str_format_from_the_cwd": (
+        'def read(n):\n    return open("{}/{}".format("docs", n)).read()'),
+    "percent_from_the_cwd": 'def read(n):\n    return open("%s/%s" % ("docs", n)).read()',
+    "env_var_without_a_default": 'X = Path(os.environ["MIP_DOCS"]).read_text()',
+    "computed_module_name": (
+        'import importlib\nX = getattr(importlib.import_module("tools" + ".fake_tool"), "thing")'),
+    "callee_reached_through_an_object": """
+        class Reader:
+            def read(self, folder):
+                return (Path(folder) / "obj.md").read_text()
+
+        READERS = {"docs": Reader()}
+
+        def load():
+            return READERS["docs"].read("docs")
+        """,
+}
+
+
+@pytest.mark.parametrize("shape", sorted(RESIDUALS))
+def test_each_documented_residual_is_still_missed_by_both_nets(tmp_path: Path, shape: str) -> None:
+    root = _tree(tmp_path, RESIDUALS[shape])
+
+    result = scan(root)
+
+    assert (result.unhandled_file_uses, _flow(result), _literals(root, result)) == ([], set(), set())
+
+
 def test_names_that_only_look_like_unfollowed_roots_are_not_reported(tmp_path: Path) -> None:
     # The control for the root rules: a local `files`, an `argv` attribute of
     # a first-party class and a `path` key are not the module roots they echo.

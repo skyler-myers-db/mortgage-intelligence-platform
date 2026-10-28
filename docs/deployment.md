@@ -129,25 +129,49 @@ reader. Two entries are optional and are never in git:
   renderer's, so the result is the same today; the difference predates the
   slim folder.
 
-Two independent static scans of `backend/` and the first-party modules it
-imports guard the closure. The flow scan (`tests/fixtures/app_runtime_reads.py`)
-follows every path value rooted in `__file__` or the working directory to the
-code that reads it; anything it cannot follow (a library call, an f-string, a
-function returned to callers it cannot see) counts as a read of the whole
-subtree under the value, so an escaping repo root can never be covered. The
-literal sweep (`tests/fixtures/app_runtime_literals.py`) flags every string
-literal that names a repo path outside `backend/`, whatever flow it sits in.
-`tests/unit/test_app_runtime_closure_reads.py` fails when either finds a read
-the closure does not cover (a literal may instead be reviewed in that test,
-with a reason), or when a closure entry is no longer read, and
-`tests/unit/test_app_runtime_read_shapes.py` pins the shapes each net catches.
-The scans are static, so they have residuals: a callee they cannot name (a
-method reached through an object, a function passed as a value) is assumed to
-read only under the path it receives, and `getattr`, `exec` and computed
-`importlib` names are invisible. No backend read uses those shapes today, and
-the readers that matter degrade silently when their file is missing
-(`county_names` returns `{}`, the Genie space-id fallback returns `None`), so
-keep new reads to the shapes the scans follow.
+Two static scans of `backend/` and the first-party modules it imports guard
+the closure. The flow scan (`tests/fixtures/app_runtime_reads.py`) follows
+every path value rooted in a bare `__file__` or the working directory, and
+every string passed into a first-party function it can name, to the code that
+reads it. Anything it cannot follow (a library call, an f-string, a function
+returned to callers it cannot see) counts as a read of the whole subtree under
+the value, so an escaping repo root can never be covered, and a root it does
+not follow at all (`backend.__file__`, `sys.modules[__name__].__file__`,
+`__spec__`, `inspect.getfile`, `sys.argv`, `sys.path`,
+`importlib.resources.files`, `pkgutil.get_data`) is reported as unhandled
+wherever it appears. The literal sweep (`tests/fixtures/app_runtime_literals.py`)
+follows nothing. It flags a string literal that names a repo path outside
+`backend/` by its own text (a `/` path such as `"docs/a.md"`, or a dotted
+string naming a tracked first-party module such as `"tools.x"`), or by the
+path call, `/` join or environment default around it. A bare name such as
+`"docs"` passed into a function is not flagged by the sweep; only the flow
+scan follows it. `tests/unit/test_app_runtime_closure_reads.py` fails when
+either finds a read the closure does not cover (a literal may instead be
+reviewed in that test, with a reason), or when a closure entry is no longer
+read, and `tests/unit/test_app_runtime_read_shapes.py` pins the shapes each
+net catches.
+
+The scans are static, and these shapes are residuals that neither sees
+(`RESIDUALS` in `tests/unit/test_app_runtime_read_shapes.py` pins each one):
+
+- a first-party callee the flow scan cannot name (a method reached through an
+  object, a function passed as a value), which is assumed to read only under
+  the path it receives;
+- a bare top-level name with no `/` handed to a library loader
+  (`StaticFiles(directory="docs")`, `jinja2.FileSystemLoader("docs")`) or to
+  any other call that is neither a path constructor nor a first-party function
+  the scan can name (bare names are not swept: the backend uses `"lakebase"`
+  and `"genie"` as dependency labels hundreds of times);
+- a working-directory path built with `str.format` or `%` from parts that
+  hold no `/` (`"{}/{}".format("docs", name)`); a `__file__` root formatted
+  into a string still counts as a read of the whole repository;
+- a path read from an environment variable with no default;
+- `getattr`, `exec`, `eval` and a module named by a computed string.
+
+No backend read uses those shapes today. The readers that matter degrade
+silently when their file is missing (`county_names` returns `{}`, the Genie
+space-id fallback returns `None`), so keep new reads to the shapes the scans
+follow.
 
 `tests/unit/test_app_runtime_closure_stage.py` holds the closure to its file
 budget: 1,300 staged files, about 130 s of download, of which at most 600 are

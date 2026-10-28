@@ -41,11 +41,22 @@ A root it does not follow is reported as unhandled wherever it is referenced
 
 A path value bound to a name nothing loads counts as read where it is bound.
 
-Known residuals, each a shape no backend module uses today: a first-party
-callee the scan cannot name (a method reached through an object, a function
-passed as a value) is assumed to read only under the path it receives, so a
-callee that walks up from it is not seen; ``getattr``, ``exec`` and
-``importlib`` with a computed name are invisible.
+Residuals neither net sees, each a shape no backend module uses today
+(tests/unit/test_app_runtime_read_shapes.py RESIDUALS pins each one):
+
+* a first-party callee the flow scan cannot name (a method reached through an
+  object, a function passed as a value) is assumed to read only under the
+  path it receives, and gets none of the strings passed to it;
+* a bare top-level name with no ``/`` (``"docs"``) handed to a library loader
+  (``StaticFiles(directory="docs")``, ``jinja2.FileSystemLoader("docs")``) or
+  to any other call that is neither a path constructor nor a first-party
+  function the scan can name. Bare names are not swept: the backend uses
+  ``"lakebase"`` and ``"genie"`` as dependency labels hundreds of times;
+* a working-directory path built with ``str.format`` or ``%`` from parts
+  that hold no ``/`` (``"{}/{}".format("docs", n)``); a ``__file__`` root
+  formatted into a string still escapes, so it counts as ``./**``;
+* a path read from an environment variable with no default;
+* ``getattr``, ``exec``, ``eval`` and a module named by a computed string.
 
 The scan is split by responsibility: app_runtime_paths.py (path values and
 pure helpers), app_runtime_flow.py (resolution and binding to a fixed point),
