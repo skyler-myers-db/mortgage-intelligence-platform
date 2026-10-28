@@ -26,6 +26,9 @@ from fastapi.testclient import TestClient
 from backend.api.audit import EXPORT_DIGEST_MISMATCH_DETAIL
 from backend.config.settings import settings
 from backend.main import app
+from backend.schemas.common import contains_pii_marker
+from backend.services import audit_fingerprint
+from backend.services.audit_entity_ids import audit_safe_letters
 from backend.services.audit_event_types import is_server_owned_audit_event_type
 from backend.services.audit_filter_sql import AUDIT_COUNT_CAP, AUDIT_FACET_LIMIT
 from backend.services.audit_fingerprint import (
@@ -372,7 +375,7 @@ def test_receipt_writes_one_audit_export_row_with_exactly_four_keys(
         "audit_explorer.export",
         "audit_ledger",
     )
-    assert row.entity_id == f"export-{fingerprint[:16]}"
+    assert row.entity_id == f"export-{audit_safe_letters(fingerprint)}"
     assert row.actor == ADMIN
     assert row.payload_json == {
         "exported_row_count": 2,
@@ -384,6 +387,30 @@ def test_receipt_writes_one_audit_export_row_with_exactly_four_keys(
     assert body["event_type"] == "AUDIT_EXPORT"
     assert (body["actor"], body["row_count"], body["filter_fingerprint"]) == (ADMIN, 2, fingerprint)
     assert body["recorded_at"]
+
+
+def test_a_fingerprint_whose_hex_reads_as_a_phone_number_still_records_the_export(
+    audit_store: InMemoryAuditStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Pre-2026-10-28 the entity was ``export-{fingerprint[:16]}``. Under this
+    # process key FILTERS fingerprint to b917f0406271903c..., whose ten-digit
+    # run reads as a phone number, so the audit-id PII guard refused the row
+    # and the download never started (422, about 1.4% of keys).
+    monkeypatch.setattr(settings, "app_env", "test")
+    monkeypatch.setattr(audit_fingerprint, "_LOCAL_KEY", hashlib.sha256(b"probe-168").digest())
+    for name in ("mip_genie_action_secret_current", "mip_genie_action_secret", "mip_genie_action_secret_previous"):
+        monkeypatch.setattr(settings, name, None)
+    fingerprint = keyed_filter_fingerprint(
+        audit_filter_fingerprint(dict(FILTERS)), domain=AUDIT_LEDGER_FINGERPRINT_DOMAIN
+    )
+    assert fingerprint is not None and contains_pii_marker(f"export-{fingerprint[:16]}"), "control: the pin must still trip"
+
+    response = client.post("/api/v1/audit/export-receipt", json=_declaration(), headers=ADMIN_HEADERS)
+
+    assert response.status_code == 200, response.text
+    [row] = audit_store.list(limit=10)
+    assert row.entity_id == f"export-{audit_safe_letters(fingerprint)}"
+    assert row.payload_json["filter_fingerprint"] == response.json()["filter_fingerprint"] == fingerprint
 
 
 @pytest.mark.parametrize(

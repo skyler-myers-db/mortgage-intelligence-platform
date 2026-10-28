@@ -559,7 +559,18 @@ def _project_genie_criteria(
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", digest):
                 raise ValueError(f"criteria.{field_name} must be a bounded digest")
             out[field_name] = digest
+    # A trusted-SQL rescue turn has no Genie conversation, and its draft writer
+    # stores that absence as exactly "" (databricks_genie_direct mints the turn
+    # with conversation_id=""). Echo it unchanged: the decision proof
+    # re-fingerprints this projection against the contract hashed over the raw
+    # stored criteria, so dropping or rejecting it leaves every trusted-SQL
+    # draft unapprovable. Only the exact empty string is absence; whitespace
+    # and every non-empty value still need the opaque-id shape.
+    if value.get("conversation_id") == "":
+        out["conversation_id"] = ""
     for field_name in ("conversation_id", "message_id"):
+        if field_name in out:
+            continue
         if field_name in value and value[field_name] is not None:
             opaque_id = str(value[field_name]).strip()
             if not _GENIE_OPAQUE_ID_PATTERN.fullmatch(opaque_id):

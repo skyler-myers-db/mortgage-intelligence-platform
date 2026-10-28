@@ -4,7 +4,7 @@ The Databricks Apps build can skip the reinstall and keeps its environment
 across deployments, so the App logs one ``dependency_lock_check`` event at
 startup. The drift rules follow tools/python_deps_check.py: walk the installed
 closure of requirements.in with markers and extras evaluated, so a lock entry
-nothing reaches (tomli on Python 3.11) is not applicable rather than drift.
+nothing reaches (tomli via coverage on Python 3.11) is not applicable rather than drift.
 """
 
 from __future__ import annotations
@@ -73,6 +73,37 @@ def test_the_real_lock_parses_into_the_deploy_preflight_pins() -> None:
     assert {p.name: p.version for p in pins} == preflight
 
 
+PLATFORMS = {
+    "linux-x86_64": {"sys_platform": "linux", "platform_system": "Linux", "platform_machine": "x86_64"},
+    "macos-arm64": {"sys_platform": "darwin", "platform_system": "Darwin", "platform_machine": "arm64"},
+}
+
+
+@pytest.mark.parametrize("platform", PLATFORMS)
+def test_the_real_lock_pins_the_closure_of_the_app_and_of_local_dev(platform: str) -> None:
+    # 2026-10-28: the App (Linux x86_64) reported unpinned 1, greenlet, which
+    # sqlalchemy requires on x86_64 but not on arm64, so a lock compiled on Apple
+    # Silicon never pinned it. Replay a clean install of the lock on each platform:
+    # every locked package at its pin, with the metadata this interpreter holds.
+    text = (ROOT / "uv.lock").read_text(encoding="utf-8")
+    pins = check.parse_lock(text)
+    locked = {pin.name: pin.version for pin in pins}
+    here = check.current_environment()
+    env = check.InstalledEnvironment(
+        markers=_markers(**PLATFORMS[platform]),
+        version=lambda name: locked.get(name) or here.version(name),
+        requires=here.requires,
+    )
+
+    result = check.compute_drift(
+        pins, check.parse_requirements((ROOT / "requirements.in").read_text(encoding="utf-8")), env
+    )
+
+    assert (result.unpinned_names, result.drifted) == ((), ())
+    assert ("greenlet" in result.not_applicable_names) is (platform == "macos-arm64")
+    assert "--python-platform x86_64-manylinux_2_28" in text.splitlines()[1]
+
+
 def test_a_universal_lock_keeps_markers_and_skips_hashes_options_and_urls() -> None:
     assert check.parse_lock(UNIVERSAL_LOCK) == [
         check.LockPin("aiohttp", "3.14.5"),
@@ -113,7 +144,7 @@ TOMLI_REQUIRES = {
 
 
 def test_a_lock_entry_excluded_by_its_parents_marker_is_not_applicable() -> None:
-    # The real lock pins tomli via coverage[toml]; on Python 3.11 nothing installs it.
+    # requirements-dev.lock pins tomli via coverage[toml]; on Python 3.11 nothing installs it.
     pins = _pins("pytest-cov==6.0.0", "coverage==7.10.0", "tomli==2.4.1")
     installed = {"pytest-cov": "6.0.0", "coverage": "7.10.0"}
 
@@ -124,6 +155,7 @@ def test_a_lock_entry_excluded_by_its_parents_marker_is_not_applicable() -> None
     )
 
     assert (on_311.outcome, on_311.pins_checked, on_311.not_applicable) == ("ok", 2, 1)
+    assert on_311.not_applicable_names == ("tomli",)
     assert on_310.drifted == (check.Drift("tomli", "2.4.1", None),)
 
 
@@ -141,6 +173,9 @@ def test_a_pin_line_marker_selects_the_pin_for_this_interpreter(reverse: bool) -
     assert result.drifted == (check.Drift("numpy", "1.26.4", "2.1.0"),)
     # numpy 2.1.0 and tomli by marker; aiohttp and typing-extensions unreached.
     assert (result.not_applicable, result.unpinned) == (4, 1)
+    # Lines are counted, packages named: numpy's 1.26.4 line applied, so it is not named.
+    assert result.not_applicable_names == ("aiohttp", "tomli", "typing-extensions")
+    assert result.unpinned_names == ("tomli",)
 
 
 def test_platform_only_dependencies_follow_this_platform() -> None:
@@ -156,6 +191,7 @@ def test_platform_only_dependencies_follow_this_platform() -> None:
     windows = check.compute_drift(pins, roots, _env(installed, requires, sys_platform="win32"))
 
     assert (linux.outcome, linux.pins_checked, linux.not_applicable) == ("ok", 2, 2)
+    assert linux.not_applicable_names == ("colorama", "pywin32")
     assert windows.drifted == (
         check.Drift("colorama", "0.4.6", None),
         check.Drift("pywin32", "311", None),
@@ -167,7 +203,7 @@ def test_a_reached_package_the_lock_does_not_pin_is_counted_not_drift() -> None:
 
     result = check.compute_drift(_pins("sqlalchemy==2.0"), ["sqlalchemy"], env)
 
-    assert (result.outcome, result.unpinned) == ("ok", 1)
+    assert (result.outcome, result.unpinned, result.unpinned_names) == ("ok", 1, ("greenlet",))
 
 
 def test_missing_oversized_or_empty_inputs_are_lock_unreadable(
@@ -318,9 +354,36 @@ def test_the_event_carries_the_counts_and_the_drift(
     assert (event.levelno, event.__dict__["mip_outcome"]) == (logging.WARNING, "drift")
     assert extras["pins_checked"] == 2 and extras["drifted_count"] == 1
     assert extras["drifted"] == [{"name": "oauthlib", "locked": "4.0.0", "installed": "3.3.1"}]
+    assert (extras["unpinned"], extras["unpinned_names"]) == (0, [])
+    assert (extras["not_applicable"], extras["not_applicable_names"]) == (0, [])
     assert (extras["python"], extras["lock_python"]) == ("3.11", "3.11")
     assert extras["requirements_digest"] == "current"
     assert extras["remedy"] == check.REMEDY_REINSTALL
+
+
+def test_the_event_names_unpinned_and_not_applicable_sorted_and_bounded(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    extra = check.MAX_LOGGED_NAMES + 5
+    unpinned = [f"dep-{i:02d}" for i in reversed(range(extra))]
+    unreached = [f"old-{i:02d}" for i in reversed(range(extra))]
+    lock = HEADER + "".join(f"{name}==1.0\n" for name in ["fastapi", *unreached])
+    (tmp_path / "uv.lock").write_text(lock, encoding="utf-8")
+    (tmp_path / "requirements.in").write_text("fastapi\n", encoding="utf-8")
+    env = _env({"fastapi": "1.0", **dict.fromkeys(unpinned, "2.0")}, {"fastapi": unpinned})
+
+    with caplog.at_level(logging.INFO, logger="mip-runtime"):
+        result = check.log_dependency_lock_check(
+            lock_file=tmp_path / "uv.lock", requirements_in=tmp_path / "requirements.in",
+            requirements_txt=tmp_path / "requirements.txt", environment=env,
+        )
+
+    [event] = _events(caplog)
+    extras = event.__dict__["mip_extras"]
+    assert result.unpinned_names == tuple(sorted(unpinned))
+    assert (extras["unpinned"], extras["not_applicable"]) == (extra, extra)
+    assert extras["unpinned_names"] == sorted(unpinned)[: check.MAX_LOGGED_NAMES]
+    assert extras["not_applicable_names"] == sorted(unreached)[: check.MAX_LOGGED_NAMES]
 
 
 def test_the_event_never_raises(caplog: pytest.LogCaptureFixture) -> None:

@@ -8,7 +8,7 @@ PYTHON ?= $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo pytho
 
 setup:
 	python3 -m venv .venv
-	. .venv/bin/activate && pip install -r requirements.txt
+	. .venv/bin/activate && pip install -r requirements-dev.txt
 	npm --prefix frontend install
 
 dev-api:

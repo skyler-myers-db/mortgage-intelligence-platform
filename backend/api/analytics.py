@@ -46,12 +46,19 @@ FunnelStoreDep = Annotated[ApprovalFunnelStore, Depends(get_approval_funnel_stor
 LoanOfficerStateDep = Annotated[LoanOfficerStateStore, Depends(get_loan_officer_state_store)]
 
 _ALLOWED_SEGMENTS = set(get_args(SegmentCode))
+# Exactly the Analytics Signal menu (frontend/src/routes/analytics.lib.ts
+# SIGNAL_FILTERS), every value from mip.gold.evidence_events' signal_type
+# vocabulary; tests/unit/test_analytics_signal_vocabulary_contract.py pins both.
+# product_type and origination_channel are explainability-only and not on the
+# menu, so they stay out.
 _ALLOWED_SIGNAL_TYPES = {
     "absentee_mailing",
     "competitor_lien",
     "corporate_owner",
     "equity",
     "foreclosure_stage",
+    "heloc_propensity",
+    "listing",
     "loan_type_fit",
     "market_trend",
     "multi_property",
@@ -59,6 +66,7 @@ _ALLOWED_SIGNAL_TYPES = {
     "recent_payoff",
     "recent_refi",
     "recent_sale",
+    "refi_propensity",
 }
 _ALLOWED_LENDER_RELATIONSHIPS = {
     "Current customer",

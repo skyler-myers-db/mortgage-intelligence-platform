@@ -1,3 +1,3 @@
-# deps-digest: uv.lock sha256=6403444dd6d3af4a32ae0115ef42df67d386300712225d98188bd42c8b6bc482 requirements.in sha256=843c91627ffcd8f593b5fece6558cd250ea11b4bfbe1fc068ecf12787b327f09
+# deps-digest: uv.lock sha256=1655f7763e95189252f30ed11d2d0eabc7c4b089fa2b77c7df3ad6dab7dad7f3 requirements.in sha256=14ea915af0e4b3542ff4e67c4affaa34f99977a7fdd9255bba470dab38b3bd3e
 -c uv.lock
 -r requirements.in

@@ -2,8 +2,9 @@
 
 Audit quality-v2 / stack-10, W5e lane w5-deps-report. Standard library only.
 ``python -m tools.deps_report --json OUT --markdown OUT`` reads the exact pins
-(frontend/package.json, requirements.in + uv.lock), the advisory feeds (npm
-audit over the lock, pip-audit over uv.lock), the literal tool pins in
+(frontend/package.json, requirements.in + uv.lock, requirements-dev.in +
+requirements-dev.lock), the advisory feeds (npm audit over the lock, pip-audit
+over both Python locks), the literal tool pins in
 .github/workflows/*.yml, the dated waivers (ci.yml review dates, the file-size
 allowlist, tools/dependency_holds.json) and, informationally, the live
 release gate. It exits 1 only on a gate signal, 2 when a source could not be

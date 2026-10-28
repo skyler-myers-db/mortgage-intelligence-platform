@@ -97,7 +97,32 @@ def test_range_pinned_direct_requirements_drift_at_their_locked_versions(tmp_pat
     ], "a transitive lock entry (oauthlib) and an unresolved range are never listed"
     assert fetched == ["databricks-sdk", "gitpython", "psycopg"]
     real = python.ranged_names(python.REQUIREMENTS_IN) - set(python.pins(python.REQUIREMENTS_IN))
-    assert {"gitpython", "pyasn1", "aiohttp", "pyarrow", "sqlparse", "thrift", "psycopg"} <= real
+    assert {"gitpython", "pyasn1", "aiohttp", "pyarrow", "sqlparse", "psycopg"} <= real
+
+
+def test_the_app_and_dev_sets_both_report_and_a_shared_name_reports_once(tmp_path: Path) -> None:
+    app_in, app_lock, dev_in, dev_lock = (tmp_path / name for name in ("r.in", "r.lock", "d.in", "d.lock"))
+    app_in.write_text("fastapi==1.0\n")
+    app_lock.write_text("fastapi==1.0\npackaging==25.0\n")
+    dev_in.write_text("pytest==9.0.3\npackaging>=24\n")
+    dev_lock.write_text("packaging==25.0\npluggy==1.6.0\npytest==9.0.3\n")
+
+    rows = python.all_package_rows(lambda name: {"info": {"version": "9.9.9"}, "urls": []}, [], [(app_in, app_lock), (dev_in, dev_lock)])
+
+    assert [(row["package"], row["pinned"]) for row in rows] == [("fastapi", "1.0"), ("packaging", "25.0"), ("pytest", "9.0.3")]
+    # The real dev input lists the CI tools, and the App's input lists none of them.
+    dev, app = set(python.pins(python.DEV_REQUIREMENTS_IN)), set(python.pins(python.REQUIREMENTS_IN))
+    assert {"pytest", "ruff", "mypy", "hypothesis"} <= dev and not dev & app
+
+
+def test_pip_audit_reads_both_python_locks(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[list[str]] = []
+    monkeypatch.setattr(advisories, "_json_command", lambda argv, source: seen.append(argv) or {})
+
+    advisories.run_pip_audit()
+
+    assert seen == [["pip-audit", "-r", "uv.lock", "-r", "requirements-dev.lock", "--no-deps", "--disable-pip", "--strict", "-f", "json"]]
+    assert all((REPO_ROOT / name).is_file() for name in ("uv.lock", "requirements-dev.lock"))
 
 
 def test_the_holds_file_is_schema_checked(tmp_path: Path) -> None:

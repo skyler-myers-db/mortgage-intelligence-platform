@@ -139,7 +139,7 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
           npm --prefix frontend ci
       - name: Verify Databricks CLI
         run: databricks --version
@@ -525,7 +525,7 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
           if [ -f frontend/package-lock.json ]; then
             npm --prefix frontend ci
           else
@@ -1130,7 +1130,7 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
       - name: Export Genie live env
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
@@ -1278,10 +1278,7 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          # Hypothesis is a `.[fuzz]` extra; install it explicitly here
-          # in case requirements.txt drops the pin.
-          pip install "hypothesis>=6.123,<7"
+          pip install -r requirements-dev.txt
       - name: Export deep Genie live env
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}

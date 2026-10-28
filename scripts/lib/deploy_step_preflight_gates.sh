@@ -32,8 +32,8 @@ echo "  target:     ${TARGET}"
 echo "  dry-run:    ${DRY_RUN}"
 
 # >>> deploy interpreter pins: check >>>
-# A drifted mlflow, databricks-sdk or databricks-sql-connector registers and
-# serves a stack CI never proved (full_deploy_readiness.md 3.12), so the
+# A drifted mlflow or databricks-sdk registers and serves a stack CI never
+# proved (full_deploy_readiness.md 3.12), so the
 # interpreter's installed closure must equal the requirements.txt pins
 # (uv.lock). tools/python_deps_check.py exits 0 pinned, 10 drift (it prints the
 # remedy); anything else is a hard error. A dry run reports and continues; a
@@ -64,11 +64,10 @@ fi
 
 # >>> requirements digest: check >>>
 # On 2026-10-28 the Databricks Apps build skipped the reinstall for a lock bump
-# that left requirements.txt unchanged, and the App kept its old wheels. That
-# it reinstalls only when the bytes of requirements.txt change, never following
-# the -c uv.lock / -r requirements.in includes, is inferred from that build log
-# and is to be confirmed by the first deploy after the change, so a lock bump
-# needs a restamp (docs/deployment.md, "App Python dependencies: the
+# that left requirements.txt unchanged, and the App kept its old wheels. It
+# reinstalls only when the bytes of requirements.txt change, never following
+# the -c uv.lock / -r requirements.in includes (confirmed the same day by the
+# first deploy carrying the digest line), so a lock bump needs a restamp (docs/deployment.md, "App Python dependencies: the
 # deps-digest line").
 # tools/requirements_digest.py exits 0 current and 1 stale (it prints the
 # remedy); anything else is a hard error. A dry run reports and continues; a

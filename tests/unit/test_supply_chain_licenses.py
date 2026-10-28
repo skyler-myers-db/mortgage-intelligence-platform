@@ -126,8 +126,6 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert "-r requirements.txt" not in lock
     assert "-r requirements.in" in lock
     assert "uvicorn[standard]==0.47.0" in requirements_in
-    assert "databricks-sql-connector==4.8.0" in requirements_in
-    assert "oauthlib>=4.0.0,<5" in requirements_in
     assert "boto3==1.43.50" in requirements_in
     assert "pg8000==1.31.5" in requirements_in
     assert "gitpython>=3.2.1,<4" in requirements_in
@@ -135,7 +133,6 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert "aiohttp>=3.14.4" in requirements_in
     assert "pyasn1>=0.6.4,<1" in requirements_in
     assert "sqlparse>=0.6.0,<1" in requirements_in
-    assert "thrift>=0.24.0,<0.25" in requirements_in
     assert "multidict==6.9.1" in requirements_in
     assert "werkzeug==3.1.9" in requirements_in
     assert "mako==1.4.2" in requirements_in
@@ -146,12 +143,10 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert "opentelemetry-api>=1.45.1,<2" in requirements_in
     assert "opentelemetry-sdk>=1.45.1,<2" in requirements_in
     assert "opentelemetry-exporter-otlp>=1.45.1,<2" in requirements_in
+    assert "opentelemetry-instrumentation-logging>=0.66b1,<1" in requirements_in
     for required_pin in (
         "boto3==1.43.50",
         "uvicorn==0.47.0",
-        "databricks-sql-connector==4.8.0",
-        "oauthlib==4.0.0",
-        "pyjwt==2.15.0",
         "urllib3==2.8.0",
         "multidict==6.9.1",
         "werkzeug==3.1.9",
@@ -168,13 +163,21 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
         "opentelemetry-api==1.45.1",
         "opentelemetry-sdk==1.45.1",
         "opentelemetry-exporter-otlp==1.45.1",
+        "opentelemetry-instrumentation-logging==0.66b1",
         "certifi==2026.10.23",
         "graphql-core==3.2.12",
         "pillow==13.0.0",
         "sqlparse==0.6.0",
-        "thrift==0.24.0",
     ):
         assert required_pin in lock
+    # The App image is runtime-only (2026-10-28): the unused SQL connector
+    # closure is gone, and the test tools moved to requirements-dev.in.
+    for absent in (
+        "databricks-sql-connector", "oauthlib", "thrift", "pyjwt", "lz4", "pybreaker",
+        "openpyxl", "pytest", "pytest-cov", "pytest-xdist", "ruff", "mypy", "hypothesis",
+    ):
+        assert not re.search(rf"^{absent}\b", requirements_in, re.MULTILINE), absent
+        assert not re.search(rf"^{absent}==", lock, re.MULTILINE), absent
 
     deploy = deploy_entrypoint_text()
     assert "import boto3, mlflow" in deploy
@@ -239,7 +242,7 @@ def test_every_ci_audit_ignore_is_named_in_the_supply_chain_audit_doc() -> None:
 
     ignored = re.findall(r"--ignore-vuln\s+([A-Za-z0-9-]+)", ci)
     # Non-vacuity: the audited run line exists even when no ignore is left.
-    assert re.search(r"^\s*run: pip-audit -r requirements\.txt --strict\b", ci, re.MULTILINE)
+    assert re.search(r"^\s*run: pip-audit -r requirements-dev\.txt --strict\b", ci, re.MULTILINE)
     for advisory in ignored:
         assert advisory in doc, f"{advisory} is ignored in ci.yml but not named in the doc"
     for review_date in re.findall(r"Review date: (\d{4}-\d{2}-\d{2})", ci):

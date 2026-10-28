@@ -40,6 +40,9 @@ import {
   archiveLiveCampaign,
   reconcileGenieCampaignAction,
 } from '../support/liveCampaignProof';
+import { ADDRESSABLE_POPULATION_KPI_LABEL } from '../../src/lib/populationLabels';
+import { SIGNAL_TYPE_TO_OPTION } from '../../src/routes/analytics.lib';
+import type { SignalAnalyticsResponse } from '../../src/types';
 import { EVIDENCE_DRAWER, openEvidenceDrawer } from './helpers';
 import {
   ZIP_STAGE,
@@ -385,7 +388,7 @@ async function clickSegmentCard(page: Page, label: string) {
 }
 
 async function chooseFilter(page: Page, label: string, value: string) {
-  const trigger = page.getByRole('button', { name: new RegExp(`^${escapeRegExp(label)}:`) });
+  const trigger = page.getByRole('combobox', { name: new RegExp(`^${escapeRegExp(label)}:`) });
   await expect(trigger, `filter ${label} should be ready`).toBeVisible({ timeout: 45_000 });
   await trigger.click();
   await page.getByRole('option', { name: value, exact: true }).click();
@@ -986,7 +989,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // mip.semantics.portfolio_headline_metric_view and its drawer lineage
     // cites that view plus an underlying row asset.
     const kpiChips: Array<[string | RegExp, string]> = [
-      ['Marketable population', 'Marketable population'],
+      [ADDRESSABLE_POPULATION_KPI_LABEL, ADDRESSABLE_POPULATION_KPI_LABEL],
       [/Rate \+ equity screen/, 'Rate + equity screen'],
       ['Opportunity score', 'Opportunity score'],
       [/How the offer path was selected/, 'How the offer path was selected'],
@@ -1664,8 +1667,62 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page.getByText(/no write-back to customer systems/i)).toBeVisible();
   });
 
-  test('analytics: multi-select filters drive API queries and URL state', async ({ page }) => {
-    test.setTimeout(90_000);
+  test('analytics: multi-select filters drive API queries and URL state', async ({ page, request }) => {
+    test.setTimeout(180_000);
+
+    // Evidence rows carry their source's own date, not the gold run's: equity
+    // and lien signals keep the Cotality refresh-batch date (2026-08-09 on the
+    // dev book), while listing evidence carries its own MLS status/listing
+    // date and recent refi/payoff/sale their event dates, so which signals are
+    // empty over a window is data that moves with the calendar, never a
+    // constant. Ask the Signals read the UI is about to make (same filters,
+    // every signal) which menu signals hold evidence, and drive the UI with
+    // those. Every menu choice is an accepted API filter
+    // (tests/unit/test_analytics_signal_vocabulary_contract.py), so the whole
+    // menu is in play.
+    const signalsWithEvidence = async (days: number): Promise<string[]> => {
+      const query = `states=IL,CA&segment_codes=itm,equity&segment_mode=any&days=${days}`;
+      const resp = await request.get(`${API_URL}/api/v1/analytics/signals?${query}`, {
+        headers: AUTH_HEADERS,
+        timeout: 120_000,
+      });
+      expect(resp.status(), `GET /api/v1/analytics/signals?${query}`).toBe(200);
+      const body = (await resp.json()) as SignalAnalyticsResponse;
+      return [...new Set(body.evidence_by_signal.map((row) => row.signal_type))].filter(
+        (signalType) => signalType in SIGNAL_TYPE_TO_OPTION,
+      );
+    };
+    const lastWeek = new Set(await signalsWithEvidence(7));
+    const lastQuarter = await signalsWithEvidence(90);
+    expect(lastQuarter, 'a selectable signal needs evidence in the last 90 days, the widest window').not.toHaveLength(0);
+    // Signals with evidence first, so the pair's read has rows; the rest of
+    // the menu only pads the pair when a single signal has evidence.
+    const signalsByEvidence = [...new Set([...lastQuarter, ...Object.keys(SIGNAL_TYPE_TO_OPTION)])];
+    const shownSignals = signalsByEvidence.slice(0, 2);
+    // 7 and 90 are the windows that reach the URL (30 is the default and is
+    // omitted), so either proves the window is forwarded; take the narrower
+    // one that still holds evidence for the pair and, unfiltered, a signal
+    // outside it. Without that outsider the in-pair check below passes even
+    // when the server ignores signal_types, because every row is already one
+    // of the pair.
+    const holdsSignalOutsidePair = (signals: Iterable<string>) =>
+      [...signals].some((signalType) => !shownSignals.includes(signalType));
+    const windowDays =
+      shownSignals.some((signalType) => lastWeek.has(signalType)) && holdsSignalOutsidePair(lastWeek) ? 7 : 90;
+    expect(
+      holdsSignalOutsidePair(windowDays === 7 ? lastWeek : lastQuarter),
+      `the unfiltered ${windowDays}-day read must hold a signal outside ${shownSignals.join(',')}, or the server-filter check proves nothing`,
+    ).toBe(true);
+    // A signal the 7-day probe returned no evidence for (the probe's
+    // evidence_by_signal is unlimited, so absence there is a measured zero,
+    // whatever date the source stamps), preferring one the 90-day window does
+    // hold, so the empty state below is the window's doing.
+    const emptySignal = signalsByEvidence.find((signalType) => !lastWeek.has(signalType)) ?? '';
+    expect(emptySignal, 'need a selectable signal with no evidence in the last 7 days').not.toBe('');
+    test.info().annotations.push({
+      type: 'live signal choice',
+      description: `${shownSignals.join(',')} over ${windowDays} days; empty proof ${emptySignal} over 7 days`,
+    });
 
     await gotoApp(page, '/analytics');
     await expect(page.getByRole('heading', { name: 'Analytics', exact: true })).toBeVisible({ timeout: 30_000 });
@@ -1709,34 +1766,66 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 
     await page.getByRole('tab', { name: /Signals/i }).click();
     await page.getByRole('button', { name: /^Signal:/i }).click();
-    await page.getByRole('option', { name: 'Equity', exact: true }).click();
-    await page.getByRole('option', { name: 'Rate spread', exact: true }).click();
+    for (const signalType of shownSignals) {
+      await page.getByRole('option', { name: SIGNAL_TYPE_TO_OPTION[signalType], exact: true }).click();
+    }
     await page.keyboard.press('Escape');
     await expect(page.getByRole('button', { name: /Signal: 2 selected/i })).toBeVisible();
 
-    const signalResponse = page.waitForResponse((response) => {
+    const isSignalRead = (response: { url(): string }, signalTypes: string, days: number) => {
       if (!response.url().includes('/api/v1/analytics/signals')) return false;
       const params = new URL(response.url()).searchParams;
       return (
         params.get('states') === 'IL,CA' &&
         params.get('segment_codes') === 'itm,equity' &&
         params.get('segment_mode') === 'any' &&
-        params.get('signal_types') === 'equity,rate_spread' &&
-        params.get('days') === '7'
+        params.get('signal_types') === signalTypes &&
+        params.get('days') === String(days)
       );
-    });
+    };
+    const signalResponse = page.waitForResponse((response) =>
+      isSignalRead(response, shownSignals.join(','), windowDays),
+    );
     await page.getByRole('combobox', { name: /^Window:/i }).click();
-    await page.getByRole('option', { name: 'Last 7 days', exact: true }).click();
-    await signalResponse;
+    await page.getByRole('option', { name: `Last ${windowDays} days`, exact: true }).click();
+    const signalRead = await signalResponse;
+    // A menu choice the API rejects is a 422 and an errored tab.
+    expect(signalRead.status(), `Signals read for ${shownSignals.join(',')}`).toBe(200);
+    const signalBody = (await signalRead.json()) as SignalAnalyticsResponse;
+    // The read is filtered server-side, not just labelled: it has rows, and
+    // every row is one of the two selected signals.
+    expect(signalBody.evidence_by_signal.length).toBeGreaterThan(0);
+    for (const row of signalBody.evidence_by_signal) {
+      expect(shownSignals).toContain(row.signal_type);
+    }
 
     const url = new URL(page.url());
     expect(url.pathname).toBe('/analytics');
     expect(url.searchParams.get('states')).toBe('IL,CA');
     expect(url.searchParams.get('segment_codes')).toBe('itm,equity');
     expect(url.searchParams.get('segment_mode')).toBe('any');
-    expect(url.searchParams.get('signal_types')).toBe('equity,rate_spread');
-    expect(url.searchParams.get('days')).toBe('7');
+    expect(url.searchParams.get('signal_types')).toBe(shownSignals.join(','));
+    expect(url.searchParams.get('days')).toBe(String(windowDays));
     await expect(page.getByText(/Evidence by Signal Type/i)).toBeVisible({ timeout: 30_000 });
+
+    // The same URL state with a window the probe proves empty replays into
+    // the measured-zero empty state, with its recovery, not a blank tab.
+    url.searchParams.set('signal_types', emptySignal);
+    url.searchParams.set('days', '7');
+    const emptyResponse = page.waitForResponse((response) => isSignalRead(response, emptySignal, 7), {
+      timeout: 120_000,
+    });
+    await gotoApp(page, `${url.pathname}${url.search}`);
+    const emptyRead = await emptyResponse;
+    expect(emptyRead.status(), `Signals read for ${emptySignal}`).toBe(200);
+    const emptyBody = (await emptyRead.json()) as SignalAnalyticsResponse;
+    expect(emptyBody.evidence_by_signal).toEqual([]);
+    expect(emptyBody.evidence_daily).toEqual([]);
+    expect(emptyBody.evidence_examples).toEqual([]);
+    const emptyState = page.getByRole('status').filter({ hasText: 'No borrowers match these filters.' });
+    await expect(emptyState).toBeVisible({ timeout: 30_000 });
+    await expect(emptyState.getByRole('button', { name: 'Clear filters' })).toBeVisible();
+    await expect(page.getByText(/Evidence by Signal Type/i)).toHaveCount(0);
   });
 
   test('lead-queue: rows render, row expand opens inline dossier preview', async ({ page }) => {

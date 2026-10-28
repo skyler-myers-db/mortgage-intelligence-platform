@@ -63,8 +63,8 @@ required entry, an ``--out`` inside ``--dist`` or around it
 (compared by file identity, so a symlink, ``..``, another letter case or a
 firmlink cannot hide it), a requirements.txt whose deps-digest line does
 not match uv.lock and requirements.in at REF (the Apps build can then skip
-the reinstall: observed 2026-10-28, its byte comparison inferred and not yet
-confirmed) and a non-empty ``--out``. It then copies the dist into a
+the reinstall: observed and confirmed 2026-10-28) and a non-empty
+``--out``. It then copies the dist into a
 temporary sibling of ``--out``, reviews that copy (the copy is what ships),
 refuses a folder over its file budgets, adds the tracked files and renames
 the folder into place, so any refusal or failure leaves ``--out`` as it was.
