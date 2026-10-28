@@ -8,8 +8,11 @@ the release-id CLI turns into exit 2.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import threading
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -208,8 +211,26 @@ def test_manifest_entries_refuse_anything_but_visible_regular_files(tmp_path: Pa
         alias.symlink_to(folder, target_is_directory=True)
         folder = alias
 
-    with pytest.raises(contract.ReleaseContractError):
+    fifo = folder / "pipe" if kind == "fifo" else None
+    with _fifo_writer(fifo), pytest.raises(contract.ReleaseContractError):
         contract.manifest_entries(folder)
+
+
+@contextlib.contextmanager
+def _fifo_writer(fifo: Path | None) -> Iterator[None]:
+    """Give a FIFO a writer that closes at once, so code that wrongly opens it
+    reads EOF and fails the test instead of blocking it forever."""
+    if fifo is None:
+        yield
+        return
+    writer = threading.Thread(target=lambda: os.close(os.open(fifo, os.O_WRONLY)), daemon=True)
+    writer.start()
+    try:
+        yield
+    finally:
+        os.close(os.open(fifo, os.O_RDONLY | os.O_NONBLOCK))  # release a writer still waiting
+        writer.join(timeout=10)
+        assert not writer.is_alive()
 
 
 def test_the_release_id_is_deterministic_and_moves_with_one_byte_or_one_path(tmp_path: Path) -> None:
