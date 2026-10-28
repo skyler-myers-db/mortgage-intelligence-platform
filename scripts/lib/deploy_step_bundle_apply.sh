@@ -97,6 +97,40 @@ else
 fi
 run npm --prefix frontend run build
 
+# >>> app release source: stage >>>
+# The App never runs from the bundle files root: it only grows, and the App
+# compute re-downloads every source file inside its 10-minute start window.
+# Stage the runtime closure at the deploy commit (git archive, tracked files
+# only) plus the dist just built into one per-release folder, with its
+# manifest beside it (tools/databricks/app_runtime_closure.py). Step 5
+# publishes it create-only. --require-brotli-check refuses a host with no .br
+# checker rather than quietly shipping gzip only. The stage root is
+# gitignored and outside the exact-source gate; only a real run clears it.
+# The release id is read back from the manifest, so a refusal there stops the
+# deploy like the build above; a dry run uses a visibly inert id.
+step "stage the App runtime closure at ${SOURCE_GIT_SHA:0:12} as a per-release source folder"
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  rm -rf -- "${APP_RELEASE_STAGE_ROOT:?}"
+fi
+run "$PYTHON" -m tools.databricks.app_runtime_closure stage \
+  --ref "$SOURCE_GIT_SHA" \
+  --dist frontend/dist \
+  --out "$APP_RELEASE_STAGE_ROOT/source" \
+  --manifest-out "$APP_RELEASE_MANIFEST" \
+  --require-brotli-check
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  APP_RELEASE_ID="$("$PYTHON" -m tools.databricks.app_release_contract release-id \
+    --manifest "$APP_RELEASE_MANIFEST" --expected-commit "$SOURCE_GIT_SHA")"
+  if [[ ! "$APP_RELEASE_ID" =~ ^${SOURCE_GIT_SHA:0:12}-[0-9a-f]{12}$ ]]; then
+    echo "${RED}[deploy] the staged App release id is not <commit12>-<digest12> for ${SOURCE_GIT_SHA}.${RST}" >&2
+    exit 2
+  fi
+else
+  APP_RELEASE_ID="${SOURCE_GIT_SHA:0:12}-dry-run"
+fi
+echo "  app release: ${APP_RELEASE_ID}"
+# <<< app release source: stage <<<
+
 # -----------------------------------------------------------------------------
 # Step 2: validate bundle
 # -----------------------------------------------------------------------------

@@ -6,14 +6,16 @@
 #
 # What it does, in order, idempotently:
 #   0.  Preflight: check .env.local exists + `databricks` CLI + the venv.
-#   1.  Build the frontend (frontend/dist/** is uploaded with the bundle).
+#   1.  Build the frontend, then stage the App runtime closure at the deploy
+#       commit plus that dist as one per-release source folder + manifest.
 #   2.  Validate the direct-deployment bundle under `-t dev`, with .env.local mapped to
 #       BUNDLE_VAR_* via tools/databricks/bundle_env.py.
 #   3.  Show the direct deployment plan.
 #   4.  Deploy non-App bundle resources, then apply source-free App resource
 #       bindings (first install creates the App stopped with --no-compute).
 #   5.  Migrate Lakebase (idempotent schema.sql + seed_campaigns.sql).
-#   6.  Promote the uploaded bundle source only after migration/grant proof.
+#   6.  Publish that folder to <bundle root>/app-src/<release id> (create-only,
+#       byte-verified) and promote it only after migration/grant proof.
 #   7.  Seed + refresh silver (FRED MORTGAGE30US + Cotality share).
 #   8.  Refresh gold (CTAS chain) — the last task in the chain is
 #       `refresh_semantics_views`, which lands the four mip.semantics.*
@@ -140,7 +142,7 @@ while [[ $# -gt 0 ]]; do
       fi
       TARGET_SEEN=1; shift ;;
     -h|--help)
-      sed -n '2,60p' "$0"
+      sed -n '2,62p' "$0"
       exit 0
       ;;
     *)
@@ -408,6 +410,15 @@ FIRST_INSTALL_APP_CLIENT_ID=""
 FIRST_INSTALL_APP_SCIM_ID=""
 FIRST_INSTALL_JOURNAL_ENV=""
 FIRST_INSTALL_MARKED_PAYLOAD=""
+# Per-release App source (tools/databricks/app_release_contract.py). Step 1
+# stages the closure under this gitignored root, outside the exact-source
+# gate; step 5 publishes it as <bundle root>/app-src/<APP_RELEASE_ID>, the
+# only folder an activation names. APP_BUNDLE_FILES_PATH is the bundle files
+# root (workspace.file_path) the release root is derived from.
+APP_RELEASE_STAGE_ROOT=".databricks/app-release"
+APP_RELEASE_MANIFEST="$APP_RELEASE_STAGE_ROOT/manifest.json"
+APP_RELEASE_ID=""
+APP_BUNDLE_FILES_PATH=""
 
 # The App-access, App-release, first-install, and identity lifecycle functions
 # are sliced verbatim into scripts/lib/deploy_*_lifecycle.sh and sourced here
@@ -471,7 +482,7 @@ trap restore_rendered_sql_fail_closed EXIT
 . "$REPO_ROOT/scripts/lib/deploy_step_lakebase_and_uc_grants.sh"
 
 # -----------------------------------------------------------------------------
-# Step 5: promote uploaded source to the running Databricks App
+# Step 5: publish the per-release App source and promote it to the App
 # -----------------------------------------------------------------------------
 # shellcheck source=scripts/lib/deploy_step_app_promotion_and_refresh.sh
 . "$REPO_ROOT/scripts/lib/deploy_step_app_promotion_and_refresh.sh"

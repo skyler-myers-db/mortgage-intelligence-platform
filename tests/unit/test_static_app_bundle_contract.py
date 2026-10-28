@@ -42,6 +42,12 @@ def test_every_snapshot_converges_static_source_immediately_before_activation() 
         '  assert_expected_app_identity "$APP_NAME"\n'
         '  run "$PYTHON" -m tools.databricks.converge_static_app_source \\\n'
         '    --source-code-path "$APP_SOURCE_PATH" \\\n'
+        # The per-release folder is re-checked against its manifest before
+        # every activation (tools/databricks/converge_static_app_source.py
+        # release mode); the identity arguments stay last.
+        '    --release-id "$APP_RELEASE_ID" \\\n'
+        '    --release-manifest "$APP_RELEASE_MANIFEST" \\\n'
+        '    --expected-git-sha "$APP_GIT_SHA" \\\n'
         '    --expected-principal "$APP_CURRENT_USER" \\\n'
         '    --expected-target "$TARGET" \\\n'
         # W5e (D-platform-process-b step 7): the resolved bundle root leaf; it
@@ -49,6 +55,21 @@ def test_every_snapshot_converges_static_source_immediately_before_activation() 
         '    --expected-root-leaf "${MIP_BUNDLE_ROOT_LEAF_RESOLVED:-$TARGET}"\n'
         '  run databricks apps deploy "$APP_NAME"'
     ) in function_body
+
+
+def test_the_release_folder_is_staged_after_the_build_and_published_before_activation() -> None:
+    deploy = deploy_entrypoint_text()
+    stage = '"$PYTHON" -m tools.databricks.app_runtime_closure stage'
+    publish = '"$PYTHON" -m tools.databricks.app_release_source publish'
+
+    assert deploy.count(stage) == 1 and deploy.count(publish) == 1
+    assert (
+        deploy.index("run npm --prefix frontend run build")
+        < deploy.index(stage)
+        < deploy.index('run "$PYTHON" -m tools.databricks.bundle_env validate -t "$TARGET"')
+    )
+    assert deploy.index(publish) < deploy.index('deploy_app_snapshot "')
+    assert deploy.index("deploy_app_snapshot() {") < deploy.index(publish)
 
 
 def test_lakebase_recovery_watches_the_exact_created_dev_workflow() -> None:
