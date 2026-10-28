@@ -230,19 +230,36 @@ It requires that snapshot to hold exactly the manifest's files and compares
 every sha256: the bytes the running App uses. It is not wired into
 `scripts/deploy.sh`.
 
-**Not yet observed live** (each fails closed): that a workspace AUTO import
-keeps every closure file type, `.html` included, as a FILE (publish's listing
-refuses anything else); that the workspace list API returns `/Users/...` paths
-(publish, converge and prune refuse or ignore any other shape); that a
-deployment's `/src/` snapshot holds exactly the manifest's files; that an
-Apps deployment writes nothing into its `source_code_path` folder (if it did,
-the exact-listing converge before the second and third activations would
-refuse every deploy: signed blue restored on an upgrade, a first install
-stopped and quiesced); that the step-5 bundle summary's
-`resources.apps.mip_app.source_code_path` equals `workspace.file_path` on the
-CLI the run uses (step 5 requires it); and how `default_source_code_path`
-behaves (a source-free App resource payload may not carry it). The first
-governed `deploy-dev.yml` run on the CI install is the proof.
+**Observed on the emergency path** (dev App, 2026-10-28). One deployment
+from a slim release folder uploaded with `databricks workspace import-dir`
+(the recipe below, not publish's SDK upload) was read back after it
+SUCCEEDED with this section's own `remote_files`, `compare_listing` and
+`verify_hashes`, against the manifest `stage --manifest-out` writes for the
+same commit and dist (its staged folder equals the uploaded one byte for
+byte, 1,177 files):
+
+- the workspace list API returned `/Users/...` paths for every object;
+- every object, both `.html` files included, was a FILE;
+- after the activation the release folder still held exactly the
+  manifest's paths, sizes and sha256, so that activation wrote nothing into
+  its `source_code_path` folder;
+- the deployment's `/src/` snapshot held exactly the manifest's files, every
+  sha256 equal;
+- the platform set `App.default_source_code_path` to that deployment's
+  release folder, which is why prune keeps the folder it names.
+
+**Not yet observed live** (each fails closed): that publish's SDK upload
+with format AUTO keeps every closure file type, `.html` included, as a FILE
+(the observation above used the CLI's `import-dir`; publish's listing
+refuses anything else); that the second and third activations of one run
+also write nothing into the release folder (if one did, the exact-listing
+converge before the next would refuse the deploy: signed blue restored on
+an upgrade, a first install stopped and quiesced); that the step-5 bundle
+summary's `resources.apps.mip_app.source_code_path` equals
+`workspace.file_path` on the CLI the run uses (step 5 requires it); and how
+`default_source_code_path` behaves on `apps start` and in a source-free App
+resource payload (which may not carry it). The first governed
+`deploy-dev.yml` run on the CI install is the proof.
 
 ## Emergency recovery: a slim per-release App source folder
 
