@@ -86,11 +86,29 @@ Two operational facts to know before assembling any ad-hoc App source tree
   frontend build must therefore include those root `tests/fixtures/` files,
   or the build fails with TS2307.
 
-## Piecewise App deploy from a slim per-release folder
+## Emergency recovery: a slim per-release App source folder
 
-Why: the App compute downloads every file under the deployment's source path
-again at start, at about 10 files/s, inside the 10-minute start window
-(measured 2026-10-28). The bundle files root (`<bundle root>/dev/files`) only
+**Emergency recovery only. The command of record is `./scripts/deploy.sh -t
+dev`.** A slim folder is for the case that path cannot finish, such as a start
+window that expires while the App compute downloads the bundle files root. A
+deploy from a slim folder bypasses three governed steps, and `stage` replaces
+only part of one of them:
+
+- **Signed promotion.** None of `./scripts/deploy.sh`'s signed workspace lease
+  or signed blue proof steps run, so its rollback path holds no signed record
+  of the slim deployment.
+- **`tools/databricks/converge_static_app_source.py`.** The governed check of
+  the uploaded tree (a non-empty `frontend/dist/index.html`, no root Node
+  manifests) does not run against the uploaded folder.
+- **The in-process frontend build and its postbuild gate**
+  (`tools/postbuild_artifacts.mjs`). `stage` takes a dist built elsewhere. It
+  applies its own allowlist to that dist (below), but it cannot prove the
+  JavaScript was built from `--ref`; only the `frontend/public` files are
+  compared byte for byte.
+
+Why it exists: the App compute downloads every file under the deployment's
+source path again at start, at about 10 files/s, inside the 10-minute start
+window (measured 2026-10-28). The bundle files root (`<bundle root>/dev/files`) only
 grows, because `workspace import-dir` and piecewise uploads never delete. It
 held 6,018 files when a deployment from it was recorded FAILED. A folder with
 only the App's runtime closure is about 1,200 files (481 tracked plus 694
@@ -106,7 +124,10 @@ reader. Two entries are optional and are never in git:
 - `genie/space_id.txt`: the space id comes from the environment.
 - `sql/_rendered/...`: `backend/services/lifecycle_sync.py` falls back to
   `sql/transformations/gold_funnel_snapshot_daily.sql` and substitutes the
-  catalog itself.
+  catalog itself. A slim folder always takes this fallback. That file has no
+  feed toggle and the fallback's `mip.`-to-catalog swap matches the
+  renderer's, so the result is the same today; the difference predates the
+  slim folder.
 
 Two independent static scans of `backend/` and the first-party modules it
 imports guard the closure. The flow scan (`tests/fixtures/app_runtime_reads.py`)
@@ -127,6 +148,7 @@ read only under the path it receives, and `getattr`, `exec` and computed
 the readers that matter degrade silently when their file is missing
 (`county_names` returns `{}`, the Genie space-id fallback returns `None`), so
 keep new reads to the shapes the scans follow.
+
 `tests/unit/test_app_runtime_closure_stage.py` holds the closure to its file
 budget: 1,300 staged files, about 130 s of download, of which at most 600 are
 tracked and the rest is the dist allowance.
@@ -137,14 +159,28 @@ python -m tools.databricks.app_runtime_closure stage \
   --ref <sha> --dist frontend/dist --out <new empty directory>
 ```
 
-`stage` builds the folder from `git archive <sha>`, so untracked and
-uncommitted files never ship, and adds the given dist. Before it writes
-anything, it refuses junk (`__pycache__`, `*.pyc`, `.DS_Store`), symlinks, a
-missing required entry, a folder over budget and an `--out` that is not empty.
-It prints the file count. It makes no Databricks call. Upload the folder to a
-new per-release folder, `<bundle root>/dev/app-src/<short sha>`, and never into
-one that is already used. The piecewise payload deploy then names that folder
-as the deployment's `source_code_path`.
+`stage` builds the folder from `git archive <sha>`, so no untracked or
+uncommitted repo file ships, and adds the given dist. The dist may hold only
+what a governed build emits (`tools/databricks/app_runtime_dist.py`):
+`index.html`, `index.home.html`, `assets/**` (a `.br` or `.gz` only beside its
+source), one `branding/lender-mark.png` or `.webp`, and exactly the
+`frontend/public` files tracked at `<sha>`, byte for byte. Vite copies
+`public/` verbatim, so an untracked, edited or missing public file is refused.
+`backend/main.py` serves any real file under `frontend/dist`, so anywhere in
+the dist a dot segment (`.env`, `.vite/`), a `*.map`, `build-manifest.json`,
+`build-modules.json`, Python junk, a symlink or a `sourceMappingURL` comment
+is refused too.
+
+Before it writes anything, `stage` also refuses a symlink or submodule
+tracked at `<sha>`, a missing required entry, a `requirements.txt` whose
+deps-digest line does not match `uv.lock` and `requirements.in` at `<sha>`
+(next section), more than 600 tracked files or 1,300 in all, and an `--out`
+that is not empty. It writes into a temporary sibling of `--out` and renames
+it into place, so a failure partway leaves `--out` as it was. It prints the
+file count and exits 2 on any refusal. It makes no Databricks call. Upload the
+folder to a new per-release folder, `<bundle root>/dev/app-src/<short sha>`,
+and never into one that is already used. The piecewise payload deploy then
+names that folder as the deployment's `source_code_path`.
 
 The governed `./scripts/deploy.sh -t dev` path is unchanged. It still promotes
 from the bundle files root (`source_code_path: .` in `databricks.yml`), so a
@@ -178,10 +214,21 @@ sha256 of both included files:
 
 Every change to `uv.lock` or `requirements.in` ends with
 `python tools/requirements_digest.py --write`, which rewrites only that line.
-`tests/unit/test_requirements_digest.py` runs `--check` in CI and fails with
-that remedy when the line is stale or missing. pip, pip-audit and
-`tools/python_deps_check.py` all skip comment lines, so they read the file as
-before.
+Both files are hashed with CRLF folded to LF, and `.gitattributes` checks all
+three out with `eol=lf`, so a `core.autocrlf` checkout computes the same
+digest. Three gates run `--check`'s comparison, because the repo has no
+required CI checks:
+
+- `tests/unit/test_requirements_digest.py` in CI, which fails with the remedy
+  when the line is stale or missing;
+- `./scripts/deploy.sh` step 0, right after the interpreter pin check: a dry
+  run reports `requirements digest: stale` and continues, a real run refuses
+  with exit 2 before any workspace call;
+- `app_runtime_closure stage`, which recomputes the line from the blobs at
+  `--ref` and refuses a slim folder whose `requirements.txt` would not change.
+
+pip, pip-audit and `tools/python_deps_check.py` all skip comment lines, so
+they read the file as before.
 
 **Verify the reinstall on every deploy that changes the digest.** The App's
 deployment build log must show pip output (`Collecting ...`, `Successfully
@@ -192,16 +239,25 @@ event (logger `mip-runtime`, emitted by
 reports `outcome` `ok`, `drift` or `lock_unreadable`, with `pins_checked`,
 `not_applicable`, `unpinned`, `drifted_count` and a `drifted` list of
 `{name, locked, installed}` (`installed` is null for a missing package). It
-reads `uv.lock` and `requirements.in` from the App source root and walks the
-installed closure of `requirements.in` the way `tools/python_deps_check.py`
-does, so a pin that this interpreter never installs (tomli on Python 3.11) is
-not applicable rather than drift. It reads local files only and makes no
-network call. It never raises, so it cannot stop startup, and it took about
-0.3 s on a local interpreter. Run against a local interpreter
-built before PR #274, it reports `drift` for exactly databricks-sql-connector
+also reports `python` and the `lock_python` that `uv.lock` was compiled for (a
+mismatch is `drift`, as it is for `tools/python_deps_check.py`), and
+`requirements_digest`: `current`, `stale`, `missing` or `unreadable`. The
+`remedy` follows the cause. A stale or missing digest means the build had no
+reason to reinstall, so restamp, commit and redeploy. A current digest with
+drift means the build skipped or failed the reinstall anyway, so restamping
+changes nothing: read the deployment build log and apply the fallback below.
+It reads `uv.lock`, `requirements.in` and `requirements.txt` from the App
+source root and walks the installed closure of `requirements.in` the way
+`tools/python_deps_check.py` does, so a pin that this interpreter never
+installs (tomli on Python 3.11) is not applicable rather than drift. It reads
+local files only and makes no network call. It never raises, so it cannot
+stop startup, and the lifespan runs it in a worker thread, off the event loop
+(about 0.3 s on a local interpreter). Run against a local interpreter built
+before PR #274, it reports `drift` for exactly databricks-sql-connector
 (locked 4.8.0, installed 4.4.0) and oauthlib (locked 4.0.0, installed 3.3.1),
-the same two packages that `tools/python_deps_check.py` names. The event has
-not yet been seen in a deployed App.
+the same two packages that `tools/python_deps_check.py` names, with
+`requirements_digest` `current`. The event has not yet been seen in a deployed
+App.
 
 Whether a comment-only change defeats the skip is inferred from how the skip
 behaved (it is keyed to `requirements.txt`, and that file never

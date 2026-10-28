@@ -167,7 +167,8 @@ bytes of `requirements.txt` and does not follow its `-c uv.lock` or
 `-r requirements.in` includes, so without the new digest line the running App
 keeps its old packages (docs/deployment.md, "App Python dependencies: the
 deps-digest line"). `tests/unit/test_requirements_digest.py` fails CI when the
-line is stale. The dated "Lock refresh" entries in the addenda below record
+line is stale, a real `./scripts/deploy.sh` run refuses it at step 0, and
+`tools/databricks/app_runtime_closure.py stage` refuses to stage it. The dated "Lock refresh" entries in the addenda below record
 what each batch ran at the time. Every refresh before 2026-10-28 predates the
 digest line.
 
