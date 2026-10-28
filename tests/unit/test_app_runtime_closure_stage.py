@@ -14,14 +14,17 @@ from pathlib import Path
 
 import pytest
 
+from tools import requirements_digest as digest
 from tools.databricks import app_runtime_closure as closure
 
 ROOT = Path(__file__).resolve().parents[2]
+INPUTS = {"requirements.in": "fastapi\n", "uv.lock": "fastapi==1.0\n"}
+INCLUDES = "-c uv.lock\n-r requirements.in\n"
+STAMP = digest.digest_line_for({name: text.encode() for name, text in INPUTS.items()})
 TRACKED = {
     "app.yaml": "command: ['python', '-m', 'backend.runtime']\n",
-    "requirements.txt": "-c uv.lock\n-r requirements.in\n",
-    "requirements.in": "fastapi\n",
-    "uv.lock": "fastapi==1.0\n",
+    "requirements.txt": f"{STAMP}\n{INCLUDES}",
+    **INPUTS,
     "backend/__init__.py": "",
     "backend/services/reader.py": "X = 1\n",
     "jobs/sync_lifecycle_state.py": "Y = 2\n",
@@ -147,6 +150,40 @@ def test_stage_refuses_a_ref_missing_a_required_entry(
 
     with pytest.raises(closure.StageError, match="absent at HEAD: genie/sample_questions.md"):
         closure.stage(repo=repo, ref="HEAD", dist=dist, out=tmp_path / "out")
+
+
+@pytest.mark.parametrize(
+    ("changes", "case"),
+    [
+        ({"uv.lock": "fastapi==1.1\n"}, "lock bumped without a restamp"),
+        ({"requirements.txt": INCLUDES}, "no digest line"),
+        ({"requirements.txt": f"{STAMP[: -64]}{'0' * 64}\n{INCLUDES}"}, "zeroed digest"),
+    ],
+)
+def test_stage_refuses_a_ref_whose_requirements_digest_is_stale(
+    repo: Path, dist: Path, tmp_path: Path, changes: dict[str, str], case: str
+) -> None:
+    # The bytes of requirements.txt would not change, so the Apps build would
+    # skip the reinstall and the App would keep its old packages.
+    _write(repo, changes)
+    _git(repo, "commit", "-q", "-am", case)
+    out = tmp_path / "out"
+
+    with pytest.raises(closure.StageError, match="stale or missing deps-digest line"):
+        closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
+
+    assert not out.exists()
+
+
+def test_the_cli_exits_2_on_a_stale_digest(
+    repo: Path, dist: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write(repo, {"requirements.txt": INCLUDES})
+    _git(repo, "commit", "-q", "-am", "legacy requirements.txt")
+    args = ["--repo", str(repo), "stage", "--ref", "HEAD", "--dist", str(dist)]
+
+    assert closure.main([*args, "--out", str(tmp_path / "out")]) == 2
+    assert "python tools/requirements_digest.py --write" in capsys.readouterr().err
 
 
 def test_stage_refuses_an_unbuilt_dist_and_a_symlink(

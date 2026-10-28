@@ -19,8 +19,10 @@ holding only this closure is about 1,200 files.
 ``stage`` builds the folder from ``git archive REF`` (tracked files only, so
 untracked optional entries are skipped and reported) plus the given prebuilt
 ``frontend/dist``. It refuses junk files, symlinks, a missing required entry,
-a non-empty ``--out`` and a folder over the file budget, before writing
-anything. It never calls Databricks.
+a requirements.txt whose deps-digest line does not match uv.lock and
+requirements.in at REF (the Apps build would skip the reinstall), a non-empty
+``--out`` and a folder over the file budget, before writing anything. It never
+calls Databricks.
 """
 
 from __future__ import annotations
@@ -32,9 +34,12 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal
+
+from tools import requirements_digest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIST_PATH = "frontend/dist"
@@ -127,8 +132,10 @@ def is_junk(relpath: str) -> bool:
     return any(part in JUNK_NAMES for part in parts) or relpath.endswith(JUNK_SUFFIXES)
 
 
-def _git(repo: Path, *args: str) -> bytes:
-    result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=False)
+def _git(repo: Path, *args: str, stdin: bytes | None = None) -> bytes:
+    result = subprocess.run(
+        ["git", "-C", str(repo), *args], input=stdin, capture_output=True, check=False
+    )
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", "replace").strip()
         raise StageError(f"git {args[0]} failed: {detail}")
@@ -155,6 +162,37 @@ def tracked_files(repo: Path, ref: str) -> tuple[str, dict[str, list[str]]]:
         if owner is not None:
             found[owner.path].append(name)
     return commit, found
+
+
+def _blobs(repo: Path, commit: str, names: Sequence[str]) -> dict[str, bytes]:
+    """The contents of ``names`` at ``commit``, from one ``git cat-file --batch``."""
+
+    request = "".join(f"{commit}:{name}\n" for name in names).encode("utf-8")
+    raw = _git(repo, "cat-file", "--batch", stdin=request)
+    blobs: dict[str, bytes] = {}
+    offset = 0
+    for name in names:
+        end = raw.index(b"\n", offset)
+        header = raw[offset:end].split()
+        if len(header) != 3 or header[1] != b"blob":
+            raise StageError(f"{name} at {commit[:8]} is not a regular file")
+        start = end + 1
+        blobs[name] = raw[start : start + int(header[2])]
+        offset = start + int(header[2]) + 1
+    return blobs
+
+
+def _check_digest(blobs: Mapping[str, bytes], ref: str) -> None:
+    """Refuse a ref whose requirements.txt would not trigger the Apps reinstall."""
+
+    text = blobs[requirements_digest.REQUIREMENTS_TXT].decode("utf-8", "replace")
+    first = text.splitlines()[0] if text else ""
+    if first != requirements_digest.digest_line_for(blobs):
+        raise StageError(
+            f"requirements.txt at {ref} has a stale or missing deps-digest line, so the "
+            f"Apps build would skip the dependency reinstall; run {requirements_digest.REMEDY} "
+            "and commit"
+        )
 
 
 def _dist_files(dist: Path) -> list[str]:
@@ -187,6 +225,8 @@ def _plan(repo: Path, ref: str, dist: Path) -> tuple[StageResult, list[str]]:
     junk = [name for name in tracked if is_junk(name)]
     if junk:
         raise StageError(f"junk tracked at {ref}: {', '.join(junk[:5])}")
+    digest_inputs = (requirements_digest.REQUIREMENTS_TXT, *requirements_digest.DIGESTED_FILES)
+    _check_digest(_blobs(repo, commit, digest_inputs), ref)
     plan = StageResult(commit, tuple(tracked), tuple(_dist_files(dist)), tuple(skipped))
     if plan.total > MAX_STAGED_FILES:
         raise StageError(f"{plan.total} files exceed the {MAX_STAGED_FILES}-file budget")
