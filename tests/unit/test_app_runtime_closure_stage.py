@@ -285,6 +285,28 @@ def test_stage_refuses_junk_tracked_at_the_ref(repo: Path, dist: Path, tmp_path:
         closure.stage(repo=repo, ref="HEAD", dist=dist, out=tmp_path / "out")
 
 
+@pytest.mark.parametrize("path", ["backend/.databrickscfg", "jobs/.cache/state.json"])
+def test_stage_refuses_a_hidden_path_tracked_in_the_closure(
+    repo: Path, dist: Path, tmp_path: Path, path: str
+) -> None:
+    # git archive would ship it; nothing in the App source is a dotfile.
+    _write(repo, {path: "x\n"})
+    _git(repo, "add", "-f", path)
+    _git(repo, "commit", "-q", "-m", "dotfile")
+    out = tmp_path / "out"
+
+    with pytest.raises(closure.StageError, match=f"hidden path tracked at HEAD.*: {path}"):
+        closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
+
+    assert _nothing_written(tmp_path, out)
+
+
+def test_no_hidden_path_is_tracked_in_the_closure_at_head() -> None:
+    _, found = closure.tracked_files(ROOT, "HEAD")
+
+    assert [name for names in found.values() for name in names if closure.is_hidden(name)] == []
+
+
 def test_stage_refuses_a_ref_missing_a_required_entry(
     repo: Path, dist: Path, tmp_path: Path
 ) -> None:
@@ -485,6 +507,7 @@ def test_stage_of_head_carries_every_tracked_closure_file(tmp_path: Path) -> Non
     public = _git(ROOT, "ls-tree", "-r", "--name-only", commit, "--", "frontend/public")
     for name in public.splitlines():
         target = dist / name.removeprefix("frontend/public/")
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(subprocess.run(
             ["git", "-C", str(ROOT), "cat-file", "blob", f"{commit}:{name}"],
             capture_output=True, check=True,

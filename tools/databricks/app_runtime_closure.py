@@ -27,7 +27,8 @@ untracked optional entries are skipped and reported) plus the given prebuilt
 or ``.br`` only when it decodes to its source, no dotfiles, source maps or
 build metadata, and exactly the ``frontend/public`` files tracked at REF; a
 ``.br`` it cannot check is left out and reported). Before
-it writes anything, it refuses junk files, a symlink or submodule tracked at
+it writes anything, it refuses junk files, a hidden path (a segment starting
+with ``.``), a symlink or submodule tracked at
 REF, a missing required entry, a requirements.txt whose deps-digest line does
 not match uv.lock and requirements.in at REF (the Apps build would skip the
 reinstall) and a non-empty ``--out``. It then copies the dist into a
@@ -152,6 +153,12 @@ class StageResult:
 def is_junk(relpath: str) -> bool:
     parts = PurePosixPath(relpath).parts
     return any(part in JUNK_NAMES for part in parts) or relpath.endswith(JUNK_SUFFIXES)
+
+
+def is_hidden(relpath: str) -> bool:
+    """A path segment starting with ``.`` (``backend/.env.local``, ``jobs/.cache/``)."""
+
+    return any(part.startswith(".") for part in PurePosixPath(relpath).parts)
 
 
 def _git(repo: Path, *args: str, stdin: bytes | None = None) -> bytes:
@@ -306,6 +313,12 @@ def _plan(repo: Path, ref: str) -> _Tracked:
     junk = [name for name in tracked if is_junk(name)]
     if junk:
         raise StageError(f"junk tracked at {ref}: {', '.join(junk[:5])}")
+    hidden = [name for name in tracked if is_hidden(name)]
+    if hidden:
+        raise StageError(
+            f"hidden path tracked at {ref} (a dotfile never belongs in the App source): "
+            f"{', '.join(hidden[:5])}"
+        )
     digest_inputs = (requirements_digest.REQUIREMENTS_TXT, *requirements_digest.DIGESTED_FILES)
     _check_digest(_blobs(repo, commit, digest_inputs), ref)
     pathspecs = tuple(path for path, names in found.items() if names)

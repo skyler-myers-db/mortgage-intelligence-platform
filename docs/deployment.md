@@ -180,7 +180,8 @@ the dist a dot segment (`.env`, `.vite/`), a `*.map` in any letter case,
 CSS or HTML file with a `sourceMappingURL` comment anywhere in it is refused
 too.
 
-Before it writes anything, `stage` also refuses a symlink or submodule
+Before it writes anything, `stage` also refuses a symlink, a submodule or a
+hidden path (a segment starting with `.`, such as `backend/.env.local`)
 tracked at `<sha>`, a missing required entry, a `requirements.txt` whose
 deps-digest line does not match `uv.lock` and `requirements.in` at `<sha>`
 (next section), and an `--out` that is not empty. It then copies the dist
