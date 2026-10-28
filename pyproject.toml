@@ -15,7 +15,7 @@ otel = [
     "opentelemetry-instrumentation-logging>=0.66b1,<1",
 ]
 # Hypothesis powers tests/integration/test_genie_fuzz.py. Pinned in
-# requirements.txt for CI; listed here so ``pip install .[fuzz]`` works.
+# requirements-dev.in for CI; listed here so ``pip install .[fuzz]`` works.
 fuzz = [
     "hypothesis>=6.123,<7",
 ]

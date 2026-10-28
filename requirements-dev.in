@@ -1,0 +1,19 @@
+# Test, lint and type-check tools for CI and local development. The Databricks
+# App never installs them: its requirements.txt reads only uv.lock and
+# requirements.in. requirements-dev.txt installs both sets.
+# requirements-dev.lock pins this file's closure. It is compiled with uv.lock
+# as a constraint, so every package the two closures share keeps the App's pin,
+# and for the same Linux x86_64 platform as uv.lock (docs/deployment.md):
+#   uv pip compile requirements-dev.in -c uv.lock --python-version 3.11 \
+#     --python-platform x86_64-manylinux_2_28 --format requirements.txt \
+#     --output-file requirements-dev.lock
+# Refresh it the way uv.lock is refreshed: narrowly, with --upgrade-package.
+pytest==9.0.3
+pytest-cov==6.0.0
+pytest-xdist==3.8.0
+ruff==0.8.6
+# 2026-06-11 audit P2-14: ratcheted type gate (see [tool.mypy] in pyproject.toml).
+mypy==2.1.0
+# Genie fuzz testing (tests/integration/test_genie_fuzz.py). Required
+# in CI so self-tests run; live fuzz runs skip without Genie creds.
+hypothesis==6.123.7

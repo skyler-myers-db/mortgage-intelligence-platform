@@ -4,7 +4,7 @@ The Databricks Apps build can skip the reinstall and keeps its environment
 across deployments, so the App logs one ``dependency_lock_check`` event at
 startup. The drift rules follow tools/python_deps_check.py: walk the installed
 closure of requirements.in with markers and extras evaluated, so a lock entry
-nothing reaches (tomli on Python 3.11) is not applicable rather than drift.
+nothing reaches (tomli via coverage on Python 3.11) is not applicable rather than drift.
 """
 
 from __future__ import annotations
@@ -144,7 +144,7 @@ TOMLI_REQUIRES = {
 
 
 def test_a_lock_entry_excluded_by_its_parents_marker_is_not_applicable() -> None:
-    # The real lock pins tomli via coverage[toml]; on Python 3.11 nothing installs it.
+    # requirements-dev.lock pins tomli via coverage[toml]; on Python 3.11 nothing installs it.
     pins = _pins("pytest-cov==6.0.0", "coverage==7.10.0", "tomli==2.4.1")
     installed = {"pytest-cov": "6.0.0", "coverage": "7.10.0"}
 

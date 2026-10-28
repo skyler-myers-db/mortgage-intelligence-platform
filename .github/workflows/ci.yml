@@ -86,9 +86,12 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install dependencies
+        # requirements-dev.txt is the App's requirements.txt plus the dev
+        # tools (pytest, ruff, mypy, hypothesis) from requirements-dev.in; the
+        # App itself installs requirements.txt only.
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
       - name: ruff
         run: ruff check backend tests tools jobs pipelines
       - name: mypy (ratcheted type gate — audit P2-14)
@@ -617,7 +620,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
       - name: Built-dist artifact checks (served layer, build meta)
         # tests/unit/test_frontend_build_artifacts.py skips its served-layer
         # and build-meta checks where no dist exists (the backend job). Here
@@ -853,7 +856,8 @@ jobs:
     #      `.gitleaks.toml` at repo root.
     #   2. bandit    -- Python SAST across backend/tools/jobs/pipelines
     #      at medium+ severity. `.bandit` silences test-only noise.
-    #   3. pip-audit -- Python dependency CVE scan from requirements.txt.
+    #   3. pip-audit -- Python dependency CVE scan from requirements-dev.txt:
+    #      the App's requirements.txt plus the CI/dev tools.
     #   4. npm audit -- frontend dependency CVE scan at high+ severity,
     #      including dev/build tooling because it runs in CI and build hosts,
     #      and the operator-only tools/geo lock at the same level.
@@ -958,10 +962,17 @@ jobs:
         # admit oauthlib >=3.1.0,<5.0.0, so requirements.in moved to the
         # latest, 4.8.0 (2026-10-24), plus an oauthlib
         # >=4.0.0,<5 floor, and uv.lock to oauthlib 4.0.0, the patched release
-        # for all three. Both ignores are retired; the fix is installed. The
-        # connector's oauth module still imports WebApplicationClient and
-        # OAuth2Error from oauthlib 4.0.0.
-        run: pip-audit -r requirements.txt --strict
+        # for all three. Both ignores are retired.
+        #
+        # 2026-10-28: databricks-sql-connector left requirements.in. Nothing
+        # here imports databricks.sql (warehouse reads use the Statement
+        # Execution REST API through stdlib urllib), so the connector and the
+        # floors that existed only for its closure (oauthlib, thrift, PyJWT)
+        # are no longer installed or audited. The same day the dev tools moved
+        # to requirements-dev.in with their own lock; requirements-dev.txt
+        # includes requirements.txt, so this one audit covers the App's set and
+        # the CI tools.
+        run: pip-audit -r requirements-dev.txt --strict
 
       - name: npm audit (frontend prod + dev deps)
         # `--audit-level=high` means only high/critical CVEs fail the

@@ -71,6 +71,14 @@ this remediation pass.
   `.github/workflows/ci.yml`): a high or critical advisory fails CI;
   moderate and low advisories in dev-only tooling are tolerated and reviewed
   at the next dependency batch.
+- Backend `pip-audit`, 2026-10-28, after the runtime-only split (see "2026-10-28
+  addendum: a runtime-only App image" below): CI's command, now `pip-audit -r
+  requirements-dev.txt --strict` (the App's `requirements.txt` plus the dev
+  tools), reports no known vulnerabilities from the default PyPI service or
+  from `-s osv`, and neither does `pip-audit -r requirements.txt --strict`
+  alone. The lock form `pip-audit -r uv.lock -r requirements-dev.lock
+  --no-deps --disable-pip --strict` audits 131 packages, none twice, with no
+  finding.
 - Backend `pip-audit`, 2026-10-28, after the databricks-sql-connector 4.8.0
   and oauthlib 4.0.0 bump (see the 2026-10-28 addendum below): CI's command,
   now `pip-audit -r requirements.txt --strict` with no ignore, reports no
@@ -146,9 +154,9 @@ npm --prefix frontend audit --audit-level=high      # the CI gate
 npm --prefix frontend audit --audit-level=moderate  # advisory local read; not a gate
 npm --prefix frontend run test -- USChoroplethMap
 npm --prefix frontend run build
-./.venv/bin/pip-audit -r requirements.txt --strict
+./.venv/bin/pip-audit -r requirements-dev.txt --strict   # the App set plus the dev set
 ./.venv/bin/python tools/requirements_digest.py --check
-./.venv/bin/python -m pytest -q tests/unit/test_supply_chain_licenses.py
+./.venv/bin/python -m pytest -q tests/unit/test_supply_chain_licenses.py tests/unit/test_requirements_dev_split.py
 ./.venv/bin/python -m pytest -q tests/unit/test_error_sanitizer.py tests/unit/test_health_endpoint.py
 ```
 
@@ -156,13 +164,19 @@ npm --prefix frontend run build
 `--audit-level` named as the gate here must be the one ci.yml runs, and every
 advisory ci.yml ignores must be named in this document.
 
-Python lock refresh. A refresh moves only the named packages, and it always
-ends by restamping `requirements.txt`:
+Python lock refresh. There are two locks: `uv.lock` for the App's
+`requirements.in`, and `requirements-dev.lock` for the CI/dev tools'
+`requirements-dev.in`, compiled with `uv.lock` as a constraint. A refresh
+moves only the named packages, recompiles the dev lock when a package both
+locks pin moved (`tests/unit/test_requirements_dev_split.py` fails until it
+does), and always ends by restamping `requirements.txt`:
 
 ```bash
 uv pip compile requirements.in --python-version 3.11 --python-platform x86_64-manylinux_2_28 \
   --format requirements.txt --output-file uv.lock \
   --upgrade-package <package> [--upgrade-package <package> ...]
+uv pip compile requirements-dev.in -c uv.lock --python-version 3.11 --python-platform x86_64-manylinux_2_28 \
+  --format requirements.txt --output-file requirements-dev.lock [--upgrade-package <dev package> ...]
 python tools/requirements_digest.py --write
 ```
 
@@ -179,7 +193,9 @@ build compares the bytes of `requirements.txt` and does not follow its
 `-c uv.lock` or `-r requirements.in` includes: the first deploy whose only
 change to the file was the digest line reinstalled (21 packages upgraded,
 2026-10-28), so the digest line is what makes the lock bump visible to it (docs/deployment.md, "App
-Python dependencies: the deps-digest line"). `tests/unit/test_requirements_digest.py` fails CI when the
+Python dependencies: the deps-digest line"). A dev-only refresh changes neither
+digested file, so it never makes the App reinstall.
+`tests/unit/test_requirements_digest.py` fails CI when the
 line is stale, a real `./scripts/deploy.sh` run refuses it at step 0, and
 `tools/databricks/app_runtime_closure.py stage` refuses to stage it. The dated "Lock refresh" entries in the addenda below record
 what each batch ran at the time. Every refresh before 2026-10-28 predates the
@@ -804,3 +820,105 @@ oauthlib 4.0.0.
   the synthetic fixture keeps the parser exercised.
 - **Licences.** Unchanged: oauthlib 4.0.0 is BSD-3-Clause and
   databricks-sql-connector 4.8.0 is Apache-2.0, as before.
+
+## 2026-10-28 addendum: a runtime-only App image
+
+The check of the 32cc4384 deploy (PR #275) found two kinds of package in the
+App's Python environment that the App never uses. `requirements.txt` is what
+the Databricks Apps build installs, and `requirements.in` named both kinds:
+
+1. **databricks-sql-connector 4.8.0 and its closure** (oauthlib, thrift, lz4,
+   pybreaker, openpyxl, et-xmlfile, PyJWT). Warehouse reads use stdlib
+   `urllib` against the Statement Execution REST API
+   (`backend/services/databricks_sql.py`). The connector was still the reason
+   for the oauthlib and thrift security floors and their re-reviews (the
+   oauthlib 4.0.0 one in the addendum above).
+2. **The test, lint and type-check tools**: pytest, pytest-cov, pytest-xdist,
+   ruff, mypy and hypothesis, with their closure.
+
+**Proof that nothing uses the connector.** Two checks, both run before
+anything was removed.
+
+- *Offline import closure.* The interpreter was a venv built from the old
+  `requirements.txt`, whose 137 installed packages equal every uv.lock pin
+  except tomli (marker-excluded on 3.11). An import hook recorded every
+  attempted import. The script imported `backend.main`, `backend.runtime` and
+  every module `pkgutil.walk_packages` finds under `backend/` (435), `jobs/`
+  (18) and `tools/` (272). All of them imported. Nothing loaded, or even
+  tried to import, `databricks.sql`, oauthlib, thrift, lz4, pybreaker,
+  openpyxl or jwt. Two watched packages did load, pandas and pyarrow, both
+  through mlflow, which also requires them, so they stay.
+- *Grep.* `git grep -P` over the tracked tree found no import of
+  `databricks.sql`, `from databricks import sql`, oauthlib, thrift, lz4,
+  pybreaker, openpyxl or jwt in any `.py` or `.ipynb` file. That covers
+  `pipelines/` and `notebooks/`, which run on Databricks compute and which
+  the walk does not reach, and `tests/`. Two more checks came back empty: no
+  installed package outside the connector imports `databricks.sql`, and in
+  the installed metadata the connector is the only requirer of oauthlib,
+  thrift, lz4, pybreaker, openpyxl and PyJWT. google-auth's
+  `google.oauth2.id_token` imports jwt, but google-auth does not require it,
+  and nothing here loads that module.
+
+On this host, `git grep -E` with `\b` or `\s` matches nothing at all: 0 files
+for `\bimport\b` over `backend/`, against 425 with `-P`. Every grep above was
+run with `-P`.
+
+**Change.** `requirements.in` drops the connector and the three floors that
+existed only for its closure: `oauthlib>=4.0.0,<5`, `thrift>=0.24.0,<0.25`
+and `pyjwt==2.15.0`. Nothing else requires PyJWT. The dev tools move to a new
+`requirements-dev.in`, pinned by `requirements-dev.lock`. That lock is compiled with
+`uv.lock` as a constraint, so the three packages both closures need (attrs,
+packaging, typing-extensions) carry the App's pin in both files.
+`requirements-dev.txt` (`-r requirements.txt`, `-c requirements-dev.lock`,
+`-r requirements-dev.in`) is what CI and local development install.
+
+- **Lock refresh, narrow.** On top of PR #279's Linux x86_64 lock,
+  `uv pip compile requirements.in --python-version 3.11 --python-platform
+  x86_64-manylinux_2_28 --format requirements.txt --output-file uv.lock` with
+  no `--upgrade` only removes pins: 139 -> 114, with 0 added and 0 versions
+  changed (greenlet stays). The 25 removed are the 8 connector-closure pins
+  and the 17 dev-closure pins. The dev lock was seeded from the old `uv.lock`
+  before its first compile and is compiled for the same platform. Its 20 pins
+  all equal their old `uv.lock` versions: 17 dev-only, plus attrs, packaging
+  and typing-extensions. Compiled for `aarch64-apple-darwin` instead, it pins
+  the same 20 at the same versions, so the dev closure has no machine-keyed
+  dependency today. `requirements.txt`'s digest line is restamped.
+- **Installs, with pip as CI runs it** (macOS arm64, Python 3.11). A venv
+  from the new `requirements.txt` holds exactly the `uv.lock` pins except
+  greenlet, which sqlalchemy requires only off arm64: 113 packages and nothing
+  else. A venv from `requirements-dev.txt` holds those 113 plus the 16 dev pins
+  that apply on 3.11 (tomli is marker-excluded). That install reads `uv.lock`
+  twice as a constraint, once through each file, and pip accepts it. In the
+  runtime-only venv, the same import closure imports all 725 modules with no
+  failure. `tools/python_deps_check.py` reports 113 packages equal to their
+  pins, and `check_dependency_lock()` returns `ok`, `pins_total` 114,
+  `pins_checked` 113, `not_applicable_names` `["greenlet"]`,
+  `requirements_digest` `current`. Replayed with Linux x86_64 markers, as the
+  App runs, the walk checks all 114 with nothing unpinned or not applicable.
+  Both checks return the same on the dev venv. They also return the same on
+  the old venv, which still holds the connector and the dev tools, the way
+  the App's persisted environment will (docs/deployment.md, "A removed
+  requirement stays installed in the running App").
+- **CI.** Every workflow job that runs pytest, ruff or mypy installs
+  `requirements-dev.txt`: the backend and e2e-fixture-perf jobs in ci.yml,
+  and parity-live, playwright-e2e-live, genie-fuzz-standard and
+  genie-fuzz-deep in nightly.yml. The last one no longer installs hypothesis
+  separately. The `pip-audit` rail runs `pip-audit -r requirements-dev.txt
+  --strict`, still with no ignore. deploy-dev.yml and the kill drills keep
+  `requirements.txt`, because they run no dev tool.
+- **Weekly report.** `tools/deps_report` reads both sets. PyPI drift covers
+  requirements.in at uv.lock and requirements-dev.in at
+  requirements-dev.lock, with one row per package. The advisory read is
+  `pip-audit -r uv.lock -r requirements-dev.lock --no-deps --disable-pip
+  --strict`, which audits a shared pin once.
+- **Pinned by tests.** `tests/unit/test_requirements_dev_split.py` pins:
+  the dev file's three include lines; that the dev tools appear only in the
+  dev files; the dev lock's compile command; that every pin the two locks
+  share is equal; that the App source closure never stages a
+  `requirements-dev*` file; that every workflow job running pytest, ruff or
+  mypy installs `requirements-dev.txt`; and CI's single pip-audit line.
+  Mutating one nightly install, or one shared dev-lock pin, fails it.
+  `test_supply_chain_licenses.py` asserts that the connector closure and the
+  dev tools are absent from `requirements.in` and `uv.lock`.
+- **Licences.** No change to `docs/THIRD_PARTY_LICENSES.md`: it never listed
+  the connector closure, and hypothesis is still listed as test-only.

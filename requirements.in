@@ -1,3 +1,11 @@
+# What the Databricks App installs (requirements.txt: -c uv.lock, -r this file).
+# Runtime only: test, lint and type-check tools live in requirements-dev.in.
+# databricks-sql-connector and the floors that existed only for its closure
+# (oauthlib, thrift, PyJWT) were removed on 2026-10-28: warehouse reads use
+# stdlib urllib against the Statement Execution REST API
+# (backend/services/databricks_sql.py), and an offline import of every
+# backend/, jobs/ and tools/ module never loads databricks.sql, oauthlib,
+# thrift, lz4, pybreaker, openpyxl or jwt (docs/audits/supply-chain-audit.md).
 fastapi==0.136.1
 starlette==1.3.1  # security floor for GHSA-wqp7-x3pw-xc5r/GHSA-x746-7m8f-x49c/GHSA-82w8-qh3p-5jfq/GHSA-jp82-jpqv-5vv3; FastAPI only sets a lower bound
 uvicorn[standard]==0.47.0
@@ -6,19 +14,6 @@ pydantic-settings==2.7.1
 python-dotenv==1.2.2
 httpx==0.28.1
 databricks-sdk==0.103.0
-# 4.7.0 (2026-10-20) was the first release that admits oauthlib 4 (4.0.0
-# through 4.6.0 cap oauthlib<4.0.0); 4.8.0 (2026-10-24) is the latest and is
-# the pin. 4.4.0 was the first non-yanked release that admitted thrift 0.24.0.
-# No first-party module imports databricks.sql --
-# backend/services/databricks_sql.py drives the warehouse through the REST
-# Statement Execution API -- so the bump changes installed wheels only.
-databricks-sql-connector==4.8.0
-# Security floor for GHSA-3jp2-3mrg-2vxc, GHSA-xpv3-w29h-x7cv and
-# GHSA-hj66-6f7g-4r5v, all fixed only in oauthlib 4.0.0.
-# databricks-sql-connector (its only consumer) admits >=3.1.0,<5.0.0 from
-# 4.7.0; the explicit floor keeps the contract first-party so a future
-# connector pin cannot drag oauthlib back.
-oauthlib>=4.0.0,<5
 # Required by tools/databricks/run_agent_eval.py. Deploy fails closed if
 # mlflow.genai.evaluate is missing so "MLflow Agent Evaluation" cannot be
 # claimed from local scorer metrics alone.
@@ -66,17 +61,6 @@ aiohttp>=3.14.4
 # Security floor for PYSEC-2026-113. MLflow pulls pyarrow transitively and a
 # resolver backtrack dropped it to 21.0.0; hold the reviewed version.
 pyarrow>=24.0.0
-# Security floor for PYSEC-2026-175/PYSEC-2026-177/PYSEC-2026-178/PYSEC-2026-179
-# and the ten PyJWT advisories published 2026-09-29, each with
-# first_patched_version 2.14.0: GHSA-ffc3-869f-jxw9 (critical);
-# GHSA-w2cx-738m-mc7w, GHSA-9v7f-9g4p-ffgj, GHSA-r6x4-923q-g947,
-# GHSA-p4g4-x82p-q773, GHSA-9j54-fg26-wv3r (high); GHSA-w6j9-cwv2-h6wq,
-# GHSA-2gx3-rcp4-g85q, GHSA-hxm8-2xgr-2p9m, GHSA-8wjv-2p76-3863 (medium).
-# databricks-sql-connector depends on PyJWT; keep the transitive pin explicit
-# so pip-audit failures have a first-party dependency contract to resolve.
-# 2026-10-01: GHSA-42vr-xj54-vc7v (first_patched_version 2.15.0) moved the
-# floor again.
-pyjwt==2.15.0
 # Security floor for GHSA-8988-9cw3-xx77, GHSA-gh4c-6fx4-qh6g and
 # GHSA-vxq7-64xx-v4gw (all first patched in 2.8.0, published 2026-10-01).
 # urllib3 is transitive (requests, botocore, databricks-sdk); keep the fix
@@ -125,26 +109,11 @@ pillow==13.0.0
 # mlflow-skinny pulls sqlparse transitively and admits anything <1; keep the
 # reviewed fix explicit so a lock refresh cannot silently restore 0.5.x.
 sqlparse>=0.6.0,<1
-# Security floor for GHSA-6pjx-3pjc-mrj8, GHSA-8wv5-x4w7-5gww and
-# GHSA-hwrj-9rr4-24xh, all fixed in thrift 0.24.0. databricks-sql-connector
-# requires thrift>=0.24 (<0.25 through 4.6.0, <0.26 from 4.7.0); the explicit
-# floor keeps the contract first-party so a future connector pin cannot drag
-# thrift back, and its <0.25 cap is what holds the lock at 0.24.0.
-thrift>=0.24.0,<0.25
 psycopg[binary]>=3.2.10,<3.4
 # libpq discards structured SQLSTATE fields on startup-auth failures. The
 # Lakebase credential fence and replication startup gate use pg8000 only for
 # rejection probes so password and privilege failures retain server SQLSTATE.
 pg8000==1.31.5
-pytest==9.0.3
-pytest-cov==6.0.0
-pytest-xdist==3.8.0
-ruff==0.8.6
-# 2026-06-11 audit P2-14: ratcheted type gate (see [tool.mypy] in pyproject.toml).
-mypy==2.1.0
-# Genie fuzz testing (tests/integration/test_genie_fuzz.py). Required
-# in CI so self-tests run; live fuzz runs skip without Genie creds.
-hypothesis==6.123.7
 
 # Production OTLP log-exporter. The handler still stays env-gated by
 # MIP_OTEL_ENDPOINT, but the deployed App image must carry these wheels so
