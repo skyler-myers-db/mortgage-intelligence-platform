@@ -23,8 +23,10 @@ holding only this closure is about 1,200 files.
 ``stage`` builds the folder from ``git archive REF`` (tracked files only, so
 untracked optional entries are skipped and reported) plus the given prebuilt
 ``frontend/dist``, which must hold only governed build output
-(tools/databricks/app_runtime_dist.py: no dotfiles, source maps or build
-metadata, and exactly the ``frontend/public`` files tracked at REF). Before
+(tools/databricks/app_runtime_dist.py: Vite's hashed asset names, a ``.gz``
+or ``.br`` only when it decodes to its source, no dotfiles, source maps or
+build metadata, and exactly the ``frontend/public`` files tracked at REF; a
+``.br`` it cannot check is left out and reported). Before
 it writes anything, it refuses junk files, a symlink or submodule tracked at
 REF, a missing required entry, a requirements.txt whose deps-digest line does
 not match uv.lock and requirements.in at REF (the Apps build would skip the
@@ -48,7 +50,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from tools import requirements_digest
-from tools.databricks.app_runtime_dist import review_dist
+from tools.databricks.app_runtime_dist import brotli_decoder, review_dist
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIST_PATH = "frontend/dist"
@@ -138,6 +140,7 @@ class StageResult:
     tracked: tuple[str, ...]
     dist: tuple[str, ...]
     skipped_optional: tuple[str, ...]
+    unchecked_brotli: tuple[str, ...] = ()
 
     @property
     def total(self) -> int:
@@ -232,20 +235,23 @@ def _check_digest(blobs: Mapping[str, bytes], ref: str) -> None:
         )
 
 
-def _dist_files(repo: Path, commit: str, dist: Path, names: Sequence[str]) -> list[str]:
-    """The dist's files, once it holds only governed build output for ``commit``.
+def _dist_files(
+    repo: Path, commit: str, dist: Path, names: Sequence[str]
+) -> tuple[list[str], list[str]]:
+    """The dist's files to stage and the ``.br`` files left out unchecked.
 
+    Refuses unless the dist holds only governed build output for ``commit``;
     ``names`` are the ``frontend/public`` files tracked at ``commit``.
     """
 
     blobs = _blobs(repo, commit, names)
     public = {name.removeprefix(f"{PUBLIC_PATH}/"): blobs[name] for name in names}
-    review = review_dist(dist, public)
+    review = review_dist(dist, public, brotli=brotli_decoder())
     if review.problems:
         shown = "; ".join(review.problems[:5])
         more = f" (+{len(review.problems) - 5} more)" if len(review.problems) > 5 else ""
         raise StageError(f"--dist {dist} is not a governed build output: {shown}{more}")
-    return list(review.files)
+    return list(review.files), list(review.omitted)
 
 
 def _plan(repo: Path, ref: str, dist: Path) -> tuple[StageResult, list[str]]:
@@ -274,9 +280,8 @@ def _plan(repo: Path, ref: str, dist: Path) -> tuple[StageResult, list[str]]:
         raise StageError(f"junk tracked at {ref}: {', '.join(junk[:5])}")
     digest_inputs = (requirements_digest.REQUIREMENTS_TXT, *requirements_digest.DIGESTED_FILES)
     _check_digest(_blobs(repo, commit, digest_inputs), ref)
-    plan = StageResult(
-        commit, tuple(tracked), tuple(_dist_files(repo, commit, dist, public)), tuple(skipped)
-    )
+    staged, unchecked = _dist_files(repo, commit, dist, public)
+    plan = StageResult(commit, tuple(tracked), tuple(staged), tuple(skipped), tuple(unchecked))
     if len(plan.tracked) > MAX_TRACKED_FILES:
         raise StageError(
             f"{len(plan.tracked)} tracked closure files exceed the {MAX_TRACKED_FILES}-file "
@@ -359,6 +364,11 @@ def _stage(args: argparse.Namespace) -> int:
     )
     if result.skipped_optional:
         print(f"skipped optional (absent at {args.ref}): {', '.join(result.skipped_optional)}")
+    if result.unchecked_brotli:
+        print(
+            f"left out {len(result.unchecked_brotli)} .br files: without the brotli module "
+            "they cannot be checked against their source, so the App serves their .gz"
+        )
     return 0
 
 

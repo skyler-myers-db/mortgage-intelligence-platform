@@ -162,14 +162,23 @@ python -m tools.databricks.app_runtime_closure stage \
 `stage` builds the folder from `git archive <sha>`, so no untracked or
 uncommitted repo file ships, and adds the given dist. The dist may hold only
 what a governed build emits (`tools/databricks/app_runtime_dist.py`):
-`index.html`, `index.home.html`, `assets/**` (a `.br` or `.gz` only beside its
-source), one `branding/lender-mark.png` or `.webp`, and exactly the
-`frontend/public` files tracked at `<sha>`, byte for byte. Vite copies
-`public/` verbatim, so an untracked, edited or missing public file is refused.
+`index.html`, `index.home.html`, one `branding/lender-mark.png` or `.webp`,
+exactly the `frontend/public` files tracked at `<sha>`, byte for byte, and
+under `assets/` only Vite's flat hashed names, `<name>-<8-character
+hash>.<ext>` with `<ext>` one of js, css, json, webp, png, svg, woff2, woff or
+wasm (the naming follows `frontend/vite.config.ts`, and
+`tests/unit/test_app_runtime_closure_dist.py` fails when that config changes
+it). Vite copies `public/` verbatim, so an untracked, edited or missing public
+file is refused. The `/assets` route serves a `.br` or `.gz` sibling in place
+of the asset to a client that accepts the encoding, so each `.gz` must
+decompress to exactly its source's bytes, and so must each `.br` when the
+`brotli` module is installed. Without it a `.br` cannot be checked, so `stage`
+leaves every `.br` out, says how many, and the App serves the checked `.gz`.
 `backend/main.py` serves any real file under `frontend/dist`, so anywhere in
-the dist a dot segment (`.env`, `.vite/`), a `*.map`, `build-manifest.json`,
-`build-modules.json`, Python junk, a symlink or a `sourceMappingURL` comment
-is refused too.
+the dist a dot segment (`.env`, `.vite/`), a `*.map` in any letter case,
+`build-manifest.json`, `build-modules.json`, Python junk, a symlink, or a JS,
+CSS or HTML file with a `sourceMappingURL` comment anywhere in it is refused
+too.
 
 Before it writes anything, `stage` also refuses a symlink or submodule
 tracked at `<sha>`, a missing required entry, a `requirements.txt` whose

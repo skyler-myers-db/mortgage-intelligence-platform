@@ -9,6 +9,7 @@ window (about 10 files/s inside 10 minutes; a dist build adds about 700).
 
 from __future__ import annotations
 
+import gzip
 import io
 import os
 import subprocess
@@ -49,14 +50,31 @@ OUTSIDE = {
     "tests/unit/test_x.py": "x\n",
     "tools/x.py": "x\n",
 }
-# A governed build: the shell, hashed assets, and frontend/public copied verbatim.
+APP_JS = "app();\n" * 200
+BROTLI_MAGIC = "fake-br:"
+# A governed build: the shell, hashed assets with compressed variants that
+# decode to them, and frontend/public copied verbatim.
 DIST = {
     "index.html": "<html></html>\n",
-    "assets/app-1.js": "1;\n",
-    "assets/app-1.js.br": "br",
+    "assets/app-DnQ3_k-1.js": APP_JS,
+    "assets/app-DnQ3_k-1.js.br": BROTLI_MAGIC + APP_JS,
     "us-counties.json": TRACKED["frontend/public/us-counties.json"],
     "other.json": OUTSIDE["frontend/public/other.json"],
 }
+GZ_NAME = "assets/app-DnQ3_k-1.js.gz"
+
+
+def _fake_brotli(data: bytes) -> bytes:
+    if not data.startswith(BROTLI_MAGIC.encode()):
+        raise ValueError("not a fake brotli stream")
+    return data.removeprefix(BROTLI_MAGIC.encode())
+
+
+@pytest.fixture(autouse=True)
+def brotli(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The optional brotli module is not a dependency; a stand-in decoder makes
+    # every test independent of whether it happens to be installed.
+    monkeypatch.setattr(closure, "brotli_decoder", lambda: _fake_brotli)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -93,7 +111,12 @@ def repo(tmp_path: Path) -> Path:
 def dist(tmp_path: Path) -> Path:
     path = tmp_path / "dist"
     _write(path, DIST)
+    (path / GZ_NAME).write_bytes(gzip.compress(APP_JS.encode(), mtime=0))
     return path
+
+
+def _dist_names() -> set[str]:
+    return {f"frontend/dist/{name}" for name in (*DIST, GZ_NAME)}
 
 
 def test_stage_writes_exactly_the_closure_at_the_ref_plus_the_dist(
@@ -106,12 +129,12 @@ def test_stage_writes_exactly_the_closure_at_the_ref_plus_the_dist(
 
     result = closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
 
-    expected = set(TRACKED) | {f"frontend/dist/{name}" for name in DIST}
+    expected = set(TRACKED) | _dist_names()
     assert _files(out) == expected
     assert result.total == len(expected)
     assert result.commit == _git(repo, "rev-parse", "HEAD")
     assert (out / "backend/services/reader.py").read_text(encoding="utf-8") == "X = 1\n"
-    assert (out / "frontend/dist/assets/app-1.js.br").read_text(encoding="utf-8") == "br"
+    assert (out / "frontend/dist" / GZ_NAME).read_bytes() == (dist / GZ_NAME).read_bytes()
     assert result.skipped_optional == (
         "genie/space_id.txt",
         "sql/_rendered/transformations/gold_funnel_snapshot_daily.sql",
@@ -135,14 +158,29 @@ def test_stage_refuses_a_non_empty_out_and_leaves_it_alone(
 POLLUTED = {
     ".env": ("MIP_SECRET=x\n", "hidden path: .env"),
     "assets/a.js.map": ("{}", "source map: assets/a.js.map"),
+    "assets/foo.JS.MAP": ("{}", "source map: assets/foo.JS.MAP"),
     "build-manifest.json": ("{}", "build metadata: build-manifest.json"),
     ".vite/manifest.json": ("{}", "hidden path: .vite/manifest.json"),
-    "assets/app-2.js": (
-        "2;\n//# sourceMappingURL=app-2.js.map\n", "sourceMappingURL comment: assets/app-2.js"
+    "assets/app-Bx1yZ9aQ.js": (
+        "2;\n//# sourceMappingURL=app-2.js.map\n",
+        "sourceMappingURL comment: assets/app-Bx1yZ9aQ.js",
+    ),
+    "assets/app-Cx1yZ9aQ.js": (
+        "3;\n  //# sourceMappingURL=app-3.js.map\n",
+        "sourceMappingURL comment: assets/app-Cx1yZ9aQ.js",
     ),
     "notes.txt": ("an untracked frontend/public file\n", "not a governed build output: notes.txt"),
     ".DS_Store": ("x", "hidden path: .DS_Store"),
     "assets/__pycache__/m.txt": ("x", "python junk: assets/__pycache__/m.txt"),
+    # Served at /assets/<name> to any App user: only hashed Vite output may sit there.
+    "assets/creds.txt": ("token\n", "not a governed build output: assets/creds.txt"),
+    "assets/databrickscfg": ("[x]\n", "not a governed build output: assets/databrickscfg"),
+    "assets/env.local": ("X=1\n", "not a governed build output: assets/env.local"),
+    # Served in place of its source to a client accepting the encoding.
+    "assets/app-DnQ3_k-1.js.br": (
+        BROTLI_MAGIC + "alert('swapped');\n",
+        "compressed file does not decode to its source: assets/app-DnQ3_k-1.js.br",
+    ),
 }
 
 
@@ -154,11 +192,37 @@ def test_stage_refuses_a_dist_a_governed_build_would_not_ship(
     _write(dist, {name: text})
     out = tmp_path / "out"
 
-    with pytest.raises(closure.StageError, match="not a governed build output") as refused:
+    with pytest.raises(closure.StageError, match="is not a governed build output") as refused:
         closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
 
     assert problem in str(refused.value)
     assert not out.exists()
+
+
+def test_stage_refuses_a_gz_that_does_not_decode_to_its_source(
+    repo: Path, dist: Path, tmp_path: Path
+) -> None:
+    (dist / GZ_NAME).write_bytes(gzip.compress(b"alert('swapped');\n", mtime=0))
+    out = tmp_path / "out"
+
+    with pytest.raises(closure.StageError, match="compressed file does not decode to its source"):
+        closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
+
+    assert not out.exists()
+
+
+def test_stage_leaves_out_a_br_it_cannot_check_and_says_so(
+    repo: Path, dist: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(closure, "brotli_decoder", lambda: None)
+    out = tmp_path / "out"
+    args = ["--repo", str(repo), "stage", "--ref", "HEAD", "--dist", str(dist)]
+
+    assert closure.main([*args, "--out", str(out)]) == 0
+
+    assert _files(out) == set(TRACKED) | _dist_names() - {"frontend/dist/assets/app-DnQ3_k-1.js.br"}
+    assert "left out 1 .br files" in capsys.readouterr().out
 
 
 def test_stage_refuses_a_dist_built_from_another_commit(
@@ -314,7 +378,7 @@ def test_stage_fills_an_existing_empty_out(repo: Path, dist: Path, tmp_path: Pat
 
     closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
 
-    assert _files(out) == set(TRACKED) | {f"frontend/dist/{name}" for name in DIST}
+    assert _files(out) == set(TRACKED) | _dist_names()
     assert [p.name for p in tmp_path.iterdir() if ".staging-" in p.name] == []
 
 
@@ -331,7 +395,7 @@ def test_stage_refuses_more_tracked_files_than_the_closure_allowance(
 def test_stage_refuses_a_folder_over_the_file_budget(
     repo: Path, dist: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(closure, "MAX_STAGED_FILES", len(TRACKED) + len(DIST) - 1)
+    monkeypatch.setattr(closure, "MAX_STAGED_FILES", len(TRACKED) + len(_dist_names()) - 1)
 
     with pytest.raises(closure.StageError, match="file budget"):
         closure.stage(repo=repo, ref="HEAD", dist=dist, out=tmp_path / "out")
@@ -343,7 +407,7 @@ def test_the_cli_reports_the_count_and_exits_2_on_a_refusal(
     args = ["--repo", str(repo), "stage", "--ref", "HEAD", "--dist", str(dist)]
 
     assert closure.main([*args, "--out", str(tmp_path / "out")]) == 0
-    assert f"staged {len(TRACKED) + len(DIST)} files" in capsys.readouterr().out
+    assert f"staged {len(TRACKED) + len(_dist_names())} files" in capsys.readouterr().out
     assert closure.main([*args, "--out", str(tmp_path / "out")]) == 2
     assert "refused: --out" in capsys.readouterr().err
 
