@@ -284,7 +284,8 @@ def test_any_uncertainty_skips_the_run_and_deletes_nothing(case: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "change", ["pending", "lease", "active_moved", "app_id", "folder_is_file", "default_names_next"]
+    "change",
+    ["pending", "lease", "active_moved", "app_id", "folder_is_file", "default_names_next", "status_path_moved"],
 )
 def test_each_delete_rechecks_the_lease_the_app_and_the_folder(change: str) -> None:
     client = _world(old=5)
@@ -306,6 +307,16 @@ def test_each_delete_rechecks_the_lease_the_app_and_the_folder(change: str) -> N
             client.workspace.nodes[api(rid(2))] = client.workspace.nodes[f"{api(rid(1))}/app.yaml"]
         elif change == "default_names_next":
             client.apps.app.default_source_code_path = f"{path(rid(2))}/"
+        elif change == "status_path_moved":
+            real_status = client.workspace.get_status
+
+            def moved(api_path: str) -> Any:
+                status = real_status(api_path)
+                if api_path != api(rid(2)):
+                    return status
+                return SimpleNamespace(**{**vars(status), "path": f"{api_path}-moved"})
+
+            client.workspace.get_status = moved  # type: ignore[method-assign]
 
     client.workspace.hooks["delete"] = after_first_delete
 
@@ -335,6 +346,28 @@ def test_a_delete_that_cannot_be_reconciled_stops_the_run(fault: str) -> None:
     with pytest.raises(prune.Unreconciled):
         _run(client)
     assert client.workspace.exists(api(rid(1))) and client.workspace.exists(api(rid(2)))
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [("delete_failed", "deletion failed and could not be read back"),
+     ("deleted", "deleted but could not be read back")],
+)
+def test_a_delete_whose_outcome_cannot_be_read_back_stops_the_run(fault: str, message: str) -> None:
+    client = _world(old=4)
+    tree = client.workspace
+    if fault == "delete_failed":
+        tree.fail_before[("delete", api(rid(1)))] = InternalError("refused")
+
+    def unreadable_after(_path: str) -> None:  # runs once the pre-delete re-check has read the folder
+        tree.fail_before[("get_status", api(rid(1)))] = InternalError("read-back timeout")
+
+    tree.hooks["delete"] = unreadable_after
+
+    with pytest.raises(prune.Unreconciled, match=message):
+        _run(client)
+    assert tree.ops("delete") == [api(rid(1))]
+    assert tree.exists(api(rid(2)))
 
 
 @pytest.mark.parametrize(
