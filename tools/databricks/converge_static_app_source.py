@@ -15,7 +15,9 @@ target and root leaf):
   manifest's paths, each a FILE of the manifest's size (a file listed
   without a size is downloaded and hashed). The manifest's
   ``frontend/dist/index.html`` must be non-empty. Root Node manifests are
-  refused, never deleted: a release folder is immutable.
+  refused, never deleted: a release folder is immutable. Each root manifest
+  name is also probed with ``get_status``, because a recursive listing never
+  shows a directory, so an empty directory under that name is refused too.
 """
 
 from __future__ import annotations
@@ -140,6 +142,19 @@ def converge_static_app_source(
         _delete_exact_file(workspace, f"{root}/{manifest}")
 
 
+def _object_at(workspace: Any, path: str) -> bool:
+    """Whether any object, a directory included, is at ``path``; unreadable refuses."""
+    try:
+        workspace.workspace.get_status(path)
+    except (NotFound, ResourceDoesNotExist):
+        return False
+    except Exception as exc:  # noqa: BLE001 - absence must be proven
+        raise app_release_contract.ReleaseContractError(
+            f"could not prove {path} absent ({type(exc).__name__})"
+        ) from exc
+    return True
+
+
 def converge_release_source(
     workspace: Any,
     *,
@@ -179,7 +194,9 @@ def converge_release_source(
         )
     api_root = app_release_contract.api_path(expected)
     found = release_source.remote_files(workspace, api_root)
-    present = [name for name in _ROOT_NODE_MANIFESTS if name in found]
+    present = [
+        name for name in _ROOT_NODE_MANIFESTS if name in found or _object_at(workspace, f"{api_root}/{name}")
+    ]
     if present:
         raise app_release_contract.ReleaseContractError(
             f"release folder carries root Node manifests ({', '.join(present)}); an "

@@ -62,7 +62,9 @@ files root. Enforcement is three-layer, pinned by
    files; an exact recursive listing must show the manifest's paths, each a
    FILE of the manifest's size; and the manifest must hold a non-empty
    `frontend/dist/index.html`. A root Node manifest in the folder is refused,
-   never deleted: a release folder is immutable. Its files-root mode (no
+   never deleted: a release folder is immutable. Each root manifest name is
+   also probed with `get_status`, so an empty directory under that name, which
+   a recursive listing never shows, is refused too. Its files-root mode (no
    release arguments) is the governed way to clean a stale bundle files root
    by hand: it requires a non-empty `frontend/dist/index.html`, validates the
    exact bundle-files path shape and deletes nothing but the two root

@@ -15,6 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from databricks.sdk.errors import InternalError
 from databricks.sdk.service.workspace import ObjectType
 
 from tests.fixtures.fake_workspace import FakeWorkspaceClient
@@ -143,6 +144,25 @@ def test_a_root_node_manifest_is_named_and_never_deleted(tmp_path: Path) -> None
     with pytest.raises(contract.ReleaseContractError, match="root Node manifests"):
         _converge(client, manifest_path, manifest.release_id, path)
     assert client.workspace.exists(f"{contract.api_path(path)}/package-lock.json")
+
+
+@pytest.mark.parametrize("name", ["package.json", "package-lock.json"])
+def test_a_root_node_manifest_name_held_by_an_empty_directory_is_refused(tmp_path: Path, name: str) -> None:
+    client, manifest_path, manifest, path = _published(tmp_path)
+    client.workspace.add_dir(f"{contract.api_path(path)}/{name}")  # a recursive listing never shows it
+
+    with pytest.raises(contract.ReleaseContractError, match=rf"root Node manifests \({name}\)"):
+        _converge(client, manifest_path, manifest.release_id, path)
+    assert client.workspace.exists(f"{contract.api_path(path)}/{name}")
+    assert client.workspace.ops("delete") == []
+
+
+def test_a_root_node_manifest_name_that_cannot_be_read_is_refused(tmp_path: Path) -> None:
+    client, manifest_path, manifest, path = _published(tmp_path)
+    client.workspace.fail_before[("get_status", f"{contract.api_path(path)}/package.json")] = InternalError("x")
+
+    with pytest.raises(contract.ReleaseContractError, match="could not prove .*package.json absent"):
+        _converge(client, manifest_path, manifest.release_id, path)
 
 
 @pytest.mark.parametrize(
