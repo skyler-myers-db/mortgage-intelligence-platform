@@ -42,7 +42,7 @@ A root it does not follow is reported as unhandled wherever it is referenced
 A path value bound to a name nothing loads counts as read where it is bound.
 
 Residuals neither net sees, each a shape no backend module uses today
-(tests/unit/test_app_runtime_read_shapes.py RESIDUALS pins each one):
+(tests/unit/test_app_runtime_read_residuals.py RESIDUALS pins each one):
 
 * a first-party callee the flow scan cannot name (a method reached through an
   object, a function passed as a value) is assumed to read only under the

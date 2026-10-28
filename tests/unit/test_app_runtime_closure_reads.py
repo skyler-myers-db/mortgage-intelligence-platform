@@ -19,7 +19,8 @@ imports guard the list:
 Every read and every literal must be covered by the closure (or, for a
 literal, reviewed below with a reason), and every closure ``read`` entry must
 still be read. tests/unit/test_app_runtime_read_shapes.py pins the shapes
-each net catches and the residuals neither does.
+each net catches; test_app_runtime_read_residuals.py pins the residuals
+neither does.
 """
 
 from __future__ import annotations

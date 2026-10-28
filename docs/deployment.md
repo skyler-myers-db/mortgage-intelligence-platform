@@ -153,7 +153,7 @@ read, and `tests/unit/test_app_runtime_read_shapes.py` pins the shapes each
 net catches.
 
 The scans are static, and these shapes are residuals that neither sees
-(`RESIDUALS` in `tests/unit/test_app_runtime_read_shapes.py` pins each one):
+(`RESIDUALS` in `tests/unit/test_app_runtime_read_residuals.py` pins each one):
 
 - a first-party callee the flow scan cannot name (a method reached through an
   object, a function passed as a value), which is assumed to read only under

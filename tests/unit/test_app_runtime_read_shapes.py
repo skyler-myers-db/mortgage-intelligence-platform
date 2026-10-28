@@ -1,62 +1,23 @@
-"""The read shapes each closure net catches, in a minimal tree.
+"""The read shapes each App read net catches, in a minimal tree.
 
-The module under test is backend/services/fake.py, so ``parents[2]`` is the
-repo root; backend/roots.py exports a root for the cross-module shapes. Each
-shape reads something under docs/, which no closure entry covers, so a caught
-read shows up as uncovered. The flow scan is tests/fixtures/app_runtime_reads.py
-and the literal sweep is tests/fixtures/app_runtime_literals.py.
+tests/fixtures/app_runtime_shape_tree.py builds the tree (the module under
+test is backend/services/fake.py). CAUGHT pins each shape at least one net
+sees; tests/unit/test_app_runtime_read_residuals.py pins the flows the scan
+reports as unhandled and the known residuals neither net sees.
 """
 
 from __future__ import annotations
 
-import textwrap
 from pathlib import Path
 
 import pytest
 
-from tests.fixtures.app_runtime_literals import module_paths, sweep, top_level_names
-from tests.fixtures.app_runtime_reads import ScanResult, outside_reads, scan
-from tools.databricks import app_runtime_closure as closure
-
-ROOT_MODULE = "from pathlib import Path\n\nREPO_ROOT = Path(__file__).resolve().parents[1]\n"
-JOB = (
-    "from pathlib import Path\n\n"
-    "def run():\n"
-    '    return (Path(__file__).resolve().parents[1] / "docs" / "job.md").read_text()\n'
-)
-
-
-def _tree(tmp_path: Path, source: str) -> Path:
-    files = {
-        "backend/services/fake.py": "import os\nimport subprocess\nfrom pathlib import Path\n\n"
-        + textwrap.dedent(source).strip() + "\n",
-        "backend/roots.py": ROOT_MODULE,
-        "tools/fake_tool.py": "thing = 1\n",
-        "tools/pkg/__init__.py": "",
-        "jobs/fake_job.py": JOB,
-        "docs/README.md": "x\n",
-    }
-    for relpath, text in files.items():
-        path = tmp_path / relpath
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-    return tmp_path
-
-
-def _flow(result: ScanResult) -> set[str]:
-    return {
-        key for key in outside_reads(result) if closure.owning_entry(key, closure.CLOSURE) is None
-    }
-
-
-def _literals(root: Path, result: ScanResult) -> set[str]:
-    literals = sweep(result.trees, top_level_names(root), modules=module_paths(root))
-    return {literal.key() for literal in literals}
-
+from tests.fixtures.app_runtime_reads import outside_reads, scan
+from tests.fixtures.app_runtime_shape_tree import flow_reads, literal_reads, make_tree
 
 # shape -> (source, what the flow scan reports, what the literal sweep reports);
 # None: that net does not see the shape (at least one of the two must).
-SHAPES: dict[str, tuple[str, str | None, str | None]] = {
+CAUGHT: dict[str, tuple[str, str | None, str | None]] = {
     # Shapes the backend uses today.
     "parents_chain": (
         'X = (Path(__file__).resolve().parents[2] / "docs" / "a.md").read_text()',
@@ -277,132 +238,35 @@ SHAPES: dict[str, tuple[str, str | None, str | None]] = {
 }
 
 
-@pytest.mark.parametrize("shape", sorted(SHAPES))
+@pytest.mark.parametrize("shape", sorted(CAUGHT))
 def test_each_net_catches_each_read_shape(tmp_path: Path, shape: str) -> None:
-    source, flow, literal = SHAPES[shape]
-    root = _tree(tmp_path, source)
+    source, flow, literal = CAUGHT[shape]
+    root = make_tree(tmp_path, source)
 
     result = scan(root)
 
     assert result.unhandled_file_uses == []
     assert flow is not None or literal is not None
     if flow is not None:
-        assert flow in _flow(result)
+        assert flow in flow_reads(result)
     if literal is not None:
-        assert literal in _literals(root, result)
-
-
-@pytest.mark.parametrize(
-    ("shape", "source"),
-    [
-        ("parents_iterated", "X = [p for p in Path(__file__).resolve().parents]"),
-        ("parents_variable_index", "def f(n):\n    return Path(__file__).parents[n]"),
-        ("file_into_a_helper", "import helper\nX = helper.locate(__file__)"),
-        ("unknown_path_attribute", "X = Path(__file__).resolve().parents[2].frobnicate"),
-        ("modulo_assign", 'def f():\n    root = Path(__file__).parent\n    root %= "x"'),
-        # Roots other than a bare __file__ or the cwd, with the top-level
-        # segment held in a name, so the literal sweep cannot see it either.
-        ("module_attribute_file", (
-            'import backend\nDOCS = "docs"\n'
-            'X = (Path(backend.__file__).parent / DOCS / "q1.md").read_text()')),
-        ("sys_modules_file", (
-            'import sys\nDOCS = "docs"\n'
-            'X = Path(sys.modules[__name__].__file__).parents[2] / DOCS')),
-        ("spec_origin", 'DOCS = "docs"\nX = Path(__spec__.origin).parents[2] / DOCS'),
-        ("loader", "X = Path(__loader__.get_filename()).parents[2]"),
-        ("package_path", "X = Path(__path__[0]).parent"),
-        ("cached", "X = Path(__cached__).parents[3]"),
-        ("inspect_getfile", (
-            "import inspect\n\ndef f():\n    return 1\n\n"
-            "X = Path(inspect.getfile(f)).parents[2]")),
-        ("inspect_getsourcefile_imported", (
-            "from inspect import getsourcefile\nX = Path(getsourcefile(Path)).parent")),
-        ("sys_argv", 'import sys\nDOCS = "docs"\nX = Path(sys.argv[0]).parents[1] / DOCS'),
-        ("sys_path", 'import sys\nDOCS = "docs"\nX = Path(sys.path[0]) / DOCS'),
-        ("os_curdir", 'DOCS = "docs"\nX = Path(os.curdir) / DOCS'),
-        ("importlib_resources_files", (
-            'import importlib.resources\nDOCS = "docs"\n'
-            'X = importlib.resources.files("backend") / ".." / DOCS')),
-        ("resources_module_alias", (
-            'from importlib import resources\nX = resources.files("backend")')),
-        ("resources_function_import", (
-            'from importlib.resources import as_file\nX = as_file')),
-        ("pkgutil_get_data", 'import pkgutil\nX = pkgutil.get_data("backend", "x")'),
-    ],
-)
-def test_a_flow_the_scan_cannot_bound_is_unhandled(tmp_path: Path, shape: str, source: str) -> None:
-    result = scan(_tree(tmp_path, source))
-
-    assert result.unhandled_file_uses, shape
-    assert all(use.startswith("backend/services/fake.py:") for use in result.unhandled_file_uses)
-
-
-# The documented residuals: shapes NEITHER net sees (tests/fixtures/app_runtime_reads.py,
-# tools/databricks/app_runtime_closure.py and docs/deployment.md list them). If
-# a net learns one, move it to SHAPES and drop it from those three lists.
-RESIDUALS: dict[str, str] = {
-    "library_loader": (
-        'from starlette.staticfiles import StaticFiles\nX = StaticFiles(directory="docs")'),
-    "template_loader": 'import jinja2\nX = jinja2.FileSystemLoader("docs")',
-    "str_format_from_the_cwd": (
-        'def read(n):\n    return open("{}/{}".format("docs", n)).read()'),
-    "percent_from_the_cwd": 'def read(n):\n    return open("%s/%s" % ("docs", n)).read()',
-    "env_var_without_a_default": 'X = Path(os.environ["MIP_DOCS"]).read_text()',
-    "computed_module_name": (
-        'import importlib\nX = getattr(importlib.import_module("tools" + ".fake_tool"), "thing")'),
-    "callee_reached_through_an_object": """
-        class Reader:
-            def read(self, folder):
-                return (Path(folder) / "obj.md").read_text()
-
-        READERS = {"docs": Reader()}
-
-        def load():
-            return READERS["docs"].read("docs")
-        """,
-}
-
-
-@pytest.mark.parametrize("shape", sorted(RESIDUALS))
-def test_each_documented_residual_is_still_missed_by_both_nets(tmp_path: Path, shape: str) -> None:
-    root = _tree(tmp_path, RESIDUALS[shape])
-
-    result = scan(root)
-
-    assert (result.unhandled_file_uses, _flow(result), _literals(root, result)) == ([], set(), set())
-
-
-def test_names_that_only_look_like_unfollowed_roots_are_not_reported(tmp_path: Path) -> None:
-    # The control for the root rules: a local `files`, an `argv` attribute of
-    # a first-party class and a `path` key are not the module roots they echo.
-    source = """
-        files = ["a.md"]
-        X = files[0]
-
-        class Options:
-            argv = []
-            path = "x"
-
-        Y = Options.argv, Options.path, {"__file__": 1}
-        """
-
-    assert scan(_tree(tmp_path, source)).unhandled_file_uses == []
+        assert literal in literal_reads(root, result)
 
 
 def test_the_minimal_tree_alone_reads_nothing_outside_backend(tmp_path: Path) -> None:
-    root = _tree(tmp_path, 'X = Path(__file__).with_name("sibling.json").read_text()')
+    root = make_tree(tmp_path, 'X = Path(__file__).with_name("sibling.json").read_text()')
 
     result = scan(root)
 
     assert result.unhandled_file_uses == []
     assert outside_reads(result) == {}
-    assert _literals(root, result) == set()
+    assert literal_reads(root, result) == set()
 
 
 def test_a_path_value_inside_backend_may_escape(tmp_path: Path) -> None:
     source = 'X = subprocess.run(["ls"], cwd=Path(__file__).resolve().parent / "data")'
 
-    result = scan(_tree(tmp_path, source))
+    result = scan(make_tree(tmp_path, source))
 
     assert result.unhandled_file_uses == []
     assert outside_reads(result) == {}
@@ -416,15 +280,15 @@ def test_dotted_strings_that_name_no_tracked_module_are_not_literals(tmp_path: P
         EVENTS = ("genie.run_query", "docs.readme", "tools.missing_module", "uv.lock")
         OWN = "backend.roots"
         """
-    root = _tree(tmp_path, source)
+    root = make_tree(tmp_path, source)
     (root / "genie").mkdir()
     (root / "genie" / "sample_questions.md").write_text("- q\n", encoding="utf-8")
 
-    assert _literals(root, scan(root)) == set()
+    assert literal_reads(root, scan(root)) == set()
 
 
 def test_doc_strings_and_bare_strings_are_not_literals(tmp_path: Path) -> None:
     source = '"""See docs/guide.md."""\n\ndef f():\n    "docs/notes.md"\n    return 1'
-    root = _tree(tmp_path, source)
+    root = make_tree(tmp_path, source)
 
-    assert _literals(root, scan(root)) == set()
+    assert literal_reads(root, scan(root)) == set()
