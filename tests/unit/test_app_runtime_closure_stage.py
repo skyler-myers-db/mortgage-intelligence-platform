@@ -252,11 +252,14 @@ def test_the_cli_refuses_an_out_and_a_dist_that_contain_each_other(
             "out_inside_dist_via_symlink": tmp_path / "link" / "out",
             "out_inside_dist_via_dotdot": tmp_path / "elsewhere" / ".." / "dist" / "out",
         }[layout]
-    before = files_under(tmp_path)
+    def outside_the_repo() -> set[str]:  # git may write .git/ in the background
+        return {name for name in files_under(tmp_path) if not name.startswith("repo/")}
+
+    before = outside_the_repo()
     args = ["--repo", str(repo), "stage", "--ref", "HEAD", "--dist", str(dist), "--out", str(out)]
 
     assert closure.main(args) == 2
 
     err = capsys.readouterr().err
     assert err == f"refused: {message.format(out=out, dist=dist)}; stage into a separate folder\n"
-    assert files_under(tmp_path) == before
+    assert outside_the_repo() == before
