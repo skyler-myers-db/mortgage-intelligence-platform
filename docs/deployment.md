@@ -142,11 +142,12 @@ returned to callers it cannot see) counts as a read of the whole subtree under
 the value, so an escaping repo root can never be covered. The roots it is
 known not to follow (`backend.__file__`, `sys.modules[__name__].__file__`,
 `globals()["__file__"]` and other lookups by name, `__spec__`, any
-`co_filename`, a frame from `sys._getframe`, `inspect.currentframe` or
-`inspect.stack`, a `find_spec` result's `origin` or
-`submodule_search_locations`, `inspect.getfile`, `sys.argv`, `sys.path`,
-`importlib.resources.files`, `pkgutil.get_data`) are reported as unhandled
-wherever they appear. The literal sweep (`tests/fixtures/app_runtime_literals.py`)
+`co_filename`, a frame from `sys._getframe`, `inspect.currentframe`,
+`inspect.stack` or the other frame helpers the scan lists, the `origin` or
+`submodule_search_locations` read on a `find_spec` call or on a name bound to
+one, `inspect.getfile`, `sys.argv`, `sys.path`, `importlib.resources.files`,
+`pkgutil.get_data`) are reported as unhandled wherever they appear in those
+forms; the same roots reached another way are residuals (below). The literal sweep (`tests/fixtures/app_runtime_literals.py`)
 follows nothing. It flags a string literal that names a repo path outside
 `backend/` by its own text (a `/` path such as `"docs/a.md"`, or a dotted
 string naming a tracked first-party module such as `"tools.x"`), or by the
@@ -181,7 +182,19 @@ learns one fails loudly until it moves to the caught shapes):
 - a starred argument to a path constructor or `os.path.join`
   (`os.path.join(*["docs", "x.md"])`, `Path(*parts)`);
 - a path read from an environment variable with no default;
-- `getattr`, `exec`, `eval` and a module named by a computed string.
+- `getattr`, `exec`, `eval` and a module named by a computed string;
+- a module or frame file reached through a helper the scan does not list
+  (`traceback.extract_tb(...)[0].filename`, `logging.getLogger().findCaller()`,
+  `pkgutil.get_loader(...).get_filename()`), or a `find_spec` result whose
+  `origin` is read through an alias, a walrus, an attribute (`self.spec`) or
+  a parameter;
+- the working directory reached without `os.getcwd`, `Path.cwd` or a string:
+  `os.getcwdb()`, and `os.listdir()` or `os.scandir()` with no argument;
+- a `nonlocal` name bound two or more scopes up;
+- a folder name the scan cannot read as a string: keywords unpacked with
+  `**{...}` into a first-party function, a computed string (`"DOCS".lower()`),
+  a bytes path (`open(b"docs/x.md")`) or a library keyword
+  (`subprocess.run(..., cwd=DOCS)`).
 
 No backend read uses those shapes today. An AST pass over `backend/` and
 `jobs/sync_lifecycle_state.py` on 2026-10-28 found no starred argument,
@@ -189,7 +202,10 @@ container subscript, `str.format` or `%` path, environment read without a
 default, library loader, `exec`, `eval` or loop over a named tuple feeding a
 path call; its two `" / ".join` calls build display labels, its one computed
 `find_spec(name)` is a presence check for `databricks.sdk`, and none of its
-dynamic `getattr` calls is passed to a path call. The readers that matter
+dynamic `getattr` calls is passed to a path call. A grep the same day found
+no `extract_tb`, `findCaller`, `get_loader`, `getcwdb`, `nonlocal`,
+argument-less `listdir` or `scandir`, `.origin`, `cwd=` or bytes path, and its
+`**{...}` uses build dicts, model fields and scoring arguments, never a path. The readers that matter
 degrade silently when their file is missing (`county_names` returns `{}`, the
 Genie space-id fallback returns `None`), so a new App read outside `backend/`
 must use the shapes the scans follow, a module-level constant rooted in

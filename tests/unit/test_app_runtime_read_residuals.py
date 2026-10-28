@@ -140,6 +140,94 @@ RESIDUALS: dict[str, str] = {
         def load():
             return READERS["docs"].read("docs")
         """,
+    # Round 5. A module or frame file reached through a helper that is not
+    # in app_runtime_paths.FRAME_REFS or ROOT_REFS.
+    "traceback_frame_summary_filename": """
+        import traceback
+
+        DOCS = "docs"
+
+        def read():
+            try:
+                raise RuntimeError
+            except RuntimeError as exc:
+                root = Path(traceback.extract_tb(exc.__traceback__)[0].filename).parents[2]
+            return (root / DOCS / "t1.md").read_text()
+        """,
+    "logging_find_caller": (
+        'import logging\nDOCS = "docs"\n'
+        'X = (Path(logging.getLogger().findCaller()[0]).parents[2] / DOCS / "t2.md").read_text()'),
+    "pkgutil_loader_filename": (
+        'import pkgutil\nDOCS = "docs"\n'
+        'X = (Path(pkgutil.get_loader("backend").get_filename()).parents[1] / DOCS / "p1.md")'
+        ".read_text()"),
+    # A find_spec result whose origin is read through anything but the call
+    # itself or a name bound to it in the same module.
+    "find_spec_through_an_alias": (
+        'import importlib.util\nDOCS = "docs"\n'
+        'SPEC = importlib.util.find_spec("backend")\nALIAS = SPEC\n'
+        'X = (Path(ALIAS.origin).parents[1] / DOCS / "s1.md").read_text()'),
+    "find_spec_through_a_walrus": (
+        'import importlib.util\nDOCS = "docs"\n'
+        'X = (Path((s := importlib.util.find_spec("backend")).origin).parents[1] / DOCS'
+        ' / "s2.md").read_text()'),
+    "find_spec_on_self": """
+        import importlib.util
+
+        DOCS = "docs"
+
+        class Locator:
+            def __init__(self):
+                self.spec = importlib.util.find_spec("backend")
+
+            def read(self):
+                return (Path(self.spec.origin).parents[1] / DOCS / "s3.md").read_text()
+        """,
+    "find_spec_as_a_parameter": """
+        import importlib.util
+
+        DOCS = "docs"
+
+        def _read(spec):
+            return (Path(spec.origin).parents[1] / DOCS / "s4.md").read_text()
+
+        X = _read(importlib.util.find_spec("backend"))
+        """,
+    # The working directory reached without os.getcwd, Path.cwd or a string.
+    "bytes_cwd": 'DOCS = "docs"\nX = open(os.path.join(os.getcwdb().decode(), DOCS, "c1.md")).read()',
+    "listdir_of_the_cwd": "X = [open(n).read() for n in os.listdir()]",
+    "scandir_of_the_cwd": "X = [open(e.path).read() for e in os.scandir() if e.is_file()]",
+    # A nonlocal name bound two scopes up: the rebind targets the next scope
+    # out, not the scope that defines the name.
+    "nonlocal_two_scopes_up": """
+        DOCS = "docs"
+
+        def read():
+            root = None
+
+            def middle():
+                def bind():
+                    nonlocal root
+                    root = Path(__file__).resolve().parents[2]
+
+                bind()
+
+            middle()
+            return (root / DOCS / "n2.md").read_text()
+        """,
+    # A folder name the scan cannot read as a string: unpacked keywords, a
+    # computed string, bytes, and a library keyword.
+    "keywords_unpacked_into_a_first_party_function": """
+        DOCS = "docs"
+
+        def _read(folder):
+            return (Path(folder) / "k1.md").read_text()
+
+        X = _read(**{"folder": DOCS})
+        """,
+    "computed_string_method": 'X = (Path("DOCS".lower()) / "m1.md").read_text()',
+    "bytes_path_literal": 'X = open(b"docs/u1.md").read()',
+    "library_cwd_keyword": 'DOCS = "docs"\nX = subprocess.run(["cat", "u2.md"], cwd=DOCS)',
 }
 
 

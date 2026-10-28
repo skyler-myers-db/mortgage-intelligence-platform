@@ -40,10 +40,12 @@ module attribute ``__file__`` (``backend.__file__``,
 ``sys.modules[__name__].__file__``) or one looked up by name
 (``globals()["__file__"]``, ``vars()["__file__"]``,
 ``getattr(m, "__file__")``), ``__spec__``, ``__loader__``, ``__path__``,
-``__cached__``, any ``co_filename``, a frame (``sys._getframe``,
-``inspect.currentframe``, ``inspect.stack`` and their siblings), the
-``origin``, ``submodule_search_locations``, ``cached`` or ``loader`` of a
-``find_spec`` result, ``inspect.getfile`` and its siblings, ``sys.argv``,
+``__cached__``, any ``co_filename``, the frame helpers named in FRAME_REFS
+(``sys._getframe``, ``inspect.currentframe``, ``inspect.stack``,
+``traceback.extract_stack`` and the rest of that table, not every helper that
+yields a frame), the ``origin``, ``submodule_search_locations``, ``cached`` or
+``loader`` read directly on a ``find_spec`` call or on a name bound to one in
+the same module, ``inspect.getfile`` and its siblings, ``sys.argv``,
 ``sys.path``, ``os.curdir``, and the ``importlib.resources``,
 ``pkgutil.get_data`` and ``pkg_resources`` data helpers.
 
@@ -75,7 +77,22 @@ uses any of these shapes today:
 * a starred argument to a path constructor or ``os.path.join``
   (``Path(*PARTS)``, ``os.path.join(*["docs", "x.md"])``);
 * a path read from an environment variable with no default;
-* ``getattr``, ``exec``, ``eval`` and a module named by a computed string.
+* ``getattr``, ``exec``, ``eval`` and a module named by a computed string;
+* a module or frame file reached through a helper outside ROOT_REFS
+  (``traceback.extract_tb(...)[0].filename``,
+  ``logging.getLogger().findCaller()``,
+  ``pkgutil.get_loader(...).get_filename()``), or a ``find_spec`` result
+  whose ``origin`` is read through an alias, a walrus, an attribute
+  (``self.spec``) or a parameter;
+* the working directory reached without ``os.getcwd``, ``Path.cwd`` or a
+  string (``os.getcwdb()``, ``os.listdir()`` and ``os.scandir()`` with no
+  argument);
+* a ``nonlocal`` name bound two or more scopes up (the rebind lands one
+  scope out);
+* a folder name the scan cannot read as a ``str``: keywords unpacked with
+  ``**{...}`` into a first-party function, a computed string
+  (``"DOCS".lower()``), a bytes path (``open(b"docs/x.md")``), and a library
+  keyword (``subprocess.run(..., cwd=DOCS)``).
 
 The scan is split by responsibility: app_runtime_paths.py (path values and
 pure helpers), app_runtime_flow.py (resolution and binding to a fixed point),
