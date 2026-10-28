@@ -20,11 +20,13 @@ holding only this closure is about 1,200 files.
 untracked optional entries are skipped and reported) plus the given prebuilt
 ``frontend/dist``, which must hold only governed build output
 (tools/databricks/app_runtime_dist.py: no dotfiles, source maps or build
-metadata, and exactly the ``frontend/public`` files tracked at REF). It
-refuses junk files, symlinks, a missing required entry, a requirements.txt whose deps-digest line does not match uv.lock and
-requirements.in at REF (the Apps build would skip the reinstall), a non-empty
-``--out`` and a folder over the file budget, before writing anything. It never
-calls Databricks.
+metadata, and exactly the ``frontend/public`` files tracked at REF). Before
+it writes anything, it refuses junk files, a symlink or submodule tracked at
+REF, a missing required entry, a requirements.txt whose deps-digest line does
+not match uv.lock and requirements.in at REF (the Apps build would skip the
+reinstall), a non-empty ``--out`` and a folder over its file budgets. It
+writes into a temporary sibling of ``--out`` and renames it into place, so a
+failure while writing leaves ``--out`` as it was. It never calls Databricks.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -47,15 +50,19 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DIST_PATH = "frontend/dist"
 PUBLIC_PATH = "frontend/public"
 # Measured 2026-10-28: about 10 files/s inside a 600 s start window, and a
-# Vite build emits about 700 dist files (694 on ab6235e0). 1,400 staged files
-# is about 140 s of download, leaving the rest of the window to the pip
-# install and boot; it is also the largest tree the source-snapshot lister is
-# recorded to have listed in time (docs/deployment.md, "Source lister budget").
+# Vite build emits about 700 dist files (694 on ab6235e0). 1,300 staged files
+# is about 130 s of download, leaving the rest of the window to the pip
+# install and boot, and stays under the ~1,400-file tree the source-snapshot
+# lister is recorded to have listed in time (docs/deployment.md, "Source
+# lister budget"). The tracked share is capped on its own so closure growth
+# is caught even when a small dist would hide it inside the total.
 FILES_PER_SECOND = 10
 START_WINDOW_S = 600
-MAX_STAGED_FILES = 1_400
+MAX_STAGED_FILES = 1_300
 DIST_FILE_ALLOWANCE = 700
 MAX_TRACKED_FILES = MAX_STAGED_FILES - DIST_FILE_ALLOWANCE
+# git ls-tree modes that git archive would write as something other than a file.
+REFUSED_MODES = {"120000": "symlink", "160000": "submodule"}
 JUNK_NAMES = frozenset({"__pycache__", ".DS_Store"})
 JUNK_SUFFIXES = (".pyc", ".pyo")
 
@@ -152,19 +159,39 @@ def owning_entry(path: str, entries: tuple[ClosureEntry, ...]) -> ClosureEntry |
     return None
 
 
+TRACKED_ENTRIES: tuple[ClosureEntry, ...] = tuple(e for e in CLOSURE if e.path != DIST_PATH)
+
+
+def _commit(repo: Path, ref: str) -> str:
+    return _git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}").decode().strip()
+
+
+def _modes(repo: Path, commit: str, pathspecs: Sequence[str]) -> dict[str, str]:
+    """Every path git tracks under ``pathspecs`` at ``commit``, with its mode."""
+
+    listing = _git(repo, "ls-tree", "-r", "-z", commit, "--", *pathspecs)
+    modes: dict[str, str] = {}
+    for record in filter(None, listing.decode("utf-8").split("\0")):
+        meta, name = record.split("\t", 1)
+        modes[name] = meta.split(" ", 1)[0]
+    return modes
+
+
+def _by_entry(names: Sequence[str]) -> dict[str, list[str]]:
+    found: dict[str, list[str]] = {entry.path: [] for entry in TRACKED_ENTRIES}
+    for name in names:
+        owner = owning_entry(name, TRACKED_ENTRIES)
+        if owner is not None:
+            found[owner.path].append(name)
+    return found
+
+
 def tracked_files(repo: Path, ref: str) -> tuple[str, dict[str, list[str]]]:
     """The commit ``ref`` names and the closure files it tracks, per git entry."""
 
-    commit = _git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}").decode().strip()
-    entries = tuple(entry for entry in CLOSURE if entry.path != DIST_PATH)
-    listing = _git(repo, "ls-tree", "-r", "-z", "--name-only", commit, "--",
-                   *(entry.path for entry in entries))
-    found: dict[str, list[str]] = {entry.path: [] for entry in entries}
-    for name in filter(None, listing.decode("utf-8").split("\0")):
-        owner = owning_entry(name, entries)
-        if owner is not None:
-            found[owner.path].append(name)
-    return commit, found
+    commit = _commit(repo, ref)
+    names = _modes(repo, commit, [entry.path for entry in TRACKED_ENTRIES])
+    return commit, _by_entry(sorted(names))
 
 
 def _blobs(repo: Path, commit: str, names: Sequence[str]) -> dict[str, bytes]:
@@ -198,11 +225,12 @@ def _check_digest(blobs: Mapping[str, bytes], ref: str) -> None:
         )
 
 
-def _dist_files(repo: Path, commit: str, dist: Path) -> list[str]:
-    """The dist's files, once it holds only governed build output for ``commit``."""
+def _dist_files(repo: Path, commit: str, dist: Path, names: Sequence[str]) -> list[str]:
+    """The dist's files, once it holds only governed build output for ``commit``.
 
-    listing = _git(repo, "ls-tree", "-r", "-z", "--name-only", commit, "--", PUBLIC_PATH)
-    names = [name for name in listing.decode("utf-8").split("\0") if name]
+    ``names`` are the ``frontend/public`` files tracked at ``commit``.
+    """
+
     blobs = _blobs(repo, commit, names)
     public = {name.removeprefix(f"{PUBLIC_PATH}/"): blobs[name] for name in names}
     review = review_dist(dist, public)
@@ -214,7 +242,18 @@ def _dist_files(repo: Path, commit: str, dist: Path) -> list[str]:
 
 
 def _plan(repo: Path, ref: str, dist: Path) -> tuple[StageResult, list[str]]:
-    commit, found = tracked_files(repo, ref)
+    commit = _commit(repo, ref)
+    modes = _modes(repo, commit, [*(entry.path for entry in TRACKED_ENTRIES), PUBLIC_PATH])
+    refused = sorted(
+        f"{name} ({REFUSED_MODES[mode]})" for name, mode in modes.items() if mode in REFUSED_MODES
+    )
+    if refused:
+        raise StageError(
+            f"refusing what git archive would not write as a file at {ref}: "
+            f"{', '.join(refused[:5])}"
+        )
+    found = _by_entry(sorted(modes))
+    public = sorted(name for name in modes if name.startswith(f"{PUBLIC_PATH}/"))
     skipped: list[str] = []
     for entry in CLOSURE:
         if entry.path == DIST_PATH or found[entry.path]:
@@ -229,8 +268,13 @@ def _plan(repo: Path, ref: str, dist: Path) -> tuple[StageResult, list[str]]:
     digest_inputs = (requirements_digest.REQUIREMENTS_TXT, *requirements_digest.DIGESTED_FILES)
     _check_digest(_blobs(repo, commit, digest_inputs), ref)
     plan = StageResult(
-        commit, tuple(tracked), tuple(_dist_files(repo, commit, dist)), tuple(skipped)
+        commit, tuple(tracked), tuple(_dist_files(repo, commit, dist, public)), tuple(skipped)
     )
+    if len(plan.tracked) > MAX_TRACKED_FILES:
+        raise StageError(
+            f"{len(plan.tracked)} tracked closure files exceed the {MAX_TRACKED_FILES}-file "
+            "allowance: trim the closure or re-measure the start window"
+        )
     if plan.total > MAX_STAGED_FILES:
         raise StageError(f"{plan.total} files exceed the {MAX_STAGED_FILES}-file budget")
     pathspecs = [path for path, names in found.items() if names]
@@ -258,20 +302,33 @@ def _extract(archive: bytes, out: Path, expected: set[str]) -> None:
         raise StageError("git archive did not produce the planned file set")
 
 
+def _write(
+    repo: Path, plan: StageResult, pathspecs: Sequence[str], dist: Path, work: Path
+) -> None:
+    archive = _git(repo, "archive", "--format=tar", plan.commit, "--", *pathspecs)
+    _extract(archive, work, set(plan.tracked))
+    for relpath in plan.dist:
+        target = work / DIST_PATH / relpath
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(dist / relpath, target)
+        target.chmod(0o644)
+
+
 def stage(*, repo: Path, ref: str, dist: Path, out: Path) -> StageResult:
     """Write the closure at ``ref`` plus ``dist`` into the empty ``out``."""
 
     plan, pathspecs = _plan(repo, ref, dist)
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise StageError(f"--out {out} exists and is not an empty directory")
-    out.mkdir(parents=True, exist_ok=True)
-    archive = _git(repo, "archive", "--format=tar", plan.commit, "--", *pathspecs)
-    _extract(archive, out, set(plan.tracked))
-    for relpath in plan.dist:
-        target = out / DIST_PATH / relpath
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(dist / relpath, target)
-        target.chmod(0o644)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix=f".{out.name}.staging-", dir=out.parent))
+    try:
+        _write(repo, plan, pathspecs, dist, work)
+        # POSIX rename replaces an empty directory and fails on a non-empty one.
+        work.rename(out)
+    except BaseException:
+        shutil.rmtree(work, ignore_errors=True)
+        raise
     return plan
 
 

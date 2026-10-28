@@ -112,7 +112,7 @@ reader. Two entries are optional and are never in git:
 first-party modules it imports. It fails when a read outside `backend/` is
 missing from the closure, or when a closure entry is no longer read.
 `tests/unit/test_app_runtime_closure_stage.py` holds the closure to its file
-budget: 1,400 staged files, about 140 s of download, of which at most 700 are
+budget: 1,300 staged files, about 130 s of download, of which at most 600 are
 tracked and the rest is the dist allowance.
 
 ```bash

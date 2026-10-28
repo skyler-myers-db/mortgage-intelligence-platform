@@ -9,8 +9,10 @@ window (about 10 files/s inside 10 minutes; a dist build adds about 700).
 
 from __future__ import annotations
 
+import io
 import os
 import subprocess
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -234,6 +236,98 @@ def test_stage_refuses_an_unbuilt_dist_and_a_symlink(
         closure.stage(repo=repo, ref="HEAD", dist=dist, out=tmp_path / "b")
 
 
+def _nothing_written(tmp_path: Path, out: Path) -> bool:
+    staging = [p.name for p in tmp_path.iterdir() if p.name.startswith(f".{out.name}.staging-")]
+    return not out.exists() and staging == []
+
+
+@pytest.mark.parametrize("path", ["backend/zz_link", "frontend/public/link.json"])
+def test_stage_refuses_a_tracked_symlink_before_writing_anything(
+    repo: Path, dist: Path, tmp_path: Path, path: str
+) -> None:
+    os.symlink("../app.yaml" if path.startswith("backend") else "us-counties.json", repo / path)
+    _git(repo, "add", path)
+    _git(repo, "commit", "-q", "-m", "symlink")
+    out = tmp_path / "out"
+
+    with pytest.raises(closure.StageError, match=f"{path} \\(symlink\\)"):
+        closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
+
+    assert _nothing_written(tmp_path, out)
+
+
+def test_stage_refuses_a_tracked_submodule_before_writing_anything(
+    repo: Path, dist: Path, tmp_path: Path
+) -> None:
+    head = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "update-index", "--add", "--cacheinfo", f"160000,{head},jobs/vendored")
+    _git(repo, "commit", "-q", "-m", "gitlink")
+    out = tmp_path / "out"
+
+    with pytest.raises(closure.StageError, match="jobs/vendored \\(submodule\\)"):
+        closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
+
+    assert _nothing_written(tmp_path, out)
+
+
+def _doctored_archive(monkeypatch: pytest.MonkeyPatch, change: str) -> None:
+    real_git = closure._git
+
+    def git(repo: Path, *args: str, stdin: bytes | None = None) -> bytes:
+        raw = real_git(repo, *args, stdin=stdin)
+        if args[0] != "archive":
+            return raw
+        buffer = io.BytesIO()
+        with (
+            tarfile.open(fileobj=io.BytesIO(raw)) as source,
+            tarfile.open(fileobj=buffer, mode="w") as doctored,
+        ):
+            for member in source.getmembers():
+                if change == "missing" and member.name == "lakebase/schema.sql":
+                    continue
+                doctored.addfile(member, source.extractfile(member) if member.isfile() else None)
+            if change == "extra":
+                extra = tarfile.TarInfo("backend/unplanned.py")
+                extra.size = 2
+                doctored.addfile(extra, io.BytesIO(b"x\n"))
+        return buffer.getvalue()
+
+    monkeypatch.setattr(closure, "_git", git)
+
+
+@pytest.mark.parametrize("change", ["extra", "missing"])
+def test_stage_refuses_an_archive_that_is_not_the_plan_and_leaves_out_alone(
+    repo: Path, dist: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    _doctored_archive(monkeypatch, change)
+    out = tmp_path / "out"
+
+    with pytest.raises(closure.StageError, match="did not produce the planned file set"):
+        closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
+
+    assert _nothing_written(tmp_path, out)
+
+
+def test_stage_fills_an_existing_empty_out(repo: Path, dist: Path, tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+
+    closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
+
+    assert _files(out) == set(TRACKED) | {f"frontend/dist/{name}" for name in DIST}
+    assert [p.name for p in tmp_path.iterdir() if ".staging-" in p.name] == []
+
+
+def test_stage_refuses_more_tracked_files_than_the_closure_allowance(
+    repo: Path, dist: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A small dist must not hide closure growth inside the total budget.
+    monkeypatch.setattr(closure, "MAX_TRACKED_FILES", len(TRACKED) - 1)
+
+    with pytest.raises(closure.StageError, match="tracked closure files exceed"):
+        closure.stage(repo=repo, ref="HEAD", dist=dist, out=tmp_path / "out")
+
+
 def test_stage_refuses_a_folder_over_the_file_budget(
     repo: Path, dist: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -286,8 +380,8 @@ def test_stage_of_head_carries_every_tracked_closure_file(tmp_path: Path) -> Non
 
 
 def test_the_tracked_closure_stays_under_its_file_budget() -> None:
-    # About 10 files/s inside a 600 s start window; 1,400 staged files is about
-    # 140 s of download, under a quarter of the window, and a Vite build takes
+    # About 10 files/s inside a 600 s start window; 1,300 staged files is about
+    # 130 s of download, under a quarter of the window, and a Vite build takes
     # about 700 of them (694 on ab6235e0).
     assert closure.MAX_STAGED_FILES / closure.FILES_PER_SECOND <= closure.START_WINDOW_S / 4
     assert closure.MAX_TRACKED_FILES == closure.MAX_STAGED_FILES - closure.DIST_FILE_ALLOWANCE
