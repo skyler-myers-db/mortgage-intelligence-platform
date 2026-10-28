@@ -211,11 +211,10 @@ def genie_turn_degraded_reason(now_monotonic: float | None = None) -> GenieTurnE
     """The quota/budget class that should mark Genie degraded right now, if any."""
 
     record = last_genie_turn()
-    if record is None or record.outcome != "failed" or record.error_class is None:
+    # A success record carries no class, so it never matches (and clears).
+    if record is None or record.error_class not in QUOTA_DEGRADED_CLASSES:
         return None
-    if record.error_class not in QUOTA_DEGRADED_CLASSES:
-        return None
-    now = time.monotonic() if now_monotonic is None else now_monotonic
+    now =time.monotonic() if now_monotonic is None else now_monotonic
     if now - record.monotonic_at > QUOTA_DEGRADED_WINDOW_S:
         return None
     return record.error_class
