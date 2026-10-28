@@ -16,6 +16,7 @@ import gzip
 import importlib.util
 import os
 import re
+import zlib
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,27 @@ def fake_brotli(data: bytes) -> bytes:
 
 def gz(data: bytes) -> bytes:
     return gzip.compress(data, mtime=0)
+
+
+FTEXT, FHCRC, FEXTRA, FNAME, FCOMMENT = 0x01, 0x02, 0x04, 0x08, 0x10
+
+
+def gz_with_flags(data: bytes, flags: int) -> bytes:
+    """One gzip member of ``data`` whose header sets ``flags`` (RFC 1952)."""
+
+    header = bytearray(b"\x1f\x8b\x08") + bytes([flags]) + bytes(4) + b"\x02\xff"
+    if flags & FEXTRA:
+        header += (4).to_bytes(2, "little") + b"XY\x00\x00"
+    if flags & FNAME:
+        header += b"evil.js\x00"
+    if flags & FCOMMENT:
+        header += b"a comment\x00"
+    if flags & FHCRC:
+        header += (zlib.crc32(bytes(header)) & 0xFFFF).to_bytes(2, "little")
+    deflate = zlib.compressobj(9, zlib.DEFLATED, -zlib.MAX_WBITS)
+    body = deflate.compress(data) + deflate.flush()
+    trailer = zlib.crc32(data).to_bytes(4, "little") + len(data).to_bytes(4, "little")
+    return bytes(header) + body + trailer
 
 
 GOVERNED = {
@@ -191,6 +213,31 @@ def test_a_compressed_variant_that_is_not_its_source_is_refused(
     review = _review(_dist(tmp_path, {relpath: data}))
 
     assert review.problems == (f"compressed file does not decode to its source: {relpath}",)
+
+
+@pytest.mark.parametrize("flags", [FNAME, FCOMMENT, FEXTRA, FHCRC, FTEXT, FNAME | FHCRC])
+def test_a_gz_whose_header_carries_an_optional_field_is_refused(
+    tmp_path: Path, flags: int
+) -> None:
+    # It decodes to exactly its source, but Node's zlib.gzip
+    # (tools/precompress_assets.mjs) never writes a header field, so a file
+    # name, comment, extra field or header CRC means another tool made it.
+    member = gz_with_flags(APP_JS, flags)
+    assert gzip.decompress(member) == APP_JS  # the control: only the header differs
+    relpath = "assets/app-DnQ3_k-1.js.gz"
+
+    review = _review(_dist(tmp_path, {relpath: member}))
+
+    assert review.problems == (
+        f"gzip header carries an optional field (FLG must be 0): {relpath}",
+    )
+
+
+def test_a_bare_gzip_header_built_by_hand_is_accepted(tmp_path: Path) -> None:
+    # The control for the header rule: the same builder with FLG 0 passes.
+    review = _review(_dist(tmp_path, {"assets/app-DnQ3_k-1.js.gz": gz_with_flags(APP_JS, 0)}))
+
+    assert review.problems == ()
 
 
 def test_without_a_brotli_decoder_every_br_is_left_out_and_reported(tmp_path: Path) -> None:

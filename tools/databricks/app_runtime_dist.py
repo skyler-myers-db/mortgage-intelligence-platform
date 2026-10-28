@@ -13,8 +13,10 @@ build. It allows only what a governed build emits:
 * ``assets/<name>-<hash>.<ext>``, the flat, hashed Vite output, with ``<ext>``
   one of ``ASSET_EXTENSIONS`` (``HASHED_ASSET`` below; how it follows from
   frontend/vite.config.ts is pinned by tests/unit/test_app_runtime_closure_dist.py);
-* a ``.gz`` beside such an asset that decompresses to exactly its bytes, and a
-  ``.br`` that does too (tools/precompress_assets.mjs). Without the optional
+* a ``.gz`` beside such an asset that decompresses to exactly its bytes and
+  whose gzip header is bare (FLG 0: no file name, comment, extra field or
+  header CRC, as Node's zlib.gzip writes it), and a ``.br`` that decodes to
+  exactly its bytes too (tools/precompress_assets.mjs). Without the optional
   ``brotli`` module a ``.br`` cannot be checked, so it is left out of the
   folder and reported, and the App serves the checked ``.gz`` instead;
 * exactly the ``frontend/public`` files tracked at the staged ref, all of
@@ -58,6 +60,9 @@ HASH = r"[A-Za-z0-9_-]{8}"
 ASSET_EXTENSIONS = ("js", "css", "json", "webp", "png", "svg", "woff2", "woff", "wasm")
 HASHED_ASSET = re.compile(rf"^assets/[A-Za-z0-9_.-]+-{HASH}\.(?:{'|'.join(ASSET_EXTENSIONS)})$")
 GZIP_SUFFIX = ".gz"
+# ID1 ID2 CM=deflate FLG=0: tools/precompress_assets.mjs (Node zlib.gzip) sets no
+# optional header field, so a FNAME, FCOMMENT, FEXTRA or FHCRC is not its output.
+GZIP_BARE_HEADER = b"\x1f\x8b\x08\x00"
 BROTLI_SUFFIX = ".br"
 # tools/postbuild_artifacts.mjs META_FILES: build metadata that must never ship.
 META_FILES = frozenset({"build-manifest.json", "build-modules.json"})
@@ -111,6 +116,12 @@ def gzip_decodes_to(data: bytes, source: bytes) -> bool:
     return decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail and (
         out == source
     )
+
+
+def gzip_header_is_bare(data: bytes) -> bool:
+    """True when the gzip member's FLG byte is 0 (no optional header field)."""
+
+    return data[: len(GZIP_BARE_HEADER)] == GZIP_BARE_HEADER
 
 
 def _walk(dist: Path) -> tuple[list[str], list[str]]:
@@ -189,6 +200,8 @@ def _compressed(
     data, original = (dist / relpath).read_bytes(), (dist / source).read_bytes()
     if relpath.endswith(GZIP_SUFFIX):
         same = gzip_decodes_to(data, original)
+        if same and not gzip_header_is_bare(data):
+            return "gzip header carries an optional field (FLG must be 0)"
     else:
         try:
             same = brotli is not None and brotli(data) == original

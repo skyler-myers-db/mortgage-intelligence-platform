@@ -218,7 +218,9 @@ wasm (the naming follows `frontend/vite.config.ts`, and
 it). Vite copies `public/` verbatim, so an untracked, edited or missing public
 file is refused. The `/assets` route serves a `.br` or `.gz` sibling in place
 of the asset to a client that accepts the encoding, so each `.gz` must
-decompress to exactly its source's bytes, and so must each `.br` when the
+decompress to exactly its source's bytes and carry a bare gzip header (FLG 0:
+no file name, comment, extra field or header CRC, as Node's `zlib.gzip` in
+`tools/precompress_assets.mjs` writes it), and so must each `.br` when the
 `brotli` module is installed. Without it a `.br` cannot be checked, so `stage`
 leaves every `.br` out, says how many, and the App serves the checked `.gz`.
 `backend/main.py` serves any real file under `frontend/dist`, so anywhere in
