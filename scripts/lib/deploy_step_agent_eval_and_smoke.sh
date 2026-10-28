@@ -296,9 +296,10 @@ fi
 # never sets green_verified. tools/databricks/app_release_prune.py deletes,
 # as the deploy identity, only release-id DIRECTORY children of
 # <bundle root>/app-src that no retained deployment references. It keeps the
-# current release, the signed rollback record's folder and the two newest
-# other referenced ones, re-checks the lease and the App before each delete,
-# and skips the whole run (deleting nothing) on any uncertainty. Rollback
+# current release, the signed rollback record's folder, the folder the App's
+# default source names and the two newest other referenced ones, re-checks
+# the lease and the App before each delete, and skips the whole run
+# (deleting nothing) on any uncertainty. Rollback
 # never depends on these folders: a signed record restores the deployment's
 # own /src/ snapshot. The call sits in an `if` condition, so neither errexit
 # nor the ERR trap can fire on a prune failure; the deploy only warns.

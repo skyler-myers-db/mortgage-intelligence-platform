@@ -1,7 +1,8 @@
 """``app_release_prune``: delete only unreferenced release folders, or nothing.
 
 Every rule in the tool's docstring has a test here: what is kept (current,
-rollback record, KEEP_PREVIOUS newest previous, a folder holding a snapshot),
+rollback record and App default source in any spelling, KEEP_PREVIOUS newest
+previous, a folder holding a snapshot),
 what is never touched (files/, names that are not release ids, plain files),
 the per-delete re-checks, the MAX_DELETIONS cap, reconciliation of an
 ambiguous delete, and each uncertainty that skips the run and deletes
@@ -135,6 +136,38 @@ def test_a_rollback_record_on_a_snapshot_keeps_no_extra_folder() -> None:
     assert report.deleted == [rid(1)]
 
 
+LETTERED = rid(0xABC)  # hex letters, so a case change of the whole path changes the id segment
+SPELLINGS = {
+    "canonical": path(LETTERED),
+    "trailing_slash": f"{path(LETTERED)}/",
+    "no_workspace_prefix": path(LETTERED).removeprefix("/Workspace"),
+    "principal_case": path(LETTERED).replace(PRINCIPAL, PRINCIPAL.upper()),
+    "upper": path(LETTERED).upper(),
+}
+
+
+@pytest.mark.parametrize("spelling", sorted(SPELLINGS))
+@pytest.mark.parametrize("where", ["rollback", "default"])
+def test_a_rollback_or_default_source_keeps_its_folder_in_any_spelling(where: str, spelling: str) -> None:
+    client = _world(old=5)
+    client.workspace.add_dir(api(LETTERED))  # otherwise unreferenced: it would be deleted
+    rollback = ""
+    if where == "rollback":
+        client.apps.deployments.insert(
+            0, deployment("dep-abc", SPELLINGS[spelling], create_time="2026-09-01T10:00:00Z")
+        )
+        rollback = "dep-abc"
+    else:
+        client.apps.app.default_source_code_path = SPELLINGS[spelling]
+
+    report = _run(client, rollback=rollback)
+
+    assert report.skipped == ""
+    assert report.kept[LETTERED] == ("rollback record" if where == "rollback" else "App default source")
+    assert report.deleted == [rid(1), rid(2), rid(3)]
+    assert client.workspace.exists(api(LETTERED))
+
+
 def test_a_folder_holding_a_deployment_snapshot_is_never_deleted() -> None:
     client = _world(old=4)
     client.apps.deployments[0].deployment_artifacts.source_code_path = f"{path(rid(1))}/src/x"
@@ -238,7 +271,9 @@ def test_any_uncertainty_skips_the_run_and_deletes_nothing(case: str) -> None:
     assert set(client.workspace.nodes) == before
 
 
-@pytest.mark.parametrize("change", ["pending", "lease", "active_moved", "app_id", "folder_is_file"])
+@pytest.mark.parametrize(
+    "change", ["pending", "lease", "active_moved", "app_id", "folder_is_file", "default_names_next"]
+)
 def test_each_delete_rechecks_the_lease_the_app_and_the_folder(change: str) -> None:
     client = _world(old=5)
     leases = {"calls": 0}
@@ -257,6 +292,8 @@ def test_each_delete_rechecks_the_lease_the_app_and_the_folder(change: str) -> N
             client.apps.app.id = "replaced-app"
         elif change == "folder_is_file":
             client.workspace.nodes[api(rid(2))] = client.workspace.nodes[f"{api(rid(1))}/app.yaml"]
+        elif change == "default_names_next":
+            client.apps.app.default_source_code_path = f"{path(rid(2))}/"
 
     client.workspace.hooks["delete"] = after_first_delete
 

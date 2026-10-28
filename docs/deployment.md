@@ -174,12 +174,16 @@ capture (never on the rollback branch) and deletes, as the deploy identity
 through the SDK, only DIRECTORY children of the exact `<bundle root>/app-src`
 whose names are release ids. It keeps the current release (which must be the
 App's active deployment source), the folder of the signed rollback record's
-deployment, the two newest other release folders the App's deployments
-reference (every page of the deployment listing, newest first) and any folder
-a listed deployment's `/src/` snapshot lies in. Before each delete it
-re-asserts the signed deployment lease, re-reads the App (no pending
-deployment, the active one still the current release and not naming the
-folder) and re-reads the folder; after it, the folder must be gone, and a
+deployment, the folder the App's `default_source_code_path` names,
+the two newest other release folders the App's deployments reference (every
+page of the deployment listing, newest first) and any folder a listed deployment's
+`/src/` snapshot lies in. The rollback record's source and the App's default
+source keep a folder by any path segment that is its release id, so a
+trailing slash, a missing `/Workspace` prefix or another case of the
+principal still keeps it. Before each delete it re-asserts the signed
+deployment lease, re-reads the App (no pending deployment, the active one
+still the current release, and neither it nor the App's default source naming
+the folder) and re-reads the folder; after it, the folder must be gone, and a
 delete it cannot reconcile stops the run. At most 20 folders go per run. Any
 uncertainty skips the whole run and deletes nothing: no lease, a failed App or
 deployment read, another App id, a pending deployment, an active deployment

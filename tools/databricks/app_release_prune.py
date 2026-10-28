@@ -8,14 +8,20 @@ children of the exact ``<bundle root>/app-src`` whose names are release ids
 
 * the current release, which must be the App's active deployment source;
 * the folder of the signed rollback record's deployment, when it is one;
+* the folder the App's ``default_source_code_path`` names, if any;
 * the KEEP_PREVIOUS newest other release folders the App's deployments
   reference (every page of ``list_deployments``, newest ``create_time``
   first);
 * any folder a listed deployment's ``/src/`` snapshot lies in.
 
+The rollback record's and the App's default source are matched by any path
+segment that is a release id, so a trailing slash, a missing ``/Workspace``
+prefix or another case of the principal still keeps the folder.
+
 Before each delete it re-asserts the signed deployment lease, re-reads the
-App (no pending deployment, the active one still the current release and not
-naming the candidate) and re-derives the candidate's path; then it deletes
+App (no pending deployment, the active one still the current release, and
+neither it nor the App's default source naming the candidate) and re-derives
+the candidate's path; then it deletes
 recursively and requires the folder to be gone. A delete whose outcome is
 ambiguous is reconciled by reading the folder back; one that cannot be
 reconciled stops the run. At most MAX_DELETIONS folders go per run.
@@ -40,6 +46,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import PurePosixPath
 from typing import Any
 
 from databricks.sdk import WorkspaceClient
@@ -146,6 +153,14 @@ def _created(deployment: object) -> datetime:
     return created
 
 
+def _named_release_ids(source: object) -> set[str]:
+    """Every path segment of ``source`` that is a release id, in any spelling of the path.
+
+    Only for keeping: matching more than the canonical path can only keep more.
+    """
+    return {part for part in _text(source).casefold().split("/") if contract.RELEASE_ID_RE.fullmatch(part)}
+
+
 def _current_app(workspace: Any, target: Target) -> object:
     """The App, with no pending deployment and the current release active."""
     try:
@@ -189,8 +204,7 @@ def _retained(workspace: Any, target: Target, active_id: str) -> tuple[dict[str,
         rollback = by_id.get(target.rollback_deployment_id)
         if rollback is None:
             raise Skip("the rollback record's deployment is not listed")
-        rollback_id = target.release_id_of(_text(getattr(rollback, "source_code_path", None)))
-        if rollback_id is not None:
+        for rollback_id in sorted(_named_release_ids(getattr(rollback, "source_code_path", None))):
             kept.setdefault(rollback_id, "rollback record")
     newest = sorted(by_id.items(), key=lambda pair: (_created(pair[1]), pair[0]), reverse=True)
     previous: list[str] = []
@@ -275,10 +289,13 @@ def _recheck(
     except Exception as exc:  # noqa: BLE001 - a lease that is not proven held stops the run
         raise Skip(f"the deployment lease is not proven held ({exc})") from exc
     app = _current_app(workspace, target)
-    for deployment in (getattr(app, "active_deployment", None), getattr(app, "pending_deployment", None)):
-        source = _text(getattr(deployment, "source_code_path", None))
-        if source and (source == f"/Workspace{path}" or source.startswith(f"/Workspace{path}/")):
-            raise Skip("the App's deployment names the folder")
+    sources = (
+        getattr(getattr(app, "active_deployment", None), "source_code_path", None),
+        getattr(getattr(app, "pending_deployment", None), "source_code_path", None),
+        getattr(app, "default_source_code_path", None),
+    )
+    if any(PurePosixPath(path).name in _named_release_ids(source) for source in sources):
+        raise Skip("the App's deployment or default source names the folder")
     try:
         status = _status(workspace, path)
     except Exception as exc:  # noqa: BLE001
@@ -299,6 +316,8 @@ def prune(workspace: Any, target: Target, *, lease_check: Callable[[], None]) ->
         app = _current_app(workspace, target)
         active_id = _text(getattr(getattr(app, "active_deployment", None), "deployment_id", None))
         report.kept, snapshots = _retained(workspace, target, active_id)
+        for name in sorted(_named_release_ids(getattr(app, "default_source_code_path", None))):
+            report.kept.setdefault(name, "App default source")
         candidates = _candidates(workspace, target, report, snapshots)
     except Skip as skip:
         report.skipped = str(skip)
