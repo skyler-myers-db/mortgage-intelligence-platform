@@ -4,8 +4,12 @@
 This is the single source of truth for the repo paths the running App needs:
 the upload set (the App source the platform builds and starts) plus every file
 the backend reads outside ``backend/``. tests/unit/test_app_runtime_closure_reads.py
-scans backend/ and fails when a read is missing here or an entry here is no
-longer read, so the list cannot rot in either direction.
+checks it against two static scans of backend/ and the first-party modules it
+imports: a flow scan that counts anything it cannot follow as a read of the
+whole subtree, and a sweep of every string literal naming a repo path. It fails
+when either finds a read not covered here, or an entry here is no longer read.
+Static scans have residuals (tests/fixtures/app_runtime_reads.py lists them);
+none is a shape the backend uses today.
 
 Why a slim folder: the App compute re-downloads every source file, at about
 10 files/s, inside its 10-minute start window. The bundle files root only

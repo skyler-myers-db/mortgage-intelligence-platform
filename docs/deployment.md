@@ -108,9 +108,25 @@ reader. Two entries are optional and are never in git:
   `sql/transformations/gold_funnel_snapshot_daily.sql` and substitutes the
   catalog itself.
 
-`tests/unit/test_app_runtime_closure_reads.py` scans `backend/` and the
-first-party modules it imports. It fails when a read outside `backend/` is
-missing from the closure, or when a closure entry is no longer read.
+Two independent static scans of `backend/` and the first-party modules it
+imports guard the closure. The flow scan (`tests/fixtures/app_runtime_reads.py`)
+follows every path value rooted in `__file__` or the working directory to the
+code that reads it; anything it cannot follow (a library call, an f-string, a
+function returned to callers it cannot see) counts as a read of the whole
+subtree under the value, so an escaping repo root can never be covered. The
+literal sweep (`tests/fixtures/app_runtime_literals.py`) flags every string
+literal that names a repo path outside `backend/`, whatever flow it sits in.
+`tests/unit/test_app_runtime_closure_reads.py` fails when either finds a read
+the closure does not cover (a literal may instead be reviewed in that test,
+with a reason), or when a closure entry is no longer read, and
+`tests/unit/test_app_runtime_read_shapes.py` pins the shapes each net catches.
+The scans are static, so they have residuals: a callee they cannot name (a
+method reached through an object, a function passed as a value) is assumed to
+read only under the path it receives, and `getattr`, `exec` and computed
+`importlib` names are invisible. No backend read uses those shapes today, and
+the readers that matter degrade silently when their file is missing
+(`county_names` returns `{}`, the Genie space-id fallback returns `None`), so
+keep new reads to the shapes the scans follow.
 `tests/unit/test_app_runtime_closure_stage.py` holds the closure to its file
 budget: 1,300 staged files, about 130 s of download, of which at most 600 are
 tracked and the rest is the dist allowance.

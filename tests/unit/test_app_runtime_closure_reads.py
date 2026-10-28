@@ -1,25 +1,50 @@
-"""The App runtime closure matches what the backend reads, in both directions.
+"""The App runtime closure covers what the backend reads, by two nets.
 
 tools/databricks/app_runtime_closure.py lists the repo paths a slim
-per-release App source folder must carry. tests/fixtures/app_runtime_reads.py
-scans backend/ (and the first-party modules it imports) for every read
-outside backend/. A read the closure misses would boot an App that fails at
-request time; a closure ``read`` entry nothing reads any more is dead weight
-that hides the next real omission. Both fail here.
+per-release App source folder must carry. Several readers degrade silently
+when their file is missing (county_names returns {}, the Genie space id
+fallback returns None), so a miss is a quiet production degradation, not a
+loud failure. Two independent scans of backend/ and the first-party modules it
+imports guard the list:
+
+* the flow scan (tests/fixtures/app_runtime_reads.py) follows every path value
+  to the consumer that reads it, and counts anything it cannot follow as a
+  read of the whole subtree;
+* the literal sweep (tests/fixtures/app_runtime_literals.py) flags every
+  string literal that names a repo path, whatever flow it sits in.
+
+Every read and every literal must be covered by the closure (or, for a
+literal, reviewed below with a reason), and every closure ``read`` entry must
+still be read. tests/unit/test_app_runtime_read_shapes.py pins the shapes
+each net catches and the residuals neither does.
 """
 
 from __future__ import annotations
 
 import shutil
-import textwrap
 from pathlib import Path
 
 import pytest
 
+from tests.fixtures.app_runtime_literals import PathLiteral, sweep, top_level_names
 from tests.fixtures.app_runtime_reads import ScanResult, outside_reads, scan
 from tools.databricks import app_runtime_closure as closure
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# (module, literal key) -> why the literal is not a read the closure must carry.
+REVIEWED_LITERALS: dict[tuple[str, str], str] = {
+    ("backend/api/health.py", "docs/security/GRANTS.md#10"): (
+        "docs_ref string in the trust-boundary health payload; never opened"
+    ),
+    ("backend/config/settings.py", "docs/security/GRANTS.md#10"): (
+        "docs_ref string in the trust-boundary startup log event; never opened"
+    ),
+    ("backend/services/capabilities.py", "tests/eval"): (
+        "eval_dir, joined only with golden_agent_cases.jsonl and scorers.py, both "
+        "closure entries; the flow scan follows it to those two files"
+    ),
+}
 
 
 def _uncovered(leaves: dict[str, set[str]]) -> dict[str, set[str]]:
@@ -40,9 +65,23 @@ def _unreferenced(
     ]
 
 
+def _unreviewed(literals: list[PathLiteral]) -> list[PathLiteral]:
+    return [
+        literal
+        for literal in literals
+        if closure.owning_entry(literal.key(), closure.CLOSURE) is None
+        and (literal.origin.rsplit(":", 1)[0], literal.key()) not in REVIEWED_LITERALS
+    ]
+
+
 @pytest.fixture(scope="module")
 def real_scan() -> ScanResult:
     return scan(ROOT)
+
+
+@pytest.fixture(scope="module")
+def real_literals(real_scan: ScanResult) -> list[PathLiteral]:
+    return sweep(real_scan.trees, top_level_names(ROOT))
 
 
 def test_every_backend_read_outside_backend_is_in_the_closure(real_scan: ScanResult) -> None:
@@ -52,6 +91,18 @@ def test_every_backend_read_outside_backend_is_in_the_closure(real_scan: ScanRes
 
 def test_every_closure_read_entry_is_still_read(real_scan: ScanResult) -> None:
     assert _unreferenced(closure.READS, outside_reads(real_scan)) == []
+
+
+def test_every_path_literal_is_in_the_closure_or_reviewed(
+    real_literals: list[PathLiteral],
+) -> None:
+    assert _unreviewed(real_literals) == []
+
+
+def test_every_reviewed_literal_is_still_there(real_literals: list[PathLiteral]) -> None:
+    present = {(literal.origin.rsplit(":", 1)[0], literal.key()) for literal in real_literals}
+
+    assert sorted(set(REVIEWED_LITERALS) - present) == []
 
 
 def test_the_scan_follows_the_backend_into_the_job_module_it_imports(
@@ -69,105 +120,39 @@ def test_an_added_entry_nothing_reads_is_reported(real_scan: ScanResult) -> None
     assert _unreferenced((*closure.READS, stale), outside_reads(real_scan)) == [stale.path]
 
 
-def test_a_fake_read_in_a_copy_of_the_real_backend_is_caught(tmp_path: Path) -> None:
-    ignore = shutil.ignore_patterns("__pycache__")
-    for name in ("backend", "jobs"):
-        shutil.copytree(ROOT / name, tmp_path / name, ignore=ignore)
-    assert _uncovered(outside_reads(scan(tmp_path))) == {}  # the control: a clean copy
-    (tmp_path / "backend" / "services" / "zz_fake_read.py").write_text(
-        "from pathlib import Path\n\n"
-        'NOTES = Path(__file__).resolve().parents[2] / "docs" / "fake_read.md"\n',
-        encoding="utf-8",
-    )
-
-    assert set(_uncovered(outside_reads(scan(tmp_path)))) == {"docs/fake_read.md"}
-
-
-# Each shape the backend uses today, plus the import and escape shapes, in a
-# minimal tree: the module is backend/services/fake.py.
-SHAPES: dict[str, tuple[str, str]] = {
-    "parents_chain": (
-        'X = Path(__file__).resolve().parents[2] / "docs" / "a.md"', "docs/a.md"),
-    "parent_parent": (
-        'X = Path(__file__).resolve().parent.parent.parent / "docs" / "b.md"', "docs/b.md"),
-    "local_root": (
-        """
-        def read():
-            root = Path(__file__).resolve().parents[2]
-            path = root / "docs" / "c.md"
-            return path.read_text()
-        """, "docs/c.md"),
-    "function_return": (
-        """
-        def _repo_root():
-            return Path(__file__).resolve().parents[2]
-
-        def read():
-            notes = _repo_root() / "docs"
-            return (notes / "d.md").exists()
-        """, "docs/d.md"),
-    "joinpath": (
-        'X = Path(__file__).resolve().parents[2].joinpath("docs", "e.md")', "docs/e.md"),
-    "cwd_literal": ('X = Path("docs/f.md")', "docs/f.md"),
-    "cwd_or_fallback": (
-        """
-        def read(path=None):
-            chosen = path or Path(
-                "docs/g.md"
-            )
-            return chosen.read_text()
-        """, "docs/g.md"),
-    "or_bound_root": (
-        """
-        def read(base=None):
-            root = base or Path(__file__).resolve().parents[2]
-            return (root / "docs" / "i.md").read_text()
-        """, "docs/i.md"),
-    "open_literal": ('X = open("docs/h.md")', "docs/h.md"),
-    "tools_import": ("from tools.fake_tool import thing", "tools/fake_tool.py"),
-    "import_module": (
-        'import importlib\nX = importlib.import_module("tools.fake_tool")', "tools/fake_tool.py"),
-    "transitive": ("from jobs.fake_job import run", "docs/job.md"),
-    "escape": ('X = Path(__file__).resolve().parents[3] / "outside.txt"', "../outside.txt"),
+# Two fake readers dropped into a copy of the real backend: a module-level path
+# nothing in the module loads, and the SOURCE_ROOT that dependency_lock_check
+# exports, imported by another module.
+FAKE_READERS = {
+    "zz_fake_constant.py": (
+        'NOTES = Path(__file__).resolve().parents[2] / "docs" / "fake_constant.md"\n'
+    ),
+    "zz_fake_import.py": (
+        "from backend.services.dependency_lock_check import SOURCE_ROOT\n\n"
+        "def read():\n"
+        '    return (SOURCE_ROOT / "docs" / "fake_import.md").read_text()\n'
+    ),
 }
 
 
-def _minimal_tree(tmp_path: Path, source: str) -> Path:
-    services = tmp_path / "backend" / "services"
-    services.mkdir(parents=True)
-    body = "from pathlib import Path\n\n" + textwrap.dedent(source).strip() + "\n"
-    (services / "fake.py").write_text(body, encoding="utf-8")
-    (tmp_path / "tools").mkdir()
-    (tmp_path / "tools" / "fake_tool.py").write_text("thing = 1\n", encoding="utf-8")
-    (tmp_path / "jobs").mkdir()
-    (tmp_path / "jobs" / "fake_job.py").write_text(
-        "from pathlib import Path\n\n"
-        "def run():\n"
-        '    return (Path(__file__).resolve().parents[1] / "docs" / "job.md").read_text()\n',
-        encoding="utf-8",
-    )
-    return tmp_path
+def test_fake_reads_in_a_copy_of_the_real_backend_are_caught_by_both_nets(
+    tmp_path: Path,
+) -> None:
+    ignore = shutil.ignore_patterns("__pycache__")
+    for name in ("backend", "jobs"):
+        shutil.copytree(ROOT / name, tmp_path / name, ignore=ignore)
+    (tmp_path / "docs").mkdir()
+    clean = scan(tmp_path)
+    assert _uncovered(outside_reads(clean)) == {}  # the control: a clean copy
+    assert _unreviewed(sweep(clean.trees, top_level_names(tmp_path))) == []
+    for name, source in FAKE_READERS.items():
+        (tmp_path / "backend" / "services" / name).write_text(
+            "from pathlib import Path\n\n" + source, encoding="utf-8"
+        )
 
+    result = scan(tmp_path)
 
-@pytest.mark.parametrize("shape", sorted(SHAPES))
-def test_the_scanner_catches_each_read_shape(tmp_path: Path, shape: str) -> None:
-    source, expected = SHAPES[shape]
-
-    result = scan(_minimal_tree(tmp_path, source))
-
-    assert result.unhandled_file_uses == []
-    assert expected in _uncovered(outside_reads(result))
-
-
-def test_the_minimal_tree_alone_reads_nothing_outside_backend(tmp_path: Path) -> None:
-    result = scan(_minimal_tree(tmp_path, 'X = Path(__file__).with_name("sibling.json")'))
-
-    assert outside_reads(result) == {}
-
-
-def test_an_unrecognised_file_relative_shape_fails_loudly(tmp_path: Path) -> None:
-    source = 'import os\nX = os.path.join(os.path.dirname(__file__), "..", "..", "docs")'
-
-    result = scan(_minimal_tree(tmp_path, source))
-
-    assert result.unhandled_file_uses == ["backend/services/fake.py:4"]
+    expected = {"docs/fake_constant.md", "docs/fake_import.md"}
+    assert set(_uncovered(outside_reads(result))) == expected
+    literals = _unreviewed(sweep(result.trees, top_level_names(tmp_path)))
+    assert {literal.key() for literal in literals} == expected
