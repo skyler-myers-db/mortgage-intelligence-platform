@@ -146,7 +146,8 @@ def test_the_deploy_preflight_pin_check_still_reads_the_stamped_file() -> None:
     # is not -c/-r; the stamp must reach it as a comment.
     pins = python_deps_check.load_pins(ROOT)
 
-    assert pins.lock["databricks-sql-connector"] == "4.8.0"
+    _, lock = python_deps_check.parse_lock((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    assert pins.lock == lock and lock
     assert any(req.name == "fastapi" for req in pins.requirements)
 
 

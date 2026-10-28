@@ -61,13 +61,15 @@ def _pins(*lines: str) -> list[check.LockPin]:
     return check.parse_lock("\n".join(lines))
 
 
-def test_the_real_lock_parses_into_bare_exact_pins() -> None:
-    pins = check.parse_lock((ROOT / "uv.lock").read_text(encoding="utf-8"))
+def test_the_real_lock_parses_into_the_deploy_preflight_pins() -> None:
+    # Derived, not literal: a lock bump must not turn this red.
+    text = (ROOT / "uv.lock").read_text(encoding="utf-8")
+    pins = check.parse_lock(text)
+    _, preflight = python_deps_check.parse_lock(text)
 
     assert len(pins) == len({p.name for p in pins}) > 100
     assert all(p.marker is None for p in pins)
-    assert check.LockPin("tomli", "2.4.1") in pins
-    assert check.LockPin("databricks-sql-connector", "4.8.0") in pins
+    assert {p.name: p.version for p in pins} == preflight
 
 
 def test_a_universal_lock_keeps_markers_and_skips_hashes_options_and_urls() -> None:
