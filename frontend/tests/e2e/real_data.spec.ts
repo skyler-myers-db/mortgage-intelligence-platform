@@ -1701,8 +1701,18 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const shownSignals = signalsByEvidence.slice(0, 2);
     // 7 and 90 are the windows that reach the URL (30 is the default and is
     // omitted), so either proves the window is forwarded; take the narrower
-    // one that still holds evidence for the pair.
-    const windowDays = shownSignals.some((signalType) => lastWeek.has(signalType)) ? 7 : 90;
+    // one that still holds evidence for the pair and, unfiltered, a signal
+    // outside it. Without that outsider the in-pair check below passes even
+    // when the server ignores signal_types, because every row is already one
+    // of the pair.
+    const holdsSignalOutsidePair = (signals: Iterable<string>) =>
+      [...signals].some((signalType) => !shownSignals.includes(signalType));
+    const windowDays =
+      shownSignals.some((signalType) => lastWeek.has(signalType)) && holdsSignalOutsidePair(lastWeek) ? 7 : 90;
+    expect(
+      holdsSignalOutsidePair(windowDays === 7 ? lastWeek : lastQuarter),
+      `the unfiltered ${windowDays}-day read must hold a signal outside ${shownSignals.join(',')}, or the server-filter check proves nothing`,
+    ).toBe(true);
     // A signal the 7-day probe returned no evidence for (the probe's
     // evidence_by_signal is unlimited, so absence there is a measured zero,
     // whatever date the source stamps), preferring one the 90-day window does
