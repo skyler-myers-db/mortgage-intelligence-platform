@@ -880,6 +880,11 @@ def test_the_runbook_never_presents_the_forked_anchor_as_a_separate_metastore_or
     assert "no code checks it" in step1 and "`2543889327043640`" in step1
     assert "name neither live catalog (`mip`, `mip_app_state`)" in step2
     assert "must return the live workspace's `metastore_id`" in step8
+    # The id itself is never written down, so the step names its comparator instead.
+    assert (
+        "(compare it with the `metastore_id` that `databricks metastores current` returns on a "
+        "live-workspace credential) and `workspace_id` `7474645995341779`"
+    ) in step8
     assert "metastore-wide" in step8 and "the live install's share catalogs included" in step8
     assert "the Unity Catalog changes in step 8 are metastore-wide" in _flat(owner.split("\n1. ", 1)[0])
     assert "waits on the owner steps below, then integrator steps 1-6" in flat

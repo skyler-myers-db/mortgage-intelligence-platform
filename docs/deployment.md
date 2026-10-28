@@ -1794,9 +1794,10 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    `codex/intelligence-trust-ux`).
 8. Clear the step-4 and step-10b blockers. First confirm the shared
    metastore: `databricks metastores current` on a `pr105-host` credential
-   must return the live workspace's `metastore_id` and
-   `workspace_id` `7474645995341779` (if not, the facts above are wrong: stop
-   and re-read this section).
+   must return the live workspace's `metastore_id` (compare it with the
+   `metastore_id` that `databricks metastores current` returns on a
+   live-workspace credential) and `workspace_id` `7474645995341779` (if not,
+   the facts above are wrong: stop and re-read this section).
    - **Unity Catalog grants, metastore-wide.** A grant revoke here also
      changes what the live workspace and every other team on the metastore
      see, so each needs the catalog owner's approval and is a narrow grant
