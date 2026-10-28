@@ -259,6 +259,17 @@ def test_file_modes_are_not_part_of_the_release_id(tmp_path: Path) -> None:
     assert contract.release_id(COMMIT, contract.manifest_entries(folder)) == before
 
 
+def test_the_release_id_hashes_the_documented_line_per_file() -> None:
+    """A golden value for ``<path>\\t<size>\\t<sha256>\\n`` per file, in path order, as
+    docs/deployment.md and the module docstring state it."""
+    empty = hashlib.sha256(b"").hexdigest()
+    entries = (contract.ManifestEntry("a.txt", 2, "ab" * 32), contract.ManifestEntry("b/c.txt", 0, empty))
+    lines = f"a.txt\t2\t{'ab' * 32}\nb/c.txt\t0\t{empty}\n".encode()
+
+    assert hashlib.sha256(lines).hexdigest()[:12] == "aa4bf353a298"
+    assert contract.release_id(COMMIT, entries) == f"{COMMIT[:12]}-aa4bf353a298"
+
+
 def _written(tmp_path: Path) -> tuple[Path, contract.Manifest]:
     path = tmp_path / "manifest.json"
     manifest = contract.write_manifest(
