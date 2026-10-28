@@ -265,3 +265,44 @@ def test_the_cli_refuses_an_out_and_a_dist_that_contain_each_other(
     err = capsys.readouterr().err
     assert err == f"refused: {message.format(out=out, dist=dist)}; stage into a separate folder\n"
     assert outside_the_repo() == before
+
+
+def _stage_args(repo: Path, dist: Path, out: Path) -> list[str]:
+    return ["--repo", str(repo), "stage", "--ref", "HEAD", "--dist", str(dist), "--out", str(out)]
+
+
+def test_the_cli_refuses_an_out_inside_the_dist_that_resolve_cannot_fold(
+    repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # resolve() folds a symlink or "..", but not another spelling of the same
+    # folder (DIST for dist on a case-insensitive volume, a macOS firmlink).
+    # Make resolve() fold nothing, so the alias below stands in for such a
+    # spelling on every platform: only a file-identity check still refuses.
+    dist = make_dist(tmp_path)
+    (tmp_path / "alias").symlink_to(dist)
+    out = tmp_path / "alias" / "out"
+    monkeypatch.setattr(Path, "resolve", lambda self, strict=False: self.absolute())
+
+    assert closure.main(_stage_args(repo, dist, out)) == 2
+
+    assert capsys.readouterr().err == (
+        f"refused: --out {out} is inside --dist {dist}; stage into a separate folder\n")
+    assert sorted(p.name for p in dist.iterdir()) == ["assets", "index.html", "other.json",
+                                                      "us-counties.json"]
+
+
+def test_the_cli_refuses_an_out_inside_the_dist_in_another_letter_case(
+    repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    dist = make_dist(tmp_path)
+    if not (tmp_path / "DIST").exists():
+        pytest.skip("this volume is case-sensitive, so DIST is not dist")
+    out = tmp_path / "DIST" / "out"
+
+    assert closure.main(_stage_args(repo, dist, out)) == 2
+
+    assert capsys.readouterr().err == (
+        f"refused: --out {out} is inside --dist {dist}; stage into a separate folder\n")
+    assert sorted(p.name for p in dist.iterdir()) == ["assets", "index.html", "other.json",
+                                                      "us-counties.json"]

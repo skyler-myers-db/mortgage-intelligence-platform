@@ -49,7 +49,8 @@ refused, and without ``node`` every ``.br`` is left out and reported. Before
 it writes anything, it refuses junk files, a hidden path (a segment starting
 with ``.``), a symlink or submodule tracked at
 REF, a missing required entry, an ``--out`` inside ``--dist`` or around it
-(both resolved first), a requirements.txt whose deps-digest line does
+(compared by file identity, so a symlink, ``..``, another letter case or a
+firmlink cannot hide it), a requirements.txt whose deps-digest line does
 not match uv.lock and requirements.in at REF (the Apps build would skip the
 reinstall) and a non-empty ``--out``. It then copies the dist into a
 temporary sibling of ``--out``, reviews that copy (the copy is what ships),
@@ -381,13 +382,35 @@ def _write(repo: Path, tracked: _Tracked, dist: Path, work: Path) -> StageResult
     return plan
 
 
+def _identity(path: Path) -> tuple[int, int] | None:
+    try:
+        status = path.stat()
+    except OSError:
+        return None
+    return status.st_dev, status.st_ino
+
+
+def _contains(outer: Path, inner: Path) -> bool:
+    """``outer`` is ``inner`` or one of its existing ancestors, by file identity.
+
+    ``resolve()`` folds symlinks and ``..`` but not another spelling of the
+    same folder, such as ``DIST`` for ``dist`` on a case-insensitive volume or
+    a macOS firmlink, so the device and inode numbers decide.
+    """
+
+    target = _identity(outer)
+    if target is None:
+        return False
+    resolved = inner.resolve()
+    return any(_identity(candidate) == target for candidate in (resolved, *resolved.parents))
+
+
 def _check_apart(dist: Path, out: Path) -> None:
     """Refuse an ``--out`` inside ``--dist`` (the copy would copy itself) or around it."""
 
-    resolved_dist, resolved_out = dist.resolve(), out.resolve()
-    if resolved_out == resolved_dist or resolved_dist in resolved_out.parents:
+    if _contains(dist, out):
         raise StageError(f"--out {out} is inside --dist {dist}; stage into a separate folder")
-    if resolved_out in resolved_dist.parents:
+    if _contains(out, dist):
         raise StageError(f"--dist {dist} is inside --out {out}; stage into a separate folder")
 
 

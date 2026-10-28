@@ -256,7 +256,8 @@ hidden path (a segment starting with `.`, such as `backend/.env.local`)
 tracked at `<sha>`, a missing required entry, a `requirements.txt` whose
 deps-digest line does not match `uv.lock` and `requirements.in` at `<sha>`
 (next section), an `--out` that is not empty, and an `--out` inside `--dist`
-or around it (both resolved first, so a symlink or `..` cannot hide it). It
+or around it (compared by device and inode, so a symlink, `..`, another letter
+case on a case-insensitive volume or a macOS firmlink cannot hide it). It
 then copies the dist into a temporary sibling of `--out` without following symlinks, reviews the
 copy and ships the copy, so a dist that changes after the review cannot
 change what ships. It refuses more than 600 tracked files or 1,300 in all,
