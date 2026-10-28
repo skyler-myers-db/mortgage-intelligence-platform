@@ -126,7 +126,8 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert "-r requirements.txt" not in lock
     assert "-r requirements.in" in lock
     assert "uvicorn[standard]==0.47.0" in requirements_in
-    assert "databricks-sql-connector==4.4.0" in requirements_in
+    assert "databricks-sql-connector==4.8.0" in requirements_in
+    assert "oauthlib>=4.0.0,<5" in requirements_in
     assert "boto3==1.43.50" in requirements_in
     assert "pg8000==1.31.5" in requirements_in
     assert "gitpython>=3.2.1,<4" in requirements_in
@@ -148,7 +149,8 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     for required_pin in (
         "boto3==1.43.50",
         "uvicorn==0.47.0",
-        "databricks-sql-connector==4.4.0",
+        "databricks-sql-connector==4.8.0",
+        "oauthlib==4.0.0",
         "pyjwt==2.15.0",
         "urllib3==2.8.0",
         "multidict==6.9.1",
@@ -236,7 +238,8 @@ def test_every_ci_audit_ignore_is_named_in_the_supply_chain_audit_doc() -> None:
     doc = SUPPLY_CHAIN_AUDIT.read_text(encoding="utf-8")
 
     ignored = re.findall(r"--ignore-vuln\s+([A-Za-z0-9-]+)", ci)
-    assert ignored, "expected ci.yml's pip-audit step to carry its reviewed ignore"
+    # Non-vacuity: the audited run line exists even when no ignore is left.
+    assert re.search(r"^\s*run: pip-audit -r requirements\.txt --strict\b", ci, re.MULTILINE)
     for advisory in ignored:
         assert advisory in doc, f"{advisory} is ignored in ci.yml but not named in the doc"
     for review_date in re.findall(r"Review date: (\d{4}-\d{2}-\d{2})", ci):

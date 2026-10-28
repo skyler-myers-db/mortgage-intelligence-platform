@@ -73,7 +73,7 @@ databricks-sdk==0.103.0
     #   -r requirements.in
     #   mlflow-skinny
     #   mlflow-tracing
-databricks-sql-connector==4.4.0
+databricks-sql-connector==4.8.0
     # via -r requirements.in
 docker==7.1.0
     # via mlflow
@@ -200,8 +200,10 @@ numpy==2.4.5
     #   scikit-learn
     #   scipy
     #   skops
-oauthlib==3.3.1
-    # via databricks-sql-connector
+oauthlib==4.0.0
+    # via
+    #   -r requirements.in
+    #   databricks-sql-connector
 openpyxl==3.1.5
     # via databricks-sql-connector
 opentelemetry-api==1.45.1

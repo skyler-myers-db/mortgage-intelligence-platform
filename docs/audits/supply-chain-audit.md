@@ -71,6 +71,12 @@ this remediation pass.
   `.github/workflows/ci.yml`): a high or critical advisory fails CI;
   moderate and low advisories in dev-only tooling are tolerated and reviewed
   at the next dependency batch.
+- Backend `pip-audit`, 2026-10-28, after the databricks-sql-connector 4.8.0
+  and oauthlib 4.0.0 bump (see the 2026-10-28 addendum below): CI's command,
+  now `pip-audit -r requirements.txt --strict` with no ignore, reports no
+  known vulnerabilities from the default PyPI service or from `-s osv`. The
+  same command on the old lock reports oauthlib 3.3.1 under PYSEC-2026-4114
+  and GHSA-3jp2-3mrg-2vxc (PyPI) and also PYSEC-2026-4113 (`-s osv`).
 - Backend `pip-audit`, 2026-10-26, after the aiohttp, certifi, gitpython,
   graphql-core, mlflow, OpenTelemetry and pillow bumps (see the 2026-10-26
   addendum below): CI's command, now `pip-audit -r requirements.txt --strict
@@ -135,7 +141,7 @@ npm --prefix frontend audit --audit-level=high      # the CI gate
 npm --prefix frontend audit --audit-level=moderate  # advisory local read; not a gate
 npm --prefix frontend run test -- USChoroplethMap
 npm --prefix frontend run build
-./.venv/bin/pip-audit -r requirements.txt --strict --ignore-vuln GHSA-xpv3-w29h-x7cv --ignore-vuln GHSA-hj66-6f7g-4r5v
+./.venv/bin/pip-audit -r requirements.txt --strict
 ./.venv/bin/python -m pytest -q tests/unit/test_supply_chain_licenses.py
 ./.venv/bin/python -m pytest -q tests/unit/test_error_sanitizer.py tests/unit/test_health_endpoint.py
 ```
@@ -706,3 +712,60 @@ release that resolves cleanly, so all of them are pins, not ignores.
   OpenTelemetry distributions are Apache-2.0 like the rest of the family.
   `certifi` (MPL-2.0) becomes a direct pin, so `docs/THIRD_PARTY_LICENSES.md`
   now lists it.
+
+## 2026-10-28 addendum: oauthlib 4.0.0, and the last two ignores retired
+
+On 2026-10-27 GHSA-3jp2-3mrg-2vxc (high) reached pip-audit's PyPI feed and
+turned the `pip-audit` rail red on a pull request whose requirements had not
+changed. It is a third oauthlib 3.3.1 authorization-server advisory: the
+token endpoint's `DeviceCodeGrant.validate_token_request` never validates
+`device_code` (RFC 8628 §3.4). Like GHSA-xpv3-w29h-x7cv and
+GHSA-hj66-6f7g-4r5v, it is unreachable here, and its only patched release is
+oauthlib 4.0.0.
+
+| Advisory | Package | First patched | Action |
+|---|---|---|---|
+| GHSA-3jp2-3mrg-2vxc (high): device-flow bearer token without a valid `device_code` | `oauthlib` 3.3.1 | 4.0.0 | Fixed: `oauthlib==4.0.0` through `databricks-sql-connector==4.8.0`. |
+| GHSA-xpv3-w29h-x7cv (medium), GHSA-hj66-6f7g-4r5v (medium) | `oauthlib` 3.3.1 | 4.0.0 | Fixed the same way; both CI ignores (review date 2026-11-01) are retired. |
+
+- **The fix became installable on 2026-10-20.** databricks-sql-connector
+  4.7.0 (2026-10-20) is the first release that requires
+  `oauthlib>=3.1.0,<5.0.0`; every release from 4.0.0 through 4.6.0 required
+  `<4.0.0`. 4.7.0 is the release the 2026-10-15 re-review named as its
+  trigger ("the first connector release past 4.6.0"), and it arrived before
+  that review's 2026-11-01 date. `requirements.in` moves the connector
+  4.4.0 -> 4.8.0 (2026-10-24, the latest release; it adds kernel and
+  locked-dependency updates over 4.7.0) and adds an `oauthlib>=4.0.0,<5`
+  security floor, so a future connector pin cannot drag oauthlib back.
+  4.8.0's non-extra requirements equal 4.4.0's except `oauthlib<5` and
+  `thrift<0.26` (both from 4.7.0); the first-party `thrift>=0.24.0,<0.25`
+  floor holds the lock at 0.24.0. Only the `kernel` extra (not installed)
+  moves further.
+- **Lock refresh, narrow.** `uv pip compile requirements.in --python-version
+  3.11 --format requirements.txt --output-file uv.lock --upgrade-package
+  databricks-sql-connector --upgrade-package oauthlib` moves exactly two
+  pins: databricks-sql-connector 4.4.0 -> 4.8.0 and oauthlib 3.3.1 -> 4.0.0
+  (now also `via -r requirements.in`). `requirements.txt` is unchanged, and
+  test_supply_chain_licenses pins the new literals in both files.
+- **Still nothing first-party imports either package.** Over backend, jobs,
+  tools, pipelines and scripts, `grep -rnE "^\s*(import|from)
+  (oauthlib|databricks\.sql)"` and `grep -rnE "^\s*from databricks import
+  (.*\b)?sql\b"` return nothing. In a Python 3.11 venv built from the new
+  `requirements.txt`, `databricks.sql`, `databricks.sql.auth.oauth` and
+  `databricks.sql.auth.auth_utils` import, and the connector's only oauthlib
+  names (`oauthlib.oauth2.WebApplicationClient`,
+  `oauthlib.oauth2.rfc6749.errors.OAuth2Error`) resolve on 4.0.0.
+- **Proof** (CI's literal command through the symlink-forcing driver, pip-audit
+  2.9.0, no ignore): the new tree reports `No known vulnerabilities found` on
+  the PyPI service and on `-s osv`. The old lock with the same command reports
+  2 findings in oauthlib 3.3.1 on PyPI (PYSEC-2026-4114,
+  GHSA-3jp2-3mrg-2vxc) and 3 on `-s osv` (adding PYSEC-2026-4113), the
+  control.
+- **CI and the weekly report.** `.github/workflows/ci.yml` runs
+  `pip-audit -r requirements.txt --strict` with no ignore; the retired
+  ignores' proofs stay at the call site as history, and with them went the
+  last `Review date:` line, so the deps report has no review date to gate on.
+  `test_deps_report.py` pins both (no real ignore and no real review date);
+  the synthetic fixture keeps the parser exercised.
+- **Licences.** Unchanged: oauthlib 4.0.0 is BSD-3-Clause and
+  databricks-sql-connector 4.8.0 is Apache-2.0, as before.
