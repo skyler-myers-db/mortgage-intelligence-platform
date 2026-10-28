@@ -34,8 +34,8 @@ of strings binds each string). Each value ends at a consumer, which decides what
   calling a path, ``__file__`` outside the path constructors) is reported as
   unhandled, and its subtree counts as read.
 
-A root it does not follow is reported as unhandled wherever it is referenced
-(app_runtime_paths.ROOT_DUNDERS, ROOT_ATTRS, SPEC_ATTRS and ROOT_REFS): a
+The unfollowed roots in app_runtime_paths.ROOT_DUNDERS, ROOT_ATTRS, SPEC_ATTRS
+and ROOT_REFS are reported as unhandled wherever they are referenced: a
 module attribute ``__file__`` (``backend.__file__``,
 ``sys.modules[__name__].__file__``) or one looked up by name
 (``globals()["__file__"]``, ``vars()["__file__"]``,

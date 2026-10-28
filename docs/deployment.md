@@ -119,9 +119,9 @@ has checked them), or about 970 when no `node` is on `PATH` to check them and
 `tools/databricks/app_runtime_closure.py` is the single source of truth for
 that closure. It holds the upload set (`app.yaml`, `requirements.txt`,
 `requirements.in`, `uv.lock`, `backend/`, `jobs/`, `lakebase/` and a prebuilt
-`frontend/dist/`) and every file the backend reads outside `backend/`. `python
--m tools.databricks.app_runtime_closure list` prints each entry with its
-reader. Two entries are optional and are never in git:
+`frontend/dist/`) and the files the read nets find the backend reading
+outside `backend/`. `python -m tools.databricks.app_runtime_closure list`
+prints each entry with its reader. Two entries are optional and are never in git:
 
 - `genie/space_id.txt`: the space id comes from the environment.
 - `sql/_rendered/...`: `backend/services/lifecycle_sync.py` falls back to
@@ -249,8 +249,8 @@ it matches, and refuses the whole dist when one does not or when the checker
 itself fails. It never uses the `brotli` Python module, even when it is
 installed, because that decoder has no output cap. Without `node`, `stage`
 leaves every `.br` out, says how many, and the App serves the checked `.gz`.
-A `node` too old for the check (`zlib.brotliDecompressSync` arrived in Node
-10.16; the frontend build asks for 22.22 or later) refuses every `.br` rather
+A `node` too old for the check (its `node:` imports need Node 16, and the
+frontend build asks for 22.22 or later) refuses every `.br` rather
 than leaving it out; run `stage` with the `node` the build used.
 `backend/main.py` serves any real file under `frontend/dist`, so anywhere in
 the dist a dot segment (`.env`, `.vite/`, an empty `.git/objects` or
@@ -331,7 +331,8 @@ required CI checks:
   run reports `requirements digest: stale` and continues, a real run refuses
   with exit 2 before any workspace call;
 - `app_runtime_closure stage`, which recomputes the line from the blobs at
-  `--ref` and refuses a slim folder whose `requirements.txt` would not change.
+  `--ref` and refuses a ref whose `requirements.txt` digest line is stale or
+  missing.
 
 pip, pip-audit and `tools/python_deps_check.py` all skip comment lines, so
 they read the file as before.
@@ -348,7 +349,7 @@ reports `outcome` `ok`, `drift` or `lock_unreadable`, with `pins_checked`,
 also reports `python` and the `lock_python` that `uv.lock` was compiled for (a
 mismatch is `drift`, as it is for `tools/python_deps_check.py`), and
 `requirements_digest`: `current`, `stale`, `missing` or `unreadable`. The
-`remedy` follows the cause. A stale or missing digest leaves the bytes of
+`remedy` follows the cause. A stale or missing digest can leave the bytes of
 `requirements.txt` unchanged, which the build is inferred to treat as no
 reason to reinstall, so restamp, commit and redeploy. A current digest with
 drift means the build skipped or failed the reinstall anyway, so restamping

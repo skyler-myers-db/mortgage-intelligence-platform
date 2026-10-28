@@ -22,9 +22,14 @@ The optional ``brotli`` Python module is deliberately not used, even when it
 is installed: ``brotli.decompress`` has no output cap, so a hostile ``.br``
 would inflate without bound in this process, and its handling of bytes after
 the stream cannot be tested here (it is not a repo dependency). A node too
-old for this script (``zlib.brotliDecompressSync`` arrived in Node 10.16;
-the frontend's engines field asks for 22.22 or later) fails every check,
-which is a refusal, not an omission.
+old for this script (its ``node:`` imports need Node 16; the frontend's
+engines field asks for 22.22 or later) fails every check, which is a
+refusal, not an omission.
+
+Known gap: a brotli metadata meta-block (skipped by every decoder) can carry
+bytes that are not the source; such a file still decodes to exactly its
+source and passes. tools/precompress_assets.mjs never writes one, and a
+hostile build could put anything in a hashed ``.js`` anyway.
 
 A file that does not decode to its source is a refusal, never an omission.
 A checker that cannot finish (node exits non-zero, times out or prints
