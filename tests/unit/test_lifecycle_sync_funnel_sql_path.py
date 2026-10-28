@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from backend.services import lifecycle_sync
+from tools import render_sql
 
 REPO = Path(__file__).resolve().parents[2]
 RELATIVE = "transformations/gold_funnel_snapshot_daily.sql"
@@ -100,3 +101,27 @@ def test_the_fallback_swaps_the_catalog_from_any_cwd(
     sql = lifecycle_sync._read_funnel_sql(tmp_path / "absent.sql", catalog="acme")
 
     assert sql == lifecycle_sync.FUNNEL_SQL.read_text(encoding="utf-8").replace("mip.", "acme.")
+
+
+@pytest.mark.parametrize("catalog", ["mip", "summit_mortgage"])
+@pytest.mark.parametrize("demo_first_party_enabled", [True, False])
+def test_the_fallback_equals_the_deploy_render_of_the_funnel_sql(
+    tmp_path: Path, catalog: str, demo_first_party_enabled: bool
+) -> None:
+    # sql/_rendered is untracked, so every per-release App source folder (the
+    # git-archive closure, tools/databricks/app_runtime_closure.py) takes this
+    # fallback; it must read exactly what tools/render_sql.py would render.
+    source = tmp_path / "sql"
+    (source / "transformations").mkdir(parents=True)
+    (source / RELATIVE).write_bytes(lifecycle_sync.FUNNEL_SQL.read_bytes())
+    rendered = tmp_path / "rendered"
+    render_sql.render(
+        catalog=catalog,
+        demo_first_party_enabled=demo_first_party_enabled,
+        source_root=source,
+        dest_root=rendered,
+    )
+
+    sql = lifecycle_sync._read_funnel_sql(tmp_path / "absent.sql", catalog=catalog)
+
+    assert sql == (rendered / RELATIVE).read_text(encoding="utf-8")
