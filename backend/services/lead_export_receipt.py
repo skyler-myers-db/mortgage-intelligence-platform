@@ -30,6 +30,11 @@ What the row proves:
   pages of it the file was built from, AS THE CLIENT DECLARES THEM
   (D-audit-reads-a): the join to that view's VIEW_LEADS rows. Absent when the
   client sent none (outside the paged Lead Queue).
+
+The entity is ``export-`` plus the fingerprint's letter image
+(``audit_entity_ids``), never its raw hex. The fingerprint is unkeyed, so a
+raw slice that read as a phone number refused the same filter set in every
+deployment (``states=KS`` did).
 """
 
 from __future__ import annotations
@@ -41,6 +46,7 @@ from datetime import UTC, datetime
 
 from backend.schemas.audit import AuditEvent
 from backend.schemas.lead_export import LeadExportReceipt, LeadExportReceiptRequest
+from backend.services.audit_entity_ids import audit_safe_letters
 from backend.services.audit_store import AuditStore
 from backend.services.growth_agent_handoff import handoff_filters_fingerprint
 
@@ -107,7 +113,7 @@ def write_lead_export_receipt(
         actor=actor,
         action=LEAD_EXPORT_ACTION,
         entity_type=LEAD_EXPORT_ENTITY_TYPE,
-        entity_id=f"export-{fingerprint[:16]}",
+        entity_id=f"export-{audit_safe_letters(fingerprint)}",
         payload_json=payload_json,
         event_type=LEAD_EXPORT_EVENT_TYPE,
     )

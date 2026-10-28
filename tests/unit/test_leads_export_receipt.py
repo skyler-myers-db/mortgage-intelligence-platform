@@ -48,8 +48,10 @@ from fastapi.testclient import TestClient
 from backend.api.leads_export import EXPORT_DIGEST_MISMATCH_DETAIL
 from backend.config.settings import settings
 from backend.main import app
+from backend.schemas.common import contains_pii_marker
 from backend.schemas.lead_export import LeadExportReceiptRequest
 from backend.schemas.lead_query import MAX_LEAD_LIMIT
+from backend.services.audit_entity_ids import audit_safe_letters
 from backend.services.audit_event_types import is_server_owned_audit_event_type
 from backend.services.audit_store import get_audit_store
 from backend.services.backpressure import BackpressureController
@@ -143,6 +145,27 @@ def test_receipt_writes_exactly_one_lead_export_row(audit_store: InMemoryAuditSt
     # Only the fingerprint reaches the ledger; the raw filter values do not.
     assert "filters" not in row.payload_json
     assert "states" not in row.payload_json
+
+
+def test_a_filter_set_whose_fingerprint_reads_as_a_phone_number_still_exports(
+    audit_store: InMemoryAuditStore,
+) -> None:
+    # Pre-2026-10-28 the entity was ``export-{fingerprint[:16]}``. The lead
+    # export fingerprint is UNKEYED, so ``states=KS`` (85334b6556021725...)
+    # read as a phone number in every deployment: the audit-id PII guard
+    # refused the row and the Kansas CSV never downloaded (422).
+    filters = {"states": "KS"}
+    fingerprint = lead_export_filter_fingerprint(filters)
+    assert contains_pii_marker(f"export-{fingerprint[:16]}"), "control: the pin must still trip"
+
+    response = client.post(
+        "/api/v1/leads/export-receipt", json=_declaration(filters=filters), headers=ACTOR_HEADERS
+    )
+
+    assert response.status_code == 200, response.text
+    [row] = audit_store.list(limit=10)
+    assert row.entity_id == f"export-{audit_safe_letters(fingerprint)}"
+    assert row.payload_json["filter_fingerprint"] == response.json()["filter_fingerprint"] == fingerprint
 
 
 def test_receipt_rejects_borrower_id_digest_mismatch_with_422(

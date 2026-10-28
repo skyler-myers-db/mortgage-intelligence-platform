@@ -13,8 +13,10 @@ What the row proves, and nothing more:
   masked ``borrower_id``; the entity is the borrower.
 * Audit ledger: ``print_surface``, ``printed_row_count`` and the KEYED
   ``filter_fingerprint`` of the explorer query (``audit_fingerprint``), the
-  value AUDIT_EXPORT stores. With no fingerprint key the receipt is refused
-  and no row is written (fail closed, like AUDIT_EXPORT).
+  value AUDIT_EXPORT stores. The entity is ``print-`` plus the fingerprint's
+  letter image (``audit_entity_ids``), never its raw hex, which can read as a
+  phone number and get the row refused. With no fingerprint key the receipt
+  is refused and no row is written (fail closed, like AUDIT_EXPORT).
 
 Never stored: the filters themselves, an id list or any row content. The
 server never sees the printed page, so the row records the request, not the
@@ -27,6 +29,7 @@ from datetime import UTC, datetime
 
 from backend.schemas.audit import AuditEvent
 from backend.schemas.print_receipt import PrintReceipt, PrintReceiptRequest
+from backend.services.audit_entity_ids import audit_safe_letters
 from backend.services.audit_fingerprint import (
     AUDIT_LEDGER_FINGERPRINT_DOMAIN,
     keyed_filter_fingerprint,
@@ -70,7 +73,7 @@ def write_print_receipt(
         if fingerprint is None:
             raise PrintFingerprintUnavailable("print fingerprint key is not configured")
         entity_type = "audit_ledger"
-        entity_id = f"print-{fingerprint[:16]}"
+        entity_id = f"print-{audit_safe_letters(fingerprint)}"
         metadata = {
             "print_surface": payload.surface,
             "printed_row_count": payload.row_count,

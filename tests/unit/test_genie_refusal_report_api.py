@@ -23,8 +23,9 @@ from fastapi.testclient import TestClient
 from backend.main import _backpressure_controller, app
 from backend.schemas.audit import AuditEvent
 from backend.schemas.common import contains_pii_marker
+from backend.services.audit_entity_ids import audit_safe_letters
 from backend.services.genie_answers import GenieMessageResponse, GenieProof
-from backend.services.genie_audit import audit_safe_letter_digest, audit_safe_letters
+from backend.services.genie_audit import audit_safe_letter_digest
 from backend.services.genie_deterministic import (
     _block_unsafe_genie_output,
     _deterministic_genie_response,

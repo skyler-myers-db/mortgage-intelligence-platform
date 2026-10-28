@@ -11,6 +11,7 @@ that a refused receipt never writes a row.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator
 from typing import Any
 
@@ -20,6 +21,9 @@ from fastapi.testclient import TestClient
 from backend.api.print_receipt import PRINT_RECEIPT_REFUSED_DETAIL
 from backend.config.settings import settings
 from backend.main import app
+from backend.schemas.common import contains_pii_marker
+from backend.services import audit_fingerprint
+from backend.services.audit_entity_ids import audit_safe_letters
 from backend.services.audit_event_types import is_server_owned_audit_event_type
 from backend.services.audit_fingerprint import (
     AUDIT_LEDGER_FINGERPRINT_DOMAIN,
@@ -186,9 +190,32 @@ def test_a_ledger_print_stores_a_keyed_fingerprint_never_the_filters(store: InMe
     assert stored != plain, "a plain sha256 of the filters is a dictionary target"
     assert stored == keyed_filter_fingerprint(plain, domain=AUDIT_LEDGER_FINGERPRINT_DOMAIN)
     assert response.json()["filter_fingerprint"] == stored
-    assert (row.entity_type, row.entity_id) == ("audit_ledger", f"print-{stored[:16]}")
+    assert (row.entity_type, row.entity_id) == ("audit_ledger", f"print-{audit_safe_letters(stored)}")
     flat = repr(row.payload_json)
     assert "APPROVE" not in flat and "2026-09-01" not in flat
+
+
+def test_a_fingerprint_whose_hex_reads_as_a_phone_number_still_prints(
+    store: InMemoryAuditStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Pre-2026-10-28 the entity was ``print-{fingerprint[:16]}``. Under this
+    # process key LEDGER_FILTERS fingerprint to b917f0406271903c..., whose
+    # ten-digit run reads as a phone number, so the audit-id PII guard refused
+    # the row and the print answered 422 (about 1.4% of keys).
+    monkeypatch.setattr(audit_fingerprint, "_LOCAL_KEY", hashlib.sha256(b"probe-168").digest())
+    for name in ("mip_genie_action_secret_current", "mip_genie_action_secret", "mip_genie_action_secret_previous"):
+        monkeypatch.setattr(settings, name, None)
+    stored = keyed_filter_fingerprint(
+        audit_filter_fingerprint(dict(LEDGER_FILTERS)), domain=AUDIT_LEDGER_FINGERPRINT_DOMAIN
+    )
+    assert stored is not None and contains_pii_marker(f"print-{stored[:16]}"), "control: the pin must still trip"
+
+    response = client.post(URL, json=_ledger_body(), headers=AUDITOR_HEADERS)
+
+    assert response.status_code == 200, response.text
+    [row] = _print_rows(store)
+    assert row.entity_id == f"print-{audit_safe_letters(stored)}"
+    assert row.payload_json["filter_fingerprint"] == response.json()["filter_fingerprint"] == stored
 
 
 # --- fail closed -------------------------------------------------------------

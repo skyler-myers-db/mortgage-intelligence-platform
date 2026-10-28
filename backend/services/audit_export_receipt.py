@@ -22,6 +22,10 @@ What the row proves:
   recomputed here from the ids the client sends; a mismatch refuses the
   receipt. The ids themselves are NOT stored: the ledger rows they name are
   already in the ledger.
+
+The entity is ``export-`` plus the fingerprint's letter image
+(``audit_entity_ids``), never its raw hex, which can read as a phone number
+and get the row refused.
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from backend.schemas.audit import AuditEvent, AuditExportReceipt, AuditExportReceiptRequest
+from backend.services.audit_entity_ids import audit_safe_letters
 from backend.services.audit_fingerprint import (
     AUDIT_LEDGER_FINGERPRINT_DOMAIN,
     keyed_filter_fingerprint,
@@ -94,7 +99,7 @@ def write_audit_export_receipt(
         actor=actor,
         action=AUDIT_EXPORT_ACTION,
         entity_type=AUDIT_EXPORT_ENTITY_TYPE,
-        entity_id=f"export-{fingerprint[:16]}",
+        entity_id=f"export-{audit_safe_letters(fingerprint)}",
         payload_json={
             "exported_row_count": payload.row_count,
             "csv_sha256": payload.csv_sha256,
