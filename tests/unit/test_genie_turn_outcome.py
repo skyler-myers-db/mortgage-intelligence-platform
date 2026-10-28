@@ -241,11 +241,20 @@ def _http_error(status: int, body: str) -> urllib.error.HTTPError:
 _START = {"conversation_id": "c-1", "message": {"id": "m-1"}}
 
 
-def test_ask_records_the_live_budget_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _client(
-        monkeypatch,
-        [_START, {"status": "FAILED", "id": "m-1", "error": _LIVE_BUDGET_ENVELOPE}],
-    )
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        _LIVE_BUDGET_ENVELOPE,
+        # Each half alone must still classify: the structured type...
+        {"type": "BUDGET_EXCEEDED_EXCEPTION", "error": "You've reached your budget."},
+        # ...and the canonical code prefix of the text when the type is absent.
+        {"error": "RESOURCE_EXHAUSTED: You've reached your budget."},
+    ],
+)
+def test_ask_records_the_live_budget_failure(
+    monkeypatch: pytest.MonkeyPatch, envelope: dict[str, str]
+) -> None:
+    client = _client(monkeypatch, [_START, {"status": "FAILED", "id": "m-1", "error": envelope}])
     with pytest.raises(GenieClientError) as raised:
         client.ask(_SECRET_QUESTION)
     assert raised.value.error_class == "BUDGET_EXCEEDED"
