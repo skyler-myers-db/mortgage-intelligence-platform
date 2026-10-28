@@ -292,6 +292,23 @@ def test_the_cli_refuses_an_out_inside_the_dist_that_resolve_cannot_fold(
                                                       "us-counties.json"]
 
 
+def test_the_cli_refuses_an_out_behind_a_symlink_loop_without_a_traceback(
+    repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    dist = make_dist(tmp_path)
+    (tmp_path / "loop_a").symlink_to(tmp_path / "loop_b")
+    (tmp_path / "loop_b").symlink_to(tmp_path / "loop_a")
+    out = tmp_path / "loop_a" / "out"
+
+    assert closure.main(_stage_args(repo, dist, out)) == 2
+
+    err = capsys.readouterr().err
+    assert err.startswith(f"refused: cannot resolve {out}: ")
+    assert "Traceback" not in err
+    assert sorted(p.name for p in dist.iterdir()) == ["assets", "index.html", "other.json",
+                                                      "us-counties.json"]
+
+
 def test_the_cli_refuses_an_out_inside_the_dist_in_another_letter_case(
     repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

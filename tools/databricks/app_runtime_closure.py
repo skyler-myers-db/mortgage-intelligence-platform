@@ -404,7 +404,10 @@ def _contains(outer: Path, inner: Path) -> bool:
     target = _identity(outer)
     if target is None:
         return False
-    resolved = inner.resolve()
+    try:
+        resolved = inner.resolve()
+    except (OSError, RuntimeError) as exc:  # a symlink loop, or a path the OS refuses
+        raise StageError(f"cannot resolve {inner}: {exc}") from exc
     return any(_identity(candidate) == target for candidate in (resolved, *resolved.parents))
 
 
