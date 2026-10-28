@@ -34,8 +34,9 @@ be covered by the closure or listed, with a reason, in its reviewed allowlist.
 This sweep follows nothing, so it flags only what is visible in the literal
 itself or in the call or operator around it: a bare top-level name with no
 ``/`` (``"docs"``) passed to a first-party function is not flagged here (the
-flow scan follows it into the parameter). The residuals neither net sees are
-listed in tests/fixtures/app_runtime_reads.py.
+flow scan follows it into the parameter). The known residuals neither net
+sees are listed in tests/fixtures/app_runtime_reads.py; that list is known,
+not complete.
 """
 
 from __future__ import annotations

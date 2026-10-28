@@ -49,8 +49,13 @@ module attribute ``__file__`` (``backend.__file__``,
 
 A path value bound to a name nothing loads counts as read where it is bound.
 
-Residuals neither net sees, each a shape no backend module uses today
-(tests/unit/test_app_runtime_read_residuals.py RESIDUALS pins each one):
+Known residuals neither net sees (tests/unit/test_app_runtime_read_residuals.py
+RESIDUALS pins each one). The list is KNOWN, NOT COMPLETE: the two nets are a
+tripwire for accidental reads outside backend/, not a proof that none exists.
+A new App read outside backend/ must use the shapes the scans follow (a
+module-level ``Path(__file__)``-rooted constant plus literal segments) and be
+added to READS in tools/databricks/app_runtime_closure.py. No backend module
+uses any of these shapes today:
 
 * a first-party callee the flow scan cannot name (a method reached through an
   object, a function passed as a value) is assumed to read only under the
@@ -60,9 +65,15 @@ Residuals neither net sees, each a shape no backend module uses today
   to any other call that is neither a path constructor nor a first-party
   function the scan can name. Bare names are not swept: the backend uses
   ``"lakebase"`` and ``"genie"`` as dependency labels hundreds of times;
-* a working-directory path built with ``str.format`` or ``%`` from parts
-  that hold no ``/`` (``"{}/{}".format("docs", n)``); a ``__file__`` root
-  formatted into a string still escapes, so it counts as ``./**``;
+* a bare top-level name held in a container (``{"k": "docs"}["k"]``,
+  ``["docs"][0]``) or in a named tuple a loop walks (a loop over a literal
+  tuple or list is followed);
+* a working-directory path built with ``str.format``, ``%`` or ``str.join``
+  (``"/".join(["docs", n])``, ``os.sep.join``) from parts that hold no ``/``;
+  a ``__file__`` root formatted into a string still escapes, so it counts as
+  ``./**``;
+* a starred argument to a path constructor or ``os.path.join``
+  (``Path(*PARTS)``, ``os.path.join(*["docs", "x.md"])``);
 * a path read from an environment variable with no default;
 * ``getattr``, ``exec``, ``eval`` and a module named by a computed string.
 
@@ -269,7 +280,7 @@ def _root_label(module: ModuleFlow, node: ast.AST, specs: set[str]) -> str | Non
 
 
 def _unfollowed_roots(module: ModuleFlow) -> Iterator[str]:
-    """Every reference to a root the scan does not follow (paths.ROOT_*)."""
+    """Each reference to a root the scan is known not to follow (paths.ROOT_*)."""
 
     specs = _spec_names(module)
     for node, _ in module.nodes:

@@ -2,23 +2,30 @@
 """The Databricks App's runtime source closure, and a slim per-release stager.
 
 This is the single source of truth for the repo paths the running App needs:
-the upload set (the App source the platform builds and starts) plus every file
+the upload set (the App source the platform builds and starts) plus the files
 the backend reads outside ``backend/``. tests/unit/test_app_runtime_closure_reads.py
 checks it against two static scans of backend/ and the first-party modules it
 imports: a flow scan that counts anything it cannot follow as a read of the
-whole subtree and reports a root it does not follow (``backend.__file__``,
-``sys.argv``, ``importlib.resources.files``) as unhandled, and a sweep of the
-string literals that name a repo path (a ``/`` path, a dotted first-party
-module, or a name in a path call or ``/`` join). It fails when either finds a
-read not covered here, or an entry here is no longer read. Neither net sees:
-a callee the flow scan cannot name (a method reached through an object, a
-function passed as a value); a bare top-level name such as ``"docs"`` handed
-to a library loader (``StaticFiles(directory="docs")``,
-``jinja2.FileSystemLoader("docs")``); a working-directory path built with
-``str.format`` or ``%`` from parts that hold no ``/``; a path read from an
-environment variable with no default; and
-``getattr``, ``exec``, ``eval`` or a computed module name. No backend read
-uses those shapes today (tests/fixtures/app_runtime_reads.py).
+whole subtree and reports the roots it is known not to follow
+(``backend.__file__``, ``globals()["__file__"]``, a frame, ``sys.argv``,
+``importlib.resources.files``) as unhandled, and a sweep of the string
+literals that name a repo path (a ``/`` path, a dotted first-party module, or
+a name in a path call or ``/`` join). It fails when either finds a read not
+covered here, or an entry here is no longer read.
+
+The two nets are a tripwire for accidental reads, not a proof: their residual
+list is KNOWN, NOT COMPLETE. Known to escape both: a callee the flow scan
+cannot name (a method reached through an object, a function passed as a
+value); a bare top-level name such as ``"docs"`` handed to a library loader
+(``StaticFiles(directory="docs")``) or held in a container or a named tuple a
+loop walks; a working-directory path built with ``str.format``, ``%`` or
+``str.join``; a starred argument (``Path(*parts)``); a path read from an
+environment variable with no default; and ``getattr``, ``exec``, ``eval`` or
+a computed module name (tests/fixtures/app_runtime_reads.py names them,
+tests/unit/test_app_runtime_read_residuals.py pins them, and no backend read
+uses them today). A new App read outside ``backend/`` must use the shapes the
+scans follow, a module-level ``Path(__file__)``-rooted constant plus literal
+segments (``ROOT / "sql" / "x.sql"``), and must be added to READS below.
 
 Why a slim folder: the App compute re-downloads every source file, at about
 10 files/s, inside its 10-minute start window. The bundle files root only

@@ -7,20 +7,21 @@ fallback returns None), so a miss is a quiet production degradation, not a
 loud failure. Two independent scans of backend/ and the first-party modules it
 imports guard the list:
 
-* the flow scan (tests/fixtures/app_runtime_reads.py) follows every path value
-  to the consumer that reads it, and counts anything it cannot follow as a
-  read of the whole subtree;
+* the flow scan (tests/fixtures/app_runtime_reads.py) follows path values from
+  the roots it knows to the consumer that reads them, and counts anything it
+  cannot follow as a read of the whole subtree;
 * the literal sweep (tests/fixtures/app_runtime_literals.py) follows nothing
   and flags each string literal that names a repo path by its own text (a
   ``/`` path, or a dotted first-party module) or by the path call or ``/``
   join around it. A bare name such as ``"docs"`` passed through a parameter
   is the flow scan's to follow, not the sweep's.
 
-Every read and every literal must be covered by the closure (or, for a
-literal, reviewed below with a reason), and every closure ``read`` entry must
+Each read and literal the nets find must be covered by the closure (or, for
+a literal, reviewed below with a reason), and every closure ``read`` entry must
 still be read. tests/unit/test_app_runtime_read_shapes.py pins the shapes
-each net catches; test_app_runtime_read_residuals.py pins the residuals
-neither does.
+each net catches; test_app_runtime_read_residuals.py pins the known residuals
+neither does. The nets are a tripwire for accidental reads, not a proof: the
+residual list is known, not complete.
 """
 
 from __future__ import annotations

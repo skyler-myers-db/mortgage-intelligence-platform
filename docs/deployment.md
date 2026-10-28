@@ -131,16 +131,20 @@ reader. Two entries are optional and are never in git:
   slim folder.
 
 Two static scans of `backend/` and the first-party modules it imports guard
-the closure. The flow scan (`tests/fixtures/app_runtime_reads.py`) follows
-every path value rooted in a bare `__file__` or the working directory, and
-every string passed into a first-party function it can name, to the code that
-reads it. Anything it cannot follow (a library call, an f-string, a function
+the closure. They are a tripwire for accidental reads outside `backend/`, not a
+proof that none exists. The flow scan (`tests/fixtures/app_runtime_reads.py`)
+follows path values rooted in a bare `__file__` or the working directory, and
+strings passed into first-party functions it can name, to the code that reads
+them. Anything it cannot follow (a library call, an f-string, a function
 returned to callers it cannot see) counts as a read of the whole subtree under
-the value, so an escaping repo root can never be covered, and a root it does
-not follow at all (`backend.__file__`, `sys.modules[__name__].__file__`,
-`__spec__`, `inspect.getfile`, `sys.argv`, `sys.path`,
-`importlib.resources.files`, `pkgutil.get_data`) is reported as unhandled
-wherever it appears. The literal sweep (`tests/fixtures/app_runtime_literals.py`)
+the value, so an escaping repo root can never be covered. The roots it is
+known not to follow (`backend.__file__`, `sys.modules[__name__].__file__`,
+`globals()["__file__"]` and other lookups by name, `__spec__`, any
+`co_filename`, a frame from `sys._getframe`, `inspect.currentframe` or
+`inspect.stack`, a `find_spec` result's `origin` or
+`submodule_search_locations`, `inspect.getfile`, `sys.argv`, `sys.path`,
+`importlib.resources.files`, `pkgutil.get_data`) are reported as unhandled
+wherever they appear. The literal sweep (`tests/fixtures/app_runtime_literals.py`)
 follows nothing. It flags a string literal that names a repo path outside
 `backend/` by its own text (a `/` path such as `"docs/a.md"`, or a dotted
 string naming a tracked first-party module such as `"tools.x"`), or by the
@@ -152,8 +156,10 @@ reviewed in that test, with a reason), or when a closure entry is no longer
 read, and `tests/unit/test_app_runtime_read_shapes.py` pins the shapes each
 net catches.
 
-The scans are static, and these shapes are residuals that neither sees
-(`RESIDUALS` in `tests/unit/test_app_runtime_read_residuals.py` pins each one):
+The scans are static, and their residual list is known, not complete. These
+are the shapes known to escape both nets (`RESIDUALS` in
+`tests/unit/test_app_runtime_read_residuals.py` pins each one, so a net that
+learns one fails loudly until it moves to the caught shapes):
 
 - a first-party callee the flow scan cannot name (a method reached through an
   object, a function passed as a value), which is assumed to read only under
@@ -163,16 +169,32 @@ The scans are static, and these shapes are residuals that neither sees
   any other call that is neither a path constructor nor a first-party function
   the scan can name (bare names are not swept: the backend uses `"lakebase"`
   and `"genie"` as dependency labels hundreds of times);
-- a working-directory path built with `str.format` or `%` from parts that
-  hold no `/` (`"{}/{}".format("docs", name)`); a `__file__` root formatted
-  into a string still counts as a read of the whole repository;
+- a bare top-level name held in a container (`{"k": "docs"}["k"]`,
+  `["docs"][0]`) or in a named tuple that a loop walks (a loop over a literal
+  tuple or list is followed);
+- a working-directory path built with `str.format`, `%` or `str.join` from
+  parts that hold no `/` (`"{}/{}".format("docs", name)`,
+  `"/".join(["docs", name])`, `os.sep.join(...)`); a `__file__` root
+  formatted into a string still counts as a read of the whole repository;
+- a starred argument to a path constructor or `os.path.join`
+  (`os.path.join(*["docs", "x.md"])`, `Path(*parts)`);
 - a path read from an environment variable with no default;
 - `getattr`, `exec`, `eval` and a module named by a computed string.
 
-No backend read uses those shapes today. The readers that matter degrade
-silently when their file is missing (`county_names` returns `{}`, the Genie
-space-id fallback returns `None`), so keep new reads to the shapes the scans
-follow.
+No backend read uses those shapes today. An AST pass over `backend/` and
+`jobs/sync_lifecycle_state.py` on 2026-10-28 found no starred argument,
+container subscript, `str.format` or `%` path, environment read without a
+default, library loader, `exec`, `eval` or loop over a named tuple feeding a
+path call; its two `" / ".join` calls build display labels, its one computed
+`find_spec(name)` is a presence check for `databricks.sdk`, and none of its
+dynamic `getattr` calls is passed to a path call. The readers that matter
+degrade silently when their file is missing (`county_names` returns `{}`, the
+Genie space-id fallback returns `None`), so a new App read outside `backend/`
+must use the shapes the scans follow, a module-level constant rooted in
+`Path(__file__)` plus literal segments
+(`ROOT = Path(__file__).resolve().parents[2]`, then
+`ROOT / "sql" / "x.sql"`), and must be added to `READS` in
+`tools/databricks/app_runtime_closure.py`.
 
 `tests/unit/test_app_runtime_closure_stage.py` holds the closure to its file
 budget: 1,300 staged files, about 130 s of download, of which at most 600 are

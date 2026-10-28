@@ -105,10 +105,10 @@ def test_names_that_only_look_like_unfollowed_roots_are_not_reported(tmp_path: P
     assert scan(make_tree(tmp_path, source)).unhandled_file_uses == []
 
 
-# The documented residuals: shapes NEITHER net sees (tests/fixtures/app_runtime_reads.py,
-# tools/databricks/app_runtime_closure.py and docs/deployment.md list them). If
-# a net learns one, move it to CAUGHT (test_app_runtime_read_shapes.py) and drop
-# it from those three lists.
+# The KNOWN residuals: shapes NEITHER net sees (tests/fixtures/app_runtime_reads.py,
+# tools/databricks/app_runtime_closure.py and docs/deployment.md list them). The
+# list is known, not complete. If a net learns one, move it to CAUGHT
+# (test_app_runtime_read_shapes.py) and drop it from those three lists.
 RESIDUALS: dict[str, str] = {
     "library_loader": (
         'from starlette.staticfiles import StaticFiles\nX = StaticFiles(directory="docs")'),
