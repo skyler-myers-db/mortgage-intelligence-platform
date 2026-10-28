@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Stamp requirements.txt with the sha256 of the two files it includes.
 
-Why: the Databricks Apps build decides whether to reinstall Python
-dependencies by comparing requirements.txt with the previous deployment's
-copy ("Requirements have not changed. Skipping installation.") and does not
-follow its ``-c uv.lock`` / ``-r requirements.in`` includes. requirements.txt
-is only those two include lines, so a lock refresh (security floors included)
-never reached a running App, whose Python environment persists across
-deployments. A generated first line carrying the digest of both included
-files turns every lock or input change into a requirements.txt change:
+Why: on 2026-10-28 the Databricks Apps build logged "Requirements have not
+changed. Skipping installation." for a deploy whose uv.lock had changed but
+whose requirements.txt (only the ``-c uv.lock`` / ``-r requirements.in``
+include lines) had not, and the App kept its old packages; its Python
+environment persists across deployments. Inferred from that build log, and to
+be confirmed by the first deploy after this change: the build compares
+requirements.txt with the previous deployment's copy and does not follow its
+includes (docs/deployment.md, "App Python dependencies"). A generated first
+line carrying the digest of both included files turns every lock or input
+change into a requirements.txt change:
 
   python tools/requirements_digest.py --write   # after any uv.lock / requirements.in change
   python tools/requirements_digest.py --check   # exit 1, with the remedy, when stale

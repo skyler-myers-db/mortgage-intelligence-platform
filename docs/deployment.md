@@ -271,18 +271,22 @@ until an owner removes them. Nothing in the repository deletes them.
 
 ## App Python dependencies: the deps-digest line
 
-The Databricks Apps build decides whether to reinstall Python packages by
-comparing `requirements.txt` with the previous deployment's copy. When the
-bytes are equal it logs `Requirements have not changed. Skipping
-installation.` and keeps the Python environment it already has, which
-persists on the App compute across deployments. It does not follow the file's
-`-c uv.lock` and `-r requirements.in` includes. Until 2026-10-28
-`requirements.txt` was only those two lines, byte-identical since 2026-05-17,
-so no lock refresh reached a running App: the deploy that carried PR #274
-(databricks-sql-connector 4.4.0 to 4.8.0, oauthlib 3.3.1 to 4.0.0) skipped
-installation, and lock bumps since at least 2026-10-06, security floors
-included (certifi, urllib3, PyJWT, oauthlib, mlflow and the rest), did not
-reach the running App.
+What was observed: the 2026-10-28 deploy that carried PR #274
+(databricks-sql-connector 4.4.0 to 4.8.0, oauthlib 3.3.1 to 4.0.0) logged
+`Requirements have not changed. Skipping installation.` in its Apps build and
+kept the Python environment the App compute already had, which persists
+across deployments. `uv.lock` had changed; `requirements.txt` had not. Until
+2026-10-28 it was only the `-c uv.lock` and `-r requirements.in` include
+lines, byte-identical since 2026-05-17.
+
+What is inferred from that build log, and not yet confirmed: the build
+decides whether to reinstall by comparing `requirements.txt` with the previous
+deployment's copy, byte for byte, and does not follow the file's includes. If
+so, no lock refresh reached a running App since 2026-05-17, including the lock
+bumps since at least 2026-10-06 and their security floors (certifi, urllib3,
+PyJWT, oauthlib, mlflow and the rest). The first deploy after this change
+that carries a digest change confirms or refutes the inference (see "Verify
+the reinstall" below).
 
 `requirements.txt` therefore starts with a generated comment carrying the
 sha256 of both included files:
@@ -341,7 +345,7 @@ the same two packages that `tools/python_deps_check.py` names, with
 App.
 
 Whether a comment-only change defeats the skip is inferred from how the skip
-behaved (it is keyed to `requirements.txt`, and that file never
+behaved (it appears keyed to `requirements.txt`, and that file never
 changed); it has not yet been observed, so confirm it on the next deploy that
 carries a digest change. If the build still skips (for example because it
 compares the file with comments stripped), the fallback is an include line
