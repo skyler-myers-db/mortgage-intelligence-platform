@@ -4,44 +4,19 @@
 from __future__ import annotations
 
 import argparse
-import re
 from pathlib import PurePosixPath
 from typing import Any
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
+from tools.databricks import app_release_contract
 
 _ROOT_NODE_MANIFESTS = ("package.json", "package-lock.json")
 
 
 def _expected_source_path(*, principal: str, target: str, root_leaf: str | None = None) -> str:
-    """The bundle files root; ``root_leaf`` (default: the target) is its last root segment.
-
-    The live dev install keeps ``.../dev/files``; the isolated CI staging
-    install (W5e, tools/databricks/ci_install_isolation.py) passes its own
-    leaf, e.g. ``dev-ci``.
-    """
-    if (
-        type(principal) is not str
-        or not principal
-        or principal != principal.strip()
-        or principal in {".", ".."}
-        or "/" in principal
-        or any(character.isspace() or ord(character) < 32 for character in principal)
-    ):
-        raise RuntimeError("expected App source principal is not canonical")
-    if (
-        type(target) is not str
-        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", target) is None
-    ):
-        raise RuntimeError("expected App source target is not canonical")
-    leaf = target if root_leaf is None else root_leaf
-    if type(leaf) is not str or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", leaf) is None:
-        raise RuntimeError("expected App source root leaf is not canonical")
-    return (
-        f"/Workspace/Users/{principal}/.bundle/"
-        f"mortgage-intelligence-platform/{leaf}/files"
-    )
+    """The bundle files root (tools/databricks/app_release_contract.files_root)."""
+    return app_release_contract.files_root(principal=principal, target=target, root_leaf=root_leaf)
 
 
 def _workspace_api_path(
