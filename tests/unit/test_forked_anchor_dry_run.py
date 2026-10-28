@@ -155,6 +155,9 @@ def test_the_deploy_dev_dry_run_addresses_only_the_forked_anchor_target(tmp_path
         f".databricks/app-release/manifest.json --expected-git-sha {sha} " in command
         for command in sources
     )
+    prune = [command for command in commands if "app_release_prune" in command]
+    assert len(prune) == 1 and f"--expected-app-id dry-run-app-id --current-release {release} " in prune[0]
+    assert prune[0].endswith(f"--expected-target {CI_TARGET} --expected-root-leaf dev-ci")
 
 
 def test_an_operator_dry_run_of_the_forked_anchor_target_is_refused(tmp_path: Path) -> None:

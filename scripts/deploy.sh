@@ -32,6 +32,7 @@
 #   12. Redeploy with agentic env, run live golden Agent Evaluation, then
 #       redeploy with the eval run id.
 #   13. Smoke-check the live API via scripts/smoke_live.sh (optional; fail-loud by default).
+#   14. After a green capture only, prune unreferenced App release folders (best effort).
 #
 # Why one script (vs a bundle job that invokes provision_genie_space.py):
 # the Genie provisioner reads genie/mortgage_lead_intelligence_space.yml
@@ -142,7 +143,7 @@ while [[ $# -gt 0 ]]; do
       fi
       TARGET_SEEN=1; shift ;;
     -h|--help)
-      sed -n '2,62p' "$0"
+      sed -n '2,63p' "$0"
       exit 0
       ;;
     *)
