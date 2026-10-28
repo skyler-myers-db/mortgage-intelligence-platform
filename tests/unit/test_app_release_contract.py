@@ -9,6 +9,7 @@ the release-id CLI turns into exit 2.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import threading
@@ -274,6 +275,32 @@ def test_a_written_manifest_reads_back_and_recomputes(tmp_path: Path) -> None:
     assert manifest.paths == tuple(sorted(FILES))
 
 
+def _documented_release_id(commit: str, files: list[dict[str, object]]) -> str:
+    """The documented id formula over raw manifest entries, in list order and unchecked.
+
+    Re-stamping an edited manifest with it leaves the edit as the only defect,
+    so a refusal case cannot pass on a stale id when its own rule is reverted.
+    """
+    lines = "".join(f"{item['path']}\t{item['size']}\t{item['sha256']}\n" for item in files)
+    return f"{commit[:12]}-{hashlib.sha256(lines.encode('utf-8')).hexdigest()[:12]}"
+
+
+def test_the_restamp_helper_recomputes_a_written_manifest_id(tmp_path: Path) -> None:
+    path, manifest = _written(tmp_path)
+    document = json.loads(path.read_text(encoding="utf-8"))
+
+    assert _documented_release_id(COMMIT, document["files"]) == manifest.release_id
+    assert document["release_id"] == manifest.release_id
+
+
+# Entry-level edits whose own rule is under test: the id is re-stamped over the
+# edited entries. "size" keeps its stale id on purpose: it is the case for an
+# entry changed under the stated id.
+_RESTAMPED = frozenset(
+    {"unsorted", "duplicate", "bool_size", "negative_size", "sha", "path", "entry_key", "empty"}
+)
+
+
 def _mutate(document: dict[str, object], change: str) -> None:
     files = document["files"]
     assert isinstance(files, list)
@@ -288,7 +315,7 @@ def _mutate(document: dict[str, object], change: str) -> None:
     elif change == "unsorted":
         files.reverse()
     elif change == "duplicate":
-        files.append(dict(files[0]))
+        files.insert(1, dict(files[0]))  # adjacent, so the list stays sorted but not unique
     elif change == "id":
         document["release_id"] = f"{COMMIT[:12]}-000000000000"
     elif change == "size":
@@ -307,22 +334,39 @@ def _mutate(document: dict[str, object], change: str) -> None:
         files.clear()
     else:
         document["files"] = {}
+    if change in _RESTAMPED:
+        document["release_id"] = _documented_release_id(COMMIT, files)
 
 
 @pytest.mark.parametrize(
-    "change",
-    ["version", "bool_version", "extra_key", "short_commit", "unsorted", "duplicate", "id", "size",
-     "bool_size", "negative_size", "sha", "path", "entry_key", "empty", "files_not_list"],
+    ("change", "refusal"),
+    [
+        ("version", "version is not 1"),
+        ("bool_version", "version is not 1"),
+        ("extra_key", r"is not \{version, commit, release_id, files\}"),
+        ("short_commit", "not a 40-hex git commit"),
+        ("unsorted", "not unique and sorted"),
+        ("duplicate", "not unique and sorted"),
+        ("id", "does not recompute"),
+        ("size", "does not recompute"),
+        ("bool_size", "size is invalid"),
+        ("negative_size", "size is invalid"),
+        ("sha", "sha256 is invalid"),
+        ("path", "path is not canonical"),
+        ("entry_key", r"entry is not \{path, size, sha256\}"),
+        ("empty", "lists no files"),
+        ("files_not_list", "files is not a list"),
+    ],
 )
 def test_read_manifest_refuses_anything_but_an_exact_version_1_manifest(
-    tmp_path: Path, change: str
+    tmp_path: Path, change: str, refusal: str
 ) -> None:
     path, _ = _written(tmp_path)
     document = json.loads(path.read_text(encoding="utf-8"))
     _mutate(document, change)
     path.write_text(json.dumps(document), encoding="utf-8")
 
-    with pytest.raises(contract.ReleaseContractError):
+    with pytest.raises(contract.ReleaseContractError, match=refusal):
         contract.read_manifest(path, expected_commit=None)
 
 
