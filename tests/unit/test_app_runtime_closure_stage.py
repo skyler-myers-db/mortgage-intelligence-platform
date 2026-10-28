@@ -500,6 +500,18 @@ def test_list_prints_every_entry_and_the_tracked_files(
     assert set(capsys.readouterr().out.splitlines()) == set(TRACKED)
 
 
+def test_exactly_the_two_never_tracked_entries_are_optional() -> None:
+    # stage skips a missing optional entry and refuses a missing required one,
+    # so a reader file wrongly marked optional would be dropped from a slim
+    # folder without a word. docs/deployment.md names exactly these two.
+    optional = {entry.path for entry in closure.CLOSURE if not entry.required}
+
+    assert optional == {
+        "genie/space_id.txt",
+        "sql/_rendered/transformations/gold_funnel_snapshot_daily.sql",
+    }
+
+
 def test_stage_of_head_carries_every_tracked_closure_file(tmp_path: Path) -> None:
     commit, found = closure.tracked_files(ROOT, "HEAD")
     dist = tmp_path / "dist"
