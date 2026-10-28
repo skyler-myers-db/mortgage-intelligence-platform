@@ -112,6 +112,16 @@ def test_a_manifest_or_sha_of_another_release_is_refused(tmp_path: Path) -> None
         _converge(client, manifest_path, manifest.release_id, path, expected_git_sha="f" * 40)
 
 
+def test_a_manifest_of_another_commit_with_the_same_12_hex_prefix_is_refused(tmp_path: Path) -> None:
+    """The path and id checks see only the commit's 12-hex prefix; the manifest's
+    full commit must equal the deploy commit too."""
+    client, manifest_path, manifest, path = _published(tmp_path)
+    twin = f"{COMMIT[:12]}{'f' * 28}"
+
+    with pytest.raises(contract.ReleaseContractError, match="staged for another commit"):
+        _converge(client, manifest_path, manifest.release_id, path, expected_git_sha=twin)
+
+
 @pytest.mark.parametrize("change", ["extra", "missing", "size", "notebook", "package_json"])
 def test_a_release_folder_that_drifted_from_its_manifest_is_refused_untouched(
     tmp_path: Path, change: str
