@@ -119,6 +119,54 @@ def test_analytics_route_normalizes_segment_codes_and_mode_case() -> None:
     assert captured["filters"].signal_types == ["rate_spread"]
 
 
+def _signals_through_capture_repo(query: str) -> tuple[int, list[AnalyticsFilters | None]]:
+    calls: list[AnalyticsFilters | None] = []
+
+    class _CaptureAnalyticsRepo:
+        def signals(self, filters: AnalyticsFilters | None = None) -> SignalAnalyticsResponse:
+            calls.append(filters)
+            return SignalAnalyticsResponse(evidence_daily=[], evidence_by_signal=[], evidence_examples=[])
+
+    prior = app.dependency_overrides.get(get_analytics_repository)
+    app.dependency_overrides[get_analytics_repository] = lambda: _CaptureAnalyticsRepo()
+    try:
+        response = TestClient(app).get(f"/api/v1/analytics/signals?{query}")
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_analytics_repository, None)
+        else:
+            app.dependency_overrides[get_analytics_repository] = prior
+    return response.status_code, calls
+
+
+@pytest.mark.parametrize("signal_type", ["listing", "heloc_propensity", "refi_propensity"])
+def test_listing_and_propensity_signals_are_accepted(signal_type: str) -> None:
+    """The Signal menu offers these three; the allowlist once rejected them
+    with a 422, so choosing one errored the Signals tab."""
+
+    status, calls = _signals_through_capture_repo(f"states=IL&days=7&signal_types={signal_type}")
+    assert status == 200
+    assert len(calls) == 1 and calls[0] is not None
+    assert calls[0].signal_types == [signal_type]
+
+    legacy_status, legacy_calls = _signals_through_capture_repo(f"signal_type={signal_type.upper()}")
+    assert legacy_status == 200
+    assert legacy_calls[0] is not None and legacy_calls[0].signal_types == [signal_type]
+
+
+@pytest.mark.parametrize(
+    "signal_types",
+    ["owner_name", "listing,owner_name", "product_type", "origination_channel"],
+)
+def test_signals_outside_the_menu_are_still_rejected(signal_types: str) -> None:
+    """Unknown types, and the explainability-only evidence types the menu
+    does not offer, stay a 422 before any repository read."""
+
+    status, calls = _signals_through_capture_repo(f"signal_types={signal_types}")
+    assert status == 422
+    assert calls == []
+
+
 class _AnalyticsSqlClient:
     def __init__(self) -> None:
         self.statements: list[str] = []
