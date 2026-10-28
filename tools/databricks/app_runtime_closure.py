@@ -24,7 +24,8 @@ Why a slim folder: the App compute re-downloads every source file, at about
 10 files/s, inside its 10-minute start window. The bundle files root only
 grows (``workspace import-dir`` never deletes) and reached 6,018 files on
 2026-10-28, when a deployment from it was recorded FAILED. A per-release folder
-holding only this closure is about 1,200 files.
+holding only this closure is about 1,200 files (about 970 when the .br files
+are left out unchecked).
 
   python -m tools.databricks.app_runtime_closure list [--files [--ref REF]]
   python -m tools.databricks.app_runtime_closure stage --ref REF --dist DIR --out DIR

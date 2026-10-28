@@ -112,7 +112,8 @@ window (measured 2026-10-28). The bundle files root (`<bundle root>/dev/files`) 
 grows, because `workspace import-dir` and piecewise uploads never delete. It
 held 6,018 files when a deployment from it was recorded FAILED. A folder with
 only the App's runtime closure is about 1,200 files (481 tracked plus 694
-`frontend/dist` files on `ab6235e0`).
+`frontend/dist` files on `ab6235e0`), or about 970 when `stage` leaves the
+209 `.br` files out because the `brotli` module is not installed.
 
 `tools/databricks/app_runtime_closure.py` is the single source of truth for
 that closure. It holds the upload set (`app.yaml`, `requirements.txt`,
