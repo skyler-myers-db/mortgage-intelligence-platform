@@ -86,6 +86,56 @@ Two operational facts to know before assembling any ad-hoc App source tree
   frontend build must therefore include those root `tests/fixtures/` files,
   or the build fails with TS2307.
 
+## Piecewise App deploy from a slim per-release folder
+
+Why: the App compute downloads every file under the deployment's source path
+again at start, at about 10 files/s, inside the 10-minute start window
+(measured 2026-10-28). The bundle files root (`<bundle root>/dev/files`) only
+grows, because `workspace import-dir` and piecewise uploads never delete. It
+held 6,018 files when a deployment from it was recorded FAILED. A folder with
+only the App's runtime closure is about 1,200 files (481 tracked plus 694
+`frontend/dist` files on `ab6235e0`).
+
+`tools/databricks/app_runtime_closure.py` is the single source of truth for
+that closure. It holds the upload set (`app.yaml`, `requirements.txt`,
+`requirements.in`, `uv.lock`, `backend/`, `jobs/`, `lakebase/` and a prebuilt
+`frontend/dist/`) and every file the backend reads outside `backend/`. `python
+-m tools.databricks.app_runtime_closure list` prints each entry with its
+reader. Two entries are optional and are never in git:
+
+- `genie/space_id.txt`: the space id comes from the environment.
+- `sql/_rendered/...`: `backend/services/lifecycle_sync.py` falls back to
+  `sql/transformations/gold_funnel_snapshot_daily.sql` and substitutes the
+  catalog itself.
+
+`tests/unit/test_app_runtime_closure_reads.py` scans `backend/` and the
+first-party modules it imports. It fails when a read outside `backend/` is
+missing from the closure, or when a closure entry is no longer read.
+`tests/unit/test_app_runtime_closure_stage.py` holds the closure to its file
+budget: 1,400 staged files, about 140 s of download, of which at most 700 are
+tracked and the rest is the dist allowance.
+
+```bash
+npm --prefix frontend run build    # or reuse a dist built from the same commit
+python -m tools.databricks.app_runtime_closure stage \
+  --ref <sha> --dist frontend/dist --out <new empty directory>
+```
+
+`stage` builds the folder from `git archive <sha>`, so untracked and
+uncommitted files never ship, and adds the given dist. Before it writes
+anything, it refuses junk (`__pycache__`, `*.pyc`, `.DS_Store`), symlinks, a
+missing required entry, a folder over budget and an `--out` that is not empty.
+It prints the file count. It makes no Databricks call. Upload the folder to a
+new per-release folder, `<bundle root>/dev/app-src/<short sha>`, and never into
+one that is already used. The piecewise payload deploy then names that folder
+as the deployment's `source_code_path`.
+
+The governed `./scripts/deploy.sh -t dev` path is unchanged. It still promotes
+from the bundle files root (`source_code_path: .` in `databricks.yml`), so a
+governed deploy after a slim one points `source_code_path` back at the files
+root, with all of its files. Per-release folders build up under `app-src/`
+until an owner removes them. Nothing in the repository deletes them.
+
 ## App Python dependencies: the deps-digest line
 
 The Databricks Apps build decides whether to reinstall Python packages by
