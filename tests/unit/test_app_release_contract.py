@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -247,8 +248,13 @@ def _fifo_writer(fifo: Path | None) -> Iterator[None]:
     try:
         yield
     finally:
-        os.close(os.open(fifo, os.O_RDONLY | os.O_NONBLOCK))  # release a writer still waiting
-        writer.join(timeout=10)
+        # Release a writer still waiting. On a loaded runner the thread can
+        # reach open() only after one release reader has come and gone, and
+        # then it waits for the next reader, so keep releasing until it exits.
+        deadline = time.monotonic() + 10
+        while writer.is_alive() and time.monotonic() < deadline:
+            os.close(os.open(fifo, os.O_RDONLY | os.O_NONBLOCK))
+            writer.join(timeout=0.05)
         assert not writer.is_alive()
 
 
