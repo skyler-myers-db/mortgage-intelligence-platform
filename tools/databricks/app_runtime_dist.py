@@ -81,8 +81,8 @@ PYTHON_JUNK_SUFFIXES = (".pyc", ".pyo")
 BRANDING_PREFIX = "branding/"
 BRANDING_MARK = re.compile(r"^branding/lender-mark\.(png|webp)$")
 # Browsers honour the comment in any line or block comment, not only at the
-# start of a line, so look for it anywhere (postbuild_artifacts.mjs anchors
-# its JS check to the start of a line).
+# start of a line, so look for it anywhere (tools/postbuild_artifacts.mjs
+# SOURCE_MAP_COMMENT and SOURCE_MAP_CHECKED are the same rule).
 SOURCE_MAP_COMMENT = re.compile(rb"(?://|/\*)[ \t]*[#@][ \t]*sourceMappingURL=")
 SOURCE_MAP_CHECKED = frozenset({".js", ".mjs", ".css", ".html"})
 
