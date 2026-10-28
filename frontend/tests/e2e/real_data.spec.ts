@@ -1672,10 +1672,14 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
 
     // Evidence rows carry their source's own date, not the gold run's: equity
     // and lien signals keep the Cotality refresh-batch date (2026-08-09 on the
-    // dev book), so a pinned signal pair and window go empty as the calendar
-    // moves. Ask the Signals read the UI is about to make (same filters, every
-    // signal) which selectable signals hold evidence, and drive the UI with
-    // those.
+    // dev book), while listing evidence carries its own MLS status/listing
+    // date and recent refi/payoff/sale their event dates, so which signals are
+    // empty over a window is data that moves with the calendar, never a
+    // constant. Ask the Signals read the UI is about to make (same filters,
+    // every signal) which menu signals hold evidence, and drive the UI with
+    // those. Every menu choice is an accepted API filter
+    // (tests/unit/test_analytics_signal_vocabulary_contract.py), so the whole
+    // menu is in play.
     const signalsWithEvidence = async (days: number): Promise<string[]> => {
       const query = `states=IL,CA&segment_codes=itm,equity&segment_mode=any&days=${days}`;
       const resp = await request.get(`${API_URL}/api/v1/analytics/signals?${query}`, {
@@ -1699,8 +1703,10 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     // omitted), so either proves the window is forwarded; take the narrower
     // one that still holds evidence for the pair.
     const windowDays = shownSignals.some((signalType) => lastWeek.has(signalType)) ? 7 : 90;
-    // A signal with no evidence in the last 7 days, preferring one the 90-day
-    // window does hold, so the empty state below is the window's doing.
+    // A signal the 7-day probe returned no evidence for (the probe's
+    // evidence_by_signal is unlimited, so absence there is a measured zero,
+    // whatever date the source stamps), preferring one the 90-day window does
+    // hold, so the empty state below is the window's doing.
     const emptySignal = signalsByEvidence.find((signalType) => !lastWeek.has(signalType)) ?? '';
     expect(emptySignal, 'need a selectable signal with no evidence in the last 7 days').not.toBe('');
     test.info().annotations.push({
@@ -1772,7 +1778,10 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     );
     await page.getByRole('combobox', { name: /^Window:/i }).click();
     await page.getByRole('option', { name: `Last ${windowDays} days`, exact: true }).click();
-    const signalBody = (await (await signalResponse).json()) as SignalAnalyticsResponse;
+    const signalRead = await signalResponse;
+    // A menu choice the API rejects is a 422 and an errored tab.
+    expect(signalRead.status(), `Signals read for ${shownSignals.join(',')}`).toBe(200);
+    const signalBody = (await signalRead.json()) as SignalAnalyticsResponse;
     // The read is filtered server-side, not just labelled: it has rows, and
     // every row is one of the two selected signals.
     expect(signalBody.evidence_by_signal.length).toBeGreaterThan(0);
@@ -1797,7 +1806,9 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       timeout: 120_000,
     });
     await gotoApp(page, `${url.pathname}${url.search}`);
-    const emptyBody = (await (await emptyResponse).json()) as SignalAnalyticsResponse;
+    const emptyRead = await emptyResponse;
+    expect(emptyRead.status(), `Signals read for ${emptySignal}`).toBe(200);
+    const emptyBody = (await emptyRead.json()) as SignalAnalyticsResponse;
     expect(emptyBody.evidence_by_signal).toEqual([]);
     expect(emptyBody.evidence_daily).toEqual([]);
     expect(emptyBody.evidence_examples).toEqual([]);

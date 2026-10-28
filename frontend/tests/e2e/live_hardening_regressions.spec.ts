@@ -347,14 +347,24 @@ test('Clear filters is visible, disabled when clean, and clears active filters o
   await expect(page.getByText(/any selected segment, counted once/i)).toHaveCount(0);
 });
 
-test('Segment Intelligence stacks selected segments into an any-match cohort and replays controls', async ({ page }) => {
-  await gotoApp(page, '/segment-intelligence?segment_codes=itm,listed&segment_mode=all');
-  await expect(page.getByRole('button', { name: /All selected/i })).toHaveAttribute('aria-pressed', 'true');
+test('Segment Intelligence stacks selected segments into an any-match cohort and replays controls', async ({ page, context }) => {
+  // The URL replay runs in its own tab. It fetches the very all-mode cohort
+  // the toggle below switches to, and geo state-rollups persist to the tab's
+  // sessionStorage (lib/queryPersist) with a 30 s staleTime: in the same tab
+  // the next document can restore that read as fresh and never request it,
+  // so the all-mode wait below would time out. Clearing the key before the
+  // second goto is not enough: the persister's 1 s trailing save can write it
+  // back before the navigation commits. A new tab starts with its own empty
+  // sessionStorage.
+  const replay = await context.newPage();
+  await gotoApp(replay, '/segment-intelligence?segment_codes=itm,listed&segment_mode=all');
+  await expect(replay.getByRole('button', { name: /All selected/i })).toHaveAttribute('aria-pressed', 'true');
   // The card's selection control, by its own name: "Ask Genie about this
   // In the Money segment" (09e4b5da) also contains the segment name.
-  await expect(page.getByRole('button', { name: /^Select In the Money segment — / })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('button', { name: /^Select Listed for Sale segment — / })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByText(/all selected segments/i)).toBeVisible({ timeout: 20_000 });
+  await expect(replay.getByRole('button', { name: /^Select In the Money segment — / })).toHaveAttribute('aria-pressed', 'true');
+  await expect(replay.getByRole('button', { name: /^Select Listed for Sale segment — / })).toHaveAttribute('aria-pressed', 'true');
+  await expect(replay.getByText(/all selected segments/i)).toBeVisible({ timeout: 20_000 });
+  await replay.close();
 
   await gotoApp(page, '/segment-intelligence');
   await expect(page.getByRole('button', { name: /Any selected/i })).toHaveAttribute('aria-pressed', 'true');
