@@ -29,14 +29,18 @@ delete starts once TIME_BUDGET_SECONDS have passed since the run began (each
 SDK call carries its own timeout), so a throttled workspace cannot hold a
 green deploy open.
 
-Anything uncertain skips the whole run and deletes nothing (exit 0): no
-lease or a lease that is not held, an App or deployment read that fails, an
-App id that does not match, a pending deployment, an active deployment that
-is not the current release or is missing from the listing, a listed
-deployment without a source or a ``create_time``, a rollback deployment id
-that is not listed, or a release root that cannot be listed (a missing one
-just means nothing to prune). ``files/``, ``/src/`` snapshots, names that are
-not release ids and plain files are never touched.
+Anything uncertain in the reads before the first delete skips the whole run
+and deletes nothing (exit 0): no lease or a lease that is not held, an App or
+deployment read that fails, an App id that does not match, a pending
+deployment, an active deployment that is not the current release or is
+missing from the listing, a listed deployment without a source or a
+``create_time``, a rollback deployment id that is not listed, or a release
+root that cannot be listed (a missing one just means nothing to prune). An
+uncertainty the re-check before a later delete finds (a lost lease, a new
+pending deployment, the time budget spent) stops the run there and deletes
+nothing more; each folder already deleted passed its own re-check.
+``files/``, ``/src/`` snapshots, names that are not release ids and plain
+files are never touched.
 
 Exit codes: 0 pruned, nothing to prune, or skipped; 1 a deletion could not be
 reconciled; 2 bad arguments.
@@ -65,7 +69,7 @@ PREFIX = "[app-release-prune]"
 
 
 class Skip(Exception):
-    """A precondition is uncertain: delete nothing."""
+    """A precondition is uncertain: delete nothing more."""
 
 
 class Unreconciled(RuntimeError):
@@ -317,7 +321,7 @@ def prune(
     lease_check: Callable[[], None],
     clock: Callable[[], float] = time.monotonic,
 ) -> PruneReport:
-    """Delete unreferenced release folders, or skip and delete nothing."""
+    """Delete unreferenced release folders; any uncertainty stops it, deleting nothing more."""
     started = clock()
     report = PruneReport()
     try:

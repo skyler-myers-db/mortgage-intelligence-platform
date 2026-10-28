@@ -188,6 +188,9 @@ def test_deployment_doc_pins_the_governed_per_release_app_source() -> None:
     assert f"At most {app_release_prune.MAX_DELETIONS} folders go per run." in section
     assert app_release_prune.TIME_BUDGET_SECONDS % 60 == 0
     assert f"once {app_release_prune.TIME_BUDGET_SECONDS // 60} minutes have passed" in section
+    # A per-delete re-check stops the run after earlier deletes, so no whole-run claim.
+    assert "stops the run there and deletes nothing more" in section
+    assert "uncertainty skips the whole run" not in " ".join(section.split())
     assert f"at most\n   {app_release_source.MAX_FILES:,} files" in section
     # The emergency recipe no longer claims the governed path promotes the files root.
     recovery = deployment[deployment.index("## Emergency recovery") : deployment.index("## App Python dependencies")]

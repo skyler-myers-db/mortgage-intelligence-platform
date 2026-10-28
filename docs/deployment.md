@@ -127,9 +127,12 @@ The flow, every step in `scripts/deploy.sh`:
 
 1. **Preflight** (step 0): `python -m tools.databricks.app_runtime_closure
    check --ref <sha>` runs the git-side refusals and the tracked-file
-   allowance with no dist and no workspace call, so a commit step 1 could not
-   stage is refused (exit 2) before the lease. A dry run reports
-   `app runtime closure: <state>` and continues.
+   allowance with no dist and no workspace call, so a commit whose tracked
+   files step 1 could not stage is refused (exit 2) before the lease. The
+   dist-side refusals (the dist allowlist, the `.br` check, the total file
+   budget) can only run at step 1, after the build; CI's built-dist test
+   catches them before merge. A dry run reports `app runtime closure: <state>`
+   and continues.
 2. **Stage** (step 1, after the frontend build): `stage --ref <sha> --dist
    frontend/dist --out .databricks/app-release/source --manifest-out
    .databricks/app-release/manifest.json --require-brotli-check`, then
@@ -167,7 +170,7 @@ Where a failure lands:
 |---|---|
 | Preflight check | Exit 2 before the lease; the App is untouched. |
 | Step-1 stage or release id | Like a failed frontend build: an existing App is stopped and quiesced (Lakebase access is not yet proven). CI's built-dist test makes a dist-side refusal unlikely. |
-| Step-5 publish | Upgrade: signed blue is restored. First install: stopped and quiesced. At most one partial content-addressed folder is left; the next run of the same bytes completes it, or a later green run prunes it. |
+| Step-5 publish | Upgrade: signed blue is restored. First install: stopped and quiesced. At most one partial content-addressed folder is left; the next run of the same bytes completes it when every object left there is absent or byte-equal, or a later green run prunes it. An object left with other bytes (an ambiguous upload) makes every publish of that release id refuse, because publish never overwrites, until a green run of another commit prunes the folder or an owner removes it. |
 | Converge before an activation | Upgrade: signed blue is restored. First install: stopped and quiesced. |
 | Prune | A warning only; the release stays live. |
 
@@ -187,12 +190,15 @@ deployment lease, re-reads the App (no pending deployment, the active one
 still the current release, and neither it nor the App's default source naming
 the folder) and re-reads the folder; after it, the folder must be gone, and a
 delete it cannot reconcile stops the run. At most 20 folders go per run.
-No delete starts once 10 minutes have passed since the run began. Any
-uncertainty skips the whole run and deletes nothing: no lease, a failed App or
-deployment read, another App id, a pending deployment, an active deployment
-that is not the current release or is missing from the listing, a listed
-deployment without a source or a `create_time`, an unlisted rollback
-deployment, or a release root that cannot be listed. `files/`, `/src/`
+No delete starts once 10 minutes have passed since the run began. An
+uncertainty in the reads before the first delete skips the run and deletes
+nothing: no lease, a failed App or deployment read, another App id, a pending
+deployment, an active deployment that is not the current release or is missing
+from the listing, a listed deployment without a source or a `create_time`, an
+unlisted rollback deployment, or a release root that cannot be listed. One the
+re-check before a later delete finds (a lost lease, a new pending deployment,
+the time budget spent) stops the run there and deletes nothing more; each
+folder already deleted was proven unreferenced by its own re-check. `files/`, `/src/`
 snapshots, names that are not release ids (such as a legacy
 `app-src/<short sha>` folder) and plain files are never touched. Steady state
 is at most three folders; a folder published but never deployed lives until
@@ -228,10 +234,15 @@ every sha256: the bytes the running App uses. It is not wired into
 keeps every closure file type, `.html` included, as a FILE (publish's listing
 refuses anything else); that the workspace list API returns `/Users/...` paths
 (publish, converge and prune refuse or ignore any other shape); that a
-deployment's `/src/` snapshot holds exactly the manifest's files; and how
-`default_source_code_path` behaves (a source-free App resource payload may not
-carry it). The first governed `deploy-dev.yml` run on the CI install is the
-proof.
+deployment's `/src/` snapshot holds exactly the manifest's files; that an
+Apps deployment writes nothing into its `source_code_path` folder (if it did,
+the exact-listing converge before the second and third activations would
+refuse every deploy: signed blue restored on an upgrade, a first install
+stopped and quiesced); that the step-5 bundle summary's
+`resources.apps.mip_app.source_code_path` equals `workspace.file_path` on the
+CLI the run uses (step 5 requires it); and how `default_source_code_path`
+behaves (a source-free App resource payload may not carry it). The first
+governed `deploy-dev.yml` run on the CI install is the proof.
 
 ## Emergency recovery: a slim per-release App source folder
 
@@ -255,7 +266,7 @@ replaces only part of one of them:
 
 Why it exists: the App compute downloads every file under the deployment's
 source path again at start, at about 10 files/s, inside the 10-minute start
-window (measured 2026-10-28). The bundle files root (`<bundle root>/dev/files`) only
+window (measured 2026-10-28). The bundle files root (`<bundle root>/files`) only
 grows, because `workspace import-dir` and piecewise uploads never delete. It
 held 6,018 files when a deployment from it was recorded FAILED. A folder with
 only the App's runtime closure is about 1,200 files (481 tracked plus 694
@@ -438,7 +449,7 @@ python -m tools.databricks.app_release_contract release-id \
 ```
 
 Upload the folder under that governed name,
-`<bundle root>/<leaf>/app-src/<release id>`, with
+`<bundle root>/app-src/<release id>` ("Governed per-release App source"), with
 `python -m tools.databricks.app_release_source publish` and the flags
 `scripts/deploy.sh` step 5 passes (create-only, byte-verified), never with
 `workspace import-dir` and never into a folder that is already used: a folder
@@ -2137,7 +2148,12 @@ checklist for the owner-triggered run:
   runner's Node major and use that manifest only if its release id equals the
   one in the run's publish line (equal ids mean equal bytes; a local rebuild
   with one Node version reproduced the id on 2026-10-28);
-- the signed capture passes and the prune report is present;
+- step 5 printed the bundle files root, and the converge before each later
+  activation passed (the Apps deployment wrote nothing into the release
+  folder);
+- the signed capture passes and the prune report is present and says what it
+  kept (and deleted), not `skipped: the deployment lease is not proven held`
+  (prune runs under plain `run`, not the proof-signing authority);
 - `default_source_code_path` is recorded before and after the resource update
   and after activation;
 - a second run of the same commit uploads nothing.
