@@ -4,9 +4,12 @@
  * 1440x900. Only the natural loads of Home and the Lead Queue are used: no
  * proof drawer, no draft, nothing that is an audit-writing read.
  *
- *  - stack-01 (build slice): hidden source maps. No page asks for a `.map`
- *    and the served entry script carries no `sourceMappingURL` comment
- *    (tools/postbuild_artifacts.mjs moves the maps out of dist).
+ *  - stack-01 (build slice): hidden source maps. No page asks for a `.map`,
+ *    and neither the served entry script nor any served script, stylesheet
+ *    or HTML document carries a `sourceMappingURL` comment anywhere in it
+ *    (`//# `, `//@ ` or CSS `/*# `: the rule of tools/postbuild_artifacts.mjs
+ *    and tools/databricks/app_runtime_dist.py; postbuild moves the maps out
+ *    of dist).
  *  - bundle-03: vendor chunks. A cold load fetches exactly one vendor-react
  *    and one vendor-data chunk, both announced as modulepreload in the served
  *    HTML, and moving on to the Lead Queue fetches no vendor chunk again.
@@ -30,7 +33,9 @@ import { FIXTURE_THEMES } from './routes';
 import { expect, test } from './test';
 
 const NATURAL_LOADS = ['/', '/lead-queue'] as const;
-const SOURCE_MAP_COMMENT = /^\/\/[#@]\s*sourceMappingURL=/m;
+// tools/postbuild_artifacts.mjs SOURCE_MAP_COMMENT: browsers honour it mid-line too.
+const SOURCE_MAP_COMMENT = /(?:\/\/|\/\*)[ \t]*[#@][ \t]*sourceMappingURL=/;
+const SOURCE_MAP_READERS = new Set(['script', 'stylesheet', 'document']);
 const VENDOR_CHUNKS = ['vendor-react', 'vendor-data'] as const;
 const vendorChunk = (name: string) => new RegExp(`^/assets/${name}-[\\w-]+\\.js$`);
 const ANY_VENDOR_CHUNK = /^\/assets\/vendor-[\w-]+\.js$/;
@@ -38,22 +43,29 @@ const ANY_VENDOR_CHUNK = /^\/assets\/vendor-[\w-]+\.js$/;
 interface Traffic {
   requests: string[];
   scripts: Response[];
+  /** Every script, stylesheet and HTML document response. */
+  texts: Response[];
 }
 
 function recordTraffic(page: Page): Traffic {
-  const traffic: Traffic = { requests: [], scripts: [] };
+  const traffic: Traffic = { requests: [], scripts: [], texts: [] };
   page.on('request', (request) => {
     traffic.requests.push(new URL(request.url()).pathname);
   });
   page.on('response', (response) => {
-    if (response.request().resourceType() === 'script') traffic.scripts.push(response);
+    const type = response.request().resourceType();
+    if (type === 'script') traffic.scripts.push(response);
+    // A redirect or an empty answer has no body to read.
+    if (SOURCE_MAP_READERS.has(type) && response.status() < 300 && response.status() !== 204) {
+      traffic.texts.push(response);
+    }
   });
   return traffic;
 }
 
 test.describe('hidden source maps (stack-01 build slice)', () => {
   for (const path of NATURAL_LOADS) {
-    test(`${path} requests no source map and its entry script carries no sourceMappingURL`, async ({ app, page }) => {
+    test(`${path} requests no source map and no served script, stylesheet or document carries a sourceMappingURL`, async ({ app, page }) => {
       const traffic = recordTraffic(page);
       await app.gotoRoute(path);
 
@@ -65,8 +77,9 @@ test.describe('hidden source maps (stack-01 build slice)', () => {
       const body = (await entry?.text()) ?? '';
       expect(body.length).toBeGreaterThan(0);
       expect(body).not.toMatch(SOURCE_MAP_COMMENT);
-      for (const script of traffic.scripts) {
-        expect(await script.text(), `${new URL(script.url()).pathname} carries a sourceMappingURL`).not.toMatch(
+      expect(traffic.texts.some((response) => response.request().resourceType() === 'stylesheet'), 'a stylesheet was served').toBe(true);
+      for (const response of traffic.texts) {
+        expect(await response.text(), `${new URL(response.url()).pathname} carries a sourceMappingURL`).not.toMatch(
           SOURCE_MAP_COMMENT,
         );
       }

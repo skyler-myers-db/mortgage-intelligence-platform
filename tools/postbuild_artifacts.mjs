@@ -19,11 +19,13 @@
 //
 // Each destination is emptied and recreated first, so it only ever holds
 // this build's files. Then the build FAILS if dist still contains a .map,
-// the manifest, a `.vite/` metadata dir, or a JS file carrying a
-// `//# sourceMappingURL=` comment (a non-hidden sourcemap setting would make
-// every browser request the map). Both destinations are git-ignored, so the
-// bundle sync (git-tracked files plus frontend/dist/**) and
-// scripts/package_source.sh (git archive) never ship them.
+// the manifest, a `.vite/` metadata dir, or a JS, CSS or HTML file carrying
+// a sourceMappingURL comment anywhere in it (`//# `, legacy `//@ ` or CSS
+// `/*# `; a non-hidden sourcemap setting would make every browser request
+// the map). It is the rule tools/databricks/app_runtime_dist.py applies to
+// a dist before a slim App folder ships it. Both destinations are
+// git-ignored, so the bundle sync (git-tracked files plus frontend/dist/**)
+// and scripts/package_source.sh (git archive) never ship them.
 //
 // Lender co-branding (audit responsive-10): the build emits dist/branding/
 // only for a mark preflight validated, so the build also FAILS when
@@ -45,8 +47,14 @@ export const CHUNK_MODULES_FILE = 'build-modules.json';
 /** Build metadata `vite build` must emit into dist and this step moves out. */
 export const META_FILES = [MANIFEST_FILE, CHUNK_MODULES_FILE];
 
-/** A source-map comment at the start of a line (`//# ...` or legacy `//@ ...`). */
-export const SOURCE_MAP_COMMENT = /^\/\/[#@]\s*sourceMappingURL=/m;
+/**
+ * A source-map comment anywhere in a file: `//# ...`, legacy `//@ ...` or the
+ * CSS `/*# ... *\/` form. Browsers honour it mid-line too, so it is not
+ * anchored (tools/databricks/app_runtime_dist.py SOURCE_MAP_COMMENT).
+ */
+export const SOURCE_MAP_COMMENT = /(?:\/\/|\/\*)[ \t]*[#@][ \t]*sourceMappingURL=/;
+/** The text files a browser reads that comment from. */
+export const SOURCE_MAP_CHECKED = ['.js', '.mjs', '.css', '.html'];
 
 const repoRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 
@@ -84,8 +92,9 @@ export function distLeftovers(distDir) {
   }
   for (const file of walkFiles(distDir)) {
     if (file.endsWith('.map')) problems.push(`dist still contains a source map: ${file}`);
-    if (file.endsWith('.js') && SOURCE_MAP_COMMENT.test(readFileSync(path.join(distDir, file), 'utf8'))) {
-      problems.push(`dist JS carries a sourceMappingURL comment: ${file} (vite.config.ts build.sourcemap must be 'hidden')`);
+    const checked = SOURCE_MAP_CHECKED.some((suffix) => file.endsWith(suffix));
+    if (checked && SOURCE_MAP_COMMENT.test(readFileSync(path.join(distDir, file), 'utf8'))) {
+      problems.push(`dist file carries a sourceMappingURL comment: ${file} (vite.config.ts build.sourcemap must be 'hidden')`);
     }
   }
   return problems;

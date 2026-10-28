@@ -557,9 +557,9 @@ describe('relocateBuildArtifacts', () => {
     const mapsDir = path.join(scratch, 'sourcemaps');
     mkdirSync(path.join(distDir, 'assets'), { recursive: true });
     writeFileSync(path.join(distDir, 'index.html'), '<!doctype html>');
-    // A string that merely mentions the comment mid-line is not a source-map
-    // comment; the check is line-anchored.
-    writeFileSync(path.join(distDir, 'assets', 'index-A.js'), 'const s="//# sourceMappingURL=x";export{s};\n');
+    // Naming the directive without a comment introducer is not a source-map
+    // comment (the control for the unanchored check below).
+    writeFileSync(path.join(distDir, 'assets', 'index-A.js'), 'const s="sourceMappingURL";export{s};\n');
     writeFileSync(path.join(distDir, 'assets', 'index-A.js.map'), '{"version":3}');
     writeFileSync(path.join(distDir, 'theme-boot.js.map'), '{"version":3}');
     writeFileSync(path.join(distDir, 'build-manifest.json'), JSON.stringify(syntheticManifest()));
@@ -598,6 +598,27 @@ describe('relocateBuildArtifacts', () => {
     const dirs = scratchTree();
     writeFileSync(path.join(dirs.distDir, 'assets', 'lead-C.js'), 'export {};\n//# sourceMappingURL=lead-C.js.map\n');
     expect(() => tools.relocate(dirs)).toThrow(/sourceMappingURL comment: assets\/lead-C\.js/);
+  });
+
+  // Browsers honour the comment anywhere in a JS, CSS or HTML file, so the gate
+  // matches tools/databricks/app_runtime_dist.py: unanchored, //# //@ and /*#.
+  it.each([
+    ['assets/mid-D.js', 'export {};//# sourceMappingURL=mid-D.js.map'],
+    ['assets/legacy-E.js', 'export {};\n//@ sourceMappingURL=legacy-E.js.map\n'],
+    ['assets/spaced-F.js', 'export {};\n  // # sourceMappingURL=spaced-F.js.map\n'],
+    ['assets/entry-G.mjs', 'export {};\n//# sourceMappingURL=entry-G.mjs.map\n'],
+    ['assets/app-H.css', 'a{}\n/*# sourceMappingURL=app-H.css.map */\n'],
+    ['index.home.html', '<script>1;\n//# sourceMappingURL=/m.js.map\n</script>'],
+  ])('fails when %s carries a sourceMappingURL comment', (file, body) => {
+    const dirs = scratchTree();
+    writeFileSync(path.join(dirs.distDir, file), body);
+    expect(() => tools.relocate(dirs)).toThrow(`sourceMappingURL comment: ${file}`);
+  });
+
+  it('leaves a non-text file that mentions the comment alone', () => {
+    const dirs = scratchTree();
+    writeFileSync(path.join(dirs.distDir, 'assets', 'data-I.json'), '{"note":"//# sourceMappingURL=x"}');
+    expect(() => tools.relocate(dirs)).not.toThrow();
   });
 
   it('fails when the build emitted no manifest', () => {

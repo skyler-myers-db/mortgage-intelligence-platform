@@ -37,6 +37,15 @@ from jobs.sync_lifecycle_state import (
 
 log = logging.getLogger(__name__)
 
+# Resolved against the source root, not the cwd: the App starts in its source
+# root, but deploy step 9 and local runs need not. The deploy renders the
+# catalog into _rendered/; without it the fallback swaps the catalog itself.
+SOURCE_ROOT = Path(__file__).resolve().parents[2]
+RENDERED_FUNNEL_SQL = (
+    SOURCE_ROOT / "sql" / "_rendered" / "transformations" / "gold_funnel_snapshot_daily.sql"
+)
+FUNNEL_SQL = SOURCE_ROOT / "sql" / "transformations" / "gold_funnel_snapshot_daily.sql"
+
 
 @dataclass(frozen=True)
 class LifecycleSyncResult:
@@ -74,9 +83,7 @@ def sync_lifecycle_state_via_warehouse(
     if record_funnel_snapshot and _funnel_snapshot_schema_ready(
         client, catalog=resolved_catalog, tolerate_denied=tolerate_funnel_schema_denied
     ):
-        sql_path = funnel_sql_path or Path(
-            "sql/_rendered/transformations/gold_funnel_snapshot_daily.sql"
-        )
+        sql_path = funnel_sql_path or RENDERED_FUNNEL_SQL
         client.execute(_read_funnel_sql(sql_path, catalog=resolved_catalog))
         funnel_table = _qualified_uc_table(resolved_catalog, "gold", "funnel_snapshot_daily")
         funnel = client.execute_one(
@@ -156,7 +163,7 @@ def _is_permission_refusal(exc: BaseException) -> bool:
 
 def _read_funnel_sql(path: Path, *, catalog: str) -> str:
     if not path.exists():
-        path = Path("sql/transformations/gold_funnel_snapshot_daily.sql")
+        path = FUNNEL_SQL
     sql = path.read_text(encoding="utf-8")
     if catalog != "mip":
         sql = sql.replace("mip.", f"{catalog}.")

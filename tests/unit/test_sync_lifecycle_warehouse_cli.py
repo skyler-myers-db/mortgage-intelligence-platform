@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from pydantic import SecretStr
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -184,3 +185,38 @@ def test_lifecycle_loader_does_not_rehydrate_dotenv_auth_when_deployer_bound(
         "DATABRICKS_CLIENT_SECRET",
     ):
         assert name not in os.environ
+
+
+@pytest.mark.parametrize("override", [None, "custom/funnel.sql"])
+def test_the_funnel_sql_default_does_not_depend_on_the_cwd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, override: str | None
+) -> None:
+    # Run from outside the repository: a cwd-relative default would be missing
+    # there, and the sync would quietly fall back to the un-rendered SQL.
+    from backend.services import lifecycle_sync
+    from backend.services.lifecycle_sync import LifecycleSyncResult
+
+    captured: dict[str, object] = {}
+
+    def _fake_sync(**kwargs: object) -> LifecycleSyncResult:
+        captured.update(kwargs)
+        return LifecycleSyncResult(lakebase_rows=0, mirrored_rows=None, funnel_snapshot_rows=None)
+
+    for name in (
+        "MIP_DEPLOYER_DATABRICKS_HOST",
+        "MIP_DEPLOYER_DATABRICKS_TOKEN",
+        "MIP_DEPLOYER_DATABRICKS_PROFILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(MODULE, "_load_local_env", lambda: None)
+    monkeypatch.setattr(MODULE, "_ensure_lakebase_env", lambda *_a, **_k: None)
+    monkeypatch.setattr(MODULE, "_build_client", lambda *_a, **_k: object())
+    monkeypatch.setattr(lifecycle_sync, "sync_lifecycle_state_via_warehouse", _fake_sync)
+    argv = ["sync_lifecycle_warehouse.py", "--catalog", "mip"]
+    monkeypatch.setattr(sys, "argv", argv + (["--funnel-sql", override] if override else []))
+    monkeypatch.chdir(tmp_path)
+
+    MODULE.main()
+
+    expected = Path(override) if override else lifecycle_sync.RENDERED_FUNNEL_SQL
+    assert captured["funnel_sql_path"] == expected
