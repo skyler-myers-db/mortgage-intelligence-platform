@@ -147,8 +147,8 @@ known not to follow (`backend.__file__`, `sys.modules[__name__].__file__`,
 `submodule_search_locations` read on a `find_spec` call or on a name bound to
 one, `inspect.getfile`, `sys.argv`, `sys.path`, `importlib.resources.files`,
 `pkgutil.get_data`) are reported as unhandled wherever they appear in those
-forms; the same roots reached another way are residuals (below). The literal sweep (`tests/fixtures/app_runtime_literals.py`)
-follows nothing. It flags a string literal that names a repo path outside
+forms; the same roots reached another way are residuals (below). The literal
+sweep (`tests/fixtures/app_runtime_literals.py`) follows nothing. It flags a string literal that names a repo path outside
 `backend/` by its own text (a `/` path such as `"docs/a.md"`, or a dotted
 string naming a tracked first-party module such as `"tools.x"`), or by the
 path call, `/` join or environment default around it. A bare name such as
@@ -205,8 +205,8 @@ path call; its two `" / ".join` calls build display labels, its one computed
 dynamic `getattr` calls is passed to a path call. A grep the same day found
 no `extract_tb`, `findCaller`, `get_loader`, `getcwdb`, `nonlocal`,
 argument-less `listdir` or `scandir`, `.origin`, `cwd=` or bytes path, and its
-`**{...}` uses build dicts, model fields and scoring arguments, never a path. The readers that matter
-degrade silently when their file is missing (`county_names` returns `{}`, the
+`**{...}` uses build dicts, model fields and scoring arguments, never a path.
+The readers that matter degrade silently when their file is missing (`county_names` returns `{}`, the
 Genie space-id fallback returns `None`), so a new App read outside `backend/`
 must use the shapes the scans follow, a module-level constant rooted in
 `Path(__file__)` plus literal segments
