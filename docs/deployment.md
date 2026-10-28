@@ -231,7 +231,7 @@ every sha256: the bytes the running App uses. It is not wired into
 `scripts/deploy.sh`.
 
 **Observed on the emergency path** (dev App, 2026-10-28). One deployment
-from a slim folder that predates this section's naming (uploaded with
+from a slim folder named by the earlier emergency recipe (uploaded with
 `databricks workspace import-dir` into a legacy `app-src/<short sha>`
 folder, not published under a release id with publish's SDK upload) was
 read back after it SUCCEEDED with `remote_files`, `compare_listing` and
