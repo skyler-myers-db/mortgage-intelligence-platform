@@ -187,6 +187,61 @@ def test_a_failed_upload_that_did_not_land_fails_the_publish(tmp_path: Path) -> 
     assert client.workspace.ops("delete") == []
 
 
+def test_an_ambiguous_upload_over_other_bytes_fails_with_the_upload_error(tmp_path: Path) -> None:
+    stage_dir, manifest_path, manifest = _stage(tmp_path)
+    client = FakeWorkspaceClient()
+    target = f"{_api_root(manifest.release_id)}/backend/main.py"
+    client.workspace.add_file(target, b"APP = 2\n")  # same size, other bytes
+    client.workspace.fail_before[("upload", target)] = InternalError("timeout")
+
+    with pytest.raises(InternalError, match="timeout"):
+        _publish(client, stage_dir, manifest_path, manifest.release_id)
+    assert client.workspace.nodes[target].data == b"APP = 2\n"
+    assert client.workspace.ops("delete") == []
+
+
+def test_an_existing_object_that_cannot_be_read_back_is_never_reused(tmp_path: Path) -> None:
+    stage_dir, manifest_path, manifest = _stage(tmp_path)
+    client = FakeWorkspaceClient()
+    target = f"{_api_root(manifest.release_id)}/backend/main.py"
+    client.workspace.add_file(target, FILES["backend/main.py"])
+    client.workspace.fail_before[("download", target)] = InternalError("unreadable")
+
+    with pytest.raises(contract.ReleaseContractError, match="exists and cannot be read back"):
+        _publish(client, stage_dir, manifest_path, manifest.release_id)
+
+
+def test_a_staged_file_changed_after_the_stage_check_is_never_uploaded(tmp_path: Path) -> None:
+    stage_dir, manifest_path, manifest = _stage(tmp_path)
+    plan = source.prepare_publish(
+        release_id=manifest.release_id, stage_dir=stage_dir, manifest_path=manifest_path,
+        files_root=FILES_ROOT, expected_commit=COMMIT, principal=PRINCIPAL, target="dev",
+    )
+    (stage_dir / "backend/main.py").write_bytes(b"APP = 9\n")  # same size, after the check
+    client = FakeWorkspaceClient()
+
+    with pytest.raises(contract.ReleaseContractError, match="backend/main.py changed after the stage check"):
+        source.upload_release(client, plan)
+    assert not client.workspace.exists(f"{_api_root(manifest.release_id)}/backend/main.py")
+
+
+def test_a_listing_that_names_a_file_twice_is_refused(tmp_path: Path) -> None:
+    stage_dir, manifest_path, manifest = _stage(tmp_path)
+    client = FakeWorkspaceClient()
+    _publish(client, stage_dir, manifest_path, manifest.release_id)
+    root = _api_root(manifest.release_id)
+    real_list = client.workspace.list
+
+    def listed_twice(api: str, **kwargs: Any) -> Any:
+        listing = list(real_list(api, **kwargs))
+        return iter([*listing, listing[0]])
+
+    client.workspace.list = listed_twice  # type: ignore[method-assign]
+
+    with pytest.raises(contract.ReleaseContractError, match="twice"):
+        source.remote_files(client, root)
+
+
 @pytest.mark.parametrize("corruption", ["same_size_bytes", "size"])
 def test_remote_bytes_that_differ_after_upload_are_refused(tmp_path: Path, corruption: str) -> None:
     stage_dir, manifest_path, manifest = _stage(tmp_path)
