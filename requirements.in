@@ -158,3 +158,8 @@ hypothesis==6.123.7
 opentelemetry-api>=1.45.1,<2
 opentelemetry-sdk>=1.45.1,<2
 opentelemetry-exporter-otlp>=1.45.1,<2
+# The OTLP logging.Handler. opentelemetry-sdk 1.41.1 deprecated its own
+# opentelemetry.sdk._logs.LoggingHandler (DeprecationWarning on construction)
+# in favour of this package's handler; the 0.x line is versioned with
+# semantic-conventions (0.66b1 pairs with the 1.45.1 family).
+opentelemetry-instrumentation-logging>=0.66b1,<1

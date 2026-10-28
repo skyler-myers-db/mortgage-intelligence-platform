@@ -83,7 +83,9 @@ MIP_OTEL_ENDPOINT=https://<otlp-collector>/v1/logs
 ```
 
 When `MIP_OTEL_ENDPOINT` is set at process start, the backend wires
-`opentelemetry-sdk` + `opentelemetry-exporter-otlp` so every structured
+`opentelemetry-sdk` + `opentelemetry-exporter-otlp`, with the
+`opentelemetry-instrumentation-logging` handler (the SDK's own
+`LoggingHandler` is deprecated since 1.41.1), so every structured
 log line is shipped to the endpoint in addition to stdout. When unset,
 behaviour is unchanged (stdout JSON only).
 
@@ -94,7 +96,8 @@ also exposed as the `otel` extra:
 ```bash
 pip install .[otel]
 # or, equivalently:
-pip install 'opentelemetry-sdk>=1.27,<2' 'opentelemetry-exporter-otlp>=1.27,<2'
+pip install 'opentelemetry-sdk>=1.27,<2' 'opentelemetry-exporter-otlp>=1.27,<2' \
+  'opentelemetry-instrumentation-logging>=0.66b1,<1'
 ```
 
 If `MIP_OTEL_ENDPOINT` is set but the wheels are absent, the backend

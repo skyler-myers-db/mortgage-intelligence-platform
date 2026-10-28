@@ -8,7 +8,9 @@ Covers:
 * Health endpoint exposes ``breaker_state_changes_last_hour`` and
   ``recent_errors_count``
 
-Every test is stdlib-only and deterministic -- no sleeps, no network.
+Every test is deterministic with no sleeps. All but one are stdlib-only and
+offline; the warnings-as-errors OTLP test runs the real wheels against a
+localhost port with nothing listening.
 """
 
 from __future__ import annotations
@@ -544,8 +546,9 @@ def test_otel_handler_attached_when_exporter_mocked(
     ``opentelemetry.*`` modules in ``sys.modules`` so the late import
     inside :func:`_install_otel_handler_if_configured` resolves to our
     stubs. The handler attached to the root logger must be the
-    ``LoggingHandler`` stub we provide, and ``get_otel_handler()`` must
-    return it.
+    ``LoggingHandler`` stub we provide (at the
+    ``opentelemetry-instrumentation-logging`` path), and
+    ``get_otel_handler()`` must return it.
     """
     import sys
 
@@ -591,9 +594,10 @@ def test_otel_handler_attached_when_exporter_mocked(
             return attrs
 
     class _FakeLoggingHandler(logging.Handler):
-        def __init__(self, *, level: int, logger_provider: Any) -> None:
+        def __init__(self, *, level: int, logger_provider: Any, log_code_attributes: bool) -> None:
             super().__init__(level=level)
             self._provider = logger_provider
+            calls["log_code_attributes"] = log_code_attributes
 
         def emit(self, record: logging.LogRecord) -> None:
             calls["bodies"].append(self.format(record))
@@ -607,9 +611,11 @@ def test_otel_handler_attached_when_exporter_mocked(
     exporter_mod = types.ModuleType("opentelemetry.exporter.otlp.proto.http._log_exporter")
     exporter_mod.OTLPLogExporter = _FakeExporter  # type: ignore[attr-defined]
 
+    handler_mod = types.ModuleType("opentelemetry.instrumentation.logging.handler")
+    handler_mod.LoggingHandler = _FakeLoggingHandler  # type: ignore[attr-defined]
+
     sdk_logs = types.ModuleType("opentelemetry.sdk._logs")
     sdk_logs.LoggerProvider = _FakeProvider  # type: ignore[attr-defined]
-    sdk_logs.LoggingHandler = _FakeLoggingHandler  # type: ignore[attr-defined]
 
     sdk_logs_export = types.ModuleType("opentelemetry.sdk._logs.export")
     sdk_logs_export.BatchLogRecordProcessor = _FakeProcessor  # type: ignore[attr-defined]
@@ -622,6 +628,7 @@ def test_otel_handler_attached_when_exporter_mocked(
     inserted = {
         "opentelemetry._logs": otel_logs,
         "opentelemetry.exporter.otlp.proto.http._log_exporter": exporter_mod,
+        "opentelemetry.instrumentation.logging.handler": handler_mod,
         "opentelemetry.sdk._logs": sdk_logs,
         "opentelemetry.sdk._logs.export": sdk_logs_export,
         "opentelemetry.sdk.resources": sdk_resources,
@@ -638,6 +645,8 @@ def test_otel_handler_attached_when_exporter_mocked(
         assert calls["endpoint"] == raw_endpoint
         # Headers parsed from ``k=v,k2=v2`` into a dict.
         assert calls["headers"] == {"x-api-key": "SECRET_HEADER_VALUE", "team": "mip"}
+        # Keeps the code.* attributes the deprecated SDK handler always sent.
+        assert calls["log_code_attributes"] is True
         # Handler actually sits on the root logger.
         assert handler in logging.getLogger().handlers
 
@@ -669,6 +678,66 @@ def test_otel_handler_attached_when_exporter_mocked(
     finally:
         obs._reset_configured_for_tests()
         obs.configure_logging()
+
+
+def test_otel_handler_installs_with_warnings_as_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real wheels install the handler while every warning is an error.
+
+    opentelemetry-sdk 1.41.1 deprecated ``opentelemetry.sdk._logs.LoggingHandler``
+    and warns on construction, so under warnings-as-errors the broad
+    ``except`` reported ``otel_exporter_wiring_failed`` / ``stdout_only``.
+    No fakes here: the install path runs the installed packages against a
+    localhost port with nothing listening, and a record emitted through
+    the root logger must pass the handler without raising.
+    """
+    import socket
+    import warnings
+
+    from opentelemetry.instrumentation.logging.handler import LoggingHandler
+
+    from backend.config.settings import settings
+
+    # Bound and closed without listen(): connections to it are refused.
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        refused_port = probe.getsockname()[1]
+    monkeypatch.setattr(
+        settings, "mip_otel_endpoint", f"http://127.0.0.1:{refused_port}/v1/logs", raising=False
+    )
+    monkeypatch.setattr(settings, "mip_otel_headers", None, raising=False)
+    # The batch worker retries the refused export until this deadline
+    # (seconds; default 10), and shutdown() below waits for the worker.
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_TIMEOUT", "0.2")
+
+    obs_log = logging.getLogger("mip.observability")
+    buf = _capture(obs_log)
+    obs._reset_configured_for_tests()
+    handler: logging.Handler | None = None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            obs.configure_logging()
+            handler = obs.get_otel_handler()
+            obs.emit(logging.getLogger("mip.otel.proof"), "otlp_warnings_as_errors_probe")
+        events = [json.loads(ln) for ln in buf.getvalue().splitlines() if ln]
+        assert [(e["event"], e["outcome"]) for e in events] == [
+            ("otel_exporter_installed", "installed")
+        ], events
+        assert isinstance(handler, LoggingHandler)
+        assert handler in logging.getLogger().handlers
+    finally:
+        obs_log.handlers.clear()
+        obs_log.propagate = True
+        # Re-configure without the endpoint so no exporter outlives the test,
+        # and stop this one's batch worker (the 0.2 s timeout bounds the wait).
+        monkeypatch.setattr(settings, "mip_otel_endpoint", None, raising=False)
+        obs._reset_configured_for_tests()
+        obs.configure_logging()
+        provider = getattr(handler, "_logger_provider", None)
+        if provider is not None:
+            provider.shutdown()
 
 
 def test_boot_smoke_with_otel_env_and_missing_wheel(
