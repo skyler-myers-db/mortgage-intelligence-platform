@@ -590,7 +590,9 @@ jobs:
     # Measured in the unsharded job (same 8 runs): setup 1.6-9.7 min (the
     # high end is the slow Chromium install), the built-dist pytest 5-9 s, the
     # perf step 1m23s-1m47s. 15 is the worst of those together (~12 min) plus
-    # headroom.
+    # headroom. The built-dist step now also stages the App release (about
+    # 40 s on a loaded developer machine, mostly the .br checks; not yet
+    # measured on a runner).
     name: e2e (fixture perf + interaction budgets, single worker)
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -618,14 +620,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Built-dist artifact checks (served layer, build meta)
+      - name: Built-dist artifact checks (served layer, build meta, App release stage)
         # tests/unit/test_frontend_build_artifacts.py skips its served-layer
         # and build-meta checks where no dist exists (the backend job). Here
         # the dist was just built, so MIP_REQUIRE_FRONTEND_DIST=1 turns a
         # skip into a failure and the checks can never pass vacuously.
+        # tests/unit/test_app_release_built_dist.py stages that dist the way
+        # deploy.sh step 1 does (.br checked with this job's Node) and runs
+        # every local publish check, so a dist the deploy would refuse after
+        # the lease fails the PR instead.
         env:
           MIP_REQUIRE_FRONTEND_DIST: '1'
-        run: pytest -q tests/unit/test_frontend_build_artifacts.py
+        run: pytest -q tests/unit/test_frontend_build_artifacts.py tests/unit/test_app_release_built_dist.py
       - name: Install Chromium
         working-directory: frontend
         run: npx playwright install --with-deps chromium
