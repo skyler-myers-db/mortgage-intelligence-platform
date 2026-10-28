@@ -350,8 +350,10 @@ test('Clear filters is visible, disabled when clean, and clears active filters o
 test('Segment Intelligence stacks selected segments into an any-match cohort and replays controls', async ({ page }) => {
   await gotoApp(page, '/segment-intelligence?segment_codes=itm,listed&segment_mode=all');
   await expect(page.getByRole('button', { name: /All selected/i })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('button', { name: /In the Money/i })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('button', { name: /Listed for Sale/i })).toHaveAttribute('aria-pressed', 'true');
+  // The card's selection control, by its own name: "Ask Genie about this
+  // In the Money segment" (09e4b5da) also contains the segment name.
+  await expect(page.getByRole('button', { name: /^Select In the Money segment — / })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: /^Select Listed for Sale segment — / })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByText(/all selected segments/i)).toBeVisible({ timeout: 20_000 });
 
   await gotoApp(page, '/segment-intelligence');
@@ -431,7 +433,9 @@ test('clicking the centre of a segment card selects it instead of opening eviden
   await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
 
   await expect(select).toHaveAttribute('aria-pressed', 'true', { timeout: 20_000 });
-  await expect(page).toHaveURL(/segment_codes=[^&]*itm/, { timeout: 20_000 });
+  // One selected card is written as `segment=`; `segment_codes` is the
+  // several-card form (segmentSearchParamsForState).
+  await expect(page).toHaveURL(/[?&]segment=itm(?:&|$)/, { timeout: 20_000 });
   await expect(openEvidenceDrawer(page), 'centre click must not open the Evidence Drawer').toHaveCount(0);
 });
 
@@ -461,7 +465,7 @@ test('the Evidence Drawer is dismissible by backdrop click and by Escape', async
 
   // Page is usable again: selection still works after the drawer closes.
   await clickSegment(page, 'In the Money');
-  await expect(page).toHaveURL(/segment_codes=[^&]*itm/, { timeout: 20_000 });
+  await expect(page).toHaveURL(/[?&]segment=itm(?:&|$)/, { timeout: 20_000 });
 });
 
 test('segment any/all API counts are de-duplicated and intersection-safe', async ({ request }) => {
