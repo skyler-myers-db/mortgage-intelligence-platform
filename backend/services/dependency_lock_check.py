@@ -17,8 +17,10 @@ requirements.in (or ``stale``, ``missing``, ``unreadable``), and an outcome:
 * ``lock_unreadable``: uv.lock or requirements.in is missing, oversized or pins
   nothing, or the check itself failed (``reason`` says which).
 
-The ``remedy`` follows the cause. A stale or missing digest means the build had
-no reason to reinstall: restamp and redeploy. A current digest with drift means
+The ``remedy`` follows the cause. A stale or missing digest leaves the bytes of
+requirements.txt unchanged, which the build is inferred (2026-10-28 build log,
+not yet confirmed) to treat as no reason to reinstall: restamp and redeploy. A
+current digest with drift means
 the build skipped or failed the reinstall anyway, so restamping changes
 nothing: read the deployment build log, then the digest-named ``-c`` fallback
 in docs/deployment.md.

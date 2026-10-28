@@ -51,8 +51,9 @@ with ``.``), a symlink or submodule tracked at
 REF, a missing required entry, an ``--out`` inside ``--dist`` or around it
 (compared by file identity, so a symlink, ``..``, another letter case or a
 firmlink cannot hide it), a requirements.txt whose deps-digest line does
-not match uv.lock and requirements.in at REF (the Apps build would skip the
-reinstall) and a non-empty ``--out``. It then copies the dist into a
+not match uv.lock and requirements.in at REF (the Apps build can then skip
+the reinstall: observed 2026-10-28, its byte comparison inferred and not yet
+confirmed) and a non-empty ``--out``. It then copies the dist into a
 temporary sibling of ``--out``, reviews that copy (the copy is what ships),
 refuses a folder over its file budgets, adds the tracked files and renames
 the folder into place, so any refusal or failure leaves ``--out`` as it was.
@@ -256,14 +257,14 @@ def _blobs(repo: Path, commit: str, names: Sequence[str]) -> dict[str, bytes]:
 
 
 def _check_digest(blobs: Mapping[str, bytes], ref: str) -> None:
-    """Refuse a ref whose requirements.txt would not trigger the Apps reinstall."""
+    """Refuse a ref whose requirements.txt digest line is stale or missing."""
 
     text = blobs[requirements_digest.REQUIREMENTS_TXT].decode("utf-8", "replace")
     first = text.splitlines()[0] if text else ""
     if first != requirements_digest.digest_line_for(blobs):
         raise StageError(
             f"requirements.txt at {ref} has a stale or missing deps-digest line, so the "
-            f"Apps build would skip the dependency reinstall; run {requirements_digest.REMEDY} "
+            f"Apps build can skip the dependency reinstall; run {requirements_digest.REMEDY} "
             "and commit"
         )
 

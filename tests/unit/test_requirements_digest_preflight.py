@@ -105,7 +105,7 @@ def test_a_lock_bumped_without_a_restamp_refuses_a_real_run_with_the_remedy(
     assert result.returncode == 2
     assert "requirements digest: stale" in result.stdout
     assert "fix: python tools/requirements_digest.py --write" in result.stderr
-    assert "would skip the dependency reinstall" in result.stderr
+    assert "can skip the dependency reinstall" in result.stderr
     assert "reached-after-block" not in result.stdout
 
 

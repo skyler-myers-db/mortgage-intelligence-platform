@@ -76,7 +76,7 @@ def check(root: Path) -> tuple[int, str]:
     else:
         reason = "requirements.txt has no deps-digest first line"
     return EXIT_STALE, (
-        f"{reason}; the Databricks Apps build would skip the dependency reinstall.\n"
+        f"{reason}; the Databricks Apps build can skip the dependency reinstall.\n"
         f"  fix: {REMEDY}"
     )
 

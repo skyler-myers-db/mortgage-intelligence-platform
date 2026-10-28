@@ -63,10 +63,13 @@ fi
 # <<< deploy interpreter pins: check <<<
 
 # >>> requirements digest: check >>>
-# The Databricks Apps build reinstalls Python packages only when the bytes of
-# requirements.txt change; it never follows the -c uv.lock / -r requirements.in
-# includes, so a lock bump without a restamp leaves the App on its old wheels
-# (docs/deployment.md, "App Python dependencies: the deps-digest line").
+# On 2026-10-28 the Databricks Apps build skipped the reinstall for a lock bump
+# that left requirements.txt unchanged, and the App kept its old wheels. That
+# it reinstalls only when the bytes of requirements.txt change, never following
+# the -c uv.lock / -r requirements.in includes, is inferred from that build log
+# and is to be confirmed by the first deploy after the change, so a lock bump
+# needs a restamp (docs/deployment.md, "App Python dependencies: the
+# deps-digest line").
 # tools/requirements_digest.py exits 0 current and 1 stale (it prints the
 # remedy); anything else is a hard error. A dry run reports and continues; a
 # real run refuses with exit 2 before any workspace call. Isolated
@@ -85,7 +88,7 @@ fi
 echo "  requirements digest: ${REQUIREMENTS_DIGEST_STATE}"
 if [[ "$DRY_RUN" -eq 0 && "$REQUIREMENTS_DIGEST_STATE" != "current" ]]; then
   case "$REQUIREMENTS_DIGEST_STATE" in
-    stale) echo "${RED}[deploy] requirements.txt's deps-digest line is stale, so the Apps build would skip the dependency reinstall; apply the fix above and commit.${RST}" >&2 ;;
+    stale) echo "${RED}[deploy] requirements.txt's deps-digest line is stale, so the Apps build can skip the dependency reinstall; apply the fix above and commit.${RST}" >&2 ;;
     error) echo "${RED}[deploy] the requirements digest check failed; requirements.txt cannot be proven current.${RST}" >&2 ;;
     *) echo "${RED}[deploy] tools/requirements_digest.py is not in this tree; requirements.txt cannot be proven current.${RST}" >&2 ;;
   esac

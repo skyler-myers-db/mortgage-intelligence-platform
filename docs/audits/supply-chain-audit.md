@@ -119,8 +119,11 @@ this remediation pass.
 - `requirements.in` carries the direct Python dependency contract, `uv.lock`
   pins the transitive resolution, and `requirements.txt` installs through that
   lock as a constraint file. Its generated first line carries the sha256 of
-  both files (`tools/requirements_digest.py`), so the Databricks Apps build
-  reinstalls when either changes.
+  both files (`tools/requirements_digest.py`), so a change to either changes
+  the bytes of `requirements.txt`. The Databricks Apps build skipped the
+  reinstall on 2026-10-28 when only `uv.lock` changed; that it decides on
+  those bytes alone is inferred from that build log and is to be confirmed by
+  the first deploy after the change (docs/deployment.md).
 - `docs/THIRD_PARTY_LICENSES.md` tracks the weak-copyleft and attribution
   obligations that procurement teams are likely to ask about.
 
@@ -162,11 +165,14 @@ uv pip compile requirements.in --python-version 3.11 --format requirements.txt \
 python tools/requirements_digest.py --write
 ```
 
-The last step is not optional. The Databricks Apps build compares only the
-bytes of `requirements.txt` and does not follow its `-c uv.lock` or
-`-r requirements.in` includes, so without the new digest line the running App
-keeps its old packages (docs/deployment.md, "App Python dependencies: the
-deps-digest line"). `tests/unit/test_requirements_digest.py` fails CI when the
+The last step is not optional. On 2026-10-28 the Databricks Apps build
+skipped the reinstall for a deploy whose `uv.lock` changed but whose
+`requirements.txt` did not, and the running App kept its old packages. That
+the build compares only the bytes of `requirements.txt` and does not follow
+its `-c uv.lock` or `-r requirements.in` includes is inferred from that build
+log, to be confirmed by the first deploy after the change, so the new digest
+line is what makes the lock bump visible to it (docs/deployment.md, "App
+Python dependencies: the deps-digest line"). `tests/unit/test_requirements_digest.py` fails CI when the
 line is stale, a real `./scripts/deploy.sh` run refuses it at step 0, and
 `tools/databricks/app_runtime_closure.py stage` refuses to stage it. The dated "Lock refresh" entries in the addenda below record
 what each batch ran at the time. Every refresh before 2026-10-28 predates the

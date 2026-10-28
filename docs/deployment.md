@@ -332,7 +332,8 @@ reports `outcome` `ok`, `drift` or `lock_unreadable`, with `pins_checked`,
 also reports `python` and the `lock_python` that `uv.lock` was compiled for (a
 mismatch is `drift`, as it is for `tools/python_deps_check.py`), and
 `requirements_digest`: `current`, `stale`, `missing` or `unreadable`. The
-`remedy` follows the cause. A stale or missing digest means the build had no
+`remedy` follows the cause. A stale or missing digest leaves the bytes of
+`requirements.txt` unchanged, which the build is inferred to treat as no
 reason to reinstall, so restamp, commit and redeploy. A current digest with
 drift means the build skipped or failed the reinstall anyway, so restamping
 changes nothing: read the deployment build log and apply the fallback below.
