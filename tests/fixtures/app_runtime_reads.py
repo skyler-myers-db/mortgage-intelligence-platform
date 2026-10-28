@@ -6,8 +6,8 @@ nets; tests/fixtures/app_runtime_literals.py is the other.
 
 A path value starts at ``__file__`` (through ``Path``, ``os.path.dirname``,
 ``abspath``, ``realpath``), at the cwd (``Path.cwd()``, ``os.getcwd()``, a
-relative ``Path("...")``, ``open("...")`` or ``os.path.join("...")``, which the
-App resolves against its source root), or at a string constant, f-string or
+relative ``Path("...")``, ``open("...")``, ``os.path.join("...")`` or
+``os.path.abspath(".")``, which the App resolves against its source root), or at a string constant, f-string or
 ``os.environ.get`` default fed to one of those. The scan follows it, to a fixed
 point over every scanned module, through ``/``, ``.parent``, ``.parents[N]``,
 ``joinpath``, ``with_name``, ``resolve()``, ``str()``, ``or``/``if``, names,

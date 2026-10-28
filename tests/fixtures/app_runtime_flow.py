@@ -228,8 +228,11 @@ class ModuleFlow:
             return self._join_args(args, scope)
         if name in CWD_CALLS:
             return {Ref(".")}
-        if args and (name in STR_CALLS or name in OS_PATH_SAME):
+        if args and name in STR_CALLS:
             return self._file_ref(args[0]) | self.resolve(args[0], scope)
+        if args and name in OS_PATH_SAME:
+            # abspath(".") or realpath("docs") is a cwd path; "~" is the home folder.
+            return {ref for ref in self._as_refs(args[0], scope) if not ref.path.startswith("~")}
         if args and name == OS_PATH_DIRNAME:
             bases = self._file_ref(args[0]) | self.resolve(args[0], scope)
             return {Ref(up(ref.path, 1), ref.subtree) for ref in bases}

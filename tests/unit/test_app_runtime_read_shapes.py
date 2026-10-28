@@ -203,6 +203,15 @@ CAUGHT: dict[str, tuple[str, str | None, str | None]] = {
         def read():
             return (Path(settings.docs_dir) / "a6.md").read_text()
         """, "docs/a6.md", None),
+    # os.path.abspath / realpath of a cwd string is the cwd path (round 4).
+    "abspath_of_the_cwd": ("""
+        DOCS = "docs"
+        X = open(os.path.join(os.path.abspath("."), DOCS, "x1.md")).read()
+        """, "docs/x1.md", None),
+    "realpath_of_the_cwd": ("""
+        DOCS = "docs"
+        X = (Path(os.path.realpath(".")) / DOCS / "x2.md").read_text()
+        """, "docs/x2.md", None),
     # A bare top-level name reaching a path constructor only through a
     # first-party parameter: no '/' and no path context, so only the flow
     # scan can see it.
@@ -303,6 +312,17 @@ def test_the_minimal_tree_alone_reads_nothing_outside_backend(tmp_path: Path) ->
     assert result.unhandled_file_uses == []
     assert outside_reads(result) == {}
     assert literal_reads(root, result) == set()
+
+
+def test_the_home_folder_is_not_a_repo_read(tmp_path: Path) -> None:
+    # The control for the os.path cwd rule: expanduser("~/...") names the
+    # home folder, not a path under the source root.
+    source = 'X = open(os.path.expanduser("~/.databrickscfg")).read()'
+
+    result = scan(make_tree(tmp_path, source))
+
+    assert result.unhandled_file_uses == []
+    assert outside_reads(result) == {}
 
 
 def test_a_path_value_inside_backend_may_escape(tmp_path: Path) -> None:
