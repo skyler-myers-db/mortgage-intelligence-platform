@@ -4,8 +4,8 @@ The only other enforcement of ``tools/requirements_digest.py --check`` is a
 pytest test, and the repo has no required checks, so a lock bump merged
 without a restamp would reach a governed deploy with an unchanged
 requirements.txt, and with one the Apps build skipped the reinstall and kept
-the old packages on 2026-10-28 (that it compares only requirements.txt is
-inferred from that build log; docs/deployment.md). The block mirrors the
+the old packages on 2026-10-28 (it compares only requirements.txt, confirmed
+the same day; docs/deployment.md). The block mirrors the
 interpreter pin check beside it: a dry run reports and continues, a real run
 refuses with exit 2 before any workspace call. The block is read from ``deploy_entrypoint_text()`` (the sliced deploy.sh
 layout) and driven in a small harness.
