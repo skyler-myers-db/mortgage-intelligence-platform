@@ -1,8 +1,9 @@
 """``app_runtime_closure stage`` builds exactly the slim per-release folder.
 
 The folder is the closure at a git ref plus a prebuilt frontend/dist, and
-nothing else: no untracked or uncommitted file, no junk, no second upload
-into a used folder. The file budget is pinned against the measured start
+nothing else: no untracked or uncommitted file, no junk, no file a governed
+build would not ship (tests/unit/test_app_runtime_closure_dist.py holds the
+dist rules), no second upload into a used folder. The file budget is pinned against the measured start
 window (about 10 files/s inside 10 minutes; a dist build adds about 700).
 """
 
@@ -46,7 +47,14 @@ OUTSIDE = {
     "tests/unit/test_x.py": "x\n",
     "tools/x.py": "x\n",
 }
-DIST = {"index.html": "<html></html>\n", "assets/app-1.js": "1;\n", "assets/app-1.js.br": "br"}
+# A governed build: the shell, hashed assets, and frontend/public copied verbatim.
+DIST = {
+    "index.html": "<html></html>\n",
+    "assets/app-1.js": "1;\n",
+    "assets/app-1.js.br": "br",
+    "us-counties.json": TRACKED["frontend/public/us-counties.json"],
+    "other.json": OUTSIDE["frontend/public/other.json"],
+}
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -120,17 +128,47 @@ def test_stage_refuses_a_non_empty_out_and_leaves_it_alone(
     assert _files(out) == {"earlier/upload.txt"}
 
 
-@pytest.mark.parametrize("junk", [".DS_Store", "assets/__pycache__/m.txt", "assets/m.pyc"])
-def test_stage_refuses_junk_in_the_dist(
-    repo: Path, dist: Path, tmp_path: Path, junk: str
+# Each would be a public URL: backend/main.py's _spa_fallback serves any real
+# file under frontend/dist (GET /.env, GET /assets/a.js.map).
+POLLUTED = {
+    ".env": ("MIP_SECRET=x\n", "hidden path: .env"),
+    "assets/a.js.map": ("{}", "source map: assets/a.js.map"),
+    "build-manifest.json": ("{}", "build metadata: build-manifest.json"),
+    ".vite/manifest.json": ("{}", "hidden path: .vite/manifest.json"),
+    "assets/app-2.js": (
+        "2;\n//# sourceMappingURL=app-2.js.map\n", "sourceMappingURL comment: assets/app-2.js"
+    ),
+    "notes.txt": ("an untracked frontend/public file\n", "not a governed build output: notes.txt"),
+    ".DS_Store": ("x", "hidden path: .DS_Store"),
+    "assets/__pycache__/m.txt": ("x", "python junk: assets/__pycache__/m.txt"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(POLLUTED))
+def test_stage_refuses_a_dist_a_governed_build_would_not_ship(
+    repo: Path, dist: Path, tmp_path: Path, name: str
 ) -> None:
-    _write(dist, {junk: "x"})
+    text, problem = POLLUTED[name]
+    _write(dist, {name: text})
     out = tmp_path / "out"
 
-    with pytest.raises(closure.StageError, match="junk in --dist"):
+    with pytest.raises(closure.StageError, match="not a governed build output") as refused:
         closure.stage(repo=repo, ref="HEAD", dist=dist, out=out)
 
+    assert problem in str(refused.value)
     assert not out.exists()
+
+
+def test_stage_refuses_a_dist_built_from_another_commit(
+    repo: Path, dist: Path, tmp_path: Path
+) -> None:
+    # Vite copies frontend/public verbatim, so an older build carries the
+    # older public file.
+    _write(repo, {"frontend/public/other.json": '{"v": 2}\n'})
+    _git(repo, "commit", "-q", "-am", "public file changed")
+
+    with pytest.raises(closure.StageError, match="differs from frontend/public/other.json"):
+        closure.stage(repo=repo, ref="HEAD", dist=dist, out=tmp_path / "out")
 
 
 def test_stage_refuses_junk_tracked_at_the_ref(repo: Path, dist: Path, tmp_path: Path) -> None:
@@ -192,7 +230,7 @@ def test_stage_refuses_an_unbuilt_dist_and_a_symlink(
     with pytest.raises(closure.StageError, match="no index.html"):
         closure.stage(repo=repo, ref="HEAD", dist=tmp_path / "missing", out=tmp_path / "a")
     os.symlink(dist / "index.html", dist / "assets" / "link.html")
-    with pytest.raises(closure.StageError, match="symlink in --dist"):
+    with pytest.raises(closure.StageError, match="symlink: assets/link.html"):
         closure.stage(repo=repo, ref="HEAD", dist=dist, out=tmp_path / "b")
 
 
@@ -227,14 +265,23 @@ def test_list_prints_every_entry_and_the_tracked_files(
     assert set(capsys.readouterr().out.splitlines()) == set(TRACKED)
 
 
-def test_stage_of_head_carries_every_tracked_closure_file(dist: Path, tmp_path: Path) -> None:
+def test_stage_of_head_carries_every_tracked_closure_file(tmp_path: Path) -> None:
     commit, found = closure.tracked_files(ROOT, "HEAD")
+    dist = tmp_path / "dist"
+    _write(dist, {"index.html": "<html></html>\n"})
+    public = _git(ROOT, "ls-tree", "-r", "--name-only", commit, "--", "frontend/public")
+    for name in public.splitlines():
+        target = dist / name.removeprefix("frontend/public/")
+        target.write_bytes(subprocess.run(
+            ["git", "-C", str(ROOT), "cat-file", "blob", f"{commit}:{name}"],
+            capture_output=True, check=True,
+        ).stdout)
     out = tmp_path / "out"
 
     result = closure.stage(repo=ROOT, ref=commit, dist=dist, out=out)
 
     tracked = {name for names in found.values() for name in names}
-    assert _files(out) == tracked | {f"frontend/dist/{name}" for name in DIST}
+    assert _files(out) == tracked | {f"frontend/dist/{p}" for p in _files(dist)}
     assert set(result.tracked) == tracked
 
 

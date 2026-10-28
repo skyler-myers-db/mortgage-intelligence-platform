@@ -18,8 +18,10 @@ holding only this closure is about 1,200 files.
 
 ``stage`` builds the folder from ``git archive REF`` (tracked files only, so
 untracked optional entries are skipped and reported) plus the given prebuilt
-``frontend/dist``. It refuses junk files, symlinks, a missing required entry,
-a requirements.txt whose deps-digest line does not match uv.lock and
+``frontend/dist``, which must hold only governed build output
+(tools/databricks/app_runtime_dist.py: no dotfiles, source maps or build
+metadata, and exactly the ``frontend/public`` files tracked at REF). It
+refuses junk files, symlinks, a missing required entry, a requirements.txt whose deps-digest line does not match uv.lock and
 requirements.in at REF (the Apps build would skip the reinstall), a non-empty
 ``--out`` and a folder over the file budget, before writing anything. It never
 calls Databricks.
@@ -29,7 +31,6 @@ from __future__ import annotations
 
 import argparse
 import io
-import os
 import shutil
 import subprocess
 import sys
@@ -40,9 +41,11 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from tools import requirements_digest
+from tools.databricks.app_runtime_dist import review_dist
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIST_PATH = "frontend/dist"
+PUBLIC_PATH = "frontend/public"
 # Measured 2026-10-28: about 10 files/s inside a 600 s start window, and a
 # Vite build emits about 700 dist files (694 on ab6235e0). 1,400 staged files
 # is about 140 s of download, leaving the rest of the window to the pip
@@ -195,21 +198,19 @@ def _check_digest(blobs: Mapping[str, bytes], ref: str) -> None:
         )
 
 
-def _dist_files(dist: Path) -> list[str]:
-    if not (dist / "index.html").is_file():
-        raise StageError(f"--dist {dist} has no index.html; build the frontend first")
-    files: list[str] = []
-    for current, dirs, names in os.walk(dist):
-        for name in sorted(dirs + names):
-            path = Path(current) / name
-            relpath = path.relative_to(dist).as_posix()
-            if is_junk(relpath):
-                raise StageError(f"junk in --dist: {relpath}")
-            if path.is_symlink():
-                raise StageError(f"symlink in --dist: {relpath}")
-            if path.is_file():
-                files.append(relpath)
-    return sorted(files)
+def _dist_files(repo: Path, commit: str, dist: Path) -> list[str]:
+    """The dist's files, once it holds only governed build output for ``commit``."""
+
+    listing = _git(repo, "ls-tree", "-r", "-z", "--name-only", commit, "--", PUBLIC_PATH)
+    names = [name for name in listing.decode("utf-8").split("\0") if name]
+    blobs = _blobs(repo, commit, names)
+    public = {name.removeprefix(f"{PUBLIC_PATH}/"): blobs[name] for name in names}
+    review = review_dist(dist, public)
+    if review.problems:
+        shown = "; ".join(review.problems[:5])
+        more = f" (+{len(review.problems) - 5} more)" if len(review.problems) > 5 else ""
+        raise StageError(f"--dist {dist} is not a governed build output: {shown}{more}")
+    return list(review.files)
 
 
 def _plan(repo: Path, ref: str, dist: Path) -> tuple[StageResult, list[str]]:
@@ -227,7 +228,9 @@ def _plan(repo: Path, ref: str, dist: Path) -> tuple[StageResult, list[str]]:
         raise StageError(f"junk tracked at {ref}: {', '.join(junk[:5])}")
     digest_inputs = (requirements_digest.REQUIREMENTS_TXT, *requirements_digest.DIGESTED_FILES)
     _check_digest(_blobs(repo, commit, digest_inputs), ref)
-    plan = StageResult(commit, tuple(tracked), tuple(_dist_files(dist)), tuple(skipped))
+    plan = StageResult(
+        commit, tuple(tracked), tuple(_dist_files(repo, commit, dist)), tuple(skipped)
+    )
     if plan.total > MAX_STAGED_FILES:
         raise StageError(f"{plan.total} files exceed the {MAX_STAGED_FILES}-file budget")
     pathspecs = [path for path, names in found.items() if names]
