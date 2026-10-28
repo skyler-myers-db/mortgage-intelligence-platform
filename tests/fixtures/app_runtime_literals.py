@@ -124,9 +124,11 @@ class _Sweep:
                 if name in ("glob", "rglob"):
                     return path, True
                 tail = parent.args[parent.args.index(current) + 1 :]
-                if not all(isinstance(a, ast.Constant) and isinstance(a.value, str) for a in tail):
+                values = [a.value for a in tail
+                          if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+                if len(values) != len(tail):
                     return path, True
-                path = posixpath.join(path, *(a.value for a in tail))  # type: ignore[union-attr]
+                path = posixpath.join(path, *values)
                 current = parent
                 continue
             return path, False
@@ -144,7 +146,7 @@ class _Sweep:
                 prefix = posixpath.dirname(text.split("*")[0].split("?")[0].split("[")[0])
                 dynamic = True
             path, tail = self._extend(node, posixpath.normpath(prefix or "."))
-            yield PathLiteral(f"{self.file}:{node.lineno}", posixpath.normpath(path),
+            yield PathLiteral(f"{self.file}:{getattr(node, 'lineno', 0)}", posixpath.normpath(path),
                               dynamic or tail)
 
     def _text(self, node: ast.AST) -> tuple[str | None, bool]:

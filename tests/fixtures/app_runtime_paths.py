@@ -1,0 +1,127 @@
+"""Path values, call-name tables and pure path helpers for the App read scan.
+
+Shared by tests/fixtures/app_runtime_flow.py, app_runtime_consumers.py and
+app_runtime_reads.py (which documents the scan).
+"""
+
+from __future__ import annotations
+
+import ast
+import posixpath
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Literal
+
+Verdict = Literal["follow", "sink", "subtree", "unhandled"]
+Scope = tuple[str, ...]
+StrValue = tuple[str, bool]  # (text or constant head, has a non-constant tail)
+
+PATH_CTORS = frozenset(
+    f"pathlib.{name}" for name in ("Path", "PurePath", "PosixPath", "PurePosixPath")
+)
+STR_CALLS = frozenset({"str", "os.fspath"})
+OPEN_CALLS = frozenset({"open", "io.open", "builtins.open", "codecs.open"})
+DIR_CALLS = frozenset({"os.walk", "os.listdir", "os.scandir", "glob.glob", "glob.iglob",
+                        "shutil.copytree"})
+ENV_GETS = frozenset({"os.environ.get", "os.getenv", "os.environ.setdefault"})
+CWD_CALLS = frozenset({"pathlib.Path.cwd", "os.getcwd"})
+OS_PATH_SAME = frozenset({"os.path.abspath", "os.path.realpath", "os.path.normpath",
+                           "os.path.expanduser"})
+OS_PATH_DIRNAME = "os.path.dirname"
+OS_PATH_JOIN = "os.path.join"
+SAME_METHODS = frozenset({"resolve", "absolute", "expanduser", "as_posix", "__fspath__"})
+FOLLOW_METHODS = SAME_METHODS | {"with_name", "with_suffix", "with_stem", "joinpath",
+                                   "glob", "rglob", "iterdir"}
+SINK_ATTRS = frozenset({
+    "read_text", "read_bytes", "open", "exists", "is_file", "is_dir", "is_symlink", "stat",
+    "lstat", "samefile", "readlink", "owner", "group", "write_text", "write_bytes", "touch",
+    "mkdir", "unlink", "rmdir", "chmod", "name", "stem", "suffix", "suffixes", "parts",
+    "anchor", "drive", "root", "is_absolute", "is_relative_to", "relative_to", "match",
+    "as_uri",
+})
+SUBTREE_ATTRS = frozenset({"walk"})
+GLOB_CHARS = frozenset("*?[")
+
+
+
+@dataclass(frozen=True)
+class Ref:
+    """A repo-relative POSIX path (``.`` is the root); ``subtree`` adds ``/**``."""
+
+    path: str
+    subtree: bool = False
+
+    def key(self) -> str:
+        return f"{self.path}/**" if self.subtree else self.path
+
+
+MAX_DEPTH = 12  # a deeper path, or one more than two levels above the root, is folded
+
+
+def norm(path: str) -> str:
+    return posixpath.normpath(path or ".")
+
+
+def bounded(ref: Ref) -> Ref:
+    """Keep the path lattice finite, so ``p = p.parent`` in a loop reaches a fixed point."""
+
+    parts = ref.path.split("/")
+    if parts[:3] == ["..", "..", ".."]:
+        return Ref("../..", True)
+    if len(parts) > MAX_DEPTH:
+        return Ref("/".join(parts[:MAX_DEPTH]), True)
+    return ref
+
+
+def join(base: str, *segments: str) -> str:
+    return norm(posixpath.join(base, *segments))
+
+
+def up(path: str, levels: int) -> str:
+    """``levels`` directories up; above the repo root stays visible as ``..``."""
+
+    for _ in range(levels):
+        path = f"{path}/.." if posixpath.basename(path) in ("", ".", "..") else posixpath.dirname(path)
+        path = norm(path)
+    return path
+
+
+def join_ref(ref: Ref, text: str, dynamic: bool) -> Ref | None:
+    if text.startswith("/"):
+        return None
+    if ref.subtree:
+        ups = text.split("/").count("..")
+        return Ref(up(ref.path, ups) if ups else ref.path, True)
+    if dynamic:
+        return Ref(join(ref.path, posixpath.dirname(text)), True)
+    return Ref(join(ref.path, text))
+
+
+def subtree(refs: Iterable[Ref]) -> set[Ref]:
+    return {Ref(ref.path, True) for ref in refs}
+
+
+def const_int(node: ast.AST) -> int | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        return node.value
+    return None
+
+
+def attr_chain(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        head = attr_chain(node.value)
+        return f"{head}.{node.attr}" if head else None
+    return None
+
+
+def glob_prefix(pattern: str) -> str:
+    parts: list[str] = []
+    for part in pattern.split("/"):
+        if GLOB_CHARS & set(part):
+            break
+        parts.append(part)
+    return "/".join(parts)
+
+
