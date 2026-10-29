@@ -105,7 +105,7 @@ class _AssetSqlClient:
                 {"key": "location", "value": "dbfs:/must-not-leak"},
                 {"key": "secret", "value": "token"},
             ]
-        if "SYSTEM.ACCESS.TABLE_LINEAGE" in s:
+        if "AUDIT.ASSET_LINEAGE" in s:
             return [
                 {
                     "source_table_full_name": "mip.gold.borrower_360",
@@ -405,7 +405,7 @@ def test_function_metadata_uses_the_catalog_explorer_function_route_without_tabl
     assert any("INFORMATION_SCHEMA.ROUTINES" in statement for statement in statements)
     assert not any(statement.startswith("DESCRIBE DETAIL") for statement in statements)
     assert not any("COUNT(*)" in statement for statement in statements)
-    assert not any("TABLE_LINEAGE" in statement for statement in statements)
+    assert not any("LINEAGE" in statement for statement in statements)
 
 
 def test_object_verification_distinguishes_missing_from_unavailable() -> None:
@@ -464,7 +464,7 @@ def test_etl_only_assets_issue_no_delta_detail_count_or_properties(
     assert payload.asset_path == asset_path
     statements = [statement.upper() for statement, _ in fake.calls]
     assert not any(statement.startswith("DESCRIBE") for statement in statements)
-    # (system.access.table_lineage's own COUNT(*) AS event_count is metadata.)
+    # (the audit.asset_lineage view's own COUNT(*) AS event_count is metadata.)
     assert not any("COUNT(*) AS ROW_COUNT" in statement for statement in statements)
     assert not any(statement.startswith("SHOW TBLPROPERTIES") for statement in statements)
     assert any("INFORMATION_SCHEMA.COLUMNS" in statement for statement in statements)

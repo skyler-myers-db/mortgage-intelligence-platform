@@ -32,6 +32,11 @@ class AssetProperty(BaseModel):
     value: str | None = None
 
 
+#: Where observed lineage rows come from: the deploy-managed view the App may
+#: read, and the system table it projects (the App holds no grant on that).
+ASSET_LINEAGE_VIEW_ORIGIN = "view over system.access.table_lineage"
+
+
 class AssetLineageNode(BaseModel):
     direction: AssetLineageDirection
     asset_path: str
@@ -39,7 +44,8 @@ class AssetLineageNode(BaseModel):
     object_type: AssetObjectType | None = None
     event_time: str | None = None
     event_count: int | None = None
-    source: str = "system.access.table_lineage"
+    #: ``<catalog>.audit.asset_lineage (view over system.access.table_lineage)``.
+    source: str = f"audit.asset_lineage ({ASSET_LINEAGE_VIEW_ORIGIN})"
     catalog_explorer_url: str | None = None
 
 
