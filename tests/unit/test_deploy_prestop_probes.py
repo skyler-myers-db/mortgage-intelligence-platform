@@ -1208,6 +1208,9 @@ deployment_control_value() {{ printf ''; }}
 same_identity_casefold() {{ [[ "$1" == "$2" ]]; }}
 start_proof_signing_heartbeat() {{ :; }}
 DEPLOY_INVENTORY_PRINCIPAL=deployer@example.invalid
+# Resolved by the preflight step file; the pii-salt check reads both.
+MIP_PII_SALT_SCOPE=mip
+PII_SALT_REQUIRE_EXISTING=0
 DATABRICKS_CLIENT_ID=normal-client DATABRICKS_CLIENT_SECRET=s1
 DATABRICKS_OPERATOR2_CLIENT_ID=operator2-client
 DATABRICKS_ADMIN_CLIENT_ID=admin-client DATABRICKS_ADMIN_CLIENT_SECRET=s2
@@ -1249,5 +1252,6 @@ def test_a_passing_probe_hands_over_to_the_signed_lease(tmp_path: Path) -> None:
     _result, calls = _harness(tmp_path, probe_rc=0)
 
     probe = calls.index("tools.databricks.deploy_prestop_probes")
+    salt_check = calls.index("tools.databricks.pii_salt_scope check --scope mip --require-existing 0")
     lease = calls.index("tools.databricks.app_deployment_lease recovery-root")
-    assert probe < lease
+    assert probe < salt_check < lease
