@@ -21,6 +21,7 @@ from databricks.sdk.errors import (
     ResourceExhausted,
     TemporarilyUnavailable,
     TooManyRequests,
+    platform,
 )
 from databricks.sdk.service.workspace import ImportFormat, ObjectType
 
@@ -376,6 +377,15 @@ def test_an_upload_error_that_is_not_a_rate_limit_is_never_retried(
     assert client.workspace.ops("upload").count(target) == 1
     assert client.workspace.ops("download").count(target) == 1  # today's ambiguous reconcile
     assert waits == []
+
+
+def test_the_rate_limit_classes_are_exactly_the_sdk_classes_that_mean_429() -> None:
+    # Named one by one, so a later SDK that re-parents one still retries it.
+    meaning_429 = {platform.STATUS_CODE_MAPPING[429]} | {
+        cls for cls in platform.ERROR_CODE_MAPPING.values() if issubclass(cls, TooManyRequests)
+    }
+    assert set(retry.RATE_LIMIT_ERRORS) == meaning_429
+    assert meaning_429 == {TooManyRequests, ResourceExhausted, RequestLimitExceeded}
 
 
 @pytest.mark.parametrize("error", [TooManyRequests, ResourceExhausted, RequestLimitExceeded])
