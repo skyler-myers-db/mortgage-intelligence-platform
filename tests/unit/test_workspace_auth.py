@@ -156,12 +156,12 @@ def test_bundle_child_maps_isolated_resource_names(
     monkeypatch.setattr(bundle_env, "ENV_LOCAL", env_local)
     monkeypatch.setenv("DATABRICKS_WAREHOUSE_ID", "warehouse-id")
     monkeypatch.setenv("GENIE_SPACE_ID", "genie-space-id")
-    monkeypatch.setenv("MIP_APP_NAME", "mip-pr105-staging")
-    monkeypatch.setenv("LAKEBASE_INSTANCE_NAME", "mip-pr105-state")
-    monkeypatch.setenv("MIP_LAKEBASE_INSTANCE", "mip-pr105-state")
-    monkeypatch.setenv("LAKEBASE_DATABASE", "mip_pr105_state")
-    monkeypatch.setenv("MIP_LAKEBASE_DATABASE_NAME", "mip_pr105_state")
-    monkeypatch.setenv("MIP_LAKEBASE_SYNC_CATALOG", "mip_pr105_state")
+    monkeypatch.setenv("MIP_APP_NAME", "mip-staging")
+    monkeypatch.setenv("LAKEBASE_INSTANCE_NAME", "mip-staging-state")
+    monkeypatch.setenv("MIP_LAKEBASE_INSTANCE", "mip-staging-state")
+    monkeypatch.setenv("LAKEBASE_DATABASE", "mip_staging_state")
+    monkeypatch.setenv("MIP_LAKEBASE_DATABASE_NAME", "mip_staging_state")
+    monkeypatch.setenv("MIP_LAKEBASE_SYNC_CATALOG", "mip_staging_state")
     monkeypatch.setattr(bundle_env.render_sql, "render", lambda **_kwargs: (1, 0, 0))
     captured: dict[str, str] = {}
 
@@ -174,11 +174,11 @@ def test_bundle_child_maps_isolated_resource_names(
     monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "dev"])
 
     assert bundle_env.main() == 0
-    assert captured["BUNDLE_VAR_app_name"] == "mip-pr105-staging"
-    assert captured["BUNDLE_VAR_lakebase_instance_name"] == "mip-pr105-state"
-    assert captured["BUNDLE_VAR_lakebase_catalog_name"] == "mip_pr105_state"
-    assert captured["BUNDLE_VAR_lakebase_database_name"] == "mip_pr105_state"
-    assert captured["MIP_LAKEBASE_INSTANCE"] == "mip-pr105-state"
+    assert captured["BUNDLE_VAR_app_name"] == "mip-staging"
+    assert captured["BUNDLE_VAR_lakebase_instance_name"] == "mip-staging-state"
+    assert captured["BUNDLE_VAR_lakebase_catalog_name"] == "mip_staging_state"
+    assert captured["BUNDLE_VAR_lakebase_database_name"] == "mip_staging_state"
+    assert captured["MIP_LAKEBASE_INSTANCE"] == "mip-staging-state"
 
 
 def test_bundle_child_uses_dotenv_resource_names_when_shell_is_absent(
@@ -187,11 +187,11 @@ def test_bundle_child_uses_dotenv_resource_names_when_shell_is_absent(
 ) -> None:
     env_local = tmp_path / ".env.local"
     env_local.write_text(
-        "MIP_DEFAULT_CATALOG=mip_pr105_staging\n"
-        "MIP_APP_NAME=mip-app-pr105-staging\n"
-        "MIP_LAKEBASE_INSTANCE=mip-app-state-pr105-staging\n"
+        "MIP_DEFAULT_CATALOG=mip_staging\n"
+        "MIP_APP_NAME=mip-app-staging\n"
+        "MIP_LAKEBASE_INSTANCE=mip-app-state-staging\n"
         "LAKEBASE_DATABASE=mip_app_state\n"
-        "MIP_LAKEBASE_SYNC_CATALOG=mip_app_state_pr105_staging\n"
+        "MIP_LAKEBASE_SYNC_CATALOG=mip_app_state_staging\n"
         "DATABRICKS_WAREHOUSE_ID=warehouse-id\n"
         "GENIE_SPACE_ID=genie-space-id\n",
         encoding="utf-8",
@@ -221,10 +221,10 @@ def test_bundle_child_uses_dotenv_resource_names_when_shell_is_absent(
     monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "dev"])
 
     assert bundle_env.main() == 0
-    assert captured["BUNDLE_VAR_uc_catalog"] == "mip_pr105_staging"
-    assert captured["BUNDLE_VAR_app_name"] == "mip-app-pr105-staging"
-    assert captured["BUNDLE_VAR_lakebase_instance_name"] == "mip-app-state-pr105-staging"
-    assert captured["BUNDLE_VAR_lakebase_catalog_name"] == "mip_app_state_pr105_staging"
+    assert captured["BUNDLE_VAR_uc_catalog"] == "mip_staging"
+    assert captured["BUNDLE_VAR_app_name"] == "mip-app-staging"
+    assert captured["BUNDLE_VAR_lakebase_instance_name"] == "mip-app-state-staging"
+    assert captured["BUNDLE_VAR_lakebase_catalog_name"] == "mip_app_state_staging"
 
 
 def test_bundle_child_maps_runtime_secret_scope_from_dotenv(
@@ -233,7 +233,7 @@ def test_bundle_child_maps_runtime_secret_scope_from_dotenv(
 ) -> None:
     env_local = tmp_path / ".env.local"
     env_local.write_text(
-        "MIP_RUNTIME_SECRET_SCOPE=mip-runtime-pr105-staging\n"
+        "MIP_RUNTIME_SECRET_SCOPE=mip-runtime-staging\n"
         "DATABRICKS_WAREHOUSE_ID=warehouse-id\n"
         "GENIE_SPACE_ID=genie-space-id\n",
         encoding="utf-8",
@@ -252,7 +252,7 @@ def test_bundle_child_maps_runtime_secret_scope_from_dotenv(
     monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "dev"])
 
     assert bundle_env.main() == 0
-    assert captured["BUNDLE_VAR_runtime_secret_scope"] == "mip-runtime-pr105-staging"
+    assert captured["BUNDLE_VAR_runtime_secret_scope"] == "mip-runtime-staging"
 
 
 def test_bundle_child_preserves_exported_runtime_scope_over_dotenv(
@@ -288,14 +288,14 @@ def test_bundle_child_preserves_exported_runtime_scope_over_dotenv(
     [
         (
             {
-                "LAKEBASE_INSTANCE_NAME": "mip-pr105-state",
+                "LAKEBASE_INSTANCE_NAME": "mip-staging-state",
                 "MIP_LAKEBASE_INSTANCE": "mip-app-state",
             },
             "LAKEBASE_INSTANCE_NAME and MIP_LAKEBASE_INSTANCE must match",
         ),
         ({"MIP_APP_NAME": "MIP Unsafe"}, "MIP_APP_NAME must be a lowercase DNS-style name"),
         (
-            {"MIP_LAKEBASE_SYNC_CATALOG": "mip-pr105-state"},
+            {"MIP_LAKEBASE_SYNC_CATALOG": "mip-staging-state"},
             "MIP_LAKEBASE_SYNC_CATALOG must be a lowercase unquoted identifier",
         ),
         (
@@ -327,7 +327,7 @@ def test_governed_genie_resolution_pages_by_exact_title_and_round_trips() -> Non
             return SimpleNamespace(
                 spaces=[
                     SimpleNamespace(
-                        title="Mortgage Lead Intelligence PR105 Staging",
+                        title="Mortgage Lead Intelligence Staging",
                         space_id="governed-space-id",
                     )
                 ],
@@ -336,12 +336,12 @@ def test_governed_genie_resolution_pages_by_exact_title_and_round_trips() -> Non
 
         def get_space(self, space_id: str) -> SimpleNamespace:
             assert space_id == "governed-space-id"
-            return SimpleNamespace(title="Mortgage Lead Intelligence PR105 Staging")
+            return SimpleNamespace(title="Mortgage Lead Intelligence Staging")
 
     genie = Genie()
     resolved = bundle_env._resolve_governed_genie_space_id(
         {},
-        space_name="Mortgage Lead Intelligence PR105 Staging",
+        space_name="Mortgage Lead Intelligence Staging",
         client=SimpleNamespace(genie=genie),
     )
 
@@ -358,7 +358,7 @@ def test_direct_bundle_deploy_overwrites_stale_genie_id_with_governed_name(
         "DATABRICKS_WAREHOUSE_ID=warehouse-id\n"
         "GENIE_SPACE_ID=stale-cross-workspace-id\n"
         "MIP_AI_GATEWAY_VERIFIER_CLIENT_ID=verifier-client-id\n"
-        "MIP_GENIE_SPACE_NAME=Mortgage Lead Intelligence PR105 Staging\n",
+        "MIP_GENIE_SPACE_NAME=Mortgage Lead Intelligence Staging\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(bundle_env, "ENV_LOCAL", env_local)
@@ -369,7 +369,7 @@ def test_direct_bundle_deploy_overwrites_stale_genie_id_with_governed_name(
         "_resolve_governed_genie_space_id",
         lambda _env, *, space_name: (
             "governed-space-id"
-            if space_name == "Mortgage Lead Intelligence PR105 Staging"
+            if space_name == "Mortgage Lead Intelligence Staging"
             else "wrong"
         ),
     )

@@ -624,10 +624,10 @@ def test_credential_mint_fails_before_boundary_when_runtime_writer_is_absent() -
 def test_app_name_resolution_prefers_reviewed_deployment_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MIP_APP_NAME", "mip-app-pr105-staging")
+    monkeypatch.setenv("MIP_APP_NAME", "mip-app-staging")
     monkeypatch.setenv("BUNDLE_VAR_app_name", "wrong-lower-precedence")
 
-    assert pmo._load_app_name_from_bundle() == "mip-app-pr105-staging"
+    assert pmo._load_app_name_from_bundle() == "mip-app-staging"
 
 
 def test_app_name_resolution_accepts_bundle_variable_without_mip_alias(
@@ -1979,9 +1979,9 @@ def test_normal_secret_sink_discovers_the_exact_live_app_url() -> None:
     client = _make_client(create_returns=new_sp)
 
     with patch.object(pmo, "_set_gh_secret") as set_secret:
-        _provision(client, app_name="mip-app-pr105-staging", app_url=None)
+        _provision(client, app_name="mip-app-staging", app_url=None)
 
-    client.apps.get.assert_called_once_with("mip-app-pr105-staging")
+    client.apps.get.assert_called_once_with("mip-app-staging")
     assert (
         call(
             _CANONICAL_GH_REPO,
@@ -1997,7 +1997,7 @@ def test_missing_live_app_url_fails_before_identity_mutation() -> None:
     client.apps.get.return_value = SimpleNamespace(url=None)
 
     with pytest.raises(SystemExit, match="returned no valid HTTPS URL"):
-        _provision(client, app_name="mip-app-pr105-staging", app_url=None)
+        _provision(client, app_name="mip-app-staging", app_url=None)
 
     client.service_principals.list.assert_not_called()
     client.service_principals.create.assert_not_called()
