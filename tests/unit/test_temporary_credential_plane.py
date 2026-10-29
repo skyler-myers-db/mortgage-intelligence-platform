@@ -10,7 +10,10 @@ import pytest
 
 from tests.fixtures.oauth_credential_session import InMemoryCredentialSession
 from tools.databricks import oauth_credential_creation
-from tools.databricks.campaign_treatment_identity_probe import target_identity_groups_probe
+from tools.databricks.campaign_treatment_identity_probe import (
+    target_group_membership_probe,
+    target_identity_groups_probe,
+)
 from tools.databricks.identity_boundary_probes import (
     probe_target_managed_query_group_administration_boundary,
 )
@@ -121,6 +124,24 @@ def _campaign_probe(account: object, deployer: object | None) -> dict[str, str]:
     )
 
 
+def _membership_probe(account: object, deployer: object | None) -> dict[str, str]:
+    # The owner-group policy entry point: its hop into target_identity_groups_probe
+    # must carry the deployer client, or the workspace plane fails closed.
+    is_member = target_group_membership_probe(
+        account,  # type: ignore[arg-type]
+        ACCOUNT_SCIM_ID,
+        APPLICATION_ID,
+        "users-id",
+        "users",
+        expected_workspace_scim_id=WORKSPACE_SCIM_ID,
+        workspace_host=HOST,
+        assert_single_writer=lambda: None,
+        workspace_factory=_target_workspace,  # type: ignore[arg-type]
+        deployer_workspace=deployer,
+    )
+    return {"users-id": "users"} if is_member else {}
+
+
 def _administration_probe(account: object, deployer: object | None) -> dict[str, str]:
     return probe_target_managed_query_group_administration_boundary(
         account,
@@ -140,9 +161,10 @@ PROBES = pytest.mark.parametrize(
     ("probe", "sink"),
     [
         (_campaign_probe, "temporary:target-identity-membership-probe"),
+        (_membership_probe, "temporary:target-identity-membership-probe"),
         (_administration_probe, "temporary:managed-group-administration-probe"),
     ],
-    ids=["campaign-identity", "managed-group-administration"],
+    ids=["campaign-identity", "owner-group-membership", "managed-group-administration"],
 )
 
 
