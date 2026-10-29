@@ -201,6 +201,7 @@ def test_missing_actions_request_at_construction_fails_closed(
         "https://user:pass@actions.example.invalid/x?y=1",
         "https://user@actions.example.invalid/x?y=1",
         "https://:pass@actions.example.invalid/x?y=1",
+        "https://@actions.example.invalid/x?y=1",
     ],
 )
 def test_non_https_or_userinfo_actions_request_url_fails_closed(request_url: str) -> None:
@@ -499,6 +500,31 @@ def test_both_oidc_calls_ignore_a_runner_netrc() -> None:
 
     assert [call for call, _auth in http.auths] == ["get", "post"]
     assert all(isinstance(auth, IgnoreNetrcAuth) for _call, auth in http.auths)
+
+
+def test_scopes_authorization_details_and_endpoint_each_key_their_own_token() -> None:
+    # One explicit audience for every config, so only the remaining key field
+    # differs between them and a key that ignores it would reuse token 1.
+    http = FakeOidcHttp()
+    strategy = _strategy(http)
+    other_endpoint = "https://other-workspace.example.invalid/oidc/v1/token"
+    base = strategy(_cfg(token_audience="fixed-aud"))
+    sql_scope = strategy(_cfg(token_audience="fixed-aud", get_scopes_as_string=lambda: "sql"))
+    detailed = strategy(_cfg(token_audience="fixed-aud", authorization_details='[{"type":"x"}]'))
+    elsewhere = strategy(
+        _cfg(
+            token_audience="fixed-aud",
+            databricks_oidc_endpoints=SimpleNamespace(token_endpoint=other_endpoint),
+        )
+    )
+
+    assert base() == {"Authorization": "Bearer databricks-token-1"}
+    assert sql_scope() == {"Authorization": "Bearer databricks-token-2"}
+    assert detailed() == {"Authorization": "Bearer databricks-token-3"}
+    assert elsewhere() == {"Authorization": "Bearer databricks-token-4"}
+    assert base() == {"Authorization": "Bearer databricks-token-1"}
+    assert elsewhere() == {"Authorization": "Bearer databricks-token-4"}
+    assert len(http.posts) == 4
 
 
 def test_each_exchange_target_keeps_its_own_cached_token() -> None:
