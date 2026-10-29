@@ -289,6 +289,7 @@ def converge_campaign_treatment_access(
                 expected_workspace_scim_id=target.scim_id,
                 workspace_host=workspace_host,
                 assert_single_writer=credential_lease,  # type: ignore[arg-type]
+                deployer_workspace=client,
             )
         )
     )

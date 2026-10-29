@@ -205,6 +205,7 @@ def boundary_evidence(
             )
         )
         probe_kwargs["assert_single_writer"] = credential_lease
+        probe_kwargs["deployer_workspace"] = workspace
     effective_target_groups = _normalized_target_groups(
         target_groups_probe(
             account,
