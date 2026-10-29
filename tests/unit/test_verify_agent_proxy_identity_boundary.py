@@ -223,7 +223,10 @@ def test_github_oidc_admin_inventory_runs_after_the_proxy_m2m_sweep(
     m2m_env: list[dict[str, str]] = []
 
     def workspace_client(**kwargs: object) -> object:
-        if kwargs:
+        # Before the bind this is a real SDK client (bare WorkspaceClient() would
+        # resolve the github-oidc profile through the SDK's own provider); after
+        # it, the exact-M2M client is a stub that records its environment.
+        if os.environ.get("DATABRICKS_AUTH_TYPE") != "oauth-m2m":
             return WorkspaceClient(**kwargs)  # type: ignore[arg-type]
         m2m_env.append(dict(os.environ))
         return SimpleNamespace(config=SimpleNamespace(host="https://oidc-unit.cloud.databricks.com"))

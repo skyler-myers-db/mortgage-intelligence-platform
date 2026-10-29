@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import requests
 from databricks.sdk import config as sdk_config
 from databricks.sdk.oauth import HostMetadata, OidcEndpoints
 
@@ -151,6 +152,21 @@ def install_github_oidc_deployer(
     http = FakeOidcHttp()
     clock = FakeClock()
     monkeypatch.setattr(github_oidc_auth, "requests", http)
+    # The SDK's own github-oidc provider calls requests.get/post directly; route
+    # it to the same fakes so a test can reproduce its per-request exchange and
+    # its failure once the Actions request variables are scrubbed.
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda url, headers=None, **_kwargs: http.get(
+            url, params={}, headers=headers or {}, timeout=None
+        ),
+    )
+    monkeypatch.setattr(
+        requests,
+        "post",
+        lambda url, data=None, **_kwargs: http.post(url, data=data or {}, timeout=None),
+    )
     monkeypatch.setattr(github_oidc_auth, "_utcnow", clock)
     monkeypatch.setattr(
         sdk_config,
