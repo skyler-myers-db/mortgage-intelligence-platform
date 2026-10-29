@@ -49,12 +49,12 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, TypeVar
 
-from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import AlreadyExists, NotFound, ResourceAlreadyExists
 from databricks.sdk.service.workspace import ImportFormat
 from tools.databricks import app_release_contract as contract
 from tools.databricks.app_deployment_state import immutable_source
 from tools.databricks.app_runtime_closure import MAX_STAGED_FILES, is_junk
+from tools.databricks.workspace_auth import deployment_workspace_client
 
 ReleaseContractError = contract.ReleaseContractError
 MAX_FILES = MAX_STAGED_FILES
@@ -348,7 +348,13 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None, *, client: Callable[[], Any] = WorkspaceClient) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    # The governed deployer binding: one cached github-oidc exchange serves
+    # every upload worker instead of two extra HTTP calls per request.
+    client: Callable[[], Any] = deployment_workspace_client,
+) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "publish":
