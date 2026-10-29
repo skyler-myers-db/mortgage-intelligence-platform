@@ -5383,6 +5383,304 @@ def test_configure_step_requires_the_deployer_variable(tmp_path: Path) -> None:
     assert not profile.exists()
 
 
+OIDC_PROOF_STEP = "Prove the GitHub OIDC deployer identity"
+_DEPLOYER = "ci-deployer-application-id"
+_FAKE_DATABRICKS_SDK = """
+import json
+import os
+from types import SimpleNamespace
+
+
+def _log(call):
+    with open(os.environ["FAKE_DATABRICKS_CALLS"], "a", encoding="utf-8") as handle:
+        handle.write(call + "\\n")
+
+
+class WorkspaceClient:
+    def __init__(self, *, profile=None, **kwargs):
+        _log(f"sdk:WorkspaceClient(profile={profile}, extra={sorted(kwargs)})")
+        with open(os.environ["FAKE_DATABRICKS_SPEC"], encoding="utf-8") as handle:
+            self._spec = json.load(handle)
+        if self._spec.get("construct_error"):
+            raise PermissionError("token exchange refused")
+        self.config = SimpleNamespace(**self._spec["config"])
+        self.current_user = SimpleNamespace(me=self._me)
+        self.metastores = SimpleNamespace(current=self._current, get=self._metastore)
+        self.warehouses = SimpleNamespace(get=self._warehouse)
+        self.genie = SimpleNamespace(get_space=self._space)
+
+    def _me(self):
+        _log("sdk:current_user.me")
+        me = self._spec["me"]
+        groups = [SimpleNamespace(display=name) for name in me["groups"]]
+        return SimpleNamespace(user_name=me["user_name"], groups=groups)
+
+    def _current(self):
+        _log("sdk:metastores.current")
+        return SimpleNamespace(metastore_id=self._spec["metastore_id"])
+
+    def _metastore(self, metastore_id):
+        _log("sdk:metastores.get")
+        if metastore_id != self._spec["metastore_id"]:
+            raise LookupError("no such metastore")
+        return SimpleNamespace(owner=self._spec["metastore_owner"])
+
+    def _warehouse(self, warehouse_id):
+        _log("sdk:warehouses.get")
+        if warehouse_id not in self._spec["warehouses"]:
+            raise LookupError("no such warehouse")
+        return SimpleNamespace(id=warehouse_id)
+
+    def _space(self, space_id):
+        _log("sdk:genie.get_space")
+        if space_id not in self._spec["spaces"]:
+            raise LookupError("no such space")
+        return SimpleNamespace(space_id=space_id)
+"""
+_FAKE_DATABRICKS_CLI = """#!/usr/bin/env bash
+printf 'cli:%s profile_env=%s oidc_env=%s\\n' "$*" "${DATABRICKS_CONFIG_PROFILE:-}" \\
+  "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+set}" >> "$FAKE_DATABRICKS_CALLS"
+if [ -n "${FAKE_CLI_EXIT:-}" ]; then
+  echo "cli refused" >&2
+  exit "$FAKE_CLI_EXIT"
+fi
+cat "$FAKE_CLI_ME"
+"""
+_READ_ONLY_PROOF_CALLS = [
+    "sdk:WorkspaceClient(profile=DEFAULT, extra=[])",
+    "sdk:current_user.me",
+    "sdk:metastores.current",
+    "sdk:metastores.get",
+    "sdk:warehouses.get",
+    "sdk:genie.get_space",
+    "cli:current-user me --profile DEFAULT -o json profile_env=DEFAULT oidc_env=set",
+]
+
+
+def _bundle_target_host(target: str) -> str:
+    return str(yaml.safe_load(BUNDLE_CONFIG.read_text(encoding="utf-8"))["targets"][target]["workspace"]["host"])
+
+
+def _oidc_profile(host: str, *, auth_type: str = "github-oidc", client_id: str = _DEPLOYER, extra: str = "") -> str:
+    return f"[DEFAULT]\nhost  = {host}\nauth_type = {auth_type}\nclient_id = {client_id}\n{extra}"
+
+
+def _run_oidc_proof(
+    tmp_path: Path,
+    *,
+    spec: dict[str, Any] | None = None,
+    profile: str | None = None,
+    cli_me: str | None = None,
+    env: dict[str, str] | None = None,
+    cli: bool = True,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Run the proof step against a recording fake SDK and CLI (read-only calls only)."""
+
+    host = _bundle_target_host(ci_isolation.CI_TARGET)
+    sdk_root = tmp_path / "sdk"
+    (sdk_root / "databricks" / "sdk").mkdir(parents=True)
+    (sdk_root / "databricks" / "__init__.py").write_text("", encoding="utf-8")
+    (sdk_root / "databricks" / "sdk" / "__init__.py").write_text(_FAKE_DATABRICKS_SDK, encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    if cli:
+        fake_cli = bin_dir / "databricks"
+        fake_cli.write_text(_FAKE_DATABRICKS_CLI, encoding="utf-8")
+        fake_cli.chmod(0o755)
+    shim = bin_dir / "python"
+    shim.write_text(f'#!/usr/bin/env bash\nexec {shlex.quote(sys.executable)} "$@"\n', encoding="utf-8")
+    shim.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".databrickscfg").write_text(_oidc_profile(host) if profile is None else profile, encoding="utf-8")
+    full_spec = {
+        "config": {"auth_type": "github-oidc", "client_id": _DEPLOYER, "host": host},
+        "me": {"user_name": _DEPLOYER, "groups": ["users", "admins"]},
+        "metastore_id": "metastore-under-test",
+        "metastore_owner": _DEPLOYER,
+        "warehouses": ["staging-warehouse"],
+        "spaces": ["staging-space"],
+        **(spec or {}),
+    }
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(full_spec), encoding="utf-8")
+    cli_me_path = tmp_path / "cli-me.json"
+    cli_me_path.write_text(
+        json.dumps({"userName": _DEPLOYER, "groups": [{"display": "admins"}]}) if cli_me is None else cli_me,
+        encoding="utf-8",
+    )
+    calls = tmp_path / "calls.log"
+    result = subprocess.run(
+        ["bash", "-c", _workflow_run_block(DEPLOY_DEV, OIDC_PROOF_STEP)],
+        cwd=REPO,  # reads the committed databricks.yml; the step writes nothing
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(home),
+            "PYTHONPATH": str(sdk_root),
+            "DATABRICKS_CONFIG_PROFILE": "DEFAULT",
+            "MIP_CI_DEPLOYER_CLIENT_ID": _DEPLOYER,
+            "MIP_PROOF_DATABRICKS_HOST": host,
+            "MIP_PROOF_WAREHOUSE_ID": "staging-warehouse",
+            "MIP_PROOF_GENIE_SPACE_ID": "staging-space",
+            "ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.actions.example/request",
+            "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "github-request-token",
+            "FAKE_DATABRICKS_SPEC": str(spec_path),
+            "FAKE_DATABRICKS_CALLS": str(calls),
+            "FAKE_CLI_ME": str(cli_me_path),
+            **(env or {}),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=120,
+    )
+    logged = calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+    return result, logged
+
+
+def _proof_checks(stdout: str) -> dict[str, str]:
+    return dict(line.split("=", 1) for line in stdout.splitlines() if re.fullmatch(r"[a-z_A-Z0-9]+=(?:true|false).*", line))
+
+
+def test_oidc_proof_step_is_read_only_and_ordered_before_any_deployer_mutation() -> None:
+    workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["deploy"]["steps"]
+    names = [step.get("name") for step in steps]
+    proof = steps[names.index(OIDC_PROOF_STEP)]
+
+    assert names.index("Configure Databricks dev credentials") < names.index(OIDC_PROOF_STEP)
+    assert names.index(OIDC_PROOF_STEP) < names.index("Repair normal operator OAuth credential")
+    assert names.index(OIDC_PROOF_STEP) < names.index("Deploy dev Databricks App")
+    assert "if" not in proof, "it gates the credential repair and the deploy alike"
+    assert proof["env"] == {
+        "DATABRICKS_CONFIG_PROFILE": "DEFAULT",
+        "MIP_CI_DEPLOYER_CLIENT_ID": "${{ vars.MIP_CI_DEPLOYER_CLIENT_ID }}",
+        "MIP_PROOF_DATABRICKS_HOST": "${{ secrets.DATABRICKS_HOST }}",
+        "MIP_PROOF_WAREHOUSE_ID": "${{ secrets.DATABRICKS_WAREHOUSE_ID }}",
+        "MIP_PROOF_GENIE_SPACE_ID": "${{ secrets.GENIE_SPACE_ID }}",
+    }
+    assert not [name for name in proof["env"] if name.endswith("_SECRET") or "TOKEN" in name]
+    assert "deploy.sh" not in proof["run"]
+
+
+def test_oidc_proof_step_passes_and_prints_only_booleans(tmp_path: Path) -> None:
+    host = _bundle_target_host(ci_isolation.CI_TARGET)
+    result, calls = _run_oidc_proof(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    checks = _proof_checks(result.stdout)
+    assert set(checks.values()) == {"true"}
+    assert set(checks) == {
+        "deployer_client_id_set",
+        "github_oidc_request_env_present",
+        "no_ambient_auth_override",
+        "profile_holds_only_host_auth_type_client_id",
+        "profile_auth_type_is_github_oidc",
+        "profile_client_id_is_the_deployer",
+        "profile_host_is_DATABRICKS_HOST",
+        "profile_host_is_the_pr105_host_target",
+        "sdk_authenticates_with_the_github_oidc_profile",
+        "me_is_the_deployer",
+        "me_in_admins",
+        "metastore_owner_is_the_deployer",
+        "warehouse_resolves",
+        "genie_space_resolves",
+        "cli_authenticates",
+        "cli_me_is_the_deployer",
+        "cli_me_in_admins",
+    }
+    assert result.stdout.splitlines()[-1] == "GitHub OIDC deployer identity proven."
+    assert len(result.stdout.splitlines()) == len(checks) + 1, "booleans and the verdict, nothing else"
+    for value in (_DEPLOYER, host, "staging-warehouse", "staging-space", "metastore-under-test", "github-request-token"):
+        assert value not in result.stdout + result.stderr
+    assert calls == _READ_ONLY_PROOF_CALLS
+
+
+_STATIC_PROOF_REFUSALS = {
+    "secret-host-differs": ({"env": {"MIP_PROOF_DATABRICKS_HOST": "https://other-workspace.example"}}, "profile_host_is_DATABRICKS_HOST"),
+    "live-dev-host": ("live", "profile_host_is_the_pr105_host_target"),
+    "pat-profile": ({"profile": "pat"}, "profile_auth_type_is_github_oidc"),
+    "stored-token": ({"profile": "token"}, "profile_holds_only_host_auth_type_client_id"),
+    "profile-client-differs": ({"profile": "client"}, "profile_client_id_is_the_deployer"),
+    "deployer-unset": ({"env": {"MIP_CI_DEPLOYER_CLIENT_ID": ""}}, "deployer_client_id_set"),
+    "no-id-token-permission": ({"env": {"ACTIONS_ID_TOKEN_REQUEST_TOKEN": ""}}, "github_oidc_request_env_present"),
+    "ambient-client-id": ({"env": {"DATABRICKS_CLIENT_ID": "normal-app-client"}}, "no_ambient_auth_override"),
+    "ambient-token": ({"env": {"DATABRICKS_TOKEN": "a-pat"}}, "no_ambient_auth_override"),
+    "ambient-auth-type": ({"env": {"DATABRICKS_AUTH_TYPE": "pat"}}, "no_ambient_auth_override"),
+    "ambient-host": ({"env": {"DATABRICKS_HOST": "https://other-workspace.example"}}, "no_ambient_auth_override"),
+    "ambient-config-file": ({"env": {"DATABRICKS_CONFIG_FILE": "/elsewhere/.databrickscfg"}}, "no_ambient_auth_override"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_STATIC_PROOF_REFUSALS))
+def test_oidc_proof_step_refuses_a_wrong_profile_before_any_network_call(tmp_path: Path, case: str) -> None:
+    arrangement, failed = _STATIC_PROOF_REFUSALS[case]
+    host = _bundle_target_host(ci_isolation.CI_TARGET)
+    kwargs: dict[str, Any] = {}
+    if arrangement == "live":
+        live = _bundle_target_host("dev")
+        kwargs = {"profile": _oidc_profile(live), "env": {"MIP_PROOF_DATABRICKS_HOST": live}}
+    elif "env" in arrangement:
+        kwargs = {"env": arrangement["env"]}
+    else:
+        kwargs = {
+            "profile": {
+                "pat": _oidc_profile(host, auth_type="pat"),
+                "token": _oidc_profile(host, extra="token = a-stored-pat\n"),
+                "client": _oidc_profile(host, client_id="another-service-principal"),
+            }[arrangement["profile"]]
+        }
+    result, calls = _run_oidc_proof(tmp_path, **kwargs)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    checks = _proof_checks(result.stdout)
+    assert checks[failed] == "false"
+    assert "::error::GitHub OIDC deployer identity proof failed" in result.stdout
+    assert calls == [], "no SDK client, no CLI: nothing reaches a workspace"
+    assert "a-stored-pat" not in result.stdout + result.stderr
+
+
+_NETWORK_PROOF_REFUSALS = {
+    "another-identity": ({"spec": {"me": {"user_name": "someone-else", "groups": ["admins"]}}}, "me_is_the_deployer"),
+    "not-workspace-admin": ({"spec": {"me": {"user_name": _DEPLOYER, "groups": ["users"]}}}, "me_in_admins"),
+    "metastore-owned-elsewhere": ({"spec": {"metastore_owner": "an-owner@example.invalid"}}, "metastore_owner_is_the_deployer"),
+    "warehouse-unresolved": ({"spec": {"warehouses": []}}, "warehouse_resolves"),
+    "genie-space-unresolved": ({"spec": {"spaces": []}}, "genie_space_resolves"),
+    "sdk-auth-type-drift": (
+        {"spec": {"config": {"auth_type": "pat", "client_id": _DEPLOYER, "host": "__HOST__"}}},
+        "sdk_authenticates_with_the_github_oidc_profile",
+    ),
+    "sdk-exchange-refused": ({"spec": {"construct_error": True}}, "sdk_authenticates_with_the_github_oidc_profile"),
+    "cli-refused": (
+        {"env": {"FAKE_CLI_EXIT": "1"}},
+        ("cli_authenticates", "cli_me_is_the_deployer", "cli_me_in_admins"),
+    ),
+    "cli-another-identity": ({"cli_me": json.dumps({"userName": "someone-else", "groups": [{"display": "admins"}]})}, "cli_me_is_the_deployer"),
+    "cli-not-admin": ({"cli_me": json.dumps({"userName": _DEPLOYER, "groups": [{"display": "users"}]})}, "cli_me_in_admins"),
+    "cli-unparseable": ({"cli_me": "not json"}, ("cli_me_is_the_deployer", "cli_me_in_admins")),
+    "cli-not-installed": ({"cli": False}, ("cli_authenticates", "cli_me_is_the_deployer", "cli_me_in_admins")),
+    "cli-malformed-groups": ({"cli_me": json.dumps({"userName": _DEPLOYER, "groups": ["admins"]})}, "cli_me_in_admins"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_NETWORK_PROOF_REFUSALS))
+def test_oidc_proof_step_refuses_the_wrong_identity_or_authority(tmp_path: Path, case: str) -> None:
+    arrangement, failed = _NETWORK_PROOF_REFUSALS[case]
+    expected_false = [failed] if isinstance(failed, str) else list(failed)
+    host = _bundle_target_host(ci_isolation.CI_TARGET)
+    kwargs = json.loads(json.dumps(arrangement).replace("__HOST__", host))
+    result, calls = _run_oidc_proof(tmp_path, **kwargs)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    checks = _proof_checks(result.stdout)
+    assert [check for check, value in checks.items() if not value.startswith("true")] == expected_false
+    assert "::error::GitHub OIDC deployer identity proof failed" in result.stdout
+    assert "GitHub OIDC deployer identity proven." not in result.stdout
+    assert set(calls) <= set(_READ_ONLY_PROOF_CALLS), "read-only calls only"
+    for message in ("token exchange refused", "no such", "cli refused", "someone-else", "an-owner@example.invalid"):
+        assert message not in result.stdout + result.stderr, "never an exception message or a value"
+
+
 def test_deploy_step_authenticates_only_through_the_oidc_profile() -> None:
     """The Deploy step binds the DEFAULT github-oidc profile and the workspace probe-secret plane."""
 
@@ -5420,6 +5718,7 @@ def test_every_deployer_step_keeps_ambient_overrides_off_the_oidc_profile() -> N
     }
 
     assert list(deployer_steps) == [
+        OIDC_PROOF_STEP,
         "Repair normal operator OAuth credential",
         "Deploy dev Databricks App",
     ]

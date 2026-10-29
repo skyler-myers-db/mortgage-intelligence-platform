@@ -281,6 +281,180 @@ jobs:
             fi
           } > .env.local
           chmod 600 .env.local
+      - name: Prove the GitHub OIDC deployer identity
+        # Read-only, before the credential repair and before scripts/deploy.sh:
+        # the DEFAULT github-oidc profile must authenticate, through both the
+        # Python SDK and the Go CLI, as the reviewed deployer service principal
+        # on the pr105-host workspace, with the authority the governed deploy
+        # requires. It prints booleans only (an exception or CLI failure adds
+        # its class or exit code, never a message or value) and exits 2 on any
+        # mismatch. The profile and host checks run first; on a mismatch the
+        # step exits before any network call.
+        env:
+          DATABRICKS_CONFIG_PROFILE: DEFAULT
+          MIP_CI_DEPLOYER_CLIENT_ID: ${{ vars.MIP_CI_DEPLOYER_CLIENT_ID }}
+          # Compared for equality only, under names neither the SDK nor the
+          # CLI reads, so the profile alone selects the host and identity.
+          MIP_PROOF_DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          MIP_PROOF_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          MIP_PROOF_GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import configparser
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          TARGET = "pr105-host"
+          PROFILE = "DEFAULT"
+          # Ambient names that would override or redirect the profile.
+          OVERRIDES = (
+              "DATABRICKS_HOST",
+              "DATABRICKS_TOKEN",
+              "DATABRICKS_AUTH_TYPE",
+              "DATABRICKS_CLIENT_ID",
+              "DATABRICKS_CLIENT_SECRET",
+              "DATABRICKS_CONFIG_FILE",
+          )
+          checks = {}
+          notes = {}
+
+
+          def same(left, right):
+              return bool(left) and left == right
+
+
+          def report():
+              for name, ok in checks.items():
+                  note = f" ({notes[name]})" if name in notes else ""
+                  print(f"{name}={'true' if ok else 'false'}{note}")
+              if not all(checks.values()):
+                  print("::error::GitHub OIDC deployer identity proof failed; see the false checks above.")
+                  sys.exit(2)
+
+
+          def probe(name, read):
+              try:
+                  checks[name] = bool(read())
+              except Exception as exc:  # the class only, never its message
+                  checks[name] = False
+                  notes[name] = type(exc).__name__
+
+
+          def admins(groups):
+              return "admins" in {
+                  str(group or "").strip().casefold() for group in groups
+              }
+
+
+          expected = os.environ.get("MIP_CI_DEPLOYER_CLIENT_ID", "").strip()
+          secret_host = os.environ.get("MIP_PROOF_DATABRICKS_HOST", "").strip().rstrip("/")
+          bundle = yaml.safe_load(Path("databricks.yml").read_text(encoding="utf-8")) or {}
+          workspace = (((bundle.get("targets") or {}).get(TARGET) or {}).get("workspace")) or {}
+          bundle_host = str(workspace.get("host") or "").strip().rstrip("/")
+          parser = configparser.ConfigParser(interpolation=None)
+          parser.read(Path.home() / ".databrickscfg", encoding="utf-8")
+          profile = {key: value.strip() for key, value in parser[PROFILE].items()}
+          profile_host = profile.get("host", "").rstrip("/")
+
+          checks["deployer_client_id_set"] = bool(expected)
+          checks["github_oidc_request_env_present"] = all(
+              os.environ.get(name)
+              for name in ("ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+          )
+          checks["no_ambient_auth_override"] = not any(os.environ.get(name) for name in OVERRIDES)
+          checks["profile_holds_only_host_auth_type_client_id"] = set(profile) == {
+              "host",
+              "auth_type",
+              "client_id",
+          }
+          checks["profile_auth_type_is_github_oidc"] = profile.get("auth_type") == "github-oidc"
+          checks["profile_client_id_is_the_deployer"] = same(profile.get("client_id"), expected)
+          checks["profile_host_is_DATABRICKS_HOST"] = same(profile_host, secret_host)
+          checks["profile_host_is_the_pr105_host_target"] = same(profile_host, bundle_host)
+          if not all(checks.values()):
+              report()
+
+          from databricks.sdk import WorkspaceClient
+
+          client = None
+          me = None
+
+
+          def authenticate():
+              global client, me
+              client = WorkspaceClient(profile=PROFILE)
+              me = client.current_user.me()
+              config = client.config
+              return (
+                  config.auth_type == "github-oidc"
+                  and same(config.client_id, expected)
+                  and same(str(config.host or "").rstrip("/"), profile_host)
+              )
+
+
+          probe("sdk_authenticates_with_the_github_oidc_profile", authenticate)
+          if me is not None:
+              probe("me_is_the_deployer", lambda: same(str(me.user_name or ""), expected))
+              probe("me_in_admins", lambda: admins(group.display for group in me.groups or ()))
+              probe(
+                  "metastore_owner_is_the_deployer",
+                  lambda: same(
+                      str(
+                          client.metastores.get(client.metastores.current().metastore_id).owner
+                          or ""
+                      ),
+                      expected,
+                  ),
+              )
+              warehouse_id = os.environ.get("MIP_PROOF_WAREHOUSE_ID", "").strip()
+              probe(
+                  "warehouse_resolves",
+                  lambda: bool(warehouse_id)
+                  and same(str(client.warehouses.get(warehouse_id).id or ""), warehouse_id),
+              )
+              space_id = os.environ.get("MIP_PROOF_GENIE_SPACE_ID", "").strip()
+              probe(
+                  "genie_space_resolves",
+                  lambda: bool(space_id)
+                  and same(str(client.genie.get_space(space_id).space_id or ""), space_id),
+              )
+
+          # The Go CLI resolves the same profile through its own auth path.
+          try:
+              cli = subprocess.run(
+                  ["databricks", "current-user", "me", "--profile", PROFILE, "-o", "json"],
+                  capture_output=True,
+                  text=True,
+                  check=False,
+                  timeout=300,
+              )
+              cli_exit, cli_stdout = cli.returncode, cli.stdout
+          except (OSError, subprocess.SubprocessError) as exc:
+              cli_exit, cli_stdout = None, ""
+              notes["cli_authenticates"] = type(exc).__name__
+          checks["cli_authenticates"] = cli_exit == 0
+          if cli_exit not in (0, None):
+              notes["cli_authenticates"] = f"exit {cli_exit}"
+          try:
+              cli_me = json.loads(cli_stdout) if cli_exit == 0 else {}
+          except ValueError:
+              cli_me = {}
+          if not isinstance(cli_me, dict):
+              cli_me = {}
+          probe("cli_me_is_the_deployer", lambda: same(str(cli_me.get("userName") or ""), expected))
+          probe(
+              "cli_me_in_admins",
+              lambda: admins(group.get("display") for group in cli_me.get("groups") or ()),
+          )
+          report()
+          print("GitHub OIDC deployer identity proven.")
+          PY
       - name: Repair normal operator OAuth credential
         if: ${{ inputs.repair_normal_credential }}
         env:
@@ -288,8 +462,8 @@ jobs:
           # The normal identity's client id rides under its own name: an env
           # DATABRICKS_CLIENT_ID would override the profile's client_id and
           # aim the token exchange at the normal service principal.
-          # DATABRICKS_HOST stays for the isolation gate; it must equal the
-          # profile's host.
+          # DATABRICKS_HOST stays for the isolation gate; it equals the
+          # profile's host, which the proof step above checked.
           DATABRICKS_CONFIG_PROFILE: DEFAULT
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           MIP_NORMAL_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
