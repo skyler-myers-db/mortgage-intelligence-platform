@@ -1248,6 +1248,16 @@ The bundle task carries the same verifier client ID as a reviewed bundle
 variable and passes the required flag. A missing/template verifier therefore
 fails in the job before it opens Lakebase or applies schema SQL; a local shell
 export alone is not considered remote-job configuration.
+The same command with `--mode plan` or `--mode verify` only reads: one
+session in a PostgreSQL read-only transaction, every statement checked as a
+single SELECT, SHOW or read-only WITH before it is sent, then a rollback.
+`verify` re-runs the exact grant, trigger, function and schema-boundary
+postflights; `plan` adds the executor's missing ownership, the pending
+`schema_migrations` versions with their `-- mip:migration ... compat=` class
+(untagged counts as contract), and a comparison with the schema-input digest
+row apply writes inside its schema transaction. Each prints one JSON report
+of codes, check names, versions and `mip_app` object names, never a role
+name. Nothing invokes them yet; see `jobs/lakebase_migration_plan.py`.
 The bundle pins `run_as.user_name` to the resolved deployment identity in both
 development and production targets; live release evidence must confirm the
 created migration job reports that exact run-as instead of relying on its

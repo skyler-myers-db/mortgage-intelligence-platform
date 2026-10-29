@@ -4,7 +4,9 @@
 
 This file remains the Databricks Jobs Python-task entrypoint and the stable
 import facade used by deployment tests. Production implementation is split by
-responsibility across ``jobs/lakebase_migration_*.py`` modules.
+responsibility across ``jobs/lakebase_migration_*.py`` modules. ``--mode apply``
+(the default the bundle job runs) migrates; ``--mode plan`` and ``--mode
+verify`` only read (``jobs/lakebase_migration_plan.py``).
 """
 
 from __future__ import annotations
@@ -156,6 +158,9 @@ from jobs.lakebase_migration_grants import (
     _preflight_database_roles as _preflight_database_roles_impl,
 )
 from jobs.lakebase_migration_inputs import (  # noqa: E402
+    render_schema_inputs as _render_schema_inputs,
+)
+from jobs.lakebase_migration_inputs import (
     schema_input_digest as _schema_input_digest,
 )
 from jobs.lakebase_migration_inputs import (
@@ -170,6 +175,12 @@ from jobs.lakebase_migration_integrity import (
 )
 from jobs.lakebase_migration_integrity import (
     _split_schema_sql as _split_schema_sql,
+)
+from jobs.lakebase_migration_plan import (  # noqa: E402
+    READ_ONLY_MODES as _READ_ONLY_MODES,
+)
+from jobs.lakebase_migration_plan import (
+    main_read_only as _main_read_only,
 )
 from jobs.lakebase_migration_postflight import (  # noqa: E402
     _postflight_ai_gateway_verifier_grants as _postflight_ai_gateway_verifier_grants,
@@ -312,6 +323,12 @@ def _run_transaction(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Apply the governed Lakebase schema and seed")
     parser.add_argument(
+        "--mode",
+        choices=("apply", *_READ_ONLY_MODES),
+        default="apply",
+        help="apply migrates; plan and verify only read and print a JSON report",
+    )
+    parser.add_argument(
         "--app-name",
         default=os.environ.get("MIP_APP_NAME", "mip-app"),
     )
@@ -358,6 +375,7 @@ def main(
     tenant_id: str = "",
     ai_gateway_verifier_client_id: str | None = None,
     require_ai_gateway_verifier: bool = False,
+    mode: str = "apply",
 ) -> None:
     try:
         verifier_role = _resolve_ai_gateway_verifier_role(
@@ -378,6 +396,22 @@ def main(
         conn_kwargs = _resolve_connection(
             instance_name=lakebase_instance,
             database_name=lakebase_database,
+        )
+    if mode != "apply":
+        sys.exit(
+            _main_read_only(
+                mode,
+                conn_kwargs,
+                app_name=app_name,
+                verifier_role=verifier_role,
+                resolve_app_role_fn=_resolve_app_role,
+                schema_inputs_fn=lambda: _render_schema_inputs(
+                    _repo_root(),
+                    lender_name=lender_name,
+                    lender_nmls_id=lender_nmls_id,
+                    tenant_id=tenant_id,
+                ),
+            )
         )
     try:
         resolved_roles = _preflight_database_roles(
@@ -460,4 +494,5 @@ if __name__ == "__main__":
         tenant_id=_args.tenant_id,
         ai_gateway_verifier_client_id=_args.ai_gateway_verifier_client_id,
         require_ai_gateway_verifier=_args.require_ai_gateway_verifier,
+        mode=_args.mode,
     )
