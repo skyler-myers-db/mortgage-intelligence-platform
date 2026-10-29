@@ -508,26 +508,11 @@ def revoke_can_query_on_obsolete_endpoint(
     sp_id: str,
     effective_group_names: set[str],
     assert_single_writer: Callable[[], None] | None = None,
-    install_warehouse_id: str | None = None,
-    install_suffix: str | None = None,
 ) -> None:
-    """Remove and disprove direct or group-derived access to an obsolete endpoint.
+    """Remove and disprove direct or group-derived access to an obsolete endpoint."""
 
-    With a non-empty install suffix (the CI staging install; read from
-    BUNDLE_VAR_install_suffix unless given) it first proves, read-only, that
-    this verifier is the install's own (``install_scope.
-    assert_verifier_revokes_owned``) and otherwise exits 2 before removing
-    anything. An empty suffix (the live install) is unchanged.
-    """
-
-    from tools.databricks.install_scope import active_install_suffix, assert_verifier_revokes_owned
     from tools.databricks.serving_endpoint_acl import revoke_direct_permissions
 
-    suffix = active_install_suffix() if install_suffix is None else install_suffix
-    if suffix:
-        assert_verifier_revokes_owned(
-            client, application_id=sp_application_id, warehouse_id=install_warehouse_id, suffix=suffix
-        )
     try:
         assertion = assert_single_writer or held_assertion(
             client,
