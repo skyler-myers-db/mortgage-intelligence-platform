@@ -360,6 +360,8 @@ def test_rotation_moves_current_to_previous_and_generates_a_new_current(monkeypa
     assert HEX_KEY.fullmatch(api.values[subject.CURRENT_KEY])
     out = capsys.readouterr().out
     assert out.startswith(f"Genie action keys in mip-runtime on {INSTALL_HOST}: rotated")
+    assert f"For the grace window, deploy with {subject.PREVIOUS_KID_ENV} set to the old key id" in out
+    assert f"run --retire-previous and unset {subject.PREVIOUS_KID_ENV}." in out
     assert old_current not in out and api.values[subject.CURRENT_KEY][-16:] not in out
 
 

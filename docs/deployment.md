@@ -1477,10 +1477,12 @@ control.
 The App payload binds `MIP_COTALITY_ID_MASK_SECRET` and
 `MIP_GENIE_ACTION_SECRET_CURRENT` from the runtime secret scope for every
 sandbox, staging, customer and production runtime; only `APP_ENV=local` and
-`APP_ENV=test` may use compatibility keys. The prior action key is bound only
-when `MIP_GENIE_ACTION_SECRET_PREVIOUS` and
-`MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` are both configured for the deploy;
-the prior secret without its KID is rejected. The bundle's static resource
+`APP_ENV=test` may use compatibility keys. The prior action key
+(`genie-action-previous`) is bound only when the public
+`MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` is configured for the deploy; no key
+value is needed, because the scope already holds the key. A
+`MIP_GENIE_ACTION_SECRET_PREVIOUS` value without its KID is rejected, by the
+runtime secret plan before the App stop and again by the payload. The bundle's static resource
 declarations still need every backing Databricks Secret key to exist, so an
 absent one gets a random disabled sentinel that the runtime ignores. Keep the
 real prior key available for at least two hours so existing action
@@ -1597,12 +1599,17 @@ DATABRICKS_CONFIG_PROFILE=<install profile> \
 ./scripts/deploy.sh -t dev
 ```
 
-Set `MIP_GENIE_ACTION_SECRET_KID` to the new key id for that deploy. A
-governed deploy gives the rotation no grace window: the payload binds
-`genie-action-previous` only when a `MIP_GENIE_ACTION_SECRET_PREVIOUS` value is
-configured with its KID, and no workflow carries that value. Outstanding
-action confirmations (two-hour TTL) and provenance tokens therefore stop
-verifying at that deployment, so rotate in a quiet window.
+For that deploy, set `MIP_GENIE_ACTION_SECRET_KID` to the new key id and
+`MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` to the old one (in `.env.local`, or as
+variables of the deploy's GitHub environment; they are public ids). The
+payload then binds `genie-action-previous`, the old key the rotation moved
+there, as the grace key, so outstanding action confirmations (two-hour TTL)
+and provenance tokens keep verifying, and open tabs re-stamp to the new actor
+key with no reset. No key value rides the workflow. Without the previous id
+those tokens stop verifying at that deployment. If the rotation's second
+write fails, both keys hold the old value: rerun `--rotate-genie-action`
+before any deploy, because the runtime refuses a previous key equal to the
+current one.
 
 After a grace period, retire the previous key:
 
@@ -1620,8 +1627,9 @@ Retirement is idempotent and does not require the current or Cotality secret
 values. It replaces `genie-action-previous` with a fresh disabled sentinel,
 which immediately invalidates old tokens while keeping the static Databricks
 App resource valid. An ordinary deploy no longer does this: it keeps an
-existing previous key, which stays unbound while no previous input is
-configured.
+existing previous key, which stays unbound while
+`MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` is unset. An id left set after
+retirement binds the sentinel, which verifies nothing.
 
 `make bundle-validate` and `make bundle-plan` remain read-only diagnostics.
 The mutable `make bundle-deploy` and `make bundle-deploy-dev` aliases are

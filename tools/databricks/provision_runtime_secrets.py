@@ -39,7 +39,10 @@ provisioned plans zero writes.
 ``--rotate-genie-action`` is the only mode that reads a stored value. It is
 human-run (it refuses under GitHub Actions): it moves ``genie-action-current``
 to ``genie-action-previous`` and writes a newly generated current key, which
-the App signs with from its next deployment. ``--retire-previous`` replaces
+the App signs with from its next deployment. That deployment binds the moved
+key as the grace key when ``MIP_GENIE_ACTION_SECRET_PREVIOUS_KID`` is
+configured, a public id that needs no key value in CI
+(tools/databricks/app_deploy_payload.py). ``--retire-previous`` replaces
 ``genie-action-previous`` with a fresh disabled sentinel. No mode prints a
 value.
 
@@ -116,6 +119,7 @@ CURRENT_ENV = "MIP_GENIE_ACTION_SECRET_CURRENT"
 CURRENT_KEY = ENV_TO_KEY[CURRENT_ENV]
 PREVIOUS_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS"
 PREVIOUS_KID_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"
+CURRENT_KID_ENV = "MIP_GENIE_ACTION_SECRET_KID"
 PREVIOUS_KEY = ENV_TO_KEY[PREVIOUS_ENV]
 MASK_ENV = "MIP_COTALITY_ID_MASK_SECRET"
 MASK_KEY = ENV_TO_KEY[MASK_ENV]
@@ -585,7 +589,11 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"Genie action keys in {args.scope} on {host}: rotated ({CURRENT_KEY} moved "
                 f"to {PREVIOUS_KEY}; a new {CURRENT_KEY} was generated on this machine). "
-                "The App signs with the new key from its next deployment."
+                "The App signs with the new key from its next deployment. For the grace "
+                f"window, deploy with {PREVIOUS_KID_ENV} set to the old key id and "
+                f"{CURRENT_KID_ENV} to a new one: the App then binds {PREVIOUS_KEY}, and "
+                "without it tokens signed with the old key stop verifying. After the "
+                f"window, run --retire-previous and unset {PREVIOUS_KID_ENV}."
             )
             return 0
         if args.check:

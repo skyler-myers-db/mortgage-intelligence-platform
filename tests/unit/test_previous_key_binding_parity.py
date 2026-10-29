@@ -10,6 +10,12 @@ in the plan, or the deploy fails with the App down. The case that slipped: a
 ``genie-action-previous`` already exists, which the presence-only plan keeps
 and so never validated.
 
+The scope is presence-only and no workflow carries a previous key value, so
+the public ``MIP_GENIE_ACTION_SECRET_PREVIOUS_KID`` is what opens a rotation
+grace window: with it configured, the payload binds the stored
+``genie-action-previous`` (the key ``--rotate-genie-action`` moved there, or a
+disabled sentinel, which verifies nothing) and no value rides the payload.
+
 The secret inputs reach both modules through the shell or ``.env.local``; the
 dotenv cases point both modules' ``ENV_LOCAL`` at a temporary file this test
 writes, never at a real one. The fake Secrets API answers no value read.
@@ -18,6 +24,7 @@ writes, never at a real one. The fake Secrets API answers no value read.
 from __future__ import annotations
 
 import itertools
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -117,3 +124,26 @@ def test_the_plan_refuses_every_previous_key_configuration_the_payload_refuses(
         assert (payload_refusal is not None) == (previous == "real" and kid == "unset"), case
         if plan_refusal is not None:
             assert KID_ENV in plan_refusal and KID_ENV in str(payload_refusal), case
+
+
+@pytest.mark.parametrize("channel", CHANNELS)
+def test_a_configured_kid_binds_the_stored_previous_key_and_carries_no_value(monkeypatch, tmp_path, channel: str) -> None:
+    """After ``--rotate-genie-action`` a governed deploy keeps the grace window with the public KID alone."""
+    for previous, kid in itertools.product(PREVIOUS_VALUES, KID_VALUES):
+        if previous == "real" and kid == "unset":
+            continue  # refused by both modules (above)
+        _apply(monkeypatch, tmp_path, {PREVIOUS_ENV: PREVIOUS_VALUES[previous], KID_ENV: KID_VALUES[kid]}, channel)
+
+        plan = provision_subject.check_runtime_secrets(client=SimpleNamespace(secrets=_Secrets(ALL_KEYS)))
+        payload = payload_subject.build_payload(source_code_path="/Workspace/app/files", target="prod")
+
+        case = f"previous={previous} kid={kid}"
+        env = {item["name"]: item for item in payload["env_vars"]}  # type: ignore[union-attr]
+        assert plan.write_keys == () and provision_subject.PREVIOUS_KEY in plan.kept, case
+        if kid == "set":
+            assert env[PREVIOUS_ENV] == {"name": PREVIOUS_ENV, "value_from": "genie_action_previous_secret"}, case
+            assert env[KID_ENV]["value"] == KID_VALUES["set"], case
+        else:
+            assert PREVIOUS_ENV not in env and KID_ENV not in env, case
+        if PREVIOUS_VALUES[previous] is not None:
+            assert str(PREVIOUS_VALUES[previous]) not in json.dumps(payload), case
