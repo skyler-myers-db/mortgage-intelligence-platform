@@ -2,6 +2,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import yaml
+
 from tests.fixtures.deploy_script import deploy_entrypoint_text
 
 REPO = Path(__file__).resolve().parents[2]
@@ -100,6 +102,26 @@ def test_bundle_resource_names_are_parameterized_for_isolated_staging():
     assert dev_match
     assert "profile: DEFAULT" not in dev_match.group("body")
     assert "run_as:\n      user_name: ${workspace.current_user.userName}" in dev_match.group("body")
+
+
+def test_the_ci_staging_target_runs_as_the_oidc_deployer_service_principal():
+    """Only deploy-dev.yml deploys pr105-host, as the GitHub OIDC deployer service principal.
+
+    A service principal's SCIM userName is its application id, and a job's
+    run_as names a service principal only through service_principal_name, so
+    the target binds run_as there. Every other target keeps its user_name
+    run_as, so operator (user) deploys of dev and prod are unchanged.
+    """
+
+    bundle = yaml.safe_load((REPO / "databricks.yml").read_text(encoding="utf-8"))
+    targets = bundle["targets"]
+    current = "${workspace.current_user.userName}"
+
+    assert targets["pr105-host"]["run_as"] == {"service_principal_name": current}
+    assert targets["dev"]["run_as"] == {"user_name": current}
+    assert targets["prod"]["run_as"] == {"user_name": current}
+    assert "run_as" not in targets["ci"]
+    assert targets["pr105-host"]["mode"] == "development"
 
 
 def test_workspace_unique_names_take_the_install_suffix_and_render_live_by_default():
