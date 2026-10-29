@@ -8043,7 +8043,8 @@ def test_dev_workflow_has_no_credential_repair_or_remediation_input() -> None:
         "acknowledge_single_maintainer_break_glass",
     }
     assert "Repair normal operator OAuth credential" not in names
-    for retired in ("repair_normal_credential", "MIP_GITHUB_CREDENTIAL_SINK_TOKEN", "--set-gh-secrets", "provision_m2m_oauth"):
+    # tests/unit/test_no_ci_credential_mint.py holds every workflow to the same rule.
+    for retired in ("--set-gh-secrets", "provision_m2m_oauth", "gh secret set"):
         assert retired not in text, retired
     deploy = steps[names.index("Deploy dev Databricks App")]
     assert "if" not in deploy, "the deploy step runs whenever the job does"

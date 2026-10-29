@@ -116,8 +116,7 @@ def test_no_step_addresses_a_bundle_target_or_writes_a_pat_profile() -> None:
     assert not re.search(r"\bdatabricks\s+bundle\b", text)
     assert not re.search(r"(?m)^\s*echo \"token\s*=", text), "no PAT written into a CLI profile"
     assert ".databrickscfg" not in text
-    for retired in ("BUNDLE_VAR_bundle_root_leaf", "BUNDLE_VAR_install_suffix"):
-        assert retired not in text, retired
+    assert not [name for name in workflow["env"] if name.startswith("BUNDLE_VAR_bundle_")], "no bundle-root pins"
     assert list(workflow.get("on", workflow.get(True))) == ["workflow_dispatch"]
     assert text.count('--git-sha "$GITHUB_SHA"') == 2
 

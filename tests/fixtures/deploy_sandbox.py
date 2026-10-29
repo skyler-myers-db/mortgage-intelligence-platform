@@ -3,8 +3,8 @@
 A clone of HEAD plus the working tree's uncommitted tracked edits, a stub
 ``databricks`` that answers only ``--version`` and fails on anything else, a
 placeholder ``.env.local`` and a base environment stripped of every ambient
-GitHub, Databricks and MIP name. Moved from the forked-anchor dry-run test,
-which left with its CI staging target (M0-PR3).
+GitHub, Databricks and MIP name. Moved from the CI staging target's dry-run
+test, which left with that target (M0-PR3).
 """
 
 from __future__ import annotations
