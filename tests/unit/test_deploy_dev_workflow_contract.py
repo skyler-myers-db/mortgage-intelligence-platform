@@ -452,15 +452,24 @@ def _run_deploy_auth_harness(tmp_path: Path, *, mode: str) -> dict[str, Any]:
         f"      host: {reviewed_host}\n",
         encoding="utf-8",
     )
-    (home / ".databrickscfg").write_text(
-        "[DEFAULT]\n"
-        "host = https://conflicting-default.example\n"
-        "token = conflicting-default-token\n"
-        "[REVIEWED]\n"
-        f"host = {reviewed_host}\n"
-        "token = reviewed-profile-token\n",
-        encoding="utf-8",
-    )
+    if mode == "github-oidc":
+        # deploy-dev.yml's Configure step: no stored credential at all.
+        profile_text = (
+            "[DEFAULT]\n"
+            f"host  = {reviewed_host}\n"
+            "auth_type = github-oidc\n"
+            "client_id = ci-deployer-application-id\n"
+        )
+    else:
+        profile_text = (
+            "[DEFAULT]\n"
+            "host = https://conflicting-default.example\n"
+            "token = conflicting-default-token\n"
+            "[REVIEWED]\n"
+            f"host = {reviewed_host}\n"
+            "token = reviewed-profile-token\n"
+        )
+    (home / ".databrickscfg").write_text(profile_text, encoding="utf-8")
     mock_mint = tools_dir / "oauth_m2m_mint.py"
     mock_mint.write_text(
         """from __future__ import annotations
@@ -542,6 +551,20 @@ MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING=1 run_as_m2m_identity \
         "DATABRICKS_TOKEN": "ambient-wrong-token",
         "DATABRICKS_AUTH_TYPE": "pat",
     }
+    if mode == "github-oidc":
+        # deploy-dev.yml's Deploy step: the DEFAULT profile, the step's own
+        # host, the App's client pair exported, the runner's OIDC request
+        # variables, and no PAT.
+        run_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": str(home),
+            "DATABRICKS_CONFIG_PROFILE": "DEFAULT",
+            "DATABRICKS_HOST": reviewed_host,
+            "DATABRICKS_CLIENT_ID": "normal-app-client",
+            "DATABRICKS_CLIENT_SECRET": "normal-app-secret",
+            "ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.actions.example/request",
+            "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "github-request-token",
+        }
     result = subprocess.run(
         ["env", "-i", *(f"{key}={value}" for key, value in run_env.items()), "bash", str(harness)],
         cwd=repo,
@@ -1929,7 +1952,7 @@ def test_retained_model_audit_is_read_only_and_rotation_action_is_absent() -> No
     assert "--action" not in read_only_block
 
 
-@pytest.mark.parametrize("mode", ("pat", "profile"))
+@pytest.mark.parametrize("mode", ("pat", "profile", "github-oidc"))
 def test_deploy_auth_handoff_is_single_workspace_and_child_isolated(
     tmp_path: Path,
     mode: str,
@@ -1962,10 +1985,20 @@ def test_deploy_auth_handoff_is_single_workspace_and_child_isolated(
         assert deploy["DATABRICKS_AUTH_TYPE"] == "pat"
         assert "DATABRICKS_CONFIG_PROFILE" not in deploy
     else:
-        assert deploy["DATABRICKS_CONFIG_PROFILE"] == "REVIEWED"
+        profile = "DEFAULT" if mode == "github-oidc" else "REVIEWED"
+        assert deploy["DATABRICKS_CONFIG_PROFILE"] == profile
+        assert deploy["MIP_DEPLOYER_DATABRICKS_PROFILE"] == profile
         assert "DATABRICKS_HOST" not in deploy
         assert "DATABRICKS_TOKEN" not in deploy
         assert "DATABRICKS_AUTH_TYPE" not in deploy
+    if mode == "github-oidc":
+        # The deployer's own children keep the runner's OIDC request
+        # variables, which the github-oidc profile exchanges on each refresh.
+        assert deploy["ACTIONS_ID_TOKEN_REQUEST_URL"] == "https://token.actions.example/request"
+        assert deploy["ACTIONS_ID_TOKEN_REQUEST_TOKEN"] == "github-request-token"
+    # A reduced M2M identity never inherits the deployer's OIDC request token.
+    for reduced in (logs["m2m"], logs["runtime"], logs["runtime_authorized"]):
+        assert not [name for name in reduced if name.startswith("ACTIONS_ID_TOKEN_REQUEST")]
 
     assert len(mints) == 2
     assert [mint["DATABRICKS_CLIENT_ID"] for mint in mints] == [
@@ -2069,18 +2102,31 @@ def test_deploy_refuses_authenticated_host_outside_bundle_target_before_network(
 
 
 def test_deploy_dev_seeds_databricks_auth_without_printing_secrets() -> None:
+    """The deployer is GitHub OIDC workload identity federation: no PAT is read or stored."""
+
     text = DEPLOY_DEV.read_text(encoding="utf-8")
 
     for secret in (
         "secrets.DATABRICKS_HOST",
-        "secrets.DATABRICKS_TOKEN",
         "secrets.DATABRICKS_WAREHOUSE_ID",
         "secrets.GENIE_SPACE_ID",
     ):
         assert secret in text
+    assert "secrets.DATABRICKS_TOKEN" not in text, "the deployer PAT is retired"
+    assert "MIP_CI_DEPLOYER_CLIENT_ID: ${{ vars.MIP_CI_DEPLOYER_CLIENT_ID }}" in text
+    assert "secrets.MIP_CI_DEPLOYER_CLIENT_ID" not in text, "a public application id, a variable"
 
+    configure = _workflow_run_block(DEPLOY_DEV, "Configure Databricks dev credentials")
+    profile = configure[configure.index('echo "[DEFAULT]"') : configure.index('} > "$HOME/.databrickscfg"')]
+    assert [line.strip() for line in profile.splitlines()] == [
+        'echo "[DEFAULT]"',
+        'echo "host  = ${DATABRICKS_HOST}"',
+        'echo "auth_type = github-oidc"',
+        'echo "client_id = ${MIP_CI_DEPLOYER_CLIENT_ID}"',
+    ]
+    assert "auth_type = pat" not in text
+    assert "token = " not in text
     assert "$HOME/.databrickscfg" in text
-    assert "auth_type = pat" in text
     assert 'chmod 600 "$HOME/.databrickscfg"' in text
     assert "chmod 600 .env.local" in text
     assert "cat .env.local" not in text
@@ -2107,12 +2153,21 @@ def test_deploy_dev_binds_required_and_rotation_secrets() -> None:
 
 def test_deploy_dev_has_cost_and_permission_guards() -> None:
     text = DEPLOY_DEV.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(text)
 
     assert "permissions:" in text
     assert "contents: read" in text
     assert "concurrency:" in text
     assert "group: mip-dev-live-state" in text
     assert "cancel-in-progress: false" in text
+    # GitHub OIDC: only the deploy job may request an ID token. The workflow
+    # default stays read-only, and the refusal job inherits it.
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["jobs"]["deploy"]["permissions"] == {"contents": "read", "id-token": "write"}
+    assert "permissions" not in workflow["jobs"]["refuse-unacknowledged"]
+    holders = [name for name, job in workflow["jobs"].items() if "id-token" in (job.get("permissions") or {})]
+    assert holders == ["deploy"]
+    assert text.count("id-token: write") == 1
 
 
 def test_deploy_dev_requires_explicit_admin_rbac_and_mints_distinct_app_bearers() -> None:
@@ -5104,8 +5159,8 @@ def test_deploy_workflow_identity_check_inherits_only_public_client_ids() -> Non
     python_end = workflow.index("          PY", python_pos)
     suffix = workflow[python_end : workflow.index("- name: Deploy dev Databricks App")]
 
+    assert "DATABRICKS_TOKEN" not in prefix, "no deployer PAT reaches the step"
     for secret in (
-        "DATABRICKS_TOKEN",
         "DATABRICKS_ACCOUNT_CLIENT_SECRET",
         "MIP_COTALITY_ID_MASK_SECRET",
         "MIP_GENIE_ACTION_SECRET_CURRENT",
@@ -5127,6 +5182,7 @@ def test_deploy_workflow_identity_check_inherits_only_public_client_ids() -> Non
         "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
         "DATABRICKS_AGENT_PROXY_CLIENT_ID",
         "DATABRICKS_ACCOUNT_CLIENT_ID",
+        "MIP_CI_DEPLOYER_CLIENT_ID",
     ):
         assert client_id in workflow[python_pos:python_end]
         assert client_id in suffix
@@ -5140,7 +5196,7 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
     home.mkdir()
     required = {
         "DATABRICKS_HOST": "https://workspace.example",
-        "DATABRICKS_TOKEN": "deployer-pat",
+        "MIP_CI_DEPLOYER_CLIENT_ID": "ci-deployer",
         "DATABRICKS_WAREHOUSE_ID": "warehouse-id",
         "GENIE_SPACE_ID": "genie-id",
         "MIP_COTALITY_ID_MASK_SECRET": "mask-secret",
@@ -5188,6 +5244,15 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
     assert result.returncode == 0, result.stdout + result.stderr
     # stat only: the step wrote its .env.local into the scratch checkout.
     assert (checkout / ".env.local").stat().st_mode & 0o777 == 0o600
+    # The deployer profile holds no credential: GitHub OIDC federation only.
+    profile = home / ".databrickscfg"
+    assert profile.stat().st_mode & 0o777 == 0o600
+    assert profile.read_text(encoding="utf-8") == (
+        "[DEFAULT]\n"
+        "host  = https://workspace.example\n"
+        "auth_type = github-oidc\n"
+        "client_id = ci-deployer\n"
+    )
     child = _read_env_log(log)
     for client_id in (
         "DATABRICKS_CLIENT_ID",
@@ -5198,6 +5263,7 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
         "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
         "DATABRICKS_AGENT_PROXY_CLIENT_ID",
         "DATABRICKS_ACCOUNT_CLIENT_ID",
+        "MIP_CI_DEPLOYER_CLIENT_ID",
     ):
         expected = (
             "agent-proxy"
@@ -5216,6 +5282,161 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
         "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE",
     ):
         assert secret not in child
+
+
+_CONFIGURE_STEP_INPUTS = {
+    "DATABRICKS_HOST": "https://workspace.example",
+    "MIP_CI_DEPLOYER_CLIENT_ID": "ci-deployer",
+    "DATABRICKS_WAREHOUSE_ID": "warehouse-id",
+    "GENIE_SPACE_ID": "genie-id",
+    "MIP_COTALITY_ID_MASK_SECRET": "mask-secret",
+    "MIP_GENIE_ACTION_SECRET_CURRENT": "action-secret",
+    "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": "proof-private",
+    "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY": "model-private",
+    "MIP_DEFAULT_CATALOG": "mip_ci",
+    "DATABRICKS_CLIENT_ID": "operator-a",
+    "DATABRICKS_OPERATOR2_CLIENT_ID": "operator-b",
+    "DATABRICKS_ADMIN_CLIENT_ID": "admin",
+    "DATABRICKS_RELEASE_PROBE_CLIENT_ID": "release-probe",
+    "DATABRICKS_VERIFIER_CLIENT_ID": "verifier",
+    "DATABRICKS_AGENT_RUNTIME_CLIENT_ID": "runtime",
+    "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE": (
+        '{"client_id":"agent-proxy","client_secret":"proxy-secret",'
+        '"credential_id":"agent-proxy-credential","version":1}'
+    ),
+    "DATABRICKS_ACCOUNT_HOST": "https://accounts.example",
+    "DATABRICKS_ACCOUNT_ID": "account-id",
+    "DATABRICKS_ACCOUNT_CLIENT_ID": "account-client",
+    "DATABRICKS_ACCOUNT_CLIENT_SECRET": "account-secret",
+}
+
+
+def _run_configure_step_for_real(
+    tmp_path: Path, **overrides: str
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """Run the Configure step with the real interpreter, so its separation check executes."""
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    shim = bin_dir / "python"
+    shim.write_text(f'#!/usr/bin/env bash\nexec {shlex.quote(sys.executable)} "$@"\n', encoding="utf-8")
+    shim.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    checkout = tmp_path / "checkout"  # the step writes .env.local into its cwd
+    checkout.mkdir()
+    result = subprocess.run(
+        ["bash", "-c", _workflow_run_block(DEPLOY_DEV, "Configure Databricks dev credentials")],
+        cwd=checkout,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(home),
+            "PYTHONPATH": str(REPO),
+            **{**_CONFIGURE_STEP_INPUTS, **overrides},
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    return result, home / ".databrickscfg"
+
+
+def test_configure_step_writes_the_oidc_profile_for_a_distinct_deployer(tmp_path: Path) -> None:
+    result, profile = _run_configure_step_for_real(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert profile.read_text(encoding="utf-8") == (
+        "[DEFAULT]\nhost  = https://workspace.example\nauth_type = github-oidc\nclient_id = ci-deployer\n"
+    )
+    for secret in ("mask-secret", "action-secret", "proof-private", "model-private", "account-secret", "proxy-secret"):
+        assert secret not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("deployer", "message"),
+    (
+        ("operator-a", "CI deployer client ID must be distinct from every app-facing M2M client ID."),
+        ("VERIFIER", "CI deployer client ID must be distinct from every app-facing M2M client ID."),
+        (" agent-proxy ", "CI deployer client ID must be distinct from every app-facing M2M client ID."),
+        ("Account-Client", "Account-SCIM OAuth client must be distinct from the CI deployer client ID."),
+    ),
+    ids=("normal", "verifier-case", "agent-proxy-space", "account-scim"),
+)
+def test_configure_step_refuses_a_deployer_that_is_another_identity(
+    tmp_path: Path, deployer: str, message: str
+) -> None:
+    """The deployer is the UC/App authority: never an app-facing identity nor the account-SCIM client."""
+
+    result, profile = _run_configure_step_for_real(tmp_path, MIP_CI_DEPLOYER_CLIENT_ID=deployer)
+
+    assert result.returncode != 0
+    assert message in result.stderr
+    assert not profile.exists(), "refused before the profile is written"
+
+
+def test_configure_step_requires_the_deployer_variable(tmp_path: Path) -> None:
+    result, profile = _run_configure_step_for_real(tmp_path, MIP_CI_DEPLOYER_CLIENT_ID="")
+
+    assert result.returncode == 1
+    assert "::error::Missing required secrets or variables: MIP_CI_DEPLOYER_CLIENT_ID" in result.stdout
+    assert not profile.exists()
+
+
+def test_deploy_step_authenticates_only_through_the_oidc_profile() -> None:
+    """The Deploy step binds the DEFAULT github-oidc profile and the workspace probe-secret plane."""
+
+    workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
+    deploy = next(step for step in workflow["jobs"]["deploy"]["steps"] if step.get("name") == "Deploy dev Databricks App")
+    env = deploy["env"]
+
+    assert env["DATABRICKS_CONFIG_PROFILE"] == "DEFAULT"
+    assert env["MIP_TEMP_CREDENTIAL_PLANE"] == "workspace"
+    assert "DATABRICKS_TOKEN" not in env
+    assert "DATABRICKS_AUTH_TYPE" not in env
+    assert env["DATABRICKS_HOST"] == "${{ secrets.DATABRICKS_HOST }}"
+    assert env["MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS"] == (
+        "${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}"
+    ), "the key registry's retired verify keys reach deploy.sh"
+    # The account-SCIM authority is unchanged: its own client pair, never OIDC.
+    assert env["DATABRICKS_ACCOUNT_CLIENT_ID"] == "${{ secrets.DATABRICKS_ACCOUNT_CLIENT_ID }}"
+    assert env["DATABRICKS_ACCOUNT_CLIENT_SECRET"] == "${{ secrets.DATABRICKS_ACCOUNT_CLIENT_SECRET }}"
+
+
+def test_every_deployer_step_keeps_ambient_overrides_off_the_oidc_profile() -> None:
+    """Under github-oidc an env DATABRICKS_CLIENT_ID, TOKEN or AUTH_TYPE overrides the profile.
+
+    The deployer-authenticated steps are exactly those that select the DEFAULT
+    profile. Only the Deploy step carries the App's client pair, and
+    scripts/deploy.sh un-exports it before its first child process.
+    """
+
+    workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["deploy"]["steps"]
+    deployer_steps = {
+        step["name"]: step.get("env") or {}
+        for step in steps
+        if (step.get("env") or {}).get("DATABRICKS_CONFIG_PROFILE") == "DEFAULT"
+    }
+
+    assert list(deployer_steps) == [
+        "Repair normal operator OAuth credential",
+        "Deploy dev Databricks App",
+    ]
+    for step in steps:
+        env = step.get("env") or {}
+        assert "DATABRICKS_TOKEN" not in env, step.get("name")
+        assert "DATABRICKS_AUTH_TYPE" not in env, step.get("name")
+        assert "secrets.DATABRICKS_TOKEN" not in json.dumps(step), step.get("name")
+    carriers = [name for name, env in deployer_steps.items() if "DATABRICKS_CLIENT_ID" in env]
+    assert carriers == ["Deploy dev Databricks App"]
+    assert _workflow_run_block(DEPLOY_DEV, "Deploy dev Databricks App").strip().endswith(
+        './scripts/deploy.sh "${args[@]}"'
+    )
+    prefix = _deploy_entrypoint_text()[: _deploy_entrypoint_text().index('REPO_ROOT="$(cd')]
+    loop = prefix[prefix.index("for _PRIVATE_CREDENTIAL in") : prefix.index("unset _PRIVATE_CREDENTIAL")]
+    assert "DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET" in loop
+    assert 'export -n "${_PRIVATE_CREDENTIAL?}"' in loop
 
 
 def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
@@ -7295,11 +7516,13 @@ def test_dev_workflow_credential_repair_is_explicit_bounded_and_non_deploying() 
     assert len(deploy_steps) == 1
     repair = repair_steps[0]
     assert repair["if"] == "${{ inputs.repair_normal_credential }}"
+    # The deployer is the DEFAULT github-oidc profile. The normal identity's
+    # client id rides under MIP_NORMAL_CLIENT_ID: an env DATABRICKS_CLIENT_ID
+    # would override the profile's client_id and exchange as the normal SP.
     assert repair["env"] == {
-        "DATABRICKS_AUTH_TYPE": "pat",
+        "DATABRICKS_CONFIG_PROFILE": "DEFAULT",
         "DATABRICKS_HOST": "${{ secrets.DATABRICKS_HOST }}",
-        "DATABRICKS_TOKEN": "${{ secrets.DATABRICKS_TOKEN }}",
-        "DATABRICKS_CLIENT_ID": "${{ secrets.DATABRICKS_CLIENT_ID }}",
+        "MIP_NORMAL_CLIENT_ID": "${{ secrets.DATABRICKS_CLIENT_ID }}",
         "GH_TOKEN": "${{ secrets.MIP_GITHUB_CREDENTIAL_SINK_TOKEN }}",
         "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": ("${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}"),
         "MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY": (
@@ -7342,8 +7565,8 @@ def test_dev_workflow_credential_repair_is_explicit_bounded_and_non_deploying() 
             "GITHUB_ACTIONS": "true",
             "GITHUB_WORKFLOW_REF": "o/r/.github/workflows/deploy-dev.yml@refs/heads/main",
             "DATABRICKS_HOST": ci_isolation.target_hosts()[ci_isolation.CI_TARGET],
-            "DATABRICKS_TOKEN": "test-token",
-            "DATABRICKS_CLIENT_ID": "test-client-id",
+            "DATABRICKS_CONFIG_PROFILE": "DEFAULT",
+            "MIP_NORMAL_CLIENT_ID": "test-client-id",
             "GH_TOKEN": "test-github-token",
             "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": signing_key,
             "MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY": previous_verify_key,
@@ -7408,6 +7631,17 @@ def test_dev_workflow_credential_repair_is_explicit_bounded_and_non_deploying() 
         assert refused_probe.returncode == 2, (refused_env, refused_probe.stderr)
         assert "[ci-install-isolation] refused" in refused_probe.stderr
         assert "PROVISION_SENTINEL" not in refused_probe.stdout, refused_env
+    missing_normal = run_preflight(
+        signing_key=current_signing_key,
+        post_preflight="\nprintf 'PROVISION_SENTINEL\\n'\n",
+        overrides={"MIP_NORMAL_CLIENT_ID": ""},
+    )
+    assert missing_normal.returncode == 1
+    assert (
+        "::error::Missing required credential-repair input(s): MIP_NORMAL_CLIENT_ID"
+        in missing_normal.stdout
+    )
+    assert "PROVISION_SENTINEL" not in missing_normal.stdout
     assert deploy_steps[0]["if"] == "${{ !inputs.repair_normal_credential }}"
     assert _continued_command_tokens(repair["run"], "tools.databricks.provision_m2m_oauth") == [
         "python",
@@ -7416,7 +7650,7 @@ def test_dev_workflow_credential_repair_is_explicit_bounded_and_non_deploying() 
         "--identity-role",
         "normal",
         "--expected-application-id",
-        "$DATABRICKS_CLIENT_ID",
+        "$MIP_NORMAL_CLIENT_ID",
         "--app-name",
         "$MIP_APP_NAME",
         "--no-grant-can-use",
