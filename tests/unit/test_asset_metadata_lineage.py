@@ -140,3 +140,28 @@ def test_function_assets_issue_no_lineage_read() -> None:
 
     assert payload.lineage == []
     assert _lineage_calls(fake) == []
+
+
+def test_a_view_name_that_cannot_be_qualified_is_the_same_explicit_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Qualifying the view name is inside the guarded read: any failure keeps the gap."""
+    real_qualify = asset_metadata.qualify
+
+    def qualify(schema: str, table: str, **kwargs: Any) -> str:
+        if (schema, table) == ("audit", "asset_lineage"):
+            raise ValueError("Invalid Unity Catalog catalog identifier: 'bad-catalog'")
+        return real_qualify(schema, table, **kwargs)
+
+    monkeypatch.setattr(asset_metadata, "qualify", qualify)
+    fake = _LineageSqlClient("mip")
+
+    payload = AssetMetadataService(fake).get_asset("lead_population")
+
+    assert payload.lineage == []
+    assert "Observed lineage unavailable: warehouse metadata unavailable" in (
+        payload.known_data_gaps
+    )
+    assert _lineage_calls(fake) == []
+    assert any("INFORMATION_SCHEMA.COLUMNS" in s.upper() for s, _ in fake.calls)
+    assert "bad-catalog" not in payload.model_dump_json()
