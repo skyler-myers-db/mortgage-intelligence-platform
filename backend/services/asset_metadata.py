@@ -13,6 +13,7 @@ from typing import Any, Literal, get_args
 
 from backend.config.settings import settings as settings
 from backend.schemas.assets import (
+    ASSET_LINEAGE_VIEW_ORIGIN,
     AssetColumn,
     AssetFreshnessResponse,
     AssetLineageNode,
@@ -423,14 +424,23 @@ class AssetMetadataService:
         return properties[:20]
 
     def _load_lineage(self, descriptor: AssetDescriptor, gaps: list[str]) -> list[AssetLineageNode]:
+        """Observed lineage from the deploy-managed ``audit.asset_lineage`` view.
+
+        The view (sql/ddl/audit_asset_lineage_view.sql) projects
+        ``system.access.table_lineage`` to edges into this catalog from this
+        catalog or the Cotality share, and runs with its owner's privileges,
+        so the App reads it with SELECT on the view alone. Any failure, an
+        unpublished view included, is an explicit gap.
+        """
         if descriptor.object_type == "function":
             return []
         try:
+            lineage_view = qualify("audit", "asset_lineage")
             rows = self._sql.execute(
                 "SELECT source_table_full_name, target_table_full_name, "
                 "CAST(MAX(event_time) AS STRING) AS event_time, "
                 "COUNT(*) AS event_count "
-                "FROM system.access.table_lineage "
+                f"FROM {lineage_view} "
                 "WHERE (source_table_full_name = :asset OR target_table_full_name = :asset) "
                 "AND event_date >= current_date() - INTERVAL 90 DAYS "
                 "GROUP BY source_table_full_name, target_table_full_name "
@@ -468,6 +478,7 @@ class AssetMetadataService:
                         object_type=related_descriptor.object_type,
                         event_time=event_time,
                         event_count=event_count,
+                        source=f"{lineage_view} ({ASSET_LINEAGE_VIEW_ORIGIN})",
                         catalog_explorer_url=_catalog_explorer_url(
                             related_catalog,
                             related_schema,

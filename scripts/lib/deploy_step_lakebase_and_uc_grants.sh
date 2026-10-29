@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # Deploy step file. Steps 4b-4d: Lakebase migration, synced-catalog quiesce, reviewed-function
-# EXECUTE grants, treatment DDL, app UC grants, pii-salt and rollback scopes.
+# EXECUTE grants, treatment DDL, app UC grants, the observed-lineage view, pii-salt and
+# rollback scopes.
 # Sourced by scripts/deploy.sh in reviewed order; it runs in the entrypoint's
 # shell with its strict mode, traps, and private variables, never on its own.
 # shellcheck disable=SC2034  # top-level state assigned here is read by later step files.
@@ -241,6 +242,39 @@ if any(actual.get(key) != value for key, value in expected.items()):
 fi
 echo "  verified: campaign treatment table is append-only with exact log and deleted-file retention"
 fi
+
+# >>> observed lineage view: publish >>>
+# The asset-detail lineage section reads <catalog>.audit.asset_lineage, a
+# four-column view over system.access.table_lineage limited to edges into this
+# catalog from this catalog or the Cotality share catalog
+# (sql/ddl/audit_asset_lineage_view.sql). Unity Catalog evaluates
+# it with its OWNER's system-table access, so the App gets SELECT on this one
+# view and never a grant on the metastore-wide system schema. Lineage is an
+# optional evidence source: a deployer that cannot read the system table (exit
+# 3) skips the view and the grant with a warning, and the App keeps its explicit
+# "Observed lineage unavailable" state -- the same honest-degraded convention as
+# the pending AI Gateway inference-table grants. The skip touches nothing: a view
+# and App grant an earlier owner left stay as they were, unverified by this
+# deploy, and a new App service principal is not granted. Any other failure is
+# fatal, like every UC grant above.
+step "publish the observed-lineage view and grant the App SELECT on it (optional evidence)"
+_asset_lineage_rc=0
+run "$PYTHON" -m tools.databricks.ensure_asset_lineage_view \
+  --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+  --catalog "$_GRANTS_CATALOG" || _asset_lineage_rc=$?
+if [[ "$_asset_lineage_rc" -eq 0 ]]; then
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "  plan: the view publish and the grant below run only if the deploying identity can read system.access.table_lineage; otherwise a real run warns and skips both"
+  fi
+  apply_uc_grant "GRANT SELECT ON TABLE ${_GRANTS_CATALOG}.audit.asset_lineage TO \`${APP_SP_CLIENT_ID}\`"
+elif [[ "$_asset_lineage_rc" -eq 3 ]]; then
+  echo "${YLW}[deploy] WARNING: observed-lineage view not published: the deploying identity lacks USE CATALOG on system, USE SCHEMA on system.access or SELECT on system.access.table_lineage, so this deploy neither published nor verified ${_GRANTS_CATALOG}.audit.asset_lineage and granted nothing on it. A view and App grant an earlier owner left are unchanged and unverified, and a new App service principal is not granted; without them the App shows its explicit 'Observed lineage unavailable' gap.${RST}" >&2
+else
+  echo "${RED}[deploy] observed-lineage view publish failed (exit ${_asset_lineage_rc}); see the error above.${RST}" >&2
+  exit "$_asset_lineage_rc"
+fi
+# <<< observed lineage view: publish <<<
+
 # -----------------------------------------------------------------------------
 # Step 4d: provision the PII-salt secret scope (audit P1-4, zero-click)
 # -----------------------------------------------------------------------------

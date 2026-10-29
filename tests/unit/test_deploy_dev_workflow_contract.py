@@ -4229,10 +4229,12 @@ def test_lakebase_sync_access_is_target_bound_and_converged_around_provisioning(
     assert runtime_convergence < app_snapshot_with_agentic_proof
     base_grant_block = script[base_grants:sync_provision]
     assert "converge_app_lakebase_sync_access" not in base_grant_block
+    # A heredoc GRANT line, or one passed straight to apply_uc_grant (the
+    # observed-lineage view's grant runs only once that view is published).
     executable_grants = [
-        line.strip().replace("\\`", "`")
+        line.strip().removeprefix("apply_uc_grant ").strip('"').replace("\\`", "`")
         for line in base_grant_block.splitlines()
-        if line.lstrip().startswith("GRANT ")
+        if line.lstrip().startswith(("GRANT ", 'apply_uc_grant "GRANT '))
     ]
     assert executable_grants == [
         "GRANT USE CATALOG ON CATALOG ${_GRANTS_CATALOG} TO `${APP_SP_CLIENT_ID}`",
@@ -4257,6 +4259,7 @@ def test_lakebase_sync_access_is_target_bound_and_converged_around_provisioning(
         "GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
         "GRANT CREATE MODEL ON SCHEMA ${_GRANTS_CATALOG}.audit TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
         "GRANT CREATE TABLE ON SCHEMA ${_GRANTS_CATALOG}.audit TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
+        "GRANT SELECT ON TABLE ${_GRANTS_CATALOG}.audit.asset_lineage TO `${APP_SP_CLIENT_ID}`",
     ]
     assert not any(
         token in base_grant_block

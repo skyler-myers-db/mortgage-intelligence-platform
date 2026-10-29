@@ -29,6 +29,13 @@ and ``CREATE SCHEMA IF NOT EXISTS mip.<governed-schema>``. Without those
 two-part rewrites, a renamed-catalog deploy could create containers in the
 default catalog before its three-part table DDL targets the customer catalog.
 
+One more closed shape carries the catalog as a NAME rather than a prefix: an
+equality filter of a ``*_catalog`` column against the exact literal ``'mip'``
+(``source_table_catalog = 'mip'``), which a view over a system table uses to
+keep only this install's rows (``sql/ddl/audit_asset_lineage_view.sql``).
+Only ``=`` against exactly ``'mip'`` is rewritten: ``'mip_app'``, other
+operators and string literals anywhere else are left alone.
+
 The canonical sources keep the readable ``mip.*`` identifiers so code
 review + git diffs stay legible. The rendered tree is a build artifact
 (.gitignore'd) that the Databricks bundle's SQL tasks read from.
@@ -125,6 +132,8 @@ _CREATE_SCHEMA_PATTERN = re.compile(
     r"(?=\s|;|$)",
     re.IGNORECASE | re.MULTILINE,
 )
+# ``<column>_catalog = 'mip'``: the catalog as a name in a system-table filter.
+_CATALOG_LITERAL_PATTERN = re.compile(r"(\b[a-z_]+_catalog\s*=\s*)'mip'", re.IGNORECASE)
 _DEMO_FIRST_PARTY_TOKEN = "{{mip_enable_demo_first_party_feeds}}"
 _UC_IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,254}$")
 
@@ -179,6 +188,8 @@ def _render_text(text: str, catalog: str, *, demo_first_party_enabled: bool) -> 
         text,
     )
     total += n
+    text, n = _CATALOG_LITERAL_PATTERN.subn(lambda match: f"{match.group(1)}'{catalog}'", text)
+    total += n
     for pattern, template in _PATTERNS:
         replacement = template.format(catalog=catalog)
         new_text, n = pattern.subn(replacement, text)
@@ -188,6 +199,18 @@ def _render_text(text: str, catalog: str, *, demo_first_party_enabled: bool) -> 
     text, n = re.subn(re.escape(_DEMO_FIRST_PARTY_TOKEN), demo_literal, text)
     total += n
     return text, total
+
+
+def render_for_catalog(text: str, *, catalog: str) -> str:
+    """One canonical SQL source rendered for ``catalog``, demo feeds disabled.
+
+    For deploy helpers that execute a single reviewed file through the
+    statement API instead of a bundle SQL task; the catalog is held to the
+    same lowercase unquoted identifier rule as the CLI.
+    """
+    if _UC_IDENTIFIER.fullmatch(catalog) is None:
+        raise ValueError("catalog must be a lowercase unquoted UC identifier")
+    return _render_text(text, catalog, demo_first_party_enabled=False)[0]
 
 
 def _iter_sql_files(source_root: Path, dest_root: Path) -> list[Path]:

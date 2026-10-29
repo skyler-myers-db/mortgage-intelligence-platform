@@ -1845,6 +1845,85 @@ Databricks App resources expected by `app.yaml`:
   the exact reviewed `mip_app` table/sequence matrix in the internal security
   grant runbook.
 
+## Observed lineage view (optional evidence)
+
+The asset-detail "Observed lineage" section reads
+`<catalog>.audit.asset_lineage`, never `system.access.table_lineage`. The
+system table holds lineage for every table on a metastore other teams share,
+and App SQL reads gold, ref and audit only. So the view
+(`sql/ddl/audit_asset_lineage_view.sql`) exposes four columns
+(`source_table_full_name`, `target_table_full_name`, `event_time`,
+`event_date`) and only edges whose target is in the install catalog and whose
+source is in the install catalog or the Cotality share catalog, the two
+catalogs the App's asset registry renders. An edge from a product table into
+another team's catalog, or from another catalog into this one, would carry a
+table name the App never shows, so the view does not expose it. The App's
+query keeps its 90-day `event_date` window. Unity Catalog evaluates a view
+with its owner's privileges, so the App receives `SELECT` on this one view and
+no privilege on the `system` catalog.
+
+Deploy step 4c publishes it after the base UC grants
+(`tools/databricks/ensure_asset_lineage_view.py`, run as the deploying
+identity, between the `observed lineage view: publish` markers in
+`scripts/lib/deploy_step_lakebase_and_uc_grants.sh`):
+
+1. Probe `system.access.table_lineage` with a zero-row `SELECT`.
+2. `CREATE OR REPLACE VIEW` from the file rendered for `MIP_DEFAULT_CATALOG`
+   (`tools/render_sql.py` rewrites the view name and the two
+   `*_catalog = '<catalog>'` literals; the share catalog literal is fixed).
+3. Check with `DESCRIBE TABLE` that the view exposes exactly those four
+   columns.
+4. `GRANT SELECT ON TABLE <catalog>.audit.asset_lineage` to the App service
+   principal.
+
+Failure semantics follow the convention for optional evidence that the
+pending AI Gateway inference-table grants already use:
+
+- **The deploying identity cannot read the system table.** It lacks
+  `USE CATALOG` on `system`, `USE SCHEMA` on `system.access` or `SELECT` on
+  `system.access.table_lineage`, or the `access` system schema is not
+  enabled. The deploy prints a warning that names those privileges and
+  continues. It creates, replaces, verifies and grants nothing. A view and
+  App grant that an earlier owner left stay as they were and this deploy has
+  not verified them; their owner answers for their definition. A new App
+  service principal (after an App recreate) is not granted on such a view, so
+  lineage stays degraded until a deploy that can read the system table runs.
+  Without a view and grant the App keeps its explicit "Observed lineage
+  unavailable" gap; it never shows substitute lineage. A dry run cannot
+  probe, so its plan prints the grant as conditional on the probe.
+- **Any other failure is fatal**, like every UC grant in step 4c: an
+  unexplained probe error, a publish or `DESCRIBE` failure after the probe
+  passed, a projection other than the four columns, or the grant itself.
+  Replacing a view needs its ownership. If an operator published the view by
+  hand and a later deploy identity can read the system table, either hand the
+  view to that identity
+  (`ALTER VIEW <catalog>.audit.asset_lineage OWNER TO ...`) or keep deploying
+  with an identity that skips.
+
+The AI Gateway convention is matched only for the missing-access class. The
+pending inference-table grants warn on any grant-tool failure; this step
+fails an ownership conflict instead, because a deployer that can read the
+system table could publish the reviewed view, and another identity's view
+is in the way of it.
+
+**Ownership and grants.** The view's owner decides what the App can read
+through it, since Unity Catalog evaluates the view with the owner's access.
+After a deploy publishes the view, the deploying identity owns it, because
+replacing a view requires ownership. A view published by hand belongs to
+that operator. Transfer it only to an identity that holds the system-table
+privileges; under an owner without them the view stops resolving and the
+App shows its gap. `CREATE OR REPLACE VIEW` does not keep the privileges
+granted on the replaced view. Every publish therefore drops the App's
+`SELECT` and re-grants it in the next statement. A failure between the two
+leaves the App ungranted, which shows as the explicit gap, until the next
+successful deploy. Do not grant the view to anyone else by hand: the next
+publish drops that grant.
+
+Give the system-table privileges only to the identity that should own the
+view. A `SELECT` on `system.access.table_lineage` for a CI deploy principal
+is a metastore-wide grant, and the metastore owner decides it. The view and
+its grant are listed in the internal security grant runbook (§4).
+
 ## Optional Salesforce activation
 
 Salesforce delivery is disabled unless the full connector is configured. In
