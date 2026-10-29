@@ -1281,9 +1281,9 @@ ownership on sequences are intentionally not granted. Future-sequence default
 privileges are explicitly revoked. Any new table or sequence must be added to
 the code-owned privilege matrix after reviewing its runtime statements; otherwise the
 migration postflight rejects the deployment. `schema_migrations`,
-`action_audit_archive_runs`, and `agent_sessions` intentionally receive no app
-privileges. Postflight also rejects effective database `CREATE`, schema
-`CREATE`, any unreviewed table/sequence/routine, unsafe role attributes,
+`deployment_schema_digest`, `action_audit_archive_runs`, and `agent_sessions`
+intentionally receive no app privileges. Postflight also rejects effective
+database `CREATE`, schema `CREATE`, any unreviewed table/sequence/routine, unsafe role attributes,
 database `TEMPORARY`, every direct or recursive parent role, any direct/PUBLIC
 column ACL, and any privilege outside the exact code-owned matrix. The verifier
 postflight independently rejects access to every table except

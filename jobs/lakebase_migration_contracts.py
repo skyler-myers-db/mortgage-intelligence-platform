@@ -16,6 +16,8 @@ from typing import NamedTuple
 # ---------------------------------------------------------------------------
 _APP_ROLE_TABLE_PRIVILEGES: dict[str, tuple[str, ...]] = {
     "schema_migrations": (),
+    # Migration-owned schema-input digest row; only the executor reads it.
+    "deployment_schema_digest": (),
     "campaigns": ("SELECT", "INSERT", "UPDATE"),
     "campaign_message_variants": ("SELECT", "INSERT"),
     "tenant_disclosures": ("SELECT",),

@@ -155,6 +155,12 @@ from jobs.lakebase_migration_grants import (  # noqa: E402
 from jobs.lakebase_migration_grants import (
     _preflight_database_roles as _preflight_database_roles_impl,
 )
+from jobs.lakebase_migration_inputs import (  # noqa: E402
+    schema_input_digest as _schema_input_digest,
+)
+from jobs.lakebase_migration_inputs import (
+    schema_input_digest_sql as _schema_input_digest_sql,
+)
 from jobs.lakebase_migration_integrity import _POST_SEED_MARKER as _POST_SEED_MARKER
 from jobs.lakebase_migration_integrity import (  # noqa: E402
     _expect_database_rejection as _expect_database_rejection,
@@ -403,15 +409,18 @@ def main(
         tenant_id=tenant_id,
     )
     pre_seed_schema_sql, post_seed_schema_sql = _split_schema_sql(schema_sql)
+    sql_texts = (
+        pre_seed_schema_sql,
+        seed_sql,
+        tenant_disclosure_seed_sql,
+        post_seed_schema_sql,
+    )
 
     try:
+        # The digest row is the last statement of the same transaction, so it
+        # commits only together with the schema it describes.
         _run_transaction(
-            (
-                pre_seed_schema_sql,
-                seed_sql,
-                tenant_disclosure_seed_sql,
-                post_seed_schema_sql,
-            ),
+            (*sql_texts, _schema_input_digest_sql(_schema_input_digest(sql_texts))),
             conn_kwargs,
             app_role=app_role,
             ai_gateway_verifier_role=resolved_roles[1],

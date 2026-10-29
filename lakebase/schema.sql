@@ -21,6 +21,18 @@
 -- All UUID defaults use `gen_random_uuid()`; Lakebase Postgres enables
 -- `pgcrypto` by default on a new instance, but we include the CREATE
 -- EXTENSION line for portability.
+--
+-- Migration compatibility tags: `jobs/lakebase_migrate.py --mode plan`
+-- classifies each pending schema_migrations version by a comment line of
+-- exactly this form, placed anywhere in this file:
+--   -- mip:migration version=<schema_migrations version> compat=expand|contract
+-- `expand` is a reviewed claim that the previous release's App keeps working
+-- on the migrated schema, so a deploy window may restart it after the
+-- migration. `contract` says it may not. A version without a tag counts as
+-- contract; a malformed tag, or a tag naming no declared version, refuses
+-- the plan. Versions older than the tags carry none on purpose: nobody
+-- reviewed a claim for them, so an install that finds one pending treats it
+-- as contract.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE SCHEMA IF NOT EXISTS mip_app;
@@ -34,6 +46,27 @@ CREATE TABLE IF NOT EXISTS mip_app.schema_migrations (
     description TEXT NOT NULL,
     applied_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Deployment schema-input digest ----------------------------------------
+-- One migration-owned row: the sha256 of the exact schema, seed, tenant
+-- disclosure seed and grant-matrix inputs of the last apply that committed
+-- (jobs/lakebase_migration_inputs.py). Apply upserts it inside its schema
+-- transaction; `--mode plan` compares it with the release's inputs so an
+-- unchanged release can skip the migration and its App stop. The App role
+-- receives no privilege on it.
+CREATE TABLE IF NOT EXISTS mip_app.deployment_schema_digest (
+    scope        TEXT PRIMARY KEY CHECK (scope = 'lakebase_schema'),
+    input_digest TEXT NOT NULL CHECK (input_digest ~ '^[0-9a-f]{64}$'),
+    recorded_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- mip:migration version=2026_10_29_deployment_schema_digest compat=expand
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_29_deployment_schema_digest',
+    'Deployment schema-input digest: one migration-owned row with the input digest of the last committed apply'
+)
+ON CONFLICT (version) DO NOTHING;
 
 -- Campaigns -----------------------------------------------------------
 -- One row per marketing campaign the user has built with the portfolio
