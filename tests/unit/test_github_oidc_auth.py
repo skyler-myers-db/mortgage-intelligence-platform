@@ -349,3 +349,90 @@ def test_malformed_exchange_response_fails_closed(payload: dict[str, object]) ->
 
     with pytest.raises(RuntimeError, match="malformed token"):
         _strategy(http)(_cfg())()
+
+
+@pytest.mark.parametrize("failing_leg", ["github_status", "exchange_status"])
+@pytest.mark.parametrize("status", [429, 503])
+def test_failed_early_refresh_keeps_serving_the_still_valid_token_with_a_retry_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failing_leg: str,
+    status: int,
+) -> None:
+    deployer = install_github_oidc_deployer(monkeypatch, tmp_path)
+    client = deployment_workspace_client()
+    assert client.config.authenticate() == {"Authorization": "Bearer databricks-token-1"}
+
+    setattr(deployer.http, failing_leg, status)
+    deployer.clock.advance(3600 - 300)
+    assert client.config.authenticate() == {"Authorization": "Bearer databricks-token-1"}
+    attempts = len(deployer.http.gets)
+    deployer.clock.advance(29)
+    assert client.config.authenticate() == {"Authorization": "Bearer databricks-token-1"}
+    assert len(deployer.http.gets) == attempts
+    deployer.clock.advance(1)
+    assert client.config.authenticate() == {"Authorization": "Bearer databricks-token-1"}
+    assert len(deployer.http.gets) == attempts + 1
+
+    setattr(deployer.http, failing_leg, 200)
+    deployer.clock.advance(30)
+    fresh = client.config.authenticate()
+    assert fresh != {"Authorization": "Bearer databricks-token-1"}
+    assert fresh == {"Authorization": f"Bearer databricks-token-{len(deployer.http.posts)}"}
+    deployer.clock.advance(3600 - 300 - 1)
+    assert client.config.authenticate() == fresh
+
+
+@pytest.mark.parametrize("failing_leg", ["github_status", "exchange_status"])
+def test_refresh_failure_once_the_cached_token_is_unusable_raises(
+    failing_leg: str,
+) -> None:
+    http = FakeOidcHttp()
+    clock = FakeClock()
+    provider = _strategy(http, clock)(_cfg())
+    assert provider() == {"Authorization": "Bearer databricks-token-1"}
+
+    setattr(http, failing_leg, 503)
+    clock.advance(3600 - 30 - 1)
+    assert provider() == {"Authorization": "Bearer databricks-token-1"}
+    clock.advance(1)
+    with pytest.raises(RuntimeError, match=r"refused \(HTTP 503\)"):
+        provider()
+    with pytest.raises(RuntimeError, match=r"refused \(HTTP 503\)"):
+        provider()
+
+
+def test_short_token_keeps_a_proportional_usable_window_after_a_failed_refresh() -> None:
+    http = FakeOidcHttp(expires_in=60)
+    clock = FakeClock()
+    provider = _strategy(http, clock)(_cfg())
+    provider()
+
+    http.exchange_status = 503
+    clock.advance(30)
+    assert provider() == {"Authorization": "Bearer databricks-token-1"}
+    clock.advance(14)
+    assert provider() == {"Authorization": "Bearer databricks-token-1"}
+    clock.advance(1)
+    with pytest.raises(RuntimeError, match=r"HTTP 503"):
+        provider()
+
+
+def test_a_slow_failed_refresh_is_judged_by_the_clock_after_it_returns() -> None:
+    clock = FakeClock()
+
+    class SlowRefusal(FakeOidcHttp):
+        def post(self, url: str, **kwargs: Any) -> Any:
+            response = super().post(url, **kwargs)
+            if len(self.posts) > 1:
+                clock.advance(kwargs["timeout"])
+            return response
+
+    http = SlowRefusal()
+    provider = _strategy(http, clock)(_cfg())
+    provider()
+
+    http.exchange_status = 504
+    clock.advance(3600 - 30 - 1)
+    with pytest.raises(RuntimeError, match=r"HTTP 504"):
+        provider()

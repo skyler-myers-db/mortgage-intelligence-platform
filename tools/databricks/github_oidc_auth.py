@@ -14,6 +14,13 @@ when the deployer client is constructed, and caches each exchanged Databricks
 token until shortly before it expires. A missing snapshot fails closed at
 construction. The snapshot is the job-scoped Actions request token, which
 GitHub invalidates when the job ends; no Databricks secret exists in this flow.
+
+The early refresh is an optimisation, not a validity boundary: when it fails,
+the cached token keeps serving until just before its own expiry, with failed
+refreshes spaced by a short backoff (the SDK's ``Refreshable`` stale window
+does the same). Only a refresh that fails once the cached token is no longer
+usable raises, so one transient token-endpoint error cannot abort a deploy
+whose lease heartbeat renews for hours.
 """
 
 from __future__ import annotations
@@ -22,7 +29,7 @@ import configparser
 import os
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -41,6 +48,11 @@ AUTH_TYPE = "github-oidc"
 REQUEST_URL_ENV = "ACTIONS_ID_TOKEN_REQUEST_URL"
 REQUEST_TOKEN_ENV = "ACTIONS_ID_TOKEN_REQUEST_TOKEN"
 DEFAULT_REFRESH_SKEW = timedelta(minutes=5)
+# A cached token stops serving this long before its expiry (halved again for
+# short-lived tokens), so a request never leaves with an about-to-expire token.
+_EXPIRY_MARGIN = timedelta(seconds=30)
+# After a failed early refresh, the next attempt waits at least this long.
+_REFRESH_RETRY_BACKOFF = timedelta(seconds=30)
 _TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
 _JWT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:jwt"
 _HTTP_TIMEOUT_SECONDS = 30
@@ -91,6 +103,13 @@ class _ExchangeTarget:
     authorization_details: str
 
 
+@dataclass(frozen=True)
+class _CachedToken:
+    token: Token
+    refresh_after: datetime
+    usable_until: datetime
+
+
 class CachedGitHubOidcCredentials(CredentialsStrategy):
     """``github-oidc`` with a construction-time snapshot and an expiry cache."""
 
@@ -116,7 +135,7 @@ class CachedGitHubOidcCredentials(CredentialsStrategy):
         self._now = now or _utcnow
         self._refresh_skew = refresh_skew
         self._lock = threading.Lock()
-        self._cache: dict[_ExchangeTarget, tuple[Token, datetime]] = {}
+        self._cache: dict[_ExchangeTarget, _CachedToken] = {}
 
     def __repr__(self) -> str:
         return "CachedGitHubOidcCredentials(<Actions request snapshot redacted>)"
@@ -154,11 +173,24 @@ class CachedGitHubOidcCredentials(CredentialsStrategy):
     def _token(self, target: _ExchangeTarget) -> Token:
         with self._lock:
             cached = self._cache.get(target)
-            if cached is not None and self._now() < cached[1]:
-                return cached[0]
-            fresh, refresh_after = self._exchange(target)
-            self._cache[target] = (fresh, refresh_after)
-            return fresh
+            now = self._now()
+            if cached is not None and now < cached.refresh_after and now < cached.usable_until:
+                return cached.token
+            try:
+                fresh = self._exchange(target)
+            except Exception:
+                # Same contract as the SDK's Refreshable stale window: a failed
+                # early refresh keeps the still-valid token and retries after a
+                # backoff; once the cached token is unusable, the error raises.
+                failed_at = self._now()
+                if cached is None or failed_at >= cached.usable_until:
+                    raise
+                self._cache[target] = replace(
+                    cached, refresh_after=failed_at + _REFRESH_RETRY_BACKOFF
+                )
+                return cached.token
+            self._cache[target] = fresh
+            return fresh.token
 
     def _github_id_token(self, audience: str) -> str:
         response = self._http.get(
@@ -177,7 +209,7 @@ class CachedGitHubOidcCredentials(CredentialsStrategy):
             raise RuntimeError("GitHub Actions ID-token response carried no token")
         return value.strip()
 
-    def _exchange(self, target: _ExchangeTarget) -> tuple[Token, datetime]:
+    def _exchange(self, target: _ExchangeTarget) -> _CachedToken:
         data = {
             "grant_type": _TOKEN_EXCHANGE_GRANT,
             "subject_token_type": _JWT_TOKEN_TYPE,
@@ -214,8 +246,12 @@ class CachedGitHubOidcCredentials(CredentialsStrategy):
         issued = self._now()
         lifetime = timedelta(seconds=int(expires_in))
         expiry = issued + lifetime
-        refresh_after = expiry - min(self._refresh_skew, lifetime / 2)
-        return Token(access_token=access_token, token_type=token_type, expiry=expiry), refresh_after
+        skew = min(self._refresh_skew, lifetime / 2)
+        return _CachedToken(
+            token=Token(access_token=access_token, token_type=token_type, expiry=expiry),
+            refresh_after=expiry - skew,
+            usable_until=expiry - min(_EXPIRY_MARGIN, skew / 2),
+        )
 
 
 def _exchange_refusal(response: Any) -> str:
