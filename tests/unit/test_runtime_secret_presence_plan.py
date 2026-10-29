@@ -187,21 +187,49 @@ def test_two_consecutive_runs_the_second_plans_zero_writes(monkeypatch, capsys) 
 
 
 def test_an_absent_mask_is_generated_once_and_read_back_for_presence(monkeypatch) -> None:
-    api = _Scope(keys=tuple(key for key in ALL_KEYS if key != subject.MASK_KEY))
+    api = _Scope(exists=True)  # a first install: the scope lists no runtime key yet
 
     result = subject.provision_runtime_secrets(client=_client(api))
 
-    assert result.written == (subject.MASK_KEY,)
-    assert result.notes == (
-        f"{subject.MASK_KEY}: absent, so written once from a value generated on this runner",
-    )
-    ((key, value),) = api.puts
+    assert result.written == ALL_KEYS and api.created == []
+    assert result.notes[0] == f"{subject.MASK_KEY}: absent, so written once from a value generated on this runner"
+    key, value = api.puts[0]
     assert key == subject.MASK_KEY and HEX_KEY.fullmatch(value)
-    assert api.lists == 2, "one listing to plan, one to read the write back"
+    assert api.lists == 2, "one listing to plan, one to read the writes back"
     assert api.gets == []
 
 
-def test_an_absent_key_takes_its_optional_input(monkeypatch) -> None:
+@pytest.mark.parametrize("listed", tuple(key for key in ALL_KEYS if key not in (subject.MASK_KEY, subject.PREVIOUS_KEY)))
+@pytest.mark.parametrize("argv", (["--check"], []), ids=("check", "write"))
+def test_an_established_scope_missing_its_mask_refuses_instead_of_minting_one(
+    monkeypatch, capsys, argv: list[str], listed: str
+) -> None:
+    """The mask is written first, so another runtime key without it is a deleted mask, not a first install."""
+    api = _Scope(keys=(listed,))
+    _cli(monkeypatch, api)
+
+    assert subject.main(argv) == subject.EXIT_REFUSED
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith(
+        f"[runtime-secrets] refused on {INSTALL_HOST}: mip-runtime lists {listed} but not {subject.MASK_KEY}"
+    )
+    assert f"Set {subject.MASK_ENV} (shell or .env.local) to the value this install used" in captured.err
+    assert api.puts == [] and api.created == [] and api.gets == []
+
+
+def test_a_scope_holding_only_a_retired_previous_key_is_still_a_first_install(monkeypatch) -> None:
+    """``--retire-previous`` may create the scope and its previous key before the first deploy."""
+    api = _Scope(keys=(subject.PREVIOUS_KEY,))
+
+    result = subject.provision_runtime_secrets(client=_client(api))
+
+    assert result.kept == (subject.PREVIOUS_KEY,) and _put_keys(api)[0] == subject.MASK_KEY
+    assert HEX_KEY.fullmatch(api.values[subject.MASK_KEY]) and api.gets == []
+
+
+def test_an_established_scope_missing_its_mask_restores_it_from_the_explicit_input(monkeypatch) -> None:
     monkeypatch.setenv(subject.MASK_ENV, STRONG_INPUT)
     api = _Scope(keys=tuple(key for key in ALL_KEYS if key != subject.MASK_KEY))
 
@@ -230,9 +258,9 @@ def test_a_first_install_generates_distinct_keys_and_prints_none(monkeypatch, ca
 
 
 def test_a_write_that_does_not_land_refuses(monkeypatch) -> None:
-    api = _Scope(keys=tuple(key for key in ALL_KEYS if key != subject.MASK_KEY), drop=(subject.MASK_KEY,))
+    api = _Scope(keys=tuple(key for key in ALL_KEYS if key != subject.CURRENT_KEY), drop=(subject.CURRENT_KEY,))
 
-    with pytest.raises(subject.RuntimeSecretWriteRefused, match="does not list cotality-id-mask-v1"):
+    with pytest.raises(subject.RuntimeSecretWriteRefused, match="does not list genie-action-current"):
         subject.provision_runtime_secrets(client=_client(api))
 
 
@@ -244,7 +272,7 @@ def test_an_existing_previous_is_never_overwritten(monkeypatch, previous_input: 
     if previous_input:
         monkeypatch.setenv(subject.PREVIOUS_ENV, STRONG_INPUT)
         monkeypatch.setenv(subject.PREVIOUS_KID_ENV, "v1")
-    api = _Scope(keys=(subject.PREVIOUS_KEY,))
+    api = _Scope(keys=(subject.MASK_KEY, subject.PREVIOUS_KEY))
     stored = api.values[subject.PREVIOUS_KEY]
 
     result = subject.provision_runtime_secrets(client=_client(api))
@@ -258,7 +286,7 @@ def test_unset_salesforce_inputs_keep_the_stored_keys(monkeypatch, value: str | 
     for name in subject.OPTIONAL_RESOURCE_ENVS:
         if value is not None:
             monkeypatch.setenv(name, value)
-    api = _Scope(keys=SALESFORCE_KEYS)
+    api = _Scope(keys=(subject.MASK_KEY, *SALESFORCE_KEYS))
 
     result = subject.provision_runtime_secrets(client=_client(api))
 

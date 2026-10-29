@@ -16,6 +16,13 @@ An absent key is written once (a first install, or a key an owner deleted):
   its ``_KID``) or a disabled sentinel;
 * ``salesforce-*`` takes its input or a disabled sentinel.
 
+The mask is generated only on a first install. A run writes it before any
+other key, so a scope that lists ``genie-action-current`` or a
+``salesforce-*`` key without the mask is an established install whose mask
+was deleted: the plan refuses (exit 2) unless ``MIP_COTALITY_ID_MASK_SECRET``
+restores the value the install used, because a new mask would orphan every
+stored ``B-...`` id.
+
 The App's static resource declarations need a backing key even when nothing
 is bound to it, hence the sentinels. A configured ``SALESFORCE_*`` input still
 replaces its key: it is a third-party credential the operator supplies, and
@@ -115,6 +122,11 @@ MASK_KEY = ENV_TO_KEY[MASK_ENV]
 # Keys an absent install generates on the runner; every other absent key gets
 # the disabled sentinel when its input is unset.
 GENERATED_KEYS = frozenset({MASK_KEY, CURRENT_KEY})
+# Keys only a provisioning run writes, after the mask (ENV_TO_KEY order). One
+# of them listed without the mask marks an established install whose mask was
+# deleted. genie-action-previous is not among them: --retire-previous may
+# create it in a scope no deploy has provisioned yet.
+ESTABLISHED_INSTALL_KEYS = frozenset(ENV_TO_KEY.values()) - {MASK_KEY, PREVIOUS_KEY}
 DISABLED_PREVIOUS_PREFIX = "disabled."
 EXIT_REFUSED = 2
 HOST_ENV = "DATABRICKS_HOST"
@@ -124,6 +136,10 @@ GITHUB_ACTIONS_ENV = "GITHUB_ACTIONS"
 
 class RuntimeSecretWriteRefused(ValueError):
     """``--require-existing`` met a plan that writes, or a write did not land."""
+
+
+class MaskKeyMissingRefused(ValueError):
+    """An established runtime scope lists other runtime keys but not the mask."""
 
 
 class GenieActionRotationRefused(ValueError):
@@ -263,6 +279,27 @@ def _listed_keys(workspace: Any, *, scope: str) -> set[str]:
     return {_item_name(item, "key") for item in workspace.secrets.list_secrets(scope=scope)}
 
 
+def _require_mask_or_first_install(values: dict[str, str], existing: set[str], *, scope: str) -> None:
+    """Never generate a mask for an established install; only the explicit input restores it.
+
+    A provisioning run writes the mask before any other key, so no partial
+    first install lists another runtime key without it.
+    """
+
+    established = sorted(existing & ESTABLISHED_INSTALL_KEYS)
+    if MASK_KEY in existing or values[MASK_ENV] or not established:
+        return
+    raise MaskKeyMissingRefused(
+        f"{scope} lists {', '.join(established)} but not {MASK_KEY}. A provisioning run "
+        "writes the mask first, so this is an established install whose mask was deleted, "
+        "not a first install. A new mask would re-key every masked borrower id and orphan "
+        "the B-... ids already stored in Lakebase campaigns, approvals, audit, watchlists "
+        f"and snoozes. Set {MASK_ENV} (shell or .env.local) to the value this install used "
+        "to restore it; a deliberate re-key is an owner-run data migration. Nothing was "
+        "written."
+    )
+
+
 def _validated_inputs(values: dict[str, str], previous_kid: str, *, used: set[str]) -> None:
     """Validate the inputs this run writes; an input for an existing key is otherwise unused.
 
@@ -304,6 +341,7 @@ def plan_runtime_secrets(
     scopes = {_item_name(item, "name") for item in workspace.secrets.list_scopes()}
     scope_exists = scope in scopes
     existing = _listed_keys(workspace, scope=scope) if scope_exists else set()
+    _require_mask_or_first_install(values, existing, scope=scope)
     values = dict(values)
     # (key, the input it takes, or "" for a value made here), in ENV_TO_KEY order.
     planned: list[tuple[str, str]] = []

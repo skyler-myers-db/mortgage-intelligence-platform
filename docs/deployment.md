@@ -1510,6 +1510,14 @@ or rewrites a key that already exists:
   Each write is read back for presence (the key is listed), never for its
   value. No workflow carries these inputs
   (`tests/unit/test_runtime_secret_inputs_stay_out_of_ci.py`).
+- **A deleted mask is never regenerated.** A run writes the mask before any
+  other key, so a scope that lists `genie-action-current` or a
+  `salesforce-*` key without `cotality-id-mask-v1` is an established install
+  whose mask was deleted, not a first install. The plan refuses it with exit
+  2, before the App stop, unless `MIP_COTALITY_ID_MASK_SECRET` (shell or
+  `.env.local`, never a workflow) restores the value the install used.
+  `genie-action-previous` alone does not count: `--retire-previous` may create
+  it before the first deploy.
 - **Salesforce credentials.** When a `SALESFORCE_*` input is unset, an
   existing `salesforce-*` key is kept. The disabled sentinel is written only
   when the key is absent, because the App's static resource binding needs a
@@ -1537,8 +1545,10 @@ or rewrites a key that already exists:
 refuses with exit 2 when the plan would write anything, including a scope it
 would create. An install that is already provisioned plans zero writes, so
 run it before adopting an existing install: a misnamed
-`MIP_RUNTIME_SECRET_SCOPE` would otherwise look like a first install and mint
-a new mask.
+`MIP_RUNTIME_SECRET_SCOPE` (or a scope deleted and recreated empty) lists no
+runtime key, so it would otherwise look like a first install and mint a new
+mask. Run it with the `SALESFORCE_*` inputs unset: a configured one replaces
+its key by design, which counts as a write.
 
 Before its first Secrets API call, every mode of the tool (`--check`, the
 write run, `--retire-previous`, `--rotate-genie-action`) proves which
