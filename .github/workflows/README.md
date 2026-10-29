@@ -7,7 +7,7 @@ This repo runs five workflows:
 | [`ci.yml`](ci.yml) | `pull_request`, `push` to `main` / `feature/*` | **None.** Every job is credential-free. |
 | [`deps-report.yml`](deps-report.yml) | `schedule` (Mondays 13:17 UTC) + `workflow_dispatch` | **GITHUB_TOKEN only:** contents and actions read in `report`, issues write in `publish`. Edits one `dependency-report` issue in place; never pushes, opens no branch or pull request. |
 | [`nightly.yml`](nightly.yml) | `workflow_dispatch` only | Required — see below. |
-| [`deploy-dev.yml`](deploy-dev.yml) | `workflow_dispatch` | Required — Databricks dev deployment credentials. |
+| [`deploy-dev.yml`](deploy-dev.yml) | `workflow_dispatch` | Required — GitHub OIDC (`id-token: write`, `deploy` job only) for the deployer service principal, which has no stored credential, plus the app-facing M2M and account-SCIM credentials. |
 | [`deploy-prod.yml`](deploy-prod.yml) | `workflow_dispatch` | **GITHUB_TOKEN (actions: read) only, for the live-validation age check. Non-deploying scaffold gate only.** |
 
 The PR workflow (`ci.yml`) is designed to stay green for any contributor
@@ -38,7 +38,9 @@ to the `workflow_dispatch` SHA; it is not re-dispatched through a moving branch
 reference. After approval, that run builds the reviewed commit, creates an
 ephemeral `.env.local` containing only non-secret app configuration, passes
 runtime secrets to the provisioning step through the process environment,
-seeds a temporary `DEFAULT` Databricks CLI profile, runs
+seeds a temporary `DEFAULT` Databricks CLI profile that holds no credential
+(`auth_type = github-oidc` for the deployer service principal named by
+`MIP_CI_DEPLOYER_CLIENT_ID`), proves that identity read-only, runs
 `scripts/deploy.sh -t pr105-host --no-confirm` (the forked-anchor CI staging
 target in its own workspace; never `-t dev`, see docs/deployment.md "CI staging
 install"), and keeps the deployed app smoke test
@@ -105,7 +107,7 @@ var.
 | Secret | What it is | How to obtain |
 |---|---|---|
 | `DATABRICKS_HOST` | The `pr105-host` CI staging workspace URL, `https://dbc-149e560d-e056.cloud.databricks.com` (the `&ci_staging_host` anchor in `databricks.yml`), never the live workspace. | `deploy-dev.yml` refuses any other host before its first workspace call. In `nightly.yml`, parity-live's bundle validate refuses it, but kill-drill-simulated still reads whatever host this names (docs/deployment.md, owner step 6). |
-| `DATABRICKS_TOKEN` | Workspace-admin Personal Access Token used as the principal-pinned full-inventory/deployment authority. It is not reused as an app bearer or treated as the product app-admin identity. | Databricks UI → User Settings → Developer → Access Tokens → Generate new token. Confirm `current-user me` contains the `admins` group; rotate every 90 days (see `docs/runbook.md` §5). |
+| `DATABRICKS_TOKEN` | Repository-level workspace-admin Personal Access Token that `nightly.yml` still uses as its full-inventory authority until its own GitHub OIDC migration (a follow-up, as the same deployer service principal). `deploy-dev.yml` no longer reads it: its deployer authenticates through GitHub OIDC (`MIP_CI_DEPLOYER_CLIENT_ID` below). It is not reused as an app bearer or treated as the product app-admin identity. | Delete the `dev` environment copy; keep the repository-level secret only until `nightly.yml` moves to GitHub OIDC (docs/deployment.md, owner steps 3 and 6). |
 | `DATABRICKS_WAREHOUSE_ID` | ID of the dev serverless SQL warehouse. Same value `databricks bundle validate` resolves from `databricks.yml`. | Databricks UI → SQL Warehouses → click the warehouse → copy from URL or Connection Details. |
 | `GENIE_SPACE_ID` | Mortgage Lead Intelligence Genie Space ID. | Databricks UI → Genie → open the space → copy ID from URL. Also tracked at `genie/space_id.txt`. |
 | `DATABRICKS_CLIENT_ID` | Non-admin service-principal OAuth client ID used by deployed Playwright and the non-admin RBAC smoke. | Provision with `tools/databricks/provision_m2m_oauth.py` or `docs/security/m2m-oauth-setup.md`. |
@@ -142,7 +144,7 @@ does not consume them.
 At least one of these non-secret variables must be set under **Settings →
 Secrets and variables → Actions → Variables** before `deploy-dev.yml` runs. The
 workflow fails closed if both are empty, so dev deploys do not implicitly grant
-app-admin access to the Databricks PAT owner.
+app-admin access to the deploying principal.
 
 The "Defaults to" values below are the workflows' fallbacks, which are the
 live install's names. `deploy-dev.yml` refuses each name in the isolation rule
@@ -152,6 +154,8 @@ each to the CI staging install's value (docs/deployment.md, owner step 6).
 
 | Variable | What it is | Notes |
 |---|---|---|
+| `MIP_CI_DEPLOYER_CLIENT_ID` | Application id of the CI deployer service principal: a `dev` environment variable, public, never a secret. | Required by `deploy-dev.yml`. Its Configure step writes the `DEFAULT` profile with `auth_type = github-oidc` and this `client_id`; the service principal has no OAuth secret and no PAT. Its account federation policy trusts issuer `https://token.actions.githubusercontent.com`, subject `repo:<owner>/<repo>:environment:dev`, and two audiences: the `pr105-host` workspace token endpoint (`<host>/oidc/v1/token`) and the account id. It must differ from every app-facing client id and the account-SCIM client, be a workspace admin of `pr105-host` only, and own the shared metastore; the read-only proof step refuses the run otherwise (docs/deployment.md, owner step 3). |
+| `MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS` | Repository variable: every retired AI Gateway proof public key, oldest first, comma-separated. | `deploy-dev.yml` passes it to the credential repair and to `scripts/deploy.sh`. The key registry must end at the current key, and each signed lease record's `key_epoch` must be its key's index (docs/deployment.md, owner step 7). Public keys only. |
 | `MIP_ADMIN_EMAILS` | Comma-separated app-admin email allowlist for the dev app. | Use when a named operator must access `/api/v1/admin/*`. |
 | `MIP_ADMIN_GROUP_NAME` | Optional local/test compatibility group name. | Deployed automation uses the exact `MIP_ADMIN_IDENTITIES` value derived from `DATABRICKS_ADMIN_CLIENT_ID`; group headers are not authoritative in sandbox/production. |
 | `MIP_DEFAULT_CATALOG` | Target Unity Catalog name. | Required. The workflow fallback `mip` is the live catalog, and the `pr105-host` workspace shares the live install's metastore, so the isolation rule table (`tools/databricks/ci_install_isolation.py`) refuses an unset value or any UC spelling of a live catalog, in `deploy-dev.yml`'s preflight and in `nightly.yml`'s first job. Deploy and every nightly proof/render step use the same value. |

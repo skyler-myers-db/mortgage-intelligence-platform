@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from tools.databricks.workspace_auth import deployment_workspace_client
+
 
 def source_sha(value: str) -> str:
     normalized = value.strip()
@@ -94,7 +96,9 @@ def main(lease: Any, argv: list[str] | None = None) -> int:
     parser.add_argument("--out-env", type=Path)
     parser.add_argument("--parent-pid", type=int)
     args = parser.parse_args(argv)
-    workspace = lease.WorkspaceClient()
+    # The heartbeat renews for hours: the governed deployer binding caches its
+    # github-oidc token instead of exchanging on every lease request.
+    workspace = deployment_workspace_client(factory=lease.WorkspaceClient)
     if args.action == "repair-head":
         lease.lease_support.repair_head_hint(
             lease,

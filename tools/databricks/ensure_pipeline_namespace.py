@@ -134,6 +134,7 @@ def _owner_policies(
                 expected_workspace_scim_id=target.scim_id,
                 workspace_host=workspace_host,
                 assert_single_writer=assert_single_writer,
+                deployer_workspace=workspace,
             )
 
         return probe

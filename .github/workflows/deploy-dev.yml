@@ -55,6 +55,14 @@ jobs:
     # subsequent bundle, migration, refresh, and smoke steps.
     timeout-minutes: 240
     environment: dev
+    # The deployer is a dedicated account service principal with no OAuth
+    # secret and no PAT: it authenticates only through GitHub Actions OIDC
+    # workload identity federation, whose policy trusts this repository's
+    # `dev` environment subject. The id-token permission lets this job, and no
+    # other, request the GitHub ID token the Databricks token exchange presents.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -70,7 +78,10 @@ jobs:
       - name: Configure Databricks dev credentials
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          # The deployer service principal's application id: a public
+          # identifier (a dev environment variable, never a secret). Its
+          # federation policy, not a stored credential, authenticates it.
+          MIP_CI_DEPLOYER_CLIENT_ID: ${{ vars.MIP_CI_DEPLOYER_CLIENT_ID }}
           DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
           GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
           MIP_COTALITY_ID_MASK_SECRET: ${{ secrets.MIP_COTALITY_ID_MASK_SECRET }}
@@ -117,19 +128,19 @@ jobs:
         run: |
           set -euo pipefail
           missing=""
-          for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID MIP_COTALITY_ID_MASK_SECRET MIP_GENIE_ACTION_SECRET_CURRENT MIP_AI_GATEWAY_PROOF_SIGNING_KEY MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET; do
+          for v in DATABRICKS_HOST MIP_CI_DEPLOYER_CLIENT_ID DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID MIP_COTALITY_ID_MASK_SECRET MIP_GENIE_ACTION_SECRET_CURRENT MIP_AI_GATEWAY_PROOF_SIGNING_KEY MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET; do
             if [ -z "${!v}" ]; then
               missing="$missing $v"
             fi
           done
           if [ -n "$missing" ]; then
-            echo "::error::Missing required secrets:$missing"
+            echo "::error::Missing required secrets or variables:$missing"
             exit 1
           fi
           # Retain every value in this shell for config writes, but expose only
           # the canonical proxy bundle to its bounded parser and only public
           # client IDs to the subsequent separation check.
-          export -n DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID
+          export -n DATABRICKS_HOST DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID
           export -n MIP_COTALITY_ID_MASK_SECRET MIP_GENIE_ACTION_SECRET_CURRENT
           export -n MIP_GENIE_ACTION_SECRET_PREVIOUS MIP_AI_GATEWAY_PROOF_SIGNING_KEY
           export -n MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY
@@ -178,6 +189,14 @@ jobs:
           ).strip().casefold()
           if account_client_id and account_client_id in values:
               raise SystemExit("Account-SCIM OAuth client must be distinct from every app-facing M2M client ID.")
+          # The deployer is the UC/App deployment authority. It must never be
+          # one of the app-facing identities the deploy reconciles, grants and
+          # audits, nor the account-SCIM authority.
+          deployer_client_id = os.environ["MIP_CI_DEPLOYER_CLIENT_ID"].strip().casefold()
+          if deployer_client_id in values:
+              raise SystemExit("CI deployer client ID must be distinct from every app-facing M2M client ID.")
+          if account_client_id and account_client_id == deployer_client_id:
+              raise SystemExit("Account-SCIM OAuth client must be distinct from the CI deployer client ID.")
           PY
           export -n DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID
           export -n DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_ID
@@ -185,11 +204,18 @@ jobs:
           export -n DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_PROXY_CLIENT_ID
           export -n DATABRICKS_AGENT_PROXY_CREDENTIAL_ID
           export -n DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE DATABRICKS_ACCOUNT_CLIENT_ID
+          export -n MIP_CI_DEPLOYER_CLIENT_ID
+          # No stored credential: the SDK and CLI exchange this job's GitHub
+          # ID token (ACTIONS_ID_TOKEN_REQUEST_*) for a short-lived Databricks
+          # token as the deployer service principal. An env DATABRICKS_CLIENT_ID,
+          # DATABRICKS_TOKEN or DATABRICKS_AUTH_TYPE would override this profile,
+          # so no step that authenticates as the deployer carries one into a
+          # Databricks client (scripts/deploy.sh un-exports the App client pair).
           {
             echo "[DEFAULT]"
             echo "host  = ${DATABRICKS_HOST}"
-            echo "token = ${DATABRICKS_TOKEN}"
-            echo "auth_type = pat"
+            echo "auth_type = github-oidc"
+            echo "client_id = ${MIP_CI_DEPLOYER_CLIENT_ID}"
           } > "$HOME/.databrickscfg"
           chmod 600 "$HOME/.databrickscfg"
 
@@ -255,13 +281,192 @@ jobs:
             fi
           } > .env.local
           chmod 600 .env.local
+      - name: Prove the GitHub OIDC deployer identity
+        # Read-only, before the credential repair and before scripts/deploy.sh:
+        # the DEFAULT github-oidc profile must authenticate, through both the
+        # Python SDK and the Go CLI, as the reviewed deployer service principal
+        # on the pr105-host workspace, with the authority the governed deploy
+        # requires. It prints booleans only (an exception or CLI failure adds
+        # its class or exit code, never a message or value) and exits 2 on any
+        # mismatch. The profile and host checks run first; on a mismatch the
+        # step exits before any network call.
+        env:
+          DATABRICKS_CONFIG_PROFILE: DEFAULT
+          MIP_CI_DEPLOYER_CLIENT_ID: ${{ vars.MIP_CI_DEPLOYER_CLIENT_ID }}
+          # Compared for equality only, under names neither the SDK nor the
+          # CLI reads, so the profile alone selects the host and identity.
+          MIP_PROOF_DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          MIP_PROOF_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          MIP_PROOF_GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import configparser
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          TARGET = "pr105-host"
+          PROFILE = "DEFAULT"
+          # Ambient names that would override or redirect the profile.
+          OVERRIDES = (
+              "DATABRICKS_HOST",
+              "DATABRICKS_TOKEN",
+              "DATABRICKS_AUTH_TYPE",
+              "DATABRICKS_CLIENT_ID",
+              "DATABRICKS_CLIENT_SECRET",
+              "DATABRICKS_CONFIG_FILE",
+          )
+          checks = {}
+          notes = {}
+
+
+          def same(left, right):
+              return bool(left) and left == right
+
+
+          def report():
+              for name, ok in checks.items():
+                  note = f" ({notes[name]})" if name in notes else ""
+                  print(f"{name}={'true' if ok else 'false'}{note}")
+              if not all(checks.values()):
+                  print("::error::GitHub OIDC deployer identity proof failed; see the false checks above.")
+                  sys.exit(2)
+
+
+          def probe(name, read):
+              try:
+                  checks[name] = bool(read())
+              except Exception as exc:  # the class only, never its message
+                  checks[name] = False
+                  notes[name] = type(exc).__name__
+
+
+          def admins(groups):
+              return "admins" in {
+                  str(group or "").strip().casefold() for group in groups
+              }
+
+
+          expected = os.environ.get("MIP_CI_DEPLOYER_CLIENT_ID", "").strip()
+          secret_host = os.environ.get("MIP_PROOF_DATABRICKS_HOST", "").strip().rstrip("/")
+          bundle = yaml.safe_load(Path("databricks.yml").read_text(encoding="utf-8")) or {}
+          workspace = (((bundle.get("targets") or {}).get(TARGET) or {}).get("workspace")) or {}
+          bundle_host = str(workspace.get("host") or "").strip().rstrip("/")
+          parser = configparser.ConfigParser(interpolation=None)
+          parser.read(Path.home() / ".databrickscfg", encoding="utf-8")
+          profile = {key: value.strip() for key, value in parser[PROFILE].items()}
+          profile_host = profile.get("host", "").rstrip("/")
+
+          checks["deployer_client_id_set"] = bool(expected)
+          checks["github_oidc_request_env_present"] = all(
+              os.environ.get(name)
+              for name in ("ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+          )
+          checks["no_ambient_auth_override"] = not any(os.environ.get(name) for name in OVERRIDES)
+          checks["profile_holds_only_host_auth_type_client_id"] = set(profile) == {
+              "host",
+              "auth_type",
+              "client_id",
+          }
+          checks["profile_auth_type_is_github_oidc"] = profile.get("auth_type") == "github-oidc"
+          checks["profile_client_id_is_the_deployer"] = same(profile.get("client_id"), expected)
+          checks["profile_host_is_DATABRICKS_HOST"] = same(profile_host, secret_host)
+          checks["profile_host_is_the_pr105_host_target"] = same(profile_host, bundle_host)
+          if not all(checks.values()):
+              report()
+
+          from databricks.sdk import WorkspaceClient
+
+          client = None
+          me = None
+
+
+          def authenticate():
+              global client, me
+              client = WorkspaceClient(profile=PROFILE)
+              me = client.current_user.me()
+              config = client.config
+              return (
+                  config.auth_type == "github-oidc"
+                  and same(config.client_id, expected)
+                  and same(str(config.host or "").rstrip("/"), profile_host)
+              )
+
+
+          probe("sdk_authenticates_with_the_github_oidc_profile", authenticate)
+          if me is not None:
+              probe("me_is_the_deployer", lambda: same(str(me.user_name or ""), expected))
+              probe("me_in_admins", lambda: admins(group.display for group in me.groups or ()))
+              probe(
+                  "metastore_owner_is_the_deployer",
+                  lambda: same(
+                      str(
+                          client.metastores.get(client.metastores.current().metastore_id).owner
+                          or ""
+                      ),
+                      expected,
+                  ),
+              )
+              warehouse_id = os.environ.get("MIP_PROOF_WAREHOUSE_ID", "").strip()
+              probe(
+                  "warehouse_resolves",
+                  lambda: bool(warehouse_id)
+                  and same(str(client.warehouses.get(warehouse_id).id or ""), warehouse_id),
+              )
+              space_id = os.environ.get("MIP_PROOF_GENIE_SPACE_ID", "").strip()
+              probe(
+                  "genie_space_resolves",
+                  lambda: bool(space_id)
+                  and same(str(client.genie.get_space(space_id).space_id or ""), space_id),
+              )
+
+          # The Go CLI resolves the same profile through its own auth path.
+          try:
+              cli = subprocess.run(
+                  ["databricks", "current-user", "me", "--profile", PROFILE, "-o", "json"],
+                  capture_output=True,
+                  text=True,
+                  check=False,
+                  timeout=300,
+              )
+              cli_exit, cli_stdout = cli.returncode, cli.stdout
+          except (OSError, subprocess.SubprocessError) as exc:
+              cli_exit, cli_stdout = None, ""
+              notes["cli_authenticates"] = type(exc).__name__
+          checks["cli_authenticates"] = cli_exit == 0
+          if cli_exit not in (0, None):
+              notes["cli_authenticates"] = f"exit {cli_exit}"
+          try:
+              cli_me = json.loads(cli_stdout) if cli_exit == 0 else {}
+          except ValueError:
+              cli_me = {}
+          if not isinstance(cli_me, dict):
+              cli_me = {}
+          probe("cli_me_is_the_deployer", lambda: same(str(cli_me.get("userName") or ""), expected))
+          probe(
+              "cli_me_in_admins",
+              lambda: admins(group.get("display") for group in cli_me.get("groups") or ()),
+          )
+          report()
+          print("GitHub OIDC deployer identity proven.")
+          PY
       - name: Repair normal operator OAuth credential
         if: ${{ inputs.repair_normal_credential }}
         env:
-          DATABRICKS_AUTH_TYPE: pat
+          # The deployer authenticates through the DEFAULT github-oidc profile.
+          # The normal identity's client id rides under its own name: an env
+          # DATABRICKS_CLIENT_ID would override the profile's client_id and
+          # aim the token exchange at the normal service principal.
+          # DATABRICKS_HOST stays for the isolation gate; it equals the
+          # profile's host, which the proof step above checked.
+          DATABRICKS_CONFIG_PROFILE: DEFAULT
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          MIP_NORMAL_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           GH_TOKEN: ${{ secrets.MIP_GITHUB_CREDENTIAL_SINK_TOKEN }}
           MIP_AI_GATEWAY_PROOF_SIGNING_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}
           MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY }}
@@ -280,7 +485,7 @@ jobs:
           # staging App (tools/databricks/ci_install_isolation.py).
           python -m tools.databricks.ci_install_isolation repair-credential
           missing=""
-          for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_CLIENT_ID \
+          for v in DATABRICKS_HOST MIP_NORMAL_CLIENT_ID \
                    GH_TOKEN MIP_AI_GATEWAY_PROOF_SIGNING_KEY MIP_APP_NAME \
                    MIP_DEPLOYMENT_SOURCE_GIT_SHA MIP_M2M_GITHUB_REPOSITORY; do
             if [ -z "${!v}" ]; then
@@ -311,7 +516,7 @@ jobs:
           export MIP_AI_GATEWAY_PROOF_VERIFY_KEY
           python -m tools.databricks.provision_m2m_oauth \
             --identity-role normal \
-            --expected-application-id "$DATABRICKS_CLIENT_ID" \
+            --expected-application-id "$MIP_NORMAL_CLIENT_ID" \
             --app-name "$MIP_APP_NAME" \
             --no-grant-can-use \
             --gh-repo "$GITHUB_REPOSITORY" \
@@ -320,9 +525,19 @@ jobs:
       - name: Deploy dev Databricks App
         if: ${{ !inputs.repair_normal_credential }}
         env:
-          DATABRICKS_AUTH_TYPE: pat
+          # The deployer is the DEFAULT github-oidc profile: scripts/deploy.sh's
+          # workspace-auth bind checks its host against the pr105-host target,
+          # exports it as the deployer profile and unsets DATABRICKS_HOST. The
+          # App client pairs below are un-exported before deploy.sh's first
+          # child, so none overrides the profile's client_id.
+          DATABRICKS_CONFIG_PROFILE: DEFAULT
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          # The deploy's 300-second identity-probe secrets are minted, listed
+          # and deleted through the deployer's workspace
+          # service_principal_secrets_proxy: account-plane probe secrets never
+          # became visible to the runner's inventory (docs/deployment.md, owner
+          # step 9). Unset, the tools keep the account plane.
+          MIP_TEMP_CREDENTIAL_PLANE: workspace
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
           DATABRICKS_OPERATOR2_CLIENT_ID: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_ID }}

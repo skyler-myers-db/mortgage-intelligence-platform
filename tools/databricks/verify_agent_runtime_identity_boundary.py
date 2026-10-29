@@ -17,6 +17,7 @@ from tools.databricks.authenticated_app_denial import (
 )
 from tools.databricks.authorization_denial import is_authorization_denied
 from tools.databricks.m2m_workspace_auth import bind_exact_workspace_m2m_auth
+from tools.databricks.workspace_auth import deployment_workspace_client
 
 
 def _is_denied(value: object) -> bool:
@@ -138,7 +139,9 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError(
             "agent-runtime CLI requires the dual-authority App attestation mode"
         )
-    admin_workspace = WorkspaceClient()
+    # Build the deployer admin client before the exact-M2M bind scrubs every
+    # *TOKEN* variable: a github-oidc deployer snapshots its Actions request here.
+    admin_workspace = deployment_workspace_client(factory=WorkspaceClient)
     bind_exact_workspace_m2m_auth(
         admin_workspace=admin_workspace,
         expected_application_id=args.expected_application_id,

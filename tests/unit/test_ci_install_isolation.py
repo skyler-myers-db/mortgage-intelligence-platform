@@ -852,6 +852,64 @@ def test_the_workflow_readme_and_fork_steps_match_the_ci_only_workflows() -> Non
     assert "&default_host" in configure and "ci_staging_host" not in configure, "the fork helper rebinds one anchor"
 
 
+_OIDC_PROOF_STEP = "Prove the GitHub OIDC deployer identity"
+_APPLICATION_ID = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+
+
+def test_the_owner_steps_set_up_the_github_oidc_deployer_without_a_stored_credential() -> None:
+    """The deployer PAT is retired: a federated service principal replaces it, named by placeholders only.
+
+    Owner step 3 creates and authorizes the deployer, step 4 re-mints the
+    account-SCIM credential, step 7 keeps the proof-key registry verifiable,
+    and step 9 hands the staging objects to the deployer and moves the probe
+    secrets to the workspace plane. The doc names the workflow's own step,
+    and no application or account id is written down.
+    """
+
+    section = _doc_section(BOOTSTRAP_HEADING)
+    owner = section.split("**Owner steps", 1)[1].split("**Integrator steps", 1)[0]
+    host = yaml.safe_load(BUNDLE.read_text(encoding="utf-8"))["targets"][CI_TARGET]["workspace"]["host"]
+    step3, step4, step7, step9 = (_flat(_numbered_item(owner, number)) for number in (3, 4, 7, 9))
+
+    for anchor in (
+        "**The CI deployer service principal and its authority.**",
+        "`deploy-dev.yml` reads no `DATABRICKS_TOKEN`",
+        "Never create an OAuth secret or a token for it",
+        "with the `ADMIN` permission, so `admins` is in its `/Me` groups",
+        "never to the live workspace (`2543889327043640`)",
+        "Issuer: `https://token.actions.githubusercontent.com`",
+        "Subject: `repo:<owner>/<repo>:environment:dev`",
+        "Never widen it to a branch, a ref or `repo:<owner>/<repo>:*`",
+        f"`{host}/oidc/v1/token`",
+        "the account id `<account-id>`",
+        "`MIP_CI_DEPLOYER_CLIENT_ID` to `<deployer-application-id>`",
+        "Grant `CREATE_CATALOG` on the metastore",
+        "Grant `USE_CATALOG`, `USE_SCHEMA` and `SELECT` on the share catalog `cotality_mortgage_data`",
+        "transfer the metastore's ownership to `<deployer-application-id>`",
+        "delete the dead `dev` environment secret `DATABRICKS_TOKEN`",
+    ):
+        assert anchor in step3, anchor
+    assert step3.index("Grant `CREATE_CATALOG`") < step3.index("Last, transfer the metastore's ownership"), "grants first"
+    assert "gh secret set DATABRICKS_ACCOUNT_CLIENT_SECRET" in step4 and "agents never handle the value" in step4
+    assert "the account plane stays on `DATABRICKS_ACCOUNT_*`" in step4
+    assert "`MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS`" in step7 and "It must end at the current key" in step7
+    assert "`MIP_TEMP_CREDENTIAL_PLANE=workspace`" in step9
+    assert "Never widen `MIP_UC_APPROVED_OWNER_PRINCIPALS` instead; a missed object must fail closed." in step9
+    assert "This is expected, not yet proven" in step9, "the workspace plane is not claimed as a proven fix"
+
+    steps = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))["jobs"]["deploy"]["steps"]
+    assert _OIDC_PROOF_STEP in [step.get("name") for step in steps]
+    assert f'"{_OIDC_PROOF_STEP}" runs next, read-only' in _flat(section)
+    assert "`run_as` the deploying service principal" in _flat(section)
+    assert not _APPLICATION_ID.search(section), "placeholders only, never an application or account id"
+
+    readme = WORKFLOWS_README.read_text(encoding="utf-8")
+    deployer = _readme_row(readme, "MIP_CI_DEPLOYER_CLIENT_ID")
+    assert "`repo:<owner>/<repo>:environment:dev`" in deployer and "no OAuth secret and no PAT" in deployer
+    assert "`deploy-dev.yml` no longer reads it" in _readme_row(readme, "DATABRICKS_TOKEN")
+    assert not _APPLICATION_ID.search(readme)
+
+
 GRANTS_DOC = ROOT / "docs" / "security" / "GRANTS.md"
 RUNBOOK = ROOT / "docs" / "runbook.md"
 
