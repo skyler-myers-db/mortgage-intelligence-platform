@@ -5739,6 +5739,30 @@ _NETWORK_PROOF_REFUSALS = {
         {"spec": {"config": {"auth_type": "pat", "client_id": _DEPLOYER, "host": "__HOST__"}}},
         "sdk_authenticates_with_the_github_oidc_profile",
     ),
+    "sdk-client-id-drift": (
+        {
+            "spec": {
+                "config": {
+                    "auth_type": "github-oidc",
+                    "client_id": "another-service-principal",
+                    "host": "__HOST__",
+                }
+            }
+        },
+        "sdk_authenticates_with_the_github_oidc_profile",
+    ),
+    "sdk-host-drift": (
+        {
+            "spec": {
+                "config": {
+                    "auth_type": "github-oidc",
+                    "client_id": _DEPLOYER,
+                    "host": "https://another-workspace.example.invalid",
+                }
+            }
+        },
+        "sdk_authenticates_with_the_github_oidc_profile",
+    ),
     "sdk-exchange-refused": ({"spec": {"construct_error": True}}, "sdk_authenticates_with_the_github_oidc_profile"),
     "cli-refused": (
         {"env": {"FAKE_CLI_EXIT": "1"}},
@@ -5766,7 +5790,15 @@ def test_oidc_proof_step_refuses_the_wrong_identity_or_authority(tmp_path: Path,
     assert "::error::GitHub OIDC deployer identity proof failed" in result.stdout
     assert "GitHub OIDC deployer identity proven." not in result.stdout
     assert set(calls) <= set(_READ_ONLY_PROOF_CALLS), "read-only calls only"
-    for message in ("token exchange refused", "no such", "cli refused", "someone-else", "an-owner@example.invalid"):
+    for message in (
+        "token exchange refused",
+        "no such",
+        "cli refused",
+        "someone-else",
+        "an-owner@example.invalid",
+        "another-service-principal",
+        "another-workspace.example.invalid",
+    ):
         assert message not in result.stdout + result.stderr, "never an exception message or a value"
 
 
