@@ -1853,10 +1853,14 @@ system table holds lineage for every table on a metastore other teams share,
 and App SQL reads gold, ref and audit only. So the view
 (`sql/ddl/audit_asset_lineage_view.sql`) exposes four columns
 (`source_table_full_name`, `target_table_full_name`, `event_time`,
-`event_date`) and only edges whose source or target is in the install
-catalog. The App's query keeps its 90-day `event_date` window. Unity Catalog
-evaluates a view with its owner's privileges, so the App receives `SELECT` on
-this one view and no privilege on the `system` catalog.
+`event_date`) and only edges whose target is in the install catalog and whose
+source is in the install catalog or the Cotality share catalog, the two
+catalogs the App's asset registry renders. An edge from a product table into
+another team's catalog, or from another catalog into this one, would carry a
+table name the App never shows, so the view does not expose it. The App's
+query keeps its 90-day `event_date` window. Unity Catalog evaluates a view
+with its owner's privileges, so the App receives `SELECT` on this one view and
+no privilege on the `system` catalog.
 
 Deploy step 4c publishes it after the base UC grants
 (`tools/databricks/ensure_asset_lineage_view.py`, run as the deploying
@@ -1866,7 +1870,7 @@ identity, between the `observed lineage view: publish` markers in
 1. Probe `system.access.table_lineage` with a zero-row `SELECT`.
 2. `CREATE OR REPLACE VIEW` from the file rendered for `MIP_DEFAULT_CATALOG`
    (`tools/render_sql.py` rewrites the view name and the two
-   `*_catalog = '<catalog>'` literals).
+   `*_catalog = '<catalog>'` literals; the share catalog literal is fixed).
 3. Check with `DESCRIBE TABLE` that the view exposes exactly those four
    columns.
 4. `GRANT SELECT ON TABLE <catalog>.audit.asset_lineage` to the App service

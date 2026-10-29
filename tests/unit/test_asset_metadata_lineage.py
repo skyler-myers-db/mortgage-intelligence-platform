@@ -27,6 +27,8 @@ EDGE_ROWS = [
         "event_count": 3,
     },
     {
+        # The view never returns an edge into another catalog; the service
+        # still drops any related node outside the asset registry.
         "source_table_full_name": "{catalog}.gold.lead_population",
         "target_table_full_name": "other_team.reports.weekly",
         "event_time": "2026-10-26 08:00:00",

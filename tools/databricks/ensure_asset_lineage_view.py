@@ -2,11 +2,12 @@
 """Publish the App's least-privilege observed-lineage view (optional evidence).
 
 ``<catalog>.audit.asset_lineage`` (``sql/ddl/audit_asset_lineage_view.sql``)
-projects four columns of ``system.access.table_lineage`` for the edges that
-touch the install catalog. Unity Catalog evaluates a view with its owner's
-privileges on what it reads, so the deploying identity that creates the view
-must be able to read the system table; the App then needs ``SELECT`` on the
-view only, never a grant on the metastore-wide system schema.
+projects four columns of ``system.access.table_lineage`` for the edges into
+the install catalog from the install or the Cotality share catalog. Unity
+Catalog evaluates a view with its owner's privileges on what it reads, so the
+deploying identity that creates the view must be able to read the system
+table; the App then needs ``SELECT`` on the view only, never a grant on the
+metastore-wide system schema.
 
 Exit status (``scripts/deploy.sh`` maps it, between the
 ``observed lineage view: publish`` markers):
@@ -144,7 +145,7 @@ def ensure_asset_lineage_view(run: StatementRunner, *, catalog: str) -> Outcome:
             f"{view_name(catalog)} exposes {list(columns)}, expected exactly {list(VIEW_COLUMNS)}"
         )
     print(
-        f"  published: {view_name(catalog)} ({len(columns)} columns, edges touching "
+        f"  published: {view_name(catalog)} ({len(columns)} columns, edges into "
         f"catalog {catalog}), evaluated with its owner's {SYSTEM_TABLE} access"
     )
     return "published"

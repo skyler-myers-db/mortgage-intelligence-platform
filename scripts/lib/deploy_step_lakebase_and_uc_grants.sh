@@ -245,8 +245,9 @@ fi
 
 # >>> observed lineage view: publish >>>
 # The asset-detail lineage section reads <catalog>.audit.asset_lineage, a
-# four-column view over system.access.table_lineage limited to edges touching
-# this catalog (sql/ddl/audit_asset_lineage_view.sql). Unity Catalog evaluates
+# four-column view over system.access.table_lineage limited to edges into this
+# catalog from this catalog or the Cotality share catalog
+# (sql/ddl/audit_asset_lineage_view.sql). Unity Catalog evaluates
 # it with its OWNER's system-table access, so the App gets SELECT on this one
 # view and never a grant on the metastore-wide system schema. Lineage is an
 # optional evidence source: a deployer that cannot read the system table (exit

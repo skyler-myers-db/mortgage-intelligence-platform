@@ -427,9 +427,10 @@ class AssetMetadataService:
         """Observed lineage from the deploy-managed ``audit.asset_lineage`` view.
 
         The view (sql/ddl/audit_asset_lineage_view.sql) projects
-        ``system.access.table_lineage`` to this catalog's edges and runs with
-        its owner's privileges, so the App reads it with SELECT on the view
-        alone. Any failure, an unpublished view included, is an explicit gap.
+        ``system.access.table_lineage`` to edges into this catalog from this
+        catalog or the Cotality share, and runs with its owner's privileges,
+        so the App reads it with SELECT on the view alone. Any failure, an
+        unpublished view included, is an explicit gap.
         """
         if descriptor.object_type == "function":
             return []

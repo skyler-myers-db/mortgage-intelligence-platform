@@ -328,9 +328,11 @@ live staging drill before claiming this boundary is deployable.
 from `system.access.table_lineage`. That system table holds lineage for every
 table on a metastore other teams share. The view exposes four columns
 (source and target full names, `event_time`, `event_date`) and keeps only
-edges whose source or target is in the install catalog. Unity Catalog
-evaluates a view with its owner's privileges, so the App needs `SELECT` on
-this one view and no privilege anywhere in the `system` catalog. The view's
+edges whose target is in the install catalog and whose source is in the
+install catalog or the Cotality share catalog, so the App cannot read the
+name of a table in any other catalog through it. Unity Catalog evaluates a
+view with its owner's privileges, so the App needs `SELECT` on this one view
+and no privilege anywhere in the `system` catalog. The view's
 owner, the deploying identity that creates it, needs `USE CATALOG` on
 `system`, `USE SCHEMA` on `system.access` and `SELECT` on
 `system.access.table_lineage`. When it lacks them, deploy step 4c warns,
@@ -1523,8 +1525,11 @@ assumption in your runbook.
   prefix described in §4, not every audit object that may later land in the schema.
 - **Any privilege on `system.access`** (`USE SCHEMA`, or `SELECT` on
   `system.access.table_lineage`). That table holds lineage for every table on
-  the metastore. The app reads the four-column, install-catalog
-  `mip.audit.asset_lineage` view, which runs with its owner's access (§4).
+  the metastore. The app reads the four-column `mip.audit.asset_lineage` view
+  of edges into the install catalog from the install or Cotality share
+  catalog, which runs with its owner's access (§4). A leaked app credential
+  therefore lists no other team's table names, however long the system
+  table retains lineage.
 - **`CAN_MANAGE`** on the app resource. That belongs to the Entrada
   delivery team's admin group, not the app identity itself.
 - **Direct Postgres `SUPERUSER` or database `CREATE`** on the Lakebase role.
