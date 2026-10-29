@@ -1609,6 +1609,45 @@ restore, prior app snapshots, source-regression rollback via
 and governed-action HMAC key rotation, use
 [`docs/disaster-recovery.md`](disaster-recovery.md).
 
+### PII salt (write-once)
+
+The silver SQL and the Lakeflow feature pipeline hash PII with
+`secret('mip', 'pii-salt-v1')`. Every masked join key in an install derives
+from that value, so the salt is written once and never replaced. The Secrets
+API overwrites on put and has no create-only form, so step 4d provisions the
+salt with `tools/databricks/pii_salt_scope.py ensure`, which writes only after
+a listing it can trust:
+
+- It lists the secret scopes and, when the scope exists, its keys. Any list
+  error (a permission error, a timeout, a lost page, a scope that vanished
+  between the two calls) or a malformed listing refuses with exit 2 before
+  any create or put. A failed listing is never read as "absent". The inline
+  step it replaced did read it that way, so a failed `list-secrets` would
+  have put a fresh salt over the live one.
+- It creates the scope only when the scope listing lacks it, and then lists
+  again. It puts a fresh random value (32 bytes, hex) only when a listing
+  lacks the key, and then requires the key to be listed. An existing key is
+  never written and its value is never read.
+- Exit 1 means a put was attempted and its result could not be proven.
+  Re-run the deploy; it lists again before any further write.
+
+Right after the pre-stop probes below, before the signed lease and step 0a,
+`deploy.sh` runs the same inventory read-only (`check`), so a listing the
+deployer cannot complete refuses while the App still serves. Both modes name
+scopes and keys only, never the value or the host.
+
+`MIP_PII_SALT_SCOPE` (shell, then `.env.local`; default `mip`) names the
+scope. The readers take the scope as a literal, so preflight refuses any other
+value until they read the control. `--require-existing 1` refuses an absent
+scope or key instead of creating it; `deploy.sh` passes `0`, so a first
+install still creates the salt, until the install profile records that masked
+keys already exist. To check by hand, pin the install's identity:
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<install profile> \
+  python -m tools.databricks.pii_salt_scope check --scope mip --require-existing 1
+```
+
 ### Pre-stop probes (read-only, before step 0a)
 
 Step 0a stops the existing App, and on the unsigned rebase path also
