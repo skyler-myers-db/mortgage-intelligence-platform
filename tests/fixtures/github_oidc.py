@@ -54,8 +54,11 @@ class FakeOidcHttp:
     exchange_payload: object | None = None
     gets: list[dict[str, Any]] = field(default_factory=list)
     posts: list[dict[str, Any]] = field(default_factory=list)
+    # The ``auth`` each call carried, in call order (``None`` when absent).
+    auths: list[tuple[str, object]] = field(default_factory=list)
 
     def get(self, url: str, **kwargs: Any) -> FakeResponse:
+        self.auths.append(("get", kwargs.get("auth")))
         self.gets.append(
             {
                 "url": url,
@@ -67,6 +70,7 @@ class FakeOidcHttp:
         return FakeResponse(self.github_status, {"value": f"github-id-token-{len(self.gets)}"})
 
     def post(self, url: str, **kwargs: Any) -> FakeResponse:
+        self.auths.append(("post", kwargs.get("auth")))
         self.posts.append({"url": url, **dict(kwargs["data"]), "timeout": kwargs["timeout"]})
         payload = self.exchange_payload
         if payload is None:

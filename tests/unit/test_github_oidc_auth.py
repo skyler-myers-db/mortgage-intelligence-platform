@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from databricks.sdk.oauth import IgnoreNetrcAuth
 
 from tests.fixtures.github_oidc import (
     DEPLOYER_CLIENT_ID,
@@ -193,15 +194,34 @@ def test_missing_actions_request_at_construction_fails_closed(
     assert deployer.http.gets == [] and deployer.http.posts == []
 
 
-def test_non_https_actions_request_url_fails_closed() -> None:
+@pytest.mark.parametrize(
+    "request_url",
+    [
+        "http://actions.example.invalid/x?y=1",
+        "https://user:pass@actions.example.invalid/x?y=1",
+        "https://user@actions.example.invalid/x?y=1",
+        "https://:pass@actions.example.invalid/x?y=1",
+    ],
+)
+def test_non_https_or_userinfo_actions_request_url_fails_closed(request_url: str) -> None:
     with pytest.raises(RuntimeError, match="not an HTTPS URL"):
         CachedGitHubOidcCredentials(
             environ={
-                github_oidc_auth.REQUEST_URL_ENV: "http://actions.example.invalid/x?y=1",
+                github_oidc_auth.REQUEST_URL_ENV: request_url,
                 github_oidc_auth.REQUEST_TOKEN_ENV: REQUEST_TOKEN,
             },
             http=FakeOidcHttp(),
         )
+
+
+def test_userinfo_token_endpoint_fails_closed_before_any_exchange() -> None:
+    http = FakeOidcHttp()
+    endpoints = SimpleNamespace(token_endpoint="https://user@oidc-unit.example.invalid/token")
+
+    with pytest.raises(RuntimeError, match="not an HTTPS URL"):
+        _strategy(http)(_cfg(databricks_oidc_endpoints=endpoints))
+
+    assert http.gets == [] and http.posts == []
 
 
 def test_unbound_ambient_github_oidc_profile_also_gets_the_cached_strategy(
@@ -459,3 +479,47 @@ def test_a_slow_failed_refresh_is_judged_by_the_clock_after_it_returns() -> None
     clock.advance(3600 - 30 - 1)
     with pytest.raises(RuntimeError, match=r"HTTP 504"):
         provider()
+
+
+@pytest.mark.parametrize("token_audience", [None, "", "  "])
+def test_unset_token_audience_requests_the_github_token_for_the_token_endpoint(
+    token_audience: str | None,
+) -> None:
+    http = FakeOidcHttp()
+
+    _strategy(http)(_cfg(token_audience=token_audience))()
+
+    assert [call["params"] for call in http.gets] == [{"audience": TOKEN_ENDPOINT}]
+
+
+def test_both_oidc_calls_ignore_a_runner_netrc() -> None:
+    http = FakeOidcHttp()
+
+    _strategy(http)(_cfg())()
+
+    assert [call for call, _auth in http.auths] == ["get", "post"]
+    assert all(isinstance(auth, IgnoreNetrcAuth) for _call, auth in http.auths)
+
+
+def test_each_exchange_target_keeps_its_own_cached_token() -> None:
+    http = FakeOidcHttp()
+    strategy = _strategy(http)
+    deployer = strategy(_cfg())
+    other_client = strategy(_cfg(client_id="00000000-0000-4000-8000-0000000000b2"))
+    other_audience = strategy(_cfg(token_audience="other-audience"))
+
+    assert deployer() == {"Authorization": "Bearer databricks-token-1"}
+    assert other_client() == {"Authorization": "Bearer databricks-token-2"}
+    assert other_audience() == {"Authorization": "Bearer databricks-token-3"}
+    assert deployer() == {"Authorization": "Bearer databricks-token-1"}
+    assert other_client() == {"Authorization": "Bearer databricks-token-2"}
+    assert [post["client_id"] for post in http.posts] == [
+        DEPLOYER_CLIENT_ID,
+        "00000000-0000-4000-8000-0000000000b2",
+        DEPLOYER_CLIENT_ID,
+    ]
+    assert [call["params"]["audience"] for call in http.gets] == [
+        TOKEN_ENDPOINT,
+        TOKEN_ENDPOINT,
+        "other-audience",
+    ]
