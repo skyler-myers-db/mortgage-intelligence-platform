@@ -28,6 +28,7 @@ from tests.fixtures.deploy_script import (
     deploy_entrypoint_text,
 )
 from tools.databricks import ci_install_isolation as ci_isolation
+from tools.databricks import github_oidc_auth, temporary_credential_plane, workspace_auth
 from tools.databricks import lakebase_oauth_role_bootstrap_admission as admission
 from tools.databricks import lakebase_oauth_role_bootstrap_orchestration as orchestration
 
@@ -420,6 +421,16 @@ def _read_env_log(path: Path) -> dict[str, str]:
     )
 
 
+def _deploy_step_env() -> dict[str, str]:
+    """The parsed env block of deploy-dev.yml's "Deploy dev Databricks App" step."""
+
+    workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
+    deploy = next(
+        step for step in workflow["jobs"]["deploy"]["steps"] if step.get("name") == "Deploy dev Databricks App"
+    )
+    return {str(name): str(value) for name, value in deploy["env"].items()}
+
+
 def _run_deploy_auth_harness(tmp_path: Path, *, mode: str) -> dict[str, Any]:
     repo = tmp_path / mode
     tools_dir = repo / "tools"
@@ -554,11 +565,14 @@ MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING=1 run_as_m2m_identity \
     if mode == "github-oidc":
         # deploy-dev.yml's Deploy step: the DEFAULT profile, the step's own
         # host, the App's client pair exported, the runner's OIDC request
-        # variables, and no PAT.
+        # variables, and no PAT. The profile and probe-plane literals are read
+        # from the workflow itself, so the harness cannot drift from it.
+        step_env = _deploy_step_env()
         run_env = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": str(home),
-            "DATABRICKS_CONFIG_PROFILE": "DEFAULT",
+            "DATABRICKS_CONFIG_PROFILE": step_env["DATABRICKS_CONFIG_PROFILE"],
+            "MIP_TEMP_CREDENTIAL_PLANE": step_env["MIP_TEMP_CREDENTIAL_PLANE"],
             "DATABRICKS_HOST": reviewed_host,
             "DATABRICKS_CLIENT_ID": "normal-app-client",
             "DATABRICKS_CLIENT_SECRET": "normal-app-secret",
@@ -1996,6 +2010,8 @@ def test_deploy_auth_handoff_is_single_workspace_and_child_isolated(
         # variables, which the github-oidc profile exchanges on each refresh.
         assert deploy["ACTIONS_ID_TOKEN_REQUEST_URL"] == "https://token.actions.example/request"
         assert deploy["ACTIONS_ID_TOKEN_REQUEST_TOKEN"] == "github-request-token"
+        # The probe-secret plane survives the bind into the deployer's children.
+        assert deploy["MIP_TEMP_CREDENTIAL_PLANE"] == "workspace"
     # A reduced M2M identity never inherits the deployer's OIDC request token.
     for reduced in (logs["m2m"], logs["runtime"], logs["runtime_authorized"]):
         assert not [name for name in reduced if name.startswith("ACTIONS_ID_TOKEN_REQUEST")]
@@ -2062,6 +2078,49 @@ def test_deploy_auth_handoff_is_single_workspace_and_child_isolated(
     assert runtime_authorized["MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING"] == "1"
     assert runtime_authorized["MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY"] == "model-signing-secret"
     assert "MIP_AI_GATEWAY_PROOF_SIGNING_KEY" not in runtime_authorized
+
+
+def _record_deployer_client(monkeypatch: pytest.MonkeyPatch, environ: dict[str, str]) -> dict[str, Any]:
+    """Build the governed deployer client under exactly ``environ``; return its kwargs."""
+
+    for name in list(os.environ):
+        monkeypatch.delenv(name)
+    for name, value in environ.items():
+        monkeypatch.setenv(name, value)
+    built: list[dict[str, Any]] = []
+
+    def factory(**kwargs: Any) -> Any:
+        built.append(kwargs)
+        return object()
+
+    workspace_auth.deployment_workspace_client(factory=factory)
+    assert len(built) == 1
+    return built[0]
+
+
+def test_deploy_step_env_reaches_the_cached_github_oidc_deployer_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The workflow half and the tools half agree end to end.
+
+    deploy-dev.yml's Deploy step env, after scripts/deploy.sh's
+    bind_deployment_workspace_auth, is the env every deployer child reads:
+    deployment_workspace_client must build the cached github-oidc client from
+    the profile's own host and client_id (never the App's exported client id),
+    and the temporary-credential plane must resolve to the workspace plane.
+    """
+
+    child = _run_deploy_auth_harness(tmp_path, mode="github-oidc")["deploy"]
+
+    kwargs = _record_deployer_client(monkeypatch, child)
+
+    assert sorted(kwargs) == ["auth_type", "client_id", "credentials_strategy", "host", "profile"]
+    assert kwargs["profile"] == "DEFAULT"
+    assert kwargs["host"] == "https://reviewed-workspace.example"
+    assert kwargs["client_id"] == "ci-deployer-application-id"
+    assert kwargs["auth_type"] == github_oidc_auth.AUTH_TYPE
+    assert isinstance(kwargs["credentials_strategy"], github_oidc_auth.CachedGitHubOidcCredentials)
+    assert temporary_credential_plane.temporary_credential_plane() == temporary_credential_plane.WORKSPACE_PLANE
 
 
 def test_deploy_refuses_mixed_ambient_pat_and_dotenv_host_before_network(
@@ -5353,6 +5412,36 @@ def test_configure_step_writes_the_oidc_profile_for_a_distinct_deployer(tmp_path
         assert secret not in result.stdout + result.stderr
 
 
+def test_configure_step_profile_is_the_one_the_cached_deployer_client_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The profile the Configure step writes is exactly what the deployer tooling consumes.
+
+    The proof step requires the profile to hold only host, auth_type and
+    client_id; the tooling reads it the way the SDK does and must find the same
+    three keys. An exported App client id or host never redirects the exchange.
+    """
+
+    result, profile = _run_configure_step_for_real(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    environ = {
+        "HOME": str(profile.parent),
+        "MIP_DEPLOYER_DATABRICKS_PROFILE": "DEFAULT",
+        "ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.actions.example/request",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "github-request-token",
+        "DATABRICKS_CLIENT_ID": "operator-a",
+        "DATABRICKS_HOST": "https://ambient-wrong.example",
+    }
+
+    kwargs = _record_deployer_client(monkeypatch, environ)
+
+    assert set(github_oidc_auth.profile_section("DEFAULT")) == {"host", "auth_type", "client_id"}
+    assert kwargs["host"] == _CONFIGURE_STEP_INPUTS["DATABRICKS_HOST"]
+    assert kwargs["client_id"] == _CONFIGURE_STEP_INPUTS["MIP_CI_DEPLOYER_CLIENT_ID"]
+    assert kwargs["auth_type"] == github_oidc_auth.AUTH_TYPE
+    assert isinstance(kwargs["credentials_strategy"], github_oidc_auth.CachedGitHubOidcCredentials)
+
+
 @pytest.mark.parametrize(
     ("deployer", "message"),
     (
@@ -5736,6 +5825,50 @@ def test_every_deployer_step_keeps_ambient_overrides_off_the_oidc_profile() -> N
     loop = prefix[prefix.index("for _PRIVATE_CREDENTIAL in") : prefix.index("unset _PRIVATE_CREDENTIAL")]
     assert "DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET" in loop
     assert 'export -n "${_PRIVATE_CREDENTIAL?}"' in loop
+
+
+def test_every_oidc_deployer_input_the_tooling_reads_is_wired_by_the_workflow() -> None:
+    """Each input the github-oidc deployer tooling reads has exactly one reviewed source.
+
+    Step literals are named by the tools' own constants and must be values the
+    tools accept. The Actions ID-token request pair comes from the runner only
+    because the deploy job holds id-token: write; no step may set or shadow it,
+    nor redirect the profile file the tooling and the proof step both read.
+    """
+
+    workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
+    deploy_job = workflow["jobs"]["deploy"]
+    step_env = _deploy_step_env()
+
+    plane = step_env[temporary_credential_plane.TEMP_CREDENTIAL_PLANE_ENV]
+    assert temporary_credential_plane.temporary_credential_plane(
+        {temporary_credential_plane.TEMP_CREDENTIAL_PLANE_ENV: plane}
+    ) == temporary_credential_plane.WORKSPACE_PLANE
+    assert step_env["DATABRICKS_CONFIG_PROFILE"] == "DEFAULT"
+    assert deploy_job["permissions"]["id-token"] == "write"
+    runner_only = (github_oidc_auth.REQUEST_URL_ENV, github_oidc_auth.REQUEST_TOKEN_ENV, "DATABRICKS_CONFIG_FILE")
+    for scope in (workflow, deploy_job, *deploy_job["steps"]):
+        assert not set(runner_only) & set(scope.get("env") or {}), scope.get("name", "job or workflow env")
+    # Only the Deploy step mints probe secrets; the credential repair rotates
+    # through the workspace proxy already and never reads the plane.
+    carriers = [
+        step["name"]
+        for step in deploy_job["steps"]
+        if temporary_credential_plane.TEMP_CREDENTIAL_PLANE_ENV in (step.get("env") or {})
+    ]
+    assert carriers == ["Deploy dev Databricks App"]
+
+
+def test_federation_subject_in_the_docs_matches_the_deploy_jobs_environment() -> None:
+    """The deployer's federation policy trusts the dev environment subject: keep the job bound to it."""
+
+    workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
+    environment = workflow["jobs"]["deploy"]["environment"]
+    subject = f"repo:<owner>/<repo>:environment:{environment}"
+
+    assert environment == "dev"
+    assert subject in (REPO / "docs" / "deployment.md").read_text(encoding="utf-8")
+    assert subject in (REPO / ".github" / "workflows" / "README.md").read_text(encoding="utf-8")
 
 
 def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
