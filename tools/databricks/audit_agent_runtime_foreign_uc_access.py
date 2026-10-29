@@ -622,6 +622,7 @@ def audit_foreign_uc_access(
     if target_groups_probe is _DEFAULT_TARGET_GROUPS_PROBE:
         credential_lease = assert_single_writer or held_deployment_credential_assertion(workspace)
         probe_kwargs["assert_single_writer"] = credential_lease
+        probe_kwargs["deployer_workspace"] = workspace
     effective_target_groups = _normalized_target_groups(
         target_groups_probe(
             account,

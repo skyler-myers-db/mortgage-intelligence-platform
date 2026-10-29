@@ -28,6 +28,7 @@ from tools.databricks.oauth_credential_quarantine import (
     CredentialMutationContext,
     CredentialMutationQuarantineError,
 )
+from tools.databricks.temporary_credential_plane import temporary_credential_api
 
 # Bounded settle window for new-credential propagation.
 #
@@ -255,6 +256,7 @@ def target_identity_groups_probe(
     workspace_host: str,
     assert_single_writer: Callable[[], None],
     workspace_factory: Callable[..., WorkspaceClient] = WorkspaceClient,
+    deployer_workspace: Any | None = None,
 ) -> dict[str, str]:
     """Return authoritative effective groups as the target App identity.
 
@@ -263,7 +265,9 @@ def target_identity_groups_probe(
     read that identity's own SCIM ``groups`` collection instead. SCIM defines
     that collection to include direct, nested, and dynamically calculated
     membership, so this proof needs no SQL warehouse authority. Cleanup
-    failure is always fatal.
+    failure is always fatal. ``MIP_TEMP_CREDENTIAL_PLANE=workspace`` mints
+    through ``deployer_workspace`` instead of the account plane
+    (``temporary_credential_plane``).
     """
 
     host = workspace_host.strip()
@@ -275,6 +279,13 @@ def target_identity_groups_probe(
     workspace_principal_id = expected_workspace_scim_id.strip()
     if not workspace_principal_id:
         raise RuntimeError("Workspace service-principal id is required for identity proof")
+    credential_api = temporary_credential_api(
+        account=account,
+        deployer_workspace=deployer_workspace,
+        account_principal_id=principal_id,
+        workspace_principal_id=workspace_principal_id,
+        lifetime=_TEMPORARY_PROBE_SECRET_LIFETIME,
+    )
     credential: ExactOAuthCredential | None = None
     probe_error: BaseException | None = None
     effective_groups: dict[str, str] = {}
@@ -299,7 +310,8 @@ def target_identity_groups_probe(
                 last_error = exc
                 print(
                     f"[identity-probe] credential mint attempt {attempt} of "
-                    f"{_CREDENTIAL_MINT_ATTEMPTS} hit transient account-inventory "
+                    f"{_CREDENTIAL_MINT_ATTEMPTS} hit transient "
+                    f"{credential_api.authority_scope}-inventory "
                     # The full before/after/added/removed inventory sets are
                     # the whole diagnostic; the old 120-char cap cut them off
                     # exactly where they began (2026-08-09 deploy incident).
@@ -314,25 +326,15 @@ def target_identity_groups_probe(
 
     def _create_probe_credential() -> ExactOAuthCredential:
         return create_exact_oauth_credential(
-            principal_id=principal_id,
-            list_credentials=lambda: account.service_principal_secrets.list(
-                principal_id
-            ),
-            create_credential=lambda: account.service_principal_secrets.create(
-                principal_id,
-                lifetime=_TEMPORARY_PROBE_SECRET_LIFETIME,
-            ),
-            delete_credential=lambda credential_id: (
-                account.service_principal_secrets.delete(
-                    principal_id,
-                    credential_id,
-                )
-            ),
+            principal_id=credential_api.principal_id,
+            list_credentials=credential_api.list_credentials,
+            create_credential=credential_api.create_credential,
+            delete_credential=credential_api.delete_credential,
             assert_single_writer=assert_single_writer,
             mutation_context=CredentialMutationContext(
-                authority_scope="account",
+                authority_scope=credential_api.authority_scope,
                 authority_identity=application_id,
-                provider_api="account.service_principal_secrets",
+                provider_api=credential_api.provider_api,
                 operation_mode="temporary_probe",
                 sink_descriptor="temporary:target-identity-membership-probe",
                 credential_lifetime_seconds=300,
@@ -469,16 +471,9 @@ def target_identity_groups_probe(
             try:
                 revoke_exact_oauth_credential(
                     credential,
-                    principal_id=principal_id,
-                    list_credentials=lambda: account.service_principal_secrets.list(
-                        principal_id
-                    ),
-                    delete_credential=lambda credential_id: (
-                        account.service_principal_secrets.delete(
-                            principal_id,
-                            credential_id,
-                        )
-                    ),
+                    principal_id=credential_api.principal_id,
+                    list_credentials=credential_api.list_credentials,
+                    delete_credential=credential_api.delete_credential,
                     assert_single_writer=assert_single_writer,
                     label="temporary target identity",
                 )
@@ -504,6 +499,7 @@ def target_group_membership_probe(
     workspace_host: str,
     assert_single_writer: Callable[[], None],
     workspace_factory: Callable[..., WorkspaceClient] = WorkspaceClient,
+    deployer_workspace: Any | None = None,
 ) -> bool:
     """Evaluate one owner group against the target's authoritative snapshot."""
 
@@ -521,6 +517,7 @@ def target_group_membership_probe(
         workspace_host=workspace_host,
         assert_single_writer=assert_single_writer,
         workspace_factory=workspace_factory,
+        deployer_workspace=deployer_workspace,
     )
     expected_name = _canonical(group_name)
     observed_name = effective_groups.get(group_id)

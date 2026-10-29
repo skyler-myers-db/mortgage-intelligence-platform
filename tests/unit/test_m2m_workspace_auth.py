@@ -1,14 +1,23 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
+from tests.fixtures.github_oidc import (
+    DEPLOYER_CLIENT_ID,
+    actions_keys,
+    install_github_oidc_deployer,
+    restored_environ,
+)
 from tools.databricks.m2m_workspace_auth import (
     bind_exact_workspace_m2m_auth,
     reviewed_databricks_account_origin,
 )
+from tools.databricks.workspace_auth import deployment_workspace_client
 
 
 def _admin_workspace(host: str = "https://workspace.cloud.databricks.com") -> object:
@@ -189,3 +198,44 @@ def test_accepts_canonical_databricks_account_origins(origin: str) -> None:
 def test_rejects_unreviewed_databricks_account_origins(origin: str) -> None:
     with pytest.raises(RuntimeError, match="reviewed Databricks account origin"):
         reviewed_databricks_account_origin(origin, label="account host")
+
+
+def test_github_oidc_deployer_admin_survives_the_exact_m2m_sweep(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    deployer = install_github_oidc_deployer(monkeypatch, tmp_path)
+    monkeypatch.setenv("EXACT_CLIENT_ID", "target-client")
+    monkeypatch.setenv("EXACT_CLIENT_SECRET", "target-secret")
+    with restored_environ():
+        admin = deployment_workspace_client()
+        bind_exact_workspace_m2m_auth(
+            admin_workspace=admin,
+            expected_application_id="target-client",
+            client_id_env="EXACT_CLIENT_ID",
+            client_secret_env="EXACT_CLIENT_SECRET",
+            label="target",
+        )
+        bound_env = dict(os.environ)
+        first = admin.config.authenticate()
+        deployer.clock.advance(3600)
+        refreshed = admin.config.authenticate()
+        post_sweep_builds: list[dict[str, Any]] = []
+
+        def record_build(**kwargs: Any) -> Any:
+            post_sweep_builds.append(kwargs)
+            return SimpleNamespace()
+
+        deployment_workspace_client(factory=record_build)
+
+    # The sweep stays fail-closed: no Actions request survives in the M2M env,
+    # and no new github-oidc deployer can be built from it afterwards.
+    assert actions_keys(bound_env) == []
+    assert bound_env["DATABRICKS_CLIENT_ID"] == "target-client"
+    assert bound_env["DATABRICKS_AUTH_TYPE"] == "oauth-m2m"
+    assert post_sweep_builds == [{}]
+    # The admin client captured before the sweep keeps authenticating and
+    # refreshing as the deployer from its construction-time snapshot.
+    assert first == {"Authorization": "Bearer databricks-token-1"}
+    assert refreshed == {"Authorization": "Bearer databricks-token-2"}
+    assert {post["client_id"] for post in deployer.http.posts} == {DEPLOYER_CLIENT_ID}

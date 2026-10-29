@@ -35,6 +35,7 @@ from tools.databricks.serving_query_group_access import (
     managed_query_group_external_id,
     managed_query_group_name,
 )
+from tools.databricks.temporary_credential_plane import temporary_credential_api
 
 _MAX_INVENTORY = 1000
 _MANAGED_GROUP_NAME_RE = re.compile(
@@ -449,6 +450,8 @@ def probe_target_managed_query_group_administration_boundary(
     its own authoritative ``groups`` projection, and execute a semantically
     idempotent group-administration denial probe under those same credentials. The
     temporary credential must be deleted even when any proof fails.
+    ``MIP_TEMP_CREDENTIAL_PLANE=workspace`` mints through ``admin_workspace``
+    (the deployer) instead of the account plane (``temporary_credential_plane``).
     """
 
     principal_id = account_sp_id.strip()
@@ -471,30 +474,27 @@ def probe_target_managed_query_group_administration_boundary(
         sorted(binding.id for binding in group_bindings)
     ):
         raise RuntimeError("attached managed workspace-group inventory is ambiguous")
+    credential_api = temporary_credential_api(
+        account=account_client,
+        deployer_workspace=admin_workspace,
+        account_principal_id=principal_id,
+        workspace_principal_id=workspace_principal_id,
+        lifetime=_TEMPORARY_ADMINISTRATION_PROBE_SECRET_LIFETIME,
+    )
     credential: ExactOAuthCredential | None = None
     probe_error: BaseException | None = None
     effective_groups: dict[str, str] = {}
     try:
         credential = create_exact_oauth_credential(
-            principal_id=principal_id,
-            list_credentials=lambda: account_client.service_principal_secrets.list(
-                principal_id
-            ),
-            create_credential=lambda: account_client.service_principal_secrets.create(
-                principal_id,
-                lifetime=_TEMPORARY_ADMINISTRATION_PROBE_SECRET_LIFETIME,
-            ),
-            delete_credential=lambda credential_id: (
-                account_client.service_principal_secrets.delete(
-                    principal_id,
-                    credential_id,
-                )
-            ),
+            principal_id=credential_api.principal_id,
+            list_credentials=credential_api.list_credentials,
+            create_credential=credential_api.create_credential,
+            delete_credential=credential_api.delete_credential,
             assert_single_writer=assert_single_writer,
             mutation_context=CredentialMutationContext(
-                authority_scope="account",
+                authority_scope=credential_api.authority_scope,
                 authority_identity=principal,
-                provider_api="account.service_principal_secrets",
+                provider_api=credential_api.provider_api,
                 operation_mode="temporary_probe",
                 sink_descriptor="temporary:managed-group-administration-probe",
                 credential_lifetime_seconds=300,
@@ -560,16 +560,9 @@ def probe_target_managed_query_group_administration_boundary(
             try:
                 revoke_exact_oauth_credential(
                     credential,
-                    principal_id=principal_id,
-                    list_credentials=lambda: (
-                        account_client.service_principal_secrets.list(principal_id)
-                    ),
-                    delete_credential=lambda credential_id: (
-                        account_client.service_principal_secrets.delete(
-                            principal_id,
-                            credential_id,
-                        )
-                    ),
+                    principal_id=credential_api.principal_id,
+                    list_credentials=credential_api.list_credentials,
+                    delete_credential=credential_api.delete_credential,
                     assert_single_writer=assert_single_writer,
                     label="temporary managed-group administration",
                 )
