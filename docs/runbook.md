@@ -97,11 +97,14 @@ belongs to:
   workflow below for the live App. Escalate to the owner:
   any live-App recovery, including a manual restart or payload redeploy, is
   an owner-only decision.
-- **The CI staging install** (the forked-anchor `pr105-host` target,
-  docs/deployment.md, "CI staging install"). Recover it only through the
-  governed deployment workflow below. That workflow keeps the App stopped
-  while it reconciles the exact Lakebase roles, runs the migration and grant
-  postflight, and activates source only after those checks pass:
+- **A CI install.** None exists today: the CI staging install's workspace
+  was deleted on 2026-10-29, and `deploy-dev.yml` is parked until a client
+  environment is selected (M1-PR7; docs/deployment.md, "CI deploy
+  (deploy-dev.yml): parked"), so the dispatch below ends in its `parked`
+  job. Once M1-PR7 lands, recover a CI install only through that governed
+  workflow. It keeps the App stopped while it reconciles the exact Lakebase
+  roles, runs the migration and grant postflight, and activates source only
+  after those checks pass:
 
 ```bash
 BRANCH="$(git branch --show-current)"
@@ -115,8 +118,7 @@ RUN_URL="$(gh workflow run deploy-dev.yml --ref "$BRANCH" \
   -f acknowledge_single_maintainer_break_glass=true \
   -f skip_silver=true \
   -f skip_smoke=false \
-  -f rebase_unverified_app="$REBASE_UNVERIFIED_APP" \
-  -f remediate_foreign_catalog_bindings=false)"
+  -f rebase_unverified_app="$REBASE_UNVERIFIED_APP")"
 # Fail closed unless this gh version returned exactly the created Actions URL.
 if [[ "$RUN_URL" =~ ^https://github\.com/[^/]+/[^/]+/actions/runs/([0-9]+)$ ]]; then
   RUN_ID="${BASH_REMATCH[1]}"
@@ -127,9 +129,8 @@ fi
 gh run watch "$RUN_ID" --exit-status
 ```
 
-The GitHub workflow above is dev-only. Since post-W5 it deploys only the CI
-staging install on the forked-anchor `pr105-host` target in its own workspace,
-so it can never deploy or recover the live dev App.
+The GitHub workflow above is dev-only, and it is never a recovery path for
+the live dev App.
 Do not transpose it to a customer or production workspace: production recovery requires its separately reviewed
 environment contract and change-controlled `scripts/deploy.sh -t prod`
 invocation. A failed pre-capture rebase remains unsigned and therefore requires
