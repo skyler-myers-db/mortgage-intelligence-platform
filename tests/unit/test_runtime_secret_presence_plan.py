@@ -131,12 +131,27 @@ def test_a_provisioned_install_plans_zero_writes_and_reads_no_value(monkeypatch,
 
 def test_a_weak_input_for_an_existing_key_is_unused_and_not_validated(monkeypatch) -> None:
     monkeypatch.setenv(subject.MASK_ENV, "short")
-    monkeypatch.setenv(subject.PREVIOUS_ENV, STRONG_INPUT)  # no _KID: unused, so not required
     api = _Scope(keys=ALL_KEYS)
 
     plan = subject.check_runtime_secrets(client=_client(api))
 
     assert plan.write_keys == () and api.gets == []
+
+
+@pytest.mark.parametrize("stored", ("previous-stored", "previous-absent"))
+def test_a_previous_input_without_its_kid_refuses_before_the_stop(monkeypatch, capsys, stored: str) -> None:
+    """The App payload refuses this pairing whether or not the input seeds a key, and it runs after the stop."""
+    monkeypatch.setenv(subject.PREVIOUS_ENV, STRONG_INPUT)
+    keys = ALL_KEYS if stored == "previous-stored" else tuple(key for key in ALL_KEYS if key != subject.PREVIOUS_KEY)
+    api = _Scope(keys=keys)
+    _cli(monkeypatch, api)
+
+    assert subject.main(["--check"]) == subject.EXIT_REFUSED
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert f"refused on {INSTALL_HOST}: {subject.PREVIOUS_KID_ENV} is required when {subject.PREVIOUS_ENV}" in captured.err
+    assert api.gets == [] and api.puts == []
 
 
 def test_the_cli_check_on_a_provisioned_scope_reports_zero_writes_and_zero_reads(monkeypatch, capsys) -> None:

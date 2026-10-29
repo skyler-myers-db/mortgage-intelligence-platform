@@ -264,9 +264,15 @@ def _listed_keys(workspace: Any, *, scope: str) -> set[str]:
 
 
 def _validated_inputs(values: dict[str, str], previous_kid: str, *, used: set[str]) -> None:
-    """Validate only the inputs this run writes; an input for an existing key is unused."""
+    """Validate the inputs this run writes; an input for an existing key is otherwise unused.
 
-    if PREVIOUS_ENV in used and not previous_kid:
+    The previous key's KID pairing is the exception: the App payload refuses a
+    ``MIP_GENIE_ACTION_SECRET_PREVIOUS`` without its ``_KID`` whether or not it
+    seeds a key, and the payload is built after the App stop, so this pre-stop
+    plan refuses it first (tests/unit/test_previous_key_binding_parity.py).
+    """
+
+    if values[PREVIOUS_ENV] and not previous_kid:
         raise ValueError(
             f"{PREVIOUS_KID_ENV} is required when {PREVIOUS_ENV} is retained "
             "during a rotation grace period"
