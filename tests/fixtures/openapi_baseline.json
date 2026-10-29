@@ -1881,7 +1881,7 @@
             "title": "Object Type"
           },
           "source": {
-            "default": "system.access.table_lineage",
+            "default": "audit.asset_lineage (view over system.access.table_lineage)",
             "title": "Source",
             "type": "string"
           }

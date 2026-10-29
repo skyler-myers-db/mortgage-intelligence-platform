@@ -1550,7 +1550,7 @@ class _FakeAssetSqlClient:
                 {"key": "quality", "value": "gold"},
                 {"key": "path", "value": "dbfs:/secret"},
             ]
-        if "SYSTEM.ACCESS.TABLE_LINEAGE" in s:
+        if "AUDIT.ASSET_LINEAGE" in s:
             return [
                 {
                     "source_table_full_name": "mip.gold.borrower_360",
