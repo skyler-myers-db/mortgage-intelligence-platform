@@ -627,10 +627,11 @@ That run is GO only when all of these hold:
 - a smoke script whose geo-drill probe checks the shipped state → ZIP drill,
   not the retired county grain (`scripts/smoke_live.sh` does since the
   post-W5 live geo gate);
-- a configured `MIP_COTALITY_ID_MASK_SECRET` equal to the stored
-  `cotality-id-mask-v1` (step 0 refuses a mismatch before the App stop), the
-  owner's read of the report-only `genie-action-current` note, and the
-  `SALESFORCE_*` values supplied or the connector accepted as disabled: an
+- a runtime secret plan that keeps the stored `cotality-id-mask-v1`,
+  `genie-action-current` and `genie-action-previous` unread (step 0 prints it
+  before the App stop; an install that is already provisioned passes
+  `provision_runtime_secrets.py --check --require-existing` with zero writes),
+  and the `SALESFORCE_*` values supplied or the connector accepted as disabled: an
   unset or placeholder input keeps the stored `salesforce-*` key but leaves it
   unbound (`docs/deployment.md`, the `provision_runtime_secrets.py` notes);
 - a deploy interpreter whose packages equal the `requirements.txt` pins: the

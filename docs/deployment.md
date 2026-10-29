@@ -736,13 +736,12 @@ LAKEBASE_DATABASE="mip_app_state"
 MIP_GENIE_SPACE_NAME="Acme Mortgage Lead Intelligence"
 MIP_RUNTIME_SECRET_SCOPE="acme-mip-runtime"
 MIP_APP_ROLLBACK_SECRET_SCOPE="acme-mip-app-rollback"
-# Required for every deployed runtime, including the dev sandbox.
-MIP_COTALITY_ID_MASK_SECRET="<deployment-scoped-random-secret>"
-MIP_GENIE_ACTION_SECRET_CURRENT="<deployment-scoped-random-secret>"
+# The runtime HMAC keys need no input: a first install generates them in
+# MIP_RUNTIME_SECRET_SCOPE, and every later deploy keeps them unread. Set one
+# only to seed an absent key with a value the install already uses.
+# MIP_COTALITY_ID_MASK_SECRET="<deployment-scoped-random-secret>"
+# MIP_GENIE_ACTION_SECRET_CURRENT="<deployment-scoped-random-secret>"
 MIP_GENIE_ACTION_SECRET_KID="v2"
-# Set both previous-key values only for a bounded rotation grace period.
-# MIP_GENIE_ACTION_SECRET_PREVIOUS="<prior-deployment-secret>"
-# MIP_GENIE_ACTION_SECRET_PREVIOUS_KID="v1"
 ```
 
    See [`docs/se-onboarding.md`](se-onboarding.md) for the full
@@ -1475,39 +1474,42 @@ Customers requiring owner-independent retention must export Gateway logs to a
 separately governed immutable sink; Module 0 does not claim that stronger
 control.
 
-`MIP_COTALITY_ID_MASK_SECRET` and `MIP_GENIE_ACTION_SECRET_CURRENT` are
-mandatory for sandbox, staging, customer, and production app payloads. Only
-`APP_ENV=local` and `APP_ENV=test` may use compatibility keys. During action-key
-rotation, deploy the new current key/KID together with both prior-key values.
-The prior secret without `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` is rejected.
-When the prior secret is absent, it is not injected into the App payload. The
-bundle's static optional-resource declaration still requires the backing
-Databricks Secret key to exist, so the provisioner replaces it with a random
-disabled sentinel that the runtime cannot read through an environment binding.
-Keep the real prior key available for at least two hours so
-existing action confirmations and one-hour generated-copy/cohort provenance
-tokens can expire. The previous key is verification-only; new tokens always
-use the current key.
+The App payload binds `MIP_COTALITY_ID_MASK_SECRET` and
+`MIP_GENIE_ACTION_SECRET_CURRENT` from the runtime secret scope for every
+sandbox, staging, customer and production runtime; only `APP_ENV=local` and
+`APP_ENV=test` may use compatibility keys. The prior action key is bound only
+when `MIP_GENIE_ACTION_SECRET_PREVIOUS` and
+`MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` are both configured for the deploy;
+the prior secret without its KID is rejected. The bundle's static resource
+declarations still need every backing Databricks Secret key to exist, so an
+absent one gets a random disabled sentinel that the runtime ignores. Keep the
+real prior key available for at least two hours so existing action
+confirmations and one-hour generated-copy/cohort provenance tokens can
+expire. The previous key is verification-only; new tokens always use the
+current key.
 
-The provisioner (`tools/databricks/provision_runtime_secrets.py`) decides every
-write before it makes one, and it never silently replaces two kinds of
-existing key:
+The provisioner (`tools/databricks/provision_runtime_secrets.py`) is
+presence-only. It decides every write before it makes one, and it never reads
+or rewrites a key that already exists:
 
-- **The Cotality ID mask.** If `cotality-id-mask-v1` already exists in the
-  scope, the configured `MIP_COTALITY_ID_MASK_SECRET` must equal it as the
-  runtime reads it (UTF-8, surrounding whitespace stripped). The provisioner
-  compares HMAC-SHA256 fingerprints of the two values under a per-run random
-  salt and prints neither value nor fingerprint. If they differ, or if the
-  stored value cannot be read, the run refuses with exit 2 before it writes
-  anything. The Secrets API returns a value outside a notebook only to a
-  workspace admin with READ on the scope (a normal user gets `BAD_REQUEST`),
-  so the deploying identity must be a workspace admin, as `deploy.sh`
-  already requires. Each read leaves a `getSecret` entry in the workspace
-  audit log. Writing a different mask would re-key every masked borrower id
-  and orphan the `B-…` ids already stored in Lakebase campaigns, approvals,
-  audit, watchlists and snoozes. To fix a refusal, set the value the install
-  already uses. A deliberate re-key is an owner-run data migration. A deploy
-  never does it. An equal mask is kept and not rewritten.
+- **Existing keys are kept unread.** `cotality-id-mask-v1`,
+  `genie-action-current` and `genie-action-previous` are kept whatever the
+  deploy's inputs say, and the plan names an input that is set but unused.
+  The tool only lists the scope's keys; it never calls `getSecret`, so no
+  stored value reaches the runner, CI or a log, and the deployer needs no
+  READ on a value. Writing a different mask would re-key every masked
+  borrower id and orphan the `B-…` ids already stored in Lakebase campaigns,
+  approvals, audit, watchlists and snoozes, so a deploy never does it. A
+  deliberate re-key is an owner-run data migration.
+- **Absent keys are written once.** On a first install the mask and the
+  current action key are generated on the runner (`secrets.token_hex(32)`),
+  unless the optional `MIP_COTALITY_ID_MASK_SECRET` or
+  `MIP_GENIE_ACTION_SECRET_CURRENT` input (shell or `.env.local`) seeds them
+  with a value the install already uses. `genie-action-previous` takes
+  `MIP_GENIE_ACTION_SECRET_PREVIOUS` (with its KID) or the disabled sentinel.
+  Each write is read back for presence (the key is listed), never for its
+  value. No workflow carries these inputs
+  (`tests/unit/test_runtime_secret_inputs_stay_out_of_ci.py`).
 - **Salesforce credentials.** When a `SALESFORCE_*` input is unset, an
   existing `salesforce-*` key is kept. The disabled sentinel is written only
   when the key is absent, because the App's static resource binding needs a
@@ -1531,18 +1533,16 @@ existing key:
   (`databricks secrets delete-secret mip-runtime <key>`); the next deploy then
   writes the disabled sentinel.
 
-`genie-action-current` is compared the same way but never refuses, because a
-rotation is an operator's call. The plan prints one names-only note:
-`unchanged`; `rotated` (the configured previous key equals the stored value,
-so it stays valid for the grace period); `changed with no grace key`
-(outstanding action confirmations and provenance tokens stop verifying); or
-`not compared` with the error code. The note is report-only: no deploy step
-reads it, and nothing refuses on it. A fingerprint pre-check that covers the
-current key is therefore the owner reading that note; only the mask
-comparison is enforced.
+`--check --require-existing` (and the write run with `--require-existing`)
+refuses with exit 2 when the plan would write anything, including a scope it
+would create. An install that is already provisioned plans zero writes, so
+run it before adopting an existing install: a misnamed
+`MIP_RUNTIME_SECRET_SCOPE` would otherwise look like a first install and mint
+a new mask.
 
 Before its first Secrets API call, every mode of the tool (`--check`, the
-write run, `--retire-previous`) proves which workspace it is about to call.
+write run, `--retire-previous`, `--rotate-genie-action`) proves which
+workspace it is about to call.
 Building the SDK client can already contact the resolved host for an OAuth
 token, but no secret is listed or read before the proof.
 `WorkspaceClient()` resolves the Databricks SDK's default chain: process
@@ -1570,13 +1570,31 @@ DATABRICKS_CONFIG_PROFILE=<install profile> \
 
 Confirm that the host on the printed plan line is the install's workspace
 before you act on the result. Pin the profile the same way for
-`--retire-previous`.
+`--retire-previous` and `--rotate-genie-action`.
 
-After that bounded grace period, remove
-`MIP_GENIE_ACTION_SECRET_PREVIOUS` and
-`MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` from the deployment environment and
-`.env.local`, retire the Databricks secret, and deploy the no-previous-key
-payload:
+To rotate the Genie action key, an operator runs the human-only rotation (it
+refuses under GitHub Actions, where a deploy only keeps keys). It is the one
+mode that reads a stored value: it moves `genie-action-current` to
+`genie-action-previous`, writes a newly generated `genie-action-current`, and
+prints key names only. The App signs with the new key from its next
+deployment:
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<install profile> \
+  python tools/databricks/provision_runtime_secrets.py \
+  --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}" \
+  --rotate-genie-action
+./scripts/deploy.sh -t dev
+```
+
+Set `MIP_GENIE_ACTION_SECRET_KID` to the new key id for that deploy. A
+governed deploy gives the rotation no grace window: the payload binds
+`genie-action-previous` only when a `MIP_GENIE_ACTION_SECRET_PREVIOUS` value is
+configured with its KID, and no workflow carries that value. Outstanding
+action confirmations (two-hour TTL) and provenance tokens therefore stop
+verifying at that deployment, so rotate in a quiet window.
+
+After a grace period, retire the previous key:
 
 ```bash
 unset MIP_GENIE_ACTION_SECRET_PREVIOUS
@@ -1591,8 +1609,9 @@ DATABRICKS_CONFIG_PROFILE=<install profile> \
 Retirement is idempotent and does not require the current or Cotality secret
 values. It replaces `genie-action-previous` with a fresh disabled sentinel,
 which immediately invalidates old tokens while keeping the static Databricks
-App resource valid. An ordinary deploy with no configured previous key does
-the same before emitting a payload without the previous environment binding.
+App resource valid. An ordinary deploy no longer does this: it keeps an
+existing previous key, which stays unbound while no previous input is
+configured.
 
 `make bundle-validate` and `make bundle-plan` remain read-only diagnostics.
 The mutable `make bundle-deploy` and `make bundle-deploy-dev` aliases are

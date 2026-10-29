@@ -234,28 +234,38 @@ claim and verifies against a current key plus an optional previous key. Token
 TTL is 2 hours; keep the previous key configured for at least 2 hours, or 24
 hours during customer-facing maintenance windows.
 
-Rotation procedure:
+Rotation procedure (human-run; the runtime secret scope is presence-only, so
+a deploy never rotates a key and no workflow carries a key value):
 
-1. Before deploy, move the current value to previous and install a new current:
+1. Move the current key to previous and generate a new current in the scope.
+   The tool refuses under GitHub Actions and prints key names only:
 
    ```bash
-   MIP_GENIE_ACTION_SECRET_PREVIOUS="$MIP_GENIE_ACTION_SECRET_CURRENT"
-   MIP_GENIE_ACTION_SECRET_PREVIOUS_KID="$MIP_GENIE_ACTION_SECRET_KID"
-   MIP_GENIE_ACTION_SECRET_CURRENT="<new-random-secret>"
+   DATABRICKS_CONFIG_PROFILE=<install profile> \
+     python tools/databricks/provision_runtime_secrets.py \
+     --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}" \
+     --rotate-genie-action
    MIP_GENIE_ACTION_SECRET_KID="v2"
    ```
 
    If the deployment still uses the legacy `MIP_GENIE_ACTION_SECRET`, treat it
    as the current key and migrate to `MIP_GENIE_ACTION_SECRET_CURRENT`.
 
-2. Redeploy:
+2. Redeploy, so the App binds the new current key:
 
    ```bash
    CI=1 ./scripts/deploy.sh -t dev --no-confirm
    ```
 
-3. After the grace window, remove `MIP_GENIE_ACTION_SECRET_PREVIOUS` and
-   `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID`, then redeploy again.
+   The deploy keeps both keys unread. It binds `genie-action-previous` as the
+   grace key only when `MIP_GENIE_ACTION_SECRET_PREVIOUS` and
+   `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` are configured for it, which no
+   workflow does; without that binding, tokens signed with the old key stop
+   verifying at this deployment.
+
+3. After the grace window, retire the previous key with
+   `provision_runtime_secrets.py --retire-previous`, then redeploy again
+   (`docs/deployment.md`, "Databricks App").
 
 Validation:
 
