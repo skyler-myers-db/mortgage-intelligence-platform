@@ -37,6 +37,7 @@ from tools.databricks.verifier_customer_resource_denial import (
     collect_admin_customer_resource_denial_inventory,
     verify_customer_resource_denial_boundary,
 )
+from tools.databricks.workspace_auth import deployment_workspace_client
 
 _RELATION_RE = re.compile(
     r"^(?P<catalog>[A-Za-z_][A-Za-z0-9_]*)\."
@@ -719,7 +720,9 @@ def main(argv: list[str] | None = None) -> int:
         if not args.customer_resource_denial
         else ""
     )
-    admin_workspace = WorkspaceClient()
+    # Build the deployer admin client before the exact-M2M bind scrubs every
+    # *TOKEN* variable: a github-oidc deployer snapshots its Actions request here.
+    admin_workspace = deployment_workspace_client(factory=WorkspaceClient)
     customer_inventory: VerifierCustomerResourceDenialInventory | None = None
     managed_query_group_bindings: tuple[boundary_probes.ManagedWorkspaceGroupBinding, ...] = ()
     if args.customer_resource_denial:

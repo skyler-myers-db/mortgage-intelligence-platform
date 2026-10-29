@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import PermissionDenied
 from databricks.sdk.service.apps import ComputeState
 
+from tests.fixtures.github_oidc import (
+    DEPLOYER_CLIENT_ID,
+    actions_keys,
+    install_github_oidc_deployer,
+    restored_environ,
+)
 from tests.fixtures.oauth_credential_session import (
     install_in_memory_credential_mutation_session,
 )
@@ -181,6 +189,51 @@ def test_main_captures_admin_then_binds_exact_verifier_m2m(
     assert observed["managed_inventory_workspace"] is clients[0]
     assert observed["managed_inventory_auth"] == ("pat", "admin-token")
     assert "DATABRICKS_VERIFIER_CLIENT_SECRET" not in os.environ
+
+
+def test_github_oidc_admin_keeps_authenticating_after_the_verifier_m2m_sweep(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    deployer = install_github_oidc_deployer(monkeypatch, tmp_path)
+    monkeypatch.setenv("DATABRICKS_VERIFIER_CLIENT_ID", "verifier-client-id")
+    monkeypatch.setenv("DATABRICKS_VERIFIER_CLIENT_SECRET", "verifier-secret")
+    m2m_env: list[dict[str, str]] = []
+
+    def workspace_client(**kwargs: object) -> object:
+        if kwargs:
+            return WorkspaceClient(**kwargs)  # type: ignore[arg-type]
+        m2m_env.append(dict(os.environ))
+        return SimpleNamespace(config=SimpleNamespace(host="https://oidc-unit.cloud.databricks.com"))
+
+    observed: dict[str, object] = {}
+
+    def verify(**kwargs: object) -> None:
+        admin = kwargs["admin_workspace"]
+        observed["actions_at_verify"] = actions_keys(os.environ)
+        observed["first"] = admin.config.authenticate()  # type: ignore[attr-defined]
+        deployer.clock.advance(3600)
+        observed["refreshed"] = admin.config.authenticate()  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(boundary, "WorkspaceClient", workspace_client)
+    monkeypatch.setattr(boundary, "AccountClient", lambda **_kwargs: object())
+    monkeypatch.setattr(boundary, "verify_boundary", verify)
+    monkeypatch.setattr(
+        boundary, "collect_managed_proxy_workspace_groups", lambda _workspace, **_kwargs: ()
+    )
+
+    with restored_environ():
+        assert boundary.main(_verifier_main_args()) == 0
+
+    assert observed == {
+        "actions_at_verify": [],
+        "first": {"Authorization": "Bearer databricks-token-1"},
+        "refreshed": {"Authorization": "Bearer databricks-token-2"},
+    }
+    assert len(m2m_env) == 1
+    assert actions_keys(m2m_env[0]) == []
+    assert m2m_env[0]["DATABRICKS_CLIENT_ID"] == "verifier-client-id"
+    assert {post["client_id"] for post in deployer.http.posts} == {DEPLOYER_CLIENT_ID}
 
 
 @pytest.mark.parametrize(

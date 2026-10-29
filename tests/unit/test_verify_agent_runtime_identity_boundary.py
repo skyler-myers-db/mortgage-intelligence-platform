@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import PermissionDenied
 from databricks.sdk.service.apps import ComputeState
 
+from tests.fixtures.github_oidc import (
+    DEPLOYER_CLIENT_ID,
+    actions_keys,
+    install_github_oidc_deployer,
+    restored_environ,
+)
 from tools.databricks import verify_agent_runtime_identity_boundary as boundary
 
 
@@ -90,6 +98,48 @@ def test_main_captures_admin_then_binds_exact_runtime_m2m(
     assert observed["admin_workspace"] is clients[0]
     assert observed["allow_attested_app_401"] is True
     assert "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET" not in os.environ
+
+
+
+def test_github_oidc_admin_keeps_authenticating_after_the_runtime_m2m_sweep(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    deployer = install_github_oidc_deployer(monkeypatch, tmp_path)
+    monkeypatch.setenv("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", "runtime-client")
+    monkeypatch.setenv("DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET", "runtime-secret")
+    m2m_env: list[dict[str, str]] = []
+
+    def workspace_client(**kwargs: object) -> object:
+        if kwargs:
+            return WorkspaceClient(**kwargs)  # type: ignore[arg-type]
+        m2m_env.append(dict(os.environ))
+        return SimpleNamespace(config=SimpleNamespace(host="https://oidc-unit.cloud.databricks.com"))
+
+    observed: dict[str, object] = {}
+
+    def verify(_workspace: object, **kwargs: object) -> None:
+        admin = kwargs["admin_workspace"]
+        observed["actions_at_verify"] = actions_keys(os.environ)
+        observed["first"] = admin.config.authenticate()  # type: ignore[attr-defined]
+        deployer.clock.advance(3600)
+        observed["refreshed"] = admin.config.authenticate()  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(boundary, "WorkspaceClient", workspace_client)
+    monkeypatch.setattr(boundary, "verify_boundary", verify)
+
+    with restored_environ():
+        assert boundary.main(_runtime_main_args()) == 0
+
+    assert observed == {
+        "actions_at_verify": [],
+        "first": {"Authorization": "Bearer databricks-token-1"},
+        "refreshed": {"Authorization": "Bearer databricks-token-2"},
+    }
+    assert len(m2m_env) == 1
+    assert actions_keys(m2m_env[0]) == []
+    assert m2m_env[0]["DATABRICKS_CLIENT_ID"] == "runtime-client"
+    assert {post["client_id"] for post in deployer.http.posts} == {DEPLOYER_CLIENT_ID}
 
 
 def _workspace(*, sql_state: str = "FAILED", sql_error: object = "PERMISSION_DENIED") -> object:

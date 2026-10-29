@@ -52,6 +52,7 @@ from tools.databricks.serving_query_authorization_convergence import (
     wait_for_managed_query_group_projection,
     wait_for_reviewed_query_group_projections,
 )
+from tools.databricks.workspace_auth import deployment_workspace_client
 
 _MAX_INVENTORY = 1000
 _TARGET_QUERY_PROMPT = (
@@ -772,7 +773,9 @@ def main(argv: list[str] | None = None) -> int:
         if not denial_mode
         else ""
     )
-    admin_workspace = WorkspaceClient()
+    # Build the deployer admin client before the exact-M2M bind scrubs every
+    # *TOKEN* variable: a github-oidc deployer snapshots its Actions request here.
+    admin_workspace = deployment_workspace_client(factory=WorkspaceClient)
     if denial_mode:
         assert_workspace_admin_inventory_identity(
             admin_workspace,

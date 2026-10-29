@@ -3,14 +3,22 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from urllib.parse import unquote
 
 import pytest
+from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import PermissionDenied, ResourceDoesNotExist
 from databricks.sdk.service.apps import ComputeState
 
+from tests.fixtures.github_oidc import (
+    DEPLOYER_CLIENT_ID,
+    actions_keys,
+    install_github_oidc_deployer,
+    restored_environ,
+)
 from tools.databricks import agent_proxy_identity_inventory_groups as inventory_groups
 from tools.databricks import verify_agent_proxy_identity_boundary as boundary
 from tools.databricks.agent_proxy_capability_group_access import (
@@ -135,13 +143,17 @@ def test_main_scrubs_deployer_aliases_before_exact_proxy_clients(
         "https://workspace.cloud.databricks.com",
     )
     monkeypatch.setenv("MIP_DEPLOYER_DATABRICKS_TOKEN", "deployer-token")
-    monkeypatch.setenv("MIP_DEPLOYER_DATABRICKS_PROFILE", "DEFAULT")
+    # deploy.sh binds exactly one deployer form (PAT here); the admin client
+    # is built from that governed binding, never from the ambient aliases.
+    monkeypatch.delenv("MIP_DEPLOYER_DATABRICKS_PROFILE", raising=False)
     monkeypatch.setenv("DATABRICKS_AGENT_PROXY_CLIENT_ID", PROXY_ID)
     monkeypatch.setenv("DATABRICKS_AGENT_PROXY_CLIENT_SECRET", "proxy-secret")
     auth_at_construction: list[tuple[str, str, str, str]] = []
+    construction_kwargs: list[dict[str, object]] = []
     clients: list[object] = []
 
-    def workspace_client() -> object:
+    def workspace_client(**kwargs: object) -> object:
+        construction_kwargs.append(kwargs)
         auth_at_construction.append(
             (
                 os.environ.get("DATABRICKS_AUTH_TYPE", ""),
@@ -179,6 +191,14 @@ def test_main_scrubs_deployer_aliases_before_exact_proxy_clients(
         ("pat", "admin-token", "", "deployer-token"),
         ("oauth-m2m", "", PROXY_ID, ""),
     ]
+    assert construction_kwargs == [
+        {
+            "host": "https://workspace.cloud.databricks.com",
+            "token": "deployer-token",
+            "auth_type": "pat",
+        },
+        {},
+    ]
     assert account_args["host"] == "https://accounts.cloud.databricks.com"
     assert account_args["client_id"] == PROXY_ID
     assert account_args["client_secret"] == "proxy-secret"
@@ -189,7 +209,52 @@ def test_main_scrubs_deployer_aliases_before_exact_proxy_clients(
     assert observed["allow_attested_stopped_app_503"] is True
     assert "DATABRICKS_AGENT_PROXY_CLIENT_SECRET" not in os.environ
     assert "MIP_DEPLOYER_DATABRICKS_HOST" not in os.environ
-    assert "MIP_DEPLOYER_DATABRICKS_PROFILE" not in os.environ
+    assert "MIP_DEPLOYER_DATABRICKS_TOKEN" not in os.environ
+
+
+
+def test_github_oidc_admin_inventory_runs_after_the_proxy_m2m_sweep(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    deployer = install_github_oidc_deployer(monkeypatch, tmp_path)
+    monkeypatch.setenv("DATABRICKS_AGENT_PROXY_CLIENT_ID", PROXY_ID)
+    monkeypatch.setenv("DATABRICKS_AGENT_PROXY_CLIENT_SECRET", "proxy-secret")
+    m2m_env: list[dict[str, str]] = []
+
+    def workspace_client(**kwargs: object) -> object:
+        if kwargs:
+            return WorkspaceClient(**kwargs)  # type: ignore[arg-type]
+        m2m_env.append(dict(os.environ))
+        return SimpleNamespace(config=SimpleNamespace(host="https://oidc-unit.cloud.databricks.com"))
+
+    observed: dict[str, object] = {}
+
+    def collect(admin: Any, **_kwargs: object) -> AgentProxyBoundaryInventory:
+        # collect_admin_inventory is the first admin call after the sweep.
+        observed["actions_at_inventory"] = actions_keys(os.environ)
+        observed["first"] = admin.config.authenticate()
+        deployer.clock.advance(3600)
+        observed["refreshed"] = admin.config.authenticate()
+        return _inventory()
+
+    monkeypatch.setattr(boundary, "WorkspaceClient", workspace_client)
+    monkeypatch.setattr(boundary, "AccountClient", lambda **_kwargs: object())
+    monkeypatch.setattr(boundary, "collect_admin_inventory", collect)
+    monkeypatch.setattr(boundary, "verify_boundary", lambda **_kwargs: None)
+
+    with restored_environ():
+        assert boundary.main(_proxy_main_args()) == 0
+
+    assert observed == {
+        "actions_at_inventory": [],
+        "first": {"Authorization": "Bearer databricks-token-1"},
+        "refreshed": {"Authorization": "Bearer databricks-token-2"},
+    }
+    assert len(m2m_env) == 1
+    assert actions_keys(m2m_env[0]) == []
+    assert m2m_env[0]["DATABRICKS_CLIENT_ID"] == PROXY_ID
+    assert {post["client_id"] for post in deployer.http.posts} == {DEPLOYER_CLIENT_ID}
 
 
 def _denied(*_args: object, **_kwargs: object) -> object:

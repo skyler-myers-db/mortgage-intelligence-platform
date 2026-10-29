@@ -9,6 +9,10 @@ network access. Every value is synthetic.
 
 from __future__ import annotations
 
+import os
+import socket
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -137,6 +141,11 @@ def install_github_oidc_deployer(
         monkeypatch.setenv("MIP_DEPLOYER_DATABRICKS_PROFILE", profile)
     else:
         monkeypatch.delenv("MIP_DEPLOYER_DATABRICKS_PROFILE", raising=False)
+    def refuse_network(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("github-oidc unit fixture attempted a network connection")
+
+    monkeypatch.setattr(socket, "create_connection", refuse_network)
+    monkeypatch.setattr(socket.socket, "connect", refuse_network)
     monkeypatch.setenv(github_oidc_auth.REQUEST_URL_ENV, REQUEST_URL)
     monkeypatch.setenv(github_oidc_auth.REQUEST_TOKEN_ENV, REQUEST_TOKEN)
     http = FakeOidcHttp()
@@ -161,3 +170,19 @@ def install_github_oidc_deployer(
         ),
     )
     return GitHubOidcDeployer(http=http, clock=clock, config_file=config_file)
+
+
+@contextmanager
+def restored_environ() -> Iterator[None]:
+    """Restore os.environ exactly after a fail-closed scrub pops unrelated keys."""
+
+    saved = dict(os.environ)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+
+
+def actions_keys(environ: Mapping[str, str]) -> list[str]:
+    return sorted(name for name in environ if name.startswith("ACTIONS_"))
