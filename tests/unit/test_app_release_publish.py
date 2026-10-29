@@ -297,7 +297,7 @@ def _refusal(tmp_path: Path, case: str) -> list[str]:
     elif case == "other_release_id":
         overrides["--release-id"] = f"{COMMIT[:12]}-000000000000"
     elif case == "other_leaf":
-        overrides["--files-root"] = contract.files_root(principal=PRINCIPAL, target="dev", root_leaf="dev-ci")
+        overrides["--files-root"] = contract.files_root(principal=PRINCIPAL, target="dev", root_leaf="client-a")
     elif case == "other_principal":
         overrides["--expected-principal"] = "other@example.com"
     elif case == "workers":

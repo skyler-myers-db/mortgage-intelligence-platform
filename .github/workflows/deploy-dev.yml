@@ -14,14 +14,6 @@ on:
         description: "One-time only: stop an existing App that has no signed rollback record"
         type: boolean
         default: false
-      remediate_foreign_catalog_bindings:
-        description: "Refused on pr105-host: rewrites catalog bindings for the whole shared metastore; leave false"
-        type: boolean
-        default: false
-      repair_normal_credential:
-        description: "Recovery only: rotate the missing normal-operator OAuth secret into GitHub"
-        type: boolean
-        default: false
       acknowledge_single_maintainer_break_glass:
         description: "Required: acknowledge audited self-approval because this repository has one maintainer"
         type: boolean
@@ -37,6 +29,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  parked:
+    # Parked until a client environment is selected (M1-PR7). The CI staging
+    # workspace this workflow deployed to was deleted on 2026-10-29, and the
+    # bundle's dev target is the live install, which no CI run may reach
+    # before M1-PR7's per-client environment lands. Every dispatch refuses
+    # here, before the environment approval and before any job requests an
+    # ID token: the deploy job needs this one, so it never starts, and
+    # scripts/deploy.sh repeats the refusal for this workflow's ref.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse until a client environment is selected
+        run: |
+          echo "::error::deploy-dev is parked until a client environment is selected (M1-PR7)."
+          exit 1
   refuse-unacknowledged:
     if: ${{ !inputs.acknowledge_single_maintainer_break_glass }}
     runs-on: ubuntu-latest
@@ -47,6 +53,7 @@ jobs:
           echo "::error::Dev deployment requires explicit single-maintainer break-glass acknowledgement."
           exit 1
   deploy:
+    needs: parked
     if: ${{ inputs.acknowledge_single_maintainer_break_glass }}
     runs-on: ubuntu-latest
     # A first install may perform two serial one-use role convergences. Each
@@ -282,11 +289,10 @@ jobs:
           } > .env.local
           chmod 600 .env.local
       - name: Prove the GitHub OIDC deployer identity
-        # Read-only, before the credential repair and before scripts/deploy.sh:
-        # the DEFAULT github-oidc profile must authenticate, through both the
-        # Python SDK and the Go CLI, as the reviewed deployer service principal
-        # on the pr105-host workspace, with the authority the governed deploy
-        # requires. It prints booleans only (an exception or CLI failure adds
+        # Read-only, before scripts/deploy.sh: the DEFAULT github-oidc profile
+        # must authenticate, through both the Python SDK and the Go CLI, as the
+        # reviewed deployer service principal on the bundle target's
+        # workspace, with the authority the governed deploy requires. It prints booleans only (an exception or CLI failure adds
         # its class or exit code, never a message or value) and exits 2 on any
         # mismatch. The profile and host checks run first; on a mismatch the
         # step exits before any network call.
@@ -310,7 +316,7 @@ jobs:
 
           import yaml
 
-          TARGET = "pr105-host"
+          TARGET = "dev"
           PROFILE = "DEFAULT"
           # Ambient names that would override or redirect the profile.
           OVERRIDES = (
@@ -376,7 +382,7 @@ jobs:
           checks["profile_auth_type_is_github_oidc"] = profile.get("auth_type") == "github-oidc"
           checks["profile_client_id_is_the_deployer"] = same(profile.get("client_id"), expected)
           checks["profile_host_is_DATABRICKS_HOST"] = same(profile_host, secret_host)
-          checks["profile_host_is_the_pr105_host_target"] = same(profile_host, bundle_host)
+          checks["profile_host_is_the_bundle_target_host"] = same(profile_host, bundle_host)
           if not all(checks.values()):
               report()
 
@@ -455,79 +461,12 @@ jobs:
           report()
           print("GitHub OIDC deployer identity proven.")
           PY
-      - name: Repair normal operator OAuth credential
-        if: ${{ inputs.repair_normal_credential }}
-        env:
-          # The deployer authenticates through the DEFAULT github-oidc profile.
-          # The normal identity's client id rides under its own name: an env
-          # DATABRICKS_CLIENT_ID would override the profile's client_id and
-          # aim the token exchange at the normal service principal.
-          # DATABRICKS_HOST stays for the isolation gate; it equals the
-          # profile's host, which the proof step above checked.
-          DATABRICKS_CONFIG_PROFILE: DEFAULT
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          MIP_NORMAL_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
-          GH_TOKEN: ${{ secrets.MIP_GITHUB_CREDENTIAL_SINK_TOKEN }}
-          MIP_AI_GATEWAY_PROOF_SIGNING_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}
-          MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY }}
-          MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS: ${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}
-          # No live `mip-app` fallback: unset fails closed below.
-          MIP_APP_NAME: ${{ vars.MIP_APP_NAME }}
-          MIP_DEPLOYMENT_SOURCE_GIT_SHA: ${{ github.sha }}
-          MIP_M2M_GITHUB_REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          # This step rotates an OAuth secret before, and outside,
-          # scripts/deploy.sh and its isolation preflight. So first, before
-          # any workspace call: deploy-dev.yml only, DATABRICKS_HOST must be
-          # the forked-anchor pr105-host target's workspace (never the dev
-          # target's live workspace), and MIP_APP_NAME must name the CI
-          # staging App (tools/databricks/ci_install_isolation.py).
-          python -m tools.databricks.ci_install_isolation repair-credential
-          missing=""
-          for v in DATABRICKS_HOST MIP_NORMAL_CLIENT_ID \
-                   GH_TOKEN MIP_AI_GATEWAY_PROOF_SIGNING_KEY MIP_APP_NAME \
-                   MIP_DEPLOYMENT_SOURCE_GIT_SHA MIP_M2M_GITHUB_REPOSITORY; do
-            if [ -z "${!v}" ]; then
-              missing="$missing $v"
-            fi
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::Missing required credential-repair input(s):$missing"
-            exit 1
-          fi
-          if ! MIP_AI_GATEWAY_PROOF_VERIFY_KEY="$(
-            python - <<'PY'
-          import os
-          from backend.services.ai_gateway_proof_attestation import (
-              derive_gateway_proof_verify_key,
-          )
-
-          print(
-              derive_gateway_proof_verify_key(
-                  os.environ["MIP_AI_GATEWAY_PROOF_SIGNING_KEY"]
-              )
-          )
-          PY
-          )"; then
-            echo "::error::MIP_AI_GATEWAY_PROOF_SIGNING_KEY is invalid"
-            exit 1
-          fi
-          export MIP_AI_GATEWAY_PROOF_VERIFY_KEY
-          python -m tools.databricks.provision_m2m_oauth \
-            --identity-role normal \
-            --expected-application-id "$MIP_NORMAL_CLIENT_ID" \
-            --app-name "$MIP_APP_NAME" \
-            --no-grant-can-use \
-            --gh-repo "$GITHUB_REPOSITORY" \
-            --rotate \
-            --set-gh-secrets
       - name: Deploy dev Databricks App
-        if: ${{ !inputs.repair_normal_credential }}
         env:
           # The deployer is the DEFAULT github-oidc profile: scripts/deploy.sh's
-          # workspace-auth bind checks its host against the pr105-host target,
-          # exports it as the deployer profile and unsets DATABRICKS_HOST. The
+          # workspace-auth bind checks its host against the target's
+          # workspace.host, exports it as the deployer profile and unsets
+          # DATABRICKS_HOST. The
           # App client pairs below are un-exported before deploy.sh's first
           # child, so none overrides the profile's client_id.
           DATABRICKS_CONFIG_PROFILE: DEFAULT
@@ -535,8 +474,8 @@ jobs:
           # The deploy's 300-second identity-probe secrets are minted, listed
           # and deleted through the deployer's workspace
           # service_principal_secrets_proxy: account-plane probe secrets never
-          # became visible to the runner's inventory (docs/deployment.md, owner
-          # step 9). Unset, the tools keep the account plane.
+          # became visible to the runner's inventory (docs/deployment.md, "The
+          # CI deployer"). Unset, the tools keep the account plane.
           MIP_TEMP_CREDENTIAL_PLANE: workspace
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
@@ -581,19 +520,11 @@ jobs:
           MIP_AI_GATEWAY_AGENT_MODEL_FAMILY: ${{ vars.MIP_AI_GATEWAY_AGENT_MODEL_FAMILY }}
           MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE: ${{ vars.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE }}
           MIP_AI_GATEWAY_TABLE_PREFIX: ${{ vars.MIP_AI_GATEWAY_TABLE_PREFIX }}
-          # A literal, never a var: the CI staging install's own bundle root
-          # (~/.bundle/<bundle>/dev-ci) and its _ci display-name suffix, so
-          # this run never uploads into or shares state with the live
-          # install. scripts/deploy.sh refuses this workflow without it, and
-          # refuses any live-default name beside it (D-platform-process-b
-          # step 7; tools/databricks/ci_install_isolation.py). The root and
-          # suffix are defence in depth on the forked-anchor pr105-host
-          # target's own workspace, but the catalog names checked beside it
-          # are the primary UC isolation: that workspace shares the live
-          # install's metastore.
-          MIP_BUNDLE_ROOT_LEAF: dev-ci
           MIP_REBASE_UNVERIFIED_APP: ${{ inputs.rebase_unverified_app && '1' || '0' }}
-          MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS: ${{ inputs.remediate_foreign_catalog_bindings && '1' || '0' }}
+          # No remediation input: the foreign-catalog binding remediation
+          # rewrites bindings for the whole shared metastore, so this workflow
+          # can never request it (docs/security/GRANTS.md).
+          MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS: '0'
           MIP_REQUIRE_AI_GATEWAY_CLAIMABLE: '1'
           SALESFORCE_INSTANCE_URL: ${{ vars.SALESFORCE_INSTANCE_URL }}
           SALESFORCE_CLIENT_ID: ${{ vars.SALESFORCE_CLIENT_ID }}
@@ -606,15 +537,11 @@ jobs:
           SALESFORCE_SECURITY_TOKEN: ${{ secrets.SALESFORCE_SECURITY_TOKEN }}
         run: |
           set -euo pipefail
-          # The forked-anchor CI staging target only, never `dev`: its own
-          # workspace host binds this run's auth to the staging workspace,
-          # where the reserved identities are resolved by name (unassigned
-          # in the live workspace by owner invariant; the UC metastore is
-          # shared, docs/deployment.md "CI staging install").
-          # scripts/deploy.sh and tools/databricks/bundle_env.py refuse this
-          # workflow on any other target
-          # (tools/databricks/ci_install_isolation.py).
-          args=(-t pr105-host --no-confirm)
+          # Unreachable while the `parked` job refuses, and scripts/deploy.sh
+          # refuses this workflow's ref before any Databricks call: the dev
+          # target is the live install. M1-PR7 replaces this step with a
+          # per-client environment and target.
+          args=(-t dev --no-confirm)
           if [ "${{ inputs.skip_silver }}" = "true" ]; then
             args+=(--skip-silver)
           fi

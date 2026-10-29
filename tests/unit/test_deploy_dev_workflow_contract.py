@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import re
@@ -16,9 +15,6 @@ from typing import Any
 import pytest
 import yaml
 
-from backend.services.ai_gateway_proof_attestation import (
-    derive_gateway_proof_verify_key,
-)
 from backend.services.databricks_jobs import MANAGED_JOBS
 from tests.fixtures.deploy_script import (
     DEPLOY_SCRIPT,
@@ -27,7 +23,6 @@ from tests.fixtures.deploy_script import (
     deploy_contract_text,
     deploy_entrypoint_text,
 )
-from tools.databricks import ci_install_isolation as ci_isolation
 from tools.databricks import github_oidc_auth, temporary_credential_plane, workspace_auth
 from tools.databricks import lakebase_oauth_role_bootstrap_admission as admission
 from tools.databricks import lakebase_oauth_role_bootstrap_orchestration as orchestration
@@ -50,32 +45,65 @@ def test_deploy_script_rejects_nonmutable_target_before_preflight(target: str) -
     )
 
     assert result.returncode == 2
-    assert "target must be exactly dev, prod or pr105-host" in result.stderr
+    assert "target must be exactly dev or prod" in result.stderr
     assert "step 1" not in result.stdout
 
 
-@pytest.mark.parametrize(
-    ("target", "target_class"),
-    (("dev", "dev"), ("prod", "prod"), ("pr105-host", "dev")),
-)
-def test_deploy_script_target_parse_maps_the_forked_anchor_target_to_the_dev_class(
-    target: str, target_class: str
-) -> None:
-    """Post-W5: only the argument parse runs here (it ends before any helper or step)."""
+def _target_parse(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """Run only deploy.sh's argument parse (it ends before any helper or step)."""
 
     text = deploy_entrypoint_text()
     parse = text[text.index("DRY_RUN=0\n") : text.index("# Pretty-print helpers")]
-    result = subprocess.run(
-        ["bash", "-c", parse + 'printf "%s|%s\\n" "$TARGET" "$TARGET_CLASS"\n', "deploy.sh", "-t", target],
+    ambient = {name: value for name, value in os.environ.items() if not name.startswith("GITHUB_")}
+    return subprocess.run(
+        ["bash", "-c", parse + 'printf "%s\\n" "$TARGET"\n', "deploy.sh", *args],
         cwd=REPO,
+        env={**ambient, **(env or {})},
         text=True,
         capture_output=True,
         check=False,
         timeout=30,
     )
 
+
+@pytest.mark.parametrize("target", ("dev", "prod"))
+def test_deploy_script_target_parse_accepts_exactly_dev_and_prod(target: str) -> None:
+    result = _target_parse("-t", target)
+
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip().splitlines()[-1] == f"{target}|{target_class}"
+    assert result.stdout.strip().splitlines()[-1] == target
+
+
+DEPLOY_DEV_REF = "o/r/.github/workflows/deploy-dev.yml@refs/heads/main"
+
+
+@pytest.mark.parametrize("args", (("-t", "dev"), ("-t", "prod"), ("-t", "dev", "--dry-run")))
+def test_deploy_script_refuses_the_parked_deploy_dev_workflow_before_any_step(args: tuple[str, ...]) -> None:
+    """deploy-dev.yml is parked until a client environment is selected (M1-PR7), dry run included."""
+
+    result = _target_parse(*args, env={"GITHUB_ACTIONS": "true", "GITHUB_WORKFLOW_REF": DEPLOY_DEV_REF})
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "deploy-dev.yml is parked until a client environment is selected (M1-PR7)" in result.stderr
+    assert result.stdout == "", "refused before the parse prints anything"
+
+
+@pytest.mark.parametrize(
+    "env",
+    (
+        {"GITHUB_ACTIONS": "true", "GITHUB_WORKFLOW_REF": "o/r/.github/workflows/ci.yml@refs/heads/main"},
+        {"GITHUB_WORKFLOW_REF": DEPLOY_DEV_REF},
+        {"GITHUB_ACTIONS": "true"},
+    ),
+    ids=("ci-workflow", "ref-outside-actions", "actions-without-ref"),
+)
+def test_the_parked_refusal_keys_on_the_deploy_dev_ref_in_actions_only(env: dict[str, str]) -> None:
+    """The non-vacuity control: CI's own pytest and operator runs parse unchanged."""
+
+    result = _target_parse("-t", "dev", env=env)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1] == "dev"
 
 
 @pytest.mark.parametrize(
@@ -4267,7 +4295,9 @@ def test_admin_and_nightly_jobs_cannot_replace_reviewed_growth_agent_functions()
     nightly_workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
     nightly_jobs = _workflow_bundle_run_targets(nightly_workflow)
     publisher_jobs = {job_name for job_name, _task_key, _path in publishers}
-    assert "mip_refresh_scores" in nightly_jobs
+    # Parked live validation runs no bundle job at all (M0-PR3); when M1-PR8
+    # brings a refresh back, it must still never reach a publisher.
+    assert nightly_jobs == set()
     assert nightly_jobs.isdisjoint(publisher_jobs)
 
     # The weekly mip_scheduled_refresh runs unattended: nothing it reaches
@@ -4995,13 +5025,15 @@ def test_deploy_dev_wires_separate_required_gateway_signing_keys() -> None:
     secret_binding = (
         "MIP_AI_GATEWAY_PROOF_SIGNING_KEY: " "${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}"
     )
-    assert workflow.count(secret_binding) == 3
+    # The Configure step's presence check and the Deploy step (the credential
+    # repair, a third reader, was removed with its secrets-write token).
+    assert workflow.count(secret_binding) == 2
     assert (
         workflow.count(
             "MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS: "
             "${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}"
         )
-        == 2
+        == 1
     )
     model_binding = (
         "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY: "
@@ -5549,6 +5581,11 @@ _READ_ONLY_PROOF_CALLS = [
 ]
 
 
+# The bundle target the proof step compares the profile host with. deploy-dev.yml
+# is parked (M1-PR7), so this is the dev target the step names today.
+OIDC_PROOF_TARGET = "dev"
+
+
 def _bundle_target_host(target: str) -> str:
     return str(yaml.safe_load(BUNDLE_CONFIG.read_text(encoding="utf-8"))["targets"][target]["workspace"]["host"])
 
@@ -5568,7 +5605,7 @@ def _run_oidc_proof(
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run the proof step against a recording fake SDK and CLI (read-only calls only)."""
 
-    host = _bundle_target_host(ci_isolation.CI_TARGET)
+    host = _bundle_target_host(OIDC_PROOF_TARGET)
     sdk_root = tmp_path / "sdk"
     (sdk_root / "databricks" / "sdk").mkdir(parents=True)
     (sdk_root / "databricks" / "__init__.py").write_text("", encoding="utf-8")
@@ -5641,9 +5678,8 @@ def test_oidc_proof_step_is_read_only_and_ordered_before_any_deployer_mutation()
     proof = steps[names.index(OIDC_PROOF_STEP)]
 
     assert names.index("Configure Databricks dev credentials") < names.index(OIDC_PROOF_STEP)
-    assert names.index(OIDC_PROOF_STEP) < names.index("Repair normal operator OAuth credential")
     assert names.index(OIDC_PROOF_STEP) < names.index("Deploy dev Databricks App")
-    assert "if" not in proof, "it gates the credential repair and the deploy alike"
+    assert "if" not in proof, "it gates the deploy unconditionally"
     assert proof["env"] == {
         "DATABRICKS_CONFIG_PROFILE": "DEFAULT",
         "MIP_CI_DEPLOYER_CLIENT_ID": "${{ vars.MIP_CI_DEPLOYER_CLIENT_ID }}",
@@ -5656,7 +5692,7 @@ def test_oidc_proof_step_is_read_only_and_ordered_before_any_deployer_mutation()
 
 
 def test_oidc_proof_step_passes_and_prints_only_booleans(tmp_path: Path) -> None:
-    host = _bundle_target_host(ci_isolation.CI_TARGET)
+    host = _bundle_target_host(OIDC_PROOF_TARGET)
     result, calls = _run_oidc_proof(tmp_path)
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -5670,7 +5706,7 @@ def test_oidc_proof_step_passes_and_prints_only_booleans(tmp_path: Path) -> None
         "profile_auth_type_is_github_oidc",
         "profile_client_id_is_the_deployer",
         "profile_host_is_DATABRICKS_HOST",
-        "profile_host_is_the_pr105_host_target",
+        "profile_host_is_the_bundle_target_host",
         "sdk_authenticates_with_the_github_oidc_profile",
         "me_is_the_deployer",
         "me_in_admins",
@@ -5690,7 +5726,7 @@ def test_oidc_proof_step_passes_and_prints_only_booleans(tmp_path: Path) -> None
 
 _STATIC_PROOF_REFUSALS = {
     "secret-host-differs": ({"env": {"MIP_PROOF_DATABRICKS_HOST": "https://other-workspace.example"}}, "profile_host_is_DATABRICKS_HOST"),
-    "live-dev-host": ("live", "profile_host_is_the_pr105_host_target"),
+    "another-workspace-host": ("elsewhere", "profile_host_is_the_bundle_target_host"),
     "pat-profile": ({"profile": "pat"}, "profile_auth_type_is_github_oidc"),
     "stored-token": ({"profile": "token"}, "profile_holds_only_host_auth_type_client_id"),
     "profile-client-differs": ({"profile": "client"}, "profile_client_id_is_the_deployer"),
@@ -5707,11 +5743,12 @@ _STATIC_PROOF_REFUSALS = {
 @pytest.mark.parametrize("case", sorted(_STATIC_PROOF_REFUSALS))
 def test_oidc_proof_step_refuses_a_wrong_profile_before_any_network_call(tmp_path: Path, case: str) -> None:
     arrangement, failed = _STATIC_PROOF_REFUSALS[case]
-    host = _bundle_target_host(ci_isolation.CI_TARGET)
+    host = _bundle_target_host(OIDC_PROOF_TARGET)
     kwargs: dict[str, Any] = {}
-    if arrangement == "live":
-        live = _bundle_target_host("dev")
-        kwargs = {"profile": _oidc_profile(live), "env": {"MIP_PROOF_DATABRICKS_HOST": live}}
+    if arrangement == "elsewhere":
+        # The profile and the secret agree, but name a workspace the bundle target does not.
+        other = "https://other-workspace.example"
+        kwargs = {"profile": _oidc_profile(other), "env": {"MIP_PROOF_DATABRICKS_HOST": other}}
     elif "env" in arrangement:
         kwargs = {"env": arrangement["env"]}
     else:
@@ -5783,7 +5820,7 @@ _NETWORK_PROOF_REFUSALS = {
 def test_oidc_proof_step_refuses_the_wrong_identity_or_authority(tmp_path: Path, case: str) -> None:
     arrangement, failed = _NETWORK_PROOF_REFUSALS[case]
     expected_false = [failed] if isinstance(failed, str) else list(failed)
-    host = _bundle_target_host(ci_isolation.CI_TARGET)
+    host = _bundle_target_host(OIDC_PROOF_TARGET)
     kwargs = json.loads(json.dumps(arrangement).replace("__HOST__", host))
     result, calls = _run_oidc_proof(tmp_path, **kwargs)
 
@@ -5841,11 +5878,7 @@ def test_every_deployer_step_keeps_ambient_overrides_off_the_oidc_profile() -> N
         if (step.get("env") or {}).get("DATABRICKS_CONFIG_PROFILE") == "DEFAULT"
     }
 
-    assert list(deployer_steps) == [
-        OIDC_PROOF_STEP,
-        "Repair normal operator OAuth credential",
-        "Deploy dev Databricks App",
-    ]
+    assert list(deployer_steps) == [OIDC_PROOF_STEP, "Deploy dev Databricks App"]
     for step in steps:
         env = step.get("env") or {}
         assert "DATABRICKS_TOKEN" not in env, step.get("name")
@@ -5910,14 +5943,11 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
     workflow = DEPLOY_DEV.read_text(encoding="utf-8")
 
     assert "rebase_unverified_app:" in workflow
-    assert "remediate_foreign_catalog_bindings:" in workflow
+    assert "remediate_foreign_catalog_bindings" not in workflow
     assert (
         "MIP_REBASE_UNVERIFIED_APP: ${{ inputs.rebase_unverified_app && '1' || '0' }}" in workflow
     )
-    assert (
-        "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS: "
-        "${{ inputs.remediate_foreign_catalog_bindings && '1' || '0' }}" in workflow
-    )
+    assert "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS: '0'" in workflow
     assert "MIP_REQUIRE_AI_GATEWAY_CLAIMABLE: '1'" in workflow
     assert workflow.count("MIP_DEFAULT_CATALOG: ${{ vars.MIP_DEFAULT_CATALOG || 'mip' }}") == 2
     for name in (
@@ -7956,173 +7986,65 @@ def test_completed_redeploy_supervisor_command_pins_proxy_identity_explicitly() 
     assert "--skip-gateway" in tokens
 
 
-def test_dev_workflow_credential_repair_is_explicit_bounded_and_non_deploying() -> None:
+def test_dev_workflow_is_parked_until_a_client_environment_is_selected() -> None:
+    """M0-PR3: every dispatch refuses before the environment approval and any ID token.
+
+    The CI staging workspace was deleted and the dev target is the live
+    install, so the deploy job needs the `parked` job, whose one step fails.
+    The deploy job's `if` holds no status function, so a failed need skips it.
+    """
+
     workflow = yaml.load(DEPLOY_DEV.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     workflow_inputs = workflow["on"]["workflow_dispatch"]["inputs"]
-    repair_input = workflow_inputs["repair_normal_credential"]
-    assert repair_input["type"] == "boolean"
-    assert repair_input["default"] == "false"
+    jobs = workflow["jobs"]
+    parked = jobs["parked"]
+    assert list(jobs)[0] == "parked"
+    for key in ("if", "needs", "environment", "permissions", "continue-on-error"):
+        assert key not in parked, key
+    (step,) = parked["steps"]
+    assert "if" not in step and "continue-on-error" not in step
+    assert "::error::deploy-dev is parked until a client environment is selected (M1-PR7)." in step["run"]
+    assert step["run"].rstrip().endswith("exit 1")
+    deploy_job = jobs["deploy"]
+    assert deploy_job["needs"] == "parked"
+    assert deploy_job["if"] == ("${{ inputs.acknowledge_single_maintainer_break_glass }}")
+    assert not re.search(r"\b(?:always|failure|cancelled|success)\s*\(", deploy_job["if"])
+
     break_glass_input = workflow_inputs["acknowledge_single_maintainer_break_glass"]
     assert break_glass_input["type"] == "boolean"
     assert break_glass_input["default"] == "false"
-
-    steps = workflow["jobs"]["deploy"]["steps"]
-    refusal_job = workflow["jobs"]["refuse-unacknowledged"]
-    deploy_job = workflow["jobs"]["deploy"]
+    refusal_job = jobs["refuse-unacknowledged"]
     assert refusal_job["if"] == ("${{ !inputs.acknowledge_single_maintainer_break_glass }}")
     refusal_steps = refusal_job["steps"]
     assert len(refusal_steps) == 1
     assert refusal_steps[0]["name"] == ("Refuse an unacknowledged single-maintainer deployment")
     assert "exit 1" in refusal_steps[0]["run"]
-    assert deploy_job["if"] == ("${{ inputs.acknowledge_single_maintainer_break_glass }}")
-    repair_steps = [
-        step for step in steps if step.get("name") == "Repair normal operator OAuth credential"
-    ]
-    deploy_steps = [step for step in steps if step.get("name") == "Deploy dev Databricks App"]
-    assert len(repair_steps) == 1
-    assert len(deploy_steps) == 1
-    repair = repair_steps[0]
-    assert repair["if"] == "${{ inputs.repair_normal_credential }}"
-    # The deployer is the DEFAULT github-oidc profile. The normal identity's
-    # client id rides under MIP_NORMAL_CLIENT_ID: an env DATABRICKS_CLIENT_ID
-    # would override the profile's client_id and exchange as the normal SP.
-    assert repair["env"] == {
-        "DATABRICKS_CONFIG_PROFILE": "DEFAULT",
-        "DATABRICKS_HOST": "${{ secrets.DATABRICKS_HOST }}",
-        "MIP_NORMAL_CLIENT_ID": "${{ secrets.DATABRICKS_CLIENT_ID }}",
-        "GH_TOKEN": "${{ secrets.MIP_GITHUB_CREDENTIAL_SINK_TOKEN }}",
-        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": ("${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}"),
-        "MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY": (
-            "${{ secrets.MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY }}"
-        ),
-        "MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS": (
-            "${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}"
-        ),
-        "MIP_APP_NAME": "${{ vars.MIP_APP_NAME }}",
-        "MIP_DEPLOYMENT_SOURCE_GIT_SHA": "${{ github.sha }}",
-        "MIP_M2M_GITHUB_REPOSITORY": "${{ github.repository }}",
+
+
+def test_dev_workflow_has_no_credential_repair_or_remediation_input() -> None:
+    """The normal-credential repair and the metastore-wide remediation input are gone for good.
+
+    The repair rotated an OAuth secret into GitHub through a secrets-write
+    token, outside scripts/deploy.sh; the remediation rewrote catalog bindings
+    for the whole shared metastore. The rule table that fenced both in CI was
+    retired with the CI staging install, so neither may come back as an input.
+    """
+
+    text = DEPLOY_DEV.read_text(encoding="utf-8")
+    workflow = yaml.load(text, Loader=yaml.BaseLoader)
+    workflow_inputs = workflow["on"]["workflow_dispatch"]["inputs"]
+    steps = workflow["jobs"]["deploy"]["steps"]
+    names = [step.get("name") for step in steps]
+
+    assert set(workflow_inputs) == {
+        "skip_silver",
+        "skip_smoke",
+        "rebase_unverified_app",
+        "acknowledge_single_maintainer_break_glass",
     }
-    assert 'MIP_AI_GATEWAY_PROOF_VERIFY_KEY="$(' in repair["run"]
-    assert "derive_gateway_proof_verify_key" in repair["run"]
-    assert 'os.environ["MIP_AI_GATEWAY_PROOF_SIGNING_KEY"]' in repair["run"]
-    assert "export MIP_AI_GATEWAY_PROOF_VERIFY_KEY" in repair["run"]
-    assert "MIP_AI_GATEWAY_PROOF_SIGNING_KEY is invalid" in repair["run"]
-    repair_preflight = repair["run"].partition("python -m tools.databricks.provision_m2m_oauth")[0]
-    # The isolation gate is the step's first command, before any workspace call.
-    assert repair["run"].splitlines()[:2] == ["set -euo pipefail", "# This step rotates an OAuth secret before, and outside,"]
-    assert [line for line in repair["run"].splitlines() if line and not line.startswith("#")][1] == (
-        "python -m tools.databricks.ci_install_isolation repair-credential"
-    )
-
-    def encoded_seed(byte: int) -> str:
-        return base64.urlsafe_b64encode(bytes([byte]) * 32).rstrip(b"=").decode()
-
-    def run_preflight(
-        *,
-        signing_key: str,
-        previous_verify_key: str = "",
-        historical_verify_keys: str = "",
-        post_preflight: str,
-        overrides: dict[str, str] | None = None,
-    ) -> subprocess.CompletedProcess[str]:
-        overrides = overrides or {}
-        preflight_env = {
-            **os.environ,
-            "PATH": f"{Path(sys.executable).parent}:{os.environ['PATH']}",
-            "GITHUB_ACTIONS": "true",
-            "GITHUB_WORKFLOW_REF": "o/r/.github/workflows/deploy-dev.yml@refs/heads/main",
-            "DATABRICKS_HOST": ci_isolation.target_hosts()[ci_isolation.CI_TARGET],
-            "DATABRICKS_CONFIG_PROFILE": "DEFAULT",
-            "MIP_NORMAL_CLIENT_ID": "test-client-id",
-            "GH_TOKEN": "test-github-token",
-            "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": signing_key,
-            "MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY": previous_verify_key,
-            "MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS": historical_verify_keys,
-            "MIP_APP_NAME": "test-app",
-            "MIP_DEPLOYMENT_SOURCE_GIT_SHA": "a" * 40,
-            "MIP_M2M_GITHUB_REPOSITORY": "owner/repo",
-            **overrides,
-        }
-        return subprocess.run(
-            ["bash", "-c", repair_preflight + post_preflight],
-            cwd=REPO,
-            env=preflight_env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-
-    historical_verify_key = derive_gateway_proof_verify_key(encoded_seed(1))
-    previous_verify_key = derive_gateway_proof_verify_key(encoded_seed(2))
-    current_signing_key = encoded_seed(3)
-    current_verify_key = derive_gateway_proof_verify_key(current_signing_key)
-    ordered_probe = run_preflight(
-        signing_key=current_signing_key,
-        previous_verify_key=previous_verify_key,
-        historical_verify_keys=historical_verify_key,
-        post_preflight=(
-            "\npython - <<'PY'\n"
-            "import json\n"
-            "from tools.databricks.app_deployment_lease_support import key_registry\n"
-            "print(json.dumps(key_registry()))\n"
-            "PY\n"
-        ),
-    )
-    assert ordered_probe.returncode == 0, ordered_probe.stdout + ordered_probe.stderr
-    assert json.loads(ordered_probe.stdout) == [
-        historical_verify_key,
-        previous_verify_key,
-        current_verify_key,
-    ]
-
-    invalid_signing_key = "A" * 42
-    invalid_probe = run_preflight(
-        signing_key=invalid_signing_key,
-        post_preflight="\nprintf 'PROVISION_SENTINEL\\n'\n",
-    )
-    assert invalid_probe.returncode != 0
-    assert "::error::MIP_AI_GATEWAY_PROOF_SIGNING_KEY is invalid" in invalid_probe.stdout
-    assert "PROVISION_SENTINEL" not in invalid_probe.stdout
-    assert invalid_signing_key not in invalid_probe.stdout + invalid_probe.stderr
-    for refused_env in (
-        {"DATABRICKS_HOST": ci_isolation.target_hosts()["dev"]},
-        {"MIP_APP_NAME": "mip-app"},
-        {"MIP_APP_NAME": ""},
-        {"GITHUB_WORKFLOW_REF": "o/r/.github/workflows/ci.yml@refs/heads/main"},
-    ):
-        refused_probe = run_preflight(
-            signing_key=current_signing_key,
-            post_preflight="\nprintf 'PROVISION_SENTINEL\\n'\n",
-            overrides=refused_env,
-        )
-        assert refused_probe.returncode == 2, (refused_env, refused_probe.stderr)
-        assert "[ci-install-isolation] refused" in refused_probe.stderr
-        assert "PROVISION_SENTINEL" not in refused_probe.stdout, refused_env
-    missing_normal = run_preflight(
-        signing_key=current_signing_key,
-        post_preflight="\nprintf 'PROVISION_SENTINEL\\n'\n",
-        overrides={"MIP_NORMAL_CLIENT_ID": ""},
-    )
-    assert missing_normal.returncode == 1
-    assert (
-        "::error::Missing required credential-repair input(s): MIP_NORMAL_CLIENT_ID"
-        in missing_normal.stdout
-    )
-    assert "PROVISION_SENTINEL" not in missing_normal.stdout
-    assert deploy_steps[0]["if"] == "${{ !inputs.repair_normal_credential }}"
-    assert _continued_command_tokens(repair["run"], "tools.databricks.provision_m2m_oauth") == [
-        "python",
-        "-m",
-        "tools.databricks.provision_m2m_oauth",
-        "--identity-role",
-        "normal",
-        "--expected-application-id",
-        "$MIP_NORMAL_CLIENT_ID",
-        "--app-name",
-        "$MIP_APP_NAME",
-        "--no-grant-can-use",
-        "--gh-repo",
-        "$GITHUB_REPOSITORY",
-        "--rotate",
-        "--set-gh-secrets",
-    ]
+    assert "Repair normal operator OAuth credential" not in names
+    for retired in ("repair_normal_credential", "MIP_GITHUB_CREDENTIAL_SINK_TOKEN", "--set-gh-secrets", "provision_m2m_oauth"):
+        assert retired not in text, retired
+    deploy = steps[names.index("Deploy dev Databricks App")]
+    assert "if" not in deploy, "the deploy step runs whenever the job does"
+    assert deploy["env"]["MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS"] == "0"

@@ -60,13 +60,13 @@ if [[ -z "$DEMO_FEEDS_FROM_ENV" ]]; then
   DEMO_FEEDS_FROM_ENV="$(dotenv_value MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS)"
 fi
 if [[ -z "$DEMO_FEEDS_FROM_ENV" ]]; then
-  if [[ "$TARGET_CLASS" == "dev" ]]; then
+  if [[ "$TARGET" == "dev" ]]; then
     DEMO_FEEDS_FROM_ENV=1
   else
     DEMO_FEEDS_FROM_ENV=0
   fi
 fi
-if [[ "$TARGET_CLASS" != "dev" ]]; then
+if [[ "$TARGET" != "dev" ]]; then
   DEMO_FEEDS_NORMALIZED="$(printf '%s' "$DEMO_FEEDS_FROM_ENV" | tr '[:upper:]' '[:lower:]')"
   if [[ "$DEMO_FEEDS_NORMALIZED" =~ ^(1|true|yes|y|on)$ && "${MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD:-0}" != "1" ]]; then
     echo "${RED}[deploy] refusing to enable Summit demo first-party feeds for target ${TARGET}.${RST}" >&2

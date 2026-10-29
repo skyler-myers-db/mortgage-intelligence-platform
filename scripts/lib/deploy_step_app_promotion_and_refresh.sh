@@ -72,7 +72,7 @@ deploy_app_snapshot() {
     --expected-git-sha "$APP_GIT_SHA" \
     --expected-principal "$APP_CURRENT_USER" \
     --expected-target "$TARGET" \
-    --expected-root-leaf "${MIP_BUNDLE_ROOT_LEAF_RESOLVED:-$TARGET}"
+    --expected-root-leaf "$TARGET"
   run databricks apps deploy "$APP_NAME" --json "@$APP_DEPLOY_PAYLOAD" --timeout 20m
   assert_expected_app_identity "$APP_NAME"
   if [[ -n "${APP_LAST_DEPLOY_PAYLOAD:-}" ]]; then
@@ -170,7 +170,7 @@ run "$PYTHON" -m tools.databricks.app_release_source publish \
   --expected-commit "$SOURCE_GIT_SHA" \
   --expected-principal "$APP_CURRENT_USER" \
   --expected-target "$TARGET" \
-  --expected-root-leaf "${MIP_BUNDLE_ROOT_LEAF_RESOLVED:-$TARGET}"
+  --expected-root-leaf "$TARGET"
 APP_SOURCE_PATH="${APP_BUNDLE_FILES_PATH%/files}/app-src/${APP_RELEASE_ID}"
 # <<< app release source: publish <<<
 
@@ -264,7 +264,7 @@ run_job_with_retry databricks bundle run mip_kpi_snapshot -t "$TARGET"
 step "verify mip_scheduled_refresh — ${BUNDLE_VAR_scheduled_refresh_pause_status:-unset}, chain and failure email"
 # An unset pause status reaches the tool as "" and is refused (exit 2).
 _SCHEDULED_REFRESH_ARGS=(--expect "${BUNDLE_VAR_scheduled_refresh_pause_status:-}")
-if [[ "$TARGET" == "dev" && -z "${BUNDLE_VAR_install_suffix:-}" ]]; then
+if [[ "$TARGET" == "dev" ]]; then
   _SCHEDULED_REFRESH_ARGS+=(--live-install)
 fi
 run "$PYTHON" -m tools.databricks.verify_scheduled_refresh_state \

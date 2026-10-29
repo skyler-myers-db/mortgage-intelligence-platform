@@ -202,7 +202,7 @@ def test_no_tracked_file_names_a_third_party_handle_or_catalog() -> None:
         "docs/runbook.md",
         "docs/security/GRANTS.md",
         ".github/workflows/deploy-dev.yml",
-        "tests/unit/test_ci_install_isolation.py",
+        ".github/workflows/nightly.yml",
         "tests/unit/test_no_third_party_names.py",
         ".claude/agent-memory/principal-architect/project_forked_anchor_ci_target.md",
     ):

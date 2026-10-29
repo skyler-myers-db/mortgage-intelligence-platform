@@ -587,22 +587,17 @@ How it is switched on:
 
 - `databricks.yml` declares `scheduled_refresh_pause_status` with the default
   `PAUSED`, and no target sets it.
-- The `scripts/deploy.sh` preflight exports `UNPAUSED` only for `-t dev` on the
-  default bundle root (empty `install_suffix`). `MIP_SCHEDULED_REFRESH=off`
-  (shell or `.env.local`) keeps it paused. Every other target is always
-  paused and refuses `MIP_SCHEDULED_REFRESH=on` (exit 2): the CI staging
-  install (`deploy-dev.yml`, target `pr105-host`, leaf `dev-ci`) and
-  `-t prod`, where a cadence is a customer decision that needs a reviewed
-  change. `tools/databricks/bundle_env.py` refuses an `UNPAUSED` export for
-  any other install.
+- The `scripts/deploy.sh` preflight exports `UNPAUSED` only for `-t dev`.
+  `MIP_SCHEDULED_REFRESH=off` (shell or `.env.local`) keeps it paused. Every
+  other target is always paused and refuses `MIP_SCHEDULED_REFRESH=on`
+  (exit 2): `-t prod`, where a cadence is a customer decision that needs a
+  reviewed change. `tools/databricks/bundle_env.py` refuses an `UNPAUSED`
+  export for any other install.
 - A failed run emails the deploying user, on the live install only.
   `bundle_env.py` writes that recipient into the target's
   `.databricks/bundle/<target>/variable-overrides.json` (`dev` for the live
   install), because the CLI refuses a `BUNDLE_VAR_` export for a list
-  variable, and rewrites it before every CLI call. The CI staging install and
-  prod get no recipient: the CI deployer is a service principal whose user
-  name is an application id, not an email address. The CI install writes its
-  own `pr105-host` file on its own runner.
+  variable, and rewrites it before every CLI call. prod gets no recipient.
 
 **How it lands.** The schedule reaches a workspace only through the bundle
 apply inside a full governed `./scripts/deploy.sh -t dev` run. A Jobs-UI

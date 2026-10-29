@@ -50,9 +50,8 @@ def test_every_snapshot_converges_static_source_immediately_before_activation() 
         '    --expected-git-sha "$APP_GIT_SHA" \\\n'
         '    --expected-principal "$APP_CURRENT_USER" \\\n'
         '    --expected-target "$TARGET" \\\n'
-        # W5e (D-platform-process-b step 7): the resolved bundle root leaf; it
-        # is the target itself for every install but the CI staging one.
-        '    --expected-root-leaf "${MIP_BUNDLE_ROOT_LEAF_RESOLVED:-$TARGET}"\n'
+        # The bundle root's last segment is the target itself (databricks.yml).
+        '    --expected-root-leaf "$TARGET"\n'
         '  run databricks apps deploy "$APP_NAME"'
     ) in function_body
 

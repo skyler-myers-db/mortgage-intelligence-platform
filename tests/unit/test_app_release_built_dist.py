@@ -36,9 +36,9 @@ REQUIRE_DIST_FLAG = "MIP_REQUIRE_FRONTEND_DIST"
 STAGE_START = "# >>> app release source: stage >>>"
 STAGE_END = "# <<< app release source: stage <<<"
 STAGE_CALL = 'run "$PYTHON" -m tools.databricks.app_runtime_closure stage'
-# The CI install's bundle identity shape (tools/databricks/ci_install_isolation.py);
-# the principal is a placeholder, never a live one.
-PRINCIPAL, TARGET, LEAF = "ci-deployer@example.invalid", "pr105-host", "dev-ci"
+# A service-principal deployer under a caller-supplied root leaf; the principal
+# is a placeholder, never a live one.
+PRINCIPAL, TARGET, LEAF = "ci-deployer@example.invalid", "dev", "client-a"
 
 
 def _require_built_dist() -> None:

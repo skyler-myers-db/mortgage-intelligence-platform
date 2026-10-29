@@ -24,7 +24,7 @@ from tools.databricks import app_runtime_closure as closure
 from tools.databricks import converge_static_app_source as converge
 
 PRINCIPAL = "ci-deployer@example.com"
-TARGET, LEAF = "pr105-host", "dev-ci"
+TARGET, LEAF = "dev", "client-a"
 FILES_ROOT = contract.files_root(principal=PRINCIPAL, target=TARGET, root_leaf=LEAF)
 IDENTITY = ["--expected-principal", PRINCIPAL, "--expected-target", TARGET, "--expected-root-leaf", LEAF]
 

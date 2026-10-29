@@ -187,66 +187,15 @@ else
 fi
 # <<< frontend dependency freshness: check <<<
 
-# >>> ci-install-isolation (W5e w5-deps-report, D-platform-process-b step 7)
-# Pure and fail-closed, so it also runs in DRY_RUN, and it sits before the
-# confirmation prompt, the BUNDLE_VAR exports and any mutation: deploy-dev.yml
-# must use its own bundle root (MIP_BUNDLE_ROOT_LEAF) and staging names, and a
-# non-default root is CI-only (tools/databricks/ci_install_isolation.py, which
-# names only variables on refusal). deploy-dev.yml deploys only to the
-# forked-anchor pr105-host target, which is deploy-dev.yml-only. The names are
-# read as the gates below read them (shell, then .env.local); an unset name
-# falls back to its live default, so the tool refuses it. An operator run (no
-# leaf, not pr105-host, not deploy-dev.yml) resolves to the live root without
-# Python: the tool's answer for that input.
-_CI_INSTALL_LEAF="$(deployment_control_value MIP_BUNDLE_ROOT_LEAF)"
-if [[ -z "$_CI_INSTALL_LEAF" && "$TARGET" != "pr105-host" && \
-      "${GITHUB_WORKFLOW_REF:-}" != *"/.github/workflows/deploy-dev.yml@"* ]]; then
-  _CI_INSTALL_VARS=$'bundle_root_leaf=dev\ninstall_suffix='
-elif ! _CI_INSTALL_VARS="$(
-  MIP_BUNDLE_ROOT_LEAF="$_CI_INSTALL_LEAF" \
-  MIP_APP_NAME="$(deployment_control_value MIP_APP_NAME)" \
-  MIP_DEFAULT_CATALOG="$(deployment_control_value MIP_DEFAULT_CATALOG)" \
-  MIP_LAKEBASE_INSTANCE="$(deployment_control_value MIP_LAKEBASE_INSTANCE)" \
-  MIP_LAKEBASE_SYNC_CATALOG="$(deployment_control_value MIP_LAKEBASE_SYNC_CATALOG)" \
-  MIP_RUNTIME_SECRET_SCOPE="$(deployment_control_value MIP_RUNTIME_SECRET_SCOPE)" \
-  MIP_APP_ROLLBACK_SECRET_SCOPE="$(deployment_control_value MIP_APP_ROLLBACK_SECRET_SCOPE)" \
-  MIP_GENIE_SPACE_NAME="$(deployment_control_value MIP_GENIE_SPACE_NAME)" \
-  MIP_AI_GATEWAY_TABLE_PREFIX="$(deployment_control_value MIP_AI_GATEWAY_TABLE_PREFIX)" \
-  MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE="$(deployment_control_value MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE)" \
-  MIP_AI_GATEWAY_AGENT_MODEL_FAMILY="$(deployment_control_value MIP_AI_GATEWAY_AGENT_MODEL_FAMILY)" \
-  GENIE_SPACE_ID="$(deployment_control_value GENIE_SPACE_ID)" \
-  MIP_DEPLOY_TARGET="$TARGET" "$PYTHON" -m tools.databricks.ci_install_isolation
-)"; then
-  echo "${RED}[deploy] refusing: the CI staging install is not isolated from the live install (see above).${RST}" >&2
-  exit 2
-fi
-BUNDLE_VAR_bundle_root_leaf="$(printf '%s\n' "$_CI_INSTALL_VARS" | sed -n 's/^bundle_root_leaf=//p')"
-BUNDLE_VAR_install_suffix="$(printf '%s\n' "$_CI_INSTALL_VARS" | sed -n 's/^install_suffix=//p')"
-export BUNDLE_VAR_bundle_root_leaf BUNDLE_VAR_install_suffix
-if [[ -n "$BUNDLE_VAR_install_suffix" ]]; then
-  # Later steps read these two from the shell only (with live defaults): pin
-  # them to the values the rule table just checked (shell, then .env.local).
-  MIP_AI_GATEWAY_TABLE_PREFIX="$(deployment_control_value MIP_AI_GATEWAY_TABLE_PREFIX)"
-  MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE="$(deployment_control_value MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE)"
-  export MIP_AI_GATEWAY_TABLE_PREFIX MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE
-fi
-MIP_BUNDLE_ROOT_LEAF_RESOLVED="$TARGET"
-if [[ "$TARGET_CLASS" == "dev" ]]; then
-  MIP_BUNDLE_ROOT_LEAF_RESOLVED="$BUNDLE_VAR_bundle_root_leaf"
-fi
-unset _CI_INSTALL_VARS _CI_INSTALL_LEAF
-# <<< ci-install-isolation
-
 # >>> scheduled-refresh (data-freshness design 2026-10-26)
 # mip_scheduled_refresh's pause status is decided here, never in a bundle
 # target: the variable defaults to PAUSED. Only the dev target's LIVE install
-# (empty install_suffix) unpauses, by default; MIP_SCHEDULED_REFRESH=off opts
-# it out. The CI staging install is always PAUSED. prod is always PAUSED: a
-# prod cadence is a customer decision that needs a reviewed change here, so an
-# explicit `on` for prod is refused rather than ignored. Pure, so it also runs
-# in DRY_RUN. A Jobs-UI unpause is reverted by the next deploy, and any apply
-# outside this script re-pauses the live schedule; this switch is the durable
-# one (docs/runbook.md "Weekly scheduled refresh").
+# unpauses, by default; MIP_SCHEDULED_REFRESH=off opts it out. prod is always
+# PAUSED: a prod cadence is a customer decision that needs a reviewed change
+# here, so an explicit `on` for prod is refused rather than ignored. Pure, so
+# it also runs in DRY_RUN. A Jobs-UI unpause is reverted by the next deploy,
+# and any apply outside this script re-pauses the live schedule; this switch is
+# the durable one (docs/runbook.md "Weekly scheduled refresh").
 if [[ "$TARGET" == "dev" ]]; then
   _SCHEDULED_REFRESH="$(deployment_control_value MIP_SCHEDULED_REFRESH on)"
 else
@@ -263,7 +212,7 @@ if [[ "$TARGET" != "dev" && "$_SCHEDULED_REFRESH" == "on" ]]; then
   echo "${RED}[deploy] MIP_SCHEDULED_REFRESH=on is honoured only for the dev target's live install; ${TARGET} keeps mip_scheduled_refresh PAUSED.${RST}" >&2
   exit 2
 fi
-if [[ "$TARGET" == "dev" && "$_SCHEDULED_REFRESH" == "on" && -z "$BUNDLE_VAR_install_suffix" ]]; then
+if [[ "$TARGET" == "dev" && "$_SCHEDULED_REFRESH" == "on" ]]; then
   BUNDLE_VAR_scheduled_refresh_pause_status=UNPAUSED
 else
   BUNDLE_VAR_scheduled_refresh_pause_status=PAUSED
@@ -649,7 +598,7 @@ fi
 
 APP_RUNTIME_ENV="${APP_ENV:-}"
 if [[ -z "$APP_RUNTIME_ENV" ]]; then
-  if [[ "$TARGET_CLASS" == "dev" ]]; then
+  if [[ "$TARGET" == "dev" ]]; then
     APP_RUNTIME_ENV="sandbox"
   else
     APP_RUNTIME_ENV="$TARGET"
