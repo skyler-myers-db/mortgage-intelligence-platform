@@ -83,14 +83,22 @@ def test_a_deployer_without_system_table_access_warns_and_grants_nothing(tmp_pat
     assert called
     assert grants == []
     assert "reached-after-block" in stdout
-    assert "WARNING: observed lineage stays unavailable" in stderr
+    assert "WARNING: observed-lineage view not published" in stderr
     for privilege in (
         "USE CATALOG on system",
         "USE SCHEMA on system.access",
         "SELECT on system.access.table_lineage",
     ):
         assert privilege in stderr
-    assert "summit_mortgage.audit.asset_lineage was not published" in stderr
+    assert (
+        "this deploy neither published nor verified summit_mortgage.audit.asset_lineage "
+        "and granted nothing on it"
+    ) in stderr
+    # The skip touches nothing, so it must not claim the App holds no grant: a
+    # view and grant an earlier owner left are reported as unverified, not absent.
+    assert "A view and App grant an earlier owner left are unchanged and unverified" in stderr
+    assert "a new App service principal is not granted" in stderr
+    assert "was not granted SELECT" not in stderr
 
 
 @pytest.mark.parametrize("exit_code", [1, 2, 4])
@@ -108,5 +116,17 @@ def test_a_dry_run_calls_no_helper_and_only_reports_the_grant(tmp_path: Path) ->
 
     assert rc == 0, stderr
     assert not called
-    assert f"would grant: {GRANT}" in stdout
+    # The plan says the grant is conditional on the probe a dry run never makes.
+    plan = (
+        "  plan: the view publish and the grant below run only if the deploying identity "
+        "can read system.access.table_lineage; otherwise a real run warns and skips both"
+    )
+    assert plan in stdout
+    assert stdout.index(plan) < stdout.index(f"would grant: {GRANT}")
     assert "reached-after-block" in stdout
+
+
+def test_a_real_run_prints_no_dry_run_plan(tmp_path: Path) -> None:
+    _rc, stdout, _stderr, _grants, _called = _drive(tmp_path, exit_code=0)
+
+    assert "plan: the view publish" not in stdout

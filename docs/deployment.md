@@ -1883,9 +1883,14 @@ pending AI Gateway inference-table grants already use:
   `USE CATALOG` on `system`, `USE SCHEMA` on `system.access` or `SELECT` on
   `system.access.table_lineage`, or the `access` system schema is not
   enabled. The deploy prints a warning that names those privileges and
-  continues. It creates nothing and grants nothing, and a view that an
-  earlier owner published stays as it was. The App keeps its explicit
-  "Observed lineage unavailable" gap; it never shows substitute lineage.
+  continues. It creates, replaces, verifies and grants nothing. A view and
+  App grant that an earlier owner left stay as they were and this deploy has
+  not verified them; their owner answers for their definition. A new App
+  service principal (after an App recreate) is not granted on such a view, so
+  lineage stays degraded until a deploy that can read the system table runs.
+  Without a view and grant the App keeps its explicit "Observed lineage
+  unavailable" gap; it never shows substitute lineage. A dry run cannot
+  probe, so its plan prints the grant as conditional on the probe.
 - **Any other failure is fatal**, like every UC grant in step 4c: an
   unexplained probe error, a publish or `DESCRIBE` failure after the probe
   passed, a projection other than the four columns, or the grant itself.

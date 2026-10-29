@@ -253,17 +253,22 @@ fi
 # optional evidence source: a deployer that cannot read the system table (exit
 # 3) skips the view and the grant with a warning, and the App keeps its explicit
 # "Observed lineage unavailable" state -- the same honest-degraded convention as
-# the pending AI Gateway inference-table grants. Any other failure is fatal,
-# like every UC grant above.
+# the pending AI Gateway inference-table grants. The skip touches nothing: a view
+# and App grant an earlier owner left stay as they were, unverified by this
+# deploy, and a new App service principal is not granted. Any other failure is
+# fatal, like every UC grant above.
 step "publish the observed-lineage view and grant the App SELECT on it (optional evidence)"
 _asset_lineage_rc=0
 run "$PYTHON" -m tools.databricks.ensure_asset_lineage_view \
   --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
   --catalog "$_GRANTS_CATALOG" || _asset_lineage_rc=$?
 if [[ "$_asset_lineage_rc" -eq 0 ]]; then
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "  plan: the view publish and the grant below run only if the deploying identity can read system.access.table_lineage; otherwise a real run warns and skips both"
+  fi
   apply_uc_grant "GRANT SELECT ON TABLE ${_GRANTS_CATALOG}.audit.asset_lineage TO \`${APP_SP_CLIENT_ID}\`"
 elif [[ "$_asset_lineage_rc" -eq 3 ]]; then
-  echo "${YLW}[deploy] WARNING: observed lineage stays unavailable: the deploying identity lacks USE CATALOG on system, USE SCHEMA on system.access or SELECT on system.access.table_lineage, so ${_GRANTS_CATALOG}.audit.asset_lineage was not published and the App was not granted SELECT on it.${RST}" >&2
+  echo "${YLW}[deploy] WARNING: observed-lineage view not published: the deploying identity lacks USE CATALOG on system, USE SCHEMA on system.access or SELECT on system.access.table_lineage, so this deploy neither published nor verified ${_GRANTS_CATALOG}.audit.asset_lineage and granted nothing on it. A view and App grant an earlier owner left are unchanged and unverified, and a new App service principal is not granted; without them the App shows its explicit 'Observed lineage unavailable' gap.${RST}" >&2
 else
   echo "${RED}[deploy] observed-lineage view publish failed (exit ${_asset_lineage_rc}); see the error above.${RST}" >&2
   exit "$_asset_lineage_rc"
