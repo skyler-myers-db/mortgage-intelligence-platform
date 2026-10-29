@@ -12,6 +12,10 @@ audit-readable MATRIX, no longer a required manual runbook:
   post-agentic AI Gateway table-grant step (resolves the SP client id
   from `databricks apps get`, executes via the deploy warehouse, fails
   the deploy loudly when the deploying identity lacks GRANT authority).
+  The same step publishes the observed-lineage view
+  `<catalog>.audit.asset_lineage` and grants the App `SELECT` on it, or
+  warns and skips both when the deploying identity cannot read
+  `system.access.table_lineage` (§4, "Observed-lineage view").
 * §Lakebase app/verifier-role grants are applied by `jobs/lakebase_migrate.py`
   after schema + seed. The job resolves exactly
   `databricks apps.get(name).service_principal_client_id`, waits only for
@@ -282,6 +286,8 @@ The `refresh_run_state` read fails silently and every gold table's
 GRANT USE CATALOG ON CATALOG mip TO `mip-app`;
 GRANT USE SCHEMA ON SCHEMA mip.audit TO `mip-app`;
 GRANT SELECT, MODIFY ON TABLE mip.audit.campaign_treatment_snapshot TO `mip-app`;
+-- Optional evidence: only after the deploy published the observed-lineage view.
+GRANT SELECT ON TABLE mip.audit.asset_lineage TO `mip-app`;
 -- Substitute only the exact contract-hashed payload table discovered by
 -- grant_ai_gateway_inference_table.py; never grant a fixed or family-wide name.
 GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_growth_agent_<resource-hash-12>_payload TO `mip-app`;
@@ -317,7 +323,24 @@ below that governed window) can make an otherwise valid campaign proof
 unreadable. Verify both effective properties and a pinned-version read in the
 live staging drill before claiming this boundary is deployable.
 
-All other audit access is limited to the MIP-owned AI Gateway inference-log tables
+**Observed-lineage view.** The App reads observed lineage from
+`mip.audit.asset_lineage` (`sql/ddl/audit_asset_lineage_view.sql`), never
+from `system.access.table_lineage`. That system table holds lineage for every
+table on a metastore other teams share. The view exposes four columns
+(source and target full names, `event_time`, `event_date`) and keeps only
+edges whose source or target is in the install catalog. Unity Catalog
+evaluates a view with its owner's privileges, so the App needs `SELECT` on
+this one view and no privilege anywhere in the `system` catalog. The view's
+owner, the deploying identity that creates it, needs `USE CATALOG` on
+`system`, `USE SCHEMA` on `system.access` and `SELECT` on
+`system.access.table_lineage`. When it lacks them, deploy step 4c warns,
+names them, and skips both the view and this grant. The App then keeps its
+explicit "Observed lineage unavailable" gap. Any other publish or grant
+failure is fatal. See `docs/deployment.md`, "Observed lineage view (optional
+evidence)".
+
+Besides the treatment table and that view, all other audit access is limited
+to the MIP-owned AI Gateway inference-log tables
 whose names match the configured prefix `MIP_AI_GATEWAY_INFERENCE_TABLE`
 (generated prefix
 `<catalog>.audit.mip_agent_gateway_growth_agent_<resource-hash-12>`).
@@ -659,8 +682,10 @@ claiming AI Gateway governance live.
 **What not to grant.** Do not grant `SELECT ON SCHEMA mip.audit` to either the
 runtime app or verifier service principal. That would expose every current and
 future audit table in the schema. Each needs `USE SCHEMA`; the runtime app has
-the exact treatment-table grant above plus Gateway-prefix `SELECT`, while the
-verifier has only Gateway-prefix `SELECT`. The verifier must fail its identity
+the exact treatment-table grant above, `SELECT` on the observed-lineage view
+plus Gateway-prefix `SELECT`, while the verifier has only Gateway-prefix
+`SELECT`. Do not grant the runtime app anything on `system.access`: the
+view's owner reads the system table on its behalf. The verifier must fail its identity
 boundary if `campaign_treatment_snapshot` is visible, must not join `mip-admin`,
 and the runtime app must not write the Lakebase proof ledger. The verifier
 boundary also rejects forbidden metastore privileges and any direct, inherited,
@@ -1370,6 +1395,7 @@ SHOW GRANTS `mip-app` ON CATALOG mip;
 SHOW GRANTS `mip-app` ON SCHEMA mip.gold;
 SHOW GRANTS `mip-app` ON SCHEMA mip.ref;
 SHOW GRANTS `mip-app` ON SCHEMA mip.audit;
+SHOW GRANTS `mip-app` ON TABLE mip.audit.asset_lineage;  -- expect SELECT once published
 -- Substitute the exact generated table printed by the grant postflight.
 SHOW GRANTS `mip-app` ON TABLE mip.audit.mip_agent_gateway_growth_agent_<resource-hash-12>_payload;
 SHOW GRANTS `mip-app` ON SCHEMA mip_app_state.mip_sync;
@@ -1389,6 +1415,8 @@ SHOW GRANTS ON WAREHOUSE `mip_serverless_sql`;
 -- Concrete round-trip
 SELECT COUNT(*) FROM mip.gold.borrower_360;     -- expect > 0 after refresh
 SELECT COUNT(*) FROM mip.ref.offer_rules_config; -- expect > 0 after seed
+SELECT COUNT(*) FROM mip.audit.asset_lineage
+WHERE event_date >= current_date() - INTERVAL 90 DAYS; -- expect > 0 once a refresh job has run
 SELECT COUNT(*) FROM mip.audit.mip_agent_gateway_growth_agent_<resource-hash-12>_payload
 WHERE client_request_id LIKE 'mip-capability-%'; -- expect > 0 after live capability probe
 -- Optional ETL-only proof; run as `sp-mip-etl`, not `mip-app`.
@@ -1493,6 +1521,10 @@ assumption in your runbook.
 - **`SELECT ON SCHEMA mip.audit`**. The app only needs the exact
   `campaign_treatment_snapshot` table and MIP-owned AI Gateway inference-log
   prefix described in §4, not every audit object that may later land in the schema.
+- **Any privilege on `system.access`** (`USE SCHEMA`, or `SELECT` on
+  `system.access.table_lineage`). That table holds lineage for every table on
+  the metastore. The app reads the four-column, install-catalog
+  `mip.audit.asset_lineage` view, which runs with its owner's access (§4).
 - **`CAN_MANAGE`** on the app resource. That belongs to the Entrada
   delivery team's admin group, not the app identity itself.
 - **Direct Postgres `SUPERUSER` or database `CREATE`** on the Lakebase role.
