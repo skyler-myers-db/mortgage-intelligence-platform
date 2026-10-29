@@ -25,6 +25,7 @@ from databricks.sdk.service.workspace import (
     WorkspaceObjectAccessControlRequest,
     WorkspaceObjectPermissionLevel,
 )
+from tools.databricks import app_deployment_lease_holder as lease_holder
 from tools.databricks import app_deployment_lease_record_io as lease_record_io
 from tools.databricks import app_deployment_lease_recovery_checkpoint as recovery_checkpoint
 from tools.databricks import app_deployment_lease_support as lease_support
@@ -115,6 +116,7 @@ def _assert_protected_root(
     object_id: str,
 ) -> None:
     permissions = workspace.workspace.get_permissions("directories", object_id)
+    holder_field = lease_holder.holder_acl_field(workspace, holder)
     holder_manage = False
     writer_read = False
     for entry in _items(_field(permissions, "access_control_list")):
@@ -122,7 +124,7 @@ def _assert_protected_root(
         user_name = str(_field(entry, "user_name") or "").strip()
         service_principal_name = str(_field(entry, "service_principal_name") or "").strip()
         group_name = str(_field(entry, "group_name") or "").strip().casefold()
-        if user_name == holder and not service_principal_name and not group_name:
+        if lease_holder.is_holder_entry(holder_field, holder, entry):
             if levels != {"CAN_MANAGE"}:
                 raise RuntimeError("App deployment lease holder permission drifted")
             holder_manage = True
@@ -153,10 +155,7 @@ def _ensure_protected_root(
         "directories",
         object_id,
         access_control_list=[
-            WorkspaceObjectAccessControlRequest(
-                user_name=holder,
-                permission_level=WorkspaceObjectPermissionLevel.CAN_MANAGE,
-            ),
+            lease_holder.holder_manage_request(workspace, holder),
             WorkspaceObjectAccessControlRequest(
                 service_principal_name=writer_application_id,
                 permission_level=WorkspaceObjectPermissionLevel.CAN_READ,
@@ -579,6 +578,7 @@ def acquire(
     source_git_sha = _source_sha(source_git_sha)
     current = now or _now()
     holder = _holder(workspace)
+    lease_holder.holder_acl_field(workspace, holder)  # resolve the ACL kind before any write
     writer = (
         writer_application_id or os.environ.get("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", "")
     ).strip()
