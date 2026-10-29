@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import socket
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -100,9 +101,31 @@ def test_n_requests_across_workers_make_one_github_fetch_and_one_exchange(
     deployer = install_github_oidc_deployer(monkeypatch, tmp_path)
     monkeypatch.setenv("DATABRICKS_CLIENT_ID", "normal-app-client")
     client = deployment_workspace_client()
+    # The GitHub fetch holds until a second worker overlaps it (or 0.5 s
+    # passes), so an unserialised cache miss is observed, not raced past.
+    overlap = threading.Event()
+    inside = [0]
+    counter = threading.Lock()
+    fetch = deployer.http.get
+
+    def overlapping_get(url: str, **kwargs: Any) -> Any:
+        with counter:
+            inside[0] += 1
+            if inside[0] > 1:
+                overlap.set()
+        overlap.wait(timeout=0.5)
+        try:
+            return fetch(url, **kwargs)
+        finally:
+            with counter:
+                inside[0] -= 1
+
+    monkeypatch.setattr(deployer.http, "get", overlapping_get)
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         headers = list(pool.map(lambda _i: client.config.authenticate(), range(64)))
+
+    assert not overlap.is_set()
 
     assert client.config.auth_type == "github-oidc"
     assert {h["Authorization"] for h in headers} == {"Bearer databricks-token-1"}
