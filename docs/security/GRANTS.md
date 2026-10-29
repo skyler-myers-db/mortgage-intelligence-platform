@@ -338,7 +338,9 @@ owner, the deploying identity that creates it, needs `USE CATALOG` on
 `system.access.table_lineage`. When it lacks them, deploy step 4c warns,
 names them, and skips both the view and this grant. The App then keeps its
 explicit "Observed lineage unavailable" gap. Any other publish or grant
-failure is fatal. See `docs/deployment.md`, "Observed lineage view (optional
+failure is fatal. A replace drops the view's grants, so the deploy re-grants
+the App right after each publish and no hand-made grant on the view
+survives one. See `docs/deployment.md`, "Observed lineage view (optional
 evidence)".
 
 Besides the treatment table and that view, all other audit access is limited

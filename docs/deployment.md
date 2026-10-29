@@ -1900,11 +1900,29 @@ pending AI Gateway inference-table grants already use:
   (`ALTER VIEW <catalog>.audit.asset_lineage OWNER TO ...`) or keep deploying
   with an identity that skips.
 
+The AI Gateway convention is matched only for the missing-access class. The
+pending inference-table grants warn on any grant-tool failure; this step
+fails an ownership conflict instead, because a deployer that can read the
+system table could publish the reviewed view, and another identity's view
+is in the way of it.
+
+**Ownership and grants.** The view's owner decides what the App can read
+through it, since Unity Catalog evaluates the view with the owner's access.
+After a deploy publishes the view, the deploying identity owns it, because
+replacing a view requires ownership. A view published by hand belongs to
+that operator. Transfer it only to an identity that holds the system-table
+privileges; under an owner without them the view stops resolving and the
+App shows its gap. `CREATE OR REPLACE VIEW` does not keep the privileges
+granted on the replaced view. Every publish therefore drops the App's
+`SELECT` and re-grants it in the next statement. A failure between the two
+leaves the App ungranted, which shows as the explicit gap, until the next
+successful deploy. Do not grant the view to anyone else by hand: the next
+publish drops that grant.
+
 Give the system-table privileges only to the identity that should own the
-view. Unity Catalog evaluates the view with its owner's access, so a
-`SELECT` on `system.access.table_lineage` for a CI deploy principal is a
-metastore-wide grant and is the metastore owner's decision. The view and its
-grant are listed in the internal security grant runbook (§4).
+view. A `SELECT` on `system.access.table_lineage` for a CI deploy principal
+is a metastore-wide grant, and the metastore owner decides it. The view and
+its grant are listed in the internal security grant runbook (§4).
 
 ## Optional Salesforce activation
 
