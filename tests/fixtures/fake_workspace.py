@@ -17,9 +17,11 @@ a typed tree of DIRECTORY, FILE and NOTEBOOK objects:
 ``get``, ``list_deployments`` and ``get_deployment``.
 
 Faults: ``fail_before[(op, path)]`` raises before the operation applies;
-``fail_after[(op, path)]`` applies it and then raises (an ambiguous result);
-``hooks[op]`` runs before every such call with the path. Every call is
-recorded in ``calls`` as ``(op, path)``.
+``fail_after[(op, path)]`` applies it and then raises (an ambiguous result).
+An exception there fails every such call; a list fails one call per item, in
+order, and lets later calls through (a throttle that clears). ``hooks[op]``
+runs before every such call with the path. Every call is recorded in
+``calls`` as ``(op, path)``.
 """
 
 from __future__ import annotations
@@ -60,8 +62,8 @@ def _parent(path: str) -> str:
 class FakeTree:
     nodes: dict[str, Node] = field(default_factory=lambda: {"/": Node(ObjectType.DIRECTORY)})
     calls: list[tuple[str, str]] = field(default_factory=list)
-    fail_before: dict[tuple[str, str], Exception] = field(default_factory=dict)
-    fail_after: dict[tuple[str, str], Exception] = field(default_factory=dict)
+    fail_before: dict[tuple[str, str], Exception | list[Exception]] = field(default_factory=dict)
+    fail_after: dict[tuple[str, str], Exception | list[Exception]] = field(default_factory=dict)
     hooks: dict[str, Callable[[str], None]] = field(default_factory=dict)
     lock: threading.RLock = field(default_factory=threading.RLock)
 
@@ -88,18 +90,26 @@ class FakeTree:
         return [path for name, path in self.calls if name == op]
 
     # -- fault plumbing -----------------------------------------------------
+    def _fault(self, table: dict[tuple[str, str], Exception | list[Exception]], op: str,
+               path: str) -> Exception | None:
+        with self.lock:
+            fault = table.get((op, path))
+            if isinstance(fault, list):
+                return fault.pop(0) if fault else None
+            return fault
+
     def _enter(self, op: str, path: str) -> None:
         with self.lock:
             self.calls.append((op, path))
         hook = self.hooks.get(op)
         if hook is not None:
             hook(path)
-        error = self.fail_before.get((op, path))
+        error = self._fault(self.fail_before, op, path)
         if error is not None:
             raise error
 
     def _leave(self, op: str, path: str) -> None:
-        error = self.fail_after.get((op, path))
+        error = self._fault(self.fail_after, op, path)
         if error is not None:
             raise error
 

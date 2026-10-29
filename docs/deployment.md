@@ -147,11 +147,22 @@ The flow, every step in `scripts/deploy.sh`:
    1,300 files and none over 10 MiB, `app.yaml`, `requirements.txt` and a
    non-empty `frontend/dist/index.html` present, no root Node manifest, no
    notebook-shaped file), then makes one create-only workspace AUTO import per
-   file. An object that already exists is reused only when its bytes are equal;
-   other bytes are refused and nothing is overwritten. It then requires an exact
-   recursive listing (each object a FILE of the manifest's size) and downloads
-   every file to compare its sha256. It never deletes, so a re-run of the same
-   release uploads nothing.
+   file, 4 at a time by default (`--workers`). An object that already exists is
+   reused only when its bytes are equal; other bytes are refused and nothing is
+   overwritten. It then requires an exact recursive listing (each object a FILE
+   of the manifest's size) and downloads every file to compare its sha256. It
+   never deletes, so a re-run of the same release uploads nothing. A rate limit
+   (HTTP 429) on an upload, a download or the listing is retried, and only a
+   rate limit (`tools/databricks/app_release_retry.py`: six attempts per call,
+   exponential backoff with jitter, at least the Retry-After, at most 30 s per
+   wait, one `[app-release]` line per retry). The SDK never retries a
+   workspace import itself, which is how a 429 at 8 workers ended a
+   1,177-file publish on 2026-10-29. A retried upload is still create-only: if
+   the throttled attempt landed, the retry meets the existing object and the
+   byte compare above decides. A call still throttled after its sixth attempt
+   is a refusal (exit 2) that names the object and the budget. Any other error
+   is handled as before, on its first occurrence: a failed upload is still read
+   back once, and counts as uploaded only if its bytes are there.
 4. **Converge** before each of the three activations (release mode, see
    "App source contract"), then the Apps deployment names the release folder
    as its `source_code_path`. The platform copies the folder into the
@@ -170,7 +181,7 @@ Where a failure lands:
 |---|---|
 | Preflight check | Exit 2 before the lease; the App is untouched. |
 | Step-1 stage or release id | Like a failed frontend build: an existing App is stopped and quiesced (Lakebase access is not yet proven). CI's built-dist test makes a dist-side refusal unlikely. |
-| Step-5 publish | Upgrade: signed blue is restored. First install: stopped and quiesced. At most one partial content-addressed folder is left; the next run of the same bytes completes it when every object left there is absent or byte-equal, or a later green run prunes it. An object left with other bytes (an ambiguous upload) makes every publish of that release id refuse, because publish never overwrites, until a green run of another commit prunes the folder or an owner removes it. |
+| Step-5 publish | Upgrade: signed blue is restored. First install: stopped and quiesced. At most one partial content-addressed folder is left (a rate limit that outlasts the retry budget leaves one too); the next run of the same bytes completes it when every object left there is absent or byte-equal, or a later green run prunes it. An object left with other bytes (an ambiguous upload) makes every publish of that release id refuse, because publish never overwrites, until a green run of another commit prunes the folder or an owner removes it. |
 | Converge before an activation | Upgrade: signed blue is restored. First install: stopped and quiesced. |
 | Prune | A warning only; the release stays live. |
 
@@ -474,8 +485,11 @@ Upload the folder under that governed name,
 `scripts/deploy.sh` step 5 passes (create-only, byte-verified), never with
 `workspace import-dir` and never into a folder that is already used: a folder
 under the governed name whose bytes differ makes the governed publish of that
-commit refuse at step 5. The piecewise payload deploy then names that folder
-as the deployment's `source_code_path`.
+commit refuse at step 5. A publish that stops part way, for example on a rate
+limit (HTTP 429) still there after the retry budget, leaves a partial folder:
+run the same command again, which byte-compares what is already there and
+uploads only what is missing. The piecewise payload deploy then names that
+folder as the deployment's `source_code_path`.
 
 A later governed run of the same commit and dist reuses a folder published
 this way, and governed prune retires it once no retained deployment
@@ -2416,7 +2430,8 @@ the first run is a first install, so prune has nothing to delete. First-run
 checklist for the owner-triggered run:
 
 - the publish line counts at most 1,300 files, with the upload and verify
-  wall time and no 429 at 8 workers;
+  wall time at the default 4 workers and the number of `[app-release]` rate
+  limit retry lines (none is the goal; a retry is not a failure);
 - every activation SUCCEEDED and no `[BUILD]` log shows an npm step; the
   first activation's `[BUILD]` log shows a pip install (a first install has
   no previous `requirements.txt`), later activations of the same release are
