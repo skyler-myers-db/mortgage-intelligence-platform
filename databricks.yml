@@ -188,10 +188,16 @@ targets:
   # tools/databricks/ci_install_isolation.py refuses it outside deploy-dev.yml
   # and refuses a host equal to the dev target's. No Genie pin: the governed
   # space is resolved by MIP_GENIE_SPACE_NAME in that workspace at deploy time.
+  # run_as names a service principal: only deploy-dev.yml deploys this target,
+  # and it authenticates solely as the CI deployer service principal through
+  # GitHub Actions OIDC (profile auth_type github-oidc), whose SCIM userName is
+  # its application id. A job's run_as must name a service principal through
+  # service_principal_name, never user_name (docs/deployment.md, "CI staging
+  # install").
   pr105-host:
     mode: development
     run_as:
-      user_name: ${workspace.current_user.userName}
+      service_principal_name: ${workspace.current_user.userName}
     workspace:
       host: &ci_staging_host https://dbc-149e560d-e056.cloud.databricks.com
       root_path: ~/.bundle/${bundle.name}/${var.bundle_root_leaf}
