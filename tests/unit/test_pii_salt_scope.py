@@ -144,10 +144,12 @@ LIVE_SHAPE = {SCOPE: {KEY}, "other-team-scope": {"their-key"}}
 def test_list_failure_never_writes(capsys, mode, require_existing, store, failure) -> None:
     api = _Secrets(store, **failure)
 
-    assert _main(api, mode, require_existing=require_existing) == subject.EXIT_REFUSED
+    exit_code = _main(api, mode, require_existing=require_existing)
 
+    # First: no create and no put reached the workspace, whatever the exit code.
     assert _writes(api) == []
     assert {call[0] for call in api.calls} <= {"list_scopes", "list_secrets"}
+    assert exit_code == subject.EXIT_REFUSED
     err = capsys.readouterr().err
     assert "[pii-salt] refused: could not list" in err
     assert "(ListFailure), so absence is not proven" in err

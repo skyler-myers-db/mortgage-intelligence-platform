@@ -431,6 +431,21 @@ DEPLOYMENT_SYNC_SCHEMA="$MIP_LAKEBASE_SYNC_SCHEMA"
 DEPLOYMENT_SYNC_TABLES="$MIP_LAKEBASE_SYNC_TABLES"
 MIP_GENIE_SPACE_NAME="$(deployment_control_value MIP_GENIE_SPACE_NAME 'Mortgage Lead Intelligence')"
 MIP_RUNTIME_SECRET_SCOPE="$(deployment_control_value MIP_RUNTIME_SECRET_SCOPE mip-runtime)"
+# >>> pii-salt scope control >>>
+# The write-once PII salt (tools/databricks/pii_salt_scope.py). The silver SQL
+# and the Lakeflow pipeline read secret('mip', 'pii-salt-v1') as literals, so
+# mip is the only accepted scope until they take this control: another scope
+# would hold a salt nothing reads, while the readers hash with whatever sits
+# under mip. An existing salt is never rewritten either way. Require-existing
+# stays 0 (a first install creates the salt) until the install profile
+# records that masked keys already exist.
+MIP_PII_SALT_SCOPE="$(deployment_control_value MIP_PII_SALT_SCOPE mip)"
+PII_SALT_REQUIRE_EXISTING=0
+if [[ "$MIP_PII_SALT_SCOPE" != "mip" ]]; then
+  echo "${RED}[deploy] MIP_PII_SALT_SCOPE must be mip: the silver SQL and the Lakeflow pipeline read secret('mip', 'pii-salt-v1') as literals.${RST}" >&2
+  exit 2
+fi
+# <<< pii-salt scope control <<<
 MIP_APP_ROLLBACK_SECRET_SCOPE="$(deployment_control_value MIP_APP_ROLLBACK_SECRET_SCOPE mip-app-rollback)"
 MIP_AGENT_PROXY_SECRET_SCOPE="$(
   deployment_control_value MIP_AGENT_PROXY_SECRET_SCOPE "${MIP_APP_NAME}-agent-proxy"

@@ -285,52 +285,20 @@ fi
 # a source-committed constant (predictable hashing — worse than failing).
 # Create-if-missing ONLY; an existing salt is NEVER rotated, because
 # rotating it changes every masked identifier across refreshes and breaks
-# join stability between gold snapshots.
+# join stability between gold snapshots. The Secrets API has no create-only
+# put, so tools/databricks/pii_salt_scope.py writes only after an
+# authoritative "listed, key absent": any list-scopes or list-secrets error
+# exits 2 before a create or put, where the earlier inline check read a
+# failed listing as "absent" and would have overwritten the live salt. The
+# value never leaves the tool's process. Step 0 ran the same inventory
+# read-only before the lease.
 step "provision pii-salt secret scope (create-if-missing, never rotate)"
-# CLI JSON shape note (observed live 2026-06-11): `databricks secrets
-# list-scopes -o json` / `list-secrets -o json` emit a BARE ARRAY on
-# current CLI versions and a wrapped object on older ones — accept both.
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  echo "  would inspect/create: scope mip and write-once pii-salt-v1"
-elif ! databricks secrets list-scopes -o json | "$PYTHON" -c 'import json,sys
-data = json.load(sys.stdin)
-items = data.get("scopes", []) if isinstance(data, dict) else (data or [])
-names = {s.get("name") for s in items if isinstance(s, dict)}
-sys.exit(0 if "mip" in names else 1)'; then
-  run databricks secrets create-scope mip
-fi
-if [[ "$DRY_RUN" -eq 0 ]] && ! databricks secrets list-secrets mip -o json 2>/dev/null | "$PYTHON" -c 'import json,sys
-data = json.load(sys.stdin)
-items = data.get("secrets", []) if isinstance(data, dict) else (data or [])
-keys = {s.get("key") for s in items if isinstance(s, dict)}
-sys.exit(0 if "pii-salt-v1" in keys else 1)'; then
-  echo "  generating pii-salt-v1 (random 64-hex, write-once)"
-  _PII_SECRET_PAYLOAD="$(mktemp -t mip-pii-salt.XXXXXX.json)"
-  chmod 600 "$_PII_SECRET_PAYLOAD"
-  "$PYTHON" - "$_PII_SECRET_PAYLOAD" <<'PY'
-import json
-import secrets
-import sys
-from pathlib import Path
-
-Path(sys.argv[1]).write_text(
-    json.dumps(
-        {"scope": "mip", "key": "pii-salt-v1", "string_value": secrets.token_hex(32)}
-    ),
-    encoding="utf-8",
-)
-PY
-  if ! run_redacted \
-    "databricks api post /api/2.0/secrets/put --json @[secure-temp]" \
-    databricks api post /api/2.0/secrets/put --json "@$_PII_SECRET_PAYLOAD"; then
-    rm -f "$_PII_SECRET_PAYLOAD"
-    _PII_SECRET_PAYLOAD=""
-    exit 1
-  fi
-  rm -f "$_PII_SECRET_PAYLOAD"
-  _PII_SECRET_PAYLOAD=""
-elif [[ "$DRY_RUN" -eq 0 ]]; then
-  echo "  pii-salt-v1 already present — leaving untouched (rotation would break masked-ID stability)"
+  echo "  would inspect/create: scope ${MIP_PII_SALT_SCOPE} and write-once pii-salt-v1"
+else
+  run "$PYTHON" -m tools.databricks.pii_salt_scope ensure \
+    --scope "$MIP_PII_SALT_SCOPE" \
+    --require-existing "$PII_SALT_REQUIRE_EXISTING"
 fi
 
 step "provision dedicated signed App rollback-contract secret scope"
