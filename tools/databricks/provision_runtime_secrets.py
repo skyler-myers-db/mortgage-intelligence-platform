@@ -1,31 +1,40 @@
 """Provision Databricks Secret keys used by the deployed App runtime.
 
-Secret values are read from the process environment or ``.env.local`` and
-written directly through the Secrets API. They are never emitted in the
-Databricks Apps deployment JSON or printed to stdout.
+Presence only. A key that already exists in the scope is kept: its value is
+never read, compared or rewritten. That covers ``cotality-id-mask-v1`` (it
+keys every masked borrower id, ``B-...``), ``genie-action-current``,
+``genie-action-previous``, and every ``salesforce-*`` key whose input is
+unset. No stored value reaches the runner, so no runtime secret value is ever
+copied into CI or compared there.
 
-Two kinds of existing key are never silently replaced:
+An absent key is written once (a first install, or a key an owner deleted):
 
-* ``cotality-id-mask-v1`` keys every masked borrower id (``B-...``). When the
-  key exists, the configured value must equal the stored one as the runtime
-  reads it. The two are compared as HMAC-SHA256 fingerprints under a per-run
-  random salt; a difference, or a stored value that cannot be read, refuses
-  the whole run before any write. No value or fingerprint is printed. The
-  Secrets API returns a value outside a notebook only to a workspace admin
-  with READ on the scope; deploy.sh already requires a workspace-admin
-  deployer.
-* ``salesforce-*`` keys are kept when their inputs are unset. The disabled
-  sentinel is written only when the key is absent, because the App's static
-  resource declaration needs a backing key.
+* ``cotality-id-mask-v1`` and ``genie-action-current`` take their optional
+  input (``MIP_COTALITY_ID_MASK_SECRET``, ``MIP_GENIE_ACTION_SECRET_CURRENT``,
+  from the shell or ``.env.local``) or a value generated on the runner;
+* ``genie-action-previous`` takes ``MIP_GENIE_ACTION_SECRET_PREVIOUS`` (with
+  its ``_KID``) or a disabled sentinel;
+* ``salesforce-*`` takes its input or a disabled sentinel.
 
-An existing ``genie-action-current`` is compared the same way but never
-refuses: the plan only notes whether the configured key is unchanged, a
-rotation with the stored value kept as the grace key, a change with no grace
-key (outstanding action and provenance tokens stop verifying), or not
-comparable.
+The App's static resource declarations need a backing key even when nothing
+is bound to it, hence the sentinels. A configured ``SALESFORCE_*`` input still
+replaces its key: it is a third-party credential the operator supplies, and
+the App payload binds the key only when that input is set
+(tests/unit/test_salesforce_secret_binding_parity.py). An input set for any
+other key that already exists is ignored, and the plan says so by name. Every
+write is read back for presence (the key is listed), never for its value.
 
 ``--check`` builds the same plan read-only (no scope creation, no write), so
-``scripts/deploy.sh`` can refuse before it stops the App.
+``scripts/deploy.sh`` can refuse before it stops the App. ``--require-existing``
+refuses (exit 2) a plan that writes anything: an install that is already
+provisioned plans zero writes.
+
+``--rotate-genie-action`` is the only mode that reads a stored value. It is
+human-run (it refuses under GitHub Actions): it moves ``genie-action-current``
+to ``genie-action-previous`` and writes a newly generated current key, which
+the App signs with from its next deployment. ``--retire-previous`` replaces
+``genie-action-previous`` with a fresh disabled sentinel. No mode prints a
+value.
 
 Every CLI mode first proves the workspace it is about to call is the install's.
 Run by hand, the SDK's default resolution falls back to the ``~/.databrickscfg``
@@ -42,8 +51,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
-import hmac
 import os
 import secrets
 import sys
@@ -88,7 +95,6 @@ ENV_TO_KEY = {
     "SALESFORCE_PASSWORD": "salesforce-password",
     "SALESFORCE_SECURITY_TOKEN": "salesforce-security-token",
 }
-REQUIRED = frozenset({"MIP_COTALITY_ID_MASK_SECRET", "MIP_GENIE_ACTION_SECRET_CURRENT"})
 STRONG_SECRET_ENVS = frozenset(
     {
         "MIP_COTALITY_ID_MASK_SECRET",
@@ -106,14 +112,22 @@ PREVIOUS_KID_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"
 PREVIOUS_KEY = ENV_TO_KEY[PREVIOUS_ENV]
 MASK_ENV = "MIP_COTALITY_ID_MASK_SECRET"
 MASK_KEY = ENV_TO_KEY[MASK_ENV]
+# Keys an absent install generates on the runner; every other absent key gets
+# the disabled sentinel when its input is unset.
+GENERATED_KEYS = frozenset({MASK_KEY, CURRENT_KEY})
 DISABLED_PREVIOUS_PREFIX = "disabled."
 EXIT_REFUSED = 2
 HOST_ENV = "DATABRICKS_HOST"
 DEPLOY_HOST_ENV = "MIP_DATABRICKS_WORKSPACE_HOST"
+GITHUB_ACTIONS_ENV = "GITHUB_ACTIONS"
 
 
-class RuntimeSecretChangeRefused(ValueError):
-    """The run would replace a stored value the install depends on."""
+class RuntimeSecretWriteRefused(ValueError):
+    """``--require-existing`` met a plan that writes, or a write did not land."""
+
+
+class GenieActionRotationRefused(ValueError):
+    """The rotation cannot run here, or has no stored key to rotate."""
 
 
 class WorkspaceHostRefused(ValueError):
@@ -121,7 +135,7 @@ class WorkspaceHostRefused(ValueError):
 
 
 class EmptySecretValue(Exception):
-    """The Secrets API answered without a value, so nothing can be compared."""
+    """The Secrets API answered without a value."""
 
 
 @dataclass(frozen=True)
@@ -136,6 +150,10 @@ class RuntimeSecretPlan:
     @property
     def write_keys(self) -> tuple[str, ...]:
         return tuple(key for key, _value in self.writes)
+
+    @property
+    def writes_anything(self) -> bool:
+        return bool(self.writes) or not self.scope_exists
 
 
 @dataclass(frozen=True)
@@ -208,8 +226,9 @@ def _install_hosts() -> tuple[tuple[str, str], ...]:
 def bound_workspace(client: Any | None = None) -> tuple[Any, str]:
     """The workspace client and its resolved host, proven to be the install's.
 
-    Runs before any Secrets API call. A secret read in the wrong workspace leaves
-    getSecret audit entries there and returns a verdict about the wrong install.
+    Runs before any Secrets API call. A secret listed or written in the wrong
+    workspace leaves audit entries there and returns a verdict about the wrong
+    install.
     """
 
     workspace = client if client is not None else WorkspaceClient()
@@ -240,114 +259,31 @@ def bound_workspace(client: Any | None = None) -> tuple[Any, str]:
     return workspace, resolved
 
 
-def _validated_values() -> dict[str, str]:
-    values, previous_kid = _configured_values()
-    missing = sorted(name for name in REQUIRED if not values[name])
-    if missing:
-        raise ValueError(f"{', '.join(missing)} required before provisioning runtime secrets")
+def _listed_keys(workspace: Any, *, scope: str) -> set[str]:
+    return {_item_name(item, "key") for item in workspace.secrets.list_secrets(scope=scope)}
 
-    if values[PREVIOUS_ENV] and not previous_kid:
+
+def _validated_inputs(values: dict[str, str], previous_kid: str, *, used: set[str]) -> None:
+    """Validate only the inputs this run writes; an input for an existing key is unused."""
+
+    if PREVIOUS_ENV in used and not previous_kid:
         raise ValueError(
             f"{PREVIOUS_KID_ENV} is required when {PREVIOUS_ENV} is retained "
             "during a rotation grace period"
         )
-
-    for env_name, value in values.items():
-        if value and env_name in STRONG_SECRET_ENVS:
-            values[env_name] = require_strong_runtime_secret(
-                value,
-                name=env_name,
-                extra_placeholders=PLACEHOLDERS,
-            )
-    require_distinct_rotation_secrets(
-        values[CURRENT_ENV],
-        values[PREVIOUS_ENV] or None,
-        current_name="MIP_GENIE_ACTION_SECRET_CURRENT",
-        previous_name="MIP_GENIE_ACTION_SECRET_PREVIOUS",
-    )
-    return values
-
-
-def _salted_fingerprint(value: bytes, salt: bytes) -> bytes:
-    return hmac.new(salt, value, hashlib.sha256).digest()
-
-
-def _stored_runtime_value(workspace: Any, *, scope: str, key: str) -> bytes:
-    """The stored value as the runtime reads it (UTF-8, surrounding whitespace stripped)."""
-
-    response = workspace.secrets.get_secret(scope=scope, key=key)
-    encoded = _item_name(response, "value")
-    if not encoded:
-        raise EmptySecretValue(f"{scope}/{key}")
-    raw = base64.b64decode(encoded, validate=True)
-    return raw.decode("utf-8").strip().encode("utf-8")
-
-
-def _stored_equals(
-    workspace: Any, *, scope: str, key: str, configured: tuple[str, ...]
-) -> tuple[bool, ...]:
-    """Whether the stored value equals each configured value, by salted fingerprint.
-
-    A read failure propagates; the caller decides whether doubt refuses.
-    """
-
-    salt = secrets.token_bytes(32)
-    stored = _salted_fingerprint(_stored_runtime_value(workspace, scope=scope, key=key), salt)
-    return tuple(
-        hmac.compare_digest(stored, _salted_fingerprint(value.encode("utf-8"), salt))
-        for value in configured
-    )
-
-
-def _unreadable_reason(exc: Exception) -> str:
-    # The error code or class name only: an SDK message can echo request detail.
-    return str(getattr(exc, "error_code", None) or type(exc).__name__)
-
-
-def _require_unchanged_mask(workspace: Any, *, scope: str, configured: str) -> None:
-    try:
-        (unchanged,) = _stored_equals(
-            workspace, scope=scope, key=MASK_KEY, configured=(configured,)
+    for env_name in sorted(used & STRONG_SECRET_ENVS):
+        values[env_name] = require_strong_runtime_secret(
+            values[env_name],
+            name=env_name,
+            extra_placeholders=PLACEHOLDERS,
         )
-    except Exception as exc:  # any doubt refuses: never overwrite what cannot be compared
-        raise RuntimeSecretChangeRefused(
-            f"{scope}/{MASK_KEY} exists, but its value could not be read to prove it "
-            f"unchanged ({_unreadable_reason(exc)}). The Secrets API returns a value "
-            "outside a notebook only to a workspace admin with READ on secret scope "
-            f"{scope}; deploy with such an identity. Nothing was written."
-        ) from None
-    if not unchanged:
-        raise RuntimeSecretChangeRefused(
-            f"{scope}/{MASK_KEY} holds a different value than the configured {MASK_ENV} "
-            "(salted fingerprints compared; neither value is printed). Writing it would "
-            "re-key every masked borrower id and orphan the B-... ids already stored in "
-            "Lakebase campaigns, approvals, audit, watchlists and snoozes. Set "
-            f"{MASK_ENV} (shell or .env.local) to the value this install already uses. "
-            "A deliberate re-key is an owner-run data migration, never a deploy side "
-            "effect. Nothing was written."
+    if {CURRENT_ENV, PREVIOUS_ENV} <= used:
+        require_distinct_rotation_secrets(
+            values[CURRENT_ENV],
+            values[PREVIOUS_ENV],
+            current_name=CURRENT_ENV,
+            previous_name=PREVIOUS_ENV,
         )
-
-
-def _current_key_note(workspace: Any, *, scope: str, current: str, previous: str) -> str:
-    """Report-only. A rotation is an operator's call, so a change never refuses."""
-
-    try:
-        unchanged, kept_as_grace = _stored_equals(
-            workspace, scope=scope, key=CURRENT_KEY, configured=(current, previous)
-        )
-    except Exception as exc:
-        return f"{CURRENT_KEY}: not compared ({_unreadable_reason(exc)})"
-    if unchanged:
-        return f"{CURRENT_KEY}: unchanged"
-    if previous and kept_as_grace:
-        return (
-            f"{CURRENT_KEY}: rotated; the stored value stays valid as {PREVIOUS_KEY} "
-            "for the grace period"
-        )
-    return (
-        f"{CURRENT_KEY}: changed with no grace key; outstanding action confirmations "
-        "and provenance tokens stop verifying"
-    )
 
 
 def plan_runtime_secrets(
@@ -355,52 +291,114 @@ def plan_runtime_secrets(
     *,
     scope: str,
     workspace: Any,
+    previous_kid: str = "",
 ) -> RuntimeSecretPlan:
-    """Read-only: decide every write before any write happens."""
+    """Read-only: decide every write before any write happens. Lists keys, reads no value."""
 
     scopes = {_item_name(item, "name") for item in workspace.secrets.list_scopes()}
     scope_exists = scope in scopes
-    existing = (
-        {_item_name(item, "key") for item in workspace.secrets.list_secrets(scope=scope)}
-        if scope_exists
-        else set()
-    )
-    if MASK_KEY in existing:
-        _require_unchanged_mask(workspace, scope=scope, configured=values[MASK_ENV])
+    existing = _listed_keys(workspace, scope=scope) if scope_exists else set()
+    values = dict(values)
+    # (key, the input it takes, or "" for a value made here), in ENV_TO_KEY order.
+    planned: list[tuple[str, str]] = []
+    kept: list[str] = []
     notes: list[str] = []
-    if CURRENT_KEY in existing:
-        notes.append(
-            _current_key_note(
-                workspace,
-                scope=scope,
-                current=values[CURRENT_ENV],
-                previous=values[PREVIOUS_ENV],
-            )
+    for env_name, key in ENV_TO_KEY.items():
+        configured = values[env_name]
+        if key in existing and not (env_name in OPTIONAL_RESOURCE_ENVS and configured):
+            kept.append(key)
+            if configured:
+                notes.append(
+                    f"{key}: kept unread; {env_name} is set but never replaces an existing key"
+                )
+            continue
+        if configured:
+            verb = "replaced" if key in existing else "absent, so written once"
+            notes.append(f"{key}: {verb} from {env_name}")
+            planned.append((key, env_name))
+        elif key in GENERATED_KEYS:
+            notes.append(f"{key}: absent, so written once from a value generated on this runner")
+            planned.append((key, ""))
+        else:
+            # The App's resources are declared statically in the bundle, so the
+            # backing key must exist even when nothing binds it. A random
+            # disabled value verifies nothing and exposes no key.
+            notes.append(f"{key}: absent, so written once as a disabled sentinel")
+            planned.append((key, ""))
+    _validated_inputs(values, previous_kid, used={env for _key, env in planned if env})
+    writes = tuple((key, values[env] if env else _fresh_value(key)) for key, env in planned)
+    return RuntimeSecretPlan(
+        scope_exists=scope_exists, writes=writes, kept=tuple(kept), notes=tuple(notes)
+    )
+
+
+def _fresh_value(key: str) -> str:
+    """A generated key for the mask and current key; a disabled sentinel for the rest."""
+
+    if key in GENERATED_KEYS:
+        return secrets.token_hex(32)
+    return f"{DISABLED_PREVIOUS_PREFIX}{secrets.token_hex(32)}"
+
+
+def _require_no_writes(plan: RuntimeSecretPlan, *, scope: str) -> None:
+    if not plan.writes_anything:
+        return
+    planned = ", ".join(plan.write_keys) if plan.write_keys else "none"
+    scope_text = "" if plan.scope_exists else f"; scope {scope} is absent"
+    raise RuntimeSecretWriteRefused(
+        f"--require-existing, but the plan writes {planned}{scope_text}. An install that "
+        "is already provisioned plans zero writes: check the configured runtime secret "
+        "scope before a first-install write mints new keys. Nothing was written."
+    )
+
+
+def _require_written_keys_listed(workspace: Any, *, scope: str, keys: tuple[str, ...]) -> None:
+    """Read back for presence only: each written key is listed. No value is read."""
+
+    if not keys:
+        return
+    listed = _listed_keys(workspace, scope=scope)
+    missing = [key for key in keys if key not in listed]
+    if missing:
+        raise RuntimeSecretWriteRefused(
+            f"wrote {', '.join(keys)} to {scope}, but the scope does not list "
+            f"{', '.join(missing)}. Run again; a key that exists is kept."
         )
 
-    writes: list[tuple[str, str]] = []
-    kept: list[str] = []
-    for env_name, key in ENV_TO_KEY.items():
-        value = values[env_name]
-        if key in existing and (
-            key == MASK_KEY or (env_name in OPTIONAL_RESOURCE_ENVS and not value)
-        ):
-            # The mask was just proven equal; an unset optional input never
-            # replaces a stored credential with a disabled sentinel.
-            kept.append(key)
-            continue
-        if (key == PREVIOUS_KEY or env_name in OPTIONAL_RESOURCE_ENVS) and not value:
-            # Databricks App resources are declared statically in the bundle,
-            # so the backing key must exist even when no rotation grace key is
-            # injected into the runtime. Replacing it with a random disabled
-            # value invalidates old tokens without exposing a verifier key.
-            value = f"{DISABLED_PREVIOUS_PREFIX}{secrets.token_hex(32)}"
-        if not value:
-            continue
-        writes.append((key, value))
-    return RuntimeSecretPlan(
-        scope_exists=scope_exists, writes=tuple(writes), kept=tuple(kept), notes=tuple(notes)
-    )
+
+def check_runtime_secrets(
+    *,
+    scope: str = DEFAULT_SCOPE,
+    client: WorkspaceClient | None = None,
+    require_existing: bool = False,
+) -> RuntimeSecretPlan:
+    """Build the provisioning plan without creating the scope or writing a key."""
+
+    values, previous_kid = _configured_values()
+    workspace = client if client is not None else bound_workspace()[0]
+    plan = plan_runtime_secrets(values, scope=scope, workspace=workspace, previous_kid=previous_kid)
+    if require_existing:
+        _require_no_writes(plan, scope=scope)
+    return plan
+
+
+def provision_runtime_secrets(
+    *,
+    scope: str = DEFAULT_SCOPE,
+    client: WorkspaceClient | None = None,
+    require_existing: bool = False,
+) -> ProvisionedRuntimeSecrets:
+    values, previous_kid = _configured_values()
+    workspace = client if client is not None else bound_workspace()[0]
+    plan = plan_runtime_secrets(values, scope=scope, workspace=workspace, previous_kid=previous_kid)
+    if require_existing:
+        _require_no_writes(plan, scope=scope)
+    if not plan.scope_exists:
+        workspace.secrets.create_scope(scope=scope)
+    for key, value in plan.writes:
+        workspace.secrets.put_secret(scope=scope, key=key, string_value=value)
+    _require_written_keys_listed(workspace, scope=scope, keys=plan.write_keys)
+    return ProvisionedRuntimeSecrets(written=plan.write_keys, kept=plan.kept, notes=plan.notes)
 
 
 def retire_previous_secret(
@@ -414,7 +412,7 @@ def retire_previous_secret(
     scopes = {_item_name(item, "name") for item in workspace.secrets.list_scopes()}
     if scope not in scopes:
         workspace.secrets.create_scope(scope=scope)
-    existing = {_item_name(item, "key") for item in workspace.secrets.list_secrets(scope=scope)}
+    existing = _listed_keys(workspace, scope=scope)
     workspace.secrets.put_secret(
         scope=scope,
         key=PREVIOUS_KEY,
@@ -423,31 +421,70 @@ def retire_previous_secret(
     return PREVIOUS_KEY in existing
 
 
-def check_runtime_secrets(
+def _in_github_actions() -> bool:
+    return os.environ.get(GITHUB_ACTIONS_ENV, "").strip().lower() not in ("", "false")
+
+
+def _require_human_run() -> None:
+    if _in_github_actions():
+        raise GenieActionRotationRefused(
+            f"--rotate-genie-action is human-run only, and {GITHUB_ACTIONS_ENV} is set. A "
+            "governed deploy keeps every existing key. Nothing was read or written."
+        )
+
+
+def _stored_runtime_value(workspace: Any, *, scope: str, key: str) -> str:
+    """The stored value as the runtime reads it (UTF-8, surrounding whitespace stripped)."""
+
+    response = workspace.secrets.get_secret(scope=scope, key=key)
+    encoded = _item_name(response, "value")
+    if not encoded:
+        raise EmptySecretValue(f"{scope}/{key}")
+    return base64.b64decode(encoded, validate=True).decode("utf-8").strip()
+
+
+def _unreadable_reason(exc: Exception) -> str:
+    # The error code or class name only: an SDK message can echo request detail.
+    return str(getattr(exc, "error_code", None) or type(exc).__name__)
+
+
+def rotate_genie_action_secret(
     *,
     scope: str = DEFAULT_SCOPE,
     client: WorkspaceClient | None = None,
-) -> RuntimeSecretPlan:
-    """Build the provisioning plan without creating the scope or writing a key."""
+) -> None:
+    """Move ``genie-action-current`` to ``genie-action-previous``; write a new current key.
 
-    values = _validated_values()
+    The one value read in this tool. Previous is written first, so the stored
+    current key is never lost: if the second write fails, both keys hold the
+    old value and a rerun completes the rotation.
+    """
+
+    _require_human_run()
     workspace = client if client is not None else bound_workspace()[0]
-    return plan_runtime_secrets(values, scope=scope, workspace=workspace)
-
-
-def provision_runtime_secrets(
-    *,
-    scope: str = DEFAULT_SCOPE,
-    client: WorkspaceClient | None = None,
-) -> ProvisionedRuntimeSecrets:
-    values = _validated_values()
-    workspace = client if client is not None else bound_workspace()[0]
-    plan = plan_runtime_secrets(values, scope=scope, workspace=workspace)
-    if not plan.scope_exists:
-        workspace.secrets.create_scope(scope=scope)
-    for key, value in plan.writes:
-        workspace.secrets.put_secret(scope=scope, key=key, string_value=value)
-    return ProvisionedRuntimeSecrets(written=plan.write_keys, kept=plan.kept, notes=plan.notes)
+    scopes = {_item_name(item, "name") for item in workspace.secrets.list_scopes()}
+    if scope not in scopes or CURRENT_KEY not in _listed_keys(workspace, scope=scope):
+        raise GenieActionRotationRefused(
+            f"{scope}/{CURRENT_KEY} does not exist, so there is nothing to rotate; a deploy "
+            "writes the first key. Nothing was read or written."
+        )
+    try:
+        current = _stored_runtime_value(workspace, scope=scope, key=CURRENT_KEY)
+    except Exception as exc:  # any doubt refuses: never rotate a key that cannot be moved
+        raise GenieActionRotationRefused(
+            f"{scope}/{CURRENT_KEY} could not be read ({_unreadable_reason(exc)}). The Secrets "
+            "API returns a value outside a notebook only to a workspace admin with READ on "
+            f"secret scope {scope}. Nothing was written."
+        ) from None
+    if not current:
+        raise GenieActionRotationRefused(
+            f"{scope}/{CURRENT_KEY} is blank, so there is no key to keep for the grace "
+            "period. Nothing was written."
+        )
+    replacement = secrets.token_hex(32)
+    workspace.secrets.put_secret(scope=scope, key=PREVIOUS_KEY, string_value=current)
+    workspace.secrets.put_secret(scope=scope, key=CURRENT_KEY, string_value=replacement)
+    _require_written_keys_listed(workspace, scope=scope, keys=(PREVIOUS_KEY, CURRENT_KEY))
 
 
 def _key_list(keys: tuple[str, ...]) -> str:
@@ -462,6 +499,11 @@ def _print_notes(notes: tuple[str, ...]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scope", default=DEFAULT_SCOPE)
+    parser.add_argument(
+        "--require-existing",
+        action="store_true",
+        help="refuse (exit 2) a plan that writes anything: a provisioned install plans zero writes",
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
         "--retire-previous",
@@ -473,8 +515,17 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="read-only: build the provisioning plan and refuse exactly as a write run would",
     )
+    mode.add_argument(
+        "--rotate-genie-action",
+        action="store_true",
+        help="human-run: move the current Genie action key to previous and generate a new one",
+    )
     args = parser.parse_args(argv)
+    if args.require_existing and (args.retire_previous or args.rotate_genie_action):
+        parser.error("--require-existing applies to --check and the provisioning run only")
     try:
+        if args.rotate_genie_action:
+            _require_human_run()
         workspace, host = bound_workspace()
     except ValueError as exc:
         print(f"[runtime-secrets] refused: {exc}", file=sys.stderr)
@@ -485,8 +536,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"previous runtime verification key in {args.scope} on {host}: {state}")
         return 0
     try:
+        if args.rotate_genie_action:
+            rotate_genie_action_secret(scope=args.scope, client=workspace)
+            print(
+                f"Genie action keys in {args.scope} on {host}: rotated ({CURRENT_KEY} moved "
+                f"to {PREVIOUS_KEY}; a new {CURRENT_KEY} was generated on this machine). "
+                "The App signs with the new key from its next deployment."
+            )
+            return 0
         if args.check:
-            plan = check_runtime_secrets(scope=args.scope, client=workspace)
+            plan = check_runtime_secrets(
+                scope=args.scope, client=workspace, require_existing=args.require_existing
+            )
             print(
                 f"runtime secret plan for {args.scope} on {host}: "
                 f"write {_key_list(plan.write_keys)}; "
@@ -494,7 +555,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             _print_notes(plan.notes)
             return 0
-        result = provision_runtime_secrets(scope=args.scope, client=workspace)
+        result = provision_runtime_secrets(
+            scope=args.scope, client=workspace, require_existing=args.require_existing
+        )
     except ValueError as exc:
         print(f"[runtime-secrets] refused on {host}: {exc}", file=sys.stderr)
         return EXIT_REFUSED
