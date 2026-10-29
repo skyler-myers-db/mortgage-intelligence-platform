@@ -151,6 +151,11 @@ def install_github_oidc_deployer(
 
     monkeypatch.setattr(socket, "create_connection", refuse_network)
     monkeypatch.setattr(socket.socket, "connect", refuse_network)
+    # A hosted runner exports its own credential-free ACTIONS_* keys
+    # (orchestration id, archive cache, ...); drop them so a sweep assertion
+    # sees only the request pair this fixture seeds.
+    for name in [key for key in os.environ if key.startswith("ACTIONS_")]:
+        monkeypatch.delenv(name)
     monkeypatch.setenv(github_oidc_auth.REQUEST_URL_ENV, REQUEST_URL)
     monkeypatch.setenv(github_oidc_auth.REQUEST_TOKEN_ENV, REQUEST_TOKEN)
     http = FakeOidcHttp()
