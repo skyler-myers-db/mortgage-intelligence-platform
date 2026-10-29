@@ -292,10 +292,11 @@ jobs:
         # Read-only, before scripts/deploy.sh: the DEFAULT github-oidc profile
         # must authenticate, through both the Python SDK and the Go CLI, as the
         # reviewed deployer service principal on the bundle target's
-        # workspace, with the authority the governed deploy requires. It prints booleans only (an exception or CLI failure adds
-        # its class or exit code, never a message or value) and exits 2 on any
-        # mismatch. The profile and host checks run first; on a mismatch the
-        # step exits before any network call.
+        # workspace, with the authority the governed deploy requires. It
+        # prints booleans only (an exception or CLI failure adds its class or
+        # exit code, never a message or value) and exits 2 on any mismatch.
+        # The profile and host checks run first; on a mismatch the step exits
+        # before any network call.
         env:
           DATABRICKS_CONFIG_PROFILE: DEFAULT
           MIP_CI_DEPLOYER_CLIENT_ID: ${{ vars.MIP_CI_DEPLOYER_CLIENT_ID }}
