@@ -1,0 +1,12 @@
+"""Client profiles: one typed, validated description of a governed install.
+
+A client profile names one install of the Mortgage Intelligence Platform in one
+Databricks workspace. The repository carries only the schema (``schema``), the
+input resolver (``environment``), the derived views (``profile``), the log
+redaction helpers (``redact``) and a placeholder template
+(``deploy/clients/example.env``). Concrete values live outside the tree: in CI
+as GitHub Environment variables (public fields) and secrets (identifying and
+secret fields), and locally in ``.env.local``.
+
+Nothing in ``scripts/deploy.sh`` reads a profile yet; later slices wire it in.
+"""
