@@ -3,9 +3,10 @@
 databricks-sdk's own ``github-oidc`` strategy (0.103.0,
 ``credentials_provider._oidc_credentials_provider``) re-reads
 ``ACTIONS_ID_TOKEN_REQUEST_URL``/``ACTIONS_ID_TOKEN_REQUEST_TOKEN`` from
-``os.environ``, fetches a new GitHub ID token and performs a new token exchange
-on every API request. That costs two extra HTTP calls per request on the hot
-deploy paths, and the client stops authenticating as soon as a fail-closed
+``os.environ``, fetches a new GitHub ID token, re-reads the OIDC discovery
+document and performs a new token exchange on every API request. That costs
+three extra HTTP calls per request on the hot deploy paths (none retried on a
+429 or 5xx), and the client stops authenticating as soon as a fail-closed
 scrub (``m2m_workspace_auth.bind_exact_workspace_m2m_auth`` pops every
 ``*TOKEN*`` variable) removes the Actions request variables.
 

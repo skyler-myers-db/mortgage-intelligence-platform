@@ -45,6 +45,7 @@ from tools.databricks.uc_target_identity import (
     account_target_identity,
     workspace_target_identity,
 )
+from tools.databricks.workspace_auth import deployment_workspace_client
 from tools.databricks.workspace_system_group_evidence import (
     workspace_users_clone_group_evidence,
     workspace_users_group_evidence,
@@ -877,9 +878,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     audit_foreign_uc_access(
-        # Same stalled-read posture as the account client in
-        # uc_owner_policy.account_client_from_env (2026-08-09).
-        WorkspaceClient(config=Config(http_timeout_seconds=120)),
+        # Same stalled-read posture as uc_owner_policy.account_client_from_env
+        # (2026-08-09); the deployer binding caches a github-oidc token for all workers.
+        deployment_workspace_client(
+            factory=lambda **auth: WorkspaceClient(config=Config(**auth, http_timeout_seconds=120))
+        ),
         application_id=args.application_id,
         catalog=args.catalog,
         expected_inventory_principal=args.expected_inventory_principal,

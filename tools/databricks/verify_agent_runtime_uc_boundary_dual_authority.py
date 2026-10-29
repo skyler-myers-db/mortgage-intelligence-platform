@@ -24,6 +24,7 @@ from tools.databricks.gateway_model_lifecycle_audit import (
 )
 from tools.databricks.uc_owner_policy import account_client_from_env
 from tools.databricks.verify_agent_runtime_uc_grants import verify_effective_uc_boundary
+from tools.databricks.workspace_auth import deployment_workspace_client
 
 _AMBIENT_AUTH_KEYS = (
     "DATABRICKS_ACCOUNT_CLIENT_ID",
@@ -102,7 +103,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    admin_workspace = WorkspaceClient()
+    # The deployer binding caches a github-oidc token across both foreign-UC audits
+    # instead of re-exchanging per request; the target client below stays env-bound.
+    admin_workspace = deployment_workspace_client(factory=WorkspaceClient)
     account_client = account_client_from_env()
     proof = audit_foreign_uc_access(
         admin_workspace,
