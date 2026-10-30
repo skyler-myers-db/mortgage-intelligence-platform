@@ -85,22 +85,20 @@ def plan(
         raise InventoryRefused("current_user() did not return exactly one identity")
     identity = str(identity_rows[0]["identity"]).strip().casefold()
     tables, routines = inventory_statements(catalog)
+    rows = [
+        ("table", str(row.get("table_catalog")), str(row.get("table_schema")), str(row.get("table_name")),
+         str(row.get("table_type")), str(row.get("table_owner") or ""))
+        for row in execute(tables)
+    ]
+    rows += [
+        ("function", str(row.get("routine_catalog")), str(row.get("routine_schema")),
+         str(row.get("routine_name")), "FUNCTION", str(row.get("routine_owner") or ""))
+        for row in execute(routines)
+    ]
     statements: list[str] = []
     pipeline_datasets = 0
-    candidates: list[tuple[str, str, str, str]] = []
-    for row in execute(tables):
-        candidates.append(
-            (str(row.get("table_catalog")), str(row.get("table_schema")), str(row.get("table_name")),
-             f"table:{row.get('table_type')}:{row.get('table_owner')}")
-        )
-    for row in execute(routines):
-        candidates.append(
-            (str(row.get("routine_catalog")), str(row.get("routine_schema")), str(row.get("routine_name")),
-             f"function:FUNCTION:{row.get('routine_owner')}")
-        )
     group = _quote(owner_group)
-    for row_catalog, schema, name, described in candidates:
-        source, kind, owner = described.split(":", 2)
+    for source, row_catalog, schema, name, kind, owner in rows:
         if row_catalog != catalog or schema not in GOVERNED_SCHEMAS:
             raise InventoryRefused(f"the {source} inventory returned a row outside the governed schemas")
         if owner.strip().casefold() != identity:

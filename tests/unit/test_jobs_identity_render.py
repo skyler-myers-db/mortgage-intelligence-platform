@@ -10,8 +10,9 @@ what M2-PR5 adds:
   the pipeline move to the jobs principal);
 * the ``converge_governed_owner`` task, and a job environment no remaining
   task uses (the one that task runs in);
-* ``mip_lakebase_migrate``'s ``--jobs-reader-client-id`` parameter, which
-  enables the Lakebase jobs_reader role for the jobs principal;
+* ``mip_lakebase_migrate``'s ``--jobs-reader-client-id`` parameter (that
+  job's digest is not pinned, see TOUCHED; the normalizer still strips it for
+  the whole-bundle comparison below);
 * the lifecycle task's ``python_file``, which names its job-only entrypoint
   (jobs/sync_lifecycle_state_job.py runs the install pins, then the
   App-imported jobs/sync_lifecycle_state.py it replaces here).
@@ -55,9 +56,11 @@ TOUCHED = (
     "jobs.mip_refresh_silver",
     "jobs.mip_refresh_scores",
     "jobs.mip_scheduled_refresh",
-    "jobs.mip_lakebase_migrate",
     "pipelines.mip_feature_pipeline",
 )
+# mip_lakebase_migrate gains only --jobs-reader-client-id (asserted below and in
+# tests/unit/test_lakebase_jobs_reader.py); its digest is not pinned here, so a
+# parallel change to that task's other parameters does not collide with this one.
 OWNER_TASK = "converge_governed_owner"
 JOB_ENTRYPOINTS = {"jobs/sync_lifecycle_state_job.py": "jobs/sync_lifecycle_state.py"}
 JOBS_READER_PARAMETER = re.compile(r"--jobs-reader-client-id=")
@@ -65,7 +68,7 @@ _VARIABLE = re.compile(r"\$\{var\.([a-z_]+)\}")
 _GOLDEN_NOTE = (
     "Written from origin/main 3d37e347 (before M2-PR5) by this test's resolver and normalizer "
     "with the paychex-shaped profile. A diff is a change to a resource M2-PR5 touched beyond "
-    "its run_as, its converge_governed_owner task, the jobs-reader parameter and the lifecycle job's entrypoint: review it."
+    "its run_as, its converge_governed_owner task and the lifecycle job's entrypoint: review it."
 )
 
 
@@ -159,8 +162,7 @@ def test_the_normalizer_removes_only_what_m2_pr5_adds() -> None:
     deployer = views.client_target_vars(profile)["deployer_principal"]
     for key in TOUCHED:
         before, after = resolved[key], normalized(resolved[key])
-        expected = deployer if key == "jobs.mip_lakebase_migrate" else jobs_principal
-        assert before["run_as"] == {"service_principal_name": expected}, key
+        assert before["run_as"] == {"service_principal_name": jobs_principal}, key
         assert "run_as" not in after
     owner_tasks = {
         key: [task for task in resolved[key]["tasks"] if task["task_key"] == OWNER_TASK]
@@ -173,8 +175,12 @@ def test_the_normalizer_removes_only_what_m2_pr5_adds() -> None:
         "jobs.mip_fred_rates_ingest",
     }
     assert all(len(tasks) <= 1 for tasks in owner_tasks.values())
-    migrate = resolved["jobs.mip_lakebase_migrate"]["tasks"][0]["spark_python_task"]["parameters"]
-    assert f"--jobs-reader-client-id={jobs_principal}" in migrate
+    migrate = resolved["jobs.mip_lakebase_migrate"]
+    assert migrate["run_as"] == {"service_principal_name": deployer}
+    parameters = migrate["tasks"][0]["spark_python_task"]["parameters"]
+    assert f"--jobs-reader-client-id={jobs_principal}" in parameters
+    kept = normalized(migrate)["tasks"][0]["spark_python_task"]["parameters"]
+    assert not any(JOBS_READER_PARAMETER.match(item) for item in kept)
     # A resource M2-PR5 did not touch normalizes to itself apart from run_as.
     untouched = resolved["jobs.mip_ref_seed"]
     assert normalized(untouched) == {k: v for k, v in untouched.items() if k != "run_as"}
