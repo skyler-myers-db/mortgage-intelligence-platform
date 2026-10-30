@@ -348,6 +348,28 @@ def test_stage_reads_the_path_from_an_env_variable_so_deploy_never_echoes_it(
     assert code == 2 and "--file-env must name an MIP_* environment variable" in err
 
 
+def test_stage_reads_the_lender_from_the_environment_so_deploy_never_echoes_it(
+    capsys: pytest.CaptureFixture[str], fixture_lender, repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = make_png()
+    entry = fixture_lender(entry_for(data, "image/png", 64, 32))
+    mark_file = tmp_path / "mark.png"
+    mark_file.write_bytes(data)
+    monkeypatch.setenv("MIP_LENDER_NAME", LENDER)
+    monkeypatch.setenv("MIP_LENDER_NMLS_ID", NMLS)
+    out = ("--file", str(mark_file), "--out", "frontend/.branding-stage", "--expect-sha256", entry.sha256)
+
+    assert _run(capsys, "stage", "--identity-env", *out)[0] == 0
+    assert (repo / "frontend" / ".branding-stage" / "lender-mark.png").read_bytes() == data
+    code, _, err = _run(capsys, "stage", "--identity-env", "--lender", LENDER, "--nmls", NMLS, *out)
+    assert code == 2 and "drop --lender and --nmls" in err
+    code, _, err = _run(capsys, "stage", "--lender", LENDER, *out)
+    assert code == 2 and "--lender and --nmls are required without --identity-env" in err
+    monkeypatch.delenv("MIP_LENDER_NAME")
+    code, _, err = _run(capsys, "stage", "--identity-env", *out)
+    assert code == 2 and "not a reviewed lender identity" in err
+
+
 def test_stage_refuses_any_out_but_the_stage_dir(capsys: pytest.CaptureFixture[str], repo: Path, tmp_path: Path) -> None:
     victim = tmp_path / "victim"
     victim.mkdir()

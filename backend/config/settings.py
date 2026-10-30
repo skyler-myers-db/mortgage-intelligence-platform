@@ -23,12 +23,9 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, Settings
 
 from backend.config import source_names
 from backend.config.cotality_source_settings import CotalitySourceSettings
+from backend.config.lender_identity_settings import LenderIdentitySettings
 from backend.schemas._validators_source_names import set_configured_source_forms_provider
 from backend.schemas._validators_tenant import set_public_lender_name_provider
-from backend.schemas.lender_identity import (
-    effective_public_tenant_id,
-    validate_public_lender_identity,
-)
 
 # Documented, shared error message so every fail-fast site reads the
 # same -- helps operators who see it in a container log.
@@ -120,7 +117,7 @@ def _running_under_pytest() -> bool:
     return "pytest" in sys.modules
 
 
-class Settings(BaseSettings, CotalitySourceSettings):
+class Settings(BaseSettings, LenderIdentitySettings, CotalitySourceSettings):
     model_config = SettingsConfigDict(
         env_file=(".env", ".env.local"),
         env_file_encoding="utf-8",
@@ -149,9 +146,6 @@ class Settings(BaseSettings, CotalitySourceSettings):
         validation_alias=AliasChoices("MIP_GIT_SHA", "GIT_SHA", "SOURCE_VERSION"),
     )
     mip_app_deployment_lease_id: str | None = None
-    mip_lender_name: str = "Summit Mortgage"
-    mip_lender_nmls_id: str = ""
-    mip_tenant_id: str | None = None
     mip_default_catalog: str = "mip"
     mip_default_schema: str = "gold"
     mip_lakebase_schema: str = "mip_app"
@@ -275,14 +269,6 @@ class Settings(BaseSettings, CotalitySourceSettings):
     mip_lakebase_sync_catalog: str = "mip_app_state"
     mip_lakebase_sync_schema: str = "mip_sync"
     mip_lakebase_sync_tables: str = "source_readiness,segment_population,funnel_snapshot_daily"
-
-    def effective_tenant_id(self) -> str:
-        """Return the Lakebase disclosure namespace for this deployment."""
-
-        return effective_public_tenant_id(
-            self.mip_tenant_id,
-            lender_name=self.mip_lender_name,
-        )
 
     # In-the-money contract: matches tests/fixtures/rate_spread_golden.json
     # (market_rate_constant) and tests/fixtures/in_the_money_golden.json
@@ -620,19 +606,6 @@ class Settings(BaseSettings, CotalitySourceSettings):
         gt=0,
         allow_inf_nan=False,
     )
-
-    @model_validator(mode="after")
-    def _validate_public_lender_identity(self) -> Settings:
-        self.mip_lender_name, self.mip_lender_nmls_id = validate_public_lender_identity(
-            self.mip_lender_name,
-            self.mip_lender_nmls_id,
-        )
-        if self.mip_tenant_id is not None:
-            self.mip_tenant_id = effective_public_tenant_id(
-                self.mip_tenant_id,
-                lender_name=self.mip_lender_name,
-            )
-        return self
 
     @model_validator(mode="after")
     def _validate_health_wait_budget(self) -> Settings:
