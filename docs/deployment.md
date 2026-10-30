@@ -152,16 +152,20 @@ The flow, every step in `scripts/deploy.sh`:
    overwritten. It then requires an exact recursive listing (each object a FILE
    of the manifest's size) and downloads every file to compare its sha256. It
    never deletes, so a re-run of the same release uploads nothing. A rate limit
-   (HTTP 429) on an upload, a download or the listing is retried, and only a
-   rate limit (`tools/databricks/app_release_retry.py`: six attempts per call,
-   exponential backoff with jitter, at least the Retry-After, at most 30 s per
-   wait, one `[app-release]` line per retry). The SDK never retries a
-   workspace import itself, which is how a 429 at 8 workers ended a
-   1,177-file publish on 2026-10-29. A retried upload is still create-only: if
-   the throttled attempt landed, the retry meets the existing object and the
-   byte compare above decides. A call still throttled after its sixth attempt
-   is a refusal (exit 2) that names the object and the budget. Any other error
-   is handled as before, on its first occurrence: a failed upload is still read
+   (HTTP 429) on an upload is retried, and only a rate limit
+   (`tools/databricks/app_release_retry.py`: six attempts per upload,
+   exponential backoff with jitter, the larger of the backoff and the
+   Retry-After, cut to 30 s per wait, one `[app-release]` line per retry).
+   The SDK never retries a workspace import itself, which is how a 429 at 8
+   workers ended a 1,177-file publish on 2026-10-29. A retried upload is still
+   create-only: if the throttled attempt landed, the retry meets the existing
+   object and the byte compare above decides. A download or the listing is a
+   GET, which the SDK retries itself on a 429 until its own
+   `retry_timeout_seconds` (300 s by default) runs out; the tool then refuses
+   it at once rather than spend a second budget. Either way a call still
+   throttled is a refusal (exit 2) that names the object and the budget spent
+   (the sixth upload attempt, or the SDK's timeout). Any other error is
+   handled as before, on its first occurrence: a failed upload is still read
    back once, and counts as uploaded only if its bytes are there.
 4. **Converge** before each of the three activations (release mode, see
    "App source contract"), then the Apps deployment names the release folder
@@ -486,7 +490,7 @@ Upload the folder under that governed name,
 `workspace import-dir` and never into a folder that is already used: a folder
 under the governed name whose bytes differ makes the governed publish of that
 commit refuse at step 5. A publish that stops part way, for example on a rate
-limit (HTTP 429) still there after the retry budget, leaves a partial folder:
+limit (HTTP 429) that outlasts the retry budget, leaves a partial folder:
 run the same command again, which byte-compares what is already there and
 uploads only what is missing. The piecewise payload deploy then names that
 folder as the deployment's `source_code_path`.

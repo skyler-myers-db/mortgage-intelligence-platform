@@ -6,19 +6,29 @@ release on ``ResourceExhausted: Too many requests`` raised by
 request with no body or a rewindable one, until its own retry timeout, but
 ``workspace.upload`` passes its form fields as a dict, which ``do`` sends
 once. So an upload 429 always reached the caller. This module is that missing
-retry. It also wraps the release tools' download and listing calls: those
-GETs get the SDK's retry first, and this bound applies to a 429 that still
-surfaces.
+retry.
 
-``RateLimitRetry.call`` gives one call ``attempts`` tries. The wait after try
-n is a draw from the upper half of ``base * 2**(n-1)`` (``jitter`` is 0..1),
-raised to the error's Retry-After (the SDK's ``retry_after_secs``) and cut to
-``cap``, so a longer Retry-After waits ``cap`` and the budget stays bounded.
-Each retry prints one ``[app-release]`` line to stderr, so a deploy log shows
-how often it was throttled. Any other error propagates on its first
-occurrence. A call still throttled on its last try raises RateLimitExhausted,
-a ReleaseContractError, so the release CLIs refuse it with exit 2. ``sleep``
-and ``jitter`` are injectable so tests never wait.
+The release tools' download and listing calls are GETs, which ``do`` retries
+itself: every 429 (and 503) carries ``retry_after_secs``, so the SDK waits and
+retries it until ``retry_timeout_seconds`` (300 s unless configured) and then
+raises ``TimeoutError`` from the last 429 (``retries.retried`` raises
+``RuntimeError`` instead when a ``max_attempts`` runs out first; ``do`` sets
+none). No 429 reaches the caller from a GET. ``call``
+refuses that shape at once as RateLimitExhausted, naming the call and the
+SDK's timeout, without a second budget on top of the 300 s already spent; a
+timeout from anything else (a 503, a dropped connection) propagates
+unchanged.
+
+``RateLimitRetry.call`` gives one call ``attempts`` tries against a 429 that
+does reach it. The wait after try n is a draw from the upper half of
+``base * 2**(n-1)`` (``jitter`` is 0..1), raised to the error's Retry-After
+(the SDK's ``retry_after_secs``) and cut to ``cap``, so a longer Retry-After
+waits ``cap`` and the budget stays bounded. Each retry prints one
+``[app-release]`` line to stderr, so a deploy log shows how often it was
+throttled. Any other error propagates on its first occurrence. A call still
+throttled on its last try raises RateLimitExhausted, a ReleaseContractError,
+so the release CLIs refuse it with exit 2. ``sleep`` and ``jitter`` are
+injectable so tests never wait.
 """
 
 from __future__ import annotations
@@ -47,6 +57,15 @@ class RateLimitExhausted(ReleaseContractError):
     """Every attempt of one call was rate limited; nothing was overwritten."""
 
 
+def _sdk_retry_gave_up_on_a_rate_limit(error: BaseException) -> bool:
+    """``ApiClient.do``'s own retry ran out while the request was still a 429."""
+    return (
+        isinstance(error, TimeoutError | RuntimeError)
+        and not isinstance(error, ReleaseContractError)
+        and isinstance(error.__cause__, RATE_LIMIT_ERRORS)
+    )
+
+
 @dataclass(frozen=True)
 class RateLimitRetry:
     """Exponential backoff with jitter for HTTP 429 alone, within a fixed budget."""
@@ -71,7 +90,7 @@ class RateLimitRetry:
         return min(self.cap_seconds, wait)
 
     def call(self, what: str, function: Callable[[], _R]) -> _R:
-        """``function()``, retried on a rate limit; refuses once the budget is spent."""
+        """``function()``, retried on a 429; refuses once this budget or the SDK's is spent."""
         for attempt in range(1, self.attempts + 1):
             try:
                 return function()
@@ -89,6 +108,13 @@ class RateLimitRetry:
                     file=sys.stderr, flush=True,
                 )
                 self.sleep(wait)
+            except (TimeoutError, RuntimeError) as error:
+                if not _sdk_retry_gave_up_on_a_rate_limit(error):
+                    raise
+                raise RateLimitExhausted(
+                    f"the {what} was still rate limited (HTTP 429) when the SDK's own retry "
+                    f"gave up ({error}); nothing was overwritten or deleted, so a re-run is safe"
+                ) from error
         raise AssertionError("unreachable: attempts is at least 1")
 
 

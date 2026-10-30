@@ -9,6 +9,7 @@ AUTO's notebook detection and ResourceAlreadyExists.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,7 @@ from databricks.sdk.errors import (
 )
 from databricks.sdk.service.workspace import ImportFormat, ObjectType
 
-from tests.fixtures.fake_workspace import FakeWorkspaceClient, deployment
+from tests.fixtures.fake_workspace import FakeWorkspaceClient, deployment, sdk_gave_up
 from tools.databricks import app_release_contract as contract
 from tools.databricks import app_release_retry as retry
 from tools.databricks import app_release_source as source
@@ -327,7 +328,9 @@ def test_a_rate_limit_retry_never_takes_other_bytes_for_its_own(tmp_path: Path) 
     assert client.workspace.ops("delete") == []
 
 
-def test_verify_hashes_retries_a_rate_limited_download(tmp_path: Path) -> None:
+# A 429 that reaches the caller from a GET: SDK 0.103.0 never lets one through
+# (it retries a GET itself; see the sdk_gave_up tests below), another SDK might.
+def test_verify_hashes_retries_a_download_429_that_reaches_it(tmp_path: Path) -> None:
     _, _, manifest = _stage(tmp_path)
     client = FakeWorkspaceClient()
     root = _api_root(manifest.release_id)
@@ -343,7 +346,7 @@ def test_verify_hashes_retries_a_rate_limited_download(tmp_path: Path) -> None:
     assert waits == [2.0, 4.0]
 
 
-def test_the_exact_listing_retries_a_rate_limit_from_the_start(tmp_path: Path) -> None:
+def test_the_exact_listing_retries_a_429_that_reaches_it_from_the_start(tmp_path: Path) -> None:
     _, _, manifest = _stage(tmp_path)
     client = FakeWorkspaceClient()
     root = _api_root(manifest.release_id)
@@ -355,6 +358,85 @@ def test_the_exact_listing_retries_a_rate_limit_from_the_start(tmp_path: Path) -
     assert set(source.remote_files(client, root, retry=policy)) == set(FILES)
     assert client.workspace.ops("list") == [root, root]
     assert waits == [2.0]
+
+
+def _gave_up_text(what: str) -> str:
+    return (
+        f"refused: the {what} was still rate limited (HTTP 429) when the SDK's own "
+        "retry gave up (Timed out after 0:05:00)"
+    )
+
+
+def test_a_download_the_sdk_gave_up_on_is_refused_at_once_naming_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stage_dir, manifest_path, manifest = _stage(tmp_path)
+    client = FakeWorkspaceClient()
+    target = f"{_api_root(manifest.release_id)}/backend/main.py"
+    client.workspace.fail_before[("download", target)] = sdk_gave_up(_throttled(retry_after=60))
+    policy, waits = _no_wait()
+
+    code = source.main(_args(stage_dir, manifest_path, manifest.release_id),
+                       client=lambda: client, retry=policy)
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert _gave_up_text(f"download of {target}") in err
+    assert client.workspace.ops("download").count(target) == 1  # the SDK already spent 300 s
+    assert waits == []
+    assert client.workspace.nodes[target].data == FILES["backend/main.py"]
+    assert client.workspace.ops("delete") == []
+
+
+def test_a_listing_the_sdk_gave_up_on_is_refused_at_once_naming_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stage_dir, manifest_path, manifest = _stage(tmp_path)
+    client = FakeWorkspaceClient()
+    root = _api_root(manifest.release_id)
+    client.workspace.fail_before[("list", root)] = sdk_gave_up(_throttled(retry_after=60))
+    policy, waits = _no_wait()
+
+    code = source.main(_args(stage_dir, manifest_path, manifest.release_id),
+                       client=lambda: client, retry=policy)
+
+    assert code == 2
+    assert _gave_up_text(f"listing of {root}") in capsys.readouterr().err
+    assert client.workspace.ops("list") == [root]
+    assert waits == []
+    assert client.workspace.ops("delete") == []
+
+
+@pytest.mark.parametrize(
+    ("download_fault", "refusal"),
+    [
+        (lambda: _throttled(retry_after=1),
+         "refused: the download of {target} was rate limited (HTTP 429) on all 6 attempts"),
+        (lambda: sdk_gave_up(_throttled(retry_after=60)), _gave_up_text("download of {target}")),
+    ],
+    ids=["429-reaches-the-caller", "sdk-retry-gave-up"],
+)
+def test_a_throttled_read_back_of_a_landed_upload_is_a_rate_limit_refusal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    download_fault: Callable[[], Exception], refusal: str,
+) -> None:
+    stage_dir, manifest_path, manifest = _stage(tmp_path)
+    client = FakeWorkspaceClient()
+    target = f"{_api_root(manifest.release_id)}/app.yaml"
+    client.workspace.fail_after[("upload", target)] = [_throttled()]  # it lands, then 429
+    client.workspace.fail_before[("download", target)] = download_fault()
+    policy, _ = _no_wait()
+
+    code = source.main(_args(stage_dir, manifest_path, manifest.release_id),
+                       client=lambda: client, retry=policy)
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert refusal.format(target=target) in err
+    assert "cannot be read back" not in err
+    assert client.workspace.ops("upload").count(target) == 2  # the throttled try, then AlreadyExists
+    assert client.workspace.nodes[target].data == FILES["app.yaml"]
+    assert client.workspace.ops("delete") == []
 
 
 @pytest.mark.parametrize(

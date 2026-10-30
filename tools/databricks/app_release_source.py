@@ -29,14 +29,16 @@ exactly the manifest's paths, each a FILE of the manifest's size, and every
 file is then downloaded and its sha256 compared. Publish never deletes and
 never overwrites, so a re-run of the same release uploads nothing.
 
-Rate limits: each upload, download and listing call is retried on HTTP 429
-alone (tools/databricks/app_release_retry.py: six attempts, exponential
-backoff with jitter, at least the Retry-After, at most 30 s per wait). A
-retried upload is still create-only, so a throttled attempt that landed meets
-AlreadyExists and the byte compare above. A call still throttled after its
-last attempt is a refusal (exit 2) naming the object and the budget, with no
-reconcile; any other error is handled exactly as above, on its first
-occurrence.
+Rate limits (tools/databricks/app_release_retry.py): an upload is retried on
+HTTP 429 alone, six attempts, exponential backoff with jitter, the larger of
+the backoff and the Retry-After, cut to 30 s per wait; the SDK sends an import
+once. A retried upload is still create-only, so a throttled attempt that
+landed meets AlreadyExists and the byte compare above. A download or listing
+is a GET, which the SDK retries itself on a 429 until its
+``retry_timeout_seconds`` (300 s by default); when that runs out it is refused
+at once. Either way a call still throttled is a refusal (exit 2) naming the
+object and the budget spent, with no reconcile; any other error is handled
+exactly as above, on its first occurrence.
 
 ``verify-deployment`` is read-only, for the live proof (not wired into
 deploy.sh): the deployment (``--deployment-id``, else the App's active one)
@@ -149,7 +151,8 @@ def remote_files(
     """Every object below ``api_root`` by relative path; each must be a FILE."""
     prefix = f"{api_root}/"
     try:
-        # The whole walk restarts on a 429: a recursive listing is many calls.
+        # A recursive listing is many GETs. The SDK retries each one's 429 and
+        # its timeout is refused at once; a 429 that reaches here restarts the walk.
         listing = retry.call(
             f"listing of {api_root}",
             lambda: list(workspace.workspace.list(api_root, recursive=True)),

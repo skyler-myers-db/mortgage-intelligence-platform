@@ -21,7 +21,8 @@ Faults: ``fail_before[(op, path)]`` raises before the operation applies;
 An exception there fails every such call; a list fails one call per item, in
 order, and lets later calls through (a throttle that clears). ``hooks[op]``
 runs before every such call with the path. Every call is recorded in
-``calls`` as ``(op, path)``.
+``calls`` as ``(op, path)``. A real client never raises a 429 from a GET
+(``download``, ``list``): ``sdk_gave_up`` builds what it raises instead.
 """
 
 from __future__ import annotations
@@ -30,10 +31,12 @@ import io
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import PurePosixPath
 from types import SimpleNamespace
 from typing import Any, BinaryIO
 
+from databricks.sdk.clock import Clock
 from databricks.sdk.errors import (
     BadRequest,
     InvalidParameterValue,
@@ -41,11 +44,54 @@ from databricks.sdk.errors import (
     ResourceAlreadyExists,
     ResourceDoesNotExist,
 )
+from databricks.sdk.retries import retried
 from databricks.sdk.service.workspace import ImportFormat, ObjectType
 
 from tools.databricks.app_release_contract import notebook_shape
 
 SOURCE_NOTEBOOK_SUFFIXES = (".py", ".sql", ".scala", ".r")
+SDK_RETRY_TIMEOUT_SECONDS = 300  # Config.retry_timeout_seconds when unset (SDK 0.103.0)
+
+
+class InstantClock(Clock):
+    """The SDK's clock interface; ``sleep`` only moves ``time`` forward."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.lock = threading.Lock()
+
+    def time(self) -> float:
+        with self.lock:
+            return self.now
+
+    def sleep(self, seconds: float) -> None:
+        with self.lock:
+            self.now += seconds
+
+
+def sdk_gave_up(error: Exception, *, max_attempts: int | None = None) -> Exception:
+    """What SDK 0.103.0's ``ApiClient.do`` raises once its own retry of ``error`` gives up.
+
+    ``do`` wraps every request with no body (each GET) in ``retries.retried``
+    for ``retry_timeout_seconds`` and retries any error that carries
+    ``retry_after_secs``, which the SDK sets on every 429 and 503. Past the
+    deadline it raises ``TimeoutError`` from the last error; ``RuntimeError``
+    when ``max_attempts`` ran out first. The SDK's own decorator builds it here,
+    on an instant clock, so the shape is the SDK's and no test waits.
+    """
+
+    def failing() -> None:
+        raise error
+
+    policy = retried(
+        timeout=timedelta(seconds=SDK_RETRY_TIMEOUT_SECONDS), is_retryable=lambda _: "transient",
+        clock=InstantClock(), max_attempts=max_attempts,
+    )
+    try:
+        policy(failing)()
+    except Exception as gave_up:  # noqa: BLE001 - the shape under test
+        return gave_up
+    raise AssertionError("the SDK's retry returned without the call ever succeeding")
 
 
 @dataclass
