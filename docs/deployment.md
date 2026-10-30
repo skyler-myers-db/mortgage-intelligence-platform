@@ -2252,6 +2252,31 @@ The app runs on live Unity Catalog + Lakebase in every environment — there is 
   (`deploy-prod.yml`) runs the same gate as a convenience; neither
   `scripts/deploy.sh` nor `scripts/package_source.sh` calls GitHub.
 
+## Client account bootstrap (human-run)
+
+The client's account admin sets up a new client's identities once, by hand,
+with `python -m tools.clients.bootstrap_account`. These are the deployer,
+jobs, validator, data-owners group, reserved M2M identities and account
+principal, each pinned by application id.
+
+The loop is plan, review, ack, apply:
+
+1. `--plan` is read-only. It prints a public-safe canonical plan and its
+   sha256.
+2. `--apply --ack-plan <sha256>` recomputes the plan and refuses unless the
+   digest is identical.
+3. A second `--apply` makes zero mutations. `--verify` re-checks read-only.
+
+`--rotate-adopted` and `--post-first-install` follow the same plan and ack
+loop. The mutating actions refuse under CI or without a terminal. Every run
+logs in fresh in a throwaway config and token cache, and never reads
+`~/.databrickscfg`.
+
+The full operator guide, including what the tool never does, is
+[docs/clients/bootstrap.md](clients/bootstrap.md). Until the GitHub
+credential sink (M2-PR2) lands, an apply that would create, adopt or mint
+refuses before its first mutation.
+
 ## CI deploy (deploy-dev.yml): parked, and the release-gate bootstrap
 
 Decision D-platform-process-b step 7 (audit quality-03, report 12.4 #8). The
