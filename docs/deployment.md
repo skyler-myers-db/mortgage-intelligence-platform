@@ -1843,10 +1843,16 @@ leaves the App serving and changes nothing. The gate refuses:
   caller in `admins` (the deploy's preflight already requires that); the
   metastore-scoped Lakebase catalog lookup is the one exception;
 - an update or resize of the Lakebase database instance, unless
-  `MIP_ACK_DATABASE_INSTANCE_UPDATE` equals the sha256 of the canonical field
-  diff. The refusal prints that digest and the full report holds the diff.
-  Review it, then export the digest for that run only. The pre-apply gate
-  recomputes the digest, so an acknowledgement covers exactly the reviewed diff;
+  `MIP_ACK_DATABASE_INSTANCE_UPDATE` equals the sha256 of what the update will
+  do. The CLI sends the instance's whole configured state with
+  `UpdateMask: "*"`, so the update also reverts a remote-only drift on an
+  input-only field (`node_count`, `retention_window_in_days`, ...) that the
+  plan lists as `skip`. The digest therefore covers the full `new_state`,
+  every change skip included, the instance name and the state lineage. The
+  refusal prints that digest and the full report's `instance_update` holds
+  exactly what it covers. Review it, then export the digest for that run
+  only. The pre-apply gate recomputes the digest, so an acknowledgement covers
+  exactly the reviewed update of this install, and never another install's;
 - **`not_adopted`**: when the deployer's state does not bind `apps.mip_app`
   (its entry plans a create), the App's own lookup finds it existing, and every
   refusal is a collision, the deployer is looking at an install it never

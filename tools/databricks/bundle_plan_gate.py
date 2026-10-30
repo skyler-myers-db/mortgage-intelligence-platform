@@ -19,9 +19,11 @@ from the kinds databricks.yml declares
   caller that is not a workspace admin (a list shows only what the caller may
   see) refuses as ``lookup_failed``.
 * ``update`` or ``resize`` of a ``database_instances`` entry refuses unless
-  ``MIP_ACK_DATABASE_INSTANCE_UPDATE`` equals the sha256 of the canonical
-  field diff (``instance_update_digest``). The pre-apply run recomputes the
-  diff, so an acknowledgement covers exactly the diff that was reviewed.
+  ``MIP_ACK_DATABASE_INSTANCE_UPDATE`` equals the sha256 of what the update
+  will do (``instance_update_digest``): the whole ``new_state`` it sends,
+  every change skip included, the instance name and the state lineage. The
+  pre-apply run recomputes it, so an acknowledgement covers exactly the
+  update that was reviewed, of this install only.
 
 **Not adopted** (attack O14). When the plan does not bind ``apps.<app key>``
 (its entry plans ``create``, so the deployer's state holds no live id for
@@ -116,8 +118,10 @@ REMEDIES: Mapping[str, str] = MappingProxyType(
             "never creates blind"
         ),
         "instance_update_unacked": (
-            "the plan updates the Lakebase database instance; review the field diff in the "
-            f"full plan report, then re-run with {ACK_ENV} set to its sha256"
+            "the plan updates the Lakebase database instance, which sends its whole configured "
+            "state; review instance_update in the full plan report (every change, skip "
+            "included: a skipped remote drift is reverted too), then re-run with "
+            f"{ACK_ENV} set to its sha256"
         ),
         "not_adopted": (
             "this deployer's bundle state does not bind the App, which already exists, and "
@@ -130,7 +134,19 @@ REMEDIES: Mapping[str, str] = MappingProxyType(
 
 
 def instance_update(plan: BundlePlan) -> tuple[Mapping[str, Any], ...]:
-    """The canonical field diff of every database-instance update or resize."""
+    """What every database-instance update or resize will do, exactly as it is acknowledged.
+
+    The CLI's ``DoUpdate`` (``bundle/direct/dresources/database_instance.go``
+    at v1.10.0) sends the whole ``new_state.value`` with ``UpdateMask: "*"``,
+    so the update writes every field, not only the changes the plan classifies
+    as ``update``. A remote-only difference on an input-only field
+    (``node_count``, ``retention_window_in_days`` and the other
+    ``ignore_remote_changes`` fields of ``resources.generated.yml``) plans
+    ``skip``, yet the update reverts it to the configured value. So each item
+    carries the full ``new_state`` and every change, skip included; the
+    instance name and the state lineage bind it to one install, so an
+    acknowledgement kept for another install's identical diff never replays.
+    """
 
     items = []
     for entry in plan.entries:
@@ -145,14 +161,24 @@ def instance_update(plan: BundlePlan) -> tuple[Mapping[str, Any], ...]:
                 "remote": change.remote,
             }
             for path, change in sorted(entry.changes.items())
-            if change.action != "skip"
         }
-        items.append({"resource": entry.symbolic, "action": entry.action, "changes": changes})
+        new_state = dict(entry.new_value) if entry.new_value is not None else None
+        items.append(
+            {
+                "resource": entry.symbolic,
+                "action": entry.action,
+                "instance_name": (new_state or {}).get("name"),
+                "lineage": plan.lineage,
+                "new_state": new_state,
+                "new_vars": dict(entry.new_vars),
+                "changes": changes,
+            }
+        )
     return tuple(items)
 
 
 def instance_update_digest(plan: BundlePlan) -> str:
-    """sha256 of the canonical instance field diff; "" when no instance changes."""
+    """sha256 of every ``instance_update`` item; "" when no instance changes."""
 
     items = instance_update(plan)
     return sha256_hex(list(items)) if items else ""
@@ -265,6 +291,16 @@ def evaluate(
 
     diff = instance_update(plan)
     digest = instance_update_digest(plan)
+    for item in diff:
+        if item["new_state"] is None:
+            # Without the body the update sends, no digest says what it does.
+            refusals.append(
+                _refuse(
+                    "malformed_plan",
+                    str(item["resource"]),
+                    reason=f"{item['resource']} {item['action']} carries no new_state",
+                )
+            )
     if digest and acknowledgement != digest:
         for item in diff:
             refusals.append(

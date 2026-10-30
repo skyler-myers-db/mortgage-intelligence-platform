@@ -183,15 +183,26 @@ def test_an_unacknowledged_instance_update_refuses_and_prints_its_digest() -> No
         "digest": report.instance_update_sha256,
         "acknowledged": False,
     }
-    assert report.instance_update[0]["changes"] == {
+    item = report.instance_update[0]
+    assert item["changes"] == {
         "capacity": {
             "action": "update",
             "reason": "",
             "old": "CU_1",
             "new": "CU_2",
             "remote": "CU_1",
-        }
-    }, "skip changes stay out of the acknowledged diff"
+        },
+        "effective_capacity": {
+            "action": "skip",
+            "reason": "backend_default",
+            "old": None,
+            "new": None,
+            "remote": "CU_1",
+        },
+    }, "every change, skip included, is acknowledged"
+    assert item["new_state"] == {"name": "synthetic-mip_app_state", "capacity": "CU_2"}
+    assert item["instance_name"] == "synthetic-mip_app_state"
+    assert item["lineage"] == fx.LINEAGE
 
 
 def test_the_exact_acknowledgement_admits_the_instance_update_and_only_that_diff() -> None:
