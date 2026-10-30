@@ -17,7 +17,8 @@ log, the plan or an exception message. A secret travels as a
 ``put_secret`` may reveal it.
 
 The GitHub-environment sink (``<client>`` environment secrets through a
-temporary ``GH_CONFIG_DIR``) is M2-PR2. Until it lands the default sink is
+temporary ``GH_CONFIG_DIR``) is ``tools.clients.github_sink``, selected with
+``bootstrap_account --sink github-environment``. Without it the sink is
 ``UnconfiguredSink``, which refuses before the first mutation, so a real
 ``--apply`` that would create, adopt or mint stops with nothing changed.
 
@@ -59,14 +60,14 @@ class CredentialSink(Protocol):
 
 
 class UnconfiguredSink:
-    """The default until M2-PR2: refuses, so nothing is created that cannot be pinned."""
+    """The default (``--sink none``): refuses, so nothing is created that cannot be pinned."""
 
     def ready(self) -> None:
         raise BootstrapRefusal(
             [
-                "credential sink: none is configured; the GitHub-environment sink lands "
-                "in M2-PR2, and until then a run that would create, adopt or mint refuses "
-                "before its first mutation"
+                "credential sink: none is selected; pass --sink github-environment to hand "
+                "pins and minted secrets to the client's GitHub environment. Without it a run "
+                "that would create, adopt or mint refuses before its first mutation"
             ]
         )
 
