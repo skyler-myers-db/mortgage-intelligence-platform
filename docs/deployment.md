@@ -2139,8 +2139,7 @@ Retired with that workspace (M0-PR3):
 - `deploy-dev.yml`'s normal-credential repair step, its input and its
   secrets-write token, and its foreign-catalog remediation input: the
   workflow now passes `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=0` as a
-  literal, and the remediation has no CI command of record
-  (docs/security/GRANTS.md);
+  literal, and the remediation has no CI command of record;
 - `nightly.yml`'s personal-access-token profile, its bundle validate and its
   three refresh-job runs. They were removed rather than re-aimed: the
   remaining `dev` target is the live install, whose deployed jobs CI must

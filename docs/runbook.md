@@ -129,8 +129,8 @@ fi
 gh run watch "$RUN_ID" --exit-status
 ```
 
-The GitHub workflow above is dev-only, and it is never a recovery path for
-the live dev App.
+The GitHub workflow above is dev-only. It is never a recovery path for the
+live dev App.
 Do not transpose it to a customer or production workspace: production recovery requires its separately reviewed
 environment contract and change-controlled `scripts/deploy.sh -t prod`
 invocation. A failed pre-capture rebase remains unsigned and therefore requires
