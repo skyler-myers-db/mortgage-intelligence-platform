@@ -81,16 +81,37 @@ def _registry_problems() -> list[str]:
     for name, mark in _REVIEWED_LENDER_MARKS.items():
         if mark.nmls_id not in _REVIEWED_PUBLIC_LENDER_IDENTITIES.get(name, frozenset()):
             problems.append(f"{name}: not a reviewed (lender name, NMLS id) identity")
-        if _SHA256_RE.fullmatch(mark.sha256) is None:
-            problems.append(f"{name}: sha256 is not 64 lowercase hex characters")
-        ref = mark.authorization_ref
-        if _AUTHORIZATION_REF_RE.fullmatch(ref) is None or "://" in ref or "@" in ref:
-            problems.append(f"{name}: authorization_ref is not a plain reference")
-        reviewed_on: object = mark.reviewed_on
-        if type(reviewed_on) is not date or reviewed_on > date.today():
-            problems.append(f"{name}: reviewed_on is not a past calendar date")
-        if mark.media_type not in ("image/png", "image/webp"):
-            problems.append(f"{name}: media_type is not PNG or WebP")
+        problems.extend(reviewed_mark_problems(name, mark))
+    return problems
+
+
+def reviewed_mark_problems(label: str, mark: ReviewedLenderMark) -> list[str]:
+    """The rules every reviewed mark entry meets, each broken one as ``label: rule``.
+
+    Shared by the source-controlled registry and the mark a digest-pinned
+    lender record carries (lender_identity_record.py), which passes a field
+    name as ``label`` so no refusal names the lender.
+    """
+
+    problems: list[str] = []
+    if _SHA256_RE.fullmatch(mark.sha256) is None:
+        problems.append(f"{label}: sha256 is not 64 lowercase hex characters")
+    ref = mark.authorization_ref
+    if _AUTHORIZATION_REF_RE.fullmatch(ref) is None or "://" in ref or "@" in ref:
+        problems.append(f"{label}: authorization_ref is not a plain reference")
+    reviewed_on: object = mark.reviewed_on
+    if type(reviewed_on) is not date or reviewed_on > date.today():
+        problems.append(f"{label}: reviewed_on is not a past calendar date")
+    if mark.media_type not in ("image/png", "image/webp"):
+        problems.append(f"{label}: media_type is not PNG or WebP")
+    height, width = mark.height, mark.width
+    if (
+        type(height) is not int
+        or type(width) is not int
+        or not MIN_MARK_HEIGHT <= height <= MAX_MARK_HEIGHT
+        or not height <= width <= 2 * height
+    ):
+        problems.append(f"{label}: width and height are not a reviewable mark size")
     return problems
 
 
@@ -186,6 +207,16 @@ def validate_lender_mark(
     mark = _REVIEWED_LENDER_MARKS.get(lender)
     if mark is None or mark.nmls_id != nmls_id:
         raise ValueError("no reviewed lender mark is recorded for this lender identity")
+    return validate_reviewed_mark_bytes(mark, data)
+
+
+def validate_reviewed_mark_bytes(mark: ReviewedLenderMark, data: bytes) -> ReviewedLenderMark:
+    """Return ``mark`` when ``data`` is exactly that reviewed file, or raise ValueError.
+
+    The identity check is the caller's: ``validate_lender_mark`` for the
+    registry, the verified record for a digest-pinned customer identity.
+    """
+
     if len(data) > MAX_MARK_BYTES:
         raise ValueError("lender mark is larger than 64 KiB")
     media_type: MediaType
