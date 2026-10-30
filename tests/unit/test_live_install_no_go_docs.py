@@ -358,7 +358,7 @@ def test_grants_gives_foreign_catalog_remediation_no_ci_command_of_record() -> N
     heading = "**Foreign-catalog remediation has no CI command of record (post-W5, 2026-10-27).**"
     assert heading in grants
     # No sentence after the negated heading may name a command of record for it, however paraphrased.
-    paragraph = grants.split(heading, 1)[1].split("When an owner-approved run does reach it", 1)[0]
+    paragraph = grants.split(heading, 1)[1].split("When an owner-approved run did reach it", 1)[0]
     assert "command of record" not in paragraph.lower()
     assert "the workflow passes `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=0` as a literal, so no dispatch can request the remediation" in paragraph
     env = {
@@ -367,10 +367,15 @@ def test_grants_gives_foreign_catalog_remediation_no_ci_command_of_record() -> N
         for key, value in (step.get("env") or {}).items()
     }
     assert env["MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS"] == "0", "the doc's literal"
+    # M0-PR5: the operator path is refused before any Databricks call, and the
+    # stop branches that ran the remediation are gone.
     assert (
-        "The operator path, `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1 ./scripts/deploy.sh -t client`, would run in "
-        "the live workspace, whose governed deploy is NO-GO"
+        "The operator path, `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1 ./scripts/deploy.sh`, used to stop the live "
+        "App to run it. That path is gone: any value other than `0`, from the environment or from `.env.local`, "
+        "exits 2 before any Databricks call"
     ) in grants
+    for retired in ("targets the live workspace", "would run in the live workspace"):
+        assert retired not in grants, retired
     assert "Any metastore-wide remediation is therefore an owner-only, separately reviewed decision" in grants
     # The owner decision rests on the blast radius the code has:
     # foreign_catalog_binding_manifest refuses a policy that leaves any other

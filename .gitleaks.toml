@@ -61,6 +61,12 @@ regexes = [
   # argv, stdout, stderr or a leftover temp file (M2-PR2). Test-only; it
   # configures no process and authenticates nothing.
   '''^canary-m2m-secret-77aa0c$''',
+  # The Unity Catalog grants API's paging argument `max_results=0` (all rows
+  # per page) beside `page_token=page_token` in
+  # tools/databricks/prestop_owner_equivalent.py (M0-PR5): the generic-api-key
+  # rule reads the keyword `token` followed by that argument as a key. It is an
+  # SDK keyword argument, not a credential.
+  '''^max_results=0$''',
 ]
 
 # Paths where noisy-but-safe strings live. The design_files/ prototypes
