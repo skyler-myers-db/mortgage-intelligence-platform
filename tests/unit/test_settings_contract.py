@@ -26,6 +26,17 @@ DIRECT_ENV_READS = {
     "MIP_COTALITY_ID_MASK_SECRET",
     "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS",
 }
+# Settings fields whose .env.example lines only the owner can add: agents may
+# not read or edit the template (.claude/settings.json), so docs/deployment.md,
+# "Cotality source share", carries the exact lines until then. The owner's
+# template change empties this set; the test below fails once the template
+# documents a name still listed here.
+SETTINGS_FIELDS_PENDING_TEMPLATE = {
+    "MIP_COTALITY_SOURCE_CATALOG",
+    "MIP_COTALITY_SOURCE_SCHEMA",
+    "MIP_COTALITY_SOURCE_TABLE_PREFIX",
+}
+DEPLOYMENT_DOC = ROOT / "docs" / "deployment.md"
 
 
 def _primary_env_name(field_name: str) -> str:
@@ -101,8 +112,20 @@ def test_every_settings_field_is_documented_in_env_example() -> None:
         _primary_env_name(field_name)
         for field_name in Settings.model_fields
         if _primary_env_name(field_name) not in documented
+        and _primary_env_name(field_name) not in SETTINGS_FIELDS_PENDING_TEMPLATE
     ]
     assert missing == []
+
+
+def test_pending_settings_fields_stay_tracked_until_the_template_documents_them() -> None:
+    documented = set(re.findall(r"\b[A-Z][A-Z0-9_]+(?==)", ENV_EXAMPLE.read_text(encoding="utf-8")))
+    assert sorted(SETTINGS_FIELDS_PENDING_TEMPLATE & documented) == [], "remove it from the pending set"
+    primary = {_primary_env_name(field_name) for field_name in Settings.model_fields}
+    assert sorted(SETTINGS_FIELDS_PENDING_TEMPLATE - primary) == [], "a pending name must be a Settings field"
+    doc = DEPLOYMENT_DOC.read_text(encoding="utf-8")
+    for name in sorted(SETTINGS_FIELDS_PENDING_TEMPLATE):
+        assert re.search(rf"^{name}=$", doc, re.MULTILINE), f"{name}: docs/deployment.md carries its template line"
+    assert "`test_pending_settings_fields_stay_tracked_until_the_template_documents_them`" in doc
 
 
 def test_direct_os_environ_reads_are_labeled_in_env_example() -> None:

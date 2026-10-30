@@ -868,6 +868,21 @@ MIP_COTALITY_SOURCE_TABLE_PREFIX="-"
   then name the configured share tables, each under its canonical
   `source_key` (the table's canonical three-part name, the same on every
   install), which the evidence drawer and the asset page key their links by.
+
+`.env.example` cannot be read or edited from an agent session, so the owner
+adds these lines to its settings section and, in the same change, empties
+`SETTINGS_FIELDS_PENDING_TEMPLATE` in `tests/unit/test_settings_contract.py`;
+`test_pending_settings_fields_stay_tracked_until_the_template_documents_them`
+fails once the template has them and the set still lists them:
+
+```bash
+# Cotality source share catalog the App reads; unset or blank = the canonical share catalog.
+MIP_COTALITY_SOURCE_CATALOG=
+# Cotality source share schema the App reads; unset or blank = the canonical share schema.
+MIP_COTALITY_SOURCE_SCHEMA=
+# Cotality source share table-name prefix; unset or blank = canonical, "-" when the share's tables carry no prefix.
+MIP_COTALITY_SOURCE_TABLE_PREFIX=
+```
 - The prompt guards keep their reviewed canonical patterns and add only the
   configured share's qualified names: `<catalog>.<schema>.` and each table's
   three-part name, also with quoted parts or spaces around the dots. A bare
