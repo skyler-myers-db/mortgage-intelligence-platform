@@ -282,9 +282,11 @@ resource payload (which may not carry it). The first governed
 ## Emergency recovery: a slim per-release App source folder
 
 **Emergency recovery only. The command of record is `./scripts/deploy.sh -t
-dev`, which now stages, publishes and promotes a per-release folder itself
+client`, which stages, publishes and promotes a per-release folder itself
 (previous section).** A hand-made slim folder is for the case that path cannot
-run at all. A deploy from it bypasses three governed steps, and `stage`
+run at all, which today includes every ship to the live install: it predates
+the client target and is reached only through the recipe below until it is
+adopted (M2-PR6). A deploy from it bypasses three governed steps, and `stage`
 replaces only part of one of them:
 
 - **Signed promotion.** None of `./scripts/deploy.sh`'s signed workspace lease
@@ -472,33 +474,77 @@ copy and ships the copy, so a dist that changes after the review cannot
 change what ships. It refuses more than 600 tracked files or 1,300 in all,
 adds the tracked files and renames the folder into place, so a refusal or a
 failure partway leaves `--out` as it was. It prints the file count and exits
-2 on any refusal. It makes no Databricks call. Stage with a manifest and
-read the governed release id from it:
+2 on any refusal. It makes no Databricks call.
+
+### The emergency recipe, command by command (legacy dev root)
+
+Until the live install is adopted into the client target's deployer root
+(M2-PR6), every App ship to the live App goes through these commands, and only
+these. They address the **legacy root**
+`/Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/dev`, where
+`<owner>` is the user who owns the live install's bundle state. The `dev`
+target left `databricks.yml`, so the legacy root is named by explicit flags:
+`--expected-target dev --expected-root-leaf dev` on every tool that checks
+the bundle identity. Those tools check the flags against the path shape
+`/Workspace/Users/<principal>/.bundle/mortgage-intelligence-platform/<leaf>`
+(`tools/databricks/app_release_contract.py`), never against the bundle's
+target list. `tests/unit/test_docs_recipe_commands.py` parses every command in
+the block below and runs it offline (an in-memory workspace for the publish
+and the converge), so a change that stops one parsing or moves the legacy
+root fails CI.
 
 ```bash
 python -m tools.databricks.app_runtime_closure stage --ref <sha> \
-  --dist frontend/dist --out <new empty directory> \
-  --manifest-out <new file beside it> --require-brotli-check
+  --dist frontend/dist --out <stage-dir> \
+  --manifest-out <manifest> --require-brotli-check
 python -m tools.databricks.app_release_contract release-id \
-  --manifest <that file> --expected-commit <sha>
+  --manifest <manifest> --expected-commit <sha>
+python -m tools.databricks.app_release_source publish \
+  --release-id <release-id> --stage-dir <stage-dir> --manifest <manifest> \
+  --files-root /Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/dev/files \
+  --expected-commit <sha> --expected-principal <owner> \
+  --expected-target dev --expected-root-leaf dev
+python -m tools.databricks.converge_static_app_source \
+  --source-code-path /Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/dev/app-src/<release-id> \
+  --release-id <release-id> --release-manifest <manifest> --expected-git-sha <sha> \
+  --expected-principal <owner> --expected-target dev --expected-root-leaf dev
+MIP_GIT_SHA=<sha> python -m tools.databricks.app_deploy_payload \
+  --source-code-path /Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/dev/app-src/<release-id> \
+  --target dev --app-env sandbox --catalog mip --schema gold \
+  --lakebase-instance <lakebase-instance> > <payload>
+databricks apps deploy <app-name> --json @<payload> -p <profile>
 ```
 
-Upload the folder under that governed name,
-`<bundle root>/app-src/<release id>` ("Governed per-release App source"), with
-`python -m tools.databricks.app_release_source publish` and the flags
-`scripts/deploy.sh` step 5 passes (create-only, byte-verified), never with
-`workspace import-dir` and never into a folder that is already used: a folder
-under the governed name whose bytes differ makes the governed publish of that
-commit refuse at step 5. A publish that stops part way, for example on a rate
-limit (HTTP 429) that outlasts the retry budget, leaves a partial folder:
-run the same command again, which byte-compares what is already there and
-uploads only what is missing. The piecewise payload deploy then names that
-folder as the deployment's `source_code_path`.
+1. **Stage** the closure at the commit and read its release id back from the
+   manifest. `<stage-dir>` is a new empty directory and `<manifest>` a new
+   file beside it.
+2. **Publish** the folder under that governed name in the legacy root,
+   create-only and byte-verified, never with `workspace import-dir` and never
+   into a folder that is already used: a folder under the governed name whose
+   bytes differ makes every later publish of that release id refuse. A publish
+   that stops part way, for example on a rate limit (HTTP 429) that outlasts
+   the retry budget, leaves a partial folder: run the same command again,
+   which byte-compares what is already there and uploads only what is
+   missing.
+3. **Converge**: the release-mode check `scripts/deploy.sh` runs before each
+   activation. It refuses unless the folder is exactly the release folder of
+   that commit in the legacy root and still holds exactly the manifest's
+   files.
+4. **Payload**: the deployment JSON for that folder. Run it from the checkout
+   whose `.env.local` holds the live install's operator values (lender, admin
+   allowlist and the rest); `--target dev` keeps the demo payload policy. The
+   payload leaves the campaign-treatment runtime off, so health reports
+   `campaign_treatment_runtime: disabled_baseline_deploy`, the honest state of
+   a deployment made outside signed promotion.
+5. **Deploy** from outside the checkout, with the CLI profile of the live
+   workspace (`-p <profile>`), so no bundle context can choose the host.
 
-A later governed run of the same commit and dist reuses a folder published
-this way, and governed prune retires it once no retained deployment
-references it. Legacy `app-src/<short sha>` folders are not release ids, so
-prune never touches them: they stay owner cleanup.
+A governed `./scripts/deploy.sh -t client` run never addresses the legacy
+root: it publishes under its own deployer root
+(`/Workspace/Users/<deployer>/.bundle/mortgage-intelligence-platform/<client>`)
+and its prune lists only that root's `app-src/`. Folders published by this
+recipe, and legacy `app-src/<short sha>` folders (which are not release ids),
+stay owner cleanup until the adoption.
 
 ## App Python dependencies: the deps-digest line
 

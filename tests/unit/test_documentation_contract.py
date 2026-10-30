@@ -114,11 +114,33 @@ def test_readme_surfaces_current_operator_entrypoints() -> None:
         assert required in text
 
 
+EMERGENCY_RECIPE_HEADING = "### The emergency recipe, command by command (legacy dev root)"
+
+
+def _without_the_emergency_recipe_block(path: Path, text: str) -> str:
+    """docs/deployment.md minus the one fenced block of the emergency recipe.
+
+    That block is the owner-sanctioned way to ship the live install until it
+    is adopted (M1-PR2); tests/unit/test_docs_recipe_commands.py runs each of
+    its commands. Exactly one ``databricks apps deploy`` line may sit in it,
+    and nothing else is exempt.
+    """
+
+    if path != ROOT / "docs" / "deployment.md":
+        return text
+    start = text.index("```bash\n", text.index(EMERGENCY_RECIPE_HEADING))
+    end = text.index("\n```\n", start) + len("\n```\n")
+    block = text[start:end]
+    assert len(re.findall(r"databricks\s+(?:apps\s+deploy|bundle\s+deploy)\b", block)) == 1, block
+    assert re.search(r"(?m)^databricks apps deploy <app-name> --json @<payload> -p <profile>$", block)
+    return text[:start] + text[end:]
+
+
 def test_current_operator_docs_never_advertise_bare_mutable_deployment() -> None:
     violations: list[str] = []
     command = re.compile(r"databricks\s+(?:apps\s+deploy|bundle\s+deploy)\b")
     for path in (*CURRENT_OPERATOR_DOCS, *CURRENT_DEPLOYMENT_GUIDANCE_SURFACES):
-        text = _read(path)
+        text = _without_the_emergency_recipe_block(path, _read(path))
         if command.search(text):
             violations.append(str(path.relative_to(ROOT)))
         assert "promote it from the Databricks Apps deployment UI" not in text
