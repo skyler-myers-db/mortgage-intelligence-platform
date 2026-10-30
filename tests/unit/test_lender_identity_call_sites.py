@@ -365,16 +365,33 @@ _BLOCK_START = '_MIP_LENDER_NAME_CONFIGURED="$(deployment_control_value MIP_LEND
 _BLOCK_END = 'echo "[deploy] lender identity: digest-pinned record ${MIP_LENDER_IDENTITY_SHA256:0:12}"\nfi\n'
 
 
-def _run_preflight_block(cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+# The preflight's lender exports, up to (not including) the next export.
+_EXPORTS_START = 'export BUNDLE_VAR_lender_name="$MIP_LENDER_NAME"\n'
+_EXPORTS_NEXT = 'export BUNDLE_VAR_lakebase_instance_name="$MIP_LAKEBASE_INSTANCE"\n'
+# What a child process (the bundle CLI) inherits of the record's two variables.
+_BUNDLE_RECORD_VARS = "bash -c 'echo \"bundle=[${BUNDLE_VAR_lender_identity_sha256-unset}|${BUNDLE_VAR_lender_identity_json-unset}]\"'\n"
+
+
+def _between(text: str, start_marker: str, end_marker: str, *, inclusive: bool = True) -> str:
+    start = text.index(start_marker)
+    return text[start : text.index(end_marker, start) + (len(end_marker) if inclusive else 0)]
+
+
+def _run_preflight_block(
+    cwd: Path, env: dict[str, str], *, through_bundle_exports: bool = False
+) -> subprocess.CompletedProcess[str]:
     text = PREFLIGHT.read_text(encoding="utf-8")
-    start = text.index(_BLOCK_START)
-    block = text[start : text.index(_BLOCK_END, start) + len(_BLOCK_END)]
+    block = _between(text, _BLOCK_START, _BLOCK_END)
+    exports = ""
+    if through_bundle_exports:
+        exports = _between(text, _EXPORTS_START, _EXPORTS_NEXT, inclusive=False) + _BUNDLE_RECORD_VARS
     harness = (
         "set -euo pipefail\n"
         "RED=''; RST=''\n"
         "deployment_control_value() { local value=\"${!1:-}\"; printf '%s' \"${value:-${2:-}}\"; }\n"
         f"{block}"
         'echo "identity=[${MIP_LENDER_NAME}|${MIP_LENDER_NMLS_ID}|${MIP_TENANT_ID}|${MIP_LENDER_IDENTITY_SHA256:-}]"\n'
+        f"{exports}"
     )
     base = {key: value for key, value in os.environ.items() if not key.startswith("MIP_")}
     return subprocess.run(
@@ -403,6 +420,20 @@ def test_the_preflight_exports_a_verified_record_without_printing_it() -> None:
     assert lines[0] == f"[deploy] lender identity: digest-pinned record {RECORD_SHA256[:12]}"
     assert lines[1] == f"identity=[{RECORD['legal_name']}|{RECORD['nmls_id']}|{RECORD['tenant_id']}|{RECORD_SHA256}]"
     assert RECORD_TEXT not in completed.stdout + completed.stderr
+
+
+def test_only_the_verified_record_reaches_the_bundle_variables() -> None:
+    # Review of #298: an ambient BUNDLE_VAR record never reaches the bundle CLI.
+    ambient = {"BUNDLE_VAR_lender_identity_json": "ambient", "BUNDLE_VAR_lender_identity_sha256": "ambient"}
+
+    demo = _run_preflight_block(ROOT, ambient, through_bundle_exports=True)
+    assert demo.returncode == 0, demo.stderr
+    assert demo.stdout.strip().splitlines()[-1] == "bundle=[unset|unset]"
+
+    pinned = _run_preflight_block(ROOT, {**ambient, **PINNED}, through_bundle_exports=True)
+    assert pinned.returncode == 0, pinned.stderr
+    line = pinned.stdout.strip().splitlines()[-1]
+    assert line == f"bundle=[{RECORD_SHA256}|{RECORD_TEXT}]"
 
 
 @pytest.mark.parametrize(
