@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # Deploy step file. Step 0 (continued): separated automation credentials, tooling-dependency
-# guard, signed workspace lease, OAuth and Lakebase bootstrap recovery,
-# first-install journal read, and the owned rollback secret scope.
+# guard, SQL render and bundle validation, the pre-lease bundle plan gate (where
+# --phase plan exits), signed workspace lease, OAuth and Lakebase bootstrap
+# recovery, first-install journal read, and the owned rollback secret scope.
 # Sourced by scripts/deploy.sh in reviewed order; it runs in the entrypoint's
 # shell with its strict mode, traps, and private variables, never on its own.
 # shellcheck disable=SC2034  # top-level state assigned here is read by later step files.
@@ -104,6 +105,54 @@ if ! "$PYTHON" -c 'import dotenv, pydantic' >/dev/null 2>&1; then
   echo "  create the project venv first: make setup — then re-run." >&2
   exit 2
 fi
+
+# -----------------------------------------------------------------------------
+# Step 1a: render SQL for the target UC catalog (before the lease)
+# -----------------------------------------------------------------------------
+# Rendered and validated before the signed lease and every App stop, so a render
+# or validation refusal stops the deploy while the App still serves (bundle_env
+# renders the same tree again for each bundle call it wraps).
+# The bundle's SQL tasks read from sql/_rendered/**/*.sql. The canonical
+# sources under sql/** hardcode the default `mip.*` catalog prefix for
+# readability + code review; tools/render_sql.py substitutes the governed
+# catalog/schema DDL and three-part UC prefixes for the target catalog before bundle
+# validate/deploy read the rendered tree. The renderer also materializes the
+# first-party demo-feed switch as a SQL literal because Databricks SQL does not
+# allow parameter markers in this DDL path. The stand-alone renderer defaults to
+# disabled; this wrapper explicitly opts the Summit dev demo in while keeping
+# prod/customer deploys fail-closed.
+DEMO_FEEDS_FROM_ENV="${MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS:-}"
+if [[ -z "$DEMO_FEEDS_FROM_ENV" ]]; then
+  DEMO_FEEDS_FROM_ENV="$(dotenv_value MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS)"
+fi
+if [[ -z "$DEMO_FEEDS_FROM_ENV" ]]; then
+  if [[ "$TARGET" == "dev" ]]; then
+    DEMO_FEEDS_FROM_ENV=1
+  else
+    DEMO_FEEDS_FROM_ENV=0
+  fi
+fi
+if [[ "$TARGET" != "dev" ]]; then
+  DEMO_FEEDS_NORMALIZED="$(printf '%s' "$DEMO_FEEDS_FROM_ENV" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$DEMO_FEEDS_NORMALIZED" =~ ^(1|true|yes|y|on)$ && "${MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD:-0}" != "1" ]]; then
+    echo "${RED}[deploy] refusing to enable Summit demo first-party feeds for target ${TARGET}.${RST}" >&2
+    echo "  Set MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD=1 only for an approved demo workspace; never for a customer production workspace." >&2
+    exit 2
+  fi
+fi
+export MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS="$DEMO_FEEDS_FROM_ENV"
+step "render SQL for target UC catalog (MIP_DEFAULT_CATALOG=${MIP_DEFAULT_CATALOG:-mip}, MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=${MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS})"
+run "$PYTHON" tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+if [[ "$MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS" =~ ^(1|true|TRUE|yes|YES|y|Y|on|ON)$ ]]; then
+  RESTORE_RENDERED_SQL_FAIL_CLOSED=1
+fi
+
+# -----------------------------------------------------------------------------
+# Step 2: validate bundle (before the lease)
+# -----------------------------------------------------------------------------
+step "validate direct-deployment bundle against -t ${TARGET}"
+run "$PYTHON" -m tools.databricks.bundle_env validate -t "$TARGET"
+
 if [[ "$DRY_RUN" -eq 0 ]]; then
   _M2M_MISSING=""
   for _M2M_NAME in \
@@ -215,6 +264,26 @@ PYEOF
     exit 2
   fi
   # <<< pii-salt pre-stop check <<<
+else
+  export MIP_APP_DEPLOYMENT_LEASE_ID="dry-run-deployment-lease"
+  echo "  app automation: normal/admin Bearer mint deferred by --dry-run"
+  step "pre-stop probes: Supervisor retirement acknowledgement and Genie group grants"
+  echo "  would probe read-only: the creator of Supervisor '${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}' (MIP_RETIRE_HUMAN_SUPERVISOR) and Genie group grants"
+  echo "  would check read-only: scope ${MIP_PII_SALT_SCOPE} and write-once pii-salt-v1"
+fi
+# >>> bundle plan gate: pre-lease >>>
+# Read-only: plan the bundle and refuse a delete, recreate, identity rename,
+# unknown kind, name collision, unadopted install or unacknowledged Lakebase
+# instance update here, while the App still serves, before the signed lease and
+# every App stop (tools/databricks/bundle_plan_gate.py). --phase plan ends here,
+# with the lease never taken.
+run_bundle_plan_gate pre-lease
+if [[ "${DEPLOY_PHASE:-}" == "plan" ]]; then
+  echo "${GRN}[deploy] plan phase complete: read-only, stopped before the lease; nothing was changed.${RST}"
+  exit 0
+fi
+# <<< bundle plan gate: pre-lease <<<
+if [[ "$DRY_RUN" -eq 0 ]]; then
   # The signed lease is the first persistent workspace mutation. A contender
   # must lose here before it can revoke stale grants or alter shared resources.
   APP_LEASE_RECOVERY_ENV="$(mktemp -t mip-app-lease-recovery.XXXXXX.env)"
@@ -411,11 +480,6 @@ else:
     DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET
   echo "  app automation: distinct per-run normal/admin Bearers minted"
 else
-  export MIP_APP_DEPLOYMENT_LEASE_ID="dry-run-deployment-lease"
-  echo "  app automation: normal/admin Bearer mint deferred by --dry-run"
-  step "pre-stop probes: Supervisor retirement acknowledgement and Genie group grants"
-  echo "  would probe read-only: the creator of Supervisor '${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}' (MIP_RETIRE_HUMAN_SUPERVISOR) and Genie group grants"
-  echo "  would check read-only: scope ${MIP_PII_SALT_SCOPE} and write-once pii-salt-v1"
   step "prove or create the deterministic owned App rollback secret scope"
   echo "  would prove/create: scope ${APP_ROLLBACK_SECRET_SCOPE}"
 fi

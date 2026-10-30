@@ -214,13 +214,15 @@ def _stage(repo: Path, *, dry_run: int, stage_exit: int = 0, release: str = "", 
     return result, stale, staged, read_back
 
 
-def test_the_stage_block_follows_the_build_and_precedes_bundle_validation() -> None:
+def test_the_stage_block_follows_the_build_and_precedes_the_pre_apply_plan_gate() -> None:
     text = deploy_entrypoint_text()
     block = _block(STAGE_START, STAGE_END)
     code = _code(block)
 
     assert text.index("run npm --prefix frontend run build") < text.index(STAGE_START)
-    assert text.index(STAGE_END) < text.index('step "validate direct-deployment bundle against -t ${TARGET}"')
+    # Validation moved ahead of the lease (M0-PR4); the stage still precedes the
+    # plan gate that runs immediately before the bundle apply.
+    assert text.index(STAGE_END) < text.index("\nrun_bundle_plan_gate pre-apply\n")
     assert (
         'run "$PYTHON" -m tools.databricks.app_runtime_closure stage \\\n'
         '  --ref "$SOURCE_GIT_SHA" \\\n'
