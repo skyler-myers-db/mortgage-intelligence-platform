@@ -10,8 +10,8 @@ turn first, through the App's own live client (``ASSERT`` is
 the provisioner's live smoke also makes), on the governed space, while the App
 still serves. A failed or unfinished turn, or one that returns only the
 question's echo, refuses; a budget error is named as such. The governed space
-is the signed record's, or without a record the one the provisioner adopts by
-its exact title (``prestop_probe_suite.governed_genie_space``).
+is the signed record's, or without a record the one the provisioner resolves
+by its pin, never by its title alone (``prestop_probe_suite.governed_genie_space``).
 
 The turn runs as the deployer, so it proves the space and the workspace budget,
 not the App's own grant (the post-stop audits prove that). It is the probe's

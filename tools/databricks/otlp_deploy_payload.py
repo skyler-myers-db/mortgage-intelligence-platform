@@ -62,7 +62,7 @@ def build_payload(
 ) -> dict[str, object]:
     return build_app_deploy_payload(
         source_code_path=source_code_path,
-        target="prod",
+        install_class="customer",
         app_env=app_env,
         catalog=catalog,
         schema=schema,

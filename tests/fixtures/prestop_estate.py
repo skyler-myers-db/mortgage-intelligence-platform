@@ -12,8 +12,9 @@ to produce one refusal. The document is plain JSON, so
 make. Every non-read call fails the test, except ``apps.stop``, which a
 matrix test must prove never happens: it marks the App STOPPED in the
 document instead. The rollback-record verifier, the first-install journal
-read and the Genie turn are seams the estate scripts directly (``record``,
-``journal``, ``genie_turn``), see ``install``.
+read, the record-less Genie pin resolution and the Genie turn are seams the
+estate scripts directly (``record``, ``journal``, ``genie_pin``,
+``genie_turn``), see ``install``.
 """
 
 from __future__ import annotations
@@ -107,6 +108,7 @@ def clean_estate() -> dict[str, Any]:
         },
         "rebase_absence": "absent",
         "journal": "absent",
+        "genie_pin": None,
         "genie_turn": "COMPLETED",
         "calls": [],
     }
@@ -283,7 +285,8 @@ class FakeWorkspace:
         space = path.rsplit("/", 1)[1]
         if space in self.estate["genie_errors"]:
             raise RuntimeError(f"PERMISSION_DENIED reading the ACL of {space}")
-        return _ns({"access_control_list": self.estate["genie"][space]})
+        # ApiClient.do returns the parsed JSON body: plain dicts, as here.
+        return copy.deepcopy({"access_control_list": self.estate["genie"][space]})
 
     def _scopes(self) -> list[Any]:
         return [SimpleNamespace(name=name) for name in self.estate["secret_scopes"]]
@@ -379,7 +382,10 @@ def install(estate_path: Path, *, probes: bool) -> None:
     ``WorkspaceClient`` and ``AccountClient`` become the fakes. ``record`` scripts
     the signed-record verifier (a dict passes, a string raises that message);
     ``rebase_absence`` scripts the bootstrap absence proof; ``journal`` the
-    first-install journal state; ``genie_turn`` the Genie turn's terminal status
+    first-install journal state; ``genie_pin`` the space the pin record names
+    (``None``: the signed ``record``'s space when the record verifies, otherwise
+    nothing pinned and no title match, so the provisioner creates one);
+    ``genie_turn`` the Genie turn's terminal status
     (``BUDGET`` raises a budget error). After each process the document is written
     back, so a stop the probe was never meant to make is visible to the test.
     """
@@ -400,6 +406,7 @@ def install(estate_path: Path, *, probes: bool) -> None:
     from tools.databricks import (
         app_first_install_journal,
         prestop_genie_budget,
+        prestop_probe_suite,
         prestop_rollback_record,
         uc_owner_policy,
     )
@@ -430,7 +437,23 @@ def install(estate_path: Path, *, probes: bool) -> None:
     app_first_install_journal.recovery_state = (  # type: ignore[assignment]
         lambda *_a, **_kw: estate["journal"]
     )
+    def governed(_workspace: Any, **_kwargs: Any) -> Any:
+        return scripted_resolution(estate)
+
     prestop_genie_budget.ASSERT = turn  # type: ignore[assignment]
+    prestop_probe_suite.GOVERNED_SPACE = governed  # type: ignore[assignment]
+
+
+def scripted_resolution(estate: dict[str, Any]) -> Any:
+    """What ``genie_space_pin.resolve`` returns for ``estate`` (its seam in the probes)."""
+
+    from tools.databricks.genie_space_pin import Resolution
+
+    if estate.get("genie_pin"):
+        return Resolution(action="use", space_id=estate["genie_pin"], source="pin")
+    if isinstance(estate.get("record"), dict) and estate["app"] is not None:
+        return Resolution(action="use", space_id=estate["record"]["genie_space_id"], source="record")
+    return Resolution(action="create", space_id=None, source="none")
 
 
 def write_estate(path: Path, estate: dict[str, Any]) -> Path:

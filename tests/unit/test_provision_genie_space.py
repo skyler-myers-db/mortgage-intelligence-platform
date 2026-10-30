@@ -68,41 +68,11 @@ def _expected_assets(catalog: str = "mip") -> set[str]:
     return {f"{catalog}.{schema}.{table}" for schema, table in EXPECTED_ASSET_PAIRS}
 
 
-def test_find_space_rejects_duplicate_exact_titles_before_update() -> None:
-    class Genie:
-        def __init__(self) -> None:
-            self.pages: list[str | None] = []
+def test_the_provisioner_never_resolves_the_governed_space_by_title_alone() -> None:
+    """M1-PR3 (attack G12): the title-only lookup is gone; tests/unit/test_genie_space_pin.py
+    covers the pin resolution (duplicate titles, squatters, acks, first creates)."""
 
-        def list_spaces(self, *, page_token: str | None) -> types.SimpleNamespace:
-            self.pages.append(page_token)
-            if page_token is None:
-                return types.SimpleNamespace(
-                    spaces=[
-                        types.SimpleNamespace(
-                            title="Mortgage Lead Intelligence",
-                            space_id="first-space",
-                        )
-                    ],
-                    next_page_token="next",
-                )
-            return types.SimpleNamespace(
-                spaces=[
-                    types.SimpleNamespace(
-                        title="Mortgage Lead Intelligence",
-                        space_id="second-space",
-                    )
-                ],
-                next_page_token=None,
-            )
-
-    genie = Genie()
-    with pytest.raises(ValueError, match="refusing ambiguous Genie binding"):
-        pgs._find_space(
-            types.SimpleNamespace(genie=genie),
-            "Mortgage Lead Intelligence",
-        )
-
-    assert genie.pages == [None, "next"]
+    assert not hasattr(pgs, "_find_space")
 
 
 @pytest.fixture(autouse=True)
@@ -609,4 +579,6 @@ def test_dry_run_exits_zero_without_touching_sdk(
     assert rc == 0
     assert "dry-run" in captured.out
     assert "trusted assets" in captured.out
-    assert "BUNDLE_VAR_genie_space_id" in captured.out
+    assert "Resolve the governed space by its pin" in captured.out
+    assert "An unpinned title match: refuse unless --ack-plan names its pin plan." in captured.out
+    assert "GENIE_SPACE_ID" not in captured.out, "no input names the governed space (M1-PR3)"

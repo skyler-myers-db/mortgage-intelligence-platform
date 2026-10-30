@@ -66,7 +66,44 @@ D0_OPERATOR_INPUTS = {
     "MIP_COTALITY_ID_MASK_SECRET": "presence-only",
     "MIP_GENIE_ACTION_SECRET_CURRENT": "presence-only",
 }
-D0_NAME_COUNT = 32
+# D0's exact, sorted env-name set: computed identically on origin/main 9f3ee4d8
+# (build_payload target="dev") and on M1-PR3 (install_class="demo"). A rename,
+# an addition or a removal is a change to the live App's env: review it.
+D0_NAMES = (
+    "APP_ENV",
+    "DATABRICKS_WAREHOUSE_ID",
+    "GENIE_SPACE_ID",
+    "LAKEBASE_HOST",
+    "LAKEBASE_INSTANCE_NAME",
+    "MIP_ADMIN_EMAILS",
+    "MIP_ADMIN_IDENTITIES",
+    "MIP_APPROVER_EMAILS",
+    "MIP_APPROVER_IDENTITIES",
+    "MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED",
+    "MIP_COTALITY_ID_MASK_SECRET",
+    "MIP_DEFAULT_CATALOG",
+    "MIP_DEFAULT_SCHEMA",
+    "MIP_FRED_RATES_JOB_ID",
+    "MIP_GENIE_ACTION_SECRET_CURRENT",
+    "MIP_GENIE_REFUSAL_TEXT_CAPTURE",
+    "MIP_GIT_SHA",
+    "MIP_GOLD_REFRESH_JOB_ID",
+    "MIP_GROWTH_AGENT_SCHEDULER_JOB_ID",
+    "MIP_LAKEBASE_INSTANCE",
+    "MIP_LAKEBASE_SYNC_CATALOG",
+    "MIP_LAKEBASE_SYNC_SCHEMA",
+    "MIP_LAKEBASE_SYNC_TABLES",
+    "MIP_LEADS_WARM_INTERVAL_S",
+    "MIP_LENDER_NAME",
+    "MIP_LENDER_NMLS_ID",
+    "MIP_LIFECYCLE_SYNC_JOB_ID",
+    "MIP_RUM_ENABLED",
+    "MIP_SILVER_REFRESH_JOB_ID",
+    "MIP_TENANT_ID",
+    "MIP_WAREHOUSE_KEEP_WARM",
+    "PGHOST",
+)
+D0_NAME_COUNT = len(D0_NAMES)
 GOLDEN_PATH = REPO / "tests" / "fixtures" / "cotality_source_d0_golden.json"
 _GOLDEN_NOTE = (
     "First written from origin/main a46ce799, before the App read the Cotality source "
@@ -105,7 +142,7 @@ def _hermetic_operator_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
 
 def _d0_payload_env() -> list[dict[str, str]]:
-    payload = build_payload(source_code_path="/Workspace/app-src/release", target="dev")
+    payload = build_payload(source_code_path="/Workspace/app-src/release", install_class="demo")
     return payload["env_vars"]  # type: ignore[return-value]
 
 
@@ -135,7 +172,8 @@ def _d0_env_in(cwd: Path) -> dict[str, str]:
 def test_the_payload_builder_emits_exactly_d0s_name_set() -> None:
     names = _names(_d0_payload_env())
 
-    assert len(names) == len(set(names)) == D0_NAME_COUNT
+    assert len(names) == len(set(names)) == D0_NAME_COUNT == 32
+    assert tuple(sorted(names)) == D0_NAMES
     assert not set(names) & set(source_names.ENV_NAMES)
 
 

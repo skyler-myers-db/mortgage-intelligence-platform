@@ -109,6 +109,7 @@ from tools.databricks.supervisor_retirement_ack import (
 SYSTEM_USERS_GROUP = "users"
 APPROVED_OWNERS_ENV = "MIP_UC_APPROVED_OWNER_PRINCIPALS"
 GENIE_MANAGERS_ENV = "MIP_GENIE_MANAGER_PRINCIPALS"
+GENIE_PIN_ACK_ENV = "MIP_GENIE_PIN_ACK"
 # The identity pin_journal signs for a replaced Supervisor; a gap fails after step 0a.
 PINNED_SUPERVISOR_FIELDS = ("supervisor_agent_id", "endpoint_name", "creator", "create_time")
 _REPLACEMENT_HASH = r"[0-9a-f]{12}"
@@ -549,6 +550,8 @@ def main(argv: list[str] | None = None) -> int:
             # both lists name principals, and deploy.sh echoes each command it runs.
             approved_owner_principals=os.environ.get(APPROVED_OWNERS_ENV, ""),
             genie_manager_principals=os.environ.get(GENIE_MANAGERS_ENV, ""),
+            # The preflight's own ack (shell only): the same plan digest adopts the same space.
+            genie_pin_ack=os.environ.get(GENIE_PIN_ACK_ENV, "").strip(),
         ),
         runtime_application_id=args.runtime_application_id,
         verifier_application_id=args.verifier_application_id,

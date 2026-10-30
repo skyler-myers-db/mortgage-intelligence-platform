@@ -114,34 +114,29 @@ fi
 # validate/deploy read the rendered tree. The renderer also materializes the
 # first-party demo-feed switch as a SQL literal because Databricks SQL does not
 # allow parameter markers in this DDL path. The stand-alone renderer defaults to
-# disabled; this wrapper explicitly opts a Summit demo install in (the client
-# profile's MIP_INSTALL_CLASS, as the dev target was before M1-PR2) while
-# keeping customer installs fail-closed. CLIENT_INSTALL_CLASS is set by
+# disabled; this wrapper renders the client profile's own
+# MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS (tools/clients/policy.py, M1-PR3), off when
+# the profile leaves it unset. The profile refuses it for a customer install,
+# so a customer render is always fail-closed. CLIENT_DEMO_FEEDS is set by
 # resolve_client_profile at the top of step 0 (deploy_step_preflight_gates.sh),
 # before this file is sourced.
-DEMO_FEEDS_FROM_ENV="${MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS:-}"
-if [[ -z "$DEMO_FEEDS_FROM_ENV" ]]; then
-  DEMO_FEEDS_FROM_ENV="$(dotenv_value MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS)"
+if [[ ! "${CLIENT_DEMO_FEEDS:-}" =~ ^[01]$ ]]; then
+  echo "${RED}[deploy] the client profile's demo-feed policy did not resolve; refusing to render.${RST}" >&2
+  exit 2
 fi
-if [[ -z "$DEMO_FEEDS_FROM_ENV" ]]; then
-  if [[ "$CLIENT_INSTALL_CLASS" == "demo" ]]; then
-    DEMO_FEEDS_FROM_ENV=1
-  else
-    DEMO_FEEDS_FROM_ENV=0
-  fi
-fi
-if [[ "$CLIENT_INSTALL_CLASS" != "demo" ]]; then
-  DEMO_FEEDS_NORMALIZED="$(printf '%s' "$DEMO_FEEDS_FROM_ENV" | tr '[:upper:]' '[:lower:]')"
-  if [[ "$DEMO_FEEDS_NORMALIZED" =~ ^(1|true|yes|y|on)$ && "${MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD:-0}" != "1" ]]; then
-    echo "${RED}[deploy] refusing to enable Summit demo first-party feeds for a ${CLIENT_INSTALL_CLASS} install.${RST}" >&2
-    echo "  Set MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD=1 only for an approved demo workspace; never for a customer production workspace." >&2
-    exit 2
-  fi
-fi
-export MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS="$DEMO_FEEDS_FROM_ENV"
+export MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS="$CLIENT_DEMO_FEEDS"
+# The install catalog's managed storage, the profile's optional
+# MIP_UC_CATALOG_STORAGE_ROOT (M1-PR3): a first install creates the catalog
+# with that MANAGED LOCATION (the live checks refused a first install whose
+# metastore has no root while it is unset). The renderer and the pipeline
+# namespace bootstrap are handed its name, never its value, so no planned or
+# printed command carries it.
+MIP_UC_CATALOG_STORAGE_ROOT="$(deployment_control_value MIP_UC_CATALOG_STORAGE_ROOT)"
+export MIP_UC_CATALOG_STORAGE_ROOT
 step "render SQL for target UC catalog (MIP_DEFAULT_CATALOG=${MIP_DEFAULT_CATALOG:-mip}, MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=${MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS})"
-run "$PYTHON" tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"
-if [[ "$MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS" =~ ^(1|true|TRUE|yes|YES|y|Y|on|ON)$ ]]; then
+run "$PYTHON" tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+  --storage-root-env MIP_UC_CATALOG_STORAGE_ROOT
+if [[ "$MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS" == "1" ]]; then
   RESTORE_RENDERED_SQL_FAIL_CLOSED=1
 fi
 
@@ -454,10 +449,11 @@ else:
   fi
   # Reconcile any CREATE privileges left by a prior SIGKILL at the same early
   # recovery boundary.
-  _GRANTS_WAREHOUSE_ID="${DATABRICKS_WAREHOUSE_ID:-$(dotenv_value DATABRICKS_WAREHOUSE_ID)}"
+  # The warehouse the preflight resolved from this deployer's bundle state
+  # (or, on a first install, its bootstrap warehouse; M1-PR3).
   _GRANTS_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
   if [[ -z "$_GRANTS_WAREHOUSE_ID" ]]; then
-    echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID is required for early privilege reconciliation.${RST}" >&2
+    echo "${RED}[deploy] the preflight resolved no SQL warehouse for early privilege reconciliation.${RST}" >&2
     exit 1
   fi
   AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=1

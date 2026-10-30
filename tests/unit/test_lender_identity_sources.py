@@ -8,7 +8,7 @@ payload and the bundle variables (the SQL render and the Lakebase
 migration) carry the same digest. The deploy readers run as
 ``scripts/deploy.sh -t client`` runs them (#299): bundle_env on the client
 target, whose customer profile in ``.env.local`` carries the record, and the
-payload build with ``--target client --install-class customer``.
+payload build with ``--install-class customer`` (M1-PR3 retired ``--target``).
 """
 
 from __future__ import annotations
@@ -95,7 +95,6 @@ def _payload_digest(monkeypatch: pytest.MonkeyPatch, env_local: Path) -> str:
     monkeypatch.setattr(app_deploy_payload, "ENV_LOCAL", env_local)
     payload = app_deploy_payload.build_payload(
         source_code_path="/Workspace/app-src/release",
-        target="client",
         install_class="customer",
         lakebase_instance="mip-app-state",
         campaign_treatment_runtime_enabled=True,

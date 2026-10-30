@@ -21,8 +21,9 @@ Two dashboard specs replace the prior stubs:
 - `dashboards/executive_dashboard.lvdash.json` — CEO / VP Mortgage Lending view.
 - `dashboards/segment_dashboard.lvdash.json` — Head of Growth view.
 
-Both are wired into `resources/dashboards.yml` at the bundle level, which
-supplies `warehouse_id` via `${var.sql_warehouse_id}`. The JSON files never
+Both are wired into `databricks.yml`'s `dashboards:` block at the bundle
+level, which supplies `warehouse_id` as the bundle's own warehouse
+(`${resources.sql_warehouses.mip_serverless_sql.id}`). The JSON files never
 pin a warehouse id, never reach below `mip.gold.*` / `mip.semantics.*`, and
 contain no emojis (enforced by `tests/unit/test_lakeview_dashboards.py`).
 
