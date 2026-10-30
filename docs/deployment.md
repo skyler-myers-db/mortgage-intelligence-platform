@@ -860,8 +860,18 @@ MIP_COTALITY_SOURCE_TABLE_PREFIX="-"
 - These are local deploy controls for now. `deploy-dev.yml` and `nightly.yml`
   are parked and do not forward them; per-client CI reads them from the
   client profile once M1-PR7 lands.
-- The App runtime (asset registry, lineage registry and Genie guards) still
-  names the canonical share until its settings move onto these names (M3-PR2).
+- The App reads the same three names as settings
+  (`backend/config/cotality_source_settings.py`), canonical when unset, with
+  the same refusals. `app_deploy_payload.py` sends a name to the App only when
+  it is set and differs from the canonical one, so a canonical install's App
+  env-name set does not change. The asset registry and the lineage manifest
+  then name the configured share tables, each under its canonical
+  `source_key` (the table's canonical three-part name, the same on every
+  install), which the evidence drawer and the asset page key their links by.
+- The prompt guards keep their reviewed canonical patterns and add only the
+  configured share's qualified names: `<catalog>.<schema>.` and each table's
+  three-part name. A bare configured name is never a refusal, so a schema
+  called `mortgage` leaves every mortgage question alone.
 
 ### Deploy interpreter
 
