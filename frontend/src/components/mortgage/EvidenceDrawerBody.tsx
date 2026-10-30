@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Icon } from '../Icon';
 import { api } from '../../lib/api';
 import { kpiProofApi } from '../../lib/apiClients/kpiProof';
-import { assetKeyForSource } from '../../lib/drawerSources';
+import { assetKeyForLineageNode, assetKeyForSource } from '../../lib/drawerSources';
 import { resolveDrawerProse } from '../../lib/drawerSourceRegistry.prose';
 import { queryKeys } from '../../lib/queryKeys';
 import { formatTimestamp } from '../../lib/time';
@@ -167,7 +167,7 @@ function catalogNodeForSource(
         : null);
   if (!assetKey || !manifest) return null;
   for (const family of manifest.families) {
-    const node = family.nodes.find((candidate) => assetKeyForSource(candidate.fqn) === assetKey);
+    const node = family.nodes.find((candidate) => assetKeyForLineageNode(candidate) === assetKey);
     if (node) return node;
   }
   return null;

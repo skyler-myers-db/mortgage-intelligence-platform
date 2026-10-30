@@ -32,7 +32,7 @@ jobs:
   parked:
     # Parked until a client environment is selected (M1-PR7). The CI staging
     # workspace this workflow deployed to was deleted on 2026-10-29, and the
-    # bundle's dev target is the live install, which no CI run may reach
+    # live install predates the client target and no CI run may reach it
     # before M1-PR7's per-client environment lands. Every dispatch refuses
     # here, before the environment approval and before any job requests an
     # ID token: the deploy job needs this one, so it never starts, and
@@ -287,8 +287,9 @@ jobs:
       - name: Prove the GitHub OIDC deployer identity
         # Read-only, before scripts/deploy.sh: the DEFAULT github-oidc profile
         # must authenticate, through both the Python SDK and the Go CLI, as the
-        # reviewed deployer service principal on the bundle target's
-        # workspace, with the authority the governed deploy requires. It
+        # reviewed deployer service principal on DATABRICKS_HOST's workspace
+        # (the bundle's client target names no host, M1-PR2), with the
+        # authority the governed deploy requires. It
         # prints booleans only (an exception or CLI failure adds its class or
         # exit code, never a message or value) and exits 2 on any mismatch.
         # The profile and host checks run first; on a mismatch the step exits
@@ -313,7 +314,7 @@ jobs:
 
           import yaml
 
-          TARGET = "dev"
+          TARGET = "client"
           PROFILE = "DEFAULT"
           # Ambient names that would override or redirect the profile.
           OVERRIDES = (
@@ -379,7 +380,9 @@ jobs:
           checks["profile_auth_type_is_github_oidc"] = profile.get("auth_type") == "github-oidc"
           checks["profile_client_id_is_the_deployer"] = same(profile.get("client_id"), expected)
           checks["profile_host_is_DATABRICKS_HOST"] = same(profile_host, secret_host)
-          checks["profile_host_is_the_bundle_target_host"] = same(profile_host, bundle_host)
+          # The client target takes its host from this profile: a host
+          # committed to the bundle would be a second source of truth.
+          checks["bundle_target_commits_no_host"] = not bundle_host
           if not all(checks.values()):
               report()
 
@@ -461,8 +464,8 @@ jobs:
       - name: Deploy dev Databricks App
         env:
           # The deployer is the DEFAULT github-oidc profile: scripts/deploy.sh's
-          # workspace-auth bind checks its host against the target's
-          # workspace.host, exports it as the deployer profile and unsets
+          # workspace-auth bind checks its host against the client profile's
+          # DATABRICKS_HOST, exports it as the deployer profile and unsets
           # DATABRICKS_HOST. The
           # App client pairs below are un-exported before deploy.sh's first
           # child, so none overrides the profile's client_id.
@@ -532,10 +535,9 @@ jobs:
         run: |
           set -euo pipefail
           # Unreachable while the `parked` job refuses, and scripts/deploy.sh
-          # refuses this workflow's ref before any Databricks call: the dev
-          # target is the live install. M1-PR7 replaces this step with a
-          # per-client environment and target.
-          args=(-t dev --no-confirm)
+          # refuses this workflow's ref before any Databricks call. M1-PR7
+          # replaces this step with a per-client environment.
+          args=(-t client --no-confirm)
           if [ "${{ inputs.skip_silver }}" = "true" ]; then
             args+=(--skip-silver)
           fi

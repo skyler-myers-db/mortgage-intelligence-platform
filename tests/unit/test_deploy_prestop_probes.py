@@ -1242,7 +1242,10 @@ start_proof_signing_heartbeat() {{ :; }}
 # The step file renders, validates and runs the pre-lease plan gate (M0-PR4).
 dotenv_value() {{ printf ''; }}
 run_bundle_plan_gate() {{ printf 'run_bundle_plan_gate %s\n' "$*" >> {shlex.quote(str(calls))}; }}
-TARGET=dev
+TARGET=client
+# The client profile's install class, which resolve_client_profile sets at the
+# top of the preflight step file (M1-PR2); the render's demo-feed default reads it.
+CLIENT_INSTALL_CLASS=demo
 DEPLOY_PHASE=""
 DEPLOY_INVENTORY_PRINCIPAL=deployer@example.invalid
 # Resolved by the preflight step file; the pii-salt check reads both.

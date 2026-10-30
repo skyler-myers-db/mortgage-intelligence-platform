@@ -2,15 +2,19 @@
 # =============================================================================
 # scripts/deploy.sh
 # -----------------------------------------------------------------------------
-# One-command zero-click dev deploy for the Mortgage Intelligence Platform.
+# One-command zero-click client deploy for the Mortgage Intelligence Platform.
 #
 # What it does, in order, idempotently:
+#   00. Resolve the client profile (tools/clients) before anything else; a
+#       refused profile exits 2. The deployer's host must be the profile's,
+#       and read-only live checks prove the workspace id, the metastore id and
+#       the deployer (tools/clients/live_checks.py) before any other call.
 #   0.  Preflight: check .env.local exists + `databricks` CLI + the venv.
 #   1.  Build the frontend, then stage the App runtime closure at the deploy
 #       commit plus that dist as one per-release source folder + manifest.
 #   2.  Before the signed lease and any App stop: render SQL, validate the
-#       direct-deployment bundle under `-t dev` (.env.local mapped to BUNDLE_VAR_*
-#       via tools/databricks/bundle_env.py), and gate its plan
+#       direct-deployment bundle under `-t client` (the profile mapped to
+#       BUNDLE_VAR_* via tools/databricks/bundle_env.py), and gate its plan
 #       (tools/databricks/bundle_plan_gate.py: no delete, recreate or collision).
 #   3.  Gate the plan again under the lease, immediately before step 4.
 #   4.  Deploy non-App bundle resources, then apply source-free App resource
@@ -42,26 +46,29 @@
 # that YAML as an artifact; keeping the provisioner local to the deploy
 # workstation keeps the source of truth in-repo where code review lives.
 #
-# Usage:
-#   ./scripts/deploy.sh -t dev             # full dev deploy
-#   ./scripts/deploy.sh -t dev --dry-run   # print the plan, make no changes
-#   ./scripts/deploy.sh -t dev --skip-silver
+# Usage (`client` is the one target; it is also the default):
+#   ./scripts/deploy.sh -t client             # full client deploy
+#   ./scripts/deploy.sh -t client --dry-run   # print the plan, make no changes
+#   ./scripts/deploy.sh -t client --skip-silver
 #                                          # skip silver refresh (FRED + share)
-#   ./scripts/deploy.sh -t dev --skip-smoke
+#   ./scripts/deploy.sh -t client --skip-smoke
 #                                          # skip the post-deploy curl smoke test
-#   ALLOW_SMOKE_FAILURE=1 ./scripts/deploy.sh -t dev
+#   ALLOW_SMOKE_FAILURE=1 ./scripts/deploy.sh -t client
 #                                       # emergency/manual deploy only: warn instead of fail
-#   ./scripts/deploy.sh -t dev --no-confirm
+#   ./scripts/deploy.sh -t client --no-confirm
 #                                       # skip the y/N prompt before deploy
 #   ./scripts/deploy.sh --verify-source-only
 #                                       # run the exact-source gate and exit
-#   ./scripts/deploy.sh -t dev --phase plan --dry-run
+#   ./scripts/deploy.sh -t client --phase plan --dry-run
 #                                       # read-only steps and the bundle plan
 #                                       # gate, then exit before the lease
 #                                       # (a live --phase plan is CI-only)
+# The live install predating the client target is reached only through the
+# emergency recipe in docs/deployment.md until it is adopted (M2-PR6).
 #
 # Environment:
-#   .env.local must set at minimum DATABRICKS_HOST, DATABRICKS_WAREHOUSE_ID.
+#   .env.local holds the client profile (deploy/clients/example.env), plus
+#   DATABRICKS_WAREHOUSE_ID.
 #   (If GENIE_SPACE_ID is blank on first run, this script provisions the
 #   Genie space before bundle deploy so databricks_app.mip_app never binds
 #   to the placeholder sentinel. The later Genie step re-runs after gold
@@ -107,7 +114,7 @@ SKIP_SILVER=0
 SKIP_SMOKE=0
 NO_CONFIRM=0
 VERIFY_SOURCE_ONLY=0
-TARGET="dev"
+TARGET="client"
 TARGET_SEEN=0
 DEPLOY_PHASE=""
 PHASE_SEEN=0
@@ -131,7 +138,7 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       if [[ $# -lt 2 || -z "$2" ]]; then
-        echo "[deploy] missing value for $1 (expected target name, e.g. dev)" >&2
+        echo "[deploy] missing value for $1 (expected target name: client)" >&2
         exit 2
       fi
       TARGET="$2"; TARGET_SEEN=1; shift 2 ;;
@@ -146,7 +153,7 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       if [[ -z "$TARGET" ]]; then
-        echo "[deploy] missing value for --target= (expected target name, e.g. dev)" >&2
+        echo "[deploy] missing value for --target= (expected target name: client)" >&2
         exit 2
       fi
       TARGET_SEEN=1; shift ;;
@@ -165,7 +172,7 @@ while [[ $# -gt 0 ]]; do
       fi
       PHASE_SEEN=1 ;;
     -h|--help)
-      sed -n '2,69p' "$0"
+      sed -n '2,81p' "$0"
       exit 0
       ;;
     *)
@@ -174,14 +181,16 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-if [[ "$TARGET" != "dev" && "$TARGET" != "prod" ]]; then
-  echo "[deploy] target must be exactly dev or prod; refusing '$TARGET'" >&2
+# One deployable target (M1-PR2): `client`, whose host, root and run_as all
+# come from the client profile. `ci` is validate-only (bundle_env), and the
+# retired dev and prod targets are refused like any other name.
+if [[ "$TARGET" != "client" ]]; then
+  echo "[deploy] target must be exactly client; refusing '$TARGET'" >&2
   exit 2
 fi
 # deploy-dev.yml is parked until a client environment is selected (M1-PR7):
-# the CI staging workspace it deployed to was deleted, and the dev target is
-# the live install, which no CI run may reach before M1-PR7's per-client
-# environment lands. The workflow refuses first; this repeats the refusal
+# the CI staging workspace it deployed to was deleted, and no CI run may
+# reach a client install before M1-PR7's per-client environment lands. The workflow refuses first; this repeats the refusal
 # before any Databricks call, also in DRY_RUN. It keys on the workflow ref,
 # never on GITHUB_ACTIONS alone, so CI's own pytest and its deploy.sh dry
 # runs are unchanged.
@@ -457,6 +466,17 @@ APP_RELEASE_STAGE_ROOT=".databricks/app-release"
 APP_RELEASE_MANIFEST="$APP_RELEASE_STAGE_ROOT/manifest.json"
 APP_RELEASE_ID=""
 APP_BUNDLE_FILES_PATH=""
+# The client profile (resolve_client_profile, scripts/lib/
+# deploy_identity_lifecycle.sh): the client key is the bundle root's leaf, the
+# deployer the root's owner and the App release principal.
+CLIENT_KEY=""
+CLIENT_INSTALL_CLASS=""
+CLIENT_HOST=""
+CLIENT_DEPLOYER=""
+# Step 5 sets these from the profile: the principal and root leaf every App
+# release check (publish, converge, prune) names. Empty refuses.
+APP_RELEASE_PRINCIPAL=""
+APP_RELEASE_ROOT_LEAF=""
 
 # The App-access, App-release, first-install, and identity lifecycle functions
 # are sliced verbatim into scripts/lib/deploy_*_lifecycle.sh and sourced here

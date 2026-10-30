@@ -93,7 +93,7 @@ def _check_app_permissions() -> str | None:
         f"note: Databricks App '{app_id}' detected. If scripts/deploy.sh fails "
         f"during App resource reconciliation with a 'Can View' permission "
         f"error, grant the reviewed deployer CAN_MANAGE as documented in "
-        f"docs/se-onboarding.md, then rerun './scripts/deploy.sh -t dev'."
+        f"docs/se-onboarding.md, then rerun './scripts/deploy.sh -t client'."
     )
 
 

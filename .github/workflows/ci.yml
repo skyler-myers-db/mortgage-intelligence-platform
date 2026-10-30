@@ -337,10 +337,14 @@ jobs:
           main = yaml.safe_load((root / "databricks.yml").read_text())
           assert main.get("bundle", {}).get("name"), "databricks.yml missing bundle.name"
           targets = main.get("targets", {})
-          for required in ("dev", "prod"):
-              assert required in targets, f"databricks.yml missing targets.{required}"
-              assert targets[required].get("workspace", {}).get("host"), \
-                  f"targets.{required}.workspace.host is required"
+          # M1-PR2: one host-less client target (its host comes from the
+          # client profile) plus the validate-only ci target, whose host is a
+          # placeholder. No root-level host is committed.
+          assert set(targets) == {"client", "ci"}, f"databricks.yml targets are {sorted(targets)}"
+          assert not main.get("workspace", {}).get("host"), "databricks.yml must not commit a root host"
+          assert not targets["client"].get("workspace", {}).get("host"), \
+              "targets.client.workspace.host must stay unset"
+          assert targets["ci"].get("workspace", {}).get("host"), "targets.ci.workspace.host is required"
           resources = main.get("resources", {})
           for kind in ("jobs", "pipelines", "sql_warehouses", "apps"):
               if kind in resources:

@@ -28,12 +28,16 @@ from typing import Any
 
 from databricks.sdk.errors import NotFound
 
+from tests.fixtures.client_profiles import IDENTITY_IDS
+
 DEPLOYER = "deployer@example.invalid"
 APP_NAME = "mip-app"
 APP_CLIENT = "app-client-EXAMPLE"
 APP_SCIM = "app-scim-1"
-RUNTIME_CLIENT = "runtime-client-EXAMPLE"
-VERIFIER_CLIENT = "verifier-client-EXAMPLE"
+# The synthetic client profile's roles (tests/fixtures/client_profiles.py), so
+# the real deploy.sh, which cross-checks each alias against them, can use these.
+RUNTIME_CLIENT = IDENTITY_IDS["runtime"]
+VERIFIER_CLIENT = IDENTITY_IDS["verifier"]
 GOVERNED_SPACE = "space-governed"
 BLUE_GATEWAY = "mip-agent-gateway-blue"
 BLUE_SUPERVISOR_ENDPOINT = "mas-blue-endpoint"

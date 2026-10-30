@@ -211,7 +211,7 @@ Fresh deployed evidence (2026-06-11, perf/polish slice — geo singleflight, pre
 
 Retained deployed evidence from the previous deploy tranche (not a fresh deploy of the local interaction-affordance edits above):
 
-- Historical active deployment smoke completed before the signed command-of-record cutover. Current releases must use `./scripts/deploy.sh -t dev`; the prior unrestricted bundle/direct snapshot sequence is no longer supported.
+- Historical active deployment smoke completed before the signed command-of-record cutover. Current releases must use `./scripts/deploy.sh -t client`; the prior unrestricted bundle/direct snapshot sequence is no longer supported.
 - Live health result: `/api/health` returned `status=ok`, `mode=live`, `warehouse/lakebase/genie=up`; `/api/admin/health` returned all breakers closed, `recent_errors_count=0`, `fallback_identity_fallbacks_total=0`, and `log_export=stdout-only`.
 - Live route-performance result: 12/12 passed against the active deployment, including the audit-safe Lead Queue canary that hover/focus/row-expand issue zero governed borrower dossier reads.
 - Live browser/device/accessibility result: 52/52 passed against the active deployment across Chromium, Firefox, WebKit, Pixel 7, iPhone 15, and iPad Pro 11 landscape.

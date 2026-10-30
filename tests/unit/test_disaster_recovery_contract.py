@@ -20,9 +20,9 @@ def test_disaster_recovery_runbook_covers_operational_scenarios() -> None:
         assert phrase in text
 
     for command in (
-        "databricks bundle run mip_lakebase_migrate -t dev",
-        "databricks bundle run mip_refresh_scores -t dev",
-        "CI=1 ./scripts/deploy.sh -t dev --no-confirm",
+        "databricks bundle run mip_lakebase_migrate -t client",
+        "databricks bundle run mip_refresh_scores -t client",
+        "CI=1 ./scripts/deploy.sh -t client --no-confirm",
         "git checkout <prior-good-sha>",
         "tools/databricks/provision_genie_space.py",
         "tools/databricks/export_action_audit.py",
@@ -44,12 +44,27 @@ def test_lakebase_schema_records_migrations_and_archive_runs() -> None:
 
 
 def test_production_lakebase_targets_enable_readable_secondaries() -> None:
+    """A customer install attaches readable secondaries unless its profile says otherwise.
+
+    M1-PR2 retired the prod target, which set them on; the client target reads
+    var.lakebase_readable_secondaries (default off, a demo install's posture),
+    and the profile sets it on for a customer install with no explicit value.
+    """
+    from tests.fixtures.client_profiles import customer_profile, demo_profile
+    from tools.clients import profile as views
+    from tools.clients.environment import RawProfile, resolve
+
     bundle = Path("databricks.yml").read_text(encoding="utf-8")
 
-    assert "prod:" in bundle
     assert "prod_otlp:" not in bundle
-    assert bundle.count("enable_readable_secondaries: true") >= 1
-    assert "enable_readable_secondaries: false" in bundle
+    assert "enable_readable_secondaries: ${var.lakebase_readable_secondaries}" in bundle
+    assert "lakebase_readable_secondaries:" in bundle
+    customer = resolve(RawProfile(values=customer_profile(MIP_LAKEBASE_READABLE_SECONDARIES=None)))
+    assert views.client_target_vars(customer)["lakebase_readable_secondaries"] == "true"
+    explicit = resolve(RawProfile(values=customer_profile(MIP_LAKEBASE_READABLE_SECONDARIES="false")))
+    assert views.client_target_vars(explicit)["lakebase_readable_secondaries"] == "false"
+    demo = resolve(RawProfile(values=demo_profile(MIP_LAKEBASE_READABLE_SECONDARIES=None)))
+    assert "lakebase_readable_secondaries" not in views.client_target_vars(demo)
 
 
 def test_action_audit_export_helper_is_copy_only() -> None:

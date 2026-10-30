@@ -114,23 +114,26 @@ fi
 # validate/deploy read the rendered tree. The renderer also materializes the
 # first-party demo-feed switch as a SQL literal because Databricks SQL does not
 # allow parameter markers in this DDL path. The stand-alone renderer defaults to
-# disabled; this wrapper explicitly opts the Summit dev demo in while keeping
-# prod/customer deploys fail-closed.
+# disabled; this wrapper explicitly opts a Summit demo install in (the client
+# profile's MIP_INSTALL_CLASS, as the dev target was before M1-PR2) while
+# keeping customer installs fail-closed. CLIENT_INSTALL_CLASS is set by
+# resolve_client_profile at the top of step 0 (deploy_step_preflight_gates.sh),
+# before this file is sourced.
 DEMO_FEEDS_FROM_ENV="${MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS:-}"
 if [[ -z "$DEMO_FEEDS_FROM_ENV" ]]; then
   DEMO_FEEDS_FROM_ENV="$(dotenv_value MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS)"
 fi
 if [[ -z "$DEMO_FEEDS_FROM_ENV" ]]; then
-  if [[ "$TARGET" == "dev" ]]; then
+  if [[ "$CLIENT_INSTALL_CLASS" == "demo" ]]; then
     DEMO_FEEDS_FROM_ENV=1
   else
     DEMO_FEEDS_FROM_ENV=0
   fi
 fi
-if [[ "$TARGET" != "dev" ]]; then
+if [[ "$CLIENT_INSTALL_CLASS" != "demo" ]]; then
   DEMO_FEEDS_NORMALIZED="$(printf '%s' "$DEMO_FEEDS_FROM_ENV" | tr '[:upper:]' '[:lower:]')"
   if [[ "$DEMO_FEEDS_NORMALIZED" =~ ^(1|true|yes|y|on)$ && "${MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD:-0}" != "1" ]]; then
-    echo "${RED}[deploy] refusing to enable Summit demo first-party feeds for target ${TARGET}.${RST}" >&2
+    echo "${RED}[deploy] refusing to enable Summit demo first-party feeds for a ${CLIENT_INSTALL_CLASS} install.${RST}" >&2
     echo "  Set MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD=1 only for an approved demo workspace; never for a customer production workspace." >&2
     exit 2
   fi

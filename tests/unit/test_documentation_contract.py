@@ -114,11 +114,33 @@ def test_readme_surfaces_current_operator_entrypoints() -> None:
         assert required in text
 
 
+EMERGENCY_RECIPE_HEADING = "### The emergency recipe, command by command (legacy dev root)"
+
+
+def _without_the_emergency_recipe_block(path: Path, text: str) -> str:
+    """docs/deployment.md minus the one fenced block of the emergency recipe.
+
+    That block is the owner-sanctioned way to ship the live install until it
+    is adopted (M1-PR2); tests/unit/test_docs_recipe_commands.py runs each of
+    its commands. Exactly one ``databricks apps deploy`` line may sit in it,
+    and nothing else is exempt.
+    """
+
+    if path != ROOT / "docs" / "deployment.md":
+        return text
+    start = text.index("```bash\n", text.index(EMERGENCY_RECIPE_HEADING))
+    end = text.index("\n```\n", start) + len("\n```\n")
+    block = text[start:end]
+    assert len(re.findall(r"databricks\s+(?:apps\s+deploy|bundle\s+deploy)\b", block)) == 1, block
+    assert re.search(r"(?m)^databricks apps deploy <app-name> --json @<payload> -p <profile>$", block)
+    return text[:start] + text[end:]
+
+
 def test_current_operator_docs_never_advertise_bare_mutable_deployment() -> None:
     violations: list[str] = []
     command = re.compile(r"databricks\s+(?:apps\s+deploy|bundle\s+deploy)\b")
     for path in (*CURRENT_OPERATOR_DOCS, *CURRENT_DEPLOYMENT_GUIDANCE_SURFACES):
-        text = _read(path)
+        text = _without_the_emergency_recipe_block(path, _read(path))
         if command.search(text):
             violations.append(str(path.relative_to(ROOT)))
         assert "promote it from the Databricks Apps deployment UI" not in text
@@ -131,7 +153,37 @@ def test_current_operator_docs_never_advertise_bare_mutable_deployment() -> None
 
     for relative in ("README.md", "docs/runbook.md", "docs/se-onboarding.md"):
         text = _read(ROOT / relative)
-        assert "./scripts/deploy.sh -t dev" in text or "make deploy-dev" in text
+        assert "./scripts/deploy.sh -t client" in text
+        assert "./scripts/deploy.sh -t dev" not in text, "the dev target left databricks.yml (M1-PR2)"
+
+
+# A raw `databricks bundle <verb> ... -t <target>` in prose or a code block.
+_RAW_BUNDLE_COMMAND = re.compile(
+    r"databricks bundle (?:run|summary|validate|plan|deploy|destroy)\b[^`\n]*?-t\s+(\w+)"
+)
+
+
+def test_operator_docs_run_raw_bundle_commands_only_on_the_client_target_with_its_root_exported() -> None:
+    """The dev and prod targets left databricks.yml in M1-PR2, and the raw CLI reads no .env.local.
+
+    So a raw bundle command names ``-t client``, and every doc that holds one
+    says to export the client target's root variables first. Validation that
+    reads the profile goes through ``bundle_env.py`` (``make bundle-validate``).
+    """
+
+    surfaces = (*CURRENT_OPERATOR_DOCS, ROOT / "AGENTS.md", ROOT / "docs" / "agentic-workflow.md")
+    for path in surfaces:
+        text = _read(path)
+        targets = _RAW_BUNDLE_COMMAND.findall(text)
+        assert set(targets) <= {"client"}, (path.relative_to(ROOT), targets)
+        if targets:
+            assert "BUNDLE_VAR_client_key" in text and "BUNDLE_VAR_deployer_principal" in text, path
+    claude = _read(ROOT / "CLAUDE.md")
+    assert "- `databricks bundle validate -t client` passes" not in claude
+    assert "- `tools/databricks/bundle_env.py validate -t client` (`make bundle-validate`) passes" in claude
+    deployment = " ".join(_read(ROOT / "docs" / "deployment.md").split())
+    assert "`make bundle-plan` remain read-only diagnostics" not in deployment, "bundle-plan exits 2"
+    assert "`make bundle-plan` and the mutable `make bundle-deploy`" in deployment
 
 
 def test_deployment_doc_pins_the_prebuilt_app_source_contract() -> None:
@@ -233,7 +285,7 @@ def test_otlp_operator_docs_use_the_same_governed_target() -> None:
         text = _read(ROOT / relative)
         assert "MIP_OTEL_HEADERS_SECRET_SCOPE" in text
         assert "MIP_OTEL_HEADERS_SECRET_KEY" in text
-        assert "scripts/deploy.sh -t prod" in text
+        assert "scripts/deploy.sh -t client" in text and "scripts/deploy.sh -t prod" not in text
         assert "tools/databricks/otlp_deploy_payload.py" not in text
     observability = _read(ROOT / "docs" / "observability.md")
     assert "databricks secrets list-scopes" in observability
@@ -258,9 +310,9 @@ def test_mutable_operator_surfaces_route_to_signed_deploy_only() -> None:
     assert "databricks apps deploy" not in scaffold
     assert "databricks bundle deploy" not in m2m
     assert "make bundle-deploy-dev" not in genie
-    assert "./scripts/deploy.sh -t dev" in scaffold
-    assert "./scripts/deploy.sh -t dev" in m2m
-    assert "./scripts/deploy.sh -t dev" in genie
+    assert "./scripts/deploy.sh -t client" in scaffold
+    assert "./scripts/deploy.sh -t client" in m2m
+    assert "./scripts/deploy.sh -t client" in genie
 
 
 def test_production_workflow_is_honestly_non_deploying() -> None:

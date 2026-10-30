@@ -14,7 +14,7 @@ Checklist:
 3. Use `python -m backend.runtime` so ports come from Databricks runtime variables.
 4. Mock mode must work without Databricks network access.
 5. All Databricks calls must have typed service wrappers and graceful fallbacks.
-6. Run `python tools/verify_scaffold.py` and `databricks bundle validate -t dev` after workspace variables are filled.
+6. Run `python tools/verify_scaffold.py` and, once the client profile is filled in `.env.local`, `make bundle-validate` (`tools/databricks/bundle_env.py validate -t client`).
 
 Preferred patterns:
 - `backend/services/databricks_sql.py` owns SQL Warehouse access.

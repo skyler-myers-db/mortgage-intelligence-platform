@@ -127,10 +127,12 @@ stalls, press **Sync workflow state** in Admin **Data operations** (the same
 warehouse sync, run inside the App), or run the job. Run the job only where
 the deployed jobs match the current bundle: on an install whose governed
 deploy is NO-GO, never run it; use the runbook's "Interim refresh (governed
-deploy NO-GO)".
+deploy NO-GO)". A direct run needs the client target's root: export
+`BUNDLE_VAR_client_key` and `BUNDLE_VAR_deployer_principal` from the client
+profile first, as the runbook's §4 note says.
 
 ```bash
-databricks bundle run mip_sync_lifecycle_state -t dev
+databricks bundle run mip_sync_lifecycle_state -t client
 ```
 
 ---
@@ -174,10 +176,13 @@ one, press **Sync workflow state** in Admin **Data operations** (the same
 warehouse sync and funnel snapshot, run inside the App, not this job), or
 run the job with CLI access. Run the job only where the deployed jobs match
 the current bundle: on an install whose governed deploy is NO-GO, never run
-it; use the runbook's "Interim refresh (governed deploy NO-GO)".
+it; use the runbook's "Interim refresh (governed deploy NO-GO)". A direct
+run needs the client target's root: export `BUNDLE_VAR_client_key` and
+`BUNDLE_VAR_deployer_principal` from the client profile first, as the
+runbook's §4 note says.
 
 ```bash
-databricks bundle run mip_sync_lifecycle_state -t dev
+databricks bundle run mip_sync_lifecycle_state -t client
 ```
 
 The job runs `sync_from_lakebase` → `record_funnel_snapshot` in sequence, so

@@ -19,7 +19,6 @@ and the SDK client is the fake.
 
 from __future__ import annotations
 
-import base64
 import copy
 import json
 import shlex
@@ -29,8 +28,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 
+from tests.fixtures.client_profiles import IDENTITY_IDS, env_file_text, paychex_shaped_profile
 from tests.fixtures.deploy_sandbox import INHERITED_PREFIXES, sandbox
 from tests.fixtures.prestop_estate import (
     APP_CLIENT,
@@ -48,6 +47,7 @@ from tools.databricks import prestop_refusals as codes
 REPO = Path(__file__).resolve().parents[2]
 # Canned success for the steps the offline sandbox cannot run for real.
 CANNED = (
+    "-m tools.clients.live_checks",
     "-m tools.python_deps_check",
     "-m tools.requirements_digest",
     "-m tools.databricks.app_runtime_closure",
@@ -76,7 +76,7 @@ def _fake_python(tmp_path: Path) -> Path:
         'case "$*" in\n'
         f"{canned}\n"
         "  '-m tools.databricks.agent_proxy_credential_bundle all-fields'*)\n"
-        "    printf 'proxy-client-EXAMPLE\\tproxy-credential-EXAMPLE\\tproxy-secret-EXAMPLE\\n'; exit 0 ;;\n"
+        f"    printf '{IDENTITY_IDS['proxy']}\\tproxy-credential-EXAMPLE\\tproxy-secret-EXAMPLE\\n'; exit 0 ;;\n"
         f"  {shlex.quote(LEASE)}*) echo lease >> \"$PRESTOP_MARKERS\"; exit 97 ;;\n"
         f"{stops}\n"
         "esac\n"
@@ -106,25 +106,17 @@ def _stub_cli(bin_dir: Path) -> None:
     cli.chmod(0o755)
 
 
-def _key(seed: int) -> str:
-    return base64.urlsafe_b64encode(bytes((seed + index) % 256 for index in range(32))).decode().rstrip("=")
-
-
-def _bundle_host() -> str:
-    data = yaml.safe_load((REPO / "databricks.yml").read_text(encoding="utf-8"))
-    target = (data.get("targets") or {}).get("dev") or {}
-    return str(
-        (target.get("workspace") or {}).get("host") or (data.get("workspace") or {}).get("host")
-    ).rstrip("/")
-
-
 def _deploy(
     tmp_path: Path, estate: dict[str, Any], **env: str
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any], list[str], list[str]]:
     checkout, base_env, cli_log = sandbox(tmp_path)
+    # The sandbox's synthetic client profile, with the demo install's weekly
+    # refresh off: a service-principal deployer cannot receive its failure mail.
+    profile = paychex_shaped_profile(
+        MIP_SCHEDULED_REFRESH="off", MIP_SCHEDULED_REFRESH_RECIPIENTS=None
+    )
     (checkout / ".env.local").write_text(
-        f"DATABRICKS_HOST={_bundle_host()}\nDATABRICKS_WAREHOUSE_ID=warehouse-1\n",
-        encoding="utf-8",
+        env_file_text({**profile, "DATABRICKS_WAREHOUSE_ID": "warehouse-1"}), encoding="utf-8"
     )
     _stub_cli(tmp_path / "bin")
     markers = tmp_path / "markers.log"
@@ -138,7 +130,7 @@ def _deploy(
             "HOME": str(tmp_path),
             "DATABRICKS_CONFIG_FILE": str(tmp_path / "no-databrickscfg"),
             "DATABRICKS_STUB_LOG": str(cli_log),
-            "DATABRICKS_HOST": _bundle_host(),
+            "DATABRICKS_HOST": profile["DATABRICKS_HOST"],
             "DATABRICKS_TOKEN": "token-PLACEHOLDER",
             "MIP_DEPLOY_PYTHON": str(_fake_python(tmp_path)),
             "MIP_TEST_PRESTOP_ESTATE": str(estate_path),
@@ -146,31 +138,20 @@ def _deploy(
             "PRESTOP_MARKERS": str(markers),
             "PRESTOP_PY_LOG": str(tmp_path / "python.log"),
             "MLFLOW_DISABLE_AGENT_HINT": "1",
-            "MIP_ADMIN_EMAILS": "operator@example.invalid",
-            "MIP_UC_APPROVED_OWNER_PRINCIPALS": "mip-data-owners",
-            "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": _key(1),
-            "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY": _key(101),
-            "DATABRICKS_CLIENT_ID": "normal-client-EXAMPLE",
-            "DATABRICKS_CLIENT_SECRET": "normal-secret-EXAMPLE",
-            "DATABRICKS_OPERATOR2_CLIENT_ID": "operator2-client-EXAMPLE",
-            "DATABRICKS_ADMIN_CLIENT_ID": "admin-client-EXAMPLE",
-            "DATABRICKS_ADMIN_CLIENT_SECRET": "admin-secret-EXAMPLE",
-            "DATABRICKS_RELEASE_PROBE_CLIENT_ID": "release-probe-client-EXAMPLE",
-            "DATABRICKS_RELEASE_PROBE_CLIENT_SECRET": "release-probe-secret-EXAMPLE",
+            # The M2M client ids are the profile's roles; their secrets, the
+            # signing keys and the approvals come from the profile itself.
+            "DATABRICKS_CLIENT_ID": IDENTITY_IDS["normal"],
+            "DATABRICKS_OPERATOR2_CLIENT_ID": IDENTITY_IDS["operator2"],
+            "DATABRICKS_ADMIN_CLIENT_ID": IDENTITY_IDS["admin"],
+            "DATABRICKS_RELEASE_PROBE_CLIENT_ID": IDENTITY_IDS["release_probe"],
             "DATABRICKS_VERIFIER_CLIENT_ID": VERIFIER_CLIENT,
-            "DATABRICKS_VERIFIER_CLIENT_SECRET": "verifier-secret-EXAMPLE",
             "DATABRICKS_AGENT_RUNTIME_CLIENT_ID": RUNTIME_CLIENT,
-            "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET": "runtime-secret-EXAMPLE",
-            "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE": "proxy-bundle-EXAMPLE",
-            "DATABRICKS_ACCOUNT_HOST": "https://accounts.example.invalid",
-            "DATABRICKS_ACCOUNT_ID": "account-EXAMPLE",
-            "DATABRICKS_ACCOUNT_CLIENT_ID": "account-client-EXAMPLE",
-            "DATABRICKS_ACCOUNT_CLIENT_SECRET": "account-secret-EXAMPLE",
+            "DATABRICKS_ACCOUNT_CLIENT_ID": IDENTITY_IDS["account_principal"],
             **env,
         }
     )
     result = subprocess.run(
-        ["bash", "scripts/deploy.sh", "-t", "dev", "--no-confirm", "--skip-silver", "--skip-smoke"],
+        ["bash", "scripts/deploy.sh", "-t", "client", "--no-confirm", "--skip-silver", "--skip-smoke"],
         cwd=checkout,
         env=run_env,
         text=True,

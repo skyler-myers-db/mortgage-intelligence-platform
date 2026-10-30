@@ -56,6 +56,11 @@ regexes = [
   # The fixed CLIP-mask placeholder tests/unit/test_leads_paging_audit.py sets
   # for MIP_COTALITY_ID_MASK_SECRET (W5c paging). Test-only; configures no process.
   '''^clip-mask-key-0123456789abcdef0123$''',
+  # The fixed canary value tests/unit/test_github_environment.py feeds through
+  # the GitHub-environment credential sink to prove a secret never reaches
+  # argv, stdout, stderr or a leftover temp file (M2-PR2). Test-only; it
+  # configures no process and authenticates nothing.
+  '''^canary-m2m-secret-77aa0c$''',
 ]
 
 # Paths where noisy-but-safe strings live. The design_files/ prototypes

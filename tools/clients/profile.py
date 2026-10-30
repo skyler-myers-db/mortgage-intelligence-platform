@@ -126,6 +126,48 @@ def _lender_env(profile: ClientProfile) -> dict[str, str]:
     }
 
 
+def client_target_vars(profile: ClientProfile) -> dict[str, str]:
+    """The ``client`` target's own variables: its root, its run_as and its overrides.
+
+    The deployer's application id is lower-cased: it names the service
+    principal's home folder and its ``service_principal_name``, which the
+    platform spells in lower case. ``jobs_principal`` is left to its bundle
+    default (the deployer) until M2-PR5. An unset dashboard folder keeps its
+    bundle default. An unset readable-secondaries flag keeps the retired
+    targets' posture: on for a customer install (the prod target attached
+    readable secondaries), the bundle default (off) for a demo one.
+    """
+
+    variables = {
+        "client_key": profile.client,
+        "deployer_principal": profile.identity_ids.deployer.lower(),
+    }
+    if profile.dashboard_parent_path is not None:
+        variables["dashboard_parent_path"] = profile.dashboard_parent_path
+    if profile.lakebase_readable_secondaries is not None:
+        variables["lakebase_readable_secondaries"] = profile.lakebase_readable_secondaries
+    elif profile.install_class == "customer":
+        variables["lakebase_readable_secondaries"] = "true"
+    return variables
+
+
+def client_target(profile: ClientProfile) -> dict[str, str]:
+    """What scripts/deploy.sh keeps from the profile before any other step.
+
+    The client key, the install class, the profile's workspace host and the
+    ``client`` target's variables as ``BUNDLE_VAR_*`` exports, so a direct
+    ``databricks bundle run -t client`` addresses the same root as
+    tools/databricks/bundle_env.py.
+    """
+
+    return {
+        "MIP_CLIENT": profile.client,
+        "MIP_INSTALL_CLASS": profile.install_class,
+        "DATABRICKS_HOST": profile.databricks_host,
+        **{f"BUNDLE_VAR_{name}": value for name, value in client_target_vars(profile).items()},
+    }
+
+
 def bundle_vars(profile: ClientProfile) -> dict[str, str]:
     """Values for the bundle variables databricks.yml declares today.
 
@@ -135,6 +177,7 @@ def bundle_vars(profile: ClientProfile) -> dict[str, str]:
 
     lender = _lender_env(profile)
     variables = {
+        **client_target_vars(profile),
         "uc_catalog": profile.default_catalog,
         "app_name": profile.app_name,
         "lakebase_instance_name": profile.lakebase_instance,

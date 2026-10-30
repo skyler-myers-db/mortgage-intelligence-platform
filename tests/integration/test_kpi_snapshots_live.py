@@ -6,7 +6,7 @@ or Databricks workspace credentials.
 
 Proves, against the deployed instance:
 
-1. **Backfill** -- after ``./scripts/deploy.sh -t dev`` (step 9b runs the
+1. **Backfill** -- after ``./scripts/deploy.sh -t client`` (step 9b runs the
    ``mip_kpi_snapshot`` job), ``mip_app.kpi_snapshots`` has at least one
    row, so S4 never renders against an empty snapshot table.
 2. **Round-trip** -- the delta service's nearest-snapshot lookup reads the

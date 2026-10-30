@@ -73,11 +73,12 @@ For a customer fork, first add the customer's exact public legal lender name
 and verified NMLS ID to the source-controlled registry in
 `backend/schemas/lender_identity.py`. That registry change requires independent
 review; runtime configuration alone cannot introduce a new borrower-facing
-identity. After the reviewed pair is merged, rebind the bundle's single
-workspace-host anchor and set that exact identity in `.env.local`:
+identity. After the reviewed pair is merged, fill the client profile
+(`deploy/clients/example.env`: the workspace host, ids and resource names of
+the install; `databricks.yml` commits no host) and set that exact identity in
+`.env.local`:
 
 ```bash
-./scripts/configure-workspace.sh https://<customer-workspace>.cloud.databricks.com
 MIP_LENDER_NAME="<reviewed legal lender name>"
 MIP_LENDER_NMLS_ID="<matching reviewed lender NMLS id>"
 # Optional; defaults from MIP_LENDER_NAME when unset.
@@ -90,18 +91,23 @@ before it mutates workspace resources and fails closed when the pair is absent
 from the reviewed registry.
 
 ```bash
-make deploy-dev
+./scripts/deploy.sh -t client --dry-run   # the governed deploy's plan, no changes
+make deploy-dev                           # prints the CI dispatch command
 ```
 
-`make deploy-dev` runs `scripts/deploy.sh`: build, env-aware direct bundle
-validate/plan/deploy, app snapshot promotion, refresh jobs, Genie rebinding,
-and smoke checks. `make bundle-validate` and `make bundle-plan` are safe
-read-only diagnostics because they run `tools/databricks/bundle_env.py`.
-The former mutable `make bundle-deploy` and `make bundle-deploy-dev` aliases
-fail closed. All workspace mutation goes through `make deploy-dev` so non-App
-resource selection, App resource reconciliation, signed source promotion,
-migrations, proof checks, refreshes, and smoke gates remain one reviewable
-operator flow.
+The command of record is `./scripts/deploy.sh -t client`, run in CI per client
+environment: profile resolution and live identity checks, build, env-aware
+direct bundle validate/plan/deploy, app snapshot promotion, refresh jobs,
+Genie rebinding, and smoke checks. `make deploy-dev` no longer deploys from a
+workstation; it prints the dispatch command. `make bundle-validate` validates
+the client target through `tools/databricks/bundle_env.py` against the
+workspace your own CLI auth names, with the filled client profile in
+`.env.local`; it changes no resource, but the CLI creates the root's empty
+`files` folder when it is missing. The former mutable `make bundle-deploy` and
+`make bundle-deploy-dev` aliases, and `make bundle-plan`, fail closed. All
+workspace mutation goes through the deploy script so non-App resource
+selection, App resource reconciliation, signed source promotion, migrations,
+proof checks, refreshes, and smoke gates remain one reviewable flow.
 
 ## Documentation map
 

@@ -28,13 +28,13 @@ audit-readable MATRIX, no longer a required manual runbook:
   failure message points here.
 
 **Audience.** The Entrada/Databricks SE (or customer workspace admin) who
-runs `./scripts/deploy.sh -t dev|prod` against a fresh customer workspace.
+runs `./scripts/deploy.sh -t client` against a fresh customer workspace.
 That script wraps the Databricks bundle resource deploy plus app promotion and
 population jobs. Every SQL block below remains copy-paste-able for manual
 recovery and review.
 
 **Precondition for manual recovery.** The command-of-record deployment
-(`./scripts/deploy.sh -t dev|prod`) has completed its minimal namespace and
+(`./scripts/deploy.sh -t client`) has completed its minimal namespace and
 bundle-resource phases once, so the `mip-app` resource, SQL warehouse,
 Lakebase instance, and governed UC catalog exist. Unrestricted bundle mutation
 is not an operator recovery path and cannot establish this precondition on a
