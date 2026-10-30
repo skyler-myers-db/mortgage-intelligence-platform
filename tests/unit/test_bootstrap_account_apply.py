@@ -101,8 +101,9 @@ def test_plan_is_read_only_and_follows_the_spec_order(estate: FakeEstate, env: P
     assert order == ["deployer", "jobs", "validator", *RESERVED_CORE, "account_principal"]
     lines = result.steps()
     assert lines.index("grant_sp_role target=jobs grantee=deployer sp_role=user") < lines.index(
-        "create_group group=acme-data-owners"
+        "create_group group=acme-data-owners members=deployer,jobs"
     )
+    assert not [line for line in lines if line.startswith("add_group_member")]
     assert lines[-2:] == [
         f"grant_uc securable_type=catalog securable={SOURCE_CATALOG} principal=acme-data-owners privileges=USE_CATALOG",
         f"grant_uc securable_type=schema securable={SOURCE_CATALOG}.{SOURCE_SCHEMA} "

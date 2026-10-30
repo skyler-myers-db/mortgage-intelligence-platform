@@ -27,6 +27,9 @@ fails the test. What exists is checked as it runs, into
 * a workspace assignment that lowers a permission;
 * a federation-policy update on an identity marked protected.
 
+``fail_after = (api, method)`` makes the next mutating call after that one
+raise once, before it acts: a transient failure mid-apply.
+
 ``assert_safe(estate)`` fails on any violation; the ``estate`` fixtures run
 it after every test.
 
@@ -142,6 +145,8 @@ class FakeEstate:
     compensation_allowed: bool = False
     revoked_minted: list[str] = field(default_factory=list)
     secret_delete_error: Exception | None = None
+    fail_after: tuple[str, str] | None = None
+    fail_armed: bool = False
     _ids: itertools.count = field(default_factory=lambda: itertools.count(1001))
 
     # --- builders ---------------------------------------------------------
@@ -211,9 +216,20 @@ class _Api:
 
     def record(self, method: str, *args: Any, **kwargs: Any) -> None:
         self.estate.calls.append(Call(self.plane, self.name, method, args, kwargs))
+        if method not in MUTATING_METHODS:
+            return
+        if self.estate.fail_armed:
+            self.estate.fail_armed = False
+            raise RuntimeError("an injected transient failure")
+        if self.estate.fail_after == (self.name, method):
+            self.estate.fail_after, self.estate.fail_armed = None, True
 
     def violate(self, message: str) -> None:
         self.estate.violations.append(f"{self.name}: {message}")
+
+
+def text_value(item: ComplexValue) -> str:
+    return str(item.value or "")
 
 
 def _filtered(records: list[Any], expression: str | None) -> list[Any]:
@@ -336,9 +352,9 @@ class _Groups(_Api):
         self.record("get", id)
         return self._view(id)
 
-    def create(self, *, display_name: str) -> Group:
-        self.record("create", display_name=display_name)
-        return self._view(self.estate.add_group(display_name))
+    def create(self, *, display_name: str, members: list[ComplexValue] | None = None) -> Group:
+        self.record("create", display_name=display_name, members=members)
+        return self._view(self.estate.add_group(display_name, {text_value(m) for m in members or ()}))
 
     def patch(self, id: str, *, operations: list[Any], schemas: list[Any]) -> None:  # noqa: A002 - SDK name
         self.record("patch", id, operations=operations, schemas=schemas)

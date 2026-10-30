@@ -18,7 +18,9 @@ AST allowlist.
 
 A failure stops the run at that step and raises ``StepFailure``, whose text
 names the step and the exception class only: an SDK or sink message could
-carry an identifier or, after a mint, the credential itself.
+carry an identifier or, after a mint, the credential itself. A re-run plans
+only what is left, except that a service principal created before its pin
+reached the sink is refused by name until ``--adopt`` names it.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from typing import Any, NoReturn
 from databricks.sdk.errors import NotFound
 from databricks.sdk.service.catalog import PermissionsChange, Privilege
 from databricks.sdk.service.iam import (
+    ComplexValue,
     GrantRule,
     Patch,
     PatchOp,
@@ -127,8 +130,9 @@ class Executor:
             except Exception as exc:  # the class only: the message could carry a value
                 raise StepFailure(
                     f"step {index} ({item.op}) failed: {type(exc).__name__}; "
-                    f"{self.mutations} mutation(s) applied before it. Re-run --plan: the bootstrap "
-                    "is idempotent."
+                    f"{self.mutations} mutation(s) applied before it. Re-run --plan. If it refuses a "
+                    "service principal this run created, confirm it and name it with --adopt "
+                    "<role>=<application id> (docs/clients/bootstrap.md)."
                 ) from None
         return self.mutations
 
@@ -222,18 +226,30 @@ class Executor:
 
     # --- group and share --------------------------------------------------------
 
+    def _member_id(self, member: str) -> str:
+        member_id = self.obs.interim_user_id if member == "interim" else self._principal(member).scim_id
+        if not member_id:
+            raise BootstrapRefusal(["data_owners: a member is not resolved"])
+        return member_id
+
     def _create_group(self, item: Step) -> None:
-        record = self.account.groups.create(display_name=item.get("group"))
+        """Create the group holding its members in one call.
+
+        So an interrupted run never leaves an empty group, which the next
+        plan could not tell from someone else's.
+        """
+
+        members = [ComplexValue(value=self._member_id(member)) for member in item.get("members").split(",")]
+        record = self.account.groups.create(display_name=item.get("group"), members=members)
         self._mutated()
         self.group_id = text(getattr(record, "id", None))
         if not self.group_id:
             raise BootstrapRefusal(["data_owners: the created group came back without an id"])
 
     def _add_group_member(self, item: Step) -> None:
-        member = item.get("member")
-        member_id = self.obs.interim_user_id if member == "interim" else self._principal(member).scim_id
-        if not self.group_id or not member_id:
-            raise BootstrapRefusal(["data_owners: the group or member is not resolved"])
+        member_id = self._member_id(item.get("member"))
+        if not self.group_id:
+            raise BootstrapRefusal(["data_owners: the group is not resolved"])
         self.account.groups.patch(
             self.group_id,
             operations=[Patch(op=PatchOp.ADD, path="members", value=[{"value": member_id}])],

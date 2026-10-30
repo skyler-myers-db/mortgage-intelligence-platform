@@ -200,9 +200,11 @@ def _identity_steps(obs: Observation, state: RoleState) -> list[Step]:
 
 
 def _group_steps(obs: Observation) -> list[Step]:
-    steps = []
     if obs.group.group_id is None:
-        steps.append(step("create_group", group=obs.group.name))
+        # Created holding its members: an empty group would read as foreign.
+        members = ["deployer", "jobs", *(["interim"] if obs.interim_user_id is not None else [])]
+        return [step("create_group", group=obs.group.name, members=",".join(members))]
+    steps = []
     for role in ("deployer", "jobs"):
         principal = obs.principal(role)
         if principal is None or principal.scim_id not in obs.group.member_ids:

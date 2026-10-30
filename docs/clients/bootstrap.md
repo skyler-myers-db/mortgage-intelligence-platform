@@ -21,7 +21,7 @@ It works in this order (plan §4.3). `<prefix>` is `MIP_IDENTITY_PREFIX`
 |---|---|---|
 | 1 | `<prefix>-deployer` | No OAuth secret, no PAT or OBO token, and exactly one federation policy: issuer GitHub Actions, subject `repo:<owner>/<repo>:environment:<client>`, the workspace OIDC audience. The policy is set **before** the workspace `ADMIN` assignment. |
 | 2 | `<prefix>-jobs` | No secret, no policy, a workspace `USER` assignment. The deployer gets Service Principal User on it. |
-| 3 | `<prefix>-data-owners` | An account group holding deployer and jobs, plus `--interim-member` if you give one. |
+| 3 | `<prefix>-data-owners` | An account group holding deployer and jobs, plus `--interim-member` if you give one. A new group is created holding them in one call. |
 | 4 | `<prefix>-validator` | No secret. One federation policy with subject `…:environment:<client>-validate`. A `USER` assignment. |
 | 5 | Reserved M2M identities | normal, operator2, admin and release-probe; with `--tier agentic` also verifier, runtime and proxy. Each gets a `USER` assignment. |
 | 6 | Account principal | The bootstrap grants it Service Principal Manager on the reserved M2M identities only. It is refused if it holds account admin or any role on deployer, jobs or validator. Its grants on identities outside this install are not audited: that would mean reading every service principal's rule set in the account. |
@@ -196,12 +196,25 @@ on the validator.
 
 ## Recovering from an interrupted apply
 
-A failed step stops the run and names only the step and the exception
-class. Re-run `--plan`; the bootstrap is idempotent.
+A failed step stops the run. It names only the step, the exception class
+and how many mutations were applied before it. Re-run `--plan`: what was
+applied drops out, and the new plan holds only what is left.
 
-Say a service principal was created but its pin never reached the sink.
-The next plan refuses its name as "not pinned". Confirm it is the one this
-run created, then pin it with `--adopt <role>=<application id>`.
+One case needs you. A service principal is pinned only once the sink stores
+the grown pin map. If the run stopped between creating one and that write,
+or the create's answer was lost, the next plan refuses its name as "not
+pinned". Confirm it is the one this run created (the account console shows
+its application id and creation time), then pin it:
+
+```bash
+python -m tools.clients.bootstrap_account --plan --adopt <role>=<application id>
+```
+
+The data-owners group has no such gap. A new group is created holding the
+deployer and jobs in one call, so the next plan recognizes it. A group named
+`<prefix>-data-owners` that holds neither is someone else's until you check
+it and name it with `--adopt data_owners=<group id>` (the account console
+shows the group id).
 
 ## Deferred and pending
 
