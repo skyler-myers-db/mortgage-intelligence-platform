@@ -59,10 +59,13 @@ identifier that merely resembles one.
 A form outside that set is not guessed at. Instead, a non-canonical render is
 checked after the rewrite: any canonical token left for a name that changed
 (any case, at identifier boundaries) refuses the whole render before a file
-is written, naming the file and line. The vendor's former brand spelled
-``CoreLogic`` in prose is the one non-name spelling of the schema token. The
-canonical source is not rewritten at all, so its render is byte-identical to
-what it was before the rewrite existed.
+is written, naming the file and line. The one exemption is the vendor's
+former brand, ``CoreLogic``, on a reviewed prose line: the whole line must
+equal one in ``_VENDOR_BRAND_PROSE_LINES``, and on that line the brand is
+inside a comment or a string literal in every lexical state. Anywhere else,
+``CoreLogic`` is the schema token (an unquoted identifier resolves case-
+insensitively) and refuses. The canonical source is not rewritten at all, so
+its render is byte-identical to what it was before the rewrite existed.
 
 The canonical sources keep the readable ``mip.*`` identifiers so code
 review + git diffs stay legible. The rendered tree is a build artifact
@@ -197,9 +200,22 @@ _CANONICAL_SOURCE_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("schema", re.compile(rf"(?i)(?<![A-Za-z0-9_]){_SRC_SCHEMA}(?![A-Za-z0-9_])")),
     ("table_prefix", re.compile(rf"(?i)(?<![A-Za-z0-9_]){_SRC_PREFIX}")),
 )
-# Prose, not a name: the vendor's former brand, spelled exactly so, touching
-# neither a qualifier dot nor a quoted identifier's backtick.
+# Prose, not a name: the vendor's former brand on a reviewed line. The match
+# must be spelled exactly so AND its whole line (ended by ``\n`` or ``\r``, as
+# the Spark SQL lexer ends a ``--`` comment) must be one of these. Each line is
+# reviewed so that the brand is never code in any lexical state the line can
+# start in: a ``--`` comment from code; string text from inside a ``'`` string
+# (its quotes pair up before the brand); and no ``"``, backtick or ``*/`` lets
+# a double-quoted string, a quoted identifier or a bracketed comment end on it.
+# A prose spelling anywhere else refuses, rather than guessing at prose.
 _VENDOR_BRAND = "CoreLogic"
+_VENDOR_BRAND_PROSE_LINES = frozenset(
+    {
+        # sql/ddl/silver_property_master.sql
+        "--            owner_occupancy_code    'O'/'A'/'T' per CoreLogic dictionary.",
+    }
+)
+_LINE_BREAKS = re.compile(r"[\r\n]")
 
 
 class CanonicalSourceLeft(ValueError):
@@ -247,9 +263,13 @@ def _resolve_demo_first_party_enabled(cli_value: str | None) -> bool:
 
 
 def _is_vendor_brand(text: str, match: re.Match[str]) -> bool:
-    before = text[match.start() - 1] if match.start() else ""
-    after = text[match.end()] if match.end() < len(text) else ""
-    return match.group(0) == _VENDOR_BRAND and before not in {".", "`"} and after not in {".", "`"}
+    """The brand on a reviewed prose line (``_VENDOR_BRAND_PROSE_LINES``)."""
+
+    if match.group(0) != _VENDOR_BRAND:
+        return False
+    start = max(text.rfind("\n", 0, match.start()), text.rfind("\r", 0, match.start())) + 1
+    end = _LINE_BREAKS.search(text, match.end())
+    return text[start : end.start() if end else len(text)] in _VENDOR_BRAND_PROSE_LINES
 
 
 def canonical_source_tokens(text: str, cotality: CotalitySource) -> list[tuple[str, int]]:

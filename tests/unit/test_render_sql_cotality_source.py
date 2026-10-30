@@ -159,11 +159,64 @@ def test_each_closed_shape_is_rewritten_and_only_its_own_names_change() -> None:
         "SELECT cotality_mortgage_data_v2.x, cotality_mortgage_data_v2.corelogic_v2.x",
         "SELECT corelogic_feed.x",
         "SELECT entrada_evaluation, my_entrada_eval_flag",
-        "-- per CoreLogic dictionary",
     ],
 )
 def test_a_lookalike_identifier_is_neither_rewritten_nor_refused(lookalike: str) -> None:
     assert render_sql.render_cotality_source(lookalike, ACME, where="t") == (lookalike, 0)
+
+
+# The one reviewed prose line that carries the vendor's former brand.
+BRAND_LINE = "--            owner_occupancy_code    'O'/'A'/'T' per CoreLogic dictionary."
+# Only the schema changes, so the brand is the only token the check can see.
+SCHEMA_ONLY = CotalitySource(CANONICAL.catalog, "feed", CANONICAL.table_prefix)
+
+
+@pytest.mark.parametrize("cotality", [ACME, SCHEMA_ONLY])
+@pytest.mark.parametrize(
+    "text",
+    [
+        BRAND_LINE,
+        f"SELECT 1;\n{BRAND_LINE}\nSELECT 2;",
+        f"SELECT 1;\r\n{BRAND_LINE}\r\nSELECT 2;",
+        f"SELECT 'open\n{BRAND_LINE}\nclose';",
+    ],
+)
+def test_the_brand_on_the_reviewed_prose_line_is_not_a_schema_token(
+    cotality: CotalitySource, text: str
+) -> None:
+    assert render_sql.render_cotality_source(text, cotality, where="t")[0] == text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "USE CATALOG cotality_mortgage_data;\nUSE SCHEMA CoreLogic;\nSELECT * FROM entrada_eval_mls_listing_v1;",
+        "SELECT * FROM cotality_mortgage_data . CoreLogic . entrada_eval_mls_listing_v1",
+        "SELECT * FROM CoreLogic.entrada_eval_mls_listing_v1",
+        "-- per CoreLogic dictionary",
+        "SELECT 1; -- per CoreLogic dictionary.",
+        "SELECT '--' AS x; USE SCHEMA CoreLogic;",
+        f"{BRAND_LINE} USE SCHEMA CoreLogic",
+        f"x{BRAND_LINE}",
+        f"{BRAND_LINE}\rUSE SCHEMA CoreLogic",
+        "SELECT 'x\n--', y FROM CoreLogic.t",
+    ],
+)
+def test_the_brand_anywhere_but_a_reviewed_prose_line_refuses(text: str) -> None:
+    """``CoreLogic`` resolves as ``corelogic`` wherever it is code."""
+
+    for cotality in (ACME, SCHEMA_ONLY):
+        with pytest.raises(render_sql.CanonicalSourceLeft, match=r"schema at line"):
+            render_sql.render_cotality_source(text, cotality, where="t")
+
+
+def test_every_reviewed_prose_line_occurs_in_the_sources() -> None:
+    """A reviewed line no source carries any more is an exemption to drop."""
+
+    lines = {line for source in _sources() for line in source.read_text(encoding="utf-8").splitlines()}
+    reviewed = render_sql._VENDOR_BRAND_PROSE_LINES
+    assert reviewed == {BRAND_LINE}
+    assert reviewed <= lines
 
 
 @pytest.mark.parametrize(
