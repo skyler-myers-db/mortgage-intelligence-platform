@@ -5,6 +5,14 @@ credentials are absent. A clear, operator-targeted message explains
 which env vars are missing and how to provide them. The app runs on
 real Unity Catalog data in every environment and fails visibly before
 serving a single request when a required credential is missing.
+
+Lender identity invariant: a customer lender is a digest-pinned record
+(``MIP_LENDER_IDENTITY_JSON`` + ``MIP_LENDER_IDENTITY_SHA256``,
+``backend/schemas/lender_identity_record.py``). When either is set, the
+record must verify against its reviewed digest before settings load, or
+the process refuses to start with one line that names no value. With
+neither set, this check does nothing and settings validate the
+code-registry identity exactly as before.
 """
 from __future__ import annotations
 
@@ -13,7 +21,30 @@ import sys
 
 import uvicorn
 
-from backend.config.settings import settings
+from backend.schemas.lender_identity_record import (
+    LenderIdentityRefused,
+    pinned_identity_configured,
+    reviewed_lender_identity_from_env,
+)
+
+
+def _preflight_lender_identity() -> None:
+    """Refuse a customer-class boot whose pinned lender record does not verify."""
+
+    if not pinned_identity_configured(os.environ):
+        return
+    try:
+        identity = reviewed_lender_identity_from_env(os.environ)
+    except ValueError as exc:
+        # Every pinned-path refusal is a fixed sentence without a value.
+        reason = str(exc) if isinstance(exc, LenderIdentityRefused) else "the record did not verify"
+        print(f"[mip-runtime] refusing to start: lender identity: {reason}", file=sys.stderr)
+        sys.exit(1)
+    assert identity.digest is not None
+    print(
+        f"[mip-runtime] lender identity: digest-pinned record {identity.digest[:12]} verified",
+        file=sys.stderr,
+    )
 
 
 def _preflight_credentials() -> None:
@@ -23,6 +54,10 @@ def _preflight_credentials() -> None:
     sees the misconfiguration in the container log within seconds,
     rather than as a 500 at request time.
     """
+    # Imported here, after the lender identity check, so a refused record
+    # stops the boot with its one-line reason, not a settings traceback.
+    from backend.config.settings import settings
+
     # Diagnostic: on Databricks Apps the runtime injects env vars whose
     # names may differ from what the backend reads. Dump presence (not
     # values) of every credential-shaped var so operator triage can
@@ -61,6 +96,7 @@ def _preflight_credentials() -> None:
 
 
 def main() -> None:
+    _preflight_lender_identity()
     _preflight_credentials()
     port = int(os.getenv("DATABRICKS_APP_PORT") or os.getenv("UVICORN_PORT") or "8000")
     host = os.getenv("UVICORN_HOST", "0.0.0.0")

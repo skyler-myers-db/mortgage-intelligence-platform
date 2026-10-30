@@ -30,6 +30,7 @@ from backend.config.settings import (
 )
 from backend.services import lifecycle_run_watch, rum_rollup
 from backend.services.actor_binding import ActorBindingMiddleware
+from backend.services.audit_store import get_audit_store
 from backend.services.backpressure import BackpressureController, BackpressureMiddleware
 from backend.services.campaign_treatment_runtime import (
     CAMPAIGN_TREATMENT_RUNTIME_MARKER_ENV,
@@ -40,6 +41,7 @@ from backend.services.genie_place_dimension import warm_governed_place_dimension
 from backend.services.genie_refusal_text_retention import refusal_text_purge_loop
 from backend.services.health_probes import prime_warehouse_state_client
 from backend.services.keep_warm import log_startup_policy as _keep_warm_policy
+from backend.services.lender_identity_boot import record_lender_identity_boot
 from backend.services.observability import (
     configure_logging,
     emit,
@@ -323,6 +325,14 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         _warm_warehouse()
         prime_warehouse_state_client()  # delivery-01: build off the health path
         _warm_lakebase()
+        # One ledger row per boot for a digest-pinned lender record (verified
+        # by backend/runtime.py before this process loaded settings); none
+        # for the code-registry identity. A failed write only logs: degraded.
+        record_lender_identity_boot(
+            settings.reviewed_lender_identity(),
+            store_factory=get_audit_store,
+            actor=settings.default_actor,
+        )
         _warm_hot_lead_cache()
         warm_governed_place_dimension()
         purge_task = asyncio.create_task(refusal_text_purge_loop())
