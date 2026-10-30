@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from datetime import timedelta
-from typing import Any, cast
+from typing import Any
 from uuid import UUID
 
 from backend.agents.reviewed_uc_function_contract import (
@@ -37,6 +37,12 @@ from tools.databricks.app_rollback_gateway_binding import (
 )
 from tools.databricks.app_rollback_gateway_proof import (
     resolve_stored_gateway_resource_proof,
+)
+from tools.databricks.app_rollback_payload_proof import (
+    env_map as _env_map,
+)
+from tools.databricks.app_rollback_payload_proof import (
+    payload_resource_proof,
 )
 from tools.databricks.app_rollback_record_builder import (
     build_app_rollback_record as _record_from,
@@ -179,15 +185,6 @@ def _ensure_started(workspace: Any, *, app_name: str) -> None:
         workspace.apps.start_and_wait(app_name, timeout=DEPLOY_TIMEOUT)
 
 
-def _env_map(payload: dict[str, object]) -> dict[str, str]:
-    env_vars = cast(list[object], payload["env_vars"])
-    return {
-        str(item["name"]): str(item.get("value") or "")
-        for item in env_vars
-        if isinstance(item, dict) and "value" in item
-    }
-
-
 def _payload_deployment_lease_id(payload: dict[str, object]) -> str:
     lease_id = _env_map(payload).get("MIP_APP_DEPLOYMENT_LEASE_ID", "").strip()
     try:
@@ -203,57 +200,12 @@ def _payload_resource_proof(
     payload: dict[str, object],
     genie_space_id: str,
 ) -> ExactGatewayRuntimeProof:
-    env = _env_map(payload)
-    required = (
-        "MIP_DEFAULT_CATALOG",
-        "MIP_AGENT_SUPERVISOR_NAME",
-        "MIP_AGENT_RUNTIME_CLIENT_ID",
-        "MIP_REVIEWED_FUNCTION_OWNER",
-        "MIP_AGENT_PROXY_CLIENT_ID",
-        "MIP_AGENT_PROXY_CREDENTIAL_ID",
-        "MIP_AGENT_PROXY_SECRET_REFERENCE",
-        "MIP_AI_GATEWAY_ENDPOINT",
-        "MIP_AI_GATEWAY_AGENT_MODEL",
-        "MIP_AI_GATEWAY_AGENT_MODEL_VERSION",
-        "MIP_AI_GATEWAY_AGENT_MODEL_SOURCE",
-        "MIP_AI_GATEWAY_EXPERIMENT_NAME",
-        "MIP_AI_GATEWAY_EXPERIMENT_ID",
-        "MIP_AI_GATEWAY_INFERENCE_TABLE",
-        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256",
-    )
-    if not genie_space_id.strip() or not all(env.get(name) for name in required):
-        raise RuntimeError("App rollback payload lacks its exact Gateway resource contract")
-    proof = resolve_exact_resource_proof(
+    return payload_resource_proof(
         workspace,
-        supervisor_name=env["MIP_AGENT_SUPERVISOR_NAME"],
-        catalog=env["MIP_DEFAULT_CATALOG"],
+        payload=payload,
         genie_space_id=genie_space_id,
-        runtime_application_id=env["MIP_AGENT_RUNTIME_CLIENT_ID"],
-        reviewed_function_owner=env["MIP_REVIEWED_FUNCTION_OWNER"],
-        proxy_caller_application_id=env["MIP_AGENT_PROXY_CLIENT_ID"],
-        proxy_caller_credential_id=env["MIP_AGENT_PROXY_CREDENTIAL_ID"],
-        proxy_caller_secret_reference=env["MIP_AGENT_PROXY_SECRET_REFERENCE"],
-        supervisor_id=env["MIP_AGENT_SUPERVISOR_ID"],
-        gateway_endpoint=env["MIP_AI_GATEWAY_ENDPOINT"],
-        gateway_model_family_name=env.get("MIP_AI_GATEWAY_AGENT_MODEL_FAMILY"),
-        gateway_experiment_base_name=env.get("MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE"),
-        gateway_table_prefix=env.get("MIP_AI_GATEWAY_TABLE_PREFIX"),
-        require_resource_binding=True,
+        resolve_exact_resource_proof=resolve_exact_resource_proof,
     )
-    expected = {
-        "gateway_model_name": env["MIP_AI_GATEWAY_AGENT_MODEL"],
-        "gateway_model_version": env["MIP_AI_GATEWAY_AGENT_MODEL_VERSION"],
-        "gateway_model_source": env["MIP_AI_GATEWAY_AGENT_MODEL_SOURCE"],
-        "gateway_experiment_name": env["MIP_AI_GATEWAY_EXPERIMENT_NAME"],
-        "gateway_experiment_id": env["MIP_AI_GATEWAY_EXPERIMENT_ID"],
-        "gateway_inference_table": env["MIP_AI_GATEWAY_INFERENCE_TABLE"],
-    }
-    drifted = sorted(key for key, value in expected.items() if proof.contract.get(key) != value)
-    if drifted or proof.digest != env["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256"]:
-        raise RuntimeError(
-            "App rollback payload does not match its live exact Gateway resource proof"
-        )
-    return proof
 
 
 def _stored_resource_proof(
