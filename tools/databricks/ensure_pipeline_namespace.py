@@ -5,6 +5,15 @@ Databricks Asset Bundles cannot create a pipeline whose target catalog/schema
 does not already exist. The full Module 0 DDL remains a bundle job because it
 also creates governed tables; this helper deliberately creates only the empty
 catalog and ``silver`` schema needed to break that first-install cycle.
+
+It is the governed deploy's first catalog creator, so it stamps the install
+marker (``mip.install_key`` = ``MIP_CLIENT``, M1-PR3) in the same create
+call: an interrupted first install then finds its own catalog marked, and the
+pre-lease install check (tools/clients/install_checks.py) accepts it. A
+catalog it found absent must read back with exactly that marker, even after a
+concurrent-create conflict; an existing catalog carrying another install's
+marker refuses; an existing unmarked one is never altered (the pre-lease
+check already decided whether this deployer holds it).
 """
 
 from __future__ import annotations
@@ -14,6 +23,7 @@ import os
 import re
 from collections.abc import Callable
 from types import SimpleNamespace
+from typing import Any
 
 from databricks.sdk import AccountClient, WorkspaceClient
 from databricks.sdk.errors import (
@@ -23,6 +33,7 @@ from databricks.sdk.errors import (
     ResourceConflict,
     ResourceDoesNotExist,
 )
+from tools.clients.install_checks import INSTALL_KEY_PROPERTY
 from tools.databricks.campaign_treatment_identity_probe import target_group_membership_probe
 from tools.databricks.oauth_credential_boundary import (
     held_deployment_credential_assertion,
@@ -37,6 +48,8 @@ from tools.databricks.uc_target_identity import workspace_target_identity
 from tools.databricks.workspace_auth import deployment_workspace_client
 
 _IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]{0,254}$")
+# MIP_CLIENT's own shape (tools/clients/schema.py).
+_INSTALL_KEY_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
 _MANAGED_CATALOG_TYPE = "MANAGED_CATALOG"
 _CREATE_CONFLICTS = (
     AlreadyExists,
@@ -183,6 +196,18 @@ def _verify_catalog(
     _verify_owners(owner_policies, catalog)
 
 
+def _verify_install_marker(catalog: object, *, install_key: str, attempted_create: bool) -> None:
+    properties = getattr(catalog, "properties", None) or {}
+    marker = str(properties.get(INSTALL_KEY_PROPERTY) or "").strip()
+    if marker and marker != install_key:
+        raise RuntimeError(f"Pipeline catalog carries {INSTALL_KEY_PROPERTY} for another install")
+    if attempted_create and marker != install_key:
+        raise RuntimeError(
+            f"Pipeline catalog was absent, but its readback does not carry this install's "
+            f"{INSTALL_KEY_PROPERTY}: another creator won the create"
+        )
+
+
 def _verify_schema(
     schema: object,
     *,
@@ -217,16 +242,20 @@ def ensure_pipeline_namespace(
     assert_single_writer: Callable[[], None] | None = None,
     workspace: WorkspaceClient | None = None,
     storage_root: str | None = None,
+    install_key: str | None = None,
 ) -> tuple[bool, bool]:
     """Create and verify only the empty namespace needed by the DAB pipeline.
 
     ``storage_root`` (the client profile's MIP_UC_CATALOG_STORAGE_ROOT, M1-PR3)
-    is the catalog's managed location when this call creates it; an existing
+    is the catalog's managed location when this call creates it, and
+    ``install_key`` (MIP_CLIENT) its ``mip.install_key`` marker; an existing
     catalog is never altered.
     """
 
     catalog_name = _validate_identifier("catalog", catalog)
     schema_name = _validate_identifier("schema", schema)
+    if install_key is not None and not _INSTALL_KEY_RE.fullmatch(install_key):
+        raise ValueError("Invalid install key (MIP_CLIENT)")
     client = workspace or deployment_workspace_client()
     current_metastore = client.metastores.current()
     metastore_id = str(getattr(current_metastore, "metastore_id", "") or "").strip()
@@ -246,19 +275,17 @@ def ensure_pipeline_namespace(
 
     catalog_object = _get_or_none(client.catalogs.get, catalog_name)
     catalog_created = False
+    attempted_create = catalog_object is None
     if catalog_object is None:
+        create_kwargs: dict[str, Any] = {
+            "comment": "Mortgage Intelligence Platform - Module 0 catalog.",
+        }
+        if storage_root:
+            create_kwargs["storage_root"] = storage_root
+        if install_key is not None:
+            create_kwargs["properties"] = {INSTALL_KEY_PROPERTY: install_key}
         try:
-            if storage_root:
-                client.catalogs.create(
-                    catalog_name,
-                    comment="Mortgage Intelligence Platform - Module 0 catalog.",
-                    storage_root=storage_root,
-                )
-            else:
-                client.catalogs.create(
-                    catalog_name,
-                    comment="Mortgage Intelligence Platform - Module 0 catalog.",
-                )
+            client.catalogs.create(catalog_name, **create_kwargs)
         except _CREATE_CONFLICTS:
             # A concurrent creator is acceptable only if authoritative readback
             # proves the exact governed object below.
@@ -274,6 +301,8 @@ def ensure_pipeline_namespace(
         metastore_id=metastore_id,
         owner_policies=owner_policies,
     )
+    if install_key is not None:
+        _verify_install_marker(catalog_object, install_key=install_key, attempted_create=attempted_create)
 
     full_schema_name = f"{catalog_name}.{schema_name}"
     schema_object = _get_or_none(client.schemas.get, full_schema_name)
@@ -319,6 +348,11 @@ def main() -> int:
         help="App/M2M service-principal application id forbidden from ownership.",
     )
     parser.add_argument(
+        "--install-key",
+        required=True,
+        help="MIP_CLIENT: the install marker a created catalog carries as mip.install_key.",
+    )
+    parser.add_argument(
         "--storage-root-env",
         default=None,
         metavar="NAME",
@@ -353,6 +387,7 @@ def main() -> int:
         approved_owner_principals=approved,
         forbidden_owner_principals=forbidden,
         storage_root=storage_root,
+        install_key=args.install_key,
     )
     print(
         "Verified managed pipeline namespace "

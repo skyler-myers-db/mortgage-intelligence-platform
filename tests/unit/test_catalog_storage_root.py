@@ -115,5 +115,5 @@ def test_the_deploy_names_the_variable_and_never_its_value() -> None:
     text = deploy_entrypoint_text()
 
     assert 'run "$PYTHON" tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}" \\\n  --storage-root-env MIP_UC_CATALOG_STORAGE_ROOT' in text
-    assert "  --storage-root-env MIP_UC_CATALOG_STORAGE_ROOT\n)" in text, "the pipeline namespace bootstrap"
+    assert "  --storage-root-env MIP_UC_CATALOG_STORAGE_ROOT\n  --install-key" in text, "the pipeline namespace bootstrap"
     assert "$MIP_UC_CATALOG_STORAGE_ROOT" not in text.replace('export MIP_UC_CATALOG_STORAGE_ROOT', "")

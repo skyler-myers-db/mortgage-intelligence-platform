@@ -113,10 +113,13 @@ verify_exact_deploy_source
 # empty managed namespace needed by the pipeline. Governed tables remain in the
 # post-bundle mip_init_catalog_schemas job after the App identity is quiesced.
 step "ensure managed UC pipeline namespace exists before bundle apply"
+# A catalog this creates carries the install marker mip.install_key=MIP_CLIENT,
+# which the pre-lease install check reads (tools/clients/install_checks.py).
 _PIPELINE_NAMESPACE_ARGS=(
   --catalog "${MIP_DEFAULT_CATALOG:-mip}"
   --schema silver
   --storage-root-env MIP_UC_CATALOG_STORAGE_ROOT
+  --install-key "$CLIENT_KEY"
 )
 # shellcheck disable=SC2031  # Parent-shell M2M ids survive bounded subshells.
 for _FORBIDDEN_OWNER in \

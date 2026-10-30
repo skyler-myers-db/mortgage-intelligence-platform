@@ -62,10 +62,13 @@ class _ObjectApi:
 
     def create(self, *args: object, **kwargs: object) -> object:
         self.create_calls.append((args, kwargs))
-        self.value = self.created
         if self.conflict:
+            # Another creator won: the catalog is theirs, without this call's properties.
+            self.value = self.created
             raise ResourceAlreadyExists("concurrent create")
-        return self.created
+        # The API stores the properties sent in the create call.
+        self.value = SimpleNamespace(**{**vars(self.created), "properties": kwargs.get("properties")})
+        return self.value
 
 
 class _DirectoryApi:
@@ -590,3 +593,109 @@ def test_inconclusive_identity_group_proof_precedes_namespace_mutation() -> None
         )
 
     assert schemas.create_calls == []
+
+
+# ------------------------------------------------------------- install marker (M1-PR3)
+
+
+def _ensure_install(workspace: object, *, install_key: str = "summit") -> tuple[bool, bool]:
+    return ensure_pipeline_namespace(
+        catalog="mip_customer",
+        forbidden_owner_principals={"runtime-app-client"},
+        workspace=workspace,  # type: ignore[arg-type]
+        account_factory=lambda: _mirrored_account(workspace),  # type: ignore[arg-type]
+        assert_single_writer=lambda: None,
+        install_key=install_key,
+    )
+
+
+def test_a_created_catalog_carries_the_install_marker_from_its_create_call() -> None:
+    workspace, catalogs, _schemas = _workspace()
+
+    assert _ensure_install(workspace) == (True, True)
+
+    assert catalogs.create_calls == [
+        (
+            ("mip_customer",),
+            {
+                "comment": "Mortgage Intelligence Platform - Module 0 catalog.",
+                "properties": {"mip.install_key": "summit"},
+            },
+        )
+    ]
+    assert catalogs.value.properties == {"mip.install_key": "summit"}
+
+
+def test_a_first_install_interrupted_after_the_catalog_create_passes_the_pre_lease_check() -> None:
+    """The next run's install check reads the very catalog this create left behind."""
+
+    from tests.fixtures.client_profiles import DEMO_PROFILE, IDENTITY_IDS
+    from tests.fixtures.live_workspace import LiveAccount, LiveWorkspace, bundle_state
+    from tools.clients import install_checks
+    from tools.clients.environment import RawProfile, resolve
+
+    profile = resolve(RawProfile(values=DEMO_PROFILE))
+    workspace, catalogs, _schemas = _workspace()
+    _ensure_install(workspace, install_key=profile.client)
+    # The catalog now exists: unmarked it would read as {} (exists), never as absent.
+    left_behind = catalogs.value.properties or {}
+    account = LiveAccount(IDENTITY_IDS["account_principal"])
+    warehouse_only = bundle_state(**{"sql_warehouses.mip_serverless_sql": "a0b1c2d3e4f5a6b7"})
+    for facts in (
+        {},  # stopped before the non-App bundle apply
+        {"state": warehouse_only},  # after it, before the App create
+        {"state": warehouse_only, "app": SimpleNamespace(name=profile.app_name), "journal": True},
+    ):
+        next_run = LiveWorkspace(DEMO_PROFILE, identity_ids=IDENTITY_IDS, catalog_properties=left_behind, **facts)
+        assert install_checks.check(profile, next_run, lambda: account) == [], facts
+
+
+def test_a_catalog_another_creator_won_refuses_before_the_schema() -> None:
+    workspace, _catalogs, schemas = _workspace(catalog_conflict=True)
+
+    with pytest.raises(RuntimeError, match="another creator won the create"):
+        _ensure_install(workspace)
+
+    assert schemas.create_calls == []
+
+
+def test_an_existing_catalog_marked_for_another_install_refuses() -> None:
+    marked = SimpleNamespace(**{**vars(_catalog()), "properties": {"mip.install_key": "another-client"}})
+    workspace, catalogs, schemas = _workspace(catalog=marked)
+
+    with pytest.raises(RuntimeError, match="for another install"):
+        _ensure_install(workspace)
+
+    assert catalogs.create_calls == [] and schemas.create_calls == []
+
+
+@pytest.mark.parametrize("properties", [None, {}, {"mip.install_key": "summit"}])
+def test_an_existing_catalog_unmarked_or_marked_for_this_install_is_never_altered(
+    properties: dict[str, str] | None,
+) -> None:
+    existing = SimpleNamespace(**{**vars(_catalog()), "properties": properties})
+    workspace, catalogs, _schemas = _workspace(catalog=existing, schema=_schema())
+
+    # _ObjectApi has no update: any alteration of the catalog would fail here.
+    assert _ensure_install(workspace) == (False, False)
+    assert catalogs.create_calls == []
+
+
+@pytest.mark.parametrize("value", ["", "Summit", "s", "summit_1", "-summit", "s" * 32])
+def test_an_install_key_that_is_not_a_client_key_is_rejected_before_any_call(value: str) -> None:
+    with pytest.raises(ValueError, match="Invalid install key"):
+        ensure_pipeline_namespace(
+            catalog="mip_customer",
+            forbidden_owner_principals={"runtime-app-client"},
+            workspace=object(),  # type: ignore[arg-type]
+            install_key=value,
+        )
+
+
+def test_the_deploy_stamps_the_profiles_client_key() -> None:
+    from tests.fixtures.deploy_script import deploy_entrypoint_text
+
+    text = deploy_entrypoint_text()
+    block = text[text.index("_PIPELINE_NAMESPACE_ARGS=(") :]
+    block = block[: block.index(")")]
+    assert '--install-key "$CLIENT_KEY"' in block

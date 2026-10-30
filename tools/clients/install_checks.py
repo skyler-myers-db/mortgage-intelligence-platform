@@ -17,12 +17,15 @@ reads as absent. Any other read error refuses that check, never "absent".
    gate, which verifies the signed journal and refuses ``not_adopted``
    otherwise, still before the lease.
 2. **install marker.** The catalog ``MIP_DEFAULT_CATALOG`` carries the
-   property ``mip.install_key``. Present, it must equal ``MIP_CLIENT``.
-   Absent on an existing catalog, the catalog is accepted only when this
-   deployer's state binds the App (an install it already holds); otherwise it
-   is another install's catalog or one this deployer never adopted, which a
-   ``CREATE CATALOG IF NOT EXISTS`` would silently reuse. No catalog is a
-   first install.
+   property ``mip.install_key``, which the governed deploy stamps in the very
+   call that creates the catalog (tools/databricks/ensure_pipeline_namespace.py),
+   so a first install interrupted anywhere after that create finds its own
+   catalog marked. Present, it must equal ``MIP_CLIENT``. Absent on an
+   existing catalog, this install's deploy did not create it: it is accepted
+   only when this deployer's state binds the App (an install it already
+   holds, from before the marker); otherwise it is another install's catalog
+   or one this deployer never adopted, which a ``CREATE CATALOG IF NOT
+   EXISTS`` would silently reuse. No catalog is a first install.
 3. **Cotality share.** The source catalog (``MIP_COTALITY_SOURCE_*``, the
    canonical names when unset; backend/config/source_names.py) is a Delta
    Sharing catalog, mounted from ``MIP_COTALITY_SHARE_PROVIDER`` and
@@ -150,8 +153,9 @@ class InstallChecks:
         elif not marker and not self.app_bound:
             self.lines.append(
                 f"install marker: MIP_DEFAULT_CATALOG exists without {INSTALL_KEY_PROPERTY}, and this "
-                "deployer's state binds no App: a catalog this deployer never adopted, which CREATE "
-                "CATALOG IF NOT EXISTS would silently reuse (adopt the install first, plan M2-PR6)"
+                "deployer's state binds no App: a catalog this install's deploy did not create, which "
+                "CREATE CATALOG IF NOT EXISTS would silently reuse (an install from before the marker: "
+                "adopt it first, plan M2-PR6; any other catalog: set another MIP_DEFAULT_CATALOG)"
             )
         return True
 

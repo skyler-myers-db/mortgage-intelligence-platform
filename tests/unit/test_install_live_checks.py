@@ -186,8 +186,9 @@ def test_an_unmarked_catalog_with_no_app_in_this_deployers_state_refuses(
     assert code == 2
     assert _refusals(text) == [
         "install marker: MIP_DEFAULT_CATALOG exists without mip.install_key, and this deployer's state "
-        "binds no App: a catalog this deployer never adopted, which CREATE CATALOG IF NOT EXISTS would "
-        "silently reuse (adopt the install first, plan M2-PR6)"
+        "binds no App: a catalog this install's deploy did not create, which CREATE CATALOG IF NOT "
+        "EXISTS would silently reuse (an install from before the marker: adopt it first, plan M2-PR6; "
+        "any other catalog: set another MIP_DEFAULT_CATALOG)"
     ]
 
 

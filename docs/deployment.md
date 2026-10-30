@@ -838,10 +838,16 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
      first-install journal may own, which the pre-lease bundle plan gate
      judges with the verified journal;
    - **install marker**: the catalog property `mip.install_key`, when
-     present, equals `MIP_CLIENT`. An existing catalog without it is accepted
-     only when this deployer's state binds the App, so `CREATE CATALOG IF NOT
-     EXISTS` never silently reuses another install's catalog. No catalog is a
-     first install;
+     present, equals `MIP_CLIENT`. The deploy stamps it in the very call that
+     creates the catalog (`tools/databricks/ensure_pipeline_namespace.py
+     --install-key "$CLIENT_KEY"`), so a first install interrupted anywhere
+     after that create finds its own catalog marked; a catalog the bootstrap
+     found absent must read back with exactly that marker. An existing catalog
+     without it was not created by this install's deploy and is accepted only
+     when this deployer's state binds the App (an install from before the
+     marker), so `CREATE CATALOG IF NOT EXISTS` never silently reuses another
+     install's catalog; the bootstrap never alters an existing catalog. No
+     catalog is a first install;
    - **Cotality share**: the source catalog is a Delta Sharing catalog from
      `MIP_COTALITY_SHARE_PROVIDER` / `MIP_COTALITY_SHARE_NAME` (when set), and
      all seven source tables resolve;
