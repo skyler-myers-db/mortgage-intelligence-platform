@@ -826,6 +826,43 @@ main checkout shared by agent worktrees) looks like a private install, so a
 from a checkout that owns its `node_modules` and that nothing else links to,
 or answer no at the prompt and refresh the shared install deliberately.
 
+### Cotality source share
+
+The silver lift reads the Cotality share by its canonical names: catalog
+`cotality_mortgage_data`, schema `corelogic` and tables named
+`entrada_eval_<stem>` (`backend/config/source_names.py`). A workspace whose
+share is mounted under other names sets three deployment controls, in the
+shell or in `.env.local` (a non-empty shell value wins, as for every control):
+
+```bash
+MIP_COTALITY_SOURCE_CATALOG="acme_cotality"
+MIP_COTALITY_SOURCE_SCHEMA="mortgage"
+# The share's table-name prefix; "-" when its tables carry none.
+MIP_COTALITY_SOURCE_TABLE_PREFIX="-"
+```
+
+- Unset or blank means the canonical name. Blank cannot mean "no table
+  prefix", because a blank value is unset in every layer, so that is `-`.
+- The catalog and schema must be lowercase unquoted identifiers, and the
+  prefix 1 to 64 lowercase letters, digits or `_`, or `-`. A template value
+  (`<...>` or `00000000PLACEHOLDER`) is refused, not read as unset. The deploy
+  preflight exits 2 on any of these before the first render, and
+  `render_sql.py`, `bundle_env.py`, `provision_genie_space.py` and
+  `ensure_asset_lineage_view.py`, run on their own, refuse the same values
+  before any workspace call.
+- One resolution feeds every reader: the rendered SQL (a closed-shape rewrite
+  of the canonical names, then a check that refuses the whole render, naming
+  the file and line, if a canonical token is left), the observed lineage
+  view's share-catalog filter, the Genie space spec, and the
+  `cotality_source_*` bundle variables. `databricks.yml` hands those to the
+  feature pipeline's configuration. The pipeline has no default source: a run
+  whose configuration does not name one fails before it reads a table.
+- These are local deploy controls for now. `deploy-dev.yml` and `nightly.yml`
+  are parked and do not forward them; per-client CI reads them from the
+  client profile once M1-PR7 lands.
+- The App runtime (asset registry, lineage registry and Genie guards) still
+  names the canonical share until its settings move onto these names (M3-PR2).
+
 ### Deploy interpreter
 
 `deploy.sh` runs every repo tool with one interpreter. By default that is
@@ -1966,7 +2003,8 @@ identity, between the `observed lineage view: publish` markers in
 1. Probe `system.access.table_lineage` with a zero-row `SELECT`.
 2. `CREATE OR REPLACE VIEW` from the file rendered for `MIP_DEFAULT_CATALOG`
    (`tools/render_sql.py` rewrites the view name and the two
-   `*_catalog = '<catalog>'` literals; the share catalog literal is fixed).
+   `*_catalog = '<catalog>'` literals, and the share catalog literal to
+   `MIP_COTALITY_SOURCE_CATALOG` when that is set: "Cotality source share").
 3. Check with `DESCRIBE TABLE` that the view exposes exactly those four
    columns.
 4. `GRANT SELECT ON TABLE <catalog>.audit.asset_lineage` to the App service

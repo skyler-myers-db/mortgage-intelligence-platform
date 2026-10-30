@@ -203,3 +203,16 @@ def test_the_preflight_block_accepts_the_no_prefix_spelling_for_the_prefix_only(
     assert "MIP_COTALITY_SOURCE_TABLE_PREFIX=-" in prefix.stdout.splitlines()
     for name in ("MIP_COTALITY_SOURCE_CATALOG", "MIP_COTALITY_SOURCE_SCHEMA"):
         assert _run_block(bash, {name: "-"}).returncode == 2, name
+
+
+def test_the_deployment_guide_documents_the_source_controls() -> None:
+    """An operator learns the names, the no-prefix spelling and that CI does not carry them yet."""
+
+    guide = (Path(__file__).resolve().parents[2] / "docs" / "deployment.md").read_text(encoding="utf-8")
+    section = guide[guide.index("### Cotality source share") : guide.index("### Deploy interpreter")]
+
+    for name in source_names.ENV_NAMES:
+        assert f"{name}=" in section, name
+    assert f'MIP_COTALITY_SOURCE_TABLE_PREFIX="{source_names.NO_TABLE_PREFIX}"' in section
+    assert "template value" in section and "local deploy controls" in section
+    assert "the share catalog literal is fixed" not in guide
