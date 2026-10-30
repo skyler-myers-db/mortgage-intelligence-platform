@@ -18,6 +18,7 @@ from tools.databricks import bundle_plan_gate as gate
 from tools.databricks.bundle_plan_shape import parse_plan
 from tools.databricks.deploy_plan_report import (
     PUBLIC_SCHEMA,
+    Deferral,
     PlanReport,
     Refusal,
     UnsafePublicValue,
@@ -127,8 +128,30 @@ def test_the_public_summary_has_a_closed_set_of_keys() -> None:
             app_bound=False,
             refusals=(Refusal(code="made_up", resource="apps.mip_app", remedy="r"),),
         ),
+        PlanReport(
+            position="pre-lease",
+            app_resource="apps.mip_app",
+            app_bound=False,
+            deferrals=(Deferral(code="made_up", resource="apps.mip_app", note="n"),),
+        ),
+        PlanReport(
+            position="pre-lease",
+            app_resource="apps.mip_app",
+            app_bound=False,
+            deferrals=(Deferral(code="journal_owned", resource="synthetic-mip_app", note="n"),),
+        ),
     ),
-    ids=("resolved-app", "position", "digest", "cli-version", "resource", "related", "code"),
+    ids=(
+        "resolved-app",
+        "position",
+        "digest",
+        "cli-version",
+        "resource",
+        "related",
+        "code",
+        "deferral-code",
+        "deferral-resource",
+    ),
 )
 def test_a_value_outside_the_public_classes_refuses_to_render(report: PlanReport) -> None:
     with pytest.raises(UnsafePublicValue):
