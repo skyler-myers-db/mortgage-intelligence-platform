@@ -236,7 +236,12 @@ def test_the_client_validate_exports_todays_names_and_the_client_root(
         assert child[f"BUNDLE_VAR_{name}"] == defaults[name]["default"], name
     assert child["MIP_APP_NAME"] == "mip-app" and child["MIP_LAKEBASE_INSTANCE"] == "mip-app-state"
     assert child["BUNDLE_VAR_lender_name"] == "Summit Mortgage"
+    # The one intended difference from the retired dev render: the verifier is
+    # the profile's MIP_IDENTITY_IDS_JSON.verifier, never the environment's
+    # MIP_AI_GATEWAY_VERIFIER_CLIENT_ID (which the dev target read, and without
+    # which it rendered the placeholder).
     assert child["BUNDLE_VAR_ai_gateway_verifier_client_id"] == IDENTITY_IDS["verifier"]
+    assert "MIP_AI_GATEWAY_VERIFIER_CLIENT_ID" not in paychex_shaped_profile()
     # The client target's own variables, from the profile alone.
     assert child["BUNDLE_VAR_client_key"] == CLIENT
     assert child["BUNDLE_VAR_deployer_principal"] == DEPLOYER
@@ -269,3 +274,26 @@ def test_an_ambient_client_variable_never_reaches_the_cli(
         assert bundle_env.main() == 0, capsys.readouterr().err
         assert seen.get("BUNDLE_VAR_client_key") == expected, target
         assert "BUNDLE_VAR_jobs_principal" not in seen, target
+
+
+@pytest.mark.parametrize("alias", ["MIP_AI_GATEWAY_VERIFIER_CLIENT_ID", "DATABRICKS_VERIFIER_CLIENT_ID"])
+def test_a_verifier_alias_that_is_not_the_profiles_is_refused_before_the_cli(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], alias: str
+) -> None:
+    """An ambient verifier id can neither replace the profile's nor be silently dropped."""
+
+    for name in [name for name in os.environ if name.startswith(_AMBIENT_PREFIXES)]:
+        monkeypatch.delenv(name)
+    monkeypatch.setenv(alias, IDENTITY_IDS["admin"])
+    env_local = tmp_path / ".env.local"
+    env_local.write_text(env_file_text(paychex_shaped_profile()), encoding="utf-8")
+    monkeypatch.setattr(bundle_env, "ENV_LOCAL", env_local)
+    monkeypatch.setattr(bundle_env, "BUNDLE_ROOT", tmp_path / "bundle-root")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(bundle_env.subprocess, "run", lambda command, **_kwargs: calls.append(command))
+    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "client"])
+
+    assert bundle_env.main() == 2
+    err = capsys.readouterr().err
+    assert f"{alias}: must equal MIP_IDENTITY_IDS_JSON.verifier" in err
+    assert IDENTITY_IDS["admin"] not in err and calls == []
