@@ -16,6 +16,10 @@
 # immediately before the non-App bundle apply, so a plan that changed since the
 # first gate (time of check, time of use) is judged again, with no journal
 # deferral. A refusal exits 2.
+# pre-lease also previews the App ACL the run's release access convergence
+# will set (bundle_plan_app_acl): the private report names each kept, added,
+# removed or changed grant, and an ACL that converger would refuse refuses. A
+# dry run without the four release identities skips the preview.
 run_bundle_plan_gate() {
   local position="${1:?bundle plan gate position is required}"
   local plan_json report_json
@@ -28,6 +32,19 @@ run_bundle_plan_gate() {
         --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE"
         --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
       )
+      # shellcheck disable=SC2031  # Parent-shell client IDs are unchanged by mint subshells.
+      if [[ -n "${DATABRICKS_RELEASE_PROBE_CLIENT_ID:-}" && \
+            -n "${DATABRICKS_CLIENT_ID:-}" && \
+            -n "${DATABRICKS_OPERATOR2_CLIENT_ID:-}" && \
+            -n "${DATABRICKS_ADMIN_CLIENT_ID:-}" ]]; then
+        journal_args+=(
+          --app-acl-app-name "$_GRANTS_APP_NAME"
+          --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID"
+          --normal-application-id "$DATABRICKS_CLIENT_ID"
+          --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID"
+          --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID"
+        )
+      fi
       ;;
     pre-apply) ;;
     *)

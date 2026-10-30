@@ -13,6 +13,11 @@ and serial, the database-instance update an acknowledgement digests, and why
 a deferred collision was deferred.
 It stays with the operator: a local file today, the client workspace's
 plan-reports folder once the governed plan phase writes one (M1-PR7).
+
+The **App ACL preview** (M0-PR5, pre-lease only) says what the run's release
+access convergence will do to the existing App's direct ACL: which grants it
+keeps, adds, removes or changes (``bundle_plan_app_acl``). The public summary
+carries its code and those four counts; only ``full()`` names the principals.
 """
 
 from __future__ import annotations
@@ -37,9 +42,12 @@ REFUSAL_CODES = frozenset(
         "lookup_failed",
         "instance_update_unacked",
         "not_adopted",
+        "app_acl",
     }
 )
 DEFERRAL_CODES = frozenset({"journal_owned"})
+APP_ACL_CODES = frozenset({"unchanged", "changes", "app_absent", "refused"})
+APP_ACL_COUNTS = ("keep", "add", "remove", "change")
 COUNTED_ACTIONS = ("create", "update", "resize", "update_id", "recreate", "delete", "skip")
 _SYMBOLIC = re.compile(r"[a-z][a-z0-9_]*\.[A-Za-z0-9][A-Za-z0-9_-]*(?:\.(?:permissions|grants))?\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -84,6 +92,48 @@ class LookupRecord:
 
 
 @dataclass(frozen=True)
+class AclGrant:
+    """One direct App ACL grant (full report only): principal field, name and level."""
+
+    kind: str  # "user_name", "service_principal_name" or "group_name"
+    principal: str
+    level: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {"kind": self.kind, "principal": self.principal, "level": self.level}
+
+
+@dataclass(frozen=True)
+class AppAclPreview:
+    """What the release access convergence will do to the App's direct ACL."""
+
+    code: str
+    keep: tuple[AclGrant, ...] = ()
+    add: tuple[AclGrant, ...] = ()
+    remove: tuple[AclGrant, ...] = ()
+    change: tuple[tuple[AclGrant, AclGrant], ...] = ()
+
+    def counts(self) -> dict[str, int]:
+        return {name: len(getattr(self, name)) for name in APP_ACL_COUNTS}
+
+    def public(self) -> dict[str, Any]:
+        if self.code not in APP_ACL_CODES:
+            raise UnsafePublicValue("an App ACL preview code is not a reviewed code")
+        return {"code": self.code, **self.counts()}
+
+    def full(self) -> dict[str, Any]:
+        return {
+            **self.public(),
+            "keep": [grant.as_dict() for grant in self.keep],
+            "add": [grant.as_dict() for grant in self.add],
+            "remove": [grant.as_dict() for grant in self.remove],
+            "change": [
+                {"from": before.as_dict(), "to": after.as_dict()} for before, after in self.change
+            ],
+        }
+
+
+@dataclass(frozen=True)
 class PlanReport:
     """What the gate found in one plan, at one position of the deploy."""
 
@@ -101,6 +151,7 @@ class PlanReport:
     instance_update: tuple[Mapping[str, Any], ...] = ()
     lookups: tuple[LookupRecord, ...] = ()
     deferrals: tuple[Deferral, ...] = ()
+    app_acl: AppAclPreview | None = None
 
     @property
     def refused(self) -> bool:
@@ -150,6 +201,7 @@ class PlanReport:
             "instance_update_sha256": self.instance_update_sha256,
             "refusals": refusals,
             "deferred": deferred,
+            "app_acl": None if self.app_acl is None else self.app_acl.public(),
         }
 
     def full(self) -> dict[str, Any]:
@@ -172,6 +224,7 @@ class PlanReport:
             for public, deferral in zip(report["deferred"], self.deferrals, strict=True)
         ]
         report["instance_update"] = [dict(item) for item in self.instance_update]
+        report["app_acl"] = None if self.app_acl is None else self.app_acl.full()
         report["lookups"] = [
             {
                 "resource": record.resource,
