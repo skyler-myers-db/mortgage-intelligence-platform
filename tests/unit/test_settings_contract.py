@@ -70,6 +70,10 @@ def _sample_for_field(field_name: str) -> tuple[str, Any]:
         return "activity", "activity"  # off | activity | scheduled
     if field_name == "mip_genie_refusal_text_capture":
         return "enabled", "enabled"  # enabled | disabled (default disabled)
+    if field_name in {"mip_cotality_source_catalog", "mip_cotality_source_schema"}:
+        return "sentinel_value", "sentinel_value"  # a lowercase UC identifier
+    if field_name == "mip_cotality_source_table_prefix":
+        return "sentinel_", "sentinel_"  # a table prefix, or "-" for none
     annotation = Settings.model_fields[field_name].annotation
     if _annotation_contains(annotation, bool):
         return "false", False
