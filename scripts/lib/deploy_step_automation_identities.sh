@@ -249,7 +249,9 @@ PYEOF
   # Genie turn that fails (one real turn). Each reuses the assertion of the
   # step it protects; any refusal exits 2 here, before this run stops the App.
   # The owner policy resolves owners in account SCIM, so the probes get the
-  # bounded account credential, never the proof-signing key.
+  # bounded account credential, never the proof-signing key. The approved-owner
+  # and Genie-manager lists name principals, so the probe reads them from the
+  # exported environment, never argv: run_with_account_identity echoes argv.
   _PRESTOP_REBASE_UNVERIFIED_APP=0
   if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" ]]; then
     _PRESTOP_REBASE_UNVERIFIED_APP=1
@@ -266,9 +268,7 @@ PYEOF
     --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
     --genie-space-name "$MIP_GENIE_SPACE_NAME" \
-    --rebase-unverified-app "$_PRESTOP_REBASE_UNVERIFIED_APP" \
-    --approved-owner-principals "${MIP_UC_APPROVED_OWNER_PRINCIPALS:-}" \
-    --genie-manager-principals "${MIP_GENIE_MANAGER_PRINCIPALS:-}"
+    --rebase-unverified-app "$_PRESTOP_REBASE_UNVERIFIED_APP"
   # >>> pii-salt pre-stop check >>>
   # Step 4d writes the write-once pii-salt only after an authoritative "listed,
   # key absent". Run the same inventory read-only here, before the lease and

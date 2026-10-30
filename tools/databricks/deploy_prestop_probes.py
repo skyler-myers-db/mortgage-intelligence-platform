@@ -67,6 +67,7 @@ any refusal, before the signed lease and any App stop.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from collections.abc import Callable, Mapping
@@ -106,6 +107,8 @@ from tools.databricks.supervisor_retirement_ack import (
 )
 
 SYSTEM_USERS_GROUP = "users"
+APPROVED_OWNERS_ENV = "MIP_UC_APPROVED_OWNER_PRINCIPALS"
+GENIE_MANAGERS_ENV = "MIP_GENIE_MANAGER_PRINCIPALS"
 # The identity pin_journal signs for a replaced Supervisor; a gap fails after step 0a.
 PINNED_SUPERVISOR_FIELDS = ("supervisor_agent_id", "endpoint_name", "creator", "create_time")
 _REPLACEMENT_HASH = r"[0-9a-f]{12}"
@@ -518,8 +521,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--catalog", required=True)
     parser.add_argument("--genie-space-name", required=True)
     parser.add_argument("--rebase-unverified-app", choices=("0", "1"), required=True)
-    parser.add_argument("--approved-owner-principals", default="")
-    parser.add_argument("--genie-manager-principals", default="")
     args = parser.parse_args(argv)
 
     from databricks.sdk import WorkspaceClient
@@ -544,8 +545,10 @@ def main(argv: list[str] | None = None) -> int:
             canonical_name=args.supervisor_name,
             rebase_unverified_app=args.rebase_unverified_app == "1",
             deployer=args.expected_inventory_principal,
-            approved_owner_principals=args.approved_owner_principals,
-            genie_manager_principals=args.genie_manager_principals,
+            # Read from the environment like the post-stop converger, never from argv:
+            # both lists name principals, and deploy.sh echoes each command it runs.
+            approved_owner_principals=os.environ.get(APPROVED_OWNERS_ENV, ""),
+            genie_manager_principals=os.environ.get(GENIE_MANAGERS_ENV, ""),
         ),
         runtime_application_id=args.runtime_application_id,
         verifier_application_id=args.verifier_application_id,

@@ -333,6 +333,29 @@ def test_an_active_deployment_other_than_the_record_reaches_the_step_0a_restore(
     assert after["app"]["active_deployment"] == "deployment-green"
 
 
+def test_the_approval_lists_reach_the_probe_through_the_environment_only(
+    tmp_path: Path,
+) -> None:
+    # The profile approves owner@summit.example as an owner and
+    # genie-managers-alpha as a Genie manager (tests/fixtures/client_profiles.py).
+    # Both lists are IDENTIFYING, and deploy.sh echoes every command it runs.
+    estate = clean_estate()
+    estate["grants"]["catalog/mip"].append(
+        {"principal": "owner@summit.example", "privileges": ["MANAGE"]}
+    )
+    estate["genie"][GOVERNED_SPACE].append(
+        acl_entry("group_name", "genie-managers-alpha", "CAN_MANAGE")
+    )
+
+    result, _after, reached, _cli_calls = _deploy(tmp_path, estate)
+
+    detail = result.stdout[-3000:] + result.stderr[-6000:]
+    assert reached == ["lease"], detail
+    assert "every owner-equivalent grantee is an approved principal" in result.stdout
+    for value in ("owner@summit.example", "genie-managers-alpha"):
+        assert value not in result.stdout + result.stderr, value
+
+
 @pytest.mark.parametrize(
     ("code", "edit", "env"),
     CASES,

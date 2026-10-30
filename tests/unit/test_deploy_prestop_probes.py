@@ -928,6 +928,37 @@ def test_main_passes_once_the_operator_acknowledges_and_grants_are_clean(
     assert "pre-stop probes passed (read-only)" in capsys.readouterr().out
 
 
+def test_main_reads_the_approval_lists_from_the_environment_never_argv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import databricks.sdk
+
+    from tools.databricks import m2m_access_policy, provision_agentic_resources
+
+    seen: list[Any] = []
+
+    def record(*_args: Any, config: Any, **_kwargs: Any) -> tuple[list[Any], list[str]]:
+        seen.append(config)
+        return [], []
+
+    workspace = _ReadOnlyWorkspace(acls={"governed": _acl()}, app=_app())
+    monkeypatch.setattr(databricks.sdk, "WorkspaceClient", lambda: workspace)
+    monkeypatch.setattr(provision_agentic_resources, "_supervisor_agents", _agents_human)
+    monkeypatch.setattr(m2m_access_policy, "resolve_effective_groups", _walk({}))
+    monkeypatch.setattr(probes, "suite_refusals", record)
+    monkeypatch.setenv(ack.ACKNOWLEDGEMENT_ENV, HUMAN_ID)
+    monkeypatch.setenv("MIP_UC_APPROVED_OWNER_PRINCIPALS", "mip-data-owners,owner@example.invalid")
+    monkeypatch.setenv("MIP_GENIE_MANAGER_PRINCIPALS", "genie-curators")
+
+    assert probes.main(_main_args()) == 0
+    assert [(c.approved_owner_principals, c.genie_manager_principals) for c in seen] == [
+        ("mip-data-owners,owner@example.invalid", "genie-curators")
+    ]
+    with pytest.raises(SystemExit) as refused:
+        probes.main([*_main_args(), "--approved-owner-principals", "owner@example.invalid"])
+    assert refused.value.code == 2, "argv would echo the principals into the deploy transcript"
+
+
 def test_main_resolves_each_principal_through_the_admin_scim_walk(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1101,10 +1132,16 @@ def test_the_probe_runs_after_deployer_auth_and_the_runtime_secret_check() -> No
         '--catalog "${MIP_DEFAULT_CATALOG:-mip}"',
         '--genie-space-name "$MIP_GENIE_SPACE_NAME"',
         '--rebase-unverified-app "$_PRESTOP_REBASE_UNVERIFIED_APP"',
-        '--approved-owner-principals "${MIP_UC_APPROVED_OWNER_PRINCIPALS:-}"',
-        '--genie-manager-principals "${MIP_GENIE_MANAGER_PRINCIPALS:-}"',
     ):
         assert argument in call, argument
+    # The approval lists name principals (IDENTIFYING in the client profile),
+    # and run_with_account_identity echoes argv, so they reach the probe only
+    # through the exported environment, the way the post-stop converger reads
+    # MIP_UC_APPROVED_OWNER_PRINCIPALS.
+    for name in ("MIP_UC_APPROVED_OWNER_PRINCIPALS", "MIP_GENIE_MANAGER_PRINCIPALS"):
+        assert name not in call, name
+        before = script[:probe]
+        assert f"export {name}" in before or f"export {name}=" in before, name
 
 
 def test_dry_run_names_the_probe_without_running_it() -> None:
