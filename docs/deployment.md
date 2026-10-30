@@ -2123,6 +2123,86 @@ through the pre-lease gate and exits before the lease. A live plan phase is
 CI-only (`plan is CI-only; use --dry-run or make bundle-validate`); locally,
 `--phase plan --dry-run` prints the same steps without any Databricks call.
 
+### Keep blue serving: the one bounded quiesce window (M0-PR8)
+
+A release keeps the signed last-good App (blue) serving. It stops the App
+only for a **window reason** the read-only plan predicted
+(`tools/databricks/quiesce_window_plan.py`):
+
+- **WR1** binding diff: the App's live resource bindings differ from the
+  bundle's (any diff, until spike S2 proves an unchanged database binding
+  leaves a running App and its role alone), or a binding id is unresolved;
+- **WR2** App role rotation: `converge_lakebase_oauth_role --check` drifts;
+- **WR3** pending migration: the Lakebase migration plan decides `apply`;
+- **WR4** acknowledged Lakebase instance update (the plan gate's digest).
+
+The plan runs after each bundle plan gate: before the lease (`pre-lease`, so
+`--phase plan` prints it) and again under the lease right before the non-App
+apply (`pre-apply`, the time-of-check recheck). Its private report is written
+mode 0600 and its public line carries codes, booleans, counts and digests
+only. A window opens only when `MIP_ACK_QUIESCE_WINDOW` equals the plan's
+sha256 at both positions; that sha256 covers the reasons, blue's deployment,
+its restore source and that folder's full-tree digest, the env-name set and
+the migration's compatibility, so the opened reasons are exactly the predicted
+ones. Export the digest for that run only. It is a shell-only, one-run value,
+never a `.env.local` line. (The owner hardware-key operation attestation the
+plan names is deferred; this exact digest ack stands in for it.) No reason
+needs no ack, and a reason that appears only at the recheck refuses.
+
+**The window** (`scripts/lib/deploy_quiesce_window_lifecycle.sh`) opens at the
+first mutation that needs it (WR4 before the non-App apply, WR1 before the
+binding update, WR2 before the role convergence, WR3 before the migration):
+it re-validates the plan and the ack, re-proves blue is the App's last
+deployment, journals `window_open` (`<lease root>/<app>.quiesce-window.json`,
+signed) and then stops the App, identity-pinned. It closes right after the
+Lakebase migration: `apps start`; wait for **the deployment the start
+created** (never "active changed"); require SUCCEEDED; prove its source is
+blue's restore source, that folder's full-tree digest is unchanged, its
+`/src/` snapshot has the same digest and its env-name set is the signed
+record's; `app_deployment_rollback repin --to <id>` signs a new record
+version with the same provenance and `predecessor_deployment_id`, checking
+health against the re-pinned id; then the journal closes. A failed proof
+stops the App again and leaves the journal open for the dead-man (M0-PR9). A
+contract migration (`blue_restorable` false) keeps the App stopped until green
+activation closes the window: that outage is part of the acknowledged digest.
+
+With no reason, nothing stops: the binding update is skipped (the bindings
+are re-read under the lease and must still equal the bundle's), the role
+converger refuses any rotation the plan did not predict, and the migration job
+is skipped because the pre-apply plan proved it a noop with a passing verify.
+
+**EXIT-trap states** (`stop_app_after_failed_deploy`): `blue_serving` never
+stops the App and converges runtime access with it up; `blue_degraded` (blue
+serving while its synced-catalog access or the reviewed functions are
+mutated) also re-reconciles those; `window_open` starts and re-pins blue when
+every proof holds, otherwise leaves the window to the dead-man. The rollback's
+`ensure` and `restore` re-pin the same way when they start a stopped blue
+(tier a, only while blue is the App's last deployment); `restore` redeploys
+the signed snapshot (tier b) otherwise.
+
+**Catalog bootstrap skip rule** (attack O12,
+`tools/databricks/catalog_bootstrap_skip_rule.py`). `mip_init_catalog_schemas`
+republishes the reviewed functions, an EXECUTE gap while blue serves. It is
+skipped only when the live `information_schema` routines, parameters and DDL
+contract columns and the treatment table's properties hash-equal the rendered
+sources (read-only, under the lease, right before the job); the grants are
+still reconciled and proven. Otherwise it runs and the PlanReport's
+`execute_gap` predicts the interval and the republished functions.
+
+**Stop contract** (attack O16). The window library and the EXIT-trap
+compensation are the only shell files that stop or start the App, and
+`tools/databricks/stop_primitive_map.py` maps every SDK `apps.stop`, `start`,
+`deploy` and `update` call in `tools/` to the CLI modes that reach it; only
+those two files may call a mutating mode.
+
+**Owed live confirmations.** Spike S7 (a throwaway App): that `apps start`
+creates a new deployment from `default_source_code_path`, whether the env
+config carries over, and the start of a FAILED-active App. Spike S2: whether
+`apps update` with an unchanged database binding touches a running App or its
+role. Until then the code assumes the worst case for both. The live shape of
+`information_schema.routines.routine_definition` is also derived, not
+captured; a reformatted body only ever means "run".
+
 ## Presenter mode (demo workspaces only)
 
 `MIP_PRESENTER_MODE` (default off) shows demo-only affordances to every user

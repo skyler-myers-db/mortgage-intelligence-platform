@@ -90,11 +90,7 @@ recover_interrupted_first_install_app() {
   fi
   APP_FAIL_CLOSED_NAME="$_GRANTS_APP_NAME"
   step "stop journal-owned unsigned first-install App after interrupted deployment"
-  run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
-    --app-name "$_GRANTS_APP_NAME" \
-    --expected-app-id "$FIRST_INSTALL_APP_ID" \
-    --expected-client-id "$FIRST_INSTALL_APP_CLIENT_ID" \
-    --expected-scim-id "$FIRST_INSTALL_APP_SCIM_ID"
+  run stop_journal_owned_first_install_app
   step "quarantine journal-owned App access before exact recovery deletion"
   run "$PYTHON" -m tools.databricks.converge_app_release_access \
     --mode quarantine \

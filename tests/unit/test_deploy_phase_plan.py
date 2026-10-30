@@ -85,6 +85,7 @@ def test_the_plan_phase_dry_run_stops_after_the_pre_lease_gate(tmp_path: Path) -
         ".venv/bin/python -m tools.databricks.bundle_plan_gate check"
         " --plan /tmp/mip-dry-run-bundle-plan-pre-lease.json --position pre-lease --app-key mip_app"
         " --report-out /tmp/mip-dry-run-bundle-plan-report-pre-lease.json"
+        " --execute-gap /tmp/mip-dry-run-catalog-bootstrap-pre-lease.json"
         " --first-install-app-name mip-app --rollback-scope mip-app-rollback"
         " --lakebase-instance mip-app-state",
     ]

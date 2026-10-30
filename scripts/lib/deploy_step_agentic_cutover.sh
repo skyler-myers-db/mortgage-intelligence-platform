@@ -318,6 +318,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       run converge_app_treatment_access quiesce
       TREATMENT_RUNTIME_QUIESCED=1
       APP_UPGRADE_STATE="green_activating_quiesced"
+      # Green activation supersedes the quiesce window states (M0-PR8).
+      end_quiesce_window_at_activation
     fi
     wait_for_app_deployable
     mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET

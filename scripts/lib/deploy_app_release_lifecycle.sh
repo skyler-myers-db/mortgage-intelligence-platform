@@ -287,6 +287,21 @@ stop_app_after_failed_deploy() {
         ;;
     esac
   fi
+  # The quiesce window states (M0-PR8, deploy_quiesce_window_lifecycle.sh)
+  # govern signed blue until green activation: blue_serving and blue_degraded
+  # never stop the App, they converge runtime access with it up; window_open
+  # starts and re-pins blue when proven, else leaves the journaled window to
+  # the dead-man. They come first: an unproven Lakebase or grant proof below
+  # describes a candidate, never a blue this run did not touch.
+  case "${QUIESCE_WINDOW_STATE:-}:${APP_UPGRADE_STATE:-first_install}" in
+    blue_serving:blue_quiesced|blue_serving:blue_quiescing|\
+    blue_degraded:blue_quiesced|blue_degraded:blue_quiescing|\
+    window_open:blue_quiesced|window_open:blue_quiescing)
+      echo "${YLW}[deploy] signed blue is governed by the quiesce window (${QUIESCE_WINDOW_STATE}); compensating without a stop.${RST}" >&2
+      compensate_quiesce_window_state
+      return $?
+      ;;
+  esac
   if [[ "${LAKEBASE_RUNTIME_ACCESS_PROVEN:-0}" -ne 1 ]]; then
     echo "${RED}[deploy] Lakebase runtime access is unproven; stopping and quiescing instead of restoring signed blue.${RST}" >&2
     stop_and_quiesce_unproven_app

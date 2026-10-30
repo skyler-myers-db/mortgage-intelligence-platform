@@ -135,6 +135,9 @@ run_with_account_identity run_with_proof_signing_authority \
   "$PYTHON" -m tools.databricks.ensure_pipeline_namespace \
   "${_PIPELINE_NAMESPACE_ARGS[@]}"
 verify_exact_deploy_source
+# An acknowledged Lakebase instance update (WR4) restarts the database blue
+# reads, so the window opens before the non-App apply that sends it.
+ensure_quiesce_window_open_for WR4
 step "deploy non-App bundle resources without activating an App candidate"
 if [[ "$DRY_RUN" -eq 0 ]]; then
   BUNDLE_SUMMARY_JSON="$("$PYTHON" -m tools.databricks.bundle_env summary -t "$TARGET" -o json)"
@@ -285,27 +288,41 @@ PYEOF
       echo "${RED}[deploy] existing App identity drifted before resource-binding update.${RST}" >&2
       exit 4
     fi
-    step "stop and identity-pin existing App before Lakebase binding update"
-    run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
-      --app-name "$_GRANTS_APP_NAME" \
-      --expected-app-id "$_BINDING_APP_ID" \
-      --expected-client-id "$_BINDING_APP_CLIENT_ID" \
-      --expected-scim-id "$_BINDING_APP_SCIM_ID"
+    if [[ -n "${QUIESCE_WINDOW_STATE:-}" ]]; then
+      # Signed blue keeps serving: a binding diff (WR1) opens the window here.
+      ensure_quiesce_window_open_for WR1
+    else
+      step "stop and identity-pin existing App before Lakebase binding update"
+      run stop_ungoverned_existing_app_before_binding_update
+    fi
     # The mutation verifier compares resource bindings while independently
     # pinning compute state. Stopping is intentional, so establish the stopped
     # state as the authoritative pre-mutation baseline.
     databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_BEFORE"
   fi
-  assert_expected_app_identity "$_GRANTS_APP_NAME"
-  run databricks apps update "$_GRANTS_APP_NAME" \
-    --json "@$APP_RESOURCE_BINDING_PAYLOAD"
-  assert_expected_app_identity "$_GRANTS_APP_NAME"
-  if [[ "$DRY_RUN" -eq 0 ]]; then
-    databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_AFTER"
-    "$PYTHON" -m tools.databricks.app_resource_bindings verify \
+  if [[ -n "${QUIESCE_WINDOW_STATE:-}" && "$QUIESCE_WINDOW_STATE" != "window_open" ]]; then
+    # No window reason: the bindings must already equal the bundle's, read
+    # again now under the lease (time of check, time of use). A diff refuses
+    # with blue still serving; it is never updated outside the window.
+    step "prove the serving App's resource bindings already equal the bundle (no window)"
+    if ! "$PYTHON" -m tools.databricks.app_resource_bindings diff \
       --expected "$APP_RESOURCE_BINDING_PAYLOAD" \
-      --before "$APP_RESOURCE_BINDING_BEFORE" \
-      --after "$APP_RESOURCE_BINDING_AFTER"
+      --live "$APP_RESOURCE_BINDING_BEFORE"; then
+      echo "${RED}[deploy] the App's bindings drifted after the window plan; re-run to plan the window. Blue keeps serving.${RST}" >&2
+      exit 2
+    fi
+  else
+    assert_expected_app_identity "$_GRANTS_APP_NAME"
+    run databricks apps update "$_GRANTS_APP_NAME" \
+      --json "@$APP_RESOURCE_BINDING_PAYLOAD"
+    assert_expected_app_identity "$_GRANTS_APP_NAME"
+    if [[ "$DRY_RUN" -eq 0 ]]; then
+      databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_AFTER"
+      "$PYTHON" -m tools.databricks.app_resource_bindings verify \
+        --expected "$APP_RESOURCE_BINDING_PAYLOAD" \
+        --before "$APP_RESOURCE_BINDING_BEFORE" \
+        --after "$APP_RESOURCE_BINDING_AFTER"
+    fi
   fi
 fi
 
@@ -357,6 +374,11 @@ fi
 # documented databricks_create_role SQL function, which creates LOGIN-only
 # roles.  The helper proves zero ownership, memberships, and non-ACL shared
 # dependencies before any replacement and verifies the resulting live profile.
+# The converger changes the App's role only while the App is STOPPED and
+# refuses otherwise. A planned rotation (WR2) opens the window first; the
+# first install and the unsigned rebase are already stopped. It never stops
+# the App itself any more: a stop for a mutation is the window's alone.
+ensure_quiesce_window_open_for WR2
 step "converge App Lakebase OAuth role to exact LOGIN-only profile"
 run_with_lakebase_bootstrap_authority \
   "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
@@ -365,7 +387,6 @@ run_with_lakebase_bootstrap_authority \
   --application-id "$APP_SP_CLIENT_ID" \
   --role-contract app \
   --app-name "$_GRANTS_APP_NAME" \
-  --stop-app-for-mutation \
   --repair-legacy-replication
 step "converge verifier Lakebase OAuth role to exact LOGIN-only profile"
 run_with_lakebase_bootstrap_authority \

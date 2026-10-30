@@ -27,7 +27,7 @@ wait_for_app_deployable() {
   if [[ "$compute" == "STOPPED" || "$compute" == "STOPPING" ]]; then
     step "app compute is ${compute} — starting before snapshot deploy"
     assert_expected_app_identity "$APP_NAME"
-    run databricks apps start "$APP_NAME"
+    run start_stopped_app_before_activation
     assert_expected_app_identity "$APP_NAME"
   fi
   for i in $(seq 1 90); do

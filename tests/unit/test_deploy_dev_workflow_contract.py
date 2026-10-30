@@ -1356,21 +1356,31 @@ def test_stale_runtime_bootstrap_grants_are_reconciled_before_build_or_bundle() 
 
 
 def test_existing_app_is_stopped_and_identity_pinned_before_binding_update() -> None:
+    """Signed blue: a binding diff (WR1) opens the quiesce window, which stops it
+    identity-pinned (M0-PR8); no diff never updates. Ungoverned: the stop is
+    the window library's identity-pinned function."""
+
     script = _deploy_entrypoint_text()
     existing_update = script.index('step "update existing Databricks App resource bindings')
     identity_read = script.index("_BINDING_APP_ID _BINDING_APP_CLIENT_ID", existing_update)
-    stop = script.index("tools.databricks.stop_app_fail_closed", identity_read)
+    window = script.index("ensure_quiesce_window_open_for WR1", identity_read)
+    stop = script.index("run stop_ungoverned_existing_app_before_binding_update", window)
     stopped_baseline = script.index(
         'databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_BEFORE"',
         stop,
     )
+    no_window = script.index("tools.databricks.app_resource_bindings diff", stopped_baseline)
     update = script.index('databricks apps update "$_GRANTS_APP_NAME"', stop)
     convergence = script.index("tools.databricks.converge_lakebase_oauth_role", update)
 
-    assert existing_update < identity_read < stop < stopped_baseline < update < convergence
-    assert '--expected-app-id "$_BINDING_APP_ID"' in script[stop:update]
-    assert '--expected-client-id "$_BINDING_APP_CLIENT_ID"' in script[stop:update]
-    assert '--expected-scim-id "$_BINDING_APP_SCIM_ID"' in script[stop:update]
+    assert existing_update < identity_read < window < stop < stopped_baseline < no_window < update
+    assert update < convergence
+    helper = _shell_function("stop_ungoverned_existing_app_before_binding_update")
+    assert '--expected-app-id "$_BINDING_APP_ID"' in helper
+    assert '--expected-client-id "$_BINDING_APP_CLIENT_ID"' in helper
+    assert '--expected-scim-id "$_BINDING_APP_SCIM_ID"' in helper
+    opener = _shell_function("open_quiesce_window")
+    assert '--expected-app-id "$_EXISTING_APP_ID"' in opener
 
 
 def test_all_post_inventory_name_mutations_have_exact_identity_boundaries() -> None:
@@ -1380,7 +1390,10 @@ def test_all_post_inventory_name_mutations_have_exact_identity_boundaries() -> N
     assert script.index('assert_expected_app_identity "$_GRANTS_APP_NAME"', update) > update
 
     wait_helper = _shell_function("wait_for_app_deployable")
-    start = wait_helper.index('databricks apps start "$APP_NAME"')
+    start = wait_helper.index("run start_stopped_app_before_activation")
+    assert 'databricks apps start "$APP_NAME"' in _shell_function(
+        "start_stopped_app_before_activation"
+    )
     assert wait_helper.rfind('assert_expected_app_identity "$APP_NAME"', 0, start) > 0
     assert wait_helper.index('assert_expected_app_identity "$APP_NAME"', start) > start
 
@@ -1390,9 +1403,12 @@ def test_all_post_inventory_name_mutations_have_exact_identity_boundaries() -> N
     assert deploy_helper.index('assert_expected_app_identity "$APP_NAME"', deploy) > deploy
 
     no_proof = _unsigned_candidate_rollback_block()
-    final_stop = no_proof.index("tools.databricks.stop_app_fail_closed")
+    final_stop = no_proof.index("run stop_unproven_candidate_before_rollback")
     final_quiesce = no_proof.index("converge_app_treatment_access quiesce")
-    assert '"${APP_EXPECTED_IDENTITY_ARGS[@]}"' in no_proof[final_stop:final_quiesce]
+    assert final_stop < final_quiesce
+    stop_helper = _shell_function("stop_unproven_candidate_before_rollback")
+    assert "tools.databricks.stop_app_fail_closed" in stop_helper
+    assert '"${APP_EXPECTED_IDENTITY_ARGS[@]}"' in stop_helper
 
 
 def test_lakebase_access_proof_brackets_binding_role_rotation_and_migration() -> None:
@@ -2386,7 +2402,7 @@ def test_deploy_uses_isolated_release_probe_only_during_signed_capture_gate() ->
     rebase = script.index('if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" && \\')
     absence_gate = script.index("tools.databricks.app_rollback_bootstrap_gate", rebase)
     fail_closed_arm = script.index("APP_FAIL_CLOSED_ARMED=1", absence_gate)
-    stop = script.index("tools.databricks.stop_app_fail_closed", rebase)
+    stop = script.index("run stop_unsigned_rebase_app", rebase)
     quarantine = script.index("tools.databricks.converge_app_release_access", stop)
     quarantined_state = script.index("APP_ACCESS_QUARANTINED=1", quarantine)
     treatment_quiesce = script.index(
@@ -2403,8 +2419,8 @@ def test_deploy_uses_isolated_release_probe_only_during_signed_capture_gate() ->
     first_snapshot_else = script.index("\nelse\n", first_snapshot)
     assert rebase < absence_gate < fail_closed_arm < stop < quarantine
     assert stop < quarantined_state < treatment_quiesce < rebase_first_install
-    rebase_stop = script[stop:quarantine]
-    assert '"${APP_EXPECTED_IDENTITY_ARGS[@]}"' in rebase_stop
+    assert "run stop_unsigned_rebase_app" in script[stop:quarantine]
+    assert '"${APP_EXPECTED_IDENTITY_ARGS[@]}"' in _shell_function("stop_unsigned_rebase_app")
     assert rebase_first_install < first_snapshot_guard < first_snapshot < first_snapshot_else
     assert "_EXISTING_APP_SP_CLIENT_ID" not in script[first_snapshot_guard:first_snapshot]
 
@@ -2545,7 +2561,8 @@ def test_explicit_unsigned_candidate_rollback_delegates_to_quarantine_aware_rest
               --expected-scim-id app-scim-id
             )
             TREATMENT_RUNTIME_QUIESCED=0
-            PYTHON=/nonexistent/python
+            PYTHON=python_stub
+            python_stub() {{ printf 'python:%s\n' "$*" >> {shlex.quote(str(calls))}; }}
             step() {{ printf 'step:%s\n' "$1" >> {shlex.quote(str(calls))}; }}
             converge_app_treatment_access() {{ printf 'treatment:%s\n' "$1" >> {shlex.quote(str(calls))}; }}
             restore_signed_blue_while_quiesced() {{ printf 'restore-helper\n' >> {shlex.quote(str(calls))}; }}
@@ -2553,6 +2570,7 @@ def test_explicit_unsigned_candidate_rollback_delegates_to_quarantine_aware_rest
               printf 'run:%s\n' "$*" >> {shlex.quote(str(calls))}
               if declare -F "$1" >/dev/null; then "$@"; fi
             }}
+            {_shell_function("stop_unproven_candidate_before_rollback")}
             {_unsigned_candidate_rollback_block()}
             """
         ),
@@ -3368,7 +3386,7 @@ def test_first_install_creation_is_preceded_by_signed_durable_recovery_intent() 
         inventory,
     )
     recovery_function = script.index("recover_interrupted_first_install_app()")
-    recovery_stop = script.index("tools.databricks.stop_app_fail_closed", recovery_function)
+    recovery_stop = script.index("run stop_journal_owned_first_install_app", recovery_function)
     recovery_quarantine = script.index(
         "tools.databricks.converge_app_release_access",
         recovery_stop,
@@ -4025,7 +4043,7 @@ def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
         'step "quiesce app treatment writes immediately before treatment-table DDL"'
     )
     uc_init = script.index(
-        "\ninitialize_uc_targets_and_reconcile_function_grants\n",
+        "\n  initialize_uc_targets_and_reconcile_function_grants\n",
         post_bundle_quiesce,
     )
     constraint_convergence = script.index(
@@ -4345,7 +4363,10 @@ def test_reviewed_function_execute_grants_are_reconciled_after_gold_refresh() ->
 
     assert initial_proof < lakebase_migration < function_postflight < first_proven
     assert "REVIEWED_FUNCTION_GRANTS_PROVEN=1" not in script[initial_proof:function_postflight]
-    assert script.count("\ninitialize_uc_targets_and_reconcile_function_grants\n") == 1
+    # Run unless the live-state skip rule (M0-PR8, attack O12) proves the
+    # catalog already equals the bootstrap; then only the grants are reconciled.
+    assert script.count("\n  initialize_uc_targets_and_reconcile_function_grants\n") == 1
+    assert script.count("\n  reconcile_reviewed_function_execute_grants\n") == 1
     assert script.count("\nrefresh_gold_and_reconcile_function_grants\n") == 1
     invocation = script.index("\nrefresh_gold_and_reconcile_function_grants\n")
     assert invocation < script.index(runtime_provision)
@@ -5915,7 +5936,7 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
     assert 'kind != "apps"' in script
     assert 'BUNDLE_NON_APP_ARGS+=(--select "$_bundle_selector")' in script
     assert script.index('APP_UPGRADE_STATE="blue_active"') < preserve_old
-    rollback_ensure = script.index("tools.databricks.app_deployment_rollback ensure")
+    rollback_ensure = script.index('prove_or_restore_signed_blue "$APP_ROLLBACK_BINDING_ENV"')
     blue_quiescing = script.index('APP_UPGRADE_STATE="blue_quiescing"')
     activating = script.index('APP_UPGRADE_STATE="green_activating_quiesced"')
     green_capture = script.index('capture_last_good_app "${AGENT_RUNTIME_BINDING_SHA256:-}"')
@@ -6655,8 +6676,10 @@ def test_agent_proxy_acl_lifecycle_is_bound_and_compensated_before_lease_release
     )
     assert exact_identity_export < unsigned_rebase_stop < proxy_compensation_armed
     stop_block = script[unsigned_rebase_stop:proxy_compensation_armed]
-    assert "tools.databricks.stop_app_fail_closed" in stop_block
-    assert '"${APP_EXPECTED_IDENTITY_ARGS[@]}"' in stop_block
+    assert "run stop_unsigned_rebase_app" in stop_block
+    helper = _shell_function("stop_unsigned_rebase_app")
+    assert "tools.databricks.stop_app_fail_closed" in helper
+    assert '"${APP_EXPECTED_IDENTITY_ARGS[@]}"' in helper
     helper = _shell_function("converge_agent_proxy_boundary")
     for required in (
         "--supervisor-endpoint",

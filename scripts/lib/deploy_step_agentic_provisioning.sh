@@ -277,9 +277,7 @@ if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]]; then
 fi
 if [[ -n "${_EXISTING_APP_ID:-}" && "$APP_UPGRADE_STATE" == "first_install" ]]; then
   step "stop the exact unsigned rebase App before legacy proxy ACL migration"
-  run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
-    --app-name "$_GRANTS_APP_NAME" \
-    "${APP_EXPECTED_IDENTITY_ARGS[@]}"
+  run stop_unsigned_rebase_app
 fi
 step "grant and globally audit the dedicated Supervisor proxy caller"
 if [[ "$DRY_RUN" -eq 0 ]]; then
