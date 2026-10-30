@@ -21,11 +21,13 @@ from the kinds databricks.yml declares
   field diff (``instance_update_digest``). The pre-apply run recomputes the
   diff, so an acknowledgement covers exactly the diff that was reviewed.
 
-**Not adopted** (attack O14). When every refusal is a collision and the plan
-does not bind ``apps.<app key>`` (its entry plans ``create``, so the
-deployer's state holds no live id for it), the deployer is looking at an
-install it never adopted. The collisions fold into one ``not_adopted``
-refusal that lists them as detail.
+**Not adopted** (attack O14). When the plan does not bind ``apps.<app key>``
+(its entry plans ``create``, so the deployer's state holds no live id for
+it), that App's own lookup finds it existing, and every refusal is a
+collision, the deployer is looking at an install it never adopted. The
+collisions fold into one ``not_adopted`` refusal that lists them as detail.
+With no App there is no install to adopt: a first install that meets a stray
+same-name object keeps its plain ``collision`` refusals and their remedy.
 
 Exit codes: 0 the plan passes; 2 refused (each refusal printed with its
 remedy) or the plan could not be read. Printed lines carry codes, counts,
@@ -111,9 +113,10 @@ REMEDIES: Mapping[str, str] = MappingProxyType(
             f"full plan report, then re-run with {ACK_ENV} set to its sha256"
         ),
         "not_adopted": (
-            "this deployer's bundle state does not bind the App, and every create collides "
-            "with an existing install; adopt that install into this deployer's state before "
-            "any mutating phase (plan M2-PR6)"
+            "this deployer's bundle state does not bind the App, which already exists, and "
+            "every other refusal is a name collision: an install this deployer never adopted. "
+            "Adopt it into this deployer's state (bundle deployment bind, through a reviewed "
+            "change; the governed adoption flow is plan M2-PR6) before any mutating phase"
         ),
     }
 )
@@ -255,7 +258,16 @@ def evaluate(
         app_bound = False
     else:
         app_bound = app_entry.action != "create"
-    if refusals and not app_bound and all(r.code == "collision" for r in refusals):
+    # An install exists only when the App does: its own lookup must have found it.
+    install_found = any(
+        record.resource == app_resource and record.outcome == "exists" for record in lookups
+    )
+    if (
+        refusals
+        and not app_bound
+        and install_found
+        and all(r.code == "collision" for r in refusals)
+    ):
         refusals = [
             Refusal(
                 code="not_adopted",

@@ -1843,10 +1843,12 @@ leaves the App serving and changes nothing. The gate refuses:
   diff. The refusal prints that digest and the full report holds the diff.
   Review it, then export the digest for that run only. The pre-apply gate
   recomputes the digest, so an acknowledgement covers exactly the reviewed diff;
-- **`not_adopted`**: when every refusal is a collision and the deployer's state
-  does not bind `apps.mip_app` (its entry plans a create), the deployer is
-  looking at an install it never adopted. The collisions fold into this one
-  refusal and are listed as its detail.
+- **`not_adopted`**: when the deployer's state does not bind `apps.mip_app`
+  (its entry plans a create), the App's own lookup finds it existing, and every
+  refusal is a collision, the deployer is looking at an install it never
+  adopted. The collisions fold into this one refusal and are listed as its
+  detail. With no App there is no install: a first install that meets a stray
+  same-name object gets the plain `collision` refusal and its remedy.
 
 Printed lines carry refusal codes, counts, digests and symbolic `<kind>.<key>`
 names only (`PlanReport.public_summary()` in

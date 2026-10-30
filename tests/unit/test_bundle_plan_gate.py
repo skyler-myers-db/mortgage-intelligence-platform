@@ -250,6 +250,30 @@ def test_a_partly_existing_install_still_folds_into_one_not_adopted() -> None:
     assert report.refusals[0].related == ("apps.mip_app",)
 
 
+@pytest.mark.parametrize(
+    ("service", "found"),
+    (
+        ("jobs", "synthetic-mip_ref_seed"),
+        ("warehouses", "synthetic-mip_serverless_sql"),
+        ("experiments", "synthetic-mip_lead_scoring"),
+    ),
+)
+def test_a_stray_same_name_object_on_a_first_install_is_a_plain_collision(
+    service: str, found: str
+) -> None:
+    # No App, so no install to adopt: the actionable collision remedy stays.
+    workspace = fx.RecordingWorkspace({service: {found}})
+
+    report, _workspace, _built = _evaluate(fx.first_install(), workspace)
+
+    assert report.codes == ("collision",)
+    refusal = report.refusals[0]
+    assert refusal.related == () and refusal.remedy == gate.REMEDIES["collision"]
+    assert refusal.detail["names"] == [found]
+    app = next(record for record in report.lookups if record.resource == "apps.mip_app")
+    assert app.outcome == "absent"
+
+
 def test_collisions_do_not_fold_when_the_state_binds_the_app() -> None:
     doc = fx.with_entries(
         fx.first_install(),
