@@ -2145,6 +2145,15 @@ Retired with that workspace (M0-PR3):
   remaining `dev` target is the live install, whose deployed jobs CI must
   never run (docs/runbook.md, "Interim refresh (governed deploy NO-GO)").
 
+**Owner follow-up: `.env.example`.** One line of the operator `.env.local`
+template still describes the retired CI staging install. Agents cannot read
+that template under this repository's permission settings, so the owner
+deletes the line and, in the same change, drops the template's
+`ALLOWED_FILES` entry from the retired-install ratchet and this paragraph.
+Until then the ratchet caps the template at that one line;
+`test_every_allowlist_entry_is_still_needed_and_tracked` fails once the line
+is gone and the entry is not.
+
 The metastore ownership transfer and the staging-catalog ownership handover
 that two former owner steps described were cancelled; neither is part of any
 step below, and no step revokes another team's grant.

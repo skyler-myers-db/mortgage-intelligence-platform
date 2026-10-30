@@ -13,6 +13,7 @@ the scan finds this file's own pattern before any absence is trusted.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -55,6 +56,10 @@ ALLOWED_PREFIXES = {
     ".claude/agent-memory/": "dated agent-memory records, not code, tests, workflows or docs",
     "docs/audits/": "dated audit reports",
 }
+# Allowlist entries only the owner can clear, each tracked by an owner
+# follow-up paragraph in docs/deployment.md until it is cleared.
+DEPLOYMENT_DOC = ROOT / "docs" / "deployment.md"
+OWNER_FOLLOW_UPS = frozenset({".env.example"})
 
 
 def _matching_lines() -> Counter[str]:
@@ -128,3 +133,25 @@ def test_every_allowlist_entry_is_still_needed_and_tracked() -> None:
         assert counts[path] > 0, f"{path} no longer matches; drop its allowlist entry"
     for prefix in ALLOWED_PREFIXES:
         assert any(path.startswith(prefix) for path in counts), f"no {prefix} file matches; drop the prefix"
+
+
+def test_every_owner_cleared_entry_is_a_tracked_owner_follow_up() -> None:
+    """Review of #293: an entry only the owner can clear must not become a permanent cap.
+
+    Each one is capped, and docs/deployment.md carries its owner follow-up,
+    which names the file, the edit and this test; the paragraph goes when the
+    entry does, so the doc never lists a follow-up that is already done.
+    """
+
+    owner_cleared = {path for path, (reason, _cap) in ALLOWED_FILES.items() if "the owner" in reason}
+    assert owner_cleared == OWNER_FOLLOW_UPS, "an owner-cleared entry needs an owner follow-up, and only it"
+    paragraphs = [
+        (match.group(1), " ".join(paragraph.split()))
+        for paragraph in DEPLOYMENT_DOC.read_text(encoding="utf-8").split("\n\n")
+        if (match := re.match(r"\*\*Owner follow-up: `([^`]+)`\.\*\*", paragraph))
+    ]
+    assert sorted(path for path, _body in paragraphs) == sorted(OWNER_FOLLOW_UPS)
+    for path, body in paragraphs:
+        assert ALLOWED_FILES[path][1] is not None, f"{path}: an owner-cleared entry is always capped"
+        assert "`ALLOWED_FILES`" in body and "this paragraph" in body, path
+        assert "`test_every_allowlist_entry_is_still_needed_and_tracked`" in body, path
