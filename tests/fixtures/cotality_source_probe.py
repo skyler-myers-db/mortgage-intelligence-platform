@@ -12,7 +12,9 @@ the child's probe printed:
 * ``verdicts``: both prompt-guard surfaces' verdict for each question read
   from stdin (the Ask Genie prompt matchers and the growth objective guard);
 * ``observed``: the observed-lineage nodes the asset-detail read builds for
-  the rows read from stdin.
+  the rows read from stdin;
+* ``source_assets``: the audit source-asset policy's verdict for each asset
+  name read from stdin.
 
 No monkeypatch reaches a child, so no import-time cache can answer half of a
 comparison (memory: guard differential harness traps).
@@ -127,6 +129,23 @@ def observed(asset_key: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]
     return [node.model_dump(mode="json") for node in nodes]
 
 
+def source_assets(assets: Sequence[str]) -> dict[str, str]:
+    """Each name's audit source-asset verdict: ``accepted`` or the refusal."""
+
+    from backend.config.settings import settings  # noqa: F401 - registers the guard forms
+    from backend.services.audit_metadata_value_policy import validate_source_assets
+
+    result: dict[str, str] = {}
+    for asset in assets:
+        try:
+            validate_source_assets([asset])
+        except ValueError as refusal:
+            result[asset] = str(refusal)
+        else:
+            result[asset] = "accepted"
+    return result
+
+
 def run_fresh(env: Mapping[str, str], probe: str, cwd: Path, payload: object = None) -> Any:
     """Run ``probe`` in a child started with exactly ``env``; return its JSON."""
 
@@ -153,6 +172,8 @@ def _main(probe: str) -> None:
         result = verdicts(payload)
     elif probe == "observed":
         result = observed(payload["asset_key"], payload["rows"])
+    elif probe == "source_assets":
+        result = source_assets(payload)
     else:
         raise SystemExit(f"unknown probe: {probe}")
     sys.stdout.write("\n" + json.dumps(result, sort_keys=True) + "\n")

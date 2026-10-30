@@ -1,5 +1,8 @@
 """The configured Cotality share's qualified names, refused by the prompt guards.
 
+``backend/services/audit_metadata_value_policy.py`` refuses them as an audit
+source asset too, beside its canonical ``cotality_mortgage_data.`` prefix.
+
 The guards' own reviewed patterns refuse the canonical share
 (``_PROMPT_JAILBREAK_RE`` in ``backend/schemas/growth_agent.py`` and
 ``_SCOPE_BYPASS_PROMPT_PATTERNS`` in

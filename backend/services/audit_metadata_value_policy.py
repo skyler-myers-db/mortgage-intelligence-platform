@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from backend.schemas._validators_source_names import contains_configured_source_reference
+
 _SOURCE_ASSET_PATTERN = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*\.(?:gold|semantics|ref|mip_app)\.[A-Za-z_][A-Za-z0-9_]*$"
     r"|^mip_app\.[A-Za-z_][A-Za-z0-9_]*$"
@@ -33,6 +35,10 @@ def validate_source_assets(value: Any) -> None:
             lowered.startswith(("system.", "information_schema.", "hive_metastore.", "cotality_mortgage_data."))
             or ".silver." in lowered
             or ".first_party." in lowered
+            # A configured Cotality share mounted in a schema the pattern
+            # admits (``gold``, ``semantics``, ``ref``) is refused as the
+            # canonical share is; ``()`` on a canonical install.
+            or contains_configured_source_reference(text)
         ):
             raise ValueError("contains a forbidden source asset")
 
