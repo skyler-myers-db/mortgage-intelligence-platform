@@ -470,7 +470,9 @@ def plan_digest(entries: Iterable[AcceptedEntry]) -> str:
     return hashlib.sha256(canonical_plan(entries).encode("utf-8")).hexdigest()
 
 
-def _default_static_control() -> Sequence[str]:
+def static_control_violations() -> Sequence[str]:
+    """The compensating static control an elevated App entry needs; empty while it holds."""
+
     from tools.databricks.estate.genie_single_space import violations
 
     return violations()
@@ -503,7 +505,7 @@ def load_policy(
     policy = build_policy(
         parsed,
         now=moment,
-        static_control=static_control or _default_static_control,
+        static_control=static_control or static_control_violations,
         verifier_application_ids=verifiers,
         governed_space_ids=governed_space_ids,
         governed_space_names=[env.get(GOVERNED_SPACE_NAME_ENV, "")],
@@ -554,4 +556,5 @@ __all__ = [
     "load_policy",
     "plan_digest",
     "privilege_class",
+    "static_control_violations",
 ]

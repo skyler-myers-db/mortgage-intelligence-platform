@@ -2081,6 +2081,8 @@ The client profile's `MIP_ACCEPTED_EXPOSURE_JSON` may accept one exactly
   registered model is one) or volume for `runtime` or `proxy`. Anything else
   (`uc_ownership`, another workspace object, an App UC grant, a proxy Genie
   grant) refuses at load instead of being acknowledged and never matching.
+  `python -m tools.clients resolve` (deploy step 0) runs the same closed shape
+  and ceiling, so such an entry fails there with the profile's other errors.
 - **Ceiling.** The read class is Genie `CAN_VIEW`/`CAN_RUN` and UC `BROWSE`,
   `USE_CATALOG`, `USE_SCHEMA`, `SELECT`; everything else is elevated, and
   `privilege_class` must say which. Elevated is refused for
