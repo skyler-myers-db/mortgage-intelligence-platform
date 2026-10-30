@@ -145,14 +145,16 @@ def _generic_profile() -> schema.ClientProfile:
     """Identifying values a real estate holds that name no client.
 
     A shared ``main`` catalog, an ``inherited:samples`` source, a two-letter
-    group, a group named ``admin`` and the ``/Workspace/Shared`` root; the
-    three-letter grantee ``qzx`` is the shortest value that stays masked.
+    group (``qa``, a fragment of no schema term, so only the length floor
+    spares it), groups named ``admin`` and ``approver`` and the
+    ``/Workspace/Shared`` root. The three-letter grantee ``qzx`` is the
+    shortest value that stays masked.
     """
 
     shared = {
         **EXPOSURE[1],
         "securable": {"type": "CATALOG", "id": "main", "name": "main"},
-        "grantee": "it",
+        "grantee": "qa",
         "source": "inherited:samples",
     }
     short = {**EXPOSURE[1], "grantee": "qzx"}
@@ -168,7 +170,7 @@ def _generic_profile() -> schema.ClientProfile:
 
 def test_generic_values_are_never_registered_and_specific_ones_still_are() -> None:
     masks = set(views.masks(_generic_profile()))
-    assert not masks & {"main", "samples", "it", "admin", "approver", "/Workspace/Shared"}
+    assert not masks & {"main", "samples", "qa", "admin", "approver", "/Workspace/Shared"}
     assert {"qzx", "Another Team Space", "genie-managers-alpha", "space-alpha-0001"} <= masks
 
 
@@ -176,7 +178,7 @@ def test_generic_values_are_never_registered_and_specific_ones_still_are() -> No
     "line",
     [
         "MIP_REMAINING: the domain of origin/main is maintained",
-        "deploy: wrote the dashboard under /Workspace/Shared/mip; it is readable",
+        "deploy: wrote the dashboard under /Workspace/Shared/mip; the qa check is next",
     ],
 )
 def test_unrelated_log_text_survives_generic_identifying_values(line: str) -> None:

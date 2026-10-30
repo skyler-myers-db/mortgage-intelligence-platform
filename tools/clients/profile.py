@@ -42,7 +42,7 @@ _ORIGIN_FIELDS = frozenset({"DATABRICKS_HOST", "DATABRICKS_ACCOUNT_HOST"})
 # (deploy-dev.yml and deploy_step_automation_identities.sh today).
 _APPROVER_ROLES = ("normal", "operator2")
 _ADMIN_ROLES = ("admin", "release_probe")
-# A mask this short blanks fragments of ordinary words (``it`` in ``commit``).
+# A mask this short blanks fragments of ordinary words (``qa`` in ``aqua``).
 MIN_MASK_LENGTH = 3
 # The words refusal lines and exposure decisions are made of: the schema
 # vocabulary and every profile field and alias name.
