@@ -169,6 +169,21 @@ that proof fails, deployment also attempts treatment-write quiescence and exits
 with a dedicated compensation failure instead of reporting the original step
 as the complete failure state.
 
+Treatment grants converge by diff, not by `REVOKE ALL PRIVILEGES` followed by
+`GRANT`. For the catalog, the audit schema and the treatment table, the
+converger reads the App principal's own direct grants, grants what the
+reviewed set lacks, and then revokes only what it does not contain. A reviewed
+privilege the App already holds is never revoked, so an already-converged
+boundary is re-proven with zero statements and a quiesce-to-runtime switch is
+one `GRANT MODIFY`. Assignments for any other principal are skipped and never
+revoked. Direct `MANAGE`, `READ METADATA`, `EXTERNAL USE LOCATION` and
+`EXTERNAL USE SCHEMA` are outside `ALL PRIVILEGES`, so the revoke-all
+converger never removed them and its exact postflight refused; the diff
+converger leaves them and refuses the same way. A direct `ALL PRIVILEGES` grant
+is the one drift state that still revokes before it re-grants, because
+revoking it also removes the privileges it implies. A runtime failure at any
+stage still ends with no treatment write path.
+
 ---
 
 ## 1. Catalog `mip`

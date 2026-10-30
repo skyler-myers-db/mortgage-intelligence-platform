@@ -4,6 +4,12 @@
 Object presence and effective authority are read through authoritative Unity
 Catalog APIs. Quiesce removes writes before bundle promotion; runtime restores
 only exact table-scoped SELECT and MODIFY after constraints converge.
+
+Convergence is a diff, not REVOKE ALL followed by GRANT: it reads the App
+principal's direct grants on each governed securable, grants what the reviewed
+set lacks, then revokes only what it does not contain. A reviewed privilege the
+App already holds is never revoked, so treatment approvals stay live while an
+already-converged boundary is re-proven.
 """
 
 from __future__ import annotations
@@ -11,7 +17,8 @@ from __future__ import annotations
 import argparse
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from typing import Literal
 
 from databricks.sdk import AccountClient, WorkspaceClient
@@ -40,6 +47,42 @@ _TABLE = "campaign_treatment_snapshot"
 _SCHEMA = "audit"
 _SAFE_METASTORE_PRIVILEGES = {"USE_MARKETPLACE_ASSETS"}
 Mode = Literal["quiesce", "runtime"]
+_PRIVILEGE_RE = re.compile(r"^[A-Z]+(?:_[A-Z]+)*$")
+_REVIEWED_ORDER = ("USE_CATALOG", "USE_SCHEMA", "SELECT", "MODIFY")
+_ALL_PRIVILEGES = "ALL_PRIVILEGES"
+# Unity Catalog documents that ALL PRIVILEGES excludes these and that REVOKE ALL
+# PRIVILEGES leaves them in place. The revoke-all converger therefore never
+# removed them and its exact postflight failed closed; the diff converger keeps
+# that refusal instead of revoking them itself.
+OUTSIDE_ALL_PRIVILEGES = frozenset(
+    {"MANAGE", "READ_METADATA", "EXTERNAL_USE_LOCATION", "EXTERNAL_USE_SCHEMA"}
+)
+
+
+@dataclass(frozen=True)
+class Securable:
+    """One governed securable, named for the grants API, for SQL and for reports."""
+
+    securable_type: str
+    full_name: str
+    object_sql: str
+    label: str
+
+    @property
+    def sql_kind(self) -> str:
+        return self.securable_type.upper()
+
+
+def reviewed_privileges(securable_type: str, mode: Mode) -> frozenset[str]:
+    """Return the exact direct privileges the App holds on a securable in ``mode``."""
+
+    if securable_type == "catalog":
+        return frozenset({"USE_CATALOG"})
+    if securable_type == "schema":
+        return frozenset({"USE_SCHEMA"})
+    if securable_type == "table":
+        return frozenset({"SELECT"} if mode == "quiesce" else {"SELECT", "MODIFY"})
+    raise ValueError(f"Unsupported treatment securable type: {securable_type!r}")
 
 
 def _validate_identifier(label: str, value: str) -> str:
@@ -142,6 +185,129 @@ def _effective_privileges(
     return privileges
 
 
+def direct_privileges(
+    workspace: WorkspaceClient,
+    *,
+    securable_type: str,
+    full_name: str,
+    principal: str,
+) -> set[str]:
+    """Read only ``principal``'s own direct grants on one securable.
+
+    Assignments for any other principal are skipped, never interpreted: the
+    converger has no authority over another team's grants and must not read
+    them into a plan that could revoke them.
+    """
+
+    privileges: set[str] = set()
+    page_token: str | None = None
+    seen_tokens: set[str] = set()
+    while True:
+        response = workspace.grants.get(
+            securable_type,
+            full_name,
+            principal=principal,
+            page_token=page_token,
+            max_results=0,
+        )
+        for assignment in getattr(response, "privilege_assignments", None) or []:
+            grantee = getattr(assignment, "principal", None)
+            if not isinstance(grantee, str) or not grantee or grantee != grantee.strip():
+                raise RuntimeError("Direct grants API returned a noncanonical principal")
+            if grantee != principal:
+                if grantee.casefold() == principal.casefold():
+                    raise RuntimeError("Direct grants API returned a case-variant principal")
+                continue
+            for privilege in getattr(assignment, "privileges", None) or []:
+                name = _privilege_name(privilege)
+                if not _PRIVILEGE_RE.fullmatch(name):
+                    raise RuntimeError("Direct grants API returned an invalid privilege")
+                privileges.add(name)
+        next_token = str(getattr(response, "next_page_token", "") or "").strip()
+        if not next_token:
+            break
+        if next_token in seen_tokens:
+            raise RuntimeError("Direct grants API repeated a pagination token")
+        seen_tokens.add(next_token)
+        page_token = next_token
+    return privileges
+
+
+def ordered_privileges(privileges: Iterable[str]) -> list[str]:
+    def key(name: str) -> tuple[int, str]:
+        rank = _REVIEWED_ORDER.index(name) if name in _REVIEWED_ORDER else len(_REVIEWED_ORDER)
+        return rank, name
+
+    return sorted(set(privileges), key=key)
+
+
+def plan_securable(
+    current: set[str], reviewed: frozenset[str]
+) -> tuple[list[str], list[str], list[str]]:
+    """Return the (grant, revoke, retained) diff that reaches ``reviewed``.
+
+    ``retained`` holds privileges outside ALL PRIVILEGES: convergence leaves
+    them in place and its exact postflight refuses, as it always has.
+    """
+
+    grant = ordered_privileges(reviewed - current)
+    revoke = ordered_privileges(current - reviewed - OUTSIDE_ALL_PRIVILEGES)
+    retained = ordered_privileges((current - reviewed) & OUTSIDE_ALL_PRIVILEGES)
+    return grant, revoke, retained
+
+
+def _privilege_sql(names: list[str]) -> str:
+    for name in names:
+        if not _PRIVILEGE_RE.fullmatch(name):
+            raise ValueError(f"Invalid privilege name: {name!r}")
+    return ", ".join(name.replace("_", " ") for name in names)
+
+
+def _converge_securable(
+    workspace: WorkspaceClient,
+    *,
+    warehouse_id: str,
+    securable: Securable,
+    principal: str,
+    principal_sql: str,
+    reviewed: frozenset[str],
+    grant: bool = True,
+) -> None:
+    """Grant what ``reviewed`` lacks, then revoke only what it does not contain."""
+
+    def current() -> set[str]:
+        return direct_privileges(
+            workspace,
+            securable_type=securable.securable_type,
+            full_name=securable.full_name,
+            principal=principal,
+        )
+
+    def change(verb: str, names: list[str], preposition: str) -> None:
+        execute_sql(
+            workspace,
+            warehouse_id=warehouse_id,
+            statement=(
+                f"{verb} {_privilege_sql(names)} ON {securable.sql_kind} "
+                f"{securable.object_sql} {preposition} {principal_sql}"
+            ),
+        )
+
+    held = current()
+    if _ALL_PRIVILEGES in held - reviewed:
+        # REVOKE ALL PRIVILEGES also removes every individual privilege it
+        # implies, reviewed ones included, so it cannot follow the grants. This
+        # drift state alone keeps a brief window; the revoke-all converger
+        # opened the same window on every run.
+        change("REVOKE", [_ALL_PRIVILEGES], "FROM")
+        held = current()
+    missing, extra, _retained = plan_securable(held, reviewed)
+    if grant and missing:
+        change("GRANT", missing, "TO")
+    if extra:
+        change("REVOKE", extra, "FROM")
+
+
 def _assert_effective_privileges(
     workspace: WorkspaceClient,
     *,
@@ -185,23 +351,21 @@ def _assert_metastore_boundary(
         )
 
 
-def _set_table_actions(
-    workspace: WorkspaceClient,
-    *,
-    warehouse_id: str,
-    relation: str,
-    principal_sql: str,
-    actions: list[str],
-) -> None:
-    execute_sql(
-        workspace,
-        warehouse_id=warehouse_id,
-        statement=f"REVOKE ALL PRIVILEGES ON TABLE {relation} FROM {principal_sql}",
-    )
-    execute_sql(
-        workspace,
-        warehouse_id=warehouse_id,
-        statement=f"GRANT {', '.join(actions)} ON TABLE {relation} TO {principal_sql}",
+def governed_securables(catalog: str) -> tuple[Securable, Securable, Securable]:
+    """Return the catalog, audit schema and treatment table securables."""
+
+    catalog_name = _validate_identifier("catalog", catalog)
+    catalog_sql = _quoted_identifier(catalog_name)
+    schema_sql = f"{catalog_sql}.{_quoted_identifier(_SCHEMA)}"
+    return (
+        Securable("catalog", catalog_name, catalog_sql, "catalog"),
+        Securable("schema", f"{catalog_name}.{_SCHEMA}", schema_sql, "audit schema"),
+        Securable(
+            "table",
+            f"{catalog_name}.{_SCHEMA}.{_TABLE}",
+            f"{schema_sql}.{_quoted_identifier(_TABLE)}",
+            "treatment table",
+        ),
     )
 
 
@@ -266,9 +430,7 @@ def converge_campaign_treatment_access(
     if principal_name != principal:
         raise ValueError("principal must be canonical")
     principal_sql = _quoted_principal(principal_name)
-    catalog_sql = _quoted_identifier(catalog_name)
-    schema_sql = f"{catalog_sql}.{_quoted_identifier(_SCHEMA)}"
-    relation = f"{schema_sql}.{_quoted_identifier(_TABLE)}"
+    catalog_securable, schema_securable, table_securable = governed_securables(catalog_name)
     client = workspace or deployment_workspace_client()
     target = _identity_context(client, principal_name)
     workspace_host = str(
@@ -306,56 +468,43 @@ def converge_campaign_treatment_access(
     if catalog_object is None:
         return False
 
-    if table_object is not None:
-        execute_sql(
+    def converge(securable: Securable, reviewed: frozenset[str], *, grant: bool = True) -> None:
+        _converge_securable(
             client,
             warehouse_id=warehouse,
-            statement=f"REVOKE ALL PRIVILEGES ON TABLE {relation} FROM {principal_sql}",
-        )
-    if schema_object is not None:
-        execute_sql(
-            client,
-            warehouse_id=warehouse,
-            statement=f"REVOKE ALL PRIVILEGES ON SCHEMA {schema_sql} FROM {principal_sql}",
-        )
-    execute_sql(
-        client,
-        warehouse_id=warehouse,
-        statement=f"REVOKE ALL PRIVILEGES ON CATALOG {catalog_sql} FROM {principal_sql}",
-    )
-    execute_sql(
-        client,
-        warehouse_id=warehouse,
-        statement=f"GRANT USE CATALOG ON CATALOG {catalog_sql} TO {principal_sql}",
-    )
-    if schema_object is not None:
-        execute_sql(
-            client,
-            warehouse_id=warehouse,
-            statement=f"GRANT USE SCHEMA ON SCHEMA {schema_sql} TO {principal_sql}",
-        )
-    verified_objects = _assert_existing_boundaries(
-        client,
-        catalog=catalog_name,
-        principal=principal_name,
-        owner_policy=owner_policy,
-        table_actions=None,
-    )
-    table_object = verified_objects[2]
-    if table_object is None:
-        if mode == "runtime":
-            raise RuntimeError("Cannot grant runtime access before the treatment table exists")
-        return False
-
-    actions = ["SELECT"] if mode == "quiesce" else ["SELECT", "MODIFY"]
-    try:
-        _set_table_actions(
-            client,
-            warehouse_id=warehouse,
-            relation=relation,
+            securable=securable,
+            principal=principal_name,
             principal_sql=principal_sql,
-            actions=actions,
+            reviewed=reviewed,
+            grant=grant,
         )
+
+    table_reviewed = reviewed_privileges("table", mode)
+    actions = ordered_privileges(table_reviewed)
+    table_stage = False
+    try:
+        if table_object is not None:
+            # Strip unreviewed table authority (in quiesce mode, MODIFY) before
+            # any parent grant runs, as the revoke-all converger did first.
+            converge(table_securable, table_reviewed, grant=False)
+        converge(catalog_securable, reviewed_privileges("catalog", mode))
+        if schema_object is not None:
+            converge(schema_securable, reviewed_privileges("schema", mode))
+        verified_objects = _assert_existing_boundaries(
+            client,
+            catalog=catalog_name,
+            principal=principal_name,
+            owner_policy=owner_policy,
+            table_actions=None,
+        )
+        if verified_objects[2] is None:
+            if mode == "runtime":
+                raise RuntimeError(
+                    "Cannot grant runtime access before the treatment table exists"
+                )
+            return False
+        table_stage = True
+        converge(table_securable, table_reviewed)
         _assert_existing_boundaries(
             client,
             catalog=catalog_name,
@@ -366,19 +515,15 @@ def converge_campaign_treatment_access(
     except BaseException:
         if mode == "runtime":
             try:
-                _set_table_actions(
-                    client,
-                    warehouse_id=warehouse,
-                    relation=relation,
-                    principal_sql=principal_sql,
-                    actions=["SELECT"],
-                )
-                _assert_existing_boundaries(
+                _quiesce_after_runtime_failure(
                     client,
                     catalog=catalog_name,
                     principal=principal_name,
                     owner_policy=owner_policy,
-                    table_actions=["SELECT"],
+                    converge_table=lambda grant: converge(
+                        table_securable, reviewed_privileges("table", "quiesce"), grant=grant
+                    ),
+                    table_stage=table_stage,
                 )
             except BaseException as cleanup_error:
                 raise RuntimeError(
@@ -387,6 +532,48 @@ def converge_campaign_treatment_access(
                 ) from cleanup_error
         raise
     return True
+
+
+def _quiesce_after_runtime_failure(
+    client: WorkspaceClient,
+    *,
+    catalog: str,
+    principal: str,
+    owner_policy: ApprovedOwnerPolicy,
+    converge_table: Callable[[bool], None],
+    table_stage: bool,
+) -> None:
+    """Leave no treatment write path after a failed runtime convergence.
+
+    A failure at the table stage restores and proves the exact quiesced boundary,
+    as before. An earlier failure only revokes table authority and proves no
+    write path remains: the revoke-all converger had removed it by then, and an
+    unproven parent boundary must not gain a grant.
+    """
+
+    if table_stage:
+        converge_table(True)
+        _assert_existing_boundaries(
+            client,
+            catalog=catalog,
+            principal=principal,
+            owner_policy=owner_policy,
+            table_actions=["SELECT"],
+        )
+        return
+    if _object_presence(client, catalog=catalog)[2] is None:
+        return
+    converge_table(False)
+    actual = _effective_privileges(
+        client,
+        securable_type="table",
+        full_name=f"{catalog}.{_SCHEMA}.{_TABLE}",
+        principal=principal,
+    )
+    if not actual <= {"SELECT"}:
+        raise RuntimeError(
+            f"Effective table privileges retain a treatment write path: {sorted(actual)}"
+        )
 
 
 def main() -> int:
