@@ -29,6 +29,13 @@ _IDENTIFYING = sorted(
 )
 
 
+@pytest.fixture(autouse=True)
+def _outside_actions(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Under GitHub Actions emit_mask writes ::add-mask:: lines (the runner
+    # consumes them and prints nothing); the masked run has its own test below.
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+
 class _LiveWorkspace:
     """A fake deployer WorkspaceClient that records each GET it answers."""
 
@@ -88,6 +95,26 @@ def test_live_checks_pass_on_the_profiles_workspace_and_deployer(
     assert code == 0, text
     assert "client live checks ok" in text
     assert workspace.calls == ["GET scim/Me (org id)", "GET current-metastore-assignment", "GET scim/Me"]
+
+
+def test_under_actions_each_live_id_is_masked_and_every_other_line_is_value_free(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    live_ids = ("4200000099", "00000000-0000-4000-8000-00000000a099", IDENTITY_IDS["admin"])
+    workspace = _LiveWorkspace(workspace_id=live_ids[0], metastore_id=live_ids[1], principal=live_ids[2])
+    env_file = tmp_path / "client.env"
+    env_file.write_text("".join(f"{name}='{value}'\n" for name, value in PROFILE.items()), encoding="utf-8")
+
+    code = live_checks.main([], environ={}, env_file=env_file, client=lambda: workspace)
+    out = capsys.readouterr()
+
+    assert code == 2
+    masks = [line for line in out.err.splitlines() if line.startswith("::add-mask::")]
+    assert set(live_ids) <= {line.removeprefix("::add-mask::") for line in masks}
+    rest = out.out + "".join(f"{line}\n" for line in out.err.splitlines() if not line.startswith("::add-mask::"))
+    assert not any(value in rest for value in (*_IDENTIFYING, *live_ids)), "only mask lines carry a value"
+    assert out.err.index("::add-mask::") < out.err.index("client live checks refused:")
 
 
 def test_a_host_mismatch_exits_2_before_any_request(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
