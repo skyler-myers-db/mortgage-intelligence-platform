@@ -21,6 +21,10 @@ Mapping (env -> BUNDLE_VAR_*):
   MIP_LAKEBASE_SYNC_CATALOG -> BUNDLE_VAR_lakebase_catalog_name
   LAKEBASE_DATABASE       -> BUNDLE_VAR_lakebase_database_name
   MIP_RUNTIME_SECRET_SCOPE -> BUNDLE_VAR_runtime_secret_scope
+  MIP_COTALITY_SOURCE_CATALOG / _SCHEMA / _TABLE_PREFIX
+                          -> BUNDLE_VAR_cotality_source_catalog / _schema /
+                             _table_prefix (canonical when unset; the same
+                             names render sql/_rendered)
   MIP_BUNDLE_ROOT_LEAF    -> BUNDLE_VAR_bundle_root_leaf (default dev; CI staging only)
   (derived from the leaf) -> BUNDLE_VAR_install_suffix ('' for dev)
   (dev live install only) -> scheduled_refresh_failure_recipients, written to
@@ -69,6 +73,7 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from backend.config import source_names  # noqa: E402
 from backend.schemas.lender_identity import (  # noqa: E402
     effective_public_tenant_id,
     validate_public_lender_identity,
@@ -467,6 +472,7 @@ def main() -> int:
                 "MIP_GENIE_SPACE_NAME",
                 "MIP_RUNTIME_SECRET_SCOPE",
                 "MIP_BUNDLE_ROOT_LEAF",
+                *source_names.ENV_NAMES,
             }:
                 if str(env.get(k) or "").strip():
                     continue
@@ -631,6 +637,16 @@ def main() -> int:
         )
         return 2
     env["BUNDLE_VAR_uc_catalog"] = catalog
+    # The Cotality source share: one resolution renders the SQL and sets the
+    # variables the feature pipeline's configuration reads.
+    try:
+        cotality = source_names.from_env(env)
+    except ValueError as exc:
+        print(f"[bundle_env] {exc}", file=sys.stderr)
+        return 2
+    env["BUNDLE_VAR_cotality_source_catalog"] = cotality.catalog
+    env["BUNDLE_VAR_cotality_source_schema"] = cotality.schema
+    env["BUNDLE_VAR_cotality_source_table_prefix"] = cotality.table_prefix
     try:
         demo_first_party_enabled = render_sql._parse_bool(
             _demo_first_party_flag_for_target(env, target=target),
@@ -653,10 +669,15 @@ def main() -> int:
         )
         return 2
 
-    processed, written, subs = render_sql.render(
-        catalog=catalog,
-        demo_first_party_enabled=demo_first_party_enabled,
-    )
+    try:
+        processed, written, subs = render_sql.render(
+            catalog=catalog,
+            demo_first_party_enabled=demo_first_party_enabled,
+            cotality=cotality,
+        )
+    except render_sql.CanonicalSourceLeft as exc:
+        print(f"[bundle_env] {exc}", file=sys.stderr)
+        return 2
 
     # Operator feedback (never print the full value; just confirm resolution).
     def status(name: str, value: str | None) -> str:
@@ -678,7 +699,7 @@ def main() -> int:
     print(
         "[bundle_env] "
         f"render_sql catalog={catalog} processed={processed} written={written} "
-        f"substitutions={subs} "
+        f"substitutions={subs} cotality_source={cotality.describe()} "
         f"demo_first_party_feeds={'enabled' if demo_first_party_enabled else 'disabled'}",
         file=sys.stderr,
     )
@@ -686,7 +707,7 @@ def main() -> int:
     cli = ["databricks", "bundle", subcmd, *rest]
     result = subprocess.run(cli, env=env, check=False)
     if demo_first_party_enabled:
-        render_sql.render(catalog=catalog, demo_first_party_enabled=False)
+        render_sql.render(catalog=catalog, demo_first_party_enabled=False, cotality=cotality)
         print(
             "[bundle_env] restored sql/_rendered with "
             "demo_first_party_feeds=disabled after CLI exit",
