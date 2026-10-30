@@ -1,7 +1,8 @@
 """NB-3: presenter mode and the refusal-capture switch are refused at step 0.
 
 ``MIP_PRESENTER_MODE`` is demo-only (D-shell-deviations-e1). The App payload
-already refused a truthy value for ``-t prod``, but only at App promotion,
+already refused a truthy value for ``-t prod`` (now a customer install, M1-PR2),
+but only at App promotion,
 after the bundle, UC and Lakebase steps had mutated the workspace. The deploy
 preflight now parses it, and ``MIP_GENIE_REFUSAL_TEXT_CAPTURE``
 (D-audit-reads-d), before any workspace mutation, and exits 2.
@@ -48,12 +49,12 @@ def _bashes() -> list[str]:
 BASHES = _bashes()
 
 
-def _run(bash: str, target: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run(bash: str, install_class: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     harness = (
         "set -euo pipefail\n"
         "RED=''; RST=''\n"
         "deployment_control_value() { local value=\"${!1:-}\"; printf '%s' \"${value:-${2:-}}\"; }\n"
-        f"TARGET={target}\n"
+        f"CLIENT_INSTALL_CLASS={install_class}\n"
         f"{_block()}"
         'echo "presenter=[${_MIP_PRESENTER_MODE}] capture=[${_MIP_GENIE_REFUSAL_TEXT_CAPTURE}]"\n'
     )
@@ -84,22 +85,22 @@ def test_the_block_runs_in_preflight_before_any_bundle_uc_or_lakebase_mutation()
 
 @pytest.mark.parametrize("bash", BASHES)
 @pytest.mark.parametrize(
-    ("target", "env", "message"),
+    ("install_class", "env", "message"),
     [
-        ("prod", {"MIP_PRESENTER_MODE": "1"}, "refused for target prod"),
-        ("prod", {"MIP_PRESENTER_MODE": "TRUE"}, "refused for target prod"),
-        ("prod", {"MIP_PRESENTER_MODE": " On "}, "refused for target prod"),
-        ("dev", {"MIP_PRESENTER_MODE": "maybe"}, "must be one of 0/1/true/false/yes/no/on/off"),
-        ("prod", {"MIP_PRESENTER_MODE": "2"}, "must be one of 0/1/true/false/yes/no/on/off"),
-        ("dev", {"MIP_GENIE_REFUSAL_TEXT_CAPTURE": "enable"}, "must be enabled or disabled"),
-        ("dev", {"MIP_GENIE_REFUSAL_TEXT_CAPTURE": "Enabled"}, "must be enabled or disabled"),
-        ("prod", {"MIP_GENIE_REFUSAL_TEXT_CAPTURE": "off"}, "must be enabled or disabled"),
+        ("customer", {"MIP_PRESENTER_MODE": "1"}, "refused for a customer install"),
+        ("customer", {"MIP_PRESENTER_MODE": "TRUE"}, "refused for a customer install"),
+        ("customer", {"MIP_PRESENTER_MODE": " On "}, "refused for a customer install"),
+        ("demo", {"MIP_PRESENTER_MODE": "maybe"}, "must be one of 0/1/true/false/yes/no/on/off"),
+        ("customer", {"MIP_PRESENTER_MODE": "2"}, "must be one of 0/1/true/false/yes/no/on/off"),
+        ("demo", {"MIP_GENIE_REFUSAL_TEXT_CAPTURE": "enable"}, "must be enabled or disabled"),
+        ("demo", {"MIP_GENIE_REFUSAL_TEXT_CAPTURE": "Enabled"}, "must be enabled or disabled"),
+        ("customer", {"MIP_GENIE_REFUSAL_TEXT_CAPTURE": "off"}, "must be enabled or disabled"),
     ],
 )
-def test_prod_presenter_mode_and_unparseable_values_exit_2(
-    bash: str, target: str, env: dict[str, str], message: str
+def test_customer_presenter_mode_and_unparseable_values_exit_2(
+    bash: str, install_class: str, env: dict[str, str], message: str
 ) -> None:
-    proc = _run(bash, target, env)
+    proc = _run(bash, install_class, env)
     assert proc.returncode == 2, (proc.stdout, proc.stderr)
     assert message in proc.stderr
     assert "presenter=[" not in proc.stdout
@@ -107,20 +108,20 @@ def test_prod_presenter_mode_and_unparseable_values_exit_2(
 
 @pytest.mark.parametrize("bash", BASHES)
 @pytest.mark.parametrize(
-    ("target", "env", "expected"),
+    ("install_class", "env", "expected"),
     [
-        ("dev", {"MIP_PRESENTER_MODE": "1"}, "presenter=[1] capture=[]"),
-        ("dev", {"MIP_PRESENTER_MODE": "Yes"}, "presenter=[yes] capture=[]"),
-        ("prod", {"MIP_PRESENTER_MODE": "off"}, "presenter=[off] capture=[]"),
-        ("prod", {}, "presenter=[] capture=[]"),
-        ("prod", {"MIP_GENIE_REFUSAL_TEXT_CAPTURE": "disabled"}, "presenter=[] capture=[disabled]"),
-        ("dev", {"MIP_GENIE_REFUSAL_TEXT_CAPTURE": "enabled"}, "presenter=[] capture=[enabled]"),
+        ("demo", {"MIP_PRESENTER_MODE": "1"}, "presenter=[1] capture=[]"),
+        ("demo", {"MIP_PRESENTER_MODE": "Yes"}, "presenter=[yes] capture=[]"),
+        ("customer", {"MIP_PRESENTER_MODE": "off"}, "presenter=[off] capture=[]"),
+        ("customer", {}, "presenter=[] capture=[]"),
+        ("customer", {"MIP_GENIE_REFUSAL_TEXT_CAPTURE": "disabled"}, "presenter=[] capture=[disabled]"),
+        ("demo", {"MIP_GENIE_REFUSAL_TEXT_CAPTURE": "enabled"}, "presenter=[] capture=[enabled]"),
     ],
 )
-def test_dev_presenter_mode_prod_off_and_the_capture_values_pass(
-    bash: str, target: str, env: dict[str, str], expected: str
+def test_demo_presenter_mode_customer_off_and_the_capture_values_pass(
+    bash: str, install_class: str, env: dict[str, str], expected: str
 ) -> None:
-    proc = _run(bash, target, env)
+    proc = _run(bash, install_class, env)
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
     assert expected in proc.stdout
 

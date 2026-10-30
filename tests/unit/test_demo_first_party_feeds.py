@@ -19,29 +19,31 @@ def test_render_sql_demo_feed_switch_defaults_fail_closed(
     assert render_sql._resolve_demo_first_party_enabled("true") is True
 
 
-def test_bundle_env_refuses_demo_feeds_for_non_dev_without_override() -> None:
+def test_bundle_env_refuses_demo_feeds_outside_a_demo_install_without_override() -> None:
+    """M1-PR2: the retired dev target's demo default is the demo install class's."""
     from tools.databricks import bundle_env
 
-    assert bundle_env._target_from_args(["-t", "prod"]) == "prod"
+    assert bundle_env._target_from_args(["-t", "client"]) == "client"
     assert bundle_env._target_from_args(["--target=customer"]) == "customer"
-    assert bundle_env._demo_first_party_flag_for_target({}, target="dev") == "1"
-    assert bundle_env._demo_first_party_flag_for_target({}, target="prod") == "0"
-    assert bundle_env._demo_first_party_flag_for_target(
+    assert bundle_env._target_from_args(["--select=jobs.x"]) == "", "no target is the default"
+    assert bundle_env._demo_first_party_flag({}, demo_install=True) == "1"
+    assert bundle_env._demo_first_party_flag({}, demo_install=False) == "0"
+    assert bundle_env._demo_first_party_flag(
         {"MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS": "0"},
-        target="dev",
+        demo_install=True,
     ) == "0"
-    assert bundle_env._demo_feeds_allowed_for_target(
-        target="dev",
+    assert bundle_env._demo_feeds_allowed(
+        demo_install=True,
         enabled=True,
         env={},
     )
-    assert not bundle_env._demo_feeds_allowed_for_target(
-        target="prod",
+    assert not bundle_env._demo_feeds_allowed(
+        demo_install=False,
         enabled=True,
         env={},
     )
-    assert bundle_env._demo_feeds_allowed_for_target(
-        target="prod",
+    assert bundle_env._demo_feeds_allowed(
+        demo_install=False,
         enabled=True,
         env={"MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD": "1"},
     )

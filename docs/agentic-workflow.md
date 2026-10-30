@@ -42,5 +42,5 @@ Example for `/lead-queue`:
 - After route: `npm --prefix frontend run build`.
 - After backend service: `pytest -q tests/unit`.
 - After endpoint: `pytest -q tests/integration`.
-- After Databricks config: `databricks bundle validate -t dev`.
+- After Databricks config: `make bundle-validate` (the placeholder `ci` target).
 - Before release: all of the above plus manual click path.

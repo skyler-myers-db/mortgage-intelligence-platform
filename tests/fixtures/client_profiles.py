@@ -7,6 +7,7 @@ ratchet (tests/unit/test_no_client_identifiers_committed.py).
 
 from __future__ import annotations
 
+import base64
 import json
 
 from tools.clients.schema import FIELD_CLASS, FieldClass
@@ -152,6 +153,47 @@ def demo_profile(**overrides: str | None) -> dict[str, str]:
     """The demo profile; an override of ``None`` removes that field."""
 
     return _apply(DEMO_PROFILE, overrides)
+
+
+def _synthetic_seed(start: int) -> str:
+    """A 32-byte Ed25519 seed (bytes ``start`` .. ``start + 31``), base64url without padding."""
+
+    return base64.urlsafe_b64encode(bytes(range(start, start + 32))).decode("ascii").rstrip("=")
+
+
+def paychex_shaped_profile(**overrides: str | None) -> dict[str, str]:
+    """Client #1's shape with synthetic identifiers (M1-PR2).
+
+    The live install's posture: a demo install with the agentic tier, the
+    weekly refresh and the Summit demo feeds on, presenter mode off, readable
+    secondaries off, today's resource names (catalog ``mip``, App ``mip-app``,
+    instance ``mip-app-state``, ...), the canonical Cotality source names and
+    the default dashboard folder. Every identifier is the demo profile's
+    synthetic one; the client key is a codename.
+    """
+
+    shaped: dict[str, str | None] = {
+        "MIP_CLIENT": "client-one",
+        # The deploy derives this scope from the App name and refuses another.
+        "MIP_AGENT_PROXY_SECRET_SCOPE": "mip-app-agent-proxy",
+        # The deploy derives public keys from both signing keys: Ed25519 seeds.
+        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": _synthetic_seed(0),
+        "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY": _synthetic_seed(32),
+        "MIP_PRESENTER_MODE": "0",
+        "MIP_LAKEBASE_READABLE_SECONDARIES": "false",
+        "MIP_COTALITY_SOURCE_CATALOG": None,
+        "MIP_COTALITY_SOURCE_SCHEMA": None,
+        "MIP_COTALITY_SOURCE_TABLE_PREFIX": None,
+        "MIP_DASHBOARD_PARENT_PATH": None,
+    }
+    return _apply(_apply(DEMO_PROFILE, shaped), overrides)
+
+
+def env_file_text(values: dict[str, str]) -> str:
+    """``values`` as single-quoted dotenv lines (every profile value is quote-free)."""
+
+    assert not any("'" in value or "\n" in value for value in values.values())
+    return "".join(f"{name}='{value}'\n" for name, value in values.items())
 
 
 def customer_profile(**overrides: str | None) -> dict[str, str]:

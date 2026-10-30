@@ -3,8 +3,7 @@
 PYTHON ?= $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
 
 .PHONY: setup dev-api dev-ui test test-e2e lint lint-shell build validate bundle-validate bundle-plan bundle-deploy zip \
-        provision-genie bundle-validate-env bundle-deploy-dev deploy-dev check-workspace-host \
-        configure-workspace render-sql
+        provision-genie bundle-validate-env bundle-deploy-dev deploy-dev render-sql
 
 setup:
 	python3 -m venv .venv
@@ -63,11 +62,16 @@ validate:
 render-sql:
 	$(PYTHON) tools/render_sql.py --catalog "$${MIP_DEFAULT_CATALOG:-mip}"
 
+# Local validation uses the `ci` target (M1-PR2): placeholder host and
+# principals, no client profile, and bundle_env refuses every subcommand but
+# validate for it. A bundle plan of the `client` target runs only inside the
+# governed deploy, never from a workstation default.
 bundle-validate: render-sql
-	$(PYTHON) tools/databricks/bundle_env.py validate -t dev
+	$(PYTHON) tools/databricks/bundle_env.py validate -t ci
 
 bundle-plan: render-sql
-	$(PYTHON) tools/databricks/bundle_env.py plan -t dev
+	@echo "bundle-plan is retired: the client target is planned only inside the governed deploy; use make bundle-validate or ./scripts/deploy.sh -t client --dry-run" >&2
+	@exit 2
 
 bundle-deploy: render-sql
 	@echo "bundle-deploy is retired: use make deploy-dev for the signed command-of-record flow" >&2
@@ -85,7 +89,7 @@ zip:
 #                         for auth resolution rules.
 # `bundle-validate-env`   sources .env.local (if present), exports
 #                         DATABRICKS_WAREHOUSE_ID and GENIE_SPACE_ID into
-#                         bundle variables, then validates the dev target.
+#                         bundle variables, then validates the ci target.
 # `bundle-deploy-dev`     retired unsafe alias; use `deploy-dev`.
 # ---------------------------------------------------------------------------
 
@@ -98,66 +102,26 @@ provision-genie:
 # GENIE_SPACE_ID to BUNDLE_VAR_sql_warehouse_id / BUNDLE_VAR_genie_space_id
 # before invoking the Databricks CLI.
 bundle-validate-env: render-sql
-	@$(PYTHON) tools/databricks/bundle_env.py validate -t dev
+	@$(PYTHON) tools/databricks/bundle_env.py validate -t ci
 
 bundle-deploy-dev: render-sql
 	@echo "bundle-deploy-dev is retired: use make deploy-dev for signed App promotion" >&2
 	@exit 2
 
 # ---------------------------------------------------------------------------
-# `deploy-dev` — single-command zero-click dev deploy.
+# `deploy-dev` — print the governed deploy's dispatch command (M1-PR2).
 #
-# Delegates to scripts/deploy.sh, which chains bundle validate + deploy +
-# silver refresh + Lakebase migrate + gold refresh + lifecycle sync +
-# Genie provisioning + live smoke, all idempotent. This is the one
-# command an operator runs to stand a workspace up from scratch or to
-# roll forward after a code change. Every step fails loudly and the
-# script can be safely re-run.
-#
-# For finer-grained control, scripts/deploy.sh accepts:
-#     --dry-run       # print the plan, make no changes
-#     --skip-silver   # skip the FRED + share refresh (fast path)
-#     --skip-smoke    # skip the post-deploy curl smoke test
-#     --no-confirm    # skip the interactive y/N prompt
-#
-# `provision-genie` above is kept as a separate target for operators who
-# want to rebind only the Genie space (e.g. after editing
-# genie/mortgage_lead_intelligence_space.yml) without re-deploying the
-# bundle. Running `deploy-dev` is a strict superset.
+# A workstation no longer deploys. The command of record is
+# `./scripts/deploy.sh -t client`, run in CI per client environment (the
+# deploy-dev workflow, parked until M1-PR7 selects one). Locally, use
+# `./scripts/deploy.sh -t client --dry-run` to print the plan and
+# `make bundle-validate` to validate the bundle. The live install that
+# predates the client target ships only through the emergency recipe in
+# docs/deployment.md until it is adopted (M2-PR6). This target makes no change
+# and exits 2, so nothing mistakes it for a deploy.
 # ---------------------------------------------------------------------------
 deploy-dev:
-	./scripts/deploy.sh
-
-# Rebind the one workspace.host YAML anchor in databricks.yml for a customer
-# fork. Usage:
-#   make configure-workspace HOST=https://<customer-workspace>
-configure-workspace:
-	@test -n "$${HOST:-}" || { echo "usage: make configure-workspace HOST=https://<customer-workspace>"; exit 2; }
-	./scripts/configure-workspace.sh "$${HOST}"
-
-# ---------------------------------------------------------------------------
-# Forkability safeguard (audit R5-24, 2026-04-23).
-#
-# All four `workspace.host:` values in databricks.yml dereference the
-# root-level `&default_host` YAML anchor — a customer forking the repo
-# edits EXACTLY ONE line to rebind the host. This target greps for the
-# Entrada hostname outside the anchor's declaration line (the `&default_host`
-# line is the one legitimate occurrence). Fails the build if any other
-# line in databricks.yml still contains the literal — which would mean an
-# SE has edited the file and re-introduced a duplicate string, or future
-# code has added a new host reference that bypassed the anchor.
-#
-# Usage:
-#   make check-workspace-host         # fails if stray hostname found
-#
-# Wire into CI before any customer-fork deploy.
-# ---------------------------------------------------------------------------
-check-workspace-host:
-	@STRAY=$$(grep -n "dbc-3aa503a9-4fa8.cloud.databricks.com" databricks.yml | grep -v "&default_host" || true); \
-	  if [ -n "$$STRAY" ]; then \
-	    echo "[check-workspace-host] FAIL: stray Entrada hostname found outside the anchor:"; \
-	    echo "$$STRAY"; \
-	    echo "[check-workspace-host] fix: replace with '*default_host' and keep the single &default_host declaration."; \
-	    exit 1; \
-	  fi; \
-	  echo "[check-workspace-host] OK: workspace.host is anchored."
+	@echo "deploy-dev does not deploy from a workstation. Dispatch the governed deploy in CI:" >&2
+	@echo "  gh workflow run deploy-dev.yml --ref main -f acknowledge_single_maintainer_break_glass=true" >&2
+	@echo "(parked until M1-PR7 selects a client environment; dry run locally with ./scripts/deploy.sh -t client --dry-run)" >&2
+	@exit 2

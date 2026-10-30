@@ -8,7 +8,10 @@ redaction helpers (``redact``) and a placeholder template
 as GitHub Environment variables (public fields) and secrets (identifying and
 secret fields), and locally in ``.env.local``.
 
-Nothing in ``scripts/deploy.sh`` reads a profile yet; later slices wire it in.
+``scripts/deploy.sh -t client`` resolves the profile before any other step
+(the ``client-target`` view) and ``live_checks`` proves the workspace and
+the deployer against it; tools/databricks/bundle_env.py takes the bundle's
+resource names from it. Later slices wire in the rest.
 
 ``bootstrap_account`` is the human-run account bootstrap that creates or
 adopts a client's identities before its first deploy (docs/clients/bootstrap.md).

@@ -11,27 +11,13 @@ bundle:
   # migrate, so the bundle defaults to direct from first deploy.
   engine: direct
 
-# `workspace.host` must be literal — the Databricks CLI resolves it at
-# bundle-load time (before variables), so `${var.*}` is rejected here.
-# The URL below is Entrada's dev workspace; a customer deploying this bundle
-# to their own workspace either (a) edits this block once on their fork, or
-# (b) overrides the `host` in their Databricks CLI profile, which the CLI
-# uses for auth when its value matches any target's `workspace.host`. This
-# literal-and-profile contract is the "zero-click after configuring
-# .env.local" story in docs/runbook.md §2. Audit 2026-04-23: flagged as a
-# packaging footgun for non-Entrada customers; resolution ratified with
-# explicit comment + SE checklist on the `prod` target below.
-#
-# DRY-up (audit R5-24, 2026-04-23): a YAML anchor on this root-level host
-# is the single source of truth. Every `workspace.host:` field across the
-# deployable targets dereferences `*default_host`. Variables cannot be
-# used here (see above), so an anchor is the correct primitive. A customer forking the
-# repo now edits EXACTLY ONE line to rebind the host. `make
-# check-workspace-host` (Makefile) greps for the literal outside this
-# anchor and fails if it finds one — a forkability safeguard so an SE
-# cannot ship a customer deploy still pointing at Entrada's workspace.
-workspace:
-  host: &default_host https://dbc-3aa503a9-4fa8.cloud.databricks.com
+# No workspace host is committed (M1-PR2). The `client` target carries none:
+# the Databricks CLI takes it from the authenticated environment (the
+# deployer's profile or DATABRICKS_HOST), and scripts/deploy.sh refuses before
+# any other step unless that host is the client profile's DATABRICKS_HOST and
+# the workspace id, metastore id and deployer read back live are the
+# profile's (tools/clients/live_checks.py). A host cannot come from a
+# variable: the CLI resolves `workspace.host` before variables.
 
 # Sync: explicitly include the built frontend bundle in the uploaded
 # source tree. `frontend/dist/` is in .gitignore (we don't commit built
@@ -98,70 +84,47 @@ sync:
     - tools/geo/**
 
 targets:
-  dev:
-    mode: development
-    default: true
-    run_as:
-      user_name: ${workspace.current_user.userName}
-    workspace:
-      host: *default_host
-      root_path: ~/.bundle/${bundle.name}/${bundle.target}
-    variables:
-      # The Databricks Apps bundle schema requires app Genie bindings to carry
-      # a concrete space_id; it cannot resolve Genie spaces by name through a
-      # bundle lookup. Keep the root variable default as the CI placeholder, but
-      # pin the Entrada dev target to the governed mortgage_lead_intelligence
-      # space in this target workspace so post-bootstrap resource recovery
-      # through the signed scripts/deploy.sh command of record
-      # never reaches Apps with the placeholder and returns the opaque 403
-      # "Can View" permission error. The pin must name a space in the
-      # *default_host workspace.
-      genie_space_id: 01f13d4968af1b249dc388fd5b18b195
-
-  prod:
+  # The one deployable target (M1-PR2). Every install is a client, named by
+  # its profile (tools/clients, deploy/clients/example.env), and every
+  # per-client value reaches the bundle as a variable that
+  # tools/databricks/bundle_env.py and scripts/deploy.sh set from that
+  # profile; none is committed here.
+  #   * No `workspace.host`: the CLI uses the authenticated host, which the
+  #     deploy proves is the profile's before anything else.
+  #   * Production mode: no `[dev <user>] ` name prefix and no per-user
+  #     sandboxing. The root is the deployer service principal's own folder
+  #     plus the client key, so one root holds exactly one install.
+  #   * No top-level `run_as`: CLI 1.10 refuses a run_as that differs from the
+  #     deploying identity for apps and dashboards. Every job and the pipeline
+  #     instead name their own run_as below (the deployer until M2-PR5 moves
+  #     the App-triggerable and refresh jobs and the pipeline to
+  #     var.jobs_principal).
+  client:
     mode: production
-    # CUSTOMER-SE CHECKLIST BEFORE FIRST `./scripts/deploy.sh -t prod`:
-    #   1. `workspace.host` dereferences the root `&default_host` YAML anchor.
-    #      Before customer deploy, run:
-    #        ./scripts/configure-workspace.sh https://<customer-workspace>
-    #      (or make the same one-line anchor edit manually). Then point the
-    #      DEFAULT CLI profile at that same customer workspace.
-    #   2. Decide catalog isolation: share `mip` with dev in a single
-    #      workspace, or set `variables.uc_catalog.default` to `mip_prod`
-    #      for separation. Both are valid; pick one and document.
-    #   3. Confirm the deploying identity is the approved UC owner/metastore
-    #      administrator and Delta Share source access is available. The
-    #      command-of-record creates the minimal pipeline namespace before
-    #      bundle apply, then converges runtime grants and verifies postflight.
-    #   4. Lakebase instance name `mip-app-state` is reused across targets
-    #      via UC; if you need a prod-only instance, override the resource
-    #      block under `database_instances`.
     workspace:
-      host: *default_host
-      profile: DEFAULT
-      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
-    run_as:
-      user_name: ${workspace.current_user.userName}
+      root_path: /Workspace/Users/${var.deployer_principal}/.bundle/${bundle.name}/${var.client_key}
+    presets:
+      tags:
+        mip_client: ${var.client_key}
     resources:
-      database_instances:
-        mip_app_state:
-          # Production posture: keep the dev-sized single-node Lakebase as
-          # the base resource, but attach readable secondaries for customer
-          # targets so transient primary maintenance fails over instead of
-          # surfacing as an app-wide degraded state.
-          enable_readable_secondaries: true
-  # `ci` target is for PR validation ONLY — never deploy against it. The
-  # `dev` + `prod` targets both carry `mode:` + `${workspace.current_user
-  # .userName}` templates that force the CLI to call
-  # /api/2.0/preview/scim/v2/Me to resolve the deploying user's name,
-  # which is impossible in PR CI (no real token, by design). This target
-  # has no mode and no user templates, so `bundle validate -t ci` does
-  # not reach out and never performs an auth preflight. The PR workflow
-  # uses this target; deploys use `dev` / `prod`.
+      dashboards:
+        # MIP_DASHBOARD_PARENT_PATH in the profile; the root's resources
+        # folder unless set (an adopted install may pin its legacy folder).
+        mip_executive_dashboard:
+          parent_path: ${var.dashboard_parent_path}
+        mip_segment_dashboard:
+          parent_path: ${var.dashboard_parent_path}
+  # `ci` target is for PR validation ONLY (`make bundle-validate`,
+  # `bundle_env validate -t ci`); bundle_env refuses every other subcommand
+  # for it, so it can never deploy. Its host and principals are placeholders
+  # that name no workspace, so a validate against it needs no profile.
   ci:
     workspace:
-      host: *default_host
+      host: https://ci-placeholder.invalid
       root_path: /Workspace/ci-placeholder/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      client_key: ci
+      deployer_principal: 00000000-0000-0000-0000-000000000000
 
 resources:
   # Slice 5 real-data migration: self-contained Lakebase provisioning.
@@ -187,7 +150,10 @@ resources:
       capacity: CU_1
       node_count: 1
       retention_window_in_days: 7
-      enable_readable_secondaries: false
+      # var.lakebase_readable_secondaries (MIP_LAKEBASE_READABLE_SECONDARIES
+      # in the profile), off unless set. It sits here, not in a target
+      # override: the CLI cannot merge an interpolated string over a bool.
+      enable_readable_secondaries: ${var.lakebase_readable_secondaries}
 
   database_catalogs:
     mip_app_state_catalog:
@@ -304,6 +270,11 @@ resources:
       auto_stop_mins: 10
 
   jobs:
+    # Every job and the pipeline name their own run_as (M1-PR2): the `client`
+    # target has no top-level run_as, so nothing runs as whoever happens to
+    # deploy. var.deployer_principal is the profile's deployer service
+    # principal (application id) until M2-PR5 moves the App-triggerable and
+    # refresh jobs and the pipeline to var.jobs_principal.
     # Dedicated first-install bootstrap. Deploy runs this idempotent DAG before
     # applying UC grants, so a fresh or --skip-silver deployment never grants
     # a schema, table, or reviewed Growth Agent function before it exists.
@@ -313,6 +284,8 @@ resources:
     # must never replace them and silently discard their object grants.
     mip_init_catalog_schemas:
       name: mip_init_catalog_schemas
+      run_as:
+        service_principal_name: ${var.deployer_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -376,6 +349,8 @@ resources:
     # leaves this job out on purpose: the Cotality eval share is static.
     mip_refresh_silver:
       name: mip_refresh_silver
+      run_as:
+        service_principal_name: ${var.deployer_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -457,6 +432,8 @@ resources:
     # refresh reference data.
     mip_ref_seed:
       name: mip_ref_seed
+      run_as:
+        service_principal_name: ${var.deployer_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -535,6 +512,8 @@ resources:
     # and the outer SELECTs LEFT JOIN with COALESCE for the rate columns.
     mip_refresh_scores:
       name: mip_refresh_scores
+      run_as:
+        service_principal_name: ${var.deployer_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -960,6 +939,8 @@ resources:
     # when computing approved_borrowers / actioned_borrowers.
     mip_sync_lifecycle_state:
       name: mip_sync_lifecycle_state
+      run_as:
+        service_principal_name: ${var.deployer_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -1024,10 +1005,12 @@ resources:
     # the dev cadence comes from ./scripts/deploy.sh, which runs this job
     # after every gold refresh -- that run is also the first-install
     # backfill, so kpi_snapshots is never empty after a zero-click deploy --
-    # and, on the dev live install, from mip_scheduled_refresh's weekly
+    # and, on a demo install, from mip_scheduled_refresh's weekly
     # chain (step 4). This job's own schedule stays PAUSED.
     mip_kpi_snapshot:
       name: mip_kpi_snapshot
+      run_as:
+        service_principal_name: ${var.deployer_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -1073,6 +1056,8 @@ resources:
     # operator deliberately enables a customer-approved cadence.
     mip_growth_agent_monitor_scheduler:
       name: mip_growth_agent_monitor_scheduler
+      run_as:
+        service_principal_name: ${var.deployer_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -1110,6 +1095,8 @@ resources:
     # CONFLICT DO NOTHING) so re-running the job is a no-op.
     mip_lakebase_migrate:
       name: mip_lakebase_migrate
+      run_as:
+        service_principal_name: ${var.deployer_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -1152,6 +1139,8 @@ resources:
     # idempotent). See jobs/fred_rates_ingest.py for resilience on FRED outage.
     mip_fred_rates_ingest:
       name: mip_fred_rates_ingest
+      run_as:
+        service_principal_name: ${var.deployer_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -1175,7 +1164,7 @@ resources:
       # definition available for a customer-approved cadence, but ship every
       # target PAUSED by default. Operators normally refresh rates from Admin
       # → Data operations when FRED/source readiness says the row is stale.
-      # On the dev live install, mip_scheduled_refresh runs this job weekly as
+      # On a demo install, mip_scheduled_refresh runs this job weekly as
       # step 1 of its chain, ahead of gold; a standalone run re-creates the
       # audit-C1 stale-rate skew until gold runs, so pair it with a gold refresh.
       schedule:
@@ -1234,15 +1223,17 @@ resources:
     # refresh"), which is not freshness.
     # pause_status comes from var.scheduled_refresh_pause_status (default
     # PAUSED, set by no target); only scripts/deploy.sh exports UNPAUSED, and
-    # only for the dev target's live install. An explicit UNPAUSED survives
-    # `mode: development` (CLI v1.10.0); any other apply re-pauses it.
+    # only for a demo install (the profile's MIP_INSTALL_CLASS). Any other
+    # apply re-pauses it.
     # The failure email is var.scheduled_refresh_failure_recipients (default
-    # empty); tools/databricks/bundle_env.py fills it for the dev live install
-    # only, never prod.
+    # empty); tools/databricks/bundle_env.py fills it for a demo install
+    # only, never a customer one.
     # Never add a task that reaches mip_init_catalog_schemas (the reviewed
     # Growth Agent function publisher): tests/unit/test_refresh_schedule_contract.py.
     mip_scheduled_refresh:
       name: mip_scheduled_refresh
+      run_as:
+        service_principal_name: ${var.deployer_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -1304,6 +1295,8 @@ resources:
     # column contracts; docs/data-contract-module0.md §2 is authoritative.
     mip_feature_pipeline:
       name: mip_feature_pipeline
+      run_as:
+        service_principal_name: ${var.deployer_principal}
       catalog: ${var.uc_catalog}
       schema: silver
       photon: true
@@ -1313,7 +1306,7 @@ resources:
       # `development` is intentionally NOT set here -- bundle target mode
       # (`mode: development` vs `mode: production`) flips the pipeline's
       # development flag automatically. Hardcoding `development: true` here
-      # blocks `databricks bundle validate -t prod`.
+      # blocks `databricks bundle validate -t client` (production mode).
       continuous: false
       # The source the pipeline reads. It requires all three keys and has no
       # default source of its own, so a run without them fails before it
@@ -1351,11 +1344,11 @@ resources:
   # breaks a fresh zero-click bundle apply; a workspace-root name renders
   # invalid. The CLI's presets step rewrites every experiment name, in every
   # target and mode, as `dir + "/" + name_prefix + base`, so `/mip-lead-scoring`
-  # rendered `//[dev <user>] mip-lead-scoring` (dev) and `//mip-lead-scoring`
-  # (prod, ci): CLI v1.10.0, read-only `bundle validate`, 2026-10-27. Under
-  # `mode: development` the prefix `[dev <user>] ` sandboxes per-user names, so
-  # no `${workspace.current_user.userName}` template is needed (it would make
-  # `bundle validate -t ci` authenticate). Pinned by
+  # rendered `//[dev <user>] mip-lead-scoring` under the retired
+  # development-mode target and `//mip-lead-scoring` in production and no-mode
+  # targets: CLI v1.10.0, read-only `bundle validate`, 2026-10-27. The client
+  # target is production mode, so the name carries no prefix; one workspace
+  # holds one client install (the live checks pin its workspace id). Pinned by
   # tests/unit/test_bundle_experiment_path.py.
   experiments:
     mip_lead_scoring:
@@ -1368,6 +1361,37 @@ resources:
 # database in UC so SQL warehouses can query it alongside mip.gold.
 
 variables:
+  # The client target's identity (M1-PR2). tools/databricks/bundle_env.py and
+  # scripts/deploy.sh set each from the resolved client profile
+  # (tools/clients/profile.py bundle_vars); the ci target sets placeholders.
+  # Neither has a default, so a client run without its profile cannot render
+  # a root or a run_as.
+  client_key:
+    description: >-
+      The client key (MIP_CLIENT): the bundle root's last segment and the
+      mip_client tag on every taggable resource.
+  deployer_principal:
+    description: >-
+      Application id of the client's deployer service principal
+      (MIP_IDENTITY_IDS_JSON.deployer): the bundle root's owner folder and
+      the run_as of every job and the pipeline.
+  jobs_principal:
+    description: >-
+      Application id the App-triggerable and refresh jobs and the pipeline
+      will run as. The deployer until M2-PR5 introduces the non-admin jobs
+      identity; nothing reads it yet.
+    default: ${var.deployer_principal}
+  dashboard_parent_path:
+    description: >-
+      Workspace folder of the two Lakeview dashboards
+      (MIP_DASHBOARD_PARENT_PATH); the bundle root's resources folder unless
+      the profile pins another (an adopted install's legacy folder).
+    default: ${workspace.resource_path}
+  lakebase_readable_secondaries:
+    description: >-
+      Whether the Lakebase instance attaches readable secondaries
+      (MIP_LAKEBASE_READABLE_SECONDARIES); off unless the profile sets true.
+    default: false
   uc_catalog:
     description: Unity Catalog catalog for Mortgage Intelligence Platform tables
     default: mip
@@ -1390,8 +1414,8 @@ variables:
     description: >-
       Pause status of mip_scheduled_refresh's weekly schedule. PAUSED by
       default and set by no target: scripts/deploy.sh exports UNPAUSED only
-      for the dev target's live install, and MIP_SCHEDULED_REFRESH=off opts
-      it out. prod stays PAUSED. Any apply outside scripts/deploy.sh
+      for a demo install, and MIP_SCHEDULED_REFRESH=off opts it out. A
+      customer install stays PAUSED. Any apply outside scripts/deploy.sh
       re-pauses it.
     default: PAUSED
   scheduled_refresh_failure_recipients:
@@ -1401,7 +1425,7 @@ variables:
       set by no target. The CLI refuses a BUNDLE_VAR_ export for a complex
       variable, so tools/databricks/bundle_env.py writes it into the bundle's
       .databricks/bundle/<target>/variable-overrides.json: the deploying user
-      for the dev target's live install, empty for prod.
+      for a demo install, empty for a customer one.
     default: []
   ai_gateway_verifier_client_id:
     description: >-
@@ -1424,12 +1448,12 @@ variables:
   # BUNDLE_VAR_sql_warehouse_id=$DATABRICKS_WAREHOUSE_ID and
   # BUNDLE_VAR_genie_space_id=$GENIE_SPACE_ID before calling the CLI.
   #
-  # The root defaults stay as CI placeholders. The dev target above pins the
-  # governed Entrada Genie space explicitly. Mutable bundle application is an
-  # internal selector-bounded phase of `scripts/deploy.sh`; unrestricted
-  # bundle deployment is not an operator recovery path. Customer targets set a
-  # target-specific Genie id after provisioning or pass BUNDLE_VAR_genie_space_id
-  # to the command of record.
+  # The root defaults stay as CI placeholders; no target pins a Genie id.
+  # Mutable bundle application is an internal selector-bounded phase of
+  # `scripts/deploy.sh`, whose bundle_env resolves the governed space by its
+  # title in the authenticated workspace and exports BUNDLE_VAR_genie_space_id
+  # before every plan, summary, deploy or binding; unrestricted bundle
+  # deployment is not an operator recovery path.
   sql_warehouse_id:
     description: >-
       Serverless SQL Warehouse ID. Override with BUNDLE_VAR_sql_warehouse_id
@@ -1477,7 +1501,7 @@ variables:
   # (api.stlouisfed.org/fred/series/observations, which requires
   # api_key=...), and (b) the zero-click-deploy story documented in
   # CLAUDE.md is honoured: any future secret is reachable from
-  # `./scripts/deploy.sh -t dev` + a `.env.local` fill-in, never from
+  # `./scripts/deploy.sh -t client` + a `.env.local` fill-in, never from
   # click-ops in the Databricks UI. When that upgrade happens, the
   # ingest script will read `os.environ.get("FRED_API_KEY", "")` and
   # log-at-warn when missing (fall back to fredgraph.csv), so an empty

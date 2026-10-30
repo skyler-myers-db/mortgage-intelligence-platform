@@ -77,7 +77,7 @@ def test_every_target_renders_one_valid_path_directly_under_shared() -> None:
     bundle = _bundle()
     name = bundle["resources"]["experiments"]["mip_lead_scoring"]["name"]
 
-    assert set(bundle["targets"]) == {"dev", "prod", "ci"}
+    assert set(bundle["targets"]) == {"client", "ci"}
     for target_name, target in bundle["targets"].items():
         prefix = _target_prefix(target)
         rendered = _cli_presets_name(name, prefix)
@@ -89,8 +89,10 @@ def test_every_target_renders_one_valid_path_directly_under_shared() -> None:
         assert posixpath.basename(rendered) == f"{prefix}mip-lead-scoring", target_name
 
 
-def test_the_dev_target_is_the_only_prefixed_one() -> None:
+def test_no_target_prefixes_the_experiment() -> None:
+    """The development-mode dev target, the only prefixed one, left with M1-PR2."""
+
     targets = _bundle()["targets"]
 
-    assert _target_prefix(targets["dev"]) == DEV_PREFIX
-    assert _target_prefix(targets["prod"]) == "" and _target_prefix(targets["ci"]) == ""
+    assert _target_prefix(targets["client"]) == "" and _target_prefix(targets["ci"]) == ""
+    assert targets["client"]["mode"] == "production" and "mode" not in targets["ci"]

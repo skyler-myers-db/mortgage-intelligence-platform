@@ -90,7 +90,7 @@ def test_databricks_yml_contains_required_resource_names():
 def test_bundle_resource_names_are_parameterized_for_isolated_staging():
     content = (REPO / "databricks.yml").read_text(encoding="utf-8")
 
-    assert "host: &default_host https://dbc-3aa503a9-4fa8.cloud.databricks.com" in content
+    assert "&default_host" not in content, "M1-PR2: no committed workspace host"
     assert "name: ${var.app_name}" in content
     assert "name: ${var.lakebase_instance_name}" in content
     assert "name: ${var.lakebase_catalog_name}" in content
@@ -98,70 +98,66 @@ def test_bundle_resource_names_are_parameterized_for_isolated_staging():
     assert re.search(r"(?ms)^  lakebase_instance_name:.*?default: mip-app-state$", content)
     assert re.search(r"(?ms)^  lakebase_catalog_name:.*?default: mip_app_state$", content)
 
-    dev_match = re.search(r"(?ms)^  dev:\n(?P<body>.*?)(?=^  prod:\n)", content)
-    assert dev_match
-    assert "profile: DEFAULT" not in dev_match.group("body")
-    assert "run_as:\n      user_name: ${workspace.current_user.userName}" in dev_match.group("body")
+    client = yaml.safe_load(content)["targets"]["client"]
+    assert "profile" not in client.get("workspace", {})
+    assert "run_as" not in client
 
 
-def test_every_deployable_target_runs_as_the_deploying_user():
-    """dev and prod bind run_as through user_name; the ci validation target has none.
+def test_no_target_runs_as_the_deploying_user():
+    """M1-PR2: no target binds a top-level run_as; each job and the pipeline name the deployer SP.
 
-    The CI staging target, which ran as the GitHub OIDC deployer service
-    principal, left the bundle with its workspace (M0-PR3).
+    The dev and prod targets, which ran as the deploying user through
+    ``user_name``, left the bundle (tests/unit/test_client_target_shape.py
+    pins the per-resource run_as).
     """
 
     bundle = yaml.safe_load((REPO / "databricks.yml").read_text(encoding="utf-8"))
     targets = bundle["targets"]
-    current = "${workspace.current_user.userName}"
 
-    assert set(targets) == {"dev", "prod", "ci"}
-    assert targets["dev"]["run_as"] == {"user_name": current}
-    assert targets["prod"]["run_as"] == {"user_name": current}
-    assert "run_as" not in targets["ci"]
+    assert set(targets) == {"client", "ci"}
+    assert not any("run_as" in target for target in targets.values())
+    assert "${workspace.current_user.userName}" not in (REPO / "databricks.yml").read_text(encoding="utf-8")
 
 
-def test_workspace_unique_names_and_the_dev_root_are_the_live_install_literals():
-    """No variable suffixes the workspace-unique display names, and the dev root is ~/.bundle/<bundle>/dev."""
+def test_workspace_unique_names_and_the_client_root_are_literal():
+    """No variable suffixes the workspace-unique display names; the client root is the deployer's folder plus the client key."""
     content = (REPO / "databricks.yml").read_text(encoding="utf-8")
     bundle = yaml.safe_load(content)
 
     for name in ("mip_serverless_sql", "mip_feature_pipeline", "/Shared/mip-lead-scoring"):
         assert f"\n      name: {name}\n" in content, name
-    assert bundle["targets"]["dev"]["workspace"]["root_path"] == "~/.bundle/${bundle.name}/${bundle.target}"
+    assert (
+        bundle["targets"]["client"]["workspace"]["root_path"]
+        == "/Workspace/Users/${var.deployer_principal}/.bundle/${bundle.name}/${var.client_key}"
+    )
 
 
-def test_dev_bundle_pins_real_genie_space_for_signed_deploy():
-    """The dev target must not inherit the CI placeholder for app binding.
+def test_no_target_pins_a_genie_space_and_the_wrapper_refuses_the_placeholder():
+    """The dev target's Genie pin left with it (M1-PR2).
 
-    Databricks Apps requires a concrete Genie ``space_id`` in the app resource.
-    If the dev target falls back to the root placeholder, the command-of-record
-    deploy reaches Apps with an invalid binding and returns an opaque permission
-    error.
+    Databricks Apps requires a concrete Genie ``space_id`` in the app resource,
+    and a placeholder reaches Apps as an opaque permission error. No target
+    pins one now: tools/databricks/bundle_env.py resolves the governed space by
+    its title in the authenticated workspace and refuses a plan, summary,
+    deploy or binding that would still carry the placeholder.
     """
     content = (REPO / "databricks.yml").read_text(encoding="utf-8")
-    dev_match = re.search(r"(?ms)^  dev:\n(?P<body>.*?)(?=^  prod:\n)", content)
-    assert dev_match, "databricks.yml must define a dev target before prod."
+    bundle = yaml.safe_load(content)
+    wrapper = (REPO / "tools" / "databricks" / "bundle_env.py").read_text(encoding="utf-8")
 
-    dev_body = dev_match.group("body")
-    assert "genie_space_id: 01f13d4968af1b249dc388fd5b18b195" in dev_body
-    assert "genie_space_id: 00000000PLACEHOLDER" not in dev_body
+    assert not any("genie_space_id" in (target.get("variables") or {}) for target in bundle["targets"].values())
+    assert bundle["variables"]["genie_space_id"]["default"] == "00000000PLACEHOLDER"
+    assert "_resolve_governed_genie_space_id(env, space_name=space_name)" in wrapper
+    assert "refusing bundle {subcmd} with placeholder bundle variables" in wrapper
 
 
-def test_dev_genie_pin_is_the_live_workspace_space_not_the_retired_staging_pin():
-    """Post-W5: the dev pin names the live space on *default_host.
-
-    441588f6 moved the host anchor to the retired staging workspace and, in the
-    same diff, swapped this pin to that workspace's space (01f18188...).
-    ace044d6 rebound the anchor to the live workspace but left the pin, so the
-    CI isolation guard compared GENIE_SPACE_ID against a space that does not
-    exist on the live host (a read-only get-space there returns not found),
-    while the live "Mortgage Lead Intelligence" space is 01f13d49....
-    """
+def test_databricks_yml_names_no_genie_space_id():
+    """Neither the retired staging pin nor the live space's id is committed to the bundle any more."""
     content = (REPO / "databricks.yml").read_text(encoding="utf-8")
 
     assert "01f18188d7a41311abe3d99932b5aa9a" not in content, "the retired staging-workspace pin"
-    assert content.count("genie_space_id: 01f13d4968af1b249dc388fd5b18b195") == 1
+    assert re.search(r"genie_space_id: (?!00000000PLACEHOLDER)[0-9a-f]{32}", content) is None
+    assert re.search(r"genie_space_id: (?!00000000PLACEHOLDER)[0-9a-f]{32}", "genie_space_id: " + "a" * 32)
 
 
 def test_python_jobs_receive_bundle_catalog_variable():
@@ -329,48 +325,19 @@ def test_governed_deploy_wires_otlp_without_global_app_yaml_secret():
     assert "MIP_OTEL_HEADERS must never be provided as plaintext" in deploy
 
 
-def test_workspace_host_configuration_script_rewrites_only_anchor(tmp_path):
-    source = REPO / "databricks.yml"
-    target = tmp_path / "databricks.yml"
-    target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+def test_the_host_anchor_tooling_is_retired():
+    """M1-PR2: no host is committed, so nothing rebinds or greps one.
 
-    script = REPO / "scripts" / "configure-workspace.sh"
-    result = subprocess.run(
-        [
-            str(script),
-            "--file",
-            str(target),
-            "adb-1234567890123456.7.azuredatabricks.net",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    scripts/configure-workspace.sh and the Makefile's configure-workspace and
+    check-workspace-host targets left with the anchor; the host comes from the
+    client profile and the authenticated environment.
+    """
+    makefile = (REPO / "Makefile").read_text(encoding="utf-8")
 
-    content = target.read_text(encoding="utf-8")
-    assert "[configure-workspace] updated workspace.host anchor." in result.stdout
-    assert "host: &default_host https://adb-1234567890123456.7.azuredatabricks.net" in content
-    assert "https://dbc-3aa503a9-4fa8.cloud.databricks.com" not in content
-    assert len(re.findall(r"^  host: &default_host ", content, re.MULTILINE)) == 1
-    assert len(re.findall(r"host: \*default_host", content)) >= 3
-
-
-def test_workspace_host_configuration_script_rejects_non_origin_url(tmp_path):
-    target = tmp_path / "databricks.yml"
-    target.write_text((REPO / "databricks.yml").read_text(encoding="utf-8"), encoding="utf-8")
-
-    script = REPO / "scripts" / "configure-workspace.sh"
-    result = subprocess.run(
-        [
-            str(script),
-            "--file",
-            str(target),
-            "https://adb-1234567890123456.7.azuredatabricks.net/?token=bad",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode != 0
-    assert "workspace host must be only the workspace origin" in result.stderr
+    assert not (REPO / "scripts" / "configure-workspace.sh").exists()
+    assert "configure-workspace" not in makefile and "check-workspace-host" not in makefile
+    assert "bundle_env.py validate -t ci" in makefile
+    deploy_dev = makefile[makefile.index("\ndeploy-dev:\n") :]
+    assert "gh workflow run deploy-dev.yml" in deploy_dev and "./scripts/deploy.sh\n" not in deploy_dev
+    result = subprocess.run(["make", "-s", "-C", str(REPO), "deploy-dev"], capture_output=True, text=True, check=False)
+    assert result.returncode == 2 and "gh workflow run deploy-dev.yml" in result.stderr

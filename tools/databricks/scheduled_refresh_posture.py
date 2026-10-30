@@ -1,21 +1,23 @@
 """Which install may run and mail ``mip_scheduled_refresh`` (data-freshness design, 2026-10-26).
 
 The weekly ``mip_scheduled_refresh`` job (databricks.yml) chains FRED -> gold ->
-lifecycle -> KPI snapshot. Only the dev target's live install may run it on
-a schedule or mail its failures:
+lifecycle -> KPI snapshot. Only a demo install (the client profile's
+``MIP_INSTALL_CLASS``; before M1-PR2, the dev target's live install) may run it
+on a schedule or mail its failures. M1-PR3 replaces the class with the
+profile's own refresh fields:
 
 * ``scheduled_refresh_pause_status`` is a plain variable. scripts/deploy.sh
-  exports ``BUNDLE_VAR_scheduled_refresh_pause_status`` (UNPAUSED only for the
-  live install); :func:`check_pause_status` refuses UNPAUSED anywhere else, so
-  a stray export can never unpause prod through tools/databricks/bundle_env.py
-  either.
+  exports ``BUNDLE_VAR_scheduled_refresh_pause_status`` (UNPAUSED only for a
+  demo install); :func:`check_pause_status` refuses UNPAUSED anywhere else, so
+  a stray export can never unpause a customer install through
+  tools/databricks/bundle_env.py either.
 * ``scheduled_refresh_failure_recipients`` is a complex variable (a list), and
   the CLI refuses a ``BUNDLE_VAR_`` export for a complex variable (CLI v1.10.0:
   "setting via environment variables ... is not supported for complex
   variable"). Its only non-target channel is the bundle's
   ``.databricks/bundle/<target>/variable-overrides.json``, which
   :func:`write_failure_recipients` owns for this one key: the deploying user
-  (``${workspace.current_user.userName}``, resolved by the CLI) for the live
+  (``${workspace.current_user.userName}``, resolved by the CLI) for a demo
   install, an empty list for everything else.
 """
 
@@ -35,14 +37,14 @@ PAUSE_STATES = frozenset({"PAUSED", "UNPAUSED"})
 _TARGET_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 
 
-def is_live_install(*, target: str) -> bool:
-    """The dev target: the only install the schedule serves."""
+def is_live_install(*, install_class: str | None) -> bool:
+    """A demo install: the only one the schedule serves."""
 
-    return target == "dev"
+    return install_class == "demo"
 
 
-def check_pause_status(env: Mapping[str, str], *, target: str) -> None:
-    """Refuse a malformed pause status, or UNPAUSED outside the live install.
+def check_pause_status(env: Mapping[str, str], *, install_class: str | None) -> None:
+    """Refuse a malformed pause status, or UNPAUSED outside a demo install.
 
     An absent export keeps the bundle default (PAUSED). An empty or unknown
     value would reach the Jobs API as an invalid pause status, so it is
@@ -54,17 +56,17 @@ def check_pause_status(env: Mapping[str, str], *, target: str) -> None:
     value = env[PAUSE_ENV]
     if value not in PAUSE_STATES:
         raise ValueError(f"{PAUSE_ENV} must be PAUSED or UNPAUSED")
-    if value == "UNPAUSED" and not is_live_install(target=target):
+    if value == "UNPAUSED" and not is_live_install(install_class=install_class):
         raise ValueError(
-            f"{PAUSE_ENV}=UNPAUSED is allowed only for the dev target's live install; "
-            "prod keeps mip_scheduled_refresh PAUSED"
+            f"{PAUSE_ENV}=UNPAUSED is allowed only for a demo install; "
+            "every other install keeps mip_scheduled_refresh PAUSED"
         )
 
 
-def failure_recipients(*, target: str) -> list[str]:
-    """The live install mails its deployer; every other install mails nobody."""
+def failure_recipients(*, install_class: str | None) -> list[str]:
+    """A demo install mails its deployer; every other install mails nobody."""
 
-    if is_live_install(target=target):
+    if is_live_install(install_class=install_class):
         return list(LIVE_INSTALL_RECIPIENTS)
     return []
 
@@ -100,11 +102,17 @@ def write_failure_recipients(bundle_root: Path, *, target: str, recipients: list
     return path
 
 
-def apply(env: Mapping[str, str], *, target: str, bundle_root: Path) -> str:
-    """Check the pause export and write the recipients; return a one-line status."""
+def apply(
+    env: Mapping[str, str], *, target: str, install_class: str | None, bundle_root: Path
+) -> str:
+    """Check the pause export and write the recipients; return a one-line status.
 
-    check_pause_status(env, target=target)
-    recipients = failure_recipients(target=target)
+    ``target`` names the bundle target whose overrides file is written;
+    ``install_class`` (None for the ci target) decides the posture.
+    """
+
+    check_pause_status(env, install_class=install_class)
+    recipients = failure_recipients(install_class=install_class)
     write_failure_recipients(bundle_root, target=target, recipients=recipients)
     pause = env.get(PAUSE_ENV) or "PAUSED (bundle default)"
     mail = "deployer" if recipients else "none"

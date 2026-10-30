@@ -9,8 +9,8 @@ remain the review-of-record.
 
 ## Problem
 
-CLAUDE.md mandates a zero-click deploy through `./scripts/deploy.sh -t dev`
-(or `make deploy-dev`): the command of record must provision, populate,
+CLAUDE.md mandates a zero-click deploy through `./scripts/deploy.sh -t client`
+(run in CI): the command of record must provision, populate,
 promote, and smoke-check every resource the app needs, with no manual UI steps
 and no out-of-band preprocessing. That promise was violated for any customer
 whose UC catalog is not named `mip`.

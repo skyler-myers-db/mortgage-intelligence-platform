@@ -352,7 +352,7 @@ Only the minimum — things the user must decide; everything else I've decided i
 pytest tests/unit/test_pii_redaction.py -q
 pytest tests/integration/test_uc_grants.py -q
 ruff check backend
-databricks bundle validate -t dev
+python tools/databricks/bundle_env.py validate -t client
 # manual: operator runs `databricks secrets list-scopes` and confirms `mip` exists
 # manual: operator runs `git log --all -S 'dapi' --source --remotes` and confirms no PAT ever committed
 ```

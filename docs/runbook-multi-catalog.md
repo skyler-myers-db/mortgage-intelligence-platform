@@ -2,6 +2,12 @@
 
 ## TL;DR
 
+> **Refused today (M1-PR2).** `./scripts/deploy.sh -t client` resolves the
+> client profile before any other step, and the profile refuses a
+> `MIP_DEFAULT_CATALOG` other than `mip` until the catalog-label slice lands
+> (`tools/clients/rules.py`, `catalog_refusals`): the SQL still names the
+> catalog literally in places. The render path below is kept for that slice.
+
 Module 0 defaults its UC catalog to `mip`. Customers who require a different catalog name (`mip_prod`, `lender_uc`, `cotality_mip`, …) set one variable and deploy. The Python API layer, Spark Python jobs, and SQL transformation layer are now multi-catalog safe — there is no manual preprocessing step.
 
 ```bash
@@ -9,7 +15,7 @@ Module 0 defaults its UC catalog to `mip`. Customers who require a different cat
 MIP_DEFAULT_CATALOG=summit_mortgage
 
 # Then deploy:
-./scripts/deploy.sh           # or: make deploy-dev
+./scripts/deploy.sh -t client   # in CI; make deploy-dev prints the dispatch
 ```
 
 That is the entire operator contract. `scripts/deploy.sh` (step 1a) runs `tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"` before the bundle validate/deploy phase, which materializes `sql/_rendered/**` with the target catalog substituted into the governed catalog/schema DDL and three-part UC prefixes. The bundle's SQL tasks all read from `sql/_rendered/**`, so every CTAS / DDL / metric view / UC function lands in the right catalog on first deploy.
@@ -18,7 +24,7 @@ For the bundle-variable path (non-default workspace target), keep the two-var fo
 
 ```bash
 MIP_DEFAULT_CATALOG=mip_prod \
-./scripts/deploy.sh -t prod
+./scripts/deploy.sh -t client
 ```
 
 The deploy script maps `MIP_DEFAULT_CATALOG` to the bundle-side `uc_catalog`

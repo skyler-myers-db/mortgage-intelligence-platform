@@ -131,7 +131,8 @@ def test_current_operator_docs_never_advertise_bare_mutable_deployment() -> None
 
     for relative in ("README.md", "docs/runbook.md", "docs/se-onboarding.md"):
         text = _read(ROOT / relative)
-        assert "./scripts/deploy.sh -t dev" in text or "make deploy-dev" in text
+        assert "./scripts/deploy.sh -t client" in text
+        assert "./scripts/deploy.sh -t dev" not in text, "the dev target left databricks.yml (M1-PR2)"
 
 
 def test_deployment_doc_pins_the_prebuilt_app_source_contract() -> None:
@@ -233,7 +234,7 @@ def test_otlp_operator_docs_use_the_same_governed_target() -> None:
         text = _read(ROOT / relative)
         assert "MIP_OTEL_HEADERS_SECRET_SCOPE" in text
         assert "MIP_OTEL_HEADERS_SECRET_KEY" in text
-        assert "scripts/deploy.sh -t prod" in text
+        assert "scripts/deploy.sh -t client" in text and "scripts/deploy.sh -t prod" not in text
         assert "tools/databricks/otlp_deploy_payload.py" not in text
     observability = _read(ROOT / "docs" / "observability.md")
     assert "databricks secrets list-scopes" in observability
@@ -258,9 +259,9 @@ def test_mutable_operator_surfaces_route_to_signed_deploy_only() -> None:
     assert "databricks apps deploy" not in scaffold
     assert "databricks bundle deploy" not in m2m
     assert "make bundle-deploy-dev" not in genie
-    assert "./scripts/deploy.sh -t dev" in scaffold
-    assert "./scripts/deploy.sh -t dev" in m2m
-    assert "./scripts/deploy.sh -t dev" in genie
+    assert "./scripts/deploy.sh -t client" in scaffold
+    assert "./scripts/deploy.sh -t client" in m2m
+    assert "./scripts/deploy.sh -t client" in genie
 
 
 def test_production_workflow_is_honestly_non_deploying() -> None:

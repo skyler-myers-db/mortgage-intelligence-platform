@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -16,6 +17,13 @@ import pytest
 import yaml
 
 from backend.services.databricks_jobs import MANAGED_JOBS
+from tests.fixtures.client_profiles import (
+    DEMO_PROFILE,
+    IDENTITY_IDS,
+    customer_profile,
+    env_file_text,
+    paychex_shaped_profile,
+)
 from tests.fixtures.deploy_script import (
     DEPLOY_SCRIPT,
     DEPLOY_SOURCED_SCRIPTS,
@@ -34,8 +42,10 @@ DEPLOY_LIB_SCRIPTS = DEPLOY_SOURCED_SCRIPTS
 BUNDLE_CONFIG = REPO / "databricks.yml"
 
 
-@pytest.mark.parametrize("target", ("ci", "unknown", "staging"))
+@pytest.mark.parametrize("target", ("ci", "unknown", "staging", "dev", "prod"))
 def test_deploy_script_rejects_nonmutable_target_before_preflight(target: str) -> None:
+    """M1-PR2: `client` is the one deployable target; the retired dev and prod are refused like any other name."""
+
     result = subprocess.run(
         ["bash", str(DEPLOY_SCRIPT), "--target", target, "--dry-run"],
         cwd=REPO,
@@ -45,7 +55,7 @@ def test_deploy_script_rejects_nonmutable_target_before_preflight(target: str) -
     )
 
     assert result.returncode == 2
-    assert "target must be exactly dev or prod" in result.stderr
+    assert "target must be exactly client" in result.stderr
     assert "step 1" not in result.stdout
 
 
@@ -66,18 +76,20 @@ def _target_parse(*args: str, env: dict[str, str] | None = None) -> subprocess.C
     )
 
 
-@pytest.mark.parametrize("target", ("dev", "prod"))
-def test_deploy_script_target_parse_accepts_exactly_dev_and_prod(target: str) -> None:
-    result = _target_parse("-t", target)
+@pytest.mark.parametrize("args", (("-t", "client"), ("--target=client",), ()))
+def test_deploy_script_target_parse_accepts_exactly_client(args: tuple[str, ...]) -> None:
+    """`client` is also the default when no target is named."""
+
+    result = _target_parse(*args)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip().splitlines()[-1] == target
+    assert result.stdout.strip().splitlines()[-1] == "client"
 
 
 DEPLOY_DEV_REF = "o/r/.github/workflows/deploy-dev.yml@refs/heads/main"
 
 
-@pytest.mark.parametrize("args", (("-t", "dev"), ("-t", "prod"), ("-t", "dev", "--dry-run")))
+@pytest.mark.parametrize("args", (("-t", "client"), (), ("-t", "client", "--dry-run")))
 def test_deploy_script_refuses_the_parked_deploy_dev_workflow_before_any_step(args: tuple[str, ...]) -> None:
     """deploy-dev.yml is parked until a client environment is selected (M1-PR7), dry run included."""
 
@@ -100,15 +112,15 @@ def test_deploy_script_refuses_the_parked_deploy_dev_workflow_before_any_step(ar
 def test_the_parked_refusal_keys_on_the_deploy_dev_ref_in_actions_only(env: dict[str, str]) -> None:
     """The non-vacuity control: CI's own pytest and operator runs parse unchanged."""
 
-    result = _target_parse("-t", "dev", env=env)
+    result = _target_parse("-t", "client", env=env)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip().splitlines()[-1] == "dev"
+    assert result.stdout.strip().splitlines()[-1] == "client"
 
 
 @pytest.mark.parametrize(
     "targets",
-    (("-t", "dev", "--target", "prod"), ("--target=dev", "--target=prod")),
+    (("-t", "client", "--target", "client"), ("--target=client", "--target=client")),
 )
 def test_deploy_script_rejects_duplicate_target_before_preflight(
     targets: tuple[str, ...],
@@ -482,15 +494,9 @@ def _run_deploy_auth_harness(tmp_path: Path, *, mode: str) -> dict[str, Any]:
     if mode == "pat":
         env_lines.append("DATABRICKS_TOKEN=reviewed-deployer-pat")
     (repo / ".env.local").write_text("\n".join(env_lines) + "\n", encoding="utf-8")
-    (repo / "databricks.yml").write_text(
-        "workspace:\n"
-        f"  host: {reviewed_host}\n"
-        "targets:\n"
-        "  dev:\n"
-        "    workspace:\n"
-        f"      host: {reviewed_host}\n",
-        encoding="utf-8",
-    )
+    # M1-PR2: the client target names no host; the auth bind compares the
+    # authenticated host with the client profile's (CLIENT_HOST below).
+    (repo / "databricks.yml").write_text("targets:\n  client: {}\n", encoding="utf-8")
     if mode == "github-oidc":
         # deploy-dev.yml's Configure step: no stored credential at all.
         profile_text = (
@@ -538,7 +544,8 @@ RED=""
 DIM=""
 RST=""
 DRY_RUN=0
-TARGET=dev
+TARGET=client
+CLIENT_HOST={shlex.quote(reviewed_host)}
 PYTHON={shlex.quote(sys.executable)}
 MINT_ENV_LOG={shlex.quote(str(mint_log))}
 M2M_ENV_LOG={shlex.quote(str(m2m_log))}
@@ -628,7 +635,7 @@ def _run_bind_harness(
     tmp_path: Path,
     *,
     env_local: str,
-    bundle_host: str,
+    client_host: str,
     ambient: dict[str, str],
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     repo = tmp_path / "bind"
@@ -637,10 +644,7 @@ def _run_bind_harness(
     bin_dir.mkdir(parents=True)
     home.mkdir()
     (repo / ".env.local").write_text(env_local, encoding="utf-8")
-    (repo / "databricks.yml").write_text(
-        "targets:\n" "  dev:\n" "    workspace:\n" f"      host: {bundle_host}\n",
-        encoding="utf-8",
-    )
+    (repo / "databricks.yml").write_text("targets:\n  client: {}\n", encoding="utf-8")
     mutation_marker = repo / "network-mutation-attempted"
     fake_databricks = bin_dir / "databricks"
     fake_databricks.write_text(
@@ -655,7 +659,8 @@ set -euo pipefail
 RED=""
 RST=""
 DRY_RUN=0
-TARGET=dev
+TARGET=client
+CLIENT_HOST={shlex.quote(client_host)}
 PYTHON={shlex.quote(sys.executable)}
 {_deploy_auth_function_block()}
 bind_deployment_workspace_auth
@@ -2164,7 +2169,7 @@ def test_deploy_refuses_mixed_ambient_pat_and_dotenv_host_before_network(
     result, mutation_marker = _run_bind_harness(
         tmp_path,
         env_local="DATABRICKS_HOST=https://dotenv-workspace.example\n",
-        bundle_host="https://ambient-workspace.example",
+        client_host="https://ambient-workspace.example",
         ambient={
             "DATABRICKS_HOST": "https://ambient-workspace.example",
             "DATABRICKS_TOKEN": "ambient-pat",
@@ -2176,7 +2181,26 @@ def test_deploy_refuses_mixed_ambient_pat_and_dotenv_host_before_network(
     assert not mutation_marker.exists()
 
 
-def test_deploy_refuses_authenticated_host_outside_bundle_target_before_network(
+def test_deploy_refuses_authenticated_host_outside_the_client_profile_before_network(
+    tmp_path: Path,
+) -> None:
+    """M1-PR2: the client target has no host, so the bind compares with the profile's DATABRICKS_HOST."""
+
+    result, mutation_marker = _run_bind_harness(
+        tmp_path,
+        env_local=(
+            "DATABRICKS_HOST=https://reviewed-workspace.example\n" "DATABRICKS_TOKEN=reviewed-pat\n"
+        ),
+        client_host="https://different-target.example",
+        ambient={},
+    )
+
+    assert result.returncode == 2
+    assert "the deployer's workspace host is not the client profile's DATABRICKS_HOST" in result.stderr
+    assert not mutation_marker.exists()
+
+
+def test_deploy_accepts_the_client_profiles_host_without_regard_to_case_or_slash(
     tmp_path: Path,
 ) -> None:
     result, mutation_marker = _run_bind_harness(
@@ -2184,15 +2208,12 @@ def test_deploy_refuses_authenticated_host_outside_bundle_target_before_network(
         env_local=(
             "DATABRICKS_HOST=https://reviewed-workspace.example\n" "DATABRICKS_TOKEN=reviewed-pat\n"
         ),
-        bundle_host="https://different-target.example",
+        client_host="https://Reviewed-Workspace.example/",
         ambient={},
     )
 
-    assert result.returncode == 2
-    assert (
-        "authenticated workspace host does not match databricks.yml target 'dev'" in result.stderr
-    )
-    assert not mutation_marker.exists()
+    assert result.returncode == 0, result.stderr
+    assert mutation_marker.exists(), "the stub CLI ran after the bind passed"
 
 
 def test_deploy_dev_seeds_databricks_auth_without_printing_secrets() -> None:
@@ -4923,10 +4944,12 @@ def test_first_install_dry_run_executes_no_databricks_operations(
     (checkout / ".venv").symlink_to(_sandbox_venv_dir(), target_is_directory=True)
     with (checkout / ".git" / "info" / "exclude").open("a", encoding="utf-8") as exclude:
         exclude.write(".venv\n")
+    # M1-PR2: the client profile resolves before the preflight, so the
+    # sandbox carries a full synthetic one (tests/fixtures/client_profiles.py).
     (checkout / ".env.local").write_text(
-        "DATABRICKS_HOST=https://example.cloud.databricks.com\n"
-        "DATABRICKS_WAREHOUSE_ID=warehouse-1\n"
-        "GENIE_SPACE_ID=space-1\n",
+        env_file_text(
+            {**paychex_shaped_profile(), "DATABRICKS_WAREHOUSE_ID": "warehouse-1", "GENIE_SPACE_ID": "space-1"}
+        ),
         encoding="utf-8",
     )
     bin_dir = tmp_path / "bin"
@@ -4949,12 +4972,14 @@ def test_first_install_dry_run_executes_no_databricks_operations(
         **{
             name: value
             for name, value in os.environ.items()
-            if not name.startswith(("COV_CORE", "COVERAGE"))
+            if not name.startswith(("COV_CORE", "COVERAGE", "MIP_", "DATABRICKS_", "BUNDLE_VAR_", "APP_ENV"))
         },
-        "APP_ENV": "local",
         "DATABRICKS_STUB_LOG": str(log),
+        # A Python SDK client built by mistake fails offline.
+        "DATABRICKS_CONFIG_FILE": str(tmp_path / "no-databrickscfg"),
         "GENIE_SPACE_ID": "space-1",
-        "DATABRICKS_AGENT_RUNTIME_CLIENT_ID": "dry-run-runtime-client-id",
+        # An identity alias must equal its MIP_IDENTITY_IDS_JSON role.
+        "DATABRICKS_AGENT_RUNTIME_CLIENT_ID": IDENTITY_IDS["runtime"],
         "MIP_ADMIN_EMAILS": "operator@example.invalid",
         "MIP_COTALITY_ID_MASK_SECRET": "stable-local-mask-secret",
         "MIP_GENIE_ACTION_SECRET_CURRENT": "stable-local-action-secret",
@@ -4966,7 +4991,7 @@ def test_first_install_dry_run_executes_no_databricks_operations(
             "bash",
             "scripts/deploy.sh",
             "-t",
-            "dev",
+            "client",
             "--dry-run",
             "--no-confirm",
             "--skip-silver",
@@ -4991,7 +5016,7 @@ def test_first_install_dry_run_executes_no_databricks_operations(
         grant_start,
     )
     grant_block = result.stdout[grant_start:grant_end]
-    for principal in ("dry-run-app-client-id", "dry-run-runtime-client-id"):
+    for principal in ("dry-run-app-client-id", IDENTITY_IDS["runtime"]):
         for function_name in (
             "fn_build_cohort",
             "fn_segment_counts",
@@ -5585,13 +5610,19 @@ _READ_ONLY_PROOF_CALLS = [
 ]
 
 
-# The bundle target the proof step compares the profile host with. deploy-dev.yml
-# is parked (M1-PR7), so this is the dev target the step names today.
-OIDC_PROOF_TARGET = "dev"
+# The bundle target the proof step reads. deploy-dev.yml is parked (M1-PR7);
+# since M1-PR2 its one deployable target, `client`, names no host, so the step
+# proves the bundle commits none and takes the host from the profile and the
+# DATABRICKS_HOST secret alone. A synthetic workspace host stands in for both.
+OIDC_PROOF_TARGET = "client"
+_PROOF_HOST = "https://dbc-oidc-proof.cloud.databricks.com"
 
 
 def _bundle_target_host(target: str) -> str:
-    return str(yaml.safe_load(BUNDLE_CONFIG.read_text(encoding="utf-8"))["targets"][target]["workspace"]["host"])
+    """The proof workspace: the committed client target names none of its own."""
+
+    assert "host" not in (yaml.safe_load(BUNDLE_CONFIG.read_text(encoding="utf-8"))["targets"][target].get("workspace") or {})
+    return _PROOF_HOST
 
 
 def _oidc_profile(host: str, *, auth_type: str = "github-oidc", client_id: str = _DEPLOYER, extra: str = "") -> str:
@@ -5606,8 +5637,12 @@ def _run_oidc_proof(
     cli_me: str | None = None,
     env: dict[str, str] | None = None,
     cli: bool = True,
+    bundle: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
-    """Run the proof step against a recording fake SDK and CLI (read-only calls only)."""
+    """Run the proof step against a recording fake SDK and CLI (read-only calls only).
+
+    ``bundle`` replaces the committed databricks.yml the step reads.
+    """
 
     host = _bundle_target_host(OIDC_PROOF_TARGET)
     sdk_root = tmp_path / "sdk"
@@ -5643,9 +5678,14 @@ def _run_oidc_proof(
         encoding="utf-8",
     )
     calls = tmp_path / "calls.log"
+    cwd = REPO  # reads the committed databricks.yml; the step writes nothing
+    if bundle is not None:
+        cwd = tmp_path / "bundle"
+        cwd.mkdir()
+        (cwd / "databricks.yml").write_text(bundle, encoding="utf-8")
     result = subprocess.run(
         ["bash", "-c", _workflow_run_block(DEPLOY_DEV, OIDC_PROOF_STEP)],
-        cwd=REPO,  # reads the committed databricks.yml; the step writes nothing
+        cwd=cwd,
         env={
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "HOME": str(home),
@@ -5710,7 +5750,7 @@ def test_oidc_proof_step_passes_and_prints_only_booleans(tmp_path: Path) -> None
         "profile_auth_type_is_github_oidc",
         "profile_client_id_is_the_deployer",
         "profile_host_is_DATABRICKS_HOST",
-        "profile_host_is_the_bundle_target_host",
+        "bundle_target_commits_no_host",
         "sdk_authenticates_with_the_github_oidc_profile",
         "me_is_the_deployer",
         "me_in_admins",
@@ -5730,7 +5770,7 @@ def test_oidc_proof_step_passes_and_prints_only_booleans(tmp_path: Path) -> None
 
 _STATIC_PROOF_REFUSALS = {
     "secret-host-differs": ({"env": {"MIP_PROOF_DATABRICKS_HOST": "https://other-workspace.example"}}, "profile_host_is_DATABRICKS_HOST"),
-    "another-workspace-host": ("elsewhere", "profile_host_is_the_bundle_target_host"),
+    "a-committed-bundle-host": ("committed-host", "bundle_target_commits_no_host"),
     "pat-profile": ({"profile": "pat"}, "profile_auth_type_is_github_oidc"),
     "stored-token": ({"profile": "token"}, "profile_holds_only_host_auth_type_client_id"),
     "profile-client-differs": ({"profile": "client"}, "profile_client_id_is_the_deployer"),
@@ -5749,10 +5789,9 @@ def test_oidc_proof_step_refuses_a_wrong_profile_before_any_network_call(tmp_pat
     arrangement, failed = _STATIC_PROOF_REFUSALS[case]
     host = _bundle_target_host(OIDC_PROOF_TARGET)
     kwargs: dict[str, Any] = {}
-    if arrangement == "elsewhere":
-        # The profile and the secret agree, but name a workspace the bundle target does not.
-        other = "https://other-workspace.example"
-        kwargs = {"profile": _oidc_profile(other), "env": {"MIP_PROOF_DATABRICKS_HOST": other}}
+    if arrangement == "committed-host":
+        # A host committed to the client target again: a second source of truth.
+        kwargs = {"bundle": f"targets:\n  client:\n    workspace:\n      host: {host}\n"}
     elif "env" in arrangement:
         kwargs = {"env": arrangement["env"]}
     else:
@@ -6522,36 +6561,58 @@ def test_deploy_script_provisions_runtime_secrets_presence_only() -> None:
     assert "Apps deploy payload\n# carries only value_from resource names" in text
 
 
-_ENV_LOCAL_BASE = "DATABRICKS_HOST=https://example.cloud.databricks.com\nDATABRICKS_WAREHOUSE_ID=abc123\n"
+def _client_profile_env_local(install_class: str, **overrides: str | None) -> str:
+    """A full synthetic client profile for a sandbox ``.env.local`` (M1-PR2)."""
+
+    if install_class == "demo":
+        values = paychex_shaped_profile(**overrides)
+    else:
+        # A customer install keeps the weekly refresh off (the deploy refuses on).
+        values = customer_profile(
+            **{"MIP_SCHEDULED_REFRESH": "off", "MIP_AGENT_PROXY_SECRET_SCOPE": "mip-app-agent-proxy", **overrides}
+        )
+    return env_file_text({**values, "DATABRICKS_WAREHOUSE_ID": "abc123"})
+
+
+def _copy_client_profile_tooling(repo: Path) -> None:
+    """tools/clients and the lender registry it imports: the profile resolves before the preflight."""
+
+    shutil.copytree(REPO / "tools" / "clients", repo / "tools" / "clients", ignore=shutil.ignore_patterns("__pycache__"))
+    (repo / "tools" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "backend" / "schemas").mkdir(parents=True)
+    for module in ("__init__.py", "schemas/__init__.py", "schemas/lender_identity.py"):
+        shutil.copy2(REPO / "backend" / module, repo / "backend" / module)
 
 
 @pytest.mark.parametrize(
-    ("target", "app_env", "env_local", "shell"),
+    ("install_class", "app_env", "env_local", "shell"),
     (
-        ("prod", None, "", {}),
-        ("prod", None, "MIP_GENIE_ACTION_SECRET=legacy-does-not-count\n", {}),
-        ("prod", None, "MIP_COTALITY_ID_MASK_SECRET=REDACTED\n", {}),
-        ("dev", "customer", "", {}),
-        ("dev", None, "", {"MIP_GENIE_ACTION_SECRET_CURRENT": "REDACTED"}),
-        ("dev", None, "", {}),
+        ("customer", None, "", {}),
+        ("customer", None, "MIP_GENIE_ACTION_SECRET=legacy-does-not-count\n", {}),
+        ("customer", None, "MIP_COTALITY_ID_MASK_SECRET=REDACTED\n", {}),
+        ("demo", "prod", "", {}),
+        ("demo", None, "", {"MIP_GENIE_ACTION_SECRET_CURRENT": "REDACTED"}),
+        ("demo", None, "", {}),
     ),
     ids=(
-        "prod-no-inputs",
-        "prod-legacy-genie-secret-only",
-        "prod-placeholder-mask",
-        "customer-runtime-no-inputs",
+        "customer-no-inputs",
+        "customer-legacy-genie-secret-only",
+        "customer-placeholder-mask",
+        "demo-prod-runtime-no-inputs",
         "sandbox-placeholder-current",
         "sandbox-no-inputs",
     ),
 )
 def test_deploy_preflight_requires_no_runtime_hmac_input(
-    tmp_path: Path, target: str, app_env: str | None, env_local: str, shell: dict[str, str]
+    tmp_path: Path, install_class: str, app_env: str | None, env_local: str, shell: dict[str, str]
 ) -> None:
     """An absent runtime key is generated once by the provisioner, so no input is required.
 
-    The dry run passes the runtime HMAC note and stops at the next required-key
-    gate (the AI Gateway proof key, deliberately unset here), which proves the
-    preflight got past the retired mask and action-key gates.
+    The dry run passes the runtime HMAC note and stops at the next key gate:
+    the AI Gateway proof key, which the client profile requires (M1-PR2), is
+    the profile fixture's malformed one here, so the key derivation refuses
+    it. That proves the preflight got past the retired mask and action-key
+    gates.
     """
 
     repo = tmp_path / "repo"
@@ -6562,25 +6623,37 @@ def test_deploy_preflight_requires_no_runtime_hmac_input(
     deploy_copy = script_dir / "deploy.sh"
     _write_deploy_fixture(deploy_copy, DEPLOY_SCRIPT.read_text(encoding="utf-8"))
     deploy_copy.chmod(0o755)
-    (repo / ".env.local").write_text(_ENV_LOCAL_BASE + env_local, encoding="utf-8")
+    _copy_client_profile_tooling(repo)
+    profile_overrides: dict[str, str | None] = {
+        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": DEMO_PROFILE["MIP_AI_GATEWAY_PROOF_SIGNING_KEY"],
+    }
+    if app_env is not None:
+        profile_overrides["MIP_APP_ENV"] = app_env
+    (repo / ".env.local").write_text(
+        _client_profile_env_local(install_class, **profile_overrides) + env_local, encoding="utf-8"
+    )
     _commit_deploy_fixture(repo)
+    subprocess.run(["git", "add", "tools", "backend"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Deploy Test", "-c", "user.email=deploy-test@example.com", "commit", "-qm", "profile tooling"],
+        cwd=repo,
+        check=True,
+    )
     fake_databricks = bin_dir / "databricks"
     fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
     fake_databricks.chmod(0o755)
 
-    env = {**os.environ, **shell, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
-    for name in (
-        "APP_ENV",
-        "MIP_COTALITY_ID_MASK_SECRET",
-        "MIP_GENIE_ACTION_SECRET",
-        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY",
-    ):
-        if name not in shell:
-            env.pop(name, None)
-    if app_env is not None:
-        env["APP_ENV"] = app_env
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith(("MIP_", "DATABRICKS_", "BUNDLE_VAR_", "APP_ENV"))
+    }
+    env.update(shell)
+    env["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+    env["MIP_DEPLOY_PYTHON"] = sys.executable
+    env["PYTHONDONTWRITEBYTECODE"] = "1"  # the exact-source gate refuses an untracked __pycache__
     result = subprocess.run(
-        ["bash", str(deploy_copy), "-t", target, "--dry-run", "--no-confirm"],
+        ["bash", str(deploy_copy), "-t", "client", "--dry-run", "--no-confirm"],
         cwd=repo,
         env=env,
         text=True,
@@ -6588,15 +6661,11 @@ def test_deploy_preflight_requires_no_runtime_hmac_input(
         check=False,
     )
 
-    runtime_env = app_env or ("sandbox" if target == "dev" else target)
-    assert result.returncode == 1
+    assert result.returncode == 1, result.stdout[-2000:] + result.stderr[-2000:]
     assert "runtime HMAC keys: presence-only" in result.stdout
     assert "MIP_COTALITY_ID_MASK_SECRET" not in result.stdout + result.stderr
     assert "MIP_GENIE_ACTION_SECRET_CURRENT" not in result.stdout + result.stderr
-    assert (
-        f"MIP_AI_GATEWAY_PROOF_SIGNING_KEY is required for target '{target}' (APP_ENV={runtime_env})"
-        in result.stderr
-    )
+    assert "[deploy] ERROR: MIP_AI_GATEWAY_PROOF_SIGNING_KEY is invalid." in result.stderr
     assert "step 2:" not in result.stdout
 
 
