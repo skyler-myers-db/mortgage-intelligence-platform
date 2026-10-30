@@ -294,6 +294,20 @@ def test_a_lookup_error_is_never_read_as_absent() -> None:
     assert report.lookups[0].outcome == "failed: PermissionDenied"
 
 
+@pytest.mark.parametrize("service", sorted({service for service, _ in fx.READ_ONLY_CALLS}))
+def test_every_kinds_lookup_error_refuses_and_only_not_found_reads_absent(service: str) -> None:
+    # Each GET treats only NotFound as "absent"; a list errors as a whole.
+    workspace = fx.RecordingWorkspace(failures={service: PermissionDenied("denied")})
+
+    report, workspace, _built = _evaluate(fx.first_install(), workspace)
+
+    failed = [record for record in report.lookups if record.outcome.startswith("failed")]
+    assert failed and {record.outcome for record in failed} == {"failed: PermissionDenied"}
+    assert {call[0] for call in workspace.calls if call[0] == service}, "the failing lookup ran"
+    assert set(report.codes) == {"lookup_failed"}, "never a pass, never a fold"
+    assert len(report.codes) == len(failed)
+
+
 def test_a_client_that_cannot_be_built_refuses_every_create() -> None:
     def factory() -> Any:
         raise RuntimeError("workspace is not the install's")
