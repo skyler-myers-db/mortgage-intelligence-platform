@@ -1298,11 +1298,10 @@ resources:
               path: sql/_rendered/transformations/assert_scheduled_refresh_outcome.sql
 
   pipelines:
-    # Slice 2 real-data migration: silver lift from cotality_mortgage_data.
-    # corelogic into mip.silver.* (5 tables). State-filtered to IL/CA/
-    # FL/TX/WA/CO at source. See pipelines/lakeflow/mip_feature_pipeline.py
-    # and sql/ddl/silver_*.sql for column contracts; docs/data-contract-
-    # module0.md §2 is authoritative.
+    # Slice 2 real-data migration: silver lift from the Cotality source share
+    # (the cotality_source_* variables) into ${var.uc_catalog}.silver.*. See
+    # pipelines/lakeflow/mip_feature_pipeline.py and sql/ddl/silver_*.sql for
+    # column contracts; docs/data-contract-module0.md §2 is authoritative.
     mip_feature_pipeline:
       name: mip_feature_pipeline
       catalog: ${var.uc_catalog}
@@ -1316,6 +1315,13 @@ resources:
       # development flag automatically. Hardcoding `development: true` here
       # blocks `databricks bundle validate -t prod`.
       continuous: false
+      # The source the pipeline reads. It requires all three keys and has no
+      # default source of its own, so a run without them fails before it
+      # reads anything (pipelines/lakeflow/mip_feature_pipeline.py).
+      configuration:
+        mip.cotality_source_catalog: ${var.cotality_source_catalog}
+        mip.cotality_source_schema: ${var.cotality_source_schema}
+        mip.cotality_source_table_prefix: ${var.cotality_source_table_prefix}
       libraries:
         - file:
             path: pipelines/lakeflow/mip_feature_pipeline.py
@@ -1440,6 +1446,20 @@ variables:
   lakebase_database_name:
     description: Lakebase Postgres database name backing Module 0 app state
     default: mip_app_state
+  # The Cotality source share the feature pipeline reads. The defaults are the
+  # canonical names in backend/config/source_names.py (a test pins them
+  # equal). tools/databricks/bundle_env.py exports them from
+  # MIP_COTALITY_SOURCE_*; the client profile's bundle-vars view carries the
+  # same fields.
+  cotality_source_catalog:
+    description: Unity Catalog catalog the Cotality source share is mounted as
+    default: cotality_mortgage_data
+  cotality_source_schema:
+    description: Schema of the Cotality source share that holds its tables
+    default: corelogic
+  cotality_source_table_prefix:
+    description: Name prefix of the Cotality source share's tables ('-' for none)
+    default: entrada_eval_
   runtime_secret_scope:
     description: >-
       Databricks Secret scope containing deployment-scoped masking and

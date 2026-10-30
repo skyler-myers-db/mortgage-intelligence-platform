@@ -22,6 +22,14 @@ class ProfileRefusal(ValueError):
         super().__init__("; ".join(self.lines))
 
 
+class BootstrapRefusal(ProfileRefusal):
+    """The account bootstrap refused (tools/clients/bootstrap_account.py).
+
+    Same contract as a profile refusal: each line names an input, a role or
+    a step and the rule it broke, never an identifier or a credential.
+    """
+
+
 def _location(loc: Iterable[object], error_type: str) -> str:
     parts = [str(part) for part in loc]
     if error_type == "extra_forbidden" and len(parts) > 1:

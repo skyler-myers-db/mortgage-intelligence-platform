@@ -3,7 +3,8 @@
 
 ``<catalog>.audit.asset_lineage`` (``sql/ddl/audit_asset_lineage_view.sql``)
 projects four columns of ``system.access.table_lineage`` for the edges into
-the install catalog from the install or the Cotality share catalog. Unity
+the install catalog from the install or the Cotality share catalog (the
+configured ``MIP_COTALITY_SOURCE_CATALOG``, canonical when unset). Unity
 Catalog evaluates a view with its owner's privileges on what it reads, so the
 deploying identity that creates the view must be able to read the system
 table; the App then needs ``SELECT`` on the view only, never a grant on the
@@ -27,11 +28,14 @@ Exit status (``scripts/deploy.sh`` maps it, between the
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Literal
 
+from backend.config import source_names
+from backend.config.source_names import CotalitySource
 from tools import render_sql
 
 REPO = Path(__file__).resolve().parents[2]
@@ -80,9 +84,16 @@ def probe_statement() -> str:
     )
 
 
-def view_statement(catalog: str, *, source: Path = VIEW_SQL) -> str:
+def view_statement(
+    catalog: str,
+    *,
+    source: Path = VIEW_SQL,
+    cotality: CotalitySource = source_names.CANONICAL,
+) -> str:
     """The rendered CREATE OR REPLACE VIEW, comment lines and terminator removed."""
-    rendered = render_sql.render_for_catalog(source.read_text(encoding="utf-8"), catalog=catalog)
+    rendered = render_sql.render_for_catalog(
+        source.read_text(encoding="utf-8"), catalog=catalog, cotality=cotality
+    )
     body = "\n".join(
         line for line in rendered.splitlines() if not line.lstrip().startswith("--")
     ).strip()
@@ -117,12 +128,17 @@ def described_columns(response: object) -> tuple[str, ...]:
     return tuple(names)
 
 
-def ensure_asset_lineage_view(run: StatementRunner, *, catalog: str) -> Outcome:
+def ensure_asset_lineage_view(
+    run: StatementRunner,
+    *,
+    catalog: str,
+    cotality: CotalitySource = source_names.CANONICAL,
+) -> Outcome:
     """Probe, publish and verify the view; ``skipped`` when the probe is denied.
 
     ``run`` executes one statement and raises on any non-success.
     """
-    statement = view_statement(catalog)
+    statement = view_statement(catalog, cotality=cotality)
     try:
         run(probe_statement())
     except RuntimeError as exc:
@@ -165,6 +181,12 @@ def main(argv: list[str] | None = None) -> int:
     if not warehouse_id or render_sql._UC_IDENTIFIER.fullmatch(catalog) is None:
         print("ensure_asset_lineage_view: invalid --warehouse-id or --catalog", file=sys.stderr)
         return 2
+    try:
+        # scripts/deploy.sh exports the resolved MIP_COTALITY_SOURCE_* names.
+        cotality = source_names.from_env(os.environ)
+    except ValueError as exc:
+        print(f"ensure_asset_lineage_view: {exc}", file=sys.stderr)
+        return 2
 
     from tools.databricks.ensure_campaign_treatment_table import execute_sql  # noqa: PLC0415
     from tools.databricks.workspace_auth import deployment_workspace_client  # noqa: PLC0415
@@ -175,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
         return execute_sql(workspace, warehouse_id=warehouse_id, statement=statement)
 
     try:
-        outcome = ensure_asset_lineage_view(run, catalog=catalog)
+        outcome = ensure_asset_lineage_view(run, catalog=catalog, cotality=cotality)
     except LineageViewError as exc:
         print(f"ensure_asset_lineage_view: {exc}", file=sys.stderr)
         return EXIT_FAILED
