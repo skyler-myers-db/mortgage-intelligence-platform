@@ -7,9 +7,14 @@ The guards' own reviewed patterns refuse the canonical share
 changes them. An install that mounts the share under other names
 (``backend/config/source_names.py``) adds exactly these refusals: the share's
 schema-qualified prefix ``catalog.schema.`` and each share table's three-part
-name, each ``re.escape``'d. A bare configured token is never a pattern: a
-schema called ``mortgage`` must leave every ordinary mortgage question alone,
-so a form that is not ``catalog.schema.``-qualified refuses to compile. The
+name, each part ``re.escape``'d. Each part may carry an SQL identifier quote
+and each dot surrounding whitespace, the spellings SQL itself accepts
+(`` `acme`.`mortgage`. `` and ``acme . mortgage .``): the canonical growth
+guard refuses its bare catalog token, so it refuses those spellings too, and
+a configured install must not be weaker. A bare configured token is never a
+pattern: a schema called ``mortgage`` must leave every ordinary mortgage
+question alone, so a form that is not ``catalog.schema.``-qualified refuses to
+compile, and every spelling still needs every part and both dots. The
 canonical source adds nothing, and no exemption set is read or widened here.
 
 Runtime settings register the forms (``backend/config/settings.py``), so the
@@ -31,6 +36,19 @@ _forms_provider: _FormsProvider | None = None
 # required, so no bare catalog, schema or table name can pass.
 _QUALIFIED_FORM = re.compile(r"[a-z_][a-z0-9_]{0,254}\.[a-z_][a-z0-9_]{0,254}\.[a-z0-9_]{0,320}")
 
+# An identifier quote of either SQL dialect Databricks parses (the backtick,
+# and the double quote under ANSI double-quoted identifiers), optional around
+# each part, and whitespace around each dot: ``acme . mortgage .`` and
+# `` `acme`.`mortgage`. `` name the share as ``acme.mortgage.`` does.
+_QUOTE = r'[`"]?'
+_DOT = rf"{_QUOTE}\s*\.\s*{_QUOTE}"
+
+
+def _spellings(form: str) -> str:
+    """``form``'s parts, each ``re.escape``'d, joined by a quoted-or-spaced dot."""
+
+    return _QUOTE + _DOT.join(re.escape(part) for part in form.split("."))
+
 
 def set_configured_source_forms_provider(provider: _FormsProvider | None) -> None:
     """Register the configured share's qualified names without importing settings."""
@@ -45,7 +63,7 @@ def _compiled(forms: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
         return ()
     if any(_QUALIFIED_FORM.fullmatch(form) is None for form in forms):
         raise ValueError("a configured Cotality source guard form must be catalog.schema.-qualified")
-    alternatives = "|".join(re.escape(form) for form in forms)
+    alternatives = "|".join(_spellings(form) for form in forms)
     # A left boundary only: anything after ``catalog.schema.`` is still the share.
     return (re.compile(rf"(?<![A-Za-z0-9_])(?:{alternatives})", re.IGNORECASE),)
 

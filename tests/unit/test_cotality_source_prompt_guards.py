@@ -5,8 +5,9 @@ Two surfaces name the share: the growth objective guard
 scope-bypass matcher (``_SCOPE_BYPASS_PROMPT_PATTERNS``, ``scope_bypass``).
 Their reviewed canonical patterns are unchanged. A configured share adds
 exactly its qualified names (``catalog.schema.`` and each table's three-part
-name, ``backend/config/source_names.qualified_forms``), each ``re.escape``'d,
-on both surfaces; a bare configured token never becomes a pattern, so a schema
+name, ``backend/config/source_names.qualified_forms``), each part
+``re.escape``'d and spelled as SQL accepts it (quoted parts, spaced dots), on
+both surfaces; a bare configured token never becomes a pattern, so a schema
 called ``mortgage`` leaves every mortgage question alone.
 
 The battery runs every reviewed bank (the Ask Genie allow and refusal banks,
@@ -75,9 +76,27 @@ def _bare_probes(source: CotalitySource) -> list[str]:
     return [_probe(name) for name in bare]
 
 
+def _quoted(form: str, quote: str) -> str:
+    return ".".join(f"{quote}{part}{quote}" if part else part for part in form.split("."))
+
+
 def _qualified_probes(source: CotalitySource) -> list[str]:
+    """Each qualified form, upper-cased, part-quoted and dot-spaced as SQL accepts."""
+
     forms = source_names.qualified_forms(source)
-    return [_probe(form) for form in forms] + [_probe(forms[1].upper())]
+    table = forms[1]
+    catalog_schema, _, table_name = table.rpartition(".")
+    spelled = [
+        table.upper(),
+        _quoted(table, "`"),
+        _quoted(forms[0], "`"),
+        _quoted(table, '"'),
+        f"`{catalog_schema}`.{table_name}",
+        table.replace(".", " . "),
+        forms[0].replace(".", " ."),
+        table.replace(".", ". "),
+    ]
+    return [_probe(form) for form in (*forms, *spelled)]
 
 
 _BANKS = (
@@ -176,8 +195,14 @@ def test_every_form_is_qualified_and_no_bare_token_matches(source: CotalitySourc
     assert all(guard_forms._QUALIFIED_FORM.fullmatch(form) for form in forms)
     for question in _bare_probes(source):
         assert pattern.search(question) is None, question
+    for name in (source.catalog, source.schema, f"{source.catalog}.{source.schema}"):
+        # Quoted or spaced, a name short of ``catalog.schema.`` is still bare.
+        for spelled in (_quoted(name, "`"), _quoted(name, '"'), name.replace(".", " . ")):
+            assert pattern.search(_probe(spelled)) is None, spelled
     assert pattern.search(f"use {source.catalog}.{source.schema}.anything") is not None
+    assert pattern.search(f"use `{source.catalog}` . `{source.schema}` . anything") is not None
     assert pattern.search(f"x{source.catalog}.{source.schema}.") is None
+    assert pattern.search(f"x {source.catalog}x.{source.schema}.") is None
 
 
 @pytest.mark.parametrize(
@@ -195,6 +220,7 @@ def test_a_regex_metacharacter_in_a_form_is_escaped() -> None:
     assert pattern.search("a_b.c_d.") is not None
     assert pattern.search("aXb.c_d.") is None
     assert pattern.search("a_bXc_d.") is None
+    assert pattern.search("a_b c_d.") is None
 
 
 def test_importing_settings_registers_the_configured_forms(tmp_path: Path) -> None:
