@@ -1940,10 +1940,14 @@ refusal here is the refusal that step would raise with the App down:
   signed-blue path the probe runs step 0a's verifier
   (`verified_signed_last_good_contract`): a missing record or rollback scope
   refuses as `rollback_record_absent`, a failed signature, digest or
-  scope-ownership proof as `rollback_record_tampered`, and an App identity,
-  Gateway resource or active deployment that no longer matches the record as
-  `rollback_record_drift` (step 0a would otherwise redeploy the record's
-  deployment over whatever serves now, such as an emergency payload deploy).
+  scope-ownership proof as `rollback_record_tampered`, and an App identity or
+  Gateway resource that no longer matches the record, or an active deployment
+  that is pending or still in progress, as `rollback_record_drift`. An active
+  deployment that is simply not the record's is no refusal: step 0a's `ensure`
+  restores the record's deployment over it, which is how a re-run recovers a
+  run killed after green activation and before signed capture, so the probe
+  only names it. The same restore replaces an emergency payload deploy, as it
+  did before these probes.
   With `MIP_REBASE_UNVERIFIED_APP=1` and a first-install journal that is not
   signed, it runs the bootstrap gate's absence proof instead, moved here from
   step 0a: a record that exists refuses as `rollback_record_present`, and a

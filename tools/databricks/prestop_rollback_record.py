@@ -11,11 +11,13 @@ App still serves:
   ``ensure`` path calls (``verified_signed_last_good_contract``). A missing
   record or rollback scope refuses as ``rollback_record_absent``; a failed
   signature, digest or scope-ownership proof as ``rollback_record_tampered``;
-  an App identity or Gateway resource that no longer matches the record, or an
-  active deployment that is not the record's, as ``rollback_record_drift``.
-  On drift ``ensure`` would redeploy the record's deployment over whatever
-  serves now (an emergency deploy, or a run that died before capture), so the
-  operator decides that, not this run.
+  an App identity or Gateway resource that no longer matches the record as
+  ``rollback_record_drift``, as does an active deployment that cannot be read
+  as one stable id (a pending or in-progress deployment), which ``ensure``
+  refuses too. An active deployment that is not the record's is no refusal:
+  ``ensure`` restores the record's deployment over it (a run killed after
+  green activation and before signed capture resumes that way), so the probe
+  names it in a note and leaves the recovery to step 0a.
 * **absent** (existing App with ``MIP_REBASE_UNVERIFIED_APP=1``, journal not
   signed): ``ASSERT_ABSENT`` is the bootstrap gate's proof, moved here from
   step 0a. A record that exists refuses as ``rollback_record_present``. A
@@ -77,10 +79,10 @@ _REMEDY_TAMPERED = (
     "owner review the scope's audit log before any repair. Then re-run."
 )
 _REMEDY_DRIFT = (
-    "The live App no longer matches its signed record, so step 0a would redeploy the "
-    "record's deployment over what serves now. Confirm which deployment should serve "
-    "(an emergency payload deploy is the usual cause); the owner either restores the "
-    "recorded deployment or re-adopts the live one. Then re-run."
+    "The live App's identity, Gateway resources or deployment state no longer match its "
+    "signed record, so step 0a refuses after it stops the App. Wait for a pending "
+    "deployment to finish; otherwise have the owner compare the App with docs/deployment.md "
+    "(App rollback record) before any repair. Then re-run."
 )
 _REMEDY_PRESENT = (
     "A signed last-good record exists, so the one-time unsigned rebase is refused: unset "
@@ -143,17 +145,16 @@ def _signed_verdict(workspace: Any, *, app_name: str, scope: str) -> RollbackRec
         return RollbackRecordVerdict((_refusal(_classify(exc), str(exc)),), ())
     try:
         active = ACTIVE_DEPLOYMENT(workspace, app_name=app_name)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - ensure reads it the same way and refuses
         return RollbackRecordVerdict((_refusal(ROLLBACK_RECORD_DRIFT, str(exc)),), (), contract)
     if active != contract.deployment_id:
         return RollbackRecordVerdict(
-            (
-                _refusal(
-                    ROLLBACK_RECORD_DRIFT,
-                    f"the active deployment {active} is not the record's {contract.deployment_id}",
-                ),
-            ),
             (),
+            (
+                f"signed last-good record verified; the active deployment {active} is not "
+                f"the record's {contract.deployment_id}, so step 0a restores the record's "
+                "deployment over it before any other mutation",
+            ),
             contract,
         )
     return RollbackRecordVerdict(

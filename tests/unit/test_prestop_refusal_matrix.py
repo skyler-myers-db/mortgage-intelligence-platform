@@ -270,7 +270,12 @@ CASES: tuple[tuple[str, Any, dict[str, str]], ...] = (
     ),
     (codes.ROLLBACK_RECORD_PRESENT, _set(("rebase_absence",), "present"), {"MIP_REBASE_UNVERIFIED_APP": "1"}),
     (codes.ROLLBACK_RECORD_TAMPERED, _set(("record",), "App rollback contract signature is invalid"), {}),
-    (codes.ROLLBACK_RECORD_DRIFT, _set(("app", "active_deployment"), "deployment-emergency"), {}),
+    (
+        codes.ROLLBACK_RECORD_DRIFT,
+        _set(("record",), "App service-principal identity drifted from the signed rollback contract"),
+        {},
+    ),
+    (codes.ROLLBACK_RECORD_DRIFT, _set(("app", "pending"), True), {}),
     (codes.OWNER_POLICY, _owner_outside_policy, {}),
     (codes.OWNER_EQUIVALENT, _owner_equivalent_human, {}),
     (codes.OWNER_EQUIVALENT, _foreign_genie_manager, {}),
@@ -309,6 +314,23 @@ def test_a_clean_estate_reaches_the_lease(tmp_path: Path) -> None:
         f"one Genie turn on the governed space {GOVERNED_SPACE} completed",
     ):
         assert note in result.stdout, note
+
+
+def test_an_active_deployment_other_than_the_record_reaches_the_step_0a_restore(
+    tmp_path: Path,
+) -> None:
+    # The re-run that recovers a run killed after green activation: step 0a's
+    # ensure restores the record's deployment, so no probe refuses it.
+    estate = clean_estate()
+    estate["app"]["active_deployment"] = "deployment-green"
+
+    result, after, reached, _cli_calls = _deploy(tmp_path, estate)
+
+    detail = result.stdout[-3000:] + result.stderr[-6000:]
+    assert reached == ["lease"], detail
+    assert "the active deployment deployment-green is not the record's deployment-blue" in result.stdout
+    assert after["app"]["state"] == "RUNNING"
+    assert after["app"]["active_deployment"] == "deployment-green"
 
 
 @pytest.mark.parametrize(

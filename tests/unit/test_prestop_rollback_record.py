@@ -123,19 +123,24 @@ def test_every_verifier_failure_refuses_with_its_class(
     assert verdict.contract is None
 
 
-def test_an_active_deployment_other_than_the_record_is_drift(
+def test_an_active_deployment_other_than_the_record_is_left_to_the_step_0a_restore(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # A run killed after green activation and before signed capture leaves this
+    # state; step 0a's ensure restores the record's deployment, so a refusal
+    # here would block the very re-run that recovers it.
     estate = clean_estate()
     estate["app"]["active_deployment"] = "deployment-emergency"
-    script = _Script(signed=signed_contract(estate["record"]))
+    contract = signed_contract(estate["record"])
 
-    verdict = _verdict(monkeypatch, script, estate=estate)
+    verdict = _verdict(monkeypatch, _Script(signed=contract), estate=estate)
 
-    assert _codes(verdict) == [codes.ROLLBACK_RECORD_DRIFT]
-    message = verdict.refusals[0].message
-    assert "the active deployment deployment-emergency is not the record's deployment-blue" in message
-    assert "would redeploy the record's deployment over what serves now" in message
+    assert verdict.refusals == () and verdict.contract is contract
+    assert verdict.notes == (
+        "signed last-good record verified; the active deployment deployment-emergency is "
+        "not the record's deployment-blue, so step 0a restores the record's deployment "
+        "over it before any other mutation",
+    )
 
 
 def test_a_pending_deployment_is_drift(monkeypatch: pytest.MonkeyPatch) -> None:
