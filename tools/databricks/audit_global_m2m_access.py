@@ -11,6 +11,7 @@ from tools.databricks.agent_runtime_access import (
     audit_global_genie_access,
     audit_global_no_genie_access,
 )
+from tools.databricks.estate.accepted_exposure import IDENTITIES, identity_matcher
 from tools.databricks.identity_boundary_probes import (
     ManagedWorkspaceGroupBinding,
     managed_workspace_group_binding,
@@ -348,6 +349,27 @@ def _audit_managed_query_group_governance(
     return principal_id, authoritative_effective_groups
 
 
+def assert_exposure_identity(
+    workspace: object, *, identity: str, app_name: str, application_id: str
+) -> None:
+    """Bind ``--exposure-identity`` to the audited principal before any matcher is used.
+
+    Only the App's matcher may accept an elevated exposure, so ``app`` must be
+    the named App's own service principal; ``runtime`` and ``proxy`` are read
+    class only and must not be it.
+    """
+
+    app_client_id = str(
+        _field(workspace.apps.get(app_name), "service_principal_client_id") or ""  # type: ignore[attr-defined]
+    ).strip()
+    is_app = bool(app_client_id) and app_client_id.casefold() == application_id.strip().casefold()
+    if (identity == "app") != is_app:
+        raise RuntimeError(
+            f"--exposure-identity {identity} does not match the audited principal: "
+            + ("it is not the App's service principal" if identity == "app" else "it is the App's")
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app-name", required=True)
@@ -373,7 +395,18 @@ def main(argv: list[str] | None = None) -> int:
     genie = parser.add_mutually_exclusive_group(required=True)
     genie.add_argument("--genie-space-id")
     genie.add_argument("--forbid-all-genie", action="store_true")
+    parser.add_argument(
+        "--exposure-identity",
+        choices=IDENTITIES,
+        help=(
+            "Judge Genie grants on unrelated spaces with this identity's accepted-exposure "
+            "matcher (MIP_ACCEPTED_EXPOSURE_JSON). Refused with --forbid-all-genie: the "
+            "verifier's audit never consults a matcher."
+        ),
+    )
     args = parser.parse_args(argv)
+    if args.forbid_all_genie and args.exposure_identity:
+        parser.error("--forbid-all-genie rejects --exposure-identity")
     if args.serving_endpoint and not args.expected_serving_permission:
         parser.error("--serving-endpoint requires --expected-serving-permission")
     if args.forbid_customer_serving and args.expected_serving_permission:
@@ -388,6 +421,17 @@ def main(argv: list[str] | None = None) -> int:
         workspace,
         expected_principal=args.expected_inventory_principal,
     )
+    matcher = None
+    if args.exposure_identity:
+        assert_exposure_identity(
+            workspace,
+            identity=args.exposure_identity,
+            app_name=args.app_name,
+            application_id=args.application_id,
+        )
+        matcher = identity_matcher(
+            args.exposure_identity, governed_space_ids=[args.genie_space_id]
+        )
     credential_lease = held_deployment_credential_assertion(workspace)
     (
         service_principal_id,
@@ -429,6 +473,7 @@ def main(argv: list[str] | None = None) -> int:
             application_id=args.application_id,
             service_principal_id=service_principal_id,
             effective_group_names=effective_group_names,
+            matcher=matcher,
         )
     elif args.forbid_all_genie:
         audit_global_no_genie_access(

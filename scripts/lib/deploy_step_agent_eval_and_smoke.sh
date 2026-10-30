@@ -147,6 +147,7 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
     --account-id "$DATABRICKS_ACCOUNT_ID" \
     --expected-serving-permission CAN_MANAGE \
     --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+    --exposure-identity runtime \
     --serving-endpoint "$MIP_AGENT_SUPERVISOR_ENDPOINT" \
     --serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT"
   step "re-audit final Supervisor proxy caller access after blue retirement"
@@ -243,6 +244,7 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
     --account-id "$DATABRICKS_ACCOUNT_ID" \
     --expected-serving-permission CAN_QUERY \
     --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+    --exposure-identity app \
     --serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT"
   step "clear the authenticated cutover journal after every final boundary proof"
   run_as_m2m_identity \
