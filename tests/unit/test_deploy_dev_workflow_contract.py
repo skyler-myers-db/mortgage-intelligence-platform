@@ -4945,10 +4945,16 @@ def test_first_install_dry_run_executes_no_databricks_operations(
     with (checkout / ".git" / "info" / "exclude").open("a", encoding="utf-8") as exclude:
         exclude.write(".venv\n")
     # M1-PR2: the client profile resolves before the preflight, so the
-    # sandbox carries a full synthetic one (tests/fixtures/client_profiles.py).
+    # sandbox carries a full synthetic one (tests/fixtures/client_profiles.py),
+    # with the weekly refresh off: the preflight refuses `on` for its
+    # service-principal deployer until M1-PR3.
     (checkout / ".env.local").write_text(
         env_file_text(
-            {**paychex_shaped_profile(), "DATABRICKS_WAREHOUSE_ID": "warehouse-1", "GENIE_SPACE_ID": "space-1"}
+            {
+                **paychex_shaped_profile(MIP_SCHEDULED_REFRESH="off", MIP_SCHEDULED_REFRESH_RECIPIENTS=None),
+                "DATABRICKS_WAREHOUSE_ID": "warehouse-1",
+                "GENIE_SPACE_ID": "space-1",
+            }
         ),
         encoding="utf-8",
     )
@@ -6565,7 +6571,11 @@ def _client_profile_env_local(install_class: str, **overrides: str | None) -> st
     """A full synthetic client profile for a sandbox ``.env.local`` (M1-PR2)."""
 
     if install_class == "demo":
-        values = paychex_shaped_profile(**overrides)
+        # The weekly refresh is off: the preflight refuses `on` for the
+        # profile's service-principal deployer until M1-PR3.
+        values = paychex_shaped_profile(
+            **{"MIP_SCHEDULED_REFRESH": "off", "MIP_SCHEDULED_REFRESH_RECIPIENTS": None, **overrides}
+        )
     else:
         # A customer install keeps the weekly refresh off (the deploy refuses on).
         values = customer_profile(

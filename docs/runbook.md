@@ -601,6 +601,11 @@ How it is switched on:
   (exit 2): there a cadence is a customer decision that needs a reviewed
   change. `tools/databricks/bundle_env.py` refuses an `UNPAUSED` export for
   any other install.
+- Until M1-PR3, the preflight also refuses `MIP_SCHEDULED_REFRESH=on` (exit 2,
+  before any bundle command) for a demo install whose deployer is a service
+  principal, which every `-t client` install is: the failure email would go to
+  an application id. Set `MIP_SCHEDULED_REFRESH=off` for such an install;
+  M1-PR3 mails the profile's `MIP_SCHEDULED_REFRESH_RECIPIENTS` instead.
 - A failed run emails the deploying user, on a demo install only.
   `bundle_env.py` writes that recipient into the target's
   `.databricks/bundle/<target>/variable-overrides.json` (`client`), because

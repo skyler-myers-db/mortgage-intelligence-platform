@@ -1417,8 +1417,9 @@ variables:
     description: >-
       Pause status of mip_scheduled_refresh's weekly schedule. PAUSED by
       default and set by no target: scripts/deploy.sh exports UNPAUSED only
-      for a demo install, and MIP_SCHEDULED_REFRESH=off opts it out. A
-      customer install stays PAUSED. Any apply outside scripts/deploy.sh
+      for a demo install whose deployer is an email (until M1-PR3, never a
+      service-principal deployer), and MIP_SCHEDULED_REFRESH=off opts it out.
+      A customer install stays PAUSED. Any apply outside scripts/deploy.sh
       re-pauses it.
     default: PAUSED
   scheduled_refresh_failure_recipients:

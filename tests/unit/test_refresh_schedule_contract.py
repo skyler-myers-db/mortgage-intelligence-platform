@@ -307,8 +307,18 @@ def test_unpaused_is_reachable_only_for_a_demo_install() -> None:
     assert "export BUNDLE_VAR_scheduled_refresh_pause_status" in code
 
 
+# A deployer whose user name is an email, which keeps the block's unpause path
+# covered, and the service-principal deployer every -t client profile has (the
+# profile takes the deployer as an application id).
+USER_DEPLOYER = "deployer@lender.example"
+SP_DEPLOYER = "00000000-0000-4000-8000-000000000001"
+
+
 def _bash_block(
-    install_class: str, env: dict[str, str] | None = None, dotenv: dict[str, str] | None = None
+    install_class: str,
+    env: dict[str, str] | None = None,
+    dotenv: dict[str, str] | None = None,
+    deployer: str = USER_DEPLOYER,
 ) -> subprocess.CompletedProcess[str]:
     bash = shutil.which("bash")
     assert bash
@@ -316,7 +326,7 @@ def _bash_block(
     arms = "".join(f"{name}) value='{value}' ;; " for name, value in (dotenv or {}).items())
     prelude = (
         "set -euo pipefail\nRED=''\nRST=''\n"
-        f"CLIENT_INSTALL_CLASS='{install_class}'\n"
+        f"CLIENT_INSTALL_CLASS='{install_class}'\nCLIENT_DEPLOYER='{deployer}'\n"
         'deployment_control_value() { local name="$1" default_value="${2:-}" value; value="${!name:-}"; '
         f'if [[ -z "$value" ]]; then case "$name" in {arms}*) ;; esac; fi; '
         "printf '%s' \"${value:-$default_value}\"; }\n"
@@ -339,6 +349,7 @@ def _result(completed: subprocess.CompletedProcess[str]) -> str:
 
 
 def test_the_block_unpauses_only_a_demo_install() -> None:
+    # Unpaused only where the failure mail reaches a mailbox: a deployer that is a user.
     assert _result(_bash_block("demo")) == "RESULT=UNPAUSED", "a demo install: on by default"
     assert _result(_bash_block("demo", env={"MIP_SCHEDULED_REFRESH": "on"})) == "RESULT=UNPAUSED"
     assert _result(_bash_block("demo", env={"MIP_SCHEDULED_REFRESH": "off"})) == "RESULT=PAUSED"
@@ -350,6 +361,32 @@ def test_the_block_unpauses_only_a_demo_install() -> None:
     assert _result(_bash_block("customer", env={"BUNDLE_VAR_scheduled_refresh_pause_status": "UNPAUSED"})) == (
         "RESULT=PAUSED"
     )
+    # A service-principal deployer pauses with `off`, as every customer install does.
+    assert _result(_bash_block("demo", env={"MIP_SCHEDULED_REFRESH": "off"}, deployer=SP_DEPLOYER)) == "RESULT=PAUSED"
+    assert _result(_bash_block("customer", deployer=SP_DEPLOYER)) == "RESULT=PAUSED"
+
+
+@pytest.mark.parametrize(
+    ("env", "dotenv"),
+    [({}, {}), ({"MIP_SCHEDULED_REFRESH": "on"}, {}), ({}, {"MIP_SCHEDULED_REFRESH": "on"})],
+)
+def test_the_block_refuses_a_demo_refresh_whose_failure_mail_would_reach_an_application_id(
+    env: dict[str, str], dotenv: dict[str, str]
+) -> None:
+    """Every -t client deployer is a service principal: refused before any apply writes UNPAUSED.
+
+    Without this the step-4 apply would write an UNPAUSED schedule mailing an
+    application id, and only the step-9c postflight would refuse it, after the
+    mutation.
+    """
+
+    refused = _bash_block("demo", env=env, dotenv=dotenv, deployer=SP_DEPLOYER)
+
+    assert refused.returncode == 2, refused.stdout
+    assert "MIP_SCHEDULED_REFRESH=on mails mip_scheduled_refresh's failures to the deploying user" in refused.stderr
+    assert "Set MIP_SCHEDULED_REFRESH=off until M1-PR3" in refused.stderr
+    assert SP_DEPLOYER not in refused.stderr, "the refusal names no identifier"
+    assert "RESULT=" not in refused.stdout
 
 
 @pytest.mark.parametrize(

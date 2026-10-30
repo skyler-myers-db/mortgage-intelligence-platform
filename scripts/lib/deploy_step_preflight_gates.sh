@@ -213,10 +213,16 @@ fi
 # M1-PR2) unpauses, by default; MIP_SCHEDULED_REFRESH=off opts it out. A
 # customer install is always PAUSED: its cadence is a customer decision that
 # needs a reviewed change here, so an explicit `on` there is refused rather
-# than ignored. Pure, so it also runs in DRY_RUN. A Jobs-UI unpause is
-# reverted by the next deploy, and any apply outside this script re-pauses the
-# live schedule; this switch is the durable one (docs/runbook.md "Weekly
-# scheduled refresh"). M1-PR3 derives this from the profile's refresh fields.
+# than ignored. The schedule mails its failures to the deploying user, which
+# the live checks pin to the profile's deployer: a deployer that is not an
+# email (every service-principal deployer, which a -t client install always
+# has) gets `on` refused here, before any apply could write an UNPAUSED
+# schedule that the step-9c postflight would only refuse afterwards. Pure, so
+# it also runs in DRY_RUN. A Jobs-UI unpause is reverted by the next deploy,
+# and any apply outside this script re-pauses the live schedule; this switch
+# is the durable one (docs/runbook.md "Weekly scheduled refresh"). M1-PR3
+# derives this from the profile's refresh fields and mails
+# MIP_SCHEDULED_REFRESH_RECIPIENTS instead.
 if [[ "$CLIENT_INSTALL_CLASS" == "demo" ]]; then
   _SCHEDULED_REFRESH="$(deployment_control_value MIP_SCHEDULED_REFRESH on)"
 else
@@ -231,6 +237,11 @@ case "$_SCHEDULED_REFRESH" in
 esac
 if [[ "$CLIENT_INSTALL_CLASS" != "demo" && "$_SCHEDULED_REFRESH" == "on" ]]; then
   echo "${RED}[deploy] MIP_SCHEDULED_REFRESH=on is honoured only for a demo install; a ${CLIENT_INSTALL_CLASS} install keeps mip_scheduled_refresh PAUSED.${RST}" >&2
+  exit 2
+fi
+if [[ "$CLIENT_INSTALL_CLASS" == "demo" && "$_SCHEDULED_REFRESH" == "on" && \
+      "$CLIENT_DEPLOYER" != *@* ]]; then
+  echo "${RED}[deploy] MIP_SCHEDULED_REFRESH=on mails mip_scheduled_refresh's failures to the deploying user, and this install deploys as its deployer service principal, whose user name is an application id, not an email. Set MIP_SCHEDULED_REFRESH=off until M1-PR3 mails MIP_SCHEDULED_REFRESH_RECIPIENTS instead.${RST}" >&2
   exit 2
 fi
 if [[ "$CLIENT_INSTALL_CLASS" == "demo" && "$_SCHEDULED_REFRESH" == "on" ]]; then

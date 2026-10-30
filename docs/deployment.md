@@ -2209,7 +2209,10 @@ before M1-PR2, the dev target's live install) runs the weekly
 `mip_scheduled_refresh` (FRED → gold → lifecycle → KPI, Fridays 06:00
 America/Chicago). `MIP_SCHEDULED_REFRESH=off` pauses it. A customer install
 always ships it paused and refuses `MIP_SCHEDULED_REFRESH=on`. Its failure
-email goes to the deploying user on a demo install only. The schedule reaches
+email goes to the deploying user on a demo install only, so until M1-PR3 mails
+the profile's `MIP_SCHEDULED_REFRESH_RECIPIENTS`, the preflight also refuses
+`MIP_SCHEDULED_REFRESH=on` for a demo install deployed by a service principal
+(every `-t client` install), before any bundle command. The schedule reaches
 the workspace only through the bundle apply of a GO governed
 `./scripts/deploy.sh -t client` run; the live install is not adopted yet, and
 its last governed run was NO-GO on 2026-10-27. See `docs/runbook.md`, "Weekly scheduled

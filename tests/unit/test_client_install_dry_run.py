@@ -7,10 +7,13 @@ The client profile is client #1's shape with synthetic identifiers
   (tests/fixtures/deploy_sandbox.py), with a stub ``databricks`` that fails on
   anything but ``--version``: the profile resolves first, every bundle and job
   command addresses ``client``, the read-only live checks are planned before
-  any bundle command, the demo install's weekly refresh is unpaused and
-  verified as such, and every App source check names the deployer and the
+  any bundle command, and every App source check names the deployer and the
   client key. A refused profile, or a profile whose host is not the auth
-  host, stops the run before any planned command.
+  host, stops the run before any planned command. The demo install's weekly
+  refresh stops it before any bundle command: its failure mail would go to
+  the deployer service principal's application id, so the preflight refuses
+  ``MIP_SCHEDULED_REFRESH=on`` until M1-PR3 mails the profile's recipients,
+  and the plan above runs with it ``off``.
 * tools/databricks/bundle_env.py with that profile renders byte for byte the
   SQL the retired dev target rendered for the same install (catalog ``mip``,
   Summit demo feeds on), and exports today's resource names: the variable
@@ -57,6 +60,7 @@ NAME_VARIABLES = (
 
 def test_the_client_dry_run_addresses_only_the_client_target(tmp_path: Path) -> None:
     checkout, env, log = sandbox(tmp_path)
+    _with_env_local(checkout, MIP_SCHEDULED_REFRESH="off", MIP_SCHEDULED_REFRESH_RECIPIENTS=None)
 
     result = dry_run(checkout, env)
 
@@ -74,9 +78,9 @@ def test_the_client_dry_run_addresses_only_the_client_target(tmp_path: Path) -> 
         assert re.search(r"(?:^| )-t client(?: |$)", command), command
     assert not any(re.search(r"(?:^| )-t (?!client\b)", command) for command in commands)
     assert "target:     client (client client-one, demo install)" in out
-    assert "scheduled refresh: UNPAUSED" in out, "a demo install runs the weekly refresh"
+    assert "scheduled refresh: PAUSED" in out
     verify = [command for command in commands if "verify_scheduled_refresh_state" in command]
-    assert verify == [".venv/bin/python -m tools.databricks.verify_scheduled_refresh_state --expect UNPAUSED --live-install"]
+    assert verify == [".venv/bin/python -m tools.databricks.verify_scheduled_refresh_state --expect PAUSED --live-install"]
     assert "deployment bind mip_app mip-app -t client" in out
     # The per-release App source: preflight checks the closure for real (git
     # only), step 1 prints the stage, step 5 the publish, and every
@@ -118,6 +122,26 @@ def test_a_refused_profile_stops_the_dry_run_before_any_planned_command(tmp_path
     assert "MIP_EXPECT_WORKSPACE_ID" in result.stderr and "the client profile was refused" in result.stderr
     assert planned_commands(result.stdout) == []
     assert not log.exists(), "refused before any Databricks call, --version included"
+
+
+def test_a_demo_refresh_mailing_the_deployer_sp_stops_the_dry_run_before_any_bundle_command(
+    tmp_path: Path,
+) -> None:
+    """The paychex-shaped profile has the weekly refresh on: refused before any apply could write it.
+
+    Only the read-only live checks, which pin the deploying user to that
+    service principal, are planned ahead of the refusal.
+    """
+
+    checkout, env, log = sandbox(tmp_path)
+
+    result = dry_run(checkout, env)
+
+    assert result.returncode == 2, result.stdout[-2000:] + result.stderr[-2000:]
+    assert "MIP_SCHEDULED_REFRESH=on mails mip_scheduled_refresh's failures to the deploying user" in result.stderr
+    assert "scheduled refresh:" not in ANSI.sub("", result.stdout)
+    assert planned_commands(result.stdout) == [".venv/bin/python -m tools.clients.live_checks"]
+    assert log.read_text(encoding="utf-8").splitlines() in ([], ["--version"]), "no Databricks CLI call"
 
 
 def test_a_host_that_is_not_the_profiles_stops_the_dry_run_before_the_live_checks(tmp_path: Path) -> None:
