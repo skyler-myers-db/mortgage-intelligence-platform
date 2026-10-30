@@ -28,12 +28,17 @@ Who reads the names:
   pipeline's configuration, which the pipeline reads with no fallback.
 * ``tools/databricks/provision_genie_space.py`` renders the Genie space spec,
   and ``tools/databricks/ensure_asset_lineage_view.py`` the lineage view.
+* The App reads them as settings (``backend/config/settings.py``,
+  ``mip_cotality_source_*``, canonical by default): the asset registry and the
+  lineage manifest name the configured share tables under their canonical
+  ``source_key``, and the prompt guards refuse the configured share's
+  ``qualified_forms`` beside their own canonical patterns.
+  ``tools/databricks/app_deploy_payload.py`` sends a name to the App only when
+  it is set and differs from the canonical one.
 
 ``from_env`` reads a mapping the caller has already merged: scripts/deploy.sh
 resolves the names shell-first, then from ``.env.local``, and exports them, as
-it does for every deployment control. The App's registry, lineage and guards
-still name the canonical source; they move onto these names, through App
-settings, separately.
+it does for every deployment control.
 
 Standard library only: the renderer runs before the backend's runtime
 requirements are installed.
@@ -175,4 +180,37 @@ def from_env(environ: Mapping[str, str]) -> CotalitySource:
         catalog=environ.get(CATALOG_ENV),
         schema=environ.get(SCHEMA_ENV),
         table_prefix=environ.get(TABLE_PREFIX_ENV),
+    )
+
+
+def canonical_stem(catalog: str | None, schema: str, object_name: str) -> str | None:
+    """The stem when the three parts name a canonical share table, else ``None``.
+
+    Exact and case-sensitive, as the closed-shape render is: the registry and
+    the lineage manifest spell the canonical names in lowercase.
+    """
+
+    prefix = CANONICAL.table_prefix
+    if catalog != CANONICAL.catalog or schema != CANONICAL.schema:
+        return None
+    if not object_name.startswith(prefix):
+        return None
+    stem = object_name[len(prefix) :]
+    return stem if stem in TABLE_STEMS else None
+
+
+def qualified_forms(source: CotalitySource) -> tuple[str, ...]:
+    """The configured share's qualified names, for the prompt guards.
+
+    ``catalog.schema.`` and each share table's three-part name. Never a bare
+    catalog, schema or table name: a schema called ``mortgage`` must not make
+    every mortgage question a refusal. Empty for the canonical source, whose
+    names the guards' own reviewed patterns already refuse.
+    """
+
+    if source.is_canonical:
+        return ()
+    return (
+        f"{source.catalog}.{source.schema}.",
+        *(source.table(stem) for stem in TABLE_STEMS),
     )

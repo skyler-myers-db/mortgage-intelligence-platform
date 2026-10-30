@@ -23,6 +23,7 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from backend.config import source_names  # noqa: E402
 from backend.config.runtime_secret_policy import runtime_secret_text  # noqa: E402
 from backend.schemas.lender_identity import (  # noqa: E402
     effective_public_tenant_id,
@@ -304,6 +305,37 @@ def _validated_keep_warm(dotenv: dict[str, str]) -> None:
         )
 
 
+def _cotality_source_env(dotenv: dict[str, str]) -> list[dict[str, str]]:
+    """``MIP_COTALITY_SOURCE_*`` for the App, only where set and non-canonical.
+
+    Each name validates through backend/config/source_names.py (a template
+    value refuses here, before the App would refuse it at boot) and rides as
+    configuration spells it, ``-`` for no table prefix. A canonical or unset
+    name is left to the App's canonical default, so a canonical install's
+    env-name set is exactly the one the emergency recipe gates on.
+    """
+
+    source = source_names.resolve(
+        catalog=_env_value(source_names.CATALOG_ENV, dotenv),
+        schema=_env_value(source_names.SCHEMA_ENV, dotenv),
+        table_prefix=_env_value(source_names.TABLE_PREFIX_ENV, dotenv),
+    )
+    canonical = source_names.CANONICAL
+    return [
+        {"name": name, "value": value}
+        for name, value, default in (
+            (source_names.CATALOG_ENV, source.catalog, canonical.catalog),
+            (source_names.SCHEMA_ENV, source.schema, canonical.schema),
+            (
+                source_names.TABLE_PREFIX_ENV,
+                source.table_prefix_setting,
+                canonical.table_prefix_setting,
+            ),
+        )
+        if value != default
+    ]
+
+
 # The runtime's Literal (backend.config.settings.mip_genie_refusal_text_capture).
 REFUSAL_TEXT_CAPTURE_VALUES = ("enabled", "disabled")
 
@@ -378,6 +410,7 @@ def build_payload(
     _validated_keep_warm(dotenv)
     presenter_mode = _validated_presenter_mode(dotenv, target)
     _validated_refusal_text_capture(dotenv)
+    cotality_source_env = _cotality_source_env(dotenv)
     if bool(otel_endpoint.strip()) != bool(otel_header_resource.strip()):
         raise ValueError(
             "MIP_OTEL_ENDPOINT and its App secret resource must be configured together"
@@ -442,6 +475,7 @@ def build_payload(
                 continue
             env_vars.append({"name": name, "value_from": SECRET_RESOURCE_BINDINGS[name]})
 
+    env_vars.extend(cotality_source_env)
     for name in NON_SECRET_OPERATOR_VARS:
         _append_value(
             env_vars,

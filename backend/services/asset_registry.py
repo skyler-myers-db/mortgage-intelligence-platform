@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from backend.config import source_names
 from backend.config.settings import settings
 from backend.schemas.assets import AssetObjectType
 
@@ -29,6 +30,10 @@ class AssetDescriptor:
     #: No source-readiness row covers this asset (UC functions, ref tables,
     #: the readiness ledger itself, the lifecycle mirror, owner transfers).
     freshness_not_tracked: bool = False
+    #: A Cotality share table's canonical three-part name, the same on every
+    #: install; ``None`` for the App's own assets. Its ``key`` is canonical
+    #: too, while ``fqn`` names the share this install configures.
+    source_key: str | None = None
 
     @property
     def fqn(self) -> str:
@@ -69,6 +74,34 @@ def _descriptor(
         aliases=aliases,
         freshness_basis=freshness_basis,
         freshness_not_tracked=freshness_not_tracked,
+    )
+
+
+# The share this install reads (settings ``mip_cotality_source_*``).
+_COTALITY_SOURCE = settings.cotality_source()
+
+
+def _share_descriptor(
+    stem: str,
+    *,
+    title: str,
+    description: str,
+    freshness_basis: str | None = None,
+    freshness_not_tracked: bool = False,
+) -> AssetDescriptor:
+    """A Cotality share table: canonical key, configured location."""
+
+    return AssetDescriptor(
+        key=source_names.CANONICAL.table_name(stem),
+        title=title,
+        description=description,
+        schema_name=_COTALITY_SOURCE.schema,
+        object_name=_COTALITY_SOURCE.table_name(stem),
+        catalog_name=_COTALITY_SOURCE.catalog,
+        allow_count_fallback=False,
+        freshness_basis=freshness_basis,
+        freshness_not_tracked=freshness_not_tracked,
+        source_key=source_names.CANONICAL.table(stem),
     )
 
 
@@ -156,68 +189,47 @@ ASSET_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
             "to prove what data is live, pending, or synthetic."
         ),
     ),
-    _descriptor(
-        "corelogic",
-        "entrada_eval_property_domain_v3",
+    _share_descriptor(
+        "property_domain_v3",
         freshness_basis="Cotality Public Records",
-        catalog_name="cotality_mortgage_data",
         title="Cotality Property Domain Share",
         description="Governed shared property-domain input used by the Module 0 property lift.",
-        allow_count_fallback=False,
     ),
-    _descriptor(
-        "corelogic",
-        "entrada_eval_voluntary_lien_status_marketing_v2",
+    _share_descriptor(
+        "voluntary_lien_status_marketing_v2",
         freshness_basis="Voluntary Lien",
-        catalog_name="cotality_mortgage_data",
         title="Cotality Voluntary Lien Share",
         description="Governed shared lien and valuation input used by Module 0 economics.",
-        allow_count_fallback=False,
     ),
-    _descriptor(
-        "corelogic",
-        "entrada_eval_mls_listing_v1",
+    _share_descriptor(
+        "mls_listing_v1",
         freshness_basis="MLS Listings",
-        catalog_name="cotality_mortgage_data",
         title="Cotality MLS Listing Share",
         description="Governed shared MLS listing input used by the listing-activity lift.",
-        allow_count_fallback=False,
     ),
-    _descriptor(
-        "corelogic",
-        "entrada_eval_heloc_propensity_score_v1",
+    _share_descriptor(
+        "heloc_propensity_score_v1",
         freshness_basis="Cotality HELOC Propensity",
-        catalog_name="cotality_mortgage_data",
         title="Cotality HELOC Propensity Share",
         description="Governed shared HELOC propensity-model input; not a permit filing feed.",
-        allow_count_fallback=False,
     ),
-    _descriptor(
-        "corelogic",
-        "entrada_eval_refi_propensity_score_v1",
+    _share_descriptor(
+        "refi_propensity_score_v1",
         freshness_basis="Cotality Refi Propensity",
-        catalog_name="cotality_mortgage_data",
         title="Cotality Refi Propensity Share",
         description="Governed shared refinance propensity-model input.",
-        allow_count_fallback=False,
     ),
-    _descriptor(
-        "corelogic",
-        "entrada_eval_mortgage_domain_v1",
+    _share_descriptor(
+        "mortgage_domain_v1",
         freshness_basis="MMA Mortgage Analytics",
-        catalog_name="cotality_mortgage_data",
         title="Cotality Mortgage Domain Share",
         description="Governed shared mortgage-event history used by lifecycle evidence.",
-        allow_count_fallback=False,
     ),
-    _descriptor(
-        "corelogic",
-        "entrada_eval_owner_transfer_domain_v1",
+    _share_descriptor(
+        "owner_transfer_domain_v1",
         freshness_not_tracked=True,
-        catalog_name="cotality_mortgage_data",
         title="Cotality Owner Transfer Share",
         description="Governed shared owner-transfer and sale-event history.",
-        allow_count_fallback=False,
     ),
     _descriptor(
         "silver",

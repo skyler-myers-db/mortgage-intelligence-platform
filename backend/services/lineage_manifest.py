@@ -7,8 +7,11 @@ lift -> UC scoring function -> gold table -> metric view.
 
 This module reads and validates the file (Pydantic, fail-loud on a
 malformed manifest), resolves ``catalog: null`` nodes against the
-deployed default catalog, and attaches Catalog Explorer deep links
-built from the configured workspace host. No warehouse call is made —
+deployed default catalog and the raw-share nodes (written with the
+canonical Cotality names) against the configured share, keeping each
+raw-share node's canonical name as its ``source_key``, and attaches
+Catalog Explorer deep links built from the configured workspace host.
+No warehouse call is made —
 the manifest is static product truth; the live integration test
 (tests/integration/test_lineage_manifest_live.py) is what checks the
 named objects against Unity Catalog.
@@ -20,6 +23,7 @@ import json
 from pathlib import Path
 from urllib.parse import quote
 
+from backend.config import source_names
 from backend.config.settings import settings
 from backend.schemas.lineage import (
     LineageFamily,
@@ -74,11 +78,37 @@ def catalog_explorer_url_for(
     )
 
 
+def _share_stem(node: LineageManifestNode) -> str | None:
+    """The Cotality table stem of a node written with the canonical share names.
+
+    A node in the canonical share catalog that is not one of its tables would
+    keep a canonical name on an install that mounts the share elsewhere, so it
+    fails loudly here, as a canonical token left by the SQL render does.
+    """
+    if node.catalog != source_names.CANONICAL.catalog:
+        return None
+    stem = source_names.canonical_stem(node.catalog, node.schema_name, node.object_name)
+    if stem is None:
+        raise ValueError(f"lineage node {node.id!r} names no Cotality share table")
+    return stem
+
+
 def resolve_node_fqn(node: LineageManifestNode) -> tuple[str, str, str]:
     """Return ``(catalog, schema, object)`` with the default catalog
-    applied to catalog-relative (``catalog: null``) manifest nodes."""
+    applied to catalog-relative (``catalog: null``) manifest nodes and the
+    configured Cotality share to the canonical share's nodes."""
+    stem = _share_stem(node)
+    if stem is not None:
+        source = settings.cotality_source()
+        return source.catalog, source.schema, source.table_name(stem)
     catalog = node.catalog or settings.mip_default_catalog
     return catalog, node.schema_name, node.object_name
+
+
+def node_source_key(node: LineageManifestNode) -> str | None:
+    """A raw-share node's canonical three-part name; ``None`` otherwise."""
+    stem = _share_stem(node)
+    return None if stem is None else source_names.CANONICAL.table(stem)
 
 
 def build_manifest_response() -> LineageManifestResponse:
@@ -99,6 +129,7 @@ def build_manifest_response() -> LineageManifestResponse:
                     catalog_explorer_url=catalog_explorer_url_for(
                         node.object_type, catalog, schema_name, object_name
                     ),
+                    source_key=node_source_key(node),
                 )
             )
         families.append(

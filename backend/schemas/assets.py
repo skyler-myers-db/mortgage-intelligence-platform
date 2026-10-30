@@ -47,6 +47,10 @@ class AssetLineageNode(BaseModel):
     #: ``<catalog>.audit.asset_lineage (view over system.access.table_lineage)``.
     source: str = f"audit.asset_lineage ({ASSET_LINEAGE_VIEW_ORIGIN})"
     catalog_explorer_url: str | None = None
+    #: A Cotality share table's canonical three-part name (the same on every
+    #: install, whatever ``asset_path`` the share is mounted at); ``None`` for
+    #: the App's own assets.
+    source_key: str | None = None
 
 
 class AssetMetadataResponse(BaseModel):

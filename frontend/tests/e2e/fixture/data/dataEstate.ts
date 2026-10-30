@@ -104,8 +104,8 @@ function assetMetadata(assetKey: string): AssetMetadataResponse {
     ddl: null,
     ddl_redacted_lines: 0,
     lineage: [
-      { direction: 'upstream', asset_path: 'mip.silver.property_features', label: 'Property features', object_type: 'table', event_time: SNAPSHOT_AT, event_count: 1, source: 'lineage_manifest', catalog_explorer_url: null },
-      { direction: 'downstream', asset_path: 'mip.semantics.portfolio_headline_metric_view', label: 'Portfolio headline metric view', object_type: 'view', event_time: SNAPSHOT_AT, event_count: 1, source: 'lineage_manifest', catalog_explorer_url: null },
+      { direction: 'upstream', asset_path: 'mip.silver.property_features', label: 'Property features', object_type: 'table', event_time: SNAPSHOT_AT, event_count: 1, source: 'lineage_manifest', catalog_explorer_url: null, source_key: null },
+      { direction: 'downstream', asset_path: 'mip.semantics.portfolio_headline_metric_view', label: 'Portfolio headline metric view', object_type: 'view', event_time: SNAPSHOT_AT, event_count: 1, source: 'lineage_manifest', catalog_explorer_url: null, source_key: null },
     ],
     known_data_gaps: [],
   };
@@ -124,9 +124,9 @@ function lineageFamily([id, title]: readonly [string, string]): LineageManifestF
     title,
     description: `${title} lineage.`,
     nodes: [
-      { id: `${id}_raw`, layer: 'raw_share', object_type: 'table', fqn: 'cotality.liens.voluntary_lien', label: 'Voluntary Lien', note: null, catalog_explorer_url: null },
-      { id: `${id}_gold`, layer: 'gold', object_type: 'table', fqn: 'mip.gold.borrower_360', label: 'Borrower 360', note: null, catalog_explorer_url: null },
-      { id: `${id}_metric`, layer: 'metric_view', object_type: 'view', fqn: 'mip.semantics.portfolio_headline_metric_view', label: 'Portfolio headline metric view', note: null, catalog_explorer_url: null },
+      { id: `${id}_raw`, layer: 'raw_share', object_type: 'table', fqn: 'cotality.liens.voluntary_lien', label: 'Voluntary Lien', note: null, catalog_explorer_url: null, source_key: 'cotality.liens.voluntary_lien' },
+      { id: `${id}_gold`, layer: 'gold', object_type: 'table', fqn: 'mip.gold.borrower_360', label: 'Borrower 360', note: null, catalog_explorer_url: null, source_key: null },
+      { id: `${id}_metric`, layer: 'metric_view', object_type: 'view', fqn: 'mip.semantics.portfolio_headline_metric_view', label: 'Portfolio headline metric view', note: null, catalog_explorer_url: null, source_key: null },
     ],
   };
 }

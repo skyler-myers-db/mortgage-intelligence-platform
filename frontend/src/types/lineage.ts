@@ -15,6 +15,8 @@ export interface LineageManifestNode {
   label: string;
   note?: string | null;
   catalog_explorer_url?: string | null;
+  /** A raw-share node's canonical name; `fqn` is the share this install configures. */
+  source_key?: string | null;
 }
 
 export interface LineageManifestFamily {
