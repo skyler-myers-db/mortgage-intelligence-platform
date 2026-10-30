@@ -820,7 +820,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--check", action="store_true", help="Read-only: print role drift and exit 1 on drift."
+        "--check", action="store_true", help="Read-only: print role drift and exit 3 on drift."
     )
     return parser
 

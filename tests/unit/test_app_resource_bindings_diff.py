@@ -19,6 +19,7 @@ from tools.databricks.app_resource_bindings import (
     binding_diff,
     build_resource_binding_payload,
 )
+from tools.databricks.check_exit_codes import CHECK_DRIFT, CHECK_EXACT
 
 # Concrete values in the fixture payload. A diff line must never print one.
 _VALUES = ("warehouse-id", "mip-state-staging", "12345", "mip_app_state", "CAN_USE", "otel-scope")
@@ -142,7 +143,7 @@ def test_source_fields_in_the_expected_payload_are_refused() -> None:
         binding_diff(expected=payload, live=_live(_payload()))
 
 
-def test_cli_diff_reads_only_its_two_files_and_exits_one_on_drift(
+def test_cli_diff_reads_only_its_two_files_and_exits_with_the_drift_code(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     expected_path, live_path = tmp_path / "expected.json", tmp_path / "live.json"
@@ -154,7 +155,7 @@ def test_cli_diff_reads_only_its_two_files_and_exits_one_on_drift(
 
     status = bindings.main(["diff", "--expected", str(expected_path), "--live", str(live_path)])
 
-    assert status == 1
+    assert status == CHECK_DRIFT
     assert capsys.readouterr().out == (
         "[mip-app-bindings] diff: binding database: database.permission differ "
         "(update replaces them)\n"
@@ -162,7 +163,10 @@ def test_cli_diff_reads_only_its_two_files_and_exits_one_on_drift(
     after = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in tmp_path.iterdir()}
     assert after == before
     live_path.write_text(json.dumps(_live(_payload())), encoding="utf-8")
-    assert bindings.main(["diff", "--expected", str(expected_path), "--live", str(live_path)]) == 0
+    assert (
+        bindings.main(["diff", "--expected", str(expected_path), "--live", str(live_path)])
+        == CHECK_EXACT
+    )
 
 
 _FIELD_VALUES = st.sampled_from(("a", "b", 1, None))

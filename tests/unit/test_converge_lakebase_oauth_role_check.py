@@ -7,10 +7,12 @@ from unittest.mock import MagicMock
 
 import psycopg
 import pytest
+from databricks.sdk.errors import PermissionDenied
 
 from tests.unit import test_converge_lakebase_oauth_role as role_tests
 from tools.databricks import converge_lakebase_oauth_role as converger
 from tools.databricks import converge_lakebase_oauth_role_check as check_module
+from tools.databricks.check_exit_codes import CHECK_DRIFT
 from tools.databricks.converge_lakebase_oauth_role_check import READ_ONLY_SESSION, check_role
 
 APP = "service-principal-id"
@@ -130,7 +132,10 @@ def test_exact_role_reports_no_drift_while_the_app_serves(app_state: str) -> Non
         ),
         (
             {"profile": SAFE, "identity_type": "USER"},
-            ["role: control-plane identity is not an exact service principal"],
+            [
+                "role: control-plane identity is not an exact service principal "
+                "(convergence refuses)"
+            ],
         ),
     ],
 )
@@ -183,7 +188,38 @@ def test_bootstrap_residue_is_reported_and_never_recovered(
     assert _check(role_tests._State(SAFE, app_state="RUNNING")) == [expected]
 
 
-def test_cli_check_exits_one_on_drift_without_touching_the_app(
+@pytest.mark.parametrize(
+    "failure",
+    [PermissionDenied("deployer may not read the instance role"), TimeoutError("network")],
+    ids=["sdk-denied", "network"],
+)
+def test_a_control_plane_read_failure_propagates_instead_of_reading_as_drift(
+    failure: Exception,
+) -> None:
+    state = role_tests._State(SAFE, app_state="RUNNING")
+    client = role_tests._client(state)
+    client.service_principals.list.side_effect = lambda **_: iter(
+        [MagicMock(id="service-principal-scim-id", application_id=APP)]
+    )
+    client.database.get_database_instance_role.side_effect = failure
+
+    # The check could not decide, so it must not exit with the drift code.
+    with pytest.raises(type(failure)):
+        check_role(
+            client,
+            account_client=None,
+            instance_name="mip-app-state",
+            database_name="mip_app_state",
+            application_id=APP,
+            role_contract="app",
+            connect=lambda **_kwargs: role_tests._Connection(state),
+            allow_absent_provider_schema=True,
+        )
+    assert state.app_state == "RUNNING"
+    assert state.deleted == 0
+
+
+def test_cli_check_exits_with_the_drift_code_without_touching_the_app(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     state = role_tests._State(converger.LEGACY_API_OAUTH_PROFILE, app_state="RUNNING")
@@ -209,7 +245,7 @@ def test_cli_check_exits_one_on_drift_without_touching_the_app(
         "--check",
     ]  # fmt: skip
 
-    assert converger.main(argv) == 1
+    assert converger.main(argv) == CHECK_DRIFT
 
     output = capsys.readouterr().out
     assert "[mip-lakebase-oauth-role] drift role-contract=app: role: legacy REPLICATION" in output

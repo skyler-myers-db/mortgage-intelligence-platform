@@ -12,6 +12,7 @@ from tests.unit import test_converge_app_lakebase_sync_access as sync_tests
 from tests.unit.test_campaign_treatment_access_check import _Spy
 from tools.databricks import converge_app_lakebase_sync_access as converger
 from tools.databricks.app_lakebase_sync_access_check import check_app_lakebase_sync_access
+from tools.databricks.check_exit_codes import CHECK_DRIFT, CHECK_EXACT
 
 CATALOG, SYNC_SCHEMA, SYNC_TABLES = (
     sync_tests.CATALOG,
@@ -115,7 +116,7 @@ def test_runtime_absent_targets_are_drift_and_quiesce_absent_catalog_is_not() ->
     assert len(statements) == 1
 
 
-def test_cli_check_exits_one_on_drift(
+def test_cli_check_exits_with_the_drift_code_on_drift(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     workspace, execution = sync_tests._workspace(query_rows=sync_tests._runtime_postflight())
@@ -132,10 +133,10 @@ def test_cli_check_exits_one_on_drift(
         "--check",
     ]  # fmt: skip
 
-    assert converger.main([*argv, "--mode", "quiesce"]) == 1
+    assert converger.main([*argv, "--mode", "quiesce"]) == CHECK_DRIFT
     output = capsys.readouterr().out
     assert "[mip-lakebase-sync-access] drift mode=quiesce: sync schema" in output
-    assert converger.main([*argv, "--mode", "runtime"]) == 0
+    assert converger.main([*argv, "--mode", "runtime"]) == CHECK_EXACT
     assert "check passed mode=runtime" in capsys.readouterr().out
     assert not any("GRANT" in sql or "REVOKE" in sql for sql in execution.statements)
 

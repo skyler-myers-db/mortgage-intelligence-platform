@@ -626,7 +626,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Read-only: print the symbolic grant diff for --mode and exit 1 on drift.",
+        help="Read-only: print the symbolic grant diff for --mode and exit 3 on drift.",
     )
     args = parser.parse_args(argv)
     if args.check:

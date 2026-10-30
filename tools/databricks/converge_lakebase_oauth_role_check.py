@@ -25,6 +25,7 @@ import psycopg
 
 from jobs.lakebase_migration_provider_plane import _postflight_public_schema_boundary
 from jobs.lakebase_migration_schema_hooks import _postflight_event_trigger_inventory
+from tools.databricks.check_exit_codes import CHECK_DRIFT, CHECK_EXACT
 from tools.databricks.converge_lakebase_oauth_role import (
     LEGACY_API_OAUTH_PROFILE,
     SAFE_OAUTH_PROFILE,
@@ -160,8 +161,13 @@ def check_role(
                         instance_name=instance_name,
                         application_id=application_id,
                     )
-                except Exception:  # noqa: BLE001 - any SDK or contract failure is drift
-                    drift.append("role: control-plane identity is not an exact service principal")
+                except RuntimeError:
+                    # Only the identity contract is drift. An SDK, auth or
+                    # network failure propagates: the probe could not decide.
+                    drift.append(
+                        "role: control-plane identity is not an exact service principal "
+                        "(convergence refuses)"
+                    )
                 try:
                     _assert_oauth_security_label(
                         cursor,
@@ -212,7 +218,7 @@ def run_check(client: Any, account_client: Any, args: argparse.Namespace) -> int
     contract = args.role_contract
     if not drift:
         print(f"{_PREFIX} check passed role-contract={contract}: role is exact LOGIN-only")
-        return 0
+        return CHECK_EXACT
     for line in drift:
         print(f"{_PREFIX} drift role-contract={contract}: {line}")
-    return 1
+    return CHECK_DRIFT

@@ -18,6 +18,7 @@ mode must not do; the converger and the UC owner-policy probe keep that proof.
 from __future__ import annotations
 
 from databricks.sdk import WorkspaceClient
+from tools.databricks.check_exit_codes import CHECK_DRIFT, CHECK_EXACT
 from tools.databricks.converge_campaign_treatment_access import (
     _ALL_PRIVILEGES,
     _SAFE_METASTORE_PRIVILEGES,
@@ -148,10 +149,10 @@ def run_check(*, catalog: str, principal: str, mode: Mode) -> int:
         print(
             f"{_PREFIX} check passed mode={mode}: governed catalog is absent, nothing to converge"
         )
-        return 0
+        return CHECK_EXACT
     if not drift:
         print(f"{_PREFIX} check passed mode={mode}: App grants equal the reviewed set")
-        return 0
+        return CHECK_EXACT
     for line in drift:
         print(f"{_PREFIX} drift mode={mode}: {line}")
-    return 1
+    return CHECK_DRIFT

@@ -16,6 +16,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from tools.databricks.check_exit_codes import CHECK_DRIFT, CHECK_EXACT
+
 _RESOURCE_REFERENCE_RE = re.compile(
     r"\$\{resources\.(?P<kind>[a-z_]+)\.(?P<key>[A-Za-z0-9_-]+)\."
     r"(?P<field>[A-Za-z0-9_]+)\}\Z"
@@ -231,7 +233,7 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--require-stopped-without-deployment", action="store_true")
 
     diff = subparsers.add_parser(
-        "diff", help="Read-only: print the symbolic binding diff and exit 1 when it is non-empty."
+        "diff", help="Read-only: print the symbolic binding diff and exit 3 when it is non-empty."
     )
     diff.add_argument("--expected", type=Path, required=True)
     diff.add_argument("--live", type=Path, required=True)
@@ -246,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[mip-app-bindings] diff: {line}")
         if not lines:
             print("[mip-app-bindings] live App resource bindings equal the bundle payload")
-        return 1 if lines else 0
+        return CHECK_DRIFT if lines else CHECK_EXACT
     if args.command == "build":
         payload = build_resource_binding_payload(
             _load_object(args.bundle_summary),

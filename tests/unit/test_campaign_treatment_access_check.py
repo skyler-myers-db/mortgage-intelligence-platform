@@ -12,6 +12,7 @@ from tests.unit import test_converge_campaign_treatment_access as converge_tests
 from tools.databricks import campaign_treatment_access_check as check_module
 from tools.databricks import converge_campaign_treatment_access as converger
 from tools.databricks.campaign_treatment_access_check import check_campaign_treatment_access
+from tools.databricks.check_exit_codes import CHECK_DRIFT, CHECK_EXACT
 
 CATALOG, SCHEMA, TABLE = golden.CATALOG, golden.SCHEMA, golden.TABLE
 _READ_ONLY_METHODS = {"get", "list", "get_effective", "current", "me"}
@@ -305,18 +306,20 @@ def test_absent_catalog_is_not_drift_because_convergence_returns_without_a_state
 
     assert drift is None
     assert outcome.ok and outcome.result is False and outcome.statements == ()
-    assert check_module.run_check(catalog="mip", principal=golden.APP, mode=mode) == 0
+    assert check_module.run_check(catalog="mip", principal=golden.APP, mode=mode) == CHECK_EXACT
     assert "governed catalog is absent, nothing to converge" in capsys.readouterr().out
     _assert_read_only(calls, plane)
 
 
-def test_run_check_exits_nonzero_on_drift_and_prints_no_identifiers(
+def test_run_check_exits_with_the_drift_code_and_prints_no_identifiers(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     spy, calls, plane = _workspace(golden._start_store({}, golden.FOREIGN))
     monkeypatch.setattr(check_module, "deployment_workspace_client", lambda: spy)
 
-    assert check_module.run_check(catalog="mip", principal=golden.APP, mode="quiesce") == 1
+    assert (
+        check_module.run_check(catalog="mip", principal=golden.APP, mode="quiesce") == CHECK_DRIFT
+    )
 
     output = capsys.readouterr().out
     _assert_read_only(calls, plane)
@@ -333,7 +336,9 @@ def test_cli_check_needs_no_warehouse_and_converge_still_requires_one(
     spy, calls, plane = _workspace(golden._start_store(reviewed, golden.FOREIGN))
     monkeypatch.setattr(check_module, "deployment_workspace_client", lambda: spy)
 
-    assert converger.main(["--check", "--principal", golden.APP, "--mode", "runtime"]) == 0
+    assert (
+        converger.main(["--check", "--principal", golden.APP, "--mode", "runtime"]) == CHECK_EXACT
+    )
     assert "check passed mode=runtime" in capsys.readouterr().out
     _assert_read_only(calls, plane)
     with pytest.raises(SystemExit) as excinfo:

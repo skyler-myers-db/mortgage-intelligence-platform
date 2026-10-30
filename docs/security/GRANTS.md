@@ -199,14 +199,19 @@ stage still ends with no treatment write path, or says that compensating
 quiescence could not be proven.
 
 Every App-touching converger also has a read-only mode that reads what the
-converger reads, prints a symbolic diff (objects named by role, tables and
+converger reads and prints a symbolic diff (objects named by role, tables and
 unreviewed identities counted, no host, catalog, principal or resource
-value) and exits 1 on drift:
+value). Each exits 0 when the live state is exact and 3 on drift
+(`tools/databricks/check_exit_codes.py`). A probe that cannot decide, for
+example on an authorization or network failure, raises and exits 1, and a
+usage error exits 2, so a failed probe never reads as drift:
 
 - `converge_campaign_treatment_access --check --mode quiesce|runtime`: direct
   and effective grants against the reviewed set; no SQL statement and no
-  warehouse. The approved-owner policy is not evaluated, because its
-  group-exclusion proof mints a credential for the App identity.
+  warehouse. An absent governed catalog is not drift, because convergence
+  then returns without a statement. The approved-owner policy is not
+  evaluated, because its group-exclusion proof mints a credential for the App
+  identity.
 - `ensure_campaign_treatment_table --check`: one `SHOW TBLPROPERTIES`; no
   `ALTER`.
 - `converge_app_lakebase_sync_access --check --mode quiesce|runtime`: the

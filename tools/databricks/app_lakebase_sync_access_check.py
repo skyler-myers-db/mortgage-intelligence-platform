@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 
 from databricks.sdk import WorkspaceClient
+from tools.databricks.check_exit_codes import CHECK_DRIFT, CHECK_EXACT
 from tools.databricks.converge_app_lakebase_sync_access import (
     _RESERVED_SYNC_SCHEMAS,
     Mode,
@@ -106,7 +107,7 @@ def run_check(args: argparse.Namespace) -> int:
     )
     if not drift:
         print(f"{_PREFIX} check passed mode={args.mode}: App sync access is exact")
-        return 0
+        return CHECK_EXACT
     for line in drift:
         print(f"{_PREFIX} drift mode={args.mode}: {line}")
-    return 1
+    return CHECK_DRIFT

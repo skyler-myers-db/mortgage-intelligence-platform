@@ -22,6 +22,7 @@ from databricks.sdk.service.sql import (
     ExecuteStatementRequestOnWaitTimeout,
     StatementParameterListItem,
 )
+from tools.databricks.check_exit_codes import CHECK_DRIFT, CHECK_EXACT
 from tools.databricks.workspace_auth import deployment_workspace_client
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -329,13 +330,13 @@ def _print_check(drift: list[str] | None) -> int:
     prefix = "[mip-treatment-table]"
     if drift is None:
         print(f"{prefix} check passed: governed campaign treatment table is absent")
-        return 0
+        return CHECK_EXACT
     if not drift:
         print(f"{prefix} check passed: constraints and retention properties are exact")
-        return 0
+        return CHECK_EXACT
     for line in drift:
         print(f"{prefix} drift: {line}")
-    return 1
+    return CHECK_DRIFT
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -350,7 +351,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Read-only: print the symbolic contract drift and exit 1 on drift.",
+        help="Read-only: print the symbolic contract drift and exit 3 on drift.",
     )
     args = parser.parse_args(argv)
     if args.check:

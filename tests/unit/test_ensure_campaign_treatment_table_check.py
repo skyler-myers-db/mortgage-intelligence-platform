@@ -14,6 +14,7 @@ from tests.unit.test_ensure_campaign_treatment_table import (
     _response,
 )
 from tools.databricks import ensure_campaign_treatment_table as table_module
+from tools.databricks.check_exit_codes import CHECK_DRIFT, CHECK_EXACT
 from tools.databricks.ensure_campaign_treatment_table import (
     _assert_contract,
     check_campaign_treatment_table,
@@ -188,13 +189,13 @@ def test_drift_is_empty_exactly_when_the_converger_postflight_passes() -> None:
     assert checked == 5 * 3 * 3 * 3 * 3 * 2
 
 
-def test_cli_check_exits_one_on_drift_and_zero_when_exact(
+def test_cli_check_exits_with_the_drift_code_on_drift_and_zero_when_exact(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     drifted, drifted_execution, _ = _workspace([*_BASE_PROPERTIES, _CONSTRAINT_PROPERTIES[0]])
     monkeypatch.setattr(table_module, "deployment_workspace_client", lambda: drifted)
 
-    assert table_module.main(["--warehouse-id", "warehouse-1", "--check"]) == 1
+    assert table_module.main(["--warehouse-id", "warehouse-1", "--check"]) == CHECK_DRIFT
     assert "[mip-treatment-table] drift: constraint campaign_treatment_assignment_chk" in (
         capsys.readouterr().out
     )
@@ -202,7 +203,7 @@ def test_cli_check_exits_one_on_drift_and_zero_when_exact(
 
     exact, _, _ = _workspace([*_BASE_PROPERTIES, *_CONSTRAINT_PROPERTIES])
     monkeypatch.setattr(table_module, "deployment_workspace_client", lambda: exact)
-    assert table_module.main(["--warehouse-id", "warehouse-1", "--check"]) == 0
+    assert table_module.main(["--warehouse-id", "warehouse-1", "--check"]) == CHECK_EXACT
     assert "check passed" in capsys.readouterr().out
 
 
