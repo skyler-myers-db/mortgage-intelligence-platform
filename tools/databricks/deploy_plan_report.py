@@ -18,6 +18,12 @@ The **App ACL preview** (M0-PR5, pre-lease only) says what the run's release
 access convergence will do to the existing App's direct ACL: which grants it
 keeps, adds, removes or changes (``bundle_plan_app_acl``). The public summary
 carries its code and those four counts; only ``full()`` names the principals.
+
+The **EXECUTE-gap prediction** (M0-PR8, attack O12) says whether the catalog
+bootstrap will run, and so republish the reviewed functions while blue serves
+(``catalog_bootstrap_skip_rule``): ``skip`` when the live catalog already
+equals the rendered sources, ``gap`` with the republished functions and the
+predicted interval otherwise, ``unknown`` when the rule did not report.
 """
 
 from __future__ import annotations
@@ -48,6 +54,8 @@ REFUSAL_CODES = frozenset(
 DEFERRAL_CODES = frozenset({"journal_owned"})
 APP_ACL_CODES = frozenset({"unchanged", "changes", "app_absent", "refused"})
 APP_ACL_COUNTS = ("keep", "add", "remove", "change")
+EXECUTE_GAP_CODES = frozenset({"skip", "gap", "unknown"})
+EXECUTE_GAP_KINDS = ("catalogs", "schemas", "tables", "table_properties", "functions")
 COUNTED_ACTIONS = ("create", "update", "resize", "update_id", "recreate", "delete", "skip")
 _SYMBOLIC = re.compile(r"[a-z][a-z0-9_]*\.[A-Za-z0-9][A-Za-z0-9_-]*(?:\.(?:permissions|grants))?\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -134,6 +142,60 @@ class AppAclPreview:
 
 
 @dataclass(frozen=True)
+class ExecuteGapPrediction:
+    """Whether the catalog bootstrap republishes blue's reviewed functions, and for how long."""
+
+    code: str
+    functions: tuple[str, ...] = ()
+    differing: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
+    unknown_statements: int = 0
+    predicted_seconds: int = 0
+    rendered_sha256: str = ""
+    live_sha256: str = ""
+    detail: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+
+    @classmethod
+    def from_skip_rule(cls, report: Mapping[str, Any] | None) -> ExecuteGapPrediction:
+        if not report:
+            return cls(code="unknown")
+        differing = report.get("differing") or {}
+        return cls(
+            code=str(report.get("code") or "unknown"),
+            functions=tuple(str(name) for name in report.get("functions_republished") or ()),
+            differing={kind: len(differing.get(kind) or ()) for kind in EXECUTE_GAP_KINDS},
+            unknown_statements=len(report.get("unknown_statements") or ()),
+            predicted_seconds=int((report.get("execute_gap") or {}).get("predicted_seconds") or 0),
+            rendered_sha256=str(report.get("rendered_sha256") or ""),
+            live_sha256=str(report.get("live_sha256") or ""),
+            detail={
+                "differing": {kind: list(differing.get(kind) or ()) for kind in EXECUTE_GAP_KINDS},
+                "unknown_statements": list(report.get("unknown_statements") or ()),
+                "live_error": str(report.get("live_error") or ""),
+                "execute_gap": dict(report.get("execute_gap") or {}),
+            },
+        )
+
+    def public(self) -> dict[str, Any]:
+        if self.code not in EXECUTE_GAP_CODES:
+            raise UnsafePublicValue("an EXECUTE-gap code is not a reviewed code")
+        for digest in (self.rendered_sha256, self.live_sha256):
+            if digest and _DIGEST.fullmatch(digest) is None:
+                raise UnsafePublicValue("an EXECUTE-gap digest is not a sha256 hex digest")
+        return {
+            "code": self.code,
+            "functions": [_symbolic(name) for name in self.functions],
+            "differing": {kind: int(self.differing.get(kind, 0)) for kind in EXECUTE_GAP_KINDS},
+            "unknown_statements": int(self.unknown_statements),
+            "predicted_seconds": int(self.predicted_seconds),
+            "rendered_sha256": self.rendered_sha256,
+            "live_sha256": self.live_sha256,
+        }
+
+    def full(self) -> dict[str, Any]:
+        return {**self.public(), "detail": dict(self.detail)}
+
+
+@dataclass(frozen=True)
 class PlanReport:
     """What the gate found in one plan, at one position of the deploy."""
 
@@ -152,6 +214,7 @@ class PlanReport:
     lookups: tuple[LookupRecord, ...] = ()
     deferrals: tuple[Deferral, ...] = ()
     app_acl: AppAclPreview | None = None
+    execute_gap: ExecuteGapPrediction | None = None
 
     @property
     def refused(self) -> bool:
@@ -202,6 +265,7 @@ class PlanReport:
             "refusals": refusals,
             "deferred": deferred,
             "app_acl": None if self.app_acl is None else self.app_acl.public(),
+            "execute_gap": None if self.execute_gap is None else self.execute_gap.public(),
         }
 
     def full(self) -> dict[str, Any]:
@@ -225,6 +289,7 @@ class PlanReport:
         ]
         report["instance_update"] = [dict(item) for item in self.instance_update]
         report["app_acl"] = None if self.app_acl is None else self.app_acl.full()
+        report["execute_gap"] = None if self.execute_gap is None else self.execute_gap.full()
         report["lookups"] = [
             {
                 "resource": record.resource,
