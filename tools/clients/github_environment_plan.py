@@ -24,6 +24,14 @@ step writes) and the maintainer's GitHub id are folded into one ``binding``
 sha256, so the ack pins them exactly. Hashing them all keeps the binding
 from confirming a guess: one low-entropy value written alone (a host, an
 email) is never hashed without the metastore and account UUIDs beside it.
+
+**Kept secrets stay provable.** Without ``--rotate`` an identifying secret
+already set is kept, and GitHub cannot read it back. Before the plan moves
+``MIP_CLIENT_PROFILE_SHA256`` past such a secret it proves the secret
+current: the environment's own variables plus the local identifying values
+must hash to the digest the environment records. Otherwise it refuses and
+asks for ``--rotate``, so the digest never vouches for a value the
+environment does not hold.
 """
 
 from __future__ import annotations
@@ -37,7 +45,7 @@ from typing import Any
 
 from tools.clients import profile as views
 from tools.clients.bootstrap_plan import canonical_json
-from tools.clients.environment import RawProfile, from_local, resolve
+from tools.clients.environment import RawProfile, from_github, from_local, resolve
 from tools.clients.errors import BootstrapRefusal, ProfileRefusal
 from tools.clients.github_protections import (
     BranchPolicy,
@@ -104,15 +112,18 @@ def _skeleton(values: Mapping[str, str]) -> tuple[str, ReviewMode, bool]:
     return client, mode, tier == "on"
 
 
+def _withheld() -> dict[str, str]:
+    return {name: WITHHELD for name, kind in FIELD_CLASS.items() if kind is FieldClass.SECRET}
+
+
 def load_inputs(environ: Mapping[str, str], env_file: Path | None) -> EnvironmentInputs:
     """Read the local profile; keep no secret; resolve it whole when it can."""
 
     raw = from_local(environ, env_file)
     kept = {name: value for name, value in raw.values.items() if FIELD_CLASS[name] is not FieldClass.SECRET}
     client, mode, agentic = _skeleton(kept)
-    withheld = {name: WITHHELD for name, kind in FIELD_CLASS.items() if kind is FieldClass.SECRET}
     try:
-        profile = resolve(RawProfile(values={**kept, **withheld}, identity_aliases=raw.identity_aliases))
+        profile = resolve(RawProfile(values={**kept, **_withheld()}, identity_aliases=raw.identity_aliases))
     except ProfileRefusal as refusal:
         skeleton = {"MIP_CLIENT": client, "MIP_REVIEW_MODE": mode.name}
         return EnvironmentInputs(client, mode, agentic, variables=skeleton, deferred=refusal.lines)
@@ -258,6 +269,36 @@ def _misplaced(state: EnvironmentState) -> list[str]:
     return lines
 
 
+def _held_digest(inputs: EnvironmentInputs, deploy: EnvironmentState) -> str | None:
+    """The digest the deploy would resolve if every identifying secret held its local value."""
+
+    try:
+        held = resolve(from_github(deploy.variables, {**inputs.covered, **_withheld()}, environment=deploy.name))
+    except ProfileRefusal:
+        return None
+    return views.digest(held)
+
+
+def _unproven_kept(inputs: EnvironmentInputs, deploy: EnvironmentState, *, rotate: bool) -> list[str]:
+    """Refusal lines when the digest would move past a kept secret nothing proves current."""
+
+    if rotate or inputs.profile_digest is None:
+        return []
+    if not any(name in deploy.secret_updates for name in inputs.identifying):
+        return []
+    recorded = deploy.variables.get(PROFILE_DIGEST_VARIABLE)
+    if recorded == inputs.profile_digest:
+        return []
+    if recorded is not None and _held_digest(inputs, deploy) == recorded:
+        return []  # the kept secrets hold the local values; only what this plan writes moved
+    state = "is not set" if recorded is None else "no longer matches the local identifying values"
+    return [
+        f"identifying secrets: {PROFILE_DIGEST_VARIABLE} of {deploy.name} {state}, so nothing proves "
+        "the identifying secrets already set hold the local profile's values (GitHub cannot read them "
+        "back). Re-run --plan with --rotate to rewrite them from the local profile"
+    ]
+
+
 def _notes(inputs: EnvironmentInputs, deploy: EnvironmentState, *, rotate: bool) -> list[str]:
     """What the plan leaves alone, and why: value-free, field names only."""
 
@@ -320,7 +361,7 @@ def compute_plan(inputs: EnvironmentInputs, obs: Observation, *, repository: str
     """Every mutation that makes the two environments hold ``inputs``, in order."""
 
     deploy = obs.states[inputs.client]
-    lines = _misplaced(deploy)
+    lines = _misplaced(deploy) or _unproven_kept(inputs, deploy, rotate=rotate)
     if lines:
         raise BootstrapRefusal(lines)
     maintainer_id = int(obs.maintainer["id"])

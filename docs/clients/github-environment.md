@@ -49,7 +49,13 @@ becomes an update or a delete of that policy.
   and metastore ids, principals, emails, the lender identity, accepted
   exposure), set **only where missing**. GitHub cannot read a secret back, so
   the tool cannot tell an old value from a new one; `--rotate` rewrites them
-  all from the local profile.
+  all from the local profile. Before it moves `MIP_CLIENT_PROFILE_SHA256`
+  past a secret it keeps, the plan proves that secret current: the
+  environment's variables plus your local identifying values must hash to
+  the digest the environment already records. If they do not (you changed an
+  identifying value, re-pinned `MIP_IDENTITY_IDS_JSON`, or an apply stopped
+  before the digest), the plan refuses and asks for `--rotate`. So the digest
+  never vouches for a value the environment does not hold.
 - **Signing keys:** `MIP_AI_GATEWAY_PROOF_SIGNING_KEY`, and with
   `MIP_AGENTIC_TIER=on` also `MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY`. Each
   is a fresh Ed25519 key, generated in memory and piped straight into the
