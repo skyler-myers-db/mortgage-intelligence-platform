@@ -23,7 +23,9 @@ class ProfileRefusal(ValueError):
 
 
 class BootstrapRefusal(ProfileRefusal):
-    """The account bootstrap refused (tools/clients/bootstrap_account.py).
+    """The account bootstrap, the GitHub-environment tool or its sink refused.
+
+    (tools/clients/bootstrap_account.py, github_environment.py, github_sink.py.)
 
     Same contract as a profile refusal: each line names an input, a role or
     a step and the rule it broke, never an identifier or a credential.

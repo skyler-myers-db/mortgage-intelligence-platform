@@ -1001,13 +1001,21 @@ Never re-sync a venv that other sessions share to make a deploy pass.
 Live app validation and agent ownership use seven service principals and store only their OAuth
 client credentials. No bearer token is a GitHub secret or `.env.local` value:
 
-One-shot OAuth secrets are written only to the repository detected from the
-current `origin`. Customer automation without a local git remote must set
+One-shot OAuth secrets are written only to one GitHub Environment
+(`--gh-env <client>`, required with `--set-gh-secrets`) of the repository
+detected from the current `origin`, never to repository-level secrets. Every
+`gh` call names `--env` and never `--repo`; the repository reaches it through
+`GH_REPO`. Before any mint or SDK mutation the tool reads the environment
+and refuses unless it exists with exactly its `MIP_REVIEW_MODE`'s
+protections, with the signed-in `gh` user as its one required reviewer, no
+admin bypass and a branch policy of exactly `{main}`; `<client>-validate`,
+the validator's federation subject, is always refused. Customer automation
+without a local git remote must set
 `MIP_M2M_GITHUB_REPOSITORY=owner/repository`; an explicit `--gh-repo` must
 match that reviewed sink. Grant-only reconciliation with `--no-mint-secret`
 does not require this binding and can run from a customer fork unchanged.
 
-| Role | Default service principal | GitHub Actions secrets |
+| Role | Default service principal | GitHub Environment secrets |
 |---|---|---|
 | normal app user | `mip-nightly-ci-sp` | `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET` |
 | second app operator | `mip-nightly-operator2-ci-sp` | `DATABRICKS_OPERATOR2_CLIENT_ID`, `DATABRICKS_OPERATOR2_CLIENT_SECRET` |
@@ -1021,7 +1029,8 @@ For a fresh workspace, create credentials **before** running deploy. The
 credentials-only mode never lists or grants an App, Lakebase instance, Gateway
 endpoint, or SQL warehouse; it creates/resolves the reserved service principal,
 optionally creates/joins the reviewed admin group, and sends only that role's
-client ID and one-shot client secret to the repository bound to `origin`.
+client ID and one-shot client secret to the `--gh-env` environment of the
+repository bound to `origin`.
 Export the verifier proof signing key and its derived public verify key before
 these commands. Each operation holds its outer signed App deployment lease and
 also acquires the fixed global `mip-oauth-credential-mutations` lease before its
@@ -1041,25 +1050,29 @@ group remains a separately reviewed, explicit action:
 ```bash
 python tools/databricks/provision_m2m_oauth.py \
   --pre-app-bootstrap --identity-role agent_runtime --set-gh-secrets \
-  --gh-repo skyler-myers-db/mortgage-intelligence-platform
+  --gh-repo skyler-myers-db/mortgage-intelligence-platform --gh-env <client>
 python tools/databricks/provision_m2m_oauth.py \
   --pre-app-bootstrap --identity-role normal --set-gh-secrets \
-  --gh-repo skyler-myers-db/mortgage-intelligence-platform
+  --gh-repo skyler-myers-db/mortgage-intelligence-platform --gh-env <client>
 python tools/databricks/provision_m2m_oauth.py \
   --pre-app-bootstrap --identity-role operator2 --set-gh-secrets \
-  --gh-repo skyler-myers-db/mortgage-intelligence-platform
+  --gh-repo skyler-myers-db/mortgage-intelligence-platform --gh-env <client>
 python tools/databricks/provision_m2m_oauth.py \
   --pre-app-bootstrap --identity-role admin --create-group \
-  --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
+  --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+  --gh-env <client>
 python tools/databricks/provision_m2m_oauth.py \
   --pre-app-bootstrap --identity-role release_probe \
-  --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
+  --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+  --gh-env <client>
 python tools/databricks/provision_m2m_oauth.py \
   --pre-app-bootstrap --identity-role verifier \
-  --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
+  --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+  --gh-env <client>
 python tools/databricks/provision_m2m_oauth.py \
   --pre-app-bootstrap --identity-role agent_proxy \
-  --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
+  --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+  --gh-env <client>
 ```
 
 Pre-App bootstrap is creation-only and refuses every existing reserved
@@ -1067,7 +1080,8 @@ principal. If a failed bootstrap was fully compensated, prove that the
 credentialless principal is removed before repeating the bootstrap command; do
 not add `--rotate` to a bootstrap retry. After the App exists, a reviewed
 rotation uses normal mode with that role's canonical
-`--expected-application-id`, `--rotate`, and `--set-gh-secrets`.
+`--expected-application-id`, `--rotate`, `--set-gh-secrets`, and
+`--gh-env <client>`; a mint without the environment is refused.
 Before provider create, the provisioner writes and reads back a signed,
 immutable intent containing the exact authority, principal, sink descriptor,
 global lease generation, and prior credential IDs. It records the returned
@@ -2641,9 +2655,17 @@ logs in fresh in a throwaway config and token cache, and never reads
 `~/.databrickscfg`.
 
 The full operator guide, including what the tool never does, is
-[docs/clients/bootstrap.md](clients/bootstrap.md). Until the GitHub
-credential sink (M2-PR2) lands, an apply that would create, adopt or mint
-refuses before its first mutation.
+[docs/clients/bootstrap.md](clients/bootstrap.md). Unless the GitHub
+credential sink is selected with `--sink github-environment`, an apply that
+would create, adopt or mint refuses before its first mutation.
+
+`python -m tools.clients.github_environment` creates the client's GitHub
+Environments, `<client>` and `<client>-validate`, with the review mode's
+protections, and fills `<client>` from the local profile: public fields as
+variables, identifying fields as secrets, freshly generated Ed25519 signing
+keys, and the profile digest `MIP_CLIENT_PROFILE_SHA256`. It uses the same
+plan, review, ack and apply loop, in a throwaway `gh` login. The guide is
+[docs/clients/github-environment.md](clients/github-environment.md).
 
 ## CI deploy (deploy-dev.yml): parked, and the release-gate bootstrap
 
@@ -2907,13 +2929,13 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    `identity_boundary_probes`, mint 300-second secrets for existing
    principals and delete them after the probe; none is durable.) The
    `--set-gh-secrets` sink sends each role's client id and one-shot secret
-   only to a GitHub repository's
-   repository-level Actions secrets (`gh secret set --repo`): the reviewed
-   `origin`, or the repository `MIP_M2M_GITHUB_REPOSITORY` names. The secret
-   names are fixed per role (`IDENTITY_DEFAULTS`), and in this repository they
-   belong to the CI install: `nightly.yml` reads them, and `deploy-dev.yml`
-   reads them wherever its `dev` environment does not shadow them (owner step
-   3). A live identity bootstrap therefore needs its own reviewed sink: another
+   only to one GitHub Environment's secrets (`gh secret set --env`, never
+   repository-level ones; `--gh-env` names the environment) of the reviewed
+   `origin`, or of the repository `MIP_M2M_GITHUB_REPOSITORY` names. The secret
+   names are fixed per role (`IDENTITY_DEFAULTS`). Before M2-PR2 they were
+   repository-level, and in this repository they belong to the CI install:
+   `nightly.yml` reads them, and `deploy-dev.yml` reads them wherever its
+   `dev` environment does not shadow them (owner step 3). A live identity bootstrap therefore needs its own reviewed sink: another
    repository named by `MIP_M2M_GITHUB_REPOSITORY`, plus a reviewed way to
    hand the values to the operator, who cannot read GitHub secrets back. It
    stays out of scope until that design is reviewed. Never run the bootstrap
