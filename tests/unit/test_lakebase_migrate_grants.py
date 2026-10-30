@@ -1802,11 +1802,13 @@ def test_main_runs_seed_and_integrity_probe_in_schema_transaction_before_grants(
         ai_gateway_verifier_role: str | None,
         verify_outreach_integrity: bool,
     ) -> None:
-        assert len(sql_texts) == 4
+        assert len(sql_texts) == 5
         assert "CREATE TABLE IF NOT EXISTS mip_app.schema_migrations" in sql_texts[0]
         assert "INSERT INTO mip_app.campaign_message_variants" in sql_texts[1]
         assert "configured tenant disclosure postflight failed" in sql_texts[2]
         assert "VALIDATE CONSTRAINT approvals_campaign_variant_channel_fkey" in sql_texts[3]
+        # The schema-input digest row commits inside the same transaction.
+        assert "INSERT INTO mip_app.deployment_schema_digest" in sql_texts[4]
         assert app_role == "app-role"
         assert ai_gateway_verifier_role is None
         assert verify_outreach_integrity is True
