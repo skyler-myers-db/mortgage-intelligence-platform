@@ -118,11 +118,11 @@ class ReviewedLenderIdentity:
         return self.digest is not None
 
 
-def _text(env: Mapping[str, str | None], name: str) -> str:
+def _text(env: Mapping[str, object], name: str) -> str:
     return str(env.get(name) or "").strip()
 
 
-def pinned_identity_configured(env: Mapping[str, str | None]) -> bool:
+def pinned_identity_configured(env: Mapping[str, object]) -> bool:
     """True when either pinned-record name holds a value (blank counts as absent)."""
 
     return any(_text(env, name) for name in PINNED_ENV_NAMES)
@@ -314,7 +314,7 @@ def lender_identity_digest(text: str) -> str:
     return digest
 
 
-def _code_registry_identity(env: Mapping[str, str | None]) -> ReviewedLenderIdentity:
+def _code_registry_identity(env: Mapping[str, object]) -> ReviewedLenderIdentity:
     """The legacy path, unchanged: a missing name is Summit, a present one is validated as given."""
 
     lender, nmls_id = validate_public_lender_identity(
@@ -330,7 +330,7 @@ def _code_registry_identity(env: Mapping[str, str | None]) -> ReviewedLenderIden
     )
 
 
-def _require_legacy_agreement(env: Mapping[str, str | None], identity: ReviewedLenderIdentity) -> None:
+def _require_legacy_agreement(env: Mapping[str, object], identity: ReviewedLenderIdentity) -> None:
     expected = {
         LENDER_NAME_ENV: identity.lender_name,
         LENDER_NMLS_ENV: identity.nmls_id,
@@ -346,7 +346,7 @@ def _require_legacy_agreement(env: Mapping[str, str | None], identity: ReviewedL
             raise LenderIdentityRefused(f"{name}: must equal the pinned {_FIELD} record when both are set")
 
 
-def reviewed_lender_identity_from_env(env: Mapping[str, str | None]) -> ReviewedLenderIdentity:
+def reviewed_lender_identity_from_env(env: Mapping[str, object]) -> ReviewedLenderIdentity:
     """Resolve the one reviewed lender identity from these configuration values.
 
     ``env`` maps the five names in ``LEGACY_ENV_NAMES`` and
@@ -377,7 +377,7 @@ def reviewed_lender_identity_from_env(env: Mapping[str, str | None]) -> Reviewed
     return identity
 
 
-def present_env(values: Mapping[str, str | None]) -> dict[str, str]:
+def present_env(values: Mapping[str, object]) -> dict[str, str]:
     """The five lender names whose value is not blank, for callers where blank means unset."""
 
     names = (*LEGACY_ENV_NAMES, *PINNED_ENV_NAMES)

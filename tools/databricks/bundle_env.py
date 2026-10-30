@@ -16,6 +16,9 @@ Mapping (env -> BUNDLE_VAR_*):
   MIP_LENDER_NAME         -> BUNDLE_VAR_lender_name
   MIP_LENDER_NMLS_ID      -> BUNDLE_VAR_lender_nmls_id
   MIP_TENANT_ID           -> BUNDLE_VAR_tenant_id
+  MIP_LENDER_IDENTITY_JSON / _SHA256
+                          -> BUNDLE_VAR_lender_identity_json / _sha256 (a
+                             verified digest-pinned customer record only)
   MIP_AI_GATEWAY_VERIFIER_CLIENT_ID -> BUNDLE_VAR_ai_gateway_verifier_client_id
   LAKEBASE_INSTANCE_NAME  -> BUNDLE_VAR_lakebase_instance_name
   MIP_LAKEBASE_SYNC_CATALOG -> BUNDLE_VAR_lakebase_catalog_name
@@ -56,9 +59,13 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from backend.schemas.lender_identity import (  # noqa: E402
-    effective_public_tenant_id,
-    validate_public_lender_identity,
+from backend.schemas.lender_identity_record import (  # noqa: E402
+    LEGACY_ENV_NAMES,
+    LENDER_IDENTITY_JSON_ENV,
+    LENDER_IDENTITY_SHA256_ENV,
+    PINNED_ENV_NAMES,
+    present_env,
+    reviewed_lender_identity_from_env,
 )
 from tools import render_sql  # noqa: E402
 from tools.databricks import scheduled_refresh_posture  # noqa: E402
@@ -511,23 +518,30 @@ def main() -> int:
     )
 
     try:
-        lender_name, lender_nmls_id = validate_public_lender_identity(
-            env.get("MIP_LENDER_NAME") or "Summit Mortgage",
-            env.get("MIP_LENDER_NMLS_ID"),
-        )
-        tenant_id = effective_public_tenant_id(
-            env.get("MIP_TENANT_ID"),
-            lender_name=lender_name,
+        # A blank value is unset here, as before: an unset name is Summit Mortgage.
+        lender = reviewed_lender_identity_from_env(
+            present_env({name: env.get(name) for name in (*LEGACY_ENV_NAMES, *PINNED_ENV_NAMES)})
         )
     except ValueError as exc:
         print(f"[bundle_env] invalid lender disclosure identity: {exc}", file=sys.stderr)
         return 2
+    lender_name, lender_nmls_id, tenant_id = lender.lender_name, lender.nmls_id, lender.tenant_id
     env["MIP_LENDER_NAME"] = lender_name
     env["MIP_LENDER_NMLS_ID"] = lender_nmls_id
     env["MIP_TENANT_ID"] = tenant_id
     env["BUNDLE_VAR_lender_name"] = lender_name
     env["BUNDLE_VAR_lender_nmls_id"] = lender_nmls_id
     env["BUNDLE_VAR_tenant_id"] = tenant_id
+    if lender.pinned:
+        # The Lakebase migration job re-verifies the record before it renders
+        # the tenant's disclosures; with no record these stay at their "".
+        assert lender.canonical_json is not None and lender.digest is not None
+        env[LENDER_IDENTITY_JSON_ENV] = env["BUNDLE_VAR_lender_identity_json"] = lender.canonical_json
+        env[LENDER_IDENTITY_SHA256_ENV] = env["BUNDLE_VAR_lender_identity_sha256"] = lender.digest
+    else:
+        # Only a record verified here may reach the bundle, never an ambient one.
+        env.pop("BUNDLE_VAR_lender_identity_json", None)
+        env.pop("BUNDLE_VAR_lender_identity_sha256", None)
 
     try:
         resource_names = _deployment_resource_names(env)

@@ -18,13 +18,25 @@ from collections.abc import Callable
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    Field,
+    PrivateAttr,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from backend.schemas._validators_tenant import set_public_lender_name_provider
-from backend.schemas.lender_identity import (
-    effective_public_tenant_id,
-    validate_public_lender_identity,
+from backend.schemas.lender_identity import effective_public_tenant_id
+from backend.schemas.lender_identity_record import (
+    LENDER_NAME_ENV,
+    LENDER_NMLS_ENV,
+    PINNED_ENV_NAMES,
+    TENANT_ID_ENV,
+    ReviewedLenderIdentity,
+    reviewed_lender_identity_from_env,
 )
 
 # Documented, shared error message so every fail-fast site reads the
@@ -149,6 +161,7 @@ class Settings(BaseSettings):
     mip_lender_name: str = "Summit Mortgage"
     mip_lender_nmls_id: str = ""
     mip_tenant_id: str | None = None
+    _reviewed_lender_identity: ReviewedLenderIdentity | None = PrivateAttr(default=None)
     mip_default_catalog: str = "mip"
     mip_default_schema: str = "gold"
     mip_lakebase_schema: str = "mip_app"
@@ -620,16 +633,39 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_public_lender_identity(self) -> Settings:
-        self.mip_lender_name, self.mip_lender_nmls_id = validate_public_lender_identity(
-            self.mip_lender_name,
-            self.mip_lender_nmls_id,
-        )
-        if self.mip_tenant_id is not None:
-            self.mip_tenant_id = effective_public_tenant_id(
-                self.mip_tenant_id,
-                lender_name=self.mip_lender_name,
-            )
+        """Resolve the reviewed lender identity (lender_identity_record.py).
+
+        The three legacy fields go in only when configured, so an unset name
+        is the Summit default on the code-registry path and never conflicts
+        with a digest-pinned record. The pinned record and its digest are
+        read from the process environment only: the App payload carries them,
+        and they are not Settings fields.
+        """
+
+        inputs: dict[str, object] = {
+            name: os.environ.get(name) for name in PINNED_ENV_NAMES if os.environ.get(name)
+        }
+        for field_name, env_name in (
+            ("mip_lender_name", LENDER_NAME_ENV),
+            ("mip_lender_nmls_id", LENDER_NMLS_ENV),
+            ("mip_tenant_id", TENANT_ID_ENV),
+        ):
+            if field_name in self.model_fields_set:
+                inputs[env_name] = getattr(self, field_name)
+        identity = reviewed_lender_identity_from_env(inputs)
+        self.mip_lender_name, self.mip_lender_nmls_id = identity.lender_name, identity.nmls_id
+        if self.mip_tenant_id is not None or identity.pinned:
+            self.mip_tenant_id = identity.tenant_id
+        self._reviewed_lender_identity = identity
         return self
+
+    def reviewed_lender_identity(self) -> ReviewedLenderIdentity:
+        """The identity the validator resolved: its digest is ``None`` unless pinned."""
+
+        identity = self._reviewed_lender_identity
+        if identity is None:  # model_construct() skips validation
+            raise RuntimeError("settings were constructed without lender identity validation")
+        return identity
 
     @model_validator(mode="after")
     def _validate_health_wait_budget(self) -> Settings:

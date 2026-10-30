@@ -4,8 +4,10 @@
 
 ``validate`` (preflight, before any workspace mutation) checks
 ``MIP_LENDER_MARK_FILE`` against the reviewed registry in
-``backend/schemas/lender_branding.py`` and, with ``--print-sha256``, writes
-only the file's sha256 to stdout (nothing when no mark is configured).
+``backend/schemas/lender_branding.py`` (or, for a digest-pinned customer
+record in ``MIP_LENDER_IDENTITY_JSON``, the mark that record carries) and,
+with ``--print-sha256``, writes only the file's sha256 to stdout (nothing
+when no mark is configured).
 
 ``stage`` (Step 1, right before ``npm run build``) purges
 ``frontend/.branding-stage``, re-validates the file, checks it is still the
@@ -39,8 +41,15 @@ from backend.schemas.lender_branding import (  # noqa: E402
     ReviewedLenderMark,
     reviewed_lender_mark,
     validate_lender_mark,
+    validate_reviewed_mark_bytes,
 )
-from backend.schemas.lender_identity import validate_public_lender_identity  # noqa: E402
+from backend.schemas.lender_identity_record import (  # noqa: E402
+    LENDER_NAME_ENV,
+    LENDER_NMLS_ENV,
+    PINNED_ENV_NAMES,
+    ReviewedLenderIdentity,
+    reviewed_lender_identity_from_env,
+)
 
 EXIT_OK = 0
 EXIT_REFUSED = 2
@@ -90,9 +99,12 @@ def _read_mark(path_text: str) -> bytes:
         os.close(fd)
 
 
-def _identity(lender: str, nmls: str) -> tuple[str, str]:
+def _identity(lender: str, nmls: str) -> ReviewedLenderIdentity:
+    """The reviewed identity: the registry's, or the pinned record deploy.sh exported."""
+
+    pinned = {name: os.environ.get(name, "") for name in PINNED_ENV_NAMES}
     try:
-        return validate_public_lender_identity(lender, nmls)
+        return reviewed_lender_identity_from_env({LENDER_NAME_ENV: lender, LENDER_NMLS_ENV: nmls, **pinned})
     except ValueError:
         raise Refused("the lender name and NMLS id are not a reviewed lender identity") from None
 
@@ -100,17 +112,23 @@ def _identity(lender: str, nmls: str) -> tuple[str, str]:
 def _checked_mark(lender: str, nmls: str, file_text: str) -> tuple[ReviewedLenderMark, bytes] | None:
     """The validated mark and its bytes; None when neither a file nor a reviewed mark exists."""
 
-    name, nmls_id = _identity(lender, nmls)
-    reviewed = reviewed_lender_mark(name)
+    identity = _identity(lender, nmls)
+    name, nmls_id = identity.lender_name, identity.nmls_id
+    # A pinned record's name is identifying: refusals name the record instead.
+    label = "the pinned lender record" if identity.pinned else name
+    reviewed = identity.mark if identity.pinned else reviewed_lender_mark(name)
     if not file_text:
         if reviewed is None:
             return None
-        raise Refused(f"reviewed mark configured for {name} but MIP_LENDER_MARK_FILE is unset")
+        raise Refused(f"reviewed mark configured for {label} but MIP_LENDER_MARK_FILE is unset")
     if reviewed is None:
-        raise Refused(f"no reviewed lender mark is recorded for {name}; unset MIP_LENDER_MARK_FILE")
+        raise Refused(f"no reviewed lender mark is recorded for {label}; unset MIP_LENDER_MARK_FILE")
     data = _read_mark(file_text)
     try:
-        mark = validate_lender_mark(name, nmls_id, data)
+        if identity.pinned:
+            mark = validate_reviewed_mark_bytes(reviewed, data)
+        else:
+            mark = validate_lender_mark(name, nmls_id, data)
     except ValueError as error:
         # lender_branding's messages are fixed sentences without file bytes.
         raise Refused(str(error)) from None

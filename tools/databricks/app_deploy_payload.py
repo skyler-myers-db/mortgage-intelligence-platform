@@ -24,9 +24,14 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from backend.config.runtime_secret_policy import runtime_secret_text  # noqa: E402
-from backend.schemas.lender_identity import (  # noqa: E402
-    effective_public_tenant_id,
-    validate_public_lender_identity,
+from backend.schemas.lender_identity_record import (  # noqa: E402
+    LEGACY_ENV_NAMES,
+    LENDER_IDENTITY_JSON_ENV,
+    LENDER_IDENTITY_SHA256_ENV,
+    PINNED_ENV_NAMES,
+    LenderIdentityRefused,
+    present_env,
+    reviewed_lender_identity_from_env,
 )
 from tools.databricks.lakebase_instance_contract import (  # noqa: E402
     DEFAULT_LAKEBASE_INSTANCE_NAME,
@@ -361,18 +366,14 @@ def build_payload(
 ) -> dict[str, object]:
     lakebase_instance = validated_lakebase_instance_name(lakebase_instance)
     dotenv = _dotenv_overlay()
-    lender_name, lender_nmls_id = validate_public_lender_identity(
-        _env_value("MIP_LENDER_NAME", dotenv) or "Summit Mortgage",
-        _env_value("MIP_LENDER_NMLS_ID", dotenv),
-    )
-    tenant_id = effective_public_tenant_id(
-        _env_value("MIP_TENANT_ID", dotenv),
-        lender_name=lender_name,
+    # A blank value is unset here, as before: an unset name is Summit Mortgage.
+    lender = reviewed_lender_identity_from_env(
+        present_env({name: _env_value(name, dotenv) for name in (*LEGACY_ENV_NAMES, *PINNED_ENV_NAMES)})
     )
     resolved_lender_values = {
-        "MIP_LENDER_NAME": lender_name,
-        "MIP_LENDER_NMLS_ID": lender_nmls_id,
-        "MIP_TENANT_ID": tenant_id,
+        "MIP_LENDER_NAME": lender.lender_name,
+        "MIP_LENDER_NMLS_ID": lender.nmls_id,
+        "MIP_TENANT_ID": lender.tenant_id,
     }
     previous_secret_enabled, previous_secret_kid = _previous_secret_grace_configured(dotenv)
     _validated_keep_warm(dotenv)
@@ -450,6 +451,13 @@ def build_payload(
             or _env_value(name, dotenv)
             or SAFE_RUNTIME_DEFAULTS.get(name, ""),
         )
+    if lender.pinned:
+        # Only a digest-pinned customer record adds names: with no record the
+        # env-name set stays exactly the one the emergency recipe gates on.
+        # The App re-verifies the canonical record against its digest at boot.
+        assert lender.canonical_json is not None and lender.digest is not None
+        env_vars.append({"name": LENDER_IDENTITY_JSON_ENV, "value": lender.canonical_json})
+        env_vars.append({"name": LENDER_IDENTITY_SHA256_ENV, "value": lender.digest})
     return {
         "source_code_path": source_code_path,
         "mode": mode,
@@ -487,19 +495,24 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    payload = build_payload(
-        source_code_path=args.source_code_path,
-        target=args.target,
-        current_user_email=args.current_user_email,
-        app_env=args.app_env,
-        catalog=args.catalog,
-        schema=args.schema,
-        lakebase_instance=args.lakebase_instance,
-        mode=args.mode,
-        campaign_treatment_runtime_enabled=args.enable_campaign_treatment_runtime,
-        otel_endpoint=args.otel_endpoint,
-        otel_header_resource=args.otel_header_resource,
-    )
+    try:
+        payload = build_payload(
+            source_code_path=args.source_code_path,
+            target=args.target,
+            current_user_email=args.current_user_email,
+            app_env=args.app_env,
+            catalog=args.catalog,
+            schema=args.schema,
+            lakebase_instance=args.lakebase_instance,
+            mode=args.mode,
+            campaign_treatment_runtime_enabled=args.enable_campaign_treatment_runtime,
+            otel_endpoint=args.otel_endpoint,
+            otel_header_resource=args.otel_header_resource,
+        )
+    except LenderIdentityRefused as refusal:
+        # A fixed sentence that names the field and the rule, never a value.
+        print(f"app_deploy_payload: refused: {refusal}", file=sys.stderr)
+        return 2
     json.dump(payload, sys.stdout, indent=2)
     sys.stdout.write("\n")
     return 0
