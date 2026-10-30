@@ -184,6 +184,29 @@ is the one drift state that still revokes before it re-grants, because
 revoking it also removes the privileges it implies. A runtime failure at any
 stage still ends with no treatment write path.
 
+Every App-touching converger also has a read-only mode that reads what the
+converger reads, prints a symbolic diff (objects named by role, tables and
+unreviewed identities counted, no host, catalog, principal or resource
+value) and exits 1 on drift:
+
+- `converge_campaign_treatment_access --check --mode quiesce|runtime`: direct
+  and effective grants against the reviewed set; no SQL statement and no
+  warehouse. The approved-owner policy is not evaluated, because its
+  group-exclusion proof mints a credential for the App identity.
+- `ensure_campaign_treatment_table --check`: one `SHOW TBLPROPERTIES`; no
+  `ALTER`.
+- `converge_app_lakebase_sync_access --check --mode quiesce|runtime`: the
+  converger's own `information_schema` audit, reporting every violation
+  instead of the first; SELECT only.
+- `converge_lakebase_oauth_role --check`: the role, label, relationship, ACL,
+  bootstrap-residue and public-schema reads in a read-only session, valid
+  while the App serves; it never stops the App or takes the bootstrap lock.
+- `app_resource_bindings diff --expected <payload> --live <apps get json>`:
+  empty exactly when the post-update binding verifier would pass.
+
+Nothing invokes them yet; the keep-serving release wires them into its
+pre-stop probes.
+
 ---
 
 ## 1. Catalog `mip`
