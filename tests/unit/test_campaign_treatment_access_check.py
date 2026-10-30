@@ -46,12 +46,13 @@ def _workspace(
     store: golden.Store,
     *,
     inherited: dict[golden.Key, set[str]] | None = None,
+    catalog_exists: bool = True,
     schema_exists: bool = True,
     table_exists: bool = True,
     ignore_principal_filter: bool = False,
 ) -> tuple[_Spy, list[str], golden._Plane]:
     workspace, _, _ = converge_tests._workspace(
-        schema_exists=schema_exists, table_exists=table_exists
+        catalog_exists=catalog_exists, schema_exists=schema_exists, table_exists=table_exists
     )
     plane = golden._Plane(
         store=store,
@@ -71,7 +72,7 @@ def _assert_read_only(calls: list[str], plane: golden._Plane) -> None:
     assert {call.rsplit(".", 1)[-1] for call in calls} <= _READ_ONLY_METHODS, sorted(set(calls))
 
 
-def _check(mode: str, store: golden.Store, **kwargs: Any) -> tuple[list[str], list[str]]:
+def _check(mode: str, store: golden.Store, **kwargs: Any) -> tuple[list[str] | None, list[str]]:
     spy, calls, plane = _workspace(store, **kwargs)
     drift = check_campaign_treatment_access(
         catalog="mip",
@@ -80,9 +81,47 @@ def _check(mode: str, store: golden.Store, **kwargs: Any) -> tuple[list[str], li
         workspace=spy,  # type: ignore[arg-type]
     )
     _assert_read_only(calls, plane)
-    for line in drift:
+    for line in drift or []:
         assert not any(identifier in line for identifier in _IDENTIFIERS), line
     return drift, calls
+
+
+def _disagreements(mode: str, start: golden.Store, **kwargs: Any) -> list[str]:
+    """Where the check and a real convergence run from ``start`` disagree.
+
+    The check is empty exactly when convergence issues no statement, never
+    predicts a refusal for a run that succeeds, and is empty after convergence.
+    Without group-conveyed grants it predicts every refusal too. A group grant
+    of a privilege the App also holds directly is invisible to a name-level
+    read; the check still reports drift there and convergence's exact
+    postflight refuses.
+    """
+
+    label = f"mode={mode} {kwargs} start={ {k[0]: sorted(v.get(golden.APP, ())) for k, v in start.items()} }"
+    drift = _check(mode, golden._copy(start), **kwargs)[0] or []
+    outcome = golden._run(
+        converger.converge_campaign_treatment_access,
+        mode=mode,
+        store=golden._copy(start),
+        **kwargs,
+    )
+    problems: list[str] = []
+    if (drift == []) is not (outcome.ok and outcome.statements == ()):
+        problems.append(f"{label}: drift={drift} ok={outcome.ok} {outcome.statements}")
+    predicts_refusal = any("refuses" in line for line in drift)
+    if predicts_refusal and outcome.ok:
+        problems.append(f"{label}: drift={drift} predicts a refusal but convergence succeeded")
+    if not predicts_refusal and not outcome.ok and not kwargs.get("inherited"):
+        problems.append(f"{label}: drift={drift} missed a refusal ({outcome.error})")
+    if outcome.ok:
+        store = {
+            key: {name: set(held) for name, held in grants.items()}
+            for key, grants in outcome.store.items()
+        }
+        after = _check(mode, store, **kwargs)[0]
+        if after:
+            problems.append(f"{label}: drift after convergence {after}")
+    return problems
 
 
 @pytest.mark.parametrize("mode", ["quiesce", "runtime"])
@@ -163,6 +202,37 @@ def test_converged_boundary_reports_no_drift(mode: str) -> None:
             {"ignore_principal_filter": True},
             [],
         ),
+        # Unity Catalog applies schema MODIFY to the table; convergence removes it
+        # with the schema revoke, so the table line must not claim a refusal.
+        (
+            "quiesce",
+            {CATALOG: {"USE_CATALOG"}, SCHEMA: {"USE_SCHEMA", "MODIFY"}, TABLE: {"SELECT"}},
+            {},
+            ["audit schema: revoke MODIFY"],
+        ),
+        (
+            "runtime",
+            {CATALOG: {"USE_CATALOG", "ALL_PRIVILEGES"}, SCHEMA: {"USE_SCHEMA"}, TABLE: {"SELECT"}},
+            {},
+            [
+                "catalog: revoke ALL_PRIVILEGES first (it also drops the reviewed "
+                "privileges it implies, which are re-granted)",
+                "catalog: grant USE_CATALOG",
+                "treatment table: grant MODIFY",
+            ],
+        ),
+        # A parent grant convergence keeps cannot explain a privilege below it.
+        (
+            "quiesce",
+            {CATALOG: {"USE_CATALOG", "MANAGE"}, SCHEMA: {"USE_SCHEMA"}, TABLE: {"SELECT"}},
+            {},
+            [
+                "catalog: direct MANAGE is outside ALL PRIVILEGES "
+                "(convergence leaves it and refuses)",
+                "audit schema: inherited MANAGE (convergence cannot remove it and refuses)",
+                "treatment table: inherited MANAGE (convergence cannot remove it and refuses)",
+            ],
+        ),
     ],
 )
 def test_drift_is_reported_symbolically(
@@ -177,9 +247,13 @@ def test_drift_is_reported_symbolically(
 
 
 @pytest.mark.parametrize("mode", ["quiesce", "runtime"])
-def test_check_agrees_with_convergence_on_every_full_presence_state(mode: str) -> None:
+@pytest.mark.parametrize(
+    "universe", [golden.UNIVERSE, golden.WRITE_UNIVERSE], ids=["base", "write"]
+)
+def test_check_agrees_with_convergence_on_every_full_presence_state(
+    mode: str, universe: dict[golden.Key, tuple[str, ...]]
+) -> None:
     disagreements: list[str] = []
-    universe = golden.UNIVERSE
     for catalog, schema, table in itertools.product(
         golden._subsets(universe[CATALOG]),
         golden._subsets(universe[SCHEMA]),
@@ -188,21 +262,52 @@ def test_check_agrees_with_convergence_on_every_full_presence_state(mode: str) -
         start = golden._start_store(
             {CATALOG: catalog, SCHEMA: schema, TABLE: table}, golden.FOREIGN
         )
-        drift, _ = _check(mode, golden._copy(start))
-        outcome = golden._run(
-            converger.converge_campaign_treatment_access, mode=mode, store=golden._copy(start)
-        )
-        converged_without_change = outcome.ok and outcome.statements == ()
-        if (drift == []) is not converged_without_change:
-            disagreements.append(f"{catalog}/{schema}/{table}: drift={drift} ok={outcome.ok}")
-        if outcome.ok:
-            store = {
-                key: {name: set(held) for name, held in grants.items()}
-                for key, grants in outcome.store.items()
-            }
-            if _check(mode, store)[0] != []:
-                disagreements.append(f"{catalog}/{schema}/{table}: drift after convergence")
+        disagreements.extend(_disagreements(mode, start))
     assert disagreements == []
+
+
+@pytest.mark.parametrize("mode", ["quiesce", "runtime"])
+def test_check_agrees_with_convergence_on_partial_presence_and_group_grants(mode: str) -> None:
+    universe = golden.WRITE_UNIVERSE
+    disagreements: list[str] = []
+    for catalog, schema in itertools.product(
+        golden._subsets(universe[CATALOG]), golden._subsets(universe[SCHEMA])
+    ):
+        start = golden._start_store({CATALOG: catalog, SCHEMA: schema}, golden.FOREIGN)
+        disagreements.extend(_disagreements(mode, start, table_exists=False))
+    for catalog in golden._subsets(universe[CATALOG]):
+        start = golden._start_store({CATALOG: catalog}, golden.FOREIGN)
+        disagreements.extend(_disagreements(mode, start, schema_exists=False, table_exists=False))
+    for table in golden._subsets(universe[TABLE]):
+        for inherited in ({TABLE: {"MODIFY"}}, {SCHEMA: {"SELECT"}}, {CATALOG: {"BROWSE"}}):
+            start = golden._start_store(
+                {CATALOG: {"USE_CATALOG"}, SCHEMA: {"USE_SCHEMA"}, TABLE: table}, golden.FOREIGN
+            )
+            disagreements.extend(_disagreements(mode, start, inherited=inherited))
+    assert disagreements == []
+
+
+@pytest.mark.parametrize("mode", ["quiesce", "runtime"])
+def test_absent_catalog_is_not_drift_because_convergence_returns_without_a_statement(
+    mode: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    start = golden._start_store({}, golden.FOREIGN)
+
+    drift, _ = _check(mode, golden._copy(start), catalog_exists=False)
+    outcome = golden._run(
+        converger.converge_campaign_treatment_access,
+        mode=mode,
+        store=golden._copy(start),
+        catalog_exists=False,
+    )
+    spy, calls, plane = _workspace(golden._copy(start), catalog_exists=False)
+    monkeypatch.setattr(check_module, "deployment_workspace_client", lambda: spy)
+
+    assert drift is None
+    assert outcome.ok and outcome.result is False and outcome.statements == ()
+    assert check_module.run_check(catalog="mip", principal=golden.APP, mode=mode) == 0
+    assert "governed catalog is absent, nothing to converge" in capsys.readouterr().out
+    _assert_read_only(calls, plane)
 
 
 def test_run_check_exits_nonzero_on_drift_and_prints_no_identifiers(

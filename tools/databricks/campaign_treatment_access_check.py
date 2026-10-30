@@ -21,6 +21,7 @@ from databricks.sdk import WorkspaceClient
 from tools.databricks.converge_campaign_treatment_access import (
     _ALL_PRIVILEGES,
     _SAFE_METASTORE_PRIVILEGES,
+    OUTSIDE_ALL_PRIVILEGES,
     Mode,
     _effective_privileges,
     _identity_context,
@@ -45,8 +46,12 @@ def check_campaign_treatment_access(
     principal: str,
     mode: Mode,
     workspace: WorkspaceClient | None = None,
-) -> list[str]:
-    """Return symbolic drift lines; an empty list means the boundary is converged."""
+) -> list[str] | None:
+    """Return symbolic drift lines; an empty list means the boundary is converged.
+
+    ``None`` means the governed catalog is absent: convergence then returns
+    without a statement in either mode, so there is nothing to converge.
+    """
 
     if mode not in {"quiesce", "runtime"}:
         raise ValueError(f"Unsupported access convergence mode: {mode!r}")
@@ -75,6 +80,14 @@ def check_campaign_treatment_access(
         drift.append(f"metastore: forbidden privileges {_names(forbidden)} (convergence refuses)")
 
     presence = _object_presence(client, catalog=securables[0].full_name)
+    if presence[0] is None:
+        # The converger checks the metastore before presence, so it still refuses.
+        return drift or None
+    # What convergence revokes on a parent. Unity Catalog applies a catalog or
+    # schema grant to every securable below it, so a child's effective set
+    # carries those privileges until the parent revoke runs: they are drift on
+    # the parent, already reported there, not unremovable authority on the child.
+    revoked_on_parents: set[str] = set()
     for securable, present in zip(securables, presence, strict=True):
         if present is None:
             if mode == "runtime":
@@ -89,6 +102,7 @@ def check_campaign_treatment_access(
             principal=principal_name,
         )
         grant, revoke, retained = plan_securable(direct, reviewed)
+        revoked_here = set(revoke)
         if _ALL_PRIVILEGES in revoke:
             drift.append(
                 f"{securable.label}: revoke ALL_PRIVILEGES first "
@@ -111,12 +125,16 @@ def check_campaign_treatment_access(
             full_name=securable.full_name,
             principal=principal_name,
         )
-        inherited = effective - direct - reviewed
+        inherited = effective - direct - reviewed - revoked_on_parents
+        if _ALL_PRIVILEGES in revoked_on_parents:
+            # A revoked parent ALL PRIVILEGES conveys everything it implies.
+            inherited &= OUTSIDE_ALL_PRIVILEGES
         if inherited:
             drift.append(
                 f"{securable.label}: inherited {_names(inherited)} "
                 "(convergence cannot remove it and refuses)"
             )
+        revoked_on_parents |= revoked_here
     return drift
 
 
@@ -126,6 +144,11 @@ def run_check(*, catalog: str, principal: str, mode: Mode) -> int:
         f"{_PREFIX} owner policy is not evaluated read-only "
         "(its group-exclusion proof mints a credential)"
     )
+    if drift is None:
+        print(
+            f"{_PREFIX} check passed mode={mode}: governed catalog is absent, nothing to converge"
+        )
+        return 0
     if not drift:
         print(f"{_PREFIX} check passed mode={mode}: App grants equal the reviewed set")
         return 0

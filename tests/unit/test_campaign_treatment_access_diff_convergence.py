@@ -6,7 +6,8 @@ from every starting state in an exhaustive enumeration over small privilege
 universes, in both modes and for every object-presence shape. The store models
 the documented UC semantics: ``REVOKE ALL PRIVILEGES`` removes ALL PRIVILEGES
 and every privilege it implies, and leaves MANAGE, READ METADATA, EXTERNAL USE
-LOCATION and EXTERNAL USE SCHEMA in place.
+LOCATION and EXTERNAL USE SCHEMA in place; a privilege granted on the catalog
+or the schema reaches every securable below it (``_effective``).
 
 For every state where today's converger succeeds, the diff converger succeeds
 with the identical final grant store. Where today's converger fails closed,
@@ -21,7 +22,7 @@ from __future__ import annotations
 
 import itertools
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -60,9 +61,40 @@ UNIVERSE = {
     SCHEMA: ("USE_SCHEMA", "SELECT", "ALL_PRIVILEGES", "EXTERNAL_USE_SCHEMA"),
     TABLE: ("SELECT", "MODIFY", "ALL_PRIVILEGES", "MANAGE"),
 }
+# Every privilege that can complete a treatment write path, on every level it
+# can be granted: MODIFY and USE SCHEMA reach the table from a parent, and
+# ALL PRIVILEGES implies both.
+WRITE_UNIVERSE = {
+    CATALOG: ("USE_CATALOG", "USE_SCHEMA", "MODIFY", "ALL_PRIVILEGES"),
+    SCHEMA: ("USE_SCHEMA", "MODIFY", "ALL_PRIVILEGES"),
+    TABLE: ("SELECT", "MODIFY", "ALL_PRIVILEGES"),
+}
 
 Key = tuple[str, str]
 Store = dict[Key, dict[str, set[str]]]
+# A usage privilege reaches only the levels it gates: USE SCHEMA granted on the
+# catalog reaches its schemas but no table, and USE CATALOG stays on the
+# catalog. The converger's exact postflights pass on the live estate, which
+# pins that neither is reported below that level.
+_USAGE_LEVEL = {"USE_CATALOG": 0, "USE_SCHEMA": 1, "EXTERNAL_USE_SCHEMA": 1}
+
+
+def _effective(app: Mapping[Key, Iterable[str]], key: Key) -> set[str]:
+    """The App's effective privileges on ``key`` from its own direct grants.
+
+    Unity Catalog applies a privilege granted on a catalog or a schema to every
+    current and future securable below it, so MODIFY on the audit schema is
+    MODIFY on the treatment table.
+    """
+
+    level = SECURABLES.index(key)
+    inherited = {
+        privilege
+        for ancestor in SECURABLES[:level]
+        for privilege in app.get(ancestor, ())
+        if _USAGE_LEVEL.get(privilege, level) >= level
+    }
+    return set(app.get(key, ())) | inherited
 
 
 def _privilege(name: str) -> object:
@@ -124,7 +156,8 @@ class _Plane:
             held = {"USE_MARKETPLACE_ASSETS"}
         else:
             key = (securable_type, full_name)
-            held = set(self.store.get(key, {}).get(APP, set())) | self.inherited.get(key, set())
+            app = {k: v.get(APP, set()) for k, v in self.store.items()}
+            held = _effective(app, key) | self.inherited.get(key, set())
         entries = [SimpleNamespace(privilege=_privilege(p)) for p in sorted(held)]
         return SimpleNamespace(
             privilege_assignments=[SimpleNamespace(principal=APP, privileges=entries)],
@@ -164,11 +197,13 @@ def _run(
     mode: str,
     store: Store,
     inherited: dict[Key, set[str]] | None = None,
+    catalog_exists: bool = True,
     schema_exists: bool = True,
     table_exists: bool = True,
     ignore_principal_filter: bool = False,
 ) -> _Outcome:
     workspace, _, _ = converge_tests._workspace(
+        catalog_exists=catalog_exists,
         schema_exists=schema_exists,
         table_exists=table_exists,
     )
