@@ -9,7 +9,8 @@ Convergence is a diff, not REVOKE ALL followed by GRANT: it reads the App
 principal's direct grants on each governed securable, grants what the reviewed
 set lacks, then revokes only what it does not contain. A reviewed privilege the
 App already holds is never revoked, so treatment approvals stay live while an
-already-converged boundary is re-proven.
+already-converged boundary is re-proven. ``--check`` evaluates the same diff
+read-only (``campaign_treatment_access_check``).
 """
 
 from __future__ import annotations
@@ -576,9 +577,9 @@ def _quiesce_after_runtime_failure(
         )
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--warehouse-id", required=True)
+    parser.add_argument("--warehouse-id")
     parser.add_argument("--catalog", default="mip")
     parser.add_argument("--principal", required=True)
     parser.add_argument("--mode", choices=("quiesce", "runtime"), required=True)
@@ -588,7 +589,18 @@ def main() -> int:
         default=[],
         help="Explicit trusted UC owner principal; repeat for multiple owners.",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Read-only: print the symbolic grant diff for --mode and exit 1 on drift.",
+    )
+    args = parser.parse_args(argv)
+    if args.check:
+        from tools.databricks.campaign_treatment_access_check import run_check
+
+        return run_check(catalog=args.catalog, principal=args.principal, mode=args.mode)
+    if not args.warehouse_id:
+        parser.error("--warehouse-id is required unless --check is given")
     approved_owners = parse_approved_owner_principals(
         os.environ.get("MIP_UC_APPROVED_OWNER_PRINCIPALS", "")
     )
