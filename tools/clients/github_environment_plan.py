@@ -18,9 +18,12 @@ the signing keys) and lists the refusal lines as deferred.
 **The plan** is the ordered list of mutations, computed from one observation.
 Its canonical form is compact key-sorted JSON and its digest the sha256 of
 those bytes, as the bootstrap's (tools/clients/bootstrap_plan.py). It names
-environments, protections, field names and public values only. The
-identifying values a ``set_secret`` step writes and the maintainer's GitHub
-id are folded into one ``binding`` sha256, so the ack pins them exactly.
+environments, protections, field names and public values only. Every
+identifying value of the resolved profile (not only those a ``set_secret``
+step writes) and the maintainer's GitHub id are folded into one ``binding``
+sha256, so the ack pins them exactly. Hashing them all keeps the binding
+from confirming a guess: one low-entropy value written alone (a host, an
+email) is never hashed without the metastore and account UUIDs beside it.
 """
 
 from __future__ import annotations
@@ -78,7 +81,10 @@ class EnvironmentInputs:
     mode: ReviewMode
     agentic: bool
     variables: Mapping[str, str] = field(default_factory=dict)
+    # The identifying values this tool writes: every one but MIP_IDENTITY_IDS_JSON.
     identifying: Mapping[str, str] = field(default_factory=dict, repr=False)
+    # Every identifying value the profile digest covers, MIP_IDENTITY_IDS_JSON too.
+    covered: Mapping[str, str] = field(default_factory=dict, repr=False)
     profile_digest: str | None = None
     deferred: tuple[str, ...] = ()
 
@@ -112,17 +118,14 @@ def load_inputs(environ: Mapping[str, str], env_file: Path | None) -> Environmen
         return EnvironmentInputs(client, mode, agentic, variables=skeleton, deferred=refusal.lines)
     env = views.canonical_env(profile)
     variables = {name: value for name, value in env.items() if FIELD_CLASS[name] is FieldClass.PUBLIC}
-    identifying = {
-        name: value
-        for name, value in env.items()
-        if FIELD_CLASS[name] is FieldClass.IDENTIFYING and name != PINS_FIELD
-    }
+    covered = {name: value for name, value in env.items() if FIELD_CLASS[name] is FieldClass.IDENTIFYING}
     return EnvironmentInputs(
         profile.client,
         review_mode(profile.review_mode),
         profile.agentic_tier == "on",
         variables=variables,
-        identifying=identifying,
+        identifying={name: value for name, value in covered.items() if name != PINS_FIELD},
+        covered=covered,
         profile_digest=views.digest(profile),
     )
 
@@ -329,12 +332,12 @@ def compute_plan(inputs: EnvironmentInputs, obs: Observation, *, repository: str
         if deploy.variables.get(name) != value:
             change = "update" if name in deploy.variables else "create"
             steps.append(step("set_variable", env=target, name=name, change=change, value=value))
-    written: dict[str, str] = {}
-    for name, value in sorted(inputs.identifying.items()):
+    written: list[str] = []
+    for name in sorted(inputs.identifying):
         if rotate or name not in deploy.secret_updates:
             change = "replace" if name in deploy.secret_updates else "create"
             steps.append(step("set_secret", env=target, name=name, change=change, source="local profile"))
-            written[name] = value
+            written.append(name)
     steps += [
         step("generate_signing_key", env=target, name=name, kind="ed25519")
         for name in inputs.signing_keys
@@ -345,9 +348,9 @@ def compute_plan(inputs: EnvironmentInputs, obs: Observation, *, repository: str
         change = "update" if PROFILE_DIGEST_VARIABLE in deploy.variables else "create"
         steps.append(step("set_variable", env=target, name=PROFILE_DIGEST_VARIABLE, change=change, value=digest))
     notes = _notes(inputs, deploy, rotate=rotate)
-    binding = hashlib.sha256(
-        canonical_json({"maintainer_id": maintainer_id, "secrets": written})
-    ).hexdigest()
+    # Every identifying value, not only those written (module docstring).
+    bound = {"maintainer_id": maintainer_id, "identifying": dict(inputs.covered), "written": written}
+    binding = hashlib.sha256(canonical_json(bound)).hexdigest()
     return Plan(
         client=inputs.client,
         repository=repository,

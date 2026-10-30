@@ -138,8 +138,18 @@ the command line.
 
 Environments, review mode, protections, field names, public values and
 policy ids. Never an identifying value, a credential, a key or the
-maintainer's GitHub id: those are folded into one `binding` sha256, so the
-ack still pins the identifying values a `set_secret` step writes.
+maintainer's GitHub id. The identifying values and the id are folded into
+one `binding` sha256, so the ack pins the values a `set_secret` step writes
+and the one reviewer the plan installs: an `--apply` under another gh login
+refuses the digest you reviewed.
+
+The binding covers **every** identifying value of the resolved profile, not
+only those the plan writes. So a plan that writes one guessable secret (a
+host, an email) never prints a hash of that value alone: it is always hashed
+beside the metastore and account UUIDs. Before the profile resolves (the
+skeleton), the binding covers the maintainer's id only, and an id can be
+recovered from it by enumeration. That hides nothing: GitHub returns any
+user's id from their public login.
 
 ## Deferred
 
