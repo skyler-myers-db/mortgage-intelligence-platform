@@ -577,6 +577,13 @@ export MIP_UC_APPROVED_OWNER_PRINCIPALS="$_UC_APPROVED_OWNERS"
 # owner-equivalent probe, attack G12). Empty approves no one else.
 MIP_GENIE_MANAGER_PRINCIPALS="$(deployment_control_value MIP_GENIE_MANAGER_PRINCIPALS)"
 export MIP_GENIE_MANAGER_PRINCIPALS
+# The metastore's exact owner (the client profile's MIP_UC_METASTORE_OWNER,
+# M2-PR4): the pre-stop owner probe and every treatment-access convergence
+# judge the metastore by MetastoreOwnerPolicy over exactly this principal, not
+# by the approved owners or the deployer. Blank refuses there. It names a
+# principal, so it reaches them through the environment, never argv.
+MIP_UC_METASTORE_OWNER="$(deployment_control_value MIP_UC_METASTORE_OWNER)"
+export MIP_UC_METASTORE_OWNER
 for _ACCOUNT_AUTH_NAME in DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID; do
   resolve_m2m_credential "$_ACCOUNT_AUTH_NAME"
 done

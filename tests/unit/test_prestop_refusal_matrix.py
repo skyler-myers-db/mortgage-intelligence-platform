@@ -35,6 +35,7 @@ from tests.fixtures.prestop_estate import (
     APP_CLIENT,
     BLUE_SUPERVISOR_ENDPOINT,
     CANONICAL,
+    DEPLOYER,
     GOVERNED_SPACE,
     LEGACY_GATEWAY,
     RUNTIME_CLIENT,
@@ -114,8 +115,11 @@ def _deploy(
     checkout, base_env, cli_log = sandbox(tmp_path)
     # The sandbox's synthetic client profile, with the demo install's weekly
     # refresh off: a service-principal deployer cannot receive its failure mail.
+    # The fake estate's metastore is the deployer's, so the profile names it.
     profile = paychex_shaped_profile(
-        MIP_SCHEDULED_REFRESH="off", MIP_SCHEDULED_REFRESH_RECIPIENTS=None
+        MIP_SCHEDULED_REFRESH="off",
+        MIP_SCHEDULED_REFRESH_RECIPIENTS=None,
+        MIP_UC_METASTORE_OWNER=DEPLOYER,
     )
     (checkout / ".env.local").write_text(
         env_file_text({**profile, "DATABRICKS_WAREHOUSE_ID": "warehouse-1"}), encoding="utf-8"

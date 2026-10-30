@@ -52,7 +52,8 @@ App down:
    or tampered, and on the unsigned rebase path the bootstrap gate's absence
    proof, moved here from step 0a.
 5. **Owner policy** (``prestop_owner_policy``): ``ApprovedOwnerPolicy`` on the
-   metastore, the governed catalog, its audit schema and the treatment table.
+   governed catalog, its audit schema and the treatment table, and
+   ``MetastoreOwnerPolicy`` (exactly ``MIP_UC_METASTORE_OWNER``) on the metastore.
 6. **Owner-equivalent grantees** (``prestop_owner_equivalent``, attack G12).
 7. **Serving endpoints** (``prestop_serving_endpoints``): App access only on
    record-pinned endpoints.
@@ -529,6 +530,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     from tools.databricks.m2m_access_policy import resolve_effective_groups
     from tools.databricks.provision_agentic_resources import _supervisor_agents
+    from tools.databricks.uc_owner_policy import metastore_owner_from_env
 
     workspace = WorkspaceClient()
     assert_workspace_admin_inventory_identity(
@@ -549,6 +551,7 @@ def main(argv: list[str] | None = None) -> int:
             # both lists name principals, and deploy.sh echoes each command it runs.
             approved_owner_principals=os.environ.get(APPROVED_OWNERS_ENV, ""),
             genie_manager_principals=os.environ.get(GENIE_MANAGERS_ENV, ""),
+            metastore_owner=metastore_owner_from_env(),
         ),
         runtime_application_id=args.runtime_application_id,
         verifier_application_id=args.verifier_application_id,

@@ -1,12 +1,14 @@
 """Pre-stop probe: the approved-owner policy on the governed Unity Catalog objects.
 
 ``converge_campaign_treatment_access`` runs ``ApprovedOwnerPolicy.assert_objects``
-on the metastore, the governed catalog, its audit schema and the treatment
-table after step 0a has quiesced (and, on the rebase path, stopped) the App.
-An owner outside ``MIP_UC_APPROVED_OWNER_PRINCIPALS`` plus the deployer, or the
-App's own service principal, then fails with the App down. This probe calls the
-same method (``ASSERT``) on the same objects (``OBJECTS``) first, while the App
-still serves, and names each refusing object and its owner.
+on the governed catalog, its audit schema and the treatment table, and
+``MetastoreOwnerPolicy`` (exactly ``MIP_UC_METASTORE_OWNER``) on the metastore,
+after step 0a has quiesced (and, on the rebase path, stopped) the App. An
+owner outside ``MIP_UC_APPROVED_OWNER_PRINCIPALS`` plus the deployer, a
+metastore owner other than the configured one, or the App's own service
+principal, then fails with the App down. This probe calls the same methods
+(``ASSERT`` and ``ASSERT_METASTORE``) on the same objects (``OBJECTS``) first,
+while the App still serves, and names each refusing object and its owner.
 
 One part of the policy cannot run read-only. For a group owner the policy asks
 a membership probe whether the App's service principal belongs to that group;
@@ -27,19 +29,29 @@ from typing import Any
 from tools.databricks.converge_campaign_treatment_access import _object_presence
 from tools.databricks.prestop_refusals import OWNER_POLICY, PrestopRefusal
 from tools.databricks.uc_owner_policy import (
+    METASTORE_OWNER_ENV,
     ApprovedOwnerPolicy,
+    MetastoreOwnerPolicy,
     account_client_from_env,
 )
 from tools.databricks.uc_target_identity import workspace_target_identity
 
-# The policy method and object reads the post-stop converger uses (identity).
+# The policy methods and object reads the post-stop converger uses (identity).
 ASSERT = ApprovedOwnerPolicy.assert_objects
+ASSERT_METASTORE = MetastoreOwnerPolicy.assert_objects
 OBJECTS = _object_presence
+METASTORE = "metastore"
 _LABELS = ("governed catalog", "audit schema", "treatment table")
 _REMEDY = (
     "Either transfer ownership to an approved owner (MIP_UC_APPROVED_OWNER_PRINCIPALS or "
     "the deployer; never the App's service principal), or, after the owner's review, add "
     "that exact owner to MIP_UC_APPROVED_OWNER_PRINCIPALS. Then re-run."
+)
+_METASTORE_REMEDY = (
+    f"The metastore owner must be exactly {METASTORE_OWNER_ENV} (never users, account "
+    "users, admins, the App's service principal or a group holding it): after the "
+    f"client's review, set {METASTORE_OWNER_ENV} to the metastore's actual owner in the "
+    "client profile. No metastore transfer is part of a deploy. Then re-run."
 )
 
 
@@ -61,7 +73,7 @@ def _governed_objects(workspace: Any, *, catalog: str) -> list[tuple[str, object
     metastore_id = str(getattr(assignment, "metastore_id", "") or "").strip()
     if not metastore_id:
         raise RuntimeError("the current workspace has no authoritative metastore identifier")
-    objects: list[tuple[str, object]] = [("metastore", workspace.metastores.get(metastore_id))]
+    objects: list[tuple[str, object]] = [(METASTORE, workspace.metastores.get(metastore_id))]
     objects.extend(
         (label, item)
         for label, item in zip(_LABELS, OBJECTS(workspace, catalog=catalog), strict=True)
@@ -77,6 +89,7 @@ def owner_policy_refusals(
     catalog: str,
     approved_owner_principals: Iterable[str],
     app_groups: frozenset[str],
+    metastore_owner: str,
     account_factory: Callable[[], Any] = account_client_from_env,
 ) -> tuple[list[PrestopRefusal], list[str]]:
     """Refuse every governed object whose owner the post-stop policy would refuse."""
@@ -84,12 +97,21 @@ def owner_policy_refusals(
     if not app_client_id:
         return [], ["no App exists yet; the owner policy runs against its SP after creation"]
     try:
+        target = workspace_target_identity(workspace, application_id=app_client_id)
+        probe = read_only_membership_probe(app_groups)
         policy = ApprovedOwnerPolicy(
             workspace=workspace,
-            target=workspace_target_identity(workspace, application_id=app_client_id),
+            target=target,
             configured_principals=set(approved_owner_principals),
             account_factory=account_factory,
-            group_membership_probe=read_only_membership_probe(app_groups),
+            group_membership_probe=probe,
+        )
+        metastore_policy = MetastoreOwnerPolicy(
+            workspace=workspace,
+            target=target,
+            account_factory=account_factory,
+            group_membership_probe=probe,
+            metastore_owner=metastore_owner,
         )
         objects = _governed_objects(workspace, catalog=catalog)
     except Exception as exc:  # noqa: BLE001 - an unreadable policy input refuses
@@ -103,14 +125,18 @@ def owner_policy_refusals(
     refusals: list[PrestopRefusal] = []
     for label, item in objects:
         try:
-            ASSERT(policy, (item,))
+            if label == METASTORE:
+                ASSERT_METASTORE(metastore_policy, (item,))
+            else:
+                ASSERT(policy, (item,))
         except Exception as exc:  # noqa: BLE001 - each object refuses on its own
             owner = str(getattr(item, "owner", "") or "<missing>")
+            remedy = _METASTORE_REMEDY if label == METASTORE else _REMEDY
             refusals.append(
                 PrestopRefusal(
                     OWNER_POLICY,
                     f"the {label} owner {owner!r} fails the approved-owner policy that runs "
-                    f"after step 0a stops the App: {exc}. {_REMEDY}",
+                    f"after step 0a stops the App: {exc}. {remedy}",
                 )
             )
     notes = [] if refusals else [f"approved-owner policy holds on {len(objects)} governed objects"]

@@ -9,6 +9,7 @@ import pytest
 from tests.fixtures.prestop_estate import (
     APP_CLIENT,
     APP_SCIM,
+    DEPLOYER,
     FakeAccount,
     FakeWorkspace,
     clean_estate,
@@ -25,6 +26,7 @@ def _run(
     app_client_id: str = APP_CLIENT,
     app_groups: frozenset[str] = frozenset({"users"}),
     account: Any = None,
+    metastore_owner: str = DEPLOYER,
 ) -> tuple[list[str], list[str], FakeWorkspace]:
     workspace = FakeWorkspace(estate)
 
@@ -39,6 +41,7 @@ def _run(
         catalog="mip",
         approved_owner_principals=APPROVED,
         app_groups=app_groups,
+        metastore_owner=metastore_owner,
         account_factory=factory,
     )
     assert all(refusal.code == OWNER_POLICY for refusal in refusals)
@@ -62,8 +65,58 @@ def test_a_metastore_owner_outside_the_contract_refuses_by_name() -> None:
 
     assert len(refusals) == 1
     assert "the metastore owner 'platform-lead@example.invalid'" in refusals[0]
-    assert "outside the explicit approved-owner contract" in refusals[0]
-    assert "add that exact owner to MIP_UC_APPROVED_OWNER_PRINCIPALS" in refusals[0]
+    assert "metastore owner is not exactly MIP_UC_METASTORE_OWNER" in refusals[0]
+    assert "set MIP_UC_METASTORE_OWNER to the metastore's actual owner" in refusals[0]
+    assert "No metastore transfer is part of a deploy" in refusals[0]
+
+
+def test_an_approved_owner_does_not_satisfy_the_metastore_owner_policy() -> None:
+    # The install's approved owners own its objects; the metastore is the client's.
+    estate = clean_estate()
+    estate["metastore"]["owner"] = "mip-data-owners"
+
+    refusals, _notes, _workspace = _run(estate)
+
+    assert len(refusals) == 1 and "the metastore owner 'mip-data-owners'" in refusals[0]
+
+
+def test_the_deployer_owns_the_metastore_only_when_the_profile_names_it() -> None:
+    refusals, _notes, _workspace = _run(clean_estate(), metastore_owner="mip-data-owners")
+
+    assert len(refusals) == 1
+    assert f"the metastore owner {DEPLOYER!r}" in refusals[0]
+
+
+def test_a_configured_metastore_owner_group_without_the_app_passes() -> None:
+    estate = clean_estate()
+    estate["metastore"]["owner"] = "mip-data-owners"
+
+    refusals, _notes, _workspace = _run(estate, metastore_owner="mip-data-owners")
+
+    assert refusals == []
+
+
+def test_a_metastore_owner_group_containing_the_app_refuses() -> None:
+    estate = clean_estate()
+    estate["metastore"]["owner"] = "mip-data-owners"
+    estate["principals"]["mip-data-owners"]["members"] = [APP_SCIM]
+
+    refusals, _notes, _workspace = _run(
+        estate, metastore_owner="mip-data-owners", app_groups=frozenset({"users", "mip-data-owners"})
+    )
+
+    assert len(refusals) == 1
+    assert "the metastore owner 'mip-data-owners'" in refusals[0]
+    assert "member of approved owner group" in refusals[0]
+
+
+@pytest.mark.parametrize("configured", ["", " deployer@example.invalid", "users", "Account  Users", "admins"])
+def test_an_unusable_metastore_owner_setting_refuses_every_object(configured: str) -> None:
+    refusals, _notes, _workspace = _run(clean_estate(), metastore_owner=configured)
+
+    assert len(refusals) == 1
+    assert "cannot evaluate the approved-owner policy before step 0a" in refusals[0]
+    assert "MIP_UC_METASTORE_OWNER must" in refusals[0]
 
 
 def test_the_app_service_principal_cannot_own_the_treatment_table() -> None:

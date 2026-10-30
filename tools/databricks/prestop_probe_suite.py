@@ -52,6 +52,8 @@ class ProbeSuiteConfig:
     deployer: str
     approved_owner_principals: str
     genie_manager_principals: str
+    # MIP_UC_METASTORE_OWNER; blank refuses the owner policy (MetastoreOwnerPolicy).
+    metastore_owner: str = ""
 
 
 def journal_state_reader(
@@ -146,6 +148,7 @@ def suite_refusals(
             config.approved_owner_principals
         ),
         app_groups=app_groups,
+        metastore_owner=config.metastore_owner,
         account_factory=account_factory,
     )
     refusals.extend(found)
