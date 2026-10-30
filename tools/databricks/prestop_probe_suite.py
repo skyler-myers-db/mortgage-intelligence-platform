@@ -33,10 +33,10 @@ from tools.databricks.uc_owner_policy import (
     parse_approved_owner_principals,
 )
 
-# The provisioner's own resolution (attack G12, M1-PR3): with no signed record,
-# the space step 0a updates is the one the pin record names, or the one title
-# match an exact digest ack adopts; with neither it creates one. A title alone
-# never names it.
+# The provisioner's own resolution (attack G12, M1-PR3): the space step 0a
+# updates is the one the pin record or the signed record names (a record whose
+# space was retired is superseded), or the one title match an exact digest ack
+# adopts; with neither it creates one. A title alone never names it.
 GOVERNED_SPACE = genie_space_pin.resolve
 
 
@@ -89,13 +89,18 @@ def canonical_supervisor_endpoint(agents: list[dict[str, Any]], canonical_name: 
 def governed_genie_space(
     workspace: Any, *, contract: Any, config: ProbeSuiteConfig
 ) -> tuple[str, list[PrestopRefusal], list[str]]:
-    """The record-pinned space, else the one the provisioner resolves by its pin (never a title)."""
+    """The space the provisioner resolves after step 0a, by its pin (never a title alone).
 
-    if contract is not None:
-        return contract.genie_space_id, [], []
+    With a signed record that is normally the record's own space. After a
+    disaster-recovery retire (tools/databricks/genie_space_pin_retire.py) the
+    record still names the gone space until the next capture, and the
+    provisioner creates or uses another; the probes judge that one.
+    """
+
+    record_space = contract.genie_space_id if contract is not None else ""
     title = config.genie_space_name.strip()
     if not title:
-        return "", [], []
+        return record_space, [], []
     try:
         resolution = GOVERNED_SPACE(
             workspace,
@@ -121,14 +126,16 @@ def governed_genie_space(
                 "provisioner refuses the same after step 0a.",
             )
         ], []
-    if resolution.space_id is None:
+    space_id = resolution.space_id or ""
+    if record_space and space_id == record_space:
+        return space_id, [], []
+    prefix = "the signed record names a retired Genie space" if record_space else "no signed record"
+    if not space_id:
         return "", [], [
-            "no pin names a Genie space and none has the governed title yet; the provisioner "
-            "creates and pins it"
+            f"{prefix}; no pin names a Genie space and none has the governed title yet; the "
+            "provisioner creates and pins it"
         ]
-    return resolution.space_id, [], [
-        f"no signed record; the governed Genie space is {resolution.space_id} by its {resolution.source}"
-    ]
+    return space_id, [], [f"{prefix}; the governed Genie space is {space_id} by its {resolution.source}"]
 
 
 def suite_refusals(

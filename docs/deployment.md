@@ -1938,8 +1938,9 @@ Two operator-only modes; `scripts/deploy.sh` passes neither, and
   recomputes the plan right before its one write, a signed tombstone pin
   record that pins nothing and lists the gone id in `retired_space_ids`. The
   next deploy then creates and pins a new space. A rollback record naming the
-  gone id is superseded until the next green capture, and a retired id is
-  never pinned again. A space that still exists is never unpinned. See
+  gone id is superseded until the next green capture (the pre-stop probes
+  judge the space step 0a will use, not the record's gone one), and a retired
+  id is never pinned again. A space that still exists is never unpinned. See
   `docs/disaster-recovery.md`, Scenario 5.
 - **The legacy live install's Genie spec, until it is adopted (M2-PR6).** It
   has no pin and no signed rollback record, so its space is an unpinned title

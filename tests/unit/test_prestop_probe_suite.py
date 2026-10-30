@@ -21,6 +21,7 @@ from tests.fixtures.prestop_estate import (
     acl_entry,
     clean_estate,
     rename_record_supervisor,
+    scripted_resolution,
     signed_contract,
 )
 from tools.databricks import deploy_prestop_probes as runner
@@ -67,6 +68,9 @@ def _suite(
         return SimpleNamespace(genie_status="COMPLETED", answer_text="12,345 borrowers")
 
     monkeypatch.setattr(prestop_genie_budget, "ASSERT", ask)
+    # The provisioner's resolution over this estate: the record's space, or the pin's.
+    resolved = {**estate, "app": estate["app"] if app else None}
+    monkeypatch.setattr(prestop_probe_suite, "GOVERNED_SPACE", lambda *_a, **_kw: scripted_resolution(resolved))
     workspace = FakeWorkspace(estate)
     refusals, notes = suite_refusals(
         workspace,
@@ -89,6 +93,43 @@ def test_a_clean_install_passes_every_suite_probe(monkeypatch: pytest.MonkeyPatc
     assert found == []
     assert asked == [GOVERNED_SPACE], "the Genie turn asks the record-pinned space"
     assert len(notes) == 5
+
+
+def test_a_record_whose_space_was_retired_yields_to_the_provisioners_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After a DR retire the record still names the gone space; step 0a creates or uses another."""
+
+    estate = clean_estate()
+    estate["genie"]["space-recreated"] = [acl_entry("user_name", "steward@example.invalid", "CAN_MANAGE")]
+    estate["genie_pin"] = "space-recreated"  # pinned after the retire
+
+    found, notes, asked = _suite(monkeypatch, estate)
+
+    assert asked == ["space-recreated"] and found == [codes.OWNER_EQUIVALENT]
+    assert (
+        "the signed record names a retired Genie space; the governed Genie space is space-recreated by its pin"
+        in notes
+    )
+
+    monkeypatch.setattr(
+        prestop_probe_suite,
+        "GOVERNED_SPACE",
+        lambda *_a, **_kw: genie_space_pin.Resolution(action="create", space_id=None, source="none"),
+    )
+    found, notes = suite_refusals(
+        FakeWorkspace(clean_estate()),
+        config=CONFIG,
+        app_client_id=APP_CLIENT,
+        app_scim_id=APP_SCIM,
+        app_groups=frozenset({"users"}),
+        agents=clean_estate()["agents"],
+        acls=genie_acls(FakeWorkspace(clean_estate())),
+        journal_state=lambda: "absent",
+        account_factory=lambda: FakeAccount(clean_estate()),
+        token_provider=lambda: "token-PLACEHOLDER",
+    )
+    assert found == [] and any(note.startswith("the signed record names a retired Genie space; no pin") for note in notes)
 
 
 def test_the_record_pins_the_governed_space_the_owner_equivalent_probe_audits(
@@ -321,6 +362,6 @@ def test_without_a_record_or_a_titled_space_there_is_no_governed_space(
 
     assert refusals == [] and asked == []
     assert (
-        "no pin names a Genie space and none has the governed title yet; the provisioner "
-        "creates and pins it"
+        "no signed record; no pin names a Genie space and none has the governed title yet; the "
+        "provisioner creates and pins it"
     ) in notes

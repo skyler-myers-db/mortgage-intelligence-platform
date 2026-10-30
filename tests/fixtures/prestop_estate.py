@@ -382,9 +382,10 @@ def install(estate_path: Path, *, probes: bool) -> None:
     ``WorkspaceClient`` and ``AccountClient`` become the fakes. ``record`` scripts
     the signed-record verifier (a dict passes, a string raises that message);
     ``rebase_absence`` scripts the bootstrap absence proof; ``journal`` the
-    first-install journal state; ``genie_pin`` the space a pin names when no
-    record does (``None``: nothing pinned and no title match, so the provisioner
-    creates one); ``genie_turn`` the Genie turn's terminal status
+    first-install journal state; ``genie_pin`` the space the pin record names
+    (``None``: the signed ``record``'s space when the record verifies, otherwise
+    nothing pinned and no title match, so the provisioner creates one);
+    ``genie_turn`` the Genie turn's terminal status
     (``BUDGET`` raises a budget error). After each process the document is written
     back, so a stop the probe was never meant to make is visible to the test.
     """
@@ -404,7 +405,6 @@ def install(estate_path: Path, *, probes: bool) -> None:
 
     from tools.databricks import (
         app_first_install_journal,
-        genie_space_pin,
         prestop_genie_budget,
         prestop_probe_suite,
         prestop_rollback_record,
@@ -438,12 +438,22 @@ def install(estate_path: Path, *, probes: bool) -> None:
         lambda *_a, **_kw: estate["journal"]
     )
     def governed(_workspace: Any, **_kwargs: Any) -> Any:
-        if estate.get("genie_pin") is None:
-            return genie_space_pin.Resolution(action="create", space_id=None, source="none")
-        return genie_space_pin.Resolution(action="use", space_id=estate["genie_pin"], source="pin")
+        return scripted_resolution(estate)
 
     prestop_genie_budget.ASSERT = turn  # type: ignore[assignment]
     prestop_probe_suite.GOVERNED_SPACE = governed  # type: ignore[assignment]
+
+
+def scripted_resolution(estate: dict[str, Any]) -> Any:
+    """What ``genie_space_pin.resolve`` returns for ``estate`` (its seam in the probes)."""
+
+    from tools.databricks.genie_space_pin import Resolution
+
+    if estate.get("genie_pin"):
+        return Resolution(action="use", space_id=estate["genie_pin"], source="pin")
+    if isinstance(estate.get("record"), dict) and estate["app"] is not None:
+        return Resolution(action="use", space_id=estate["record"]["genie_space_id"], source="record")
+    return Resolution(action="create", space_id=None, source="none")
 
 
 def write_estate(path: Path, estate: dict[str, Any]) -> Path:
