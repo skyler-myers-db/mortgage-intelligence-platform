@@ -10,11 +10,13 @@ leftovers trip it on a shared workspace, with the App already stopped: a
 and one on the endpoint of a Supervisor renamed out of the canonical name (it
 is no longer the one the cutover replaces).
 
-This probe runs the same function (``ASSERT``) first. The reviewed set is the
-record-pinned endpoints (the signed record's Gateway and Supervisor endpoints)
-plus the canonical Supervisor's endpoint (the one the cutover journal pins),
-restricted to those the App reaches, classified by the same exact-mode reader
-the cutover uses (``MODE``); each is accepted in its exact legacy query mode.
+This probe runs the same function (``ASSERT``) first, on the same reviewed
+set: the signed record's Gateway plus the canonical Supervisor's endpoint (the
+only Supervisor ``pin_journal`` accepts, so the only one the cutover can
+replace). The record's own Supervisor endpoint is in that set only while its
+Supervisor still holds the canonical name. The set is restricted to the
+endpoints the App reaches, classified by the same exact-mode reader the
+cutover uses (``MODE``); each is accepted in its exact legacy query mode.
 With none, ``ASSERT_NONE`` proves no access at all. The new Gateway does not
 exist yet. Group membership is the workspace-visible walk plus ``users``, so
 this is an early refusal; the post-stop audit still reads the account plane.

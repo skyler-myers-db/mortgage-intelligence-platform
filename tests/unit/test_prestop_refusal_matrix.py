@@ -33,6 +33,7 @@ from tests.fixtures.client_profiles import IDENTITY_IDS, env_file_text, paychex_
 from tests.fixtures.deploy_sandbox import INHERITED_PREFIXES, sandbox
 from tests.fixtures.prestop_estate import (
     APP_CLIENT,
+    BLUE_SUPERVISOR_ENDPOINT,
     CANONICAL,
     GOVERNED_SPACE,
     LEGACY_GATEWAY,
@@ -40,6 +41,7 @@ from tests.fixtures.prestop_estate import (
     VERIFIER_CLIENT,
     acl_entry,
     clean_estate,
+    rename_record_supervisor,
     write_estate,
 )
 from tools.databricks import prestop_refusals as codes
@@ -203,6 +205,13 @@ def _legacy_gateway_query(estate: dict[str, Any]) -> None:
     }
 
 
+def _renamed_record_supervisor_query(estate: dict[str, Any]) -> None:
+    rename_record_supervisor(estate)
+    estate["serving"][BLUE_SUPERVISOR_ENDPOINT]["acl"] = [
+        acl_entry("service_principal_name", APP_CLIENT, "CAN_QUERY")
+    ]
+
+
 def _unacknowledged_human_supervisor(estate: dict[str, Any]) -> None:
     estate["agents"][0]["creator"] = "operator@example.invalid"
 
@@ -266,6 +275,7 @@ CASES: tuple[tuple[str, Any, dict[str, str]], ...] = (
     (codes.OWNER_EQUIVALENT, _owner_equivalent_human, {}),
     (codes.OWNER_EQUIVALENT, _foreign_genie_manager, {}),
     (codes.SERVING_ENDPOINT, _legacy_gateway_query, {}),
+    (codes.SERVING_ENDPOINT, _renamed_record_supervisor_query, {}),
     (codes.GENIE_BUDGET, _set(("genie_turn",), "BUDGET"), {}),
     (codes.PROBE_ERROR, _set(("genie_errors",), [GOVERNED_SPACE]), {}),
 )

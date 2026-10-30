@@ -20,6 +20,7 @@ from tests.fixtures.prestop_estate import (
     FakeWorkspace,
     acl_entry,
     clean_estate,
+    rename_record_supervisor,
     signed_contract,
 )
 from tools.databricks import deploy_prestop_probes as runner
@@ -31,6 +32,7 @@ from tools.databricks.prestop_probe_suite import (
     canonical_supervisor_endpoint,
     suite_refusals,
 )
+from tools.databricks.serving_endpoint_acl import audit_global_serving_endpoint_access
 
 CONFIG = ProbeSuiteConfig(
     app_name=APP_NAME,
@@ -106,6 +108,36 @@ def test_a_legacy_record_pins_mip_agent_gateway(monkeypatch: pytest.MonkeyPatch)
     estate["record"]["gateway_endpoint"] = LEGACY_GATEWAY
     estate["serving"].pop("mip-agent-gateway-blue")
     assert _suite(monkeypatch, estate)[0] == []
+
+
+def test_query_on_the_record_supervisor_refuses_once_it_leaves_the_canonical_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_query = [acl_entry("service_principal_name", APP_CLIENT, "CAN_QUERY")]
+    estate = clean_estate()
+    estate["serving"][BLUE_SUPERVISOR_ENDPOINT]["acl"] = app_query
+    assert _suite(monkeypatch, estate)[0] == [], "the canonical one is the one cutover replaces"
+
+    estate = rename_record_supervisor(clean_estate())
+    estate["serving"][BLUE_SUPERVISOR_ENDPOINT]["acl"] = app_query
+    assert estate["record"]["supervisor_endpoint"] == BLUE_SUPERVISOR_ENDPOINT
+
+    found, _notes, _asked = _suite(monkeypatch, estate)
+
+    assert found == [codes.SERVING_ENDPOINT]
+    # Parity: the post-stop App audit reviews the record's Gateway and the
+    # canonical Supervisor (here without App access), and refuses the same.
+    with pytest.raises(RuntimeError, match=f"unrelated serving endpoint '{BLUE_SUPERVISOR_ENDPOINT}'"):
+        audit_global_serving_endpoint_access(
+            FakeWorkspace(estate),
+            app_name=APP_NAME,
+            reviewed_endpoint_names=[estate["record"]["gateway_endpoint"]],
+            service_principal=APP_CLIENT,
+            expected_permission_level="CAN_QUERY",
+            service_principal_id=APP_SCIM,
+            effective_group_names={"users"},
+            legacy_pinned_endpoint_names=[estate["record"]["gateway_endpoint"]],
+        )
 
 
 def test_without_an_app_only_the_owner_equivalent_probe_reads(

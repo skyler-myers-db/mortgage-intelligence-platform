@@ -170,9 +170,13 @@ def suite_refusals(
     refusals.extend(found)
     notes.extend(said)
 
+    # The post-stop App audit reviews the record's Gateway and the Supervisor the
+    # cutover replaces, and pin_journal replaces only the one on the canonical
+    # name. So the record's own Supervisor endpoint is reviewed only while it is
+    # that canonical one; once renamed, the App's access there is unrelated.
     pinned = [canonical_supervisor_endpoint(agents, config.canonical_name)]
     if contract is not None:
-        pinned.extend((contract.gateway_endpoint, contract.supervisor_endpoint))
+        pinned.append(contract.gateway_endpoint)
     found, said = serving_endpoint_refusals(
         workspace,
         app_name=config.app_name,

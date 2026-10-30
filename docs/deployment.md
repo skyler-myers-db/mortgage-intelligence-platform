@@ -1979,12 +1979,14 @@ refusal here is the refusal that step would raise with the App down:
   is never read as "no grantees". No post-stop step checks these grantees yet,
   so this probe owns the assertion.
 - **Serving endpoints** (`prestop_serving_endpoints`, `serving_endpoint`). The
-  cutover's App audit (`audit_global_serving_endpoint_access`) runs first, here:
-  the App may query only the signed record's Gateway and Supervisor endpoints
-  and the canonical Supervisor's endpoint (the one the cutover journal pins),
-  each in its exact legacy query mode. A `CAN_QUERY` on the legacy
-  `mip-agent-gateway` that no record pins, or on the endpoint of a Supervisor
-  renamed off the canonical name, refuses; remove that access with the
+  cutover's App audit (`audit_global_serving_endpoint_access`) runs first, here,
+  on the set that audit reviews: the App may query only the signed record's
+  Gateway and the canonical Supervisor's endpoint (the only Supervisor the
+  cutover journal can pin), each in its exact legacy query mode. The record's
+  own Supervisor endpoint is in that set only while its Supervisor holds the
+  canonical name. A `CAN_QUERY` on the legacy `mip-agent-gateway` that no
+  record pins, or on the endpoint of a Supervisor renamed off the canonical
+  name (even the one the record pins), refuses; remove that access with the
   endpoint owner's consent.
 - **Genie budget** (`prestop_genie_budget`, `genie_budget`). One real turn,
   asked through the App's own Genie client (`GenieClient.ask`) on the governed

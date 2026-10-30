@@ -112,6 +112,27 @@ def clean_estate() -> dict[str, Any]:
     }
 
 
+def rename_record_supervisor(estate: dict[str, Any]) -> dict[str, Any]:
+    """The record still pins ``mas-blue-endpoint``, whose Supervisor left the canonical name.
+
+    A runtime Supervisor now holds the canonical name, so ``pin_journal`` (which
+    accepts only the canonical-name Supervisor) can never replace the record's.
+    """
+
+    estate["agents"][0]["display_name"] = f"{CANONICAL} (retired copy)"
+    estate["agents"].append(
+        {
+            "supervisor_agent_id": "supervisor-green",
+            "display_name": CANONICAL,
+            "creator": RUNTIME_CLIENT,
+            "endpoint_name": "mas-green-endpoint",
+            "create_time": "2026-02-02T03:04:05.678Z",
+        }
+    )
+    estate["serving"]["mas-green-endpoint"] = {"id": "endpoint-green", "acl": []}
+    return estate
+
+
 def _acl_entry(field: str, name: str, level: str, inherited: bool | str = False) -> dict[str, Any]:
     permission: dict[str, Any] = {"permission_level": level, "inherited": bool(inherited)}
     if isinstance(inherited, str):
