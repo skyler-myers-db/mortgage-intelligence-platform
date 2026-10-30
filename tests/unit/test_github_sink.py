@@ -246,10 +246,20 @@ def test_confirm_is_true_only_for_what_this_run_wrote(protected: FakeGitHub) -> 
 
 def test_a_write_the_environment_did_not_record_is_not_confirmed(protected: FakeGitHub) -> None:
     with _sink(protected) as sink:
+        sink.put_secret("DATABRICKS_CLIENT_SECRET", "00000000-0000-4000-8000-000000000004", SecretStr("older"))
+    state = protected.state()
+    state["drop_writes"] = True  # gh exits 0, but the stored secret keeps its old updatedAt
+    protected.write(state)
+    with _sink(protected) as sink:
+        sink.put_secret("DATABRICKS_CLIENT_SECRET", "00000000-0000-4000-8000-000000000004", SecretStr(CANARY))
+        assert sink.confirm_secret("DATABRICKS_CLIENT_SECRET") is False
+    assert protected.environment(CLIENT)["secrets"]["DATABRICKS_CLIENT_SECRET"]["sha256"] == _sha("older")
+
+
+def test_a_failed_write_raises_a_value_free_failure(protected: FakeGitHub) -> None:
+    with _sink(protected) as sink:
         sink.ready()
-        state = protected.state()
-        state["fail"].append({"argv": ["secret", "set", "DATABRICKS_CLIENT_SECRET"]})
-        protected.write(state)
+        protected.fail_next("secret", "set", "DATABRICKS_CLIENT_SECRET")
         with pytest.raises(GhFailure, match=r"^gh secret set failed \(exit 1\)$"):
             sink.put_secret("DATABRICKS_CLIENT_SECRET", "00000000-0000-4000-8000-000000000004", SecretStr(CANARY))
         assert sink.confirm_secret("DATABRICKS_CLIENT_SECRET") is False

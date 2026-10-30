@@ -194,6 +194,8 @@ def main():
     elif command == ["secret", "set"]:
         if not stdin:
             sys.exit(1)
+        if state.get("drop_writes"):  # an acknowledged write the server never applied
+            return
         env["secrets"][argv[2]] = {"sha256": hashlib.sha256(stdin).hexdigest(), "len": len(stdin), "ed25519": is_ed25519(stdin), "updatedAt": tick(state)}
         save(state)
     elif command == ["secret", "delete"]:
