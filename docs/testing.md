@@ -89,6 +89,8 @@ docker rm -f mip-pg-$USER
 
 `-n 0` is required, and the two suites must never run concurrently: both `DROP SCHEMA mip_app CASCADE` and recreate it in the same database. Point the DSN only at a throwaway database.
 
+`tests/integration/test_lakebase_migration_plan_postgres.py` is the DSN half of the read-only `--mode plan|verify` proof: it applies the schema the way apply does (the four texts, the digest row, the grants), records every statement plan and verify send through a proxy over the real cursor, checks that the server rejects a write inside their session (and a multi-command text even past the client guard), and proves that four kinds of owner-level drift (a same-shape function-body rewrite, a dropped CHECK, a dropped unique index, deleted seed rows) turn a noop plan into apply until a real apply repairs them. The unit half, `tests/unit/test_lakebase_migration_plan.py`, runs the same modes against a fake psycopg that refuses anything but a read, and walks every function reachable from `main_read_only` to prove each `.execute` is a literal read.
+
 ### Growth Agent trust (wave 5)
 
 Audit 2026-09-21 `critic-01`, `genie-09` part 1, `flow-08` slice 2 and `wow-ai-4` (backend):

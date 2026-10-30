@@ -1019,7 +1019,6 @@ APP_RESOURCE_BINDING_BEFORE=""
 APP_RESOURCE_BINDING_AFTER=""
 FIRST_INSTALL_JOURNAL_ENV=""
 FIRST_INSTALL_MARKED_PAYLOAD=""
-_PII_SECRET_PAYLOAD=""
 APP_DEPLOYMENT_LEASE_ID=""
 APP_DEPLOYMENT_LEASE_HEARTBEAT_PID=""
 FIRST_INSTALL_APP_CREATED=1
@@ -1965,7 +1964,9 @@ def test_deploy_requires_control_plane_and_runtime_uc_boundary_proofs() -> None:
     assert 'run "$@"' in dual_helper
 
 
-def test_pii_salt_is_generated_in_a_secure_payload_and_never_logged() -> None:
+def test_pii_salt_is_generated_inside_the_write_once_tool_and_never_logged() -> None:
+    # The value is generated and put inside tools/databricks/pii_salt_scope.py
+    # (tests/unit/test_pii_salt_scope.py); the step only names scope and key.
     text = _deploy_entrypoint_text()
     block = text[
         text.index('step "provision pii-salt secret scope') : text.index(
@@ -1973,11 +1974,17 @@ def test_pii_salt_is_generated_in_a_secure_payload_and_never_logged() -> None:
         )
     ]
 
-    assert "secrets.token_hex(32)" in block
-    assert "run_redacted" in block
-    assert "@[secure-temp]" in block
-    assert "--string-value" not in block
-    assert "openssl rand" not in block
+    assert 'run "$PYTHON" -m tools.databricks.pii_salt_scope ensure' in block
+    for retired in (
+        "databricks secrets",
+        "secrets/put",
+        "string_value",
+        "token_hex",
+        "mktemp",
+        "--string-value",
+        "openssl rand",
+    ):
+        assert retired not in block, retired
 
 
 def test_retained_model_audit_is_read_only_and_rotation_action_is_absent() -> None:
@@ -2223,18 +2230,25 @@ def test_deploy_dev_seeds_databricks_auth_without_printing_secrets() -> None:
     assert 'echo "MIP_GENIE_ACTION_SECRET_PREVIOUS=' not in text
 
 
-def test_deploy_dev_binds_required_and_rotation_secrets() -> None:
+def test_deploy_dev_binds_only_the_public_action_key_ids() -> None:
+    """The runtime HMAC values stay in Databricks (presence-only provisioning).
+
+    tests/unit/test_runtime_secret_inputs_stay_out_of_ci.py proves no workflow
+    names the three secret inputs at all; the public key ids still ride along.
+    """
     text = DEPLOY_DEV.read_text(encoding="utf-8")
 
     for binding in (
-        "MIP_COTALITY_ID_MASK_SECRET: ${{ secrets.MIP_COTALITY_ID_MASK_SECRET }}",
-        "MIP_GENIE_ACTION_SECRET_CURRENT: ${{ secrets.MIP_GENIE_ACTION_SECRET_CURRENT }}",
-        "MIP_GENIE_ACTION_SECRET_PREVIOUS: ${{ secrets.MIP_GENIE_ACTION_SECRET_PREVIOUS }}",
         "MIP_GENIE_ACTION_SECRET_KID: ${{ vars.MIP_GENIE_ACTION_SECRET_KID }}",
         "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID: ${{ vars.MIP_GENIE_ACTION_SECRET_PREVIOUS_KID }}",
     ):
         assert binding in text
-    assert "MIP_COTALITY_ID_MASK_SECRET MIP_GENIE_ACTION_SECRET_CURRENT" in text
+    for secret in (
+        "secrets.MIP_COTALITY_ID_MASK_SECRET",
+        "secrets.MIP_GENIE_ACTION_SECRET_CURRENT",
+        "secrets.MIP_GENIE_ACTION_SECRET_PREVIOUS",
+    ):
+        assert secret not in text
     assert "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID=${MIP_GENIE_ACTION_SECRET_PREVIOUS_KID}" in text
 
 
@@ -4989,6 +5003,7 @@ def test_first_install_dry_run_executes_no_databricks_operations(
             )
             assert grant_block.count(statement) == 1
     assert "would verify: campaign treatment table append-only" in result.stdout
+    assert "would check read-only: scope mip and write-once pii-salt-v1" in result.stdout
     assert "would inspect/create: scope mip and write-once pii-salt-v1" in result.stdout
     assert "deploy Databricks App snapshot with Agent Evaluation proof" in result.stdout
 
@@ -5005,13 +5020,13 @@ def test_deploy_fails_fast_when_python_lacks_repo_tooling_deps() -> None:
     script = _deploy_entrypoint_text()
 
     guard = script.index("import dotenv, pydantic")
-    mask_gate = script.index("MIP_COTALITY_ID_MASK_SECRET is required for target")
+    signing_key_gate = script.index("MIP_AI_GATEWAY_PROOF_SIGNING_KEY is required for target")
     oauth_gate = script.index(
         "OAuth credential intent recovery and orphan-lease recovery are mutually exclusive"
     )
     m2m_gate = script.index("missing required per-run M2M credential(s)")
     lease_root = script.index("tools.databricks.app_deployment_lease recovery-root")
-    assert mask_gate < oauth_gate < guard < m2m_gate < lease_root
+    assert signing_key_gate < oauth_gate < guard < m2m_gate < lease_root
 
     guard_block = script[guard : script.index("\nfi\n", guard)]
     assert "cannot import the deploy tooling baseline (python-dotenv + pydantic)" in guard_block
@@ -5041,7 +5056,7 @@ def test_deploy_dev_wires_separate_required_gateway_signing_keys() -> None:
     )
     assert workflow.count(model_binding) == 2
     required_loop = workflow[workflow.index('missing=""') : workflow.index("python - <<'PY'")]
-    assert "MIP_GENIE_ACTION_SECRET_CURRENT" in required_loop
+    assert "MIP_GENIE_ACTION_SECRET_CURRENT" not in required_loop, "presence-only, not required"
     assert "MIP_AI_GATEWAY_PROOF_SIGNING_KEY" in required_loop
     assert "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY" in required_loop
     script = _deploy_entrypoint_text()
@@ -5256,9 +5271,6 @@ def test_deploy_workflow_identity_check_inherits_only_public_client_ids() -> Non
     assert "DATABRICKS_TOKEN" not in prefix, "no deployer PAT reaches the step"
     for secret in (
         "DATABRICKS_ACCOUNT_CLIENT_SECRET",
-        "MIP_COTALITY_ID_MASK_SECRET",
-        "MIP_GENIE_ACTION_SECRET_CURRENT",
-        "MIP_GENIE_ACTION_SECRET_PREVIOUS",
         "MIP_AI_GATEWAY_PROOF_SIGNING_KEY",
         "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY",
     ):
@@ -5293,9 +5305,6 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
         "MIP_CI_DEPLOYER_CLIENT_ID": "ci-deployer",
         "DATABRICKS_WAREHOUSE_ID": "warehouse-id",
         "GENIE_SPACE_ID": "genie-id",
-        "MIP_COTALITY_ID_MASK_SECRET": "mask-secret",
-        "MIP_GENIE_ACTION_SECRET_CURRENT": "action-secret",
-        "MIP_GENIE_ACTION_SECRET_PREVIOUS": "old-action-secret",
         "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": "proof-private",
         "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY": "model-private",
         "MIP_DEFAULT_CATALOG": "mip",
@@ -5368,9 +5377,6 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
     for secret in (
         "DATABRICKS_TOKEN",
         "DATABRICKS_ACCOUNT_CLIENT_SECRET",
-        "MIP_COTALITY_ID_MASK_SECRET",
-        "MIP_GENIE_ACTION_SECRET_CURRENT",
-        "MIP_GENIE_ACTION_SECRET_PREVIOUS",
         "MIP_AI_GATEWAY_PROOF_SIGNING_KEY",
         "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY",
         "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE",
@@ -5383,8 +5389,6 @@ _CONFIGURE_STEP_INPUTS = {
     "MIP_CI_DEPLOYER_CLIENT_ID": "ci-deployer",
     "DATABRICKS_WAREHOUSE_ID": "warehouse-id",
     "GENIE_SPACE_ID": "genie-id",
-    "MIP_COTALITY_ID_MASK_SECRET": "mask-secret",
-    "MIP_GENIE_ACTION_SECRET_CURRENT": "action-secret",
     "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": "proof-private",
     "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY": "model-private",
     "MIP_DEFAULT_CATALOG": "mip_ci",
@@ -6498,12 +6502,17 @@ def test_deploy_dev_wires_optional_salesforce_external_id_upsert_without_preflig
     assert "SALESFORCE" not in required_preflight
 
 
-def test_deploy_script_requires_cotality_mask_secret_for_prod_target(tmp_path: Path) -> None:
+def test_deploy_script_provisions_runtime_secrets_presence_only() -> None:
     text = _deploy_entrypoint_text()
 
     assert 'APP_RUNTIME_ENV="${APP_ENV:-}"' in text
-    assert "MIP_COTALITY_ID_MASK_SECRET is required for target" in text
-    assert "source-known compatibility namespace is allowed only for local/test" in text
+    assert "is required for target '$TARGET'" in text, "the other required-key gates stay"
+    for retired in (
+        "MIP_COTALITY_ID_MASK_SECRET is required for target",
+        "MIP_GENIE_ACTION_SECRET_CURRENT is required for target",
+        "source-known compatibility namespace is allowed only for local/test",
+    ):
+        assert retired not in text
     assert text.index("tools.databricks.provision_runtime_secrets") < text.index(
         "tools.databricks.bundle_env validate"
     )
@@ -6511,6 +6520,39 @@ def test_deploy_script_requires_cotality_mask_secret_for_prod_target(tmp_path: P
     assert 'export BUNDLE_VAR_runtime_secret_scope="$RUNTIME_SECRET_SCOPE"' in text
     assert '--scope "$RUNTIME_SECRET_SCOPE"' in text
     assert "Apps deploy payload\n# carries only value_from resource names" in text
+
+
+_ENV_LOCAL_BASE = "DATABRICKS_HOST=https://example.cloud.databricks.com\nDATABRICKS_WAREHOUSE_ID=abc123\n"
+
+
+@pytest.mark.parametrize(
+    ("target", "app_env", "env_local", "shell"),
+    (
+        ("prod", None, "", {}),
+        ("prod", None, "MIP_GENIE_ACTION_SECRET=legacy-does-not-count\n", {}),
+        ("prod", None, "MIP_COTALITY_ID_MASK_SECRET=REDACTED\n", {}),
+        ("dev", "customer", "", {}),
+        ("dev", None, "", {"MIP_GENIE_ACTION_SECRET_CURRENT": "REDACTED"}),
+        ("dev", None, "", {}),
+    ),
+    ids=(
+        "prod-no-inputs",
+        "prod-legacy-genie-secret-only",
+        "prod-placeholder-mask",
+        "customer-runtime-no-inputs",
+        "sandbox-placeholder-current",
+        "sandbox-no-inputs",
+    ),
+)
+def test_deploy_preflight_requires_no_runtime_hmac_input(
+    tmp_path: Path, target: str, app_env: str | None, env_local: str, shell: dict[str, str]
+) -> None:
+    """An absent runtime key is generated once by the provisioner, so no input is required.
+
+    The dry run passes the runtime HMAC note and stops at the next required-key
+    gate (the AI Gateway proof key, deliberately unset here), which proves the
+    preflight got past the retired mask and action-key gates.
+    """
 
     repo = tmp_path / "repo"
     script_dir = repo / "scripts"
@@ -6520,24 +6562,25 @@ def test_deploy_script_requires_cotality_mask_secret_for_prod_target(tmp_path: P
     deploy_copy = script_dir / "deploy.sh"
     _write_deploy_fixture(deploy_copy, DEPLOY_SCRIPT.read_text(encoding="utf-8"))
     deploy_copy.chmod(0o755)
-    (repo / ".env.local").write_text(
-        "DATABRICKS_HOST=https://example.cloud.databricks.com\n" "DATABRICKS_WAREHOUSE_ID=abc123\n",
-        encoding="utf-8",
-    )
+    (repo / ".env.local").write_text(_ENV_LOCAL_BASE + env_local, encoding="utf-8")
     _commit_deploy_fixture(repo)
     fake_databricks = bin_dir / "databricks"
     fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
     fake_databricks.chmod(0o755)
 
-    env = {
-        **os.environ,
-        "MIP_GENIE_ACTION_SECRET_CURRENT": "stable-customer-campaign-secret",
-        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
-    }
-    env.pop("MIP_COTALITY_ID_MASK_SECRET", None)
-    env.pop("MIP_GENIE_ACTION_SECRET", None)
+    env = {**os.environ, **shell, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+    for name in (
+        "APP_ENV",
+        "MIP_COTALITY_ID_MASK_SECRET",
+        "MIP_GENIE_ACTION_SECRET",
+        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY",
+    ):
+        if name not in shell:
+            env.pop(name, None)
+    if app_env is not None:
+        env["APP_ENV"] = app_env
     result = subprocess.run(
-        ["bash", str(deploy_copy), "-t", "prod", "--dry-run", "--no-confirm"],
+        ["bash", str(deploy_copy), "-t", target, "--dry-run", "--no-confirm"],
         cwd=repo,
         env=env,
         text=True,
@@ -6545,195 +6588,15 @@ def test_deploy_script_requires_cotality_mask_secret_for_prod_target(tmp_path: P
         check=False,
     )
 
+    runtime_env = app_env or ("sandbox" if target == "dev" else target)
     assert result.returncode == 1
+    assert "runtime HMAC keys: presence-only" in result.stdout
+    assert "MIP_COTALITY_ID_MASK_SECRET" not in result.stdout + result.stderr
+    assert "MIP_GENIE_ACTION_SECRET_CURRENT" not in result.stdout + result.stderr
     assert (
-        "MIP_COTALITY_ID_MASK_SECRET is required for target 'prod' (APP_ENV=prod)" in result.stderr
-    )
-    assert "step 1: preflight" in result.stdout
-    assert "step 2:" not in result.stdout
-
-
-def test_deploy_script_rejects_placeholder_current_action_secret_for_sandbox(
-    tmp_path: Path,
-) -> None:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
-
-    repo = tmp_path / "repo"
-    script_dir = repo / "scripts"
-    bin_dir = tmp_path / "bin"
-    script_dir.mkdir(parents=True)
-    bin_dir.mkdir()
-    deploy_copy = script_dir / "deploy.sh"
-    _write_deploy_fixture(deploy_copy, text)
-    deploy_copy.chmod(0o755)
-    (repo / ".env.local").write_text(
-        "DATABRICKS_HOST=https://example.cloud.databricks.com\n"
-        "DATABRICKS_WAREHOUSE_ID=abc123\n"
-        "MIP_COTALITY_ID_MASK_SECRET=stable-sandbox-mask-secret\n"
-        "MIP_GENIE_ACTION_SECRET=legacy-does-not-count\n",
-        encoding="utf-8",
-    )
-    _commit_deploy_fixture(repo)
-    fake_databricks = bin_dir / "databricks"
-    fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
-    fake_databricks.chmod(0o755)
-
-    env = {
-        **os.environ,
-        "MIP_GENIE_ACTION_SECRET_CURRENT": "REDACTED",
-        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
-    }
-    for name in ("APP_ENV", "MIP_GENIE_ACTION_SECRET"):
-        env.pop(name, None)
-    result = subprocess.run(
-        ["bash", str(deploy_copy), "-t", "dev", "--dry-run", "--no-confirm"],
-        cwd=repo,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 1
-    assert (
-        "MIP_GENIE_ACTION_SECRET_CURRENT is required for target 'dev' (APP_ENV=sandbox)"
+        f"MIP_AI_GATEWAY_PROOF_SIGNING_KEY is required for target '{target}' (APP_ENV={runtime_env})"
         in result.stderr
     )
-    assert "step 2:" not in result.stdout
-
-
-def test_deploy_script_requires_cotality_mask_secret_for_customer_runtime_env(
-    tmp_path: Path,
-) -> None:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
-
-    repo = tmp_path / "repo"
-    script_dir = repo / "scripts"
-    bin_dir = tmp_path / "bin"
-    script_dir.mkdir(parents=True)
-    bin_dir.mkdir()
-    deploy_copy = script_dir / "deploy.sh"
-    _write_deploy_fixture(deploy_copy, text)
-    deploy_copy.chmod(0o755)
-    (repo / ".env.local").write_text(
-        "DATABRICKS_HOST=https://example.cloud.databricks.com\n" "DATABRICKS_WAREHOUSE_ID=abc123\n",
-        encoding="utf-8",
-    )
-    _commit_deploy_fixture(repo)
-    fake_databricks = bin_dir / "databricks"
-    fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
-    fake_databricks.chmod(0o755)
-
-    env = {
-        **os.environ,
-        "APP_ENV": "customer",
-        "MIP_GENIE_ACTION_SECRET_CURRENT": "stable-customer-campaign-secret",
-        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
-    }
-    env.pop("MIP_COTALITY_ID_MASK_SECRET", None)
-    result = subprocess.run(
-        ["bash", str(deploy_copy), "-t", "dev", "--dry-run", "--no-confirm"],
-        cwd=repo,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 1
-    assert (
-        "MIP_COTALITY_ID_MASK_SECRET is required for target 'dev' (APP_ENV=customer)"
-        in result.stderr
-    )
-    assert "step 2:" not in result.stdout
-
-
-def test_deploy_script_rejects_legacy_genie_secret_as_mask_secret(tmp_path: Path) -> None:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
-
-    repo = tmp_path / "repo"
-    script_dir = repo / "scripts"
-    bin_dir = tmp_path / "bin"
-    script_dir.mkdir(parents=True)
-    bin_dir.mkdir()
-    deploy_copy = script_dir / "deploy.sh"
-    _write_deploy_fixture(deploy_copy, text)
-    deploy_copy.chmod(0o755)
-    (repo / ".env.local").write_text(
-        "DATABRICKS_HOST=https://example.cloud.databricks.com\n"
-        "DATABRICKS_WAREHOUSE_ID=abc123\n"
-        "MIP_GENIE_ACTION_SECRET=legacy-does-not-count\n",
-        encoding="utf-8",
-    )
-    _commit_deploy_fixture(repo)
-    fake_databricks = bin_dir / "databricks"
-    fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
-    fake_databricks.chmod(0o755)
-
-    env = {
-        **os.environ,
-        "MIP_GENIE_ACTION_SECRET_CURRENT": "stable-customer-campaign-secret",
-        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
-    }
-    env.pop("MIP_COTALITY_ID_MASK_SECRET", None)
-    result = subprocess.run(
-        ["bash", str(deploy_copy), "-t", "prod", "--dry-run", "--no-confirm"],
-        cwd=repo,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 1
-    assert (
-        "MIP_COTALITY_ID_MASK_SECRET is required for target 'prod' (APP_ENV=prod)" in result.stderr
-    )
-    assert "cotality id-mask secret: configured" not in result.stdout
-    assert "step 2:" not in result.stdout
-
-
-def test_deploy_script_rejects_placeholder_cotality_mask_secret(tmp_path: Path) -> None:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
-
-    repo = tmp_path / "repo"
-    script_dir = repo / "scripts"
-    bin_dir = tmp_path / "bin"
-    script_dir.mkdir(parents=True)
-    bin_dir.mkdir()
-    deploy_copy = script_dir / "deploy.sh"
-    _write_deploy_fixture(deploy_copy, text)
-    deploy_copy.chmod(0o755)
-    (repo / ".env.local").write_text(
-        "DATABRICKS_HOST=https://example.cloud.databricks.com\n"
-        "DATABRICKS_WAREHOUSE_ID=abc123\n"
-        "MIP_COTALITY_ID_MASK_SECRET=REDACTED\n",
-        encoding="utf-8",
-    )
-    _commit_deploy_fixture(repo)
-    fake_databricks = bin_dir / "databricks"
-    fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
-    fake_databricks.chmod(0o755)
-
-    env = {
-        **os.environ,
-        "MIP_GENIE_ACTION_SECRET_CURRENT": "stable-customer-campaign-secret",
-        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
-    }
-    result = subprocess.run(
-        ["bash", str(deploy_copy), "-t", "prod", "--dry-run", "--no-confirm"],
-        cwd=repo,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 1
-    assert (
-        "MIP_COTALITY_ID_MASK_SECRET is required for target 'prod' (APP_ENV=prod)" in result.stderr
-    )
-    assert "cotality id-mask secret: configured" not in result.stdout
     assert "step 2:" not in result.stdout
 
 

@@ -29,6 +29,17 @@ exactly the manifest's paths, each a FILE of the manifest's size, and every
 file is then downloaded and its sha256 compared. Publish never deletes and
 never overwrites, so a re-run of the same release uploads nothing.
 
+Rate limits (tools/databricks/app_release_retry.py): an upload is retried on
+HTTP 429 alone, six attempts, exponential backoff with jitter, the larger of
+the backoff and the Retry-After, cut to 30 s per wait; the SDK sends an import
+once. A retried upload is still create-only, so a throttled attempt that
+landed meets AlreadyExists and the byte compare above. A download or listing
+is a GET, which the SDK retries itself on a 429 until its
+``retry_timeout_seconds`` (300 s by default); when that runs out it is refused
+at once. Either way a call still throttled is a refusal (exit 2) naming the
+object and the budget spent, with no reconcile; any other error is handled
+exactly as above, on its first occurrence.
+
 ``verify-deployment`` is read-only, for the live proof (not wired into
 deploy.sh): the deployment (``--deployment-id``, else the App's active one)
 must name ``.../app-src/<id>`` as its source, its
@@ -53,6 +64,11 @@ from databricks.sdk.errors import AlreadyExists, NotFound, ResourceAlreadyExists
 from databricks.sdk.service.workspace import ImportFormat
 from tools.databricks import app_release_contract as contract
 from tools.databricks.app_deployment_state import immutable_source
+from tools.databricks.app_release_retry import (
+    RATE_LIMIT_RETRY,
+    RateLimitExhausted,
+    RateLimitRetry,
+)
 from tools.databricks.app_runtime_closure import MAX_STAGED_FILES, is_junk
 from tools.databricks.workspace_auth import deployment_workspace_client
 
@@ -62,7 +78,11 @@ MAX_FILE_BYTES = 10 * 1024 * 1024
 REQUIRED_FILES = ("app.yaml", "requirements.txt")
 INDEX = "frontend/dist/index.html"
 ROOT_NODE_MANIFESTS = ("package.json", "package-lock.json")
-DEFAULT_WORKERS = 8
+# 2026-10-29: 8 workers, all one principal, drew HTTP 429 (RESOURCE_EXHAUSTED,
+# a per-user limit) part way through a 1,177-file release. Every worker draws
+# on that one user's limit, so the default halves the burst; RateLimitRetry
+# absorbs what is left. --workers still overrides it.
+DEFAULT_WORKERS = 4
 MAX_WORKERS = 16
 _HEAD_BYTES = 64 * 1024
 _CHUNK = 1 << 20
@@ -125,11 +145,18 @@ def _object_type(info: object) -> str:
     return str(getattr(kind, "value", kind) or "").upper()
 
 
-def remote_files(workspace: Any, api_root: str) -> dict[str, Any]:
+def remote_files(
+    workspace: Any, api_root: str, *, retry: RateLimitRetry = RATE_LIMIT_RETRY
+) -> dict[str, Any]:
     """Every object below ``api_root`` by relative path; each must be a FILE."""
     prefix = f"{api_root}/"
     try:
-        listing = list(workspace.workspace.list(api_root, recursive=True))
+        # A recursive listing is many GETs. The SDK retries each one's 429 and
+        # its timeout is refused at once; a 429 that reaches here restarts the walk.
+        listing = retry.call(
+            f"listing of {api_root}",
+            lambda: list(workspace.workspace.list(api_root, recursive=True)),
+        )
     except NotFound as exc:
         raise ReleaseContractError(f"the release folder {api_root} does not exist") from exc
     found: dict[str, Any] = {}
@@ -166,12 +193,15 @@ def compare_listing(found: dict[str, Any], manifest: contract.Manifest) -> list[
     return unsized
 
 
-def _download(workspace: Any, api_file: str) -> bytes:
-    stream = workspace.workspace.download(api_file)
-    chunks = []
-    while chunk := stream.read(_CHUNK):
-        chunks.append(chunk)
-    return b"".join(chunks)
+def _download(workspace: Any, api_file: str, retry: RateLimitRetry) -> bytes:
+    def read() -> bytes:
+        stream = workspace.workspace.download(api_file)
+        chunks = []
+        while chunk := stream.read(_CHUNK):
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+    return retry.call(f"download of {api_file}", read)
 
 
 def _parallel(workers: int, function: Callable[[_T], _R], items: Iterable[_T]) -> list[_R]:
@@ -184,12 +214,17 @@ def _parallel(workers: int, function: Callable[[_T], _R], items: Iterable[_T]) -
 
 
 def verify_hashes(
-    workspace: Any, api_root: str, entries: Iterable[contract.ManifestEntry], *, workers: int
+    workspace: Any,
+    api_root: str,
+    entries: Iterable[contract.ManifestEntry],
+    *,
+    workers: int,
+    retry: RateLimitRetry = RATE_LIMIT_RETRY,
 ) -> None:
     """Download each file and compare its size and sha256 with the manifest."""
 
     def differs(entry: contract.ManifestEntry) -> str | None:
-        data = _download(workspace, f"{api_root}/{entry.path}")
+        data = _download(workspace, f"{api_root}/{entry.path}", retry)
         same = len(data) == entry.size and hashlib.sha256(data).hexdigest() == entry.sha256
         return None if same else entry.path
 
@@ -198,16 +233,26 @@ def verify_hashes(
         raise ReleaseContractError(f"remote bytes differ from the manifest: {_shown(mismatched)}")
 
 
-def _upload_one(workspace: Any, api_file: str, data: bytes) -> str:
-    """``uploaded`` or ``reused``; refuses an existing object with other bytes."""
-    try:
+def _upload_one(workspace: Any, api_file: str, data: bytes, retry: RateLimitRetry) -> str:
+    """``uploaded`` or ``reused``; refuses an existing object with other bytes.
+
+    Every attempt is create-only, so an object a throttled attempt did land
+    meets AlreadyExists on the retry and is byte-compared like any other.
+    """
+
+    def create() -> None:
         workspace.workspace.upload(
             api_file, io.BytesIO(data), format=ImportFormat.AUTO, overwrite=False
         )
+
+    try:
+        retry.call(f"upload of {api_file}", create)
         return "uploaded"
     except (AlreadyExists, ResourceAlreadyExists):
         try:
-            existing = _download(workspace, api_file)
+            existing = _download(workspace, api_file, retry)
+        except RateLimitExhausted:
+            raise
         except Exception as exc:  # noqa: BLE001 - an unreadable object is never reused
             raise ReleaseContractError(f"{api_file} exists and cannot be read back") from exc
         if existing != data:
@@ -215,9 +260,11 @@ def _upload_one(workspace: Any, api_file: str, data: bytes) -> str:
                 f"{api_file} already exists with different bytes; nothing was overwritten"
             ) from None
         return "reused"
+    except RateLimitExhausted:
+        raise
     except Exception as upload_error:  # noqa: BLE001 - reconcile an ambiguous upload
         try:
-            existing = _download(workspace, api_file)
+            existing = _download(workspace, api_file, retry)
         except Exception:  # noqa: BLE001
             raise upload_error from None
         if existing != data:
@@ -271,7 +318,9 @@ def prepare_publish(
     return PublishPlan(manifest, stage_dir, release, workers)
 
 
-def upload_release(workspace: Any, plan: PublishPlan) -> PublishReport:
+def upload_release(
+    workspace: Any, plan: PublishPlan, *, retry: RateLimitRetry = RATE_LIMIT_RETRY
+) -> PublishReport:
     """Create-only uploads, then the listing and sha256 proof of the whole folder."""
     manifest, api_root = plan.manifest, contract.api_path(plan.release_path)
     folders = sorted({str(PurePosixPath(f"{api_root}/{path}").parent) for path in manifest.paths})
@@ -282,17 +331,19 @@ def upload_release(workspace: Any, plan: PublishPlan) -> PublishReport:
         data = (plan.stage_dir / entry.path).read_bytes()
         if len(data) != entry.size or hashlib.sha256(data).hexdigest() != entry.sha256:
             raise ReleaseContractError(f"{entry.path} changed after the stage check")
-        return _upload_one(workspace, f"{api_root}/{entry.path}", data)
+        return _upload_one(workspace, f"{api_root}/{entry.path}", data, retry)
 
     outcomes = _parallel(plan.workers, upload, manifest.entries)
-    compare_listing(remote_files(workspace, api_root), manifest)
-    verify_hashes(workspace, api_root, manifest.entries, workers=plan.workers)
+    compare_listing(remote_files(workspace, api_root, retry=retry), manifest)
+    verify_hashes(workspace, api_root, manifest.entries, workers=plan.workers, retry=retry)
     return PublishReport(plan.release_path, outcomes.count("uploaded"), outcomes.count("reused"))
 
 
-def publish(workspace: Any, **kwargs: Any) -> PublishReport:
+def publish(
+    workspace: Any, *, retry: RateLimitRetry = RATE_LIMIT_RETRY, **kwargs: Any
+) -> PublishReport:
     """``prepare_publish`` then ``upload_release``; kwargs as ``prepare_publish``."""
-    return upload_release(workspace, prepare_publish(**kwargs))
+    return upload_release(workspace, prepare_publish(**kwargs), retry=retry)
 
 
 def verify_deployment(
@@ -303,6 +354,7 @@ def verify_deployment(
     release_id: str,
     deployment_id: str | None = None,
     workers: int = DEFAULT_WORKERS,
+    retry: RateLimitRetry = RATE_LIMIT_RETRY,
 ) -> str:
     """The deployment runs this release's bytes; returns its snapshot path."""
     if manifest.release_id != contract.check_release_id(release_id, commit=manifest.commit):
@@ -321,9 +373,9 @@ def verify_deployment(
     except RuntimeError as exc:
         raise ReleaseContractError(str(exc)) from exc
     api_snapshot = contract.api_path(snapshot)
-    found = remote_files(workspace, api_snapshot)
+    found = remote_files(workspace, api_snapshot, retry=retry)
     compare_listing(found, manifest)
-    verify_hashes(workspace, api_snapshot, manifest.entries, workers=workers)
+    verify_hashes(workspace, api_snapshot, manifest.entries, workers=workers, retry=retry)
     return snapshot
 
 
@@ -354,6 +406,7 @@ def main(
     # The governed deployer binding: one cached github-oidc exchange serves
     # every upload worker instead of two extra HTTP calls per request.
     client: Callable[[], Any] = deployment_workspace_client,
+    retry: RateLimitRetry = RATE_LIMIT_RETRY,
 ) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -365,7 +418,7 @@ def main(
                 target=args.expected_target, root_leaf=args.expected_root_leaf,
                 workers=args.workers,
             )
-            report = upload_release(client(), plan)
+            report = upload_release(client(), plan, retry=retry)
             print(
                 f"[app-release-source] {report.release_path}: {report.uploaded} uploaded, "
                 f"{report.reused} already present with equal bytes; listing and sha256 verified"
@@ -374,7 +427,7 @@ def main(
         manifest = contract.read_manifest(args.manifest, expected_commit=None)
         snapshot = verify_deployment(
             client(), app_name=args.app_name, manifest=manifest,
-            release_id=args.release_id, deployment_id=args.deployment_id,
+            release_id=args.release_id, deployment_id=args.deployment_id, retry=retry,
         )
         print(
             f"[app-release-source] {snapshot} holds exactly release {args.release_id} "

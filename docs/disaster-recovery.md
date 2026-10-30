@@ -234,28 +234,45 @@ claim and verifies against a current key plus an optional previous key. Token
 TTL is 2 hours; keep the previous key configured for at least 2 hours, or 24
 hours during customer-facing maintenance windows.
 
-Rotation procedure:
+Rotation procedure (human-run; the runtime secret scope is presence-only, so
+a deploy never rotates a key and no workflow carries a key value):
 
-1. Before deploy, move the current value to previous and install a new current:
+1. Move the current key to previous and generate a new current in the scope.
+   The tool refuses under GitHub Actions and prints key names only. Then set
+   the key ids for the next deploy (in `.env.local`, or as the
+   `MIP_GENIE_ACTION_SECRET_KID` and `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID`
+   variables of the deploy's GitHub environment); they are public ids, not
+   key values:
 
    ```bash
-   MIP_GENIE_ACTION_SECRET_PREVIOUS="$MIP_GENIE_ACTION_SECRET_CURRENT"
-   MIP_GENIE_ACTION_SECRET_PREVIOUS_KID="$MIP_GENIE_ACTION_SECRET_KID"
-   MIP_GENIE_ACTION_SECRET_CURRENT="<new-random-secret>"
+   DATABRICKS_CONFIG_PROFILE=<install profile> \
+     python tools/databricks/provision_runtime_secrets.py \
+     --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}" \
+     --rotate-genie-action
+   MIP_GENIE_ACTION_SECRET_PREVIOUS_KID="v1"
    MIP_GENIE_ACTION_SECRET_KID="v2"
    ```
 
    If the deployment still uses the legacy `MIP_GENIE_ACTION_SECRET`, treat it
    as the current key and migrate to `MIP_GENIE_ACTION_SECRET_CURRENT`.
 
-2. Redeploy:
+2. Redeploy, so the App binds the new current key:
 
    ```bash
    CI=1 ./scripts/deploy.sh -t dev --no-confirm
    ```
 
-3. After the grace window, remove `MIP_GENIE_ACTION_SECRET_PREVIOUS` and
-   `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID`, then redeploy again.
+   The deploy keeps both keys unread. Because
+   `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` is set, the App payload also binds
+   `genie-action-previous` (the old key the rotation moved there) as the
+   grace key. Without that id, tokens signed with the old key stop verifying
+   at this deployment.
+
+3. After the grace window, retire the previous key with
+   `provision_runtime_secrets.py --retire-previous`, unset
+   `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID`, then redeploy again
+   (`docs/deployment.md`, "Databricks App"). An id left set binds the retired
+   key, a disabled sentinel that verifies nothing.
 
 Validation:
 
@@ -265,8 +282,9 @@ Validation:
 
 Browser identity across a rotation (D-identity-review-a4): the same
 `MIP_GENIE_ACTION_SECRET_CURRENT` keys the opaque per-actor browser key
-(`actor_cache_key`), and `MIP_GENIE_ACTION_SECRET_PREVIOUS` also keeps that
-identity continuous during the grace window. `/api/v1/health` publishes the
+(`actor_cache_key`), and `MIP_GENIE_ACTION_SECRET_PREVIOUS` (the
+`genie-action-previous` key, bound while `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID`
+is set) also keeps that identity continuous during the grace window. `/api/v1/health` publishes the
 actor's key under the previous secret as `actor_cache_key_aliases`, so an open
 tab re-stamps to the new key with no reset, and the request binding
 (`X-MIP-Actor-Key`) accepts either key until the previous secret is removed. A

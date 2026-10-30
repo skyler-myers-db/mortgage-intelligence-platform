@@ -34,8 +34,9 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   export GENIE_SPACE_ID
 fi
 
-# Provision runtime HMAC values directly into Databricks Secrets only after
-# the governed Genie binding has been resolved. The later Apps deploy payload
+# Provision runtime secret keys directly in Databricks Secrets only after the
+# governed Genie binding has been resolved: every existing key is kept unread
+# and an absent one is written once. The later Apps deploy payload
 # carries only value_from resource names, never raw secret values.
 RUNTIME_SECRET_SCOPE="${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"
 export BUNDLE_VAR_runtime_secret_scope="$RUNTIME_SECRET_SCOPE"

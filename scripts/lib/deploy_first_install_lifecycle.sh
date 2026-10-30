@@ -319,9 +319,6 @@ restore_rendered_sql_fail_closed() {
   if [[ -n "${FIRST_INSTALL_MARKED_PAYLOAD:-}" ]]; then
     rm -f "$FIRST_INSTALL_MARKED_PAYLOAD"
   fi
-  if [[ -n "${_PII_SECRET_PAYLOAD:-}" ]]; then
-    rm -f "$_PII_SECRET_PAYLOAD"
-  fi
   if [[ "$DRY_RUN" -eq 0 && "$RESTORE_RENDERED_SQL_FAIL_CLOSED" -eq 1 ]]; then
     if MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=0 "$PYTHON" tools/render_sql.py \
       --catalog "${MIP_DEFAULT_CATALOG:-mip}" >/dev/null 2>&1; then

@@ -1244,6 +1244,40 @@ The bundle task carries the same verifier client ID as a reviewed bundle
 variable and passes the required flag. A missing/template verifier therefore
 fails in the job before it opens Lakebase or applies schema SQL; a local shell
 export alone is not considered remote-job configuration.
+The same command with `--mode plan` or `--mode verify` only reads: one
+session in a PostgreSQL read-only transaction, then a rollback. Every
+statement is scanned once in lexer order (literals, dollar quotes, quoted
+identifiers and nested comments) and must be a single SELECT, SHOW or
+read-only WITH before it is sent; it is then sent as a prepared statement, so
+PostgreSQL itself parses exactly one command and no text can end the
+read-only transaction.
+`verify` re-runs the exact grant, trigger, function and schema-boundary
+postflights; `plan` adds the executor's missing ownership, the pending
+`schema_migrations` versions with their `-- mip:migration ... compat=` class
+(untagged counts as contract), and a comparison with the
+`deployment_schema_digest` row apply writes as the last statement of its
+schema transaction: the input digest, one digest per input component
+(schema, seed, tenant disclosure seed, grant matrix), and a fingerprint of
+the `mip_app` catalog (columns, defaults, constraints, indexes, function
+sources and settings, triggers, rules, policies, sequence parameters,
+types) and of the seeded reference rows the App only reads. Plan reports
+`noop` only when nothing is pending, the inputs are equal, verify passes
+and the live fingerprint equals the recorded one, so owner-level drift that
+only apply's schema.sql replay repairs (a same-shape function-body rewrite,
+a dropped CHECK or unique index, deleted seed rows) still plans an apply.
+`blue_restorable` additionally needs every pending version tagged `expand`
+and the seed, tenant seed and grant-matrix components unchanged; an
+in-place edit to existing DDL or a function body must ship as its own
+tagged version. A database whose `schema_migrations` holds a version the
+release does not declare is refused before any App stop
+(`database_ahead_of_release`; the report counts such rows and never echoes
+their text). The governed remediation for a version renamed or withdrawn
+after some database recorded it is a reviewed
+`-- mip:migration retired=<version>` line in `lakebase/schema.sql`, which
+plan then accepts; deleting the ledger row by hand is not one. Each prints
+one JSON report of codes, check names, versions and `mip_app` object names,
+never a role name. Nothing invokes them yet; see
+`jobs/lakebase_migration_plan.py`.
 The bundle pins `run_as.user_name` to the resolved deployment identity in both
 development and production targets; live release evidence must confirm the
 created migration job reports that exact run-as instead of relying on its
@@ -1277,9 +1311,9 @@ ownership on sequences are intentionally not granted. Future-sequence default
 privileges are explicitly revoked. Any new table or sequence must be added to
 the code-owned privilege matrix after reviewing its runtime statements; otherwise the
 migration postflight rejects the deployment. `schema_migrations`,
-`action_audit_archive_runs`, and `agent_sessions` intentionally receive no app
-privileges. Postflight also rejects effective database `CREATE`, schema
-`CREATE`, any unreviewed table/sequence/routine, unsafe role attributes,
+`deployment_schema_digest`, `action_audit_archive_runs`, and `agent_sessions`
+intentionally receive no app privileges. Postflight also rejects effective
+database `CREATE`, schema `CREATE`, any unreviewed table/sequence/routine, unsafe role attributes,
 database `TEMPORARY`, every direct or recursive parent role, any direct/PUBLIC
 column ACL, and any privilege outside the exact code-owned matrix. The verifier
 postflight independently rejects access to every table except

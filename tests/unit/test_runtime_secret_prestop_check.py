@@ -1,11 +1,12 @@
 """deploy.sh plans the mip-runtime provisioning read-only before step 0a stops the App.
 
-provision_runtime_secrets refuses a changed (or unreadable) Cotality ID-mask
-value, but it runs in the bundle-apply step, after signed_blue_proof has
-stopped and quarantined the App; with no signed blue the App would be left
-stopped. The preflight runs the same plan with ``--check`` while the App still
-serves. The block is read from ``deploy_entrypoint_text()`` (the sliced
-deploy.sh layout) and driven with a stub module.
+provision_runtime_secrets keeps every existing key unread and writes an absent
+one once; it refuses an unusable optional input or another workspace. It runs
+in the bundle-apply step, after signed_blue_proof has stopped and quarantined
+the App; with no signed blue the App would be left stopped. The preflight runs
+the same plan with ``--check`` while the App still serves. The block is read
+from ``deploy_entrypoint_text()`` (the sliced deploy.sh layout) and driven with
+a stub module.
 """
 
 from __future__ import annotations
@@ -43,8 +44,7 @@ def test_the_check_runs_after_the_secrets_resolve_and_before_the_app_stop() -> N
 
     for resolved in (
         'MIP_RUNTIME_SECRET_SCOPE="$(deployment_control_value MIP_RUNTIME_SECRET_SCOPE mip-runtime)"',
-        'export MIP_GENIE_ACTION_SECRET_CURRENT="$_GENIE_ACTION_SECRET_RESOLVED"',
-        'export MIP_COTALITY_ID_MASK_SECRET="$_ID_MASK_RESOLVED"',
+        'echo "  runtime HMAC keys: presence-only',
     ):
         assert text.index(resolved) < check, resolved
     assert check < text.index('step "acquire signed workspace lease for the exact App deployment"')

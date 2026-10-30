@@ -147,11 +147,26 @@ The flow, every step in `scripts/deploy.sh`:
    1,300 files and none over 10 MiB, `app.yaml`, `requirements.txt` and a
    non-empty `frontend/dist/index.html` present, no root Node manifest, no
    notebook-shaped file), then makes one create-only workspace AUTO import per
-   file. An object that already exists is reused only when its bytes are equal;
-   other bytes are refused and nothing is overwritten. It then requires an exact
-   recursive listing (each object a FILE of the manifest's size) and downloads
-   every file to compare its sha256. It never deletes, so a re-run of the same
-   release uploads nothing.
+   file, 4 at a time by default (`--workers`). An object that already exists is
+   reused only when its bytes are equal; other bytes are refused and nothing is
+   overwritten. It then requires an exact recursive listing (each object a FILE
+   of the manifest's size) and downloads every file to compare its sha256. It
+   never deletes, so a re-run of the same release uploads nothing. A rate limit
+   (HTTP 429) on an upload is retried, and only a rate limit
+   (`tools/databricks/app_release_retry.py`: six attempts per upload,
+   exponential backoff with jitter, the larger of the backoff and the
+   Retry-After, cut to 30 s per wait, one `[app-release]` line per retry).
+   The SDK never retries a workspace import itself, which is how a 429 at 8
+   workers ended a 1,177-file publish on 2026-10-29. A retried upload is still
+   create-only: if the throttled attempt landed, the retry meets the existing
+   object and the byte compare above decides. A download or the listing is a
+   GET, which the SDK retries itself on a 429 until its own
+   `retry_timeout_seconds` (300 s by default) runs out; the tool then refuses
+   it at once rather than spend a second budget. Either way a call still
+   throttled is a refusal (exit 2) that names the object and the budget spent
+   (the sixth upload attempt, or the SDK's timeout). Any other error is
+   handled as before, on its first occurrence: a failed upload is still read
+   back once, and counts as uploaded only if its bytes are there.
 4. **Converge** before each of the three activations (release mode, see
    "App source contract"), then the Apps deployment names the release folder
    as its `source_code_path`. The platform copies the folder into the
@@ -170,7 +185,7 @@ Where a failure lands:
 |---|---|
 | Preflight check | Exit 2 before the lease; the App is untouched. |
 | Step-1 stage or release id | Like a failed frontend build: an existing App is stopped and quiesced (Lakebase access is not yet proven). CI's built-dist test makes a dist-side refusal unlikely. |
-| Step-5 publish | Upgrade: signed blue is restored. First install: stopped and quiesced. At most one partial content-addressed folder is left; the next run of the same bytes completes it when every object left there is absent or byte-equal, or a later green run prunes it. An object left with other bytes (an ambiguous upload) makes every publish of that release id refuse, because publish never overwrites, until a green run of another commit prunes the folder or an owner removes it. |
+| Step-5 publish | Upgrade: signed blue is restored. First install: stopped and quiesced. At most one partial content-addressed folder is left (a rate limit that outlasts the retry budget leaves one too); the next run of the same bytes completes it when every object left there is absent or byte-equal, or a later green run prunes it. An object left with other bytes (an ambiguous upload) makes every publish of that release id refuse, because publish never overwrites, until a green run of another commit prunes the folder or an owner removes it. |
 | Converge before an activation | Upgrade: signed blue is restored. First install: stopped and quiesced. |
 | Prune | A warning only; the release stays live. |
 
@@ -474,8 +489,11 @@ Upload the folder under that governed name,
 `scripts/deploy.sh` step 5 passes (create-only, byte-verified), never with
 `workspace import-dir` and never into a folder that is already used: a folder
 under the governed name whose bytes differ makes the governed publish of that
-commit refuse at step 5. The piecewise payload deploy then names that folder
-as the deployment's `source_code_path`.
+commit refuse at step 5. A publish that stops part way, for example on a rate
+limit (HTTP 429) that outlasts the retry budget, leaves a partial folder:
+run the same command again, which byte-compares what is already there and
+uploads only what is missing. The piecewise payload deploy then names that
+folder as the deployment's `source_code_path`.
 
 A later governed run of the same commit and dist reuses a folder published
 this way, and governed prune retires it once no retained deployment
@@ -736,13 +754,12 @@ LAKEBASE_DATABASE="mip_app_state"
 MIP_GENIE_SPACE_NAME="Acme Mortgage Lead Intelligence"
 MIP_RUNTIME_SECRET_SCOPE="acme-mip-runtime"
 MIP_APP_ROLLBACK_SECRET_SCOPE="acme-mip-app-rollback"
-# Required for every deployed runtime, including the dev sandbox.
-MIP_COTALITY_ID_MASK_SECRET="<deployment-scoped-random-secret>"
-MIP_GENIE_ACTION_SECRET_CURRENT="<deployment-scoped-random-secret>"
+# The runtime HMAC keys need no input: a first install generates them in
+# MIP_RUNTIME_SECRET_SCOPE, and every later deploy keeps them unread. Set one
+# only to seed an absent key with a value the install already uses.
+# MIP_COTALITY_ID_MASK_SECRET="<deployment-scoped-random-secret>"
+# MIP_GENIE_ACTION_SECRET_CURRENT="<deployment-scoped-random-secret>"
 MIP_GENIE_ACTION_SECRET_KID="v2"
-# Set both previous-key values only for a bounded rotation grace period.
-# MIP_GENIE_ACTION_SECRET_PREVIOUS="<prior-deployment-secret>"
-# MIP_GENIE_ACTION_SECRET_PREVIOUS_KID="v1"
 ```
 
    See [`docs/se-onboarding.md`](se-onboarding.md) for the full
@@ -1473,39 +1490,53 @@ Customers requiring owner-independent retention must export Gateway logs to a
 separately governed immutable sink; Module 0 does not claim that stronger
 control.
 
-`MIP_COTALITY_ID_MASK_SECRET` and `MIP_GENIE_ACTION_SECRET_CURRENT` are
-mandatory for sandbox, staging, customer, and production app payloads. Only
-`APP_ENV=local` and `APP_ENV=test` may use compatibility keys. During action-key
-rotation, deploy the new current key/KID together with both prior-key values.
-The prior secret without `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` is rejected.
-When the prior secret is absent, it is not injected into the App payload. The
-bundle's static optional-resource declaration still requires the backing
-Databricks Secret key to exist, so the provisioner replaces it with a random
-disabled sentinel that the runtime cannot read through an environment binding.
-Keep the real prior key available for at least two hours so
-existing action confirmations and one-hour generated-copy/cohort provenance
-tokens can expire. The previous key is verification-only; new tokens always
-use the current key.
+The App payload binds `MIP_COTALITY_ID_MASK_SECRET` and
+`MIP_GENIE_ACTION_SECRET_CURRENT` from the runtime secret scope for every
+sandbox, staging, customer and production runtime; only `APP_ENV=local` and
+`APP_ENV=test` may use compatibility keys. The prior action key
+(`genie-action-previous`) is bound only when the public
+`MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` is configured for the deploy; no key
+value is needed, because the scope already holds the key. A
+`MIP_GENIE_ACTION_SECRET_PREVIOUS` value without its KID is rejected, by the
+runtime secret plan before the App stop and again by the payload. The
+bundle's static resource declarations still need every backing Databricks
+Secret key to exist, so an
+absent one gets a random disabled sentinel that the runtime ignores. Keep the
+real prior key available for at least two hours so existing action
+confirmations and one-hour generated-copy/cohort provenance tokens can
+expire. The previous key is verification-only; new tokens always use the
+current key.
 
-The provisioner (`tools/databricks/provision_runtime_secrets.py`) decides every
-write before it makes one, and it never silently replaces two kinds of
-existing key:
+The provisioner (`tools/databricks/provision_runtime_secrets.py`) is
+presence-only. It decides every write before it makes one, and it never reads
+or rewrites a key that already exists:
 
-- **The Cotality ID mask.** If `cotality-id-mask-v1` already exists in the
-  scope, the configured `MIP_COTALITY_ID_MASK_SECRET` must equal it as the
-  runtime reads it (UTF-8, surrounding whitespace stripped). The provisioner
-  compares HMAC-SHA256 fingerprints of the two values under a per-run random
-  salt and prints neither value nor fingerprint. If they differ, or if the
-  stored value cannot be read, the run refuses with exit 2 before it writes
-  anything. The Secrets API returns a value outside a notebook only to a
-  workspace admin with READ on the scope (a normal user gets `BAD_REQUEST`),
-  so the deploying identity must be a workspace admin, as `deploy.sh`
-  already requires. Each read leaves a `getSecret` entry in the workspace
-  audit log. Writing a different mask would re-key every masked borrower id
-  and orphan the `B-…` ids already stored in Lakebase campaigns, approvals,
-  audit, watchlists and snoozes. To fix a refusal, set the value the install
-  already uses. A deliberate re-key is an owner-run data migration. A deploy
-  never does it. An equal mask is kept and not rewritten.
+- **Existing keys are kept unread.** `cotality-id-mask-v1`,
+  `genie-action-current` and `genie-action-previous` are kept whatever the
+  deploy's inputs say, and the plan names an input that is set but unused.
+  The tool only lists the scope's keys; it never calls `getSecret`, so no
+  stored value reaches the runner, CI or a log, and the deployer needs no
+  READ on a value. Writing a different mask would re-key every masked
+  borrower id and orphan the `B-…` ids already stored in Lakebase campaigns,
+  approvals, audit, watchlists and snoozes, so a deploy never does it. A
+  deliberate re-key is an owner-run data migration.
+- **Absent keys are written once.** On a first install the mask and the
+  current action key are generated on the runner (`secrets.token_hex(32)`),
+  unless the optional `MIP_COTALITY_ID_MASK_SECRET` or
+  `MIP_GENIE_ACTION_SECRET_CURRENT` input (shell or `.env.local`) seeds them
+  with a value the install already uses. `genie-action-previous` takes
+  `MIP_GENIE_ACTION_SECRET_PREVIOUS` (with its KID) or the disabled sentinel.
+  Each write is read back for presence (the key is listed), never for its
+  value. No workflow carries these inputs
+  (`tests/unit/test_runtime_secret_inputs_stay_out_of_ci.py`).
+- **A deleted mask is never regenerated.** A run writes the mask before any
+  other key, so a scope that lists `genie-action-current` or a
+  `salesforce-*` key without `cotality-id-mask-v1` is an established install
+  whose mask was deleted, not a first install. The plan refuses it with exit
+  2, before the App stop, unless `MIP_COTALITY_ID_MASK_SECRET` (shell or
+  `.env.local`, never a workflow) restores the value the install used.
+  `genie-action-previous` alone does not count: `--retire-previous` may create
+  it before the first deploy.
 - **Salesforce credentials.** When a `SALESFORCE_*` input is unset, an
   existing `salesforce-*` key is kept. The disabled sentinel is written only
   when the key is absent, because the App's static resource binding needs a
@@ -1529,18 +1560,18 @@ existing key:
   (`databricks secrets delete-secret mip-runtime <key>`); the next deploy then
   writes the disabled sentinel.
 
-`genie-action-current` is compared the same way but never refuses, because a
-rotation is an operator's call. The plan prints one names-only note:
-`unchanged`; `rotated` (the configured previous key equals the stored value,
-so it stays valid for the grace period); `changed with no grace key`
-(outstanding action confirmations and provenance tokens stop verifying); or
-`not compared` with the error code. The note is report-only: no deploy step
-reads it, and nothing refuses on it. A fingerprint pre-check that covers the
-current key is therefore the owner reading that note; only the mask
-comparison is enforced.
+`--check --require-existing` (and the write run with `--require-existing`)
+refuses with exit 2 when the plan would write anything, including a scope it
+would create. An install that is already provisioned plans zero writes, so
+run it before adopting an existing install: a misnamed
+`MIP_RUNTIME_SECRET_SCOPE` (or a scope deleted and recreated empty) lists no
+runtime key, so it would otherwise look like a first install and mint a new
+mask. Run it with the `SALESFORCE_*` inputs unset: a configured one replaces
+its key by design, which counts as a write.
 
 Before its first Secrets API call, every mode of the tool (`--check`, the
-write run, `--retire-previous`) proves which workspace it is about to call.
+write run, `--retire-previous`, `--rotate-genie-action`) proves which
+workspace it is about to call.
 Building the SDK client can already contact the resolved host for an OAuth
 token, but no secret is listed or read before the proof.
 `WorkspaceClient()` resolves the Databricks SDK's default chain: process
@@ -1568,13 +1599,36 @@ DATABRICKS_CONFIG_PROFILE=<install profile> \
 
 Confirm that the host on the printed plan line is the install's workspace
 before you act on the result. Pin the profile the same way for
-`--retire-previous`.
+`--retire-previous` and `--rotate-genie-action`.
 
-After that bounded grace period, remove
-`MIP_GENIE_ACTION_SECRET_PREVIOUS` and
-`MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` from the deployment environment and
-`.env.local`, retire the Databricks secret, and deploy the no-previous-key
-payload:
+To rotate the Genie action key, an operator runs the human-only rotation (it
+refuses under GitHub Actions, where a deploy only keeps keys). It is the one
+mode that reads a stored value: it moves `genie-action-current` to
+`genie-action-previous`, writes a newly generated `genie-action-current`, and
+prints key names only. The App signs with the new key from its next
+deployment:
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<install profile> \
+  python tools/databricks/provision_runtime_secrets.py \
+  --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}" \
+  --rotate-genie-action
+./scripts/deploy.sh -t dev
+```
+
+For that deploy, set `MIP_GENIE_ACTION_SECRET_KID` to the new key id and
+`MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` to the old one (in `.env.local`, or as
+variables of the deploy's GitHub environment; they are public ids). The
+payload then binds `genie-action-previous`, the old key the rotation moved
+there, as the grace key, so outstanding action confirmations (two-hour TTL)
+and provenance tokens keep verifying, and open tabs re-stamp to the new actor
+key with no reset. No key value rides the workflow. Without the previous id
+those tokens stop verifying at that deployment. If the rotation's second
+write fails, both keys hold the old value: rerun `--rotate-genie-action`
+before any deploy, because the runtime refuses a previous key equal to the
+current one.
+
+After a grace period, retire the previous key:
 
 ```bash
 unset MIP_GENIE_ACTION_SECRET_PREVIOUS
@@ -1589,8 +1643,10 @@ DATABRICKS_CONFIG_PROFILE=<install profile> \
 Retirement is idempotent and does not require the current or Cotality secret
 values. It replaces `genie-action-previous` with a fresh disabled sentinel,
 which immediately invalidates old tokens while keeping the static Databricks
-App resource valid. An ordinary deploy with no configured previous key does
-the same before emitting a payload without the previous environment binding.
+App resource valid. An ordinary deploy no longer does this: it keeps an
+existing previous key, which stays unbound while
+`MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` is unset. An id left set after
+retirement binds the sentinel, which verifies nothing.
 
 `make bundle-validate` and `make bundle-plan` remain read-only diagnostics.
 The mutable `make bundle-deploy` and `make bundle-deploy-dev` aliases are
@@ -1606,6 +1662,48 @@ restore, prior app snapshots, source-regression rollback via
 `git checkout <prior-good-sha>`, Genie space re-provisioning, audit archival,
 and governed-action HMAC key rotation, use
 [`docs/disaster-recovery.md`](disaster-recovery.md).
+
+### PII salt (write-once)
+
+The silver SQL and the Lakeflow feature pipeline hash PII with
+`secret('mip', 'pii-salt-v1')`. Every masked join key in an install derives
+from that value, so the salt is written once and never replaced. The Secrets
+API overwrites on put and has no create-only form, so step 4d provisions the
+salt with `tools/databricks/pii_salt_scope.py ensure`, which writes only after
+a listing it can trust:
+
+- It lists the secret scopes and, when the scope exists, its keys. Any list
+  error (a permission error, a timeout, a lost page, a scope that vanished
+  between the two calls) or a malformed listing refuses with exit 2 before
+  any create or put. A failed listing is never read as "absent". The inline
+  step it replaced did read it that way, so a failed `list-secrets` would
+  have put a fresh salt over the live one.
+- It creates the scope only when the scope listing lacks it, and then lists
+  again. It puts a fresh random value (32 bytes, hex) only when a listing
+  lacks the key, and then requires the key to be listed. An existing key is
+  never written and its value is never read.
+- Exit 1 means a put was attempted and its result could not be proven.
+  Re-run the deploy; it lists again before any further write.
+
+Right after the pre-stop probes below, before the signed lease and step 0a,
+`deploy.sh` runs the same inventory read-only (`check`), so a listing the
+deployer cannot complete refuses while the App still serves. Neither mode
+prints the value. Both print scope and key names, and show an SDK error only by
+its class. The one exception is the workspace-binding refusal, which runs
+before any Secrets API call: it names the host the SDK resolved and the
+install's configured host, so the operator can see which identity to pin.
+
+`MIP_PII_SALT_SCOPE` (shell, then `.env.local`; default `mip`) names the
+scope. The readers take the scope as a literal, so preflight refuses any other
+value until they read the control. `--require-existing 1` refuses an absent
+scope or key instead of creating it; `deploy.sh` passes `0`, so a first
+install still creates the salt, until the install profile records that masked
+keys already exist. To check by hand, pin the install's identity:
+
+```bash
+DATABRICKS_CONFIG_PROFILE=<install profile> \
+  python -m tools.databricks.pii_salt_scope check --scope mip --require-existing 1
+```
 
 ### Pre-stop probes (read-only, before step 0a)
 
@@ -2263,7 +2361,8 @@ runner, and the first run is a first install, so prune has nothing to delete.
 First-run checklist for the owner-triggered run:
 
 - the publish line counts at most 1,300 files, with the upload and verify
-  wall time and no 429 at 8 workers;
+  wall time at the default 4 workers and the number of `[app-release]` rate
+  limit retry lines (none is the goal; a retry is not a failure);
 - every activation SUCCEEDED and no `[BUILD]` log shows an npm step; the
   first activation's `[BUILD]` log shows a pip install (a first install has
   no previous `requirements.txt`), later activations of the same release are

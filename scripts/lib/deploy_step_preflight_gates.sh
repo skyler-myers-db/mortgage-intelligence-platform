@@ -380,6 +380,21 @@ DEPLOYMENT_SYNC_SCHEMA="$MIP_LAKEBASE_SYNC_SCHEMA"
 DEPLOYMENT_SYNC_TABLES="$MIP_LAKEBASE_SYNC_TABLES"
 MIP_GENIE_SPACE_NAME="$(deployment_control_value MIP_GENIE_SPACE_NAME 'Mortgage Lead Intelligence')"
 MIP_RUNTIME_SECRET_SCOPE="$(deployment_control_value MIP_RUNTIME_SECRET_SCOPE mip-runtime)"
+# >>> pii-salt scope control >>>
+# The write-once PII salt (tools/databricks/pii_salt_scope.py). The silver SQL
+# and the Lakeflow pipeline read secret('mip', 'pii-salt-v1') as literals, so
+# mip is the only accepted scope until they take this control: another scope
+# would hold a salt nothing reads, while the readers hash with whatever sits
+# under mip. An existing salt is never rewritten either way. Require-existing
+# stays 0 (a first install creates the salt) until the install profile
+# records that masked keys already exist.
+MIP_PII_SALT_SCOPE="$(deployment_control_value MIP_PII_SALT_SCOPE mip)"
+PII_SALT_REQUIRE_EXISTING=0
+if [[ "$MIP_PII_SALT_SCOPE" != "mip" ]]; then
+  echo "${RED}[deploy] MIP_PII_SALT_SCOPE must be mip: the silver SQL and the Lakeflow pipeline read secret('mip', 'pii-salt-v1') as literals.${RST}" >&2
+  exit 2
+fi
+# <<< pii-salt scope control <<<
 MIP_APP_ROLLBACK_SECRET_SCOPE="$(deployment_control_value MIP_APP_ROLLBACK_SECRET_SCOPE mip-app-rollback)"
 MIP_AGENT_PROXY_SECRET_SCOPE="$(
   deployment_control_value MIP_AGENT_PROXY_SECRET_SCOPE "${MIP_APP_NAME}-agent-proxy"
@@ -606,74 +621,15 @@ if [[ -z "$APP_RUNTIME_ENV" ]]; then
 fi
 APP_GIT_SHA="$SOURCE_GIT_SHA"
 
-# Campaign/Genie confirmation tokens must remain verifiable across app
-# restarts and replicas. Every deployed runtime, including the shared sandbox,
-# requires an operator-owned current secret. Process-local and generated-file
-# keys are allowed only by the backend's local/test runtime paths.
-_GENIE_ACTION_SECRET_RESOLVED="${MIP_GENIE_ACTION_SECRET_CURRENT:-}"
-if [[ -z "$_GENIE_ACTION_SECRET_RESOLVED" ]]; then
-  _GENIE_ACTION_SECRET_RESOLVED="$(dotenv_value MIP_GENIE_ACTION_SECRET_CURRENT)"
-fi
-_GENIE_ACTION_SECRET_NORMALIZED="$(printf '%s' "$_GENIE_ACTION_SECRET_RESOLVED" | tr '[:upper:]' '[:lower:]')"
-case "$_GENIE_ACTION_SECRET_NORMALIZED" in
-  ""|redacted|changeme|change-me|change_me|placeholder|example|your-secret|your_secret)
-    _GENIE_ACTION_SECRET_RESOLVED=""
-    ;;
-esac
-if [[ "$_GENIE_ACTION_SECRET_NORMALIZED" == \<*\> ]]; then
-  _GENIE_ACTION_SECRET_RESOLVED=""
-fi
-if [[ -z "$_GENIE_ACTION_SECRET_RESOLVED" ]]; then
-  if [[ "$APP_RUNTIME_ENV" != "local" && "$APP_RUNTIME_ENV" != "test" ]]; then
-    echo "${RED}[deploy] ERROR: MIP_GENIE_ACTION_SECRET_CURRENT is required for target '$TARGET' (APP_ENV=${APP_RUNTIME_ENV}).${RST}" >&2
-    echo "${RED}  Deployed confirmation and campaign-provenance tokens require a stable, deployment-scoped HMAC key.${RST}" >&2
-    exit 1
-  fi
-  echo "${YLW}[deploy] WARNING: local/test runtime will use its non-durable compatibility key.${RST}" >&2
-else
-  echo "  genie/campaign HMAC: configured"
-fi
-if [[ -n "$_GENIE_ACTION_SECRET_RESOLVED" ]]; then
-  export MIP_GENIE_ACTION_SECRET_CURRENT="$_GENIE_ACTION_SECRET_RESOLVED"
-fi
-
-# Cotality ID-mask HMAC visibility check. The source-known compatibility
-# namespace is local/test-only; sandbox and customer runtimes fail before any
-# app mutation unless the operator supplies a durable deployment-scoped key.
-_ID_MASK_RESOLVED="${MIP_COTALITY_ID_MASK_SECRET:-$("$PYTHON" - <<'PYEOF'
-from pathlib import Path
-try:
-    from dotenv import dotenv_values
-    values = dotenv_values(Path(".env.local"))
-    print((values.get("MIP_COTALITY_ID_MASK_SECRET") or "").strip())
-except Exception:
-    print("")
-PYEOF
-)}"
-_ID_MASK_NORMALIZED="$(printf '%s' "$_ID_MASK_RESOLVED" | tr '[:upper:]' '[:lower:]')"
-case "$_ID_MASK_NORMALIZED" in
-  ""|redacted|changeme|change-me|change_me|placeholder|example|your-secret|your_secret|mip-cotality-id-mask-v1)
-    _ID_MASK_RESOLVED=""
-    ;;
-esac
-if [[ "$_ID_MASK_NORMALIZED" == \<*\> ]]; then
-  _ID_MASK_RESOLVED=""
-fi
-if [[ -z "$_ID_MASK_RESOLVED" ]]; then
-  if [[ "$APP_RUNTIME_ENV" != "local" && "$APP_RUNTIME_ENV" != "test" ]]; then
-    echo "${RED}[deploy] ERROR: MIP_COTALITY_ID_MASK_SECRET is required for target '$TARGET' (APP_ENV=${APP_RUNTIME_ENV}).${RST}" >&2
-    echo "${RED}  Deployed runtimes must use a deployment-scoped HMAC secret;${RST}" >&2
-    echo "${RED}  the source-known compatibility namespace is allowed only for local/test.${RST}" >&2
-    exit 1
-  fi
-  echo "${YLW}[deploy] WARNING: MIP_COTALITY_ID_MASK_SECRET is not set (env or .env.local).${RST}" >&2
-  echo "${YLW}  Cotality ID masking will use the local/test compatibility namespace.${RST}" >&2
-else
-  echo "  cotality id-mask secret: configured"
-fi
-if [[ -n "$_ID_MASK_RESOLVED" ]]; then
-  export MIP_COTALITY_ID_MASK_SECRET="$_ID_MASK_RESOLVED"
-fi
+# Runtime HMAC keys (the Cotality ID mask and the Genie action current and
+# previous keys) are presence-only and need no deploy input. The provisioner
+# keeps every key already in the runtime secret scope, never reading or
+# rewriting its value, and writes an absent key once (a first install) from
+# its optional shell or .env.local input or a value generated on the runner.
+# No value of theirs reaches CI. The read-only plan below (runtime secret
+# pre-stop check) asserts each key's presence or names the first-install
+# write before the App stop.
+echo "  runtime HMAC keys: presence-only (an existing key is kept unread; an absent one is written once)"
 
 # Exact AI Gateway proof rows use verifier-only Ed25519 signatures. The App
 # receives only the derived public key, so the Lakebase proof-writer credential
@@ -787,10 +743,11 @@ fi
 
 # >>> runtime secret pre-stop check >>>
 # Step 0a stops the App before the bundle-apply step provisions mip-runtime.
-# Plan that provisioning read-only here, while the App still serves: a stored
-# Cotality ID-mask value that differs from (or cannot be compared with) the
-# configured one refuses now, not after the stop (full_deploy_readiness.md
-# 3.7). The tool names keys only, never values or fingerprints.
+# Plan that provisioning read-only here, while the App still serves: the plan
+# lists the scope's keys (it reads no value), keeps every existing key, and
+# names each first-install write, so an unusable optional input or another
+# workspace refuses now, not after the stop (full_deploy_readiness.md 3.7).
+# The tool names keys only, never values.
 if [[ "$DRY_RUN" -eq 0 ]]; then
   if ! "$PYTHON" -m tools.databricks.provision_runtime_secrets --check \
       --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"; then

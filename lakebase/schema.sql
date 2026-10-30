@@ -21,6 +21,33 @@
 -- All UUID defaults use `gen_random_uuid()`; Lakebase Postgres enables
 -- `pgcrypto` by default on a new instance, but we include the CREATE
 -- EXTENSION line for portability.
+--
+-- Migration compatibility tags: `jobs/lakebase_migrate.py --mode plan`
+-- classifies each pending schema_migrations version by a comment line of
+-- exactly this form, placed anywhere in this file:
+--   -- mip:migration version=<schema_migrations version> compat=expand|contract
+-- `expand` is a reviewed claim that the previous release's App keeps working
+-- on the migrated schema, so a deploy window may restart it after the
+-- migration. `contract` says it may not. A version without a tag counts as
+-- contract; a malformed tag, or a tag naming no declared version, refuses
+-- the plan. Versions older than the tags carry none on purpose: nobody
+-- reviewed a claim for them, so an install that finds one pending treats it
+-- as contract.
+--
+-- Retired ledger versions: plan refuses a database whose schema_migrations
+-- holds a version this file does not declare (database_ahead_of_release:
+-- a newer release migrated it, and apply of this one would fail after the
+-- App stop). A version renamed or withdrawn after some database recorded it
+-- is not that; name it once on a line of exactly this form and plan accepts
+-- the leftover row (apply never reads it):
+--   -- mip:migration retired=<schema_migrations version>
+-- The four below were renamed on their branches before merge (each block is
+-- declared under its new name), so a database migrated from such a branch
+-- may still hold the old name.
+-- mip:migration retired=2026_10_01_disposition_notes_retired
+-- mip:migration retired=2026_10_01_genie_refusal_report_texts
+-- mip:migration retired=2026_10_02_borrower_decision_history_index
+-- mip:migration retired=2026_10_02_genie_job_sections
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE SCHEMA IF NOT EXISTS mip_app;
@@ -34,6 +61,36 @@ CREATE TABLE IF NOT EXISTS mip_app.schema_migrations (
     description TEXT NOT NULL,
     applied_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Deployment schema-input digest ----------------------------------------
+-- One migration-owned row about the last apply that committed: the sha256
+-- of its exact schema, seed, tenant disclosure seed and grant-matrix inputs,
+-- one sha256 per input component, and a fingerprint of the mip_app catalog
+-- and seeded reference rows those inputs left behind
+-- (jobs/lakebase_migration_ledger.py). Apply upserts it as the last
+-- statement of its schema transaction; `--mode plan` compares it with the
+-- release's inputs and the live catalog so an unchanged, undrifted install
+-- can skip the migration and its App stop. The App role receives no
+-- privilege on it.
+CREATE TABLE IF NOT EXISTS mip_app.deployment_schema_digest (
+    scope                         TEXT PRIMARY KEY CHECK (scope = 'lakebase_schema'),
+    input_digest                  TEXT NOT NULL CHECK (input_digest ~ '^[0-9a-f]{64}$'),
+    schema_digest                 TEXT NOT NULL CHECK (schema_digest ~ '^[0-9a-f]{64}$'),
+    seed_digest                   TEXT NOT NULL CHECK (seed_digest ~ '^[0-9a-f]{64}$'),
+    tenant_disclosure_seed_digest TEXT NOT NULL
+                                  CHECK (tenant_disclosure_seed_digest ~ '^[0-9a-f]{64}$'),
+    grant_matrix_digest           TEXT NOT NULL CHECK (grant_matrix_digest ~ '^[0-9a-f]{64}$'),
+    catalog_fingerprint           TEXT NOT NULL CHECK (catalog_fingerprint ~ '^[0-9a-f]{64}$'),
+    recorded_at                   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- mip:migration version=2026_10_29_deployment_schema_digest compat=expand
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_10_29_deployment_schema_digest',
+    'Deployment schema-input digest: one migration-owned row with the input digests and the catalog fingerprint of the last committed apply'
+)
+ON CONFLICT (version) DO NOTHING;
 
 -- Campaigns -----------------------------------------------------------
 -- One row per marketing campaign the user has built with the portfolio
