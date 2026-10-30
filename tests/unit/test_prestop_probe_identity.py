@@ -16,6 +16,8 @@ from tools.databricks import (
     app_deployment_rollback_cli,
     app_rollback_bootstrap_gate,
     audit_global_m2m_access,
+    bundle_plan_app_acl,
+    converge_app_release_access,
     converge_campaign_treatment_access,
     prestop_genie_budget,
     prestop_owner_equivalent,
@@ -90,3 +92,10 @@ def test_the_owner_equivalent_probe_reads_approvals_with_the_owner_policy_parser
         is uc_owner_policy.parse_approved_owner_principals
     )
 
+
+def test_the_app_acl_preview_runs_the_converger_reader_and_plan() -> None:
+    assert bundle_plan_app_acl.INSPECT is converge_app_release_access._inspect_acl
+    assert bundle_plan_app_acl.PLAN is converge_app_release_access.planned_release_acl
+    assert "planned_release_acl(current" in inspect.getsource(
+        converge_app_release_access.converge_app_release_access
+    )

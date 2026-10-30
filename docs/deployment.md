@@ -1978,7 +1978,22 @@ leaves the App serving and changes nothing. The gate refuses:
   refusal is a collision, the deployer is looking at an install it never
   adopted. The collisions fold into this one refusal and are listed as its
   detail. With no App there is no install: a first install that meets a stray
-  same-name object gets the plain `collision` refusal and its remedy.
+  same-name object gets the plain `collision` refusal and its remedy;
+- **`app_acl`** (pre-lease only): the App ACL preview below found an ACL the
+  release access converger cannot read or converge (an inherited non-manager
+  grant, an unexpected level, or a release identity that also manages the
+  App), which would fail it after step 0a, or could not read the ACL at all.
+
+**App ACL preview** (pre-lease only, M0-PR5). The run ends by converging the
+existing App's direct ACL to the runtime release phase
+(`converge_app_release_access --mode runtime`): direct managers are kept, and
+every other direct grant is replaced by `CAN_USE` for the normal, operator2 and
+admin service principals, so a business user's direct `CAN_USE` is dropped.
+The pre-lease gate previews that with the converger's own reader and plan
+(`tools/databricks/bundle_plan_app_acl.py`). The printed line and the public
+summary carry its code (`unchanged`, `changes`, `app_absent` or `refused`) and
+the keep, add, remove and change counts; the full report names each grant. A
+dry run without the four release identities skips it.
 
 One collision is deferred instead, and only before the lease. An interrupted
 first install can leave the App created but not bound into bundle state (a
