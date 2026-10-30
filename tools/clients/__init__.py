@@ -12,4 +12,7 @@ Nothing in ``scripts/deploy.sh`` reads a profile yet; later slices wire it in.
 
 ``bootstrap_account`` is the human-run account bootstrap that creates or
 adopts a client's identities before its first deploy (docs/clients/bootstrap.md).
+``github_environment`` creates and fills the client's GitHub Environments,
+and ``github_sink`` is the bootstrap's credential sink into them
+(docs/clients/github-environment.md).
 """

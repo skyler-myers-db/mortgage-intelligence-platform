@@ -2271,9 +2271,17 @@ logs in fresh in a throwaway config and token cache, and never reads
 `~/.databrickscfg`.
 
 The full operator guide, including what the tool never does, is
-[docs/clients/bootstrap.md](clients/bootstrap.md). Until the GitHub
-credential sink (M2-PR2) lands, an apply that would create, adopt or mint
-refuses before its first mutation.
+[docs/clients/bootstrap.md](clients/bootstrap.md). Unless the GitHub
+credential sink is selected with `--sink github-environment`, an apply that
+would create, adopt or mint refuses before its first mutation.
+
+`python -m tools.clients.github_environment` creates the client's GitHub
+Environments, `<client>` and `<client>-validate`, with the review mode's
+protections, and fills `<client>` from the local profile: public fields as
+variables, identifying fields as secrets, freshly generated Ed25519 signing
+keys, and the profile digest `MIP_CLIENT_PROFILE_SHA256`. It uses the same
+plan, review, ack and apply loop, in a throwaway `gh` login. The guide is
+[docs/clients/github-environment.md](clients/github-environment.md).
 
 ## CI deploy (deploy-dev.yml): parked, and the release-gate bootstrap
 
