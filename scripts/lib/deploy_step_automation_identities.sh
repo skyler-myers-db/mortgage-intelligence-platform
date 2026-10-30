@@ -462,10 +462,11 @@ else:
   fi
   # Reconcile any CREATE privileges left by a prior SIGKILL at the same early
   # recovery boundary.
-  _GRANTS_WAREHOUSE_ID="${DATABRICKS_WAREHOUSE_ID:-$(dotenv_value DATABRICKS_WAREHOUSE_ID)}"
+  # The warehouse the preflight resolved from this deployer's bundle state
+  # (or, on a first install, its bootstrap warehouse; M1-PR3).
   _GRANTS_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
   if [[ -z "$_GRANTS_WAREHOUSE_ID" ]]; then
-    echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID is required for early privilege reconciliation.${RST}" >&2
+    echo "${RED}[deploy] the preflight resolved no SQL warehouse for early privilege reconciliation.${RST}" >&2
     exit 1
   fi
   AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=1

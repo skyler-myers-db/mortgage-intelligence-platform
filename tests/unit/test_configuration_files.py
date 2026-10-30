@@ -241,7 +241,7 @@ def test_deploy_overwrites_stale_genie_id_before_bundle_and_after_rebind():
     assert "GENIE_SPACE_ID_FROM_ENV" not in first_block
     # M1-PR3: by its pin, signed when it pins, and an ambient GENIE_SPACE_ID is dropped first.
     assert 'run_with_proof_signing_authority "$PYTHON" -m tools.databricks.provision_genie_space' in first_block
-    assert '"${GENIE_PIN_ARGS[@]}" "${GENIE_PIN_ACK_ARGS[@]}"' in first_block
+    assert '"${GENIE_PIN_ARGS[@]}" --warehouse-id "$_GRANTS_WAREHOUSE_ID" "${GENIE_PIN_ACK_ARGS[@]}"' in first_block
     assert content.index("\nunset GENIE_SPACE_ID\n") < first_resolve
 
     rebind = content.index(

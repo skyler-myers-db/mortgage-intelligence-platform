@@ -32,7 +32,6 @@ For ``-t ci`` the same names come from the environment and ``.env.local``
 with their defaults, as before the client target.
 
 Mapping, every target (env -> BUNDLE_VAR_*):
-  DATABRICKS_WAREHOUSE_ID -> BUNDLE_VAR_sql_warehouse_id
   MIP_LENDER_NAME         -> BUNDLE_VAR_lender_name
   MIP_LENDER_NMLS_ID      -> BUNDLE_VAR_lender_nmls_id
   MIP_TENANT_ID           -> BUNDLE_VAR_tenant_id
@@ -503,12 +502,13 @@ def main() -> int:
                 continue
             if deployer_auth_bound and k in immutable_workspace_auth:
                 continue
-            if k == "DATABRICKS_WAREHOUSE_ID" and _is_real(env.get(k)):
-                continue
             env[k] = v
     # GENIE_SPACE_ID is no deploy input (M1-PR3): the governed space comes from
     # its pin below, never from the shell, .env.local or genie/space_id.txt.
+    # No bundle variable names a warehouse either: every resource uses the
+    # bundle's own, so an ambient export of the retired variable is dropped.
     env.pop("GENIE_SPACE_ID", None)
+    env.pop("BUNDLE_VAR_sql_warehouse_id", None)
 
     if subcmd == "deployment":
         deployment_error = _validate_app_deployment_command(
@@ -522,7 +522,6 @@ def main() -> int:
         if deployment_error is not None:
             print(f"[bundle_env] {deployment_error}", file=sys.stderr)
             return 2
-    warehouse = env.get("DATABRICKS_WAREHOUSE_ID")
     genie: str | None = None
     verifier_client_id = (
         profile.identity_ids.verifier
@@ -568,8 +567,6 @@ def main() -> int:
 
     if subcmd in {"plan", "summary", "deploy", "deployment"}:
         missing = []
-        if not _is_real(warehouse):
-            missing.append("DATABRICKS_WAREHOUSE_ID")
         if not _is_real(genie) and not genie_unprovisioned:
             missing.append("the pinned governed Genie space")
         if not _is_real(verifier_client_id):
@@ -588,7 +585,6 @@ def main() -> int:
             )
             return 2
 
-    env["BUNDLE_VAR_sql_warehouse_id"] = str(warehouse) if _is_real(warehouse) else PLACEHOLDER
     env["BUNDLE_VAR_genie_space_id"] = str(genie) if _is_real(genie) else PLACEHOLDER
     env["BUNDLE_VAR_ai_gateway_verifier_client_id"] = (
         str(verifier_client_id) if _is_real(verifier_client_id) else PLACEHOLDER
@@ -720,7 +716,6 @@ def main() -> int:
             f"install_class={profile.install_class} (root, run_as and names from the profile)",
             file=sys.stderr,
         )
-    print(f"[bundle_env] {status('DATABRICKS_WAREHOUSE_ID', warehouse)}", file=sys.stderr)
     print(f"[bundle_env] {status('governed Genie space (pinned)', genie)}", file=sys.stderr)
     print(
         "[bundle_env] deployment resources "

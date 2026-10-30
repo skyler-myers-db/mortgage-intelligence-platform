@@ -13,7 +13,7 @@ step "preflight — check .env.local, databricks CLI, venv"
 
 if [[ ! -f .env.local ]]; then
   echo "${RED}[deploy] .env.local missing.${RST}" >&2
-  echo "  copy .env.example to .env.local, fill in the client profile (deploy/clients/example.env) and DATABRICKS_WAREHOUSE_ID." >&2
+  echo "  copy .env.example to .env.local and fill in the client profile (deploy/clients/example.env); a first install also sets DATABRICKS_WAREHOUSE_ID." >&2
   exit 2
 fi
 
@@ -145,6 +145,49 @@ if [[ "$DRY_RUN" -eq 0 ]] && ! "$PYTHON" -m tools.clients.live_checks; then
   exit 2
 fi
 # <<< client live checks <<<
+
+# >>> bundle warehouse >>>
+# The SQL warehouse every early step runs SQL on is the one this deployer's
+# bundle state binds (resources.sql_warehouses.mip_serverless_sql, read by
+# tools/databricks/bundle_state.py; M1-PR3), the warehouse the bundle created
+# and the App binds. An operator DATABRICKS_WAREHOUSE_ID (shell or .env.local)
+# that names another warehouse refuses. On a true first install the state
+# binds none until the step-4 apply creates it: the operator's value is then
+# the bootstrap warehouse for the steps before that apply (the Genie create
+# among them), and the deploy switches to the bundle's warehouse right after
+# the apply. With neither, a first install refuses here. Read-only; a dry run
+# reads no state and plans with the operator's value.
+_OPERATOR_WAREHOUSE_ID="$(deployment_control_value DATABRICKS_WAREHOUSE_ID)"
+BUNDLE_STATE_WAREHOUSE_ID=""
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  echo "${DIM}\$ $PYTHON -m tools.databricks.bundle_state warehouse-id${RST}"
+  if ! BUNDLE_STATE_WAREHOUSE_ID="$("$PYTHON" -m tools.databricks.bundle_state warehouse-id)"; then
+    echo "${RED}[deploy] this deployer's bundle state could not be read; nothing was changed.${RST}" >&2
+    exit 2
+  fi
+fi
+if [[ -n "$BUNDLE_STATE_WAREHOUSE_ID" ]]; then
+  if [[ -n "$_OPERATOR_WAREHOUSE_ID" && "$_OPERATOR_WAREHOUSE_ID" != "$BUNDLE_STATE_WAREHOUSE_ID" ]]; then
+    echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID names another warehouse than this deployer's bundle state binds; unset it (the bundle's own warehouse is used).${RST}" >&2
+    exit 2
+  fi
+  _GRANTS_WAREHOUSE_ID="$BUNDLE_STATE_WAREHOUSE_ID"
+  WAREHOUSE_SOURCE="bundle-state"
+elif [[ "$DRY_RUN" -eq 1 ]]; then
+  _GRANTS_WAREHOUSE_ID="${_OPERATOR_WAREHOUSE_ID:-dry-run-bundle-warehouse}"
+  WAREHOUSE_SOURCE="dry-run (bundle state unread)"
+elif [[ -n "$_OPERATOR_WAREHOUSE_ID" ]]; then
+  _GRANTS_WAREHOUSE_ID="$_OPERATOR_WAREHOUSE_ID"
+  WAREHOUSE_SOURCE="first-install-bootstrap"
+else
+  echo "${RED}[deploy] this deployer's bundle state binds no SQL warehouse yet (a first install): set DATABRICKS_WAREHOUSE_ID to a warehouse the deployer can use for the steps before the bundle creates its own.${RST}" >&2
+  exit 2
+fi
+DATABRICKS_WAREHOUSE_ID="$_GRANTS_WAREHOUSE_ID"
+export DATABRICKS_WAREHOUSE_ID
+echo "  sql warehouse: ${WAREHOUSE_SOURCE}"
+unset _OPERATOR_WAREHOUSE_ID
+# <<< bundle warehouse <<<
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
   # Unity Catalog model registration validates the uploaded artifact through

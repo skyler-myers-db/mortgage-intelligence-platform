@@ -87,6 +87,8 @@ Create `.env.local` at the repo root (gitignored — never commit):
 cat > .env.local <<'EOF'
 DATABRICKS_HOST=https://<customer-workspace>.cloud.databricks.com
 DATABRICKS_TOKEN=<PAT from workspace User Settings -> Developer -> Access Tokens>
+# A first install's bootstrap warehouse only: once the bundle has created its
+# own, scripts/deploy.sh uses that one and refuses a value that differs.
 DATABRICKS_WAREHOUSE_ID=<serverless warehouse id from Compute -> SQL warehouses>
 # No GENIE_SPACE_ID: scripts/deploy.sh resolves the governed Genie space by
 # its pin (tools/databricks/genie_space_pin.py, M1-PR3); a first deploy

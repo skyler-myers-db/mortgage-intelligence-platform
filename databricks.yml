@@ -1328,10 +1328,10 @@ resources:
     # job (see above). The gold materialisation path is now exclusively the
     # warehouse-executed CTAS files under `sql/transformations/gold_*.sql`.
 
-  # Dashboards are only declared once var.sql_warehouse_id is populated for
-  # the target workspace. When a warehouse ID is provided, these blocks wire
-  # to mip_executive_dashboard and mip_segment_dashboard files under
-  # dashboards/. Resource names kept here so string-contract tests pass.
+  # Both dashboards run on the bundle's own warehouse
+  # (resources.sql_warehouses.mip_serverless_sql) and wire to the
+  # mip_executive_dashboard and mip_segment_dashboard files under dashboards/.
+  # Resource names kept here so string-contract tests pass.
   dashboards:
     mip_executive_dashboard:
       display_name: mip_executive_dashboard
@@ -1446,30 +1446,21 @@ variables:
       Unity Catalog database-catalog name registered for the Lakebase instance.
       Keep it aligned with MIP_LAKEBASE_SYNC_CATALOG.
     default: mip_app_state
-  # sql_warehouse_id and genie_space_id can be overridden per-invocation via
-  # the Databricks CLI BUNDLE_VAR_* mechanism. `bundle-validate-env` sources
-  # .env.local and exports
-  # BUNDLE_VAR_sql_warehouse_id=$DATABRICKS_WAREHOUSE_ID and
-  # BUNDLE_VAR_genie_space_id=$GENIE_SPACE_ID before calling the CLI.
+  # Every resource uses the bundle's own warehouse
+  # (${resources.sql_warehouses.mip_serverless_sql.id}); no variable names one
+  # (the unused sql_warehouse_id variable left in M1-PR3).
   #
-  # The root defaults stay as CI placeholders; no target pins a Genie id.
-  # Mutable bundle application is an internal selector-bounded phase of
+  # The genie_space_id default stays a CI placeholder; no target pins a Genie
+  # id. Mutable bundle application is an internal selector-bounded phase of
   # `scripts/deploy.sh`, whose bundle_env resolves the governed space by its
-  # title in the authenticated workspace and exports BUNDLE_VAR_genie_space_id
-  # before every plan, summary, deploy or binding; unrestricted bundle
-  # deployment is not an operator recovery path.
-  sql_warehouse_id:
-    description: >-
-      Serverless SQL Warehouse ID. Override with BUNDLE_VAR_sql_warehouse_id
-      (`bundle-validate-env` reads DATABRICKS_WAREHOUSE_ID from .env.local;
-      `scripts/deploy.sh` owns mutable use).
-    default: 00000000PLACEHOLDER
+  # pin (tools/databricks/genie_space_pin.py, never a title or an input) and
+  # exports BUNDLE_VAR_genie_space_id before every plan, summary, deploy or
+  # binding; unrestricted bundle deployment is not an operator recovery path.
   genie_space_id:
     description: >-
-      Genie Space ID for Mortgage Lead Intelligence. Override with
-      BUNDLE_VAR_genie_space_id. Populate by running
-      `make provision-genie` (writes genie/space_id.txt) and exporting
-      GENIE_SPACE_ID from that file.
+      Genie Space ID for Mortgage Lead Intelligence. tools/databricks/bundle_env.py
+      sets BUNDLE_VAR_genie_space_id from the governed space's pin
+      (tools/databricks/genie_space_pin.py); GENIE_SPACE_ID is no input.
     default: 00000000PLACEHOLDER
   lakebase_database_name:
     description: Lakebase Postgres database name backing Module 0 app state
@@ -1511,7 +1502,8 @@ variables:
   # log-at-warn when missing (fall back to fredgraph.csv), so an empty
   # default here is correct. Override via `BUNDLE_VAR_fred_api_key` or
   # set `FRED_API_KEY=` in `.env.local` (wired through
-  # tools/databricks/bundle_env.py, same pattern as DATABRICKS_WAREHOUSE_ID).
+  # tools/databricks/bundle_env.py, the same .env.local overlay as the other
+  # deploy controls).
   fred_api_key:
     description: >-
       Optional FRED API key (public fredgraph.csv endpoint works without it).

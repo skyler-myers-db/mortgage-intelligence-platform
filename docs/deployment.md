@@ -851,6 +851,14 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
      (named to both tools, never printed);
    - **account principal**: `MIP_IDENTITY_IDS_JSON.account_principal` holds no
      account admin role (read from account SCIM with its own credential).
+   After the live checks, the preflight takes the SQL warehouse from this deployer's bundle
+   state (`python -m tools.databricks.bundle_state warehouse-id`, the
+   warehouse the bundle created, M1-PR3): `DATABRICKS_WAREHOUSE_ID` is read
+   only as a first install's bootstrap warehouse, for the steps before the
+   bundle apply creates its own (the deploy switches to that one right after
+   the apply), and refuses when it names another warehouse than the state
+   binds. `databricks.yml` declares no `sql_warehouse_id` variable: every
+   resource uses the bundle's own warehouse.
    `deploy-dev.yml` and `nightly.yml` are Entrada CI only, and both are parked
    until a client environment is selected (M1-PR7): their first job refuses
    every dispatch. The command of record is `./scripts/deploy.sh -t client`.
@@ -2601,7 +2609,8 @@ principal outside this repository until M2-PR1's client bootstrap does it.
   target's until M1-PR7). The step then proves, through the Python SDK and
   the Go CLI, that the profile authenticates as `MIP_CI_DEPLOYER_CLIENT_ID`,
   that this principal is in `admins` and owns the current metastore, and that
-  `DATABRICKS_WAREHOUSE_ID` and `GENIE_SPACE_ID` resolve. The metastore-owner
+  `DATABRICKS_WAREHOUSE_ID` resolves (the Genie space is no input since
+  M1-PR3; the deploy resolves it by its pin). The metastore-owner
   check presumed the cancelled metastore transfer; M1-PR7 replaces it. The
   step prints booleans only (a failed call adds its exception class or the
   CLI's exit code, never a message or a value) and exits 2 on any mismatch.
@@ -2802,9 +2811,10 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    retire its older secrets unless something local still uses them. The
    deployer never takes this role: the account plane stays on
    `DATABRICKS_ACCOUNT_*`.
-4. Set the CI install's `GENIE_SPACE_ID` and `DATABRICKS_WAREHOUSE_ID`
-   secrets for its own workspace, never the live ones. The proof step refuses
-   either one unless it resolves for the deployer.
+4. Set the CI install's `DATABRICKS_WAREHOUSE_ID` secret for its own
+   workspace, never the live one. The proof step refuses it unless it
+   resolves for the deployer. (`GENIE_SPACE_ID` is no deploy input since
+   M1-PR3; `nightly.yml` still names it for its live checks.)
 5. Point the REPOSITORY-level names `nightly.yml` reads (it has no
    `environment:`) at the same CI install as the CI environment: the
    variables `MIP_APP_NAME`, `MIP_DEFAULT_CATALOG`, `MIP_LAKEBASE_INSTANCE`,

@@ -285,7 +285,7 @@ run "$PYTHON" -m tools.databricks.verify_scheduled_refresh_state \
 step "rebind Genie space — bind trusted assets from genie/mortgage_lead_intelligence_space.yml"
 # The same pin resolution as step 0a: the space step 0a pinned, never a title.
 run_with_proof_signing_authority "$PYTHON" -m tools.databricks.provision_genie_space \
-  "${GENIE_PIN_ARGS[@]}"
+  "${GENIE_PIN_ARGS[@]}" --warehouse-id "$_GRANTS_WAREHOUSE_ID"
 if [[ "$DRY_RUN" -eq 0 ]]; then
   if [[ ! -s genie/space_id.txt ]]; then
     echo "${RED}[deploy] Genie rebind did not write genie/space_id.txt.${RST}" >&2

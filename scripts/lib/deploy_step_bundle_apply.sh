@@ -19,7 +19,7 @@
 # signed with the deploy's proof key, hence the bounded signing authority.
 step "resolve governed Genie space by its pin before App secret and bundle mutation"
 run_with_proof_signing_authority "$PYTHON" -m tools.databricks.provision_genie_space \
-  "${GENIE_PIN_ARGS[@]}" "${GENIE_PIN_ACK_ARGS[@]}"
+  "${GENIE_PIN_ARGS[@]}" --warehouse-id "$_GRANTS_WAREHOUSE_ID" "${GENIE_PIN_ACK_ARGS[@]}"
 if [[ "$DRY_RUN" -eq 0 ]]; then
   if [[ ! -s genie/space_id.txt ]]; then
     echo "${RED}[deploy] Genie provisioner did not write genie/space_id.txt.${RST}" >&2
@@ -173,6 +173,27 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   # Refresh after apply: on a true first install this is the first summary
   # that can contain concrete ids for every App resource binding.
   BUNDLE_SUMMARY_JSON="$("$PYTHON" -m tools.databricks.bundle_env summary -t "$TARGET" -o json)"
+  # >>> bundle warehouse: after apply >>>
+  # The warehouse the apply left in this deployer's state is the one every
+  # later step uses: it must be the one the preflight read, and a first
+  # install switches from its bootstrap warehouse to it here (M1-PR3).
+  _APPLIED_WAREHOUSE_ID="$("$PYTHON" -c '
+import json, sys
+
+warehouse = ((json.load(sys.stdin).get("resources") or {}).get("sql_warehouses") or {}).get("mip_serverless_sql") or {}
+print(str(warehouse.get("id") or "").strip())
+' <<< "$BUNDLE_SUMMARY_JSON")"
+  if [[ -z "$_APPLIED_WAREHOUSE_ID" || \
+        ( "$WAREHOUSE_SOURCE" == "bundle-state" && "$_APPLIED_WAREHOUSE_ID" != "$_GRANTS_WAREHOUSE_ID" ) ]]; then
+    echo "${RED}[deploy] the bundle's SQL warehouse after the apply is not the one its state bound before it.${RST}" >&2
+    exit 4
+  fi
+  _GRANTS_WAREHOUSE_ID="$_APPLIED_WAREHOUSE_ID"
+  DATABRICKS_WAREHOUSE_ID="$_GRANTS_WAREHOUSE_ID"
+  export DATABRICKS_WAREHOUSE_ID
+  WAREHOUSE_SOURCE="bundle-state"
+  unset _APPLIED_WAREHOUSE_ID
+  # <<< bundle warehouse: after apply <<<
 fi
 
 # The App's Lakebase role exists only after its database resource binding is

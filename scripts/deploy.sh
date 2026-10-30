@@ -67,8 +67,10 @@
 # emergency recipe in docs/deployment.md until it is adopted (M2-PR6).
 #
 # Environment:
-#   .env.local holds the client profile (deploy/clients/example.env), plus
-#   DATABRICKS_WAREHOUSE_ID.
+#   .env.local holds the client profile (deploy/clients/example.env). The SQL
+#   warehouse is the one this deployer's bundle state binds; a first install
+#   needs DATABRICKS_WAREHOUSE_ID as its bootstrap warehouse until the bundle
+#   apply creates its own.
 #   GENIE_SPACE_ID is no input (M1-PR3): the governed Genie space is resolved
 #   by its pin (tools/databricks/genie_space_pin.py). A first install creates
 #   and pins it before bundle deploy, so databricks_app.mip_app never binds the
@@ -177,7 +179,7 @@ while [[ $# -gt 0 ]]; do
       fi
       PHASE_SEEN=1 ;;
     -h|--help)
-      sed -n '2,83p' "$0"
+      sed -n '2,85p' "$0"
       exit 0
       ;;
     *)
@@ -486,6 +488,10 @@ CLIENT_APP_ENV=""
 CLIENT_DEMO_FEEDS=""
 CLIENT_PRESENTER_MODE=""
 CLIENT_SCHEDULED_REFRESH=""
+# The SQL warehouse the preflight resolves (bundle_state warehouse-id, M1-PR3):
+# bundle-state, or first-install-bootstrap until the step-4 apply.
+_GRANTS_WAREHOUSE_ID=""
+WAREHOUSE_SOURCE=""
 # Step 5 sets these from the profile: the principal and root leaf every App
 # release check (publish, converge, prune) names. Empty refuses.
 APP_RELEASE_PRINCIPAL=""
