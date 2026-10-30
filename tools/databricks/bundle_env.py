@@ -36,6 +36,9 @@ Mapping, every target (env -> BUNDLE_VAR_*):
   MIP_LENDER_NAME         -> BUNDLE_VAR_lender_name
   MIP_LENDER_NMLS_ID      -> BUNDLE_VAR_lender_nmls_id
   MIP_TENANT_ID           -> BUNDLE_VAR_tenant_id
+  MIP_LENDER_IDENTITY_JSON / _SHA256
+                          -> BUNDLE_VAR_lender_identity_json / _sha256 (a
+                             verified digest-pinned customer record only)
   MIP_COTALITY_SOURCE_CATALOG / _SCHEMA / _TABLE_PREFIX
                           -> BUNDLE_VAR_cotality_source_catalog / _schema /
                              _table_prefix (canonical when unset; '-' is no
@@ -83,9 +86,13 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from backend.config import source_names  # noqa: E402
-from backend.schemas.lender_identity import (  # noqa: E402
-    effective_public_tenant_id,
-    validate_public_lender_identity,
+from backend.schemas.lender_identity_record import (  # noqa: E402
+    LEGACY_ENV_NAMES,
+    LENDER_IDENTITY_JSON_ENV,
+    LENDER_IDENTITY_SHA256_ENV,
+    PINNED_ENV_NAMES,
+    as_configured,
+    reviewed_lender_identity_from_env,
 )
 from tools import render_sql  # noqa: E402
 from tools.clients import profile as client_views  # noqa: E402
@@ -531,6 +538,9 @@ def main() -> int:
             # reviewed shell export, but make the documented one-.env.local
             # path work when no shell value exists. Alias agreement and target
             # safety are validated below before the CLI can mutate anything.
+            # The pinned lender record and its pin are controls too: the
+            # preflight and the App payload take a shell record first, so a
+            # dotenv one must never replace it here.
             if k in {
                 "MIP_DEFAULT_CATALOG",
                 "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS",
@@ -538,6 +548,7 @@ def main() -> int:
                 "MIP_LENDER_NAME",
                 "MIP_LENDER_NMLS_ID",
                 "MIP_TENANT_ID",
+                *PINNED_ENV_NAMES,
                 "MIP_AI_GATEWAY_VERIFIER_CLIENT_ID",
                 "LAKEBASE_INSTANCE_NAME",
                 "MIP_LAKEBASE_INSTANCE",
@@ -663,23 +674,31 @@ def main() -> int:
     )
 
     try:
-        lender_name, lender_nmls_id = validate_public_lender_identity(
-            env.get("MIP_LENDER_NAME") or "Summit Mortgage",
-            env.get("MIP_LENDER_NMLS_ID"),
-        )
-        tenant_id = effective_public_tenant_id(
-            env.get("MIP_TENANT_ID"),
-            lender_name=lender_name,
+        # The legacy values as given, as before: an unset or empty name is
+        # Summit Mortgage, and a whitespace-only one is refused.
+        lender = reviewed_lender_identity_from_env(
+            as_configured({name: env.get(name) for name in (*LEGACY_ENV_NAMES, *PINNED_ENV_NAMES)})
         )
     except ValueError as exc:
         print(f"[bundle_env] invalid lender disclosure identity: {exc}", file=sys.stderr)
         return 2
+    lender_name, lender_nmls_id, tenant_id = lender.lender_name, lender.nmls_id, lender.tenant_id
     env["MIP_LENDER_NAME"] = lender_name
     env["MIP_LENDER_NMLS_ID"] = lender_nmls_id
     env["MIP_TENANT_ID"] = tenant_id
     env["BUNDLE_VAR_lender_name"] = lender_name
     env["BUNDLE_VAR_lender_nmls_id"] = lender_nmls_id
     env["BUNDLE_VAR_tenant_id"] = tenant_id
+    if lender.pinned:
+        # The Lakebase migration job re-verifies the record before it renders
+        # the tenant's disclosures; with no record these stay at their "".
+        assert lender.canonical_json is not None and lender.digest is not None
+        env[LENDER_IDENTITY_JSON_ENV] = env["BUNDLE_VAR_lender_identity_json"] = lender.canonical_json
+        env[LENDER_IDENTITY_SHA256_ENV] = env["BUNDLE_VAR_lender_identity_sha256"] = lender.digest
+    else:
+        # Only a record verified here may reach the bundle, never an ambient one.
+        env.pop("BUNDLE_VAR_lender_identity_json", None)
+        env.pop("BUNDLE_VAR_lender_identity_sha256", None)
 
     # -t client: the names are the profile's, which validated their shapes and
     # alias agreement; -t ci keeps the environment's names and defaults.
@@ -790,8 +809,9 @@ def main() -> int:
             catalog=catalog,
             demo_first_party_enabled=demo_first_party_enabled,
             cotality=cotality,
+            lender=lender,
         )
-    except render_sql.CanonicalSourceLeft as exc:
+    except (render_sql.CanonicalSourceLeft, render_sql.TenantRowsUnmatched) as exc:
         print(f"[bundle_env] {exc}", file=sys.stderr)
         return 2
 
@@ -829,7 +849,12 @@ def main() -> int:
     cli = ["databricks", "bundle", subcmd, *rest]
     result = subprocess.run(cli, env=env, check=False)
     if demo_first_party_enabled:
-        render_sql.render(catalog=catalog, demo_first_party_enabled=False, cotality=cotality)
+        render_sql.render(
+            catalog=catalog,
+            demo_first_party_enabled=False,
+            cotality=cotality,
+            lender=lender,
+        )
         print(
             "[bundle_env] restored sql/_rendered with "
             "demo_first_party_feeds=disabled after CLI exit",

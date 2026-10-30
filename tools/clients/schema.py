@@ -100,6 +100,7 @@ FIELD_CLASS: dict[str, FieldClass] = {
     "MIP_COTALITY_SOURCE_CATALOG": _P,
     "MIP_COTALITY_SOURCE_SCHEMA": _P,
     "MIP_COTALITY_SOURCE_TABLE_PREFIX": _P,
+    "MIP_LENDER_IDENTITY_SHA256": _P,
     "DATABRICKS_HOST": _I,
     "MIP_EXPECT_WORKSPACE_ID": _I,
     "MIP_EXPECT_METASTORE_ID": _I,
@@ -172,6 +173,12 @@ JSON_LEAF_CLASS: dict[str, dict[str, LeafClass]] = {
         "servicer_aliases[]": _IV,
         "reviewed_by": _IV,
         "reviewed_at": _DA,
+        "mark.sha256": _IV,
+        "mark.media_type": LeafClass.PUBLIC,
+        "mark.width": LeafClass.PUBLIC,
+        "mark.height": LeafClass.PUBLIC,
+        "mark.authorization_ref": _IV,
+        "mark.reviewed_on": _DA,
     },
     "MIP_ACCEPTED_EXPOSURE_JSON": {
         "[].kind": _VO,
@@ -239,6 +246,7 @@ _SCALAR_SHAPES: dict[str, tuple[re.Pattern[str], str]] = {
         TABLE_PREFIX,
         "1 to 64 lowercase letters, digits or '_', or '-' for no prefix",
     ),
+    "lender_identity_sha256": (re.compile(r"[0-9a-f]{64}"), "64 lowercase hex characters"),
     "expect_workspace_id": (WORKSPACE_ID, "a decimal workspace id"),
     "expect_metastore_id": (UUID, "a metastore id (UUID)"),
     "account_id": (UUID, "an account id (UUID)"),
@@ -303,6 +311,8 @@ class ClientProfile(BaseModel):
     cotality_source_catalog: str | None = Field(default=None, alias="MIP_COTALITY_SOURCE_CATALOG")
     cotality_source_schema: str | None = Field(default=None, alias="MIP_COTALITY_SOURCE_SCHEMA")
     cotality_source_table_prefix: str | None = Field(default=None, alias="MIP_COTALITY_SOURCE_TABLE_PREFIX")
+    # The reviewed pin of MIP_LENDER_IDENTITY_JSON (customer class only).
+    lender_identity_sha256: str | None = Field(default=None, alias="MIP_LENDER_IDENTITY_SHA256")
     # Identifying.
     databricks_host: str = Field(alias="DATABRICKS_HOST")
     expect_workspace_id: str = Field(alias="MIP_EXPECT_WORKSPACE_ID")

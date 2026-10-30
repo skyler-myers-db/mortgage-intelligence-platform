@@ -10,13 +10,21 @@ _REVIEWED_ORGANIZATION_SUFFIX_RE = re.compile(
     r"lender|lending|mortgage)$",
     re.IGNORECASE,
 )
-_PUBLIC_LENDER_NMLS_ID_RE = re.compile(r"[1-9]\d{3,11}")
+# ASCII digits only: Python's \d also matches Arabic-Indic, fullwidth and
+# other Unicode digits, which would render into borrower disclosures.
+_PUBLIC_LENDER_NMLS_ID_RE = re.compile(r"[1-9][0-9]{3,11}")
 _PUBLIC_TENANT_ID_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _SUMMIT_LENDER_NAME = "Summit Mortgage"
 _SUMMIT_DEMO_NMLS_ID = "123456"
-# This registry is deliberately source-controlled, not runtime-configurable.
-# Adding a customer identity requires an independently reviewed code change
-# that binds the exact public legal name to its verified lender NMLS id.
+_SUMMIT_TENANT_ID = "summit"
+# The reviewed identities are this source-controlled registry (the Summit
+# Mortgage demo pair) plus at most one digest-pinned customer record. A
+# customer identity is never a bare runtime string: it is the canonical JSON
+# record in MIP_LENDER_IDENTITY_JSON, accepted only when its sha256 equals
+# MIP_LENDER_IDENTITY_SHA256, the deploying maintainer's exact-digest
+# acknowledgement (lender_identity_record.py; not an independent approval).
+# Every caller resolves through reviewed_lender_identity_from_env() there;
+# this function alone still accepts only the registry.
 _REVIEWED_PUBLIC_LENDER_IDENTITIES: dict[str, frozenset[str]] = {
     _SUMMIT_LENDER_NAME: frozenset({_SUMMIT_DEMO_NMLS_ID}),
 }
@@ -91,13 +99,19 @@ def validate_public_lender_identity(
             "mip_lender_name and mip_lender_nmls_id must match an independently "
             "reviewed source-controlled lender identity"
         )
+    require_sms_disclosure_budget(lender, nmls_id)
+    return lender, nmls_id
+
+
+def require_sms_disclosure_budget(lender: str, nmls_id: str) -> None:
+    """Refuse an identity whose mandatory SMS disclosure leaves no reviewed copy room."""
+
     disclosure = lender + _SMS_DISCLOSURE_SUFFIX.format(nmls_id=nmls_id)
     if len(_SMS_MINIMUM_REVIEWED_COPY + disclosure) > _SMS_MAX_LENGTH:
         raise ValueError(
             "mip_lender_name and mip_lender_nmls_id exceed the reviewed 160-character "
             "SMS disclosure budget"
         )
-    return lender, nmls_id
 
 
 def effective_public_tenant_id(value: object, *, lender_name: object) -> str:
@@ -110,13 +124,13 @@ def effective_public_tenant_id(value: object, *, lender_name: object) -> str:
             raise ValueError(
                 "mip_tenant_id must be a lowercase identifier of at most 64 characters"
             )
-        if configured == "summit" and normalized_lender != _SUMMIT_LENDER_NAME:
+        if configured == _SUMMIT_TENANT_ID and normalized_lender != _SUMMIT_LENDER_NAME:
             raise ValueError(
                 "mip_tenant_id summit is reserved for the Summit Mortgage demo identity"
             )
         return configured
     if normalized_lender == _SUMMIT_LENDER_NAME:
-        return "summit"
+        return _SUMMIT_TENANT_ID
     slug = re.sub(r"[^a-z0-9]+", "_", normalized_lender.lower()).strip("_")
     if _PUBLIC_TENANT_ID_RE.fullmatch(slug) is None:
         raise ValueError("mip_lender_name cannot produce a valid disclosure tenant identifier")

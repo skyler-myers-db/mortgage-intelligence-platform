@@ -16,6 +16,11 @@ from __future__ import annotations
 import logging
 from threading import Lock
 
+from backend.schemas.lender_identity import _SUMMIT_LENDER_NAME
+from backend.schemas.lender_identity_record import (
+    ReviewedLenderIdentity,
+    tenant_lender_dictionary,
+)
 from backend.services.observability import emit
 
 log = logging.getLogger(__name__)
@@ -41,7 +46,18 @@ log = logging.getLogger(__name__)
 # test `test_lender_ref_map_matches_seed_sql` (future slice) will enforce
 # that invariant mechanically. Today, the sync is a documentation
 # contract: if you add a row to the seed SQL, add it here too.
+#
+# A customer install whose lender identity is a digest-pinned record
+# (backend/schemas/lender_identity_record.py) falls back to
+# ``tenant_lender_ref_map``: these entries with each Summit demo tenant row
+# the record does not claim retired to ``Competitor Other``, plus one per
+# record alias, exactly as tools/render_sql.py renders the seed for it. The
+# demo keeps this dict itself.
 # ---------------------------------------------------------------------------
+
+# What a retired demo tenant row displays (tools/render_sql.py): the label
+# ``resolve`` gives any servicer the dictionary does not name.
+_RETIRED_TENANT_DISPLAY = "Competitor Other"
 
 _LENDER_REF_MAP: dict[str, str] = {
     "UNITED WHOLESALE MTG": "Competitor A",
@@ -59,6 +75,27 @@ _LENDER_REF_MAP: dict[str, str] = {
     "SUMMIT MTG CORP": "Summit Mortgage",
     "SUMMIT MORTGAGE CORP": "Summit Mortgage",
 }
+
+
+def tenant_lender_ref_map(identity: ReviewedLenderIdentity) -> dict[str, str]:
+    """The fallback vocabulary for this identity; the demo map itself when unpinned."""
+
+    if not identity.pinned:
+        return _LENDER_REF_MAP
+    tenant = tenant_lender_dictionary(identity)
+    competitors = {
+        raw: display if display != _SUMMIT_LENDER_NAME else _RETIRED_TENANT_DISPLAY
+        for raw, display in _LENDER_REF_MAP.items()
+        if raw not in tenant
+    }
+    return {**competitors, **tenant}
+
+
+def _configured_fallback() -> dict[str, str]:
+    # Local import: settings import this module's package indirectly.
+    from backend.config.settings import settings
+
+    return tenant_lender_ref_map(settings.reviewed_lender_identity())
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +145,7 @@ class LenderRefResolver:
 
         self._cache: TTLCache = TTLCache()
         self._ttl_s = ttl_s
-        self._fallback = fallback if fallback is not None else _LENDER_REF_MAP
+        self._fallback = fallback if fallback is not None else _configured_fallback()
         self._load_lock = Lock()
         # Sticky flag: TRUE once we've emitted the "falling back" warning
         # so we don't spam logs on every single ``resolve()`` call.

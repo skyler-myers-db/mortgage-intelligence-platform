@@ -6424,7 +6424,15 @@ def _copy_client_profile_tooling(repo: Path) -> None:
     shutil.copytree(REPO / "tools" / "clients", repo / "tools" / "clients", ignore=shutil.ignore_patterns("__pycache__"))
     (repo / "tools" / "__init__.py").write_text("", encoding="utf-8")
     (repo / "backend" / "schemas").mkdir(parents=True)
-    for module in ("__init__.py", "schemas/__init__.py", "schemas/lender_identity.py"):
+    # The profile's lender pin rules import the record module (#298), which
+    # imports the branding rules.
+    for module in (
+        "__init__.py",
+        "schemas/__init__.py",
+        "schemas/lender_identity.py",
+        "schemas/lender_identity_record.py",
+        "schemas/lender_branding.py",
+    ):
         shutil.copy2(REPO / "backend" / module, repo / "backend" / module)
 
 
