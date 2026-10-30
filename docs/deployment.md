@@ -2590,8 +2590,18 @@ identity that holds no workspace admin.
 
 **Owner convergence.**
 
-* `mip_refresh_silver`, `mip_refresh_scores` and `mip_fred_rates_ingest` end
-  with `converge_governed_owner` (`run_if: ALL_DONE`).
+* `mip_refresh_silver`, `mip_refresh_scores` and `mip_fred_rates_ingest` run
+  `converge_governed_owner` after every refresh task, on `run_if: ALL_DONE`,
+  so a failed run still hands over what it created.
+* A run is judged by its leaf tasks. With the ALL_DONE handover as the only
+  leaf, a run whose refresh task failed would end `SUCCESS_WITH_FAILURES`,
+  and CLI v1.10.0 `bundle run` exits 0 for that state, so deploy.sh would
+  carry on past a failed refresh. Each of the three jobs therefore ends in
+  `assert_refresh_succeeded`: a compute-free condition task on
+  `run_if: ALL_SUCCESS` after the handover and every refresh leaf. Any failed
+  task leaves it `UPSTREAM_FAILED` and the run `FAILED`.
+  `tests/unit/test_job_run_outcome.py` fails each task of every bundle job in
+  turn and requires a `FAILED` run every time.
 * It hands every table, view and function that the run's own identity owns
   in the pinned catalog's governed schemas to the pinned group.
 * It never touches:

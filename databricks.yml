@@ -450,9 +450,9 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/ddl/silver_property_owners_primary_view.sql
-        # M2-PR5: the last task, on ALL_DONE so a failed run still hands over
-        # what it created. Objects the jobs identity owns in the governed
-        # schemas move to the pinned data-owner group; nothing else is touched.
+        # M2-PR5: on ALL_DONE so a failed run still hands over what it
+        # created. Objects the jobs identity owns in the governed schemas move
+        # to the pinned data-owner group; nothing else is touched.
         - task_key: converge_governed_owner
           description: "ALTER OWNER to the data-owner group: the jobs identity's own objects in the governed schemas only."
           run_if: ALL_DONE
@@ -463,6 +463,23 @@ resources:
             python_file: jobs/converge_governed_owner.py
             parameters:
               - "--catalog=${var.uc_catalog}"
+        # The run's verdict (M2-PR5). A run is judged by its leaf tasks, and an
+        # ALL_DONE converge_governed_owner as the only leaf would end a run
+        # whose refresh task failed SUCCESS_WITH_FAILURES, which `bundle run`
+        # exits 0 for. This compute-free condition task is the only leaf: on
+        # ALL_SUCCESS after the handover and every task it waits for, so any
+        # failed task leaves it UPSTREAM_FAILED and the run FAILED
+        # (tests/unit/test_job_run_outcome.py).
+        - task_key: assert_refresh_succeeded
+          description: "Fail the run unless every refresh task and the owner handover succeeded (no compute)."
+          run_if: ALL_SUCCESS
+          depends_on:
+            - task_key: converge_governed_owner
+            - task_key: init_property_owners_primary_view
+          condition_task:
+            op: EQUAL_TO
+            left: "succeeded"
+            right: "succeeded"
     # Slice13-accuracy: standalone ref-data seed job. Mirrors the two
     # tasks baked into mip_refresh_silver so analysts / ops can re-run
     # the lender-dictionary seed without kicking the full silver pipeline.
@@ -939,9 +956,9 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/metric_views/certified_borrower_opportunity_metric_view.sql
-        # M2-PR5: the last task, on ALL_DONE so a failed run still hands over
-        # what it created. Objects the jobs identity owns in the governed
-        # schemas move to the pinned data-owner group; nothing else is touched.
+        # M2-PR5: on ALL_DONE so a failed run still hands over what it
+        # created. Objects the jobs identity owns in the governed schemas move
+        # to the pinned data-owner group; nothing else is touched.
         - task_key: converge_governed_owner
           description: "ALTER OWNER to the data-owner group: the jobs identity's own objects in the governed schemas only."
           run_if: ALL_DONE
@@ -966,6 +983,37 @@ resources:
             python_file: jobs/converge_governed_owner.py
             parameters:
               - "--catalog=${var.uc_catalog}"
+        # The run's verdict (M2-PR5). A run is judged by its leaf tasks, and an
+        # ALL_DONE converge_governed_owner as the only leaf would end a run
+        # whose refresh task failed SUCCESS_WITH_FAILURES, which `bundle run`
+        # exits 0 for. This compute-free condition task is the only leaf: on
+        # ALL_SUCCESS after the handover and every task it waits for, so any
+        # failed task leaves it UPSTREAM_FAILED and the run FAILED
+        # (tests/unit/test_job_run_outcome.py).
+        - task_key: assert_refresh_succeeded
+          description: "Fail the run unless every refresh task and the owner handover succeeded (no compute)."
+          run_if: ALL_SUCCESS
+          depends_on:
+            - task_key: converge_governed_owner
+            - task_key: ctas_household_rollup
+            - task_key: ctas_lockin_cohort
+            - task_key: ctas_county_rollup
+            - task_key: ctas_zip_rollup
+            - task_key: ctas_equity_spread_points
+            - task_key: ctas_rate_window_weekly
+            - task_key: ctas_state_top_segment
+            - task_key: ctas_segment_combination_rollup
+            - task_key: ctas_rate_sensitivity_rollup
+            - task_key: ctas_rate_sensitivity_book
+            - task_key: ctas_address_lookup
+            - task_key: ctas_source_readiness
+            - task_key: refresh_certified_lead_metric_view
+            - task_key: refresh_certified_segment_metric_view
+            - task_key: refresh_certified_borrower_metric_view
+          condition_task:
+            op: EQUAL_TO
+            left: "succeeded"
+            right: "succeeded"
 
     # Durable repair sync of Lakebase approval + outreach state into
     # mip.gold.borrower_lifecycle_state. Metric views (segment_
@@ -1285,9 +1333,9 @@ resources:
               - "--table=${var.uc_catalog}.silver.market_rates_weekly"
           max_retries: 2
           retry_on_timeout: true
-        # M2-PR5: the last task, on ALL_DONE so a failed run still hands over
-        # what it created. Objects the jobs identity owns in the governed
-        # schemas move to the pinned data-owner group; nothing else is touched.
+        # M2-PR5: on ALL_DONE so a failed run still hands over what it
+        # created. Objects the jobs identity owns in the governed schemas move
+        # to the pinned data-owner group; nothing else is touched.
         - task_key: converge_governed_owner
           description: "ALTER OWNER to the data-owner group: the jobs identity's own objects in the governed schemas only."
           run_if: ALL_DONE
@@ -1298,6 +1346,23 @@ resources:
             python_file: jobs/converge_governed_owner.py
             parameters:
               - "--catalog=${var.uc_catalog}"
+        # The run's verdict (M2-PR5). A run is judged by its leaf tasks, and an
+        # ALL_DONE converge_governed_owner as the only leaf would end a run
+        # whose refresh task failed SUCCESS_WITH_FAILURES, which `bundle run`
+        # exits 0 for. This compute-free condition task is the only leaf: on
+        # ALL_SUCCESS after the handover and every task it waits for, so any
+        # failed task leaves it UPSTREAM_FAILED and the run FAILED
+        # (tests/unit/test_job_run_outcome.py).
+        - task_key: assert_refresh_succeeded
+          description: "Fail the run unless every refresh task and the owner handover succeeded (no compute)."
+          run_if: ALL_SUCCESS
+          depends_on:
+            - task_key: converge_governed_owner
+            - task_key: refresh_from_fred
+          condition_task:
+            op: EQUAL_TO
+            left: "succeeded"
+            right: "succeeded"
 
     # Weekly scheduled refresh (2026-10-26 data-freshness design). ONE schedule
     # chains the existing jobs in deploy.sh's order (FRED -> gold -> lifecycle

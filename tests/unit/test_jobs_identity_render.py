@@ -8,8 +8,9 @@ what M2-PR5 adds:
 
 * every ``run_as`` (the four App-triggerable jobs, mip_scheduled_refresh and
   the pipeline move to the jobs principal);
-* the ``converge_governed_owner`` task, and a job environment no remaining
-  task uses (the one that task runs in);
+* the ``converge_governed_owner`` task and the run's verdict after it
+  (``assert_refresh_succeeded``), and a job environment no remaining task
+  uses (the one the handover runs in);
 * ``mip_lakebase_migrate``'s ``--jobs-reader-client-id`` parameter (that
   job's digest is not pinned, see TOUCHED; the normalizer still strips it for
   the whole-bundle comparison below);
@@ -62,6 +63,7 @@ TOUCHED = (
 # tests/unit/test_lakebase_jobs_reader.py); its digest is not pinned here, so a
 # parallel change to that task's other parameters does not collide with this one.
 OWNER_TASK = "converge_governed_owner"
+ADDED_TASKS = frozenset({OWNER_TASK, "assert_refresh_succeeded"})
 JOB_ENTRYPOINTS = {"jobs/sync_lifecycle_state_job.py": "jobs/sync_lifecycle_state.py"}
 JOBS_READER_PARAMETER = re.compile(r"--jobs-reader-client-id=")
 _VARIABLE = re.compile(r"\$\{var\.([a-z_]+)\}")
@@ -117,7 +119,7 @@ def normalized(resource: dict[str, Any]) -> dict[str, Any]:
 
     value = copy.deepcopy(resource)
     value.pop("run_as", None)
-    tasks = [task for task in value.get("tasks", []) if task.get("task_key") != OWNER_TASK]
+    tasks = [task for task in value.get("tasks", []) if task.get("task_key") not in ADDED_TASKS]
     for task in tasks:
         python = task.get("spark_python_task")
         if python:
@@ -175,6 +177,10 @@ def test_the_normalizer_removes_only_what_m2_pr5_adds() -> None:
         "jobs.mip_fred_rates_ingest",
     }
     assert all(len(tasks) <= 1 for tasks in owner_tasks.values())
+    # The verdict leaf rides with the handover, in exactly the same jobs.
+    for key in owner_tasks:
+        added = sorted(t["task_key"] for t in resolved[key]["tasks"] if t["task_key"] in ADDED_TASKS)
+        assert added == (sorted(ADDED_TASKS) if owner_tasks[key] else []), key
     migrate = resolved["jobs.mip_lakebase_migrate"]
     assert migrate["run_as"] == {"service_principal_name": deployer}
     parameters = migrate["tasks"][0]["spark_python_task"]["parameters"]

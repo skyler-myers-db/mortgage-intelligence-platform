@@ -13,8 +13,8 @@ the deployer and others:
 * a row outside the governed schemas or an unreviewed table type refuses
   before any ALTER; an overridden ``--catalog`` refuses before any SQL;
 * :data:`GOVERNED_SCHEMAS` is tools/render_sql.py's governed set, and the task
-  is the last one, on ALL_DONE, in exactly the jobs that create or replace
-  objects.
+  runs after every refresh task, on ALL_DONE, in exactly the jobs that create
+  or replace objects, followed only by the run's ALL_SUCCESS verdict.
 """
 
 from __future__ import annotations
@@ -210,11 +210,17 @@ def test_the_task_ends_exactly_the_jobs_that_create_or_replace_objects() -> None
         job = JOBS[key]
         assert job["run_as"] == {"service_principal_name": "${var.jobs_principal}"}, key
         task = next(t for t in job["tasks"] if t["task_key"] == "converge_governed_owner")
-        others = [t["task_key"] for t in job["tasks"] if t is not task]
-        depended = {d["task_key"] for t in job["tasks"] if t is not task for d in t.get("depends_on", [])}
-        leaves = {k for k in others if k not in depended}
-        assert {d["task_key"] for d in task["depends_on"]} == leaves, f"{key}: the last task"
+        verdict = next(t for t in job["tasks"] if t["task_key"] == "assert_refresh_succeeded")
+        refresh = [t for t in job["tasks"] if t is not task and t is not verdict]
+        depended = {d["task_key"] for t in refresh for d in t.get("depends_on", [])}
+        leaves = {t["task_key"] for t in refresh if t["task_key"] not in depended}
+        assert {d["task_key"] for d in task["depends_on"]} == leaves, f"{key}: after every refresh task"
         assert task["run_if"] == "ALL_DONE", key
+        # The run's verdict waits for the handover and for every refresh leaf,
+        # on ALL_SUCCESS, so a failed task still fails the run
+        # (tests/unit/test_job_run_outcome.py).
+        assert {d["task_key"] for d in verdict["depends_on"]} == leaves | {task["task_key"]}, key
+        assert verdict["run_if"] == "ALL_SUCCESS", key
         assert task["spark_python_task"] == {
             "python_file": "jobs/converge_governed_owner.py",
             "parameters": ["--catalog=${var.uc_catalog}"],
