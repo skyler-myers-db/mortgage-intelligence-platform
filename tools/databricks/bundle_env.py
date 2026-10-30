@@ -424,6 +424,9 @@ def main() -> int:
             # reviewed shell export, but make the documented one-.env.local
             # path work when no shell value exists. Alias agreement and target
             # safety are validated below before the CLI can mutate anything.
+            # The pinned lender record and its pin are controls too: the
+            # preflight and the App payload take a shell record first, so a
+            # dotenv one must never replace it here.
             if k in {
                 "MIP_DEFAULT_CATALOG",
                 "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS",
@@ -431,6 +434,7 @@ def main() -> int:
                 "MIP_LENDER_NAME",
                 "MIP_LENDER_NMLS_ID",
                 "MIP_TENANT_ID",
+                *PINNED_ENV_NAMES,
                 "MIP_AI_GATEWAY_VERIFIER_CLIENT_ID",
                 "LAKEBASE_INSTANCE_NAME",
                 "MIP_LAKEBASE_INSTANCE",
