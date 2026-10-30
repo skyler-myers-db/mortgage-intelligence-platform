@@ -392,8 +392,6 @@ CUTOVER_JOURNAL_ENV_FILE=""
 APP_DEPLOYMENT_LEASE_ENV=""
 APP_LEASE_RECOVERY_ENV=""
 OAUTH_CREDENTIAL_QUARANTINE_FILE=""
-FOREIGN_CATALOG_BINDING_DIR=""
-FOREIGN_CATALOG_REMEDIATION_COMPLETE=0
 APP_RESOURCE_BINDING_SUMMARY=""
 APP_RESOURCE_BINDING_PAYLOAD=""
 APP_RESOURCE_BINDING_BEFORE=""
@@ -511,6 +509,23 @@ trap restore_rendered_sql_fail_closed EXIT
 
 # shellcheck source=scripts/lib/deploy_bundle_plan_gate_lifecycle.sh
 . "$REPO_ROOT/scripts/lib/deploy_bundle_plan_gate_lifecycle.sh"
+
+# >>> foreign-catalog remediation refused >>>
+# The foreign-catalog binding remediation rewrote the isolation mode and
+# workspace bindings of other teams' catalogs on the shared metastore, and
+# stopped the App to do it. Its stop branches are gone (M0-PR5) and its tool
+# leaves with M4-PR2, so a request for it, from the environment or from
+# .env.local, refuses here: before any Databricks call, in a dry run too, with
+# the App untouched. The deploy-dev workflow passes the literal 0.
+_REMEDIATE_FOREIGN_CATALOG_BINDINGS="$(
+  deployment_control_value MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS 0
+)"
+if [[ "$_REMEDIATE_FOREIGN_CATALOG_BINDINGS" != "0" ]]; then
+  echo "${RED}[deploy] MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS is refused: the foreign-catalog binding remediation rewrites other teams' metastore-level catalog state and is retired (docs/security/GRANTS.md); unset it. Nothing was changed.${RST}" >&2
+  exit 2
+fi
+unset _REMEDIATE_FOREIGN_CATALOG_BINDINGS
+# <<< foreign-catalog remediation refused <<<
 
 # Deploy step files: the orchestration below is sliced verbatim, in reviewed
 # order, into scripts/lib/deploy_step_*.sh. Each step file is sourced into this
