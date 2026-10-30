@@ -169,6 +169,63 @@ that proof fails, deployment also attempts treatment-write quiescence and exits
 with a dedicated compensation failure instead of reporting the original step
 as the complete failure state.
 
+Treatment grants converge by diff, not by `REVOKE ALL PRIVILEGES` followed by
+`GRANT`. For the catalog, the audit schema and the treatment table, the
+converger reads the App principal's own direct grants. It first revokes, table
+first, then schema, then catalog, only what the reviewed set does not contain,
+and only then grants what the reviewed set lacks. A reviewed privilege the App
+already holds is never revoked, so an already-converged boundary is re-proven
+with zero statements and a quiesce-to-runtime switch is one `GRANT MODIFY`.
+Assignments for any other principal are skipped and never revoked.
+
+Revoking first matters because Unity Catalog applies `MODIFY` granted on a
+catalog or schema to every table below it: a `USE CATALOG` or `USE SCHEMA`
+grant issued while a parent `MODIFY` remained would complete a write path.
+For the same reason, in runtime mode, when a parent grant is needed the
+table `MODIFY` the App already holds is held back and re-granted only after
+the parent boundary is proven. So quiesce never opens a treatment write path,
+runtime opens one only at that proven table grant, and a run that fails at any
+statement never ends with a write path it did not start with. The revoke-all
+converger never opened one early either; the golden tests check that rule on
+both convergers from every start state.
+
+Direct `MANAGE`, `READ METADATA`, `EXTERNAL USE LOCATION` and
+`EXTERNAL USE SCHEMA` are outside `ALL PRIVILEGES`, so the revoke-all
+converger never removed them and its exact postflight refused; the diff
+converger leaves them and refuses the same way. A direct `ALL PRIVILEGES` grant
+is the one drift state that still revokes before it re-grants, because
+revoking it also removes the privileges it implies. A runtime failure at any
+stage still ends with no treatment write path, or says that compensating
+quiescence could not be proven.
+
+Every App-touching converger also has a read-only mode that reads what the
+converger reads and prints a symbolic diff (objects named by role, tables and
+unreviewed identities counted, no host, catalog, principal or resource
+value). Each exits 0 when the live state is exact and 3 on drift
+(`tools/databricks/check_exit_codes.py`). A probe that cannot decide, for
+example on an authorization or network failure, raises and exits 1, and a
+usage error exits 2, so a failed probe never reads as drift:
+
+- `converge_campaign_treatment_access --check --mode quiesce|runtime`: direct
+  and effective grants against the reviewed set; no SQL statement and no
+  warehouse. An absent governed catalog is not drift, because convergence
+  then returns without a statement. The approved-owner policy is not
+  evaluated, because its group-exclusion proof mints a credential for the App
+  identity.
+- `ensure_campaign_treatment_table --check`: one `SHOW TBLPROPERTIES`; no
+  `ALTER`.
+- `converge_app_lakebase_sync_access --check --mode quiesce|runtime`: the
+  converger's own `information_schema` audit, reporting every violation
+  instead of the first; SELECT only.
+- `converge_lakebase_oauth_role --check`: the role, label, relationship, ACL,
+  bootstrap-residue and public-schema reads in a read-only session, valid
+  while the App serves; it never stops the App or takes the bootstrap lock.
+- `app_resource_bindings diff --expected <payload> --live <apps get json>`:
+  empty exactly when the post-update binding verifier would pass.
+
+Nothing invokes them yet; the keep-serving release wires them into its
+pre-stop probes.
+
 ---
 
 ## 1. Catalog `mip`

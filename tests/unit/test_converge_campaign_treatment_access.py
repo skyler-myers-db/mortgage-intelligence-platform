@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -173,19 +174,39 @@ def converge_campaign_treatment_access(**kwargs: object) -> bool:
     return _converge_campaign_treatment_access(**kwargs)  # type: ignore[arg-type]
 
 
+_GRANT_STATEMENT_RE = re.compile(
+    r"^(?P<verb>GRANT|REVOKE) (?P<privileges>.+) ON (?P<kind>CATALOG|SCHEMA|TABLE) "
+    r"\S+ (?:TO|FROM) `app-client`$"
+)
+
+
 class _StatementExecution:
+    """Apply the App principal's GRANT/REVOKE statements to a direct-grant store."""
+
     def __init__(self) -> None:
-        self.table_actions: list[str] = []
+        self.direct: dict[str, set[str]] = {"catalog": set(), "schema": set(), "table": set()}
         self.statements: list[str] = []
+
+    @property
+    def table_actions(self) -> list[str]:
+        return [name for name in ("SELECT", "MODIFY") if name in self.direct["table"]]
+
+    @table_actions.setter
+    def table_actions(self, actions: list[str]) -> None:
+        self.direct["table"] = set(actions)
 
     def execute_statement(self, *, statement: str, **_: object) -> object:
         self.statements.append(statement)
-        if statement.startswith("REVOKE ALL PRIVILEGES ON TABLE"):
-            self.table_actions = []
-        if statement.startswith("GRANT SELECT, MODIFY ON TABLE"):
-            self.table_actions = ["SELECT", "MODIFY"]
-        elif statement.startswith("GRANT SELECT ON TABLE"):
-            self.table_actions = ["SELECT"]
+        match = _GRANT_STATEMENT_RE.fullmatch(statement)
+        assert match is not None, statement
+        held = self.direct[match["kind"].lower()]
+        names = {name.strip().replace(" ", "_") for name in match["privileges"].split(",")}
+        if match["verb"] == "GRANT":
+            held.update(names)
+        elif "ALL_PRIVILEGES" in names:
+            held.clear()
+        else:
+            held.difference_update(names)
         return SimpleNamespace(
             status=SimpleNamespace(state="SUCCEEDED", error=None),
             result=SimpleNamespace(data_array=[]),
@@ -206,6 +227,7 @@ class _Grants:
         self.table_extra_calls = table_extra_calls
         self.metastore_forbidden = metastore_forbidden
         self.calls: list[tuple[str, str, str | None]] = []
+        self.direct_calls: list[tuple[str, str]] = []
 
     @staticmethod
     def _response(privileges: set[str], *, next_page_token: str = "") -> object:
@@ -216,6 +238,27 @@ class _Grants:
         return SimpleNamespace(
             privilege_assignments=[SimpleNamespace(privileges=entries)],
             next_page_token=next_page_token,
+        )
+
+    def get(
+        self,
+        securable_type: str,
+        full_name: str,
+        *,
+        principal: str | None = None,
+        page_token: str | None = None,
+        max_results: int | None = None,
+    ) -> object:
+        assert max_results == 0 and page_token is None
+        assert principal == "app-client"
+        self.direct_calls.append((securable_type, full_name))
+        entries = [
+            SimpleNamespace(value=privilege)
+            for privilege in sorted(self.execution.direct[securable_type])
+        ]
+        return SimpleNamespace(
+            privilege_assignments=[SimpleNamespace(principal="app-client", privileges=entries)],
+            next_page_token="",
         )
 
     def get_effective(
@@ -235,13 +278,13 @@ class _Grants:
                 privileges.add("CREATE_CATALOG")
             return self._response(privileges)
         if securable_type == "catalog":
-            privileges = {"USE_CATALOG"}
+            privileges = set(self.execution.direct["catalog"])
         elif securable_type == "schema":
-            privileges = {"USE_SCHEMA"}
+            privileges = set(self.execution.direct["schema"])
             if self.parent_forbidden:
                 privileges.add("SELECT")
         elif securable_type == "table":
-            privileges = set(self.execution.table_actions)
+            privileges = set(self.execution.direct["table"])
             if self.table_extra_calls:
                 self.table_extra_calls -= 1
                 privileges.add("MANAGE")
@@ -1387,7 +1430,11 @@ def test_quiesce_handles_table_appearing_between_presence_reads() -> None:
 
     assert appearing.calls >= 3
     assert execution.table_actions == ["SELECT"]
-    assert any("REVOKE ALL PRIVILEGES ON TABLE" in sql for sql in execution.statements)
+    # Diff convergence revokes only the unreviewed write privilege; the reviewed
+    # SELECT the App already held is never revoked and re-granted.
+    assert any(sql.startswith("REVOKE MODIFY ON TABLE") for sql in execution.statements)
+    assert not any("ALL PRIVILEGES" in sql for sql in execution.statements)
+    assert not any(sql.startswith("GRANT SELECT ON TABLE") for sql in execution.statements)
     assert ("table", "mip.audit.campaign_treatment_snapshot", None) in grants.calls
 
 

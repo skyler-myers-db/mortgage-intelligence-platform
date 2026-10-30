@@ -9,4 +9,7 @@ as GitHub Environment variables (public fields) and secrets (identifying and
 secret fields), and locally in ``.env.local``.
 
 Nothing in ``scripts/deploy.sh`` reads a profile yet; later slices wire it in.
+
+``bootstrap_account`` is the human-run account bootstrap that creates or
+adopts a client's identities before its first deploy (docs/clients/bootstrap.md).
 """

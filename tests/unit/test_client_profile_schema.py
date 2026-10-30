@@ -20,7 +20,7 @@ from tests.fixtures.client_profiles import (
 from tools.clients import profile as views
 from tools.clients.environment import RawProfile, from_github, from_local, resolve
 from tools.clients.errors import ProfileRefusal
-from tools.clients.json_fields import IdentityIds
+from tools.clients.json_fields import IdentityIds, IdentityPins
 from tools.clients.schema import (
     FIELD_CLASS,
     IDENTITY_ALIASES,
@@ -78,6 +78,20 @@ def test_the_json_class_map_names_every_json_field_and_identity_role() -> None:
     assert set(JSON_LEAF_CLASS) == json_fields
     assert set(JSON_LEAF_CLASS["MIP_IDENTITY_IDS_JSON"]) == set(IdentityIds.model_fields)
     assert set(IDENTITY_ALIASES.values()) <= set(IdentityIds.model_fields)
+
+
+def test_identity_pins_take_the_same_roles_each_optional() -> None:
+    """The account bootstrap's partial MIP_IDENTITY_IDS_JSON: same roles and rules."""
+
+    assert set(IdentityPins.model_fields) == set(IdentityIds.model_fields)
+    assert IdentityPins().by_role() == {}
+    assert IdentityPins.model_validate(IDENTITY_IDS).by_role() == IDENTITY_IDS
+    with pytest.raises(ValueError, match="deployer and jobs must be distinct identities"):
+        IdentityPins(deployer=IDENTITY_IDS["deployer"], jobs=IDENTITY_IDS["deployer"])
+    with pytest.raises(ValueError, match="a service-principal application id"):
+        IdentityPins(deployer="not-a-uuid")
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        IdentityPins.model_validate({"deployer": IDENTITY_IDS["deployer"], "someone": IDENTITY_IDS["jobs"]})
 
 
 def _template_values() -> dict[str, str]:

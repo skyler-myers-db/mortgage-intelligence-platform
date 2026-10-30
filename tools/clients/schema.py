@@ -242,7 +242,10 @@ _SCALAR_SHAPES: dict[str, tuple[re.Pattern[str], str]] = {
     "ai_gateway_experiment_base": (DNS_NAME, "a lowercase DNS-style name"),
     "cotality_source_catalog": (UC_IDENTIFIER, "a lowercase unquoted identifier"),
     "cotality_source_schema": (UC_IDENTIFIER, "a lowercase unquoted identifier"),
-    "cotality_source_table_prefix": (TABLE_PREFIX, "at most 64 lowercase letters, digits or '_'"),
+    "cotality_source_table_prefix": (
+        TABLE_PREFIX,
+        "1 to 64 lowercase letters, digits or '_', or '-' for no prefix",
+    ),
     "lender_identity_sha256": (re.compile(r"[0-9a-f]{64}"), "64 lowercase hex characters"),
     "expect_workspace_id": (WORKSPACE_ID, "a decimal workspace id"),
     "expect_metastore_id": (UUID, "a metastore id (UUID)"),

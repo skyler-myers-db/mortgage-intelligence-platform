@@ -95,6 +95,20 @@ def _distinct_subset(
     return values
 
 
+def _application_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return require(value, UUID, expected="a service-principal application id (UUID)")
+
+
+def _assert_distinct(by_role: dict[str, str]) -> None:
+    seen: dict[str, str] = {}
+    for role, value in by_role.items():
+        other = seen.setdefault(value.casefold(), role)
+        if other != role:
+            raise ValueError(f"{other} and {role} must be distinct identities")
+
+
 class IdentityIds(StrictModel):
     """The install's service-principal application ids, by role (plan §4.3).
 
@@ -117,21 +131,56 @@ class IdentityIds(StrictModel):
     @field_validator("*")
     @classmethod
     def _application_id(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return require(value, UUID, expected="a service-principal application id (UUID)")
+        return _application_id(value)
 
     @model_validator(mode="after")
     def _pairwise_distinct(self) -> IdentityIds:
-        seen: dict[str, str] = {}
-        for role, value in self.by_role().items():
-            other = seen.setdefault(value.casefold(), role)
-            if other != role:
-                raise ValueError(f"{other} and {role} must be distinct identities")
+        _assert_distinct(self.by_role())
         return self
 
     def by_role(self) -> dict[str, str]:
         """Every configured role and its application id, in declaration order."""
+
+        return {
+            role: value
+            for role, value in self.model_dump().items()
+            if isinstance(value, str)
+        }
+
+
+class IdentityPins(StrictModel):
+    """``MIP_IDENTITY_IDS_JSON`` before every identity exists: each role optional.
+
+    The account bootstrap (tools/clients/bootstrap_account.py) reads the
+    roles it already pinned from here, creates the rest, and hands the grown
+    map to the credential sink. Same roles, shape and distinctness rule as
+    ``IdentityIds``; the full profile still requires every core role.
+    """
+
+    deployer: str | None = None
+    jobs: str | None = None
+    validator: str | None = None
+    normal: str | None = None
+    operator2: str | None = None
+    admin: str | None = None
+    release_probe: str | None = None
+    verifier: str | None = None
+    runtime: str | None = None
+    proxy: str | None = None
+    account_principal: str | None = None
+
+    @field_validator("*")
+    @classmethod
+    def _application_id(cls, value: str | None) -> str | None:
+        return _application_id(value)
+
+    @model_validator(mode="after")
+    def _pairwise_distinct(self) -> IdentityPins:
+        _assert_distinct(self.by_role())
+        return self
+
+    def by_role(self) -> dict[str, str]:
+        """Every pinned role and its application id, in declaration order."""
 
         return {
             role: value

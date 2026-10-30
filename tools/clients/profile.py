@@ -42,6 +42,13 @@ _ORIGIN_FIELDS = frozenset({"DATABRICKS_HOST", "DATABRICKS_ACCOUNT_HOST"})
 # (deploy-dev.yml and deploy_step_automation_identities.sh today).
 _APPROVER_ROLES = ("normal", "operator2")
 _ADMIN_ROLES = ("admin", "release_probe")
+# The Cotality source fields, each named as the databricks.yml variable it sets
+# (the feature pipeline's configuration reads those variables).
+_COTALITY_SOURCE_VARIABLES = (
+    "cotality_source_catalog",
+    "cotality_source_schema",
+    "cotality_source_table_prefix",
+)
 # A mask this short blanks fragments of ordinary words (``qa`` in ``aqua``).
 MIN_MASK_LENGTH = 3
 # The words refusal lines and exposure decisions are made of: the schema
@@ -147,6 +154,12 @@ def bundle_vars(profile: ClientProfile) -> dict[str, str]:
         variables["tenant_id"] = lender["MIP_TENANT_ID"]
         variables["lender_identity_json"] = lender["MIP_LENDER_IDENTITY_JSON"]
         variables["lender_identity_sha256"] = lender.get("MIP_LENDER_IDENTITY_SHA256", "")
+    # The Cotality source names, when set; an unset one keeps the variable's
+    # canonical default (backend/config/source_names.py).
+    for variable in _COTALITY_SOURCE_VARIABLES:
+        value = getattr(profile, variable)
+        if value is not None:
+            variables[variable] = value
     if profile.identity_ids.verifier is not None:
         variables["ai_gateway_verifier_client_id"] = profile.identity_ids.verifier
     return variables

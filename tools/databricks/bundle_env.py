@@ -24,6 +24,10 @@ Mapping (env -> BUNDLE_VAR_*):
   MIP_LAKEBASE_SYNC_CATALOG -> BUNDLE_VAR_lakebase_catalog_name
   LAKEBASE_DATABASE       -> BUNDLE_VAR_lakebase_database_name
   MIP_RUNTIME_SECRET_SCOPE -> BUNDLE_VAR_runtime_secret_scope
+  MIP_COTALITY_SOURCE_CATALOG / _SCHEMA / _TABLE_PREFIX
+                          -> BUNDLE_VAR_cotality_source_catalog / _schema /
+                             _table_prefix (canonical when unset; '-' is no
+                             table prefix; the same names render sql/_rendered)
   (dev live install only) -> scheduled_refresh_failure_recipients, written to
                              .databricks/bundle/<target>/variable-overrides.json
                              (tools/databricks/scheduled_refresh_posture.py)
@@ -59,6 +63,7 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from backend.config import source_names  # noqa: E402
 from backend.schemas.lender_identity_record import (  # noqa: E402
     LEGACY_ENV_NAMES,
     LENDER_IDENTITY_JSON_ENV,
@@ -434,6 +439,7 @@ def main() -> int:
                 "MIP_LAKEBASE_SYNC_CATALOG",
                 "MIP_GENIE_SPACE_NAME",
                 "MIP_RUNTIME_SECRET_SCOPE",
+                *source_names.ENV_NAMES,
             }:
                 if str(env.get(k) or "").strip():
                     continue
@@ -584,6 +590,18 @@ def main() -> int:
         )
         return 2
     env["BUNDLE_VAR_uc_catalog"] = catalog
+    # The Cotality source share: one resolution renders the SQL and sets the
+    # variables the feature pipeline's configuration reads.
+    try:
+        cotality = source_names.from_env(env)
+    except ValueError as exc:
+        print(f"[bundle_env] {exc}", file=sys.stderr)
+        return 2
+    env["BUNDLE_VAR_cotality_source_catalog"] = cotality.catalog
+    env["BUNDLE_VAR_cotality_source_schema"] = cotality.schema
+    # The setting's spelling: "-" for a share with no table prefix, since an
+    # empty bundle variable would not read as one.
+    env["BUNDLE_VAR_cotality_source_table_prefix"] = cotality.table_prefix_setting
     try:
         demo_first_party_enabled = render_sql._parse_bool(
             _demo_first_party_flag_for_target(env, target=target),
@@ -610,9 +628,10 @@ def main() -> int:
         processed, written, subs = render_sql.render(
             catalog=catalog,
             demo_first_party_enabled=demo_first_party_enabled,
+            cotality=cotality,
             lender=lender,
         )
-    except render_sql.TenantRowsUnmatched as exc:
+    except (render_sql.CanonicalSourceLeft, render_sql.TenantRowsUnmatched) as exc:
         print(f"[bundle_env] {exc}", file=sys.stderr)
         return 2
 
@@ -636,7 +655,7 @@ def main() -> int:
     print(
         "[bundle_env] "
         f"render_sql catalog={catalog} processed={processed} written={written} "
-        f"substitutions={subs} "
+        f"substitutions={subs} cotality_source={cotality.describe()} "
         f"demo_first_party_feeds={'enabled' if demo_first_party_enabled else 'disabled'}",
         file=sys.stderr,
     )
@@ -644,7 +663,12 @@ def main() -> int:
     cli = ["databricks", "bundle", subcmd, *rest]
     result = subprocess.run(cli, env=env, check=False)
     if demo_first_party_enabled:
-        render_sql.render(catalog=catalog, demo_first_party_enabled=False, lender=lender)
+        render_sql.render(
+            catalog=catalog,
+            demo_first_party_enabled=False,
+            cotality=cotality,
+            lender=lender,
+        )
         print(
             "[bundle_env] restored sql/_rendered with "
             "demo_first_party_feeds=disabled after CLI exit",
