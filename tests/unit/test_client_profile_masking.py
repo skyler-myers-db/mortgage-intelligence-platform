@@ -13,7 +13,13 @@ import json
 
 import pytest
 
-from tests.fixtures.client_profiles import EXPOSURE, LENDER_IDENTITY, customer_profile, demo_profile
+from tests.fixtures.client_profiles import (
+    EXPOSURE,
+    LENDER_IDENTITY,
+    LENDER_MARK,
+    customer_profile,
+    demo_profile,
+)
 from tools.clients import profile as views
 from tools.clients import schema
 from tools.clients.environment import RawProfile, resolve
@@ -66,7 +72,7 @@ def test_every_identifying_leaf_is_masked_and_nothing_else(build) -> None:
 def test_every_json_leaf_path_has_a_class() -> None:
     samples = {
         "MIP_IDENTITY_IDS_JSON": json.loads(demo_profile()["MIP_IDENTITY_IDS_JSON"]),
-        "MIP_LENDER_IDENTITY_JSON": LENDER_IDENTITY,
+        "MIP_LENDER_IDENTITY_JSON": {**LENDER_IDENTITY, "mark": LENDER_MARK},
         "MIP_ACCEPTED_EXPOSURE_JSON": EXPOSURE,
     }
     for name, sample in samples.items():

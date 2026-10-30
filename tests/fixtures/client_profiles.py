@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 
+from backend.schemas.lender_identity_record import lender_identity_digest
 from tools.clients.schema import FIELD_CLASS, FieldClass
 
 
@@ -38,6 +39,18 @@ LENDER_IDENTITY = {
     "reviewed_by": "reviewer@lender.example",
     "reviewed_at": "2026-10-01",
 }
+# The optional co-branding mark a record may carry (its facts, never the image).
+LENDER_MARK = {
+    "sha256": "ab" * 32,
+    "media_type": "image/png",
+    "width": 64,
+    "height": 32,
+    "authorization_ref": "BRAND-AUTH/2026-0042",
+    "reviewed_on": "2026-09-30",
+}
+# The record's reviewed pin, computed (a committed 64-hex literal would only
+# restate it).
+LENDER_IDENTITY_SHA256 = lender_identity_digest(json.dumps(LENDER_IDENTITY))
 EXPOSURE = [
     {
         "kind": "workspace_permission",
@@ -163,6 +176,7 @@ def customer_profile(**overrides: str | None) -> dict[str, str]:
         "MIP_INSTALL_CLASS": "customer",
         "MIP_APP_ENV": "prod",
         "MIP_LENDER_IDENTITY_JSON": json.dumps(LENDER_IDENTITY),
+        "MIP_LENDER_IDENTITY_SHA256": LENDER_IDENTITY_SHA256,
     }
     return _apply(_apply(DEMO_PROFILE, customer), overrides)
 
