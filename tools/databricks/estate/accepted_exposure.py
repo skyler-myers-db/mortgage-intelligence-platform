@@ -1,50 +1,30 @@
 """Identity-scoped, exact accepted exposure with a privilege ceiling (plan 4.12, M2-PR4).
 
-A client install shares its workspace and metastore with other teams, and
-some of their objects reach this install's identities: ``users`` holds
-``CAN_MANAGE`` on every space under ``/Workspace/Shared`` by default, and a
-foreign catalog may grant ``account users`` ``SELECT``. The global audits
-refuse every such grant. Under the no-revoke ruling the owner cannot always
-remove one, so the client profile may accept it, exactly, in
-``MIP_ACCEPTED_EXPOSURE_JSON`` (``tools.clients.json_fields.ExposureEntry``).
+Other teams' grants on a shared workspace and metastore can reach this
+install's identities (``users`` ``CAN_MANAGE`` under ``/Workspace/Shared``,
+``account users`` ``SELECT`` on a foreign catalog), and the no-revoke ruling
+leaves some in place. The client profile may accept one, exactly, in
+``MIP_ACCEPTED_EXPOSURE_JSON`` (``tools.clients.json_fields.ExposureEntry``);
+docs/deployment.md, "Accepted shared-estate exposure", is the operator view.
 
-**Exact tuple.** An entry accepts one observed exposure only when every field
-is equal: kind; securable type, id and full name (or title); grantee; the
-exact privilege set; source (``direct`` or ``inherited:<path>``); binding
-(isolation mode and bound workspace ids). A broader, narrower, renamed,
-re-parented or re-bound exposure is a different tuple and refuses. A UC
-catalog or registered model has no immutable id in the API, so its id is its
-full name. A workspace object (a Genie space) lives in exactly one workspace,
-so its binding is ``ISOLATED`` to that one workspace id.
+* **Exact tuple.** kind; securable type, id and name (a catalog's or model's id
+  is its full name; a Genie space is ``ISOLATED`` to its one workspace id);
+  grantee; exact privilege set; source; binding. Any other tuple refuses.
+* **Ceiling.** Read is Genie ``CAN_VIEW``/``CAN_RUN`` and UC ``BROWSE``,
+  ``USE_CATALOG``, ``USE_SCHEMA``, ``SELECT``; the rest is elevated, and
+  ``privilege_class`` must say so. Elevated is refused for ``runtime`` and
+  ``proxy``, and accepted for ``app`` alone, for at most 30 days, while
+  ``genie_single_space`` holds. Entries naming the verifier or the governed
+  space refuse; an expired entry parses and never matches.
+* **Matching.** One matcher per identity (``app``, ``runtime``, ``proxy``),
+  handed to that identity's pre-stop probe and post-stop audits, which build
+  the observed tuples the same way. The verifier has none.
+* **Plan digest.** The owner attestation is deferred, so a non-empty policy is
+  pinned by an exact digest ack: ``MIP_ACK_ACCEPTED_EXPOSURE_PLAN`` must equal
+  the canonical plan's sha256, recomputed by every consumer right before it
+  judges. An empty policy needs no ack and accepts nothing, as before.
 
-**Ceiling.** The read class is Genie ``CAN_VIEW``/``CAN_RUN`` and Unity
-Catalog ``BROWSE``/``USE_CATALOG``/``USE_SCHEMA``/``SELECT``; everything else,
-ownership included, is elevated. An entry's ``privilege_class`` must equal the
-class its privileges compute to, so an elevated grant is never accepted
-implicitly. Elevated is refused for ``runtime`` and ``proxy``: the object's
-owner must narrow the grant, or the agentic tier stays off. It is accepted for
-``app`` alone, explicitly, for at most 30 days, and only while the static
-control holds (``genie_single_space``: every backend Genie API call goes
-through the one client bound to the pinned governed space). An entry naming
-the verifier, or the governed Genie space, is refused.
-
-**Matching.** ``ExposurePolicy.matcher(identity)`` returns the one matcher of
-``app``, ``runtime`` or ``proxy``; the verifier has none, so its
-``--forbid-all-genie`` audit stays absolute. Each identity's matcher is handed
-to its pre-stop probe and to its post-stop audits, which build the observed
-tuples with the same functions, so both refuse the same exposures. An entry
-past ``expires_at`` still parses and never matches.
-
-**Plan digest.** The owner attestation is deferred (single_maintainer_audited
-review mode), so the entries are pinned by an exact digest ack instead: the
-sha256 of the canonical plan below. A run that judges a non-empty policy needs
-``MIP_ACK_ACCEPTED_EXPOSURE_PLAN`` set to that digest for that run only, and
-every consumer recomputes the plan from the profile immediately before it
-judges an exposure, so a changed entry refuses until it is acknowledged again.
-An empty policy needs no ack and accepts nothing: the audits behave as before.
-
-Refusal lines name entry indexes, fields and rules, never a value: a refusal
-reaches public CI logs, and every identifying leaf of an entry is masked.
+Refusal lines name entry indexes, fields and rules, never a value.
 """
 
 from __future__ import annotations
@@ -455,12 +435,14 @@ def load_policy(
     static_control: Callable[[], Sequence[str]] | None = None,
     verifier_application_ids: Iterable[str] = (),
     governed_space_ids: Iterable[str] = (),
+    require_ack: bool = True,
 ) -> ExposurePolicy:
     """Recompute the policy from ``MIP_ACCEPTED_EXPOSURE_JSON`` and check its ack.
 
     ``ack`` defaults to ``MIP_ACK_ACCEPTED_EXPOSURE_PLAN``. The governed space
     name (``MIP_GENIE_SPACE_NAME``) and the verifier ids the deploy exports
-    join whatever the caller names.
+    join whatever the caller names. Only the read-only plan view passes
+    ``require_ack=False``; a policy loaded that way is never handed to an audit.
     """
 
     env = os.environ if environ is None else environ
@@ -477,7 +459,7 @@ def load_policy(
         governed_space_ids=governed_space_ids,
         governed_space_names=[env.get(GOVERNED_SPACE_NAME_ENV, "")],
     )
-    if policy.entries:
+    if policy.entries and require_ack:
         acknowledged = (env.get(ACK_ENV, "") if ack is None else ack).strip()
         if acknowledged != policy.digest:
             raise ExposureRefusal(
