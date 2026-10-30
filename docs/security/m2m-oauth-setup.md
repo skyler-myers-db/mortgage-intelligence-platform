@@ -208,6 +208,7 @@ Flags of note:
 | client ID/secret sink flags | role-owned names                            | Optional assertions only; custom or cross-role GitHub secret destinations are rejected.            |
 | `--app-name`            | resolved from `databricks.yml`                   | Deployed App to grant on.                                                                         |
 | `--gh-repo`             | inferred from `git remote get-url origin`        | Must match the detected origin or `MIP_M2M_GITHUB_REPOSITORY`; a different secret sink is rejected before SDK calls or minting. |
+| `--gh-env`              | none                                             | The client's GitHub Environment that receives the role's secrets. Required with `--set-gh-secrets`; a repository-level sink and `<client>-validate` are refused, and the environment must exist with its review mode's protections, before SDK calls or minting. `--no-mint-secret` needs none. |
 | `--set-gh-secrets`      | off (explicit opt-in)                            | Required for minting and upload; the tool never prints or stores the one-shot client secret.       |
 | `--rotate`              | off                                              | If the SP exists, mint a fresh secret. Deployment revokes every non-active agent-proxy credential only after green cutover and blue retirement. |
 | `--grant-can-use` / `--no-grant-can-use` | role-specific | Control persistent App grants for both operator identities and the admin identity. Release-probe, verifier, agent-runtime, and agent-proxy roles always forbid persistent App `CAN_USE` and reject `--grant-can-use`, including under `--dry-run`. |
@@ -215,8 +216,9 @@ Flags of note:
 
 Rotation (replaces the "Rotation cadence" section below when you use
 the SDK path): use normal mode with the role's canonical
-`--expected-application-id`, `--rotate`, and `--set-gh-secrets`; never combine
-`--rotate` with creation-only `--pre-app-bootstrap`. For every role except
+`--expected-application-id`, `--rotate`, `--set-gh-secrets`, and
+`--gh-env <client>`; never combine `--rotate` with creation-only
+`--pre-app-bootstrap`. For every role except
 agent-proxy, a durable sink acknowledgement is followed by immediate retirement
 of every prior credential and an exact one-credential postflight. For agent-proxy,
 the old credential remains usable during blue/green overlap; the signed deploy

@@ -342,7 +342,8 @@ python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
 # compensated, prove and remove the credentialless principal before repeating
 # bootstrap; never add --rotate to a bootstrap command. After the App exists,
 # rotate in normal mode with the role's exact --expected-application-id,
-# --rotate, and --set-gh-secrets. Never reuse a client ID across roles.
+# --rotate, --set-gh-secrets, and --gh-env "$GH_ENV" (a mint without the
+# environment is refused). Never reuse a client ID across roles.
 # A signed intent is durable before provider create; observation and sink
 # records are durable before the one-shot secret is returned or written.
 # A durable oauth-credential-quarantine record blocks every App namespace until

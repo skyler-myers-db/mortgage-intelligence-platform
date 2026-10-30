@@ -1079,7 +1079,8 @@ principal. If a failed bootstrap was fully compensated, prove that the
 credentialless principal is removed before repeating the bootstrap command; do
 not add `--rotate` to a bootstrap retry. After the App exists, a reviewed
 rotation uses normal mode with that role's canonical
-`--expected-application-id`, `--rotate`, and `--set-gh-secrets`.
+`--expected-application-id`, `--rotate`, `--set-gh-secrets`, and
+`--gh-env <client>`; a mint without the environment is refused.
 Before provider create, the provisioner writes and reads back a signed,
 immutable intent containing the exact authority, principal, sink descriptor,
 global lease generation, and prior credential IDs. It records the returned
