@@ -1207,6 +1207,11 @@ resolve_m2m_credential() {{ :; }}
 deployment_control_value() {{ printf ''; }}
 same_identity_casefold() {{ [[ "$1" == "$2" ]]; }}
 start_proof_signing_heartbeat() {{ :; }}
+# The step file renders, validates and runs the pre-lease plan gate (M0-PR4).
+dotenv_value() {{ printf ''; }}
+run_bundle_plan_gate() {{ printf 'run_bundle_plan_gate %s\n' "$*" >> {shlex.quote(str(calls))}; }}
+TARGET=dev
+DEPLOY_PHASE=""
 DEPLOY_INVENTORY_PRINCIPAL=deployer@example.invalid
 # Resolved by the preflight step file; the pii-salt check reads both.
 MIP_PII_SALT_SCOPE=mip
@@ -1245,6 +1250,7 @@ def test_a_probe_refusal_stops_the_deploy_before_the_lease(tmp_path: Path) -> No
     assert "[step] pre-stop probes:" in result.stdout
     assert "tools.databricks.deploy_prestop_probes --app-name mip-app" in calls
     assert "app_deployment_lease" not in calls
+    assert "run_bundle_plan_gate" not in calls
     assert "stop_app_fail_closed" not in calls
 
 
@@ -1253,5 +1259,6 @@ def test_a_passing_probe_hands_over_to_the_signed_lease(tmp_path: Path) -> None:
 
     probe = calls.index("tools.databricks.deploy_prestop_probes")
     salt_check = calls.index("tools.databricks.pii_salt_scope check --scope mip --require-existing 0")
+    gate = calls.index("run_bundle_plan_gate pre-lease")
     lease = calls.index("tools.databricks.app_deployment_lease recovery-root")
-    assert probe < salt_check < lease
+    assert probe < salt_check < gate < lease

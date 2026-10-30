@@ -65,7 +65,7 @@ def test_the_release_folder_is_staged_after_the_build_and_published_before_activ
     assert (
         deploy.index("run npm --prefix frontend run build")
         < deploy.index(stage)
-        < deploy.index('run "$PYTHON" -m tools.databricks.bundle_env validate -t "$TARGET"')
+        < deploy.index("\nrun_bundle_plan_gate pre-apply\n")
     )
     assert deploy.index(publish) < deploy.index('deploy_app_snapshot "')
     assert deploy.index("deploy_app_snapshot() {") < deploy.index(publish)
