@@ -3,7 +3,7 @@
 # scripts/smoke_live.sh -- operator "is real UC actually reachable?" smoke
 #
 # Slice 9 of the real-data migration closes the self-contained loop: after
-# `./scripts/deploy.sh -t dev` (or a resource deploy plus app promotion and
+# `./scripts/deploy.sh -t client` (or a resource deploy plus app promotion and
 # refresh jobs), the operator should be able to run this script and see 200s
 # from every canonical endpoint in under ~30s.
 #

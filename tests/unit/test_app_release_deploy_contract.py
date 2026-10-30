@@ -48,6 +48,8 @@ CHECK_START = "# >>> app runtime closure: check >>>"
 CHECK_END = "# <<< app runtime closure: check <<<"
 DIGEST_END = "# <<< requirements digest: check <<<"
 PROMPT = 'read -r -p "About to DEPLOY to the ${TARGET} target. Continue? [y/N] " ans'
+# The client key, the client target's root leaf (M1-PR2).
+LEAF = "client-one"
 
 
 def _block(start: str = CHECK_START, end: str = CHECK_END) -> str:
@@ -82,7 +84,7 @@ def _harness(repo: Path, *, dry_run: int) -> subprocess.CompletedProcess[str]:
     script = repo / "preflight.sh"
     script.write_text(
         "set -Eeuo pipefail\ntrap 'exit 99' ERR\n"
-        f'RED=""\nRST=""\nDRY_RUN={dry_run}\nTARGET=dev\nPYTHON={shlex.quote(sys.executable)}\n'
+        f'RED=""\nRST=""\nDRY_RUN={dry_run}\nTARGET=client\nPYTHON={shlex.quote(sys.executable)}\n'
         f'SOURCE_GIT_SHA={"0" * 40}\n{_block()}\necho reached-after-block\n',
         encoding="utf-8",
     )
@@ -112,7 +114,7 @@ def test_a_stageable_head_passes_a_real_run_in_the_real_tree(tmp_path: Path) -> 
     script = tmp_path / "preflight.sh"
     script.write_text(
         "set -Eeuo pipefail\ntrap 'exit 99' ERR\n"
-        f'RED=""\nRST=""\nDRY_RUN=0\nTARGET=dev\nPYTHON={shlex.quote(sys.executable)}\n'
+        f'RED=""\nRST=""\nDRY_RUN=0\nTARGET=client\nPYTHON={shlex.quote(sys.executable)}\n'
         f"SOURCE_GIT_SHA={head}\n{_block()}\necho reached-after-block\n",
         encoding="utf-8",
     )
@@ -284,27 +286,82 @@ def test_a_release_id_of_another_shape_is_refused(tmp_path: Path, release: str) 
     assert "reached-after-block" not in result.stdout
 
 
-def _publish_env(files_root: str, target: str) -> dict[str, str]:
+PRINCIPAL_START = "# >>> app release principal: check >>>"
+PRINCIPAL_END = "# <<< app release principal: check <<<"
+# The client profile's deployer: a service principal's application id (M1-PR2).
+DEPLOYER = "00000000-0000-4000-8000-0000000000aa"
+
+
+def _principal_check(repo: Path, *, dry_run: int, current_user: str) -> subprocess.CompletedProcess[str]:
+    return drive(
+        repo,
+        function("same_identity_casefold") + _block(PRINCIPAL_START, PRINCIPAL_END),
+        dry_run=dry_run,
+        env={"APP_CURRENT_USER": current_user, "CLIENT_DEPLOYER": DEPLOYER, "CLIENT_KEY": LEAF},
+        epilogue='echo "principal=${APP_RELEASE_PRINCIPAL} leaf=${APP_RELEASE_ROOT_LEAF}"\n',
+    )
+
+
+def test_the_principal_check_follows_the_inventory_check_and_precedes_the_publish() -> None:
+    text = deploy_entrypoint_text()
+
+    assert text.index("bundle identity does not match the preflighted workspace-admin") < text.index(PRINCIPAL_START)
+    assert text.index(PRINCIPAL_END) < text.index(PUBLISH_START)
+
+
+@pytest.mark.parametrize("current_user", [DEPLOYER, DEPLOYER.upper()])
+def test_a_real_run_as_the_profiles_deployer_names_it_and_the_client_key(tmp_path: Path, current_user: str) -> None:
+    result = _principal_check(tmp_path, dry_run=0, current_user=current_user)
+
+    assert result.returncode == 0, result.stderr
+    assert f"principal={DEPLOYER} leaf={LEAF}\nreached-after-block\n" in result.stdout
+
+
+@pytest.mark.parametrize("current_user", ["00000000-0000-4000-8000-0000000000bb", "operator@lender.example", " "])
+def test_a_real_run_as_another_principal_is_refused_before_the_publish(tmp_path: Path, current_user: str) -> None:
+    """Defence in depth behind the live checks: the bundle summary's user must be the profile's deployer."""
+
+    result = _principal_check(tmp_path, dry_run=0, current_user=current_user)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "the bundle runs as another principal than the client profile's deployer" in result.stderr
+    assert DEPLOYER not in result.stderr, "the refusal names no identifier"
+    assert "principal=" not in result.stdout and "reached-after-block" not in result.stdout
+
+
+def test_a_dry_run_names_the_deployer_without_the_identity_check(tmp_path: Path) -> None:
+    """A dry run's offline summary carries no real user."""
+
+    result = _principal_check(tmp_path, dry_run=1, current_user="dry-run-user")
+
+    assert result.returncode == 0, result.stderr
+    assert f"principal={DEPLOYER} leaf={LEAF}\n" in result.stdout
+
+
+def _publish_env(files_root: str, leaf: str) -> dict[str, str]:
     return {
         **_stage_env(),
         "APP_RELEASE_ID": RELEASE_ID,
         "APP_BUNDLE_FILES_PATH": files_root,
         "APP_CURRENT_USER": PRINCIPAL,
-        "TARGET": target,
+        "APP_RELEASE_PRINCIPAL": PRINCIPAL,
+        "APP_RELEASE_ROOT_LEAF": leaf,
+        "TARGET": "client",
     }
 
 
-def _publish(repo: Path, *, dry_run: int, files_root: str, target: str = "dev", exit_code: int = 0):
-    # The bundle root's last segment is the target itself (databricks.yml root_path).
+def _publish(repo: Path, *, dry_run: int, files_root: str, leaf: str = LEAF, exit_code: int = 0):
+    # The client target's root: the deployer's folder plus the client key
+    # (databricks.yml root_path), so the leaf is the client key, never the target.
     argv = [
         "publish", "--release-id", RELEASE_ID, "--stage-dir", ".databricks/app-release/source",
         "--manifest", ".databricks/app-release/manifest.json", "--files-root", files_root,
-        "--expected-commit", SHA, "--expected-principal", PRINCIPAL, "--expected-target", target,
-        "--expected-root-leaf", target,
+        "--expected-commit", SHA, "--expected-principal", PRINCIPAL, "--expected-target", "client",
+        "--expected-root-leaf", leaf,
     ]
     called = stub_tool(repo, "app_release_source", argv=argv, body=f"sys.exit({exit_code})\n")
     result = drive(
-        repo, _block(PUBLISH_START, PUBLISH_END), dry_run=dry_run, env=_publish_env(files_root, target),
+        repo, _block(PUBLISH_START, PUBLISH_END), dry_run=dry_run, env=_publish_env(files_root, leaf),
         epilogue='echo "source=${APP_SOURCE_PATH:-unset}"\n',
     )
     return result, called
@@ -334,13 +391,15 @@ def test_app_source_path_is_assigned_once_from_the_files_root_and_the_release_id
     assert '    --source-code-path "$APP_SOURCE_PATH" \\\n' in function("deploy_app_snapshot")
 
 
-@pytest.mark.parametrize("target", ["dev", "prod"])
-def test_a_published_release_composes_the_contract_release_path(tmp_path: Path, target: str) -> None:
-    files_root = contract.files_root(principal=PRINCIPAL, target=target)
+@pytest.mark.parametrize("leaf", [LEAF, "fictional-customer"])
+def test_a_published_release_composes_the_contract_release_path(tmp_path: Path, leaf: str) -> None:
+    files_root = contract.files_root(principal=PRINCIPAL, target="client", root_leaf=leaf)
 
-    result, called = _publish(tmp_path, dry_run=0, files_root=files_root, target=target)
+    result, called = _publish(tmp_path, dry_run=0, files_root=files_root, leaf=leaf)
 
-    expected = contract.release_path(principal=PRINCIPAL, target=target, release_id=RELEASE_ID, commit=SHA)
+    expected = contract.release_path(
+        principal=PRINCIPAL, target="client", root_leaf=leaf, release_id=RELEASE_ID, commit=SHA
+    )
     assert result.returncode == 0, result.stderr
     assert called.exists()
     assert f"source={expected}\n" in result.stdout
@@ -348,7 +407,8 @@ def test_a_published_release_composes_the_contract_release_path(tmp_path: Path, 
 
 def test_a_publish_refusal_trips_errexit_before_any_source_path_exists(tmp_path: Path) -> None:
     result, called = _publish(
-        tmp_path, dry_run=0, files_root=contract.files_root(principal=PRINCIPAL, target="dev"), exit_code=2,
+        tmp_path, dry_run=0, files_root=contract.files_root(principal=PRINCIPAL, target="client", root_leaf=LEAF),
+        exit_code=2,
     )
 
     assert result.returncode == 99

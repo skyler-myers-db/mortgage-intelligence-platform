@@ -22,7 +22,7 @@ Remember these exact product anchors:
 - Enterprise product polish at 1440×900.
 - Fast page loads, stable interactions, real data under the hood.
 - Source evidence visible on every score/recommendation — traced to live Unity Catalog rows.
-- **Self-contained, zero-click deploy.** `./scripts/deploy.sh -t dev` (or `make deploy-dev`) is the only supported mutation command for first deploys and roll-forwards. It must provision, populate, promote, and smoke-check every resource the app needs — UC catalog + schemas, silver/gold tables, Lakeflow pipelines, Lakebase instance + migrations, FRED ingest job, Genie Space, Databricks App — with no manual UI steps, no "now go click this" setup docs, no secret dances beyond one `.env.local` fill-in. Unrestricted raw bundle deployment is retired because the bundle includes App source and can bypass signed promotion. Customers should see a working app after the deploy script completes.
+- **Self-contained, zero-click deploy.** `./scripts/deploy.sh -t client` (run in CI per client environment; `make deploy-dev` prints its dispatch command) is the only supported mutation command for first deploys and roll-forwards. It must provision, populate, promote, and smoke-check every resource the app needs — UC catalog + schemas, silver/gold tables, Lakeflow pipelines, Lakebase instance + migrations, FRED ingest job, Genie Space, Databricks App — with no manual UI steps, no "now go click this" setup docs, no secret dances beyond one `.env.local` fill-in. Unrestricted raw bundle deployment is retired because the bundle includes App source and can bypass signed promotion. Customers should see a working app after the deploy script completes.
 - Clear separation of frontend, backend, SQL, Databricks resources, and agent docs.
 - Small files, strong types, easy-to-review commits.
 - Repeatable validation after every slice.
@@ -67,9 +67,10 @@ npm --prefix frontend run build                                # tsc -b && vite 
 
 # Scaffold + bundle
 python tools/verify_scaffold.py
-make deploy-dev                                                 # full one-command deploy
-databricks bundle validate -t dev                              # resource-level validation
-# Unrestricted bundle mutation is retired; use make deploy-dev.
+./scripts/deploy.sh -t client --dry-run                        # print the governed deploy's plan, no changes
+make deploy-dev                                                 # prints the CI dispatch command (no local deploy)
+make bundle-validate                                            # bundle_env validate -t client: the filled profile's workspace, your CLI auth
+# Unrestricted bundle mutation is retired; the governed deploy is ./scripts/deploy.sh -t client.
 
 # Makefile aggregates: make setup | dev-api | dev-ui | test | lint | build | validate
 ```
@@ -126,7 +127,7 @@ Hard rules for UI work:
 - Do not wire automatic email/SMS sending.
 - Do not introduce a mock fallback in the running app. The app runs on real Unity Catalog data or it fails visibly. Handle flakiness with resilience engineering (retries, warm-start, cache, circuit breaker, degraded-state UI) — never with silent mock substitution.
 - Do not filter real data to a single metro. The product must follow the current refreshed Cotality coverage dynamically; geography drill-down is a hero surface, not a nice-to-have.
-- Do not add out-of-band setup steps. Any new infrastructure (UC object, secret scope, job, pipeline, Lakebase migration, seed file) must be declared in the bundle or an idempotent deploy helper and must be reachable from `./scripts/deploy.sh -t dev` plus a documented `.env.local` template. Unrestricted raw bundle mutation is unsupported because it can activate App source outside signed promotion; the customer/operator contract is the deploy script. Manual click-ops in the Databricks UI are a packaging bug.
+- Do not add out-of-band setup steps. Any new infrastructure (UC object, secret scope, job, pipeline, Lakebase migration, seed file) must be declared in the bundle or an idempotent deploy helper and must be reachable from `./scripts/deploy.sh -t client` plus a documented `.env.local` template (the client profile, `deploy/clients/example.env`). Unrestricted raw bundle mutation is unsupported because it can activate App source outside signed promotion; the customer/operator contract is the deploy script. Manual click-ops in the Databricks UI are a packaging bug.
 - Do not rely on external APIs being reachable at deploy-time. FRED and any future public-data sources must have a repo-committed seed file so the first app boot has data even before the first scheduled refresh runs.
 - Do not put secrets in source, `.env`, `app.yaml`, screenshots, notebooks, or logs.
 - Do not change the app to Streamlit unless the user explicitly chooses the emergency fallback.
@@ -184,5 +185,5 @@ The product is ready when:
 - Frontend build passes.
 - Unit tests pass (scoring primitives pinned by golden fixtures) AND integration tests pass against real UC (nightly parity run green).
 - Playwright e2e passes against the live app, exercising the full product flow on real data.
-- `databricks bundle validate -t dev` passes (warehouse + Genie space ids resolve from `.env.local` / bundle vars).
+- `tools/databricks/bundle_env.py validate -t client` (`make bundle-validate`) passes (the client profile in `.env.local` supplies the root, run_as and resource names; warehouse + Genie space ids resolve from bundle vars).
 - `docs/module0-talk-track.md` supports a 6–8 minute presentation grounded in the multi-state real-data story.

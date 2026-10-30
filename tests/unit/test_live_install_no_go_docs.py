@@ -73,8 +73,10 @@ def _runbook_recovery() -> str:
 
 # ------------------------------------------------------- the live-recovery ban
 
-# An operator deploy of the live install, however it is spelled in prose.
-_OPERATOR_LIVE_DEPLOY = r"`?(?:\./)?scripts/deploy\.sh`? -t dev`?"
+# An operator deploy of the live install, however it is spelled in prose: the
+# retired dev target, or the client target (M1-PR2), which cannot reach the
+# live install before its adoption either.
+_OPERATOR_LIVE_DEPLOY = r"`?(?:\./)?scripts/deploy\.sh`? -t (?:dev|client)`?"
 # A recovery verb that reaches the operator deploy, or an un-negated dispatch for the live App, in one sentence.
 _LIVE_RECOVERY_OVERCLAIMS = (
     re.compile(r"(?i)\b(?:recover|restor|restart|redeploy|repair)\w*\b[^.]{0,80}?(?:" + _OPERATOR_LIVE_DEPLOY + ")"),
@@ -87,11 +89,11 @@ _LIVE_RECOVERY_OVERCLAIMS = (
 # Any sentence holding both an operator deploy and recovery vocabulary, in
 # either order and whatever the verb, is an overclaim. No sentence in the CI
 # section or the runbook recovery needs both; a negation does not excuse one
-# (rephrase with "start"). The bare `deploy.sh`, `--target dev`/`--target=dev`
-# and `make deploy-dev` (whose recipe runs `./scripts/deploy.sh`, target dev)
-# count as the operator deploy too.
+# (rephrase with "start"). The bare `deploy.sh`, `--target dev`/`--target=dev`,
+# the same with `client`, and `make deploy-dev` (whose recipe ran
+# `./scripts/deploy.sh` before M1-PR2) count as the operator deploy too.
 _OPERATOR_LIVE_DEPLOY_RE = re.compile(
-    r"(?i)(?:(?:\./)?scripts/)?\bdeploy\.sh`? (?:-t|--target)[ =]dev\b|\bmake deploy-dev\b"
+    r"(?i)(?:(?:\./)?scripts/)?\bdeploy\.sh`? (?:-t|--target)[ =](?:dev|client)\b|\bmake deploy-dev\b"
 )
 _RECOVERY_VOCABULARY = re.compile(
     r"(?i)\b(?:recover|restor|restart|re-?deploy|repair|reviv|resurrect)\w*"
@@ -139,6 +141,8 @@ def assert_no_live_recovery_overclaim(text: str) -> None:
         "An operator re-deploys the live App with `./scripts/deploy.sh -t dev`.",
         "An operator rolls the live App forward with `./scripts/deploy.sh -t dev`.",
         "Restore the live App: dispatch deploy-dev.yml.",
+        "Restart the live App with `./scripts/deploy.sh -t client`.",
+        "An operator recovers the live dev App with `scripts/deploy.sh --target=client`.",
     ],
 )
 def test_the_live_recovery_overclaim_ban_catches_paraphrases(overclaim: str) -> None:
@@ -177,7 +181,8 @@ def test_the_live_app_has_no_governed_recovery_path_and_escalates_to_the_owner()
     assert "`scripts/deploy.sh` never creates one" in live and "`--expected-application-id`" in live
     assert "The only path that mints a usable durable credential cannot serve the live install" in live
     assert "Deploying or recovering the live App is therefore an owner-only decision." in live
-    assert "Never start `./scripts/deploy.sh -t dev` against the live workspace during an incident" in live
+    assert "Never start `./scripts/deploy.sh -t client` against the live workspace during an incident" in live
+    assert "ships only through the emergency recipe" in live, "the live install's only path until adoption"
 
     whole = _flat(DEPLOYMENT_DOC.read_text(encoding="utf-8"))
     assert "`./scripts/deploy.sh -t dev` or dispatch `deploy-dev.yml`" not in whole, "not equivalent first installs"
@@ -363,8 +368,8 @@ def test_grants_gives_foreign_catalog_remediation_no_ci_command_of_record() -> N
     }
     assert env["MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS"] == "0", "the doc's literal"
     assert (
-        "The operator path, `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1 ./scripts/deploy.sh -t dev`, targets the live "
-        "workspace, whose governed deploy is NO-GO"
+        "The operator path, `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1 ./scripts/deploy.sh -t client`, would run in "
+        "the live workspace, whose governed deploy is NO-GO"
     ) in grants
     assert "Any metastore-wide remediation is therefore an owner-only, separately reviewed decision" in grants
     # The owner decision rests on the blast radius the code has:

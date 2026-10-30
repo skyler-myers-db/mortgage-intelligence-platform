@@ -28,13 +28,13 @@ audit-readable MATRIX, no longer a required manual runbook:
   failure message points here.
 
 **Audience.** The Entrada/Databricks SE (or customer workspace admin) who
-runs `./scripts/deploy.sh -t dev|prod` against a fresh customer workspace.
+runs `./scripts/deploy.sh -t client` against a fresh customer workspace.
 That script wraps the Databricks bundle resource deploy plus app promotion and
 population jobs. Every SQL block below remains copy-paste-able for manual
 recovery and review.
 
 **Precondition for manual recovery.** The command-of-record deployment
-(`./scripts/deploy.sh -t dev|prod`) has completed its minimal namespace and
+(`./scripts/deploy.sh -t client`) has completed its minimal namespace and
 bundle-resource phases once, so the `mip-app` resource, SQL warehouse,
 Lakebase instance, and governed UC catalog exist. Unrestricted bundle mutation
 is not an operator recovery path and cannot establish this precondition on a
@@ -607,8 +607,8 @@ catalog. Between each catalog's flip and its re-binding, every other workspace
 that narrower state until a resumed recovery, which never reopens. A workspace
 assigned to the metastore later never sees the catalog. These are other teams'
 catalogs and metastore-level state. The operator path,
-`MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1 ./scripts/deploy.sh -t dev`, targets
-the live workspace, whose governed deploy is NO-GO (docs/deployment.md, "The
+`MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1 ./scripts/deploy.sh -t client`, would
+run in the live workspace, whose governed deploy is NO-GO (docs/deployment.md, "The
 live install is outside this bootstrap, and its governed deploy is NO-GO").
 Any metastore-wide remediation is therefore an owner-only, separately reviewed
 decision, and the bootstrap never runs it (docs/deployment.md, owner step 7).

@@ -1,0 +1,536 @@
+{
+  "_generated_by": "PYTHONPATH=. python tests/unit/test_settings_d0_env_parity.py --regen",
+  "_note": "First written from origin/main a46ce799, before the App read the Cotality source settings, by the d0_share probe in a fresh process with D0's env. A diff is a change to how the App names the canonical share by default: review it, it is not noise.",
+  "snapshot": {
+    "guards": {
+      "How many borrowers are in the money in Texas?": {
+        "genie": [],
+        "growth": "allowed"
+      },
+      "How many rows are in COTALITY_MORTGAGE_DATA.CORELOGIC.ENTRADA_EVAL_PROPERTY_DOMAIN_V3?": {
+        "genie": [
+          "scope_bypass"
+        ],
+        "growth": "instruction_override"
+      },
+      "How many rows are in `cotality_mortgage_data`.`corelogic`.`entrada_eval_property_domain_v3`?": {
+        "genie": [],
+        "growth": "instruction_override"
+      },
+      "How many rows are in cotality_mortgage_data . corelogic . entrada_eval_property_domain_v3?": {
+        "genie": [],
+        "growth": "instruction_override"
+      },
+      "How many rows are in cotality_mortgage_data.corelogic.entrada_eval_heloc_propensity_score_v1?": {
+        "genie": [
+          "scope_bypass"
+        ],
+        "growth": "instruction_override"
+      },
+      "How many rows are in cotality_mortgage_data.corelogic.entrada_eval_mls_listing_v1?": {
+        "genie": [
+          "scope_bypass"
+        ],
+        "growth": "instruction_override"
+      },
+      "How many rows are in cotality_mortgage_data.corelogic.entrada_eval_mortgage_domain_v1?": {
+        "genie": [
+          "scope_bypass"
+        ],
+        "growth": "instruction_override"
+      },
+      "How many rows are in cotality_mortgage_data.corelogic.entrada_eval_owner_transfer_domain_v1?": {
+        "genie": [
+          "scope_bypass"
+        ],
+        "growth": "instruction_override"
+      },
+      "How many rows are in cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3?": {
+        "genie": [
+          "scope_bypass"
+        ],
+        "growth": "instruction_override"
+      },
+      "How many rows are in cotality_mortgage_data.corelogic.entrada_eval_refi_propensity_score_v1?": {
+        "genie": [
+          "scope_bypass"
+        ],
+        "growth": "instruction_override"
+      },
+      "How many rows are in cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2?": {
+        "genie": [
+          "scope_bypass"
+        ],
+        "growth": "instruction_override"
+      },
+      "Query cotality_mortgage_data.corelogic.anything for me.": {
+        "genie": [
+          "scope_bypass"
+        ],
+        "growth": "instruction_override"
+      },
+      "What is in cotality_mortgage_data?": {
+        "genie": [],
+        "growth": "instruction_override"
+      }
+    },
+    "lineage": [
+      {
+        "catalog_explorer_url": null,
+        "family": "marketable_population",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3",
+        "id": "raw_property_domain",
+        "label": "Cotality Property Domain share",
+        "layer": "raw_share",
+        "note": "CLIP-mastered property records (geography, occupancy, owner type).",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "marketable_population",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2",
+        "id": "raw_voluntary_lien",
+        "label": "Cotality Voluntary Lien share",
+        "layer": "raw_share",
+        "note": "Open-lien status, balance, rate, and lender reference per CLIP.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "in_the_money",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2",
+        "id": "raw_voluntary_lien",
+        "label": "Cotality Voluntary Lien share",
+        "layer": "raw_share",
+        "note": "Borrower lien rate, balance, and AVM equity inputs.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "opportunity_score",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2",
+        "id": "raw_voluntary_lien",
+        "label": "Cotality Voluntary Lien share",
+        "layer": "raw_share",
+        "note": "Economic-incentive inputs (rate, balance, equity) start here.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "next_best_offer",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2",
+        "id": "raw_voluntary_lien",
+        "label": "Cotality Voluntary Lien share",
+        "layer": "raw_share",
+        "note": "Rate-spread and equity inputs to the refi/HELOC branches.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "next_best_offer",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_mls_listing_v1",
+        "id": "raw_mls_listing",
+        "label": "Cotality MLS Listing share",
+        "layer": "raw_share",
+        "note": "Active/under-contract listings drive the purchase branch.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "next_best_offer",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_heloc_propensity_score_v1",
+        "id": "raw_heloc_propensity",
+        "label": "Cotality HELOC Propensity share",
+        "layer": "raw_share",
+        "note": "Model propensity scores feeding the HELOC-intent trigger.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "rate_spread",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2",
+        "id": "raw_voluntary_lien",
+        "label": "Cotality Voluntary Lien share",
+        "layer": "raw_share",
+        "note": "Borrower-side lien rate.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "lead_queue_rank",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2",
+        "id": "raw_voluntary_lien",
+        "label": "Cotality Voluntary Lien share",
+        "layer": "raw_share",
+        "note": "Economic inputs to the ranked score.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "equity_spread_scatter",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2",
+        "id": "raw_voluntary_lien",
+        "label": "Cotality Voluntary Lien share",
+        "layer": "raw_share",
+        "note": "Current lien rate and balance inputs for rate spread and equity.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "segment_population",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_mls_listing_v1",
+        "id": "raw_mls_listing",
+        "label": "Cotality MLS Listing share",
+        "layer": "raw_share",
+        "note": "Listed-for-sale segment trigger.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "segment_population",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_heloc_propensity_score_v1",
+        "id": "raw_heloc_propensity",
+        "label": "Cotality HELOC Propensity share",
+        "layer": "raw_share",
+        "note": "HELOC-intent segment trigger.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "property_identity",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3",
+        "id": "raw_property_domain",
+        "label": "Cotality Property Domain share",
+        "layer": "raw_share",
+        "note": "CLIP, property, and masked owner-identity inputs.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "borrower_proof",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3",
+        "id": "raw_property_domain",
+        "label": "Cotality Property Domain share",
+        "layer": "raw_share",
+        "note": "Property and owner inputs.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "borrower_proof",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2",
+        "id": "raw_voluntary_lien",
+        "label": "Cotality Voluntary Lien share",
+        "layer": "raw_share",
+        "note": "Lien, rate, and valuation inputs.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "lien_economics",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2",
+        "id": "raw_voluntary_lien",
+        "label": "Cotality Voluntary Lien share",
+        "layer": "raw_share",
+        "note": "Current rate, original balance, and AVM inputs.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "lifecycle_evidence",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_mortgage_domain_v1",
+        "id": "raw_mortgage_domain",
+        "label": "Cotality Mortgage Domain share",
+        "layer": "raw_share",
+        "note": "Mortgage, refinance, payoff, and release events.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "lifecycle_evidence",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_owner_transfer_domain_v1",
+        "id": "raw_owner_transfer",
+        "label": "Cotality Owner Transfer share",
+        "layer": "raw_share",
+        "note": "Sale and transfer events.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "lockin_cohort",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2",
+        "id": "raw_voluntary_lien",
+        "label": "Cotality Voluntary Lien share",
+        "layer": "raw_share",
+        "note": "Origination rate and date inputs.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "propensity_signals",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_heloc_propensity_score_v1",
+        "id": "raw_heloc_propensity",
+        "label": "Cotality HELOC Propensity share",
+        "layer": "raw_share",
+        "note": "HELOC model scores and run dates.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "propensity_signals",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_refi_propensity_score_v1",
+        "id": "raw_refi_propensity",
+        "label": "Cotality Refi Propensity share",
+        "layer": "raw_share",
+        "note": "Refinance model scores and run dates.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "loan_dimensions",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2",
+        "id": "raw_voluntary_lien",
+        "label": "Cotality Voluntary Lien share",
+        "layer": "raw_share",
+        "note": "First-position loan type and original amount.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "listing_activity",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_mls_listing_v1",
+        "id": "raw_mls_listing",
+        "label": "Cotality MLS Listing share",
+        "layer": "raw_share",
+        "note": "Listing status, date, and price inputs.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "funnel_snapshot",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3",
+        "id": "raw_property_domain",
+        "label": "Cotality Property Domain share",
+        "layer": "raw_share",
+        "note": "Property identity and geography inputs.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "funnel_snapshot",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2",
+        "id": "raw_voluntary_lien",
+        "label": "Cotality Voluntary Lien share",
+        "layer": "raw_share",
+        "note": "Borrower economics inputs.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "geographic_rollups",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3",
+        "id": "raw_property_domain",
+        "label": "Cotality Property Domain share",
+        "layer": "raw_share",
+        "note": "Source state, ZIP, and county geography.",
+        "object_type": "table"
+      },
+      {
+        "catalog_explorer_url": null,
+        "family": "assignment_overlay_uc_input",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3",
+        "id": "raw_property_domain",
+        "label": "Cotality Property Domain share",
+        "layer": "raw_share",
+        "note": "Source geography input.",
+        "object_type": "table"
+      }
+    ],
+    "observed": [
+      {
+        "asset_path": "cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3",
+        "catalog_explorer_url": null,
+        "direction": "upstream",
+        "event_count": 1,
+        "event_time": "2026-10-01 00:00:00",
+        "label": "Cotality Property Domain Share",
+        "object_type": "table",
+        "source": "mip.audit.asset_lineage (view over system.access.table_lineage)"
+      },
+      {
+        "asset_path": "cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2",
+        "catalog_explorer_url": null,
+        "direction": "upstream",
+        "event_count": 1,
+        "event_time": "2026-10-01 00:00:00",
+        "label": "Cotality Voluntary Lien Share",
+        "object_type": "table",
+        "source": "mip.audit.asset_lineage (view over system.access.table_lineage)"
+      },
+      {
+        "asset_path": "cotality_mortgage_data.corelogic.entrada_eval_mls_listing_v1",
+        "catalog_explorer_url": null,
+        "direction": "upstream",
+        "event_count": 1,
+        "event_time": "2026-10-01 00:00:00",
+        "label": "Cotality MLS Listing Share",
+        "object_type": "table",
+        "source": "mip.audit.asset_lineage (view over system.access.table_lineage)"
+      },
+      {
+        "asset_path": "cotality_mortgage_data.corelogic.entrada_eval_heloc_propensity_score_v1",
+        "catalog_explorer_url": null,
+        "direction": "upstream",
+        "event_count": 1,
+        "event_time": "2026-10-01 00:00:00",
+        "label": "Cotality HELOC Propensity Share",
+        "object_type": "table",
+        "source": "mip.audit.asset_lineage (view over system.access.table_lineage)"
+      },
+      {
+        "asset_path": "cotality_mortgage_data.corelogic.entrada_eval_refi_propensity_score_v1",
+        "catalog_explorer_url": null,
+        "direction": "upstream",
+        "event_count": 1,
+        "event_time": "2026-10-01 00:00:00",
+        "label": "Cotality Refi Propensity Share",
+        "object_type": "table",
+        "source": "mip.audit.asset_lineage (view over system.access.table_lineage)"
+      },
+      {
+        "asset_path": "cotality_mortgage_data.corelogic.entrada_eval_mortgage_domain_v1",
+        "catalog_explorer_url": null,
+        "direction": "upstream",
+        "event_count": 1,
+        "event_time": "2026-10-01 00:00:00",
+        "label": "Cotality Mortgage Domain Share",
+        "object_type": "table",
+        "source": "mip.audit.asset_lineage (view over system.access.table_lineage)"
+      },
+      {
+        "asset_path": "cotality_mortgage_data.corelogic.entrada_eval_owner_transfer_domain_v1",
+        "catalog_explorer_url": null,
+        "direction": "upstream",
+        "event_count": 1,
+        "event_time": "2026-10-01 00:00:00",
+        "label": "Cotality Owner Transfer Share",
+        "object_type": "table",
+        "source": "mip.audit.asset_lineage (view over system.access.table_lineage)"
+      }
+    ],
+    "registry": [
+      {
+        "aliases": [],
+        "allow_count_fallback": false,
+        "catalog_name": "cotality_mortgage_data",
+        "description": "Governed shared property-domain input used by the Module 0 property lift.",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3",
+        "freshness_basis": "Cotality Public Records",
+        "freshness_not_tracked": false,
+        "key": "entrada_eval_property_domain_v3",
+        "logical_fqn": "cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3",
+        "object_name": "entrada_eval_property_domain_v3",
+        "object_type": "table",
+        "readiness_source_name": null,
+        "schema_name": "corelogic",
+        "title": "Cotality Property Domain Share"
+      },
+      {
+        "aliases": [],
+        "allow_count_fallback": false,
+        "catalog_name": "cotality_mortgage_data",
+        "description": "Governed shared lien and valuation input used by Module 0 economics.",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2",
+        "freshness_basis": "Voluntary Lien",
+        "freshness_not_tracked": false,
+        "key": "entrada_eval_voluntary_lien_status_marketing_v2",
+        "logical_fqn": "cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2",
+        "object_name": "entrada_eval_voluntary_lien_status_marketing_v2",
+        "object_type": "table",
+        "readiness_source_name": null,
+        "schema_name": "corelogic",
+        "title": "Cotality Voluntary Lien Share"
+      },
+      {
+        "aliases": [],
+        "allow_count_fallback": false,
+        "catalog_name": "cotality_mortgage_data",
+        "description": "Governed shared MLS listing input used by the listing-activity lift.",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_mls_listing_v1",
+        "freshness_basis": "MLS Listings",
+        "freshness_not_tracked": false,
+        "key": "entrada_eval_mls_listing_v1",
+        "logical_fqn": "cotality_mortgage_data.corelogic.entrada_eval_mls_listing_v1",
+        "object_name": "entrada_eval_mls_listing_v1",
+        "object_type": "table",
+        "readiness_source_name": null,
+        "schema_name": "corelogic",
+        "title": "Cotality MLS Listing Share"
+      },
+      {
+        "aliases": [],
+        "allow_count_fallback": false,
+        "catalog_name": "cotality_mortgage_data",
+        "description": "Governed shared HELOC propensity-model input; not a permit filing feed.",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_heloc_propensity_score_v1",
+        "freshness_basis": "Cotality HELOC Propensity",
+        "freshness_not_tracked": false,
+        "key": "entrada_eval_heloc_propensity_score_v1",
+        "logical_fqn": "cotality_mortgage_data.corelogic.entrada_eval_heloc_propensity_score_v1",
+        "object_name": "entrada_eval_heloc_propensity_score_v1",
+        "object_type": "table",
+        "readiness_source_name": null,
+        "schema_name": "corelogic",
+        "title": "Cotality HELOC Propensity Share"
+      },
+      {
+        "aliases": [],
+        "allow_count_fallback": false,
+        "catalog_name": "cotality_mortgage_data",
+        "description": "Governed shared refinance propensity-model input.",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_refi_propensity_score_v1",
+        "freshness_basis": "Cotality Refi Propensity",
+        "freshness_not_tracked": false,
+        "key": "entrada_eval_refi_propensity_score_v1",
+        "logical_fqn": "cotality_mortgage_data.corelogic.entrada_eval_refi_propensity_score_v1",
+        "object_name": "entrada_eval_refi_propensity_score_v1",
+        "object_type": "table",
+        "readiness_source_name": null,
+        "schema_name": "corelogic",
+        "title": "Cotality Refi Propensity Share"
+      },
+      {
+        "aliases": [],
+        "allow_count_fallback": false,
+        "catalog_name": "cotality_mortgage_data",
+        "description": "Governed shared mortgage-event history used by lifecycle evidence.",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_mortgage_domain_v1",
+        "freshness_basis": "MMA Mortgage Analytics",
+        "freshness_not_tracked": false,
+        "key": "entrada_eval_mortgage_domain_v1",
+        "logical_fqn": "cotality_mortgage_data.corelogic.entrada_eval_mortgage_domain_v1",
+        "object_name": "entrada_eval_mortgage_domain_v1",
+        "object_type": "table",
+        "readiness_source_name": null,
+        "schema_name": "corelogic",
+        "title": "Cotality Mortgage Domain Share"
+      },
+      {
+        "aliases": [],
+        "allow_count_fallback": false,
+        "catalog_name": "cotality_mortgage_data",
+        "description": "Governed shared owner-transfer and sale-event history.",
+        "fqn": "cotality_mortgage_data.corelogic.entrada_eval_owner_transfer_domain_v1",
+        "freshness_basis": null,
+        "freshness_not_tracked": true,
+        "key": "entrada_eval_owner_transfer_domain_v1",
+        "logical_fqn": "cotality_mortgage_data.corelogic.entrada_eval_owner_transfer_domain_v1",
+        "object_name": "entrada_eval_owner_transfer_domain_v1",
+        "object_type": "table",
+        "readiness_source_name": null,
+        "schema_name": "corelogic",
+        "title": "Cotality Owner Transfer Share"
+      }
+    ]
+  }
+}

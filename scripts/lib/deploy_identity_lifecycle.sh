@@ -81,8 +81,74 @@ resolve_m2m_credential() {
   fi
 }
 
+# The client profile (tools/clients), resolved before any other deploy step
+# (M1-PR2). A refusal exits 2 with lines that name fields, never values. The
+# shell keeps the client key, the install class and the profile's workspace
+# host, and exports exactly the client target's bundle variables (its root,
+# run_as and overrides), so a direct `databricks bundle run -t client`
+# addresses the same root as tools/databricks/bundle_env.py. Pure: it also
+# runs in DRY_RUN. `resolve` registers every identifying value as a runner
+# mask before it writes the 0600 view this reads.
+CLIENT_TARGET_BUNDLE_VARS=(
+  BUNDLE_VAR_client_key BUNDLE_VAR_deployer_principal BUNDLE_VAR_jobs_principal
+  BUNDLE_VAR_dashboard_parent_path BUNDLE_VAR_lakebase_readable_secondaries
+)
+resolve_client_profile() {
+  local view line name value
+  unset "${CLIENT_TARGET_BUNDLE_VARS[@]}"
+  CLIENT_KEY=""; CLIENT_INSTALL_CLASS=""; CLIENT_HOST=""; CLIENT_DEPLOYER=""
+  view="$(mktemp -t mip-client-target.XXXXXX)"
+  if ! "$PYTHON" -m tools.clients resolve --emit client-target --format env --out "$view"; then
+    rm -f "$view"
+    echo "${RED}[deploy] the client profile was refused; fix the fields named above in .env.local (deploy/clients/example.env).${RST}" >&2
+    exit 2
+  fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    name="${line%%=*}"
+    value="${line#*=}"
+    value="${value#\'}"
+    value="${value%\'}"
+    case "$name" in
+      MIP_CLIENT) CLIENT_KEY="$value" ;;
+      MIP_INSTALL_CLASS) CLIENT_INSTALL_CLASS="$value" ;;
+      DATABRICKS_HOST) CLIENT_HOST="$value" ;;
+      BUNDLE_VAR_client_key|BUNDLE_VAR_deployer_principal|BUNDLE_VAR_dashboard_parent_path|BUNDLE_VAR_lakebase_readable_secondaries)
+        printf -v "$name" '%s' "$value"
+        export "${name?}"
+        ;;
+      *)
+        rm -f "$view"
+        echo "${RED}[deploy] the client-target view carries an unexpected name; refusing.${RST}" >&2
+        exit 2
+        ;;
+    esac
+  done < "$view"
+  rm -f "$view"
+  CLIENT_DEPLOYER="${BUNDLE_VAR_deployer_principal:-}"
+  if [[ -z "$CLIENT_KEY" || -z "$CLIENT_HOST" || -z "$CLIENT_DEPLOYER" || \
+        ( "$CLIENT_INSTALL_CLASS" != "demo" && "$CLIENT_INSTALL_CLASS" != "customer" ) ]]; then
+    echo "${RED}[deploy] the client-target view is incomplete; refusing.${RST}" >&2
+    exit 2
+  fi
+  echo "  client:     ${CLIENT_KEY} (${CLIENT_INSTALL_CLASS} install; profile resolved)"
+}
+
+# The host the CLI and the SDK resolved for the deployer must be the client
+# profile's DATABRICKS_HOST (M1-PR2: the client target carries no host).
+# Hostnames compare without regard to case or a trailing slash.
+assert_client_profile_host() {
+  local host expected
+  host="$(printf '%s' "${1%/}" | tr '[:upper:]' '[:lower:]')"
+  expected="$(printf '%s' "${CLIENT_HOST:-}" | tr '[:upper:]' '[:lower:]')"
+  expected="${expected%/}"
+  if [[ -z "$expected" || "$host" != "$expected" ]]; then
+    echo "${RED}[deploy] the deployer's workspace host is not the client profile's DATABRICKS_HOST.${RST}" >&2
+    return 2
+  fi
+}
+
 bind_deployment_workspace_auth() {
-  local bundle_host dotenv_host dotenv_token host token profile profile_host
+  local dotenv_host dotenv_token host token profile profile_host
   dotenv_host="$(dotenv_value DATABRICKS_HOST)"
   dotenv_token="$(dotenv_value DATABRICKS_TOKEN)"
   unset MIP_DEPLOYER_DATABRICKS_HOST MIP_DEPLOYER_DATABRICKS_TOKEN \
@@ -93,6 +159,7 @@ bind_deployment_workspace_auth() {
       echo "${RED}[deploy] could not resolve the planned deployment workspace host.${RST}" >&2
       return 2
     fi
+    assert_client_profile_host "$host" || return 2
     export MIP_DATABRICKS_WORKSPACE_HOST="${host%/}"
     export -n DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET 2>/dev/null || true
     return 0
@@ -188,26 +255,10 @@ PY
     echo "${RED}[deploy] could not resolve the deployment workspace host.${RST}" >&2
     return 2
   fi
-  bundle_host="$($PYTHON - "$TARGET" <<'PY'
-import sys
-from pathlib import Path
-
-import yaml
-
-data = yaml.safe_load(Path("databricks.yml").read_text(encoding="utf-8")) or {}
-target = sys.argv[1]
-targets = data.get("targets") or {}
-if target not in targets:
-    raise SystemExit(f"unknown Databricks bundle target: {target}")
-workspace = targets[target].get("workspace") or {}
-top_workspace = data.get("workspace") or {}
-print(str(workspace.get("host") or top_workspace.get("host") or "").strip().rstrip("/"))
-PY
-)"
-  if [[ -z "$bundle_host" || "${host%/}" != "$bundle_host" ]]; then
-    echo "${RED}[deploy] authenticated workspace host does not match databricks.yml target '$TARGET'.${RST}" >&2
-    return 2
-  fi
+  # The client target carries no host: the one the CLI will use (the selected
+  # profile's, or the PAT pair's) must be the client profile's, before any
+  # request leaves (tools/clients/live_checks.py then proves it live).
+  assert_client_profile_host "$host" || return 2
   export MIP_DATABRICKS_WORKSPACE_HOST="${host%/}"
   # These names represent the normal App user, never the UC/App deployment
   # authority. Preserve their shell values but remove them from child envs.

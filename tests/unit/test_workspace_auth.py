@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -8,18 +9,48 @@ from typing import Any
 
 import pytest
 
+from tests.fixtures.client_profiles import (
+    DEMO_PROFILE,
+    IDENTITY_IDS,
+    env_file_text,
+    paychex_shaped_profile,
+)
+from tools.clients.environment import KNOWN_NAMES
+from tools.clients.schema import FIELD_CLASS, FieldClass
 from tools.databricks import bundle_env
 from tools.databricks.workspace_auth import deployment_workspace_client
 
 REPO = Path(__file__).resolve().parents[2]
+PROFILE = DEMO_PROFILE
+# Every identifying value of the profile, and each application id inside its JSON.
+_IDENTIFYING = sorted(
+    {
+        *(value for name, value in PROFILE.items() if FIELD_CLASS[name] is FieldClass.IDENTIFYING),
+        *IDENTITY_IDS.values(),
+    }
+)
 
 
 @pytest.fixture(autouse=True)
 def _bundle_overrides_in_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """bundle_env.main() writes the bundle's variable-overrides.json: keep it out of the checkout."""
+    """bundle_env.main() writes the bundle's variable-overrides.json: keep it out of the checkout.
+
+    No profile field leaks in from the developer's shell either: -t client
+    resolves the profile from the environment and the test's .env.local.
+    """
 
     monkeypatch.setattr(bundle_env, "BUNDLE_ROOT", tmp_path / "bundle-root")
     monkeypatch.delenv("DATABRICKS_BUNDLE_ROOT", raising=False)
+    for name in KNOWN_NAMES:
+        monkeypatch.delenv(name, raising=False)
+
+
+def _client_env_local(tmp_path: Path, **values: str | None) -> Path:
+    """An .env.local holding the paychex-shaped client profile plus ``values``."""
+
+    env_local = tmp_path / ".env.local"
+    env_local.write_text(env_file_text(paychex_shaped_profile(**values)), encoding="utf-8")
+    return env_local
 
 
 def _recording_factory(calls: list[dict[str, Any]]) -> Any:
@@ -136,7 +167,7 @@ def test_bundle_child_strips_app_facing_oauth_from_ambient_and_dotenv(
         return type("Result", (), {"returncode": 0})()
 
     monkeypatch.setattr(bundle_env.subprocess, "run", fake_run)
-    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "dev"])
+    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "ci"])
 
     assert bundle_env.main() == 0
     assert captured["DATABRICKS_HOST"] == "https://reviewed-workspace.example"
@@ -171,7 +202,7 @@ def test_bundle_child_maps_isolated_resource_names(
         return type("Result", (), {"returncode": 0})()
 
     monkeypatch.setattr(bundle_env.subprocess, "run", fake_run)
-    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "dev"])
+    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "ci"])
 
     assert bundle_env.main() == 0
     assert captured["BUNDLE_VAR_app_name"] == "mip-staging"
@@ -218,7 +249,7 @@ def test_bundle_child_uses_dotenv_resource_names_when_shell_is_absent(
         return type("Result", (), {"returncode": 0})()
 
     monkeypatch.setattr(bundle_env.subprocess, "run", fake_run)
-    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "dev"])
+    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "ci"])
 
     assert bundle_env.main() == 0
     assert captured["BUNDLE_VAR_uc_catalog"] == "mip_staging"
@@ -249,7 +280,7 @@ def test_bundle_child_maps_runtime_secret_scope_from_dotenv(
         return type("Result", (), {"returncode": 0})()
 
     monkeypatch.setattr(bundle_env.subprocess, "run", fake_run)
-    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "dev"])
+    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "ci"])
 
     assert bundle_env.main() == 0
     assert captured["BUNDLE_VAR_runtime_secret_scope"] == "mip-runtime-staging"
@@ -277,7 +308,7 @@ def test_bundle_child_preserves_exported_runtime_scope_over_dotenv(
         return type("Result", (), {"returncode": 0})()
 
     monkeypatch.setattr(bundle_env.subprocess, "run", fake_run)
-    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "dev"])
+    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "ci"])
 
     assert bundle_env.main() == 0
     assert captured["BUNDLE_VAR_runtime_secret_scope"] == "reviewed-runtime-scope"
@@ -353,14 +384,9 @@ def test_direct_bundle_deploy_overwrites_stale_genie_id_with_governed_name(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    env_local = tmp_path / ".env.local"
-    env_local.write_text(
-        "DATABRICKS_WAREHOUSE_ID=warehouse-id\n"
-        "GENIE_SPACE_ID=stale-cross-workspace-id\n"
-        "MIP_AI_GATEWAY_VERIFIER_CLIENT_ID=verifier-client-id\n"
-        "MIP_GENIE_SPACE_NAME=Mortgage Lead Intelligence Staging\n",
-        encoding="utf-8",
-    )
+    env_local = _client_env_local(tmp_path, MIP_GENIE_SPACE_NAME="Mortgage Lead Intelligence Staging")
+    with env_local.open("a", encoding="utf-8") as extra:
+        extra.write("DATABRICKS_WAREHOUSE_ID=warehouse-id\nGENIE_SPACE_ID=stale-cross-workspace-id\n")
     monkeypatch.setattr(bundle_env, "ENV_LOCAL", env_local)
     for name in ("DATABRICKS_WAREHOUSE_ID", "GENIE_SPACE_ID", "MIP_GENIE_SPACE_NAME"):
         monkeypatch.delenv(name, raising=False)
@@ -385,13 +411,14 @@ def test_direct_bundle_deploy_overwrites_stale_genie_id_with_governed_name(
     monkeypatch.setattr(
         bundle_env.sys,
         "argv",
-        ["bundle_env.py", "deploy", "-t", "dev", "--select", "jobs.refresh_gold"],
+        ["bundle_env.py", "deploy", "-t", "client", "--select", "jobs.refresh_gold"],
     )
 
     assert bundle_env.main() == 0
     assert captured["GENIE_SPACE_ID"] == "governed-space-id"
     assert captured["BUNDLE_VAR_genie_space_id"] == "governed-space-id"
-    assert captured["BUNDLE_VAR_ai_gateway_verifier_client_id"] == "verifier-client-id"
+    # -t client: the verifier is the profile's MIP_IDENTITY_IDS_JSON.verifier.
+    assert captured["BUNDLE_VAR_ai_gateway_verifier_client_id"] == IDENTITY_IDS["verifier"]
     assert "stale-cross-workspace-id" not in captured.values()
 
 
@@ -399,14 +426,9 @@ def test_bundle_deployment_bind_uses_the_same_reviewed_workspace_contract(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    env_local = tmp_path / ".env.local"
-    env_local.write_text(
-        "DATABRICKS_WAREHOUSE_ID=warehouse-id\n"
-        "GENIE_SPACE_ID=genie-space-id\n"
-        "MIP_AI_GATEWAY_VERIFIER_CLIENT_ID=verifier-client-id\n"
-        "MIP_APP_NAME=mip-app\n",
-        encoding="utf-8",
-    )
+    env_local = _client_env_local(tmp_path)
+    with env_local.open("a", encoding="utf-8") as extra:
+        extra.write("DATABRICKS_WAREHOUSE_ID=warehouse-id\nGENIE_SPACE_ID=genie-space-id\n")
     monkeypatch.setattr(bundle_env, "ENV_LOCAL", env_local)
     monkeypatch.setattr(
         bundle_env,
@@ -433,7 +455,7 @@ def test_bundle_deployment_bind_uses_the_same_reviewed_workspace_contract(
             "mip_app",
             "mip-app",
             "-t",
-            "dev",
+            "client",
             "--auto-approve",
         ],
     )
@@ -447,14 +469,16 @@ def test_bundle_deployment_bind_uses_the_same_reviewed_workspace_contract(
         "mip_app",
         "mip-app",
         "-t",
-        "dev",
+        "client",
         "--auto-approve",
     ]
     child_env = captured["env"]
     assert isinstance(child_env, dict)
     assert child_env["BUNDLE_VAR_app_name"] == "mip-app"
     assert child_env["BUNDLE_VAR_genie_space_id"] == "genie-space-id"
-    assert child_env["BUNDLE_VAR_ai_gateway_verifier_client_id"] == "verifier-client-id"
+    assert child_env["BUNDLE_VAR_ai_gateway_verifier_client_id"] == IDENTITY_IDS["verifier"]
+    assert child_env["BUNDLE_VAR_client_key"] == "client-one"
+    assert child_env["BUNDLE_VAR_deployer_principal"] == IDENTITY_IDS["deployer"]
     assert captured["check"] is False
 
 
@@ -462,13 +486,14 @@ def test_direct_bundle_deploy_refuses_missing_remote_verifier_binding(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    env_local = tmp_path / ".env.local"
-    env_local.write_text(
-        "DATABRICKS_WAREHOUSE_ID=warehouse-id\n" "GENIE_SPACE_ID=genie-space-id\n",
-        encoding="utf-8",
+    # A core-tier profile has no verifier, so the deploy still has none to bind.
+    core_ids = {role: value for role, value in IDENTITY_IDS.items() if role not in {"verifier", "runtime", "proxy"}}
+    env_local = _client_env_local(
+        tmp_path, MIP_AGENTIC_TIER="off", MIP_IDENTITY_IDS_JSON=json.dumps(core_ids)
     )
+    with env_local.open("a", encoding="utf-8") as extra:
+        extra.write("DATABRICKS_WAREHOUSE_ID=warehouse-id\nGENIE_SPACE_ID=genie-space-id\n")
     monkeypatch.setattr(bundle_env, "ENV_LOCAL", env_local)
-    monkeypatch.delenv("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID", raising=False)
     monkeypatch.setattr(
         bundle_env,
         "_resolve_governed_genie_space_id",
@@ -485,7 +510,7 @@ def test_direct_bundle_deploy_refuses_missing_remote_verifier_binding(
     monkeypatch.setattr(
         bundle_env.sys,
         "argv",
-        ["bundle_env.py", "deploy", "-t", "dev", "--select", "jobs.refresh_gold"],
+        ["bundle_env.py", "deploy", "-t", "client", "--select", "jobs.refresh_gold"],
     )
 
     assert bundle_env.main() == 2
@@ -496,15 +521,11 @@ def test_bundle_deploy_preserves_reviewed_genie_name_over_dotenv(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    env_local = tmp_path / ".env.local"
-    env_local.write_text(
-        "DATABRICKS_WAREHOUSE_ID=warehouse-id\n"
-        "GENIE_SPACE_ID=stale-id\n"
-        "MIP_AI_GATEWAY_VERIFIER_CLIENT_ID=verifier-client-id\n"
-        "MIP_GENIE_SPACE_NAME=Stale Space Name\n",
-        encoding="utf-8",
-    )
+    env_local = _client_env_local(tmp_path, MIP_GENIE_SPACE_NAME="Stale Space Name")
+    with env_local.open("a", encoding="utf-8") as extra:
+        extra.write("DATABRICKS_WAREHOUSE_ID=warehouse-id\nGENIE_SPACE_ID=stale-id\n")
     monkeypatch.setattr(bundle_env, "ENV_LOCAL", env_local)
+    # The profile takes a non-empty shell value over .env.local's.
     monkeypatch.setenv("MIP_GENIE_SPACE_NAME", "Reviewed Space Name")
     observed: list[str] = []
 
@@ -522,7 +543,7 @@ def test_bundle_deploy_preserves_reviewed_genie_name_over_dotenv(
     monkeypatch.setattr(
         bundle_env.sys,
         "argv",
-        ["bundle_env.py", "deploy", "-t", "dev", "--select", "jobs.refresh_gold"],
+        ["bundle_env.py", "deploy", "-t", "client", "--select", "jobs.refresh_gold"],
     )
 
     assert bundle_env.main() == 0
@@ -532,20 +553,23 @@ def test_bundle_deploy_preserves_reviewed_genie_name_over_dotenv(
 @pytest.mark.parametrize(
     "args",
     (
-        ["-t", "dev"],
-        ["-t", "dev", "--select", "apps.mip_app"],
-        ["-t", "dev", "--select", "*"],
-        ["-t", "dev", "--select=apps.mip_app"],
-        ["-t", "dev", "--select", "jobs.refresh_gold", "--plan", "full-plan.json"],
-        ["-t", "dev", "--plan=full-plan.json", "--select=jobs.refresh_gold"],
-        ["-t", "dev", "--select=jobs.refresh_gold", "--var=x=y"],
-        ["-t", "dev", "--select=jobs.refresh_gold", "--var", "x=y"],
-        ["-t", "dev", "--select=jobs.refresh_gold", "--profile", "other-workspace"],
-        ["-t", "dev", "--select=jobs.refresh_gold", "--profile=other-workspace"],
-        ["-t", "dev", "--select=jobs.refresh_gold", "--cluster-id", "cluster-1"],
-        ["-t", "dev", "--select=jobs.refresh_gold", "--cluster-id=cluster-1"],
-        ["-t", "dev", "--select=jobs.refresh_gold", "--force"],
-        ["-t", "dev", "--select=jobs.refresh_gold", "--target", "prod"],
+        ["-t", "client"],
+        ["-t", "client", "--select", "apps.mip_app"],
+        ["-t", "client", "--select", "*"],
+        ["-t", "client", "--select=apps.mip_app"],
+        ["-t", "client", "--select", "jobs.refresh_gold", "--plan", "full-plan.json"],
+        ["-t", "client", "--plan=full-plan.json", "--select=jobs.refresh_gold"],
+        ["-t", "client", "--select=jobs.refresh_gold", "--var=x=y"],
+        ["-t", "client", "--select=jobs.refresh_gold", "--var", "x=y"],
+        ["-t", "client", "--select=jobs.refresh_gold", "--profile", "other-workspace"],
+        ["-t", "client", "--select=jobs.refresh_gold", "--profile=other-workspace"],
+        ["-t", "client", "--select=jobs.refresh_gold", "--cluster-id", "cluster-1"],
+        ["-t", "client", "--select=jobs.refresh_gold", "--cluster-id=cluster-1"],
+        ["-t", "client", "--select=jobs.refresh_gold", "--force"],
+        ["-t", "client", "--select=jobs.refresh_gold", "--target", "client"],
+        # The retired targets and the validate-only ci target never deploy.
+        ["-t", "dev", "--select=jobs.refresh_gold"],
+        ["-t", "prod", "--select=jobs.refresh_gold"],
         ["-t", "ci", "--select=jobs.refresh_gold"],
         ["--select=jobs.refresh_gold"],
     ),
@@ -562,7 +586,7 @@ def test_bundle_env_accepts_only_exact_non_app_deploy_selectors() -> None:
         bundle_env._validate_non_app_deploy_selectors(
             [
                 "-t",
-                "dev",
+                "client",
                 "--select",
                 "jobs.refresh_gold",
                 "--select=pipelines.mip_silver",
@@ -575,22 +599,62 @@ def test_bundle_env_accepts_only_exact_non_app_deploy_selectors() -> None:
 def test_bundle_env_accepts_equals_target_with_exact_non_app_selector() -> None:
     assert (
         bundle_env._validate_non_app_deploy_selectors(
-            ["--target=prod", "--select=jobs.refresh_gold"]
+            ["--target=client", "--select=jobs.refresh_gold"]
         )
         is None
     )
 
 
 @pytest.mark.parametrize(
+    ("argv", "message"),
+    (
+        (["validate", "-t", "dev"], "bundle validate target must be exactly ci or client"),
+        (["validate", "-t", "prod"], "bundle validate target must be exactly ci or client"),
+        (["validate"], "bundle validate target must be exactly ci or client"),
+        (["plan", "-t", "ci"], "bundle plan target must be exactly client"),
+        (["summary", "-t", "dev", "-o", "json"], "bundle summary target must be exactly client"),
+        (["deployment", "bind", "mip_app", "mip-app", "-t", "ci"], "bundle deployment target must be exactly client"),
+    ),
+)
+def test_bundle_env_refuses_every_target_but_client_and_a_ci_validate(
+    argv: list[str], message: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """M1-PR2: the dev and prod targets left databricks.yml; ci only validates."""
+
+    monkeypatch.setattr(bundle_env.render_sql, "render", lambda **_kwargs: pytest.fail("rendered"))
+    monkeypatch.setattr(bundle_env.subprocess, "run", lambda *_a, **_k: pytest.fail("reached the CLI"))
+    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", *argv])
+
+    assert bundle_env.main() == 2
+    assert message in capsys.readouterr().err
+
+
+def test_bundle_env_client_target_refuses_a_refused_profile_before_any_work(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(bundle_env, "ENV_LOCAL", _client_env_local(tmp_path, MIP_EXPECT_METASTORE_ID=None))
+    monkeypatch.setattr(bundle_env.render_sql, "render", lambda **_kwargs: pytest.fail("rendered"))
+    monkeypatch.setattr(bundle_env.subprocess, "run", lambda *_a, **_k: pytest.fail("reached the CLI"))
+    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "client"])
+
+    assert bundle_env.main() == 2
+    err = capsys.readouterr().err
+    assert "client profile refused" in err and "MIP_EXPECT_METASTORE_ID" in err
+    assert not any(value in err for value in _IDENTIFYING), "refusals name fields, never values"
+
+
+@pytest.mark.parametrize(
     "args",
     (
-        ["migrate", "mip_app", "-t", "dev"],
-        ["unbind", "jobs.refresh_gold", "-t", "dev", "--force-lock"],
-        ["unbind", "mip_app", "-t", "dev", "--auto-approve"],
-        ["bind", "mip_app", "another-app", "-t", "dev", "--auto-approve"],
-        ["bind", "mip_app", "mip-app", "-t", "dev", "--var=x=y"],
-        ["bind", "mip_app", "mip-app", "-t", "dev", "-t", "prod"],
+        ["migrate", "mip_app", "-t", "client"],
+        ["unbind", "jobs.refresh_gold", "-t", "client", "--force-lock"],
+        ["unbind", "mip_app", "-t", "client", "--auto-approve"],
+        ["bind", "mip_app", "another-app", "-t", "client", "--auto-approve"],
+        ["bind", "mip_app", "mip-app", "-t", "client", "--var=x=y"],
+        ["bind", "mip_app", "mip-app", "-t", "client", "-t", "client"],
         ["bind", "mip_app", "mip-app", "--auto-approve"],
+        ["bind", "mip_app", "mip-app", "-t", "dev", "--auto-approve"],
+        ["bind", "mip_app", "mip-app", "-t", "prod", "--auto-approve"],
         ["bind", "mip_app", "mip-app", "-t", "ci", "--auto-approve"],
         ["bind", "mip_app", "mip-app", "--target=unknown", "--auto-approve"],
         ["unbind", "mip_app", "--force-lock"],
@@ -610,8 +674,8 @@ def test_bundle_env_rejects_unrestricted_deployment_state_mutation(
 @pytest.mark.parametrize(
     "args",
     (
-        ["bind", "mip_app", "mip-app", "-t", "dev", "--auto-approve"],
-        ["unbind", "mip_app", "--target=prod", "--force-lock"],
+        ["bind", "mip_app", "mip-app", "-t", "client", "--auto-approve"],
+        ["unbind", "mip_app", "--target=client", "--force-lock"],
     ),
 )
 def test_bundle_env_accepts_only_the_governed_app_binding(args: list[str]) -> None:
@@ -628,8 +692,8 @@ def test_bundle_env_rejects_unsafe_deployment_before_remote_resolution(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(bundle_env, "ENV_LOCAL", tmp_path / "missing.env")
-    monkeypatch.setenv("MIP_APP_NAME", "mip-app")
+    # A valid profile, so the refusal is the deployment shape's, not the profile's.
+    monkeypatch.setattr(bundle_env, "ENV_LOCAL", _client_env_local(tmp_path))
     monkeypatch.setattr(
         bundle_env,
         "_resolve_governed_genie_space_id",
@@ -638,7 +702,7 @@ def test_bundle_env_rejects_unsafe_deployment_before_remote_resolution(
     monkeypatch.setattr(
         bundle_env.sys,
         "argv",
-        ["bundle_env.py", "deployment", "unbind", "jobs.refresh_gold", "-t", "dev"],
+        ["bundle_env.py", "deployment", "unbind", "jobs.refresh_gold", "-t", "client"],
     )
 
     assert bundle_env.main() == 2
@@ -678,7 +742,7 @@ def test_bundle_profile_child_does_not_rehydrate_dotenv_pat(
         return type("Result", (), {"returncode": 0})()
 
     monkeypatch.setattr(bundle_env.subprocess, "run", fake_run)
-    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "dev"])
+    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "ci"])
 
     assert bundle_env.main() == 0
     assert captured["DATABRICKS_CONFIG_PROFILE"] == "REVIEWED"

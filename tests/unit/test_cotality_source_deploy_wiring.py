@@ -31,7 +31,7 @@ ACME = CotalitySource(catalog="acme_src", schema="feed", table_prefix="acme_")
 
 @pytest.fixture
 def child(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
-    """Run ``bundle_env validate -t dev``; capture the CLI env and the render call."""
+    """Run ``bundle_env validate -t ci`` (no client profile); capture the CLI env and the render call."""
 
     for name in source_names.ENV_NAMES:
         monkeypatch.delenv(name, raising=False)
@@ -53,7 +53,7 @@ def child(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
 
     monkeypatch.setattr(bundle_env.render_sql, "render", render)
     monkeypatch.setattr(bundle_env.subprocess, "run", cli)
-    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "prod"])
+    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "ci"])
     captured["env_local"] = env_local
     return captured
 

@@ -55,7 +55,7 @@ is actively using the app; `scheduled` runs the lead-page refresh-ahead loop
 at `MIP_LEADS_WARM_INTERVAL_S`, which is ignored under the other two
 policies. For a staffed walkthrough block where warm-route latency matters
 more than idle cost, set `MIP_WAREHOUSE_KEEP_WARM=activity` (or `scheduled`
-with a positive interval) in `.env.local` before `./scripts/deploy.sh -t dev`.
+with a positive interval) in `.env.local` before `./scripts/deploy.sh -t client`.
 
 ```bash
 databricks warehouses start "$DATABRICKS_WAREHOUSE_ID"
@@ -86,9 +86,10 @@ psql "host=$LAKEBASE_HOST user=$LAKEBASE_USER dbname=$LAKEBASE_DATABASE sslmode=
 If the Lakebase instance or App is stopped, first establish which install it
 belongs to:
 
-- **The live dev App** (`mip-app` in the anchor workspace). No governed path
-  recovers it today. Its command of record, an operator
-  `./scripts/deploy.sh -t dev`, is NO-GO on the live workspace
+- **The live dev App** (`mip-app` in the live workspace). No governed path
+  recovers it today. Its install predates the client target and ships only
+  through the emergency recipe until it is adopted; the governed
+  `./scripts/deploy.sh -t client` is NO-GO on the live workspace
   (docs/deployment.md, "The live install is outside this bootstrap, and its
   governed deploy is NO-GO"). A read-only listing on 2026-10-27 found none
   of the seven reserved principals in the live workspace, the deploy never
@@ -131,9 +132,9 @@ gh run watch "$RUN_ID" --exit-status
 
 The GitHub workflow above is dev-only. It is never a recovery path for the
 live dev App.
-Do not transpose it to a customer or production workspace: production recovery requires its separately reviewed
-environment contract and change-controlled `scripts/deploy.sh -t prod`
-invocation. A failed pre-capture rebase remains unsigned and therefore requires
+Do not transpose it to a customer or production workspace: production requires its separately reviewed
+environment contract and a change-controlled `scripts/deploy.sh -t client`
+invocation with that client's profile. A failed pre-capture rebase remains unsigned and therefore requires
 `REBASE_UNVERIFIED_APP=true` again on its next explicitly approved recovery;
 once a signed last-good record exists, the exceptional path refuses to run.
 
@@ -288,7 +289,7 @@ scoring-adjacent code.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| UDF returns NULL | `fn_*` not deployed to `mip.gold.*` | `databricks bundle run mip_refresh_silver -t dev` |
+| UDF returns NULL | `fn_*` not deployed to `mip.gold.*` | `databricks bundle run mip_refresh_silver -t client` |
 | Python says 82, UDF says 83 | Rate coerced to percent (`5.75`) instead of fraction (`0.0575`) on one side | Check the fixture input schema; rate_spread expects fraction |
 | Python says 81, UDF says 82 | Banker's rounding (HALF_EVEN) vs half-up drift | `backend/services/scoring.py::_round_half_even` must match UDF `round(..., 0)` which is HALF_EVEN in Spark |
 | Both say different ints | True scoring drift — primitive changed without fixture update | **STOP.** Revert the primitive edit, update the golden JSON in a separate PR with governance review |
@@ -300,9 +301,14 @@ governance + qa-test-engineer sign-off. The fixtures are the contract.
 
 ## 4. Deploy from scratch
 
+A direct `databricks bundle run <job> -t client` below needs the client
+target's root: export `BUNDLE_VAR_client_key` and `BUNDLE_VAR_deployer_principal`
+from the client profile first, as `scripts/deploy.sh` does (M1-PR2).
+
 Use this when setting up a new dev/prod workspace, or when the
 workspace has been rebuilt. A brand-new workspace has one credentials-only
-bootstrap followed by the normal `./scripts/deploy.sh` (or `make deploy-dev`).
+bootstrap followed by the normal `./scripts/deploy.sh -t client` (run in CI;
+`make deploy-dev` prints its dispatch command).
 Bootstrap cannot touch an App or data resource; deploy creates the App and then
 reconciles its operator grants. After that first install, deploy remains the one
 idempotent command.
@@ -352,7 +358,7 @@ export MIP_OAUTH_CREDENTIAL_RECOVERY_INTENT_PATH="$INTENT_PATH"
 export MIP_OAUTH_CREDENTIAL_RECOVERY_PRINCIPAL_ID="<confirmed-scim-id>"
 export MIP_OAUTH_CREDENTIAL_RECOVERY_AUTHORITY_IDENTITY="<confirmed-client-id>"
 export MIP_OAUTH_CREDENTIAL_RECOVERY_PROVIDER_API="<confirmed-provider-api>"
-./scripts/deploy.sh -t dev
+./scripts/deploy.sh -t client
 # A zero-delta unobserved intent remains quarantined because a bounded read
 # cannot prove that a delayed provider create will never commit. The current
 # provider exposes no durable non-commit evidence. Recovery also refuses
@@ -367,7 +373,7 @@ export MIP_OAUTH_CREDENTIAL_RECOVERY_PROVIDER_API="<confirmed-provider-api>"
 python -m tools.databricks.oauth_credential_recovery_cli inspect-orphan-lease
 export MIP_OAUTH_CREDENTIAL_ORPHAN_LEASE_ID="<reviewed-lease-id>"
 export MIP_OAUTH_CREDENTIAL_ORPHAN_RECOVERY_ROOT_LEASE_ID="<reviewed-recovery-root-id>"
-./scripts/deploy.sh -t dev
+./scripts/deploy.sh -t client
 
 # The outer App-lease recovery variables remain unchanged under lease protocol
 # v5. `recovery-root` now authenticates the canonical signed lease head and the
@@ -406,9 +412,8 @@ python -m tools.databricks.app_deployment_lease repair-head \
 
 # 3. Create/deploy the App; post-bundle reconciliation grants CAN_USE to the
 #    exact normal, operator2, and admin client IDs without rotating credentials.
-./scripts/deploy.sh
-# or equivalently:
-make deploy-dev
+./scripts/deploy.sh -t client
+# (in CI per client environment; `make deploy-dev` prints its dispatch command)
 ```
 
 The normal deploy creates and verifies only the empty managed
@@ -431,12 +436,13 @@ That single invocation executes:
 
 1. `npm --prefix frontend run build` — the bundle sync uploads
    `frontend/dist/**` so the FastAPI runtime can serve the SPA.
-2. `tools/databricks/bundle_env.py validate -t dev`
-   (env-aware wrapper around `databricks bundle validate`; it maps
-   `.env.local` to `BUNDLE_VAR_sql_warehouse_id` / `BUNDLE_VAR_genie_space_id`).
-3. `tools/databricks/bundle_env.py plan -t dev` — read-only direct
+2. `tools/databricks/bundle_env.py validate -t client`
+   (env-aware wrapper around `databricks bundle validate`; it maps the client
+   profile and `.env.local` to `BUNDLE_VAR_*`, the client target's root and
+   run_as included).
+3. `tools/databricks/bundle_env.py plan -t client` — read-only direct
    deployment plan. Review this output before a real app/customer deploy.
-4. `tools/databricks/bundle_env.py deploy -t dev --select ...` — deploys
+4. `tools/databricks/bundle_env.py deploy -t client --select ...` — deploys
    every non-App bundle resource (warehouse, jobs, pipelines, Lakebase,
    experiment, and dashboards) while explicitly excluding `apps.mip_app`.
 5. `tools.databricks.app_resource_bindings` resolves the now-concrete IDs and
@@ -446,24 +452,24 @@ That single invocation executes:
    compute transition occurred. First install then binds that stopped App into
    DAB state. Failed first installs unbind and delete only the newly created,
    unsigned App so a normal retry starts from authoritative absence.
-6. `databricks bundle run mip_lakebase_migrate -t dev` — Postgres
+6. `databricks bundle run mip_lakebase_migrate -t client` — Postgres
    `schema.sql` + `seed_campaigns.sql` and the exact App/verifier role-grant
    postflight. This runs only after the live database binding has provisioned
    the App role and before any App source activation.
 7. The script publishes the per-release App source folder it staged
-   (`/Workspace/Users/<deployer>/.bundle/mortgage-intelligence-platform/<target>/app-src/<release id>`,
+   (`/Workspace/Users/<deployer>/.bundle/mortgage-intelligence-platform/<client>/app-src/<release id>`,
    under `app-src/`, a sibling of the bundle files root; create-only and
    byte-verified) and
    submits its generated, governed App deployment payload to promote that
    folder only after Lakebase migration and treatment constraints have
    converged (docs/deployment.md "Governed per-release App source"). Operators
    must not replace this phase with a bare App deployment command.
-8. `databricks bundle run mip_fred_rates_ingest -t dev` — FRED
+8. `databricks bundle run mip_fred_rates_ingest -t client` — FRED
    MORTGAGE30US into `silver.market_rates_weekly`.
-9. `databricks bundle run mip_refresh_silver -t dev` — Cotality Delta
+9. `databricks bundle run mip_refresh_silver -t client` — Cotality Delta
    Share → `mip.silver.*`; geography coverage is discovered from source
    rows with non-null states.
-10. `databricks bundle run mip_refresh_scores -t dev` — CTAS chain:
+10. `databricks bundle run mip_refresh_scores -t client` — CTAS chain:
    `property_owner_bridge` → `evidence_events` → `borrower_360` →
    `lead_scores` → `lead_population` → `segment_population` →
    `lockin_cohort` → `borrower_dossier` → **`refresh_semantics_views`**
@@ -482,7 +488,7 @@ That single invocation executes:
    Deploy and durable repair runs remove only legacy untouched `pending` /
    `none` rows before the sparse MERGE. Per-event hooks skip that cleanup, so
    user actions never scan or rewrite the population-wide table.
-12. `databricks bundle run mip_growth_agent_monitor_scheduler -t dev` —
+12. `databricks bundle run mip_growth_agent_monitor_scheduler -t client` —
    optional draft-only Growth Agent automation. It calls the deployed app's
    admin-gated `/api/v1/growth-agent/monitors/run-due-all` endpoint, refreshes
    due saved watchlists for their original owners, and creates Slack/Teams
@@ -590,20 +596,26 @@ How it is switched on:
 
 - `databricks.yml` declares `scheduled_refresh_pause_status` with the default
   `PAUSED`, and no target sets it.
-- The `scripts/deploy.sh` preflight exports `UNPAUSED` only for `-t dev`.
-  `MIP_SCHEDULED_REFRESH=off` (shell or `.env.local`) keeps it paused. Every
-  other target is always paused and refuses `MIP_SCHEDULED_REFRESH=on`
-  (exit 2): `-t prod`, where a cadence is a customer decision that needs a
-  reviewed change. `tools/databricks/bundle_env.py` refuses an `UNPAUSED`
-  export for any other install.
-- A failed run emails the deploying user, on the live install only.
+- The `scripts/deploy.sh` preflight exports `UNPAUSED` only for a demo
+  install (the client profile's `MIP_INSTALL_CLASS`; before M1-PR2, `-t dev`).
+  `MIP_SCHEDULED_REFRESH=off` (shell or `.env.local`) keeps it paused. A
+  customer install is always paused and refuses `MIP_SCHEDULED_REFRESH=on`
+  (exit 2): there a cadence is a customer decision that needs a reviewed
+  change. `tools/databricks/bundle_env.py` refuses an `UNPAUSED` export for
+  any other install.
+- Until M1-PR3, the preflight also refuses `MIP_SCHEDULED_REFRESH=on` (exit 2,
+  before any bundle command) for a demo install whose deployer is a service
+  principal, which every `-t client` install is: the failure email would go to
+  an application id. Set `MIP_SCHEDULED_REFRESH=off` for such an install;
+  M1-PR3 mails the profile's `MIP_SCHEDULED_REFRESH_RECIPIENTS` instead.
+- A failed run emails the deploying user, on a demo install only.
   `bundle_env.py` writes that recipient into the target's
-  `.databricks/bundle/<target>/variable-overrides.json` (`dev` for the live
-  install), because the CLI refuses a `BUNDLE_VAR_` export for a list
-  variable, and rewrites it before every CLI call. prod gets no recipient.
+  `.databricks/bundle/<target>/variable-overrides.json` (`client`), because
+  the CLI refuses a `BUNDLE_VAR_` export for a list variable, and rewrites it
+  before every CLI call. A customer install gets no recipient.
 
 **How it lands.** The schedule reaches a workspace only through the bundle
-apply inside a full governed `./scripts/deploy.sh -t dev` run. A Jobs-UI
+apply inside a full governed `./scripts/deploy.sh -t client` run. A Jobs-UI
 unpause is reverted by the next deploy, and there is no other delivery path.
 That run is GO only when all of these hold:
 
@@ -738,7 +750,7 @@ predates the current bundle. For example, a gold job that still carries
   `tools/render_sql.py` default is off) empties the Summit demo first-party
   feeds at the next Friday run, unattended. Render every piecewise upload for
   dev with `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1`; `deploy.sh` defaults it on
-  for `-t dev`. `tools/verify_live.py` detects the mistake as first-party
+  for a demo install (before M1-PR2, `-t dev`). `tools/verify_live.py` detects the mistake as first-party
   sources with `status=not_configured expected live/demo_synthetic`.
 - **Shared catalog.** The dev schedule rebuilds gold in the dev install's
   catalog every week. If a prod install ever shares catalog `mip` in the same
@@ -777,7 +789,7 @@ predates the current bundle. For example, a gold job that still carries
 
 ### Interim refresh (governed deploy NO-GO)
 
-Use this only on an install where the governed `./scripts/deploy.sh -t dev`
+Use this only on an install where the governed `./scripts/deploy.sh -t client`
 is NO-GO (the GO list above) and dev data must move anyway. It rebuilds FRED
 and gold from the current `main` render with the App left running. It changes
 data and, only when step 1 finds a FRED source file that differs from main's
@@ -949,8 +961,8 @@ databricks api post /api/2.0/sql/statements \
   --json '{"statement":"SELECT MAX(_ingested_at) FROM mip.silver.lien_current","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
 
 # If that timestamp is > 24h old, re-run silver + gold in sequence:
-databricks bundle run mip_refresh_silver -t dev
-databricks bundle run mip_refresh_scores -t dev
+databricks bundle run mip_refresh_silver -t client
+databricks bundle run mip_refresh_scores -t client
 ```
 
 Re-run them only where the deployed jobs match the current bundle: on an
@@ -1009,8 +1021,13 @@ for the full workflow map. Common red jobs:
 - `talk-track-lint`: spoken word count out of `[1000, 1500]`. Trim or
   expand `docs/module0-talk-track.md` spoken copy (lines starting
   `> `). See `tools/talk_track_wc.py`.
-- `bundle-validate`: `databricks bundle validate -t dev` locally with
-  placeholder BUNDLE_VARs set (see workflow YAML).
+- `bundle-syntax-check` (bundle YAML + schema-shape check): it parses
+  `databricks.yml` and checks the target shape, with no auth. For the full
+  validate, run `make bundle-validate` locally: `bundle_env.py validate -t
+  client`, with the filled client profile in `.env.local` and that
+  workspace's CLI auth (the CLI creates the root's empty `files` folder when
+  it is missing). The placeholder `ci` target cannot be validated by the
+  real CLI: its `.invalid` host never resolves.
 - `playwright-e2e-offline` (PR): missing fixture / test-fixture regression.
   Repro: `npm --prefix frontend run e2e:ci`.
 - `parity-live` / `playwright-e2e-live` (nightly): **real-UC regression
@@ -1095,9 +1112,9 @@ install whose governed deploy is NO-GO, never run them; use "Interim refresh
 (governed deploy NO-GO)" in §4.
 
 ```bash
-databricks bundle run mip_refresh_silver        -t dev
-databricks bundle run mip_refresh_scores        -t dev
-databricks bundle run mip_sync_lifecycle_state  -t dev
+databricks bundle run mip_refresh_silver        -t client
+databricks bundle run mip_refresh_scores        -t client
+databricks bundle run mip_sync_lifecycle_state  -t client
 ```
 
 Then re-run the gated integration tests with workspace creds exported:
@@ -1250,7 +1267,7 @@ recommended) render as `0` or `—` instead of the expected evaluation-share tot
    current bundle: on an install whose governed deploy is NO-GO, never run
    it; use "Interim refresh (governed deploy NO-GO)" in §4:
    ```bash
-   databricks bundle run mip_refresh_scores -t dev
+   databricks bundle run mip_refresh_scores -t client
    ```
 
 2. **Schema drift** — the Python `_LEAD_POPULATION_COLUMNS` projection
@@ -1366,7 +1383,7 @@ by design. An empty county list is not this incident.
      --json '{"statement":"SELECT state, COUNT(*) AS zips, MAX(snapshot_date) AS snapshot FROM mip.gold.zip_rollup GROUP BY state","warehouse_id":"'"$DATABRICKS_WAREHOUSE_ID"'"}' | jq
    ```
    Warehouse down ⇒ §1.1. Empty or stale per-state rows ⇒ rebuild gold with
-   the governed `./scripts/deploy.sh -t dev` or, where that run is NO-GO, the
+   the governed `./scripts/deploy.sh -t client` or, where that run is NO-GO, the
    "Interim refresh (governed deploy NO-GO)" procedure (§4). **Never
    `databricks bundle run` or `run-now` the deployed `mip_refresh_scores`,
    and never press Admin → Rebuild scoring snapshot, on an install whose

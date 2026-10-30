@@ -314,9 +314,9 @@ if [[ "$DRY_RUN" -eq 1 || "$APP_UPGRADE_STATE" == "green_verified" ]]; then
     --deployment-lease-id "${MIP_APP_DEPLOYMENT_LEASE_ID:-}" \
     --source-git-sha "$SOURCE_GIT_SHA" \
     --files-root "$APP_BUNDLE_FILES_PATH" \
-    --expected-principal "$APP_CURRENT_USER" \
+    --expected-principal "$APP_RELEASE_PRINCIPAL" \
     --expected-target "$TARGET" \
-    --expected-root-leaf "$TARGET"; then
+    --expected-root-leaf "$APP_RELEASE_ROOT_LEAF"; then
     echo "${YLW}[deploy] App release folder prune did not finish; the release is live and nothing it keeps was touched. A later green run retries.${RST}" >&2
   fi
 fi

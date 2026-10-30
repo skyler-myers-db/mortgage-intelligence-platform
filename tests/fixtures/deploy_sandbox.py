@@ -1,10 +1,11 @@
 """An offline sandbox for running ``scripts/deploy.sh --dry-run`` end to end.
 
 A clone of HEAD plus the working tree's uncommitted tracked edits, a stub
-``databricks`` that answers only ``--version`` and fails on anything else, a
-placeholder ``.env.local`` and a base environment stripped of every ambient
-GitHub, Databricks and MIP name. Moved from the CI staging target's dry-run
-test, which left with that target (M0-PR3).
+``databricks`` that answers only ``--version`` and fails on anything else, an
+``.env.local`` holding a full synthetic client profile (the paychex-shaped one
+in tests/fixtures/client_profiles.py, M1-PR2) and a base environment stripped
+of every ambient GitHub, Databricks and MIP name. Moved from the CI staging
+target's dry-run test, which left with that target (M0-PR3).
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+from tests.fixtures.client_profiles import IDENTITY_IDS, env_file_text, paychex_shaped_profile
 
 REPO = Path(__file__).resolve().parents[2]
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -68,9 +71,13 @@ def sandbox(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
         exclude.write(".venv\n")
     (checkout / ".venv").symlink_to(venv_prefix(), target_is_directory=True)
     (checkout / ".env.local").write_text(
-        "DATABRICKS_HOST=https://example.cloud.databricks.com\n"
-        "DATABRICKS_WAREHOUSE_ID=warehouse-1\n"
-        "GENIE_SPACE_ID=space-1\n",
+        env_file_text(
+            {
+                **paychex_shaped_profile(),
+                "DATABRICKS_WAREHOUSE_ID": "warehouse-1",
+                "GENIE_SPACE_ID": "space-1",
+            }
+        ),
         encoding="utf-8",
     )
     bin_dir = tmp_path / "bin"
@@ -81,14 +88,13 @@ def sandbox(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
     env = {name: value for name, value in os.environ.items() if not name.startswith(INHERITED_PREFIXES)}
     env.update(
         {
-            "APP_ENV": "local",
             # A Python SDK client the dry run builds by mistake must fail
             # offline, never resolve the developer's ~/.databrickscfg.
             "DATABRICKS_CONFIG_FILE": str(tmp_path / "no-databrickscfg"),
             "DATABRICKS_STUB_LOG": str(log),
             "GENIE_SPACE_ID": "space-1",
-            "DATABRICKS_AGENT_RUNTIME_CLIENT_ID": "dry-run-runtime-client-id",
-            "MIP_ADMIN_EMAILS": "operator@example.invalid",
+            # An identity alias must equal its MIP_IDENTITY_IDS_JSON role.
+            "DATABRICKS_AGENT_RUNTIME_CLIENT_ID": IDENTITY_IDS["runtime"],
             "MIP_COTALITY_ID_MASK_SECRET": "stable-local-mask-secret",
             "MIP_GENIE_ACTION_SECRET_CURRENT": "stable-local-action-secret",
             "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
@@ -97,7 +103,7 @@ def sandbox(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
     return checkout, env, log
 
 
-def dry_run(checkout: Path, env: dict[str, str], target: str) -> subprocess.CompletedProcess[str]:
+def dry_run(checkout: Path, env: dict[str, str], target: str = "client") -> subprocess.CompletedProcess[str]:
     """``scripts/deploy.sh -t <target> --dry-run`` without silver or smoke."""
 
     return subprocess.run(

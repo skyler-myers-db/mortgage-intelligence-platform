@@ -21,6 +21,9 @@ from typing import Literal
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
+from backend.config import source_names
+from backend.config.cotality_source_settings import CotalitySourceSettings
+from backend.schemas._validators_source_names import set_configured_source_forms_provider
 from backend.schemas._validators_tenant import set_public_lender_name_provider
 from backend.schemas.lender_identity import (
     effective_public_tenant_id,
@@ -117,7 +120,7 @@ def _running_under_pytest() -> bool:
     return "pytest" in sys.modules
 
 
-class Settings(BaseSettings):
+class Settings(BaseSettings, CotalitySourceSettings):
     model_config = SettingsConfigDict(
         env_file=(".env", ".env.local"),
         env_file_encoding="utf-8",
@@ -848,3 +851,7 @@ def get_settings() -> Settings:
 
 settings = get_settings()
 set_public_lender_name_provider(lambda: settings.mip_lender_name)
+# The prompt guards also refuse the configured Cotality share's qualified names.
+set_configured_source_forms_provider(
+    lambda: source_names.qualified_forms(settings.cotality_source())
+)

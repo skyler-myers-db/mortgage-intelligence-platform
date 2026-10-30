@@ -296,6 +296,7 @@ export interface ResponseSchemas {
     label: string;
     object_type: "table" | "view" | "function" | null;
     source: string;
+    source_key: string | null;
   };
   AssetMetadataResponse: {
     asset_path: string;
@@ -1951,6 +1952,7 @@ export interface ResponseSchemas {
     layer: "raw_share" | "silver" | "gold" | "uc_function" | "metric_view" | "reference";
     note: string | null;
     object_type: "table" | "view" | "function";
+    source_key: string | null;
   };
   LoanOfficer: {
     active: boolean;

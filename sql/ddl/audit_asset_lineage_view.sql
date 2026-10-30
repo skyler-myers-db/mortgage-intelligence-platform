@@ -31,8 +31,9 @@
 --
 -- Deploy:    tools/databricks/ensure_asset_lineage_view.py renders this file
 --            for the deploy catalog with tools/render_sql.py (the three-part
---            view name and the two install-catalog literals; the share
---            catalog literal is fixed), probes the system table, publishes
+--            view name and the two install-catalog literals, and the share
+--            catalog literal to the configured Cotality source catalog,
+--            canonical when unset), probes the system table, publishes
 --            the view and verifies its four columns; scripts/deploy.sh then
 --            grants the App SELECT on it. A deployer that cannot read the
 --            system table skips both with a warning and the App keeps its

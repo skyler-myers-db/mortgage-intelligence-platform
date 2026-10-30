@@ -12,7 +12,7 @@ Idempotency contract:
     The write is ``INSERT ... ON CONFLICT (snapshot_date) DO UPDATE``.
     Re-running on the same day (scheduled run + deploy backfill, or a
     retry after a network flap) refreshes the day's row; it never
-    duplicates. The deploy script (``./scripts/deploy.sh -t dev``) runs
+    duplicates. The deploy script (``./scripts/deploy.sh -t client``) runs
     this job once after the gold refresh, which doubles as the
     first-install backfill -- a fresh deploy always leaves at least one
     snapshot row behind.

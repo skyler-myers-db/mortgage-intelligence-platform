@@ -14,8 +14,9 @@ Commands:
 * ``digest``: print the profile digest.
 * ``mask``: register every identifying leaf with the GitHub runner.
 * ``resolve``: register the masks, then write one view (deploy controls,
-  bundle variables or App payload env) to ``--out`` with mode 0600. Values
-  never go to stdout, and no view carries a secret.
+  bundle variables, App payload env, or the client target scripts/deploy.sh
+  reads first) to ``--out`` with mode 0600. Values never go to stdout, and no
+  view carries a secret.
 
 Exit 0 on success, 2 on a refusal. A refusal prints field names and rules,
 never values.
@@ -41,6 +42,7 @@ VIEWS: dict[str, Callable[[ClientProfile], dict[str, str]]] = {
     "controls": views.deploy_controls,
     "bundle-vars": views.bundle_vars,
     "app-env": views.app_payload_env,
+    "client-target": views.client_target,
 }
 
 
