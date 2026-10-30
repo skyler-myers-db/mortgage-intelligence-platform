@@ -7,8 +7,9 @@ default it is a healthy first install of the profile it is given: the
 workspace, metastore and deployer are the profile's; no App, no bundle state
 and no install catalog exist yet; the Cotality share catalog is a Delta
 Sharing catalog from the profile's provider and share with all seven tables;
-the metastore has a storage root; and the account principal holds no account
-admin. Each keyword overrides one of those facts.
+the metastore has a storage root; an install catalog, when a test makes one
+exist, has the profile's storage root; and the account principal holds no
+account admin. Each keyword overrides one of those facts.
 """
 
 from __future__ import annotations
@@ -55,6 +56,7 @@ class LiveWorkspace:
         state: object = None,
         journal: bool = False,
         catalog_properties: object = None,
+        catalog_storage_root: object = _UNSET,
         share: object = _UNSET,
         missing_tables: tuple[str, ...] = (),
         metastore_root: str = "s3://metastore-root-alpha/root",
@@ -77,6 +79,10 @@ class LiveWorkspace:
         self._state = state
         self._journal = journal
         self._catalog_properties = catalog_properties
+        # An existing install catalog was created where the profile says, unless a test says otherwise.
+        self._catalog_storage_root = (
+            profile.get("MIP_UC_CATALOG_STORAGE_ROOT") if catalog_storage_root is _UNSET else catalog_storage_root
+        )
         self._share = self._default_share() if share is _UNSET else share
         self._missing = set(missing_tables)
         self._metastore_root = metastore_root
@@ -155,7 +161,7 @@ class LiveWorkspace:
             self._raise("GET catalogs (install)")
             if self._catalog_properties is None:
                 raise NotFound("no such catalog")
-            return SimpleNamespace(properties=self._catalog_properties)
+            return SimpleNamespace(properties=self._catalog_properties, storage_root=self._catalog_storage_root)
         assert name == self._source().catalog, name
         self._raise("GET catalogs (share)")
         if self._share is None:

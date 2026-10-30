@@ -66,8 +66,10 @@ class _ObjectApi:
             # Another creator won: the catalog is theirs, without this call's properties.
             self.value = self.created
             raise ResourceAlreadyExists("concurrent create")
-        # The API stores the properties sent in the create call.
-        self.value = SimpleNamespace(**{**vars(self.created), "properties": kwargs.get("properties")})
+        # The API stores the properties and the storage root sent in the create call.
+        self.value = SimpleNamespace(
+            **{**vars(self.created), "properties": kwargs.get("properties"), "storage_root": kwargs.get("storage_root")}
+        )
         return self.value
 
 
@@ -598,7 +600,9 @@ def test_inconclusive_identity_group_proof_precedes_namespace_mutation() -> None
 # ------------------------------------------------------------- install marker (M1-PR3)
 
 
-def _ensure_install(workspace: object, *, install_key: str = "summit") -> tuple[bool, bool]:
+def _ensure_install(
+    workspace: object, *, install_key: str = "summit", storage_root: str | None = None
+) -> tuple[bool, bool]:
     return ensure_pipeline_namespace(
         catalog="mip_customer",
         forbidden_owner_principals={"runtime-app-client"},
@@ -606,6 +610,7 @@ def _ensure_install(workspace: object, *, install_key: str = "summit") -> tuple[
         account_factory=lambda: _mirrored_account(workspace),  # type: ignore[arg-type]
         assert_single_writer=lambda: None,
         install_key=install_key,
+        storage_root=storage_root,
     )
 
 
@@ -636,9 +641,10 @@ def test_a_first_install_interrupted_after_the_catalog_create_passes_the_pre_lea
 
     profile = resolve(RawProfile(values=DEMO_PROFILE))
     workspace, catalogs, _schemas = _workspace()
-    _ensure_install(workspace, install_key=profile.client)
+    _ensure_install(workspace, install_key=profile.client, storage_root=profile.catalog_storage_root)
     # The catalog now exists: unmarked it would read as {} (exists), never as absent.
     left_behind = catalogs.value.properties or {}
+    created_at = catalogs.value.storage_root
     account = LiveAccount(IDENTITY_IDS["account_principal"])
     warehouse_only = bundle_state(**{"sql_warehouses.mip_serverless_sql": "a0b1c2d3e4f5a6b7"})
     for facts in (
@@ -646,7 +652,13 @@ def test_a_first_install_interrupted_after_the_catalog_create_passes_the_pre_lea
         {"state": warehouse_only},  # after it, before the App create
         {"state": warehouse_only, "app": SimpleNamespace(name=profile.app_name), "journal": True},
     ):
-        next_run = LiveWorkspace(DEMO_PROFILE, identity_ids=IDENTITY_IDS, catalog_properties=left_behind, **facts)
+        next_run = LiveWorkspace(
+            DEMO_PROFILE,
+            identity_ids=IDENTITY_IDS,
+            catalog_properties=left_behind,
+            catalog_storage_root=created_at,
+            **facts,
+        )
         assert install_checks.check(profile, next_run, lambda: account) == [], facts
 
 

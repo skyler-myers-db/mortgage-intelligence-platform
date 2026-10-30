@@ -33,7 +33,10 @@ reads as absent. Any other read error refuses that check, never "absent".
    tables resolves.
 4. **storage root.** A first install creates the catalog: the metastore must
    have a default storage root, or ``MIP_UC_CATALOG_STORAGE_ROOT`` must be
-   set (the catalog is then created with that ``MANAGED LOCATION``).
+   set (the catalog is then created with that ``MANAGED LOCATION``). When
+   the catalog exists and ``MIP_UC_CATALOG_STORAGE_ROOT`` is set, it must be
+   the catalog's own storage root (a trailing ``/`` aside): a catalog's
+   managed location never moves, so a profile naming another one is wrong.
 5. **account principal.** ``MIP_IDENTITY_IDS_JSON.account_principal`` does not
    hold account admin (its account SCIM roles), read with its own
    credential; it may manage the reserved M2M identities only.
@@ -82,6 +85,7 @@ class InstallChecks:
         self.account = account
         self.lines: list[str] = []
         self.app_bound = False
+        self.install_catalog: Any = None
 
     def run(self) -> list[str]:
         self.adoption()
@@ -89,6 +93,8 @@ class InstallChecks:
         self.cotality_share()
         if catalog_exists is False:
             self.storage_root()
+        elif catalog_exists:
+            self.existing_storage_root()
         self.account_principal()
         return self.lines
 
@@ -143,6 +149,7 @@ class InstallChecks:
             return None
         if catalog is None:
             return False
+        self.install_catalog = catalog
         properties = getattr(catalog, "properties", None) or {}
         marker = str(properties.get(INSTALL_KEY_PROPERTY) or "").strip()
         if marker and marker != self.profile.client:
@@ -217,6 +224,18 @@ class InstallChecks:
             self.lines.append(
                 "storage root: the metastore has no default storage root and MIP_UC_CATALOG_STORAGE_ROOT "
                 "is unset, so the first install could not create MIP_DEFAULT_CATALOG; set it"
+            )
+
+    def existing_storage_root(self) -> None:
+        expected = self.profile.catalog_storage_root
+        if expected is None:
+            return
+        actual = _text(getattr(self.install_catalog, "storage_root", None))
+        if actual.rstrip("/") != expected.rstrip("/"):
+            self.lines.append(
+                "storage root: MIP_DEFAULT_CATALOG exists with another storage root than "
+                "MIP_UC_CATALOG_STORAGE_ROOT; a catalog's managed location never moves, so set the "
+                "catalog's own root or unset the field"
             )
 
     # --- 5. account principal ------------------------------------------------

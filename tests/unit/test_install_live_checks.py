@@ -307,6 +307,35 @@ def test_an_existing_catalog_needs_no_storage_root(tmp_path: Path, capsys: pytes
     assert "GET metastore_summary" not in workspace.calls
 
 
+@pytest.mark.parametrize(
+    "actual",
+    [None, "s3://another-bucket/mip", "gs://another-bucket/mip"],
+    ids=["metastore-root", "another-root", "another-cloud"],
+)
+def test_an_existing_catalog_elsewhere_than_the_configured_root_refuses(
+    actual: str | None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert DEMO_PROFILE["MIP_UC_CATALOG_STORAGE_ROOT"], "positive control: the profile sets a root"
+
+    code, text, workspace, _account = _run(tmp_path, capsys, catalog_storage_root=actual, **_adopted())
+
+    assert code == 2
+    assert _refusals(text) == [
+        "storage root: MIP_DEFAULT_CATALOG exists with another storage root than MIP_UC_CATALOG_STORAGE_ROOT; "
+        "a catalog's managed location never moves, so set the catalog's own root or unset the field"
+    ]
+    assert "GET metastore_summary" not in workspace.calls
+
+
+def test_an_existing_catalog_at_the_configured_root_passes_a_trailing_slash_aside(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = DEMO_PROFILE["MIP_UC_CATALOG_STORAGE_ROOT"].rstrip("/")
+    for actual in (root, root + "/"):
+        code, text, _workspace, _account = _run(tmp_path, capsys, catalog_storage_root=actual, **_adopted())
+        assert code == 0, text
+
+
 # ------------------------------------------------------------- 5. account principal
 
 

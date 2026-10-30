@@ -854,7 +854,9 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
    - **storage root**: a first install needs the metastore's default storage
      root, or `MIP_UC_CATALOG_STORAGE_ROOT`, which the catalog DDL and the
      pipeline namespace bootstrap then use as the catalog's `MANAGED LOCATION`
-     (named to both tools, never printed);
+     (named to both tools, never printed). When the field is set and the
+     catalog exists, it must be the catalog's own storage root (a trailing `/`
+     aside), since a managed location never moves;
    - **account principal**: `MIP_IDENTITY_IDS_JSON.account_principal` holds no
      account admin role (read from account SCIM with its own credential).
    After the live checks, the preflight takes the SQL warehouse from this deployer's bundle
