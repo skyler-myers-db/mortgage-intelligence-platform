@@ -100,7 +100,11 @@ from tools.clients.environment import from_local as client_profile_from_local  #
 from tools.clients.environment import resolve as resolve_client_profile  # noqa: E402
 from tools.clients.errors import ProfileRefusal  # noqa: E402
 from tools.clients.schema import ClientProfile  # noqa: E402
-from tools.databricks import install_pins, scheduled_refresh_posture  # noqa: E402
+from tools.databricks import (  # noqa: E402
+    install_pins,
+    monitor_scheduler_gate,
+    scheduled_refresh_posture,
+)
 from tools.databricks.workspace_auth import (  # noqa: E402
     strip_app_facing_workspace_auth,
 )
@@ -493,6 +497,14 @@ def main() -> int:
         if selector_error is not None:
             print(f"[bundle_env] {selector_error}", file=sys.stderr)
             return 2
+    # The monitor scheduler stays PAUSED until its scheduler role exists (M2-PR5).
+    monitor_refusals = monitor_scheduler_gate.validator_refusals(
+        Path(os.environ.get("DATABRICKS_BUNDLE_ROOT") or REPO)
+    )
+    for reason in monitor_refusals:
+        print(f"[bundle_env] refusing jobs.{monitor_scheduler_gate.JOB_KEY}: {reason}", file=sys.stderr)
+    if monitor_refusals:
+        return 2
     # -t client is the profile's install: resolve it before anything else, so
     # a refused profile never reaches a render, a lookup or the CLI. The
     # refusal lines name fields and rules, never values.

@@ -173,7 +173,8 @@ def test_the_gate_function_is_the_only_bundle_planner() -> None:
     assert "      genie_args=(--allow-unprovisioned-genie)\n" in body
     assert "pre-apply) ;;" in body
     assert '--position "$position"' in body and "--report-out" in body
-    assert body.count("exit 2") == 3
+    # The plan cannot be computed; the plan gate refused; the monitor gate refused (M2-PR5).
+    assert body.count("exit 2") == 4
 
 
 def test_only_the_pre_lease_gate_reads_the_first_install_journal() -> None:
@@ -214,6 +215,7 @@ def _harness(
     phase: str,
     bundle_rc: int = 0,
     journal: str | None = None,
+    monitor_rc: int = 0,
 ) -> tuple[subprocess.CompletedProcess[str], list[str], Path]:
     """Drive the pre-lease block: a stub bundle_env prints ``doc``, the real gate judges it.
 
@@ -234,6 +236,15 @@ def _harness(
     lease = stub_tool(repo, "app_deployment_lease", argv=["acquire"], body="")
     for module in GATE_MODULES:  # the real gate, beside the stubs
         shutil.copy2(REPO / "tools" / "databricks" / module, repo / "tools" / "databricks" / module)
+    # The monitor scheduler gate (M2-PR5) runs on the same plan file right after
+    # the plan gate; its own logic is tests/unit/test_monitor_scheduler_gate.py's.
+    (repo / "tools" / "databricks" / "monitor_scheduler_gate.py").write_text(
+        "import os, sys\n"
+        "assert sys.argv[1:3] == ['check', '--plan'] and os.path.isfile(sys.argv[3]), sys.argv\n"
+        f"open({str(repo / MONITOR_CALLED)!r}, 'a').write('called\\n')\n"
+        f"sys.exit({monitor_rc})\n",
+        encoding="utf-8",
+    )
     shell = (
         f"TMPDIR={tmp_path}\n"
         # macOS mktemp -t ignores TMPDIR; keep both temp files where the test looks.
@@ -271,8 +282,9 @@ def test_the_plan_phase_exits_read_only_and_never_takes_the_lease(tmp_path: Path
     assert "plan phase complete: read-only, stopped before the lease" in result.stdout
     assert "[mip-plan-gate] pre-lease plan gate passed (read-only)" in result.stdout
     assert called == [
-        "bundle_env.called"
-    ], "bundle_env plan is the only stubbed call; the lease never runs"
+        "bundle_env.called",
+        MONITOR_CALLED,
+    ], "bundle_env plan and the monitor gate are the only stubbed calls; the lease never runs"
     assert not lease.exists()
     assert "reached-after-block" not in result.stdout
     assert "unexpected databricks" not in result.stderr
@@ -287,7 +299,7 @@ def test_a_full_run_passes_the_gate_and_continues_to_the_lease(tmp_path: Path) -
 
     assert result.returncode == 0, result.stderr
     assert "reached-after-block" in result.stdout
-    assert called == ["app_deployment_lease.called", "bundle_env.called"]
+    assert called == ["app_deployment_lease.called", "bundle_env.called", MONITOR_CALLED]
     assert lease.exists()
 
 
@@ -309,8 +321,21 @@ def test_a_gate_refusal_exits_2_before_the_lease(
     assert "the bundle plan gate refused (pre-lease)" in result.stderr
     assert "[mip-plan-gate] REFUSED " in result.stderr
     assert not lease.exists() and "reached-after-block" not in result.stdout
-    assert called == ["bundle_env.called"]
+    # The monitor gate still judged the plan: a refusal run reports every refusal.
+    assert called == ["bundle_env.called", MONITOR_CALLED]
     assert not list(tmp_path.glob("mip-bundle-plan.*")), "the raw plan is removed on a refusal too"
+
+
+@pytest.mark.parametrize("phase", ("plan", ""))
+def test_an_enabled_monitor_scheduler_exits_2_before_the_lease(tmp_path: Path, phase: str) -> None:
+    result, called, lease = _harness(tmp_path, fx.adopted(), phase=phase, monitor_rc=2)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "[mip-plan-gate] pre-lease plan gate passed (read-only)" in result.stdout
+    assert "the Growth Agent monitor scheduler is enabled in the plan or live (pre-lease)" in result.stderr
+    assert not lease.exists() and "reached-after-block" not in result.stdout
+    assert called == ["bundle_env.called", MONITOR_CALLED]
+    assert not list(tmp_path.glob("mip-bundle-plan.*")), "the raw plan is removed"
 
 
 def test_a_plan_that_cannot_be_computed_exits_2_before_the_gate(tmp_path: Path) -> None:
@@ -323,6 +348,7 @@ def test_a_plan_that_cannot_be_computed_exits_2_before_the_gate(tmp_path: Path) 
 
 
 APP_NAME = fx.names_of("apps", fx.APP_KEY)[0]
+MONITOR_CALLED = "monitor_scheduler_gate.called"
 
 
 def _workspace_and_journal_doubles(repo: Path, journal: str) -> None:
@@ -372,7 +398,7 @@ def test_a_journal_owned_app_reaches_the_lease_and_its_recovery(
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"[mip-plan-gate] DEFERRED journal_owned apps.mip_app ({state}): " in result.stdout
     assert "reached-after-block" in result.stdout and lease.exists()
-    assert called == ["app_deployment_lease.called", "bundle_env.called"]
+    assert called == ["app_deployment_lease.called", "bundle_env.called", MONITOR_CALLED]
     assert (tmp_path / "repo" / "journal.read").read_text(encoding="utf-8") == (
         f"{APP_NAME} synthetic-rollback-scope synthetic-instance"
     ), "the gate read the journal the deploy names"
@@ -387,7 +413,7 @@ def test_an_app_no_journal_owns_still_refuses_before_the_lease(tmp_path: Path, s
     assert result.returncode == 2, result.stdout + result.stderr
     assert "[mip-plan-gate] REFUSED not_adopted apps.mip_app" in result.stderr
     assert "DEFERRED" not in result.stdout
-    assert not lease.exists() and called == ["bundle_env.called"]
+    assert not lease.exists() and called == ["bundle_env.called", MONITOR_CALLED]
 
 
 def test_the_harness_runs_the_real_gate(tmp_path: Path) -> None:

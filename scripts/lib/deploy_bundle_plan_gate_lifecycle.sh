@@ -2,7 +2,8 @@
 # The bundle plan gate (tools/databricks/bundle_plan_gate.py): plan, then refuse
 # a delete, recreate, identity rename, unknown kind, name collision, unadopted
 # install or unacknowledged Lakebase instance update, and defer (pre-lease only)
-# an App that a signed first-install journal still owns.
+# an App that a signed first-install journal still owns. Beside it, refuse an
+# enabled Growth Agent monitor scheduler (tools/databricks/monitor_scheduler_gate.py).
 # Sourced by scripts/deploy.sh; this file must not change shell options or traps.
 
 # Plan the bundle read-only and judge the plan. pre-lease runs before the signed
@@ -50,16 +51,23 @@ run_bundle_plan_gate() {
     exit 2
   fi
   # The raw plan holds remote state; only the gate's report outlives this call.
-  local gate_rc=0
+  local gate_rc=0 monitor_rc=0
   run "$PYTHON" -m tools.databricks.bundle_plan_gate check \
     --plan "$plan_json" \
     --position "$position" \
     --app-key mip_app \
     --report-out "$report_json" \
     "${journal_args[@]}" || gate_rc=$?
+  # The Growth Agent monitor scheduler stays PAUSED, planned and live, until a
+  # non-approver scheduler role exists (M2-PR5; read-only).
+  run "$PYTHON" -m tools.databricks.monitor_scheduler_gate check --plan "$plan_json" || monitor_rc=$?
   [[ "$DRY_RUN" -eq 1 ]] || rm -f "$plan_json"
   if [[ "$gate_rc" -ne 0 ]]; then
     echo "${RED}[deploy] the bundle plan gate refused (${position}); its full report, which names resources and stays private, is ${report_json}.${RST}" >&2
+    exit 2
+  fi
+  if [[ "$monitor_rc" -ne 0 ]]; then
+    echo "${RED}[deploy] the Growth Agent monitor scheduler is enabled in the plan or live (${position}); nothing was applied.${RST}" >&2
     exit 2
   fi
   [[ "$DRY_RUN" -eq 1 ]] || echo "  bundle plan report (${position}, private): ${report_json}"
