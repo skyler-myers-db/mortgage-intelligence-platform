@@ -819,11 +819,17 @@ def _build_parser() -> argparse.ArgumentParser:
             "zero ownership, memberships, and non-ACL dependencies."
         ),
     )
+    parser.add_argument(
+        "--check", action="store_true", help="Read-only: print role drift and exit 1 on drift."
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.check and args.recover_bootstrap_only:
+        parser.error("--check cannot be combined with --recover-bootstrap-only")
     from databricks.sdk import WorkspaceClient
     from databricks.sdk.config import Config
     from tools.databricks.lakebase_oauth_role_account_principal import (
@@ -837,6 +843,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     account_client = account_client_from_env()
+    if args.check:
+        from tools.databricks.converge_lakebase_oauth_role_check import run_check
+
+        return run_check(client, account_client, args)
     if args.recover_bootstrap_only:
         recover_role_bootstrap(
             client,
