@@ -34,9 +34,25 @@ def test_an_unknown_table_stem_is_refused() -> None:
         CANONICAL.table("property_basic")
 
 
-@pytest.mark.parametrize("unset", [None, "", "   ", "<cotality-source-catalog>", "00000000PLACEHOLDER"])
-def test_unset_blank_and_template_values_mean_the_canonical_name(unset: str | None) -> None:
+@pytest.mark.parametrize("unset", [None, "", "   "])
+def test_unset_and_blank_values_mean_the_canonical_name(unset: str | None) -> None:
     assert source_names.resolve(catalog=unset, schema=unset, table_prefix=unset) == CANONICAL
+
+
+@pytest.mark.parametrize("template", ["<cotality-source-catalog>", " <x> ", "acme_<x>", "00000000PLACEHOLDER"])
+@pytest.mark.parametrize("env_name", source_names.ENV_NAMES)
+def test_a_template_value_refuses_instead_of_meaning_canonical(env_name: str, template: str) -> None:
+    """Only the deploy script refused a template; a direct caller read it as unset."""
+
+    with pytest.raises(ValueError) as refusal:
+        source_names.from_env({env_name: template})
+
+    assert str(refusal.value) == f"{env_name} is a template value; set it or leave it unset"
+
+
+def test_the_template_rule_is_the_client_profile_placeholder_rule() -> None:
+    assert source_names._TEMPLATE.pattern == shapes._PLACEHOLDER.pattern
+    assert source_names._LEGACY_PLACEHOLDER == shapes.LEGACY_PLACEHOLDER
 
 
 def test_each_set_override_replaces_only_its_own_name() -> None:

@@ -5,9 +5,11 @@ catalog ``cotality_mortgage_data``, schema ``corelogic`` and tables named
 ``entrada_eval_<stem>``. An install whose share is mounted under other names
 overrides them with ``MIP_COTALITY_SOURCE_CATALOG``, ``_SCHEMA`` and
 ``_TABLE_PREFIX`` (client profile fields, class public: tools/clients/schema.py).
-Unset, blank and template values mean the canonical name (the ``_is_real``
-rule of tools/databricks/bundle_env.py); scripts/deploy.sh refuses a set value
-that is not a lowercase identifier, a template included, before any render.
+Unset and blank values mean the canonical name. A template value (``<...>`` or
+the legacy ``00000000PLACEHOLDER``) is refused, here and by scripts/deploy.sh
+before any render, rather than read as unset: a copied template line is a
+source someone meant to configure, so every caller, the deploy script or not,
+fails closed on it.
 
 Who reads the names:
 
@@ -57,6 +59,8 @@ TABLE_STEMS: tuple[str, ...] = (
 UC_IDENTIFIER = re.compile(r"[a-z_][a-z0-9_]{0,254}")
 TABLE_PREFIX = re.compile(r"[a-z0-9_]{0,64}")
 _LEGACY_PLACEHOLDER = "00000000PLACEHOLDER"
+# A template value: tools/clients/shapes.py's placeholder rule (a test pins it).
+_TEMPLATE = re.compile(r"<[^<>\n]+>")
 
 
 @dataclass(frozen=True)
@@ -105,14 +109,21 @@ CANONICAL = CotalitySource(
 )
 
 
-def _configured(value: object) -> str | None:
-    """A set value, or ``None`` for unset, blank and template values."""
+def _configured(env_name: str, value: object) -> str | None:
+    """A set value, or ``None`` for unset and blank; a template value refuses.
 
+    The refusal names the setting, never the value.
+    """
+
+    if value is None:
+        return None
     if not isinstance(value, str):
-        return None
+        raise ValueError(f"{env_name} must be a string")
     text = value.strip()
-    if not text or text == _LEGACY_PLACEHOLDER or (text.startswith("<") and text.endswith(">")):
+    if not text:
         return None
+    if text == _LEGACY_PLACEHOLDER or _TEMPLATE.search(text) is not None:
+        raise ValueError(f"{env_name} is a template value; set it or leave it unset")
     return text
 
 
@@ -125,9 +136,9 @@ def resolve(
     """The source with each set override applied over the canonical name."""
 
     return CotalitySource(
-        catalog=_configured(catalog) or CANONICAL.catalog,
-        schema=_configured(schema) or CANONICAL.schema,
-        table_prefix=_configured(table_prefix) or CANONICAL.table_prefix,
+        catalog=_configured(CATALOG_ENV, catalog) or CANONICAL.catalog,
+        schema=_configured(SCHEMA_ENV, schema) or CANONICAL.schema,
+        table_prefix=_configured(TABLE_PREFIX_ENV, table_prefix) or CANONICAL.table_prefix,
     )
 
 

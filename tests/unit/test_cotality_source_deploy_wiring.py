@@ -8,6 +8,9 @@ canonical names.
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -120,3 +123,60 @@ def test_deploy_resolves_validates_and_exports_the_source_before_any_render() ->
     # Resolved before the first SQL render and before any bundle call.
     assert text.index("# >>> cotality source names >>>") < text.index('run "$PYTHON" tools/render_sql.py')
     assert text.index("# >>> cotality source names >>>") < text.index("-m tools.databricks.bundle_env validate")
+
+
+def _preflight_block() -> str:
+    text = deploy_entrypoint_text()
+    return text[text.index("# >>> cotality source names >>>") : text.index("# <<< cotality source names <<<")]
+
+
+def _bashes() -> list[str]:
+    found: list[str] = []
+    for candidate in ("/opt/homebrew/bin/bash", "/usr/local/bin/bash", shutil.which("bash"), "/bin/bash"):
+        if candidate and Path(candidate).exists() and candidate not in found:
+            found.append(candidate)
+    return found
+
+
+def _run_block(bash: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Execute the preflight block, with ``deployment_control_value`` reading the shell only."""
+
+    harness = (
+        "set -euo pipefail\n"
+        "RED=''; RST=''\n"
+        'deployment_control_value() { local value="${!1:-}"; printf \'%s\' "${value:-${2:-}}"; }\n'
+        f"{_preflight_block()}"
+        "env | grep '^MIP_COTALITY_SOURCE_' | sort\n"
+    )
+    base = {key: value for key, value in os.environ.items() if not key.startswith("MIP_")}
+    return subprocess.run(
+        [bash, "-c", harness], env={**base, **env}, capture_output=True, text=True, timeout=60, check=False
+    )
+
+
+@pytest.mark.parametrize("bash", _bashes())
+@pytest.mark.parametrize("env_name", source_names.ENV_NAMES)
+@pytest.mark.parametrize(
+    "value", ["<cotality-source-catalog>", "00000000PLACEHOLDER", "Acme", "acme.src", "Acme;x", "acme src"]
+)
+def test_the_preflight_block_exits_2_on_a_template_or_non_identifier(
+    bash: str, env_name: str, value: str
+) -> None:
+    """Executed, not grepped: each name alone, so a weakened join cannot pass."""
+
+    proc = _run_block(bash, {env_name: value})
+
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "must be lowercase unquoted identifiers" in proc.stderr
+    assert value not in proc.stderr and proc.stdout == ""
+
+
+@pytest.mark.parametrize("bash", _bashes())
+def test_the_preflight_block_exports_set_names_and_leaves_unset_ones_empty(bash: str) -> None:
+    unset = _run_block(bash, {})
+    configured = _run_block(bash, ACME_ENV)
+
+    assert unset.returncode == 0, unset.stderr
+    assert unset.stdout.splitlines() == [f"{name}=" for name in source_names.ENV_NAMES]
+    assert configured.returncode == 0, configured.stderr
+    assert configured.stdout.splitlines() == [f"{name}={value}" for name, value in ACME_ENV.items()]
