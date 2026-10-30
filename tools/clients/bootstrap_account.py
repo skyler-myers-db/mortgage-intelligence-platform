@@ -215,13 +215,34 @@ def _print_plan(plan: Plan, out: TextIO) -> None:
     print(f"plan sha256: {plan.digest()}", file=out)
 
 
+def _secret_drift(obs: Observation) -> list[str]:
+    """Each M2M identity holds exactly one secret: the one the sink was handed.
+
+    An extra secret is one no sink holds (a failed handoff that could not be
+    revoked, or one minted outside the bootstrap), so it is drift. The agent
+    proxy holds two between a rotation and the signed deploy's cutover.
+    """
+
+    drift = []
+    for role, state in obs.roles.items():
+        held = len(state.secret_ids)
+        if state.spec.secret_field is None or state.principal is None or held == 1:
+            continue
+        if held == 0:
+            drift.append(f"{role}: holds no OAuth secret; run --rotate-adopted")
+        elif state.spec.retirement == "immediate":
+            drift.append(f"{role}: holds {held} OAuth secrets, not one; run --rotate-adopted to revoke the older")
+        else:
+            drift.append(
+                f"{role}: holds {held} credentials, not one; the signed deploy retires a superseded one "
+                "after cutover, and any other needs reconciling by hand"
+            )
+    return drift
+
+
 def _verify(clients: Any, request: BootstrapRequest, out: TextIO) -> int:
     obs, plan = _compute(clients, request, "apply")
-    drift = [item.line() for item in plan.steps]
-    for role, state in obs.roles.items():
-        if state.spec.secret_field is not None and state.principal is not None and not state.secret_ids:
-            drift.append(f"{role}: holds no OAuth secret; run --rotate-adopted")
-    drift += list(plan.deferred)
+    drift = [item.line() for item in plan.steps] + _secret_drift(obs) + list(plan.deferred)
     for role, state in obs.roles.items():
         status = "absent" if state.principal is None else state.provenance
         print(f"  {role}: {status}; secrets={len(state.secret_ids)} policies={len(state.policies)}", file=out)
@@ -230,7 +251,11 @@ def _verify(clients: Any, request: BootstrapRequest, out: TextIO) -> int:
         for line in drift:
             print(f"  - {line}", file=out)
         return 1
-    print("bootstrap verify: ok; the deployer, jobs and validator hold no credential", file=out)
+    print(
+        "bootstrap verify: ok; each M2M identity holds one secret, and the deployer, jobs and "
+        "validator hold none",
+        file=out,
+    )
     return 0
 
 

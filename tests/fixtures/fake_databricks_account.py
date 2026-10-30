@@ -15,7 +15,9 @@ fails the test. What exists is checked as it runs, into
 ``estate.violations``:
 
 * a secret delete of a protected (foreign or secretless) identity, or of a
-  secret minted in this test;
+  secret minted in this test, unless the test expects the failed-handoff
+  revocation (``compensation_allowed``); every such delete is recorded in
+  ``revoked_minted`` for the test to check;
 * a UC grant change that removes a privilege;
 * a SCIM group patch that is not a pure ``add``;
 * a rule-set update that drops any (role, principal) pair, or grants any
@@ -131,6 +133,9 @@ class FakeEstate:
     metastore_id: str = METASTORE_ID
     token_audience: str | None = None
     minted_value: str = "minted-secret-value"
+    compensation_allowed: bool = False
+    revoked_minted: list[str] = field(default_factory=list)
+    secret_delete_error: Exception | None = None
     _ids: itertools.count = field(default_factory=lambda: itertools.count(1001))
 
     # --- builders ---------------------------------------------------------
@@ -251,6 +256,8 @@ class _Secrets(_Api):
 
     def delete(self, service_principal_id: str, secret_id: str) -> None:
         self.record("delete", service_principal_id, secret_id)
+        if self.estate.secret_delete_error is not None:
+            raise self.estate.secret_delete_error
         if service_principal_id in self.estate.protected:
             self.violate("deleted a secret of a protected identity")
         held = self.estate.secrets[service_principal_id]
@@ -258,7 +265,9 @@ class _Secrets(_Api):
         if not target:
             raise NotFound("no such secret")
         if target[0].minted_here:
-            self.violate("deleted a secret minted in this run")
+            if not self.estate.compensation_allowed:
+                self.violate("deleted a secret minted in this run")
+            self.estate.revoked_minted.append(secret_id)
         held.remove(target[0])
 
 

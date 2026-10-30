@@ -127,8 +127,16 @@ The agent proxy (`--tier agentic`) differs in two ways:
   credential; with two or more, the plan defers it until you deploy or
   reconcile the extra ones.
 
-If the sink or the proof fails, every older secret is kept. A secret minted
-after you planned changes the digest, so the run refuses before minting.
+If the sink, its confirmation or the proof fails, the tool revokes the new
+secret, re-reads until it is gone, and keeps every older secret. The sink
+may then hold the revoked value, so plan and rotate again. If the revoke
+cannot be proven, the refusal says so: revoke that identity's newest secret
+in the account console. A secret minted after you planned changes the
+digest, so the run refuses before minting.
+
+`--verify` reports drift for any M2M identity that does not hold exactly
+one secret. An extra secret is one no sink holds. The agent proxy holds two
+between a rotation and the signed deploy's cutover.
 
 The secret value never reaches stdout, stderr, a log, the plan or an error
 message. The `databricks` loggers are held at WARNING for the session,
@@ -161,8 +169,9 @@ still pins them exactly.
 - revoke a grant, remove a group member, or drop a rule-set entry;
 - change an identity's roles, so it never grants account admin;
 - lower a workspace permission;
-- delete anything, except older secrets of a pinned M2M identity during
-  `--rotate-adopted` (never the agent proxy's).
+- delete anything, except, during `--rotate-adopted`, older secrets of a
+  pinned M2M identity (never the agent proxy's) or a secret it minted in the
+  same run whose handoff failed.
 
 Two kinds of tests pin this:
 

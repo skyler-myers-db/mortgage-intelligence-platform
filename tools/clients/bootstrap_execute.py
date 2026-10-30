@@ -5,9 +5,10 @@ Every call here is additive, with one reviewed exception:
 * create a service principal, a federation policy (or move the one policy
   an adopted identity already has to the client's subject), a workspace
   assignment, a group, a group member, a rule-set grant or a UC grant;
-* ``--rotate-adopted`` alone deletes, and only the secrets its plan listed
-  for a pinned M2M identity before it minted the new one. The agent proxy's
-  older credentials are never deleted here: the signed deploy retires them.
+* ``--rotate-adopted`` alone deletes: the secrets its plan listed for a
+  pinned M2M identity before it minted the new one, or the new one itself
+  when its handoff fails. The agent proxy's older credentials are never
+  deleted here: the signed deploy retires them.
 
 Never: a metastore or securable ownership transfer, a UC revoke, a SCIM
 ``remove`` or ``replace``, a rule-set update that drops a grant, a change to
@@ -24,8 +25,9 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NoReturn
 
+from databricks.sdk.errors import NotFound
 from databricks.sdk.service.catalog import PermissionsChange, Privilege
 from databricks.sdk.service.iam import (
     GrantRule,
@@ -56,6 +58,7 @@ from tools.databricks.agent_proxy_credential_bundle import canonical_agent_proxy
 _SP_ROLE = {"user": SP_USER, "manager": SP_MANAGER}
 PROBE_ATTEMPTS = 6
 PROBE_INTERVAL_SECONDS = 5.0
+REVOKE_READS = 6
 
 
 class StepFailure(RuntimeError):
@@ -262,11 +265,73 @@ class Executor:
                 self.sleep(PROBE_INTERVAL_SECONDS)
         return False
 
+    def _secret_ids(self, principal: Principal) -> set[str]:
+        return {text(entry.id) for entry in self.account.service_principal_secrets.list(principal.scim_id)}
+
+    def _hand_off(
+        self, spec: RoleSpec, principal: Principal, field_name: str, new_id: str, secret: SecretStr
+    ) -> str | None:
+        """Sink, confirm and prove the new secret; ``None``, or why it failed (value-free)."""
+
+        if not secret.get_secret_value():
+            return "the minted credential came back without a secret"
+        try:
+            value = field_value(spec, principal.application_id, new_id, secret)
+        except ValueError:
+            return "the minted credential cannot form its field's value"
+        try:
+            self.sink.put_secret(field_name, principal.application_id, value)
+            stored = self.sink.confirm_secret(field_name)
+        except BootstrapRefusal as refusal:
+            return "; ".join(refusal.lines)
+        except Exception as exc:  # the class only: the message could echo the value
+            return f"the credential sink failed ({type(exc).__name__})"
+        if not stored:
+            return f"the sink did not confirm {field_name}"
+        if not self._probe(principal.application_id, secret):
+            return "the new credential did not authenticate"
+        return None
+
+    def _revoke_minted(self, role: str, principal: Principal, new_id: str, problem: str) -> NoReturn:
+        """Revoke the new secret no sink took, re-read until it is gone, then refuse.
+
+        The repository's rotation practice (docs/security/m2m-oauth-setup.md):
+        a credential minted for a failed handoff never outlives the run.
+        """
+
+        gone = False
+        try:
+            try:
+                self.account.service_principal_secrets.delete(principal.scim_id, new_id)
+                self._mutated()
+            except NotFound:
+                pass
+            for attempt in range(REVOKE_READS):
+                if new_id not in self._secret_ids(principal):
+                    gone = True
+                    break
+                if attempt + 1 < REVOKE_READS:
+                    self.sleep(PROBE_INTERVAL_SECONDS)
+        except Exception:  # noqa: BLE001 - the outcome below is the whole answer
+            gone = False
+        if gone:
+            outcome = (
+                "the new credential was revoked and older secrets kept; the sink may hold the revoked "
+                "value, so plan and rotate again"
+            )
+        else:
+            outcome = (
+                "the new credential could not be proven revoked: revoke this identity's newest secret "
+                "in the account console, then run --verify; older secrets kept"
+            )
+        raise BootstrapRefusal([f"{role}: {problem}; {outcome}"])
+
     def _rotate_secret(self, item: Step) -> None:
         """Mint, hand to the sink, confirm, prove it authenticates, then revoke the older ones.
 
         Only an ``immediate`` identity's older secrets are revoked; the agent
-        proxy's stay for the signed deploy's blue/green retirement journal.
+        proxy's stay for the signed deploy's blue/green retirement journal. A
+        new secret whose handoff fails is revoked before the refusal.
         """
 
         role, field_name = item.get("role"), item.get("field")
@@ -280,33 +345,22 @@ class Executor:
         new_id = text(getattr(created, "id", None))
         secret = SecretStr(text(getattr(created, "secret", None)))
         del created
-        if not new_id or not secret.get_secret_value() or new_id in state.secret_ids:
-            raise BootstrapRefusal([f"{role}: the minted credential came back incomplete; older secrets kept"])
-        try:
-            value = field_value(state.spec, principal.application_id, new_id, secret)
-        except ValueError:
+        if not new_id or new_id in state.secret_ids:
+            # Nothing names the new secret, so nothing here may revoke it.
             raise BootstrapRefusal(
-                [f"{role}: the minted credential cannot form its field's value; older secrets kept"]
-            ) from None
-        try:
-            self.sink.put_secret(field_name, principal.application_id, value)
-            stored = self.sink.confirm_secret(field_name)
-        except BootstrapRefusal:
-            raise
-        except Exception as exc:
-            raise BootstrapRefusal(
-                [f"{role}: the credential sink failed ({type(exc).__name__}); older secrets kept"]
-            ) from None
-        if not stored:
-            raise BootstrapRefusal([f"{role}: the sink did not confirm {field_name}; older secrets kept"])
-        if not self._probe(principal.application_id, secret):
-            raise BootstrapRefusal([f"{role}: the new credential did not authenticate; older secrets kept"])
+                [
+                    f"{role}: the minted credential came back without a new id; older secrets kept. "
+                    "Revoke this identity's newest secret in the account console, then run --verify"
+                ]
+            )
+        problem = self._hand_off(state.spec, principal, field_name, new_id, secret)
+        if problem is not None:
+            self._revoke_minted(role, principal, new_id, problem)
         for secret_id in older:
             self.account.service_principal_secrets.delete(principal.scim_id, secret_id)
             self._mutated()
-        listed = self.account.service_principal_secrets.list(principal.scim_id)
-        remaining = {text(entry.id) for entry in listed}
+        remaining = self._secret_ids(principal)
         if remaining & set(older):
             raise BootstrapRefusal([f"{role}: an older secret is still listed; re-run --verify"])
         if new_id not in remaining:
-            raise BootstrapRefusal([f"{role}: the new credential is not listed after the rotation; re-run --verify"])
+            raise BootstrapRefusal([f"{role}: the new credential is not listed after rotating; re-run --verify"])

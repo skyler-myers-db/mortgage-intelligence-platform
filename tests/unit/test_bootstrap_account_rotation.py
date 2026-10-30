@@ -4,9 +4,11 @@ Rotation mints one secret per pinned M2M identity, hands it to the sink
 only, confirms and probes it, then revokes exactly the secrets its plan
 listed. The agent proxy is the exception: its field gets the canonical
 credential bundle the deploy parses, and its older credential stays for the
-signed deploy's blue/green retirement. A canary secret value must never
-reach stdout, stderr, a log record, the plan or an exception message, on
-the happy path or any failure path.
+signed deploy's blue/green retirement. A failed handoff revokes the new
+secret and keeps the older ones; ``--verify`` reports any M2M identity that
+does not hold exactly one. A canary secret value must never reach stdout,
+stderr, a log record, the plan or an exception message, on the happy path
+or any failure path.
 """
 
 from __future__ import annotations
@@ -138,15 +140,18 @@ def test_the_minted_secret_never_reaches_output_logs_or_the_plan(
     assert all(CANARY not in repr(secret) and CANARY not in str(secret) for _a, secret in sink.secrets.values())
 
 
+REVOKED = "the new credential was revoked and older secrets kept"
+
+
 @pytest.mark.parametrize(
     ("failure", "message"),
     [
-        ("sink", "the credential sink failed (RuntimeError); older secrets kept"),
-        ("confirm", "the sink did not confirm DATABRICKS_CLIENT_SECRET; older secrets kept"),
-        ("probe", "the new credential did not authenticate; older secrets kept"),
+        ("sink", "the credential sink failed (RuntimeError)"),
+        ("confirm", "the sink did not confirm DATABRICKS_CLIENT_SECRET"),
+        ("probe", "the new credential did not authenticate"),
     ],
 )
-def test_a_failed_handoff_keeps_every_older_secret_and_leaks_nothing(
+def test_a_failed_handoff_revokes_the_new_secret_keeps_the_older_and_leaks_nothing(
     estate: FakeEstate,
     adopted: tuple[Path, FakeSink, dict[str, list[str]]],
     caplog: pytest.LogCaptureFixture,
@@ -155,6 +160,7 @@ def test_a_failed_handoff_keeps_every_older_secret_and_leaks_nothing(
 ) -> None:
     env, sink, older = adopted
     caplog.set_level(logging.DEBUG)
+    estate.compensation_allowed = True
     if failure == "sink":
         sink.fail_put = RuntimeError(f"gh secret set echoed {CANARY}")
     elif failure == "confirm":
@@ -170,11 +176,48 @@ def test_a_failed_handoff_keeps_every_older_secret_and_leaks_nothing(
         probe=(lambda application_id, secret: False) if failure == "probe" else None,
     )
     assert result.code == 2
-    assert f"normal: {message}" in result.err
-    assert not [c for c in estate.calls if c.method == "delete"]
-    assert set(older["normal"]) <= set(_secret_ids(estate, "acme-nightly-ci-sp"))
+    assert f"normal: {message}; {REVOKED}" in result.err
+    (minted,) = [c for c in estate.calls if c.api == "service_principal_secrets" and c.method == "create"]
+    deletes = [c.args for c in estate.calls if c.method == "delete"]
+    assert deletes == [(minted.args[0], estate.revoked_minted[0])] and len(estate.revoked_minted) == 1
+    assert _secret_ids(estate, "acme-nightly-ci-sp") == older["normal"]
     for text in (result.out, result.err, caplog.text):
         assert CANARY not in text
+
+
+def test_a_new_secret_that_cannot_be_proven_revoked_says_so(
+    estate: FakeEstate, adopted: tuple[Path, FakeSink, dict[str, list[str]]]
+) -> None:
+    env, sink, older = adopted
+    sink.fail_put = RuntimeError("gh down")
+    planned = _rotation_plan(estate, env, sink)
+    estate.secret_delete_error = RuntimeError("revoke refused")
+    result = run_tool(estate, "--rotate-adopted", "--ack-plan", planned.digest, env_file=env, sink=sink)
+    assert result.code == 2
+    assert "normal: the credential sink failed (RuntimeError); the new credential could not be proven revoked" in result.err
+    assert len(_secret_ids(estate, "acme-nightly-ci-sp")) == len(older["normal"]) + 1
+    estate.secret_delete_error = None
+    sink.fail_put = None
+    verify = run_tool(estate, "--verify", env_file=env, sink=sink)
+    assert verify.code == 1 and "normal: holds 3 OAuth secrets, not one; run --rotate-adopted" in verify.out
+
+
+def test_verify_reports_an_m2m_identity_without_exactly_one_secret(
+    estate: FakeEstate, adopted: tuple[Path, FakeSink, dict[str, list[str]]]
+) -> None:
+    env, sink, _older = adopted
+    planned = _rotation_plan(estate, env, sink)
+    assert run_tool(estate, "--rotate-adopted", "--ack-plan", planned.digest, env_file=env, sink=sink).code == 0
+    assert run_tool(estate, "--verify", env_file=env, sink=sink).code == 0
+    admin = estate.by_name("acme-nightly-admin-ci-sp")
+    normal = estate.by_name("acme-nightly-ci-sp")
+    assert admin is not None and normal is not None
+    estate.add_secret(admin, "unknown-origin")
+    estate.secrets[normal.scim_id].clear()
+    verify = run_tool(estate, "--verify", env_file=env, sink=sink)
+    assert verify.code == 1
+    assert "admin: holds 2 OAuth secrets, not one; run --rotate-adopted to revoke the older" in verify.out
+    assert "normal: holds no OAuth secret; run --rotate-adopted" in verify.out
 
 
 def test_a_secret_minted_after_the_plan_refuses_before_any_mint(
@@ -257,7 +300,10 @@ def test_the_proxy_gets_its_canonical_bundle_and_keeps_its_older_credential(
     for role, field in (("verifier", "DATABRICKS_VERIFIER_CLIENT_SECRET"), ("runtime", "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET")):
         assert sink.secrets[field] == (sink.pins[role], sink.secrets[field][1])  # type: ignore[index]
         assert sink.secrets[field][1].get_secret_value() == CANARY
-    for text in (planned.out, planned.err, result.out, result.err, caplog.text):
+    verify = run_tool(estate, "--verify", *AGENTIC, env_file=env, sink=sink)
+    assert verify.code == 1
+    assert "proxy: holds 2 credentials, not one; the signed deploy retires a superseded one" in verify.out
+    for text in (planned.out, planned.err, result.out, result.err, verify.out, caplog.text):
         assert CANARY not in text
 
 
