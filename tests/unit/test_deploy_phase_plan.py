@@ -63,7 +63,9 @@ def test_the_plan_phase_dry_run_stops_after_the_pre_lease_gate(tmp_path: Path) -
         " > /tmp/mip-dry-run-bundle-plan-pre-lease.json",
         ".venv/bin/python -m tools.databricks.bundle_plan_gate check"
         " --plan /tmp/mip-dry-run-bundle-plan-pre-lease.json --position pre-lease --app-key mip_app"
-        " --report-out /tmp/mip-dry-run-bundle-plan-report-pre-lease.json",
+        " --report-out /tmp/mip-dry-run-bundle-plan-report-pre-lease.json"
+        " --first-install-app-name mip-app --rollback-scope mip-app-rollback"
+        " --lakebase-instance mip-app-state",
     ]
     assert out.rstrip().endswith(
         "[deploy] plan phase complete: read-only, stopped before the lease; nothing was changed."
@@ -92,6 +94,8 @@ def test_the_full_dry_run_gates_the_plan_before_the_lease_and_again_before_the_a
     plans = [command for command in commands if "bundle_env plan" in command]
     assert len(gates) == 2 and "--position pre-lease" in commands[gates[0]]
     assert "--position pre-apply" in commands[gates[1]]
+    assert "--first-install-app-name mip-app" in commands[gates[0]]
+    assert "--first-install-" not in commands[gates[1]], "the pre-apply gate never defers"
     assert plans == [
         ".venv/bin/python -m tools.databricks.bundle_env plan -t dev -o json --allow-unprovisioned-genie"
         " > /tmp/mip-dry-run-bundle-plan-pre-lease.json",

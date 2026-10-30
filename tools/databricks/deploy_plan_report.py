@@ -9,7 +9,8 @@ refuses to render if a value outside those classes reached it.
 
 ``PlanReport.full()`` adds what an operator needs to act: the resolved names
 each create was looked up under, the lookup that answered, the state lineage
-and serial, and the database-instance field diff an acknowledgement digests.
+and serial, the database-instance update an acknowledgement digests, and why
+a deferred collision was deferred.
 It stays with the operator: a local file today, the client workspace's
 plan-reports folder once the governed plan phase writes one (M1-PR7).
 """
@@ -38,6 +39,7 @@ REFUSAL_CODES = frozenset(
         "not_adopted",
     }
 )
+DEFERRAL_CODES = frozenset({"journal_owned"})
 COUNTED_ACTIONS = ("create", "update", "resize", "update_id", "recreate", "delete", "skip")
 _SYMBOLIC = re.compile(r"[a-z][a-z0-9_]*\.[A-Za-z0-9][A-Za-z0-9_-]*(?:\.(?:permissions|grants))?\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -60,6 +62,16 @@ class Refusal:
 
 
 @dataclass(frozen=True)
+class Deferral:
+    """A collision the gate leaves to a later, lease-held step. ``detail`` is full-report only."""
+
+    code: str
+    resource: str
+    note: str
+    detail: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+
+
+@dataclass(frozen=True)
 class LookupRecord:
     """One existence lookup a create needed (full report only)."""
 
@@ -68,7 +80,7 @@ class LookupRecord:
     names: tuple[str, ...]
     unique_within: str
     method: str
-    outcome: str  # "absent", "exists" or "failed: <error class>"
+    outcome: str  # "absent", "exists", "journal-owned (<state>)" or "failed: <error class>"
 
 
 @dataclass(frozen=True)
@@ -88,6 +100,7 @@ class PlanReport:
     instance_update_sha256: str = ""
     instance_update: tuple[Mapping[str, Any], ...] = ()
     lookups: tuple[LookupRecord, ...] = ()
+    deferrals: tuple[Deferral, ...] = ()
 
     @property
     def refused(self) -> bool:
@@ -120,6 +133,11 @@ class PlanReport:
                     "related": [_symbolic(key) for key in refusal.related],
                 }
             )
+        deferred = []
+        for deferral in self.deferrals:
+            if deferral.code not in DEFERRAL_CODES:
+                raise UnsafePublicValue("a deferral code is not a reviewed code")
+            deferred.append({"code": deferral.code, "resource": _symbolic(deferral.resource)})
         return {
             "schema": PUBLIC_SCHEMA,
             "position": self.position,
@@ -131,6 +149,7 @@ class PlanReport:
             "app": {"resource": self.app_resource, "bound": bool(self.app_bound)},
             "instance_update_sha256": self.instance_update_sha256,
             "refusals": refusals,
+            "deferred": deferred,
         }
 
     def full(self) -> dict[str, Any]:
@@ -147,6 +166,10 @@ class PlanReport:
                 "detail": dict(refusal.detail),
             }
             for public, refusal in zip(report["refusals"], self.refusals, strict=True)
+        ]
+        report["deferred"] = [
+            {**public, "note": deferral.note, "detail": dict(deferral.detail)}
+            for public, deferral in zip(report["deferred"], self.deferrals, strict=True)
         ]
         report["instance_update"] = [dict(item) for item in self.instance_update]
         report["lookups"] = [

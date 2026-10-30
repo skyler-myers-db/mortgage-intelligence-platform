@@ -169,10 +169,25 @@ def test_the_gate_function_is_the_only_bundle_planner() -> None:
         '"$PYTHON" -m tools.databricks.bundle_env plan -t "$TARGET" -o json "${genie_args[@]}"'
         in body
     )
-    assert "pre-lease) genie_args=(--allow-unprovisioned-genie) ;;" in body
+    assert "      genie_args=(--allow-unprovisioned-genie)\n" in body
     assert "pre-apply) ;;" in body
     assert '--position "$position"' in body and "--report-out" in body
     assert body.count("exit 2") == 3
+
+
+def test_only_the_pre_lease_gate_reads_the_first_install_journal() -> None:
+    body = function("run_bundle_plan_gate")
+    pre_lease = body[body.index("    pre-lease)\n") : body.index("    pre-apply) ;;")]
+
+    assert pre_lease.count("journal_args=(") == 1
+    for argument in (
+        '--first-install-app-name "$_GRANTS_APP_NAME"',
+        '--rollback-scope "$APP_ROLLBACK_SECRET_SCOPE"',
+        '--lakebase-instance "$MIP_LAKEBASE_INSTANCE"',
+    ):
+        assert argument in pre_lease and body.count(argument) == 1, argument
+    assert 'local -a genie_args=() journal_args=()' in body
+    assert '--report-out "$report_json" \\\n    "${journal_args[@]}" || gate_rc=$?' in body
 
 
 def test_the_phase_flag_is_parsed_and_the_live_plan_refused_before_any_databricks_call() -> None:
@@ -192,12 +207,23 @@ def test_the_phase_flag_is_parsed_and_the_live_plan_refused_before_any_databrick
 
 
 def _harness(
-    tmp_path: Path, doc: dict[str, object] | str, *, phase: str, bundle_rc: int = 0
+    tmp_path: Path,
+    doc: dict[str, object] | str,
+    *,
+    phase: str,
+    bundle_rc: int = 0,
+    journal: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str], Path]:
-    """Drive the pre-lease block: a stub bundle_env prints ``doc``, the real gate judges it."""
+    """Drive the pre-lease block: a stub bundle_env prints ``doc``, the real gate judges it.
+
+    With ``journal``, the gate's workspace is a double in which the planned App
+    exists, and the signed first-install journal reads ``journal``.
+    """
 
     repo = tmp_path / "repo"
     repo.mkdir()
+    if journal is not None:
+        _workspace_and_journal_doubles(repo, journal)
     planned = stub_tool(
         repo,
         "bundle_env",
@@ -222,7 +248,13 @@ def _harness(
         repo,
         shell,
         dry_run=0,
-        env={"TARGET": "dev", "DEPLOY_PHASE": phase},
+        env={
+            "TARGET": "dev",
+            "DEPLOY_PHASE": phase,
+            "_GRANTS_APP_NAME": APP_NAME,
+            "APP_ROLLBACK_SECRET_SCOPE": "synthetic-rollback-scope",
+            "MIP_LAKEBASE_INSTANCE": "synthetic-instance",
+        },
         # The next statement in deploy.sh is the lease; reaching it would call this.
         epilogue='"$PYTHON" -m tools.databricks.app_deployment_lease acquire\n',
     )
@@ -287,6 +319,74 @@ def test_a_plan_that_cannot_be_computed_exits_2_before_the_gate(tmp_path: Path) 
     assert "the bundle plan could not be computed (pre-lease)" in result.stderr
     assert "[mip-plan-gate]" not in result.stdout + result.stderr
     assert not lease.exists()
+
+
+APP_NAME = fx.names_of("apps", fx.APP_KEY)[0]
+
+
+def _workspace_and_journal_doubles(repo: Path, journal: str) -> None:
+    """The gate's own workspace (the App exists, the caller is an admin) and journal read."""
+
+    package = repo / "tools" / "databricks"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "provision_runtime_secrets.py").write_text(
+        "from types import SimpleNamespace\n"
+        "def bound_workspace():\n"
+        "    me = SimpleNamespace(groups=[SimpleNamespace(display='admins')])\n"
+        "    app = SimpleNamespace(name=" + repr(APP_NAME) + ")\n"
+        "    workspace = SimpleNamespace(\n"
+        "        current_user=SimpleNamespace(me=lambda: me),\n"
+        "        apps=SimpleNamespace(get=lambda name: app),\n"
+        "    )\n"
+        "    return workspace, 'https://workspace.example.invalid'\n",
+        encoding="utf-8",
+    )
+    (package / "app_first_install_journal.py").write_text(
+        "def recovery_state(workspace, *, app_name, rollback_scope, expected_lakebase_instance):\n"
+        f"    open({str(repo / 'journal.read')!r}, 'w').write(\n"
+        "        ' '.join((app_name, rollback_scope, expected_lakebase_instance))\n"
+        "    )\n"
+        f"    return {journal!r}\n",
+        encoding="utf-8",
+    )
+
+
+def _retry_after_an_interrupted_first_install() -> dict[str, object]:
+    """Every non-App resource is in state; the App was created but never bound."""
+
+    return fx.with_entries(
+        fx.adopted(),
+        {"resources.apps.mip_app": fx.entry("create", value=fx.resolved_name("apps", fx.APP_KEY))},
+    )
+
+
+@pytest.mark.parametrize("state", ("unclaimed", "recover"))
+def test_a_journal_owned_app_reaches_the_lease_and_its_recovery(
+    tmp_path: Path, state: str
+) -> None:
+    result, called, lease = _harness(
+        tmp_path, _retry_after_an_interrupted_first_install(), phase="", journal=state
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"[mip-plan-gate] DEFERRED journal_owned apps.mip_app ({state}): " in result.stdout
+    assert "reached-after-block" in result.stdout and lease.exists()
+    assert called == ["app_deployment_lease.called", "bundle_env.called"]
+    assert (tmp_path / "repo" / "journal.read").read_text(encoding="utf-8") == (
+        f"{APP_NAME} synthetic-rollback-scope synthetic-instance"
+    ), "the gate read the journal the deploy names"
+
+
+@pytest.mark.parametrize("state", ("absent", "signed"))
+def test_an_app_no_journal_owns_still_refuses_before_the_lease(tmp_path: Path, state: str) -> None:
+    result, called, lease = _harness(
+        tmp_path, _retry_after_an_interrupted_first_install(), phase="", journal=state
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "[mip-plan-gate] REFUSED not_adopted apps.mip_app" in result.stderr
+    assert "DEFERRED" not in result.stdout
+    assert not lease.exists() and called == ["bundle_env.called"]
 
 
 def test_the_harness_runs_the_real_gate(tmp_path: Path) -> None:

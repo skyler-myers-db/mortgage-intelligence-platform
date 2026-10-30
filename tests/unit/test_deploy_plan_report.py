@@ -80,6 +80,7 @@ def test_the_public_summary_has_a_closed_set_of_keys() -> None:
         "app",
         "instance_update_sha256",
         "refusals",
+        "deferred",
     }
     assert public["verdict"] == "passed" and public["app"] == {
         "resource": "apps.mip_app",

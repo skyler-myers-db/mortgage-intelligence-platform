@@ -1,21 +1,33 @@
 # shellcheck shell=bash
 # The bundle plan gate (tools/databricks/bundle_plan_gate.py): plan, then refuse
 # a delete, recreate, identity rename, unknown kind, name collision, unadopted
-# install or unacknowledged Lakebase instance update.
+# install or unacknowledged Lakebase instance update, and defer (pre-lease only)
+# an App that a signed first-install journal still owns.
 # Sourced by scripts/deploy.sh; this file must not change shell options or traps.
 
 # Plan the bundle read-only and judge the plan. pre-lease runs before the signed
 # lease and every App stop, and may plan before a first install provisions the
 # governed Genie space (bundle_env binds the placeholder only when no space has
-# the governed title). pre-apply re-plans under the lease, after provisioning,
+# the governed title). It also hands the gate the signed first-install journal's
+# coordinates, so an App an interrupted first install left unbound is deferred
+# to the recovery under the lease instead of refused as never adopted.
+# pre-apply re-plans under the lease, after provisioning and that recovery,
 # immediately before the non-App bundle apply, so a plan that changed since the
-# first gate (time of check, time of use) is judged again. A refusal exits 2.
+# first gate (time of check, time of use) is judged again, with no journal
+# deferral. A refusal exits 2.
 run_bundle_plan_gate() {
   local position="${1:?bundle plan gate position is required}"
   local plan_json report_json
-  local -a genie_args=()
+  local -a genie_args=() journal_args=()
   case "$position" in
-    pre-lease) genie_args=(--allow-unprovisioned-genie) ;;
+    pre-lease)
+      genie_args=(--allow-unprovisioned-genie)
+      journal_args=(
+        --first-install-app-name "$_GRANTS_APP_NAME"
+        --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE"
+        --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
+      )
+      ;;
     pre-apply) ;;
     *)
       echo "${RED}[deploy] unknown bundle plan gate position '${position}'.${RST}" >&2
@@ -43,7 +55,8 @@ run_bundle_plan_gate() {
     --plan "$plan_json" \
     --position "$position" \
     --app-key mip_app \
-    --report-out "$report_json" || gate_rc=$?
+    --report-out "$report_json" \
+    "${journal_args[@]}" || gate_rc=$?
   [[ "$DRY_RUN" -eq 1 ]] || rm -f "$plan_json"
   if [[ "$gate_rc" -ne 0 ]]; then
     echo "${RED}[deploy] the bundle plan gate refused (${position}); its full report, which names resources and stays private, is ${report_json}.${RST}" >&2

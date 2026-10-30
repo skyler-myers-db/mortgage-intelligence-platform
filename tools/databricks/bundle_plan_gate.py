@@ -33,6 +33,19 @@ collisions fold into one ``not_adopted`` refusal that lists them as detail.
 With no App there is no install to adopt: a first install that meets a stray
 same-name object keeps its plain ``collision`` refusals and their remedy.
 
+**Journal-owned App** (pre-lease only). An interrupted first install can
+leave the App created but unbound from bundle state: a lost create response,
+a crash between the journal claim and the bind, or a cleanup that unbound
+the App and then failed to delete it. deploy.sh leaves that App, with its
+signed first-install journal, for the next lease to reconcile
+(``deploy_step_signed_blue_proof.sh`` deletes it). So before the lease,
+given ``--first-install-app-name`` and the journal's scope and instance, an
+App collision whose journal reads ``unclaimed`` or ``recover``
+(``app_first_install_journal.recovery_state``, read-only) is deferred, not
+refused, and the run reaches that recovery. The pre-apply gate never defers:
+by then the recovery has proven the App absent, so a create still colliding
+there refuses.
+
 Exit codes: 0 the plan passes; 2 refused (each refusal printed with its
 remedy) or the plan could not be read. Printed lines carry codes, counts,
 digests and symbolic names only (``PlanReport.public_summary``); resolved
@@ -70,6 +83,7 @@ from tools.databricks.bundle_plan_shape import (  # noqa: E402
 )
 from tools.databricks.deploy_plan_report import (  # noqa: E402
     COUNTED_ACTIONS,
+    Deferral,
     LookupRecord,
     PlanReport,
     Refusal,
@@ -78,6 +92,14 @@ from tools.databricks.deploy_plan_report import (  # noqa: E402
 ACK_ENV = "MIP_ACK_DATABASE_INSTANCE_UPDATE"
 DEFAULT_APP_KEY = "mip_app"
 INSTANCE_KIND = "database_instances"
+# The signed journal states deploy.sh reconciles after the lease (recover-claim
+# then delete for "unclaimed", delete for "recover").
+JOURNAL_OWNED_STATES = frozenset({"unclaimed", "recover"})
+JOURNAL_OWNED_NOTE = (
+    "the App is this deployer's interrupted first install, owned by its signed first-install "
+    "journal; the recovery under the lease reconciles (deletes) it, and the pre-apply gate "
+    "judges the create again, strictly"
+)
 PLAN_RESOURCE = "bundle.plan"
 PUBLIC_REASON_CODES = frozenset({"malformed_plan", "lookup_failed"})
 _PREFIX = "[mip-plan-gate]"
@@ -202,6 +224,15 @@ def _refuse(code: str, resource: str, **detail: Any) -> Refusal:
     return Refusal(code=code, resource=resource, remedy=REMEDIES[code], detail=detail)
 
 
+def _journal(read: Callable[[Any, str], str], workspace: Any, app_name: str) -> str:
+    """The journal state of a colliding App; a failed read is never journal-owned."""
+
+    try:
+        return str(read(workspace, app_name))
+    except Exception as exc:  # noqa: BLE001 - recorded; the collision then stands
+        return f"failed: {type(exc).__name__}"
+
+
 def evaluate(
     plan: BundlePlan,
     *,
@@ -209,11 +240,17 @@ def evaluate(
     app_key: str,
     acknowledgement: str,
     workspace_factory: Callable[[], Any],
+    journal_state: Callable[[Any, str], str] | None = None,
 ) -> PlanReport:
-    """Judge one parsed plan; ``workspace_factory`` is called once, only if a create needs it."""
+    """Judge one parsed plan; ``workspace_factory`` is called once, only if a create needs it.
+
+    ``journal_state(workspace, app_name)`` reads the signed first-install
+    journal of a colliding App; it is consulted only at ``pre-lease``.
+    """
 
     app_resource = f"apps.{app_key}"
     refusals: list[Refusal] = []
+    deferrals: list[Deferral] = []
     lookups: list[LookupRecord] = []
     counts = dict.fromkeys(COUNTED_ACTIONS, 0)
     built: list[Any] = []
@@ -272,7 +309,25 @@ def evaluate(
                 )
             else:
                 outcome = "exists" if exists else "absent"
-                if exists:
+                journal = ""
+                if (
+                    exists
+                    and entry.symbolic == app_resource
+                    and position == "pre-lease"
+                    and journal_state is not None
+                ):
+                    journal = _journal(journal_state, workspace, names[0])
+                if journal in JOURNAL_OWNED_STATES:
+                    outcome = f"journal-owned ({journal})"
+                    deferrals.append(
+                        Deferral(
+                            code="journal_owned",
+                            resource=entry.symbolic,
+                            note=JOURNAL_OWNED_NOTE,
+                            detail={"journal_state": journal, "names": list(names)},
+                        )
+                    )
+                elif exists:
                     refusals.append(
                         _refuse(
                             "collision",
@@ -281,6 +336,7 @@ def evaluate(
                             names=list(names),
                             unique_within=spec.unique_within,
                             lookup=spec.method,
+                            **({"journal_state": journal} if journal else {}),
                         )
                     )
             lookups.append(
@@ -351,6 +407,7 @@ def evaluate(
         instance_update_sha256=digest,
         instance_update=diff,
         lookups=tuple(lookups),
+        deferrals=tuple(deferrals),
     )
 
 
@@ -363,6 +420,27 @@ def malformed(position: str, app_key: str, reason: str) -> PlanReport:
         app_bound=False,
         refusals=(_refuse("malformed_plan", PLAN_RESOURCE, reason=reason),),
     )
+
+
+def first_install_journal_reader(
+    app_name: str, rollback_scope: str, lakebase_instance: str
+) -> Callable[[Any, str], str]:
+    """Read the signed first-install journal of ``app_name``, the App this deploy reconciles."""
+
+    def read(workspace: Any, resolved_name: str) -> str:
+        if resolved_name != app_name:
+            raise ValueError("the plan's App is not the App this deploy's journal names")
+        # Imported here: the journal's crypto stack is needed only for a colliding App.
+        from tools.databricks.app_first_install_journal import recovery_state
+
+        return recovery_state(
+            workspace,
+            app_name=app_name,
+            rollback_scope=rollback_scope,
+            expected_lakebase_instance=lakebase_instance,
+        )
+
+    return read
 
 
 def bound_workspace_client() -> Any:
@@ -405,6 +483,9 @@ def _print_report(report: PlanReport) -> None:
         f"(plan_version {report.plan_version}, cli {report.cli_version or 'unknown'}): "
         + ", ".join(f"{counts[action]} {action}" for action in COUNTED_ACTIONS)
     )
+    for deferral in report.deferrals:
+        state = deferral.detail.get("journal_state", "")
+        print(f"{_PREFIX} DEFERRED {deferral.code} {deferral.resource} ({state}): {deferral.note}")
     for refusal in report.refusals:
         print(_refusal_line(report, refusal), file=sys.stderr)
     print(f"{_PREFIX} public summary: {json.dumps(summary, sort_keys=True)}")
@@ -422,7 +503,19 @@ def main(
     check.add_argument("--position", required=True, choices=("pre-lease", "pre-apply"))
     check.add_argument("--app-key", default=DEFAULT_APP_KEY)
     check.add_argument("--report-out", type=Path)
+    journal = check.add_argument_group(
+        "first-install journal (pre-lease only; all three or none)"
+    )
+    journal.add_argument("--first-install-app-name")
+    journal.add_argument("--rollback-scope")
+    journal.add_argument("--lakebase-instance")
     args = parser.parse_args(argv)
+    journal_values = (args.first_install_app_name, args.rollback_scope, args.lakebase_instance)
+    if any(journal_values) and not all(journal_values):
+        parser.error("the first-install journal arguments go together")
+    if any(journal_values) and args.position != "pre-lease":
+        parser.error("the first-install journal is read only before the lease (pre-lease)")
+    reader = first_install_journal_reader(*journal_values) if all(journal_values) else None
 
     try:
         plan = parse_plan(args.plan.read_text(encoding="utf-8"))
@@ -437,6 +530,7 @@ def main(
             app_key=args.app_key,
             acknowledgement=os.environ.get(ACK_ENV, "").strip(),
             workspace_factory=workspace_factory,
+            journal_state=reader,
         )
     if args.report_out is not None:
         _write_private(args.report_out, report.full())

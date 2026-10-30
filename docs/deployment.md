@@ -1860,6 +1860,19 @@ leaves the App serving and changes nothing. The gate refuses:
   detail. With no App there is no install: a first install that meets a stray
   same-name object gets the plain `collision` refusal and its remedy.
 
+One collision is deferred instead, and only before the lease. An interrupted
+first install can leave the App created but not bound into bundle state (a
+lost create response, a crash between the journal claim and the bind, or a
+cleanup that unbound the App and then failed to delete it); the deploy leaves
+that App and its signed first-install journal for the next lease to
+reconcile. On the retry the pre-lease gate reads that journal read-only
+(`app_first_install_journal.recovery_state`, for the App named by
+`MIP_APP_NAME`); when it reads `unclaimed` or `recover`, the App collision is
+printed as `DEFERRED journal_owned apps.mip_app` and the run continues to the
+lease, where the signed-journal recovery deletes the App. The pre-apply gate
+never defers: a create that still collides there refuses. Any other journal
+state, or a journal that cannot be read, keeps the strict refusal.
+
 Printed lines carry refusal codes, counts, digests and symbolic `<kind>.<key>`
 names only (`PlanReport.public_summary()` in
 `tools/databricks/deploy_plan_report.py`). The full report, with the resolved
