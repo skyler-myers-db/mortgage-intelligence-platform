@@ -870,8 +870,10 @@ MIP_COTALITY_SOURCE_TABLE_PREFIX="-"
   install), which the evidence drawer and the asset page key their links by.
 - The prompt guards keep their reviewed canonical patterns and add only the
   configured share's qualified names: `<catalog>.<schema>.` and each table's
-  three-part name. A bare configured name is never a refusal, so a schema
-  called `mortgage` leaves every mortgage question alone.
+  three-part name, also with quoted parts or spaces around the dots. A bare
+  configured name is never a refusal, so a schema called `mortgage` leaves
+  every mortgage question alone. The audit source-asset policy refuses the
+  same qualified names, as it refuses the canonical share.
 
 ### Deploy interpreter
 
