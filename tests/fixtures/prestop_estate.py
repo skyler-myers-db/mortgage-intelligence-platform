@@ -230,11 +230,17 @@ class FakeWorkspace:
         )
 
     def _me(self) -> Any:
+        groups = [{"display": "admins"}]
+        groups.extend(
+            {"display": name, "value": row["id"]}
+            for name, row in self.estate["principals"].items()
+            if row["kind"] == "group" and "deployer-id" in row.get("members", [])
+        )
         return SimpleNamespace(
             user_name=self.estate["deployer"],
             id="deployer-id",
             application_id="",
-            groups=[{"display": "admins"}],
+            groups=groups,
         )
 
     def _app(self, name: str) -> Any:
@@ -300,12 +306,20 @@ class FakeWorkspace:
             raise NotFound(f"schema {full_name} not found")
         return SimpleNamespace(full_name=full_name, owner=owner)
 
-    def _schemas(self, *, catalog_name: str) -> list[Any]:
+    def _schemas(self, *, catalog_name: str, include_browse: bool = False) -> list[Any]:
+        assert include_browse, "a complete schema inventory includes BROWSE-only schemas"
         if f"schemas/{catalog_name}" in self.estate["grants_errors"]:
             raise RuntimeError("PERMISSION_DENIED listing schemas")
+        schemas = self.estate["catalogs"][catalog_name]["schemas"].items()
+        # The API's visibility rule: every schema only for a metastore admin or the
+        # catalog's owner (directly or through a group); anyone else sees its own.
+        names = {self.estate["deployer"]} | {group["display"] for group in self._me().groups}
+        owners = {self.estate["metastore"]["owner"], self.estate["catalogs"][catalog_name]["owner"]}
+        if not names & owners:
+            schemas = [(name, owner) for name, owner in schemas if owner == self.estate["deployer"]]
         return [
             SimpleNamespace(full_name=f"{catalog_name}.{schema}", owner=owner)
-            for schema, owner in self.estate["catalogs"][catalog_name]["schemas"].items()
+            for schema, owner in schemas
         ]
 
     def _table(self, full_name: str) -> Any:

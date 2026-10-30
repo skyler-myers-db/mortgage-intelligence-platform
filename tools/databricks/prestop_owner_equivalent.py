@@ -19,7 +19,11 @@ The probe never revokes or grants: it only reads ``grants.get`` (direct
 assignments on the catalog and on each schema, so every grant is named where it
 can be removed) and the space's permissions. It fails closed: a catalog that is
 absent has no grantees, but any list, grants or permissions read error refuses
-and is never read as "no grantees". The workspace ``admins`` group's Genie
+and is never read as "no grantees". So does a schema listing the deployer
+cannot prove complete: the schemas API returns every schema of a catalog only
+to a metastore admin or the catalog's owner, and anyone else would see only
+the schemas it owns or may use, reading a hidden schema's grants as none
+(``assert_complete_schema_listing``). The workspace ``admins`` group's Genie
 ``CAN_MANAGE`` is the platform's own on every workspace object, cannot be
 revoked, and the deployer is required to be in that group, so it is the one
 grant the probe accepts by name; a Unity Catalog grant to any principal,
@@ -191,15 +195,56 @@ def _uc_grants(workspace: Any, securable_type: str, full_name: str) -> list[Owne
         page_token = token
 
 
+def _caller_names(workspace: Any) -> frozenset[str]:
+    """The deployer's own names and its ``/Me`` groups, casefolded (what an owner field names)."""
+
+    me = workspace.current_user.me()
+    names = {_text(_field(me, "user_name")), _text(_field(me, "application_id"))}
+    groups = _field(me, "groups")
+    if groups is None:
+        raise RuntimeError("the deploying identity's /Me projection omitted its groups")
+    names.update(_text(_field(group, "display")) for group in _items(groups))
+    return frozenset(name.casefold() for name in names if name)
+
+
+def assert_complete_schema_listing(workspace: Any, *, catalog: str, catalog_owner: str) -> None:
+    """Refuse unless ``schemas.list`` returns every schema of ``catalog`` to the deployer.
+
+    The schemas API lists all of a catalog's schemas only for a metastore admin
+    (the metastore's owner, or a member of its owning group) or the catalog's
+    owner (or a member of its owning group). Anyone else gets only the schemas it
+    owns or may use, which would read a hidden schema's grants as none.
+    """
+
+    metastore_id = _text(_field(workspace.metastores.current(), "metastore_id"))
+    if not metastore_id:
+        raise RuntimeError("the current workspace has no authoritative metastore identifier")
+    metastore_owner = _text(_field(workspace.metastores.get(metastore_id), "owner"))
+    if not catalog_owner or not metastore_owner:
+        raise RuntimeError("the governed catalog or the metastore has no readable owner")
+    names = _caller_names(workspace)
+    if catalog_owner.casefold() in names or metastore_owner.casefold() in names:
+        return
+    raise RuntimeError(
+        f"the deployer is neither the owner of catalog {catalog} (or a member of its owning "
+        "group) nor a metastore admin, so the schema listing returns only the schemas it owns "
+        "or may use and cannot prove every schema's grants were read; run as the catalog's "
+        "owner or a metastore admin"
+    )
+
+
 def uc_owner_equivalent_grants(workspace: Any, *, catalog: str) -> list[OwnerEquivalentGrant]:
     """Direct owner-equivalent grants on the governed catalog and each of its schemas."""
 
     try:
-        workspace.catalogs.get(catalog)
+        governed = workspace.catalogs.get(catalog)
     except (NotFound, ResourceDoesNotExist):
         return []
+    assert_complete_schema_listing(
+        workspace, catalog=catalog, catalog_owner=_text(_field(governed, "owner"))
+    )
     grants = _uc_grants(workspace, "catalog", catalog)
-    for schema in workspace.schemas.list(catalog_name=catalog):
+    for schema in workspace.schemas.list(catalog_name=catalog, include_browse=True):
         full_name = _text(_field(schema, "full_name"))
         if not full_name.startswith(f"{catalog}."):
             raise RuntimeError("the schema listing returned a schema outside the governed catalog")

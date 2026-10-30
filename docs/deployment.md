@@ -1983,8 +1983,11 @@ refusal here is the refusal that step would raise with the App down:
   refuses with the exact `REVOKE ... FROM` statement or space-ACL removal, or
   the exact approval to add after the owner's review. The probe never revokes
   or grants, and a grants, schema-listing or permissions read error refuses: it
-  is never read as "no grantees". No post-stop step checks these grantees yet,
-  so this probe owns the assertion.
+  is never read as "no grantees". So does a schema listing the deployer cannot
+  prove complete: the schemas API lists every schema only to a metastore admin
+  or the catalog's owner (directly or through the owning group), so any other
+  deployer refuses here and must run as one of those. No post-stop step checks
+  these grantees yet, so this probe owns the assertion.
 - **Serving endpoints** (`prestop_serving_endpoints`, `serving_endpoint`). The
   cutover's App audit (`audit_global_serving_endpoint_access`) runs first, here,
   on the set that audit reviews: the App may query only the signed record's

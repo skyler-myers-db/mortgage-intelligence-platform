@@ -167,6 +167,45 @@ def test_a_grants_or_listing_read_error_refuses_and_is_never_read_as_no_grantees
     assert "refuses rather than read an unreadable grant list as empty" in refusals[0]
 
 
+def _hidden_schema_grant(estate: dict[str, Any], *, catalog_owner: str) -> dict[str, Any]:
+    # A schema the deployer neither owns nor may use carries an owner-equivalent grant.
+    estate["catalogs"]["mip"]["owner"] = catalog_owner
+    estate["catalogs"]["mip"]["schemas"]["gold"] = STEWARD
+    estate["grants"]["schema/mip.gold"].append({"principal": "analytics-team", "privileges": ["MANAGE"]})
+    return estate
+
+
+def test_a_schema_listing_the_deployer_cannot_prove_complete_refuses() -> None:
+    estate = _hidden_schema_grant(clean_estate(), catalog_owner="mip-data-owners")
+    estate["metastore"]["owner"] = "someone-else@example.invalid"
+
+    refusals, _notes, workspace = _refusals(estate, approved_owners="mip-data-owners")
+
+    assert len(refusals) == 1
+    assert "cannot read the owner-equivalent grantees" in refusals[0]
+    assert "neither the owner of catalog mip (or a member of its owning group)" in refusals[0]
+    assert "run as the catalog's owner or a metastore admin" in refusals[0]
+    listed = workspace.schemas.list(catalog_name="mip", include_browse=True)
+    assert [schema.full_name for schema in listed] == ["mip.audit"], "the API hides mip.gold"
+
+
+@pytest.mark.parametrize("authority", ("member of the owning group", "metastore admin"))
+def test_a_catalog_owner_group_member_or_metastore_admin_reads_every_schema(
+    authority: str,
+) -> None:
+    estate = _hidden_schema_grant(clean_estate(), catalog_owner="mip-data-owners")
+    if authority == "metastore admin":
+        assert estate["metastore"]["owner"] == DEPLOYER
+    else:
+        estate["metastore"]["owner"] = "someone-else@example.invalid"
+        estate["principals"]["mip-data-owners"]["members"] = ["deployer-id"]
+
+    refusals, _notes, _workspace = _refusals(estate, approved_owners="mip-data-owners")
+
+    assert len(refusals) == 1
+    assert "principal 'analytics-team' holds MANAGE on schema mip.gold" in refusals[0]
+
+
 def test_a_permissions_read_error_on_the_governed_space_refuses() -> None:
     workspace = FakeWorkspace(clean_estate())
     refusals, _notes = probe.owner_equivalent_refusals(
