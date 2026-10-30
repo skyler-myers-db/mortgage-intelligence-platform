@@ -154,8 +154,9 @@ python tools/render_sql.py --catalog summit_mortgage
 grep 'CREATE OR REPLACE TABLE' sql/_rendered/transformations/gold_borrower_360.sql
 # -> CREATE OR REPLACE TABLE summit_mortgage.gold.borrower_360 AS ...
 
-# Bundle validate reads from the rendered tree.
-databricks bundle validate -t ci   # Validation OK!
+# Bundle validate reads from the rendered tree (the filled client profile in
+# .env.local and that workspace's CLI auth).
+python tools/databricks/bundle_env.py validate -t client
 
 # Confirm Spark Python jobs receive the same catalog variable.
 grep -n -- '--catalog=${var.uc_catalog}' databricks.yml

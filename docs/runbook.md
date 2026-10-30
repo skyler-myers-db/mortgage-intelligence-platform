@@ -1014,8 +1014,13 @@ for the full workflow map. Common red jobs:
 - `talk-track-lint`: spoken word count out of `[1000, 1500]`. Trim or
   expand `docs/module0-talk-track.md` spoken copy (lines starting
   `> `). See `tools/talk_track_wc.py`.
-- `bundle-validate`: `databricks bundle validate -t ci` locally
-  (`make bundle-validate`), against the placeholder `ci` target.
+- `bundle-syntax-check` (bundle YAML + schema-shape check): it parses
+  `databricks.yml` and checks the target shape, with no auth. For the full
+  validate, run `make bundle-validate` locally: `bundle_env.py validate -t
+  client`, with the filled client profile in `.env.local` and that
+  workspace's CLI auth (the CLI creates the root's empty `files` folder when
+  it is missing). The placeholder `ci` target cannot be validated by the
+  real CLI: its `.invalid` host never resolves.
 - `playwright-e2e-offline` (PR): missing fixture / test-fixture regression.
   Repro: `npm --prefix frontend run e2e:ci`.
 - `parity-live` / `playwright-e2e-live` (nightly): **real-UC regression

@@ -99,9 +99,11 @@ The command of record is `./scripts/deploy.sh -t client`, run in CI per client
 environment: profile resolution and live identity checks, build, env-aware
 direct bundle validate/plan/deploy, app snapshot promotion, refresh jobs,
 Genie rebinding, and smoke checks. `make deploy-dev` no longer deploys from a
-workstation; it prints the dispatch command. `make bundle-validate` is a
-read-only diagnostic against the placeholder `ci` target through
-`tools/databricks/bundle_env.py`. The former mutable `make bundle-deploy` and
+workstation; it prints the dispatch command. `make bundle-validate` validates
+the client target through `tools/databricks/bundle_env.py` against the
+workspace your own CLI auth names, with the filled client profile in
+`.env.local`; it changes no resource, but the CLI creates the root's empty
+`files` folder when it is missing. The former mutable `make bundle-deploy` and
 `make bundle-deploy-dev` aliases, and `make bundle-plan`, fail closed. All
 workspace mutation goes through the deploy script so non-App resource
 selection, App resource reconciliation, signed source promotion, migrations,

@@ -336,7 +336,7 @@ def test_the_host_anchor_tooling_is_retired():
 
     assert not (REPO / "scripts" / "configure-workspace.sh").exists()
     assert "configure-workspace" not in makefile and "check-workspace-host" not in makefile
-    assert "bundle_env.py validate -t ci" in makefile
+    assert "bundle_env.py validate -t client" in makefile and "validate -t ci" not in makefile
     deploy_dev = makefile[makefile.index("\ndeploy-dev:\n") :]
     assert "gh workflow run deploy-dev.yml" in deploy_dev and "./scripts/deploy.sh\n" not in deploy_dev
     result = subprocess.run(["make", "-s", "-C", str(REPO), "deploy-dev"], capture_output=True, text=True, check=False)

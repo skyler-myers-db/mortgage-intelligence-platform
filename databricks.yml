@@ -114,10 +114,13 @@ targets:
           parent_path: ${var.dashboard_parent_path}
         mip_segment_dashboard:
           parent_path: ${var.dashboard_parent_path}
-  # `ci` target is for PR validation ONLY (`make bundle-validate`,
-  # `bundle_env validate -t ci`); bundle_env refuses every other subcommand
-  # for it, so it can never deploy. Its host and principals are placeholders
-  # that name no workspace, so a validate against it needs no profile.
+  # `ci` target: the profile-free target of the bundle_env render and refusal
+  # tests (`bundle_env validate -t ci`, the CLI stubbed); bundle_env refuses
+  # every other subcommand for it, so it can never deploy. Its host and
+  # principals are placeholders that name no workspace: the host is an RFC 2606
+  # `.invalid` name, so a real CLI validate of it stops at auth and never
+  # reaches a workspace. Local validation is `make bundle-validate`, which
+  # validates the client target with the filled profile.
   ci:
     workspace:
       host: https://ci-placeholder.invalid

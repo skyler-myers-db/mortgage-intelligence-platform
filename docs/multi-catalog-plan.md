@@ -134,9 +134,9 @@ diff sql/transformations/gold_borrower_360.sql \
      sql/_rendered/transformations/gold_borrower_360.sql | head
 # shows CREATE OR REPLACE TABLE summit_mortgage.gold.borrower_360 AS ...
 
-# Bundle validate passes against the rendered tree.
-databricks bundle validate -t ci
-# Validation OK!
+# Bundle validate passes against the rendered tree (the filled client
+# profile in .env.local and that workspace's CLI auth).
+python tools/databricks/bundle_env.py validate -t client
 ```
 
 ## Out of scope

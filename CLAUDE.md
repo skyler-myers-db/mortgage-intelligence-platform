@@ -69,7 +69,7 @@ npm --prefix frontend run build                                # tsc -b && vite 
 python tools/verify_scaffold.py
 ./scripts/deploy.sh -t client --dry-run                        # print the governed deploy's plan, no changes
 make deploy-dev                                                 # prints the CI dispatch command (no local deploy)
-make bundle-validate                                            # bundle validate -t ci (placeholder target)
+make bundle-validate                                            # bundle_env validate -t client: the filled profile's workspace, your CLI auth
 # Unrestricted bundle mutation is retired; the governed deploy is ./scripts/deploy.sh -t client.
 
 # Makefile aggregates: make setup | dev-api | dev-ui | test | lint | build | validate
@@ -185,5 +185,5 @@ The product is ready when:
 - Frontend build passes.
 - Unit tests pass (scoring primitives pinned by golden fixtures) AND integration tests pass against real UC (nightly parity run green).
 - Playwright e2e passes against the live app, exercising the full product flow on real data.
-- `databricks bundle validate -t client` passes (the client profile in `.env.local` supplies the root, run_as and resource names; warehouse + Genie space ids resolve from bundle vars).
+- `tools/databricks/bundle_env.py validate -t client` (`make bundle-validate`) passes (the client profile in `.env.local` supplies the root, run_as and resource names; warehouse + Genie space ids resolve from bundle vars).
 - `docs/module0-talk-track.md` supports a 6–8 minute presentation grounded in the multi-state real-data story.

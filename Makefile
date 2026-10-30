@@ -62,12 +62,16 @@ validate:
 render-sql:
 	$(PYTHON) tools/render_sql.py --catalog "$${MIP_DEFAULT_CATALOG:-mip}"
 
-# Local validation uses the `ci` target (M1-PR2): placeholder host and
-# principals, no client profile, and bundle_env refuses every subcommand but
-# validate for it. A bundle plan of the `client` target runs only inside the
-# governed deploy, never from a workstation default.
+# Local validation validates the `client` target (M1-PR2) against the
+# workspace the operator's own CLI auth names, with the root, run_as and names
+# of the filled client profile in .env.local (tools/databricks/bundle_env.py).
+# The CLI authenticates (SCIM Me) and, when the root has no `files` folder yet,
+# creates that empty folder, so it is not a purely offline check. The `ci`
+# target cannot stand in: its host is an RFC 2606 `.invalid` placeholder, so a
+# real validate of it never reaches a workspace. A bundle plan of the `client`
+# target runs only inside the governed deploy, never from a workstation default.
 bundle-validate: render-sql
-	$(PYTHON) tools/databricks/bundle_env.py validate -t ci
+	$(PYTHON) tools/databricks/bundle_env.py validate -t client
 
 bundle-plan: render-sql
 	@echo "bundle-plan is retired: the client target is planned only inside the governed deploy; use make bundle-validate or ./scripts/deploy.sh -t client --dry-run" >&2
@@ -89,7 +93,8 @@ zip:
 #                         for auth resolution rules.
 # `bundle-validate-env`   sources .env.local (if present), exports
 #                         DATABRICKS_WAREHOUSE_ID and GENIE_SPACE_ID into
-#                         bundle variables, then validates the ci target.
+#                         bundle variables, then validates the client
+#                         target, as bundle-validate does.
 # `bundle-deploy-dev`     retired unsafe alias; use `deploy-dev`.
 # ---------------------------------------------------------------------------
 
@@ -102,7 +107,7 @@ provision-genie:
 # GENIE_SPACE_ID to BUNDLE_VAR_sql_warehouse_id / BUNDLE_VAR_genie_space_id
 # before invoking the Databricks CLI.
 bundle-validate-env: render-sql
-	@$(PYTHON) tools/databricks/bundle_env.py validate -t ci
+	@$(PYTHON) tools/databricks/bundle_env.py validate -t client
 
 bundle-deploy-dev: render-sql
 	@echo "bundle-deploy-dev is retired: use make deploy-dev for signed App promotion" >&2

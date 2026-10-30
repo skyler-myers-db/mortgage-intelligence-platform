@@ -1731,9 +1731,11 @@ existing previous key, which stays unbound while
 `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` is unset. An id left set after
 retirement binds the sentinel, which verifies nothing.
 
-`make bundle-validate` and `make bundle-plan` remain read-only diagnostics.
-The mutable `make bundle-deploy` and `make bundle-deploy-dev` aliases are
-retired and fail closed. The internal bundle wrapper accepts mutation only
+`make bundle-validate` (`bundle_env.py validate -t client`) remains a
+diagnostic that changes no resource; the CLI creates the root's empty `files`
+folder when it is missing. `make bundle-plan` and the mutable
+`make bundle-deploy` and `make bundle-deploy-dev` aliases are retired and fail
+closed. The internal bundle wrapper accepts mutation only
 with exact non-App selectors supplied by `scripts/deploy.sh`; it rejects
 unrestricted or App selectors. Always rerun `./scripts/deploy.sh` for recovery
 so complete resource bindings, durable secrets, the signed source contract,
