@@ -133,6 +133,10 @@ class LineageNode(BaseModel):
     label: str
     note: str | None = None
     catalog_explorer_url: str | None = None
+    #: A raw-share node's canonical three-part name, the same on every
+    #: install; ``fqn`` names the share this install configures. ``None``
+    #: for every other layer.
+    source_key: str | None = None
 
 
 class LineageFamily(BaseModel):

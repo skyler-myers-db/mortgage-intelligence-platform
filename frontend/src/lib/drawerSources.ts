@@ -111,6 +111,19 @@ export function assetHrefForSource(rawSource?: string | null): string | null {
   return assetKey ? assetDetailHref(assetKey) : null;
 }
 
+/**
+ * A lineage node's asset key. A Cotality share table carries its canonical
+ * name as `source_key` (the key ASSET_KEYS_BY_SOURCE is written in), because
+ * its `fqn` / `asset_path` names the share wherever this install mounts it.
+ */
+export function assetKeyForLineageNode(node: {
+  source_key?: string | null;
+  fqn?: string;
+  asset_path?: string;
+}): string | null {
+  return assetKeyForSource(node.source_key ?? node.fqn ?? node.asset_path);
+}
+
 export function assetDetailHref(assetKey: string): string {
   return `/data-estate/assets/${encodeURIComponent(assetKey)}`;
 }
