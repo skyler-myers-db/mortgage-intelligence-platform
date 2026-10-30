@@ -63,6 +63,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from backend.config import source_names  # noqa: E402
+from backend.config.source_names import CotalitySource  # noqa: E402
 from backend.services.databricks_sql import (  # noqa: E402
     DatabricksSqlClient,
     DatabricksSqlError,
@@ -98,8 +100,12 @@ def run_audit(
     *,
     sample_size: int,
     seed: int,
+    cotality: CotalitySource,
 ) -> tuple[list[ClipAudit], list[str]]:
-    """Sample + audit ``sample_size`` CLIPs and return per-CLIP results."""
+    """Sample + audit ``sample_size`` CLIPs and return per-CLIP results.
+
+    ``cotality`` is the Cotality share the raw inputs are read from.
+    """
     coverage_states = load_coverage_states(client)
     candidates = sample_clips(
         client,
@@ -129,7 +135,7 @@ def run_audit(
             opportunity_score_bucket=_bucket_label(score),
         )
         try:
-            raw = fetch_raw_inputs(client, clip)
+            raw = fetch_raw_inputs(client, clip, cotality=cotality)
             # IMPORTANT: key the gold lookup by CLIP, not borrower_id.
             # CLIP is the mastered property key for this audit.
             gold = fetch_gold_row(client, clip)
@@ -287,6 +293,12 @@ def main() -> int:
         help="Optional path for a JSON dump of per-CLIP mismatches.",
     )
     args = parser.parse_args()
+    try:
+        # The share the install's silver lift reads (MIP_COTALITY_SOURCE_*).
+        cotality = source_names.from_env(os.environ)
+    except ValueError as exc:
+        print(f"e2e_borrower_audit: {exc}", file=sys.stderr)
+        return 2
 
     client = build_client()
     warmup_client(client)
@@ -295,6 +307,7 @@ def main() -> int:
         client,
         sample_size=args.sample_size,
         seed=args.seed,
+        cotality=cotality,
     )
 
     report = render_report(
@@ -302,6 +315,7 @@ def main() -> int:
         seed=args.seed,
         sample_size=args.sample_size,
         coverage_states=coverage_states,
+        cotality=cotality,
     )
     out_path = Path(args.output) if args.output else (
         _REPO_ROOT / "docs" / "validation" / "borrower-e2e-audit.md"
