@@ -36,7 +36,10 @@ import pytest
 import yaml
 
 from backend.config import source_names
-from backend.schemas.lender_identity_record import lender_identity_digest
+from backend.schemas.lender_identity_record import (
+    lender_identity_digest,
+    reviewed_lender_identity_from_env,
+)
 from tests.fixtures.client_profiles import (
     IDENTITY_IDS,
     LENDER_IDENTITY,
@@ -255,7 +258,11 @@ def test_the_client_render_is_the_retired_dev_targets_byte_for_byte(
     reference = tmp_path / "dev-render"
     RENDER(catalog="mip", demo_first_party_enabled=True, dest_root=reference)
 
-    canonical = {"catalog": "mip", "cotality": source_names.CANONICAL}
+    # A demo profile sets no lender: the Summit demo identity, unpinned, so
+    # the render writes the seed's own tenant rows (#298).
+    demo_lender = reviewed_lender_identity_from_env({})
+    assert not demo_lender.pinned and demo_lender.lender_name == "Summit Mortgage"
+    canonical = {"catalog": "mip", "cotality": source_names.CANONICAL, "lender": demo_lender}
     assert seen["renders"][0] == {**canonical, "demo_first_party_enabled": True}
     assert seen["digest"] == _tree_digest(reference)
     assert seen["command"] == ["databricks", "bundle", "validate", "-t", "client"]
