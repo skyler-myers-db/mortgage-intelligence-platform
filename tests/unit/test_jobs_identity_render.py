@@ -6,8 +6,8 @@ profile's bundle variables (tests/fixtures/client_profiles.py; every
 as written) and each resource M2-PR5 touches is hashed after removing exactly
 what M2-PR5 adds:
 
-* every ``run_as`` (the four App-triggerable jobs, mip_scheduled_refresh and
-  the pipeline move to the jobs principal);
+* every ``run_as`` (the four App-triggerable jobs, mip_scheduled_refresh, the
+  mip_kpi_snapshot job it starts and the pipeline move to the jobs principal);
 * the ``converge_governed_owner`` task and the run's verdict after it
   (``assert_refresh_succeeded``), and a job environment no remaining task
   uses (the one the handover runs in);
@@ -57,6 +57,7 @@ TOUCHED = (
     "jobs.mip_refresh_silver",
     "jobs.mip_refresh_scores",
     "jobs.mip_scheduled_refresh",
+    "jobs.mip_kpi_snapshot",
     "pipelines.mip_feature_pipeline",
 )
 # mip_lakebase_migrate gains only --jobs-reader-client-id (asserted below and in

@@ -1,9 +1,14 @@
 """The optional Lakebase ``jobs_reader`` role (M2-PR5, plan section 4.3).
 
-The lifecycle sync (jobs/sync_lifecycle_state.py) runs as the non-admin jobs
-identity and reads the latest approval and disposition per borrower. This role
-is that identity's whole Lakebase surface: USAGE on ``mip_app`` and SELECT on
-:data:`JOBS_READER_TABLE_PRIVILEGES`, nothing else.
+The lifecycle sync (jobs/sync_lifecycle_state.py) and the KPI snapshot
+(jobs/kpi_snapshot.py) run as the non-admin jobs identity. The sync reads the
+latest approval and disposition per borrower; the snapshot upserts one
+``kpi_snapshots`` row per day (``INSERT ... ON CONFLICT DO UPDATE ...
+RETURNING``, so SELECT, INSERT and UPDATE on that one table). This role is that
+identity's whole Lakebase surface: USAGE on ``mip_app`` and
+:data:`JOBS_READER_TABLE_PRIVILEGES`, nothing else. The name stays
+``jobs_reader``: every other grant it holds is a read, and the KPI write is the
+one the deployer (the database owner) made before M2-PR5 moved the job off it.
 
 It is off unless jobs/lakebase_migrate.py is given ``--jobs-reader-client-id``
 (the bundle passes ``${var.jobs_principal}``). Unset, the grant reconciliation
@@ -15,7 +20,7 @@ inside the same failure-atomic transaction as the App and verifier roles:
   ``--role-contract jobs_reader`` creates it LOGIN-only before the migration)
   and be distinct from the App, verifier and executor roles;
 * everything it holds on the database, every schema, table, sequence and
-  routine is revoked, then USAGE and the two SELECT grants are made;
+  routine is revoked, then USAGE and the reviewed table grants are made;
 * :func:`postflight_jobs_reader_grants` proves exactly that set, and any other
   privilege rolls the whole transaction back.
 
@@ -47,6 +52,8 @@ from jobs.lakebase_migration_schema_hooks import _postflight_trigger_inventory
 JOBS_READER_TABLE_PRIVILEGES: Mapping[str, tuple[str, ...]] = {
     "approvals": ("SELECT",),
     "call_dispositions": ("SELECT",),
+    # The KPI snapshot's daily upsert (kpi_snapshots has a UUID key, no sequence).
+    "kpi_snapshots": ("SELECT", "INSERT", "UPDATE"),
 }
 LABEL = "jobs reader"
 _PLACEHOLDERS = frozenset({"00000000PLACEHOLDER"})
@@ -112,7 +119,7 @@ def grant_statements(
 
 
 def postflight_jobs_reader_grants(cur: object, role: str) -> None:
-    """The role holds exactly CONNECT, USAGE on mip_app and the reviewed SELECTs; else raise."""
+    """The role holds exactly CONNECT, USAGE on mip_app and the reviewed table grants; else raise."""
 
     cur.execute("SELECT rolname FROM pg_roles WHERE rolname = %s", (role,))  # type: ignore[attr-defined]
     if cur.fetchall() != [(role,)]:  # type: ignore[attr-defined]
@@ -154,7 +161,7 @@ def postflight_jobs_reader_grants(cur: object, role: str) -> None:
         f"{LABEL} table", actual=actual_tables, expected=set(_APP_ROLE_TABLE_PRIVILEGES)
     )
     # Every table privilege on every relation of every non-system schema: the
-    # reviewed SELECTs and nothing else, so another schema cannot hide a grant.
+    # reviewed grants and nothing else, so another schema cannot hide a grant.
     cur.execute(  # type: ignore[attr-defined]
         """
         SELECT n.nspname, c.relname, privilege.name

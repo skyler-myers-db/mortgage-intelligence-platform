@@ -2,8 +2,9 @@
 
 * jobs/_install_pins.py reads exactly the reviewed pins shape from its own
   folder; a missing or malformed file refuses.
-* Each App-triggerable Python entrypoint's ``__main__`` path goes through its
-  ``run``, which judges the parameters against the pins first (the lifecycle
+* Each jobs-identity Python entrypoint's ``__main__`` path (the App-triggerable
+  jobs', and the KPI snapshot's, which the weekly refresh starts) goes
+  through its ``run``, which judges the parameters against the pins first (the lifecycle
   sync's is jobs/sync_lifecycle_state_job.py, since the App imports
   jobs/sync_lifecycle_state.py and that module stays as the App runs it): an overridden
   ``--catalog``, ``--lakebase-instance``, ``--lakebase-database`` or
@@ -34,6 +35,7 @@ import yaml
 
 from jobs import _install_pins as pins_module
 from jobs import fred_rates_ingest as fred
+from jobs import kpi_snapshot as kpi
 from jobs import sync_lifecycle_state as sync
 from jobs import sync_lifecycle_state_job as sync_job
 from tests.fixtures.client_profiles import env_file_text, paychex_shaped_profile
@@ -239,10 +241,66 @@ def test_a_missing_pins_file_refuses_before_any_sql(
     assert recorder.calls == []
 
 
+KPI_ARGS = ["--catalog=mip", "--lakebase-instance=mip-app-state", "--lakebase-database=mip_app_state"]
+
+
+@pytest.fixture
+def kpi_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Every way the KPI snapshot could reach Spark or Lakebase, recorded instead of done."""
+
+    calls: list[str] = []
+    monkeypatch.setattr(kpi, "_get_spark", lambda: calls.append("spark"))
+    monkeypatch.setattr(kpi, "_read_headline_aggregates", lambda catalog: calls.append("spark.read") or {})
+    monkeypatch.setattr(kpi, "_resolve_connection", lambda **k: calls.append("lakebase.credential"))
+    monkeypatch.setattr(kpi, "_upsert_snapshot", lambda *a: calls.append("lakebase.upsert"))
+    return calls
+
+
+@pytest.mark.parametrize(
+    "override",
+    ["--catalog=other_catalog", "--lakebase-instance=another-instance", "--lakebase-database=another_db"],
+)
+def test_an_overridden_kpi_snapshot_run_exits_before_any_spark_or_lakebase_call(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    kpi_calls: list[str],
+    capsys: pytest.CaptureFixture[str],
+    override: str,
+) -> None:
+    monkeypatch.setattr(kpi, "__file__", str(_job_folder(tmp_path) / "kpi_snapshot.py"))
+    name = override.split("=", 1)[0]
+    argv = [arg for arg in KPI_ARGS if not arg.startswith(f"{name}=")] + [override]
+
+    with pytest.raises(SystemExit) as exited:
+        kpi.run(argv)
+
+    assert exited.value.code == pins_module.EXIT_REFUSED
+    assert kpi_calls == []
+    assert f"[install-pins] kpi_snapshot REFUSED: {name} differs from this install's pin" in capsys.readouterr().err
+
+
+def test_the_bundles_own_kpi_snapshot_parameters_pass_the_pins(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kpi_calls: list[str]
+) -> None:
+    monkeypatch.setattr(kpi, "__file__", str(_job_folder(tmp_path) / "kpi_snapshot.py"))
+    bundle_args = BUNDLE["resources"]["jobs"]["mip_kpi_snapshot"]["tasks"][0]["spark_python_task"]["parameters"]
+    assert bundle_args == [
+        "--catalog=${var.uc_catalog}",
+        "--lakebase-instance=${var.lakebase_instance_name}",
+        "--lakebase-database=${var.lakebase_database_name}",
+    ]
+    kpi.run(KPI_ARGS)
+    assert kpi_calls == ["spark.read", "lakebase.credential", "lakebase.upsert"]
+
+
 # ----------------------------------------------------------- the module loader
 
 
-LOADERS = {"jobs/sync_lifecycle_state_job.py": "_beside", "jobs/fred_rates_ingest.py": "_install_pins"}
+LOADERS = {
+    "jobs/sync_lifecycle_state_job.py": "_beside",
+    "jobs/fred_rates_ingest.py": "_install_pins",
+    "jobs/kpi_snapshot.py": "_install_pins",
+}
 
 
 def _exec_loader(relpath: str, cwd: Path) -> Any:
@@ -293,23 +351,36 @@ def test_the_app_imported_sync_module_carries_no_job_gate() -> None:
     assert "_install_pins" not in text and "importlib" not in text
 
 
-def _app_triggerable_python_files() -> set[str]:
+def _jobs_identity_python_files() -> set[str]:
+    """Every Python file a job running as the jobs identity runs (the App-triggerable four included)."""
+
     bound = {
         resource["job"]["id"].split(".")[2]
         for resource in BUNDLE["resources"]["apps"]["mip_app"]["resources"]
         if "job" in resource and resource["job"]["permission"] == "CAN_MANAGE_RUN"
     }
+    on_jobs = {
+        key
+        for key, job in BUNDLE["resources"]["jobs"].items()
+        if job["run_as"] == {"service_principal_name": "${var.jobs_principal}"}
+    }
+    assert bound <= on_jobs, "every App-triggerable job runs as the jobs identity"
     return {
         task["spark_python_task"]["python_file"]
-        for key in bound
+        for key in on_jobs
         for task in BUNDLE["resources"]["jobs"][key]["tasks"]
         if "spark_python_task" in task
     }
 
 
-def test_every_app_triggerable_python_entrypoint_runs_through_the_pins() -> None:
-    files = _app_triggerable_python_files()
-    assert {"jobs/sync_lifecycle_state_job.py", "jobs/fred_rates_ingest.py"} <= files
+def test_every_jobs_identity_python_entrypoint_runs_through_the_pins() -> None:
+    files = _jobs_identity_python_files()
+    assert {
+        "jobs/sync_lifecycle_state_job.py",
+        "jobs/fred_rates_ingest.py",
+        "jobs/converge_governed_owner.py",
+        "jobs/kpi_snapshot.py",
+    } <= files
     for relpath in sorted(files):
         tree = ast.parse((ROOT / relpath).read_text(encoding="utf-8"))
         guards = [

@@ -2552,9 +2552,13 @@ identity that holds no workspace admin.
 
 * The non-admin jobs service principal (`MIP_IDENTITY_IDS_JSON.jobs`, the
   `jobs_principal` bundle variable, which has no default) runs those four
-  jobs, `mip_scheduled_refresh` and `mip_feature_pipeline`.
+  jobs, `mip_scheduled_refresh`, `mip_kpi_snapshot` and
+  `mip_feature_pipeline`.
+* `mip_kpi_snapshot` moves with them because the weekly refresh starts it.
+  Nothing a jobs-identity job starts runs as the deployer, so the non-admin
+  identity never needs run permission on an admin-identity job.
 * The deployer keeps the deploy-time jobs: `mip_init_catalog_schemas`,
-  `mip_ref_seed`, `mip_kpi_snapshot`, `mip_lakebase_migrate` and the PAUSED
+  `mip_ref_seed`, `mip_lakebase_migrate` and the PAUSED
   `mip_growth_agent_monitor_scheduler`.
 * The CLI v1.10.0 bundle schema declares `run_as` on `resources.Pipeline`,
   so the pipeline does not need spike S4's fallback (staying on the
@@ -2570,10 +2574,10 @@ identity that holds no workspace admin.
   (`<MIP_IDENTITY_PREFIX>-data-owners`). These are public profile values.
   The file is gitignored, and `sync.include` uploads it into the
   deployer-owned bundle root, where the App cannot write.
-* `jobs/_install_pins.py` reads the file from its own folder. Each
-  App-triggerable Python entrypoint (`jobs/fred_rates_ingest.py`,
-  `jobs/sync_lifecycle_state_job.py` and `jobs/converge_governed_owner.py`)
-  calls it first. A run exits 5 before any Spark session, Lakebase credential
+* `jobs/_install_pins.py` reads the file from its own folder. Each Python
+  entrypoint a jobs-identity job runs (`jobs/fred_rates_ingest.py`,
+  `jobs/sync_lifecycle_state_job.py`, `jobs/converge_governed_owner.py` and
+  `jobs/kpi_snapshot.py`) calls it first. A run exits 5 before any Spark session, Lakebase credential
   or connection when:
   * a pinned option (`--catalog`, `--lakebase-instance`, `--lakebase-database`,
     or the FRED `--table`) differs from the pin;
@@ -2613,13 +2617,16 @@ identity that holds no workspace admin.
 **Lakebase `jobs_reader`.**
 
 * `mip_lakebase_migrate` gets `--jobs-reader-client-id=${var.jobs_principal}`
-  and grants that role USAGE on `mip_app` and SELECT on `approvals` and
-  `call_dispositions` only. The postflight refuses any other privilege.
+  and grants that role USAGE on `mip_app`, SELECT on `approvals` and
+  `call_dispositions` (the lifecycle sync's reads), and SELECT, INSERT and
+  UPDATE on `kpi_snapshots` (the KPI snapshot's daily upsert, which the
+  deployer, the database owner, made before). The postflight refuses any
+  other privilege.
 * Deploy step 4 first converges the role LOGIN-only
   (`converge_lakebase_oauth_role --role-contract jobs_reader`).
 * With the option unset, the grant reconciliation is byte-identical to before
   (`tests/unit/test_lakebase_jobs_reader.py`).
-* The role grants no write, so the lifecycle sync's fail-soft snooze wake
+* It grants no other write, so the lifecycle sync's fail-soft snooze wake
   (an UPDATE of `lead_snoozes`) is skipped under it.
 
 **Monitor scheduler held PAUSED.** Until a non-approver scheduler role exists,

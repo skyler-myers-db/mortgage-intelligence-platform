@@ -102,7 +102,8 @@ targets:
   #     deploying identity for apps and dashboards. Every job and the pipeline
   #     instead name their own run_as below: the deployer for deploy-time jobs,
   #     var.jobs_principal (the non-admin jobs identity, M2-PR5) for the four
-  #     App-triggerable jobs, mip_scheduled_refresh and the feature pipeline.
+  #     App-triggerable jobs, mip_scheduled_refresh, the KPI snapshot it
+  #     starts and the feature pipeline.
   client:
     mode: production
     workspace:
@@ -283,12 +284,14 @@ resources:
     # deploy. Two identities (M2-PR5, plan section 4.3):
     #   * var.deployer_principal, the profile's deployer service principal
     #     (workspace admin): the deploy-time jobs only (catalog init, ref seed,
-    #     KPI snapshot, Lakebase migrate, the PAUSED monitor scheduler).
+    #     Lakebase migrate, the PAUSED monitor scheduler).
     #   * var.jobs_principal, the profile's non-admin jobs service principal:
     #     every job the App can trigger (its four CAN_MANAGE_RUN bindings),
-    #     mip_scheduled_refresh and the feature pipeline, so a compromised App
-    #     can start only bundle-defined runs under an identity that holds no
-    #     workspace admin. tests/unit/test_jobs_identity_shape.py pins the split.
+    #     mip_scheduled_refresh and every job it starts (mip_kpi_snapshot too)
+    #     and the feature pipeline, so a compromised App can start only
+    #     bundle-defined runs under an identity that holds no workspace admin,
+    #     and nothing that identity starts runs as the deployer.
+    #     tests/unit/test_jobs_identity_shape.py pins the split.
     # The App-triggerable entrypoints also refuse, before any SQL or Lakebase
     # connection, a run whose catalog or Lakebase parameters differ from the
     # install's pins (jobs/_install_pins.py reads jobs/install_pins.json, which
@@ -1129,8 +1132,12 @@ resources:
     # chain (step 4). This job's own schedule stays PAUSED.
     mip_kpi_snapshot:
       name: mip_kpi_snapshot
+      # The jobs identity (M2-PR5): mip_scheduled_refresh starts this job, and
+      # a jobs-identity run never starts a deployer run. Its Lakebase role
+      # holds exactly the snapshot upsert on kpi_snapshots, and
+      # jobs/kpi_snapshot.py runs the install pins first.
       run_as:
-        service_principal_name: ${var.deployer_principal}
+        service_principal_name: ${var.jobs_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -1532,8 +1539,9 @@ variables:
     description: >-
       Application id of the client's non-admin jobs service principal
       (MIP_IDENTITY_IDS_JSON.jobs): the run_as of the four App-triggerable
-      jobs, mip_scheduled_refresh and the feature pipeline, and the Lakebase
-      jobs_reader role the lifecycle sync reads with.
+      jobs, mip_scheduled_refresh, mip_kpi_snapshot and the feature pipeline,
+      and the Lakebase jobs_reader role the lifecycle sync and the KPI
+      snapshot use.
   dashboard_parent_path:
     description: >-
       Workspace folder of the two Lakeview dashboards

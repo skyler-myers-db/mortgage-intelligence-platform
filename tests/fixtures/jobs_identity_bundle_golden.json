@@ -6,6 +6,7 @@
     "jobs.mip_refresh_silver": "ac6ed0dffef4b87f49b9ce6039f2f9a705c2fa1bcb490fea91eb7067178aeb41",
     "jobs.mip_refresh_scores": "1a5da9f31414c04b933b4b4ede5e89609910251886a73aee52df4281febe82c1",
     "jobs.mip_scheduled_refresh": "bf97cf6ee170e2a87e1604af0c2e54c41f47096aac45e44b1200acfeeb3f4195",
+    "jobs.mip_kpi_snapshot": "3d2bacd0107fb651b823c8ec130d43f45c553dd0910c2e8c198d800e9a78c14a",
     "pipelines.mip_feature_pipeline": "7ca6169ef3210280b51c77243d2fa812b54b2f001be3212750a50572e2fd0e76"
   }
 }

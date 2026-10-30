@@ -24,7 +24,8 @@ audit-readable MATRIX, no longer a required manual runbook:
   reviewed per-table matrices, and fails the deploy on lookup, role,
   inventory, or postflight errors. With `--jobs-reader-client-id` (the bundle
   passes `${var.jobs_principal}`), it also grants the optional `jobs_reader`
-  role USAGE on `mip_app` and SELECT on `approvals` and `call_dispositions`,
+  role USAGE on `mip_app`, SELECT on `approvals` and `call_dispositions`, and
+  SELECT, INSERT and UPDATE on `kpi_snapshots` (the KPI snapshot's upsert),
   and nothing else (`jobs/lakebase_migration_jobs_reader.py`, M2-PR5).
 * §provider/§silver (ETL identity) grants still require a metastore admin
   when the deploying identity does not own the share — the deploy step's

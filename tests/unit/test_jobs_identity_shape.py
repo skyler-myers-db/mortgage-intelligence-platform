@@ -2,15 +2,17 @@
 
 The App holds CAN_MANAGE_RUN on four bundle jobs (its ``job`` resource
 bindings), so it can start them, with any parameters, whenever it is
-compromised. They, the weekly ``mip_scheduled_refresh`` and the feature
-pipeline run as ``var.jobs_principal``, the non-admin jobs identity; only the
-deploy-time jobs keep the deployer (workspace admin).
+compromised. They, the weekly ``mip_scheduled_refresh``, every job it starts
+(``mip_kpi_snapshot`` included) and the feature pipeline run as
+``var.jobs_principal``, the non-admin jobs identity; only the deploy-time jobs
+keep the deployer (workspace admin).
 
 * The App's CAN_MANAGE_RUN bindings are exactly the jobs Admin Operations can
   start (backend/services/databricks_jobs.MANAGED_JOBS), and each runs as the
   jobs principal.
-* Nothing an App-triggerable job starts (a ``run_job_task`` or a
-  ``pipeline_task``) runs as the deployer.
+* Nothing a jobs-identity job starts (a ``run_job_task`` or a
+  ``pipeline_task``, transitively) runs as the deployer, so the non-admin
+  identity never needs run permission on an admin-identity job.
 * The deployer keeps exactly the deploy-time jobs; the monitor scheduler, which
   the App only reads, is one of them and stays PAUSED.
 * The pipeline runs as the jobs principal too. The CLI v1.10.0 bundle schema
@@ -42,7 +44,6 @@ DEPLOY_TIME_JOBS = frozenset(
     {
         "mip_init_catalog_schemas",
         "mip_ref_seed",
-        "mip_kpi_snapshot",
         "mip_lakebase_migrate",
         "mip_growth_agent_monitor_scheduler",
     }
@@ -112,21 +113,25 @@ def test_no_app_triggerable_job_runs_as_the_deployer() -> None:
         assert JOBS[key]["run_as"] == JOBS_IDENTITY, key
 
 
-def test_nothing_an_app_triggerable_job_starts_runs_as_the_deployer() -> None:
-    for key in _app_triggerable():
+def test_nothing_a_jobs_identity_job_starts_runs_as_the_deployer() -> None:
+    on_jobs = {key for key, job in JOBS.items() if job["run_as"] == JOBS_IDENTITY}
+    assert _app_triggerable() <= on_jobs
+    for key in sorted(on_jobs):
         for started in _started_by(key):
             kind, name = started.split(".", 1)
             resource = (JOBS if kind == "jobs" else PIPELINES)[name]
             assert resource["run_as"] == JOBS_IDENTITY, f"{key} starts {started}"
-    # The silver refresh starts the pipeline, so the pipeline is covered above.
+    # The silver refresh starts the pipeline, and the weekly refresh starts the
+    # KPI snapshot, so both are covered above.
     assert "pipelines.mip_feature_pipeline" in _started_by("mip_refresh_silver")
+    assert "jobs.mip_kpi_snapshot" in _started_by("mip_scheduled_refresh")
 
 
 def test_the_deployer_keeps_exactly_the_deploy_time_jobs() -> None:
     on_deployer = {key for key, job in JOBS.items() if job["run_as"] == DEPLOYER}
     on_jobs = {key for key, job in JOBS.items() if job["run_as"] == JOBS_IDENTITY}
     assert on_deployer == DEPLOY_TIME_JOBS
-    assert on_jobs == _app_triggerable() | {"mip_scheduled_refresh"}
+    assert on_jobs == _app_triggerable() | {"mip_scheduled_refresh", "mip_kpi_snapshot"}
     assert on_deployer | on_jobs == set(JOBS), "every job names one of the two identities"
     assert not DEPLOY_TIME_JOBS & _app_triggerable()
     assert PIPELINES["mip_feature_pipeline"]["run_as"] == JOBS_IDENTITY

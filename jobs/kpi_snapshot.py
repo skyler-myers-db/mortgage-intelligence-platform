@@ -32,7 +32,9 @@ Auth model (identical to jobs/lakebase_migrate.py):
     On Databricks the task runs under the workspace identity. We fetch a
     short-lived Postgres credential via ``POST /api/2.0/database/
     credentials``. ``LAKEBASE_*`` env-var overrides are honored for
-    local development.
+    local development. The bundle job runs as the non-admin jobs identity
+    (M2-PR5), whose Lakebase role holds exactly this upsert's privileges on
+    ``kpi_snapshots`` (jobs/lakebase_migration_jobs_reader.py).
 
 Exit codes:
     0 -- snapshot upserted.
@@ -40,13 +42,21 @@ Exit codes:
          kpi_snapshots table is missing).
     3 -- SDK / auth error resolving connection parameters.
     4 -- Spark session not available (not running on Databricks).
+    5 -- the install pins refused the run (the bundle job's ``__main__``
+         path, :func:`run`; M2-PR5): its ``--catalog``,
+         ``--lakebase-instance`` or ``--lakebase-database`` differs from
+         jobs/install_pins.json, or the pins are missing. Exit 5 comes
+         before any Spark session, Lakebase credential or connection.
 """
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import re
 import sys
+from pathlib import Path
+from types import ModuleType
 from typing import Any, cast
 
 _UC_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -330,5 +340,42 @@ def main(argv: list[str] | None = None) -> None:
     _upsert_snapshot(conn_kwargs, aggregates)
 
 
+def _install_pins() -> ModuleType:
+    """jobs/_install_pins.py from this script's own folder, by exact path (M2-PR5).
+
+    Never a search and never ``sys.path``: Databricks' exec() path can drop
+    ``__file__``, and its working directory is then this folder or the bundle
+    files root above it. Anything else refuses (exit 5) before any SQL.
+    """
+    try:
+        folder = Path(__file__).resolve().parent
+    except NameError:
+        cwd = Path.cwd()
+        folder = cwd if (cwd / "kpi_snapshot.py").is_file() else cwd / "jobs"
+    source = folder / "_install_pins.py"
+    spec = importlib.util.spec_from_file_location("mip_install_pins", source)
+    if spec is None or spec.loader is None or not source.is_file():
+        print("[install-pins] kpi_snapshot REFUSED: jobs/_install_pins.py is not beside this job", file=sys.stderr)
+        sys.exit(5)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def run(argv: list[str] | None = None) -> None:
+    """The job's entrypoint: the install pins before any Spark or Lakebase call, then :func:`main`."""
+
+    _install_pins().enforce(
+        build_parser(),
+        argv,
+        expected=lambda pins: {
+            "catalog": pins.catalog,
+            "lakebase_instance": pins.lakebase_instance,
+            "lakebase_database": pins.lakebase_database,
+        },
+    )
+    main(argv)
+
+
 if __name__ == "__main__":
-    main()
+    run()

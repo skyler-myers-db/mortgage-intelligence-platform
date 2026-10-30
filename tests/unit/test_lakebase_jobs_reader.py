@@ -1,4 +1,4 @@
-"""The optional Lakebase jobs_reader role: off is byte-identical, on is exactly two SELECTs (M2-PR5).
+"""The optional Lakebase jobs_reader role: off is byte-identical, on is exactly the reviewed grants (M2-PR5).
 
 * Unset, the grant reconciliation's statement log (every statement and its
   parameters, through tests/unit/test_lakebase_migrate_grants.py's fake
@@ -9,8 +9,9 @@
       PYTHONPATH=. python tests/unit/test_lakebase_jobs_reader.py --print
 
 * Set, the same transaction revokes everything from the role, then grants
-  exactly USAGE on mip_app and SELECT on approvals and call_dispositions, and
-  the postflight rejects any other privilege.
+  exactly USAGE on mip_app, SELECT on approvals and call_dispositions (the
+  lifecycle sync's reads) and SELECT, INSERT and UPDATE on kpi_snapshots (the
+  KPI snapshot's upsert), and the postflight rejects any other privilege.
 * The role must be real and distinct from the App, verifier and executor roles.
 * The bundle enables it for the jobs principal, and the OAuth role converger
   knows its contract.
@@ -47,6 +48,14 @@ APP = "00000000-0000-4000-8000-0000000000aa"
 VERIFIER = "00000000-0000-4000-8000-0000000000bb"
 JOBS = "00000000-0000-4000-8000-000000000002"
 EXECUTOR = "00000000-0000-4000-8000-000000000001"
+# The postflight's table-privilege rows for exactly the reviewed grants, in its ORDER BY.
+EXACT = [
+    ("mip_app", "approvals", "SELECT"),
+    ("mip_app", "call_dispositions", "SELECT"),
+    ("mip_app", "kpi_snapshots", "INSERT"),
+    ("mip_app", "kpi_snapshots", "SELECT"),
+    ("mip_app", "kpi_snapshots", "UPDATE"),
+]
 # sha256 of the unset statement log, written from origin/main 3d37e347.
 UNSET_LOG_SHA256 = {
     "app": "44ee65df24bde5ea9f8076969db196987ff5a6c367621360ff8d8d296e9bd334",
@@ -101,7 +110,7 @@ def _jobs_reader_cursor() -> _Cursor:
         [(JOBS,)],
         [("mip_app", "USAGE")],
         _table_rows(),
-        [("mip_app", "approvals", "SELECT"), ("mip_app", "call_dispositions", "SELECT")],
+        EXACT,
         [],
         [],
         [],
@@ -119,7 +128,7 @@ def _jobs_reader_cursor() -> _Cursor:
     return cursor
 
 
-def test_set_it_grants_exactly_usage_and_two_selects(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_set_it_grants_exactly_usage_and_the_reviewed_table_grants(monkeypatch: pytest.MonkeyPatch) -> None:
     cursor = _jobs_reader_cursor()
     connection = _apply(monkeypatch, cursor, verifier=VERIFIER, jobs_reader_role=JOBS)
 
@@ -131,6 +140,7 @@ def test_set_it_grants_exactly_usage_and_two_selects(monkeypatch: pytest.MonkeyP
         f'GRANT USAGE ON SCHEMA "mip_app" TO {quoted}',
         f'GRANT SELECT ON TABLE "mip_app"."approvals" TO {quoted}',
         f'GRANT SELECT ON TABLE "mip_app"."call_dispositions" TO {quoted}',
+        f'GRANT SELECT, INSERT, UPDATE ON TABLE "mip_app"."kpi_snapshots" TO {quoted}',
     ]
     revokes = [s for s in statements if s.startswith("REVOKE ") and s.endswith(f"FROM {quoted}")]
     assert f'REVOKE CREATE ON DATABASE "mip_app_state" FROM {quoted}' in revokes
@@ -168,12 +178,14 @@ class _PrivilegeCursor:
 @pytest.mark.parametrize(
     "table_privileges",
     [
-        [("mip_app", "approvals", "SELECT"), ("mip_app", "approvals", "INSERT"), ("mip_app", "call_dispositions", "SELECT")],
-        [("mip_app", "approvals", "SELECT"), ("mip_app", "call_dispositions", "SELECT"), ("mip_app", "lead_snoozes", "SELECT")],
-        [("mip_app", "approvals", "SELECT"), ("mip_app", "call_dispositions", "SELECT"), ("other", "t", "SELECT")],
+        [*EXACT, ("mip_app", "approvals", "INSERT")],
+        [*EXACT, ("mip_app", "kpi_snapshots", "DELETE")],
+        [*EXACT, ("mip_app", "lead_snoozes", "SELECT")],
+        [*EXACT, ("other", "t", "SELECT")],
+        [row for row in EXACT if row[2] != "UPDATE"],
         [("mip_app", "approvals", "SELECT")],
     ],
-    ids=["insert", "another-table", "another-schema", "missing"],
+    ids=["insert", "kpi-delete", "another-table", "another-schema", "kpi-update-missing", "missing"],
 )
 def test_the_postflight_rejects_any_other_table_privilege(
     monkeypatch: pytest.MonkeyPatch, table_privileges: list[tuple[str, str, str]]
@@ -188,10 +200,9 @@ def test_the_postflight_rejects_a_sequence_privilege(monkeypatch: pytest.MonkeyP
     for name in ("_postflight_effective_schema_privileges", "_raise_object_inventory_mismatch",
                  "_postflight_direct_column_privileges"):
         monkeypatch.setattr(jobs_reader, name, lambda *a, **k: None)
-    exact = [("mip_app", "approvals", "SELECT"), ("mip_app", "call_dispositions", "SELECT")]
     with pytest.raises(RuntimeError, match="forbidden sequence privileges"):
         jobs_reader.postflight_jobs_reader_grants(
-            _PrivilegeCursor(exact, [("mip_app", "s", "USAGE")]), JOBS
+            _PrivilegeCursor(EXACT, [("mip_app", "s", "USAGE")]), JOBS
         )
 
 
@@ -221,7 +232,7 @@ def test_the_bundle_enables_it_for_the_jobs_principal_and_the_converger_knows_it
     assert "--jobs-reader-client-id=${var.jobs_principal}" in task["parameters"]
     assert lakebase_migrate.build_parser().parse_args([]).jobs_reader_client_id == ""
     assert converge_lakebase_oauth_role._reviewed_acl_objects("jobs_reader") == (
-        {"approvals", "call_dispositions"},
+        {"approvals", "call_dispositions", "kpi_snapshots"},
         set(),
         set(),
     )
