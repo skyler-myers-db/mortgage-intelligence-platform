@@ -97,7 +97,7 @@ def _hermetic_operator_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
 
 def _d0_payload_env() -> list[dict[str, str]]:
-    payload = build_payload(source_code_path="/Workspace/app-src/release", target="dev")
+    payload = build_payload(source_code_path="/Workspace/app-src/release", install_class="demo")
     return payload["env_vars"]  # type: ignore[return-value]
 
 

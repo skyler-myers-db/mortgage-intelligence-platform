@@ -1,24 +1,23 @@
 """Which install may run and mail ``mip_scheduled_refresh`` (data-freshness design, 2026-10-26).
 
 The weekly ``mip_scheduled_refresh`` job (databricks.yml) chains FRED -> gold ->
-lifecycle -> KPI snapshot. Only a demo install (the client profile's
-``MIP_INSTALL_CLASS``; before M1-PR2, the dev target's live install) may run it
-on a schedule or mail its failures. M1-PR3 replaces the class with the
-profile's own refresh fields:
+lifecycle -> KPI snapshot. The client profile's own refresh fields decide it
+(tools/clients/policy.py, M1-PR3), for any install class:
 
 * ``scheduled_refresh_pause_status`` is a plain variable. scripts/deploy.sh
-  exports ``BUNDLE_VAR_scheduled_refresh_pause_status`` (UNPAUSED only for a
-  demo install); :func:`check_pause_status` refuses UNPAUSED anywhere else, so
-  a stray export can never unpause a customer install through
+  exports ``BUNDLE_VAR_scheduled_refresh_pause_status``, UNPAUSED only when the
+  profile's ``MIP_SCHEDULED_REFRESH`` is ``on``; :func:`check_pause_status`
+  refuses UNPAUSED anywhere else (an install whose refresh is off, and the
+  profile-free ``ci`` target), so a stray export can never unpause it through
   tools/databricks/bundle_env.py either.
 * ``scheduled_refresh_failure_recipients`` is a complex variable (a list), and
   the CLI refuses a ``BUNDLE_VAR_`` export for a complex variable (CLI v1.10.0:
   "setting via environment variables ... is not supported for complex
   variable"). Its only non-target channel is the bundle's
   ``.databricks/bundle/<target>/variable-overrides.json``, which
-  :func:`write_failure_recipients` owns for this one key: the deploying user
-  (``${workspace.current_user.userName}``, resolved by the CLI) for a demo
-  install, an empty list for everything else.
+  :func:`write_failure_recipients` owns for this one key: the profile's
+  ``MIP_SCHEDULED_REFRESH_RECIPIENTS`` (email addresses; the profile refuses an
+  application id) when the refresh is on, an empty list otherwise.
 """
 
 from __future__ import annotations
@@ -28,23 +27,24 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 
+from tools.clients.policy import InstallPolicy
+
 JOB_KEY = "mip_scheduled_refresh"
 PAUSE_VARIABLE = "scheduled_refresh_pause_status"
 RECIPIENTS_VARIABLE = "scheduled_refresh_failure_recipients"
 PAUSE_ENV = f"BUNDLE_VAR_{PAUSE_VARIABLE}"
-LIVE_INSTALL_RECIPIENTS = ("${workspace.current_user.userName}",)
 PAUSE_STATES = frozenset({"PAUSED", "UNPAUSED"})
 _TARGET_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 
 
-def is_live_install(*, install_class: str | None) -> bool:
-    """A demo install: the only one the schedule serves."""
+def refresh_on(policy: InstallPolicy | None) -> bool:
+    """The profile turns the weekly refresh on; the profile-free ci target never does."""
 
-    return install_class == "demo"
+    return policy is not None and policy.scheduled_refresh
 
 
-def check_pause_status(env: Mapping[str, str], *, install_class: str | None) -> None:
-    """Refuse a malformed pause status, or UNPAUSED outside a demo install.
+def check_pause_status(env: Mapping[str, str], *, policy: InstallPolicy | None) -> None:
+    """Refuse a malformed pause status, or UNPAUSED when the profile's refresh is off.
 
     An absent export keeps the bundle default (PAUSED). An empty or unknown
     value would reach the Jobs API as an invalid pause status, so it is
@@ -56,19 +56,17 @@ def check_pause_status(env: Mapping[str, str], *, install_class: str | None) -> 
     value = env[PAUSE_ENV]
     if value not in PAUSE_STATES:
         raise ValueError(f"{PAUSE_ENV} must be PAUSED or UNPAUSED")
-    if value == "UNPAUSED" and not is_live_install(install_class=install_class):
+    if value == "UNPAUSED" and not refresh_on(policy):
         raise ValueError(
-            f"{PAUSE_ENV}=UNPAUSED is allowed only for a demo install; "
-            "every other install keeps mip_scheduled_refresh PAUSED"
+            f"{PAUSE_ENV}=UNPAUSED is allowed only when the client profile's "
+            "MIP_SCHEDULED_REFRESH is on; every other install keeps mip_scheduled_refresh PAUSED"
         )
 
 
-def failure_recipients(*, install_class: str | None) -> list[str]:
-    """A demo install mails its deployer; every other install mails nobody."""
+def failure_recipients(*, policy: InstallPolicy | None) -> list[str]:
+    """The profile's recipients when the refresh is on; nobody otherwise."""
 
-    if is_live_install(install_class=install_class):
-        return list(LIVE_INSTALL_RECIPIENTS)
-    return []
+    return list(policy.refresh_recipients) if refresh_on(policy) and policy is not None else []
 
 
 def overrides_path(bundle_root: Path, target: str) -> Path:
@@ -103,17 +101,17 @@ def write_failure_recipients(bundle_root: Path, *, target: str, recipients: list
 
 
 def apply(
-    env: Mapping[str, str], *, target: str, install_class: str | None, bundle_root: Path
+    env: Mapping[str, str], *, target: str, policy: InstallPolicy | None, bundle_root: Path
 ) -> str:
     """Check the pause export and write the recipients; return a one-line status.
 
     ``target`` names the bundle target whose overrides file is written;
-    ``install_class`` (None for the ci target) decides the posture.
+    ``policy`` (None for the ci target) decides the posture. The status line
+    counts recipients and never names one.
     """
 
-    check_pause_status(env, install_class=install_class)
-    recipients = failure_recipients(install_class=install_class)
+    check_pause_status(env, policy=policy)
+    recipients = failure_recipients(policy=policy)
     write_failure_recipients(bundle_root, target=target, recipients=recipients)
     pause = env.get(PAUSE_ENV) or "PAUSED (bundle default)"
-    mail = "deployer" if recipients else "none"
-    return f"scheduled_refresh pause={pause} failure_email={mail}"
+    return f"scheduled_refresh pause={pause} failure_email_recipients={len(recipients)}"

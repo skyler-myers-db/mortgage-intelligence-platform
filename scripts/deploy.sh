@@ -475,6 +475,12 @@ CLIENT_KEY=""
 CLIENT_INSTALL_CLASS=""
 CLIENT_HOST=""
 CLIENT_DEPLOYER=""
+# The install policy the profile decides (tools/clients/policy.py): the App
+# env, the demo feeds (0/1), presenter mode (0/1) and the weekly refresh (on/off).
+CLIENT_APP_ENV=""
+CLIENT_DEMO_FEEDS=""
+CLIENT_PRESENTER_MODE=""
+CLIENT_SCHEDULED_REFRESH=""
 # Step 5 sets these from the profile: the principal and root leaf every App
 # release check (publish, converge, prune) names. Empty refuses.
 APP_RELEASE_PRINCIPAL=""

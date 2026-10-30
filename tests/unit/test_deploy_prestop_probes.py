@@ -1211,9 +1211,11 @@ start_proof_signing_heartbeat() {{ :; }}
 dotenv_value() {{ printf ''; }}
 run_bundle_plan_gate() {{ printf 'run_bundle_plan_gate %s\n' "$*" >> {shlex.quote(str(calls))}; }}
 TARGET=client
-# The client profile's install class, which resolve_client_profile sets at the
-# top of the preflight step file (M1-PR2); the render's demo-feed default reads it.
+# The client profile's install class and demo-feed policy, which
+# resolve_client_profile sets at the top of the preflight step file (M1-PR2,
+# M1-PR3); the render's demo-feed switch reads the policy.
 CLIENT_INSTALL_CLASS=demo
+CLIENT_DEMO_FEEDS=1
 DEPLOY_PHASE=""
 DEPLOY_INVENTORY_PRINCIPAL=deployer@example.invalid
 # Resolved by the preflight step file; the pii-salt check reads both.

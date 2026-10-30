@@ -41,7 +41,8 @@ Mapping, every target (env -> BUNDLE_VAR_*):
                              _table_prefix (canonical when unset; '-' is no
                              table prefix; the same names render sql/_rendered;
                              the client profile holds the same fields)
-  (demo install only)     -> scheduled_refresh_failure_recipients, written to
+  (refresh on only)       -> scheduled_refresh_failure_recipients (the profile's
+                             MIP_SCHEDULED_REFRESH_RECIPIENTS), written to
                              .databricks/bundle/<target>/variable-overrides.json
                              (tools/databricks/scheduled_refresh_posture.py)
 
@@ -60,11 +61,12 @@ Usage:
   # Deployment-state use is restricted to the configured App binding:
   python tools/databricks/bundle_env.py deployment bind mip_app mip-app -t client
 
-A demo install (the profile's MIP_INSTALL_CLASS) defaults to Summit demo
-first-party feeds so the public demo keeps governed contactability / Lead
-Queue data after a refresh. Any other install renders them off, and this
-wrapper refuses the flag there unless ``MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD=1``
-is also set (the profile already refuses it for a customer install).
+The install policy is the client profile's own fields (tools/clients/policy.py,
+M1-PR3), never a target name: the Summit demo first-party feeds render on
+only when the profile's MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS is 1 (the profile
+refuses that for a customer install), and the weekly refresh follows its
+MIP_SCHEDULED_REFRESH. The profile-free ``-t ci`` validate renders the feeds
+off and keeps the refresh PAUSED with no recipient.
 """
 
 from __future__ import annotations
@@ -92,6 +94,7 @@ from tools.clients import profile as client_views  # noqa: E402
 from tools.clients.environment import from_local as client_profile_from_local  # noqa: E402
 from tools.clients.environment import resolve as resolve_client_profile  # noqa: E402
 from tools.clients.errors import ProfileRefusal  # noqa: E402
+from tools.clients.policy import InstallPolicy, install_policy  # noqa: E402
 from tools.clients.schema import ClientProfile  # noqa: E402
 from tools.databricks import scheduled_refresh_posture  # noqa: E402
 from tools.databricks.workspace_auth import (  # noqa: E402
@@ -110,7 +113,8 @@ _UC_IDENTIFIER = re.compile(r"[a-z_][a-z0-9_]{0,254}\Z")
 _EXACT_RESOURCE_SELECTOR = re.compile(
     r"(?P<kind>[a-z_][a-z0-9_]*)\.(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]*)\Z"
 )
-# The one deployable target, and the targets a validate may name.
+# The one deployable target, and the targets a validate may name. A target
+# that may mutate is a client install: it resolves the client profile first.
 _MUTABLE_BUNDLE_TARGETS = frozenset({"client"})
 _VALIDATE_TARGETS = frozenset({"client", "ci"})
 # The profile's bundle variables this wrapper exports for -t client: the
@@ -278,33 +282,6 @@ def _validate_app_deployment_command(
             f"App binding {expected!r}"
         )
     return None
-
-
-def _truthy(raw: str | None) -> bool:
-    if raw is None:
-        return False
-    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def _demo_feeds_allowed(*, demo_install: bool, enabled: bool, env: dict[str, str]) -> bool:
-    if not enabled:
-        return True
-    if demo_install:
-        return True
-    return _truthy(env.get("MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD"))
-
-
-def _demo_first_party_flag(env: dict[str, str], *, demo_install: bool) -> str | None:
-    """Resolve the SQL render flag, mirroring scripts/deploy.sh.
-
-    A bare render remains fail-closed; this deployment wrapper is install-aware.
-    The Summit demo install needs synthetic first-party feeds enabled so
-    governed lead/contactability surfaces are populated after each gold refresh.
-    """
-    raw = env.get("MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS")
-    if raw:
-        return raw
-    return "1" if demo_install else "0"
 
 
 def _client_profile() -> ClientProfile:
@@ -490,9 +467,11 @@ def main() -> int:
     # a refused profile never reaches a render, a lookup or the CLI. The
     # refusal lines name fields and rules, never values.
     profile: ClientProfile | None = None
-    if target == "client":
+    policy: InstallPolicy | None = None
+    if target in _MUTABLE_BUNDLE_TARGETS:
         try:
             profile = _client_profile()
+            policy = install_policy(profile)
         except ProfileRefusal as refusal:
             print("[bundle_env] client profile refused:", file=sys.stderr)
             for line in refusal.lines:
@@ -718,17 +697,15 @@ def main() -> int:
     if profile is not None:
         for variable, value in client_views.client_target_vars(profile).items():
             env[f"BUNDLE_VAR_{variable}"] = value
-    install_class = profile.install_class if profile is not None else None
-    demo_install = install_class == "demo"
-    # mip_scheduled_refresh runs and mails only on a demo install: refuse an
-    # UNPAUSED export anywhere else, and write the failure recipients (a
-    # complex variable, which no BUNDLE_VAR_ export can carry) into the
-    # bundle's variable-overrides.json before every CLI call.
+    # mip_scheduled_refresh runs and mails only when the profile's refresh is
+    # on: refuse an UNPAUSED export anywhere else, and write the failure
+    # recipients (a complex variable, which no BUNDLE_VAR_ export can carry)
+    # into the bundle's variable-overrides.json before every CLI call.
     try:
         scheduled_refresh_status = scheduled_refresh_posture.apply(
             env,
             target=target,
-            install_class=install_class,
+            policy=policy,
             bundle_root=Path(env.get("DATABRICKS_BUNDLE_ROOT") or BUNDLE_ROOT),
         )
     except (OSError, ValueError) as exc:
@@ -759,31 +736,10 @@ def main() -> int:
     # The setting's spelling: "-" for a share with no table prefix, since an
     # empty bundle variable would not read as one.
     env["BUNDLE_VAR_cotality_source_table_prefix"] = cotality.table_prefix_setting
-    try:
-        # The ci target validates placeholders only and never deploys, so it
-        # renders the fail-closed default whatever an operator's .env.local
-        # says; only the client target renders an install's feed switch.
-        demo_first_party_enabled = target != "ci" and render_sql._parse_bool(
-            _demo_first_party_flag(env, demo_install=demo_install),
-            default=False,
-        )
-    except ValueError as exc:
-        print(f"[bundle_env] {exc}", file=sys.stderr)
-        return 2
-
-    if not _demo_feeds_allowed(
-        demo_install=demo_install,
-        enabled=demo_first_party_enabled,
-        env=env,
-    ):
-        print(
-            "[bundle_env] refusing to enable Summit demo first-party feeds "
-            f"for a {install_class or 'non-demo'} install (target {target}). Set "
-            "MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD=1 only for an approved demo "
-            "workspace; never for customer production.",
-            file=sys.stderr,
-        )
-        return 2
+    # The profile's demo-feed switch (off when unset); the ci target validates
+    # placeholders only and never deploys, so it renders the fail-closed
+    # default whatever an operator's .env.local says.
+    demo_first_party_enabled = policy is not None and policy.demo_first_party_feeds
 
     try:
         processed, written, subs = render_sql.render(

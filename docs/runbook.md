@@ -594,23 +594,24 @@ How it is switched on:
 
 - `databricks.yml` declares `scheduled_refresh_pause_status` with the default
   `PAUSED`, and no target sets it.
-- The `scripts/deploy.sh` preflight exports `UNPAUSED` only for a demo
-  install (the client profile's `MIP_INSTALL_CLASS`; before M1-PR2, `-t dev`).
-  `MIP_SCHEDULED_REFRESH=off` (shell or `.env.local`) keeps it paused. A
-  customer install is always paused and refuses `MIP_SCHEDULED_REFRESH=on`
-  (exit 2): there a cadence is a customer decision that needs a reviewed
-  change. `tools/databricks/bundle_env.py` refuses an `UNPAUSED` export for
-  any other install.
-- Until M1-PR3, the preflight also refuses `MIP_SCHEDULED_REFRESH=on` (exit 2,
-  before any bundle command) for a demo install whose deployer is a service
-  principal, which every `-t client` install is: the failure email would go to
-  an application id. Set `MIP_SCHEDULED_REFRESH=off` for such an install;
-  M1-PR3 mails the profile's `MIP_SCHEDULED_REFRESH_RECIPIENTS` instead.
-- A failed run emails the deploying user, on a demo install only.
-  `bundle_env.py` writes that recipient into the target's
-  `.databricks/bundle/<target>/variable-overrides.json` (`client`), because
-  the CLI refuses a `BUNDLE_VAR_` export for a list variable, and rewrites it
-  before every CLI call. A customer install gets no recipient.
+- The `scripts/deploy.sh` preflight exports `UNPAUSED` exactly when the
+  client profile's own `MIP_SCHEDULED_REFRESH` is `on`, for a demo or a
+  customer install alike (M1-PR3, `tools/clients/policy.py`); `off` keeps it
+  paused. A shell export of `MIP_SCHEDULED_REFRESH` reaches the profile like
+  any field (shell before `.env.local`). `tools/databricks/bundle_env.py`
+  refuses an `UNPAUSED` export for an install whose refresh is off, and for
+  the profile-free `-t ci` validate.
+- A failed run emails the profile's `MIP_SCHEDULED_REFRESH_RECIPIENTS`, never
+  the deploying user (a `-t client` deployer is a service principal, whose
+  user name is an application id). The profile requires at least one
+  recipient when the refresh is on and refuses an application id among them.
+  `bundle_env.py` writes the recipients into the target's
+  `.databricks/bundle/<target>/variable-overrides.json` (`client`, a local,
+  ignored file), because the CLI refuses a `BUNDLE_VAR_` export for a list
+  variable, and rewrites it before every CLI call. A refresh that is off gets
+  no recipient. The step-9c postflight
+  (`verify_scheduled_refresh_state --recipients-from-profile`) proves the live
+  job mails exactly those recipients, comparing them without printing one.
 
 **How it lands.** The schedule reaches a workspace only through the bundle
 apply inside a full governed `./scripts/deploy.sh -t client` run. A Jobs-UI
@@ -730,25 +731,22 @@ predates the current bundle. For example, a gold job that still carries
   interim refresh below) within about an hour of Friday 06:00 CT, and check
   that no `mip_scheduled_refresh` run is active
   (`databricks jobs list-runs --job-id <id> --active-only`) before starting.
-- **Run-as identity.** Scheduled runs execute as the dev run-as user (the
-  deploying user). If that identity loses access, runs fail and the email
-  fires. Deploy the live install as a user: with the schedule `UNPAUSED`, the
-  step 9c postflight refuses a failure recipient that is not an email address
-  (a service-principal deployer's application id).
-  That refusal comes after the App promotion, and nothing predicts it yet: it
-  needs a live read of the bound deployer's user name. The preflight's
-  scheduled-refresh block stays pure so it also runs in a dry run, and step
-  0's read-only pre-stop probe (`tools/databricks/deploy_prestop_probes.py`),
-  where that read belongs, checks Supervisor retirement and Genie group grants
-  but not the deployer's user name. Until it does, check the deploying
-  identity is a user before a GO run.
+- **Run-as identity.** Scheduled runs execute as the job's run-as identity
+  (the `-t client` deployer service principal). If that identity loses
+  access, runs fail and the email fires. The email goes to the client
+  profile's `MIP_SCHEDULED_REFRESH_RECIPIENTS` (M1-PR3), never to the
+  deploying user, so a service-principal deployer no longer swallows the
+  alert: the profile refuses `MIP_SCHEDULED_REFRESH=on` without a recipient
+  and refuses an application id among them, and the step 9c postflight
+  refuses a live job whose recipients are not exactly the profile's.
 - **Piecewise-render trap.** The scheduled gold run reads the rendered SQL in
   the bundle's `files/sql/_rendered/` tree. A piecewise upload of a render made
   without `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1` (the stand-alone
   `tools/render_sql.py` default is off) empties the Summit demo first-party
   feeds at the next Friday run, unattended. Render every piecewise upload for
-  dev with `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1`; `deploy.sh` defaults it on
-  for a demo install (before M1-PR2, `-t dev`). `tools/verify_live.py` detects the mistake as first-party
+  dev with `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1`; `deploy.sh` renders the
+  client profile's own `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS` (off when unset,
+  M1-PR3), so a demo profile sets it to `1`. `tools/verify_live.py` detects the mistake as first-party
   sources with `status=not_configured expected live/demo_synthetic`.
 - **Shared catalog.** The dev schedule rebuilds gold in the dev install's
   catalog every week. If a prod install ever shares catalog `mip` in the same

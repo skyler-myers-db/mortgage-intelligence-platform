@@ -14,6 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from tools.clients.policy import install_policy, policy_controls
 from tools.clients.rules import SUMMIT_LENDER_NAME
 from tools.clients.schema import (
     ALIASES,
@@ -154,16 +155,18 @@ def client_target_vars(profile: ClientProfile) -> dict[str, str]:
 def client_target(profile: ClientProfile) -> dict[str, str]:
     """What scripts/deploy.sh keeps from the profile before any other step.
 
-    The client key, the install class, the profile's workspace host and the
-    ``client`` target's variables as ``BUNDLE_VAR_*`` exports, so a direct
-    ``databricks bundle run -t client`` addresses the same root as
-    tools/databricks/bundle_env.py.
+    The client key, the install class, the profile's workspace host, the
+    install policy's closed values (tools/clients/policy.py: App env, demo
+    feeds, presenter mode, weekly refresh) and the ``client`` target's
+    variables as ``BUNDLE_VAR_*`` exports, so a direct ``databricks bundle run
+    -t client`` addresses the same root as tools/databricks/bundle_env.py.
     """
 
     return {
         "MIP_CLIENT": profile.client,
         "MIP_INSTALL_CLASS": profile.install_class,
         "DATABRICKS_HOST": profile.databricks_host,
+        **policy_controls(install_policy(profile)),
         **{f"BUNDLE_VAR_{name}": value for name, value in client_target_vars(profile).items()},
     }
 
@@ -184,7 +187,7 @@ def bundle_vars(profile: ClientProfile) -> dict[str, str]:
         "lakebase_catalog_name": profile.lakebase_sync_catalog,
         "lakebase_database_name": profile.lakebase_database,
         "runtime_secret_scope": profile.runtime_secret_scope,
-        "scheduled_refresh_pause_status": "UNPAUSED" if profile.scheduled_refresh == "on" else "PAUSED",
+        "scheduled_refresh_pause_status": install_policy(profile).pause_status,
         "lender_name": lender["MIP_LENDER_NAME"],
     }
     if "MIP_LENDER_NMLS_ID" in lender:
@@ -234,8 +237,9 @@ def app_payload_env(profile: ClientProfile) -> dict[str, str]:
     """The App runtime env the profile owns (the rest stays with the payload builder)."""
 
     ids = profile.identity_ids
+    policy = policy_controls(install_policy(profile))
     env = {
-        "APP_ENV": profile.app_env,
+        "APP_ENV": policy["MIP_APP_ENV"],
         "MIP_DEFAULT_CATALOG": profile.default_catalog,
         "MIP_APP_NAME": profile.app_name,
         "MIP_LAKEBASE_INSTANCE": profile.lakebase_instance,
@@ -247,8 +251,8 @@ def app_payload_env(profile: ClientProfile) -> dict[str, str]:
         "MIP_RUNTIME_SECRET_SCOPE": profile.runtime_secret_scope,
         "MIP_APP_ROLLBACK_SECRET_SCOPE": profile.app_rollback_secret_scope,
         "MIP_GENIE_SPACE_NAME": profile.genie_space_name,
-        "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS": profile.demo_first_party_feeds or "0",
-        "MIP_PRESENTER_MODE": profile.presenter_mode or "0",
+        "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS": policy["MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS"],
+        "MIP_PRESENTER_MODE": policy["MIP_PRESENTER_MODE"],
         "MIP_APPROVER_IDENTITIES": _identities(
             profile.approver_identities, *(getattr(ids, role) for role in _APPROVER_ROLES)
         ),

@@ -3,9 +3,10 @@
 Every child job ships PAUSED. The one scheduled job is the weekly
 ``mip_scheduled_refresh`` orchestrator (data-freshness design 2026-10-26): it
 chains FRED -> gold -> lifecycle -> KPI by ``run_job_task``, its pause status is
-a variable only scripts/deploy.sh sets (UNPAUSED for a demo install only: the
-client profile's MIP_INSTALL_CLASS, which took over the retired dev target's
-live-install posture in M1-PR2), and it mails failures only on that install.
+a variable only scripts/deploy.sh sets (UNPAUSED only when the client
+profile's own MIP_SCHEDULED_REFRESH is on, for any install class; M1-PR3), and
+it then mails failures to the profile's MIP_SCHEDULED_REFRESH_RECIPIENTS, and
+nobody otherwise.
 """
 from __future__ import annotations
 
@@ -18,10 +19,16 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.fixtures.client_profiles import customer_profile, env_file_text, paychex_shaped_profile
+from tests.fixtures.client_profiles import (
+    customer_profile,
+    demo_profile,
+    env_file_text,
+    paychex_shaped_profile,
+)
 from tests.fixtures.deploy_script import deploy_entrypoint_text
 from tools import verify_live_source_readiness as readiness
-from tools.clients.environment import KNOWN_NAMES
+from tools.clients.environment import KNOWN_NAMES, RawProfile, resolve
+from tools.clients.policy import InstallPolicy, install_policy
 from tools.databricks import bundle_env
 from tools.databricks import scheduled_refresh_posture as posture
 
@@ -95,9 +102,10 @@ def test_operator_docs_explain_app_refresh_default_and_paused_schedules() -> Non
     flat_deployment = " ".join(deployment.split())
     flat_runbook = " ".join(runbook.split())
     assert (
-        "The one exception: a demo install (the client profile's `MIP_INSTALL_CLASS`; before M1-PR2, the dev "
-        "target's live install) runs the weekly `mip_scheduled_refresh` (FRED → gold → lifecycle → KPI, Fridays "
-        "06:00 America/Chicago). `MIP_SCHEDULED_REFRESH=off` pauses it."
+        "The one exception: the weekly `mip_scheduled_refresh` (FRED → gold → lifecycle → KPI, Fridays 06:00 "
+        "America/Chicago) runs when the client profile's own `MIP_SCHEDULED_REFRESH` is `on` (M1-PR3, "
+        "`tools/clients/policy.py`), for a demo or a customer install alike, and its failure email then goes to "
+        "the profile's `MIP_SCHEDULED_REFRESH_RECIPIENTS`"
     ) in flat_deployment
     assert "only through the bundle apply of a GO governed `./scripts/deploy.sh -t client` run" in flat_deployment
     assert "### Weekly scheduled refresh (dev live install)" in runbook
@@ -111,7 +119,6 @@ def test_operator_docs_explain_app_refresh_default_and_paused_schedules() -> Non
         "11 weekly prints (13 August to 22 October 2026)",
         "**Treatment-table DDL race.**",
         "**Silent re-pause.**",
-        "on a demo install only",
         # Design §7.1 risks and the full GO list (adversarial follow-ups).
         "**Piecewise-render trap.**",
         "**Shared catalog.**",
@@ -126,12 +133,12 @@ def test_operator_docs_explain_app_refresh_default_and_paused_schedules() -> Non
         "Accept that by exporting `MIP_RETIRE_HUMAN_SUPERVISOR=<supervisor id>` in the operator shell for "
         "the run, or rename it off the canonical name first. Without either, step 0's pre-stop probe "
         "refuses before the App stop;",
-        # The deployer-is-a-user check is the one GO read the probe does not make yet.
-        "where that read belongs, checks Supervisor retirement and Genie group grants but not the "
-        "deployer's user name. Until it does, check the deploying identity is a user before a GO run.",
-        # The preflight refuses `on` for every install but a demo one, and the target has its own file.
-        "A customer install is always paused and refuses `MIP_SCHEDULED_REFRESH=on` (exit 2)",
-        "`.databricks/bundle/<target>/variable-overrides.json` (`client`)",
+        # The refresh mails the profile's recipients, never the deployer (M1-PR3).
+        "The email goes to the client profile's `MIP_SCHEDULED_REFRESH_RECIPIENTS` (M1-PR3), never to the "
+        "deploying user, so a service-principal deployer no longer swallows the alert",
+        "exports `UNPAUSED` exactly when the client profile's own `MIP_SCHEDULED_REFRESH` is `on`, for a demo or "
+        "a customer install alike",
+        "`.databricks/bundle/<target>/variable-overrides.json` (`client`",
     ):
         assert phrase in flat_runbook, phrase
     for stale in (
@@ -139,9 +146,11 @@ def test_operator_docs_explain_app_refresh_default_and_paused_schedules() -> Non
         "the pre-stop probe step it belongs in has not landed",
         "(both are target `dev`)",
         "share that file in one checkout",
+        "Until M1-PR3",
+        "check the deploying identity is a user before a GO run",
     ):
         assert stale not in flat_runbook, stale
-    assert "A customer install always ships it paused and refuses `MIP_SCHEDULED_REFRESH=on`" in flat_deployment
+    assert "Until M1-PR3" not in flat_deployment
     for doc in (flat_deployment, flat_runbook):
         assert "no other operator action" not in doc.lower()
 
@@ -290,47 +299,25 @@ def test_the_block_sits_before_the_prompt_and_the_first_validate() -> None:
     assert not [line for line in _code_lines() if "DRY_RUN" in line], "pure: it runs in DRY_RUN too"
 
 
-def test_unpaused_is_reachable_only_for_a_demo_install() -> None:
+def test_unpaused_is_reachable_only_when_the_profiles_refresh_is_on() -> None:
     code = _code_lines()
     assignments = [line.strip() for line in code if "BUNDLE_VAR_scheduled_refresh_pause_status=" in line]
 
     assert assignments == [
-        "BUNDLE_VAR_scheduled_refresh_pause_status=UNPAUSED",
-        "BUNDLE_VAR_scheduled_refresh_pause_status=PAUSED",
+        "on) BUNDLE_VAR_scheduled_refresh_pause_status=UNPAUSED ;;",
+        "off) BUNDLE_VAR_scheduled_refresh_pause_status=PAUSED ;;",
     ]
-    unpause = code.index("  BUNDLE_VAR_scheduled_refresh_pause_status=UNPAUSED")
-    assert code[unpause - 1] == 'if [[ "$CLIENT_INSTALL_CLASS" == "demo" && "$_SCHEDULED_REFRESH" == "on" ]]; then'
-    assert code[unpause + 1] == "else"
-    assert '  _SCHEDULED_REFRESH="$(deployment_control_value MIP_SCHEDULED_REFRESH on)"' in code, "demo default on"
-    assert '  _SCHEDULED_REFRESH="$(deployment_control_value MIP_SCHEDULED_REFRESH off)"' in code, "customer default off"
-    assert "TARGET" not in "\n".join(code), "keyed on the install class, never a target name"
+    assert code[0] == 'case "$CLIENT_SCHEDULED_REFRESH" in', "the client profile's own MIP_SCHEDULED_REFRESH (M1-PR3)"
+    joined = "\n".join(code)
+    assert "TARGET" not in joined and "CLIENT_INSTALL_CLASS" not in joined, "never a target name or the class"
+    assert "deployment_control_value" not in joined, "the profile already read the shell and .env.local"
     assert "export BUNDLE_VAR_scheduled_refresh_pause_status" in code
 
 
-# A deployer whose user name is an email, which keeps the block's unpause path
-# covered, and the service-principal deployer every -t client profile has (the
-# profile takes the deployer as an application id).
-USER_DEPLOYER = "deployer@lender.example"
-SP_DEPLOYER = "00000000-0000-4000-8000-000000000001"
-
-
-def _bash_block(
-    install_class: str,
-    env: dict[str, str] | None = None,
-    dotenv: dict[str, str] | None = None,
-    deployer: str = USER_DEPLOYER,
-) -> subprocess.CompletedProcess[str]:
+def _bash_block(refresh: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     bash = shutil.which("bash")
     assert bash
-    # The real helper reads the shell, then .env.local, then the default; ``dotenv`` stands in for the file.
-    arms = "".join(f"{name}) value='{value}' ;; " for name, value in (dotenv or {}).items())
-    prelude = (
-        "set -euo pipefail\nRED=''\nRST=''\n"
-        f"CLIENT_INSTALL_CLASS='{install_class}'\nCLIENT_DEPLOYER='{deployer}'\n"
-        'deployment_control_value() { local name="$1" default_value="${2:-}" value; value="${!name:-}"; '
-        f'if [[ -z "$value" ]]; then case "$name" in {arms}*) ;; esac; fi; '
-        "printf '%s' \"${value:-$default_value}\"; }\n"
-    )
+    prelude = f"set -euo pipefail\nRED=''\nRST=''\nCLIENT_SCHEDULED_REFRESH='{refresh}'\n"
     epilogue = '\nprintf "RESULT=%s\\n" "$(printenv BUNDLE_VAR_scheduled_refresh_pause_status)"\n'
     return subprocess.run(
         [bash, "-c", prelude + _block() + epilogue],
@@ -348,94 +335,66 @@ def _result(completed: subprocess.CompletedProcess[str]) -> str:
     return completed.stdout.strip().splitlines()[-1]
 
 
-def test_the_block_unpauses_only_a_demo_install() -> None:
-    # Unpaused only where the failure mail reaches a mailbox: a deployer that is a user.
-    assert _result(_bash_block("demo")) == "RESULT=UNPAUSED", "a demo install: on by default"
-    assert _result(_bash_block("demo", env={"MIP_SCHEDULED_REFRESH": "on"})) == "RESULT=UNPAUSED"
-    assert _result(_bash_block("demo", env={"MIP_SCHEDULED_REFRESH": "off"})) == "RESULT=PAUSED"
-    assert _result(_bash_block("demo", dotenv={"MIP_SCHEDULED_REFRESH": "off"})) == "RESULT=PAUSED"
-    assert _result(_bash_block("customer")) == "RESULT=PAUSED"
-    assert _result(_bash_block("customer", env={"MIP_SCHEDULED_REFRESH": "off"})) == "RESULT=PAUSED"
-    stray = {"BUNDLE_VAR_scheduled_refresh_pause_status": "UNPAUSED", "MIP_SCHEDULED_REFRESH": "off"}
-    assert _result(_bash_block("demo", env=stray)) == "RESULT=PAUSED", "the block owns the export"
-    assert _result(_bash_block("customer", env={"BUNDLE_VAR_scheduled_refresh_pause_status": "UNPAUSED"})) == (
-        "RESULT=PAUSED"
-    )
-    # A service-principal deployer pauses with `off`, as every customer install does.
-    assert _result(_bash_block("demo", env={"MIP_SCHEDULED_REFRESH": "off"}, deployer=SP_DEPLOYER)) == "RESULT=PAUSED"
-    assert _result(_bash_block("customer", deployer=SP_DEPLOYER)) == "RESULT=PAUSED"
+def test_the_block_unpauses_exactly_when_the_profiles_refresh_is_on() -> None:
+    assert _result(_bash_block("on")) == "RESULT=UNPAUSED"
+    assert _result(_bash_block("off")) == "RESULT=PAUSED"
+    # The block owns the export: a stray one, or a stray shell switch, never decides it.
+    stray = {"BUNDLE_VAR_scheduled_refresh_pause_status": "UNPAUSED", "MIP_SCHEDULED_REFRESH": "on"}
+    assert _result(_bash_block("off", env=stray)) == "RESULT=PAUSED"
+    assert _result(_bash_block("on", env={"MIP_SCHEDULED_REFRESH": "off"})) == "RESULT=UNPAUSED"
 
 
-@pytest.mark.parametrize(
-    ("env", "dotenv"),
-    [({}, {}), ({"MIP_SCHEDULED_REFRESH": "on"}, {}), ({}, {"MIP_SCHEDULED_REFRESH": "on"})],
-)
-def test_the_block_refuses_a_demo_refresh_whose_failure_mail_would_reach_an_application_id(
-    env: dict[str, str], dotenv: dict[str, str]
-) -> None:
-    """Every -t client deployer is a service principal: refused before any apply writes UNPAUSED.
-
-    Without this the step-4 apply would write an UNPAUSED schedule mailing an
-    application id, and only the step-9c postflight would refuse it, after the
-    mutation.
-    """
-
-    refused = _bash_block("demo", env=env, dotenv=dotenv, deployer=SP_DEPLOYER)
+@pytest.mark.parametrize("refresh", ["", "garbage", "ON", "true"])
+def test_the_block_refuses_a_policy_that_is_not_on_or_off(refresh: str) -> None:
+    refused = _bash_block(refresh)
 
     assert refused.returncode == 2, refused.stdout
-    assert "MIP_SCHEDULED_REFRESH=on mails mip_scheduled_refresh's failures to the deploying user" in refused.stderr
-    assert "Set MIP_SCHEDULED_REFRESH=off until M1-PR3" in refused.stderr
-    assert SP_DEPLOYER not in refused.stderr, "the refusal names no identifier"
-    assert "RESULT=" not in refused.stdout
-
-
-@pytest.mark.parametrize(
-    ("install_class", "env"),
-    [
-        ("demo", {"MIP_SCHEDULED_REFRESH": "garbage"}),
-        ("demo", {"MIP_SCHEDULED_REFRESH": "ON"}),
-        ("demo", {"MIP_SCHEDULED_REFRESH": "true"}),
-        ("customer", {"MIP_SCHEDULED_REFRESH": "on"}),
-    ],
-)
-def test_the_block_refuses_a_bad_value_and_a_customer_unpause(install_class: str, env: dict[str, str]) -> None:
-    refused = _bash_block(install_class, env=env)
-
-    assert refused.returncode == 2, refused.stdout
-    assert "MIP_SCHEDULED_REFRESH" in refused.stderr
+    assert "MIP_SCHEDULED_REFRESH must be on or off" in refused.stderr
     assert "RESULT=" not in refused.stdout
 
 
 # ---------------------------- bundle_env: pause export and failure recipients
 
 
+def _policy(*, refresh: str = "on", install_class: str = "demo") -> InstallPolicy:
+    build = demo_profile if install_class == "demo" else customer_profile
+    return install_policy(resolve(RawProfile(values=build(MIP_SCHEDULED_REFRESH=refresh))))
+
+
 @pytest.mark.parametrize(
-    ("install_class", "value", "allowed"),
+    ("refresh", "install_class", "value", "allowed"),
     [
-        ("demo", "UNPAUSED", True),
-        ("demo", "PAUSED", True),
-        ("customer", "PAUSED", True),
-        ("customer", "UNPAUSED", False),
-        (None, "UNPAUSED", False),  # the ci target: no profile
-        ("dev", "UNPAUSED", False),  # a retired target name is no install class
-        ("demo", "", False),
-        ("demo", "unpaused", False),
+        ("on", "demo", "UNPAUSED", True),
+        ("on", "customer", "UNPAUSED", True),
+        ("on", "demo", "PAUSED", True),
+        ("off", "demo", "PAUSED", True),
+        ("off", "demo", "UNPAUSED", False),
+        ("off", "customer", "UNPAUSED", False),
+        (None, None, "UNPAUSED", False),  # the ci target: no profile
+        ("on", "demo", "", False),
+        ("on", "demo", "unpaused", False),
     ],
 )
-def test_the_pause_export_is_checked_against_the_install(install_class: str | None, value: str, allowed: bool) -> None:
+def test_the_pause_export_is_checked_against_the_profiles_refresh(
+    refresh: str | None, install_class: str | None, value: str, allowed: bool
+) -> None:
+    policy = None if refresh is None or install_class is None else _policy(refresh=refresh, install_class=install_class)
     env = {posture.PAUSE_ENV: value}
     if allowed:
-        posture.check_pause_status(env, install_class=install_class)
+        posture.check_pause_status(env, policy=policy)
     else:
         with pytest.raises(ValueError, match=posture.PAUSE_ENV):
-            posture.check_pause_status(env, install_class=install_class)
-    posture.check_pause_status({}, install_class=install_class)  # absent: the bundle default
+            posture.check_pause_status(env, policy=policy)
+    posture.check_pause_status({}, policy=policy)  # absent: the bundle default
 
 
-def test_only_a_demo_install_mails_its_deployer() -> None:
-    assert posture.failure_recipients(install_class="demo") == ["${workspace.current_user.userName}"]
-    for install_class in ("customer", None, "dev"):
-        assert posture.failure_recipients(install_class=install_class) == [], install_class
+def test_only_a_refresh_that_is_on_mails_and_then_only_the_profiles_recipients() -> None:
+    recipients = ["refresh-alerts@summit.example"]
+    for install_class in ("demo", "customer"):
+        assert posture.failure_recipients(policy=_policy(refresh="on", install_class=install_class)) == recipients
+        assert posture.failure_recipients(policy=_policy(refresh="off", install_class=install_class)) == []
+    assert posture.failure_recipients(policy=None) == []
+    assert not hasattr(posture, "LIVE_INSTALL_RECIPIENTS"), "never the deploying user's userName"
 
 
 def test_the_overrides_writer_keeps_other_keys_and_refuses_a_bad_file(tmp_path: Path) -> None:
@@ -443,10 +402,10 @@ def test_the_overrides_writer_keeps_other_keys_and_refuses_a_bad_file(tmp_path: 
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({"operator_key": ["kept"]}), encoding="utf-8")
 
-    posture.write_failure_recipients(tmp_path, target="dev", recipients=["${workspace.current_user.userName}"])
+    posture.write_failure_recipients(tmp_path, target="dev", recipients=["refresh-alerts@summit.example"])
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "operator_key": ["kept"],
-        posture.RECIPIENTS_VARIABLE: ["${workspace.current_user.userName}"],
+        posture.RECIPIENTS_VARIABLE: ["refresh-alerts@summit.example"],
     }
     posture.write_failure_recipients(tmp_path, target="dev", recipients=[])
     assert json.loads(path.read_text(encoding="utf-8"))[posture.RECIPIENTS_VARIABLE] == []
@@ -461,7 +420,11 @@ def test_the_overrides_writer_keeps_other_keys_and_refuses_a_bad_file(tmp_path: 
 
 
 def _bundle_env_main(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, env: dict[str, str], install_class: str = "demo"
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    env: dict[str, str],
+    install_class: str = "demo",
+    refresh: str = "on",
 ) -> tuple[int, list[list[str]]]:
     """``validate -t client`` with a demo or customer profile; ``ci`` validates with none."""
 
@@ -470,7 +433,7 @@ def _bundle_env_main(
     profiles = {"demo": paychex_shaped_profile, "customer": customer_profile}
     env_local = tmp_path / ".env.local"
     if install_class in profiles:
-        env_local.write_text(env_file_text(profiles[install_class]()), encoding="utf-8")
+        env_local.write_text(env_file_text(profiles[install_class](MIP_SCHEDULED_REFRESH=refresh)), encoding="utf-8")
     monkeypatch.setattr(bundle_env, "ENV_LOCAL", env_local)
     monkeypatch.setattr(bundle_env, "BUNDLE_ROOT", tmp_path)
     for name in ("DATABRICKS_BUNDLE_ROOT", posture.PAUSE_ENV, "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS", *KNOWN_NAMES):
@@ -493,31 +456,36 @@ def _written_recipients(tmp_path: Path, target: str = "client") -> object:
     return overrides[posture.RECIPIENTS_VARIABLE]
 
 
-def test_bundle_env_mails_a_demo_install_and_never_a_customer_one(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("install_class", ["demo", "customer"])
+def test_bundle_env_mails_the_profiles_recipients_only_while_its_refresh_is_on(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, install_class: str
 ) -> None:
-    code, calls = _bundle_env_main(monkeypatch, tmp_path, {posture.PAUSE_ENV: "UNPAUSED"})
+    code, calls = _bundle_env_main(monkeypatch, tmp_path, {posture.PAUSE_ENV: "UNPAUSED"}, install_class=install_class)
     assert code == 0 and len(calls) == 1
-    assert _written_recipients(tmp_path) == ["${workspace.current_user.userName}"]
+    assert _written_recipients(tmp_path) == ["refresh-alerts@summit.example"]
 
-    code, calls = _bundle_env_main(monkeypatch, tmp_path, {}, install_class="customer")
+    code, calls = _bundle_env_main(monkeypatch, tmp_path, {}, install_class=install_class, refresh="off")
     assert code == 0 and _written_recipients(tmp_path) == []
+
+
+def test_bundle_env_mails_nobody_on_the_ci_target(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     code, calls = _bundle_env_main(monkeypatch, tmp_path, {}, install_class="ci")
     assert code == 0 and _written_recipients(tmp_path, "ci") == []
 
 
 @pytest.mark.parametrize(
-    ("env", "install_class"),
+    ("env", "install_class", "refresh"),
     [
-        ({posture.PAUSE_ENV: "UNPAUSED"}, "customer"),
-        ({posture.PAUSE_ENV: "UNPAUSED"}, "ci"),
-        ({posture.PAUSE_ENV: "sometimes"}, "demo"),
+        ({posture.PAUSE_ENV: "UNPAUSED"}, "customer", "off"),
+        ({posture.PAUSE_ENV: "UNPAUSED"}, "demo", "off"),
+        ({posture.PAUSE_ENV: "UNPAUSED"}, "ci", "on"),
+        ({posture.PAUSE_ENV: "sometimes"}, "demo", "on"),
     ],
 )
-def test_bundle_env_refuses_an_unpause_outside_a_demo_install(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, env: dict[str, str], install_class: str
+def test_bundle_env_refuses_an_unpause_the_profile_does_not_decide(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, env: dict[str, str], install_class: str, refresh: str
 ) -> None:
-    code, calls = _bundle_env_main(monkeypatch, tmp_path, env, install_class=install_class)
+    code, calls = _bundle_env_main(monkeypatch, tmp_path, env, install_class=install_class, refresh=refresh)
 
     assert code == 2 and calls == [], "refused before the CLI runs"
 
@@ -534,7 +502,7 @@ def test_bundle_env_writes_the_overrides_under_databricks_bundle_root(
     )
 
     assert code == 0 and len(calls) == 1
-    assert _written_recipients(other_root) == ["${workspace.current_user.userName}"]
+    assert _written_recipients(other_root) == ["refresh-alerts@summit.example"]
     assert not posture.overrides_path(tmp_path, "client").exists(), "never the default root's file"
 
 
@@ -664,31 +632,13 @@ def test_every_operator_doc_that_runs_the_gold_or_lifecycle_job_carries_the_stal
     assert "Interim refresh (governed deploy NO-GO)" in job_trigger._LIFECYCLE_REPAIR_COMMAND
 
 
-# ------------------------- the step-9c postflight asks only a demo install for mail
+# ------------------- the step-9c postflight asks the profile for its recipients
 
 
-def _postflight_args(install_class: str) -> list[str]:
-    """The step-9c argument list deploy.sh builds for verify_scheduled_refresh_state."""
-
-    bash = shutil.which("bash")
-    assert bash
+def test_the_postflight_always_asks_the_profile_for_its_recipients() -> None:
     text = deploy_entrypoint_text()
-    start = text.index("_SCHEDULED_REFRESH_ARGS=(--expect")
-    snippet = text[start : text.index('run "$PYTHON" -m tools.databricks.verify_scheduled_refresh_state', start)]
-    script = (
-        "set -euo pipefail\n"
-        f"CLIENT_INSTALL_CLASS='{install_class}'\n"
-        "BUNDLE_VAR_scheduled_refresh_pause_status=PAUSED\n"
-        + snippet
-        + 'printf "%s\\n" "${_SCHEDULED_REFRESH_ARGS[@]}"\n'
-    )
-    completed = subprocess.run(
-        [bash, "-c", script], env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=False, timeout=60
-    )
-    assert completed.returncode == 0, completed.stderr
-    return completed.stdout.splitlines()
+    start = text.index('step "verify mip_scheduled_refresh')
+    snippet = text[start : text.index('step "rebind Genie space', start)]
 
-
-def test_the_postflight_asks_only_the_live_install_for_its_recipient() -> None:
-    assert _postflight_args("demo") == ["--expect", "PAUSED", "--live-install"]
-    assert _postflight_args("customer") == ["--expect", "PAUSED"]
+    assert "--recipients-from-profile" in snippet
+    assert "--live-install" not in text and "CLIENT_INSTALL_CLASS" not in snippet

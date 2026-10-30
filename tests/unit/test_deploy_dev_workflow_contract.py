@@ -4947,8 +4947,7 @@ def test_first_install_dry_run_executes_no_databricks_operations(
         exclude.write(".venv\n")
     # M1-PR2: the client profile resolves before the preflight, so the
     # sandbox carries a full synthetic one (tests/fixtures/client_profiles.py),
-    # with the weekly refresh off: the preflight refuses `on` for its
-    # service-principal deployer until M1-PR3.
+    # here with the weekly refresh off.
     (checkout / ".env.local").write_text(
         env_file_text(
             {
@@ -6551,7 +6550,7 @@ def test_deploy_dev_wires_optional_salesforce_external_id_upsert_without_preflig
 def test_deploy_script_provisions_runtime_secrets_presence_only() -> None:
     text = _deploy_entrypoint_text()
 
-    assert 'APP_RUNTIME_ENV="${APP_ENV:-}"' in text
+    assert 'APP_RUNTIME_ENV="$CLIENT_APP_ENV"' in text, "the client profile's MIP_APP_ENV (M1-PR3)"
     assert "is required for target '$TARGET'" in text, "the other required-key gates stay"
     for retired in (
         "MIP_COTALITY_ID_MASK_SECRET is required for target",

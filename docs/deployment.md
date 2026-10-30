@@ -510,7 +510,7 @@ DATABRICKS_CONFIG_PROFILE=<profile> python -m tools.databricks.converge_static_a
   --expected-principal <owner> --expected-target dev --expected-root-leaf dev
 MIP_GIT_SHA=<sha> python -m tools.databricks.app_deploy_payload \
   --source-code-path /Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/dev/app-src/<release-id> \
-  --target dev --app-env sandbox --catalog mip --schema gold \
+  --install-class demo --app-env sandbox --catalog mip --schema gold \
   --lakebase-instance <lakebase-instance> > <payload>
 databricks apps deploy <app-name> --json @<payload> -p <profile>
 ```
@@ -541,7 +541,8 @@ override a profile.
    files.
 4. **Payload**: the deployment JSON for that folder. Run it from the checkout
    whose `.env.local` holds the live install's operator values (lender, admin
-   allowlist and the rest); `--target dev` keeps the demo payload policy. The
+   allowlist and the rest); `--install-class demo` keeps the live install's demo
+   payload policy (the builder takes no target name since M1-PR3). The
    payload leaves the campaign-treatment runtime off, so health reports
    `campaign_treatment_runtime: disabled_baseline_deploy`, the honest state of
    a deployment made outside signed promotion.
@@ -2313,16 +2314,13 @@ cadence and confirms the target writes to an isolated catalog; otherwise
 multiple bundle targets can contend on the same Unity Catalog tables and burn
 avoidable compute.
 
-The one exception: a demo install (the client profile's `MIP_INSTALL_CLASS`;
-before M1-PR2, the dev target's live install) runs the weekly
-`mip_scheduled_refresh` (FRED → gold → lifecycle → KPI, Fridays 06:00
-America/Chicago). `MIP_SCHEDULED_REFRESH=off` pauses it. A customer install
-always ships it paused and refuses `MIP_SCHEDULED_REFRESH=on`. Its failure
-email goes to the deploying user on a demo install only, so until M1-PR3 mails
-the profile's `MIP_SCHEDULED_REFRESH_RECIPIENTS`, the preflight also refuses
-`MIP_SCHEDULED_REFRESH=on` for a demo install deployed by a service principal
-(every `-t client` install), before any bundle command. The schedule reaches
-the workspace only through the bundle apply of a GO governed
+The one exception: the weekly `mip_scheduled_refresh` (FRED → gold →
+lifecycle → KPI, Fridays 06:00 America/Chicago) runs when the client profile's
+own `MIP_SCHEDULED_REFRESH` is `on` (M1-PR3, `tools/clients/policy.py`), for a
+demo or a customer install alike, and its failure email then goes to the
+profile's `MIP_SCHEDULED_REFRESH_RECIPIENTS` (required with `on`; an
+application id is refused). `off` ships it paused, mailing nobody. The schedule
+reaches the workspace only through the bundle apply of a GO governed
 `./scripts/deploy.sh -t client` run; the live install is not adopted yet, and
 its last governed run was NO-GO on 2026-10-27. See `docs/runbook.md`, "Weekly scheduled
 refresh (dev live install)", for the GO conditions, the risks (static-share
