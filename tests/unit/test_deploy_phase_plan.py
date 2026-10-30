@@ -78,7 +78,7 @@ def test_the_plan_phase_dry_run_stops_after_the_pre_lease_gate(tmp_path: Path) -
     assert commands == [
         # The client profile's read-only live checks (M1-PR2), printed, not run.
         ".venv/bin/python -m tools.clients.live_checks",
-        ".venv/bin/python tools/render_sql.py --catalog mip",
+        ".venv/bin/python tools/render_sql.py --catalog mip --storage-root-env MIP_UC_CATALOG_STORAGE_ROOT",
         ".venv/bin/python -m tools.databricks.bundle_env validate -t client",
         ".venv/bin/python -m tools.databricks.bundle_env plan -t client -o json --allow-unprovisioned-genie"
         " > /tmp/mip-dry-run-bundle-plan-pre-lease.json",

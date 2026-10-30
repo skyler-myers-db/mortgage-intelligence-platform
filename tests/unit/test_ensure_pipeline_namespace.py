@@ -210,6 +210,42 @@ def test_fresh_namespace_creates_only_catalog_and_silver_schema() -> None:
     ]
 
 
+def test_a_profile_storage_root_is_the_created_catalogs_managed_location() -> None:
+    """M1-PR3: MIP_UC_CATALOG_STORAGE_ROOT reaches the create; an existing catalog is never altered."""
+
+    workspace, catalogs, _schemas = _workspace()
+
+    created = ensure_pipeline_namespace(
+        catalog="mip_customer",
+        forbidden_owner_principals={"runtime-app-client"},
+        workspace=workspace,  # type: ignore[arg-type]
+        account_factory=lambda: _mirrored_account(workspace),  # type: ignore[arg-type]
+        assert_single_writer=lambda: None,
+        storage_root="s3://bucket-alpha/mip",
+    )
+
+    assert created == (True, True)
+    assert catalogs.create_calls == [
+        (
+            ("mip_customer",),
+            {
+                "comment": "Mortgage Intelligence Platform - Module 0 catalog.",
+                "storage_root": "s3://bucket-alpha/mip",
+            },
+        )
+    ]
+    existing, catalogs, _schemas = _workspace(catalog=_catalog(), schema=_schema())
+    assert ensure_pipeline_namespace(
+        catalog="mip_customer",
+        forbidden_owner_principals={"runtime-app-client"},
+        workspace=existing,  # type: ignore[arg-type]
+        account_factory=lambda: _mirrored_account(existing),  # type: ignore[arg-type]
+        assert_single_writer=lambda: None,
+        storage_root="s3://bucket-alpha/mip",
+    ) == (False, False)
+    assert catalogs.create_calls == []
+
+
 def test_existing_exact_namespace_is_an_idempotent_noop() -> None:
     workspace, catalogs, schemas = _workspace(catalog=_catalog(), schema=_schema())
 

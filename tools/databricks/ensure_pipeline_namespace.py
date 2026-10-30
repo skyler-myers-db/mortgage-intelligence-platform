@@ -216,8 +216,14 @@ def ensure_pipeline_namespace(
     group_membership_probe: Callable[[AccountClient, str, str, str, str], bool] | None = None,
     assert_single_writer: Callable[[], None] | None = None,
     workspace: WorkspaceClient | None = None,
+    storage_root: str | None = None,
 ) -> tuple[bool, bool]:
-    """Create and verify only the empty namespace needed by the DAB pipeline."""
+    """Create and verify only the empty namespace needed by the DAB pipeline.
+
+    ``storage_root`` (the client profile's MIP_UC_CATALOG_STORAGE_ROOT, M1-PR3)
+    is the catalog's managed location when this call creates it; an existing
+    catalog is never altered.
+    """
 
     catalog_name = _validate_identifier("catalog", catalog)
     schema_name = _validate_identifier("schema", schema)
@@ -242,10 +248,17 @@ def ensure_pipeline_namespace(
     catalog_created = False
     if catalog_object is None:
         try:
-            client.catalogs.create(
-                catalog_name,
-                comment="Mortgage Intelligence Platform - Module 0 catalog.",
-            )
+            if storage_root:
+                client.catalogs.create(
+                    catalog_name,
+                    comment="Mortgage Intelligence Platform - Module 0 catalog.",
+                    storage_root=storage_root,
+                )
+            else:
+                client.catalogs.create(
+                    catalog_name,
+                    comment="Mortgage Intelligence Platform - Module 0 catalog.",
+                )
         except _CREATE_CONFLICTS:
             # A concurrent creator is acceptable only if authoritative readback
             # proves the exact governed object below.
@@ -305,7 +318,19 @@ def main() -> int:
         default=[],
         help="App/M2M service-principal application id forbidden from ownership.",
     )
+    parser.add_argument(
+        "--storage-root-env",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Name of the environment variable holding the catalog's storage root "
+            "(MIP_UC_CATALOG_STORAGE_ROOT); named so the value never prints."
+        ),
+    )
     args = parser.parse_args()
+    from tools.render_sql import _storage_root
+
+    storage_root = _storage_root(os.environ.get(args.storage_root_env) if args.storage_root_env else None)
     approved = parse_approved_owner_principals(
         os.environ.get("MIP_UC_APPROVED_OWNER_PRINCIPALS", "")
     )
@@ -327,6 +352,7 @@ def main() -> int:
         schema=args.schema,
         approved_owner_principals=approved,
         forbidden_owner_principals=forbidden,
+        storage_root=storage_root,
     )
     print(
         "Verified managed pipeline namespace "

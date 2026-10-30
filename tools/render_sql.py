@@ -178,6 +178,21 @@ _CREATE_SCHEMA_PATTERN = re.compile(
 # ``<column>_catalog = 'mip'``: the catalog as a name in a system-table filter.
 _CATALOG_LITERAL_PATTERN = re.compile(r"(\b[a-z_]+_catalog\s*=\s*)'mip'", re.IGNORECASE)
 _DEMO_FIRST_PARTY_TOKEN = "{{mip_enable_demo_first_party_feeds}}"
+# The install catalog's managed storage (the client profile's
+# MIP_UC_CATALOG_STORAGE_ROOT, M1-PR3): the profile's shape, re-checked here so
+# no quote or space can reach the rendered DDL literal.
+_STORAGE_ROOT = re.compile(r"(?:s3|abfss|gs)://[^\s'\"<>\\]+")
+
+
+def _storage_root(value: str | None) -> str | None:
+    """``value`` as a storage root for MANAGED LOCATION; ``None`` for unset or blank."""
+
+    root = (value or "").strip()
+    if not root:
+        return None
+    if _STORAGE_ROOT.fullmatch(root) is None:
+        raise ValueError("catalog storage root must be an s3://, abfss:// or gs:// root with no quote or space")
+    return root
 _UC_IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,254}$")
 
 # The Cotality source's closed shapes (module docstring), one alternation so no
@@ -341,10 +356,16 @@ def _render_text(
     demo_first_party_enabled: bool,
     cotality: CotalitySource = source_names.CANONICAL,
     where: str = "<text>",
+    storage_root: str | None = None,
 ) -> tuple[str, int]:
-    """Apply UC prefix substitutions and render-time SQL switches."""
+    """Apply UC prefix substitutions and render-time SQL switches.
+
+    With ``storage_root`` the catalog DDL creates the catalog with that
+    ``MANAGED LOCATION``; without it the DDL is byte-identical to before.
+    """
     total = 0
-    text, n = _CREATE_CATALOG_PATTERN.subn(lambda match: f"{match.group(1)}{catalog}", text)
+    location = "" if storage_root is None else f"\nMANAGED LOCATION '{storage_root}'"
+    text, n = _CREATE_CATALOG_PATTERN.subn(lambda match: f"{match.group(1)}{catalog}{location}", text)
     total += n
     text, n = _CREATE_SCHEMA_PATTERN.subn(
         lambda match: f"{match.group(1)}{catalog}.{match.group('schema').lower()}",
@@ -411,8 +432,12 @@ def render(
     source_root: Path = _DEFAULT_SOURCE,
     dest_root: Path = _DEFAULT_DEST,
     cotality: CotalitySource = source_names.CANONICAL,
+    storage_root: str | None = None,
 ) -> tuple[int, int, int]:
     """Render every SQL file under source_root into dest_root.
+
+    ``storage_root`` (the profile's MIP_UC_CATALOG_STORAGE_ROOT) renders the
+    catalog DDL with that ``MANAGED LOCATION``; unset or blank changes nothing.
 
     Returns ``(files_processed, files_written, total_substitutions)``.
     A file is "written" only if its rendered content differs from what is
@@ -423,6 +448,7 @@ def render(
     """
     if not source_root.is_dir():
         raise FileNotFoundError(f"source directory does not exist: {source_root}")
+    root = _storage_root(storage_root)
 
     files = _iter_sql_files(source_root, dest_root)
     files_written = 0
@@ -438,6 +464,7 @@ def render(
             demo_first_party_enabled=demo_first_party_enabled,
             cotality=cotality,
             where=str(rel),
+            storage_root=root,
         )
         total_subs += n
         outputs.append((dest_root / rel, rendered))
@@ -490,6 +517,18 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
             "The deploy wrapper explicitly enables this for the Summit dev demo."
         ),
     )
+    parser.add_argument(
+        "--storage-root-env",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Name of the environment variable that holds the install catalog's "
+            "storage root (the client profile's MIP_UC_CATALOG_STORAGE_ROOT); the "
+            "catalog DDL then creates it with that MANAGED LOCATION. Named, never "
+            "passed, so the value stays out of the printed command. Unset or blank "
+            "changes nothing."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -515,6 +554,7 @@ def main(argv: list[str] | None = None) -> int:
     catalog = catalog.strip()
     try:
         cotality = source_names.from_env(os.environ)
+        storage_root = _storage_root(os.environ.get(args.storage_root_env) if args.storage_root_env else None)
     except ValueError as exc:
         print(f"render_sql: {exc}", file=sys.stderr)
         return 2
@@ -529,6 +569,7 @@ def main(argv: list[str] | None = None) -> int:
             source_root=source_root,
             dest_root=dest_root,
             cotality=cotality,
+            storage_root=storage_root,
         )
     except CanonicalSourceLeft as exc:
         print(f"render_sql: {exc}", file=sys.stderr)

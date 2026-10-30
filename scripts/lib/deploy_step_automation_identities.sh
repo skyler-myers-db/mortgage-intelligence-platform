@@ -130,8 +130,17 @@ if [[ ! "${CLIENT_DEMO_FEEDS:-}" =~ ^[01]$ ]]; then
   exit 2
 fi
 export MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS="$CLIENT_DEMO_FEEDS"
+# The install catalog's managed storage, the profile's optional
+# MIP_UC_CATALOG_STORAGE_ROOT (M1-PR3): a first install creates the catalog
+# with that MANAGED LOCATION (the live checks refused a first install whose
+# metastore has no root while it is unset). The renderer and the pipeline
+# namespace bootstrap are handed its name, never its value, so no planned or
+# printed command carries it.
+MIP_UC_CATALOG_STORAGE_ROOT="$(deployment_control_value MIP_UC_CATALOG_STORAGE_ROOT)"
+export MIP_UC_CATALOG_STORAGE_ROOT
 step "render SQL for target UC catalog (MIP_DEFAULT_CATALOG=${MIP_DEFAULT_CATALOG:-mip}, MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=${MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS})"
-run "$PYTHON" tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+run "$PYTHON" tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+  --storage-root-env MIP_UC_CATALOG_STORAGE_ROOT
 if [[ "$MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS" == "1" ]]; then
   RESTORE_RENDERED_SQL_FAIL_CLOSED=1
 fi

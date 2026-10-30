@@ -828,6 +828,29 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
    refuses (exit 2) before any other step unless that host is the profile's
    `DATABRICKS_HOST` and the read-only live checks find the profile's
    workspace id, metastore id and deployer (`tools/clients/live_checks.py`).
+   The same call then runs the read-only install checks
+   (`tools/clients/install_checks.py`, M1-PR3), all before the signed lease
+   and any App stop. Each refuses on a read error rather than reading it as
+   absent, and every refusal is reported together:
+   - **adoption**: an App named `MIP_APP_NAME` that this deployer's bundle
+     state (`<root>/state/resources.json`) does not bind as `apps.mip_app` is
+     an existing install it never adopted. The one exception is an App a
+     first-install journal may own, which the pre-lease bundle plan gate
+     judges with the verified journal;
+   - **install marker**: the catalog property `mip.install_key`, when
+     present, equals `MIP_CLIENT`. An existing catalog without it is accepted
+     only when this deployer's state binds the App, so `CREATE CATALOG IF NOT
+     EXISTS` never silently reuses another install's catalog. No catalog is a
+     first install;
+   - **Cotality share**: the source catalog is a Delta Sharing catalog from
+     `MIP_COTALITY_SHARE_PROVIDER` / `MIP_COTALITY_SHARE_NAME` (when set), and
+     all seven source tables resolve;
+   - **storage root**: a first install needs the metastore's default storage
+     root, or `MIP_UC_CATALOG_STORAGE_ROOT`, which the catalog DDL and the
+     pipeline namespace bootstrap then use as the catalog's `MANAGED LOCATION`
+     (named to both tools, never printed);
+   - **account principal**: `MIP_IDENTITY_IDS_JSON.account_principal` holds no
+     account admin role (read from account SCIM with its own credential).
    `deploy-dev.yml` and `nightly.yml` are Entrada CI only, and both are parked
    until a client environment is selected (M1-PR7): their first job refuses
    every dispatch. The command of record is `./scripts/deploy.sh -t client`.

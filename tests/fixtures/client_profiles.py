@@ -167,8 +167,10 @@ def paychex_shaped_profile(**overrides: str | None) -> dict[str, str]:
     The live install's posture: a demo install with the agentic tier, the
     weekly refresh and the Summit demo feeds on, presenter mode off, readable
     secondaries off, today's resource names (catalog ``mip``, App ``mip-app``,
-    instance ``mip-app-state``, ...), the canonical Cotality source names and
-    the default dashboard folder. Every identifier is the demo profile's
+    instance ``mip-app-state``, ...), the canonical Cotality source names, the
+    default dashboard folder and no catalog storage root (its ``mip`` catalog
+    already exists on a metastore with a default root, so the catalog DDL
+    renders byte-identically). Every identifier is the demo profile's
     synthetic one; the client key is a codename.
     """
 
@@ -185,6 +187,7 @@ def paychex_shaped_profile(**overrides: str | None) -> dict[str, str]:
         "MIP_COTALITY_SOURCE_SCHEMA": None,
         "MIP_COTALITY_SOURCE_TABLE_PREFIX": None,
         "MIP_DASHBOARD_PARENT_PATH": None,
+        "MIP_UC_CATALOG_STORAGE_ROOT": None,
     }
     return _apply(_apply(DEMO_PROFILE, shaped), overrides)
 

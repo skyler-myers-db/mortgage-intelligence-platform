@@ -741,13 +741,17 @@ def main() -> int:
     # default whatever an operator's .env.local says.
     demo_first_party_enabled = policy is not None and policy.demo_first_party_feeds
 
+    # The install catalog's managed storage (MIP_UC_CATALOG_STORAGE_ROOT) for
+    # the profile's install; the ci target renders none.
+    storage_root = profile.catalog_storage_root if profile is not None else None
     try:
         processed, written, subs = render_sql.render(
             catalog=catalog,
             demo_first_party_enabled=demo_first_party_enabled,
             cotality=cotality,
+            storage_root=storage_root,
         )
-    except render_sql.CanonicalSourceLeft as exc:
+    except ValueError as exc:  # render_sql.CanonicalSourceLeft, or a malformed storage root
         print(f"[bundle_env] {exc}", file=sys.stderr)
         return 2
 
@@ -785,7 +789,9 @@ def main() -> int:
     cli = ["databricks", "bundle", subcmd, *rest]
     result = subprocess.run(cli, env=env, check=False)
     if demo_first_party_enabled:
-        render_sql.render(catalog=catalog, demo_first_party_enabled=False, cotality=cotality)
+        render_sql.render(
+            catalog=catalog, demo_first_party_enabled=False, cotality=cotality, storage_root=storage_root
+        )
         print(
             "[bundle_env] restored sql/_rendered with "
             "demo_first_party_feeds=disabled after CLI exit",

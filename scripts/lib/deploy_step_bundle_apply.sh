@@ -117,6 +117,7 @@ step "ensure managed UC pipeline namespace exists before bundle apply"
 _PIPELINE_NAMESPACE_ARGS=(
   --catalog "${MIP_DEFAULT_CATALOG:-mip}"
   --schema silver
+  --storage-root-env MIP_UC_CATALOG_STORAGE_ROOT
 )
 # shellcheck disable=SC2031  # Parent-shell M2M ids survive bounded subshells.
 for _FORBIDDEN_OWNER in \

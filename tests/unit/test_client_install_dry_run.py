@@ -222,11 +222,12 @@ def test_the_client_render_is_the_retired_dev_targets_byte_for_byte(
     RENDER(catalog="mip", demo_first_party_enabled=True, dest_root=reference)
 
     canonical = {"catalog": "mip", "cotality": source_names.CANONICAL}
-    assert seen["renders"][0] == {**canonical, "demo_first_party_enabled": True}
+    # Client #1 sets no catalog storage root, so the catalog DDL is unchanged (M1-PR3).
+    assert seen["renders"][0] == {**canonical, "demo_first_party_enabled": True, "storage_root": None}
     assert seen["digest"] == _tree_digest(reference)
     assert seen["command"] == ["databricks", "bundle", "validate", "-t", "client"]
     # After the CLI exits the tree is restored with the feeds off, as before.
-    assert seen["renders"][1:] == [{**canonical, "demo_first_party_enabled": False}]
+    assert seen["renders"][1:] == [{**canonical, "demo_first_party_enabled": False, "storage_root": None}]
 
 
 def test_the_client_validate_exports_todays_names_and_the_client_root(
