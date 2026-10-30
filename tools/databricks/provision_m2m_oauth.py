@@ -416,11 +416,8 @@ def provision(
             "Secret minting requires --set-gh-secrets, --gh-repo and --gh-env <client>; this tool "
             "never prints or stores one-shot OAuth secrets locally or in repository-level secrets."
         )
-    if mint_secret and not _gh_available():
-        raise SystemExit(
-            "Secret minting requires an installed, authenticated gh CLI; "
-            "run `gh auth login` before retrying."
-        )
+    if mint_secret:  # gh signed in, and the --gh-env environment reviewed and protected
+        _github_helpers.require_mint_sink(gh_repo, gh_env, available=_gh_available)
     for name in (
         client_id_secret_name,
         client_secret_secret_name,

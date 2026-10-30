@@ -55,7 +55,12 @@ three secrets to the client's GitHub Environment — runs from a single Python t
 #   1. `databricks auth login` as a workspace admin (or set DATABRICKS_HOST +
 #      an admin PAT in ~/.databrickscfg DEFAULT profile).
 #   2. `gh auth login` against the repo owner. Used to push the three
-#      GitHub secrets via stdin.
+#      GitHub secrets via stdin. Before any mint the tool reads (never
+#      writes) the --gh-env environment and refuses unless it exists with
+#      exactly its review mode's protections: the signed-in gh user as its
+#      one required reviewer, can_admins_bypass=false and a branch policy of
+#      exactly {main} (`python -m tools.clients.github_environment --apply`
+#      sets them up). `<client>-validate` is the validator's and is refused.
 #   3. The reviewed `origin` remote names the GitHub repository that will
 #      receive each role-owned client ID and one-shot client secret.
 #   4. Export MIP_AI_GATEWAY_PROOF_SIGNING_KEY and its derived

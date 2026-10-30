@@ -922,7 +922,12 @@ One-shot OAuth secrets are written only to one GitHub Environment
 (`--gh-env <client>`, required with `--set-gh-secrets`) of the repository
 detected from the current `origin`, never to repository-level secrets. Every
 `gh` call names `--env` and never `--repo`; the repository reaches it through
-`GH_REPO`. Customer automation without a local git remote must set
+`GH_REPO`. Before any mint or SDK mutation the tool reads the environment
+and refuses unless it exists with exactly its `MIP_REVIEW_MODE`'s
+protections, with the signed-in `gh` user as its one required reviewer, no
+admin bypass and a branch policy of exactly `{main}`; `<client>-validate`,
+the validator's federation subject, is always refused. Customer automation
+without a local git remote must set
 `MIP_M2M_GITHUB_REPOSITORY=owner/repository`; an explicit `--gh-repo` must
 match that reviewed sink. Grant-only reconciliation with `--no-mint-secret`
 does not require this binding and can run from a customer fork unchanged.

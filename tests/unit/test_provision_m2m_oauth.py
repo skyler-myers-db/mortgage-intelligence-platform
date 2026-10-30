@@ -169,6 +169,13 @@ def _clear_role_client_ids(monkeypatch: pytest.MonkeyPatch) -> None:
         "_confirm_gh_secrets",
         lambda _repo, _names: None,
     )
+    # The target environment's protections are read through gh; the tests
+    # that need a refusal patch this themselves.
+    monkeypatch.setattr(
+        pmo._github_helpers,
+        "environment_refusals",
+        lambda _repo, _environment: [],
+    )
     for defaults in pmo.IDENTITY_DEFAULTS.values():
         monkeypatch.delenv(defaults.client_id_secret_name, raising=False)
 
@@ -3173,6 +3180,55 @@ def test_live_mint_requires_one_client_environment_before_sdk_mutation(gh_env: s
     client_factory.assert_not_called()
     gh_available.assert_not_called()
     set_secret.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("gh_env", "refusals", "expected"),
+    [
+        ("acme-validate", [], "the validator's federation subject"),
+        (_CANONICAL_GH_ENV, ["github: acme can_admins_bypass differs from single_maintainer_audited"],
+         "refused before any mutation: github: acme can_admins_bypass differs"),
+    ],
+)
+def test_live_mint_requires_a_reviewed_protected_environment_before_sdk_mutation(
+    gh_env: str, refusals: list[str], expected: str
+) -> None:
+    client_factory = MagicMock()
+    with (
+        patch.object(pmo, "_gh_available", return_value=True) as gh_available,
+        patch.object(pmo._github_helpers, "environment_refusals", return_value=refusals) as checked,
+        patch.object(pmo, "_set_gh_secret") as set_secret,
+        pytest.raises(SystemExit, match=expected),
+    ):
+        pmo.provision(
+            sp_name="mip-nightly-ci-sp",
+            expected_application_id=None,
+            app_name="mip-app",
+            grant_can_use=True,
+            group_name=None,
+            create_group=False,
+            lakebase_instance=None,
+            gateway_endpoint=None,
+            warehouse_id=None,
+            gh_repo=_CANONICAL_GH_REPO,
+            set_gh_secrets=True,
+            gh_env=gh_env,
+            mint_secret=True,
+            rotate=False,
+            app_url="https://example",
+            client_id_secret_name="DATABRICKS_CLIENT_ID",
+            client_secret_secret_name="DATABRICKS_CLIENT_SECRET",
+            app_url_secret_name="MIP_APP_URL",
+            identity_role="normal",
+            client_factory=client_factory,
+        )
+    client_factory.assert_not_called()
+    set_secret.assert_not_called()
+    if gh_env.endswith("-validate"):
+        gh_available.assert_not_called()
+        checked.assert_not_called()
+    else:
+        checked.assert_called_once_with(_CANONICAL_GH_REPO, gh_env)
 
 
 def test_live_mint_requires_authenticated_gh_before_sdk_mutation() -> None:
