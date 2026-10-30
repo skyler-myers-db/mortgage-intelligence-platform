@@ -5,12 +5,16 @@ Review of #298. The record (``MIP_LENDER_IDENTITY_JSON``) and its pin
 like every other deployment control, and a non-blank shell value wins. Two
 records that each match their own pin must never split the deploy: the App
 payload and the bundle variables (the SQL render and the Lakebase
-migration) carry the same digest.
+migration) carry the same digest. The deploy readers run as
+``scripts/deploy.sh -t client`` runs them (#299): bundle_env on the client
+target, whose customer profile in ``.env.local`` carries the record, and the
+payload build with ``--target client --install-class customer``.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +25,11 @@ from backend.schemas.lender_identity_record import (
     LENDER_IDENTITY_SHA256_ENV,
     lender_identity_digest,
 )
-from tests.fixtures.client_profiles import LENDER_IDENTITY
+from tests.fixtures.client_profiles import (
+    LENDER_IDENTITY,
+    env_file_text,
+    paychex_shaped_customer_profile,
+)
 from tools.databricks import app_deploy_payload, bundle_env
 
 _LENDER_NAMES = ("MIP_LENDER_NAME", "MIP_LENDER_NMLS_ID", "MIP_TENANT_ID", LENDER_IDENTITY_JSON_ENV, LENDER_IDENTITY_SHA256_ENV)
@@ -45,8 +53,21 @@ def _env_local(path: Path, values: dict[str, str]) -> Path:
     return path
 
 
+def _client_env_local(path: Path, record: dict[str, str]) -> Path:
+    """A customer client profile whose ``.env.local`` record and pin are ``record``."""
+
+    path.write_text(env_file_text(paychex_shaped_customer_profile(**record)), encoding="utf-8")
+    return path
+
+
+# Ambient names a client profile resolution must not inherit.
+_AMBIENT_PREFIXES = ("MIP_", "DATABRICKS_", "BUNDLE_VAR_", "GENIE_", "LAKEBASE_", "APP_ENV")
+
+
 @pytest.fixture(autouse=True)
 def _hermetic(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in [name for name in os.environ if name.startswith(_AMBIENT_PREFIXES)]:
+        monkeypatch.delenv(name)
     for name in (
         *app_deploy_payload.NON_SECRET_OPERATOR_VARS,
         *app_deploy_payload.SECRET_RESOURCE_BINDINGS,
@@ -66,7 +87,8 @@ def _payload_digest(monkeypatch: pytest.MonkeyPatch, env_local: Path) -> str:
     monkeypatch.setattr(app_deploy_payload, "ENV_LOCAL", env_local)
     payload = app_deploy_payload.build_payload(
         source_code_path="/Workspace/app-src/release",
-        target="dev",
+        target="client",
+        install_class="customer",
         lakebase_instance="mip-app-state",
         campaign_treatment_runtime_enabled=True,
     )
@@ -85,7 +107,7 @@ def _bundle_vars(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, env_local: Pat
         return type("Result", (), {"returncode": 0})()
 
     monkeypatch.setattr(bundle_env.subprocess, "run", fake_run)
-    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "prod"])
+    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "client"])
     assert bundle_env.main() == 0
     return seen
 
@@ -95,7 +117,7 @@ def test_a_shell_record_wins_over_a_dotenv_record_at_every_deploy_reader(
 ) -> None:
     shell, dotenv = _pinned(SHELL_RECORD), _pinned(DOTENV_RECORD)
     assert shell[LENDER_IDENTITY_SHA256_ENV] != dotenv[LENDER_IDENTITY_SHA256_ENV]
-    env_local = _env_local(tmp_path / ".env.local", dotenv)
+    env_local = _client_env_local(tmp_path / ".env.local", dotenv)
     for name, value in shell.items():
         monkeypatch.setenv(name, value)
 
@@ -110,7 +132,7 @@ def test_a_shell_record_wins_over_a_dotenv_record_at_every_deploy_reader(
 
 def test_a_dotenv_record_alone_reaches_every_deploy_reader(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     dotenv = _pinned(DOTENV_RECORD)
-    env_local = _env_local(tmp_path / ".env.local", dotenv)
+    env_local = _client_env_local(tmp_path / ".env.local", dotenv)
 
     payload = _payload_digest(monkeypatch, env_local)
     variables = _bundle_vars(monkeypatch, tmp_path, env_local)

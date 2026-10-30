@@ -202,6 +202,25 @@ def paychex_shaped_profile(**overrides: str | None) -> dict[str, str]:
     return _apply(_apply(DEMO_PROFILE, shaped), overrides)
 
 
+def paychex_shaped_customer_profile(**overrides: str | None) -> dict[str, str]:
+    """Client #1's shape as a customer install: the demo-only fields off, a pinned lender record.
+
+    The weekly refresh is off, as a customer install's must be, and the
+    record is LENDER_IDENTITY under its pin (#298); an override replaces
+    either.
+    """
+
+    customer: dict[str, str | None] = {
+        **dict.fromkeys(_DEMO_ONLY),
+        "MIP_INSTALL_CLASS": "customer",
+        "MIP_APP_ENV": "prod",
+        "MIP_SCHEDULED_REFRESH": "off",
+        "MIP_LENDER_IDENTITY_JSON": json.dumps(LENDER_IDENTITY),
+        "MIP_LENDER_IDENTITY_SHA256": LENDER_IDENTITY_SHA256,
+    }
+    return paychex_shaped_profile(**{**customer, **overrides})
+
+
 def env_file_text(values: dict[str, str]) -> str:
     """``values`` as single-quoted dotenv lines (every profile value is quote-free)."""
 

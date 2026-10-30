@@ -42,7 +42,12 @@ from backend.schemas.lender_identity_record import (
     lender_identity_digest,
 )
 from jobs.lakebase_migration_seed import _tenant_disclosure_seed_sql
-from tests.fixtures.client_profiles import LENDER_IDENTITY
+from tests.fixtures.client_profiles import (
+    LENDER_IDENTITY,
+    env_file_text,
+    paychex_shaped_customer_profile,
+    paychex_shaped_profile,
+)
 from tools.branding import lender_mark
 from tools.databricks import app_deploy_payload, bundle_env
 
@@ -279,9 +284,37 @@ def test_the_migration_job_passes_the_pinned_record_from_the_bundle() -> None:
 # --- bundle_env -------------------------------------------------------------------
 
 
-def _bundle_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, env: dict[str, str]) -> tuple[int, dict[str, str]]:
+# bundle_env's targets since #299: ``ci`` resolves the lender from the
+# environment alone (no profile); ``client`` first resolves the client
+# profile from ``.env.local`` (a demo one, or a customer one whose pinned
+# record the environment supplies), then the same lender values.
+_BUNDLE_TARGETS = ("ci", "client")
+# Ambient names a client profile resolution must not inherit.
+_AMBIENT_PREFIXES = ("MIP_", "DATABRICKS_", "BUNDLE_VAR_", "GENIE_", "LAKEBASE_", "APP_ENV")
+
+
+def _client_env_local(tmp_path: Path, env: dict[str, str]) -> Path:
+    """The client profile beside ``env``: a customer one when ``env`` pins a record."""
+
+    if any(name in env for name in PINNED):
+        profile = paychex_shaped_customer_profile(**dict.fromkeys(PINNED))
+    else:
+        profile = paychex_shaped_profile()
+    path = tmp_path / ".env.local"
+    path.write_text(env_file_text(profile), encoding="utf-8")
+    return path
+
+
+def _bundle_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, env: dict[str, str], target: str = "ci"
+) -> tuple[int, dict[str, str]]:
     seen: dict[str, str] = {}
-    monkeypatch.setattr(bundle_env, "ENV_LOCAL", tmp_path / ".env.local.absent")
+    if target == "client":
+        for name in [name for name in os.environ if name.startswith(_AMBIENT_PREFIXES)]:
+            monkeypatch.delenv(name)
+        monkeypatch.setattr(bundle_env, "ENV_LOCAL", _client_env_local(tmp_path, env))
+    else:
+        monkeypatch.setattr(bundle_env, "ENV_LOCAL", tmp_path / ".env.local.absent")
     monkeypatch.setattr(bundle_env, "BUNDLE_ROOT", tmp_path)
     for name in ("DATABRICKS_BUNDLE_ROOT", "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS", *_LENDER_NAMES):
         monkeypatch.delenv(name, raising=False)
@@ -294,17 +327,20 @@ def _bundle_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, env: dict[str, 
         return type("Result", (), {"returncode": 0})()
 
     monkeypatch.setattr(bundle_env.subprocess, "run", fake_run)
-    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", "prod"])
+    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", target])
     return bundle_env.main(), seen
 
 
-def test_bundle_env_passes_only_a_verified_record_to_the_bundle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    code, seen = _bundle_env(monkeypatch, tmp_path, {})
+@pytest.mark.parametrize("target", _BUNDLE_TARGETS)
+def test_bundle_env_passes_only_a_verified_record_to_the_bundle(
+    target: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    code, seen = _bundle_env(monkeypatch, tmp_path, {}, target)
     assert code == 0
     assert (seen["BUNDLE_VAR_lender_name"], seen["BUNDLE_VAR_tenant_id"]) == ("Summit Mortgage", "summit")
     assert "BUNDLE_VAR_lender_identity_json" not in seen and "BUNDLE_VAR_lender_identity_sha256" not in seen
 
-    code, seen = _bundle_env(monkeypatch, tmp_path, PINNED)
+    code, seen = _bundle_env(monkeypatch, tmp_path, PINNED, target)
     assert code == 0
     assert seen["BUNDLE_VAR_lender_name"] == RECORD["legal_name"]
     assert seen["BUNDLE_VAR_lender_identity_sha256"] == RECORD_SHA256
@@ -333,14 +369,15 @@ def _base_identity(name: object, nmls: object, tenant: object) -> tuple[str, str
         return None
 
 
+@pytest.mark.parametrize("target", _BUNDLE_TARGETS)
 @pytest.mark.parametrize("env", _LEGACY_ENVS, ids=[repr(env) for env in _LEGACY_ENVS])
 def test_bundle_env_resolves_the_legacy_values_exactly_as_before(
-    env: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    env: dict[str, str], target: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     expected = _base_identity(
         env.get("MIP_LENDER_NAME") or "Summit Mortgage", env.get("MIP_LENDER_NMLS_ID"), env.get("MIP_TENANT_ID")
     )
-    code, seen = _bundle_env(monkeypatch, tmp_path, env)
+    code, seen = _bundle_env(monkeypatch, tmp_path, env, target)
 
     if expected is None:
         assert (code, seen) == (2, {})
@@ -349,14 +386,22 @@ def test_bundle_env_resolves_the_legacy_values_exactly_as_before(
         assert tuple(seen[f"BUNDLE_VAR_{name}"] for name in ("lender_name", "lender_nmls_id", "tenant_id")) == expected
 
 
+@pytest.mark.parametrize("target", _BUNDLE_TARGETS)
 @pytest.mark.parametrize("case", sorted(_REFUSED_ENVS))
 def test_bundle_env_refuses_an_unverifiable_record(
-    case: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    case: str, target: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    code, seen = _bundle_env(monkeypatch, tmp_path, _REFUSED_ENVS[case])
+    code, seen = _bundle_env(monkeypatch, tmp_path, _REFUSED_ENVS[case], target)
 
     assert code == 2 and seen == {}
-    assert RECORD["legal_name"] not in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert RECORD["legal_name"] not in err
+    # Refused by the record's own check, never by the target: -t ci at
+    # bundle_env's lender resolution, -t client already at the profile.
+    if target == "client":
+        assert "[bundle_env] client profile refused:" in err and "MIP_LENDER_IDENTITY" in err
+    else:
+        assert "[bundle_env] invalid lender disclosure identity: MIP_LENDER_IDENTITY" in err
 
 
 # --- the deploy preflight -----------------------------------------------------------

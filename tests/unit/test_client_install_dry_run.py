@@ -44,6 +44,7 @@ from tests.fixtures.client_profiles import (
     IDENTITY_IDS,
     LENDER_IDENTITY,
     env_file_text,
+    paychex_shaped_customer_profile,
     paychex_shaped_profile,
 )
 from tests.fixtures.deploy_sandbox import ANSI, dry_run, planned_commands, sandbox
@@ -186,17 +187,11 @@ def test_a_pinned_lender_records_identifying_values_never_reach_the_transcript(t
     record = {**LENDER_IDENTITY, "legal_name": "Zyrplax Harbor Lending", "nmls_id": "7788991", "tenant_id": "zyrplax"}
     text = json.dumps(record)
     checkout, env, _log = sandbox(tmp_path)
-    _with_env_local(
-        checkout,
-        MIP_INSTALL_CLASS="customer",
-        MIP_APP_ENV="prod",
-        MIP_SCHEDULED_REFRESH="off",
-        MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=None,
-        MIP_PRESENTER_MODE=None,
-        MIP_SEED_OPERATOR_EMAIL=None,
-        MIP_LENDER_IDENTITY_JSON=text,
-        MIP_LENDER_IDENTITY_SHA256=lender_identity_digest(text),
+    customer = paychex_shaped_customer_profile(
+        MIP_LENDER_IDENTITY_JSON=text, MIP_LENDER_IDENTITY_SHA256=lender_identity_digest(text)
     )
+    resources = {"DATABRICKS_WAREHOUSE_ID": "warehouse-1", "GENIE_SPACE_ID": "space-1"}
+    (checkout / ".env.local").write_text(env_file_text({**customer, **resources}), encoding="utf-8")
 
     result = dry_run(checkout, env)
 
