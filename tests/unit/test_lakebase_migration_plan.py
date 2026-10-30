@@ -90,10 +90,12 @@ class _FakeCursor:
     def __exit__(self, *_args: object) -> None:
         return None
 
-    def execute(self, statement: object, params: Any = None) -> None:
+    def execute(self, statement: object, params: Any = None, *, prepare: bool | None = None) -> None:
         text = str(statement)
         if self._connection.read_only is not True:
             raise AssertionError("a statement arrived before the connection was read-only")
+        if prepare is not True:
+            raise AssertionError("a read-only statement must be sent as a prepared statement")
         if not _is_read(text):
             raise AssertionError(f"fake psycopg refused a non-read statement: {text[:80]!r}")
         self.executed.append((text, params))

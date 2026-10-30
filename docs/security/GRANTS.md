@@ -1249,8 +1249,12 @@ variable and passes the required flag. A missing/template verifier therefore
 fails in the job before it opens Lakebase or applies schema SQL; a local shell
 export alone is not considered remote-job configuration.
 The same command with `--mode plan` or `--mode verify` only reads: one
-session in a PostgreSQL read-only transaction, every statement checked as a
-single SELECT, SHOW or read-only WITH before it is sent, then a rollback.
+session in a PostgreSQL read-only transaction, then a rollback. Every
+statement is scanned once in lexer order (literals, dollar quotes, quoted
+identifiers and nested comments) and must be a single SELECT, SHOW or
+read-only WITH before it is sent; it is then sent as a prepared statement, so
+PostgreSQL itself parses exactly one command and no text can end the
+read-only transaction.
 `verify` re-runs the exact grant, trigger, function and schema-boundary
 postflights; `plan` adds the executor's missing ownership, the pending
 `schema_migrations` versions with their `-- mip:migration ... compat=` class

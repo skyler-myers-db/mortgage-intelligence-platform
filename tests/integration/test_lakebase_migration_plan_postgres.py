@@ -24,6 +24,7 @@ import pytest
 from psycopg import sql as psql
 
 from jobs import lakebase_migrate
+from jobs import lakebase_migration_read_only as read_only
 from jobs.lakebase_migration_inputs import (
     parse_schema_migrations,
     render_schema_inputs,
@@ -104,10 +105,11 @@ class _RecordingCursor:
     def __exit__(self, *args: Any) -> None:
         self._cursor.__exit__(*args)
 
-    def execute(self, statement: str, params: Any = None) -> Any:
+    def execute(self, statement: str, params: Any = None, *, prepare: bool | None = None) -> Any:
         assert isinstance(statement, str) and _READ_LEAD_RE.match(statement), statement[:80]
+        assert prepare is True, statement[:80]
         self._recorded.append(statement)
-        return self._cursor.execute(statement, params)
+        return self._cursor.execute(statement, params, prepare=prepare)
 
     def fetchall(self) -> list[Any]:
         return self._cursor.fetchall()
@@ -277,3 +279,32 @@ def test_the_server_rejects_a_write_inside_the_read_only_session(
 
     with psycopg.connect(**conn_kwargs) as conn:
         assert conn.execute("SELECT to_regclass('mip_app_read_only_probe')").fetchone() == (None,)
+
+
+_SMUGGLED_WRITE = "SELECT '--'; COMMIT; CREATE TABLE public.mip_app_read_only_smuggle (value integer)"
+
+
+def test_one_text_cannot_end_the_read_only_transaction_and_write(
+    monkeypatch: pytest.MonkeyPatch,
+    conn_kwargs: dict[str, str],
+) -> None:
+    with psycopg.connect(**conn_kwargs, autocommit=True) as conn:
+        conn.execute("DROP TABLE IF EXISTS public.mip_app_read_only_smuggle")
+    # The client guard refuses the text outright.
+    with (
+        pytest.raises(read_only.ReadOnlyStatementRefused, match="multiple statements"),
+        read_only_session(conn_kwargs) as cur,
+    ):
+        cur.execute(_SMUGGLED_WRITE)
+    # With the guard switched off, the server still parses one command only:
+    # the simple-query protocol would have committed and created the table.
+    monkeypatch.setattr(read_only, "assert_read_statement", lambda _statement: None)
+    with (
+        pytest.raises(psycopg.errors.SyntaxError, match="multiple commands"),
+        read_only_session(conn_kwargs) as cur,
+    ):
+        cur.execute(_SMUGGLED_WRITE)
+
+    with psycopg.connect(**conn_kwargs) as conn:
+        created = conn.execute("SELECT to_regclass('public.mip_app_read_only_smuggle')").fetchone()
+    assert created == (None,)
