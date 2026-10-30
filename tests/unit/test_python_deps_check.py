@@ -440,7 +440,15 @@ def test_a_real_deploy_with_a_drifted_override_stops_at_step_0_before_any_worksp
     shutil.copytree(ROOT / "tools" / "clients", repo / "tools" / "clients", ignore=shutil.ignore_patterns("__pycache__"))
     (repo / "tools" / "__init__.py").write_text("", encoding="utf-8")
     (repo / "backend" / "schemas").mkdir(parents=True)
-    for module in ("__init__.py", "schemas/__init__.py", "schemas/lender_identity.py"):
+    # The profile's lender pin rules import the record module (#298), which
+    # imports the branding rules.
+    for module in (
+        "__init__.py",
+        "schemas/__init__.py",
+        "schemas/lender_identity.py",
+        "schemas/lender_identity_record.py",
+        "schemas/lender_branding.py",
+    ):
         shutil.copy2(ROOT / "backend" / module, repo / "backend" / module)
     _repo(tmp_path, requirements_in="pytest\n", lock={"pytest": "0.0.1"})
     (repo / "databricks.yml").write_text("targets:\n  client: {}\n", encoding="utf-8")

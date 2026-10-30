@@ -26,6 +26,15 @@ DIRECT_ENV_READS = {
     "MIP_COTALITY_ID_MASK_SECRET",
     "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS",
 }
+# Direct reads (backend/runtime.py, Settings' lender validator) whose
+# .env.example lines only the owner can add: agents may not read the template
+# (.claude/settings.json), so docs/deployment.md, "Customer lender identity",
+# carries the exact lines until then. The owner's template change moves each
+# name into DIRECT_ENV_READS; the test below fails once the template has it.
+DIRECT_ENV_READS_PENDING_TEMPLATE = {
+    "MIP_LENDER_IDENTITY_JSON",
+    "MIP_LENDER_IDENTITY_SHA256",
+}
 # Settings fields whose .env.example lines only the owner can add: agents may
 # not read or edit the template (.claude/settings.json), so docs/deployment.md,
 # "Cotality source share", carries the exact lines until then. The owner's
@@ -133,6 +142,16 @@ def test_direct_os_environ_reads_are_labeled_in_env_example() -> None:
     assert "--- Direct os.environ reads / deploy-only knobs (not Settings fields) ---" in content
     documented = set(re.findall(r"\b[A-Z][A-Z0-9_]+(?==)", content))
     assert sorted(DIRECT_ENV_READS - documented) == []
+
+
+def test_pending_direct_reads_stay_tracked_until_the_template_documents_them() -> None:
+    documented = set(re.findall(r"\b[A-Z][A-Z0-9_]+(?==)", ENV_EXAMPLE.read_text(encoding="utf-8")))
+    assert sorted(DIRECT_ENV_READS_PENDING_TEMPLATE & documented) == [], "move it into DIRECT_ENV_READS"
+    assert not DIRECT_ENV_READS_PENDING_TEMPLATE & DIRECT_ENV_READS
+    doc = DEPLOYMENT_DOC.read_text(encoding="utf-8")
+    for name in sorted(DIRECT_ENV_READS_PENDING_TEMPLATE):
+        assert re.search(rf"^{name}=$", doc, re.MULTILINE), f"{name}: docs/deployment.md carries its template line"
+    assert "`test_pending_direct_reads_stay_tracked_until_the_template_documents_them`" in doc
 
 
 @pytest.mark.parametrize("field_name", sorted(Settings.model_fields))

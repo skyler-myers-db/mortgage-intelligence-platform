@@ -285,15 +285,27 @@ MIP_UC_FOREIGN_CATALOG_BINDING_POLICY="$(
   deployment_control_value MIP_UC_FOREIGN_CATALOG_BINDING_POLICY
 )"
 MIP_APP_NAME="$(deployment_control_value MIP_APP_NAME mip-app)"
-MIP_LENDER_NAME="$(deployment_control_value MIP_LENDER_NAME 'Summit Mortgage')"
+# The resolver below gets the lender name only when it is configured: an
+# unset name is Summit there, and a pinned record must not meet that default.
+_MIP_LENDER_NAME_CONFIGURED="$(deployment_control_value MIP_LENDER_NAME)"
+MIP_LENDER_NAME="${_MIP_LENDER_NAME_CONFIGURED:-Summit Mortgage}"
 _MIP_LENDER_NMLS_ID="$(deployment_control_value MIP_LENDER_NMLS_ID)"
 _MIP_TENANT_ID="$(deployment_control_value MIP_TENANT_ID)"
-if [[ ! -f backend/schemas/lender_identity.py ]]; then
+# A customer lender is a digest-pinned record, never a bare name: the
+# identifying record and its public sha256 pin, the deploying maintainer's
+# exact-digest acknowledgement (backend/schemas/lender_identity_record.py).
+# Only the pin's first 12 characters are ever printed. A blank shell value of
+# either is unset here, as at the client profile and every other reader.
+_MIP_LENDER_IDENTITY_JSON="$(nonblank_control_value MIP_LENDER_IDENTITY_JSON)"
+_MIP_LENDER_IDENTITY_SHA256="$(nonblank_control_value MIP_LENDER_IDENTITY_SHA256)"
+if [[ ! -f backend/schemas/lender_identity.py || ! -f backend/schemas/lender_identity_record.py ]]; then
   # Isolated shell-contract tests copy only deploy.sh. The only safe fallback
   # without the source-controlled registry is the exact built-in demo pair.
   if [[ "$MIP_LENDER_NAME" != "Summit Mortgage" || \
         ( -n "$_MIP_LENDER_NMLS_ID" && "$_MIP_LENDER_NMLS_ID" != "123456" ) || \
-        ( -n "$_MIP_TENANT_ID" && "$_MIP_TENANT_ID" != "summit" ) ]]; then
+        ( -n "$_MIP_TENANT_ID" && "$_MIP_TENANT_ID" != "summit" ) || \
+        -n "${_MIP_LENDER_IDENTITY_JSON//[[:space:]]/}" || \
+        -n "${_MIP_LENDER_IDENTITY_SHA256//[[:space:]]/}" ]]; then
     echo "${RED}[deploy] source-controlled lender identity registry is unavailable.${RST}" >&2
     exit 2
   fi
@@ -301,19 +313,34 @@ if [[ ! -f backend/schemas/lender_identity.py ]]; then
 elif ! _MIP_LENDER_IDENTITY="$(
     "$PYTHON" -c '
 import sys
-from backend.schemas.lender_identity import effective_public_tenant_id, validate_public_lender_identity
-lender, nmls = validate_public_lender_identity(sys.argv[1], sys.argv[2])
-tenant = effective_public_tenant_id(sys.argv[3], lender_name=lender)
-print("\t".join((lender, nmls, tenant)))
-' "$MIP_LENDER_NAME" "$_MIP_LENDER_NMLS_ID" "$_MIP_TENANT_ID"
+from backend.schemas.lender_identity_record import (
+    LEGACY_ENV_NAMES, PINNED_ENV_NAMES, as_configured, reviewed_lender_identity_from_env,
+)
+identity = reviewed_lender_identity_from_env(
+    as_configured(dict(zip((*LEGACY_ENV_NAMES, *PINNED_ENV_NAMES), sys.argv[1:], strict=True)))
+)
+fields = (identity.lender_name, identity.nmls_id, identity.tenant_id)
+print("\t".join((*fields, identity.digest) if identity.digest else fields))
+' "$_MIP_LENDER_NAME_CONFIGURED" "$_MIP_LENDER_NMLS_ID" "$_MIP_TENANT_ID" \
+      "$_MIP_LENDER_IDENTITY_JSON" "$_MIP_LENDER_IDENTITY_SHA256"
 )"; then
-  echo "${RED}[deploy] lender name, NMLS id, or tenant disclosure namespace is invalid.${RST}" >&2
+  echo "${RED}[deploy] lender name, NMLS id, tenant disclosure namespace, or pinned lender record is invalid.${RST}" >&2
   exit 2
 fi
-IFS=$'\t' read -r MIP_LENDER_NAME MIP_LENDER_NMLS_ID MIP_TENANT_ID <<< "$_MIP_LENDER_IDENTITY"
+_MIP_LENDER_IDENTITY_DIGEST=''
+IFS=$'\t' read -r MIP_LENDER_NAME MIP_LENDER_NMLS_ID MIP_TENANT_ID _MIP_LENDER_IDENTITY_DIGEST \
+  <<< "$_MIP_LENDER_IDENTITY"
 if [[ -z "$MIP_LENDER_NAME" || -z "$MIP_LENDER_NMLS_ID" || -z "$MIP_TENANT_ID" ]]; then
   echo "${RED}[deploy] lender disclosure identity did not resolve completely.${RST}" >&2
   exit 2
+fi
+if [[ -n "$_MIP_LENDER_IDENTITY_DIGEST" ]]; then
+  # Verified above: the App payload, bundle_env, the SQL render and the
+  # Lakebase migration each re-verify the record against this pin.
+  MIP_LENDER_IDENTITY_JSON="$_MIP_LENDER_IDENTITY_JSON"
+  MIP_LENDER_IDENTITY_SHA256="$_MIP_LENDER_IDENTITY_DIGEST"
+  export MIP_LENDER_IDENTITY_JSON MIP_LENDER_IDENTITY_SHA256
+  echo "[deploy] lender identity: digest-pinned record ${MIP_LENDER_IDENTITY_SHA256:0:12}"
 fi
 # Optional lender co-branding (audit responsive-10, report 12.4 #9). The mark
 # file is checked against the reviewed registry (backend/schemas/
@@ -564,6 +591,13 @@ export BUNDLE_VAR_app_name="$MIP_APP_NAME"
 export BUNDLE_VAR_lender_name="$MIP_LENDER_NAME"
 export BUNDLE_VAR_lender_nmls_id="$MIP_LENDER_NMLS_ID"
 export BUNDLE_VAR_tenant_id="$MIP_TENANT_ID"
+if [[ -n "$_MIP_LENDER_IDENTITY_DIGEST" ]]; then
+  export BUNDLE_VAR_lender_identity_json="$MIP_LENDER_IDENTITY_JSON"
+  export BUNDLE_VAR_lender_identity_sha256="$MIP_LENDER_IDENTITY_SHA256"
+else
+  # Only the record verified above may reach the bundle, never an ambient one.
+  unset BUNDLE_VAR_lender_identity_json BUNDLE_VAR_lender_identity_sha256
+fi
 export BUNDLE_VAR_lakebase_instance_name="$MIP_LAKEBASE_INSTANCE"
 export BUNDLE_VAR_lakebase_catalog_name="$MIP_LAKEBASE_SYNC_CATALOG"
 export BUNDLE_VAR_lakebase_database_name="$LAKEBASE_DATABASE"

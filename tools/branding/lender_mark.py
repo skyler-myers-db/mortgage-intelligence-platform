@@ -4,15 +4,20 @@
 
 ``validate`` (preflight, before any workspace mutation) checks
 ``MIP_LENDER_MARK_FILE`` against the reviewed registry in
-``backend/schemas/lender_branding.py`` and, with ``--print-sha256``, writes
-only the file's sha256 to stdout (nothing when no mark is configured).
+``backend/schemas/lender_branding.py`` (or, for a digest-pinned customer
+record in ``MIP_LENDER_IDENTITY_JSON``, the mark that record carries) and,
+with ``--print-sha256``, writes only the file's sha256 to stdout (nothing
+when no mark is configured).
 
 ``stage`` (Step 1, right before ``npm run build``) purges
 ``frontend/.branding-stage``, re-validates the file, checks it is still the
 file preflight validated (``--expect-sha256``) and copies it there as
 ``lender-mark.png`` or ``lender-mark.webp`` for the Vite build to emit.
 deploy.sh's ``run`` echoes every argument, so Step 1 names the file with
-``--file-env MIP_LENDER_MARK_FILE`` (the variable, never the path).
+``--file-env MIP_LENDER_MARK_FILE`` (the variable, never the path), and the
+lender with ``--identity-env``: the ``MIP_LENDER_NAME`` and
+``MIP_LENDER_NMLS_ID`` the preflight resolved and exported, never their
+values, which for a digest-pinned record are identifying.
 
 Exit codes are 0 (accepted, or nothing configured) and 2 (refused). Human
 lines go to stderr and show only the hash prefix, media type and size; the
@@ -39,8 +44,15 @@ from backend.schemas.lender_branding import (  # noqa: E402
     ReviewedLenderMark,
     reviewed_lender_mark,
     validate_lender_mark,
+    validate_reviewed_mark_bytes,
 )
-from backend.schemas.lender_identity import validate_public_lender_identity  # noqa: E402
+from backend.schemas.lender_identity_record import (  # noqa: E402
+    LENDER_NAME_ENV,
+    LENDER_NMLS_ENV,
+    PINNED_ENV_NAMES,
+    ReviewedLenderIdentity,
+    reviewed_lender_identity_from_env,
+)
 
 EXIT_OK = 0
 EXIT_REFUSED = 2
@@ -90,9 +102,24 @@ def _read_mark(path_text: str) -> bytes:
         os.close(fd)
 
 
-def _identity(lender: str, nmls: str) -> tuple[str, str]:
+def _lender_args(args: argparse.Namespace) -> tuple[str, str]:
+    """--lender and --nmls, or with --identity-env the two names deploy.sh exported."""
+
+    if args.identity_env:
+        if args.lender is not None or args.nmls is not None:
+            raise Refused("--identity-env reads the lender from the environment; drop --lender and --nmls")
+        return os.environ.get(LENDER_NAME_ENV, ""), os.environ.get(LENDER_NMLS_ENV, "")
+    if args.lender is None or args.nmls is None:
+        raise Refused("--lender and --nmls are required without --identity-env")
+    return str(args.lender), str(args.nmls)
+
+
+def _identity(lender: str, nmls: str) -> ReviewedLenderIdentity:
+    """The reviewed identity: the registry's, or the pinned record deploy.sh exported."""
+
+    pinned = {name: os.environ.get(name, "") for name in PINNED_ENV_NAMES}
     try:
-        return validate_public_lender_identity(lender, nmls)
+        return reviewed_lender_identity_from_env({LENDER_NAME_ENV: lender, LENDER_NMLS_ENV: nmls, **pinned})
     except ValueError:
         raise Refused("the lender name and NMLS id are not a reviewed lender identity") from None
 
@@ -100,17 +127,23 @@ def _identity(lender: str, nmls: str) -> tuple[str, str]:
 def _checked_mark(lender: str, nmls: str, file_text: str) -> tuple[ReviewedLenderMark, bytes] | None:
     """The validated mark and its bytes; None when neither a file nor a reviewed mark exists."""
 
-    name, nmls_id = _identity(lender, nmls)
-    reviewed = reviewed_lender_mark(name)
+    identity = _identity(lender, nmls)
+    name, nmls_id = identity.lender_name, identity.nmls_id
+    # A pinned record's name is identifying: refusals name the record instead.
+    label = "the pinned lender record" if identity.pinned else name
+    reviewed = identity.mark if identity.pinned else reviewed_lender_mark(name)
     if not file_text:
         if reviewed is None:
             return None
-        raise Refused(f"reviewed mark configured for {name} but MIP_LENDER_MARK_FILE is unset")
+        raise Refused(f"reviewed mark configured for {label} but MIP_LENDER_MARK_FILE is unset")
     if reviewed is None:
-        raise Refused(f"no reviewed lender mark is recorded for {name}; unset MIP_LENDER_MARK_FILE")
+        raise Refused(f"no reviewed lender mark is recorded for {label}; unset MIP_LENDER_MARK_FILE")
     data = _read_mark(file_text)
     try:
-        mark = validate_lender_mark(name, nmls_id, data)
+        if identity.pinned:
+            mark = validate_reviewed_mark_bytes(reviewed, data)
+        else:
+            mark = validate_lender_mark(name, nmls_id, data)
     except ValueError as error:
         # lender_branding's messages are fixed sentences without file bytes.
         raise Refused(str(error)) from None
@@ -129,7 +162,7 @@ def _file_text(args: argparse.Namespace) -> str:
 
 
 def _validate(args: argparse.Namespace) -> int:
-    checked = _checked_mark(args.lender, args.nmls, _file_text(args))
+    checked = _checked_mark(*_lender_args(args), _file_text(args))
     if checked is None:
         _say("lender mark: none")
         return EXIT_OK
@@ -156,7 +189,7 @@ def _purge(out: Path) -> None:
 def _stage(args: argparse.Namespace) -> int:
     out = _stage_dir(args.out)
     _purge(out)
-    checked = _checked_mark(args.lender, args.nmls, _file_text(args))
+    checked = _checked_mark(*_lender_args(args), _file_text(args))
     if checked is None:
         _say("lender mark: none staged")
         return EXIT_OK
@@ -175,8 +208,9 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("validate", "stage"):
         command = commands.add_parser(name)
-        command.add_argument("--lender", required=True)
-        command.add_argument("--nmls", required=True)
+        command.add_argument("--lender", default=None)
+        command.add_argument("--nmls", default=None)
+        command.add_argument("--identity-env", action="store_true")
         source = command.add_mutually_exclusive_group()
         source.add_argument("--file", default="")
         source.add_argument("--file-env", default=None)
