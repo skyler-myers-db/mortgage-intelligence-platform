@@ -1482,8 +1482,9 @@ sandbox, staging, customer and production runtime; only `APP_ENV=local` and
 `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` is configured for the deploy; no key
 value is needed, because the scope already holds the key. A
 `MIP_GENIE_ACTION_SECRET_PREVIOUS` value without its KID is rejected, by the
-runtime secret plan before the App stop and again by the payload. The bundle's static resource
-declarations still need every backing Databricks Secret key to exist, so an
+runtime secret plan before the App stop and again by the payload. The
+bundle's static resource declarations still need every backing Databricks
+Secret key to exist, so an
 absent one gets a random disabled sentinel that the runtime ignores. Keep the
 real prior key available for at least two hours so existing action
 confirmations and one-hour generated-copy/cohort provenance tokens can
