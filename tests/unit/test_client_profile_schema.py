@@ -331,6 +331,29 @@ def test_malformed_json_and_missing_fields_are_refused() -> None:
     _assert_refused(demo_profile(DATABRICKS_HOST=None), "DATABRICKS_HOST", "Field required")
 
 
+def _repeated_key(field: str) -> str:
+    """The field's demo JSON with one key given twice, the second value differing."""
+
+    raw = DEMO_PROFILE[field]
+    if field == "MIP_ACCEPTED_EXPOSURE_JSON":
+        old = '"identities": ["app"]'
+        assert raw.count(old) == 1
+        return raw.replace(old, old + ', "identities": ["runtime"]')
+    assert raw.endswith("}")
+    return raw[:-1] + ', "deployer": ' + json.dumps(IDENTITY_IDS["jobs"]) + "}"
+
+
+@pytest.mark.parametrize("field", ["MIP_ACCEPTED_EXPOSURE_JSON", "MIP_IDENTITY_IDS_JSON"])
+def test_a_repeated_json_key_is_refused_without_naming_it(field: str) -> None:
+    """The last of two values would win silently, unlike what a reviewer reads (review of #306)."""
+
+    repeated = _repeated_key(field)
+    assert json.loads(repeated) != json.loads(DEMO_PROFILE[field]), "plain json.loads lets the last win"
+
+    lines = _assert_refused(demo_profile(**{field: repeated}), field, "repeats a key in one JSON object")
+    assert not any("identities" in line or "deployer" in line for line in lines)
+
+
 @pytest.mark.parametrize(
     "change",
     [

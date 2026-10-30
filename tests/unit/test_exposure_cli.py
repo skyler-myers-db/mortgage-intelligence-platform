@@ -7,6 +7,7 @@ value as a runner mask under GitHub Actions before it prints.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Any
@@ -61,19 +62,37 @@ def _digest(entries: list[dict[str, Any]]) -> str:
     return build_policy(parsed, now=datetime.now(UTC), static_control=lambda: []).digest
 
 
-def test_plan_prints_the_digest_and_a_summary_without_values(
+def test_plan_prints_the_digest_a_value_free_summary_and_the_canonical_plan(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv("MIP_ACCEPTED_EXPOSURE_JSON", json.dumps([ENTRY]))
 
     assert cli.main(["--plan"]) == 0
 
-    out = capsys.readouterr().out
-    assert f"sha256={_digest([ENTRY])} entries=1" in out
-    assert "identities: app=1; classes: read=1; kinds: workspace_permission=1" in out
-    assert "expires: 2099-12-31; already expired: 0" in out
+    *summary, plan = capsys.readouterr().out.splitlines()
+    text = "\n".join(summary)
+    assert f"sha256={_digest([ENTRY])} entries=1" in text
+    assert "identities: app=1; classes: read=1; kinds: workspace_permission=1" in text
+    assert "expires: 2099-12-31; already expired: 0" in text
     for value in (OTHER, TITLE, GROUP, "/directories/77", "4200000001", ENTRY["reason"]):
-        assert value not in out
+        assert value not in text
+    # Review of #306: the reviewer sees exactly what the ack pins.
+    assert hashlib.sha256(plan.encode("utf-8")).hexdigest() == _digest([ENTRY])
+    assert json.loads(plan) == {"version": 1, "entries": [ENTRY]}
+
+
+def test_under_github_actions_the_plan_masks_every_identifying_value_first(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("MIP_ACCEPTED_EXPOSURE_JSON", json.dumps([ENTRY]))
+
+    assert cli.main(["--plan"]) == 0
+
+    err = capsys.readouterr().err
+    masks = {line.removeprefix("::add-mask::") for line in err.splitlines() if line.startswith("::add-mask::")}
+    assert {OTHER, TITLE, GROUP, "/directories/77", "4200000001", ENTRY["reason"]} <= masks
+    assert not masks & {"CAN_VIEW", "ISOLATED", "workspace_permission", "GENIE_SPACE", "app", "read"}
 
 
 def test_check_accepts_only_the_recomputed_digest(

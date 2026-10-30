@@ -44,7 +44,13 @@ from pydantic import ValidationError
 
 from tools.clients.json_fields import ExposureEntry
 from tools.clients.profile import iter_leaves
-from tools.clients.shapes import DIRECT_SOURCE, INHERITED_SOURCE_PREFIX, is_placeholder
+from tools.clients.shapes import (
+    DIRECT_SOURCE,
+    INHERITED_SOURCE_PREFIX,
+    DuplicateJsonKey,
+    is_placeholder,
+    strict_json_loads,
+)
 
 EXPOSURE_ENV = "MIP_ACCEPTED_EXPOSURE_JSON"
 ACK_ENV = "MIP_ACK_ACCEPTED_EXPOSURE_PLAN"
@@ -377,7 +383,9 @@ def _parse(raw: str) -> tuple[list[ExposureEntry], list[str]]:
     if not text:
         return [], []
     try:
-        payload = json.loads(text)
+        payload = strict_json_loads(text)
+    except DuplicateJsonKey:
+        return [], [f"{EXPOSURE_ENV}: repeats a key in one JSON object; give each key once"]
     except ValueError:
         return [], [f"{EXPOSURE_ENV}: must be single-line JSON"]
     if not isinstance(payload, list):

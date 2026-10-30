@@ -446,6 +446,21 @@ def test_an_unusable_profile_value_refuses_without_echoing_it(raw: str, line: st
     assert "secret-looking-value" not in text
 
 
+def test_a_repeated_key_refuses_so_the_ack_pins_what_the_reviewer_read() -> None:
+    """Review of #306: ``"identities": ["app"]`` then ``"identities": ["runtime", "proxy"]``
+    parsed as the second, a tuple the reviewer never saw, under a valid ack."""
+
+    raw = json.dumps([genie_entry()]).replace(
+        '"identities": ["app"]', '"identities": ["app"], "identities": ["runtime", "app"]'
+    )
+    assert json.loads(raw)[0]["identities"] == ["runtime", "app"], "plain json.loads lets the last win"
+
+    with pytest.raises(ExposureRefusal) as caught:
+        load_policy({EXPOSURE_ENV: raw}, now=NOW, ack="", static_control=_clean)
+
+    assert caught.value.lines == (f"{EXPOSURE_ENV}: repeats a key in one JSON object; give each key once",)
+
+
 def test_a_refusal_names_entries_and_rules_never_values() -> None:
     text = _refusal([elevated_app(identities=["runtime"], grantee="team-secret-group")])
 

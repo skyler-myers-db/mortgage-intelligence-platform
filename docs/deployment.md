@@ -2101,8 +2101,12 @@ The client profile's `MIP_ACCEPTED_EXPOSURE_JSON` may accept one exactly
   load.
 - **Ack.** The owner attestation is deferred (`single_maintainer_audited`), so a
   non-empty policy is pinned by an exact digest instead.
-  `python -m tools.databricks.estate.cli --plan` prints the plan's sha256 and a
-  public summary; `--check --ack-plan <sha256>` checks a digest. Export
+  `python -m tools.databricks.estate.cli --plan` prints the plan's sha256, a
+  public summary and, on its last line, the canonical plan whose sha256 the
+  ack pins (each identifying value masked first under GitHub Actions), so the
+  reviewer reads exactly what is acknowledged; a key repeated in the profile
+  JSON refuses, since its last value would otherwise win unseen.
+  `--check --ack-plan <sha256>` checks a digest. Export
   `MIP_ACK_ACCEPTED_EXPOSURE_PLAN=<sha256>` in the shell for the one run that
   should use the reviewed plan, never in `.env.local`: every consumer
   recomputes the plan from the profile right before it judges an exposure, and

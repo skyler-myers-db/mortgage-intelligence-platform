@@ -1,9 +1,10 @@
 """``python -m tools.databricks.estate.cli --plan | --check --ack-plan SHA | --emit-exposure-inventory``.
 
-* ``--plan`` prints the accepted-exposure plan's sha256 and a public summary
-  (entry counts by identity, class and kind, and the expiry dates). The
-  plan itself is the profile's ``MIP_ACCEPTED_EXPOSURE_JSON``; the owner
-  reviews it there.
+* ``--plan`` prints the accepted-exposure plan's sha256, a public summary
+  (entry counts by identity, class and kind, and the expiry dates) and, last,
+  the canonical plan itself: the exact text whose sha256 the ack pins, so the
+  owner reviews what is acknowledged, not the raw profile value. Under GitHub
+  Actions each identifying leaf is registered as a mask before it prints.
 * ``--check --ack-plan SHA`` exits 0 only when the recomputed plan's digest is
   ``SHA``: the same check every consumer runs against
   ``MIP_ACK_ACCEPTED_EXPOSURE_PLAN`` before it judges an exposure.
@@ -43,6 +44,7 @@ from tools.databricks.estate.accepted_exposure import (
     Exposure,
     ExposurePolicy,
     ExposureRefusal,
+    canonical_plan,
     load_policy,
     privilege_class,
 )
@@ -69,6 +71,15 @@ def _summary(policy: ExposurePolicy) -> list[str]:
         f"identities: {counts(by_identity)}; classes: {counts(by_class)}; kinds: {counts(by_kind)}",
         f"expires: {', '.join(expiries) or 'none'}; already expired: {expired}",
     ]
+
+
+def _emit_plan(policy: ExposurePolicy) -> None:
+    """The canonical plan, alone on the last line: ``sha256(line)`` is the ack."""
+
+    for entry in policy.entries:
+        mask_candidate(entry.canonical())
+    print(f"{_PREFIX} the canonical plan follows; its sha256 is the ack:")
+    print(canonical_plan(policy.entries))
 
 
 def mask_candidate(candidate: Mapping[str, Any]) -> None:
@@ -254,8 +265,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.plan:
-            for line in _summary(load_policy(require_ack=False)):
+            policy = load_policy(require_ack=False)
+            for line in _summary(policy):
                 print(f"{_PREFIX} {line}")
+            _emit_plan(policy)
             return 0
         if args.check:
             policy = load_policy(ack=args.ack_plan)
