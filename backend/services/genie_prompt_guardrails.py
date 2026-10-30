@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from backend.schemas._validators_source_names import configured_source_patterns
 from backend.schemas.marketing_safety_terms import UNREVIEWED_LENDER_NAME_RE_FRAGMENT
 
 if TYPE_CHECKING:
@@ -268,7 +269,11 @@ def source_gap_prompt_match(question: str) -> str | None:
 
 
 def scope_bypass_prompt_match(question: str) -> str | None:
-    return _prompt_pattern_match(question, _SCOPE_BYPASS_PROMPT_PATTERNS)
+    # The configured Cotality share's qualified names refuse beside the reviewed
+    # patterns; a canonical install adds none (backend/schemas/_validators_source_names.py).
+    return _prompt_pattern_match(
+        question, _SCOPE_BYPASS_PROMPT_PATTERNS + configured_source_patterns()
+    )
 
 
 def off_topic_prompt_match(question: str) -> str | None:

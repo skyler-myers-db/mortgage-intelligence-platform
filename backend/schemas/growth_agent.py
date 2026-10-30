@@ -17,6 +17,7 @@ from backend.schemas._validators_protected_class import (
     contains_protected_class_marketing_text,
     protected_class_marketing_reason,
 )
+from backend.schemas._validators_source_names import contains_configured_source_reference
 from backend.schemas._validators_unsafe_text import contains_unsafe_ai_text
 from backend.schemas.admin import AdminCapability
 from backend.schemas.borrower_copy_claims import (
@@ -522,7 +523,7 @@ def _growth_prompt_refusal_code(flat: str, name_scan: str) -> GrowthPromptRefusa
     marketing_reason = protected_class_marketing_reason(flat)
     if marketing_reason == "protected_class":
         return "protected_class"
-    if _PROMPT_JAILBREAK_RE.search(flat):
+    if _PROMPT_JAILBREAK_RE.search(flat) or contains_configured_source_reference(flat):
         return "instruction_override"
     if _PROMPT_UNREVIEWED_LENDER_TARGET_RE.search(flat):
         return "cross_lender_targeting"
@@ -594,6 +595,7 @@ def assert_reviewed_growth_objective(
         or _PROMPT_PROTECTED_CLASS_RE.search(flat)
         or _PROMPT_PROTECTED_AGE_PROXY_RE.search(flat)
         or _PROMPT_JAILBREAK_RE.search(flat)
+        or contains_configured_source_reference(flat)
         or _PROMPT_UNAVAILABLE_SOURCE_RE.search(flat)
         or _PROMPT_UNREVIEWED_LENDER_TARGET_RE.search(flat)
         or contains_unsafe_ai_text(name_scan)
