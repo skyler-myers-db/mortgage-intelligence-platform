@@ -25,6 +25,7 @@ The client profile is client #1's shape with synthetic identifiers
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 from pathlib import Path
@@ -34,7 +35,17 @@ import pytest
 import yaml
 
 from backend.config import source_names
-from tests.fixtures.client_profiles import IDENTITY_IDS, env_file_text, paychex_shaped_profile
+from backend.schemas.lender_identity_record import (
+    lender_identity_digest,
+    reviewed_lender_identity_from_env,
+)
+from tests.fixtures.client_profiles import (
+    IDENTITY_IDS,
+    LENDER_IDENTITY,
+    env_file_text,
+    paychex_shaped_customer_profile,
+    paychex_shaped_profile,
+)
 from tests.fixtures.deploy_sandbox import ANSI, dry_run, planned_commands, sandbox
 from tools import render_sql
 from tools.databricks import bundle_env
@@ -172,6 +183,63 @@ def test_the_parked_deploy_dev_workflow_is_refused_before_any_databricks_call(tm
     assert "step 1" not in result.stdout
 
 
+def test_a_pinned_lender_records_identifying_values_never_reach_the_transcript(tmp_path: Path) -> None:
+    # Review of #298: run echoes every argument, and GitHub masks only a
+    # whole secret, never the legal name or NMLS id taken from it. Under
+    # -t client the record and its pin are the customer profile's: a demo
+    # profile refuses them.
+    record = {**LENDER_IDENTITY, "legal_name": "Zyrplax Harbor Lending", "nmls_id": "7788991", "tenant_id": "zyrplax"}
+    text = json.dumps(record)
+    checkout, env, _log = sandbox(tmp_path)
+    customer = paychex_shaped_customer_profile(
+        MIP_LENDER_IDENTITY_JSON=text, MIP_LENDER_IDENTITY_SHA256=lender_identity_digest(text)
+    )
+    resources = {"DATABRICKS_WAREHOUSE_ID": "warehouse-1", "GENIE_SPACE_ID": "space-1"}
+    (checkout / ".env.local").write_text(env_file_text({**customer, **resources}), encoding="utf-8")
+
+    result = dry_run(checkout, env)
+
+    assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-4000:]
+    transcript = ANSI.sub("", result.stdout + result.stderr)
+    assert f"client:     {CLIENT} (customer install; profile resolved)" in transcript
+    assert f"[deploy] lender identity: digest-pinned record {lender_identity_digest(text)[:12]}" in transcript
+    for value in (record["legal_name"], "Zyrplax", record["nmls_id"]):
+        assert value not in transcript, value
+    assert "tools.branding.lender_mark stage --identity-env" in transcript, "the stage step ran"
+
+
+@pytest.mark.parametrize(
+    "blank",
+    [
+        {"MIP_LENDER_IDENTITY_JSON": "   "},
+        {"MIP_LENDER_IDENTITY_JSON": "   ", "MIP_LENDER_IDENTITY_SHA256": "   "},
+        {"MIP_LENDER_IDENTITY_SHA256": "\t"},
+    ],
+    ids=["record", "record_and_pin", "pin"],
+)
+def test_a_blank_shell_record_leaves_the_profiles_record_to_the_preflight(
+    tmp_path: Path, blank: dict[str, str]
+) -> None:
+    # Review of #298: the client profile, bundle_env and the App payload read
+    # a whitespace-only shell value as unset and take .env.local's. The
+    # preflight let it win: it refused the profile's record ("pins a record,
+    # but MIP_LENDER_IDENTITY_JSON is unset"; "is required to pin"), or, with
+    # both names blank, went green on the Summit demo identity under a
+    # customer profile.
+    checkout, env, _log = sandbox(tmp_path)
+    resources = {"DATABRICKS_WAREHOUSE_ID": "warehouse-1", "GENIE_SPACE_ID": "space-1"}
+    profile = paychex_shaped_customer_profile()
+    (checkout / ".env.local").write_text(env_file_text({**profile, **resources}), encoding="utf-8")
+
+    result = dry_run(checkout, {**env, **blank})
+
+    assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-4000:]
+    transcript = ANSI.sub("", result.stdout + result.stderr)
+    assert f"client:     {CLIENT} (customer install; profile resolved)" in transcript
+    digest = profile["MIP_LENDER_IDENTITY_SHA256"]
+    assert f"[deploy] lender identity: digest-pinned record {digest[:12]}" in transcript
+
+
 # ------------------------------------------ rendered SQL and today's names
 
 
@@ -221,7 +289,11 @@ def test_the_client_render_is_the_retired_dev_targets_byte_for_byte(
     reference = tmp_path / "dev-render"
     RENDER(catalog="mip", demo_first_party_enabled=True, dest_root=reference)
 
-    canonical = {"catalog": "mip", "cotality": source_names.CANONICAL}
+    # A demo profile sets no lender: the Summit demo identity, unpinned, so
+    # the render writes the seed's own tenant rows (#298).
+    demo_lender = reviewed_lender_identity_from_env({})
+    assert not demo_lender.pinned and demo_lender.lender_name == "Summit Mortgage"
+    canonical = {"catalog": "mip", "cotality": source_names.CANONICAL, "lender": demo_lender}
     # Client #1 sets no catalog storage root, so the catalog DDL is unchanged (M1-PR3).
     assert seen["renders"][0] == {**canonical, "demo_first_party_enabled": True, "storage_root": None}
     assert seen["digest"] == _tree_digest(reference)

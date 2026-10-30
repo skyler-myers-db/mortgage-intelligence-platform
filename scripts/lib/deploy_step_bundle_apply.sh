@@ -48,11 +48,13 @@ run "$PYTHON" -m tools.databricks.provision_runtime_secrets \
 # -----------------------------------------------------------------------------
 step "build frontend (frontend/dist/** is uploaded by the bundle sync.include)"
 # Stage the lender mark preflight validated (responsive-10), or purge a stale
-# stage, for the build to emit. --file-env: run echoes its arguments, and the
-# mark's path is never logged.
+# stage, for the build to emit. --file-env and --identity-env: run echoes its
+# arguments, and neither the mark's path nor the lender's name and NMLS id
+# (identifying for a pinned record) is ever logged; the tool reads the
+# MIP_LENDER_NAME / MIP_LENDER_NMLS_ID the preflight resolved and exported.
 if [[ -f tools/branding/lender_mark.py ]]; then
-  run "$PYTHON" -m tools.branding.lender_mark stage --lender "$MIP_LENDER_NAME" \
-    --nmls "$MIP_LENDER_NMLS_ID" --file-env MIP_LENDER_MARK_FILE \
+  run "$PYTHON" -m tools.branding.lender_mark stage --identity-env \
+    --file-env MIP_LENDER_MARK_FILE \
     --expect-sha256 "$MIP_LENDER_MARK_SHA256" --out frontend/.branding-stage
 else
   rm -rf frontend/.branding-stage

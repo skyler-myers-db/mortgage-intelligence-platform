@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 
+from backend.schemas.lender_identity_record import lender_identity_digest
 from tools.clients.schema import FIELD_CLASS, FieldClass
 
 
@@ -39,6 +40,18 @@ LENDER_IDENTITY = {
     "reviewed_by": "reviewer@lender.example",
     "reviewed_at": "2026-10-01",
 }
+# The optional co-branding mark a record may carry (its facts, never the image).
+LENDER_MARK = {
+    "sha256": "ab" * 32,
+    "media_type": "image/png",
+    "width": 64,
+    "height": 32,
+    "authorization_ref": "BRAND-AUTH/2026-0042",
+    "reviewed_on": "2026-09-30",
+}
+# The record's reviewed pin, computed (a committed 64-hex literal would only
+# restate it).
+LENDER_IDENTITY_SHA256 = lender_identity_digest(json.dumps(LENDER_IDENTITY))
 EXPOSURE = [
     {
         "kind": "workspace_permission",
@@ -192,6 +205,25 @@ def paychex_shaped_profile(**overrides: str | None) -> dict[str, str]:
     return _apply(_apply(DEMO_PROFILE, shaped), overrides)
 
 
+def paychex_shaped_customer_profile(**overrides: str | None) -> dict[str, str]:
+    """Client #1's shape as a customer install: the demo-only fields off, a pinned lender record.
+
+    The weekly refresh is off, as a customer install's must be, and the
+    record is LENDER_IDENTITY under its pin (#298); an override replaces
+    either.
+    """
+
+    customer: dict[str, str | None] = {
+        **dict.fromkeys(_DEMO_ONLY),
+        "MIP_INSTALL_CLASS": "customer",
+        "MIP_APP_ENV": "prod",
+        "MIP_SCHEDULED_REFRESH": "off",
+        "MIP_LENDER_IDENTITY_JSON": json.dumps(LENDER_IDENTITY),
+        "MIP_LENDER_IDENTITY_SHA256": LENDER_IDENTITY_SHA256,
+    }
+    return paychex_shaped_profile(**{**customer, **overrides})
+
+
 def env_file_text(values: dict[str, str]) -> str:
     """``values`` as single-quoted dotenv lines (every profile value is quote-free)."""
 
@@ -208,6 +240,7 @@ def customer_profile(**overrides: str | None) -> dict[str, str]:
         "MIP_INSTALL_CLASS": "customer",
         "MIP_APP_ENV": "prod",
         "MIP_LENDER_IDENTITY_JSON": json.dumps(LENDER_IDENTITY),
+        "MIP_LENDER_IDENTITY_SHA256": LENDER_IDENTITY_SHA256,
     }
     return _apply(_apply(DEMO_PROFILE, customer), overrides)
 

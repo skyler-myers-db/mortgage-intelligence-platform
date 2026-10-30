@@ -12,6 +12,11 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, SecretStr
 
 from backend.schemas.lender_identity import _SUMMIT_DEMO_NMLS_ID, _SUMMIT_LENDER_NAME
+from backend.schemas.lender_identity_record import (
+    LenderIdentityRefused,
+    canonical_lender_identity_json,
+    parse_lender_identity_record,
+)
 from tools.clients.shapes import (
     CLOUDS,
     STORAGE_ROOT,
@@ -109,6 +114,32 @@ def _is_summit(identity: LenderIdentity) -> bool:
     )
 
 
+def lender_record_json(identity: LenderIdentity) -> str:
+    """The record's canonical JSON: the text MIP_LENDER_IDENTITY_SHA256 pins."""
+
+    return canonical_lender_identity_json(identity.model_dump(exclude_none=True))
+
+
+def _lender_pin_refusals(profile: ClientProfile, identity: LenderIdentity) -> list[str]:
+    """The backend's own record rules, then the pin; skipped while a placeholder remains."""
+
+    pin = profile.lender_identity_sha256
+    if pin is None:
+        return ["MIP_LENDER_IDENTITY_SHA256: is required to pin MIP_LENDER_IDENTITY_JSON"]
+    if not _real(pin) or any(is_placeholder(text) for text in _strings(identity)):
+        return []
+    try:
+        record = parse_lender_identity_record(lender_record_json(identity))
+    except LenderIdentityRefused as refusal:
+        return [str(refusal)]
+    if record.digest != pin:
+        return [
+            "MIP_LENDER_IDENTITY_SHA256: must equal the sha256 of the canonical "
+            "MIP_LENDER_IDENTITY_JSON record"
+        ]
+    return []
+
+
 def install_class_refusals(profile: ClientProfile) -> list[str]:
     """Demo fields stay off a customer install; a lender identity stays off a demo."""
 
@@ -129,11 +160,16 @@ def install_class_refusals(profile: ClientProfile) -> list[str]:
                 "MIP_LENDER_IDENTITY_JSON: the Summit Mortgage demo identity is refused "
                 "for a customer install"
             )
-    elif profile.install_class == "demo" and identity is not None:
-        lines.append(
-            "MIP_LENDER_IDENTITY_JSON: is customer-only; a demo install uses the "
-            "Summit Mortgage identity"
-        )
+        else:
+            lines += _lender_pin_refusals(profile, identity)
+    elif profile.install_class == "demo":
+        if identity is not None:
+            lines.append(
+                "MIP_LENDER_IDENTITY_JSON: is customer-only; a demo install uses the "
+                "Summit Mortgage identity"
+            )
+        if profile.lender_identity_sha256 is not None:
+            lines.append("MIP_LENDER_IDENTITY_SHA256: is customer-only; it pins MIP_LENDER_IDENTITY_JSON")
     return lines
 
 

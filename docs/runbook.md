@@ -314,33 +314,36 @@ reconciles its operator grants. After that first install, deploy remains the one
 idempotent command.
 
 ```bash
-# 0. One-time credentials before the App exists. The GitHub sink must match origin.
+# 0. One-time credentials before the App exists. The GitHub sink is one
+#    environment (--gh-env) of the repository that matches origin.
 # Export MIP_AI_GATEWAY_PROOF_SIGNING_KEY and its derived
 # MIP_AI_GATEWAY_PROOF_VERIFY_KEY first. Bootstrap holds the outer signed App
 # lease and the fixed global mip-oauth-credential-mutations lease. These
 # standalone commands refuse tracked or untracked changes and require any
 # configured MIP_DEPLOYMENT_SOURCE_GIT_SHA to equal HEAD.
 GH_REPO=skyler-myers-db/mortgage-intelligence-platform
+GH_ENV=<client>   # the client's GitHub Environment; repository-level secrets are refused
 python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
-  --identity-role agent_runtime --set-gh-secrets --gh-repo "$GH_REPO"
+  --identity-role agent_runtime --set-gh-secrets --gh-repo "$GH_REPO" --gh-env "$GH_ENV"
 python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
-  --identity-role normal --set-gh-secrets --gh-repo "$GH_REPO"
+  --identity-role normal --set-gh-secrets --gh-repo "$GH_REPO" --gh-env "$GH_ENV"
 python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
-  --identity-role operator2 --set-gh-secrets --gh-repo "$GH_REPO"
+  --identity-role operator2 --set-gh-secrets --gh-repo "$GH_REPO" --gh-env "$GH_ENV"
 python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
-  --identity-role admin --create-group --set-gh-secrets --gh-repo "$GH_REPO"
+  --identity-role admin --create-group --set-gh-secrets --gh-repo "$GH_REPO" --gh-env "$GH_ENV"
 python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
-  --identity-role release_probe --set-gh-secrets --gh-repo "$GH_REPO"
+  --identity-role release_probe --set-gh-secrets --gh-repo "$GH_REPO" --gh-env "$GH_ENV"
 python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
-  --identity-role verifier --set-gh-secrets --gh-repo "$GH_REPO"
+  --identity-role verifier --set-gh-secrets --gh-repo "$GH_REPO" --gh-env "$GH_ENV"
 python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
-  --identity-role agent_proxy --set-gh-secrets --gh-repo "$GH_REPO"
+  --identity-role agent_proxy --set-gh-secrets --gh-repo "$GH_REPO" --gh-env "$GH_ENV"
 
 # Pre-App bootstrap is creation-only. If a failed bootstrap was fully
 # compensated, prove and remove the credentialless principal before repeating
 # bootstrap; never add --rotate to a bootstrap command. After the App exists,
 # rotate in normal mode with the role's exact --expected-application-id,
-# --rotate, and --set-gh-secrets. Never reuse a client ID across roles.
+# --rotate, --set-gh-secrets, and --gh-env "$GH_ENV" (a mint without the
+# environment is refused). Never reuse a client ID across roles.
 # A signed intent is durable before provider create; observation and sink
 # records are durable before the one-shot secret is returned or written.
 # A durable oauth-credential-quarantine record blocks every App namespace until

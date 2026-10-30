@@ -208,6 +208,9 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         # audit explorer's CSV. It reuses exported_row_count, csv_sha256 and
         # filter_fingerprint above; the event ids are only hashed, not stored.
         "event_ids_sha256",
+        # LENDER_IDENTITY_VERIFIED (backend/services/lender_identity_boot.py):
+        # the boot's digest-pinned lender record, by its public sha256 only.
+        "lender_identity_sha256",
         # Maker-checker approval requests (backend/api/approval_requests.py):
         # the server-issued request id, three bounded counts, and the skipped
         # borrowers grouped under the four closed skip reasons. The note rides

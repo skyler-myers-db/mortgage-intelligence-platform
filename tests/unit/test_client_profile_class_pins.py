@@ -61,6 +61,8 @@ EXPECTED_PUBLIC = frozenset(
         "MIP_COTALITY_SOURCE_CATALOG",
         "MIP_COTALITY_SOURCE_SCHEMA",
         "MIP_COTALITY_SOURCE_TABLE_PREFIX",
+        # M3-PR3: the reviewed pin is public; the record it pins is identifying.
+        "MIP_LENDER_IDENTITY_SHA256",
     }
 )
 EXPECTED_IDENTIFYING = frozenset(
@@ -133,6 +135,12 @@ EXPECTED_LEAF_CLASS = {
         "servicer_aliases[]": _ID,
         "reviewed_by": _ID,
         "reviewed_at": _DATE,
+        "mark.sha256": _ID,
+        "mark.media_type": LeafClass.PUBLIC,
+        "mark.width": LeafClass.PUBLIC,
+        "mark.height": LeafClass.PUBLIC,
+        "mark.authorization_ref": _ID,
+        "mark.reviewed_on": _DATE,
     },
     "MIP_ACCEPTED_EXPOSURE_JSON": {
         "[].kind": _VOCAB,

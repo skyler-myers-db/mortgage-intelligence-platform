@@ -40,6 +40,12 @@ import pytest
 
 from backend.config import source_names
 from backend.config.source_names import CANONICAL, TABLE_STEMS
+from backend.schemas.lender_identity_record import (
+    LENDER_IDENTITY_JSON_ENV,
+    LENDER_IDENTITY_SHA256_ENV,
+    PINNED_ENV_NAMES,
+)
+from tests.fixtures.client_profiles import LENDER_IDENTITY, LENDER_IDENTITY_SHA256
 from tests.fixtures.cotality_source_probe import REPO, run_fresh
 from tools.databricks import app_deploy_payload
 from tools.databricks.app_deploy_payload import build_payload
@@ -122,6 +128,8 @@ def _d0_operator_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
         app_deploy_payload.PREVIOUS_SECRET_KID_ENV,
         "MIP_PRESENTER_MODE",
         *source_names.ENV_NAMES,
+        # D0 has no pinned lender record (#298); an ambient one would add names.
+        *PINNED_ENV_NAMES,
     ):
         monkeypatch.delenv(name, raising=False)
     for name, value in D0_OPERATOR_INPUTS.items():
@@ -202,6 +210,23 @@ def test_only_a_set_non_canonical_name_is_sent(monkeypatch: pytest.MonkeyPatch) 
         {"name": source_names.TABLE_PREFIX_ENV, "value": source_names.NO_TABLE_PREFIX},
     ]
     assert [item for item in env_vars if item in baseline] == baseline
+
+
+def test_a_pinned_lender_record_adds_only_its_two_names_to_d0s_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#298: without a record D0's 32 names stay exactly D0's; a pinned record appends its two."""
+
+    baseline = _names(_d0_payload_env())
+    # A record replaces D0's Summit pair, which would otherwise have to equal it.
+    for name in ("MIP_LENDER_NAME", "MIP_LENDER_NMLS_ID"):
+        monkeypatch.delenv(name)
+    monkeypatch.setenv(LENDER_IDENTITY_JSON_ENV, json.dumps(LENDER_IDENTITY))
+    monkeypatch.setenv(LENDER_IDENTITY_SHA256_ENV, LENDER_IDENTITY_SHA256)
+
+    names = _names(_d0_payload_env())
+
+    assert len(baseline) == len(set(baseline)) == D0_NAME_COUNT
+    assert not set(baseline) & set(PINNED_ENV_NAMES)
+    assert names == [*baseline, LENDER_IDENTITY_JSON_ENV, LENDER_IDENTITY_SHA256_ENV]
 
 
 @pytest.fixture(scope="module")

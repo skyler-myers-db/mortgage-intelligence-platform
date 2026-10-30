@@ -108,6 +108,10 @@ def write_env(path: Path, *, pins: Mapping[str, str] | None = None, **overrides:
     return path
 
 
+def _no_github_sink(client: str, repository: str) -> Any:
+    raise AssertionError("this test gives the bootstrap no GitHub sink")
+
+
 def estate_session(estate: FakeEstate) -> Callable[[Any], Any]:
     @contextmanager
     def open_session(inputs: Any) -> Iterator[Any]:
@@ -126,12 +130,14 @@ def run_tool(
     probe: Callable[[str, SecretStr], bool] | None = None,
     session: Callable[[Any], Any] | None = None,
     deps_sink: Any = None,
+    github_sink: Callable[[str, str], Any] | None = None,
 ) -> Result:
     out, err = io.StringIO(), io.StringIO()
     answer = probe or (lambda application_id, secret: True)
     deps = Dependencies(
         open_session=session or estate_session(estate),
         sink=deps_sink if deps_sink is not None else (sink if sink is not None else FakeSink()),
+        open_github_sink=github_sink or _no_github_sink,
         probe_for=lambda inputs: answer,
         environ=dict(environ or {}),
         stdin=stdin if stdin is not None else TTY(),

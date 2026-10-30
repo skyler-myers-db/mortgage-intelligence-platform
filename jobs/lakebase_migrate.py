@@ -349,6 +349,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--tenant-id",
         default=os.environ.get("MIP_TENANT_ID", ""),
     )
+    # A customer install's digest-pinned lender record; empty for the demo.
+    parser.add_argument(
+        "--lender-identity-json",
+        default=os.environ.get("MIP_LENDER_IDENTITY_JSON", ""),
+    )
+    parser.add_argument(
+        "--lender-identity-sha256",
+        default=os.environ.get("MIP_LENDER_IDENTITY_SHA256", ""),
+    )
     parser.add_argument(
         "--ai-gateway-verifier-client-id",
         default=os.environ.get("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID", ""),
@@ -370,6 +379,8 @@ def main(
     lender_name: str = "Summit Mortgage",
     lender_nmls_id: str = "",
     tenant_id: str = "",
+    lender_identity_json: str = "",
+    lender_identity_sha256: str = "",
     ai_gateway_verifier_client_id: str | None = None,
     require_ai_gateway_verifier: bool = False,
     mode: str = "apply",
@@ -407,6 +418,8 @@ def main(
                     lender_name=lender_name,
                     lender_nmls_id=lender_nmls_id,
                     tenant_id=tenant_id,
+                    lender_identity_json=lender_identity_json,
+                    lender_identity_sha256=lender_identity_sha256,
                 ),
             )
         )
@@ -438,6 +451,8 @@ def main(
         lender_name=lender_name,
         lender_nmls_id=lender_nmls_id,
         tenant_id=tenant_id,
+        lender_identity_json=lender_identity_json,
+        lender_identity_sha256=lender_identity_sha256,
     )
     pre_seed_schema_sql, post_seed_schema_sql = _split_schema_sql(schema_sql)
     sql_texts = (
@@ -490,6 +505,8 @@ if __name__ == "__main__":
         lender_name=_args.lender_name,
         lender_nmls_id=_args.lender_nmls_id,
         tenant_id=_args.tenant_id,
+        lender_identity_json=_args.lender_identity_json,
+        lender_identity_sha256=_args.lender_identity_sha256,
         ai_gateway_verifier_client_id=_args.ai_gateway_verifier_client_id,
         require_ai_gateway_verifier=_args.require_ai_gateway_verifier,
         mode=_args.mode,
