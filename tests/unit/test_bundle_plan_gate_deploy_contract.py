@@ -37,7 +37,11 @@ APP_STOPS = (
     "--mode quarantine",
     "tools.databricks.app_deployment_rollback ensure",
     "apps stop",
+    "apps start",
     "--stop-app-for-mutation",
+    "tools.databricks.quiesce_window open",
+    "tools.databricks.quiesce_window start",
+    "tools.databricks.app_deployment_rollback repin",
 )
 GATE_MODULES = (
     "bundle_plan_gate.py",
@@ -96,13 +100,29 @@ def test_the_pre_lease_gate_precedes_the_lease_and_every_app_stop() -> None:
     ), "the fail-closed stop is armed after it"
     for stop in APP_STOPS:
         assert all(gate < steps + site for site in _calls(text[steps:], stop)), stop
-    assert len(_calls(text[steps:], "tools.databricks.stop_app_fail_closed")) >= 4
+    # Since M0-PR8 the steps never stop the App inline: every stop is a named
+    # function of the window library (or the EXIT-trap compensation) they call.
+    assert _calls(text[steps:], "tools.databricks.stop_app_fail_closed") == []
     stopping = _functions_that_stop_the_app()
+    window_stops = {
+        "stop_unsigned_rebase_app",
+        "stop_journal_owned_first_install_app",
+        "stop_ungoverned_existing_app_before_binding_update",
+        "stop_unproven_candidate_before_rollback",
+        "start_stopped_app_before_activation",
+        "prove_or_restore_signed_blue",
+        "ensure_quiesce_window_open_for",
+        "close_quiesce_window",
+    }
     assert {
         "stop_and_quiesce_unproven_app",
         "recover_interrupted_first_install_app",
         "deploy_app_snapshot",
-    } <= stopping
+    } | window_stops <= stopping
+    # The first-install recovery calls its stop from its library function.
+    for name in window_stops - {"stop_journal_owned_first_install_app"}:
+        assert _calls(text[steps:], name), f"{name} is called by a step"
+    assert "plan_quiesce_window" not in stopping and "run_bundle_plan_gate" not in stopping
     for name in stopping:
         assert all(gate < steps + site for site in _calls(text[steps:], name)), name
 
@@ -188,7 +208,10 @@ def test_only_the_pre_lease_gate_reads_the_first_install_journal() -> None:
     ):
         assert argument in pre_lease and body.count(argument) == 1, argument
     assert 'local -a genie_args=() journal_args=()' in body
-    assert '--report-out "$report_json" \\\n    "${journal_args[@]}" || gate_rc=$?' in body
+    assert (
+        '--report-out "$report_json" \\\n    --execute-gap "$execute_gap_json" \\\n'
+        '    "${journal_args[@]}" || gate_rc=$?'
+    ) in body
 
 
 def test_the_phase_flag_is_parsed_and_the_live_plan_refused_before_any_databricks_call() -> None:
@@ -241,6 +264,10 @@ def _harness(
         ': > "$f"; printf \'%s\\n\' "$f"; }\n'
         'GRN=""\n'
         'databricks() { echo "unexpected databricks $*" >&2; return 97; }\n'
+        # The window library's read-only planners (M0-PR8) have their own tests;
+        # here they only record that the gate ran them, the plan after the gate.
+        'check_catalog_bootstrap_skip_rule() { echo "skip-rule-checked" >&2; return 3; }\n'
+        'plan_quiesce_window() { echo "window-planned $1"; }\n'
         + function("run_json_to_file")
         + function("run_bundle_plan_gate")
         + block(GATE_START, GATE_END)
@@ -289,6 +316,8 @@ def test_a_full_run_passes_the_gate_and_continues_to_the_lease(tmp_path: Path) -
     assert "reached-after-block" in result.stdout
     assert called == ["app_deployment_lease.called", "bundle_env.called"]
     assert lease.exists()
+    assert "skip-rule-checked" in result.stderr, "the PlanReport predicts the EXECUTE gap"
+    assert "window-planned pre-lease" in result.stdout, "the window is planned after the gate"
 
 
 @pytest.mark.parametrize("phase", ("plan", ""))

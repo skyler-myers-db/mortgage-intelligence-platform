@@ -60,6 +60,7 @@ read included, is a GET or a list.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import sys
@@ -91,6 +92,7 @@ from tools.databricks.bundle_plan_shape import (  # noqa: E402
 from tools.databricks.deploy_plan_report import (  # noqa: E402
     COUNTED_ACTIONS,
     Deferral,
+    ExecuteGapPrediction,
     LookupRecord,
     PlanReport,
     Refusal,
@@ -444,6 +446,12 @@ def _print_report(report: PlanReport) -> None:
             + ", ".join(f"{acl[name]} {name}" for name in ("keep", "add", "remove", "change"))
             + "; principals in the private report)"
         )
+    if report.execute_gap is not None:
+        gap = summary["execute_gap"]
+        print(
+            f"{_PREFIX} catalog bootstrap: {gap['code']} ({len(gap['functions'])} republished "
+            f"functions, EXECUTE gap at most {gap['predicted_seconds']} s)"
+        )
     for deferral in report.deferrals:
         state = deferral.detail.get("journal_state", "")
         print(f"{_PREFIX} DEFERRED {deferral.code} {deferral.resource} ({state}): {deferral.note}")
@@ -474,6 +482,11 @@ def main(
     acl.add_argument("--app-acl-app-name")
     for role in ("release-probe", "normal", "operator2", "admin"):
         acl.add_argument(f"--{role}-application-id")
+    check.add_argument(
+        "--execute-gap",
+        type=Path,
+        help="catalog_bootstrap_skip_rule's report: the EXECUTE-gap prediction (M0-PR8)",
+    )
     args = parser.parse_args(argv)
     acl_values = (
         args.app_acl_app_name,
@@ -519,6 +532,14 @@ def main(
             normal_application_id=args.normal_application_id,
             operator2_application_id=args.operator2_application_id,
             admin_application_id=args.admin_application_id,
+        )
+    if args.execute_gap is not None:
+        try:
+            skip_rule = json.loads(args.execute_gap.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            skip_rule = None
+        report = dataclasses.replace(
+            report, execute_gap=ExecuteGapPrediction.from_skip_rule(skip_rule)
         )
     if args.report_out is not None:
         _write_private(args.report_out, report.full())

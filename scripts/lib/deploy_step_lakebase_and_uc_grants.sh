@@ -18,9 +18,20 @@
 # and every existing App remain unmodified throughout this migration; source
 # activation occurs only through deploy_app_snapshot after convergence.
 # Requires only step 4 (the bundle apply defines the job + Lakebase instance).
-step "migrate Lakebase — schema.sql + seed_campaigns.sql (idempotent)"
-run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"
+# With signed blue serving and no window reason (M0-PR8), the pre-apply plan
+# proved the migration a noop: no pending version, equal schema-input digests,
+# an equal catalog fingerprint and a passing verify (app-role grants
+# included). Inside a window the job always runs, also to re-grant a rotated
+# role, and the window closes right after it with blue started and re-pinned.
+ensure_quiesce_window_open_for WR3
+if [[ "${QUIESCE_WINDOW_STATE:-}" == "blue_serving" && "${QUIESCE_WINDOW_CODE:-}" == "none" ]]; then
+  step "skip the Lakebase migration: the pre-apply plan is noop and its verify passed"
+else
+  step "migrate Lakebase — schema.sql + seed_campaigns.sql (idempotent)"
+  run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"
+fi
 LAKEBASE_RUNTIME_ACCESS_PROVEN=1
+close_quiesce_window
 
 # Historical releases granted the App's UC identity directly on the Lakebase
 # ``public``/``mip_app`` schemas.  Remove that residue (and any pre-existing
@@ -28,6 +39,7 @@ LAKEBASE_RUNTIME_ACCESS_PROVEN=1
 # resolves nested groups and proves the effective boundary, so a broader group
 # grant or ownership path fails the release instead of being hidden by a
 # successful direct REVOKE.
+mark_blue_degraded "its Lakebase synced-catalog access is quiesced until step 10b converges it"
 step "quiesce legacy and target Lakebase synced-catalog access"
 run "$PYTHON" -m tools.databricks.converge_app_lakebase_sync_access \
   --mode quiesce \
@@ -151,7 +163,22 @@ run_with_account_identity run_with_proof_signing_authority \
   --principal "$APP_SP_CLIENT_ID" \
   --mode quiesce
 TREATMENT_RUNTIME_QUIESCED=1
-initialize_uc_targets_and_reconcile_function_grants
+# Live-state skip rule (attack O12): the bootstrap republishes the reviewed
+# functions, an EXECUTE gap while blue serves. It is skipped only when the live
+# routines and DDL contract columns hash-equal the rendered sources, read again
+# here, under the lease; the grants are still reconciled and proven.
+CATALOG_BOOTSTRAP_SKIP_JSON="$(mktemp -t mip-catalog-bootstrap.XXXXXX.json)"
+chmod 600 "$CATALOG_BOOTSTRAP_SKIP_JSON"
+if [[ "$DRY_RUN" -eq 0 ]] && check_catalog_bootstrap_skip_rule "$CATALOG_BOOTSTRAP_SKIP_JSON"; then
+  step "skip mip_init_catalog_schemas: the live catalog already equals the rendered bootstrap"
+  REVIEWED_FUNCTION_GRANTS_PROVEN=0
+  step "reconcile and prove reviewed function EXECUTE grants (bootstrap skipped)"
+  reconcile_reviewed_function_execute_grants
+else
+  mark_blue_degraded "the reviewed functions are republished; EXECUTE is proven again by the reconcile"
+  initialize_uc_targets_and_reconcile_function_grants
+fi
+rm -f "$CATALOG_BOOTSTRAP_SKIP_JSON"
 
 # CHECK constraints must be added through ALTER TABLE in Databricks SQL; the
 # CREATE TABLE bootstrap cannot declare them inline. Inspect Delta's persisted

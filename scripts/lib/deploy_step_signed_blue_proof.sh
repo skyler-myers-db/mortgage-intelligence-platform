@@ -92,9 +92,7 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
         --scope "$APP_ROLLBACK_SECRET_SCOPE"
       APP_FAIL_CLOSED_ARMED=1
       step "explicitly stop an unverified legacy App before fail-closed rebase"
-      run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
-        --app-name "$_GRANTS_APP_NAME" \
-        "${APP_EXPECTED_IDENTITY_ARGS[@]}"
+      run stop_unsigned_rebase_app
       step "quarantine all non-manager App access for the unsigned rebase"
       # shellcheck disable=SC2031  # Parent-shell normal client ID is unchanged by mint subshells.
       run "$PYTHON" -m tools.databricks.converge_app_release_access \
@@ -128,18 +126,7 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
       mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
       step "prove or reconcile the signed last-good App before non-App mutations"
       APP_ROLLBACK_BINDING_ENV="$(mktemp -t mip-app-blue-binding.XXXXXX.env)"
-      run_with_account_identity \
-        run_with_proof_signing_authority \
-          "$PYTHON" -m tools.databricks.app_deployment_rollback ensure \
-        --app-name "$_GRANTS_APP_NAME" \
-        --scope "$APP_ROLLBACK_SECRET_SCOPE" \
-        --base-url "${MIP_APP_URL:?existing App URL is required}" \
-        --token-env MIP_BEARER_TOKEN \
-        --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
-        --deployment-source-git-sha "$SOURCE_GIT_SHA" \
-        --treatment-warehouse-id "$_GRANTS_WAREHOUSE_ID" \
-        --treatment-catalog "$_GRANTS_CATALOG" \
-        --out-env "$APP_ROLLBACK_BINDING_ENV"
+      prove_or_restore_signed_blue "$APP_ROLLBACK_BINDING_ENV"
       set -a
       # shellcheck disable=SC1090
       . "$APP_ROLLBACK_BINDING_ENV"
@@ -147,6 +134,9 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
       APP_SIGNED_BLUE_AVAILABLE=1
       TREATMENT_RUNTIME_QUIESCED=1
       APP_UPGRADE_STATE="blue_quiesced"
+      # Proven signed blue serves from here on (M0-PR8): the release stops it
+      # only inside the planned quiesce window.
+      QUIESCE_WINDOW_STATE="blue_serving"
       if [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "signed" ]]; then
         step "retire completed first-install journal after signed-blue verification"
         run_with_proof_signing_authority \

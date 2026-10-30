@@ -390,6 +390,20 @@ def _save_legacy_record(workspace: Any, *, scope: str, record: dict[str, Any]) -
     )
 
 
+def save_versioned_record(
+    workspace: Any,
+    *,
+    scope: str,
+    record: dict[str, Any],
+) -> None:
+    """Write a v6 record with the current writer and a v5 record with the legacy one."""
+
+    if record.get("version") == LEGACY_RECORD_VERSION:
+        _save_legacy_record(workspace, scope=scope, record=record)
+    else:
+        _save_record(workspace, scope=scope, record=record)
+
+
 def _write_record(
     workspace: Any,
     *,

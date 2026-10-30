@@ -67,12 +67,23 @@ run_bundle_plan_gate() {
     exit 2
   fi
   # The raw plan holds remote state; only the gate's report outlives this call.
-  local gate_rc=0
+  # The PlanReport predicts the EXECUTE-gap interval (M0-PR8, attack O12):
+  # the catalog bootstrap skip rule reads the live catalog read-only.
+  local gate_rc=0 execute_gap_json
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    execute_gap_json="/tmp/mip-dry-run-catalog-bootstrap-${position}.json"
+    echo "  would check read-only: the catalog bootstrap skip rule (live routines and DDL contract columns against the rendered sources)"
+  else
+    execute_gap_json="$(mktemp -t mip-catalog-bootstrap.XXXXXX.json)"
+    chmod 600 "$execute_gap_json"
+    check_catalog_bootstrap_skip_rule "$execute_gap_json" || true
+  fi
   run "$PYTHON" -m tools.databricks.bundle_plan_gate check \
     --plan "$plan_json" \
     --position "$position" \
     --app-key mip_app \
     --report-out "$report_json" \
+    --execute-gap "$execute_gap_json" \
     "${journal_args[@]}" || gate_rc=$?
   [[ "$DRY_RUN" -eq 1 ]] || rm -f "$plan_json"
   if [[ "$gate_rc" -ne 0 ]]; then
@@ -80,4 +91,5 @@ run_bundle_plan_gate() {
     exit 2
   fi
   [[ "$DRY_RUN" -eq 1 ]] || echo "  bundle plan report (${position}, private): ${report_json}"
+  plan_quiesce_window "$position" "$report_json"
 }

@@ -74,12 +74,13 @@ def main(argv: list[str] | None = None) -> int:
         DEFAULT_SCOPE,
         capture_current,
         ensure_current,
+        repin_started_deployment,
         restore_last_good,
         verified_signed_last_good_contract,
     )
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("ensure", "inspect", "capture", "restore"))
+    parser.add_argument("action", choices=("ensure", "inspect", "capture", "restore", "repin"))
     parser.add_argument("--app-name", required=True)
     parser.add_argument("--scope", default=DEFAULT_SCOPE)
     parser.add_argument("--base-url", required=True)
@@ -97,6 +98,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--treatment-warehouse-id")
     parser.add_argument("--treatment-catalog", default="mip")
     parser.add_argument("--out-env", type=Path)
+    # repin (M0-PR8): the deployment an `apps start` created, proven blue.
+    parser.add_argument("--to", dest="repin_to")
+    parser.add_argument("--expected-tree-sha256")
     args = parser.parse_args(argv)
     token = os.environ.get(args.token_env, "").strip()
     if not token:
@@ -134,6 +138,30 @@ def main(argv: list[str] | None = None) -> int:
                 signed_blue,
                 gateway_endpoint=endpoint,
             )
+    elif args.action == "repin":
+        if not args.repin_to or not args.expected_rollback_deployment_id:
+            parser.error("--to and --expected-rollback-deployment-id are required for repin")
+        if not args.deployment_lease_id or not args.deployment_source_git_sha:
+            parser.error("repin requires the deployment lease and source SHA")
+        repin_started_deployment(
+            workspace,
+            app_name=args.app_name,
+            scope=args.scope,
+            deployment_id=args.repin_to,
+            expected_rollback_deployment_id=args.expected_rollback_deployment_id,
+            base_url=args.base_url,
+            bearer_token=token,
+            deployment_lease_id=args.deployment_lease_id,
+            deployment_source_git_sha=args.deployment_source_git_sha,
+            expected_tree_sha256=args.expected_tree_sha256,
+        )
+        if args.out_env is not None:
+            repinned = verified_signed_last_good_contract(
+                workspace,
+                app_name=args.app_name,
+                scope=args.scope,
+            )
+            _write_binding_env(args.out_env, repinned, gateway_endpoint=repinned.gateway_endpoint)
     elif args.action == "inspect":
         if args.out_env is None:
             parser.error("--out-env is required for inspect")

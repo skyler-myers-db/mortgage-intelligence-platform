@@ -273,9 +273,7 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
   APP_UPGRADE_STATE="green_verified"
 elif [[ "$DRY_RUN" -eq 0 ]]; then
   step "stop the unproven candidate before signed-blue rollback"
-  run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
-    --app-name "$APP_NAME" \
-    "${APP_EXPECTED_IDENTITY_ARGS[@]}"
+  run stop_unproven_candidate_before_rollback
   step "prove treatment authority remains quiesced before signed-blue rollback"
   run converge_app_treatment_access quiesce
   TREATMENT_RUNTIME_QUIESCED=1

@@ -403,6 +403,14 @@ APP_FAIL_CLOSED_ARMED=0
 APP_FAIL_CLOSED_NAME=""
 APP_EXPECTED_IDENTITY_ARGS=()
 APP_UPGRADE_STATE="first_install"
+# The quiesce window (scripts/lib/deploy_quiesce_window_lifecycle.sh, M0-PR8).
+QUIESCE_WINDOW_STATE=""
+QUIESCE_WINDOW_CODE=""
+QUIESCE_WINDOW_REASONS=""
+QUIESCE_WINDOW_PLAN_JSON=""
+QUIESCE_WINDOW_BLUE_RESTORABLE=1
+QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID=""
+QUIESCE_WINDOW_TREE_SHA256=""
 APP_ROLLBACK_SECRET_SCOPE="${MIP_APP_ROLLBACK_SECRET_SCOPE:-mip-app-rollback}"
 MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS=""
 MIP_APP_ROLLBACK_RECORD_VERSION=""
@@ -496,6 +504,8 @@ APP_RELEASE_ROOT_LEAF=""
 . "$REPO_ROOT/scripts/lib/deploy_cutover_journal_lifecycle.sh"
 # shellcheck source=scripts/lib/deploy_supervisor_creation_lifecycle.sh
 . "$REPO_ROOT/scripts/lib/deploy_supervisor_creation_lifecycle.sh"
+# shellcheck source=scripts/lib/deploy_quiesce_window_lifecycle.sh
+. "$REPO_ROOT/scripts/lib/deploy_quiesce_window_lifecycle.sh"
 
 # shellcheck source=scripts/lib/deploy_app_release_lifecycle.sh
 . "$REPO_ROOT/scripts/lib/deploy_app_release_lifecycle.sh"
