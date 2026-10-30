@@ -184,7 +184,9 @@ still pins them exactly.
 Two kinds of tests pin this:
 
 - `tests/unit/test_bootstrap_account_safety.py`: an AST allowlist of every
-  SDK call the tool can make;
+  SDK call any `tools/clients` module can make, including the credential
+  sink, which also refuses a raw `api_client` call and reflection on a
+  client;
 - every bootstrap test: a run-time call spy in the fake account.
 
 When a precondition fails, the tool refuses and tells you what to fix by

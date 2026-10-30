@@ -6,10 +6,14 @@
   file, an empty token cache, no inherited auth environment, quiet SDK
   loggers. A cached token there refuses; the operator's ``~/.databrickscfg``
   is never read, whatever it holds.
-* An AST allowlist pins every SDK call the bootstrap modules can make. The
-  only delete in it is a service-principal secret's; nothing transfers an
-  owner, revokes a grant, removes a member or touches an identity's roles.
-  The fake account's spy enforces the same at run time on every test path.
+* An AST allowlist pins every SDK call the ``tools/clients`` modules can
+  make (the bootstrap and the credential sink M2-PR2 extends). The only
+  delete in it is a service-principal secret's; nothing transfers an owner,
+  revokes a grant, removes a member or touches an identity's roles. A call
+  the allowlist could not see refuses outright: the raw ``api_client``,
+  reflection (``getattr`` and kin) on a session client or naming an SDK
+  API, ``attrgetter``/``methodcaller``, and the ``ApiClient`` class. The
+  fake account's spy enforces the same at run time on every test path.
 """
 
 from __future__ import annotations
@@ -43,7 +47,7 @@ from tools.clients.credential_sink import account_token_probe
 from tools.clients.errors import BootstrapRefusal
 
 ROOT = Path(__file__).resolve().parents[2]
-BOOTSTRAP_MODULES = sorted((ROOT / "tools" / "clients").glob("bootstrap_*.py"))
+BOOTSTRAP_MODULES = sorted((ROOT / "tools" / "clients").glob("*.py"))
 ALLOWED_CALLS = frozenset(
     {
         ("access_control", "get_rule_set"),
@@ -78,6 +82,11 @@ ALLOWED_CALLS = frozenset(
 )
 FORBIDDEN_KEYWORDS = frozenset({"owner", "new_owner", "remove", "roles", "entitlements"})
 DESTRUCTIVE_METHODS = frozenset({"delete", "unassign", "transfer_ownership", "remove", "reset"})
+# Names that reach an API without a visible ``<client>.<api>.<method>(...)``.
+DYNAMIC_NAMES = frozenset({"api_client", "ApiClient", "attrgetter", "methodcaller", "__getattribute__", "__dict__"})
+REFLECTION = frozenset({"getattr", "setattr", "delattr", "vars"})
+# A reflective lookup of one of these reaches a session client, wherever it starts.
+CLIENT_ENTRY_NAMES = frozenset({"account", "workspace", "api_client", "do"})
 
 
 @pytest.fixture
@@ -272,6 +281,44 @@ def _calls_in(source: str) -> list[tuple[ast.Call, tuple[str, str]]]:
     return found
 
 
+def _client_rooted(node: ast.expr) -> bool:
+    """A session client, or reached from one through attributes and subscripts."""
+
+    while isinstance(node, ast.Attribute | ast.Subscript):
+        if isinstance(node, ast.Attribute) and node.attr in {"account", "workspace"}:
+            return True
+        node = node.value
+    return isinstance(node, ast.Name) and node.id in {"account", "workspace", "clients"}
+
+
+def _dynamic_in(source: str) -> list[str]:
+    """Calls the allowlist cannot see: the raw API client, reflection, dynamic dispatch.
+
+    Reflection is refused on a session client (any attribute) and anywhere
+    for a client entry name; on a record, like ``getattr(item, "permissions")``,
+    it reaches no API and stays allowed.
+    """
+
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        name = (
+            node.attr
+            if isinstance(node, ast.Attribute)
+            else node.id
+            if isinstance(node, ast.Name)
+            else node.name.rsplit(".", 1)[-1]
+            if isinstance(node, ast.alias)
+            else None
+        )
+        if name in DYNAMIC_NAMES:
+            found.append(f"line {getattr(node, 'lineno', 0)}: {name}")
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in REFLECTION and node.args:
+            named = node.args[1] if len(node.args) > 1 else None
+            if _client_rooted(node.args[0]) or (isinstance(named, ast.Constant) and named.value in CLIENT_ENTRY_NAMES):
+                found.append(f"line {node.lineno}: {node.func.id}()")
+    return found
+
+
 def _aliases_in(source: str) -> list[int]:
     """Lines binding ``<client>.<api>`` to a name, which would hide its calls."""
 
@@ -311,6 +358,12 @@ def test_the_checks_catch_a_planted_alias_transfer_and_revoke() -> None:
         "self.workspace.metastores.update('m', owner='x')\n"
         "self.workspace.grants.update('catalog', 'c', changes=[PermissionsChange(remove=[p])])\n"
         "self.account.service_principals.patch('1', operations=[Patch(op=PatchOp.REPLACE, path='roles')])\n"
+        "self.workspace.api_client.do('PATCH', '/api/2.1/unity-catalog/metastores/m', body={'owner': 'x'})\n"
+        "self.account.api_client.do('DELETE', '/api/2.0/accounts/a/servicePrincipals/1')\n"
+        "getattr(self.workspace, 'metastores').update('m', owner='x')\n"
+        "getattr(getattr(self, 'account'), 'service_principals').delete('1')\n"
+        "from operator import methodcaller\n"
+        "setattr(clients.account, 'groups', None)\n"
     )
     assert _aliases_in(planted) == [1]
     assert {pair for _node, pair in _calls_in(planted)} == {
@@ -319,13 +372,27 @@ def test_the_checks_catch_a_planted_alias_transfer_and_revoke() -> None:
         ("service_principals", "patch"),
     }
     assert set(_forbidden_in(planted)) >= {"('metastores', 'update') sets owner", "line 3: remove=", "line 4: REPLACE"}
+    assert set(_dynamic_in(planted)) == {
+        "line 5: api_client",
+        "line 6: api_client",
+        "line 7: getattr()",
+        "line 8: getattr()",
+        "line 9: methodcaller",
+        "line 10: setattr()",
+    }
+    # Reflection on a record stays allowed, even for a field named like an API.
+    assert _dynamic_in(
+        "getattr(record, attribute, None)\ngetattr(item, 'permissions', None)\n"
+        "getattr(self.workspace.metastores.current(), 'id')\n"
+    ) == []
 
 
 def test_the_bootstrap_calls_only_the_reviewed_sdk_surface() -> None:
     sources = _sources()
-    assert len(sources) >= 7
+    assert {"credential_sink.py", "bootstrap_execute.py", "bootstrap_observe.py", "bootstrap_session.py"} <= set(sources)
     for name, source in sources.items():
         assert _aliases_in(source) == [], name
+        assert _dynamic_in(source) == [], name
     used = {pair for source in sources.values() for _node, pair in _calls_in(source)}
     assert used == ALLOWED_CALLS
     destructive = {pair for pair in ALLOWED_CALLS if pair[1] in DESTRUCTIVE_METHODS}
