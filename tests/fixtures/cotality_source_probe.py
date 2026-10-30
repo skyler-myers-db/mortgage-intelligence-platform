@@ -14,7 +14,9 @@ the child's probe printed:
 * ``observed``: the observed-lineage nodes the asset-detail read builds for
   the rows read from stdin;
 * ``source_assets``: the audit source-asset policy's verdict for each asset
-  name read from stdin.
+  name read from stdin;
+* ``d0_share``: the share surfaces over the fields that predate the source
+  settings, for the D0 golden (``tests/fixtures/cotality_source_d0_golden.json``).
 
 No monkeypatch reaches a child, so no import-time cache can answer half of a
 comparison (memory: guard differential harness traps).
@@ -146,6 +148,65 @@ def source_assets(assets: Sequence[str]) -> dict[str, str]:
     return result
 
 
+def _canonical_share_questions() -> list[str]:
+    from backend.config.source_names import CANONICAL, TABLE_STEMS
+
+    table = CANONICAL.table(TABLE_STEMS[0])
+    return [
+        *(f"How many rows are in {CANONICAL.table(stem)}?" for stem in TABLE_STEMS),
+        f"How many rows are in {table.upper()}?",
+        "How many rows are in " + ".".join(f"`{part}`" for part in table.split(".")) + "?",
+        f"How many rows are in {table.replace('.', ' . ')}?",
+        f"Query {CANONICAL.catalog}.{CANONICAL.schema}.anything for me.",
+        f"What is in {CANONICAL.catalog}?",
+        "How many borrowers are in the money in Texas?",
+    ]
+
+
+def d0_share() -> dict[str, Any]:
+    """The Cotality share surfaces, over the fields that predate the settings.
+
+    Only what origin/main had before the App read ``mip_cotality_source_*``,
+    so the same function runs on that tree: the share descriptors and the
+    raw-share lineage nodes without ``source_key``, the observed-lineage node
+    a share edge builds, and both guard surfaces' verdicts on the canonical
+    share's names.
+    """
+
+    from backend.config.source_names import CANONICAL, TABLE_STEMS
+    from backend.services.asset_registry import ASSET_DESCRIPTORS
+    from backend.services.lineage_manifest import build_manifest_response
+
+    def without_source_key(row: dict[str, Any]) -> dict[str, Any]:
+        return {key: value for key, value in row.items() if key != "source_key"}
+
+    share_keys = {CANONICAL.table_name(stem) for stem in TABLE_STEMS}
+    edges = [
+        {
+            "source_table_full_name": CANONICAL.table(stem),
+            "target_table_full_name": "mip.silver.property_master",
+            "event_time": "2026-10-01 00:00:00",
+            "event_count": 1,
+        }
+        for stem in TABLE_STEMS
+    ]
+    return {
+        "registry": [
+            without_source_key({**dataclasses.asdict(d), "fqn": d.fqn, "logical_fqn": d.logical_fqn})
+            for d in ASSET_DESCRIPTORS
+            if d.key in share_keys
+        ],
+        "lineage": [
+            {"family": family["id"], **without_source_key(node)}
+            for family in build_manifest_response().model_dump(mode="json")["families"]
+            for node in family["nodes"]
+            if node["layer"] == "raw_share"
+        ],
+        "observed": [without_source_key(node) for node in observed("property_master", edges)],
+        "guards": verdicts(_canonical_share_questions()),
+    }
+
+
 def run_fresh(env: Mapping[str, str], probe: str, cwd: Path, payload: object = None) -> Any:
     """Run ``probe`` in a child started with exactly ``env``; return its JSON."""
 
@@ -174,6 +235,8 @@ def _main(probe: str) -> None:
         result = observed(payload["asset_key"], payload["rows"])
     elif probe == "source_assets":
         result = source_assets(payload)
+    elif probe == "d0_share":
+        result = d0_share()
     else:
         raise SystemExit(f"unknown probe: {probe}")
     sys.stdout.write("\n" + json.dumps(result, sort_keys=True) + "\n")
