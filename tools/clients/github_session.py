@@ -20,6 +20,13 @@ runs like this:
   ``--field``, ``--with-token``): values go to gh on stdin only.
 * **Value-free failures.** A failed call names the gh subcommand and its
   exit code, never its output, which could echo a value.
+* **The token dies with the run.** The directory is deleted when the session
+  ends, and also on SIGHUP (the terminal closed) and SIGTERM, which by
+  default end Python without running ``finally`` blocks: inside a session
+  they raise ``SystemExit`` instead. A SIGKILL or a crash skips everything,
+  so each new session first deletes this user's session directories whose
+  owning process is gone. A directory that survives its deletion is named
+  on stderr.
 
 Nothing here reads a secret back: GitHub cannot return one.
 """
@@ -30,8 +37,11 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
+import sys
 import tempfile
+import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -53,6 +63,9 @@ _REFUSED_FLAGS = frozenset(
 _TOKEN = re.compile(r"[A-Za-z0-9_./:=?&,-]{1,200}")
 _CALL_TIMEOUT_SECONDS = 60
 _LOGIN_TIMEOUT_SECONDS = 900
+SESSION_PREFIX = "mip-gh-session-"
+OWNER_FILE = "owner.pid"
+_EXIT_SIGNALS = (signal.SIGHUP, signal.SIGTERM)
 
 Runner = Callable[..., Any]
 
@@ -201,7 +214,77 @@ class GhSession:
 
 
 def _new_root() -> Path:
-    return Path(tempfile.mkdtemp(prefix="mip-gh-session-"))
+    return Path(tempfile.mkdtemp(prefix=SESSION_PREFIX))
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:  # another user's live process
+        return True
+    return True
+
+
+def sweep_stale_sessions(parent: Path, *, keep: Path) -> list[Path]:
+    """Delete this user's session directories under ``parent`` whose owner is gone.
+
+    Only a directory (never a link) named like a session, owned by this user
+    and holding an owner file whose process no longer runs: a live session,
+    concurrent or not, is never touched.
+    """
+
+    removed = []
+    for path in sorted(parent.glob(f"{SESSION_PREFIX}*")):
+        if path == keep or path.is_symlink() or not path.is_dir():
+            continue
+        try:
+            if path.lstat().st_uid != os.getuid():
+                continue
+            pid = int((path / OWNER_FILE).read_text(encoding="ascii").strip())
+        except (OSError, ValueError):
+            continue
+        if not _alive(pid):
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(path)
+    return removed
+
+
+@contextmanager
+def _signals_end_the_session() -> Iterator[None]:
+    """SIGHUP and SIGTERM raise ``SystemExit``, so the session's ``finally`` runs.
+
+    The first one also ignores both, so a second cannot interrupt the
+    deletion. An ignored signal (``nohup``) stays ignored. Python sets
+    handlers only from the main thread; elsewhere the stale sweep is the
+    backstop.
+    """
+
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def end(signum: int, _frame: object) -> None:
+        for each in _EXIT_SIGNALS:
+            signal.signal(each, signal.SIG_IGN)
+        raise SystemExit(128 + signum)
+
+    previous = {each: signal.getsignal(each) for each in _EXIT_SIGNALS}
+    for each, handler in previous.items():
+        if handler is not signal.SIG_IGN:
+            signal.signal(each, end)
+    try:
+        yield
+    finally:
+        for each, handler in previous.items():
+            signal.signal(each, signal.SIG_DFL if handler is None else handler)
+
+
+def _delete(root: Path) -> None:
+    shutil.rmtree(root, ignore_errors=True)
+    if root.exists():
+        print(f"github: could not delete {root}; it may hold the session's gh token, delete it by hand", file=sys.stderr)
 
 
 @contextmanager
@@ -220,12 +303,18 @@ def fresh_gh_session(
     os.chmod(root, 0o700)
     if any(root.iterdir()):
         raise BootstrapRefusal(["github: the temporary session directory is not empty; refusing to reuse it"])
-    try:
-        for directory in (root / "gh", root / "home"):
-            directory.mkdir(mode=0o700)
-            os.chmod(directory, 0o700)
-        yield GhSession(
-            root=root, repository=repository, environ=dict(os.environ if environ is None else environ), runner=runner
-        )
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
+    with _signals_end_the_session():
+        try:
+            (root / OWNER_FILE).write_text(f"{os.getpid()}\n", encoding="ascii")
+            sweep_stale_sessions(root.parent, keep=root)
+            for directory in (root / "gh", root / "home"):
+                directory.mkdir(mode=0o700)
+                os.chmod(directory, 0o700)
+            yield GhSession(
+                root=root,
+                repository=repository,
+                environ=dict(os.environ if environ is None else environ),
+                runner=runner,
+            )
+        finally:
+            _delete(root)

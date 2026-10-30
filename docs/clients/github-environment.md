@@ -130,7 +130,12 @@ reads any input.
 login. Each run makes a new private temporary directory (mode 0700), points
 `GH_CONFIG_DIR` and `HOME` into it and asks you to `gh auth login` there in
 the browser. The token is stored in that directory (`--insecure-storage`), not
-your keychain, and is deleted with it. Every `GH_*` and `GITHUB_*` variable
+your keychain, and is deleted with it: when the run ends, and also when you
+close the terminal (SIGHUP) or the run is terminated (SIGTERM). A run that
+is killed outright (SIGKILL, a crash) cannot clean up, so each new run first
+deletes your session directories whose process is gone; a live run's is
+never touched. If a directory survives its deletion, the run names it on
+stderr: delete it by hand. Every `GH_*` and `GITHUB_*` variable
 in your shell (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_DEBUG`, …) is removed from
 every `gh` call. Every call names `--env` and never `--repo`: the repository
 reaches `gh` through `GH_REPO`. Every value reaches `gh` on stdin, never on

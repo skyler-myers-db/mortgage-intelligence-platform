@@ -6,21 +6,52 @@
 * The session directory is private, starts empty, refuses reuse and is
   deleted afterwards; no gh call runs before the fresh login.
 * A failure names the subcommand and exit code, never gh's output.
+* The directory, and the login token in it, is deleted on SIGHUP and
+  SIGTERM too; a session left by a killed process is swept by the next one,
+  and a directory that survives its deletion is named on stderr.
 """
 
 from __future__ import annotations
 
+import os
+import signal
 import stat
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from tools.clients import github_session
 from tools.clients.errors import BootstrapRefusal
-from tools.clients.github_session import GhFailure, check_argv, child_environment, fresh_gh_session
+from tools.clients.github_session import (
+    OWNER_FILE,
+    SESSION_PREFIX,
+    GhFailure,
+    check_argv,
+    child_environment,
+    fresh_gh_session,
+)
 
 CANARY = "canary-gh-output-81c2aa"
+ROOT = Path(__file__).resolve().parents[2]
+# Stands in for the login token gh writes into hosts.yml.
+LEFT_BEHIND = "canary-left-behind-5d1e"
+# A session that writes a token where gh would, says where, and waits to be signalled.
+_HOLDER = f"""
+import sys, tempfile, time
+from pathlib import Path
+from tools.clients.github_session import fresh_gh_session
+
+make_root = lambda: Path(tempfile.mkdtemp(prefix="{SESSION_PREFIX}", dir=sys.argv[1]))
+with fresh_gh_session("acme-org/mip", environ={{}}, make_root=make_root) as session:
+    (session.config_dir / "hosts.yml").write_text("github.com:\\n    oauth_token: {LEFT_BEHIND}\\n")
+    print(session.root, flush=True)
+    time.sleep(60)
+"""
 
 
 def test_the_child_environment_keeps_no_github_configuration(tmp_path: Path) -> None:
@@ -134,3 +165,60 @@ def test_a_login_that_does_not_complete_refuses(tmp_path: Path) -> None:
         with pytest.raises(BootstrapRefusal, match="the gh login did not complete"):
             session.login()
         assert not session.logged_in
+
+
+@pytest.mark.parametrize("signum", [signal.SIGHUP, signal.SIGTERM])
+def test_a_hangup_or_terminate_still_deletes_the_token(tmp_path: Path, signum: int) -> None:
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _HOLDER, str(tmp_path)], cwd=ROOT, stdout=subprocess.PIPE, text=True
+    )
+    try:
+        assert holder.stdout is not None
+        root = Path(holder.stdout.readline().strip())
+        assert (root / "gh" / "hosts.yml").read_text().count(LEFT_BEHIND) == 1
+        holder.send_signal(signum)
+        assert holder.wait(timeout=30) == 128 + signum
+    finally:
+        holder.kill()
+        holder.wait()
+    assert not root.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def _dead_pid() -> int:
+    finished = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
+    return int(finished.stdout)
+
+
+def _left_session(parent: Path, name: str, owner: int | None) -> Path:
+    root = parent / f"{SESSION_PREFIX}{name}"
+    (root / "gh").mkdir(parents=True)
+    (root / "gh" / "hosts.yml").write_text(f"github.com:\n    oauth_token: {LEFT_BEHIND}\n", encoding="utf-8")
+    if owner is not None:
+        (root / OWNER_FILE).write_text(f"{owner}\n", encoding="ascii")
+    return root
+
+
+def test_a_new_session_sweeps_only_sessions_whose_owner_is_gone(tmp_path: Path) -> None:
+    killed = _left_session(tmp_path, "killed", _dead_pid())
+    live = _left_session(tmp_path, "live", os.getpid())  # a concurrent session
+    unowned = _left_session(tmp_path, "unowned", None)  # not yet claimed, or not ours
+    other = tmp_path / "unrelated"
+    other.mkdir()
+    (other / OWNER_FILE).write_text(f"{_dead_pid()}\n", encoding="ascii")
+    make_root = lambda: Path(tempfile.mkdtemp(prefix=SESSION_PREFIX, dir=tmp_path))  # noqa: E731
+    with fresh_gh_session("acme-org/mip", environ={}, make_root=make_root) as session:
+        assert (session.root / OWNER_FILE).read_text(encoding="ascii").strip() == str(os.getpid())
+        assert not killed.exists()
+        assert live.exists() and unowned.exists() and other.exists()
+    assert not session.root.exists()
+
+
+def test_a_directory_that_survives_deletion_is_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(github_session.shutil, "rmtree", lambda *_args, **_kwargs: None)
+    root = tmp_path / "s"
+    with fresh_gh_session("acme-org/mip", environ={}, make_root=lambda: (root.mkdir(), root)[1]):
+        pass
+    assert f"github: could not delete {root}" in capsys.readouterr().err
