@@ -2,6 +2,10 @@
 .env
 .env.*
 !.env.example
+# A client profile lives in its GitHub Environment or .env.local; only the
+# placeholder template is tracked (tools/clients).
+deploy/clients/*
+!deploy/clients/example.env
 secrets/
 *.pem
 *.key

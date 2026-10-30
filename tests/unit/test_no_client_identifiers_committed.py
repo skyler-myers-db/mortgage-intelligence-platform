@@ -164,3 +164,24 @@ def test_each_shape_has_a_positive_and_a_negative_control() -> None:
 
 def test_this_file_matches_no_shape() -> None:
     assert not +shape_counts(Path(__file__).read_bytes())
+
+
+def _git(*args: str) -> subprocess.CompletedProcess[bytes] | None:
+    try:
+        return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def test_a_profile_copied_beside_the_template_is_ignored() -> None:
+    """A real profile holds UUIDs and custom hosts no shape above catches yet."""
+
+    listed = _git("ls-files", "-z", "--", "deploy/clients")
+    if listed is None or listed.returncode != 0:
+        pytest.skip("not a git checkout")
+    assert listed.stdout.decode("utf-8").split("\0") == ["deploy/clients/example.env", ""]
+    for name in ("client-alpha.env", "client-alpha.env.local", "client-alpha.json"):
+        ignored = _git("check-ignore", "-q", "--no-index", f"deploy/clients/{name}")
+        assert ignored is not None and ignored.returncode == 0, name
+    template = _git("check-ignore", "-q", "--no-index", "deploy/clients/example.env")
+    assert template is not None and template.returncode == 1
