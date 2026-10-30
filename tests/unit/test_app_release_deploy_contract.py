@@ -284,6 +284,58 @@ def test_a_release_id_of_another_shape_is_refused(tmp_path: Path, release: str) 
     assert "reached-after-block" not in result.stdout
 
 
+PRINCIPAL_START = "# >>> app release principal: check >>>"
+PRINCIPAL_END = "# <<< app release principal: check <<<"
+# The client profile's deployer: a service principal's application id (M1-PR2).
+DEPLOYER = "00000000-0000-4000-8000-0000000000aa"
+
+
+def _principal_check(repo: Path, *, dry_run: int, current_user: str) -> subprocess.CompletedProcess[str]:
+    return drive(
+        repo,
+        function("same_identity_casefold") + _block(PRINCIPAL_START, PRINCIPAL_END),
+        dry_run=dry_run,
+        env={"APP_CURRENT_USER": current_user, "CLIENT_DEPLOYER": DEPLOYER, "CLIENT_KEY": LEAF},
+        epilogue='echo "principal=${APP_RELEASE_PRINCIPAL} leaf=${APP_RELEASE_ROOT_LEAF}"\n',
+    )
+
+
+def test_the_principal_check_follows_the_inventory_check_and_precedes_the_publish() -> None:
+    text = deploy_entrypoint_text()
+
+    assert text.index("bundle identity does not match the preflighted workspace-admin") < text.index(PRINCIPAL_START)
+    assert text.index(PRINCIPAL_END) < text.index(PUBLISH_START)
+
+
+@pytest.mark.parametrize("current_user", [DEPLOYER, DEPLOYER.upper()])
+def test_a_real_run_as_the_profiles_deployer_names_it_and_the_client_key(tmp_path: Path, current_user: str) -> None:
+    result = _principal_check(tmp_path, dry_run=0, current_user=current_user)
+
+    assert result.returncode == 0, result.stderr
+    assert f"principal={DEPLOYER} leaf={LEAF}\nreached-after-block\n" in result.stdout
+
+
+@pytest.mark.parametrize("current_user", ["00000000-0000-4000-8000-0000000000bb", "operator@lender.example", " "])
+def test_a_real_run_as_another_principal_is_refused_before_the_publish(tmp_path: Path, current_user: str) -> None:
+    """Defence in depth behind the live checks: the bundle summary's user must be the profile's deployer."""
+
+    result = _principal_check(tmp_path, dry_run=0, current_user=current_user)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "the bundle runs as another principal than the client profile's deployer" in result.stderr
+    assert DEPLOYER not in result.stderr, "the refusal names no identifier"
+    assert "principal=" not in result.stdout and "reached-after-block" not in result.stdout
+
+
+def test_a_dry_run_names_the_deployer_without_the_identity_check(tmp_path: Path) -> None:
+    """A dry run's offline summary carries no real user."""
+
+    result = _principal_check(tmp_path, dry_run=1, current_user="dry-run-user")
+
+    assert result.returncode == 0, result.stderr
+    assert f"principal={DEPLOYER} leaf={LEAF}\n" in result.stdout
+
+
 def _publish_env(files_root: str, leaf: str) -> dict[str, str]:
     return {
         **_stage_env(),

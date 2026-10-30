@@ -150,6 +150,7 @@ if [[ -z "$APP_CURRENT_USER" || \
   echo "${RED}[deploy] bundle identity does not match the preflighted workspace-admin inventory principal.${RST}" >&2
   exit 1
 fi
+# >>> app release principal: check >>>
 # The client target's root is the profile deployer's folder plus the client
 # key (databricks.yml): every App release check names that principal and that
 # leaf, and the bundle must run as that deployer.
@@ -159,6 +160,7 @@ if [[ "$DRY_RUN" -eq 0 ]] && ! same_identity_casefold "$APP_CURRENT_USER" "$APP_
   echo "${RED}[deploy] the bundle runs as another principal than the client profile's deployer.${RST}" >&2
   exit 1
 fi
+# <<< app release principal: check <<<
 
 # >>> app release source: publish >>>
 # After the Lakebase migration and reviewed-grant proofs, before the first
