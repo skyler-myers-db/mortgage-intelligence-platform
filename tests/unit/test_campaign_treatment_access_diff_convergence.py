@@ -13,9 +13,11 @@ For every state where today's converger succeeds, the diff converger succeeds
 with the identical final grant store. Where today's converger fails closed,
 the diff converger fails closed too, never holds a write privilege today's run
 removed, and differs only by keeping reviewed privileges today revoked mid-run.
-Other principals' grants are never touched. A Hypothesis property covers
-larger universes, extra foreign principals and a grants API that ignores the
-principal filter.
+In every run, a treatment write path (``_write_path``, inheritance included)
+never appears in quiesce, and in runtime appears only at a table grant issued
+after the parent boundary proof. Other principals' grants are never touched. A
+Hypothesis property covers larger universes, extra foreign principals and a
+grants API that ignores the principal filter.
 """
 
 from __future__ import annotations
@@ -97,6 +99,20 @@ def _effective(app: Mapping[Key, Iterable[str]], key: Key) -> set[str]:
     return set(app.get(key, ())) | inherited
 
 
+def _has(held: set[str], privilege: str) -> bool:
+    return privilege in held or "ALL_PRIVILEGES" in held
+
+
+def _write_path(app: Mapping[Key, Iterable[str]]) -> bool:
+    """Whether the App's own grants let it write the treatment table."""
+
+    return (
+        _has(_effective(app, CATALOG), "USE_CATALOG")
+        and _has(_effective(app, SCHEMA), "USE_SCHEMA")
+        and _has(_effective(app, TABLE), "MODIFY")
+    )
+
+
 def _privilege(name: str) -> object:
     try:
         return Privilege(name)
@@ -111,15 +127,31 @@ class _Plane:
     store: Store
     inherited: dict[Key, set[str]] = field(default_factory=dict)
     ignore_principal_filter: bool = False
+    fail_at: int | None = None
     statements: list[str] = field(default_factory=list)
     snapshots: list[dict[Key, frozenset[str]]] = field(default_factory=list)
+    # Per statement: whether an effective-grants read of the catalog, the first
+    # read of the parent boundary proof, had already run.
+    after_parent_proof: list[bool] = field(default_factory=list)
+    catalog_proofs: int = 0
 
     def app(self, key: Key) -> set[str]:
         return self.store.setdefault(key, {}).setdefault(APP, set())
 
+    def app_state(self) -> dict[Key, frozenset[str]]:
+        return {k: frozenset(self.app(k)) for k in SECURABLES}
+
     # statement_execution
     def execute_statement(self, *, statement: str, **_: object) -> object:
         self.statements.append(statement)
+        self.after_parent_proof.append(self.catalog_proofs > 0)
+        if len(self.statements) - 1 == self.fail_at:
+            # An injected warehouse failure: the grant store is unchanged.
+            self.snapshots.append(self.app_state())
+            return SimpleNamespace(
+                status=SimpleNamespace(state="FAILED", error="injected failure"),
+                result=None,
+            )
         match = _STATEMENT_RE.fullmatch(statement)
         assert match is not None, statement
         assert match["principal"] == APP, statement
@@ -132,7 +164,7 @@ class _Plane:
             if "ALL_PRIVILEGES" in names:
                 held.intersection_update(OUTSIDE)
             held.difference_update(names)
-        self.snapshots.append({k: frozenset(self.app(k)) for k in SECURABLES})
+        self.snapshots.append(self.app_state())
         return SimpleNamespace(
             status=SimpleNamespace(state="SUCCEEDED", error=None),
             result=SimpleNamespace(data_array=[]),
@@ -156,6 +188,7 @@ class _Plane:
             held = {"USE_MARKETPLACE_ASSETS"}
         else:
             key = (securable_type, full_name)
+            self.catalog_proofs += key == CATALOG
             app = {k: v.get(APP, set()) for k, v in self.store.items()}
             held = _effective(app, key) | self.inherited.get(key, set())
         entries = [SimpleNamespace(privilege=_privilege(p)) for p in sorted(held)]
@@ -173,6 +206,8 @@ class _Outcome:
     store: dict[Key, dict[str, frozenset[str]]]
     statements: tuple[str, ...]
     snapshots: tuple[dict[Key, frozenset[str]], ...]
+    after_parent_proof: tuple[bool, ...] = ()
+    message: str = ""
 
 
 def _frozen(store: Store) -> dict[Key, dict[str, frozenset[str]]]:
@@ -201,6 +236,7 @@ def _run(
     schema_exists: bool = True,
     table_exists: bool = True,
     ignore_principal_filter: bool = False,
+    fail_at: int | None = None,
 ) -> _Outcome:
     workspace, _, _ = converge_tests._workspace(
         catalog_exists=catalog_exists,
@@ -211,6 +247,7 @@ def _run(
         store=store,
         inherited=inherited or {},
         ignore_principal_filter=ignore_principal_filter,
+        fail_at=fail_at,
     )
     workspace.statement_execution = plane
     workspace.grants = plane
@@ -223,20 +260,24 @@ def _run(
         "account_factory": lambda: converge_tests._mirrored_account(workspace),
         "assert_single_writer": lambda: None,
     }
-    try:
-        result = function(**kwargs)
-    except Exception as exc:  # noqa: BLE001 - both outcomes are compared
+
+    def outcome(ok: bool, result: bool | None, error: str, message: str = "") -> _Outcome:
         return _Outcome(
-            False,
-            None,
-            type(exc).__name__,
+            ok,
+            result,
+            error,
             _frozen(store),
             tuple(plane.statements),
             tuple(plane.snapshots),
+            tuple(plane.after_parent_proof),
+            message,
         )
-    return _Outcome(
-        True, result, "", _frozen(store), tuple(plane.statements), tuple(plane.snapshots)
-    )
+
+    try:
+        result = function(**kwargs)
+    except Exception as exc:  # noqa: BLE001 - both outcomes are compared
+        return outcome(False, None, type(exc).__name__, str(exc))
+    return outcome(True, result, "")
 
 
 def _app_final(outcome: _Outcome, key: Key) -> frozenset[str]:
@@ -245,6 +286,40 @@ def _app_final(outcome: _Outcome, key: Key) -> frozenset[str]:
 
 def _reviewed(key: Key, mode: str) -> frozenset[str]:
     return converger.reviewed_privileges(key[0], mode)  # type: ignore[arg-type]
+
+
+def _app_state(store: Store) -> dict[Key, frozenset[str]]:
+    return {key: frozenset(store.get(key, {}).get(APP, ())) for key in SECURABLES}
+
+
+def _parent_boundary_held(app: dict[Key, frozenset[str]], present: tuple[Key, ...]) -> bool:
+    """Whether every present parent already held its reviewed grant, with no ALL PRIVILEGES."""
+
+    return all(
+        _reviewed(key, "runtime") <= app[key] and "ALL_PRIVILEGES" not in app[key]
+        for key in (CATALOG, SCHEMA)
+        if key in present
+    )
+
+
+def _write_path_problems(label: str, mode: str, start: Store, outcome: _Outcome) -> list[str]:
+    """A write path never appears in quiesce; in runtime only at a proven table grant.
+
+    Also: a failed run never leaves a write path its start did not hold.
+    """
+
+    states = [_app_state(start), *outcome.snapshots]
+    problems: list[str] = []
+    for index, statement in enumerate(outcome.statements):
+        if _write_path(states[index + 1]) and not _write_path(states[index]):
+            table_grant = statement.startswith("GRANT ") and " ON TABLE " in statement
+            if mode == "quiesce" or not (table_grant and outcome.after_parent_proof[index]):
+                problems.append(f"{label}: write path opened by {statement!r}")
+    if mode == "quiesce" and outcome.ok and _write_path(states[-1]):
+        problems.append(f"{label}: quiesce succeeded with a write path")
+    if not outcome.ok and _write_path(states[-1]) and not _write_path(states[0]):
+        problems.append(f"{label}: failed run left a write path the start did not hold")
+    return problems
 
 
 def _compare(
@@ -270,15 +345,23 @@ def _compare(
             for principal, held in grants.items():
                 if principal != APP and outcome.store.get(key, {}).get(principal) != held:
                     problems.append(f"{label}: {name} changed a foreign grant on {key[0]}")
+        # The oracle meets the write-path invariant too, so the diff converger
+        # is held to today's behaviour, not to a stricter rule.
+        problems.extend(_write_path_problems(f"{label} {name}", mode, start, outcome))
     if old.ok:
         if not new.ok or new.result != old.result:
             problems.append(f"{label}: legacy ok={old.result} but diff ok={new.ok} {new.error}")
         elif new.store != old.store:
             problems.append(f"{label}: final grants differ {new.store} != {old.store}")
+        start_app = _app_state(start)
         for key in present:
-            kept = {p for p in before.get(key, {}).get(APP, ()) if p in _reviewed(key, mode)}
-            if "ALL_PRIVILEGES" in before.get(key, {}).get(APP, ()):
+            if "ALL_PRIVILEGES" in start_app[key]:
                 continue
+            kept = start_app[key] & _reviewed(key, mode)
+            if key == TABLE and not _parent_boundary_held(start_app, present):
+                # No reviewed write path ran through the table at the start, and
+                # runtime holds MODIFY back until the parent boundary is proven.
+                kept -= {"MODIFY"}
             if any(not kept <= snap[key] for snap in new.snapshots):
                 problems.append(f"{label}: diff opened a window on {key[0]}")
         return problems, new
@@ -293,6 +376,9 @@ def _compare(
             problems.append(f"{label}: diff kept unreviewed {sorted(new_app - old_app)}")
     if "MODIFY" in _app_final(new, TABLE) and "MODIFY" not in _app_final(old, TABLE):
         problems.append(f"{label}: diff left a treatment write path legacy removed")
+    old_final, new_final = ({key: _app_final(run, key) for key in SECURABLES} for run in (old, new))
+    if _write_path(new_final) and not _write_path(old_final):
+        problems.append(f"{label}: diff left an inherited write path legacy removed")
     return problems, new
 
 

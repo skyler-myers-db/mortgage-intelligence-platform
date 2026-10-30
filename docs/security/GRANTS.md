@@ -171,18 +171,32 @@ as the complete failure state.
 
 Treatment grants converge by diff, not by `REVOKE ALL PRIVILEGES` followed by
 `GRANT`. For the catalog, the audit schema and the treatment table, the
-converger reads the App principal's own direct grants, grants what the
-reviewed set lacks, and then revokes only what it does not contain. A reviewed
-privilege the App already holds is never revoked, so an already-converged
-boundary is re-proven with zero statements and a quiesce-to-runtime switch is
-one `GRANT MODIFY`. Assignments for any other principal are skipped and never
-revoked. Direct `MANAGE`, `READ METADATA`, `EXTERNAL USE LOCATION` and
+converger reads the App principal's own direct grants. It first revokes, table
+first, then schema, then catalog, only what the reviewed set does not contain,
+and only then grants what the reviewed set lacks. A reviewed privilege the App
+already holds is never revoked, so an already-converged boundary is re-proven
+with zero statements and a quiesce-to-runtime switch is one `GRANT MODIFY`.
+Assignments for any other principal are skipped and never revoked.
+
+Revoking first matters because Unity Catalog applies `MODIFY` granted on a
+catalog or schema to every table below it: a `USE CATALOG` or `USE SCHEMA`
+grant issued while a parent `MODIFY` remained would complete a write path.
+For the same reason, in runtime mode, when a parent grant is needed the
+table `MODIFY` the App already holds is held back and re-granted only after
+the parent boundary is proven. So quiesce never opens a treatment write path,
+runtime opens one only at that proven table grant, and a run that fails at any
+statement never ends with a write path it did not start with. The revoke-all
+converger never opened one early either; the golden tests check that rule on
+both convergers from every start state.
+
+Direct `MANAGE`, `READ METADATA`, `EXTERNAL USE LOCATION` and
 `EXTERNAL USE SCHEMA` are outside `ALL PRIVILEGES`, so the revoke-all
 converger never removed them and its exact postflight refused; the diff
 converger leaves them and refuses the same way. A direct `ALL PRIVILEGES` grant
 is the one drift state that still revokes before it re-grants, because
 revoking it also removes the privileges it implies. A runtime failure at any
-stage still ends with no treatment write path.
+stage still ends with no treatment write path, or says that compensating
+quiescence could not be proven.
 
 Every App-touching converger also has a read-only mode that reads what the
 converger reads, prints a symbolic diff (objects named by role, tables and

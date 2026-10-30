@@ -6,11 +6,14 @@ Catalog APIs. Quiesce removes writes before bundle promotion; runtime restores
 only exact table-scoped SELECT and MODIFY after constraints converge.
 
 Convergence is a diff, not REVOKE ALL followed by GRANT: it reads the App
-principal's direct grants on each governed securable, grants what the reviewed
-set lacks, then revokes only what it does not contain. A reviewed privilege the
-App already holds is never revoked, so treatment approvals stay live while an
-already-converged boundary is re-proven. ``--check`` evaluates the same diff
-read-only (``campaign_treatment_access_check``).
+principal's direct grants on each governed securable and first revokes, deepest
+securable first, only what the reviewed set does not contain; only then does it
+grant what the reviewed set lacks. A reviewed privilege the App already holds
+is never revoked, so treatment approvals stay live while an already-converged
+boundary is re-proven, and no run opens a treatment write path the revoke-all
+converger would not have opened: quiesce never opens one, and runtime opens one
+only at the table grant after the parent boundary is proven. ``--check``
+evaluates the same diff read-only (``campaign_treatment_access_check``).
 """
 
 from __future__ import annotations
@@ -273,8 +276,13 @@ def _converge_securable(
     principal_sql: str,
     reviewed: frozenset[str],
     grant: bool = True,
-) -> None:
-    """Grant what ``reviewed`` lacks, then revoke only what it does not contain."""
+) -> list[str]:
+    """Revoke what ``reviewed`` does not contain, then grant only what it lacks.
+
+    Revoking first means no intermediate state holds more than the start or the
+    end. With ``grant=False`` only the revokes run. Returns the reviewed
+    privileges still missing after the revokes, before any grant.
+    """
 
     def current() -> set[str]:
         return direct_privileges(
@@ -303,10 +311,11 @@ def _converge_securable(
         change("REVOKE", [_ALL_PRIVILEGES], "FROM")
         held = current()
     missing, extra, _retained = plan_securable(held, reviewed)
-    if grant and missing:
-        change("GRANT", missing, "TO")
     if extra:
         change("REVOKE", extra, "FROM")
+    if grant and missing:
+        change("GRANT", missing, "TO")
+    return missing
 
 
 def _assert_effective_privileges(
@@ -469,8 +478,10 @@ def converge_campaign_treatment_access(
     if catalog_object is None:
         return False
 
-    def converge(securable: Securable, reviewed: frozenset[str], *, grant: bool = True) -> None:
-        _converge_securable(
+    def converge(
+        securable: Securable, reviewed: frozenset[str], *, grant: bool = True
+    ) -> list[str]:
+        return _converge_securable(
             client,
             warehouse_id=warehouse,
             securable=securable,
@@ -482,12 +493,37 @@ def converge_campaign_treatment_access(
 
     table_reviewed = reviewed_privileges("table", mode)
     actions = ordered_privileges(table_reviewed)
+    present = [
+        securable
+        for securable, found in (
+            (table_securable, table_object),
+            (schema_securable, schema_object),
+            (catalog_securable, catalog_object),
+        )
+        if found is not None
+    ]
     table_stage = False
     try:
-        if table_object is not None:
-            # Strip unreviewed table authority (in quiesce mode, MODIFY) before
-            # any parent grant runs, as the revoke-all converger did first.
-            converge(table_securable, table_reviewed, grant=False)
+        # Phase 1 strips every unreviewed privilege, deepest securable first, as
+        # the revoke-all converger did, before any grant runs. Unity Catalog
+        # applies MODIFY on a catalog or schema to every table below it, so a
+        # parent USE grant issued while any unreviewed MODIFY remained could
+        # complete a write path that the run then depends on a later revoke to
+        # close. Revoking an unreviewed privilege never removes a reviewed one.
+        parent_missing = False
+        for securable in present:
+            missing = converge(
+                securable, reviewed_privileges(securable.securable_type, mode), grant=False
+            )
+            parent_missing |= securable is not table_securable and bool(missing)
+        if parent_missing and table_object is not None and "MODIFY" in table_reviewed:
+            # A parent grant would complete a write path through the table
+            # MODIFY the App already holds before the boundary is proven. Hold
+            # MODIFY back until the table stage re-grants it after the proof.
+            # A complete parent boundary needs no grant, so a converged runtime
+            # boundary keeps MODIFY and issues no statement.
+            converge(table_securable, reviewed_privileges("table", "quiesce"), grant=False)
+        # Phase 2 grants only the reviewed parent privileges that are missing.
         converge(catalog_securable, reviewed_privileges("catalog", mode))
         if schema_object is not None:
             converge(schema_securable, reviewed_privileges("schema", mode))
@@ -539,7 +575,7 @@ def _quiesce_after_runtime_failure(
     catalog: str,
     principal: str,
     owner_policy: ApprovedOwnerPolicy,
-    converge_table: Callable[[bool], None],
+    converge_table: Callable[[bool], object],
     table_stage: bool,
 ) -> None:
     """Leave no treatment write path after a failed runtime convergence.
