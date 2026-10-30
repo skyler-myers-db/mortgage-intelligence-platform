@@ -6,8 +6,8 @@ failure recipients. A bundle validate cannot prove what the Jobs API stored,
 so after the apply this reads the live job and fails the deploy when:
 
 * ``settings.schedule.pause_status`` differs from ``--expect``;
-* the failure email disagrees with the install: exactly one recipient on the
-  dev live install (an email address whenever the schedule is UNPAUSED, so a
+* the failure email disagrees with the install: exactly one recipient on a
+  demo install (``--live-install``; an email address whenever the schedule is UNPAUSED, so a
   service-principal deployer's application id never silently swallows the
   alert), none anywhere else;
 * the orchestrator's task graph is not exactly :data:`ORCHESTRATOR_TASKS`:
@@ -157,7 +157,7 @@ def verify(
 def main(argv: list[str] | None = None, *, stdin: Any = None, client: Any = None) -> int:
     parser = argparse.ArgumentParser(description="Verify the deployed mip_scheduled_refresh against the deploy intent.")
     parser.add_argument("--expect", required=True, choices=sorted(PAUSE_STATES))
-    parser.add_argument("--live-install", action="store_true", help="the dev target's live install")
+    parser.add_argument("--live-install", action="store_true", help="a demo install, which runs the schedule")
     args = parser.parse_args(argv)
     try:
         summary = json.loads((stdin or sys.stdin).read())

@@ -13,7 +13,7 @@ table honest about what it is:
   1%..15% clamp gates borrower_360 applies to ``rate_spread_bps``;
 * the book is disclosed as-of the shared refresh anchor (``book_as_of``);
 * the bundle wires the CTAS behind the freshness sentinel through the
-  rendered path, so ``./scripts/deploy.sh -t dev`` builds it;
+  rendered path, so ``./scripts/deploy.sh -t client`` builds it;
 * the app-side read never computes the percentile per request.
 """
 

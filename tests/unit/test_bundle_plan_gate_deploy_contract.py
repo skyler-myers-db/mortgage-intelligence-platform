@@ -228,7 +228,7 @@ def _harness(
     planned = stub_tool(
         repo,
         "bundle_env",
-        argv=["plan", "-t", "dev", "-o", "json", "--allow-unprovisioned-genie"],
+        argv=["plan", "-t", "client", "-o", "json", "--allow-unprovisioned-genie"],
         body=f"sys.stdout.write({doc if isinstance(doc, str) else fx.dumps(doc)!r})\nsys.exit({bundle_rc})\n",
     )
     lease = stub_tool(repo, "app_deployment_lease", argv=["acquire"], body="")
@@ -250,7 +250,7 @@ def _harness(
         shell,
         dry_run=0,
         env={
-            "TARGET": "dev",
+            "TARGET": "client",
             "DEPLOY_PHASE": phase,
             "_GRANTS_APP_NAME": APP_NAME,
             "APP_ROLLBACK_SECRET_SCOPE": "synthetic-rollback-scope",

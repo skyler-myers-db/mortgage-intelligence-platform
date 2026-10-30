@@ -12,6 +12,13 @@ All API probes below use canonical `/api/v1/*` paths. Deprecated `/api/*`
 aliases still exist today for compatibility, but DR procedures should not rely
 on them.
 
+A raw `databricks bundle run <job> -t client` or `databricks bundle summary -t
+client` below needs the client target's root: export `BUNDLE_VAR_client_key`
+and `BUNDLE_VAR_deployer_principal` from the client profile first, as
+`scripts/deploy.sh` does (runbook §4). Without them the CLI refuses with "no
+value assigned to required variable client_key". The `bundle_env.py` and
+`scripts/deploy.sh` commands set them from `.env.local` themselves.
+
 ## Targets
 
 | Surface | Recovery primitive | RPO | RTO target |
@@ -70,7 +77,7 @@ Recovery:
    idempotent and safe after a PITR restore:
 
    ```bash
-   databricks bundle run mip_lakebase_migrate -t dev
+   databricks bundle run mip_lakebase_migrate -t client
    ```
 
 4. Verify the migration ledger and audit table:
@@ -106,9 +113,9 @@ install whose governed deploy is NO-GO, never run them; use the runbook's
 
 ```bash
 databricks warehouses start "$DATABRICKS_WAREHOUSE_ID"
-databricks bundle run mip_ref_seed -t dev
-databricks bundle run mip_refresh_silver -t dev
-databricks bundle run mip_refresh_scores -t dev
+databricks bundle run mip_ref_seed -t client
+databricks bundle run mip_refresh_silver -t client
+databricks bundle run mip_refresh_scores -t client
 ```
 
 Then validate:
@@ -142,7 +149,7 @@ Governed source/frontend rollback from a reviewed prior SHA:
 ```bash
 git fetch origin
 git checkout <prior-good-sha>
-CI=1 ./scripts/deploy.sh -t dev --no-confirm
+CI=1 ./scripts/deploy.sh -t client --no-confirm
 ```
 
 The command of record acquires the signed deployment lease, keeps treatment
@@ -179,15 +186,15 @@ Recovery:
 ```bash
 git fetch origin
 git checkout <prior-good-sha>
-.venv/bin/python tools/databricks/bundle_env.py validate -t dev
-.venv/bin/python tools/databricks/bundle_env.py plan -t dev
-CI=1 ./scripts/deploy.sh -t dev --no-confirm
+.venv/bin/python tools/databricks/bundle_env.py validate -t client
+.venv/bin/python tools/databricks/bundle_env.py plan -t client
+CI=1 ./scripts/deploy.sh -t client --no-confirm
 ```
 
 Validate the resource graph and live routes:
 
 ```bash
-databricks bundle summary -t dev
+databricks bundle summary -t client
 databricks apps get mip-app -o json | jq '{state, active_deployment}'
 curl -fsS "$MIP_APP_URL/api/v1/health" | jq
 curl -fsS "$MIP_APP_URL/api/v1/config/options" \
@@ -212,7 +219,7 @@ Recovery:
 
 # Copy the returned space id into .env.local or BUNDLE_VAR_genie_space_id,
 # then rebind app resources.
-CI=1 ./scripts/deploy.sh -t dev --no-confirm
+CI=1 ./scripts/deploy.sh -t client --no-confirm
 ```
 
 Validate with a safe prompt:
@@ -259,7 +266,7 @@ a deploy never rotates a key and no workflow carries a key value):
 2. Redeploy, so the App binds the new current key:
 
    ```bash
-   CI=1 ./scripts/deploy.sh -t dev --no-confirm
+   CI=1 ./scripts/deploy.sh -t client --no-confirm
    ```
 
    The deploy keeps both keys unread. Because
@@ -354,7 +361,7 @@ production customer target has a failover posture by default.
 Validate before customer go-live:
 
 ```bash
-.venv/bin/python tools/databricks/bundle_env.py validate -t prod
+.venv/bin/python tools/databricks/bundle_env.py validate -t client
 ```
 
 ## Incident Closeout

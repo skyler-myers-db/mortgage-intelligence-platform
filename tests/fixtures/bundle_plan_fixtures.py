@@ -35,8 +35,10 @@ from databricks.sdk.errors import NotFound
 REPO = Path(__file__).resolve().parents[2]
 CLI_VERSION = "1.10.0"
 LINEAGE = "00000000-0000-4000-8000-000000000000"
+# The client target's root (M1-PR2): the deployer's home, then the client key
+# as the leaf (the paychex-shaped profile's codename).
 DEPLOYER_ROOT = (
-    "/Workspace/Users/deployer@example.invalid/.bundle/mortgage-intelligence-platform/dev"
+    "/Workspace/Users/deployer@example.invalid/.bundle/mortgage-intelligence-platform/client-one"
 )
 APP_KEY = "mip_app"
 # Every (service, method) a lookup may call; all are GETs or lists. The

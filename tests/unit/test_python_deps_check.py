@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 from packaging.markers import default_environment
 
+from tests.fixtures.client_profiles import env_file_text, paychex_shaped_profile
 from tests.fixtures.deploy_script import (
     DEPLOY_SCRIPT,
     DEPLOY_SOURCED_SCRIPTS,
@@ -434,14 +435,18 @@ def test_a_real_deploy_with_a_drifted_override_stops_at_step_0_before_any_worksp
         shutil.copy2(source, repo / "scripts" / "lib" / source.name)
     (repo / "tools").mkdir()
     shutil.copy2(TOOL, repo / "tools" / "python_deps_check.py")
+    # The client profile resolves before the pin check (M1-PR2): carry its
+    # resolver and a synthetic profile, so the run reaches the check.
+    shutil.copytree(ROOT / "tools" / "clients", repo / "tools" / "clients", ignore=shutil.ignore_patterns("__pycache__"))
+    (repo / "tools" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "backend" / "schemas").mkdir(parents=True)
+    for module in ("__init__.py", "schemas/__init__.py", "schemas/lender_identity.py"):
+        shutil.copy2(ROOT / "backend" / module, repo / "backend" / module)
     _repo(tmp_path, requirements_in="pytest\n", lock={"pytest": "0.0.1"})
-    (repo / "databricks.yml").write_text(
-        "workspace:\n  host: https://reviewed-workspace.example\ntargets:\n  dev: {}\n",
-        encoding="utf-8",
-    )
-    (repo / ".gitignore").write_text(".env.local\n", encoding="utf-8")
+    (repo / "databricks.yml").write_text("targets:\n  client: {}\n", encoding="utf-8")
+    (repo / ".gitignore").write_text(".env.local\n__pycache__/\n", encoding="utf-8")
     (repo / ".env.local").write_text(
-        "DATABRICKS_HOST=https://reviewed-workspace.example\nDATABRICKS_TOKEN=reviewed-pat\n",
+        env_file_text({**paychex_shaped_profile(), "DATABRICKS_TOKEN": "reviewed-pat"}),
         encoding="utf-8",
     )
     git = ["git", "-c", "user.name=Deploy Test", "-c", "user.email=deploy-test@example.com"]
@@ -468,7 +473,7 @@ def test_a_real_deploy_with_a_drifted_override_stops_at_step_0_before_any_worksp
     )
 
     result = subprocess.run(
-        ["bash", "scripts/deploy.sh", "-t", "dev", "--no-confirm"],
+        ["bash", "scripts/deploy.sh", "-t", "client", "--no-confirm"],
         cwd=repo,
         env=env,
         text=True,

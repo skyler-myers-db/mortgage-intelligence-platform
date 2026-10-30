@@ -13,9 +13,14 @@ step "preflight — check .env.local, databricks CLI, venv"
 
 if [[ ! -f .env.local ]]; then
   echo "${RED}[deploy] .env.local missing.${RST}" >&2
-  echo "  copy .env.example to .env.local, then fill in DATABRICKS_HOST + DATABRICKS_WAREHOUSE_ID." >&2
+  echo "  copy .env.example to .env.local, fill in the client profile (deploy/clients/example.env) and DATABRICKS_WAREHOUSE_ID." >&2
   exit 2
 fi
+
+# The client profile first (M1-PR2), before any other gate or call: a refused
+# profile exits 2 (scripts/lib/deploy_identity_lifecycle.sh). The auth bind
+# then requires the deployer's host to be the profile's.
+resolve_client_profile
 
 bind_deployment_workspace_auth
 
@@ -28,7 +33,7 @@ fi
 DB_VERSION="$(databricks --version 2>&1 || echo 'unknown')"
 echo "  databricks: ${DB_VERSION}"
 echo "  python:     ${PYTHON}"
-echo "  target:     ${TARGET}"
+echo "  target:     ${TARGET} (client ${CLIENT_KEY}, ${CLIENT_INSTALL_CLASS} install)"
 echo "  dry-run:    ${DRY_RUN}"
 
 # >>> deploy interpreter pins: check >>>
@@ -127,6 +132,20 @@ if [[ "$DRY_RUN" -eq 0 && "$APP_RUNTIME_CLOSURE_STATE" != "current" ]]; then
 fi
 # <<< app runtime closure: check <<<
 
+# >>> client live checks >>>
+# The first Databricks call of the run, once the interpreter, the requirements
+# digest and the App closure are proven: read-only, the deployer client's host,
+# the workspace id, the current metastore and the authenticated principal must
+# be the client profile's (tools/clients/live_checks.py: two SCIM Me GETs and
+# the current metastore assignment). A mismatch exits 2 here, naming the
+# check, never a value. A dry run prints the command and makes no call.
+echo "${DIM}\$ $PYTHON -m tools.clients.live_checks${RST}"
+if [[ "$DRY_RUN" -eq 0 ]] && ! "$PYTHON" -m tools.clients.live_checks; then
+  echo "${RED}[deploy] the client live checks refused this workspace or principal; nothing was changed.${RST}" >&2
+  exit 2
+fi
+# <<< client live checks <<<
+
 if [[ "$DRY_RUN" -eq 0 ]]; then
   # Unity Catalog model registration validates the uploaded artifact through
   # the metastore's cloud storage before the version becomes ready. Fail before
@@ -189,14 +208,22 @@ fi
 
 # >>> scheduled-refresh (data-freshness design 2026-10-26)
 # mip_scheduled_refresh's pause status is decided here, never in a bundle
-# target: the variable defaults to PAUSED. Only the dev target's LIVE install
-# unpauses, by default; MIP_SCHEDULED_REFRESH=off opts it out. prod is always
-# PAUSED: a prod cadence is a customer decision that needs a reviewed change
-# here, so an explicit `on` for prod is refused rather than ignored. Pure, so
+# target: the variable defaults to PAUSED. Only a demo install (the client
+# profile's MIP_INSTALL_CLASS, as the dev target's live install was before
+# M1-PR2) unpauses, by default; MIP_SCHEDULED_REFRESH=off opts it out. A
+# customer install is always PAUSED: its cadence is a customer decision that
+# needs a reviewed change here, so an explicit `on` there is refused rather
+# than ignored. The schedule mails its failures to the deploying user, which
+# the live checks pin to the profile's deployer: a deployer that is not an
+# email (every service-principal deployer, which a -t client install always
+# has) gets `on` refused here, before any apply could write an UNPAUSED
+# schedule that the step-9c postflight would only refuse afterwards. Pure, so
 # it also runs in DRY_RUN. A Jobs-UI unpause is reverted by the next deploy,
-# and any apply outside this script re-pauses the live schedule; this switch is
-# the durable one (docs/runbook.md "Weekly scheduled refresh").
-if [[ "$TARGET" == "dev" ]]; then
+# and any apply outside this script re-pauses the live schedule; this switch
+# is the durable one (docs/runbook.md "Weekly scheduled refresh"). M1-PR3
+# derives this from the profile's refresh fields and mails
+# MIP_SCHEDULED_REFRESH_RECIPIENTS instead.
+if [[ "$CLIENT_INSTALL_CLASS" == "demo" ]]; then
   _SCHEDULED_REFRESH="$(deployment_control_value MIP_SCHEDULED_REFRESH on)"
 else
   _SCHEDULED_REFRESH="$(deployment_control_value MIP_SCHEDULED_REFRESH off)"
@@ -208,11 +235,16 @@ case "$_SCHEDULED_REFRESH" in
     exit 2
     ;;
 esac
-if [[ "$TARGET" != "dev" && "$_SCHEDULED_REFRESH" == "on" ]]; then
-  echo "${RED}[deploy] MIP_SCHEDULED_REFRESH=on is honoured only for the dev target's live install; ${TARGET} keeps mip_scheduled_refresh PAUSED.${RST}" >&2
+if [[ "$CLIENT_INSTALL_CLASS" != "demo" && "$_SCHEDULED_REFRESH" == "on" ]]; then
+  echo "${RED}[deploy] MIP_SCHEDULED_REFRESH=on is honoured only for a demo install; a ${CLIENT_INSTALL_CLASS} install keeps mip_scheduled_refresh PAUSED.${RST}" >&2
   exit 2
 fi
-if [[ "$TARGET" == "dev" && "$_SCHEDULED_REFRESH" == "on" ]]; then
+if [[ "$CLIENT_INSTALL_CLASS" == "demo" && "$_SCHEDULED_REFRESH" == "on" && \
+      "$CLIENT_DEPLOYER" != *@* ]]; then
+  echo "${RED}[deploy] MIP_SCHEDULED_REFRESH=on mails mip_scheduled_refresh's failures to the deploying user, and this install deploys as its deployer service principal, whose user name is an application id, not an email. Set MIP_SCHEDULED_REFRESH=off until M1-PR3 mails MIP_SCHEDULED_REFRESH_RECIPIENTS instead.${RST}" >&2
+  exit 2
+fi
+if [[ "$CLIENT_INSTALL_CLASS" == "demo" && "$_SCHEDULED_REFRESH" == "on" ]]; then
   BUNDLE_VAR_scheduled_refresh_pause_status=UNPAUSED
 else
   BUNDLE_VAR_scheduled_refresh_pause_status=PAUSED
@@ -325,7 +357,7 @@ fi
 export MIP_LENDER_MARK_FILE MIP_DEFAULT_THEME MIP_DEFAULT_ACCENT MIP_LENDER_MARK_SHA256
 # Demo-only presenter mode (D-shell-deviations-e1; W5b NB-3) and the consented
 # Genie refusal-text capture switch (D-audit-reads-d) are parsed here, before
-# any workspace mutation: a truthy presenter value for prod, or a typo in
+# any workspace mutation: a truthy presenter value for a customer install, or a typo in
 # either, stops at step 0 instead of at App promotion. The presenter
 # vocabulary is the payload's _PRESENTER_MODE_ON/_OFF (the two are pinned
 # equal); tr, not ${var,,}, so bash 3.2 parses it. The payload keeps its own
@@ -335,8 +367,8 @@ _MIP_PRESENTER_MODE="$(deployment_control_value MIP_PRESENTER_MODE \
 case "$_MIP_PRESENTER_MODE" in
   ''|0|false|no|off) ;;
   1|true|yes|on)
-    if [[ "$TARGET" == "prod" ]]; then
-      echo "${RED}[deploy] MIP_PRESENTER_MODE is demo-only and refused for target prod.${RST}" >&2
+    if [[ "$CLIENT_INSTALL_CLASS" == "customer" ]]; then
+      echo "${RED}[deploy] MIP_PRESENTER_MODE is demo-only and refused for a customer install.${RST}" >&2
       exit 2
     fi
     ;;
@@ -632,10 +664,12 @@ fi
 
 APP_RUNTIME_ENV="${APP_ENV:-}"
 if [[ -z "$APP_RUNTIME_ENV" ]]; then
-  if [[ "$TARGET" == "dev" ]]; then
+  # The retired dev target's sandbox for a demo install, prod's for a
+  # customer one (M1-PR3 takes it from the profile's MIP_APP_ENV).
+  if [[ "$CLIENT_INSTALL_CLASS" == "demo" ]]; then
     APP_RUNTIME_ENV="sandbox"
   else
-    APP_RUNTIME_ENV="$TARGET"
+    APP_RUNTIME_ENV="prod"
   fi
 fi
 APP_GIT_SHA="$SOURCE_GIT_SHA"

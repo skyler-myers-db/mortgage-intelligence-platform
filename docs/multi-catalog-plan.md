@@ -9,8 +9,8 @@ remain the review-of-record.
 
 ## Problem
 
-CLAUDE.md mandates a zero-click deploy through `./scripts/deploy.sh -t dev`
-(or `make deploy-dev`): the command of record must provision, populate,
+CLAUDE.md mandates a zero-click deploy through `./scripts/deploy.sh -t client`
+(run in CI): the command of record must provision, populate,
 promote, and smoke-check every resource the app needs, with no manual UI steps
 and no out-of-band preprocessing. That promise was violated for any customer
 whose UC catalog is not named `mip`.
@@ -134,9 +134,9 @@ diff sql/transformations/gold_borrower_360.sql \
      sql/_rendered/transformations/gold_borrower_360.sql | head
 # shows CREATE OR REPLACE TABLE summit_mortgage.gold.borrower_360 AS ...
 
-# Bundle validate passes against the rendered tree.
-databricks bundle validate -t ci
-# Validation OK!
+# Bundle validate passes against the rendered tree (the filled client
+# profile in .env.local and that workspace's CLI auth).
+python tools/databricks/bundle_env.py validate -t client
 ```
 
 ## Out of scope
