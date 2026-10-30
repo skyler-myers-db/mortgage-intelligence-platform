@@ -238,6 +238,8 @@ def render_schema_inputs(
     lender_name: str,
     lender_nmls_id: str,
     tenant_id: str,
+    lender_identity_json: str = "",
+    lender_identity_sha256: str = "",
 ) -> tuple[str, tuple[str, str, str, str]]:
     """Return schema.sql and the four texts apply executes, read-only.
 
@@ -252,6 +254,8 @@ def render_schema_inputs(
         lender_name=lender_name,
         lender_nmls_id=lender_nmls_id,
         tenant_id=tenant_id,
+        lender_identity_json=lender_identity_json,
+        lender_identity_sha256=lender_identity_sha256,
     )
     pre_seed_schema_sql, post_seed_schema_sql = _split_schema_sql(schema_sql)
     return schema_sql, (

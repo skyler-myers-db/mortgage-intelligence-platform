@@ -5,9 +5,13 @@ from __future__ import annotations
 import hashlib
 import re
 
-from backend.schemas.lender_identity import (
-    effective_public_tenant_id,
-    validate_public_lender_identity,
+from backend.schemas.lender_identity_record import (
+    LENDER_IDENTITY_JSON_ENV,
+    LENDER_IDENTITY_SHA256_ENV,
+    LENDER_NAME_ENV,
+    LENDER_NMLS_ENV,
+    TENANT_ID_ENV,
+    reviewed_lender_identity_from_env,
 )
 
 _ACTIVE_REQUIRES_READY_CONSTRAINT = "campaigns_active_requires_ready_treatment_chk"
@@ -57,11 +61,25 @@ def _tenant_disclosure_seed_sql(
     lender_name: object,
     lender_nmls_id: object,
     tenant_id: object,
+    lender_identity_json: object = "",
+    lender_identity_sha256: object = "",
 ) -> str:
-    """Render idempotent reviewed generic disclosures for this deployment."""
+    """Render idempotent reviewed generic disclosures for this deployment.
 
-    lender, nmls_id = validate_public_lender_identity(lender_name, lender_nmls_id)
-    tenant = effective_public_tenant_id(tenant_id, lender_name=lender)
+    The identity is the code registry's, or a digest-pinned customer record
+    re-verified here (backend/schemas/lender_identity_record.py).
+    """
+
+    identity = reviewed_lender_identity_from_env(
+        {
+            LENDER_NAME_ENV: lender_name,
+            LENDER_NMLS_ENV: lender_nmls_id,
+            TENANT_ID_ENV: tenant_id,
+            LENDER_IDENTITY_JSON_ENV: lender_identity_json,
+            LENDER_IDENTITY_SHA256_ENV: lender_identity_sha256,
+        }
+    )
+    lender, nmls_id, tenant = identity.lender_name, identity.nmls_id, identity.tenant_id
     identity_digest = hashlib.sha256(f"generic-v1\0{lender}\0{nmls_id}".encode()).hexdigest()[:16]
     version = f"{tenant}-reviewed-generic-v1-{identity_digest}"
     rows = (

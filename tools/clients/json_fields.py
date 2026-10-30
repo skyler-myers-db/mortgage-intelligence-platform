@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, StrictInt, field_validator, model_validator
 
 from backend.schemas.lender_identity import (
     validate_public_lender_name,
@@ -36,11 +36,45 @@ from tools.clients.shapes import (
 )
 
 _TENANT_ID = re.compile(r"[a-z][a-z0-9_]{0,63}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+_CALENDAR_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+_MARK_MEDIA_TYPES = frozenset({"image/png", "image/webp"})
+_MAX_SERVICER_ALIASES = 32
 _SINGLE_LINE = re.compile(r"[^\n\r\0]{1,500}")
 
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+
+class LenderMark(StrictModel):
+    """A customer lender's reviewed co-branding mark: its facts, never the image.
+
+    backend/schemas/lender_branding.py's rules (reviewed_mark_problems) hold
+    the rest, through tools/clients/rules.py.
+    """
+
+    sha256: str
+    media_type: str
+    width: StrictInt
+    height: StrictInt
+    authorization_ref: str
+    reviewed_on: str
+
+    @field_validator("sha256")
+    @classmethod
+    def _sha256(cls, value: str) -> str:
+        return require(value, _SHA256, expected="64 lowercase hex characters")
+
+    @field_validator("media_type")
+    @classmethod
+    def _media_type(cls, value: str) -> str:
+        return _one_of(value, _MARK_MEDIA_TYPES, expected="image/png or image/webp")
+
+    @field_validator("reviewed_on")
+    @classmethod
+    def _reviewed_on(cls, value: str) -> str:
+        return require(value, _CALENDAR_DATE, expected="an ISO-8601 calendar date")
 
 
 def _one_of(value: str, allowed: frozenset[str], *, expected: str) -> str:
@@ -156,7 +190,12 @@ class IdentityPins(StrictModel):
 
 
 class LenderIdentity(StrictModel):
-    """A customer install's reviewed lender identity (customer class only)."""
+    """A customer install's reviewed lender identity (customer class only).
+
+    ``MIP_LENDER_IDENTITY_SHA256`` pins this record's canonical JSON
+    (backend/schemas/lender_identity_record.py), which re-checks it with the
+    backend's own rules.
+    """
 
     version: Literal[1]
     legal_name: str
@@ -165,6 +204,7 @@ class LenderIdentity(StrictModel):
     servicer_aliases: tuple[str, ...] = ()
     reviewed_by: str
     reviewed_at: str
+    mark: LenderMark | None = None
 
     @field_validator("legal_name")
     @classmethod
@@ -184,6 +224,10 @@ class LenderIdentity(StrictModel):
     @field_validator("servicer_aliases")
     @classmethod
     def _aliases(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        # At least one: the tenant's own servicer rows drive current-customer
+        # detection, and with none gold falls back to the demo tenant's name.
+        if not 1 <= len(values) <= _MAX_SERVICER_ALIASES:
+            raise ValueError(f"must list 1-{_MAX_SERVICER_ALIASES} servicer names")
         for value in values:
             require(value, TITLE, expected="servicer names of at most 100 characters")
         return values

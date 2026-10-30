@@ -790,10 +790,11 @@ and the lock lacks. Recompile with the command above, restamp and redeploy.
 
 1. Fill `.env.local` with workspace, warehouse, lender/runtime values, and the
    deployment-owned resource namespace (or set the corresponding GitHub
-   Actions variables). The exact lender-name/NMLS pair must already exist in
-   the source-controlled reviewed identity registry in
-   `backend/schemas/lender_identity.py`; customer onboarding adds that pair in
-   an independently reviewed PR before these deployment variables are set:
+   Actions variables). A customer lender is a digest-pinned record
+   (`MIP_LENDER_IDENTITY_JSON` + `MIP_LENDER_IDENTITY_SHA256`, see
+   [Customer lender identity](#customer-lender-identity-a-digest-pinned-record));
+   a bare name/NMLS pair is accepted only for the source-controlled demo pair
+   in `backend/schemas/lender_identity.py`:
 
 ```bash
 MIP_LENDER_NAME="<exact reviewed customer legal lender name>"
@@ -2159,6 +2160,107 @@ exits 2 there instead of at App promotion.
 Admin capability panel (`backend/services/capabilities.py`), and it is not
 carried by the deploy payload, so deployed Apps run with it off.
 
+## Customer lender identity: a digest-pinned record
+
+The source-controlled registry in `backend/schemas/lender_identity.py` holds
+only the Summit Mortgage demo pair. A customer lender onboards without a code
+change, as one record and its pin (`backend/schemas/lender_identity_record.py`):
+
+| Name | Class | Value |
+| --- | --- | --- |
+| `MIP_LENDER_IDENTITY_JSON` | identifying (GitHub Environment secret, or `.env.local`) | `{"version":1,"legal_name":…,"nmls_id":…,"tenant_id":…,"servicer_aliases":[…],"reviewed_by":…,"reviewed_at":…}`, plus an optional `"mark"` (below). |
+| `MIP_LENDER_IDENTITY_SHA256` | public (GitHub Environment variable) | The sha256 of the record's canonical JSON: the normalized record with sorted keys and no whitespace. |
+
+The record passes the code registry's own validators (organization-shaped
+legal name, 4-12 digit NMLS id, lowercase tenant id, the 160-character SMS
+disclosure budget), lists 1-32 distinct servicer aliases (the raw Cotality
+servicer strings that name the tenant itself), and is never any part of the
+Summit demo identity. Print the record's pin (read-only) with:
+
+```bash
+MIP_LENDER_IDENTITY_JSON='<the record>' python -m backend.schemas.lender_identity_record
+```
+
+**What the pin is, and is not.** The pin is an exact-digest acknowledgement,
+the review mode `single_maintainer_audited` uses in place of the deferred
+owner attestation: the deploying maintainer reviews the record, prints its
+digest and sets that digest beside it, and every reader recomputes it before
+it acts. Any change to the record after that, one character included, is
+refused everywhere, the deploy, the App and the Lakebase migration can never
+serve two different records, and every verified App boot writes a
+`LENDER_IDENTITY_VERIFIED` audit row naming the digest. The pin is not an
+independent approval: it travels in the same configuration as the record, so
+whoever can set a deploy's configuration can acknowledge a record, and no
+workflow carries it through a GitHub Environment approval yet
+(`deploy-dev.yml` is parked until a client environment is selected, M1-PR7).
+A trust anchor outside that configuration is the owner attestation, deferred
+with the rest of plan M1-PR5.
+
+**Where it is verified.** Every lender call site resolves through
+`reviewed_lender_identity_from_env()`:
+
+- `scripts/deploy.sh` preflight, before any workspace mutation; it prints only
+  the first 12 characters of the pin, never the record.
+- The App payload build (`tools/databricks/app_deploy_payload.py`) exits 2 on
+  an unverifiable record, and adds `MIP_LENDER_IDENTITY_JSON` and
+  `MIP_LENDER_IDENTITY_SHA256` to the payload only for a verified one. With no
+  record, the payload's env-name set is unchanged.
+- `tools/databricks/bundle_env.py`, the SQL render, the Lakebase migration
+  job (bundle variables `lender_identity_json` / `lender_identity_sha256`, empty
+  by default) and the lender-mark tool.
+- App startup: `backend/runtime.py` refuses the boot, with one line that names
+  no value, before settings load. A verified boot writes exactly one
+  `LENDER_IDENTITY_VERIFIED` audit row carrying only the digest. If that write
+  fails, the App keeps serving and logs one `lender_identity_audit_write_failed`
+  ERROR (outcome `degraded`); the write is not retried, because a retry after
+  an ambiguous commit could record the same boot twice.
+
+`MIP_LENDER_NAME`, `MIP_LENDER_NMLS_ID` and `MIP_TENANT_ID` are optional beside
+a record and, when set, must equal it.
+
+**Tenant aliases.** The SQL render adds one `is_competitor = FALSE` row per
+alias to the lender dictionary seed, display name the record's legal name,
+and drops a competitor row whose raw key the record claims. The seed `MERGE`
+never deletes, so each demo tenant row (`SUMMIT MTG` and its variants) the
+record does not claim is retired instead: it stays in the seed as an
+`is_competitor = TRUE` row displayed as `Competitor Other`, and the `MERGE`'s
+update turns the demo row an existing `ref.lender_dictionary` holds into a
+competitor. Gold then counts none of those loans as the tenant's and names
+the record's legal name as the tenant. The App's in-process lender fallback
+mirrors the same rows.
+
+**Demo and legacy installs** set neither name and behave exactly as before.
+
+The record and its pin travel like every other deployment control: in the
+shell or in `.env.local`, a non-blank shell value winning, at every reader
+(the deploy preflight, `bundle_env.py`, the App payload build, settings and
+`backend/runtime.py`). A blank value is one Python's `str.strip()` empties: a
+whitespace-only shell value is unset, and `.env.local`'s is read instead. (The
+preflight's other controls, read through `deployment_control_value`, let any
+non-empty shell value win.) A local App reads them from the same `.env` /
+`.env.local` files as its settings.
+
+Under `./scripts/deploy.sh -t client` both are fields of the client profile
+(`deploy/clients/example.env`), which resolves, from the same sources in the
+same order, before any other step: a customer install's profile requires the
+record and refuses it without its pin or with a pin that is not its digest,
+and a demo install's profile refuses either name. `bundle_env.py -t client`
+resolves the profile the same way; `-t ci` validates with the environment's
+values alone.
+
+`.env.example` cannot be read or edited from an agent session, so the owner
+adds these lines to its "Direct os.environ reads" section and, in the same
+change, moves both names from `DIRECT_ENV_READS_PENDING_TEMPLATE` to
+`DIRECT_ENV_READS` in `tests/unit/test_settings_contract.py`;
+`test_pending_direct_reads_stay_tracked_until_the_template_documents_them`
+fails once the template has them and the move is not made:
+
+```bash
+# optional customer installs: the lender record (identifying) and the sha256 of its canonical JSON the deploying maintainer acknowledged (public); docs/deployment.md "Customer lender identity"
+MIP_LENDER_IDENTITY_JSON=
+MIP_LENDER_IDENTITY_SHA256=
+```
+
 ## Lender co-branding (optional)
 
 A deployment may draw its lender's reviewed mark beside the tenant name (the
@@ -2177,10 +2279,13 @@ Values equal to the defaults emit nothing, so a deployment that sets none of
 them renders exactly as before. A user's own Console choice always wins over
 a tenant default.
 
-The mark is accepted only when it matches a source-controlled entry in
-`backend/schemas/lender_branding.py` that is bound to the reviewed lender
-name and NMLS id in `backend/schemas/lender_identity.py`: same sha256, media
-type and pixel size, PNG or WebP without metadata, colour profile or
+The mark is accepted only when it matches a reviewed entry: for the
+code-registry identity, a source-controlled entry in
+`backend/schemas/lender_branding.py` bound to the reviewed lender name and
+NMLS id in `backend/schemas/lender_identity.py`; for a digest-pinned customer
+record, the record's own `"mark"` object (`sha256`, `media_type`, `width`,
+`height`, `authorization_ref`, `reviewed_on`), checked by the same rules. In
+both cases: same sha256, media type and pixel size, PNG or WebP without metadata, colour profile or
 animation, at most 64 KiB, 32-512 px tall and 1-2 times as wide as tall.
 Preflight checks it before any workspace mutation and stops the deploy on any
 mismatch; the log shows only the first 12 characters of its sha256, never the
