@@ -81,6 +81,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from backend.config import source_names  # noqa: E402
+from backend.config.source_names import CotalitySource  # noqa: E402
+from tools import render_sql  # noqa: E402
 from tools.databricks.workspace_auth import (  # noqa: E402
     APP_FACING_WORKSPACE_AUTH_ENV,
     deployment_workspace_client,
@@ -116,8 +119,13 @@ def _load_env_local() -> None:
             # A stale .env.local MIP_DEFAULT_CATALOG can update the live Genie
             # space with zero bound tables; scripts/deploy.sh exports the
             # intended catalog before invoking this tool. Standalone operators
-            # should use --catalog or an explicit exported env var.
-            if key in {"MIP_DEFAULT_CATALOG", "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS"}:
+            # should use --catalog or an explicit exported env var. The
+            # Cotality source names are deployment controls in the same way.
+            if key in {
+                "MIP_DEFAULT_CATALOG",
+                "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS",
+                *source_names.ENV_NAMES,
+            }:
                 continue
             if key in APP_FACING_WORKSPACE_AUTH_ENV:
                 continue
@@ -179,7 +187,23 @@ def _catalog_name() -> str:
     return (os.environ.get("MIP_DEFAULT_CATALOG") or DEFAULT_CATALOG).strip() or DEFAULT_CATALOG
 
 
-def _render_space_templates(value: Any, *, tenant_name: str, catalog_name: str) -> Any:
+def _cotality_source() -> CotalitySource:
+    return source_names.from_env(os.environ)
+
+
+def _render_space_templates(
+    value: Any,
+    *,
+    tenant_name: str,
+    catalog_name: str,
+    cotality: CotalitySource = source_names.CANONICAL,
+) -> Any:
+    """Render tenant, install catalog and Cotality source into every string.
+
+    The Cotality source goes through tools/render_sql.py's closed-shape rewrite
+    last, so the install-catalog rules never run over the source names, and a
+    non-canonical source refuses a string that still carries a canonical token.
+    """
     if isinstance(value, str):
         rendered = value.replace("{tenant_name}", tenant_name).replace("{catalog}", catalog_name)
         if catalog_name != DEFAULT_CATALOG:
@@ -194,15 +218,19 @@ def _render_space_templates(value: Any, *, tenant_name: str, catalog_name: str) 
                 catalog_name,
                 rendered,
             )
-        return rendered
+        return render_sql.render_cotality_source(rendered, cotality, where="Genie space spec")[0]
     if isinstance(value, list):
         return [
-            _render_space_templates(item, tenant_name=tenant_name, catalog_name=catalog_name)
+            _render_space_templates(
+                item, tenant_name=tenant_name, catalog_name=catalog_name, cotality=cotality
+            )
             for item in value
         ]
     if isinstance(value, dict):
         return {
-            key: _render_space_templates(item, tenant_name=tenant_name, catalog_name=catalog_name)
+            key: _render_space_templates(
+                item, tenant_name=tenant_name, catalog_name=catalog_name, cotality=cotality
+            )
             for key, item in value.items()
         }
     return value
@@ -246,6 +274,7 @@ class SpaceSpec:
             raw,
             tenant_name=_tenant_name(),
             catalog_name=_catalog_name(),
+            cotality=_cotality_source(),
         )
         return cls(
             name=str(raw.get("name", DEFAULT_SPACE_NAME)).strip(),
