@@ -203,6 +203,18 @@ PYEOF
     --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
     --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
     --supervisor-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}"
+  # >>> pii-salt pre-stop check >>>
+  # Step 4d writes the write-once pii-salt only after an authoritative "listed,
+  # key absent". Run the same inventory read-only here, before the lease and
+  # the App stop: a scope or key listing the deployer cannot complete refuses
+  # now, while the App still serves. The tool names scopes and keys only.
+  if ! "$PYTHON" -m tools.databricks.pii_salt_scope check \
+      --scope "$MIP_PII_SALT_SCOPE" \
+      --require-existing "$PII_SALT_REQUIRE_EXISTING"; then
+    echo "${RED}[deploy] the pii-salt check was refused before the lease and the App stop (see above).${RST}" >&2
+    exit 2
+  fi
+  # <<< pii-salt pre-stop check <<<
   # The signed lease is the first persistent workspace mutation. A contender
   # must lose here before it can revoke stale grants or alter shared resources.
   APP_LEASE_RECOVERY_ENV="$(mktemp -t mip-app-lease-recovery.XXXXXX.env)"
@@ -403,6 +415,7 @@ else
   echo "  app automation: normal/admin Bearer mint deferred by --dry-run"
   step "pre-stop probes: Supervisor retirement acknowledgement and Genie group grants"
   echo "  would probe read-only: the creator of Supervisor '${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}' (MIP_RETIRE_HUMAN_SUPERVISOR) and Genie group grants"
+  echo "  would check read-only: scope ${MIP_PII_SALT_SCOPE} and write-once pii-salt-v1"
   step "prove or create the deterministic owned App rollback secret scope"
   echo "  would prove/create: scope ${APP_ROLLBACK_SECRET_SCOPE}"
 fi

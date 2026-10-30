@@ -991,7 +991,6 @@ APP_RESOURCE_BINDING_BEFORE=""
 APP_RESOURCE_BINDING_AFTER=""
 FIRST_INSTALL_JOURNAL_ENV=""
 FIRST_INSTALL_MARKED_PAYLOAD=""
-_PII_SECRET_PAYLOAD=""
 APP_DEPLOYMENT_LEASE_ID=""
 APP_DEPLOYMENT_LEASE_HEARTBEAT_PID=""
 FIRST_INSTALL_APP_CREATED=1
@@ -1937,7 +1936,9 @@ def test_deploy_requires_control_plane_and_runtime_uc_boundary_proofs() -> None:
     assert 'run "$@"' in dual_helper
 
 
-def test_pii_salt_is_generated_in_a_secure_payload_and_never_logged() -> None:
+def test_pii_salt_is_generated_inside_the_write_once_tool_and_never_logged() -> None:
+    # The value is generated and put inside tools/databricks/pii_salt_scope.py
+    # (tests/unit/test_pii_salt_scope.py); the step only names scope and key.
     text = _deploy_entrypoint_text()
     block = text[
         text.index('step "provision pii-salt secret scope') : text.index(
@@ -1945,11 +1946,17 @@ def test_pii_salt_is_generated_in_a_secure_payload_and_never_logged() -> None:
         )
     ]
 
-    assert "secrets.token_hex(32)" in block
-    assert "run_redacted" in block
-    assert "@[secure-temp]" in block
-    assert "--string-value" not in block
-    assert "openssl rand" not in block
+    assert 'run "$PYTHON" -m tools.databricks.pii_salt_scope ensure' in block
+    for retired in (
+        "databricks secrets",
+        "secrets/put",
+        "string_value",
+        "token_hex",
+        "mktemp",
+        "--string-value",
+        "openssl rand",
+    ):
+        assert retired not in block, retired
 
 
 def test_retained_model_audit_is_read_only_and_rotation_action_is_absent() -> None:
@@ -4966,6 +4973,7 @@ def test_first_install_dry_run_executes_no_databricks_operations(
             )
             assert grant_block.count(statement) == 1
     assert "would verify: campaign treatment table append-only" in result.stdout
+    assert "would check read-only: scope mip and write-once pii-salt-v1" in result.stdout
     assert "would inspect/create: scope mip and write-once pii-salt-v1" in result.stdout
     assert "deploy Databricks App snapshot with Agent Evaluation proof" in result.stdout
 
