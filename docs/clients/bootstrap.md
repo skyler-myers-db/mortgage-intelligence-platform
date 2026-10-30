@@ -7,10 +7,11 @@ and apply loop: nothing changes until you hand it the exact digest of a plan
 you have read.
 
 > **Status.** The tool is built and tested against fake account and
-> workspace clients only. A real `--apply` that would create, adopt or mint
-> anything stops before its first mutation until the GitHub-environment
-> credential sink lands (M2-PR2): the default sink refuses. `--plan` and
-> `--verify` are read-only and work today.
+> workspace clients, and a fake `gh`, only. A mutating action needs
+> `--sink github-environment`, the GitHub-environment credential sink
+> (M2-PR2); without it (`--sink none`, the default) a run that would create,
+> adopt or mint stops before its first mutation. `--plan` and `--verify` are
+> read-only.
 
 ## What it creates or adopts
 
@@ -46,6 +47,32 @@ by application id. An identity it pins is the bootstrap's own.
 
 After each create or adopt, the bootstrap hands the grown pin map to the
 credential sink.
+
+## The credential sink: `--sink github-environment`
+
+Pins and minted secrets go to the client's GitHub Environment `<client>`
+and nowhere else (`tools/clients/github_sink.py`):
+
+- `MIP_IDENTITY_IDS_JSON`, the whole pin map, after each create or adopt;
+- each minted secret, under its profile field, during `--rotate-adopted`.
+  The agent proxy's field gets the canonical bundle; only the fields the
+  roster mints into are accepted, so a runtime secret or any other name is
+  refused.
+
+The sink logs in to `gh` fresh, in a throwaway directory, on its first use
+(the same session as [github-environment.md](github-environment.md)). Before
+the first account mutation it refuses unless `<client>` exists with exactly
+the protections its `MIP_REVIEW_MODE` variable names, for you as the
+signed-in maintainer, and a branch policy of exactly `{main}`. Create it
+first with `python -m tools.clients.github_environment --apply`.
+
+A secret is confirmed only when the environment lists it with an
+`updatedAt` other than the one it had just before this run wrote it.
+
+The sink never prints a pin or a secret. GitHub cannot read a secret back,
+so keep `MIP_IDENTITY_IDS_JSON` in your local file too: the next bootstrap
+run reads its pins from there (the account console shows each identity's
+application id).
 
 ## Inputs
 
@@ -85,7 +112,8 @@ when the run ends.
 python -m tools.clients.bootstrap_account --plan
 
 # 2. Review the steps, then apply exactly that plan.
-python -m tools.clients.bootstrap_account --apply --ack-plan <sha256 from step 1>
+python -m tools.clients.bootstrap_account --apply --sink github-environment \
+    --ack-plan <sha256 from step 1>
 
 # 3. Re-check read-only at any time (exit 1 on drift, 2 on a refusal).
 python -m tools.clients.bootstrap_account --verify
@@ -108,7 +136,8 @@ digest.
 
 ```bash
 python -m tools.clients.bootstrap_account --plan --for rotate-adopted
-python -m tools.clients.bootstrap_account --rotate-adopted --ack-plan <sha256>
+python -m tools.clients.bootstrap_account --rotate-adopted --sink github-environment \
+    --ack-plan <sha256>
 ```
 
 Every identity that holds a secret must already be pinned. That means the
@@ -159,6 +188,7 @@ Principal Manager on it:
 ```bash
 python -m tools.clients.bootstrap_account --plan --for post-first-install
 python -m tools.clients.bootstrap_account --post-first-install --ack-plan <sha256>
+# (--post-first-install writes nothing to a sink.)
 ```
 
 ## What the plan prints
@@ -221,8 +251,9 @@ shows the group id).
 - **Owner hardware-key `mint` attestation (plan §4.2): deferred.** The
   review mode is `single_maintainer_audited`. Its stand-in is the exact
   plan-digest ack plus the human-presence checks above.
-- **GitHub-environment sink (M2-PR2): pending.** Until it lands, `--apply`
-  refuses any create, adopt or mint, and `--rotate-adopted` refuses outright.
+- **GitHub-environment sink (M2-PR2): built.** Select it with `--sink
+  github-environment`; the default `--sink none` still refuses any create,
+  adopt or mint.
 - **`CREATE_CATALOG` on the metastore** for the deployer is not granted
   here. The first install needs it; it is a metastore-wide grant and stays
   an owner step.

@@ -422,7 +422,7 @@ def test_the_default_sink_refuses_before_the_first_mutation(estate: FakeEstate, 
 
     planned = run_tool(estate, "--plan", env_file=env)
     result = run_tool(estate, "--apply", "--ack-plan", planned.digest, env_file=env, deps_sink=UnconfiguredSink())
-    assert result.code == 2 and "credential sink: none is configured" in result.err
+    assert result.code == 2 and "credential sink: none is selected; pass --sink github-environment" in result.err
     assert estate.mutations() == []
 
 

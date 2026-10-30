@@ -234,7 +234,7 @@ def test_the_owner_steps_state_the_reserved_identity_contract() -> None:
         "The only path that mints a usable durable credential, for a new principal or a rotation, is `--set-gh-secrets`",
         "mint 300-second secrets for existing principals and delete them after the probe; none is durable.",
         "`provision_m2m_oauth --pre-app-bootstrap --set-gh-secrets`",
-        "repository-level Actions secrets (`gh secret set --repo`)",
+        "only to one GitHub Environment's secrets (`gh secret set --env`, never repository-level ones; `--gh-env` names the environment)",
         "`MIP_M2M_GITHUB_REPOSITORY`",
         "in this repository they belong to the CI install",
         "It stays out of scope until that design is reviewed.",

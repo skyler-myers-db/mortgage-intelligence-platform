@@ -139,11 +139,19 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--gh-env",
+        default=None,
+        help=(
+            "The client's GitHub Environment whose secrets receive minted OAuth "
+            "values. Required with --set-gh-secrets: repository-level secrets are refused."
+        ),
+    )
+    parser.add_argument(
         "--set-gh-secrets",
         action="store_true",
         help=(
-            "Write role-owned OAuth values to GitHub Actions secrets via the "
-            "`gh` CLI. Requires `gh auth login`."
+            "Write role-owned OAuth values to the --gh-env GitHub Environment's "
+            "secrets via the `gh` CLI, never the repository's. Requires `gh auth login`."
         ),
     )
     parser.add_argument(

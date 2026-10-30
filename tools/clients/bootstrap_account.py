@@ -35,6 +35,12 @@ drift, including an M2M identity without exactly one secret. A second
 * ``--post-first-install`` grants the account principal Service Principal
   Manager on the App's own identity, once the first install created it.
 
+**The credential sink.** ``--sink github-environment`` hands the pin map
+and every minted secret to the client's GitHub Environment
+(tools/clients/github_sink.py), in a fresh gh login; it refuses unless that
+environment is protected as its review mode requires. The default,
+``--sink none``, refuses before the first create, adopt or mint.
+
 **Deferred owner attestation.** The plan's owner hardware-key ``mint``
 attestation is deferred (review mode ``single_maintainer_audited``). Its
 stand-in is the exact plan-digest ack, plus human presence: the mutating
@@ -56,6 +62,7 @@ import os
 import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TextIO
@@ -92,9 +99,11 @@ from tools.clients.credential_sink import (
     account_token_probe,
 )
 from tools.clients.errors import BootstrapRefusal, ProfileRefusal
+from tools.clients.github_sink import SinkFactory, github_environment_sink
 
 REPO = Path(__file__).resolve().parents[2]
 MUTATING = ("apply", "rotate-adopted", "post-first-install")
+SINKS = ("none", "github-environment")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
@@ -114,6 +123,7 @@ class Dependencies:
 
     open_session: SessionFactory = fresh_session
     sink: CredentialSink = field(default_factory=UnconfiguredSink)
+    open_github_sink: SinkFactory = github_environment_sink
     probe_for: Callable[[BootstrapInputs], CredentialProbe] = _default_probe
     environ: Mapping[str, str] = field(default_factory=lambda: os.environ)
     stdin: TextIO = field(default_factory=lambda: sys.stdin)
@@ -136,6 +146,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.set_defaults(action="plan")
     parser.add_argument("--for", dest="plan_for", choices=MUTATING, help="--plan: the action to plan (default apply)")
     parser.add_argument("--ack-plan", help="the sha256 that --plan printed for this action")
+    parser.add_argument(
+        "--sink", choices=SINKS, default="none", help="where pins and minted secrets go (mutating actions)"
+    )
     parser.add_argument("--tier", choices=("core", "agentic"), default="core")
     parser.add_argument("--adopt", action="append", default=[], metavar="ROLE=ID", help="pin an existing identity")
     parser.add_argument("--interim-member", help="an account user's email, added to the data-owners group")
@@ -262,7 +275,9 @@ def _verify(clients: Any, request: BootstrapRequest, out: TextIO) -> int:
     return 0
 
 
-def _mutate(clients: Any, request: BootstrapRequest, action: Action, ack: str, deps: Dependencies) -> int:
+def _mutate(
+    clients: Any, request: BootstrapRequest, action: Action, ack: str, deps: Dependencies, sink: CredentialSink
+) -> int:
     obs, plan = _compute(clients, request, action)
     if not hmac.compare_digest(plan.digest(), ack):
         raise BootstrapRefusal(
@@ -275,7 +290,7 @@ def _mutate(clients: Any, request: BootstrapRequest, action: Action, ack: str, d
     kwargs: dict[str, Any] = {"probe": probe}
     if deps.sleep is not None:
         kwargs["sleep"] = deps.sleep
-    executor = Executor(clients, obs, deps.sink, **kwargs)
+    executor = Executor(clients, obs, sink, **kwargs)
     count = executor.run(plan)
     print(f"bootstrap {action}: {len(plan.steps)} step(s), {count} mutation(s)", file=deps.stdout)
     if action != "apply":
@@ -300,16 +315,23 @@ def _run(args: argparse.Namespace, deps: Dependencies) -> int:
             )
     elif args.ack_plan:
         raise BootstrapRefusal(["--ack-plan: applies to --apply, --rotate-adopted and --post-first-install only"])
+    if args.sink != "none" and action not in MUTATING:
+        raise BootstrapRefusal(["--sink: applies to --apply, --rotate-adopted and --post-first-install only"])
     if args.plan_for is not None and action != "plan":
         raise BootstrapRefusal(["--for: applies to --plan only"])
     request = _request(args, deps)
-    with deps.open_session(request.inputs) as clients:
+    with ExitStack() as stack:
+        sink = deps.sink
+        if args.sink == "github-environment":
+            # The gh login itself waits for the sink's first use (its ready()).
+            sink = stack.enter_context(deps.open_github_sink(request.inputs.client, request.repository))
+        clients = stack.enter_context(deps.open_session(request.inputs))
         if action == "plan":
             _print_plan(_compute(clients, request, args.plan_for or "apply")[1], deps.stdout)
             return 0
         if action == "verify":
             return _verify(clients, request, deps.stdout)
-        return _mutate(clients, request, action, args.ack_plan, deps)
+        return _mutate(clients, request, action, args.ack_plan, deps, sink)
 
 
 def main(argv: Sequence[str] | None = None, deps: Dependencies | None = None) -> int:
