@@ -15,22 +15,30 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
+from dotenv import dotenv_values
 
 from backend.schemas.lender_identity_record import (
     LENDER_IDENTITY_JSON_ENV,
     LENDER_IDENTITY_SHA256_ENV,
+    PINNED_ENV_NAMES,
     lender_identity_digest,
+    pinned_inputs,
 )
 from tests.fixtures.client_profiles import (
     LENDER_IDENTITY,
     env_file_text,
     paychex_shaped_customer_profile,
 )
+from tools.clients import environment
 from tools.databricks import app_deploy_payload, bundle_env
+
+ROOT = Path(__file__).resolve().parents[2]
 
 _LENDER_NAMES = ("MIP_LENDER_NAME", "MIP_LENDER_NMLS_ID", "MIP_TENANT_ID", LENDER_IDENTITY_JSON_ENV, LENDER_IDENTITY_SHA256_ENV)
 SHELL_RECORD: dict[str, Any] = dict(LENDER_IDENTITY)
@@ -138,6 +146,72 @@ def test_a_dotenv_record_alone_reaches_every_deploy_reader(monkeypatch: pytest.M
     variables = _bundle_vars(monkeypatch, tmp_path, env_local)
 
     assert payload == variables["BUNDLE_VAR_lender_identity_sha256"] == dotenv[LENDER_IDENTITY_SHA256_ENV]
+
+
+# --- A blank shell value is unset at every reader -----------------------------------
+
+_LIB = ROOT / "scripts" / "lib"
+# _bundle_vars patches subprocess.run itself (bundle_env.subprocess is the module).
+_RUN = subprocess.run
+_PREFLIGHT_START = '_MIP_LENDER_NAME_CONFIGURED="$(deployment_control_value MIP_LENDER_NAME)"'
+_PREFLIGHT_END = 'echo "[deploy] lender identity: digest-pinned record ${MIP_LENDER_IDENTITY_SHA256:0:12}"\nfi\n'
+
+
+def _preflight_digest(cwd: Path) -> str:
+    """The pin the deploy preflight's lender block resolves in ``cwd``, with the deploy's own readers.
+
+    The block runs as deploy.sh runs it, after the identity library is
+    sourced, so ``.env.local`` in ``cwd`` is read; ``backend`` is linked in so
+    the block finds the source-controlled registry.
+    """
+
+    text = (_LIB / "deploy_step_preflight_gates.sh").read_text(encoding="utf-8")
+    start = text.index(_PREFLIGHT_START)
+    block = text[start : text.index(_PREFLIGHT_END, start) + len(_PREFLIGHT_END)]
+    (cwd / "backend").symlink_to(ROOT / "backend", target_is_directory=True)
+    harness = (
+        "set -euo pipefail\nRED=''; RST=''\n"
+        f'. "{_LIB / "deploy_identity_lifecycle.sh"}"\n'
+        f'{block}printf "digest=%s\\n" "${{MIP_LENDER_IDENTITY_SHA256:-}}"\n'
+    )
+    completed = _RUN(
+        ["bash", "-c", harness],
+        cwd=cwd,
+        env={**os.environ, "PYTHON": sys.executable, "PYTHONPATH": str(ROOT)},
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout.strip().splitlines()[-1].removeprefix("digest=")
+
+
+@pytest.mark.parametrize("blank", ["   ", "\t", "\u00a0\u3000"], ids=["spaces", "tab", "unicode_space"])
+@pytest.mark.parametrize(
+    "names",
+    [(LENDER_IDENTITY_JSON_ENV,), (LENDER_IDENTITY_JSON_ENV, LENDER_IDENTITY_SHA256_ENV), (LENDER_IDENTITY_SHA256_ENV,)],
+    ids=["record", "record_and_pin", "pin"],
+)
+def test_a_blank_shell_value_leaves_the_dotenv_record_to_every_deploy_reader(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, blank: str, names: tuple[str, ...]
+) -> None:
+    # Review of #298: str.strip() decides blank at every Python reader. The
+    # preflight let a whitespace-only shell value win over .env.local, and the
+    # payload read it as unset without falling back to .env.local, so either
+    # refused the profile's record or resolved the Summit demo identity.
+    dotenv = _pinned(DOTENV_RECORD)
+    env_local = _client_env_local(tmp_path / ".env.local", dotenv)
+    for name in names:
+        monkeypatch.setenv(name, blank)
+    digest = dotenv[LENDER_IDENTITY_SHA256_ENV]
+
+    profile = environment.from_local(os.environ, env_local).values
+    assert {name: profile.get(name) for name in PINNED_ENV_NAMES} == dotenv
+    assert pinned_inputs(os.environ, dotenv_values(env_local)) == dotenv, "settings and backend/runtime.py"
+    assert _bundle_vars(monkeypatch, tmp_path, env_local)["BUNDLE_VAR_lender_identity_sha256"] == digest
+    assert _payload_digest(monkeypatch, env_local) == digest
+    assert _preflight_digest(tmp_path) == digest
 
 
 # --- Settings and the App runtime: the same record from .env.local ------------------

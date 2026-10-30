@@ -430,10 +430,12 @@ def _run_preflight_block(
     exports = ""
     if through_bundle_exports:
         exports = _between(text, _EXPORTS_START, _EXPORTS_NEXT, inclusive=False) + _BUNDLE_RECORD_VARS
+    # The deploy's own control readers, with .env.local never read: the shell only.
     harness = (
         "set -euo pipefail\n"
         "RED=''; RST=''\n"
-        "deployment_control_value() { local value=\"${!1:-}\"; printf '%s' \"${value:-${2:-}}\"; }\n"
+        f'. "{ROOT / "scripts" / "lib" / "deploy_identity_lifecycle.sh"}"\n'
+        "dotenv_value() { printf ''; }\n"
         f"{block}"
         'echo "identity=[${MIP_LENDER_NAME}|${MIP_LENDER_NMLS_ID}|${MIP_TENANT_ID}|${MIP_LENDER_IDENTITY_SHA256:-}]"\n'
         f"{exports}"

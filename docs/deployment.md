@@ -2220,7 +2220,10 @@ mirrors the same rows.
 The record and its pin travel like every other deployment control: in the
 shell or in `.env.local`, a non-blank shell value winning, at every reader
 (the deploy preflight, `bundle_env.py`, the App payload build, settings and
-`backend/runtime.py`). A local App reads them from the same `.env` /
+`backend/runtime.py`). A blank value is one Python's `str.strip()` empties: a
+whitespace-only shell value is unset, and `.env.local`'s is read instead. (The
+preflight's other controls, read through `deployment_control_value`, let any
+non-empty shell value win.) A local App reads them from the same `.env` /
 `.env.local` files as its settings.
 
 Under `./scripts/deploy.sh -t client` both are fields of the client profile

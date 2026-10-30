@@ -204,6 +204,38 @@ def test_a_pinned_lender_records_identifying_values_never_reach_the_transcript(t
     assert "tools.branding.lender_mark stage --identity-env" in transcript, "the stage step ran"
 
 
+@pytest.mark.parametrize(
+    "blank",
+    [
+        {"MIP_LENDER_IDENTITY_JSON": "   "},
+        {"MIP_LENDER_IDENTITY_JSON": "   ", "MIP_LENDER_IDENTITY_SHA256": "   "},
+        {"MIP_LENDER_IDENTITY_SHA256": "\t"},
+    ],
+    ids=["record", "record_and_pin", "pin"],
+)
+def test_a_blank_shell_record_leaves_the_profiles_record_to_the_preflight(
+    tmp_path: Path, blank: dict[str, str]
+) -> None:
+    # Review of #298: the client profile, bundle_env and the App payload read
+    # a whitespace-only shell value as unset and take .env.local's. The
+    # preflight let it win: it refused the profile's record ("pins a record,
+    # but MIP_LENDER_IDENTITY_JSON is unset"; "is required to pin"), or, with
+    # both names blank, went green on the Summit demo identity under a
+    # customer profile.
+    checkout, env, _log = sandbox(tmp_path)
+    resources = {"DATABRICKS_WAREHOUSE_ID": "warehouse-1", "GENIE_SPACE_ID": "space-1"}
+    profile = paychex_shaped_customer_profile()
+    (checkout / ".env.local").write_text(env_file_text({**profile, **resources}), encoding="utf-8")
+
+    result = dry_run(checkout, {**env, **blank})
+
+    assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-4000:]
+    transcript = ANSI.sub("", result.stdout + result.stderr)
+    assert f"client:     {CLIENT} (customer install; profile resolved)" in transcript
+    digest = profile["MIP_LENDER_IDENTITY_SHA256"]
+    assert f"[deploy] lender identity: digest-pinned record {digest[:12]}" in transcript
+
+
 # ------------------------------------------ rendered SQL and today's names
 
 

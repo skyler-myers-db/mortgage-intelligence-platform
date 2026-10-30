@@ -294,9 +294,10 @@ _MIP_TENANT_ID="$(deployment_control_value MIP_TENANT_ID)"
 # A customer lender is a digest-pinned record, never a bare name: the
 # identifying record and its public sha256 pin, the deploying maintainer's
 # exact-digest acknowledgement (backend/schemas/lender_identity_record.py).
-# Only the pin's first 12 characters are ever printed.
-_MIP_LENDER_IDENTITY_JSON="$(deployment_control_value MIP_LENDER_IDENTITY_JSON)"
-_MIP_LENDER_IDENTITY_SHA256="$(deployment_control_value MIP_LENDER_IDENTITY_SHA256)"
+# Only the pin's first 12 characters are ever printed. A blank shell value of
+# either is unset here, as at the client profile and every other reader.
+_MIP_LENDER_IDENTITY_JSON="$(nonblank_control_value MIP_LENDER_IDENTITY_JSON)"
+_MIP_LENDER_IDENTITY_SHA256="$(nonblank_control_value MIP_LENDER_IDENTITY_SHA256)"
 if [[ ! -f backend/schemas/lender_identity.py || ! -f backend/schemas/lender_identity_record.py ]]; then
   # Isolated shell-contract tests copy only deploy.sh. The only safe fallback
   # without the source-controlled registry is the exact built-in demo pair.

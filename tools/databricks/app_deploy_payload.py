@@ -187,6 +187,18 @@ def _env_value(key: str, dotenv: dict[str, str]) -> str:
     return (os.environ.get(key) or dotenv.get(key) or "").strip()
 
 
+def _pinned_env_value(key: str, dotenv: dict[str, str]) -> str:
+    """A pinned lender name: a blank shell value is unset, so ``.env.local``'s is read.
+
+    ``_env_value`` takes a whitespace-only shell value and strips it to "",
+    never reaching ``.env.local``. The client profile, bundle_env, settings
+    and the deploy preflight read past it (``pinned_inputs``), so the payload
+    must too, or it refuses or drops the record they resolve (review of #298).
+    """
+
+    return (os.environ.get(key) or "").strip() or (dotenv.get(key) or "").strip()
+
+
 def _salesforce_input(key: str, dotenv: dict[str, str]) -> str:
     """A connector input; a placeholder secret (``changeme``, ``<password>``) is unset.
 
@@ -414,9 +426,15 @@ def build_payload(
 ) -> dict[str, object]:
     lakebase_instance = validated_lakebase_instance_name(lakebase_instance)
     dotenv = _dotenv_overlay()
-    # A blank value is unset here, as before: an unset name is Summit Mortgage.
+    # A blank legacy value is unset here, as before: an unset name is Summit
+    # Mortgage. A blank pinned name falls back to .env.local, as everywhere.
     lender = reviewed_lender_identity_from_env(
-        present_env({name: _env_value(name, dotenv) for name in (*LEGACY_ENV_NAMES, *PINNED_ENV_NAMES)})
+        present_env(
+            {
+                **{name: _env_value(name, dotenv) for name in LEGACY_ENV_NAMES},
+                **{name: _pinned_env_value(name, dotenv) for name in PINNED_ENV_NAMES},
+            }
+        )
     )
     resolved_lender_values = {
         "MIP_LENDER_NAME": lender.lender_name,
