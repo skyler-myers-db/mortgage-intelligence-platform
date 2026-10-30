@@ -13,14 +13,15 @@ from backend.agents.reviewed_uc_function_contract import (
     assert_reviewed_function_set,
     authenticated_reviewed_function_owner,
 )
-from databricks.sdk.service.apps import AppDeployment
 from tools.databricks.app_deployment_health import health as _health
 from tools.databricks.app_deployment_lease import assert_held as assert_deployment_lease_held
-from tools.databricks.app_deployment_state import (
-    active_deployment_id as _active_deployment_id,
+from tools.databricks.app_deployment_repin import (
+    HealthCheck,
+    redeploy_signed_blue,
+    repin_start_deployment,
 )
 from tools.databricks.app_deployment_state import (
-    deployment_state as _deployment_state,
+    active_deployment_id as _active_deployment_id,
 )
 from tools.databricks.app_deployment_state import (
     latest_succeeded as _latest_succeeded,
@@ -42,17 +43,23 @@ from tools.databricks.app_rollback_payload_proof import (
     env_map as _env_map,
 )
 from tools.databricks.app_rollback_payload_proof import (
+    payload_deployment_lease_id as _payload_deployment_lease_id,
+)
+from tools.databricks.app_rollback_payload_proof import (
     payload_resource_proof,
+)
+from tools.databricks.app_rollback_payload_proof import (
+    rollback_gateway_endpoint as _rollback_gateway_endpoint,
 )
 from tools.databricks.app_rollback_record_builder import (
     build_app_rollback_record as _record_from,
 )
 from tools.databricks.app_rollback_record_contract import (
-    LEGACY_RECORD_VERSION,
+    LEGACY_RECORD_VERSION,  # noqa: F401 - compatibility for callers/tests
     RECORD_VERSION,
     _delete_legacy_record,
     _load_record,
-    _save_legacy_record,
+    _save_legacy_record,  # noqa: F401 - compatibility for callers/tests
     _save_record,
     _text,
     _validated_payload,
@@ -63,12 +70,21 @@ from tools.databricks.app_rollback_record_contract import (
 from tools.databricks.app_rollback_record_contract import (
     _record_key as _contract_record_key,
 )
+from tools.databricks.app_rollback_record_contract import (
+    save_versioned_record as _save_versioned_record,
+)
 from tools.databricks.app_rollback_resource_contract import (
     app_resource_contract,
     restore_signed_app_resource_contract,
     validated_app_resource_contract,
 )
 from tools.databricks.app_rollback_signed_contract import SignedLastGoodAppContract
+from tools.databricks.app_start_deployment import (
+    StartProofError,
+    ensure_started,
+    is_stopped,
+    last_deployment_is,
+)
 from tools.databricks.converge_campaign_treatment_access import (
     Mode,
     converge_campaign_treatment_access,
@@ -96,10 +112,13 @@ def _verify_health(
     git_sha: str,
     gateway_binding: str | None,
     deployment_lease_id: str,
+    expected_deployment_id: str | None = None,
 ) -> None:
     pin = active_app_deployment_pin(
         workspace, app_name=app_name, expected_lease_id=deployment_lease_id
     )
+    if expected_deployment_id is not None and pin.deployment_id != expected_deployment_id:
+        raise RuntimeError("App health is pinned to another deployment than the re-pinned one")
     actual = _health(
         workspace,
         app_name=app_name,
@@ -173,25 +192,59 @@ def _converge_treatment_guard(
         raise RuntimeError("signed App rollback requires the governed treatment table")
 
 
-def _ensure_started(workspace: Any, *, app_name: str) -> None:
-    state = _text(
-        getattr(getattr(workspace.apps.get(app_name), "compute_status", None), "state", None)
+def _health_hook(
+    workspace: Any, *, app_name: str, base_url: str, bearer_token: str
+) -> HealthCheck:
+    def health(record: dict[str, Any], pinned_id: str | None) -> None:
+        _verify_health(
+            workspace,
+            app_name=app_name,
+            base_url=base_url,
+            bearer_token=bearer_token,
+            git_sha=record["git_sha"],
+            gateway_binding=record["gateway_binding_sha256"],
+            deployment_lease_id=_payload_deployment_lease_id(record["payload"]),
+            expected_deployment_id=pinned_id,
+        )
+
+    return health
+
+
+def repin_started_deployment(
+    workspace: Any,
+    *,
+    app_name: str,
+    scope: str,
+    deployment_id: str,
+    expected_rollback_deployment_id: str,
+    base_url: str,
+    bearer_token: str,
+    deployment_lease_id: str,
+    deployment_source_git_sha: str,
+    expected_tree_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Prove the deployment a start created is blue and re-pin the signed record to it."""
+
+    return repin_start_deployment(
+        workspace,
+        app_name=app_name,
+        scope=scope,
+        deployment_id=deployment_id,
+        expected_rollback_deployment_id=expected_rollback_deployment_id,
+        expected_lakebase_instance=_expected_lakebase_instance(),
+        assert_lease_held=held_assertion(
+            workspace,
+            app_name=app_name,
+            lease_id=deployment_lease_id,
+            source_git_sha=deployment_source_git_sha,
+            operation="signed App record re-pin",
+        ),
+        verify_health=_health_hook(
+            workspace, app_name=app_name, base_url=base_url, bearer_token=bearer_token
+        ),
+        resource_proof=lambda record: _stored_resource_proof(workspace, record=record),
+        expected_tree_sha256=expected_tree_sha256,
     )
-    normalized = state.split(".")[-1].upper()
-    if normalized == "STOPPING":
-        workspace.apps.wait_get_app_stopped(app_name, timeout=DEPLOY_TIMEOUT)
-        normalized = "STOPPED"
-    if normalized == "STOPPED":
-        workspace.apps.start_and_wait(app_name, timeout=DEPLOY_TIMEOUT)
-
-
-def _payload_deployment_lease_id(payload: dict[str, object]) -> str:
-    lease_id = _env_map(payload).get("MIP_APP_DEPLOYMENT_LEASE_ID", "").strip()
-    try:
-        UUID(lease_id)
-    except ValueError as exc:
-        raise RuntimeError("App rollback payload has an invalid deployment lease") from exc
-    return lease_id
 
 
 def _payload_resource_proof(
@@ -223,15 +276,6 @@ def _stored_resource_proof(
         assert_legacy_resources=assert_live_legacy_gateway_resources,
         resolve_exact_resource_proof=resolve_exact_resource_proof,
     )
-
-
-def _rollback_gateway_endpoint(record: dict[str, Any]) -> str:
-    env = _env_map(record["payload"])
-    endpoint = (env.get("MIP_AGENT_SERVING_ENDPOINT") or "").strip()
-    metadata_endpoint = (env.get("MIP_AI_GATEWAY_ENDPOINT") or "").strip()
-    if not endpoint or (metadata_endpoint and metadata_endpoint != endpoint):
-        raise RuntimeError("signed App rollback payload has no Gateway endpoint")
-    return endpoint
 
 
 def verified_signed_last_good_contract(
@@ -397,18 +441,6 @@ def _converge_rollback_endpoint_acl(
     )
 
 
-def _save_versioned_record(
-    workspace: Any,
-    *,
-    scope: str,
-    record: dict[str, Any],
-) -> None:
-    if record.get("version") == LEGACY_RECORD_VERSION:
-        _save_legacy_record(workspace, scope=scope, record=record)
-    else:
-        _save_record(workspace, scope=scope, record=record)
-
-
 def ensure_current(
     workspace: Any,
     *,
@@ -481,7 +513,25 @@ def ensure_current(
         _stored_resource_proof(workspace, record=record)
         if _active_deployment_id(workspace, app_name=app_name) != active_id:
             raise RuntimeError("App active deployment changed during signed resource repair")
-        _ensure_started(workspace, app_name=app_name)
+        # Tier a only while blue is the App's last deployment: the start then
+        # snapshots blue's own source, and the record is re-pinned to it.
+        if is_stopped(workspace, app_name=app_name) and not last_deployment_is(
+            workspace, app_name=app_name, deployment_id=active_id
+        ):
+            raise RuntimeError("stopped App's last deployment is not blue; tier a refused")
+        started = ensure_started(workspace, app_name=app_name)
+        if started:
+            record = repin_started_deployment(
+                workspace,
+                app_name=app_name,
+                scope=scope,
+                deployment_id=started,
+                expected_rollback_deployment_id=active_id,
+                base_url=base_url,
+                bearer_token=bearer_token,
+                deployment_lease_id=deployment_lease_id,
+                deployment_source_git_sha=deployment_source_git_sha,
+            )
         _converge_rollback_endpoint_acl(
             workspace,
             app_name=app_name,
@@ -772,49 +822,40 @@ def restore_last_good(
             deployment_source_git_sha=deployment_source_git_sha,
             revoke_endpoints=revoke_endpoints,
         )
-        _ensure_started(workspace, app_name=app_name)
-        _active_deployment_id(workspace, app_name=app_name)
-        restored = workspace.apps.deploy_and_wait(
-            app_name,
-            AppDeployment.from_dict(record["payload"]),
-            timeout=DEPLOY_TIMEOUT,
+        tier_a = is_stopped(workspace, app_name=app_name) and last_deployment_is(
+            workspace, app_name=app_name, deployment_id=record["deployment_id"]
         )
-        if _deployment_state(restored) != "SUCCEEDED":
-            raise RuntimeError("last-good App rollback deployment did not succeed")
-        restored_id = _text(getattr(restored, "deployment_id", None))
-        if _active_deployment_id(workspace, app_name=app_name) != restored_id:
-            raise RuntimeError("restored App deployment is not the exact active deployment")
-        _verify_health(
-            workspace,
-            app_name=app_name,
-            base_url=base_url,
-            bearer_token=bearer_token,
-            git_sha=record["git_sha"],
-            gateway_binding=record["gateway_binding_sha256"],
-            deployment_lease_id=_payload_deployment_lease_id(record["payload"]),
-        )
-        _stored_resource_proof(workspace, record=record)
-        latest = _latest_succeeded(workspace, app_name=app_name)
-        if _text(getattr(latest, "deployment_id", None)) != restored_id:
-            raise RuntimeError("restored App is not the active succeeded deployment")
-        app_client_id, app_scim_id = _app_identity(workspace, app_name=app_name)
-        refreshed = _record_from(
-            app_name=app_name,
-            deployment=latest,
-            payload=record["payload"],
-            git_sha=record["git_sha"],
-            gateway_binding=record["gateway_binding_sha256"],
-            gateway_resources=record["gateway_resources"],
-            app_resources=record["app_resources"],
-            app_service_principal_client_id=app_client_id,
-            app_service_principal_scim_id=app_scim_id,
-            expected_lakebase_instance=expected_lakebase_instance,
-            pending_proxy_credential_retirement_ids=tuple(
-                record["pending_proxy_credential_retirement_ids"]
-            ),
-            record_version=int(record["version"]),
-        )
-        _save_versioned_record(workspace, scope=scope, record=refreshed)
+        started = ensure_started(workspace, app_name=app_name)
+        repinned = False
+        if started and tier_a:
+            try:
+                repin_started_deployment(
+                    workspace,
+                    app_name=app_name,
+                    scope=scope,
+                    deployment_id=started,
+                    expected_rollback_deployment_id=record["deployment_id"],
+                    base_url=base_url,
+                    bearer_token=bearer_token,
+                    deployment_lease_id=deployment_lease_id,
+                    deployment_source_git_sha=deployment_source_git_sha,
+                )
+                repinned = True
+            except StartProofError:
+                repinned = False  # not provably blue: tier b replaces it below
+        if not repinned:
+            redeploy_signed_blue(
+                workspace,
+                app_name=app_name,
+                scope=scope,
+                record=record,
+                expected_lakebase_instance=expected_lakebase_instance,
+                verify_health=_health_hook(
+                    workspace, app_name=app_name, base_url=base_url, bearer_token=bearer_token
+                ),
+                resource_proof=lambda signed: _stored_resource_proof(workspace, record=signed),
+                timeout=DEPLOY_TIMEOUT,
+            )
         if restore_treatment:
             _converge_treatment_guard(
                 workspace,

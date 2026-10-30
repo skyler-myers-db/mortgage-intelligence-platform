@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any, cast
+from uuid import UUID
 
 from tools.databricks.export_gateway_runtime_contract import ExactGatewayRuntimeProof
 
@@ -84,3 +85,25 @@ def payload_resource_proof(
             "App rollback payload does not match its live exact Gateway resource proof"
         )
     return proof
+
+
+def payload_deployment_lease_id(payload: dict[str, object]) -> str:
+    """The deployment lease a payload's literal env binds."""
+
+    lease_id = env_map(payload).get("MIP_APP_DEPLOYMENT_LEASE_ID", "").strip()
+    try:
+        UUID(lease_id)
+    except ValueError as exc:
+        raise RuntimeError("App rollback payload has an invalid deployment lease") from exc
+    return lease_id
+
+
+def rollback_gateway_endpoint(record: dict[str, Any]) -> str:
+    """The Gateway endpoint a signed record's payload serves."""
+
+    env = env_map(record["payload"])
+    endpoint = (env.get("MIP_AGENT_SERVING_ENDPOINT") or "").strip()
+    metadata_endpoint = (env.get("MIP_AI_GATEWAY_ENDPOINT") or "").strip()
+    if not endpoint or (metadata_endpoint and metadata_endpoint != endpoint):
+        raise RuntimeError("signed App rollback payload has no Gateway endpoint")
+    return endpoint
