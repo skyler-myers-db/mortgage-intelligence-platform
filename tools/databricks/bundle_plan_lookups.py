@@ -6,6 +6,15 @@ fields that name its object and the GET or list that proves the name free
 declared kinds). A GET reads only not-found as absent; any other error
 propagates, so ``bundle_plan_gate.evaluate`` refuses the create as
 ``lookup_failed`` rather than read it as free.
+
+A list answers with what the caller may see (``warehouses.list`` "lists all
+SQL warehouses that a user has access to"; ``jobs.list`` and
+``pipelines.list_pipelines`` filter by the caller's ACLs too), and a GET may
+answer not-found for an object the caller cannot read. So an absence in a
+workspace-scoped lookup is evidence only from a caller that sees every
+workspace object: ``prove_full_visibility`` requires a workspace admin first.
+The metastore-scoped catalog lookup is the one exception, since workspace
+admin widens nothing there.
 """
 
 from __future__ import annotations
@@ -16,6 +25,34 @@ from types import MappingProxyType
 from typing import Any
 
 from databricks.sdk.errors import NotFound
+
+ADMINS_GROUP = "admins"
+VISIBILITY_METHOD = "current_user.me"
+
+
+class VisibilityUnproven(RuntimeError):
+    """The caller is not proven to see every workspace object, so an absence proves nothing."""
+
+
+def prove_full_visibility(workspace: Any) -> None:
+    """Return only when the caller is a workspace admin; a ``me`` error propagates.
+
+    The same membership read as
+    ``audit_global_m2m_access.workspace_admin_inventory_principal``, which the
+    deploy's preflight already requires of its ambient identity; the gate
+    proves it again itself, because the gate also runs on its own.
+    """
+
+    current = workspace.current_user.me()
+    groups = {
+        _value(group, "display").strip().casefold()
+        for group in (_value_object(current, "groups") or ())
+    }
+    if ADMINS_GROUP not in groups:
+        raise VisibilityUnproven(
+            "the caller is not a workspace admin, so a lookup that sees only what the "
+            "caller may see cannot prove a workspace-scoped name free"
+        )
 
 
 def _found(call: Callable[[], Any]) -> bool:
@@ -89,6 +126,9 @@ class KindLookup:
     unique_within: str
     method: str  # the read-only SDK call, for the full report
     exists: Callable[[Any, tuple[str, ...]], bool]
+    # True unless the name is unique within the metastore: an absence counts
+    # only after prove_full_visibility (see the module docstring).
+    requires_admin_visibility: bool = True
 
 
 KIND_LOOKUPS: Mapping[str, KindLookup] = MappingProxyType(
@@ -104,7 +144,12 @@ KIND_LOOKUPS: Mapping[str, KindLookup] = MappingProxyType(
                 _instance_exists,
             ),
             KindLookup(
-                "database_catalogs", ("name",), "metastore", "catalogs.get", _catalog_exists
+                "database_catalogs",
+                ("name",),
+                "metastore",
+                "catalogs.get",
+                _catalog_exists,
+                requires_admin_visibility=False,
             ),
             KindLookup(
                 "sql_warehouses", ("name",), "workspace", "warehouses.list", _warehouse_exists

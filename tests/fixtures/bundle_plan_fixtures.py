@@ -39,9 +39,11 @@ DEPLOYER_ROOT = (
     "/Workspace/Users/deployer@example.invalid/.bundle/mortgage-intelligence-platform/dev"
 )
 APP_KEY = "mip_app"
-# Every (service, method) a lookup may call; all are GETs or lists.
+# Every (service, method) a lookup may call; all are GETs or lists. The
+# caller's own identity read (current_user.me) is the workspace-admin proof.
 READ_ONLY_CALLS = frozenset(
     {
+        ("current_user", "me"),
         ("apps", "get"),
         ("database", "get_database_instance"),
         ("catalogs", "get"),
@@ -183,16 +185,20 @@ class RecordingWorkspace:
     ``existing`` maps a service to the names that exist there (dashboards by
     workspace path). Any attribute chain resolves, so a mutating call would be
     recorded too, and the tests assert none ever is. ``failures`` makes one
-    service's every call raise.
+    service's every call raise. ``admin`` is whether ``current_user.me`` lists
+    the caller in the workspace ``admins`` group.
     """
 
     def __init__(
         self,
         existing: dict[str, set[str]] | None = None,
         failures: dict[str, Exception] | None = None,
+        *,
+        admin: bool = True,
     ) -> None:
         self.existing = {service: set(names) for service, names in (existing or {}).items()}
         self.failures = dict(failures or {})
+        self.admin = admin
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
 
     def __getattr__(self, service: str) -> Any:
@@ -218,6 +224,12 @@ class RecordingWorkspace:
     ) -> Any:
         if service in self.failures:
             raise self.failures[service]
+        if (service, method) == ("current_user", "me"):
+            groups = ["users", "admins"] if self.admin else ["users"]
+            return SimpleNamespace(
+                user_name="deployer@example.invalid",
+                groups=[SimpleNamespace(display=group) for group in groups],
+            )
         key = (
             kwargs.get("name")
             or kwargs.get("path")
@@ -246,6 +258,11 @@ class RecordingWorkspace:
         if (service, method) == ("pipelines", "list_pipelines"):
             return [SimpleNamespace(name=name) for name in sorted(self._names(service))]
         return None
+
+    def lookup_calls(self) -> list[tuple[str, str, dict[str, Any]]]:
+        """Every recorded call but the admin proof."""
+
+        return [call for call in self.calls if call[:2] != ("current_user", "me")]
 
     def mutating_calls(self) -> list[tuple[str, str]]:
         return [

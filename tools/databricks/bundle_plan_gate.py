@@ -14,8 +14,10 @@ from the kinds databricks.yml declares
 * ``delete`` and ``recreate`` refuse, a state-only ``gone`` delete included;
   ``update_id`` (a rename of an identity field) refuses too.
 * ``create`` looks its name up with the table's read-only GET or list. A name
-  that already exists refuses as a ``collision``; a lookup that errors, or a
-  name the plan has not resolved, refuses as ``lookup_failed``.
+  that already exists refuses as a ``collision``; a lookup that errors, a
+  name the plan has not resolved, or a workspace-scoped name looked up by a
+  caller that is not a workspace admin (a list shows only what the caller may
+  see) refuses as ``lookup_failed``.
 * ``update`` or ``resize`` of a ``database_instances`` entry refuses unless
   ``MIP_ACK_DATABASE_INSTANCE_UPDATE`` equals the sha256 of the canonical
   field diff (``instance_update_digest``). The pre-apply run recomputes the
@@ -52,7 +54,11 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from tools.databricks.bundle_plan_lookups import KIND_LOOKUPS, KindLookup  # noqa: E402
+from tools.databricks.bundle_plan_lookups import (  # noqa: E402
+    KIND_LOOKUPS,
+    KindLookup,
+    prove_full_visibility,
+)
 from tools.databricks.bundle_plan_shape import (  # noqa: E402
     BundlePlan,
     PlanEntry,
@@ -105,8 +111,9 @@ REMEDIES: Mapping[str, str] = MappingProxyType(
         ),
         "lookup_failed": (
             "the gate could not prove this resource's name is free (the full plan report "
-            "says why); fix the read access or the unresolved name, then re-run. It never "
-            "creates blind"
+            "says why); fix the read access (a workspace-scoped name is proven free only by a "
+            "workspace admin, who sees every object) or the unresolved name, then re-run. It "
+            "never creates blind"
         ),
         "instance_update_unacked": (
             "the plan updates the Lakebase database instance; review the field diff in the "
@@ -184,6 +191,7 @@ def evaluate(
     lookups: list[LookupRecord] = []
     counts = dict.fromkeys(COUNTED_ACTIONS, 0)
     built: list[Any] = []
+    proven: list[Exception | None] = []
 
     def client() -> Any:
         # Built once; a factory failure (a workspace other than the install's,
@@ -196,6 +204,19 @@ def evaluate(
         if isinstance(built[0], Exception):
             raise built[0]
         return built[0]
+
+    def visible(workspace: Any) -> None:
+        # Proven once per plan, like the client; a failure refuses every
+        # workspace-scoped create on the same cause.
+        if not proven:
+            try:
+                prove_full_visibility(workspace)
+            except Exception as exc:  # noqa: BLE001 - re-raised for each lookup below
+                proven.append(exc)
+            else:
+                proven.append(None)
+        if proven[0] is not None:
+            raise proven[0]
 
     for entry in plan.entries:
         counts[entry.action] += 1
@@ -214,7 +235,10 @@ def evaluate(
                 refusals.append(_refuse("lookup_failed", entry.symbolic, reason=str(exc)))
                 continue
             try:
-                exists = spec.exists(client(), names)
+                workspace = client()
+                if spec.requires_admin_visibility:
+                    visible(workspace)
+                exists = spec.exists(workspace, names)
             except Exception as exc:  # noqa: BLE001 - any failure is unproven, never "absent"
                 outcome = f"failed: {type(exc).__name__}"
                 refusals.append(

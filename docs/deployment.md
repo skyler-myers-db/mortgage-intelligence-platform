@@ -1837,7 +1837,11 @@ leaves the App serving and changes nothing. The gate refuses:
   equal to the kinds `databricks.yml` declares);
 - a `create` whose name already exists, looked up with a read-only GET or list
   per kind (`collision`), or whose name cannot be proven free (`lookup_failed`:
-  a read error, or a name the plan has not resolved);
+  a read error, a name the plan has not resolved, or a caller that is not a
+  workspace admin). A list or GET answers with what the caller may see, so a
+  workspace-scoped absence counts only after `current_user.me` lists the
+  caller in `admins` (the deploy's preflight already requires that); the
+  metastore-scoped Lakebase catalog lookup is the one exception;
 - an update or resize of the Lakebase database instance, unless
   `MIP_ACK_DATABASE_INSTANCE_UPDATE` equals the sha256 of the canonical field
   diff. The refusal prints that digest and the full report holds the diff.

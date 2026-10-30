@@ -91,7 +91,8 @@ def test_a_first_install_whose_names_are_free_passes_after_one_lookup_per_create
     assert report.codes == ()
     assert report.app_bound is False
     assert built == [1], "one client for every lookup"
-    assert len(workspace.calls) == len(fx.declared_resources())
+    assert len(workspace.lookup_calls()) == len(fx.declared_resources())
+    assert [call[:2] for call in workspace.calls].count(("current_user", "me")) == 1
     assert {(service, method) for service, method, _ in workspace.calls} == fx.READ_ONLY_CALLS
     assert {record.outcome for record in report.lookups} == {"absent"}
 
@@ -113,7 +114,7 @@ def test_a_create_of_an_existing_name_on_an_adopted_install_is_a_collision() -> 
     assert refusal.resource == "jobs.mip_scheduled_refresh"
     assert refusal.detail["names"] == ["synthetic-mip_scheduled_refresh"]
     assert refusal.detail["lookup"] == "jobs.list"
-    assert [call[:2] for call in workspace.calls] == [("jobs", "list")]
+    assert [call[:2] for call in workspace.calls] == [("current_user", "me"), ("jobs", "list")]
 
 
 @pytest.mark.parametrize("gone", (False, True))
@@ -238,7 +239,7 @@ def test_an_empty_state_plan_against_an_existing_install_is_exactly_one_not_adop
     assert {item["kind"] for item in refusal.detail["collisions"]} == {
         kind for kind, _ in fx.declared_resources()
     }
-    assert len(workspace.calls) == len(fx.declared_resources())
+    assert len(workspace.lookup_calls()) == len(fx.declared_resources())
 
 
 def test_a_partly_existing_install_still_folds_into_one_not_adopted() -> None:
@@ -381,7 +382,7 @@ def test_a_dashboard_is_looked_up_by_its_workspace_path() -> None:
     report, workspace, _built = _evaluate(doc, workspace)
 
     assert report.codes == ("collision",)
-    assert workspace.calls[0][2]["path"] == f"{parent}/{display}.lvdash.json"
+    assert workspace.lookup_calls()[0][2]["path"] == f"{parent}/{display}.lvdash.json"
 
 
 def test_a_pipeline_lookup_compares_names_exactly_after_the_like_filter() -> None:
@@ -395,7 +396,7 @@ def test_a_pipeline_lookup_compares_names_exactly_after_the_like_filter() -> Non
     report, workspace, _built = _evaluate(doc, workspace)
 
     assert report.codes == ()
-    assert workspace.calls[0][2]["filter"] == "name LIKE 'mip_feature_pipeline'"
+    assert workspace.lookup_calls()[0][2]["filter"] == "name LIKE 'mip_feature_pipeline'"
 
 
 def test_the_app_entry_must_be_in_the_plan() -> None:
@@ -427,6 +428,6 @@ def test_every_sdk_call_in_the_gate_is_a_reviewed_get_or_list() -> None:
         and node.func.value.value.id == "workspace"
     }
     assert calls == fx.READ_ONLY_CALLS
-    assert {spec.method for spec in gate.KIND_LOOKUPS.values()} == {
+    assert {spec.method for spec in gate.KIND_LOOKUPS.values()} | {lookups.VISIBILITY_METHOD} == {
         f"{s}.{m}" for s, m in fx.READ_ONLY_CALLS
     }
