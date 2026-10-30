@@ -69,7 +69,7 @@ from backend.schemas.lender_identity_record import (  # noqa: E402
     LENDER_IDENTITY_JSON_ENV,
     LENDER_IDENTITY_SHA256_ENV,
     PINNED_ENV_NAMES,
-    present_env,
+    as_configured,
     reviewed_lender_identity_from_env,
 )
 from tools import render_sql  # noqa: E402
@@ -524,9 +524,10 @@ def main() -> int:
     )
 
     try:
-        # A blank value is unset here, as before: an unset name is Summit Mortgage.
+        # The legacy values as given, as before: an unset or empty name is
+        # Summit Mortgage, and a whitespace-only one is refused.
         lender = reviewed_lender_identity_from_env(
-            present_env({name: env.get(name) for name in (*LEGACY_ENV_NAMES, *PINNED_ENV_NAMES)})
+            as_configured({name: env.get(name) for name in (*LEGACY_ENV_NAMES, *PINNED_ENV_NAMES)})
         )
     except ValueError as exc:
         print(f"[bundle_env] invalid lender disclosure identity: {exc}", file=sys.stderr)

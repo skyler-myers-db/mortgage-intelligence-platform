@@ -384,6 +384,21 @@ def present_env(values: Mapping[str, object]) -> dict[str, str]:
     return {name: str(values[name]) for name in names if str(values.get(name) or "").strip()}
 
 
+def as_configured(values: Mapping[str, object]) -> dict[str, object]:
+    """The five lender names for a caller whose legacy values were never stripped.
+
+    bundle_env and the deploy preflight passed a legacy value to the registry
+    as given, so only a missing or empty one was unset: a whitespace-only
+    ``MIP_LENDER_NAME`` reached the name validator and was refused there.
+    This keeps that for the legacy names (a whitespace-only NMLS or tenant id
+    resolves as unset in the registry itself, as before) and applies
+    ``present_env``'s blank-is-unset rule to the two pinned names only.
+    """
+
+    legacy = {name: values[name] for name in LEGACY_ENV_NAMES if values.get(name) not in (None, "")}
+    return {**legacy, **{name: str(values[name]) for name in PINNED_ENV_NAMES if _text(values, name)}}
+
+
 def tenant_lender_dictionary(identity: ReviewedLenderIdentity) -> dict[str, str]:
     """Raw servicer key -> display name for the tenant's own rows (pinned path only)."""
 

@@ -280,10 +280,10 @@ elif ! _MIP_LENDER_IDENTITY="$(
     "$PYTHON" -c '
 import sys
 from backend.schemas.lender_identity_record import (
-    LEGACY_ENV_NAMES, PINNED_ENV_NAMES, present_env, reviewed_lender_identity_from_env,
+    LEGACY_ENV_NAMES, PINNED_ENV_NAMES, as_configured, reviewed_lender_identity_from_env,
 )
 identity = reviewed_lender_identity_from_env(
-    present_env(dict(zip((*LEGACY_ENV_NAMES, *PINNED_ENV_NAMES), sys.argv[1:], strict=True)))
+    as_configured(dict(zip((*LEGACY_ENV_NAMES, *PINNED_ENV_NAMES), sys.argv[1:], strict=True)))
 )
 fields = (identity.lender_name, identity.nmls_id, identity.tenant_id)
 print("\t".join((*fields, identity.digest) if identity.digest else fields))

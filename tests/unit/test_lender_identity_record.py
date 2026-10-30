@@ -24,6 +24,7 @@ from backend.schemas.lender_identity_record import (
     LENDER_IDENTITY_JSON_ENV,
     LENDER_IDENTITY_SHA256_ENV,
     LenderIdentityRefused,
+    as_configured,
     canonical_lender_identity_json,
     lender_identity_digest,
     parse_lender_identity_record,
@@ -320,6 +321,21 @@ def test_present_env_drops_blank_values_for_blank_means_unset_callers() -> None:
     values = {"MIP_LENDER_NAME": "", "MIP_LENDER_NMLS_ID": " 123456 ", "OTHER": "x", LENDER_IDENTITY_JSON_ENV: "  "}
 
     assert present_env(values) == {"MIP_LENDER_NMLS_ID": " 123456 "}
+
+
+def test_as_configured_keeps_legacy_values_as_given_and_drops_blank_pins() -> None:
+    values = {
+        "MIP_LENDER_NAME": "   ",
+        "MIP_LENDER_NMLS_ID": "",
+        "MIP_TENANT_ID": None,
+        "OTHER": "x",
+        LENDER_IDENTITY_JSON_ENV: "  ",
+        LENDER_IDENTITY_SHA256_ENV: "ab",
+    }
+
+    assert as_configured(values) == {"MIP_LENDER_NAME": "   ", LENDER_IDENTITY_SHA256_ENV: "ab"}
+    with pytest.raises(ValueError, match="mip_lender_name must be"):
+        reviewed_lender_identity_from_env(as_configured({"MIP_LENDER_NAME": "   "}))
 
 
 def test_canonical_json_sorts_keys_without_whitespace() -> None:

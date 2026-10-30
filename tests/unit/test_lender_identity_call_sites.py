@@ -16,6 +16,7 @@ Two contracts, call site by call site:
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 import struct
@@ -30,6 +31,10 @@ from pydantic import ValidationError
 
 from backend.config.settings import Settings
 from backend.schemas import lender_branding
+from backend.schemas.lender_identity import (
+    effective_public_tenant_id,
+    validate_public_lender_identity,
+)
 from backend.schemas.lender_identity_record import (
     LENDER_IDENTITY_JSON_ENV,
     LENDER_IDENTITY_SHA256_ENV,
@@ -306,6 +311,44 @@ def test_bundle_env_passes_only_a_verified_record_to_the_bundle(monkeypatch: pyt
     assert lender_identity_digest(seen["BUNDLE_VAR_lender_identity_json"]) == RECORD_SHA256
 
 
+# Review of #298: bundle_env and the preflight hand the registry their legacy
+# values as given, blank and whitespace-only included, exactly as origin/main
+# a9493e21 did (the two base formulas below); only the pinned names drop blanks.
+_LEGACY_VALUES = {
+    "MIP_LENDER_NAME": (None, "", "   ", "Summit Mortgage", " Summit  Mortgage "),
+    "MIP_LENDER_NMLS_ID": (None, "", "  ", "123456"),
+    "MIP_TENANT_ID": (None, "", "  ", "summit"),
+}
+_LEGACY_ENVS = [
+    {name: value for name, value in zip(_LEGACY_VALUES, values, strict=True) if value is not None}
+    for values in itertools.product(*_LEGACY_VALUES.values())
+]
+
+
+def _base_identity(name: object, nmls: object, tenant: object) -> tuple[str, str, str] | None:
+    try:
+        lender, nmls_id = validate_public_lender_identity(name, nmls)
+        return lender, nmls_id, effective_public_tenant_id(tenant, lender_name=lender)
+    except ValueError:
+        return None
+
+
+@pytest.mark.parametrize("env", _LEGACY_ENVS, ids=[repr(env) for env in _LEGACY_ENVS])
+def test_bundle_env_resolves_the_legacy_values_exactly_as_before(
+    env: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    expected = _base_identity(
+        env.get("MIP_LENDER_NAME") or "Summit Mortgage", env.get("MIP_LENDER_NMLS_ID"), env.get("MIP_TENANT_ID")
+    )
+    code, seen = _bundle_env(monkeypatch, tmp_path, env)
+
+    if expected is None:
+        assert (code, seen) == (2, {})
+    else:
+        assert code == 0
+        assert tuple(seen[f"BUNDLE_VAR_{name}"] for name in ("lender_name", "lender_nmls_id", "tenant_id")) == expected
+
+
 @pytest.mark.parametrize("case", sorted(_REFUSED_ENVS))
 def test_bundle_env_refuses_an_unverifiable_record(
     case: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -360,6 +403,26 @@ def test_the_preflight_exports_a_verified_record_without_printing_it() -> None:
     assert lines[0] == f"[deploy] lender identity: digest-pinned record {RECORD_SHA256[:12]}"
     assert lines[1] == f"identity=[{RECORD['legal_name']}|{RECORD['nmls_id']}|{RECORD['tenant_id']}|{RECORD_SHA256}]"
     assert RECORD_TEXT not in completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize(
+    "env",
+    [{"MIP_LENDER_NAME": "   "}, {"MIP_LENDER_NAME": ""}, {"MIP_LENDER_NMLS_ID": "  "}, {"MIP_TENANT_ID": "  "}],
+    ids=["whitespace_name", "empty_name", "whitespace_nmls", "whitespace_tenant"],
+)
+def test_the_preflight_resolves_the_legacy_values_exactly_as_before(env: dict[str, str]) -> None:
+    # The preflight's legacy defaults: a shell value as given, "" when unset.
+    expected = _base_identity(
+        env.get("MIP_LENDER_NAME") or "Summit Mortgage", env.get("MIP_LENDER_NMLS_ID", ""), env.get("MIP_TENANT_ID", "")
+    )
+    completed = _run_preflight_block(ROOT, env)
+
+    if expected is None:
+        assert completed.returncode == 2, completed.stdout
+        assert "lender name, NMLS id, tenant disclosure namespace, or pinned lender record is invalid" in completed.stderr
+    else:
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stdout.strip() == f"identity=[{'|'.join(expected)}|]"
 
 
 @pytest.mark.parametrize("case", sorted(_REFUSED_ENVS))
