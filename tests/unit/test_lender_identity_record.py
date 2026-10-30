@@ -2,8 +2,9 @@
 
 The invariant: a customer lender identity is never a bare runtime string. It
 is accepted only as a record that parses under the reviewed shapes and whose
-canonical sha256 equals the reviewed pin. With neither pinned name set, the
-resolver is exactly the code-registry path.
+canonical sha256 equals its pin, the deploying maintainer's exact-digest
+acknowledgement. With neither pinned name set, the resolver is exactly the
+code-registry path.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -340,3 +342,29 @@ def test_as_configured_keeps_legacy_values_as_given_and_drops_blank_pins() -> No
 
 def test_canonical_json_sorts_keys_without_whitespace() -> None:
     assert canonical_lender_identity_json({"b": [1, 2], "a": {"d": 1, "c": 2}}) == '{"a":{"c":2,"d":1},"b":[1,2]}'
+
+
+def test_no_doc_claims_an_approval_the_pin_does_not_carry() -> None:
+    """Review of #298: the pin is self-certifying, so every doc says what it is.
+
+    It travels in the record's own configuration channel. Until a workflow
+    carries it through a GitHub Environment approval (none does: the scan
+    below has a positive control), no doc may claim that gate, and each one
+    calls the pin an acknowledgement and not an independent approval.
+    """
+
+    root = Path(__file__).resolve().parents[2]
+    workflows = "\n".join(path.read_text(encoding="utf-8") for path in sorted((root / ".github").rglob("*.yml")))
+    assert "MIP_LENDER_NAME" in workflows, "positive control: the workflows carry the legacy lender name"
+    deployment = (root / "docs" / "deployment.md").read_text(encoding="utf-8")
+    section = deployment[deployment.index("## Customer lender identity") :]
+    docs = {
+        "README.md": (root / "README.md").read_text(encoding="utf-8"),
+        "docs/deployment.md": section[: section.index("\n## ", 1)],
+        "lender_identity_record.py": record_module.__doc__ or "",
+    }
+    for name, text in docs.items():
+        flat = " ".join(text.split())
+        assert "exact-digest acknowledgement" in flat and "not an independent approval" in flat, name
+        if "MIP_LENDER_IDENTITY_SHA256" not in workflows:
+            assert "GitHub Environment approval" not in flat.replace("through a GitHub Environment approval yet", ""), name

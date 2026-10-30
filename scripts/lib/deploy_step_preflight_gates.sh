@@ -260,8 +260,9 @@ MIP_LENDER_NAME="${_MIP_LENDER_NAME_CONFIGURED:-Summit Mortgage}"
 _MIP_LENDER_NMLS_ID="$(deployment_control_value MIP_LENDER_NMLS_ID)"
 _MIP_TENANT_ID="$(deployment_control_value MIP_TENANT_ID)"
 # A customer lender is a digest-pinned record, never a bare name: the
-# identifying record and its public reviewed sha256 (backend/schemas/
-# lender_identity_record.py). Neither is ever printed.
+# identifying record and its public sha256 pin, the deploying maintainer's
+# exact-digest acknowledgement (backend/schemas/lender_identity_record.py).
+# Only the pin's first 12 characters are ever printed.
 _MIP_LENDER_IDENTITY_JSON="$(deployment_control_value MIP_LENDER_IDENTITY_JSON)"
 _MIP_LENDER_IDENTITY_SHA256="$(deployment_control_value MIP_LENDER_IDENTITY_SHA256)"
 if [[ ! -f backend/schemas/lender_identity.py || ! -f backend/schemas/lender_identity_record.py ]]; then

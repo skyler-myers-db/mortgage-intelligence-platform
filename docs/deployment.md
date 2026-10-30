@@ -1883,7 +1883,7 @@ carried by the deploy payload, so deployed Apps run with it off.
 
 The source-controlled registry in `backend/schemas/lender_identity.py` holds
 only the Summit Mortgage demo pair. A customer lender onboards without a code
-change, as one reviewed record (`backend/schemas/lender_identity_record.py`):
+change, as one record and its pin (`backend/schemas/lender_identity_record.py`):
 
 | Name | Class | Value |
 | --- | --- | --- |
@@ -1894,17 +1894,26 @@ The record passes the code registry's own validators (organization-shaped
 legal name, 4-12 digit NMLS id, lowercase tenant id, the 160-character SMS
 disclosure budget), lists 1-32 distinct servicer aliases (the raw Cotality
 servicer strings that name the tenant itself), and is never any part of the
-Summit demo identity. Print the pin a reviewer approves with:
+Summit demo identity. Print the record's pin (read-only) with:
 
 ```bash
 MIP_LENDER_IDENTITY_JSON='<the record>' python -m backend.schemas.lender_identity_record
 ```
 
-**Review.** The pin is the review: the deferred owner signature is replaced by
-this exact digest, which reaches a deploy only through the client's GitHub
-Environment approval (review mode `single_maintainer_audited`). Any edit to
-the record, one character included, changes its digest, so a record that no
-longer matches its pin is refused everywhere.
+**What the pin is, and is not.** The pin is an exact-digest acknowledgement,
+the review mode `single_maintainer_audited` uses in place of the deferred
+owner attestation: the deploying maintainer reviews the record, prints its
+digest and sets that digest beside it, and every reader recomputes it before
+it acts. Any change to the record after that, one character included, is
+refused everywhere, the deploy, the App and the Lakebase migration can never
+serve two different records, and every verified App boot writes a
+`LENDER_IDENTITY_VERIFIED` audit row naming the digest. The pin is not an
+independent approval: it travels in the same configuration as the record, so
+whoever can set a deploy's configuration can acknowledge a record, and no
+workflow carries it through a GitHub Environment approval yet
+(`deploy-dev.yml` is parked until a client environment is selected, M1-PR7).
+A trust anchor outside that configuration is the owner attestation, deferred
+with the rest of plan M1-PR5.
 
 **Where it is verified.** Every lender call site resolves through
 `reviewed_lender_identity_from_env()`:

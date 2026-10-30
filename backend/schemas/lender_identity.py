@@ -21,9 +21,10 @@ _SUMMIT_TENANT_ID = "summit"
 # Mortgage demo pair) plus at most one digest-pinned customer record. A
 # customer identity is never a bare runtime string: it is the canonical JSON
 # record in MIP_LENDER_IDENTITY_JSON, accepted only when its sha256 equals
-# the reviewed MIP_LENDER_IDENTITY_SHA256 (lender_identity_record.py). Every
-# caller resolves through reviewed_lender_identity_from_env() there; this
-# function alone still accepts only the registry.
+# MIP_LENDER_IDENTITY_SHA256, the deploying maintainer's exact-digest
+# acknowledgement (lender_identity_record.py; not an independent approval).
+# Every caller resolves through reviewed_lender_identity_from_env() there;
+# this function alone still accepts only the registry.
 _REVIEWED_PUBLIC_LENDER_IDENTITIES: dict[str, frozenset[str]] = {
     _SUMMIT_LENDER_NAME: frozenset({_SUMMIT_DEMO_NMLS_ID}),
 }

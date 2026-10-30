@@ -72,12 +72,14 @@ python -m backend.runtime
 A customer lender is configuration, not a code change. The
 source-controlled registry in `backend/schemas/lender_identity.py` holds only
 the Summit Mortgage demo pair; a customer's exact public legal name, verified NMLS ID, tenant id
-and servicer aliases are one reviewed record in `MIP_LENDER_IDENTITY_JSON`,
-pinned by its canonical sha256 in `MIP_LENDER_IDENTITY_SHA256` (see
+and servicer aliases are one record in `MIP_LENDER_IDENTITY_JSON`, pinned by
+its canonical sha256 in `MIP_LENDER_IDENTITY_SHA256` (see
 [Customer lender identity](docs/deployment.md#customer-lender-identity-a-digest-pinned-record)).
-Runtime configuration alone, a bare `MIP_LENDER_NAME` included, still cannot
-introduce a new borrower-facing identity: the deploy and the App refuse a
-record whose digest is not the reviewed pin. With the record and its pin set,
+A bare `MIP_LENDER_NAME` still cannot introduce a new borrower-facing
+identity, and the deploy and the App refuse a record whose digest is not its
+pin. The pin is an exact-digest acknowledgement by the deploying maintainer
+(review mode `single_maintainer_audited`), not an independent approval: the
+owner attestation that would anchor it is deferred. With the record and its pin set,
 `MIP_LENDER_NAME`, `MIP_LENDER_NMLS_ID` and `MIP_TENANT_ID` are optional and,
 when set, must equal the record. Rebind the bundle's single workspace-host
 anchor and set the identity in `.env.local`:

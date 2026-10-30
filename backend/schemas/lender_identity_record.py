@@ -1,14 +1,21 @@
 """The reviewed lender identity: the code registry or one digest-pinned record.
 
 ``backend/schemas/lender_identity.py`` registers only the Summit Mortgage
-demo pair. A customer lender is configuration, not a code change: its
-reviewed record is the JSON object in ``MIP_LENDER_IDENTITY_JSON`` (an
-identifying profile value: a GitHub Environment secret, or ``.env.local``),
-and ``MIP_LENDER_IDENTITY_SHA256`` (a public value) pins the sha256 of the
-record's canonical JSON. Review approves the digest: the record reaches a
-deploy only through the client's GitHub Environment approval (review mode
-``single_maintainer_audited``), and any edit to it, one character included,
-changes the digest the deploy and the App recompute.
+demo pair. A customer lender is configuration, not a code change: its record
+is the JSON object in ``MIP_LENDER_IDENTITY_JSON`` (an identifying profile
+value: a GitHub Environment secret, or ``.env.local``), and
+``MIP_LENDER_IDENTITY_SHA256`` (a public value) pins the sha256 of the
+record's canonical JSON.
+
+The pin is an exact-digest acknowledgement, the review mode
+``single_maintainer_audited`` uses in place of the deferred owner
+attestation: the deploying maintainer reviews the record, prints its digest
+(``python -m`` this module, read-only) and sets it beside the record, and
+every reader recomputes it before it acts, so any edit to the record after
+that, one character included, is refused. It is not an independent
+approval: the pin travels in the same configuration as the record, so
+whoever sets a deploy's configuration can acknowledge a record. Each
+verified App boot is audited (``backend/services/lender_identity_boot.py``).
 
 ``reviewed_lender_identity_from_env`` is the one resolver every lender call
 site uses (settings, the App payload builder, bundle_env, the deploy
@@ -240,7 +247,7 @@ def parse_lender_identity_record(text: str) -> ReviewedLenderIdentity:
     """Parse and normalize one record; the result's digest is its canonical sha256.
 
     This checks shape only. ``reviewed_lender_identity_from_env`` also holds
-    the digest to the reviewed pin.
+    the digest to its pin.
     """
 
     if len(text) > _MAX_RECORD_CHARS:

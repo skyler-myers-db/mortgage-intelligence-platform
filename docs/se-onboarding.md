@@ -98,13 +98,14 @@ GENIE_SPACE_ID=
 # on first deploy. See docs/runbook-multi-catalog.md for details.
 # MIP_DEFAULT_CATALOG=summit_mortgage
 # Customer-facing legal identity shown in the app and used by governed copy.
-# A customer lender is one reviewed record, pinned by its canonical sha256
-# (docs/deployment.md, "Customer lender identity"); a bare name/NMLS pair is
+# A customer lender is one record, pinned by the canonical sha256 the deploying
+# maintainer acknowledged (docs/deployment.md, "Customer lender identity"; an
+# acknowledgement, not an independent approval); a bare name/NMLS pair is
 # accepted only for the source-controlled demo pair in
 # backend/schemas/lender_identity.py, so runtime text alone cannot create a
 # new lender-text exemption.
 # MIP_LENDER_IDENTITY_JSON='{"version":1,"legal_name":"...","nmls_id":"...",...}'
-# MIP_LENDER_IDENTITY_SHA256=<reviewed sha256 of the record's canonical JSON>
+# MIP_LENDER_IDENTITY_SHA256=<sha256 of the record's canonical JSON>
 MIP_LENDER_NAME=<exact reviewed customer legal lender name>
 MIP_LENDER_NMLS_ID=<matching reviewed customer lender NMLS id>
 # Optional: override the Lakebase disclosure namespace. If unset, the app
