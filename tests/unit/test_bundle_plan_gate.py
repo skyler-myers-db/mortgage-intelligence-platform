@@ -17,6 +17,7 @@ from databricks.sdk.errors import PermissionDenied
 
 from tests.fixtures import bundle_plan_fixtures as fx
 from tools.databricks import bundle_plan_gate as gate
+from tools.databricks import bundle_plan_lookups as lookups
 from tools.databricks.bundle_plan_shape import parse_plan
 
 APP = f"resources.apps.{fx.APP_KEY}"
@@ -387,7 +388,11 @@ def test_the_app_entry_must_be_in_the_plan() -> None:
 
 
 def test_every_sdk_call_in_the_gate_is_a_reviewed_get_or_list() -> None:
-    tree = ast.parse(Path(gate.__file__).read_text(encoding="utf-8"))
+    tree = ast.parse(
+        "\n".join(
+            Path(module.__file__).read_text(encoding="utf-8") for module in (gate, lookups)
+        )
+    )
     calls = {
         (node.func.value.attr, node.func.attr)
         for node in ast.walk(tree)

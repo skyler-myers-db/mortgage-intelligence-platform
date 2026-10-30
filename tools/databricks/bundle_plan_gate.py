@@ -7,9 +7,9 @@ before the non-App bundle apply (``--position pre-apply``), so a plan that
 changed in between is judged again. ``--phase plan`` stops after the first.
 
 The document is parsed fail closed (``bundle_plan_shape``). Each entry's kind
-must be in ``KIND_LOOKUPS``, a closed table built from the kinds
-databricks.yml declares (``tests/unit/test_bundle_plan_gate_kinds.py`` pins
-the two equal). Per entry:
+must be in ``KIND_LOOKUPS`` (``bundle_plan_lookups``), a closed table built
+from the kinds databricks.yml declares
+(``tests/unit/test_bundle_plan_gate_kinds.py`` pins the two equal). Per entry:
 
 * ``delete`` and ``recreate`` refuse, a state-only ``gone`` delete included;
   ``update_id`` (a rename of an identity field) refuses too.
@@ -42,7 +42,6 @@ import json
 import os
 import sys
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -51,7 +50,7 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from databricks.sdk.errors import NotFound  # noqa: E402
+from tools.databricks.bundle_plan_lookups import KIND_LOOKUPS, KindLookup  # noqa: E402
 from tools.databricks.bundle_plan_shape import (  # noqa: E402
     BundlePlan,
     PlanEntry,
@@ -73,116 +72,6 @@ PLAN_RESOURCE = "bundle.plan"
 PUBLIC_REASON_CODES = frozenset({"malformed_plan", "lookup_failed"})
 _PREFIX = "[mip-plan-gate]"
 
-
-def _found(call: Callable[[], Any]) -> bool:
-    """True when the GET answers, False on not-found; any other error propagates."""
-
-    try:
-        call()
-    except NotFound:  # ResourceDoesNotExist is a NotFound
-        return False
-    return True
-
-
-def _value(item: Any, name: str) -> str:
-    raw = item.get(name) if isinstance(item, Mapping) else getattr(item, name, None)
-    return str(raw or "")
-
-
-def _app_exists(workspace: Any, names: tuple[str, ...]) -> bool:
-    return _found(lambda: workspace.apps.get(name=names[0]))
-
-
-def _instance_exists(workspace: Any, names: tuple[str, ...]) -> bool:
-    return _found(lambda: workspace.database.get_database_instance(name=names[0]))
-
-
-def _catalog_exists(workspace: Any, names: tuple[str, ...]) -> bool:
-    return _found(lambda: workspace.catalogs.get(name=names[0]))
-
-
-def _warehouse_exists(workspace: Any, names: tuple[str, ...]) -> bool:
-    return any(_value(item, "name") == names[0] for item in workspace.warehouses.list())
-
-
-def _job_exists(workspace: Any, names: tuple[str, ...]) -> bool:
-    # The API filters on the exact name, case-insensitively; a same-name job
-    # would run a second copy of the schedule, so case-folded equality counts.
-    wanted = names[0].casefold()
-    return any(
-        _value(_value_object(job, "settings"), "name").casefold() == wanted
-        for job in workspace.jobs.list(name=names[0])
-    )
-
-
-def _pipeline_exists(workspace: Any, names: tuple[str, ...]) -> bool:
-    if "'" in names[0]:
-        raise ValueError("a pipeline name with a quote cannot be filtered safely")
-    listed = workspace.pipelines.list_pipelines(filter=f"name LIKE '{names[0]}'")
-    return any(_value(item, "name") == names[0] for item in listed)
-
-
-def _dashboard_exists(workspace: Any, names: tuple[str, ...]) -> bool:
-    parent, display_name = names
-    path = f"{parent.rstrip('/')}/{display_name}.lvdash.json"
-    return _found(lambda: workspace.workspace.get_status(path=path))
-
-
-def _experiment_exists(workspace: Any, names: tuple[str, ...]) -> bool:
-    return _found(lambda: workspace.experiments.get_by_name(experiment_name=names[0]))
-
-
-def _value_object(item: Any, name: str) -> Any:
-    return item.get(name) if isinstance(item, Mapping) else getattr(item, name, None)
-
-
-@dataclass(frozen=True)
-class KindLookup:
-    """How one resource kind's create is proven not to collide."""
-
-    kind: str
-    name_fields: tuple[str, ...]  # new_state.value fields that name the object
-    unique_within: str
-    method: str  # the read-only SDK call, for the full report
-    exists: Callable[[Any, tuple[str, ...]], bool]
-
-
-KIND_LOOKUPS: Mapping[str, KindLookup] = MappingProxyType(
-    {
-        spec.kind: spec
-        for spec in (
-            KindLookup("apps", ("name",), "workspace", "apps.get", _app_exists),
-            KindLookup(
-                "database_instances",
-                ("name",),
-                "workspace",
-                "database.get_database_instance",
-                _instance_exists,
-            ),
-            KindLookup(
-                "database_catalogs", ("name",), "metastore", "catalogs.get", _catalog_exists
-            ),
-            KindLookup(
-                "sql_warehouses", ("name",), "workspace", "warehouses.list", _warehouse_exists
-            ),
-            KindLookup("jobs", ("name",), "workspace (by name)", "jobs.list", _job_exists),
-            KindLookup(
-                "pipelines", ("name",), "workspace", "pipelines.list_pipelines", _pipeline_exists
-            ),
-            KindLookup(
-                "dashboards",
-                ("parent_path", "display_name"),
-                "workspace path",
-                "workspace.get_status",
-                _dashboard_exists,
-            ),
-            KindLookup(
-                "experiments", ("name",), "workspace", "experiments.get_by_name", _experiment_exists
-            ),
-        )
-    }
-)
-
 REMEDIES: Mapping[str, str] = MappingProxyType(
     {
         "malformed_plan": (
@@ -192,7 +81,7 @@ REMEDIES: Mapping[str, str] = MappingProxyType(
         ),
         "unknown_kind": (
             "the plan names a resource kind with no reviewed existence lookup; add it to "
-            "KIND_LOOKUPS in tools/databricks/bundle_plan_gate.py with a test, then re-run"
+            "KIND_LOOKUPS in tools/databricks/bundle_plan_lookups.py with a test, then re-run"
         ),
         "delete": (
             "a governed deploy never deletes a bundle resource, even a state-only delete of "

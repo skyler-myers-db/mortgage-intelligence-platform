@@ -39,7 +39,12 @@ APP_STOPS = (
     "apps stop",
     "--stop-app-for-mutation",
 )
-GATE_MODULES = ("bundle_plan_gate.py", "bundle_plan_shape.py", "deploy_plan_report.py")
+GATE_MODULES = (
+    "bundle_plan_gate.py",
+    "bundle_plan_lookups.py",
+    "bundle_plan_shape.py",
+    "deploy_plan_report.py",
+)
 
 
 def _steps(text: str) -> int:
