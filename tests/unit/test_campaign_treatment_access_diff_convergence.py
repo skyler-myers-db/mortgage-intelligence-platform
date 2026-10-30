@@ -150,7 +150,9 @@ def _frozen(store: Store) -> dict[Key, dict[str, frozenset[str]]]:
 
 
 def _start_store(app: dict[Key, Iterable[str]], foreign: dict[Key, dict[str, set[str]]]) -> Store:
-    store: Store = {key: {name: set(held) for name, held in grants.items()} for key, grants in foreign.items()}
+    store: Store = {
+        key: {name: set(held) for name, held in grants.items()} for key, grants in foreign.items()
+    }
     for key, held in app.items():
         store.setdefault(key, {})[APP] = set(held)
     return store
@@ -190,7 +192,11 @@ def _run(
         result = function(**kwargs)
     except Exception as exc:  # noqa: BLE001 - both outcomes are compared
         return _Outcome(
-            False, None, type(exc).__name__, _frozen(store), tuple(plane.statements),
+            False,
+            None,
+            type(exc).__name__,
+            _frozen(store),
+            tuple(plane.statements),
             tuple(plane.snapshots),
         )
     return _Outcome(
@@ -216,8 +222,12 @@ def _compare(
     """Run both convergers from ``start``; return violated invariants and the diff run."""
 
     before = _frozen(start)
-    old = _run(legacy.converge_campaign_treatment_access, mode=mode, store=_copy(start), **run_kwargs)
-    new = _run(converger.converge_campaign_treatment_access, mode=mode, store=_copy(start), **run_kwargs)
+    old = _run(
+        legacy.converge_campaign_treatment_access, mode=mode, store=_copy(start), **run_kwargs
+    )
+    new = _run(
+        converger.converge_campaign_treatment_access, mode=mode, store=_copy(start), **run_kwargs
+    )
     label = f"mode={mode} start={ {k[0]: sorted(v.get(APP, ())) for k, v in start.items()} }"
     problems: list[str] = []
     for outcome, name in ((old, "legacy"), (new, "diff")):
@@ -252,7 +262,9 @@ def _compare(
 
 
 def _copy(store: Store) -> Store:
-    return {key: {name: set(held) for name, held in grants.items()} for key, grants in store.items()}
+    return {
+        key: {name: set(held) for name, held in grants.items()} for key, grants in store.items()
+    }
 
 
 def _subsets(universe: tuple[str, ...]) -> list[frozenset[str]]:
@@ -290,7 +302,9 @@ def test_every_full_presence_state_matches_the_revoke_all_postcondition(mode: st
 @pytest.mark.parametrize("mode", ["quiesce", "runtime"])
 def test_partial_presence_states_match_the_revoke_all_postcondition(mode: str) -> None:
     problems: list[str] = []
-    for catalog, schema in itertools.product(_subsets(UNIVERSE[CATALOG]), _subsets(UNIVERSE[SCHEMA])):
+    for catalog, schema in itertools.product(
+        _subsets(UNIVERSE[CATALOG]), _subsets(UNIVERSE[SCHEMA])
+    ):
         start = _start_store({CATALOG: catalog, SCHEMA: schema}, FOREIGN)
         problems.extend(
             _compare(mode=mode, start=start, present=(CATALOG, SCHEMA), table_exists=False)[0]
@@ -319,7 +333,9 @@ def test_inherited_authority_refuses_exactly_as_before(
 ) -> None:
     problems: list[str] = []
     for table in _subsets(UNIVERSE[TABLE]):
-        start = _start_store({CATALOG: {"USE_CATALOG"}, SCHEMA: {"USE_SCHEMA"}, TABLE: table}, FOREIGN)
+        start = _start_store(
+            {CATALOG: {"USE_CATALOG"}, SCHEMA: {"USE_SCHEMA"}, TABLE: table}, FOREIGN
+        )
         problems.extend(
             _compare(mode=mode, start=start, present=SECURABLES, inherited=inherited)[0]
         )

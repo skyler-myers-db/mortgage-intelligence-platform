@@ -74,7 +74,10 @@ def _assert_read_only(calls: list[str], plane: golden._Plane) -> None:
 def _check(mode: str, store: golden.Store, **kwargs: Any) -> tuple[list[str], list[str]]:
     spy, calls, plane = _workspace(store, **kwargs)
     drift = check_campaign_treatment_access(
-        catalog="mip", principal=golden.APP, mode=mode, workspace=spy  # type: ignore[arg-type]
+        catalog="mip",
+        principal=golden.APP,
+        mode=mode,
+        workspace=spy,  # type: ignore[arg-type]
     )
     _assert_read_only(calls, plane)
     for line in drift:
@@ -182,7 +185,9 @@ def test_check_agrees_with_convergence_on_every_full_presence_state(mode: str) -
         golden._subsets(universe[SCHEMA]),
         golden._subsets(universe[TABLE]),
     ):
-        start = golden._start_store({CATALOG: catalog, SCHEMA: schema, TABLE: table}, golden.FOREIGN)
+        start = golden._start_store(
+            {CATALOG: catalog, SCHEMA: schema, TABLE: table}, golden.FOREIGN
+        )
         drift, _ = _check(mode, golden._copy(start))
         outcome = golden._run(
             converger.converge_campaign_treatment_access, mode=mode, store=golden._copy(start)
@@ -223,9 +228,7 @@ def test_cli_check_needs_no_warehouse_and_converge_still_requires_one(
     spy, calls, plane = _workspace(golden._start_store(reviewed, golden.FOREIGN))
     monkeypatch.setattr(check_module, "deployment_workspace_client", lambda: spy)
 
-    assert (
-        converger.main(["--check", "--principal", golden.APP, "--mode", "runtime"]) == 0
-    )
+    assert converger.main(["--check", "--principal", golden.APP, "--mode", "runtime"]) == 0
     assert "check passed mode=runtime" in capsys.readouterr().out
     _assert_read_only(calls, plane)
     with pytest.raises(SystemExit) as excinfo:

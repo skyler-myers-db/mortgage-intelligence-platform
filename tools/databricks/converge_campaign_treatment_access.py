@@ -500,9 +500,7 @@ def converge_campaign_treatment_access(
         )
         if verified_objects[2] is None:
             if mode == "runtime":
-                raise RuntimeError(
-                    "Cannot grant runtime access before the treatment table exists"
-                )
+                raise RuntimeError("Cannot grant runtime access before the treatment table exists")
             return False
         table_stage = True
         converge(table_securable, table_reviewed)
