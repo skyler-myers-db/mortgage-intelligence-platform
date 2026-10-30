@@ -34,24 +34,22 @@ With no App there is no install to adopt: a first install that meets a stray
 same-name object keeps its plain ``collision`` refusals and their remedy.
 
 **Journal-owned App** (pre-lease only). An interrupted first install can
-leave the App created but unbound from bundle state: a lost create response,
-a crash between the journal claim and the bind, or a cleanup that unbound
-the App and then failed to delete it. deploy.sh leaves that App, with its
-signed first-install journal, for the next lease to reconcile
-(``deploy_step_signed_blue_proof.sh`` deletes it). So before the lease,
-given ``--first-install-app-name`` and the journal's scope and instance, an
-App collision whose journal reads ``unclaimed`` or ``recover``
-(``app_first_install_journal.recovery_state``, read-only) is deferred, not
-refused, and the run reaches that recovery. The pre-apply gate never defers:
-by then the recovery has proven the App absent, so a create still colliding
-there refuses.
+leave the App created but unbound from bundle state (a lost create response,
+a crash between the journal claim and the bind, a cleanup that unbound the
+App and then failed to delete it); deploy.sh leaves it, with its signed
+first-install journal, for the recovery under the next lease
+(``deploy_step_signed_blue_proof.sh``). Given ``--first-install-app-name``
+and the journal's scope and instance, an App collision whose journal reads
+``unclaimed`` or ``recover`` (``app_first_install_journal.recovery_state``)
+is deferred, not refused, so the run reaches that recovery. The pre-apply
+gate never defers: the recovery has proven the App absent by then.
 
 Exit codes: 0 the plan passes; 2 refused (each refusal printed with its
 remedy) or the plan could not be read. Printed lines carry codes, counts,
 digests and symbolic names only (``PlanReport.public_summary``); resolved
 names go to ``--report-out`` (``PlanReport.full``), written mode 0600. The
-check never writes to the workspace: every SDK call it can make is a GET or
-a list.
+check never writes to the workspace: every SDK call it can make, the journal
+read included, is a GET or a list.
 """
 
 from __future__ import annotations
@@ -69,6 +67,11 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from tools.databricks.bundle_plan_instance_ack import (  # noqa: E402
+    ACK_ENV,
+    instance_update,
+    instance_update_digest,
+)
 from tools.databricks.bundle_plan_lookups import (  # noqa: E402
     KIND_LOOKUPS,
     KindLookup,
@@ -79,7 +82,6 @@ from tools.databricks.bundle_plan_shape import (  # noqa: E402
     PlanEntry,
     PlanShapeError,
     parse_plan,
-    sha256_hex,
 )
 from tools.databricks.deploy_plan_report import (  # noqa: E402
     COUNTED_ACTIONS,
@@ -89,9 +91,7 @@ from tools.databricks.deploy_plan_report import (  # noqa: E402
     Refusal,
 )
 
-ACK_ENV = "MIP_ACK_DATABASE_INSTANCE_UPDATE"
 DEFAULT_APP_KEY = "mip_app"
-INSTANCE_KIND = "database_instances"
 # The signed journal states deploy.sh reconciles after the lease (recover-claim
 # then delete for "unclaimed", delete for "recover").
 JOURNAL_OWNED_STATES = frozenset({"unclaimed", "recover"})
@@ -153,57 +153,6 @@ REMEDIES: Mapping[str, str] = MappingProxyType(
         ),
     }
 )
-
-
-def instance_update(plan: BundlePlan) -> tuple[Mapping[str, Any], ...]:
-    """What every database-instance update or resize will do, exactly as it is acknowledged.
-
-    The CLI's ``DoUpdate`` (``bundle/direct/dresources/database_instance.go``
-    at v1.10.0) sends the whole ``new_state.value`` with ``UpdateMask: "*"``,
-    so the update writes every field, not only the changes the plan classifies
-    as ``update``. A remote-only difference on an input-only field
-    (``node_count``, ``retention_window_in_days`` and the other
-    ``ignore_remote_changes`` fields of ``resources.generated.yml``) plans
-    ``skip``, yet the update reverts it to the configured value. So each item
-    carries the full ``new_state`` and every change, skip included; the
-    instance name and the state lineage bind it to one install, so an
-    acknowledgement kept for another install's identical diff never replays.
-    """
-
-    items = []
-    for entry in plan.entries:
-        if entry.kind != INSTANCE_KIND or entry.action not in {"update", "resize"}:
-            continue
-        changes = {
-            path: {
-                "action": change.action,
-                "reason": change.reason,
-                "old": change.old,
-                "new": change.new,
-                "remote": change.remote,
-            }
-            for path, change in sorted(entry.changes.items())
-        }
-        new_state = dict(entry.new_value) if entry.new_value is not None else None
-        items.append(
-            {
-                "resource": entry.symbolic,
-                "action": entry.action,
-                "instance_name": (new_state or {}).get("name"),
-                "lineage": plan.lineage,
-                "new_state": new_state,
-                "new_vars": dict(entry.new_vars),
-                "changes": changes,
-            }
-        )
-    return tuple(items)
-
-
-def instance_update_digest(plan: BundlePlan) -> str:
-    """sha256 of every ``instance_update`` item; "" when no instance changes."""
-
-    items = instance_update(plan)
-    return sha256_hex(list(items)) if items else ""
 
 
 def _names(entry: PlanEntry, spec: KindLookup) -> tuple[str, ...]:

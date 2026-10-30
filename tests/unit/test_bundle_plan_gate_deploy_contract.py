@@ -41,6 +41,7 @@ APP_STOPS = (
 )
 GATE_MODULES = (
     "bundle_plan_gate.py",
+    "bundle_plan_instance_ack.py",
     "bundle_plan_lookups.py",
     "bundle_plan_shape.py",
     "deploy_plan_report.py",
