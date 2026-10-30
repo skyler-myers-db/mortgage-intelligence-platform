@@ -181,10 +181,11 @@ def _settings(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]) -> Settings:
     return Settings(_env_file=None)  # type: ignore[call-arg]
 
 
-@pytest.mark.parametrize("env", [{}, {name: D0_OPERATOR_ENV[name] for name in _LENDER_NAMES[:3]}])
+@pytest.mark.parametrize("env", [{}, D0_OPERATOR_ENV], ids=["bare", "d0_name_set"])
 def test_with_no_record_identity_branding_and_disclosure_are_byte_identical(
     env: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The d0 case loads every operator name the live install's payload sets.
     settings = _settings(monkeypatch, env)
 
     assert (settings.mip_lender_name, settings.mip_lender_nmls_id, settings.effective_tenant_id()) == (

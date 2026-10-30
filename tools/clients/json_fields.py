@@ -47,6 +47,36 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
 
 
+class LenderMark(StrictModel):
+    """A customer lender's reviewed co-branding mark: its facts, never the image.
+
+    backend/schemas/lender_branding.py's rules (reviewed_mark_problems) hold
+    the rest, through tools/clients/rules.py.
+    """
+
+    sha256: str
+    media_type: str
+    width: StrictInt
+    height: StrictInt
+    authorization_ref: str
+    reviewed_on: str
+
+    @field_validator("sha256")
+    @classmethod
+    def _sha256(cls, value: str) -> str:
+        return require(value, _SHA256, expected="64 lowercase hex characters")
+
+    @field_validator("media_type")
+    @classmethod
+    def _media_type(cls, value: str) -> str:
+        return _one_of(value, _MARK_MEDIA_TYPES, expected="image/png or image/webp")
+
+    @field_validator("reviewed_on")
+    @classmethod
+    def _reviewed_on(cls, value: str) -> str:
+        return require(value, _CALENDAR_DATE, expected="an ISO-8601 calendar date")
+
+
 def _one_of(value: str, allowed: frozenset[str], *, expected: str) -> str:
     if is_placeholder(value) or value in allowed:
         return value
@@ -108,36 +138,6 @@ class IdentityIds(StrictModel):
             for role, value in self.model_dump().items()
             if isinstance(value, str)
         }
-
-
-class LenderMark(StrictModel):
-    """A customer lender's reviewed co-branding mark: its facts, never the image.
-
-    backend/schemas/lender_branding.py's rules (reviewed_mark_problems) hold
-    the rest, through tools/clients/rules.py.
-    """
-
-    sha256: str
-    media_type: str
-    width: StrictInt
-    height: StrictInt
-    authorization_ref: str
-    reviewed_on: str
-
-    @field_validator("sha256")
-    @classmethod
-    def _sha256(cls, value: str) -> str:
-        return require(value, _SHA256, expected="64 lowercase hex characters")
-
-    @field_validator("media_type")
-    @classmethod
-    def _media_type(cls, value: str) -> str:
-        return _one_of(value, _MARK_MEDIA_TYPES, expected="image/png or image/webp")
-
-    @field_validator("reviewed_on")
-    @classmethod
-    def _reviewed_on(cls, value: str) -> str:
-        return require(value, _CALENDAR_DATE, expected="an ISO-8601 calendar date")
 
 
 class LenderIdentity(StrictModel):
