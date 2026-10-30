@@ -22,7 +22,10 @@ audit-readable MATRIX, no longer a required manual runbook:
   that Postgres role plus the explicit
   `MIP_AI_GATEWAY_VERIFIER_CLIENT_ID`, revokes prior privileges, applies the
   reviewed per-table matrices, and fails the deploy on lookup, role,
-  inventory, or postflight errors.
+  inventory, or postflight errors. With `--jobs-reader-client-id` (the bundle
+  passes `${var.jobs_principal}`), it also grants the optional `jobs_reader`
+  role USAGE on `mip_app` and SELECT on `approvals` and `call_dispositions`,
+  and nothing else (`jobs/lakebase_migration_jobs_reader.py`, M2-PR5).
 * §provider/§silver (ETL identity) grants still require a metastore admin
   when the deploying identity does not own the share — the deploy step's
   failure message points here.

@@ -2430,6 +2430,91 @@ The full operator guide, including what the tool never does, is
 credential sink (M2-PR2) lands, an apply that would create, adopt or mint
 refuses before its first mutation.
 
+## Jobs identity and pinned job parameters (M2-PR5)
+
+The App holds `CAN_MANAGE_RUN` on four bundle jobs (`mip_sync_lifecycle_state`,
+`mip_fred_rates_ingest`, `mip_refresh_silver`, `mip_refresh_scores`), and
+`run_now` lets the caller replace a Python task's parameters. So a
+compromised App must be able to start only bundle-defined runs, under an
+identity that holds no workspace admin.
+
+**Two run_as identities.**
+
+* The non-admin jobs service principal (`MIP_IDENTITY_IDS_JSON.jobs`, the
+  `jobs_principal` bundle variable, which has no default) runs those four
+  jobs, `mip_scheduled_refresh` and `mip_feature_pipeline`.
+* The deployer keeps the deploy-time jobs: `mip_init_catalog_schemas`,
+  `mip_ref_seed`, `mip_kpi_snapshot`, `mip_lakebase_migrate` and the PAUSED
+  `mip_growth_agent_monitor_scheduler`.
+* The CLI v1.10.0 bundle schema declares `run_as` on `resources.Pipeline`,
+  so the pipeline does not need spike S4's fallback (staying on the
+  deployer). S4's live half, ALTER OWNER on the pipeline's published
+  datasets after a run_as change, stays with the cutover.
+* `tests/unit/test_jobs_identity_shape.py` pins the split.
+
+**Pinned parameters.**
+
+* Before every bundle call, `tools/databricks/bundle_env.py` renders
+  `jobs/install_pins.json` from the profile: the catalog, the Lakebase
+  instance and database, and the data-owner group
+  (`<MIP_IDENTITY_PREFIX>-data-owners`). These are public profile values.
+  The file is gitignored, and `sync.include` uploads it into the
+  deployer-owned bundle root, where the App cannot write.
+* `jobs/_install_pins.py` reads the file from its own folder. Each
+  App-triggerable Python entrypoint (`jobs/fred_rates_ingest.py`,
+  `jobs/sync_lifecycle_state_job.py` and `jobs/converge_governed_owner.py`)
+  calls it first. A run exits 5 before any Spark session, Lakebase credential
+  or connection when:
+  * a pinned option (`--catalog`, `--lakebase-instance`, `--lakebase-database`,
+    or the FRED `--table`) differs from the pin;
+  * an option the bundle does not pass is set (`--seed-path`,
+    `--prune-legacy-defaults`);
+  * the pins file is missing or malformed.
+* The lifecycle task runs `jobs/sync_lifecycle_state_job.py`. That file loads
+  the pins and `jobs/sync_lifecycle_state.py` beside it by exact path.
+  `jobs/sync_lifecycle_state.py` itself is unchanged, because the App imports
+  it.
+* The SQL and pipeline tasks take no parameters a `run_now` can redirect. The
+  rendered SQL declares no parameter markers, and `pipeline_params` carries
+  only `full_refresh`.
+
+**Owner convergence.**
+
+* `mip_refresh_silver`, `mip_refresh_scores` and `mip_fred_rates_ingest` end
+  with `converge_governed_owner` (`run_if: ALL_DONE`).
+* It hands every table, view and function that the run's own identity owns
+  in the pinned catalog's governed schemas to the pinned group.
+* It never touches:
+  * an object someone else owns (the deployer's reviewed Growth Agent
+    functions included);
+  * another catalog, the catalog itself or a schema;
+  * a pipeline dataset.
+
+**Lakebase `jobs_reader`.**
+
+* `mip_lakebase_migrate` gets `--jobs-reader-client-id=${var.jobs_principal}`
+  and grants that role USAGE on `mip_app` and SELECT on `approvals` and
+  `call_dispositions` only. The postflight refuses any other privilege.
+* Deploy step 4 first converges the role LOGIN-only
+  (`converge_lakebase_oauth_role --role-contract jobs_reader`).
+* With the option unset, the grant reconciliation is byte-identical to before
+  (`tests/unit/test_lakebase_jobs_reader.py`).
+* The role grants no write, so the lifecycle sync's fail-soft snooze wake
+  (an UPDATE of `lead_snoozes`) is skipped under it.
+
+**Monitor scheduler held PAUSED.** Until a non-approver scheduler role exists,
+`tools/databricks/monitor_scheduler_gate.py` refuses an enabled
+`mip_growth_agent_monitor_scheduler` (a schedule, trigger or continuous block
+that is not PAUSED) in three places:
+
+* in databricks.yml or a target override (`bundle_env`, every call);
+* in the bundle plan's `new_state`;
+* live: by name, a dev-prefixed copy included, or by its bound id. This runs
+  beside the plan gate at both positions.
+
+**Live effect.** None until a governed release deploys this bundle. The live
+jobs keep their deployed run_as and sources until then.
+
 ## CI deploy (deploy-dev.yml): parked, and the release-gate bootstrap
 
 Decision D-platform-process-b step 7 (audit quality-03, report 12.4 #8). The
