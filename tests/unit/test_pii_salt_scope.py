@@ -352,7 +352,30 @@ def test_another_workspace_is_refused_before_any_call(capsys, mode) -> None:
     assert _main(api, mode, host=OTHER_HOST) == subject.EXIT_REFUSED
 
     assert api.calls == []
-    assert "[pii-salt] refused: the Databricks SDK resolved workspace" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "[pii-salt] refused: the Databricks SDK resolved workspace" in err
+    # The one line that names hosts, as docs/deployment.md says: the operator
+    # needs both to know which identity to pin.
+    assert OTHER_HOST in err and INSTALL_HOST in err
+
+
+@pytest.mark.parametrize("mode", ("ensure", "check"))
+def test_an_sdk_error_while_the_client_is_built_is_shown_by_class_only(
+    monkeypatch, capsys, mode
+) -> None:
+    def unbuildable() -> None:
+        raise ListFailure(f"default auth: cannot configure credentials for {LEAKY_DETAIL}")
+
+    monkeypatch.setattr(runtime_secrets, "WorkspaceClient", unbuildable)
+
+    assert subject.main([mode, "--scope", SCOPE, "--require-existing", "0"]) == subject.EXIT_REFUSED
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        "[pii-salt] refused: the install's workspace could not be resolved (ListFailure). "
+        "Nothing was read or written.\n"
+    )
 
 
 @pytest.mark.parametrize("scope", ("", "mip scope", "mip/../x", "m" * 129))

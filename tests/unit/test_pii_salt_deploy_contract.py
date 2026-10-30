@@ -276,3 +276,23 @@ def test_an_unset_scope_resolves_to_mip(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert "scope=mip policy=0" in result.stdout.splitlines()
+
+
+# --- The runbook says what the tool prints ---------------------------------------
+
+
+def test_the_runbook_names_the_one_line_that_prints_a_host() -> None:
+    # The workspace-binding refusal names both hosts it compared; the runbook
+    # once said neither mode ever prints a host. tests/unit/test_pii_salt_scope.py
+    # pins the output this sentence describes.
+    doc = (ROOT / "docs" / "deployment.md").read_text(encoding="utf-8")
+    start = doc.index("### PII salt (write-once)")
+    section = " ".join(doc[start : doc.index("\n### ", start + 1)].split())
+
+    assert "never the value or the host" not in section
+    assert (
+        "Neither mode prints the value. Both print scope and key names, and show an SDK "
+        "error only by its class. The one exception is the workspace-binding refusal, which "
+        "runs before any Secrets API call: it names the host the SDK resolved and the "
+        "install's configured host"
+    ) in section

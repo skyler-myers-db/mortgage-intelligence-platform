@@ -24,10 +24,12 @@ in both modes, for an install whose masked keys already exist.
 
 The value is generated in this process and sent only to the Secrets API;
 nothing prints it. Every mode first proves the SDK resolved the install's
-workspace (``provision_runtime_secrets.bound_workspace``, whose refusal names
-the hosts it compared); the tool's own lines name scopes and keys only, and
-an SDK error only by its class. Exit codes: 0 done; 2 refused, with no put
-attempted; 1 a put was attempted and its result could not be proven.
+workspace (``provision_runtime_secrets.bound_workspace``). Its refusal is the
+only line that can name a workspace host: the one the SDK resolved and the
+install's configured one. Every other line names scopes and keys only, and
+shows an SDK error, including one raised while the client is built, only by
+its class. Exit codes: 0 done; 2 refused, with no put attempted; 1 a put was
+attempted and its result could not be proven.
 """
 
 from __future__ import annotations
@@ -45,7 +47,10 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from tools.databricks.provision_runtime_secrets import bound_workspace  # noqa: E402
+from tools.databricks.provision_runtime_secrets import (  # noqa: E402
+    WorkspaceHostRefused,
+    bound_workspace,
+)
 
 SALT_KEY = "pii-salt-v1"
 DEFAULT_SCOPE = "mip"
@@ -175,8 +180,15 @@ def main(argv: list[str] | None = None, *, client: Any | None = None) -> int:
         return EXIT_REFUSED
     try:
         workspace, _host = bound_workspace(client)
-    except Exception as exc:  # noqa: BLE001 -- includes WorkspaceHostRefused
+    except WorkspaceHostRefused as exc:  # names the hosts it compared, nothing else
         print(f"{_PREFIX} refused: {exc}", file=sys.stderr)
+        return EXIT_REFUSED
+    except Exception as exc:  # noqa: BLE001 -- an SDK client or auth error, by class only
+        print(
+            f"{_PREFIX} refused: the install's workspace could not be resolved "
+            f"({type(exc).__name__}). Nothing was read or written.",
+            file=sys.stderr,
+        )
         return EXIT_REFUSED
     try:
         if args.mode == "check":

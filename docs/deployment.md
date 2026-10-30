@@ -1633,8 +1633,11 @@ a listing it can trust:
 
 Right after the pre-stop probes below, before the signed lease and step 0a,
 `deploy.sh` runs the same inventory read-only (`check`), so a listing the
-deployer cannot complete refuses while the App still serves. Both modes name
-scopes and keys only, never the value or the host.
+deployer cannot complete refuses while the App still serves. Neither mode
+prints the value. Both print scope and key names, and show an SDK error only by
+its class. The one exception is the workspace-binding refusal, which runs
+before any Secrets API call: it names the host the SDK resolved and the
+install's configured host, so the operator can see which identity to pin.
 
 `MIP_PII_SALT_SCOPE` (shell, then `.env.local`; default `mip`) names the
 scope. The readers take the scope as a literal, so preflight refuses any other
