@@ -54,7 +54,7 @@ def test_verifies_six_exact_direct_effective_execute_grants() -> None:
 
     verifier.verify_reviewed_function_execute_grants(
         SimpleNamespace(grants=grants),
-        catalog="mip_pr105_staging",
+        catalog="mip_staging",
         principals=("app-client", "runtime-client"),
     )
 

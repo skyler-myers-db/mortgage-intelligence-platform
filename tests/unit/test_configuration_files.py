@@ -104,36 +104,31 @@ def test_bundle_resource_names_are_parameterized_for_isolated_staging():
     assert "run_as:\n      user_name: ${workspace.current_user.userName}" in dev_match.group("body")
 
 
-def test_the_ci_staging_target_runs_as_the_oidc_deployer_service_principal():
-    """Only deploy-dev.yml deploys pr105-host, as the GitHub OIDC deployer service principal.
+def test_every_deployable_target_runs_as_the_deploying_user():
+    """dev and prod bind run_as through user_name; the ci validation target has none.
 
-    A service principal's SCIM userName is its application id, and a job's
-    run_as names a service principal only through service_principal_name, so
-    the target binds run_as there. Every other target keeps its user_name
-    run_as, so operator (user) deploys of dev and prod are unchanged.
+    The CI staging target, which ran as the GitHub OIDC deployer service
+    principal, left the bundle with its workspace (M0-PR3).
     """
 
     bundle = yaml.safe_load((REPO / "databricks.yml").read_text(encoding="utf-8"))
     targets = bundle["targets"]
     current = "${workspace.current_user.userName}"
 
-    assert targets["pr105-host"]["run_as"] == {"service_principal_name": current}
+    assert set(targets) == {"dev", "prod", "ci"}
     assert targets["dev"]["run_as"] == {"user_name": current}
     assert targets["prod"]["run_as"] == {"user_name": current}
     assert "run_as" not in targets["ci"]
-    assert targets["pr105-host"]["mode"] == "development"
 
 
-def test_workspace_unique_names_take_the_install_suffix_and_render_live_by_default():
-    """W5e (D-platform-process-b step 7): the CI staging install suffixes the
-    three workspace-unique display names; the empty default keeps the live
-    install's names byte for byte."""
+def test_workspace_unique_names_and_the_dev_root_are_the_live_install_literals():
+    """No variable suffixes the workspace-unique display names, and the dev root is ~/.bundle/<bundle>/dev."""
     content = (REPO / "databricks.yml").read_text(encoding="utf-8")
+    bundle = yaml.safe_load(content)
 
     for name in ("mip_serverless_sql", "mip_feature_pipeline", "/Shared/mip-lead-scoring"):
-        assert f"\n      name: {name}${{var.install_suffix}}\n" in content, name
-        assert f"\n      name: {name}\n" not in content, f"{name} must carry the suffix"
-    assert re.search(r'(?ms)^  install_suffix:.*?default: ""$', content)
+        assert f"\n      name: {name}\n" in content, name
+    assert bundle["targets"]["dev"]["workspace"]["root_path"] == "~/.bundle/${bundle.name}/${bundle.target}"
 
 
 def test_dev_bundle_pins_real_genie_space_for_signed_deploy():
@@ -154,7 +149,7 @@ def test_dev_bundle_pins_real_genie_space_for_signed_deploy():
 
 
 def test_dev_genie_pin_is_the_live_workspace_space_not_the_retired_staging_pin():
-    """Post-W5 forked-anchor lane: the dev pin names the live space on *default_host.
+    """Post-W5: the dev pin names the live space on *default_host.
 
     441588f6 moved the host anchor to the retired staging workspace and, in the
     same diff, swapped this pin to that workspace's space (01f18188...).

@@ -1,10 +1,9 @@
 name: live validation (on demand)
 
-# On-demand live workflow -- refreshes the governed dev UC snapshot, then runs
-# the real-UC integration + Playwright suites against the dev Databricks
-# workspace. This is intentionally NOT scheduled: the Databricks refresh jobs,
-# Genie probes, browser matrix, and Lakebase checks are release/signoff gates,
-# not a daily meter burn for a product developed intermittently.
+# On-demand live workflow -- runs the real-UC integration + Playwright suites
+# against a deployed install. This is intentionally NOT scheduled: the Genie
+# probes, browser matrix, and Lakebase checks are release/signoff gates, not a
+# daily meter burn for a product developed intermittently.
 #
 # It catches:
 #   - SQL<->Python parity drift (tests/integration/test_sql_python_parity.py)
@@ -22,15 +21,17 @@ name: live validation (on demand)
 # when a green run of this workflow on main certifies runtime-equivalent code,
 # is at most 14 days old, and its parity, Playwright and simulated-drill jobs
 # all succeeded; the two verify_deployed_app_contract commit checks below are
-# what make a green run certify its own commit. Its bundle commands address the
-# isolated CI staging install that deploy-dev.yml deploys (the forked-anchor
-# pr105-host target in its own workspace, bundle root leaf dev-ci, name suffix
-# _ci), never the live install's workspace or state. The repository-level
-# DATABRICKS_HOST must therefore be that target's host (docs/deployment.md,
-# owner step 6). If it names another workspace, parity-live and everything
-# after it fail at its bundle validate step (the CLI refuses the
-# profile/target host mismatch), but kill-drill-simulated needs only the
-# UC-catalog guard and still reads whatever host the repository names.
+# what make a green run certify its own commit.
+#
+# Parked until a client environment is selected (M1-PR7). It validated the CI
+# staging install that deploy-dev.yml deployed, whose workspace was deleted on
+# 2026-10-29, and the repository-level credentials still name that workspace.
+# The first job, `parked`, refuses every dispatch and every other job needs
+# it, directly or through parity-live, so no job reaches a workspace. The
+# bundle validate and refresh-job steps (and the personal-access-token
+# profile they wrote) were removed rather than re-aimed: the remaining bundle
+# target is the live install, whose jobs CI must never run. M1-PR8 rebuilds
+# this workflow per client under a non-admin validator identity.
 #
 # On failure: a GitHub issue is created with the failing job name + a
 # link to the run. Slack/PagerDuty integration is deliberately deferred
@@ -79,8 +80,6 @@ env:
   BUNDLE_VAR_lakebase_catalog_name: ${{ vars.MIP_LAKEBASE_SYNC_CATALOG || 'mip_app_state' }}
   BUNDLE_VAR_lakebase_database_name: ${{ vars.LAKEBASE_DATABASE || secrets.LAKEBASE_DATABASE || 'mip_app_state' }}
   BUNDLE_VAR_runtime_secret_scope: ${{ vars.MIP_RUNTIME_SECRET_SCOPE || 'mip-runtime' }}
-  BUNDLE_VAR_bundle_root_leaf: dev-ci
-  BUNDLE_VAR_install_suffix: _ci
   MIP_AI_GATEWAY_AGENT_MODEL_FAMILY: ${{ vars.MIP_AI_GATEWAY_AGENT_MODEL_FAMILY }}
   MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE: ${{ vars.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE }}
   MIP_AI_GATEWAY_TABLE_PREFIX: ${{ vars.MIP_AI_GATEWAY_TABLE_PREFIX }}
@@ -93,31 +92,23 @@ permissions:
   issues: write   # required for the auto-filed failure issue
 
 jobs:
-  ci-install-isolation:
+  parked:
     # The first job: every other job needs it, directly or through
-    # parity-live. The pr105-host workspace shares the live install's Unity
-    # Catalog metastore, and this workflow's catalog names fall back to the
-    # live `mip` / `mip_app_state` when the repository variables are unset.
-    # The rule table's UC-catalog check refuses an unset catalog name or a
-    # live one in any UC spelling before any job reads or writes a catalog
-    # (tools/databricks/ci_install_isolation.py; docs/deployment.md owner
-    # step 6).
-    name: CI staging install isolation (UC catalogs)
+    # parity-live, so a refusal here skips every job that would read or write
+    # a workspace (see the header). The issue filer does not need it, so a
+    # parked dispatch opens no failure issue.
+    name: Parked until a client environment is selected
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Refuse a live catalog through the shared metastore
-        # Reads the workflow-level MIP_DEFAULT_CATALOG and
-        # MIP_LAKEBASE_SYNC_CATALOG every job uses; never overridden here.
-        run: python -m tools.databricks.ci_install_isolation uc-catalogs
+      - name: Refuse until a client environment is selected
+        run: |
+          echo "::error::live validation is parked until a client environment is selected (M1-PR7)."
+          exit 1
 
   parity-live:
     name: SQL<->Python + Lakebase + Genie live
-    needs: ci-install-isolation
+    needs: parked
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -177,28 +168,6 @@ jobs:
             echo "DATABRICKS_WAREHOUSE_ID=$DATABRICKS_WAREHOUSE_ID"
             echo "GENIE_SPACE_ID=$GENIE_SPACE_ID"
           } >> "$GITHUB_ENV"
-      - name: databricks bundle validate (CI staging target, real creds)
-        # The real validate moved here from PR CI because it unavoidably
-        # calls /api/2.0/preview/scim/v2/Me which requires a real token.
-        # Newer CLI (v0.297+) always resolves a profile from
-        # ~/.databrickscfg -- env-var-only auth returns the misleading
-        # error "no DEFAULT profile configured." Seed a real DEFAULT
-        # profile from the secrets block; the secrets values double-pipe
-        # into both the env vars the Python SDK reads and the
-        # .databrickscfg file the CLI reads.
-        env:
-          DATABRICKS_AUTH_TYPE: pat
-          BUNDLE_VAR_sql_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
-          BUNDLE_VAR_genie_space_id: ${{ secrets.GENIE_SPACE_ID }}
-        run: |
-          {
-            echo "[DEFAULT]"
-            echo "host  = ${DATABRICKS_HOST}"
-            echo "token = ${DATABRICKS_TOKEN}"
-            echo "auth_type = pat"
-          } > "$HOME/.databrickscfg"
-          chmod 600 "$HOME/.databrickscfg"
-          databricks bundle validate -t pr105-host --profile DEFAULT
       - name: Resolve source-bound Gateway runtime contract
         # Endpoint/table repository secrets are intentionally not authoritative:
         # the reviewed source constants plus live Supervisor/Agent metadata must
@@ -251,35 +220,6 @@ jobs:
             --git-sha "$GITHUB_SHA" \
             --gateway-binding-sha256 "$MIP_EXPECTED_AGENT_GATEWAY_BINDING_SHA256" \
             --rollback-scope "$MIP_APP_ROLLBACK_SECRET_SCOPE"
-      - name: Refresh live FRED market rates before validation
-        # The parity gate compares gold borrower scoring against the latest
-        # reviewed FRED MORTGAGE30US row. FRED publishes independently of repo
-        # deploys, so this release gate refreshes rates before validating.
-        env:
-          DATABRICKS_AUTH_TYPE: pat
-          BUNDLE_VAR_sql_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
-          BUNDLE_VAR_genie_space_id: ${{ secrets.GENIE_SPACE_ID }}
-        run: databricks bundle run mip_fred_rates_ingest -t pr105-host --profile DEFAULT
-      - name: Refresh live Cotality silver features before validation
-        # The raw-share parity reference reads Cotality directly, while app gold
-        # reads mip.silver.*. Refresh silver here so raw-share expansions or
-        # corrections do not create the same stale-snapshot failure shape.
-        env:
-          DATABRICKS_AUTH_TYPE: pat
-          BUNDLE_VAR_sql_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
-          BUNDLE_VAR_genie_space_id: ${{ secrets.GENIE_SPACE_ID }}
-        run: databricks bundle run mip_refresh_silver -t pr105-host --profile DEFAULT
-      - name: Refresh live gold scoring snapshot before validation
-        # Rebuild borrower_360, lead_scores, segment_population, rollups, and
-        # source_readiness from the just-refreshed silver/reference inputs.
-        # Without this, weekly FRED/source-readiness changes can make live
-        # validation fail until a human happens to run deploy.sh or the app's
-        # Admin Operations refresh.
-        env:
-          DATABRICKS_AUTH_TYPE: pat
-          BUNDLE_VAR_sql_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
-          BUNDLE_VAR_genie_space_id: ${{ secrets.GENIE_SPACE_ID }}
-        run: databricks bundle run mip_refresh_scores -t pr105-host --profile DEFAULT
       - name: Reconcile delayed AI Gateway inference-table grants
         # Inference tables are delivered asynchronously. A non-strict deploy may
         # finish while the table is still pending, so every manual live gate
@@ -1042,7 +982,7 @@ jobs:
 
   kill-drill-simulated:
     name: Credential-kill drill (simulated targets)
-    needs: ci-install-isolation
+    needs: parked
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Simulated drills (genie / token / warehouse-sim / lakebase-sim)
@@ -1321,11 +1261,10 @@ jobs:
 
   notify-on-failure:
     name: File issue on failure
-    needs: [ci-install-isolation, parity-live, playwright-e2e-live, kill-drill-simulated, genie-fuzz-standard, kill-drill-real-infra]
+    needs: [parity-live, playwright-e2e-live, kill-drill-simulated, genie-fuzz-standard, kill-drill-real-infra]
     if: >-
       ${{
         always() && (
-          needs.ci-install-isolation.result == 'failure' ||
           needs.parity-live.result == 'failure' ||
           needs.playwright-e2e-live.result == 'failure' ||
           needs.kill-drill-simulated.result == 'failure' ||
@@ -1346,10 +1285,9 @@ jobs:
               `Manual live-UC workflow failed. Run: ${runUrl}`,
               '',
               '**Likely causes (in order):**',
-              '- The new pre-validation refresh step failed (`mip_fred_rates_ingest`, `mip_refresh_silver`, or `mip_refresh_scores`). Inspect those logs first.',
               '- Databricks workspace credentials rotated (check repo secrets).',
               '- Serverless warehouse or Lakebase instance stopped.',
-              '- A parity step failed after refresh, which now means real SQL/Python or raw-share/gold predicate drift.',
+              '- A parity step failed, which means real SQL/Python or raw-share/gold predicate drift or a stale gold snapshot.',
               '- Genie space deleted or its trusted-assets list pruned.',
               '',
               '**Triage:** docs/runbook.md §3 (parity-red) and §8 (CI failure triage).',

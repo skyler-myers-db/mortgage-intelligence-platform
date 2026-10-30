@@ -51,19 +51,19 @@ def test_explicit_lakebase_resource_args_override_ambient_environment(
     monkeypatch.setattr("databricks.sdk.WorkspaceClient", lambda: client)
 
     resolved = module._resolve_connection(
-        instance_name="mip-pr105-state",
-        database_name="mip_pr105_database",
+        instance_name="mip-staging-state",
+        database_name="mip_staging_database",
     )
 
-    assert resolved["dbname"] == "mip_pr105_database"
+    assert resolved["dbname"] == "mip_staging_database"
     assert calls == [
-        ("GET", "/api/2.0/database/instances/mip-pr105-state", None),
+        ("GET", "/api/2.0/database/instances/mip-staging-state", None),
         (
             "POST",
             "/api/2.0/database/credentials",
             {
                 "request_id": ANY,
-                "instance_names": ["mip-pr105-state"],
+                "instance_names": ["mip-staging-state"],
             },
         ),
     ]
@@ -175,8 +175,8 @@ def test_lakebase_migration_failure_boundaries_never_reflect_exception_text(
 
     with pytest.raises(SystemExit, match="2"):
         lakebase_migrate.main(
-            app_name="mip-app-pr105-staging",
-            lakebase_instance="mip-pr105-state",
+            app_name="mip-app-staging",
+            lakebase_instance="mip-staging-state",
             lakebase_database="mip_app_state",
             ai_gateway_verifier_client_id="verifier-client-id",
             require_ai_gateway_verifier=True,
@@ -195,19 +195,19 @@ def test_lakebase_migration_failure_boundaries_never_reflect_exception_text(
 def test_lakebase_job_parser_accepts_explicit_resource_args(module: Any) -> None:
     args = module.build_parser().parse_args(
         [
-            "--lakebase-instance=mip-pr105-state",
-            "--lakebase-database=mip_pr105_database",
+            "--lakebase-instance=mip-staging-state",
+            "--lakebase-database=mip_staging_database",
         ]
     )
 
-    assert args.lakebase_instance == "mip-pr105-state"
-    assert args.lakebase_database == "mip_pr105_database"
+    assert args.lakebase_instance == "mip-staging-state"
+    assert args.lakebase_database == "mip_staging_database"
 
 
 def test_lakebase_migration_parser_accepts_explicit_app_name() -> None:
-    args = lakebase_migrate.build_parser().parse_args(["--app-name=mip-app-pr105-staging"])
+    args = lakebase_migrate.build_parser().parse_args(["--app-name=mip-app-staging"])
 
-    assert args.app_name == "mip-app-pr105-staging"
+    assert args.app_name == "mip-app-staging"
 
 
 def test_lakebase_migration_parser_accepts_required_explicit_verifier_identity() -> None:

@@ -376,7 +376,7 @@ def test_a_delete_whose_outcome_cannot_be_read_back_stops_the_run(fault: str, me
         ("source_git_sha", SHA[:12]),
         ("current_release", f"{'f' * 12}-{'c' * 12}"),
         ("current_release", "0123abcd"),
-        ("files_root", contract.files_root(principal=PRINCIPAL, target="dev", root_leaf="dev-ci")),
+        ("files_root", contract.files_root(principal=PRINCIPAL, target="dev", root_leaf="client-a")),
         ("app_name", ""),
         ("expected_app_id", " "),
         ("principal", "src"),

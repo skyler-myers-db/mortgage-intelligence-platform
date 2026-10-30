@@ -157,7 +157,7 @@ def verify(
 def main(argv: list[str] | None = None, *, stdin: Any = None, client: Any = None) -> int:
     parser = argparse.ArgumentParser(description="Verify the deployed mip_scheduled_refresh against the deploy intent.")
     parser.add_argument("--expect", required=True, choices=sorted(PAUSE_STATES))
-    parser.add_argument("--live-install", action="store_true", help="the dev target's live install (empty install_suffix)")
+    parser.add_argument("--live-install", action="store_true", help="the dev target's live install")
     args = parser.parse_args(argv)
     try:
         summary = json.loads((stdin or sys.stdin).read())

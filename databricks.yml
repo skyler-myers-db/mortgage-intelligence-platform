@@ -24,9 +24,7 @@ bundle:
 #
 # DRY-up (audit R5-24, 2026-04-23): a YAML anchor on this root-level host
 # is the single source of truth. Every `workspace.host:` field across the
-# deployable targets dereferences `*default_host`; only the CI-only
-# `pr105-host` target carries its own `&ci_staging_host` (Entrada's CI
-# staging workspace, refused outside deploy-dev.yml). Variables cannot be
+# deployable targets dereferences `*default_host`. Variables cannot be
 # used here (see above), so an anchor is the correct primitive. A customer forking the
 # repo now edits EXACTLY ONE line to rebind the host. `make
 # check-workspace-host` (Makefile) greps for the literal outside this
@@ -107,12 +105,7 @@ targets:
       user_name: ${workspace.current_user.userName}
     workspace:
       host: *default_host
-      # The leaf defaults to `dev`, so the live install's root (and state)
-      # stays ~/.bundle/<bundle>/dev. Only the CI staging install
-      # (deploy-dev.yml, MIP_BUNDLE_ROOT_LEAF=dev-ci) gets its own root, and
-      # only on the forked-anchor `pr105-host` target below:
-      # tools/databricks/ci_install_isolation.py refuses it anywhere else.
-      root_path: ~/.bundle/${bundle.name}/${var.bundle_root_leaf}
+      root_path: ~/.bundle/${bundle.name}/${bundle.target}
     variables:
       # The Databricks Apps bundle schema requires app Genie bindings to carry
       # a concrete space_id; it cannot resolve Genie spaces by name through a
@@ -122,8 +115,7 @@ targets:
       # through the signed scripts/deploy.sh command of record
       # never reaches Apps with the placeholder and returns the opaque 403
       # "Can View" permission error. The pin must name a space in the
-      # *default_host workspace: tools/databricks/ci_install_isolation.py
-      # refuses a CI staging GENIE_SPACE_ID equal to it.
+      # *default_host workspace.
       genie_space_id: 01f13d4968af1b249dc388fd5b18b195
 
   prod:
@@ -170,37 +162,6 @@ targets:
     workspace:
       host: *default_host
       root_path: /Workspace/ci-placeholder/.bundle/${bundle.name}/${bundle.target}
-  # Forked-anchor CI staging target (post-W5, D-platform-process-b step 7).
-  # deploy-dev.yml deploys ONLY here and never to `dev`: the CI staging
-  # install gets its own workspace host, so scripts/deploy.sh's host check
-  # binds its auth to that workspace, which separates the workspace-scoped
-  # objects (App, warehouse, endpoints, Genie, secret scopes, Lakebase, the
-  # `users` group) and resolves the seven reserved identities by name there.
-  # It does NOT separate Unity Catalog: that workspace shares the live
-  # install's metastore, so the rule table's distinct catalog names are the
-  # primary UC isolation. Service principals are account-level, so keeping
-  # each workspace's reserved principals out of the other is an owner
-  # invariant (docs/deployment.md, "CI staging install"). Its own YAML anchor
-  # (not `*default_host`) keeps scripts/configure-workspace.sh and
-  # `make check-workspace-host` single-anchor for customer forks. A dev-class
-  # install otherwise (development mode, sandbox runtime, Summit demo feeds),
-  # still under its own root leaf and `_ci` names. CI-only:
-  # tools/databricks/ci_install_isolation.py refuses it outside deploy-dev.yml
-  # and refuses a host equal to the dev target's. No Genie pin: the governed
-  # space is resolved by MIP_GENIE_SPACE_NAME in that workspace at deploy time.
-  # run_as names a service principal: only deploy-dev.yml deploys this target,
-  # and it authenticates solely as the CI deployer service principal through
-  # GitHub Actions OIDC (profile auth_type github-oidc), whose SCIM userName is
-  # its application id. A job's run_as must name a service principal through
-  # service_principal_name, never user_name (docs/deployment.md, "CI staging
-  # install").
-  pr105-host:
-    mode: development
-    run_as:
-      service_principal_name: ${workspace.current_user.userName}
-    workspace:
-      host: &ci_staging_host https://dbc-149e560d-e056.cloud.databricks.com
-      root_path: ~/.bundle/${bundle.name}/${var.bundle_root_leaf}
 
 resources:
   # Slice 5 real-data migration: self-contained Lakebase provisioning.
@@ -336,7 +297,7 @@ resources:
 
   sql_warehouses:
     mip_serverless_sql:
-      name: mip_serverless_sql${var.install_suffix}
+      name: mip_serverless_sql
       warehouse_type: PRO
       enable_serverless_compute: true
       cluster_size: 2X-Small
@@ -1277,7 +1238,7 @@ resources:
     # `mode: development` (CLI v1.10.0); any other apply re-pauses it.
     # The failure email is var.scheduled_refresh_failure_recipients (default
     # empty); tools/databricks/bundle_env.py fills it for the dev live install
-    # only, never the dev-ci leaf or prod.
+    # only, never prod.
     # Never add a task that reaches mip_init_catalog_schemas (the reviewed
     # Growth Agent function publisher): tests/unit/test_refresh_schedule_contract.py.
     mip_scheduled_refresh:
@@ -1342,7 +1303,7 @@ resources:
     # pipelines/lakeflow/mip_feature_pipeline.py and sql/ddl/silver_*.sql for
     # column contracts; docs/data-contract-module0.md §2 is authoritative.
     mip_feature_pipeline:
-      name: mip_feature_pipeline${var.install_suffix}
+      name: mip_feature_pipeline
       catalog: ${var.uc_catalog}
       schema: silver
       photon: true
@@ -1398,7 +1359,7 @@ resources:
   # tests/unit/test_bundle_experiment_path.py.
   experiments:
     mip_lead_scoring:
-      name: /Shared/mip-lead-scoring${var.install_suffix}
+      name: /Shared/mip-lead-scoring
 
 # Genie spaces (mortgage_lead_intelligence) are still provisioned out-of-
 # bundle via tools/databricks/provision_genie_space.py (see AGENTS.md).
@@ -1425,26 +1386,13 @@ variables:
   tenant_id:
     description: Lakebase namespace for the configured deployment's reviewed disclosures
     default: ""
-  bundle_root_leaf:
-    description: >-
-      Last segment of the dev-class targets' bundle root. `dev` is the live
-      install; only deploy-dev.yml's isolated CI staging install on the
-      forked-anchor pr105-host target sets another value (MIP_BUNDLE_ROOT_LEAF,
-      checked by tools/databricks/ci_install_isolation.py).
-    default: dev
-  install_suffix:
-    description: >-
-      Appended to the workspace-unique display names (SQL warehouse, feature
-      pipeline, MLflow experiment). Empty for the live install; derived from
-      the bundle root leaf for the CI staging install.
-    default: ""
   scheduled_refresh_pause_status:
     description: >-
       Pause status of mip_scheduled_refresh's weekly schedule. PAUSED by
       default and set by no target: scripts/deploy.sh exports UNPAUSED only
-      for the dev target's live install (empty install_suffix), and
-      MIP_SCHEDULED_REFRESH=off opts it out. The CI staging install and prod
-      stay PAUSED. Any apply outside scripts/deploy.sh re-pauses it.
+      for the dev target's live install, and MIP_SCHEDULED_REFRESH=off opts
+      it out. prod stays PAUSED. Any apply outside scripts/deploy.sh
+      re-pauses it.
     default: PAUSED
   scheduled_refresh_failure_recipients:
     type: complex
@@ -1453,7 +1401,7 @@ variables:
       set by no target. The CLI refuses a BUNDLE_VAR_ export for a complex
       variable, so tools/databricks/bundle_env.py writes it into the bundle's
       .databricks/bundle/<target>/variable-overrides.json: the deploying user
-      for the dev target's live install, empty for the dev-ci leaf and prod.
+      for the dev target's live install, empty for prod.
     default: []
   ai_gateway_verifier_client_id:
     description: >-

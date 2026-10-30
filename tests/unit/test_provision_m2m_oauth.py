@@ -624,10 +624,10 @@ def test_credential_mint_fails_before_boundary_when_runtime_writer_is_absent() -
 def test_app_name_resolution_prefers_reviewed_deployment_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MIP_APP_NAME", "mip-app-pr105-staging")
+    monkeypatch.setenv("MIP_APP_NAME", "mip-app-staging")
     monkeypatch.setenv("BUNDLE_VAR_app_name", "wrong-lower-precedence")
 
-    assert pmo._load_app_name_from_bundle() == "mip-app-pr105-staging"
+    assert pmo._load_app_name_from_bundle() == "mip-app-staging"
 
 
 def test_app_name_resolution_accepts_bundle_variable_without_mip_alias(
@@ -1979,9 +1979,9 @@ def test_normal_secret_sink_discovers_the_exact_live_app_url() -> None:
     client = _make_client(create_returns=new_sp)
 
     with patch.object(pmo, "_set_gh_secret") as set_secret:
-        _provision(client, app_name="mip-app-pr105-staging", app_url=None)
+        _provision(client, app_name="mip-app-staging", app_url=None)
 
-    client.apps.get.assert_called_once_with("mip-app-pr105-staging")
+    client.apps.get.assert_called_once_with("mip-app-staging")
     assert (
         call(
             _CANONICAL_GH_REPO,
@@ -1997,7 +1997,7 @@ def test_missing_live_app_url_fails_before_identity_mutation() -> None:
     client.apps.get.return_value = SimpleNamespace(url=None)
 
     with pytest.raises(SystemExit, match="returned no valid HTTPS URL"):
-        _provision(client, app_name="mip-app-pr105-staging", app_url=None)
+        _provision(client, app_name="mip-app-staging", app_url=None)
 
     client.service_principals.list.assert_not_called()
     client.service_principals.create.assert_not_called()
@@ -2338,66 +2338,6 @@ def test_verifier_grants_green_before_revoke_and_preserves_signed_blue(
         ("revoke", "stale-gateway"),
     ]
     assert result.granted_can_query is True
-
-
-@pytest.mark.parametrize("shared", [True, False], ids=["shared-verifier", "install-owned-verifier"])
-def test_suffixed_verifier_provisioning_proves_ownership_before_the_gateway_grant(
-    monkeypatch: pytest.MonkeyPatch, shared: bool
-) -> None:
-    """Post-W5: the CI staging install's verifier revoke is guarded with this call's --warehouse-id."""
-
-    from tools.databricks import install_scope
-
-    verifier = _sp(
-        "mip-ai-gateway-verifier-ci-sp",
-        sp_id="verifier-scim-id",
-        application_id="verifier-application-id",
-    )
-    client = _make_client(existing_sp=verifier, resource_access=False)
-    holders = ("verifier-application-id",) if shared else ("live-app",)
-    client.warehouses.list.side_effect = lambda: iter(
-        [SimpleNamespace(id="warehouse-123", name="mip_serverless_sql_ci"), SimpleNamespace(id="wh-live", name="mip_serverless_sql")]
-    )
-    client.warehouses.get_permissions.side_effect = lambda _warehouse_id: WarehousePermissions(
-        access_control_list=[
-            WarehouseAccessControlResponse(
-                service_principal_name=holder,
-                all_permissions=[WarehousePermission(inherited=False, permission_level=WarehousePermissionLevel.CAN_USE)],
-            )
-            for holder in holders
-        ]
-    )
-    monkeypatch.setenv(install_scope.INSTALL_SUFFIX_ENV, "_ci")
-    events: list[tuple[str, str]] = []
-    monkeypatch.setattr(pmo, "_reserved_gateway_endpoints", lambda _client: {"green-gateway", "live-green-gateway"})
-    monkeypatch.setattr(
-        pmo, "_grant_can_query_on_endpoint", lambda _client, endpoint, *_a, **_k: events.append(("grant", endpoint))
-    )
-    monkeypatch.setattr(
-        pmo,
-        "_revoke_can_query_on_obsolete_endpoint",
-        lambda _client, endpoint, *_a, **k: events.append(("revoke", f"{endpoint}@{k['install_warehouse_id']}")),
-    )
-    monkeypatch.setattr(pmo, "_grant_can_use_on_warehouse", lambda *_a, **_k: events.append(("warehouse", "")))
-    arguments: dict[str, object] = {
-        "sp_name": verifier.display_name,
-        "grant_can_use": False,
-        "group_name": None,
-        "gateway_endpoint": "green-gateway",
-        "warehouse_id": "warehouse-123",
-        "identity_role": "verifier",
-        "mint_secret": False,
-        "set_gh_secrets": False,
-        "gh_repo": None,
-    }
-
-    if shared:
-        with pytest.raises(install_scope.InstallScopeRefusal):
-            _provision(client, **arguments)
-        assert events == [], "no Gateway grant, no revoke and no warehouse convergence"
-    else:
-        _provision(client, **arguments)
-        assert events == [("grant", "green-gateway"), ("revoke", "live-green-gateway@warehouse-123"), ("warehouse", "")]
 
 
 def test_provision_rejects_verifier_app_can_use_before_client_or_any_mutation() -> None:

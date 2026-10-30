@@ -25,7 +25,7 @@ def test_new_system_owned_kimi_model_uses_exact_platform_inheritance(monkeypatch
 
     verifier._audit_registered_models(
         workspace,
-        catalog="mip_pr105_staging",
+        catalog="mip_staging",
         principal="proxy-application-id",
         owner_aliases={"proxy-application-id"},
     )
