@@ -423,15 +423,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     matcher = None
     if args.exposure_identity:
-        assert_exposure_identity(
-            workspace,
-            identity=args.exposure_identity,
-            app_name=args.app_name,
-            application_id=args.application_id,
-        )
-        matcher = identity_matcher(
+        # Load first: a policy with no entry for this identity accepts nothing,
+        # so the audit then reads exactly what it read without the flag.
+        loaded = identity_matcher(
             args.exposure_identity, governed_space_ids=[args.genie_space_id]
         )
+        if loaded.active:
+            assert_exposure_identity(
+                workspace,
+                identity=args.exposure_identity,
+                app_name=args.app_name,
+                application_id=args.application_id,
+            )
+            matcher = loaded
     credential_lease = held_deployment_credential_assertion(workspace)
     (
         service_principal_id,

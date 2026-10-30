@@ -136,7 +136,8 @@ def test_main_hands_the_named_identity_its_own_matcher(monkeypatch) -> None:
     monkeypatch.setattr(
         audit,
         "identity_matcher",
-        lambda identity, **kwargs: loaded.append((identity, kwargs)) or f"matcher-{identity}",
+        lambda identity, **kwargs: loaded.append((identity, kwargs))
+        or SimpleNamespace(active=True, name=f"matcher-{identity}"),
     )
 
     argv = [
@@ -148,10 +149,54 @@ def test_main_hands_the_named_identity_its_own_matcher(monkeypatch) -> None:
     ]  # fmt: skip
     assert _main(["--application-id", "app-client-EXAMPLE", *argv, "--exposure-identity", "app"]) == 0
     assert loaded == [("app", {"governed_space_ids": ["space-id"]})]
-    assert genie[-1]["matcher"] == "matcher-app"
+    assert genie[-1]["matcher"].name == "matcher-app"
     with pytest.raises(RuntimeError, match="does not match the audited principal"):
         _main(["--application-id", "app-client-EXAMPLE", *argv, "--exposure-identity", "runtime"])
-    assert len(loaded) == 1, "a mismatched identity never loads a matcher"
+    assert len(genie) == 1, "a mismatched identity never reaches an audit"
+
+
+@pytest.mark.parametrize("identity", ["app", "runtime"])
+def test_an_empty_policy_reads_exactly_what_the_audit_read_without_the_flag(
+    monkeypatch, identity: str
+) -> None:
+    """Review of #306: no apps.get, and no matcher, when no entry covers the identity."""
+
+    for name in ("MIP_ACCEPTED_EXPOSURE_JSON", "MIP_ACK_ACCEPTED_EXPOSURE_PLAN", "MIP_GENIE_SPACE_NAME"):
+        monkeypatch.delenv(name, raising=False)
+    runs: list[tuple[list[str], list[dict[str, object]]]] = []
+    argv = [
+        "--application-id", "app-client-EXAMPLE",
+        "--account-id", "account-id",
+        "--expected-inventory-principal", "deployer@example.com",
+        "--serving-endpoint", "gateway-endpoint",
+        "--expected-serving-permission", "CAN_QUERY",
+        "--genie-space-id", "space-id",
+    ]  # fmt: skip
+    for extra in ([], ["--exposure-identity", identity]):
+        workspace = _workspace()
+        reads: list[str] = []
+        genie: list[dict[str, object]] = []
+
+        def no_app_read(_name: str, reads: list[str] = reads) -> object:
+            reads.append("apps.get")
+            raise AssertionError("an empty policy must not read the App")
+
+        workspace.apps = SimpleNamespace(get=no_app_read)
+        monkeypatch.setattr(audit, "WorkspaceClient", lambda workspace=workspace: workspace)
+        monkeypatch.setattr(audit, "audit_global_serving_endpoint_access", lambda *_a, **_kw: None)
+        monkeypatch.setattr(
+            audit, "audit_global_genie_access", lambda _client, genie=genie, **kwargs: genie.append(kwargs)
+        )
+        monkeypatch.setattr(
+            audit, "_audit_managed_query_group_governance", lambda *_a, **_kw: _TARGET_IDENTITY_PROOF
+        )
+
+        assert _main([*argv, *extra]) == 0
+        runs.append((reads, genie))
+
+    (plain_reads, plain_genie), (flag_reads, flag_genie) = runs
+    assert plain_reads == flag_reads == []
+    assert plain_genie == flag_genie and flag_genie[0]["matcher"] is None
 
 
 def test_main_can_audit_verifier_without_genie(monkeypatch) -> None:
