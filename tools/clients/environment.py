@@ -1,15 +1,27 @@
 """Resolve a client profile from GitHub contexts or from the local environment.
 
 **CI.** ``--vars-json`` carries ``toJSON(vars)`` and ``--secrets-json``
-``toJSON(secrets)``, each from one step's env (``env:NAME``) or a file. They
-are the only inputs; the ambient environment and ``.env.local`` are not read.
+``toJSON(secrets)``, each from one step's env (``env:NAME``) or a file, and
+``--environment`` names the GitHub Environment the job runs in. The ambient
+environment and ``.env.local`` are not read.
 
 * An identifying or secret field (or alias) found in ``vars`` is refused: a
   variable prints in clear in step env and in the run log.
 * A public field found in ``secrets`` is refused: the runner would mask its
   value, and a masked catalog or scope name blanks unrelated log text.
-* Unknown keys are ignored. Both contexts hold repository-wide entries, and
-  ``secrets`` always holds ``github_token``.
+* ``MIP_CLIENT`` must equal the environment name, so a job pointed at another
+  client's environment is refused.
+* Unknown keys are ignored. ``secrets`` always holds ``github_token``.
+
+**Scope precondition.** In an environment job both contexts also carry the
+organization's and the repository's entries, with the environment's winning
+on a clash, and nothing in them says which scope an entry came from. So a
+field the environment omits is filled, silently, from a repository-level entry
+of the same name. No repository- or organization-level secret or variable may
+carry a profile field or alias name; deleting the ones that do is a cutover
+step of the per-client workflow (M1-PR7). Until then a repository-level
+identifying variable is refused here like any other, and a ``MIP_CLIENT`` that
+only the repository holds fails the environment binding.
 
 **Local.** A non-empty shell value beats ``.env.local``, as
 ``deployment_control_value`` in scripts/lib/deploy_identity_lifecycle.sh does.
@@ -95,8 +107,17 @@ def _canonicalize(found: Mapping[str, str]) -> RawProfile:
     return RawProfile(values=values, identity_aliases=identity)
 
 
-def from_github(vars_context: Mapping[str, object], secrets_context: Mapping[str, object]) -> RawProfile:
-    """The profile from the deploy environment's variables and secrets."""
+def from_github(
+    vars_context: Mapping[str, object],
+    secrets_context: Mapping[str, object],
+    *,
+    environment: str,
+) -> RawProfile:
+    """The profile from the deploy environment's variables and secrets.
+
+    ``environment`` is the GitHub Environment the job runs in; GitHub matches
+    environment names without regard to case, so the binding does too.
+    """
 
     refusals: list[str] = []
     found: dict[str, str] = {}
@@ -120,6 +141,11 @@ def from_github(vars_context: Mapping[str, object], secrets_context: Mapping[str
             )
         else:
             found[name] = text
+    bound = environment.strip().casefold()
+    if not bound:
+        refusals.append("--environment: name the GitHub Environment the job runs in")
+    elif found.get("MIP_CLIENT", "").casefold() != bound:
+        refusals.append("MIP_CLIENT: must equal the GitHub Environment the job runs in")
     if refusals:
         raise ProfileRefusal(refusals)
     return _canonicalize(found)

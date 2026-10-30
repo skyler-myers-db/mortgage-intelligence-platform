@@ -3,7 +3,8 @@
 Inputs, one way or the other:
 
 * CI: ``--vars-json SRC`` and ``--secrets-json SRC``, where SRC is ``env:NAME``
-  (a step env var holding ``toJSON(vars)`` or ``toJSON(secrets)``) or a file.
+  (a step env var holding ``toJSON(vars)`` or ``toJSON(secrets)``) or a file,
+  plus ``--environment NAME``, the GitHub Environment the job runs in.
 * Local: the shell, then ``--env-file`` (default ``.env.local``).
   ``--env-file-only`` ignores the shell, to check a template.
 
@@ -48,6 +49,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("command", choices=("check", "resolve", "mask", "digest"))
     parser.add_argument("--vars-json", help="env:NAME or a file holding toJSON(vars)")
     parser.add_argument("--secrets-json", help="env:NAME or a file holding toJSON(secrets)")
+    parser.add_argument("--environment", help="CI: the GitHub Environment the job runs in; MIP_CLIENT must equal it")
     parser.add_argument("--env-file", help="local env file (default: .env.local)")
     parser.add_argument("--env-file-only", action="store_true", help="ignore the shell environment")
     parser.add_argument(
@@ -67,10 +69,14 @@ def _load(args: argparse.Namespace) -> ClientProfile:
     if args.vars_json or args.secrets_json:
         if args.env_file or args.env_file_only:
             raise ProfileRefusal(["choose the CI contexts or a local env file, not both"])
+        if args.environment is None:
+            raise ProfileRefusal(["--environment: required with the CI contexts"])
         vars_context = read_context(args.vars_json) if args.vars_json else {}
         secrets_context = read_context(args.secrets_json) if args.secrets_json else {}
-        raw = from_github(vars_context, secrets_context)
+        raw = from_github(vars_context, secrets_context, environment=args.environment)
     else:
+        if args.environment is not None:
+            raise ProfileRefusal(["--environment: applies to the CI contexts only"])
         env_file = Path(args.env_file) if args.env_file else REPO / ".env.local"
         raw = from_local({} if args.env_file_only else os.environ, env_file)
     return resolve(raw, allow_placeholders=args.allow_placeholders)

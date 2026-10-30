@@ -128,7 +128,7 @@ def test_a_profile_round_trips_through_its_canonical_env(build) -> None:
     assert again == first
     assert views.digest(again) == views.digest(first)
     variables, secrets = split_contexts(env)
-    assert resolve(from_github(variables, secrets)) == first
+    assert resolve(from_github(variables, secrets, environment=first.client)) == first
 
 
 def test_the_digest_covers_identifying_fields_and_never_secrets() -> None:
