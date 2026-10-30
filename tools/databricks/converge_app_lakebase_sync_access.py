@@ -9,7 +9,9 @@ access to the exact reviewed synced-table allowlist.
 Every mutation is followed by a bounded ``system.information_schema`` audit
 covering the App service principal and its workspace-visible nested groups.
 The audit fails closed on inherited residue, ownership, malformed results, or
-results too large to prove completely in one response.
+results too large to prove completely in one response. ``--check`` runs the same
+audit read-only and reports every violation symbolically
+(``app_lakebase_sync_access_check``).
 """
 
 from __future__ import annotations
@@ -371,7 +373,20 @@ def _postflight(
     application_id: str,
     grantees: tuple[str, ...],
     mode: Mode,
+    findings: list[str] | None = None,
 ) -> None:
+    """Prove the exact boundary for ``mode``.
+
+    Without ``findings`` the first violation raises, as convergence always has.
+    With a list, each boundary violation is appended as a symbolic, identifier-free
+    line and evaluation continues; malformed or unrelated results still raise.
+    """
+
+    def violation(message: str, symbol: str) -> None:
+        if findings is None:
+            raise RuntimeError(message)
+        findings.append(symbol)
+
     catalog_rows = _query_rows(
         workspace,
         warehouse_id=warehouse_id,
@@ -401,18 +416,32 @@ def _postflight(
         ):
             raise RuntimeError("Lakebase sync catalog privileges returned an unrelated grant")
         if action not in _KNOWN_CATALOG_PRIVILEGES:
-            raise RuntimeError(f"Unexpected effective Lakebase sync catalog privilege: {action}")
+            violation(
+                f"Unexpected effective Lakebase sync catalog privilege: {action}",
+                f"sync catalog: unexpected effective privilege {action}",
+            )
+            continue
         if observed_grantee != application_id:
-            raise RuntimeError("App identity inherits a Lakebase catalog privilege through a group")
+            violation(
+                "App identity inherits a Lakebase catalog privilege through a group",
+                f"sync catalog: {action} is inherited through a group",
+            )
+            continue
         if privilege_source != "NONE":
-            raise RuntimeError("Lakebase catalog privilege is inherited from a broader object")
+            violation(
+                "Lakebase catalog privilege is inherited from a broader object",
+                f"sync catalog: {action} is inherited from a broader object",
+            )
+            continue
         direct_catalog_actions.add(action)
     expected_catalog_actions = {"USE CATALOG"} if mode == "runtime" else set()
     if direct_catalog_actions != expected_catalog_actions:
-        raise RuntimeError(
+        violation(
             "Lakebase sync catalog privileges are not exact: "
             f"expected {sorted(expected_catalog_actions)}, "
-            f"observed {sorted(direct_catalog_actions)}"
+            f"observed {sorted(direct_catalog_actions)}",
+            f"sync catalog: direct privileges are {sorted(direct_catalog_actions)}, "
+            f"reviewed {sorted(expected_catalog_actions)}",
         )
 
     schema_rows = _query_rows(
@@ -450,26 +479,39 @@ def _postflight(
             or not privilege_source
         ):
             raise RuntimeError("Lakebase sync schema privileges returned an unrelated grant")
+        schema_role = "sync schema" if observed_schema == sync_schema else "unreviewed schema"
         if mode == "quiesce":
-            raise RuntimeError(
+            violation(
                 f"App identity retains an effective quiesced schema privilege: "
-                f"{catalog}.{observed_schema} {action}"
+                f"{catalog}.{observed_schema} {action}",
+                f"{schema_role}: {action} is retained in quiesce mode",
             )
+            continue
         if observed_schema != sync_schema:
-            raise RuntimeError("App identity retains access to an unrelated Lakebase schema")
+            violation(
+                "App identity retains access to an unrelated Lakebase schema",
+                f"unreviewed schema: App holds {action}",
+            )
+            continue
         if observed_grantee != application_id:
-            raise RuntimeError(
-                "App identity inherits a target Lakebase schema privilege through a group"
+            violation(
+                "App identity inherits a target Lakebase schema privilege through a group",
+                f"sync schema: {action} is inherited through a group",
             )
+            continue
         if privilege_source != "NONE":
-            raise RuntimeError(
-                "Runtime target Lakebase schema privilege is inherited from a broader object"
+            violation(
+                "Runtime target Lakebase schema privilege is inherited from a broader object",
+                f"sync schema: {action} is inherited from a broader object",
             )
+            continue
         target_actions.add(action)
     if mode == "runtime" and target_actions != _RUNTIME_SCHEMA_PRIVILEGES:
-        raise RuntimeError(
+        violation(
             "Runtime Lakebase sync schema privileges are not exact: "
-            f"expected {sorted(_RUNTIME_SCHEMA_PRIVILEGES)}, observed {sorted(target_actions)}"
+            f"expected {sorted(_RUNTIME_SCHEMA_PRIVILEGES)}, observed {sorted(target_actions)}",
+            f"sync schema: direct privileges are {sorted(target_actions)}, "
+            f"reviewed {sorted(_RUNTIME_SCHEMA_PRIVILEGES)}",
         )
 
     table_rows = _query_rows(
@@ -509,32 +551,42 @@ def _postflight(
             or not privilege_source
         ):
             raise RuntimeError("Lakebase sync table privileges returned an unrelated grant")
+        reviewed_table = observed_schema == sync_schema and observed_table in sync_tables
+        table_role = "reviewed synced table" if reviewed_table else "unreviewed table"
         if mode == "quiesce":
-            raise RuntimeError(
+            violation(
                 f"App identity retains an effective quiesced table privilege: "
-                f"{catalog}.{observed_schema}.{observed_table} {action}"
+                f"{catalog}.{observed_schema}.{observed_table} {action}",
+                f"{table_role}: {action} is retained in quiesce mode",
             )
-        if (
-            observed_schema != sync_schema
-            or observed_table not in sync_tables
-            or action != "SELECT"
-        ):
-            raise RuntimeError(
+            continue
+        if not reviewed_table or action != "SELECT":
+            violation(
                 f"Unexpected effective target Lakebase table privilege: "
-                f"{catalog}.{observed_schema}.{observed_table} {action}"
+                f"{catalog}.{observed_schema}.{observed_table} {action}",
+                f"{table_role}: unexpected {action}",
             )
+            continue
         if observed_grantee != application_id:
-            raise RuntimeError(
-                "App identity inherits a target Lakebase table privilege through a group"
+            violation(
+                "App identity inherits a target Lakebase table privilege through a group",
+                f"{table_role}: {action} is inherited through a group",
             )
+            continue
         if privilege_source != "NONE":
-            raise RuntimeError("Target Lakebase table SELECT is not a direct exact-table grant")
+            violation(
+                "Target Lakebase table SELECT is not a direct exact-table grant",
+                f"{table_role}: {action} is inherited from a broader object",
+            )
+            continue
         target_table_actions.add((observed_table, action))
     expected_table_actions = {(table, "SELECT") for table in sync_tables}
     if mode == "runtime" and target_table_actions != expected_table_actions:
-        raise RuntimeError(
+        violation(
             "Runtime Lakebase sync table privileges are not exact: "
-            f"expected {sorted(expected_table_actions)}, observed {sorted(target_table_actions)}"
+            f"expected {sorted(expected_table_actions)}, observed {sorted(target_table_actions)}",
+            f"reviewed synced tables: SELECT is missing on "
+            f"{len(expected_table_actions - target_table_actions)} of {len(sync_tables)}",
         )
 
     ownership_rows = _query_rows(
@@ -592,8 +644,9 @@ def _postflight(
             or (kind == "TABLE" and (not observed_schema or not observed_object))
         ):
             raise RuntimeError("Lakebase sync ownership returned an invalid object")
-        raise RuntimeError(
-            f"App identity is an effective owner of Lakebase sync {kind.lower()} object"
+        violation(
+            f"App identity is an effective owner of Lakebase sync {kind.lower()} object",
+            f"ownership: App owns a Lakebase sync {kind.lower()} object",
         )
 
 
@@ -717,11 +770,20 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--sync-schema", required=True)
     parser.add_argument("--sync-tables", required=True)
     parser.add_argument("--mode", choices=("quiesce", "runtime"), required=True)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Read-only: run the boundary audit for --mode and exit 1 on drift.",
+    )
     return parser
 
 
-def main() -> int:
-    args = _parser().parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    if args.check:
+        from tools.databricks.app_lakebase_sync_access_check import run_check
+
+        return run_check(args)
     exists = converge_app_lakebase_sync_access(
         warehouse_id=args.warehouse_id,
         app_application_id=args.app_application_id,
