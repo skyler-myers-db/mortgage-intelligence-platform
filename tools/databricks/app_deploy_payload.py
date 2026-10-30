@@ -250,6 +250,17 @@ def validated_app_resource_name(value: str) -> str:
 
 
 def _previous_secret_grace_configured(dotenv: dict[str, str]) -> tuple[bool, str]:
+    """Whether the App binds ``genie-action-previous`` as a rotation grace key, and its key id.
+
+    The public ``MIP_GENIE_ACTION_SECRET_PREVIOUS_KID`` opens the window. The
+    runtime secret scope is presence-only and no workflow carries a key value,
+    so what this binds is the stored key: the one ``provision_runtime_secrets
+    --rotate-genie-action`` moved there, or a disabled sentinel, which verifies
+    nothing. A previous value without its id is still refused, and the
+    provisioner's pre-stop plan refuses it first
+    (tests/unit/test_previous_key_binding_parity.py).
+    """
+
     previous = runtime_secret_text(_env_value(PREVIOUS_SECRET_ENV, dotenv))
     previous_kid = _env_value(PREVIOUS_SECRET_KID_ENV, dotenv)
     if previous and not previous_kid:
@@ -257,7 +268,7 @@ def _previous_secret_grace_configured(dotenv: dict[str, str]) -> tuple[bool, str
             f"{PREVIOUS_SECRET_KID_ENV} is required when {PREVIOUS_SECRET_ENV} "
             "is retained during a rotation grace period"
         )
-    return previous is not None, previous_kid
+    return bool(previous_kid), previous_kid
 
 
 # The runtime's Literal (backend.config.settings.mip_warehouse_keep_warm);

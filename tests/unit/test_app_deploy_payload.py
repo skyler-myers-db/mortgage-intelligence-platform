@@ -496,7 +496,8 @@ def test_payload_rejects_previous_action_secret_without_rotation_kid(monkeypatch
         )
 
 
-def test_payload_omits_stale_previous_kid_without_previous_secret(monkeypatch) -> None:
+def test_payload_binds_the_stored_previous_key_on_its_kid_alone(monkeypatch) -> None:
+    """The presence-only scope holds the grace key (``--rotate-genie-action``); no workflow carries its value."""
     monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_PREVIOUS_KID", "v2")
 
     payload = build_payload(
@@ -506,13 +507,18 @@ def test_payload_omits_stale_previous_kid_without_previous_secret(monkeypatch) -
     )
     env = _env_map(payload)
 
-    assert "MIP_GENIE_ACTION_SECRET_PREVIOUS" not in env
-    assert "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID" not in env
+    assert env["MIP_GENIE_ACTION_SECRET_PREVIOUS"] == {
+        "name": "MIP_GENIE_ACTION_SECRET_PREVIOUS",
+        "value_from": "genie_action_previous_secret",
+    }
+    assert env["MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"]["value"] == "v2"
 
 
-def test_payload_omits_placeholder_previous_secret(monkeypatch) -> None:
+@pytest.mark.parametrize("kid", (None, "v2"), ids=("no-kid", "kid"))
+def test_a_placeholder_previous_secret_is_unset_and_the_kid_alone_decides(monkeypatch, kid: str | None) -> None:
     monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_PREVIOUS", "REDACTED")
-    monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_PREVIOUS_KID", "v2")
+    if kid is not None:
+        monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_PREVIOUS_KID", kid)
 
     payload = build_payload(
         source_code_path="/Workspace/app/files",
@@ -521,8 +527,9 @@ def test_payload_omits_placeholder_previous_secret(monkeypatch) -> None:
     )
     env = _env_map(payload)
 
-    assert "MIP_GENIE_ACTION_SECRET_PREVIOUS" not in env
-    assert "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID" not in env
+    assert ("MIP_GENIE_ACTION_SECRET_PREVIOUS" in env) == (kid is not None)
+    assert ("MIP_GENIE_ACTION_SECRET_PREVIOUS_KID" in env) == (kid is not None)
+    assert "REDACTED" not in str(payload)
 
 
 def test_payload_uses_secret_resource_when_operator_value_is_placeholder(monkeypatch) -> None:
