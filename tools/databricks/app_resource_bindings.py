@@ -16,6 +16,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from tools.databricks.check_exit_codes import CHECK_DRIFT, CHECK_EXACT
+
 _RESOURCE_REFERENCE_RE = re.compile(
     r"\$\{resources\.(?P<kind>[a-z_]+)\.(?P<key>[A-Za-z0-9_-]+)\."
     r"(?P<field>[A-Za-z0-9_]+)\}\Z"
@@ -158,6 +160,62 @@ def _assert_exact_transition(
             raise ValueError(f"first-install App compute is not stopped: {state!r}")
 
 
+def _bindings_by_name(value: Any, *, label: str) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise ValueError(f"{label} App resource bindings are not a list of objects")
+    names = [str(item.get("name") or "") for item in value]
+    if any(not name for name in names) or len(set(names)) != len(names):
+        raise ValueError(f"{label} App resource binding names must be non-empty and unique")
+    return dict(zip(names, value, strict=True))
+
+
+def _differing_fields(expected: Any, live: Any, prefix: str = "") -> list[str]:
+    """Return the dotted paths whose values differ, never the values themselves."""
+
+    if isinstance(expected, dict) and isinstance(live, dict):
+        paths: list[str] = []
+        for key in sorted(set(expected) | set(live), key=str):
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if key not in expected or key not in live:
+                paths.append(path)
+            elif expected[key] != live[key]:
+                paths.extend(_differing_fields(expected[key], live[key], path))
+        return paths
+    return [] if expected == live else [prefix or "value"]
+
+
+def binding_diff(*, expected: dict[str, Any], live: dict[str, Any]) -> list[str]:
+    """Describe, symbolically, how the live App differs from the binding payload.
+
+    Empty exactly when the post-update verifier would accept ``live`` as an
+    exact match for ``expected`` (same description, same bindings, same order).
+    Reviewed binding names come from the bundle and are printed; live-only
+    names are counted. No resource id, name or other value is ever printed.
+    """
+
+    _assert_source_free(expected)
+    if str(live.get("name") or "") != str(expected.get("name") or ""):
+        raise ValueError("live App identity does not match the binding payload")
+    reviewed = _bindings_by_name(expected.get("resources"), label="expected")
+    observed = _bindings_by_name(live.get("resources") or [], label="live")
+    lines: list[str] = []
+    if str(live.get("description") or "") != str(expected.get("description") or ""):
+        lines.append("description: differs (update replaces it)")
+    for name, binding in reviewed.items():
+        if name not in observed:
+            lines.append(f"binding {name}: missing (update adds it)")
+            continue
+        fields = _differing_fields(binding, observed[name])
+        if fields:
+            lines.append(f"binding {name}: {', '.join(fields)} differ (update replaces them)")
+    unreviewed = [name for name in observed if name not in reviewed]
+    if unreviewed:
+        lines.append(f"{len(unreviewed)} unreviewed live binding(s) (update removes them)")
+    if not lines and live.get("resources") != expected.get("resources"):
+        lines.append("binding order differs (update reorders them)")
+    return lines
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -173,11 +231,24 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--after", type=Path, required=True)
     verify.add_argument("--before", type=Path)
     verify.add_argument("--require-stopped-without-deployment", action="store_true")
+
+    diff = subparsers.add_parser(
+        "diff", help="Read-only: print the symbolic binding diff and exit 3 when it is non-empty."
+    )
+    diff.add_argument("--expected", type=Path, required=True)
+    diff.add_argument("--live", type=Path, required=True)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "diff":
+        lines = binding_diff(expected=_load_object(args.expected), live=_load_object(args.live))
+        for line in lines:
+            print(f"[mip-app-bindings] diff: {line}")
+        if not lines:
+            print("[mip-app-bindings] live App resource bindings equal the bundle payload")
+        return CHECK_DRIFT if lines else CHECK_EXACT
     if args.command == "build":
         payload = build_resource_binding_payload(
             _load_object(args.bundle_summary),
