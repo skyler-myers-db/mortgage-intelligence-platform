@@ -11,7 +11,9 @@ placeholders and runs every Python command through the tool's own ``main``:
 stage with its stage step stubbed (it would build a real closure), the
 release id for real, the publish and the converge for real against an
 in-memory workspace, and the payload for real. Nothing reaches the network.
-The ``databricks apps deploy`` line is checked for its shape only.
+The ``databricks apps deploy`` line is checked for its shape only. The three
+commands that call the workspace (publish, converge, deploy) must all name the
+same live-workspace CLI profile; the others name none.
 """
 
 from __future__ import annotations
@@ -130,6 +132,29 @@ def test_every_bundle_identity_check_names_the_legacy_dev_root_explicitly() -> N
         assert f"--source-code-path {legacy}app-src/<release-id> " in command
 
 
+def _profile(command: str, values: dict[str, str]) -> str | None:
+    """The CLI profile ``command`` names: its env prefix, or the ``databricks`` CLI's ``-p``."""
+
+    env, tokens, _ = _argv(command, values)
+    named = env.get("DATABRICKS_CONFIG_PROFILE")
+    if tokens[0] == "databricks" and "-p" in tokens:
+        assert named is None, command
+        named = tokens[tokens.index("-p") + 1]
+    return named
+
+
+def test_every_workspace_call_names_the_same_live_profile(staged: dict[str, str]) -> None:
+    """Publish, converge and deploy name ``<profile>``; a Python tool would otherwise take DEFAULT."""
+
+    commands = recipe_commands()
+    profiles = [_profile(command, staged) for command in commands]
+
+    assert profiles == [None, None, "live-workspace", "live-workspace", None, "live-workspace"]
+    for command in (commands[2], commands[3]):
+        env, _, _ = _argv(command, staged)
+        assert set(env) == {"DATABRICKS_CONFIG_PROFILE"}, command
+
+
 def test_stage_parses(monkeypatch: pytest.MonkeyPatch, staged: dict[str, str]) -> None:
     parsed: list[Any] = []
     monkeypatch.setattr(app_runtime_closure, "_stage", lambda args: parsed.append(args) or 0)
@@ -151,19 +176,30 @@ def test_release_id_runs(staged: dict[str, str], capsys: pytest.CaptureFixture[s
 
 
 def test_publish_and_converge_run_against_the_legacy_root(
-    staged: dict[str, str], capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, staged: dict[str, str], capsys: pytest.CaptureFixture[str]
 ) -> None:
+    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE", raising=False)
     workspace = FakeWorkspaceClient()
     release = f"{LEGACY_ROOT}/app-src/{staged['release-id']}"
-    _, publish, _ = _argv(recipe_commands()[2], staged)
-    _, converge_command, _ = _argv(recipe_commands()[3], staged)
+    publish_env, publish, _ = _argv(recipe_commands()[2], staged)
+    converge_env, converge_command, _ = _argv(recipe_commands()[3], staged)
+    profiles: list[str | None] = []
 
-    published = app_release_source.main(
-        _module_args(publish, "tools.databricks.app_release_source"), client=lambda: workspace
-    )
-    converged = converge.main(
-        _module_args(converge_command, "tools.databricks.converge_static_app_source"), client=lambda: workspace
-    )
+    def client() -> FakeWorkspaceClient:
+        # The profile each command's env prefix sets, as its client sees it.
+        profiles.append(os.environ.get("DATABRICKS_CONFIG_PROFILE"))
+        return workspace
+
+    with monkeypatch.context() as scoped:
+        for name, value in publish_env.items():
+            scoped.setenv(name, value)
+        published = app_release_source.main(_module_args(publish, "tools.databricks.app_release_source"), client=client)
+    with monkeypatch.context() as scoped:
+        for name, value in converge_env.items():
+            scoped.setenv(name, value)
+        converged = converge.main(
+            _module_args(converge_command, "tools.databricks.converge_static_app_source"), client=client
+        )
 
     out = capsys.readouterr()
     assert (published, converged) == (0, 0), out.err
@@ -174,6 +210,7 @@ def test_publish_and_converge_run_against_the_legacy_root(
         if path.startswith(f"{api_release}/") and node.kind is ObjectType.FILE
     }
     assert uploaded == FILES, "the release folder sits in the legacy root, byte for byte"
+    assert profiles and set(profiles) == {staged["profile"]}, "every client is built under the live profile"
     assert f"[app-release-source] {release}: {len(FILES)} uploaded" in out.out
     assert f"release {staged['release-id']} matches its manifest" in out.out
 

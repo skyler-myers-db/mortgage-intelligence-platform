@@ -499,12 +499,12 @@ python -m tools.databricks.app_runtime_closure stage --ref <sha> \
   --manifest-out <manifest> --require-brotli-check
 python -m tools.databricks.app_release_contract release-id \
   --manifest <manifest> --expected-commit <sha>
-python -m tools.databricks.app_release_source publish \
+DATABRICKS_CONFIG_PROFILE=<profile> python -m tools.databricks.app_release_source publish \
   --release-id <release-id> --stage-dir <stage-dir> --manifest <manifest> \
   --files-root /Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/dev/files \
   --expected-commit <sha> --expected-principal <owner> \
   --expected-target dev --expected-root-leaf dev
-python -m tools.databricks.converge_static_app_source \
+DATABRICKS_CONFIG_PROFILE=<profile> python -m tools.databricks.converge_static_app_source \
   --source-code-path /Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/dev/app-src/<release-id> \
   --release-id <release-id> --release-manifest <manifest> --expected-git-sha <sha> \
   --expected-principal <owner> --expected-target dev --expected-root-leaf dev
@@ -514,6 +514,15 @@ MIP_GIT_SHA=<sha> python -m tools.databricks.app_deploy_payload \
   --lakebase-instance <lakebase-instance> > <payload>
 databricks apps deploy <app-name> --json @<payload> -p <profile>
 ```
+
+Publish, converge and deploy are the three commands that call the workspace,
+and each names the live workspace's CLI profile, the same `<profile>` in all
+three. Without it the two Python tools build their client from the ambient
+environment or the `DEFAULT` profile, which may name another workspace with
+the same `/Workspace/Users` path: the publish would land there and the deploy
+would then fail on the live one. Run them in a shell with no
+`DATABRICKS_HOST` or `DATABRICKS_TOKEN` exported, because the SDK lets those
+override a profile.
 
 1. **Stage** the closure at the commit and read its release id back from the
    manifest. `<stage-dir>` is a new empty directory and `<manifest>` a new
