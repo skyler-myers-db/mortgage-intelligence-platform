@@ -1874,8 +1874,9 @@ emergency recipe gates on.
 `tools/databricks/genie_space_pin.py` resolves the space:
 
 1. **A pin.** The signed pin record (`genie-space-pin-v1-<app>` in the App
-   rollback secret scope, signed with the deploy's proof key like the
-   rollback record) or the App's signed rollback record names the space by
+   rollback secret scope, one of the keys that scope's ownership proof admits,
+   signed with the deploy's proof key like the rollback record) or the App's
+   signed rollback record names the space by
    id. When both exist they must agree, and the space must still exist; a
    pinned space that is gone refuses and never falls back to a title.
 2. **No pin, no space with the title.** A first install: step 0a creates the

@@ -10,7 +10,7 @@ title match the deploy did not pin is never adopted.
   at every green capture;
 * the pin record, ``genie-space-pin-v1-<app>`` in the App rollback secret scope
   (``tools/databricks/app_rollback_secret_scope.py`` proves the scope this
-  deployer's own), signed Ed25519 with the deploy's
+  deployer's own and admits this key among its reviewed ones), signed Ed25519 with the deploy's
   ``MIP_AI_GATEWAY_PROOF_SIGNING_KEY`` like the rollback record and verified
   against ``MIP_AI_GATEWAY_PROOF_VERIFY_KEY`` (or the previous key). The
   provisioner writes it the moment it creates the space (``created``), when it
@@ -102,10 +102,10 @@ def _text(value: object) -> str:
 
 
 def pin_key(app_name: str) -> str:
-    normalized = app_name.strip()
-    if not normalized or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for ch in normalized):
-        raise ValueError("Genie pin App name is invalid")
-    return f"{PIN_KEY_PREFIX}-{normalized}"
+    # The scope's ownership proof admits exactly this key, so it is defined there.
+    from tools.databricks.app_rollback_secret_scope import genie_space_pin_key
+
+    return genie_space_pin_key(app_name)
 
 
 def _decode(value: str, *, length: int) -> bytes:
