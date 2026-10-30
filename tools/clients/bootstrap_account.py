@@ -24,11 +24,14 @@ plan and its sha256. ``--for`` picks the action it plans (``apply``,
 ``rotate-adopted`` or ``post-first-install``). Each mutating action needs
 ``--ack-plan <sha256>``: it recomputes the plan read-only, refuses on any
 difference, then executes. ``--verify`` re-checks read-only and exits 1 on
-drift. A second ``--apply`` makes zero mutations.
+drift, including an M2M identity without exactly one secret. A second
+``--apply`` makes zero mutations.
 
 * ``--rotate-adopted`` mints a new secret for every pinned M2M identity,
   hands it to the credential sink, confirms and probes it, then revokes
-  every older secret of that identity.
+  every older secret of that identity. A failed handoff revokes the new
+  secret instead. The agent proxy gets its canonical credential bundle and
+  keeps its older credential for the signed deploy to retire.
 * ``--post-first-install`` grants the account principal Service Principal
   Manager on the App's own identity, once the first install created it.
 
