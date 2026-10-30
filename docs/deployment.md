@@ -2088,10 +2088,15 @@ The client profile's `MIP_ACCEPTED_EXPOSURE_JSON` may accept one exactly
   `privilege_class` must say which. Elevated is refused for
   `runtime` and `proxy`: the object's owner must narrow the grant, or the
   agentic tier stays off. It is accepted for `app` alone, for at most 30 days,
-  and only while `tests/unit/test_genie_single_space_ast.py`'s control holds:
-  every backend Genie API call goes through the one client bound to the pinned
-  governed space. An entry naming the verifier or the governed space refuses,
-  as does an entry past its expiry (it parses, it never matches).
+  and only while both compensating static controls hold
+  (`tools/databricks/estate/genie_single_space.py` and `sql_trust_scope.py`,
+  pinned by `tests/unit/test_genie_single_space_ast.py` and
+  `test_sql_trust_scope_ast.py`): every backend Genie API call goes through the
+  one client bound to the pinned governed space, and the SQL trust policy
+  admits only FQNs in the install's catalog under `audit`, `gold`, `ref` or
+  `semantics` (no configured Cotality source FQN is admitted today). An entry
+  naming the verifier or the governed space refuses, as does an entry past its
+  expiry (it parses, it never matches).
 - **Matching.** One matcher per identity. The pre-stop Genie clause and the
   post-stop App and agent-runtime Genie audits (`audit_global_m2m_access
   --exposure-identity app|runtime`) use the same one, so they refuse alike; the

@@ -306,7 +306,22 @@ def test_elevated_for_app_within_30_days_is_accepted_for_app_only() -> None:
 def test_elevated_for_app_needs_the_single_space_control() -> None:
     lines = _refusal([elevated_app()], control=lambda: ["backend/x.py:1: a Genie API path"])
 
-    assert "needs the single-space Genie control" in lines and "backend/x.py:1" in lines
+    assert "needs the compensating static controls" in lines and "backend/x.py:1" in lines
+
+
+def test_the_default_static_control_is_both_plan_clauses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Plan 4.12's elevated-App control has two clauses; a breach of either refuses (review of #306)."""
+
+    from tools.databricks.estate import genie_single_space, sql_trust_scope
+
+    assert policy_module.static_control_violations() == []
+    monkeypatch.setattr(sql_trust_scope, "violations", lambda: ["sql: a trusted asset outside the governed schemas"])
+    assert "sql: a trusted asset outside" in _refusal([elevated_app()], control=policy_module.static_control_violations)
+    monkeypatch.setattr(sql_trust_scope, "violations", lambda: [])
+    monkeypatch.setattr(genie_single_space, "violations", lambda: ["genie: a Genie API path outside"])
+    assert "genie: a Genie API path outside" in _refusal(
+        [elevated_app()], control=policy_module.static_control_violations
+    )
 
 
 def test_the_static_control_is_consulted_only_for_elevated_entries() -> None:

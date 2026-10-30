@@ -14,7 +14,7 @@ docs/deployment.md, "Accepted shared-estate exposure", is the operator view.
   ``USE_CATALOG``, ``USE_SCHEMA``, ``SELECT``; the rest is elevated, and
   ``privilege_class`` must say so. Elevated is refused for ``runtime`` and
   ``proxy``, and accepted for ``app`` alone, for at most 30 days, while
-  ``genie_single_space`` holds. Entries naming the verifier or the governed
+  ``genie_single_space`` and ``sql_trust_scope`` hold. Entries naming the verifier or the governed
   space refuse; an expired entry parses and never matches.
 * **Matching.** One matcher per identity (``app``, ``runtime``, ``proxy``),
   handed to that identity's pre-stop probe and post-stop audits, which build
@@ -359,7 +359,8 @@ def _ceiling_lines(
     violations = list(static_control())
     if violations:
         lines.append(
-            f"{at}: elevated App exposure needs the single-space Genie control, which fails: "
+            f"{at}: elevated App exposure needs the compensating static controls (the "
+            "single-space Genie client and the governed SQL trust scope), which fail: "
             + "; ".join(violations)
         )
     return lines
@@ -471,11 +472,16 @@ def plan_digest(entries: Iterable[AcceptedEntry]) -> str:
 
 
 def static_control_violations() -> Sequence[str]:
-    """The compensating static control an elevated App entry needs; empty while it holds."""
+    """The compensating static controls an elevated App entry needs; empty while both hold.
 
-    from tools.databricks.estate.genie_single_space import violations
+    Plan 4.12: every backend Genie API call goes through the one client bound
+    to the pinned governed space (``genie_single_space``), and the SQL trust
+    policy admits only governed FQNs (``sql_trust_scope``).
+    """
 
-    return violations()
+    from tools.databricks.estate import genie_single_space, sql_trust_scope
+
+    return [*genie_single_space.violations(), *sql_trust_scope.violations()]
 
 
 def load_policy(
