@@ -15,6 +15,7 @@ from tools.databricks.agent_runtime_uc_inventory import _text
 from tools.databricks.audit_agent_runtime_foreign_uc_access import (
     audit_foreign_uc_access,
 )
+from tools.databricks.estate.accepted_exposure import identity_matcher
 from tools.databricks.gateway_model_archival import (
     GatewayModelArchiveScope,
     delta_version_resolver,
@@ -107,6 +108,8 @@ def main(argv: list[str] | None = None) -> int:
     # instead of re-exchanging per request; the target client below stays env-bound.
     admin_workspace = deployment_workspace_client(factory=WorkspaceClient)
     account_client = account_client_from_env()
+    # The runtime identity's accepted UC exposure, the same for both proofs (M2-PR4).
+    exposure = identity_matcher("runtime")
     proof = audit_foreign_uc_access(
         admin_workspace,
         application_id=args.application_id,
@@ -114,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_inventory_principal=args.expected_inventory_principal,
         foreign_catalog_binding_policy=args.foreign_catalog_binding_policy_json,
         account_factory=lambda: account_client,
+        exposure=exposure,
     )
     model_family = (args.gateway_model_family or args.gateway_model).strip()
     archive_scope = GatewayModelArchiveScope(
@@ -184,6 +188,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_inventory_principal=args.expected_inventory_principal,
         foreign_catalog_binding_policy=args.foreign_catalog_binding_policy_json,
         account_factory=lambda: account_client,
+        exposure=exposure,
     )
     if post_runtime_proof != proof:
         raise RuntimeError("foreign-catalog control-plane proof changed during runtime audit")

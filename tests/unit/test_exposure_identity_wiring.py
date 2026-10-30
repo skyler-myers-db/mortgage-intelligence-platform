@@ -118,3 +118,31 @@ def test_an_app_without_a_service_principal_cannot_be_the_app_identity() -> None
         audit.assert_exposure_identity(
             _workspace(""), identity="app", app_name="mip-app", application_id="app-client-EXAMPLE"
         )
+
+
+def test_every_foreign_uc_audit_names_its_identity() -> None:
+    script = deploy_entrypoint_text()
+    calls = script.split("-m tools.databricks.audit_agent_runtime_foreign_uc_access")[1:]
+    assert len(calls) == 2, "the step-4 preflight and the agentic provisioning preflight"
+    for call in calls:
+        body = call.split("\nstep ", 1)[0].split("\n  # ", 1)[0]
+        assert '--application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"' in body, body
+        assert "--exposure-identity runtime" in body, body
+
+
+@pytest.mark.parametrize(
+    ("module", "identity", "count"),
+    [
+        ("tools/databricks/verify_agent_runtime_uc_boundary_dual_authority.py", "runtime", 2),
+        ("tools/databricks/verify_agent_proxy_uc_boundary_dual_authority.py", "proxy", 2),
+    ],
+)
+def test_every_dual_authority_proof_uses_one_identity_matcher(module: str, identity: str, count: int) -> None:
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / module).read_text(encoding="utf-8")
+    calls = source.split("audit_foreign_uc_access(\n")[1:]
+
+    assert len(calls) == count
+    assert all("exposure=exposure," in call.split("\n    )", 1)[0] for call in calls)
+    assert source.count(f'exposure = identity_matcher("{identity}")') == 1

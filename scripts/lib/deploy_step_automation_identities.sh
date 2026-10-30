@@ -420,6 +420,7 @@ else:
     --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
     --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+    --exposure-identity runtime \
     --allow-missing-mip-catalog
   # Recover any deterministic one-use Lakebase role creators left by a prior
   # SIGKILL immediately after the lease winner is known.

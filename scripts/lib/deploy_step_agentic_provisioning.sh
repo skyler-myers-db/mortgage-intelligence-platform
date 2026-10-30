@@ -48,7 +48,8 @@ run_with_account_identity run_with_proof_signing_authority \
   "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
   --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
   --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
-  --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
+  --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+  --exposure-identity runtime
 step "grant exact Genie CAN_RUN to the dedicated agent-runtime identity"
 run "$PYTHON" -m tools.databricks.agent_runtime_access \
   --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
