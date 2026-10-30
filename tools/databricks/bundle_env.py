@@ -606,10 +606,15 @@ def main() -> int:
         )
         return 2
 
-    processed, written, subs = render_sql.render(
-        catalog=catalog,
-        demo_first_party_enabled=demo_first_party_enabled,
-    )
+    try:
+        processed, written, subs = render_sql.render(
+            catalog=catalog,
+            demo_first_party_enabled=demo_first_party_enabled,
+            lender=lender,
+        )
+    except render_sql.TenantRowsUnmatched as exc:
+        print(f"[bundle_env] {exc}", file=sys.stderr)
+        return 2
 
     # Operator feedback (never print the full value; just confirm resolution).
     def status(name: str, value: str | None) -> str:
@@ -639,7 +644,7 @@ def main() -> int:
     cli = ["databricks", "bundle", subcmd, *rest]
     result = subprocess.run(cli, env=env, check=False)
     if demo_first_party_enabled:
-        render_sql.render(catalog=catalog, demo_first_party_enabled=False)
+        render_sql.render(catalog=catalog, demo_first_party_enabled=False, lender=lender)
         print(
             "[bundle_env] restored sql/_rendered with "
             "demo_first_party_feeds=disabled after CLI exit",

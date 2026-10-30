@@ -36,6 +36,21 @@ keep only this install's rows (``sql/ddl/audit_asset_lineage_view.sql``).
 Only ``=`` against exactly ``'mip'`` is rewritten: ``'mip_app'``, other
 operators and string literals anywhere else are left alone.
 
+The tenant lender's own dictionary rows.
+---------------------------------------------------------------------------
+
+``sql/ref/lender_dictionary_seed.sql`` names the Summit Mortgage demo
+tenant's servicer aliases (``is_competitor = FALSE``). A customer install
+whose lender identity is a digest-pinned record
+(``backend/schemas/lender_identity_record.py``) renders that file with the
+demo tenant rows replaced by one row per record alias (display name = the
+record's legal name, ``lender_type`` ``other``); a competitor row whose raw
+key is a tenant alias is dropped, since the tenant is not its own
+competitor. The rewrite is a closed shape: it parses the MERGE's one
+contiguous block of VALUES rows and refuses the render when that block, or
+any demo tenant row in it, is not the exact shape it knows. With no pinned
+record nothing changes, so the demo render is byte-identical.
+
 The canonical sources keep the readable ``mip.*`` identifiers so code
 review + git diffs stay legible. The rendered tree is a build artifact
 (.gitignore'd) that the Databricks bundle's SQL tasks read from.
@@ -91,7 +106,11 @@ CLI.
     python tools/render_sql.py --catalog summit_mortgage
     python tools/render_sql.py --source sql --dest sql/_rendered
 
-Exit status: 0 on success, 2 on arg error, 1 on I/O / permission error.
+A digest-pinned lender record (``MIP_LENDER_IDENTITY_JSON`` and
+``MIP_LENDER_IDENTITY_SHA256`` in the environment) renders the tenant rows.
+
+Exit status: 0 on success, 2 on arg error or a refused lender record or
+seed shape, 1 on I/O / permission error.
 """
 
 from __future__ import annotations
@@ -100,7 +119,22 @@ import argparse
 import os
 import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from backend.schemas.lender_identity import _SUMMIT_LENDER_NAME  # noqa: E402
+from backend.schemas.lender_identity_record import (  # noqa: E402
+    LenderIdentityRefused,
+    ReviewedLenderIdentity,
+    pinned_identity_configured,
+    present_env,
+    reviewed_lender_identity_from_env,
+    tenant_lender_dictionary,
+)
 
 # The UC schema segments governed by this rewrite. Order does not
 # matter (they are disjoint). Documented in docs/multi-catalog-plan.md.
@@ -136,8 +170,23 @@ _CREATE_SCHEMA_PATTERN = re.compile(
 _CATALOG_LITERAL_PATTERN = re.compile(r"(\b[a-z_]+_catalog\s*=\s*)'mip'", re.IGNORECASE)
 _DEMO_FIRST_PARTY_TOKEN = "{{mip_enable_demo_first_party_feeds}}"
 _UC_IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,254}$")
+# One VALUES row of the lender dictionary seed: (raw_key, display_name,
+# lender_type, is_competitor), each on its own line.
+_LENDER_DICTIONARY_SEED = Path("ref") / "lender_dictionary_seed.sql"
+_DICTIONARY_ROW = re.compile(
+    r"^    \('(?P<raw>[A-Z0-9][A-Z0-9 &.,/-]*)',\s+'(?P<display>[A-Za-z0-9 &.-]+)',"
+    r"\s+'(?P<type>[a-z_]+)',\s+(?P<competitor>TRUE|FALSE)\),?$",
+    re.MULTILINE,
+)
+_TENANT_LENDER_TYPE = "other"
+# A competitor's display is a controlled alias (backend/schemas/_validators_tenant.py).
+_COMPETITOR_DISPLAY = re.compile(r"Competitor (?:[A-Z]|Other)")
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+class TenantRowsUnmatched(ValueError):
+    """The lender dictionary seed is not the shape the tenant-row rewrite knows."""
+
+
 _DEFAULT_SOURCE = _REPO_ROOT / "sql"
 _DEFAULT_DEST = _REPO_ROOT / "sql" / "_rendered"
 
@@ -213,6 +262,49 @@ def render_for_catalog(text: str, *, catalog: str) -> str:
     return _render_text(text, catalog, demo_first_party_enabled=False)[0]
 
 
+def _sql_text_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def render_tenant_lender_rows(text: str, lender: ReviewedLenderIdentity) -> str:
+    """The seed with its demo tenant rows replaced by a pinned record's aliases."""
+
+    rows = list(_DICTIONARY_ROW.finditer(text))
+    block = "\n".join(row.group(0) for row in rows)
+    tenant_rows = [row for row in rows if row["competitor"] == "FALSE"]
+    if (
+        not rows
+        or text[rows[0].start() : rows[-1].end()] != block
+        or not tenant_rows
+        or any(row["display"] != _SUMMIT_LENDER_NAME for row in tenant_rows)
+        or any(
+            _COMPETITOR_DISPLAY.fullmatch(row["display"]) is None
+            for row in rows
+            if row["competitor"] == "TRUE"
+        )
+    ):
+        raise TenantRowsUnmatched(
+            "render_sql: sql/ref/lender_dictionary_seed.sql is not the reviewed shape the "
+            "tenant-row rewrite knows (one contiguous VALUES block of Competitor-alias rows "
+            "and the demo's tenant rows); refusing to render it for a pinned lender record"
+        )
+    tenant = tenant_lender_dictionary(lender)
+    kept = [row.group(0).rstrip(",") for row in rows if row["competitor"] == "TRUE" and row["raw"] not in tenant]
+    added = [
+        f"    ({_sql_text_literal(raw)}, {_sql_text_literal(display)}, '{_TENANT_LENDER_TYPE}', FALSE)"
+        for raw, display in tenant.items()
+    ]
+    return text[: rows[0].start()] + ",\n".join((*kept, *added)) + text[rows[-1].end() :]
+
+
+def resolve_pinned_lender(env: Mapping[str, str]) -> ReviewedLenderIdentity | None:
+    """The verified pinned record, or None when none is configured (the demo render)."""
+
+    if not pinned_identity_configured(env):
+        return None
+    return reviewed_lender_identity_from_env(present_env(env))
+
+
 def _iter_sql_files(source_root: Path, dest_root: Path) -> list[Path]:
     """Return canonical ``*.sql`` files, skipping every rendered artifact tree."""
     files: list[Path] = []
@@ -238,18 +330,27 @@ def render(
     demo_first_party_enabled: bool,
     source_root: Path = _DEFAULT_SOURCE,
     dest_root: Path = _DEFAULT_DEST,
+    lender: ReviewedLenderIdentity | None = None,
 ) -> tuple[int, int, int]:
     """Render every SQL file under source_root into dest_root.
 
     Returns ``(files_processed, files_written, total_substitutions)``.
     A file is "written" only if its rendered content differs from what is
     already on disk at the destination path -- this keeps the operation
-    cheap on repeated deploys.
+    cheap on repeated deploys. ``lender`` renders a digest-pinned record's
+    tenant rows into the lender dictionary seed; an unpinned one is ignored.
     """
     if not source_root.is_dir():
         raise FileNotFoundError(f"source directory does not exist: {source_root}")
 
     files = _iter_sql_files(source_root, dest_root)
+    pinned = lender if lender is not None and lender.pinned else None
+    if pinned is not None:
+        seed = source_root / _LENDER_DICTIONARY_SEED
+        if seed not in files:
+            raise TenantRowsUnmatched("render_sql: a pinned lender record needs sql/ref/lender_dictionary_seed.sql")
+        # Refuse before any file is written, never after a partial render.
+        render_tenant_lender_rows(seed.read_text(encoding="utf-8"), pinned)
     files_written = 0
     total_subs = 0
 
@@ -259,6 +360,8 @@ def render(
         dst.parent.mkdir(parents=True, exist_ok=True)
 
         src_text = src.read_text(encoding="utf-8")
+        if pinned is not None and rel == _LENDER_DICTIONARY_SEED:
+            src_text = render_tenant_lender_rows(src_text, pinned)
         rendered, n = _render_text(
             src_text,
             catalog,
@@ -340,12 +443,23 @@ def main(argv: list[str] | None = None) -> int:
     dest_root = Path(args.dest).resolve()
 
     try:
+        # scripts/deploy.sh exports a verified record (MIP_LENDER_IDENTITY_*).
+        lender = resolve_pinned_lender(os.environ)
+    except LenderIdentityRefused as exc:
+        print(f"render_sql: refused: {exc}", file=sys.stderr)
+        return 2
+
+    try:
         processed, written, subs = render(
             catalog=catalog,
             demo_first_party_enabled=demo_first_party_enabled,
             source_root=source_root,
             dest_root=dest_root,
+            lender=lender,
         )
+    except TenantRowsUnmatched as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     except FileNotFoundError as exc:
         print(f"render_sql: {exc}", file=sys.stderr)
         return 1
@@ -357,6 +471,7 @@ def main(argv: list[str] | None = None) -> int:
         f"render_sql: catalog={catalog} processed={processed} "
         f"written={written} substitutions={subs} "
         f"demo_first_party_feeds={'enabled' if demo_first_party_enabled else 'disabled'} "
+        f"{'tenant_rows=pinned ' if lender is not None else ''}"
         f"source={source_root.relative_to(_REPO_ROOT) if source_root.is_relative_to(_REPO_ROOT) else source_root} "
         f"dest={dest_root.relative_to(_REPO_ROOT) if dest_root.is_relative_to(_REPO_ROOT) else dest_root}"
     )
