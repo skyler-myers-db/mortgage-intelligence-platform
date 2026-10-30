@@ -365,7 +365,7 @@ def test_the_app_env_name_set_is_unchanged_and_its_genie_id_is_the_pinned_bindin
 
     import yaml
 
-    from tests.unit.test_settings_d0_env_parity import D0_NAME_COUNT, _d0_operator_config
+    from tests.unit.test_settings_d0_env_parity import D0_NAME_COUNT, D0_NAMES, _d0_operator_config
     from tools.databricks.app_deploy_payload import build_payload
 
     def names_and_genie() -> tuple[list[str], list[dict[str, str]]]:
@@ -376,6 +376,7 @@ def test_the_app_env_name_set_is_unchanged_and_its_genie_id_is_the_pinned_bindin
     _d0_operator_config(monkeypatch, tmp_path)
     names, genie = names_and_genie()
     assert len(names) == len(set(names)) == D0_NAME_COUNT
+    assert tuple(sorted(names)) == D0_NAMES, "exactly D0's names: no rename, addition or removal"
     assert genie == [{"name": "GENIE_SPACE_ID", "value_from": "genie_space"}]
 
     monkeypatch.setenv("GENIE_SPACE_ID", "ambient-retired-input")
