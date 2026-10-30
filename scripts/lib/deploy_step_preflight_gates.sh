@@ -584,6 +584,13 @@ export MIP_GENIE_MANAGER_PRINCIPALS
 # principal, so it reaches them through the environment, never argv.
 MIP_UC_METASTORE_OWNER="$(deployment_control_value MIP_UC_METASTORE_OWNER)"
 export MIP_UC_METASTORE_OWNER
+# The profile's accepted shared-estate exposure (MIP_ACCEPTED_EXPOSURE_JSON,
+# tools/databricks/estate/accepted_exposure.py, M2-PR4). The pre-stop Genie
+# clause and the App, agent-runtime and agent-proxy audits each recompute its
+# plan and refuse unless MIP_ACK_ACCEPTED_EXPOSURE_PLAN, exported in the shell
+# for this run only, equals that plan's sha256. Empty accepts nothing, as before.
+MIP_ACCEPTED_EXPOSURE_JSON="$(deployment_control_value MIP_ACCEPTED_EXPOSURE_JSON)"
+export MIP_ACCEPTED_EXPOSURE_JSON
 for _ACCOUNT_AUTH_NAME in DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID; do
   resolve_m2m_credential "$_ACCOUNT_AUTH_NAME"
 done

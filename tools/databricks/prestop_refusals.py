@@ -30,6 +30,8 @@ OWNER_EQUIVALENT = "owner_equivalent"
 SERVING_ENDPOINT = "serving_endpoint"
 # One real Genie turn on the governed space.
 GENIE_BUDGET = "genie_budget"
+# The profile's accepted exposure (MIP_ACCEPTED_EXPOSURE_JSON) cannot be used.
+ACCEPTED_EXPOSURE = "accepted_exposure"
 # A probe that could not complete its reads refuses rather than pass.
 PROBE_ERROR = "probe_error"
 
@@ -48,6 +50,7 @@ REFUSAL_CODES = frozenset(
         OWNER_EQUIVALENT,
         SERVING_ENDPOINT,
         GENIE_BUDGET,
+        ACCEPTED_EXPOSURE,
         PROBE_ERROR,
     }
 )

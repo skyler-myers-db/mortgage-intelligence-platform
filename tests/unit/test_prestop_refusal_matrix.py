@@ -24,6 +24,7 @@ import json
 import shlex
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -115,11 +116,13 @@ def _deploy(
     checkout, base_env, cli_log = sandbox(tmp_path)
     # The sandbox's synthetic client profile, with the demo install's weekly
     # refresh off: a service-principal deployer cannot receive its failure mail.
-    # The fake estate's metastore is the deployer's, so the profile names it.
+    # The fake estate's metastore is the deployer's, so the profile names it,
+    # and it accepts no shared-estate exposure unless a case sets one.
     profile = paychex_shaped_profile(
         MIP_SCHEDULED_REFRESH="off",
         MIP_SCHEDULED_REFRESH_RECIPIENTS=None,
         MIP_UC_METASTORE_OWNER=DEPLOYER,
+        MIP_ACCEPTED_EXPOSURE_JSON="[]",
     )
     (checkout / ".env.local").write_text(
         env_file_text({**profile, "DATABRICKS_WAREHOUSE_ID": "warehouse-1"}), encoding="utf-8"
@@ -251,6 +254,41 @@ def _owner_outside_policy(estate: dict[str, Any]) -> None:
     estate["principals"]["someone-else@example.invalid"] = {"kind": "user", "id": "someone-id"}
 
 
+OTHER_SPACE = "space-other-team"
+ACCEPTED_APP_READ = {
+    "kind": "workspace_permission",
+    "securable": {"type": "GENIE_SPACE", "id": OTHER_SPACE, "name": "Other Team Space"},
+    "grantee": "app-readers",
+    "privileges": ["CAN_VIEW"],
+    "source": "inherited:/directories/77",
+    "binding": {"isolation_mode": "ISOLATED", "workspace_ids": ["4200000001"]},
+    "identities": ["app"],
+    "privilege_class": "read",
+    "reason": "Another team shares its space with the App's reader group",
+    "expires_at": "2099-12-31",
+}
+
+
+def _app_reader_genie_grant(estate: dict[str, Any]) -> None:
+    estate["principals"]["app-readers"] = {
+        "kind": "group",
+        "id": "group-app-readers",
+        "members": [estate["app"]["scim_id"]],
+    }
+    estate["genie"][OTHER_SPACE] = [
+        acl_entry("group_name", "app-readers", "CAN_VIEW", "/directories/77")
+    ]
+    estate["genie_titles"] = {OTHER_SPACE: "Other Team Space"}
+
+
+def _accepted_plan_digest(entries: list[dict[str, Any]]) -> str:
+    from tools.clients.json_fields import ExposureEntry
+    from tools.databricks.estate.accepted_exposure import build_policy
+
+    parsed = [ExposureEntry.model_validate(item) for item in entries]
+    return build_policy(parsed, now=datetime.now(UTC), static_control=lambda: []).digest
+
+
 def _set(path: tuple[str, ...], value: Any) -> Any:
     def edit(estate: dict[str, Any]) -> None:
         target = estate
@@ -286,6 +324,11 @@ CASES: tuple[tuple[str, Any, dict[str, str]], ...] = (
     (codes.SERVING_ENDPOINT, _legacy_gateway_query, {}),
     (codes.SERVING_ENDPOINT, _renamed_record_supervisor_query, {}),
     (codes.GENIE_BUDGET, _set(("genie_turn",), "BUDGET"), {}),
+    (
+        codes.ACCEPTED_EXPOSURE,
+        _app_reader_genie_grant,
+        {"MIP_ACCEPTED_EXPOSURE_JSON": json.dumps([ACCEPTED_APP_READ])},
+    ),
     (codes.PROBE_ERROR, _set(("genie_errors",), [GOVERNED_SPACE]), {}),
 )
 
@@ -358,6 +401,34 @@ def test_the_approval_lists_reach_the_probe_through_the_environment_only(
     assert "every owner-equivalent grantee is an approved principal" in result.stdout
     for value in ("owner@summit.example", "genie-managers-alpha"):
         assert value not in result.stdout + result.stderr, value
+
+
+def test_an_acknowledged_accepted_exposure_reaches_the_lease(tmp_path: Path) -> None:
+    # The same group grant refuses without the entry (genie_group_grant) and
+    # without the ack (accepted_exposure); with both, the App's matcher accepts it.
+    estate = clean_estate()
+    _app_reader_genie_grant(estate)
+
+    result, after, reached, _cli_calls = _deploy(
+        tmp_path,
+        estate,
+        MIP_ACCEPTED_EXPOSURE_JSON=json.dumps([ACCEPTED_APP_READ]),
+        MIP_ACK_ACCEPTED_EXPOSURE_PLAN=_accepted_plan_digest([ACCEPTED_APP_READ]),
+    )
+
+    detail = result.stdout[-3000:] + result.stderr[-6000:]
+    assert reached == ["lease"], detail
+    assert "accepted exposure: Genie space space-other-team: group 'app-readers' for app" in result.stdout
+    assert after["app"]["state"] == "RUNNING"
+
+
+def test_the_same_grant_without_an_entry_refuses(tmp_path: Path) -> None:
+    estate = clean_estate()
+    _app_reader_genie_grant(estate)
+
+    result, after, reached, cli_calls = _deploy(tmp_path, estate)
+
+    _assert_refused_before_the_lease(result, estate, after, reached, cli_calls, codes.GENIE_GROUP_GRANT)
 
 
 @pytest.mark.parametrize(

@@ -243,6 +243,7 @@ converge_green_only_app_access() {
     --account-id "$DATABRICKS_ACCOUNT_ID" \
     --expected-serving-permission CAN_QUERY \
     --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+    --exposure-identity app \
     --serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT"
   )
   if [[ "$app_old_gateway_mode" != "none" ]]; then

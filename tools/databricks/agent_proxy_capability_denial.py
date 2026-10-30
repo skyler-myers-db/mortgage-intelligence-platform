@@ -25,6 +25,7 @@ from tools.databricks.agent_runtime_access import (
     _genie_spaces,
     audit_global_no_genie_access,
 )
+from tools.databricks.estate.accepted_exposure import identity_matcher
 from tools.databricks.m2m_access_policy import resolve_effective_groups
 
 _DENIAL_DEADLINE_SECONDS = 120.0
@@ -226,11 +227,14 @@ def revoke_all_genie_acls(
                 f"Genie duplicate postflight {space_id}: {type(exc).__name__}: {exc}"
             )
     try:
+        # The agent-proxy's own accepted-exposure matcher (read class only,
+        # M2-PR4); with no proxy entry it accepts nothing, as before.
         audit_global_no_genie_access(
             workspace,
             application_id=application_id,
             service_principal_id=service_principal_id,
             effective_group_names=effective_group_names,
+            matcher=identity_matcher("proxy"),
         )
     except Exception as exc:  # noqa: BLE001 - include postflight with mutation errors
         errors.append(f"Genie postflight: {type(exc).__name__}: {exc}")

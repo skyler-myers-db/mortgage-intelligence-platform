@@ -29,7 +29,12 @@ workspace admin before any mutation, so this probe refuses them up front:
    (``--forbid-all-genie``) also refuses every grant to the verifier itself,
    which needs no governed space id, so the probe refuses those too. Direct
    App and agent-runtime grants are judged against the governed space, which
-   is provisioned later, so they stay with the post-stop audits.
+   is provisioned later, so they stay with the post-stop audits. A group
+   grant the client profile accepts for the App or the agent-runtime
+   (``MIP_ACCEPTED_EXPOSURE_JSON``, M2-PR4) is judged by that identity's
+   matcher, as the post-stop audit judges it (``prestop_accepted_exposure``);
+   the verifier never consults one, and a policy the audits would refuse
+   refuses here (``accepted_exposure``).
 
 Group membership is resolved the way the audits' admin-side fallback resolves
 it (``m2m_access_policy.resolve_effective_groups``), plus the system ``users``
@@ -77,6 +82,7 @@ from typing import Any
 
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
 from tools.databricks.agent_runtime_access import _field, _text
+from tools.databricks.prestop_accepted_exposure import PrestopExposure, load_prestop_exposure
 from tools.databricks.prestop_genie_grants import (
     GenieAcl,
     genie_acls,
@@ -329,6 +335,20 @@ def audited_principals(
     )
 
 
+def exposure_labels(
+    principals: AuditedPrincipals, *, runtime_application_id: str
+) -> dict[str, str]:
+    """The audited labels that have an accepted-exposure identity: the App and the runtime."""
+
+    labels: dict[str, str] = {}
+    if principals.app_client_id:
+        labels[f"App SP {principals.app_client_id}"] = "app"
+    runtime = f"agent-runtime SP {runtime_application_id}"
+    if runtime in principals.resolved:
+        labels[runtime] = "runtime"
+    return labels
+
+
 @dataclass(frozen=True)
 class BaseVerdict:
     """The Supervisor and Genie-grant clauses' refusals, plus what they read."""
@@ -358,8 +378,14 @@ def base_verdict(
     acknowledgement: str,
     list_agents: Callable[[], list[dict[str, Any]]],
     resolve_groups: Callable[..., Mapping[str, str]],
+    exposure: PrestopExposure | None = None,
 ) -> BaseVerdict:
-    """Run the Supervisor and Genie-grant clauses; every refusal carries its code."""
+    """Run the Supervisor and Genie-grant clauses; every refusal carries its code.
+
+    ``exposure`` drops each App or agent-runtime principal whose accepted-exposure
+    matcher accepts a group grant (``prestop_accepted_exposure``); the verifier
+    is never relaxed.
+    """
 
     agents = list_agents()
     retirement, notes = supervisor_retirement_refusals(
@@ -405,6 +431,14 @@ def base_verdict(
     )
     acls = genie_acls(workspace)
     grants = genie_group_grants(workspace, effective_groups=effective, acls=acls)
+    if exposure is not None:
+        grants, accepted, refused = exposure.filter_group_grants(
+            workspace,
+            grants,
+            labels=exposure_labels(principals, runtime_application_id=runtime_application_id),
+        )
+        notes.extend(accepted)
+        refusals.extend(refused)
     verifier_grants = verifier_genie_grants(
         acls, verifier_application_id=verifier_application_id
     )
@@ -469,9 +503,16 @@ def all_refusals(
     acknowledgement: str,
     list_agents: Callable[[], list[dict[str, Any]]],
     resolve_groups: Callable[..., Mapping[str, str]],
+    load_exposure: Callable[..., tuple[PrestopExposure | None, list[PrestopRefusal]]] = (
+        load_prestop_exposure
+    ),
 ) -> tuple[list[PrestopRefusal], list[str]]:
     """Every probe, in one read-only pass; a probe that cannot finish refuses."""
 
+    exposure, exposure_refusals = load_exposure(
+        verifier_application_id=verifier_application_id,
+        governed_title=config.genie_space_name,
+    )
     try:
         base = base_verdict(
             workspace,
@@ -482,10 +523,11 @@ def all_refusals(
             acknowledgement=acknowledgement,
             list_agents=list_agents,
             resolve_groups=resolve_groups,
+            exposure=exposure,
         )
     except (Exception, SystemExit) as exc:  # noqa: BLE001 - an unfinished read never passes
-        return [_probe_error(exc)], []
-    refusals, notes = list(base.refusals), list(base.notes)
+        return [*exposure_refusals, _probe_error(exc)], []
+    refusals, notes = [*exposure_refusals, *base.refusals], list(base.notes)
     try:
         found, said = suite_refusals(
             workspace,

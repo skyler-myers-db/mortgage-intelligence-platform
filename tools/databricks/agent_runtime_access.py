@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from typing import Any
 
 from databricks.sdk import WorkspaceClient
+from tools.databricks.estate.accepted_exposure import ExposureMatcher
+from tools.databricks.estate.genie_exposure import entry_exposures
 from tools.databricks.m2m_access_policy import resolve_effective_groups
 
 AGENT_RUNTIME_DISPLAY_NAME = "mip-agent-runtime-ci-sp"
@@ -164,15 +167,54 @@ def _genie_spaces(workspace: Any) -> dict[str, str]:
         page_token = next_token
 
 
+@dataclass(frozen=True)
+class GenieExposure:
+    """One identity's accepted-exposure matcher, with what its tuples need to name a space."""
+
+    matcher: ExposureMatcher
+    workspace_id: str
+    titles: dict[str, str]
+
+    def accepts(self, entry: object, *, space_id: str) -> bool:
+        return self.matcher.accepts_all(
+            entry_exposures(
+                entry,
+                space_id=space_id,
+                title=self.titles.get(space_id, ""),
+                workspace_id=self.workspace_id,
+            )
+        )
+
+
+def genie_exposure(
+    workspace: Any, matcher: ExposureMatcher | None, *, titles: dict[str, str]
+) -> GenieExposure | None:
+    """The matcher bound to this workspace, or ``None`` when it covers nothing (no extra read)."""
+
+    if matcher is None or not matcher.active:
+        return None
+    from tools.databricks.agent_runtime_uc_baseline import authoritative_workspace_id
+
+    return GenieExposure(
+        matcher=matcher, workspace_id=authoritative_workspace_id(workspace), titles=titles
+    )
+
+
 def _assert_no_genie_access(
     permissions: object,
     *,
     space_id: str,
     application_id: str,
     effective_group_names: set[str],
+    exposure: GenieExposure | None = None,
 ) -> None:
+    """No grant on an unrelated space, but those the identity's matcher accepts exactly."""
+
+    def accepted(entry: object) -> bool:
+        return exposure is not None and exposure.accepts(entry, space_id=space_id)
+
     principal = _principal_entry(permissions, application_id=application_id)
-    if principal is not None and _permission_levels(principal):
+    if principal is not None and _permission_levels(principal) and not accepted(principal):
         raise RuntimeError(
             f"agent-runtime identity retains forbidden access to unrelated Genie space "
             f"{space_id!r}"
@@ -184,6 +226,7 @@ def _assert_no_genie_access(
             for entry in entries
             if _text(_field(entry, "group_name")) in effective_group_names
             and _permission_levels(entry)
+            and not accepted(entry)
         }
     )
     if group_access:
@@ -200,8 +243,13 @@ def audit_global_genie_access(
     application_id: str,
     service_principal_id: str | None = None,
     effective_group_names: set[str] | None = None,
+    matcher: ExposureMatcher | None = None,
 ) -> None:
-    """Admin-side proof that runtime can access exactly one reviewed Genie space."""
+    """Admin-side proof that runtime can access exactly one reviewed Genie space.
+
+    On every other space a grant the identity's ``matcher`` accepts exactly is
+    not refused (M2-PR4); the reviewed space itself is never relaxed.
+    """
 
     target = reviewed_genie_space_id.strip()
     principal = application_id.strip()
@@ -221,6 +269,9 @@ def audit_global_genie_access(
     spaces = _genie_spaces(workspace)
     if target not in spaces:
         raise RuntimeError(f"reviewed Genie space {target!r} is not visible to the admin audit")
+    exposure = genie_exposure(workspace, matcher, titles=spaces)
+    if exposure is not None:
+        exposure.matcher.assert_not_governed(space_ids=[target], space_names=[spaces[target]])
     for space_id in sorted(spaces):
         path = f"/api/2.0/permissions/genie/{space_id}"
         try:
@@ -239,6 +290,7 @@ def audit_global_genie_access(
                 space_id=space_id,
                 application_id=principal,
                 effective_group_names=group_names,
+                exposure=exposure,
             )
 
 
@@ -248,8 +300,13 @@ def audit_global_no_genie_access(
     application_id: str,
     service_principal_id: str | None = None,
     effective_group_names: set[str] | None = None,
+    matcher: ExposureMatcher | None = None,
 ) -> None:
-    """Admin-side proof that an identity has no access to any Genie space."""
+    """Admin-side proof that an identity has no access to any Genie space.
+
+    The verifier's ``--forbid-all-genie`` passes no ``matcher``, so it stays
+    absolute. The agent-proxy's deny-all passes its own (M2-PR4).
+    """
 
     principal = application_id.strip()
     if not principal:
@@ -265,7 +322,9 @@ def audit_global_no_genie_access(
             ).values()
         )
     )
-    for space_id in sorted(_genie_spaces(workspace)):
+    spaces = _genie_spaces(workspace)
+    exposure = genie_exposure(workspace, matcher, titles=spaces)
+    for space_id in sorted(spaces):
         try:
             permissions = workspace.api_client.do(
                 "GET", f"/api/2.0/permissions/genie/{space_id}"
@@ -277,6 +336,7 @@ def audit_global_no_genie_access(
             space_id=space_id,
             application_id=principal,
             effective_group_names=group_names,
+            exposure=exposure,
         )
 
 

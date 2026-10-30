@@ -217,6 +217,8 @@ class FakeWorkspace:
             get=self._app, get_permissions=self._app_permissions, stop=self._stop
         )
         self.genie = SimpleNamespace(list_spaces=self._spaces)
+        # The workspace id an accepted Genie exposure is bound to (M2-PR4).
+        self.get_workspace_id = lambda: int(estate.get("workspace_id", "4200000001"))
         self.api_client = SimpleNamespace(do=self._do)
         self.workspace = SimpleNamespace(get_status=lambda path: SimpleNamespace(object_id=5))
         self.secrets = SimpleNamespace(list_scopes=self._scopes)

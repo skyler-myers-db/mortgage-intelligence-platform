@@ -110,10 +110,48 @@ def test_main_audits_serving_and_genie_globally(monkeypatch) -> None:
                     "application_id": "runtime-id",
                     "service_principal_id": "runtime-scim-id",
                     "effective_group_names": {"hidden-account-parent"},
+                    # No --exposure-identity: no matcher, every grant refuses as before.
+                    "matcher": None,
                 },
             ),
         ),
     ]
+
+
+def test_main_hands_the_named_identity_its_own_matcher(monkeypatch) -> None:
+    workspace = _workspace()
+    workspace.apps = SimpleNamespace(
+        get=lambda _name: SimpleNamespace(service_principal_client_id="app-client-EXAMPLE")
+    )
+    genie: list[dict[str, object]] = []
+    loaded: list[tuple[str, object]] = []
+    monkeypatch.setattr(audit, "WorkspaceClient", lambda: workspace)
+    monkeypatch.setattr(audit, "audit_global_serving_endpoint_access", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        audit, "audit_global_genie_access", lambda _client, **kwargs: genie.append(kwargs)
+    )
+    monkeypatch.setattr(
+        audit, "_audit_managed_query_group_governance", lambda *_a, **_kw: _TARGET_IDENTITY_PROOF
+    )
+    monkeypatch.setattr(
+        audit,
+        "identity_matcher",
+        lambda identity, **kwargs: loaded.append((identity, kwargs)) or f"matcher-{identity}",
+    )
+
+    argv = [
+        "--account-id", "account-id",
+        "--expected-inventory-principal", "deployer@example.com",
+        "--serving-endpoint", "gateway-endpoint",
+        "--expected-serving-permission", "CAN_QUERY",
+        "--genie-space-id", "space-id",
+    ]  # fmt: skip
+    assert _main(["--application-id", "app-client-EXAMPLE", *argv, "--exposure-identity", "app"]) == 0
+    assert loaded == [("app", {"governed_space_ids": ["space-id"]})]
+    assert genie[-1]["matcher"] == "matcher-app"
+    with pytest.raises(RuntimeError, match="does not match the audited principal"):
+        _main(["--application-id", "app-client-EXAMPLE", *argv, "--exposure-identity", "runtime"])
+    assert len(loaded) == 1, "a mismatched identity never loads a matcher"
 
 
 def test_main_can_audit_verifier_without_genie(monkeypatch) -> None:
