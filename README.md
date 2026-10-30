@@ -69,12 +69,18 @@ python -m backend.runtime
 
 ## Databricks deploy
 
-For a customer fork, first add the customer's exact public legal lender name
-and verified NMLS ID to the source-controlled registry in
-`backend/schemas/lender_identity.py`. That registry change requires independent
-review; runtime configuration alone cannot introduce a new borrower-facing
-identity. After the reviewed pair is merged, rebind the bundle's single
-workspace-host anchor and set that exact identity in `.env.local`:
+A customer lender is configuration, not a code change. The
+source-controlled registry in `backend/schemas/lender_identity.py` holds only
+the Summit Mortgage demo pair; a customer's exact public legal name, verified NMLS ID, tenant id
+and servicer aliases are one reviewed record in `MIP_LENDER_IDENTITY_JSON`,
+pinned by its canonical sha256 in `MIP_LENDER_IDENTITY_SHA256` (see
+[Customer lender identity](docs/deployment.md#customer-lender-identity-a-digest-pinned-record)).
+Runtime configuration alone, a bare `MIP_LENDER_NAME` included, still cannot
+introduce a new borrower-facing identity: the deploy and the App refuse a
+record whose digest is not the reviewed pin. With the record and its pin set,
+`MIP_LENDER_NAME`, `MIP_LENDER_NMLS_ID` and `MIP_TENANT_ID` are optional and,
+when set, must equal the record. Rebind the bundle's single workspace-host
+anchor and set the identity in `.env.local`:
 
 ```bash
 ./scripts/configure-workspace.sh https://<customer-workspace>.cloud.databricks.com

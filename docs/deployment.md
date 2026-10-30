@@ -735,10 +735,11 @@ and the lock lacks. Recompile with the command above, restamp and redeploy.
 
 1. Fill `.env.local` with workspace, warehouse, lender/runtime values, and the
    deployment-owned resource namespace (or set the corresponding GitHub
-   Actions variables). The exact lender-name/NMLS pair must already exist in
-   the source-controlled reviewed identity registry in
-   `backend/schemas/lender_identity.py`; customer onboarding adds that pair in
-   an independently reviewed PR before these deployment variables are set:
+   Actions variables). A customer lender is a digest-pinned record
+   (`MIP_LENDER_IDENTITY_JSON` + `MIP_LENDER_IDENTITY_SHA256`, see
+   [Customer lender identity](#customer-lender-identity-a-digest-pinned-record));
+   a bare name/NMLS pair is accepted only for the source-controlled demo pair
+   in `backend/schemas/lender_identity.py`:
 
 ```bash
 MIP_LENDER_NAME="<exact reviewed customer legal lender name>"
@@ -1841,6 +1842,73 @@ exits 2 there instead of at App promotion.
 Admin capability panel (`backend/services/capabilities.py`), and it is not
 carried by the deploy payload, so deployed Apps run with it off.
 
+## Customer lender identity: a digest-pinned record
+
+The source-controlled registry in `backend/schemas/lender_identity.py` holds
+only the Summit Mortgage demo pair. A customer lender onboards without a code
+change, as one reviewed record (`backend/schemas/lender_identity_record.py`):
+
+| Name | Class | Value |
+| --- | --- | --- |
+| `MIP_LENDER_IDENTITY_JSON` | identifying (GitHub Environment secret, or `.env.local`) | `{"version":1,"legal_name":…,"nmls_id":…,"tenant_id":…,"servicer_aliases":[…],"reviewed_by":…,"reviewed_at":…}`, plus an optional `"mark"` (below). |
+| `MIP_LENDER_IDENTITY_SHA256` | public (GitHub Environment variable) | The sha256 of the record's canonical JSON: the normalized record with sorted keys and no whitespace. |
+
+The record passes the code registry's own validators (organization-shaped
+legal name, 4-12 digit NMLS id, lowercase tenant id, the 160-character SMS
+disclosure budget), lists 1-32 distinct servicer aliases (the raw Cotality
+servicer strings that name the tenant itself), and is never any part of the
+Summit demo identity. Print the pin a reviewer approves with:
+
+```bash
+MIP_LENDER_IDENTITY_JSON='<the record>' python -m backend.schemas.lender_identity_record
+```
+
+**Review.** The pin is the review: the deferred owner signature is replaced by
+this exact digest, which reaches a deploy only through the client's GitHub
+Environment approval (review mode `single_maintainer_audited`). Any edit to
+the record, one character included, changes its digest, so a record that no
+longer matches its pin is refused everywhere.
+
+**Where it is verified.** Every lender call site resolves through
+`reviewed_lender_identity_from_env()`:
+
+- `scripts/deploy.sh` preflight, before any workspace mutation; it prints only
+  the first 12 characters of the pin, never the record.
+- The App payload build (`tools/databricks/app_deploy_payload.py`) exits 2 on
+  an unverifiable record, and adds `MIP_LENDER_IDENTITY_JSON` and
+  `MIP_LENDER_IDENTITY_SHA256` to the payload only for a verified one. With no
+  record, the payload's env-name set is unchanged.
+- `tools/databricks/bundle_env.py`, the SQL render, the Lakebase migration
+  job (bundle variables `lender_identity_json` / `lender_identity_sha256`, empty
+  by default) and the lender-mark tool.
+- App startup: `backend/runtime.py` refuses the boot, with one line that names
+  no value, before settings load. A verified boot writes exactly one
+  `LENDER_IDENTITY_VERIFIED` audit row carrying only the digest. If that write
+  fails, the App keeps serving and logs one `lender_identity_audit_write_failed`
+  ERROR (outcome `degraded`); the write is not retried, because a retry after
+  an ambiguous commit could record the same boot twice.
+
+`MIP_LENDER_NAME`, `MIP_LENDER_NMLS_ID` and `MIP_TENANT_ID` are optional beside
+a record and, when set, must equal it.
+
+**Tenant aliases.** The SQL render replaces the lender dictionary seed's demo
+tenant rows with one `is_competitor = FALSE` row per alias, display name the
+record's legal name, and drops a competitor row whose raw key the record
+claims; the App's in-process lender fallback mirrors the same rows. The seed
+`MERGE` never deletes, so rows an earlier demo render left in an existing
+`ref.lender_dictionary` stay until removed.
+
+**Demo and legacy installs** set neither name and behave exactly as before.
+
+`.env.example` cannot be edited from an agent session; the integrator adds
+these lines to it:
+
+```bash
+# optional customer installs: the reviewed lender record (identifying) and the sha256 of its canonical JSON (public); docs/deployment.md "Customer lender identity"
+MIP_LENDER_IDENTITY_JSON=
+MIP_LENDER_IDENTITY_SHA256=
+```
+
 ## Lender co-branding (optional)
 
 A deployment may draw its lender's reviewed mark beside the tenant name (the
@@ -1859,10 +1927,13 @@ Values equal to the defaults emit nothing, so a deployment that sets none of
 them renders exactly as before. A user's own Console choice always wins over
 a tenant default.
 
-The mark is accepted only when it matches a source-controlled entry in
-`backend/schemas/lender_branding.py` that is bound to the reviewed lender
-name and NMLS id in `backend/schemas/lender_identity.py`: same sha256, media
-type and pixel size, PNG or WebP without metadata, colour profile or
+The mark is accepted only when it matches a reviewed entry: for the
+code-registry identity, a source-controlled entry in
+`backend/schemas/lender_branding.py` bound to the reviewed lender name and
+NMLS id in `backend/schemas/lender_identity.py`; for a digest-pinned customer
+record, the record's own `"mark"` object (`sha256`, `media_type`, `width`,
+`height`, `authorization_ref`, `reviewed_on`), checked by the same rules. In
+both cases: same sha256, media type and pixel size, PNG or WebP without metadata, colour profile or
 animation, at most 64 KiB, 32-512 px tall and 1-2 times as wide as tall.
 Preflight checks it before any workspace mutation and stops the deploy on any
 mismatch; the log shows only the first 12 characters of its sha256, never the
