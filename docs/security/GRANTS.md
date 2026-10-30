@@ -1272,9 +1272,16 @@ a dropped CHECK or unique index, deleted seed rows) still plans an apply.
 `blue_restorable` additionally needs every pending version tagged `expand`
 and the seed, tenant seed and grant-matrix components unchanged; an
 in-place edit to existing DDL or a function body must ship as its own
-tagged version. Each prints one JSON report of codes, check names,
-versions and `mip_app` object names, never a role name. Nothing invokes
-them yet; see `jobs/lakebase_migration_plan.py`.
+tagged version. A database whose `schema_migrations` holds a version the
+release does not declare is refused before any App stop
+(`database_ahead_of_release`; the report counts such rows and never echoes
+their text). The governed remediation for a version renamed or withdrawn
+after some database recorded it is a reviewed
+`-- mip:migration retired=<version>` line in `lakebase/schema.sql`, which
+plan then accepts; deleting the ledger row by hand is not one. Each prints
+one JSON report of codes, check names, versions and `mip_app` object names,
+never a role name. Nothing invokes them yet; see
+`jobs/lakebase_migration_plan.py`.
 The bundle pins `run_as.user_name` to the resolved deployment identity in both
 development and production targets; live release evidence must confirm the
 created migration job reports that exact run-as instead of relying on its

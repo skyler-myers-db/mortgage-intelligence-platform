@@ -243,6 +243,8 @@ def _stub_checks(
 def _plan(
     monkeypatch: pytest.MonkeyPatch,
     catalog: _Catalog,
+    *,
+    retired: frozenset[str] = frozenset(),
     **checks: str,
 ) -> tuple[dict[str, Any], list[str]]:
     connection = _install(monkeypatch, catalog.route)
@@ -253,6 +255,7 @@ def _plan(
         migrations=_MIGRATIONS,
         repo_digest=_REPO_DIGEST,
         repo_components=_REPO_COMPONENTS,
+        retired=retired,
     )
     assert _APP_ROLE not in json.dumps(report)
     return report, _assert_read_only_session(connection)
@@ -467,12 +470,31 @@ def test_a_fresh_install_plans_every_version(monkeypatch: pytest.MonkeyPatch) ->
     assert report["digest"] == "absent"
 
 
-def test_a_database_ahead_of_the_release_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
-    report, _statements = _plan(monkeypatch, _Catalog(applied={*_DECLARED, "2026_02_01_newer"}))
+def test_a_database_ahead_of_the_release_refuses_and_counts_without_naming(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # schema_migrations.version is unconstrained database text.
+    foreign = "2026_02_01_acme_lender_internal_note"
+    report, _statements = _plan(monkeypatch, _Catalog(applied={*_DECLARED, foreign}))
 
     assert report["decision"] == "refuse"
     assert report["refusals"] == ["database_ahead_of_release"]
-    assert report["migrations"]["unknown_applied"] == ["2026_02_01_newer"]
+    assert report["migrations"]["unknown_applied"] == 1
+    assert "acme" not in json.dumps(report)
+
+
+def test_a_reviewed_retired_version_left_in_the_database_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    renamed = "2026_01_01_base_before_rename"
+    report, _statements = _plan(
+        monkeypatch, _Catalog(applied={*_DECLARED, renamed}), retired=frozenset({renamed})
+    )
+
+    assert (report["decision"], report["refusals"]) == ("noop", [])
+    assert report["migrations"]["unknown_applied"] == 0
+    assert report["migrations"]["retired_applied"] == 1
+    assert renamed not in json.dumps(report)
 
 
 def test_an_apply_preflight_failure_refuses_and_skips_verify(

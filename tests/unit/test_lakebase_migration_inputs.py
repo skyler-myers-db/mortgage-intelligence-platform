@@ -13,6 +13,7 @@ from jobs.lakebase_migration_inputs import (
     SCHEMA_INPUT_COMPONENTS,
     MigrationInputError,
     SchemaMigration,
+    parse_retired_migrations,
     parse_schema_migrations,
     render_schema_inputs,
     schema_input_components,
@@ -139,6 +140,51 @@ def test_two_tags_for_one_version_refuse() -> None:
 
     with pytest.raises(MigrationInputError, match="two compatibility tags"):
         parse_schema_migrations(schema)
+
+
+def test_the_repo_retires_exactly_the_four_branch_renamed_versions() -> None:
+    retired = parse_retired_migrations(_SCHEMA)
+    declared = {migration.version for migration in parse_schema_migrations(_SCHEMA)}
+
+    # Each was renamed before merge; its block is declared under the new name.
+    assert retired == {
+        "2026_10_01_disposition_notes_retired",
+        "2026_10_01_genie_refusal_report_texts",
+        "2026_10_02_borrower_decision_history_index",
+        "2026_10_02_genie_job_sections",
+    }
+    assert not retired & declared
+    assert {
+        "2026_10_07_disposition_notes_retired",
+        "2026_10_07_genie_refusal_report_texts",
+        "2026_10_07_borrower_decision_history_index",
+        "2026_10_01_genie_job_sections",
+    } <= declared
+
+
+def test_a_retired_line_is_not_a_compatibility_tag() -> None:
+    schema = _schema("-- mip:migration retired=2026_01_00_old_name", _insert("2026_01_01_a"))
+
+    assert parse_retired_migrations(schema) == {"2026_01_00_old_name"}
+    assert parse_schema_migrations(schema)[0].tagged is False
+
+
+@pytest.mark.parametrize(
+    "lines",
+    (
+        ("-- mip:migration retired=2026_01_01_a",),
+        ("-- mip:migration retired=not_a_version",),
+        ("-- mip:migration retired=2026_01_00_old", "-- mip:migration retired=2026_01_00_old"),
+    ),
+    ids=("declared", "malformed", "twice"),
+)
+def test_a_retired_name_that_is_declared_malformed_or_repeated_refuses(
+    lines: tuple[str, ...],
+) -> None:
+    with pytest.raises(MigrationInputError, match="malformed or declared"):
+        parse_retired_migrations(_schema(*lines, _insert("2026_01_01_a")))
+    with pytest.raises(MigrationInputError, match="malformed or declared"):
+        parse_schema_migrations(_schema(*lines, _insert("2026_01_01_a")))
 
 
 def test_a_version_declared_twice_refuses() -> None:

@@ -62,6 +62,9 @@ _TAG_LINE_RE = re.compile(r"^[ \t]*--[ \t]*mip:migration\b.*$", re.MULTILINE)
 _TAG_RE = re.compile(
     r"-- mip:migration version=(?P<version>[0-9a-z_]+) compat=(?P<compat>expand|contract)"
 )
+# A reviewed ledger name some database may hold although no release declares
+# it any more (renamed or withdrawn after it was applied somewhere).
+_RETIRED_RE = re.compile(r"-- mip:migration retired=(?P<version>[0-9a-z_]+)")
 
 
 class MigrationInputError(RuntimeError):
@@ -102,9 +105,44 @@ def parse_schema_migrations(schema_sql: str) -> tuple[SchemaMigration, ...]:
             raise MigrationInputError(f"schema_migrations version {version!r} is declared twice")
         versions.append(version)
 
+    tags, _retired = _parse_tag_lines(schema_sql, versions)
+    return tuple(
+        SchemaMigration(
+            version=version,
+            compat=tags.get(version, "contract"),
+            tagged=version in tags,
+        )
+        for version in versions
+    )
+
+
+def parse_retired_migrations(schema_sql: str) -> frozenset[str]:
+    """Return the reviewed retired ledger versions plan accepts in a database.
+
+    ``-- mip:migration retired=<version>`` names a version a database may
+    have recorded before it was renamed or withdrawn. Plan refuses an applied
+    version the release does not declare (``database_ahead_of_release``)
+    unless it is retired here. A retired name must be well formed, unique,
+    and not declared.
+    """
+
+    versions = [migration.version for migration in parse_schema_migrations(schema_sql)]
+    return _parse_tag_lines(schema_sql, versions)[1]
+
+
+def _parse_tag_lines(
+    schema_sql: str, versions: Sequence[str]
+) -> tuple[dict[str, MigrationCompat], frozenset[str]]:
     tags: dict[str, MigrationCompat] = {}
+    retired: set[str] = set()
     for line_match in _TAG_LINE_RE.finditer(schema_sql):
         line = line_match.group(0)
+        if (retirement := _RETIRED_RE.fullmatch(line)) is not None:
+            version = retirement.group("version")
+            if not _VERSION_RE.fullmatch(version) or version in versions or version in retired:
+                raise MigrationInputError(f"retired version {version!r} is malformed or declared")
+            retired.add(version)
+            continue
         tag = _TAG_RE.fullmatch(line)
         if tag is None:
             raise MigrationInputError(f"malformed migration compatibility tag: {line.strip()!r}")
@@ -114,15 +152,7 @@ def parse_schema_migrations(schema_sql: str) -> tuple[SchemaMigration, ...]:
         if version in tags:
             raise MigrationInputError(f"version {version!r} carries two compatibility tags")
         tags[version] = "expand" if tag.group("compat") == "expand" else "contract"
-
-    return tuple(
-        SchemaMigration(
-            version=version,
-            compat=tags.get(version, "contract"),
-            tagged=version in tags,
-        )
-        for version in versions
-    )
+    return tags, frozenset(retired)
 
 
 def grant_matrix_document() -> str:

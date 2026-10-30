@@ -33,6 +33,21 @@
 -- the plan. Versions older than the tags carry none on purpose: nobody
 -- reviewed a claim for them, so an install that finds one pending treats it
 -- as contract.
+--
+-- Retired ledger versions: plan refuses a database whose schema_migrations
+-- holds a version this file does not declare (database_ahead_of_release:
+-- a newer release migrated it, and apply of this one would fail after the
+-- App stop). A version renamed or withdrawn after some database recorded it
+-- is not that; name it once on a line of exactly this form and plan accepts
+-- the leftover row (apply never reads it):
+--   -- mip:migration retired=<schema_migrations version>
+-- The four below were renamed on their branches before merge (each block is
+-- declared under its new name), so a database migrated from such a branch
+-- may still hold the old name.
+-- mip:migration retired=2026_10_01_disposition_notes_retired
+-- mip:migration retired=2026_10_01_genie_refusal_report_texts
+-- mip:migration retired=2026_10_02_borrower_decision_history_index
+-- mip:migration retired=2026_10_02_genie_job_sections
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE SCHEMA IF NOT EXISTS mip_app;

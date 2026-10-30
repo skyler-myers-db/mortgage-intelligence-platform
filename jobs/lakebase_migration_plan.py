@@ -33,6 +33,7 @@ from jobs.lakebase_migration_grants import (
 )
 from jobs.lakebase_migration_inputs import (
     SchemaMigration,
+    parse_retired_migrations,
     parse_schema_migrations,
     schema_input_components,
     schema_input_digest,
@@ -295,6 +296,7 @@ def run_plan(
     migrations: Sequence[SchemaMigration],
     repo_digest: str,
     repo_components: Mapping[str, str],
+    retired: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Collect every plan fact in one read-only session and decide."""
 
@@ -335,7 +337,8 @@ def run_plan(
                 catalog_state = _catalog_state(cur, recorded) if verify["passed"] else "skipped"
     declared = {migration.version for migration in migrations}
     pending = [m for m in migrations if applied is not None and m.version not in applied]
-    unknown_applied = sorted((applied or set()) - declared)
+    # Ledger rows are database text: the report counts them, never names them.
+    unknown_applied = len((applied or set()) - declared - retired)
     if unknown_applied:
         refusals.append("database_ahead_of_release")
     changed_components: list[str] | None = None
@@ -368,6 +371,7 @@ def run_plan(
             "pending": [m.version for m in pending],
             "pending_contract": [m.version for m in pending if m.compat == "contract"],
             "unknown_applied": unknown_applied,
+            "retired_applied": len((applied or set()) & retired),
         },
         "digest": digest_state,
         "digest_components_changed": changed_components,
@@ -412,6 +416,7 @@ def main_read_only(
             stage = "migration_inputs"
             schema_sql, sql_texts = schema_inputs_fn()
             migrations = parse_schema_migrations(schema_sql)
+            retired = parse_retired_migrations(schema_sql)
             repo_digest = schema_input_digest(sql_texts)
             repo_components = schema_input_components(sql_texts)
             stage = "read_only_session"
@@ -421,6 +426,7 @@ def main_read_only(
                 migrations=migrations,
                 repo_digest=repo_digest,
                 repo_components=repo_components,
+                retired=retired,
             )
     except ReadOnlyStatementRefused:
         report["refusals"] = ["read_only_guard"]
