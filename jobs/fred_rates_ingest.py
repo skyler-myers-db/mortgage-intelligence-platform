@@ -43,12 +43,17 @@ Runtime assumptions:
       explicitly with `--table <catalog>.<schema>.<name>`.
     - `--seed-path` defaults to the repo-relative
       `data/seeds/fred_mortgage30us_seed.csv`.
+    - As a bundle job (the `__main__` path, :func:`run`), the install pins
+      come first (jobs/_install_pins.py, M2-PR5): `--table` must be the pinned
+      catalog's table and only `--mode` may vary; any other option exits 5
+      before any Spark or FRED call. :func:`main` alone keeps the local flags.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import importlib.util
 import io
 import logging
 import os
@@ -60,6 +65,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from types import ModuleType
 
 FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv" "?id=MORTGAGE30US&cosd=2021-01-01"
 DEFAULT_CATALOG = "mip"
@@ -600,10 +606,50 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
+def _install_pins() -> ModuleType:
+    """jobs/_install_pins.py from this script's own folder, by exact path (M2-PR5).
+
+    Never a search and never ``sys.path``: Databricks' exec() path can drop
+    ``__file__``, and its working directory is then this folder or the bundle
+    files root above it. Anything else refuses (exit 5) before any SQL.
+    """
+    try:
+        folder = Path(__file__).resolve().parent
+    except NameError:
+        cwd = Path.cwd()
+        folder = cwd if (cwd / "fred_rates_ingest.py").is_file() else cwd / "jobs"
+    source = folder / "_install_pins.py"
+    spec = importlib.util.spec_from_file_location("mip_install_pins", source)
+    if spec is None or spec.loader is None or not source.is_file():
+        print("[install-pins] fred_rates_ingest REFUSED: jobs/_install_pins.py is not beside this job", file=sys.stderr)
+        sys.exit(5)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def run(argv: list[str] | None = None) -> int:
+    """The job's entrypoint: the install pins before any Spark or FRED call, then :func:`main`.
+
+    ``--table`` must be the pinned catalog's market-rates table and ``--mode``
+    is the bundle's free choice; any other option set (``--seed-path``, say,
+    which would load an arbitrary file into silver) exits 5 before anything runs.
+    """
+    _install_pins().enforce(
+        build_parser(),
+        argv,
+        expected=lambda pins: {
+            "table": f"{pins.catalog}.{DEFAULT_TABLE_SCHEMA}.{DEFAULT_TABLE_NAME}"
+        },
+        free=("mode",),
+    )
+    return main(argv)
+
+
 if __name__ == "__main__":
     # Only raise SystemExit on a non-zero return. Databricks ipykernel
     # exec wrappers treat *any* SystemExit (including SystemExit(0)) as
     # a task failure, so a successful run must fall through cleanly.
-    _rc = main()
+    _rc = run()
     if _rc != 0:
         sys.exit(_rc)

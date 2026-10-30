@@ -43,6 +43,10 @@ Mapping, every target (env -> BUNDLE_VAR_*):
                              _table_prefix (canonical when unset; '-' is no
                              table prefix; the same names render sql/_rendered;
                              the client profile holds the same fields)
+  catalog, Lakebase names, MIP_IDENTITY_PREFIX
+                          -> jobs/install_pins.json (gitignored, synced): the
+                             parameters the App-triggerable jobs accept
+                             (tools/databricks/install_pins.py, M2-PR5)
   (demo install only)     -> scheduled_refresh_failure_recipients, written to
                              .databricks/bundle/<target>/variable-overrides.json
                              (tools/databricks/scheduled_refresh_posture.py)
@@ -91,11 +95,12 @@ from backend.schemas.lender_identity import (  # noqa: E402
 )
 from tools import render_sql  # noqa: E402
 from tools.clients import profile as client_views  # noqa: E402
+from tools.clients.bootstrap_roster import data_owners_group  # noqa: E402
 from tools.clients.environment import from_local as client_profile_from_local  # noqa: E402
 from tools.clients.environment import resolve as resolve_client_profile  # noqa: E402
 from tools.clients.errors import ProfileRefusal  # noqa: E402
 from tools.clients.schema import ClientProfile  # noqa: E402
-from tools.databricks import scheduled_refresh_posture  # noqa: E402
+from tools.databricks import install_pins, scheduled_refresh_posture  # noqa: E402
 from tools.databricks.workspace_auth import (  # noqa: E402
     strip_app_facing_workspace_auth,
 )
@@ -796,6 +801,26 @@ def main() -> int:
     except render_sql.CanonicalSourceLeft as exc:
         print(f"[bundle_env] {exc}", file=sys.stderr)
         return 2
+    # The install pins the App-triggerable jobs check their parameters against
+    # (M2-PR5): the same catalog and Lakebase names as the bundle variables.
+    identity_prefix = (
+        profile.identity_prefix
+        if profile is not None
+        else str(env.get("MIP_IDENTITY_PREFIX") or "mip").strip()
+    )
+    try:
+        install_pins.render(
+            Path(env.get("DATABRICKS_BUNDLE_ROOT") or BUNDLE_ROOT),
+            install_pins.document(
+                catalog=catalog,
+                lakebase_instance=resource_names["lakebase_instance_name"],
+                lakebase_database=resource_names["lakebase_database_name"],
+                data_owner_group=data_owners_group(identity_prefix),
+            ),
+        )
+    except OSError as exc:
+        print(f"[bundle_env] could not render the install pins: {exc}", file=sys.stderr)
+        return 2
 
     # Operator feedback (never print the full value; just confirm resolution).
     def status(name: str, value: str | None) -> str:
@@ -820,6 +845,7 @@ def main() -> int:
         file=sys.stderr,
     )
     print(f"[bundle_env] {scheduled_refresh_status}", file=sys.stderr)
+    print(f"[bundle_env] install pins rendered to {install_pins.PINS_RELPATH}", file=sys.stderr)
     print(
         "[bundle_env] "
         f"render_sql catalog={catalog} processed={processed} written={written} "

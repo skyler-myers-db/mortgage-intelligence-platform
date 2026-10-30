@@ -44,6 +44,10 @@ sync:
   include:
     - frontend/dist/**
     - sql/_rendered/**
+    # The install pins the App-triggerable jobs read beside their sources
+    # (jobs/_install_pins.py, M2-PR5); bundle_env renders them, gitignored,
+    # before every bundle call, so each deploy uploads this install's own.
+    - jobs/install_pins.json
   # The frontend is built before bundle deployment and served as static files
   # by FastAPI. Databricks Apps currently provides Node 22.16, while the
   # audited React Router release requires Node 22.22 for package installation.
@@ -989,7 +993,9 @@ resources:
           description: "MERGE changed Lakebase approval/outreach rows into the sparse gold lifecycle mirror."
           environment_key: py_default
           spark_python_task:
-            python_file: jobs/sync_lifecycle_state.py
+            # The job-only entrypoint (M2-PR5): the install pins first, then
+            # jobs/sync_lifecycle_state.py, which the App also imports.
+            python_file: jobs/sync_lifecycle_state_job.py
             parameters:
               - "--catalog=${var.uc_catalog}"
               - "--lakebase-instance=${var.lakebase_instance_name}"

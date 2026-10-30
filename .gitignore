@@ -56,6 +56,10 @@ genie/space_id.txt
 # sql/** and stay committed; only the rendered copies under sql/_rendered
 # are gitignored. See docs/multi-catalog-plan.md + docs/runbook-multi-catalog.md.
 sql/_rendered/
+# The install pins tools/databricks/install_pins.py renders before every bundle
+# call (M2-PR5); databricks.yml syncs it. Never committed: it is per install.
+jobs/install_pins.json
+jobs/.install_pins.*
 
 # Claude local
 .claude/

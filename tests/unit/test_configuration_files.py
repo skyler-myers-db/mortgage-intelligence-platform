@@ -165,7 +165,7 @@ def test_python_jobs_receive_bundle_catalog_variable():
     content = (REPO / "databricks.yml").read_text(encoding="utf-8")
 
     sync_match = re.search(
-        r"(?ms)python_file: jobs/sync_lifecycle_state.py\n"
+        r"(?ms)python_file: jobs/sync_lifecycle_state_job.py\n"
         r"\s+parameters:\n"
         r"\s+- \"--catalog=\$\{var\.uc_catalog\}\"",
         content,
@@ -189,7 +189,7 @@ def test_lakebase_jobs_receive_the_same_bundle_resource_namespace():
 
     for source in (
         "jobs/lakebase_migrate.py",
-        "jobs/sync_lifecycle_state.py",
+        "jobs/sync_lifecycle_state_job.py",
         "jobs/kpi_snapshot.py",
     ):
         start = content.index(f"python_file: {source}")
