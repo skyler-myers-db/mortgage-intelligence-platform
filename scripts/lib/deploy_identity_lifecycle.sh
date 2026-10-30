@@ -96,7 +96,7 @@ CLIENT_TARGET_BUNDLE_VARS=(
 resolve_client_profile() {
   local view line name value
   unset "${CLIENT_TARGET_BUNDLE_VARS[@]}"
-  CLIENT_KEY=""; CLIENT_INSTALL_CLASS=""; CLIENT_HOST=""; CLIENT_DEPLOYER=""
+  CLIENT_KEY=""; CLIENT_INSTALL_CLASS=""; CLIENT_HOST=""; CLIENT_DEPLOYER=""; CLIENT_JOBS_PRINCIPAL=""
   view="$(mktemp -t mip-client-target.XXXXXX)"
   if ! "$PYTHON" -m tools.clients resolve --emit client-target --format env --out "$view"; then
     rm -f "$view"
@@ -125,7 +125,10 @@ resolve_client_profile() {
   done < "$view"
   rm -f "$view"
   CLIENT_DEPLOYER="${BUNDLE_VAR_deployer_principal:-}"
-  if [[ -z "$CLIENT_KEY" || -z "$CLIENT_HOST" || -z "$CLIENT_DEPLOYER" || -z "${BUNDLE_VAR_jobs_principal:-}" || \
+  # The non-admin jobs identity (M2-PR5): the App-triggerable jobs' run_as and
+  # the Lakebase jobs_reader role step 4 converges.
+  CLIENT_JOBS_PRINCIPAL="${BUNDLE_VAR_jobs_principal:-}"
+  if [[ -z "$CLIENT_KEY" || -z "$CLIENT_HOST" || -z "$CLIENT_DEPLOYER" || -z "$CLIENT_JOBS_PRINCIPAL" || \
         ( "$CLIENT_INSTALL_CLASS" != "demo" && "$CLIENT_INSTALL_CLASS" != "customer" ) ]]; then
     echo "${RED}[deploy] the client-target view is incomplete; refusing.${RST}" >&2
     exit 2

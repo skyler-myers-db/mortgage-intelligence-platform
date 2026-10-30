@@ -1,0 +1,12 @@
+{
+  "note": "Written from origin/main 3d37e347 (before M2-PR5) by this test's resolver and normalizer with the paychex-shaped profile. A diff is a change to a resource M2-PR5 touched beyond its run_as, its converge_governed_owner task and the jobs-reader parameter: review it.",
+  "resources": {
+    "jobs.mip_sync_lifecycle_state": "365d3251bd6d7b5837d73b380b33553600137311b4f0f149e9a69701362bbeb8",
+    "jobs.mip_fred_rates_ingest": "de14507e42f2a5edde5761375ca9f3fb720702ba61b3fe971875aea4c97b5b7f",
+    "jobs.mip_refresh_silver": "ac6ed0dffef4b87f49b9ce6039f2f9a705c2fa1bcb490fea91eb7067178aeb41",
+    "jobs.mip_refresh_scores": "1a5da9f31414c04b933b4b4ede5e89609910251886a73aee52df4281febe82c1",
+    "jobs.mip_scheduled_refresh": "bf97cf6ee170e2a87e1604af0c2e54c41f47096aac45e44b1200acfeeb3f4195",
+    "jobs.mip_lakebase_migrate": "f84beff7d2315638b15fdc3a911f7dae127b1ab6f8f52ed1a9bb7fac33c43de9",
+    "pipelines.mip_feature_pipeline": "7ca6169ef3210280b51c77243d2fa812b54b2f001be3212750a50572e2fd0e76"
+  }
+}

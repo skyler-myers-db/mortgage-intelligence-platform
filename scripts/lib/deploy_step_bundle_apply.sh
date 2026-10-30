@@ -375,6 +375,18 @@ run_with_lakebase_bootstrap_authority \
   --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
   --role-contract verifier \
   --repair-legacy-replication
+# The non-admin jobs identity's Lakebase role (M2-PR5): mip_lakebase_migrate
+# (step 4b, --jobs-reader-client-id) grants it SELECT on the lifecycle sync's
+# two tables and postflights exactly that, so the role must exist first.
+# CLIENT_JOBS_PRINCIPAL is the client-target view's (resolve_client_profile).
+step "converge jobs-reader Lakebase OAuth role to exact LOGIN-only profile"
+run_with_lakebase_bootstrap_authority \
+  "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+  --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+  --lakebase-database "$LAKEBASE_DATABASE" \
+  --application-id "$CLIENT_JOBS_PRINCIPAL" \
+  --role-contract jobs_reader \
+  --repair-legacy-replication
 # Credentials-only bootstrap intentionally cannot touch an App that does not
 # exist yet. As soon as bundle apply has created/resolved the App, converge the
 # three App-facing identities by their reserved role and immutable client ID.

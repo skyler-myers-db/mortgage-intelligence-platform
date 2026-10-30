@@ -1201,6 +1201,9 @@ resources:
               - "--tenant-id=${var.tenant_id}"
               - "--ai-gateway-verifier-client-id=${var.ai_gateway_verifier_client_id}"
               - "--require-ai-gateway-verifier"
+              # M2-PR5: the jobs identity's Lakebase jobs_reader role (SELECT on
+              # the lifecycle sync's approval and disposition tables only).
+              - "--jobs-reader-client-id=${var.jobs_principal}"
           max_retries: 2
           retry_on_timeout: true
 
