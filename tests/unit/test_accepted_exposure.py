@@ -378,6 +378,49 @@ def test_a_tuple_no_audit_can_observe_refuses(entry: dict[str, Any], line: str) 
     assert line in _refusal([entry])
 
 
+@pytest.mark.parametrize(
+    ("entry", "line"),
+    [
+        (
+            uc_entry(kind="uc_ownership", privileges=["OWNERSHIP"], privilege_class="elevated"),
+            "uc_ownership is never accepted",
+        ),
+        (
+            genie_entry(securable={"type": "DASHBOARD", "id": "d", "name": "d"}, privilege_class="elevated"),
+            "no audit observes a workspace_permission on a DASHBOARD",
+        ),
+        (uc_entry(identities=["app"]), "no UC audit consults a matcher for app"),
+        (uc_entry(identities=["app", "runtime"]), "no UC audit consults a matcher for app"),
+        (
+            uc_entry(securable={"type": "EXTERNAL_LOCATION", "id": "x", "name": "x"}),
+            "no audit observes a uc_grant on a EXTERNAL_LOCATION",
+        ),
+        (uc_entry(securable={"type": "MODEL", "id": "c.s.m", "name": "c.s.m"}), "registered models too"),
+        (genie_entry(identities=["proxy"]), "no Genie audit consults a matcher for proxy"),
+    ],
+    ids=["ownership", "dashboard", "uc-app", "uc-app-runtime", "external-location", "model", "genie-proxy"],
+)
+def test_an_entry_no_audit_observes_for_its_identities_refuses(entry: dict[str, Any], line: str) -> None:
+    """Review of #306: such an entry loads, is acknowledged and never matches, so it refuses."""
+
+    assert line in _refusal([entry])
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        genie_entry(identities=["app", "runtime"]),
+        *(
+            uc_entry(securable={"type": kind, "id": "c.s.o", "name": "c.s.o"}, identities=["runtime", "proxy"])
+            for kind in ("SCHEMA", "TABLE", "FUNCTION", "VOLUME")
+        ),
+        uc_entry(identities=["proxy"]),
+    ],
+)
+def test_every_observed_tuple_and_identity_loads(entry: dict[str, Any]) -> None:
+    assert _load([entry]).entries
+
+
 def test_a_repeated_tuple_refuses() -> None:
     lines = _refusal([genie_entry(), genie_entry(reason="the same grant again")])
 

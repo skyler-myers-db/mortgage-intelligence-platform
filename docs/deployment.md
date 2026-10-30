@@ -2075,9 +2075,15 @@ The client profile's `MIP_ACCEPTED_EXPOSURE_JSON` may accept one exactly
   wider or narrower grant included, refuses. A UC grant accepted on a catalog
   or schema also covers the same grantee's privileges inherited below it,
   while they are a subset.
+- **Observed tuples only.** An entry loads only when an audit builds its tuple
+  for each of its identities: a Genie space's `workspace_permission` for `app`
+  or `runtime`, or a `uc_grant` on a catalog, schema, table, function (a
+  registered model is one) or volume for `runtime` or `proxy`. Anything else
+  (`uc_ownership`, another workspace object, an App UC grant, a proxy Genie
+  grant) refuses at load instead of being acknowledged and never matching.
 - **Ceiling.** The read class is Genie `CAN_VIEW`/`CAN_RUN` and UC `BROWSE`,
-  `USE_CATALOG`, `USE_SCHEMA`, `SELECT`; everything else, ownership included,
-  is elevated, and `privilege_class` must say which. Elevated is refused for
+  `USE_CATALOG`, `USE_SCHEMA`, `SELECT`; everything else is elevated, and
+  `privilege_class` must say which. Elevated is refused for
   `runtime` and `proxy`: the object's owner must narrow the grant, or the
   agentic tier stays off. It is accepted for `app` alone, for at most 30 days,
   and only while `tests/unit/test_genie_single_space_ast.py`'s control holds:

@@ -18,9 +18,10 @@ docs/deployment.md, "Accepted shared-estate exposure", is the operator view.
   space refuse; an expired entry parses and never matches.
 * **Matching.** One matcher per identity (``app``, ``runtime``, ``proxy``),
   handed to that identity's pre-stop probe and post-stop audits, which build
-  the observed tuples the same way. The verifier has none, and the
-  agent-proxy's Genie boundary (its managed-capability ACLs and deny-all)
-  consults none, so a Genie entry naming ``proxy`` refuses at load.
+  the observed tuples the same way. The verifier has none. A tuple no audit
+  builds for an entry's identity refuses at load: Genie is judged for the App
+  and the runtime (the agent-proxy's Genie boundary stays absolute), UC grants
+  for the runtime and the proxy, and ownership never.
 * **Plan digest.** The owner attestation is deferred, so a non-empty policy is
   pinned by an exact digest ack: ``MIP_ACK_ACCEPTED_EXPOSURE_PLAN`` must equal
   the canonical plan's sha256, recomputed by every consumer right before it
@@ -58,9 +59,12 @@ GENIE_READ = frozenset({"CAN_VIEW", "CAN_RUN"})
 UC_READ = frozenset({"BROWSE", "USE_CATALOG", "USE_SCHEMA", "SELECT"})
 READ, ELEVATED = "read", "elevated"
 ELEVATED_IDENTITIES = frozenset({"app"})
-# The identities whose Genie audits consult a matcher: the pre-stop Genie clause
-# and agent_runtime_access.audit_global_genie_access (App and agent-runtime).
+# Who consults a matcher for which tuples (``_observer_lines``): the Genie
+# audits for the App and the agent-runtime, the foreign UC audits for the
+# agent-runtime and the agent-proxy, on these UC securable types.
 GENIE_IDENTITIES = frozenset({"app", "runtime"})
+UC_IDENTITIES = frozenset({"runtime", "proxy"})
+UC_OBSERVED_TYPES = frozenset({"CATALOG", "SCHEMA", "TABLE", "FUNCTION", "VOLUME"})
 ELEVATED_MAX = timedelta(days=30)
 UC_GRANT, UC_OWNERSHIP, WORKSPACE_PERMISSION = "uc_grant", "uc_ownership", "workspace_permission"
 OWNERSHIP = "OWNERSHIP"
@@ -270,7 +274,7 @@ def _exposure(entry: ExposureEntry) -> Exposure:
 
 
 def _shape_lines(index: int, exposure: Exposure) -> list[str]:
-    """Tuples no audit can ever observe: refused, so a typo cannot hide as a dead entry."""
+    """Tuples that are not well formed: refused, so a typo cannot hide as a dead entry."""
 
     at = f"entry {index}"
     lines: list[str] = []
@@ -295,17 +299,34 @@ def _shape_lines(index: int, exposure: Exposure) -> list[str]:
 
 
 def _observer_lines(index: int, exposure: Exposure, identities: frozenset[str]) -> list[str]:
-    """Identities whose audits never build this tuple: refused, like a tuple no audit observes."""
+    """A tuple, or an identity for it, that no audit ever builds: refused, never a dead entry.
 
-    lines: list[str] = []
-    if exposure.kind == WORKSPACE_PERMISSION and exposure.securable_type == GENIE_SPACE:
-        unobserved = sorted(identities - GENIE_IDENTITIES)
-        if unobserved:
-            lines.append(
-                f"entry {index}: no Genie audit consults a matcher for {', '.join(unobserved)}; "
-                "the agent-proxy's Genie boundary is absolute"
-            )
-    return lines
+    Each consumer builds one kind of tuple for some identities only: the
+    pre-stop Genie clause and ``audit_global_genie_access`` a Genie
+    ``workspace_permission`` for the App and the agent-runtime; the foreign UC
+    audit and both dual-authority proofs a ``uc_grant`` on a catalog, schema,
+    table, function or volume for the agent-runtime and the agent-proxy.
+    Ownership is never judged by a matcher (foreign ownership always refuses).
+    """
+
+    at = f"entry {index}"
+    if exposure.kind == UC_OWNERSHIP:
+        return [f"{at}: uc_ownership is never accepted; foreign ownership refuses whatever the profile lists"]
+    if exposure.kind == WORKSPACE_PERMISSION:
+        if exposure.securable_type != GENIE_SPACE:
+            return [f"{at}: no audit observes a workspace_permission on a {exposure.securable_type}"]
+        observers, audit, remedy = GENIE_IDENTITIES, "Genie", "; the agent-proxy's Genie boundary is absolute"
+    else:
+        if exposure.securable_type not in UC_OBSERVED_TYPES:
+            return [
+                f"{at}: no audit observes a uc_grant on a {exposure.securable_type}; the foreign UC "
+                "audit reads catalogs, schemas, tables, functions (registered models too) and volumes"
+            ]
+        observers, audit, remedy = UC_IDENTITIES, "UC", "; the App's UC grants are not judged by a matcher"
+    unobserved = sorted(identities - observers)
+    if not unobserved:
+        return []
+    return [f"{at}: no {audit} audit consults a matcher for {', '.join(unobserved)}" + remedy]
 
 
 def _ceiling_lines(

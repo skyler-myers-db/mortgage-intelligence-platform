@@ -94,7 +94,6 @@ def test_the_exact_catalog_entry_accepts_it_and_its_inherited_children() -> None
         {"source": "inherited:METASTORE/metastore-id"},
         {"securable": {"type": "CATALOG", "id": "other", "name": "other_renamed"}},
         {"binding": {"isolation_mode": "ISOLATED", "workspace_ids": ["4200000001"]}},
-        {"identities": ["app"]},
         {"identities": ["proxy"]},
         {"expires_at": "2026-10-01"},
     ],
@@ -103,6 +102,11 @@ def test_the_exact_catalog_entry_accepts_it_and_its_inherited_children() -> None
 def test_any_other_tuple_still_refuses(changed: dict[str, Any]) -> None:
     with pytest.raises(RuntimeError, match="forbidden access on catalog other"):
         harness._audit(_readable_catalog(), exposure=_matcher([entry(**changed)]))
+
+
+def test_an_app_uc_entry_refuses_at_load_since_no_app_audit_reads_it() -> None:
+    with pytest.raises(ExposureRefusal, match="no UC audit consults a matcher for app"):
+        _matcher([entry(identities=["app"])])
 
 
 def test_an_unlisted_direct_grant_below_an_accepted_catalog_still_refuses() -> None:
