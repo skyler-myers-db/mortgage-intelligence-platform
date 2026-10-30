@@ -4,7 +4,8 @@ Applies the governed schema the way ``--mode apply`` does (the four texts plus
 the digest row, then the grants) and drives the read-only modes against the
 result. Every statement plan and verify send is recorded through a proxy over
 the real psycopg cursor and must be a read; the server must also reject a
-write inside the session. Vanilla PostgreSQL has neither the Databricks
+write inside the session. Owner-level drift that only apply's replay of
+schema.sql repairs must turn a noop plan into apply. Vanilla PostgreSQL has neither the Databricks
 provider schema nor the managed event triggers, so the suite uses the same
 explicit seams as the other real-Postgres suites. Skipped unless
 ``MIP_TEST_POSTGRES_DSN`` names a disposable database.
@@ -28,9 +29,10 @@ from jobs import lakebase_migration_read_only as read_only
 from jobs.lakebase_migration_inputs import (
     parse_schema_migrations,
     render_schema_inputs,
+    schema_input_components,
     schema_input_digest,
-    schema_input_digest_sql,
 )
+from jobs.lakebase_migration_ledger import schema_input_digest_sql
 from jobs.lakebase_migration_plan import CheckContext, run_plan, run_verify
 from jobs.lakebase_migration_read_only import read_only_session
 
@@ -76,7 +78,7 @@ def _apply(conn_kwargs: dict[str, str], app_role: str) -> None:
 
     _schema_sql, sql_texts = _inputs()
     lakebase_migrate._run_transaction(
-        (*sql_texts, schema_input_digest_sql(schema_input_digest(sql_texts))),
+        (*sql_texts, schema_input_digest_sql(sql_texts)),
         conn_kwargs,
         app_role=app_role,
         verify_outreach_integrity=True,
@@ -163,6 +165,7 @@ def _read_only(
                 ctx,
                 migrations=parse_schema_migrations(schema_sql),
                 repo_digest=schema_input_digest(sql_texts),
+                repo_components=schema_input_components(sql_texts),
             )
     assert recorded[0] == "SHOW transaction_read_only"
     return report, recorded
@@ -204,18 +207,28 @@ def test_after_apply_plan_is_noop_and_verify_passes_with_reads_only(
     assert plan["decision"] == "noop", plan
     assert plan["blue_restorable"] is True
     assert plan["digest"] == "equal"
+    # Apply computed the fingerprint under schema.sql's search_path; plan
+    # recomputed it in a fresh session under the default one.
+    assert plan["catalog"] == "equal"
     assert verify["passed"] is True, verify
     # Both sessions really ran the catalog reads, not an early exit.
     assert len(plan_statements) >= 25 and len(verify_statements) >= 20
     with psycopg.connect(**conn_kwargs) as conn:
         rows = conn.execute(
-            "SELECT scope, input_digest FROM mip_app.deployment_schema_digest"
+            "SELECT scope, input_digest, grant_matrix_digest FROM mip_app.deployment_schema_digest"
         ).fetchall()
         app_select = conn.execute(
             "SELECT has_table_privilege(%s, 'mip_app.deployment_schema_digest', 'SELECT')",
             (app_role,),
         ).fetchone()
-    assert rows == [("lakebase_schema", schema_input_digest(_inputs()[1]))]
+    sql_texts = _inputs()[1]
+    assert rows == [
+        (
+            "lakebase_schema",
+            schema_input_digest(sql_texts),
+            schema_input_components(sql_texts)["grant_matrix"],
+        )
+    ]
     assert app_select == (False,)
 
 
@@ -247,6 +260,56 @@ def test_plan_sees_a_pending_version_then_a_changed_digest(
 
     assert (differs["decision"], differs["digest"]) == ("apply", "differs")
     assert differs["blue_restorable"] is False
+
+
+_FUNCTION = "mip_app.prevent_action_audit_mutation()"
+
+
+def _same_shape_function_body_rewrite(conn_kwargs: dict[str, str]) -> str:
+    """CREATE OR REPLACE the audit guard with a body that lets every mutation through."""
+
+    with psycopg.connect(**conn_kwargs, autocommit=True) as conn:
+        row = conn.execute(f"SELECT pg_get_functiondef('{_FUNCTION}'::regprocedure)").fetchone()
+    assert row is not None
+    head, _as, rest = str(row[0]).partition("AS $function$")
+    _body, _end, tail = rest.partition("$function$")
+    return f"{head}AS $function$\nBEGIN\n    RETURN COALESCE(NEW, OLD);\nEND;\n$function${tail}"
+
+
+_DRIFT = {
+    "function_body": _same_shape_function_body_rewrite,
+    "dropped_check": lambda _kwargs: (
+        "ALTER TABLE mip_app.campaigns DROP CONSTRAINT campaigns_criteria_reviewed_shape_chk"
+    ),
+    "dropped_unique_index": lambda _kwargs: "DROP INDEX mip_app.idx_activation_outbox_request_id",
+    "deleted_seed_rows": lambda _kwargs: "DELETE FROM mip_app.activation_destinations",
+}
+
+
+@pytest.mark.parametrize("drift", sorted(_DRIFT))
+def test_drift_only_apply_repairs_turns_noop_into_apply(
+    monkeypatch: pytest.MonkeyPatch,
+    conn_kwargs: dict[str, str],
+    app_role: str,
+    drift: str,
+) -> None:
+    _apply(conn_kwargs, app_role)
+    _superuser(conn_kwargs, _DRIFT[drift](conn_kwargs))
+
+    drifted, _recorded = _read_only(monkeypatch, conn_kwargs, app_role, mode="plan")
+    verify, _recorded = _read_only(monkeypatch, conn_kwargs, app_role, mode="verify")
+
+    # Inputs, ledger and every postflight still agree: only the catalog
+    # fingerprint sees the drift.
+    assert (drifted["digest"], drifted["migrations"]["pending"]) == ("equal", [])
+    assert verify["passed"] is True
+    assert (drifted["decision"], drifted["catalog"]) == ("apply", "differs"), drifted
+    assert drifted["blue_restorable"] is False
+
+    _apply(conn_kwargs, app_role)
+    repaired, _recorded = _read_only(monkeypatch, conn_kwargs, app_role, mode="plan")
+
+    assert (repaired["decision"], repaired["catalog"]) == ("noop", "equal"), repaired
 
 
 def test_plan_names_an_object_the_executor_does_not_own(
@@ -281,7 +344,9 @@ def test_the_server_rejects_a_write_inside_the_read_only_session(
         assert conn.execute("SELECT to_regclass('mip_app_read_only_probe')").fetchone() == (None,)
 
 
-_SMUGGLED_WRITE = "SELECT '--'; COMMIT; CREATE TABLE public.mip_app_read_only_smuggle (value integer)"
+_SMUGGLED_WRITE = (
+    "SELECT '--'; COMMIT; CREATE TABLE public.mip_app_read_only_smuggle (value integer)"
+)
 
 
 def test_one_text_cannot_end_the_read_only_transaction_and_write(

@@ -160,12 +160,6 @@ from jobs.lakebase_migration_grants import (
 from jobs.lakebase_migration_inputs import (  # noqa: E402
     render_schema_inputs as _render_schema_inputs,
 )
-from jobs.lakebase_migration_inputs import (
-    schema_input_digest as _schema_input_digest,
-)
-from jobs.lakebase_migration_inputs import (
-    schema_input_digest_sql as _schema_input_digest_sql,
-)
 from jobs.lakebase_migration_integrity import _POST_SEED_MARKER as _POST_SEED_MARKER
 from jobs.lakebase_migration_integrity import (  # noqa: E402
     _expect_database_rejection as _expect_database_rejection,
@@ -175,6 +169,9 @@ from jobs.lakebase_migration_integrity import (
 )
 from jobs.lakebase_migration_integrity import (
     _split_schema_sql as _split_schema_sql,
+)
+from jobs.lakebase_migration_ledger import (  # noqa: E402
+    schema_input_digest_sql as _schema_input_digest_sql,
 )
 from jobs.lakebase_migration_plan import (  # noqa: E402
     READ_ONLY_MODES as _READ_ONLY_MODES,
@@ -452,9 +449,10 @@ def main(
 
     try:
         # The digest row is the last statement of the same transaction, so it
-        # commits only together with the schema it describes.
+        # commits only together with the schema it describes, and its catalog
+        # fingerprint sees exactly the state the four texts left.
         _run_transaction(
-            (*sql_texts, _schema_input_digest_sql(_schema_input_digest(sql_texts))),
+            (*sql_texts, _schema_input_digest_sql(sql_texts)),
             conn_kwargs,
             app_role=app_role,
             ai_gateway_verifier_role=resolved_roles[1],

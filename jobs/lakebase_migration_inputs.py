@@ -2,8 +2,10 @@
 
 Everything here is pure: it reads the repository-authored SQL texts and the
 code-owned grant matrix, never a database. ``--mode apply`` writes the digest
-of exactly the texts it executes; ``--mode plan`` recomputes it from the same
-texts and compares it with the row the last committed apply left behind.
+of exactly the texts it executes, and one digest per input component;
+``--mode plan`` recomputes them from the same texts and compares them with
+the row the last committed apply left behind
+(``jobs/lakebase_migration_ledger.py``).
 """
 
 from __future__ import annotations
@@ -36,6 +38,11 @@ _DIGEST_DOMAIN = b"mip-lakebase-schema-inputs-v1"
 # and byte length, so moving bytes from one text to another changes it.
 _SQL_TEXT_LABELS = ("schema_pre_seed", "seed", "tenant_disclosure_seed", "schema_post_seed")
 _SHA256_HEX_RE = re.compile(r"[0-9a-f]{64}")
+# The digest row also records each input component on its own. A
+# compatibility tag reviews schema.sql DDL only, so plan may call a release
+# blue-restorable only while every other component is unchanged.
+_COMPONENT_DOMAIN = b"mip-lakebase-schema-input-component-v1"
+SCHEMA_INPUT_COMPONENTS = ("schema", "seed", "tenant_disclosure_seed", "grant_matrix")
 
 _MIGRATION_INSERT_MARKER = "INSERT INTO mip_app.schema_migrations"
 # The one reviewed ledger-insert shape. Every marker occurrence must match it
@@ -142,18 +149,19 @@ def grant_matrix_document() -> str:
     )
 
 
-def schema_input_digest(sql_texts: Sequence[str]) -> str:
-    """sha256 over the four texts apply executes plus the grant matrix."""
-
+def _framed_texts(sql_texts: Sequence[str]) -> tuple[tuple[str, str], ...]:
     if len(sql_texts) != len(_SQL_TEXT_LABELS):
         raise MigrationInputError(
             f"schema-input digest needs {len(_SQL_TEXT_LABELS)} SQL texts, got {len(sql_texts)}"
         )
-    digest = hashlib.sha256(_DIGEST_DOMAIN + b"\0")
-    framed = (
+    return (
         *zip(_SQL_TEXT_LABELS, sql_texts, strict=True),
         ("grant_matrix", grant_matrix_document()),
     )
+
+
+def _framed_digest(domain: bytes, framed: Sequence[tuple[str, str]]) -> str:
+    digest = hashlib.sha256(domain + b"\0")
     for label, text in framed:
         data = text.encode("utf-8")
         digest.update(label.encode("ascii") + b"\0" + str(len(data)).encode("ascii") + b"\0")
@@ -161,22 +169,37 @@ def schema_input_digest(sql_texts: Sequence[str]) -> str:
     return digest.hexdigest()
 
 
-def schema_input_digest_sql(digest: str) -> str:
-    """Render the digest-row upsert apply runs inside its schema transaction.
+def schema_input_digest(sql_texts: Sequence[str]) -> str:
+    """sha256 over the four texts apply executes plus the grant matrix."""
 
-    The row commits atomically with the schema it describes: a rolled-back
-    apply leaves the previous digest in place, so plan sees a difference.
-    """
+    return _framed_digest(_DIGEST_DOMAIN, _framed_texts(sql_texts))
 
-    if not _SHA256_HEX_RE.fullmatch(digest):
+
+def schema_input_components(sql_texts: Sequence[str]) -> dict[str, str]:
+    """One domain-separated sha256 per input component, keyed by its name."""
+
+    texts = dict(_framed_texts(sql_texts))
+    labels: dict[str, tuple[str, ...]] = {
+        "schema": ("schema_pre_seed", "schema_post_seed"),
+        "seed": ("seed",),
+        "tenant_disclosure_seed": ("tenant_disclosure_seed",),
+        "grant_matrix": ("grant_matrix",),
+    }
+    return {
+        component: _framed_digest(
+            _COMPONENT_DOMAIN + b"\0" + component.encode("ascii"),
+            tuple((label, texts[label]) for label in labels[component]),
+        )
+        for component in SCHEMA_INPUT_COMPONENTS
+    }
+
+
+def validated_digest(value: str) -> str:
+    """Return ``value`` if it is a sha256 hex digest safe to render as SQL."""
+
+    if not _SHA256_HEX_RE.fullmatch(value):
         raise MigrationInputError("schema-input digest must be 64 lowercase hex characters")
-    return f"""
-INSERT INTO mip_app.deployment_schema_digest (scope, input_digest)
-VALUES ('{SCHEMA_DIGEST_SCOPE}', '{digest}')
-ON CONFLICT (scope) DO UPDATE
-SET input_digest = EXCLUDED.input_digest,
-    recorded_at = now();
-"""
+    return value
 
 
 def render_schema_inputs(

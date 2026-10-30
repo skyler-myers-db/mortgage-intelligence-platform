@@ -8,13 +8,20 @@ from typing import Any
 
 import pytest
 
-from jobs import lakebase_migrate, lakebase_migration_contracts
+from jobs import lakebase_migrate, lakebase_migration_contracts, lakebase_migration_ledger
 from jobs.lakebase_migration_inputs import (
+    SCHEMA_INPUT_COMPONENTS,
     MigrationInputError,
     SchemaMigration,
     parse_schema_migrations,
     render_schema_inputs,
+    schema_input_components,
     schema_input_digest,
+    validated_digest,
+)
+from jobs.lakebase_migration_ledger import (
+    CATALOG_FINGERPRINT_SQL,
+    SEEDED_REFERENCE_TABLES,
     schema_input_digest_sql,
 )
 
@@ -79,7 +86,9 @@ def test_a_missing_tag_counts_as_contract() -> None:
 
 
 def test_an_explicit_contract_tag_is_recorded_as_tagged() -> None:
-    schema = _schema(_insert("2026_01_01_drop"), "-- mip:migration version=2026_01_01_drop compat=contract")
+    schema = _schema(
+        _insert("2026_01_01_drop"), "-- mip:migration version=2026_01_01_drop compat=contract"
+    )
 
     assert parse_schema_migrations(schema) == (
         SchemaMigration(version="2026_01_01_drop", compat="contract", tagged=True),
@@ -113,7 +122,9 @@ def test_a_malformed_tag_refuses_instead_of_defaulting(line: str) -> None:
 
 
 def test_a_tag_naming_no_declared_version_refuses() -> None:
-    schema = _schema("-- mip:migration version=2026_01_09_typo compat=expand", _insert("2026_01_01_a"))
+    schema = _schema(
+        "-- mip:migration version=2026_01_09_typo compat=expand", _insert("2026_01_01_a")
+    )
 
     with pytest.raises(MigrationInputError, match="names no declared version"):
         parse_schema_migrations(schema)
@@ -218,19 +229,120 @@ def test_digest_requires_exactly_the_four_apply_texts() -> None:
         schema_input_digest(_TEXTS[:3])
 
 
-def test_digest_sql_upserts_the_single_scoped_row() -> None:
-    digest = schema_input_digest(_TEXTS)
-    statement = schema_input_digest_sql(digest)
+@pytest.mark.parametrize("index", range(4))
+def test_each_text_moves_exactly_its_own_component(index: int) -> None:
+    changed = list(_TEXTS)
+    changed[index] += " "
+    owner = ("schema", "seed", "tenant_disclosure_seed", "schema")[index]
 
-    assert f"VALUES ('lakebase_schema', '{digest}')" in statement
-    assert "INSERT INTO mip_app.deployment_schema_digest (scope, input_digest)" in statement
+    before, after = schema_input_components(_TEXTS), schema_input_components(changed)
+
+    assert tuple(before) == SCHEMA_INPUT_COMPONENTS
+    assert [name for name in SCHEMA_INPUT_COMPONENTS if before[name] != after[name]] == [owner]
+
+
+def test_a_grant_matrix_change_moves_only_the_grant_matrix_component(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = schema_input_components(_TEXTS)
+    monkeypatch.setitem(lakebase_migration_contracts._APP_ROLE_TABLE_PRIVILEGES, "campaigns", ())
+    after = schema_input_components(_TEXTS)
+
+    assert [name for name in SCHEMA_INPUT_COMPONENTS if before[name] != after[name]] == [
+        "grant_matrix"
+    ]
+
+
+def test_component_digests_are_domain_separated_from_each_other_and_the_input_digest() -> None:
+    same = ("x", "x", "x", "x")
+    components = schema_input_components(same)
+
+    assert len({*components.values(), schema_input_digest(same)}) == 5
+
+
+def test_digest_sql_upserts_the_single_scoped_row_with_the_catalog_fingerprint() -> None:
+    statement = schema_input_digest_sql(_TEXTS)
+    components = schema_input_components(_TEXTS)
+    values = ", ".join(
+        f"'{digest}'"
+        for digest in (
+            schema_input_digest(_TEXTS),
+            *(components[name] for name in SCHEMA_INPUT_COMPONENTS),
+        )
+    )
+
+    assert f"SELECT 'lakebase_schema', {values}, fingerprint.value" in statement
+    assert f"FROM ({CATALOG_FINGERPRINT_SQL}) AS fingerprint(value)" in statement
+    assert (
+        "INSERT INTO mip_app.deployment_schema_digest (\n    scope, input_digest, schema_digest, "
+        "seed_digest, tenant_disclosure_seed_digest, grant_matrix_digest, catalog_fingerprint\n)"
+    ) in statement
     assert "ON CONFLICT (scope) DO UPDATE" in statement
+    for column in ("input_digest", "grant_matrix_digest", "catalog_fingerprint"):
+        assert f"{column} = EXCLUDED.{column}," in statement
 
 
 @pytest.mark.parametrize("value", ("", "ABC", "0" * 63, "g" * 64, "0" * 64 + "'; DROP TABLE x; --"))
 def test_digest_sql_renders_only_a_validated_digest(value: str) -> None:
     with pytest.raises(MigrationInputError, match="64 lowercase hex"):
-        schema_input_digest_sql(value)
+        validated_digest(value)
+
+
+def test_the_digest_row_columns_match_the_recorded_read_and_the_components() -> None:
+    table = _SCHEMA[
+        _SCHEMA.index("CREATE TABLE IF NOT EXISTS mip_app.deployment_schema_digest (") :
+    ]
+    table = table[: table.index(");")]
+    columns = re.findall(r"^    ([a-z_]+)\s", table, re.MULTILINE)
+    read = lakebase_migration_ledger._RECORDED_DIGEST_SQL
+
+    expected = [f"{name}_digest" for name in SCHEMA_INPUT_COMPONENTS]
+    assert columns == ["scope", "input_digest", *expected, "catalog_fingerprint", "recorded_at"]
+    assert re.findall(r"^    ([a-z_]+),?$", read, re.MULTILINE) == [
+        "input_digest",
+        *expected,
+        "catalog_fingerprint",
+    ]
+
+
+# -- catalog fingerprint ----------------------------------------------------
+
+
+def test_the_fingerprint_hashes_exactly_the_reviewed_seeded_reference_tables() -> None:
+    hashed = re.findall(r"FROM mip_app\.([a-z_]+) seeded", CATALOG_FINGERPRINT_SQL)
+    labelled = re.findall(r"'row\|([a-z_]+)\|%L'", CATALOG_FINGERPRINT_SQL)
+
+    assert hashed == labelled == list(SEEDED_REFERENCE_TABLES)
+    # Rows the App could write are runtime state, not drift: each table here
+    # is one the App only reads, so only apply's texts change its rows.
+    for table in SEEDED_REFERENCE_TABLES:
+        assert lakebase_migration_contracts._APP_ROLE_TABLE_PRIVILEGES[table] == ("SELECT",)
+
+
+def test_every_seeded_reference_table_is_written_by_the_apply_texts() -> None:
+    _schema_sql, sql_texts = render_schema_inputs(
+        ROOT, lender_name="Summit Mortgage", lender_nmls_id="", tenant_id=""
+    )
+    seeded = set(re.findall(r"INSERT INTO mip_app\.([a-z_]+)", "\n".join(sql_texts)))
+
+    assert set(SEEDED_REFERENCE_TABLES) <= seeded
+
+
+def test_the_fingerprint_reads_no_search_path_or_datestyle_dependent_rendering() -> None:
+    """Apply computes it under schema.sql's search_path, plan under the default."""
+
+    lowered = CATALOG_FINGERPRINT_SQL.lower()
+    for rendering in (
+        "pg_get_",
+        "::regclass",
+        "::regproc",
+        "::regtype",
+        "format_type",
+        "oidvectortypes",
+    ):
+        assert rendering not in lowered
+    # Timestamps render per TimeZone; the seeded rows drop them.
+    assert lowered.count("- array['created_at', 'updated_at']") == len(SEEDED_REFERENCE_TABLES)
 
 
 def test_schema_declares_the_digest_table_before_the_first_seed_dependent_block() -> None:
@@ -277,7 +389,7 @@ def test_apply_appends_the_digest_row_to_the_unchanged_schema_transaction(
     )
     expected = (pre_seed, seed, tenant_seed, post_seed)
     assert captured["sql_texts"][:4] == expected
-    assert captured["sql_texts"][4] == schema_input_digest_sql(schema_input_digest(expected))
+    assert captured["sql_texts"][4] == schema_input_digest_sql(expected)
     assert len(captured["sql_texts"]) == 5
     assert captured["options"] == {
         "app_role": "app-role",

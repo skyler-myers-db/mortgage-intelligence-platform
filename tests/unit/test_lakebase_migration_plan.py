@@ -27,12 +27,21 @@ from jobs.lakebase_migration_contracts import (
     _APP_TRIGGER_CONTRACT,
 )
 from jobs.lakebase_migration_inputs import (
+    SCHEMA_INPUT_COMPONENTS,
     SchemaMigration,
     parse_schema_migrations,
     render_schema_inputs,
+    schema_input_components,
     schema_input_digest,
 )
-from jobs.lakebase_migration_plan import CheckContext, main_read_only, run_plan, run_verify
+from jobs.lakebase_migration_ledger import CATALOG_FINGERPRINT_SQL
+from jobs.lakebase_migration_plan import (
+    CheckContext,
+    main_read_only,
+    plan_decision,
+    run_plan,
+    run_verify,
+)
 from jobs.lakebase_migration_read_only import (
     ReadOnlyStatementRefused,
     assert_read_statement,
@@ -48,7 +57,10 @@ _MIGRATIONS = (
     SchemaMigration(version="2026_01_02_added_column", compat="expand", tagged=True),
 )
 _DECLARED = {migration.version for migration in _MIGRATIONS}
-_REPO_DIGEST = schema_input_digest(("pre", "seed", "tenant", "post"))
+_TEXTS = ("pre", "seed", "tenant", "post")
+_REPO_DIGEST = schema_input_digest(_TEXTS)
+_REPO_COMPONENTS = schema_input_components(_TEXTS)
+_FINGERPRINT = "f" * 64
 
 
 @pytest.fixture(autouse=True)
@@ -90,7 +102,9 @@ class _FakeCursor:
     def __exit__(self, *_args: object) -> None:
         return None
 
-    def execute(self, statement: object, params: Any = None, *, prepare: bool | None = None) -> None:
+    def execute(
+        self, statement: object, params: Any = None, *, prepare: bool | None = None
+    ) -> None:
         text = str(statement)
         if self._connection.read_only is not True:
             raise AssertionError("a statement arrived before the connection was read-only")
@@ -161,6 +175,9 @@ def _assert_read_only_session(connection: _FakeConnection) -> list[str]:
 class _Catalog:
     applied: set[str] | None = field(default_factory=lambda: set(_DECLARED))
     digest: str | None = _REPO_DIGEST
+    components: dict[str, str] = field(default_factory=lambda: dict(_REPO_COMPONENTS))
+    recorded_fingerprint: str = _FINGERPRINT
+    live_fingerprint: str | None = _FINGERPRINT
     authority: tuple[bool, ...] = (True, True, True, True, True)
     unowned: Rows = field(default_factory=list)
     roles: set[str] = field(default_factory=lambda: {_APP_ROLE})
@@ -181,9 +198,16 @@ class _Catalog:
             return [(present, present)]
         if text == "SELECT version FROM mip_app.schema_migrations ORDER BY version":
             return [(version,) for version in sorted(self.applied or ())]
-        if "FROM mip_app.deployment_schema_digest WHERE scope = %s" in text:
+        if "FROM mip_app.deployment_schema_digest\nWHERE scope = %s" in text:
             assert params == ("lakebase_schema",)
-            return [] if self.digest is None else [(self.digest,)]
+            if self.digest is None:
+                return []
+            components = tuple(self.components[name] for name in SCHEMA_INPUT_COMPONENTS)
+            return [(self.digest, *components, self.recorded_fingerprint)]
+        if text == CATALOG_FINGERPRINT_SQL:
+            if self.live_fingerprint is None:
+                raise RuntimeError("relation mip_app.sales_team does not exist")
+            return [(self.live_fingerprint,)]
         return None
 
 
@@ -223,7 +247,13 @@ def _plan(
 ) -> tuple[dict[str, Any], list[str]]:
     connection = _install(monkeypatch, catalog.route)
     _stub_checks(monkeypatch, **checks)
-    report = run_plan({"host": "test"}, _CTX, migrations=_MIGRATIONS, repo_digest=_REPO_DIGEST)
+    report = run_plan(
+        {"host": "test"},
+        _CTX,
+        migrations=_MIGRATIONS,
+        repo_digest=_REPO_DIGEST,
+        repo_components=_REPO_COMPONENTS,
+    )
     assert _APP_ROLE not in json.dumps(report)
     return report, _assert_read_only_session(connection)
 
@@ -240,6 +270,8 @@ def test_plan_is_noop_when_nothing_is_pending_the_digest_matches_and_verify_pass
     assert report["blue_restorable"] is True
     assert report["refusals"] == []
     assert report["digest"] == "equal"
+    assert report["digest_components_changed"] == []
+    assert report["catalog"] == "equal"
     assert report["migrations"]["pending"] == []
     assert report["verify"] == {
         "checks": ["trigger_contract", "app_role_grants"],
@@ -247,17 +279,93 @@ def test_plan_is_noop_when_nothing_is_pending_the_digest_matches_and_verify_pass
         "passed": True,
     }
     assert "SELECT 'check:trigger_inventory'" in statements
+    # The fingerprint is the session's last read.
+    assert statements[-1] == CATALOG_FINGERPRINT_SQL
+
+
+@pytest.mark.parametrize(
+    ("live", "state"), (("0" * 64, "differs"), (None, "unreadable")), ids=("drift", "unreadable")
+)
+def test_catalog_drift_under_equal_inputs_needs_apply(
+    monkeypatch: pytest.MonkeyPatch,
+    live: str | None,
+    state: str,
+) -> None:
+    report, _statements = _plan(monkeypatch, _Catalog(live_fingerprint=live))
+
+    assert (report["digest"], report["catalog"]) == ("equal", state)
+    assert report["verify"]["passed"] is True
+    assert report["decision"] == "apply"
+    # A pure repair: nothing pending, so nothing a tag reviewed.
+    assert report["blue_restorable"] is False
 
 
 def test_a_pending_expand_version_applies_and_keeps_blue_restorable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    report, _statements = _plan(monkeypatch, _Catalog(applied={"2026_01_01_base"}))
+    components = {**_REPO_COMPONENTS, "schema": "0" * 64}
+    report, _statements = _plan(
+        monkeypatch,
+        _Catalog(applied={"2026_01_01_base"}, digest="0" * 64, components=components),
+    )
 
     assert report["decision"] == "apply"
     assert report["migrations"]["pending"] == ["2026_01_02_added_column"]
     assert report["migrations"]["pending_contract"] == []
+    assert report["digest_components_changed"] == ["schema"]
     assert report["blue_restorable"] is True
+
+
+@pytest.mark.parametrize("component", ("seed", "tenant_disclosure_seed", "grant_matrix"))
+def test_a_pending_expand_version_beside_an_untagged_input_change_is_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    component: str,
+) -> None:
+    components = {**_REPO_COMPONENTS, "schema": "0" * 64, component: "1" * 64}
+    report, _statements = _plan(
+        monkeypatch,
+        _Catalog(applied={"2026_01_01_base"}, digest="0" * 64, components=components),
+    )
+
+    assert report["decision"] == "apply"
+    assert report["migrations"]["pending_contract"] == []
+    assert report["digest_components_changed"] == ["schema", component]
+    assert report["blue_restorable"] is False
+
+
+def test_a_pending_expand_version_without_a_recorded_digest_is_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report, _statements = _plan(monkeypatch, _Catalog(applied={"2026_01_01_base"}, digest=None))
+
+    assert (report["decision"], report["digest"]) == ("apply", "absent")
+    assert report["digest_components_changed"] is None
+    assert report["catalog"] == "absent"
+    assert report["blue_restorable"] is False
+
+
+def test_a_real_grant_matrix_narrowing_beside_an_expand_version_is_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The review case: one expand version plus a revoke the matrix alone carries."""
+
+    released = schema_input_components(_TEXTS)
+    monkeypatch.setitem(_APP_ROLE_TABLE_PRIVILEGES, "campaigns", ("SELECT", "INSERT"))
+    narrowed = schema_input_components(_TEXTS)
+    pending = [SchemaMigration("2026_11_01_new_column", "expand", True)]
+
+    changed = [name for name in SCHEMA_INPUT_COMPONENTS if released[name] != narrowed[name]]
+
+    assert changed == ["grant_matrix"]
+    common = {"refusals": [], "pending": pending, "catalog_state": "equal", "verify_passed": True}
+    assert plan_decision(**common, digest_state="differs", changed_components=changed) == (
+        "apply",
+        False,
+    )
+    assert plan_decision(**common, digest_state="differs", changed_components=["schema"]) == (
+        "apply",
+        True,
+    )
 
 
 def test_a_pending_untagged_version_counts_as_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -277,18 +385,22 @@ def test_an_absent_or_different_digest_needs_apply(
     report, _statements = _plan(monkeypatch, _Catalog(digest=digest))
 
     assert report["digest"] == state
+    assert report["catalog"] == ("absent" if digest is None else "equal")
     assert report["decision"] == "apply"
     # Nothing pending: the change is in inputs no tag reviewed.
     assert report["blue_restorable"] is False
 
 
 def test_verify_drift_needs_apply_rather_than_a_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
-    report, _statements = _plan(monkeypatch, _Catalog(), verify_fail="app_role_grants")
+    report, statements = _plan(monkeypatch, _Catalog(), verify_fail="app_role_grants")
 
     assert report["decision"] == "apply"
     assert report["refusals"] == []
     assert report["verify"]["failed_check"] == "app_role_grants"
     assert report["verify"]["checks"] == ["trigger_contract"]
+    # The failed check aborted the session; nothing reads after it.
+    assert report["catalog"] == "skipped"
+    assert CATALOG_FINGERPRINT_SQL not in statements
 
 
 def test_executor_probe_names_every_missing_ownership(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -334,7 +446,8 @@ def test_executor_probe_on_a_fresh_database_needs_create_not_schema_ownership(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     report, _statements = _plan(
-        monkeypatch, _Catalog(applied=None, digest=None, authority=(True, True, False, False, False))
+        monkeypatch,
+        _Catalog(applied=None, digest=None, authority=(True, True, False, False, False)),
     )
 
     assert report["executor_missing"] == ["database:CREATE"]
@@ -461,9 +574,12 @@ def test_facade_plan_mode_reads_the_real_inputs_and_never_reaches_apply(
         ROOT, lender_name="Summit Mortgage", lender_nmls_id="", tenant_id=""
     )
     declared = {migration.version for migration in parse_schema_migrations(schema_sql)}
-    connection = _install(
-        monkeypatch, _Catalog(applied=declared, digest=schema_input_digest(sql_texts)).route
+    catalog = _Catalog(
+        applied=declared,
+        digest=schema_input_digest(sql_texts),
+        components=schema_input_components(sql_texts),
     )
+    connection = _install(monkeypatch, catalog.route)
     _stub_checks(monkeypatch)
     monkeypatch.setattr(lakebase_migrate, "_resolve_connection", lambda **_kwargs: {"host": "test"})
     monkeypatch.setattr(lakebase_migrate, "_resolve_app_role", lambda: _APP_ROLE)
@@ -475,7 +591,7 @@ def test_facade_plan_mode_reads_the_real_inputs_and_never_reaches_apply(
 
     assert exit_info.value.code == 0
     report = json.loads(capsys.readouterr().out)
-    assert (report["decision"], report["digest"]) == ("noop", "equal")
+    assert (report["decision"], report["digest"], report["catalog"]) == ("noop", "equal", "equal")
     assert report["migrations"]["declared"] == len(declared) > 40
     _assert_read_only_session(connection)
 
@@ -496,10 +612,31 @@ def test_cli_defaults_to_apply_so_the_bundle_job_is_unchanged() -> None:
 def _trigger_rows() -> Rows:
     return sorted(
         (
-            table_schema, table_name, trigger_name, "O", trigger_type, 0, True, True,
-            function_schema, function_name, function_arguments, "f", "trigger", False,
-            "migration-owner", "migration-owner", True, True, True, False, True, True,
-            True, True, True,
+            table_schema,
+            table_name,
+            trigger_name,
+            "O",
+            trigger_type,
+            0,
+            True,
+            True,
+            function_schema,
+            function_name,
+            function_arguments,
+            "f",
+            "trigger",
+            False,
+            "migration-owner",
+            "migration-owner",
+            True,
+            True,
+            True,
+            False,
+            True,
+            True,
+            True,
+            True,
+            True,
         )  # fmt: skip
         for (table_schema, table_name, trigger_name), (
             function_schema,
@@ -689,8 +826,7 @@ def _reachable_statements(entry: tuple[str, str]) -> tuple[set[str], list[str], 
                         if target[0] in modules and target[1] in modules[target[0]].functions:
                             stack.append(target)
                     elif (
-                        child.id in module.assigns
-                        and (module_name, child.id) not in walked_assigns
+                        child.id in module.assigns and (module_name, child.id) not in walked_assigns
                     ):
                         walked_assigns.add((module_name, child.id))
                         nodes.append(module.assigns[child.id])
@@ -716,7 +852,13 @@ def test_every_statement_reachable_from_plan_or_verify_is_a_literal_read() -> No
     )
 
     assert not reached & _MUTATORS
-    assert {"_postflight_app_role_grants", "_preflight_executable_schema_hooks"} <= reached
+    assert {
+        "_postflight_app_role_grants",
+        "_preflight_executable_schema_hooks",
+        "read_ledger",
+        "read_catalog_fingerprint",
+    } <= reached
+    assert CATALOG_FINGERPRINT_SQL in statements
     assert non_literal == 0
     assert len(statements) >= 40
     for statement in statements:

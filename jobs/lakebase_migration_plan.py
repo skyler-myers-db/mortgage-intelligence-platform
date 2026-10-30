@@ -8,9 +8,11 @@ deploy can run them while the App keeps serving.
 * ``verify`` re-runs apply's exact postflights against the live database.
 * ``plan`` answers "would apply change anything, and could it succeed?":
   the executor's ownership, pending ledger versions and their compatibility
-  class, the recorded schema-input digest, apply's read-only preflights, and
-  verify. Noop means no pending version, an equal digest and a passing
-  verify; then the migration (and the App stop it needs) can be skipped.
+  class, the recorded schema-input digests, apply's read-only preflights,
+  verify, and the catalog fingerprint apply recorded at its commit. Noop
+  means no pending version, equal input digests, a passing verify and an
+  equal catalog fingerprint; then the migration (and the App stop it needs)
+  can be skipped.
 
 The JSON report names checks, codes, versions and ``mip_app`` objects only.
 It never carries a role name, host or exception text, so it is safe to print
@@ -20,7 +22,7 @@ in a public run log.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,10 +32,15 @@ from jobs.lakebase_migration_grants import (
     _resolve_database_roles,
 )
 from jobs.lakebase_migration_inputs import (
-    SCHEMA_DIGEST_SCOPE,
     SchemaMigration,
     parse_schema_migrations,
+    schema_input_components,
     schema_input_digest,
+)
+from jobs.lakebase_migration_ledger import (
+    RecordedDigest,
+    read_catalog_fingerprint,
+    read_ledger,
 )
 from jobs.lakebase_migration_postflight import (
     _postflight_ai_gateway_verifier_grants,
@@ -57,32 +64,7 @@ from jobs.lakebase_migration_schema_hooks import (
 
 READ_ONLY_MODES = ("plan", "verify")
 
-_LEDGER_PRESENCE_SQL = """
-SELECT
-    to_regclass('mip_app.schema_migrations') IS NOT NULL,
-    to_regclass('mip_app.deployment_schema_digest') IS NOT NULL
-"""
-_APPLIED_VERSIONS_SQL = "SELECT version FROM mip_app.schema_migrations ORDER BY version"
-_RECORDED_DIGEST_SQL = "SELECT input_digest FROM mip_app.deployment_schema_digest WHERE scope = %s"
 _SCHEMA_PRESENT_SQL = "SELECT to_regnamespace('mip_app') IS NOT NULL"
-
-
-def read_ledger(cur: ReadOnlyCursor) -> tuple[set[str], str | None]:
-    """Return the applied versions and the recorded digest; absent reads empty."""
-
-    cur.execute(_LEDGER_PRESENCE_SQL)
-    presence = cur.fetchone()
-    migrations_present, digest_present = presence if presence is not None else (False, False)
-    applied: set[str] = set()
-    if migrations_present:
-        cur.execute(_APPLIED_VERSIONS_SQL)
-        applied = {str(row[0]) for row in cur.fetchall()}
-    recorded: str | None = None
-    if digest_present:
-        cur.execute(_RECORDED_DIGEST_SQL, (SCHEMA_DIGEST_SCOPE,))
-        row = cur.fetchone()
-        recorded = None if row is None else str(row[0])
-    return applied, recorded
 
 
 @dataclass(frozen=True)
@@ -214,26 +196,56 @@ def run_checks(
     return passed, None
 
 
+# Input components a compatibility tag never reviews. A change to any of
+# them makes the release contract, whatever its pending versions say.
+_UNTAGGED_COMPONENTS = frozenset({"seed", "tenant_disclosure_seed", "grant_matrix"})
+
+
 def plan_decision(
     *,
     refusals: Sequence[str],
     pending: Sequence[SchemaMigration],
     digest_state: str,
+    changed_components: Sequence[str] | None,
+    catalog_state: str,
     verify_passed: bool,
 ) -> tuple[str, bool]:
     """Return (decision, blue_restorable) for the facts a plan collected.
 
+    Noop needs equal inputs AND an equal catalog: equal inputs alone miss
+    drift (a rewritten function body, a dropped constraint or index, deleted
+    seed rows) that only apply's replay of schema.sql repairs.
+
     An apply is blue-restorable only when its changes are pending versions
-    that are all tagged expand. An apply with nothing pending changes inputs
-    no tag reviewed, which counts as contract like a missing tag.
+    that are all tagged expand, against a recorded digest whose seed, tenant
+    seed and grant-matrix components all equal the release's. A tag reviews
+    its own version's DDL; an in-place edit to existing DDL or a function
+    body must ship as its own tagged version, since no tag can see it. An
+    apply with nothing pending, or with no recorded digest to compare, counts
+    as contract like a missing tag.
     """
 
     if refusals:
         return "refuse", False
-    if not pending and digest_state == "equal" and verify_passed:
+    if not pending and digest_state == "equal" and catalog_state == "equal" and verify_passed:
         return "noop", True
-    restorable = bool(pending) and all(migration.compat == "expand" for migration in pending)
+    restorable = (
+        bool(pending)
+        and all(migration.compat == "expand" for migration in pending)
+        and changed_components is not None
+        and not _UNTAGGED_COMPONENTS.intersection(changed_components)
+    )
     return "apply", restorable
+
+
+def _catalog_state(cur: ReadOnlyCursor, recorded: RecordedDigest) -> str:
+    try:
+        live = read_catalog_fingerprint(cur)
+    except ReadOnlyStatementRefused:
+        raise
+    except Exception:  # noqa: BLE001 -- e.g. a seeded table dropped; apply recreates it
+        return "unreadable"
+    return "equal" if live == recorded.catalog_fingerprint else "differs"
 
 
 def _role_context(
@@ -282,13 +294,15 @@ def run_plan(
     *,
     migrations: Sequence[SchemaMigration],
     repo_digest: str,
+    repo_components: Mapping[str, str],
 ) -> dict[str, Any]:
     """Collect every plan fact in one read-only session and decide."""
 
     refusals: list[str] = []
     executor_missing: list[str] = []
     applied: set[str] | None = None
-    recorded: str | None = None
+    recorded: RecordedDigest | None = None
+    catalog_state = "absent"
     verify: dict[str, Any] = {"checks": [], "failed_check": None, "passed": False}
     with read_only_session(conn_kwargs) as cur:
         # A failed read aborts the transaction, so the first failing stage
@@ -315,19 +329,31 @@ def run_plan(
             else:
                 verify["checks"], verify["failed_check"] = run_checks(cur, ctx, VERIFY_CHECKS)
                 verify["passed"] = verify["failed_check"] is None
+            # Last: a failed read aborts the session, and a failing check
+            # already decides apply, so there is nothing left to compare.
+            if recorded is not None:
+                catalog_state = _catalog_state(cur, recorded) if verify["passed"] else "skipped"
     declared = {migration.version for migration in migrations}
     pending = [m for m in migrations if applied is not None and m.version not in applied]
     unknown_applied = sorted((applied or set()) - declared)
     if unknown_applied:
         refusals.append("database_ahead_of_release")
+    changed_components: list[str] | None = None
     if recorded is None:
         digest_state = "absent"
     else:
-        digest_state = "equal" if recorded == repo_digest else "differs"
+        digest_state = "equal" if recorded.input_digest == repo_digest else "differs"
+        changed_components = [
+            name
+            for name, digest in repo_components.items()
+            if recorded.components.get(name) != digest
+        ]
     decision, blue_restorable = plan_decision(
         refusals=refusals,
         pending=pending,
         digest_state=digest_state,
+        changed_components=changed_components,
+        catalog_state=catalog_state,
         verify_passed=bool(verify["passed"]),
     )
     return {
@@ -344,6 +370,8 @@ def run_plan(
             "unknown_applied": unknown_applied,
         },
         "digest": digest_state,
+        "digest_components_changed": changed_components,
+        "catalog": catalog_state,
         "verify": verify,
     }
 
@@ -385,8 +413,15 @@ def main_read_only(
             schema_sql, sql_texts = schema_inputs_fn()
             migrations = parse_schema_migrations(schema_sql)
             repo_digest = schema_input_digest(sql_texts)
+            repo_components = schema_input_components(sql_texts)
             stage = "read_only_session"
-            report = run_plan(conn_kwargs, ctx, migrations=migrations, repo_digest=repo_digest)
+            report = run_plan(
+                conn_kwargs,
+                ctx,
+                migrations=migrations,
+                repo_digest=repo_digest,
+                repo_components=repo_components,
+            )
     except ReadOnlyStatementRefused:
         report["refusals"] = ["read_only_guard"]
     except Exception:  # noqa: BLE001 -- the stage code is the public diagnostic

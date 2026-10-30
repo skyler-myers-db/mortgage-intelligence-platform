@@ -1258,10 +1258,23 @@ read-only transaction.
 `verify` re-runs the exact grant, trigger, function and schema-boundary
 postflights; `plan` adds the executor's missing ownership, the pending
 `schema_migrations` versions with their `-- mip:migration ... compat=` class
-(untagged counts as contract), and a comparison with the schema-input digest
-row apply writes inside its schema transaction. Each prints one JSON report
-of codes, check names, versions and `mip_app` object names, never a role
-name. Nothing invokes them yet; see `jobs/lakebase_migration_plan.py`.
+(untagged counts as contract), and a comparison with the
+`deployment_schema_digest` row apply writes as the last statement of its
+schema transaction: the input digest, one digest per input component
+(schema, seed, tenant disclosure seed, grant matrix), and a fingerprint of
+the `mip_app` catalog (columns, defaults, constraints, indexes, function
+sources and settings, triggers, rules, policies, sequence parameters,
+types) and of the seeded reference rows the App only reads. Plan reports
+`noop` only when nothing is pending, the inputs are equal, verify passes
+and the live fingerprint equals the recorded one, so owner-level drift that
+only apply's schema.sql replay repairs (a same-shape function-body rewrite,
+a dropped CHECK or unique index, deleted seed rows) still plans an apply.
+`blue_restorable` additionally needs every pending version tagged `expand`
+and the seed, tenant seed and grant-matrix components unchanged; an
+in-place edit to existing DDL or a function body must ship as its own
+tagged version. Each prints one JSON report of codes, check names,
+versions and `mip_app` object names, never a role name. Nothing invokes
+them yet; see `jobs/lakebase_migration_plan.py`.
 The bundle pins `run_as.user_name` to the resolved deployment identity in both
 development and production targets; live release evidence must confirm the
 created migration job reports that exact run-as instead of relying on its

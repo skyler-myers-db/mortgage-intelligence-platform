@@ -48,23 +48,32 @@ CREATE TABLE IF NOT EXISTS mip_app.schema_migrations (
 );
 
 -- Deployment schema-input digest ----------------------------------------
--- One migration-owned row: the sha256 of the exact schema, seed, tenant
--- disclosure seed and grant-matrix inputs of the last apply that committed
--- (jobs/lakebase_migration_inputs.py). Apply upserts it inside its schema
--- transaction; `--mode plan` compares it with the release's inputs so an
--- unchanged release can skip the migration and its App stop. The App role
--- receives no privilege on it.
+-- One migration-owned row about the last apply that committed: the sha256
+-- of its exact schema, seed, tenant disclosure seed and grant-matrix inputs,
+-- one sha256 per input component, and a fingerprint of the mip_app catalog
+-- and seeded reference rows those inputs left behind
+-- (jobs/lakebase_migration_ledger.py). Apply upserts it as the last
+-- statement of its schema transaction; `--mode plan` compares it with the
+-- release's inputs and the live catalog so an unchanged, undrifted install
+-- can skip the migration and its App stop. The App role receives no
+-- privilege on it.
 CREATE TABLE IF NOT EXISTS mip_app.deployment_schema_digest (
-    scope        TEXT PRIMARY KEY CHECK (scope = 'lakebase_schema'),
-    input_digest TEXT NOT NULL CHECK (input_digest ~ '^[0-9a-f]{64}$'),
-    recorded_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    scope                         TEXT PRIMARY KEY CHECK (scope = 'lakebase_schema'),
+    input_digest                  TEXT NOT NULL CHECK (input_digest ~ '^[0-9a-f]{64}$'),
+    schema_digest                 TEXT NOT NULL CHECK (schema_digest ~ '^[0-9a-f]{64}$'),
+    seed_digest                   TEXT NOT NULL CHECK (seed_digest ~ '^[0-9a-f]{64}$'),
+    tenant_disclosure_seed_digest TEXT NOT NULL
+                                  CHECK (tenant_disclosure_seed_digest ~ '^[0-9a-f]{64}$'),
+    grant_matrix_digest           TEXT NOT NULL CHECK (grant_matrix_digest ~ '^[0-9a-f]{64}$'),
+    catalog_fingerprint           TEXT NOT NULL CHECK (catalog_fingerprint ~ '^[0-9a-f]{64}$'),
+    recorded_at                   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- mip:migration version=2026_10_29_deployment_schema_digest compat=expand
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_10_29_deployment_schema_digest',
-    'Deployment schema-input digest: one migration-owned row with the input digest of the last committed apply'
+    'Deployment schema-input digest: one migration-owned row with the input digests and the catalog fingerprint of the last committed apply'
 )
 ON CONFLICT (version) DO NOTHING;
 
