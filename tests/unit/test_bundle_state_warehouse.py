@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
@@ -227,3 +228,34 @@ def test_no_bundle_variable_names_a_warehouse() -> None:
     assert "${var.sql_warehouse_id}" not in (REPO / "databricks.yml").read_text(encoding="utf-8")
     assert 'env["BUNDLE_VAR_sql_warehouse_id"]' not in source
     assert 'env.pop("BUNDLE_VAR_sql_warehouse_id", None)' in source, "an ambient export is dropped"
+
+
+# Where the dead variable may still be named, and why: the drop of an ambient
+# export, and the two sentences that say it is gone.
+_DEAD_VARIABLE_MENTIONS = {
+    "tools/databricks/bundle_env.py": 'env.pop("BUNDLE_VAR_sql_warehouse_id", None)',
+    "docs/deployment.md": "declares no `sql_warehouse_id` variable",
+    "databricks.yml": "(the unused sql_warehouse_id variable left in M1-PR3)",
+}
+
+
+def test_no_operator_surface_still_names_the_dead_variable() -> None:
+    surfaces = [
+        ".github", "Makefile", "scripts", "tools", "sql", "jobs", "pipelines", "databricks.yml",
+        "docs/deployment.md", "docs/se-onboarding.md", "docs/runbook.md", "docs/validation/dashboards.md",
+    ]  # fmt: skip
+    found = subprocess.run(
+        ["git", "grep", "-nP", "sql_warehouse_id", "--", *surfaces],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.splitlines()
+
+    allowed = [
+        line
+        for line in found
+        if any(line.startswith(f"{path}:") and marker in line for path, marker in _DEAD_VARIABLE_MENTIONS.items())
+    ]
+    assert len(allowed) == len(_DEAD_VARIABLE_MENTIONS), "positive control: the same grep finds each allowed line"
+    assert [line for line in found if line not in allowed] == []

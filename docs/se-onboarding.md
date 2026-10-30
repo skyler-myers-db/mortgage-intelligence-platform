@@ -113,11 +113,13 @@ EOF
 
 Env-var names are authoritative in
 [`backend/config/settings.py`](../backend/config/settings.py).
-The `BUNDLE_VAR_*` mapping (`DATABRICKS_WAREHOUSE_ID` →
-`BUNDLE_VAR_sql_warehouse_id`, the pinned governed Genie space →
+The `BUNDLE_VAR_*` mapping (the pinned governed Genie space →
 `BUNDLE_VAR_genie_space_id`, and the lender/NMLS/tenant values → their
 Lakebase migration variables) happens inside
-`tools/databricks/bundle_env.py` — no extra exports needed.
+`tools/databricks/bundle_env.py` — no extra exports needed. No variable
+names a SQL warehouse: every bundle resource uses the bundle's own
+(`resources.sql_warehouses.mip_serverless_sql`), and `scripts/deploy.sh`
+reads its id from this deployer's bundle state.
 
 The migration atomically installs reviewed generic email, direct-mail, and SMS
 disclosures for this exact lender/NMLS/tenant identity. State-specific legal

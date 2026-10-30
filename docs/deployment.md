@@ -2565,7 +2565,7 @@ rollback, and smoke gates.
 
 The app runs on live Unity Catalog + Lakebase in every environment — there is no mock-mode runtime toggle (see [CLAUDE.md](../CLAUDE.md) "Negative prompting"). Flakiness is handled by the resilience layer (retry, warehouse warm-start, SWR cache, circuit breaker, degraded-state banner), never by silent mock fallback.
 
-- Warehouse ID + Genie space ID are set (`BUNDLE_VAR_sql_warehouse_id`, `BUNDLE_VAR_genie_space_id`).
+- The governed Genie space is pinned (`provision_genie_space --plan-pin` resolves it read-only), and no warehouse or Genie id is set by hand: `bundle_env.py` binds `BUNDLE_VAR_genie_space_id` from the pin, and every resource uses the bundle's own SQL warehouse, whose id the deploy reads from bundle state.
 - App name, Lakebase instance/catalog/database, Genie title, and runtime/rollback
   secret scopes are unique to the intended workspace; the deployer's
   authenticated host is the client profile's `DATABRICKS_HOST`, and the live
