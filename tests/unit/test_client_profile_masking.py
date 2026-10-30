@@ -141,6 +141,66 @@ def test_a_refusal_line_stays_readable_under_the_masks(changes: dict[str, str]) 
         assert _github_mask(line, masks) == line
 
 
+def _generic_profile() -> schema.ClientProfile:
+    """Identifying values a real estate holds that name no client.
+
+    A shared ``main`` catalog, an ``inherited:samples`` source, a two-letter
+    group, a group named ``admin`` and the ``/Workspace/Shared`` root; the
+    three-letter grantee ``qzx`` is the shortest value that stays masked.
+    """
+
+    shared = {
+        **EXPOSURE[1],
+        "securable": {"type": "CATALOG", "id": "main", "name": "main"},
+        "grantee": "it",
+        "source": "inherited:samples",
+    }
+    short = {**EXPOSURE[1], "grantee": "qzx"}
+    return _profile(
+        customer_profile(
+            MIP_ACCEPTED_EXPOSURE_JSON=json.dumps([EXPOSURE[0], shared, short]),
+            MIP_ADMIN_GROUP_NAME="admin",
+            MIP_GENIE_MANAGER_PRINCIPALS="approver,genie-managers-alpha",
+            MIP_DASHBOARD_PARENT_PATH="/Workspace/Shared",
+        )
+    )
+
+
+def test_generic_values_are_never_registered_and_specific_ones_still_are() -> None:
+    masks = set(views.masks(_generic_profile()))
+    assert not masks & {"main", "samples", "it", "admin", "approver", "/Workspace/Shared"}
+    assert {"qzx", "Another Team Space", "genie-managers-alpha", "space-alpha-0001"} <= masks
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "MIP_REMAINING: the domain of origin/main is maintained",
+        "deploy: wrote the dashboard under /Workspace/Shared/mip; it is readable",
+    ],
+)
+def test_unrelated_log_text_survives_generic_identifying_values(line: str) -> None:
+    assert _github_mask(line, views.masks(_generic_profile())) == line
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"MIP_UC_METASTORE_OWNER": "account users"},
+        {"MIP_REVIEW_MODE": "independent"},
+        {"MIP_ADMIN_IDENTITIES": "mip-deployer"},
+        {"MIP_APPROVER_IDENTITIES": "mip-validator"},
+        {"MIP_DEFAULT_CATALOG": "lender_catalog"},
+    ],
+)
+def test_a_refusal_line_stays_readable_under_generic_masks(changes: dict[str, str]) -> None:
+    masks = views.masks(_generic_profile())
+    with pytest.raises(ProfileRefusal) as caught:
+        _profile(customer_profile(**changes))
+    for line in caught.value.lines:
+        assert _github_mask(line, masks) == line
+
+
 def test_emit_mask_registers_each_line_on_stderr_only_in_actions() -> None:
     stream = io.StringIO()
     assert emit_mask("value-alpha\nvalue-beta", stream=stream, environ={"GITHUB_ACTIONS": "true"}) == (

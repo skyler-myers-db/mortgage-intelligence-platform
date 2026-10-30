@@ -11,7 +11,8 @@ class (plan §4.1):
 * ``secret``: a GitHub Environment secret; never printed, never digested.
 
 Locally every class lives in ``.env.local``. ``JSON_LEAF_CLASS`` classes each
-leaf of the JSON fields; schema vocabulary and ISO dates are never masked, so
+leaf of the JSON fields; schema vocabulary, ISO dates and generic values
+(platform-default names, fragments of schema terms) are never masked, so
 refusal lines and exposure decisions stay readable.
 """
 

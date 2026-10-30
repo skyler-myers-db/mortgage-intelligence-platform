@@ -98,6 +98,12 @@ _VOCABULARY = frozenset(
         DIRECT_SOURCE,
     )
 )
+VOCABULARY_TERMS = _VOCABULARY
+# Names every Databricks workspace shares, and its standard folder roots. They
+# identify no client, and as masks they would blank unrelated log text
+# (``main`` inside ``origin/main``), so the profile never masks them.
+PLATFORM_NAMES = frozenset({"main", "samples", "system", "hive_metastore"})
+_PLATFORM_FOLDERS = frozenset({"/workspace", "/workspace/shared", "/workspace/users", "/workspace/repos"})
 
 
 def is_placeholder(value: str) -> bool:
@@ -110,6 +116,13 @@ def is_vocabulary(value: str) -> bool:
     """A closed schema term (principal, kind, type, privilege, identity, class)."""
 
     return " ".join(value.split()).casefold() in _VOCABULARY
+
+
+def is_platform_name(value: str) -> bool:
+    """A platform-default catalog name or a standard workspace folder root."""
+
+    folded = value.strip().casefold()
+    return folded in PLATFORM_NAMES or (folded.rstrip("/") or "/") in _PLATFORM_FOLDERS
 
 
 def is_iso_date(value: str) -> bool:

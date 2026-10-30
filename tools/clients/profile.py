@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from tools.clients.rules import SUMMIT_LENDER_NAME
 from tools.clients.schema import (
+    ALIASES,
     FIELD_CLASS,
     IDENTITY_ALIASES,
     JSON_LEAF_CLASS,
@@ -26,9 +27,11 @@ from tools.clients.schema import (
 from tools.clients.shapes import (
     CLOUDS,
     INHERITED_SOURCE_PREFIX,
+    VOCABULARY_TERMS,
     https_host,
     is_iso_date,
     is_placeholder,
+    is_platform_name,
     is_vocabulary,
 )
 
@@ -39,6 +42,21 @@ _ORIGIN_FIELDS = frozenset({"DATABRICKS_HOST", "DATABRICKS_ACCOUNT_HOST"})
 # (deploy-dev.yml and deploy_step_automation_identities.sh today).
 _APPROVER_ROLES = ("normal", "operator2")
 _ADMIN_ROLES = ("admin", "release_probe")
+# A mask this short blanks fragments of ordinary words (``it`` in ``commit``).
+MIN_MASK_LENGTH = 3
+# The words refusal lines and exposure decisions are made of: the schema
+# vocabulary and every profile field and alias name.
+_READABLE_TERMS = tuple(
+    sorted(
+        {
+            *VOCABULARY_TERMS,
+            *(
+                name.casefold()
+                for name in (*FIELD_CLASS, *IDENTITY_ALIASES, *(a for names in ALIASES.values() for a in names))
+            ),
+        }
+    )
+)
 
 
 def _plain(value: Any) -> Any:
@@ -218,10 +236,31 @@ def iter_leaves(value: Any, path: str = "") -> Iterator[tuple[str, str]]:
         yield path, str(value)
 
 
-def _maskable(value: str) -> bool:
-    """Vocabulary, ISO dates and placeholders are never registered as masks."""
+def _generic(value: str) -> bool:
+    """A value that names no client, so masking it only blanks unrelated text.
 
-    return bool(value) and not is_vocabulary(value) and not is_iso_date(value) and not is_placeholder(value)
+    That is a value shorter than ``MIN_MASK_LENGTH``, a platform-default name,
+    or a fragment of a readable term (``admin`` inside ``admins``).
+    """
+
+    folded = value.casefold()
+    return (
+        len(value) < MIN_MASK_LENGTH
+        or is_platform_name(value)
+        or any(folded in term for term in _READABLE_TERMS)
+    )
+
+
+def _maskable(value: str) -> bool:
+    """Vocabulary, ISO dates, placeholders and generic values are never masks."""
+
+    return (
+        bool(value)
+        and not is_vocabulary(value)
+        and not is_iso_date(value)
+        and not is_placeholder(value)
+        and not _generic(value)
+    )
 
 
 def _field_masks(name: str, value: Any) -> Iterator[str]:
@@ -244,7 +283,10 @@ def masks(profile: ClientProfile) -> tuple[str, ...]:
     """Every identifying leaf, longest first, for ``::add-mask::``.
 
     A leaf missing from ``JSON_LEAF_CLASS`` is treated as identifying, so a
-    new JSON key fails closed into the mask list.
+    new JSON key fails closed into the mask list. A generic leaf (see
+    ``_generic``) is left out. This list decides only what is added to the
+    runner's own masks: GitHub still masks each secret's whole value, so a
+    scalar secret that is itself generic stays blanked wherever it prints.
     """
 
     found: set[str] = set()
