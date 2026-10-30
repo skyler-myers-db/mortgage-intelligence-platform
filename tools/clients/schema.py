@@ -412,12 +412,18 @@ class ClientProfile(BaseModel):
     @field_validator(*_EMAIL_LISTS, "scheduled_refresh_recipients")
     @classmethod
     def _emails(cls, values: tuple[str, ...], info: ValidationInfo) -> tuple[str, ...]:
+        first_of: dict[str, int] = {}
         for index, value in enumerate(values):
             if info.field_name == "scheduled_refresh_recipients" and UUID.fullmatch(value):
                 raise ValueError(
                     f"entry {index} is an application id; recipients must be email addresses"
                 )
             require(value, EMAIL, expected="comma-separated email addresses")
+            # The postflight compares the live job's recipients case-insensitively
+            # (verify_scheduled_refresh_state), so the written set must be too.
+            first = first_of.setdefault(value.casefold(), index)
+            if info.field_name == "scheduled_refresh_recipients" and first != index:
+                raise ValueError(f"entry {index} repeats entry {first} in another case; list each recipient once")
         return values
 
     @field_validator(*_IDENTITY_LISTS, *_PRINCIPAL_LISTS)

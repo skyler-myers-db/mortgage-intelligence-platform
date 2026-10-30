@@ -100,6 +100,37 @@ def test_a_refresh_without_recipients_is_refused() -> None:
     assert any(line.startswith("MIP_SCHEDULED_REFRESH_RECIPIENTS: is required") for line in caught.value.lines)
 
 
+@pytest.mark.parametrize(
+    ("recipients", "refused"),
+    [
+        ("ops@summit.example", False),
+        ("ops@summit.example,ops@summit.example", False),
+        ("Ops@Summit.example,alerts@summit.example", False),
+        ("ops@summit.example,OPS@summit.example", True),
+    ],
+)
+def test_the_recipients_written_are_the_recipients_the_postflight_verifies(recipients: str, refused: bool) -> None:
+    """The write (scheduled_refresh_posture) and the postflight's case-insensitive check see one set."""
+
+    from types import SimpleNamespace
+
+    from tools.databricks.scheduled_refresh_posture import failure_recipients
+    from tools.databricks.verify_scheduled_refresh_state import _recipient_problems
+
+    values = demo_profile(MIP_SCHEDULED_REFRESH_RECIPIENTS=recipients)
+    if refused:
+        # Refused before anything is written: the postflight could never pass it.
+        with pytest.raises(ProfileRefusal):
+            resolve(RawProfile(values=values))
+        return
+    policy = install_policy(resolve(RawProfile(values=values)))
+    written = failure_recipients(policy=policy)
+    job = SimpleNamespace(email_notifications=SimpleNamespace(on_failure=written))
+
+    assert len({item.casefold() for item in written}) == len(written)
+    assert _recipient_problems(job, expected=policy.refresh_recipients) == []
+
+
 def test_install_policy_refuses_a_demo_flag_on_a_customer_even_past_the_profile_rules() -> None:
     """Defence in depth: a profile built without its validators still cannot yield such a policy."""
 
