@@ -551,7 +551,7 @@ def status(
     rollback_scope: str,
     expected_lakebase_instance: str,
 ) -> str:
-    """Return the exact signed first-install recovery state."""
+    """Return the exact signed first-install recovery state under the held lease."""
 
     assert_held(
         workspace,
@@ -559,6 +559,29 @@ def status(
         lease_id=lease_id,
         source_git_sha=source_git_sha,
     )
+    return recovery_state(
+        workspace,
+        app_name=app_name,
+        rollback_scope=rollback_scope,
+        expected_lakebase_instance=expected_lakebase_instance,
+    )
+
+
+def recovery_state(
+    workspace: Any,
+    *,
+    app_name: str,
+    rollback_scope: str,
+    expected_lakebase_instance: str,
+) -> str:
+    """The same signed recovery state, read-only and without asserting the lease.
+
+    Only ``status`` (this read under the held lease) may authorize a recovery
+    mutation. The deploy's pre-lease bundle plan gate reads it bare to tell an
+    App this journal owns, which the next lease reconciles, from an install the
+    deployer never adopted; the pre-apply gate re-checks under the lease.
+    """
+
     record = _download(workspace, app_name=app_name)
     if record is None:
         return "absent"

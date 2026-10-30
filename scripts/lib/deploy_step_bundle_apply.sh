@@ -1,6 +1,6 @@
 # shellcheck shell=bash
-# Deploy step file. Steps 0a-4: governed Genie space resolution, runtime secret bindings, SQL
-# render, frontend build, bundle validate/plan/apply without App activation,
+# Deploy step file. Steps 0a-4: governed Genie space resolution, runtime secret bindings,
+# frontend build, the pre-apply bundle plan gate, bundle apply without App activation,
 # Lakebase OAuth role convergence, and identity isolation audits.
 # Sourced by scripts/deploy.sh in reviewed order; it runs in the entrypoint's
 # shell with its strict mode, traps, and private variables, never on its own.
@@ -43,44 +43,6 @@ export BUNDLE_VAR_runtime_secret_scope="$RUNTIME_SECRET_SCOPE"
 step "provision Databricks App runtime secret bindings"
 run "$PYTHON" -m tools.databricks.provision_runtime_secrets \
   --scope "$RUNTIME_SECRET_SCOPE"
-
-# -----------------------------------------------------------------------------
-# Step 1a: render SQL for the target UC catalog
-# -----------------------------------------------------------------------------
-# The bundle's SQL tasks read from sql/_rendered/**/*.sql. The canonical
-# sources under sql/** hardcode the default `mip.*` catalog prefix for
-# readability + code review; tools/render_sql.py substitutes the governed
-# catalog/schema DDL and three-part UC prefixes for the target catalog before bundle
-# validate/deploy read the rendered tree. The renderer also materializes the
-# first-party demo-feed switch as a SQL literal because Databricks SQL does not
-# allow parameter markers in this DDL path. The stand-alone renderer defaults to
-# disabled; this wrapper explicitly opts the Summit dev demo in while keeping
-# prod/customer deploys fail-closed.
-DEMO_FEEDS_FROM_ENV="${MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS:-}"
-if [[ -z "$DEMO_FEEDS_FROM_ENV" ]]; then
-  DEMO_FEEDS_FROM_ENV="$(dotenv_value MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS)"
-fi
-if [[ -z "$DEMO_FEEDS_FROM_ENV" ]]; then
-  if [[ "$TARGET" == "dev" ]]; then
-    DEMO_FEEDS_FROM_ENV=1
-  else
-    DEMO_FEEDS_FROM_ENV=0
-  fi
-fi
-if [[ "$TARGET" != "dev" ]]; then
-  DEMO_FEEDS_NORMALIZED="$(printf '%s' "$DEMO_FEEDS_FROM_ENV" | tr '[:upper:]' '[:lower:]')"
-  if [[ "$DEMO_FEEDS_NORMALIZED" =~ ^(1|true|yes|y|on)$ && "${MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD:-0}" != "1" ]]; then
-    echo "${RED}[deploy] refusing to enable Summit demo first-party feeds for target ${TARGET}.${RST}" >&2
-    echo "  Set MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD=1 only for an approved demo workspace; never for a customer production workspace." >&2
-    exit 2
-  fi
-fi
-export MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS="$DEMO_FEEDS_FROM_ENV"
-step "render SQL for target UC catalog (MIP_DEFAULT_CATALOG=${MIP_DEFAULT_CATALOG:-mip}, MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=${MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS})"
-run "$PYTHON" tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"
-if [[ "$MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS" =~ ^(1|true|TRUE|yes|YES|y|Y|on|ON)$ ]]; then
-  RESTORE_RENDERED_SQL_FAIL_CLOSED=1
-fi
 
 # -----------------------------------------------------------------------------
 # Step 1: build the frontend
@@ -133,16 +95,13 @@ echo "  app release: ${APP_RELEASE_ID}"
 # <<< app release source: stage <<<
 
 # -----------------------------------------------------------------------------
-# Step 2: validate bundle
+# Step 3: plan bundle and gate the plan again, under the lease
 # -----------------------------------------------------------------------------
-step "validate direct-deployment bundle against -t ${TARGET}"
-run "$PYTHON" -m tools.databricks.bundle_env validate -t "$TARGET"
-
-# -----------------------------------------------------------------------------
-# Step 3: plan bundle
-# -----------------------------------------------------------------------------
-step "plan direct deployment against -t ${TARGET}"
-run "$PYTHON" -m tools.databricks.bundle_env plan -t "$TARGET"
+# The pre-lease gate judged the plan before the lease and every App stop. Judge
+# it again here, after Genie provisioning and immediately before the non-App
+# apply, so a plan that changed in between (time of check, time of use) or an
+# instance acknowledgement that no longer matches its diff refuses.
+run_bundle_plan_gate pre-apply
 
 # -----------------------------------------------------------------------------
 # Step 4: deploy bundle
