@@ -60,6 +60,8 @@ sys.modules[_MINT_MODNAME] = mint
 _mint_spec.loader.exec_module(mint)  # type: ignore[union-attr]
 
 _CANONICAL_GH_REPO = pmo.CANONICAL_GH_REPO
+_CANONICAL_GH_ENV = "acme"
+_CANONICAL_GH_SINK = pmo._github_helpers.environment_sink(_CANONICAL_GH_REPO, _CANONICAL_GH_ENV)
 
 
 class _CredentialIntent:
@@ -565,7 +567,7 @@ def test_delivered_rotation_applies_role_owned_retirement_policy(
         ),
         diagnostic=lambda _message: None,
         error_factory=lambda error, **_kwargs: error,
-        gh_repo=_CANONICAL_GH_REPO,
+        gh_repo=_CANONICAL_GH_SINK,
         client_id_secret_name=(
             "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE"
             if identity_role == "agent_proxy"
@@ -651,6 +653,7 @@ def _provision(client: MagicMock, **overrides: object):
         "gateway_endpoint": None,
         "warehouse_id": None,
         "gh_repo": _CANONICAL_GH_REPO,
+        "gh_env": _CANONICAL_GH_ENV,
         "set_gh_secrets": True,
         "mint_secret": True,
         "rotate": False,
@@ -839,7 +842,7 @@ def test_pre_app_bootstrap_mints_only_role_owned_credentials_without_resource_ca
     if role != "agent_proxy":
         expected_writes.append(
             call(
-                _CANONICAL_GH_REPO,
+                _CANONICAL_GH_SINK,
                 defaults.client_id_secret_name,
                 f"{role}-application-id",
             )
@@ -847,7 +850,7 @@ def test_pre_app_bootstrap_mints_only_role_owned_credentials_without_resource_ca
     if defaults.credential_id_secret_name and role != "agent_proxy":
         expected_writes.append(
             call(
-                _CANONICAL_GH_REPO,
+                _CANONICAL_GH_SINK,
                 defaults.credential_id_secret_name,
                 "secret-id-xyz",
             )
@@ -862,7 +865,7 @@ def test_pre_app_bootstrap_mints_only_role_owned_credentials_without_resource_ca
         else "dose_fake_secret_value"
     )
     expected_writes.append(
-        call(_CANONICAL_GH_REPO, defaults.client_secret_secret_name, final_value)
+        call(_CANONICAL_GH_SINK, defaults.client_secret_secret_name, final_value)
     )
     assert set_secret.call_args_list == expected_writes
     client.apps.list.assert_called()
@@ -1003,6 +1006,7 @@ def test_pre_app_bootstrap_rejects_resource_scope_before_sdk_calls(
         "gateway_endpoint": None,
         "warehouse_id": None,
         "gh_repo": _CANONICAL_GH_REPO,
+        "gh_env": _CANONICAL_GH_ENV,
         "set_gh_secrets": True,
         "mint_secret": True,
         "rotate": False,
@@ -1086,11 +1090,14 @@ def test_pre_app_bootstrap_cli_forwards_credentials_only_contract() -> None:
                 "--set-gh-secrets",
                 "--gh-repo",
                 _CANONICAL_GH_REPO,
+                "--gh-env",
+                _CANONICAL_GH_ENV,
             ]
         )
 
     assert rc == 0
     kwargs = provision_call.call_args.kwargs
+    assert kwargs["gh_env"] == _CANONICAL_GH_ENV
     assert kwargs["pre_app_bootstrap"] is True
     assert kwargs["app_name"] == ""
     assert kwargs["grant_can_use"] is False
@@ -1357,13 +1364,13 @@ def test_normal_happy_path_creates_grants_mints_and_uses_role_owned_secret_names
         service_principal_id="1234"
     )
     assert set_secret.call_args_list == [
-        call(_CANONICAL_GH_REPO, "DATABRICKS_CLIENT_ID", "app-id-abc"),
+        call(_CANONICAL_GH_SINK, "DATABRICKS_CLIENT_ID", "app-id-abc"),
         call(
-            _CANONICAL_GH_REPO,
+            _CANONICAL_GH_SINK,
             "MIP_APP_URL",
             "https://mip-app-test.aws.databricksapps.com",
         ),
-        call(_CANONICAL_GH_REPO, "DATABRICKS_CLIENT_SECRET", "dose_fake_secret_value"),
+        call(_CANONICAL_GH_SINK, "DATABRICKS_CLIENT_SECRET", "dose_fake_secret_value"),
     ]
     assert result.created_sp is True
     assert result.secret_minted is True
@@ -1407,7 +1414,7 @@ def test_agent_proxy_partial_secret_sink_failure_revokes_minted_credential() -> 
 
     assert set_secret.call_args_list == [
         call(
-            _CANONICAL_GH_REPO,
+            _CANONICAL_GH_SINK,
             "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE",
             canonical_agent_proxy_credential_bundle(
                 client_id="proxy-application-id",
@@ -1417,7 +1424,7 @@ def test_agent_proxy_partial_secret_sink_failure_revokes_minted_credential() -> 
         ),
     ]
     invalidate_secrets.assert_called_once_with(
-        _CANONICAL_GH_REPO,
+        _CANONICAL_GH_SINK,
         frozenset({"DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE"}),
     )
     client.service_principal_secrets_proxy.delete.assert_called_once_with(
@@ -1874,7 +1881,7 @@ def test_atomic_bundle_writer_failure_preserves_old_value_before_production_comp
         pmo._credential_delivery.deliver_oauth_credential(
             writer=writer,
             revoker=revoke,
-            gh_repo=_CANONICAL_GH_REPO,
+            gh_repo=_CANONICAL_GH_SINK,
             client_id_secret_name="DATABRICKS_AGENT_PROXY_CLIENT_ID",
             client_id="proxy-application-id",
             client_secret_secret_name="DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE",
@@ -1899,7 +1906,7 @@ def test_atomic_bundle_writer_failure_preserves_old_value_before_production_comp
     pmo._credential_delivery.deliver_oauth_credential(
         writer=writer,
         revoker=revoke,
-        gh_repo=_CANONICAL_GH_REPO,
+        gh_repo=_CANONICAL_GH_SINK,
         client_id_secret_name="DATABRICKS_AGENT_PROXY_CLIENT_ID",
         client_id="proxy-application-id",
         client_secret_secret_name="DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE",
@@ -1926,7 +1933,7 @@ def test_concurrent_agent_proxy_rotations_leave_one_coherent_bundle() -> None:
         pmo._credential_delivery.deliver_oauth_credential(
             writer=writer,
             revoker=lambda **_kwargs: None,
-            gh_repo=_CANONICAL_GH_REPO,
+            gh_repo=_CANONICAL_GH_SINK,
             client_id_secret_name="DATABRICKS_AGENT_PROXY_CLIENT_ID",
             client_id="proxy-client",
             client_secret_secret_name="DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE",
@@ -1984,7 +1991,7 @@ def test_normal_secret_sink_discovers_the_exact_live_app_url() -> None:
     client.apps.get.assert_called_once_with("mip-app-staging")
     assert (
         call(
-            _CANONICAL_GH_REPO,
+            _CANONICAL_GH_SINK,
             "MIP_APP_URL",
             "https://mip-app-live.aws.databricksapps.com",
         )
@@ -2356,6 +2363,7 @@ def test_provision_rejects_verifier_app_can_use_before_client_or_any_mutation() 
             warehouse_id="warehouse-123",
             gh_repo=_CANONICAL_GH_REPO,
             set_gh_secrets=True,
+            gh_env=_CANONICAL_GH_ENV,
             mint_secret=True,
             rotate=True,
             app_url="https://mip-app-test.aws.databricksapps.com",
@@ -3113,8 +3121,47 @@ def test_direct_provision_rejects_unreviewed_secret_sink_before_client_or_mint()
             warehouse_id=None,
             gh_repo="attacker/unreviewed-repo",
             set_gh_secrets=True,
+            gh_env=_CANONICAL_GH_ENV,
             mint_secret=True,
             rotate=True,
+            app_url="https://example",
+            client_id_secret_name="DATABRICKS_CLIENT_ID",
+            client_secret_secret_name="DATABRICKS_CLIENT_SECRET",
+            app_url_secret_name="MIP_APP_URL",
+            identity_role="normal",
+            client_factory=client_factory,
+        )
+
+    client_factory.assert_not_called()
+    gh_available.assert_not_called()
+    set_secret.assert_not_called()
+
+
+@pytest.mark.parametrize("gh_env", [None, "", "Acme", "acme/../other", "a"])
+def test_live_mint_requires_one_client_environment_before_sdk_mutation(gh_env: str | None) -> None:
+    """Repository-level secrets are refused: a mint names one GitHub Environment."""
+
+    client_factory = MagicMock()
+    with (
+        patch.object(pmo, "_gh_available") as gh_available,
+        patch.object(pmo, "_set_gh_secret") as set_secret,
+        pytest.raises(SystemExit, match="--gh-env <client>"),
+    ):
+        pmo.provision(
+            sp_name="mip-nightly-ci-sp",
+            expected_application_id=None,
+            app_name="mip-app",
+            grant_can_use=True,
+            group_name=None,
+            create_group=False,
+            lakebase_instance=None,
+            gateway_endpoint=None,
+            warehouse_id=None,
+            gh_repo=_CANONICAL_GH_REPO,
+            gh_env=gh_env,
+            set_gh_secrets=True,
+            mint_secret=True,
+            rotate=False,
             app_url="https://example",
             client_id_secret_name="DATABRICKS_CLIENT_ID",
             client_secret_secret_name="DATABRICKS_CLIENT_SECRET",
@@ -3146,6 +3193,7 @@ def test_live_mint_requires_authenticated_gh_before_sdk_mutation() -> None:
             warehouse_id=None,
             gh_repo=_CANONICAL_GH_REPO,
             set_gh_secrets=True,
+            gh_env=_CANONICAL_GH_ENV,
             mint_secret=True,
             rotate=False,
             app_url="https://example",
@@ -3161,8 +3209,9 @@ def test_live_mint_requires_authenticated_gh_before_sdk_mutation() -> None:
 def test_set_gh_secret_uses_stdin_and_never_outputs_value(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    with patch.object(pmo.subprocess, "run") as run:
-        pmo._set_gh_secret("acme/repo", "DATABRICKS_CLIENT_SECRET", "s3cr3t")
+    sink = pmo._github_helpers.environment_sink("acme/repo", "acme")
+    with patch.object(pmo._github_helpers.subprocess, "run") as run:
+        pmo._set_gh_secret(sink, "DATABRICKS_CLIENT_SECRET", "s3cr3t")
 
     args, kwargs = run.call_args
     assert args[0] == [
@@ -3170,9 +3219,11 @@ def test_set_gh_secret_uses_stdin_and_never_outputs_value(
         "secret",
         "set",
         "DATABRICKS_CLIENT_SECRET",
-        "--repo",
-        "acme/repo",
+        "--env",
+        "acme",
     ]
+    assert "--repo" not in args[0]
+    assert kwargs["env"]["GH_REPO"] == "acme/repo"
     assert kwargs["input"] == b"s3cr3t"
     assert "s3cr3t" not in " ".join(args[0])
     captured = capsys.readouterr()

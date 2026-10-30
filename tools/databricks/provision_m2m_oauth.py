@@ -333,6 +333,7 @@ def provision(
     client_secret_secret_name: str,
     app_url_secret_name: str | None,
     credential_id_secret_name: str | None = None,
+    gh_env: str | None = None,
     identity_role: IdentityRole = "normal",
     client_factory: Any | None = None,
     revoke_gateway_endpoints: tuple[str, ...] = (),
@@ -363,10 +364,10 @@ def provision(
             raise SystemExit(
                 "--pre-app-bootstrap forbids resource access: " + ", ".join(incompatible)
             )
-        if not mint_secret or not set_gh_secrets or not gh_repo:
+        if not mint_secret or not set_gh_secrets or not gh_repo or not gh_env:
             raise SystemExit(
                 "--pre-app-bootstrap requires one-shot OAuth minting through "
-                "--set-gh-secrets and a reviewed --gh-repo sink"
+                "--set-gh-secrets and a reviewed --gh-repo and --gh-env sink"
             )
     preserved_gateway_endpoints = {
         str(name).strip() for name in preserve_gateway_endpoints if str(name).strip()
@@ -410,10 +411,10 @@ def provision(
             return WorkspaceClient()
     if create_group and not group_name:
         raise SystemExit("--create-group requires an identity role with --group-name")
-    if mint_secret and (not set_gh_secrets or not gh_repo):
+    if mint_secret and not (set_gh_secrets and gh_repo and _github_helpers.is_environment(gh_env)):
         raise SystemExit(
-            "Secret minting requires --set-gh-secrets and --gh-repo; "
-            "this tool never prints or stores one-shot OAuth secrets locally."
+            "Secret minting requires --set-gh-secrets, --gh-repo and --gh-env <client>; this tool "
+            "never prints or stores one-shot OAuth secrets locally or in repository-level secrets."
         )
     if mint_secret and not _gh_available():
         raise SystemExit(
@@ -699,7 +700,7 @@ def provision(
                 find_existing_sp=_find_existing_sp,
             )
         )
-        assert gh_repo is not None  # validated before any SDK mutation
+        assert gh_repo is not None and gh_env is not None  # validated before any SDK mutation
         credential_id = _credential_mutation.mint_and_deliver_oauth_credential(
             client=client,
             sp_id=sp.id,
@@ -714,7 +715,7 @@ def provision(
             secret_invalidator=_invalidate_gh_secrets,
             diagnostic=_diag,
             error_factory=_wrap_admin_error,
-            gh_repo=gh_repo,
+            gh_repo=_github_helpers.environment_sink(gh_repo, gh_env),
             client_id_secret_name=client_id_secret_name,
             client_secret_secret_name=client_secret_secret_name,
             credential_id_secret_name=credential_id_secret_name,
@@ -841,7 +842,7 @@ def main(argv: list[str] | None = None) -> int:
         f"pre_app_bootstrap={args.pre_app_bootstrap} app_name={app_name!r} "
         f"group_name={group_name!r} "
         f"create_group={args.create_group} lakebase_instance={lakebase_instance!r} "
-        f"warehouse_id={args.warehouse_id!r} "
+        f"warehouse_id={args.warehouse_id!r} gh_env={args.gh_env!r} "
         f"gh_repo={gh_repo!r} set_gh_secrets={args.set_gh_secrets} rotate={args.rotate}"
     )
 
@@ -867,6 +868,7 @@ def main(argv: list[str] | None = None) -> int:
             gateway_endpoint=args.gateway_endpoint,
             warehouse_id=args.warehouse_id,
             gh_repo=gh_repo,
+            gh_env=args.gh_env,
             set_gh_secrets=args.set_gh_secrets,
             mint_secret=args.mint_secret,
             rotate=args.rotate,

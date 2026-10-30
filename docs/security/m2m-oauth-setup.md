@@ -48,7 +48,7 @@ both paths, so the SDK flow and the UI flow are step-by-step comparable.
 
 The entire procedure — create the service principal, grant `CAN USE` on
 the deployed App, mint the OAuth client_id + client_secret, write the
-three secrets to the GitHub repo — runs from a single Python tool:
+three secrets to the client's GitHub Environment — runs from a single Python tool:
 
 ```bash
 # Pre-reqs (one-time):
@@ -75,6 +75,7 @@ python tools/databricks/provision_m2m_oauth.py \
     --pre-app-bootstrap \
     --identity-role agent_runtime \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --gh-env <client> \
     --set-gh-secrets
 
 # Repeat for the other six separated workspace identities. Group creation is
@@ -83,32 +84,38 @@ python tools/databricks/provision_m2m_oauth.py \
     --pre-app-bootstrap \
     --identity-role normal \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --gh-env <client> \
     --set-gh-secrets
 python tools/databricks/provision_m2m_oauth.py \
     --pre-app-bootstrap \
     --identity-role operator2 \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --gh-env <client> \
     --set-gh-secrets
 python tools/databricks/provision_m2m_oauth.py \
     --pre-app-bootstrap \
     --identity-role admin \
     --create-group \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --gh-env <client> \
     --set-gh-secrets
 python tools/databricks/provision_m2m_oauth.py \
     --pre-app-bootstrap \
     --identity-role release_probe \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --gh-env <client> \
     --set-gh-secrets
 python tools/databricks/provision_m2m_oauth.py \
     --pre-app-bootstrap \
     --identity-role verifier \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --gh-env <client> \
     --set-gh-secrets
 python tools/databricks/provision_m2m_oauth.py \
     --pre-app-bootstrap \
     --identity-role agent_proxy \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --gh-env <client> \
     --set-gh-secrets
 ```
 
@@ -140,8 +147,16 @@ What this runs (in order, all via `databricks-sdk`):
    read cannot prove that a delayed provider create will never commit and the
    current provider exposes no durable non-commit evidence; it never
    reconstructs or re-delivers a secret.
-3. `gh secret set ... --repo ... <stdin>` writes each role's credential
-   material via stdin so it never appears in argv/ps. For the agent-proxy role,
+3. `gh secret set <NAME> --env <client> <stdin>` writes each role's credential
+   material to the client's GitHub Environment, via stdin so it never appears
+   in argv/ps. The repository reaches `gh` through `GH_REPO`; no call passes
+   `--repo`, and a repository-level sink is refused (M2-PR2). The signed
+   intent records the sink as `<owner>/<repo>:environment:<client>`, so a
+   recovery deletes the armed names from that environment only. An intent
+   armed before M2-PR2 recorded a bare repository, which the recovery's
+   invalidator now refuses: it stays quarantined (fail-closed) until an owner
+   deletes its armed names by hand (`gh secret delete <NAME> --repo
+   <owner>/<repo>`) and resolves it by hand. For the agent-proxy role,
    the only write is one
    canonical `DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE` JSON value containing
    its client ID, immutable credential ID, and one-shot secret. Live consumers
