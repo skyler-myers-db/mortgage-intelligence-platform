@@ -160,6 +160,21 @@ def test_uuid_recipients_are_refused() -> None:
     _assert_refused(values, "MIP_SCHEDULED_REFRESH_RECIPIENTS", "entry 1 is an application id")
 
 
+@pytest.mark.parametrize(
+    "recipients",
+    ["ops@summit.example,OPS@summit.example", "ops@summit.example,alerts@summit.example,Ops@Summit.Example"],
+)
+def test_case_variant_recipients_are_refused(recipients: str) -> None:
+    values = demo_profile(MIP_SCHEDULED_REFRESH_RECIPIENTS=recipients)
+    lines = _assert_refused(values, "MIP_SCHEDULED_REFRESH_RECIPIENTS", "repeats entry 0 in another case")
+    assert not any("summit.example" in line.casefold() for line in lines), "the refusal names no address"
+
+
+def test_exact_duplicate_recipients_collapse_to_one() -> None:
+    profile = _profile(demo_profile(MIP_SCHEDULED_REFRESH_RECIPIENTS="ops@summit.example, ops@summit.example"))
+    assert profile.scheduled_refresh_recipients == ("ops@summit.example",)
+
+
 def test_scheduled_refresh_on_needs_recipients() -> None:
     values = demo_profile(MIP_SCHEDULED_REFRESH_RECIPIENTS=None)
     _assert_refused(values, "MIP_SCHEDULED_REFRESH_RECIPIENTS", "required when MIP_SCHEDULED_REFRESH=on")

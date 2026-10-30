@@ -30,6 +30,21 @@ def test_disaster_recovery_runbook_covers_operational_scenarios() -> None:
         assert command in text
 
 
+def test_a_deleted_genie_space_is_recovered_by_retiring_its_pin_never_by_copying_an_id() -> None:
+    """M1-PR3: the governed space is pinned by id; GENIE_SPACE_ID is no deploy input."""
+
+    text = Path("docs/disaster-recovery.md").read_text(encoding="utf-8")
+    scenario = text[text.index("## Scenario 5: Genie Space Deleted Or Misconfigured") :]
+    scenario = scenario[: scenario.index("\n## ", 1)]
+
+    assert "provision_genie_space.py --retire-pin --plan-pin" in scenario
+    assert "provision_genie_space.py --retire-pin \\\n  --ack-plan <retire-plan-sha256>" in scenario
+    assert "BUNDLE_VAR_genie_space_id" not in scenario.replace(
+        "`GENIE_SPACE_ID` and `BUNDLE_VAR_genie_space_id`\nare no deploy inputs", ""
+    )
+    assert "Copy the returned space id" not in scenario
+
+
 def test_lakebase_schema_records_migrations_and_archive_runs() -> None:
     schema_sql = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 

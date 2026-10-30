@@ -7,7 +7,8 @@ a stub deploy interpreter (``MIP_DEPLOY_PYTHON``) that runs every real Python
 step through ``tests/fixtures/prestop_launcher.py`` against that estate. The
 steps before the probes that need a live workspace or build tooling (the pin
 and closure checks, SQL render, bundle validate and plan, the runtime-secret
-and pii-salt checks, the plan gate) answer success; the signed lease and every
+and pii-salt checks, the plan gate, the Genie space pin check, the bundle
+state's warehouse read) answer success; the signed lease and every
 App stop primitive are markers that end the run.
 
 For every refusal code the run must exit 2 with that code printed, call no
@@ -60,6 +61,8 @@ CANNED = (
     "-m tools.databricks.bundle_env",
     "-m tools.databricks.pii_salt_scope check",
     "-m tools.databricks.bundle_plan_gate check",
+    "-m tools.databricks.provision_genie_space --plan-pin",
+    "-m tools.databricks.bundle_state warehouse-id",
     # The catalog bootstrap skip rule and the window plan (M0-PR8) read live
     # state the fake estate does not model; their own tests cover them.
     "-m tools.databricks.catalog_bootstrap_skip_rule",

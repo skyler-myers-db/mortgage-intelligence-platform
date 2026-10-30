@@ -138,8 +138,9 @@ def test_no_target_pins_a_genie_space_and_the_wrapper_refuses_the_placeholder():
     Databricks Apps requires a concrete Genie ``space_id`` in the app resource,
     and a placeholder reaches Apps as an opaque permission error. No target
     pins one now: tools/databricks/bundle_env.py resolves the governed space by
-    its title in the authenticated workspace and refuses a plan, summary,
-    deploy or binding that would still carry the placeholder.
+    its pin (tools/databricks/genie_space_pin.py, M1-PR3; never its title) and
+    refuses a plan, summary, deploy or binding that would still carry the
+    placeholder.
     """
     content = (REPO / "databricks.yml").read_text(encoding="utf-8")
     bundle = yaml.safe_load(content)
@@ -147,7 +148,7 @@ def test_no_target_pins_a_genie_space_and_the_wrapper_refuses_the_placeholder():
 
     assert not any("genie_space_id" in (target.get("variables") or {}) for target in bundle["targets"].values())
     assert bundle["variables"]["genie_space_id"]["default"] == "00000000PLACEHOLDER"
-    assert "_resolve_governed_genie_space_id(env, space_name=space_name)" in wrapper
+    assert "genie = _pinned_genie_space_id(env, profile)" in wrapper
     assert "refusing bundle {subcmd} with placeholder bundle variables" in wrapper
 
 
@@ -207,7 +208,7 @@ def test_deploy_resolves_resource_namespace_before_workspace_mutation():
     content = deploy_entrypoint_text()
     namespace = content.index('MIP_APP_NAME="$(deployment_control_value MIP_APP_NAME mip-app)"')
     genie_resolution = content.index(
-        'step "resolve governed Genie space before App secret and bundle mutation"'
+        'step "resolve governed Genie space by its pin before App secret and bundle mutation"'
     )
     runtime_secret_mutation = content.index(
         'step "provision Databricks App runtime secret bindings"'
@@ -228,7 +229,7 @@ def test_deploy_resolves_resource_namespace_before_workspace_mutation():
 def test_deploy_overwrites_stale_genie_id_before_bundle_and_after_rebind():
     content = deploy_entrypoint_text()
     first_resolve = content.index(
-        'step "resolve governed Genie space before App secret and bundle mutation"'
+        'step "resolve governed Genie space by its pin before App secret and bundle mutation"'
     )
     runtime_secret_mutation = content.index(
         'step "provision Databricks App runtime secret bindings"'
@@ -238,6 +239,10 @@ def test_deploy_overwrites_stale_genie_id_before_bundle_and_after_rebind():
     assert 'GENIE_SPACE_ID="$(< genie/space_id.txt)"' in first_block
     assert "export GENIE_SPACE_ID" in first_block
     assert "GENIE_SPACE_ID_FROM_ENV" not in first_block
+    # M1-PR3: by its pin, signed when it pins, and an ambient GENIE_SPACE_ID is dropped first.
+    assert 'run_with_proof_signing_authority "$PYTHON" -m tools.databricks.provision_genie_space' in first_block
+    assert '"${GENIE_PIN_ARGS[@]}" --warehouse-id "$_GRANTS_WAREHOUSE_ID" "${GENIE_PIN_ACK_ARGS[@]}"' in first_block
+    assert content.index("\nunset GENIE_SPACE_ID\n") < first_resolve
 
     rebind = content.index(
         'step "rebind Genie space — bind trusted assets from '

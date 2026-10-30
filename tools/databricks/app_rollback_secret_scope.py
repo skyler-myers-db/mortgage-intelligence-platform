@@ -49,6 +49,19 @@ def historical_supervisor_cleanup_journal_key(app_name: str) -> str:
     return f"historical-supervisor-cleanup-v1-{normalized}"
 
 
+def genie_space_pin_key(app_name: str) -> str:
+    """Return the App-bound key of the governed Genie space's signed pin (M1-PR3).
+
+    tools/databricks/genie_space_pin.py writes the pin here the moment it
+    creates or adopts the space, so the ownership proof below must admit it.
+    """
+
+    normalized = app_name.strip()
+    if _APP_NAME_RE.fullmatch(normalized) is None:
+        raise ValueError("Genie pin App name is invalid")
+    return f"genie-space-pin-v1-{normalized}"
+
+
 @dataclass(frozen=True)
 class AppRollbackScopeBinding:
     app_name: str
@@ -176,6 +189,7 @@ def _expected_keys(app_name: str) -> set[str]:
         f"app-last-good-v5-{app_name}",
         f"app-last-good-v6-{app_name}",
         historical_supervisor_cleanup_journal_key(app_name),
+        genie_space_pin_key(app_name),
     }
 
 

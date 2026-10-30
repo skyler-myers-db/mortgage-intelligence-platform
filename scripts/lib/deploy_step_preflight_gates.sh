@@ -13,7 +13,7 @@ step "preflight — check .env.local, databricks CLI, venv"
 
 if [[ ! -f .env.local ]]; then
   echo "${RED}[deploy] .env.local missing.${RST}" >&2
-  echo "  copy .env.example to .env.local, fill in the client profile (deploy/clients/example.env) and DATABRICKS_WAREHOUSE_ID." >&2
+  echo "  copy .env.example to .env.local and fill in the client profile (deploy/clients/example.env); a first install also sets DATABRICKS_WAREHOUSE_ID." >&2
   exit 2
 fi
 
@@ -146,6 +146,45 @@ if [[ "$DRY_RUN" -eq 0 ]] && ! "$PYTHON" -m tools.clients.live_checks; then
 fi
 # <<< client live checks <<<
 
+# >>> bundle warehouse >>>
+# Early SQL runs on the warehouse this deployer's bundle state binds
+# (resources.sql_warehouses.mip_serverless_sql, tools/databricks/bundle_state.py;
+# M1-PR3); an operator DATABRICKS_WAREHOUSE_ID naming another refuses. A first
+# install's state binds none until the step-4 apply: the operator's value is
+# the bootstrap warehouse until then, and the deploy switches to the bundle's
+# right after. With neither, it refuses. A dry run reads no state.
+_OPERATOR_WAREHOUSE_ID="$(deployment_control_value DATABRICKS_WAREHOUSE_ID)"
+BUNDLE_STATE_WAREHOUSE_ID=""
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  echo "${DIM}\$ $PYTHON -m tools.databricks.bundle_state warehouse-id${RST}"
+  if ! BUNDLE_STATE_WAREHOUSE_ID="$("$PYTHON" -m tools.databricks.bundle_state warehouse-id)"; then
+    echo "${RED}[deploy] this deployer's bundle state could not be read; nothing was changed.${RST}" >&2
+    exit 2
+  fi
+fi
+if [[ -n "$BUNDLE_STATE_WAREHOUSE_ID" ]]; then
+  if [[ -n "$_OPERATOR_WAREHOUSE_ID" && "$_OPERATOR_WAREHOUSE_ID" != "$BUNDLE_STATE_WAREHOUSE_ID" ]]; then
+    echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID names another warehouse than this deployer's bundle state binds; unset it (the bundle's own warehouse is used).${RST}" >&2
+    exit 2
+  fi
+  _GRANTS_WAREHOUSE_ID="$BUNDLE_STATE_WAREHOUSE_ID"
+  WAREHOUSE_SOURCE="bundle-state"
+elif [[ "$DRY_RUN" -eq 1 ]]; then
+  _GRANTS_WAREHOUSE_ID="${_OPERATOR_WAREHOUSE_ID:-dry-run-bundle-warehouse}"
+  WAREHOUSE_SOURCE="dry-run (bundle state unread)"
+elif [[ -n "$_OPERATOR_WAREHOUSE_ID" ]]; then
+  _GRANTS_WAREHOUSE_ID="$_OPERATOR_WAREHOUSE_ID"
+  WAREHOUSE_SOURCE="first-install-bootstrap"
+else
+  echo "${RED}[deploy] this deployer's bundle state binds no SQL warehouse yet (a first install): set DATABRICKS_WAREHOUSE_ID to a warehouse the deployer can use for the steps before the bundle creates its own.${RST}" >&2
+  exit 2
+fi
+DATABRICKS_WAREHOUSE_ID="$_GRANTS_WAREHOUSE_ID"
+export DATABRICKS_WAREHOUSE_ID
+echo "  sql warehouse: ${WAREHOUSE_SOURCE}"
+unset _OPERATOR_WAREHOUSE_ID
+# <<< bundle warehouse <<<
+
 if [[ "$DRY_RUN" -eq 0 ]]; then
   # Unity Catalog model registration validates the uploaded artifact through
   # the metastore's cloud storage before the version becomes ready. Fail before
@@ -208,50 +247,29 @@ fi
 
 # >>> scheduled-refresh (data-freshness design 2026-10-26)
 # mip_scheduled_refresh's pause status is decided here, never in a bundle
-# target: the variable defaults to PAUSED. Only a demo install (the client
-# profile's MIP_INSTALL_CLASS, as the dev target's live install was before
-# M1-PR2) unpauses, by default; MIP_SCHEDULED_REFRESH=off opts it out. A
-# customer install is always PAUSED: its cadence is a customer decision that
-# needs a reviewed change here, so an explicit `on` there is refused rather
-# than ignored. The schedule mails its failures to the deploying user, which
-# the live checks pin to the profile's deployer: a deployer that is not an
-# email (every service-principal deployer, which a -t client install always
-# has) gets `on` refused here, before any apply could write an UNPAUSED
-# schedule that the step-9c postflight would only refuse afterwards. Pure, so
-# it also runs in DRY_RUN. A Jobs-UI unpause is reverted by the next deploy,
-# and any apply outside this script re-pauses the live schedule; this switch
-# is the durable one (docs/runbook.md "Weekly scheduled refresh"). M1-PR3
-# derives this from the profile's refresh fields and mails
-# MIP_SCHEDULED_REFRESH_RECIPIENTS instead.
-if [[ "$CLIENT_INSTALL_CLASS" == "demo" ]]; then
-  _SCHEDULED_REFRESH="$(deployment_control_value MIP_SCHEDULED_REFRESH on)"
-else
-  _SCHEDULED_REFRESH="$(deployment_control_value MIP_SCHEDULED_REFRESH off)"
-fi
-case "$_SCHEDULED_REFRESH" in
-  on|off) ;;
+# target: the variable defaults to PAUSED. The client profile's own
+# MIP_SCHEDULED_REFRESH decides it (tools/clients/policy.py, M1-PR3), for any
+# install class: on unpauses the schedule and mails its failures to the
+# profile's MIP_SCHEDULED_REFRESH_RECIPIENTS (email addresses; the profile
+# refuses `on` without them and refuses an application id among them, so a
+# service-principal deployer never swallows the alert); off keeps it PAUSED
+# and mails nobody. bundle_env writes those recipients into the bundle's
+# variable-overrides.json and the step-9c postflight proves the live job
+# carries exactly them. A shell export of MIP_SCHEDULED_REFRESH reaches the
+# profile like any field (shell before .env.local). Pure, so it also runs in
+# DRY_RUN. A Jobs-UI unpause is reverted by the next deploy, and any apply
+# outside this script re-pauses the live schedule; this switch is the durable
+# one (docs/runbook.md "Weekly scheduled refresh").
+case "$CLIENT_SCHEDULED_REFRESH" in
+  on) BUNDLE_VAR_scheduled_refresh_pause_status=UNPAUSED ;;
+  off) BUNDLE_VAR_scheduled_refresh_pause_status=PAUSED ;;
   *)
-    echo "${RED}[deploy] MIP_SCHEDULED_REFRESH must be on or off.${RST}" >&2
+    echo "${RED}[deploy] the client profile's MIP_SCHEDULED_REFRESH must be on or off.${RST}" >&2
     exit 2
     ;;
 esac
-if [[ "$CLIENT_INSTALL_CLASS" != "demo" && "$_SCHEDULED_REFRESH" == "on" ]]; then
-  echo "${RED}[deploy] MIP_SCHEDULED_REFRESH=on is honoured only for a demo install; a ${CLIENT_INSTALL_CLASS} install keeps mip_scheduled_refresh PAUSED.${RST}" >&2
-  exit 2
-fi
-if [[ "$CLIENT_INSTALL_CLASS" == "demo" && "$_SCHEDULED_REFRESH" == "on" && \
-      "$CLIENT_DEPLOYER" != *@* ]]; then
-  echo "${RED}[deploy] MIP_SCHEDULED_REFRESH=on mails mip_scheduled_refresh's failures to the deploying user, and this install deploys as its deployer service principal, whose user name is an application id, not an email. Set MIP_SCHEDULED_REFRESH=off until M1-PR3 mails MIP_SCHEDULED_REFRESH_RECIPIENTS instead.${RST}" >&2
-  exit 2
-fi
-if [[ "$CLIENT_INSTALL_CLASS" == "demo" && "$_SCHEDULED_REFRESH" == "on" ]]; then
-  BUNDLE_VAR_scheduled_refresh_pause_status=UNPAUSED
-else
-  BUNDLE_VAR_scheduled_refresh_pause_status=PAUSED
-fi
 export BUNDLE_VAR_scheduled_refresh_pause_status
 echo "  scheduled refresh: ${BUNDLE_VAR_scheduled_refresh_pause_status} (mip_scheduled_refresh, Fridays 06:00 America/Chicago)"
-unset _SCHEDULED_REFRESH
 # <<< scheduled-refresh
 
 if [[ "$DRY_RUN" -eq 0 && "$NO_CONFIRM" -eq 0 ]]; then
@@ -382,25 +400,17 @@ else
   echo "[deploy] lender mark: none"
 fi
 export MIP_LENDER_MARK_FILE MIP_DEFAULT_THEME MIP_DEFAULT_ACCENT MIP_LENDER_MARK_SHA256
-# Demo-only presenter mode (D-shell-deviations-e1; W5b NB-3) and the consented
-# Genie refusal-text capture switch (D-audit-reads-d) are parsed here, before
-# any workspace mutation: a truthy presenter value for a customer install, or a typo in
-# either, stops at step 0 instead of at App promotion. The presenter
-# vocabulary is the payload's _PRESENTER_MODE_ON/_OFF (the two are pinned
-# equal); tr, not ${var,,}, so bash 3.2 parses it. The payload keeps its own
-# checks as defence in depth.
-_MIP_PRESENTER_MODE="$(deployment_control_value MIP_PRESENTER_MODE \
-  | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-case "$_MIP_PRESENTER_MODE" in
-  ''|0|false|no|off) ;;
-  1|true|yes|on)
-    if [[ "$CLIENT_INSTALL_CLASS" == "customer" ]]; then
-      echo "${RED}[deploy] MIP_PRESENTER_MODE is demo-only and refused for a customer install.${RST}" >&2
-      exit 2
-    fi
-    ;;
+# Demo-only presenter mode (D-shell-deviations-e1; W5b NB-3) is the client
+# profile's MIP_PRESENTER_MODE (tools/clients/policy.py, M1-PR3): the profile
+# parses it strictly and refuses it for a customer install before this step,
+# so a typo or a customer value stops at step 0 instead of at App promotion.
+# The payload builder keeps its own checks as defence in depth. The consented
+# Genie refusal-text capture switch (D-audit-reads-d) is parsed here, before
+# any workspace mutation.
+case "$CLIENT_PRESENTER_MODE" in
+  0|1) echo "  presenter mode: ${CLIENT_PRESENTER_MODE} (the client profile's MIP_PRESENTER_MODE)" ;;
   *)
-    echo "${RED}[deploy] MIP_PRESENTER_MODE must be one of 0/1/true/false/yes/no/on/off.${RST}" >&2
+    echo "${RED}[deploy] the client profile's MIP_PRESENTER_MODE must be 0 or 1.${RST}" >&2
     exit 2
     ;;
 esac
@@ -701,16 +711,10 @@ if [[ "${_AUDITOR_OVERLAP:-0}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 # <<< auditor-sod-check
 
-APP_RUNTIME_ENV="${APP_ENV:-}"
-if [[ -z "$APP_RUNTIME_ENV" ]]; then
-  # The retired dev target's sandbox for a demo install, prod's for a
-  # customer one (M1-PR3 takes it from the profile's MIP_APP_ENV).
-  if [[ "$CLIENT_INSTALL_CLASS" == "demo" ]]; then
-    APP_RUNTIME_ENV="sandbox"
-  else
-    APP_RUNTIME_ENV="prod"
-  fi
-fi
+# The App's APP_ENV is the client profile's MIP_APP_ENV (sandbox or prod; M1-PR3).
+# A shell APP_ENV is the profile's alias and must agree with it, or the profile
+# resolution above refused.
+APP_RUNTIME_ENV="$CLIENT_APP_ENV"
 APP_GIT_SHA="$SOURCE_GIT_SHA"
 
 # Runtime HMAC keys (the Cotality ID mask and the Genie action current and
@@ -850,3 +854,39 @@ else
   echo "[deploy] would check (read-only): tools.databricks.provision_runtime_secrets --check --scope ${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"
 fi
 # <<< runtime secret pre-stop check <<<
+
+# >>> genie space pin: check >>>
+# The governed Genie space resolves by the id a pin names (the signed pin
+# record or rollback record), never by its title alone (attack G12, M1-PR3;
+# tools/databricks/genie_space_pin.py). Read-only, before the lease: a gone
+# pinned space, a pin and record that disagree, or an unpinned title match
+# refuses. The one way to adopt such a match is an exact digest ack:
+# MIP_GENIE_PIN_ACK (shell only, never .env.local) must equal the sha256 of
+# the plan printed here; step 0a recomputes it right before it pins. A first
+# install (nothing pinned, no title match) passes and pins at step 0a.
+GENIE_PIN_ACK_ARGS=()
+if [[ -n "${MIP_GENIE_PIN_ACK:-}" ]]; then
+  if [[ ! "$MIP_GENIE_PIN_ACK" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "${RED}[deploy] MIP_GENIE_PIN_ACK must be the 64-hex sha256 of the read-only Genie pin plan.${RST}" >&2
+    exit 2
+  fi
+  GENIE_PIN_ACK_ARGS=(--ack-plan "$MIP_GENIE_PIN_ACK")
+fi
+GENIE_PIN_ARGS=(
+  --space-name "$MIP_GENIE_SPACE_NAME"
+  --catalog "$MIP_DEFAULT_CATALOG"
+  --app-name "$MIP_APP_NAME"
+  --pin-scope "$MIP_APP_ROLLBACK_SECRET_SCOPE"
+  --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
+  --no-smoke-test
+)
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  if ! "$PYTHON" -m tools.databricks.provision_genie_space --plan-pin \
+      "${GENIE_PIN_ARGS[@]}" "${GENIE_PIN_ACK_ARGS[@]}"; then
+    echo "${RED}[deploy] the governed Genie space pin was refused before the lease (see above); nothing was changed.${RST}" >&2
+    exit 2
+  fi
+else
+  echo "[deploy] would check (read-only): tools.databricks.provision_genie_space --plan-pin (the governed Genie space by its pin)"
+fi
+# <<< genie space pin: check <<<

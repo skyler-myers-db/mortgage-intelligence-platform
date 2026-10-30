@@ -118,7 +118,7 @@ def _decisions(stored: tuple[str, ...]) -> tuple[set[str], dict[str, str], set[s
     plan = provision_subject.check_runtime_secrets(
         client=SimpleNamespace(secrets=_Secrets(stored))
     )
-    env = payload_subject.build_payload(source_code_path="/Workspace/app/files", target="prod")
+    env = payload_subject.build_payload(source_code_path="/Workspace/app/files", install_class="customer")
     bound = {
         provision_subject.ENV_TO_KEY[item["name"]]
         for item in env["env_vars"]  # type: ignore[union-attr]

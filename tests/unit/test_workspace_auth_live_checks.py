@@ -11,11 +11,11 @@ tests/unit/test_client_install_dry_run.py.)
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from tests.fixtures.client_profiles import DEMO_PROFILE, IDENTITY_IDS
+from tests.fixtures.live_workspace import LiveAccount, LiveWorkspace
 from tools.clients import live_checks
 from tools.clients.schema import FIELD_CLASS, FieldClass
 
@@ -36,46 +36,25 @@ def _outside_actions(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
 
 
-class _LiveWorkspace:
-    """A fake deployer WorkspaceClient that records each GET it answers."""
+def _LiveWorkspace(**overrides: str) -> LiveWorkspace:  # noqa: N802 - the M1-PR2 name, now the shared fake
+    """The shared fake (tests/fixtures/live_workspace.py): a healthy first install of PROFILE."""
 
-    def __init__(self, **overrides: str) -> None:
-        live = {
-            "host": PROFILE["DATABRICKS_HOST"],
-            "workspace_id": PROFILE["MIP_EXPECT_WORKSPACE_ID"],
-            "metastore_id": PROFILE["MIP_EXPECT_METASTORE_ID"],
-            "metastore_workspace_id": PROFILE["MIP_EXPECT_WORKSPACE_ID"],
-            "principal": IDENTITY_IDS["deployer"],
-            **overrides,
-        }
-        self.calls: list[str] = []
-        self.config = SimpleNamespace(host=live["host"])
-        self._live = live
-        self.metastores = SimpleNamespace(current=self._current)
-        self.current_user = SimpleNamespace(me=self._me)
+    return LiveWorkspace(PROFILE, identity_ids=IDENTITY_IDS, **overrides)
 
-    def get_workspace_id(self) -> int:
-        self.calls.append("GET scim/Me (org id)")
-        return int(self._live["workspace_id"])
 
-    def _current(self) -> object:
-        self.calls.append("GET current-metastore-assignment")
-        return SimpleNamespace(
-            metastore_id=self._live["metastore_id"],
-            workspace_id=int(self._live["metastore_workspace_id"]),
-        )
+IDENTITY_CALLS = ["GET scim/Me (org id)", "GET current-metastore-assignment", "GET scim/Me"]
 
-    def _me(self) -> object:
-        self.calls.append("GET scim/Me")
-        return SimpleNamespace(user_name=self._live["principal"])
+
+def _account() -> LiveAccount:
+    return LiveAccount(IDENTITY_IDS["account_principal"])
 
 
 def _live_check(
-    tmp_path: Path, workspace: _LiveWorkspace, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, workspace: LiveWorkspace, capsys: pytest.CaptureFixture[str]
 ) -> tuple[int, str]:
     env_file = tmp_path / "client.env"
     env_file.write_text("".join(f"{name}='{value}'\n" for name, value in PROFILE.items()), encoding="utf-8")
-    code = live_checks.main([], environ={}, env_file=env_file, client=lambda: workspace)
+    code = live_checks.main([], environ={}, env_file=env_file, client=lambda: workspace, account=_account)
     out = capsys.readouterr()
     text = out.out + out.err
     assert not any(value in text for value in _IDENTIFYING), "a refusal names checks, never values"
@@ -94,7 +73,8 @@ def test_live_checks_pass_on_the_profiles_workspace_and_deployer(
 
     assert code == 0, text
     assert "client live checks ok" in text
-    assert workspace.calls == ["GET scim/Me (org id)", "GET current-metastore-assignment", "GET scim/Me"]
+    assert workspace.calls[:3] == IDENTITY_CALLS, "the identity reads come first"
+    assert all(call.startswith("GET") for call in workspace.calls), "read-only"
 
 
 def test_under_actions_each_live_id_is_masked_and_every_other_line_is_value_free(
@@ -106,7 +86,7 @@ def test_under_actions_each_live_id_is_masked_and_every_other_line_is_value_free
     env_file = tmp_path / "client.env"
     env_file.write_text("".join(f"{name}='{value}'\n" for name, value in PROFILE.items()), encoding="utf-8")
 
-    code = live_checks.main([], environ={}, env_file=env_file, client=lambda: workspace)
+    code = live_checks.main([], environ={}, env_file=env_file, client=lambda: workspace, account=_account)
     out = capsys.readouterr()
 
     assert code == 2

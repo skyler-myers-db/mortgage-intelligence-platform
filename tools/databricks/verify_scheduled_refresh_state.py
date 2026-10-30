@@ -6,10 +6,12 @@ failure recipients. A bundle validate cannot prove what the Jobs API stored,
 so after the apply this reads the live job and fails the deploy when:
 
 * ``settings.schedule.pause_status`` differs from ``--expect``;
-* the failure email disagrees with the install: exactly one recipient on a
-  demo install (``--live-install``; an email address whenever the schedule is UNPAUSED, so a
-  service-principal deployer's application id never silently swallows the
-  alert), none anywhere else;
+* the failure email is not exactly the expected recipients: with
+  ``--recipients-from-profile``, the client profile's
+  ``MIP_SCHEDULED_REFRESH_RECIPIENTS`` when its ``MIP_SCHEDULED_REFRESH`` is
+  ``on`` and nobody when it is off (tools/clients/policy.py, M1-PR3); without
+  it, nobody. Addresses compare without regard to case and are never printed;
+  a mismatch names counts only;
 * the orchestrator's task graph is not exactly :data:`ORCHESTRATOR_TASKS`:
   FRED -> gold -> lifecycle -> KPI, each task running the bundle's own job and
   depending only on the step before it, plus the SELECT-only outcome gate after
@@ -22,19 +24,24 @@ so after the apply this reads the live job and fails the deploy when:
   grants).
 
 The bundle summary JSON (``bundle_env summary -t <target> -o json``) arrives on
-stdin. It never prints a recipient address. Exit 0 on match, 2 otherwise.
+stdin. It never prints a recipient address. Exit 0 on match, 2 otherwise
+(a profile that cannot be resolved included).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 from tools.databricks.scheduled_refresh_posture import JOB_KEY, PAUSE_STATES
+
+REPO = Path(__file__).resolve().parents[2]
 
 #: The orchestrator's task graph as databricks.yml declares it: task_key ->
 #: (the bundle job its run_job_task runs, or None for the SQL gate; the task
@@ -73,20 +80,18 @@ def _sql_file_path(task: Any) -> str:
     return str(getattr(getattr(getattr(task, "sql_task", None), "file", None), "path", "") or "")
 
 
-def _recipient_problems(root: Any, *, expect_pause: str, live_install: bool) -> list[str]:
+def _recipient_problems(root: Any, *, expected: tuple[str, ...]) -> list[str]:
     recipients = [str(item) for item in getattr(getattr(root, "email_notifications", None), "on_failure", None) or []]
-    if not live_install:
-        if recipients:
-            return [f"{JOB_KEY} must email no failure recipient outside the live install, has {len(recipients)}"]
+    want = sorted({item.strip().casefold() for item in expected})
+    have = sorted(item.strip().casefold() for item in recipients)
+    if have == want:
         return []
-    if len(recipients) != 1:
-        return [f"{JOB_KEY} must email exactly one failure recipient on the live install, has {len(recipients)}"]
-    if expect_pause == "UNPAUSED" and "@" not in recipients[0]:
-        return [
-            f"{JOB_KEY}'s failure recipient on the live install is not an email address (a service-principal "
-            "deployer?): deploy the live install as a user, or set MIP_SCHEDULED_REFRESH=off"
-        ]
-    return []
+    if not want:
+        return [f"{JOB_KEY} must email no failure recipient while the refresh is off, has {len(recipients)}"]
+    return [
+        f"{JOB_KEY} must email exactly the client profile's {len(want)} failure recipient(s) "
+        f"(MIP_SCHEDULED_REFRESH_RECIPIENTS), has {len(recipients)} that differ"
+    ]
 
 
 def _task_graph_problems(root: Any, ids: dict[str, str]) -> list[str]:
@@ -119,7 +124,7 @@ def verify(
     summary: dict[str, Any],
     *,
     expect_pause: str,
-    live_install: bool,
+    expected_recipients: tuple[str, ...] = (),
 ) -> list[str]:
     """Every mismatch between the live job and the intent; empty means it matches."""
 
@@ -129,7 +134,7 @@ def verify(
     pause = _value(getattr(root, "schedule", None), "pause_status")
     if pause != expect_pause:
         problems.append(f"{JOB_KEY} pause_status is {pause}, expected {expect_pause}")
-    problems.extend(_recipient_problems(root, expect_pause=expect_pause, live_install=live_install))
+    problems.extend(_recipient_problems(root, expected=expected_recipients))
     problems.extend(_task_graph_problems(root, ids))
 
     reached: set[str] = set()
@@ -154,12 +159,34 @@ def verify(
     return problems
 
 
-def main(argv: list[str] | None = None, *, stdin: Any = None, client: Any = None) -> int:
+def _profile_recipients(environ: Mapping[str, str] | None, env_file: Path | None) -> tuple[str, ...]:
+    """The client profile's refresh recipients (shell, then ``.env.local``); () when its refresh is off."""
+
+    from tools.clients.environment import from_local, resolve
+    from tools.clients.policy import install_policy
+
+    raw = from_local(os.environ if environ is None else environ, env_file or REPO / ".env.local")
+    return install_policy(resolve(raw)).refresh_recipients
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    stdin: Any = None,
+    client: Any = None,
+    environ: Mapping[str, str] | None = None,
+    env_file: Path | None = None,
+) -> int:
     parser = argparse.ArgumentParser(description="Verify the deployed mip_scheduled_refresh against the deploy intent.")
     parser.add_argument("--expect", required=True, choices=sorted(PAUSE_STATES))
-    parser.add_argument("--live-install", action="store_true", help="a demo install, which runs the schedule")
+    parser.add_argument(
+        "--recipients-from-profile",
+        action="store_true",
+        help="expect the client profile's refresh recipients (nobody when its refresh is off)",
+    )
     args = parser.parse_args(argv)
     try:
+        expected = _profile_recipients(environ, env_file) if args.recipients_from_profile else ()
         summary = json.loads((stdin or sys.stdin).read())
         if not isinstance(summary, dict):
             raise ValueError("bundle summary JSON must be an object")
@@ -170,7 +197,10 @@ def main(argv: list[str] | None = None, *, stdin: Any = None, client: Any = None
 
             client = deployment_workspace_client()
         problems = verify(
-            lambda job_id: client.jobs.get(job_id), summary, expect_pause=args.expect, live_install=args.live_install
+            lambda job_id: client.jobs.get(job_id),
+            summary,
+            expect_pause=args.expect,
+            expected_recipients=expected,
         )
     except Exception as exc:  # noqa: BLE001 - a postflight fails closed on any read error
         print(f"[scheduled-refresh] cannot verify the deployed job: {exc}", file=sys.stderr)

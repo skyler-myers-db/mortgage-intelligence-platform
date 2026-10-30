@@ -34,7 +34,6 @@ env:
   # Placeholder BUNDLE_VARs so `databricks bundle validate` can resolve
   # variable references without any real workspace secrets. The nightly
   # workflow swaps these for real values.
-  BUNDLE_VAR_sql_warehouse_id: 'ffffffffffffffff'
   BUNDLE_VAR_genie_space_id: '00000000-0000-0000-0000-000000000000'
   BUNDLE_VAR_lakebase_instance: 'mip-placeholder'
 

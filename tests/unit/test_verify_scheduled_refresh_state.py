@@ -2,8 +2,9 @@
 
 ``tools/databricks/verify_scheduled_refresh_state.py`` reads the applied job
 back through the Jobs API: a bundle validate cannot prove what was stored. It
-must fail on a wrong pause status, a failure email on the wrong install (or not
-an address while the live schedule runs), an orchestrator task graph that is not
+must fail on a wrong pause status, a failure email that is not exactly the
+client profile's recipients (nobody while its refresh is off; M1-PR3), an
+orchestrator task graph that is not
 FRED -> gold -> lifecycle -> KPI plus the outcome gate after gold, and a live
 ``run_job_task`` closure that is not exactly those four jobs or that reaches a
 reviewed-function publisher.
@@ -34,6 +35,14 @@ IDS = {
 }
 SUMMARY = {"resources": {"jobs": {key: {"id": job_id} for key, job_id in IDS.items()}}}
 DEPLOYER = "operator@example.invalid"
+PROFILE_FLAG = "--recipients-from-profile"
+
+
+@pytest.fixture(autouse=True)
+def _profile_recipients(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--recipients-from-profile`` reads the client profile; these tests pin its recipients."""
+
+    monkeypatch.setattr(postflight, "_profile_recipients", lambda environ, env_file: (DEPLOYER,))
 
 
 GATE_PATH = "/Workspace/Users/x/.bundle/p/dev/files/sql/_rendered/transformations/assert_scheduled_refresh_outcome.sql"
@@ -90,10 +99,10 @@ def _get(jobs: dict[str, Any]) -> Any:
     return lambda job_id: SimpleNamespace(settings=jobs[str(job_id)])
 
 
-def test_a_matching_live_install_passes_without_printing_the_recipient(capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_matching_refresh_passes_without_printing_the_recipient(capsys: pytest.CaptureFixture[str]) -> None:
     client = SimpleNamespace(jobs=SimpleNamespace(get=_get(_jobs())))
 
-    code = postflight.main(["--expect", "UNPAUSED", "--live-install"], stdin=io.StringIO(json.dumps(SUMMARY)), client=client)
+    code = postflight.main(["--expect", "UNPAUSED", PROFILE_FLAG], stdin=io.StringIO(json.dumps(SUMMARY)), client=client)
 
     captured = capsys.readouterr()
     assert code == 0, captured.err
@@ -101,21 +110,30 @@ def test_a_matching_live_install_passes_without_printing_the_recipient(capsys: p
 
 
 def test_a_paused_ci_install_without_email_passes() -> None:
-    assert postflight.verify(_get(_jobs(pause="PAUSED", recipients=[])), SUMMARY, expect_pause="PAUSED", live_install=False) == []
+    assert postflight.verify(_get(_jobs(pause="PAUSED", recipients=[])), SUMMARY, expect_pause="PAUSED", expected_recipients=()) == []
 
 
 @pytest.mark.parametrize(
-    ("jobs", "expect", "live", "needle"),
+    ("jobs", "expect", "recipients", "needle"),
     [
-        (_jobs(pause="PAUSED"), "UNPAUSED", True, "pause_status is PAUSED, expected UNPAUSED"),
-        (_jobs(pause="UNPAUSED", recipients=[]), "UNPAUSED", True, "exactly one failure recipient"),
-        (_jobs(pause="PAUSED"), "PAUSED", False, "no failure recipient outside the live install"),
+        (_jobs(pause="PAUSED"), "UNPAUSED", (DEPLOYER,), "pause_status is PAUSED, expected UNPAUSED"),
+        (_jobs(pause="UNPAUSED", recipients=[]), "UNPAUSED", (DEPLOYER,), "exactly the client profile's 1 failure"),
+        (_jobs(pause="PAUSED"), "PAUSED", (), "no failure recipient while the refresh is off"),
+        (
+            _jobs(recipients=["someone-else@example.invalid"]),
+            "UNPAUSED",
+            (DEPLOYER,),
+            "has 1 that differ",
+        ),
     ],
 )
-def test_a_wrong_pause_or_email_fails(jobs: dict[str, Any], expect: str, live: bool, needle: str) -> None:
-    problems = postflight.verify(_get(jobs), SUMMARY, expect_pause=expect, live_install=live)
+def test_a_wrong_pause_or_email_fails(
+    jobs: dict[str, Any], expect: str, recipients: tuple[str, ...], needle: str
+) -> None:
+    problems = postflight.verify(_get(jobs), SUMMARY, expect_pause=expect, expected_recipients=recipients)
 
     assert any(needle in problem for problem in problems), problems
+    assert not any(DEPLOYER in problem or "someone-else" in problem for problem in problems)
 
 
 def test_a_stale_gold_job_that_publishes_a_reviewed_function_fails() -> None:
@@ -124,7 +142,7 @@ def test_a_stale_gold_job_that_publishes_a_reviewed_function_fails() -> None:
         _task("publish_fn_build_cohort", sql_path="/x/sql/_rendered/uc_functions/fn_build_cohort.sql")
     )
 
-    problems = postflight.verify(_get(jobs), SUMMARY, expect_pause="UNPAUSED", live_install=True)
+    problems = postflight.verify(_get(jobs), SUMMARY, expect_pause="UNPAUSED", expected_recipients=(DEPLOYER,))
 
     assert problems == [f"job {IDS['mip_refresh_scores']} task publish_fn_build_cohort publishes a reviewed Growth Agent function"]
 
@@ -133,12 +151,12 @@ def test_a_closure_that_reaches_the_publisher_or_drops_a_child_fails() -> None:
     reaches = _jobs()
     reaches[IDS["mip_kpi_snapshot"]].tasks.append(_task("bootstrap", run_job=IDS["mip_init_catalog_schemas"]))
     reaches[IDS["mip_init_catalog_schemas"]] = SimpleNamespace(tasks=[_task("init_catalog_schemas")])
-    problems = postflight.verify(_get(reaches), SUMMARY, expect_pause="UNPAUSED", live_install=True)
+    problems = postflight.verify(_get(reaches), SUMMARY, expect_pause="UNPAUSED", expected_recipients=(DEPLOYER,))
     assert "mip_scheduled_refresh reaches mip_init_catalog_schemas" in problems
 
     dropped = _jobs()
     dropped[IDS["mip_scheduled_refresh"]].tasks = dropped[IDS["mip_scheduled_refresh"]].tasks[:3]
-    problems = postflight.verify(_get(dropped), SUMMARY, expect_pause="UNPAUSED", live_install=True)
+    problems = postflight.verify(_get(dropped), SUMMARY, expect_pause="UNPAUSED", expected_recipients=(DEPLOYER,))
     assert any("expected the bundle's chain" in problem for problem in problems), problems
 
 
@@ -155,35 +173,79 @@ def test_either_half_of_the_publisher_check_fails_on_its_own(task_key: str, sql_
     jobs = _jobs()
     jobs[IDS["mip_kpi_snapshot"]].tasks.append(_task(task_key, sql_path=sql_path))
 
-    problems = postflight.verify(_get(jobs), SUMMARY, expect_pause="UNPAUSED", live_install=True)
+    problems = postflight.verify(_get(jobs), SUMMARY, expect_pause="UNPAUSED", expected_recipients=(DEPLOYER,))
 
     assert problems == [f"job {IDS['mip_kpi_snapshot']} task {task_key} publishes a reviewed Growth Agent function"]
 
 
-def test_two_recipients_on_the_live_install_fail() -> None:
+def test_a_recipient_beyond_the_profiles_fails() -> None:
     jobs = _jobs(recipients=[DEPLOYER, "second@example.invalid"])
 
-    problems = postflight.verify(_get(jobs), SUMMARY, expect_pause="UNPAUSED", live_install=True)
+    problems = postflight.verify(_get(jobs), SUMMARY, expect_pause="UNPAUSED", expected_recipients=(DEPLOYER,))
 
-    assert problems == ["mip_scheduled_refresh must email exactly one failure recipient on the live install, has 2"]
+    assert problems == [
+        "mip_scheduled_refresh must email exactly the client profile's 1 failure recipient(s) "
+        "(MIP_SCHEDULED_REFRESH_RECIPIENTS), has 2 that differ"
+    ]
 
 
-def test_a_non_address_recipient_fails_only_while_the_live_schedule_runs(capsys: pytest.CaptureFixture[str]) -> None:
+def test_recipients_compare_as_a_set_without_regard_to_case() -> None:
+    jobs = _jobs(recipients=["B@Example.Invalid", "a@example.invalid"])
+
+    assert postflight.verify(
+        _get(jobs), SUMMARY, expect_pause="UNPAUSED", expected_recipients=("a@example.invalid", "b@example.invalid")
+    ) == []
+
+
+def test_an_application_id_recipient_never_matches_the_profiles_and_is_never_printed(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The profile refuses an application id among its recipients, so a deployer SP id always differs."""
+
     application_id = "00000000-0000-0000-0000-000000000000"
     jobs = _jobs(recipients=[application_id])
 
-    problems = postflight.verify(_get(jobs), SUMMARY, expect_pause="UNPAUSED", live_install=True)
-    assert len(problems) == 1 and "is not an email address" in problems[0], problems
-    assert "MIP_SCHEDULED_REFRESH=off" in problems[0]
-
-    paused = _jobs(pause="PAUSED", recipients=[application_id])
-    assert postflight.verify(_get(paused), SUMMARY, expect_pause="PAUSED", live_install=True) == []
+    problems = postflight.verify(_get(jobs), SUMMARY, expect_pause="UNPAUSED", expected_recipients=(DEPLOYER,))
+    assert len(problems) == 1 and "has 1 that differ" in problems[0], problems
 
     client = SimpleNamespace(jobs=SimpleNamespace(get=_get(jobs)))
-    code = postflight.main(["--expect", "UNPAUSED", "--live-install"], stdin=io.StringIO(json.dumps(SUMMARY)), client=client)
+    code = postflight.main(["--expect", "UNPAUSED", PROFILE_FLAG], stdin=io.StringIO(json.dumps(SUMMARY)), client=client)
     captured = capsys.readouterr()
     assert code == 2
     assert application_id not in captured.out + captured.err, "never print a recipient"
+
+
+@pytest.mark.parametrize(("refresh", "expected"), [("on", ("refresh-alerts@summit.example",)), ("off", ())])
+def test_the_profile_decides_the_expected_recipients(
+    refresh: str, expected: tuple[str, ...], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from tests.fixtures.client_profiles import demo_profile, env_file_text
+
+    monkeypatch.undo()
+    env_file = tmp_path / ".env.local"
+    env_file.write_text(env_file_text(demo_profile(MIP_SCHEDULED_REFRESH=refresh)), encoding="utf-8")
+
+    assert postflight._profile_recipients({}, env_file) == expected
+
+
+def test_a_profile_that_cannot_be_resolved_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.undo()
+    client = SimpleNamespace(jobs=SimpleNamespace(get=_get(_jobs())))
+    env_file = tmp_path / ".env.local"
+    env_file.write_text("MIP_CLIENT='fictional-demo'\n", encoding="utf-8")
+
+    code = postflight.main(
+        ["--expect", "UNPAUSED", PROFILE_FLAG],
+        stdin=io.StringIO(json.dumps(SUMMARY)),
+        client=client,
+        environ={},
+        env_file=env_file,
+    )
+
+    assert code == 2
+    assert "cannot verify the deployed job" in capsys.readouterr().err
 
 
 def test_a_closure_that_reaches_an_extra_non_publisher_job_fails() -> None:
@@ -193,7 +255,7 @@ def test_a_closure_that_reaches_an_extra_non_publisher_job_fails() -> None:
     jobs[IDS["mip_refresh_scores"]].tasks.append(_task("refresh_silver_first", run_job=silver_id))
     jobs[silver_id] = SimpleNamespace(tasks=[_task("silver_pipeline")])
 
-    problems = postflight.verify(_get(jobs), summary, expect_pause="UNPAUSED", live_install=True)
+    problems = postflight.verify(_get(jobs), summary, expect_pause="UNPAUSED", expected_recipients=(DEPLOYER,))
 
     expected = sorted([IDS["mip_scheduled_refresh"], *(IDS[key] for key in postflight.CHAIN_JOB_KEYS)])
     reached = sorted([*expected, silver_id])
@@ -266,7 +328,7 @@ def _replace(key: str, **fields: Any) -> Any:
     ],
 )
 def test_an_orchestrator_task_graph_that_is_not_the_bundle_chain_fails(change: Any, needle: str) -> None:
-    problems = postflight.verify(_get(_with_task(change)), SUMMARY, expect_pause="UNPAUSED", live_install=True)
+    problems = postflight.verify(_get(_with_task(change)), SUMMARY, expect_pause="UNPAUSED", expected_recipients=(DEPLOYER,))
 
     assert any(needle in problem for problem in problems), problems
 
@@ -293,7 +355,7 @@ def test_the_expected_task_graph_is_the_one_databricks_yml_declares() -> None:
 def test_the_success_line_names_what_was_checked(capsys: pytest.CaptureFixture[str]) -> None:
     client = SimpleNamespace(jobs=SimpleNamespace(get=_get(_jobs())))
 
-    assert postflight.main(["--expect", "UNPAUSED", "--live-install"], stdin=io.StringIO(json.dumps(SUMMARY)), client=client) == 0
+    assert postflight.main(["--expect", "UNPAUSED", PROFILE_FLAG], stdin=io.StringIO(json.dumps(SUMMARY)), client=client) == 0
 
     out = capsys.readouterr().out
     assert "tasks FRED -> gold -> lifecycle -> KPI plus the outcome gate after gold" in out
@@ -311,7 +373,7 @@ def test_the_cli_builds_the_deployer_client_never_a_bare_workspace_client(monkey
 
     monkeypatch.setattr(workspace_auth, "deployment_workspace_client", fake_deployment_client)
 
-    code = postflight.main(["--expect", "UNPAUSED", "--live-install"], stdin=io.StringIO(json.dumps(SUMMARY)))
+    code = postflight.main(["--expect", "UNPAUSED", PROFILE_FLAG], stdin=io.StringIO(json.dumps(SUMMARY)))
 
     assert code == 0 and built == ["deployer"]
 
@@ -325,7 +387,7 @@ def test_the_cli_builds_the_deployer_client_never_a_bare_workspace_client(monkey
     ],
 )
 def test_any_read_failure_fails_closed(stdin: str, client: Any, capsys: pytest.CaptureFixture[str]) -> None:
-    code = postflight.main(["--expect", "UNPAUSED", "--live-install"], stdin=io.StringIO(stdin), client=client)
+    code = postflight.main(["--expect", "UNPAUSED", PROFILE_FLAG], stdin=io.StringIO(stdin), client=client)
 
     assert code == 2
     assert "cannot verify the deployed job" in capsys.readouterr().err
@@ -339,8 +401,9 @@ def test_deploy_runs_the_postflight_after_the_kpi_snapshot_and_before_the_genie_
     block = text[kpi:rebind]
 
     assert kpi < call < rebind
-    assert '_SCHEDULED_REFRESH_ARGS=(--expect "${BUNDLE_VAR_scheduled_refresh_pause_status:-}")' in block
-    assert 'if [[ "$CLIENT_INSTALL_CLASS" == "demo" ]]; then\n  _SCHEDULED_REFRESH_ARGS+=(--live-install)' in block
-    assert 'run "$PYTHON" -m tools.databricks.verify_scheduled_refresh_state \\\n  "${_SCHEDULED_REFRESH_ARGS[@]}" <<< "$BUNDLE_SUMMARY_JSON"' in block, (
-        "through run (skipped in a dry-run), with the post-apply summary as a here-string"
-    )
+    assert "--live-install" not in block and "CLIENT_INSTALL_CLASS" not in block
+    assert (
+        'run "$PYTHON" -m tools.databricks.verify_scheduled_refresh_state \\\n'
+        '  --expect "${BUNDLE_VAR_scheduled_refresh_pause_status:-}" \\\n'
+        '  --recipients-from-profile <<< "$BUNDLE_SUMMARY_JSON"'
+    ) in block, "through run (skipped in a dry-run), with the post-apply summary as a here-string"

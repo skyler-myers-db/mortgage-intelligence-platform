@@ -119,6 +119,11 @@ def test_the_profile_sets_only_the_client_targets_own_variables(build: Any) -> N
         "MIP_CLIENT": profile.client,
         "MIP_INSTALL_CLASS": profile.install_class,
         "DATABRICKS_HOST": profile.databricks_host,
+        # The install policy's closed values (tools/clients/policy.py, M1-PR3).
+        "MIP_APP_ENV": profile.app_env,
+        "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS": "1" if profile.demo_first_party_feeds == "1" else "0",
+        "MIP_PRESENTER_MODE": "1" if profile.presenter_mode == "1" else "0",
+        "MIP_SCHEDULED_REFRESH": profile.scheduled_refresh,
         **{f"BUNDLE_VAR_{name}": value for name, value in target_vars.items()},
     }
 

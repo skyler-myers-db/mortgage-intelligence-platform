@@ -48,7 +48,6 @@ emit_app_deploy_payload() {
   local destination="$1" source_code_path="$2" git_sha="$3"
   MIP_GIT_SHA="$git_sha" "$PYTHON" -m tools.databricks.app_deploy_payload \
     --source-code-path "$source_code_path" \
-    --target "$TARGET" \
     --install-class "$CLIENT_INSTALL_CLASS" \
     --current-user-email "$APP_CURRENT_USER" \
     --app-env "$APP_RUNTIME_ENV" \
@@ -267,30 +266,26 @@ run_job_with_retry databricks bundle run mip_kpi_snapshot -t "$TARGET"
 # -----------------------------------------------------------------------------
 # A validate cannot prove what the Jobs API stored: read the applied
 # mip_scheduled_refresh back and fail when its pause status differs from the
-# preflight decision, its failure email disagrees with the install, its task
-# graph is not FRED -> gold -> lifecycle -> KPI plus the outcome gate after
-# gold, or its live run_job_task closure is not exactly those four jobs (never
-# the reviewed-function publisher). The summary goes in as a here-string
-# (no pipe to break); `run` skips it in a dry-run, whose offline summary has no
-# job ids.
+# preflight decision, its failure email is not exactly the client profile's
+# recipients (MIP_SCHEDULED_REFRESH_RECIPIENTS when the refresh is on, nobody
+# when it is off; compared, never printed), its task graph is not FRED -> gold
+# -> lifecycle -> KPI plus the outcome gate after gold, or its live
+# run_job_task closure is not exactly those four jobs (never the
+# reviewed-function publisher). The summary goes in as a here-string (no pipe
+# to break); `run` skips it in a dry-run, whose offline summary has no job ids.
 step "verify mip_scheduled_refresh — ${BUNDLE_VAR_scheduled_refresh_pause_status:-unset}, chain and failure email"
 # An unset pause status reaches the tool as "" and is refused (exit 2).
-_SCHEDULED_REFRESH_ARGS=(--expect "${BUNDLE_VAR_scheduled_refresh_pause_status:-}")
-if [[ "$CLIENT_INSTALL_CLASS" == "demo" ]]; then
-  _SCHEDULED_REFRESH_ARGS+=(--live-install)
-fi
 run "$PYTHON" -m tools.databricks.verify_scheduled_refresh_state \
-  "${_SCHEDULED_REFRESH_ARGS[@]}" <<< "$BUNDLE_SUMMARY_JSON"
-unset _SCHEDULED_REFRESH_ARGS
+  --expect "${BUNDLE_VAR_scheduled_refresh_pause_status:-}" \
+  --recipients-from-profile <<< "$BUNDLE_SUMMARY_JSON"
 
 # -----------------------------------------------------------------------------
 # Step 10: rebind the Genie space after gold/semantic assets exist
 # -----------------------------------------------------------------------------
 step "rebind Genie space — bind trusted assets from genie/mortgage_lead_intelligence_space.yml"
-run "$PYTHON" -m tools.databricks.provision_genie_space \
-  --space-name "$MIP_GENIE_SPACE_NAME" \
-  --catalog "$MIP_DEFAULT_CATALOG" \
-  --no-smoke-test
+# The same pin resolution as step 0a: the space step 0a pinned, never a title.
+run_with_proof_signing_authority "$PYTHON" -m tools.databricks.provision_genie_space \
+  "${GENIE_PIN_ARGS[@]}" --warehouse-id "$_GRANTS_WAREHOUSE_ID"
 if [[ "$DRY_RUN" -eq 0 ]]; then
   if [[ ! -s genie/space_id.txt ]]; then
     echo "${RED}[deploy] Genie rebind did not write genie/space_id.txt.${RST}" >&2

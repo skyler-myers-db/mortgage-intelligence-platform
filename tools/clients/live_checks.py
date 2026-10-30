@@ -14,11 +14,15 @@ binds the deployer's workspace auth and before any other Databricks call
    ``MIP_IDENTITY_IDS_JSON.deployer``.
 
 Steps 2-4 are three GETs (SCIM ``Me`` twice and the current metastore
-assignment); every refusal among them is reported. Exit 0 when all four hold,
-2 otherwise. A refusal names the check, never a value: these are identifying
-fields, and the line may reach a public CI log. Each id read from the
-workspace is registered as a runner mask the moment it is read
-(``redact.emit_mask``).
+assignment); every refusal among them is reported. Once all four hold, the
+read-only install checks run (tools/clients/install_checks.py, M1-PR3):
+adoption, the ``mip.install_key`` install marker, the Cotality share, the
+storage root and the account principal's roles. They never run against a
+workspace or as a principal that is not the profile's. Exit 0 when every
+check holds, 2 otherwise; a read error refuses, never reads as absent. A
+refusal names the check, never a value: these are identifying fields, and the
+line may reach a public CI log. Each id read from the workspace is registered
+as a runner mask the moment it is read (``redact.emit_mask``).
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from tools.clients import install_checks
 from tools.clients.environment import from_local, resolve
 from tools.clients.errors import ProfileRefusal
 from tools.clients.redact import emit_mask
@@ -93,13 +98,20 @@ def read_live_identity(client: Any) -> LiveIdentity:
     )
 
 
-def check(profile: ClientProfile, client: Any) -> list[str]:
-    """Every refusal, host first; no request is sent when the host differs."""
+def check(profile: ClientProfile, client: Any, account: Callable[[], Any] | None = None) -> list[str]:
+    """Every refusal, host first; no request is sent when the host differs.
+
+    The install checks run only once the workspace and the principal are
+    proven the profile's.
+    """
 
     lines = host_refusals(profile, str(getattr(client.config, "host", "") or ""))
     if lines:
         return lines
-    return identity_refusals(profile, read_live_identity(client))
+    lines = identity_refusals(profile, read_live_identity(client))
+    if lines:
+        return lines
+    return install_checks.check(profile, client, account)
 
 
 def _default_client() -> Any:
@@ -114,6 +126,7 @@ def main(
     environ: Mapping[str, str] | None = None,
     env_file: Path | None = None,
     client: Callable[[], Any] = _default_client,
+    account: Callable[[], Any] | None = None,
 ) -> int:
     if argv:
         print("usage: python -m tools.clients.live_checks (no arguments)", file=sys.stderr)
@@ -121,7 +134,7 @@ def main(
     try:
         raw = from_local(os.environ if environ is None else environ, env_file or REPO / ".env.local")
         profile = resolve(raw)
-        lines = check(profile, client())
+        lines = check(profile, client(), account)
     except ProfileRefusal as refusal:
         lines = list(refusal.lines)
     except Exception as exc:  # the class only: an SDK message can carry a host or an id
@@ -131,7 +144,10 @@ def main(
         for line in lines:
             print(f"  - {line}", file=sys.stderr)
         return 2
-    print("client live checks ok: host, workspace id, metastore id and deployer are the profile's")
+    print(
+        "client live checks ok: host, workspace id, metastore id and deployer are the profile's; "
+        "adoption, install marker, Cotality share, storage root and account principal hold"
+    )
     return 0
 
 

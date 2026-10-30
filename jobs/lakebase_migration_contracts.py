@@ -569,7 +569,9 @@ _AI_GATEWAY_VERIFIER_TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE")
 _VERIFIER_OPTIONAL_APP_ENVS = frozenset(
     {"local", "test", "testing", "pytest", "dev", "development", "sandbox"}
 )
-_VERIFIER_OPTIONAL_BUNDLE_TARGETS = frozenset({"", "local", "test", "ci", "dev"})
+# No bundle target name relaxes the verifier (M1-PR3): only an unset or
+# local/test target, and only alongside an optional APP_ENV above.
+_VERIFIER_OPTIONAL_BUNDLE_TARGETS = frozenset({"", "local", "test"})
 
 _TABLE_PRIVILEGE_NAMES = (
     "SELECT",
