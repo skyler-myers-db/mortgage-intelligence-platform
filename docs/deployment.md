@@ -1972,9 +1972,12 @@ refusal here is the refusal that step would raise with the App down:
   (direct grants, so each is named where it can be removed), and of `CAN_EDIT`
   or `CAN_MANAGE` on the governed Genie space (the signed record's, or without a
   record the one the Genie provisioner adopts by its exact title; an ambiguous
-  title refuses, as the provisioner would after step 0a), must be in
-  `MIP_UC_APPROVED_OWNER_PRINCIPALS`, be the deployer, or be in
-  `MIP_GENIE_MANAGER_PRINCIPALS` (compared case-insensitively). The workspace
+  title refuses, as the provisioner would after step 0a), must be approved,
+  compared case-insensitively. On the catalog and its schemas that means
+  `MIP_UC_APPROVED_OWNER_PRINCIPALS` or the deployer, the principals approved to
+  own those objects. On the Genie space it also means
+  `MIP_GENIE_MANAGER_PRINCIPALS`, which approves the space only: a Genie
+  manager with `MANAGE` on the catalog still refuses. The workspace
   `admins` group's Genie `CAN_MANAGE`, which every workspace object carries and
   no one can revoke, is the one grant accepted by name. Each other grantee
   refuses with the exact `REVOKE ... FROM` statement or space-ACL removal, or

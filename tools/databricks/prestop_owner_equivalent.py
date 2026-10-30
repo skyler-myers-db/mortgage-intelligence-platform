@@ -5,11 +5,13 @@ Ownership is not the only way to control a governed object. ``MANAGE`` and
 and its schemas, ``EXTERNAL_USE_SCHEMA`` lets it read their data outside Unity
 Catalog, and ``CAN_EDIT`` or ``CAN_MANAGE`` on the governed Genie space let it
 rewrite the instructions and SQL the App's answers come from (attack G12). Each
-grantee of one of those on the governed catalog, any of its schemas or the
+grantee of one of those must therefore be an approved principal, compared
+case-insensitively and judged per surface (``ApprovedGrantees``): on the
+governed catalog and any of its schemas, ``MIP_UC_APPROVED_OWNER_PRINCIPALS``
+plus the deployer, the principals approved to own those objects; on the
 governed Genie space (the signed record's, or the one the provisioner adopts by
-its exact title) must therefore be an approved principal:
-``MIP_UC_APPROVED_OWNER_PRINCIPALS`` plus the deployer plus
-``MIP_GENIE_MANAGER_PRINCIPALS``, compared case-insensitively. Anyone else
+its exact title), those plus ``MIP_GENIE_MANAGER_PRINCIPALS``. A Genie-manager
+approval approves the space only, never a Unity Catalog grant. Anyone else
 refuses before step 0a, and the remedy names the exact revoke or the exact
 approval to add.
 
@@ -125,18 +127,33 @@ class OwnerEquivalentRefusal(RuntimeError):
         self.grants = grants
 
 
+@dataclass(frozen=True)
+class ApprovedGrantees:
+    """Who may hold an owner-equivalent grant, per surface (casefolded names)."""
+
+    # The catalog and its schemas: MIP_UC_APPROVED_OWNER_PRINCIPALS ∪ the deployer.
+    uc: frozenset[str]
+    # The governed Genie space: the above ∪ MIP_GENIE_MANAGER_PRINCIPALS.
+    genie: frozenset[str]
+
+    def admits(self, grant: OwnerEquivalentGrant) -> bool:
+        names = self.genie if grant.surface == "genie" else self.uc
+        return grant.principal.casefold() in names
+
+
 def approved_principals(
     *, approved_owners: str, deployer: str, genie_managers: str
-) -> frozenset[str]:
-    """``MIP_UC_APPROVED_OWNER_PRINCIPALS`` ∪ the deployer ∪ ``MIP_GENIE_MANAGER_PRINCIPALS``."""
+) -> ApprovedGrantees:
+    """The approved owners and the deployer everywhere; the Genie managers on the space only."""
 
-    names = {
-        *parse_approved_owner_principals(approved_owners),
-        *parse_approved_owner_principals(genie_managers),
-    }
+    owners = parse_approved_owner_principals(approved_owners)
     if deployer.strip():
-        names.add(deployer.strip())
-    return frozenset(name.casefold() for name in names)
+        owners.add(deployer.strip())
+    uc = frozenset(name.casefold() for name in owners)
+    managers = frozenset(
+        name.casefold() for name in parse_approved_owner_principals(genie_managers)
+    )
+    return ApprovedGrantees(uc=uc, genie=uc | managers)
 
 
 def _uc_grants(workspace: Any, securable_type: str, full_name: str) -> list[OwnerEquivalentGrant]:
@@ -238,14 +255,14 @@ def _platform_manager(grant: OwnerEquivalentGrant) -> bool:
 
 
 def assert_owner_equivalent_grantees(
-    grants: Iterable[OwnerEquivalentGrant], *, approved: frozenset[str]
+    grants: Iterable[OwnerEquivalentGrant], *, approved: ApprovedGrantees
 ) -> None:
-    """Raise ``OwnerEquivalentRefusal`` naming every grantee outside ``approved``."""
+    """Raise ``OwnerEquivalentRefusal`` naming every grantee ``approved`` does not admit."""
 
     refused = tuple(
         grant
         for grant in grants
-        if grant.principal.casefold() not in approved and not _platform_manager(grant)
+        if not approved.admits(grant) and not _platform_manager(grant)
     )
     if refused:
         raise OwnerEquivalentRefusal(refused)
@@ -260,7 +277,7 @@ def owner_equivalent_refusals(
     catalog: str,
     genie_space_id: str,
     acls: list[GenieAcl] | None,
-    approved: frozenset[str],
+    approved: ApprovedGrantees,
 ) -> tuple[list[PrestopRefusal], list[str]]:
     """One refusal per unapproved grantee, or one for any read the probe could not finish."""
 

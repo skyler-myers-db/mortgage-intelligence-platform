@@ -20,6 +20,9 @@ from tools.databricks.prestop_refusals import OWNER_EQUIVALENT
 
 STEWARD = "steward@example.invalid"
 FOREIGN_SP = "foreign-app-sp-EXAMPLE"
+_NOBODY_BUT_THE_DEPLOYER = probe.approved_principals(
+    approved_owners="", deployer=DEPLOYER, genie_managers=""
+)
 
 
 def _refusals(
@@ -171,13 +174,17 @@ def test_a_permissions_read_error_on_the_governed_space_refuses() -> None:
         catalog="mip",
         genie_space_id=GOVERNED_SPACE,
         acls=[("space-other", {"access_control_list": []})],
-        approved=frozenset({DEPLOYER}),
+        approved=_NOBODY_BUT_THE_DEPLOYER,
     )
 
     assert len(refusals) == 1
     assert "is not exactly once among the admin-visible spaces" in refusals[0].message
     unread, _notes = probe.owner_equivalent_refusals(
-        workspace, catalog="mip", genie_space_id=GOVERNED_SPACE, acls=None, approved=frozenset()
+        workspace,
+        catalog="mip",
+        genie_space_id=GOVERNED_SPACE,
+        acls=None,
+        approved=_NOBODY_BUT_THE_DEPLOYER,
     )
     assert "the Genie space ACLs were not read" in unread[0].message
 
@@ -188,7 +195,7 @@ def test_an_absent_catalog_has_no_grantees_and_no_pinned_space_is_noted() -> Non
     workspace = FakeWorkspace(estate)
 
     refusals, notes = probe.owner_equivalent_refusals(
-        workspace, catalog="mip", genie_space_id="", acls=None, approved=frozenset()
+        workspace, catalog="mip", genie_space_id="", acls=None, approved=_NOBODY_BUT_THE_DEPLOYER
     )
 
     assert refusals == []
@@ -205,13 +212,32 @@ def test_the_probe_only_reads() -> None:
     assert all(call.startswith("GET ") for call in workspace.estate["calls"])
 
 
-def test_the_approval_union_is_owners_deployer_and_genie_managers() -> None:
+def test_the_approvals_are_the_owners_and_deployer_plus_genie_managers_on_the_space() -> None:
     approved = probe.approved_principals(
         approved_owners=" mip-data-owners , owner@example.invalid",
         deployer=" Deployer@Example.invalid ",
         genie_managers="genie-curators,",
     )
 
-    assert approved == frozenset(
-        {"mip-data-owners", "owner@example.invalid", "deployer@example.invalid", "genie-curators"}
+    owners = {"mip-data-owners", "owner@example.invalid", "deployer@example.invalid"}
+    assert approved.uc == frozenset(owners)
+    assert approved.genie == frozenset({*owners, "genie-curators"})
+
+
+def test_a_genie_manager_approval_never_approves_a_unity_catalog_grant() -> None:
+    # MIP_GENIE_MANAGER_PRINCIPALS approves CAN_EDIT or CAN_MANAGE on the
+    # governed space; MANAGE on the catalog is ownership-grade and needs the
+    # owner approval, as its remedy says.
+    estate = clean_estate()
+    estate["grants"]["catalog/mip"].append(
+        {"principal": "genie-curators", "privileges": ["ALL_PRIVILEGES", "MANAGE"]}
     )
+    estate["genie"][GOVERNED_SPACE].append(acl_entry("group_name", "genie-curators", "CAN_EDIT"))
+
+    refusals, _notes, _workspace = _refusals(estate, genie_managers="genie-curators")
+
+    assert len(refusals) == 1
+    assert "principal 'genie-curators' holds ALL_PRIVILEGES, MANAGE on catalog mip" in refusals[0]
+    assert "approve that exact principal in MIP_UC_APPROVED_OWNER_PRINCIPALS" in refusals[0]
+    approved, _notes, _workspace = _refusals(estate, approved_owners="genie-curators")
+    assert approved == [], "an approved owner may hold both"
