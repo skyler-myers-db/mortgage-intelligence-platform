@@ -112,7 +112,7 @@ resolve_client_profile() {
       MIP_CLIENT) CLIENT_KEY="$value" ;;
       MIP_INSTALL_CLASS) CLIENT_INSTALL_CLASS="$value" ;;
       DATABRICKS_HOST) CLIENT_HOST="$value" ;;
-      BUNDLE_VAR_client_key|BUNDLE_VAR_deployer_principal|BUNDLE_VAR_dashboard_parent_path|BUNDLE_VAR_lakebase_readable_secondaries)
+      BUNDLE_VAR_client_key|BUNDLE_VAR_deployer_principal|BUNDLE_VAR_jobs_principal|BUNDLE_VAR_dashboard_parent_path|BUNDLE_VAR_lakebase_readable_secondaries)
         printf -v "$name" '%s' "$value"
         export "${name?}"
         ;;
@@ -125,7 +125,7 @@ resolve_client_profile() {
   done < "$view"
   rm -f "$view"
   CLIENT_DEPLOYER="${BUNDLE_VAR_deployer_principal:-}"
-  if [[ -z "$CLIENT_KEY" || -z "$CLIENT_HOST" || -z "$CLIENT_DEPLOYER" || \
+  if [[ -z "$CLIENT_KEY" || -z "$CLIENT_HOST" || -z "$CLIENT_DEPLOYER" || -z "${BUNDLE_VAR_jobs_principal:-}" || \
         ( "$CLIENT_INSTALL_CLASS" != "demo" && "$CLIENT_INSTALL_CLASS" != "customer" ) ]]; then
     echo "${RED}[deploy] the client-target view is incomplete; refusing.${RST}" >&2
     exit 2

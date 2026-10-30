@@ -8,7 +8,8 @@
   the ``mip_client`` presets tag and the dashboard folder override, and no
   top-level ``run_as`` anywhere.
 * Every job and the pipeline name their own ``run_as``: the deployer service
-  principal, until M2-PR5.
+  principal for the deploy-time jobs, the jobs principal for the rest
+  (M2-PR5; tests/unit/test_jobs_identity_shape.py pins which is which).
 * The new variables carry the defaults the plan names, and the profile sets
   exactly the client target's own ones.
 """
@@ -30,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[2]
 BUNDLE_TEXT = (ROOT / "databricks.yml").read_text(encoding="utf-8")
 BUNDLE: dict[str, Any] = yaml.safe_load(BUNDLE_TEXT)
 DEPLOYER_RUN_AS = {"service_principal_name": "${var.deployer_principal}"}
+JOBS_RUN_AS = {"service_principal_name": "${var.jobs_principal}"}
 CLIENT_VARIABLES = ("client_key", "deployer_principal", "jobs_principal", "dashboard_parent_path", "lakebase_readable_secondaries")
 # A workspace host of any reviewed cloud, or the legacy per-workspace `dbc-` label.
 WORKSPACE_HOST = re.compile(
@@ -84,7 +86,7 @@ def test_every_job_and_the_pipeline_name_their_own_run_as(kind: str) -> None:
     resources = BUNDLE["resources"][kind]
     assert resources, kind
     for key, resource in resources.items():
-        assert resource.get("run_as") == DEPLOYER_RUN_AS, f"{kind}.{key}"
+        assert resource.get("run_as") in (DEPLOYER_RUN_AS, JOBS_RUN_AS), f"{kind}.{key}"
     # Nothing else in the bundle names a run_as: apps and dashboards run as the deployer.
     assert BUNDLE_TEXT.count("run_as:") == len(BUNDLE["resources"]["jobs"]) + len(BUNDLE["resources"]["pipelines"])
 
@@ -93,15 +95,19 @@ def test_the_ci_target_validates_with_placeholders_only() -> None:
     ci = BUNDLE["targets"]["ci"]
     assert "mode" not in ci
     assert ci["workspace"]["root_path"] == "/Workspace/ci-placeholder/.bundle/${bundle.name}/${bundle.target}"
-    assert ci["variables"] == {"client_key": "ci", "deployer_principal": "00000000-0000-0000-0000-000000000000"}
+    assert ci["variables"] == {
+        "client_key": "ci",
+        "deployer_principal": "00000000-0000-0000-0000-000000000000",
+        "jobs_principal": "00000000-0000-0000-0000-000000000001",
+    }
 
 
 def test_the_client_variables_carry_the_planned_defaults() -> None:
     variables = BUNDLE["variables"]
     for name in CLIENT_VARIABLES:
         assert variables[name]["description"].strip(), name
-    assert "default" not in variables["client_key"] and "default" not in variables["deployer_principal"]
-    assert variables["jobs_principal"]["default"] == "${var.deployer_principal}"
+    for name in ("client_key", "deployer_principal", "jobs_principal"):
+        assert "default" not in variables[name], f"{name} comes from the profile alone"
     assert variables["dashboard_parent_path"]["default"] == "${workspace.resource_path}"
     assert variables["lakebase_readable_secondaries"]["default"] is False
 
@@ -110,9 +116,11 @@ def test_the_client_variables_carry_the_planned_defaults() -> None:
 def test_the_profile_sets_only_the_client_targets_own_variables(build: Any) -> None:
     profile = resolve(RawProfile(values=build()))
     target_vars = views.client_target_vars(profile)
-    assert set(target_vars) <= set(CLIENT_VARIABLES) - {"jobs_principal"}, "jobs_principal stays the default"
+    assert set(target_vars) <= set(CLIENT_VARIABLES)
     assert target_vars["client_key"] == profile.client
     assert target_vars["deployer_principal"] == profile.identity_ids.deployer.lower()
+    assert target_vars["jobs_principal"] == profile.identity_ids.jobs.lower()
+    assert target_vars["jobs_principal"] != target_vars["deployer_principal"]
     assert set(views.bundle_vars(profile)) <= set(BUNDLE["variables"])
     view = views.client_target(profile)
     assert view == {
@@ -125,7 +133,7 @@ def test_the_profile_sets_only_the_client_targets_own_variables(build: Any) -> N
 
 def test_an_unset_dashboard_folder_or_secondaries_flag_keeps_the_bundle_default() -> None:
     profile = resolve(RawProfile(values=paychex_shaped_profile(MIP_LAKEBASE_READABLE_SECONDARIES=None)))
-    assert set(views.client_target_vars(profile)) == {"client_key", "deployer_principal"}
+    assert set(views.client_target_vars(profile)) == {"client_key", "deployer_principal", "jobs_principal"}
     pinned = resolve(RawProfile(values=demo_profile()))
     assert views.client_target_vars(pinned)["dashboard_parent_path"] == "/Workspace/Shared/dashboards-alpha"
     assert views.client_target_vars(pinned)["lakebase_readable_secondaries"] == "false"

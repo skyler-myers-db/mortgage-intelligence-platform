@@ -246,7 +246,8 @@ def test_the_client_validate_exports_todays_names_and_the_client_root(
     assert child["BUNDLE_VAR_client_key"] == CLIENT
     assert child["BUNDLE_VAR_deployer_principal"] == DEPLOYER
     assert child["BUNDLE_VAR_lakebase_readable_secondaries"] == "false"
-    assert "BUNDLE_VAR_dashboard_parent_path" not in child and "BUNDLE_VAR_jobs_principal" not in child
+    assert child["BUNDLE_VAR_jobs_principal"] == IDENTITY_IDS["jobs"]
+    assert "BUNDLE_VAR_dashboard_parent_path" not in child
 
 
 def test_an_ambient_client_variable_never_reaches_the_cli(
@@ -268,12 +269,13 @@ def test_an_ambient_client_variable_never_reaches_the_cli(
         return type("Result", (), {"returncode": 0})()
 
     monkeypatch.setattr(bundle_env.subprocess, "run", fake_cli)
-    for target, expected in (("client", CLIENT), ("ci", None)):
+    for target, expected, jobs in (("client", CLIENT, IDENTITY_IDS["jobs"]), ("ci", None, None)):
         seen.clear()
         monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "validate", "-t", target])
         assert bundle_env.main() == 0, capsys.readouterr().err
         assert seen.get("BUNDLE_VAR_client_key") == expected, target
-        assert "BUNDLE_VAR_jobs_principal" not in seen, target
+        # The profile's jobs identity, never the ambient one (ci keeps its placeholder).
+        assert seen.get("BUNDLE_VAR_jobs_principal") == jobs, target
 
 
 @pytest.mark.parametrize("alias", ["MIP_AI_GATEWAY_VERIFIER_CLIENT_ID", "DATABRICKS_VERIFIER_CLIENT_ID"])

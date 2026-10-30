@@ -129,18 +129,23 @@ def _lender_env(profile: ClientProfile) -> dict[str, str]:
 def client_target_vars(profile: ClientProfile) -> dict[str, str]:
     """The ``client`` target's own variables: its root, its run_as and its overrides.
 
-    The deployer's application id is lower-cased: it names the service
-    principal's home folder and its ``service_principal_name``, which the
-    platform spells in lower case. ``jobs_principal`` is left to its bundle
-    default (the deployer) until M2-PR5. An unset dashboard folder keeps its
-    bundle default. An unset readable-secondaries flag keeps the retired
-    targets' posture: on for a customer install (the prod target attached
-    readable secondaries), the bundle default (off) for a demo one.
+    The deployer's and the jobs identity's application ids are lower-cased:
+    they name the deployer's home folder and each ``service_principal_name``,
+    which the platform spells in lower case. The jobs identity (M2-PR5) is the
+    run_as of the App-triggerable and refresh jobs and the pipeline. An unset
+    dashboard folder keeps its bundle default. An unset readable-secondaries
+    flag keeps the retired targets' posture: on for a customer install (the
+    prod target attached readable secondaries), the bundle default (off) for a
+    demo one.
     """
 
+    # Bound to a name first: tests/unit/test_bootstrap_account_safety.py reads
+    # ``<x>.jobs.<method>(...)`` in tools/clients as a Jobs API call.
+    jobs_application_id = profile.identity_ids.jobs
     variables = {
         "client_key": profile.client,
         "deployer_principal": profile.identity_ids.deployer.lower(),
+        "jobs_principal": jobs_application_id.lower(),
     }
     if profile.dashboard_parent_path is not None:
         variables["dashboard_parent_path"] = profile.dashboard_parent_path

@@ -16,7 +16,9 @@ is refused.
 
 Mapping, ``-t client`` (the profile -> BUNDLE_VAR_*, tools/clients/profile.py):
   MIP_CLIENT              -> BUNDLE_VAR_client_key (the root leaf, the mip_client tag)
-  MIP_IDENTITY_IDS_JSON.deployer -> BUNDLE_VAR_deployer_principal (root owner, run_as)
+  MIP_IDENTITY_IDS_JSON.deployer -> BUNDLE_VAR_deployer_principal (root owner, deploy-time run_as)
+  MIP_IDENTITY_IDS_JSON.jobs -> BUNDLE_VAR_jobs_principal (run_as of the App-triggerable
+                             and refresh jobs and the pipeline, M2-PR5)
   MIP_DASHBOARD_PARENT_PATH -> BUNDLE_VAR_dashboard_parent_path (when set)
   MIP_LAKEBASE_READABLE_SECONDARIES -> BUNDLE_VAR_lakebase_readable_secondaries (when set)
   MIP_DEFAULT_CATALOG     -> BUNDLE_VAR_uc_catalog
