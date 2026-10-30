@@ -13,9 +13,12 @@ call: that workflow is parked until a client environment is selected
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
+from backend.schemas.lender_identity_record import lender_identity_digest
+from tests.fixtures.client_profiles import LENDER_IDENTITY
 from tests.fixtures.deploy_sandbox import ANSI, dry_run, planned_commands, sandbox
 
 TARGET = "dev"
@@ -69,3 +72,21 @@ def test_the_parked_deploy_dev_workflow_is_refused_before_any_databricks_call(tm
     assert "deploy-dev.yml is parked until a client environment is selected (M1-PR7)" in result.stderr
     assert not log.exists() or log.read_text(encoding="utf-8") == "", "refused before any Databricks call"
     assert "step 1" not in result.stdout
+
+
+def test_a_pinned_lender_records_identifying_values_never_reach_the_transcript(tmp_path: Path) -> None:
+    # Review of #298: run echoes every argument, and GitHub masks only a
+    # whole secret, never the legal name or NMLS id taken from it.
+    record = {**LENDER_IDENTITY, "legal_name": "Zyrplax Harbor Lending", "nmls_id": "7788991", "tenant_id": "zyrplax"}
+    text = json.dumps(record)
+    checkout, env, _log = sandbox(tmp_path)
+    env.update({"MIP_LENDER_IDENTITY_JSON": text, "MIP_LENDER_IDENTITY_SHA256": lender_identity_digest(text)})
+
+    result = dry_run(checkout, env, TARGET)
+
+    assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-4000:]
+    transcript = ANSI.sub("", result.stdout + result.stderr)
+    assert f"[deploy] lender identity: digest-pinned record {lender_identity_digest(text)[:12]}" in transcript
+    for value in (record["legal_name"], "Zyrplax", record["nmls_id"]):
+        assert value not in transcript, value
+    assert "tools.branding.lender_mark stage --identity-env" in transcript, "the stage step ran"

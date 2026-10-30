@@ -92,6 +92,10 @@ def test_stage_runs_inside_step_1_right_before_the_build_with_no_new_step() -> N
     stage_call = deploy[stage : deploy.index("--out frontend/.branding-stage", stage)]
     assert "--file-env MIP_LENDER_MARK_FILE" in stage_call
     assert "$MIP_LENDER_MARK_FILE" not in stage_call
+    # Nor the lender, identifying for a pinned record (review of #298): the
+    # tool reads the name and NMLS id the preflight exported.
+    assert "--identity-env" in stage_call
+    assert not re.search(r"--lender\b|--nmls\b|\$\{?MIP_LENDER_N", stage_call), stage_call
 
 
 def test_only_the_hash_prefix_is_ever_logged() -> None:
