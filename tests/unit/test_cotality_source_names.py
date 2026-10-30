@@ -109,5 +109,30 @@ def test_a_name_outside_the_identifier_shape_is_refused_without_echoing_it(
 
 
 def test_the_names_share_the_client_profile_shapes() -> None:
+    """The profile holds the setting; only a resolved source holds ``""``."""
+
     assert source_names.UC_IDENTIFIER.pattern == shapes.UC_IDENTIFIER.pattern
-    assert source_names.TABLE_PREFIX.pattern == shapes.TABLE_PREFIX.pattern
+    assert source_names.TABLE_PREFIX_SETTING.pattern == shapes.TABLE_PREFIX.pattern
+    assert source_names.TABLE_PREFIX.fullmatch("") is not None
+    assert source_names.TABLE_PREFIX_SETTING.fullmatch("") is None
+
+
+def test_the_no_prefix_spelling_resolves_to_an_empty_prefix_and_back() -> None:
+    """Blank means unset (canonical) in every layer, so no prefix has its own spelling."""
+
+    none = source_names.from_env({"MIP_COTALITY_SOURCE_TABLE_PREFIX": " - "})
+
+    assert source_names.NO_TABLE_PREFIX == "-"
+    assert none == CotalitySource(CANONICAL.catalog, CANONICAL.schema, "")
+    assert none.table("mls_listing_v1") == "cotality_mortgage_data.corelogic.mls_listing_v1"
+    assert none.table_prefix_setting == "-"
+    assert ACME.table_prefix_setting == "acme_" and CANONICAL.table_prefix_setting == "entrada_eval_"
+    assert source_names.from_env({"MIP_COTALITY_SOURCE_TABLE_PREFIX": ""}) == CANONICAL
+    for setting in ("-", "acme_", "entrada_eval_"):
+        assert source_names.resolve(table_prefix=setting).table_prefix_setting == setting
+
+
+@pytest.mark.parametrize("value", ["--", "-acme_", "acme-", "_-"])
+def test_the_no_prefix_spelling_is_exact(value: str) -> None:
+    with pytest.raises(ValueError, match="Cotality source table_prefix must be"):
+        source_names.resolve(table_prefix=value)

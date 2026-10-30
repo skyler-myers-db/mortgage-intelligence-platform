@@ -30,7 +30,9 @@ SECRET_SCOPE = re.compile(r"[A-Za-z0-9._-]{1,128}")
 TITLE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9 &'._()-]{0,98}[A-Za-z0-9)])?")
 GROUP_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9 _.-]{0,254}[A-Za-z0-9])?")
 SHARE_OBJECT_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9_. -]{0,254}[A-Za-z0-9])?")
-TABLE_PREFIX = re.compile(r"[a-z0-9_]{0,64}")
+# A Cotality source table prefix as configured: ``-`` spells "no prefix",
+# since a blank value means unset (backend/config/source_names.py).
+TABLE_PREFIX = re.compile(r"[a-z0-9_]{1,64}|-")
 WORKSPACE_PATH = re.compile(r"/Workspace(?:/[^/\n\r\0<>]+)+")
 STORAGE_ROOT = re.compile(r"(?P<scheme>s3|abfss|gs)://[^\s'\"<>]+")
 PRINCIPAL = re.compile(r"[^\s,<>](?:[^,\n\r<>]{0,253}[^\s,<>])?")

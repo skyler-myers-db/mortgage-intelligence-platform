@@ -85,6 +85,19 @@ def test_bundle_env_renders_and_exports_one_configured_source(
     assert [call["cotality"] for call in child["renders"]] == [ACME]
 
 
+def test_bundle_env_hands_the_pipeline_the_no_prefix_spelling(
+    child: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The render gets ``""``; the bundle variable keeps ``-``, which the pipeline reads."""
+
+    monkeypatch.setenv("MIP_COTALITY_SOURCE_TABLE_PREFIX", "-")
+
+    assert bundle_env.main() == 0
+
+    assert _variables(child["env"]) == (CANONICAL.catalog, CANONICAL.schema, "-")
+    assert [call["cotality"].table_prefix for call in child["renders"]] == [""]
+
+
 def test_a_shell_source_name_beats_dotenv(child: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     child["env_local"].write_text(
         "MIP_COTALITY_SOURCE_CATALOG=dotenv_src\nMIP_COTALITY_SOURCE_SCHEMA=dotenv_schema\n",
@@ -118,7 +131,7 @@ def test_deploy_resolves_validates_and_exports_the_source_before_any_render() ->
     for name in source_names.ENV_NAMES:
         assert f'{name}="$(deployment_control_value {name})"' in block
     assert "export MIP_COTALITY_SOURCE_CATALOG MIP_COTALITY_SOURCE_SCHEMA MIP_COTALITY_SOURCE_TABLE_PREFIX" in block
-    assert "^[a-z_][a-z0-9_]{0,254}$" in block and "^[a-z0-9_]{1,64}$" in block
+    assert "^[a-z_][a-z0-9_]{0,254}$" in block and "^([a-z0-9_]{1,64}|-)$" in block
     assert "exit 2" in block
     # Resolved before the first SQL render and before any bundle call.
     assert text.index("# >>> cotality source names >>>") < text.index('run "$PYTHON" tools/render_sql.py')
@@ -157,7 +170,7 @@ def _run_block(bash: str, env: dict[str, str]) -> subprocess.CompletedProcess[st
 @pytest.mark.parametrize("bash", _bashes())
 @pytest.mark.parametrize("env_name", source_names.ENV_NAMES)
 @pytest.mark.parametrize(
-    "value", ["<cotality-source-catalog>", "00000000PLACEHOLDER", "Acme", "acme.src", "Acme;x", "acme src"]
+    "value", ["<cotality-source-catalog>", "00000000PLACEHOLDER", "Acme", "acme.src", "Acme;x", "acme src", "--"]
 )
 def test_the_preflight_block_exits_2_on_a_template_or_non_identifier(
     bash: str, env_name: str, value: str
@@ -180,3 +193,13 @@ def test_the_preflight_block_exports_set_names_and_leaves_unset_ones_empty(bash:
     assert unset.stdout.splitlines() == [f"{name}=" for name in source_names.ENV_NAMES]
     assert configured.returncode == 0, configured.stderr
     assert configured.stdout.splitlines() == [f"{name}={value}" for name, value in ACME_ENV.items()]
+
+
+@pytest.mark.parametrize("bash", _bashes())
+def test_the_preflight_block_accepts_the_no_prefix_spelling_for_the_prefix_only(bash: str) -> None:
+    prefix = _run_block(bash, {"MIP_COTALITY_SOURCE_TABLE_PREFIX": "-"})
+
+    assert prefix.returncode == 0, prefix.stderr
+    assert "MIP_COTALITY_SOURCE_TABLE_PREFIX=-" in prefix.stdout.splitlines()
+    for name in ("MIP_COTALITY_SOURCE_CATALOG", "MIP_COTALITY_SOURCE_SCHEMA"):
+        assert _run_block(bash, {name: "-"}).returncode == 2, name

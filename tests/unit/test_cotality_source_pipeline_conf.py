@@ -22,6 +22,7 @@ from tests.fixtures.client_profiles import demo_profile
 from tests.fixtures.lakeflow_pipeline_stub import PIPELINE, REPO, exec_pipeline
 from tools.clients import profile as views
 from tools.clients.environment import RawProfile, resolve
+from tools.clients.errors import ProfileRefusal
 from tools.clients.schema import ClientProfile
 
 KEYS = (
@@ -42,7 +43,9 @@ SHARES = {
 
 
 def _conf(source: CotalitySource) -> dict[str, str]:
-    return dict(zip(KEYS, (source.catalog, source.schema, source.table_prefix), strict=True))
+    """The configuration the bundle hands the pipeline: the prefix as a setting."""
+
+    return dict(zip(KEYS, (source.catalog, source.schema, source.table_prefix_setting), strict=True))
 
 
 def _pipeline_resource() -> dict:
@@ -73,7 +76,15 @@ def test_each_missing_key_raises_by_name(missing: str) -> None:
 
 @pytest.mark.parametrize(
     ("key", "value"),
-    [(KEYS[0], "Acme_Src"), (KEYS[0], ""), (KEYS[1], "feed-x"), (KEYS[2], "acme.")],
+    [
+        (KEYS[0], "Acme_Src"),
+        (KEYS[0], ""),
+        (KEYS[1], "feed-x"),
+        (KEYS[2], "acme."),
+        # Blank is not "no prefix": every layer reads it as unset.
+        (KEYS[2], ""),
+        (KEYS[2], "--"),
+    ],
 )
 def test_an_invalid_value_raises_without_reading_a_table(key: str, value: str) -> None:
     conf = {**_conf(ACME), key: value}
@@ -161,8 +172,9 @@ def test_the_pipeline_shapes_are_the_source_names_shapes() -> None:
     assert run.namespace["_SOURCE_NAME_SHAPES"] == (
         source_names.UC_IDENTIFIER.pattern,
         source_names.UC_IDENTIFIER.pattern,
-        source_names.TABLE_PREFIX.pattern,
+        source_names.TABLE_PREFIX_SETTING.pattern,
     )
+    assert run.namespace["_NO_TABLE_PREFIX"] == source_names.NO_TABLE_PREFIX
 
 
 def test_the_bundle_variable_defaults_are_the_canonical_names() -> None:
@@ -203,3 +215,39 @@ def test_an_unset_profile_source_name_keeps_the_canonical_variable_default() -> 
     variables = views.bundle_vars(_profile(values))
 
     assert not {name for name in variables if name.startswith("cotality_source_")}
+
+
+# --- a share with no table prefix, from the profile to every reader ----------------
+
+NO_PREFIX = CotalitySource("cotality_prod", "mortgage", "")
+
+
+def test_a_no_prefix_profile_reaches_the_pipeline_and_the_render_as_one_source() -> None:
+    """The profile's bundle view and its deploy controls name the same tables."""
+
+    profile = _profile(
+        demo_profile(
+            MIP_COTALITY_SOURCE_CATALOG="cotality_prod",
+            MIP_COTALITY_SOURCE_SCHEMA="mortgage",
+            MIP_COTALITY_SOURCE_TABLE_PREFIX="-",
+        )
+    )
+    variables = views.bundle_vars(profile)
+    run = exec_pipeline(
+        {f"mip.{name}": value for name, value in variables.items() if name.startswith("cotality_source_")}
+    )
+    rendered = source_names.from_env(views.deploy_controls(profile))
+
+    assert variables["cotality_source_table_prefix"] == "-"
+    assert rendered == NO_PREFIX
+    assert {name: run.namespace[name] for name in SHARES} == {
+        name: NO_PREFIX.table(stem) for name, stem in SHARES.items()
+    }
+    assert run.namespace["_SHARE_MLS_LISTING"] == "cotality_prod.mortgage.mls_listing_v1"
+
+
+def test_a_blank_profile_table_prefix_is_refused_rather_than_split() -> None:
+    """``""`` once reached the bundle as no prefix but the render as canonical."""
+
+    with pytest.raises(ProfileRefusal, match="MIP_COTALITY_SOURCE_TABLE_PREFIX"):
+        _profile(demo_profile(MIP_COTALITY_SOURCE_TABLE_PREFIX=""))

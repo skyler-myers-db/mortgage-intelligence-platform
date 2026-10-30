@@ -23,8 +23,8 @@ Mapping (env -> BUNDLE_VAR_*):
   MIP_RUNTIME_SECRET_SCOPE -> BUNDLE_VAR_runtime_secret_scope
   MIP_COTALITY_SOURCE_CATALOG / _SCHEMA / _TABLE_PREFIX
                           -> BUNDLE_VAR_cotality_source_catalog / _schema /
-                             _table_prefix (canonical when unset; the same
-                             names render sql/_rendered)
+                             _table_prefix (canonical when unset; '-' is no
+                             table prefix; the same names render sql/_rendered)
   (dev live install only) -> scheduled_refresh_failure_recipients, written to
                              .databricks/bundle/<target>/variable-overrides.json
                              (tools/databricks/scheduled_refresh_posture.py)
@@ -585,7 +585,9 @@ def main() -> int:
         return 2
     env["BUNDLE_VAR_cotality_source_catalog"] = cotality.catalog
     env["BUNDLE_VAR_cotality_source_schema"] = cotality.schema
-    env["BUNDLE_VAR_cotality_source_table_prefix"] = cotality.table_prefix
+    # The setting's spelling: "-" for a share with no table prefix, since an
+    # empty bundle variable would not read as one.
+    env["BUNDLE_VAR_cotality_source_table_prefix"] = cotality.table_prefix_setting
     try:
         demo_first_party_enabled = render_sql._parse_bool(
             _demo_first_party_flag_for_target(env, target=target),

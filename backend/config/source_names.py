@@ -11,6 +11,14 @@ before any render, rather than read as unset: a copied template line is a
 source someone meant to configure, so every caller, the deploy script or not,
 fails closed on it.
 
+A share whose tables carry no prefix sets ``MIP_COTALITY_SOURCE_TABLE_PREFIX``
+to ``-`` (``NO_TABLE_PREFIX``). An empty value cannot say so: blank means unset
+in ``.env.local``, in GitHub variables and in ``deployment_control_value``, and
+unset means the canonical prefix. So every layer that carries the setting
+(the env, the client profile, the ``cotality_source_table_prefix`` bundle
+variable and the pipeline configuration) spells no prefix as ``-``, and only
+a resolved ``CotalitySource`` holds ``""``.
+
 Who reads the names:
 
 * ``tools/render_sql.py`` rewrites the canonical qualified forms in the SQL
@@ -54,10 +62,16 @@ TABLE_STEMS: tuple[str, ...] = (
     "owner_transfer_domain_v1",
 )
 
+# The configured spelling of "the share's tables carry no prefix". It is not
+# a prefix character, so no real prefix can mean it.
+NO_TABLE_PREFIX = "-"
+
 # The client profile's shapes for the same fields (tools/clients/shapes.py
-# UC_IDENTIFIER and TABLE_PREFIX; a test pins them equal).
+# UC_IDENTIFIER and TABLE_PREFIX; a test pins them equal). TABLE_PREFIX is a
+# resolved prefix, "" for none; TABLE_PREFIX_SETTING is how one is configured.
 UC_IDENTIFIER = re.compile(r"[a-z_][a-z0-9_]{0,254}")
 TABLE_PREFIX = re.compile(r"[a-z0-9_]{0,64}")
+TABLE_PREFIX_SETTING = re.compile(r"[a-z0-9_]{1,64}|-")
 _LEGACY_PLACEHOLDER = "00000000PLACEHOLDER"
 # A template value: tools/clients/shapes.py's placeholder rule (a test pins it).
 _TEMPLATE = re.compile(r"<[^<>\n]+>")
@@ -96,6 +110,12 @@ class CotalitySource:
 
         return f"{self.catalog}.{self.schema}.{self.table_name(stem)}"
 
+    @property
+    def table_prefix_setting(self) -> str:
+        """The prefix as configuration spells it: ``NO_TABLE_PREFIX`` for none."""
+
+        return self.table_prefix or NO_TABLE_PREFIX
+
     def describe(self) -> str:
         """``catalog.schema.prefix*``: the source in one public line."""
 
@@ -133,12 +153,18 @@ def resolve(
     schema: object = None,
     table_prefix: object = None,
 ) -> CotalitySource:
-    """The source with each set override applied over the canonical name."""
+    """The source with each set override applied over the canonical name.
 
+    ``table_prefix`` is the setting: ``NO_TABLE_PREFIX`` resolves to ``""``.
+    """
+
+    prefix = _configured(TABLE_PREFIX_ENV, table_prefix)
     return CotalitySource(
         catalog=_configured(CATALOG_ENV, catalog) or CANONICAL.catalog,
         schema=_configured(SCHEMA_ENV, schema) or CANONICAL.schema,
-        table_prefix=_configured(TABLE_PREFIX_ENV, table_prefix) or CANONICAL.table_prefix,
+        table_prefix=(
+            CANONICAL.table_prefix if prefix is None else "" if prefix == NO_TABLE_PREFIX else prefix
+        ),
     )
 
 

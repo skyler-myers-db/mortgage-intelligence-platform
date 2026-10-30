@@ -1458,7 +1458,7 @@ variables:
     description: Schema of the Cotality source share that holds its tables
     default: corelogic
   cotality_source_table_prefix:
-    description: Name prefix of the Cotality source share's tables
+    description: Name prefix of the Cotality source share's tables ('-' for none)
     default: entrada_eval_
   runtime_secret_scope:
     description: >-

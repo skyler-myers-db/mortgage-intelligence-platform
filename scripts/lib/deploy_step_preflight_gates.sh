@@ -515,14 +515,15 @@ fi
 # then .env.local) and exported, so the SQL renderer, the lineage-view helper,
 # the Genie spec render and bundle_env (which sets the cotality_source_* bundle
 # variables the feature pipeline's configuration reads) all see the same
-# names. A render that would leave a canonical token refuses on its own.
+# names. A render that would leave a canonical token refuses on its own. A
+# share with no table prefix spells it "-": a blank value means unset.
 MIP_COTALITY_SOURCE_CATALOG="$(deployment_control_value MIP_COTALITY_SOURCE_CATALOG)"
 MIP_COTALITY_SOURCE_SCHEMA="$(deployment_control_value MIP_COTALITY_SOURCE_SCHEMA)"
 MIP_COTALITY_SOURCE_TABLE_PREFIX="$(deployment_control_value MIP_COTALITY_SOURCE_TABLE_PREFIX)"
 if [[ -n "$MIP_COTALITY_SOURCE_CATALOG" && ! "$MIP_COTALITY_SOURCE_CATALOG" =~ ^[a-z_][a-z0-9_]{0,254}$ ]] || \
    [[ -n "$MIP_COTALITY_SOURCE_SCHEMA" && ! "$MIP_COTALITY_SOURCE_SCHEMA" =~ ^[a-z_][a-z0-9_]{0,254}$ ]] || \
-   [[ -n "$MIP_COTALITY_SOURCE_TABLE_PREFIX" && ! "$MIP_COTALITY_SOURCE_TABLE_PREFIX" =~ ^[a-z0-9_]{1,64}$ ]]; then
-  echo "${RED}[deploy] MIP_COTALITY_SOURCE_CATALOG, _SCHEMA and _TABLE_PREFIX must be lowercase unquoted identifiers.${RST}" >&2
+   [[ -n "$MIP_COTALITY_SOURCE_TABLE_PREFIX" && ! "$MIP_COTALITY_SOURCE_TABLE_PREFIX" =~ ^([a-z0-9_]{1,64}|-)$ ]]; then
+  echo "${RED}[deploy] MIP_COTALITY_SOURCE_CATALOG, _SCHEMA and _TABLE_PREFIX must be lowercase unquoted identifiers (_TABLE_PREFIX '-' for none).${RST}" >&2
   exit 2
 fi
 export MIP_COTALITY_SOURCE_CATALOG MIP_COTALITY_SOURCE_SCHEMA MIP_COTALITY_SOURCE_TABLE_PREFIX

@@ -122,7 +122,10 @@ _SOURCE_CONF_KEYS: tuple[str, ...] = (
     "mip.cotality_source_table_prefix",
 )
 _UC_NAME = r"[a-z_][a-z0-9_]{0,254}"
-_SOURCE_NAME_SHAPES: tuple[str, ...] = (_UC_NAME, _UC_NAME, r"[a-z0-9_]{0,64}")
+# The table prefix as configured: "-" spells "no prefix", because a blank
+# value means unset in every layer that carries the setting.
+_NO_TABLE_PREFIX = "-"
+_SOURCE_NAME_SHAPES: tuple[str, ...] = (_UC_NAME, _UC_NAME, r"[a-z0-9_]{1,64}|-")
 
 
 def _cotality_source_from_conf(conf) -> tuple[str, str, str]:
@@ -140,7 +143,7 @@ def _cotality_source_from_conf(conf) -> tuple[str, str, str]:
             "the bundle variables; there is no default source."
         )
     catalog, schema, table_prefix = values
-    return catalog, schema, table_prefix
+    return catalog, schema, "" if table_prefix == _NO_TABLE_PREFIX else table_prefix
 
 
 _SOURCE_CATALOG, _SOURCE_SCHEMA, _SOURCE_TABLE_PREFIX = _cotality_source_from_conf(  # pragma: no cover
