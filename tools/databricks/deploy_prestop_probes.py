@@ -43,11 +43,31 @@ still read each target's own ``/Me`` projection, which can also carry
 account-level nested groups workspace SCIM does not show, so this probe is an
 early refusal, not a replacement for those audits. It changes no exemption
 rule and performs only GET/list calls.
+
+Five more probes (M0-PR5) each call the very assertion the post-stop step they
+protect calls, so a refusal here is the refusal that step would raise with the
+App down:
+
+4. **Rollback record** (``prestop_rollback_record``): signed, absent, drifted
+   or tampered, and on the unsigned rebase path the bootstrap gate's absence
+   proof, moved here from step 0a.
+5. **Owner policy** (``prestop_owner_policy``): ``ApprovedOwnerPolicy`` on the
+   metastore, the governed catalog, its audit schema and the treatment table.
+6. **Owner-equivalent grantees** (``prestop_owner_equivalent``, attack G12).
+7. **Serving endpoints** (``prestop_serving_endpoints``): App access only on
+   record-pinned endpoints.
+8. **Genie budget** (``prestop_genie_budget``): one real turn on the
+   record-pinned space, the only call that is not a GET or a list.
+
+Every refusal carries a reviewed code (``prestop_refusals``). A probe whose
+reads fail refuses (``probe_error``) instead of passing; ``main`` exits 2 on
+any refusal, before the signed lease and any App stop.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from collections.abc import Callable, Mapping
@@ -57,12 +77,23 @@ from typing import Any
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
 from tools.databricks.agent_runtime_access import _field, _text
 from tools.databricks.prestop_genie_grants import (
+    GenieAcl,
     genie_acls,
     genie_group_grants,
     genie_group_remedy,
     shared_folder_names,
     verifier_genie_grants,
     verifier_genie_remedy,
+)
+from tools.databricks.prestop_probe_suite import ProbeSuiteConfig, suite_refusals
+from tools.databricks.prestop_refusals import (
+    AUDITED_PRINCIPAL_UNRESOLVED,
+    GENIE_GROUP_GRANT,
+    PROBE_ERROR,
+    RESERVED_REPLACEMENT_NAME,
+    SUPERVISOR_RETIREMENT,
+    VERIFIER_GENIE_GRANT,
+    PrestopRefusal,
 )
 from tools.databricks.supervisor_agent_contract import (
     RUNTIME_REPLACEMENT_PREFIX,
@@ -76,6 +107,9 @@ from tools.databricks.supervisor_retirement_ack import (
 )
 
 SYSTEM_USERS_GROUP = "users"
+APPROVED_OWNERS_ENV = "MIP_UC_APPROVED_OWNER_PRINCIPALS"
+GENIE_MANAGERS_ENV = "MIP_GENIE_MANAGER_PRINCIPALS"
+GENIE_PIN_ACK_ENV = "MIP_GENIE_PIN_ACK"
 # The identity pin_journal signs for a replaced Supervisor; a gap fails after step 0a.
 PINNED_SUPERVISOR_FIELDS = ("supervisor_agent_id", "endpoint_name", "creator", "create_time")
 _REPLACEMENT_HASH = r"[0-9a-f]{12}"
@@ -199,6 +233,8 @@ class AuditedPrincipals:
     resolved: dict[str, str]
     unresolved: dict[str, str]
     notes: tuple[str, ...]
+    app_client_id: str = ""
+    app_scim_id: str = ""
 
 
 def _scim_id(workspace: Any, *, label: str, application_id: str) -> str:
@@ -258,6 +294,7 @@ def audited_principals(
     notes: list[str] = []
     resolved: dict[str, str] = {}
     unresolved: dict[str, str] = {}
+    app_client_id = app_scim_id = ""
     try:
         app = workspace.apps.get(app_name)
     except (NotFound, ResourceDoesNotExist):
@@ -282,10 +319,36 @@ def audited_principals(
             resolved[key] = _scim_id(workspace, label=label, application_id=application_id)
         except PrincipalResolutionError as exc:
             unresolved[key] = str(exc)
-    return AuditedPrincipals(resolved=resolved, unresolved=unresolved, notes=tuple(notes))
+    complete = bool(app_client_id and app_scim_id)
+    return AuditedPrincipals(
+        resolved=resolved,
+        unresolved=unresolved,
+        notes=tuple(notes),
+        app_client_id=app_client_id if complete else "",
+        app_scim_id=app_scim_id if complete else "",
+    )
 
 
-def run_probes(
+@dataclass(frozen=True)
+class BaseVerdict:
+    """The Supervisor and Genie-grant clauses' refusals, plus what they read."""
+
+    refusals: list[PrestopRefusal]
+    notes: list[str]
+    agents: list[dict[str, Any]]
+    acls: list[GenieAcl]
+    principals: AuditedPrincipals
+    effective: dict[str, frozenset[str]]
+
+    @property
+    def app_groups(self) -> frozenset[str]:
+        """The App SP's workspace-visible groups plus ``users`` (just ``users`` if absent)."""
+
+        label = f"App SP {self.principals.app_client_id}"
+        return self.effective.get(label, frozenset({SYSTEM_USERS_GROUP}))
+
+
+def base_verdict(
     workspace: Any,
     *,
     app_name: str,
@@ -295,18 +358,20 @@ def run_probes(
     acknowledgement: str,
     list_agents: Callable[[], list[dict[str, Any]]],
     resolve_groups: Callable[..., Mapping[str, str]],
-) -> tuple[list[str], list[str]]:
-    """Run every probe and return every refusal at once, plus informational notes."""
+) -> BaseVerdict:
+    """Run the Supervisor and Genie-grant clauses; every refusal carries its code."""
 
     agents = list_agents()
-    refusals, notes = supervisor_retirement_refusals(
+    retirement, notes = supervisor_retirement_refusals(
         agents,
         canonical_name=canonical_name,
         runtime_application_id=runtime_application_id,
         acknowledgement=acknowledgement,
     )
+    refusals = [PrestopRefusal(SUPERVISOR_RETIREMENT, message) for message in retirement]
     refusals.extend(
-        reserved_replacement_refusals(
+        PrestopRefusal(RESERVED_REPLACEMENT_NAME, message)
+        for message in reserved_replacement_refusals(
             agents,
             canonical_name=canonical_name,
             runtime_application_id=runtime_application_id,
@@ -320,8 +385,11 @@ def run_probes(
     )
     notes.extend(principals.notes)
     refusals.extend(
-        f"cannot read the {label}'s group memberships: {reason}, then re-run. The probe "
-        "refuses rather than pass a principal it could not audit."
+        PrestopRefusal(
+            AUDITED_PRINCIPAL_UNRESOLVED,
+            f"cannot read the {label}'s group memberships: {reason}, then re-run. The probe "
+            "refuses rather than pass a principal it could not audit.",
+        )
         for label, reason in principals.unresolved.items()
     )
     effective = {
@@ -343,21 +411,103 @@ def run_probes(
     folders = shared_folder_names(workspace, [*grants, *verifier_grants])
     if grants:
         refusals.append(
-            "the global Genie audits run after step 0a stops the App and refuse these "
-            "group grants: "
-            + "; ".join(grant.describe(folders) for grant in grants)
-            + ". "
-            + genie_group_remedy(grants)
+            PrestopRefusal(
+                GENIE_GROUP_GRANT,
+                "the global Genie audits run after step 0a stops the App and refuse these "
+                "group grants: "
+                + "; ".join(grant.describe(folders) for grant in grants)
+                + ". "
+                + genie_group_remedy(grants),
+            )
         )
     if verifier_grants:
         refusals.append(
-            "the verifier's global Genie audit (--forbid-all-genie) runs after step 0a "
-            "and refuses every Genie grant to the verifier: "
-            + "; ".join(grant.describe(folders) for grant in verifier_grants)
-            + ". "
-            + verifier_genie_remedy(verifier_grants)
+            PrestopRefusal(
+                VERIFIER_GENIE_GRANT,
+                "the verifier's global Genie audit (--forbid-all-genie) runs after step 0a "
+                "and refuses every Genie grant to the verifier: "
+                + "; ".join(grant.describe(folders) for grant in verifier_grants)
+                + ". "
+                + verifier_genie_remedy(verifier_grants),
+            )
         )
-    return refusals, notes
+    return BaseVerdict(refusals, notes, agents, acls, principals, effective)
+
+
+def run_probes(
+    workspace: Any,
+    *,
+    app_name: str,
+    runtime_application_id: str,
+    verifier_application_id: str,
+    canonical_name: str,
+    acknowledgement: str,
+    list_agents: Callable[[], list[dict[str, Any]]],
+    resolve_groups: Callable[..., Mapping[str, str]],
+) -> tuple[list[str], list[str]]:
+    """Run the Supervisor and Genie-grant clauses and return every refusal at once."""
+
+    verdict = base_verdict(
+        workspace,
+        app_name=app_name,
+        runtime_application_id=runtime_application_id,
+        verifier_application_id=verifier_application_id,
+        canonical_name=canonical_name,
+        acknowledgement=acknowledgement,
+        list_agents=list_agents,
+        resolve_groups=resolve_groups,
+    )
+    return [refusal.message for refusal in verdict.refusals], verdict.notes
+
+
+def all_refusals(
+    workspace: Any,
+    *,
+    config: ProbeSuiteConfig,
+    runtime_application_id: str,
+    verifier_application_id: str,
+    acknowledgement: str,
+    list_agents: Callable[[], list[dict[str, Any]]],
+    resolve_groups: Callable[..., Mapping[str, str]],
+) -> tuple[list[PrestopRefusal], list[str]]:
+    """Every probe, in one read-only pass; a probe that cannot finish refuses."""
+
+    try:
+        base = base_verdict(
+            workspace,
+            app_name=config.app_name,
+            runtime_application_id=runtime_application_id,
+            verifier_application_id=verifier_application_id,
+            canonical_name=config.canonical_name,
+            acknowledgement=acknowledgement,
+            list_agents=list_agents,
+            resolve_groups=resolve_groups,
+        )
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - an unfinished read never passes
+        return [_probe_error(exc)], []
+    refusals, notes = list(base.refusals), list(base.notes)
+    try:
+        found, said = suite_refusals(
+            workspace,
+            config=config,
+            app_client_id=base.principals.app_client_id,
+            app_scim_id=base.principals.app_scim_id,
+            app_groups=base.app_groups,
+            agents=base.agents,
+            acls=base.acls,
+        )
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - keep what the clauses found
+        return [*refusals, _probe_error(exc)], notes
+    return [*refusals, *found], [*notes, *said]
+
+
+def _probe_error(exc: BaseException) -> PrestopRefusal:
+    return PrestopRefusal(
+        PROBE_ERROR,
+        f"a pre-stop probe could not complete its reads: {type(exc).__name__}: {exc}. "
+        "The probes refuse rather than pass what they could not read; fix the read "
+        "(identity, permissions or network), then re-run.",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -367,6 +517,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runtime-application-id", required=True)
     parser.add_argument("--verifier-application-id", required=True)
     parser.add_argument("--supervisor-name", required=True)
+    parser.add_argument("--rollback-scope", required=True)
+    parser.add_argument("--lakebase-instance", required=True)
+    parser.add_argument("--catalog", required=True)
+    parser.add_argument("--genie-space-name", required=True)
+    parser.add_argument("--rebase-unverified-app", choices=("0", "1"), required=True)
     args = parser.parse_args(argv)
 
     from databricks.sdk import WorkspaceClient
@@ -380,12 +535,26 @@ def main(argv: list[str] | None = None) -> int:
     assert_workspace_admin_inventory_identity(
         workspace, expected_principal=args.expected_inventory_principal
     )
-    refusals, notes = run_probes(
+    refusals, notes = all_refusals(
         workspace,
-        app_name=args.app_name,
+        config=ProbeSuiteConfig(
+            app_name=args.app_name,
+            rollback_scope=args.rollback_scope,
+            lakebase_instance=args.lakebase_instance,
+            catalog=args.catalog,
+            genie_space_name=args.genie_space_name,
+            canonical_name=args.supervisor_name,
+            rebase_unverified_app=args.rebase_unverified_app == "1",
+            deployer=args.expected_inventory_principal,
+            # Read from the environment like the post-stop converger, never from argv:
+            # both lists name principals, and deploy.sh echoes each command it runs.
+            approved_owner_principals=os.environ.get(APPROVED_OWNERS_ENV, ""),
+            genie_manager_principals=os.environ.get(GENIE_MANAGERS_ENV, ""),
+            # The preflight's own ack (shell only): the same plan digest adopts the same space.
+            genie_pin_ack=os.environ.get(GENIE_PIN_ACK_ENV, "").strip(),
+        ),
         runtime_application_id=args.runtime_application_id,
         verifier_application_id=args.verifier_application_id,
-        canonical_name=args.supervisor_name,
         acknowledgement=supervisor_retirement_acknowledgement(),
         list_agents=_supervisor_agents,
         resolve_groups=resolve_effective_groups,
@@ -394,7 +563,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[mip-prestop] {note}")
     if refusals:
         for refusal in refusals:
-            print(f"[mip-prestop] REFUSED: {refusal}", file=sys.stderr)
+            print(f"[mip-prestop] REFUSED: {refusal.line()}", file=sys.stderr)
         print(
             "[mip-prestop] nothing was changed and the App was not stopped by this run.",
             file=sys.stderr,

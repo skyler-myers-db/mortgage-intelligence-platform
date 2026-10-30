@@ -137,6 +137,34 @@ def _requested_can_use(mode: Mode, identities: dict[str, str]) -> tuple[str, ...
     )
 
 
+def planned_release_acl(
+    current: _AclState, *, mode: Mode, identities: dict[str, str]
+) -> dict[Principal, str]:
+    """The exact direct ACL one release phase sets on the App.
+
+    Direct managers are kept; every other direct grant is replaced by the
+    phase's CAN_USE service principals. A lifecycle identity that is also an
+    App manager refuses. The converger applies this; the bundle plan gate
+    previews it before the lease (``bundle_plan_app_acl``).
+    """
+
+    direct_managers = frozenset(
+        principal for principal, level in current.direct.items() if level == "CAN_MANAGE"
+    )
+    lifecycle_manager_overlap = (direct_managers | current.inherited_managers).intersection(
+        {("service_principal_name", application_id) for application_id in identities.values()}
+    )
+    if lifecycle_manager_overlap:
+        raise RuntimeError("release lifecycle identity overlaps an App manager")
+    return {
+        **{principal: "CAN_MANAGE" for principal in sorted(direct_managers)},
+        **{
+            ("service_principal_name", application_id): "CAN_USE"
+            for application_id in _requested_can_use(mode, identities)
+        },
+    }
+
+
 def _assert_app_identity(
     workspace: Any,
     *,
@@ -227,14 +255,10 @@ def converge_app_release_access(
     # fail rather than allowing the release to claim convergence.
     _assert_app_identity(workspace, app_name=app, **identity_args)
     current = _inspect_acl(workspace.apps.get_permissions(app))
+    planned = planned_release_acl(current, mode=mode, identities=identities)
     direct_managers = frozenset(
-        principal for principal, level in current.direct.items() if level == "CAN_MANAGE"
+        principal for principal, level in planned.items() if level == "CAN_MANAGE"
     )
-    lifecycle_manager_overlap = (direct_managers | current.inherited_managers).intersection(
-        {("service_principal_name", application_id) for application_id in identities.values()}
-    )
-    if lifecycle_manager_overlap:
-        raise RuntimeError("release lifecycle identity overlaps an App manager")
 
     requests = [
         _request(principal, AppPermissionLevel.CAN_MANAGE) for principal in sorted(direct_managers)

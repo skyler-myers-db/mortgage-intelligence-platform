@@ -286,9 +286,6 @@ restore_rendered_sql_fail_closed() {
   if [[ -n "${OAUTH_CREDENTIAL_QUARANTINE_FILE:-}" ]]; then
     rm -f "$OAUTH_CREDENTIAL_QUARANTINE_FILE"
   fi
-  if [[ -n "${FOREIGN_CATALOG_BINDING_DIR:-}" ]]; then
-    rm -rf "$FOREIGN_CATALOG_BINDING_DIR"
-  fi
   if [[ -n "${APP_RESOURCE_BINDING_SUMMARY:-}" ]]; then
     rm -f "$APP_RESOURCE_BINDING_SUMMARY"
   fi

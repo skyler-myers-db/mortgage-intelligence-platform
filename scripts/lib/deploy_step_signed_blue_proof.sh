@@ -83,7 +83,11 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
     APP_FAIL_CLOSED_NAME="$_GRANTS_APP_NAME"
     if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" && \
           "$FIRST_INSTALL_JOURNAL_STATUS" != "signed" ]]; then
-      step "prove the unsigned legacy App has no existing last-good rollback record"
+      # The pre-stop probe proved this absence before the lease
+      # (prestop_rollback_record). A record is written only under the lease,
+      # so the same proof runs again here, under it, to close the window
+      # between that probe and the lease (time of check, time of use).
+      step "re-prove under the lease that the unsigned legacy App has no last-good rollback record"
       run "$PYTHON" -m tools.databricks.app_rollback_bootstrap_gate \
         --app-name "$_GRANTS_APP_NAME" \
         --scope "$APP_ROLLBACK_SECRET_SCOPE"
@@ -163,55 +167,6 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
       --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
       --catalog "$_GRANTS_CATALOG" \
       --allow-absent
-  fi
-  if [[ "${MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS:-0}" == "1" ]]; then
-    if [[ "$FOREIGN_CATALOG_REMEDIATION_COMPLETE" -eq 0 ]]; then
-      step "stop the exact admitted App before foreign-catalog remediation"
-      run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
-        --app-name "$_GRANTS_APP_NAME" \
-        "${APP_EXPECTED_IDENTITY_ARGS[@]}"
-      run_foreign_catalog_binding_remediation
-      step "preflight remediated agent-runtime foreign UC access while App is stopped"
-      run_with_account_identity run_with_proof_signing_authority \
-        "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
-        --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
-        --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
-        --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
-      FOREIGN_CATALOG_REMEDIATION_COMPLETE=1
-      if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]]; then
-        step "restart and re-prove only the exact signed-blue App after UC preflight"
-        run_with_account_identity \
-          run_with_proof_signing_authority \
-            "$PYTHON" -m tools.databricks.app_deployment_rollback ensure \
-          --app-name "$_GRANTS_APP_NAME" \
-          --scope "$APP_ROLLBACK_SECRET_SCOPE" \
-          --base-url "${MIP_APP_URL:?existing App URL is required}" \
-          --token-env MIP_BEARER_TOKEN \
-          --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
-          --deployment-source-git-sha "$SOURCE_GIT_SHA" \
-          --treatment-warehouse-id "$_GRANTS_WAREHOUSE_ID" \
-          --treatment-catalog "$_GRANTS_CATALOG" \
-          --out-env "$APP_ROLLBACK_BINDING_ENV"
-        TREATMENT_RUNTIME_QUIESCED=1
-        APP_UPGRADE_STATE="blue_quiesced"
-      fi
-    fi
-    step "recover interrupted verifier Lakebase role bootstrap after UC preflight"
-    run_with_lakebase_bootstrap_authority \
-      "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
-      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
-      --lakebase-database "$LAKEBASE_DATABASE" \
-      --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
-      --role-contract verifier \
-      --recover-bootstrap-only
-    step "recover interrupted App Lakebase role bootstrap after UC preflight"
-    run_with_lakebase_bootstrap_authority \
-      "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
-      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
-      --lakebase-database "$LAKEBASE_DATABASE" \
-      --application-id "$_EXISTING_APP_SP_CLIENT_ID" \
-      --role-contract app \
-      --recover-bootstrap-only
   fi
 else
   echo "[deploy] dry-run: existing app treatment writes remain live until treatment DDL"
