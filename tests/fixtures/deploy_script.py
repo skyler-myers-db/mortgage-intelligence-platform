@@ -32,6 +32,9 @@ DEPLOY_SLICED_LIBRARIES = (
     _LIB / "deploy_app_release_lifecycle.sh",
     _LIB / "deploy_first_install_lifecycle.sh",
     _LIB / "deploy_identity_lifecycle.sh",
+    # Not sliced from the entrypoint: written for the bundle plan gate
+    # (M0-PR4), sourced and expanded the same way, after the identity library.
+    _LIB / "deploy_bundle_plan_gate_lifecycle.sh",
 )
 # Top-level orchestration sliced verbatim out of the entrypoint, in step order.
 DEPLOY_STEP_SCRIPTS = (

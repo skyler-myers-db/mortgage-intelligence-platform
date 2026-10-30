@@ -50,6 +50,10 @@ Usage:
   python tools/databricks/bundle_env.py validate -t client
   python tools/databricks/bundle_env.py plan     -t client
   python tools/databricks/bundle_env.py summary  -t client -o json
+  # The deploy's pre-lease plan gate (tools/databricks/bundle_plan_gate.py)
+  # may plan before a first install provisions the governed Genie space:
+  # with no space of that title, and only for plan, the placeholder binds.
+  python tools/databricks/bundle_env.py plan -t client -o json --allow-unprovisioned-genie
   # Mutable use is command-of-record internal only and requires one or more
   # exact, non-App selectors:
   python tools/databricks/bundle_env.py deploy -t client --select jobs.example
@@ -128,6 +132,7 @@ _CLIENT_TARGET_VARIABLES = (
     "dashboard_parent_path",
     "lakebase_readable_secondaries",
 )
+UNPROVISIONED_GENIE_FLAG = "--allow-unprovisioned-genie"
 
 
 def _is_real(value: str | None) -> bool:
@@ -395,6 +400,10 @@ def _genie_workspace_client(env: dict[str, str]) -> Any:
     return client
 
 
+class GovernedGenieSpaceAbsent(ValueError):
+    """No Genie space holds the governed title yet (a first install provisions it)."""
+
+
 def _resolve_governed_genie_space_id(
     env: dict[str, str],
     *,
@@ -417,6 +426,10 @@ def _resolve_governed_genie_space_id(
         page_token = getattr(response, "next_page_token", None)
         if not page_token:
             break
+    if not matches:
+        raise GovernedGenieSpaceAbsent(
+            f"expected exactly one Genie space named {space_name!r}; found 0"
+        )
     if len(matches) != 1:
         raise ValueError(
             f"expected exactly one Genie space named {space_name!r}; found {len(matches)}"
@@ -457,6 +470,17 @@ def main() -> int:
     if target_error is not None:
         print(f"[bundle_env] {target_error}", file=sys.stderr)
         return 2
+    allow_unprovisioned_genie = UNPROVISIONED_GENIE_FLAG in rest
+    if allow_unprovisioned_genie:
+        # Wrapper-only flag, never passed to the CLI: the pre-lease plan gate
+        # plans before a first install has provisioned the governed space.
+        if subcmd != "plan" or rest.count(UNPROVISIONED_GENIE_FLAG) != 1:
+            print(
+                f"[bundle_env] {UNPROVISIONED_GENIE_FLAG} is accepted once, by plan only",
+                file=sys.stderr,
+            )
+            return 2
+        rest = [arg for arg in rest if arg != UNPROVISIONED_GENIE_FLAG]
     if subcmd == "deploy":
         selector_error = _validate_non_app_deploy_selectors(rest)
         if selector_error is not None:
@@ -567,6 +591,7 @@ def main() -> int:
     # resolve the exact governed title in the authenticated workspace and
     # overwrite the child value. `scripts/deploy.sh` provisions that named
     # space first, so a missing or duplicate title here is always a hard stop.
+    genie_unprovisioned = False
     if subcmd in {"plan", "summary", "deploy", "deployment"}:
         space_name = (
             profile.genie_space_name
@@ -575,25 +600,45 @@ def main() -> int:
         )
         try:
             governed_genie = _resolve_governed_genie_space_id(env, space_name=space_name)
+        except GovernedGenieSpaceAbsent as exc:
+            if not allow_unprovisioned_genie:
+                print(
+                    f"[bundle_env] governed Genie binding verification failed: {exc}",
+                    file=sys.stderr,
+                )
+                return 2
+            # Read-only plan only: no space holds the governed title, so no id
+            # in env or .env.local can be the governed one. Plan with the
+            # placeholder; scripts/deploy.sh plans again, without this flag,
+            # after it provisions the space and before it applies anything.
+            print(
+                f"[bundle_env] no Genie space is named {space_name!r} yet; this read-only "
+                "plan binds the placeholder (the deploy re-plans after provisioning)",
+                file=sys.stderr,
+            )
+            genie_unprovisioned = True
+            genie = PLACEHOLDER
+            env["GENIE_SPACE_ID"] = PLACEHOLDER
         except Exception as exc:  # noqa: BLE001 - CLI boundary must fail closed
             print(
                 f"[bundle_env] governed Genie binding verification failed: {exc}", file=sys.stderr
             )
             return 2
-        if _is_real(genie) and str(genie).strip() != governed_genie:
-            print(
-                "[bundle_env] replacing stale GENIE_SPACE_ID with the id resolved "
-                f"from MIP_GENIE_SPACE_NAME={space_name!r}",
-                file=sys.stderr,
-            )
-        genie = governed_genie
-        env["GENIE_SPACE_ID"] = governed_genie
+        else:
+            if _is_real(genie) and str(genie).strip() != governed_genie:
+                print(
+                    "[bundle_env] replacing stale GENIE_SPACE_ID with the id resolved "
+                    f"from MIP_GENIE_SPACE_NAME={space_name!r}",
+                    file=sys.stderr,
+                )
+            genie = governed_genie
+            env["GENIE_SPACE_ID"] = governed_genie
 
     if subcmd in {"plan", "summary", "deploy", "deployment"}:
         missing = []
         if not _is_real(warehouse):
             missing.append("DATABRICKS_WAREHOUSE_ID")
-        if not _is_real(genie):
+        if not _is_real(genie) and not genie_unprovisioned:
             missing.append("GENIE_SPACE_ID")
         if not _is_real(verifier_client_id):
             missing.append("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID")

@@ -4863,7 +4863,8 @@ def test_pipeline_namespace_bootstrap_is_leased_and_precedes_bundle_apply() -> N
 
     lease = script.index("tools.databricks.app_deployment_lease acquire")
     compensation = script.index("APP_FAIL_CLOSED_ARMED=1")
-    plan = script.index('tools.databricks.bundle_env plan -t "$TARGET"')
+    # The pre-lease gate plans too (M0-PR4); this is the re-plan under the lease.
+    plan = script.index("\nrun_bundle_plan_gate pre-apply\n")
     namespace = script.index("tools.databricks.ensure_pipeline_namespace")
     bundle_apply = script.index('tools.databricks.bundle_env deploy -t "$TARGET"')
     full_ddl = script.index('databricks bundle run mip_init_catalog_schemas -t "$TARGET"')

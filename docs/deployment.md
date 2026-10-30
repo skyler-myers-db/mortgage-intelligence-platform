@@ -1913,6 +1913,79 @@ service principal created it, and otherwise only revokes the App's and
 verifier's access. That step is the reviewed path whatever happens to the
 Supervisor, so the unacknowledged refusal comes after it.
 
+### Bundle plan gate (read-only, before the lease)
+
+`./scripts/deploy.sh` renders the SQL and validates the bundle right after the
+config gates, and after the pre-stop probes and the pii-salt check it plans the
+bundle (`bundle_env plan -t client -o json`) and hands the plan to
+`tools/databricks/bundle_plan_gate.py check --position pre-lease`. That is
+before the signed lease and before any App stop. It runs the gate again under
+the lease (`--position pre-apply`), after Genie provisioning and immediately
+before the non-App bundle apply, so a plan that changed in between is judged
+again. Either refusal exits 2 with a remedy per refusal; the pre-lease one
+leaves the App serving and changes nothing. The gate refuses:
+
+- a `delete` (a state-only delete of an object already gone included), a
+  `recreate`, or an `update_id` rename of an identity field;
+- a resource kind with no reviewed existence lookup (`KIND_LOOKUPS`, pinned
+  equal to the kinds `databricks.yml` declares);
+- a `create` whose name already exists, looked up with a read-only GET or list
+  per kind (`collision`), or whose name cannot be proven free (`lookup_failed`:
+  a read error, a name the plan has not resolved, or a caller that is not a
+  workspace admin). A list or GET answers with what the caller may see, so a
+  workspace-scoped absence counts only after `current_user.me` lists the
+  caller in `admins` (the deploy's preflight already requires that); the
+  metastore-scoped Lakebase catalog lookup is the one exception;
+- an update or resize of the Lakebase database instance, unless
+  `MIP_ACK_DATABASE_INSTANCE_UPDATE` equals the sha256 of what the update will
+  do. The CLI sends the instance's whole configured state with
+  `UpdateMask: "*"`, so the update also reverts a remote-only drift on an
+  input-only field (`node_count`, `retention_window_in_days`, ...) that the
+  plan lists as `skip`. The digest therefore covers the full `new_state`,
+  every change skip included, the instance name and the state lineage. The
+  refusal prints that digest and the full report's `instance_update` holds
+  exactly what it covers. Review it, then export the digest for that run
+  only. The pre-apply gate recomputes the digest, so an acknowledgement covers
+  exactly the reviewed update of this install, and never another install's;
+- **`not_adopted`**: when the deployer's state does not bind `apps.mip_app`
+  (its entry plans a create), the App's own lookup finds it existing, and every
+  refusal is a collision, the deployer is looking at an install it never
+  adopted. The collisions fold into this one refusal and are listed as its
+  detail. With no App there is no install: a first install that meets a stray
+  same-name object gets the plain `collision` refusal and its remedy.
+
+One collision is deferred instead, and only before the lease. An interrupted
+first install can leave the App created but not bound into bundle state (a
+lost create response, a crash between the journal claim and the bind, or a
+cleanup that unbound the App and then failed to delete it); the deploy leaves
+that App and its signed first-install journal for the next lease to
+reconcile. On the retry the pre-lease gate reads that journal read-only
+(`app_first_install_journal.recovery_state`, for the App named by
+`MIP_APP_NAME`); when it reads `unclaimed` or `recover`, the App collision is
+printed as `DEFERRED journal_owned apps.mip_app` and the run continues to the
+lease, where the signed-journal recovery deletes the App. The pre-apply gate
+never defers: a create that still collides there refuses. Any other journal
+state, or a journal that cannot be read, keeps the strict refusal.
+
+Printed lines carry refusal codes, counts, digests and symbolic `<kind>.<key>`
+names only (`PlanReport.public_summary()` in
+`tools/databricks/deploy_plan_report.py`). The full report, with the resolved
+names and lookups, is written mode 0600 to a temporary file whose path the run
+prints; keep it private. Before a first install provisions the governed Genie
+space, the pre-lease plan binds the placeholder (`bundle_env plan
+--allow-unprovisioned-genie`, accepted by `plan` only and only when no space has
+the governed title); the pre-apply plan always resolves the governed space.
+
+The plan JSON shape is derived from the Databricks CLI v1.10.0 source (cited in
+`tools/databricks/bundle_plan_shape.py`), not from a live capture, which is
+still owed at the first governed plan phase. Any field, action or key the
+parser does not know refuses as `malformed_plan`.
+
+`./scripts/deploy.sh -t client --phase plan` runs only the read-only steps
+through the pre-lease gate and exits before the lease. A live plan phase is
+CI-only (`plan is CI-only; use --dry-run or make bundle-validate`); locally,
+`--phase plan --dry-run` prints the same steps without any Databricks call.
+
 ## Presenter mode (demo workspaces only)
 
 `MIP_PRESENTER_MODE` (default off) shows demo-only affordances to every user

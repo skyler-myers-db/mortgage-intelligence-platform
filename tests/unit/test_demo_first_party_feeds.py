@@ -4,7 +4,15 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures.deploy_block_harness import block, drive
+from tests.fixtures.deploy_script import deploy_entrypoint_text
+
 REPO = Path(__file__).resolve().parents[2]
+# deploy.sh's demo-feed switch, rendered before the lease since M0-PR4
+# (scripts/lib/deploy_step_automation_identities.sh) and keyed on the client
+# profile's install class since M1-PR2.
+FEEDS_START = 'DEMO_FEEDS_FROM_ENV="${MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS:-}"'
+FEEDS_END = 'export MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS="$DEMO_FEEDS_FROM_ENV"'
 
 
 def test_render_sql_demo_feed_switch_defaults_fail_closed(
@@ -124,3 +132,66 @@ def test_gold_consumes_first_party_relationship_signals() -> None:
     assert "'demo_synthetic'" in readiness_sql
     assert "COUNT_IF(COALESCE(synthetic_demo, FALSE)) = COUNT(*) THEN 'demo_synthetic'" in readiness_sql
     assert "Summit Mortgage synthetic servicing feed" in readiness_sql
+
+
+def _deploy_feed_switch(tmp_path: Path, **variables: str) -> tuple[int, str, str]:
+    """Drive deploy.sh's demo-feed switch with ``variables`` as its shell state."""
+
+    result = drive(
+        tmp_path,
+        "dotenv_value() { printf ''; }\n" + block(FEEDS_START, FEEDS_END),
+        dry_run=1,
+        env=variables,
+        epilogue='echo "feeds=${MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS}"\n',
+    )
+    return result.returncode, result.stdout, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("variables", "feeds"),
+    (
+        ({"CLIENT_INSTALL_CLASS": "demo"}, "1"),
+        ({"CLIENT_INSTALL_CLASS": "customer"}, "0"),
+        ({"CLIENT_INSTALL_CLASS": "demo", "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS": "0"}, "0"),
+        (
+            {
+                "CLIENT_INSTALL_CLASS": "customer",
+                "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS": "1",
+                "MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD": "1",
+            },
+            "1",
+        ),
+    ),
+)
+def test_deploy_defaults_the_demo_feeds_from_the_install_class(
+    tmp_path: Path, variables: dict[str, str], feeds: str
+) -> None:
+    rc, out, err = _deploy_feed_switch(tmp_path, **variables)
+
+    assert rc == 0, err
+    assert f"feeds={feeds}" in out and "reached-after-block" in out
+
+
+@pytest.mark.parametrize("value", ("1", "TRUE", "on"))
+def test_deploy_refuses_demo_feeds_for_a_customer_install_without_the_override(
+    tmp_path: Path, value: str
+) -> None:
+    rc, out, err = _deploy_feed_switch(
+        tmp_path, CLIENT_INSTALL_CLASS="customer", MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=value
+    )
+
+    assert rc == 2
+    assert "refusing to enable Summit demo first-party feeds for a customer install." in err
+    assert "reached-after-block" not in out
+
+
+def test_the_feed_switch_runs_only_after_the_client_profile_resolves(tmp_path: Path) -> None:
+    """M0-PR4 moved the switch before the lease; it still follows resolve_client_profile."""
+
+    text = deploy_entrypoint_text()
+    assert text.index("\nresolve_client_profile\n") < text.index(FEEDS_START)
+    assert text.index(FEEDS_END) < text.index("\nrun_bundle_plan_gate pre-lease\n")
+    # Without the profile's install class the switch fails closed, never defaults.
+    rc, out, err = _deploy_feed_switch(tmp_path)
+    assert rc != 0 and "CLIENT_INSTALL_CLASS: unbound variable" in err
+    assert "reached-after-block" not in out

@@ -12,9 +12,11 @@
 #   0.  Preflight: check .env.local exists + `databricks` CLI + the venv.
 #   1.  Build the frontend, then stage the App runtime closure at the deploy
 #       commit plus that dist as one per-release source folder + manifest.
-#   2.  Validate the direct-deployment bundle under `-t client`, with the
-#       profile mapped to BUNDLE_VAR_* via tools/databricks/bundle_env.py.
-#   3.  Show the direct deployment plan.
+#   2.  Before the signed lease and any App stop: render SQL, validate the
+#       direct-deployment bundle under `-t client` (the profile mapped to
+#       BUNDLE_VAR_* via tools/databricks/bundle_env.py), and gate its plan
+#       (tools/databricks/bundle_plan_gate.py: no delete, recreate or collision).
+#   3.  Gate the plan again under the lease, immediately before step 4.
 #   4.  Deploy non-App bundle resources, then apply source-free App resource
 #       bindings (first install creates the App stopped with --no-compute).
 #   5.  Migrate Lakebase (idempotent schema.sql + seed_campaigns.sql).
@@ -57,6 +59,10 @@
 #                                       # skip the y/N prompt before deploy
 #   ./scripts/deploy.sh --verify-source-only
 #                                       # run the exact-source gate and exit
+#   ./scripts/deploy.sh -t client --phase plan --dry-run
+#                                       # read-only steps and the bundle plan
+#                                       # gate, then exit before the lease
+#                                       # (a live --phase plan is CI-only)
 # The live install predating the client target is reached only through the
 # emergency recipe in docs/deployment.md until it is adopted (M2-PR6).
 #
@@ -110,6 +116,8 @@ NO_CONFIRM=0
 VERIFY_SOURCE_ONLY=0
 TARGET="client"
 TARGET_SEEN=0
+DEPLOY_PHASE=""
+PHASE_SEEN=0
 
 # `for arg in "$@"` iterates a pre-expanded snapshot, so an inner
 # `shift` to grab `-t <target>`'s value doesn't actually consume the
@@ -149,8 +157,22 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       TARGET_SEEN=1; shift ;;
+    --phase|--phase=*)
+      if [[ "$PHASE_SEEN" -eq 1 ]]; then
+        echo "[deploy] phase may be supplied only once" >&2
+        exit 2
+      fi
+      if [[ "$1" == --phase=* ]]; then
+        DEPLOY_PHASE="${1#--phase=}"; shift
+      elif [[ $# -lt 2 ]]; then
+        echo "[deploy] missing value for --phase (expected plan)" >&2
+        exit 2
+      else
+        DEPLOY_PHASE="$2"; shift 2
+      fi
+      PHASE_SEEN=1 ;;
     -h|--help)
-      sed -n '2,75p' "$0"
+      sed -n '2,81p' "$0"
       exit 0
       ;;
     *)
@@ -176,6 +198,22 @@ if [[ "${GITHUB_ACTIONS:-}" == "true" && "${GITHUB_WORKFLOW_REF:-}" == *"/.githu
   echo "[deploy] deploy-dev.yml is parked until a client environment is selected (M1-PR7); refusing" >&2
   exit 2
 fi
+# >>> deploy phase >>>
+# --phase plan runs the read-only steps through the bundle plan gate and exits
+# before the signed lease. No --phase is today's full run; plan is the only
+# phase so far. A live plan is CI-only (attack O13): the client deployer has no
+# secret a person can use, and a person's bundle plan against a deployer root
+# trips the CLI's run_as check. A dry run makes no Databricks call, so it stays
+# available everywhere.
+if [[ "$PHASE_SEEN" -eq 1 && "$DEPLOY_PHASE" != "plan" ]]; then
+  echo "[deploy] phase must be exactly plan; refusing '${DEPLOY_PHASE}'" >&2
+  exit 2
+fi
+if [[ "$DEPLOY_PHASE" == "plan" && "$DRY_RUN" -eq 0 && "${GITHUB_ACTIONS:-}" != "true" ]]; then
+  echo "[deploy] plan is CI-only; use --dry-run or make bundle-validate" >&2
+  exit 2
+fi
+# <<< deploy phase <<<
 
 # -----------------------------------------------------------------------------
 # Pretty-print helpers
@@ -470,6 +508,9 @@ trap restore_rendered_sql_fail_closed EXIT
 
 # shellcheck source=scripts/lib/deploy_identity_lifecycle.sh
 . "$REPO_ROOT/scripts/lib/deploy_identity_lifecycle.sh"
+
+# shellcheck source=scripts/lib/deploy_bundle_plan_gate_lifecycle.sh
+. "$REPO_ROOT/scripts/lib/deploy_bundle_plan_gate_lifecycle.sh"
 
 # Deploy step files: the orchestration below is sliced verbatim, in reviewed
 # order, into scripts/lib/deploy_step_*.sh. Each step file is sourced into this
