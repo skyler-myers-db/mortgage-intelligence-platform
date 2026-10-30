@@ -11,6 +11,8 @@
   signing keys never reach argv, stdout, stderr or a file left behind.
 * Identifying values are secrets, never variables; the profile digest
   variable equals the digest the deploy resolves from the environment.
+* Each generated signing key's public verify key is a variable, written
+  before the key and equal to what the deploy derives from it.
 * Human presence: refused under Actions, under CI and without a terminal,
   before any session opens.
 """
@@ -26,6 +28,7 @@ from typing import Any
 
 import pytest
 
+from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
 from tests.fixtures.client_profiles import demo_profile, split_contexts
 from tests.fixtures.fake_gh import (
     MAINTAINER,
@@ -43,6 +46,7 @@ from tools.clients.github_environment_plan import (
     PINS_FIELD,
     PROFILE_DIGEST_VARIABLE,
     PROOF_SIGNING_KEY,
+    VERIFY_KEYS,
 )
 from tools.clients.schema import FIELD_CLASS, FieldClass
 
@@ -194,7 +198,9 @@ def test_identifying_values_are_secrets_and_public_values_variables(fake: FakeGi
     deploy = fake.environment(CLIENT)
     variables = {name: item["value"] for name, item in deploy["variables"].items()}
     public = {name: value for name, value in local.items() if FIELD_CLASS[name] is FieldClass.PUBLIC}
-    assert variables == {**public, PROFILE_DIGEST_VARIABLE: views.digest(resolve(from_local({}, env)))}
+    profile_variables = {name: value for name, value in variables.items() if name not in VERIFY_KEYS.values()}
+    assert profile_variables == {**public, PROFILE_DIGEST_VARIABLE: views.digest(resolve(from_local({}, env)))}
+    assert set(variables) - set(profile_variables) == set(VERIFY_KEYS.values())
     identifying = {name: value for name, value in local.items() if FIELD_CLASS[name] is FieldClass.IDENTIFYING}
     expected_secrets = set(identifying) - {PINS_FIELD} | {PROOF_SIGNING_KEY, MODEL_SIGNING_KEY}
     assert set(deploy["secrets"]) == expected_secrets
@@ -246,6 +252,61 @@ def test_secrets_are_set_only_where_missing_unless_rotate_and_keys_never_rotate(
     # A rotated plan is not the plain plan: its ack does not carry over.
     plain = run_env_tool(fake, "--apply", "--ack-plan", rotated_plan.digest, env_file=env)
     assert plain.code == 2 and "does not match the plan computed now" in plain.err
+
+
+def _recording_generator(generated: list[bytes]) -> Any:
+    def generate() -> bytes:
+        key = ed25519_signing_key()
+        generated.append(key)
+        return key
+
+    return generate
+
+
+def test_each_generated_key_stores_the_verify_key_the_deploy_derives_first(fake: FakeGitHub, env: Path) -> None:
+    generated: list[bytes] = []
+    _planned, applied = plan_and_apply(fake, env, generate_key=_recording_generator(generated))
+    assert applied.code == 0, applied.err
+    deploy = fake.environment(CLIENT)
+    writes = [call["argv"][:3] for call in fake.calls() if call["argv"][1:2] == ["set"]]
+    for key, name in zip(generated, (PROOF_SIGNING_KEY, MODEL_SIGNING_KEY), strict=True):
+        assert deploy["secrets"][name]["sha256"] == _sha(key)
+        assert deploy["variables"][VERIFY_KEYS[name]]["value"] == derive_gateway_proof_verify_key(key.decode())
+        assert writes.index(["variable", "set", VERIFY_KEYS[name]]) < writes.index(["secret", "set", name])
+    assert deploy["variables"][VERIFY_KEYS[PROOF_SIGNING_KEY]] != deploy["variables"][VERIFY_KEYS[MODEL_SIGNING_KEY]]
+
+
+def test_a_key_whose_write_failed_is_generated_again_with_a_matching_verify_key(
+    fake: FakeGitHub, tmp_path: Path
+) -> None:
+    # Onboarding step 1, the skeleton: the keys are generated before any profile value.
+    skeleton = write_profile(tmp_path / "input" / "skeleton.env", _values(MIP_IDENTITY_IDS_JSON=None))
+    planned = run_env_tool(fake, "--plan", env_file=skeleton)
+    fake.fail_next("secret", "set", PROOF_SIGNING_KEY)
+    failed = run_env_tool(fake, "--apply", "--ack-plan", planned.digest, env_file=skeleton)
+    assert failed.code == 2 and "(generate_signing_key) failed" in failed.err
+    assert PROOF_SIGNING_KEY not in fake.environment(CLIENT)["secrets"]
+    assert VERIFY_KEYS[PROOF_SIGNING_KEY] in fake.environment(CLIENT)["variables"]  # the public half went first
+    generated: list[bytes] = []
+    _replanned, finished = plan_and_apply(fake, skeleton, generate_key=_recording_generator(generated))
+    assert finished.code == 0 and "converged" in finished.out, finished.err
+    verify = fake.environment(CLIENT)["variables"][VERIFY_KEYS[PROOF_SIGNING_KEY]]["value"]
+    assert verify == derive_gateway_proof_verify_key(generated[0].decode())
+
+
+def test_a_key_without_its_verify_key_is_named_never_regenerated(fake: FakeGitHub, env: Path) -> None:
+    _planned, applied = plan_and_apply(fake, env)
+    assert applied.code == 0, applied.err
+    state = fake.state()
+    del state["environments"][CLIENT]["variables"][VERIFY_KEYS[MODEL_SIGNING_KEY]]
+    fake.write(state)
+    planned = run_env_tool(fake, "--plan", env_file=env)
+    assert planned.code == 0 and planned.steps() == []
+    assert [note for note in planned.document()["notes"] if note.startswith("missing: ")] == [
+        f"missing: {VERIFY_KEYS[MODEL_SIGNING_KEY]} is not a variable of {CLIENT}, and GitHub cannot return "
+        f"{MODEL_SIGNING_KEY} to derive it; set it from a job that holds the key, or rotate the key by the "
+        "reviewed procedure (docs/deployment.md)"
+    ]
 
 
 def test_the_core_tier_generates_only_the_proof_signing_key(fake: FakeGitHub, tmp_path: Path) -> None:

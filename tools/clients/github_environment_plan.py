@@ -66,6 +66,13 @@ PROFILE_DIGEST_VARIABLE = "MIP_CLIENT_PROFILE_SHA256"
 PINS_FIELD = "MIP_IDENTITY_IDS_JSON"
 PROOF_SIGNING_KEY = "MIP_AI_GATEWAY_PROOF_SIGNING_KEY"
 MODEL_SIGNING_KEY = "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY"
+# Each signing key's public half, stored as a variable: read-only jobs verify
+# with it and never receive the private key (.github/workflows/README.md), and
+# only the run that generates a key ever holds both halves.
+VERIFY_KEYS = {
+    PROOF_SIGNING_KEY: "MIP_AI_GATEWAY_PROOF_VERIFY_KEY",
+    MODEL_SIGNING_KEY: "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY",
+}
 # A stand-in for each secret field while the profile validates; never written.
 WITHHELD = "withheld-by-the-github-environment"
 _CLIENT = re.compile(r"[a-z][a-z0-9-]{1,30}")
@@ -334,13 +341,21 @@ def _stale(inputs: EnvironmentInputs, deploy: EnvironmentState) -> list[str]:
 def _notes(inputs: EnvironmentInputs, deploy: EnvironmentState, *, rotate: bool) -> list[str]:
     """What the plan leaves alone, and why: value-free, field names only."""
 
+    unverifiable = [
+        f"missing: {VERIFY_KEYS[name]} is not a variable of {deploy.name}, and GitHub cannot return "
+        f"{name} to derive it; set it from a job that holds the key, or rotate the key by the "
+        "reviewed procedure (docs/deployment.md)"
+        for name in inputs.signing_keys
+        if name in deploy.secret_updates and VERIFY_KEYS[name] not in deploy.variables
+    ]
     if inputs.profile_digest is None:
         return [
             "deferred: the profile's values and MIP_CLIENT_PROFILE_SHA256 wait until the whole "
             "local profile resolves",
             *(f"deferred: {line}" for line in inputs.deferred),
+            *unverifiable,
         ]
-    notes = _stale(inputs, deploy)
+    notes = [*_stale(inputs, deploy), *unverifiable]
     if not rotate and any(name in deploy.secret_updates for name in inputs.identifying):
         notes.append(
             "kept: identifying secrets already set are not rewritten (GitHub cannot read them back); "
@@ -403,7 +418,7 @@ def compute_plan(inputs: EnvironmentInputs, obs: Observation, *, repository: str
             steps.append(step("set_secret", env=target, name=name, change=change, source="local profile"))
             written.append(name)
     steps += [
-        step("generate_signing_key", env=target, name=name, kind="ed25519")
+        step("generate_signing_key", env=target, name=name, kind="ed25519", verify_variable=VERIFY_KEYS[name])
         for name in inputs.signing_keys
         if name not in deploy.secret_updates
     ]

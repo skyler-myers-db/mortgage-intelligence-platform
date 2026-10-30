@@ -16,7 +16,11 @@ Then it fills ``<client>`` from the local profile
 * the Ed25519 signing keys, ``MIP_AI_GATEWAY_PROOF_SIGNING_KEY`` and, on the
   agentic tier, ``MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY``: generated in
   memory and piped straight into secrets on stdin, never on disk or in argv.
-  Each is generated once; ``--rotate`` never replaces one;
+  Each is generated once; ``--rotate`` never replaces one. Its public verify
+  key (``MIP_AI_GATEWAY_PROOF_VERIFY_KEY``,
+  ``MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY``) is derived in the same step
+  and stored first, as a variable: read-only jobs verify with it, and no
+  later run can derive it, because GitHub never returns the private key;
 * ``MIP_CLIENT_PROFILE_SHA256``, the profile digest, as a public variable.
 
 **Never:** a runtime secret (the App's runtime secret scope keeps the mask
@@ -87,6 +91,18 @@ def ed25519_signing_key() -> bytes:
 
     raw = Ed25519PrivateKey.generate().private_bytes_raw()
     return base64.urlsafe_b64encode(raw).rstrip(b"=")
+
+
+def ed25519_verify_key(signing_key: bytes) -> bytes:
+    """The raw public key of ``signing_key``, encoded the same way.
+
+    It equals backend.services.ai_gateway_proof_attestation's
+    ``derive_gateway_proof_verify_key``, which the deploy uses (a test pins it).
+    """
+
+    raw = base64.urlsafe_b64decode(signing_key + b"=" * (-len(signing_key) % 4))
+    public = Ed25519PrivateKey.from_private_bytes(raw).public_key().public_bytes_raw()
+    return base64.urlsafe_b64encode(public).rstrip(b"=")
 
 
 def _infer_repository() -> str | None:
@@ -186,6 +202,10 @@ class _Executor:
         if fingerprint in self._generated:
             raise BootstrapRefusal(["signing keys: two generated keys are equal; nothing more was written"])
         self._generated.add(fingerprint)
+        # The public half first: if the secret write then fails, the key is
+        # absent, so the next plan generates both again.
+        verify = ed25519_verify_key(key)
+        self.session.call(["variable", "set", item.get("verify_variable"), "--env", item.get("env")], stdin=verify)
         self.session.call(["secret", "set", item.get("name"), "--env", item.get("env")], stdin=key)
         del key
 

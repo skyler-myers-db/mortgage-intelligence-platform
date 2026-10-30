@@ -64,6 +64,14 @@ becomes an update or a delete of that policy.
   orphans every record the old one signed; rotate a proof key with the
   reviewed procedure in [deployment.md](../deployment.md) ("Per-run M2M
   identities").
+- **Verify keys:** the public half of each generated key,
+  `MIP_AI_GATEWAY_PROOF_VERIFY_KEY` and `MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY`,
+  as a variable. Read-only jobs (the nightly) verify with it and never
+  receive the private key. It is derived in the same step, exactly as the
+  deploy derives it, and written **before** the key: GitHub never returns
+  the private key, so no later run could derive it, and if the key's write
+  fails the next plan generates both again. A key already set without its
+  verify key is named in the notes, never regenerated.
 - **`MIP_CLIENT_PROFILE_SHA256`:** the profile digest (`python -m
   tools.clients digest`) of the local profile, as a public variable. It is
   the stand-in for the deferred owner profile attestation: a deploy that
@@ -81,8 +89,8 @@ It never writes:
 
 Until the whole local profile resolves (every public and identifying field,
 with `MIP_IDENTITY_IDS_JSON` complete), the plan writes only the skeleton:
-both environments and their protections, `MIP_CLIENT`, `MIP_REVIEW_MODE` and
-the signing keys. Its notes name what is missing, by field.
+both environments and their protections, `MIP_CLIENT`, `MIP_REVIEW_MODE`,
+the signing keys and their verify keys. Its notes name what is missing, by field.
 
 The plan refuses an identifying field stored as a variable, or a public one
 stored as a secret: the deploy's resolver would refuse it too. Delete it by
