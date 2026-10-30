@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -40,7 +41,7 @@ from tools.databricks.agent_runtime_access import (
 from tools.databricks.estate.accepted_exposure import ExposureRefusal, build_policy, load_policy
 from tools.databricks.estate.genie_exposure import entry_exposures, entry_levels
 from tools.databricks.m2m_access_policy import resolve_effective_groups
-from tools.databricks.prestop_accepted_exposure import PrestopExposure
+from tools.databricks.prestop_accepted_exposure import PrestopExposure, load_prestop_exposure
 from tools.databricks.prestop_refusals import ACCEPTED_EXPOSURE, GENIE_GROUP_GRANT
 
 NOW = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
@@ -342,6 +343,44 @@ def test_the_proxy_deny_all_refuses_its_group_grant_end_to_end(
     assert f"Genie duplicate postflight {space}" in message and "boundary drifted" in message
     assert "Genie postflight" in message and "through group" in message
     assert "accepted exposure" not in message, "the deny-all never loads the policy"
+
+
+@pytest.mark.parametrize(
+    ("expires_in", "refuses"),
+    [(timedelta(hours=1), True), (timedelta(hours=24), True), (timedelta(hours=25), False)],
+)
+def test_an_entry_expiring_within_the_run_margin_refuses_before_the_stop(
+    monkeypatch: pytest.MonkeyPatch, expires_in: timedelta, refuses: bool
+) -> None:
+    """Review of #306: the post-stop audits load later and would judge it expired, App stopped."""
+
+    entries = [entry("app", expires_at=(NOW + expires_in).isoformat())]
+    parsed = [ExposureEntry.model_validate(item) for item in entries]
+    monkeypatch.setenv("MIP_ACCEPTED_EXPOSURE_JSON", json.dumps(entries))
+    monkeypatch.setenv(
+        "MIP_ACK_ACCEPTED_EXPOSURE_PLAN", build_policy(parsed, now=NOW, static_control=lambda: []).digest
+    )
+    for name in ("MIP_GENIE_SPACE_NAME", "DATABRICKS_VERIFIER_CLIENT_ID", "MIP_AI_GATEWAY_VERIFIER_CLIENT_ID"):
+        monkeypatch.delenv(name, raising=False)
+
+    exposure, refusals = load_prestop_exposure(
+        verifier_application_id=VERIFIER_CLIENT, governed_title=GOVERNED_TITLE, now=NOW
+    )
+
+    if refuses:
+        assert exposure is None
+        assert [refusal.code for refusal in refusals] == [ACCEPTED_EXPOSURE]
+        assert "entry 0: expires within the 24 h deploy-run margin" in refusals[0].message
+        # The same entry, judged by a post-stop audit an hour later, is already expired.
+        later = _policy(entries).matcher("app")
+        assert replace(later, now=NOW + expires_in).verdict(entry_exposures_for(entries[0])[0]).code == "expired"
+    else:
+        assert exposure is not None and refusals == []
+
+
+def entry_exposures_for(item: dict[str, Any]) -> tuple[Any, ...]:
+    acl = acl_entry("group_name", item["grantee"], item["privileges"][0], PARENT)
+    return entry_exposures(acl, space_id=OTHER, title=OTHER_TITLE, workspace_id=WORKSPACE)
 
 
 def test_elevated_for_the_proxy_refuses_at_load() -> None:

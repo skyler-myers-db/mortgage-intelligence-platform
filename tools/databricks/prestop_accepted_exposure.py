@@ -13,12 +13,17 @@ With no entry for the App or the agent-runtime nothing extra is read; with
 one, the probe reads the visible spaces' titles once (an entry names its
 space by id and title, and a title is never printed) and the workspace id
 (the space's binding).
+
+Every consumer judges expiry at the moment it loads, and the post-stop audits
+load long after this probe. So an entry expiring within ``RUN_MARGIN`` refuses
+here: it would pass now and refuse as expired with the App already stopped.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 from typing import Any
 
 from tools.databricks.agent_runtime_access import _genie_spaces
@@ -32,6 +37,8 @@ from tools.databricks.estate.genie_exposure import genie_exposures
 from tools.databricks.prestop_genie_grants import GenieGroupGrant
 from tools.databricks.prestop_refusals import ACCEPTED_EXPOSURE, PrestopRefusal
 
+# The reviewed bound on one deploy run, from this probe to its last post-stop audit.
+RUN_MARGIN = timedelta(hours=24)
 _REMEDY = (
     "Fix MIP_ACCEPTED_EXPOSURE_JSON in the client profile (each line names the entry "
     "and the rule), or acknowledge its reviewed plan for this run, then re-run."
@@ -107,16 +114,32 @@ class PrestopExposure:
         return kept, notes, []
 
 
+def expiring_lines(policy: ExposurePolicy, *, margin: timedelta = RUN_MARGIN) -> list[str]:
+    """Entries still valid now that expire before the run's post-stop audits may judge them."""
+
+    hours = int(margin.total_seconds() // 3600)
+    return [
+        f"entry {entry.index}: expires within the {hours} h deploy-run margin, so the post-stop "
+        "audits would judge it expired with the App stopped; renew its expires_at and acknowledge "
+        "the new plan"
+        for entry in policy.entries
+        if policy.now < entry.expires_at <= policy.now + margin
+    ]
+
+
 def load_prestop_exposure(
-    *, verifier_application_id: str, governed_title: str
+    *, verifier_application_id: str, governed_title: str, now: datetime | None = None
 ) -> tuple[PrestopExposure | None, list[PrestopRefusal]]:
     """Load the policy as the post-stop audits will; a refusal keeps every grant refused."""
 
     try:
-        policy = load_policy(verifier_application_ids=[verifier_application_id])
+        policy = load_policy(verifier_application_ids=[verifier_application_id], now=now)
     except ExposureRefusal as exc:
         return None, [_refusal(exc)]
+    expiring = expiring_lines(policy)
+    if expiring:
+        return None, [_refusal(ExposureRefusal(expiring))]
     return PrestopExposure(policy=policy, governed_title=governed_title), []
 
 
-__all__ = ["PrestopExposure", "load_prestop_exposure"]
+__all__ = ["RUN_MARGIN", "PrestopExposure", "expiring_lines", "load_prestop_exposure"]

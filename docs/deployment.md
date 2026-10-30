@@ -2111,6 +2111,10 @@ The client profile's `MIP_ACCEPTED_EXPOSURE_JSON` may accept one exactly
   should use the reviewed plan, never in `.env.local`: every consumer
   recomputes the plan from the profile right before it judges an exposure, and
   a missing or different ack refuses (`accepted_exposure` before the stop).
+  Each consumer judges expiry when it loads, and the post-stop audits load
+  long after the pre-stop probe, so an entry expiring within 24 hours of the
+  probe refuses there (`accepted_exposure`): renew it before the run rather
+  than have it expire with the App stopped.
 - **Inventory.** `python -m tools.databricks.estate.cli
   --emit-exposure-inventory --app-name ... --runtime-application-id ...
   --verifier-application-id ... --expected-inventory-principal ...
