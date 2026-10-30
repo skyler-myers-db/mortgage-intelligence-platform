@@ -11,16 +11,15 @@
 }
 
 # The app resource binding validates the Genie space during
-# `databricks bundle deploy`. A merely well-formed GENIE_SPACE_ID is not proof
-# that it names the governed space in this workspace: CI variables and local
-# dotenv files can survive a workspace change. Always resolve by the reviewed
-# MIP_GENIE_SPACE_NAME, then replace the ambient id with the provisioner's
-# authoritative result before any runtime secret or bundle mutation.
-step "resolve governed Genie space before App secret and bundle mutation"
-run "$PYTHON" -m tools.databricks.provision_genie_space \
-  --space-name "$MIP_GENIE_SPACE_NAME" \
-  --catalog "$MIP_DEFAULT_CATALOG" \
-  --no-smoke-test
+# `databricks bundle deploy`. No input names it (GENIE_SPACE_ID is retired,
+# M1-PR3): the provisioner resolves the governed space by its pin
+# (tools/databricks/genie_space_pin.py), creates and pins it on a first
+# install, pins an acked title match after recomputing its plan, and refuses
+# anything else, before any runtime secret or bundle mutation. A pin write is
+# signed with the deploy's proof key, hence the bounded signing authority.
+step "resolve governed Genie space by its pin before App secret and bundle mutation"
+run_with_proof_signing_authority "$PYTHON" -m tools.databricks.provision_genie_space \
+  "${GENIE_PIN_ARGS[@]}" "${GENIE_PIN_ACK_ARGS[@]}"
 if [[ "$DRY_RUN" -eq 0 ]]; then
   if [[ ! -s genie/space_id.txt ]]; then
     echo "${RED}[deploy] Genie provisioner did not write genie/space_id.txt.${RST}" >&2

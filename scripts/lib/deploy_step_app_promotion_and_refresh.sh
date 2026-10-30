@@ -283,10 +283,9 @@ run "$PYTHON" -m tools.databricks.verify_scheduled_refresh_state \
 # Step 10: rebind the Genie space after gold/semantic assets exist
 # -----------------------------------------------------------------------------
 step "rebind Genie space — bind trusted assets from genie/mortgage_lead_intelligence_space.yml"
-run "$PYTHON" -m tools.databricks.provision_genie_space \
-  --space-name "$MIP_GENIE_SPACE_NAME" \
-  --catalog "$MIP_DEFAULT_CATALOG" \
-  --no-smoke-test
+# The same pin resolution as step 0a: the space step 0a pinned, never a title.
+run_with_proof_signing_authority "$PYTHON" -m tools.databricks.provision_genie_space \
+  "${GENIE_PIN_ARGS[@]}"
 if [[ "$DRY_RUN" -eq 0 ]]; then
   if [[ ! -s genie/space_id.txt ]]; then
     echo "${RED}[deploy] Genie rebind did not write genie/space_id.txt.${RST}" >&2

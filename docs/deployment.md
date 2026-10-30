@@ -1850,6 +1850,53 @@ DATABRICKS_CONFIG_PROFILE=<install profile> \
   python -m tools.databricks.pii_salt_scope check --scope mip --require-existing 1
 ```
 
+### The governed Genie space, pinned by id (M1-PR3)
+
+Anyone who can create a Genie space can give it the governed title, and under
+the live-first doctrine whoever controls the space controls the answers
+(attack G12). So the deploy never adopts a space by its title alone, and
+`GENIE_SPACE_ID` is no deploy input: an ambient value is unset at startup,
+`bundle_env.py` ignores it in the shell, `.env.local` and `genie/space_id.txt`,
+and `deploy-dev.yml` no longer carries it. The App's own `GENIE_SPACE_ID` is
+unchanged: a `value_from: genie_space` resource reference whose binding
+`databricks.yml` takes from `var.genie_space_id`, which `bundle_env.py` sets
+from the pin. The App's env-name set is therefore exactly the one the
+emergency recipe gates on.
+
+`tools/databricks/genie_space_pin.py` resolves the space:
+
+1. **A pin.** The signed pin record (`genie-space-pin-v1-<app>` in the App
+   rollback secret scope, signed with the deploy's proof key like the
+   rollback record) or the App's signed rollback record names the space by
+   id. When both exist they must agree, and the space must still exist; a
+   pinned space that is gone refuses and never falls back to a title.
+2. **No pin, no space with the title.** A first install: step 0a creates the
+   space and pins its id at once, so a run interrupted before its capture
+   still finds its own space next time.
+3. **No pin, one space with the title.** Refused (exit 10): a space the deploy
+   never created or pinned. The owner attestation is deferred, so the one way
+   to adopt it is an exact digest ack. The read-only plan prints the candidate
+   id, the principals holding a direct CAN_MANAGE on it (the Genie API reports
+   no creator; the creator is among them), the deploying identity and the
+   plan's sha256. Review it, then run with `MIP_GENIE_PIN_ACK=<sha256>` exported
+   in the shell (never `.env.local`). Step 0a recomputes the plan immediately
+   before it pins and refuses with nothing changed if the digest moved.
+4. **More than one.** Refused as ambiguous.
+
+The preflight runs the same resolution read-only
+(`provision_genie_space --plan-pin`) before the signed lease and any App stop,
+so a squatter or a stale pin refuses while the App still serves. Run it by hand
+to read the plan:
+
+```bash
+python -m tools.databricks.provision_genie_space --plan-pin \
+  --space-name "<genie-space-title>" --app-name <app-name> \
+  --pin-scope <app-rollback-scope> --lakebase-instance <lakebase-instance>
+```
+
+Reading a pin needs `MIP_AI_GATEWAY_PROOF_VERIFY_KEY` exported; writing one
+needs the signing key too, which the provisioner checks before any mutation.
+
 ### Pre-stop probes (read-only, before step 0a)
 
 Step 0a stops the existing App, and on the unsigned rebase path also

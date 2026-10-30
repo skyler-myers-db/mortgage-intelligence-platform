@@ -2224,9 +2224,10 @@ def test_deploy_dev_seeds_databricks_auth_without_printing_secrets() -> None:
     for secret in (
         "secrets.DATABRICKS_HOST",
         "secrets.DATABRICKS_WAREHOUSE_ID",
-        "secrets.GENIE_SPACE_ID",
     ):
         assert secret in text
+    # GENIE_SPACE_ID is no deploy input: the governed space resolves by its pin (M1-PR3).
+    assert "GENIE_SPACE_ID" not in text.replace("No GENIE_SPACE_ID", "")
     assert "secrets.DATABRICKS_TOKEN" not in text, "the deployer PAT is retired"
     assert "MIP_CI_DEPLOYER_CLIENT_ID: ${{ vars.MIP_CI_DEPLOYER_CLIENT_ID }}" in text
     assert "secrets.MIP_CI_DEPLOYER_CLIENT_ID" not in text, "a public application id, a variable"
@@ -5611,7 +5612,6 @@ _READ_ONLY_PROOF_CALLS = [
     "sdk:metastores.current",
     "sdk:metastores.get",
     "sdk:warehouses.get",
-    "sdk:genie.get_space",
     "cli:current-user me --profile DEFAULT -o json profile_env=DEFAULT oidc_env=set",
 ]
 
@@ -5700,7 +5700,6 @@ def _run_oidc_proof(
             "MIP_CI_DEPLOYER_CLIENT_ID": _DEPLOYER,
             "MIP_PROOF_DATABRICKS_HOST": host,
             "MIP_PROOF_WAREHOUSE_ID": "staging-warehouse",
-            "MIP_PROOF_GENIE_SPACE_ID": "staging-space",
             "ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.actions.example/request",
             "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "github-request-token",
             "FAKE_DATABRICKS_SPEC": str(spec_path),
@@ -5735,7 +5734,6 @@ def test_oidc_proof_step_is_read_only_and_ordered_before_any_deployer_mutation()
         "MIP_CI_DEPLOYER_CLIENT_ID": "${{ vars.MIP_CI_DEPLOYER_CLIENT_ID }}",
         "MIP_PROOF_DATABRICKS_HOST": "${{ secrets.DATABRICKS_HOST }}",
         "MIP_PROOF_WAREHOUSE_ID": "${{ secrets.DATABRICKS_WAREHOUSE_ID }}",
-        "MIP_PROOF_GENIE_SPACE_ID": "${{ secrets.GENIE_SPACE_ID }}",
     }
     assert not [name for name in proof["env"] if name.endswith("_SECRET") or "TOKEN" in name]
     assert "deploy.sh" not in proof["run"]
@@ -5762,7 +5760,6 @@ def test_oidc_proof_step_passes_and_prints_only_booleans(tmp_path: Path) -> None
         "me_in_admins",
         "metastore_owner_is_the_deployer",
         "warehouse_resolves",
-        "genie_space_resolves",
         "cli_authenticates",
         "cli_me_is_the_deployer",
         "cli_me_in_admins",
@@ -5823,7 +5820,6 @@ _NETWORK_PROOF_REFUSALS = {
     "not-workspace-admin": ({"spec": {"me": {"user_name": _DEPLOYER, "groups": ["users"]}}}, "me_in_admins"),
     "metastore-owned-elsewhere": ({"spec": {"metastore_owner": "an-owner@example.invalid"}}, "metastore_owner_is_the_deployer"),
     "warehouse-unresolved": ({"spec": {"warehouses": []}}, "warehouse_resolves"),
-    "genie-space-unresolved": ({"spec": {"spaces": []}}, "genie_space_resolves"),
     "sdk-auth-type-drift": (
         {"spec": {"config": {"auth_type": "pat", "client_id": _DEPLOYER, "host": "__HOST__"}}},
         "sdk_authenticates_with_the_github_oidc_profile",

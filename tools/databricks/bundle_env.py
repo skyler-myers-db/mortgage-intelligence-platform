@@ -26,13 +26,13 @@ Mapping, ``-t client`` (the profile -> BUNDLE_VAR_*, tools/clients/profile.py):
   LAKEBASE_DATABASE       -> BUNDLE_VAR_lakebase_database_name
   MIP_RUNTIME_SECRET_SCOPE -> BUNDLE_VAR_runtime_secret_scope
   MIP_IDENTITY_IDS_JSON.verifier -> BUNDLE_VAR_ai_gateway_verifier_client_id
-  MIP_GENIE_SPACE_NAME    -> the governed Genie title resolved below
+  the governed Genie space -> BUNDLE_VAR_genie_space_id, by its pin
+                             (tools/databricks/genie_space_pin.py, M1-PR3)
 For ``-t ci`` the same names come from the environment and ``.env.local``
 with their defaults, as before the client target.
 
 Mapping, every target (env -> BUNDLE_VAR_*):
   DATABRICKS_WAREHOUSE_ID -> BUNDLE_VAR_sql_warehouse_id
-  GENIE_SPACE_ID          -> BUNDLE_VAR_genie_space_id
   MIP_LENDER_NAME         -> BUNDLE_VAR_lender_name
   MIP_LENDER_NMLS_ID      -> BUNDLE_VAR_lender_nmls_id
   MIP_TENANT_ID           -> BUNDLE_VAR_tenant_id
@@ -53,7 +53,8 @@ Usage:
   python tools/databricks/bundle_env.py summary  -t client -o json
   # The deploy's pre-lease plan gate (tools/databricks/bundle_plan_gate.py)
   # may plan before a first install provisions the governed Genie space:
-  # with no space of that title, and only for plan, the placeholder binds.
+  # with no pin and no signed rollback record, and only for plan, the
+  # placeholder binds.
   python tools/databricks/bundle_env.py plan -t client -o json --allow-unprovisioned-genie
   # Mutable use is command-of-record internal only and requires one or more
   # exact, non-App selectors:
@@ -377,52 +378,22 @@ def _genie_workspace_client(env: dict[str, str]) -> Any:
     return client
 
 
-class GovernedGenieSpaceAbsent(ValueError):
-    """No Genie space holds the governed title yet (a first install provisions it)."""
+def _pinned_genie_space_id(env: dict[str, str], profile: ClientProfile) -> str | None:
+    """The governed Genie space by its pin; ``None`` when nothing pins one yet (a first install).
 
+    Never a title and never an input: ``GENIE_SPACE_ID`` is retired (M1-PR3).
+    The pin record and the App's signed rollback record must agree, and a
+    pinned space must still exist (tools/databricks/genie_space_pin.py).
+    """
 
-def _resolve_governed_genie_space_id(
-    env: dict[str, str],
-    *,
-    space_name: str,
-    client: Any | None = None,
-) -> str:
-    """Resolve exactly one live Genie space by governed title and round-trip it."""
+    from tools.databricks import genie_space_pin
 
-    if not space_name.strip():
-        raise ValueError("MIP_GENIE_SPACE_NAME must not be empty")
-    workspace = client or _genie_workspace_client(env)
-    matches: list[Any] = []
-    page_token: str | None = None
-    while True:
-        response = workspace.genie.list_spaces(page_token=page_token)
-        for space in getattr(response, "spaces", None) or []:
-            title = str(getattr(space, "title", None) or getattr(space, "name", None) or "")
-            if title.strip() == space_name:
-                matches.append(space)
-        page_token = getattr(response, "next_page_token", None)
-        if not page_token:
-            break
-    if not matches:
-        raise GovernedGenieSpaceAbsent(
-            f"expected exactly one Genie space named {space_name!r}; found 0"
-        )
-    if len(matches) != 1:
-        raise ValueError(
-            f"expected exactly one Genie space named {space_name!r}; found {len(matches)}"
-        )
-    space_id = str(
-        getattr(matches[0], "space_id", None) or getattr(matches[0], "id", None) or ""
-    ).strip()
-    if not _is_real(space_id):
-        raise ValueError(f"Genie space {space_name!r} returned no valid space id")
-    confirmed = workspace.genie.get_space(space_id)
-    confirmed_title = str(
-        getattr(confirmed, "title", None) or getattr(confirmed, "name", None) or ""
-    ).strip()
-    if confirmed_title != space_name:
-        raise ValueError(f"Genie space {space_id!r} round-trip title does not match {space_name!r}")
-    return space_id
+    return genie_space_pin.pinned_space_id(
+        _genie_workspace_client(env),
+        app_name=profile.app_name,
+        scope=profile.app_rollback_secret_scope,
+        lakebase_instance=profile.lakebase_instance,
+    )
 
 
 def main() -> int:
@@ -503,9 +474,6 @@ def main() -> int:
         for k, v in dotenv_values(ENV_LOCAL).items():
             if v is None:
                 continue
-            # deploy.sh may pre-provision Genie and export GENIE_SPACE_ID
-            # before calling this helper. Preserve that real value if
-            # .env.local still carries the first-run blank/template value.
             # Deployment controls follow shell > dotenv > default. Preserve a
             # reviewed shell export, but make the documented one-.env.local
             # path work when no shell value exists. Alias agreement and target
@@ -535,9 +503,12 @@ def main() -> int:
                 continue
             if deployer_auth_bound and k in immutable_workspace_auth:
                 continue
-            if k in {"DATABRICKS_WAREHOUSE_ID", "GENIE_SPACE_ID"} and _is_real(env.get(k)):
+            if k == "DATABRICKS_WAREHOUSE_ID" and _is_real(env.get(k)):
                 continue
             env[k] = v
+    # GENIE_SPACE_ID is no deploy input (M1-PR3): the governed space comes from
+    # its pin below, never from the shell, .env.local or genie/space_id.txt.
+    env.pop("GENIE_SPACE_ID", None)
 
     if subcmd == "deployment":
         deployment_error = _validate_app_deployment_command(
@@ -552,73 +523,55 @@ def main() -> int:
             print(f"[bundle_env] {deployment_error}", file=sys.stderr)
             return 2
     warehouse = env.get("DATABRICKS_WAREHOUSE_ID")
-    genie = env.get("GENIE_SPACE_ID")
+    genie: str | None = None
     verifier_client_id = (
         profile.identity_ids.verifier
         if profile is not None
         else env.get("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID")
     )
-    if not _is_real(genie):
-        space_id_file = REPO / "genie" / "space_id.txt"
-        if space_id_file.exists():
-            genie = space_id_file.read_text(encoding="utf-8").strip()
-            if _is_real(genie):
-                env["GENIE_SPACE_ID"] = genie
 
     # Plan/summary/deploy can influence a real deployment decision, and deploy
-    # mutates the App binding. Never trust a syntactically valid env/dotenv id:
-    # resolve the exact governed title in the authenticated workspace and
-    # overwrite the child value. `scripts/deploy.sh` provisions that named
-    # space first, so a missing or duplicate title here is always a hard stop.
+    # mutates the App binding. The governed space is the one its pin names
+    # (attack G12): the signed pin record or the App's signed rollback record,
+    # proven to exist. A title match is never adopted here; only the
+    # provisioner adopts one, by an exact digest ack. With nothing pinned yet
+    # (a first install), only the pre-lease plan may bind the placeholder.
     genie_unprovisioned = False
-    if subcmd in {"plan", "summary", "deploy", "deployment"}:
-        space_name = (
-            profile.genie_space_name
-            if profile is not None
-            else str(env.get("MIP_GENIE_SPACE_NAME") or "Mortgage Lead Intelligence").strip()
-        )
+    if subcmd in {"plan", "summary", "deploy", "deployment"} and profile is not None:
         try:
-            governed_genie = _resolve_governed_genie_space_id(env, space_name=space_name)
-        except GovernedGenieSpaceAbsent as exc:
+            genie = _pinned_genie_space_id(env, profile)
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary fails closed
+            print(
+                "[bundle_env] governed Genie binding verification failed: "
+                f"{exc if type(exc).__name__ == 'GeniePinRefusal' else type(exc).__name__}",
+                file=sys.stderr,
+            )
+            return 2
+        if genie is None:
             if not allow_unprovisioned_genie:
                 print(
-                    f"[bundle_env] governed Genie binding verification failed: {exc}",
+                    "[bundle_env] governed Genie binding verification failed: no pin names the "
+                    "governed Genie space yet; run tools/databricks/provision_genie_space.py (which "
+                    "creates and pins it) or ./scripts/deploy.sh first",
                     file=sys.stderr,
                 )
                 return 2
-            # Read-only plan only: no space holds the governed title, so no id
-            # in env or .env.local can be the governed one. Plan with the
-            # placeholder; scripts/deploy.sh plans again, without this flag,
-            # after it provisions the space and before it applies anything.
+            # Read-only plan only: nothing pins a space yet, so no id can be
+            # the governed one. scripts/deploy.sh plans again, without this
+            # flag, after it provisions and pins the space.
             print(
-                f"[bundle_env] no Genie space is named {space_name!r} yet; this read-only "
-                "plan binds the placeholder (the deploy re-plans after provisioning)",
+                "[bundle_env] no pin names the governed Genie space yet; this read-only plan binds "
+                "the placeholder (the deploy re-plans after provisioning)",
                 file=sys.stderr,
             )
             genie_unprovisioned = True
-            genie = PLACEHOLDER
-            env["GENIE_SPACE_ID"] = PLACEHOLDER
-        except Exception as exc:  # noqa: BLE001 - CLI boundary must fail closed
-            print(
-                f"[bundle_env] governed Genie binding verification failed: {exc}", file=sys.stderr
-            )
-            return 2
-        else:
-            if _is_real(genie) and str(genie).strip() != governed_genie:
-                print(
-                    "[bundle_env] replacing stale GENIE_SPACE_ID with the id resolved "
-                    f"from MIP_GENIE_SPACE_NAME={space_name!r}",
-                    file=sys.stderr,
-                )
-            genie = governed_genie
-            env["GENIE_SPACE_ID"] = governed_genie
 
     if subcmd in {"plan", "summary", "deploy", "deployment"}:
         missing = []
         if not _is_real(warehouse):
             missing.append("DATABRICKS_WAREHOUSE_ID")
         if not _is_real(genie) and not genie_unprovisioned:
-            missing.append("GENIE_SPACE_ID")
+            missing.append("the pinned governed Genie space")
         if not _is_real(verifier_client_id):
             missing.append("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID")
         if missing:
@@ -768,7 +721,7 @@ def main() -> int:
             file=sys.stderr,
         )
     print(f"[bundle_env] {status('DATABRICKS_WAREHOUSE_ID', warehouse)}", file=sys.stderr)
-    print(f"[bundle_env] {status('GENIE_SPACE_ID', genie)}", file=sys.stderr)
+    print(f"[bundle_env] {status('governed Genie space (pinned)', genie)}", file=sys.stderr)
     print(
         "[bundle_env] deployment resources "
         f"app={resource_names['app_name']} "

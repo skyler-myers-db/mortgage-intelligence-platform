@@ -69,10 +69,12 @@
 # Environment:
 #   .env.local holds the client profile (deploy/clients/example.env), plus
 #   DATABRICKS_WAREHOUSE_ID.
-#   (If GENIE_SPACE_ID is blank on first run, this script provisions the
-#   Genie space before bundle deploy so databricks_app.mip_app never binds
-#   to the placeholder sentinel. The later Genie step re-runs after gold
-#   refresh to bind trusted assets.)
+#   GENIE_SPACE_ID is no input (M1-PR3): the governed Genie space is resolved
+#   by its pin (tools/databricks/genie_space_pin.py). A first install creates
+#   and pins it before bundle deploy, so databricks_app.mip_app never binds the
+#   placeholder; an unpinned title match refuses unless MIP_GENIE_PIN_ACK
+#   (shell only) is the sha256 of its read-only pin plan. The later Genie step
+#   re-runs after gold refresh to bind trusted assets.
 #
 # Fail-loud contract:
 #   * `set -euo pipefail` — any step that exits non-zero stops the script.
@@ -102,6 +104,9 @@ for _PRIVATE_CREDENTIAL in \
   export -n "${_PRIVATE_CREDENTIAL?}" 2>/dev/null || true
 done
 unset _PRIVATE_CREDENTIAL
+# GENIE_SPACE_ID is no deploy input (M1-PR3): only this run's pin resolution
+# (step 0a's provisioner) sets it, so an ambient value never reaches a step.
+unset GENIE_SPACE_ID
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -172,7 +177,7 @@ while [[ $# -gt 0 ]]; do
       fi
       PHASE_SEEN=1 ;;
     -h|--help)
-      sed -n '2,81p' "$0"
+      sed -n '2,83p' "$0"
       exit 0
       ;;
     *)

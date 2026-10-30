@@ -1,12 +1,14 @@
 """``bundle_env plan --allow-unprovisioned-genie``: the pre-lease plan gate's only relaxation.
 
 The deploy plans before the signed lease (M0-PR4), which on a first install is
-before the governed Genie space exists. Only ``plan``, and only with this
-wrapper flag, may then proceed with the placeholder binding, and only when no
-space holds the governed title. A duplicate title, any other resolution error,
-the flag on another subcommand, or the flag absent still refuse, and the flag
-never reaches the Databricks CLI. Every call names ``-t client`` (M1-PR2) with
-the paychex-shaped client profile in ``.env.local``
+before the governed Genie space exists. bundle_env binds the governed space by
+its pin only (tools/databricks/genie_space_pin.py, M1-PR3): never a title and
+never an ambient ``GENIE_SPACE_ID``. Only ``plan``, and only with this wrapper
+flag, may proceed with the placeholder binding, and only when nothing pins a
+space yet. A pin refusal, any other read error, the flag on another
+subcommand, or the flag absent still refuse, and the flag never reaches the
+Databricks CLI. Every call names ``-t client`` (M1-PR2) with the
+paychex-shaped client profile in ``.env.local``
 (tests/fixtures/client_profiles.py).
 """
 
@@ -43,20 +45,10 @@ def _client_env_local(tmp_path: Path, extra: str) -> Path:
     return env_local
 
 
-def _space_list(*titles: str) -> SimpleNamespace:
-    spaces = [
-        SimpleNamespace(title=title, space_id=f"space-{index}")
-        for index, title in enumerate(titles)
-    ]
+def _pins(pinned: str | None) -> Any:
+    """``_pinned_genie_space_id`` answering ``pinned`` (``None``: nothing pins a space yet)."""
 
-    class Genie:
-        def list_spaces(self, *, page_token: str | None) -> SimpleNamespace:
-            return SimpleNamespace(spaces=spaces, next_page_token=None)
-
-        def get_space(self, space_id: str) -> SimpleNamespace:
-            return next(SimpleNamespace(title=s.title) for s in spaces if s.space_id == space_id)
-
-    return SimpleNamespace(genie=Genie())
+    return lambda _env, _profile: pinned
 
 
 def _run(
@@ -64,7 +56,7 @@ def _run(
     tmp_path: Path,
     argv: list[str],
     *,
-    titles: tuple[str, ...],
+    pinned: str | None,
     ambient_genie: str = "stale-cross-workspace-id",
 ) -> tuple[int, dict[str, Any]]:
     # -t client: the verifier is the profile's MIP_IDENTITY_IDS_JSON.verifier.
@@ -75,7 +67,7 @@ def _run(
     monkeypatch.setattr(bundle_env, "REPO", tmp_path)
     for name in ("DATABRICKS_WAREHOUSE_ID", "GENIE_SPACE_ID", "MIP_GENIE_SPACE_NAME"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(bundle_env, "_genie_workspace_client", lambda _env: _space_list(*titles))
+    monkeypatch.setattr(bundle_env, "_pinned_genie_space_id", _pins(pinned))
     monkeypatch.setattr(bundle_env.render_sql, "render", lambda **_kwargs: (1, 0, 0))
     monkeypatch.setattr(
         bundle_env.scheduled_refresh_posture, "apply", lambda env, **_kw: "refresh: test"
@@ -92,51 +84,51 @@ def _run(
     return bundle_env.main(), captured
 
 
-def test_the_flag_plans_with_the_placeholder_when_no_space_has_the_title(
+def test_the_flag_plans_with_the_placeholder_when_nothing_pins_a_space(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    rc, captured = _run(
-        monkeypatch, tmp_path, ["plan", "-t", "client", "-o", "json", FLAG], titles=("Other",)
-    )
+    rc, captured = _run(monkeypatch, tmp_path, ["plan", "-t", "client", "-o", "json", FLAG], pinned=None)
 
     assert rc == 0
     assert captured["command"] == ["databricks", "bundle", "plan", "-t", "client", "-o", "json"]
     assert captured["env"]["BUNDLE_VAR_genie_space_id"] == bundle_env.PLACEHOLDER
     assert "stale-cross-workspace-id" not in captured["env"].values(), "a stale id never binds"
+    assert "GENIE_SPACE_ID" not in captured["env"], "GENIE_SPACE_ID is no input (M1-PR3)"
     assert "binds the placeholder" in capsys.readouterr().err
 
 
-def test_the_flag_still_resolves_the_governed_space_when_it_exists(
+def test_the_flag_still_binds_the_pinned_space_when_one_is_pinned(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     rc, captured = _run(
-        monkeypatch,
-        tmp_path,
-        ["plan", "-t", "client", "-o", "json", FLAG],
-        titles=("Mortgage Lead Intelligence",),
+        monkeypatch, tmp_path, ["plan", "-t", "client", "-o", "json", FLAG], pinned="pinned-space"
     )
 
     assert rc == 0
-    assert captured["env"]["BUNDLE_VAR_genie_space_id"] == "space-0"
+    assert captured["env"]["BUNDLE_VAR_genie_space_id"] == "pinned-space"
 
 
-def test_a_duplicate_title_refuses_even_with_the_flag(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_a_pin_refusal_refuses_even_with_the_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    rc, captured = _run(
-        monkeypatch,
-        tmp_path,
-        ["plan", "-t", "client", "-o", "json", FLAG],
-        titles=("Mortgage Lead Intelligence", "Mortgage Lead Intelligence"),
-    )
+    from tools.databricks.genie_space_pin import GeniePinRefusal
 
-    assert rc == 2 and captured == {}
+    def refused(_env: dict[str, str], _profile: Any) -> str:
+        raise GeniePinRefusal("the pinned governed Genie space no longer exists")
+
+    rc, captured = _run(monkeypatch, tmp_path, ["plan", "-t", "client", "-o", "json", FLAG], pinned=None)
+    assert rc == 0
+    monkeypatch.setattr(bundle_env, "_pinned_genie_space_id", refused)
+    captured.clear()
+
+    assert bundle_env.main() == 2 and captured == {}
+    assert "the pinned governed Genie space no longer exists" in capsys.readouterr().err
 
 
 def test_without_the_flag_an_unprovisioned_space_still_refuses_the_plan(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    rc, captured = _run(monkeypatch, tmp_path, ["plan", "-t", "client", "-o", "json"], titles=())
+    rc, captured = _run(monkeypatch, tmp_path, ["plan", "-t", "client", "-o", "json"], pinned=None)
 
     assert rc == 2 and captured == {}
 
@@ -158,7 +150,7 @@ def test_the_flag_is_refused_outside_one_plan(
     capsys: pytest.CaptureFixture[str],
     argv: list[str],
 ) -> None:
-    rc, captured = _run(monkeypatch, tmp_path, argv, titles=())
+    rc, captured = _run(monkeypatch, tmp_path, argv, pinned=None)
 
     assert rc == 2 and captured == {}
     # The flag's own refusal, not the target check before it.
@@ -166,10 +158,10 @@ def test_the_flag_is_refused_outside_one_plan(
 
 
 def test_a_genie_read_error_refuses_even_with_the_flag(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     def broken(_env: dict[str, str]) -> Any:
-        raise RuntimeError("Genie listing failed")
+        raise RuntimeError(f"Genie listing failed for {tmp_path}")
 
     monkeypatch.setattr(bundle_env, "_genie_workspace_client", broken)
     env_local = _client_env_local(tmp_path, "DATABRICKS_WAREHOUSE_ID=w\n")
@@ -183,15 +175,11 @@ def test_a_genie_read_error_refuses_even_with_the_flag(
 
     assert bundle_env.main() == 2
     assert called == []
+    err = capsys.readouterr().err
+    assert "governed Genie binding verification failed: RuntimeError" in err
+    assert str(tmp_path) not in err, "a non-pin error prints its class only"
 
 
-def test_an_absent_title_is_its_own_error_class_with_the_same_message() -> None:
-    with pytest.raises(bundle_env.GovernedGenieSpaceAbsent, match="found 0"):
-        bundle_env._resolve_governed_genie_space_id(
-            {}, space_name="Governed", client=_space_list("Other")
-        )
-    with pytest.raises(ValueError, match="found 2") as raised:
-        bundle_env._resolve_governed_genie_space_id(
-            {}, space_name="G", client=_space_list("G", "G")
-        )
-    assert not isinstance(raised.value, bundle_env.GovernedGenieSpaceAbsent)
+def test_bundle_env_no_longer_resolves_a_space_by_its_title() -> None:
+    for retired in ("_resolve_governed_genie_space_id", "GovernedGenieSpaceAbsent"):
+        assert not hasattr(bundle_env, retired), retired

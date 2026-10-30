@@ -47,10 +47,19 @@ Design choices (Module 0):
 * Auth resolution mirrors ``databricks`` CLI: env vars first
   (``DATABRICKS_HOST`` / ``DATABRICKS_TOKEN``), then the named CLI profile
   (``--profile`` flag or ``DATABRICKS_CONFIG_PROFILE``, default ``DEFAULT``).
-* Warehouse ID comes from ``DATABRICKS_WAREHOUSE_ID`` (same variable the
-  bundle picks up via ``BUNDLE_VAR_sql_warehouse_id``).
+* Warehouse ID comes from ``--warehouse-id`` (scripts/deploy.sh passes the
+  warehouse its bundle state binds) or ``DATABRICKS_WAREHOUSE_ID``.
+* The governed space is resolved by a pinned id, never by its title alone
+  (tools/databricks/genie_space_pin.py, attack G12, M1-PR3): the signed pin
+  record or the App's signed rollback record. With no pin, no title match
+  means a first create, which pins the new id; one title match is refused
+  unless ``--ack-plan`` is the sha256 of its read-only pin plan
+  (``--plan-pin`` prints it, with no mutation); more than one is refused. A
+  write needs the deploy's proof-signing key pair
+  (``MIP_AI_GATEWAY_PROOF_SIGNING_KEY`` / ``_VERIFY_KEY``), checked before
+  any mutation. ``GENIE_SPACE_ID`` is never an input.
 * On success, writes the resolved space id to ``genie/space_id.txt``
-  (gitignored) and prints an ``export`` line the operator can paste.
+  (gitignored), the run-local hand-off to scripts/deploy.sh.
 * Runs a live smoke-test conversation (``--smoke-test``, default on)
   against the new space so operators see that Genie actually
   answers before serving real traffic.
@@ -84,6 +93,12 @@ if str(REPO_ROOT) not in sys.path:
 from backend.config import source_names  # noqa: E402
 from backend.config.source_names import CotalitySource  # noqa: E402
 from tools import render_sql  # noqa: E402
+from tools.databricks import genie_space_pin  # noqa: E402
+from tools.databricks.genie_space_writes import (  # noqa: E402
+    _create_with_fallback,
+    _update_with_fallback,
+    _verify_round_trip,
+)
 from tools.databricks.workspace_auth import (  # noqa: E402
     APP_FACING_WORKSPACE_AUTH_ENV,
     deployment_workspace_client,
@@ -138,7 +153,14 @@ def _load_env_local() -> None:
             os.environ[key] = value
 
 DEFAULT_SPACE_NAME = "Mortgage Lead Intelligence"
+DEFAULT_APP_NAME = "mip-app"
+DEFAULT_LAKEBASE_INSTANCE = "mip-app-state"
 DEFAULT_PROFILE = "DEFAULT"
+# Exit codes of the pin (M1-PR3): 10 refused before any mutation, 11 a space
+# was created but its pin could not be written (the next run refuses it as an
+# unpinned title match until it is acked).
+EXIT_PIN_REFUSED = 10
+EXIT_PIN_UNWRITTEN = 11
 DEFAULT_SMOKE_QUESTION = "How many borrowers are currently in-the-money?"
 SMOKE_TIMEOUT_SECONDS = 60
 DEFAULT_TENANT_NAME = "Summit Mortgage"
@@ -434,6 +456,31 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Path to the space YAML (default: genie/mortgage_lead_intelligence_space.yml).",
     )
     parser.add_argument(
+        "--app-name",
+        default=os.environ.get("MIP_APP_NAME") or DEFAULT_APP_NAME,
+        help="The App whose governed space this is (it names the pin and the rollback record).",
+    )
+    parser.add_argument(
+        "--pin-scope",
+        default=os.environ.get("MIP_APP_ROLLBACK_SECRET_SCOPE") or None,
+        help="The App rollback secret scope holding the pin (default: derived from --app-name).",
+    )
+    parser.add_argument(
+        "--lakebase-instance",
+        default=os.environ.get("MIP_LAKEBASE_INSTANCE") or DEFAULT_LAKEBASE_INSTANCE,
+        help="The App's Lakebase instance, which the signed rollback record names.",
+    )
+    parser.add_argument(
+        "--plan-pin",
+        action="store_true",
+        help="Read-only: resolve the governed space by its pin and print the plan; no mutation.",
+    )
+    parser.add_argument(
+        "--ack-plan",
+        default="",
+        help="The sha256 of the read-only pin plan that adopts one unpinned title match.",
+    )
+    parser.add_argument(
         "--smoke-test",
         dest="smoke_test",
         action="store_true",
@@ -473,28 +520,6 @@ def _build_client(args: argparse.Namespace):
     return WorkspaceClient(**kwargs)
 
 
-def _find_space(client: Any, target_name: str) -> Any | None:
-    """Resolve at most one exact-title space across every result page."""
-    matches: list[Any] = []
-    page_token: str | None = None
-    while True:
-        resp = client.genie.list_spaces(page_token=page_token)
-        spaces = getattr(resp, "spaces", None) or []
-        for space in spaces:
-            title = getattr(space, "title", None) or getattr(space, "name", None)
-            if title and title.strip() == target_name:
-                matches.append(space)
-        page_token = getattr(resp, "next_page_token", None)
-        if not page_token:
-            break
-    if len(matches) > 1:
-        raise ValueError(
-            f"refusing ambiguous Genie binding: found {len(matches)} spaces "
-            f"named {target_name!r}"
-        )
-    return matches[0] if matches else None
-
-
 def _workspace_ui_url(host: str | None, space_id: str | None = None) -> str:
     base = (host or "").rstrip("/")
     if not base:
@@ -507,129 +532,6 @@ def _workspace_ui_url(host: str | None, space_id: str | None = None) -> str:
 def _write_space_id(space_id: str) -> None:
     SPACE_ID_FILE.parent.mkdir(parents=True, exist_ok=True)
     SPACE_ID_FILE.write_text(space_id + "\n")
-
-
-def _call_create(
-    client: Any,
-    *,
-    warehouse_id: str,
-    serialized: str,
-    title: str,
-    description: str,
-) -> Any:
-    return client.genie.create_space(
-        warehouse_id=warehouse_id,
-        serialized_space=serialized,
-        title=title,
-        description=description,
-    )
-
-
-def _is_missing_catalog_error(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return "catalog" in msg and "does not exist" in msg
-
-
-def _create_with_fallback(
-    client: Any,
-    spec: SpaceSpec,
-    *,
-    warehouse_id: str,
-    title: str,
-) -> tuple[Any, bool]:
-    """Attempt full create; on missing-catalog error, retry with empty tables.
-
-    Returns (created_space, tables_bound_flag).
-    """
-    serialized_full = spec.to_serialized_payload(include_tables=True)
-    try:
-        created = _call_create(
-            client,
-            warehouse_id=warehouse_id,
-            serialized=serialized_full,
-            title=title,
-            description=spec.description,
-        )
-        return created, True
-    except Exception as exc:  # noqa: BLE001
-        if not _is_missing_catalog_error(exc):
-            raise
-        print(
-            f"warning: table bindings rejected ({exc}); "
-            f"creating space without tables so curation (questions, instructions) still lands.",
-            file=sys.stderr,
-        )
-        serialized_empty = spec.to_serialized_payload(include_tables=False)
-        created = _call_create(
-            client,
-            warehouse_id=warehouse_id,
-            serialized=serialized_empty,
-            title=title,
-            description=spec.description,
-        )
-        return created, False
-
-
-def _update_with_fallback(
-    client: Any,
-    spec: SpaceSpec,
-    *,
-    space_id: str,
-    title: str,
-    warehouse_id: str | None,
-) -> bool:
-    """Attempt full update; fall back to empty tables on missing-catalog error.
-
-    Returns tables_bound_flag.
-    """
-    serialized_full = spec.to_serialized_payload(include_tables=True)
-    try:
-        kwargs: dict[str, Any] = {
-            "space_id": space_id,
-            "description": spec.description,
-            "serialized_space": serialized_full,
-            "title": title,
-        }
-        if warehouse_id:
-            kwargs["warehouse_id"] = warehouse_id
-        client.genie.update_space(**kwargs)
-        return True
-    except Exception as exc:  # noqa: BLE001
-        if not _is_missing_catalog_error(exc):
-            raise
-        print(
-            f"warning: table bindings rejected on update ({exc}); "
-            f"updating without tables so questions/instructions still land.",
-            file=sys.stderr,
-        )
-        serialized_empty = spec.to_serialized_payload(include_tables=False)
-        kwargs = {
-            "space_id": space_id,
-            "description": spec.description,
-            "serialized_space": serialized_empty,
-            "title": title,
-        }
-        if warehouse_id:
-            kwargs["warehouse_id"] = warehouse_id
-        client.genie.update_space(**kwargs)
-        return False
-
-
-def _verify_round_trip(client: Any, space_id: str) -> dict[str, Any]:
-    """Re-fetch the space with its serialized payload and return the dict.
-
-    Callers assert structure, not content — e.g. that config.sample_questions
-    echoes the same count we sent.
-    """
-    full = client.genie.get_space(space_id, include_serialized_space=True)
-    d = full.as_dict() if hasattr(full, "as_dict") else {}
-    ss = d.get("serialized_space")
-    if isinstance(ss, str):
-        try:
-            d["_parsed_serialized_space"] = json.loads(ss)
-        except Exception:  # noqa: BLE001
-            d["_parsed_serialized_space"] = {}
-    return d
 
 
 def _run_smoke_test(client: Any, space_id: str) -> bool:
@@ -675,6 +577,20 @@ def _run_smoke_test(client: Any, space_id: str) -> bool:
     return True
 
 
+def _default_pin_scope(app_name: str) -> str:
+    from tools.databricks.app_rollback_secret_scope import expected_app_rollback_scope
+
+    return expected_app_rollback_scope(app_name)
+
+
+def _print_refusal(exc: genie_space_pin.GeniePinRefusal) -> None:
+    if exc.plan is not None:
+        print("read-only pin plan (nothing was changed):")
+        for line in genie_space_pin.describe_plan(exc.plan):
+            print(line)
+    print(f"error: {exc}", file=sys.stderr)
+
+
 def run(args: argparse.Namespace) -> int:
     if args.catalog:
         os.environ["MIP_DEFAULT_CATALOG"] = args.catalog
@@ -700,14 +616,15 @@ def run(args: argparse.Namespace) -> int:
         print()
         print("Plan (dry-run, no SDK calls made):")
         print(f"  - Resolve workspace via profile={args.profile!r} (or env).")
-        print(f"  - List spaces, search for title == {target_name!r}.")
-        print("  - If not found: CREATE via genie.create_space() with")
-        print("      warehouse_id = ${DATABRICKS_WAREHOUSE_ID}")
+        print("  - Resolve the governed space by its pin (the signed pin record or rollback record).")
+        print(f"  - No pin and no space titled {target_name!r}: CREATE via genie.create_space() with")
+        print("      warehouse_id = --warehouse-id (the bundle's warehouse)")
         print(f"      title        = {target_name!r}")
         print(f"      description  = {spec.description[:60]!r}...")
-        print("  - If found: UPDATE title / description / serialized_space if drift.")
+        print("    then pin the new id.")
+        print("  - A pinned space: UPDATE title / description / serialized_space if drift.")
+        print("  - An unpinned title match: refuse unless --ack-plan names its pin plan.")
         print(f"  - Write resolved space_id to {SPACE_ID_FILE.relative_to(REPO_ROOT)}")
-        print("  - Print export line: BUNDLE_VAR_genie_space_id=<id>")
         return 0
 
     try:
@@ -719,15 +636,38 @@ def run(args: argparse.Namespace) -> int:
     host = getattr(client.config, "host", None)
     print(f"  workspace:     {host}")
 
+    pin_scope = args.pin_scope or _default_pin_scope(args.app_name)
     try:
-        existing = _find_space(client, target_name)
-    except Exception as exc:  # noqa: BLE001
-        print(f"error: list_spaces failed: {exc}", file=sys.stderr)
-        print(f"hint:  open {_workspace_ui_url(host)} to create it manually.", file=sys.stderr)
-        return 4
+        resolution = genie_space_pin.resolve(
+            client,
+            app_name=args.app_name,
+            title=target_name,
+            scope=pin_scope,
+            lakebase_instance=args.lakebase_instance,
+            ack_plan=args.ack_plan,
+        )
+    except genie_space_pin.GeniePinRefusal as exc:
+        _print_refusal(exc)
+        return EXIT_PIN_REFUSED
+    except Exception as exc:  # noqa: BLE001 - the class only: an SDK message can carry an id
+        print(f"error: the governed Genie space pin could not be read: {type(exc).__name__}", file=sys.stderr)
+        return EXIT_PIN_REFUSED
 
-    plan = "CREATE" if existing is None else "UPDATE"
-    print(f"  plan:          {plan}")
+    plan = {"use": "UPDATE", "adopt": "UPDATE", "create": "CREATE"}[resolution.action]
+    print(f"  plan:          {plan} (governed space from {resolution.source})")
+    if args.plan_pin:
+        if resolution.plan is not None:
+            for line in genie_space_pin.describe_plan({**resolution.plan, "sha256": resolution.plan_sha256}):
+                print(line)
+        print("  read-only pin plan: nothing was changed")
+        return 0
+    if resolution.write_pin is not None:
+        # A pin write needs the deploy's signing key pair: prove it before any mutation.
+        try:
+            genie_space_pin.sign_pin({"probe": True})
+        except Exception as exc:  # noqa: BLE001
+            print(f"error: the Genie pin cannot be signed ({exc}); nothing was changed.", file=sys.stderr)
+            return EXIT_PIN_REFUSED
 
     tables_bound = False
     space_id = ""
@@ -735,10 +675,9 @@ def run(args: argparse.Namespace) -> int:
     if plan == "CREATE":
         if not args.warehouse_id:
             print(
-                "error: DATABRICKS_WAREHOUSE_ID (or --warehouse-id) is required to create a space.",
+                "error: --warehouse-id (the bundle's warehouse) is required to create a space.",
                 file=sys.stderr,
             )
-            print(f"hint:  open {_workspace_ui_url(host)} to create manually.", file=sys.stderr)
             return 5
         try:
             created, tables_bound = _create_with_fallback(
@@ -751,8 +690,28 @@ def run(args: argparse.Namespace) -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"error: create_space failed: {exc}", file=sys.stderr)
             return 6
-    else:  # UPDATE
-        space_id = getattr(existing, "space_id", "") or ""
+    else:  # UPDATE the pinned (or just acked) space
+        space_id = resolution.space_id or ""
+    if space_id and resolution.write_pin is not None:
+        try:
+            genie_space_pin.write_pin(
+                client,
+                scope=pin_scope,
+                app_name=args.app_name,
+                title=target_name,
+                space_id=space_id,
+                provenance=resolution.write_pin,
+                plan_digest=resolution.plan_sha256,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"error: the governed Genie space could not be pinned ({type(exc).__name__}); the next run "
+                "refuses it as an unpinned title match until its plan is acked.",
+                file=sys.stderr,
+            )
+            return EXIT_PIN_UNWRITTEN
+        print(f"  pinned:        governed space ({resolution.write_pin})")
+    if plan == "UPDATE" and space_id:
         try:
             tables_bound = _update_with_fallback(
                 client,
@@ -809,10 +768,7 @@ def run(args: argparse.Namespace) -> int:
     print(f"Resolved space_id: {space_id}")
     print(f"Written to:        {SPACE_ID_FILE.relative_to(REPO_ROOT)}")
     print(f"Deep link:         {_workspace_ui_url(host, space_id)}")
-    print()
-    print("Paste into your shell (or .env.local, not committed):")
-    print(f"  export BUNDLE_VAR_genie_space_id={space_id}")
-    print(f"  export GENIE_SPACE_ID={space_id}")
+    print("The id is pinned: scripts/deploy.sh and bundle_env resolve it by the pin, never by an input.")
 
     if not tables_bound:
         print()

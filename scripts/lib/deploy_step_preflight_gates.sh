@@ -776,3 +776,44 @@ else
   echo "[deploy] would check (read-only): tools.databricks.provision_runtime_secrets --check --scope ${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"
 fi
 # <<< runtime secret pre-stop check <<<
+
+# >>> genie space pin: check >>>
+# The governed Genie space resolves by the id a pin names (the signed pin
+# record, or the App's signed rollback record), never by its title alone
+# (attack G12; tools/databricks/genie_space_pin.py, M1-PR3). Resolve it
+# read-only here, before the lease and any App stop: a pin that names a
+# space that is gone, a pin and a record that disagree, or a title match no
+# pin names (a space this deploy never created) refuses. The owner
+# attestation is deferred, so the one way to adopt such a match is an exact
+# digest ack: MIP_GENIE_PIN_ACK (shell only, never .env.local) must equal the
+# sha256 of the read-only pin plan this check prints (candidate id, its direct
+# CAN_MANAGE holders, the deploying identity). Step 0a recomputes the plan
+# immediately before it pins and refuses, with nothing changed, if it moved.
+# A first install (nothing pinned, no title match) passes and creates and
+# pins the space at step 0a.
+GENIE_PIN_ACK_ARGS=()
+if [[ -n "${MIP_GENIE_PIN_ACK:-}" ]]; then
+  if [[ ! "$MIP_GENIE_PIN_ACK" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "${RED}[deploy] MIP_GENIE_PIN_ACK must be the 64-hex sha256 of the read-only Genie pin plan.${RST}" >&2
+    exit 2
+  fi
+  GENIE_PIN_ACK_ARGS=(--ack-plan "$MIP_GENIE_PIN_ACK")
+fi
+GENIE_PIN_ARGS=(
+  --space-name "$MIP_GENIE_SPACE_NAME"
+  --catalog "$MIP_DEFAULT_CATALOG"
+  --app-name "$MIP_APP_NAME"
+  --pin-scope "$MIP_APP_ROLLBACK_SECRET_SCOPE"
+  --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
+  --no-smoke-test
+)
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  if ! "$PYTHON" -m tools.databricks.provision_genie_space --plan-pin \
+      "${GENIE_PIN_ARGS[@]}" "${GENIE_PIN_ACK_ARGS[@]}"; then
+    echo "${RED}[deploy] the governed Genie space pin was refused before the lease (see above); nothing was changed.${RST}" >&2
+    exit 2
+  fi
+else
+  echo "[deploy] would check (read-only): tools.databricks.provision_genie_space --plan-pin (the governed Genie space by its pin)"
+fi
+# <<< genie space pin: check <<<

@@ -81,7 +81,7 @@ def test_the_block_runs_in_preflight_before_any_bundle_uc_or_lakebase_mutation()
     block_at = text.index(BLOCK_START)
     for mutation in (
         "# Step 0a: prove signed-blue state before any workspace mutation",
-        'step "resolve governed Genie space before App secret and bundle mutation"',
+        'step "resolve governed Genie space by its pin before App secret and bundle mutation"',
         "# Step 1a: render SQL for the target UC catalog",
         "bundle run mip_lakebase_migrate",
     ):

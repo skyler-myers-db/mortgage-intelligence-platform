@@ -88,10 +88,9 @@ cat > .env.local <<'EOF'
 DATABRICKS_HOST=https://<customer-workspace>.cloud.databricks.com
 DATABRICKS_TOKEN=<PAT from workspace User Settings -> Developer -> Access Tokens>
 DATABRICKS_WAREHOUSE_ID=<serverless warehouse id from Compute -> SQL warehouses>
-# GENIE_SPACE_ID may be blank on first deploy; scripts/deploy.sh will
-# provision the space before applying the app resource and write
-# genie/space_id.txt.
-GENIE_SPACE_ID=
+# No GENIE_SPACE_ID: scripts/deploy.sh resolves the governed Genie space by
+# its pin (tools/databricks/genie_space_pin.py, M1-PR3); a first deploy
+# creates and pins it before applying the app resource.
 # OPTIONAL: set the UC catalog name if the customer uses a non-default name
 # (default is "mip"). scripts/deploy.sh step 1a renders sql/_rendered/**
 # for this catalog before the bundle runs, so CTAS lands in the right place
@@ -113,7 +112,7 @@ EOF
 Env-var names are authoritative in
 [`backend/config/settings.py`](../backend/config/settings.py).
 The `BUNDLE_VAR_*` mapping (`DATABRICKS_WAREHOUSE_ID` →
-`BUNDLE_VAR_sql_warehouse_id`, `GENIE_SPACE_ID` →
+`BUNDLE_VAR_sql_warehouse_id`, the pinned governed Genie space →
 `BUNDLE_VAR_genie_space_id`, and the lender/NMLS/tenant values → their
 Lakebase migration variables) happens inside
 `tools/databricks/bundle_env.py` — no extra exports needed.
@@ -184,13 +183,10 @@ What `scripts/deploy.sh` does is enumerated in
 [`docs/runbook.md`](runbook.md) §4 (steps 1–10). Re-running is
 idempotent — safe after a partial failure.
 
-On first deploy, Genie provisioning writes `genie/space_id.txt`.
-Keeping the value in `.env.local` makes later manual wrapper invocations
-more explicit:
-
-```bash
-echo "GENIE_SPACE_ID=$(cat genie/space_id.txt)" >> .env.local
-```
+On first deploy, Genie provisioning creates the space, pins its id (a signed
+record in the App rollback secret scope) and writes `genie/space_id.txt` for
+the rest of that run. Every later deploy and wrapper invocation resolves the
+space by that pin; no `.env.local` value names it.
 
 ---
 
@@ -323,9 +319,9 @@ Then re-probe `/api/v1/health` — `lakebase` should flip to `"up"` within
 
 Three possible causes, in order of likelihood:
 
-1. **`GENIE_SPACE_ID` not set.** Re-run
-   `echo "GENIE_SPACE_ID=$(cat genie/space_id.txt)" >> .env.local`,
-   re-run phase 1 deploy, re-run phase 2.
+1. **The App's Genie binding is missing.** Re-run
+   `./scripts/deploy.sh -t client`: it resolves the governed space by its
+   pin and binds the App to it (GENIE_SPACE_ID is no input since M1-PR3).
 2. **Service principal missing `CAN RUN` on the space.** Re-run
    `./scripts/deploy.sh -t client`; its identity-access convergence grants and
    verifies that exact permission.
