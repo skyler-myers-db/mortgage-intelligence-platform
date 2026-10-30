@@ -220,6 +220,66 @@ def _assert_contract(properties: dict[str, str], *, require_all: bool) -> set[st
     return missing
 
 
+def contract_drift(properties: dict[str, str]) -> list[str]:
+    """List every deviation from the governed contract, symbolically.
+
+    Empty exactly when ``_assert_contract(properties, require_all=True)`` passes.
+    Only missing constraints are convergeable; every other line is a drift the
+    converger refuses. Unreviewed constraint names are counted, never printed.
+    """
+
+    drift: list[str] = []
+    expected_keys = {f"delta.constraints.{name}" for name in _CONSTRAINTS}
+    unexpected = {key for key in properties if key.startswith("delta.constraints.")}
+    unexpected -= expected_keys
+    if unexpected:
+        drift.append(f"{len(unexpected)} unreviewed Delta constraint(s) (convergence refuses)")
+    for name, expected in _CONSTRAINTS.items():
+        actual = properties.get(f"delta.constraints.{name}")
+        if actual is None:
+            drift.append(f"constraint {name}: missing (convergence adds it)")
+            continue
+        try:
+            same = _canonical_expression(actual) == _canonical_expression(expected)
+        except RuntimeError:
+            same = False
+        if not same:
+            drift.append(f"constraint {name}: conflicting definition (convergence refuses)")
+    for key, expected in _TABLE_PROPERTIES.items():
+        if key not in properties:
+            drift.append(f"property {key}: missing (convergence refuses)")
+        elif properties[key] != expected:
+            drift.append(f"property {key}: differs from the governed value (convergence refuses)")
+    return drift
+
+
+def check_campaign_treatment_table(
+    *,
+    warehouse_id: str,
+    catalog: str,
+    allow_absent: bool = False,
+    workspace: WorkspaceClient | None = None,
+) -> list[str] | None:
+    """Read-only: return contract drift, or ``None`` for an allowed absent table.
+
+    Issues only the authoritative table lookup and ``SHOW TBLPROPERTIES``.
+    """
+
+    warehouse = warehouse_id.strip()
+    if not warehouse:
+        raise ValueError("warehouse_id must be non-empty")
+    catalog_name = _validate_identifier("catalog", catalog)
+    client = workspace or deployment_workspace_client()
+    try:
+        client.tables.get(".".join((catalog_name, *_TABLE)))
+    except (NotFound, ResourceDoesNotExist):
+        if allow_absent:
+            return None
+        return ["treatment table: absent (convergence cannot add its constraints)"]
+    relation = ".".join(_quoted(part) for part in (catalog_name, *_TABLE))
+    return contract_drift(_table_properties(client, warehouse_id=warehouse, relation=relation))
+
+
 def ensure_campaign_treatment_table(
     *,
     warehouse_id: str,
@@ -265,7 +325,20 @@ def ensure_campaign_treatment_table(
     return converged
 
 
-def main() -> int:
+def _print_check(drift: list[str] | None) -> int:
+    prefix = "[mip-treatment-table]"
+    if drift is None:
+        print(f"{prefix} check passed: governed campaign treatment table is absent")
+        return 0
+    if not drift:
+        print(f"{prefix} check passed: constraints and retention properties are exact")
+        return 0
+    for line in drift:
+        print(f"{prefix} drift: {line}")
+    return 1
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--warehouse-id", required=True)
     parser.add_argument("--catalog", default="mip")
@@ -274,7 +347,20 @@ def main() -> int:
         action="store_true",
         help="Succeed without mutation when the authoritative UC table API reports absent.",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Read-only: print the symbolic contract drift and exit 1 on drift.",
+    )
+    args = parser.parse_args(argv)
+    if args.check:
+        return _print_check(
+            check_campaign_treatment_table(
+                warehouse_id=args.warehouse_id,
+                catalog=args.catalog,
+                allow_absent=args.allow_absent,
+            )
+        )
     converged = ensure_campaign_treatment_table(
         warehouse_id=args.warehouse_id,
         catalog=args.catalog,
