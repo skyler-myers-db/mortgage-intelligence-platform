@@ -180,7 +180,11 @@ def mint_and_deliver_oauth_credential(
     app_url: str | None,
     atomic_credential_bundle: bool,
 ) -> str:
-    """Mint, publish, and compensate one credential under the exact App lease."""
+    """Mint, publish, and compensate one credential under the exact App lease.
+
+    ``gh_repo`` is the GitHub sink coordinate the signed intent records:
+    ``<owner>/<repo>:environment:<client>`` (m2m_oauth_github.environment_sink).
+    """
 
     sink_names = (
         [client_secret_secret_name]
