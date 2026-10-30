@@ -1748,13 +1748,18 @@ Step 0a stops the existing App, and on the unsigned rebase path also
 quarantines its access. Without a signed blue record any later failure leaves
 the App stopped. Right after the per-run M2M credential checks, and before the
 signed lease or any other workspace mutation, `./scripts/deploy.sh` runs
-`tools/databricks/deploy_prestop_probes.py` as the workspace-admin deployer. It
-performs only GET/list calls and lists every refusal in one pass (exit 2,
+`tools/databricks/deploy_prestop_probes.py` as the workspace-admin deployer,
+with the bounded account-SCIM credential (the owner policy resolves owners in
+account SCIM) and never the proof-signing key. It performs only GET/list calls,
+except the one Genie turn below, and lists every refusal in one pass (exit 2,
 nothing changed, the App not stopped by this run) for these failures, which
-would otherwise surface only after step 0a. A read the probe cannot complete
-(an unreadable Genie ACL, an App read error other than "not found", a SCIM or
-Supervisor listing error, a non-admin deployer) exits non-zero with that error
-instead; either way the deploy stops before the signed lease. The `deploy-dev`
+would otherwise surface only after step 0a. Each refusal line reads
+`[mip-prestop] REFUSED: <code>: <message>`, with one reviewed code
+(`tools/databricks/prestop_refusals.py`). A read a probe cannot complete (an
+unreadable Genie ACL, an App read error other than "not found", a SCIM or
+Supervisor listing error) refuses as `probe_error`, never passes; a non-admin
+deployer stops the probe with that error. Either way the deploy stops before
+the signed lease. The `deploy-dev`
 workflow runs the same probe and never sets `MIP_RETIRE_HUMAN_SUPERVISOR`, so
 expect a CI deploy to refuse here, before step 0a, on any workspace whose Genie
 spaces grant `users` (directly or through `/Workspace/Shared`) or that holds a
@@ -1842,6 +1847,84 @@ after the stop.
   principal, or remove the duplicate) in the same pass as the other refusals.
   It still lists every `users` grant for it, since every principal joins that
   group once it exists.
+
+Five more probes (M0-PR5) each call the very assertion of the step they
+protect, pinned by identity in `tests/unit/test_prestop_probe_identity.py`, so a
+refusal here is the refusal that step would raise with the App down:
+
+- **Rollback record** (`prestop_rollback_record`). For an existing App on the
+  signed-blue path the probe runs step 0a's verifier
+  (`verified_signed_last_good_contract`): a missing record or rollback scope
+  refuses as `rollback_record_absent`, a failed signature, digest or
+  scope-ownership proof as `rollback_record_tampered`, and an App identity,
+  Gateway resource or active deployment that no longer matches the record as
+  `rollback_record_drift` (step 0a would otherwise redeploy the record's
+  deployment over whatever serves now, such as an emergency payload deploy).
+  With `MIP_REBASE_UNVERIFIED_APP=1` and a first-install journal that is not
+  signed, it runs the bootstrap gate's absence proof instead, moved here from
+  step 0a: a record that exists refuses as `rollback_record_present`, and a
+  rollback scope that does not exist yet holds none. Step 0a still runs the
+  same proof once more under the lease, closing the window between this probe
+  and the lease. No App, or an App its signed first-install journal owns
+  (`recover` or `unclaimed`, which the recovery under the lease deletes), has
+  no blue to protect.
+- **Owner policy** (`prestop_owner_policy`, `owner_policy`).
+  `ApprovedOwnerPolicy.assert_objects` on the metastore, the governed catalog,
+  its `audit` schema and the treatment table, the objects
+  `converge_campaign_treatment_access` checks after step 0a. An owner outside
+  `MIP_UC_APPROVED_OWNER_PRINCIPALS` plus the deployer, or the App's own
+  service principal, refuses, named with its object. For a group owner the
+  post-stop converger proves the App is not a member by minting a short-lived
+  credential; read-only, the probe answers from the App's workspace-visible
+  groups (plus `users`), so an account-level nested membership is still caught
+  only after the stop.
+- **Owner-equivalent grantees** (`prestop_owner_equivalent`,
+  `owner_equivalent`, attack G12). Every grantee of `MANAGE`, `ALL_PRIVILEGES`
+  or `EXTERNAL_USE_SCHEMA` on the governed catalog or any of its schemas
+  (direct grants, so each is named where it can be removed), and of `CAN_EDIT`
+  or `CAN_MANAGE` on the governed Genie space (the signed record's, or without a
+  record the one the Genie provisioner adopts by its exact title; an ambiguous
+  title refuses, as the provisioner would after step 0a), must be in
+  `MIP_UC_APPROVED_OWNER_PRINCIPALS`, be the deployer, or be in
+  `MIP_GENIE_MANAGER_PRINCIPALS` (compared case-insensitively). The workspace
+  `admins` group's Genie `CAN_MANAGE`, which every workspace object carries and
+  no one can revoke, is the one grant accepted by name. Each other grantee
+  refuses with the exact `REVOKE ... FROM` statement or space-ACL removal, or
+  the exact approval to add after the owner's review. The probe never revokes
+  or grants, and a grants, schema-listing or permissions read error refuses: it
+  is never read as "no grantees". No post-stop step checks these grantees yet,
+  so this probe owns the assertion.
+- **Serving endpoints** (`prestop_serving_endpoints`, `serving_endpoint`). The
+  cutover's App audit (`audit_global_serving_endpoint_access`) runs first, here:
+  the App may query only the signed record's Gateway and Supervisor endpoints
+  and the canonical Supervisor's endpoint (the one the cutover journal pins),
+  each in its exact legacy query mode. A `CAN_QUERY` on the legacy
+  `mip-agent-gateway` that no record pins, or on the endpoint of a Supervisor
+  renamed off the canonical name, refuses; remove that access with the
+  endpoint owner's consent.
+- **Genie budget** (`prestop_genie_budget`, `genie_budget`). One real turn,
+  asked through the App's own Genie client (`GenieClient.ask`) on the governed
+  space with the live smoke's question. A failed or unfinished turn, or one
+  that returns only the question's echo, refuses, and a budget error is named
+  as such: smoke and agent evaluation need Genie after step 0a. It is the
+  probe's one call that is not a GET or a list (it opens one Genie
+  conversation); with no governed space yet it is skipped. Tests never issue
+  it.
+
+The owner-equivalent approvals come from one deploy control, resolved like the
+others (shell export, then `.env.local`):
+
+```
+# Principals (users, service principals or groups) approved to hold CAN_EDIT or
+# CAN_MANAGE on the governed Genie space, besides MIP_UC_APPROVED_OWNER_PRINCIPALS
+# and the deployer; comma-separated. Empty approves no one else.
+MIP_GENIE_MANAGER_PRINCIPALS=
+```
+
+`MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS` is refused before any of this, before
+any Databricks call and in a dry run too: any value other than `0`, from the
+environment or `.env.local`, exits 2. The stop branches that ran the
+foreign-catalog remediation are gone; its tooling is deleted with M4-PR2.
 
 The probe is an early refusal, not a replacement for the post-stop audits.
 Those still read each target's own `/Me` groups, which can include

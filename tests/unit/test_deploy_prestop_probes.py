@@ -44,6 +44,13 @@ HUMAN_ID = "a1a1a1a1-0000-4000-8000-000000000001"
 CANONICAL = "Mortgage Growth Agent"
 
 
+@pytest.fixture(autouse=True)
+def _suite_probes_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The record, owner, serving and Genie-budget probes have their own tests
+    # (tests/unit/test_prestop_*.py); here main() runs only these clauses.
+    monkeypatch.setattr(probes, "suite_refusals", lambda *_args, **_kwargs: ([], []))
+
+
 def _human_canonical(**overrides: str) -> dict[str, str]:
     return {
         "supervisor_agent_id": HUMAN_ID,
@@ -1005,12 +1012,25 @@ def _main_args() -> list[str]:
         VERIFIER_ID,
         "--supervisor-name",
         CANONICAL,
+        "--rollback-scope",
+        "mip-app-rollback",
+        "--lakebase-instance",
+        "mip-app-state",
+        "--catalog",
+        "mip",
+        "--genie-space-name",
+        "Mortgage Lead Intelligence",
+        "--rebase-unverified-app",
+        "0",
     ]
 
 
 # --- Deploy orchestration -----------------------------------------------------
 
-PROBE_CALL = '  run "$PYTHON" -m tools.databricks.deploy_prestop_probes \\\n'
+PROBE_CALL = (
+    "  run_with_account_identity \\\n"
+    '    "$PYTHON" -m tools.databricks.deploy_prestop_probes \\\n'
+)
 
 
 def test_the_probe_runs_read_only_before_the_lease_and_every_app_stop() -> None:
@@ -1062,18 +1082,29 @@ def test_the_probe_runs_after_deployer_auth_and_the_runtime_secret_check() -> No
         "APP_FAIL_CLOSED_ARMED=1",
     ):
         assert app_stop not in before_probe, app_stop
-    # No bounded authority wrapper: the probe needs neither the signing key nor
-    # the account-SCIM credential, and never runs as an M2M identity.
+    # One bounded authority only: the owner policy resolves owners in account
+    # SCIM (M0-PR5), so the probe gets the account credential, never the
+    # proof-signing key, and never runs as an M2M identity.
     block = script[probe : script.index("\n  # The signed lease", probe)]
-    assert "run_with_" not in block and "run_as_m2m_identity" not in block
+    call = block[: block.index("# >>> pii-salt pre-stop check >>>")]
+    assert call.count("run_with_account_identity") == 1
+    assert "run_with_proof_signing_authority" not in call
+    assert "run_as_m2m_identity" not in call and "run_with_lakebase" not in call
     for argument in (
         '--app-name "$_GRANTS_APP_NAME"',
         '--expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"',
         '--runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"',
         '--verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"',
         '--supervisor-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}"',
+        '--rollback-scope "$APP_ROLLBACK_SECRET_SCOPE"',
+        '--lakebase-instance "$MIP_LAKEBASE_INSTANCE"',
+        '--catalog "${MIP_DEFAULT_CATALOG:-mip}"',
+        '--genie-space-name "$MIP_GENIE_SPACE_NAME"',
+        '--rebase-unverified-app "$_PRESTOP_REBASE_UNVERIFIED_APP"',
+        '--approved-owner-principals "${MIP_UC_APPROVED_OWNER_PRINCIPALS:-}"',
+        '--genie-manager-principals "${MIP_GENIE_MANAGER_PRINCIPALS:-}"',
     ):
-        assert argument in block
+        assert argument in call, argument
 
 
 def test_dry_run_names_the_probe_without_running_it() -> None:
@@ -1203,6 +1234,7 @@ RED=""; RST=""
 step() {{ echo "[step] $*"; }}
 run() {{ "$@"; }}
 run_with_proof_signing_authority() {{ "$@"; }}
+run_with_account_identity() {{ "$@"; }}
 resolve_m2m_credential() {{ :; }}
 deployment_control_value() {{ printf ''; }}
 same_identity_casefold() {{ [[ "$1" == "$2" ]]; }}
@@ -1216,6 +1248,9 @@ DEPLOY_INVENTORY_PRINCIPAL=deployer@example.invalid
 # Resolved by the preflight step file; the pii-salt check reads both.
 MIP_PII_SALT_SCOPE=mip
 PII_SALT_REQUIRE_EXISTING=0
+APP_ROLLBACK_SECRET_SCOPE=mip-app-rollback
+MIP_LAKEBASE_INSTANCE=mip-app-state
+MIP_GENIE_SPACE_NAME="Mortgage Lead Intelligence"
 DATABRICKS_CLIENT_ID=normal-client DATABRICKS_CLIENT_SECRET=s1
 DATABRICKS_OPERATOR2_CLIENT_ID=operator2-client
 DATABRICKS_ADMIN_CLIENT_ID=admin-client DATABRICKS_ADMIN_CLIENT_SECRET=s2

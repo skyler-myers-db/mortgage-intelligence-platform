@@ -16,11 +16,6 @@
 # tokens are minted per run; a quarantined rebase uses only the dedicated
 # release-probe token until signed capture. The verifier client is used only
 # for deployment-side Gateway proof writes and is not a member of mip-admin.
-if [[ "${MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS:-0}" == "1" && \
-      "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" ]]; then
-  echo "${RED}[deploy] foreign-catalog remediation cannot be combined with unsigned App rebase.${RST}" >&2
-  exit 4
-fi
 for _M2M_NAME in \
   DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
   DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
@@ -243,15 +238,34 @@ PYEOF
   # the agent-runtime SP did not create without the operator naming it in
   # MIP_RETIRE_HUMAN_SUPERVISOR (or with an incomplete identity), a
   # non-runtime Supervisor on a reserved replacement name, a Genie space
-  # granting a group the App, agent-runtime or verifier SP belongs to, and any
-  # Genie grant to the verifier. Refuse here, before this run stops the App.
-  step "pre-stop probes: Supervisor retirement acknowledgement and Genie group grants"
-  run "$PYTHON" -m tools.databricks.deploy_prestop_probes \
+  # granting a group the App, agent-runtime or verifier SP belongs to, any
+  # Genie grant to the verifier, a signed rollback record that is absent,
+  # tampered or drifted (or, for the unsigned rebase, present), a governed
+  # owner outside the approved-owner policy, an unapproved owner-equivalent
+  # grantee, App serving access beyond the record-pinned endpoints, and a
+  # Genie turn that fails (one real turn). Each reuses the assertion of the
+  # step it protects; any refusal exits 2 here, before this run stops the App.
+  # The owner policy resolves owners in account SCIM, so the probes get the
+  # bounded account credential, never the proof-signing key.
+  _PRESTOP_REBASE_UNVERIFIED_APP=0
+  if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" ]]; then
+    _PRESTOP_REBASE_UNVERIFIED_APP=1
+  fi
+  step "pre-stop probes: Supervisor, Genie grants, rollback record, owners, serving and Genie budget"
+  run_with_account_identity \
+    "$PYTHON" -m tools.databricks.deploy_prestop_probes \
     --app-name "$_GRANTS_APP_NAME" \
     --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
     --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
     --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
-    --supervisor-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}"
+    --supervisor-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}" \
+    --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+    --genie-space-name "$MIP_GENIE_SPACE_NAME" \
+    --rebase-unverified-app "$_PRESTOP_REBASE_UNVERIFIED_APP" \
+    --approved-owner-principals "${MIP_UC_APPROVED_OWNER_PRINCIPALS:-}" \
+    --genie-manager-principals "${MIP_GENIE_MANAGER_PRINCIPALS:-}"
   # >>> pii-salt pre-stop check >>>
   # Step 4d writes the write-once pii-salt only after an authoritative "listed,
   # key absent". Run the same inventory read-only here, before the lease and
@@ -267,8 +281,8 @@ PYEOF
 else
   export MIP_APP_DEPLOYMENT_LEASE_ID="dry-run-deployment-lease"
   echo "  app automation: normal/admin Bearer mint deferred by --dry-run"
-  step "pre-stop probes: Supervisor retirement acknowledgement and Genie group grants"
-  echo "  would probe read-only: the creator of Supervisor '${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}' (MIP_RETIRE_HUMAN_SUPERVISOR) and Genie group grants"
+  step "pre-stop probes: Supervisor, Genie grants, rollback record, owners, serving and Genie budget"
+  echo "  would probe read-only: the creator of Supervisor '${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}' (MIP_RETIRE_HUMAN_SUPERVISOR), Genie group grants, the signed rollback record in ${APP_ROLLBACK_SECRET_SCOPE}, governed owners and owner-equivalent grantees, App serving access, and one Genie turn"
   echo "  would check read-only: scope ${MIP_PII_SALT_SCOPE} and write-once pii-salt-v1"
 fi
 # >>> bundle plan gate: pre-lease >>>
@@ -397,27 +411,24 @@ else:
       exit 4
     fi
   fi
-  if [[ "${MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS:-0}" != "1" ]]; then
-    step "preflight agent-runtime foreign UC access before Lakebase bootstrap mutation"
-    run_with_account_identity run_with_proof_signing_authority \
-      "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
-      --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
-      --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
-      --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
-      --allow-missing-mip-catalog
-    # Recover any deterministic one-use Lakebase role creators left by a prior
-    # SIGKILL immediately after the lease winner is known.
-    step "recover interrupted verifier Lakebase role bootstrap"
-    run_with_lakebase_bootstrap_authority \
-      "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
-      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
-      --lakebase-database "$LAKEBASE_DATABASE" \
-      --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
-      --role-contract verifier \
-      --recover-bootstrap-only
-  fi
-  if [[ -n "$_EXISTING_APP_SP_CLIENT_ID" && \
-        "${MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS:-0}" != "1" ]]; then
+  step "preflight agent-runtime foreign UC access before Lakebase bootstrap mutation"
+  run_with_account_identity run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
+    --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+    --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+    --allow-missing-mip-catalog
+  # Recover any deterministic one-use Lakebase role creators left by a prior
+  # SIGKILL immediately after the lease winner is known.
+  step "recover interrupted verifier Lakebase role bootstrap"
+  run_with_lakebase_bootstrap_authority \
+    "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --lakebase-database "$LAKEBASE_DATABASE" \
+    --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+    --role-contract verifier \
+    --recover-bootstrap-only
+  if [[ -n "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
     step "recover interrupted App Lakebase role bootstrap"
     run_with_lakebase_bootstrap_authority \
       "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
@@ -433,31 +444,7 @@ else:
     echo "${RED}[deploy] could not authenticate first-install recovery journal.${RST}" >&2
     exit 1
   fi
-  if [[ "${MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS:-0}" == "1" ]]; then
-    if [[ -z "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
-      echo "${RED}[deploy] foreign-catalog remediation requires an existing identity-pinned App.${RST}" >&2
-      exit 4
-    fi
-    if [[ "$FIRST_INSTALL_JOURNAL_STATUS" != "absent" && \
-          "$FIRST_INSTALL_JOURNAL_STATUS" != "signed" ]]; then
-      echo "${RED}[deploy] foreign-catalog remediation refuses unstable first-install App state.${RST}" >&2
-      exit 4
-    fi
-    step "stop the exact App before foreign-catalog recovery or fresh remediation"
-    run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
-      --app-name "$_GRANTS_APP_NAME" \
-      "${APP_EXPECTED_IDENTITY_ARGS[@]}"
-    run_foreign_catalog_binding_remediation
-    step "preflight remediated agent-runtime foreign UC access while App is stopped"
-    run_with_account_identity run_with_proof_signing_authority \
-      "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
-      --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
-      --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
-      --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
-    FOREIGN_CATALOG_REMEDIATION_COMPLETE=1
-  fi
-  if [[ "${MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS:-0}" != "1" && \
-        -n "$FIRST_INSTALL_APP_CLIENT_ID" && \
+  if [[ -n "$FIRST_INSTALL_APP_CLIENT_ID" && \
         "$FIRST_INSTALL_APP_CLIENT_ID" != "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
     step "recover interrupted Lakebase bootstrap for journaled App identity"
     recover_journaled_first_install_lakebase_bootstrap

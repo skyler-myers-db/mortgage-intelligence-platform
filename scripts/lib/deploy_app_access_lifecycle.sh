@@ -1,6 +1,6 @@
 # shellcheck shell=bash
-# App identity pin, foreign-catalog binding remediation, deployment sync-contract
-# restore, and App treatment/release access convergence.
+# App identity pin, deployment sync-contract restore, and App treatment/release
+# access convergence.
 # Sourced by scripts/deploy.sh; this file must not change shell options or traps.
 
 assert_expected_app_identity() {
@@ -16,102 +16,6 @@ assert_expected_app_identity() {
     --app-name "$app_name" \
     "${APP_EXPECTED_IDENTITY_ARGS[@]}" \
     --assert-identity-only
-}
-
-run_foreign_catalog_binding_remediation() {
-  if [[ -z "${MIP_UC_FOREIGN_CATALOG_BINDING_POLICY:-}" ]]; then
-    echo "${RED}[deploy] foreign-catalog remediation requires the reviewed binding policy.${RST}" >&2
-    return 4
-  fi
-  FOREIGN_CATALOG_BINDING_DIR="$(mktemp -d -t mip-foreign-catalog.XXXXXX)"
-  local manifest="$FOREIGN_CATALOG_BINDING_DIR/manifest.json"
-  local parent_manifest="$FOREIGN_CATALOG_BINDING_DIR/parent.json"
-  local action="apply"
-  local recovery_candidate="" recovery_rc=0 recovered=0
-  local -a recovery_candidates=()
-  local -a common_args=(
-    --app-name "$_GRANTS_APP_NAME"
-    --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
-    --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
-    --expected-account-id "$DATABRICKS_ACCOUNT_ID"
-    --expected-account-client-id "$DATABRICKS_ACCOUNT_CLIENT_ID"
-    --mip-catalog "${MIP_DEFAULT_CATALOG:-mip}"
-    --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"
-  )
-  if [[ -n "${MIP_APP_DEPLOYMENT_RECOVERY_CANDIDATES:-}" ]]; then
-    step "recover the signed interrupted foreign-catalog manifest"
-    IFS=',' read -r -a recovery_candidates \
-      <<< "$MIP_APP_DEPLOYMENT_RECOVERY_CANDIDATES"
-    for recovery_candidate in "${recovery_candidates[@]}"; do
-      if run_with_account_identity run_with_proof_signing_authority \
-          "$PYTHON" -m tools.databricks.converge_foreign_catalog_workspace_bindings \
-          recover-local "${common_args[@]}" \
-          --parent-lease-id "$recovery_candidate" \
-          --manifest "$parent_manifest"; then
-        recovered=1
-        break
-      else
-        recovery_rc=$?
-      fi
-      if [[ "$recovery_rc" -eq 5 ]]; then
-        break
-      elif [[ "$recovery_rc" -ne 3 ]]; then
-        return "$recovery_rc"
-      fi
-    done
-    if [[ "$recovered" -eq 1 ]]; then
-      step "reauthorize interrupted foreign-catalog remediation under the current lease"
-      if run_with_account_identity run_with_proof_signing_authority \
-        "$PYTHON" -m tools.databricks.converge_foreign_catalog_workspace_bindings \
-        reauthorize "${common_args[@]}" \
-        --manifest "$parent_manifest" \
-        --out-manifest "$manifest"; then
-        :
-      else
-        recovery_rc=$?
-        return "$recovery_rc"
-      fi
-      action="resume"
-    else
-      step "no interrupted foreign-catalog manifest; snapshot fresh signed pre-state"
-      if run_with_account_identity run_with_proof_signing_authority \
-        "$PYTHON" -m tools.databricks.converge_foreign_catalog_workspace_bindings \
-        snapshot "${common_args[@]}" --manifest "$manifest"; then
-        :
-      else
-        recovery_rc=$?
-        return "$recovery_rc"
-      fi
-    fi
-  else
-    step "snapshot the exact signed foreign-catalog binding pre-state"
-    if run_with_account_identity run_with_proof_signing_authority \
-      "$PYTHON" -m tools.databricks.converge_foreign_catalog_workspace_bindings \
-      snapshot "${common_args[@]}" --manifest "$manifest"; then
-      :
-    else
-      recovery_rc=$?
-      return "$recovery_rc"
-    fi
-  fi
-  step "$action the reviewed foreign-catalog workspace isolation"
-  if run_with_account_identity run_with_proof_signing_authority \
-    "$PYTHON" -m tools.databricks.converge_foreign_catalog_workspace_bindings \
-    "$action" "${common_args[@]}" --manifest "$manifest"; then
-    :
-  else
-    recovery_rc=$?
-    return "$recovery_rc"
-  fi
-  step "verify the complete foreign-catalog workspace isolation policy"
-  if run_with_account_identity run_with_proof_signing_authority \
-    "$PYTHON" -m tools.databricks.converge_foreign_catalog_workspace_bindings \
-    verify "${common_args[@]}" --manifest "$manifest"; then
-    :
-  else
-    recovery_rc=$?
-    return "$recovery_rc"
-  fi
 }
 
 restore_deployment_sync_contract() {

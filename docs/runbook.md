@@ -727,9 +727,10 @@ predates the current bundle. For example, a gold job that still carries
   needs a live read of the bound deployer's user name. The preflight's
   scheduled-refresh block stays pure so it also runs in a dry run, and step
   0's read-only pre-stop probe (`tools/databricks/deploy_prestop_probes.py`),
-  where that read belongs, checks Supervisor retirement and Genie group grants
-  but not the deployer's user name. Until it does, check the deploying
-  identity is a user before a GO run.
+  where that read belongs, checks Supervisor retirement, Genie group grants,
+  the rollback record, governed owners and owner-equivalent grantees, App
+  serving access and one Genie turn, but not the deployer's user name. Until
+  it does, check the deploying identity is a user before a GO run.
 - **Piecewise-render trap.** The scheduled gold run reads the rendered SQL in
   the bundle's `files/sql/_rendered/` tree. A piecewise upload of a render made
   without `MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1` (the stand-alone

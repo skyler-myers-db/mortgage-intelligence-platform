@@ -606,22 +606,30 @@ catalog. Between each catalog's flip and its re-binding, every other workspace
 (the live one and every other team's) loses it. A run killed there stays in
 that narrower state until a resumed recovery, which never reopens. A workspace
 assigned to the metastore later never sees the catalog. These are other teams'
-catalogs and metastore-level state. The operator path,
-`MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1 ./scripts/deploy.sh -t dev`, targets
-the live workspace, whose governed deploy is NO-GO (docs/deployment.md, "The
-live install is outside this bootstrap, and its governed deploy is NO-GO").
-Any metastore-wide remediation is therefore an owner-only, separately reviewed
-decision, and the bootstrap never runs it (docs/deployment.md, owner step 7).
+catalogs and metastore-level state. Any metastore-wide remediation is
+therefore an owner-only, separately reviewed decision, and the bootstrap never
+runs it (docs/deployment.md, owner step 7).
 
-When an owner-approved run does reach it, `scripts/deploy.sh` acquires the
-signed App lease and starts its parent-PID-fenced heartbeat. It requires an existing stable App,
-stops the exact immutable App identity before any recovery or fresh catalog
-write, and then runs `snapshot`, `apply`, and `verify`. A signed immutable
+**`scripts/deploy.sh` refuses it (M0-PR5, 2026-10-30).** The operator path,
+`MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=1 ./scripts/deploy.sh`, used to stop
+the live App to run it. That path is gone: any value other than `0`, from the
+environment or from `.env.local`, exits 2 before any Databricks call, in a dry
+run too, with the App untouched, and the stop branches that ran the remediation
+are deleted. The remediation tooling itself
+(`tools/databricks/converge_foreign_catalog_workspace_bindings.py` and its
+`foreign_catalog_binding_*` modules) is deleted with M4-PR2, once M4-PR1's
+estate inventory replaces the binding policy. What the next paragraph describes
+is how that tooling behaved while `scripts/deploy.sh` still ran it.
+
+When an owner-approved run did reach it, `scripts/deploy.sh` acquired the
+signed App lease and started its parent-PID-fenced heartbeat. It required an existing stable App,
+stopped the exact immutable App identity before any recovery or fresh catalog
+write, and then ran `snapshot`, `apply`, and `verify`. A signed immutable
 completion record is written only after the whole-policy verification passes.
-The ordinary UC preflight also runs while the App remains stopped. Only after
-that postflight may signed-blue reconciliation start the App; signed blue is
+The ordinary UC preflight also ran while the App remained stopped. Only after
+that postflight could signed-blue reconciliation start the App; signed blue was
 re-proven before the first Lakebase recovery mutation. An absent or unstable
-first-install App is rejected.
+first-install App was rejected.
 
 The lease is released from normal deployment cleanup without discarding
 same-deployer recovery authority. Protocol-v5 lease generations bind a bounded
