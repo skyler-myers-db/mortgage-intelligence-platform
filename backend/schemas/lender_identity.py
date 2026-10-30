@@ -10,7 +10,9 @@ _REVIEWED_ORGANIZATION_SUFFIX_RE = re.compile(
     r"lender|lending|mortgage)$",
     re.IGNORECASE,
 )
-_PUBLIC_LENDER_NMLS_ID_RE = re.compile(r"[1-9]\d{3,11}")
+# ASCII digits only: Python's \d also matches Arabic-Indic, fullwidth and
+# other Unicode digits, which would render into borrower disclosures.
+_PUBLIC_LENDER_NMLS_ID_RE = re.compile(r"[1-9][0-9]{3,11}")
 _PUBLIC_TENANT_ID_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _SUMMIT_LENDER_NAME = "Summit Mortgage"
 _SUMMIT_DEMO_NMLS_ID = "123456"

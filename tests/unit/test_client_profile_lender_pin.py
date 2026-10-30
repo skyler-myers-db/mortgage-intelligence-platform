@@ -103,6 +103,7 @@ def test_a_malformed_pin_is_refused(pin: str) -> None:
     ("changes", "rule"),
     [
         ({"servicer_aliases": []}, "must list 1-32 servicer names"),
+        ({"nmls_id": "1٢٣٤٥٦"}, "4-12 digit nonzero NMLS"),
         ({"servicer_aliases": ["Fictional Harbor", "FICTIONAL HARBOR"]}, "must not repeat a servicer name"),
         ({"mark": {**LENDER_MARK, "height": 20}}, "not a reviewable mark size"),
         ({"mark": {**LENDER_MARK, "authorization_ref": "https://brand.example/ok"}}, "authorization_ref"),

@@ -164,6 +164,10 @@ _SHAPE_CASES: list[tuple[str, object, str]] = [
     ("legal_name", "Romani", "public lender organization name"),
     ("legal_name", 7, "legal_name must be a string"),
     ("nmls_id", "000123", "4-12 digit nonzero NMLS"),
+    # Review of #298: a Unicode digit (Arabic-Indic, fullwidth) is not an NMLS
+    # digit, though Python's \d matches it; it would render into disclosures.
+    ("nmls_id", "1٢٣٤٥٦", "4-12 digit nonzero NMLS"),
+    ("nmls_id", "42424２", "4-12 digit nonzero NMLS"),
     ("tenant_id", "Fictional-Harbor", "tenant_id must be a lowercase identifier"),
     ("servicer_aliases", [], "must list 1-32 servicer names"),
     ("servicer_aliases", "Fictional Harbor Servicing", "must list 1-32 servicer names"),
