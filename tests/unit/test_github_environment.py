@@ -435,6 +435,36 @@ def test_a_stale_profile_variable_is_named_not_deleted(fake: FakeGitHub, env: Pa
     assert not [line for line in planned.steps() if "MIP_PRESENTER_MODE" in line]
 
 
+@pytest.mark.parametrize(
+    ("kind", "name", "value", "expected"),
+    [
+        # The M2M writer stores each role's client id under its alias; the deploy reads it.
+        ("secrets", "DATABRICKS_CLIENT_ID", None, None),
+        ("variables", "APP_ENV", "sandbox", None),  # agrees with MIP_APP_ENV
+        ("variables", "APP_ENV", "prod", "disagrees: APP_ENV is a variable of fictional-demo that differs from MIP_APP_ENV"),
+    ],
+)
+def test_an_alias_the_deploy_reads_is_never_called_stale(
+    fake: FakeGitHub, env: Path, kind: str, name: str, value: str | None, expected: str | None
+) -> None:
+    _planned, applied = plan_and_apply(fake, env)
+    assert applied.code == 0, applied.err
+    state = fake.state()
+    item = {"value": value, "updatedAt": "2026-10-30T00:00:09Z"} if kind == "variables" else {
+        "sha256": _sha("x"), "len": 36, "ed25519": False, "updatedAt": "2026-10-30T00:00:09Z"
+    }
+    state["environments"][CLIENT][kind][name] = item
+    fake.write(state)
+    planned = run_env_tool(fake, "--plan", env_file=env)
+    assert planned.code == 0, planned.err
+    notes = [note for note in planned.document()["notes"] if name in note]
+    if expected is None:
+        assert notes == []
+    else:
+        assert len(notes) == 1 and notes[0].startswith(expected)
+    assert planned.steps() == []
+
+
 def test_the_plan_document_round_trips_as_canonical_json(fake: FakeGitHub, env: Path) -> None:
     planned = run_env_tool(fake, "--plan", env_file=env)
     line = next(line for line in planned.out.splitlines() if line.startswith("canonical plan: "))

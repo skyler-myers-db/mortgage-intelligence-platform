@@ -87,7 +87,11 @@ the signing keys. Its notes name what is missing, by field.
 The plan refuses an identifying field stored as a variable, or a public one
 stored as a secret: the deploy's resolver would refuse it too. Delete it by
 hand. It names, and leaves alone, a profile variable or identifying secret
-your local profile no longer sets.
+your local profile no longer sets. The client-id names the M2M writer and
+the bootstrap's sink store (`DATABRICKS_CLIENT_ID` and the others that alias
+a `MIP_IDENTITY_IDS_JSON` role) are theirs, so the plan never calls them
+stale. An alias variable such as `APP_ENV` counts as set by its canonical
+field; the plan names it only when it disagrees, which the deploy refuses.
 
 ## The loop
 

@@ -58,7 +58,7 @@ from tools.clients.github_protections import (
     observed,
     review_mode,
 )
-from tools.clients.schema import FIELD_CLASS, FieldClass, name_class
+from tools.clients.schema import ALIASES, FIELD_CLASS, IDENTITY_ALIASES, FieldClass, name_class
 
 PLAN_VERSION = 1
 TOOL = "tools.clients.github_environment"
@@ -69,6 +69,7 @@ MODEL_SIGNING_KEY = "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY"
 # A stand-in for each secret field while the profile validates; never written.
 WITHHELD = "withheld-by-the-github-environment"
 _CLIENT = re.compile(r"[a-z][a-z0-9-]{1,30}")
+_CANONICAL_OF = {alias: canonical for canonical, aliases in ALIASES.items() for alias in aliases}
 OPS = frozenset(
     {
         "put_environment",
@@ -299,6 +300,37 @@ def _unproven_kept(inputs: EnvironmentInputs, deploy: EnvironmentState, *, rotat
     ]
 
 
+def _stale(inputs: EnvironmentInputs, deploy: EnvironmentState) -> list[str]:
+    """Profile names the environment holds that the local profile does not set.
+
+    ``MIP_IDENTITY_IDS_JSON`` and the client-id names that alias its roles
+    belong to the bootstrap's sinks and the M2M writer, never to this tool. An
+    alias of a public field counts as set when its canonical field is, and
+    must agree with it: the deploy's resolver refuses otherwise.
+    """
+
+    local = {**inputs.variables, **inputs.covered}
+    notes = []
+    for kind, names in (("variable", deploy.variables), ("secret", deploy.secret_updates)):
+        for name in sorted(names):
+            if name == PINS_FIELD or name in IDENTITY_ALIASES:
+                continue
+            if name_class(name) not in {FieldClass.PUBLIC, FieldClass.IDENTIFYING}:
+                continue
+            canonical = _CANONICAL_OF.get(name, name)
+            if canonical not in local:
+                notes.append(
+                    f"stale: {name} is a {kind} of {deploy.name} the local profile does not set; the "
+                    "deploy reads it, so set it locally or delete it by hand"
+                )
+            elif canonical != name and deploy.variables.get(name) != local[canonical]:
+                notes.append(
+                    f"disagrees: {name} is a {kind} of {deploy.name} that differs from {canonical}; the "
+                    "deploy refuses until they agree, so delete it by hand"
+                )
+    return notes
+
+
 def _notes(inputs: EnvironmentInputs, deploy: EnvironmentState, *, rotate: bool) -> list[str]:
     """What the plan leaves alone, and why: value-free, field names only."""
 
@@ -308,16 +340,7 @@ def _notes(inputs: EnvironmentInputs, deploy: EnvironmentState, *, rotate: bool)
             "local profile resolves",
             *(f"deferred: {line}" for line in inputs.deferred),
         ]
-    notes = [
-        f"stale: {name} is a {kind} of {deploy.name} the local profile does not set; the deploy "
-        "reads it, so set it locally or delete it by hand"
-        for kind, names in (("variable", deploy.variables), ("secret", deploy.secret_updates))
-        for name in sorted(names)
-        if name != PINS_FIELD
-        and name_class(name) in {FieldClass.PUBLIC, FieldClass.IDENTIFYING}
-        and name not in inputs.variables
-        and name not in inputs.identifying
-    ]
+    notes = _stale(inputs, deploy)
     if not rotate and any(name in deploy.secret_updates for name in inputs.identifying):
         notes.append(
             "kept: identifying secrets already set are not rewritten (GitHub cannot read them back); "
