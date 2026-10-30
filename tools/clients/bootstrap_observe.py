@@ -14,7 +14,10 @@ refuses (value-free) whatever no plan may proceed from:
   PAT/OBO token, or more than one federation policy (jobs: any), or a policy
   from another issuer;
 * jobs or validator is a workspace admin;
-* the account principal can manage the deployer, jobs or validator identity;
+* any principal but an account admin holds a role on the deployer, jobs or
+  validator identity (a Manager could mint it a secret, a User act as it);
+  the deployer's Service Principal User on jobs is the one reviewed grant,
+  and the account principal is refused by name;
 * ``<prefix>-data-owners`` exists but is not provably the bootstrap's, or
   holds members other than deployer, jobs and the interim member.
 """
@@ -37,6 +40,10 @@ SP_MANAGER = "roles/servicePrincipal.manager"
 SOURCE_CATALOG_PRIVILEGES = ("USE_CATALOG",)
 SOURCE_SCHEMA_PRIVILEGES = ("SELECT", "USE_SCHEMA")
 Provenance = Literal["pinned", "adopted", "absent"]
+SECRETLESS_ROLES = ("deployer", "jobs", "validator")
+# (target, SP role, grantee): the only non-admin grant a secretless identity may carry.
+REVIEWED_GRANTS = frozenset({("jobs", SP_USER, "deployer")})
+_PRINCIPAL_KINDS = {"servicePrincipals/": "a service principal", "groups/": "a group", "users/": "a user"}
 
 
 def text(value: object) -> str:
@@ -145,6 +152,7 @@ class _Reader:
         self.request = request
         self.inputs = request.inputs
         self.lines: list[str] = []
+        self.admins: dict[str, bool] = {}
 
     def refuse(self, line: str) -> None:
         self.lines.append(line)
@@ -289,16 +297,57 @@ class _Reader:
                 text(rule.role): frozenset(text(p) for p in rule.principals or ())
                 for rule in getattr(response, "grant_rules", None) or ()
             }
-        manager = states.get("account_principal")
-        if manager is not None and manager.principal is not None:
-            reference = sp_reference(manager.principal.application_id)
-            for role in ("deployer", "jobs", "validator"):
-                if any(reference in principals for principals in found.get(role, {}).values()):
-                    self.refuse(
-                        f"account_principal: holds a role on the {role} identity; "
-                        "it may manage the reserved M2M identities only"
-                    )
+        self.check_secretless_grants(states, found)
         return found
+
+    def account_admin(self, reference: str) -> bool:
+        """``users/<name>`` names exactly one account user who holds account admin."""
+
+        name = reference.removeprefix("users/")
+        if name not in self.admins:
+            matches = []
+            if name and "'" not in name:  # an unfilterable name is no admin: fail closed
+                listed = self.account.users.list(filter=f"userName eq '{name}'", attributes="id,userName,roles")
+                matches = _exact(listed, "user_name", name)
+            roles = (getattr(matches[0], "roles", None) or ()) if len(matches) == 1 else ()
+            self.admins[name] = ACCOUNT_ADMIN_ROLE in {text(getattr(item, "value", None)) for item in roles}
+        return self.admins[name]
+
+    def check_secretless_grants(
+        self, states: Mapping[str, RoleState], found: Mapping[str, Mapping[str, frozenset[str]]]
+    ) -> None:
+        """Only account admins, and the reviewed grants, hold a role on a secretless identity."""
+
+        def reference(role: str) -> str | None:
+            state = states.get(role)
+            return sp_reference(state.principal.application_id) if state and state.principal else None
+
+        reviewed = {(target, sp_role, reference(grantee)) for target, sp_role, grantee in REVIEWED_GRANTS}
+        manager = reference("account_principal")
+        lines: list[str] = []
+        for target in SECRETLESS_ROLES:
+            for sp_role, principals in sorted(found.get(target, {}).items()):
+                for principal in sorted(principals):
+                    if (target, sp_role, principal) in reviewed:
+                        continue
+                    if principal == manager:
+                        line = (
+                            f"account_principal: holds a role on the {target} identity; "
+                            "it may manage the reserved M2M identities only"
+                        )
+                    elif principal.startswith("users/") and self.account_admin(principal):
+                        continue
+                    else:
+                        kind = next((k for p, k in _PRINCIPAL_KINDS.items() if principal.startswith(p)), "a principal")
+                        kind += " who is not an account admin" if kind == "a user" else ""
+                        line = (
+                            f"{target}: {kind} holds {sp_role} on it and could mint it a credential or act "
+                            "as it; only account admins may (remove the grant in the account console)"
+                        )
+                    if line not in lines:
+                        lines.append(line)
+        for line in lines:
+            self.refuse(line)
 
     def interim_user(self) -> str | None:
         email = self.request.interim_member

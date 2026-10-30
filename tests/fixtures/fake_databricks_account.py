@@ -1,9 +1,11 @@
 """An in-memory Databricks account and workspace for the account-bootstrap tests.
 
 ``FakeEstate`` holds service principals, their OAuth secrets and federation
-policies, workspace assignments, account groups and users, service-principal
-rule sets, workspace tokens, the Cotality source catalog and its grants, and
-one App. ``estate.clients()`` returns account and workspace clients whose
+policies, workspace assignments, account groups and users (and which users
+are account admins), service-principal rule sets, workspace tokens, the
+Cotality source catalog and its grants, and one App. The session's operator
+is an account admin, and like the account it gets Service Principal Manager
+on every service principal it creates. ``estate.clients()`` returns account and workspace clients whose
 API objects carry the SDK's method names and return the SDK's own dataclasses,
 so the code under test is the code that would talk to a real account.
 
@@ -76,6 +78,9 @@ WORKSPACE_ID = 4200000101
 WORKSPACE_HOST = "https://acme.cloud.databricks.com"
 AUDIENCE = f"{WORKSPACE_HOST}/oidc/v1/token"
 REPOSITORY = "acme-org/mip-platform"
+OPERATOR = "operator@owner.example"
+OPERATOR_ID = "9000000000"
+SP_MANAGER = "roles/servicePrincipal.manager"
 SOURCE_CATALOG = "cotality_source_acme"
 SOURCE_SCHEMA = "property_acme"
 _FILTER = re.compile(r"(?P<attr>applicationId|displayName|userName) eq '(?P<value>[^']*)'")
@@ -120,7 +125,8 @@ class FakeEstate:
     policies: dict[str, list[FederationPolicy]] = field(default_factory=dict)
     assignments: dict[str, set[str]] = field(default_factory=dict)
     groups: dict[str, tuple[str, set[str]]] = field(default_factory=dict)
-    users: dict[str, str] = field(default_factory=dict)
+    users: dict[str, str] = field(default_factory=lambda: {OPERATOR_ID: OPERATOR})
+    account_admins: set[str] = field(default_factory=lambda: {OPERATOR_ID})
     rule_sets: dict[str, tuple[int, dict[str, set[str]]]] = field(default_factory=dict)
     token_owners: set[str] = field(default_factory=set)
     tokens_readable: bool = True
@@ -170,9 +176,11 @@ class FakeEstate:
         self.groups[group_id] = (name, set(members or ()))
         return group_id
 
-    def add_user(self, user_name: str) -> str:
+    def add_user(self, user_name: str, *, account_admin: bool = False) -> str:
         user_id = str(9_000_000_000 + self.next_id())
         self.users[user_id] = user_name
+        if account_admin:
+            self.account_admins.add(user_id)
         return user_id
 
     def rule_set(self, application_id: str) -> dict[str, set[str]]:
@@ -240,7 +248,9 @@ class _ServicePrincipals(_Api):
         self.record("create", **kwargs)
         if set(kwargs) - {"display_name", "active"}:
             self.violate("create sets more than a name and active")
-        return self._view(self.estate.add_sp(kwargs["display_name"]))
+        sp = self.estate.add_sp(kwargs["display_name"])
+        self.estate.rule_set(sp.application_id).setdefault(SP_MANAGER, set()).add(f"users/{OPERATOR}")
+        return self._view(sp)
 
 
 class _Secrets(_Api):
@@ -340,9 +350,17 @@ class _Groups(_Api):
 
 
 class _Users(_Api):
-    def list(self, *, filter: str | None = None) -> list[User]:  # noqa: A002 - SDK name
-        self.record("list", filter=filter)
-        return _filtered([User(id=i, user_name=n) for i, n in self.estate.users.items()], filter)
+    def list(self, *, filter: str | None = None, attributes: str | None = None) -> list[User]:  # noqa: A002 - SDK name
+        self.record("list", filter=filter, attributes=attributes)
+        users = [
+            User(
+                id=i,
+                user_name=n,
+                roles=[ComplexValue(value="account_admin")] if i in self.estate.account_admins else None,
+            )
+            for i, n in self.estate.users.items()
+        ]
+        return _filtered(users, filter)
 
 
 class _AccessControl(_Api):

@@ -24,8 +24,16 @@ It works in this order (plan §4.3). `<prefix>` is `MIP_IDENTITY_PREFIX`
 | 3 | `<prefix>-data-owners` | An account group holding deployer and jobs, plus `--interim-member` if you give one. |
 | 4 | `<prefix>-validator` | No secret. One federation policy with subject `…:environment:<client>-validate`. A `USER` assignment. |
 | 5 | Reserved M2M identities | normal, operator2, admin and release-probe; with `--tier agentic` also verifier, runtime and proxy. Each gets a `USER` assignment. |
-| 6 | Account principal | Service Principal Manager on the reserved M2M identities only. Never on deployer, jobs or validator, and never account admin. |
+| 6 | Account principal | The bootstrap grants it Service Principal Manager on the reserved M2M identities only. It is refused if it holds account admin or any role on deployer, jobs or validator. Its grants on identities outside this install are not audited: that would mean reading every service principal's rule set in the account. |
 | 7 | Source grants | `USE_CATALOG` on the Cotality source catalog, and `USE_SCHEMA` and `SELECT` on its schema, for the data-owners group. If the source is not mounted yet, this step is deferred. |
+
+**Who may hold a role on deployer, jobs and validator.** A Service
+Principal Manager on one of them could mint it a secret; a Service
+Principal User could act as it. So the plan refuses any holder that is not
+an account admin: a service principal, a group, or a user without account
+admin. The one reviewed exception is the deployer's Service Principal User
+on jobs. The refusal names the identity, the role and the kind of holder.
+Remove the grant in the account console, then plan again.
 
 **Pinned by application id.** `MIP_IDENTITY_IDS_JSON` records every identity
 by application id. An identity it pins is the bootstrap's own.
@@ -181,7 +189,8 @@ Two kinds of tests pin this:
 
 When a precondition fails, the tool refuses and tells you what to fix by
 hand. Examples: a deployer that holds a secret, a second federation policy,
-or an account principal that holds account admin.
+an account principal that holds account admin, or a group that holds a role
+on the validator.
 
 ## Recovering from an interrupted apply
 

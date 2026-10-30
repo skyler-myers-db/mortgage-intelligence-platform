@@ -252,8 +252,8 @@ def _verify(clients: Any, request: BootstrapRequest, out: TextIO) -> int:
             print(f"  - {line}", file=out)
         return 1
     print(
-        "bootstrap verify: ok; each M2M identity holds one secret, and the deployer, jobs and "
-        "validator hold none",
+        "bootstrap verify: ok; each M2M identity holds one secret; the deployer, jobs and "
+        "validator hold none and no unreviewed role grant",
         file=out,
     )
     return 0

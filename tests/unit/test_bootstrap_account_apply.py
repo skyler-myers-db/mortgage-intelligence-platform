@@ -26,6 +26,7 @@ from tests.fixtures.fake_databricks_account import (
     ACCOUNT_ID,
     AUDIENCE,
     METASTORE_ID,
+    OPERATOR,
     REPOSITORY,
     SOURCE_CATALOG,
     SOURCE_SCHEMA,
@@ -38,6 +39,8 @@ from tests.fixtures.fake_databricks_account import (
 from tools.clients.bootstrap_roster import roster
 
 SUBJECT = f"repo:{REPOSITORY}:environment:acme"
+# The account grants the creating operator (an account admin) Manager on what it creates.
+CREATOR = {"roles/servicePrincipal.manager": {f"users/{OPERATOR}"}}
 
 
 @pytest.fixture
@@ -149,7 +152,10 @@ def test_apply_creates_every_identity_and_a_second_run_makes_zero_mutations(esta
         assert estate.secrets[_sp(estate, f"acme-{role}").scim_id] == []
     (group_id,) = estate.groups
     assert estate.groups[group_id] == ("acme-data-owners", {deployer.scim_id, jobs.scim_id})
-    assert estate.rule_set(jobs.application_id) == {"roles/servicePrincipal.user": {f"servicePrincipals/{deployer.application_id}"}}
+    assert estate.rule_set(jobs.application_id) == {
+        **CREATOR,
+        "roles/servicePrincipal.user": {f"servicePrincipals/{deployer.application_id}"},
+    }
     assert estate.grants[("catalog", SOURCE_CATALOG)] == {"acme-data-owners": {"USE_CATALOG"}}
     assert estate.grants[("schema", f"{SOURCE_CATALOG}.{SOURCE_SCHEMA}")] == {"acme-data-owners": {"SELECT", "USE_SCHEMA"}}
 
@@ -195,7 +201,7 @@ def test_the_agentic_tier_adds_the_three_runtime_identities(estate: FakeEstate, 
     assert sink.pins is not None and {"verifier", "runtime", "proxy"} <= set(sink.pins)
     manager = f"servicePrincipals/{sink.pins['account_principal']}"
     for role in (*RESERVED_CORE, "verifier", "runtime", "proxy"):
-        assert estate.rule_set(sink.pins[role])["roles/servicePrincipal.manager"] == {manager}
+        assert estate.rule_set(sink.pins[role])["roles/servicePrincipal.manager"] == {manager, f"users/{OPERATOR}"}
 
 
 def test_the_tier_must_agree_with_the_profile(estate: FakeEstate, tmp_path: Path) -> None:
@@ -211,7 +217,7 @@ def test_the_account_principal_manages_the_reserved_identities_only(estate: Fake
     assert sink.pins is not None
     manager = f"servicePrincipals/{sink.pins['account_principal']}"
     for role in RESERVED_CORE:
-        assert estate.rule_set(sink.pins[role]) == {"roles/servicePrincipal.manager": {manager}}
+        assert estate.rule_set(sink.pins[role]) == {"roles/servicePrincipal.manager": {manager, f"users/{OPERATOR}"}}
     for role in ("deployer", "jobs", "validator", "account_principal"):
         held = estate.rule_set(sink.pins[role])
         assert all(manager not in principals for principals in held.values()), role
