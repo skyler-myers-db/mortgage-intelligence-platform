@@ -2566,6 +2566,33 @@ identity that holds no workspace admin.
   datasets after a run_as change, stays with the cutover.
 * `tests/unit/test_jobs_identity_shape.py` pins the split.
 
+**Workspace ACLs.** The jobs identity holds no workspace admin and only a
+USER assignment, so its runs can reach a workspace object only by grant.
+Deploy step 4, right after the jobs-reader Lakebase role and before the first
+job runs as it, runs `tools/databricks/jobs_identity_acl.py apply`:
+
+* It derives the grants from databricks.yml:
+  * CAN_READ on the bundle files folder (`workspace.file_path`). Every task's
+    Python and SQL file, `jobs/install_pins.json` and the pipeline's library
+    sit under the deployer's own home folder.
+  * CAN_USE on the warehouse the SQL tasks name.
+  * CAN_RUN on `mip_feature_pipeline`, which `mip_refresh_silver` starts.
+  * CAN_MANAGE_RUN on the four jobs `mip_scheduled_refresh` starts. Each of
+    them must run as the jobs identity itself.
+  * CAN_USE on the Lakebase instance a `--lakebase-instance` parameter names.
+* Any other resource reference or task kind in a jobs-identity job refuses, so
+  a new dependency cannot ship without its grant.
+* It resolves each object from the bundle summary, and refuses unless the
+  summary's jobs-identity jobs run as the profile's jobs principal.
+* It adds only what the identity lacks, by the permissions API's PATCH, then
+  re-reads every object. It never removes or lowers a grant, so the App's
+  `CAN_MANAGE_RUN` bindings, the verifier's warehouse `CAN_USE` and other
+  teams' grants stay. Bundle `permissions:` blocks would set each object's
+  whole ACL on every deploy and drop those, which is why this is a deploy
+  step.
+* `plan` reads only. Output names bundle keys, never object ids or
+  principals. `tests/unit/test_jobs_identity_acl.py` pins all of this.
+
 **Pinned parameters.**
 
 * Before every bundle call, `tools/databricks/bundle_env.py` renders

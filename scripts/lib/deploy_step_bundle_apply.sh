@@ -376,9 +376,10 @@ run_with_lakebase_bootstrap_authority \
   --role-contract verifier \
   --repair-legacy-replication
 # The non-admin jobs identity's Lakebase role (M2-PR5): mip_lakebase_migrate
-# (step 4b, --jobs-reader-client-id) grants it SELECT on the lifecycle sync's
-# two tables and postflights exactly that, so the role must exist first.
-# CLIENT_JOBS_PRINCIPAL is the client-target view's (resolve_client_profile).
+# (step 4b, --jobs-reader-client-id) grants it the lifecycle sync's SELECTs and
+# the KPI snapshot's upsert and postflights exactly that, so the role must
+# exist first. CLIENT_JOBS_PRINCIPAL is the client-target view's
+# (resolve_client_profile).
 step "converge jobs-reader Lakebase OAuth role to exact LOGIN-only profile"
 run_with_lakebase_bootstrap_authority \
   "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
@@ -387,6 +388,21 @@ run_with_lakebase_bootstrap_authority \
   --application-id "$CLIENT_JOBS_PRINCIPAL" \
   --role-contract jobs_reader \
   --repair-legacy-replication
+# The jobs identity holds no workspace admin, so the jobs and the pipeline that
+# run as it can read the bundle files, use the warehouse, start the pipeline and
+# the chained jobs and use the Lakebase instance only by grant (M2-PR5).
+# tools/databricks/jobs_identity_acl.py derives exactly those from
+# databricks.yml, adds the ones it lacks with PATCH (nothing is removed or
+# lowered) and postflights them, before the first job runs as it (step 4b).
+step "grant the jobs identity the workspace ACLs its jobs and pipeline use"
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  JOBS_IDENTITY_ACL_SUMMARY="$APP_RESOURCE_BINDING_SUMMARY"
+else
+  JOBS_IDENTITY_ACL_SUMMARY="/tmp/mip-dry-run-bundle-summary.json"
+fi
+run "$PYTHON" -m tools.databricks.jobs_identity_acl apply \
+  --bundle-summary "$JOBS_IDENTITY_ACL_SUMMARY" \
+  --jobs-principal "$CLIENT_JOBS_PRINCIPAL"
 # Credentials-only bootstrap intentionally cannot touch an App that does not
 # exist yet. As soon as bundle apply has created/resolved the App, converge the
 # three App-facing identities by their reserved role and immutable client ID.
