@@ -2113,6 +2113,14 @@ shell or in `.env.local`, a non-blank shell value winning, at every reader
 `backend/runtime.py`). A local App reads them from the same `.env` /
 `.env.local` files as its settings.
 
+Under `./scripts/deploy.sh -t client` both are fields of the client profile
+(`deploy/clients/example.env`), which resolves, from the same sources in the
+same order, before any other step: a customer install's profile requires the
+record and refuses it without its pin or with a pin that is not its digest,
+and a demo install's profile refuses either name. `bundle_env.py -t client`
+resolves the profile the same way; `-t ci` validates with the environment's
+values alone.
+
 `.env.example` cannot be read or edited from an agent session, so the owner
 adds these lines to its "Direct os.environ reads" section and, in the same
 change, moves both names from `DIRECT_ENV_READS_PENDING_TEMPLATE` to
