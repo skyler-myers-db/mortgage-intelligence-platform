@@ -6,9 +6,15 @@ this order, so the deployer's federation subject is set before any later
 step can depend on it, and before its own ADMIN assignment.
 
 Display names derive from ``MIP_IDENTITY_PREFIX``. The reserved M2M names
-come from ``tools/databricks/m2m_identity_contract.IDENTITY_DEFAULTS`` with
-its ``mip-`` prefix swapped for the client's, so the default prefix keeps
-exactly the names the deploy tooling already looks up.
+and secret fields come from
+``tools/databricks/m2m_identity_contract.IDENTITY_DEFAULTS``, with its
+``mip-`` prefix swapped for the client's, so the default prefix keeps exactly
+the names the deploy tooling already looks up.
+
+The agent proxy is the one reserved identity whose rotation differs (the
+deploy's ``credential_retirement_mode``): its field holds the canonical
+credential bundle, and its older credentials retire through the signed
+deploy's blue/green journal, never in the bootstrap.
 """
 
 from __future__ import annotations
@@ -16,10 +22,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, cast
 
+from tools.databricks.agent_proxy_credential_bundle import AGENT_PROXY_CREDENTIAL_BUNDLE_SECRET
 from tools.databricks.m2m_identity_contract import IDENTITY_DEFAULTS, IdentityRole
 
 Kind = Literal["deployer", "jobs", "validator", "m2m", "account_principal"]
 Tier = Literal["core", "agentic"]
+Retirement = Literal["immediate", "signed_app_cutover"]
 
 GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 DATA_OWNERS_ROLE = "data_owners"
@@ -46,9 +54,20 @@ class RoleSpec:
     # The account principal gets Service Principal Manager on it.
     managed_by_account_principal: bool
     agentic: bool = False
+    # The role's name in the M2M contract; ``None`` outside it.
+    contract_role: IdentityRole | None = None
+    # How a rotation retires the older secrets: in the same run (``immediate``)
+    # or after the signed deploy's cutover (``signed_app_cutover``).
+    retirement: Retirement = "immediate"
 
     def display_name(self, prefix: str) -> str:
         return f"{prefix}-{self.name_suffix}"
+
+    @property
+    def bundled(self) -> bool:
+        """The secret field holds the canonical agent-proxy bundle, not a bare secret."""
+
+        return self.secret_field == AGENT_PROXY_CREDENTIAL_BUNDLE_SECRET
 
     @property
     def secretless(self) -> bool:
@@ -57,19 +76,22 @@ class RoleSpec:
         return self.kind in {"deployer", "jobs", "validator"}
 
 
-def _reserved(role: str, secret_field: str, *, agentic: bool = False) -> RoleSpec:
-    contract_name = IDENTITY_DEFAULTS[cast(IdentityRole, _CONTRACT_ROLE.get(role, role))].sp_name
-    if not contract_name.startswith(_CONTRACT_PREFIX):
+def _reserved(role: str, *, agentic: bool = False) -> RoleSpec:
+    contract_role = cast(IdentityRole, _CONTRACT_ROLE.get(role, role))
+    defaults = IDENTITY_DEFAULTS[contract_role]
+    if not defaults.sp_name.startswith(_CONTRACT_PREFIX):
         raise RuntimeError(f"reserved identity {role} has an unexpected contract name")
     return RoleSpec(
         role=role,
         kind="m2m",
-        name_suffix=contract_name.removeprefix(_CONTRACT_PREFIX),
+        name_suffix=defaults.sp_name.removeprefix(_CONTRACT_PREFIX),
         assignment="USER",
         environment_suffix=None,
-        secret_field=secret_field,
+        secret_field=defaults.client_secret_secret_name,
         managed_by_account_principal=True,
         agentic=agentic,
+        contract_role=contract_role,
+        retirement="signed_app_cutover" if contract_role == "agent_proxy" else "immediate",
     )
 
 
@@ -77,13 +99,13 @@ ROSTER: tuple[RoleSpec, ...] = (
     RoleSpec("deployer", "deployer", "deployer", "ADMIN", "", None, False),
     RoleSpec("jobs", "jobs", "jobs", "USER", None, None, False),
     RoleSpec("validator", "validator", "validator", "USER", VALIDATE_ENVIRONMENT_SUFFIX, None, False),
-    _reserved("normal", "DATABRICKS_CLIENT_SECRET"),
-    _reserved("operator2", "DATABRICKS_OPERATOR2_CLIENT_SECRET"),
-    _reserved("admin", "DATABRICKS_ADMIN_CLIENT_SECRET"),
-    _reserved("release_probe", "DATABRICKS_RELEASE_PROBE_CLIENT_SECRET"),
-    _reserved("verifier", "DATABRICKS_VERIFIER_CLIENT_SECRET", agentic=True),
-    _reserved("runtime", "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET", agentic=True),
-    _reserved("proxy", "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE", agentic=True),
+    _reserved("normal"),
+    _reserved("operator2"),
+    _reserved("admin"),
+    _reserved("release_probe"),
+    _reserved("verifier", agentic=True),
+    _reserved("runtime", agentic=True),
+    _reserved("proxy", agentic=True),
     RoleSpec(
         "account_principal",
         "account_principal",

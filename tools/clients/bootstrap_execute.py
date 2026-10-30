@@ -6,7 +6,8 @@ Every call here is additive, with one reviewed exception:
   an adopted identity already has to the client's subject), a workspace
   assignment, a group, a group member, a rule-set grant or a UC grant;
 * ``--rotate-adopted`` alone deletes, and only the secrets its plan listed
-  for a pinned M2M identity before it minted the new one.
+  for a pinned M2M identity before it minted the new one. The agent proxy's
+  older credentials are never deleted here: the signed deploy retires them.
 
 Never: a metastore or securable ownership transfer, a UC revoke, a SCIM
 ``remove`` or ``replace``, a rule-set update that drops a grant, a change to
@@ -47,9 +48,10 @@ from tools.clients.bootstrap_observe import (
     text,
 )
 from tools.clients.bootstrap_plan import Plan, Step
-from tools.clients.bootstrap_roster import GITHUB_OIDC_ISSUER
+from tools.clients.bootstrap_roster import GITHUB_OIDC_ISSUER, RoleSpec
 from tools.clients.credential_sink import CredentialProbe, CredentialSink
 from tools.clients.errors import BootstrapRefusal
+from tools.databricks.agent_proxy_credential_bundle import canonical_agent_proxy_credential_bundle
 
 _SP_ROLE = {"user": SP_USER, "manager": SP_MANAGER}
 PROBE_ATTEMPTS = 6
@@ -58,6 +60,18 @@ PROBE_INTERVAL_SECONDS = 5.0
 
 class StepFailure(RuntimeError):
     """A mutation failed; the message is value-free."""
+
+
+def field_value(spec: RoleSpec, application_id: str, credential_id: str, secret: SecretStr) -> SecretStr:
+    """What the sink stores for ``spec``'s field: the secret, or the proxy's bundle."""
+
+    if not spec.bundled:
+        return secret
+    return SecretStr(
+        canonical_agent_proxy_credential_bundle(
+            client_id=application_id, credential_id=credential_id, client_secret=secret.get_secret_value()
+        )
+    )
 
 
 class Executor:
@@ -249,11 +263,16 @@ class Executor:
         return False
 
     def _rotate_secret(self, item: Step) -> None:
-        """Mint, hand to the sink, confirm, prove it authenticates, then revoke the older ones."""
+        """Mint, hand to the sink, confirm, prove it authenticates, then revoke the older ones.
+
+        Only an ``immediate`` identity's older secrets are revoked; the agent
+        proxy's stay for the signed deploy's blue/green retirement journal.
+        """
 
         role, field_name = item.get("role"), item.get("field")
+        state = self.obs.roles[role]
         principal = self._principal(role)
-        older = self.obs.roles[role].secret_ids
+        older = state.secret_ids if state.spec.retirement == "immediate" else ()
         if self.probe is None:
             raise BootstrapRefusal([f"{role}: no credential probe is configured"])
         created = self.account.service_principal_secrets.create(principal.scim_id)
@@ -261,10 +280,16 @@ class Executor:
         new_id = text(getattr(created, "id", None))
         secret = SecretStr(text(getattr(created, "secret", None)))
         del created
-        if not new_id or not secret.get_secret_value() or new_id in older:
+        if not new_id or not secret.get_secret_value() or new_id in state.secret_ids:
             raise BootstrapRefusal([f"{role}: the minted credential came back incomplete; older secrets kept"])
         try:
-            self.sink.put_secret(field_name, principal.application_id, secret)
+            value = field_value(state.spec, principal.application_id, new_id, secret)
+        except ValueError:
+            raise BootstrapRefusal(
+                [f"{role}: the minted credential cannot form its field's value; older secrets kept"]
+            ) from None
+        try:
+            self.sink.put_secret(field_name, principal.application_id, value)
             stored = self.sink.confirm_secret(field_name)
         except BootstrapRefusal:
             raise
@@ -283,3 +308,5 @@ class Executor:
         remaining = {text(entry.id) for entry in listed}
         if remaining & set(older):
             raise BootstrapRefusal([f"{role}: an older secret is still listed; re-run --verify"])
+        if new_id not in remaining:
+            raise BootstrapRefusal([f"{role}: the new credential is not listed after the rotation; re-run --verify"])

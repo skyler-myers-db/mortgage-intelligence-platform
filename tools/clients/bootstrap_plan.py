@@ -275,11 +275,17 @@ def plan_apply(obs: Observation) -> Plan:
 
 
 def plan_rotation(obs: Observation) -> Plan:
-    """Mint one new secret per pinned M2M identity and revoke every older one.
+    """Mint one new secret per pinned M2M identity and retire every older one.
 
     Every secret-bearing identity of the tier must already be pinned: a
     secret is handed to the sink only for an identity the sink's pin map
     already names.
+
+    An ``immediate`` identity's older secrets are revoked in the same run.
+    The agent proxy's are not: the signed last-good App record pins its
+    active credential, and the signed deploy retires a superseded one after
+    its blue/green cutover. So the proxy rotates only while it holds at most
+    one credential; with more, its rotation is deferred.
     """
 
     unpinned = [
@@ -292,16 +298,26 @@ def plan_rotation(obs: Observation) -> Plan:
             [f"{role}: is not pinned in MIP_IDENTITY_IDS_JSON; run --apply first" for role in unpinned]
         )
     steps = []
+    deferred = []
     secrets: dict[str, list[str]] = {}
     for role, state in obs.roles.items():
-        field_name = state.spec.secret_field
+        field_name, held = state.spec.secret_field, len(state.secret_ids)
         if field_name is None:
             continue
         secrets[role] = list(state.secret_ids)
-        steps.append(step("rotate_secret", role=role, field=field_name, revoke=str(len(state.secret_ids))))
+        if state.spec.retirement == "immediate":
+            steps.append(step("rotate_secret", role=role, field=field_name, revoke=str(held)))
+        elif held > 1:
+            deferred.append(
+                f"{role}: not rotated; it holds {held} credentials and a rotation keeps every older one "
+                "for the signed deploy to retire after cutover. Bring it to one first: deploy, or "
+                "reconcile the others by hand"
+            )
+        else:
+            steps.append(step("rotate_secret", role=role, field=field_name, revoke="0", retire=state.spec.retirement))
     material = _base_material(obs)
     material["secrets"] = secrets
-    return _plan(obs, "rotate-adopted", steps, material)
+    return _plan(obs, "rotate-adopted", steps, material, deferred=tuple(deferred))
 
 
 # --- post-first-install -----------------------------------------------------

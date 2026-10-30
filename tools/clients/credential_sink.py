@@ -5,7 +5,11 @@ never hold (plan §4.1):
 
 * the identity pins, ``MIP_IDENTITY_IDS_JSON`` (identifying), after every
   create or adopt;
-* a freshly minted M2M secret (secret), during ``--rotate-adopted``.
+* a freshly minted M2M secret (secret), during ``--rotate-adopted``. The
+  bootstrap hands over the field's exact value: the client secret, or for
+  ``DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE`` the canonical bundle of client
+  id, credential id and secret that the deploy parses
+  (tools/databricks/agent_proxy_credential_bundle.py). A sink stores it as is.
 
 Both go to a ``CredentialSink`` and nowhere else: never stdout, stderr, a
 log, the plan or an exception message. A secret travels as a
@@ -48,7 +52,7 @@ class CredentialSink(Protocol):
         """Store the whole pin map (``MIP_IDENTITY_IDS_JSON``), replacing the old one."""
 
     def put_secret(self, field: str, application_id: str, secret: SecretStr) -> None:
-        """Store ``secret`` as the profile secret ``field`` for that identity."""
+        """Store ``secret``, the field's exact value, as the profile secret ``field``."""
 
     def confirm_secret(self, field: str) -> bool:
         """``True`` once the sink holds a value for ``field`` stored by this run."""

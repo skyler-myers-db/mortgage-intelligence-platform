@@ -2,9 +2,11 @@
 
 Rotation mints one secret per pinned M2M identity, hands it to the sink
 only, confirms and probes it, then revokes exactly the secrets its plan
-listed. A canary secret value must never reach stdout, stderr, a log
-record, the plan or an exception message, on the happy path or any
-failure path.
+listed. The agent proxy is the exception: its field gets the canonical
+credential bundle the deploy parses, and its older credential stays for the
+signed deploy's blue/green retirement. A canary secret value must never
+reach stdout, stderr, a log record, the plan or an exception message, on
+the happy path or any failure path.
 """
 
 from __future__ import annotations
@@ -23,9 +25,15 @@ from tests.fixtures.bootstrap_harness import (
     write_env,
 )
 from tests.fixtures.fake_databricks_account import FakeEstate, assert_safe
+from tools.clients.bootstrap_roster import ROSTER
+from tools.databricks.agent_proxy_credential_bundle import parse_agent_proxy_credential_bundle
+from tools.databricks.m2m_identity_contract import IDENTITY_DEFAULTS
+from tools.databricks.m2m_oauth_credential_mutation import credential_retirement_mode
 
 CANARY = "canary-6f1d2c9e-secret-never-printed"
 ROTATED = (*RESERVED_CORE, "account_principal")
+PROXY_FIELD = "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE"
+AGENTIC = ("--tier", "agentic")
 
 
 @pytest.fixture
@@ -203,6 +211,70 @@ def test_rotation_never_touches_the_secretless_identities(estate: FakeEstate, tm
     minted_for = {c.args[0] for c in estate.calls if c.api == "service_principal_secrets" and c.method == "create"}
     secretless = {estate.by_name(f"acme-{role}").scim_id for role in ("deployer", "jobs", "validator")}  # type: ignore[union-attr]
     assert minted_for and not minted_for & secretless
+
+
+# --- the agent proxy -----------------------------------------------------------------
+
+
+def test_the_roster_follows_the_m2m_contract_for_fields_and_retirement() -> None:
+    reserved = [spec for spec in ROSTER if spec.contract_role is not None]
+    assert [spec.role for spec in reserved] == [*RESERVED_CORE, "verifier", "runtime", "proxy"]
+    for spec in reserved:
+        assert spec.contract_role is not None
+        assert spec.secret_field == IDENTITY_DEFAULTS[spec.contract_role].client_secret_secret_name
+        assert spec.retirement == credential_retirement_mode(spec.contract_role)
+    assert [spec.role for spec in ROSTER if spec.bundled] == ["proxy"]
+    assert [spec.role for spec in ROSTER if spec.retirement != "immediate"] == ["proxy"]
+
+
+def _agentic_install(estate: FakeEstate, tmp_path: Path) -> tuple[Path, FakeSink]:
+    sink = FakeSink()
+    _planned, applied = plan_and_apply(estate, write_env(tmp_path / "a.env", MIP_AGENTIC_TIER="on"), sink, *AGENTIC)
+    assert applied.code == 0, applied.err
+    return write_env(tmp_path / "pinned.env", pins=sink.pins, MIP_AGENTIC_TIER="on"), sink
+
+
+def test_the_proxy_gets_its_canonical_bundle_and_keeps_its_older_credential(
+    estate: FakeEstate, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    env, sink = _agentic_install(estate, tmp_path)
+    caplog.set_level(logging.DEBUG)
+    proxy = estate.by_name("acme-agent-supervisor-proxy-ci-sp")
+    assert proxy is not None
+    active = estate.add_secret(proxy, "the-signed-active-credential")
+    planned = run_tool(estate, "--plan", "--for", "rotate-adopted", *AGENTIC, env_file=env, sink=sink)
+    assert planned.code == 0, planned.err
+    assert f"rotate_secret role=proxy field={PROXY_FIELD} revoke=0 retire=signed_app_cutover" in planned.steps()
+    result = run_tool(estate, "--rotate-adopted", "--ack-plan", planned.digest, *AGENTIC, env_file=env, sink=sink)
+    assert result.code == 0, result.err
+    (minted,) = [s.secret_id for s in estate.secrets[proxy.scim_id] if s.minted_here]
+    assert _secret_ids(estate, "acme-agent-supervisor-proxy-ci-sp") == [active, minted]
+    assert not [c for c in estate.calls if c.method == "delete" and c.args[0] == proxy.scim_id]
+    application_id, value = sink.secrets[PROXY_FIELD]
+    bundle = parse_agent_proxy_credential_bundle(value.get_secret_value())
+    assert (bundle.client_id, bundle.credential_id, bundle.client_secret) == (sink.pins["proxy"], minted, CANARY)  # type: ignore[index]
+    assert application_id == sink.pins["proxy"]  # type: ignore[index]
+    for role, field in (("verifier", "DATABRICKS_VERIFIER_CLIENT_SECRET"), ("runtime", "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET")):
+        assert sink.secrets[field] == (sink.pins[role], sink.secrets[field][1])  # type: ignore[index]
+        assert sink.secrets[field][1].get_secret_value() == CANARY
+    for text in (planned.out, planned.err, result.out, result.err, caplog.text):
+        assert CANARY not in text
+
+
+def test_a_proxy_holding_two_credentials_is_deferred_not_rotated(estate: FakeEstate, tmp_path: Path) -> None:
+    env, sink = _agentic_install(estate, tmp_path)
+    proxy = estate.by_name("acme-agent-supervisor-proxy-ci-sp")
+    assert proxy is not None
+    held = [estate.add_secret(proxy), estate.add_secret(proxy)]
+    planned = run_tool(estate, "--plan", "--for", "rotate-adopted", *AGENTIC, env_file=env, sink=sink)
+    assert planned.code == 0, planned.err
+    assert not [line for line in planned.steps() if "role=proxy" in line]
+    assert "deferred: proxy: not rotated; it holds 2 credentials" in planned.out
+    result = run_tool(estate, "--rotate-adopted", "--ack-plan", planned.digest, *AGENTIC, env_file=env, sink=sink)
+    assert result.code == 0, result.err
+    assert _secret_ids(estate, "acme-agent-supervisor-proxy-ci-sp") == held
+    assert PROXY_FIELD not in sink.secrets
+    assert not [c for c in estate.calls if c.args and c.args[0] == proxy.scim_id and c.method in {"create", "delete"}]
 
 
 # --- post-first-install --------------------------------------------------------------

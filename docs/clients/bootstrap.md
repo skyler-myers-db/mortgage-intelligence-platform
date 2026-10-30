@@ -116,6 +116,17 @@ validator are never touched. For each such identity the tool:
 For a newly created identity this is its first secret, and nothing is
 revoked.
 
+The agent proxy (`--tier agentic`) differs in two ways:
+
+- Its field, `DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE`, gets the canonical
+  JSON bundle of client id, credential id and secret that the deploy parses
+  (`tools/databricks/agent_proxy_credential_bundle.py`), not a bare secret.
+- Its older credential is never revoked here. The signed last-good App
+  record pins the active one, and the signed deploy retires it after the
+  blue/green cutover. So the proxy rotates only while it holds at most one
+  credential; with two or more, the plan defers it until you deploy or
+  reconcile the extra ones.
+
 If the sink or the proof fails, every older secret is kept. A secret minted
 after you planned changes the digest, so the run refuses before minting.
 
@@ -151,7 +162,7 @@ still pins them exactly.
 - change an identity's roles, so it never grants account admin;
 - lower a workspace permission;
 - delete anything, except older secrets of a pinned M2M identity during
-  `--rotate-adopted`.
+  `--rotate-adopted` (never the agent proxy's).
 
 Two kinds of tests pin this:
 
