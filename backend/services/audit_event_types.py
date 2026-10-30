@@ -80,6 +80,9 @@ SERVER_OWNED_AUDIT_EVENT_PREFIXES: tuple[str, ...] = (
     "GENIE_ACTION_",
     "GROWTH_AGENT_",
     "LEAD_",
+    # LENDER_IDENTITY_VERIFIED: the App boot's one audit row for a
+    # digest-pinned lender record (backend/services/lender_identity_boot.py).
+    "LENDER_IDENTITY_",
 )
 
 

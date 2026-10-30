@@ -107,6 +107,15 @@ def validator_refusals(bundle_root: Path) -> list[str]:
     return [reason for text in texts for reason in bundle_refusals(text)]
 
 
+def refuse_enabled(bundle_root: Path, *, prefix: str) -> bool:
+    """Print :func:`validator_refusals` under ``prefix``; True when there is any."""
+
+    refusals = validator_refusals(bundle_root)
+    for reason in refusals:
+        print(f"{prefix} refusing jobs.{JOB_KEY}: {reason}", file=sys.stderr)
+    return bool(refusals)
+
+
 def planned_refusals(plan: BundlePlan) -> list[str]:
     entry = plan.entry(f"resources.jobs.{JOB_KEY}")
     if entry is None or entry.new_value is None:

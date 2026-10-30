@@ -20,6 +20,8 @@ import os
 import tempfile
 from pathlib import Path
 
+from tools.clients.bootstrap_roster import data_owners_group
+
 PINS_RELPATH = Path("jobs") / "install_pins.json"
 PINS_VERSION = 1
 
@@ -56,3 +58,24 @@ def render(bundle_root: Path, pins: dict[str, object]) -> Path:
         Path(temporary).unlink(missing_ok=True)
         raise
     return target
+
+
+def render_install(
+    bundle_root: Path,
+    *,
+    catalog: str,
+    lakebase_instance: str,
+    lakebase_database: str,
+    identity_prefix: str,
+) -> Path:
+    """:func:`render` of an install's pins; its group is ``<identity_prefix>-data-owners``."""
+
+    return render(
+        bundle_root,
+        document(
+            catalog=catalog,
+            lakebase_instance=lakebase_instance,
+            lakebase_database=lakebase_database,
+            data_owner_group=data_owners_group(identity_prefix),
+        ),
+    )

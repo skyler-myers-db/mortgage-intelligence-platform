@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from tools.clients.rules import SUMMIT_LENDER_NAME
+from tools.clients.rules import SUMMIT_LENDER_NAME, lender_record_json
 from tools.clients.schema import (
     ALIASES,
     FIELD_CLASS,
@@ -110,20 +110,25 @@ def account_host(profile: ClientProfile) -> str:
 
 
 def _lender_env(profile: ClientProfile) -> dict[str, str]:
-    """The legacy lender env: Summit for demo, the reviewed record for a customer.
+    """The lender env: Summit for demo; the pinned record and its pin for a customer.
 
-    A customer identity still has to pass backend.schemas.lender_identity's
-    source-controlled registry downstream, so this cannot widen it.
+    Every consumer re-verifies the record against the pin
+    (backend/schemas/lender_identity_record.py), so this cannot widen the
+    reviewed identities: a customer still needs the reviewed digest.
     """
 
     identity = profile.lender_identity
     if identity is None:
         return {"MIP_LENDER_NAME": SUMMIT_LENDER_NAME}
-    return {
+    env = {
         "MIP_LENDER_NAME": identity.legal_name,
         "MIP_LENDER_NMLS_ID": identity.nmls_id,
         "MIP_TENANT_ID": identity.tenant_id,
+        "MIP_LENDER_IDENTITY_JSON": lender_record_json(identity),
     }
+    if profile.lender_identity_sha256 is not None:
+        env["MIP_LENDER_IDENTITY_SHA256"] = profile.lender_identity_sha256
+    return env
 
 
 def client_target_vars(profile: ClientProfile) -> dict[str, str]:
@@ -195,6 +200,8 @@ def bundle_vars(profile: ClientProfile) -> dict[str, str]:
     if "MIP_LENDER_NMLS_ID" in lender:
         variables["lender_nmls_id"] = lender["MIP_LENDER_NMLS_ID"]
         variables["tenant_id"] = lender["MIP_TENANT_ID"]
+        variables["lender_identity_json"] = lender["MIP_LENDER_IDENTITY_JSON"]
+        variables["lender_identity_sha256"] = lender.get("MIP_LENDER_IDENTITY_SHA256", "")
     # The Cotality source names, when set; an unset one keeps the variable's
     # canonical default (backend/config/source_names.py).
     for variable in _COTALITY_SOURCE_VARIABLES:

@@ -1254,6 +1254,8 @@ resources:
               - "--lender-name=${var.lender_name}"
               - "--lender-nmls-id=${var.lender_nmls_id}"
               - "--tenant-id=${var.tenant_id}"
+              - "--lender-identity-json=${var.lender_identity_json}"
+              - "--lender-identity-sha256=${var.lender_identity_sha256}"
               - "--ai-gateway-verifier-client-id=${var.ai_gateway_verifier_client_id}"
               - "--require-ai-gateway-verifier"
               # M2-PR5: the jobs identity's Lakebase jobs_reader role (SELECT on
@@ -1570,6 +1572,15 @@ variables:
     default: ""
   tenant_id:
     description: Lakebase namespace for the configured deployment's reviewed disclosures
+    default: ""
+  lender_identity_json:
+    description: >-
+      A customer install's digest-pinned lender record (canonical JSON), set
+      by tools/databricks/bundle_env.py only after it verifies the record
+      against lender_identity_sha256. Empty for the Summit demo identity.
+    default: ""
+  lender_identity_sha256:
+    description: Reviewed sha256 pin of lender_identity_json; empty when it is empty
     default: ""
   scheduled_refresh_pause_status:
     description: >-

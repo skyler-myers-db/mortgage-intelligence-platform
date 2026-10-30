@@ -62,6 +62,33 @@ deployment_control_value() {
   printf '%s' "${value:-$default_value}"
 }
 
+# deployment_control_value under the rule every Python reader of the two
+# pinned lender names applies (pinned_inputs in backend/schemas/
+# lender_identity_record.py, the client profile, bundle_env.py and the App
+# payload): a shell value str.strip() empties is unset, and .env.local's is
+# read. deployment_control_value lets a whitespace-only shell value win, so
+# the preflight once resolved another record than the client profile it
+# follows (review of #298). Python decides blank, so the whitespace class is
+# the readers' own, not the shell's [[:space:]].
+nonblank_control_value() {
+  local name="$1" value blank=""
+  value="${!name:-}"
+  if [[ -n "$value" ]]; then
+    blank="$(_MIP_NONBLANK_PROBE="$value" "$PYTHON" -c \
+      'import os; print("no" if os.environ["_MIP_NONBLANK_PROBE"].strip() else "yes")')" || blank=""
+    if [[ "$blank" == "no" ]]; then
+      printf '%s' "$value"
+      return 0
+    fi
+    if [[ "$blank" != "yes" ]]; then
+      echo "${RED}[deploy] could not decide whether ${name} is blank; refusing.${RST}" >&2
+      return 2
+    fi
+  fi
+  value="$(dotenv_value "$name")"
+  printf '%s' "$value"
+}
+
 resolve_m2m_credential() {
   local name="$1" scope="${2:-export}" value
   value="${!name:-}"
