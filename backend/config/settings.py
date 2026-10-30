@@ -639,14 +639,11 @@ class Settings(BaseSettings):
     ) -> Settings:
         """Resolve the reviewed lender identity (lender_identity_record.py).
 
-        The three legacy fields go in only when configured, so an unset name
-        is the Summit default on the code-registry path and never conflicts
-        with a digest-pinned record. The pinned record and its digest are not
-        Settings fields, but they come from the same sources as one: the
-        process environment first (the App payload carries them there), then
-        the dotenv files this instance loads, which pydantic-settings hands
-        this validator as extra keys of ``data`` (none under
-        MIP_DISABLE_DOTENV or ``_env_file=None``).
+        A legacy field goes in only when configured, so an unset name is the
+        Summit default and never conflicts with a pinned record. The record
+        and its pin are not fields, but come from the same sources: the
+        environment first, then this instance's dotenv files, which
+        pydantic-settings hands this validator as extra keys of ``data``.
         """
 
         settings = handler(data)
