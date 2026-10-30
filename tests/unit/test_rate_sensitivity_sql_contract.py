@@ -24,7 +24,7 @@ three in step and keep the arithmetic honest:
   ``is_latest``), and the lien join is a LEFT JOIN (gated rows stay in);
 * the live statement embeds ``eligible_sql_predicate()`` verbatim;
 * the bundle wires both CTAS behind the freshness sentinel, through the
-  rendered path, so ``./scripts/deploy.sh -t dev`` builds them.
+  rendered path, so ``./scripts/deploy.sh -t client`` builds them.
 """
 
 from __future__ import annotations

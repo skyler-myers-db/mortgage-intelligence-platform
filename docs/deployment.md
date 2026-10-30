@@ -282,9 +282,11 @@ resource payload (which may not carry it). The first governed
 ## Emergency recovery: a slim per-release App source folder
 
 **Emergency recovery only. The command of record is `./scripts/deploy.sh -t
-dev`, which now stages, publishes and promotes a per-release folder itself
+client`, which stages, publishes and promotes a per-release folder itself
 (previous section).** A hand-made slim folder is for the case that path cannot
-run at all. A deploy from it bypasses three governed steps, and `stage`
+run at all, which today includes every ship to the live install: it predates
+the client target and is reached only through the recipe below until it is
+adopted (M2-PR6). A deploy from it bypasses three governed steps, and `stage`
 replaces only part of one of them:
 
 - **Signed promotion.** None of `./scripts/deploy.sh`'s signed workspace lease
@@ -472,33 +474,86 @@ copy and ships the copy, so a dist that changes after the review cannot
 change what ships. It refuses more than 600 tracked files or 1,300 in all,
 adds the tracked files and renames the folder into place, so a refusal or a
 failure partway leaves `--out` as it was. It prints the file count and exits
-2 on any refusal. It makes no Databricks call. Stage with a manifest and
-read the governed release id from it:
+2 on any refusal. It makes no Databricks call.
+
+### The emergency recipe, command by command (legacy dev root)
+
+Until the live install is adopted into the client target's deployer root
+(M2-PR6), every App ship to the live App goes through these commands, and only
+these. They address the **legacy root**
+`/Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/dev`, where
+`<owner>` is the user who owns the live install's bundle state. The `dev`
+target left `databricks.yml`, so the legacy root is named by explicit flags:
+`--expected-target dev --expected-root-leaf dev` on every tool that checks
+the bundle identity. Those tools check the flags against the path shape
+`/Workspace/Users/<principal>/.bundle/mortgage-intelligence-platform/<leaf>`
+(`tools/databricks/app_release_contract.py`), never against the bundle's
+target list. `tests/unit/test_docs_recipe_commands.py` parses every command in
+the block below and runs it offline (an in-memory workspace for the publish
+and the converge), so a change that stops one parsing or moves the legacy
+root fails CI.
 
 ```bash
 python -m tools.databricks.app_runtime_closure stage --ref <sha> \
-  --dist frontend/dist --out <new empty directory> \
-  --manifest-out <new file beside it> --require-brotli-check
+  --dist frontend/dist --out <stage-dir> \
+  --manifest-out <manifest> --require-brotli-check
 python -m tools.databricks.app_release_contract release-id \
-  --manifest <that file> --expected-commit <sha>
+  --manifest <manifest> --expected-commit <sha>
+DATABRICKS_CONFIG_PROFILE=<profile> python -m tools.databricks.app_release_source publish \
+  --release-id <release-id> --stage-dir <stage-dir> --manifest <manifest> \
+  --files-root /Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/dev/files \
+  --expected-commit <sha> --expected-principal <owner> \
+  --expected-target dev --expected-root-leaf dev
+DATABRICKS_CONFIG_PROFILE=<profile> python -m tools.databricks.converge_static_app_source \
+  --source-code-path /Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/dev/app-src/<release-id> \
+  --release-id <release-id> --release-manifest <manifest> --expected-git-sha <sha> \
+  --expected-principal <owner> --expected-target dev --expected-root-leaf dev
+MIP_GIT_SHA=<sha> python -m tools.databricks.app_deploy_payload \
+  --source-code-path /Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/dev/app-src/<release-id> \
+  --target dev --app-env sandbox --catalog mip --schema gold \
+  --lakebase-instance <lakebase-instance> > <payload>
+databricks apps deploy <app-name> --json @<payload> -p <profile>
 ```
 
-Upload the folder under that governed name,
-`<bundle root>/app-src/<release id>` ("Governed per-release App source"), with
-`python -m tools.databricks.app_release_source publish` and the flags
-`scripts/deploy.sh` step 5 passes (create-only, byte-verified), never with
-`workspace import-dir` and never into a folder that is already used: a folder
-under the governed name whose bytes differ makes the governed publish of that
-commit refuse at step 5. A publish that stops part way, for example on a rate
-limit (HTTP 429) that outlasts the retry budget, leaves a partial folder:
-run the same command again, which byte-compares what is already there and
-uploads only what is missing. The piecewise payload deploy then names that
-folder as the deployment's `source_code_path`.
+Publish, converge and deploy are the three commands that call the workspace,
+and each names the live workspace's CLI profile, the same `<profile>` in all
+three. Without it the two Python tools build their client from the ambient
+environment or the `DEFAULT` profile, which may name another workspace with
+the same `/Workspace/Users` path: the publish would land there and the deploy
+would then fail on the live one. Run them in a shell with no
+`DATABRICKS_HOST` or `DATABRICKS_TOKEN` exported, because the SDK lets those
+override a profile.
 
-A later governed run of the same commit and dist reuses a folder published
-this way, and governed prune retires it once no retained deployment
-references it. Legacy `app-src/<short sha>` folders are not release ids, so
-prune never touches them: they stay owner cleanup.
+1. **Stage** the closure at the commit and read its release id back from the
+   manifest. `<stage-dir>` is a new empty directory and `<manifest>` a new
+   file beside it.
+2. **Publish** the folder under that governed name in the legacy root,
+   create-only and byte-verified, never with `workspace import-dir` and never
+   into a folder that is already used: a folder under the governed name whose
+   bytes differ makes every later publish of that release id refuse. A publish
+   that stops part way, for example on a rate limit (HTTP 429) that outlasts
+   the retry budget, leaves a partial folder: run the same command again,
+   which byte-compares what is already there and uploads only what is
+   missing.
+3. **Converge**: the release-mode check `scripts/deploy.sh` runs before each
+   activation. It refuses unless the folder is exactly the release folder of
+   that commit in the legacy root and still holds exactly the manifest's
+   files.
+4. **Payload**: the deployment JSON for that folder. Run it from the checkout
+   whose `.env.local` holds the live install's operator values (lender, admin
+   allowlist and the rest); `--target dev` keeps the demo payload policy. The
+   payload leaves the campaign-treatment runtime off, so health reports
+   `campaign_treatment_runtime: disabled_baseline_deploy`, the honest state of
+   a deployment made outside signed promotion.
+5. **Deploy** from outside the checkout, with the CLI profile of the live
+   workspace (`-p <profile>`), so no bundle context can choose the host.
+
+A governed `./scripts/deploy.sh -t client` run never addresses the legacy
+root: it publishes under its own deployer root
+(`/Workspace/Users/<deployer>/.bundle/mortgage-intelligence-platform/<client>`)
+and its prune lists only that root's `app-src/`. Folders published by this
+recipe, and legacy `app-src/<short sha>` folders (which are not release ids),
+stay owner cleanup until the adoption.
 
 ## App Python dependencies: the deps-digest line
 
@@ -765,28 +820,28 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
 
    See [`docs/se-onboarding.md`](se-onboarding.md) for the full
    one-workspace-one-lender tenancy checklist.
-2. For a customer fork, rebind the bundle's single workspace-host anchor
-   before any deploy:
-
-```bash
-./scripts/configure-workspace.sh https://<customer-workspace>.cloud.databricks.com
-```
-
-   The `databricks.yml` host anchor and `DATABRICKS_HOST` must identify that
-   same workspace. `deploy-dev.yml` and `nightly.yml` are Entrada CI only,
-   and both are parked until a client environment is selected (M1-PR7): their
-   first job refuses every dispatch. A fork deploys with
-   `./scripts/deploy.sh -t dev`.
+2. Fill the client profile (`deploy/clients/example.env`) into `.env.local`.
+   `databricks.yml` commits no workspace host: its one deployable target,
+   `client`, takes the host from the authenticated environment, roots the
+   bundle at `/Workspace/Users/<deployer>/.bundle/mortgage-intelligence-platform/<client>`
+   and runs every job and the pipeline as the profile's deployer. The deploy
+   refuses (exit 2) before any other step unless that host is the profile's
+   `DATABRICKS_HOST` and the read-only live checks find the profile's
+   workspace id, metastore id and deployer (`tools/clients/live_checks.py`).
+   `deploy-dev.yml` and `nightly.yml` are Entrada CI only, and both are parked
+   until a client environment is selected (M1-PR7): their first job refuses
+   every dispatch. The command of record is `./scripts/deploy.sh -t client`.
    Before the first deployment into an isolated workspace, run:
 
 ```bash
-python tools/databricks/bundle_env.py validate -t dev
-python tools/databricks/bundle_env.py plan -t dev
+python tools/databricks/bundle_env.py validate -t client
+./scripts/deploy.sh -t client --dry-run
 ```
 
-   The first plan must report only additions (`0 to change`, `0 to delete`). A
-   change or deletion means the local bundle state or resource namespace still
-   points at another installation; stop before deployment and reconcile it.
+   The governed deploy's first plan must report only additions (`0 to
+   change`, `0 to delete`). A change or deletion means the bundle state or
+   resource namespace still points at another installation; stop and
+   reconcile it.
    `MIP_LAKEBASE_INSTANCE`/`LAKEBASE_INSTANCE_NAME` and
    `LAKEBASE_DATABASE`/`MIP_LAKEBASE_DATABASE_NAME` are compatibility alias
    pairs and must match when both names are present.
@@ -798,7 +853,7 @@ python tools/databricks/bundle_env.py plan -t dev
    refresh/smoke steps.
 
 ```bash
-./scripts/deploy.sh -t dev
+./scripts/deploy.sh -t client
 ```
 
 The command of record deploys only an exact committed revision. Before any
@@ -861,8 +916,35 @@ MIP_COTALITY_SOURCE_TABLE_PREFIX="-"
 - These are local deploy controls for now. `deploy-dev.yml` and `nightly.yml`
   are parked and do not forward them; per-client CI reads them from the
   client profile once M1-PR7 lands.
-- The App runtime (asset registry, lineage registry and Genie guards) still
-  names the canonical share until its settings move onto these names (M3-PR2).
+- The App reads the same three names as settings
+  (`backend/config/cotality_source_settings.py`), canonical when unset, with
+  the same refusals. `app_deploy_payload.py` sends a name to the App only when
+  it is set and differs from the canonical one, so a canonical install's App
+  env-name set does not change. The asset registry and the lineage manifest
+  then name the configured share tables, each under its canonical
+  `source_key` (the table's canonical three-part name, the same on every
+  install), which the evidence drawer and the asset page key their links by.
+
+`.env.example` cannot be read or edited from an agent session, so the owner
+adds these lines to its settings section and, in the same change, empties
+`SETTINGS_FIELDS_PENDING_TEMPLATE` in `tests/unit/test_settings_contract.py`;
+`test_pending_settings_fields_stay_tracked_until_the_template_documents_them`
+fails once the template has them and the set still lists them:
+
+```bash
+# Cotality source share catalog the App reads; unset or blank = the canonical share catalog.
+MIP_COTALITY_SOURCE_CATALOG=
+# Cotality source share schema the App reads; unset or blank = the canonical share schema.
+MIP_COTALITY_SOURCE_SCHEMA=
+# Cotality source share table-name prefix; unset or blank = canonical, "-" when the share's tables carry no prefix.
+MIP_COTALITY_SOURCE_TABLE_PREFIX=
+```
+- The prompt guards keep their reviewed canonical patterns and add only the
+  configured share's qualified names: `<catalog>.<schema>.` and each table's
+  three-part name, also with quoted parts or spaces around the dots. A bare
+  configured name is never a refusal, so a schema called `mortgage` leaves
+  every mortgage question alone. The audit source-asset policy refuses the
+  same qualified names, as it refuses the canonical share.
 
 ### Deploy interpreter
 
@@ -906,7 +988,7 @@ problems and this remedy:
 python3.11 -m venv "$HOME/.venvs/mip-deploy"
 "$HOME/.venvs/mip-deploy/bin/python" -m pip install -r <checkout>/requirements.txt
 export MIP_DEPLOY_PYTHON="$HOME/.venvs/mip-deploy/bin/python"
-./scripts/deploy.sh -t dev
+./scripts/deploy.sh -t client
 ```
 
 Keep the venv outside the checkout. The exact-source gate fails on any
@@ -1043,7 +1125,7 @@ configure the two distinct Ed25519 private keys
 secrets documented below. Store its derived public key separately as the
 `MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY` GitHub Actions variable; nightly
 read-only jobs never receive the private key. Only then run
-`./scripts/deploy.sh -t dev` for an operator install (`deploy-dev.yml` is
+`./scripts/deploy.sh -t client` for a client install (`deploy-dev.yml` is
 parked; see "CI deploy (deploy-dev.yml): parked" below). Bundle apply first
 creates only non-App dependencies. Deploy then resolves their concrete IDs and
 applies the App resource bindings without a source deployment: a new App is
@@ -1651,7 +1733,7 @@ DATABRICKS_CONFIG_PROFILE=<install profile> \
   python tools/databricks/provision_runtime_secrets.py \
   --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}" \
   --rotate-genie-action
-./scripts/deploy.sh -t dev
+./scripts/deploy.sh -t client
 ```
 
 For that deploy, set `MIP_GENIE_ACTION_SECRET_KID` to the new key id and
@@ -1675,7 +1757,7 @@ DATABRICKS_CONFIG_PROFILE=<install profile> \
   python tools/databricks/provision_runtime_secrets.py \
   --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}" \
   --retire-previous
-./scripts/deploy.sh -t dev
+./scripts/deploy.sh -t client
 ```
 
 Retirement is idempotent and does not require the current or Cotality secret
@@ -1686,9 +1768,11 @@ existing previous key, which stays unbound while
 `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` is unset. An id left set after
 retirement binds the sentinel, which verifies nothing.
 
-`make bundle-validate` and `make bundle-plan` remain read-only diagnostics.
-The mutable `make bundle-deploy` and `make bundle-deploy-dev` aliases are
-retired and fail closed. The internal bundle wrapper accepts mutation only
+`make bundle-validate` (`bundle_env.py validate -t client`) remains a
+diagnostic that changes no resource; the CLI creates the root's empty `files`
+folder when it is missing. `make bundle-plan` and the mutable
+`make bundle-deploy` and `make bundle-deploy-dev` aliases are retired and fail
+closed. The internal bundle wrapper accepts mutation only
 with exact non-App selectors supplied by `scripts/deploy.sh`; it rejects
 unrestricted or App selectors. Always rerun `./scripts/deploy.sh` for recovery
 so complete resource bindings, durable secrets, the signed source contract,
@@ -1857,6 +1941,79 @@ service principal created it, and otherwise only revokes the App's and
 verifier's access. That step is the reviewed path whatever happens to the
 Supervisor, so the unacknowledged refusal comes after it.
 
+### Bundle plan gate (read-only, before the lease)
+
+`./scripts/deploy.sh` renders the SQL and validates the bundle right after the
+config gates, and after the pre-stop probes and the pii-salt check it plans the
+bundle (`bundle_env plan -t client -o json`) and hands the plan to
+`tools/databricks/bundle_plan_gate.py check --position pre-lease`. That is
+before the signed lease and before any App stop. It runs the gate again under
+the lease (`--position pre-apply`), after Genie provisioning and immediately
+before the non-App bundle apply, so a plan that changed in between is judged
+again. Either refusal exits 2 with a remedy per refusal; the pre-lease one
+leaves the App serving and changes nothing. The gate refuses:
+
+- a `delete` (a state-only delete of an object already gone included), a
+  `recreate`, or an `update_id` rename of an identity field;
+- a resource kind with no reviewed existence lookup (`KIND_LOOKUPS`, pinned
+  equal to the kinds `databricks.yml` declares);
+- a `create` whose name already exists, looked up with a read-only GET or list
+  per kind (`collision`), or whose name cannot be proven free (`lookup_failed`:
+  a read error, a name the plan has not resolved, or a caller that is not a
+  workspace admin). A list or GET answers with what the caller may see, so a
+  workspace-scoped absence counts only after `current_user.me` lists the
+  caller in `admins` (the deploy's preflight already requires that); the
+  metastore-scoped Lakebase catalog lookup is the one exception;
+- an update or resize of the Lakebase database instance, unless
+  `MIP_ACK_DATABASE_INSTANCE_UPDATE` equals the sha256 of what the update will
+  do. The CLI sends the instance's whole configured state with
+  `UpdateMask: "*"`, so the update also reverts a remote-only drift on an
+  input-only field (`node_count`, `retention_window_in_days`, ...) that the
+  plan lists as `skip`. The digest therefore covers the full `new_state`,
+  every change skip included, the instance name and the state lineage. The
+  refusal prints that digest and the full report's `instance_update` holds
+  exactly what it covers. Review it, then export the digest for that run
+  only. The pre-apply gate recomputes the digest, so an acknowledgement covers
+  exactly the reviewed update of this install, and never another install's;
+- **`not_adopted`**: when the deployer's state does not bind `apps.mip_app`
+  (its entry plans a create), the App's own lookup finds it existing, and every
+  refusal is a collision, the deployer is looking at an install it never
+  adopted. The collisions fold into this one refusal and are listed as its
+  detail. With no App there is no install: a first install that meets a stray
+  same-name object gets the plain `collision` refusal and its remedy.
+
+One collision is deferred instead, and only before the lease. An interrupted
+first install can leave the App created but not bound into bundle state (a
+lost create response, a crash between the journal claim and the bind, or a
+cleanup that unbound the App and then failed to delete it); the deploy leaves
+that App and its signed first-install journal for the next lease to
+reconcile. On the retry the pre-lease gate reads that journal read-only
+(`app_first_install_journal.recovery_state`, for the App named by
+`MIP_APP_NAME`); when it reads `unclaimed` or `recover`, the App collision is
+printed as `DEFERRED journal_owned apps.mip_app` and the run continues to the
+lease, where the signed-journal recovery deletes the App. The pre-apply gate
+never defers: a create that still collides there refuses. Any other journal
+state, or a journal that cannot be read, keeps the strict refusal.
+
+Printed lines carry refusal codes, counts, digests and symbolic `<kind>.<key>`
+names only (`PlanReport.public_summary()` in
+`tools/databricks/deploy_plan_report.py`). The full report, with the resolved
+names and lookups, is written mode 0600 to a temporary file whose path the run
+prints; keep it private. Before a first install provisions the governed Genie
+space, the pre-lease plan binds the placeholder (`bundle_env plan
+--allow-unprovisioned-genie`, accepted by `plan` only and only when no space has
+the governed title); the pre-apply plan always resolves the governed space.
+
+The plan JSON shape is derived from the Databricks CLI v1.10.0 source (cited in
+`tools/databricks/bundle_plan_shape.py`), not from a live capture, which is
+still owed at the first governed plan phase. Any field, action or key the
+parser does not know refuses as `malformed_plan`.
+
+`./scripts/deploy.sh -t client --phase plan` runs only the read-only steps
+through the pre-lease gate and exits before the lease. A live plan phase is
+CI-only (`plan is CI-only; use --dry-run or make bundle-validate`); locally,
+`--phase plan --dry-run` prints the same steps without any Databricks call.
+
 ## Presenter mode (demo workspaces only)
 
 `MIP_PRESENTER_MODE` (default off) shows demo-only affordances to every user
@@ -1867,12 +2024,12 @@ gates no guard, approval, audit or data path, and it is never an
 authorization input. The deploy payload accepts `0`/`false`/`no`/`off`/empty
 (off: the variable is omitted) or `1`/`true`/`yes`/`on` (on: the App receives
 `MIP_PRESENTER_MODE=1` and the deploy prints a notice); any other value fails
-the deploy, and a truthy value is refused for `-t prod`. At runtime an
+the deploy, and a truthy value is refused for a customer install. At runtime an
 unparseable value reads as off instead of failing boot. Admin -> Deployment
 readiness and the admin health body (`presenter_mode`) show the current
 state.
 The deploy preflight parses the same values at step 0, before any bundle, UC
-or Lakebase mutation, so an unparseable value, or a truthy one with `-t prod`,
+or Lakebase mutation, so an unparseable value, or a truthy one for a customer install,
 exits 2 there instead of at App promotion.
 
 `MIP_PREVIEW_MIRROR` is a different flag: it gates the roadmap rows of the
@@ -2250,13 +2407,18 @@ cadence and confirms the target writes to an isolated catalog; otherwise
 multiple bundle targets can contend on the same Unity Catalog tables and burn
 avoidable compute.
 
-The one exception: the dev target's live install runs the weekly
+The one exception: a demo install (the client profile's `MIP_INSTALL_CLASS`;
+before M1-PR2, the dev target's live install) runs the weekly
 `mip_scheduled_refresh` (FRED → gold → lifecycle → KPI, Fridays 06:00
-America/Chicago). `MIP_SCHEDULED_REFRESH=off` pauses it. `prod` always ships it
-paused, and `-t prod` refuses `MIP_SCHEDULED_REFRESH=on`. Its failure email goes to the deploying user on the
-live install only. The schedule reaches the workspace only through the bundle
-apply of a GO governed `./scripts/deploy.sh -t dev` run, and that run was NO-GO
-on the dev workspace on 2026-10-27. See `docs/runbook.md`, "Weekly scheduled
+America/Chicago). `MIP_SCHEDULED_REFRESH=off` pauses it. A customer install
+always ships it paused and refuses `MIP_SCHEDULED_REFRESH=on`. Its failure
+email goes to the deploying user on a demo install only, so until M1-PR3 mails
+the profile's `MIP_SCHEDULED_REFRESH_RECIPIENTS`, the preflight also refuses
+`MIP_SCHEDULED_REFRESH=on` for a demo install deployed by a service principal
+(every `-t client` install), before any bundle command. The schedule reaches
+the workspace only through the bundle apply of a GO governed
+`./scripts/deploy.sh -t client` run; the live install is not adopted yet, and
+its last governed run was NO-GO on 2026-10-27. See `docs/runbook.md`, "Weekly scheduled
 refresh (dev live install)", for the GO conditions, the risks (static-share
 decay, the treatment-table DDL race, silent re-pause, the piecewise-render trap,
 a shared catalog) and the read-only checks.
@@ -2271,7 +2433,7 @@ rollback contract admits exactly this one `CAN_VIEW` job binding; every other
 job binding keeps `CAN_MANAGE_RUN`.
 
 Adding OTLP to an existing App uses the same target that already owns its
-Lakebase and warehouse resources. Re-run `scripts/deploy.sh -t prod`; its
+Lakebase and warehouse resources. Re-run `scripts/deploy.sh -t client`; its
 source-free resource reconciliation preserves the active signed deployment,
 adds `otel_headers`, and only then runs the normal migration, cutover, signed
 rollback, and smoke gates.
@@ -2282,8 +2444,9 @@ The app runs on live Unity Catalog + Lakebase in every environment — there is 
 
 - Warehouse ID + Genie space ID are set (`BUNDLE_VAR_sql_warehouse_id`, `BUNDLE_VAR_genie_space_id`).
 - App name, Lakebase instance/catalog/database, Genie title, and runtime/rollback
-  secret scopes are unique to the intended workspace; the configured bundle
-  host and `DATABRICKS_HOST` identify that same workspace.
+  secret scopes are unique to the intended workspace; the deployer's
+  authenticated host is the client profile's `DATABRICKS_HOST`, and the live
+  checks find its workspace id, metastore id and deployer.
 - Lakebase schema + `mip_app.action_audit` table exist.
 - Genie space is curated against `mip.semantics.*` metric views only.
 - `/api/v1/health` returns `status: ok`; `/api/v1/admin/health` reports
@@ -2294,10 +2457,10 @@ The app runs on live Unity Catalog + Lakebase in every environment — there is 
   with its generation ID, response hash, source-freshness timestamp, subject,
   body, and canonical borrower evidence IDs.
 - `./scripts/deploy.sh --verify-source-only` passes for the exact committed SHA.
-- `tools/databricks/bundle_env.py validate -t dev` passes.
-- `tools/databricks/bundle_env.py plan -t dev` shows the expected direct
-  deployment changes; a first isolated-workspace plan has zero changes and
-  zero deletions.
+- `tools/databricks/bundle_env.py validate -t client` passes.
+- The governed deploy's plan step shows the expected direct deployment
+  changes; a first isolated-workspace plan has zero changes and zero
+  deletions.
 - Optional production observability gate: if external log durability is
   required, `MIP_OTEL_ENDPOINT` and any required `MIP_OTEL_HEADERS` are
   configured, `/api/v1/admin/health` reports `log_export: otlp`, and the
@@ -2379,8 +2542,9 @@ for the `deploy-dev.yml` workflow ref under GitHub Actions, before any
 Databricks call and in a dry run too; an operator run and CI's own pytest are
 unchanged. M1-PR7 rebuilds `deploy-dev.yml` per client environment, and
 M1-PR8 rebuilds `nightly.yml` per client under a non-admin validator
-identity. The bundle's `dev` and `prod` targets stay until M1-PR2 replaces
-them.
+identity. M1-PR2 replaced the bundle's `dev` and `prod` targets with the one
+host-less `client` target, rooted at the client profile's deployer and client
+key.
 
 Retired with that workspace (M0-PR3):
 
@@ -2415,9 +2579,11 @@ step below, and no step revokes another team's grant.
 
 **The live install is outside this bootstrap, and its governed deploy is
 NO-GO.** Nothing in this section deploys, recovers or restarts the live
-`mip-app`. Its command of record is an operator `./scripts/deploy.sh -t dev`,
-but a read-only readiness check on 2026-10-26 found that it cannot deploy the
-live App by any supported path today:
+`mip-app`. Its install predates the client target: until it is adopted
+(M2-PR6) it ships only through the emergency recipe ("The emergency recipe,
+command by command"), and a governed `./scripts/deploy.sh -t client` cannot
+reach it. A read-only readiness check on 2026-10-26 also found that the
+governed deploy cannot deploy the live App by any supported path today:
 
 - The live workspace holds none of the seven reserved principals, and
   `scripts/deploy.sh` never creates one: it always passes
@@ -2430,8 +2596,8 @@ live App by any supported path today:
   two gates would have failed after that point.
 
 Deploying or recovering the live App is therefore an owner-only decision.
-Never start `./scripts/deploy.sh -t dev` against the live workspace during an
-incident; escalate to the owner (docs/runbook.md, section 1.2).
+Never start `./scripts/deploy.sh -t client` against the live workspace during
+an incident; escalate to the owner (docs/runbook.md, section 1.2).
 
 **The CI deployer: GitHub OIDC, no stored credential.** `deploy-dev.yml`
 deploys as a dedicated account service principal, never a person and never
@@ -2757,9 +2923,9 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
 
 1. Freeze merges and pause piecewise deploys.
 2. Read-only render: a plain `python -m tools.databricks.bundle_env validate
-   -t dev` shows the live root and names unchanged (a bare `databricks bundle
-   validate -t dev` with no `BUNDLE_VAR_genie_space_id` binds the dev
-   target's Genie pin).
+   -t client` with the client profile shows the client root and today's
+   resource names (`tests/unit/test_client_install_dry_run.py` pins both for a
+   client-#1-shaped profile).
 3. Dispatch `deploy-prod.yml` on `main` and record the expected FAIL
    (`no_green_run`).
 

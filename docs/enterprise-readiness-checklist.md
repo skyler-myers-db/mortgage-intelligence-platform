@@ -20,7 +20,7 @@ This checklist separates implemented controls from the validation evidence that 
 
 ## Per-Release Evidence To Refresh
 
-- [ ] `databricks bundle validate -t dev --profile DEFAULT`.
+- [ ] `tools/databricks/bundle_env.py validate -t client` with the client profile in `.env.local`.
 - [ ] App deploy completes and `databricks apps get mip-app --profile DEFAULT -o json` shows the new active deployment.
 - [ ] Lakebase migration job has run against the target workspace.
 - [ ] Score/source-readiness jobs have refreshed downstream gold tables after SQL changes.

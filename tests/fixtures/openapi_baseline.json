@@ -1884,6 +1884,17 @@
             "default": "audit.asset_lineage (view over system.access.table_lineage)",
             "title": "Source",
             "type": "string"
+          },
+          "source_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Key"
           }
         },
         "required": [
@@ -13855,6 +13866,17 @@
             ],
             "title": "Object Type",
             "type": "string"
+          },
+          "source_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Key"
           }
         },
         "required": [

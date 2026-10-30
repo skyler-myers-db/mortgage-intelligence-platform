@@ -17,7 +17,7 @@ precomputed superset would be keyed differently and never join. Pins:
   ``CURRENT_TIMESTAMP(`` itself;
 * the DDL, the 003 manifest block and the bundle task are present, the task
   behind the freshness sentinel through the rendered path, so
-  ``./scripts/deploy.sh -t dev`` builds the table.
+  ``./scripts/deploy.sh -t client`` builds the table.
 """
 
 from __future__ import annotations

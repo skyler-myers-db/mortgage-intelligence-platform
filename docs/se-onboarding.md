@@ -140,19 +140,16 @@ databricks current-user me | jq .userName
 ```
 
 The `DEFAULT` profile is what every `databricks bundle` command binds to
-by default. If the customer uses a different profile name, edit the
-`profile:` line in [`databricks.yml`](../databricks.yml) lines 32 / 52
-to match, or pass `--profile` explicitly.
+by default. If the customer uses a different profile name, select it with
+`DATABRICKS_CONFIG_PROFILE` or pass `--profile` explicitly;
+[`databricks.yml`](../databricks.yml) names no profile.
 
-If this is a customer fork, rebind the bundle's single workspace-host anchor
-once so every target points at the customer workspace:
-
-```bash
-./scripts/configure-workspace.sh "$DATABRICKS_HOST"
-```
-
-The helper normalizes the URL, updates only the `&default_host` line in
-[`databricks.yml`](../databricks.yml), and runs `make check-workspace-host`.
+[`databricks.yml`](../databricks.yml) commits no workspace host (M1-PR2):
+its one deployable target, `client`, takes the host from this authenticated
+environment. Fill the client profile (`deploy/clients/example.env`) into
+`.env.local`; the deploy refuses before any other step unless the
+authenticated host is the profile's `DATABRICKS_HOST` and the read-only live
+checks find the profile's workspace id, metastore id and deployer.
 
 ---
 
@@ -184,7 +181,7 @@ the signed deployment, rollback, migration, and proof contract.
 
 ```bash
 # One command: env-aware direct bundle validate/plan/deploy, app promotion, jobs, refreshes, and Genie provision
-./scripts/deploy.sh -t dev
+./scripts/deploy.sh -t client
 # Expected last line: "[deploy] complete."
 ```
 
@@ -285,11 +282,16 @@ customer.
 
 ## 7. If X fails
 
+A direct `databricks bundle run <job> -t client` below needs the client
+target's root: export `BUNDLE_VAR_client_key` and `BUNDLE_VAR_deployer_principal`
+from the client profile first, as `scripts/deploy.sh` does
+([runbook §4](runbook.md#4-deploy-from-scratch)).
+
 ### 7.1 "PERMISSION_DENIED" on `mip.gold.*` or `mip.silver.*`
 
 The command-of-record was run under a non-approved owner/metastore identity, or
 its automated grant convergence/postflight did not complete. Correct that
-identity or configuration and re-run `./scripts/deploy.sh -t dev`; do not patch
+identity or configuration and re-run `./scripts/deploy.sh -t client`; do not patch
 runtime grants manually, because the deployment verifies their exact shape.
 
 ### 7.2 `/api/v1/health` reports `warehouse: "down"` for > 60 s
@@ -302,7 +304,7 @@ databricks warehouses list | jq -r '.[] | select(.name=="mip_serverless_sql") | 
 # Compare to: grep DATABRICKS_WAREHOUSE_ID .env.local
 ```
 
-If the values differ, fix `.env.local` and re-run `./scripts/deploy.sh -t dev`.
+If the values differ, fix `.env.local` and re-run `./scripts/deploy.sh -t client`.
 That command is the only supported promotion path because it preserves the
 governed App payload and every migration, proof, refresh, and smoke gate. A
 wrong warehouse id is the single most common cause of a persistent red health
@@ -314,7 +316,7 @@ Lakebase creds are missing or the Lakebase role has not been
 provisioned. Run:
 
 ```bash
-databricks bundle run mip_lakebase_migrate -t dev
+databricks bundle run mip_lakebase_migrate -t client
 ```
 
 Then re-probe `/api/v1/health` — `lakebase` should flip to `"up"` within
@@ -330,10 +332,10 @@ Three possible causes, in order of likelihood:
    `echo "GENIE_SPACE_ID=$(cat genie/space_id.txt)" >> .env.local`,
    re-run phase 1 deploy, re-run phase 2.
 2. **Service principal missing `CAN RUN` on the space.** Re-run
-   `./scripts/deploy.sh -t dev`; its identity-access convergence grants and
+   `./scripts/deploy.sh -t client`; its identity-access convergence grants and
    verifies that exact permission.
 3. **Semantics views unbound.** Re-run
-   `databricks bundle run mip_refresh_scores -t dev` — the
+   `databricks bundle run mip_refresh_scores -t client` — the
    `refresh_semantics_views` task rebinds Genie's trusted assets. Only where
    the deployed jobs match the current bundle: on an install whose governed
    deploy is NO-GO, never run it; use the runbook's "Interim refresh
@@ -352,7 +354,7 @@ databricks apps get mip-app --profile DEFAULT -o json \
 ```
 
 If no active deployment is populated, inspect the command-of-record failure and
-re-run `./scripts/deploy.sh -t dev`; never recover with a bare App deployment.
+re-run `./scripts/deploy.sh -t client`; never recover with a bare App deployment.
 If the deployment shows SUCCEEDED but the browser still serves stale JS,
 hard-refresh (§6.4). If still stale, open in an incognito window to rule out
 service-worker caching.

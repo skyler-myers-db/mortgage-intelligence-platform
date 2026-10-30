@@ -1,7 +1,7 @@
 """The deploy preflight's auditor segregation-of-duties check (D-audit-reads-c3).
 
 ``scripts/lib/deploy_step_preflight_gates.sh`` (step 0 of
-``./scripts/deploy.sh -t dev``) counts the configured auditors and how many
+``./scripts/deploy.sh -t client``) counts the configured auditors and how many
 of them also hold the administrator or approver role, and warns -- never
 refuses -- when that overlap is non-zero. It prints counts only: no identity
 may reach stdout or stderr. Each list resolves from the shell env first, else

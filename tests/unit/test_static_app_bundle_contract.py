@@ -48,10 +48,11 @@ def test_every_snapshot_converges_static_source_immediately_before_activation() 
         '    --release-id "$APP_RELEASE_ID" \\\n'
         '    --release-manifest "$APP_RELEASE_MANIFEST" \\\n'
         '    --expected-git-sha "$APP_GIT_SHA" \\\n'
-        '    --expected-principal "$APP_CURRENT_USER" \\\n'
+        # The client target's root: the profile's deployer and its client
+        # key (databricks.yml root_path, M1-PR2).
+        '    --expected-principal "$APP_RELEASE_PRINCIPAL" \\\n'
         '    --expected-target "$TARGET" \\\n'
-        # The bundle root's last segment is the target itself (databricks.yml).
-        '    --expected-root-leaf "$TARGET"\n'
+        '    --expected-root-leaf "$APP_RELEASE_ROOT_LEAF"\n'
         '  run databricks apps deploy "$APP_NAME"'
     ) in function_body
 
@@ -65,7 +66,7 @@ def test_the_release_folder_is_staged_after_the_build_and_published_before_activ
     assert (
         deploy.index("run npm --prefix frontend run build")
         < deploy.index(stage)
-        < deploy.index('run "$PYTHON" -m tools.databricks.bundle_env validate -t "$TARGET"')
+        < deploy.index("\nrun_bundle_plan_gate pre-apply\n")
     )
     assert deploy.index(publish) < deploy.index('deploy_app_snapshot "')
     assert deploy.index("deploy_app_snapshot() {") < deploy.index(publish)

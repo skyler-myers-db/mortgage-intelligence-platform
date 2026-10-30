@@ -247,7 +247,7 @@ unset MIP_OTEL_HEADERS
 export MIP_OTEL_ENDPOINT=https://<customer-owned-collector>/v1/logs
 export MIP_OTEL_HEADERS_SECRET_SCOPE=customer-observability
 export MIP_OTEL_HEADERS_SECRET_KEY=otlp-headers
-CI=1 ./scripts/deploy.sh -t prod --no-confirm
+CI=1 ./scripts/deploy.sh -t client --no-confirm
 
 # 3. Prove the deployed app handler is active.
 MIP_APP_URL="$(databricks apps get mip-app --profile DEFAULT -o json | jq -r .url)"

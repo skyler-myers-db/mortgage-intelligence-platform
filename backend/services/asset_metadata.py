@@ -485,6 +485,7 @@ class AssetMetadataService:
                             related_object,
                             object_type=related_descriptor.object_type,
                         ),
+                        source_key=related_descriptor.source_key,
                     )
                 )
         deduped: dict[tuple[str, str], AssetLineageNode] = {}

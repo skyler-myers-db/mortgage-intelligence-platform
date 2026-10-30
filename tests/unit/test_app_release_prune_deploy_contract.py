@@ -35,8 +35,8 @@ PRUNE_GATE = 'if [[ "$DRY_RUN" -eq 1 || "$APP_UPGRADE_STATE" == "green_verified"
 PRUNE_ARGS = [
     "--app-name", "mip-app", "--expected-app-id", "app-id-1", "--current-release", RELEASE_ID,
     "--rollback-deployment-id", "deployment-1", "--deployment-lease-id", "lease-1",
-    "--source-git-sha", SHA, "--files-root", f"{BUNDLE}/dev/files",
-    "--expected-principal", PRINCIPAL, "--expected-target", "dev", "--expected-root-leaf", "dev",
+    "--source-git-sha", SHA, "--files-root", f"{BUNDLE}/client-one/files",
+    "--expected-principal", PRINCIPAL, "--expected-target", "client", "--expected-root-leaf", "client-one",
 ]
 
 
@@ -46,7 +46,9 @@ def _prune(repo: Path, *, dry_run: int, state: str, exit_code: int = 0, extra: d
         "APP_UPGRADE_STATE": state, "APP_NAME": "mip-app", "APP_OBJECT_ID": "app-id-1",
         "APP_RELEASE_ID": RELEASE_ID, "MIP_APP_ROLLBACK_DEPLOYMENT_ID": "deployment-1",
         "MIP_APP_DEPLOYMENT_LEASE_ID": "lease-1", "SOURCE_GIT_SHA": SHA,
-        "APP_BUNDLE_FILES_PATH": f"{BUNDLE}/dev/files", "APP_CURRENT_USER": PRINCIPAL, "TARGET": "dev",
+        "APP_BUNDLE_FILES_PATH": f"{BUNDLE}/client-one/files", "APP_CURRENT_USER": PRINCIPAL, "TARGET": "client",
+        # The client target's release identity: the deployer and the client key (M1-PR2).
+        "APP_RELEASE_PRINCIPAL": PRINCIPAL, "APP_RELEASE_ROOT_LEAF": "client-one",
         **(extra or {}),
     }
     if dry_run:

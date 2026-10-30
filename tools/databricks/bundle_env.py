@@ -9,43 +9,65 @@ stays `make bundle-validate-env`. Mutable deployment is intentionally reserved
 for `scripts/deploy.sh`, which supplies exact non-App resource selectors and
 then performs the signed App promotion.
 
-Mapping (env -> BUNDLE_VAR_*):
+Targets (M1-PR2): ``-t client`` is the one deployable target and needs the
+resolved client profile (tools/clients); ``-t ci`` is validate-only, with
+placeholder principals and no profile. Every other target, and a missing one,
+is refused.
+
+Mapping, ``-t client`` (the profile -> BUNDLE_VAR_*, tools/clients/profile.py):
+  MIP_CLIENT              -> BUNDLE_VAR_client_key (the root leaf, the mip_client tag)
+  MIP_IDENTITY_IDS_JSON.deployer -> BUNDLE_VAR_deployer_principal (root owner, run_as)
+  MIP_DASHBOARD_PARENT_PATH -> BUNDLE_VAR_dashboard_parent_path (when set)
+  MIP_LAKEBASE_READABLE_SECONDARIES -> BUNDLE_VAR_lakebase_readable_secondaries (when set)
+  MIP_DEFAULT_CATALOG     -> BUNDLE_VAR_uc_catalog
+  MIP_APP_NAME            -> BUNDLE_VAR_app_name
+  MIP_LAKEBASE_INSTANCE   -> BUNDLE_VAR_lakebase_instance_name
+  MIP_LAKEBASE_SYNC_CATALOG -> BUNDLE_VAR_lakebase_catalog_name
+  LAKEBASE_DATABASE       -> BUNDLE_VAR_lakebase_database_name
+  MIP_RUNTIME_SECRET_SCOPE -> BUNDLE_VAR_runtime_secret_scope
+  MIP_IDENTITY_IDS_JSON.verifier -> BUNDLE_VAR_ai_gateway_verifier_client_id
+  MIP_GENIE_SPACE_NAME    -> the governed Genie title resolved below
+For ``-t ci`` the same names come from the environment and ``.env.local``
+with their defaults, as before the client target.
+
+Mapping, every target (env -> BUNDLE_VAR_*):
   DATABRICKS_WAREHOUSE_ID -> BUNDLE_VAR_sql_warehouse_id
   GENIE_SPACE_ID          -> BUNDLE_VAR_genie_space_id
-  MIP_APP_NAME            -> BUNDLE_VAR_app_name
   MIP_LENDER_NAME         -> BUNDLE_VAR_lender_name
   MIP_LENDER_NMLS_ID      -> BUNDLE_VAR_lender_nmls_id
   MIP_TENANT_ID           -> BUNDLE_VAR_tenant_id
   MIP_LENDER_IDENTITY_JSON / _SHA256
                           -> BUNDLE_VAR_lender_identity_json / _sha256 (a
                              verified digest-pinned customer record only)
-  MIP_AI_GATEWAY_VERIFIER_CLIENT_ID -> BUNDLE_VAR_ai_gateway_verifier_client_id
-  LAKEBASE_INSTANCE_NAME  -> BUNDLE_VAR_lakebase_instance_name
-  MIP_LAKEBASE_SYNC_CATALOG -> BUNDLE_VAR_lakebase_catalog_name
-  LAKEBASE_DATABASE       -> BUNDLE_VAR_lakebase_database_name
-  MIP_RUNTIME_SECRET_SCOPE -> BUNDLE_VAR_runtime_secret_scope
   MIP_COTALITY_SOURCE_CATALOG / _SCHEMA / _TABLE_PREFIX
                           -> BUNDLE_VAR_cotality_source_catalog / _schema /
                              _table_prefix (canonical when unset; '-' is no
-                             table prefix; the same names render sql/_rendered)
-  (dev live install only) -> scheduled_refresh_failure_recipients, written to
+                             table prefix; the same names render sql/_rendered;
+                             the client profile holds the same fields)
+  (demo install only)     -> scheduled_refresh_failure_recipients, written to
                              .databricks/bundle/<target>/variable-overrides.json
                              (tools/databricks/scheduled_refresh_posture.py)
 
 Usage:
-  python tools/databricks/bundle_env.py validate -t dev
-  python tools/databricks/bundle_env.py plan     -t dev
-  python tools/databricks/bundle_env.py summary  -t dev -o json
+  python tools/databricks/bundle_env.py validate -t ci
+  python tools/databricks/bundle_env.py validate -t client
+  python tools/databricks/bundle_env.py plan     -t client
+  python tools/databricks/bundle_env.py summary  -t client -o json
+  # The deploy's pre-lease plan gate (tools/databricks/bundle_plan_gate.py)
+  # may plan before a first install provisions the governed Genie space:
+  # with no space of that title, and only for plan, the placeholder binds.
+  python tools/databricks/bundle_env.py plan -t client -o json --allow-unprovisioned-genie
   # Mutable use is command-of-record internal only and requires one or more
   # exact, non-App selectors:
-  python tools/databricks/bundle_env.py deploy -t dev --select jobs.example
+  python tools/databricks/bundle_env.py deploy -t client --select jobs.example
   # Deployment-state use is restricted to the configured App binding:
-  python tools/databricks/bundle_env.py deployment bind mip_app mip-app -t dev
+  python tools/databricks/bundle_env.py deployment bind mip_app mip-app -t client
 
-The dev target defaults to Summit demo first-party feeds so the public demo
-keeps governed contactability / Lead Queue data after a refresh. For any
-non-dev target, this wrapper refuses that flag unless
-``MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD=1`` is also set.
+A demo install (the profile's MIP_INSTALL_CLASS) defaults to Summit demo
+first-party feeds so the public demo keeps governed contactability / Lead
+Queue data after a refresh. Any other install renders them off, and this
+wrapper refuses the flag there unless ``MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD=1``
+is also set (the profile already refuses it for a customer install).
 """
 
 from __future__ import annotations
@@ -73,6 +95,11 @@ from backend.schemas.lender_identity_record import (  # noqa: E402
     reviewed_lender_identity_from_env,
 )
 from tools import render_sql  # noqa: E402
+from tools.clients import profile as client_views  # noqa: E402
+from tools.clients.environment import from_local as client_profile_from_local  # noqa: E402
+from tools.clients.environment import resolve as resolve_client_profile  # noqa: E402
+from tools.clients.errors import ProfileRefusal  # noqa: E402
+from tools.clients.schema import ClientProfile  # noqa: E402
 from tools.databricks import scheduled_refresh_posture  # noqa: E402
 from tools.databricks.workspace_auth import (  # noqa: E402
     strip_app_facing_workspace_auth,
@@ -90,7 +117,29 @@ _UC_IDENTIFIER = re.compile(r"[a-z_][a-z0-9_]{0,254}\Z")
 _EXACT_RESOURCE_SELECTOR = re.compile(
     r"(?P<kind>[a-z_][a-z0-9_]*)\.(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]*)\Z"
 )
-_MUTABLE_BUNDLE_TARGETS = frozenset({"dev", "prod"})
+# The one deployable target, and the targets a validate may name.
+_MUTABLE_BUNDLE_TARGETS = frozenset({"client"})
+_VALIDATE_TARGETS = frozenset({"client", "ci"})
+# The profile's bundle variables this wrapper exports for -t client: the
+# target's own variables and the resource names. The lender and the refresh
+# pause status keep their own channels (below and scripts/deploy.sh).
+_RESOURCE_NAME_VARIABLES = (
+    "app_name",
+    "lakebase_instance_name",
+    "lakebase_catalog_name",
+    "lakebase_database_name",
+)
+_PROFILE_NAME_VARIABLES = (*_RESOURCE_NAME_VARIABLES, "uc_catalog", "runtime_secret_scope")
+# The client target's own variables (databricks.yml): set from the profile for
+# -t client, never from an ambient export.
+_CLIENT_TARGET_VARIABLES = (
+    "client_key",
+    "deployer_principal",
+    "jobs_principal",
+    "dashboard_parent_path",
+    "lakebase_readable_secondaries",
+)
+UNPROVISIONED_GENIE_FLAG = "--allow-unprovisioned-genie"
 
 
 def _is_real(value: str | None) -> bool:
@@ -106,8 +155,12 @@ def _is_real(value: str | None) -> bool:
 
 
 def _target_from_args(args: list[str]) -> str:
-    """Resolve the DAB target from wrapper args with Databricks' dev default."""
-    target = "dev"
+    """The DAB target the wrapper args name; "" when none is named.
+
+    No target is the default: databricks.yml declares none, so a call without
+    one is refused below rather than left to the CLI.
+    """
+    target = ""
     idx = 0
     while idx < len(args):
         arg = args[idx]
@@ -118,7 +171,17 @@ def _target_from_args(args: list[str]) -> str:
         if arg.startswith("--target="):
             target = arg.split("=", 1)[1]
         idx += 1
-    return target or "dev"
+    return target
+
+
+def _target_error(subcmd: str, target: str) -> str | None:
+    """``-t client`` for every subcommand; ``-t ci`` for validate only."""
+
+    allowed = _VALIDATE_TARGETS if subcmd == "validate" else _MUTABLE_BUNDLE_TARGETS
+    if target in allowed:
+        return None
+    names = " or ".join(sorted(allowed))
+    return f"bundle {subcmd} target must be exactly {names}"
 
 
 def _validate_non_app_deploy_selectors(args: list[str]) -> str | None:
@@ -158,7 +221,7 @@ def _validate_non_app_deploy_selectors(args: list[str]) -> str | None:
             "target and exact --select values are allowed"
         )
     if target not in _MUTABLE_BUNDLE_TARGETS:
-        return "bundle deploy target must be exactly dev or prod"
+        return "bundle deploy target must be exactly client"
     if not selectors:
         return (
             "unrestricted bundle deploy is forbidden because it can activate "
@@ -214,7 +277,7 @@ def _validate_app_deployment_command(
         positional.append(argument)
         index += 1
     if target not in _MUTABLE_BUNDLE_TARGETS:
-        return "bundle deployment target must be exactly dev or prod"
+        return "bundle deployment target must be exactly client"
     expected = ["mip_app", expected_app_name] if action == "bind" else ["mip_app"]
     if positional != expected:
         return (
@@ -230,25 +293,39 @@ def _truthy(raw: str | None) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _demo_feeds_allowed_for_target(*, target: str, enabled: bool, env: dict[str, str]) -> bool:
+def _demo_feeds_allowed(*, demo_install: bool, enabled: bool, env: dict[str, str]) -> bool:
     if not enabled:
         return True
-    if target == "dev":
+    if demo_install:
         return True
     return _truthy(env.get("MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD"))
 
 
-def _demo_first_party_flag_for_target(env: dict[str, str], *, target: str) -> str | None:
+def _demo_first_party_flag(env: dict[str, str], *, demo_install: bool) -> str | None:
     """Resolve the SQL render flag, mirroring scripts/deploy.sh.
 
-    A bare render remains fail-closed; this deployment wrapper is target-aware.
-    The Summit dev demo needs synthetic first-party feeds enabled so governed
-    lead/contactability surfaces are populated after each gold refresh.
+    A bare render remains fail-closed; this deployment wrapper is install-aware.
+    The Summit demo install needs synthetic first-party feeds enabled so
+    governed lead/contactability surfaces are populated after each gold refresh.
     """
     raw = env.get("MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS")
     if raw:
         return raw
-    return "1" if target == "dev" else "0"
+    return "1" if demo_install else "0"
+
+
+def _client_profile() -> ClientProfile:
+    """The client profile from the shell and ``.env.local`` (a non-empty shell value wins)."""
+
+    return resolve_client_profile(client_profile_from_local(os.environ, ENV_LOCAL))
+
+
+def _profile_bundle_variables(profile: ClientProfile) -> dict[str, str]:
+    """The ``client`` target's variables and resource names, from the profile."""
+
+    variables = client_views.bundle_vars(profile)
+    names = {name: variables[name] for name in _PROFILE_NAME_VARIABLES}
+    return {**client_views.client_target_vars(profile), **names}
 
 
 def _deployment_resource_names(env: dict[str, str]) -> dict[str, str]:
@@ -330,6 +407,10 @@ def _genie_workspace_client(env: dict[str, str]) -> Any:
     return client
 
 
+class GovernedGenieSpaceAbsent(ValueError):
+    """No Genie space holds the governed title yet (a first install provisions it)."""
+
+
 def _resolve_governed_genie_space_id(
     env: dict[str, str],
     *,
@@ -352,6 +433,10 @@ def _resolve_governed_genie_space_id(
         page_token = getattr(response, "next_page_token", None)
         if not page_token:
             break
+    if not matches:
+        raise GovernedGenieSpaceAbsent(
+            f"expected exactly one Genie space named {space_name!r}; found 0"
+        )
     if len(matches) != 1:
         raise ValueError(
             f"expected exactly one Genie space named {space_name!r}; found {len(matches)}"
@@ -387,11 +472,40 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    target = _target_from_args(rest)
+    target_error = _target_error(subcmd, target)
+    if target_error is not None:
+        print(f"[bundle_env] {target_error}", file=sys.stderr)
+        return 2
+    allow_unprovisioned_genie = UNPROVISIONED_GENIE_FLAG in rest
+    if allow_unprovisioned_genie:
+        # Wrapper-only flag, never passed to the CLI: the pre-lease plan gate
+        # plans before a first install has provisioned the governed space.
+        if subcmd != "plan" or rest.count(UNPROVISIONED_GENIE_FLAG) != 1:
+            print(
+                f"[bundle_env] {UNPROVISIONED_GENIE_FLAG} is accepted once, by plan only",
+                file=sys.stderr,
+            )
+            return 2
+        rest = [arg for arg in rest if arg != UNPROVISIONED_GENIE_FLAG]
     if subcmd == "deploy":
         selector_error = _validate_non_app_deploy_selectors(rest)
         if selector_error is not None:
             print(f"[bundle_env] {selector_error}", file=sys.stderr)
             return 2
+    # -t client is the profile's install: resolve it before anything else, so
+    # a refused profile never reaches a render, a lookup or the CLI. The
+    # refusal lines name fields and rules, never values.
+    profile: ClientProfile | None = None
+    if target == "client":
+        try:
+            profile = _client_profile()
+        except ProfileRefusal as refusal:
+            print("[bundle_env] client profile refused:", file=sys.stderr)
+            for line in refusal.lines:
+                print(f"  - {line}", file=sys.stderr)
+            return 2
+    profile_variables = _profile_bundle_variables(profile) if profile is not None else {}
 
     # Start from the current process env so PATH, HOME, DATABRICKS_CONFIG_*
     # all propagate, then overlay dotenv values.
@@ -457,18 +571,25 @@ def main() -> int:
                 continue
             env[k] = v
 
-    target = _target_from_args(rest)
     if subcmd == "deployment":
         deployment_error = _validate_app_deployment_command(
             rest,
-            expected_app_name=str(env.get("MIP_APP_NAME") or "mip-app").strip(),
+            expected_app_name=(
+                profile_variables["app_name"]
+                if profile is not None
+                else str(env.get("MIP_APP_NAME") or "mip-app").strip()
+            ),
         )
         if deployment_error is not None:
             print(f"[bundle_env] {deployment_error}", file=sys.stderr)
             return 2
     warehouse = env.get("DATABRICKS_WAREHOUSE_ID")
     genie = env.get("GENIE_SPACE_ID")
-    verifier_client_id = env.get("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID")
+    verifier_client_id = (
+        profile.identity_ids.verifier
+        if profile is not None
+        else env.get("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID")
+    )
     if not _is_real(genie):
         space_id_file = REPO / "genie" / "space_id.txt"
         if space_id_file.exists():
@@ -481,29 +602,54 @@ def main() -> int:
     # resolve the exact governed title in the authenticated workspace and
     # overwrite the child value. `scripts/deploy.sh` provisions that named
     # space first, so a missing or duplicate title here is always a hard stop.
+    genie_unprovisioned = False
     if subcmd in {"plan", "summary", "deploy", "deployment"}:
-        space_name = str(env.get("MIP_GENIE_SPACE_NAME") or "Mortgage Lead Intelligence").strip()
+        space_name = (
+            profile.genie_space_name
+            if profile is not None
+            else str(env.get("MIP_GENIE_SPACE_NAME") or "Mortgage Lead Intelligence").strip()
+        )
         try:
             governed_genie = _resolve_governed_genie_space_id(env, space_name=space_name)
+        except GovernedGenieSpaceAbsent as exc:
+            if not allow_unprovisioned_genie:
+                print(
+                    f"[bundle_env] governed Genie binding verification failed: {exc}",
+                    file=sys.stderr,
+                )
+                return 2
+            # Read-only plan only: no space holds the governed title, so no id
+            # in env or .env.local can be the governed one. Plan with the
+            # placeholder; scripts/deploy.sh plans again, without this flag,
+            # after it provisions the space and before it applies anything.
+            print(
+                f"[bundle_env] no Genie space is named {space_name!r} yet; this read-only "
+                "plan binds the placeholder (the deploy re-plans after provisioning)",
+                file=sys.stderr,
+            )
+            genie_unprovisioned = True
+            genie = PLACEHOLDER
+            env["GENIE_SPACE_ID"] = PLACEHOLDER
         except Exception as exc:  # noqa: BLE001 - CLI boundary must fail closed
             print(
                 f"[bundle_env] governed Genie binding verification failed: {exc}", file=sys.stderr
             )
             return 2
-        if _is_real(genie) and str(genie).strip() != governed_genie:
-            print(
-                "[bundle_env] replacing stale GENIE_SPACE_ID with the id resolved "
-                f"from MIP_GENIE_SPACE_NAME={space_name!r}",
-                file=sys.stderr,
-            )
-        genie = governed_genie
-        env["GENIE_SPACE_ID"] = governed_genie
+        else:
+            if _is_real(genie) and str(genie).strip() != governed_genie:
+                print(
+                    "[bundle_env] replacing stale GENIE_SPACE_ID with the id resolved "
+                    f"from MIP_GENIE_SPACE_NAME={space_name!r}",
+                    file=sys.stderr,
+                )
+            genie = governed_genie
+            env["GENIE_SPACE_ID"] = governed_genie
 
     if subcmd in {"plan", "summary", "deploy", "deployment"}:
         missing = []
         if not _is_real(warehouse):
             missing.append("DATABRICKS_WAREHOUSE_ID")
-        if not _is_real(genie):
+        if not _is_real(genie) and not genie_unprovisioned:
             missing.append("GENIE_SPACE_ID")
         if not _is_real(verifier_client_id):
             missing.append("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID")
@@ -554,8 +700,14 @@ def main() -> int:
         env.pop("BUNDLE_VAR_lender_identity_json", None)
         env.pop("BUNDLE_VAR_lender_identity_sha256", None)
 
+    # -t client: the names are the profile's, which validated their shapes and
+    # alias agreement; -t ci keeps the environment's names and defaults.
     try:
-        resource_names = _deployment_resource_names(env)
+        resource_names = (
+            {name: profile_variables[name] for name in _RESOURCE_NAME_VARIABLES}
+            if profile is not None
+            else _deployment_resource_names(env)
+        )
     except ValueError as exc:
         print(f"[bundle_env] {exc}", file=sys.stderr)
         return 2
@@ -567,27 +719,46 @@ def main() -> int:
     env["LAKEBASE_DATABASE"] = resource_names["lakebase_database_name"]
     env["MIP_LAKEBASE_DATABASE_NAME"] = resource_names["lakebase_database_name"]
     env["MIP_LAKEBASE_SYNC_CATALOG"] = resource_names["lakebase_catalog_name"]
-    runtime_secret_scope = str(env.get("MIP_RUNTIME_SECRET_SCOPE") or "mip-runtime").strip()
+    runtime_secret_scope = (
+        profile_variables["runtime_secret_scope"]
+        if profile is not None
+        else str(env.get("MIP_RUNTIME_SECRET_SCOPE") or "mip-runtime").strip()
+    )
     if re.fullmatch(r"[A-Za-z0-9._-]{1,128}", runtime_secret_scope) is None:
         print("[bundle_env] MIP_RUNTIME_SECRET_SCOPE is invalid", file=sys.stderr)
         return 2
     env["MIP_RUNTIME_SECRET_SCOPE"] = runtime_secret_scope
     env["BUNDLE_VAR_runtime_secret_scope"] = runtime_secret_scope
-    # mip_scheduled_refresh runs and mails only on the dev target's live
-    # install: refuse an UNPAUSED export anywhere else, and write the failure
-    # recipients (a complex variable, which no BUNDLE_VAR_ export can carry)
-    # into the bundle's variable-overrides.json before every CLI call.
+    # The client target's own variables (its root, run_as and overrides) come
+    # from the profile alone: an ambient export of one never survives, and the
+    # ci target keeps the placeholders databricks.yml gives it.
+    for variable in _CLIENT_TARGET_VARIABLES:
+        env.pop(f"BUNDLE_VAR_{variable}", None)
+    if profile is not None:
+        for variable, value in client_views.client_target_vars(profile).items():
+            env[f"BUNDLE_VAR_{variable}"] = value
+    install_class = profile.install_class if profile is not None else None
+    demo_install = install_class == "demo"
+    # mip_scheduled_refresh runs and mails only on a demo install: refuse an
+    # UNPAUSED export anywhere else, and write the failure recipients (a
+    # complex variable, which no BUNDLE_VAR_ export can carry) into the
+    # bundle's variable-overrides.json before every CLI call.
     try:
         scheduled_refresh_status = scheduled_refresh_posture.apply(
             env,
             target=target,
+            install_class=install_class,
             bundle_root=Path(env.get("DATABRICKS_BUNDLE_ROOT") or BUNDLE_ROOT),
         )
     except (OSError, ValueError) as exc:
         print(f"[bundle_env] {exc}", file=sys.stderr)
         return 2
 
-    catalog = str(env.get("MIP_DEFAULT_CATALOG") or "mip").strip()
+    catalog = (
+        profile_variables["uc_catalog"]
+        if profile is not None
+        else str(env.get("MIP_DEFAULT_CATALOG") or "mip").strip()
+    )
     if _UC_IDENTIFIER.fullmatch(catalog) is None:
         print(
             "[bundle_env] MIP_DEFAULT_CATALOG must be a lowercase unquoted identifier",
@@ -608,23 +779,27 @@ def main() -> int:
     # empty bundle variable would not read as one.
     env["BUNDLE_VAR_cotality_source_table_prefix"] = cotality.table_prefix_setting
     try:
-        demo_first_party_enabled = render_sql._parse_bool(
-            _demo_first_party_flag_for_target(env, target=target),
+        # The ci target validates placeholders only and never deploys, so it
+        # renders the fail-closed default whatever an operator's .env.local
+        # says; only the client target renders an install's feed switch.
+        demo_first_party_enabled = target != "ci" and render_sql._parse_bool(
+            _demo_first_party_flag(env, demo_install=demo_install),
             default=False,
         )
     except ValueError as exc:
         print(f"[bundle_env] {exc}", file=sys.stderr)
         return 2
 
-    if not _demo_feeds_allowed_for_target(
-        target=target,
+    if not _demo_feeds_allowed(
+        demo_install=demo_install,
         enabled=demo_first_party_enabled,
         env=env,
     ):
         print(
             "[bundle_env] refusing to enable Summit demo first-party feeds "
-            f"for target {target}. Set MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD=1 "
-            "only for an approved demo workspace; never for customer production.",
+            f"for a {install_class or 'non-demo'} install (target {target}). Set "
+            "MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD=1 only for an approved demo "
+            "workspace; never for customer production.",
             file=sys.stderr,
         )
         return 2
@@ -646,6 +821,12 @@ def main() -> int:
             return f"{name}=set (…{str(value)[-4:]})"
         return f"{name}=not-set (will use placeholder)"
 
+    if profile is not None:
+        print(
+            f"[bundle_env] client target client_key={profile.client} "
+            f"install_class={profile.install_class} (root, run_as and names from the profile)",
+            file=sys.stderr,
+        )
     print(f"[bundle_env] {status('DATABRICKS_WAREHOUSE_ID', warehouse)}", file=sys.stderr)
     print(f"[bundle_env] {status('GENIE_SPACE_ID', genie)}", file=sys.stderr)
     print(

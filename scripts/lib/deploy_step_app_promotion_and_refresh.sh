@@ -49,6 +49,7 @@ emit_app_deploy_payload() {
   MIP_GIT_SHA="$git_sha" "$PYTHON" -m tools.databricks.app_deploy_payload \
     --source-code-path "$source_code_path" \
     --target "$TARGET" \
+    --install-class "$CLIENT_INSTALL_CLASS" \
     --current-user-email "$APP_CURRENT_USER" \
     --app-env "$APP_RUNTIME_ENV" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
@@ -70,9 +71,9 @@ deploy_app_snapshot() {
     --release-id "$APP_RELEASE_ID" \
     --release-manifest "$APP_RELEASE_MANIFEST" \
     --expected-git-sha "$APP_GIT_SHA" \
-    --expected-principal "$APP_CURRENT_USER" \
+    --expected-principal "$APP_RELEASE_PRINCIPAL" \
     --expected-target "$TARGET" \
-    --expected-root-leaf "$TARGET"
+    --expected-root-leaf "$APP_RELEASE_ROOT_LEAF"
   run databricks apps deploy "$APP_NAME" --json "@$APP_DEPLOY_PAYLOAD" --timeout 20m
   assert_expected_app_identity "$APP_NAME"
   if [[ -n "${APP_LAST_DEPLOY_PAYLOAD:-}" ]]; then
@@ -149,6 +150,17 @@ if [[ -z "$APP_CURRENT_USER" || \
   echo "${RED}[deploy] bundle identity does not match the preflighted workspace-admin inventory principal.${RST}" >&2
   exit 1
 fi
+# >>> app release principal: check >>>
+# The client target's root is the profile deployer's folder plus the client
+# key (databricks.yml): every App release check names that principal and that
+# leaf, and the bundle must run as that deployer.
+APP_RELEASE_PRINCIPAL="$CLIENT_DEPLOYER"
+APP_RELEASE_ROOT_LEAF="$CLIENT_KEY"
+if [[ "$DRY_RUN" -eq 0 ]] && ! same_identity_casefold "$APP_CURRENT_USER" "$APP_RELEASE_PRINCIPAL"; then
+  echo "${RED}[deploy] the bundle runs as another principal than the client profile's deployer.${RST}" >&2
+  exit 1
+fi
+# <<< app release principal: check <<<
 
 # >>> app release source: publish >>>
 # After the Lakebase migration and reviewed-grant proofs, before the first
@@ -168,9 +180,9 @@ run "$PYTHON" -m tools.databricks.app_release_source publish \
   --manifest "$APP_RELEASE_MANIFEST" \
   --files-root "$APP_BUNDLE_FILES_PATH" \
   --expected-commit "$SOURCE_GIT_SHA" \
-  --expected-principal "$APP_CURRENT_USER" \
+  --expected-principal "$APP_RELEASE_PRINCIPAL" \
   --expected-target "$TARGET" \
-  --expected-root-leaf "$TARGET"
+  --expected-root-leaf "$APP_RELEASE_ROOT_LEAF"
 APP_SOURCE_PATH="${APP_BUNDLE_FILES_PATH%/files}/app-src/${APP_RELEASE_ID}"
 # <<< app release source: publish <<<
 
@@ -264,7 +276,7 @@ run_job_with_retry databricks bundle run mip_kpi_snapshot -t "$TARGET"
 step "verify mip_scheduled_refresh — ${BUNDLE_VAR_scheduled_refresh_pause_status:-unset}, chain and failure email"
 # An unset pause status reaches the tool as "" and is refused (exit 2).
 _SCHEDULED_REFRESH_ARGS=(--expect "${BUNDLE_VAR_scheduled_refresh_pause_status:-}")
-if [[ "$TARGET" == "dev" ]]; then
+if [[ "$CLIENT_INSTALL_CLASS" == "demo" ]]; then
   _SCHEDULED_REFRESH_ARGS+=(--live-install)
 fi
 run "$PYTHON" -m tools.databricks.verify_scheduled_refresh_state \

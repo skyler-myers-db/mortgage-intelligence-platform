@@ -80,7 +80,7 @@ Despite its legacy filename, `deploy-prod.yml` does not deploy or authenticate
 to a production workspace. It is an explicit scaffold-only placeholder. The
 only implemented mutable workflow is the governed dev deployment above;
 production requires a separately reviewed environment contract before a real
-workflow may call `scripts/deploy.sh -t prod`.
+workflow may call `scripts/deploy.sh -t client`.
 
 Its second job, `live-validation-age`, is the release gate on live evidence
 (audit quality-03 item 3): it runs `python -m tools.live_validation_gate

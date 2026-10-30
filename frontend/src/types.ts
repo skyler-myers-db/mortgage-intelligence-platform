@@ -429,6 +429,8 @@ export interface AssetLineageNode {
   event_count?: number | null;
   source: string;
   catalog_explorer_url?: string | null;
+  /** A Cotality share table's canonical name, whatever `asset_path` this install mounts it at. */
+  source_key?: string | null;
 }
 
 export interface AssetMetadataResponse {
