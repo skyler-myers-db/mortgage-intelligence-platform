@@ -2088,9 +2088,11 @@ The client profile's `MIP_ACCEPTED_EXPOSURE_JSON` may accept one exactly
   post-stop App and agent-runtime Genie audits (`audit_global_m2m_access
   --exposure-identity app|runtime`) use the same one, so they refuse alike; the
   foreign UC audit and both dual-authority proofs use the runtime's or the
-  proxy's; the agent-proxy's Genie deny-all uses the proxy's. The verifier's
-  `--forbid-all-genie` never consults a matcher, so a grant reaching it (any
-  `users` grant does) still refuses.
+  proxy's. The verifier's `--forbid-all-genie` never consults a matcher, so a
+  grant reaching it (any `users` grant does) still refuses. Neither does the
+  agent-proxy's Genie boundary (its managed-capability ACLs, converged or
+  denied, and its deny-all audit), so a Genie entry naming `proxy` refuses at
+  load.
 - **Ack.** The owner attestation is deferred (`single_maintainer_audited`), so a
   non-empty policy is pinned by an exact digest instead.
   `python -m tools.databricks.estate.cli --plan` prints the plan's sha256 and a

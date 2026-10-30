@@ -18,7 +18,9 @@ docs/deployment.md, "Accepted shared-estate exposure", is the operator view.
   space refuse; an expired entry parses and never matches.
 * **Matching.** One matcher per identity (``app``, ``runtime``, ``proxy``),
   handed to that identity's pre-stop probe and post-stop audits, which build
-  the observed tuples the same way. The verifier has none.
+  the observed tuples the same way. The verifier has none, and the
+  agent-proxy's Genie boundary (its managed-capability ACLs and deny-all)
+  consults none, so a Genie entry naming ``proxy`` refuses at load.
 * **Plan digest.** The owner attestation is deferred, so a non-empty policy is
   pinned by an exact digest ack: ``MIP_ACK_ACCEPTED_EXPOSURE_PLAN`` must equal
   the canonical plan's sha256, recomputed by every consumer right before it
@@ -56,6 +58,9 @@ GENIE_READ = frozenset({"CAN_VIEW", "CAN_RUN"})
 UC_READ = frozenset({"BROWSE", "USE_CATALOG", "USE_SCHEMA", "SELECT"})
 READ, ELEVATED = "read", "elevated"
 ELEVATED_IDENTITIES = frozenset({"app"})
+# The identities whose Genie audits consult a matcher: the pre-stop Genie clause
+# and agent_runtime_access.audit_global_genie_access (App and agent-runtime).
+GENIE_IDENTITIES = frozenset({"app", "runtime"})
 ELEVATED_MAX = timedelta(days=30)
 UC_GRANT, UC_OWNERSHIP, WORKSPACE_PERMISSION = "uc_grant", "uc_ownership", "workspace_permission"
 OWNERSHIP = "OWNERSHIP"
@@ -289,6 +294,20 @@ def _shape_lines(index: int, exposure: Exposure) -> list[str]:
     return lines
 
 
+def _observer_lines(index: int, exposure: Exposure, identities: frozenset[str]) -> list[str]:
+    """Identities whose audits never build this tuple: refused, like a tuple no audit observes."""
+
+    lines: list[str] = []
+    if exposure.kind == WORKSPACE_PERMISSION and exposure.securable_type == GENIE_SPACE:
+        unobserved = sorted(identities - GENIE_IDENTITIES)
+        if unobserved:
+            lines.append(
+                f"entry {index}: no Genie audit consults a matcher for {', '.join(unobserved)}; "
+                "the agent-proxy's Genie boundary is absolute"
+            )
+    return lines
+
+
 def _ceiling_lines(
     entry: AcceptedEntry, *, now: datetime, static_control: Callable[[], Sequence[str]]
 ) -> list[str]:
@@ -396,6 +415,7 @@ def build_policy(
             expires_text=entry.expires_at,
             expires_at=expires_at,
         )
+        lines.extend(_observer_lines(index, exposure, item.identities))
         lines.extend(_ceiling_lines(item, now=now, static_control=static_control))
         accepted.append(item)
     lines.extend(

@@ -11,6 +11,7 @@ whatever the profile accepts.
 
 from __future__ import annotations
 
+import inspect
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -30,6 +31,7 @@ from tests.fixtures.prestop_estate import (
     clean_estate,
 )
 from tools.clients.json_fields import ExposureEntry
+from tools.databricks import agent_proxy_capability_denial as denial
 from tools.databricks import deploy_prestop_probes as runner
 from tools.databricks.agent_runtime_access import (
     audit_global_genie_access,
@@ -126,7 +128,7 @@ CASES: dict[str, Any] = {
     "no_entry": (lambda identity: [], True),
     "exact": (lambda identity: [entry(identity)], False),
     "other_identity": (
-        lambda identity: [entry(identity, identities=["proxy" if identity == "app" else "app"])],
+        lambda identity: [entry(identity, identities=["runtime" if identity == "app" else "app"])],
         True,
     ),
     "broader_level": (lambda identity: [entry(identity, privileges=["CAN_VIEW", "CAN_RUN"])], True),
@@ -214,9 +216,23 @@ def test_no_entry_for_the_identity_reads_nothing_extra() -> None:
     workspace = FakeWorkspace(_estate("app"))
     calls_without = list(_reads(workspace, _policy([])))
     workspace = FakeWorkspace(_estate("app"))
-    calls_other = list(_reads(workspace, _policy([entry("app", identities=["proxy"])])))
+    calls_other = list(_reads(workspace, _policy([_proxy_uc_entry()])))
 
     assert calls_without == calls_other
+
+
+def _proxy_uc_entry() -> dict[str, Any]:
+    """An entry no Genie consumer reads: the agent-proxy's UC grant on a foreign catalog."""
+
+    return entry(
+        "app",
+        kind="uc_grant",
+        securable={"type": "CATALOG", "id": "foreign_alpha", "name": "foreign_alpha"},
+        privileges=["USE_CATALOG"],
+        source="direct",
+        binding={"isolation_mode": "OPEN", "workspace_ids": []},
+        identities=["proxy"],
+    )
 
 
 def _reads(workspace: FakeWorkspace, policy: Any) -> list[str]:
@@ -276,29 +292,56 @@ def test_one_entry_per_source_and_the_exact_levels_it_grants() -> None:
     ]
 
 
-@pytest.mark.parametrize(
-    ("identities", "refuses"), [(["proxy"], False), (["app", "runtime"], True), (None, True)]
-)
-def test_the_proxy_deny_all_audit_accepts_only_its_own_listed_read_exposure(
-    identities: list[str] | None, refuses: bool
-) -> None:
-    estate = _estate("app", group="proxy-readers")
-    estate["principals"]["proxy-readers"]["members"] = ["proxy-scim"]
-    policy = _policy([entry("app", grantee="proxy-readers", identities=identities)] if identities else [])
+def test_a_genie_entry_for_the_proxy_refuses_at_load() -> None:
+    """No Genie audit of the agent-proxy consults a matcher, so its entry is dead and refuses."""
 
-    def audit() -> None:
-        audit_global_no_genie_access(
+    with pytest.raises(ExposureRefusal, match="no Genie audit consults a matcher for proxy"):
+        _policy([entry("app", grantee="proxy-readers", identities=["proxy"])])
+    with pytest.raises(ExposureRefusal, match="no Genie audit consults a matcher for proxy"):
+        _policy([entry("app", grantee="proxy-readers", identities=["app", "proxy"])])
+
+
+def test_the_deny_all_audit_takes_no_matcher() -> None:
+    """The verifier's and the agent-proxy's zero-Genie proofs stay absolute, the governed space too."""
+
+    assert "matcher" not in inspect.signature(audit_global_no_genie_access).parameters
+    assert "matcher" not in inspect.signature(denial.revoke_all_genie_acls).parameters
+
+
+@pytest.mark.parametrize("space", [OTHER, GOVERNED_SPACE])
+def test_the_proxy_deny_all_refuses_its_group_grant_end_to_end(
+    monkeypatch: pytest.MonkeyPatch, space: str
+) -> None:
+    """``revoke_all_genie_acls`` end to end (review of #306): a read grant through the proxy's
+    group refuses on an unrelated space and on the governed one, whatever the profile lists."""
+
+    estate = _estate("app")
+    estate["principals"]["proxy-readers"] = {"kind": "group", "id": "group-proxy", "members": ["proxy-scim"]}
+    estate["genie"][space] = [acl_entry("group_name", "proxy-readers", "CAN_VIEW", PARENT)]
+    listed = entry(
+        "app",
+        securable={"type": "GENIE_SPACE", "id": space, "name": estate["genie_titles"][space]},
+        grantee="proxy-readers",
+        identities=["proxy"],
+    )
+    monkeypatch.setenv("MIP_ACCEPTED_EXPOSURE_JSON", json.dumps([listed]))
+    monkeypatch.setenv("MIP_ACK_ACCEPTED_EXPOSURE_PLAN", "0" * 64)
+    monkeypatch.setattr(denial, "inspect_managed_agent_proxy_group", lambda *_a, **_kw: None)
+
+    with pytest.raises(RuntimeError, match="Genie deny-all did not converge") as caught:
+        denial.revoke_all_genie_acls(
             FakeWorkspace(estate),
             application_id="proxy-client-EXAMPLE",
+            service_principal_id="proxy-scim",
             effective_group_names={"users", "proxy-readers"},
-            matcher=policy.matcher("proxy"),
+            assert_single_writer=lambda: None,
+            assert_legacy_cleanup_quiesced=lambda: None,
         )
 
-    if refuses:
-        with pytest.raises(RuntimeError, match="through group"):
-            audit()
-    else:
-        audit()
+    message = str(caught.value)
+    assert f"Genie duplicate postflight {space}" in message and "boundary drifted" in message
+    assert "Genie postflight" in message and "through group" in message
+    assert "accepted exposure" not in message, "the deny-all never loads the policy"
 
 
 def test_elevated_for_the_proxy_refuses_at_load() -> None:

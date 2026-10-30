@@ -300,12 +300,13 @@ def audit_global_no_genie_access(
     application_id: str,
     service_principal_id: str | None = None,
     effective_group_names: set[str] | None = None,
-    matcher: ExposureMatcher | None = None,
 ) -> None:
     """Admin-side proof that an identity has no access to any Genie space.
 
-    The verifier's ``--forbid-all-genie`` passes no ``matcher``, so it stays
-    absolute. The agent-proxy's deny-all passes its own (M2-PR4).
+    Absolute: it takes no accepted-exposure matcher (M2-PR4). Its callers are
+    the verifier's ``--forbid-all-genie`` and the agent-proxy's deny-all, and
+    neither identity's Genie boundary may be relaxed; with no matcher, no
+    entry can relax a grant on the governed space either.
     """
 
     principal = application_id.strip()
@@ -322,9 +323,7 @@ def audit_global_no_genie_access(
             ).values()
         )
     )
-    spaces = _genie_spaces(workspace)
-    exposure = genie_exposure(workspace, matcher, titles=spaces)
-    for space_id in sorted(spaces):
+    for space_id in sorted(_genie_spaces(workspace)):
         try:
             permissions = workspace.api_client.do(
                 "GET", f"/api/2.0/permissions/genie/{space_id}"
@@ -336,7 +335,6 @@ def audit_global_no_genie_access(
             space_id=space_id,
             application_id=principal,
             effective_group_names=group_names,
-            exposure=exposure,
         )
 
 
