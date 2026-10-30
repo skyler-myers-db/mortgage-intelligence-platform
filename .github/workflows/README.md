@@ -37,7 +37,9 @@ branch and forbid administrator bypass. The original workflow run stays bound
 to the `workflow_dispatch` SHA; it is not re-dispatched through a moving branch
 reference. After approval, that run builds the reviewed commit, creates an
 ephemeral `.env.local` containing only non-secret app configuration, passes
-runtime secrets to the provisioning step through the process environment,
+the Salesforce connector secrets to the provisioning step through the process
+environment (the App's runtime HMAC keys never leave Databricks: existing keys
+are kept unread and absent ones are generated once on the runner),
 seeds a temporary `DEFAULT` Databricks CLI profile that holds no credential
 (`auth_type = github-oidc` for the deployer service principal named by
 `MIP_CI_DEPLOYER_CLIENT_ID`), proves that identity read-only, runs
