@@ -264,6 +264,13 @@ def test_a_pin_that_names_no_identity_is_refused(estate: FakeEstate, tmp_path: P
     assert "MIP_IDENTITY_IDS_JSON.deployer: no account service principal has that application id" in result.err
 
 
+def test_a_placeholder_pin_is_refused_before_any_lookup(estate: FakeEstate, tmp_path: Path) -> None:
+    result = run_tool(estate, "--plan", env_file=write_env(tmp_path / "p.env", pins={"jobs": "<jobs-application-id>"}))
+    assert result.code == 2
+    assert "MIP_IDENTITY_IDS_JSON: jobs: holds a <placeholder>; set a real value" in result.err
+    assert estate.calls == []
+
+
 def test_an_identity_alias_must_name_a_pinned_identity(estate: FakeEstate, tmp_path: Path) -> None:
     env = write_env(tmp_path / "a.env", DATABRICKS_CLIENT_ID=app_id(77))
     result = run_tool(estate, "--plan", env_file=env)

@@ -148,6 +148,15 @@ class BootstrapInputs(BaseModel):
             raise ValueError("must be a JSON object")
         return parsed
 
+    @field_validator("pins")
+    @classmethod
+    def _real_pins(cls, value: IdentityPins) -> IdentityPins:
+        # IdentityPins admits a template's <placeholder>; a live run never does.
+        placeholders = [role for role, pin in value.by_role().items() if is_placeholder(pin)]
+        if placeholders:
+            raise ValueError(f"{', '.join(placeholders)}: holds a <placeholder>; set a real value")
+        return value
+
     def resolved_account_host(self) -> str:
         """The account console origin: the profile's, or the cloud's."""
 
