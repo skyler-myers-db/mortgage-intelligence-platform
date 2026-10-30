@@ -8,7 +8,7 @@ import { AccessDenied } from '../components/ui/AccessDenied';
 import type { AsyncQuery } from '../components/ui/AsyncState';
 import { Skeleton } from '../components/ui/Skeleton';
 import { api, ApiError } from '../lib/api';
-import { assetHrefForSource } from '../lib/drawerSources';
+import { assetDetailHref, assetKeyForLineageNode } from '../lib/drawerSources';
 import { queryKeys } from '../lib/queryKeys';
 import { formatCount } from '../lib/formatters';
 import { formatTimestamp } from '../lib/time';
@@ -270,7 +270,8 @@ export default function AssetRoute() {
             </div>
             <div className="surface__body asset-lineage">
               {asset.lineage.map((node) => {
-                const href = assetHrefForSource(node.asset_path);
+                const assetKey = assetKeyForLineageNode(node);
+                const href = assetKey ? assetDetailHref(assetKey) : null;
                 if (!href) {
                   return (
                     <div key={`${node.direction}-${node.asset_path}`} className="lineage-node">
