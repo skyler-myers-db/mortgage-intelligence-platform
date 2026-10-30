@@ -49,10 +49,15 @@ log = logging.getLogger(__name__)
 #
 # A customer install whose lender identity is a digest-pinned record
 # (backend/schemas/lender_identity_record.py) falls back to
-# ``tenant_lender_ref_map``: these entries without the Summit demo tenant
-# rows, plus one per record alias, exactly as tools/render_sql.py renders
-# the seed for it. The demo keeps this dict itself.
+# ``tenant_lender_ref_map``: these entries with each Summit demo tenant row
+# the record does not claim retired to ``Competitor Other``, plus one per
+# record alias, exactly as tools/render_sql.py renders the seed for it. The
+# demo keeps this dict itself.
 # ---------------------------------------------------------------------------
+
+# What a retired demo tenant row displays (tools/render_sql.py): the label
+# ``resolve`` gives any servicer the dictionary does not name.
+_RETIRED_TENANT_DISPLAY = "Competitor Other"
 
 _LENDER_REF_MAP: dict[str, str] = {
     "UNITED WHOLESALE MTG": "Competitor A",
@@ -79,9 +84,9 @@ def tenant_lender_ref_map(identity: ReviewedLenderIdentity) -> dict[str, str]:
         return _LENDER_REF_MAP
     tenant = tenant_lender_dictionary(identity)
     competitors = {
-        raw: display
+        raw: display if display != _SUMMIT_LENDER_NAME else _RETIRED_TENANT_DISPLAY
         for raw, display in _LENDER_REF_MAP.items()
-        if display != _SUMMIT_LENDER_NAME and raw not in tenant
+        if raw not in tenant
     }
     return {**competitors, **tenant}
 

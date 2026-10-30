@@ -42,11 +42,14 @@ The tenant lender's own dictionary rows.
 ``sql/ref/lender_dictionary_seed.sql`` names the Summit Mortgage demo
 tenant's servicer aliases (``is_competitor = FALSE``). A customer install
 whose lender identity is a digest-pinned record
-(``backend/schemas/lender_identity_record.py``) renders that file with the
-demo tenant rows replaced by one row per record alias (display name = the
-record's legal name, ``lender_type`` ``other``); a competitor row whose raw
-key is a tenant alias is dropped, since the tenant is not its own
-competitor. The rewrite is a closed shape: it parses the MERGE's one
+(``backend/schemas/lender_identity_record.py``) renders that file with one
+row per record alias (display name = the record's legal name,
+``lender_type`` ``other``); a competitor row whose raw key is a tenant alias
+is dropped, since the tenant is not its own competitor. Each demo tenant
+row the record does not claim is retired, not dropped: it stays as a
+``Competitor Other`` competitor row, because the MERGE never deletes and an
+existing dictionary would otherwise keep Summit as the tenant. The rewrite
+is a closed shape: it parses the MERGE's one
 contiguous block of VALUES rows and refuses the render when that block, or
 any demo tenant row in it, is not the exact shape it knows. With no pinned
 record nothing changes, so the demo render is byte-identical.
@@ -218,6 +221,9 @@ _DICTIONARY_ROW = re.compile(
 _TENANT_LENDER_TYPE = "other"
 # A competitor's display is a controlled alias (backend/schemas/_validators_tenant.py).
 _COMPETITOR_DISPLAY = re.compile(r"Competitor (?:[A-Z]|Other)")
+# A retired demo tenant row's display: the alias lender_ref already gives a
+# servicer the dictionary does not name.
+_RETIRED_TENANT_DISPLAY = "Competitor Other"
 
 
 class TenantRowsUnmatched(ValueError):
@@ -457,11 +463,20 @@ def render_tenant_lender_rows(text: str, lender: ReviewedLenderIdentity) -> str:
         )
     tenant = tenant_lender_dictionary(lender)
     kept = [row.group(0).rstrip(",") for row in rows if row["competitor"] == "TRUE" and row["raw"] not in tenant]
+    # The MERGE never deletes, so an existing ref.lender_dictionary still holds
+    # the demo's tenant rows. Each one the record does not claim stays in the
+    # source as a competitor row: the MERGE's update retires it, and gold no
+    # longer counts its loans as the tenant's or names Summit the tenant.
+    retired = [
+        f"    ({_sql_text_literal(row['raw'])}, '{_RETIRED_TENANT_DISPLAY}', '{row['type']}', TRUE)"
+        for row in tenant_rows
+        if row["raw"] not in tenant
+    ]
     added = [
         f"    ({_sql_text_literal(raw)}, {_sql_text_literal(display)}, '{_TENANT_LENDER_TYPE}', FALSE)"
         for raw, display in tenant.items()
     ]
-    return text[: rows[0].start()] + ",\n".join((*kept, *added)) + text[rows[-1].end() :]
+    return text[: rows[0].start()] + ",\n".join((*kept, *retired, *added)) + text[rows[-1].end() :]
 
 
 def resolve_pinned_lender(env: Mapping[str, str]) -> ReviewedLenderIdentity | None:

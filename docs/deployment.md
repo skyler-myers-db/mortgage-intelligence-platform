@@ -1928,12 +1928,16 @@ longer matches its pin is refused everywhere.
 `MIP_LENDER_NAME`, `MIP_LENDER_NMLS_ID` and `MIP_TENANT_ID` are optional beside
 a record and, when set, must equal it.
 
-**Tenant aliases.** The SQL render replaces the lender dictionary seed's demo
-tenant rows with one `is_competitor = FALSE` row per alias, display name the
-record's legal name, and drops a competitor row whose raw key the record
-claims; the App's in-process lender fallback mirrors the same rows. The seed
-`MERGE` never deletes, so rows an earlier demo render left in an existing
-`ref.lender_dictionary` stay until removed.
+**Tenant aliases.** The SQL render adds one `is_competitor = FALSE` row per
+alias to the lender dictionary seed, display name the record's legal name,
+and drops a competitor row whose raw key the record claims. The seed `MERGE`
+never deletes, so each demo tenant row (`SUMMIT MTG` and its variants) the
+record does not claim is retired instead: it stays in the seed as an
+`is_competitor = TRUE` row displayed as `Competitor Other`, and the `MERGE`'s
+update turns the demo row an existing `ref.lender_dictionary` holds into a
+competitor. Gold then counts none of those loans as the tenant's and names
+the record's legal name as the tenant. The App's in-process lender fallback
+mirrors the same rows.
 
 **Demo and legacy installs** set neither name and behave exactly as before.
 

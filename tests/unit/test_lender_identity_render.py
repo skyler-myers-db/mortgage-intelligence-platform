@@ -4,7 +4,9 @@ The demo (Summit Mortgage, no pinned record) render is byte-identical: the
 same tree with or without the code-registry identity, and the seed renders to
 its own source text at catalog ``mip``, as it did before (sha256 equal to the
 source on origin/main a9493e21). A digest-pinned record replaces the demo
-tenant rows with its aliases, and the in-process fallback agrees with it.
+tenant rows with its aliases, retires the demo tenant rows it does not claim
+as competitor rows (the seed MERGE never deletes), and the in-process
+fallback agrees with it.
 """
 
 from __future__ import annotations
@@ -102,7 +104,45 @@ def test_a_pinned_record_replaces_the_demo_tenant_rows_with_its_aliases() -> Non
     }
     assert all(display != "Summit Mortgage" for display, _ in after.values())
     competitors = {raw: row for raw, row in before.items() if row[1] == "TRUE" and raw != "WELLS FARGO BK NA"}
-    assert {raw: row for raw, row in after.items() if row[1] == "TRUE"} == competitors
+    # The demo tenant rows the record does not claim are retired, not dropped.
+    retired = {raw: ("Competitor Other", "TRUE") for raw in ("SUMMIT MORTGAGE", "SUMMIT MTG CORP", "SUMMIT MORTGAGE CORP")}
+    assert {raw: row for raw, row in after.items() if row[1] == "TRUE"} == {**competitors, **retired}
+
+
+def _merge(table: dict[str, tuple[str, str]], rows: dict[str, tuple[str, str]]) -> dict[str, tuple[str, str]]:
+    """The seed's MERGE on raw_key: a matched row takes the source's display and flag; none is deleted."""
+
+    return {**table, **rows}
+
+
+def _tenant_lender_ref(table: dict[str, tuple[str, str]]) -> str:
+    """gold_borrower_360's tenant_display: MIN(display_name) over the tenant rows, else Summit."""
+
+    tenant = [display for display, flag in table.values() if flag == "FALSE"]
+    return min(tenant) if tenant else "Summit Mortgage"
+
+
+def test_a_pinned_render_retires_the_demo_tenant_rows_an_existing_dictionary_holds() -> None:
+    # Review of #298: converting an existing catalog (seeded by a demo render)
+    # must not leave Summit's rows as the tenant's own. The MERGE never
+    # deletes, so the render keeps each unclaimed demo tenant key as a
+    # competitor row, which the MERGE's WHEN MATCHED clause applies.
+    text = SEED.read_text(encoding="utf-8")
+    assert "WHEN MATCHED THEN UPDATE SET\n  display_name  = s.display_name,\n" in text
+    assert "  is_competitor = s.is_competitor,\n" in text and "DELETE" not in text
+    existing = _rows(text)
+    assert _tenant_lender_ref(existing) == "Summit Mortgage"
+    # Sorts after "Summit Mortgage", so a leftover demo row would win MIN().
+    record = {**RECORD, "legal_name": "Zenith Harbor Lending", "servicer_aliases": ["Zenith Harbor Servicing"]}
+
+    rendered = _rows(render_sql.render_tenant_lender_rows(text, _pinned(record)))
+    converted = _merge(existing, rendered)
+
+    assert _tenant_lender_ref(converted) == "Zenith Harbor Lending"
+    assert {raw for raw, (_, flag) in converted.items() if flag == "FALSE"} == {"ZENITH HARBOR SERVICING"}
+    demo_keys = {raw for raw, (display, _) in existing.items() if display == "Summit Mortgage"}
+    assert {raw: rendered[raw] for raw in demo_keys} == {raw: ("Competitor Other", "TRUE") for raw in demo_keys}
+    assert all(display != "Summit Mortgage" for display, _ in converted.values())
 
 
 def test_the_pinned_render_still_rewrites_the_catalog_and_keeps_the_merge(tmp_path: Path) -> None:
@@ -153,7 +193,9 @@ def test_the_cli_renders_a_verified_record_and_refuses_a_tampered_one(
     argv = ["--catalog", "mip", "--source", str(SQL), "--dest", str(tmp_path)]
 
     assert render_sql.main(argv) == 0
-    assert "SUMMIT MORTGAGE CORP" not in (tmp_path / "ref" / "lender_dictionary_seed.sql").read_text(encoding="utf-8")
+    rendered = (tmp_path / "ref" / "lender_dictionary_seed.sql").read_text(encoding="utf-8")
+    assert "'Summit Mortgage'" not in rendered
+    assert "    ('SUMMIT MORTGAGE CORP', 'Competitor Other', 'non_bank_fintech', TRUE),\n" in rendered
     assert "tenant_rows=pinned" in capsys.readouterr().out
 
     monkeypatch.setenv(LENDER_IDENTITY_JSON_ENV, text.replace("Hara", "Harra"))
