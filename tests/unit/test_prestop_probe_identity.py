@@ -19,6 +19,7 @@ from tools.databricks import (
     bundle_plan_app_acl,
     converge_app_release_access,
     converge_campaign_treatment_access,
+    genie_space_pin,
     prestop_genie_budget,
     prestop_owner_equivalent,
     prestop_owner_policy,
@@ -75,8 +76,10 @@ def test_the_genie_budget_probe_asks_through_the_app_live_client() -> None:
     assert prestop_genie_budget.QUESTION == provision_genie_space.DEFAULT_SMOKE_QUESTION
 
 
-def test_without_a_record_the_governed_space_is_the_one_the_provisioner_adopts() -> None:
-    assert prestop_probe_suite.GOVERNED_SPACE_BY_TITLE is provision_genie_space._find_space
+def test_without_a_record_the_governed_space_is_the_one_the_provisioner_resolves() -> None:
+    # Both resolve it by its pin, never by a title alone (attack G12, M1-PR3).
+    assert prestop_probe_suite.GOVERNED_SPACE is genie_space_pin.resolve
+    assert "genie_space_pin.resolve(" in inspect.getsource(provision_genie_space.run)
 
 
 def test_the_owner_equivalent_probe_reads_approvals_with_the_owner_policy_parser() -> None:

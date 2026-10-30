@@ -90,7 +90,8 @@ jobs:
           # federation policy, not a stored credential, authenticates it.
           MIP_CI_DEPLOYER_CLIENT_ID: ${{ vars.MIP_CI_DEPLOYER_CLIENT_ID }}
           DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
-          GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
+          # No GENIE_SPACE_ID: the deploy resolves the governed space by its
+          # pin, never by an input (M1-PR3).
           MIP_AI_GATEWAY_PROOF_SIGNING_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}
           MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY: ${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY }}
           MIP_GENIE_ACTION_SECRET_KID: ${{ vars.MIP_GENIE_ACTION_SECRET_KID }}
@@ -132,7 +133,7 @@ jobs:
         run: |
           set -euo pipefail
           missing=""
-          for v in DATABRICKS_HOST MIP_CI_DEPLOYER_CLIENT_ID DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID MIP_AI_GATEWAY_PROOF_SIGNING_KEY MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET; do
+          for v in DATABRICKS_HOST MIP_CI_DEPLOYER_CLIENT_ID DATABRICKS_WAREHOUSE_ID MIP_AI_GATEWAY_PROOF_SIGNING_KEY MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET; do
             if [ -z "${!v}" ]; then
               missing="$missing $v"
             fi
@@ -144,7 +145,7 @@ jobs:
           # Retain every value in this shell for config writes, but expose only
           # the canonical proxy bundle to its bounded parser and only public
           # client IDs to the subsequent separation check.
-          export -n DATABRICKS_HOST DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID
+          export -n DATABRICKS_HOST DATABRICKS_WAREHOUSE_ID
           export -n MIP_AI_GATEWAY_PROOF_SIGNING_KEY
           export -n MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY
           export -n MIP_GENIE_ACTION_SECRET_KID MIP_GENIE_ACTION_SECRET_PREVIOUS_KID
@@ -226,7 +227,6 @@ jobs:
             echo "APP_ENV=sandbox"
             echo "DATABRICKS_HOST=${DATABRICKS_HOST}"
             echo "DATABRICKS_WAREHOUSE_ID=${DATABRICKS_WAREHOUSE_ID}"
-            echo "GENIE_SPACE_ID=${GENIE_SPACE_ID}"
             echo "MIP_DEFAULT_CATALOG=${MIP_DEFAULT_CATALOG}"
             echo "MIP_LENDER_NAME=${MIP_LENDER_NAME:-Summit Mortgage}"
             echo "MIP_LENDER_NMLS_ID=${MIP_LENDER_NMLS_ID:-}"
@@ -301,7 +301,6 @@ jobs:
           # CLI reads, so the profile alone selects the host and identity.
           MIP_PROOF_DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           MIP_PROOF_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
-          MIP_PROOF_GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -423,12 +422,6 @@ jobs:
                   "warehouse_resolves",
                   lambda: bool(warehouse_id)
                   and same(str(client.warehouses.get(warehouse_id).id or ""), warehouse_id),
-              )
-              space_id = os.environ.get("MIP_PROOF_GENIE_SPACE_ID", "").strip()
-              probe(
-                  "genie_space_resolves",
-                  lambda: bool(space_id)
-                  and same(str(client.genie.get_space(space_id).space_id or ""), space_id),
               )
 
           # The Go CLI resolves the same profile through its own auth path.

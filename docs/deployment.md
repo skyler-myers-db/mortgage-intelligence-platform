@@ -510,7 +510,7 @@ DATABRICKS_CONFIG_PROFILE=<profile> python -m tools.databricks.converge_static_a
   --expected-principal <owner> --expected-target dev --expected-root-leaf dev
 MIP_GIT_SHA=<sha> python -m tools.databricks.app_deploy_payload \
   --source-code-path /Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/dev/app-src/<release-id> \
-  --target dev --app-env sandbox --catalog mip --schema gold \
+  --install-class demo --app-env sandbox --catalog mip --schema gold \
   --lakebase-instance <lakebase-instance> > <payload>
 databricks apps deploy <app-name> --json @<payload> -p <profile>
 ```
@@ -541,7 +541,8 @@ override a profile.
    files.
 4. **Payload**: the deployment JSON for that folder. Run it from the checkout
    whose `.env.local` holds the live install's operator values (lender, admin
-   allowlist and the rest); `--target dev` keeps the demo payload policy. The
+   allowlist and the rest); `--install-class demo` keeps the live install's demo
+   payload policy (the builder takes no target name since M1-PR3). The
    payload leaves the campaign-treatment runtime off, so health reports
    `campaign_treatment_runtime: disabled_baseline_deploy`, the honest state of
    a deployment made outside signed promotion.
@@ -828,6 +829,45 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
    refuses (exit 2) before any other step unless that host is the profile's
    `DATABRICKS_HOST` and the read-only live checks find the profile's
    workspace id, metastore id and deployer (`tools/clients/live_checks.py`).
+   The same call then runs the read-only install checks
+   (`tools/clients/install_checks.py`, M1-PR3), all before the signed lease
+   and any App stop. Each refuses on a read error rather than reading it as
+   absent, and every refusal is reported together:
+   - **adoption**: an App named `MIP_APP_NAME` that this deployer's bundle
+     state (`<root>/state/resources.json`) does not bind as `apps.mip_app` is
+     an existing install it never adopted. The one exception is an App a
+     first-install journal may own, which the pre-lease bundle plan gate
+     judges with the verified journal;
+   - **install marker**: the catalog property `mip.install_key`, when
+     present, equals `MIP_CLIENT`. The deploy stamps it in the very call that
+     creates the catalog (`tools/databricks/ensure_pipeline_namespace.py
+     --install-key "$CLIENT_KEY"`), so a first install interrupted anywhere
+     after that create finds its own catalog marked; a catalog the bootstrap
+     found absent must read back with exactly that marker. An existing catalog
+     without it was not created by this install's deploy and is accepted only
+     when this deployer's state binds the App (an install from before the
+     marker), so `CREATE CATALOG IF NOT EXISTS` never silently reuses another
+     install's catalog; the bootstrap never alters an existing catalog. No
+     catalog is a first install;
+   - **Cotality share**: the source catalog is a Delta Sharing catalog from
+     `MIP_COTALITY_SHARE_PROVIDER` / `MIP_COTALITY_SHARE_NAME` (when set), and
+     all seven source tables resolve;
+   - **storage root**: a first install needs the metastore's default storage
+     root, or `MIP_UC_CATALOG_STORAGE_ROOT`, which the catalog DDL and the
+     pipeline namespace bootstrap then use as the catalog's `MANAGED LOCATION`
+     (named to both tools, never printed). When the field is set and the
+     catalog exists, it must be the catalog's own storage root (a trailing `/`
+     aside), since a managed location never moves;
+   - **account principal**: `MIP_IDENTITY_IDS_JSON.account_principal` holds no
+     account admin role (read from account SCIM with its own credential).
+   After the live checks, the preflight takes the SQL warehouse from this deployer's bundle
+   state (`python -m tools.databricks.bundle_state warehouse-id`, the
+   warehouse the bundle created, M1-PR3): `DATABRICKS_WAREHOUSE_ID` is read
+   only as a first install's bootstrap warehouse, for the steps before the
+   bundle apply creates its own (the deploy switches to that one right after
+   the apply), and refuses when it names another warehouse than the state
+   binds. `databricks.yml` declares no `sql_warehouse_id` variable: every
+   resource uses the bundle's own warehouse.
    `deploy-dev.yml` and `nightly.yml` are Entrada CI only, and both are parked
    until a client environment is selected (M1-PR7): their first job refuses
    every dispatch. The command of record is `./scripts/deploy.sh -t client`.
@@ -1841,6 +1881,77 @@ DATABRICKS_CONFIG_PROFILE=<install profile> \
   python -m tools.databricks.pii_salt_scope check --scope mip --require-existing 1
 ```
 
+### The governed Genie space, pinned by id (M1-PR3)
+
+Anyone who can create a Genie space can give it the governed title, and under
+the live-first doctrine whoever controls the space controls the answers
+(attack G12). So the deploy never adopts a space by its title alone, and
+`GENIE_SPACE_ID` is no deploy input: an ambient value is unset at startup,
+`bundle_env.py` ignores it in the shell, `.env.local` and `genie/space_id.txt`,
+and `deploy-dev.yml` no longer carries it. The App's own `GENIE_SPACE_ID` is
+unchanged: a `value_from: genie_space` resource reference whose binding
+`databricks.yml` takes from `var.genie_space_id`, which `bundle_env.py` sets
+from the pin. The App's env-name set is therefore exactly the one the
+emergency recipe gates on.
+
+`tools/databricks/genie_space_pin.py` resolves the space:
+
+1. **A pin.** The signed pin record (`genie-space-pin-v1-<app>` in the App
+   rollback secret scope, one of the keys that scope's ownership proof admits,
+   signed with the deploy's proof key like the rollback record) or the App's
+   signed rollback record names the space by
+   id. When both exist they must agree, and the space must still exist; a
+   pinned space that is gone refuses and never falls back to a title.
+2. **No pin, no space with the title.** A first install: step 0a creates the
+   space and pins its id at once, so a run interrupted before its capture
+   still finds its own space next time.
+3. **No pin, one space with the title.** Refused (exit 10): a space the deploy
+   never created or pinned. The owner attestation is deferred, so the one way
+   to adopt it is an exact digest ack. The read-only plan prints the candidate
+   id, the principals holding a direct CAN_MANAGE on it (the Genie API reports
+   no creator; the creator is among them), the deploying identity and the
+   plan's sha256. Review it, then run with `MIP_GENIE_PIN_ACK=<sha256>` exported
+   in the shell (never `.env.local`). Step 0a recomputes the plan immediately
+   before it pins and refuses with nothing changed if the digest moved.
+4. **More than one.** Refused as ambiguous.
+
+The preflight runs the same resolution read-only
+(`provision_genie_space --plan-pin`) before the signed lease and any App stop,
+so a squatter or a stale pin refuses while the App still serves. Run it by hand
+to read the plan:
+
+```bash
+python -m tools.databricks.provision_genie_space --plan-pin \
+  --space-name "<genie-space-title>" --app-name <app-name> \
+  --pin-scope <app-rollback-scope> --lakebase-instance <lakebase-instance>
+```
+
+Reading a pin needs `MIP_AI_GATEWAY_PROOF_VERIFY_KEY` exported; writing one
+needs the signing key too, which the provisioner checks before any mutation.
+
+Two operator-only modes; `scripts/deploy.sh` passes neither, and
+`tests/unit/test_genie_space_pin_retire.py` pins that:
+
+- **A deleted space (disaster recovery).** A pinned space that is gone refuses
+  every deploy. `--retire-pin --plan-pin` proves it gone and prints the
+  read-only retire plan and its sha256; `--retire-pin --ack-plan <sha256>`
+  recomputes the plan right before its one write, a signed tombstone pin
+  record that pins nothing and lists the gone id in `retired_space_ids`. The
+  next deploy then creates and pins a new space. A rollback record naming the
+  gone id is superseded until the next green capture (the pre-stop probes
+  judge the space step 0a will use, not the record's gone one), and a retired
+  id is never pinned again. A space that still exists is never unpinned. See
+  `docs/disaster-recovery.md`, Scenario 5.
+- **The legacy live install's Genie spec, until it is adopted (M2-PR6).** It
+  has no pin and no signed rollback record, so its space is an unpinned title
+  match, which the stand-alone provisioner no longer updates by title alone
+  (before M1-PR3 it did). Run `--plan-pin` (read-only), review the plan, then
+  run `--no-pin --ack-plan <sha256>`: the acked space is updated and no pin is
+  written, so the live workspace gains no secret and no signing key is
+  needed. Without `--no-pin`, the ack also pins the space, which needs the
+  signing key pair and the App rollback scope this deployer owns. `--no-pin`
+  never creates a space.
+
 ### Pre-stop probes (read-only, before step 0a)
 
 Step 0a stops the existing App, and on the unsigned rebase path also
@@ -2542,16 +2653,13 @@ cadence and confirms the target writes to an isolated catalog; otherwise
 multiple bundle targets can contend on the same Unity Catalog tables and burn
 avoidable compute.
 
-The one exception: a demo install (the client profile's `MIP_INSTALL_CLASS`;
-before M1-PR2, the dev target's live install) runs the weekly
-`mip_scheduled_refresh` (FRED → gold → lifecycle → KPI, Fridays 06:00
-America/Chicago). `MIP_SCHEDULED_REFRESH=off` pauses it. A customer install
-always ships it paused and refuses `MIP_SCHEDULED_REFRESH=on`. Its failure
-email goes to the deploying user on a demo install only, so until M1-PR3 mails
-the profile's `MIP_SCHEDULED_REFRESH_RECIPIENTS`, the preflight also refuses
-`MIP_SCHEDULED_REFRESH=on` for a demo install deployed by a service principal
-(every `-t client` install), before any bundle command. The schedule reaches
-the workspace only through the bundle apply of a GO governed
+The one exception: the weekly `mip_scheduled_refresh` (FRED → gold →
+lifecycle → KPI, Fridays 06:00 America/Chicago) runs when the client profile's
+own `MIP_SCHEDULED_REFRESH` is `on` (M1-PR3, `tools/clients/policy.py`), for a
+demo or a customer install alike, and its failure email then goes to the
+profile's `MIP_SCHEDULED_REFRESH_RECIPIENTS` (required with `on`; an
+application id is refused). `off` ships it paused, mailing nobody. The schedule
+reaches the workspace only through the bundle apply of a GO governed
 `./scripts/deploy.sh -t client` run; the live install is not adopted yet, and
 its last governed run was NO-GO on 2026-10-27. See `docs/runbook.md`, "Weekly scheduled
 refresh (dev live install)", for the GO conditions, the risks (static-share
@@ -2577,7 +2685,7 @@ rollback, and smoke gates.
 
 The app runs on live Unity Catalog + Lakebase in every environment — there is no mock-mode runtime toggle (see [CLAUDE.md](../CLAUDE.md) "Negative prompting"). Flakiness is handled by the resilience layer (retry, warehouse warm-start, SWR cache, circuit breaker, degraded-state banner), never by silent mock fallback.
 
-- Warehouse ID + Genie space ID are set (`BUNDLE_VAR_sql_warehouse_id`, `BUNDLE_VAR_genie_space_id`).
+- The governed Genie space is pinned (`provision_genie_space --plan-pin` resolves it read-only), and no warehouse or Genie id is set by hand: `bundle_env.py` binds `BUNDLE_VAR_genie_space_id` from the pin, and every resource uses the bundle's own SQL warehouse, whose id the deploy reads from bundle state.
 - App name, Lakebase instance/catalog/database, Genie title, and runtime/rollback
   secret scopes are unique to the intended workspace; the deployer's
   authenticated host is the client profile's `DATABRICKS_HOST`, and the live
@@ -2899,7 +3007,8 @@ principal outside this repository until M2-PR1's client bootstrap does it.
   target's until M1-PR7). The step then proves, through the Python SDK and
   the Go CLI, that the profile authenticates as `MIP_CI_DEPLOYER_CLIENT_ID`,
   that this principal is in `admins` and owns the current metastore, and that
-  `DATABRICKS_WAREHOUSE_ID` and `GENIE_SPACE_ID` resolve. The metastore-owner
+  `DATABRICKS_WAREHOUSE_ID` resolves (the Genie space is no input since
+  M1-PR3; the deploy resolves it by its pin). The metastore-owner
   check presumed the cancelled metastore transfer; M1-PR7 replaces it. The
   step prints booleans only (a failed call adds its exception class or the
   CLI's exit code, never a message or a value) and exits 2 on any mismatch.
@@ -3100,9 +3209,10 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    retire its older secrets unless something local still uses them. The
    deployer never takes this role: the account plane stays on
    `DATABRICKS_ACCOUNT_*`.
-4. Set the CI install's `GENIE_SPACE_ID` and `DATABRICKS_WAREHOUSE_ID`
-   secrets for its own workspace, never the live ones. The proof step refuses
-   either one unless it resolves for the deployer.
+4. Set the CI install's `DATABRICKS_WAREHOUSE_ID` secret for its own
+   workspace, never the live one. The proof step refuses it unless it
+   resolves for the deployer. (`GENIE_SPACE_ID` is no deploy input since
+   M1-PR3; `nightly.yml` still names it for its live checks.)
 5. Point the REPOSITORY-level names `nightly.yml` reads (it has no
    `environment:`) at the same CI install as the CI environment: the
    variables `MIP_APP_NAME`, `MIP_DEFAULT_CATALOG`, `MIP_LAKEBASE_INSTANCE`,

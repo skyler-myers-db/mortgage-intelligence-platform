@@ -37,7 +37,7 @@
 --
 -- Usage (Databricks bundle / SQL task):
 --   sql_task:
---     warehouse_id: ${var.sql_warehouse_id}
+--     warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
 --     file:
 --       path: sql/ddl/003_gold_tables.sql
 --

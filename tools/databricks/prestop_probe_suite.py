@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from tools.databricks import genie_space_pin
 from tools.databricks.prestop_genie_budget import (
     deployer_token_provider,
     genie_budget_refusals,
@@ -27,15 +28,16 @@ from tools.databricks.prestop_owner_policy import owner_policy_refusals
 from tools.databricks.prestop_refusals import OWNER_EQUIVALENT, PrestopRefusal
 from tools.databricks.prestop_rollback_record import rollback_record_verdict
 from tools.databricks.prestop_serving_endpoints import serving_endpoint_refusals
-from tools.databricks.provision_genie_space import _find_space
 from tools.databricks.uc_owner_policy import (
     account_client_from_env,
     parse_approved_owner_principals,
 )
 
-# The provisioner's own exact-title lookup: with no signed record, the space it
-# adopts after step 0a is the governed one (one exact title match, or none).
-GOVERNED_SPACE_BY_TITLE = _find_space
+# The provisioner's own resolution (attack G12, M1-PR3): the space step 0a
+# updates is the one the pin record or the signed record names (a record whose
+# space was retired is superseded), or the one title match an exact digest ack
+# adopts; with neither it creates one. A title alone never names it.
+GOVERNED_SPACE = genie_space_pin.resolve
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,8 @@ class ProbeSuiteConfig:
     deployer: str
     approved_owner_principals: str
     genie_manager_principals: str
+    # MIP_GENIE_PIN_ACK: the sha256 of the read-only pin plan the preflight printed.
+    genie_pin_ack: str = ""
 
 
 def journal_state_reader(
@@ -83,29 +87,55 @@ def canonical_supervisor_endpoint(agents: list[dict[str, Any]], canonical_name: 
 
 
 def governed_genie_space(
-    workspace: Any, *, contract: Any, title: str
+    workspace: Any, *, contract: Any, config: ProbeSuiteConfig
 ) -> tuple[str, list[PrestopRefusal], list[str]]:
-    """The record-pinned space, else the one the provisioner adopts by its exact title."""
+    """The space the provisioner resolves after step 0a, by its pin (never a title alone).
 
-    if contract is not None:
-        return contract.genie_space_id, [], []
-    if not title.strip():
-        return "", [], []
+    With a signed record that is normally the record's own space. After a
+    disaster-recovery retire (tools/databricks/genie_space_pin_retire.py) the
+    record still names the gone space until the next capture, and the
+    provisioner creates or uses another; the probes judge that one.
+    """
+
+    record_space = contract.genie_space_id if contract is not None else ""
+    title = config.genie_space_name.strip()
+    if not title:
+        return record_space, [], []
     try:
-        space = GOVERNED_SPACE_BY_TITLE(workspace, title.strip())
-    except Exception as exc:  # noqa: BLE001 - the provisioner refuses the same after step 0a
+        resolution = GOVERNED_SPACE(
+            workspace,
+            app_name=config.app_name,
+            title=title,
+            scope=config.rollback_scope,
+            lakebase_instance=config.lakebase_instance,
+            ack_plan=config.genie_pin_ack,
+        )
+    except genie_space_pin.GeniePinRefusal as exc:
         return "", [
             PrestopRefusal(
                 OWNER_EQUIVALENT,
-                f"the governed Genie space cannot be resolved by its title ({exc}); the "
-                "provisioner refuses the same after step 0a. Rename or trash the extra "
-                "spaces with their owners' consent, then re-run.",
+                f"the governed Genie space cannot be resolved by its pin ({exc}); the "
+                "provisioner refuses the same after step 0a.",
             )
         ], []
-    if space is None:
-        return "", [], ["no Genie space has the governed title yet; the provisioner creates it"]
-    space_id = str(getattr(space, "space_id", "") or "").strip()
-    return space_id, [], [f"no signed record; the governed Genie space is {space_id} by its title"]
+    except Exception as exc:  # noqa: BLE001 - the class only: an SDK message can carry an id
+        return "", [
+            PrestopRefusal(
+                OWNER_EQUIVALENT,
+                f"the governed Genie space pin could not be read ({type(exc).__name__}); the "
+                "provisioner refuses the same after step 0a.",
+            )
+        ], []
+    space_id = resolution.space_id or ""
+    if record_space and space_id == record_space:
+        return space_id, [], []
+    prefix = "the signed record names a retired Genie space" if record_space else "no signed record"
+    if not space_id:
+        return "", [], [
+            f"{prefix}; no pin names a Genie space and none has the governed title yet; the "
+            "provisioner creates and pins it"
+        ]
+    return space_id, [], [f"{prefix}; the governed Genie space is {space_id} by its {resolution.source}"]
 
 
 def suite_refusals(
@@ -151,9 +181,7 @@ def suite_refusals(
     refusals.extend(found)
     notes.extend(said)
 
-    genie_space_id, found, said = governed_genie_space(
-        workspace, contract=contract, title=config.genie_space_name
-    )
+    genie_space_id, found, said = governed_genie_space(workspace, contract=contract, config=config)
     refusals.extend(found)
     notes.extend(said)
     found, said = owner_equivalent_refusals(

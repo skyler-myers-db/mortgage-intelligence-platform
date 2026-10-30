@@ -1441,7 +1441,9 @@ reporting `"silver_max_ingested_at": null`.
 1. **Workspace → Genie → Spaces → mortgage_lead_intelligence**. If the
    space does not exist, run `python tools/databricks/provision_genie_space.py`
    (this is the same invocation `scripts/deploy.sh` step 9 runs —
-   idempotent, creates or updates).
+   idempotent, creates or updates the space its pin names, M1-PR3). If a pin
+   names a space that was deleted, retire the pin first
+   (`docs/disaster-recovery.md`, Scenario 5).
 2. **Space settings → Permissions → Add → Service principal →
    `mip-app` → `CAN RUN`**.
 3. Verify the space's trusted-assets list includes the three

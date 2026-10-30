@@ -103,7 +103,7 @@ def _plan_refusal(stored: tuple[str, ...]) -> str | None:
 
 def _payload_refusal() -> str | None:
     try:
-        payload_subject.build_payload(source_code_path="/Workspace/app/files", target="prod")
+        payload_subject.build_payload(source_code_path="/Workspace/app/files", install_class="customer")
     except ValueError as exc:
         return str(exc)
     return None
@@ -135,7 +135,7 @@ def test_a_configured_kid_binds_the_stored_previous_key_and_carries_no_value(mon
         _apply(monkeypatch, tmp_path, {PREVIOUS_ENV: PREVIOUS_VALUES[previous], KID_ENV: KID_VALUES[kid]}, channel)
 
         plan = provision_subject.check_runtime_secrets(client=SimpleNamespace(secrets=_Secrets(ALL_KEYS)))
-        payload = payload_subject.build_payload(source_code_path="/Workspace/app/files", target="prod")
+        payload = payload_subject.build_payload(source_code_path="/Workspace/app/files", install_class="customer")
 
         case = f"previous={previous} kid={kid}"
         env = {item["name"]: item for item in payload["env_vars"]}  # type: ignore[union-attr]

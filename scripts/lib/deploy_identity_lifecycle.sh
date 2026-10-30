@@ -110,12 +110,14 @@ resolve_m2m_credential() {
 
 # The client profile (tools/clients), resolved before any other deploy step
 # (M1-PR2). A refusal exits 2 with lines that name fields, never values. The
-# shell keeps the client key, the install class and the profile's workspace
-# host, and exports exactly the client target's bundle variables (its root,
-# run_as and overrides), so a direct `databricks bundle run -t client`
-# addresses the same root as tools/databricks/bundle_env.py. Pure: it also
-# runs in DRY_RUN. `resolve` registers every identifying value as a runner
-# mask before it writes the 0600 view this reads.
+# shell keeps the client key, the install class, the profile's workspace host
+# and the install policy (tools/clients/policy.py, M1-PR3: App env, demo
+# feeds, presenter mode and weekly refresh, each the profile's own field), and
+# exports exactly the client target's bundle variables (its root, run_as and
+# overrides), so a direct `databricks bundle run -t client` addresses the same
+# root as tools/databricks/bundle_env.py. Pure: it also runs in DRY_RUN.
+# `resolve` registers every identifying value as a runner mask before it
+# writes the 0600 view this reads.
 CLIENT_TARGET_BUNDLE_VARS=(
   BUNDLE_VAR_client_key BUNDLE_VAR_deployer_principal BUNDLE_VAR_jobs_principal
   BUNDLE_VAR_dashboard_parent_path BUNDLE_VAR_lakebase_readable_secondaries
@@ -124,6 +126,7 @@ resolve_client_profile() {
   local view line name value
   unset "${CLIENT_TARGET_BUNDLE_VARS[@]}"
   CLIENT_KEY=""; CLIENT_INSTALL_CLASS=""; CLIENT_HOST=""; CLIENT_DEPLOYER=""; CLIENT_JOBS_PRINCIPAL=""
+  CLIENT_APP_ENV=""; CLIENT_DEMO_FEEDS=""; CLIENT_PRESENTER_MODE=""; CLIENT_SCHEDULED_REFRESH=""
   view="$(mktemp -t mip-client-target.XXXXXX)"
   if ! "$PYTHON" -m tools.clients resolve --emit client-target --format env --out "$view"; then
     rm -f "$view"
@@ -139,6 +142,10 @@ resolve_client_profile() {
       MIP_CLIENT) CLIENT_KEY="$value" ;;
       MIP_INSTALL_CLASS) CLIENT_INSTALL_CLASS="$value" ;;
       DATABRICKS_HOST) CLIENT_HOST="$value" ;;
+      MIP_APP_ENV) CLIENT_APP_ENV="$value" ;;
+      MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS) CLIENT_DEMO_FEEDS="$value" ;;
+      MIP_PRESENTER_MODE) CLIENT_PRESENTER_MODE="$value" ;;
+      MIP_SCHEDULED_REFRESH) CLIENT_SCHEDULED_REFRESH="$value" ;;
       BUNDLE_VAR_client_key|BUNDLE_VAR_deployer_principal|BUNDLE_VAR_jobs_principal|BUNDLE_VAR_dashboard_parent_path|BUNDLE_VAR_lakebase_readable_secondaries)
         printf -v "$name" '%s' "$value"
         export "${name?}"
@@ -156,7 +163,9 @@ resolve_client_profile() {
   # the Lakebase jobs_reader role step 4 converges.
   CLIENT_JOBS_PRINCIPAL="${BUNDLE_VAR_jobs_principal:-}"
   if [[ -z "$CLIENT_KEY" || -z "$CLIENT_HOST" || -z "$CLIENT_DEPLOYER" || -z "$CLIENT_JOBS_PRINCIPAL" || \
-        ( "$CLIENT_INSTALL_CLASS" != "demo" && "$CLIENT_INSTALL_CLASS" != "customer" ) ]]; then
+        ( "$CLIENT_INSTALL_CLASS" != "demo" && "$CLIENT_INSTALL_CLASS" != "customer" ) || \
+        ! "$CLIENT_APP_ENV" =~ ^(sandbox|prod)$ || ! "$CLIENT_DEMO_FEEDS" =~ ^[01]$ || \
+        ! "$CLIENT_PRESENTER_MODE" =~ ^[01]$ || ! "$CLIENT_SCHEDULED_REFRESH" =~ ^(on|off)$ ]]; then
     echo "${RED}[deploy] the client-target view is incomplete; refusing.${RST}" >&2
     exit 2
   fi
