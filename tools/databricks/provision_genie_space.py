@@ -58,6 +58,13 @@ Design choices (Module 0):
   write needs the deploy's proof-signing key pair
   (``MIP_AI_GATEWAY_PROOF_SIGNING_KEY`` / ``_VERIFY_KEY``), checked before
   any mutation. ``GENIE_SPACE_ID`` is never an input.
+* Two operator-only modes (scripts/deploy.sh passes neither):
+  ``--retire-pin`` retires the pin of a pinned space that is gone (disaster
+  recovery; tools/databricks/genie_space_pin_retire.py), read-only with
+  ``--plan-pin`` and otherwise only with ``--ack-plan`` equal to the retire
+  plan's sha256. ``--no-pin`` updates an acked title match (or a pinned
+  space) without writing a pin: the legacy live install's stand-alone spec
+  update until it is adopted (plan M2-PR6). It never creates a space.
 * On success, writes the resolved space id to ``genie/space_id.txt``
   (gitignored), the run-local hand-off to scripts/deploy.sh.
 * Runs a live smoke-test conversation (``--smoke-test``, default on)
@@ -73,7 +80,7 @@ import json
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -481,6 +488,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="The sha256 of the read-only pin plan that adopts one unpinned title match.",
     )
     parser.add_argument(
+        "--retire-pin",
+        action="store_true",
+        help="Retire the pin of a governed space that is gone (with --plan-pin: read-only plan).",
+    )
+    parser.add_argument(
+        "--no-pin",
+        action="store_true",
+        help="Update an acked title match or a pinned space without writing a pin; never creates.",
+    )
+    parser.add_argument(
         "--smoke-test",
         dest="smoke_test",
         action="store_true",
@@ -591,6 +608,28 @@ def _print_refusal(exc: genie_space_pin.GeniePinRefusal) -> None:
     print(f"error: {exc}", file=sys.stderr)
 
 
+def _retire_pin(client: Any, args: argparse.Namespace, *, title: str, scope: str) -> int:
+    from tools.databricks import genie_space_pin_retire
+
+    target = {"app_name": args.app_name, "title": title, "scope": scope, "lakebase_instance": args.lakebase_instance}
+    try:
+        if args.plan_pin:
+            plan = genie_space_pin_retire.retire_plan(client, **target)
+            for line in genie_space_pin.describe_plan(plan):
+                print(line)
+            print("  read-only retire plan: nothing was changed")
+            return 0
+        genie_space_pin_retire.retire(client, ack_plan=args.ack_plan, **target)
+    except genie_space_pin.GeniePinRefusal as exc:
+        _print_refusal(exc)
+        return EXIT_PIN_REFUSED
+    except Exception as exc:  # noqa: BLE001 - the class only: an SDK message can carry an id
+        print(f"error: the Genie pin could not be retired: {type(exc).__name__}", file=sys.stderr)
+        return EXIT_PIN_REFUSED
+    print("  retired:       the pin of the gone governed space; the next run creates and pins a new one")
+    return 0
+
+
 def run(args: argparse.Namespace) -> int:
     if args.catalog:
         os.environ["MIP_DEFAULT_CATALOG"] = args.catalog
@@ -625,6 +664,8 @@ def run(args: argparse.Namespace) -> int:
         print("  - A pinned space: UPDATE title / description / serialized_space if drift.")
         print("  - An unpinned title match: refuse unless --ack-plan names its pin plan.")
         print(f"  - Write resolved space_id to {SPACE_ID_FILE.relative_to(REPO_ROOT)}")
+        if args.retire_pin:
+            print("  - --retire-pin: instead retire the pin of a pinned space that is gone (acked plan only).")
         return 0
 
     try:
@@ -637,6 +678,11 @@ def run(args: argparse.Namespace) -> int:
     print(f"  workspace:     {host}")
 
     pin_scope = args.pin_scope or _default_pin_scope(args.app_name)
+    if args.retire_pin:
+        if args.no_pin:
+            print("error: --retire-pin and --no-pin are exclusive; nothing was changed.", file=sys.stderr)
+            return EXIT_PIN_REFUSED
+        return _retire_pin(client, args, title=target_name, scope=pin_scope)
     try:
         resolution = genie_space_pin.resolve(
             client,
@@ -661,6 +707,15 @@ def run(args: argparse.Namespace) -> int:
                 print(line)
         print("  read-only pin plan: nothing was changed")
         return 0
+    if args.no_pin:
+        if plan == "CREATE":
+            print(
+                "error: --no-pin never creates a space (a created space is pinned at once); nothing was changed.",
+                file=sys.stderr,
+            )
+            return EXIT_PIN_REFUSED
+        resolution = replace(resolution, write_pin=None)
+        print("  pin:           not written (--no-pin)")
     if resolution.write_pin is not None:
         # A pin write needs the deploy's signing key pair: prove it before any mutation.
         try:
@@ -702,6 +757,7 @@ def run(args: argparse.Namespace) -> int:
                 space_id=space_id,
                 provenance=resolution.write_pin,
                 plan_digest=resolution.plan_sha256,
+                retired_space_ids=resolution.retired,
             )
         except Exception as exc:  # noqa: BLE001
             print(
@@ -768,7 +824,10 @@ def run(args: argparse.Namespace) -> int:
     print(f"Resolved space_id: {space_id}")
     print(f"Written to:        {SPACE_ID_FILE.relative_to(REPO_ROOT)}")
     print(f"Deep link:         {_workspace_ui_url(host, space_id)}")
-    print("The id is pinned: scripts/deploy.sh and bundle_env resolve it by the pin, never by an input.")
+    if args.no_pin:
+        print("The id was not pinned (--no-pin): adopt the install (plan M2-PR6) before a governed deploy.")
+    else:
+        print("The id is pinned: scripts/deploy.sh and bundle_env resolve it by the pin, never by an input.")
 
     if not tables_bound:
         print()

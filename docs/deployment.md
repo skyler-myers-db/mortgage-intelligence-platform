@@ -1912,6 +1912,28 @@ python -m tools.databricks.provision_genie_space --plan-pin \
 Reading a pin needs `MIP_AI_GATEWAY_PROOF_VERIFY_KEY` exported; writing one
 needs the signing key too, which the provisioner checks before any mutation.
 
+Two operator-only modes; `scripts/deploy.sh` passes neither, and
+`tests/unit/test_genie_space_pin_retire.py` pins that:
+
+- **A deleted space (disaster recovery).** A pinned space that is gone refuses
+  every deploy. `--retire-pin --plan-pin` proves it gone and prints the
+  read-only retire plan and its sha256; `--retire-pin --ack-plan <sha256>`
+  recomputes the plan right before its one write, a signed tombstone pin
+  record that pins nothing and lists the gone id in `retired_space_ids`. The
+  next deploy then creates and pins a new space. A rollback record naming the
+  gone id is superseded until the next green capture, and a retired id is
+  never pinned again. A space that still exists is never unpinned. See
+  `docs/disaster-recovery.md`, Scenario 5.
+- **The legacy live install's Genie spec, until it is adopted (M2-PR6).** It
+  has no pin and no signed rollback record, so its space is an unpinned title
+  match, which the stand-alone provisioner no longer updates by title alone
+  (before M1-PR3 it did). Run `--plan-pin` (read-only), review the plan, then
+  run `--no-pin --ack-plan <sha256>`: the acked space is updated and no pin is
+  written, so the live workspace gains no secret and no signing key is
+  needed. Without `--no-pin`, the ack also pins the space, which needs the
+  signing key pair and the App rollback scope this deployer owns. `--no-pin`
+  never creates a space.
+
 ### Pre-stop probes (read-only, before step 0a)
 
 Step 0a stops the existing App, and on the unsigned rebase path also

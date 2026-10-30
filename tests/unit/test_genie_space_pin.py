@@ -72,6 +72,7 @@ def _pinned(workspace: PinWorkspace, space_id: str, provenance: str = "created")
             "provenance": provenance,
             "plan_sha256": "",
             "pinned_at": "2026-10-30T00:00:00+00:00",
+            "retired_space_ids": [],
         }
     )
     workspace.secrets_by_key[pin.pin_key(APP)] = json.dumps(signed, sort_keys=True, separators=(",", ":"))

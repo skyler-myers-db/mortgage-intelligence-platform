@@ -498,8 +498,15 @@ That single invocation executes:
    `MIP_ADMIN_EMAILS`) before the job is unpaused; otherwise the
    all-actor endpoint fails closed with `403 {"detail":"forbidden"}`.
 13. `python tools/databricks/provision_genie_space.py` — reads
-   `genie/mortgage_lead_intelligence_space.yml`, creates or updates
-   the Genie Space, binds trusted assets, writes `genie/space_id.txt`.
+   `genie/mortgage_lead_intelligence_space.yml` and resolves the governed
+   space by its pin, never by its title (M1-PR3): it updates the pinned space,
+   or on a first install creates the space and pins its id at once. A space
+   that only carries the governed title is refused unless `--ack-plan` (in a
+   deploy, `MIP_GENIE_PIN_ACK`) names its read-only pin plan; `--plan-pin`
+   prints that plan with no mutation. It binds trusted assets and writes
+   `genie/space_id.txt`, which no deploy step reads any more. A pinned space
+   that was deleted is recovered with `--retire-pin`
+   (`docs/disaster-recovery.md`, Scenario 5).
 14. `./scripts/smoke_live.sh` — verify the app and all four deps up.
 
 Flags on `scripts/deploy.sh` for partial re-runs:

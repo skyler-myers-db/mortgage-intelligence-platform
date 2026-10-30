@@ -19,7 +19,13 @@ title match the deploy did not pin is never adopted.
   its capture still finds the space it created.
 
 When both exist they must agree. A pinned space must still exist: one that is
-gone refuses and never falls back to a title.
+gone refuses and never falls back to a title. Disaster recovery retires that
+pin through a reviewed, digest-acked change
+(``tools/databricks/genie_space_pin_retire.py``): the pin record becomes a
+signed tombstone (``retired``) that lists the gone id in
+``retired_space_ids``. A rollback record naming a retired id is superseded
+(the next green capture replaces it), every later pin carries the list
+forward, and a retired id is never pinned again.
 
 **No pin.** The title decides only between a first create and a refusal:
 
@@ -63,10 +69,12 @@ PIN_VERSION = 1
 PIN_KEY_PREFIX = "genie-space-pin-v1"
 PIN_ALGORITHM = "ed25519-genie-space-pin-v1"
 PIN_DOMAIN = b"mip-genie-space-pin\0"
-PROVENANCES = frozenset({"created", "acked", "record"})
+PROVENANCES = frozenset({"created", "acked", "record", "retired"})
 PLAN_VERSION = 1
 _ABSENT = (NotFound, ResourceDoesNotExist)
-_PIN_FIELDS = frozenset({"version", "app_name", "title", "space_id", "provenance", "plan_sha256", "pinned_at"})
+_PIN_FIELDS = frozenset(
+    {"version", "app_name", "title", "space_id", "provenance", "plan_sha256", "pinned_at", "retired_space_ids"}
+)
 _SIGNATURE_FIELDS = frozenset({"attestation_alg", "attestation_verify_key", "attestation_signature"})
 
 
@@ -95,6 +103,8 @@ class Resolution:
     plan: dict[str, Any] | None = None
     plan_sha256: str = ""
     managers: tuple[str, ...] = field(default=())
+    # Retired (gone) ids the pin record lists; every new pin carries them forward.
+    retired: tuple[str, ...] = field(default=())
 
 
 def _text(value: object) -> str:
@@ -175,11 +185,20 @@ def verified_pin(
         )
     except InvalidSignature as exc:
         raise GeniePinRefusal("the Genie pin record signature is invalid") from exc
+    provenance = record.get("provenance")
+    space_id = _text(record.get("space_id"))
+    retired = record.get("retired_space_ids")
     if (
         record.get("version") != PIN_VERSION
         or record.get("app_name") != app_name
-        or record.get("provenance") not in PROVENANCES
-        or not _text(record.get("space_id"))
+        or provenance not in PROVENANCES
+        or not isinstance(retired, list)
+        or any(not isinstance(item, str) or not item.strip() for item in retired)
+        or retired != sorted(set(retired))
+        # A tombstone pins nothing and retires at least one id; any other pin names one live id.
+        or (provenance == "retired") == bool(space_id)
+        or (provenance == "retired" and not retired)
+        or space_id in retired
     ):
         raise GeniePinRefusal("the Genie pin record does not name this App's governed space")
     return dict(record)
@@ -300,22 +319,30 @@ def plan_sha256(plan: Mapping[str, Any]) -> str:
     return hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def _pins(workspace: Any, *, app_name: str, scope: str, lakebase_instance: str) -> tuple[str, str]:
-    """(pin record id, signed rollback record id), each "" when absent; they must agree."""
+def _pins(workspace: Any, *, app_name: str, scope: str, lakebase_instance: str) -> tuple[str, str, tuple[str, ...]]:
+    """(pin record id, signed rollback record id, retired ids); an id is "" when absent.
+
+    The two ids must agree. A rollback record that names a retired id is
+    superseded (its space is gone; the next green capture replaces it).
+    """
 
     pin = read_pin(workspace, scope=scope, app_name=app_name)
-    record = record_space_id(workspace, scope=scope, app_name=app_name, lakebase_instance=lakebase_instance)
+    record = record_space_id(workspace, scope=scope, app_name=app_name, lakebase_instance=lakebase_instance) or ""
+    retired = tuple(pin["retired_space_ids"]) if pin is not None else ()
     pinned = _text(pin["space_id"]) if pin is not None else ""
+    if record in retired:
+        record = ""
     if pinned and record and pinned != record:
         raise GeniePinRefusal("the Genie pin record and the signed rollback record name different spaces")
-    return pinned, record or ""
+    return pinned, record, retired
 
 
 def _existing(workspace: Any, space_id: str) -> str:
     if not _space_exists(workspace, emit_mask(space_id)):
         raise GeniePinRefusal(
             "the pinned governed Genie space no longer exists; it is never replaced by a title match "
-            "(restore it, or retire the pin through a reviewed change)"
+            "(restore it, or retire the pin: provision_genie_space --retire-pin --plan-pin prints the "
+            "read-only retire plan, and --retire-pin --ack-plan <its sha256> retires it)"
         )
     return space_id
 
@@ -323,7 +350,7 @@ def _existing(workspace: Any, space_id: str) -> str:
 def pinned_space_id(workspace: Any, *, app_name: str, scope: str, lakebase_instance: str) -> str | None:
     """The governed space a pin names, proven to exist; ``None`` when nothing pins one yet."""
 
-    pinned, record = _pins(workspace, app_name=app_name, scope=scope, lakebase_instance=lakebase_instance)
+    pinned, record, _retired = _pins(workspace, app_name=app_name, scope=scope, lakebase_instance=lakebase_instance)
     return _existing(workspace, pinned or record) if pinned or record else None
 
 
@@ -338,17 +365,22 @@ def resolve(
 ) -> Resolution:
     """How the governed space resolves now: read-only, and fail closed."""
 
-    pinned, record = _pins(workspace, app_name=app_name, scope=scope, lakebase_instance=lakebase_instance)
+    pinned, record, retired = _pins(workspace, app_name=app_name, scope=scope, lakebase_instance=lakebase_instance)
     if pinned or record:
         return Resolution(
             action="use",
             space_id=_existing(workspace, pinned or record),
             source="pin" if pinned else "record",
             write_pin=None if pinned else "record",
+            retired=retired,
         )
-    matches = title_matches(workspace, title)
+    matches = [
+        space
+        for space in title_matches(workspace, title)
+        if _text(getattr(space, "space_id", None) or getattr(space, "id", None)) not in retired
+    ]
     if not matches:
-        return Resolution(action="create", space_id=None, source="none", write_pin="created")
+        return Resolution(action="create", space_id=None, source="none", write_pin="created", retired=retired)
     if len(matches) > 1:
         raise GeniePinRefusal(f"{len(matches)} Genie spaces carry the governed title and none is pinned")
     candidate = emit_mask(_text(getattr(matches[0], "space_id", None) or getattr(matches[0], "id", None)))
@@ -374,6 +406,7 @@ def resolve(
         plan=plan,
         plan_sha256=digest,
         managers=managers,
+        retired=retired,
     )
 
 
@@ -389,9 +422,14 @@ def write_pin(
     space_id: str,
     provenance: str,
     plan_digest: str = "",
+    retired_space_ids: tuple[str, ...] | list[str] = (),
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Sign and store the pin record, then read it back exactly (under the deploy lease)."""
+    """Sign and store the pin record, then read it back exactly (under the deploy lease).
+
+    ``retired_space_ids`` carries the ids earlier tombstones retired, so a
+    retired id is never pinned again.
+    """
 
     if provenance not in PROVENANCES:
         raise ValueError("Genie pin provenance is invalid")
@@ -406,6 +444,7 @@ def write_pin(
         "provenance": provenance,
         "plan_sha256": plan_digest,
         "pinned_at": (now or datetime.now(UTC)).isoformat(timespec="seconds"),
+        "retired_space_ids": sorted(set(retired_space_ids)),
     }
     signed = sign_pin(record)
     serialized = json.dumps(signed, sort_keys=True, separators=(",", ":"))
@@ -418,6 +457,12 @@ def write_pin(
 def describe_plan(plan: Mapping[str, Any]) -> list[str]:
     """The read-only plan as printable lines (identifiers were masked when read)."""
 
+    if plan.get("action") == "retire_pin":
+        return [
+            f"  retire the pin of: {plan['space_id']} (named by the {plan['source']}; the space is gone)",
+            f"  deploying identity: {plan['deployer']}",
+            f"  retire plan sha256: {plan['sha256']}",
+        ]
     managers = ", ".join(plan.get("managers") or []) or "none"
     return [
         f"  candidate space: {plan['space_id']}",
