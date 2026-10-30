@@ -204,7 +204,6 @@ def _new_root() -> Path:
     return Path(tempfile.mkdtemp(prefix="mip-gh-session-"))
 
 
-
 @contextmanager
 def fresh_gh_session(
     repository: str,
