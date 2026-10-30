@@ -76,10 +76,10 @@ def test_a_published_release_matches_its_manifest_and_nothing_is_deleted(tmp_pat
     assert client.workspace.ops("download")[len(FILES):] == []  # sizes listed: no hashing
 
 
-def test_the_ci_install_release_folder_converges_only_with_its_leaf(tmp_path: Path) -> None:
-    client, manifest_path, manifest, path = _published(tmp_path, leaf="dev-ci")
+def test_a_caller_leaf_release_folder_converges_only_with_its_leaf(tmp_path: Path) -> None:
+    client, manifest_path, manifest, path = _published(tmp_path, leaf="client-a")
 
-    _converge(client, manifest_path, manifest.release_id, path, expected_root_leaf="dev-ci")
+    _converge(client, manifest_path, manifest.release_id, path, expected_root_leaf="client-a")
     with pytest.raises(contract.ReleaseContractError, match="exact release folder"):
         _converge(client, manifest_path, manifest.release_id, path)
 

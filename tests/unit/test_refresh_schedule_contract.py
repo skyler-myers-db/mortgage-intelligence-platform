@@ -21,7 +21,6 @@ from tests.fixtures.deploy_script import deploy_entrypoint_text
 from tools import verify_live_source_readiness as readiness
 from tools.databricks import bundle_env
 from tools.databricks import scheduled_refresh_posture as posture
-from tools.databricks.ci_install_isolation import CI_TARGET
 
 ROOT = Path(__file__).resolve().parents[2]
 PREFLIGHT = ROOT / "scripts" / "lib" / "deploy_step_preflight_gates.sh"
@@ -126,10 +125,8 @@ def test_operator_docs_explain_app_refresh_default_and_paused_schedules() -> Non
         # The deployer-is-a-user check is the one GO read the probe does not make yet.
         "where that read belongs, checks Supervisor retirement and Genie group grants but not the "
         "deployer's user name. Until it does, check the deploying identity is a user before a GO run.",
-        # The CI staging install is its own target (pr105-host) since the forked anchor: the
-        # preflight refuses `on` for every target but dev, and each target has its own file.
-        "Every other target is always paused and refuses `MIP_SCHEDULED_REFRESH=on` (exit 2): the CI "
-        "staging install (`deploy-dev.yml`, target `pr105-host`, leaf `dev-ci`)",
+        # The preflight refuses `on` for every target but dev, and each target has its own file.
+        "Every other target is always paused and refuses `MIP_SCHEDULED_REFRESH=on` (exit 2): `-t prod`",
         "`.databricks/bundle/<target>/variable-overrides.json` (`dev` for the live install)",
     ):
         assert phrase in flat_runbook, phrase
@@ -140,8 +137,7 @@ def test_operator_docs_explain_app_refresh_default_and_paused_schedules() -> Non
         "share that file in one checkout",
     ):
         assert stale not in flat_runbook, stale
-    assert "`-t prod` and `-t pr105-host` refuse `MIP_SCHEDULED_REFRESH=on`" in flat_deployment
-    assert "and `-t prod` refuses `MIP_SCHEDULED_REFRESH=on`" not in flat_deployment
+    assert "and `-t prod` refuses `MIP_SCHEDULED_REFRESH=on`" in flat_deployment
     for doc in (flat_deployment, flat_runbook):
         assert "no other operator action" not in doc.lower()
 
@@ -280,12 +276,10 @@ def _code_lines() -> list[str]:
     return [line for line in _block().splitlines() if line.strip() and not line.lstrip().startswith("#")]
 
 
-def test_the_block_sits_between_the_install_suffix_export_and_the_first_validate() -> None:
+def test_the_block_sits_before_the_prompt_and_the_first_validate() -> None:
     text = deploy_entrypoint_text()
     block = text.index("# >>> scheduled-refresh")
 
-    assert text.index("export BUNDLE_VAR_bundle_root_leaf BUNDLE_VAR_install_suffix") < block
-    assert text.index("# <<< ci-install-isolation") < block
     assert block < text.index("tools.databricks.bundle_env validate")
     assert block < text.index('read -r -p "About to DEPLOY')
     assert block < text.index("\nrun "), "before the first top-level run-wrapped mutation"
@@ -301,9 +295,7 @@ def test_unpaused_is_reachable_only_for_the_dev_live_install() -> None:
         "BUNDLE_VAR_scheduled_refresh_pause_status=PAUSED",
     ]
     unpause = code.index("  BUNDLE_VAR_scheduled_refresh_pause_status=UNPAUSED")
-    assert code[unpause - 1] == (
-        'if [[ "$TARGET" == "dev" && "$_SCHEDULED_REFRESH" == "on" && -z "$BUNDLE_VAR_install_suffix" ]]; then'
-    )
+    assert code[unpause - 1] == 'if [[ "$TARGET" == "dev" && "$_SCHEDULED_REFRESH" == "on" ]]; then'
     assert code[unpause + 1] == "else"
     assert '  _SCHEDULED_REFRESH="$(deployment_control_value MIP_SCHEDULED_REFRESH on)"' in code, "dev default on"
     assert '  _SCHEDULED_REFRESH="$(deployment_control_value MIP_SCHEDULED_REFRESH off)"' in code, "prod default off"
@@ -311,7 +303,7 @@ def test_unpaused_is_reachable_only_for_the_dev_live_install() -> None:
 
 
 def _bash_block(
-    target: str, install_suffix: str, env: dict[str, str] | None = None, dotenv: dict[str, str] | None = None
+    target: str, env: dict[str, str] | None = None, dotenv: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
     bash = shutil.which("bash")
     assert bash
@@ -319,7 +311,7 @@ def _bash_block(
     arms = "".join(f"{name}) value='{value}' ;; " for name, value in (dotenv or {}).items())
     prelude = (
         "set -euo pipefail\nRED=''\nRST=''\n"
-        f"TARGET='{target}'\nBUNDLE_VAR_install_suffix='{install_suffix}'\n"
+        f"TARGET='{target}'\n"
         'deployment_control_value() { local name="$1" default_value="${2:-}" value; value="${!name:-}"; '
         f'if [[ -z "$value" ]]; then case "$name" in {arms}*) ;; esac; fi; '
         "printf '%s' \"${value:-$default_value}\"; }\n"
@@ -342,15 +334,17 @@ def _result(completed: subprocess.CompletedProcess[str]) -> str:
 
 
 def test_the_block_unpauses_only_the_dev_live_install() -> None:
-    assert _result(_bash_block("dev", "")) == "RESULT=UNPAUSED", "dev live install: on by default"
-    assert _result(_bash_block("dev", "_ci")) == "RESULT=PAUSED", "the CI staging install is always paused"
-    assert _result(_bash_block("dev", "_ci", env={"MIP_SCHEDULED_REFRESH": "on"})) == "RESULT=PAUSED"
-    assert _result(_bash_block("dev", "", env={"MIP_SCHEDULED_REFRESH": "off"})) == "RESULT=PAUSED"
-    assert _result(_bash_block("dev", "", dotenv={"MIP_SCHEDULED_REFRESH": "off"})) == "RESULT=PAUSED"
-    assert _result(_bash_block("prod", "")) == "RESULT=PAUSED"
-    assert _result(_bash_block("prod", "", env={"MIP_SCHEDULED_REFRESH": "off"})) == "RESULT=PAUSED"
-    stray = {"BUNDLE_VAR_scheduled_refresh_pause_status": "UNPAUSED"}
-    assert _result(_bash_block("dev", "_ci", env=stray)) == "RESULT=PAUSED", "the block owns the export"
+    assert _result(_bash_block("dev")) == "RESULT=UNPAUSED", "dev live install: on by default"
+    assert _result(_bash_block("dev", env={"MIP_SCHEDULED_REFRESH": "on"})) == "RESULT=UNPAUSED"
+    assert _result(_bash_block("dev", env={"MIP_SCHEDULED_REFRESH": "off"})) == "RESULT=PAUSED"
+    assert _result(_bash_block("dev", dotenv={"MIP_SCHEDULED_REFRESH": "off"})) == "RESULT=PAUSED"
+    assert _result(_bash_block("prod")) == "RESULT=PAUSED"
+    assert _result(_bash_block("prod", env={"MIP_SCHEDULED_REFRESH": "off"})) == "RESULT=PAUSED"
+    stray = {"BUNDLE_VAR_scheduled_refresh_pause_status": "UNPAUSED", "MIP_SCHEDULED_REFRESH": "off"}
+    assert _result(_bash_block("dev", env=stray)) == "RESULT=PAUSED", "the block owns the export"
+    assert _result(_bash_block("prod", env={"BUNDLE_VAR_scheduled_refresh_pause_status": "UNPAUSED"})) == (
+        "RESULT=PAUSED"
+    )
 
 
 @pytest.mark.parametrize(
@@ -363,7 +357,7 @@ def test_the_block_unpauses_only_the_dev_live_install() -> None:
     ],
 )
 def test_the_block_refuses_a_bad_value_and_a_prod_unpause(target: str, env: dict[str, str]) -> None:
-    refused = _bash_block(target, "", env=env)
+    refused = _bash_block(target, env=env)
 
     assert refused.returncode == 2, refused.stdout
     assert "MIP_SCHEDULED_REFRESH" in refused.stderr
@@ -374,33 +368,31 @@ def test_the_block_refuses_a_bad_value_and_a_prod_unpause(target: str, env: dict
 
 
 @pytest.mark.parametrize(
-    ("target", "suffix", "value", "allowed"),
+    ("target", "value", "allowed"),
     [
-        ("dev", "", "UNPAUSED", True),
-        ("dev", "", "PAUSED", True),
-        ("dev", "_ci", "PAUSED", True),
-        ("prod", "", "PAUSED", True),
-        ("dev", "_ci", "UNPAUSED", False),
-        ("prod", "", "UNPAUSED", False),
-        ("ci", "", "UNPAUSED", False),
-        ("dev", "", "", False),
-        ("dev", "", "unpaused", False),
+        ("dev", "UNPAUSED", True),
+        ("dev", "PAUSED", True),
+        ("prod", "PAUSED", True),
+        ("prod", "UNPAUSED", False),
+        ("ci", "UNPAUSED", False),
+        ("dev", "", False),
+        ("dev", "unpaused", False),
     ],
 )
-def test_the_pause_export_is_checked_against_the_install(target: str, suffix: str, value: str, allowed: bool) -> None:
+def test_the_pause_export_is_checked_against_the_install(target: str, value: str, allowed: bool) -> None:
     env = {posture.PAUSE_ENV: value}
     if allowed:
-        posture.check_pause_status(env, target=target, install_suffix=suffix)
+        posture.check_pause_status(env, target=target)
     else:
         with pytest.raises(ValueError, match=posture.PAUSE_ENV):
-            posture.check_pause_status(env, target=target, install_suffix=suffix)
-    posture.check_pause_status({}, target=target, install_suffix=suffix)  # absent: the bundle default
+            posture.check_pause_status(env, target=target)
+    posture.check_pause_status({}, target=target)  # absent: the bundle default
 
 
 def test_only_the_dev_live_install_mails_its_deployer() -> None:
-    assert posture.failure_recipients(target="dev", install_suffix="") == ["${workspace.current_user.userName}"]
-    for target, suffix in (("dev", "_ci"), ("prod", ""), ("ci", "")):
-        assert posture.failure_recipients(target=target, install_suffix=suffix) == [], (target, suffix)
+    assert posture.failure_recipients(target="dev") == ["${workspace.current_user.userName}"]
+    for target in ("prod", "ci"):
+        assert posture.failure_recipients(target=target) == [], target
 
 
 def test_the_overrides_writer_keeps_other_keys_and_refuses_a_bad_file(tmp_path: Path) -> None:
@@ -431,7 +423,7 @@ def _bundle_env_main(
     calls: list[list[str]] = []
     monkeypatch.setattr(bundle_env, "ENV_LOCAL", tmp_path / ".env.local.absent")
     monkeypatch.setattr(bundle_env, "BUNDLE_ROOT", tmp_path)
-    for name in ("DATABRICKS_BUNDLE_ROOT", "MIP_BUNDLE_ROOT_LEAF", posture.PAUSE_ENV, "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS"):
+    for name in ("DATABRICKS_BUNDLE_ROOT", posture.PAUSE_ENV, "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS"):
         monkeypatch.delenv(name, raising=False)
     for name, value in env.items():
         monkeypatch.setenv(name, value)
@@ -451,14 +443,10 @@ def _written_recipients(tmp_path: Path, target: str = "dev") -> object:
     return overrides[posture.RECIPIENTS_VARIABLE]
 
 
-def test_bundle_env_mails_the_live_install_and_never_the_ci_leaf(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_bundle_env_mails_the_live_install_and_never_prod(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     code, calls = _bundle_env_main(monkeypatch, tmp_path, {posture.PAUSE_ENV: "UNPAUSED"})
     assert code == 0 and len(calls) == 1
     assert _written_recipients(tmp_path) == ["${workspace.current_user.userName}"]
-
-    code, calls = _bundle_env_main(monkeypatch, tmp_path, {"MIP_BUNDLE_ROOT_LEAF": "dev-ci"})
-    assert code == 0 and len(calls) == 1
-    assert _written_recipients(tmp_path) == [], "the dev-ci leaf rewrites the same file to no recipients"
 
     code, calls = _bundle_env_main(monkeypatch, tmp_path, {}, target="prod")
     assert code == 0 and _written_recipients(tmp_path, "prod") == []
@@ -467,7 +455,6 @@ def test_bundle_env_mails_the_live_install_and_never_the_ci_leaf(monkeypatch: py
 @pytest.mark.parametrize(
     ("env", "target"),
     [
-        ({"MIP_BUNDLE_ROOT_LEAF": "dev-ci", posture.PAUSE_ENV: "UNPAUSED"}, "dev"),
         ({posture.PAUSE_ENV: "UNPAUSED"}, "prod"),
         ({posture.PAUSE_ENV: "sometimes"}, "dev"),
     ],
@@ -622,10 +609,10 @@ def test_every_operator_doc_that_runs_the_gold_or_lifecycle_job_carries_the_stal
     assert "Interim refresh (governed deploy NO-GO)" in job_trigger._LIFECYCLE_REPAIR_COMMAND
 
 
-# ------------------- the forked-anchor CI staging target (pr105-host) stays PAUSED
+# ------------------------------- the step-9c postflight asks only dev for mail
 
 
-def _postflight_args(target: str, install_suffix: str) -> list[str]:
+def _postflight_args(target: str) -> list[str]:
     """The step-9c argument list deploy.sh builds for verify_scheduled_refresh_state."""
 
     bash = shutil.which("bash")
@@ -635,7 +622,7 @@ def _postflight_args(target: str, install_suffix: str) -> list[str]:
     snippet = text[start : text.index('run "$PYTHON" -m tools.databricks.verify_scheduled_refresh_state', start)]
     script = (
         "set -euo pipefail\n"
-        f"TARGET='{target}'\nTARGET_CLASS=dev\nBUNDLE_VAR_install_suffix='{install_suffix}'\n"
+        f"TARGET='{target}'\n"
         "BUNDLE_VAR_scheduled_refresh_pause_status=PAUSED\n"
         + snippet
         + 'printf "%s\\n" "${_SCHEDULED_REFRESH_ARGS[@]}"\n'
@@ -647,37 +634,6 @@ def _postflight_args(target: str, install_suffix: str) -> list[str]:
     return completed.stdout.splitlines()
 
 
-@pytest.mark.parametrize("suffix", ["_ci", ""])
-def test_the_forked_anchor_ci_target_stays_paused_and_mails_nobody(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, suffix: str
-) -> None:
-    """pr105-host is dev-class (deploy.sh sets TARGET_CLASS=dev) but never the live install.
-
-    The scheduled-refresh checks key on the literal dev target, so neither its
-    `_ci` install nor even an empty suffix can unpause the job, ask the
-    postflight for the deployer recipient, or be written any recipient.
-    """
-
-    dev_class = {"TARGET_CLASS": "dev"}
-    assert _result(_bash_block(CI_TARGET, suffix, env=dev_class)) == "RESULT=PAUSED"
-    assert _result(_bash_block(CI_TARGET, suffix, env={**dev_class, "MIP_SCHEDULED_REFRESH": "off"})) == "RESULT=PAUSED"
-    refused = _bash_block(CI_TARGET, suffix, env={**dev_class, "MIP_SCHEDULED_REFRESH": "on"})
-    assert refused.returncode == 2 and "RESULT=" not in refused.stdout
-    assert "MIP_SCHEDULED_REFRESH=on is honoured only for the dev target's live install" in refused.stderr
-
-    assert _postflight_args(CI_TARGET, suffix) == ["--expect", "PAUSED"], "never --live-install"
-    assert posture.failure_recipients(target=CI_TARGET, install_suffix=suffix) == []
-    with pytest.raises(ValueError, match=posture.PAUSE_ENV):
-        posture.check_pause_status({posture.PAUSE_ENV: "UNPAUSED"}, target=CI_TARGET, install_suffix=suffix)
-
-    leaf = {"MIP_BUNDLE_ROOT_LEAF": "dev-ci"} if suffix else {}
-    code, calls = _bundle_env_main(monkeypatch, tmp_path, leaf, target=CI_TARGET)
-    assert code == 0 and len(calls) == 1
-    assert _written_recipients(tmp_path, CI_TARGET) == []
-    code, calls = _bundle_env_main(monkeypatch, tmp_path, {**leaf, posture.PAUSE_ENV: "UNPAUSED"}, target=CI_TARGET)
-    assert code == 2 and calls == [], "refused before the CLI runs"
-
-
-def test_the_postflight_control_still_asks_the_live_install_for_its_recipient() -> None:
-    assert _postflight_args("dev", "") == ["--expect", "PAUSED", "--live-install"]
-    assert _postflight_args("dev", "_ci") == ["--expect", "PAUSED"]
+def test_the_postflight_asks_only_the_live_install_for_its_recipient() -> None:
+    assert _postflight_args("dev") == ["--expect", "PAUSED", "--live-install"]
+    assert _postflight_args("prod") == ["--expect", "PAUSED"]

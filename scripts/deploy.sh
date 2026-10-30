@@ -152,18 +152,20 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-# pr105-host is the forked-anchor CI staging target (databricks.yml): a
-# dev-class install in its own workspace, deploy-dev.yml only (the preflight's
-# tools/databricks/ci_install_isolation.py refuses it anywhere else).
-# TARGET_CLASS carries the dev-class rules (sandbox runtime, Summit demo
-# feeds, the resolved root leaf) to the step files.
-if [[ "$TARGET" != "dev" && "$TARGET" != "prod" && "$TARGET" != "pr105-host" ]]; then
-  echo "[deploy] target must be exactly dev, prod or pr105-host; refusing '$TARGET'" >&2
+if [[ "$TARGET" != "dev" && "$TARGET" != "prod" ]]; then
+  echo "[deploy] target must be exactly dev or prod; refusing '$TARGET'" >&2
   exit 2
 fi
-TARGET_CLASS="$TARGET"
-if [[ "$TARGET" == "pr105-host" ]]; then
-  TARGET_CLASS="dev"
+# deploy-dev.yml is parked until a client environment is selected (M1-PR7):
+# the CI staging workspace it deployed to was deleted, and the dev target is
+# the live install, which no CI run may reach before M1-PR7's per-client
+# environment lands. The workflow refuses first; this repeats the refusal
+# before any Databricks call, also in DRY_RUN. It keys on the workflow ref,
+# never on GITHUB_ACTIONS alone, so CI's own pytest and its deploy.sh dry
+# runs are unchanged.
+if [[ "${GITHUB_ACTIONS:-}" == "true" && "${GITHUB_WORKFLOW_REF:-}" == *"/.github/workflows/deploy-dev.yml@"* ]]; then
+  echo "[deploy] deploy-dev.yml is parked until a client environment is selected (M1-PR7); refusing" >&2
+  exit 2
 fi
 
 # -----------------------------------------------------------------------------

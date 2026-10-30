@@ -59,16 +59,16 @@ def test_the_files_root_is_unchanged_and_the_release_root_is_its_sibling() -> No
     assert _release() == f"{BUNDLE}/dev/app-src/{RELEASE_ID}"
 
 
-def test_the_ci_install_release_root_renders_under_its_own_leaf() -> None:
-    path = _release(leaf="dev-ci")
+def test_a_caller_leaf_release_root_renders_under_its_own_leaf() -> None:
+    path = _release(leaf="client-a")
 
-    assert path == f"{BUNDLE}/dev-ci/app-src/{RELEASE_ID}"
-    assert contract.release_id_of(path, principal=PRINCIPAL, target="dev", root_leaf="dev-ci") == (
+    assert path == f"{BUNDLE}/client-a/app-src/{RELEASE_ID}"
+    assert contract.release_id_of(path, principal=PRINCIPAL, target="dev", root_leaf="client-a") == (
         RELEASE_ID
     )
-    # A release folder of the CI install is never one of the live install's.
+    # A release folder under another leaf is never one of the target root's.
     assert contract.release_id_of(path, principal=PRINCIPAL, target="dev") is None
-    assert contract.release_id_of(_release(), principal=PRINCIPAL, target="dev", root_leaf="dev-ci") is None
+    assert contract.release_id_of(_release(), principal=PRINCIPAL, target="dev", root_leaf="client-a") is None
 
 
 def test_a_release_path_has_nine_segments_and_no_snapshot_marker() -> None:
@@ -155,7 +155,7 @@ def test_release_id_in_reads_any_principal_and_leaf_but_only_the_exact_release_s
     shape guards it, because the principal and leaf are not known there."""
     release = _release()
     assert contract.release_id_in(release) == RELEASE_ID
-    assert contract.release_id_in(_release(leaf="dev-ci").replace(PRINCIPAL, "ci-sp")) == RELEASE_ID
+    assert contract.release_id_in(_release(leaf="client-a").replace(PRINCIPAL, "ci-sp")) == RELEASE_ID
     for bad in (
         f"{release}/extra",  # a tenth segment
         release.replace(f"/{PRINCIPAL}/", "/../"),  # a dot-dot principal

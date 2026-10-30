@@ -652,7 +652,6 @@ def provision(
         reserved_gateway_endpoints=_reserved_gateway_endpoints,
         grant=_grant_can_query_on_endpoint,
         revoke=_revoke_can_query_on_obsolete_endpoint,
-        install_warehouse_id=warehouse_id,
     )
 
     granted_warehouse_can_use = False

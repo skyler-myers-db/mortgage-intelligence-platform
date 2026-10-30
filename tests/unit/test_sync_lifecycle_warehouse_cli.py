@@ -74,12 +74,12 @@ def test_static_lakebase_auth_still_honors_explicit_database(monkeypatch) -> Non
 
     MODULE._ensure_lakebase_env(
         settings,
-        database_name="mip_pr105_database",
+        database_name="mip_staging_database",
     )
 
-    assert os.environ["LAKEBASE_DATABASE"] == "mip_pr105_database"
-    assert os.environ["PGDATABASE"] == "mip_pr105_database"
-    assert settings.lakebase_database == "mip_pr105_database"
+    assert os.environ["LAKEBASE_DATABASE"] == "mip_staging_database"
+    assert os.environ["PGDATABASE"] == "mip_staging_database"
+    assert settings.lakebase_database == "mip_staging_database"
 
 
 def test_bound_deployer_workspace_owns_sql_and_lakebase_auth(monkeypatch) -> None:
@@ -125,8 +125,8 @@ def test_bound_deployer_workspace_owns_sql_and_lakebase_auth(monkeypatch) -> Non
     MODULE._ensure_lakebase_env(
         settings,
         workspace=workspace,
-        instance_name="mip-pr105-state",
-        database_name="mip_pr105_database",
+        instance_name="mip-staging-state",
+        database_name="mip_staging_database",
     )
     client = MODULE._build_client(17, settings, workspace)
 
@@ -136,11 +136,11 @@ def test_bound_deployer_workspace_owns_sql_and_lakebase_auth(monkeypatch) -> Non
     assert os.environ["PGHOST"] == "reviewed-lakebase.example"
     assert os.environ["PGUSER"] == "reviewed-deployer"
     assert os.environ["PGPASSWORD"] == "reviewed-lakebase-token"
-    assert os.environ["LAKEBASE_DATABASE"] == "mip_pr105_database"
-    assert os.environ["PGDATABASE"] == "mip_pr105_database"
+    assert os.environ["LAKEBASE_DATABASE"] == "mip_staging_database"
+    assert os.environ["PGDATABASE"] == "mip_staging_database"
     assert settings.lakebase_host == "reviewed-lakebase.example"
     assert settings.lakebase_password.get_secret_value() == "reviewed-lakebase-token"
-    assert settings.lakebase_database == "mip_pr105_database"
+    assert settings.lakebase_database == "mip_staging_database"
     assert client._host == "https://reviewed-workspace.example"
     assert client._warehouse_id == "warehouse-id"
     assert client._token_provider() == "reviewed-workspace-token"

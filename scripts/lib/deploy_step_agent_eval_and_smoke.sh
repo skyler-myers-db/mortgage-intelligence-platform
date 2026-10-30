@@ -316,7 +316,7 @@ if [[ "$DRY_RUN" -eq 1 || "$APP_UPGRADE_STATE" == "green_verified" ]]; then
     --files-root "$APP_BUNDLE_FILES_PATH" \
     --expected-principal "$APP_CURRENT_USER" \
     --expected-target "$TARGET" \
-    --expected-root-leaf "${MIP_BUNDLE_ROOT_LEAF_RESOLVED:-$TARGET}"; then
+    --expected-root-leaf "$TARGET"; then
     echo "${YLW}[deploy] App release folder prune did not finish; the release is live and nothing it keeps was touched. A later green run retries.${RST}" >&2
   fi
 fi

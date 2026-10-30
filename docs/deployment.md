@@ -116,7 +116,7 @@ deployment from it was recorded FAILED). A release folder holds only the App's
 runtime closure, about 1,180 files.
 
 `<bundle root>` is `/Workspace/Users/<deploy principal>/.bundle/mortgage-intelligence-platform/<leaf>`,
-where `<leaf>` is the target (or the CI install's `dev-ci`). `app-src/` is a
+where `<leaf>` is the target. `app-src/` is a
 sibling of `files/` that bundle sync never touches. The release id is
 `<commit[:12]>-<digest[:12]>`, where the digest is the sha256 of one
 `<path>\t<size>\t<sha256>\n` line per staged file in path order
@@ -772,11 +772,10 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
 ```
 
    The `databricks.yml` host anchor and `DATABRICKS_HOST` must identify that
-   same workspace. `deploy-dev.yml` and `nightly.yml` are Entrada CI only:
-   both address the `pr105-host` target, whose `&ci_staging_host` anchor
-   names Entrada's CI staging workspace and is never rebound by
-   `scripts/configure-workspace.sh`, so a fork's `deploy-dev.yml` run fails
-   closed at its host check. A fork deploys with `./scripts/deploy.sh -t dev`.
+   same workspace. `deploy-dev.yml` and `nightly.yml` are Entrada CI only,
+   and both are parked until a client environment is selected (M1-PR7): their
+   first job refuses every dispatch. A fork deploys with
+   `./scripts/deploy.sh -t dev`.
    Before the first deployment into an isolated workspace, run:
 
 ```bash
@@ -1006,9 +1005,8 @@ configure the two distinct Ed25519 private keys
 secrets documented below. Store its derived public key separately as the
 `MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY` GitHub Actions variable; nightly
 read-only jobs never receive the private key. Only then run
-`./scripts/deploy.sh -t dev` for an operator install, or dispatch
-`deploy-dev.yml` for the CI staging install, which deploys only the
-`pr105-host` target (see "CI staging install" below). Bundle apply first
+`./scripts/deploy.sh -t dev` for an operator install (`deploy-dev.yml` is
+parked; see "CI deploy (deploy-dev.yml): parked" below). Bundle apply first
 creates only non-App dependencies. Deploy then resolves their concrete IDs and
 applies the App resource bindings without a source deployment: a new App is
 created stopped with `--no-compute`, while an existing App update must preserve
@@ -1327,7 +1325,7 @@ Supervisor/Gateway/model/experiment/inference-table resource proof. The v6
 record scope is deterministically App-bound: names ending in `-app` append
 `-rollback`, while an environment suffix after `-app-` is preserved after the
 inserted `-rollback-` segment (for example,
-`mip-app-pr105-staging` → `mip-app-rollback-pr105-staging`). It contains an
+`mip-app-staging` → `mip-app-rollback-staging`). It contains an
 App/deployer ownership marker, and is re-audited before every record read,
 write, or legacy-key deletion. Its direct ACL must be exactly the original
 deployer plus `admins` at `MANAGE`, and its only permitted non-marker keys are
@@ -2122,9 +2120,8 @@ avoidable compute.
 
 The one exception: the dev target's live install runs the weekly
 `mip_scheduled_refresh` (FRED → gold → lifecycle → KPI, Fridays 06:00
-America/Chicago). `MIP_SCHEDULED_REFRESH=off` pauses it. The CI staging install
-and `prod` always ship it paused, and `-t prod` and `-t pr105-host` refuse
-`MIP_SCHEDULED_REFRESH=on`. Its failure email goes to the deploying user on the
+America/Chicago). `MIP_SCHEDULED_REFRESH=off` pauses it. `prod` always ships it
+paused, and `-t prod` refuses `MIP_SCHEDULED_REFRESH=on`. Its failure email goes to the deploying user on the
 live install only. The schedule reaches the workspace only through the bundle
 apply of a GO governed `./scripts/deploy.sh -t dev` run, and that run was NO-GO
 on the dev workspace on 2026-10-27. See `docs/runbook.md`, "Weekly scheduled
@@ -2232,37 +2229,63 @@ The full operator guide, including what the tool never does, is
 credential sink (M2-PR2) lands, an apply that would create, adopt or mint
 refuses before its first mutation.
 
-## CI staging install (deploy-dev.yml) and the release-gate bootstrap
+## CI deploy (deploy-dev.yml): parked, and the release-gate bootstrap
 
-Decision D-platform-process-b step 7 (audit quality-03, report 12.4 #8),
-prepared in W5e `w5-deps-report` and completed by the post-W5
-forked-anchor lane. The release gate above needs one green
-`live validation (on demand)` run on `main`; its 120-day lookback from the
-last green run (2026-06-16) ended on 2026-10-14, so the gate reads
-`no_green_run` until this bootstrap completes.
+Decision D-platform-process-b step 7 (audit quality-03, report 12.4 #8). The
+release gate above needs one green `live validation (on demand)` run on
+`main`; its 120-day lookback from the last green run (2026-06-16) ended on
+2026-10-14, so the gate reads `no_green_run` until a CI install is green
+again.
 
-**Status: the forked-anchor `pr105-host` target is built; the bootstrap now
-waits on the owner steps below, then integrator steps 1-6.** The
-`pr105-host` render in integrator step 2 has never run: it needs a credential
-for that workspace, so the target itself is pinned by static tests only. In W5e the
-bootstrap was blocked in the anchor workspace: the reserved-identity contract
-(owner step 1) meant a CI staging install there would resolve the same seven
-reserved principals as any full `scripts/deploy.sh -t dev` of the live
-install, so the two installs could never hold separate identities there (the
-anchor workspace holds none of the seven today: a read-only listing found
-none on 2026-10-27). The guards below keep that fail-closed but can never let
-it reach green. Since post-W5, `deploy-dev.yml` deploys only to the
-`pr105-host` target, which has its own workspace host. That separates the
-workspace-scoped objects and the workspace the identities are resolved in; it
-does not separate Unity Catalog or the account (see "What the forked anchor
-separates, and what it shares" below).
+**Status: parked until a client environment is selected (M1-PR7).** The CI
+staging install this section bootstrapped lived in its own workspace, which
+was deleted on 2026-10-29. Both CI workflows now refuse up front: the first
+job of `deploy-dev.yml` and of `nightly.yml`, `parked`, fails every dispatch,
+and every other job needs it, so no job requests the environment approval or
+an ID token, or reaches a workspace. `scripts/deploy.sh` repeats the refusal
+for the `deploy-dev.yml` workflow ref under GitHub Actions, before any
+Databricks call and in a dry run too; an operator run and CI's own pytest are
+unchanged. M1-PR7 rebuilds `deploy-dev.yml` per client environment, and
+M1-PR8 rebuilds `nightly.yml` per client under a non-admin validator
+identity. The bundle's `dev` and `prod` targets stay until M1-PR2 replaces
+them.
+
+Retired with that workspace (M0-PR3):
+
+- its bundle target and that target's own workspace-host anchor;
+- the CI isolation rule table, its `scripts/deploy.sh` preflight block and
+  its `tools/databricks/bundle_env.py` hooks, with the bundle-root leaf and
+  display-name suffix variables it resolved (the dev root is
+  `~/.bundle/<bundle>/dev` again, and the three workspace-unique names are
+  literals, exactly as the defaults rendered);
+- the install-scope probes, which ran only behind a non-empty suffix;
+- `deploy-dev.yml`'s normal-credential repair step, its input and its
+  secrets-write token, and its foreign-catalog remediation input: the
+  workflow now passes `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=0` as a
+  literal, and the remediation has no CI command of record;
+- `nightly.yml`'s personal-access-token profile, its bundle validate and its
+  three refresh-job runs. They were removed rather than re-aimed: the
+  remaining `dev` target is the live install, whose deployed jobs CI must
+  never run (docs/runbook.md, "Interim refresh (governed deploy NO-GO)").
+
+**Owner follow-up: `.env.example`.** One line of the operator `.env.local`
+template still describes the retired CI staging install. Agents cannot read
+that template under this repository's permission settings, so the owner
+deletes the line and, in the same change, drops the template's
+`ALLOWED_FILES` entry from the retired-install ratchet and this paragraph.
+Until then the ratchet caps the template at that one line;
+`test_every_allowlist_entry_is_still_needed_and_tracked` fails once the line
+is gone and the entry is not.
+
+The metastore ownership transfer and the staging-catalog ownership handover
+that two former owner steps described were cancelled; neither is part of any
+step below, and no step revokes another team's grant.
 
 **The live install is outside this bootstrap, and its governed deploy is
-NO-GO.** `deploy-dev.yml` deploys and recovers only the CI staging install on
-`pr105-host`; nothing in this section deploys, recovers or restarts the live
-`mip-app` in the anchor workspace. Its command of record is an operator
-`./scripts/deploy.sh -t dev`, but a read-only readiness check on 2026-10-26
-found that it cannot deploy the live App by any supported path today:
+NO-GO.** Nothing in this section deploys, recovers or restarts the live
+`mip-app`. Its command of record is an operator `./scripts/deploy.sh -t dev`,
+but a read-only readiness check on 2026-10-26 found that it cannot deploy the
+live App by any supported path today:
 
 - The live workspace holds none of the seven reserved principals, and
   `scripts/deploy.sh` never creates one: it always passes
@@ -2278,68 +2301,17 @@ Deploying or recovering the live App is therefore an owner-only decision.
 Never start `./scripts/deploy.sh -t dev` against the live workspace during an
 incident; escalate to the owner (docs/runbook.md, section 1.2).
 
-**Why the CI install needs isolating.** `databricks.yml` anchors
-`workspace.host` to the live workspace, and the dev target's bundle root was
-`~/.bundle/<bundle>/dev`, the live `mip-app`'s own root. A `deploy-dev.yml`
-run would have uploaded into, and shared bundle state with, the live install
-(and `converge_static_app_source` deletes the root npm manifests there), and
-with the dev environment's variables unset its fallbacks name the live
-Lakebase instance `mip-app-state`, sync catalog `mip_app_state` and secret
-scope `mip-runtime`. Root, name and variable isolation cannot separate the
-identities, because the seven reserved display names are workspace-wide; only
-another workspace can, and only while each workspace keeps its own reserved
-principals (the owner invariant in owner step 1).
-
-**The forked-anchor target (built, post-W5).**
-
-- `databricks.yml` target `pr105-host`: development mode, `run_as` the
-  deploying service principal (`service_principal_name:
-  ${workspace.current_user.userName}`, the CI deployer below; only
-  `deploy-dev.yml` deploys this target), root
-  `~/.bundle/<bundle>/${var.bundle_root_leaf}`, no Genie
-  pin (the governed space is resolved by `MIP_GENIE_SPACE_NAME` at deploy
-  time), and its own YAML anchor `&ci_staging_host` =
-  `https://dbc-149e560d-e056.cloud.databricks.com`, the retired staging
-  workspace the CI install used before the 2026-08-08 rebind. `dev`, `prod`
-  and `ci` keep `*default_host`, so `scripts/configure-workspace.sh` and
-  `make check-workspace-host` stay single-anchor for customer forks.
-- Identities are resolved in the host's workspace. `scripts/deploy.sh`'s
-  workspace-auth bind refuses any authenticated host other than the target's
-  `workspace.host` before any mutation, and the deploy reconciles the seven
-  reserved roles by display name in that authenticated workspace, refusing a
-  duplicate reserved name or a principal whose application id differs from
-  the configured client id. That is not a structural separation: service
-  principals are account-level, so one principal can be assigned to both
-  workspaces. The two installs could share an identity only if an owner
-  assigned one workspace's reserved principal to the other AND configured the
-  other install with its client id; the owner invariant in owner step 1
-  forbids both, and no code checks the account-level assignments.
-- `scripts/deploy.sh` accepts `-t pr105-host` as a dev-class target
-  (`TARGET_CLASS=dev`: sandbox `APP_ENV`, Summit demo feeds, the resolved root
-  leaf). `deploy-dev.yml` runs `scripts/deploy.sh -t pr105-host --no-confirm`;
-  `nightly.yml`'s bundle validate and three bundle runs use `-t pr105-host`.
-- Why this and not install-scoped reserved names: those would rework the
-  identity contract in `m2m_identity_contract.py`, `provision_m2m_oauth.py`
-  and the runtime display-name pin the global audits read, and the CI install
-  would still share the live workspace and its `users` group, so the
-  workspace-scoped audits below would still fail it on the live workspace's
-  Genie `users` grants. Both designs
-  share the Unity Catalog metastore, so neither changes the metastore-wide UC
-  audit's blockers (owner step 8). The forked anchor changes one bundle target
-  and the rule table, separates every workspace-scoped object, and keeps every
-  guard.
-- The dev target's Genie pin is `01f13d4968af1b249dc388fd5b18b195`, the live
-  "Mortgage Lead Intelligence" space. It was `01f18188d7a41311abe3d99932b5aa9a`
-  from 441588f6, which moved the host anchor to the staging workspace and
-  swapped the pin in the same diff, until this lane; ace044d6 had rebound the
-  anchor but not the pin, so the isolation guard compared CI's
-  `GENIE_SPACE_ID` against a space that does not exist on the live host.
-
 **The CI deployer: GitHub OIDC, no stored credential.** `deploy-dev.yml`
 deploys as a dedicated account service principal, never a person and never
 one of the seven reserved identities. It has no OAuth secret and no personal
 access token: it authenticates only through GitHub Actions OIDC workload
-identity federation (owner step 3).
+identity federation. Its federation policy trusts issuer
+`https://token.actions.githubusercontent.com` and subject
+`repo:<owner>/<repo>:environment:dev`, the default GitHub OIDC subject of a
+job bound to this repository's `dev` environment, whose required reviewer and
+branch policy gate every run; never widen it to a branch, a ref or
+`repo:<owner>/<repo>:*`. The owner creates and federates that service
+principal outside this repository until M2-PR1's client bootstrap does it.
 
 - The `deploy` job alone holds `id-token: write` (the workflow default stays
   `contents: read`). The Configure step writes the `DEFAULT` profile as
@@ -2348,195 +2320,70 @@ identity federation (owner step 3).
   equal to any app-facing client id or to the account-SCIM client. The SDK
   and the CLI exchange the job's GitHub ID token for a short-lived Databricks
   token as that service principal; nothing is stored.
-- "Prove the GitHub OIDC deployer identity" runs next, read-only, before the
-  credential repair and before `scripts/deploy.sh`. Its profile and host
-  checks run first and stop the run before any network call. The profile must
-  hold only those three keys, with no ambient `DATABRICKS_HOST`, `_TOKEN`,
-  `_AUTH_TYPE`, `_CLIENT_ID`, `_CLIENT_SECRET` or `_CONFIG_FILE` override,
-  and its host must equal both `DATABRICKS_HOST` and the `pr105-host`
-  target's `workspace.host`. The step then proves, through the Python SDK and
+- "Prove the GitHub OIDC deployer identity" runs next, read-only, before
+  `scripts/deploy.sh`. Its profile and host checks run first and stop the run
+  before any network call. The profile must hold only those three keys, with
+  no ambient `DATABRICKS_HOST`, `_TOKEN`, `_AUTH_TYPE`, `_CLIENT_ID`,
+  `_CLIENT_SECRET` or `_CONFIG_FILE` override, and its host must equal both
+  `DATABRICKS_HOST` and the bundle target's `workspace.host` (the `dev`
+  target's until M1-PR7). The step then proves, through the Python SDK and
   the Go CLI, that the profile authenticates as `MIP_CI_DEPLOYER_CLIENT_ID`,
   that this principal is in `admins` and owns the current metastore, and that
-  `DATABRICKS_WAREHOUSE_ID` and `GENIE_SPACE_ID` resolve. It prints booleans
-  only (a failed call adds its exception class or the CLI's exit code, never
-  a message or a value) and exits 2 on any mismatch.
+  `DATABRICKS_WAREHOUSE_ID` and `GENIE_SPACE_ID` resolve. The metastore-owner
+  check presumed the cancelled metastore transfer; M1-PR7 replaces it. The
+  step prints booleans only (a failed call adds its exception class or the
+  CLI's exit code, never a message or a value) and exits 2 on any mismatch.
 - Under `github-oidc` an environment `DATABRICKS_CLIENT_ID` overrides the
   profile's `client_id`, so no deployer step lets one reach a Databricks
-  client. The repair step carries the normal identity's id as
-  `MIP_NORMAL_CLIENT_ID`. The deploy step carries the App's client pairs,
-  which `scripts/deploy.sh` un-exports before its first child process.
+  client. The deploy step carries the App's client pairs, which
+  `scripts/deploy.sh` un-exports before its first child process.
 - The deploy step sets `MIP_TEMP_CREDENTIAL_PLANE=workspace`. The deploy's
   300-second identity-probe secrets are then minted, listed and deleted
-  through the deployer's workspace `service_principal_secrets_proxy` (owner
-  step 9). Unset, the plane stays `account`, so operator runs are unchanged.
+  through the deployer's workspace `service_principal_secrets_proxy`. The
+  2026-08-04 `invalid_client` for `mip-agent-runtime-ci-sp` came from an
+  account-plane M2M `service_principal_secrets.create()` that reported
+  success from the runner, but the secret never appeared in the inventory;
+  the workspace plane is the one durable rotations from a runner have
+  persisted on. This is expected, not yet proven. Unset, the plane stays
+  `account`, so operator runs are unchanged.
 - At run time the deployer's SCIM `userName` is its application id. That id
   is the bundle's current user and `run_as`, the deployment-lease holder,
   the release folder's principal and the reviewed functions' owner. The
   account-SCIM authority is unchanged: it is still its own
   `DATABRICKS_ACCOUNT_CLIENT_ID`/`_SECRET` pair.
 
-**What the forked anchor separates, and what it shares.** Read-only reads
-from the live workspace on 2026-10-27 (agents never call `pr105-host`):
+**Workspace-global steps.** Bundle roots, names and variables do not isolate
+identities. These steps act on a whole workspace or the whole metastore, so a
+second install that shared one of these identities with the live install
+would cut the live App off, or fail closed:
 
-- Shared: the live workspace's Unity Catalog metastore and the Databricks
-  account. The
-  live workspace (id `2543889327043640`) is on it, and so are the pr105-era CI
-  catalog `mip_pr105_staging` and another team's catalog whose step-4
-  blocker grant was revoked on 2026-08-03 through a pr105 credential. The live `mip` and
-  `mip_app_state` and the share catalog `cotality_mortgage_data` are `OPEN`,
-  so the `pr105-host` workspace sees them. Catalogs, schemas, tables, grants,
-  isolation modes, workspace bindings, `account users` and service principals
-  are therefore shared. The owner confirms the metastore with `databricks
-  metastores current` on a `pr105-host` credential (owner step 8).
-- Separated: every workspace-scoped object, i.e. the App, SQL warehouses,
-  serving endpoints, Genie spaces, secret scopes, Lakebase instances, jobs,
-  pipelines, MLflow experiments, bundle state, the workspace `users` group and
-  service-principal workspace assignments, plus every catalog `ISOLATED` away
-  from the `pr105-host` workspace. Of the metastore's 46 catalogs, 34 are
-  `OPEN` and 12 are `ISOLATED`, and none of the 12 is bound to workspace
-  `7474645995341779`, the `pr105-host` id on record.
-- Consequence: the rule table's catalog-scoped names are the CI install's
-  primary Unity Catalog isolation, never defence in depth, and must never be
-  relaxed: `MIP_DEFAULT_CATALOG` and `MIP_LAKEBASE_SYNC_CATALOG` (neither may
-  name `mip` or `mip_app_state` in any UC spelling), and the AI Gateway table
-  prefix and model family, which live in `MIP_DEFAULT_CATALOG`. The same holds
-  for the metastore-wide UC audit (`audit_agent_runtime_foreign_uc_access`)
-  and for owner step 8: its grant and binding changes are metastore-wide.
+| Step | Scope | What a shared identity does |
+|---|---|---|
+| `warehouse_acl.converge_exact_can_use` (verifier `CAN_USE`) | removes the identity's direct access on every other warehouse | a verifier shared with the live install loses the live warehouse grant |
+| `agent_proxy_access` converge (Supervisor and Genie ACLs, then obsolete-endpoint revokes) | deactivates the proxy's membership on every non-reviewed Supervisor agent, converges its ACL on every Genie space, revokes it on every endpoint outside the reviewed set | a proxy shared with the live install loses the live Supervisor and endpoint access |
+| `agent_proxy_access --mode deny-all` (the failure compensation) | revokes the proxy on every endpoint, Supervisor and Genie space | revokes a shared proxy everywhere, the live install included |
+| `m2m_access_policy.revoke_can_query_on_obsolete_endpoint` (verifier) | endpoints outside the reviewed set | endpoints carry no install-scoped name, so a shared verifier loses the live Gateway |
+| `reconcile_historical_agent_endpoints cleanup` (step 10b, "attest and retire every unrelated historical runtime endpoint") | every serving endpoint and Supervisor agent the agent-runtime identity created | deletes each one outside the preserved pins, with its query groups, but only after attesting the whole inventory. An endpoint whose signed Gateway contract names another catalog or Genie space fails that attestation (`signed identity or scope drifted`), so a runtime shared with the live install fails closed here before any delete |
+| `audit_global_m2m_access --genie-space-id` (`agent_runtime_access.audit_global_genie_access`, the runtime's re-audits) | every Genie space in the workspace, read-only | fails closed unless the agent runtime holds `CAN_RUN` on exactly this install's space and nothing else; a runtime shared with the live install holds the live space |
+| `assert_lakebase_role_scope`, `assert_no_warehouse_access`, the other global M2M audits | the whole workspace, read-only | fail closed if a shared identity holds access elsewhere |
+| `audit_agent_runtime_foreign_uc_access` (step 4 before the Lakebase bootstrap, step 10b before runtime-owned UC mutations, and after any foreign-catalog remediation) | every catalog in the metastore except this install's, read-only | fails closed on any agent-runtime privilege there (a runtime shared with the live install holds the live catalog's grants) and on any foreign catalog granting to `account users` (owner step 7) |
 
-**Isolation rules (built).**
+So each install needs its own seven identities (owner step 1), and a second
+install in the live install's metastore still meets the metastore-wide UC
+audit: every `OPEN` catalog, the live install's included, must grant the
+runtime nothing, and every catalog `ISOLATED` away from the install's
+workspace must match `MIP_UC_FOREIGN_CATALOG_BINDING_POLICY` exactly (owner
+step 7).
 
-- `databricks.yml`: variables `bundle_root_leaf` (default `dev`) and
-  `install_suffix` (default empty). The dev-class targets' root is
-  `~/.bundle/${bundle.name}/${var.bundle_root_leaf}`, and the three
-  workspace-unique display names (the SQL warehouse, the feature pipeline,
-  the MLflow experiment) end in `${var.install_suffix}`. With the defaults
-  the live install renders exactly as before; the prod and ci targets are
-  unchanged. The experiment is `/Shared/mip-lead-scoring${var.install_suffix}`.
-  The CLI rewrites every experiment name as `dir + "/" + name_prefix + base`
-  in every target, so a workspace-root name rendered as `//…`. One level under
-  `/Shared` renders `/Shared/[dev <user>] mip-lead-scoring` for dev and
-  `/Shared/mip-lead-scoring` for prod and ci
-  (`tests/unit/test_bundle_experiment_path.py`). On paychex the bundle state
-  holds the experiment at `/Shared/mip/[dev <user>] lead-scoring`,
-  so the first governed bundle apply is expected to rename it to the new name.
-  That apply has not been run or planned. A read-only `experiments
-  get-by-name` on 2026-10-27 found nothing at the new dev name, so the rename
-  has no collision to fail on. For rollback, record the rename as a change
-  the listed rollback steps do not undo. It keeps the experiment id, runs and
-  models, and no repo code reads the experiment by name. Reversing it is an
-  owner-run rename by id (`databricks experiments update-experiment
-  <experiment id> --new-name '/Shared/mip/[dev <user>] lead-scoring'`), and
-  the next bundle apply from this tree renames it again. At the new path the
-  experiment inherits the ACL of `/Shared` itself rather than of
-  `/Shared/mip`; whether that ACL is acceptable is an owner decision.
-- `deploy-dev.yml` sets `MIP_BUNDLE_ROOT_LEAF: dev-ci` as a literal in the
-  deploy step, so the CI install lives under `~/.bundle/<bundle>/dev-ci` and
-  its names end in `_ci`, as defence in depth inside its own workspace.
-  `nightly.yml` sets `BUNDLE_VAR_bundle_root_leaf: dev-ci` and
-  `BUNDLE_VAR_install_suffix: _ci`, so its `bundle validate/run -t pr105-host`
-  read that install's state.
-- `scripts/deploy.sh` preflight (before the prompt and any mutation, also in
-  `--dry-run`) runs `tools/databricks/ci_install_isolation.py`. It refuses,
-  with exit 2 and the variable name only: `deploy-dev.yml` on any target but
-  `pr105-host`, or without a non-default leaf; `pr105-host` outside
-  `deploy-dev.yml`; a non-default leaf outside GitHub Actions or on any target
-  but `pr105-host`; a `pr105-host` whose resolved hostname is empty,
-  unparseable or the dev target's (a scheme, port, path, query or trailing
-  dot never makes a second workspace; an alias DNS name for the live
-  workspace is beyond a static check, and owner step 8's `metastores current`
-  workspace id is that proof); a malformed leaf; and, with a non-default leaf, any of
-  `MIP_APP_NAME`, `MIP_DEFAULT_CATALOG`, `MIP_LAKEBASE_INSTANCE`,
-  `MIP_LAKEBASE_SYNC_CATALOG`, `MIP_RUNTIME_SECRET_SCOPE`,
-  `MIP_APP_ROLLBACK_SECRET_SCOPE`, `MIP_GENIE_SPACE_NAME`,
-  `MIP_AI_GATEWAY_TABLE_PREFIX` or `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE`
-  that is unset or equal to its live default, a `MIP_DEFAULT_CATALOG` or
-  `MIP_LAKEBASE_SYNC_CATALOG` that names either live catalog (`mip`,
-  `mip_app_state`) in any spelling Unity Catalog resolves to it (case,
-  backticks; the crossed pair included, because the metastore is shared), a
-  `GENIE_SPACE_ID` equal to the dev target's pinned live space, a set
-  `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY` outside `MIP_DEFAULT_CATALOG` (unset,
-  the deploy derives it from that catalog), or a
-  `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS` other than unset or `0` (the
-  workflow's `remediate_foreign_catalog_bindings` input: the remediation
-  rewrites bindings metastore-wide). An operator run (no leaf, not
-  `pr105-host`) is unchanged.
-  The CI rule is keyed on the `deploy-dev.yml` workflow ref, a present leaf
-  or the `pr105-host` target, never on `GITHUB_ACTIONS` alone, so CI's own
-  pytest is unaffected.
-- `tools/databricks/bundle_env.py` runs the same rule table before its
-  mutating subcommands (`deploy` and the App `deployment bind/unbind`): once
-  before any workspace call and again on the governed Genie id it would bind.
-  So through `bundle_env` the `pr105-host` target is deployable and bindable
-  only from `deploy-dev.yml`, and `deploy-dev.yml` can deploy or bind no other
-  target. `validate`, `plan` and `summary` are unchanged. It does not gate
-  `databricks bundle run` (`nightly.yml` runs `pr105-host` jobs directly) or
-  a raw CLI bundle deployment, which the deploy contract retires.
-- `deploy-dev.yml`'s `repair_normal_credential` step rotates the normal
-  identity's OAuth secret into GitHub before, and outside,
-  `scripts/deploy.sh` and its preflight. It first runs
-  `python -m tools.databricks.ci_install_isolation repair-credential`, which
-  refuses (exit 2, before any workspace call) outside `deploy-dev.yml`, a
-  `DATABRICKS_HOST` whose hostname is not the `pr105-host` target's, and a
-  `MIP_APP_NAME` that is unset or the live `mip-app`; the step's
-  `MIP_APP_NAME` has no `mip-app` fallback.
-- `converge_static_app_source --expected-root-leaf` checks the App source
-  path against the resolved leaf (default: the target, i.e. as before).
-- **Workspace-global steps** (the root and names do not isolate identities).
-  The workspace-scoped rows are defence in depth now that the CI install runs
-  in its own workspace. The `audit_agent_runtime_foreign_uc_access` row is
-  metastore-wide, and the metastore is shared, so it stays primary
-  protection:
-
-  | Step | Scope | With a non-empty install suffix |
-  |---|---|---|
-  | `install_scope check-proxy` and `check-warehouse` (`tools/databricks/install_scope.py`, read-only probes in step 10b) | the proxy's serving-endpoint ACLs; the verifier's warehouse ACLs | run before `AGENT_PROXY_ACCESS_MUTATED` or `VERIFIER_GATEWAY_CUTOVER_MUTATED` is armed and refuse (exit 2) when the identity holds access this install does not own. The deploy then exits through its EXIT trap with no workspace-global compensation armed: the trap stops and cleans up only this install's App and temporary grants, then releases the lease |
-  | `warehouse_acl.converge_exact_can_use` (verifier `CAN_USE`) | removes the identity's direct access on every other warehouse | backstop: repeats the warehouse check before the command's first mutation. A refusal this late exits after both compensations are armed: the proxy's deny-all is guarded (below), and the verifier's compensation revokes only this run's green Gateway and otherwise audits read-only |
-  | `agent_proxy_access` converge (Supervisor and Genie ACLs, then obsolete-endpoint revokes) | deactivates the proxy's membership on every non-reviewed Supervisor agent, converges its ACL on every Genie space, revokes it on every endpoint outside the reviewed set | backstop: repeats the endpoint check before its first convergence. The check reads serving endpoints only, so it covers the Supervisor and Genie steps indirectly: a proxy shared with the live install holds the live Supervisor endpoint |
-  | `agent_proxy_access --mode deny-all` (the failure compensation) | revokes the proxy on every endpoint, Supervisor and Genie space | refuses (exit 2, before any revoke) unless the proxy holds no endpoint access outside this install's own Supervisor endpoints (`--install-owned-endpoint`, passed by `deny_all_agent_proxy_access`); the compensation then fails loudly (exit 90, lease retained) |
-  | `m2m_access_policy.revoke_can_query_on_obsolete_endpoint` (verifier) | endpoints outside the reviewed set | backstop: before the Gateway convergence's first grant, and again before each revoke, repeats the `check-warehouse` proof (`install_scope.assert_verifier_revokes_owned`) with the call's `--warehouse-id`, and refuses (exit 2, counts only) without one. Endpoints carry no install-scoped name and a shared runtime creates both installs' endpoints, so the verifier's warehouse ACL is the witness: a verifier shared with the live install holds the live, unsuffixed warehouse grant. The forked-anchor `pr105-host` target gives the CI install its own verifier in the first place, while the owner invariant in owner step 1 holds |
-  | `reconcile_historical_agent_endpoints cleanup` (step 10b, "attest and retire every unrelated historical runtime endpoint") | every serving endpoint and Supervisor agent the agent-runtime identity created | deletes each one outside the preserved pins, with its query groups, but only after attesting the whole inventory. An endpoint whose signed Gateway contract names another catalog or Genie space fails that attestation (`signed identity or scope drifted`), so a runtime shared with the live install fails closed here before any delete. Not suffix-guarded: the scope is keyed on the identity |
-  | `audit_global_m2m_access --genie-space-id` (`agent_runtime_access.audit_global_genie_access`, the runtime's re-audits) | every Genie space in the workspace, read-only | fails closed unless the agent runtime holds `CAN_RUN` on exactly this install's space and nothing else; a runtime shared with the live install holds the live space |
-  | `assert_lakebase_role_scope`, `assert_no_warehouse_access`, the other global M2M audits | the whole workspace, read-only | fail closed if a shared identity holds access elsewhere |
-  | `audit_agent_runtime_foreign_uc_access` (step 4 before the Lakebase bootstrap, step 10b before runtime-owned UC mutations, and after any foreign-catalog remediation) | every catalog in the metastore except this install's, read-only | fails closed on any agent-runtime privilege there (a runtime shared with the live install holds the live catalog's grants) and on any foreign catalog granting to `account users` (owner step 8) |
-
-  With the shared identities of the anchor workspace these guards fail a CI
-  deploy closed at the step-4 agent-runtime foreign-UC audit, at the
-  historical Gateway attestation and at the `install_scope` probes; they
-  cannot make it pass. That is why the CI install now runs in its own
-  workspace, and why the rule table refuses `deploy-dev.yml` on any other
-  target: no dispatch can target the anchor workspace. In the `pr105-host`
-  workspace the workspace-scoped audits read that workspace's own Genie
-  spaces, endpoints and warehouses. The UC audit reads the shared metastore:
-  every `OPEN` catalog, the live install's included, must grant the runtime
-  nothing, and every catalog `ISOLATED` away from that workspace must match
-  `MIP_UC_FOREIGN_CATALOG_BINDING_POLICY` exactly (owner step 8).
-- `nightly.yml` declares no `environment:`, so it reads REPOSITORY-level
-  variables and secrets while `deploy-dev.yml` reads the `dev` environment's.
-  Its `bundle validate/run -t pr105-host` address the dev-ci root through its
-  `BUNDLE_VAR_*` pins, but its `databricks apps get` `--git-sha` verify,
-  `BUNDLE_VAR_uc_catalog` and parity tests use the repository-level names, so
-  those must name the same CI staging install (owner step 6). Its DEFAULT
-  profile is written from the repository-level `DATABRICKS_HOST`, which must
-  be the `pr105-host` host: the CLI refuses a profile whose host differs from
-  the target's. Otherwise the verify step fails fast against a different App.
-  Its first job, `ci-install-isolation`, runs the rule table's UC-catalog row
-  (`python -m tools.databricks.ci_install_isolation uc-catalogs`) on the
-  workflow-level `MIP_DEFAULT_CATALOG` and `MIP_LAKEBASE_SYNC_CATALOG`, and
-  every other job needs it. Those names fall back to the live `mip` and
-  `mip_app_state` when the repository variables are unset, so an unset or
-  live catalog name (in any UC spelling) refuses the run before any job reads
-  or writes a catalog through the shared metastore.
-
-**The App release folder on the CI install.** With `MIP_BUNDLE_ROOT_LEAF=dev-ci`
-the release lives at
-`/Workspace/Users/<deployer-application-id>/.bundle/mortgage-intelligence-platform/dev-ci/app-src/<release id>`
-("Governed per-release App source"). `deploy-dev.yml` needs no change: it
-already sets up Node 22, which the build and the `.br` check use, and installs
-`requirements.txt`, which brings the SDK; a shallow checkout is enough for
-`git archive`. Publish, converge and prune each validate the principal, the
-target and the `dev-ci` leaf. The stage root goes away with the runner, and
-the first run is a first install, so prune has nothing to delete. First-run
-checklist for the owner-triggered run:
+**The App release folder on a CI install.** The release lives at
+`/Workspace/Users/<deployer-application-id>/.bundle/mortgage-intelligence-platform/<target>/app-src/<release id>`
+("Governed per-release App source"). `deploy-dev.yml` needs no change for it:
+it already sets up Node 22, which the build and the `.br` check use, and
+installs `requirements.txt`, which brings the SDK; a shallow checkout is
+enough for `git archive`. Publish, converge and prune each validate the
+principal, the target and the root leaf. The stage root goes away with the
+runner, and the first run is a first install, so prune has nothing to delete.
+First-run checklist for the owner-triggered run:
 
 - the publish line counts at most 1,300 files, with the upload and verify
   wall time at the default 4 workers and the number of `[app-release]` rate
@@ -2547,7 +2394,7 @@ checklist for the owner-triggered run:
   expected to print `Requirements have not changed. Skipping installation.`
   ("App Python dependencies"), and the boot `dependency_lock_check` is ok
   after each;
-- `active_deployment.source_code_path` ends in `/dev-ci/app-src/<release id>`
+- `active_deployment.source_code_path` ends in `/<target>/app-src/<release id>`
   and `deployment_artifacts.source_code_path` is a `/src/` snapshot;
 - `verify-deployment` matches the run's manifest. The runner's stage root is
   gone after the run, so re-stage the same commit from a fresh build with the
@@ -2564,16 +2411,12 @@ checklist for the owner-triggered run:
   and after activation;
 - a second run of the same commit uploads nothing.
 
-**Owner steps (never agent work).** These are the exact remaining steps. Each
-is a credential, identity, GitHub-settings or audited-consent action against
-the `pr105-host` workspace
-(`https://dbc-149e560d-e056.cloud.databricks.com`), the Databricks account or
-this repository. None mutates a live-workspace object, but the Unity Catalog
-changes in step 8 are metastore-wide, so they also change what the live
-workspace and every other team on that metastore see, and so are step 3's
-metastore grants and ownership transfer. Agents never call the
-`pr105-host` workspace, so nothing below is pre-verified there. Read-only
-checks of the current GitHub state (names and timestamps only):
+**Owner steps (never agent work).** They apply to the CI install M1-PR7
+brings back. Each is a credential, identity, GitHub-settings or
+audited-consent action against that install's workspace, the Databricks
+account or this repository. The Unity Catalog checks in step 7 read
+metastore-wide state that other teams share. Read-only checks of the current
+GitHub state (names and timestamps only):
 
 ```bash
 R=skyler-myers-db/mortgage-intelligence-platform
@@ -2611,26 +2454,22 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    principals use reserved display name`) and fail closed through its EXIT
    trap.
 
-   Resolution (built): the forked-anchor (`pr105-host`) target, chosen over
-   a change that makes the reserved names install-scoped (see "The
-   forked-anchor target" above). The CI install's identities are the seven
-   reserved principals of the `pr105-host` workspace. Owner action: in that
-   workspace, make each of the seven reserved principals exist exactly once
-   and its GitHub client id/secret pair current. The repository and `dev`
-   environment secrets date from 2026-07-15..26, the staging-workspace era, so
-   they are expected to be that workspace's principals; confirm each
-   `*_CLIENT_ID` resolves there under its reserved name. Create only a
-   missing role, with the `--pre-app-bootstrap` commands in "Per-run M2M
-   identities" authenticated to that workspace (creation-only: it refuses an
-   existing reserved principal), and the account-SCIM client
+   Resolution: one workspace per install, each with its own seven reserved
+   principals. The CI target that implemented it was retired with its
+   workspace; M1-PR7's client environments carry the same rule. Owner action,
+   in the CI install's workspace: make each of the seven reserved principals
+   exist exactly once and its GitHub client id/secret pair current. Create
+   only a missing role, with the `--pre-app-bootstrap` commands in "Per-run
+   M2M identities" authenticated to that workspace (creation-only: it refuses
+   an existing reserved principal), and the account-SCIM client
    (`DATABRICKS_ACCOUNT_*`) if absent.
 
    **Owner invariant: each workspace keeps its own reserved principals.**
-   Service principals are account-level objects, so the forked anchor
-   separates identities only while this holds; no code checks it. Never
-   assign the `pr105-host` workspace's seven reserved principals to the live
-   workspace (`2543889327043640`), and never configure the live install
-   (`.env.local`, an operator shell) with their client ids.
+   Service principals are account-level objects, so separate workspaces
+   separate identities only while this holds; no code checks it. Never assign
+   one install's seven reserved principals to another install's workspace,
+   and never configure an install (`.env.local`, an operator shell) with
+   another install's client ids.
 
    The live install has no seven of its own: on 2026-10-27 the live workspace
    held none of the seven names, only the App's own `app-<id> mip-app`
@@ -2655,7 +2494,7 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    names are fixed per role (`IDENTITY_DEFAULTS`), and in this repository they
    belong to the CI install: `nightly.yml` reads them, and `deploy-dev.yml`
    reads them wherever its `dev` environment does not shadow them (owner step
-   4). A live identity bootstrap therefore needs its own reviewed sink: another
+   3). A live identity bootstrap therefore needs its own reviewed sink: another
    repository named by `MIP_M2M_GITHUB_REPOSITORY`, plus a reviewed way to
    hand the values to the operator, who cannot read GitHub secrets back. It
    stays out of scope until that design is reviewed. Never run the bootstrap
@@ -2664,75 +2503,24 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
 
    Check the invariant read-only before each dispatch. Run
    `databricks service-principals list --filter 'displayName sw "mip-"'` once
-   with a live-workspace credential and once with a `pr105-host` credential.
-   No `applicationId` in the live listing may equal the `applicationId` of any
-   of the seven reserved principals in the `pr105-host` listing. Compare the
-   two listings, never a stored `*_CLIENT_ID`: GitHub secrets cannot be read
-   back.
-2. Set the dev environment variables to staging names: `MIP_APP_NAME`,
-   `MIP_DEFAULT_CATALOG`, `MIP_LAKEBASE_INSTANCE`,
-   `MIP_LAKEBASE_SYNC_CATALOG`, `MIP_RUNTIME_SECRET_SCOPE`,
-   `MIP_APP_ROLLBACK_SECRET_SCOPE` (derived from the App name, as the
-   preflight requires), `MIP_GENIE_SPACE_NAME`, `MIP_AI_GATEWAY_TABLE_PREFIX`
-   and `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE`; leave
-   `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY` unset or name a family in the staging
-   catalog. `MIP_AGENT_PROXY_SECRET_SCOPE` may stay unset: the preflight
-   derives it as `<MIP_APP_NAME>-agent-proxy` and refuses any other value.
-   The two catalog names must name neither live catalog (`mip`,
-   `mip_app_state`): the metastore is shared, and the rule table refuses them
-   otherwise. The 2026-10-26 readiness check found the staging App, catalog,
-   Lakebase, runtime-scope and Genie names already set; confirm the
-   rollback scope and the two AI Gateway names, which the rule table refuses
-   when unset.
-3. **The CI deployer service principal and its authority.** This replaces
-   the retired deployer PAT; `deploy-dev.yml` reads no `DATABRICKS_TOKEN`.
-   - Create a dedicated account service principal for the deployer. Record
-     its account id as `<deployer-sp-id>` and its application id as
-     `<deployer-application-id>`. Never create an OAuth secret or a token
-     for it, and never reuse a reserved identity, the account-SCIM client or
-     another team's automation principal.
-   - Assign it to the `pr105-host` workspace (`7474645995341779`) with the
-     `ADMIN` permission, so `admins` is in its `/Me` groups, as the global
-     inventory audits require. Assign it to no other workspace, and never to
-     the live workspace (`2543889327043640`).
-   - Create its federation policy (`databricks account
-     service-principal-federation-policy create <deployer-sp-id>`). Issuer:
-     `https://token.actions.githubusercontent.com`. Subject:
-     `repo:<owner>/<repo>:environment:dev`, the default GitHub OIDC subject
-     of a job bound to this repository's `dev` environment, whose required
-     reviewer and branch policy still gate every run. Never widen it to a
-     branch, a ref or `repo:<owner>/<repo>:*`. Both audiences are required:
-     the workspace token endpoint
-     `https://dbc-149e560d-e056.cloud.databricks.com/oidc/v1/token` (the
-     SDK's default) and the account id `<account-id>` (for a CLI that
-     requests the account audience).
-   - Set the `dev` environment variable `MIP_CI_DEPLOYER_CLIENT_ID` to
-     `<deployer-application-id>`. It is public: a variable, never a secret.
-   - Point the environment's `DATABRICKS_HOST` (set 2026-07-17,
-     staging-workspace era) at the `pr105-host` workspace: the host
-     must equal `https://dbc-149e560d-e056.cloud.databricks.com`, or the
-     proof step and `scripts/deploy.sh` refuse the run at their host checks,
-     before any mutation. Then delete the dead `dev` environment secret
-     `DATABRICKS_TOKEN`. Keep the repository-level one until `nightly.yml`
-     moves to GitHub OIDC (step 6).
-   - Unity Catalog (metastore-wide): run these as the current metastore
-     owner, in this order. Grant `CREATE_CATALOG` on the metastore (the bundle creates
-     the Lakebase database catalog). Grant `USE_CATALOG`, `USE_SCHEMA` and
-     `SELECT` on the share catalog `cotality_mortgage_data`, which the silver
-     pipeline and the gold SQL read as the deployer (`run_as`). Optionally,
-     with consent, grant `USE_SCHEMA` on `system.access` and `SELECT` on
-     `system.access.audit`, read only by first-install and Supervisor audit
-     recovery; these expose account-wide audit logs, and without them an
-     interrupted first install needs owner-run recovery. Last, transfer the
-     metastore's ownership to `<deployer-application-id>` (`databricks
-     metastores update <metastore id> --owner <deployer-application-id>`).
-     The UC control-plane audit requires its caller to own the current
-     metastore directly, and a group owner would weaken that fail-closed
-     check. This is an owner decision on a shared object: afterwards only the
-     deployer passes the deploy's step-4 and step-10b UC audits on this
-     metastore, and the previous owner loses metastore-admin powers. An
-     account admin can reverse it.
-4. Remove or re-set the environment-level `DATABRICKS_CLIENT_ID`
+   per workspace credential. No `applicationId` in one install's listing may
+   equal the `applicationId` of any of the seven reserved principals in the
+   other's. Compare the listings, never a stored `*_CLIENT_ID`: GitHub
+   secrets cannot be read back.
+2. Set the CI environment's install names to that install's own values,
+   never the live install's: `MIP_APP_NAME`, `MIP_DEFAULT_CATALOG`,
+   `MIP_LAKEBASE_INSTANCE`, `MIP_LAKEBASE_SYNC_CATALOG`,
+   `MIP_RUNTIME_SECRET_SCOPE`, `MIP_APP_ROLLBACK_SECRET_SCOPE` (derived from
+   the App name, as the preflight requires), `MIP_GENIE_SPACE_NAME`,
+   `MIP_AI_GATEWAY_TABLE_PREFIX` and `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE`;
+   leave `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY` unset or name a family in that
+   install's catalog. `MIP_AGENT_PROXY_SECRET_SCOPE` may stay unset: the
+   preflight derives it as `<MIP_APP_NAME>-agent-proxy` and refuses any other
+   value. An install in the live install's metastore shares it, so neither
+   catalog name may name a live catalog (`mip`, `mip_app_state`). Nothing
+   enforces that since the CI rule table was retired; M1-PR7's client
+   environment carries the names.
+3. Remove or re-set the environment-level `DATABRICKS_CLIENT_ID`
    (2026-07-20), which shadows the rotated repository-level pair
    (2026-07-26), and check that every environment-level `*_CLIENT_ID` pairs
    with its own secret. Re-mint the account-SCIM credential yourself. Create
@@ -2742,36 +2530,30 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    retire its older secrets unless something local still uses them. The
    deployer never takes this role: the account plane stays on
    `DATABRICKS_ACCOUNT_*`.
-5. Set staging `GENIE_SPACE_ID` and `DATABRICKS_WAREHOUSE_ID` secrets for
-   the `pr105-host` workspace, never the live ones. `GENIE_SPACE_ID` must
-   differ from the dev target's pin `01f13d4968af1b249dc388fd5b18b195`; the
-   rule table refuses it otherwise. The proof step refuses either one unless
-   it resolves for the deployer.
-6. Point the REPOSITORY-level names `nightly.yml` reads (it has no
-   `environment:`) at the same CI staging install as the dev environment:
-   the variables `MIP_APP_NAME`, `MIP_DEFAULT_CATALOG`,
-   `MIP_LAKEBASE_INSTANCE`, `MIP_LAKEBASE_SYNC_CATALOG`,
-   `MIP_RUNTIME_SECRET_SCOPE`, `MIP_APP_ROLLBACK_SECRET_SCOPE`,
-   `MIP_AGENT_PROXY_SECRET_SCOPE`, `MIP_GENIE_SPACE_NAME`,
-   `MIP_AI_GATEWAY_TABLE_PREFIX` and `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE`
-   (and `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY` unset or in the staging catalog),
-   and the secrets `DATABRICKS_HOST` (the `pr105-host` host),
-   `DATABRICKS_TOKEN`, `DATABRICKS_WAREHOUSE_ID` and `GENIE_SPACE_ID`. Only
-   `deploy-dev.yml` (whose dev environment shadows the repository level) and
-   `nightly.yml` read these names. Compare names and `updated_at` in the
-   repository-level listings above against the dev environment's. If the
-   repository-level values must keep naming the live install, nightly cannot
-   certify the CI install: stop and decide before integrator step 5.
-   `nightly.yml` still authenticates with that repository-level
-   `DATABRICKS_TOKEN` until its own GitHub OIDC migration, a follow-up. The
-   CI install's bundle state lives under the deployer's home (`~` is the
-   authenticated principal's), so nightly must then run as the same deployer
-   service principal, through a second federation policy bound to
-   `nightly.yml` on `main` (subject claim `job_workflow_ref`). After the
-   first green `deploy-dev.yml` run, set the repository variable
+4. Set the CI install's `GENIE_SPACE_ID` and `DATABRICKS_WAREHOUSE_ID`
+   secrets for its own workspace, never the live ones. The proof step refuses
+   either one unless it resolves for the deployer.
+5. Point the REPOSITORY-level names `nightly.yml` reads (it has no
+   `environment:`) at the same CI install as the CI environment: the
+   variables `MIP_APP_NAME`, `MIP_DEFAULT_CATALOG`, `MIP_LAKEBASE_INSTANCE`,
+   `MIP_LAKEBASE_SYNC_CATALOG`, `MIP_RUNTIME_SECRET_SCOPE`,
+   `MIP_APP_ROLLBACK_SECRET_SCOPE`, `MIP_AGENT_PROXY_SECRET_SCOPE`,
+   `MIP_GENIE_SPACE_NAME`, `MIP_AI_GATEWAY_TABLE_PREFIX` and
+   `MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE` (and
+   `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY` unset or in that install's catalog),
+   and the secrets `DATABRICKS_HOST`, `DATABRICKS_WAREHOUSE_ID` and
+   `GENIE_SPACE_ID`. Only `deploy-dev.yml` (whose dev environment shadows the
+   repository level) and `nightly.yml` read these names. Compare names and
+   `updated_at` in the repository-level listings above against the dev
+   environment's. If the repository-level values must keep naming the live
+   install, nightly cannot certify the CI install: stop and decide before
+   integrator step 5. The repository-level `DATABRICKS_TOKEN` is dead with
+   the deleted CI workspace; do not mint another one. M1-PR8 gives nightly
+   its own validator identity and federation subject. After the first green
+   `deploy-dev.yml` run, set the repository variable
    `MIP_REVIEWED_FUNCTION_OWNER` to `<deployer-application-id>`, the reviewed
    functions' new owner, or nightly reports owner drift.
-7. Keep `main` in the dev environment's deployment branch policy. A
+6. Keep `main` in the dev environment's deployment branch policy. A
    read-only check on 2026-10-28 found it next to
    `codex/intelligence-trust-ux`. Then make the AI Gateway proof-key registry
    verify every signed record on the CI install (the proof-key rotation in
@@ -2789,26 +2571,20 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    to every retired public key that signed one of those records, oldest
    first, and the repository variable `MIP_AI_GATEWAY_PROOF_VERIFY_KEY` to
    the new public key for nightly. `deploy-dev.yml` passes the historical
-   keys to the repair step and to `scripts/deploy.sh`.
-8. Clear the step-4 and step-10b blockers. First confirm the shared
-   metastore: `databricks metastores current` on a `pr105-host` credential
-   must return the live workspace's `metastore_id` (compare it with the
-   `metastore_id` that `databricks metastores current` returns on a
-   live-workspace credential) and `workspace_id` `7474645995341779` (if not,
-   the facts above are wrong: stop and re-read this section).
-   - **Unity Catalog grants, metastore-wide.** A grant revoke here also
-     changes what the live workspace and every other team on the metastore
-     see, so each needs the catalog owner's approval and is a narrow grant
-     revoke, never an isolation or re-binding. The step-4 audit fails on any
+   keys to `scripts/deploy.sh`.
+7. Clear the step-4 and step-10b blockers. First confirm the metastore:
+   `databricks metastores current` on a credential for the CI install's
+   workspace returns that workspace's `workspace_id` and the `metastore_id`
+   it runs on; compare it with the same read on a live-workspace credential
+   to know whether the two installs share a metastore. If they do, the UC
+   audit reads the live install's catalogs too.
+   - **Unity Catalog grants, metastore-wide.** The step-4 audit fails on any
      privilege the runtime holds on an `OPEN` catalog, BROWSE included and
-     inherited through `account users` included. On 2026-10-27, 15 catalogs
-     granted `account users`: 11 `ISOLATED` ones, bound to the live
-     workspace and not to `pr105-host` (they need the binding policy below,
-     not a revoke); the platform catalogs `samples` and `system`, which the
-     audit skips; and the two known blockers, two `OPEN` catalogs owned by
-     other teams that grant `account users` `ALL_PRIVILEGES` and `BROWSE`
-     respectively. Find them and their owners at run time with this
-     read-only inventory on a `pr105-host` credential; every row it prints
+     inherited through `account users` included. Never revoke another team's
+     grant and never isolate or re-bind another team's catalog: such a
+     catalog stays a blocker for this install until a reviewed exposure
+     decision covers it. Find them and their owners at run time with this
+     read-only inventory on the CI install's credential; every row it prints
      outside `samples` and `system` is a blocker:
 
      ```bash
@@ -2822,87 +2598,48 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
          done
      ```
    - **Binding policy (a GitHub-settings action, no UC change).** The audit
-     accepts a catalog `ISOLATED` away from the `pr105-host` workspace only
-     if it matches the dev environment's
-     `MIP_UC_FOREIGN_CATALOG_BINDING_POLICY` exactly (owner, catalog type,
-     isolation mode, bound workspace ids, binding types). On 2026-10-27 that
-     is all 12 `ISOLATED` catalogs. Set the policy from a read-only inventory
-     of their current state, never the other way round.
-   - **Workspace-scoped, in the `pr105-host` workspace only:** Genie spaces
+     accepts a catalog `ISOLATED` away from the CI install's workspace only
+     if it matches the CI environment's `MIP_UC_FOREIGN_CATALOG_BINDING_POLICY`
+     exactly (owner, catalog type, isolation mode, bound workspace ids,
+     binding types). Set the policy from a read-only inventory of their
+     current state, never the other way round.
+   - **Workspace-scoped, in the CI install's workspace only:** Genie spaces
      that grant a group the CI identities belong to, such as workspace
      `users` (the runtime, verifier and App Genie audits fail on any group
-     grant); and any direct grant the staging verifier still holds on an
-     unsuffixed warehouse, or the proxy on a serving endpoint outside its
-     reviewed set, from the staging-workspace era (the `install_scope` probes
-     refuse both).
+     grant).
 
-   Never dispatch with `remediate_foreign_catalog_bindings=true`: it sets
-   catalogs ISOLATED and rewrites their workspace bindings metastore-wide,
-   and between its isolate and re-bind calls (or after a killed run) every
-   other workspace loses those catalogs, the live install's share catalogs
-   included. The rule table refuses it on
-   `pr105-host` (exit 2, before any mutation).
-9. Hand the staging install over to the deployer, then clear the known
-   step-4 blocker.
-   - A previous user deployer created the staging objects, and the deploy's
-     owner, creator and ACL checks accept only the deployer. In the
-     `pr105-host` workspace, with consent (staging state is lost), delete
-     the previous deployer's development-mode jobs (`[dev <user>] mip_*`) and
-     its feature pipeline, which manages the silver datasets. Delete the
-     staging Lakebase synced tables, then the database catalog, then the
-     instance. Delete the staging rollback and runtime secret scopes. The
-     deploy recreates each one as the deployer.
-   - In the staging catalog, transfer to `<deployer-application-id>` every
-     securable the previous deployer owns: the catalog, its schemas, tables,
-     views, metric views, functions and volumes. Leave the agent runtime's
-     own models and payload tables alone: step 10b attests the historical
-     runtime artifacts against them, live, before it retires those
-     artifacts. Never widen `MIP_UC_APPROVED_OWNER_PRINCIPALS` instead; a
-     missed object must fail closed. Verify read-only that the previous
-     deployer owns nothing left in the staging catalog.
-   - The 2026-08-04 `invalid_client` for `mip-agent-runtime-ci-sp` came from
-     an account-plane M2M `service_principal_secrets.create()` that reported
-     success from the runner, but the secret never appeared in the
-     inventory. `deploy-dev.yml` now sets `MIP_TEMP_CREDENTIAL_PLANE=workspace`,
-     so the deploy's 300-second probe secrets go through the deployer's
-     workspace `service_principal_secrets_proxy`, the plane that durable
-     rotations from a runner have persisted on. This is expected, not yet
-     proven: if a probe still fails, re-mint or assign that service
-     principal in the `pr105-host` workspace, or take the captured
-     `error_id`s to Databricks support.
-10. Dispatch `deploy-dev.yml` on `main` with
-    `acknowledge_single_maintainer_break_glass=true` (or approve that exact
-    dispatch in chat), then approve the pending deployment. The workflow can
-    only deploy `-t pr105-host`, so it never runs against the anchor
-    workspace. If a staging App with `MIP_APP_NAME` already exists in that
-    workspace with no signed rollback record (the staging-workspace-era App
-    likely does), set `rebase_unverified_app=true` on this first dispatch only;
-    without it the run fails closed after the treatment quiesce and leaves that
-    staging App stopped.
+   The foreign-catalog binding remediation sets catalogs ISOLATED and
+   rewrites their workspace bindings metastore-wide, and between its isolate
+   and re-bind calls (or after a killed run) every other workspace loses
+   those catalogs, the live install's share catalogs included.
+   `deploy-dev.yml` has no input that requests it.
+8. Once M1-PR7 lifts the parked refusal, dispatch `deploy-dev.yml` on `main`
+   with `acknowledge_single_maintainer_break_glass=true` (or approve that
+   exact dispatch in chat), then approve the pending deployment. If an App
+   with `MIP_APP_NAME` already exists in that workspace with no signed
+   rollback record, set `rebase_unverified_app=true` on this first dispatch
+   only; without it the run fails closed after the treatment quiesce and
+   leaves that App stopped.
 
 **Integrator steps.**
 
 1. Freeze merges and pause piecewise deploys.
 2. Read-only render: a plain `python -m tools.databricks.bundle_env validate
    -t dev` shows the live root and names unchanged (a bare `databricks bundle
-   validate -t dev` with no `BUNDLE_VAR_genie_space_id` now binds the pin
-   `01f13d4968af1b249dc388fd5b18b195`). The `pr105-host` render
-   (`MIP_BUNDLE_ROOT_LEAF=dev-ci ... validate -t pr105-host`, root
-   `.../dev-ci`, the `_ci` names) needs a credential for that workspace, so it
-   is an owner or CI check, never an agent one.
+   validate -t dev` with no `BUNDLE_VAR_genie_space_id` binds the dev
+   target's Genie pin).
 3. Dispatch `deploy-prod.yml` on `main` and record the expected FAIL
    (`no_green_run`).
 
-Steps 4-6 run only on the forked-anchor target (owner steps 1-10), never
-against the anchor workspace; the rule table now refuses any other target.
+Steps 4-6 run only after M1-PR7 selects a client environment and owner steps
+1-8 hold for it, never against the live install.
 
-4. After the owner's dispatch and approval (owner step 10), watch
+4. After the owner's dispatch and approval (owner step 8), watch
    `deploy-dev.yml` to green.
-5. Confirm owner step 6 (names and `updated_at` only: the repository-level
-   variables and secrets `nightly.yml` reads were set to the CI staging
-   install), then dispatch `nightly.yml` on the same sha and watch it. Its
-   live jobs need the `nightly.yml` GitHub OIDC follow-up in owner step 6
-   first: they still read the retired repository-level PAT.
+5. Confirm owner step 5 (names and `updated_at` only: the repository-level
+   variables and secrets `nightly.yml` reads name the CI install), then
+   dispatch `nightly.yml` on the same sha and watch it. It needs M1-PR8
+   first: until then its `parked` job refuses.
 6. Repair stale `frontend/tests/e2e/real_data.spec.ts` assertions in a PR if
    it is red, then repeat 4-5; record the green run URL in the audit
    report; re-dispatch `deploy-prod.yml` and expect PASS.

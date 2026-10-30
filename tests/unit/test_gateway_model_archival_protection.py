@@ -269,7 +269,7 @@ def _discover(workspace: Any) -> tuple[dict[str, Any], ...]:
         object(),
         app_name="mip-app",
         runtime_application_id=_IDENTITIES["runtime"],
-        rollback_scope="mip-pr105",
+        rollback_scope="mip-staging",
         expected_lakebase_instance="lakebase",
         model_family="mip.audit.mortgage_growth_supervisor_proxy",
         experiment_base="mip-agent-runtime-gateway-proxy",
