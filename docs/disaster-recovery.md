@@ -12,6 +12,13 @@ All API probes below use canonical `/api/v1/*` paths. Deprecated `/api/*`
 aliases still exist today for compatibility, but DR procedures should not rely
 on them.
 
+A raw `databricks bundle run <job> -t client` or `databricks bundle summary -t
+client` below needs the client target's root: export `BUNDLE_VAR_client_key`
+and `BUNDLE_VAR_deployer_principal` from the client profile first, as
+`scripts/deploy.sh` does (runbook §4). Without them the CLI refuses with "no
+value assigned to required variable client_key". The `bundle_env.py` and
+`scripts/deploy.sh` commands set them from `.env.local` themselves.
+
 ## Targets
 
 | Surface | Recovery primitive | RPO | RTO target |

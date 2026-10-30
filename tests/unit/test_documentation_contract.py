@@ -157,6 +157,35 @@ def test_current_operator_docs_never_advertise_bare_mutable_deployment() -> None
         assert "./scripts/deploy.sh -t dev" not in text, "the dev target left databricks.yml (M1-PR2)"
 
 
+# A raw `databricks bundle <verb> ... -t <target>` in prose or a code block.
+_RAW_BUNDLE_COMMAND = re.compile(
+    r"databricks bundle (?:run|summary|validate|plan|deploy|destroy)\b[^`\n]*?-t\s+(\w+)"
+)
+
+
+def test_operator_docs_run_raw_bundle_commands_only_on_the_client_target_with_its_root_exported() -> None:
+    """The dev and prod targets left databricks.yml in M1-PR2, and the raw CLI reads no .env.local.
+
+    So a raw bundle command names ``-t client``, and every doc that holds one
+    says to export the client target's root variables first. Validation that
+    reads the profile goes through ``bundle_env.py`` (``make bundle-validate``).
+    """
+
+    surfaces = (*CURRENT_OPERATOR_DOCS, ROOT / "AGENTS.md", ROOT / "docs" / "agentic-workflow.md")
+    for path in surfaces:
+        text = _read(path)
+        targets = _RAW_BUNDLE_COMMAND.findall(text)
+        assert set(targets) <= {"client"}, (path.relative_to(ROOT), targets)
+        if targets:
+            assert "BUNDLE_VAR_client_key" in text and "BUNDLE_VAR_deployer_principal" in text, path
+    claude = _read(ROOT / "CLAUDE.md")
+    assert "- `databricks bundle validate -t client` passes" not in claude
+    assert "- `tools/databricks/bundle_env.py validate -t client` (`make bundle-validate`) passes" in claude
+    deployment = " ".join(_read(ROOT / "docs" / "deployment.md").split())
+    assert "`make bundle-plan` remain read-only diagnostics" not in deployment, "bundle-plan exits 2"
+    assert "`make bundle-plan` and the mutable `make bundle-deploy`" in deployment
+
+
 def test_deployment_doc_pins_the_prebuilt_app_source_contract() -> None:
     deployment = _read(ROOT / "docs" / "deployment.md")
     app_yaml = _read(ROOT / "app.yaml")

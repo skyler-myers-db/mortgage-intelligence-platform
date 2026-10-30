@@ -277,6 +277,11 @@ customer.
 
 ## 7. If X fails
 
+A direct `databricks bundle run <job> -t client` below needs the client
+target's root: export `BUNDLE_VAR_client_key` and `BUNDLE_VAR_deployer_principal`
+from the client profile first, as `scripts/deploy.sh` does
+([runbook §4](runbook.md#4-deploy-from-scratch)).
+
 ### 7.1 "PERMISSION_DENIED" on `mip.gold.*` or `mip.silver.*`
 
 The command-of-record was run under a non-approved owner/metastore identity, or
