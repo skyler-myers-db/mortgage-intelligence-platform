@@ -1,6 +1,7 @@
 """Lakeflow (Delta Live Tables) pipeline for Module 0 silver tables.
 
-Declares the silver tables lifted from `cotality_mortgage_data.corelogic`:
+Declares the silver tables lifted from the configured Cotality source share
+(canonical `cotality_mortgage_data.corelogic`; see `_SOURCE_CONF_KEYS`):
 
     * silver.property_master          (CLIP-grain, 1:1 from property_domain_v3)
     * silver.lien_current             (CLIP-grain, 1:1 from voluntary_lien)   -- THE SPINE
@@ -24,8 +25,10 @@ returns.
 Runtime contract:
 - Target `target = "silver"`, `catalog = "mip"` are set on the pipeline
   resource in databricks.yml.
-- Source `cotality_mortgage_data.corelogic.*` is attached to the DEFAULT
-  workspace; the pipeline principal needs SELECT on those share tables.
+- The source share is named by the pipeline configuration
+  `mip.cotality_source_*` (databricks.yml, from the bundle variables
+  `cotality_source_*`); the pipeline principal needs SELECT on its tables.
+  A run without that configuration raises before any table is declared.
 - Streaming reads (`dlt.read_stream`) are preferred where the underlying is
   Delta. If the share's physical format is not Delta-compatible with CDF, the
   @dlt.table will fall back to batch via `spark.table(...)` -- see the
@@ -46,18 +49,21 @@ See:
 """
 from __future__ import annotations
 
+import re
+
 # NOTE: `dlt` and `pyspark.sql.functions` are only available when this file
 # runs inside a Databricks Lakeflow (Delta Live Tables) pipeline. For local
 # import-time checks (ruff / pytest contract test), we guard the imports so
 # the file remains parseable without Databricks runtime dependencies.
 try:  # pragma: no cover -- Databricks runtime only
     import dlt
-    from pyspark.sql import DataFrame
+    from pyspark.sql import DataFrame, SparkSession
     from pyspark.sql import functions as F
     from pyspark.sql.window import Window
 except ImportError:  # pragma: no cover -- local parse-only
     dlt = None  # type: ignore[assignment]
     DataFrame = None  # type: ignore[assignment,misc]
+    SparkSession = None  # type: ignore[assignment,misc]
     F = None  # type: ignore[assignment]
     Window = None  # type: ignore[assignment,misc]
 
@@ -99,18 +105,69 @@ _PII_SALT_KEY = "pii-salt-v1"
 TRUST_NAME_PATTERN = r"\b(TRUST|TRUSTEE|TRUSTEES|TRST|REVOCABLE|IRREVOCABLE)\b|\bTR\s*$"
 LLC_NAME_PATTERN = r"\b(LLC|L L C|LC|LTD|LIMITED|INC|INCORPORATED|CORP|CORPORATION|COMPANY|LP|LLP|LLLP|PARTNERSHIP|PARTNERS|HOLDINGS|VENTURES|PROPERTIES|ENTERPRISES|INVESTMENTS)\b"
 
-# Max owner slots in entrada_eval_property_domain_v3 (owner_1..owner_4).
+# Max owner slots in the property_domain_v3 share table (owner_1..owner_4).
 MAX_OWNER_SLOTS = 4
 
-# Source share tables (full UC path).
-_SHARE_CATALOG = "cotality_mortgage_data.corelogic"
-_SHARE_PROPERTY_V3 = f"{_SHARE_CATALOG}.entrada_eval_property_domain_v3"
-_SHARE_VOLUNTARY_LIEN = f"{_SHARE_CATALOG}.entrada_eval_voluntary_lien_status_marketing_v2"
-_SHARE_MLS_LISTING = f"{_SHARE_CATALOG}.entrada_eval_mls_listing_v1"
-_SHARE_HELOC_PROPENSITY = f"{_SHARE_CATALOG}.entrada_eval_heloc_propensity_score_v1"
-_SHARE_REFI_PROPENSITY = f"{_SHARE_CATALOG}.entrada_eval_refi_propensity_score_v1"
-_SHARE_MORTGAGE_DOMAIN = f"{_SHARE_CATALOG}.entrada_eval_mortgage_domain_v1"
-_SHARE_OWNER_TRANSFER = f"{_SHARE_CATALOG}.entrada_eval_owner_transfer_domain_v1"
+# The Cotality source share, read from the pipeline configuration that
+# databricks.yml sets from the bundle variables cotality_source_* (whose
+# defaults are the canonical names in backend/config/source_names.py; a test
+# pins the keys, the shapes and the defaults). Every key is required and there
+# is no default source: a run whose configuration does not name its source
+# raises before any table is declared. That covers a run between a bundle
+# deploy's file upload and its pipeline update, when this file is new and the
+# configuration is still the old one.
+_SOURCE_CONF_KEYS: tuple[str, ...] = (
+    "mip.cotality_source_catalog",
+    "mip.cotality_source_schema",
+    "mip.cotality_source_table_prefix",
+)
+_UC_NAME = r"[a-z_][a-z0-9_]{0,254}"
+# The table prefix as configured: "-" spells "no prefix", because a blank
+# value means unset in every layer that carries the setting.
+_NO_TABLE_PREFIX = "-"
+_SOURCE_NAME_SHAPES: tuple[str, ...] = (_UC_NAME, _UC_NAME, r"[a-z0-9_]{1,64}|-")
+
+
+def _cotality_source_from_conf(conf) -> tuple[str, str, str]:
+    """``(catalog, schema, table_prefix)`` from the pipeline's Spark conf."""
+    values = [conf.get(key, None) for key in _SOURCE_CONF_KEYS]
+    refused = [
+        f"{key} {'unset' if value is None else 'invalid'}"
+        for key, value, shape in zip(_SOURCE_CONF_KEYS, values, _SOURCE_NAME_SHAPES, strict=True)
+        if value is None or re.fullmatch(shape, value) is None
+    ]
+    if refused:
+        raise RuntimeError(
+            "mip_feature_pipeline: the pipeline configuration does not name a valid "
+            f"Cotality source ({', '.join(refused)}). scripts/deploy.sh sets it from "
+            "the bundle variables; there is no default source."
+        )
+    catalog, schema, table_prefix = values
+    return catalog, schema, "" if table_prefix == _NO_TABLE_PREFIX else table_prefix
+
+
+_SOURCE_CATALOG, _SOURCE_SCHEMA, _SOURCE_TABLE_PREFIX = _cotality_source_from_conf(  # pragma: no cover
+    (SparkSession.getActiveSession() or SparkSession.builder.getOrCreate()).conf
+)
+
+
+def _source_table_name(stem: str) -> str:
+    """A share table's name: the configured prefix, then its stem."""
+    return f"{_SOURCE_TABLE_PREFIX}{stem}"
+
+
+def _source_table(stem: str) -> str:
+    """A share table's full UC path."""
+    return f"{_SOURCE_CATALOG}.{_SOURCE_SCHEMA}.{_source_table_name(stem)}"
+
+
+_SHARE_PROPERTY_V3 = _source_table("property_domain_v3")
+_SHARE_VOLUNTARY_LIEN = _source_table("voluntary_lien_status_marketing_v2")
+_SHARE_MLS_LISTING = _source_table("mls_listing_v1")
+_SHARE_HELOC_PROPENSITY = _source_table("heloc_propensity_score_v1")
+_SHARE_REFI_PROPENSITY = _source_table("refi_propensity_score_v1")
+_SHARE_MORTGAGE_DOMAIN = _source_table("mortgage_domain_v1")
+_SHARE_OWNER_TRANSFER = _source_table("owner_transfer_domain_v1")
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +251,7 @@ def _zip5(col_name, state_col: str = "situs_state"):  # pragma: no cover -- Data
 @dlt.table(  # pragma: no cover -- Databricks-runtime only
     name="property_master",
     comment=(
-        "CLIP-grain property snapshot from entrada_eval_property_domain_v3, "
+        f"CLIP-grain property snapshot from {_source_table_name('property_domain_v3')}, "
         "retaining every valid source state. Raw owner names + street addresses "
         "never land here; see docs/data-contract-module0.md §2.2."
     ),
@@ -272,8 +329,9 @@ def silver_property_master() -> DataFrame:  # pragma: no cover
 @dlt.table(  # pragma: no cover
     name="lien_current",
     comment=(
-        "CLIP-grain lien + rates snapshot from entrada_eval_voluntary_lien_"
-        "status_marketing_v2 retaining every valid source state. THE SPINE of "
+        "CLIP-grain lien + rates snapshot from "
+        f"{_source_table_name('voluntary_lien_status_marketing_v2')} "
+        "retaining every valid source state. THE SPINE of "
         "Module 0 scoring. See docs/data-contract-module0.md §2.1."
     ),
     table_properties={
@@ -530,7 +588,7 @@ def silver_refi_propensity() -> DataFrame:  # pragma: no cover
 @dlt.table(  # pragma: no cover
     name="mortgage_events",
     comment=(
-        "Event-grain mortgage history from entrada_eval_mortgage_domain_v1 "
+        f"Event-grain mortgage history from {_source_table_name('mortgage_domain_v1')} "
         "retaining every valid deed_situs_state_static value. Feeds "
         "intent_trigger + gold.evidence_events. "
         "See docs/data-contract-module0.md §2.3."
@@ -591,8 +649,9 @@ def silver_mortgage_events() -> DataFrame:  # pragma: no cover
 @dlt.table(  # pragma: no cover
     name="owner_transfer_events",
     comment=(
-        "Event-grain owner-transfer history from entrada_eval_owner_transfer_"
-        "domain_v1 retaining every valid deed_situs_state_static value. Buyer "
+        "Event-grain owner-transfer history from "
+        f"{_source_table_name('owner_transfer_domain_v1')} "
+        "retaining every valid deed_situs_state_static value. Buyer "
         "names NEVER landed. See docs/data-contract-module0.md §2.4."
     ),
     table_properties={
@@ -750,7 +809,7 @@ def _blank_to_null(col):  # pragma: no cover -- Databricks-runtime only
 @dlt.table(  # pragma: no cover
     name="property_owners",
     comment=(
-        "Multi-owner explode of entrada_eval_property_domain_v3 (S1.1): one "
+        f"Multi-owner explode of {_source_table_name('property_domain_v3')} (S1.1): one "
         "row per occupied owner slot (max 4 per property record), with "
         "owner_entity_type classification {individual,trust,llc,unresolved} "
         "+ resolution_confidence. Classify + caveat + suppress only — "

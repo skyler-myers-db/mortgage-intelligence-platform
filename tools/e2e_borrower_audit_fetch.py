@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from backend.config.source_names import CotalitySource
 from backend.services.databricks_sql import DatabricksSqlClient, DatabricksSqlError
 
 # ---------------------------------------------------------------------------
@@ -165,8 +166,14 @@ def sample_clips(
 def fetch_raw_inputs(
     client: DatabricksSqlClient,
     clip: str,
+    *,
+    cotality: CotalitySource,
 ) -> dict[str, Any]:
     """Fetch the raw Cotality share rows for ``clip``.
+
+    ``cotality`` names the share this install's silver lift reads
+    (``source_names.from_env``); there is no default, so the audit never
+    compares gold against a share the install does not read.
 
     Projects only the columns the gold CTAS consumes. NO PII is
     projected: we explicitly omit ``owner_1_full_name``,
@@ -191,7 +198,7 @@ def fetch_raw_inputs(
         "  first_position_mortgage_loan_type_code                   AS first_pos_loan_type, "
         "  first_position_currently_assigned_lender_company_name    AS first_pos_lender_current, "
         "  CAST(second_position_mortgage_amount AS BIGINT)          AS second_pos_amount "
-        "FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2 "
+        f"FROM {cotality.table('voluntary_lien_status_marketing_v2')} "
         "WHERE clip = :clip "
         "LIMIT 1"
     )
@@ -215,7 +222,7 @@ def fetch_raw_inputs(
         "  CAST(year_built AS INT)                AS year_built, "
         "  CAST(total_number_of_bedrooms_all_bldgs AS INT) AS bedrooms, "
         "  CAST(total_number_of_bathrooms AS DOUBLE)       AS bathrooms "
-        "FROM cotality_mortgage_data.corelogic.entrada_eval_property_domain_v3 "
+        f"FROM {cotality.table('property_domain_v3')} "
         "WHERE clip = :clip "
         "LIMIT 1"
     )

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 
+from backend.config.source_names import CotalitySource
 from tools.e2e_borrower_audit_model import ClipAudit, Mismatch
 
 
@@ -26,8 +27,9 @@ def render_report(
     seed: int,
     sample_size: int,
     coverage_states: list[str],
+    cotality: CotalitySource,
 ) -> str:
-    """Render the markdown report body."""
+    """Render the markdown report body; ``cotality`` is the share the raw rows came from."""
     passed = [a for a in audits if a.passed]
     total = len(audits)
     mismatch_count = sum(len(a.mismatches) for a in audits)
@@ -56,8 +58,8 @@ def render_report(
     lines.append("   `gold.lead_scores`) using `ORDER BY HASH(clip, :seed)` for")
     lines.append("   deterministic reproducibility across runs.")
     lines.append("2. For each CLIP the audit pulls rows from the raw Cotality share")
-    lines.append("   (`entrada_eval_voluntary_lien_status_marketing_v2` +")
-    lines.append("    `entrada_eval_property_domain_v3`) and the latest FRED")
+    lines.append(f"   (`{cotality.table_name('voluntary_lien_status_marketing_v2')}` +")
+    lines.append(f"    `{cotality.table_name('property_domain_v3')}`) and the latest FRED")
     lines.append("   `MORTGAGE30US` market rate.")
     lines.append("3. Derived columns are independently recomputed in Python using the")
     lines.append("   canonical scoring primitives in `backend/services/scoring.py`")
