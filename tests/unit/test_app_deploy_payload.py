@@ -6,6 +6,7 @@ import sys
 
 import pytest
 
+from backend.config import source_names
 from tools.databricks import app_deploy_payload
 from tools.databricks.app_deploy_payload import build_payload
 
@@ -69,6 +70,8 @@ def _hermetic_operator_config(monkeypatch, tmp_path):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv(app_deploy_payload.PREVIOUS_SECRET_KID_ENV, raising=False)
     monkeypatch.delenv("MIP_PRESENTER_MODE", raising=False)
+    for name in source_names.ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "test-mask-secret")
     monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_CURRENT", "test-action-secret")
 
