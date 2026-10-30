@@ -8,11 +8,12 @@ serving a single request when a required credential is missing.
 
 Lender identity invariant: a customer lender is a digest-pinned record
 (``MIP_LENDER_IDENTITY_JSON`` + ``MIP_LENDER_IDENTITY_SHA256``,
-``backend/schemas/lender_identity_record.py``). When either is set, the
-record must verify against its reviewed digest before settings load, or
-the process refuses to start with one line that names no value. With
-neither set, this check does nothing and settings validate the
-code-registry identity exactly as before.
+``backend/schemas/lender_identity_record.py``). When either is set, in the
+process environment or in a dotenv file settings will load, the record must
+verify against its pinned digest before settings load, or the process
+refuses to start with one line that names no value. With neither set, this
+check does nothing and settings validate the code-registry identity exactly
+as before.
 """
 from __future__ import annotations
 
@@ -22,19 +23,43 @@ import sys
 import uvicorn
 
 from backend.schemas.lender_identity_record import (
+    LEGACY_ENV_NAMES,
     LenderIdentityRefused,
-    pinned_identity_configured,
+    pinned_inputs,
     reviewed_lender_identity_from_env,
 )
+
+# The dotenv files settings load (backend/config/settings.py,
+# ``model_config["env_file"]``), a later file winning; settings cannot be
+# imported to read them here, since importing them loads them.
+SETTINGS_DOTENV_FILES = (".env", ".env.local")
+
+
+def _settings_dotenv() -> dict[str, str]:
+    """What settings will read from their dotenv files: nothing under the kill switch."""
+
+    if os.environ.get("MIP_DISABLE_DOTENV", "").strip() == "1":
+        return {}
+    from dotenv import dotenv_values
+
+    loaded: dict[str, str] = {}
+    for path in SETTINGS_DOTENV_FILES:
+        loaded.update({key: value for key, value in dotenv_values(path).items() if value is not None})
+    return loaded
 
 
 def _preflight_lender_identity() -> None:
     """Refuse a customer-class boot whose pinned lender record does not verify."""
 
-    if not pinned_identity_configured(os.environ):
+    dotenv = _settings_dotenv()
+    pinned = pinned_inputs(os.environ, dotenv)
+    if not pinned:
         return
+    # A legacy name beside the record must equal it: from the environment
+    # when the environment holds it, as settings read it, else the dotenv.
+    legacy = {name: os.environ.get(name, dotenv.get(name)) for name in LEGACY_ENV_NAMES}
     try:
-        identity = reviewed_lender_identity_from_env(os.environ)
+        identity = reviewed_lender_identity_from_env({**legacy, **pinned})
     except ValueError as exc:
         # Every pinned-path refusal is a fixed sentence without a value.
         reason = str(exc) if isinstance(exc, LenderIdentityRefused) else "the record did not verify"

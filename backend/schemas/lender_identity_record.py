@@ -384,6 +384,25 @@ def present_env(values: Mapping[str, object]) -> dict[str, str]:
     return {name: str(values[name]) for name in names if str(values.get(name) or "").strip()}
 
 
+def pinned_inputs(environ: Mapping[str, object], dotenv: Mapping[str, object]) -> dict[str, str]:
+    """The two pinned names from the process environment, else from dotenv values.
+
+    Name by name, in the order every deployment control follows: a non-blank
+    environment value wins, and a blank one is unset. pydantic-settings
+    lowercases the dotenv names it loads, so a dotenv name matches in either
+    case. Settings and ``backend/runtime.py`` read the record this way, so a
+    record in ``.env.local`` is the record the App serves, never ignored.
+    """
+
+    found: dict[str, str] = {}
+    for name in PINNED_ENV_NAMES:
+        for value in (environ.get(name), dotenv.get(name), dotenv.get(name.lower())):
+            if str(value or "").strip():
+                found[name] = str(value)
+                break
+    return found
+
+
 def as_configured(values: Mapping[str, object]) -> dict[str, object]:
     """The five lender names for a caller whose legacy values were never stripped.
 

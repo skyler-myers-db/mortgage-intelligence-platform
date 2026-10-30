@@ -1937,11 +1937,21 @@ claims; the App's in-process lender fallback mirrors the same rows. The seed
 
 **Demo and legacy installs** set neither name and behave exactly as before.
 
-`.env.example` cannot be edited from an agent session; the integrator adds
-these lines to it:
+The record and its pin travel like every other deployment control: in the
+shell or in `.env.local`, a non-blank shell value winning, at every reader
+(the deploy preflight, `bundle_env.py`, the App payload build, settings and
+`backend/runtime.py`). A local App reads them from the same `.env` /
+`.env.local` files as its settings.
+
+`.env.example` cannot be read or edited from an agent session, so the owner
+adds these lines to its "Direct os.environ reads" section and, in the same
+change, moves both names from `DIRECT_ENV_READS_PENDING_TEMPLATE` to
+`DIRECT_ENV_READS` in `tests/unit/test_settings_contract.py`;
+`test_pending_direct_reads_stay_tracked_until_the_template_documents_them`
+fails once the template has them and the move is not made:
 
 ```bash
-# optional customer installs: the reviewed lender record (identifying) and the sha256 of its canonical JSON (public); docs/deployment.md "Customer lender identity"
+# optional customer installs: the lender record (identifying) and the sha256 of its canonical JSON the deploying maintainer acknowledged (public); docs/deployment.md "Customer lender identity"
 MIP_LENDER_IDENTITY_JSON=
 MIP_LENDER_IDENTITY_SHA256=
 ```

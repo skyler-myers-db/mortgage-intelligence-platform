@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import (
     AliasChoices,
     Field,
+    ModelWrapValidatorHandler,
     PrivateAttr,
     SecretStr,
     field_validator,
@@ -33,9 +34,9 @@ from backend.schemas.lender_identity import effective_public_tenant_id
 from backend.schemas.lender_identity_record import (
     LENDER_NAME_ENV,
     LENDER_NMLS_ENV,
-    PINNED_ENV_NAMES,
     TENANT_ID_ENV,
     ReviewedLenderIdentity,
+    pinned_inputs,
     reviewed_lender_identity_from_env,
 )
 
@@ -631,20 +632,30 @@ class Settings(BaseSettings):
         allow_inf_nan=False,
     )
 
-    @model_validator(mode="after")
-    def _validate_public_lender_identity(self) -> Settings:
+    @model_validator(mode="wrap")
+    @classmethod
+    def _validate_public_lender_identity(
+        cls, data: Any, handler: ModelWrapValidatorHandler[Settings]
+    ) -> Settings:
         """Resolve the reviewed lender identity (lender_identity_record.py).
 
         The three legacy fields go in only when configured, so an unset name
         is the Summit default on the code-registry path and never conflicts
-        with a digest-pinned record. The pinned record and its digest are
-        read from the process environment only: the App payload carries them,
-        and they are not Settings fields.
+        with a digest-pinned record. The pinned record and its digest are not
+        Settings fields, but they come from the same sources as one: the
+        process environment first (the App payload carries them there), then
+        the dotenv files this instance loads, which pydantic-settings hands
+        this validator as extra keys of ``data`` (none under
+        MIP_DISABLE_DOTENV or ``_env_file=None``).
         """
 
-        inputs: dict[str, object] = {
-            name: os.environ.get(name) for name in PINNED_ENV_NAMES if os.environ.get(name)
-        }
+        settings = handler(data)
+        loaded = data if isinstance(data, Mapping) else {}
+        settings._resolve_lender_identity(pinned_inputs(os.environ, loaded))
+        return settings
+
+    def _resolve_lender_identity(self, pinned: Mapping[str, str]) -> None:
+        inputs: dict[str, object] = dict(pinned)
         for field_name, env_name in (
             ("mip_lender_name", LENDER_NAME_ENV),
             ("mip_lender_nmls_id", LENDER_NMLS_ENV),
@@ -657,7 +668,6 @@ class Settings(BaseSettings):
         if self.mip_tenant_id is not None or identity.pinned:
             self.mip_tenant_id = identity.tenant_id
         self._reviewed_lender_identity = identity
-        return self
 
     def reviewed_lender_identity(self) -> ReviewedLenderIdentity:
         """The identity the validator resolved: its digest is ``None`` unless pinned."""

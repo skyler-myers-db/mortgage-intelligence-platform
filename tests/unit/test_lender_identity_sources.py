@@ -116,3 +116,76 @@ def test_a_dotenv_record_alone_reaches_every_deploy_reader(monkeypatch: pytest.M
     variables = _bundle_vars(monkeypatch, tmp_path, env_local)
 
     assert payload == variables["BUNDLE_VAR_lender_identity_sha256"] == dotenv[LENDER_IDENTITY_SHA256_ENV]
+
+
+# --- Settings and the App runtime: the same record from .env.local ------------------
+
+
+def _local_settings(monkeypatch: pytest.MonkeyPatch, cwd: Path, **init: Any) -> Any:
+    from backend.config.settings import Settings
+
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("MIP_DISABLE_DOTENV", "0")
+    return Settings(**init)
+
+
+def test_settings_load_a_record_carried_in_env_local(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    dotenv = _pinned(DOTENV_RECORD)
+    _env_local(tmp_path / ".env.local", dotenv)
+
+    identity = _local_settings(monkeypatch, tmp_path).reviewed_lender_identity()
+
+    assert identity.digest == dotenv[LENDER_IDENTITY_SHA256_ENV]
+    assert identity.lender_name == DOTENV_RECORD["legal_name"]
+
+
+def test_settings_take_the_shell_record_the_payload_takes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    shell = _pinned(SHELL_RECORD)
+    env_local = _env_local(tmp_path / ".env.local", _pinned(DOTENV_RECORD))
+    for name, value in shell.items():
+        monkeypatch.setenv(name, value)
+
+    settings = _local_settings(monkeypatch, tmp_path)
+
+    assert settings.reviewed_lender_identity().digest == _payload_digest(monkeypatch, env_local)
+
+
+def test_settings_without_dotenv_ignore_a_dotenv_record(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _env_local(tmp_path / ".env.local", _pinned(DOTENV_RECORD))
+
+    assert not _local_settings(monkeypatch, tmp_path, _env_file=None).reviewed_lender_identity().pinned
+    monkeypatch.setenv("MIP_DISABLE_DOTENV", "1")
+    from backend import runtime
+    from backend.config.settings import Settings
+
+    assert not Settings().reviewed_lender_identity().pinned
+    runtime._preflight_lender_identity()  # nothing configured for either
+
+
+def test_the_runtime_reads_the_dotenv_files_settings_load() -> None:
+    from backend import runtime
+    from backend.config.settings import Settings
+
+    assert Settings.model_config["env_file"] == runtime.SETTINGS_DOTENV_FILES
+
+
+def test_the_runtime_verifies_a_dotenv_record_before_settings_load(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from backend import runtime
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MIP_DISABLE_DOTENV", "0")
+    dotenv = _pinned(DOTENV_RECORD)
+    _env_local(tmp_path / ".env.local", dotenv)
+
+    runtime._preflight_lender_identity()
+    assert f"digest-pinned record {dotenv[LENDER_IDENTITY_SHA256_ENV][:12]} verified" in capsys.readouterr().err
+
+    _env_local(tmp_path / ".env.local", {**dotenv, LENDER_IDENTITY_JSON_ENV: dotenv[LENDER_IDENTITY_JSON_ENV].replace("Harbor", "Harbour")})
+    with pytest.raises(SystemExit) as exited:
+        runtime._preflight_lender_identity()
+    assert exited.value.code == 1
+    err = capsys.readouterr().err
+    assert err.startswith("[mip-runtime] refusing to start: lender identity: MIP_LENDER_IDENTITY_JSON")
+    assert DOTENV_RECORD["legal_name"] not in err
