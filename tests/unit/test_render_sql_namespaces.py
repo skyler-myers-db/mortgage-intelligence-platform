@@ -8,7 +8,7 @@ import pytest
 from tools.render_sql import _render_text, main, render
 
 REPO = Path(__file__).resolve().parents[2]
-TARGET = "mip_pr105_staging"
+TARGET = "mip_staging"
 SOURCE_FILES = (
     "sql/ddl/001_catalogs_schemas.sql",
     "sql/ddl/003_gold_tables.sql",

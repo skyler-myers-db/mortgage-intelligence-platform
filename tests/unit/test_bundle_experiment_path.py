@@ -23,10 +23,6 @@ import yaml
 REPO = Path(__file__).resolve().parents[2]
 BUNDLE = REPO / "databricks.yml"
 DEV_PREFIX = "[dev someone] "  # synthetic stand-in for the CLI's `[dev <short user name>] ` prefix
-SUFFIXES = ("", "_ci")  # the live install and the CI staging install
-# The forked-anchor CI staging target (deploy-dev.yml only); its install always
-# carries the `_ci` suffix and its own workspace's /Shared.
-CI_TARGET = "pr105-host"
 
 
 def _cli_presets_name(name: str, prefix: str) -> str:
@@ -52,11 +48,10 @@ def _target_prefix(target: dict) -> str:
     ("name", "prefix", "rendered"),
     (
         ("/mip-lead-scoring", DEV_PREFIX, "//[dev someone] mip-lead-scoring"),
-        ("/mip-lead-scoring_ci", DEV_PREFIX, "//[dev someone] mip-lead-scoring_ci"),
         ("/mip-lead-scoring", "", "//mip-lead-scoring"),
         ("/Shared/mip/lead-scoring", DEV_PREFIX, "/Shared/mip/[dev someone] lead-scoring"),
         ("/Shared/mip-lead-scoring", DEV_PREFIX, "/Shared/[dev someone] mip-lead-scoring"),
-        ("/Shared/mip-lead-scoring_ci", "", "/Shared/mip-lead-scoring_ci"),
+        ("/Shared/mip-lead-scoring", "", "/Shared/mip-lead-scoring"),
     ),
 )
 def test_the_mirror_reproduces_the_recorded_cli_renders(name: str, prefix: str, rendered: str) -> None:
@@ -72,19 +67,17 @@ def test_no_target_overrides_the_experiment_so_the_root_name_is_what_every_targe
         assert not overrides, f"target {target_name} overrides the experiment"
 
 
-def test_the_declared_name_is_one_level_under_shared_and_takes_the_install_suffix() -> None:
+def test_the_declared_name_is_one_level_under_shared() -> None:
     declared = _bundle()["resources"]["experiments"]["mip_lead_scoring"]["name"]
 
-    assert declared == "/Shared/mip-lead-scoring${var.install_suffix}"
+    assert declared == "/Shared/mip-lead-scoring"
 
 
-@pytest.mark.parametrize("suffix", SUFFIXES)
-def test_every_target_renders_one_valid_path_directly_under_shared(suffix: str) -> None:
+def test_every_target_renders_one_valid_path_directly_under_shared() -> None:
     bundle = _bundle()
-    declared = bundle["resources"]["experiments"]["mip_lead_scoring"]["name"]
-    name = declared.replace("${var.install_suffix}", suffix)
+    name = bundle["resources"]["experiments"]["mip_lead_scoring"]["name"]
 
-    assert set(bundle["targets"]) == {"dev", "prod", "ci", CI_TARGET}
+    assert set(bundle["targets"]) == {"dev", "prod", "ci"}
     for target_name, target in bundle["targets"].items():
         prefix = _target_prefix(target)
         rendered = _cli_presets_name(name, prefix)
@@ -93,22 +86,11 @@ def test_every_target_renders_one_valid_path_directly_under_shared(suffix: str) 
         assert posixpath.normpath(rendered) == rendered, (target_name, rendered)
         # /Shared exists in every workspace; a deeper parent breaks a fresh apply.
         assert posixpath.dirname(rendered) == "/Shared", (target_name, rendered)
-        assert posixpath.basename(rendered) == f"{prefix}mip-lead-scoring{suffix}", target_name
+        assert posixpath.basename(rendered) == f"{prefix}mip-lead-scoring", target_name
 
 
-def test_the_dev_class_targets_are_the_only_prefixed_ones() -> None:
+def test_the_dev_target_is_the_only_prefixed_one() -> None:
     targets = _bundle()["targets"]
 
-    # pr105-host is development mode too: the CLI prefixes with its deploying
-    # principal's short name, which DEV_PREFIX stands in for.
-    assert _target_prefix(targets["dev"]) == DEV_PREFIX and _target_prefix(targets[CI_TARGET]) == DEV_PREFIX
+    assert _target_prefix(targets["dev"]) == DEV_PREFIX
     assert _target_prefix(targets["prod"]) == "" and _target_prefix(targets["ci"]) == ""
-
-
-def test_the_ci_staging_target_renders_its_suffixed_experiment_under_its_own_shared() -> None:
-    bundle = _bundle()
-    declared = bundle["resources"]["experiments"]["mip_lead_scoring"]["name"]
-    name = declared.replace("${var.install_suffix}", "_ci")
-
-    rendered = _cli_presets_name(name, _target_prefix(bundle["targets"][CI_TARGET]))
-    assert rendered == f"/Shared/{DEV_PREFIX}mip-lead-scoring_ci"

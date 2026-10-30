@@ -37,7 +37,7 @@ def test_direct_execution_forwards_non_default_lakebase_instance() -> None:
             "--target",
             "dev",
             "--lakebase-instance",
-            "mip-app-state-pr105-staging",
+            "mip-app-state-staging",
         ],
         cwd="/tmp",
         check=False,
@@ -47,8 +47,8 @@ def test_direct_execution_forwards_non_default_lakebase_instance() -> None:
 
     assert completed.returncode == 0, completed.stderr
     env = _env_map(json.loads(completed.stdout))
-    assert env["LAKEBASE_INSTANCE_NAME"]["value"] == "mip-app-state-pr105-staging"
-    assert env["MIP_LAKEBASE_INSTANCE"]["value"] == "mip-app-state-pr105-staging"
+    assert env["LAKEBASE_INSTANCE_NAME"]["value"] == "mip-app-state-staging"
+    assert env["MIP_LAKEBASE_INSTANCE"]["value"] == "mip-app-state-staging"
 
 
 @pytest.fixture(autouse=True)
@@ -253,17 +253,17 @@ def test_app_deploy_payload_pins_non_default_lakebase_instance() -> None:
     payload = build_payload(
         source_code_path="/Workspace/app/files",
         target="dev",
-        lakebase_instance="mip-app-state-pr105-staging",
+        lakebase_instance="mip-app-state-staging",
     )
     env = _env_map(payload)
 
     assert env["LAKEBASE_INSTANCE_NAME"] == {
         "name": "LAKEBASE_INSTANCE_NAME",
-        "value": "mip-app-state-pr105-staging",
+        "value": "mip-app-state-staging",
     }
     assert env["MIP_LAKEBASE_INSTANCE"] == {
         "name": "MIP_LAKEBASE_INSTANCE",
-        "value": "mip-app-state-pr105-staging",
+        "value": "mip-app-state-staging",
     }
 
 

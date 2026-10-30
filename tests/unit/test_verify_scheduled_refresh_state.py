@@ -340,7 +340,7 @@ def test_deploy_runs_the_postflight_after_the_kpi_snapshot_and_before_the_genie_
 
     assert kpi < call < rebind
     assert '_SCHEDULED_REFRESH_ARGS=(--expect "${BUNDLE_VAR_scheduled_refresh_pause_status:-}")' in block
-    assert 'if [[ "$TARGET" == "dev" && -z "${BUNDLE_VAR_install_suffix:-}" ]]; then\n  _SCHEDULED_REFRESH_ARGS+=(--live-install)' in block
+    assert 'if [[ "$TARGET" == "dev" ]]; then\n  _SCHEDULED_REFRESH_ARGS+=(--live-install)' in block
     assert 'run "$PYTHON" -m tools.databricks.verify_scheduled_refresh_state \\\n  "${_SCHEDULED_REFRESH_ARGS[@]}" <<< "$BUNDLE_SUMMARY_JSON"' in block, (
         "through run (skipped in a dry-run), with the post-apply summary as a here-string"
     )

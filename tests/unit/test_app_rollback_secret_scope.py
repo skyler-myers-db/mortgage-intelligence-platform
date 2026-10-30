@@ -98,8 +98,8 @@ def test_fresh_scope_is_bound_to_app_and_exact_deployer_admin_acl() -> None:
 
 def test_staging_suffix_scope_name_is_deterministic() -> None:
     assert (
-        expected_app_rollback_scope("mip-app-pr105-staging")
-        == "mip-app-rollback-pr105-staging"
+        expected_app_rollback_scope("mip-app-staging")
+        == "mip-app-rollback-staging"
     )
 
 

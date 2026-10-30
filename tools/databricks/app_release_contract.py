@@ -3,8 +3,7 @@
 
 Paths, all under one bundle root
 ``/Workspace/Users/<principal>/.bundle/mortgage-intelligence-platform/<leaf>``
-(``<leaf>`` is the target, or the isolated CI install's own leaf such as
-``dev-ci``; tools/databricks/ci_install_isolation.py):
+(``<leaf>`` is the target unless a caller passes its own root leaf):
 
 * ``files_root``: ``<bundle root>/files``, bundle sync's upload root. Jobs read
   it, and pre-release deployments may still name it.
@@ -85,9 +84,7 @@ def bundle_root(*, principal: str, target: str, root_leaf: str | None = None) ->
 def files_root(*, principal: str, target: str, root_leaf: str | None = None) -> str:
     """The bundle files root; ``root_leaf`` (default: the target) is its last root segment.
 
-    The live dev install keeps ``.../dev/files``; the isolated CI staging
-    install (W5e, tools/databricks/ci_install_isolation.py) passes its own
-    leaf, e.g. ``dev-ci``.
+    The live dev install keeps ``.../dev/files``.
     """
     return f"{bundle_root(principal=principal, target=target, root_leaf=root_leaf)}/files"
 

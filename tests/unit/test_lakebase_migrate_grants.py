@@ -1105,10 +1105,10 @@ def test_resolve_app_role_explicit_name_overrides_ambient_environment(
     )
 
     assert (
-        lakebase_migrate._resolve_app_role(client, app_name="mip-app-pr105-staging")
+        lakebase_migrate._resolve_app_role(client, app_name="mip-app-staging")
         == "staging-app-client-id"
     )
-    assert requested == ["mip-app-pr105-staging"]
+    assert requested == ["mip-app-staging"]
 
 
 def test_schema_and_seed_run_in_one_rollback_capable_transaction(

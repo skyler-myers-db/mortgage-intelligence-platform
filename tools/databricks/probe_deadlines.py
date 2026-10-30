@@ -103,7 +103,7 @@ def _mirror_scope(cli_profile: str) -> str:
     Ledger paths are identical across workspaces while their contents are
     not, so a flat mirror would serve one workspace's signed records for
     another's identical path. Key the cache by the profile actually used to
-    read it (2026-08-10: the same tree exists on pr105-staging and paychex).
+    read it (2026-08-10: the same tree existed in two workspaces at once).
     """
 
     safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in cli_profile)

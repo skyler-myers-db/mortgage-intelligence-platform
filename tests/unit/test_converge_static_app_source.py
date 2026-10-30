@@ -248,9 +248,9 @@ def test_accepts_ambiguous_delete_only_after_proven_absence() -> None:
     _converge(client)
 
 
-# --- W5e w5-deps-report: the isolated CI staging install's bundle root leaf
+# --- a caller-supplied bundle root leaf (default: the target)
 
-CI_SOURCE = f"/Workspace/Users/{PRINCIPAL}/.bundle/mortgage-intelligence-platform/dev-ci/files"
+CI_SOURCE = f"/Workspace/Users/{PRINCIPAL}/.bundle/mortgage-intelligence-platform/client-a/files"
 
 
 def _workspace_at(api_root: str, manifests: set[str]) -> MagicMock:
@@ -274,7 +274,7 @@ def test_the_ci_root_leaf_is_accepted_only_when_expected() -> None:
     client = _workspace_at(ci_root, {f"{ci_root}/package.json"})
 
     converge_static_app_source(
-        client, source_code_path=CI_SOURCE, expected_principal=PRINCIPAL, expected_target=TARGET, expected_root_leaf="dev-ci"
+        client, source_code_path=CI_SOURCE, expected_principal=PRINCIPAL, expected_target=TARGET, expected_root_leaf="client-a"
     )
     assert client.workspace.delete.call_args_list == [call(f"{ci_root}/package.json", recursive=False)]
 
@@ -282,7 +282,7 @@ def test_the_ci_root_leaf_is_accepted_only_when_expected() -> None:
         _converge(_workspace(), source=CI_SOURCE)  # no leaf: the target's root only
     with pytest.raises(RuntimeError, match="does not match"):
         converge_static_app_source(
-            _workspace(), source_code_path=SOURCE, expected_principal=PRINCIPAL, expected_target=TARGET, expected_root_leaf="dev-ci"
+            _workspace(), source_code_path=SOURCE, expected_principal=PRINCIPAL, expected_target=TARGET, expected_root_leaf="client-a"
         )
 
 

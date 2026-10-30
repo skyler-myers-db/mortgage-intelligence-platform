@@ -17,7 +17,7 @@ from tools.databricks.provision_agent_proxy_secret import (
     secret_reference,
 )
 
-APP_NAME = "mip-app-pr105"
+APP_NAME = "mip-app-staging"
 SCOPE = f"{APP_NAME}-agent-proxy"
 RUNTIME_ID = "runtime-client"
 PROXY_ID = "proxy-client"

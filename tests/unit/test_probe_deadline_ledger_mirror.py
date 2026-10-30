@@ -79,7 +79,7 @@ def test_live_read_success_backfills_the_mirror(tmp_path, monkeypatch):
 
 def test_mirror_scope_isolates_workspaces_sharing_a_ledger_path(tmp_path, monkeypatch):
     path = f"{probe_deadlines._LEASE_ROOT}/mip-app.json.cc33.next"
-    for profile, payload in (("DEFAULT", b"pr105-record"), ("paychex", b"paychex-record")):
+    for profile, payload in (("DEFAULT", b"default-record"), ("paychex", b"paychex-record")):
         scoped = tmp_path / profile
         scoped.mkdir()
         (scoped / "mip-app.json.cc33.next").write_bytes(payload)
@@ -89,4 +89,4 @@ def test_mirror_scope_isolates_workspaces_sharing_a_ledger_path(tmp_path, monkey
     monkeypatch.setenv("MIP_PROBE_CLI_PROFILE", "paychex")
     assert probe_deadlines.bounded_workspace_read(object(), path) == b"paychex-record"
     monkeypatch.setenv("MIP_PROBE_CLI_PROFILE", "DEFAULT")
-    assert probe_deadlines.bounded_workspace_read(object(), path) == b"pr105-record"
+    assert probe_deadlines.bounded_workspace_read(object(), path) == b"default-record"
