@@ -44,6 +44,11 @@ and the journal's scope and instance, an App collision whose journal reads
 is deferred, not refused, so the run reaches that recovery. The pre-apply
 gate never defers: the recovery has proven the App absent by then.
 
+**App ACL preview** (pre-lease only, ``bundle_plan_app_acl``). Given the App
+name and the four release identities, the report previews what the run's
+runtime release access convergence does to the App's direct ACL, and an ACL
+that converger would refuse refuses as ``app_acl``.
+
 Exit codes: 0 the plan passes; 2 refused (each refusal printed with its
 remedy) or the plan could not be read. Printed lines carry codes, counts,
 digests and symbolic names only (``PlanReport.public_summary``); resolved
@@ -432,6 +437,13 @@ def _print_report(report: PlanReport) -> None:
         f"(plan_version {report.plan_version}, cli {report.cli_version or 'unknown'}): "
         + ", ".join(f"{counts[action]} {action}" for action in COUNTED_ACTIONS)
     )
+    if report.app_acl is not None:
+        acl = summary["app_acl"]
+        print(
+            f"{_PREFIX} app ACL preview: {acl['code']} ("
+            + ", ".join(f"{acl[name]} {name}" for name in ("keep", "add", "remove", "change"))
+            + "; principals in the private report)"
+        )
     for deferral in report.deferrals:
         state = deferral.detail.get("journal_state", "")
         print(f"{_PREFIX} DEFERRED {deferral.code} {deferral.resource} ({state}): {deferral.note}")
@@ -458,7 +470,22 @@ def main(
     journal.add_argument("--first-install-app-name")
     journal.add_argument("--rollback-scope")
     journal.add_argument("--lakebase-instance")
+    acl = check.add_argument_group("App ACL preview (pre-lease only; all five or none)")
+    acl.add_argument("--app-acl-app-name")
+    for role in ("release-probe", "normal", "operator2", "admin"):
+        acl.add_argument(f"--{role}-application-id")
     args = parser.parse_args(argv)
+    acl_values = (
+        args.app_acl_app_name,
+        args.release_probe_application_id,
+        args.normal_application_id,
+        args.operator2_application_id,
+        args.admin_application_id,
+    )
+    if any(acl_values) and not all(acl_values):
+        parser.error("the App ACL preview arguments go together")
+    if any(acl_values) and args.position != "pre-lease":
+        parser.error("the App ACL is previewed only before the lease (pre-lease)")
     journal_values = (args.first_install_app_name, args.rollback_scope, args.lakebase_instance)
     if any(journal_values) and not all(journal_values):
         parser.error("the first-install journal arguments go together")
@@ -480,6 +507,18 @@ def main(
             acknowledgement=os.environ.get(ACK_ENV, "").strip(),
             workspace_factory=workspace_factory,
             journal_state=reader,
+        )
+    if all(acl_values) and report.plan_sha256:
+        from tools.databricks.bundle_plan_app_acl import with_app_acl_preview
+
+        report = with_app_acl_preview(
+            report,
+            workspace_factory=workspace_factory,
+            app_name=args.app_acl_app_name,
+            release_probe_application_id=args.release_probe_application_id,
+            normal_application_id=args.normal_application_id,
+            operator2_application_id=args.operator2_application_id,
+            admin_application_id=args.admin_application_id,
         )
     if args.report_out is not None:
         _write_private(args.report_out, report.full())

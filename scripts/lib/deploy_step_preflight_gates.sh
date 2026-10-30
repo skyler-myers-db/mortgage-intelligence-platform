@@ -605,6 +605,11 @@ if [[ -z "$_UC_APPROVED_OWNERS" ]]; then
   _UC_APPROVED_OWNERS="$(dotenv_value MIP_UC_APPROVED_OWNER_PRINCIPALS)"
 fi
 export MIP_UC_APPROVED_OWNER_PRINCIPALS="$_UC_APPROVED_OWNERS"
+# Principals approved to hold CAN_EDIT or CAN_MANAGE on the governed Genie
+# space, besides the approved owners and the deployer (the pre-stop
+# owner-equivalent probe, attack G12). Empty approves no one else.
+MIP_GENIE_MANAGER_PRINCIPALS="$(deployment_control_value MIP_GENIE_MANAGER_PRINCIPALS)"
+export MIP_GENIE_MANAGER_PRINCIPALS
 for _ACCOUNT_AUTH_NAME in DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID; do
   resolve_m2m_credential "$_ACCOUNT_AUTH_NAME"
 done

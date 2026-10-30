@@ -82,7 +82,9 @@ def test_the_public_summary_has_a_closed_set_of_keys() -> None:
         "instance_update_sha256",
         "refusals",
         "deferred",
+        "app_acl",
     }
+    assert public["app_acl"] is None, "no preview unless the gate was given the identities"
     assert public["verdict"] == "passed" and public["app"] == {
         "resource": "apps.mip_app",
         "bound": True,

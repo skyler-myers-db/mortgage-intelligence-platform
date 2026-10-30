@@ -127,8 +127,10 @@ def test_operator_docs_explain_app_refresh_default_and_paused_schedules() -> Non
         "the run, or rename it off the canonical name first. Without either, step 0's pre-stop probe "
         "refuses before the App stop;",
         # The deployer-is-a-user check is the one GO read the probe does not make yet.
-        "where that read belongs, checks Supervisor retirement and Genie group grants but not the "
-        "deployer's user name. Until it does, check the deploying identity is a user before a GO run.",
+        "where that read belongs, checks Supervisor retirement, Genie group grants, the rollback "
+        "record, governed owners and owner-equivalent grantees, App serving access and one Genie "
+        "turn, but not the deployer's user name. Until it does, check the deploying identity is a "
+        "user before a GO run.",
         # The preflight refuses `on` for every install but a demo one, and the target has its own file.
         "A customer install is always paused and refuses `MIP_SCHEDULED_REFRESH=on` (exit 2)",
         "`.databricks/bundle/<target>/variable-overrides.json` (`client`)",
