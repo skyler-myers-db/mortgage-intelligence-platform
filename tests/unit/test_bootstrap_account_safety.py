@@ -54,6 +54,9 @@ ALLOWED_CALLS = frozenset(
         ("access_control", "update_rule_set"),
         ("apps", "get"),
         ("catalogs", "get"),
+        # Read-only: tools/clients/live_checks.py proves the deploy runs as the
+        # profile's deployer (M1-PR2).
+        ("current_user", "me"),
         ("grants", "get"),
         ("grants", "update"),
         ("groups", "create"),
