@@ -175,9 +175,16 @@ def test_explicitly_off_demo_flags_are_allowed_on_a_customer_profile() -> None:
 
 @pytest.mark.parametrize(
     "lender",
-    [{"legal_name": "Summit Mortgage", "nmls_id": "123456"}, {"tenant_id": "summit"}],
+    [
+        {"legal_name": "Summit Mortgage"},
+        {"legal_name": "SUMMIT MORTGAGE"},
+        {"legal_name": "summit  mortgage"},
+        {"nmls_id": "123456"},
+        {"tenant_id": "summit"},
+    ],
 )
 def test_the_summit_identity_is_refused_on_a_customer_profile(lender: dict[str, str]) -> None:
+    # Each case changes one part of the identity, so each part refuses alone.
     values = customer_profile(MIP_LENDER_IDENTITY_JSON=json.dumps({**LENDER_IDENTITY, **lender}))
     _assert_refused(values, "MIP_LENDER_IDENTITY_JSON", "Summit Mortgage demo identity is refused")
 

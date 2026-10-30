@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, SecretStr
 
+from backend.schemas.lender_identity import _SUMMIT_DEMO_NMLS_ID, _SUMMIT_LENDER_NAME
 from tools.clients.shapes import (
     CLOUDS,
     STORAGE_ROOT,
@@ -21,10 +22,14 @@ from tools.clients.shapes import (
 )
 
 if TYPE_CHECKING:
+    from tools.clients.json_fields import LenderIdentity
     from tools.clients.schema import ClientProfile
 
 CATALOG = "mip"
-SUMMIT_LENDER_NAME = "Summit Mortgage"
+# The demo identity, from the backend's lender registry so the two cannot drift.
+SUMMIT_LENDER_NAME = _SUMMIT_LENDER_NAME
+SUMMIT_DEMO_NMLS_ID = _SUMMIT_DEMO_NMLS_ID
+SUMMIT_TENANT_ID = "summit"
 RESERVED_ROLES = ("deployer", "jobs", "validator")
 AGENTIC_ROLES = ("verifier", "runtime", "proxy")
 AGENTIC_SECRETS = (
@@ -94,6 +99,16 @@ def cloud_refusals(profile: ClientProfile) -> list[str]:
     return lines
 
 
+def _is_summit(identity: LenderIdentity) -> bool:
+    """Any one part of the demo identity: its name in any case, NMLS id or tenant."""
+
+    return (
+        normalize_principal(identity.legal_name) == normalize_principal(SUMMIT_LENDER_NAME)
+        or identity.nmls_id == SUMMIT_DEMO_NMLS_ID
+        or identity.tenant_id == SUMMIT_TENANT_ID
+    )
+
+
 def install_class_refusals(profile: ClientProfile) -> list[str]:
     """Demo fields stay off a customer install; a lender identity stays off a demo."""
 
@@ -109,7 +124,7 @@ def install_class_refusals(profile: ClientProfile) -> list[str]:
             lines.append("MIP_SEED_OPERATOR_EMAIL: is demo-only and refused for a customer install")
         if identity is None:
             lines.append("MIP_LENDER_IDENTITY_JSON: is required for a customer install")
-        elif identity.legal_name == SUMMIT_LENDER_NAME or identity.tenant_id == "summit":
+        elif _is_summit(identity):
             lines.append(
                 "MIP_LENDER_IDENTITY_JSON: the Summit Mortgage demo identity is refused "
                 "for a customer install"
