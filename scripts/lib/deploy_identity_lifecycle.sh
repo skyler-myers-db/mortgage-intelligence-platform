@@ -125,7 +125,7 @@ CLIENT_TARGET_BUNDLE_VARS=(
 resolve_client_profile() {
   local view line name value
   unset "${CLIENT_TARGET_BUNDLE_VARS[@]}"
-  CLIENT_KEY=""; CLIENT_INSTALL_CLASS=""; CLIENT_HOST=""; CLIENT_DEPLOYER=""
+  CLIENT_KEY=""; CLIENT_INSTALL_CLASS=""; CLIENT_HOST=""; CLIENT_DEPLOYER=""; CLIENT_JOBS_PRINCIPAL=""
   CLIENT_APP_ENV=""; CLIENT_DEMO_FEEDS=""; CLIENT_PRESENTER_MODE=""; CLIENT_SCHEDULED_REFRESH=""
   view="$(mktemp -t mip-client-target.XXXXXX)"
   if ! "$PYTHON" -m tools.clients resolve --emit client-target --format env --out "$view"; then
@@ -146,7 +146,7 @@ resolve_client_profile() {
       MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS) CLIENT_DEMO_FEEDS="$value" ;;
       MIP_PRESENTER_MODE) CLIENT_PRESENTER_MODE="$value" ;;
       MIP_SCHEDULED_REFRESH) CLIENT_SCHEDULED_REFRESH="$value" ;;
-      BUNDLE_VAR_client_key|BUNDLE_VAR_deployer_principal|BUNDLE_VAR_dashboard_parent_path|BUNDLE_VAR_lakebase_readable_secondaries)
+      BUNDLE_VAR_client_key|BUNDLE_VAR_deployer_principal|BUNDLE_VAR_jobs_principal|BUNDLE_VAR_dashboard_parent_path|BUNDLE_VAR_lakebase_readable_secondaries)
         printf -v "$name" '%s' "$value"
         export "${name?}"
         ;;
@@ -159,7 +159,10 @@ resolve_client_profile() {
   done < "$view"
   rm -f "$view"
   CLIENT_DEPLOYER="${BUNDLE_VAR_deployer_principal:-}"
-  if [[ -z "$CLIENT_KEY" || -z "$CLIENT_HOST" || -z "$CLIENT_DEPLOYER" || \
+  # The non-admin jobs identity (M2-PR5): the App-triggerable jobs' run_as and
+  # the Lakebase jobs_reader role step 4 converges.
+  CLIENT_JOBS_PRINCIPAL="${BUNDLE_VAR_jobs_principal:-}"
+  if [[ -z "$CLIENT_KEY" || -z "$CLIENT_HOST" || -z "$CLIENT_DEPLOYER" || -z "$CLIENT_JOBS_PRINCIPAL" || \
         ( "$CLIENT_INSTALL_CLASS" != "demo" && "$CLIENT_INSTALL_CLASS" != "customer" ) || \
         ! "$CLIENT_APP_ENV" =~ ^(sandbox|prod)$ || ! "$CLIENT_DEMO_FEEDS" =~ ^[01]$ || \
         ! "$CLIENT_PRESENTER_MODE" =~ ^[01]$ || ! "$CLIENT_SCHEDULED_REFRESH" =~ ^(on|off)$ ]]; then

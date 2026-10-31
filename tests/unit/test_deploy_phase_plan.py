@@ -87,6 +87,9 @@ def test_the_plan_phase_dry_run_stops_after_the_pre_lease_gate(tmp_path: Path) -
         " --report-out /tmp/mip-dry-run-bundle-plan-report-pre-lease.json"
         " --first-install-app-name mip-app --rollback-scope mip-app-rollback"
         " --lakebase-instance mip-app-state",
+        # The Growth Agent monitor scheduler stays PAUSED, planned and live (M2-PR5).
+        ".venv/bin/python -m tools.databricks.monitor_scheduler_gate check"
+        " --plan /tmp/mip-dry-run-bundle-plan-pre-lease.json",
     ]
     assert out.rstrip().endswith(
         "[deploy] plan phase complete: read-only, stopped before the lease; nothing was changed."
@@ -127,6 +130,9 @@ def test_the_full_dry_run_gates_the_plan_before_the_lease_and_again_before_the_a
     genie = next(i for i, command in enumerate(commands) if "provision_genie_space" in command)
     apply = next(i for i, command in enumerate(commands) if "bundle_env deploy" in command)
     assert gates[0] < genie < gates[1] < apply
+    monitor = [index for index, command in enumerate(commands) if "monitor_scheduler_gate check" in command]
+    assert monitor == [gates[0] + 1, gates[1] + 1], "beside the plan gate at both positions"
+    assert commands[monitor[1]].endswith("--plan /tmp/mip-dry-run-bundle-plan-pre-apply.json")
     assert out.index("and gate it (pre-lease)") < out.index(
         "prove or create the deterministic owned App rollback"
     )

@@ -17,6 +17,7 @@ from jobs.lakebase_migration_contracts import (
     _APP_ROLE_SEQUENCE_PRIVILEGES,
     _APP_ROLE_TABLE_PRIVILEGES,
 )
+from jobs.lakebase_migration_jobs_reader import JOBS_READER_TABLE_PRIVILEGES
 from jobs.lakebase_migration_provider_plane import (
     _close_public_schema_boundary,
     _postflight_no_pre_boundary_sessions,
@@ -67,6 +68,8 @@ class RoleRelationshipMismatchError(RuntimeError):
 def _reviewed_acl_objects(role_contract: str) -> tuple[set[str], set[str], set[tuple[str, str]]]:
     if role_contract == "verifier":
         return {"ai_gateway_proof_ledger"}, set(), set()
+    if role_contract == "jobs_reader":
+        return set(JOBS_READER_TABLE_PRIVILEGES), set(), set()
     if role_contract != "app":
         raise ValueError(f"unsupported role contract {role_contract!r}")
     tables = {name for name, privileges in _APP_ROLE_TABLE_PRIVILEGES.items() if privileges}
@@ -796,7 +799,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lakebase-instance", required=True)
     parser.add_argument("--lakebase-database", required=True)
     parser.add_argument("--application-id", required=True)
-    parser.add_argument("--role-contract", required=True, choices=("app", "verifier"))
+    parser.add_argument("--role-contract", required=True, choices=("app", "verifier", "jobs_reader"))
     parser.add_argument(
         "--recover-bootstrap-only",
         action="store_true",

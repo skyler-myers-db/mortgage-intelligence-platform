@@ -44,6 +44,10 @@ sync:
   include:
     - frontend/dist/**
     - sql/_rendered/**
+    # The install pins the App-triggerable jobs read beside their sources
+    # (jobs/_install_pins.py, M2-PR5); bundle_env renders them, gitignored,
+    # before every bundle call, so each deploy uploads this install's own.
+    - jobs/install_pins.json
   # The frontend is built before bundle deployment and served as static files
   # by FastAPI. Databricks Apps currently provides Node 22.16, while the
   # audited React Router release requires Node 22.22 for package installation.
@@ -96,9 +100,10 @@ targets:
   #     plus the client key, so one root holds exactly one install.
   #   * No top-level `run_as`: CLI 1.10 refuses a run_as that differs from the
   #     deploying identity for apps and dashboards. Every job and the pipeline
-  #     instead name their own run_as below (the deployer until M2-PR5 moves
-  #     the App-triggerable and refresh jobs and the pipeline to
-  #     var.jobs_principal).
+  #     instead name their own run_as below: the deployer for deploy-time jobs,
+  #     var.jobs_principal (the non-admin jobs identity, M2-PR5) for the four
+  #     App-triggerable jobs, mip_scheduled_refresh, the KPI snapshot it
+  #     starts and the feature pipeline.
   client:
     mode: production
     workspace:
@@ -128,6 +133,7 @@ targets:
     variables:
       client_key: ci
       deployer_principal: 00000000-0000-0000-0000-000000000000
+      jobs_principal: 00000000-0000-0000-0000-000000000001
 
 resources:
   # Slice 5 real-data migration: self-contained Lakebase provisioning.
@@ -275,9 +281,23 @@ resources:
   jobs:
     # Every job and the pipeline name their own run_as (M1-PR2): the `client`
     # target has no top-level run_as, so nothing runs as whoever happens to
-    # deploy. var.deployer_principal is the profile's deployer service
-    # principal (application id) until M2-PR5 moves the App-triggerable and
-    # refresh jobs and the pipeline to var.jobs_principal.
+    # deploy. Two identities (M2-PR5, plan section 4.3):
+    #   * var.deployer_principal, the profile's deployer service principal
+    #     (workspace admin): the deploy-time jobs only (catalog init, ref seed,
+    #     Lakebase migrate, the PAUSED monitor scheduler).
+    #   * var.jobs_principal, the profile's non-admin jobs service principal:
+    #     every job the App can trigger (its four CAN_MANAGE_RUN bindings),
+    #     mip_scheduled_refresh and every job it starts (mip_kpi_snapshot too)
+    #     and the feature pipeline, so a compromised App can start only
+    #     bundle-defined runs under an identity that holds no workspace admin,
+    #     and nothing that identity starts runs as the deployer.
+    #     tests/unit/test_jobs_identity_shape.py pins the split.
+    # The App-triggerable entrypoints also refuse, before any SQL or Lakebase
+    # connection, a run whose catalog or Lakebase parameters differ from the
+    # install's pins (jobs/_install_pins.py reads jobs/install_pins.json, which
+    # tools/databricks/bundle_env.py renders from the profile before every
+    # bundle call), and every job that creates or replaces governed objects
+    # ends with converge_governed_owner (jobs/converge_governed_owner.py).
     # Dedicated first-install bootstrap. Deploy runs this idempotent DAG before
     # applying UC grants, so a fresh or --skip-silver deployment never grants
     # a schema, table, or reviewed Growth Agent function before it exists.
@@ -353,13 +373,18 @@ resources:
     mip_refresh_silver:
       name: mip_refresh_silver
       run_as:
-        service_principal_name: ${var.deployer_principal}
+        service_principal_name: ${var.jobs_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
         owner: entrada
         slice: module0-real-data-slice2
       max_concurrent_runs: 1
+      # The converge_governed_owner task's serverless Python environment.
+      environments:
+        - environment_key: py_default
+          spec:
+            environment_version: "5"
       tasks:
         - task_key: init_catalog_schemas
           description: "Idempotent CREATE CATALOG mip + schemas raw/silver/gold/semantics/app/audit."
@@ -428,6 +453,36 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/ddl/silver_property_owners_primary_view.sql
+        # M2-PR5: on ALL_DONE so a failed run still hands over what it
+        # created. Objects the jobs identity owns in the governed schemas move
+        # to the pinned data-owner group; nothing else is touched.
+        - task_key: converge_governed_owner
+          description: "ALTER OWNER to the data-owner group: the jobs identity's own objects in the governed schemas only."
+          run_if: ALL_DONE
+          depends_on:
+            - task_key: init_property_owners_primary_view
+          environment_key: py_default
+          spark_python_task:
+            python_file: jobs/converge_governed_owner.py
+            parameters:
+              - "--catalog=${var.uc_catalog}"
+        # The run's verdict (M2-PR5). A run is judged by its leaf tasks, and an
+        # ALL_DONE converge_governed_owner as the only leaf would end a run
+        # whose refresh task failed SUCCESS_WITH_FAILURES, which `bundle run`
+        # exits 0 for. This compute-free condition task is the only leaf: on
+        # ALL_SUCCESS after the handover and every task it waits for, so any
+        # failed task leaves it UPSTREAM_FAILED and the run FAILED
+        # (tests/unit/test_job_run_outcome.py).
+        - task_key: assert_refresh_succeeded
+          description: "Fail the run unless every refresh task and the owner handover succeeded (no compute)."
+          run_if: ALL_SUCCESS
+          depends_on:
+            - task_key: converge_governed_owner
+            - task_key: init_property_owners_primary_view
+          condition_task:
+            op: EQUAL_TO
+            left: "succeeded"
+            right: "succeeded"
     # Slice13-accuracy: standalone ref-data seed job. Mirrors the two
     # tasks baked into mip_refresh_silver so analysts / ops can re-run
     # the lender-dictionary seed without kicking the full silver pipeline.
@@ -516,7 +571,7 @@ resources:
     mip_refresh_scores:
       name: mip_refresh_scores
       run_as:
-        service_principal_name: ${var.deployer_principal}
+        service_principal_name: ${var.jobs_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -527,6 +582,11 @@ resources:
       # with a deploy's run of this job waits instead of being skipped.
       queue:
         enabled: true
+      # The converge_governed_owner task's serverless Python environment.
+      environments:
+        - environment_key: py_default
+          spec:
+            environment_version: "5"
       tasks:
         - task_key: init_fn_bounded_mortgage_rate
           description: "CREATE OR REPLACE mip.gold.fn_bounded_mortgage_rate before rate/equity CTAS."
@@ -899,6 +959,64 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/metric_views/certified_borrower_opportunity_metric_view.sql
+        # M2-PR5: on ALL_DONE so a failed run still hands over what it
+        # created. Objects the jobs identity owns in the governed schemas move
+        # to the pinned data-owner group; nothing else is touched.
+        - task_key: converge_governed_owner
+          description: "ALTER OWNER to the data-owner group: the jobs identity's own objects in the governed schemas only."
+          run_if: ALL_DONE
+          depends_on:
+            - task_key: ctas_household_rollup
+            - task_key: ctas_lockin_cohort
+            - task_key: ctas_county_rollup
+            - task_key: ctas_zip_rollup
+            - task_key: ctas_equity_spread_points
+            - task_key: ctas_rate_window_weekly
+            - task_key: ctas_state_top_segment
+            - task_key: ctas_segment_combination_rollup
+            - task_key: ctas_rate_sensitivity_rollup
+            - task_key: ctas_rate_sensitivity_book
+            - task_key: ctas_address_lookup
+            - task_key: ctas_source_readiness
+            - task_key: refresh_certified_lead_metric_view
+            - task_key: refresh_certified_segment_metric_view
+            - task_key: refresh_certified_borrower_metric_view
+          environment_key: py_default
+          spark_python_task:
+            python_file: jobs/converge_governed_owner.py
+            parameters:
+              - "--catalog=${var.uc_catalog}"
+        # The run's verdict (M2-PR5). A run is judged by its leaf tasks, and an
+        # ALL_DONE converge_governed_owner as the only leaf would end a run
+        # whose refresh task failed SUCCESS_WITH_FAILURES, which `bundle run`
+        # exits 0 for. This compute-free condition task is the only leaf: on
+        # ALL_SUCCESS after the handover and every task it waits for, so any
+        # failed task leaves it UPSTREAM_FAILED and the run FAILED
+        # (tests/unit/test_job_run_outcome.py).
+        - task_key: assert_refresh_succeeded
+          description: "Fail the run unless every refresh task and the owner handover succeeded (no compute)."
+          run_if: ALL_SUCCESS
+          depends_on:
+            - task_key: converge_governed_owner
+            - task_key: ctas_household_rollup
+            - task_key: ctas_lockin_cohort
+            - task_key: ctas_county_rollup
+            - task_key: ctas_zip_rollup
+            - task_key: ctas_equity_spread_points
+            - task_key: ctas_rate_window_weekly
+            - task_key: ctas_state_top_segment
+            - task_key: ctas_segment_combination_rollup
+            - task_key: ctas_rate_sensitivity_rollup
+            - task_key: ctas_rate_sensitivity_book
+            - task_key: ctas_address_lookup
+            - task_key: ctas_source_readiness
+            - task_key: refresh_certified_lead_metric_view
+            - task_key: refresh_certified_segment_metric_view
+            - task_key: refresh_certified_borrower_metric_view
+          condition_task:
+            op: EQUAL_TO
+            left: "succeeded"
+            right: "succeeded"
 
     # Durable repair sync of Lakebase approval + outreach state into
     # mip.gold.borrower_lifecycle_state. Metric views (segment_
@@ -943,7 +1061,7 @@ resources:
     mip_sync_lifecycle_state:
       name: mip_sync_lifecycle_state
       run_as:
-        service_principal_name: ${var.deployer_principal}
+        service_principal_name: ${var.jobs_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -976,7 +1094,9 @@ resources:
           description: "MERGE changed Lakebase approval/outreach rows into the sparse gold lifecycle mirror."
           environment_key: py_default
           spark_python_task:
-            python_file: jobs/sync_lifecycle_state.py
+            # The job-only entrypoint (M2-PR5): the install pins first, then
+            # jobs/sync_lifecycle_state.py, which the App also imports.
+            python_file: jobs/sync_lifecycle_state_job.py
             parameters:
               - "--catalog=${var.uc_catalog}"
               - "--lakebase-instance=${var.lakebase_instance_name}"
@@ -1012,8 +1132,12 @@ resources:
     # chain (step 4). This job's own schedule stays PAUSED.
     mip_kpi_snapshot:
       name: mip_kpi_snapshot
+      # The jobs identity (M2-PR5): mip_scheduled_refresh starts this job, and
+      # a jobs-identity run never starts a deployer run. Its Lakebase role
+      # holds exactly the snapshot upsert on kpi_snapshots, and
+      # jobs/kpi_snapshot.py runs the install pins first.
       run_as:
-        service_principal_name: ${var.deployer_principal}
+        service_principal_name: ${var.jobs_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -1134,6 +1258,9 @@ resources:
               - "--lender-identity-sha256=${var.lender_identity_sha256}"
               - "--ai-gateway-verifier-client-id=${var.ai_gateway_verifier_client_id}"
               - "--require-ai-gateway-verifier"
+              # M2-PR5: the jobs identity's Lakebase jobs_reader role (SELECT on
+              # the lifecycle sync's approval and disposition tables only).
+              - "--jobs-reader-client-id=${var.jobs_principal}"
           max_retries: 2
           retry_on_timeout: true
 
@@ -1145,7 +1272,7 @@ resources:
     mip_fred_rates_ingest:
       name: mip_fred_rates_ingest
       run_as:
-        service_principal_name: ${var.deployer_principal}
+        service_principal_name: ${var.jobs_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -1215,6 +1342,36 @@ resources:
               - "--table=${var.uc_catalog}.silver.market_rates_weekly"
           max_retries: 2
           retry_on_timeout: true
+        # M2-PR5: on ALL_DONE so a failed run still hands over what it
+        # created. Objects the jobs identity owns in the governed schemas move
+        # to the pinned data-owner group; nothing else is touched.
+        - task_key: converge_governed_owner
+          description: "ALTER OWNER to the data-owner group: the jobs identity's own objects in the governed schemas only."
+          run_if: ALL_DONE
+          depends_on:
+            - task_key: refresh_from_fred
+          environment_key: py_default
+          spark_python_task:
+            python_file: jobs/converge_governed_owner.py
+            parameters:
+              - "--catalog=${var.uc_catalog}"
+        # The run's verdict (M2-PR5). A run is judged by its leaf tasks, and an
+        # ALL_DONE converge_governed_owner as the only leaf would end a run
+        # whose refresh task failed SUCCESS_WITH_FAILURES, which `bundle run`
+        # exits 0 for. This compute-free condition task is the only leaf: on
+        # ALL_SUCCESS after the handover and every task it waits for, so any
+        # failed task leaves it UPSTREAM_FAILED and the run FAILED
+        # (tests/unit/test_job_run_outcome.py).
+        - task_key: assert_refresh_succeeded
+          description: "Fail the run unless every refresh task and the owner handover succeeded (no compute)."
+          run_if: ALL_SUCCESS
+          depends_on:
+            - task_key: converge_governed_owner
+            - task_key: refresh_from_fred
+          condition_task:
+            op: EQUAL_TO
+            left: "succeeded"
+            right: "succeeded"
 
     # Weekly scheduled refresh (2026-10-26 data-freshness design). ONE schedule
     # chains the existing jobs in deploy.sh's order (FRED -> gold -> lifecycle
@@ -1238,7 +1395,7 @@ resources:
     mip_scheduled_refresh:
       name: mip_scheduled_refresh
       run_as:
-        service_principal_name: ${var.deployer_principal}
+        service_principal_name: ${var.jobs_principal}
       tags:
         solution: mortgage-intelligence-platform
         module: module0
@@ -1301,7 +1458,7 @@ resources:
     mip_feature_pipeline:
       name: mip_feature_pipeline
       run_as:
-        service_principal_name: ${var.deployer_principal}
+        service_principal_name: ${var.jobs_principal}
       catalog: ${var.uc_catalog}
       schema: silver
       photon: true
@@ -1369,8 +1526,8 @@ variables:
   # The client target's identity (M1-PR2). tools/databricks/bundle_env.py and
   # scripts/deploy.sh set each from the resolved client profile
   # (tools/clients/profile.py bundle_vars); the ci target sets placeholders.
-  # Neither has a default, so a client run without its profile cannot render
-  # a root or a run_as.
+  # None of client_key, deployer_principal and jobs_principal has a default,
+  # so a client run without its profile cannot render a root or a run_as.
   client_key:
     description: >-
       The client key (MIP_CLIENT): the bundle root's last segment and the
@@ -1379,13 +1536,14 @@ variables:
     description: >-
       Application id of the client's deployer service principal
       (MIP_IDENTITY_IDS_JSON.deployer): the bundle root's owner folder and
-      the run_as of every job and the pipeline.
+      the run_as of the deploy-time jobs.
   jobs_principal:
     description: >-
-      Application id the App-triggerable and refresh jobs and the pipeline
-      will run as. The deployer until M2-PR5 introduces the non-admin jobs
-      identity; nothing reads it yet.
-    default: ${var.deployer_principal}
+      Application id of the client's non-admin jobs service principal
+      (MIP_IDENTITY_IDS_JSON.jobs): the run_as of the four App-triggerable
+      jobs, mip_scheduled_refresh, mip_kpi_snapshot and the feature pipeline,
+      and the Lakebase jobs_reader role the lifecycle sync and the KPI
+      snapshot use.
   dashboard_parent_path:
     description: >-
       Workspace folder of the two Lakeview dashboards
