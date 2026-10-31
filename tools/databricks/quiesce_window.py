@@ -48,7 +48,11 @@ from tools.databricks.app_start_deployment import (
     wait_for_compute_active,
     wait_for_terminal,
 )
-from tools.databricks.quiesce_window_facts import app_or_none, collect_facts
+from tools.databricks.quiesce_window_facts import (
+    app_or_none,
+    collect_facts,
+    takes_unsigned_rebase,
+)
 from tools.databricks.quiesce_window_plan import ACK_ENV, body_sha256, window_plan
 
 _PREFIX = "[mip-quiesce-window]"
@@ -285,7 +289,10 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--binding-payload", type=Path)
     plan.add_argument("--role-check", choices=("exact", "drift"))
     plan.add_argument("--migration-plan", type=Path)
-    plan.add_argument("--rebase-unverified-app", choices=("0", "1"), default="0")
+    # plan: the rebase step 0a takes; applicable: the operator's request, which
+    # it resolves against the first-install journal (MIP_QUIESCE_WINDOW_REBASE).
+    for mode in (plan, sub.choices["applicable"]):
+        mode.add_argument("--rebase-unverified-app", choices=("0", "1"), default="0")
     plan.add_argument("--out", required=True, type=Path)
     sub.choices["open"].add_argument("--plan", required=True, type=Path)
     close = sub.choices["close"]
@@ -345,9 +352,17 @@ def main(
     if args.command == "applicable":
         app = app_or_none(workspace, app_name=app_name)
         client_id = _text(getattr(app, "service_principal_client_id", None)) if app else ""
+        rebase = app is not None and takes_unsigned_rebase(
+            workspace,
+            app_name=app_name,
+            scope=args.scope,
+            lakebase_instance=args.lakebase_instance,
+            requested=args.rebase_unverified_app == "1",
+        )
         values = {
             "MIP_QUIESCE_WINDOW_APP_PRESENT": "1" if app is not None else "0",
             "MIP_QUIESCE_WINDOW_APP_CLIENT_ID": client_id,
+            "MIP_QUIESCE_WINDOW_REBASE": "1" if rebase else "0",
         }
         if args.out_env is not None:
             args.out_env.write_text(_env_lines(values), encoding="utf-8")

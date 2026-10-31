@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -191,3 +193,33 @@ def test_facts_round_trip_through_the_private_plan() -> None:
     assert WindowFacts.from_dict(json.loads(json.dumps(facts.as_dict()))) == facts
     with pytest.raises(ValueError, match="unknown field"):
         WindowFacts.from_dict({**facts.as_dict(), "stray": 1})
+
+
+# --- the rebase the plan is told about (the one step 0a takes) ----------------------
+
+
+@pytest.mark.parametrize(
+    ("requested", "journal", "rebase"),
+    (("1", "signed", "0"), ("1", "absent", "1"), ("1", "recover", "1"), ("0", "absent", "0")),
+    ids=("signed-journal-is-signed-blue", "no-journal", "journal-owned", "not-requested"),
+)
+def test_applicable_resolves_the_rebase_against_the_first_install_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, requested: str, journal: str, rebase: str
+) -> None:
+    from tools.databricks import app_first_install_journal, quiesce_window
+
+    read: list[str] = []
+
+    def recovery_state(_workspace: object, **kwargs: str) -> str:
+        read.append(kwargs["app_name"])
+        return journal
+
+    monkeypatch.setattr(app_first_install_journal, "recovery_state", recovery_state)
+    app = SimpleNamespace(name="mip-app", service_principal_client_id="app-client-PLACEHOLDER")
+    workspace = SimpleNamespace(apps=SimpleNamespace(list=lambda: [app], get=lambda _name: app))
+    out = tmp_path / "applicable.env"
+    argv = ["applicable", "--app-name", "mip-app", "--rebase-unverified-app", requested]
+    assert quiesce_window.main([*argv, "--out-env", str(out)], workspace_factory=lambda: workspace) == 0
+
+    assert f"MIP_QUIESCE_WINDOW_REBASE={rebase}\n" in out.read_text(encoding="utf-8")
+    assert read == (["mip-app"] if requested == "1" else []), "the journal is read only on request"

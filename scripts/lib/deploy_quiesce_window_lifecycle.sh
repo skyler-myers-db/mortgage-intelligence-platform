@@ -70,7 +70,7 @@ collect_quiesce_window_binding_payload() {
 plan_quiesce_window() {
   local position="${1:?window plan position is required}"
   local gate_report="${2:?bundle plan gate report is required}"
-  local probe_dir role_rc=0 plan_rc=0
+  local probe_dir role_rc=0 plan_rc=0 rebase
   local -a plan_args=(--position "$position")
   step "plan the quiesce window (${position}, read-only)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -79,18 +79,31 @@ plan_quiesce_window() {
   fi
   probe_dir="$(mktemp -d -t mip-quiesce-window.XXXXXX)"
   chmod 700 "$probe_dir"
-  "$PYTHON" -m tools.databricks.quiesce_window applicable \
+  if ! "$PYTHON" -m tools.databricks.quiesce_window applicable \
     --app-name "$_GRANTS_APP_NAME" \
-    --out-env "$probe_dir/applicable.env"
-  unset MIP_QUIESCE_WINDOW_APP_PRESENT MIP_QUIESCE_WINDOW_APP_CLIENT_ID
+    --scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --rebase-unverified-app "${MIP_REBASE_UNVERIFIED_APP:-0}" \
+    --out-env "$probe_dir/applicable.env"; then
+    echo "${RED}[deploy] the App or its first-install journal could not be read (${position}); nothing was changed.${RST}" >&2
+    exit 2
+  fi
+  unset MIP_QUIESCE_WINDOW_APP_PRESENT MIP_QUIESCE_WINDOW_APP_CLIENT_ID MIP_QUIESCE_WINDOW_REBASE
   # No file reads as "no App": the plan tool then reads the App itself and
   # refuses an installed signed blue that arrives without its probes.
   if [[ -s "$probe_dir/applicable.env" ]]; then
     # shellcheck disable=SC1091
     . "$probe_dir/applicable.env"
   fi
-  if [[ "${MIP_QUIESCE_WINDOW_APP_PRESENT:-0}" == "1" && \
-        "${MIP_REBASE_UNVERIFIED_APP:-0}" != "1" ]]; then
+  # The rebase is the one step 0a takes, never the raw flag: requested AND no
+  # signed first-install journal (the tool reads it as step 0a and the pre-stop
+  # probe do). Once step 0a governs signed blue it has decided, and the
+  # journal it retired would read absent, so a governed run never rebases.
+  rebase="${MIP_QUIESCE_WINDOW_REBASE:-0}"
+  if [[ -n "${QUIESCE_WINDOW_STATE:-}" ]]; then
+    rebase=0
+  fi
+  if [[ "${MIP_QUIESCE_WINDOW_APP_PRESENT:-0}" == "1" && "$rebase" != "1" ]]; then
     if collect_quiesce_window_binding_payload "$probe_dir/binding.json"; then
       plan_args+=(--binding-payload "$probe_dir/binding.json")
     fi
@@ -126,7 +139,7 @@ plan_quiesce_window() {
     --scope "$APP_ROLLBACK_SECRET_SCOPE" \
     --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
     --plan-gate-report "$gate_report" \
-    --rebase-unverified-app "${MIP_REBASE_UNVERIFIED_APP:-0}" \
+    --rebase-unverified-app "$rebase" \
     --out "$QUIESCE_WINDOW_PLAN_JSON" \
     "${plan_args[@]}" || plan_rc=$?
   if [[ "$plan_rc" -ne 0 ]]; then
@@ -141,6 +154,16 @@ print(plan["code"], ",".join(plan["reasons"]) or "-")
     echo "${RED}[deploy] the quiesce window plan wrote no readable report (${position}); nothing was changed.${RST}" >&2
     exit 2
   fi
+  # Signed blue that step 0a governs has a plan of its own: "none" or
+  # "window". Any other code would run the release's mutations (the Lakebase
+  # migration among them) with no window, no reasons and no ack.
+  case "${QUIESCE_WINDOW_STATE:-}:${QUIESCE_WINDOW_CODE}" in
+    :*|blue_serving:none|blue_serving:window|blue_degraded:none|blue_degraded:window) ;;
+    *)
+      echo "${RED}[deploy] the quiesce window plan is ${QUIESCE_WINDOW_CODE} (${position}) while step 0a governs signed blue (${QUIESCE_WINDOW_STATE}); refusing before any mutation. Blue keeps serving.${RST}" >&2
+      exit 2
+      ;;
+  esac
   echo "  quiesce window plan (${position}, private): ${QUIESCE_WINDOW_PLAN_JSON}"
 }
 

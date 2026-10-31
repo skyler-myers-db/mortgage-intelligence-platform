@@ -44,7 +44,9 @@ case "$*" in
   *"quiesce_window assert-serving"*)
     [[ -z "${NOT_SERVING:-}" ]] || exit 1 ;;
   *"quiesce_window applicable"*)
-    printf 'MIP_QUIESCE_WINDOW_APP_PRESENT=0\n' > "$out" ;;
+    printf 'MIP_QUIESCE_WINDOW_APP_PRESENT=%s\nMIP_QUIESCE_WINDOW_APP_CLIENT_ID=app-client\nMIP_QUIESCE_WINDOW_REBASE=%s\n' "${APP_PRESENT:-0}" "${JOURNAL_REBASE:-0}" > "$out" ;;
+  *"converge_lakebase_oauth_role --check"*"--role-contract app"*)
+    exit "${APP_ROLE_RC:-0}" ;;
   *"quiesce_window plan"*)
     [[ -z "${PLAN_REFUSES:-}" ]] || exit 2
     printf '{"code": "%s", "reasons": %s}\n' "${PLAN_CODE:-none}" "${PLAN_REASONS_JSON:-[]}" > "$out" ;;
@@ -78,6 +80,9 @@ QUIESCE_WINDOW_STATE=""; QUIESCE_WINDOW_CODE=""; QUIESCE_WINDOW_REASONS=""
 QUIESCE_WINDOW_PLAN_JSON="$TMPDIR/plan.json"; QUIESCE_WINDOW_BLUE_RESTORABLE=1
 QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID=deployment-blue; QUIESCE_WINDOW_TREE_SHA256=t
 APP_ROLLBACK_BINDING_ENV="$TMPDIR/binding.env"; APP_UPGRADE_STATE=blue_quiesced
+TARGET=client; OTEL_RESOURCE_BINDING_ARGS=(); DATABRICKS_VERIFIER_CLIENT_ID=verifier-client
+MIP_LENDER_NAME=lender; MIP_LENDER_NMLS_ID=1; MIP_TENANT_ID=tenant
+run_job_with_retry() { echo "job: $*" >> "$CALLS"; }
 """
 
 
@@ -273,6 +278,92 @@ def test_the_plan_sets_the_reasons_the_window_opens_for(tmp_path: Path) -> None:
     assert "code=window reasons=WR1,WR3" in result.stdout
     plan = next(call for call in calls if "quiesce_window plan" in call)
     assert "--position pre-apply" in plan and "--plan-gate-report" in plan
+
+
+def _migration_block() -> str:
+    """The step file's real migration lines: open for WR3, run or skip the job, close."""
+
+    text = (LIB / "deploy_step_lakebase_and_uc_grants.sh").read_text(encoding="utf-8")
+    start = text.index("ensure_quiesce_window_open_for WR3\n")
+    end = text.index("\nclose_quiesce_window\n", start) + len("\nclose_quiesce_window\n")
+    return text[start:end]
+
+
+@pytest.mark.parametrize("journal_rebase", ("0", "1"), ids=("signed-journal", "retired-journal"))
+def test_a_governed_run_with_the_rebase_flag_still_plans_signed_blue(
+    tmp_path: Path, journal_rebase: str
+) -> None:
+    (tmp_path / "report.json").write_text("{}", encoding="utf-8")
+    result, calls = _run(
+        tmp_path,
+        'QUIESCE_WINDOW_STATE=blue_serving\nplan_quiesce_window pre-apply "$TMPDIR/report.json"\n',
+        MIP_REBASE_UNVERIFIED_APP="1",
+        APP_PRESENT="1",
+        JOURNAL_REBASE=journal_rebase,
+    )
+    assert result.returncode == 0, result.stderr
+    plan = next(call for call in calls if "quiesce_window plan" in call)
+    assert "--rebase-unverified-app 0" in plan, "step 0a governs signed blue: never a rebase"
+    assert _has(calls, "--role-contract app") == 1 and _has(calls, "lakebase_migrate.py --mode plan") == 1
+    applicable = next(call for call in calls if "quiesce_window applicable" in call)
+    assert "--rebase-unverified-app 1" in applicable, "the tool resolves the request itself"
+
+
+@pytest.mark.parametrize(("journal_rebase", "passed"), (("0", "0"), ("1", "1")))
+def test_the_pre_lease_plan_rebases_only_when_the_journal_is_not_signed(
+    tmp_path: Path, journal_rebase: str, passed: str
+) -> None:
+    (tmp_path / "report.json").write_text("{}", encoding="utf-8")
+    result, calls = _run(
+        tmp_path,
+        'plan_quiesce_window pre-lease "$TMPDIR/report.json"\n',
+        MIP_REBASE_UNVERIFIED_APP="1",
+        APP_PRESENT="1",
+        JOURNAL_REBASE=journal_rebase,
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"--rebase-unverified-app {passed}" in next(c for c in calls if "quiesce_window plan" in c)
+    assert _has(calls, "--role-contract app") == (1 if passed == "0" else 0)
+
+
+@pytest.mark.parametrize("code", ("not_applicable", "refused", "unreviewed"))
+def test_a_governed_run_whose_plan_is_neither_none_nor_window_never_runs_the_migration(
+    tmp_path: Path, code: str
+) -> None:
+    (tmp_path / "report.json").write_text("{}", encoding="utf-8")
+    result, calls = _run(
+        tmp_path,
+        'QUIESCE_WINDOW_STATE=blue_serving\nplan_quiesce_window pre-apply "$TMPDIR/report.json"\n'
+        + _migration_block()
+        + 'echo "final=$QUIESCE_WINDOW_STATE"\n',
+        APP_PRESENT="1",
+        PLAN_CODE=code,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "refusing before any mutation" in result.stderr
+    assert not _has(calls, "mip_lakebase_migrate") and "final=" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("code", "reasons", "job"),
+    (("none", "[]", 0), ("window", '["WR3"]', 1)),
+)
+def test_the_migration_block_skips_only_a_none_plan_and_runs_inside_a_window(
+    tmp_path: Path, code: str, reasons: str, job: int
+) -> None:
+    (tmp_path / "report.json").write_text("{}", encoding="utf-8")
+    result, calls = _run(
+        tmp_path,
+        'QUIESCE_WINDOW_STATE=blue_serving\nplan_quiesce_window pre-apply "$TMPDIR/report.json"\n'
+        + _migration_block()
+        + 'echo "final=$QUIESCE_WINDOW_STATE"\n',
+        APP_PRESENT="1",
+        PLAN_CODE=code,
+        PLAN_REASONS_JSON=reasons,
+    )
+    assert result.returncode == 0, result.stderr
+    assert _has(calls, "bundle run mip_lakebase_migrate") == job
+    assert _has(calls, "quiesce_window open") == job and "final=blue_serving" in result.stdout
 
 
 # --- positive controls --------------------------------------------------------------

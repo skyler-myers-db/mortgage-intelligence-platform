@@ -37,6 +37,30 @@ def app_or_none(workspace: Any, *, app_name: str) -> object | None:
     return workspace.apps.get(app_name) if matches else None
 
 
+def takes_unsigned_rebase(
+    workspace: Any, *, app_name: str, scope: str, lakebase_instance: str, requested: bool
+) -> bool:
+    """Whether step 0a takes the unsigned rebase: requested, and no signed first-install journal.
+
+    Step 0a and the pre-stop probe (``prestop_rollback_record``) apply the same
+    rule: a signed journal is signed blue whatever ``MIP_REBASE_UNVERIFIED_APP``
+    says, so the window governs it. The journal is read read-only, without the
+    lease, as the probe reads it.
+    """
+
+    if not requested:
+        return False
+    from tools.databricks.app_first_install_journal import recovery_state
+
+    state = recovery_state(
+        workspace,
+        app_name=app_name,
+        rollback_scope=scope,
+        expected_lakebase_instance=lakebase_instance,
+    )
+    return state != "signed"
+
+
 def _migration(plan: dict[str, Any]) -> dict[str, Any]:
     decision = str(plan.get("decision") or "")
     if plan.get("mode") != "plan" or decision not in MIGRATION_DECISIONS:
