@@ -146,12 +146,10 @@ def test_the_pre_apply_gate_replans_after_genie_and_immediately_before_the_non_a
     pre_apply = text.index(PRE_APPLY)
     apply = text.index('run "$PYTHON" -m tools.databricks.bundle_env deploy -t "$TARGET"')
 
-    assert (
-        text.index(LEASE, steps)
-        < text.index("tools.databricks.provision_genie_space", steps)
-        < pre_apply
-        < apply
-    )
+    # The step-0a provisioning (the preflight's --plan-pin before the lease is read-only).
+    provision = text.index('step "resolve governed Genie space by its pin', steps)
+    assert text.index(LEASE, steps) < provision < pre_apply < apply
+    assert text.index("provision_genie_space --plan-pin", steps) < text.index(LEASE, steps)
     assert text.index("# <<< app release source: stage <<<") < pre_apply
     between = text[pre_apply:apply]
     # Only the empty pipeline namespace (not a bundle resource), the exact-source

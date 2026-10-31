@@ -64,6 +64,10 @@ ALLOWED_CALLS = frozenset(
         ("groups", "list"),
         ("groups", "patch"),
         ("metastores", "current"),
+        # Read-only: tools/clients/install_checks.py reads the metastore's
+        # storage root, a share table's existence and the first-install
+        # journal's presence before the lease (M1-PR3).
+        ("metastores", "summary"),
         ("schemas", "get"),
         ("service_principal_federation_policy", "create"),
         ("service_principal_federation_policy", "list"),
@@ -74,6 +78,7 @@ ALLOWED_CALLS = frozenset(
         ("service_principals", "create"),
         ("service_principals", "get"),
         ("service_principals", "list"),
+        ("tables", "exists"),
         ("token_management", "list"),
         ("users", "list"),
         ("workspace_assignment", "list"),
@@ -81,6 +86,7 @@ ALLOWED_CALLS = frozenset(
         # The client method; the SDK's Workspace (notebook) API shares the name
         # and has no such method, so any other ``workspace`` call still fails.
         ("workspace", "get_workspace_id"),
+        ("workspace", "get_status"),
     }
 )
 FORBIDDEN_KEYWORDS = frozenset({"owner", "new_owner", "remove", "roles", "entitlements"})
@@ -400,8 +406,15 @@ def test_the_bootstrap_calls_only_the_reviewed_sdk_surface() -> None:
     assert used == ALLOWED_CALLS
     destructive = {pair for pair in ALLOWED_CALLS if pair[1] in DESTRUCTIVE_METHODS}
     assert destructive == {("service_principal_secrets", "delete")}
-    assert [pair for pair in ALLOWED_CALLS if pair[0] == "metastores"] == [("metastores", "current")]
-    assert not [pair for pair in ALLOWED_CALLS if pair[0] in {"catalogs", "schemas", "tables"} and pair[1] != "get"]
+    assert sorted(pair for pair in ALLOWED_CALLS if pair[0] == "metastores") == [
+        ("metastores", "current"),
+        ("metastores", "summary"),
+    ]
+    assert not [
+        pair
+        for pair in ALLOWED_CALLS
+        if pair[0] in {"catalogs", "schemas", "tables"} and pair[1] not in {"get", "exists"}
+    ]
     assert not [pair for pair in ALLOWED_CALLS if pair[0] == "service_principals" and pair[1] in {"patch", "update"}]
 
 

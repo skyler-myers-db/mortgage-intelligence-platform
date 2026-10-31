@@ -123,7 +123,7 @@ def _set(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]) -> None:
 def _payload_env() -> dict[str, dict[str, str]]:
     payload = app_deploy_payload.build_payload(
         source_code_path="/Workspace/app-src/release",
-        target="dev",
+        install_class="demo",
         lakebase_instance="mip-app-state",
         campaign_treatment_runtime_enabled=True,
     )
@@ -174,7 +174,7 @@ def test_the_payload_build_refuses_an_unverifiable_record_with_exit_2(
 
     with pytest.raises(LenderIdentityRefused):
         _payload_env()
-    assert app_deploy_payload.main(["--source-code-path", "/Workspace/app-src/release"]) == 2
+    assert app_deploy_payload.main(["--source-code-path", "/Workspace/app-src/release", "--install-class", "demo"]) == 2
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "app_deploy_payload: refused: MIP_LENDER_IDENTITY" in captured.err

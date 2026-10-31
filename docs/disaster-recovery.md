@@ -27,7 +27,7 @@ value assigned to required variable client_key". The `bundle_env.py` and
 | Lakebase app state (`mip_app.*`) | Databricks-managed Lakebase PITR, 7-day window | Up to 24 h depending on selected restore point | 15 min restore + 5 min schema head check |
 | UC gold tables (`mip.gold.*`) | CTAS rebuild from silver/ref/source | Last silver/ref refresh | 10 min on warm warehouse |
 | UC silver tables (`mip.silver.*`) | Cotality Delta Share + FRED refresh jobs | Last upstream source availability; FRED weekly is acceptable | 30 min |
-| Genie space | Re-provision from `genie/mortgage_lead_intelligence_space.yml` | Last committed Genie YAML | 10 min |
+| Genie space | Re-provision the pinned space from `genie/mortgage_lead_intelligence_space.yml`; a deleted one needs its pin retired first (Scenario 5) | Last committed Genie YAML | 10 min |
 | Governed action tokens | HMAC current/previous key grace window | No data loss; in-flight token TTL is 2 h | One redeploy |
 | Audit ledger archive | Quarterly JSONL.GZ export + archive run ledger | 24 h for archive job; Lakebase PITR covers 7 d | 30 min export verification |
 
@@ -208,19 +208,45 @@ Symptoms:
 - Ask Genie returns `source: "degraded"` or policy-blocked responses for all
   trusted sample questions.
 
-Recovery:
+The governed space is resolved by its pin, never by its title (attack G12,
+M1-PR3; `docs/deployment.md`, "The governed Genie space, pinned by id"). No
+space id is copied anywhere: `GENIE_SPACE_ID` and `BUNDLE_VAR_genie_space_id`
+are no deploy inputs, and `bundle_env.py` binds the App to the pinned id.
+
+Recovery when the space is **misconfigured** (it still exists): re-run the
+deploy, which updates the pinned space from the committed YAML.
 
 ```bash
-.venv/bin/python tools/databricks/provision_genie_space.py \
-  --profile DEFAULT \
-  --warehouse-id "$DATABRICKS_WAREHOUSE_ID" \
-  --spec genie/mortgage_lead_intelligence_space.yml \
-  --smoke-test
-
-# Copy the returned space id into .env.local or BUNDLE_VAR_genie_space_id,
-# then rebind app resources.
 CI=1 ./scripts/deploy.sh -t client --no-confirm
 ```
+
+Recovery when the space is **deleted**: every deploy now refuses, because a
+pinned space that is gone is never replaced by a title match. Retire the pin
+through its reviewed, digest-acked path, then deploy, which creates the new
+space and pins it:
+
+```bash
+GENIE_PIN=(--space-name "<genie-space-title>" --app-name <app-name> \
+  --pin-scope <app-rollback-scope> --lakebase-instance <lakebase-instance>)
+# 1. Read-only: proves the pinned space is gone and prints the retire plan
+#    (the gone id, the signed source naming it, the deploying identity, sha256).
+.venv/bin/python tools/databricks/provision_genie_space.py --retire-pin --plan-pin "${GENIE_PIN[@]}"
+# 2. Review the plan, then retire with its exact sha256. The plan is recomputed
+#    right before the one write (a signed tombstone pin record) and refuses,
+#    with nothing changed, if it moved. Needs MIP_AI_GATEWAY_PROOF_SIGNING_KEY
+#    and _VERIFY_KEY exported, and the App rollback scope this deployer owns.
+.venv/bin/python tools/databricks/provision_genie_space.py --retire-pin \
+  --ack-plan <retire-plan-sha256> "${GENIE_PIN[@]}"
+# 3. Deploy: with nothing pinned and no space titled as governed, step 0a
+#    creates the space and pins its id. A space someone recreated by hand with
+#    the governed title is not adopted silently: the preflight refuses it until
+#    MIP_GENIE_PIN_ACK names its read-only pin plan.
+CI=1 ./scripts/deploy.sh -t client --no-confirm
+```
+
+A rollback record that still names the deleted space is superseded until the
+next green capture replaces it, and the deleted id is never pinned again. A
+space that still exists is never unpinned this way.
 
 Validate with a safe prompt:
 

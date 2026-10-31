@@ -35,8 +35,8 @@ def test_direct_execution_forwards_non_default_lakebase_instance() -> None:
             str(app_deploy_payload.REPO / "tools/databricks/app_deploy_payload.py"),
             "--source-code-path",
             "/Workspace/app/files",
-            "--target",
-            "dev",
+            "--install-class",
+            "demo",
             "--lakebase-instance",
             "mip-app-state-staging",
         ],
@@ -110,7 +110,7 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
 
     payload = build_payload(
         source_code_path="/Workspace/app/files",
-        target="prod",
+        install_class="customer",
         current_user_email="se@example.com",
         catalog="acme_mip",
         schema="gold",
@@ -166,19 +166,19 @@ def test_app_deploy_payload_rejects_unreviewed_lender_identity(monkeypatch) -> N
     monkeypatch.setenv("MIP_LENDER_NMLS_ID", "7654321")
 
     with pytest.raises(ValueError, match="independently reviewed source-controlled"):
-        build_payload(source_code_path="/Workspace/app/files", target="prod")
+        build_payload(source_code_path="/Workspace/app/files", install_class="customer")
 
 
 def test_treatment_runtime_gate_requires_exact_enabled_value(monkeypatch) -> None:
     # Stale operator config cannot enable the gate.
     monkeypatch.setenv("MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED", "1")
-    disabled = _env_map(build_payload(source_code_path="/Workspace/app/files", target="prod"))
+    disabled = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class="customer"))
     assert disabled["MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED"]["value"] == "0"
 
     enabled = _env_map(
         build_payload(
             source_code_path="/Workspace/app/files",
-            target="prod",
+            install_class="customer",
             campaign_treatment_runtime_enabled=True,
         )
     )
@@ -192,7 +192,7 @@ def test_otel_overlay_preserves_canonical_governed_payload(monkeypatch) -> None:
     env = _env_map(
         build_payload(
             source_code_path="/Workspace/app/files",
-            target="prod",
+            install_class="customer",
             campaign_treatment_runtime_enabled=True,
             otel_endpoint="https://collector.example.com/v1/logs",
             otel_header_resource="otel_headers",
@@ -225,7 +225,7 @@ def test_otel_overlay_rejects_partial_or_unsafe_configuration(
     with pytest.raises(ValueError, match="OTEL|OTLP|https|credentials"):
         build_payload(
             source_code_path="/Workspace/app/files",
-            target="prod",
+            install_class="customer",
             otel_endpoint=endpoint,
             otel_header_resource=resource,
         )
@@ -242,7 +242,7 @@ def test_app_deploy_payload_does_not_overlay_lakebase_dsn_fragments(monkeypatch)
     monkeypatch.setenv("LAKEBASE_DATABASE", "wrong_db")
     monkeypatch.setenv("LAKEBASE_SSLMODE", "disable")
 
-    payload = build_payload(source_code_path="/Workspace/app/files", target="prod")
+    payload = build_payload(source_code_path="/Workspace/app/files", install_class="customer")
     env = _env_map(payload)
 
     assert env["PGHOST"]["value_from"] == "database"
@@ -255,7 +255,7 @@ def test_app_deploy_payload_does_not_overlay_lakebase_dsn_fragments(monkeypatch)
 def test_app_deploy_payload_pins_non_default_lakebase_instance() -> None:
     payload = build_payload(
         source_code_path="/Workspace/app/files",
-        target="dev",
+        install_class="demo",
         lakebase_instance="mip-app-state-staging",
     )
     env = _env_map(payload)
@@ -275,7 +275,7 @@ def test_app_deploy_payload_rejects_invalid_lakebase_instance(name: str) -> None
     with pytest.raises(ValueError, match="lowercase DNS-style"):
         build_payload(
             source_code_path="/Workspace/app/files",
-            target="dev",
+            install_class="demo",
             lakebase_instance=name,
         )
 
@@ -286,12 +286,12 @@ def test_payload_does_not_bootstrap_current_user_admin(monkeypatch) -> None:
 
     dev = build_payload(
         source_code_path="/Workspace/app/files",
-        target="dev",
+        install_class="demo",
         current_user_email="operator@summit.example",
     )
     prod = build_payload(
         source_code_path="/Workspace/app/files",
-        target="prod",
+        install_class="customer",
         current_user_email="operator@summit.example",
     )
 
@@ -303,7 +303,7 @@ def test_payload_includes_explicit_admin_operator_vars(monkeypatch) -> None:
     monkeypatch.setenv("MIP_ADMIN_EMAILS", "admin@example.com")
     monkeypatch.setenv("MIP_ADMIN_GROUP_NAME", "risk-admin")
 
-    payload = build_payload(source_code_path="/Workspace/app/files", target="dev")
+    payload = build_payload(source_code_path="/Workspace/app/files", install_class="demo")
     env = _env_map(payload)
 
     assert env["MIP_ADMIN_EMAILS"]["value"] == "admin@example.com"
@@ -313,14 +313,14 @@ def test_payload_includes_explicit_admin_operator_vars(monkeypatch) -> None:
 def test_payload_carries_the_auditor_allowlist_only_when_set(monkeypatch) -> None:
     """D-audit-reads-c3: no auditor is bootstrapped; an operator's list rides
     the payload (empty values are dropped, which is the fail-closed default)."""
-    for target in ("dev", "prod"):
-        env = _env_map(build_payload(source_code_path="/Workspace/app/files", target=target))
+    for install_class in ("demo", "customer"):
+        env = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class=install_class))
         assert "MIP_AUDITOR_EMAILS" not in env
         assert "MIP_AUDITOR_IDENTITIES" not in env
 
     monkeypatch.setenv("MIP_AUDITOR_EMAILS", "auditor@example.com")
     monkeypatch.setenv("MIP_AUDITOR_IDENTITIES", "audit-client")
-    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="dev"))
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class="demo"))
 
     assert env["MIP_AUDITOR_EMAILS"] == {"name": "MIP_AUDITOR_EMAILS", "value": "auditor@example.com"}
     assert env["MIP_AUDITOR_IDENTITIES"] == {"name": "MIP_AUDITOR_IDENTITIES", "value": "audit-client"}
@@ -331,7 +331,7 @@ def test_payload_carries_the_auditor_allowlist_only_when_set(monkeypatch) -> Non
 def test_presenter_mode_rides_a_dev_payload_as_one_and_says_so(monkeypatch, capsys, raw) -> None:
     monkeypatch.setenv("MIP_PRESENTER_MODE", raw)
 
-    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="dev"))
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class="demo"))
 
     assert env["MIP_PRESENTER_MODE"] == {"name": "MIP_PRESENTER_MODE", "value": "1"}
     assert capsys.readouterr().err.strip() == app_deploy_payload.PRESENTER_MODE_NOTICE
@@ -342,7 +342,7 @@ def test_presenter_mode_is_omitted_when_off(monkeypatch, capsys, raw) -> None:
     if raw is not None:
         monkeypatch.setenv("MIP_PRESENTER_MODE", raw)
 
-    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="dev"))
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class="demo"))
 
     assert "MIP_PRESENTER_MODE" not in env
     assert "presenter mode" not in capsys.readouterr().err
@@ -352,16 +352,16 @@ def test_presenter_mode_refuses_an_unparseable_value(monkeypatch) -> None:
     monkeypatch.setenv("MIP_PRESENTER_MODE", "maybe")
 
     with pytest.raises(ValueError, match="MIP_PRESENTER_MODE must be one of"):
-        build_payload(source_code_path="/Workspace/app/files", target="dev")
+        build_payload(source_code_path="/Workspace/app/files", install_class="demo")
 
 
-def test_presenter_mode_is_refused_for_prod_and_off_is_fine(monkeypatch) -> None:
+def test_presenter_mode_is_refused_for_a_customer_install_and_off_is_fine(monkeypatch) -> None:
     monkeypatch.setenv("MIP_PRESENTER_MODE", "true")
-    with pytest.raises(ValueError, match="refused for target prod"):
-        build_payload(source_code_path="/Workspace/app/files", target="prod")
+    with pytest.raises(ValueError, match="refused for a customer install"):
+        build_payload(source_code_path="/Workspace/app/files", install_class="customer")
 
     monkeypatch.setenv("MIP_PRESENTER_MODE", "off")
-    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="prod"))
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class="customer"))
     assert "MIP_PRESENTER_MODE" not in env
 
 
@@ -375,15 +375,15 @@ def test_refusal_text_capture_ships_enabled_by_default_and_passes_an_opt_out(mon
     """D-audit-reads-d: the payload's explicit safe default is 'enabled' (an
     empty value would be dropped), and a lender's 'disabled' rides through."""
     assert "MIP_GENIE_REFUSAL_TEXT_CAPTURE" in app_deploy_payload.NON_SECRET_OPERATOR_VARS
-    for target in ("dev", "prod"):
-        env = _env_map(build_payload(source_code_path="/Workspace/app/files", target=target))
+    for install_class in ("demo", "customer"):
+        env = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class=install_class))
         assert env["MIP_GENIE_REFUSAL_TEXT_CAPTURE"] == {
             "name": "MIP_GENIE_REFUSAL_TEXT_CAPTURE",
             "value": "enabled",
         }
 
     monkeypatch.setenv("MIP_GENIE_REFUSAL_TEXT_CAPTURE", "disabled")
-    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="prod"))
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class="customer"))
     assert env["MIP_GENIE_REFUSAL_TEXT_CAPTURE"]["value"] == "disabled"
 
 
@@ -392,7 +392,7 @@ def test_refusal_text_capture_refuses_a_typo_before_boot(monkeypatch, raw) -> No
     monkeypatch.setenv("MIP_GENIE_REFUSAL_TEXT_CAPTURE", raw)
 
     with pytest.raises(ValueError, match="MIP_GENIE_REFUSAL_TEXT_CAPTURE must be enabled or disabled"):
-        build_payload(source_code_path="/Workspace/app/files", target="dev")
+        build_payload(source_code_path="/Workspace/app/files", install_class="demo")
 
 
 def test_refusal_text_capture_values_match_the_runtime_literal() -> None:
@@ -411,7 +411,7 @@ def test_payload_allows_operator_to_enable_lead_rewarm(monkeypatch) -> None:
     monkeypatch.setenv("MIP_WAREHOUSE_KEEP_WARM", "scheduled")
     monkeypatch.setenv("MIP_LEADS_WARM_INTERVAL_S", "120")
 
-    payload = build_payload(source_code_path="/Workspace/app/files", target="dev")
+    payload = build_payload(source_code_path="/Workspace/app/files", install_class="demo")
     env = _env_map(payload)
 
     assert env["MIP_LEADS_WARM_INTERVAL_S"]["value"] == "120"
@@ -421,7 +421,7 @@ def test_payload_allows_operator_to_enable_lead_rewarm(monkeypatch) -> None:
 def test_payload_pins_keep_warm_off_explicitly(monkeypatch) -> None:
     """Deployment env_vars replace app.yaml and empty values are dropped, so
     the idle-cost default must be an explicit value (audit delivery-v1)."""
-    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="dev"))
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class="demo"))
 
     assert env["MIP_WAREHOUSE_KEEP_WARM"]["value"] == "off"
     assert "MIP_WAREHOUSE_KEEP_WARM_ACTIVITY_WINDOW_MIN" not in env
@@ -431,7 +431,7 @@ def test_payload_carries_an_operator_activity_policy(monkeypatch) -> None:
     monkeypatch.setenv("MIP_WAREHOUSE_KEEP_WARM", "activity")
     monkeypatch.setenv("MIP_WAREHOUSE_KEEP_WARM_ACTIVITY_WINDOW_MIN", "30")
 
-    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="dev"))
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class="demo"))
 
     assert env["MIP_WAREHOUSE_KEEP_WARM"]["value"] == "activity"
     assert env["MIP_WAREHOUSE_KEEP_WARM_ACTIVITY_WINDOW_MIN"]["value"] == "30"
@@ -444,7 +444,7 @@ def test_payload_refuses_a_rewarm_interval_the_policy_would_ignore(monkeypatch, 
     monkeypatch.setenv("MIP_LEADS_WARM_INTERVAL_S", "120")
 
     with pytest.raises(ValueError, match="MIP_WAREHOUSE_KEEP_WARM=scheduled"):
-        build_payload(source_code_path="/Workspace/app/files", target="dev")
+        build_payload(source_code_path="/Workspace/app/files", install_class="demo")
 
 
 def test_payload_binds_cotality_mask_secret_without_serializing_value(monkeypatch) -> None:
@@ -452,7 +452,7 @@ def test_payload_binds_cotality_mask_secret_without_serializing_value(monkeypatc
 
     payload = build_payload(
         source_code_path="/Workspace/app/files",
-        target="prod",
+        install_class="customer",
         app_env="prod",
     )
     env = _env_map(payload)
@@ -475,7 +475,7 @@ def test_payload_includes_previous_action_secret_only_for_explicit_rotation_grac
 
     payload = build_payload(
         source_code_path="/Workspace/app/files",
-        target="prod",
+        install_class="customer",
         app_env="prod",
     )
     env = _env_map(payload)
@@ -494,7 +494,7 @@ def test_payload_rejects_previous_action_secret_without_rotation_kid(monkeypatch
     with pytest.raises(ValueError, match="MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"):
         build_payload(
             source_code_path="/Workspace/app/files",
-            target="prod",
+            install_class="customer",
             app_env="prod",
         )
 
@@ -505,7 +505,7 @@ def test_payload_binds_the_stored_previous_key_on_its_kid_alone(monkeypatch) -> 
 
     payload = build_payload(
         source_code_path="/Workspace/app/files",
-        target="prod",
+        install_class="customer",
         app_env="prod",
     )
     env = _env_map(payload)
@@ -525,7 +525,7 @@ def test_a_placeholder_previous_secret_is_unset_and_the_kid_alone_decides(monkey
 
     payload = build_payload(
         source_code_path="/Workspace/app/files",
-        target="prod",
+        install_class="customer",
         app_env="prod",
     )
     env = _env_map(payload)
@@ -540,7 +540,7 @@ def test_payload_uses_secret_resource_when_operator_value_is_placeholder(monkeyp
 
     payload = build_payload(
         source_code_path="/Workspace/app/files",
-        target="prod",
+        install_class="customer",
         app_env="prod",
     )
     assert (
@@ -554,7 +554,7 @@ def test_payload_never_serializes_absent_current_action_secret(monkeypatch) -> N
 
     payload = build_payload(
         source_code_path="/Workspace/app/files",
-        target="dev",
+        install_class="demo",
         app_env="sandbox",
     )
     assert (
@@ -569,7 +569,7 @@ def test_payload_local_runtime_can_omit_durable_secrets(monkeypatch) -> None:
 
     payload = build_payload(
         source_code_path="/Workspace/app/files",
-        target="dev",
+        install_class="demo",
         app_env="local",
     )
 
@@ -591,7 +591,7 @@ def test_payload_binds_salesforce_secrets_only_for_complete_idempotent_connector
     }.items():
         monkeypatch.setenv(name, value)
 
-    payload = build_payload(source_code_path="/Workspace/app/files", target="prod")
+    payload = build_payload(source_code_path="/Workspace/app/files", install_class="customer")
     env = _env_map(payload)
 
     assert env["SALESFORCE_EXTERNAL_ID_FIELD"]["value"] == "MIP_Activation_Id__c"
@@ -602,7 +602,7 @@ def test_payload_binds_salesforce_secrets_only_for_complete_idempotent_connector
     assert "sf-password" not in str(payload)
 
     monkeypatch.delenv("SALESFORCE_EXTERNAL_ID_FIELD")
-    incomplete = _env_map(build_payload(source_code_path="/Workspace/app/files", target="prod"))
+    incomplete = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class="customer"))
     assert "SALESFORCE_CLIENT_SECRET" not in incomplete
     assert "SALESFORCE_PASSWORD" not in incomplete
 
@@ -621,7 +621,7 @@ def test_kept_salesforce_keys_stay_unbound_while_the_secret_inputs_are_unset(
     }.items():
         monkeypatch.setenv(name, value)
 
-    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="prod"))
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class="customer"))
 
     assert env["SALESFORCE_INSTANCE_URL"]["value"] == "https://summit.example.my.salesforce.com"
     assert not set(app_deploy_payload.SALESFORCE_SECRET_ENVS) & set(env)
@@ -654,7 +654,7 @@ def test_a_placeholder_salesforce_secret_input_counts_as_unset(
     }.items():
         monkeypatch.setenv(name, value)
 
-    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="prod"))
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class="customer"))
 
     bound = {name for name in app_deploy_payload.SALESFORCE_SECRET_ENVS if name in env}
     if token.startswith("<"):
@@ -670,7 +670,7 @@ def test_payload_refuses_an_unknown_keep_warm_policy(monkeypatch, policy) -> Non
     monkeypatch.setenv("MIP_WAREHOUSE_KEEP_WARM", policy)
 
     with pytest.raises(ValueError, match="MIP_WAREHOUSE_KEEP_WARM must be one of"):
-        build_payload(source_code_path="/Workspace/app/files", target="dev")
+        build_payload(source_code_path="/Workspace/app/files", install_class="demo")
 
 
 def test_payload_keep_warm_policies_are_the_runtime_literal() -> None:
@@ -689,12 +689,12 @@ def test_rum_is_on_by_default_and_an_explicit_opt_out_is_forwarded(monkeypatch) 
     stays off so a deploy that drops the operator env fails closed."""
     from backend.config.settings import Settings
 
-    for target in ("dev", "prod"):
-        env = _env_map(build_payload(source_code_path="/Workspace/app/files", target=target))
+    for install_class in ("demo", "customer"):
+        env = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class=install_class))
         assert env["MIP_RUM_ENABLED"] == {"name": "MIP_RUM_ENABLED", "value": "1"}
 
     monkeypatch.setenv("MIP_RUM_ENABLED", "0")
-    env = _env_map(build_payload(source_code_path="/Workspace/app/files", target="dev"))
+    env = _env_map(build_payload(source_code_path="/Workspace/app/files", install_class="demo"))
     assert env["MIP_RUM_ENABLED"] == {"name": "MIP_RUM_ENABLED", "value": "0"}
 
     assert Settings.model_fields["mip_rum_enabled"].default is False

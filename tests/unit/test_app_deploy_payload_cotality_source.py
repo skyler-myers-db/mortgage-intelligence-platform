@@ -37,7 +37,7 @@ def _hermetic_operator_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
 
 def _source_env() -> dict[str, str]:
-    payload = build_payload(source_code_path="/Workspace/app-src/release", target="dev")
+    payload = build_payload(source_code_path="/Workspace/app-src/release", install_class="demo")
     return {
         item["name"]: item["value"]
         for item in payload["env_vars"]  # type: ignore[attr-defined]

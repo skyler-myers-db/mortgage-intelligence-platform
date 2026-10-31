@@ -92,9 +92,9 @@ zip:
 #                         using the Databricks SDK. See the tool's docstring
 #                         for auth resolution rules.
 # `bundle-validate-env`   sources .env.local (if present), exports
-#                         DATABRICKS_WAREHOUSE_ID and GENIE_SPACE_ID into
-#                         bundle variables, then validates the client
-#                         target, as bundle-validate does.
+#                         DATABRICKS_WAREHOUSE_ID into bundle variables,
+#                         then validates the client target, as
+#                         bundle-validate does.
 # `bundle-deploy-dev`     retired unsafe alias; use `deploy-dev`.
 # ---------------------------------------------------------------------------
 
@@ -103,9 +103,9 @@ provision-genie:
 
 # The env-wired targets delegate to tools/databricks/bundle_env.py which uses
 # python-dotenv to parse .env.local safely (tolerates unquoted spaces and
-# angle-bracket placeholder values). It maps DATABRICKS_WAREHOUSE_ID and
-# GENIE_SPACE_ID to BUNDLE_VAR_sql_warehouse_id / BUNDLE_VAR_genie_space_id
-# before invoking the Databricks CLI.
+# angle-bracket placeholder values). It maps the pinned governed Genie space
+# (never an input) to BUNDLE_VAR_genie_space_id before invoking the Databricks
+# CLI. No variable names a SQL warehouse: every resource uses the bundle's own.
 bundle-validate-env: render-sql
 	@$(PYTHON) tools/databricks/bundle_env.py validate -t client
 

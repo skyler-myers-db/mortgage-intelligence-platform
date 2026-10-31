@@ -343,44 +343,34 @@ def test_bundle_resource_names_fail_closed_on_drift_or_unsafe_values(
         bundle_env._deployment_resource_names(names)
 
 
-def test_governed_genie_resolution_pages_by_exact_title_and_round_trips() -> None:
-    class Genie:
-        def __init__(self) -> None:
-            self.pages: list[str | None] = []
+def test_bundle_env_resolves_the_governed_space_by_its_pin_with_the_profiles_coordinates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M1-PR3: the pin record or the signed rollback record, never a title (attack G12)."""
 
-        def list_spaces(self, *, page_token: str | None) -> SimpleNamespace:
-            self.pages.append(page_token)
-            if page_token is None:
-                return SimpleNamespace(
-                    spaces=[SimpleNamespace(title="Other Space", space_id="other-id")],
-                    next_page_token="next",
-                )
-            return SimpleNamespace(
-                spaces=[
-                    SimpleNamespace(
-                        title="Mortgage Lead Intelligence Staging",
-                        space_id="governed-space-id",
-                    )
-                ],
-                next_page_token=None,
-            )
+    from tools.clients.environment import RawProfile, resolve
+    from tools.databricks import genie_space_pin
 
-        def get_space(self, space_id: str) -> SimpleNamespace:
-            assert space_id == "governed-space-id"
-            return SimpleNamespace(title="Mortgage Lead Intelligence Staging")
+    seen: dict[str, object] = {}
 
-    genie = Genie()
-    resolved = bundle_env._resolve_governed_genie_space_id(
-        {},
-        space_name="Mortgage Lead Intelligence Staging",
-        client=SimpleNamespace(genie=genie),
-    )
+    def pinned(workspace: object, **kwargs: object) -> str:
+        seen.update(kwargs, workspace=workspace)
+        return "governed-space-id"
 
-    assert resolved == "governed-space-id"
-    assert genie.pages == [None, "next"]
+    monkeypatch.setattr(genie_space_pin, "pinned_space_id", pinned)
+    monkeypatch.setattr(bundle_env, "_genie_workspace_client", lambda env: "deployer-client")
+    profile = resolve(RawProfile(values=paychex_shaped_profile()))
+
+    assert bundle_env._pinned_genie_space_id({}, profile) == "governed-space-id"
+    assert seen == {
+        "workspace": "deployer-client",
+        "app_name": profile.app_name,
+        "scope": profile.app_rollback_secret_scope,
+        "lakebase_instance": profile.lakebase_instance,
+    }
 
 
-def test_direct_bundle_deploy_overwrites_stale_genie_id_with_governed_name(
+def test_direct_bundle_deploy_binds_the_pinned_space_never_an_ambient_genie_id(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -392,12 +382,8 @@ def test_direct_bundle_deploy_overwrites_stale_genie_id_with_governed_name(
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(
         bundle_env,
-        "_resolve_governed_genie_space_id",
-        lambda _env, *, space_name: (
-            "governed-space-id"
-            if space_name == "Mortgage Lead Intelligence Staging"
-            else "wrong"
-        ),
+        "_pinned_genie_space_id",
+        lambda _env, profile: "governed-space-id" if profile.app_name == "mip-app" else "wrong",
     )
     monkeypatch.setattr(bundle_env.render_sql, "render", lambda **_kwargs: (1, 0, 0))
     captured: dict[str, str] = {}
@@ -415,7 +401,7 @@ def test_direct_bundle_deploy_overwrites_stale_genie_id_with_governed_name(
     )
 
     assert bundle_env.main() == 0
-    assert captured["GENIE_SPACE_ID"] == "governed-space-id"
+    assert "GENIE_SPACE_ID" not in captured, "GENIE_SPACE_ID is no input and never reaches the CLI"
     assert captured["BUNDLE_VAR_genie_space_id"] == "governed-space-id"
     # -t client: the verifier is the profile's MIP_IDENTITY_IDS_JSON.verifier.
     assert captured["BUNDLE_VAR_ai_gateway_verifier_client_id"] == IDENTITY_IDS["verifier"]
@@ -432,8 +418,8 @@ def test_bundle_deployment_bind_uses_the_same_reviewed_workspace_contract(
     monkeypatch.setattr(bundle_env, "ENV_LOCAL", env_local)
     monkeypatch.setattr(
         bundle_env,
-        "_resolve_governed_genie_space_id",
-        lambda _env, *, space_name: "genie-space-id",
+        "_pinned_genie_space_id",
+        lambda _env, _profile: "genie-space-id",
     )
     monkeypatch.setattr(bundle_env.render_sql, "render", lambda **_kwargs: (1, 0, 0))
     captured: dict[str, object] = {}
@@ -496,8 +482,8 @@ def test_direct_bundle_deploy_refuses_missing_remote_verifier_binding(
     monkeypatch.setattr(bundle_env, "ENV_LOCAL", env_local)
     monkeypatch.setattr(
         bundle_env,
-        "_resolve_governed_genie_space_id",
-        lambda _env, *, space_name: "genie-space-id",
+        "_pinned_genie_space_id",
+        lambda _env, _profile: "genie-space-id",
     )
     subprocess_called = False
 
@@ -529,11 +515,11 @@ def test_bundle_deploy_preserves_reviewed_genie_name_over_dotenv(
     monkeypatch.setenv("MIP_GENIE_SPACE_NAME", "Reviewed Space Name")
     observed: list[str] = []
 
-    def resolve(_env: dict[str, str], *, space_name: str) -> str:
-        observed.append(space_name)
+    def resolve(_env: dict[str, str], profile: Any) -> str:
+        observed.append(profile.genie_space_name)
         return "reviewed-space-id"
 
-    monkeypatch.setattr(bundle_env, "_resolve_governed_genie_space_id", resolve)
+    monkeypatch.setattr(bundle_env, "_pinned_genie_space_id", resolve)
     monkeypatch.setattr(bundle_env.render_sql, "render", lambda **_kwargs: (1, 0, 0))
     monkeypatch.setattr(
         bundle_env.subprocess,
@@ -696,7 +682,7 @@ def test_bundle_env_rejects_unsafe_deployment_before_remote_resolution(
     monkeypatch.setattr(bundle_env, "ENV_LOCAL", _client_env_local(tmp_path))
     monkeypatch.setattr(
         bundle_env,
-        "_resolve_governed_genie_space_id",
+        "_pinned_genie_space_id",
         lambda *_args, **_kwargs: pytest.fail("unsafe deployment reached remote resolution"),
     )
     monkeypatch.setattr(

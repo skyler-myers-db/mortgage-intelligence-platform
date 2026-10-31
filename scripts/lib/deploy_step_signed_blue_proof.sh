@@ -8,10 +8,11 @@
   exit 2
 }
 
-_GRANTS_WAREHOUSE_ID="${DATABRICKS_WAREHOUSE_ID:-$(dotenv_value DATABRICKS_WAREHOUSE_ID)}"
+# _GRANTS_WAREHOUSE_ID: the warehouse the preflight resolved from this
+# deployer's bundle state (or a first install's bootstrap warehouse; M1-PR3).
 _GRANTS_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
-if [[ -z "$_GRANTS_WAREHOUSE_ID" ]]; then
-  echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID missing (env or .env.local) — cannot govern treatment access.${RST}" >&2
+if [[ -z "${_GRANTS_WAREHOUSE_ID:-}" ]]; then
+  echo "${RED}[deploy] no SQL warehouse was resolved — cannot govern treatment access.${RST}" >&2
   exit 4
 fi
 # The exact target was discovered at the immediate post-lease recovery boundary

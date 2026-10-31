@@ -9,10 +9,10 @@ from tests.fixtures.deploy_script import deploy_entrypoint_text
 
 REPO = Path(__file__).resolve().parents[2]
 # deploy.sh's demo-feed switch, rendered before the lease since M0-PR4
-# (scripts/lib/deploy_step_automation_identities.sh) and keyed on the client
-# profile's install class since M1-PR2.
-FEEDS_START = 'DEMO_FEEDS_FROM_ENV="${MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS:-}"'
-FEEDS_END = 'export MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS="$DEMO_FEEDS_FROM_ENV"'
+# (scripts/lib/deploy_step_automation_identities.sh) and the client profile's
+# own MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS since M1-PR3 (tools/clients/policy.py).
+FEEDS_START = 'if [[ ! "${CLIENT_DEMO_FEEDS:-}" =~ ^[01]$ ]]; then'
+FEEDS_END = 'export MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS="$CLIENT_DEMO_FEEDS"'
 
 
 def test_render_sql_demo_feed_switch_defaults_fail_closed(
@@ -27,34 +27,18 @@ def test_render_sql_demo_feed_switch_defaults_fail_closed(
     assert render_sql._resolve_demo_first_party_enabled("true") is True
 
 
-def test_bundle_env_refuses_demo_feeds_outside_a_demo_install_without_override() -> None:
-    """M1-PR2: the retired dev target's demo default is the demo install class's."""
+def test_bundle_env_takes_the_demo_feeds_from_the_profile_policy_alone() -> None:
+    """M1-PR3: no class default and no override flag; the ci target renders them off."""
     from tools.databricks import bundle_env
 
     assert bundle_env._target_from_args(["-t", "client"]) == "client"
     assert bundle_env._target_from_args(["--target=customer"]) == "customer"
     assert bundle_env._target_from_args(["--select=jobs.x"]) == "", "no target is the default"
-    assert bundle_env._demo_first_party_flag({}, demo_install=True) == "1"
-    assert bundle_env._demo_first_party_flag({}, demo_install=False) == "0"
-    assert bundle_env._demo_first_party_flag(
-        {"MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS": "0"},
-        demo_install=True,
-    ) == "0"
-    assert bundle_env._demo_feeds_allowed(
-        demo_install=True,
-        enabled=True,
-        env={},
-    )
-    assert not bundle_env._demo_feeds_allowed(
-        demo_install=False,
-        enabled=True,
-        env={},
-    )
-    assert bundle_env._demo_feeds_allowed(
-        demo_install=False,
-        enabled=True,
-        env={"MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD": "1"},
-    )
+    for retired in ("_demo_first_party_flag", "_demo_feeds_allowed"):
+        assert not hasattr(bundle_env, retired), retired
+    source = (REPO / "tools/databricks/bundle_env.py").read_text(encoding="utf-8")
+    assert "MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD" not in source
+    assert "demo_first_party_enabled = policy is not None and policy.demo_first_party_feeds" in source
 
 
 def test_local_rendered_demo_feed_artifact_is_fail_closed_when_present() -> None:
@@ -150,20 +134,14 @@ def _deploy_feed_switch(tmp_path: Path, **variables: str) -> tuple[int, str, str
 @pytest.mark.parametrize(
     ("variables", "feeds"),
     (
-        ({"CLIENT_INSTALL_CLASS": "demo"}, "1"),
-        ({"CLIENT_INSTALL_CLASS": "customer"}, "0"),
-        ({"CLIENT_INSTALL_CLASS": "demo", "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS": "0"}, "0"),
-        (
-            {
-                "CLIENT_INSTALL_CLASS": "customer",
-                "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS": "1",
-                "MIP_ALLOW_DEMO_FIRST_PARTY_IN_PROD": "1",
-            },
-            "1",
-        ),
+        ({"CLIENT_DEMO_FEEDS": "1"}, "1"),
+        ({"CLIENT_DEMO_FEEDS": "0"}, "0"),
+        # The profile's value is the switch; an ambient export never overrides it.
+        ({"CLIENT_DEMO_FEEDS": "0", "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS": "1"}, "0"),
+        ({"CLIENT_DEMO_FEEDS": "1", "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS": "0"}, "1"),
     ),
 )
-def test_deploy_defaults_the_demo_feeds_from_the_install_class(
+def test_deploy_renders_the_profiles_demo_feed_policy(
     tmp_path: Path, variables: dict[str, str], feeds: str
 ) -> None:
     rc, out, err = _deploy_feed_switch(tmp_path, **variables)
@@ -172,16 +150,14 @@ def test_deploy_defaults_the_demo_feeds_from_the_install_class(
     assert f"feeds={feeds}" in out and "reached-after-block" in out
 
 
-@pytest.mark.parametrize("value", ("1", "TRUE", "on"))
-def test_deploy_refuses_demo_feeds_for_a_customer_install_without_the_override(
+@pytest.mark.parametrize("value", ("", "TRUE", "on", "2"))
+def test_deploy_refuses_a_feed_policy_that_is_not_the_profiles_closed_value(
     tmp_path: Path, value: str
 ) -> None:
-    rc, out, err = _deploy_feed_switch(
-        tmp_path, CLIENT_INSTALL_CLASS="customer", MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=value
-    )
+    rc, out, err = _deploy_feed_switch(tmp_path, CLIENT_DEMO_FEEDS=value, MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS="1")
 
     assert rc == 2
-    assert "refusing to enable Summit demo first-party feeds for a customer install." in err
+    assert "the client profile's demo-feed policy did not resolve; refusing to render." in err
     assert "reached-after-block" not in out
 
 
@@ -191,7 +167,7 @@ def test_the_feed_switch_runs_only_after_the_client_profile_resolves(tmp_path: P
     text = deploy_entrypoint_text()
     assert text.index("\nresolve_client_profile\n") < text.index(FEEDS_START)
     assert text.index(FEEDS_END) < text.index("\nrun_bundle_plan_gate pre-lease\n")
-    # Without the profile's install class the switch fails closed, never defaults.
+    # Without the profile's policy the switch fails closed, never defaults.
     rc, out, err = _deploy_feed_switch(tmp_path)
-    assert rc != 0 and "CLIENT_INSTALL_CLASS: unbound variable" in err
+    assert rc == 2 and "demo-feed policy did not resolve" in err
     assert "reached-after-block" not in out

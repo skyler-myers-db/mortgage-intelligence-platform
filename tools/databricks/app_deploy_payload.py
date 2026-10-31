@@ -382,28 +382,23 @@ PRESENTER_MODE_NOTICE = (
 INSTALL_CLASSES = ("demo", "customer")
 
 
-def _validated_presenter_mode(
-    dotenv: dict[str, str], target: str, install_class: str | None = None
-) -> bool:
+def _validated_presenter_mode(dotenv: dict[str, str], install_class: str) -> bool:
     """Demo-only MIP_PRESENTER_MODE (D-shell-deviations-e1): parse it strictly.
 
     An unparseable value fails the deploy (the runtime would read it as off),
-    and any truthy value is refused for a customer install (``--install-class
-    customer``, which scripts/deploy.sh passes for ``-t client``) and for the
-    legacy ``--target prod``. ``--target client`` needs its install class, so
-    a client payload can never fall through to the demo default.
+    and any truthy value is refused for a customer install. The install class
+    is the client profile's (``--install-class``, which scripts/deploy.sh
+    passes; the emergency recipe passes the live install's ``demo``), never a
+    bundle target name, so a payload can never fall through to the demo
+    default.
     """
 
-    if install_class is not None and install_class not in INSTALL_CLASSES:
+    if install_class not in INSTALL_CLASSES:
         raise ValueError(f"--install-class must be one of {', '.join(INSTALL_CLASSES)}")
-    if target == "client" and install_class is None:
-        raise ValueError("--target client requires --install-class (the client profile's)")
     raw = _env_value("MIP_PRESENTER_MODE", dotenv).lower()
     if raw not in _PRESENTER_MODE_ON | _PRESENTER_MODE_OFF:
         raise ValueError("MIP_PRESENTER_MODE must be one of 0/1/true/false/yes/no/on/off")
     enabled = raw in _PRESENTER_MODE_ON
-    if enabled and target == "prod":
-        raise ValueError("MIP_PRESENTER_MODE is demo-only and refused for target prod")
     if enabled and install_class == "customer":
         raise ValueError("MIP_PRESENTER_MODE is demo-only and refused for a customer install")
     return enabled
@@ -412,8 +407,7 @@ def _validated_presenter_mode(
 def build_payload(
     *,
     source_code_path: str,
-    target: str,
-    install_class: str | None = None,
+    install_class: str,
     current_user_email: str = "",
     app_env: str = APP_ENV_DEFAULT,
     catalog: str = CATALOG_DEFAULT,
@@ -443,7 +437,7 @@ def build_payload(
     }
     previous_secret_enabled, previous_secret_kid = _previous_secret_grace_configured(dotenv)
     _validated_keep_warm(dotenv)
-    presenter_mode = _validated_presenter_mode(dotenv, target, install_class)
+    presenter_mode = _validated_presenter_mode(dotenv, install_class)
     _validated_refusal_text_capture(dotenv)
     cotality_source_env = _cotality_source_env(dotenv)
     if bool(otel_endpoint.strip()) != bool(otel_header_resource.strip()):
@@ -538,10 +532,9 @@ def _parser() -> argparse.ArgumentParser:
         description="Emit a Databricks Apps deploy JSON payload for Module 0."
     )
     parser.add_argument("--source-code-path", required=True)
-    # `client` for scripts/deploy.sh (with --install-class); the emergency
-    # recipe in docs/deployment.md passes the legacy `dev` (demo policy).
-    parser.add_argument("--target", default="dev")
-    parser.add_argument("--install-class", choices=INSTALL_CLASSES, default=None)
+    # The client profile's install class (scripts/deploy.sh); the emergency
+    # recipe in docs/deployment.md passes the live install's `demo`.
+    parser.add_argument("--install-class", choices=INSTALL_CLASSES, required=True)
     parser.add_argument("--current-user-email", default="")
     parser.add_argument("--app-env", default=APP_ENV_DEFAULT)
     parser.add_argument("--catalog", default=CATALOG_DEFAULT)
@@ -569,7 +562,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         payload = build_payload(
             source_code_path=args.source_code_path,
-            target=args.target,
             install_class=args.install_class,
             current_user_email=args.current_user_email,
             app_env=args.app_env,

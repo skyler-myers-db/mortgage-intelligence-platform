@@ -48,7 +48,7 @@ cryptography==50.0.1
 # MLflow and google-auth pull these transitively; pin the reviewed fixes so a
 # lock refresh cannot silently restore the vulnerable releases.
 gitpython>=3.2.1,<4  # 3.1.57 added GHSA-3f7w-8rr8-f37f; 3.1.59 adds PYSEC-2026-3785/3786/3787/3788; 3.2.1 adds GHSA-83vg-56qc-22m7
-pyasn1>=0.6.4,<1
+pyasn1>=0.6.5,<1  # 0.6.5 adds GHSA-2qm8-x737-gmw5, GHSA-mm57-4v3p-rchx, GHSA-9m75-vc3g-4x39, GHSA-fm9c-5rcf-2q5p (all high)
 # Security floor for PYSEC-2026-3545/PYSEC-2026-3546/PYSEC-2026-3547, raised
 # to 3.14.4 for the eight advisories published 2026-10-19/20, each first
 # patched in 3.14.4: GHSA-5wr8-gcqf-gqf3, GHSA-2g87-pp6c-29x5,

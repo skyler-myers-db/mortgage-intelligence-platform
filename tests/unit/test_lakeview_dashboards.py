@@ -286,7 +286,7 @@ def test_no_hardcoded_warehouse_or_workspace_id(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     # The dashboard JSON must NOT pin a warehouse id. The bundle wires it at
     # the dashboard resource level (databricks.yml `dashboards:` block) via
-    # `warehouse_id: ${var.sql_warehouse_id}`.
+    # `warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}`.
     for banned_key in ("warehouseId", "warehouse_id", "warehouseID"):
         assert banned_key not in text, (
             f"{path.name} contains key '{banned_key}' - warehouse id must "
