@@ -131,7 +131,7 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert "gitpython>=3.2.1,<4" in requirements_in
     assert "cryptography==50.0.1" in requirements_in
     assert "aiohttp>=3.14.4" in requirements_in
-    assert "pyasn1>=0.6.4,<1" in requirements_in
+    assert "pyasn1>=0.6.5,<1" in requirements_in
     assert "sqlparse>=0.6.0,<1" in requirements_in
     assert "multidict==6.9.1" in requirements_in
     assert "werkzeug==3.1.9" in requirements_in
@@ -157,7 +157,7 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
         "pyarrow==25.0.0",
         "aiohttp==3.14.5",
         "yarl==1.25.1",
-        "pyasn1==0.6.4",
+        "pyasn1==0.6.5",
         "pg8000==1.31.5",
         "psycopg==3.3.4",
         "opentelemetry-api==1.45.1",
