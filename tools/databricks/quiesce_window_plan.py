@@ -5,7 +5,10 @@ A release keeps blue serving. It stops the App only for a window reason:
 * **WR1** binding diff: the App's live resource bindings differ from the
   bundle's (any diff, until spike S2 proves an unchanged database binding
   leaves a running App and its role alone), or a binding id is unresolved;
-* **WR2** App role rotation: ``converge_lakebase_oauth_role --check`` drifts;
+* **WR2** Lakebase role rotation: ``converge_lakebase_oauth_role --check``
+  drifts for the App role or the verifier role. A rotation drops the role's
+  grants, which only the migration job re-applies, and that job runs only
+  inside a window;
 * **WR3** pending migration: the Lakebase migration plan decides ``apply``;
 * **WR4** acked instance update: the bundle plan updates the Lakebase
   instance under an acknowledged digest (``bundle_plan_instance_ack``).
@@ -51,7 +54,7 @@ POSITIONS = frozenset({"pre-lease", "pre-apply"})
 REASONS = ("WR1", "WR2", "WR3", "WR4")
 REASON_NAMES = {
     "WR1": "binding_diff",
-    "WR2": "app_role_rotation",
+    "WR2": "lakebase_role_rotation",
     "WR3": "pending_migration",
     "WR4": "acked_instance_update",
 }
@@ -109,7 +112,8 @@ class WindowFacts:
     journal_state: str = "absent"
     binding_state: str = "equal"  # "equal", "diff" or "unresolved"
     binding_lines: tuple[str, ...] = ()
-    role_state: str = "exact"  # "exact" or "drift"
+    role_state: str = "exact"  # the App role: "exact" or "drift"
+    verifier_role_state: str = "exact"  # the AI Gateway verifier role
     migration_decision: str = "noop"  # "noop", "apply" or "refuse"
     migration_blue_restorable: bool = True
     migration_pending: tuple[str, ...] = ()
@@ -126,7 +130,7 @@ class WindowFacts:
     def reasons(self) -> tuple[str, ...]:
         present = {
             "WR1": self.binding_state != "equal",
-            "WR2": self.role_state != "exact",
+            "WR2": self.role_state != "exact" or self.verifier_role_state != "exact",
             "WR3": self.migration_decision == "apply",
             "WR4": bool(self.instance_update_sha256),
         }
@@ -215,6 +219,7 @@ def canonical_body(facts: WindowFacts, *, blue_restorable: bool) -> dict[str, An
         "binding_state": facts.binding_state,
         "binding_lines": sorted(facts.binding_lines),
         "role_state": facts.role_state,
+        "verifier_role_state": facts.verifier_role_state,
         "migration_pending": sorted(facts.migration_pending),
         "migration_pending_contract": sorted(facts.migration_pending_contract),
         "instance_update_sha256": facts.instance_update_sha256,

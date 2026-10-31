@@ -3,8 +3,8 @@
 ``collect_facts`` reads the window journal, the App, the signed rollback
 record and blue's deployment, and folds in the read-only probe results the
 deploy runs with their own authorities: the bundle plan gate's report (WR4),
-the binding payload diffed against the live App (WR1), the App role
-``--check`` (WR2) and the Lakebase migration plan (WR3). The two full-tree
+the binding payload diffed against the live App (WR1), the App and verifier
+role ``--check`` (WR2) and the Lakebase migration plan (WR3). The two full-tree
 digests are downloaded only when a reason exists.
 """
 
@@ -87,6 +87,7 @@ def collect_facts(
     role_state: str | None,
     migration_plan: dict[str, Any] | None,
     rebase_unverified_app: bool,
+    verifier_role_state: str | None = None,
     digest: Callable[[Any, str], str] = tree_digest,
 ) -> WindowFacts:
     """Read every fact the window plan needs; download trees only when a reason exists."""
@@ -107,8 +108,14 @@ def collect_facts(
         if str(exc).startswith(NOT_FOUND_RECORD):
             return WindowFacts(applicable=False, not_applicable_reason="no_signed_record")
         raise
-    if role_state not in {"exact", "drift"} or migration_plan is None:
-        raise ValueError("an installed signed blue needs the App role check and the migration plan")
+    if (
+        role_state not in {"exact", "drift"}
+        or verifier_role_state not in {"exact", "drift"}
+        or migration_plan is None
+    ):
+        raise ValueError(
+            "an installed signed blue needs the App and verifier role checks and the migration plan"
+        )
     if binding_payload is None:
         binding_state, lines = "unresolved", ()
     else:
@@ -123,6 +130,7 @@ def collect_facts(
         binding_state=binding_state,
         binding_lines=lines,
         role_state=role_state,
+        verifier_role_state=verifier_role_state,
         **_migration(migration_plan),
         instance_update_sha256=str(gate_report.get("instance_update_sha256") or ""),
         blue_deployment_id=blue_id,

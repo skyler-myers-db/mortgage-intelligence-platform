@@ -288,6 +288,7 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--plan-gate-report", required=True, type=Path)
     plan.add_argument("--binding-payload", type=Path)
     plan.add_argument("--role-check", choices=("exact", "drift"))
+    plan.add_argument("--verifier-role-check", choices=("exact", "drift"))
     plan.add_argument("--migration-plan", type=Path)
     # plan: the rebase step 0a takes; applicable: the operator's request, which
     # it resolves against the first-install journal (MIP_QUIESCE_WINDOW_REBASE).
@@ -378,6 +379,7 @@ def main(
             gate_report=_load_json(args.plan_gate_report),
             binding_payload=_load_json(args.binding_payload) if args.binding_payload else None,
             role_state=args.role_check,
+            verifier_role_state=args.verifier_role_check,
             migration_plan=_load_json(args.migration_plan) if args.migration_plan else None,
             rebase_unverified_app=args.rebase_unverified_app == "1",
         )

@@ -403,7 +403,9 @@ fi
 # The converger changes the App's role only while the App is STOPPED and
 # refuses otherwise. A planned rotation (WR2) opens the window first; the
 # first install and the unsigned rebase are already stopped. It never stops
-# the App itself any more: a stop for a mutation is the window's alone.
+# the App itself any more: a stop for a mutation is the window's alone. A
+# verifier rotation is WR2 too: outside a window the verifier role is proven
+# exact first, because only the migration job (in a window) re-grants it.
 ensure_quiesce_window_open_for WR2
 step "converge App Lakebase OAuth role to exact LOGIN-only profile"
 run_with_lakebase_bootstrap_authority \
@@ -414,6 +416,7 @@ run_with_lakebase_bootstrap_authority \
   --role-contract app \
   --app-name "$_GRANTS_APP_NAME" \
   --repair-legacy-replication
+require_exact_verifier_role_outside_window
 step "converge verifier Lakebase OAuth role to exact LOGIN-only profile"
 run_with_lakebase_bootstrap_authority \
   "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \

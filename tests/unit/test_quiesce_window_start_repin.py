@@ -130,6 +130,7 @@ def _plan(estate: Estate, *, migration: dict[str, Any] = MIGRATION_APPLY, ack: s
         gate_report={"verdict": "passed", "instance_update_sha256": ""},
         binding_payload=EQUAL_BINDINGS,
         role_state="exact",
+        verifier_role_state="exact",
         migration_plan=migration,
         rebase_unverified_app=False,
     )

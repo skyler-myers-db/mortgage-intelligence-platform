@@ -70,11 +70,11 @@ collect_quiesce_window_binding_payload() {
 plan_quiesce_window() {
   local position="${1:?window plan position is required}"
   local gate_report="${2:?bundle plan gate report is required}"
-  local probe_dir role_rc=0 plan_rc=0 rebase
+  local probe_dir role_rc=0 verifier_rc=0 plan_rc=0 rebase
   local -a plan_args=(--position "$position")
   step "plan the quiesce window (${position}, read-only)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "  would plan read-only: WR1 binding diff, WR2 App role --check, WR3 Lakebase migration plan, WR4 acked instance update; a window opens only with MIP_ACK_QUIESCE_WINDOW equal to its sha256"
+    echo "  would plan read-only: WR1 binding diff, WR2 App and verifier role --check, WR3 Lakebase migration plan, WR4 acked instance update; a window opens only with MIP_ACK_QUIESCE_WINDOW equal to its sha256"
     return 0
   fi
   probe_dir="$(mktemp -d -t mip-quiesce-window.XXXXXX)"
@@ -118,6 +118,22 @@ plan_quiesce_window() {
       3) plan_args+=(--role-check drift) ;;
       *)
         echo "${RED}[deploy] the App role check could not decide (exit ${role_rc}); nothing was changed.${RST}" >&2
+        exit 2
+        ;;
+    esac
+    # The verifier role is WR2 too: its converge would rotate it and drop the
+    # grants only the migration job re-applies, and that job runs in a window.
+    run_with_lakebase_bootstrap_authority \
+      "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role --check \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+      --lakebase-database "$LAKEBASE_DATABASE" \
+      --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+      --role-contract verifier || verifier_rc=$?
+    case "$verifier_rc" in
+      0) plan_args+=(--verifier-role-check exact) ;;
+      3) plan_args+=(--verifier-role-check drift) ;;
+      *)
+        echo "${RED}[deploy] the verifier role check could not decide (exit ${verifier_rc}); nothing was changed.${RST}" >&2
         exit 2
         ;;
     esac
@@ -298,6 +314,29 @@ repin_and_close_quiesce_window() {
     --deployment-source-git-sha "$SOURCE_GIT_SHA" || return 1
   QUIESCE_WINDOW_STATE="blue_serving"
   QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID="$proven"
+}
+
+# Outside a window the verifier role must already be exact: its converge
+# would rotate it and drop the grants only the migration job re-applies, and
+# that job never runs against a serving blue. Read again under the lease
+# (time of check, time of use); drift exits 2 before the converge.
+require_exact_verifier_role_outside_window() {
+  local rc=0
+  [[ "${QUIESCE_WINDOW_STATE:-}" == "blue_serving" || \
+     "${QUIESCE_WINDOW_STATE:-}" == "blue_degraded" ]] || return 0
+  step "prove the verifier Lakebase role is already exact (no window)"
+  run_with_lakebase_bootstrap_authority \
+    "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role --check \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --lakebase-database "$LAKEBASE_DATABASE" \
+    --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+    --role-contract verifier || rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    3) echo "${RED}[deploy] the verifier role drifted after the window plan; re-run to plan the window. Blue keeps serving.${RST}" >&2 ;;
+    *) echo "${RED}[deploy] the verifier role check could not decide (exit ${rc}); its converge is refused. Blue keeps serving.${RST}" >&2 ;;
+  esac
+  exit 2
 }
 
 # Blue keeps serving while a dependency it reads is mutated; a failure from

@@ -84,6 +84,17 @@ def test_each_reason_alone_needs_a_window_and_the_exact_digest_ack(reason: str) 
     )
 
 
+def test_a_verifier_role_rotation_is_wr2_and_forces_the_migration_job_into_a_window() -> None:
+    # The converge would replace a legacy verifier role and drop its grants;
+    # only the migration job re-grants it, and the job runs only in a window.
+    facts = _facts(verifier_role_state="drift")
+    assert facts.reasons() == ("WR2",)
+    plan = _acked(facts)
+    assert plan.code == "window" and plan.blue_restorable is True
+    assert plan.canonical["verifier_role_state"] == "drift"
+    assert window_plan(facts, position="pre-apply", acknowledgement="").refusals == ("window_unacked",)
+
+
 def test_no_reason_needs_no_window_and_no_ack() -> None:
     plan = window_plan(_facts(), position="pre-apply", acknowledgement="")
     assert (plan.code, plan.ack, plan.reasons, plan.predicted_seconds) == ("none", "not_required", (), 0)
@@ -106,6 +117,7 @@ def test_the_digest_ignores_the_position_so_the_recheck_reproduces_it() -> None:
         {"source_tree_sha256": "d" * 64, "artifact_tree_sha256": "d" * 64},
         {"env_names_sha256": "e" * 64},
         {"role_state": "drift"},
+        {"verifier_role_state": "drift"},
         {"instance_update_sha256": "f" * 64},
     ),
 )

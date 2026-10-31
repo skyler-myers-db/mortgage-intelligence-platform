@@ -47,6 +47,8 @@ case "$*" in
     printf 'MIP_QUIESCE_WINDOW_APP_PRESENT=%s\nMIP_QUIESCE_WINDOW_APP_CLIENT_ID=app-client\nMIP_QUIESCE_WINDOW_REBASE=%s\n' "${APP_PRESENT:-0}" "${JOURNAL_REBASE:-0}" > "$out" ;;
   *"converge_lakebase_oauth_role --check"*"--role-contract app"*)
     exit "${APP_ROLE_RC:-0}" ;;
+  *"converge_lakebase_oauth_role --check"*"--role-contract verifier"*)
+    exit "${VERIFIER_ROLE_RC:-0}" ;;
   *"quiesce_window plan"*)
     [[ -z "${PLAN_REFUSES:-}" ]] || exit 2
     printf '{"code": "%s", "reasons": %s}\n' "${PLAN_CODE:-none}" "${PLAN_REASONS_JSON:-[]}" > "$out" ;;
@@ -366,6 +368,58 @@ def test_the_migration_block_skips_only_a_none_plan_and_runs_inside_a_window(
     assert _has(calls, "quiesce_window open") == job and "final=blue_serving" in result.stdout
 
 
+@pytest.mark.parametrize(("rc", "check"), (("0", "exact"), ("3", "drift")))
+def test_the_plan_reads_the_verifier_role_as_a_wr2_fact(tmp_path: Path, rc: str, check: str) -> None:
+    (tmp_path / "report.json").write_text("{}", encoding="utf-8")
+    result, calls = _run(
+        tmp_path,
+        'QUIESCE_WINDOW_STATE=blue_serving\nplan_quiesce_window pre-apply "$TMPDIR/report.json"\n',
+        APP_PRESENT="1",
+        VERIFIER_ROLE_RC=rc,
+    )
+    assert result.returncode == 0, result.stderr
+    verifier = next(call for call in calls if "--role-contract verifier" in call)
+    assert "--check" in verifier and "--application-id verifier-client" in verifier
+    assert f"--verifier-role-check {check}" in next(c for c in calls if "quiesce_window plan" in c)
+
+
+def test_an_undecided_verifier_role_check_refuses_the_plan(tmp_path: Path) -> None:
+    (tmp_path / "report.json").write_text("{}", encoding="utf-8")
+    result, calls = _run(
+        tmp_path,
+        'QUIESCE_WINDOW_STATE=blue_serving\nplan_quiesce_window pre-apply "$TMPDIR/report.json"\n',
+        APP_PRESENT="1",
+        VERIFIER_ROLE_RC="1",
+    )
+    assert result.returncode == 2 and "verifier role check could not decide" in result.stderr
+    assert not _has(calls, "quiesce_window plan")
+
+
+@pytest.mark.parametrize(
+    ("state", "rc", "exit_code", "checks"),
+    (
+        ("blue_serving", "0", 0, 1),
+        ("blue_degraded", "3", 2, 1),
+        ("blue_serving", "3", 2, 1),
+        ("blue_serving", "1", 2, 1),
+        ("window_open", "3", 0, 0),
+        ("", "3", 0, 0),
+    ),
+)
+def test_outside_a_window_the_verifier_role_must_already_be_exact(
+    tmp_path: Path, state: str, rc: str, exit_code: int, checks: int
+) -> None:
+    result, calls = _run(
+        tmp_path,
+        f"QUIESCE_WINDOW_STATE={state}\nrequire_exact_verifier_role_outside_window\n"
+        'echo "converge-verifier" >> "$CALLS"\n',
+        VERIFIER_ROLE_RC=rc,
+    )
+    assert result.returncode == exit_code, result.stderr
+    assert _has(calls, "--role-contract verifier") == checks
+    assert ("converge-verifier" in calls) is (exit_code == 0), "drift refuses before the converge"
+
+
 # --- positive controls --------------------------------------------------------------
 
 SEQUENCE = """QUIESCE_WINDOW_STATE=blue_serving; QUIESCE_WINDOW_REASONS="$REASONS"
@@ -426,6 +480,8 @@ def test_the_step_files_open_each_reason_before_its_mutation_and_close_after_the
     update = at('run databricks apps update "$_GRANTS_APP_NAME"')
     wr2 = at("ensure_quiesce_window_open_for WR2")
     role = at('step "converge App Lakebase OAuth role to exact LOGIN-only profile"')
+    verifier_check = at("\nrequire_exact_verifier_role_outside_window\n")
+    verifier = at('step "converge verifier Lakebase OAuth role to exact LOGIN-only profile"')
     wr3 = at("ensure_quiesce_window_open_for WR3")
     migrate = at("databricks bundle run mip_lakebase_migrate")
     proven = at("LAKEBASE_RUNTIME_ACCESS_PROVEN=1", migrate)
@@ -434,6 +490,7 @@ def test_the_step_files_open_each_reason_before_its_mutation_and_close_after_the
     activation = at("end_quiesce_window_at_activation")
     green = at('deploy_app_snapshot "activate App snapshot', activation)
 
-    assert wr4 < apply < wr1 < update < wr2 < role < wr3 < migrate < proven < close < degrade
+    assert wr4 < apply < wr1 < update < wr2 < role < verifier_check < verifier < wr3 < migrate
+    assert migrate < proven < close < degrade
     assert activation < green
     assert "--stop-app-for-mutation" not in text[steps:], "the converger never stops the App"

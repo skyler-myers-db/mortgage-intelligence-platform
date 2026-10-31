@@ -2258,7 +2258,10 @@ only for a **window reason** the read-only plan predicted
 - **WR1** binding diff: the App's live resource bindings differ from the
   bundle's (any diff, until spike S2 proves an unchanged database binding
   leaves a running App and its role alone), or a binding id is unresolved;
-- **WR2** App role rotation: `converge_lakebase_oauth_role --check` drifts;
+- **WR2** Lakebase role rotation: `converge_lakebase_oauth_role --check`
+  drifts for the App role or the AI Gateway verifier role (a rotation drops
+  the role's grants, which only the migration job re-applies, and that job
+  runs only inside a window);
 - **WR3** pending migration: the Lakebase migration plan decides `apply`;
 - **WR4** acknowledged Lakebase instance update (the plan gate's digest).
 
@@ -2293,9 +2296,11 @@ contract migration (`blue_restorable` false) keeps the App stopped until green
 activation closes the window: that outage is part of the acknowledged digest.
 
 With no reason, nothing stops: the binding update is skipped (the bindings
-are re-read under the lease and must still equal the bundle's), the role
-converger refuses any rotation the plan did not predict, and the migration job
-is skipped because the pre-apply plan proved it a noop with a passing verify.
+are re-read under the lease and must still equal the bundle's), the App role
+converger refuses any rotation the plan did not predict, the verifier role is
+re-checked under the lease right before its converge (drift exits 2, blue
+serving), and the migration job is skipped because the pre-apply plan proved
+it a noop with a passing verify.
 
 **EXIT-trap states** (`stop_app_after_failed_deploy`): `blue_serving` never
 stops the App and converges runtime access with it up; `blue_degraded` (blue
