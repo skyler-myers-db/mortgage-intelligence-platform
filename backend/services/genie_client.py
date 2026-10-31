@@ -49,6 +49,12 @@ from backend.services.genie_client_parsing import (
     _question_hash,
 )
 from backend.services.genie_completion_stages import cooperative_cancel_point
+from backend.services.genie_turn_outcome import (
+    classify_genie_failure,
+    classify_transport_failure,
+    record_genie_turn_failure,
+    record_genie_turn_success,
+)
 from backend.services.observability import emit
 
 log = logging.getLogger(__name__)
@@ -86,7 +92,9 @@ class GenieClientError(RuntimeError):
 
     Attributes are surfaced verbatim so the resilience wrapper, health
     probe, and /ask-genie error translation can present operator-facing
-    context without regex-parsing the message.
+    context without regex-parsing the message. ``error_class`` is the closed
+    ``genie_turn_outcome`` class decided at the raise site, where the
+    upstream error text is in hand; only the class is kept.
     """
 
     def __init__(
@@ -98,6 +106,7 @@ class GenieClientError(RuntimeError):
         conversation_id: str | None = None,
         message_id: str | None = None,
         state: str | None = None,
+        error_class: str | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -105,6 +114,7 @@ class GenieClientError(RuntimeError):
         self.conversation_id = conversation_id
         self.message_id = message_id
         self.state = state
+        self.error_class = error_class
 
 
 @dataclass
@@ -243,6 +253,8 @@ class GenieClient:
             if isinstance(exc, CooperativeCancel):
                 _emit_cancelled("ask", start, statement_hash=q_hash)
                 raise
+            if isinstance(exc, Exception):
+                record_genie_turn_failure(exc)
             emit(
                 log,
                 "genie_query_error",
@@ -252,6 +264,7 @@ class GenieClient:
                 statement_hash=q_hash,
                 duration_ms=round((time.monotonic() - start) * 1000.0, 2),
                 outcome="error",
+                error_class=getattr(exc, "error_class", None),
                 exc_type=type(exc).__name__,
                 exc_msg=str(exc)[:500],
             )
@@ -278,9 +291,15 @@ class GenieClient:
             statement_hash=q_hash,
             conversation_id=conversation_id,
         )
-        if conversation_id is None:
-            return self._start_conversation(question)
-        return conversation_id, self._append_message(conversation_id, question)
+        try:
+            if conversation_id is None:
+                return self._start_conversation(question)
+            return conversation_id, self._append_message(conversation_id, question)
+        except Exception as exc:
+            # A turn that could not even start (budget, rate limit, auth) is
+            # a failed model turn; a successful submit is not an outcome yet.
+            record_genie_turn_failure(exc)
+            raise
 
     def peek_message(self, conversation_id: str, message_id: str) -> dict[str, Any]:
         """Return the raw message body from ONE poll GET (no waiting loop).
@@ -288,12 +307,25 @@ class GenieClient:
         Pure read for the live-progress surface. Raw thoughts in the body
         never cross the API boundary — the router translates them through
         ``genie_reasoning_trace_from_thoughts`` before responding.
+
+        A terminal state seen here IS the turn's outcome on the async path:
+        the browser skips ``/message/complete`` after a FAILED progress poll,
+        so the peek records it (class only) for the health surface. A failed
+        peek GET is a transport hiccup, not a turn outcome, and records nothing.
         """
         url = (
             f"{self._host}/api/2.0/genie/spaces/{self._space_id}"
             f"/conversations/{conversation_id}/messages/{message_id}"
         )
-        return self._get(url, timeout_s=self._PEEK_TIMEOUT_S)
+        body = self._get(url, timeout_s=self._PEEK_TIMEOUT_S)
+        state = str(body.get("status") or body.get("state") or "")
+        if state in _GENIE_SUCCESS_STATES:
+            record_genie_turn_success()
+        elif state in _GENIE_TERMINAL_ERROR_STATES:
+            record_genie_turn_failure(
+                self._terminal_message_error(body, state, conversation_id, message_id)
+            )
+        return body
 
     def resume_message(self, conversation_id: str, message_id: str) -> GenieResponse:
         """Complete an already-submitted message: poll → extract → rows.
@@ -325,6 +357,8 @@ class GenieClient:
             if isinstance(exc, CooperativeCancel):
                 _emit_cancelled("resume", start, statement_hash=f"resume:{message_id}", message_id=message_id)
                 raise
+            if isinstance(exc, Exception):
+                record_genie_turn_failure(exc)
             emit(
                 log,
                 "genie_query_error",
@@ -336,6 +370,7 @@ class GenieClient:
                 message_id=message_id,
                 duration_ms=round((time.monotonic() - start) * 1000.0, 2),
                 outcome="error",
+                error_class=getattr(exc, "error_class", None),
                 exc_type=type(exc).__name__,
                 exc_msg=str(exc)[:500],
             )
@@ -363,6 +398,7 @@ class GenieClient:
             )
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
+        record_genie_turn_success()
         emit(
             log,
             "genie_query_end",
@@ -512,6 +548,7 @@ class GenieClient:
             raise GenieClientError(
                 "Genie start-conversation response missing conversation_id/message_id",
                 space_id=self._space_id,
+                error_class="MALFORMED_RESPONSE",
             )
         return conv_id, msg_id
 
@@ -527,6 +564,7 @@ class GenieClient:
                 "Genie append-message response missing message id",
                 space_id=self._space_id,
                 conversation_id=conversation_id,
+                error_class="MALFORMED_RESPONSE",
             )
         return msg_id
 
@@ -553,14 +591,7 @@ class GenieClient:
             if state in _GENIE_SUCCESS_STATES:
                 return body
             if state in _GENIE_TERMINAL_ERROR_STATES:
-                err = (body.get("error") or {}).get("message") or state
-                raise GenieClientError(
-                    f"Genie message terminated in state {state!r}: {err}",
-                    space_id=self._space_id,
-                    conversation_id=conversation_id,
-                    message_id=message_id,
-                    state=state,
-                )
+                raise self._terminal_message_error(body, state, conversation_id, message_id)
             if time.monotonic() >= deadline:
                 raise GenieClientError(
                     f"Genie message polling timed out after {budget}s "
@@ -569,12 +600,42 @@ class GenieClient:
                     conversation_id=conversation_id,
                     message_id=message_id,
                     state=last_state,
+                    error_class="TIMEOUT",
                 )
             # A stopped governed turn (genie-03) ends here, before the next
             # poll; every Genie call precedes the record's commit point.
             cooperative_cancel_point()
             time.sleep(sleep_s)
             sleep_s = min(self._POLL_MAX_S, sleep_s * self._POLL_BACKOFF)
+
+    def _terminal_message_error(
+        self,
+        body: dict[str, Any],
+        state: str,
+        conversation_id: str,
+        message_id: str,
+    ) -> GenieClientError:
+        """The error for a terminal non-success message, classified from its
+        ``error`` envelope (``{"error": <text>, "type": <code>}`` on the wire).
+
+        The exception text keeps today's shape; the envelope's free text is
+        read only by the classifier and never stored.
+        """
+        error = body.get("error")
+        envelope = error if isinstance(error, dict) else {}
+        err = envelope.get("message") or state
+        return GenieClientError(
+            f"Genie message terminated in state {state!r}: {err}",
+            space_id=self._space_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            state=state,
+            error_class=classify_genie_failure(
+                state=state,
+                error_type=envelope.get("type"),
+                detail=envelope.get("error") or envelope.get("message"),
+            ),
+        )
 
     def _fetch_query_result(
         self,
@@ -757,11 +818,13 @@ class GenieClient:
                 f"HTTP {exc.code} from Genie API: {detail[:500]}",
                 status_code=exc.code,
                 space_id=self._space_id,
+                error_class=classify_genie_failure(status_code=exc.code, detail=detail),
             ) from exc
         except urllib.error.URLError as exc:
             raise GenieClientError(
                 f"Network error reaching Genie API: {exc.reason!r}",
                 space_id=self._space_id,
+                error_class=classify_transport_failure(exc),
             ) from exc
         try:
             return json.loads(raw)
@@ -769,6 +832,7 @@ class GenieClient:
             raise GenieClientError(
                 f"Malformed JSON from Genie API (first 200 chars): {raw[:200]!r}",
                 space_id=self._space_id,
+                error_class="MALFORMED_RESPONSE",
             ) from exc
 
 # ---------------------------------------------------------------------------

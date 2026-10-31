@@ -82,12 +82,16 @@ export interface ResponseSchemas {
     campaign_treatment_runtime: string | null;
     circuit_breakers: { [key: string]: string };
     counters_persistence: string;
-    /** Per-dependency state (warehouse, lakebase, genie): up | down | resuming. 'resuming' (warehouse only) means the serverless warehouse is starting from auto-stop; consumers treat any value other than 'down' as not an outage. */
+    /** Per-dependency state (warehouse, lakebase, genie): up | down | resuming | degraded. 'resuming' (warehouse only) means the serverless warehouse is starting from auto-stop. 'degraded' (genie only) means the space answers its ping but the most recent model turn failed on a budget or quota class recently (see dependency_reasons); asking Genie stays enabled. Consumers treat any value other than 'down' as not an outage. */
     dependencies: { [key: string]: string };
+    /** Why a dependency reads 'degraded', keyed like dependencies: a closed failure class such as BUDGET_EXCEEDED. Absent when nothing is degraded. */
+    dependency_reasons: { [key: string]: string };
     deployment_lease_id: string | null;
     fallback_identity_fallbacks_process_total: number;
     fallback_identity_fallbacks_total: number;
     forced_degraded: ResponseSchemas['ForcedDegradedInfo'] | null;
+    /** Outcome of the most recent real Genie model turn in this App process (process-local, reset on restart); null when no turn has run since boot. Health never runs a turn itself. */
+    genie_last_turn: ResponseSchemas['GenieLastTurn'] | null;
     git_sha: string | null;
     log_export: string;
     mode: string;
@@ -1228,6 +1232,19 @@ export interface ResponseSchemas {
   GenieJobStage: "queued" | "collecting" | "repairing" | "verifying" | "cross_checking" | "rewriting" | "planning" | "researching" | "synthesizing" | "finalizing" | "done" | "failed" | "expired" | "cancelled";
   /** Lifecycle of a completion job; the ``status`` CHECK in lakebase/schema.sql. */
   GenieJobStatus: "queued" | "running" | "succeeded" | "failed" | "expired" | "cancelled";
+  /**
+   * Outcome of the most recent real Genie model turn in this process.
+   *
+   * Closed fields only: never question text, SQL, rows, ids or upstream
+   * error text (the class is decided where the error is raised).
+   */
+  GenieLastTurn: {
+    /** When the outcome was recorded (UTC). */
+    at: string;
+    /** Sanitized failure class; null when the turn succeeded. */
+    error_class: "BUDGET_EXCEEDED" | "QUOTA_EXCEEDED" | "RATE_LIMITED" | "TIMEOUT" | "AUTH" | "NOT_FOUND" | "UPSTREAM_ERROR" | "NETWORK" | "CANCELED" | "EXPIRED" | "FAILED" | "MALFORMED_RESPONSE" | "UNKNOWN" | null;
+    outcome: "success" | "failed";
+  };
   /** Wire contract returned by `/api/genie/message`. */
   GenieMessageResponse: {
     actions: ResponseSchemas['GenieActionSuggestion'][];
@@ -1639,8 +1656,10 @@ export interface ResponseSchemas {
     agent_gateway_binding_sha256?: string | null;
     campaign_treatment_runtime?: string | null;
     circuit_breakers?: { [key: string]: string };
-    /** Per-dependency state (warehouse, lakebase, genie): up | down | resuming. 'resuming' (warehouse only) means the serverless warehouse is starting from auto-stop; consumers treat any value other than 'down' as not an outage. */
+    /** Per-dependency state (warehouse, lakebase, genie): up | down | resuming | degraded. 'resuming' (warehouse only) means the serverless warehouse is starting from auto-stop. 'degraded' (genie only) means the space answers its ping but the most recent model turn failed on a budget or quota class recently (see dependency_reasons); asking Genie stays enabled. Consumers treat any value other than 'down' as not an outage. */
     dependencies?: { [key: string]: string };
+    /** Why a dependency reads 'degraded', keyed like dependencies: a closed failure class such as BUDGET_EXCEEDED. Absent when nothing is degraded. */
+    dependency_reasons?: { [key: string]: string };
     deployment_lease_id?: string | null;
     forced_degraded?: ResponseSchemas['ForcedDegradedInfo'] | null;
     git_sha?: string | null;

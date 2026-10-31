@@ -564,8 +564,16 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Per-dependency state (warehouse, lakebase, genie): up | down | resuming. 'resuming' (warehouse only) means the serverless warehouse is starting from auto-stop; consumers treat any value other than 'down' as not an outage.",
+            "description": "Per-dependency state (warehouse, lakebase, genie): up | down | resuming | degraded. 'resuming' (warehouse only) means the serverless warehouse is starting from auto-stop. 'degraded' (genie only) means the space answers its ping but the most recent model turn failed on a budget or quota class recently (see dependency_reasons); asking Genie stays enabled. Consumers treat any value other than 'down' as not an outage.",
             "title": "Dependencies",
+            "type": "object"
+          },
+          "dependency_reasons": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Why a dependency reads 'degraded', keyed like dependencies: a closed failure class such as BUDGET_EXCEEDED. Absent when nothing is degraded.",
+            "title": "Dependency Reasons",
             "type": "object"
           },
           "deployment_lease_id": {
@@ -598,6 +606,17 @@
                 "type": "null"
               }
             ]
+          },
+          "genie_last_turn": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GenieLastTurn"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Outcome of the most recent real Genie model turn in this App process (process-local, reset on restart); null when no turn has run since boot. Health never runs a turn itself."
           },
           "git_sha": {
             "anyOf": [
@@ -8568,6 +8587,58 @@
         "title": "GenieJobStatus",
         "type": "string"
       },
+      "GenieLastTurn": {
+        "description": "Outcome of the most recent real Genie model turn in this process.\n\nClosed fields only: never question text, SQL, rows, ids or upstream\nerror text (the class is decided where the error is raised).",
+        "properties": {
+          "at": {
+            "description": "When the outcome was recorded (UTC).",
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "error_class": {
+            "anyOf": [
+              {
+                "enum": [
+                  "BUDGET_EXCEEDED",
+                  "QUOTA_EXCEEDED",
+                  "RATE_LIMITED",
+                  "TIMEOUT",
+                  "AUTH",
+                  "NOT_FOUND",
+                  "UPSTREAM_ERROR",
+                  "NETWORK",
+                  "CANCELED",
+                  "EXPIRED",
+                  "FAILED",
+                  "MALFORMED_RESPONSE",
+                  "UNKNOWN"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Sanitized failure class; null when the turn succeeded.",
+            "title": "Error Class"
+          },
+          "outcome": {
+            "enum": [
+              "success",
+              "failed"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome",
+          "at"
+        ],
+        "title": "GenieLastTurn",
+        "type": "object"
+      },
       "GenieMessageRequest": {
         "properties": {
           "conversation_id": {
@@ -11617,8 +11688,16 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Per-dependency state (warehouse, lakebase, genie): up | down | resuming. 'resuming' (warehouse only) means the serverless warehouse is starting from auto-stop; consumers treat any value other than 'down' as not an outage.",
+            "description": "Per-dependency state (warehouse, lakebase, genie): up | down | resuming | degraded. 'resuming' (warehouse only) means the serverless warehouse is starting from auto-stop. 'degraded' (genie only) means the space answers its ping but the most recent model turn failed on a budget or quota class recently (see dependency_reasons); asking Genie stays enabled. Consumers treat any value other than 'down' as not an outage.",
             "title": "Dependencies",
+            "type": "object"
+          },
+          "dependency_reasons": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Why a dependency reads 'degraded', keyed like dependencies: a closed failure class such as BUDGET_EXCEEDED. Absent when nothing is degraded.",
+            "title": "Dependency Reasons",
             "type": "object"
           },
           "deployment_lease_id": {

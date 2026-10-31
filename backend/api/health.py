@@ -10,8 +10,9 @@ Slice-6/7 contract (returned body):
       "dependencies": {
         "warehouse":       "up" | "down" | "resuming",
         "lakebase":        "up" | "down",
-        "genie":           "up" | "down"
+        "genie":           "up" | "down" | "degraded"
       },
+      "dependency_reasons": {"genie": "BUDGET_EXCEEDED"},   # only when degraded
       "circuit_breakers": {
         "warehouse":       "closed" | "open" | "half_open",
         "lakebase":        "closed" | "open" | "half_open",
@@ -39,6 +40,17 @@ while the breaker is closed).
 Anonymous load-balancer/liveness requests intentionally do not run those
 probes, so external monitoring cannot keep billable dependencies warm.
 The frontend's degraded banner auto-retries until ``status == "ok"``.
+
+Model turns are invisible to those pings (2026-10-28: two days of
+``BUDGET_EXCEEDED`` turns behind ``genie: up``), so the Genie client records
+the outcome of every real turn it runs (``backend.services.genie_turn_outcome``)
+and health READS that record: no probe ever starts a turn, costs money or
+writes an audit row. When the space pings up but the last turn failed on a
+budget/quota class inside the window, ``genie`` reads ``degraded``, ``status``
+reads ``degraded`` and ``dependency_reasons`` names the class. A rate-limited
+turn does not degrade (it clears within a minute), the next successful turn
+clears it, and asking Genie is never blocked by it. Admin health also carries
+``genie_last_turn`` (outcome, sanitized class, UTC time) for any outcome.
 """
 
 from __future__ import annotations
@@ -66,6 +78,10 @@ from backend.services.forced_degraded import (
     apply_forced_degraded,
     forced_degraded_payload,
     forced_degraded_snapshot_from_cookie,
+)
+from backend.services.genie_turn_outcome import (
+    genie_turn_degraded_reason,
+    last_genie_turn_payload,
 )
 from backend.services.health_probes import breaker_states, probe_snapshot
 from backend.services.keep_warm import note_activity, parse_idle_hint
@@ -151,6 +167,28 @@ def _apply_breaker_degraded(
     return next_status, next_deps
 
 
+def _apply_genie_turn_degraded(
+    status: str,
+    deps: dict[str, str],
+) -> tuple[str, dict[str, str], dict[str, str]]:
+    """Degrade a pinging Genie whose recent model turns hit a budget/quota wall.
+
+    Reads the in-process last-turn record only; never starts a turn. A Genie
+    already ``down`` (ping or breaker) stays ``down``, the stronger signal.
+    """
+
+    reason = genie_turn_degraded_reason()
+    if reason is None or deps.get("genie") != "up":
+        return status, deps, {}
+    return "degraded", {**deps, "genie": "degraded"}, {"genie": reason}
+
+
+def _live_reasons(reasons: dict[str, str], deps: dict[str, str]) -> dict[str, str]:
+    """Reasons for dependencies still ``degraded`` after the forced-drill overlay."""
+
+    return {dep: reason for dep, reason in reasons.items() if deps.get(dep) == "degraded"}
+
+
 def _apply_treatment_runtime_degraded(status: str) -> tuple[str, str]:
     """Fold the deploy-promotion marker into overall health status.
 
@@ -173,6 +211,7 @@ def _diagnostic_body(
     deps: dict[str, str],
     actor_email: str,
     forced_degraded: dict[str, object] | None = None,
+    dependency_reasons: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     status, treatment_runtime = _apply_treatment_runtime_degraded(status)
     boundary_warning = None
@@ -196,7 +235,12 @@ def _diagnostic_body(
         "app_env": settings.app_env,
         "warehouse_id": settings.databricks_warehouse_id,
         "dependencies": deps,
+        "dependency_reasons": dependency_reasons or {},
         "circuit_breakers": breaker_states(),
+        # Outcome of the most recent real Genie model turn (outcome, closed
+        # error class, UTC time; null before the first turn). Recorded by the
+        # Genie client on turns users and capability probes already run.
+        "genie_last_turn": last_genie_turn_payload(),
         # PII-safe identity discriminator for frontend cache hygiene.
         # The browser never receives the actor email, but can still clear
         # QueryClient data if Databricks Apps swaps the workspace identity
@@ -322,8 +366,10 @@ def health(request: Request) -> dict[str, Any]:
     status, deps = probe_snapshot()
     breakers = breaker_states()
     status, deps = _apply_breaker_degraded(status, deps, breakers)
+    status, deps, reasons = _apply_genie_turn_degraded(status, deps)
 
     status, deps, forced_degraded = _apply_browser_forced_degraded(request, status, deps)
+    reasons = _live_reasons(reasons, deps)
     status, treatment_runtime = _apply_treatment_runtime_degraded(status)
     body = {
         "status": status,
@@ -357,6 +403,8 @@ def health(request: Request) -> dict[str, Any]:
         body["agent_gateway_binding_sha256"] = gateway_binding
     if forced_degraded is not None:
         body["forced_degraded"] = forced_degraded
+    if reasons:
+        body["dependency_reasons"] = reasons
     return body
 
 
@@ -365,5 +413,8 @@ def admin_health(request: Request, _actor: AdminDep) -> dict[str, Any]:
     """Return ops diagnostics behind admin RBAC."""
     status, deps = probe_snapshot()
     status, deps = _apply_breaker_degraded(status, deps)
+    status, deps, reasons = _apply_genie_turn_degraded(status, deps)
     status, deps, forced_degraded = _apply_browser_forced_degraded(request, status, deps)
-    return _diagnostic_body(status, deps, _actor, forced_degraded)
+    return _diagnostic_body(
+        status, deps, _actor, forced_degraded, _live_reasons(reasons, deps)
+    )

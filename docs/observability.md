@@ -409,6 +409,36 @@ need the warehouse answering (`tools/wait_app_ready.py`,
 `scripts/smoke_live.sh`) keep waiting for `up`. The wire type stays
 `dict[str, str]`.
 
+The 2026-10-28 budget finding adds one more value and two keys, additively.
+The Genie ping (`GET /spaces/{id}`) cannot see a model turn fail: from
+2026-10-26T22:29Z every dev turn ended `FAILED` with
+`BUDGET_EXCEEDED_EXCEPTION` while health read `genie=up`. The Genie client now
+records the outcome of every real turn it already runs (sync `ask`, async
+`submit` / `peek` / `resume`, capability probes) in process memory
+(`backend/services/genie_turn_outcome.py`); health only reads that record, so
+it still never starts a turn, costs nothing and writes no audit row.
+
+- `genie_last_turn` (admin body only) — `{outcome, error_class, at}` for the
+  most recent turn in this process, or `null` before the first one since boot.
+  `outcome` is `success | failed`; `error_class` is a closed class
+  (`BUDGET_EXCEEDED`, `QUOTA_EXCEEDED`, `RATE_LIMITED`, `TIMEOUT`, `AUTH`,
+  `NOT_FOUND`, `UPSTREAM_ERROR`, `NETWORK`, `CANCELED`, `EXPIRED`, `FAILED`,
+  `MALFORMED_RESPONSE`, `UNKNOWN`) decided where the error is raised; question
+  text, SQL, rows, ids and upstream error text are never stored. `at` is UTC.
+  Process-local like the counters above: one record per replica, reset on
+  restart.
+- `dependencies.genie` may be `degraded` when the space pings `up` but the
+  last turn failed with `BUDGET_EXCEEDED` or `QUOTA_EXCEEDED` within the last
+  15 minutes; `status` then reads `degraded` and `dependency_reasons`
+  (authenticated and admin bodies) names the class, e.g.
+  `{"genie": "BUDGET_EXCEEDED"}`. A `RATE_LIMITED` turn does not degrade (the
+  space's per-minute limit clears by itself), the next successful turn clears
+  it, a `down` Genie stays `down`, and the anonymous liveness body is
+  unchanged. Asking Genie is never blocked by it; the topbar pill reads
+  Degraded with the reason in its tooltip. Like `resuming`, `degraded` is not
+  `up`, so `tools/wait_app_ready.py` and `scripts/smoke_live.sh` keep waiting:
+  a deploy whose Genie cannot answer is not ready.
+
 The state read has a 2 s HTTP timeout, but building its SDK client resolves
 host metadata with the SDK's default timeouts, so the client is built once in
 the startup warm path (`warehouse_state_client_prime_failed` on failure, type

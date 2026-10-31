@@ -83,6 +83,21 @@ describe('systemStatusViewModel', () => {
     expect(systemStatusViewModel(payload('resuming', { status: 'degraded' }), 'online', 1).label).toBe('Degraded');
   });
 
+  it('reads a budget-degraded Genie as Degraded and names the reason in the tooltip', () => {
+    const view = systemStatusViewModel(
+      payload('up', {
+        status: 'degraded',
+        dependencies: { warehouse: 'up', lakebase: 'up', genie: 'degraded' },
+        dependency_reasons: { genie: 'BUDGET_EXCEEDED' },
+      }),
+    );
+    expect(view.label).toBe('Degraded');
+    expect(view.dotClass).toBe('dot danger');
+    expect(view.tooltip).toContain('genie=degraded (budget exceeded)');
+    expect(view.tooltip).toContain('warehouse=up · lakebase=up');
+    expect(systemStatusViewModel(payload('up')).tooltip).not.toContain('(');
+  });
+
   it('lets the connection outrank the last payload: an ended session never reads Live', () => {
     const live = payload('up');
 
