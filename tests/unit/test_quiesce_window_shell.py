@@ -54,6 +54,8 @@ case "$*" in
     printf '{"code": "%s", "reasons": %s}\n' "${PLAN_CODE:-none}" "${PLAN_REASONS_JSON:-[]}" > "$out" ;;
   *"app_deployment_rollback repin"*)
     printf 'MIP_APP_ROLLBACK_DEPLOYMENT_ID=deployment-start-1\n' > "$out" ;;
+  *"catalog_bootstrap_skip_rule check"*)
+    exit "${SKIP_RULE_RC:-0}" ;;
 esac
 exit 0
 """
@@ -281,6 +283,33 @@ def test_states_outside_the_window_keep_the_legacy_compensation(tmp_path: Path, 
     )
     assert result.returncode == 0, result.stderr
     assert "legacy-restore" in calls and not _has(calls, "assert-serving")
+
+
+# --- the catalog bootstrap skip rule's mapping ----------------------------------------
+
+
+@pytest.mark.parametrize(("rule_rc", "mapped"), (("0", 0), ("1", 3), ("2", 3), ("3", 3), ("4", 3)))
+def test_the_skip_rule_skips_only_on_its_exact_exit(tmp_path: Path, rule_rc: str, mapped: int) -> None:
+    # A crashed rule (a traceback exits 1) or any other outcome runs the
+    # bootstrap; only the rule's own "equal" exit skips it.
+    result, calls = _run(
+        tmp_path,
+        'rc=0; check_catalog_bootstrap_skip_rule "$TMPDIR/skip.json" || rc=$?\necho "mapped=$rc"\n',
+        SKIP_RULE_RC=rule_rc,
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"mapped={mapped}" in result.stdout
+    assert _has(calls, "catalog_bootstrap_skip_rule check --warehouse-id warehouse") == 1
+
+
+def test_the_skip_rule_without_a_warehouse_runs_without_reading(tmp_path: Path) -> None:
+    result, calls = _run(
+        tmp_path,
+        '_GRANTS_WAREHOUSE_ID=""; DATABRICKS_WAREHOUSE_ID=""; dotenv_value() { :; }\n'
+        'rc=0; check_catalog_bootstrap_skip_rule "$TMPDIR/skip.json" || rc=$?\necho "mapped=$rc"\n',
+    )
+    assert result.returncode == 0, result.stderr
+    assert "mapped=3" in result.stdout and not _has(calls, "catalog_bootstrap_skip_rule")
 
 
 # --- TOCTOU --------------------------------------------------------------------------

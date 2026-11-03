@@ -19,7 +19,10 @@ and ``SHOW TBLPROPERTIES``, read-only through the SQL warehouse, normalizes
 both alike and compares their sha256. Equal exits 0 (skip: running the job
 would change nothing); anything else exits 3 (run), and the report predicts
 the EXECUTE-gap interval. A statement kind the parser does not know, or a
-live read that fails, can never skip.
+live read that fails, can never skip; nor can a function clause the live side
+does not compare (a parameter ``DEFAULT`` or ``COMMENT``, ``SQL SECURITY``,
+``LANGUAGE``, ``READS SQL DATA``), nor a rendered source that cannot be read
+(exit 3 with no report, so the PlanReport predicts an unknown gap).
 
 The live ``routine_definition`` text shape is derived, not captured: until a
 governed run records it, a reformatted body reads as a difference, which only
@@ -223,7 +226,11 @@ def _parse_function(statement: str, contract: Contract) -> None:
     parameters = []
     for part in _top_level_split(statement[match.end() : close]):
         name, _, rest = part.partition(" ")
-        parameters.append([name.strip("`").lower(), normalize_type(_type_and_rest(rest)[0])])
+        parameter_type, parameter_tail = _type_and_rest(rest)
+        if parameter_tail.strip():
+            # A DEFAULT or a parameter COMMENT is never compared: it can only run.
+            contract.unknown.append("function_parameter_clause")
+        parameters.append([name.strip("`").lower(), normalize_type(parameter_type)])
     tail = statement[close + 1 :]
     returns = re.match(
         r"\s*RETURNS\s+(.+?)\s+(?=NOT\s+DETERMINISTIC|DETERMINISTIC|COMMENT|RETURN)",
@@ -238,6 +245,15 @@ def _parse_function(statement: str, contract: Contract) -> None:
         contract.unknown.append("function_signature_shape")
         return
     head = tail[: body.start()]
+    # Only the return type, the determinism and the COMMENT are compared. Any
+    # other header clause (SQL SECURITY, LANGUAGE, READS SQL DATA) can only run.
+    clauses = re.sub(
+        r"\bNOT\s+DETERMINISTIC\b|\bDETERMINISTIC\b", " ", head[returns.end() :], flags=re.I
+    )
+    clauses = re.sub(r"\bCOMMENT\s+'(?:[^']|'')*'", " ", clauses, count=1, flags=re.I)
+    return_words = re.sub(r"<.*>|\(.*\)", " ", returns.group(1), flags=re.S).split()
+    if clauses.strip() or len(return_words) != 1:
+        contract.unknown.append("function_header_clause")
     deterministic = (
         False
         if re.search(r"\bNOT\s+DETERMINISTIC\b", head, re.I)
@@ -448,7 +464,16 @@ def main(argv: Sequence[str] | None = None, *, workspace_factory: Any = None) ->
     check.add_argument("--repo-root", type=Path, default=Path("."))
     check.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
-    rendered = rendered_contract(bootstrap_files(args.bundle, args.repo_root))
+    try:
+        rendered = rendered_contract(bootstrap_files(args.bundle, args.repo_root))
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        # No report: the plan gate then predicts an unknown EXECUTE gap.
+        print(
+            f"[mip-catalog-bootstrap] run: the rendered bootstrap is unreadable "
+            f"({type(exc).__name__}); it never skips",
+            file=sys.stderr,
+        )
+        return CHECK_DRIFT
     live: Contract | None = None
     error = ""
     try:

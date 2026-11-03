@@ -2335,7 +2335,10 @@ skipped only when the live `information_schema` routines, parameters and DDL
 contract columns and the treatment table's properties hash-equal the rendered
 sources (read-only, under the lease, right before the job); the grants are
 still reconciled and proven. Otherwise it runs and the PlanReport's
-`execute_gap` predicts the interval and the republished functions.
+`execute_gap` predicts the interval and the republished functions. A function
+clause the live side does not compare (a parameter `DEFAULT` or `COMMENT`,
+`SQL SECURITY`, `LANGUAGE`, `READS SQL DATA`), a crashed rule or an unreadable
+rendered source always means "run"; only the rule's own exit 0 skips.
 
 **Stop contract** (attack O16). The window library and the EXIT-trap
 compensation are the only shell files that stop or start the App, and

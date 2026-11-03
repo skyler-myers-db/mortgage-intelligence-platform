@@ -257,3 +257,63 @@ def test_the_plan_report_carries_the_prediction_publicly_without_the_catalog(
     assert public["functions"] == ["gold.fn_build_cohort", "gold.fn_lead_queue_url", "gold.fn_segment_counts"]
     assert "mip." not in json.dumps(public)
     assert ExecuteGapPrediction.from_skip_rule(None).public()["code"] == "unknown"
+
+
+FUNCTION = (
+    "CREATE OR REPLACE FUNCTION mip.gold.fn_x(n INT{param}) RETURNS BIGINT {head}"
+    "COMMENT 'c' RETURN n + 1;\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("param", "head", "unknown"),
+    (
+        (" DEFAULT 5", "DETERMINISTIC ", "function_parameter_clause"),
+        (" COMMENT 'old'", "DETERMINISTIC ", "function_parameter_clause"),
+        ("", "DETERMINISTIC SQL SECURITY DEFINER ", "function_header_clause"),
+        ("", "DETERMINISTIC LANGUAGE SQL ", "function_header_clause"),
+        ("", "READS SQL DATA DETERMINISTIC ", "function_header_clause"),
+    ),
+    ids=("param-default", "param-comment", "sql-security", "language", "reads-sql-data"),
+)
+def test_an_uncompared_function_clause_never_skips(
+    tmp_path: Path, param: str, head: str, unknown: str
+) -> None:
+    # The live side does not compare these clauses, so a change to them alone
+    # would hash-equal the live function; the rule must run instead.
+    sql = tmp_path / "fn.sql"
+    sql.write_text(FUNCTION.format(param=param, head=head), encoding="utf-8")
+    contract = rule.rendered_contract([sql])
+    assert unknown in contract.unknown
+    assert rule.decide(contract, rule.rendered_contract([sql]))["decision"] == "run"
+
+
+def test_a_plain_function_has_no_uncompared_clause(tmp_path: Path) -> None:
+    sql = tmp_path / "fn.sql"
+    sql.write_text(FUNCTION.format(param="", head="DETERMINISTIC "), encoding="utf-8")
+    contract = rule.rendered_contract([sql])
+    assert contract.unknown == [] and contract.functions["mip.gold.fn_x"]["body"]
+    assert rule.decide(contract, rule.rendered_contract([sql]))["decision"] == "skip"
+
+
+def test_an_unreadable_rendered_source_exits_run_without_a_report(tmp_path: Path) -> None:
+    sql = tmp_path / "sql" / "_rendered" / "ddl" / "001_catalogs_schemas.sql"
+    sql.parent.mkdir(parents=True)
+    sql.write_text("CREATE TABLE IF NOT EXISTS mip.gold.t (a INT;\n", encoding="utf-8")
+    bundle = tmp_path / "databricks.yml"
+    bundle.write_text(
+        "resources:\n  jobs:\n    mip_init_catalog_schemas:\n      tasks:\n"
+        "        - sql_task: {file: {path: sql/_rendered/ddl/001_catalogs_schemas.sql}}\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "skip-rule.json"
+    argv = ["check", "--warehouse-id", "warehouse-PLACEHOLDER", "--out", str(out)]
+    for case in ("unbalanced", "missing"):
+        if case == "missing":
+            sql.unlink()
+        rc = rule.main(
+            [*argv, "--bundle", str(bundle), "--repo-root", str(tmp_path)],
+            workspace_factory=lambda: pytest.fail("never reads the live catalog"),
+        )
+        assert rc == CHECK_DRIFT, case
+        assert not out.exists(), "no report: the plan gate predicts an unknown gap"
