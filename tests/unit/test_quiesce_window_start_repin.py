@@ -49,6 +49,12 @@ from tools.databricks import app_start_deployment as starts
 from tools.databricks import quiesce_window as window
 from tools.databricks import quiesce_window_journal as journal
 from tools.databricks.app_rollback_record_builder import build_app_rollback_record
+from tools.databricks.app_rollback_resource_contract import (
+    app_resource_contract as real_contract,
+)
+from tools.databricks.app_rollback_resource_contract import (
+    restore_signed_app_resource_contract as real_restore,
+)
 from tools.databricks.app_rollback_resource_contract import validated_app_resource_contract
 from tools.databricks.quiesce_window_plan import window_plan
 from tools.databricks.stop_app_fail_closed import stop_app_fail_closed
@@ -62,7 +68,18 @@ MIGRATION_APPLY = {
     "migrations": {"pending": ["0042"], "pending_contract": []},
 }
 MIGRATION_NOOP = {**MIGRATION_APPLY, "decision": "noop", "migrations": {"pending": []}}
-EQUAL_BINDINGS = {"name": APP_NAME, "description": "", "resources": []}
+EQUAL_BINDINGS = {"name": APP_NAME, "description": "", "resources": APP_RESOURCES}
+# WR1: the bundle adds the read-only scheduler binding to blue's signed set.
+WR1_BINDINGS = {
+    **EQUAL_BINDINGS,
+    "resources": [
+        *APP_RESOURCES,
+        {
+            "name": "growth_agent_scheduler_job",
+            "job": {"id": "scheduler-job", "permission": "CAN_VIEW"},
+        },
+    ],
+}
 
 
 @pytest.fixture(autouse=True)
@@ -107,6 +124,7 @@ def _signed_blue(estate: Estate) -> dict[str, Any]:
 
 def _estate(behaviour: StartBehaviour | None = None) -> Estate:
     estate = make_estate(ENV_NAMES, behaviour)
+    estate.apps.resources = [dict(item) for item in APP_RESOURCES]
     _signed_blue(estate)
     return estate
 
@@ -122,14 +140,20 @@ def _stop(estate: Estate) -> Any:
     )
 
 
-def _plan(estate: Estate, *, migration: dict[str, Any] = MIGRATION_APPLY, ack: str = "") -> Any:
+def _plan(
+    estate: Estate,
+    *,
+    migration: dict[str, Any] = MIGRATION_APPLY,
+    ack: str = "",
+    bindings: dict[str, Any] = EQUAL_BINDINGS,
+) -> Any:
     facts = window.collect_facts(
         estate.workspace,
         app_name=APP_NAME,
         scope=SCOPE,
         lakebase_instance="mip-app-state",
         gate_report={"verdict": "passed", "instance_update_sha256": ""},
-        binding_payload=EQUAL_BINDINGS,
+        binding_payload=bindings,
         role_state="exact",
         verifier_role_state="exact",
         migration_plan=migration,
@@ -141,7 +165,9 @@ def _plan(estate: Estate, *, migration: dict[str, Any] = MIGRATION_APPLY, ack: s
     )
 
 
-def _repin(estate: Estate, deployment_id: str, tree: str | None = None) -> dict[str, Any]:
+def _repin(
+    estate: Estate, deployment_id: str, tree: str | None = None, applied: Any = None
+) -> dict[str, Any]:
     return rollback.repin_started_deployment(
         estate.workspace,
         app_name=APP_NAME,
@@ -153,11 +179,12 @@ def _repin(estate: Estate, deployment_id: str, tree: str | None = None) -> dict[
         deployment_lease_id=LEASE_ID,
         deployment_source_git_sha=GIT_SHA,
         expected_tree_sha256=tree,
+        applied_app_resources=applied,
     )
 
 
-def _run_window(estate: Estate) -> tuple[str, dict[str, Any]]:
-    plan = _plan(estate)
+def _run_window(estate: Estate, plan: Any = None) -> tuple[str, dict[str, Any]]:
+    plan = plan or _plan(estate)
     opened = window.open_window(
         estate.workspace,
         app_name=APP_NAME,
@@ -453,6 +480,66 @@ def test_open_rechecks_that_blue_is_still_the_last_deployment() -> None:
             stop=_stop(estate),
         )
     assert estate.apps.stops == 0
+
+
+def _wr1_window(estate: Estate) -> str:
+    """A WR1 window: open, apply the bundle's bindings with the App stopped, start, prove."""
+
+    plan = _plan(estate, migration=MIGRATION_NOOP, bindings=WR1_BINDINGS)
+    assert plan.reasons == ("WR1",)
+    real_open = window.open_window
+
+    def open_then_update(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        opened = real_open(*args, **kwargs)
+        estate.apps.update(APP_NAME, SimpleNamespace(as_dict=lambda: WR1_BINDINGS))
+        return opened
+
+    window.open_window = open_then_update  # type: ignore[assignment]
+    try:
+        proven, _opened = _run_window(estate, plan)
+    finally:
+        window.open_window = real_open  # type: ignore[assignment]
+    return proven
+
+
+def test_a_wr1_re_pin_records_the_bindings_blue_restarted_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Blue restarts on the bindings the window applied and is proven healthy
+    # on them, so the re-pinned record names them. Otherwise the next run's
+    # step 0a would revert them on the serving App, outside any window.
+    estate = _estate()
+    proven = _wr1_window(estate)
+    applied = validated_app_resource_contract(WR1_BINDINGS["resources"])
+    record = _repin(estate, proven, applied=applied)
+    assert record["app_resources"] == applied and estate.apps.updates == 1
+
+    monkeypatch.setattr(rollback, "restore_signed_app_resource_contract", real_restore)
+    monkeypatch.setattr(rollback, "app_resource_contract", real_contract)
+    rollback.ensure_current(
+        estate.workspace,
+        app_name=APP_NAME,
+        scope=SCOPE,
+        base_url="https://mip.example",
+        bearer_token="token",
+        deployment_lease_id=LEASE_ID,
+        deployment_source_git_sha=GIT_SHA,
+        treatment_warehouse_id="warehouse-id",
+        treatment_catalog="mip",
+    )
+    assert estate.apps.updates == 1, "the next step 0a never reverts the serving App's bindings"
+    assert estate.apps.resources == WR1_BINDINGS["resources"]
+
+
+@pytest.mark.parametrize("applied", (None, APP_RESOURCES[:1]), ids=("none-given", "other-set"))
+def test_a_re_pin_refuses_bindings_that_are_neither_signed_nor_applied(applied: Any) -> None:
+    estate = _estate()
+    proven = _wr1_window(estate)
+    contract = validated_app_resource_contract(applied) if applied else None
+
+    with pytest.raises(RuntimeError, match="neither the signed record's nor"):
+        _repin(estate, proven, applied=contract)
+    assert stored_record(estate)["deployment_id"] == BLUE_ID, "nothing was re-signed"
 
 
 # --- the rollback's start paths -----------------------------------------------------

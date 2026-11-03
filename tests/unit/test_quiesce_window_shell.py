@@ -207,6 +207,25 @@ def test_a_starting_window_resumes_through_the_start_tool_once(tmp_path: Path) -
     assert "--expected-app-id app-id" in start and "--expected-scim-id app-scim" in start
 
 
+@pytest.mark.parametrize(("reasons", "passed"), (("WR1,WR3", True), ("WR3", False)))
+def test_the_re_pin_gets_the_applied_bindings_only_after_a_wr1_window(
+    tmp_path: Path, reasons: str, passed: bool
+) -> None:
+    # Blue restarts on the bindings a WR1 window applied; the re-pin may record
+    # exactly that payload, so the next step 0a has nothing to revert.
+    result, calls = _run(
+        tmp_path,
+        f'QUIESCE_WINDOW_STATE=window_open; QUIESCE_WINDOW_REASONS="{reasons}"\n'
+        'APP_RESOURCE_BINDING_PAYLOAD="$TMPDIR/bindings.json"; echo "{}" > "$APP_RESOURCE_BINDING_PAYLOAD"\n'
+        "close_quiesce_window\n",
+    )
+    assert result.returncode == 0, result.stderr
+    repin = next(call for call in calls if "rollback repin" in call)
+    assert ("--app-resource-payload" in repin) is passed
+    if passed:
+        assert repin.endswith(f"--app-resource-payload {tmp_path}/bindings.json")
+
+
 def test_a_proven_window_resumes_at_the_re_pin(tmp_path: Path) -> None:
     result, calls = _run(
         tmp_path,

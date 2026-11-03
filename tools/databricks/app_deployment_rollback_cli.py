@@ -154,6 +154,10 @@ def main(argv: list[str] | None = None) -> int:
             deployment_lease_id=args.deployment_lease_id,
             deployment_source_git_sha=args.deployment_source_git_sha,
             expected_tree_sha256=args.expected_tree_sha256,
+            # The bindings a WR1 window applied: the re-pin may record them.
+            applied_app_resources=reviewed_resources_file(args.app_resource_payload)
+            if args.app_resource_payload
+            else None,
         )
         if args.out_env is not None:
             repinned = verified_signed_last_good_contract(

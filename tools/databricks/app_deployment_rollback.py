@@ -223,6 +223,7 @@ def repin_started_deployment(
     deployment_lease_id: str,
     deployment_source_git_sha: str,
     expected_tree_sha256: str | None = None,
+    applied_app_resources: list[dict[str, object]] | None = None,
 ) -> dict[str, Any]:
     """Prove the deployment a start created is blue and re-pin the signed record to it."""
 
@@ -245,6 +246,7 @@ def repin_started_deployment(
         ),
         resource_proof=lambda record: _stored_resource_proof(workspace, record=record),
         expected_tree_sha256=expected_tree_sha256,
+        applied_app_resources=applied_app_resources,
     )
 
 

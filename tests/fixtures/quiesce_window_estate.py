@@ -16,6 +16,7 @@ payload and Gateway contract.
 from __future__ import annotations
 
 import base64
+import copy
 import io
 import json
 from dataclasses import dataclass, field
@@ -135,6 +136,9 @@ class FakeApps:
     stops: int = 0
     starts: int = 0
     deploys: int = 0
+    updates: int = 0
+    # The App's resource bindings: app-level, so a start or a deploy keeps them.
+    resources: list[dict[str, Any]] = field(default_factory=list)
     get_calls: int = 0
     deployments: dict[str, SimpleNamespace] = field(default_factory=dict)
     active_id: str = BLUE_ID
@@ -163,10 +167,14 @@ class FakeApps:
             pending_deployment=pending,
             default_source_code_path=self.default_source,
             url="https://mip.example",
-            resources=[],
+            resources=copy.deepcopy(self.resources),
             description="",
         )
-        app.as_dict = lambda: {"name": APP_NAME, "description": "", "resources": []}
+        app.as_dict = lambda: {
+            "name": APP_NAME,
+            "description": "",
+            "resources": copy.deepcopy(self.resources),
+        }
         return app
 
     def get(self, _name: str) -> SimpleNamespace:
@@ -242,6 +250,13 @@ class FakeApps:
             self.pending_id = ""
             self.hidden_start = new_id
         return SimpleNamespace(response=SimpleNamespace(pending_deployment=pending))
+
+    def update(self, _name: str, app: object) -> object:
+        """A binding update: resources only, never the deployment or the compute."""
+
+        self.updates += 1
+        self.resources = copy.deepcopy(app.as_dict()["resources"])
+        return self._app()
 
     def deploy_and_wait(self, _name: str, app_deployment: object, *, timeout: object) -> object:
         self.deploys += 1

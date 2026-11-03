@@ -290,8 +290,15 @@ repin_proven_quiesce_window() {
 
 # The proven start deployment becomes the signed record (same provenance,
 # predecessor_deployment_id), health is checked against it, the journal closes.
+# A WR1 window restarted blue on the bundle's bindings, so the re-pin records
+# the live set when it is exactly that applied payload (or the record's own);
+# the next step 0a then has nothing to revert on the serving App.
 repin_and_close_quiesce_window() {
   local proven="${1:?proven start deployment id is required}"
+  local -a applied_bindings=()
+  if quiesce_window_has_reason WR1 && [[ -s "${APP_RESOURCE_BINDING_PAYLOAD:-}" ]]; then
+    applied_bindings=(--app-resource-payload "$APP_RESOURCE_BINDING_PAYLOAD")
+  fi
   mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET || return 1
   step "re-pin the signed record to the proven start deployment and check its health"
   run_with_account_identity run_with_proof_signing_authority \
@@ -305,7 +312,8 @@ repin_and_close_quiesce_window() {
     --expected-tree-sha256 "${QUIESCE_WINDOW_TREE_SHA256:?}" \
     --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --deployment-source-git-sha "$SOURCE_GIT_SHA" \
-    --out-env "${APP_ROLLBACK_BINDING_ENV:?}" || return 1
+    --out-env "${APP_ROLLBACK_BINDING_ENV:?}" \
+    "${applied_bindings[@]}" || return 1
   set -a
   # shellcheck disable=SC1090
   . "$APP_ROLLBACK_BINDING_ENV"

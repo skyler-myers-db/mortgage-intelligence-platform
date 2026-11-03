@@ -13,10 +13,13 @@ that no longer names what runs. ``repin_start_deployment`` closes that gap:
    tree digest is the expected one (the window journal's, else blue's own
    snapshot's), and the record payload's exact env-name set;
 4. authenticated health pinned to the start deployment, before any write;
-5. under the held lease, a new record version with the same provenance (every
-   field of the old record) naming the start deployment and its snapshot,
-   plus ``predecessor_deployment_id``; read back exactly;
-6. health again, against the re-pinned id.
+5. the App's live resource bindings are the record's own, or exactly the
+   contract the window applied (WR1): blue restarted on those and is proven
+   healthy on them, so the re-pinned record names them. Anything else refuses;
+6. under the held lease, a new record version with the same provenance (every
+   field of the old record but those bindings) naming the start deployment
+   and its snapshot, plus ``predecessor_deployment_id``; read back exactly;
+7. health again, against the re-pinned id.
 
 The caller supplies health and the stored Gateway resource proof, so this
 module never imports the rollback module that calls it.
@@ -41,6 +44,10 @@ from tools.databricks.app_rollback_record_contract import (
     _text,
     save_versioned_record,
 )
+from tools.databricks.app_rollback_resource_contract import (
+    app_resource_contract,
+    validated_app_resource_contract,
+)
 from tools.databricks.app_start_deployment import (
     env_names,
     prove_start_deployment,
@@ -59,8 +66,9 @@ def repinned_record(
     *,
     deployment: object,
     expected_lakebase_instance: str,
+    app_resources: list[dict[str, object]] | None = None,
 ) -> dict[str, Any]:
-    """The same signed contract, naming ``deployment`` and its snapshot."""
+    """The same signed contract, naming ``deployment``, its snapshot and the live bindings."""
 
     rebuilt = build_app_rollback_record(
         app_name=record["app_name"],
@@ -69,7 +77,7 @@ def repinned_record(
         git_sha=record["git_sha"],
         gateway_binding=record["gateway_binding_sha256"],
         gateway_resources=record["gateway_resources"],
-        app_resources=record["app_resources"],
+        app_resources=record["app_resources"] if app_resources is None else app_resources,
         app_service_principal_client_id=record["app_service_principal_client_id"],
         app_service_principal_scim_id=record["app_service_principal_scim_id"],
         expected_lakebase_instance=expected_lakebase_instance,
@@ -95,6 +103,31 @@ def _assert_app_identity(workspace: Any, *, app_name: str, record: dict[str, Any
         raise RuntimeError("App service-principal identity drifted from the signed record")
 
 
+def live_bindings_for_repin(
+    workspace: Any,
+    *,
+    app_name: str,
+    record: dict[str, Any],
+    applied: list[dict[str, object]] | None,
+) -> list[dict[str, object]]:
+    """The App's live bindings, when they are the record's own or the window's applied set.
+
+    A WR1 window updates the bindings while blue is stopped and restarts blue
+    on them; a record that kept the old set would have the next run's step 0a
+    revert them on the serving App, outside any window.
+    """
+
+    live = app_resource_contract(workspace, app_name=app_name)
+    if live == validated_app_resource_contract(record["app_resources"]):
+        return live
+    if applied is not None and live == validated_app_resource_contract(applied):
+        return live
+    raise RuntimeError(
+        "the App's live resource bindings are neither the signed record's nor the "
+        "window's applied contract"
+    )
+
+
 def _assert_start_is_current(workspace: Any, *, app_name: str, deployment_id: str) -> None:
     if active_deployment_id(workspace, app_name=app_name) != deployment_id:
         raise RuntimeError("the start deployment is not the App's exact active deployment")
@@ -116,6 +149,7 @@ def repin_start_deployment(
     resource_proof: ResourceProof,
     expected_tree_sha256: str | None = None,
     digest: Callable[[Any, str], str] = tree_digest,
+    applied_app_resources: list[dict[str, object]] | None = None,
 ) -> dict[str, Any]:
     """Prove the start deployment is blue, then sign a record naming it; return that record."""
 
@@ -160,6 +194,9 @@ def repin_start_deployment(
         record,
         deployment=started,
         expected_lakebase_instance=expected_lakebase_instance,
+        app_resources=live_bindings_for_repin(
+            workspace, app_name=app_name, record=record, applied=applied_app_resources
+        ),
     )
     _assert_start_is_current(workspace, app_name=app_name, deployment_id=proof.deployment_id)
     assert_lease_held()
@@ -174,6 +211,7 @@ def repin_start_deployment(
         persisted["deployment_id"] != proof.deployment_id
         or persisted.get(PREDECESSOR_FIELD) != expected_blue
         or persisted["payload_sha256"] != rebuilt["payload_sha256"]
+        or persisted["app_resources"] != rebuilt["app_resources"]
     ):
         raise RuntimeError("the re-pinned record did not persist exactly")
     verify_health(persisted, proof.deployment_id)

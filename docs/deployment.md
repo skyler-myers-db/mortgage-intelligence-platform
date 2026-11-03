@@ -2290,7 +2290,11 @@ SUCCEEDED; prove its source is blue's restore source, that folder's full-tree
 digest is unchanged, its `/src/` snapshot has the same digest and its env-name
 set is the signed record's; `app_deployment_rollback repin --to <id>` signs a
 new record version with the same provenance and `predecessor_deployment_id`,
-checking health against the re-pinned id; then the journal closes. Any
+checking health against the re-pinned id; then the journal closes. After a
+WR1 window blue restarted on the bundle's bindings, so the re-pin records the
+App's live bindings when they are exactly the applied payload
+(`--app-resource-payload`) or the record's own, and refuses anything else;
+the next run's step 0a then has nothing to revert on the serving App. Any
 failure after the start call (a failed proof, an unreadable pending id, a
 vanished restore folder, an SDK error) stops the App again, identity-pinned,
 journals `window_refused` and leaves the window for the dead-man (M0-PR9). A
