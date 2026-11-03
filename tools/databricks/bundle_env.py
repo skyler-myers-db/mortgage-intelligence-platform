@@ -16,7 +16,8 @@ is refused.
 
 Mapping, ``-t client`` (the profile -> BUNDLE_VAR_*, tools/clients/profile.py):
   MIP_CLIENT              -> BUNDLE_VAR_client_key (the root leaf, the mip_client tag)
-  MIP_IDENTITY_IDS_JSON.deployer -> BUNDLE_VAR_deployer_principal (root owner, run_as)
+  MIP_IDENTITY_IDS_JSON.deployer -> BUNDLE_VAR_deployer_principal (root owner, deploy-time run_as)
+  MIP_IDENTITY_IDS_JSON.jobs -> BUNDLE_VAR_jobs_principal (the jobs identity's run_as, M2-PR5)
   MIP_DASHBOARD_PARENT_PATH -> BUNDLE_VAR_dashboard_parent_path (when set)
   MIP_LAKEBASE_READABLE_SECONDARIES -> BUNDLE_VAR_lakebase_readable_secondaries (when set)
   MIP_DEFAULT_CATALOG     -> BUNDLE_VAR_uc_catalog
@@ -43,6 +44,10 @@ Mapping, every target (env -> BUNDLE_VAR_*):
                              _table_prefix (canonical when unset; '-' is no
                              table prefix; the same names render sql/_rendered;
                              the client profile holds the same fields)
+  catalog, Lakebase names, MIP_IDENTITY_PREFIX
+                          -> jobs/install_pins.json (gitignored, synced): the
+                             parameters the jobs identity's jobs accept
+                             (tools/databricks/install_pins.py, M2-PR5)
   (refresh on only)       -> scheduled_refresh_failure_recipients (the profile's
                              MIP_SCHEDULED_REFRESH_RECIPIENTS), written to
                              .databricks/bundle/<target>/variable-overrides.json
@@ -103,7 +108,11 @@ from tools.clients.environment import resolve as resolve_client_profile  # noqa:
 from tools.clients.errors import ProfileRefusal  # noqa: E402
 from tools.clients.policy import InstallPolicy, install_policy  # noqa: E402
 from tools.clients.schema import ClientProfile  # noqa: E402
-from tools.databricks import scheduled_refresh_posture  # noqa: E402
+from tools.databricks import (  # noqa: E402
+    install_pins,
+    monitor_scheduler_gate,
+    scheduled_refresh_posture,
+)
 from tools.databricks.workspace_auth import (  # noqa: E402
     strip_app_facing_workspace_auth,
 )
@@ -440,6 +449,10 @@ def main() -> int:
         if selector_error is not None:
             print(f"[bundle_env] {selector_error}", file=sys.stderr)
             return 2
+    # The monitor scheduler stays PAUSED until its scheduler role exists (M2-PR5).
+    config_root = Path(os.environ.get("DATABRICKS_BUNDLE_ROOT") or REPO)
+    if monitor_scheduler_gate.refuse_enabled(config_root, prefix="[bundle_env]"):
+        return 2
     # -t client is the profile's install: resolve it before anything else, so
     # a refused profile never reaches a render, a lookup or the CLI. The
     # refusal lines name fields and rules, never values.
@@ -723,6 +736,20 @@ def main() -> int:
     except ValueError as exc:  # CanonicalSourceLeft, TenantRowsUnmatched, or a malformed storage root
         print(f"[bundle_env] {exc}", file=sys.stderr)
         return 2
+    # The install pins the jobs-identity jobs check their parameters against
+    # (M2-PR5): the same catalog and Lakebase names as the bundle variables.
+    try:
+        install_pins.render_install(
+            Path(env.get("DATABRICKS_BUNDLE_ROOT") or BUNDLE_ROOT),
+            catalog=catalog,
+            lakebase_instance=resource_names["lakebase_instance_name"],
+            lakebase_database=resource_names["lakebase_database_name"],
+            identity_prefix=profile.identity_prefix if profile is not None
+            else str(env.get("MIP_IDENTITY_PREFIX") or "mip").strip(),
+        )
+    except OSError as exc:
+        print(f"[bundle_env] could not render the install pins: {exc}", file=sys.stderr)
+        return 2
 
     # Operator feedback (never print the full value; just confirm resolution).
     def status(name: str, value: str | None) -> str:
@@ -746,6 +773,7 @@ def main() -> int:
         file=sys.stderr,
     )
     print(f"[bundle_env] {scheduled_refresh_status}", file=sys.stderr)
+    print(f"[bundle_env] install pins rendered to {install_pins.PINS_RELPATH}", file=sys.stderr)
     print(
         "[bundle_env] "
         f"render_sql catalog={catalog} processed={processed} written={written} "

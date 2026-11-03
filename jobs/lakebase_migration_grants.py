@@ -6,6 +6,7 @@ import os
 import time
 from collections.abc import Callable
 
+from jobs import lakebase_migration_jobs_reader as jobs_reader
 from jobs.lakebase_migration_contracts import (
     _AI_GATEWAY_VERIFIER_TABLE_PRIVILEGES,
     _APP_ROLE_ROUTINE_PRIVILEGES,
@@ -76,11 +77,14 @@ def _await_authoritative_database_roles(
     *,
     timeout_s: float,
     interval_s: float,
+    jobs_reader_role: str | None = None,
 ) -> None:
     app_role, verifier_role = roles
     required_roles = [("app", app_role)]
     if verifier_role is not None:
         required_roles.append(("AI Gateway verifier", verifier_role))
+    if jobs_reader_role is not None:
+        required_roles.append((jobs_reader.LABEL, jobs_reader_role))
     for role_label, database_role in required_roles:
         deadline = time.monotonic() + timeout_s
         while True:
@@ -116,6 +120,7 @@ def _preflight_database_roles(
     app_name: str | None = None,
     role_wait_timeout_s: float | None = None,
     role_wait_interval_s: float | None = None,
+    jobs_reader_role: str | None = None,
     _resolve_app_role_fn: Callable[..., str] = _resolve_app_role,
     _resolve_verifier_role_fn: Callable[[], str | None] = _resolve_ai_gateway_verifier_role,
 ) -> _ResolvedDatabaseRoles:
@@ -141,6 +146,7 @@ def _preflight_database_roles(
                 roles,
                 timeout_s=timeout_s,
                 interval_s=interval_s,
+                jobs_reader_role=jobs_reader_role,
             )
     finally:
         conn.rollback()
@@ -157,6 +163,7 @@ def _apply_app_role_grants(
     role_wait_interval_s: float | None = None,
     allow_absent_managed_event_triggers: bool = False,
     allow_absent_provider_schema: bool = False,
+    jobs_reader_role: str | None = None,
     _resolve_app_role_fn: Callable[..., str] = _resolve_app_role,
     _resolve_verifier_role_fn: Callable[[], str | None] = _resolve_ai_gateway_verifier_role,
 ) -> None:
@@ -174,6 +181,10 @@ def _apply_app_role_grants(
             "MIP_AI_GATEWAY_VERIFIER_CLIENT_ID must identify a role distinct "
             "from the Databricks App runtime role"
         )
+    # The optional jobs reader (M2-PR5); None keeps every statement below as before.
+    jobs_reader_role = jobs_reader.resolve_jobs_reader_role(
+        jobs_reader_role, distinct_from={"app": role, "AI Gateway verifier": verifier_role}
+    )
     timeout_s, interval_s = _role_wait_settings(
         role_wait_timeout_s=role_wait_timeout_s,
         role_wait_interval_s=role_wait_interval_s,
@@ -187,7 +198,15 @@ def _apply_app_role_grants(
                 roles,
                 timeout_s=timeout_s,
                 interval_s=interval_s,
+                jobs_reader_role=jobs_reader_role,
             )
+            if jobs_reader_role is not None:
+                cur.execute("SELECT current_user")
+                executor = cur.fetchone()
+                jobs_reader.resolve_jobs_reader_role(
+                    jobs_reader_role,
+                    distinct_from={"migration executor": str(executor[0]) if executor else None},
+                )
 
             # End the read-only role-discovery transaction before starting the
             # failure-atomic ACL reconciliation transaction.
@@ -199,7 +218,9 @@ def _apply_app_role_grants(
                 raise RuntimeError("Lakebase current database lookup returned no row")
             database_name = str(database_row[0])
             target_roles = tuple(
-                target_role for target_role in (role, verifier_role) if target_role is not None
+                target_role
+                for target_role in (role, verifier_role, jobs_reader_role)
+                if target_role is not None
             )
             _postflight_event_trigger_inventory(
                 cur,
@@ -404,12 +425,22 @@ def _apply_app_role_grants(
             target_roles = [role]
             if verifier_role is not None:
                 target_roles.append(verifier_role)
+            jobs_reader_identifier = (
+                psql.Identifier(jobs_reader_role).as_string() if jobs_reader_role is not None else None
+            )
+            if jobs_reader_role is not None:
+                target_roles.append(jobs_reader_role)
             role_placeholders = ", ".join("%s" for _target_role in target_roles)
             target_role_identifiers = {
                 role: role_identifier,
                 **(
                     {verifier_role: verifier_role_identifier}
                     if verifier_role is not None and verifier_role_identifier is not None
+                    else {}
+                ),
+                **(
+                    {jobs_reader_role: jobs_reader_identifier}
+                    if jobs_reader_role is not None and jobs_reader_identifier is not None
                     else {}
                 ),
             }
@@ -629,6 +660,17 @@ def _apply_app_role_grants(
                         f"FROM {verifier_role_identifier}"
                     )
 
+            if jobs_reader_identifier is not None:
+                for statement in jobs_reader.revoke_statements(
+                    jobs_reader_identifier,
+                    database_identifier=database_identifier,
+                    schema_identifiers=all_schema_identifiers,
+                    table_identifiers=all_table_identifiers,
+                    sequence_identifiers=all_sequence_identifiers,
+                    routines=all_routines,
+                ):
+                    cur.execute(statement)
+
             for creator_identifier in routine_creator_identifiers:
                 cur.execute(
                     f"ALTER DEFAULT PRIVILEGES FOR ROLE {creator_identifier} "
@@ -694,10 +736,19 @@ def _apply_app_role_grants(
                     f"ON TABLE {table_identifiers['ai_gateway_proof_ledger']} "
                     f"TO {verifier_role_identifier}"
                 )
+            if jobs_reader_identifier is not None:
+                for statement in jobs_reader.grant_statements(
+                    jobs_reader_identifier,
+                    schema_identifier=schema_identifier,
+                    table_identifiers=table_identifiers,
+                ):
+                    cur.execute(statement)
 
             _postflight_app_role_grants(cur, role)
             if verifier_role is not None:
                 _postflight_ai_gateway_verifier_grants(cur, verifier_role)
+            if jobs_reader_role is not None:
+                jobs_reader.postflight_jobs_reader_grants(cur, jobs_reader_role)
             _postflight_event_trigger_inventory(
                 cur,
                 role,
@@ -728,7 +779,15 @@ def _apply_app_role_grants(
                 if verifier_role is not None
                 else "; verifier role omitted for dev/test"
             )
-            print(f"[lakebase-migrate] app-role grants applied to {role!r}" f"{verifier_summary}")
+            jobs_reader_summary = (
+                f"; {jobs_reader.LABEL} SELECT grants applied to {jobs_reader_role!r}"
+                if jobs_reader_role is not None
+                else ""
+            )
+            print(
+                f"[lakebase-migrate] app-role grants applied to {role!r}"
+                f"{verifier_summary}{jobs_reader_summary}"
+            )
     except Exception:
         conn.rollback()
         raise
