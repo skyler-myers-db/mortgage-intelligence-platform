@@ -34,7 +34,8 @@ workspace admin before any mutation, so this probe refuses them up front:
    (``MIP_ACCEPTED_EXPOSURE_JSON``, M2-PR4) is judged by that identity's
    matcher, as the post-stop audit judges it (``prestop_accepted_exposure``);
    the verifier never consults one, and a policy the audits would refuse
-   refuses here (``accepted_exposure``).
+   refuses here (``accepted_exposure``), an entry naming the governed space
+   the suite resolves by its pin included.
 
 Group membership is resolved the way the audits' admin-side fallback resolves
 it (``m2m_access_policy.resolve_effective_groups``), plus the system ``users``
@@ -538,6 +539,7 @@ def all_refusals(
             app_groups=base.app_groups,
             agents=base.agents,
             acls=base.acls,
+            exposure=exposure,
         )
     except (Exception, SystemExit) as exc:  # noqa: BLE001 - keep what the clauses found
         return [*refusals, _probe_error(exc)], notes

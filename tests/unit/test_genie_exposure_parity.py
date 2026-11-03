@@ -15,6 +15,7 @@ import inspect
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -24,16 +25,26 @@ from tests.fixtures.prestop_estate import (
     APP_NAME,
     APP_SCIM,
     CANONICAL,
+    DEPLOYER,
     GOVERNED_SPACE,
     RUNTIME_CLIENT,
     VERIFIER_CLIENT,
+    FakeAccount,
     FakeWorkspace,
     acl_entry,
     clean_estate,
+    scripted_resolution,
+    signed_contract,
 )
 from tools.clients.json_fields import ExposureEntry
 from tools.databricks import agent_proxy_capability_denial as denial
 from tools.databricks import deploy_prestop_probes as runner
+from tools.databricks import (
+    prestop_accepted_exposure,
+    prestop_genie_budget,
+    prestop_probe_suite,
+    prestop_rollback_record,
+)
 from tools.databricks.agent_runtime_access import (
     audit_global_genie_access,
     audit_global_no_genie_access,
@@ -42,6 +53,8 @@ from tools.databricks.estate.accepted_exposure import ExposureRefusal, build_pol
 from tools.databricks.estate.genie_exposure import entry_exposures, entry_levels
 from tools.databricks.m2m_access_policy import resolve_effective_groups
 from tools.databricks.prestop_accepted_exposure import PrestopExposure, load_prestop_exposure
+from tools.databricks.prestop_genie_grants import genie_acls
+from tools.databricks.prestop_probe_suite import ProbeSuiteConfig, suite_refusals
 from tools.databricks.prestop_refusals import ACCEPTED_EXPOSURE, GENIE_GROUP_GRANT
 
 NOW = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
@@ -388,3 +401,130 @@ def test_elevated_for_the_proxy_refuses_at_load() -> None:
 
     with pytest.raises(ExposureRefusal, match="elevated exposure is refused for proxy"):
         _policy([entry("app", identities=["proxy"], privileges=["CAN_EDIT"], privilege_class="elevated", expires_at=expires)])
+
+
+SUITE_CONFIG = ProbeSuiteConfig(
+    app_name=APP_NAME,
+    rollback_scope="mip-app-rollback",
+    lakebase_instance="mip-app-state",
+    catalog="mip",
+    genie_space_name=GOVERNED_TITLE,
+    canonical_name=CANONICAL,
+    rebase_unverified_app=False,
+    deployer=DEPLOYER,
+    approved_owner_principals="mip-data-owners",
+    genie_manager_principals="",
+    metastore_owner=DEPLOYER,
+)
+
+
+def _suite_refusals(
+    monkeypatch: pytest.MonkeyPatch, estate: dict[str, Any], policy: Any | None
+) -> list[Any]:
+    """The probe suite over ``estate`` with the policy the Genie clause loaded (or none)."""
+
+    monkeypatch.setattr(
+        prestop_rollback_record, "ASSERT_SIGNED", lambda *_a, **_kw: signed_contract(estate["record"])
+    )
+    monkeypatch.setattr(
+        prestop_genie_budget,
+        "ASSERT",
+        lambda *_a: SimpleNamespace(genie_status="COMPLETED", answer_text="12,345 borrowers"),
+    )
+    monkeypatch.setattr(prestop_probe_suite, "GOVERNED_SPACE", lambda *_a, **_kw: scripted_resolution(estate))
+    workspace = FakeWorkspace(estate)
+    refusals, _notes = suite_refusals(
+        workspace,
+        config=SUITE_CONFIG,
+        app_client_id=APP_CLIENT,
+        app_scim_id=APP_SCIM,
+        app_groups=frozenset({"users"}),
+        agents=estate["agents"],
+        acls=genie_acls(workspace),
+        journal_state=lambda: "absent",
+        account_factory=lambda: FakeAccount(estate),
+        token_provider=lambda: "token-PLACEHOLDER",
+        exposure=None if policy is None else PrestopExposure(policy=policy, governed_title=GOVERNED_TITLE),
+    )
+    return refusals
+
+
+def _governed_estate(*, live_title: str, group_grant: bool) -> dict[str, Any]:
+    """Only the governed space, pinned, under ``live_title``; maybe a reader-group grant on it."""
+
+    estate = clean_estate()
+    estate["principals"]["readers-app"] = {"kind": "group", "id": "group-readers-app", "members": [APP_SCIM]}
+    estate["genie"][GOVERNED_SPACE] = [acl_entry("service_principal_name", APP_CLIENT, "CAN_RUN")]
+    if group_grant:
+        estate["genie"][GOVERNED_SPACE].append(acl_entry("group_name", "readers-app", "CAN_VIEW"))
+    estate["genie_titles"] = {GOVERNED_SPACE: live_title}
+    estate["genie_pin"] = GOVERNED_SPACE  # the provisioner resolves the space by its pin, not its title
+    return estate
+
+
+@pytest.mark.parametrize(
+    ("live_title", "listed_title", "group_grant"),
+    [
+        pytest.param("Lead Intelligence (renamed)", "Lead Intelligence (renamed)", True, id="renamed-space"),
+        pytest.param(GOVERNED_TITLE, "Old Title", False, id="no-group-grant"),
+    ],
+)
+def test_an_entry_naming_the_pinned_governed_space_refuses_before_the_stop(
+    monkeypatch: pytest.MonkeyPatch, live_title: str, listed_title: str, group_grant: bool
+) -> None:
+    """The Genie clause knows the governed space by the configured title only: a renamed
+    space, or an entry with no group grant to filter, passed it, then refused after the stop."""
+
+    governed = entry(
+        "app",
+        securable={"type": "GENIE_SPACE", "id": GOVERNED_SPACE, "name": listed_title},
+        source="direct",
+    )
+    policy = _policy([governed])
+    estate = _governed_estate(live_title=live_title, group_grant=group_grant)
+
+    # The Genie clause alone: the pre-fix pre-stop verdict, which let it through.
+    assert not [
+        refusal
+        for refusal in runner.base_verdict(
+            FakeWorkspace(estate),
+            app_name=APP_NAME,
+            runtime_application_id=RUNTIME_CLIENT,
+            verifier_application_id=VERIFIER_CLIENT,
+            canonical_name=CANONICAL,
+            acknowledgement="",
+            list_agents=lambda: estate["agents"],
+            resolve_groups=resolve_effective_groups,
+            exposure=PrestopExposure(policy=policy, governed_title=GOVERNED_TITLE),
+        ).refusals
+        if refusal.code in {ACCEPTED_EXPOSURE, GENIE_GROUP_GRANT}
+    ]
+    refused = [refusal for refusal in _suite_refusals(monkeypatch, estate, policy) if refusal.code == ACCEPTED_EXPOSURE]
+    assert len(refused) == 1 and "names the governed Genie space" in refused[0].message
+    assert live_title not in refused[0].message and listed_title not in refused[0].message, "never a title"
+    with pytest.raises(ExposureRefusal, match="names the governed Genie space"):
+        audit_global_genie_access(
+            FakeWorkspace(estate),
+            reviewed_genie_space_id=GOVERNED_SPACE,
+            application_id=APP_CLIENT,
+            effective_group_names={"users", "readers-app"},
+            matcher=policy.matcher("app"),
+        )
+
+
+def test_the_pinned_governed_check_reads_nothing_without_a_genie_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No Genie entry (a proxy UC entry only), or an entry on another space: nothing refuses, and the
+    titles are read only when a Genie entry could name the governed space."""
+
+    listings: list[str] = []
+    real = prestop_accepted_exposure._genie_spaces
+    monkeypatch.setattr(
+        prestop_accepted_exposure, "_genie_spaces", lambda workspace: listings.append("list") or real(workspace)
+    )
+    estate = _governed_estate(live_title="Lead Intelligence (renamed)", group_grant=False)
+
+    for policy, reads in ((None, 0), (_policy([_proxy_uc_entry()]), 0), (_policy([entry("app")]), 1)):
+        listings.clear()
+        refusals = _suite_refusals(monkeypatch, estate, policy)
+        assert [refusal for refusal in refusals if refusal.code == ACCEPTED_EXPOSURE] == []
+        assert len(listings) == reads

@@ -2046,7 +2046,10 @@ after the stop.
   A group grant the client profile accepts for the App or the agent-runtime
   (see "Accepted shared-estate exposure" below) is judged by that identity's
   matcher, exactly as the post-stop audit judges it; it never relaxes the
-  verifier or the governed space.
+  verifier or the governed space. The governed space is the one the
+  provisioner resolves by its pin (below), so an entry naming its id or its
+  live title refuses here (`accepted_exposure`) even after a rename, and even
+  when no group grant reaches the App or the agent-runtime.
 
   The verifier's audit (`--forbid-all-genie`) also refuses any grant to the
   verifier service principal itself on any Genie space, which needs no
@@ -2206,8 +2209,9 @@ The client profile's `MIP_ACCEPTED_EXPOSURE_JSON` may accept one exactly
   one client bound to the pinned governed space, and the SQL trust policy
   admits only FQNs in the install's catalog under `audit`, `gold`, `ref` or
   `semantics` (no configured Cotality source FQN is admitted today). An entry
-  naming the verifier or the governed space refuses, as does an entry past its
-  expiry (it parses, it never matches).
+  naming the verifier or the governed space refuses (before the stop, the
+  space the provisioner resolves by its pin, by id or live title), as does an
+  entry past its expiry (it parses, it never matches).
 - **Matching.** One matcher per identity. The pre-stop Genie clause and the
   post-stop App and agent-runtime Genie audits (`audit_global_m2m_access
   --exposure-identity app|runtime`) use the same one, so they refuse alike; the

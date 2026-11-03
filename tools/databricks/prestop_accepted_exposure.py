@@ -10,13 +10,21 @@ same ACL entry. The verifier has no matcher, so a grant reaching it still
 refuses whatever the profile says, and the governed space is never relaxed.
 
 With no entry for the App or the agent-runtime nothing extra is read; with
-one, the probe reads the visible spaces' titles once (an entry names its
-space by id and title, and a title is never printed) and the workspace id
-(the space's binding).
+one, the group-grant filter reads the visible spaces' titles (an entry names
+its space by id and title, and a title is never printed) and the workspace id
+(the space's binding); with a Genie entry the governed check below reads the
+titles once more.
 
 Every consumer judges expiry at the moment it loads, and the post-stop audits
 load long after this probe. So an entry expiring within ``RUN_MARGIN`` refuses
 here: it would pass now and refuse as expired with the App already stopped.
+
+The governed space is judged twice. The group-grant filter knows it only by
+the configured title, which a renamed space no longer carries. So once the
+suite resolves the space the provisioner will use, by its pin
+(``prestop_probe_suite.governed_genie_space``), ``governed_refusals`` refuses
+an entry naming that id or its live title, as the post-stop audits do with the
+id they audit, whether or not a group grant reaches an audited identity.
 """
 
 from __future__ import annotations
@@ -28,6 +36,7 @@ from typing import Any
 
 from tools.databricks.agent_runtime_access import _genie_spaces
 from tools.databricks.estate.accepted_exposure import (
+    GENIE_SPACE,
     ExposureMatcher,
     ExposurePolicy,
     ExposureRefusal,
@@ -112,6 +121,25 @@ class PrestopExposure:
             if remaining:
                 kept.append(replace(grant, principals=remaining))
         return kept, notes, []
+
+    def governed_refusals(self, workspace: Any, *, space_id: str) -> list[PrestopRefusal]:
+        """Refuse an entry naming the pinned governed space, by its id or its live title.
+
+        ``audit_global_genie_access`` refuses the same entry after the stop
+        (``assert_not_governed`` on the id it audits and that space's title).
+        With no Genie entry, or no governed space yet (step 0a creates it),
+        nothing is read.
+        """
+
+        genie = any(entry.exposure.securable_type == GENIE_SPACE for entry in self.policy.entries)
+        if not genie or not space_id:
+            return []
+        title = _genie_spaces(workspace).get(space_id, "")
+        try:
+            self.policy.assert_not_governed(space_ids=[space_id], space_names=[title])
+        except ExposureRefusal as exc:
+            return [_refusal(exc)]
+        return []
 
 
 def expiring_lines(policy: ExposurePolicy, *, margin: timedelta = RUN_MARGIN) -> list[str]:

@@ -244,6 +244,13 @@ class ExposurePolicy:
     now: datetime
     digest: str = field(default="")
 
+    def assert_not_governed(self, *, space_ids: Iterable[str], space_names: Iterable[str]) -> None:
+        """Refuse an entry, for any identity, that names the governed Genie space."""
+
+        lines = _governed_lines(self.entries, space_ids=space_ids, space_names=space_names)
+        if lines:
+            raise ExposureRefusal(lines)
+
     def matcher(self, identity: str) -> ExposureMatcher:
         if identity not in IDENTITIES:
             raise ValueError(
