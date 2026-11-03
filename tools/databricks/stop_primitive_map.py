@@ -8,15 +8,20 @@ true (``tests/unit/test_stop_primitive_ast_contract.py`` and
 * ``python_primitive_sites`` walks every module under ``tools/`` with ``ast``
   and returns each call ``<expr>.apps.<method>(...)`` whose method is an SDK
   App stop, start, deploy or update (``SDK_METHODS``, their ``*_and_wait``
-  forms included). ``PRIMITIVE_SITES`` must equal that set exactly.
+  forms included), also through a name bound from ``<expr>.apps`` or
+  ``getattr(<expr>, "apps")``. ``PRIMITIVE_SITES`` must equal that set exactly.
 * ``reaching_entry_points`` follows a coarse static call graph (calls and
   function references through imports, nested functions folded into their
   top-level function) from each site back to the CLI modules whose ``main``
   reaches it. ``ENTRY_POINTS`` must equal that set exactly, and names each
   entry's mutating modes and the shell files allowed to invoke them.
 * ``shell_violations`` reads shell text with continuation lines joined and
-  reports every invocation of a mutating mode, every ``databricks apps
-  stop|start`` and every inline SDK primitive outside its allowlisted files.
+  reports every invocation of a mutating mode (``-m <module>`` or the
+  ``tools/databricks/<module>.py`` path; the mode is read from that one
+  command's own tokens, up to ``;``, ``&&``, ``|`` or a comment), every
+  import of a stop module (a heredoc or ``-c`` can call it directly), every
+  ``databricks apps stop|start`` and every inline SDK primitive outside its
+  allowlisted files.
 
 The window library and the EXIT-trap library are the only shell callers of a
 stop. Everything is matched lexically, so a comment line never counts.
@@ -106,6 +111,10 @@ ENTRY_POINTS: Mapping[str, EntryPoint] = {
         callers=frozenset({WINDOW_LIBRARY}),
     ),
 }
+# The modules that hold a primitive site: importing one is a stop path.
+SITE_MODULES = frozenset(
+    ".".join(Path(path).with_suffix("").parts) for path, _function, _method in PRIMITIVE_SITES
+)
 # Shell commands that stop or start an App directly, and inline SDK calls.
 _CLI_PRIMITIVE = re.compile(r"\bdatabricks\s+apps\s+(stop|start)\b")
 _INLINE_SDK = re.compile(
@@ -121,20 +130,51 @@ def _python_files(root: Path) -> list[Path]:
     return sorted(path for path in root.rglob("*.py") if "__pycache__" not in path.parts)
 
 
+def _is_apps_client(node: ast.AST | None) -> bool:
+    """``<expr>.apps`` or ``getattr(<expr>, "apps")``: the SDK Apps client."""
+
+    if isinstance(node, ast.Attribute):
+        return node.attr == "apps"
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) >= 2
+        and isinstance(node.args[1], ast.Constant)
+        and node.args[1].value == "apps"
+    )
+
+
+def _apps_aliases(tree: ast.AST) -> set[str]:
+    """Names bound from the Apps client anywhere in ``tree`` (``apps = workspace.apps``)."""
+
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign | ast.AnnAssign | ast.NamedExpr) and _is_apps_client(
+            node.value
+        ):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            aliases.update(target.id for target in targets if isinstance(target, ast.Name))
+    return aliases
+
+
 def python_primitive_sites(root: Path | None = None) -> set[tuple[str, str, str]]:
-    """Every ``<expr>.apps.<method>(...)`` SDK primitive call below ``root``."""
+    """Every SDK primitive call on the Apps client below ``root``, aliases included."""
 
     sites: set[tuple[str, str, str]] = set()
     for path in _python_files(root or REPO / "tools"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
+        aliases = _apps_aliases(tree)
         for top in tree.body:
             for node in ast.walk(top):
                 if (
                     isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Attribute)
                     and node.func.attr in SDK_METHODS
-                    and isinstance(node.func.value, ast.Attribute)
-                    and node.func.value.attr == "apps"
+                    and (
+                        _is_apps_client(node.func.value)
+                        or (isinstance(node.func.value, ast.Name) and node.func.value.id in aliases)
+                    )
                 ):
                     owner = (
                         top.name if isinstance(top, ast.FunctionDef | ast.ClassDef) else "<module>"
@@ -231,6 +271,38 @@ def logical_lines(text: str) -> list[tuple[int, str]]:
     return out
 
 
+def _command_tail(line: str, start: int) -> str:
+    """The rest of one command from ``start``: up to ``;``, ``&``, ``|`` or a comment.
+
+    Quotes are respected, so a separator inside a quoted argument does not
+    end the command. Only that command's own tokens can name its mode.
+    """
+
+    quote, previous = "", " "
+    for index in range(start, len(line)):
+        char = line[index]
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char in ";&|\n" or (char == "#" and previous.isspace()):
+            return line[start:index]
+        previous = char
+    return line[start:]
+
+
+def _stop_modules() -> list[tuple[str, str, str, frozenset[str]]]:
+    """(module, package, name, allowed shell files) for each module whose import stops."""
+
+    rules = []
+    for module in sorted({*ENTRY_POINTS, *SITE_MODULES}):
+        package, _, name = module.rpartition(".")
+        callers = ENTRY_POINTS[module].callers if module in ENTRY_POINTS else STOP_LIBRARIES
+        rules.append((module, package, name, callers))
+    return rules
+
+
 def _mode(entry: EntryPoint, tail: str) -> str:
     tokens = tail.split()
     if entry.positional:
@@ -248,14 +320,27 @@ def shell_violations(path: str, text: str) -> list[str]:
     found: list[str] = []
     for number, line in logical_lines(text):
         for module, entry in ENTRY_POINTS.items():
-            for match in re.finditer(rf"-m\s+{re.escape(module)}(?![\w.])", line):
-                mode = _mode(entry, line[match.end() :])
+            invocation = rf"(?:-m\s+{re.escape(module)}|{re.escape(module.replace('.', '/'))}\.py)"
+            for match in re.finditer(rf"{invocation}(?![\w.])", line):
+                mode = _mode(entry, _command_tail(line, match.end()))
                 if entry.modes.get(mode, True) and path not in entry.callers:
                     found.append(f"{path}:{number}: {module} {mode}")
+        for module, package, name, callers in _stop_modules():
+            imported = rf"\b(?:from|import)\s+{re.escape(module)}(?![\w.])"
+            from_package = rf"\bfrom\s+{re.escape(package)}\s+import\b[^#]*?\b{name}\b"
+            if path not in callers and (re.search(imported, line) or re.search(from_package, line)):
+                found.append(f"{path}:{number}: import {module}")
         if path not in STOP_LIBRARIES:
             for pattern in (_CLI_PRIMITIVE, _INLINE_SDK):
                 for match in pattern.finditer(line):
                     found.append(f"{path}:{number}: {match.group(0).strip()}")
+    # A parenthesized ``from <package> import (...)`` spans lines in a heredoc.
+    for match in re.finditer(r"\bfrom\s+(tools(?:\.\w+)*)\s+import\s*\(([^)]*)\)", text):
+        names = set(re.findall(r"\w+", match.group(2)))
+        for module, package, name, callers in _stop_modules():
+            if package == match.group(1) and name in names and path not in callers:
+                number = text.count("\n", 0, match.start()) + 1
+                found.append(f"{path}:{number}: import {module}")
     return found
 
 

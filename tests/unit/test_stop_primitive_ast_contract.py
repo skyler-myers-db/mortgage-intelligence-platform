@@ -93,6 +93,22 @@ def test_a_new_sdk_primitive_in_a_tool_is_an_unmapped_site(tmp_path: Path, monke
     }
 
 
+def test_an_aliased_apps_client_is_still_a_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _tools_copy(tmp_path)
+    (root / "tools" / "databricks" / "stray_alias.py").write_text(
+        "def bounce(workspace, name):\n    apps = workspace.apps\n    apps.get(name)\n"
+        "    apps.stop(name)\n\n\ndef revive(workspace, name):\n"
+        "    getattr(workspace, 'apps').start(name)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(stops, "REPO", root)
+    found = stops.python_primitive_sites(root / "tools")
+    assert found - set(stops.PRIMITIVE_SITES) == {
+        ("tools/databricks/stray_alias.py", "bounce", "stop"),
+        ("tools/databricks/stray_alias.py", "revive", "start"),
+    }, "a read through the alias is not a site; a stop or start is"
+
+
 def test_a_new_cli_that_reaches_a_reviewed_primitive_is_an_unreviewed_entry_point(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -3,7 +3,8 @@
 The deploy's shell files may stop or start the App (``databricks apps
 stop|start``, ``stop_app_fail_closed`` without ``--assert-identity-only``,
 ``--stop-app-for-mutation``, a mutating ``quiesce_window`` or
-``app_deployment_rollback`` mode, an inline SDK ``apps.<stop|start|deploy|
+``app_deployment_rollback`` mode, by ``-m`` or by its ``tools/databricks/``
+path, an import of a stop module, an inline SDK ``apps.<stop|start|deploy|
 update>`` or ``*_and_wait`` call) only in
 ``scripts/lib/deploy_quiesce_window_lifecycle.sh`` and the EXIT-trap
 compensation in ``scripts/lib/deploy_app_release_lifecycle.sh``. The scanner
@@ -34,6 +35,14 @@ PRIMITIVES = (
     "workspace.apps.start_and_wait(app_name)",
     "client.apps.deploy(app_name, deployment)",
     "client.apps.update(app_name, app)",
+    # The forms a lexical scan of ``-m <module>`` alone would miss.
+    '"$PYTHON" tools/databricks/stop_app_fail_closed.py --app-name "$APP_NAME"',
+    '"$PYTHON" tools/databricks/app_deployment_rollback_cli.py restore --app-name "$A"',
+    '"$PYTHON" -m tools.databricks.stop_app_fail_closed --app-name "$A"  # never --assert-identity-only',
+    '"$PYTHON" -m tools.databricks.stop_app_fail_closed --app-name "$A"; echo --assert-identity-only',
+    '"$PYTHON" - <<\'PYEOF\'\nfrom tools.databricks.stop_app_fail_closed import stop_app_fail_closed\nPYEOF',
+    '"$PYTHON" - <<\'PYEOF\'\nfrom tools.databricks import (\n    app_start_deployment,\n)\nPYEOF',
+    '"$PYTHON" -c "import tools.databricks.app_deployment_repin as repin"',
 )
 NOT_PRIMITIVES = (
     '"$PYTHON" -m tools.databricks.stop_app_fail_closed --app-name "$APP_NAME" --assert-identity-only',
@@ -43,6 +52,9 @@ NOT_PRIMITIVES = (
     '"$PYTHON" -m tools.databricks.converge_lakebase_oauth_role --check',
     "# databricks apps stop is the window's alone",
     "databricks apps get \"$APP_NAME\" -o json",
+    '"$PYTHON" -m tools.databricks.stop_app_fail_closed --app-name "$A" --assert-identity-only  # check',
+    '"$PYTHON" tools/databricks/quiesce_window.py status --out-env "$F"',
+    '"$PYTHON" -c "from tools.databricks.app_release_contract import api_path"',
 )
 
 

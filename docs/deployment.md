@@ -2340,8 +2340,11 @@ still reconciled and proven. Otherwise it runs and the PlanReport's
 **Stop contract** (attack O16). The window library and the EXIT-trap
 compensation are the only shell files that stop or start the App, and
 `tools/databricks/stop_primitive_map.py` maps every SDK `apps.stop`, `start`,
-`deploy` and `update` call in `tools/` to the CLI modes that reach it; only
-those two files may call a mutating mode.
+`deploy` and `update` call in `tools/` (also through a name bound from
+`.apps`) to the CLI modes that reach it; only those two files may call a
+mutating mode, by `-m` or by its `tools/databricks/<module>.py` path (the mode
+is read from that one command's own tokens), or import a stop module in a
+heredoc or `-c`.
 
 **Owed live confirmations.** Spike S7 (a throwaway App): that `apps start`
 creates a new deployment from `default_source_code_path`, whether the env
