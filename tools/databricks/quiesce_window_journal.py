@@ -12,11 +12,15 @@ run re-pins after the same proofs.
 States move one way, each write a compare-and-swap against the exact record
 read, under the held lease:
 
-``absent|closed`` -> ``window_open`` (before the stop) -> ``window_started``
-(the start's deployment id) -> ``window_proven`` (that deployment is blue) ->
-``closed`` (after the re-pin). A failed proof writes ``window_refused`` and the
-App is stopped again. A contract window (``blue_restorable`` false) goes
-``window_open`` -> ``closed`` when green activation supersedes it.
+``absent|closed`` -> ``window_open`` (before the stop) -> ``window_starting``
+(before ``apps start``) -> ``window_started`` (the start's deployment id) ->
+``window_proven`` (that deployment is blue) -> ``closed`` (after the re-pin).
+``window_starting`` is the intent: a start whose deployment id was never
+journaled reads as started, and a rerun resumes from the App's pending
+deployment instead of starting again. Any failure after the start call stops
+the App again and writes ``window_refused``. A contract window
+(``blue_restorable`` false) goes ``window_open`` -> ``closed`` when green
+activation supersedes it.
 """
 
 from __future__ import annotations
@@ -42,11 +46,21 @@ from tools.databricks.app_deployment_lease_support import key_registry
 
 JOURNAL_VERSION = 1
 ATTESTATION_ALG = "ed25519-app-quiesce-window-v1"
-STATES = frozenset({"window_open", "window_started", "window_proven", "window_refused", "closed"})
+STATES = frozenset(
+    {
+        "window_open",
+        "window_starting",
+        "window_started",
+        "window_proven",
+        "window_refused",
+        "closed",
+    }
+)
 TRANSITIONS = {
     "absent": frozenset({"window_open"}),
     "closed": frozenset({"window_open"}),
-    "window_open": frozenset({"window_started", "closed"}),
+    "window_open": frozenset({"window_starting", "closed"}),
+    "window_starting": frozenset({"window_started", "window_refused"}),
     "window_started": frozenset({"window_proven", "window_refused"}),
     "window_proven": frozenset({"closed"}),
     "window_refused": frozenset(),

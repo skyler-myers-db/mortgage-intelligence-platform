@@ -139,6 +139,8 @@ class FakeApps:
     deployments: dict[str, SimpleNamespace] = field(default_factory=dict)
     active_id: str = BLUE_ID
     pending_id: str = ""
+    # A start whose id the API never showed: it settles on the next read.
+    hidden_start: str = ""
     _polls: dict[str, int] = field(default_factory=dict)
     _final: dict[str, str] = field(default_factory=dict)
 
@@ -169,6 +171,9 @@ class FakeApps:
 
     def get(self, _name: str) -> SimpleNamespace:
         self.get_calls += 1
+        if self.hidden_start:
+            hidden, self.hidden_start = self.hidden_start, ""
+            self._settle(hidden)
         return self._app()
 
     def list(self) -> list[SimpleNamespace]:
@@ -235,6 +240,7 @@ class FakeApps:
         pending = SimpleNamespace(deployment_id=new_id if self.behaviour.readable_pending_id else "")
         if not self.behaviour.readable_pending_id:
             self.pending_id = ""
+            self.hidden_start = new_id
         return SimpleNamespace(response=SimpleNamespace(pending_deployment=pending))
 
     def deploy_and_wait(self, _name: str, app_deployment: object, *, timeout: object) -> object:

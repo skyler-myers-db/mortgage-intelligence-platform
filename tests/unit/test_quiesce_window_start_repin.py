@@ -167,7 +167,9 @@ def _run_window(estate: Estate) -> tuple[str, dict[str, Any]]:
         assert_lease_held=lambda: None,
         stop=_stop(estate),
     )
-    window.start_window(estate.workspace, app_name=APP_NAME, assert_lease_held=lambda: None)
+    window.start_window(
+        estate.workspace, app_name=APP_NAME, assert_lease_held=lambda: None, stop=_stop(estate)
+    )
     proven = window.await_window(
         estate.workspace,
         app_name=APP_NAME,
@@ -248,7 +250,9 @@ def test_a_changed_restore_folder_refuses_even_when_the_snapshot_matches() -> No
         assert_lease_held=lambda: None,
         stop=_stop(estate),
     )
-    window.start_window(estate.workspace, app_name=APP_NAME, assert_lease_held=lambda: None)
+    window.start_window(
+        estate.workspace, app_name=APP_NAME, assert_lease_held=lambda: None, stop=_stop(estate)
+    )
     estate.files.put_tree(RELEASE, {"late.py": b"written in the window\n"})
 
     with pytest.raises(RuntimeError, match="start_folder_digest"):
@@ -261,6 +265,141 @@ def test_a_changed_restore_folder_refuses_even_when_the_snapshot_matches() -> No
             stop=_stop(estate),
         )
     assert estate.apps.compute == "STOPPED"
+
+
+def _open(estate: Estate) -> dict[str, Any]:
+    plan = _plan(estate)
+    return window.open_window(
+        estate.workspace,
+        app_name=APP_NAME,
+        plan=plan.full(),
+        acknowledgement=plan.sha256,
+        lease_id=LEASE_ID,
+        source_git_sha=GIT_SHA,
+        assert_lease_held=lambda: None,
+        stop=_stop(estate),
+    )
+
+
+def _await(estate: Estate) -> str:
+    return window.await_window(
+        estate.workspace,
+        app_name=APP_NAME,
+        scope=SCOPE,
+        lakebase_instance="mip-app-state",
+        assert_lease_held=lambda: None,
+        stop=_stop(estate),
+    )
+
+
+def _start(estate: Estate) -> str:
+    return window.start_window(
+        estate.workspace, app_name=APP_NAME, assert_lease_held=lambda: None, stop=_stop(estate)
+    )
+
+
+def _restore_folder_gone(estate: Estate) -> None:
+    for path in [path for path in estate.files.data if path.startswith(RELEASE.removeprefix("/Workspace"))]:
+        del estate.files.data[path]
+
+
+def _get_deployment_fails(estate: Estate) -> None:
+    def unreadable(_name: str, _deployment_id: str) -> object:
+        raise ConnectionError("the Apps API is unreachable")
+
+    estate.apps.get_deployment = unreadable  # type: ignore[method-assign]
+
+
+def _record_moved(estate: Estate) -> None:
+    record = stored_record(estate)
+    moved = build_app_rollback_record(
+        app_name=APP_NAME,
+        deployment=SimpleNamespace(
+            **{**estate.apps.deployments[BLUE_ID].__dict__, "deployment_id": "deployment-other"}
+        ),
+        payload=record["payload"],
+        git_sha=GIT_SHA,
+        gateway_binding=_binding(),
+        gateway_resources={**RESOURCE_CONTRACT, "resource_digest": RESOURCE_DIGEST},
+        app_resources=APP_RESOURCES,
+        app_service_principal_client_id="app-client",
+        app_service_principal_scim_id="app-scim-id",
+        expected_lakebase_instance="mip-app-state",
+    )
+    record_contract._save_record(estate.workspace, scope=SCOPE, record=moved)
+
+
+@pytest.mark.parametrize(
+    ("break_it", "code"),
+    (
+        (_restore_folder_gone, "start_folder_digest"),
+        (_get_deployment_fails, "start_unreadable"),
+        (_record_moved, "start_record_changed"),
+    ),
+    ids=("restore-folder-gone", "get-deployment-raises", "record-moved"),
+)
+def test_any_failure_in_the_proof_stops_the_started_app_and_journals_the_refusal(
+    break_it: Any, code: str
+) -> None:
+    estate = _estate()
+    _open(estate)
+    _start(estate)
+    break_it(estate)
+
+    with pytest.raises(RuntimeError, match=code):
+        _await(estate)
+    entry = journal.read(estate.workspace, app_name=APP_NAME)
+    assert entry["state"] == "window_refused" and entry["refusal"] == code
+    assert estate.apps.compute == "STOPPED" and estate.apps.stops == 2, "stopped again"
+
+
+def test_a_start_whose_pending_id_is_unreadable_is_stopped_and_never_started_twice() -> None:
+    estate = _estate(StartBehaviour(readable_pending_id=False))
+    _open(estate)
+
+    with pytest.raises(RuntimeError, match="start_unreadable"):
+        _start(estate)
+    entry = journal.read(estate.workspace, app_name=APP_NAME)
+    assert entry["state"] == "window_refused" and entry["refusal"] == "start_unreadable"
+    assert (estate.apps.starts, estate.apps.stops, estate.apps.compute) == (1, 2, "STOPPED")
+    with pytest.raises(RuntimeError, match="no restorable window"):
+        _start(estate)
+    assert estate.apps.starts == 1, "a refused window is the dead-man's, never started again"
+
+
+def test_a_start_journaled_only_as_its_intent_resumes_from_the_pending_deployment() -> None:
+    estate = _estate()
+    opened = _open(estate)
+    journal.write(
+        estate.workspace,
+        app_name=APP_NAME,
+        expected=opened,
+        changes={"state": "window_starting"},
+        assert_lease_held=lambda: None,
+    )
+    estate.apps.start(APP_NAME)  # the start ran; the run died before journaling its id
+
+    assert _start(estate) == "deployment-start-1"
+    assert estate.apps.starts == 1, "resumed, never a second start"
+    assert journal.read(estate.workspace, app_name=APP_NAME)["state"] == "window_started"
+    assert _await(estate) == "deployment-start-1"
+
+
+def test_an_intent_with_nothing_pending_refuses_without_starting() -> None:
+    estate = _estate()
+    opened = _open(estate)
+    journal.write(
+        estate.workspace,
+        app_name=APP_NAME,
+        expected=opened,
+        changes={"state": "window_starting"},
+        assert_lease_held=lambda: None,
+    )
+
+    with pytest.raises(RuntimeError, match="start_unreadable"):
+        _start(estate)
+    assert (estate.apps.starts, estate.apps.compute) == (0, "STOPPED")
+    assert journal.read(estate.workspace, app_name=APP_NAME)["state"] == "window_refused"
 
 
 def test_a_start_without_a_readable_pending_id_refuses_rather_than_guess() -> None:

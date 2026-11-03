@@ -195,6 +195,18 @@ def test_a_started_window_resumes_at_the_proof_without_a_second_start(tmp_path: 
     assert not _has(calls, "quiesce_window start") and _has(calls, "rollback repin") == 1
 
 
+def test_a_starting_window_resumes_through_the_start_tool_once(tmp_path: Path) -> None:
+    # window_starting: the start may have run unjournaled. The start tool
+    # resumes from the App's pending deployment; the shell never starts twice.
+    result, calls = _run(
+        tmp_path, "QUIESCE_WINDOW_STATE=window_open\nstop_app_after_failed_deploy\n", JOURNAL="window_starting"
+    )
+    assert result.returncode == 0, result.stderr
+    assert _has(calls, "quiesce_window start") == 1 and _has(calls, "rollback repin") == 1
+    start = next(call for call in calls if "quiesce_window start" in call)
+    assert "--expected-app-id app-id" in start and "--expected-scim-id app-scim" in start
+
+
 def test_a_proven_window_resumes_at_the_re_pin(tmp_path: Path) -> None:
     result, calls = _run(
         tmp_path,

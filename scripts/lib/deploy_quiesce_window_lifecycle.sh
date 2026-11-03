@@ -252,11 +252,17 @@ close_quiesce_window() {
   env_file="$(mktemp -t mip-quiesce-window-close.XXXXXX.env)"
   chmod 600 "$env_file"
   step "close the quiesce window: start blue and wait for the deployment the start created"
+  # The tool journals window_starting before the start (a journaled intent
+  # resumes from the App's pending deployment, never a second start) and
+  # stops the App again, identity-pinned, on any failure after the start call.
   run_with_proof_signing_authority \
     "$PYTHON" -m tools.databricks.quiesce_window start \
     --app-name "$_GRANTS_APP_NAME" \
     --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --deployment-source-git-sha "$SOURCE_GIT_SHA" \
+    --expected-app-id "$_EXISTING_APP_ID" \
+    --expected-client-id "$_EXISTING_APP_SP_CLIENT_ID" \
+    --expected-scim-id "$_EXISTING_APP_SP_SCIM_ID" \
     --out-env "$env_file" || return 1
   repin_proven_quiesce_window "$env_file"
 }
@@ -368,7 +374,7 @@ end_quiesce_window_at_activation() {
 
 # window_open: start and re-pin if every proof holds; otherwise leave the App
 # as it is with the journal open. Never a redeploy, never another stop here
-# (await itself stops a start deployment it cannot prove).
+# (start and await themselves stop a start they cannot prove).
 compensate_open_quiesce_window() {
   local env_file state
   env_file="$(mktemp -t mip-quiesce-window-status.XXXXXX.env)"
@@ -392,13 +398,15 @@ compensate_open_quiesce_window() {
       QUIESCE_WINDOW_STATE="blue_serving"
       return 0
       ;;
-    window_open)
+    window_open|window_starting)
       if [[ "$QUIESCE_WINDOW_BLUE_RESTORABLE" != "1" ]]; then
         echo "${RED}[deploy] a contract migration window is open: the App stays stopped; the dead-man (M0-PR9) leaves it stopped.${RST}" >&2
         rm -f "$env_file"
         return 1
       fi
       rm -f "$env_file"
+      # window_starting: the start may have run unjournaled; the tool resumes
+      # from the App's pending deployment instead of starting again.
       close_quiesce_window
       return $?
       ;;

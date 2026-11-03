@@ -2284,14 +2284,18 @@ binding update, WR2 before the role convergence, WR3 before the migration):
 it re-validates the plan and the ack, re-proves blue is the App's last
 deployment, journals `window_open` (`<lease root>/<app>.quiesce-window.json`,
 signed) and then stops the App, identity-pinned. It closes right after the
-Lakebase migration: `apps start`; wait for **the deployment the start
-created** (never "active changed"); require SUCCEEDED; prove its source is
-blue's restore source, that folder's full-tree digest is unchanged, its
-`/src/` snapshot has the same digest and its env-name set is the signed
-record's; `app_deployment_rollback repin --to <id>` signs a new record
-version with the same provenance and `predecessor_deployment_id`, checking
-health against the re-pinned id; then the journal closes. A failed proof
-stops the App again and leaves the journal open for the dead-man (M0-PR9). A
+Lakebase migration: journal `window_starting`, then `apps start`; wait for
+**the deployment the start created** (never "active changed"); require
+SUCCEEDED; prove its source is blue's restore source, that folder's full-tree
+digest is unchanged, its `/src/` snapshot has the same digest and its env-name
+set is the signed record's; `app_deployment_rollback repin --to <id>` signs a
+new record version with the same provenance and `predecessor_deployment_id`,
+checking health against the re-pinned id; then the journal closes. Any
+failure after the start call (a failed proof, an unreadable pending id, a
+vanished restore folder, an SDK error) stops the App again, identity-pinned,
+journals `window_refused` and leaves the window for the dead-man (M0-PR9). A
+start whose id was never journaled (`window_starting`) resumes from the App's
+pending deployment; it is never started twice. A
 contract migration (`blue_restorable` false) keeps the App stopped until green
 activation closes the window: that outage is part of the acknowledged digest.
 

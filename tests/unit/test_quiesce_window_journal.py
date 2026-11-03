@@ -41,11 +41,12 @@ def _write(workspace: _Workspace, expected: dict | None, changes: dict) -> dict:
     )
 
 
-def test_a_window_moves_open_started_proven_closed() -> None:
+def test_a_window_moves_open_starting_started_proven_closed() -> None:
     workspace = _Workspace()
     assert journal.read(workspace, app_name=APP_NAME) is None
     opened = _write(workspace, None, OPEN)
-    started = _write(workspace, opened, {"state": "window_started", "start_deployment_id": "d-1"})
+    starting = _write(workspace, opened, {"state": "window_starting"})
+    started = _write(workspace, starting, {"state": "window_started", "start_deployment_id": "d-1"})
     proven = _write(workspace, started, {"state": "window_proven"})
     closed = _write(
         workspace, proven, {"state": "closed", "repinned_deployment_id": "d-1", "closed_by": "repin"}
@@ -61,8 +62,10 @@ def test_a_window_moves_open_started_proven_closed() -> None:
     (
         ((), "window_started"),
         (("window_open",), "window_proven"),
-        (("window_open", "window_started", "window_refused"), "window_started"),
-        (("window_open", "window_started"), "closed"),
+        (("window_open",), "window_started"),
+        (("window_open", "window_starting"), "closed"),
+        (("window_open", "window_starting", "window_refused"), "window_started"),
+        (("window_open", "window_starting", "window_started"), "closed"),
     ),
 )
 def test_a_transition_out_of_order_refuses(path: tuple[str, ...], target: str) -> None:
@@ -77,9 +80,9 @@ def test_a_transition_out_of_order_refuses(path: tuple[str, ...], target: str) -
 def test_a_write_against_a_stale_read_refuses() -> None:
     workspace = _Workspace()
     opened = _write(workspace, None, OPEN)
-    _write(workspace, opened, {"state": "window_started", "start_deployment_id": "d-1"})
+    _write(workspace, opened, {"state": "window_starting"})
     with pytest.raises(RuntimeError, match="changed since it was read"):
-        _write(workspace, opened, {"state": "window_started", "start_deployment_id": "d-2"})
+        _write(workspace, opened, {"state": "window_starting"})
 
 
 def test_a_tampered_journal_fails_its_signature() -> None:

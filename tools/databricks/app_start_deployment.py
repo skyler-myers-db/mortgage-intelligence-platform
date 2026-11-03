@@ -61,6 +61,7 @@ PROOF_CODES = frozenset(
         "start_tree_digest",
         "start_folder_digest",
         "start_env_names",
+        "start_record_changed",
     }
 )
 
@@ -106,6 +107,22 @@ def start_app(workspace: Any, *, app_name: str) -> str:
         raise StartProofError(
             "start_unreadable",
             "the start returned no pending deployment id, and the App shows none",
+        )
+    return created
+
+
+def resume_start(workspace: Any, *, app_name: str) -> str:
+    """The deployment an earlier, unjournaled start created: the App's pending one.
+
+    Never a new start: the journal says a start may have run, and a second one
+    would hide the first. No readable pending id refuses (the caller stops the
+    App and journals the refusal).
+    """
+
+    created = _pending_id(workspace.apps.get(app_name))
+    if not created:
+        raise StartProofError(
+            "start_unreadable", "the journaled start has no readable pending deployment"
         )
     return created
 

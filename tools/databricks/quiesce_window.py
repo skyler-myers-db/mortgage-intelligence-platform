@@ -13,13 +13,16 @@ digests). It prints the public summary and writes the full plan mode 0600.
 ``open`` re-validates that plan (pre-apply, its digest, the exact digest ack
 in ``MIP_ACK_QUIESCE_WINDOW``), re-checks under the lease that blue is still
 the App's last deployment, journals ``window_open`` and only then stops the
-App, identity-pinned. ``start`` records the deployment the start created.
-``await`` waits for exactly that deployment to be terminal, requires
-SUCCEEDED and proves blue's restore source, the folder's unchanged full-tree
-digest, the snapshot's equal digest and the signed record's env-name set; a
-failed proof stops the App again and leaves the journal open for the
-dead-man. ``app_deployment_rollback repin --to <id>`` then re-signs the record
-and checks health against the re-pinned id, and ``close`` closes the journal.
+App, identity-pinned. ``start`` journals ``window_starting``, starts, and
+records the deployment the start created (a rerun resumes from the App's
+pending deployment, never a second start). ``await`` waits for exactly that
+deployment to be terminal, requires SUCCEEDED and proves blue's restore
+source, the folder's unchanged full-tree digest, the snapshot's equal digest
+and the signed record's env-name set. Any failure after the start call, a
+failed proof or anything else that raises, stops the App again and journals
+``window_refused`` for the dead-man. ``app_deployment_rollback repin --to <id>``
+then re-signs the record and checks health against the re-pinned id, and
+``close`` closes the journal.
 
 ``scripts/lib/deploy_quiesce_window_lifecycle.sh`` is the only caller of the
 mutating modes (``tools/databricks/stop_primitive_map.py``).
@@ -34,15 +37,18 @@ import shlex
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
+from databricks.sdk.errors import NotFound, ResourceDoesNotExist
 from tools.databricks import quiesce_window_journal as journal
+from tools.databricks.app_release_contract import ReleaseContractError
 from tools.databricks.app_rollback_record_contract import _load_record, _text
 from tools.databricks.app_start_deployment import (
     StartProofError,
     env_names,
     last_deployment_is,
     prove_start_deployment,
+    resume_start,
     start_app,
     tree_digest,
     wait_for_compute_active,
@@ -126,18 +132,84 @@ def open_window(
     return opened
 
 
-def start_window(workspace: Any, *, app_name: str, assert_lease_held: Callable[[], None]) -> str:
+def _refuse_start(
+    workspace: Any,
+    *,
+    app_name: str,
+    exc: Exception,
+    stop: Callable[[], str],
+    assert_lease_held: Callable[[], None],
+) -> NoReturn:
+    """Stop the App, identity-pinned, journal ``window_refused`` and raise.
+
+    Every failure after the start call lands here, not only a failed proof: an
+    unproven start never keeps serving, whatever raised.
+    """
+
+    code = exc.code if isinstance(exc, StartProofError) else "start_unreadable"
+    detail = str(exc) if isinstance(exc, StartProofError) else type(exc).__name__
+    stopped = stop()
+    latest = journal.read(workspace, app_name=app_name)
+    if journal.state_of(latest) in {"window_starting", "window_started"}:
+        journal.write(
+            workspace,
+            app_name=app_name,
+            expected=latest,
+            changes={"state": "window_refused", "refusal": code},
+            assert_lease_held=assert_lease_held,
+        )
+    raise RuntimeError(
+        f"{code}: the start is not provably blue ({detail}); the App is {stopped}, "
+        "the window stays open"
+    ) from exc
+
+
+def start_window(
+    workspace: Any,
+    *,
+    app_name: str,
+    assert_lease_held: Callable[[], None],
+    stop: Callable[[], str],
+) -> str:
+    """Journal the intent, start the App, journal the deployment the start created.
+
+    ``window_starting`` is written before ``apps start``, so a start whose id
+    was never journaled is not mistaken for "never started": a rerun resumes
+    from the App's pending deployment and never starts a second time.
+    """
+
     current = journal.read(workspace, app_name=app_name)
-    if journal.state_of(current) != "window_open" or not (current or {}).get("blue_restorable"):
+    state = journal.state_of(current)
+    if state not in {"window_open", "window_starting"} or not (current or {}).get(
+        "blue_restorable"
+    ):
         raise RuntimeError("no restorable window is open to start")
-    created = start_app(workspace, app_name=app_name)
-    journal.write(
-        workspace,
-        app_name=app_name,
-        expected=current,
-        changes={"state": "window_started", "start_deployment_id": created},
-        assert_lease_held=assert_lease_held,
-    )
+    resumed = state == "window_starting"
+    if not resumed:
+        current = journal.write(
+            workspace,
+            app_name=app_name,
+            expected=current,
+            changes={"state": "window_starting"},
+            assert_lease_held=assert_lease_held,
+        )
+    try:
+        created = (resume_start if resumed else start_app)(workspace, app_name=app_name)
+        journal.write(
+            workspace,
+            app_name=app_name,
+            expected=current,
+            changes={"state": "window_started", "start_deployment_id": created},
+            assert_lease_held=assert_lease_held,
+        )
+    except Exception as exc:  # noqa: BLE001 - a start not journaled is stopped again
+        _refuse_start(
+            workspace,
+            app_name=app_name,
+            exc=exc,
+            stop=stop,
+            assert_lease_held=assert_lease_held,
+        )
     return created
 
 
@@ -153,21 +225,30 @@ def await_window(
     wait: Callable[..., object] = wait_for_terminal,
     wait_active: Callable[..., None] = wait_for_compute_active,
 ) -> str:
-    """Prove the start's deployment is blue; on any proof failure keep the App stopped."""
+    """Prove the start's deployment is blue; on any failure keep the App stopped."""
 
     current = journal.read(workspace, app_name=app_name)
     if journal.state_of(current) != "window_started" or current is None:
         raise RuntimeError("no started window to await")
-    record = _load_record(
-        workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance
-    )
-    if record["deployment_id"] != current["blue_deployment_id"]:
-        raise RuntimeError("the signed record no longer names the window's blue deployment")
     try:
+        record = _load_record(
+            workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance
+        )
+        if record["deployment_id"] != current["blue_deployment_id"]:
+            raise StartProofError(
+                "start_record_changed",
+                "the signed record no longer names the window's blue deployment",
+            )
         deployment = wait(
             workspace, app_name=app_name, deployment_id=current["start_deployment_id"]
         )
-        if digest(workspace, current["restore_source"]) != current["source_tree_sha256"]:
+        try:
+            folder = digest(workspace, current["restore_source"])
+        except (NotFound, ResourceDoesNotExist, ReleaseContractError) as exc:
+            raise StartProofError(
+                "start_folder_digest", "blue's restore source is gone or unreadable"
+            ) from exc
+        if folder != current["source_tree_sha256"]:
             raise StartProofError(
                 "start_folder_digest", "blue's restore source changed in the window"
             )
@@ -181,16 +262,14 @@ def await_window(
             digest=digest,
         )
         wait_active(workspace, app_name=app_name)
-    except StartProofError as exc:
-        stopped = stop()
-        journal.write(
+    except Exception as exc:  # noqa: BLE001 - an unproven start never keeps serving
+        _refuse_start(
             workspace,
             app_name=app_name,
-            expected=current,
-            changes={"state": "window_refused", "refusal": exc.code},
+            exc=exc,
+            stop=stop,
             assert_lease_held=assert_lease_held,
         )
-        raise RuntimeError(f"{exc}; the App is {stopped}, the window stays open") from exc
     journal.write(
         workspace,
         app_name=app_name,
@@ -422,7 +501,7 @@ def main(
     elif args.command == "start":
         values = {
             "MIP_QUIESCE_WINDOW_START_DEPLOYMENT_ID": start_window(
-                workspace, app_name=app_name, assert_lease_held=lease
+                workspace, app_name=app_name, assert_lease_held=lease, stop=stop
             )
         }
     elif args.command == "await":
