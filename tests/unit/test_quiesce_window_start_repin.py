@@ -542,6 +542,64 @@ def test_a_re_pin_refuses_bindings_that_are_neither_signed_nor_applied(applied: 
     assert stored_record(estate)["deployment_id"] == BLUE_ID, "nothing was re-signed"
 
 
+MIGRATION_CONTRACT = {
+    **MIGRATION_APPLY,
+    "blue_restorable": False,
+    "migrations": {"pending": ["0043"], "pending_contract": ["0043"]},
+}
+
+
+def _close_by_activation(estate: Estate) -> None:
+    window.close_window(
+        estate.workspace,
+        app_name=APP_NAME,
+        scope=SCOPE,
+        lakebase_instance="mip-app-state",
+        repinned="",
+        superseded_by_activation=True,
+        assert_lease_held=lambda: None,
+    )
+
+
+def test_a_contract_window_closes_only_once_green_is_the_signed_record_it_serves() -> None:
+    estate = _estate()
+    plan = _plan(estate, migration=MIGRATION_CONTRACT)
+    assert plan.blue_restorable is False
+    window.open_window(
+        estate.workspace,
+        app_name=APP_NAME,
+        plan=plan.full(),
+        acknowledgement=plan.sha256,
+        lease_id=LEASE_ID,
+        source_git_sha=GIT_SHA,
+        assert_lease_held=lambda: None,
+        stop=_stop(estate),
+    )
+    green = dict(_immutable_payload(git_sha="b" * 40), source_code_path=RELEASE)
+    estate.apps.compute = "ACTIVE"
+    estate.apps.deploy_and_wait(APP_NAME, SimpleNamespace(as_dict=lambda: green), timeout=None)
+    with pytest.raises(RuntimeError, match="the contract window stays open"):
+        _close_by_activation(estate)  # activated, but blue is still the signed record
+    assert journal.read(estate.workspace, app_name=APP_NAME)["state"] == "window_open"
+
+    captured = build_app_rollback_record(
+        app_name=APP_NAME,
+        deployment=estate.apps.deployments["deployment-redeploy-1"],
+        payload=green,
+        git_sha="b" * 40,
+        gateway_binding=_binding(),
+        gateway_resources={**RESOURCE_CONTRACT, "resource_digest": RESOURCE_DIGEST},
+        app_resources=APP_RESOURCES,
+        app_service_principal_client_id="app-client",
+        app_service_principal_scim_id="app-scim-id",
+        expected_lakebase_instance="mip-app-state",
+    )
+    record_contract._save_record(estate.workspace, scope=SCOPE, record=captured)
+    _close_by_activation(estate)
+    closed = journal.read(estate.workspace, app_name=APP_NAME)
+    assert closed["state"] == "closed" and closed["closed_by"] == "green_activation"
+
+
 # --- the rollback's start paths -----------------------------------------------------
 
 

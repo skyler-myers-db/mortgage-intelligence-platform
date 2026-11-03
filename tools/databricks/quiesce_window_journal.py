@@ -19,8 +19,8 @@ read, under the held lease:
 journaled reads as started, and a rerun resumes from the App's pending
 deployment instead of starting again. Any failure after the start call stops
 the App again and writes ``window_refused``. A contract window
-(``blue_restorable`` false) goes ``window_open`` -> ``closed`` when green
-activation supersedes it.
+(``blue_restorable`` false) goes ``window_open`` -> ``closed`` only once the
+activated green is the signed record and the App's active deployment.
 """
 
 from __future__ import annotations

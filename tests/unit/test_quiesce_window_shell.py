@@ -485,17 +485,75 @@ def test_the_release_sequence_stops_once_per_window_and_re_pins_once(
     assert f"final={final}" in result.stdout
 
 
-def test_a_contract_window_stays_open_until_green_activation_closes_it(tmp_path: Path) -> None:
+def test_a_contract_window_stays_open_through_activation_until_green_is_captured(
+    tmp_path: Path,
+) -> None:
     result, calls = _run(
-        tmp_path, SEQUENCE + "end_quiesce_window_at_activation\necho \"after=${QUIESCE_WINDOW_STATE:-none}\"\n",
+        tmp_path,
+        SEQUENCE
+        + "end_quiesce_window_at_activation\n"
+        + 'echo "activating=${QUIESCE_WINDOW_STATE:-none}"; echo "closes=$(grep -c "quiesce_window close" "$CALLS" || true)"\n'
+        + "close_contract_window_after_capture\n"
+        + 'echo "after=${QUIESCE_WINDOW_STATE:-none}"\n',
         REASONS="WR3",
         RESTORABLE="0",
     )
     assert result.returncode == 0, result.stderr
-    assert "final=window_open" in result.stdout and "after=none" in result.stdout
+    assert "final=window_open" in result.stdout and "activating=contract_activating" in result.stdout
+    assert "closes=0" in result.stdout, "the activation itself never closes the journal"
+    assert "after=none" in result.stdout
     assert not _has(calls, "quiesce_window start") and not _has(calls, "rollback repin")
-    assert _has(calls, "quiesce_window close") == 1
-    assert "--superseded-by-activation" in next(call for call in calls if "quiesce_window close" in call)
+    close = next(call for call in calls if "quiesce_window close" in call)
+    assert "--superseded-by-activation" in close and "--scope scope" in close
+    assert "--lakebase-instance instance" in close
+
+
+def test_a_restorable_window_still_open_at_activation_refuses_it(tmp_path: Path) -> None:
+    result, calls = _run(
+        tmp_path, "QUIESCE_WINDOW_STATE=window_open\nend_quiesce_window_at_activation\necho reached\n"
+    )
+    assert result.returncode == 1 and "reached" not in result.stdout
+    assert not _has(calls, "quiesce_window close")
+
+
+@pytest.mark.parametrize("upgrade", ("green_activating_quiesced", "green_treatment_pending_capture"))
+def test_a_failure_inside_an_activating_contract_window_stops_and_never_restores_blue(
+    tmp_path: Path, upgrade: str
+) -> None:
+    result, calls = _run(
+        tmp_path,
+        f"QUIESCE_WINDOW_STATE=contract_activating; APP_UPGRADE_STATE={upgrade}; "
+        "APP_SIGNED_BLUE_AVAILABLE=1\nstop_app_after_failed_deploy\n",
+    )
+    assert result.returncode == 1, "the lease is retained"
+    assert "legacy-stop" in calls and "legacy-restore" not in calls
+    assert not _has(calls, "rollback restore") and not _has(calls, "quiesce_window close")
+
+
+@pytest.mark.parametrize(
+    ("state", "restorable", "refused"),
+    (
+        ("contract_activating", "0", True),
+        ("window_open", "0", True),
+        ("window_open", "1", False),
+        ("", "1", False),
+    ),
+)
+def test_the_signed_blue_restore_refuses_while_a_contract_window_is_open(
+    tmp_path: Path, state: str, restorable: str, refused: bool
+) -> None:
+    # The real restore, also reached outside the EXIT trap (the final-proof
+    # rollback in step 11): blue never lands on a contract-migrated schema.
+    release = shlex.quote(str(LIB / "deploy_app_release_lifecycle.sh"))
+    result, calls = _run(
+        tmp_path,
+        f". {release}\nAPP_SIGNED_BLUE_AVAILABLE=1\n"
+        f"QUIESCE_WINDOW_STATE={state}; QUIESCE_WINDOW_BLUE_RESTORABLE={restorable}\n"
+        "restore_signed_blue_while_quiesced || echo \"restore rc=$?\"\n",
+    )
+    assert "restore rc=1" in result.stdout
+    assert ("refusing to restore signed blue" in result.stderr) is refused
+    assert not _has(calls, "rollback restore")
 
 
 def test_the_step_files_open_each_reason_before_its_mutation_and_close_after_the_migration() -> None:
@@ -520,8 +578,10 @@ def test_the_step_files_open_each_reason_before_its_mutation_and_close_after_the
     degrade = at("mark_blue_degraded", close)
     activation = at("end_quiesce_window_at_activation")
     green = at('deploy_app_snapshot "activate App snapshot', activation)
+    capture = at('capture_last_good_app "${AGENT_RUNTIME_BINDING_SHA256:-}"', green)
+    contract_close = at("\n  close_contract_window_after_capture\n", capture)
 
     assert wr4 < apply < wr1 < update < wr2 < role < verifier_check < verifier < wr3 < migrate
     assert migrate < proven < close < degrade
-    assert activation < green
+    assert activation < green < capture < contract_close
     assert "--stop-app-for-mutation" not in text[steps:], "the converger never stops the App"

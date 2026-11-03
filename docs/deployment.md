@@ -2300,8 +2300,15 @@ vanished restore folder, an SDK error) stops the App again, identity-pinned,
 journals `window_refused` and leaves the window for the dead-man (M0-PR9). A
 start whose id was never journaled (`window_starting`) resumes from the App's
 pending deployment; it is never started twice. A
-contract migration (`blue_restorable` false) keeps the App stopped until green
-activation closes the window: that outage is part of the acknowledged digest.
+contract migration (`blue_restorable` false) keeps the App stopped until the
+green activation, and that outage is part of the acknowledged digest. The
+activation's own start (an App must run to take a deploy) serves blue's last
+deployment on the migrated schema, with treatment authority quiesced, until
+green's snapshot deploy replaces it; that interval is part of the same
+acknowledged outage. The journal stays open through the activation
+(`contract_activating`) and closes only once green is the signed record and
+the App's active deployment. Until then any failure, in the EXIT trap or the
+final-proof rollback, stops the App and refuses the tier-b blue restore.
 
 With no reason, nothing stops: the binding update is skipped (the bindings
 are re-read under the lease and must still equal the bundle's), the App role
@@ -2314,7 +2321,9 @@ it a noop with a passing verify.
 stops the App and converges runtime access with it up; `blue_degraded` (blue
 serving while its synced-catalog access or the reviewed functions are
 mutated) also re-reconciles those; `window_open` starts and re-pins blue when
-every proof holds, otherwise leaves the window to the dead-man. The rollback's
+every proof holds, otherwise leaves the window to the dead-man;
+`contract_activating` stops the App, never restores blue and retains the
+lease. The rollback's
 `ensure` and `restore` re-pin the same way when they start a stopped blue
 (tier a, only while blue is the App's last deployment); `restore` redeploys
 the signed snapshot (tier b) otherwise.

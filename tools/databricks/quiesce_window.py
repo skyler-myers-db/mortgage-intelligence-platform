@@ -292,8 +292,25 @@ def close_window(
 ) -> None:
     current = journal.read(workspace, app_name=app_name)
     if superseded_by_activation:
-        if journal.state_of(current) != "window_open" or (current or {}).get("blue_restorable"):
+        if (
+            journal.state_of(current) != "window_open"
+            or current is None
+            or current.get("blue_restorable")
+        ):
             raise RuntimeError("only an open contract window is superseded by green activation")
+        # closed_by green_activation must be true: green is the signed record
+        # and the App's active deployment, never the window's blue.
+        from tools.databricks.app_deployment_state import active_deployment_id
+
+        record = _load_record(
+            workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance
+        )
+        if record["deployment_id"] == current["blue_deployment_id"] or (
+            active_deployment_id(workspace, app_name=app_name) != record["deployment_id"]
+        ):
+            raise RuntimeError(
+                "green is not the signed record the App serves; the contract window stays open"
+            )
         changes = {"state": "closed", "closed_by": "green_activation"}
     else:
         if journal.state_of(current) != "window_proven" or current is None:

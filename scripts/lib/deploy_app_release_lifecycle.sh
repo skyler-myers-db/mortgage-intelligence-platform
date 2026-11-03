@@ -7,6 +7,15 @@
 restore_signed_blue_while_quiesced() {
   [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]] || return 1
   [[ "${LAKEBASE_RUNTIME_ACCESS_PROVEN:-0}" -eq 1 ]] || return 1
+  # An open contract window (M0-PR8, deploy_quiesce_window_lifecycle.sh):
+  # blue cannot run on the migrated schema, so tier b is refused until green
+  # is the signed record.
+  if [[ "${QUIESCE_WINDOW_STATE:-}" == "contract_activating" ]] || \
+     [[ "${QUIESCE_WINDOW_STATE:-}" == "window_open" && \
+        "${QUIESCE_WINDOW_BLUE_RESTORABLE:-0}" != "1" ]]; then
+    echo "${RED}[deploy] a contract migration window is open; refusing to restore signed blue onto the migrated schema.${RST}" >&2
+    return 1
+  fi
   local endpoint
   local -a revoke_args=()
   if declare -F mint_m2m_token >/dev/null; then
@@ -294,6 +303,10 @@ stop_app_after_failed_deploy() {
   # the dead-man. They come first: an unproven Lakebase or grant proof below
   # describes a candidate, never a blue this run did not touch.
   case "${QUIESCE_WINDOW_STATE:-}:${APP_UPGRADE_STATE:-first_install}" in
+    contract_activating:*)
+      compensate_contract_activation
+      return $?
+      ;;
     blue_serving:blue_quiesced|blue_serving:blue_quiescing|\
     blue_degraded:blue_quiesced|blue_degraded:blue_quiescing|\
     window_open:blue_quiesced|window_open:blue_quiescing)

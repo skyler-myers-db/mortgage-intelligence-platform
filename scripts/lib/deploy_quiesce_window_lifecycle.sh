@@ -20,6 +20,10 @@
 #                 and re-pins blue if proven, else leaves the window open for
 #                 the dead-man (M0-PR9). A contract migration
 #                 (blue_restorable=0) leaves it stopped until green activates.
+#   contract_activating  a contract window the activation started the App
+#                 for: blue cannot run on the migrated schema, so until green
+#                 is the signed record a failure stops the App and never
+#                 restores blue; the journal stays open until that capture.
 
 # ---------------------------------------------------------------------------
 # Read-only planning
@@ -241,7 +245,7 @@ open_quiesce_window() {
 # set), re-pin the signed record to it under the lease, check health against
 # the re-pinned id, then close the journal. A contract window
 # (blue_restorable=0) stays open: blue cannot run on the migrated schema, and
-# green activation closes it (end_quiesce_window_at_activation).
+# only green's signed capture closes it (close_contract_window_after_capture).
 close_quiesce_window() {
   local env_file
   [[ "${QUIESCE_WINDOW_STATE:-}" == "window_open" ]] || return 0
@@ -362,18 +366,38 @@ mark_blue_degraded() {
   fi
 }
 
-# Green activation supersedes every window state; a contract window's journal
-# closes here, the App being started only to activate green.
+# Green activation supersedes the serving states. A contract window stays
+# journaled open through it: the activation's own start (an App must run to
+# take a deploy) serves blue's last deployment on the migrated schema, with
+# treatment quiesced, until green's snapshot replaces it (part of the
+# acknowledged outage), and a failed activation must never restore blue.
 end_quiesce_window_at_activation() {
-  if [[ "${QUIESCE_WINDOW_STATE:-}" == "window_open" ]]; then
-    run run_with_proof_signing_authority \
-      "$PYTHON" -m tools.databricks.quiesce_window close \
-      --app-name "$_GRANTS_APP_NAME" \
-      --superseded-by-activation \
-      --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
-      --deployment-source-git-sha "$SOURCE_GIT_SHA"
+  if [[ "${QUIESCE_WINDOW_STATE:-}" != "window_open" ]]; then
+    QUIESCE_WINDOW_STATE=""
+    return 0
   fi
+  if [[ "${QUIESCE_WINDOW_BLUE_RESTORABLE:-0}" == "1" ]]; then
+    echo "${RED}[deploy] a restorable quiesce window is still open at green activation; refusing the activation.${RST}" >&2
+    return 1
+  fi
+  QUIESCE_WINDOW_STATE="contract_activating"
+}
+
+# Green is the signed record now: the contract window closes, superseded by
+# the activation. The tool proves the record names the App's active
+# deployment and not the window's blue before it writes closed_by. The state
+# clears first, so a failed close never stops the captured green.
+close_contract_window_after_capture() {
+  [[ "${QUIESCE_WINDOW_STATE:-}" == "contract_activating" ]] || return 0
   QUIESCE_WINDOW_STATE=""
+  run run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.quiesce_window close \
+    --app-name "$_GRANTS_APP_NAME" \
+    --scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --superseded-by-activation \
+    --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --deployment-source-git-sha "$SOURCE_GIT_SHA"
 }
 
 # ---------------------------------------------------------------------------
@@ -475,6 +499,15 @@ compensate_serving_blue() {
     echo "${RED}[deploy] blue keeps serving, but its runtime access did not converge back; the lease is retained.${RST}" >&2
   fi
   return "$failed"
+}
+
+# contract_activating: stop the App (identity-pinned, treatment quiesced)
+# and refuse the tier-b blue restore; the open journal and the retained lease
+# are the dead-man's (M0-PR9) and the operator's.
+compensate_contract_activation() {
+  echo "${RED}[deploy] a contract migration window is open through green activation: blue cannot run on the migrated schema, so the App is stopped and signed blue is not restored.${RST}" >&2
+  stop_and_quiesce_unproven_app || true
+  return 1
 }
 
 compensate_quiesce_window_state() {
