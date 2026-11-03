@@ -2775,6 +2775,135 @@ keys, and the profile digest `MIP_CLIENT_PROFILE_SHA256`. It uses the same
 plan, review, ack and apply loop, in a throwaway `gh` login. The guide is
 [docs/clients/github-environment.md](clients/github-environment.md).
 
+## Jobs identity and pinned job parameters (M2-PR5)
+
+The App holds `CAN_MANAGE_RUN` on four bundle jobs (`mip_sync_lifecycle_state`,
+`mip_fred_rates_ingest`, `mip_refresh_silver`, `mip_refresh_scores`), and
+`run_now` lets the caller replace a Python task's parameters. So a
+compromised App must be able to start only bundle-defined runs, under an
+identity that holds no workspace admin.
+
+**Two run_as identities.**
+
+* The non-admin jobs service principal (`MIP_IDENTITY_IDS_JSON.jobs`, the
+  `jobs_principal` bundle variable, which has no default) runs those four
+  jobs, `mip_scheduled_refresh`, `mip_kpi_snapshot` and
+  `mip_feature_pipeline`.
+* `mip_kpi_snapshot` moves with them because the weekly refresh starts it.
+  Nothing a jobs-identity job starts runs as the deployer, so the non-admin
+  identity never needs run permission on an admin-identity job.
+* The deployer keeps the deploy-time jobs: `mip_init_catalog_schemas`,
+  `mip_ref_seed`, `mip_lakebase_migrate` and the PAUSED
+  `mip_growth_agent_monitor_scheduler`.
+* The CLI v1.10.0 bundle schema declares `run_as` on `resources.Pipeline`,
+  so the pipeline does not need spike S4's fallback (staying on the
+  deployer). S4's live half, ALTER OWNER on the pipeline's published
+  datasets after a run_as change, stays with the cutover.
+* `tests/unit/test_jobs_identity_shape.py` pins the split.
+
+**Workspace ACLs.** The jobs identity holds no workspace admin and only a
+USER assignment, so its runs can reach a workspace object only by grant.
+Deploy step 4, right after the jobs-reader Lakebase role and before the first
+job runs as it, runs `tools/databricks/jobs_identity_acl.py apply`:
+
+* It derives the grants from databricks.yml:
+  * CAN_READ on the bundle files folder (`workspace.file_path`). Every task's
+    Python and SQL file, `jobs/install_pins.json` and the pipeline's library
+    sit under the deployer's own home folder.
+  * CAN_USE on the warehouse the SQL tasks name.
+  * CAN_RUN on `mip_feature_pipeline`, which `mip_refresh_silver` starts.
+  * CAN_MANAGE_RUN on the four jobs `mip_scheduled_refresh` starts. Each of
+    them must run as the jobs identity itself.
+  * CAN_USE on the Lakebase instance a `--lakebase-instance` parameter names.
+* Any other resource reference or task kind in a jobs-identity job refuses, so
+  a new dependency cannot ship without its grant.
+* It resolves each object from the bundle summary, and refuses unless the
+  summary's jobs-identity jobs run as the profile's jobs principal.
+* It adds only what the identity lacks, by the permissions API's PATCH, then
+  re-reads every object. It never removes or lowers a grant, so the App's
+  `CAN_MANAGE_RUN` bindings, the verifier's warehouse `CAN_USE` and other
+  teams' grants stay. Bundle `permissions:` blocks would set each object's
+  whole ACL on every deploy and drop those, which is why this is a deploy
+  step.
+* `plan` reads only. Output names bundle keys, never object ids or
+  principals. `tests/unit/test_jobs_identity_acl.py` pins all of this.
+
+**Pinned parameters.**
+
+* Before every bundle call, `tools/databricks/bundle_env.py` renders
+  `jobs/install_pins.json` from the profile: the catalog, the Lakebase
+  instance and database, and the data-owner group
+  (`<MIP_IDENTITY_PREFIX>-data-owners`). These are public profile values.
+  The file is gitignored, and `sync.include` uploads it into the
+  deployer-owned bundle root, where the App cannot write.
+* `jobs/_install_pins.py` reads the file from its own folder. Each Python
+  entrypoint a jobs-identity job runs (`jobs/fred_rates_ingest.py`,
+  `jobs/sync_lifecycle_state_job.py`, `jobs/converge_governed_owner.py` and
+  `jobs/kpi_snapshot.py`) calls it first. A run exits 5 before any Spark session, Lakebase credential
+  or connection when:
+  * a pinned option (`--catalog`, `--lakebase-instance`, `--lakebase-database`,
+    or the FRED `--table`) differs from the pin;
+  * an option the bundle does not pass is set (`--seed-path`,
+    `--prune-legacy-defaults`);
+  * the pins file is missing or malformed.
+* The lifecycle task runs `jobs/sync_lifecycle_state_job.py`. That file loads
+  the pins and `jobs/sync_lifecycle_state.py` beside it by exact path.
+  `jobs/sync_lifecycle_state.py` itself is unchanged, because the App imports
+  it.
+* The SQL and pipeline tasks take no parameters a `run_now` can redirect. The
+  rendered SQL declares no parameter markers, and `pipeline_params` carries
+  only `full_refresh`.
+
+**Owner convergence.**
+
+* `mip_refresh_silver`, `mip_refresh_scores` and `mip_fred_rates_ingest` run
+  `converge_governed_owner` after every refresh task, on `run_if: ALL_DONE`,
+  so a failed run still hands over what it created.
+* A run is judged by its leaf tasks. With the ALL_DONE handover as the only
+  leaf, a run whose refresh task failed would end `SUCCESS_WITH_FAILURES`,
+  and CLI v1.10.0 `bundle run` exits 0 for that state, so deploy.sh would
+  carry on past a failed refresh. Each of the three jobs therefore ends in
+  `assert_refresh_succeeded`: a compute-free condition task on
+  `run_if: ALL_SUCCESS` after the handover and every refresh leaf. Any failed
+  task leaves it `UPSTREAM_FAILED` and the run `FAILED`.
+  `tests/unit/test_job_run_outcome.py` fails each task of every bundle job in
+  turn and requires a `FAILED` run every time.
+* It hands every table, view and function that the run's own identity owns
+  in the pinned catalog's governed schemas to the pinned group.
+* It never touches:
+  * an object someone else owns (the deployer's reviewed Growth Agent
+    functions included);
+  * another catalog, the catalog itself or a schema;
+  * a pipeline dataset.
+
+**Lakebase `jobs_reader`.**
+
+* `mip_lakebase_migrate` gets `--jobs-reader-client-id=${var.jobs_principal}`
+  and grants that role USAGE on `mip_app`, SELECT on `approvals` and
+  `call_dispositions` (the lifecycle sync's reads), and SELECT, INSERT and
+  UPDATE on `kpi_snapshots` (the KPI snapshot's daily upsert, which the
+  deployer, the database owner, made before). The postflight refuses any
+  other privilege.
+* Deploy step 4 first converges the role LOGIN-only
+  (`converge_lakebase_oauth_role --role-contract jobs_reader`).
+* With the option unset, the grant reconciliation is byte-identical to before
+  (`tests/unit/test_lakebase_jobs_reader.py`).
+* It grants no other write, so the lifecycle sync's fail-soft snooze wake
+  (an UPDATE of `lead_snoozes`) is skipped under it.
+
+**Monitor scheduler held PAUSED.** Until a non-approver scheduler role exists,
+`tools/databricks/monitor_scheduler_gate.py` refuses an enabled
+`mip_growth_agent_monitor_scheduler` (a schedule, trigger or continuous block
+that is not PAUSED) in three places:
+
+* in databricks.yml or a target override (`bundle_env`, every call);
+* in the bundle plan's `new_state`;
+* live: by name, a dev-prefixed copy included, or by its bound id. This runs
+  beside the plan gate at both positions.
+
+**Live effect.** None until a governed release deploys this bundle. The live
+jobs keep their deployed run_as and sources until then.
+
 ## CI deploy (deploy-dev.yml): parked, and the release-gate bootstrap
 
 Decision D-platform-process-b step 7 (audit quality-03, report 12.4 #8). The

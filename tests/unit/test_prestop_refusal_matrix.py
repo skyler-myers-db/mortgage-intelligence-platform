@@ -7,9 +7,9 @@ a stub deploy interpreter (``MIP_DEPLOY_PYTHON``) that runs every real Python
 step through ``tests/fixtures/prestop_launcher.py`` against that estate. The
 steps before the probes that need a live workspace or build tooling (the pin
 and closure checks, SQL render, bundle validate and plan, the runtime-secret
-and pii-salt checks, the plan gate, the Genie space pin check, the bundle
-state's warehouse read) answer success; the signed lease and every
-App stop primitive are markers that end the run.
+and pii-salt checks, the plan gate and the monitor scheduler gate beside it,
+the Genie space pin check, the bundle state's warehouse read) answer success;
+the signed lease and every App stop primitive are markers that end the run.
 
 For every refusal code the run must exit 2 with that code printed, call no
 stop primitive, leave the fake App RUNNING on the same deployment, and never
@@ -61,6 +61,10 @@ CANNED = (
     "-m tools.databricks.bundle_env",
     "-m tools.databricks.pii_salt_scope check",
     "-m tools.databricks.bundle_plan_gate check",
+    # M2-PR5's monitor scheduler gate judges the same plan file plus a live job
+    # read; its own tests are test_monitor_scheduler_gate.py and the pre-lease
+    # block's, test_bundle_plan_gate_deploy_contract.py.
+    "-m tools.databricks.monitor_scheduler_gate check",
     "-m tools.databricks.provision_genie_space --plan-pin",
     "-m tools.databricks.bundle_state warehouse-id",
 )
