@@ -29,6 +29,7 @@ from tests.fixtures.quiesce_window_estate import (
     SOURCE_FILES,
     Estate,
     StartBehaviour,
+    deployment,
     make_estate,
     stored_record,
 )
@@ -490,6 +491,36 @@ def test_restore_falls_back_to_the_tier_b_redeploy_when_the_start_is_not_blue() 
     assert (estate.apps.starts, estate.apps.deploys) == (1, 1)
     assert stored_record(estate)["deployment_id"] == "deployment-redeploy-1"
     assert "predecessor_deployment_id" not in stored_record(estate)
+
+
+def _green_is_last(estate: Estate) -> None:
+    """A post-activation rollback: green is the active, newest deployment, now stopped."""
+
+    estate.apps.deployments["deployment-green"] = deployment(
+        "deployment-green",
+        source=RELEASE,
+        artifact="/Workspace/Users/app-sp/src/deployment-green",
+        env_names=ENV_NAMES,
+        created="2026-10-01T12:00:00Z",
+    )
+    estate.apps.active_id = "deployment-green"
+    estate.apps.compute = "STOPPED"
+
+
+@pytest.mark.parametrize("green_last", (True, False), ids=("tier-b-only", "tier-a-falls-back"))
+def test_restore_redeploys_blue_when_the_start_id_is_unreadable(green_last: bool) -> None:
+    # Tier b needs only compute ACTIVE before its redeploy: a start whose own
+    # deployment id cannot be read never stops the rollback short of blue.
+    estate = _estate(StartBehaviour(readable_pending_id=False))
+    if green_last:
+        _green_is_last(estate)
+    else:
+        estate.apps.compute = "STOPPED"
+    _restore(estate)
+
+    assert (estate.apps.starts, estate.apps.deploys) == (1, 1)
+    assert stored_record(estate)["deployment_id"] == "deployment-redeploy-1"
+    assert estate.apps.active_id == "deployment-redeploy-1" and estate.apps.compute == "ACTIVE"
 
 
 def test_ensure_of_a_stopped_blue_re_pins_the_start_instead_of_failing_its_check() -> None:

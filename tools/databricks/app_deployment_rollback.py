@@ -84,6 +84,7 @@ from tools.databricks.app_start_deployment import (
     ensure_started,
     is_stopped,
     last_deployment_is,
+    wait_for_compute_active,
 )
 from tools.databricks.converge_campaign_treatment_access import (
     Mode,
@@ -825,7 +826,12 @@ def restore_last_good(
         tier_a = is_stopped(workspace, app_name=app_name) and last_deployment_is(
             workspace, app_name=app_name, deployment_id=record["deployment_id"]
         )
-        started = ensure_started(workspace, app_name=app_name)
+        try:
+            started = ensure_started(workspace, app_name=app_name)
+        except StartProofError:
+            # Tier b needs only compute ACTIVE: its redeploy replaces the start.
+            started = ""
+            wait_for_compute_active(workspace, app_name=app_name)
         repinned = False
         if started and tier_a:
             try:
