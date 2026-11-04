@@ -178,6 +178,25 @@ def read(workspace: Any, *, app_name: str) -> dict[str, Any] | None:
     return _validated(value, app_name=app_name)
 
 
+def read_unverified(workspace: Any, *, app_name: str) -> dict[str, Any] | None:
+    """The journal as stored, signature NOT verified: only for a human record (M0-PR9).
+
+    The deploy workflow's always() step records the window's state without
+    the key registry. No governed path reads this: every decision is
+    ``read``'s. A missing file reads as None, an unparseable one as ``unreadable``.
+    """
+
+    try:
+        stream = workspace.workspace.download(journal_path(app_name))
+    except (NotFound, ResourceDoesNotExist):
+        return None
+    try:
+        value = json.loads(stream.read().decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"state": "unreadable"}
+    return value if isinstance(value, dict) else {"state": "unreadable"}
+
+
 def state_of(record: dict[str, Any] | None) -> str:
     return "absent" if record is None else str(record["state"])
 

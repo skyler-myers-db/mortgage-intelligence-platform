@@ -7,6 +7,7 @@
   python -m tools.databricks.quiesce_window await ...               # wait, require, prove
   python -m tools.databricks.quiesce_window close --repinned ID ... # after the re-pin
   python -m tools.databricks.quiesce_window status --out-env F      # for the EXIT trap
+  python -m tools.databricks.quiesce_window status --unverified     # the workflow's record
   python -m tools.databricks.quiesce_window cancel-deadman --run-id N # after the close
 
 ``plan`` is read-only (GET and list calls, and file downloads for the tree
@@ -514,6 +515,9 @@ def _parser() -> argparse.ArgumentParser:
     ):
         opener.add_argument(flag, required=flag != "--expected-root-leaf", default=None)
     sub.choices["cancel-deadman"].add_argument("--run-id", required=True)
+    # The deploy workflow's always() record (M0-PR9): the raw journal state for
+    # a human, without the key registry; never an input to a decision.
+    sub.choices["status"].add_argument("--unverified", action="store_true")
     # plan: the rebase step 0a takes; applicable: the operator's request, which
     # it resolves against the first-install journal (MIP_QUIESCE_WINDOW_REBASE).
     for mode in (plan, sub.choices["applicable"]):
@@ -551,6 +555,30 @@ def _print_plan(summary: dict[str, Any], *, refused: bool) -> None:
     print(f"{_PREFIX} public summary: {json.dumps(summary, sort_keys=True)}")
     if refused:
         print(f"{_PREFIX} nothing was changed; the App keeps serving", file=sys.stderr)
+
+
+def _print_unverified_status(workspace: Any, *, app_name: str) -> None:
+    """One codes-only line from the raw journal and its marker, marked unverified.
+
+    The workflow's ``if: always()`` step has no key registry (the deploy step
+    derives the verify key inside its own process), so it cannot verify the
+    signature; it records the raw state for the operator instead. Nothing
+    here feeds a decision: every governed read is ``journal.read``.
+    """
+
+    current = journal.read_unverified(workspace, app_name=app_name)
+    state = str((current or {}).get("state") or "absent")
+    if state != "absent" and state not in journal.STATES:
+        state = "unreadable"
+    try:
+        marker_state, _start = deadman.deadman_status(workspace, app_name=app_name, current=current)
+    except (RuntimeError, ValueError):
+        marker_state = "unreadable"
+    restorable = (current or {}).get("blue_restorable") is True
+    print(
+        f"{_PREFIX} status (unverified): journal {state}, blue restorable {restorable}, "
+        f"dead-man {marker_state}"
+    )
 
 
 def main(
@@ -639,6 +667,11 @@ def main(
             lakebase_instance=args.lakebase_instance,
         )
         print(f"{_PREFIX} assert-serving: the App serves the signed record's deployment")
+        return 0
+    if args.command == "status" and args.unverified:
+        if args.out_env is not None:
+            raise SystemExit(f"{_PREFIX} an unverified status is a record, never an env file")
+        _print_unverified_status(workspace, app_name=app_name)
         return 0
     if args.command == "cancel-deadman":
         outcome = deadman.cancel_deadman(workspace, app_name=app_name, run_id=args.run_id)
