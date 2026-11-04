@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import ResourceAlreadyExists
 
 from tests.fixtures.quiesce_window_estate import (
@@ -283,11 +284,45 @@ ALLOWED_CALLS = {
 }
 
 
-def _client_calls(tree: ast.AST) -> tuple[set[tuple[str, str]], list[int]]:
+# Every SDK service a WorkspaceClient carries: a call on one through any other
+# receiver than ``window.workspace`` is a second client (M0-PR9 review).
+SDK_SERVICES = frozenset(
+    name for name in dir(WorkspaceClient) if isinstance(getattr(WorkspaceClient, name, None), property)
+)
+# Where a client may be built: the one factory, called once for the Window.
+CLIENT_BUILDERS = {
+    "WorkspaceClient": {"_workspace"},
+    "_workspace": {"window_from_argv"},
+    "workspace_factory": {"window_from_argv", "main"},
+}
+
+
+def _second_clients(tree: ast.Module) -> list[int]:
+    """Lines that build a client outside the factory or call a service on another receiver."""
+
+    found: list[int] = []
+    for top in tree.body:
+        owner = getattr(top, "name", "<module>")
+        for node in ast.walk(top):
+            if isinstance(node, ast.Name) and owner not in CLIENT_BUILDERS.get(node.id, {owner}):
+                found.append(node.lineno)
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr in SDK_SERVICES
+                and ast.unparse(node.func.value.value) != "window.workspace"
+            ):
+                found.append(node.lineno)
+    return found
+
+
+def _client_calls(tree: ast.Module) -> tuple[set[tuple[str, str]], list[int]]:
     """Every ``window.workspace.<service>.<method>(...)`` call, through an alias too.
 
-    The second item lists the lines of any other use of the client: a use the
-    contract cannot read is a failure, never a pass.
+    The second item lists the lines of any other use of the client, and of
+    any second client (``_second_clients``): a use the contract cannot read
+    is a failure, never a pass.
     """
 
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
@@ -326,7 +361,7 @@ def _client_calls(tree: ast.AST) -> tuple[set[tuple[str, str]], list[int]]:
             and node.func.value.id in aliases
         ):
             calls.add((aliases[node.func.value.id], node.func.attr))
-    return calls, strays
+    return calls, strays + _second_clients(tree)
 
 
 def test_the_dead_man_calls_only_start_and_get_plus_its_journal_and_marker() -> None:
@@ -343,21 +378,29 @@ def test_the_dead_man_calls_only_start_and_get_plus_its_journal_and_marker() -> 
 
 
 @pytest.mark.parametrize(
-    "stray",
+    ("function", "stray"),
     (
-        "    window.workspace.apps.stop(window.args.app)\n",
-        "    window.workspace.apps.deploy(window.args.app, None)\n",
-        "    window.workspace.jobs.submit()\n",
-        "    window.workspace.permissions.set('apps', 'x')\n",
-        "    apps, args = window.workspace.apps, window.args\n    apps.update(args.app, None)\n",
-        "    client = window.workspace\n    client.apps.stop(window.args.app)\n",
-        "    getattr(window.workspace, 'apps').stop(window.args.app)\n",
+        ("start_blue", "    window.workspace.apps.stop(window.args.app)\n"),
+        ("start_blue", "    window.workspace.apps.deploy(window.args.app, None)\n"),
+        ("start_blue", "    window.workspace.jobs.submit()\n"),
+        ("start_blue", "    window.workspace.permissions.set('apps', 'x')\n"),
+        ("start_blue", "    apps, args = window.workspace.apps, window.args\n    apps.update(args.app, None)\n"),
+        ("start_blue", "    client = window.workspace\n    client.apps.stop(window.args.app)\n"),
+        ("start_blue", "    getattr(window.workspace, 'apps').stop(window.args.app)\n"),
+        # The review's second clients: neither goes through window.workspace.
+        ("main", "    client = (workspace_factory or _workspace)()\n    client.permissions.set('apps', 'x')\n"),
+        ("start_blue", "    _workspace().grants.update('catalog', 'mip')\n"),
+        ("start_blue", "    from databricks.sdk import WorkspaceClient\n    WorkspaceClient().apps.stop('x')\n"),
+        ("blue_refusal", "    other = make_client()\n    other.grants.update('catalog', 'mip')\n"),
     ),
 )
-def test_the_call_contract_notices_any_other_call(stray: str) -> None:
-    text = DEADMAN.read_text(encoding="utf-8").replace(
-        "def start_blue(window: Window) -> str:\n", f"def start_blue(window: Window) -> str:\n{stray}", 1
-    )
+def test_the_call_contract_notices_any_other_call(function: str, stray: str) -> None:
+    source = DEADMAN.read_text(encoding="utf-8")
+    anchor = next(line for line in source.splitlines(keepends=True) if line.startswith(f"def {function}("))
+    if not anchor.rstrip().endswith(":"):  # a signature over several lines
+        anchor = source[source.index(anchor) : source.index(":\n", source.index(anchor)) + 2]
+    text = source.replace(anchor, anchor + stray, 1)
+    assert text != source
     calls, strays = _client_calls(ast.parse(text))
     assert calls != ALLOWED_CALLS or strays
 
