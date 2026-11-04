@@ -45,16 +45,34 @@ def test_the_ast_finds_exactly_the_reviewed_job_run_sites() -> None:
     assert stops.python_job_run_sites() == set(stops.JOB_RUN_SITES)
 
 
+RUNNER_SITE = ("tools/databricks/job_phase_runner.py", "start_run", "run_now")
+
+
 def test_the_dead_mans_submit_and_cancel_are_reached_only_through_the_window_tool() -> None:
     # M0-PR9: the submit and the cancel sit in quiesce_window_deadman, reached
     # only by quiesce_window's open and cancel-deadman, which only the window
     # library invokes.
     reached = stops.reaching_entry_points(sites=set(stops.JOB_RUN_SITES))
     assert set(reached) == set(stops.JOB_RUN_SITES)
-    assert all(entries == {"tools.databricks.quiesce_window"} for entries in reached.values()), reached
+    deadman = {site: entries for site, entries in reached.items() if site != RUNNER_SITE}
+    assert deadman and all(entries == {"tools.databricks.quiesce_window"} for entries in deadman.values()), reached
     entry = stops.ENTRY_POINTS["tools.databricks.quiesce_window"]
     assert entry.modes["open"] and entry.modes["cancel-deadman"]
     assert entry.callers == frozenset({stops.WINDOW_LIBRARY})
+
+
+def test_the_data_phases_run_now_is_reached_only_through_the_runners_run_mode() -> None:
+    # M1-PR6: the one run-now sits in job_phase_runner.start_run, reached only
+    # by the runner's own main, whose mutating modes only the data-phase
+    # library invokes; plan is read-only. It never reaches an App primitive.
+    assert RUNNER_SITE in stops.JOB_RUN_SITES
+    assert stops.reaching_entry_points(sites={RUNNER_SITE})[RUNNER_SITE] == {"tools.databricks.job_phase_runner"}
+    entry = stops.ENTRY_POINTS["tools.databricks.job_phase_runner"]
+    assert entry.callers == frozenset({stops.DATA_PHASE_LIBRARY})
+    assert entry.modes == {"plan": False, "begin": True, "run": True, "close": True}
+    assert not any("job_phase" in site[0] for site in stops.python_primitive_sites())
+    run_now = {site for site in stops.python_job_run_sites() if site[2].startswith("run_now")}
+    assert run_now == {RUNNER_SITE}, "no other tool or job source starts a job run"
 
 
 def test_every_site_is_reached_only_by_reviewed_entry_points() -> None:
@@ -63,7 +81,8 @@ def test_every_site_is_reached_only_by_reviewed_entry_points() -> None:
     for site, entries in reached.items():
         assert entries, f"{site} is reached by no CLI entry point"
         assert entries <= set(stops.ENTRY_POINTS), f"{site}: unreviewed {entries - set(stops.ENTRY_POINTS)}"
-    assert set().union(*reached.values()) == set(stops.ENTRY_POINTS)
+    job_runs = stops.reaching_entry_points(sites=set(stops.JOB_RUN_SITES))
+    assert set().union(*reached.values(), *job_runs.values()) == set(stops.ENTRY_POINTS)
 
 
 def test_every_reviewed_mode_is_one_the_entry_point_parses() -> None:
@@ -79,8 +98,9 @@ def test_every_reviewed_mode_is_one_the_entry_point_parses() -> None:
 
 
 def test_the_stop_libraries_are_the_only_callers_of_a_mutating_mode() -> None:
-    for entry in stops.ENTRY_POINTS.values():
-        assert entry.callers <= stops.STOP_LIBRARIES
+    for module, entry in stops.ENTRY_POINTS.items():
+        allowed = stops.JOB_RUN_LIBRARIES if module == "tools.databricks.job_phase_runner" else stops.STOP_LIBRARIES
+        assert entry.callers <= allowed, module
     assert stops.repo_shell_violations() == []
 
 
@@ -146,6 +166,25 @@ def test_a_stray_job_submit_or_cancel_in_a_tool_is_an_unmapped_job_run_site(
         ("tools/databricks/stray_run.py", "fire", "submit"),
         ("tools/databricks/stray_run.py", "halt", "cancel_run"),
     }
+
+
+@pytest.mark.parametrize(
+    ("source", "site"),
+    (
+        ("def fire(w):\n    w.jobs.run_now(job_id=1)\n", ("fire", "run_now")),
+        ("def fire(w):\n    j = w.jobs\n    j.run_now_and_wait(job_id=1)\n", ("fire", "run_now_and_wait")),
+        ("def fire(w):\n    w.jobs.repair_run(run_id=1, rerun_all_failed_tasks=True)\n", ("fire", "repair_run")),
+        ("def fire(w):\n    w.api_client.do('POST', '/api/2.2/jobs/run-now', body={})\n", ("fire", "rest:run-now")),
+    ),
+    ids=("run_now", "alias_and_wait", "repair", "rest"),
+)
+def test_a_stray_run_now_or_repair_in_a_tool_is_an_unmapped_job_run_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str, site: tuple[str, str]
+) -> None:
+    root = _tools_copy(tmp_path)
+    (root / "tools" / "databricks" / "stray_run_now.py").write_text(source, encoding="utf-8")
+    monkeypatch.setattr(stops, "REPO", root)
+    assert stops.python_job_run_sites() - set(stops.JOB_RUN_SITES) == {("tools/databricks/stray_run_now.py", *site)}
 
 
 def test_a_new_sdk_primitive_in_a_tool_is_an_unmapped_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

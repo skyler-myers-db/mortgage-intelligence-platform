@@ -182,3 +182,33 @@ def test_every_step_file_that_needs_a_stop_calls_a_window_function() -> None:
             assert call in text, f"{name}: {call}"
             function = call.removeprefix("run ").split()[0]
             assert f"\n{function}() {{\n" in window, f"{function} lives in the window library"
+
+
+# --- job runs from shell (M1-PR6) ---------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ("begin", "run", "close"))
+def test_the_job_phase_runners_mutating_modes_are_the_data_phase_librarys_alone(mode: str) -> None:
+    line = f'run "$PYTHON" -m tools.databricks.job_phase_runner {mode} --plan "$P" --lease-id "$L"\n'
+    for path in (stops.WINDOW_LIBRARY, "scripts/lib/deploy_step_app_promotion_and_refresh.sh", "scripts/deploy.sh"):
+        assert stops.shell_violations(path, line), f"{mode} in {path}"
+    assert stops.shell_violations(stops.DATA_PHASE_LIBRARY, line) == []
+    plan = line.replace(f" {mode} ", " plan ")
+    assert stops.shell_violations("scripts/lib/deploy_step_automation_identities.sh", plan) == []
+
+
+def test_a_bundle_job_runs_from_shell_only_at_its_reviewed_site() -> None:
+    for path, keys in stops.SHELL_JOB_RUN_SITES.items():
+        for key in keys:
+            line = f'run_job_with_retry databricks bundle run {key} -t "$TARGET"\n'
+            assert stops.shell_violations(path, line) == [], (path, key)
+            assert stops.shell_violations("scripts/lib/deploy_step_bundle_apply.sh", line), key
+    # The weekly chain runs from shell nowhere: --phase data starts it through the runner.
+    chain = 'databricks bundle run mip_scheduled_refresh -t "$TARGET"\n'
+    assert all(stops.shell_violations(path, chain) for path in (*stops.SHELL_JOB_RUN_SITES, stops.DATA_PHASE_LIBRARY))
+    # A data job is not the deploy-time step file's, and a key read at run time is never reviewed.
+    silver = 'databricks bundle run mip_refresh_silver -t "$TARGET"\n'
+    assert stops.shell_violations("scripts/lib/deploy_step_lakebase_and_uc_grants.sh", silver)
+    assert stops.shell_violations("scripts/lib/deploy_step_app_promotion_and_refresh.sh", 'databricks bundle run "$JOB"\n')
+    assert stops.shell_violations(stops.DATA_PHASE_LIBRARY, "run databricks jobs run-now --job-id 7\n")
+    assert stops.shell_violations("scripts/lib/x.sh", "# databricks bundle run mip_refresh_silver\n") == []

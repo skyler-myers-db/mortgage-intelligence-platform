@@ -66,6 +66,10 @@ ADMISSION_STATES = frozenset(
     }
 )
 _EPOCH = re.compile(r"[0-9]{9,11}")
+# A governed phase's own budget (M1-PR6, tools/databricks/phase_budget.py) is
+# admitted by the same rule against the same deadline, under its own schema.
+PHASE_BUDGET_SCHEMA = "mip.phase-budget.v1"
+REVIEWED_BUDGET_SCHEMAS = frozenset({BUDGET_SCHEMA, PHASE_BUDGET_SCHEMA})
 
 
 class WindowAdmissionError(RuntimeError):
@@ -120,7 +124,7 @@ def admission(budget: Mapping[str, Any] | None, deadline: object, *, now: float)
     if budget is None:
         return Admission("not_required")
     required = int(budget.get("required_seconds") or 0)
-    if budget.get("schema") != BUDGET_SCHEMA or required <= ADMISSION_MARGIN_S:
+    if budget.get("schema") not in REVIEWED_BUDGET_SCHEMAS or required <= ADMISSION_MARGIN_S:
         raise ValueError("the window budget is not a reviewed budget body")
     if not str(deadline or "").strip():
         return Admission("deadline_missing", required)
