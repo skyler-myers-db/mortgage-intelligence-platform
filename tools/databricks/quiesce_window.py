@@ -16,7 +16,8 @@ in ``MIP_ACK_QUIESCE_WINDOW``), admits it against the job budget
 (``quiesce_window_budget``, M0-PR9: before any stop), re-checks under the
 lease that blue is still the App's last deployment, arms the dead-man
 (``quiesce_window_deadman``: publish this release, then one ``jobs submit``),
-journals ``window_open`` and only then stops the App, identity-pinned.
+admits and re-checks blue again after that arm, journals ``window_open`` and
+only then stops the App, identity-pinned.
 ``cancel-deadman`` cancels that run once the journal is closed. ``start`` journals
 ``window_starting``, starts, and records the deployment the start created
 (a rerun resumes from the App's pending deployment, never a second start).
@@ -126,8 +127,11 @@ def open_window(
     ``admit`` decides the job-budget admission of the canonical body (M0-PR9)
     before anything is read or written: a refusal stops and submits nothing.
     ``arm`` submits the dead-man after the blue re-check and before the
-    journal write, so an arm that fails journals and stops nothing; a journal
-    write that fails cancels the armed run before it raises.
+    journal write, so an arm that fails journals and stops nothing. The arm
+    publishes a release and waits for the run to start, so the budget and
+    blue are both decided again after it, right before the journal write: a
+    deployment that landed meanwhile refuses the window. A refusal there, or a
+    journal write that fails, cancels the armed run before it raises.
     """
 
     canonical = _validated_plan(plan, acknowledgement=acknowledgement)
@@ -140,6 +144,12 @@ def open_window(
         raise RuntimeError("an earlier window's journal is still open; the window is refused")
     run_id = arm(canonical)
     try:
+        # Time of check, time of use: the arm took time.
+        admit(canonical)
+        if not last_deployment_is(workspace, app_name=app_name, deployment_id=blue_id):
+            raise RuntimeError(
+                "blue stopped being the App's last deployment during the arm; the window is refused"
+            )
         opened = _journal_open(
             workspace,
             app_name=app_name,

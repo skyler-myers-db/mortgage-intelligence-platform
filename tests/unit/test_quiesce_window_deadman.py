@@ -298,6 +298,54 @@ def test_a_journal_write_that_fails_cancels_the_armed_run_and_stops_nothing(
     assert estate.jobs.cancels == [run.run_id] and estate.apps.stops == 0
 
 
+def test_a_deployment_that_lands_during_the_arm_refuses_the_window_with_no_stop() -> None:
+    # Time of check, time of use: the arm publishes a whole release and waits
+    # for the run, so blue is re-checked after it, right before the journal.
+    from tests.fixtures.quiesce_window_estate import deployment
+
+    estate = _estate()
+    hooks = window_hooks(estate)
+    real_arm = hooks["arm"]
+
+    def arm_while_someone_deploys(canonical: Any) -> str:
+        run_id = real_arm(canonical)
+        estate.apps.deployments["deployment-out-of-band"] = deployment(
+            "deployment-out-of-band",
+            source=OTHER_SOURCE,
+            artifact="/Workspace/Users/app-sp/src/deployment-out-of-band",
+            env_names=["DATABRICKS_WAREHOUSE_ID"],
+            created="2026-10-05T00:00:00Z",
+        )
+        estate.apps.active_id = "deployment-out-of-band"
+        return run_id
+
+    with pytest.raises(RuntimeError, match="during the arm"):
+        _open_with(estate, **{**hooks, "arm": arm_while_someone_deploys})
+    run = estate.jobs.only_run()
+    assert estate.apps.stops == 0 and journal.read(estate.workspace, app_name=APP_NAME) is None
+    assert estate.jobs.cancels == [run.run_id], "the armed run is cancelled"
+
+
+def test_a_budget_that_runs_out_during_the_arm_refuses_the_window_with_no_stop() -> None:
+    estate = _estate()
+    hooks = window_hooks(estate)
+    admits: list[str] = []
+
+    def admit(canonical: Any) -> object:
+        # The open's own admissions: before the arm, then after it (the arm
+        # re-admits on its own before the submit, through the hooks).
+        admits.append("admit")
+        if len(admits) == 2:
+            raise WindowAdmissionError(SimpleNamespace(state="insufficient", remaining_seconds=1, required_seconds=2))  # type: ignore[arg-type]
+        return hooks["admit"](canonical)
+
+    with pytest.raises(WindowAdmissionError):
+        _open_with(estate, **{**hooks, "admit": admit})
+    run = estate.jobs.only_run()
+    assert len(admits) == 2 and estate.apps.stops == 0
+    assert estate.jobs.cancels == [run.run_id] and journal.read(estate.workspace, app_name=APP_NAME) is None
+
+
 @pytest.mark.parametrize("states", (("window_open",), ("window_open", "window_starting")))
 def test_an_earlier_open_journal_refuses_before_any_submit(states: tuple[str, ...]) -> None:
     # The plan saw no journal; one written since (time of check, time of use)
