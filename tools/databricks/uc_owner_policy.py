@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 from databricks.sdk import AccountClient, WorkspaceClient
 from tools.clients.shapes import PRINCIPAL_VOCABULARY
+from tools.databricks.uc_interim_owner_pairs import EXPIRED, MATCH, InterimOwnerPairs
 
 METASTORE_OWNER_ENV = "MIP_UC_METASTORE_OWNER"
 
@@ -132,6 +133,10 @@ class ApprovedOwnerPolicy:
 
     The deploying identity is approved alongside ``configured_principals``
     unless ``admit_deployer`` is false (``MetastoreOwnerPolicy``).
+    ``interim_pairs`` (M2-PR8) admits an owner outside them for exactly the
+    object a reviewed, unexpired pair names; an expired pair refuses. Every
+    other check (the App alias exclusion, SCIM resolution, the group
+    exclusion) still runs on that owner.
     """
 
     workspace: WorkspaceClient
@@ -140,6 +145,7 @@ class ApprovedOwnerPolicy:
     account_factory: Callable[[], AccountClient] = account_client_from_env
     group_membership_probe: Callable[[AccountClient, str, str, str, str], bool] | None = None
     admit_deployer: bool = True
+    interim_pairs: InterimOwnerPairs | None = None
     _account_client: AccountClient | None = field(default=None, init=False)
     _account_target_sp_id: str = field(default="", init=False)
     _account_group_names: dict[str, str] = field(default_factory=dict, init=False)
@@ -430,6 +436,22 @@ class ApprovedOwnerPolicy:
                 f"Target App service principal is a member of approved owner group {owner!r}"
             )
 
+    def _interim_match(self, item: object, owner_text: str) -> bool:
+        """Exactly this object and this owner, as Unity Catalog returns them."""
+
+        if not self.interim_pairs:
+            return False
+        full_name = getattr(item, "full_name", None) or getattr(item, "name", None)
+        if not isinstance(full_name, str) or not full_name:
+            return False
+        verdict = self.interim_pairs.verdict(full_name=full_name, owner=owner_text)
+        if verdict == EXPIRED:
+            raise RuntimeError(
+                "Governed UC owner holds an expired interim owner pair: re-own the object "
+                "(tools/clients/handover_uc_ownership.py) before the pair expires"
+            )
+        return verdict == MATCH
+
     def assert_objects(self, objects: Iterable[object | None]) -> None:
         for item in objects:
             if item is None:
@@ -446,7 +468,10 @@ class ApprovedOwnerPolicy:
             owner = _canonical(owner_text)
             if owner in self.target.aliases:
                 raise RuntimeError("Target App service principal cannot own governed UC objects")
-            if not owner or owner not in self.configured_principals:
+            if not owner or (
+                owner not in self.configured_principals
+                and not self._interim_match(item, owner_text)
+            ):
                 raise RuntimeError(
                     "Governed UC owner is outside the explicit approved-owner contract"
                 )
@@ -494,6 +519,8 @@ class MetastoreOwnerPolicy(ApprovedOwnerPolicy):
                 f"{METASTORE_OWNER_ENV} must be an exact principal, never users, "
                 "account users or admins"
             )
+        if self.interim_pairs:
+            raise RuntimeError("The metastore owner takes no interim owner pair")
         self.configured_principals = {owner}
         self.admit_deployer = False
         super().__post_init__()

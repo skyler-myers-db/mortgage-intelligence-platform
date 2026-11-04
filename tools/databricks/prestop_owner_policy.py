@@ -19,6 +19,12 @@ refuses now; an invisible one (an account-level nested group) is still caught
 by the post-stop proof. So this is an early refusal, not a replacement. Every
 other check (account and workspace SCIM resolution, the exact-name rules, the
 target-alias exclusion) is the policy's own.
+
+``interim_pairs`` (M2-PR8, ``tools/databricks/uc_interim_owner_pairs.py``) is
+the policy's exact, expiring exception for a pipeline dataset the ownership
+handover leaves with its owner. None of ``OBJECTS`` is a pipeline dataset, so
+the deploy passes none; the handover's ``--verify`` judges every governed
+object with the client's pairs.
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ from typing import Any
 
 from tools.databricks.converge_campaign_treatment_access import _object_presence
 from tools.databricks.prestop_refusals import OWNER_POLICY, PrestopRefusal
+from tools.databricks.uc_interim_owner_pairs import InterimOwnerPairs
 from tools.databricks.uc_owner_policy import (
     METASTORE_OWNER_ENV,
     ApprovedOwnerPolicy,
@@ -91,6 +98,7 @@ def owner_policy_refusals(
     app_groups: frozenset[str],
     metastore_owner: str,
     account_factory: Callable[[], Any] = account_client_from_env,
+    interim_pairs: InterimOwnerPairs | None = None,
 ) -> tuple[list[PrestopRefusal], list[str]]:
     """Refuse every governed object whose owner the post-stop policy would refuse."""
 
@@ -105,6 +113,7 @@ def owner_policy_refusals(
             configured_principals=set(approved_owner_principals),
             account_factory=account_factory,
             group_membership_probe=probe,
+            interim_pairs=interim_pairs,
         )
         metastore_policy = MetastoreOwnerPolicy(
             workspace=workspace,

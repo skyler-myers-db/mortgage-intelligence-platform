@@ -480,3 +480,33 @@ def test_secret_fields_never_appear_in_repr_or_views() -> None:
         [views.deploy_controls(profile), views.bundle_vars(profile), views.app_payload_env(profile), views.canonical_env(profile)]
     )
     assert secrets and not any(secret in rendered for secret in secrets)
+
+
+# --- the handover's interim owner pairs (M2-PR8) ------------------------------
+
+
+def _interim_pairs(*, full_name: str = "mip.silver.parcel_features", days: int = 7) -> str:
+    expires_at = datetime.fromordinal(datetime.now(UTC).date().toordinal() + days).date().isoformat()
+    return json.dumps([{"full_name": full_name, "owner": "pipeline-owner@example.com", "expires_at": expires_at}])
+
+
+def test_interim_owner_pairs_resolve_within_fourteen_days_in_the_governed_catalog() -> None:
+    profile = _profile(demo_profile(MIP_UC_INTERIM_OWNER_PAIRS_JSON=_interim_pairs()))
+    assert [pair.full_name for pair in profile.interim_owner_pairs] == ["mip.silver.parcel_features"]
+    # Unset, the field adds nothing to the canonical env, so the profile digest is unchanged.
+    assert "MIP_UC_INTERIM_OWNER_PAIRS_JSON" not in views.canonical_env(_profile(demo_profile()))
+
+
+def test_an_interim_owner_pair_outside_the_governed_catalog_or_beyond_fourteen_days_refuses() -> None:
+    field = "MIP_UC_INTERIM_OWNER_PAIRS_JSON"
+    _assert_refused(
+        demo_profile(**{field: _interim_pairs(full_name="other_catalog.silver.parcel_features")}),
+        field,
+        "pair 0 must name an object of MIP_DEFAULT_CATALOG",
+    )
+    _assert_refused(demo_profile(**{field: _interim_pairs(days=30)}), field, "at most 14 days ahead")
+    _assert_refused(demo_profile(**{field: "{}"}), field, "JSON list")
+    lines = _assert_refused(
+        demo_profile(**{field: _interim_pairs(full_name="mip.silver")}), field, "catalog.schema.name"
+    )
+    assert not any("pipeline-owner@example.com" in line for line in lines)

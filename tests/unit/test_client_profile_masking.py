@@ -74,6 +74,9 @@ def test_every_json_leaf_path_has_a_class() -> None:
         "MIP_IDENTITY_IDS_JSON": json.loads(demo_profile()["MIP_IDENTITY_IDS_JSON"]),
         "MIP_LENDER_IDENTITY_JSON": {**LENDER_IDENTITY, "mark": LENDER_MARK},
         "MIP_ACCEPTED_EXPOSURE_JSON": EXPOSURE,
+        "MIP_UC_INTERIM_OWNER_PAIRS_JSON": [
+            {"full_name": "mip.silver.parcel_features", "owner": "pipeline-owner@example.com", "expires_at": "2026-11-10"}
+        ],
     }
     for name, sample in samples.items():
         paths = {path for path, _ in views.iter_leaves(sample)}

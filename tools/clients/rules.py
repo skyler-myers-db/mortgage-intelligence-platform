@@ -285,6 +285,34 @@ def exposure_refusals(profile: ClientProfile) -> list[str]:
     return []
 
 
+def interim_pair_refusals(profile: ClientProfile) -> list[str]:
+    """The handover's interim owner pairs (M2-PR8): the governed catalog, 14 days at most.
+
+    Each pair names a pipeline dataset of the governed catalog. The same
+    ``build_pairs`` the owner policy reads them with refuses a repeated object
+    or an expiry more than 14 days ahead, at resolve as at every use.
+    """
+
+    entries = profile.interim_owner_pairs
+    if not entries or any(is_placeholder(text) for text in _strings(entries)):
+        return []
+    from datetime import UTC, datetime
+
+    from tools.databricks.uc_interim_owner_pairs import InterimPairRefusal, build_pairs
+
+    name = profile.env_name("interim_owner_pairs")
+    lines = [
+        f"{name}: pair {index} must name an object of MIP_DEFAULT_CATALOG"
+        for index, entry in enumerate(entries)
+        if _real(profile.default_catalog) and entry.full_name.split(".", 1)[0] != profile.default_catalog
+    ]
+    try:
+        build_pairs(entries, now=datetime.now(UTC))
+    except InterimPairRefusal as exc:
+        lines += [f"{name}: {line}" for line in exc.lines]
+    return lines
+
+
 def cross_field_refusals(profile: ClientProfile, *, allow_placeholders: bool) -> list[str]:
     lines = [] if allow_placeholders else placeholder_refusals(profile)
     for rule in (
@@ -295,6 +323,7 @@ def cross_field_refusals(profile: ClientProfile, *, allow_placeholders: bool) ->
         reserved_identity_refusals,
         adoption_refusals,
         exposure_refusals,
+        interim_pair_refusals,
     ):
         lines += rule(profile)
     return lines
