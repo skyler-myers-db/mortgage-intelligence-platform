@@ -83,8 +83,10 @@ def test_the_public_summary_has_a_closed_set_of_keys() -> None:
         "refusals",
         "deferred",
         "app_acl",
+        "adopt",
     }
     assert public["app_acl"] is None, "no preview unless the gate was given the identities"
+    assert public["adopt"] is None, "adopt mode only (M2-PR6)"
     assert public["verdict"] == "passed" and public["app"] == {
         "resource": "apps.mip_app",
         "bound": True,
