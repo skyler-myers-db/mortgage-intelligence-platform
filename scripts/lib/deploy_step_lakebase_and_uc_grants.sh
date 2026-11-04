@@ -77,15 +77,24 @@ apply_uc_grant() {
 # functions. Both it and the gold refresh pass through the same reconciliation
 # boundary so grants remain proven after publication and any future job-graph
 # regression fails closed before either production identity can continue.
+# The consumers are the tier's (m2m_identity_contract.required_roles): the App,
+# plus the agent runtime and the Supervisor proxy in the agentic tier only.
 reconcile_reviewed_function_execute_grants() {
   local _function_name
   local _principal
   local _grant_failed=0
   local _postflight_failed=0
-  for _principal in \
-    "$APP_SP_CLIENT_ID" \
-    "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
-    "$DATABRICKS_AGENT_PROXY_CLIENT_ID"; do
+  local -a _consumers=("$APP_SP_CLIENT_ID")
+  local -a _verify_args=(--app-application-id "$APP_SP_CLIENT_ID" --agentic-tier off)
+  if tier_is_agentic; then
+    _consumers+=("$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" "$DATABRICKS_AGENT_PROXY_CLIENT_ID")
+    _verify_args=(
+      --app-application-id "$APP_SP_CLIENT_ID"
+      --agent-runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
+      --agent-proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID"
+    )
+  fi
+  for _principal in "${_consumers[@]}"; do
     for _function_name in fn_build_cohort fn_segment_counts fn_lead_queue_url; do
       if ! apply_uc_grant \
         "GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.${_function_name} TO \`${_principal}\`"; then
@@ -95,9 +104,7 @@ reconcile_reviewed_function_execute_grants() {
   done
   if ! run "$PYTHON" -m tools.databricks.verify_reviewed_function_execute_grants \
     --catalog "$_GRANTS_CATALOG" \
-    --app-application-id "$APP_SP_CLIENT_ID" \
-    --agent-runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
-    --agent-proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID"; then
+    "${_verify_args[@]}"; then
     _postflight_failed=1
   fi
   if [[ "$_grant_failed" -ne 0 || "$_postflight_failed" -ne 0 ]]; then
@@ -180,12 +187,13 @@ step "keep treatment writes quiesced until the green App is proven and captured"
 # GRANTS.md remains the audit-readable matrix; Lakebase role grants are
 # applied by jobs/lakebase_migrate.py in step 4b.
 step "apply UC grants to the app service principal (idempotent)"
-if [[ "$DRY_RUN" -eq 0 ]]; then
+if [[ "$DRY_RUN" -eq 0 ]] && tier_is_agentic; then
   # These two schema-creation privileges exist only while the dedicated runtime
   # creates/updates its exact registered model and Gateway inference table.
   # The EXIT compensation revokes them on both success and failure.
   AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=1
 fi
+# The App's grants, in every tier.
 while IFS= read -r _grant_stmt; do
   [[ -z "$_grant_stmt" ]] && continue
   apply_uc_grant "$_grant_stmt"
@@ -199,6 +207,14 @@ GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_segment_counts TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_lead_queue_url TO \`${APP_SP_CLIENT_ID}\`
+GRANTS_EOF
+# The agent runtime's and the Supervisor proxy's, in the agentic tier only
+# (m2m_identity_contract.required_roles): the core tier deploys neither.
+if tier_is_agentic; then
+  while IFS= read -r _grant_stmt; do
+    [[ -z "$_grant_stmt" ]] && continue
+    apply_uc_grant "$_grant_stmt"
+  done <<GRANTS_EOF
 GRANT USE CATALOG ON CATALOG ${_GRANTS_CATALOG} TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
 GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.gold TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
@@ -213,6 +229,7 @@ GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit TO \`${DATABRICKS_AGENT_RUNT
 GRANT CREATE MODEL ON SCHEMA ${_GRANTS_CATALOG}.audit TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
 GRANT CREATE TABLE ON SCHEMA ${_GRANTS_CATALOG}.audit TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
 GRANTS_EOF
+fi
 
 _treatment_properties_stmt="SHOW TBLPROPERTIES ${_GRANTS_CATALOG}.audit.campaign_treatment_snapshot"
 if [[ "$DRY_RUN" -eq 1 ]]; then

@@ -804,10 +804,15 @@ if [[ -z "$_GATEWAY_MODEL_SIGNING_KEY_RESOLVED" ]]; then
     dotenv_value MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY
   )"
 fi
+# The core tier (MIP_AGENTIC_TIER=off) registers no Gateway model, so it needs
+# no model-attestation key (plan §4.15); the agentic tier still requires it.
 if [[ -z "$_GATEWAY_MODEL_SIGNING_KEY_RESOLVED" ]]; then
-  if [[ "$APP_RUNTIME_ENV" != "local" && "$APP_RUNTIME_ENV" != "test" ]]; then
+  if tier_is_agentic && [[ "$APP_RUNTIME_ENV" != "local" && "$APP_RUNTIME_ENV" != "test" ]]; then
     echo "${RED}[deploy] ERROR: MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY is required for target '$TARGET' (APP_ENV=${APP_RUNTIME_ENV}).${RST}" >&2
     exit 1
+  fi
+  if ! tier_is_agentic; then
+    echo "  Gateway model attestation: not used by the core tier"
   fi
 else
   # shellcheck disable=SC2031

@@ -123,12 +123,17 @@ _PIPELINE_NAMESPACE_ARGS=(
   --storage-root-env MIP_UC_CATALOG_STORAGE_ROOT
   --install-key "$CLIENT_KEY"
 )
+# The tier's M2M identities (M2-PR3): the core tier has no verifier or runtime.
 # shellcheck disable=SC2031  # Parent-shell M2M ids survive bounded subshells.
-for _FORBIDDEN_OWNER in \
-  "$DATABRICKS_CLIENT_ID" "$DATABRICKS_OPERATOR2_CLIENT_ID" \
-  "$DATABRICKS_ADMIN_CLIENT_ID" "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
-  "$DATABRICKS_VERIFIER_CLIENT_ID" \
-  "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"; do
+_FORBIDDEN_OWNERS=(
+  "$DATABRICKS_CLIENT_ID" "$DATABRICKS_OPERATOR2_CLIENT_ID"
+  "$DATABRICKS_ADMIN_CLIENT_ID" "$DATABRICKS_RELEASE_PROBE_CLIENT_ID"
+)
+if tier_is_agentic; then
+  # shellcheck disable=SC2031  # Parent-shell M2M ids survive bounded subshells.
+  _FORBIDDEN_OWNERS+=("$DATABRICKS_VERIFIER_CLIENT_ID" "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID")
+fi
+for _FORBIDDEN_OWNER in "${_FORBIDDEN_OWNERS[@]}"; do
   _PIPELINE_NAMESPACE_ARGS+=(--forbidden-owner-principal "$_FORBIDDEN_OWNER")
 done
 if [[ -n "${_EXISTING_APP_SP_CLIENT_ID:-}" ]]; then
@@ -393,14 +398,17 @@ run_with_lakebase_bootstrap_authority \
   --app-name "$_GRANTS_APP_NAME" \
   --stop-app-for-mutation \
   --repair-legacy-replication
-step "converge verifier Lakebase OAuth role to exact LOGIN-only profile"
-run_with_lakebase_bootstrap_authority \
-  "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
-  --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
-  --lakebase-database "$LAKEBASE_DATABASE" \
-  --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
-  --role-contract verifier \
-  --repair-legacy-replication
+# The core tier has no verifier, so no verifier Lakebase role (plan §4.15).
+if tier_is_agentic; then
+  step "converge verifier Lakebase OAuth role to exact LOGIN-only profile"
+  run_with_lakebase_bootstrap_authority \
+    "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --lakebase-database "$LAKEBASE_DATABASE" \
+    --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+    --role-contract verifier \
+    --repair-legacy-replication
+fi
 # Credentials-only bootstrap intentionally cannot touch an App that does not
 # exist yet. As soon as bundle apply has created/resolved the App, converge the
 # three App-facing identities by their reserved role and immutable client ID.
@@ -435,24 +443,28 @@ run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
   --app-name "$_GRANTS_APP_NAME" \
   --no-grant-can-use \
   --no-mint-secret
-# The first migration grants the dedicated verifier's proof-ledger role. On a
-# fresh workspace that Lakebase OAuth role does not exist merely because the
-# workspace service principal exists, so create/reconcile it before the job's
-# grant postflight. Endpoint and warehouse grants stay in the later agentic
-# convergence step, after those concrete resources are known.
-step "bootstrap dedicated AI Gateway verifier Lakebase OAuth role"
-run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
-  --identity-role verifier \
-  --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
-  --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
-  --no-mint-secret
-step "re-audit dedicated agent-runtime isolation before resource ownership"
-run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
-  --identity-role agent_runtime \
-  --expected-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
-  --no-mint-secret
-step "re-audit dedicated Supervisor proxy-caller identity isolation"
-run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
-  --identity-role agent_proxy \
-  --expected-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
-  --no-mint-secret
+# The verifier, the agent runtime and the Supervisor proxy exist only in the
+# agentic tier (plan §4.15); the core tier audits none of them.
+if tier_is_agentic; then
+  # The first migration grants the dedicated verifier's proof-ledger role. On a
+  # fresh workspace that Lakebase OAuth role does not exist merely because the
+  # workspace service principal exists, so create/reconcile it before the job's
+  # grant postflight. Endpoint and warehouse grants stay in the later agentic
+  # convergence step, after those concrete resources are known.
+  step "bootstrap dedicated AI Gateway verifier Lakebase OAuth role"
+  run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
+    --identity-role verifier \
+    --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --no-mint-secret
+  step "re-audit dedicated agent-runtime isolation before resource ownership"
+  run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
+    --identity-role agent_runtime \
+    --expected-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --no-mint-secret
+  step "re-audit dedicated Supervisor proxy-caller identity isolation"
+  run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
+    --identity-role agent_proxy \
+    --expected-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+    --no-mint-secret
+fi

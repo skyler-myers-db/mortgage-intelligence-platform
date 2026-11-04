@@ -1839,6 +1839,48 @@ restore, prior app snapshots, source-regression rollback via
 and governed-action HMAC key rotation, use
 [`docs/disaster-recovery.md`](disaster-recovery.md).
 
+### The agentic tier (`MIP_AGENTIC_TIER`, M2-PR3)
+
+The client profile's `MIP_AGENTIC_TIER` decides which reserved M2M identities a
+release uses (plan §4.15). `resolve_client_profile`, the first step of
+`./scripts/deploy.sh`, reads it from the client-target view together with its
+identity contract (`tools/databricks/m2m_identity_contract.py`): the client-id
+name of the signed lease's writer and of every role the tier deploys with. A
+view with no tier, another value than `off` or `on`, or a contract that
+disagrees with its tier exits 2 before any other step; no step has a default
+tier.
+
+| Site | `on` (agentic, client #1 today) | `off` (core) |
+|---|---|---|
+| identities | normal, operator2, admin, release probe, verifier, agent runtime, Supervisor proxy | normal, operator2, admin, release probe |
+| per-run credential checks | all seven | the four core ones |
+| model-attestation key | required | not used |
+| signed lease writer (`lease_writer`) | agent runtime | release probe |
+| pre-stop probes | `--runtime-application-id` and `--verifier-application-id`; Supervisor and Genie clauses for App, runtime and verifier | `--agentic-tier off`, neither id; no Supervisor clause; the Genie clause audits the App (on a first install, its future service principal as a `users` member) |
+| runtime UC audit, verifier Lakebase role, runtime/verifier/proxy isolation audits | run | skipped |
+| Lakebase bootstrap control identity (`run_with_lakebase_bootstrap_authority`) | the agent runtime, required up front | none; the converger refuses only a path that would create a role |
+| UC grants and the reviewed-function reconcile | App, runtime and proxy | App only (`verify_reviewed_function_execute_grants --agentic-tier off`) |
+| migrate job verifier flag (`var.require_ai_gateway_verifier`) | the bundle default `--require-ai-gateway-verifier` | `--ai-gateway-verifier-absent`, no verifier bound |
+| App payload | unchanged | `MIP_AGENT_ORCHESTRATOR=0`, `MIP_AI_GATEWAY=0`; an operator value turning either on refuses |
+| capability preflight (`tools/clients/capabilities.py`, in the live checks) | Apps, Lakebase, Genie, SQL warehouses, Model Serving, Supervisor agents, MLflow | Apps, Lakebase, Genie, SQL warehouses |
+
+The agentic tier's plan, bundle variables and App payload are byte-identical
+to those before the tier was read (the PR's artifact-hash proof;
+`tests/unit/test_agentic_tier_dry_run.py` pins its tier-aware lines). The
+emergency recipe builds the agentic payload by default and keeps its 32 env
+names.
+
+**The core tier stops at the activation boundary.** It is tier-aware through
+the Lakebase migration and the grant and reconcile steps
+(`tests/unit/test_core_tier_release_sandbox.py` runs a real non-dry-run release
+there with the four core identities). Publish, activation, signed capture, the
+signed-blue restore and the agentic provisioning, cutover and evaluation still
+need the agentic identities, so a core release exits 2 at the top of step 5,
+before anything is published or activated; a first install's App is removed by
+the first-install compensation. The live checks refuse a core release over an
+App that already exists before the lease, while it still serves. Building the
+core activation path is a follow-up.
+
 ### PII salt (write-once)
 
 The silver SQL and the Lakeflow feature pipeline hash PII with
