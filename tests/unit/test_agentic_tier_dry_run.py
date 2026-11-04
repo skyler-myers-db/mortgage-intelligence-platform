@@ -47,10 +47,14 @@ AGENTIC_LINES = (
     "--agent-proxy-application-id ",
 )
 CORE_ONLY = ("agentic tier: off", "core tier", "--agentic-tier", "not used by the core tier")
+# Profile names the sandbox does not strip (deploy_sandbox.INHERITED_PREFIXES):
+# a shell value wins over .env.local, so an ambient one would change the plan.
+_AMBIENT = ("LAKEBASE_", "APP_ENV")
 
 
 def _plan(tmp_path: Path, profile: dict[str, str] | None = None) -> tuple[int, str, str]:
     checkout, env, _log = sandbox(tmp_path)
+    env = {name: value for name, value in env.items() if not name.startswith(_AMBIENT)}
     if profile is not None:
         resources = {"DATABRICKS_WAREHOUSE_ID": "warehouse-1"}
         (checkout / ".env.local").write_text(env_file_text({**profile, **resources}), encoding="utf-8")
@@ -64,7 +68,8 @@ def test_the_agentic_tier_plans_every_site_as_before(tmp_path: Path) -> None:
     assert code == 0, out[-3000:] + err[-3000:]
     lines = out.splitlines()
     for expected in AGENTIC_LINES:
-        assert any(expected in line for line in lines), expected
+        near = [line for line in lines if expected.split(" --", 1)[0].strip() in line]
+        assert any(expected in line for line in lines), (expected, near[:3])
     for marker in CORE_ONLY:
         assert marker not in out, marker
 

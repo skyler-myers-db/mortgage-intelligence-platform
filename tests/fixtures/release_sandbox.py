@@ -103,7 +103,9 @@ def release(
     estate["deployer"] = DEPLOYER
     estate_path = write_estate(tmp_path / "estate.json", estate)
     state_path, py_log = tmp_path / "sandbox-state.json", tmp_path / "python.log"
-    run_env = {name: value for name, value in base_env.items() if not name.startswith(INHERITED_PREFIXES)}
+    # Also the profile names a shell value would set over .env.local.
+    stripped = (*INHERITED_PREFIXES, "LAKEBASE_", "APP_ENV")
+    run_env = {name: value for name, value in base_env.items() if not name.startswith(stripped)}
     run_env.update(
         {
             "PATH": base_env["PATH"],
