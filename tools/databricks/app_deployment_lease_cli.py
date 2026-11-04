@@ -92,15 +92,17 @@ def freeze_action(lease: Any, workspace: Any, args: Any, parser: Any) -> int:
     holder = lease._holder(workspace)
     try:
         if args.action == "freeze":
-            if args.until is None or not args.writer_application_id:
-                parser.error("freeze requires --until and --writer-application-id")
+            if args.until is None:
+                parser.error("freeze requires --until")
             marker_id = freezer.freeze(
                 workspace,
                 app_name=args.app_name,
                 until=args.until,
                 holder=holder,
-                ensure_root=lambda: lease._ensure_protected_root(
-                    workspace, holder=holder, writer_application_id=args.writer_application_id
+                # Never the lease's own _ensure_protected_root: it would make this
+                # caller the root's only manager and break a run holding the lease.
+                ensure_root=lambda: freezer.prepare_root(
+                    workspace, app_name=args.app_name, lease=lease
                 ),
                 environ=dict(os.environ),
             )

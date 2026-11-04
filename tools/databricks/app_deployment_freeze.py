@@ -1,7 +1,6 @@
 """Freeze the emergency publisher with a signed marker (M2-PR7, attack O8).
 
-  python -m tools.databricks.app_deployment_lease freeze --app-name N \\
-      --until <epoch> --writer-application-id W
+  python -m tools.databricks.app_deployment_lease freeze --app-name N --until <epoch>
   python -m tools.databricks.app_deployment_lease thaw --app-name N --marker-id ID
 
 Cutover step 1 freezes peer-session piecewise deploys. A message to the peers
@@ -14,7 +13,12 @@ with the deploy's proof-signing key, verified by the lease's own key registry:
 * ``freeze`` writes ``<app>.freeze-<marker id>.json`` create-only: a new
   marker id, the freezing identity, ``created_at`` and ``until`` (epoch
   seconds, in the future and at most MAX_FREEZE_SECONDS ahead). It refuses
-  while a marker for the App is still frozen.
+  while a marker for the App is still frozen. It never sets a permission
+  (``prepare_root``): the owner runs it from their own shell, and converging
+  the root's ACL for them would remove the deployer's MANAGE and break a run
+  that holds the lease. A missing root is created bare (the first lease
+  acquisition converges it); an existing one must be exactly protected for
+  the App lease's own holder and writer, checked read-only.
 * ``thaw`` writes ``<app>.freeze-<marker id>.thaw.json`` create-only, bound
   to the freeze marker's sha256. Nothing is ever overwritten or deleted.
 
@@ -36,7 +40,16 @@ While frozen, publish refuses with exit 2 unless one of:
 * the held signed lease (``--held-lease-app-name`` and ``--held-lease-id``,
   which scripts/deploy.sh passes): the governed run under the lease is the
   coordinated path the freeze exists to protect, and only the deploy's
-  signing authority can take that lease.
+  signing authority can take that lease. It exempts that App's own markers
+  only; every other App's marker is still judged, so a lease taken on a decoy
+  App lifts no freeze.
+
+Who can publish while no marker is frozen: the publisher lists the lease root
+on every publish, so once a governed lease has created it (its holder
+manages it, its writer reads it, admins manage it) a publishing identity
+that cannot list it refuses (``freeze_unreadable``) even with no marker; and
+since markers are never deleted, every later publish needs the deploy's
+public verify key exported to read an expired or thawed marker as such.
 """
 
 from __future__ import annotations
@@ -246,6 +259,32 @@ def judge_markers(workspace: Any, *, now: float | None = None) -> list[Marker]:
     return markers
 
 
+def prepare_root(workspace: Any, *, app_name: str, lease: Any) -> None:
+    """The lease root for a marker, without ever setting a permission (see the module doc)."""
+
+    try:
+        workspace.workspace.get_status(LEASE_ROOT)
+    except NotFound:
+        workspace.workspace.mkdirs(LEASE_ROOT)  # bare: the first lease acquisition converges it
+        return
+    try:
+        record = lease._download(workspace, app_name=_app(app_name))
+        if record is None:
+            return  # no lease for this App yet: its first acquisition converges the root
+        lease._assert_protected_root(
+            workspace,
+            holder=str(record.get("holder") or "").strip(),
+            writer_application_id=str(record.get("writer_application_id") or "").strip(),
+            object_id=lease._root_object_id(workspace),
+        )
+    except RuntimeError as exc:
+        raise FreezeRefused(
+            "freeze_root_unprotected",
+            f"the lease root is not exactly protected for the App's lease holder ({exc}); "
+            "nothing was written and no permission was changed",
+        ) from exc
+
+
 def override_plan(*, marker_id: str, release_path: str) -> dict[str, str]:
     """The canonical plan an ``override_freeze`` ack covers: one marker, one release folder."""
 
@@ -259,26 +298,33 @@ def assert_publish_allowed(
     override_marker_id: str | None = None,
     override_ack: str | None = None,
     held_lease: Callable[[], None] | None = None,
+    held_lease_app_name: str | None = None,
     now: float | None = None,
 ) -> list[str]:
-    """Refuse a publish while frozen; return notes. A proven held lease is exempt."""
+    """Refuse a publish while frozen; return notes. A proven held lease exempts its own App."""
 
+    exempt = None
     if held_lease is not None:
         try:
+            exempt = _app(held_lease_app_name or "")
             held_lease()
         except Exception as exc:  # noqa: BLE001 - an unproven lease exempts nothing
             raise FreezeRefused(
                 "held_lease_unproven", f"the held signed lease is not proven ({type(exc).__name__})"
             ) from exc
-        return ["the publish runs under the held signed lease; a freeze marker does not apply"]
     try:
         markers = judge_markers(workspace, now=now)
     except Exception as exc:  # noqa: BLE001 - a lease root that cannot be listed may hold a marker
         raise FreezeRefused(
             "freeze_unreadable", f"the freeze markers could not be listed ({type(exc).__name__})"
         ) from exc
-    frozen = [marker for marker in markers if marker.frozen]
+    frozen = [marker for marker in markers if marker.frozen and marker.app_name != exempt]
     notes = [f"freeze marker {marker.name}: {marker.reason}" for marker in markers]
+    if exempt is not None:
+        notes.append(
+            f"the publish runs under {exempt}'s held signed lease: that App's freeze markers do "
+            "not apply, every other App's still do"
+        )
     if override_marker_id:
         if override_marker_id not in {marker.marker_id for marker in frozen}:
             raise FreezeRefused("override_unknown", "--override-freeze names no frozen marker")

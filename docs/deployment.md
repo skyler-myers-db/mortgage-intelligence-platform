@@ -520,10 +520,14 @@ databricks apps deploy <app-name> --json @<payload> -p <profile>
 
 **The freeze marker (M2-PR7).** During the cutover the owner freezes this
 recipe with `python -m tools.databricks.app_deployment_lease freeze --app-name
-<app-name> --until <epoch> --writer-application-id <lease writer>` (with the
-deploy's proof-signing key exported), and lifts it with `thaw --marker-id
-<id>`; both write a signed, create-only marker in the lease root and nothing is
-deleted. `app_release_source publish` reads every marker after its local checks
+<app-name> --until <epoch>` (with the deploy's proof-signing key exported),
+and lifts it with `thaw --marker-id <id>`; both write a signed, create-only
+marker in the lease root and nothing is deleted. Neither ever sets a
+permission: a missing lease root is created bare (the first governed lease
+converges its ACL), and an existing one must be exactly protected for the
+App lease's own holder and writer, checked read-only
+(`freeze_root_unprotected` otherwise), so a freeze from the owner's shell
+never takes the root's MANAGE from the deployer. `app_release_source publish` reads every marker after its local checks
 and before any upload, and refuses with exit 2 while one is frozen. A marker
 reads as thawed or expired only when its signature verifies, so a shell
 without the deploy's public verify key (`MIP_AI_GATEWAY_PROOF_VERIFY_KEY`)
@@ -532,11 +536,18 @@ publish one release folder while frozen anyway, add `--override-freeze
 <marker id> --override-freeze-ack <sha256>`, the `override_freeze` digest the
 refusal prints for that marker and that exact folder; it lifts no other
 marker and carries to no other folder. `./scripts/deploy.sh`'s own publish
-passes `--held-lease-app-name` and `--held-lease-id` and is not refused: the
-governed run under the signed lease is the coordinated path the freeze
-protects. No marker, or a lease root that does not exist, changes nothing; a
-lease root that cannot be listed refuses. The freeze blocks only this
-publisher, not an old session's own deploy driver.
+passes `--held-lease-app-name` and `--held-lease-id`, and its proven lease
+exempts that App's own markers only: the governed run under the signed lease
+is the coordinated path the freeze protects, and every other App's marker is
+still judged, so a lease taken on a decoy App lifts nothing. A lease root that
+does not exist changes nothing. Once a governed lease has created it, though,
+the publisher lists it on every publish, so the identity that runs this
+recipe must be able to list it (a workspace admin can: admins manage it), or
+the publish refuses (`freeze_unreadable`) even with no marker; and since
+markers are never deleted, after any freeze every later publish needs
+`MIP_AI_GATEWAY_PROOF_VERIFY_KEY` exported to read an expired or thawed marker
+as such. The freeze blocks only this publisher, not an old session's own
+deploy driver.
 
 Publish, converge and deploy are the three commands that call the workspace,
 and each names the live workspace's CLI profile, the same `<profile>` in all

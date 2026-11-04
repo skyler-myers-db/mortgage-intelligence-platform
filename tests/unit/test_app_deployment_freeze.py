@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from tests.fixtures import rollback_records as rr
-from tests.fixtures.fake_workspace import FakeWorkspaceClient
+from tests.fixtures.fake_workspace import FakeTree, FakeWorkspaceClient
 from tools.databricks import app_deployment_freeze as freezer
 from tools.databricks import app_release_contract as contract
 from tools.databricks import app_release_source as source
@@ -164,14 +165,136 @@ def test_the_held_signed_lease_is_the_coordinated_path_and_is_proven() -> None:
     client = FakeWorkspaceClient()
     _freeze(client)
 
-    assert _allowed(client, held_lease=lambda: None)[0].startswith(
-        "the publish runs under the held signed lease"
-    )
+    notes = _allowed(client, held_lease=lambda: None, held_lease_app_name=rr.APP_NAME)
+    assert notes[-1].startswith(f"the publish runs under {rr.APP_NAME}'s held signed lease")
 
     def lost() -> None:
         raise RuntimeError("App deployment lease was released")
 
-    assert _code(client, held_lease=lost) == "held_lease_unproven"
+    assert _code(client, held_lease=lost, held_lease_app_name=rr.APP_NAME) == "held_lease_unproven"
+    assert _code(client, held_lease=lambda: None) == "held_lease_unproven", "it names its App"
+
+
+def test_a_held_lease_exempts_its_own_apps_markers_only() -> None:
+    """A lease taken on a decoy App lifts no freeze, with no ack and no audited thaw."""
+
+    client = FakeWorkspaceClient()
+    _freeze(client)
+
+    assert _code(client, held_lease=lambda: None, held_lease_app_name="decoy-app") == "frozen"
+    other = _freeze(client, app="other-app")
+    assert _code(client, held_lease=lambda: None, held_lease_app_name=rr.APP_NAME) == "frozen"
+    with pytest.raises(freezer.FreezeRefused, match=f"frozen by marker {other} "):
+        _allowed(client, held_lease=lambda: None, held_lease_app_name=rr.APP_NAME)
+
+
+# --- freeze never converges the lease root's ACL -----------------------------------------
+
+
+class _AclTree(FakeTree):
+    """The workspace tree plus the directory ACL API, exactly as the lease uses it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.acl: list[SimpleNamespace] = []
+        self.set_permissions_calls = 0
+
+    def get_status(self, path: str) -> SimpleNamespace:
+        status = super().get_status(path)
+        status.object_id = "lease-root-object"
+        return status
+
+    def set_permissions(
+        self, _kind: str, _object_id: str, *, access_control_list: list[Any]
+    ) -> None:
+        self.set_permissions_calls += 1
+        self.acl = [
+            SimpleNamespace(
+                user_name=getattr(item, "user_name", None),
+                service_principal_name=getattr(item, "service_principal_name", None),
+                group_name=None,
+                all_permissions=[
+                    SimpleNamespace(permission_level=str(item.permission_level).split(".")[-1])
+                ],
+            )
+            for item in access_control_list
+        ]
+
+    def get_permissions(self, _kind: str, _object_id: str) -> SimpleNamespace:
+        return SimpleNamespace(access_control_list=list(self.acl))
+
+
+def _acl_workspace(caller: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        workspace=_AclTree(),
+        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name=caller)),
+        service_principals=SimpleNamespace(
+            list=lambda **_kw: [SimpleNamespace(application_id="deployer-app-id")]
+        ),
+    )
+
+
+def _freeze_cli(workspace: Any, monkeypatch: pytest.MonkeyPatch) -> int:
+    import argparse
+    import time
+
+    from tools.databricks import app_deployment_lease as lease
+    from tools.databricks import app_deployment_lease_cli as lease_cli
+
+    monkeypatch.setattr(
+        lease,
+        "_download",
+        lambda *_a, **_kw: {"holder": "deployer-app-id", "writer_application_id": "writer-id"},
+    )
+    args = argparse.Namespace(
+        action="freeze",
+        app_name=rr.APP_NAME,
+        until=int(time.time()) + 3600,
+        writer_application_id="writer-id",
+        marker_id=None,
+    )
+    return lease_cli.freeze_action(lease, workspace, args, argparse.ArgumentParser())
+
+
+def test_freeze_from_the_owners_shell_never_rewrites_the_lease_roots_acl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.databricks import app_deployment_lease as lease
+
+    workspace = _acl_workspace("owner@lender.example")
+    workspace.workspace.mkdirs(freezer.LEASE_ROOT)
+    lease._ensure_protected_root(
+        workspace, holder="deployer-app-id", writer_application_id="writer-id"
+    )
+    governed = list(workspace.workspace.acl)
+
+    assert _freeze_cli(workspace, monkeypatch) == 0
+    assert workspace.workspace.set_permissions_calls == 1, "only the governed lease's own"
+    assert workspace.workspace.acl == governed
+    lease._assert_protected_root(
+        workspace,
+        holder="deployer-app-id",
+        writer_application_id="writer-id",
+        object_id="lease-root-object",
+    )
+    assert [m.app_name for m in freezer.judge_markers(workspace)] == [rr.APP_NAME]
+
+
+def test_freeze_creates_a_missing_root_bare_and_refuses_an_unprotected_one(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tools.databricks import app_deployment_lease as lease
+
+    bare = _acl_workspace("owner@lender.example")
+    assert _freeze_cli(bare, monkeypatch) == 0
+    assert bare.workspace.set_permissions_calls == 0 and bare.workspace.acl == []
+
+    drifted = _acl_workspace("owner@lender.example")
+    drifted.workspace.mkdirs(freezer.LEASE_ROOT)
+    lease._ensure_protected_root(drifted, holder="owner@lender.example", writer_application_id="w")
+    assert _freeze_cli(drifted, monkeypatch) == 2
+    assert "REFUSED freeze_root_unprotected" in capsys.readouterr().err
+    assert freezer.judge_markers(drifted) == [], "nothing was written"
 
 
 def test_a_lease_root_that_cannot_be_listed_refuses() -> None:
@@ -291,12 +414,18 @@ def test_the_lease_cli_offers_freeze_and_thaw() -> None:
 def test_the_emergency_recipe_says_the_publisher_obeys_the_freeze() -> None:
     docs = (REPO / "docs" / "deployment.md").read_text(encoding="utf-8")
     recipe = docs[docs.index("### The emergency recipe, command by command") :]
-    recipe = recipe[: recipe.index("\n## ")]
+    recipe = " ".join(recipe[: recipe.index("\n## ")].split())
 
     for phrase in (
         "freeze marker",
         "--override-freeze",
         "override_freeze",
         "MIP_AI_GATEWAY_PROOF_VERIFY_KEY",
+        # The full live effect: the root must be listable once it exists, and the
+        # verify key is needed after any freeze, even with no marker frozen.
+        "the publish refuses (`freeze_unreadable`) even with no marker",
+        "after any freeze every later publish needs `MIP_AI_GATEWAY_PROOF_VERIFY_KEY`",
+        "exempts that App's own markers only",
+        "Neither ever sets a permission",
     ):
         assert phrase in recipe, phrase

@@ -434,6 +434,7 @@ def _freeze_gate(workspace: Any, args: argparse.Namespace, plan: PublishPlan) ->
         return freezer.assert_publish_allowed(
             workspace, release_path=plan.release_path, override_marker_id=args.override_freeze,
             override_ack=args.override_freeze_ack, held_lease=held,
+            held_lease_app_name=args.held_lease_app_name,
         )
     except freezer.FreezeRefused as exc:
         raise ReleaseContractError(f"{exc.code}: {exc}") from exc
