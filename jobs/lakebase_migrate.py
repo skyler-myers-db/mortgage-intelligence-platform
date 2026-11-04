@@ -170,6 +170,9 @@ from jobs.lakebase_migration_integrity import (
 from jobs.lakebase_migration_integrity import (
     _split_schema_sql as _split_schema_sql,
 )
+from jobs.lakebase_migration_jobs_reader import (  # noqa: E402
+    resolve_jobs_reader_role as _resolve_jobs_reader_role,
+)
 from jobs.lakebase_migration_ledger import (  # noqa: E402
     schema_input_digest_sql as _schema_input_digest_sql,
 )
@@ -250,6 +253,7 @@ def _apply_app_role_grants(
     allow_absent_managed_event_triggers: bool = False,
     allow_absent_provider_schema: bool = False,
     resolved_roles: tuple[str, str | None] | None = None,
+    jobs_reader_role: str | None = None,
 ) -> None:
     """Reconcile grants while preserving facade monkeypatch seams."""
 
@@ -261,6 +265,7 @@ def _apply_app_role_grants(
         allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
         allow_absent_provider_schema=allow_absent_provider_schema,
         resolved_roles=resolved_roles,
+        jobs_reader_role=jobs_reader_role,
         _resolve_app_role_fn=_resolve_app_role,
         _resolve_verifier_role_fn=lambda: _resolve_ai_gateway_verifier_role(
             ai_gateway_verifier_client_id,
@@ -277,6 +282,7 @@ def _preflight_database_roles(
     require_ai_gateway_verifier: bool = False,
     role_wait_timeout_s: float | None = None,
     role_wait_interval_s: float | None = None,
+    jobs_reader_role: str | None = None,
     ai_gateway_verifier_absent: bool = False,
 ) -> tuple[str, str | None]:
     """Resolve and prove exact roles while preserving facade monkeypatch seams.
@@ -290,6 +296,7 @@ def _preflight_database_roles(
         app_name=app_name,
         role_wait_timeout_s=role_wait_timeout_s,
         role_wait_interval_s=role_wait_interval_s,
+        jobs_reader_role=jobs_reader_role,
         _resolve_app_role_fn=_resolve_app_role,
         _resolve_verifier_role_fn=(
             (lambda: None)
@@ -406,6 +413,15 @@ def build_parser() -> argparse.ArgumentParser:
             "schema mutation if a real verifier client ID is bound"
         ),
     )
+    parser.add_argument(
+        "--jobs-reader-client-id",
+        default="",
+        help=(
+            "The non-admin jobs identity's client ID: enables the jobs_reader role "
+            "(SELECT on the lifecycle sync's tables; jobs/lakebase_migration_jobs_reader.py). "
+            "Unset keeps it off."
+        ),
+    )
     return parser
 
 
@@ -422,6 +438,7 @@ def main(
     ai_gateway_verifier_client_id: str | None = None,
     require_ai_gateway_verifier: bool = False,
     mode: str = "apply",
+    jobs_reader_client_id: str | None = None,
     ai_gateway_verifier_absent: bool = False,
 ) -> None:
     verifier_role: str | None
@@ -436,6 +453,9 @@ def main(
                 ai_gateway_verifier_client_id,
                 required=require_ai_gateway_verifier,
             )
+        jobs_reader_role = _resolve_jobs_reader_role(
+            jobs_reader_client_id, distinct_from={"AI Gateway verifier": verifier_role}
+        )
     except Exception:  # noqa: BLE001 -- stable deployment diagnostic; never reflect secrets
         print(
             "[lakebase-migrate] verifier identity preflight failed; verify the dedicated "
@@ -476,6 +496,7 @@ def main(
             ai_gateway_verifier_client_id=verifier_role,
             require_ai_gateway_verifier=require_ai_gateway_verifier,
             ai_gateway_verifier_absent=ai_gateway_verifier_absent,
+            **({"jobs_reader_role": jobs_reader_role} if jobs_reader_role is not None else {}),
         )
     except Exception:  # noqa: BLE001 -- stable deployment diagnostic; never reflect secrets
         print(
@@ -533,7 +554,11 @@ def main(
         sys.exit(2)
 
     try:
-        _apply_app_role_grants(conn_kwargs, resolved_roles=resolved_roles)
+        _apply_app_role_grants(
+            conn_kwargs,
+            resolved_roles=resolved_roles,
+            **({"jobs_reader_role": jobs_reader_role} if jobs_reader_role is not None else {}),
+        )
     except Exception:  # noqa: BLE001 -- stable deployment diagnostic; never reflect secrets
         print(
             "[lakebase-migrate] app-role grants failed; refusing a false-green deploy. "
@@ -558,4 +583,5 @@ if __name__ == "__main__":
         require_ai_gateway_verifier=_args.require_ai_gateway_verifier,
         mode=_args.mode,
         ai_gateway_verifier_absent=_args.ai_gateway_verifier_absent,
+        jobs_reader_client_id=_args.jobs_reader_client_id,
     )
