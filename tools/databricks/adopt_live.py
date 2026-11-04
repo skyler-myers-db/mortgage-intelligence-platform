@@ -27,6 +27,8 @@ and the sha256 of its purpose-named canonical body (tools/databricks/operation_a
 * **unadopt** (purpose ``unadopt``): the slot holds an adopted record (or
   already its tombstone); ``apply`` writes the tombstone version
   (``provenance: retired``). Nothing is deleted: the copy and every field stay.
+  No record retires nothing, so the bind's unadopt recovery (M2-PR6) still
+  runs after an adopt refused past its binds; any other record refuses.
 
 ``apply`` asserts the signed lease, recomputes the plan immediately before the
 first write and refuses on any difference from the acknowledged digest. adopt
@@ -160,8 +162,10 @@ def _record_state(
     version = None if record is None else record.get("version")
     provenance = record.get("provenance") if version == V7_RECORD_VERSION and record else None
     if mode == "unadopt":
-        if provenance in {"adopted", "retired"}:
-            return str(provenance)
+        # No record (an adopt refused after its binds) retires nothing, so the
+        # unbind recovery of M2-PR6 still runs; a captured blue is not adopt's.
+        if record is None or provenance in {"adopted", "retired"}:
+            return "absent" if record is None else str(provenance)
         raise AdoptLiveRefused("record_present", "unadopt retires an adopted record only")
     if mode == "supersede":
         if provenance != "adopted" or sha256_text(str(record["deployment_id"])) != target.supersede:  # type: ignore[index]
@@ -204,17 +208,11 @@ def compute_plan(
     record = _record(workspace, target)
     if mode == "unadopt":
         state = _record_state(mode, record, target, None)
-        assert record is not None
-        return (
-            {
-                "mode": mode,
-                "record_state": state,
-                "record_deployment_sha256": sha256_text(str(record["deployment_id"])),
-                "record_tree_sha256": str(record["source_tree_sha256"]),
-            },
-            None,
-            record,
-        )
+        retired: dict[str, object] = {"mode": mode, "record_state": state}
+        if record is not None:
+            retired["record_deployment_sha256"] = sha256_text(str(record["deployment_id"]))
+            retired["record_tree_sha256"] = str(record["source_tree_sha256"])
+        return retired, None, record
     facts = gather(workspace, app_name=target.app_name, readers=readers)
     state = _record_state(mode, record, target, facts)
     plan: dict[str, object] = {
@@ -253,16 +251,15 @@ def apply(
     lease: Callable[[], None],
     reviewed_bindings: Callable[[], list[dict[str, object]]],
     ensure_scope: Callable[[], None],
-) -> dict[str, Any]:
-    """Recompute, require the exact ack, then copy and sign; returns the persisted record."""
+) -> dict[str, Any] | None:
+    """Recompute, require the exact ack, then copy and sign; the persisted record, if any."""
 
     lease()
     plan, facts, record = compute_plan(workspace, mode, target, readers)
     digest = require_ack(PURPOSE[mode], plan, ack)
     if mode == "unadopt":
-        assert record is not None
-        if record["provenance"] == "retired":
-            return record
+        if record is None or record["provenance"] == "retired":
+            return record  # nothing to retire
         tombstone = {
             **unsigned(record),
             "provenance": "retired",
@@ -427,6 +424,9 @@ def main(
                 workspace, app_name=args.app_name, scope=args.scope
             ),
         )
+        if record is None:
+            print(f"{_PREFIX} unadopt applied: no adopted record, nothing to retire")
+            return 0
         print(
             f"{_PREFIX} {args.mode} applied: a signed v7 {record['tier']} record "
             f"({record['provenance']}, frontend {record['frontend_provenance']}); the App was not "

@@ -46,7 +46,11 @@ from typing import Any
 from tools.databricks.app_deployment_rollback import verified_signed_last_good_contract
 from tools.databricks.app_deployment_state import active_deployment_id
 from tools.databricks.app_rollback_bootstrap_gate import assert_rollback_record_absent
-from tools.databricks.app_rollback_record_contract import V7_RECORD_VERSION, load_signed_record
+from tools.databricks.app_rollback_record_contract import (
+    V7_RECORD_VERSION,
+    V7_REFUSAL,
+    load_signed_record,
+)
 from tools.databricks.app_rollback_secret_scope import (
     _scope_names,
     expected_app_rollback_scope,
@@ -176,10 +180,21 @@ def _adopt_phase_verdict(
     )
 
 
+_REMEDY_V7 = (
+    "The slot holds a verified tier-aware v7 record (an adopted blue), which this v5/v6 "
+    "release path can neither verify nor restore; the core release path (M2-PR7b) reads it. "
+    "Nothing needs repair: run the adopt phases, or wait for that path."
+)
+
+
 def _signed_verdict(workspace: Any, *, app_name: str, scope: str) -> RollbackRecordVerdict:
     try:
         contract = ASSERT_SIGNED(workspace, app_name=app_name, scope=scope)
     except Exception as exc:  # noqa: BLE001 - every failure refuses with its class
+        if V7_REFUSAL in str(exc):
+            return RollbackRecordVerdict(
+                (PrestopRefusal(ROLLBACK_RECORD_PRESENT, f"{exc}. {_REMEDY_V7}"),), ()
+            )
         return RollbackRecordVerdict((_refusal(_classify(exc), str(exc)),), ())
     try:
         active = ACTIVE_DEPLOYMENT(workspace, app_name=app_name)

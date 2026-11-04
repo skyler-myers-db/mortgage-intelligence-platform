@@ -2650,8 +2650,9 @@ lease to be held, which only the deploy's signing authority can take. The CLI
 never inherits the proof-signing keys, and its output (which names ids) stays
 out of the log; every id read from either state is a runner
 mask. A live adopt or unadopt phase is CI-only, like the plan phase; locally,
-`--phase adopt --dry-run` (with or without `MIP_ADOPT_PLAN_ACK`) prints the
-steps and stops before the lease. The expected run on client #1 binds 16 keys and
+`--phase adopt --dry-run` (with or without `MIP_ADOPT_PLAN_ACK`; with it,
+adopt-live's own ack must be exported too) prints the steps and stops before
+the lease. The expected run on client #1 binds 16 keys and
 plans exactly 2 creates (the two jobs the legacy install never had).
 
 **Owed live confirmations.** No adoption has run. The direct engine's `bind`
@@ -2728,7 +2729,9 @@ for the estate inventory (M4-PR1). `MIP_ADOPT_LIVE_SUPERSEDE=<sha256 of the
 record's deployment id>` in an adopt phase re-signs an adopted record onto a
 newer active deployment after the same proofs (`predecessor_deployment_id`
 names the old one). unadopt writes the tombstone version (`provenance:
-retired`, every other field kept), so a later adopt starts clean.
+retired`, every other field kept), so a later adopt starts clean; with no
+adopted record it retires nothing, so the bind's unadopt recovery still runs,
+and a captured blue refuses (`record_present`).
 
 **The acks.** The owner attestation is deferred (review mode
 `single_maintainer_audited`), so each mode prints the sha256 of its plan's

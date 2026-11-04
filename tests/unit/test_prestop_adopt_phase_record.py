@@ -119,3 +119,28 @@ def test_the_genie_pin_reads_a_v7_records_space_and_a_tombstone_names_none() -> 
         record=rr.v7_core_record(provenance="retired", ack_purpose="unadopt"),
     )
     assert space() is None
+
+
+def test_outside_the_adopt_phases_a_v7_record_refuses_as_present_never_as_tampered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace(rr.v7_core_record())
+    monkeypatch.setattr(probe, "_scope_names", lambda _ws: {SCOPE})
+
+    def signed(ws: Any, *, app_name: str, scope: str) -> Any:
+        return contract._load_record(
+            ws, app_name=app_name, scope=scope, expected_lakebase_instance=rr.LAKEBASE
+        )
+
+    monkeypatch.setattr(probe, "ASSERT_SIGNED", signed)
+    verdict = probe.rollback_record_verdict(
+        workspace,
+        app_name=rr.APP_NAME,
+        scope=SCOPE,
+        app_exists=True,
+        rebase_unverified_app=False,
+        journal_state=lambda: "absent",
+    )
+
+    assert [refusal.code for refusal in verdict.refusals] == [codes.ROLLBACK_RECORD_PRESENT]
+    assert "tier-aware v7 record (an adopted blue)" in verdict.refusals[0].message

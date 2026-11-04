@@ -417,6 +417,14 @@ def test_unadopt_writes_a_tombstone_and_a_later_adopt_starts_clean(world: World)
     assert world.apps.mutations == []
 
 
+def test_unadopt_with_no_record_retires_nothing_so_the_unbind_recovery_still_runs(
+    world: World,
+) -> None:
+    assert _plan(world, "unadopt") == {"mode": "unadopt", "record_state": "absent"}
+    assert world.apply("unadopt") is None
+    assert world.secrets.puts == [] and world.record() is None
+
+
 def test_unadopt_refuses_a_record_it_did_not_adopt(world: World) -> None:
     contract.save_versioned_record(world, scope=rr.SCOPE, record=rr.v6_record())
 

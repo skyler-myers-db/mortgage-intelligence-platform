@@ -251,7 +251,7 @@ class World:
         readers: Readers | None = None,
         supersede: str = "",
         reviewed: list[dict[str, object]] | None = None,
-    ) -> dict[str, Any]:
+    ) -> Any:
         from tools.databricks.operation_ack import ack_digest
 
         target = self.target(supersede=supersede)
