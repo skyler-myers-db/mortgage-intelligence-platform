@@ -113,7 +113,8 @@ def test_the_refusal_is_the_last_read_only_step_and_spares_the_plan_and_adopt_ph
     ):
         assert refusal < text.index(later), later
     lines = [line for line in block(f"# >>> {RELEASE_REFUSAL} >>>", f"# <<< {RELEASE_REFUSAL} <<<").splitlines() if not line.startswith("#")]
-    assert lines[0] == 'if ! tier_is_agentic && [[ -z "${DEPLOY_PHASE:-}" ]]; then', "a core release only, in a dry run too"
+    # A run with no phase and --phase release (M1-PR6) alike, in a dry run too.
+    assert lines[0] == 'if ! tier_is_agentic && [[ -z "${DEPLOY_PHASE:-}" || "${DEPLOY_PHASE:-}" == "release" ]]; then'
     assert lines[-2:] == ["  exit 2", "fi"]
 
 

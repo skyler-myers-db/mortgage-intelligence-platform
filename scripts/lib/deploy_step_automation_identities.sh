@@ -257,6 +257,16 @@ PYEOF
     export MIP_AI_GATEWAY_VERIFIER_CLIENT_ID="$DATABRICKS_VERIFIER_CLIENT_ID"
     export BUNDLE_VAR_ai_gateway_verifier_client_id="$DATABRICKS_VERIFIER_CLIENT_ID"
   fi
+fi
+# >>> data phase: plan >>>
+# --phase data (M1-PR6) applies no bundle, stops nothing and reads no App
+# serving state: it takes neither the pre-stop probes (their one Genie turn
+# included) nor the bundle plan gate below. Its read-only data plan stands in
+# their place, before the lease (scripts/lib/deploy_governed_phases_lifecycle.sh).
+if [[ "${DEPLOY_PHASE:-}" == "data" ]]; then
+  plan_data_phase
+# <<< data phase: plan <<<
+elif [[ "$DRY_RUN" -eq 0 ]]; then
   # Read-only pre-stop probes. Step 0a stops (and on the unsigned rebase path
   # quarantines) the existing App, and with no signed blue a later failure
   # leaves it stopped. These failures are visible to the workspace admin now,
@@ -334,10 +344,13 @@ fi
 # instance update here, while the App still serves, before the signed lease and
 # every App stop (tools/databricks/bundle_plan_gate.py). --phase plan ends here,
 # with the lease never taken; the adopt phases planned above instead.
-if [[ "${DEPLOY_PHASE:-}" != "adopt" && "${DEPLOY_PHASE:-}" != "unadopt" ]]; then
+if [[ "${DEPLOY_PHASE:-}" != "adopt" && "${DEPLOY_PHASE:-}" != "unadopt" && \
+      "${DEPLOY_PHASE:-}" != "data" ]]; then
   run_bundle_plan_gate pre-lease
 fi
 if [[ "${DEPLOY_PHASE:-}" == "plan" ]]; then
+  # Each phase's predicted budget (M1-PR6), read-only, kept in a local file.
+  predict_phase_budgets
   echo "${GRN}[deploy] plan phase complete: read-only, stopped before the lease; nothing was changed.${RST}"
   exit 0
 fi
@@ -351,11 +364,18 @@ fi
 # before the lease and any workspace mutation, in a dry run too. --phase plan
 # ended above, and the adopt phases (an acknowledged bundle state edit, no
 # release step) still run.
-if ! tier_is_agentic && [[ -z "${DEPLOY_PHASE:-}" ]]; then
+if ! tier_is_agentic && [[ -z "${DEPLOY_PHASE:-}" || "${DEPLOY_PHASE:-}" == "release" ]]; then
   echo "${RED}[deploy] the core tier (MIP_AGENTIC_TIER=off) cannot release yet: publish, activation and signed capture still need the agentic identities. Refusing before the lease; nothing was changed. --phase plan and the adopt phases run in this tier.${RST}" >&2
   exit 2
 fi
 # <<< core tier: release refusal <<<
+# >>> release phase: budget admission >>>
+# --phase release (M1-PR6) fits 330 predicted minutes and the job deadline, or
+# refuses here, before the lease; a run with no --phase is not admitted.
+if [[ "${DEPLOY_PHASE:-}" == "release" ]]; then
+  admit_release_phase_budget
+fi
+# <<< release phase: budget admission <<<
 if [[ "$DRY_RUN" -eq 0 ]]; then
   # The signed lease is the first persistent workspace mutation. A contender
   # must lose here before it can revoke stale grants or alter shared resources.
@@ -418,6 +438,14 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     run_adopt_phase_apply "$DEPLOY_PHASE"
   fi
   # <<< adopt phase: apply <<<
+  # >>> data phase: run >>>
+  # The lease is the data phase's first mutation: its ledger, its job runs and
+  # the reviewed-function grants are the rest, and it ends (the EXIT trap
+  # releases the lease) before any scope, role, App or other step below.
+  if [[ "${DEPLOY_PHASE:-}" == "data" ]]; then
+    run_data_phase
+  fi
+  # <<< data phase: run <<<
   if [[ -n "${MIP_OAUTH_CREDENTIAL_ORPHAN_LEASE_ID:-}" ]]; then
     step "recover the explicitly confirmed orphan OAuth credential lease"
     run_with_proof_signing_authority \
@@ -554,6 +582,11 @@ else:
     DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET
   echo "  app automation: distinct per-run normal/admin Bearers minted"
 else
+  # >>> data phase: dry run >>>
+  if [[ "${DEPLOY_PHASE:-}" == "data" ]]; then
+    run_data_phase
+  fi
+  # <<< data phase: dry run <<<
   step "prove or create the deterministic owned App rollback secret scope"
   echo "  would prove/create: scope ${APP_ROLLBACK_SECRET_SCOPE}"
 fi

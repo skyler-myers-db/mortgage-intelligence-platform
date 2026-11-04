@@ -97,7 +97,7 @@ WINDOW_LIBRARY = "scripts/lib/deploy_quiesce_window_lifecycle.sh"
 EXIT_TRAP_LIBRARY = "scripts/lib/deploy_app_release_lifecycle.sh"
 STOP_LIBRARIES = frozenset({WINDOW_LIBRARY, EXIT_TRAP_LIBRARY})
 # The data phase (M1-PR6): the only shell caller of the job phase runner.
-DATA_PHASE_LIBRARY = "scripts/lib/deploy_data_phase_lifecycle.sh"
+DATA_PHASE_LIBRARY = "scripts/lib/deploy_governed_phases_lifecycle.sh"
 JOB_RUN_LIBRARIES = frozenset({WINDOW_LIBRARY, DATA_PHASE_LIBRARY})
 # Shell file -> the bundle jobs it may ``databricks bundle run``: the release's
 # deploy-time jobs and the gold refresh's reviewed reconcile wrapper, and the

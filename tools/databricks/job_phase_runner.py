@@ -2,7 +2,7 @@
 """The governed data phase's job runner: digest, idempotency token, signed ledger (M1-PR6).
 
 ``./scripts/deploy.sh --phase data`` runs the data jobs only through this
-tool, and only from ``scripts/lib/deploy_data_phase_lifecycle.sh``. It never
+tool, and only from ``scripts/lib/deploy_governed_phases_lifecycle.sh``. It never
 calls the Apps API and never cancels a run.
 
 * **plan** (read-only, before the lease): each job is the one this deployer's

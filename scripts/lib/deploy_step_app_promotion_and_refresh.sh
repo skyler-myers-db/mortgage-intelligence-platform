@@ -230,6 +230,16 @@ fi
 # -----------------------------------------------------------------------------
 # Step 6: silver refresh (FRED + Cotality share)
 # -----------------------------------------------------------------------------
+# >>> release phase: the data jobs >>>
+# --phase release (M1-PR6) never runs, submits or triggers a data job: steps
+# 6-9b below (silver, gold and its grant reconcile, the stale-rate guard, the
+# lifecycle sync, the KPI snapshot) are --phase data's, which runs them through
+# tools/databricks/job_phase_runner.py. A run with no --phase runs them here,
+# unchanged. The block is not re-indented: the deploy contracts pin its lines.
+if [[ "${DEPLOY_PHASE:-}" == "release" ]]; then
+  step "data jobs deferred to --phase data (silver, gold, lifecycle sync, KPI snapshot): a release never runs one"
+else
+# <<< release phase: the data jobs <<<
 if [[ "$SKIP_SILVER" -eq 1 ]]; then
   step "silver refresh — SKIPPED (--skip-silver)"
 else
@@ -276,6 +286,9 @@ run "$PYTHON" -m tools.sync_lifecycle_warehouse \
 # snapshot_date, so re-deploying the same day refreshes the day's row.
 step "record headline KPI snapshot — mip_app.kpi_snapshots backfill (idempotent per-day)"
 run_job_with_retry databricks bundle run mip_kpi_snapshot -t "$TARGET"
+# >>> release phase: end of the data jobs >>>
+fi
+# <<< release phase: end of the data jobs <<<
 
 # -----------------------------------------------------------------------------
 # Step 9c: weekly scheduled refresh postflight (read-only)

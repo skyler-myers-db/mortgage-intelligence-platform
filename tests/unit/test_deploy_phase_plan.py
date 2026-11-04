@@ -96,6 +96,10 @@ def test_the_plan_phase_dry_run_stops_after_the_pre_lease_gate(tmp_path: Path) -
     assert out.rstrip().endswith(
         "[deploy] plan phase complete: read-only, stopped before the lease; nothing was changed."
     )
+    # M1-PR6: each phase's predicted budget, read-only and with no planned command.
+    budgets = [line.strip() for line in out.splitlines() if line.strip().startswith("phase budget: ")]
+    assert [line.split()[2] for line in budgets] == ["plan", "release", "data"]
+    assert all("(limit 330, margin 15)" in line and "a live phase would refuse" in line for line in budgets)
     for later in (
         "rollback secret scope",
         "resolve governed Genie space",
@@ -160,11 +164,11 @@ def test_a_live_plan_phase_outside_github_actions_is_refused_before_any_call(
 @pytest.mark.parametrize(
     ("args", "message"),
     (
-        (["--phase", "release"], "phase must be plan, adopt or unadopt; refusing 'release'"),
-        (["--phase=data"], "phase must be plan, adopt or unadopt; refusing 'data'"),
-        (["--phase=adopt-live"], "phase must be plan, adopt or unadopt; refusing 'adopt-live'"),
-        (["--phase="], "phase must be plan, adopt or unadopt; refusing ''"),
-        (["--phase"], "missing value for --phase (expected plan, adopt or unadopt)"),
+        (["--phase", "releases"], "phase must be plan, release, data, adopt or unadopt; refusing 'releases'"),
+        (["--phase=Data"], "phase must be plan, release, data, adopt or unadopt; refusing 'Data'"),
+        (["--phase=adopt-live"], "phase must be plan, release, data, adopt or unadopt; refusing 'adopt-live'"),
+        (["--phase="], "phase must be plan, release, data, adopt or unadopt; refusing ''"),
+        (["--phase"], "missing value for --phase (expected plan, release, data, adopt or unadopt)"),
         (["--phase", "plan", "--phase", "plan"], "phase may be supplied only once"),
         (["--phase=plan", "--phase", "plan"], "phase may be supplied only once"),
     ),

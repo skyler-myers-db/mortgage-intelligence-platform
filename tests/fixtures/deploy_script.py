@@ -40,6 +40,11 @@ DEPLOY_SLICED_LIBRARIES = (
     _LIB / "deploy_bundle_plan_gate_lifecycle.sh",
     # The adopt and unadopt phases (M2-PR6), sourced right after the gate.
     _LIB / "deploy_adopt_phase_lifecycle.sh",
+    # The governed UC grant statement and the reviewed-function reconcile,
+    # moved out of the step-4b file so the data phase can run them (M1-PR6).
+    _LIB / "deploy_reviewed_function_grants_lifecycle.sh",
+    # The governed phases (M1-PR6): budgets, the release admission, the data phase.
+    _LIB / "deploy_governed_phases_lifecycle.sh",
 )
 # Top-level orchestration sliced verbatim out of the entrypoint, in step order.
 DEPLOY_STEP_SCRIPTS = (
