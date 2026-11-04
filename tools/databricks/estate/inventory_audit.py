@@ -154,14 +154,16 @@ def assert_live_catalogs(
         if not isinstance(name, str) or not name or name != name.strip() or name in names:
             raise RuntimeError("the catalog listing returned an empty, padded or repeated name")
         names.add(name)
+        if name == inventory.install_catalog:
+            continue  # the install's own catalog: newer than the inventory, or handed over since
         facts = inventory.catalogs.get(name)
         if facts is None:
-            missing += name != inventory.install_catalog
+            missing += 1
             continue
         observed = (
             getattr(item, "owner", None),
-            str(getattr(item, "catalog_type", "") or "").upper(),
-            str(getattr(item, "isolation_mode", "") or "").upper(),
+            _text(getattr(item, "catalog_type", None)).upper(),
+            _text(getattr(item, "isolation_mode", None)).upper(),
         )
         stale += observed != (facts.owner, facts.catalog_type, facts.isolation_mode)
     if missing or stale:

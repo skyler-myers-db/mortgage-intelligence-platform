@@ -97,6 +97,42 @@ def test_a_catalog_whose_owner_changed_since_the_inventory_refuses() -> None:
         harness._audit(moved, inventory=inventory)
 
 
+def _sdk_catalogs(workspace: Any) -> list[Any]:
+    """The same catalogs as the SDK returns them, enum fields included."""
+
+    from databricks.sdk.service.catalog import CatalogInfo, CatalogIsolationMode, CatalogType
+
+    return [
+        CatalogInfo(
+            name=item.name,
+            owner=item.owner,
+            catalog_type=CatalogType(item.catalog_type),
+            isolation_mode=CatalogIsolationMode(item.isolation_mode),
+        )
+        for item in workspace.catalogs.list(include_browse=True, include_unbound=True)
+    ]
+
+
+def test_sdk_enum_fields_are_read_as_their_values_by_the_collector_and_the_audit() -> None:
+    plain = harness._workspace()
+    typed = harness._workspace()
+    catalogs = _sdk_catalogs(typed)
+    typed.catalogs.list = lambda **_kwargs: iter(catalogs)
+
+    assert canonical_json(harness._inventory(typed).document) == canonical_json(harness._inventory(plain).document)
+    assert harness._audit(typed, inventory=harness._inventory(plain), self_view=harness._self_view(plain))
+
+
+def test_the_install_catalog_may_change_owner_after_the_inventory() -> None:
+    inventory = harness._inventory(harness._workspace())
+    handed_over = harness._workspace(owner_overrides={})
+    for item in handed_over.catalogs.list(include_browse=True, include_unbound=True):
+        if item.name == harness.CATALOG:
+            item.owner = "mip-data-owners"
+
+    assert harness._audit(handed_over, inventory=inventory)
+
+
 def test_a_self_view_owner_the_inventory_does_not_list_refuses() -> None:
     inventory = harness._inventory(harness._workspace())
     workspace = harness._workspace(owner_overrides={"other.sandbox.secret_fn": "late-owner@example.com"})
