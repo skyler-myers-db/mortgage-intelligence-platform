@@ -95,6 +95,15 @@ def test_a_verifier_role_rotation_is_wr2_and_forces_the_migration_job_into_a_win
     assert window_plan(facts, position="pre-apply", acknowledgement="").refusals == ("window_unacked",)
 
 
+def test_a_core_tiers_absent_verifier_role_is_no_reason_and_is_pinned() -> None:
+    # M2-PR3: the core tier deploys no verifier, so nothing of it can rotate.
+    facts = _facts(verifier_role_state="absent")
+    plan = window_plan(facts, position="pre-lease", acknowledgement="")
+    assert facts.reasons() == () and plan.code == "none"
+    assert plan.canonical["verifier_role_state"] == "absent", "the digest records the absence"
+    assert plan.sha256 != window_plan(_facts(), position="pre-lease", acknowledgement="").sha256
+
+
 @pytest.mark.parametrize(
     "jobs_reader",
     (

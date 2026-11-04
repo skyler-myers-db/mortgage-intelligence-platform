@@ -69,6 +69,8 @@ run() { "$@"; }
 run_with_proof_signing_authority() { "$@"; }
 run_with_account_identity() { "$@"; }
 run_with_lakebase_bootstrap_authority() { "$@"; }
+# The profile's agentic tier (resolve_client_profile, M2-PR3): client #1's by default.
+tier_is_agentic() { [[ "${CLIENT_AGENTIC_TIER:-on}" == "on" ]]; }
 mint_m2m_token() { :; }
 converge_app_treatment_access() { echo "treatment $1" >> "$CALLS"; }
 converge_runtime_app_release_access() { echo "release-runtime" >> "$CALLS"; }
@@ -476,6 +478,41 @@ def test_the_plan_reads_the_jobs_reader_role_and_grants_as_wr2_facts(
     migration = next(call for call in calls if "lakebase_migrate.py --mode plan" in call)
     assert "--jobs-reader-client-id jobs-client" in migration, "the plan reads its grants"
     assert f"--jobs-reader-role-check {check}" in next(c for c in calls if "quiesce_window plan" in c)
+
+
+def test_the_agentic_migration_plan_requires_the_verifier(tmp_path: Path) -> None:
+    (tmp_path / "report.json").write_text("{}", encoding="utf-8")
+    result, calls = _run(
+        tmp_path,
+        'QUIESCE_WINDOW_STATE=blue_serving\nplan_quiesce_window pre-apply "$TMPDIR/report.json"\n',
+        APP_PRESENT="1",
+    )
+    assert result.returncode == 0, result.stderr
+    migration = next(call for call in calls if "lakebase_migrate.py --mode plan" in call)
+    assert "--ai-gateway-verifier-client-id verifier-client --require-ai-gateway-verifier" in migration
+    assert "--ai-gateway-verifier-absent" not in migration
+
+
+def test_the_core_tier_plans_no_verifier_role_and_asserts_its_absence(tmp_path: Path) -> None:
+    # M2-PR3 x M0-PR8: the core tier deploys no verifier, so the window plan
+    # checks no verifier role (it is recorded absent) and the migration plan
+    # binds none. The App and the jobs-reader checks are unchanged.
+    (tmp_path / "report.json").write_text("{}", encoding="utf-8")
+    result, calls = _run(
+        tmp_path,
+        'QUIESCE_WINDOW_STATE=blue_serving\nDATABRICKS_VERIFIER_CLIENT_ID=""\n'
+        'plan_quiesce_window pre-apply "$TMPDIR/report.json"\n',
+        APP_PRESENT="1",
+        CLIENT_AGENTIC_TIER="off",
+    )
+    assert result.returncode == 0, result.stderr
+    assert not _has(calls, "--role-contract verifier")
+    assert _has(calls, "--role-contract app") == 1 and _has(calls, "--role-contract jobs_reader") == 1
+    plan = next(call for call in calls if "quiesce_window plan" in call)
+    assert "--verifier-role-check absent" in plan
+    migration = next(call for call in calls if "lakebase_migrate.py --mode plan" in call)
+    assert "--ai-gateway-verifier-absent" in migration
+    assert "--require-ai-gateway-verifier" not in migration and "--ai-gateway-verifier-client-id" not in migration
 
 
 def test_an_undecided_jobs_reader_role_check_refuses_the_plan(tmp_path: Path) -> None:

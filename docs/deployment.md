@@ -1861,6 +1861,7 @@ tier.
 | Lakebase bootstrap control identity (`run_with_lakebase_bootstrap_authority`) | the agent runtime, required up front | the release probe, required up front (it has no Lakebase role and is never a converged target) |
 | UC grants and the reviewed-function reconcile | App, runtime and proxy | App only (`verify_reviewed_function_execute_grants --agentic-tier off`) |
 | migrate job verifier flag (`var.require_ai_gateway_verifier`) | the bundle default `--require-ai-gateway-verifier` | `--ai-gateway-verifier-absent`, no verifier bound |
+| quiesce window plan (`plan_quiesce_window`, M0-PR8) | App, verifier and jobs-reader role checks; the migration plan requires the verifier | App and jobs-reader role checks; `--verifier-role-check absent` (no WR2 from it, pinned in the digest); the migration plan asserts `--ai-gateway-verifier-absent` |
 | App payload | unchanged | `MIP_AGENT_ORCHESTRATOR=0`, `MIP_AI_GATEWAY=0`; an operator value turning either on refuses |
 | capability preflight (`tools/clients/capabilities.py`, in the live checks) | Apps, Lakebase, Genie, SQL warehouses, Model Serving, MLflow (the pre-stop probes' Supervisor listing proves the Supervisor API) | Apps, Lakebase, Genie, SQL warehouses |
 
