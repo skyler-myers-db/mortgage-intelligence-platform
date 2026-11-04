@@ -2294,6 +2294,10 @@ The client profile's `MIP_ACCEPTED_EXPOSURE_JSON` may accept one exactly
   those in. Grants that can never be accepted (reaching the verifier, or
   elevated for the agent-runtime) are notes with their remedy. Under GitHub
   Actions every identifying value is registered as a mask before it prints.
+  A core-tier install (`MIP_AGENTIC_TIER=off`) deploys no agent-runtime or
+  verifier: run it with `--agentic-tier off` and neither id, and it lists the
+  Genie grants reaching the App alone, as the core pre-stop probe reads them.
+  It has no UC candidates, so `--catalog` refuses there.
 - **Metastore owner.** `converge_campaign_treatment_access` and the pre-stop
   owner probe judge the metastore with `MetastoreOwnerPolicy`:
   `ApprovedOwnerPolicy` over exactly `MIP_UC_METASTORE_OWNER`, without the
