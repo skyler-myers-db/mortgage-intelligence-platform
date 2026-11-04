@@ -7,6 +7,7 @@ public CI logs, and the value it refused may be an identifier.
 
 from __future__ import annotations
 
+import json
 import re
 from urllib.parse import urlsplit
 
@@ -106,6 +107,29 @@ VOCABULARY_TERMS = _VOCABULARY
 # (``main`` inside ``origin/main``), so the profile never masks them.
 PLATFORM_NAMES = frozenset({"main", "samples", "system", "hive_metastore"})
 _PLATFORM_FOLDERS = frozenset({"/workspace", "/workspace/shared", "/workspace/users", "/workspace/repos"})
+
+
+class DuplicateJsonKey(ValueError):
+    """A JSON object repeats a key. The key is not carried: it may be a value."""
+
+
+def _unique_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise DuplicateJsonKey("a JSON object repeats a key")
+        result[key] = value
+    return result
+
+
+def strict_json_loads(text: str) -> object:
+    """``json.loads`` refusing a repeated key, whose last value would silently win.
+
+    A reviewer reads the raw profile text; a duplicate key would let the parsed
+    value (and any digest over it) differ from what they read.
+    """
+
+    return json.loads(text, object_pairs_hook=_unique_pairs)
 
 
 def is_placeholder(value: str) -> bool:

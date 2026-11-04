@@ -17,6 +17,7 @@ from tools.databricks.agent_runtime_uc_inventory import _text
 from tools.databricks.audit_agent_runtime_foreign_uc_access import (
     audit_foreign_uc_access,
 )
+from tools.databricks.estate.accepted_exposure import identity_matcher
 from tools.databricks.serving_endpoint_legacy_query import (
     inspect_legacy_pre_provenance_group,
 )
@@ -253,6 +254,8 @@ def main(argv: list[str] | None = None) -> int:
         genie_space_id=args.genie_space_id,
     )
     allowed_workspace_groups = reviewed_capability_attestation.allowed_workspace_groups()
+    # The proxy identity's accepted UC exposure, the same for both proofs (M2-PR4).
+    exposure = identity_matcher("proxy")
     proof = audit_foreign_uc_access(
         admin_workspace,
         application_id=args.application_id,
@@ -260,6 +263,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_inventory_principal=args.expected_inventory_principal,
         foreign_catalog_binding_policy=args.foreign_catalog_binding_policy_json,
         account_factory=lambda: account_client,
+        exposure=exposure,
         allowed_workspace_groups=allowed_workspace_groups,
     )
     _bind_proxy_auth_environment(
@@ -280,6 +284,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_inventory_principal=args.expected_inventory_principal,
         foreign_catalog_binding_policy=args.foreign_catalog_binding_policy_json,
         account_factory=lambda: account_client,
+        exposure=exposure,
         allowed_workspace_groups=allowed_workspace_groups,
     )
     if (

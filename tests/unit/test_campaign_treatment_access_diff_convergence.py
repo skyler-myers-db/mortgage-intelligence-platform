@@ -260,6 +260,9 @@ def _run(
         "account_factory": lambda: converge_tests._mirrored_account(workspace),
         "assert_single_writer": lambda: None,
     }
+    if function is converger.converge_campaign_treatment_access:
+        # The frozen legacy converger predates MIP_UC_METASTORE_OWNER (M2-PR4).
+        kwargs["metastore_owner"] = "deployer"
 
     def outcome(ok: bool, result: bool | None, error: str, message: str = "") -> _Outcome:
         return _Outcome(

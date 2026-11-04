@@ -621,6 +621,13 @@ export MIP_UC_APPROVED_OWNER_PRINCIPALS="$_UC_APPROVED_OWNERS"
 # owner-equivalent probe, attack G12). Empty approves no one else.
 MIP_GENIE_MANAGER_PRINCIPALS="$(deployment_control_value MIP_GENIE_MANAGER_PRINCIPALS)"
 export MIP_GENIE_MANAGER_PRINCIPALS
+# M2-PR4, through the environment only (both name principals): the metastore's
+# exact owner (MetastoreOwnerPolicy; blank refuses), and the accepted exposure,
+# which each consumer refuses unless the shell-only MIP_ACK_ACCEPTED_EXPOSURE_PLAN
+# equals its plan's sha256 (docs/deployment.md; empty accepts nothing).
+MIP_UC_METASTORE_OWNER="$(deployment_control_value MIP_UC_METASTORE_OWNER)"
+MIP_ACCEPTED_EXPOSURE_JSON="$(deployment_control_value MIP_ACCEPTED_EXPOSURE_JSON)"
+export MIP_UC_METASTORE_OWNER MIP_ACCEPTED_EXPOSURE_JSON
 for _ACCOUNT_AUTH_NAME in DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID; do
   resolve_m2m_credential "$_ACCOUNT_AUTH_NAME"
 done

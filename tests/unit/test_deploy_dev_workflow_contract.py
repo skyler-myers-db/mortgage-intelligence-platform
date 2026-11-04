@@ -6430,9 +6430,15 @@ def _copy_client_profile_tooling(repo: Path) -> None:
 
     shutil.copytree(REPO / "tools" / "clients", repo / "tools" / "clients", ignore=shutil.ignore_patterns("__pycache__"))
     (repo / "tools" / "__init__.py").write_text("", encoding="utf-8")
+    # The profile runs the accepted-exposure policy's closed shape at resolve (M2-PR4).
+    shutil.copytree(
+        REPO / "tools" / "databricks" / "estate",
+        repo / "tools" / "databricks" / "estate",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    (repo / "tools" / "databricks" / "__init__.py").write_text("", encoding="utf-8")
     # The tier's identity contract the client-target view carries (M2-PR3).
-    (repo / "tools" / "databricks").mkdir()
-    for module in ("__init__.py", "m2m_identity_contract.py", "agent_proxy_credential_bundle.py"):
+    for module in ("m2m_identity_contract.py", "agent_proxy_credential_bundle.py"):
         shutil.copy2(REPO / "tools" / "databricks" / module, repo / "tools" / "databricks" / module)
     (repo / "backend" / "schemas").mkdir(parents=True)
     # The profile's lender pin rules import the record module (#298), which

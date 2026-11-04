@@ -439,9 +439,15 @@ def test_a_real_deploy_with_a_drifted_override_stops_at_step_0_before_any_worksp
     # resolver and a synthetic profile, so the run reaches the check.
     shutil.copytree(ROOT / "tools" / "clients", repo / "tools" / "clients", ignore=shutil.ignore_patterns("__pycache__"))
     (repo / "tools" / "__init__.py").write_text("", encoding="utf-8")
+    # The profile runs the accepted-exposure policy's closed shape at resolve (M2-PR4).
+    shutil.copytree(
+        ROOT / "tools" / "databricks" / "estate",
+        repo / "tools" / "databricks" / "estate",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    (repo / "tools" / "databricks" / "__init__.py").write_text("", encoding="utf-8")
     # The tier's identity contract the client-target view carries (M2-PR3).
-    (repo / "tools" / "databricks").mkdir()
-    for module in ("__init__.py", "m2m_identity_contract.py", "agent_proxy_credential_bundle.py"):
+    for module in ("m2m_identity_contract.py", "agent_proxy_credential_bundle.py"):
         shutil.copy2(ROOT / "tools" / "databricks" / module, repo / "tools" / "databricks" / module)
     (repo / "backend" / "schemas").mkdir(parents=True)
     # The profile's lender pin rules import the record module (#298), which

@@ -2085,6 +2085,14 @@ after the stop.
   - For a group other than the system `users` group, removing the service
     principal from that group also works.
 
+  A group grant the client profile accepts for the App or the agent-runtime
+  (see "Accepted shared-estate exposure" below) is judged by that identity's
+  matcher, exactly as the post-stop audit judges it; it never relaxes the
+  verifier or the governed space. The governed space is the one the
+  provisioner resolves by its pin (below), so an entry naming its id or its
+  live title refuses here (`accepted_exposure`) even after a rename, and even
+  when no group grant reaches the App or the agent-runtime.
+
   The verifier's audit (`--forbid-all-genie`) also refuses any grant to the
   verifier service principal itself on any Genie space, which needs no
   governed space id, so the probe lists and refuses those too. Remove a direct
@@ -2125,11 +2133,12 @@ refusal here is the refusal that step would raise with the App down:
   (`recover` or `unclaimed`, which the recovery under the lease deletes), has
   no blue to protect.
 - **Owner policy** (`prestop_owner_policy`, `owner_policy`).
-  `ApprovedOwnerPolicy.assert_objects` on the metastore, the governed catalog,
-  its `audit` schema and the treatment table, the objects
-  `converge_campaign_treatment_access` checks after step 0a. An owner outside
-  `MIP_UC_APPROVED_OWNER_PRINCIPALS` plus the deployer, or the App's own
-  service principal, refuses, named with its object. For a group owner the
+  `ApprovedOwnerPolicy.assert_objects` on the governed catalog, its `audit`
+  schema and the treatment table, and `MetastoreOwnerPolicy.assert_objects` on
+  the metastore: the objects `converge_campaign_treatment_access` checks after
+  step 0a. An owner outside `MIP_UC_APPROVED_OWNER_PRINCIPALS` plus the
+  deployer, a metastore owner other than exactly `MIP_UC_METASTORE_OWNER`, or
+  the App's own service principal, refuses, named with its object. For a group owner the
   post-stop converger proves the App is not a member by minting a short-lived
   credential; read-only, the probe answers from the App's workspace-visible
   groups (plus `users`), so an account-level nested membership is still caught
@@ -2202,6 +2211,108 @@ step handles that Gateway first: it deletes it only when the agent-runtime
 service principal created it, and otherwise only revokes the App's and
 verifier's access. That step is the reviewed path whatever happens to the
 Supervisor, so the unacknowledged refusal comes after it.
+
+### Accepted shared-estate exposure (M2-PR4)
+
+A client install shares its workspace and metastore with other teams, and the
+no-revoke ruling means some of their grants stay: `users` holds `CAN_MANAGE`
+on every Genie space under `/Workspace/Shared` by default, and a foreign
+catalog may grant `account users` `SELECT`. The global audits refuse each one.
+The client profile's `MIP_ACCEPTED_EXPOSURE_JSON` may accept one exactly
+(`tools/databricks/estate/accepted_exposure.py`); nothing else changes.
+
+- **Exact tuple.** kind; securable type, id and full name (a Genie space's
+  title; a catalog's id is its name); grantee; the exact privilege set; source
+  (`direct`, `inherited:/directories/<id>` for a Genie folder,
+  `inherited:<TYPE>/<full name>` for a UC parent); binding (`OPEN` with no
+  workspace ids, or `ISOLATED` with the bound ones; a Genie space is `ISOLATED`
+  to its one workspace id); identities (`app`, `runtime`, `proxy`);
+  privilege_class; reason; expires_at. Any change to an observed field, a
+  wider or narrower grant included, refuses. A UC grant accepted on a catalog
+  or schema also covers the same grantee's privileges inherited below it,
+  while they are a subset.
+- **Observed tuples only.** An entry loads only when an audit builds its tuple
+  for each of its identities: a Genie space's `workspace_permission` for `app`
+  or `runtime`, or a `uc_grant` on a catalog, schema, table, function (a
+  registered model is one) or volume for `runtime` or `proxy`. Anything else
+  (`uc_ownership`, another workspace object, an App UC grant, a proxy Genie
+  grant) refuses at load instead of being acknowledged and never matching.
+  `python -m tools.clients resolve` (deploy step 0) runs the same closed shape
+  and ceiling, so such an entry fails there with the profile's other errors.
+- **Ceiling.** The read class is Genie `CAN_VIEW`/`CAN_RUN` and UC `BROWSE`,
+  `USE_CATALOG`, `USE_SCHEMA`, `SELECT`; everything else is elevated, and
+  `privilege_class` must say which. Elevated is refused for
+  `runtime` and `proxy`: the object's owner must narrow the grant, or the
+  agentic tier stays off. It is accepted for `app` alone, for at most 30 days,
+  and only while both compensating static controls hold
+  (`tools/databricks/estate/genie_single_space.py` and `sql_trust_scope.py`,
+  pinned by `tests/unit/test_genie_single_space_ast.py` and
+  `test_sql_trust_scope_ast.py`): every backend Genie API call goes through the
+  one client bound to the pinned governed space, and the SQL trust policy
+  admits only FQNs in the install's catalog under `audit`, `gold`, `ref` or
+  `semantics` (no configured Cotality source FQN is admitted today). An entry
+  naming the verifier or the governed space refuses (before the stop, the
+  space the provisioner resolves by its pin, by id or live title), as does an
+  entry past its expiry (it parses, it never matches).
+- **Matching.** One matcher per identity. The pre-stop Genie clause and the
+  post-stop App and agent-runtime Genie audits (`audit_global_m2m_access
+  --exposure-identity app|runtime`) use the same one, so they refuse alike; the
+  foreign UC audit and both dual-authority proofs use the runtime's or the
+  proxy's. The verifier's `--forbid-all-genie` never consults a matcher, so a
+  grant reaching it (any `users` grant does) still refuses. Neither does the
+  agent-proxy's Genie boundary (its managed-capability ACLs, converged or
+  denied, and its deny-all audit), so a Genie entry naming `proxy` refuses at
+  load.
+- **Ack.** The owner attestation is deferred (`single_maintainer_audited`), so a
+  non-empty policy is pinned by an exact digest instead.
+  `python -m tools.databricks.estate.cli --plan` prints the plan's sha256, a
+  public summary and, on its last line, the canonical plan whose sha256 the
+  ack pins (each identifying value masked first under GitHub Actions), so the
+  reviewer reads exactly what is acknowledged; a key repeated in the profile
+  JSON refuses, since its last value would otherwise win unseen.
+  `--check --ack-plan <sha256>` checks a digest. Export
+  `MIP_ACK_ACCEPTED_EXPOSURE_PLAN=<sha256>` in the shell for the one run that
+  should use the reviewed plan, never in `.env.local`: every consumer
+  recomputes the plan from the profile right before it judges an exposure, and
+  a missing or different ack refuses (`accepted_exposure` before the stop).
+  Each consumer judges expiry when it loads, and the post-stop audits load
+  long after the pre-stop probe, so an entry expiring within 24 hours of the
+  probe refuses there (`accepted_exposure`): renew it before the run rather
+  than have it expire with the App stopped.
+- **Inventory.** `python -m tools.databricks.estate.cli
+  --emit-exposure-inventory --app-name ... --runtime-application-id ...
+  --verifier-application-id ... --expected-inventory-principal ...
+  --genie-space-name ... [--catalog mip]` lists, read-only, the Genie grants
+  reaching the App or the agent-runtime outside the governed space and (with
+  `--catalog`) the agent-runtime's direct grants on each accessible foreign
+  catalog, as candidate entries with placeholder `reason` and `expires_at`. It
+  never applies them, and the policy refuses a candidate until the owner fills
+  those in. Grants that can never be accepted (reaching the verifier, or
+  elevated for the agent-runtime) are notes with their remedy. Under GitHub
+  Actions every identifying value is registered as a mask before it prints.
+- **Metastore owner.** `converge_campaign_treatment_access` and the pre-stop
+  owner probe judge the metastore with `MetastoreOwnerPolicy`:
+  `ApprovedOwnerPolicy` over exactly `MIP_UC_METASTORE_OWNER`, without the
+  deployer or the approved owners, with the alias and group-membership
+  exclusions kept. `users`, `account users` and `admins` refuse, and so does an
+  owner the API does not return. The owner is read with `metastores.get`, which
+  the SDK documents as metastore-admin only; whether a non-admin read
+  (`metastores.summary`) returns it is spike S0(b), still owed, as are S0(a) (a
+  service principal's own `get_effective`) and S0(c) (what a runtime service
+  principal sees of its own objects without `USE_CATALOG`).
+
+The deploy controls, resolved like the others (shell export, then `.env.local`):
+
+```
+# The metastore's exact owner principal (a user, service principal or group;
+# never users, account users or admins). The treatment-access converger and the
+# pre-stop owner probe require the metastore owner to be exactly this principal.
+MIP_UC_METASTORE_OWNER=
+# Accepted shared-estate exposure, one line of JSON (plan section 4.12); [] or
+# empty accepts nothing. A non-empty value needs MIP_ACK_ACCEPTED_EXPOSURE_PLAN
+# (shell only, one run) equal to `python -m tools.databricks.estate.cli --plan`.
+MIP_ACCEPTED_EXPOSURE_JSON=
+```
 
 ### Bundle plan gate (read-only, before the lease)
 
