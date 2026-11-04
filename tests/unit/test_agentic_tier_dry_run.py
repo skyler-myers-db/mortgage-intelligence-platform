@@ -46,7 +46,7 @@ AGENTIC_LINES = (
     f"--app-application-id dry-run-app-client-id --agent-runtime-application-id {RUNTIME} "
     "--agent-proxy-application-id ",
 )
-CORE_ONLY = ("agentic tier: off", "core tier", "--agentic-tier", "not used by the core tier")
+CORE_ONLY = ("agentic tier: off", "core tier", "--agentic-tier")
 # Profile names the sandbox does not strip (deploy_sandbox.INHERITED_PREFIXES):
 # a shell value wins over .env.local, so an ambient one would change the plan.
 _AMBIENT = ("LAKEBASE_", "APP_ENV")
@@ -79,7 +79,9 @@ def test_the_core_tier_plans_no_agentic_identity_and_stops_at_the_activation_bou
     assert code == 2, out[-3000:] + err[-3000:]
     assert "the core tier (MIP_AGENTIC_TIER=off) stops at the activation boundary" in err
     assert "agentic tier: off (core: the normal, operator2, admin and release-probe identities only)" in out
-    assert "  Gateway model attestation: not used by the core tier" in out
+    # The core profile holds no model-attestation key, and none is required.
+    assert "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY is required" not in err
+    assert "Gateway model attestation:" not in out
     # (The post-lease skips print only in a live run: tests/unit/test_core_tier_release_sandbox.py.)
     for absent in (
         "--identity-role verifier",

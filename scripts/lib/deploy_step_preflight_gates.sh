@@ -786,9 +786,9 @@ PYEOF
   echo "  AI Gateway proof attestation: verifier private key / runtime public key configured"
 fi
 
-# Proxy-model provenance uses a distinct release-signing key. The runtime
-# receives this private key only for the bounded model registration command;
-# it never receives the verifier-only inference-row proof key.
+# Proxy-model provenance uses a distinct release-signing key, required only in
+# the agentic tier (the core tier registers no Gateway model; plan §4.15). The
+# runtime gets it only for the bounded model registration, never the proof key.
 # The previous public key is safe to load from local configuration and must
 # accompany the current key through provisioning so rotations remain verifiable.
 # shellcheck disable=SC2031  # Parent-shell value is intentionally restored.
@@ -811,15 +811,10 @@ if [[ -z "$_GATEWAY_MODEL_SIGNING_KEY_RESOLVED" ]]; then
     dotenv_value MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY
   )"
 fi
-# The core tier (MIP_AGENTIC_TIER=off) registers no Gateway model, so it needs
-# no model-attestation key (plan §4.15); the agentic tier still requires it.
 if [[ -z "$_GATEWAY_MODEL_SIGNING_KEY_RESOLVED" ]]; then
   if tier_is_agentic && [[ "$APP_RUNTIME_ENV" != "local" && "$APP_RUNTIME_ENV" != "test" ]]; then
     echo "${RED}[deploy] ERROR: MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY is required for target '$TARGET' (APP_ENV=${APP_RUNTIME_ENV}).${RST}" >&2
     exit 1
-  fi
-  if ! tier_is_agentic; then
-    echo "  Gateway model attestation: not used by the core tier"
   fi
 else
   # shellcheck disable=SC2031
