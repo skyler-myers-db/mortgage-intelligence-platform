@@ -117,6 +117,8 @@ REMEDIES = {
 ACK_STATES = frozenset({"not_required", "matched", "absent", "mismatch"})
 # Conservative per-step budgets in seconds, for the admission (M0-PR9). They
 # are not measurements: spikes S2 and S7 owe the live timings.
+# "green_activation" is a contract window's tail: it stays open (the App
+# stopped) through step 5's publish, the green deploy and its capture.
 STEP_BUDGET_S = {
     "stop": 120,
     "WR1": 120,
@@ -125,6 +127,7 @@ STEP_BUDGET_S = {
     "WR4": 900,
     "start": 600,
     "repin": 300,
+    "green_activation": 1800,
 }
 # The admission margin on top of the predicted window and restore (M0-PR9).
 ADMISSION_MARGIN_S = 15 * 60
@@ -287,11 +290,20 @@ def body_sha256(body: Mapping[str, Any]) -> str:
 
 
 def predicted_seconds(reasons: tuple[str, ...], *, blue_restorable: bool) -> int:
+    """The window's predicted length: from the stop to the step that closes it.
+
+    A restorable window closes on blue's start and re-pin. A contract window
+    closes only at green activation, so its tail (``green_activation``) is
+    part of the outage the admission must fit before the job's deadline.
+    """
+
     if not reasons:
         return 0
     total = STEP_BUDGET_S["stop"] + sum(STEP_BUDGET_S[reason] for reason in reasons)
     if blue_restorable:
         total += STEP_BUDGET_S["start"] + STEP_BUDGET_S["repin"]
+    else:
+        total += STEP_BUDGET_S["green_activation"]
     return total
 
 
