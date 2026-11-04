@@ -7,8 +7,11 @@ owner-only and audited by the store, and no response echoes what was typed.
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -18,7 +21,9 @@ from pydantic import SecretStr
 
 from backend.config.settings import settings
 from backend.main import app
+from backend.schemas import saved_views as saved_views_schema
 from backend.schemas.saved_views import SavedView, SavedViewMutationResponse
+from backend.services import observability
 from backend.services.audit_fingerprint import (
     SAVED_VIEW_FINGERPRINT_DOMAIN,
     keyed_filter_fingerprint,
@@ -236,11 +241,65 @@ def test_personal_details_are_refused_without_echo(
 ) -> None:
     response = _save(name)
     assert response.status_code == 422
-    text = response.text
-    for fragment in fragments:
-        assert fragment not in text
-    assert "saved view name must be a short public-safe label" in text
+    _assert_refusal_never_echoes(response, fragments)
+    assert "saved view name must be a short public-safe label" in response.text
     assert store.rows == []
+
+
+def _assert_refusal_never_echoes(response: Any, fragments: tuple[str, ...]) -> None:
+    """No fragment of the typed name appears anywhere in the 422 body.
+
+    The one field set aside is the app-wide handler's ``correlation_id``: the
+    middleware mints it as ``uuid4().hex`` before the body is parsed, so it
+    can never carry the input, but random hex holds "212" in ~0.7% of runs
+    (CI flake, 2026-11-04). It is pinned to the request's minted id instead
+    of being scanned; every other key and value, ``detail`` included, is.
+    """
+
+    body = response.json()
+    correlation_id = body.pop("correlation_id")
+    assert correlation_id == response.headers["X-Correlation-ID"]
+    assert re.fullmatch(r"[0-9a-f]{32}", correlation_id)
+    scanned = json.dumps(body, ensure_ascii=False)
+    for fragment in fragments:
+        assert fragment not in scanned
+
+
+# The minted correlation id from the 2026-11-04 CI flake (left-padded to the
+# 32 hex digits of uuid4().hex): it carries "212", the area code under test.
+_COLLIDING_CORRELATION_ID = "00000000000" + "94386adbcf21295672026"
+
+
+def test_a_minted_correlation_id_that_contains_a_fragment_is_not_an_echo(
+    store: _MemoryStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        observability, "uuid", SimpleNamespace(uuid4=lambda: SimpleNamespace(hex=_COLLIDING_CORRELATION_ID))
+    )
+    response = _save("call 212-555-1212")
+    assert response.status_code == 422
+    # The collision is real: the raw body holds "212", but only in the id.
+    assert response.json()["correlation_id"] == _COLLIDING_CORRELATION_ID
+    assert "212" in response.text
+    _assert_refusal_never_echoes(response, ("212", "555-1212"))
+    assert store.rows == []
+
+
+def test_the_scoped_no_echo_check_still_catches_an_echo_in_detail(
+    store: _MemoryStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Control: setting the correlation id aside must not blind the check. A
+    # refusal whose message DID carry the name is caught through the real
+    # 422 handler.
+    def echoing(value: object) -> str:
+        raise ValueError(f"refused {value}")
+
+    monkeypatch.setattr(saved_views_schema, "normalize_saved_view_name", echoing)
+    response = _save("call 212-555-1212")
+    assert response.status_code == 422
+    assert "212-555-1212" in json.dumps(response.json()["detail"])
+    with pytest.raises(AssertionError, match="'212' not in"):
+        _assert_refusal_never_echoes(response, ("212", "555-1212"))
 
 
 @pytest.mark.parametrize(
