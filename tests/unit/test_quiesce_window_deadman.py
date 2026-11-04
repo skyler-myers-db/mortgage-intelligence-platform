@@ -562,6 +562,28 @@ def test_within_the_guard_of_the_deadline_the_run_leaves_the_start_to_the_dead_m
     assert started == "deployment-start-1"
 
 
+def test_the_start_guard_covers_the_start_and_the_re_pin() -> None:
+    # Review: a 120 s guard let the run begin a start the job's kill cut off
+    # half-way (start wait 600 s, re-pin 300 s), left for the owner.
+    from tools.databricks.quiesce_window_plan import ADMISSION_MARGIN_S, STEP_BUDGET_S
+
+    budget = STEP_BUDGET_S["start"] + STEP_BUDGET_S["repin"]
+    assert budget < window.DEADMAN_GUARD_S < budget + ADMISSION_MARGIN_S, "the admitted restore fits outside it"
+    estate = _estate()
+    _open(estate)
+    now = time.time()
+    with pytest.raises(RuntimeError, match="dead-man owns"):
+        window.start_window(
+            estate.workspace,
+            app_name=APP_NAME,
+            assert_lease_held=lambda: None,
+            stop=_stop(estate),
+            deadline=int(now + budget),
+            clock=lambda: now,
+        )
+    assert estate.apps.starts == 0
+
+
 def test_the_start_mode_requires_the_deadline() -> None:
     with pytest.raises(SystemExit, match="job deadline"):
         window.main(

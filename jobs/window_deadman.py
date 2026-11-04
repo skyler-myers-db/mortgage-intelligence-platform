@@ -20,16 +20,20 @@ environment, the workspace file, its auth or the marker folder) refuses the
 window instead of leaving it without a restart. Until the deadline it then
 polls the window journal, and exits doing nothing once
 the journal names this window (its ``window_sha256`` and lease, which ``--token``
-digests) in any state but ``window_open``: the run moved on or closed it (and
-its close also cancels this run). A journal of another window or none at all
-is not yet this window's, so it keeps waiting. At the deadline, with the
-journal still exactly this window's ``window_open``:
+digests) in any state but ``window_open`` or ``window_starting``: the run moved
+on or closed it (and its close also cancels this run). A journal of another
+window or none at all is not yet this window's, so it keeps waiting. At the
+deadline, with the journal still exactly this window's ``window_open`` or
+``window_starting`` (the run's intent: it never journals one within the start
+guard of the deadline, so at the deadline it means the runner died before or
+during its start, and the App checks below tell which):
 
 * ``blue_restorable`` false (a contract migration) leaves the App stopped and
   records ``deadman_left_stopped``;
 * otherwise, only when the App is still the window's stopped blue (its id,
   STOPPED, nothing pending, blue its active deployment, its default source
-  blue's restore source), it runs ``apps start``, waits for the deployment
+  blue's restore source: no start of the run's ever happened, or it failed),
+  it runs ``apps start``, waits for the deployment
   that start created (never "active changed") to be terminal and records
   ``deadman_restarted`` (SUCCEEDED) or ``deadman_start_failed`` with its id.
 
@@ -135,6 +139,10 @@ class Window:
 
 # --- the journal ------------------------------------------------------------
 
+# The journal states the dead-man may restart from: the open window, and the
+# run's intent to start, which at the deadline means its runner died.
+RESTARTABLE_STATES = frozenset({"window_open", "window_starting"})
+
 
 def read_journal(window: Window) -> dict[str, Any] | None:
     """The journal as written, or None when there is none yet."""
@@ -162,12 +170,12 @@ def names_this_window(window: Window, journal: dict[str, Any] | None) -> bool:
 
 
 def still_open(window: Window, journal: dict[str, Any] | None) -> bool:
-    """Exactly this window's ``window_open``: state, blue, restore source, restorability."""
+    """Exactly this window, open or only intending its start: state, blue, source, restorability."""
 
     return (
         journal is not None
         and names_this_window(window, journal)
-        and journal.get("state") == "window_open"
+        and journal.get("state") in RESTARTABLE_STATES
         and journal.get("blue_deployment_id") == window.args.blue_deployment_id
         and journal.get("restore_source") == window.args.restore_source
         and isinstance(journal.get("blue_restorable"), bool)
@@ -332,7 +340,7 @@ def run(window: Window) -> int:
         record(window, "deadman_skipped", reason="journal_unreadable")
         return 1
     if journal is None or not still_open(window, journal):
-        print(f"{_PREFIX} the journal is not this window's window_open; nothing to do")
+        print(f"{_PREFIX} the journal is not this window's window_open or window_starting; nothing to do")
         return 0
     if window.args.blue_restorable != "true" or journal.get("blue_restorable") is not True:
         record(window, "deadman_left_stopped", reason="contract_migration")

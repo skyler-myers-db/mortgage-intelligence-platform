@@ -345,7 +345,7 @@ def deadman_recovery(facts: WindowFacts, *, position: str) -> bool:
 
     return (
         position == "pre-lease"
-        and facts.journal_state == "window_open"
+        and facts.journal_state in {"window_open", "window_starting"}
         and facts.deadman_state == "deadman_restarted"
     )
 

@@ -8,7 +8,9 @@ signed window journal and the App, with the window's own start-and-re-pin
 proofs:
 
 1. the journal verifies (signature, key registry, reviewed fields), reads
-   ``window_open`` and is restorable;
+   ``window_open`` or ``window_starting`` (the run journaled its start
+   intent and died before the start: the dead-man restarts that too) and is
+   restorable;
 2. the marker of exactly that window (its token digests the journal's window
    sha256 and lease) reads ``deadman_restarted``, names that window's blue,
    and its start deployment is not blue;
@@ -42,6 +44,8 @@ from tools.databricks.app_start_deployment import tree_digest
 from tools.databricks.quiesce_window_deadman import read_marker, window_token
 
 RECOVERABLE_MARKER = "deadman_restarted"
+# The journal states the dead-man restarts from (jobs/window_deadman.py).
+RESTARTABLE_JOURNAL = frozenset({"window_open", "window_starting"})
 
 
 class DeadmanRepinRefused(RuntimeError):
@@ -54,7 +58,7 @@ def proven_deadman_start(
     """The open window and the start deployment its dead-man recorded, re-proved read-only."""
 
     current = journal.read(workspace, app_name=app_name)
-    if journal.state_of(current) != "window_open" or current is None:
+    if journal.state_of(current) not in RESTARTABLE_JOURNAL or current is None:
         raise DeadmanRepinRefused("no window is open: there is nothing the dead-man restarted")
     if current.get("blue_restorable") is not True:
         raise DeadmanRepinRefused("a contract window is never restarted from blue")

@@ -121,7 +121,7 @@ def collect_facts(
     # An open window whose dead-man restarted blue is the recovery's (M0-PR9).
     deadman_state = (
         deadman_status(workspace, app_name=app_name, current=current)[0]
-        if journal_state == "window_open"
+        if journal_state in {"window_open", "window_starting"}
         else "absent"
     )
     if rebase_unverified_app:

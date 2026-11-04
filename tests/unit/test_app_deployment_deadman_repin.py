@@ -106,6 +106,36 @@ def test_the_next_run_re_pins_the_dead_mans_start_and_closes_the_window() -> Non
         _repin(estate)
 
 
+def test_a_dead_runners_start_intent_is_re_pinned_and_closed_by_the_next_run() -> None:
+    # The runner journaled window_starting and died before apps start: the
+    # dead-man restarted it, and only the re-pin may close that intent.
+    estate = _estate()
+    opened = _open(estate)
+    starting = journal.write(
+        estate.workspace,
+        app_name=APP_NAME,
+        expected=opened,
+        changes={"state": "window_starting"},
+        assert_lease_held=lambda: None,
+    )
+    with pytest.raises(RuntimeError, match="transition is not allowed"):
+        journal.write(
+            estate.workspace,
+            app_name=APP_NAME,
+            expected=starting,
+            changes={"state": "closed", "closed_by": "repin"},
+            assert_lease_held=lambda: None,
+        )
+    run = estate.jobs.only_run()
+    parameters = list(run.tasks[0].spark_python_task.parameters)
+    clock = Clock(float(int(parameters[parameters.index("--deadline") + 1]) - 5))
+    assert run_deadman(estate, run.run_id, clock=clock, sleep=clock.sleep) == 0
+    record = _repin(estate)
+    assert record["deployment_id"] == "deployment-start-1"
+    closed = journal.read(estate.workspace, app_name=APP_NAME)
+    assert closed["state"] == "closed" and closed["closed_by"] == "deadman_repin"
+
+
 def test_the_cli_runs_it_as_repin_from_deadman(monkeypatch: pytest.MonkeyPatch) -> None:
     estate = _estate()
     _dead_runner(estate)
@@ -237,10 +267,27 @@ def test_status_reads_the_dead_mans_marker_as_codes_only(tmp_path: Any, capsys: 
     assert "deployment-" not in line, "the public line names no id"
 
 
+@pytest.mark.parametrize("intent", (False, True), ids=("window_open", "window_starting"))
 @pytest.mark.parametrize(("position", "refused"), (("pre-lease", False), ("pre-apply", True)))
-def test_the_pre_lease_plan_lets_a_dead_man_restart_through_to_the_recovery(position: str, refused: bool) -> None:
+def test_the_pre_lease_plan_lets_a_dead_man_restart_through_to_the_recovery(
+    position: str, refused: bool, intent: bool
+) -> None:
     estate = _estate()
-    _dead_runner(estate)
+    if intent:  # the runner journaled its start intent, then died before the start
+        opened = _open(estate)
+        journal.write(
+            estate.workspace,
+            app_name=APP_NAME,
+            expected=opened,
+            changes={"state": "window_starting"},
+            assert_lease_held=lambda: None,
+        )
+        run = estate.jobs.only_run()
+        parameters = list(run.tasks[0].spark_python_task.parameters)
+        clock = Clock(float(int(parameters[parameters.index("--deadline") + 1]) - 5))
+        assert run_deadman(estate, run.run_id, clock=clock, sleep=clock.sleep) == 0
+    else:
+        _dead_runner(estate)
     facts = window.collect_facts(
         estate.workspace,
         app_name=APP_NAME,
@@ -254,7 +301,8 @@ def test_the_pre_lease_plan_lets_a_dead_man_restart_through_to_the_recovery(posi
         migration_plan=MIGRATION_NOOP,
         rebase_unverified_app=False,
     )
-    assert (facts.journal_state, facts.deadman_state) == ("window_open", "deadman_restarted")
+    state = "window_starting" if intent else "window_open"
+    assert (facts.journal_state, facts.deadman_state) == (state, "deadman_restarted")
     plan = window.window_plan(facts, position=position, acknowledgement="")
     assert ("window_journal_open" in plan.refusals) is refused
     assert plan.public_summary()["deadman_recovery"] is (not refused)

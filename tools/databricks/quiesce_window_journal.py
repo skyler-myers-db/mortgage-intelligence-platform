@@ -178,6 +178,21 @@ def read(workspace: Any, *, app_name: str) -> dict[str, Any] | None:
     return _validated(value, app_name=app_name)
 
 
+def _deadman_close(current: dict[str, Any] | None, changes: dict[str, Any]) -> bool:
+    """``window_starting`` -> ``closed`` is the dead-man re-pin's alone (M0-PR9).
+
+    A runner that died after journaling its start intent and before the start
+    leaves ``window_starting``; its dead-man restarts blue at the deadline, and
+    the next run's ``repin --from-deadman`` re-proves and closes it.
+    """
+
+    return (
+        state_of(current) == "window_starting"
+        and changes.get("state") == "closed"
+        and changes.get("closed_by") == "deadman_repin"
+    )
+
+
 def read_unverified(workspace: Any, *, app_name: str) -> dict[str, Any] | None:
     """The journal as stored, signature NOT verified: only for a human record (M0-PR9).
 
@@ -215,7 +230,7 @@ def write(
     if current != expected:
         raise RuntimeError("quiesce-window journal changed since it was read")
     target = str(changes.get("state") or "")
-    if target not in TRANSITIONS[state_of(current)]:
+    if target not in TRANSITIONS[state_of(current)] and not _deadman_close(current, changes):
         raise RuntimeError("quiesce-window journal transition is not allowed")
     base: dict[str, Any] = {name: "" for name in FIELDS}
     base.update(version=JOURNAL_VERSION, app_name=app_name, reasons=[], blue_restorable=False)

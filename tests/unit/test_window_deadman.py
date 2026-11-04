@@ -154,16 +154,57 @@ def test_a_journal_that_says_the_window_is_not_restorable_wins_over_the_flag() -
     assert _marker(estate, opened)["state"] == "deadman_left_stopped" and estate.apps.starts == 0
 
 
-@pytest.mark.parametrize("state", ("window_starting", "closed"))
-def test_a_window_that_moved_on_ends_the_dead_man_before_the_deadline(state: str) -> None:
+def _journal(estate: Estate, opened: dict[str, Any], *changes: dict[str, Any]) -> dict[str, Any]:
+    current = opened
+    for change in changes:
+        current = journal.write(
+            estate.workspace, app_name=APP_NAME, expected=current, changes=change, assert_lease_held=lambda: None
+        )
+    return current
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        ({"state": "closed"},),
+        ({"state": "window_starting"}, {"state": "window_started", "start_deployment_id": "deployment-run"}),
+        ({"state": "window_starting"}, {"state": "window_refused", "refusal": "start_unreadable"}),
+    ),
+    ids=("closed", "started", "refused"),
+)
+def test_a_window_that_moved_on_ends_the_dead_man_before_the_deadline(path: tuple[dict[str, Any], ...]) -> None:
     estate = _estate()
     opened = _open(estate)
-    journal.write(
-        estate.workspace, app_name=APP_NAME, expected=opened, changes={"state": state}, assert_lease_held=lambda: None
-    )
+    _journal(estate, opened, *path)
     clock = Clock()
     assert _deadman(estate, _argv(opened), clock) == 0
     assert clock.now < DEADLINE and estate.apps.starts == 0 and _marker(estate, opened) is None
+
+
+def test_a_runner_that_died_after_its_start_intent_is_restarted_at_the_deadline() -> None:
+    # Review: window_starting is the run's intent, journaled BEFORE apps start.
+    # A runner killed in between left the App stopped, and the dead-man used to
+    # exit at its next poll. It never journals that intent within the start
+    # guard of the deadline, so at the deadline it means the runner died.
+    estate = _estate()
+    opened = _open(estate)
+    _journal(estate, opened, {"state": "window_starting"})
+    clock = Clock()
+    assert _deadman(estate, _argv(opened), clock) == 0
+    assert clock.now >= DEADLINE
+    marker = _marker(estate, opened)
+    assert marker["state"] == "deadman_restarted" and marker["start_deployment_id"] == "deployment-start-1"
+    assert (estate.apps.starts, estate.apps.compute) == (1, "ACTIVE")
+
+
+def test_a_start_intent_whose_start_happened_is_never_started_again() -> None:
+    estate = _estate(StartBehaviour(polls_in_progress=10_000))
+    opened = _open(estate)
+    _journal(estate, opened, {"state": "window_starting"})
+    estate.apps.start(APP_NAME)  # the run's own start, then the runner died
+    assert _deadman(estate, _argv(opened)) == 1
+    assert _marker(estate, opened)["reason"] in {"app_not_stopped", "pending_deployment"}
+    assert estate.apps.starts == 1, "one start, the run's"
 
 
 def test_another_windows_journal_never_ends_the_wait_and_is_never_started() -> None:

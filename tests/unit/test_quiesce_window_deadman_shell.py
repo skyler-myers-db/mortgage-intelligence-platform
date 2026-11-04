@@ -224,11 +224,12 @@ def test_a_failure_inside_an_activating_contract_window_keeps_the_dead_man(tmp_p
 # --- the next run: repin --from-deadman before step 0a's proof ----------------------
 
 
-def test_the_next_run_re_pins_a_dead_man_restart_under_its_own_lease(tmp_path: Path) -> None:
+@pytest.mark.parametrize("journal", ("window_open", "window_starting"))
+def test_the_next_run_re_pins_a_dead_man_restart_under_its_own_lease(tmp_path: Path, journal: str) -> None:
     result, calls = _run(
         tmp_path,
         "recover_deadman_quiesce_window\necho recovered\n",
-        JOURNAL="window_open",
+        JOURNAL=journal,
         DEADMAN_STATE="deadman_restarted",
     )
     assert result.returncode == 0, result.stderr
@@ -250,6 +251,9 @@ def test_the_next_run_re_pins_a_dead_man_restart_under_its_own_lease(tmp_path: P
         ("window_open", "deadman_left_stopped"),
         ("window_open", "deadman_start_failed"),
         ("window_open", "mismatch"),
+        ("window_started", "deadman_restarted"),
+        ("window_proven", "deadman_restarted"),
+        ("window_refused", "deadman_restarted"),
     ),
 )
 def test_anything_but_an_open_window_the_dead_man_restarted_is_left_alone(

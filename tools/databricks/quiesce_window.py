@@ -72,6 +72,7 @@ from tools.databricks.quiesce_window_facts import (
 )
 from tools.databricks.quiesce_window_plan import (
     ACK_ENV,
+    STEP_BUDGET_S,
     body_sha256,
     window_plan,
     with_admission,
@@ -79,7 +80,11 @@ from tools.databricks.quiesce_window_plan import (
 
 _PREFIX = "[mip-quiesce-window]"
 # The run never starts blue this close to the job deadline: the dead-man does.
-DEADMAN_GUARD_S = 120
+# It covers the start's own wait and the re-pin (plus a slack), so a start the
+# run begins can finish before the deadline, never be cut off by the job's
+# kill half-way and left window_starting or window_started for the owner.
+DEADMAN_GUARD_SLACK_S = 120
+DEADMAN_GUARD_S = STEP_BUDGET_S["start"] + STEP_BUDGET_S["repin"] + DEADMAN_GUARD_SLACK_S
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -250,9 +255,10 @@ def start_window(
     ``window_starting`` is written before ``apps start``, so a start whose id
     was never journaled is not mistaken for "never started": a rerun resumes
     from the App's pending deployment and never starts a second time. Within
-    ``DEADMAN_GUARD_S`` of the job deadline the dead-man owns the start
-    (M0-PR9): the run journals no intent and leaves the window open for it,
-    so the two never both start the App.
+    ``DEADMAN_GUARD_S`` of the job deadline (the start and re-pin budgets
+    and a slack) the dead-man owns the start (M0-PR9): the run journals no
+    intent and leaves the window open for it, so the two never both start
+    the App, and a start the run begins has its whole budget before the kill.
     """
 
     current = journal.read(workspace, app_name=app_name)

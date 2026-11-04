@@ -652,10 +652,12 @@ recover_deadman_quiesce_window() {
   # shellcheck disable=SC1090
   . "$env_file"
   rm -f "$env_file"
-  if [[ "$MIP_QUIESCE_WINDOW_JOURNAL_STATE" != "window_open" || \
-        "${MIP_QUIESCE_WINDOW_DEADMAN_STATE:-absent}" != "deadman_restarted" ]]; then
-    return 0
-  fi
+  # window_starting too: a runner that died between its start intent and the
+  # start leaves it, and its dead-man restarts that window as well.
+  case "${MIP_QUIESCE_WINDOW_JOURNAL_STATE}:${MIP_QUIESCE_WINDOW_DEADMAN_STATE:-absent}" in
+    window_open:deadman_restarted|window_starting:deadman_restarted) ;;
+    *) return 0 ;;
+  esac
   payload="$(mktemp -t mip-quiesce-window-recover-bindings.XXXXXX.json)"
   chmod 600 "$payload"
   if collect_quiesce_window_binding_payload "$payload"; then
