@@ -14,6 +14,12 @@ reconcile steps. ``npm`` is a stub that succeeds.
 call with the identity names each was handed, and the sandbox state (the
 lease writer, the SQL statements, the bundle job runs, the first-install
 journal). Nothing can reach Databricks.
+
+``excise`` removes one marked block (``# >>> name >>>`` to ``# <<< name <<<``)
+from the clone's deploy scripts and commits that, to run the steps a refusal
+stands in front of: the core tier's sites past the lease, which its release
+refusal keeps unreachable until the core activation path exists. The block
+must exist exactly once; the real checkout is never touched.
 """
 
 from __future__ import annotations
@@ -81,16 +87,34 @@ def _lines(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
+def _excise(checkout: Path, marker: str) -> None:
+    start, end = f"# >>> {marker} >>>\n", f"# <<< {marker} <<<\n"
+    hits = [path for path in sorted((checkout / "scripts").rglob("*.sh")) if start in path.read_text(encoding="utf-8")]
+    assert len(hits) == 1, (marker, hits)
+    text = hits[0].read_text(encoding="utf-8")
+    assert text.count(start) == 1 and text.count(end) == 1, marker
+    head, rest = text.split(start)
+    hits[0].write_text(head + rest.split(end)[1], encoding="utf-8")
+    subprocess.run(
+        ["git", "-c", "user.name=Sandbox", "-c", "user.email=sandbox@example.invalid", "commit", "-qam", f"excise {marker}"],
+        cwd=checkout,
+        check=True,
+    )
+
+
 def release(
     tmp_path: Path,
     profile: dict[str, str],
     estate: dict[str, Any],
     *,
     client_ids: dict[str, str],
+    excise: str | None = None,
 ) -> Release:
     """``scripts/deploy.sh -t client`` with DRY_RUN=0, in the sandbox, with only ``client_ids``."""
 
     checkout, base_env, cli_log = sandbox(tmp_path)
+    if excise is not None:
+        _excise(checkout, excise)
     # As in the refusal matrix: the fake estate's metastore is the deployer's,
     # and it accepts no shared-estate exposure (M2-PR4).
     estate_facts = {"MIP_UC_METASTORE_OWNER": DEPLOYER, "MIP_ACCEPTED_EXPOSURE_JSON": "[]"}

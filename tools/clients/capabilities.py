@@ -24,12 +24,10 @@ feature missing from the workspace; any other error as a read that could not
 be completed. Every refusal is collected, none short-circuits the rest, and
 each names the feature and the tier, never a value.
 
-One deploy-side gap is reported here too, because it is known before the
-lease: the core tier cannot yet upgrade an App that already exists. Its
-signed-blue restore and its activation still run through the agentic
-identities (scripts/lib/deploy_agent_proxy_lifecycle.sh and the agentic
-cutover), so a core run over a serving App refuses now, while it still
-serves, instead of after the stop.
+This preflight judges the workspace only. That the core tier cannot release
+yet (its activation still needs the agentic identities) is the deploy's own
+refusal, before the lease (scripts/lib/deploy_step_automation_identities.sh),
+so a core ``--phase plan`` or adopt phase over an existing App still runs.
 """
 
 from __future__ import annotations
@@ -43,8 +41,7 @@ from databricks.sdk import errors as sdk_errors
 from tools.clients.schema import ClientProfile
 from tools.databricks.m2m_identity_contract import AgenticTier, agentic_tier
 
-_ABSENT = (sdk_errors.NotFound, sdk_errors.ResourceDoesNotExist)
-_MISSING = (*_ABSENT, sdk_errors.NotImplemented)
+_MISSING = (sdk_errors.NotFound, sdk_errors.ResourceDoesNotExist, sdk_errors.NotImplemented)
 _BOTH: tuple[AgenticTier, ...] = ("off", "on")
 _AGENTIC: tuple[AgenticTier, ...] = ("on",)
 
@@ -97,24 +94,6 @@ def _tier_label(tier: AgenticTier) -> str:
     return "the agentic tier (MIP_AGENTIC_TIER=on)" if tier == "on" else "the core tier (MIP_AGENTIC_TIER=off)"
 
 
-def _existing_app_refusals(profile: ClientProfile, client: Any, tier: AgenticTier) -> list[str]:
-    """The core tier over an App that exists: refused until its upgrade path is tier-aware."""
-
-    if tier == "on":
-        return []
-    try:
-        client.apps.get(profile.app_name)
-    except _ABSENT:
-        return []
-    except Exception as exc:  # the class only: an SDK message can carry a host or an id
-        return [f"MIP_APP_NAME: could not read whether the App exists: {type(exc).__name__}"]
-    return [
-        "MIP_AGENTIC_TIER: the core tier cannot upgrade an existing App yet (its signed-blue "
-        "restore and activation still need the agentic identities); deploy it with "
-        "MIP_AGENTIC_TIER=on"
-    ]
-
-
 def check(profile: ClientProfile, client: Any) -> list[str]:
     """Every capability refusal for the profile's tier; empty when the workspace has them all."""
 
@@ -136,4 +115,4 @@ def check(profile: ClientProfile, client: Any) -> list[str]:
                 f"MIP_AGENTIC_TIER: could not prove {capability.name} for {_tier_label(tier)}: "
                 f"{type(exc).__name__}"
             )
-    return [*lines, *_existing_app_refusals(profile, client, tier)]
+    return lines

@@ -1,15 +1,24 @@
-"""A core-tier release runs the real deploy.sh past the lease with four identities (M2-PR3).
+"""A core-tier release refuses before the lease; the sites behind that refusal run for real (M2-PR3).
 
 The client profile sets ``MIP_AGENTIC_TIER=off`` and holds only the normal,
 operator2, admin and release-probe identities (plus the deployer's own roles
 and the account principal): no verifier, agent runtime or proxy id or
 secret, and no model-attestation key. The sandbox (tests/fixtures/
 release_sandbox.py) runs ``scripts/deploy.sh -t client`` with ``DRY_RUN=0``
-against a first install, and the run must:
+against a first install.
+
+**As shipped**, the run passes the real pre-stop probes in their core mode
+(no runtime or verifier argument, no Supervisor listing, the App-only Genie
+clause) and the plan gate, then refuses (exit 2) before the lease and any
+workspace mutation: the core tier has no activation path yet, and a release
+that stops at the step-5 boundary after mutating the install would do so on
+every attempt.
+
+**With that one refusal excised from the sandbox clone** (``# >>> core tier:
+release refusal >>>``), the tier-aware sites it guards, which the core
+activation path will reach, run for real. The run must:
 
 * acquire the signed lease with the core writer, the release probe;
-* pass the real pre-stop probes in their core mode (no runtime or verifier
-  argument, the App-only Genie clause);
 * reach and complete the Lakebase migration, the reviewed-function grant
   reconcile (proven by the real verifier against the grants it applied) and
   the UC grant block, granting only the App;
@@ -18,8 +27,9 @@ against a first install, and the run must:
   control, which the one-use creator's real control check accepts for the
   App's and the jobs reader's roles, and hand that credential to no other
   child;
-* then stop at the core activation boundary, exit 2, and release the lease
-  after the first-install compensation removed the App it created.
+* then stop at the core activation boundary (the refusal's defence in
+  depth), exit 2, and release the lease after the first-install compensation
+  removed the App it created.
 
 A missing or unreviewed tier refuses before the lease.
 """
@@ -32,10 +42,25 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures.client_profiles import IDENTITY_IDS, core_tier_profile
+from tests.fixtures.deploy_block_harness import block
+from tests.fixtures.deploy_script import deploy_entrypoint_text
 from tests.fixtures.release_sandbox import core_client_ids, first_install_estate, release
 
 APP_CLIENT = "app-client-EXAMPLE"
 AGENTIC = (IDENTITY_IDS["verifier"], IDENTITY_IDS["runtime"], IDENTITY_IDS["proxy"])
+
+
+RELEASE_REFUSAL = "core tier: release refusal"
+
+
+@pytest.fixture(scope="module")
+def core_refused(tmp_path_factory: pytest.TempPathFactory):  # type: ignore[no-untyped-def]
+    return release(
+        tmp_path_factory.mktemp("core-refused"),
+        core_tier_profile(),
+        first_install_estate(),
+        client_ids=core_client_ids(),
+    )
 
 
 @pytest.fixture(scope="module")
@@ -45,11 +70,51 @@ def core_release(tmp_path_factory: pytest.TempPathFactory):  # type: ignore[no-u
         core_tier_profile(),
         first_install_estate(),
         client_ids=core_client_ids(),
+        excise=RELEASE_REFUSAL,
     )
 
 
 def _detail(run) -> str:  # type: ignore[no-untyped-def]
     return run.result.stdout[-6000:] + run.result.stderr[-6000:]
+
+
+def test_a_core_release_refuses_before_the_lease_and_changes_nothing(core_refused) -> None:  # type: ignore[no-untyped-def]
+    run = core_refused
+    assert run.result.returncode == 2, _detail(run)
+    assert "the core tier (MIP_AGENTIC_TIER=off) cannot release yet" in run.result.stderr, _detail(run)
+    assert "Refusing before the lease; nothing was changed." in run.result.stderr
+    # Every read-only check ran first: the real core probes passed.
+    assert "[mip-prestop] pre-stop probes passed (read-only)" in run.result.stdout, _detail(run)
+    assert "acquire signed workspace lease" not in run.result.stdout
+    assert "lease_writer" not in run.state, "no lease was taken"
+    # No workspace mutation: no App, no SQL, no job run, no bundle deploy.
+    assert not [
+        call["argv"]
+        for call in run.cli_calls
+        if call["argv"][:2] in (["apps", "create"], ["api", "post"], ["bundle", "run"])
+    ]
+    assert not any(module[:2] == ["tools.databricks.bundle_env", "deploy"] for module in run.modules())
+    assert not any(module[0] == "tools.databricks.app_deployment_lease" for module in run.modules())
+
+
+def test_the_refusal_is_the_last_read_only_step_and_spares_the_plan_and_adopt_phases() -> None:
+    text = deploy_entrypoint_text()
+    refusal = text.index(f"# >>> {RELEASE_REFUSAL} >>>")
+    assert text.count(f"# >>> {RELEASE_REFUSAL} >>>") == 1
+    # After the read-only probes and the plan gate (where --phase plan ends) ...
+    assert text.index("tools.databricks.deploy_prestop_probes") < refusal
+    assert text.index("# <<< bundle plan gate: pre-lease <<<") < refusal
+    # ... and before the lease, the adopt phases' apply and every later step.
+    for later in (
+        "tools.databricks.app_deployment_lease recovery-root",
+        "tools.databricks.app_deployment_lease acquire",
+        'run_adopt_phase_apply "$DEPLOY_PHASE"',
+        "# >>> core tier: activation boundary >>>",
+    ):
+        assert refusal < text.index(later), later
+    lines = [line for line in block(f"# >>> {RELEASE_REFUSAL} >>>", f"# <<< {RELEASE_REFUSAL} <<<").splitlines() if not line.startswith("#")]
+    assert lines[0] == 'if ! tier_is_agentic && [[ -z "${DEPLOY_PHASE:-}" ]]; then', "a core release only, in a dry run too"
+    assert lines[-2:] == ["  exit 2", "fi"]
 
 
 def test_the_core_release_stops_at_the_activation_boundary_after_the_grants(core_release) -> None:  # type: ignore[no-untyped-def]
@@ -83,8 +148,8 @@ def test_the_lease_is_acquired_with_the_core_writer(core_release) -> None:  # ty
     assert core_release.state["lease_released"] == "lease-sandbox-1"
 
 
-def test_the_pre_stop_probes_pass_in_their_core_mode(core_release) -> None:  # type: ignore[no-untyped-def]
-    run = core_release
+def test_the_pre_stop_probes_pass_in_their_core_mode(core_refused) -> None:  # type: ignore[no-untyped-def]
+    run = core_refused
     assert "[mip-prestop] pre-stop probes passed (read-only)" in run.result.stdout, _detail(run)
     assert "the core tier provisions no Supervisor" in run.result.stdout
     probes = [module for module in run.modules() if module[0] == "tools.databricks.deploy_prestop_probes"]
@@ -108,6 +173,9 @@ def test_the_grant_and_reconcile_steps_grant_only_the_app(core_release) -> None:
     assert verifier and all(module[1:] == ["--catalog", "mip", "--app-application-id", APP_CLIENT, "--agentic-tier", "off"] for module in verifier)
     assert "[function-grants] verified three exact effective direct EXECUTE grants" in core_release.result.stdout
     assert core_release.state["bundle_runs"] == ["mip_lakebase_migrate", "mip_init_catalog_schemas"]
+    # The pipeline namespace forbids exactly the four core identities as owners.
+    namespace = [module for module in core_release.modules() if module[0] == "tools.databricks.ensure_pipeline_namespace"]
+    assert namespace and all(module.count("--forbidden-owner-principal") == 4 for module in namespace), namespace
 
 
 def test_the_migrate_job_gets_the_absence_flag_and_no_verifier(core_release) -> None:  # type: ignore[no-untyped-def]

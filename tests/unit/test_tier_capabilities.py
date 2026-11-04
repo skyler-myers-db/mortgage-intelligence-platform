@@ -3,10 +3,11 @@
 ``tools/clients/capabilities.py`` runs read-only, inside the live checks and
 before the lease, against a fake SDK here: one list call per feature, at most
 one page. The core tier needs Apps, Lakebase, Genie and SQL warehouses; the
-agentic tier also Model Serving, Supervisor agents and MLflow. A missing
-feature or an unreadable one refuses, naming the feature and the tier, never
-a value. The core tier over an App that already exists refuses too: its
-upgrade path still needs the agentic identities.
+agentic tier also Model Serving and MLflow. A missing feature or an
+unreadable one refuses, naming the feature and the tier, never a value. The
+preflight judges the workspace alone: it never reads the App, so a core
+``--phase plan`` or adopt phase over an existing App passes it (a core release
+refuses in the deploy itself, before the lease).
 """
 
 from __future__ import annotations
@@ -88,7 +89,7 @@ def test_the_agentic_tier_proves_every_feature_with_one_read_each() -> None:
 def test_the_core_tier_needs_only_the_core_features() -> None:
     sdk = FakeSdk()
     assert capabilities.check(_profile("off"), sdk) == []
-    assert sdk.calls == [*(FEATURES[name] for name in CORE), "apps.get mip-app"]
+    assert sdk.calls == [FEATURES[name] for name in CORE]
     assert [capability.name for capability in capabilities.required("off")] == list(CORE)
 
 
@@ -116,13 +117,14 @@ def test_an_unreadable_feature_refuses_and_never_reads_as_present() -> None:
     assert "4200000001" not in "".join(lines), "a refusal never carries what the SDK said"
 
 
-def test_the_core_tier_over_an_existing_app_refuses_before_the_lease() -> None:
-    lines = capabilities.check(_profile("off"), FakeSdk(app_exists=True))
-    assert lines == [
-        "MIP_AGENTIC_TIER: the core tier cannot upgrade an existing App yet (its signed-blue "
-        "restore and activation still need the agentic identities); deploy it with MIP_AGENTIC_TIER=on"
-    ]
-    assert capabilities.check(_profile("on"), FakeSdk(app_exists=True)) == [], "the agentic tier upgrades it"
+@pytest.mark.parametrize("tier", ["off", "on"])
+def test_an_existing_app_is_not_the_preflights_to_judge(tier: str) -> None:
+    # The cutover plans and adopts over the live App in the core tier: those
+    # read-only and state-only phases must pass the live checks. Whether a core
+    # release may run is the deploy's refusal (tests/unit/test_core_tier_release_sandbox.py).
+    sdk = FakeSdk(app_exists=True)
+    assert capabilities.check(_profile(tier), sdk) == []
+    assert not [call for call in sdk.calls if call.startswith("apps.get")]
 
 
 def test_a_tier_the_schema_was_bypassed_for_refuses() -> None:

@@ -1856,7 +1856,7 @@ tier.
 | per-run credential checks | all seven | the four core ones |
 | model-attestation key | required | not used |
 | signed lease writer (`lease_writer`) | agent runtime | release probe |
-| pre-stop probes | `--runtime-application-id` and `--verifier-application-id`; Supervisor and Genie clauses for App, runtime and verifier | `--agentic-tier off`, neither id; no Supervisor clause; the Genie clause audits the App (on a first install, its future service principal as a `users` member) |
+| pre-stop probes | `--runtime-application-id` and `--verifier-application-id`; Supervisor and Genie clauses for App, runtime and verifier | `--agentic-tier off`, neither id; no Supervisor listing or clause, so the App may hold no Supervisor serving access; the Genie clause audits the App (on a first install, its future service principal as a `users` member) |
 | runtime UC audit, verifier Lakebase role, runtime/verifier/proxy isolation audits | run | skipped |
 | Lakebase bootstrap control identity (`run_with_lakebase_bootstrap_authority`) | the agent runtime, required up front | the release probe, required up front (it has no Lakebase role and is never a converged target) |
 | UC grants and the reviewed-function reconcile | App, runtime and proxy | App only (`verify_reviewed_function_execute_grants --agentic-tier off`) |
@@ -1870,16 +1870,20 @@ to those before the tier was read (the PR's artifact-hash proof;
 emergency recipe builds the agentic payload by default and keeps its 32 env
 names.
 
-**The core tier stops at the activation boundary.** It is tier-aware through
-the Lakebase migration and the grant and reconcile steps
-(`tests/unit/test_core_tier_release_sandbox.py` runs a real non-dry-run release
-there with the four core identities). Publish, activation, signed capture, the
-signed-blue restore and the agentic provisioning, cutover and evaluation still
-need the agentic identities, so a core release exits 2 at the top of step 5,
-before anything is published or activated; a first install's App is removed by
-the first-install compensation. The live checks refuse a core release over an
-App that already exists before the lease, while it still serves. Building the
-core activation path is a follow-up.
+**A core release refuses before the lease.** The core tier is tier-aware
+through the Lakebase migration and the grant and reconcile steps, but publish,
+activation, signed capture, the signed-blue restore and the agentic
+provisioning, cutover and evaluation still need the agentic identities (the
+signed rollback record pins the Gateway resource contract). A core release
+would therefore mutate the install through the grants and then stop at step 5
+on every attempt, so it refuses instead, after every read-only check (the live
+checks, the pre-stop probes in their core mode and the bundle plan gate) and
+before the lease, in a dry run too. `--phase plan` and the adopt phases run in
+the core tier, over an existing App as well. The step-5 stop stays as that
+refusal's defence in depth. `tests/unit/test_core_tier_release_sandbox.py`
+pins the refusal, and, with the refusal excised from a sandbox clone, runs the
+sites behind it for real with the four core identities. Building the core
+activation path, and with it a core release, is a follow-up.
 
 ### PII salt (write-once)
 

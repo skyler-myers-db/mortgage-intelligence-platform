@@ -8,9 +8,11 @@
   the origin/main transcript the change was proven against (its full stdout
   hashes equal; see the PR), so a site that stops planning its agentic
   identity fails here. No core-only line appears.
-* **core tier**: the plan names no verifier, runtime or proxy anywhere, grants
-  and proves only the App, skips the agentic identity audits, and stops at
-  the activation boundary with exit 2 (a live run would stop there too).
+* **core tier**: the plan names no verifier, runtime or proxy and needs no
+  model-attestation key; after the read-only checks it refuses with exit 2
+  before the lease, as a live run does (the core tier cannot release yet).
+  The sites past the lease run for real in
+  tests/unit/test_core_tier_release_sandbox.py, with that refusal excised.
 """
 
 from __future__ import annotations
@@ -74,15 +76,18 @@ def test_the_agentic_tier_plans_every_site_as_before(tmp_path: Path) -> None:
         assert marker not in out, marker
 
 
-def test_the_core_tier_plans_no_agentic_identity_and_stops_at_the_activation_boundary(tmp_path: Path) -> None:
+def test_the_core_tier_plans_no_agentic_identity_and_refuses_before_the_lease(tmp_path: Path) -> None:
     code, out, err = _plan(tmp_path, core_tier_profile())
     assert code == 2, out[-3000:] + err[-3000:]
-    assert "the core tier (MIP_AGENTIC_TIER=off) stops at the activation boundary" in err
+    assert "the core tier (MIP_AGENTIC_TIER=off) cannot release yet" in err
     assert "agentic tier: off (core: the normal, operator2, admin and release-probe identities only)" in out
     # The core profile holds no model-attestation key, and none is required.
     assert "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY is required" not in err
     assert "Gateway model attestation:" not in out
-    # (The post-lease skips print only in a live run: tests/unit/test_core_tier_release_sandbox.py.)
+    # Every read-only step was planned, then nothing past the lease.
+    assert "would probe read-only:" in out
+    assert "tools.databricks.bundle_plan_gate" in out
+    assert "acquire signed workspace lease" not in out
     for absent in (
         "--identity-role verifier",
         "--identity-role agent_runtime",
@@ -93,13 +98,3 @@ def test_the_core_tier_plans_no_agentic_identity_and_stops_at_the_activation_bou
         RUNTIME,
     ):
         assert absent not in out, absent
-    grants = [line for line in out.splitlines() if line.startswith("  would grant: ")]
-    assert grants and all(line.endswith("TO `dry-run-app-client-id`") for line in grants), grants
-    assert (
-        "$ .venv/bin/python -m tools.databricks.verify_reviewed_function_execute_grants --catalog mip "
-        "--app-application-id dry-run-app-client-id --agentic-tier off"
-    ) in out
-    namespace = next(line for line in out.splitlines() if "ensure_pipeline_namespace" in line)
-    assert namespace.count("--forbidden-owner-principal") == 4
-    # Nothing past the boundary is planned.
-    assert "app_release_source publish" not in out and "provision_agentic_resources" not in out
