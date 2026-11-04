@@ -118,15 +118,21 @@ resolve_m2m_credential() {
 # root as tools/databricks/bundle_env.py. Pure: it also runs in DRY_RUN.
 # `resolve` registers every identifying value as a runner mask before it
 # writes the 0600 view this reads.
+# The agentic tier (M2-PR3, plan §4.15) is the profile's MIP_AGENTIC_TIER,
+# with its identity contract (tools/databricks/m2m_identity_contract.py): the
+# client-id name of the lease writer and of every role the tier deploys with.
+# A missing or unreviewed tier refuses here, before the lease.
 CLIENT_TARGET_BUNDLE_VARS=(
   BUNDLE_VAR_client_key BUNDLE_VAR_deployer_principal BUNDLE_VAR_jobs_principal
   BUNDLE_VAR_dashboard_parent_path BUNDLE_VAR_lakebase_readable_secondaries
+  BUNDLE_VAR_require_ai_gateway_verifier
 )
 resolve_client_profile() {
   local view line name value
   unset "${CLIENT_TARGET_BUNDLE_VARS[@]}"
   CLIENT_KEY=""; CLIENT_INSTALL_CLASS=""; CLIENT_HOST=""; CLIENT_DEPLOYER=""
   CLIENT_APP_ENV=""; CLIENT_DEMO_FEEDS=""; CLIENT_PRESENTER_MODE=""; CLIENT_SCHEDULED_REFRESH=""
+  CLIENT_AGENTIC_TIER=""; CLIENT_LEASE_WRITER_ENV=""; CLIENT_TIER_IDENTITIES=""
   view="$(mktemp -t mip-client-target.XXXXXX)"
   if ! "$PYTHON" -m tools.clients resolve --emit client-target --format env --out "$view"; then
     rm -f "$view"
@@ -146,7 +152,10 @@ resolve_client_profile() {
       MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS) CLIENT_DEMO_FEEDS="$value" ;;
       MIP_PRESENTER_MODE) CLIENT_PRESENTER_MODE="$value" ;;
       MIP_SCHEDULED_REFRESH) CLIENT_SCHEDULED_REFRESH="$value" ;;
-      BUNDLE_VAR_client_key|BUNDLE_VAR_deployer_principal|BUNDLE_VAR_dashboard_parent_path|BUNDLE_VAR_lakebase_readable_secondaries)
+      MIP_AGENTIC_TIER) CLIENT_AGENTIC_TIER="$value" ;;
+      MIP_TIER_LEASE_WRITER) CLIENT_LEASE_WRITER_ENV="$value" ;;
+      MIP_TIER_IDENTITIES) CLIENT_TIER_IDENTITIES="$value" ;;
+      BUNDLE_VAR_client_key|BUNDLE_VAR_deployer_principal|BUNDLE_VAR_dashboard_parent_path|BUNDLE_VAR_lakebase_readable_secondaries|BUNDLE_VAR_require_ai_gateway_verifier)
         printf -v "$name" '%s' "$value"
         export "${name?}"
         ;;
@@ -166,7 +175,44 @@ resolve_client_profile() {
     echo "${RED}[deploy] the client-target view is incomplete; refusing.${RST}" >&2
     exit 2
   fi
+  if ! client_tier_contract_holds; then
+    echo "${RED}[deploy] the client-target view carries no reviewed agentic tier (MIP_AGENTIC_TIER must be exactly off or on); refusing before the lease.${RST}" >&2
+    exit 2
+  fi
   echo "  client:     ${CLIENT_KEY} (${CLIENT_INSTALL_CLASS} install; profile resolved)"
+  if ! tier_is_agentic; then
+    echo "  agentic tier: off (core: the normal, operator2, admin and release-probe identities only)"
+  fi
+}
+
+# The tier's identity contract, as the view carries it: the tier, a lease
+# writer among the tier's roles, and the core tier's absence flag for the
+# migrate job exactly when the tier is off.
+client_tier_contract_holds() {
+  local core_roles="DATABRICKS_CLIENT_ID,DATABRICKS_OPERATOR2_CLIENT_ID,DATABRICKS_ADMIN_CLIENT_ID,DATABRICKS_RELEASE_PROBE_CLIENT_ID"
+  case "$CLIENT_AGENTIC_TIER" in
+    on)
+      [[ "$CLIENT_LEASE_WRITER_ENV" == "DATABRICKS_AGENT_RUNTIME_CLIENT_ID" && \
+         "$CLIENT_TIER_IDENTITIES" == "${core_roles},DATABRICKS_VERIFIER_CLIENT_ID,DATABRICKS_AGENT_RUNTIME_CLIENT_ID,DATABRICKS_AGENT_PROXY_CLIENT_ID" && \
+         -z "${BUNDLE_VAR_require_ai_gateway_verifier+set}" ]]
+      ;;
+    off)
+      [[ "$CLIENT_LEASE_WRITER_ENV" == "DATABRICKS_RELEASE_PROBE_CLIENT_ID" && \
+         "$CLIENT_TIER_IDENTITIES" == "$core_roles" && \
+         "${BUNDLE_VAR_require_ai_gateway_verifier:-}" == "--ai-gateway-verifier-absent" ]]
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# Whether the resolved profile's tier is the agentic one (MIP_AGENTIC_TIER=on).
+tier_is_agentic() {
+  [[ "$CLIENT_AGENTIC_TIER" == "on" ]]
+}
+
+# Whether the tier deploys with the identity whose client id is held under $1.
+tier_has_identity() {
+  [[ ",${CLIENT_TIER_IDENTITIES}," == *",$1,"* ]]
 }
 
 # The host the CLI and the SDK resolved for the deployer must be the client
@@ -621,6 +667,17 @@ prove_agent_runtime_dual_uc_boundary() {
 }
 
 run_with_lakebase_bootstrap_authority() {
+  # The core tier has no control identity (m2m_identity_contract.
+  # lakebase_bootstrap_control): the child gets none, and the converger refuses
+  # only the path that would create a role. The agentic tier hands the agent
+  # runtime's credential and still refuses its absence up front.
+  if ! tier_is_agentic; then
+    (
+      unset MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET
+      run_with_account_identity run_with_proof_signing_authority "$@"
+    )
+    return
+  fi
   local control_client_id="${DATABRICKS_AGENT_RUNTIME_CLIENT_ID:-}"
   local control_client_secret="${DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET:-}"
   if [[ "$DRY_RUN" -eq 0 && \

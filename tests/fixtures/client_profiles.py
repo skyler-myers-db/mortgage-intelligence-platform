@@ -205,6 +205,34 @@ def paychex_shaped_profile(**overrides: str | None) -> dict[str, str]:
     return _apply(_apply(DEMO_PROFILE, shaped), overrides)
 
 
+# The agentic-tier secrets a core-tier profile does not hold (plan §4.15).
+_AGENTIC_SECRETS = (
+    "DATABRICKS_VERIFIER_CLIENT_SECRET",
+    "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET",
+    "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE",
+    "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY",
+)
+
+
+def core_tier_profile(**overrides: str | None) -> dict[str, str]:
+    """Client #1's shape in the core tier (M2-PR3): no verifier, runtime or proxy.
+
+    ``MIP_AGENTIC_TIER=off``, the four core M2M identities (normal, operator2,
+    admin, release probe) beside the deployer's own roles and the account
+    principal, no agentic secret and the weekly refresh off.
+    """
+
+    ids = {role: value for role, value in IDENTITY_IDS.items() if role not in ("verifier", "runtime", "proxy")}
+    core: dict[str, str | None] = {
+        "MIP_AGENTIC_TIER": "off",
+        "MIP_SCHEDULED_REFRESH": "off",
+        "MIP_SCHEDULED_REFRESH_RECIPIENTS": None,
+        "MIP_IDENTITY_IDS_JSON": json.dumps(ids),
+        **dict.fromkeys(_AGENTIC_SECRETS),
+    }
+    return paychex_shaped_profile(**{**core, **overrides})
+
+
 def paychex_shaped_customer_profile(**overrides: str | None) -> dict[str, str]:
     """Client #1's shape as a customer install: the demo-only fields off, a pinned lender record.
 

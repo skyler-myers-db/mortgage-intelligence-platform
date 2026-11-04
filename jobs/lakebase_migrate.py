@@ -277,8 +277,13 @@ def _preflight_database_roles(
     require_ai_gateway_verifier: bool = False,
     role_wait_timeout_s: float | None = None,
     role_wait_interval_s: float | None = None,
+    ai_gateway_verifier_absent: bool = False,
 ) -> tuple[str, str | None]:
-    """Resolve and prove exact roles while preserving facade monkeypatch seams."""
+    """Resolve and prove exact roles while preserving facade monkeypatch seams.
+
+    ``ai_gateway_verifier_absent`` is the core tier: no verifier role is
+    resolved, so none is proven or granted.
+    """
 
     return _preflight_database_roles_impl(
         conn_kwargs,
@@ -286,11 +291,32 @@ def _preflight_database_roles(
         role_wait_timeout_s=role_wait_timeout_s,
         role_wait_interval_s=role_wait_interval_s,
         _resolve_app_role_fn=_resolve_app_role,
-        _resolve_verifier_role_fn=lambda: _resolve_ai_gateway_verifier_role(
-            ai_gateway_verifier_client_id,
-            required=require_ai_gateway_verifier,
+        _resolve_verifier_role_fn=(
+            (lambda: None)
+            if ai_gateway_verifier_absent
+            else lambda: _resolve_ai_gateway_verifier_role(
+                ai_gateway_verifier_client_id,
+                required=require_ai_gateway_verifier,
+            )
         ),
     )
+
+
+def _core_tier_verifier_role(explicit_client_id: str | None, *, required: bool) -> None:
+    """The core tier binds no verifier: a placeholder or empty id is its absence.
+
+    A real verifier client ID under the core tier's flag is a profile and
+    bundle that disagree, so it refuses before any schema mutation, as does
+    the flag together with a requirement (the two are mutually exclusive).
+    """
+
+    if required:
+        raise RuntimeError("the core tier's verifier absence cannot be combined with a requirement")
+    role = (explicit_client_id or "").strip()
+    if role and role != "00000000PLACEHOLDER" and not (role.startswith("<") and role.endswith(">")):
+        raise RuntimeError(
+            "--ai-gateway-verifier-absent (the core tier) refuses a real verifier client ID"
+        )
 
 
 def _run_transaction(
@@ -363,10 +389,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID", ""),
         help="Dedicated verifier service-principal client ID granted proof-ledger writes",
     )
-    parser.add_argument(
+    # The client profile's tier picks one of the two (databricks.yml,
+    # var.require_ai_gateway_verifier): the agentic tier requires the
+    # dedicated verifier; the core tier has none and asserts that.
+    verifier = parser.add_mutually_exclusive_group()
+    verifier.add_argument(
         "--require-ai-gateway-verifier",
         action="store_true",
         help="Fail before schema mutation unless an explicit real verifier client ID is bound",
+    )
+    verifier.add_argument(
+        "--ai-gateway-verifier-absent",
+        action="store_true",
+        help=(
+            "The core tier (MIP_AGENTIC_TIER=off): bind no verifier role, and fail before "
+            "schema mutation if a real verifier client ID is bound"
+        ),
     )
     return parser
 
@@ -384,12 +422,20 @@ def main(
     ai_gateway_verifier_client_id: str | None = None,
     require_ai_gateway_verifier: bool = False,
     mode: str = "apply",
+    ai_gateway_verifier_absent: bool = False,
 ) -> None:
+    verifier_role: str | None
     try:
-        verifier_role = _resolve_ai_gateway_verifier_role(
-            ai_gateway_verifier_client_id,
-            required=require_ai_gateway_verifier,
-        )
+        if ai_gateway_verifier_absent:
+            verifier_role = _core_tier_verifier_role(
+                ai_gateway_verifier_client_id,
+                required=require_ai_gateway_verifier,
+            )
+        else:
+            verifier_role = _resolve_ai_gateway_verifier_role(
+                ai_gateway_verifier_client_id,
+                required=require_ai_gateway_verifier,
+            )
     except Exception:  # noqa: BLE001 -- stable deployment diagnostic; never reflect secrets
         print(
             "[lakebase-migrate] verifier identity preflight failed; verify the dedicated "
@@ -429,6 +475,7 @@ def main(
             app_name=app_name,
             ai_gateway_verifier_client_id=verifier_role,
             require_ai_gateway_verifier=require_ai_gateway_verifier,
+            ai_gateway_verifier_absent=ai_gateway_verifier_absent,
         )
     except Exception:  # noqa: BLE001 -- stable deployment diagnostic; never reflect secrets
         print(
@@ -510,4 +557,5 @@ if __name__ == "__main__":
         ai_gateway_verifier_client_id=_args.ai_gateway_verifier_client_id,
         require_ai_gateway_verifier=_args.require_ai_gateway_verifier,
         mode=_args.mode,
+        ai_gateway_verifier_absent=_args.ai_gateway_verifier_absent,
     )

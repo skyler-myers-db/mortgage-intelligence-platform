@@ -112,6 +112,62 @@ IDENTITY_DEFAULTS: dict[IdentityRole, IdentityDefaults] = {
 }
 
 
+# The agentic tier (plan §4.15): the client profile's MIP_AGENTIC_TIER. ``off``
+# is the core tier, which runs with the four core identities only; ``on`` adds
+# the verifier, the agent runtime and the Supervisor proxy. Every deploy-side
+# runtime-identity site reads its roles from here, through the resolved
+# profile, never from an ambient default.
+AgenticTier = Literal["off", "on"]
+AGENTIC_TIERS: tuple[AgenticTier, ...] = ("off", "on")
+CORE_ROLES: tuple[IdentityRole, ...] = ("normal", "operator2", "admin", "release_probe")
+AGENTIC_ROLES: tuple[IdentityRole, ...] = ("verifier", "agent_runtime", "agent_proxy")
+# The name scripts/deploy.sh holds each role's client id under. The proxy's
+# arrives inside its credential bundle; the deploy unpacks it to this name.
+DEPLOY_CLIENT_ID_ENV: dict[IdentityRole, str] = {
+    **{role: IDENTITY_DEFAULTS[role].client_id_secret_name for role in CORE_ROLES},
+    "verifier": IDENTITY_DEFAULTS["verifier"].client_id_secret_name,
+    "agent_runtime": IDENTITY_DEFAULTS["agent_runtime"].client_id_secret_name,
+    "agent_proxy": "DATABRICKS_AGENT_PROXY_CLIENT_ID",
+}
+
+
+def agentic_tier(value: str) -> AgenticTier:
+    """The reviewed tier ``value`` names; anything else (unset included) refuses."""
+
+    if value == "off":
+        return "off"
+    if value == "on":
+        return "on"
+    raise ValueError("MIP_AGENTIC_TIER must be exactly off or on")
+
+
+def required_roles(tier: AgenticTier) -> tuple[IdentityRole, ...]:
+    """The reserved M2M roles a ``tier`` install deploys with, in roster order."""
+
+    return (*CORE_ROLES, *AGENTIC_ROLES) if agentic_tier(tier) == "on" else CORE_ROLES
+
+
+def lease_writer(tier: AgenticTier) -> IdentityRole:
+    """The signed App deployment lease's delegated writer: a distinct non-deployer identity.
+
+    The agentic tier keeps today's agent runtime. The core tier has none, so
+    its writer is the release probe, which holds no App role (plan §4.15).
+    """
+
+    return "agent_runtime" if agentic_tier(tier) == "on" else "release_probe"
+
+
+def lakebase_bootstrap_control(tier: AgenticTier) -> IdentityRole | None:
+    """The identity that controls a one-use Lakebase role creator, or ``None`` in core.
+
+    The core tier has no control identity, so the deploy hands none and the
+    converger refuses only the path that would create a role
+    (tools/databricks/lakebase_oauth_role_bootstrap.py).
+    """
+
+    return "agent_runtime" if agentic_tier(tier) == "on" else None
+
+
 def configured_identity_client_ids() -> dict[IdentityRole, str]:
     """Return non-empty role-owned client IDs from the provisioning environment."""
     configured: dict[IdentityRole, str] = {}
