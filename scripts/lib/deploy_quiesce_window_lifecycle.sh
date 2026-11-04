@@ -605,3 +605,79 @@ stop_unproven_candidate_before_rollback() {
 start_stopped_app_before_activation() {
   databricks apps start "$APP_NAME"
 }
+
+# ---------------------------------------------------------------------------
+# WR5 (M2-PR8): the Lakebase ownership handover's announced window
+# ---------------------------------------------------------------------------
+# Owner-run from scripts/lakebase_handover_window.sh after the lock-bounded
+# handover (tools/clients/lakebase_handover.py) exhausted its budget, for an
+# install no signed blue governs yet. Nothing here runs in a release, and the
+# release window above never plans WR5. Variables: WR5_APP_NAME, WR5_SCOPE,
+# WR5_LAKEBASE_INSTANCE and WR5_JOURNAL (set by the entry);
+# WR5_WINDOW_STOPPED is what the entry's EXIT trap reads.
+
+# Plan read-only (the TOCTOU recheck: MIP_ACK_QUIESCE_WINDOW must equal this
+# plan's sha256), journal window_open in the handover's own journal, stop the
+# App identity-pinned, apply the journal's remainder inside the window, then
+# start and prove the start. Without the ack the plan prints its digest and
+# the window refuses with the App untouched.
+run_lakebase_handover_window() {
+  local work rc=0
+  work="$(mktemp -d -t mip-wr5-window.XXXXXX)"
+  chmod 700 "$work"
+  WR5_PLAN_JSON="$work/plan.json"
+  step "plan the WR5 window (read-only): the Lakebase handover's remainder"
+  if ! "$PYTHON" -m tools.databricks.quiesce_window plan-wr5 \
+    --app-name "${WR5_APP_NAME:?}" \
+    --scope "${WR5_SCOPE:?}" \
+    --lakebase-instance "${WR5_LAKEBASE_INSTANCE:?}" \
+    --lakebase-handover-journal "${WR5_JOURNAL:?}" \
+    --out "$WR5_PLAN_JSON" \
+    --out-env "$work/plan.env"; then
+    echo "${RED}[wr5] the window plan refused; its private plan is ${WR5_PLAN_JSON}. The App keeps serving.${RST}" >&2
+    return 2
+  fi
+  # shellcheck disable=SC1091
+  . "$work/plan.env"
+  "$PYTHON" -m tools.clients.lakebase_handover --window-open \
+    --journal "$WR5_JOURNAL" \
+    --window-sha256 "$MIP_WR5_WINDOW_SHA256" \
+    --handover-sha256 "$MIP_WR5_HANDOVER_SHA256" || return 2
+  step "stop the App for the WR5 window (identity-pinned)"
+  WR5_WINDOW_STOPPED=1
+  "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+    --app-name "$WR5_APP_NAME" \
+    --expected-app-id "$MIP_WR5_APP_ID" \
+    --expected-client-id "$MIP_WR5_APP_CLIENT_ID" \
+    --expected-scim-id "$MIP_WR5_APP_SCIM_ID" || return 1
+  step "apply the handover's remainder inside the window (one bounded pass)"
+  "$PYTHON" -m tools.clients.lakebase_handover --in-window \
+    --journal "$WR5_JOURNAL" \
+    --window-sha256 "$MIP_WR5_WINDOW_SHA256" || rc=$?
+  start_lakebase_handover_window || return 1
+  "$PYTHON" -m tools.clients.lakebase_handover --window-close --journal "$WR5_JOURNAL" || return 1
+  return "$rc"
+}
+
+# Start the App (the start creates a deployment from its default source) and
+# prove that deployment: new, SUCCEEDED, from the planned folder, compute
+# ACTIVE. Adoption later signs exactly that deployment (attack O8).
+start_lakebase_handover_window() {
+  step "start the App and prove the deployment the start created"
+  databricks apps start "$WR5_APP_NAME" >/dev/null || return 1
+  "$PYTHON" -m tools.databricks.quiesce_window await-wr5 \
+    --app-name "$WR5_APP_NAME" \
+    --plan "${WR5_PLAN_JSON:?}" || return 1
+  WR5_WINDOW_STOPPED=0
+}
+
+# The entry's EXIT trap: a window that failed with the App stopped starts it
+# again (one attempt); the journal keeps the handover's state for --revert.
+compensate_lakebase_handover_window() {
+  [[ "${WR5_WINDOW_STOPPED:-0}" == "1" ]] || return 0
+  echo "${RED}[wr5] the window failed with the App stopped; starting it again.${RST}" >&2
+  if ! start_lakebase_handover_window; then
+    echo "${RED}[wr5] the App did not provably start; start it by hand (databricks apps start), then revert or re-run the window.${RST}" >&2
+    return 1
+  fi
+}

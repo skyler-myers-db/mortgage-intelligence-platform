@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import sys
 import time
 from collections.abc import Callable, Iterator
@@ -65,9 +66,6 @@ KIND = "lakebase"
 SCHEMA = "mip.lakebase-ownership-handover.plan.v1"
 DIGEST_DOMAIN = "mip-lakebase-ownership-handover-plan"
 REVERT_DOMAIN = "mip-lakebase-ownership-handover-revert"
-REMAINDER_DOMAIN = "mip-lakebase-ownership-handover-remainder"
-# The WR5 window applies the remainder against a stopped App: one bounded pass.
-WINDOW_BUDGET = LockBudget(attempts=3, total_s=300.0, backoff_s=(1.0, 2.0))
 EXHAUSTED_EXIT = 4
 _PREFIX = "[mip-lakebase-handover]"
 
@@ -165,7 +163,7 @@ class Clock:
 SYSTEM_CLOCK = Clock()
 
 
-def _run_entries(
+def run_entries(
     connection: Any,
     journal: journals.Journal,
     entries: list[dict[str, Any]],
@@ -221,7 +219,7 @@ def apply(
     journal = journals.create(journal_path, kind=KIND, plan_sha256=current.sha256, entries=current.document["changes"])
     connection = connect()
     try:
-        finished = _run_entries(connection, journal, journal.entries, budget=budget, clock=clock)
+        finished = run_entries(connection, journal, journal.entries, budget=budget, clock=clock)
     except Exception:
         journal.set_status("refused")
         raise
@@ -229,66 +227,6 @@ def apply(
         connection.close()
     journal.set_status("applied" if finished else "exhausted")
     return journal
-
-
-def remainder(journal: journals.Journal) -> list[dict[str, Any]]:
-    return [entry for entry in journal.entries if entry["state"] in {"pending", "applying"}]
-
-
-def remainder_sha256(journal: journals.Journal) -> str:
-    """What a WR5 window would apply: the journal's plan and its unfinished objects."""
-
-    rows = [{"key": entry["key"], "state": entry["state"]} for entry in remainder(journal)]
-    return journals.plan_sha256({"plan_sha256": journal.plan_sha256, "remainder": rows}, domain=REMAINDER_DOMAIN)
-
-
-def window_open(journal: journals.Journal, *, window_sha256: str, handover_sha256: str) -> None:
-    """Record the acknowledged WR5 window before the window library stops the App."""
-
-    if journal.status != "exhausted" or remainder_sha256(journal) != handover_sha256:
-        raise LakebaseHandoverRefused("the journal is not the exhausted handover the window was planned for")
-    journal.set_status("window_open", window_sha256=window_sha256, window_handover_sha256=handover_sha256)
-
-
-def in_window(
-    read_session: ReadSession,
-    connect: Callable[[], Any],
-    journal: journals.Journal,
-    *,
-    window_sha256: str,
-    clock: Clock = SYSTEM_CLOCK,
-) -> bool:
-    """Inside the open WR5 window: settle landed objects, apply the rest in one bounded pass."""
-
-    if journal.status != "window_open" or journal.document.get("window_sha256") != window_sha256:
-        raise LakebaseHandoverRefused("no WR5 window is open for this journal")
-    with read_session() as cursor:
-        owners = live_owners(cursor)
-    pending = []
-    for entry in remainder(journal):
-        owner = owners.get(entry["key"])
-        if owner == entry["new_owner"]:
-            journal.mark(entry["key"], "applied", settled="live")
-        elif owner == entry["prior_owner"]:
-            if entry["state"] == "applying":
-                journal.mark(entry["key"], "pending", settled="live")
-            pending.append(journal.entry(entry["key"]))
-        else:
-            raise LakebaseHandoverRefused("an object changed owner outside the handover")
-    connection = connect()
-    try:
-        finished = _run_entries(connection, journal, pending, budget=WINDOW_BUDGET, clock=clock)
-    finally:
-        connection.close()
-    journal.set_status("window_applied" if finished else "window_open")
-    return finished
-
-
-def window_close(journal: journals.Journal) -> None:
-    if journal.status not in {"window_open", "window_applied"}:
-        raise LakebaseHandoverRefused("no WR5 window is open for this journal")
-    finished = not remainder(journal)
-    journal.set_status("applied" if finished else "window_closed")
 
 
 def revert_plan(read_session: ReadSession, journal: journals.Journal) -> tuple[dict[str, Any], list[str]]:
@@ -330,27 +268,11 @@ def revert(
     moves = [{**journal.entry(move["key"]), "revert_statement": move["statement"]} for move in document["moves"]]
     connection = connect()
     try:
-        finished = _run_entries(connection, journal, moves, budget=budget, clock=clock, statement="revert_statement", done="reverted")
+        finished = run_entries(connection, journal, moves, budget=budget, clock=clock, statement="revert_statement", done="reverted")
     finally:
         connection.close()
     journal.set_status("reverted" if finished else "reverting")
     return finished
-
-
-def retire_blockers(workspace: Any, *, legacy_identity: str) -> list[str]:
-    """Read-only: every job and pipeline that still runs as the legacy identity (kind:id)."""
-
-    folded = legacy_identity.strip().casefold()
-    found: list[str] = []
-    for job in workspace.jobs.list():
-        run_as = str(getattr(job, "run_as_user_name", "") or getattr(job, "creator_user_name", "") or "")
-        if run_as.strip().casefold() == folded:
-            found.append(f"job:{getattr(job, 'job_id', '')}")
-    for pipeline in workspace.pipelines.list_pipelines():
-        run_as = str(getattr(pipeline, "run_as_user_name", "") or getattr(pipeline, "creator_user_name", "") or "")
-        if run_as.strip().casefold() == folded:
-            found.append(f"pipeline:{getattr(pipeline, 'pipeline_id', '')}")
-    return sorted(found)
 
 
 def _iter_lines(plan_: LakebasePlan) -> Iterator[str]:
@@ -368,38 +290,50 @@ class Session:
     workspace: Callable[[], Any]
     target: str
     live_instance: str
+    app_name: str = ""
+    rollback_scope: str = ""
 
 
 def _profile_session(instance: str = "", database: str = "") -> Session:
+    """The profile's install; the Lakebase credential is minted only on first use."""
+
+    from functools import cache
+
     from jobs.lakebase_migration_connection import _resolve_connection
     from jobs.lakebase_migration_read_only import read_only_session
     from tools.clients.environment import from_local, resolve
     from tools.databricks.workspace_auth import deployment_workspace_client
 
     profile = resolve(from_local(os.environ, REPO / ".env.local"))
-    kwargs = _resolve_connection(
-        instance_name=instance or profile.lakebase_instance,
-        database_name=database or profile.lakebase_database,
-    )
+
+    @cache
+    def kwargs() -> dict[str, Any]:
+        return _resolve_connection(
+            instance_name=instance or profile.lakebase_instance,
+            database_name=database or profile.lakebase_database,
+        )
 
     def connect() -> Any:
         import psycopg
 
-        return psycopg.connect(**kwargs, autocommit=True)
+        return psycopg.connect(**kwargs(), autocommit=True)
 
     return Session(
-        read_session=lambda: read_only_session(kwargs),
+        read_session=lambda: read_only_session(kwargs()),
         connect=connect,
         workspace=deployment_workspace_client,
         target=profile.identity_ids.deployer,
         live_instance=profile.lakebase_instance,
+        app_name=profile.app_name,
+        rollback_scope=profile.app_rollback_secret_scope,
     )
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     mode = parser.add_mutually_exclusive_group(required=True)
-    for flag in ("--plan", "--apply", "--revert", "--retire-check", "--rehearse", "--window-open", "--in-window", "--window-close", "--remainder"):
+    modes = ("--plan", "--apply", "--revert", "--retire-check", "--rehearse", "--window-context", "--window-open", "--in-window", "--window-close", "--remainder")
+    for flag in modes:
         mode.add_argument(flag, action="store_true")
     parser.add_argument("--ack-plan", default="")
     parser.add_argument("--journal", type=Path)
@@ -428,7 +362,14 @@ def main(argv: list[str] | None = None, *, session: Callable[..., Session] = _pr
 
             return run_rehearsal(args, session=session, clock=clock)
         current = session()
+        if args.window_context:
+            # The WR5 entry's names (scripts/lakebase_handover_window.sh); no credential is minted.
+            values = {"WR5_APP_NAME": current.app_name, "WR5_SCOPE": current.rollback_scope, "WR5_LAKEBASE_INSTANCE": current.live_instance}
+            print("".join(f"{name}={shlex.quote(value)}\n" for name, value in values.items()), end="")
+            return 0
         if args.retire_check:
+            from tools.clients.handover_verify import retire_blockers
+
             workspace = current.workspace()
             legacy = args.legacy_identity or str(getattr(workspace.current_user.me(), "user_name", "") or "")
             blockers = retire_blockers(workspace, legacy_identity=legacy)
@@ -452,6 +393,14 @@ def main(argv: list[str] | None = None, *, session: Callable[..., Session] = _pr
                 return 0
             journal = apply(current.read_session, current.connect, target=current.target, ack=args.ack_plan, journal_path=args.journal, clock=clock)
             return _report_outcome(journal)
+        from tools.clients.lakebase_handover_window import (
+            in_window,
+            remainder,
+            remainder_sha256,
+            window_close,
+            window_open,
+        )
+
         journal = journals.load(args.journal, kind=KIND)
         if args.remainder:
             print(f"{_PREFIX} remainder: {len(remainder(journal))} object(s), handover sha256 {remainder_sha256(journal)}")

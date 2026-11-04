@@ -7,6 +7,7 @@
   python -m tools.databricks.quiesce_window await ...               # wait, require, prove
   python -m tools.databricks.quiesce_window close --repinned ID ... # after the re-pin
   python -m tools.databricks.quiesce_window status --out-env F      # for the EXIT trap
+  python -m tools.databricks.quiesce_window plan-wr5|await-wr5 ...  # WR5, read-only (M2-PR8)
 
 ``plan`` is read-only (GET and list calls, and file downloads for the tree
 digests). It prints the public summary and writes the full plan mode 0600.
@@ -23,6 +24,10 @@ failed proof or anything else that raises, stops the App again and journals
 ``window_refused`` for the dead-man. ``app_deployment_rollback repin --to <id>``
 then re-signs the record and checks health against the re-pinned id, and
 ``close`` closes the journal.
+
+``plan-wr5`` and ``await-wr5`` plan the Lakebase ownership handover's WR5
+window and prove its start, both read-only (tools/databricks/quiesce_window_wr5.py);
+the window library's ``run_lakebase_handover_window`` stops and starts.
 
 ``scripts/lib/deploy_quiesce_window_lifecycle.sh`` is the only caller of the
 mutating modes (``tools/databricks/stop_primitive_map.py``).
@@ -369,6 +374,8 @@ def _parser() -> argparse.ArgumentParser:
         "close",
         "status",
         "assert-serving",
+        "plan-wr5",
+        "await-wr5",
     ):
         mode = sub.add_parser(name)
         mode.add_argument("--app-name", required=True)
@@ -396,6 +403,10 @@ def _parser() -> argparse.ArgumentParser:
     close = sub.choices["close"]
     close.add_argument("--repinned", default="")
     close.add_argument("--superseded-by-activation", action="store_true")
+    wr5 = sub.choices["plan-wr5"]
+    wr5.add_argument("--lakebase-handover-journal", required=True, type=Path)
+    wr5.add_argument("--out", required=True, type=Path)
+    sub.choices["await-wr5"].add_argument("--plan", required=True, type=Path)
     return parser
 
 
@@ -425,6 +436,10 @@ def main(
         workspace_factory = deployment_workspace_client
     workspace = workspace_factory()
     app_name = args.app_name
+    if args.command in {"plan-wr5", "await-wr5"}:
+        from tools.databricks.quiesce_window_wr5 import run_mode
+
+        return run_mode(args, workspace, write_private=_write_private, env_lines=_env_lines)
 
     def lease() -> None:
         from tools.databricks.app_deployment_lease import assert_held
