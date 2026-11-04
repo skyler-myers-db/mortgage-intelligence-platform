@@ -63,6 +63,10 @@ Usage:
   python tools/databricks/bundle_env.py deploy -t client --select jobs.example
   # Deployment-state use is restricted to the configured App binding:
   python tools/databricks/bundle_env.py deployment bind mip_app mip-app -t client
+  # ... and to the exact binds and unbinds of an acknowledged adopt plan
+  # (tools/databricks/install_state_adopt.py, M2-PR6; wrapper-only flags):
+  python tools/databricks/bundle_env.py deployment bind <key> <id> -t client \
+      --auto-approve --adopt-plan <plan.json> --adopt-plan-sha256 <sha256>
 
 The install policy is the client profile's own fields (tools/clients/policy.py,
 M1-PR3), never a target name: the Summit demo first-party feeds render on
@@ -241,12 +245,54 @@ def _validate_non_app_deploy_selectors(args: list[str]) -> str | None:
     return None
 
 
+_ADOPT_PLAN_FLAGS = ("--adopt-plan", "--adopt-plan-sha256")
+_BUNDLE_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
+
+
+def _split_adopt_authority(args: list[str]) -> tuple[list[str], tuple[str, str] | None, str | None]:
+    """``(args without the wrapper flags, (plan path, sha256) or None, error)``.
+
+    The two wrapper-only flags go together, once each, and never reach the CLI.
+    """
+
+    kept: list[str] = []
+    found: dict[str, str] = {}
+    index = 0
+    while index < len(args):
+        argument = args[index]
+        name, equals, value = argument.partition("=")
+        if name in _ADOPT_PLAN_FLAGS:
+            if not equals:
+                if index + 1 >= len(args):
+                    return args, None, f"{name} requires a value"
+                value = args[index + 1]
+                index += 1
+            if name in found or not value.strip():
+                return args, None, f"{name} must be given exactly once, with a value"
+            found[name] = value
+        else:
+            kept.append(argument)
+        index += 1
+    if not found:
+        return kept, None, None
+    if len(found) != len(_ADOPT_PLAN_FLAGS):
+        return args, None, "--adopt-plan and --adopt-plan-sha256 go together"
+    return kept, (found["--adopt-plan"], found["--adopt-plan-sha256"]), None
+
+
 def _validate_app_deployment_command(
     args: list[str],
     *,
     expected_app_name: str,
+    adopt_authority: tuple[str, str] | None = None,
 ) -> str | None:
-    """Allow only the exact App bind/unbind used by the signed deploy flow."""
+    """Allow only the exact App bind/unbind used by the signed deploy flow.
+
+    With ``adopt_authority`` (an adopt plan's path and its acknowledged
+    sha256), also exactly one bind or unbind that plan names
+    (``install_state_adopt.authorize_state_edit``); an App bind still names
+    the configured App.
+    """
 
     if not args or args[0] not in {"bind", "unbind"}:
         return "bundle deployment permits only the governed App bind or unbind operation"
@@ -283,6 +329,22 @@ def _validate_app_deployment_command(
     if target not in _MUTABLE_BUNDLE_TARGETS:
         return "bundle deployment target must be exactly client"
     expected = ["mip_app", expected_app_name] if action == "bind" else ["mip_app"]
+    if adopt_authority is not None:
+        if len(positional) != (2 if action == "bind" else 1) or _BUNDLE_KEY.match(positional[0]) is None:
+            return f"bundle deployment {action} under an adopt plan names one key (and, to bind, one id)"
+        if positional[0] == "mip_app" and positional != expected[: len(positional)]:
+            return f"bundle deployment {action} must target only the configured App binding {expected!r}"
+        from tools.databricks.install_state_adopt import authorize_state_edit
+
+        plan_path, sha256 = adopt_authority
+        try:
+            text = Path(plan_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return "the adopt plan could not be read"
+        refusal = authorize_state_edit(
+            text, sha256, action, positional[0], positional[1] if action == "bind" else None
+        )
+        return None if refusal is None else f"bundle deployment {action} refused: {refusal}"
     if positional != expected:
         return (
             f"bundle deployment {action} must target only the configured "
@@ -522,6 +584,10 @@ def main() -> int:
     env.pop("BUNDLE_VAR_sql_warehouse_id", None)
 
     if subcmd == "deployment":
+        rest, adopt_authority, flag_error = _split_adopt_authority(rest)
+        if flag_error is not None:
+            print(f"[bundle_env] {flag_error}", file=sys.stderr)
+            return 2
         deployment_error = _validate_app_deployment_command(
             rest,
             expected_app_name=(
@@ -529,6 +595,7 @@ def main() -> int:
                 if profile is not None
                 else str(env.get("MIP_APP_NAME") or "mip-app").strip()
             ),
+            adopt_authority=adopt_authority,
         )
         if deployment_error is not None:
             print(f"[bundle_env] {deployment_error}", file=sys.stderr)
