@@ -476,6 +476,22 @@ def test_a_connection_override_refuses_before_the_profile_is_read(
     handover.refuse_connection_overrides({})  # positive control: no override, no refusal
 
 
+def test_rerunning_a_finished_apply_changes_nothing_and_never_suggests_a_revert(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    server = FakeServer()
+    session = SimpleNamespace(read_session=server.read_session, connect=server.connect, workspace=None, target=DEPLOYER, live_instance="live")
+    argv = ["--apply", "--ack-plan", _plan(server).sha256, "--journal", str(tmp_path / "j.json")]
+    assert handover.main(argv, session=lambda *a: session, clock=_clock(server)) == 0
+    writes = len(server.transactions)
+    capsys.readouterr()
+    assert handover.main(argv, session=lambda *a: session, clock=_clock(server)) == 2
+    err = capsys.readouterr().err
+    assert "already exists" in err and "part-way" not in err and "Revert with" not in err
+    assert len(server.transactions) == writes
+    assert journals.load(tmp_path / "j.json", kind=handover.KIND).status == "applied"
+
+
 def test_a_failure_part_way_exits_three_and_names_the_revert(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     server = FakeServer()
     digest = _plan(server).sha256

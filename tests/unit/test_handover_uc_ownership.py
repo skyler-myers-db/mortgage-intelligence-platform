@@ -278,6 +278,21 @@ def test_a_partial_apply_exits_three_and_names_the_revert(tmp_path: Path, capsys
     assert "Revert with --revert --journal" in err and "injected" not in err
 
 
+def test_rerunning_a_finished_apply_changes_nothing_and_never_suggests_a_revert(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = FakeUc()
+    argv = ["--apply", "--ack-plan", _digest(fake), "--journal", str(tmp_path / "j.json")]
+    assert handover.main(argv, install=_install, workspace_factory=lambda: fake) == 0
+    updates = list(fake.updates)
+    capsys.readouterr()
+    assert handover.main(argv, install=_install, workspace_factory=lambda: fake) == 2
+    err = capsys.readouterr().err
+    assert "already exists" in err and "part-way" not in err and "Revert with" not in err
+    assert fake.updates == updates
+    assert journals.load(tmp_path / "j.json", kind=handover.KIND).status == "applied"
+
+
 def test_a_shared_or_foreign_journal_refuses(tmp_path: Path) -> None:
     fake = FakeUc()
     handover.apply(fake, _install(), ack=_digest(fake), journal_path=tmp_path / "j.json")

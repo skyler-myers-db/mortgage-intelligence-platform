@@ -20,9 +20,11 @@ every state change, so a crash leaves the last complete state:
   ``reverting`` -> ``reverted``, and only for an object whose live owner is
   still the one the handover gave it (compare and swap): the exact inverse.
 
-``create`` refuses a path that exists, so one journal records one apply; a
-second apply after a partial failure is a revert first. ``load`` refuses a
-journal another user owns or anyone else can read.
+``create`` refuses a path that exists (``O_EXCL``), and each apply calls
+``refuse_existing`` before it plans, so one journal records one apply and a
+re-run of a finished apply changes nothing; a second apply after a partial
+failure is a revert first. ``load`` refuses a journal another user owns or
+anyone else can read.
 """
 
 from __future__ import annotations
@@ -171,6 +173,16 @@ class Journal:
         return found
 
 
+def refuse_existing(path: Path) -> None:
+    """An apply's journal is a new path: refuse before anything is planned or sent when one exists."""
+
+    if os.path.lexists(path):
+        raise JournalRefused(
+            "the journal path already exists (an earlier run's journal); nothing was changed: "
+            "revert that journal, or name a new path"
+        )
+
+
 def create(
     path: Path,
     *,
@@ -247,5 +259,6 @@ __all__ = [
     "create",
     "load",
     "plan_sha256",
+    "refuse_existing",
     "write_private",
 ]

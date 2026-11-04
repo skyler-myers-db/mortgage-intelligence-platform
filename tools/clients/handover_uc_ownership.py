@@ -129,6 +129,7 @@ def _swap(workspace: Any, entry: dict[str, Any], owner: str) -> None:
 def apply(workspace: Any, install: Install, *, ack: str, journal_path: Path) -> journals.Journal:
     """Recompute, compare with ``ack``, then move each object; raise on the first failure."""
 
+    journals.refuse_existing(journal_path)
     current = plan(workspace, install)
     if current.refusals:
         raise HandoverRefused(f"the recomputed plan refuses ({len(current.refusals)} refusals); nothing was changed")
@@ -248,6 +249,8 @@ def main(
         parser.error("--apply needs --ack-plan <sha256> and --journal <path>")
     if args.revert and not args.journal:
         parser.error("--revert needs --journal <path>")
+    # Only a journal this run creates can describe a partial apply.
+    fresh_journal = bool(args.apply) and not os.path.lexists(args.journal)
     try:
         workspace = workspace_factory()
         if args.revert:
@@ -287,7 +290,7 @@ def main(
         known = (HandoverRefused, journals.JournalRefused, InterimPairRefusal)
         detail = str(exc) if isinstance(exc, known) else type(exc).__name__
         print(f"{_PREFIX} REFUSED: {detail}", file=sys.stderr)
-        partial = args.apply and args.journal is not None and _applied_any(args.journal)
+        partial = fresh_journal and _applied_any(args.journal)
         if partial:
             print(f"{_PREFIX} the apply stopped part-way; the journal names what moved. Revert with --revert --journal <path>", file=sys.stderr)
         return 3 if partial else 2

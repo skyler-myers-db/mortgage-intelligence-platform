@@ -231,6 +231,7 @@ def apply(
 ) -> journals.Journal:
     """Recompute, compare with ``ack``, journal, then move each object lock-bounded."""
 
+    journals.refuse_existing(journal_path)
     current = plan(read_session, target=target)
     if current.refusals:
         raise LakebaseHandoverRefused(f"the recomputed plan refuses ({len(current.refusals)}); nothing was changed")
@@ -396,6 +397,8 @@ def main(argv: list[str] | None = None, *, session: Callable[..., Session] = _pr
         parser.error("--apply needs --ack-plan <sha256>")
     if (args.window_open or args.in_window) and not (args.window_sha256 and args.window_plan):
         parser.error("the window modes need --window-sha256 and --window-plan (the private plan plan-wr5 wrote)")
+    # Only a journal this run creates can describe a partial apply.
+    fresh_journal = bool(args.apply) and not os.path.lexists(args.journal)
     try:
         if args.rehearse:
             from tools.clients.lakebase_handover_rehearse import run_rehearsal
@@ -455,7 +458,7 @@ def main(argv: list[str] | None = None, *, session: Callable[..., Session] = _pr
     except Exception as exc:  # noqa: BLE001 - the class only: a driver message can name a role
         known = (LakebaseHandoverRefused, journals.JournalRefused)
         print(f"{_PREFIX} REFUSED: {exc if isinstance(exc, known) else type(exc).__name__}", file=sys.stderr)
-        if args.apply and args.journal is not None and _moved_any(args.journal):
+        if fresh_journal and _moved_any(args.journal):
             print(f"{_PREFIX} the apply stopped part-way; the journal names what moved. Revert with --revert --journal <path>", file=sys.stderr)
             return 3
         return 2
