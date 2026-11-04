@@ -2403,7 +2403,8 @@ needs no ack, and a reason that appears only at the recheck refuses.
 **The window** (`scripts/lib/deploy_quiesce_window_lifecycle.sh`) opens at the
 first mutation that needs it (WR4 before the non-App apply, WR1 before the
 binding update, WR2 before the role convergence, WR3 before the migration):
-it re-validates the plan and the ack, re-proves blue is the App's last
+it re-validates the plan and the ack, admits it against the job budget and
+arms the dead-man (M0-PR9, below), re-proves blue is the App's last
 deployment, journals `window_open` (`<lease root>/<app>.quiesce-window.json`,
 signed) and then stops the App, identity-pinned. It closes right after the
 Lakebase migration: journal `window_starting`, then `apps start`; wait for
@@ -2479,6 +2480,122 @@ config carries over, and the start of a FAILED-active App. Spike S2: whether
 role. Until then the code assumes the worst case for both. The live shape of
 `information_schema.routines.routine_definition` is also derived, not
 captured; a reformatted body only ever means "run".
+
+### The job budget and the dead-man (M0-PR9)
+
+A runner that dies inside the window (a cancelled or timed-out job sends
+SIGKILL about 10 s after SIGINT, and a lost runner sends nothing) would leave
+the App stopped. Two controls bound that (threat T5).
+
+**Budget admission** (`tools/databricks/quiesce_window_budget.py`). A window
+opens only while the job's remaining budget covers it:
+
+    MIP_JOB_DEADLINE_EPOCH - now >= predicted window + predicted restore + 15 min
+
+The predicted window is the plan's `predicted_seconds` (stop, each reason's
+step, then start and re-pin when blue is restorable). The predicted restore is
+`predicted_restore_seconds`: the EXIT trap's tier-a start and re-pin after a
+failure at the window's last mutation (start + re-pin budgets), and nothing for
+a contract window, which restores nothing. Both, the 15-minute margin and their
+sum are in the window's canonical body, so `MIP_ACK_QUIESCE_WINDOW` covers
+them; a plan with no reason has no budget, and its body and digest are M0-PR8's.
+The admission itself depends on the clock and is never in the digest: the plan
+prints it (`admission <state>: <n> s left, <m> s required`) before the lease
+and again under it, refusing `window_budget_refused`, and `quiesce_window open`
+decides it again before its dead-man submit and before the stop. A missing,
+unparseable, past or more than six hours away deadline refuses (fail closed). A
+run with no window needs no deadline, and a dry run prints the admission rule
+and the deadline's state without a Databricks call.
+
+`MIP_JOB_DEADLINE_EPOCH` is the job's hard deadline in epoch seconds:
+`deploy-dev.yml` sets it in its first step from its own `timeout-minutes`, and
+a local run passes `./scripts/deploy.sh -t client --deadline <epoch>` (or
+exports it for that run). It is a shell-only, one-run value like the window
+ack, never a `.env.local` line, so `.env.example` gets no line for it.
+
+**The dead-man** (`jobs/window_deadman.py`). `quiesce_window open` arms it
+after the budget admission and the blue re-check, before the journal write and
+the stop:
+
+1. It publishes this run's staged release with `app_release_source` (create
+   only, an exact listing and the sha256 of every file): the window opens
+   before step 5's publish, so the folder is published here, the same way and
+   to the same path, and step 5 then uploads nothing. `jobs/` is in the App's
+   staged upload set, so the dead-man ships in every release folder and the
+   App's runtime closure is unchanged (one more file in `jobs/`, which the App
+   never imports; the payload's env names are untouched).
+2. Its source is `<bundle root>/app-src/<release id>/jobs/window_deadman.py`:
+   the manifest must name it, the folder must be a governed release folder
+   (never the bundle files root or any mutable path), and its bytes are read
+   again and compared with the manifest right before the submit.
+3. One `jobs submit`: a one-time run as the submitting deployer (no `run_as`
+   or ACL, so only the deployer and workspace admins see or manage it; the App
+   has no permission on it), serverless environment version 5 like the
+   bundle's jobs with `databricks-sdk` pinned to the deploy's own (uv.lock's),
+   no retries, `timeout_seconds` = (deadline - now) + the start budget (the
+   start step's 600 s plus 300 s), and the idempotency token
+   sha256(window digest, lease id): one run per window, a retried submit gets
+   the same run.
+
+An arm that fails journals and stops nothing; a journal write that fails
+cancels the armed run. Until the deadline the dead-man polls the journal and
+exits once the journal names its window (the token) in any state but
+`window_open`; another window's journal, or none yet, is not its window. At the
+deadline, with the journal still exactly its `window_open`: a contract window
+stays stopped (marker `deadman_left_stopped`); otherwise, only when the App is
+still the window's stopped blue (its id, STOPPED, nothing pending, blue active,
+the default source blue's restore source), it runs `apps start`, waits for the
+deployment that start created to be terminal and records `deadman_restarted`
+(or `deadman_start_failed`) with that id. A dead runner therefore leaves the
+App restarted by the deadline plus the start budget. It never deploys, updates,
+stops or changes a grant: its only calls are `apps get`, `get_deployment` and
+`start`, the journal read and its marker write
+(`tests/unit/test_window_deadman.py`; `tools/databricks/stop_primitive_map.py`
+maps its start as a site no shell file reaches).
+
+The run and the dead-man never both start the App: the run journals no start
+intent within two minutes of the deadline and leaves that start to the
+dead-man. Every path that closes the journal (the re-pin close, the EXIT
+trap's resumed closes, a contract window's close after green's capture, an
+open refused before its journal) cancels the run with
+`quiesce_window cancel-deadman` (cancel only; nothing is deleted; it refuses a
+run that is not this App's dead-man). A path that leaves the window open never
+cancels it, and a cancel that fails only warns: the dead-man reads the closed
+journal at its next poll and exits.
+
+**Why a marker, not a signature.** The journal is signed with the proof-signing
+key, which never leaves the deployer's process. The dead-man signs nothing: it
+writes one create-only, unsigned marker beside the journal
+(`<lease root>/<app>.quiesce-window.deadman-<token>.json`). The marker is a
+pointer, never proof. The next governed run's pre-lease plan lets exactly an
+open window whose marker reads `deadman_restarted` through (the public line
+says `deadman_recovery`); under its own lease, before step 0a,
+`app_deployment_rollback repin --from-deadman` takes the start, blue and the
+tree digest from the signed journal, requires the marker to name that window
+and blue, the App to serve exactly that deployment with compute ACTIVE and
+blue's restore folder to keep the journal's digest, then proves source,
+snapshot digest, env names, bindings (the record's or exactly this run's
+bundle payload) and health, signs a new record version under this lease and
+closes the journal (`closed_by: deadman_repin`). A refusal writes nothing, and
+like any step-0a failure on an App not yet proven the EXIT trap stops and
+quiesces it. Any other open journal still refuses before the lease
+(`window_journal_open`): a contract window the dead-man left stopped, a start
+it could not prove, or a dead-man that has not reached its deadline. That is
+the owner break-glass case: a raw `apps start` with the owner's U2M profile,
+then the next governed run re-pins (M2-PR9 documents it).
+
+**The workflow.** `deploy-dev.yml` stays parked (M1-PR7). Its deploy job's
+first step records `MIP_JOB_DEADLINE_EPOCH`, and its last step, `if: always()`,
+runs the read-only `quiesce_window status` and records the journal's and the
+dead-man's states as codes only. The emergency recipe never runs
+`scripts/deploy.sh`, so it opens no window and arms no dead-man.
+
+**Owed live confirmations.** Spike S7 (a throwaway App only the owner can
+delete) also owes the dead-man's live facts: a one-time serverless run from a
+`/Workspace/Users/.../app-src/<id>/jobs/` file with these parameters, its
+idempotency token and timeout, `apps start` as the deployer on a stopped App,
+and the cancel of a sleeping run. Until then the worst case is assumed: a start
+creates a new deployment, and nothing is trusted without the re-proof above.
 
 ### Adopting an existing install (M2-PR6, bind only)
 
