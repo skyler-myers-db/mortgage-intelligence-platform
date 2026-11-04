@@ -372,7 +372,7 @@ def test_publish_follows_the_lakebase_and_grant_proofs_and_precedes_every_activa
     publish = text.index(PUBLISH_START)
 
     assert text.index("LAKEBASE_RUNTIME_ACCESS_PROVEN=1\n") < publish
-    assert text.index("\ninitialize_uc_targets_and_reconcile_function_grants\n") < publish
+    assert text.index("\n  initialize_uc_targets_and_reconcile_function_grants\n") < publish
     assert text.index("bundle identity does not match the preflighted workspace-admin") < publish
     assert text.index(PUBLISH_END) < text.index('deploy_app_snapshot "deploy first-install')
     assert text.count('deploy_app_snapshot "') == 3, "first install, cutover, Agent Evaluation"

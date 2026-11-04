@@ -487,6 +487,7 @@ def main(
                     lender_identity_json=lender_identity_json,
                     lender_identity_sha256=lender_identity_sha256,
                 ),
+                **({"jobs_reader_role": jobs_reader_role} if jobs_reader_role is not None else {}),
             )
         )
     try:

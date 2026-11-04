@@ -66,10 +66,12 @@ def test_the_check_runs_before_the_lease_and_every_app_stop() -> None:
 
     assert control < probe < check < lease_root < lease < ensure
     assert check < first_arm
+    # Since M0-PR8 every stop is a named function of the window library
+    # (scripts/lib/deploy_quiesce_window_lifecycle.sh) the step files call.
     for app_stop in (
-        "tools.databricks.stop_app_fail_closed",
+        "run stop_unsigned_rebase_app",
         "--mode quarantine",
-        "tools.databricks.app_deployment_rollback ensure",
+        'prove_or_restore_signed_blue "$APP_ROLLBACK_BINDING_ENV"',
     ):
         assert check < text.index(app_stop, steps), app_stop
 

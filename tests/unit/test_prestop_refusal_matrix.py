@@ -69,9 +69,18 @@ CANNED = (
     "-m tools.databricks.monitor_scheduler_gate check",
     "-m tools.databricks.provision_genie_space --plan-pin",
     "-m tools.databricks.bundle_state warehouse-id",
+    # The catalog bootstrap skip rule and the window plan (M0-PR8) read live
+    # state the fake estate does not model; their own tests cover them.
+    "-m tools.databricks.catalog_bootstrap_skip_rule",
+    "-m tools.databricks.quiesce_window applicable",
 )
 LEASE = "-m tools.databricks.app_deployment_lease"
-STOPS = ("-m tools.databricks.stop_app_fail_closed", "-m tools.databricks.converge_app_release_access")
+STOPS = (
+    "-m tools.databricks.stop_app_fail_closed",
+    "-m tools.databricks.converge_app_release_access",
+    "-m tools.databricks.quiesce_window open",
+    "-m tools.databricks.quiesce_window start",
+)
 
 
 def _fake_python(tmp_path: Path) -> Path:
@@ -89,6 +98,10 @@ def _fake_python(tmp_path: Path) -> Path:
         "  '-m tools.databricks.agent_proxy_credential_bundle all-fields'*)\n"
         f"    printf '{IDENTITY_IDS['proxy']}\\tproxy-credential-EXAMPLE\\tproxy-secret-EXAMPLE\\n'; exit 0 ;;\n"
         f"  {shlex.quote(LEASE)}*) echo lease >> \"$PRESTOP_MARKERS\"; exit 97 ;;\n"
+        "  '-m tools.databricks.quiesce_window plan'*)\n"
+        '    prev=""; for arg in "$@"; do\n'
+        '      [[ "$prev" == "--out" ]] && printf \'{"code": "not_applicable", "reasons": []}\\n\' > "$arg"\n'
+        '      prev="$arg"; done; exit 0 ;;\n'
         f"{stops}\n"
         "esac\n"
         f'exec {shlex.quote(sys.executable)} "$PRESTOP_LAUNCHER" "$@"\n',

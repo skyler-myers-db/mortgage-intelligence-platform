@@ -19,7 +19,8 @@ identity-bearing environment names it was handed. Then, by what it is:
   ``--recover-bootstrap-only`` call finds no creator to recover;
 * a scripted answer for each tool whose output the deploy reads (the lease,
   the first-install journal, the bundle summary, the release id, the stop
-  outcome, the resource bindings, the Genie space id), kept in
+  outcome, the resource bindings, the Genie space id, the catalog bootstrap
+  skip rule and the quiesce window plan of a first install), kept in
   ``SANDBOX_STATE``;
 * success for every other repository tool, which would otherwise need a live
   workspace (the check-only preflight tools, every convergence and audit).
@@ -246,6 +247,12 @@ def main() -> int:
         return 0
     if module == "tools.databricks.app_resource_bindings" and rest[:1] == ["build"]:
         Path(_option(rest, "--out")).write_text("{}\n", encoding="utf-8")
+        return 0
+    if module == "tools.databricks.catalog_bootstrap_skip_rule":
+        return 3  # a first install has no live catalog to equal the bootstrap: run it
+    if module == "tools.databricks.quiesce_window" and rest[:1] == ["plan"]:
+        # A first install: no App, so no window (M0-PR8; its own tests cover the plan).
+        Path(_option(rest, "--out")).write_text('{"code": "not_applicable", "reasons": []}\n', encoding="utf-8")
         return 0
     if module == "tools.databricks.stop_app_fail_closed":
         if "--out-env" in rest:
