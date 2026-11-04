@@ -319,7 +319,11 @@ else
   echo "  would probe read-only: the creator of Supervisor '${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}' (MIP_RETIRE_HUMAN_SUPERVISOR), Genie group grants, the signed rollback record in ${APP_ROLLBACK_SECRET_SCOPE}, governed owners and owner-equivalent grantees, App serving access, and one Genie turn"
   echo "  would check read-only: scope ${MIP_PII_SALT_SCOPE} and write-once pii-salt-v1"
 fi
+# >>> estate inventory: pre-lease >>>
+# The agentic tier's estate inventory and its exact ack, read-only, before the
+# lease and the --phase plan exit (M4-PR1); the core tier prints nothing here.
 check_estate_inventory_prelease
+# <<< estate inventory: pre-lease <<<
 # >>> adopt phase: plan >>>
 # --phase adopt|unadopt plans the bundle state edit read-only in place of the
 # pre-lease gate, which refuses the unadopted install adopt exists to bind
