@@ -58,6 +58,7 @@ def test_only_the_purposes_the_deploy_reads_have_a_one_run_shell_export() -> Non
         ("no_rollback_for", "export MIP_ACK_NO_ROLLBACK_FOR=<its sha256> for this run only"),
         ("override_freeze", "pass --override-freeze-ack <its sha256> to this one publish"),
         ("restore_unverified_frontend", "hand this one restore its restore_unverified_frontend"),
+        ("tier_transition", "pass --tier-transition-ack <its sha256> to the one blue proof"),
     ],
 )
 def test_a_missing_ack_names_the_route_that_purpose_is_really_handed_in_by(

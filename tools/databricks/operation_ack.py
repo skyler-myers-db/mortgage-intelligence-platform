@@ -17,7 +17,9 @@ purpose can never satisfy another: the same plan acknowledged for
 ``adopt_live`` and for ``supersede`` has two different digests. The purposes
 are the plan's named attestation reasons: ``adopt_live``, ``supersede``,
 ``unadopt`` (the tombstone; the plan lists it among the operation reasons),
-``restore_unverified_frontend``, ``no_rollback_for`` and ``override_freeze``.
+``restore_unverified_frontend``, ``no_rollback_for``, ``override_freeze`` and
+``tier_transition`` (M2-PR7b: a release whose tier is not its signed blue's;
+tools/databricks/blue_tier_gate.py).
 
 A digest is not a signature: anyone holding the plan can compute it. It
 proves the operator reviewed this exact plan, not who the operator is; the
@@ -39,6 +41,7 @@ PURPOSES = (
     "restore_unverified_frontend",
     "no_rollback_for",
     "override_freeze",
+    "tier_transition",
 )
 # The one-run shell export scripts/deploy.sh reads, for the purposes it reads one for.
 ACK_ENV = {
@@ -55,6 +58,11 @@ REMEDY = {
     "override_freeze": "pass --override-freeze-ack <its sha256> to this one publish",
     "restore_unverified_frontend": (
         "hand this one restore its restore_unverified_frontend ack (<its sha256>)"
+    ),
+    # No release reads it from the shell yet: the one release it can serve, an
+    # agentic release over a core blue, is wired by M4-PR1 (blue_tier_gate.py).
+    "tier_transition": (
+        "pass --tier-transition-ack <its sha256> to the one blue proof that refused"
     ),
 }
 _DOMAIN = "mip-operation-ack-v1"

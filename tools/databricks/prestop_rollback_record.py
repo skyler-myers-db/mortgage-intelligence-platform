@@ -24,6 +24,17 @@ App still serves:
   rollback scope that does not exist yet holds no record; the post-lease
   ``app_rollback_secret_scope ensure`` creates it.
 
+* **core tier** (``--agentic-tier off``, an existing App, no rebase; M2-PR7b):
+  the record is judged the way the core step 0a (``app_core_rollback
+  ensure``) judges it: ``CORE_LOAD`` reads it through the tier gate and
+  ``CORE_VERIFY`` proves the App identity and the core resource proof, never
+  the Gateway. No record or a retired tombstone refuses as
+  ``rollback_record_absent``; a record of the other tier (a v5, v6 or agentic
+  v7 record) as ``rollback_record_present``; a failed signature as
+  ``rollback_record_tampered``; a drifted identity or binding as
+  ``rollback_record_drift``. An active deployment that is not the record's is
+  a note, as above: the core step 0a restores the record's over it.
+
 * **adopt phase** (``--phase adopt|unadopt``, M2-PR7): the record is judged
   the way adopt-live will judge it, with the tier-aware reader. No record (or
   no scope yet), a v7 adopted record or its retired tombstone passes with a
@@ -56,6 +67,8 @@ from tools.databricks.app_rollback_secret_scope import (
     expected_app_rollback_scope,
 )
 from tools.databricks.app_rollback_signed_contract import SignedLastGoodAppContract
+from tools.databricks.blue_tier_gate import BlueTierRefused
+from tools.databricks.core_blue import CoreBlueRefused, load_core_blue, verify_core_blue
 from tools.databricks.prestop_refusals import (
     ROLLBACK_RECORD_ABSENT,
     ROLLBACK_RECORD_DRIFT,
@@ -68,6 +81,9 @@ from tools.databricks.prestop_refusals import (
 ASSERT_SIGNED = verified_signed_last_good_contract
 ASSERT_ABSENT = assert_rollback_record_absent
 ACTIVE_DEPLOYMENT = active_deployment_id
+# The core tier's step-0a reads (app_core_rollback ensure, M2-PR7b).
+CORE_LOAD = load_core_blue
+CORE_VERIFY = verify_core_blue
 
 # First-install journal states whose App the recovery under the lease deletes.
 JOURNAL_OWNED_STATES = frozenset({"recover", "unclaimed"})
@@ -185,7 +201,8 @@ def _adopt_phase_verdict(
 _REMEDY_V7 = (
     "The slot holds a verified tier-aware v7 record (an adopted blue), which this v5/v6 "
     "release path can neither verify nor restore; the core release path (M2-PR7b) reads it. "
-    "Nothing needs repair: run the adopt phases, or wait for that path."
+    "Nothing needs repair: release this install in the core tier (MIP_AGENTIC_TIER=off), or "
+    "run the adopt phases; an agentic release over it is M4-PR1's."
 )
 
 
@@ -219,6 +236,50 @@ def _signed_verdict(workspace: Any, *, app_name: str, scope: str) -> RollbackRec
     )
 
 
+_REMEDY_CORE_TIER = (
+    "A core release stands on a core blue only (tools/databricks/blue_tier_gate.py): an "
+    "agentic blue is released in the agentic tier. Nothing needs repair."
+)
+
+
+def _core_signed_verdict(
+    workspace: Any, *, app_name: str, scope: str, lakebase_instance: str
+) -> RollbackRecordVerdict:
+    try:
+        record = CORE_LOAD(
+            workspace,
+            app_name=app_name,
+            scope=scope,
+            lakebase_instance=lakebase_instance,
+            agentic_tier="off",
+        )
+    except (BlueTierRefused, CoreBlueRefused) as exc:
+        return RollbackRecordVerdict(
+            (PrestopRefusal(ROLLBACK_RECORD_PRESENT, f"{exc}. {_REMEDY_CORE_TIER}"),), ()
+        )
+    except Exception as exc:  # noqa: BLE001 - every failure refuses with its class
+        return RollbackRecordVerdict((_refusal(_classify(exc), str(exc)),), ())
+    if record is None:
+        return RollbackRecordVerdict(
+            (_refusal(ROLLBACK_RECORD_ABSENT, "no core record (an empty slot or a tombstone)"),), ()
+        )
+    try:
+        CORE_VERIFY(workspace, record, app_name=app_name)
+        active = ACTIVE_DEPLOYMENT(workspace, app_name=app_name)
+    except Exception as exc:  # noqa: BLE001 - the core step 0a reads it the same way
+        return RollbackRecordVerdict((_refusal(ROLLBACK_RECORD_DRIFT, str(exc)),), ())
+    where = "is the record's" if active == record["deployment_id"] else (
+        "is not the record's, so the core step 0a restores the record's deployment over it"
+    )
+    return RollbackRecordVerdict(
+        (),
+        (
+            f"signed core record verified ({record['provenance']}, core resource proof); "
+            f"the active deployment {where}",
+        ),
+    )
+
+
 def rollback_record_verdict(
     workspace: Any,
     *,
@@ -229,6 +290,7 @@ def rollback_record_verdict(
     journal_state: Callable[[], str],
     adopt_phase: bool = False,
     lakebase_instance: str = "",
+    agentic_tier: str = "on",
 ) -> RollbackRecordVerdict:
     """Judge the record the way step 0a (or, in an adopt phase, adopt-live) will."""
 
@@ -255,4 +317,8 @@ def rollback_record_verdict(
         )
     if rebase_unverified_app and state != "signed":
         return _absence_verdict(workspace, app_name=app_name, scope=scope)
+    if agentic_tier == "off":
+        return _core_signed_verdict(
+            workspace, app_name=app_name, scope=scope, lakebase_instance=lakebase_instance
+        )
     return _signed_verdict(workspace, app_name=app_name, scope=scope)

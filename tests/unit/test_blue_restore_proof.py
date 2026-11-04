@@ -9,6 +9,7 @@ import pytest
 
 from tests.fixtures import rollback_records as rr
 from tests.fixtures.adopt_live_world import World, make_repo
+from tests.fixtures.core_blue_world import adopted_core_world
 from tools.databricks import app_rollback_record_contract as contract
 from tools.databricks import blue_restore_proof as proof
 from tools.databricks.operation_ack import ack_digest
@@ -25,6 +26,15 @@ def _keys(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def adopted(tmp_path: Path) -> World:
+    """An adopted blue whose frontend adopt-live verified (MIP_ADOPT_BUILD_REFERENCE_DIST=1)."""
+
+    return adopted_core_world(tmp_path)
+
+
+@pytest.fixture
+def unverified(tmp_path: Path) -> World:
+    """An adopted blue whose frontend could not be verified."""
+
     repo, main, side = make_repo(tmp_path)
     world = World(repo=repo, main=main, side=side)
     world.apply()
@@ -166,10 +176,35 @@ def test_a_tampered_copy_refuses_the_proof_and_the_restore(adopted: World) -> No
     assert refused.value.code == "copy_tampered"
 
 
-def test_a_v5_or_v6_record_needs_nothing_new(adopted: World) -> None:
+def test_a_v5_or_v6_record_needs_nothing_new_in_the_agentic_tier_and_refuses_the_core_tier(
+    adopted: World,
+) -> None:
     contract.save_versioned_record(adopted, scope=rr.SCOPE, record=rr.v6_record())
 
-    assert "own payload is blue's tier-b restore payload" in _prepare(adopted)
+    assert "own payload is blue's tier-b restore payload" in _prepare(adopted, agentic_tier="on")
+    with pytest.raises(proof.RestoreProofRefused) as refused:
+        _prepare(adopted)
+    assert refused.value.code == "blue_tier_mismatch", "a core release never stands on an agentic blue"
+
+
+def test_a_core_blue_protects_an_agentic_release_only_with_the_exact_transition_ack(
+    adopted: World,
+) -> None:
+    from tools.databricks.blue_tier_gate import tier_transition_plan
+
+    record = adopted.record()
+    assert record is not None
+    digest = ack_digest(
+        "tier_transition", tier_transition_plan(app_name=rr.APP_NAME, record=record, agentic_tier="on")
+    )
+    for ack in (None, ack_digest("no_rollback_for", _no_rollback_plan(record))):
+        with pytest.raises(proof.RestoreProofRefused) as refused:
+            _prepare(adopted, agentic_tier="on", tier_transition_ack=ack)
+        assert refused.value.code == "blue_tier_mismatch"
+    note = _prepare(
+        adopted, agentic_tier="on", tier_transition_ack=digest, restore_payload=_restore_payload(adopted)
+    )
+    assert "recorded before activation" in note, "the transition lifts the tier check, never the proof"
 
 
 def test_no_record_or_a_tombstone_has_no_blue_to_protect(adopted: World) -> None:
@@ -209,26 +244,41 @@ def test_tier_b_needs_the_recorded_payload(adopted: World) -> None:
     assert refused.value.code == "no_restore_payload"
 
 
-def test_an_unverified_frontend_restore_needs_its_own_ack(adopted: World) -> None:
-    payload = _restore_payload(adopted)
-    _prepare(adopted, restore_payload=payload)
-    record = adopted.record()
+def test_an_unverified_frontend_restore_needs_its_own_ack(unverified: World) -> None:
+    payload = _restore_payload(unverified)
+    record = unverified.record()
     assert record is not None and record["frontend_provenance"] == "unverified"
-    plan = proof.unverified_frontend_plan(app_name=rr.APP_NAME, record=record)
+    plan = proof.unverified_frontend_plan(
+        app_name=rr.APP_NAME,
+        record={**record, "restore_payload_sha256": contract._payload_digest(payload)},
+    )
+    frontend_ack = ack_digest("restore_unverified_frontend", plan)
+    # Before activation: blue is restorable only once that exact ack is given (M2-PR7b).
+    with pytest.raises(proof.RestoreProofRefused) as refused:
+        _prepare(unverified, restore_payload=payload)
+    assert refused.value.code == "unverified_frontend_unacked"
+    assert f"MIP_ACK_RESTORE_UNVERIFIED_FRONTEND={frontend_ack}" in str(refused.value)
+    assert "MIP_ACK_NO_ROLLBACK_FOR=" in str(refused.value)
+    assert unverified.record() == record, "nothing recorded without the ack"
+    _prepare(unverified, restore_payload=payload, unverified_frontend_ack=frontend_ack)
+    record = unverified.record()
+    assert record is not None and record["restore_payload_sha256"] == contract._payload_digest(payload)
 
     for ack in (None, ack_digest("no_rollback_for", plan), "0" * 64):
         with pytest.raises(proof.RestoreProofRefused) as refused:
             proof.tier_b_payload(
-                adopted, app_name=rr.APP_NAME, record=record, unverified_frontend_ack=ack
+                unverified, app_name=rr.APP_NAME, record=record, unverified_frontend_ack=ack
             )
         assert refused.value.code in {"ack_missing", "ack_mismatch"}
     restored = proof.tier_b_payload(
-        adopted,
-        app_name=rr.APP_NAME,
-        record=record,
-        unverified_frontend_ack=ack_digest("restore_unverified_frontend", plan),
+        unverified, app_name=rr.APP_NAME, record=record, unverified_frontend_ack=frontend_ack
     )
-    assert restored == payload and adopted.apps.mutations == []
+    assert restored == payload and unverified.apps.mutations == []
+    # Re-proven at the next activation, the recorded payload still needs the ack.
+    with pytest.raises(proof.RestoreProofRefused) as refused:
+        _prepare(unverified)
+    assert refused.value.code == "unverified_frontend_unacked"
+    assert "re-proven now" in _prepare(unverified, unverified_frontend_ack=frontend_ack)
 
 
 def test_the_cli_refuses_with_exit_2_and_prints_the_ack_to_give(

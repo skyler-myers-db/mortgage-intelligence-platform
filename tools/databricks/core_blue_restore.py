@@ -1,0 +1,266 @@
+"""The core tier's step-0a proof and signed-blue restore over a v7 core record (M2-PR7b).
+
+``ensure_core_blue`` is step 0a for a core release (v6's ``ensure_current``):
+treatment is quiesced, the record is loaded through the tier gate
+(core_blue.load_core_blue), the App's identity is checked, and then:
+
+* the active deployment is not the record's (a run killed after a green
+  activation and before its signed capture): blue is restored first (tier b,
+  below), with treatment left quiesced;
+* otherwise the record's own bindings are restored when a killed run left a
+  candidate's (the restore-owned repair, the one ``apps.update`` site), and
+  identity, the core resource proof and health are proven against the record.
+  A stopped App refuses (``blue_stopped``): the start-and-re-pin of tier a is
+  M0-PR8's for v5 and v6, and for v7 it waits for spike S7 (how a start
+  snapshots source), so the release never starts a stopped core blue.
+
+``restore_core_blue`` is tier b, the only rollback once green was activated:
+blue's restore payload (``blue_restore_proof.tier_b_payload``: the immutable
+copy re-hashed, the payload digest re-proven, an ``unverified`` frontend only
+with the ``restore_unverified_frontend`` ack) is deployed, the new deployment
+is proven to be blue (SUCCEEDED, active, the newest, from the immutable copy,
+with blue's env-name set, healthy on blue's commit), and the record is
+re-pinned to it as its next version (same provenance and ack,
+``predecessor_deployment_id`` the deployment it replaced). A record with no
+restore payload (an adopted blue a release never proved before activation)
+refuses. A stopped App is started first, as v6's restore does: Databricks
+deploys only to a running App, and the start's own deployment is replaced at
+once by blue's. Treatment is converged to runtime only after every proof.
+
+Both quiesce treatment again on any failure. Neither reads a Gateway resource
+proof or needs an agentic identity.
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Callable, Mapping
+from datetime import timedelta
+from typing import Any
+
+from databricks.sdk.service.apps import AppDeployment
+from tools.databricks.app_deployment_state import (
+    active_deployment_id,
+    deployment_state,
+    latest_succeeded,
+)
+from tools.databricks.app_rollback_record_contract import _text
+from tools.databricks.app_rollback_resource_contract import restore_signed_app_resource_contract
+from tools.databricks.app_start_deployment import (
+    StartProofError,
+    ensure_started,
+    env_names,
+    is_stopped,
+    tree_digest,
+    wait_for_compute_active,
+)
+from tools.databricks.blue_restore_proof import tier_b_payload
+from tools.databricks.core_blue import (
+    CoreBlueRefused,
+    Health,
+    assert_identity,
+    live_core_bindings,
+    load_core_blue,
+    require_core_blue,
+    resign,
+    verify_core_blue,
+)
+
+DEPLOY_TIMEOUT = timedelta(minutes=20)
+
+
+def redeploy_core_blue(
+    workspace: Any, *, app_name: str, payload: Mapping[str, object], timeout: timedelta
+) -> str:
+    """Tier b's one deploy: blue's restore payload; returns the new deployment's id."""
+
+    restored = workspace.apps.deploy_and_wait(
+        app_name, AppDeployment.from_dict(dict(payload)), timeout=timeout
+    )
+    if deployment_state(restored) != "SUCCEEDED":
+        raise CoreBlueRefused("restore_failed", "blue's restore deployment did not succeed")
+    return _text(getattr(restored, "deployment_id", None))
+
+
+def _prove_restored(
+    workspace: Any, record: Mapping[str, Any], *, app_name: str, restored_id: str
+) -> None:
+    latest = latest_succeeded(workspace, app_name=app_name)
+    if (
+        not restored_id
+        or active_deployment_id(workspace, app_name=app_name) != restored_id
+        or _text(getattr(latest, "deployment_id", None)) != restored_id
+        or _text(getattr(latest, "source_code_path", None)) != record["restore_source_path"]
+    ):
+        raise CoreBlueRefused(
+            "restore_unproven",
+            "the restored deployment is not the active, newest one from blue's immutable copy",
+        )
+    if sorted(env_names(latest)) != list(record["env_names"]):
+        raise CoreBlueRefused("restore_unproven", "the restored deployment is not blue's env set")
+
+
+def restore_core_blue(
+    workspace: Any,
+    *,
+    app_name: str,
+    scope: str,
+    lakebase_instance: str,
+    agentic_tier: str,
+    health: Health,
+    lease: Callable[[], None],
+    treatment: Callable[[str], None],
+    tier_transition_ack: str | None = None,
+    unverified_frontend_ack: str | None = None,
+    expected_rollback_deployment_id: str | None = None,
+    restore_treatment: bool = True,
+    tree: Callable[[Any, str], str] = tree_digest,
+    timeout: timedelta = DEPLOY_TIMEOUT,
+) -> dict[str, Any]:
+    """Tier b over a v7 core record; returns the re-pinned record."""
+
+    treatment("quiesce")
+    try:
+        record = require_core_blue(
+            load_core_blue(
+                workspace,
+                app_name=app_name,
+                scope=scope,
+                lakebase_instance=lakebase_instance,
+                agentic_tier=agentic_tier,
+                tier_transition_ack=tier_transition_ack,
+            )
+        )
+        if (
+            expected_rollback_deployment_id is not None
+            and record["deployment_id"] != expected_rollback_deployment_id
+        ):
+            raise CoreBlueRefused(
+                "record_changed", "the signed core record changed after step 0a bound it"
+            )
+        assert_identity(workspace, record, app_name=app_name)
+        live_core_bindings(workspace, app_name=app_name)  # a serving binding refuses, unrepaired
+        lease()
+        restore_signed_app_resource_contract(
+            workspace, app_name=app_name, resources=record["app_resources"]
+        )
+        verify_core_blue(workspace, record, app_name=app_name)
+        payload = tier_b_payload(
+            workspace,
+            app_name=app_name,
+            record=record,
+            unverified_frontend_ack=unverified_frontend_ack,
+            tree=tree,
+        )
+        try:
+            ensure_started(workspace, app_name=app_name)
+        except StartProofError:
+            # Tier b needs only compute ACTIVE: its deploy replaces the start.
+            wait_for_compute_active(workspace, app_name=app_name)
+        lease()
+        restored_id = redeploy_core_blue(
+            workspace, app_name=app_name, payload=payload, timeout=timeout
+        )
+        _prove_restored(workspace, record, app_name=app_name, restored_id=restored_id)
+        health(record, restored_id)
+        verify_core_blue(workspace, record, app_name=app_name)
+        repinned = resign(
+            workspace,
+            app_name=app_name,
+            scope=scope,
+            lakebase_instance=lakebase_instance,
+            record=record,
+            lease=lease,
+            deployment_id=restored_id,
+            source_code_path=record["restore_source_path"],
+            predecessor_deployment_id=record["deployment_id"],
+        )
+        if restore_treatment:
+            treatment("runtime")
+        return repinned
+    except BaseException:
+        treatment("quiesce")
+        raise
+
+
+def ensure_core_blue(
+    workspace: Any,
+    *,
+    app_name: str,
+    scope: str,
+    lakebase_instance: str,
+    agentic_tier: str,
+    health: Health,
+    lease: Callable[[], None],
+    treatment: Callable[[str], None],
+    tier_transition_ack: str | None = None,
+    unverified_frontend_ack: str | None = None,
+    tree: Callable[[Any, str], str] = tree_digest,
+) -> dict[str, Any]:
+    """Step 0a over a v7 core record: prove blue, or restore it; treatment stays quiesced."""
+
+    treatment("quiesce")
+    try:
+        record = require_core_blue(
+            load_core_blue(
+                workspace,
+                app_name=app_name,
+                scope=scope,
+                lakebase_instance=lakebase_instance,
+                agentic_tier=agentic_tier,
+                tier_transition_ack=tier_transition_ack,
+            )
+        )
+        assert_identity(workspace, record, app_name=app_name)
+        active = active_deployment_id(workspace, app_name=app_name)
+        latest = _text(getattr(latest_succeeded(workspace, app_name=app_name), "deployment_id", None))
+        if active != record["deployment_id"] or latest != active:
+            return restore_core_blue(
+                workspace,
+                app_name=app_name,
+                scope=scope,
+                lakebase_instance=lakebase_instance,
+                agentic_tier=agentic_tier,
+                health=health,
+                lease=lease,
+                treatment=treatment,
+                tier_transition_ack=tier_transition_ack,
+                unverified_frontend_ack=unverified_frontend_ack,
+                expected_rollback_deployment_id=record["deployment_id"],
+                restore_treatment=False,
+                tree=tree,
+            )
+        live_core_bindings(workspace, app_name=app_name)  # a serving binding refuses, unrepaired
+        lease()
+        restore_signed_app_resource_contract(
+            workspace, app_name=app_name, resources=record["app_resources"]
+        )
+        verify_core_blue(workspace, record, app_name=app_name)
+        if is_stopped(workspace, app_name=app_name):
+            raise CoreBlueRefused(
+                "blue_stopped",
+                "the core blue is stopped: the release never starts it (tier a for a v7 record "
+                "waits for spike S7); start it with the owner break-glass, then re-run",
+            )
+        health(record, active)
+        verify_core_blue(workspace, record, app_name=app_name)
+        if active_deployment_id(workspace, app_name=app_name) != active:
+            raise CoreBlueRefused(
+                "deployment_changed", "the active deployment changed during the step-0a proof"
+            )
+        if record.get("attestation_verify_key") != os.environ.get(
+            "MIP_AI_GATEWAY_PROOF_VERIFY_KEY", ""
+        ).strip():
+            # A rotated proof key: the same record, signed again with the current key.
+            return resign(
+                workspace,
+                app_name=app_name,
+                scope=scope,
+                lakebase_instance=lakebase_instance,
+                record=record,
+                lease=lease,
+            )
+        return record
+    except BaseException:
+        treatment("quiesce")
+        raise
