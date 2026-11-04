@@ -13,8 +13,11 @@ algorithm name. Its fields:
     ``app_rollback_resource_contract.RESOURCE_KINDS``). A serving-endpoint,
     Gateway or proxy binding refuses, the record carries no Gateway resource
     contract, binding or proxy-retirement journal, its env-name set carries no
-    serving, Gateway, Supervisor or proxy name, and nothing reading it ever
-    consults the Gateway resource proof.
+    serving, Gateway, Supervisor, agent-model, eval or proxy name, its restore
+    payload carries the agentic surfaces' two switches as exactly ``"0"`` or
+    not at all (the core tier's own invariant,
+    ``app_deploy_payload.CORE_TIER_OFF_SWITCHES``), and nothing reading it
+    ever consults the Gateway resource proof.
   - **agentic**: v6's Gateway resource contract, binding and proxy-retirement
     journal, validated by v6's own functions, unchanged.
 * ``provenance``: ``adopted`` (adopt-live signed a deployment this script did
@@ -33,9 +36,10 @@ algorithm name. Its fields:
 * ``restore_source_path``: the immutable, create-only copy a tier-b restore
   deploys from (``app-src/adopted-*`` for an adoption, a release folder for a
   capture); never a ``/src/`` snapshot.
-* ``frontend_provenance``: ``verified`` when ``frontend/dist`` equals the build
-  artifact for ``git_sha``, else ``unverified``; a restore to an unverified
-  record needs the ``restore_unverified_frontend`` ack.
+* ``frontend_provenance`` / ``frontend_reference_sha256``: ``verified`` when
+  ``frontend/dist`` equals the reference built from ``git_sha``, with the
+  digest of the dist it matched, else ``unverified`` and null; a restore to an
+  unverified record needs the ``restore_unverified_frontend`` ack.
 * ``env_names`` / ``env_names_sha256``: the deployment's env-name set (names
   only: Databricks redacts literal values from ``get_deployment``).
 * ``restore_payload`` / ``restore_payload_sha256``: blue's tier-b restore
@@ -83,17 +87,21 @@ ACK_PURPOSES = {
     "retired": frozenset({"unadopt"}),
     "captured": frozenset(),
 }
-# The App env names only the agentic tier carries: the serving endpoint, the
-# AI Gateway, the Supervisor, the agent runtime and the proxy caller.
+# The agentic surfaces' two switches (app_deploy_payload.CORE_TIER_OFF_SWITCHES,
+# pinned equal by test): the core tier carries each as exactly "0" or not at all.
+CORE_OFF_SWITCHES = ("MIP_AGENT_ORCHESTRATOR", "MIP_AI_GATEWAY")
+CORE_OFF_VALUE = "0"
+# The App env names only the agentic tier carries: the agent model, serving
+# endpoint, Supervisor, runtime, eval and proxy caller (MIP_AGENT_*), the AI
+# Gateway and its proofs (MIP_AI_GATEWAY_*, MIP_EXPECTED_AGENT_GATEWAY_*), the
+# Gateway model attestation keys (MIP_GATEWAY_*) and the reviewed-function owner.
 AGENTIC_ENV_PREFIXES = (
-    "MIP_AGENT_PROXY_",
-    "MIP_AGENT_SUPERVISOR_",
+    "MIP_AGENT_",
     "MIP_AI_GATEWAY_",
     "MIP_EXPECTED_AGENT_GATEWAY_",
+    "MIP_GATEWAY_",
 )
-AGENTIC_ENV_NAMES = frozenset(
-    {"MIP_AGENT_SERVING_ENDPOINT", "MIP_AGENT_RUNTIME_CLIENT_ID", "MIP_REVIEWED_FUNCTION_OWNER"}
-)
+AGENTIC_ENV_NAMES = frozenset({"MIP_REVIEWED_FUNCTION_OWNER"})
 # Binding kinds the core tier refuses by name (any other non-core kind refuses too).
 AGENTIC_RESOURCE_KINDS = frozenset({"serving_endpoint", "uc_securable", "app"})
 COMMON_FIELDS = frozenset(
@@ -118,6 +126,7 @@ COMMON_FIELDS = frozenset(
         "source_tree_sha256",
         "restore_source_path",
         "frontend_provenance",
+        "frontend_reference_sha256",
         "restore_payload",
         "restore_payload_sha256",
         "predecessor_deployment_id",
@@ -148,7 +157,22 @@ def tier_of_profile(agentic_tier: str) -> str:
 
 
 def is_agentic_env_name(name: str) -> bool:
+    if name in CORE_OFF_SWITCHES:
+        return False  # a core name whose value must be off (assert_core_off_switches)
     return name in AGENTIC_ENV_NAMES or name.startswith(AGENTIC_ENV_PREFIXES)
+
+
+def assert_core_off_switches(env_vars: Iterable[Mapping[str, object]]) -> None:
+    """A core-tier payload carries each agentic switch as exactly a literal "0", or not at all."""
+
+    for item in env_vars:
+        if item.get("name") in CORE_OFF_SWITCHES and (
+            set(item) != {"name", "value"} or item.get("value") != CORE_OFF_VALUE
+        ):
+            raise V7RecordError(
+                f"a core-tier restore payload must carry {item['name']} as exactly "
+                f'"{CORE_OFF_VALUE}" or not at all: the core tier never restores an agentic surface'
+            )
 
 
 def refuse_agentic_resources(items: Iterable[object]) -> None:
@@ -209,7 +233,10 @@ def _env_names(value: object, *, tier: str) -> list[str]:
         raise V7RecordError("App rollback v7 env-name set is not sorted and unique")
     agentic = sorted(name for name in value if is_agentic_env_name(name))
     if tier == "core" and agentic:
-        raise V7RecordError("a core-tier App record carries a serving, Gateway or proxy env name")
+        raise V7RecordError(
+            "a core-tier App record carries a serving, Gateway, Supervisor, agent-model, eval or "
+            "proxy env name"
+        )
     return list(value)
 
 
@@ -232,7 +259,7 @@ def _restore_source(path: object, *, provenance: str) -> str:
 
 
 def _restore_payload(
-    value: Mapping[str, Any], *, expected_lakebase_instance: str
+    value: Mapping[str, Any], *, tier: str, expected_lakebase_instance: str
 ) -> tuple[dict[str, object] | None, str | None]:
     payload, digest = value.get("restore_payload"), value.get("restore_payload_sha256")
     if payload is None and digest is None:
@@ -250,6 +277,8 @@ def _restore_payload(
     names = sorted(str(item["name"]) for item in validated["env_vars"])  # type: ignore[union-attr]
     if names != value["env_names"]:
         raise V7RecordError("App rollback v7 restore payload env-name set is not blue's")
+    if tier == "core":
+        assert_core_off_switches(validated["env_vars"])  # type: ignore[arg-type]
     if digest != _payload_digest(validated):
         raise V7RecordError("App rollback v7 restore payload digest does not match")
     return validated, str(digest)
@@ -332,13 +361,17 @@ def validated_v7_record(
     ):
         raise V7RecordError("App rollback v7 full-tree digest is invalid")
     _restore_source(value["restore_source_path"], provenance=str(provenance))
-    frontend = value["frontend_provenance"]
-    if frontend not in FRONTEND_PROVENANCES or (
-        provenance == "captured" and frontend != "verified"
+    frontend, matched = value["frontend_provenance"], value["frontend_reference_sha256"]
+    if (
+        frontend not in FRONTEND_PROVENANCES
+        or (provenance == "captured" and frontend != "verified")
+        or (frontend == "verified")
+        != (isinstance(matched, str) and bool(_SHA256.fullmatch(matched)))
+        or (frontend == "unverified" and matched is not None)
     ):
         raise V7RecordError("App rollback v7 frontend provenance is invalid")
     payload, payload_digest = _restore_payload(
-        value, expected_lakebase_instance=expected_lakebase_instance
+        value, tier=str(tier), expected_lakebase_instance=expected_lakebase_instance
     )
     if payload is None and (provenance == "captured" or tier == "agentic"):
         raise V7RecordError(f"a {provenance} {tier}-tier record must carry its restore payload")

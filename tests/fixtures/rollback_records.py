@@ -204,6 +204,7 @@ def v7_core_fields(**overrides: Any) -> dict[str, Any]:
         "source_tree_sha256": TREE,
         "restore_source_path": adopted_folder(),
         "frontend_provenance": "verified",
+        "frontend_reference_sha256": "9" * 64,
         "restore_payload": None,
         "predecessor_deployment_id": None,
         "ack_purpose": "adopt_live",
@@ -217,3 +218,35 @@ def v7_core_record(**overrides: Any) -> dict[str, Any]:
     from tools.databricks.app_rollback_record_v7 import build_v7_record
 
     return build_v7_record(expected_lakebase_instance=LAKEBASE, **v7_core_fields(**overrides))
+
+
+RELEASE_FOLDER = (
+    f"/Workspace/Users/{DEPLOYER}/.bundle/mortgage-intelligence-platform/client-one/app-src/"
+    "0123456789ab-fedcba987654"
+)
+
+
+def v7_agentic_record(env: dict[str, str] | None = None) -> dict[str, Any]:
+    """A captured v7 agentic record with v6's Gateway contract; ``env`` joins its payload."""
+
+    from tools.databricks.app_rollback_record_v7 import build_v7_record
+
+    restore = payload(RELEASE_FOLDER, env)
+    fields = v7_core_fields(
+        tier="agentic",
+        provenance="captured",
+        ack_purpose=None,
+        ack_sha256=None,
+        env_names=sorted(str(item["name"]) for item in restore["env_vars"]),  # type: ignore[union-attr]
+        restore_source_path=RELEASE_FOLDER,
+        restore_payload=restore,
+    )
+    gateway = {
+        "gateway_resources": {
+            **GATEWAY_RESOURCES,
+            "resource_digest": gateway_exact_resource_digest(GATEWAY_RESOURCES),
+        },
+        "gateway_binding_sha256": "b" * 64,
+        "pending_proxy_credential_retirement_ids": [],
+    }
+    return build_v7_record(expected_lakebase_instance=LAKEBASE, gateway=gateway, **fields)

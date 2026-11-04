@@ -1,12 +1,8 @@
 """Validate and persist signed Databricks App rollback records.
 
 Versions 5 and 6 are validated here exactly as before v7 existed. Version 7
-(tier-aware, with provenance; tools/databricks/app_rollback_record_v7.py,
-M2-PR7) shares v6's current-record slot, so one key always holds the one
-current record and a v6 capture replaces an adopted v7 in place, never
-shadowed by it. ``_load_record`` stays the v5/v6 reader the agentic release
-path calls: it refuses a v7 record unless the caller is tier-aware
-(``accept_v7``), and reads a v7 retired tombstone as no record at all.
+(tools/databricks/app_rollback_record_v7.py, M2-PR7) shares v6's slot; the
+readers are tools/databricks/app_rollback_record_reader.py.
 """
 
 from __future__ import annotations
@@ -58,10 +54,6 @@ V7_RECORD_VERSION = 7
 V7_RECORD_ATTESTATION_ALG = "ed25519-app-rollback-v7"
 # The words the v5/v6 reader refuses a v7 record with; tier-aware callers match them.
 V7_REFUSAL = "this v5/v6 reader refuses it"
-_ABSENT = (
-    "no server-owned last-good App rollback contract exists; run the explicit "
-    "bootstrap command before upgrading this existing App"
-)
 _CREDENTIAL_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 
 
@@ -362,34 +354,16 @@ def _validated_record(
 
 
 def load_signed_record(
-    workspace: Any,
-    *,
-    app_name: str,
-    scope: str,
-    expected_lakebase_instance: str,
+    workspace: Any, *, app_name: str, scope: str, expected_lakebase_instance: str
 ) -> dict[str, Any] | None:
-    """The verified current record of any version (a v7 tombstone included), or None."""
+    """The verified current record of any version, or None (app_rollback_record_reader)."""
 
-    assert_owned_app_rollback_scope(
+    from tools.databricks.app_rollback_record_reader import signed_record
+
+    return signed_record(
         workspace,
         app_name=app_name,
         scope=scope,
-    )
-    raw = _secret_value(workspace, scope=scope, key=_record_key(app_name))
-    if raw is None:
-        raw = _secret_value(workspace, scope=scope, key=_legacy_record_key(app_name))
-    if raw is None:
-        return None
-    try:
-        decoded = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("App rollback contract is not valid JSON") from exc
-    if not isinstance(decoded, dict):
-        raise RuntimeError("App rollback contract is not an object")
-    _verify_record_attestation(decoded)
-    return _validated_record(
-        decoded,
-        app_name=app_name,
         expected_lakebase_instance=expected_lakebase_instance,
     )
 
@@ -402,23 +376,17 @@ def _load_record(
     expected_lakebase_instance: str,
     accept_v7: bool = False,
 ) -> dict[str, Any]:
-    record = load_signed_record(
+    """The v5/v6 reader the agentic release path calls (app_rollback_record_reader)."""
+
+    from tools.databricks.app_rollback_record_reader import current_record
+
+    return current_record(
         workspace,
         app_name=app_name,
         scope=scope,
         expected_lakebase_instance=expected_lakebase_instance,
+        accept_v7=accept_v7,
     )
-    if record is None or (
-        record["version"] == V7_RECORD_VERSION and record["provenance"] == "retired"
-    ):
-        # A retired tombstone holds no rollback target: it reads as absent.
-        raise RuntimeError(_ABSENT)
-    if record["version"] == V7_RECORD_VERSION and not accept_v7:
-        raise RuntimeError(
-            f"the signed App rollback record is a v7 {record['tier']}-tier record; "
-            f"{V7_REFUSAL} (the tier-aware release path reads v7)"
-        )
-    return record
 
 
 def _save_record(workspace: Any, *, scope: str, record: dict[str, Any]) -> None:

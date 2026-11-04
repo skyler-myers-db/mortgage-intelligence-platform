@@ -130,6 +130,37 @@ def test_a_retired_tombstone_reads_as_no_record_for_every_reader() -> None:
     ), "nothing is deleted"
 
 
+def test_a_tombstones_remedy_is_the_re_adoption_the_bootstrap_gate_allows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bootstrap gate refuses over any record, so a tombstone never names the rebase."""
+
+    from tools.databricks import app_rollback_bootstrap_gate as gate
+    from tools.databricks import prestop_rollback_record as prestop
+
+    monkeypatch.setattr(gate, "assert_owned_app_rollback_scope", lambda *_a, **_kw: None)
+    workspace = _workspace()
+    with pytest.raises(RuntimeError, match="run the explicit bootstrap command") as empty:
+        _load(workspace)
+    gate.assert_rollback_record_absent(workspace, app_name=rr.APP_NAME, scope=rr.SCOPE)
+
+    tombstone = rr.v7_core_record(provenance="retired", ack_purpose="unadopt")
+    contract.save_versioned_record(workspace, scope=rr.SCOPE, record=tombstone)
+    with pytest.raises(RuntimeError) as retired:
+        _load(workspace)
+    message = str(retired.value)
+    assert "bootstrap" not in message and "--phase adopt" in message
+    assert "retired adopt-live tombstone" in message
+    with pytest.raises(RuntimeError, match="refusing the one-time unsigned rebase"):
+        gate.assert_rollback_record_absent(workspace, app_name=rr.APP_NAME, scope=rr.SCOPE)
+    assert (
+        prestop._classify(retired.value)
+        == prestop._classify(empty.value)
+        == (prestop.ROLLBACK_RECORD_ABSENT)
+    ), "every consumer still reads a tombstone as no record"
+    assert "--phase adopt" in prestop._REMEDY_ABSENT
+
+
 @pytest.mark.parametrize("tamper", ("field", "algorithm"))
 def test_a_tampered_v7_record_fails_its_signature(tamper: str) -> None:
     workspace = _workspace()
@@ -168,10 +199,17 @@ def test_a_v7_core_record_refuses_a_serving_endpoint_binding() -> None:
         "MIP_AI_GATEWAY_ENDPOINT",
         "MIP_AGENT_SERVING_ENDPOINT",
         "MIP_AGENT_SUPERVISOR_ID",
+        "MIP_AGENT_MODEL",
+        "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY",
+        "MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY",
+        "MIP_AGENT_EVAL_EXPERIMENT",
+        "MIP_AGENT_EVAL_RUN_ID",
+        "MIP_AI_GATEWAY_PROOF_VERIFY_KEY",
+        "MIP_REVIEWED_FUNCTION_OWNER",
     ),
 )
 def test_a_v7_core_record_refuses_a_serving_gateway_or_proxy_env_name(name: str) -> None:
-    with pytest.raises(v7.V7RecordError, match="serving, Gateway or proxy env name"):
+    with pytest.raises(v7.V7RecordError, match="Supervisor, agent-model, eval or proxy env name"):
         rr.v7_core_record(env_names=sorted([*rr.core_env_names(), name]))
 
 
@@ -179,6 +217,66 @@ def test_the_core_flags_off_are_not_agentic_names() -> None:
     assert not v7.is_agentic_env_name("MIP_AI_GATEWAY") and not v7.is_agentic_env_name(
         "MIP_AGENT_ORCHESTRATOR"
     )
+
+
+def test_the_agentic_names_are_every_agentic_name_the_payload_builder_emits() -> None:
+    from tests.unit.test_settings_d0_env_parity import D0_NAMES
+    from tools.databricks import app_deploy_payload as builder
+
+    assert v7.CORE_OFF_SWITCHES == builder.CORE_TIER_OFF_SWITCHES
+    names = builder.NON_SECRET_OPERATOR_VARS
+    block = names[names.index("MIP_AGENT_ORCHESTRATOR") : names.index("MIP_AGENT_EVAL_RUN_ID") + 1]
+    unclassified = [
+        name
+        for name in block
+        if name not in {*v7.CORE_OFF_SWITCHES, "MIP_LAKEBASE_SYNC"}
+        and not v7.is_agentic_env_name(name)
+    ]
+    assert unclassified == [], "every name of the builder's agentic block is an agentic name"
+    assert [name for name in names if v7.is_agentic_env_name(name)] == [
+        name for name in block if name not in {*v7.CORE_OFF_SWITCHES, "MIP_LAKEBASE_SYNC"}
+    ], "and no name outside it is"
+    assert not any(v7.is_agentic_env_name(name) for name in D0_NAMES), "D0 still adopts"
+
+
+@pytest.mark.parametrize(
+    ("switches", "ok"),
+    (
+        ({"MIP_AI_GATEWAY": "0", "MIP_AGENT_ORCHESTRATOR": "0"}, True),
+        ({"MIP_AI_GATEWAY": "1", "MIP_AGENT_ORCHESTRATOR": "0"}, False),
+        ({"MIP_AI_GATEWAY": "0", "MIP_AGENT_ORCHESTRATOR": "1"}, False),
+        ({"MIP_AI_GATEWAY": "true", "MIP_AGENT_ORCHESTRATOR": "0"}, False),
+        ({"MIP_AI_GATEWAY": "off", "MIP_AGENT_ORCHESTRATOR": "0"}, False),
+        ({"MIP_AI_GATEWAY": "value_from", "MIP_AGENT_ORCHESTRATOR": "0"}, False),
+    ),
+)
+def test_a_core_restore_payload_never_switches_an_agentic_surface_on(
+    switches: dict[str, str], ok: bool
+) -> None:
+    payload = rr.payload(
+        rr.adopted_folder(), {k: v for k, v in switches.items() if v != "value_from"}
+    )
+    for name, value in switches.items():
+        if value == "value_from":
+            payload["env_vars"].append({"name": name, "value_from": "sql_warehouse"})  # type: ignore[attr-defined]
+    names = sorted([*rr.core_env_names(), *switches])
+    if ok:
+        record = rr.v7_core_record(env_names=names, restore_payload=payload)
+        assert record["restore_payload"] == payload
+        return
+    with pytest.raises(v7.V7RecordError, match="must carry MIP_(AI_GATEWAY|AGENT_ORCHESTRATOR) as"):
+        rr.v7_core_record(env_names=names, restore_payload=payload)
+
+
+def test_a_verified_frontend_names_the_reference_digest_it_matched() -> None:
+    rr.v7_core_record(frontend_provenance="unverified", frontend_reference_sha256=None)
+    for overrides in (
+        {"frontend_reference_sha256": None},
+        {"frontend_reference_sha256": "not-a-digest"},
+        {"frontend_provenance": "unverified"},
+    ):
+        with pytest.raises(v7.V7RecordError, match="frontend provenance is invalid"):
+            rr.v7_core_record(**overrides)
 
 
 def test_a_v7_core_record_carries_no_gateway_fields() -> None:

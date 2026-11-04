@@ -70,22 +70,38 @@ def _write_binding_env(
     )
 
 
+def v7_gateway_proof(workspace: object, record: dict[str, object]) -> object:
+    """A v7 agentic record's Gateway resource proof: v6 inspect's, unchanged.
+
+    No candidate owner (inspect is not a capture): the reviewed-function owner
+    is the signed restore payload's, else authenticated legacy-style, exactly
+    as ``verified_signed_last_good_contract`` reads a v6 record's payload.
+    """
+
+    from tools.databricks import app_deployment_rollback as rollback
+    from tools.databricks.app_rollback_gateway_proof import resolve_stored_gateway_resource_proof
+
+    return resolve_stored_gateway_resource_proof(
+        workspace,
+        record={
+            "version": rollback.RECORD_VERSION,
+            "gateway_resources": record["gateway_resources"],
+            "payload": record["restore_payload"],
+        },
+        candidate_reviewed_function_owner=None,
+        authenticate_owner=rollback.authenticated_reviewed_function_owner,
+        assert_function_set=rollback.assert_reviewed_function_set,
+        assert_legacy_resources=rollback.assert_live_legacy_gateway_resources,
+        resolve_exact_resource_proof=rollback.resolve_exact_resource_proof,
+        require_immutable_payload_source=False,
+    )
+
+
 def _inspected_v7(workspace: object, args: argparse.Namespace) -> bool:
     """A v7 record verified tier-aware (blue_restore_proof.inspect_v7); False for v5 and v6."""
 
     from tools.databricks import app_deployment_rollback as rollback
-    from tools.databricks.app_rollback_payload_proof import env_map
     from tools.databricks.blue_restore_proof import inspect_v7
-
-    def gateway_proof(record: dict[str, object]) -> object:
-        # The agentic kind keeps v6's Gateway resource proof, with its reviewed
-        # function owner authenticated as the deployer (the capture-time branch).
-        payload = record["restore_payload"]
-        return rollback._stored_resource_proof(
-            workspace,
-            record={"version": rollback.RECORD_VERSION, "gateway_resources": record["gateway_resources"]},
-            candidate_reviewed_function_owner=env_map(payload)["MIP_REVIEWED_FUNCTION_OWNER"],  # type: ignore[arg-type]
-        )
 
     return inspect_v7(
         workspace,
@@ -93,7 +109,7 @@ def _inspected_v7(workspace: object, args: argparse.Namespace) -> bool:
         scope=args.scope,
         lakebase_instance=rollback._expected_lakebase_instance(),
         out_env=args.out_env,
-        gateway_proof=gateway_proof,  # type: ignore[arg-type]
+        gateway_proof=lambda record: v7_gateway_proof(workspace, dict(record)),
     )
 
 
