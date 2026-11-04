@@ -93,6 +93,8 @@ EXPECTED_IDENTIFYING = frozenset(
         "MIP_LEGACY_BUNDLE_ROOT",
         "MIP_LENDER_IDENTITY_JSON",
         "MIP_ACCEPTED_EXPOSURE_JSON",
+        # M2-PR8: the handover's interim owner pairs name each dataset's owner.
+        "MIP_UC_INTERIM_OWNER_PAIRS_JSON",
         "MIP_SEED_OPERATOR_EMAIL",
     }
 )
@@ -157,6 +159,11 @@ EXPECTED_LEAF_CLASS = {
         "[].identities[]": _VOCAB,
         "[].privilege_class": _VOCAB,
         "[].reason": _ID,
+        "[].expires_at": _DATE,
+    },
+    "MIP_UC_INTERIM_OWNER_PAIRS_JSON": {
+        "[].full_name": LeafClass.PUBLIC,
+        "[].owner": _ID,
         "[].expires_at": _DATE,
     },
 }

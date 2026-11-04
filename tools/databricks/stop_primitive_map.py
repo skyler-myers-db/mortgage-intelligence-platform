@@ -43,7 +43,10 @@ true (``tests/unit/test_stop_primitive_ast_contract.py`` and
   the window library.
 
 The window library and the EXIT-trap library are the only shell callers of a
-stop. Everything is matched lexically, so a comment line never counts.
+stop; every top-level script is scanned too, so the owner-run WR5 entry
+(``scripts/lakebase_handover_window.sh``, M2-PR8) only calls the window
+library's functions. Everything is matched lexically, so a comment line never
+counts.
 """
 
 from __future__ import annotations
@@ -146,6 +149,9 @@ ENTRY_POINTS: Mapping[str, EntryPoint] = {
             "close": False,
             "status": False,
             "assert-serving": False,
+            # WR5 (M2-PR8): read-only plan and start proof; the window library stops and starts.
+            "plan-wr5": False,
+            "await-wr5": False,
             # M0-PR9: the dead-man's cancel, after the journal closes.
             "cancel-deadman": True,
         },
@@ -521,8 +527,10 @@ def shell_violations(path: str, text: str) -> list[str]:
 
 
 def shell_files(root: Path | None = None) -> list[Path]:
+    """deploy.sh, every other top-level script (the owner-run WR5 entry among them) and the libraries."""
+
     base = root or REPO
-    return sorted([base / "scripts" / "deploy.sh", *(base / "scripts").glob("lib/*.sh")])
+    return sorted({base / "scripts" / "deploy.sh", *(base / "scripts").glob("*.sh"), *(base / "scripts").glob("lib/*.sh")})
 
 
 def repo_shell_violations(

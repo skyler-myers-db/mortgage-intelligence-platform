@@ -32,7 +32,7 @@ from pydantic import (
 )
 
 from tools.clients import rules
-from tools.clients.json_fields import ExposureEntry, IdentityIds, LenderIdentity
+from tools.clients.json_fields import ExposureEntry, IdentityIds, InterimOwnerPair, LenderIdentity
 from tools.clients.shapes import (
     DNS_NAME,
     EMAIL,
@@ -128,6 +128,7 @@ FIELD_CLASS: dict[str, FieldClass] = {
     "MIP_LEGACY_BUNDLE_ROOT": _I,
     "MIP_LENDER_IDENTITY_JSON": _I,
     "MIP_ACCEPTED_EXPOSURE_JSON": _I,
+    "MIP_UC_INTERIM_OWNER_PAIRS_JSON": _I,
     "MIP_SEED_OPERATOR_EMAIL": _I,
     "DATABRICKS_CLIENT_SECRET": _S,
     "DATABRICKS_OPERATOR2_CLIENT_SECRET": _S,
@@ -199,6 +200,13 @@ JSON_LEAF_CLASS: dict[str, dict[str, LeafClass]] = {
         "[].identities[]": _VO,
         "[].privilege_class": _VO,
         "[].reason": _IV,
+        "[].expires_at": _DA,
+    },
+    # The handover's pipeline-dataset pairs (M2-PR8): a governed object's name
+    # is public like the catalog's; its interim owner is identifying.
+    "MIP_UC_INTERIM_OWNER_PAIRS_JSON": {
+        "[].full_name": LeafClass.PUBLIC,
+        "[].owner": _IV,
         "[].expires_at": _DA,
     },
 }
@@ -350,6 +358,10 @@ class ClientProfile(BaseModel):
     legacy_bundle_root: str | None = Field(default=None, alias="MIP_LEGACY_BUNDLE_ROOT")
     lender_identity: LenderIdentity | None = Field(default=None, alias="MIP_LENDER_IDENTITY_JSON")
     accepted_exposure: tuple[ExposureEntry, ...] = Field(default=(), alias="MIP_ACCEPTED_EXPOSURE_JSON")
+    # The ownership handover's interim owner pairs (M2-PR8): exact, at most 14 days.
+    interim_owner_pairs: tuple[InterimOwnerPair, ...] = Field(
+        default=(), alias="MIP_UC_INTERIM_OWNER_PAIRS_JSON"
+    )
     seed_operator_email: str | None = Field(default=None, alias="MIP_SEED_OPERATOR_EMAIL")
     # Secret. The agentic-tier credentials are required only when the tier is on.
     normal_client_secret: SecretStr = Field(alias="DATABRICKS_CLIENT_SECRET")
@@ -460,7 +472,7 @@ class ClientProfile(BaseModel):
     def _json_object(cls, value: object) -> object:
         return _parse_json(value, expected=dict)
 
-    @field_validator("accepted_exposure", mode="before")
+    @field_validator("accepted_exposure", "interim_owner_pairs", mode="before")
     @classmethod
     def _json_list(cls, value: object) -> object:
         return _parse_json(value, expected=list)

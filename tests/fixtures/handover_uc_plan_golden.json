@@ -1,0 +1,149 @@
+{
+  "catalogs": [
+    {
+      "name": "mip",
+      "role": "governed"
+    },
+    {
+      "name": "mip_app_state",
+      "role": "sync"
+    }
+  ],
+  "changes": [
+    {
+      "api": "PATCH /api/2.1/unity-catalog/functions/mip.gold.fn_lead_score {\"owner\":\"acme-data-owners\"}",
+      "full_name": "mip.gold.fn_lead_score",
+      "key": "FUNCTION:mip.gold.fn_lead_score",
+      "kind": "FUNCTION",
+      "new_owner": "acme-data-owners",
+      "prior_owner": "legacy-owner@example.com",
+      "sql": "ALTER FUNCTION `mip`.`gold`.`fn_lead_score` OWNER TO `acme-data-owners`"
+    },
+    {
+      "api": "PATCH /api/2.1/unity-catalog/functions/mip.gold.fn_rate_spread {\"owner\":\"acme-data-owners\"}",
+      "full_name": "mip.gold.fn_rate_spread",
+      "key": "FUNCTION:mip.gold.fn_rate_spread",
+      "kind": "FUNCTION",
+      "new_owner": "acme-data-owners",
+      "prior_owner": "legacy-owner@example.com",
+      "sql": "ALTER FUNCTION `mip`.`gold`.`fn_rate_spread` OWNER TO `acme-data-owners`"
+    },
+    {
+      "api": "PATCH /api/2.1/unity-catalog/models/mip.gold.propensity_model {\"owner\":\"acme-data-owners\"}",
+      "full_name": "mip.gold.propensity_model",
+      "key": "REGISTERED_MODEL:mip.gold.propensity_model",
+      "kind": "REGISTERED_MODEL",
+      "new_owner": "acme-data-owners",
+      "prior_owner": "legacy-owner@example.com",
+      "sql": ""
+    },
+    {
+      "api": "PATCH /api/2.1/unity-catalog/volumes/mip.gold.exports {\"owner\":\"acme-data-owners\"}",
+      "full_name": "mip.gold.exports",
+      "key": "VOLUME:mip.gold.exports",
+      "kind": "VOLUME",
+      "new_owner": "acme-data-owners",
+      "prior_owner": "legacy-owner@example.com",
+      "sql": "ALTER VOLUME `mip`.`gold`.`exports` OWNER TO `acme-data-owners`"
+    },
+    {
+      "api": "PATCH /api/2.1/unity-catalog/tables/mip.gold.lead_scores_v {\"owner\":\"acme-data-owners\"}",
+      "full_name": "mip.gold.lead_scores_v",
+      "key": "VIEW:mip.gold.lead_scores_v",
+      "kind": "VIEW",
+      "new_owner": "acme-data-owners",
+      "prior_owner": "legacy-owner@example.com",
+      "sql": "ALTER VIEW `mip`.`gold`.`lead_scores_v` OWNER TO `acme-data-owners`"
+    },
+    {
+      "api": "PATCH /api/2.1/unity-catalog/tables/mip.gold.portfolio_metrics {\"owner\":\"acme-data-owners\"}",
+      "full_name": "mip.gold.portfolio_metrics",
+      "key": "VIEW:mip.gold.portfolio_metrics",
+      "kind": "VIEW",
+      "new_owner": "acme-data-owners",
+      "prior_owner": "legacy-owner@example.com",
+      "sql": "ALTER VIEW `mip`.`gold`.`portfolio_metrics` OWNER TO `acme-data-owners`"
+    },
+    {
+      "api": "PATCH /api/2.1/unity-catalog/tables/mip.gold.borrower_360 {\"owner\":\"acme-data-owners\"}",
+      "full_name": "mip.gold.borrower_360",
+      "key": "TABLE:mip.gold.borrower_360",
+      "kind": "TABLE",
+      "new_owner": "acme-data-owners",
+      "prior_owner": "legacy-owner@example.com",
+      "sql": "ALTER TABLE `mip`.`gold`.`borrower_360` OWNER TO `acme-data-owners`"
+    },
+    {
+      "api": "PATCH /api/2.1/unity-catalog/schemas/mip.gold {\"owner\":\"acme-data-owners\"}",
+      "full_name": "mip.gold",
+      "key": "SCHEMA:mip.gold",
+      "kind": "SCHEMA",
+      "new_owner": "acme-data-owners",
+      "prior_owner": "legacy-owner@example.com",
+      "sql": "ALTER SCHEMA `mip`.`gold` OWNER TO `acme-data-owners`"
+    },
+    {
+      "api": "PATCH /api/2.1/unity-catalog/schemas/mip.silver {\"owner\":\"acme-data-owners\"}",
+      "full_name": "mip.silver",
+      "key": "SCHEMA:mip.silver",
+      "kind": "SCHEMA",
+      "new_owner": "acme-data-owners",
+      "prior_owner": "legacy-owner@example.com",
+      "sql": "ALTER SCHEMA `mip`.`silver` OWNER TO `acme-data-owners`"
+    },
+    {
+      "api": "PATCH /api/2.1/unity-catalog/catalogs/mip {\"owner\":\"acme-data-owners\"}",
+      "full_name": "mip",
+      "key": "CATALOG:mip",
+      "kind": "CATALOG",
+      "new_owner": "acme-data-owners",
+      "prior_owner": "legacy-owner@example.com",
+      "sql": "ALTER CATALOG `mip` OWNER TO `acme-data-owners`"
+    },
+    {
+      "api": "PATCH /api/2.1/unity-catalog/catalogs/mip_app_state {\"owner\":\"acme-data-owners\"}",
+      "full_name": "mip_app_state",
+      "key": "CATALOG:mip_app_state",
+      "kind": "CATALOG",
+      "new_owner": "acme-data-owners",
+      "prior_owner": "legacy-owner@example.com",
+      "sql": "ALTER CATALOG `mip_app_state` OWNER TO `acme-data-owners`"
+    }
+  ],
+  "interim_owner_pairs_json": "[{\"expires_at\":\"2026-11-18\",\"full_name\":\"mip.silver.parcel_rollup\",\"owner\":\"legacy-owner@example.com\"},{\"expires_at\":\"2026-11-18\",\"full_name\":\"mip.silver.parcel_stream\",\"owner\":\"legacy-owner@example.com\"}]",
+  "left_alone": {
+    "follows_catalog": 0,
+    "other_owner": 3,
+    "sync_catalog_child": 2,
+    "system_owned": 1
+  },
+  "legacy_owner": "legacy-owner@example.com",
+  "pipeline_managed": [
+    {
+      "full_name": "mip.silver.parcel_rollup",
+      "owner": "legacy-owner@example.com",
+      "table_type": "MATERIALIZED_VIEW"
+    },
+    {
+      "full_name": "mip.silver.parcel_stream",
+      "owner": "legacy-owner@example.com",
+      "table_type": "STREAMING_TABLE"
+    }
+  ],
+  "plan_sha256": "6854102e5f37cd44578fd3092a16980d74d731182c1039081b066e3e5ffbb91c",
+  "refusals": [],
+  "schema": "mip.uc-ownership-handover.plan.v1",
+  "suggested_interim_pairs": [
+    {
+      "expires_at": "2026-11-18",
+      "full_name": "mip.silver.parcel_rollup",
+      "owner": "legacy-owner@example.com"
+    },
+    {
+      "expires_at": "2026-11-18",
+      "full_name": "mip.silver.parcel_stream",
+      "owner": "legacy-owner@example.com"
+    }
+  ],
+  "target_owner": "acme-data-owners"
+}

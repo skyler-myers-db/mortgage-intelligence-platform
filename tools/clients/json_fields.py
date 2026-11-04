@@ -41,6 +41,8 @@ _CALENDAR_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 _MARK_MEDIA_TYPES = frozenset({"image/png", "image/webp"})
 _MAX_SERVICER_ALIASES = 32
 _SINGLE_LINE = re.compile(r"[^\n\r\0]{1,500}")
+# A Unity Catalog object's three-part full name, as information_schema prints it.
+_UC_FULL_NAME = re.compile(r"[a-z_][a-z0-9_]{0,254}(?:\.[a-z_][a-z0-9_]{0,254}){2}")
 
 
 class StrictModel(BaseModel):
@@ -334,6 +336,33 @@ class ExposureEntry(StrictModel):
     @classmethod
     def _reason(cls, value: str) -> str:
         return require(value, _SINGLE_LINE, expected="one line of at most 500 characters")
+
+    @field_validator("expires_at")
+    @classmethod
+    def _expires_at(cls, value: str) -> str:
+        return require(value, ISO_DATE, expected="an ISO-8601 date")
+
+
+class InterimOwnerPair(StrictModel):
+    """One pipeline dataset's interim owner (M2-PR8): exact, and at most 14 days ahead.
+
+    The shape only; the 14-day bound and the exact matching are
+    tools/databricks/uc_interim_owner_pairs.py's.
+    """
+
+    full_name: str
+    owner: str
+    expires_at: str
+
+    @field_validator("full_name")
+    @classmethod
+    def _full_name(cls, value: str) -> str:
+        return require(value, _UC_FULL_NAME, expected="a catalog.schema.name full name")
+
+    @field_validator("owner")
+    @classmethod
+    def _owner(cls, value: str) -> str:
+        return require(value, PRINCIPAL, expected="one principal")
 
     @field_validator("expires_at")
     @classmethod

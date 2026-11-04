@@ -2823,6 +2823,182 @@ and copies each file and notebook create-only and byte-verified. It never
 deletes: removing the legacy originals stays the owner's cutover step, from
 the plan's list.
 
+### Ownership handover (M2-PR8, cutover steps 7 and 8)
+
+An install deployed by hand is owned by that person: its Unity Catalog
+objects, its Lakebase database and every `mip_app` object. Two owner-run
+tools hand them to the install's identities, both plan-first. The owner
+hardware-key attestation is deferred (review mode `single_maintainer_audited`),
+so each mutating run needs an **exact digest ack**: the read-only plan prints
+the sha256 of its canonical document, `--ack-plan <sha256>` passes it for that
+one run (a flag, never a `.env.local` line), and the tool recomputes the plan
+immediately before its first change and refuses, with nothing changed, when
+the two differ. Each keeps a per-object journal at an explicit `--journal`
+path (a new file, mode 0600, never through a symlink, rewritten atomically
+after every state change), and `--revert --journal <path>` is the exact
+inverse from it, also after a partial failure: every object that may have
+moved goes back to its journaled prior owner, and only while its live owner
+is still the one the handover gave it. A revert prints its own digest first
+and mutates only with `--ack-plan <that digest>`. Printed lines carry codes,
+counts and digests; names and owners go only to `--report-out` (mode 0600)
+and the journal. Neither tool has run live.
+
+**Unity Catalog (step 7).** Run as the legacy owner:
+
+```bash
+python -m tools.clients.handover_uc_ownership --plan --report-out <private report>
+python -m tools.clients.handover_uc_ownership --apply --ack-plan <sha256> --journal <new path>
+python -m tools.clients.handover_uc_ownership --verify
+```
+
+The target is `<MIP_IDENTITY_PREFIX>-data-owners`. The plan enumerates the
+governed catalog (`MIP_DEFAULT_CATALOG`): the catalog, its schemas, tables,
+views, volumes, functions and registered models the legacy owner owns, leaves
+first and the catalog last; the Lakebase sync catalog
+(`MIP_LAKEBASE_SYNC_CATALOG`) at catalog level only (what a managed-online
+catalog holds follows its database and sync pipelines, which spike S3 has not
+rehearsed). Each change is one typed Unity Catalog update with only `owner`
+set (the plan shows the `PATCH` and the equivalent `ALTER ... OWNER TO`),
+after a compare-and-swap read of the live owner. It never touches, and
+refuses explicitly: the metastore (`metastore`), a Delta Sharing catalog
+(`share_catalog`), a foreign catalog or table (`foreign_catalog`,
+`foreign_securable`), a system catalog (`system_catalog`), an object the
+System user owns (never a change), and the users, account users or admins
+vocabulary as the target. The first failure stops the apply (exit 3).
+`--verify` is read-only: nothing left to move, and every pipeline dataset
+paired exactly. `--interim-days N` (1 to 14, default 14) sets the suggested
+pairs' expiry.
+
+**Pipeline-managed datasets.** Spike S4 (does `ALTER OWNER` on a
+pipeline-published streaming table or materialized view hold, and survive the
+pipeline's run_as change?) has not run, so they are excluded. The private
+report (`--report-out`; the printed lines carry counts only) suggests one
+interim owner pair per dataset, `(full_name, owner, expires_at)`, at most 14
+days ahead, as rows (`suggested_interim_pairs`) and as the single-line value
+the profile field takes (`interim_owner_pairs_json`). The reviewed pairs are per-client
+configuration, `MIP_UC_INTERIM_OWNER_PAIRS_JSON` (identifying: a GitHub
+Environment secret, or `.env.local`), never committed.
+`ApprovedOwnerPolicy` admits a pair's owner for exactly that object, character
+for character; an expired pair refuses its object, and the handover plan
+refuses once a configured pair has expired (`interim_pair_expired`). A pair
+never approves a grantee (the owner-equivalent probe does not read pairs) or
+the metastore. The deploy's pre-stop probe set holds no pipeline dataset, so
+it passes none: no deploy probe judges a pipeline dataset today, so no
+production caller hands pairs to the policy yet, and `--verify` matches each
+dataset with the same `build_pairs` output from the same profile field.
+Unset the field after the pipeline update or a journaled re-own moves the
+datasets.
+
+**Lakebase (step 8).** After the deployer's Postgres role exists (by the
+mechanism the S3 rehearsal picks), run as the legacy owner:
+
+```bash
+python -m tools.clients.lakebase_handover --plan
+python -m tools.clients.lakebase_handover --apply --ack-plan <sha256> --journal <new path>
+```
+
+The plan reads in a server-enforced read-only session; it refuses a missing
+target role (`target_role_missing`), one the session cannot `SET ROLE` to
+(`target_role_not_settable`), one whose privileges the session does not hold
+(`caller_cannot_revert`: after the apply the target owns every object and only
+an owner may change an owner, so a SET-only membership applies and then
+cannot revert; PostgreSQL 16 refuses that revert with 42501), an unreviewed
+object kind, and each other
+precondition PostgreSQL sets for `ALTER ... OWNER TO`: the target's CREATE on
+`mip_app` for the schema's objects (`target_needs_schema_create`), the
+session's CREATE on the database for the schema
+(`caller_needs_database_create`) and CREATEDB for the database
+(`caller_needs_createdb`). Which mechanism grants them is spike S3's; the
+rehearsal reads the same preconditions first. The apply moves
+the App database and each `mip_app` object the legacy role owns, one
+`ALTER ... OWNER TO` per transaction under `SET LOCAL lock_timeout = '3s'`
+and `SET LOCAL statement_timeout = '30s'`. `ALTER OWNER` takes an ACCESS
+EXCLUSIVE lock, and App queries queue behind a waiting one, so the lock
+timeout is what bounds an App query's wait. A lock timeout rolls back and
+retries after a backoff, at most 10 times per object and 10 minutes in all.
+It never creates, drops or reassigns a role and emits no DROP, DELETE,
+TRUNCATE, GRANT or REVOKE. When the budget runs out it stops with nothing
+half-applied (exit 4) and offers exactly two exits:
+
+- **WR5**, an announced window: `./scripts/lakebase_handover_window.sh
+  --journal <path>` plans it read-only (`quiesce_window plan-wr5`) and prints
+  its sha256; announce it, then re-run with `MIP_ACK_QUIESCE_WINDOW=<sha256>`
+  exported for that run. The window library
+  (`run_lakebase_handover_window`) journals `window_open` in the handover
+  journal, stops the App identity-pinned, applies the remainder in one bounded
+  pass (300 s), starts the App, and proves that the start created a new
+  deployment that SUCCEEDED from the planned folder (`await-wr5`); its EXIT
+  trap starts an App the window left stopped. The digest pins the App's
+  identity, its serving deployment, the folder a start snapshots and the
+  journal's remainder. Neither Python window mode takes the caller's word for
+  the window: `--window-open` and `--in-window` each read the private plan
+  (`--window-plan`, written by `plan-wr5`) and refuse unless it passed, is
+  intact, is the one `MIP_ACK_QUIESCE_WINDOW` names for this run and pins this
+  journal's remainder; `--in-window` also refuses unless the planned App reads
+  STOPPED (read-only) and the plan's PostgreSQL preconditions still hold.
+  The entry selects the deploy's interpreter (`MIP_DEPLOY_PYTHON`, else
+  `.venv/bin/python`, else `python3`) and refuses, before planning, one that
+  cannot import the window's modules (psycopg, databricks-sdk). A window that
+  opened is never planned again (`plan-wr5` then refuses
+  `window_handover_not_exhausted`): after a failed or exhausted window the
+  exit is `--revert --journal <path>`.
+  WR5 is for an install no signed blue governs yet (the
+  handover runs before adoption, which then signs the deployment the start
+  created); a signed install refuses (`window_wr5_signed_install`), since its
+  re-pin needs the deployment lease. Predicted: 1020 s, #307's conservative
+  stop (120 s) and start (600 s) budgets plus the 300 s apply bound; announce
+  that figure. The plan's "5 minutes or less" is not met by those budgets and
+  is not a gate (a 300 s refusal would refuse every WR5 window: the start
+  budget alone is 600 s); spikes S2 and S7 owe the live timings. The release
+  window (WR1-WR4) never plans WR5, and its digests are unchanged.
+  `--remainder --journal <path>` prints, read-only, the exhausted journal's
+  remainder count and the digest the window plan pins.
+- **Revert**: `--revert --journal <path>`, the exact inverse by the same lock
+  bounds.
+
+`--retire-check [--legacy-identity <name>]` (also `python -m
+tools.clients.handover_verify retire-check`; the default identity is the
+caller's) is the read-only gate before the owner removes the legacy role by
+hand: it refuses while any job or pipeline still runs as the legacy identity,
+judged by its effective run_as (each job read by id; never its creator), or
+while one's run_as cannot be read. `--rehearse --rehearse-instance <throwaway> --rehearse-database
+<db>` is spike S3's mode (owner-run, refused on the install's own instance):
+it creates one table on the throwaway, holds a concurrent long transaction on
+it past `lock_timeout`, probes it, runs the handover's own lock-bounded change
+and its inverse, and passes only if the change needed a retry, the inverse
+restored the owner, at least one probe query arrived while the change waited
+(`probe_samples_during_change`), and no probe query waited longer than
+`lock_timeout` plus a second; a session that dies voids the run. It refuses a
+database that already holds `mip_app`, and, like every mode of the tool, a
+`LAKEBASE_HOST`, `LAKEBASE_USER`, `LAKEBASE_PASSWORD` or `LAKEBASE_PORT`
+override (the operator runbooks export them for migrations; unset them first).
+On a local PostgreSQL 16.15 it passed with 12 of 12 probe queries during the
+change and a worst wait of 3.0 s. Only the L-A mechanism is rehearsed: L-B
+deletes a role.
+
+**Verify without running the stale jobs.**
+`python -m tools.clients.handover_verify privileges --principal <legacy owner>`
+probes each named principal's effective privileges, or ownership (directly or
+through a workspace-visible membership of the owning group), on the
+App-triggered lifecycle job's targets; an invisible membership refuses.
+`--target KIND:FULL_NAME:PRIV+PRIV` (repeatable; KIND is `CATALOG`, `SCHEMA`
+or `TABLE`, and `{catalog}` renders `MIP_DEFAULT_CATALOG`) replaces those
+targets. `watch-next-run --job-id <id> [--timeout-seconds S] [--interval-seconds S]`
+waits, bounded (default 7200 s, at most 12 hours; polled every 30 s by
+default, one request per poll), for the next run that starts on its own and
+reports its result; it never starts or cancels a run. Each mode takes
+`--report-out <private file>` for the names.
+
+**Owner patch: `.env.example`.** Agents cannot edit the template, so these
+are the lines the owner adds under the identifying section:
+
+```bash
+# Adopted installs, during the ownership handover only (M2-PR8): one exact
+# (full_name, owner, expires_at) pair per pipeline dataset the handover leaves
+# with its owner, at most 14 days ahead. Unset it afterwards.
+MIP_UC_INTERIM_OWNER_PAIRS_JSON=
+```
+
 ## Presenter mode (demo workspaces only)
 
 `MIP_PRESENTER_MODE` (default off) shows demo-only affordances to every user
