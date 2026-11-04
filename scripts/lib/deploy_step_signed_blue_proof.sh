@@ -115,6 +115,11 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
       TREATMENT_RUNTIME_QUIESCED=1
       APP_UPGRADE_STATE="first_install"
     else
+      # A dead-man restart from an earlier window is re-pinned first (M0-PR9),
+      # before the fail-closed arm and the treatment quiesce: a refusal exits
+      # with the App exactly as the dead-man left it, never stopped.
+      mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+      recover_deadman_quiesce_window
       APP_FAIL_CLOSED_ARMED=1
       step "quiesce treatment authority before signed-blue App reconciliation"
       run_with_account_identity run_with_proof_signing_authority \
@@ -125,8 +130,6 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
         --mode quiesce
       TREATMENT_RUNTIME_QUIESCED=1
       mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
-      # A dead-man restart from an earlier window is re-pinned first (M0-PR9).
-      recover_deadman_quiesce_window
       step "prove or reconcile the signed last-good App before non-App mutations"
       APP_ROLLBACK_BINDING_ENV="$(mktemp -t mip-app-blue-binding.XXXXXX.env)"
       prove_or_restore_signed_blue "$APP_ROLLBACK_BINDING_ENV"

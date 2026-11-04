@@ -628,9 +628,14 @@ compensate_quiesce_window_state() {
 # marker is a pointer, never proof: the tool re-proves the start deployment
 # against the signed journal and the App, re-signs the record under this lease
 # and closes the journal. The live bindings it may record are the record's or
-# exactly this run's bundle payload. A refusal writes nothing and exits; like
-# any step-0a failure on an App not yet proven, the EXIT trap then stops and
-# quiesces it (an unproven start never keeps serving). Any other open journal
+# exactly this run's bundle payload. It runs BEFORE step 0a arms the
+# fail-closed stop and quiesces treatment, so a refusal exits 2 with the App
+# exactly as the dead-man left it, the journal open and the lease released
+# (as the pre-lease window_journal_open refusal leaves it): a transient
+# failure is retried by the next run, and a re-pin already signed is resumed
+# (only the journal close is left). A WR1 window restarted on the dead
+# runner's bindings re-pins only from that same commit (its bundle payload is
+# exactly those bindings), so re-run that commit first. Any other open journal
 # was refused by the pre-lease plan before the lease.
 recover_deadman_quiesce_window() {
   local env_file payload
@@ -667,7 +672,7 @@ recover_deadman_quiesce_window() {
     --deployment-source-git-sha "$SOURCE_GIT_SHA" \
     "${applied_bindings[@]}"; then
     rm -f "$payload"
-    echo "${RED}[deploy] the dead-man's restart is not provably the window's blue; the record and the journal are unchanged, and the EXIT trap stops and quiesces the unproven App (fail closed). The owner break-glass applies.${RST}" >&2
+    echo "${RED}[deploy] the dead-man's restart is not provably the window's blue; nothing else ran and the App is left as the dead-man left it, the journal open. Re-run (a WR1 window re-pins from the dead window's own commit); an App no longer serving the dead-man's start needs the owner break-glass.${RST}" >&2
     exit 2
   fi
   rm -f "$payload"

@@ -280,3 +280,38 @@ def test_step_0a_recovers_before_it_proves_signed_blue() -> None:
     assert text.index("mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET", recover - 400) < recover
     assert recover < text.index('prove_or_restore_signed_blue "$APP_ROLLBACK_BINDING_ENV"', recover)
     assert text.index('step "acquire signed workspace lease for the exact App deployment"') < recover
+    # Review: before the fail-closed arm and the treatment quiesce, or a
+    # refused recovery stops the App the dead-man restarted, and every later
+    # run refuses it for good ("the App compute is not ACTIVE").
+    assert recover < text.index("APP_FAIL_CLOSED_ARMED=1", recover)
+    branch = text.rindex("\n    else\n", 0, recover)
+    assert "APP_FAIL_CLOSED_ARMED=1" not in text[branch:recover]
+    assert "converge_campaign_treatment_access" not in text[branch:recover]
+
+
+def _step_0a_signed_blue_branch() -> str:
+    """Step 0a's signed-blue branch, from its ``else`` to the signed-blue proof, verbatim."""
+
+    text = (REPO / "scripts" / "lib" / "deploy_step_signed_blue_proof.sh").read_text(encoding="utf-8")
+    recover = text.index("recover_deadman_quiesce_window\n")
+    start = text.rindex("\n    else\n", 0, recover) + len("\n    else\n")
+    return text[start : text.index('step "prove or reconcile the signed last-good App', recover)]
+
+
+@pytest.mark.parametrize("repin_rc", ("1", "2"))
+def test_a_refused_recovery_leaves_the_app_as_the_dead_man_left_it(tmp_path: Path, repin_rc: str) -> None:
+    # The real step-0a branch under the real EXIT trap: the App state of a run
+    # whose recovery refuses (a transient health failure, say) is untouched.
+    result, calls = _run(
+        tmp_path,
+        "APP_FAIL_CLOSED_ARMED=0; APP_UPGRADE_STATE=unverified_existing; LAKEBASE_RUNTIME_ACCESS_PROVEN=0\n"
+        "TREATMENT_RUNTIME_QUIESCED=0\n"
+        "trap stop_app_after_failed_deploy EXIT\n" + _step_0a_signed_blue_branch() + "echo past-step-0a\n",
+        JOURNAL="window_open",
+        DEADMAN_STATE="deadman_restarted",
+        REPIN_RC=repin_rc,
+    )
+    assert result.returncode == 2 and "past-step-0a" not in result.stdout
+    assert _has(calls, "repin --from-deadman") == 1
+    assert not any(_has(calls, stop) for stop in ("stop_app_fail_closed", "apps stop", "legacy-stop", "legacy-restore"))
+    assert not _has(calls, "converge_campaign_treatment_access"), "nothing ran after the refusal"
