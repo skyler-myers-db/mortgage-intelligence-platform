@@ -35,6 +35,8 @@ from tools.databricks.supervisor_agent_contract import (
 
 REPO = Path(__file__).resolve().parents[2]
 AUTOMATION_STEP = REPO / "scripts" / "lib" / "deploy_step_automation_identities.sh"
+# Its pre-lease estate inventory check (M4-PR1) lives in a function library.
+ESTATE_LIFECYCLE = REPO / "scripts" / "lib" / "deploy_estate_inventory_lifecycle.sh"
 DEPLOYMENT_DOC = REPO / "docs" / "deployment.md"
 DEPLOY_DEV = REPO / ".github" / "workflows" / "deploy-dev.yml"
 
@@ -1325,6 +1327,7 @@ DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE=bundle
 DATABRICKS_ACCOUNT_HOST=https://accounts.cloud.databricks.com
 DATABRICKS_ACCOUNT_ID=account
 DATABRICKS_ACCOUNT_CLIENT_ID=account-client DATABRICKS_ACCOUNT_CLIENT_SECRET=s6
+source {shlex.quote(str(ESTATE_LIFECYCLE))}
 source {shlex.quote(str(AUTOMATION_STEP))}
 """,
         encoding="utf-8",
@@ -1356,6 +1359,8 @@ def test_a_passing_probe_hands_over_to_the_signed_lease(tmp_path: Path) -> None:
 
     probe = calls.index("tools.databricks.deploy_prestop_probes")
     salt_check = calls.index("tools.databricks.pii_salt_scope check --scope mip --require-existing 0")
+    # The agentic tier's estate inventory check (M4-PR1), read-only, before the lease.
+    estate = calls.index("-m tools.databricks.estate.inventory_check --catalog mip")
     gate = calls.index("run_bundle_plan_gate pre-lease")
     lease = calls.index("tools.databricks.app_deployment_lease recovery-root")
-    assert probe < salt_check < gate < lease
+    assert probe < salt_check < estate < gate < lease
