@@ -1,4 +1,13 @@
-"""Validate and persist signed Databricks App rollback records."""
+"""Validate and persist signed Databricks App rollback records.
+
+Versions 5 and 6 are validated here exactly as before v7 existed. Version 7
+(tier-aware, with provenance; tools/databricks/app_rollback_record_v7.py,
+M2-PR7) shares v6's current-record slot, so one key always holds the one
+current record and a v6 capture replaces an adopted v7 in place, never
+shadowed by it. ``_load_record`` stays the v5/v6 reader the agentic release
+path calls: it refuses a v7 record unless the caller is tier-aware
+(``accept_v7``), and reads a v7 retired tombstone as no record at all.
+"""
 
 from __future__ import annotations
 
@@ -45,6 +54,14 @@ RECORD_ATTESTATION_ALG = "ed25519-app-rollback-v6"
 LEGACY_RECORD_VERSION = 5
 LEGACY_KEY_PREFIX = "app-last-good-v5"
 LEGACY_RECORD_ATTESTATION_ALG = "ed25519-app-rollback-v5"
+V7_RECORD_VERSION = 7
+V7_RECORD_ATTESTATION_ALG = "ed25519-app-rollback-v7"
+# The words the v5/v6 reader refuses a v7 record with; tier-aware callers match them.
+V7_REFUSAL = "this v5/v6 reader refuses it"
+_ABSENT = (
+    "no server-owned last-good App rollback contract exists; run the explicit "
+    "bootstrap command before upgrading this existing App"
+)
 _CREDENTIAL_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 
 
@@ -110,6 +127,8 @@ def _sign_record(record: dict[str, Any]) -> dict[str, Any]:
         algorithm = RECORD_ATTESTATION_ALG
     elif version == LEGACY_RECORD_VERSION:
         algorithm = LEGACY_RECORD_ATTESTATION_ALG
+    elif version == V7_RECORD_VERSION:
+        algorithm = V7_RECORD_ATTESTATION_ALG
     else:
         raise RuntimeError("App rollback contract version is invalid")
     signed = copy.deepcopy(record)
@@ -130,6 +149,8 @@ def _verify_record_attestation(record: dict[str, Any]) -> None:
         if record.get("version") == RECORD_VERSION
         else LEGACY_RECORD_ATTESTATION_ALG
         if record.get("version") == LEGACY_RECORD_VERSION
+        else V7_RECORD_ATTESTATION_ALG
+        if record.get("version") == V7_RECORD_VERSION
         else None
     )
     if record.get("attestation_alg") != expected_algorithm or record_key not in {
@@ -261,6 +282,12 @@ def _validated_record(
     app_name: str,
     expected_lakebase_instance: str,
 ) -> dict[str, Any]:
+    if isinstance(value, dict) and value.get("version") == V7_RECORD_VERSION:
+        from tools.databricks.app_rollback_record_v7 import validated_v7_record
+
+        return validated_v7_record(
+            value, app_name=app_name, expected_lakebase_instance=expected_lakebase_instance
+        )
     if not isinstance(value, dict) or value.get("version") not in {
         RECORD_VERSION,
         LEGACY_RECORD_VERSION,
@@ -334,13 +361,15 @@ def _validated_record(
     }
 
 
-def _load_record(
+def load_signed_record(
     workspace: Any,
     *,
     app_name: str,
     scope: str,
     expected_lakebase_instance: str,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
+    """The verified current record of any version (a v7 tombstone included), or None."""
+
     assert_owned_app_rollback_scope(
         workspace,
         app_name=app_name,
@@ -350,10 +379,7 @@ def _load_record(
     if raw is None:
         raw = _secret_value(workspace, scope=scope, key=_legacy_record_key(app_name))
     if raw is None:
-        raise RuntimeError(
-            "no server-owned last-good App rollback contract exists; run the explicit "
-            "bootstrap command before upgrading this existing App"
-        )
+        return None
     try:
         decoded = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -368,9 +394,36 @@ def _load_record(
     )
 
 
+def _load_record(
+    workspace: Any,
+    *,
+    app_name: str,
+    scope: str,
+    expected_lakebase_instance: str,
+    accept_v7: bool = False,
+) -> dict[str, Any]:
+    record = load_signed_record(
+        workspace,
+        app_name=app_name,
+        scope=scope,
+        expected_lakebase_instance=expected_lakebase_instance,
+    )
+    if record is None or (
+        record["version"] == V7_RECORD_VERSION and record["provenance"] == "retired"
+    ):
+        # A retired tombstone holds no rollback target: it reads as absent.
+        raise RuntimeError(_ABSENT)
+    if record["version"] == V7_RECORD_VERSION and not accept_v7:
+        raise RuntimeError(
+            f"the signed App rollback record is a v7 {record['tier']}-tier record; "
+            f"{V7_REFUSAL} (the tier-aware release path reads v7)"
+        )
+    return record
+
+
 def _save_record(workspace: Any, *, scope: str, record: dict[str, Any]) -> None:
-    if record.get("version") != RECORD_VERSION:
-        raise RuntimeError("current App rollback writer requires a v6 record")
+    if record.get("version") not in {RECORD_VERSION, V7_RECORD_VERSION}:
+        raise RuntimeError("current App rollback writer requires a v6 or v7 record")
     _write_record(
         workspace,
         scope=scope,
@@ -396,7 +449,7 @@ def save_versioned_record(
     scope: str,
     record: dict[str, Any],
 ) -> None:
-    """Write a v6 record with the current writer and a v5 record with the legacy one."""
+    """Write a v6 or v7 record to the current slot and a v5 record to the legacy one."""
 
     if record.get("version") == LEGACY_RECORD_VERSION:
         _save_legacy_record(workspace, scope=scope, record=record)
