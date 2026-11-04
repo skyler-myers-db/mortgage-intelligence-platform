@@ -515,6 +515,26 @@ MIP_GIT_SHA=<sha> python -m tools.databricks.app_deploy_payload \
 databricks apps deploy <app-name> --json @<payload> -p <profile>
 ```
 
+**The freeze marker (M2-PR7).** During the cutover the owner freezes this
+recipe with `python -m tools.databricks.app_deployment_lease freeze --app-name
+<app-name> --until <epoch> --writer-application-id <lease writer>` (with the
+deploy's proof-signing key exported), and lifts it with `thaw --marker-id
+<id>`; both write a signed, create-only marker in the lease root and nothing is
+deleted. `app_release_source publish` reads every marker after its local checks
+and before any upload, and refuses with exit 2 while one is frozen. A marker
+reads as thawed or expired only when its signature verifies, so a shell
+without the deploy's public verify key (`MIP_AI_GATEWAY_PROOF_VERIFY_KEY`)
+reads every marker as frozen: export that key to publish after a thaw. To
+publish one release folder while frozen anyway, add `--override-freeze
+<marker id> --override-freeze-ack <sha256>`, the `override_freeze` digest the
+refusal prints for that marker and that exact folder; it lifts no other
+marker and carries to no other folder. `./scripts/deploy.sh`'s own publish
+passes `--held-lease-app-name` and `--held-lease-id` and is not refused: the
+governed run under the signed lease is the coordinated path the freeze
+protects. No marker, or a lease root that does not exist, changes nothing; a
+lease root that cannot be listed refuses. The freeze blocks only this
+publisher, not an old session's own deploy driver.
+
 Publish, converge and deploy are the three commands that call the workspace,
 and each names the live workspace's CLI profile, the same `<profile>` in all
 three. Without it the two Python tools build their client from the ambient

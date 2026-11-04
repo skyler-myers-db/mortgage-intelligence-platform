@@ -187,13 +187,17 @@ fi
 # same release uploads nothing. A failure here restores signed blue on an
 # upgrade and leaves a first install stopped and quiesced. APP_SOURCE_PATH is
 # assigned only here: all three activations promote this one folder, and
-# converge re-checks it against the manifest before each of them.
+# converge re-checks it against the manifest before each of them. The held
+# lease flags prove this is the governed run, which a freeze marker does not
+# refuse (tools/databricks/app_deployment_freeze.py, M2-PR7).
 step "publish App release source ${APP_RELEASE_ID} (create-only, byte-verified)"
 run "$PYTHON" -m tools.databricks.app_release_source publish \
   --release-id "$APP_RELEASE_ID" \
   --stage-dir "$APP_RELEASE_STAGE_ROOT/source" \
   --manifest "$APP_RELEASE_MANIFEST" \
   --files-root "$APP_BUNDLE_FILES_PATH" \
+  --held-lease-app-name "$_GRANTS_APP_NAME" \
+  --held-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
   --expected-commit "$SOURCE_GIT_SHA" \
   --expected-principal "$APP_RELEASE_PRINCIPAL" \
   --expected-target "$TARGET" \

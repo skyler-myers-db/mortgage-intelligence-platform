@@ -82,11 +82,51 @@ def heartbeat(
             raise
 
 
+def freeze_action(lease: Any, workspace: Any, args: Any, parser: Any) -> int:
+    """``freeze --until`` / ``thaw --marker-id``: tools/databricks/app_deployment_freeze.py."""
+
+    import os
+
+    from tools.databricks import app_deployment_freeze as freezer
+
+    holder = lease._holder(workspace)
+    try:
+        if args.action == "freeze":
+            if args.until is None or not args.writer_application_id:
+                parser.error("freeze requires --until and --writer-application-id")
+            marker_id = freezer.freeze(
+                workspace,
+                app_name=args.app_name,
+                until=args.until,
+                holder=holder,
+                ensure_root=lambda: lease._ensure_protected_root(
+                    workspace, holder=holder, writer_application_id=args.writer_application_id
+                ),
+                environ=dict(os.environ),
+            )
+            print(f"[mip-deployment-lease] frozen: marker {marker_id} until {args.until}")
+        else:
+            if not args.marker_id:
+                parser.error("thaw requires --marker-id")
+            freezer.thaw(
+                workspace,
+                app_name=args.app_name,
+                marker_id=args.marker_id,
+                holder=holder,
+                environ=dict(os.environ),
+            )
+            print(f"[mip-deployment-lease] thawed: marker {args.marker_id} (nothing was deleted)")
+    except freezer.FreezeRefused as exc:
+        print(f"[mip-deployment-lease] REFUSED {exc.code}: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def main(lease: Any, argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=lease.__doc__)
     parser.add_argument(
         "action",
-        choices=("recovery-root", "repair-head", "acquire", "heartbeat", "release"),
+        choices=("recovery-root", "repair-head", "acquire", "heartbeat", "release", "freeze", "thaw"),
     )
     parser.add_argument("--app-name", required=True)
     parser.add_argument("--source-git-sha")
@@ -95,10 +135,15 @@ def main(lease: Any, argv: list[str] | None = None) -> int:
     parser.add_argument("--lease-id")
     parser.add_argument("--out-env", type=Path)
     parser.add_argument("--parent-pid", type=int)
+    # freeze / thaw (M2-PR7): the signed marker the emergency publisher obeys.
+    parser.add_argument("--until", type=int)
+    parser.add_argument("--marker-id")
     args = parser.parse_args(argv)
     # The heartbeat renews for hours: the governed deployer binding caches its
     # github-oidc token instead of exchanging on every lease request.
     workspace = deployment_workspace_client(factory=lease.WorkspaceClient)
+    if args.action in {"freeze", "thaw"}:
+        return freeze_action(lease, workspace, args, parser)
     if args.action == "repair-head":
         lease.lease_support.repair_head_hint(
             lease,
