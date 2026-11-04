@@ -77,8 +77,10 @@
 #                                       # this run's hard deadline
 #                                       # (MIP_JOB_DEADLINE_EPOCH, one run
 #                                       # only): a quiesce window opens only
-#                                       # if the budget left covers it, and
-#                                       # its dead-man restarts blue then
+#                                       # if the budget left covers it, its
+#                                       # watchdog ends the run's in-window
+#                                       # work before it, and its dead-man
+#                                       # restarts blue then
 # The live install predating the client target is reached only through the
 # emergency recipe in docs/deployment.md until it is adopted (M2-PR6).
 #
@@ -207,7 +209,7 @@ while [[ $# -gt 0 ]]; do
       fi
       PHASE_SEEN=1 ;;
     -h|--help)
-      sed -n '2,101p' "$0"
+      sed -n '2,103p' "$0"
       exit 0
       ;;
     *)
@@ -451,6 +453,8 @@ QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID=""
 QUIESCE_WINDOW_TREE_SHA256=""
 # The armed dead-man's one-time run (M0-PR9), cancelled when the journal closes.
 QUIESCE_WINDOW_DEADMAN_RUN_ID=""
+# The restorable window's deadline watchdog (M0-PR9), disarmed on the close.
+QUIESCE_WINDOW_WATCHDOG_PID=""
 APP_ROLLBACK_SECRET_SCOPE="${MIP_APP_ROLLBACK_SECRET_SCOPE:-mip-app-rollback}"
 MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS=""
 MIP_APP_ROLLBACK_RECORD_VERSION=""
@@ -569,6 +573,9 @@ APP_RELEASE_ROOT_LEAF=""
 # shellcheck source=scripts/lib/deploy_first_install_lifecycle.sh
 . "$REPO_ROOT/scripts/lib/deploy_first_install_lifecycle.sh"
 trap restore_rendered_sql_fail_closed EXIT
+# The quiesce window's watchdog (M0-PR9) ends an overrunning in-window
+# mutation before the dead-man may start blue: exit 143 into the EXIT trap.
+trap quiesce_window_deadline_reached USR1
 
 # shellcheck source=scripts/lib/deploy_identity_lifecycle.sh
 . "$REPO_ROOT/scripts/lib/deploy_identity_lifecycle.sh"

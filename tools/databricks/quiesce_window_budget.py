@@ -40,9 +40,17 @@ from tools.databricks.quiesce_window_plan import (
     ADMISSION_MARGIN_S,
     BUDGET_SCHEMA,
     DEADLINE_ENV,
+    STEP_BUDGET_S,
     budget_body,
 )
 
+# The run never starts blue this close to the job deadline: the dead-man does
+# (quiesce_window start_window). It covers the start's own wait and the re-pin
+# (plus a slack), so a start the run begins can finish before the deadline,
+# never be cut off by the job's kill half-way and left window_starting or
+# window_started for the owner. The admitted restore and margin cover it.
+DEADMAN_GUARD_SLACK_S = 120
+DEADMAN_GUARD_S = STEP_BUDGET_S["start"] + STEP_BUDGET_S["repin"] + DEADMAN_GUARD_SLACK_S
 # The GitHub-hosted job cap: a deadline further out is a mistake, and a
 # dead-man that long would outlive the lease (four hours) by hours.
 MAX_HORIZON_S = 6 * 60 * 60

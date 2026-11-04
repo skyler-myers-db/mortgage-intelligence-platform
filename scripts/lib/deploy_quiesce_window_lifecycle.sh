@@ -295,6 +295,49 @@ open_quiesce_window() {
   QUIESCE_WINDOW_BLUE_RESTORABLE="$MIP_QUIESCE_WINDOW_BLUE_RESTORABLE"
   QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID="$MIP_QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID"
   QUIESCE_WINDOW_TREE_SHA256="$MIP_QUIESCE_WINDOW_TREE_SHA256"
+  arm_quiesce_window_watchdog
+}
+
+# The run's own deadline (M0-PR9): inside a restorable window it never keeps
+# mutating once the dead-man may start blue. CI's job timeout kills the runner
+# by the deadline; a local --deadline had nothing that did. The watchdog
+# (tools/databricks/quiesce_window_watchdog.py) sends this run USR1 a minute
+# before the start guard (deploy.sh traps it: quiesce_window_deadline_reached
+# exits 143 once the current command ends) and TERMs every process the run
+# started but the lease heartbeat, so the EXIT trap, which disarms it first,
+# starts and re-pins blue itself or leaves the window to the dead-man. A
+# contract window gets none: the dead-man never starts one, and ending its
+# activation would only keep the App stopped longer.
+arm_quiesce_window_watchdog() {
+  local -a spare=()
+  [[ "${QUIESCE_WINDOW_BLUE_RESTORABLE:-0}" == "1" && \
+     -z "${QUIESCE_WINDOW_WATCHDOG_PID:-}" ]] || return 0
+  if [[ -n "${APP_DEPLOYMENT_LEASE_HEARTBEAT_PID:-}" ]]; then
+    spare=(--spare "$APP_DEPLOYMENT_LEASE_HEARTBEAT_PID")
+  fi
+  # The arguments are checked in the foreground: the window is never left
+  # with a watchdog that exited at once.
+  "$PYTHON" -m tools.databricks.quiesce_window_watchdog --check \
+    --run-pid "$$" --deadline-epoch "${MIP_JOB_DEADLINE_EPOCH:-}" > /dev/null || return 1
+  "$PYTHON" -m tools.databricks.quiesce_window_watchdog \
+    --run-pid "$$" --deadline-epoch "${MIP_JOB_DEADLINE_EPOCH:-}" "${spare[@]}" &
+  QUIESCE_WINDOW_WATCHDOG_PID=$!
+}
+
+# The journal closed, or the EXIT trap begins: the run's own deadline no
+# longer needs enforcing (the trap's start is bounded by the start guard).
+disarm_quiesce_window_watchdog() {
+  local pid="${QUIESCE_WINDOW_WATCHDOG_PID:-}"
+  [[ -n "$pid" ]] || return 0
+  QUIESCE_WINDOW_WATCHDOG_PID=""
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
+# deploy.sh's USR1 trap: the watchdog ended this run's in-window mutation.
+quiesce_window_deadline_reached() {
+  echo "${RED}[deploy] the job deadline's start guard is near inside the quiesce window: this run ends here (exit 143); its EXIT trap restores blue if it still can, else the dead-man does at the deadline.${RST}" >&2
+  exit 143
 }
 
 # A failed open may still have armed the dead-man: its run id is the first line
@@ -419,6 +462,7 @@ repin_and_close_quiesce_window() {
     --deployment-source-git-sha "$SOURCE_GIT_SHA" || return 1
   QUIESCE_WINDOW_STATE="blue_serving"
   QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID="$proven"
+  disarm_quiesce_window_watchdog
   cancel_quiesce_window_deadman
 }
 

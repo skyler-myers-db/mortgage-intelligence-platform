@@ -65,6 +65,9 @@ case "$*" in
     [[ -z "$out" ]] || printf 'MIP_APP_ROLLBACK_DEPLOYMENT_ID=deployment-start-1\n' > "$out" ;;
   *"catalog_bootstrap_skip_rule check"*)
     exit "${SKIP_RULE_RC:-0}" ;;
+  *"quiesce_window_watchdog"*)
+    # M0-PR9: the real watchdog when a test asks for it, else a no-op.
+    [[ -z "${REAL_WATCHDOG:-}" ]] || exec "$REAL_PYTHON" "$@" ;;
 esac
 exit 0
 """
@@ -100,7 +103,7 @@ CLIENT_JOBS_PRINCIPAL=jobs-client
 MIP_LENDER_NAME=lender; MIP_LENDER_NMLS_ID=1; MIP_TENANT_ID=tenant
 APP_RELEASE_ID=aaaaaaaaaaaa-bbbbbbbbbbbb; APP_RELEASE_STAGE_ROOT=.databricks/app-release
 APP_RELEASE_MANIFEST=.databricks/app-release/manifest.json; CLIENT_DEPLOYER=deployer; CLIENT_KEY=client-key
-QUIESCE_WINDOW_DEADMAN_RUN_ID=""
+QUIESCE_WINDOW_DEADMAN_RUN_ID=""; QUIESCE_WINDOW_WATCHDOG_PID=""
 run_job_with_retry() { echo "job: $*" >> "$CALLS"; }
 """
 

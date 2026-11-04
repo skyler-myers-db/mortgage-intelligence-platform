@@ -319,3 +319,78 @@ def test_a_refused_recovery_leaves_the_app_as_the_dead_man_left_it(tmp_path: Pat
     assert _has(calls, "repin --from-deadman") == 1
     assert not any(_has(calls, stop) for stop in ("stop_app_fail_closed", "apps stop", "legacy-stop", "legacy-restore"))
     assert not _has(calls, "converge_campaign_treatment_access"), "nothing ran after the refusal"
+
+
+# --- the run's own deadline: the window watchdog -----------------------------------
+
+
+def _watchdog_env(deadline_in: int) -> dict[str, str]:
+    import time
+
+    from tools.databricks import quiesce_window_watchdog as watchdog
+    from tools.databricks.quiesce_window_budget import DEADMAN_GUARD_S
+
+    deadline = int(time.time()) + DEADMAN_GUARD_S + watchdog.WATCHDOG_LEAD_S + deadline_in
+    return {"REAL_WATCHDOG": "1", "PYTHONPATH": str(REPO), "WATCHDOG_DEADLINE": str(deadline)}
+
+
+WATCHED_WINDOW = (
+    "trap quiesce_window_deadline_reached USR1\n"
+    "trap 'rc=$?; echo \"exit-trap rc=$rc\"; disarm_quiesce_window_watchdog; "
+    "if [[ $rc -ne 0 ]]; then stop_app_after_failed_deploy; fi' EXIT\n"
+    "QUIESCE_WINDOW_STATE=blue_serving; QUIESCE_WINDOW_REASONS=WR3; MIP_JOB_DEADLINE_EPOCH=$WATCHDOG_DEADLINE\n"
+    "ensure_quiesce_window_open_for WR3\n"
+    'echo "watchdog=$QUIESCE_WINDOW_WATCHDOG_PID"\n'
+)
+
+
+def test_a_watchdog_ends_an_overrunning_in_window_mutation_and_the_exit_trap_restores_blue(
+    tmp_path: Path,
+) -> None:
+    # Review: a local run past its --deadline kept mutating while the dead-man
+    # started blue under it. Here the in-window mutation overruns (sleep 45):
+    # the watchdog ends it a minute before the start guard, and the EXIT trap,
+    # still outside the guard, starts and re-pins blue itself.
+    import time
+
+    started = time.monotonic()
+    result, calls = _run(
+        tmp_path,
+        WATCHED_WINDOW + "sleep 45 || true\necho unreachable\n",
+        **_watchdog_env(2),
+    )
+    elapsed = time.monotonic() - started
+    assert result.returncode == 143, result.stdout + result.stderr
+    assert "unreachable" not in result.stdout and elapsed < 30, "the mutation was ended, not waited for"
+    assert "exit-trap rc=143" in result.stdout and "start guard of the job deadline" in result.stderr
+    assert _has(calls, "quiesce_window_watchdog --check") == 1 and _has(calls, "quiesce_window_watchdog --run-pid") == 1
+    for step in ("quiesce_window start", "quiesce_window await", "app_deployment_rollback repin", "quiesce_window close"):
+        assert _has(calls, step) == 1, step
+
+
+def test_the_close_disarms_the_watchdog(tmp_path: Path) -> None:
+    result, calls = _run(
+        tmp_path,
+        WATCHED_WINDOW
+        + 'pid="$QUIESCE_WINDOW_WATCHDOG_PID"; kill -0 "$pid"\n'
+        + "close_quiesce_window\n"
+        + 'if kill -0 "$pid" 2>/dev/null; then echo watchdog-alive; else echo watchdog-gone; fi\n'
+        + 'echo "after=${QUIESCE_WINDOW_WATCHDOG_PID:-}"\n',
+        **_watchdog_env(3 * 3600),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "watchdog-gone" in result.stdout and "after=\n" in result.stdout
+    assert _has(calls, "quiesce_window close") == 1
+
+
+def test_a_contract_window_arms_no_watchdog(tmp_path: Path) -> None:
+    result, calls = _run(tmp_path, WATCHED_WINDOW, RESTORABLE="0", **_watchdog_env(3 * 3600))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "watchdog=\n" in result.stdout and not _has(calls, "quiesce_window_watchdog")
+
+
+def test_deploy_traps_the_watchdog_and_the_exit_trap_disarms_it_first() -> None:
+    text = deploy_entrypoint_text()
+    assert text.index("deploy_quiesce_window_lifecycle.sh\"\n") < text.index("trap quiesce_window_deadline_reached USR1\n")
+    trap = text[text.index("restore_rendered_sql_fail_closed() {") :]
+    assert trap.index("local rc=$?") < trap.index("disarm_quiesce_window_watchdog") < trap.index("stop_app_after_failed_deploy")

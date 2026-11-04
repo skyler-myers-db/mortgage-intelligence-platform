@@ -64,7 +64,12 @@ from tools.databricks.app_start_deployment import (
     wait_for_compute_active,
     wait_for_terminal,
 )
-from tools.databricks.quiesce_window_budget import admission, parse_deadline, require_admitted
+from tools.databricks.quiesce_window_budget import (
+    DEADMAN_GUARD_S,
+    admission,
+    parse_deadline,
+    require_admitted,
+)
 from tools.databricks.quiesce_window_facts import (
     app_or_none,
     collect_facts,
@@ -72,19 +77,14 @@ from tools.databricks.quiesce_window_facts import (
 )
 from tools.databricks.quiesce_window_plan import (
     ACK_ENV,
-    STEP_BUDGET_S,
     body_sha256,
     window_plan,
     with_admission,
 )
 
 _PREFIX = "[mip-quiesce-window]"
-# The run never starts blue this close to the job deadline: the dead-man does.
-# It covers the start's own wait and the re-pin (plus a slack), so a start the
-# run begins can finish before the deadline, never be cut off by the job's
-# kill half-way and left window_starting or window_started for the owner.
-DEADMAN_GUARD_SLACK_S = 120
-DEADMAN_GUARD_S = STEP_BUDGET_S["start"] + STEP_BUDGET_S["repin"] + DEADMAN_GUARD_SLACK_S
+# DEADMAN_GUARD_S (quiesce_window_budget): the run never starts blue this close
+# to the job deadline; the dead-man does.
 
 
 def _load_json(path: Path) -> dict[str, Any]:

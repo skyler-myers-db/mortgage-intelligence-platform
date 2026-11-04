@@ -122,7 +122,12 @@ echo unreachable
 
     assert killed.returncode == -9, killed.stdout + killed.stderr
     assert "stopped-and-armed run=9001" in killed.stdout and "unreachable" not in killed.stdout
-    assert [call.split()[1:3] for call in calls] == [["tools.databricks.quiesce_window", "open"]]
+    assert [call.split()[1:3] for call in calls] == [
+        ["tools.databricks.quiesce_window", "open"],
+        # The run's own deadline watchdog (a no-op in the sandbox): armed after the open.
+        ["tools.databricks.quiesce_window_watchdog", "--check"],
+        ["tools.databricks.quiesce_window_watchdog", "--run-pid"],
+    ]
     after_kill = sandbox.load(tmp_path / "estate.pickle")
     assert (after_kill.apps.stops, after_kill.apps.starts, after_kill.apps.compute) == (1, 0, "STOPPED")
     assert journal.read(after_kill.workspace, app_name=APP_NAME)["state"] == "window_open"
