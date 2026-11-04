@@ -44,7 +44,7 @@ run "$PYTHON" -m tools.databricks.converge_app_lakebase_sync_access \
   --sync-schema "$DEPLOYMENT_SYNC_SCHEMA" \
   --sync-tables "$DEPLOYMENT_SYNC_TABLES"
 step "preflight agent-runtime foreign UC access before runtime-owned UC mutations"
-run_with_account_identity run_with_proof_signing_authority \
+run_with_account_identity run_with_proof_signing_authority run_with_agent_runtime_credentials \
   "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
   --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
   --catalog "${MIP_DEFAULT_CATALOG:-mip}" \

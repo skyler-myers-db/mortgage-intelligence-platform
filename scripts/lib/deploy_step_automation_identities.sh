@@ -319,6 +319,7 @@ else
   echo "  would probe read-only: the creator of Supervisor '${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}' (MIP_RETIRE_HUMAN_SUPERVISOR), Genie group grants, the signed rollback record in ${APP_ROLLBACK_SECRET_SCOPE}, governed owners and owner-equivalent grantees, App serving access, and one Genie turn"
   echo "  would check read-only: scope ${MIP_PII_SALT_SCOPE} and write-once pii-salt-v1"
 fi
+check_estate_inventory_prelease
 # >>> adopt phase: plan >>>
 # --phase adopt|unadopt plans the bundle state edit read-only in place of the
 # pre-lease gate, which refuses the unadopted install adopt exists to bind
@@ -491,7 +492,7 @@ else:
   # UC audit and no verifier Lakebase role.
   if tier_is_agentic; then
     step "preflight agent-runtime foreign UC access before Lakebase bootstrap mutation"
-    run_with_account_identity run_with_proof_signing_authority \
+    run_with_account_identity run_with_proof_signing_authority run_with_agent_runtime_credentials \
       "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
       --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
       --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
