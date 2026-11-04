@@ -443,27 +443,32 @@ declared MLflow resources bound into the source hash are the runtime's only
 governed data paths.
 
 The Unity Catalog boundary first runs before the runtime credential can perform
-even its bounded Lakebase bootstrap mutation. On a true first install where the
-MIP catalog is not present yet, this pre-bootstrap view treats every ordinary
+even its bounded Lakebase bootstrap mutation, and only in the agentic tier (the
+core tier deploys no agent runtime). On a true first install where the MIP
+catalog is not present yet, this pre-bootstrap view treats every ordinary
 catalog as foreign; after catalog creation, the repeated preflight excludes only
-the configured MIP catalog. Both require the expected workspace administrator
-to prove it directly owns the current metastore. The postflight then requires
-two independent views of the exact runtime application ID. First, that same
-administrator uses that control-plane authority to
-enumerate every ordinary foreign catalog, including unbound catalogs. An
-`OPEN` catalog or an `ISOLATED` catalog bound to the deployment workspace must
-reject any direct or inherited catalog, child-object, or registered-model
-privilege. An `ISOLATED` catalog whose complete authoritative binding inventory
-excludes the deployment workspace is accepted only when its catalog name,
-owner, catalog type, isolation mode, immutable workspace IDs, and binding types
-exactly match the versioned
-`MIP_UC_FOREIGN_CATALOG_BINDING_POLICY` deployment contract. This is a stronger
-workspace-level deny: Databricks enforces the exclusion ahead of explicit
-grants and exposes no child objects to the unbound workspace. The sealed
-control-plane proof records grant-audited catalogs separately from the complete
-typed binding-denial evidence. If a binding-denied catalog or registered model
-becomes visible to the runtime-authenticated inventory, the proof fails rather
-than suppressing the lookup.
+the configured MIP catalog. Neither requires the deployer to own the metastore
+(M4-PR1): the facts only a metastore owner can read come from the owner's estate
+inventory (`tools/clients/estate_inventory.py`, taken read-only as the
+metastore's direct owner at most 30 days before the run, and pinned by its exact
+purpose-named `estate` digest, `MIP_ACK_ESTATE_INVENTORY`). It records every
+catalog, including unbound ones, with its owner, catalog type, isolation mode,
+immutable workspace IDs and binding types, and who owns every schema, table,
+function, volume and registered model below each foreign catalog; a catalog
+bound only to other workspaces is read only from one of its bound workspaces,
+and an unreadable one is a gap that refuses. Every owner the inventory lists is
+judged: an `OPEN` or bound foreign catalog's owners through
+`ApprovedOwnerPolicy`, a binding-denied catalog's owners against the runtime's
+aliases, groups and `account users`, so ownership is refused even where the
+runtime cannot look. The runtime's effective privileges are read in its own
+view, as the runtime, on every catalog it can browse and everything below each
+foreign one, and must reject any direct or inherited catalog, child-object, or
+registered-model privilege its accepted-exposure matcher does not accept. A
+catalog or owner that view sees and the inventory lacks, or a binding-denied
+catalog or model that becomes visible to it, refuses rather than being
+suppressed. The retired `MIP_UC_FOREIGN_CATALOG_BINDING_POLICY` refuses when
+set. The sealed proof records the grant-audited (visible) catalogs separately
+from the typed binding-denial evidence.
 
 The same control-plane pass resolves the runtime service principal exactly once
 in both account and MIP workspace SCIM and requires the account identity to be
