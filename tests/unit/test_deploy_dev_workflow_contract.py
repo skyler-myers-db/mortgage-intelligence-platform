@@ -3425,10 +3425,14 @@ def test_acquired_deployment_lease_id_is_wired_into_exit_cleanup() -> None:
         source_lease,
     )
     heartbeat = script.index('--lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"', assignment)
+    # The tier's lease writer (M2-PR3): the runtime in the agentic tier, the
+    # release probe in the core tier, by its client-id name from the profile.
+    writer_value = script.index('_LEASE_WRITER_APPLICATION_ID="${!CLIENT_LEASE_WRITER_ENV:-}"')
     writer = script.index(
-        '--writer-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"',
+        '--writer-application-id "$_LEASE_WRITER_APPLICATION_ID"',
         source_lease - 800,
     )
+    assert writer_value < writer
     gateway_step = script.index(
         'step "provision the managed Supervisor under the dedicated agent-runtime identity"'
     )
@@ -4350,8 +4354,14 @@ def test_reviewed_function_execute_grants_are_reconciled_after_gold_refresh() ->
     assert script.count("\nrefresh_gold_and_reconcile_function_grants\n") == 1
     invocation = script.index("\nrefresh_gold_and_reconcile_function_grants\n")
     assert invocation < script.index(runtime_provision)
-    assert '"$APP_SP_CLIENT_ID" \\\n    "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \\\n' in helper
-    assert '"$DATABRICKS_AGENT_PROXY_CLIENT_ID"; do' in helper
+    # The consumers are the tier's (M2-PR3): the App, plus the runtime and the
+    # proxy in the agentic tier only.
+    assert 'local -a _consumers=("$APP_SP_CLIENT_ID")' in helper
+    assert (
+        "  if tier_is_agentic; then\n"
+        '    _consumers+=("$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" "$DATABRICKS_AGENT_PROXY_CLIENT_ID")\n'
+    ) in helper
+    assert 'for _principal in "${_consumers[@]}"; do' in helper
     assert "fn_build_cohort fn_segment_counts fn_lead_queue_url" in helper
     assert (
         '"GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.${_function_name} '
@@ -4396,6 +4406,7 @@ PYTHON=python3
 RED=""
 RST=""
 REVIEWED_FUNCTION_GRANTS_PROVEN=0
+tier_is_agentic() {{ true; }}
 apply_uc_grant() {{
   printf 'grant:%s\n' "$1" >> {shlex.quote(str(calls))}
   [[ "$1" != *'fn_segment_counts TO `app-client`'* ]]
@@ -4434,6 +4445,7 @@ PYTHON=python3
 RED=""
 RST=""
 REVIEWED_FUNCTION_GRANTS_PROVEN=0
+tier_is_agentic() {{ true; }}
 apply_uc_grant() {{ printf 'grant\n' >> {shlex.quote(str(calls))}; return 0; }}
 run() {{ printf 'postflight\n' >> {shlex.quote(str(calls))}; return 23; }}
 {_shell_function("reconcile_reviewed_function_execute_grants")}
@@ -6418,6 +6430,10 @@ def _copy_client_profile_tooling(repo: Path) -> None:
 
     shutil.copytree(REPO / "tools" / "clients", repo / "tools" / "clients", ignore=shutil.ignore_patterns("__pycache__"))
     (repo / "tools" / "__init__.py").write_text("", encoding="utf-8")
+    # The tier's identity contract the client-target view carries (M2-PR3).
+    (repo / "tools" / "databricks").mkdir()
+    for module in ("__init__.py", "m2m_identity_contract.py", "agent_proxy_credential_bundle.py"):
+        shutil.copy2(REPO / "tools" / "databricks" / module, repo / "tools" / "databricks" / module)
     (repo / "backend" / "schemas").mkdir(parents=True)
     # The profile's lender pin rules import the record module (#298), which
     # imports the branding rules.

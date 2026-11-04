@@ -75,7 +75,7 @@ def test_the_core_tier_plans_no_agentic_identity_and_stops_at_the_activation_bou
     assert "the core tier (MIP_AGENTIC_TIER=off) stops at the activation boundary" in err
     assert "agentic tier: off (core: the normal, operator2, admin and release-probe identities only)" in out
     assert "  Gateway model attestation: not used by the core tier" in out
-    assert "core tier: no agent-runtime UC audit and no verifier Lakebase role (MIP_AGENTIC_TIER=off)" in out
+    # (The post-lease skips print only in a live run: tests/unit/test_core_tier_release_sandbox.py.)
     for absent in (
         "--identity-role verifier",
         "--identity-role agent_runtime",

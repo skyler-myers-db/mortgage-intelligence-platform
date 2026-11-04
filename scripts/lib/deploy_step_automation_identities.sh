@@ -199,7 +199,6 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     "$DATABRICKS_CLIENT_ID" "$DATABRICKS_OPERATOR2_CLIENT_ID"
     "$DATABRICKS_ADMIN_CLIENT_ID" "$DATABRICKS_RELEASE_PROBE_CLIENT_ID"
   )
-  _M2M_DISTINCT_LABEL="normal, operator2, admin, and release-probe"
   if tier_is_agentic; then
     # shellcheck disable=SC2031
     _M2M_DISTINCT+=(
@@ -207,7 +206,6 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
       "$DATABRICKS_AGENT_PROXY_CLIENT_ID"
     )
-    _M2M_DISTINCT_LABEL="normal, operator2, admin, release-probe, verifier, agent-runtime, and agent-proxy"
   fi
   # shellcheck disable=SC2031
   if ! "$PYTHON" - \
@@ -229,7 +227,11 @@ raise SystemExit(
 )
 PYEOF
   then
-    echo "${RED}[deploy] ERROR: ${_M2M_DISTINCT_LABEL} M2M client IDs must be pairwise distinct, and account-SCIM must be distinct from all of them.${RST}" >&2
+    if tier_is_agentic; then
+      echo "${RED}[deploy] ERROR: normal, operator2, admin, release-probe, verifier, agent-runtime, and agent-proxy M2M client IDs must be pairwise distinct, and account-SCIM must be distinct from all of them.${RST}" >&2
+    else
+      echo "${RED}[deploy] ERROR: normal, operator2, admin, and release-probe M2M client IDs must be pairwise distinct, and account-SCIM must be distinct from all of them.${RST}" >&2
+    fi
     exit 1
   fi
   _CONFIGURED_ADMIN_IDENTITIES="$(deployment_control_value MIP_ADMIN_IDENTITIES)"

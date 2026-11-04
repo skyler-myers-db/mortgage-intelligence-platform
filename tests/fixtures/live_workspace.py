@@ -100,7 +100,6 @@ class LiveWorkspace:
         self.warehouses = _Strict(list=self._feature("GET sql/warehouses (list)"))
         self.serving_endpoints = _Strict(list=self._feature("GET serving-endpoints (list)"))
         self.experiments = _Strict(list_experiments=self._feature("GET mlflow/experiments (list)"))
-        self.api_client = _Strict(do=self._api_do)
         self.workspace = _Strict(download=self._download, get_status=self._get_status)
         self.catalogs = _Strict(get=self._catalog_get)
         self.tables = _Strict(exists=self._table_exists)
@@ -200,10 +199,6 @@ class LiveWorkspace:
             return []
 
         return probe
-
-    def _api_do(self, method: str, path: str, **_kwargs: Any) -> object:
-        assert (method, path) == ("GET", "/api/2.1/supervisor-agents"), (method, path)
-        return self._feature("GET supervisor-agents (list)")()
 
 
 class LiveAccount:

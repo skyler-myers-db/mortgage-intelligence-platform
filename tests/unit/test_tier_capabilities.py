@@ -36,7 +36,6 @@ FEATURES = {
     "Genie spaces": "genie.list_spaces",
     "SQL warehouses": "warehouses.list",
     "Model Serving (AI Gateway endpoints)": "serving_endpoints.list",
-    "Agent Bricks Supervisor agents": "GET /api/2.1/supervisor-agents",
     "MLflow experiments": "experiments.list_experiments",
 }
 CORE = ("Databricks Apps", "Lakebase database instances", "Genie spaces", "SQL warehouses")
@@ -55,7 +54,6 @@ class FakeSdk:
         self.warehouses = SimpleNamespace(list=self._lister("warehouses.list"))
         self.serving_endpoints = SimpleNamespace(list=self._lister("serving_endpoints.list"))
         self.experiments = SimpleNamespace(list_experiments=self._lister("experiments.list_experiments"))
-        self.api_client = SimpleNamespace(do=self._do)
 
     def _call(self, name: str) -> None:
         self.calls.append(name)
@@ -69,11 +67,6 @@ class FakeSdk:
             return iter([object(), object()])
 
         return listing
-
-    def _do(self, method: str, path: str, **_kwargs: Any) -> dict[str, Any]:
-        assert method == "GET", "a capability probe is read-only"
-        self._call(f"{method} {path}")
-        return {"supervisor_agents": []}
 
     def _app_get(self, name: str) -> object:
         self.calls.append(f"apps.get {name}")
@@ -143,12 +136,12 @@ def test_the_live_checks_run_the_capability_preflight(tmp_path: Path, capsys: py
     profile = paychex_shaped_profile()
     env_file = tmp_path / ".env.local"
     env_file.write_text(env_file_text(profile), encoding="utf-8")
-    workspace = LiveWorkspace(profile, identity_ids=IDENTITY_IDS, missing_features=("GET supervisor-agents (list)",))
+    workspace = LiveWorkspace(profile, identity_ids=IDENTITY_IDS, missing_features=("GET mlflow/experiments (list)",))
     account = LiveAccount(IDENTITY_IDS["account_principal"])
 
     code = live_checks.main([], environ={}, env_file=env_file, client=lambda: workspace, account=lambda: account)
 
     assert code == 2
     err = capsys.readouterr().err
-    assert "needs Agent Bricks Supervisor agents, which this workspace does not offer" in err
-    assert "GET supervisor-agents (list)" in workspace.calls
+    assert "needs MLflow experiments, which this workspace does not offer" in err
+    assert "GET mlflow/experiments (list)" in workspace.calls

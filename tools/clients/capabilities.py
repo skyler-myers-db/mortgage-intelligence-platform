@@ -10,8 +10,13 @@ feature's API answers only when the feature is available to the deployer.
 
 * Both tiers: Databricks Apps, Lakebase database instances, Genie spaces and
   SQL warehouses.
-* The agentic tier adds Model Serving (the AI Gateway endpoints), Agent Bricks
-  Supervisor agents and MLflow experiments.
+* The agentic tier adds Model Serving (the AI Gateway endpoints and the
+  Supervisor's serving endpoint) and MLflow experiments. The Agent Bricks
+  Supervisor API itself has no typed reader in the pinned SDK, and
+  tools/clients never reaches the raw API client
+  (tests/unit/test_bootstrap_account_safety.py); the agentic tier's pre-stop
+  probes list the Supervisor agents before the lease anyway, and a listing
+  that fails refuses there (``probe_error``).
 
 Fail closed: any error refuses that feature. A typed not-found
 (``NotFound``, ``ResourceDoesNotExist``) or ``NotImplemented`` reads as the
@@ -73,13 +78,6 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Model Serving (AI Gateway endpoints)",
         _AGENTIC,
         lambda client: _first(client.serving_endpoints.list()),
-    ),
-    Capability(
-        "Agent Bricks Supervisor agents",
-        _AGENTIC,
-        lambda client: client.api_client.do(
-            "GET", "/api/2.1/supervisor-agents", query={"page_size": 1}
-        ),
     ),
     Capability(
         "MLflow experiments",
