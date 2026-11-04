@@ -153,7 +153,12 @@ def test_the_plan_phase_exits_at_top_level_between_the_gate_and_the_lease() -> N
     assert before[: before.index("# >>> adopt phase: plan >>>")].rstrip().endswith(
         "fi"
     ), "outside the dry-run branches"
-    assert text[text.index(GATE_END) + len(GATE_END) :].startswith(
+    # Only the core tier's release refusal (M2-PR3), also at top level, sits
+    # between the gate and the lease block.
+    after = text[text.index(GATE_END) + len(GATE_END) :]
+    refusal_end = "# <<< core tier: release refusal <<<"
+    assert after.startswith("\n# >>> core tier: release refusal >>>\n")
+    assert after[after.index(refusal_end) + len(refusal_end) :].startswith(
         '\nif [[ "$DRY_RUN" -eq 0 ]]; then\n'
     )
     code = [line for line in lines if not line.startswith("#")]

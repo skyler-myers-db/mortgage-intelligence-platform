@@ -1128,8 +1128,7 @@ def test_the_probe_runs_after_deployer_auth_and_the_runtime_secret_check() -> No
     for argument in (
         '--app-name "$_GRANTS_APP_NAME"',
         '--expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"',
-        '--runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"',
-        '--verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"',
+        '"${_PRESTOP_TIER_ARGS[@]}"',
         '--supervisor-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}"',
         '--rollback-scope "$APP_ROLLBACK_SECRET_SCOPE"',
         '--lakebase-instance "$MIP_LAKEBASE_INSTANCE"',
@@ -1138,6 +1137,18 @@ def test_the_probe_runs_after_deployer_auth_and_the_runtime_secret_check() -> No
         '--rebase-unverified-app "$_PRESTOP_REBASE_UNVERIFIED_APP"',
     ):
         assert argument in call, argument
+    # The tier's identities (M2-PR3): the agentic tier's runtime and verifier,
+    # or the core tier's --agentic-tier off with neither.
+    tier_args = script[script.rindex("\n  _PRESTOP_TIER_ARGS=(\n", 0, probe) + 1 : probe]
+    assert (
+        "  _PRESTOP_TIER_ARGS=(\n"
+        '    --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"\n'
+        '    --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"\n'
+        "  )\n"
+        "  if ! tier_is_agentic; then\n"
+        "    _PRESTOP_TIER_ARGS=(--agentic-tier off)\n"
+        "  fi\n"
+    ) in tier_args
     # The approval lists name principals (IDENTIFYING in the client profile),
     # and run_with_account_identity echoes argv, so they reach the probe only
     # through the exported environment, the way the post-stop converger reads
@@ -1289,6 +1300,11 @@ TARGET=client
 # M1-PR3); the render's demo-feed switch reads the policy.
 CLIENT_INSTALL_CLASS=demo
 CLIENT_DEMO_FEEDS=1
+# The profile's agentic tier and its lease writer (resolve_client_profile,
+# M2-PR3): client #1's shape. A core release refuses before the lease.
+CLIENT_AGENTIC_TIER=on
+CLIENT_LEASE_WRITER_ENV=DATABRICKS_AGENT_RUNTIME_CLIENT_ID
+tier_is_agentic() {{ [[ "$CLIENT_AGENTIC_TIER" == "on" ]]; }}
 DEPLOY_PHASE=""
 DEPLOY_INVENTORY_PRINCIPAL=deployer@example.invalid
 # Resolved by the preflight step file; the pii-salt check reads both.

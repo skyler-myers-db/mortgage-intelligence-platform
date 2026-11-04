@@ -75,10 +75,14 @@ plan_quiesce_window() {
   local position="${1:?window plan position is required}"
   local gate_report="${2:?bundle plan gate report is required}"
   local probe_dir role_rc=0 verifier_rc=0 jobs_reader_rc=0 plan_rc=0 rebase
-  local -a plan_args=(--position "$position")
+  local -a plan_args=(--position "$position") migration_verifier_args=()
   step "plan the quiesce window (${position}, read-only)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "  would plan read-only: WR1 binding diff, WR2 App, verifier and jobs-reader role --check and the jobs reader's grants, WR3 Lakebase migration plan, WR4 acked instance update; a window opens only with MIP_ACK_QUIESCE_WINDOW equal to its sha256"
+    if tier_is_agentic; then
+      echo "  would plan read-only: WR1 binding diff, WR2 App, verifier and jobs-reader role --check and the jobs reader's grants, WR3 Lakebase migration plan, WR4 acked instance update; a window opens only with MIP_ACK_QUIESCE_WINDOW equal to its sha256"
+    else
+      echo "  would plan read-only: WR1 binding diff, WR2 App and jobs-reader role --check (the core tier has no verifier) and the jobs reader's grants, WR3 Lakebase migration plan, WR4 acked instance update; a window opens only with MIP_ACK_QUIESCE_WINDOW equal to its sha256"
+    fi
     return 0
   fi
   probe_dir="$(mktemp -d -t mip-quiesce-window.XXXXXX)"
@@ -127,20 +131,31 @@ plan_quiesce_window() {
     esac
     # The verifier role is WR2 too: its converge would rotate it and drop the
     # grants only the migration job re-applies, and that job runs in a window.
-    run_with_lakebase_bootstrap_authority \
-      "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role --check \
-      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
-      --lakebase-database "$LAKEBASE_DATABASE" \
-      --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
-      --role-contract verifier || verifier_rc=$?
-    case "$verifier_rc" in
-      0) plan_args+=(--verifier-role-check exact) ;;
-      3) plan_args+=(--verifier-role-check drift) ;;
-      *)
-        echo "${RED}[deploy] the verifier role check could not decide (exit ${verifier_rc}); nothing was changed.${RST}" >&2
-        exit 2
-        ;;
-    esac
+    # The core tier (M2-PR3) deploys no verifier: there is no role to rotate,
+    # the plan records it absent, and the migration plan asserts the absence.
+    if tier_is_agentic; then
+      run_with_lakebase_bootstrap_authority \
+        "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role --check \
+        --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+        --lakebase-database "$LAKEBASE_DATABASE" \
+        --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+        --role-contract verifier || verifier_rc=$?
+      case "$verifier_rc" in
+        0) plan_args+=(--verifier-role-check exact) ;;
+        3) plan_args+=(--verifier-role-check drift) ;;
+        *)
+          echo "${RED}[deploy] the verifier role check could not decide (exit ${verifier_rc}); nothing was changed.${RST}" >&2
+          exit 2
+          ;;
+      esac
+      migration_verifier_args=(
+        --ai-gateway-verifier-client-id "$DATABRICKS_VERIFIER_CLIENT_ID"
+        --require-ai-gateway-verifier
+      )
+    else
+      plan_args+=(--verifier-role-check absent)
+      migration_verifier_args=(--ai-gateway-verifier-absent)
+    fi
     # The jobs reader (M2-PR5) is WR2 for the same reason; the migration plan
     # below reads its grants, which no other step re-applies either.
     run_with_lakebase_bootstrap_authority \
@@ -165,8 +180,7 @@ plan_quiesce_window() {
       --lender-name "$MIP_LENDER_NAME" \
       --lender-nmls-id "$MIP_LENDER_NMLS_ID" \
       --tenant-id "$MIP_TENANT_ID" \
-      --ai-gateway-verifier-client-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
-      --require-ai-gateway-verifier \
+      "${migration_verifier_args[@]}" \
       --jobs-reader-client-id "$CLIENT_JOBS_PRINCIPAL" > "$probe_dir/migration.json" || true
     plan_args+=(--migration-plan "$probe_dir/migration.json")
   fi

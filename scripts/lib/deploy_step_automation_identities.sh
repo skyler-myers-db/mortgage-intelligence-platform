@@ -147,17 +147,28 @@ step "validate direct-deployment bundle against -t ${TARGET}"
 run "$PYTHON" -m tools.databricks.bundle_env validate -t "$TARGET"
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
+  # The tier's roster (M2-PR3): the core tier needs only the normal, admin and
+  # release-probe credentials here (operator2 is checked below); the agentic
+  # tier adds the verifier, the agent runtime and the Supervisor proxy.
+  _M2M_REQUIRED=(
+    DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+    DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET
+    DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET
+  )
+  if tier_is_agentic; then
+    _M2M_REQUIRED+=(
+      DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET
+      DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET
+      DATABRICKS_AGENT_PROXY_CLIENT_ID DATABRICKS_AGENT_PROXY_CLIENT_SECRET
+      DATABRICKS_AGENT_PROXY_CREDENTIAL_ID DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE
+    )
+  fi
+  _M2M_REQUIRED+=(
+    DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID
+    DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET
+  )
   _M2M_MISSING=""
-  for _M2M_NAME in \
-    DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
-    DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
-    DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET \
-    DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
-    DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
-    DATABRICKS_AGENT_PROXY_CLIENT_ID DATABRICKS_AGENT_PROXY_CLIENT_SECRET \
-    DATABRICKS_AGENT_PROXY_CREDENTIAL_ID DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE \
-    DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID \
-    DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET; do
+  for _M2M_NAME in "${_M2M_REQUIRED[@]}"; do
     if [[ -z "${!_M2M_NAME:-}" ]]; then
       _M2M_MISSING="${_M2M_MISSING} ${_M2M_NAME}"
     fi
@@ -184,12 +195,21 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   fi
   # run_as_m2m_identity changes DATABRICKS_CLIENT_ID only in a subshell.
   # shellcheck disable=SC2031
+  _M2M_DISTINCT=(
+    "$DATABRICKS_CLIENT_ID" "$DATABRICKS_OPERATOR2_CLIENT_ID"
+    "$DATABRICKS_ADMIN_CLIENT_ID" "$DATABRICKS_RELEASE_PROBE_CLIENT_ID"
+  )
+  if tier_is_agentic; then
+    # shellcheck disable=SC2031
+    _M2M_DISTINCT+=(
+      "$DATABRICKS_VERIFIER_CLIENT_ID"
+      "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
+      "$DATABRICKS_AGENT_PROXY_CLIENT_ID"
+    )
+  fi
+  # shellcheck disable=SC2031
   if ! "$PYTHON" - \
-    "$DATABRICKS_CLIENT_ID" "$DATABRICKS_OPERATOR2_CLIENT_ID" \
-    "$DATABRICKS_ADMIN_CLIENT_ID" "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
-    "$DATABRICKS_VERIFIER_CLIENT_ID" \
-    "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
-    "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+    "${_M2M_DISTINCT[@]}" \
     "$DATABRICKS_ACCOUNT_CLIENT_ID" <<'PYEOF'
 import sys
 
@@ -207,7 +227,11 @@ raise SystemExit(
 )
 PYEOF
   then
-    echo "${RED}[deploy] ERROR: normal, operator2, admin, release-probe, verifier, agent-runtime, and agent-proxy M2M client IDs must be pairwise distinct, and account-SCIM must be distinct from all of them.${RST}" >&2
+    if tier_is_agentic; then
+      echo "${RED}[deploy] ERROR: normal, operator2, admin, release-probe, verifier, agent-runtime, and agent-proxy M2M client IDs must be pairwise distinct, and account-SCIM must be distinct from all of them.${RST}" >&2
+    else
+      echo "${RED}[deploy] ERROR: normal, operator2, admin, and release-probe M2M client IDs must be pairwise distinct, and account-SCIM must be distinct from all of them.${RST}" >&2
+    fi
     exit 1
   fi
   _CONFIGURED_ADMIN_IDENTITIES="$(deployment_control_value MIP_ADMIN_IDENTITIES)"
@@ -227,8 +251,12 @@ print(",".join(values))
 PYEOF
 )"
   export MIP_ADMIN_IDENTITIES
-  export MIP_AI_GATEWAY_VERIFIER_CLIENT_ID="$DATABRICKS_VERIFIER_CLIENT_ID"
-  export BUNDLE_VAR_ai_gateway_verifier_client_id="$DATABRICKS_VERIFIER_CLIENT_ID"
+  # The core tier binds no verifier: the bundle keeps its placeholder, which
+  # the migrate job reads as absent (BUNDLE_VAR_require_ai_gateway_verifier).
+  if tier_is_agentic; then
+    export MIP_AI_GATEWAY_VERIFIER_CLIENT_ID="$DATABRICKS_VERIFIER_CLIENT_ID"
+    export BUNDLE_VAR_ai_gateway_verifier_client_id="$DATABRICKS_VERIFIER_CLIENT_ID"
+  fi
   # Read-only pre-stop probes. Step 0a stops (and on the unsigned rebase path
   # quarantines) the existing App, and with no signed blue a later failure
   # leaves it stopped. These failures are visible to the workspace admin now,
@@ -251,13 +279,21 @@ PYEOF
   if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" ]]; then
     _PRESTOP_REBASE_UNVERIFIED_APP=1
   fi
+  # The core tier deploys no agent runtime or verifier: the probes take
+  # neither, skip the Supervisor clauses and audit the App's Genie grants.
+  _PRESTOP_TIER_ARGS=(
+    --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
+    --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"
+  )
+  if ! tier_is_agentic; then
+    _PRESTOP_TIER_ARGS=(--agentic-tier off)
+  fi
   step "pre-stop probes: Supervisor, Genie grants, rollback record, owners, serving and Genie budget"
   run_with_account_identity \
     "$PYTHON" -m tools.databricks.deploy_prestop_probes \
     --app-name "$_GRANTS_APP_NAME" \
     --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
-    --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
-    --verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+    "${_PRESTOP_TIER_ARGS[@]}" \
     --supervisor-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}" \
     --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
     --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
@@ -306,6 +342,20 @@ if [[ "${DEPLOY_PHASE:-}" == "plan" ]]; then
   exit 0
 fi
 # <<< bundle plan gate: pre-lease <<<
+# >>> core tier: release refusal >>>
+# The core tier (MIP_AGENTIC_TIER=off, M2-PR3) has no activation path yet:
+# publish, activation, signed capture and the signed-blue restore still run
+# through the agentic identities, so a core release could only mutate the
+# install through the grants and then stop at the step-5 activation boundary,
+# on every attempt. It refuses here instead, after every read-only check and
+# before the lease and any workspace mutation, in a dry run too. --phase plan
+# ended above, and the adopt phases (an acknowledged bundle state edit, no
+# release step) still run.
+if ! tier_is_agentic && [[ -z "${DEPLOY_PHASE:-}" ]]; then
+  echo "${RED}[deploy] the core tier (MIP_AGENTIC_TIER=off) cannot release yet: publish, activation and signed capture still need the agentic identities. Refusing before the lease; nothing was changed. --phase plan and the adopt phases run in this tier.${RST}" >&2
+  exit 2
+fi
+# <<< core tier: release refusal <<<
 if [[ "$DRY_RUN" -eq 0 ]]; then
   # The signed lease is the first persistent workspace mutation. A contender
   # must lose here before it can revoke stale grants or alter shared resources.
@@ -326,12 +376,21 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     )
   fi
   APP_DEPLOYMENT_LEASE_ENV="$(mktemp -t mip-app-deployment-lease.XXXXXX.env)"
+  # The lease's delegated writer is the tier's (m2m_identity_contract.
+  # lease_writer): the agent runtime in the agentic tier, the release probe in
+  # the core tier. resolve_client_profile proved the name; the missing-credential
+  # check above proved its value.
+  _LEASE_WRITER_APPLICATION_ID="${!CLIENT_LEASE_WRITER_ENV:-}"
+  if [[ -z "$_LEASE_WRITER_APPLICATION_ID" ]]; then
+    echo "${RED}[deploy] the tier's lease writer (${CLIENT_LEASE_WRITER_ENV}) has no client id; refusing before the lease.${RST}" >&2
+    exit 2
+  fi
   step "acquire signed workspace lease for the exact App deployment"
   run_with_proof_signing_authority \
     "$PYTHON" -m tools.databricks.app_deployment_lease acquire \
     --app-name "$_GRANTS_APP_NAME" \
     --source-git-sha "$SOURCE_GIT_SHA" \
-    --writer-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --writer-application-id "$_LEASE_WRITER_APPLICATION_ID" \
     "${_APP_EXPIRED_LEASE_RECOVERY_ARGS[@]}" \
     --out-env "$APP_DEPLOYMENT_LEASE_ENV"
   set -a
@@ -428,24 +487,30 @@ else:
       exit 4
     fi
   fi
-  step "preflight agent-runtime foreign UC access before Lakebase bootstrap mutation"
-  run_with_account_identity run_with_proof_signing_authority \
-    "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
-    --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
-    --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
-    --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
-    --exposure-identity runtime \
-    --allow-missing-mip-catalog
-  # Recover any deterministic one-use Lakebase role creators left by a prior
-  # SIGKILL immediately after the lease winner is known.
-  step "recover interrupted verifier Lakebase role bootstrap"
-  run_with_lakebase_bootstrap_authority \
-    "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
-    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
-    --lakebase-database "$LAKEBASE_DATABASE" \
-    --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
-    --role-contract verifier \
-    --recover-bootstrap-only
+  # The core tier has no agent runtime and no verifier (plan §4.15): no runtime
+  # UC audit and no verifier Lakebase role.
+  if tier_is_agentic; then
+    step "preflight agent-runtime foreign UC access before Lakebase bootstrap mutation"
+    run_with_account_identity run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
+      --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+      --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+      --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+      --exposure-identity runtime \
+      --allow-missing-mip-catalog
+    # Recover any deterministic one-use Lakebase role creators left by a prior
+    # SIGKILL immediately after the lease winner is known.
+    step "recover interrupted verifier Lakebase role bootstrap"
+    run_with_lakebase_bootstrap_authority \
+      "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+      --lakebase-database "$LAKEBASE_DATABASE" \
+      --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+      --role-contract verifier \
+      --recover-bootstrap-only
+  else
+    step "core tier: no agent-runtime UC audit and no verifier Lakebase role (MIP_AGENTIC_TIER=off)"
+  fi
   if [[ -n "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
     step "recover interrupted App Lakebase role bootstrap"
     run_with_lakebase_bootstrap_authority \
@@ -476,10 +541,13 @@ else:
     echo "${RED}[deploy] the preflight resolved no SQL warehouse for early privilege reconciliation.${RST}" >&2
     exit 1
   fi
-  AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=1
-  if ! revoke_agent_runtime_bootstrap_grants; then
-    echo "${RED}[deploy] could not clear prior agent-runtime bootstrap privileges.${RST}" >&2
-    exit 1
+  # The core tier never grants the agent runtime anything, so it has nothing to clear.
+  if tier_is_agentic; then
+    AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=1
+    if ! revoke_agent_runtime_bootstrap_grants; then
+      echo "${RED}[deploy] could not clear prior agent-runtime bootstrap privileges.${RST}" >&2
+      exit 1
+    fi
   fi
   mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
   mint_m2m_token MIP_ADMIN_BEARER_TOKEN \

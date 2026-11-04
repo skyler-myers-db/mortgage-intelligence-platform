@@ -380,6 +380,27 @@ PRESENTER_MODE_NOTICE = (
 
 # The install classes of a client profile (tools/clients/schema.py).
 INSTALL_CLASSES = ("demo", "customer")
+# The client profile's MIP_AGENTIC_TIER (plan §4.15). The core tier ships the
+# agentic surfaces off: these two ride the payload as "0", whatever the
+# operator configuration says, and a truthy operator value refuses rather
+# than being silently dropped. The agentic tier (the default, which the
+# emergency recipe relies on) leaves the payload exactly as before.
+AGENTIC_TIERS = ("on", "off")
+CORE_TIER_OFF_SWITCHES = ("MIP_AGENT_ORCHESTRATOR", "MIP_AI_GATEWAY")
+_OFF_SWITCH_VALUES = frozenset({"", "0", "false", "no", "off"})
+
+
+def _core_tier_switches(dotenv: dict[str, str], agentic_tier: str) -> dict[str, str]:
+    """The core tier's forced-off agentic switches; nothing for the agentic tier."""
+
+    if agentic_tier not in AGENTIC_TIERS:
+        raise ValueError(f"--agentic-tier must be one of {', '.join(AGENTIC_TIERS)}")
+    if agentic_tier == "on":
+        return {}
+    for name in CORE_TIER_OFF_SWITCHES:
+        if _env_value(name, dotenv).lower() not in _OFF_SWITCH_VALUES:
+            raise ValueError(f"{name} is refused for the core tier (MIP_AGENTIC_TIER=off)")
+    return dict.fromkeys(CORE_TIER_OFF_SWITCHES, "0")
 
 
 def _validated_presenter_mode(dotenv: dict[str, str], install_class: str) -> bool:
@@ -417,6 +438,7 @@ def build_payload(
     campaign_treatment_runtime_enabled: bool = False,
     otel_endpoint: str = "",
     otel_header_resource: str = "",
+    agentic_tier: str = "on",
 ) -> dict[str, object]:
     lakebase_instance = validated_lakebase_instance_name(lakebase_instance)
     dotenv = _dotenv_overlay()
@@ -438,6 +460,7 @@ def build_payload(
     previous_secret_enabled, previous_secret_kid = _previous_secret_grace_configured(dotenv)
     _validated_keep_warm(dotenv)
     presenter_mode = _validated_presenter_mode(dotenv, install_class)
+    core_tier_switches = _core_tier_switches(dotenv, agentic_tier)
     _validated_refusal_text_capture(dotenv)
     cotality_source_env = _cotality_source_env(dotenv)
     if bool(otel_endpoint.strip()) != bool(otel_header_resource.strip()):
@@ -510,6 +533,7 @@ def build_payload(
             env_vars,
             name,
             resolved_lender_values.get(name)
+            or core_tier_switches.get(name)
             or _env_value(name, dotenv)
             or SAFE_RUNTIME_DEFAULTS.get(name, ""),
         )
@@ -554,6 +578,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--otel-endpoint", default="")
     parser.add_argument("--otel-header-resource", default="")
+    # The client profile's MIP_AGENTIC_TIER (scripts/deploy.sh passes it); the
+    # emergency recipe builds the live install's agentic payload by default.
+    parser.add_argument("--agentic-tier", choices=AGENTIC_TIERS, default="on")
     return parser
 
 
@@ -572,6 +599,7 @@ def main(argv: list[str] | None = None) -> int:
             campaign_treatment_runtime_enabled=args.enable_campaign_treatment_runtime,
             otel_endpoint=args.otel_endpoint,
             otel_header_resource=args.otel_header_resource,
+            agentic_tier=args.agentic_tier,
         )
     except LenderIdentityRefused as refusal:
         # A fixed sentence that names the field and the rule, never a value.

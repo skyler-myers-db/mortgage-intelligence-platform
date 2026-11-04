@@ -12,6 +12,9 @@ for one:
   ``mip_scheduled_refresh`` job is UNPAUSED only when it is ``on``, and then
   mails its failures to ``MIP_SCHEDULED_REFRESH_RECIPIENTS``. A refresh that
   is off mails nobody.
+* ``agentic_tier``: ``MIP_AGENTIC_TIER`` (``off``, the core tier, or ``on``;
+  plan §4.15). The deploy takes every runtime-identity role set from it
+  (tools/databricks/m2m_identity_contract.py) and has no default for it.
 
 The profile's rules (tools/clients/rules.py) already keep the demo flags off
 a customer install and require recipients (email addresses, never an
@@ -25,6 +28,7 @@ from dataclasses import dataclass
 
 from tools.clients.errors import ProfileRefusal
 from tools.clients.schema import ClientProfile
+from tools.databricks.m2m_identity_contract import AgenticTier, agentic_tier
 
 PAUSED = "PAUSED"
 UNPAUSED = "UNPAUSED"
@@ -38,6 +42,7 @@ class InstallPolicy:
     presenter_mode: bool
     scheduled_refresh: bool
     refresh_recipients: tuple[str, ...]
+    agentic_tier: AgenticTier
 
     @property
     def pause_status(self) -> str:
@@ -47,8 +52,16 @@ class InstallPolicy:
 
 
 def install_policy(profile: ClientProfile) -> InstallPolicy:
-    """The profile's install policy; a demo flag on a customer install refuses."""
+    """The profile's install policy; a demo flag on a customer install refuses.
 
+    So does a tier that is not exactly ``off`` or ``on``: the profile's shape
+    rule already refuses one, and a policy is never built around another.
+    """
+
+    try:
+        tier = agentic_tier(profile.agentic_tier)
+    except ValueError:
+        raise ProfileRefusal(["MIP_AGENTIC_TIER: must be exactly off or on"]) from None
     policy = InstallPolicy(
         install_class=profile.install_class,
         app_env=profile.app_env,
@@ -58,6 +71,7 @@ def install_policy(profile: ClientProfile) -> InstallPolicy:
         refresh_recipients=(
             profile.scheduled_refresh_recipients if profile.scheduled_refresh == "on" else ()
         ),
+        agentic_tier=tier,
     )
     lines = []
     if policy.install_class == "customer":
@@ -80,4 +94,5 @@ def policy_controls(policy: InstallPolicy) -> dict[str, str]:
         "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS": "1" if policy.demo_first_party_feeds else "0",
         "MIP_PRESENTER_MODE": "1" if policy.presenter_mode else "0",
         "MIP_SCHEDULED_REFRESH": "on" if policy.scheduled_refresh else "off",
+        "MIP_AGENTIC_TIER": policy.agentic_tier,
     }

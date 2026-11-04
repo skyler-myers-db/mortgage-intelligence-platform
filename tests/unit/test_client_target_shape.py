@@ -132,6 +132,20 @@ def test_the_profile_sets_only_the_client_targets_own_variables(build: Any) -> N
         "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS": "1" if profile.demo_first_party_feeds == "1" else "0",
         "MIP_PRESENTER_MODE": "1" if profile.presenter_mode == "1" else "0",
         "MIP_SCHEDULED_REFRESH": profile.scheduled_refresh,
+        # The agentic tier and its identity contract's client-id names (M2-PR3).
+        "MIP_AGENTIC_TIER": profile.agentic_tier,
+        "MIP_TIER_LEASE_WRITER": "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
+        "MIP_TIER_IDENTITIES": ",".join(
+            (
+                "DATABRICKS_CLIENT_ID",
+                "DATABRICKS_OPERATOR2_CLIENT_ID",
+                "DATABRICKS_ADMIN_CLIENT_ID",
+                "DATABRICKS_RELEASE_PROBE_CLIENT_ID",
+                "DATABRICKS_VERIFIER_CLIENT_ID",
+                "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
+                "DATABRICKS_AGENT_PROXY_CLIENT_ID",
+            )
+        ),
         **{f"BUNDLE_VAR_{name}": value for name, value in target_vars.items()},
     }
 

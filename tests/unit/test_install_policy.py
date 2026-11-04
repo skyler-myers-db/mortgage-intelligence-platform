@@ -66,6 +66,7 @@ def test_the_policy_matrix(install_class: str, refresh: str, presenter: str | No
         presenter_mode=presenter == "1",
         scheduled_refresh=refresh == "on",
         refresh_recipients=RECIPIENTS if refresh == "on" else (),
+        agentic_tier="on",
     )
     assert policy.pause_status == ("UNPAUSED" if refresh == "on" else "PAUSED")
     controls = {
@@ -73,6 +74,7 @@ def test_the_policy_matrix(install_class: str, refresh: str, presenter: str | No
         "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS": "1" if feeds == "1" else "0",
         "MIP_PRESENTER_MODE": "1" if presenter == "1" else "0",
         "MIP_SCHEDULED_REFRESH": refresh,
+        "MIP_AGENTIC_TIER": "on",
     }
     assert policy_controls(policy) == controls
     target = views.client_target(profile)

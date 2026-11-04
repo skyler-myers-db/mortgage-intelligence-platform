@@ -27,6 +27,10 @@ Mapping, ``-t client`` (the profile -> BUNDLE_VAR_*, tools/clients/profile.py):
   LAKEBASE_DATABASE       -> BUNDLE_VAR_lakebase_database_name
   MIP_RUNTIME_SECRET_SCOPE -> BUNDLE_VAR_runtime_secret_scope
   MIP_IDENTITY_IDS_JSON.verifier -> BUNDLE_VAR_ai_gateway_verifier_client_id
+                             (MIP_AGENTIC_TIER=on only; the core tier keeps the
+                             placeholder)
+  MIP_AGENTIC_TIER=off    -> BUNDLE_VAR_require_ai_gateway_verifier, the core
+                             tier's absence flag for the migrate job (M2-PR3)
   the governed Genie space -> BUNDLE_VAR_genie_space_id, by its pin
                              (tools/databricks/genie_space_pin.py, M1-PR3)
 For ``-t ci`` the same names come from the environment and ``.env.local``
@@ -159,6 +163,7 @@ _CLIENT_TARGET_VARIABLES = (
     "jobs_principal",
     "dashboard_parent_path",
     "lakebase_readable_secondaries",
+    "require_ai_gateway_verifier",
 )
 UNPROVISIONED_GENIE_FLAG = "--allow-unprovisioned-genie"
 
@@ -587,6 +592,11 @@ def main() -> int:
         if profile is not None
         else env.get("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID")
     )
+    # The core tier deploys without a verifier (plan §4.15): its migrate job
+    # asserts the absence, so the placeholder is the expected binding there.
+    verifier_required = policy is None or policy.agentic_tier == "on"
+    if not verifier_required:
+        verifier_client_id = None
 
     # Plan/summary/deploy can influence a real deployment decision, and deploy
     # mutates the App binding. The governed space is the one its pin names
@@ -628,7 +638,7 @@ def main() -> int:
         missing = []
         if not _is_real(genie) and not genie_unprovisioned:
             missing.append("the pinned governed Genie space")
-        if not _is_real(verifier_client_id):
+        if verifier_required and not _is_real(verifier_client_id):
             missing.append("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID")
         if missing:
             print(

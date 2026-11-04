@@ -125,15 +125,17 @@ def _estate() -> dict[str, Any]:
     return estate
 
 
-def _inventory(monkeypatch: pytest.MonkeyPatch, estate: dict[str, Any]) -> int:
+_AGENTIC_IDS = ["--runtime-application-id", RUNTIME_CLIENT, "--verifier-application-id", VERIFIER_CLIENT]
+
+
+def _inventory(monkeypatch: pytest.MonkeyPatch, estate: dict[str, Any], tier: list[str] | None = None) -> int:
     workspace = FakeWorkspace(estate)
     monkeypatch.setattr(databricks.sdk, "WorkspaceClient", lambda *_a, **_kw: workspace)
     return cli.main(
         [
             "--emit-exposure-inventory",
             "--app-name", APP_NAME,
-            "--runtime-application-id", RUNTIME_CLIENT,
-            "--verifier-application-id", VERIFIER_CLIENT,
+            *(_AGENTIC_IDS if tier is None else tier),
             "--expected-inventory-principal", DEPLOYER,
             "--genie-space-name", "Mortgage Lead Intelligence",
         ]
@@ -186,6 +188,36 @@ def test_the_inventory_needs_its_identities(capsys: pytest.CaptureFixture[str]) 
         cli.main(["--emit-exposure-inventory", "--app-name", APP_NAME])
 
     assert "requires --runtime-application-id" in capsys.readouterr().err
+
+
+def test_a_core_tier_inventory_audits_the_app_alone(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The core tier deploys no runtime or verifier (M2-PR3): its pre-stop
+    # Genie clause reads the App's exposure only, so the inventory does too.
+    estate = _estate()
+
+    assert _inventory(monkeypatch, estate, ["--agentic-tier", "off"]) == 0
+
+    captured = capsys.readouterr()
+    candidates = [json.loads(line) for line in captured.out.splitlines()]
+    assert candidates == [{**ENTRY, "reason": cli._REVIEW["reason"], "expires_at": cli._REVIEW["expires_at"]}]
+    assert "verifier" not in captured.err and "agent-runtime" not in captured.err
+    assert all(call.startswith("GET ") for call in estate["calls"]), "read-only"
+    assert not [call for call in estate["calls"] if RUNTIME_CLIENT in call or VERIFIER_CLIENT in call]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [["--runtime-application-id", RUNTIME_CLIENT], ["--verifier-application-id", VERIFIER_CLIENT], ["--catalog", "mip"]],
+    ids=["runtime", "verifier", "catalog"],
+)
+def test_a_core_tier_inventory_takes_no_agentic_identity(extra: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+    argv = ["--emit-exposure-inventory", "--app-name", APP_NAME, "--expected-inventory-principal", DEPLOYER]
+    with pytest.raises(SystemExit):
+        cli.main([*argv, "--agentic-tier", "off", *extra])
+
+    assert "the core tier deploys no agent runtime or verifier" in capsys.readouterr().err
 
 
 def test_uc_candidates_list_read_grants_and_note_elevated_ones() -> None:

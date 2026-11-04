@@ -54,6 +54,14 @@ ALLOWED_CALLS = frozenset(
         ("access_control", "get_rule_set"),
         ("access_control", "update_rule_set"),
         ("apps", "get"),
+        # Read-only, one page each: tools/clients/capabilities.py proves the
+        # workspace offers what the profile's MIP_AGENTIC_TIER needs (M2-PR3).
+        ("apps", "list"),
+        ("database", "list_database_instances"),
+        ("experiments", "list_experiments"),
+        ("genie", "list_spaces"),
+        ("serving_endpoints", "list"),
+        ("warehouses", "list"),
         ("catalogs", "get"),
         # Read-only: tools/clients/archive_legacy_root.py reads every bound
         # resource by id for the workspace paths it still uses (M2-PR6).

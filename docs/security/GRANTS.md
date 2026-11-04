@@ -1247,7 +1247,11 @@ only OAuth roles:
 
 Before the migration command below, converge both identities at the stopped
 deployment boundary. The reviewed agent-runtime identity is the distinct fresh
-OAuth-M2M positive control; supply it only to the convergence child:
+OAuth-M2M positive control; supply it only to the convergence child. The core
+tier (`MIP_AGENTIC_TIER=off`) has no agent runtime and no verifier: it supplies
+the release probe's `DATABRICKS_RELEASE_PROBE_CLIENT_ID` and `_SECRET` instead
+(`m2m_identity_contract.lakebase_bootstrap_control`) and converges no verifier
+role:
 
 ```bash
 export MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID="$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
