@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tools.databricks import genie_space_pin
 from tools.databricks.prestop_genie_budget import (
@@ -32,6 +32,9 @@ from tools.databricks.uc_owner_policy import (
     account_client_from_env,
     parse_approved_owner_principals,
 )
+
+if TYPE_CHECKING:
+    from tools.databricks.prestop_accepted_exposure import PrestopExposure
 
 # The provisioner's own resolution (attack G12, M1-PR3): the space step 0a
 # updates is the one the pin record or the signed record names (a record whose
@@ -54,6 +57,8 @@ class ProbeSuiteConfig:
     deployer: str
     approved_owner_principals: str
     genie_manager_principals: str
+    # MIP_UC_METASTORE_OWNER; blank refuses the owner policy (MetastoreOwnerPolicy).
+    metastore_owner: str = ""
     # MIP_GENIE_PIN_ACK: the sha256 of the read-only pin plan the preflight printed.
     genie_pin_ack: str = ""
 
@@ -151,8 +156,14 @@ def suite_refusals(
     account_factory: Callable[[], Any] = account_client_from_env,
     genie_client_factory: Callable[..., Any] | None = None,
     token_provider: Callable[[], str] | None = None,
+    exposure: PrestopExposure | None = None,
 ) -> tuple[list[PrestopRefusal], list[str]]:
-    """Run the record, owner, owner-equivalent, serving and Genie-budget probes."""
+    """Run the record, owner, owner-equivalent, serving and Genie-budget probes.
+
+    ``exposure`` (the accepted-exposure policy the Genie clause used) is judged
+    once more against the governed space resolved here by its pin, which the
+    clause, knowing only the configured title, cannot see once it is renamed.
+    """
 
     refusals: list[PrestopRefusal] = []
     notes: list[str] = []
@@ -176,6 +187,7 @@ def suite_refusals(
             config.approved_owner_principals
         ),
         app_groups=app_groups,
+        metastore_owner=config.metastore_owner,
         account_factory=account_factory,
     )
     refusals.extend(found)
@@ -184,6 +196,8 @@ def suite_refusals(
     genie_space_id, found, said = governed_genie_space(workspace, contract=contract, config=config)
     refusals.extend(found)
     notes.extend(said)
+    if exposure is not None:
+        refusals.extend(exposure.governed_refusals(workspace, space_id=genie_space_id))
     found, said = owner_equivalent_refusals(
         workspace,
         catalog=config.catalog,

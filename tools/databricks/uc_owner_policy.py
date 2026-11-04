@@ -7,6 +7,9 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from databricks.sdk import AccountClient, WorkspaceClient
+from tools.clients.shapes import PRINCIPAL_VOCABULARY
+
+METASTORE_OWNER_ENV = "MIP_UC_METASTORE_OWNER"
 
 
 def _canonical(value: object) -> str:
@@ -125,13 +128,18 @@ def _account_principal_id(account: AccountClient, *, application_id: str) -> str
 
 @dataclass
 class ApprovedOwnerPolicy:
-    """Resolve configured owner names and exclude the target App identity."""
+    """Resolve configured owner names and exclude the target App identity.
+
+    The deploying identity is approved alongside ``configured_principals``
+    unless ``admit_deployer`` is false (``MetastoreOwnerPolicy``).
+    """
 
     workspace: WorkspaceClient
     target: TargetServicePrincipal
     configured_principals: set[str] = field(default_factory=set)
     account_factory: Callable[[], AccountClient] = account_client_from_env
     group_membership_probe: Callable[[AccountClient, str, str, str, str], bool] | None = None
+    admit_deployer: bool = True
     _account_client: AccountClient | None = field(default=None, init=False)
     _account_target_sp_id: str = field(default="", init=False)
     _account_group_names: dict[str, str] = field(default_factory=dict, init=False)
@@ -173,7 +181,8 @@ class ApprovedOwnerPolicy:
         configured = {
             _canonical(value) for value in self.configured_principals if _canonical(value)
         }
-        configured.add(current_name)
+        if self.admit_deployer:
+            configured.add(current_name)
         self.configured_principals = configured
         self._current_name = current_name
         self._current_id = current_id
@@ -451,13 +460,82 @@ class ApprovedOwnerPolicy:
                 self._assert_group_excludes_target(owner=owner, group_id=principal_id)
 
 
+def _is_principal_vocabulary(value: str) -> bool:
+    return " ".join(value.split()).casefold() in PRINCIPAL_VOCABULARY
+
+
+@dataclass
+class MetastoreOwnerPolicy(ApprovedOwnerPolicy):
+    """``ApprovedOwnerPolicy`` over exactly ``{MIP_UC_METASTORE_OWNER}`` (plan 4.12).
+
+    The metastore is not an install object: its owner is whoever the client
+    named in the profile, not the install's approved owners and not the
+    deployer (unless the deployer is that owner). The owner must equal the
+    configured principal exactly, ``users``, ``account users`` and ``admins``
+    are refused, and the inherited checks stay: account and workspace SCIM
+    resolve it to one immutable principal, it is never the App's service
+    principal or one of its aliases, and a group owner must not contain the
+    App's service principal. An owner the API does not return refuses: the
+    owner is read with ``metastores.get``, which the SDK documents as
+    metastore-admin only, and whether a non-admin read (``summary``) returns
+    the owner is spike S0(b), still owed.
+    """
+
+    metastore_owner: str = ""
+
+    def __post_init__(self) -> None:
+        owner = self.metastore_owner
+        if not owner or owner != owner.strip():
+            raise RuntimeError(
+                f"{METASTORE_OWNER_ENV} must name the metastore's exact owner principal"
+            )
+        if _is_principal_vocabulary(owner):
+            raise RuntimeError(
+                f"{METASTORE_OWNER_ENV} must be an exact principal, never users, "
+                "account users or admins"
+            )
+        self.configured_principals = {owner}
+        self.admit_deployer = False
+        super().__post_init__()
+        if _canonical(owner) in self.target.aliases:
+            raise RuntimeError(
+                "Target App service principal cannot own governed UC objects: "
+                f"{METASTORE_OWNER_ENV} names it"
+            )
+
+    def assert_objects(self, objects: Iterable[object | None]) -> None:
+        items = [item for item in objects if item is not None]
+        for item in items:
+            owner = getattr(item, "owner", None)
+            if isinstance(owner, str) and _is_principal_vocabulary(owner):
+                raise RuntimeError(
+                    "The metastore owner is users, account users or admins, which never "
+                    "satisfy the metastore-owner policy"
+                )
+            if isinstance(owner, str) and owner and owner == owner.strip() and owner != self.metastore_owner:
+                raise RuntimeError(
+                    "Governed UC owner is outside the explicit approved-owner contract: the "
+                    f"metastore owner is not exactly {METASTORE_OWNER_ENV}"
+                )
+        super().assert_objects(items)
+
+
+def metastore_owner_from_env() -> str:
+    """``MIP_UC_METASTORE_OWNER`` as the deploy exports it; blank refuses downstream."""
+
+    return os.environ.get(METASTORE_OWNER_ENV, "")
+
+
 def parse_approved_owner_principals(value: str) -> set[str]:
     return {part.strip() for part in value.split(",") if part.strip()}
 
 
 __all__ = [
+    "METASTORE_OWNER_ENV",
     "ApprovedOwnerPolicy",
+    "MetastoreOwnerPolicy",
     "TargetServicePrincipal",
     "account_client_from_env",
+    "metastore_owner_from_env",
     "parse_approved_owner_principals",
 ]

@@ -19,6 +19,7 @@ evaluates the same diff read-only (``campaign_treatment_access_check``).
 from __future__ import annotations
 
 import argparse
+import functools
 import os
 import re
 from collections.abc import Callable, Iterable
@@ -38,8 +39,10 @@ from tools.databricks.oauth_credential_boundary import (
 )
 from tools.databricks.uc_owner_policy import (
     ApprovedOwnerPolicy,
+    MetastoreOwnerPolicy,
     TargetServicePrincipal,
     account_client_from_env,
+    metastore_owner_from_env,
     parse_approved_owner_principals,
 )
 from tools.databricks.uc_target_identity import workspace_target_identity
@@ -340,8 +343,15 @@ def _assert_effective_privileges(
 
 
 def _assert_metastore_boundary(
-    workspace: WorkspaceClient, *, principal: str, owner_policy: ApprovedOwnerPolicy
+    workspace: WorkspaceClient, *, principal: str, owner_policy: MetastoreOwnerPolicy
 ) -> None:
+    """The metastore's owner is exactly ``MIP_UC_METASTORE_OWNER``; the App holds no authority.
+
+    ``owner_policy`` is the ``MetastoreOwnerPolicy`` (plan 4.12), not the
+    install's approved-owner policy: neither the approved owners nor the
+    deployer may own the metastore unless the profile names them as its owner.
+    """
+
     assignment = workspace.metastores.current()
     metastore_id = str(getattr(assignment, "metastore_id", "") or "").strip()
     if not metastore_id:
@@ -429,7 +439,10 @@ def converge_campaign_treatment_access(
     group_membership_probe: Callable[[AccountClient, str, str, str, str], bool] | None = None,
     assert_single_writer: Callable[[], None] | None = None,
     workspace: WorkspaceClient | None = None,
+    metastore_owner: str | None = None,
 ) -> bool:
+    """Converge the App's treatment grants; ``metastore_owner`` defaults to the env's."""
+
     warehouse = warehouse_id.strip()
     if not warehouse:
         raise ValueError("warehouse_id must be non-empty")
@@ -465,14 +478,35 @@ def converge_campaign_treatment_access(
             )
         )
     )
+    # Both policies share one account client and one membership answer per
+    # group, so a group owning the metastore and a governed object is proven once.
+    shared_account = functools.cache(account_factory or account_client_from_env)
+    answers: dict[tuple[str, str], bool] = {}
+
+    def shared_probe(
+        account: AccountClient, account_sp_id: str, application_id: str, group_id: str, group: str
+    ) -> bool:
+        if (group_id, group) not in answers:
+            answers[(group_id, group)] = membership_probe(
+                account, account_sp_id, application_id, group_id, group
+            )
+        return answers[(group_id, group)]
+
     owner_policy = ApprovedOwnerPolicy(
         workspace=client,
         target=target,
         configured_principals=approved_owner_principals or set(),
-        account_factory=account_factory or account_client_from_env,
-        group_membership_probe=membership_probe,
+        account_factory=shared_account,
+        group_membership_probe=shared_probe,
     )
-    _assert_metastore_boundary(client, principal=principal_name, owner_policy=owner_policy)
+    metastore_policy = MetastoreOwnerPolicy(
+        workspace=client,
+        target=target,
+        account_factory=shared_account,
+        group_membership_probe=shared_probe,
+        metastore_owner=metastore_owner_from_env() if metastore_owner is None else metastore_owner,
+    )
+    _assert_metastore_boundary(client, principal=principal_name, owner_policy=metastore_policy)
     objects = _object_presence(client, catalog=catalog_name)
     catalog_object, schema_object, table_object = objects
     if catalog_object is None:

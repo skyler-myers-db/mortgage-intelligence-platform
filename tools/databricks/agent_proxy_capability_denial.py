@@ -226,6 +226,9 @@ def revoke_all_genie_acls(
                 f"Genie duplicate postflight {space_id}: {type(exc).__name__}: {exc}"
             )
     try:
+        # Absolute, like the managed-capability postflight above: the
+        # agent-proxy's Genie boundary never consults an accepted-exposure
+        # matcher, and the policy refuses a Genie entry naming it (M2-PR4).
         audit_global_no_genie_access(
             workspace,
             application_id=application_id,
