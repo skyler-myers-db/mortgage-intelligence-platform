@@ -639,8 +639,10 @@ run_lakebase_handover_window() {
   fi
   # shellcheck disable=SC1091
   . "$work/plan.env"
+  # Both window modes re-read the private plan and MIP_ACK_QUIESCE_WINDOW.
   "$PYTHON" -m tools.clients.lakebase_handover --window-open \
     --journal "$WR5_JOURNAL" \
+    --window-plan "$WR5_PLAN_JSON" \
     --window-sha256 "$MIP_WR5_WINDOW_SHA256" \
     --handover-sha256 "$MIP_WR5_HANDOVER_SHA256" || return 2
   step "stop the App for the WR5 window (identity-pinned)"
@@ -653,6 +655,7 @@ run_lakebase_handover_window() {
   step "apply the handover's remainder inside the window (one bounded pass)"
   "$PYTHON" -m tools.clients.lakebase_handover --in-window \
     --journal "$WR5_JOURNAL" \
+    --window-plan "$WR5_PLAN_JSON" \
     --window-sha256 "$MIP_WR5_WINDOW_SHA256" || rc=$?
   start_lakebase_handover_window || return 1
   "$PYTHON" -m tools.clients.lakebase_handover --window-close --journal "$WR5_JOURNAL" || return 1

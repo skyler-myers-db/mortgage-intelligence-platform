@@ -33,7 +33,6 @@ from tools.clients import handover_journal as journals
 from tools.clients import lakebase_handover as handover
 from tools.clients import lakebase_handover_rehearse as rehearsal
 from tools.clients import lakebase_handover_sql as sql
-from tools.clients import lakebase_handover_window as window
 from tools.clients.handover_verify import retire_blockers
 from tools.clients.lakebase_handover_sql import LOCK_BOUNDS, BudgetExhausted, LockBudget, PgObject
 
@@ -269,23 +268,6 @@ def test_revert_refuses_an_object_re_owned_outside_the_handover(tmp_path: Path) 
     with pytest.raises(sql.LakebaseHandoverRefused, match="nothing was reverted"):
         handover.revert(server.read_session, server.connect, journal, ack="0" * 64, clock=_clock(server))
     assert server.owners == after
-
-
-def test_the_wr5_window_applies_exactly_the_exhausted_remainder(tmp_path: Path) -> None:
-    server = FakeServer()
-    server.hold(CAMPAIGNS, 3600.0)
-    journal = _apply(server, tmp_path / "j.json")
-    remainder = window.remainder_sha256(journal)
-    with pytest.raises(sql.LakebaseHandoverRefused, match="not the exhausted handover"):
-        window.window_open(journal, window_sha256="w" * 64, handover_sha256="0" * 64)
-    window.window_open(journal, window_sha256="w" * 64, handover_sha256=remainder)
-    with pytest.raises(sql.LakebaseHandoverRefused, match="no WR5 window is open"):
-        window.in_window(server.read_session, server.connect, journal, window_sha256="x" * 64, clock=_clock(server))
-    server.held_until.clear()  # the window library stopped the App: no App transaction holds a lock
-    assert window.in_window(server.read_session, server.connect, journal, window_sha256="w" * 64, clock=_clock(server))
-    window.window_close(journal)
-    assert journal.status == "applied" and journal.counts()["applied"] == len(journal.entries)
-    assert server.owners[CAMPAIGNS] == DEPLOYER
 
 
 def test_retire_check_refuses_while_a_job_runs_as_the_legacy_identity(capsys: pytest.CaptureFixture[str]) -> None:

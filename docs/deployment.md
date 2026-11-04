@@ -2709,7 +2709,13 @@ half-applied (exit 4) and offers exactly two exits:
   deployment that SUCCEEDED from the planned folder (`await-wr5`); its EXIT
   trap starts an App the window left stopped. The digest pins the App's
   identity, its serving deployment, the folder a start snapshots and the
-  journal's remainder. WR5 is for an install no signed blue governs yet (the
+  journal's remainder. Neither Python window mode takes the caller's word for
+  the window: `--window-open` and `--in-window` each read the private plan
+  (`--window-plan`, written by `plan-wr5`) and refuse unless it passed, is
+  intact, is the one `MIP_ACK_QUIESCE_WINDOW` names for this run and pins this
+  journal's remainder; `--in-window` also refuses unless the planned App reads
+  STOPPED (read-only) and the plan's PostgreSQL preconditions still hold.
+  WR5 is for an install no signed blue governs yet (the
   handover runs before adoption, which then signs the deployment the start
   created); a signed install refuses (`window_wr5_signed_install`), since its
   re-pin needs the deployment lease. Predicted: #307's stop and start budgets

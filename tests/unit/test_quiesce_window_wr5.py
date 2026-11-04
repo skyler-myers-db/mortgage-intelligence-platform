@@ -225,6 +225,9 @@ def test_the_entry_runs_plan_journal_stop_apply_start_prove_close_in_order(tmp_p
     assert _kinds(lines) == ["--window-context", "plan-wr5", "--window-open", "stop_app_fail_closed", "--in-window", "databricks apps start", "await-wr5", "--window-close"]
     stop = next(line for line in lines if "stop_app_fail_closed" in line)
     assert "--expected-app-id app-id --expected-client-id app-client --expected-scim-id app-scim" in stop
+    for mode in ("--window-open", "--in-window"):
+        line = next(line for line in lines if mode in line)
+        assert "--window-plan " in line and line.split("--window-plan ")[1].split()[0].endswith("/plan.json"), mode
 
 
 def test_a_refused_plan_never_stops_or_starts(tmp_path: Path) -> None:

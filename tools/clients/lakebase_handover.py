@@ -25,7 +25,8 @@ offers exactly two exits:
   it read-only, stops the App, applies the rest of this journal inside it
   (``--in-window``), starts the App and proves the start; the stop and start
   are the window library's (tools/databricks/stop_primitive_map.py), never
-  this tool's; or
+  this tool's, and both window modes re-read the acknowledged plan
+  (tools/clients/lakebase_handover_window.py); or
 * ``--revert``: the exact inverse from the journal, by the same lock bounds.
 
 Every mode reaches the profile's instance (``MIP_LAKEBASE_INSTANCE``) only: a
@@ -377,6 +378,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--journal", type=Path)
     parser.add_argument("--window-sha256", default="")
     parser.add_argument("--handover-sha256", default="")
+    parser.add_argument("--window-plan", type=Path)
     parser.add_argument("--legacy-identity", default="")
     parser.add_argument("--rehearse-instance", default="")
     parser.add_argument("--rehearse-database", default="")
@@ -392,8 +394,8 @@ def main(argv: list[str] | None = None, *, session: Callable[..., Session] = _pr
         parser.error("this mode needs --journal <path>")
     if args.apply and not args.ack_plan:
         parser.error("--apply needs --ack-plan <sha256>")
-    if (args.window_open or args.in_window) and not args.window_sha256:
-        parser.error("the window modes need --window-sha256 (MIP_ACK_QUIESCE_WINDOW's digest)")
+    if (args.window_open or args.in_window) and not (args.window_sha256 and args.window_plan):
+        parser.error("the window modes need --window-sha256 and --window-plan (the private plan plan-wr5 wrote)")
     try:
         if args.rehearse:
             from tools.clients.lakebase_handover_rehearse import run_rehearsal
@@ -431,30 +433,11 @@ def main(argv: list[str] | None = None, *, session: Callable[..., Session] = _pr
                 return 0
             journal = apply(current.read_session, current.connect, target=current.target, ack=args.ack_plan, journal_path=args.journal, clock=clock)
             return _report_outcome(journal)
-        from tools.clients.lakebase_handover_window import (
-            in_window,
-            remainder,
-            remainder_sha256,
-            window_close,
-            window_open,
-        )
+        if not args.revert:
+            from tools.clients.lakebase_handover_window import run_window_mode
 
+            return run_window_mode(args, current, clock=clock)
         journal = journals.load(args.journal, kind=KIND)
-        if args.remainder:
-            print(f"{_PREFIX} remainder: {len(remainder(journal))} object(s), handover sha256 {remainder_sha256(journal)}")
-            return 0
-        if args.window_open:
-            window_open(journal, window_sha256=args.window_sha256, handover_sha256=args.handover_sha256)
-            print(f"{_PREFIX} window-open: journaled; the window library stops the App next")
-            return 0
-        if args.in_window:
-            finished = in_window(current.read_session, current.connect, journal, window_sha256=args.window_sha256, clock=clock)
-            print(f"{_PREFIX} in-window: {json.dumps(journal.counts(), sort_keys=True)}")
-            return 0 if finished else EXHAUSTED_EXIT
-        if args.window_close:
-            window_close(journal)
-            print(f"{_PREFIX} window-close: {journal.status}")
-            return 0
         document, refusals = revert_plan(current.read_session, journal)
         digest = journals.plan_sha256(document, domain=REVERT_DOMAIN)
         print(f"{_PREFIX} revert plan: {len(document['moves'])} moves, {len(document['noops'])} unmoved, sha256 {digest}")
