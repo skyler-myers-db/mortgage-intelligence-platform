@@ -35,6 +35,19 @@ ADOPT_PATH = (
 )
 PLAN_START, PLAN_END = "# >>> adopt phase: plan >>>", "# <<< adopt phase: plan <<<"
 APPLY_START, APPLY_END = "# >>> adopt phase: apply >>>", "# <<< adopt phase: apply <<<"
+# The window library's functions that stop or start the App (M0-PR8), as
+# tests/unit/test_bundle_plan_gate_deploy_contract.py lists them.
+WINDOW_STOPS = (
+    "stop_unsigned_rebase_app",
+    "stop_journal_owned_first_install_app",
+    "stop_ungoverned_existing_app_before_binding_update",
+    "stop_unproven_candidate_before_rollback",
+    "start_stopped_app_before_activation",
+    "prove_or_restore_signed_blue",
+    "ensure_quiesce_window_open_for",
+    "close_quiesce_window",
+    "stop_and_quiesce_unproven_app",
+)
 ACK = "a" * 64
 # Every way a shell or Python file could stop, start, deploy or update the
 # App, change a grant or permission, or delete (cf. M0-PR8's stop map).
@@ -144,10 +157,16 @@ def test_the_apply_follows_the_lease_heartbeat_and_precedes_every_other_mutation
         "tools.databricks.app_rollback_secret_scope ensure",
         "databricks apps list -o json",
         "APP_FAIL_CLOSED_ARMED=1",
-        "tools.databricks.stop_app_fail_closed",
         'run "$PYTHON" -m tools.databricks.bundle_env deploy -t "$TARGET"',
     ):
         assert apply < text.index(later, steps), later
+    # Since M0-PR8 the steps never stop the App inline: every stop is a call to
+    # a window-library function, so the apply precedes the first call to each.
+    assert "tools.databricks.stop_app_fail_closed" not in text[steps:apply]
+    called = {name: m.start() for name in WINDOW_STOPS if (m := re.search(rf"\b{name}\b", text[steps:]))}
+    assert {"stop_unsigned_rebase_app", "ensure_quiesce_window_open_for"} <= set(called)
+    for name, offset in called.items():
+        assert apply < steps + offset, name
     assert text.count(APPLY_START) == 1 and text.count('run_adopt_phase_apply "$DEPLOY_PHASE"') == 1
     assert text.count('run_adopt_phase_plan "$DEPLOY_PHASE"') == 1
 
