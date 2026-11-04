@@ -137,6 +137,8 @@ class WindowFacts:
     applicable: bool
     not_applicable_reason: str = ""
     journal_state: str = "absent"
+    # The open window's dead-man marker state (M0-PR9; a pointer, never proof).
+    deadman_state: str = "absent"
     binding_state: str = "equal"  # "equal", "diff" or "unresolved"
     binding_lines: tuple[str, ...] = ()
     role_state: str = "exact"  # the App role: "exact" or "drift"
@@ -233,6 +235,7 @@ class WindowPlan:
             "ack": self.ack,
             "refusals": list(self.refusals),
             "admission": dict(self.admission) or {"state": "not_evaluated"},
+            "deadman_recovery": deadman_recovery(self.facts, position=self.position),
         }
 
     def full(self) -> dict[str, Any]:
@@ -329,6 +332,21 @@ def with_admission(plan: WindowPlan, admission: Mapping[str, Any], *, admitted: 
     )
 
 
+def deadman_recovery(facts: WindowFacts, *, position: str) -> bool:
+    """An earlier window's dead-man restarted blue: the run re-pins it under its lease.
+
+    Only before the lease: the recovery (``repin --from-deadman``) runs under
+    the lease before step 0a and closes the journal, so the pre-apply recheck
+    reads it closed or refuses it as still open.
+    """
+
+    return (
+        position == "pre-lease"
+        and facts.journal_state == "window_open"
+        and facts.deadman_state == "deadman_restarted"
+    )
+
+
 def window_plan(facts: WindowFacts, *, position: str, acknowledgement: str) -> WindowPlan:
     """Decide the window from facts; refuse anything a start-and-re-pin cannot close."""
 
@@ -354,7 +372,9 @@ def window_plan(facts: WindowFacts, *, position: str, acknowledgement: str) -> W
             ack="not_required",
         )
     refusals: list[str] = []
-    if facts.journal_state not in {"absent", "closed"}:
+    if facts.journal_state not in {"absent", "closed"} and not deadman_recovery(
+        facts, position=position
+    ):
         refusals.append("window_journal_open")
     if facts.migration_decision == "refuse":
         refusals.append("window_migration_refused")

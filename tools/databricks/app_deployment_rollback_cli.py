@@ -101,6 +101,10 @@ def main(argv: list[str] | None = None) -> int:
     # repin (M0-PR8): the deployment an `apps start` created, proven blue.
     parser.add_argument("--to", dest="repin_to")
     parser.add_argument("--expected-tree-sha256")
+    # repin --from-deadman (M0-PR9): the start the window's dead-man made, under
+    # this run's lease; the start, blue and the tree digest come from the
+    # signed journal, never from an argument or the unsigned marker.
+    parser.add_argument("--from-deadman", action="store_true")
     args = parser.parse_args(argv)
     token = os.environ.get(args.token_env, "").strip()
     if not token:
@@ -138,6 +142,28 @@ def main(argv: list[str] | None = None) -> int:
                 signed_blue,
                 gateway_endpoint=endpoint,
             )
+    elif args.action == "repin" and args.from_deadman:
+        if args.repin_to or args.expected_rollback_deployment_id or args.expected_tree_sha256:
+            parser.error("--from-deadman reads the start, blue and the tree from the signed journal")
+        from tools.databricks.app_deployment_deadman_repin import repin_deadman_start
+
+        repin_deadman_start(
+            workspace,
+            app_name=args.app_name,
+            scope=args.scope,
+            base_url=args.base_url,
+            bearer_token=token,
+            deployment_lease_id=args.deployment_lease_id or "",
+            deployment_source_git_sha=args.deployment_source_git_sha or "",
+            applied_app_resources=reviewed_resources_file(args.app_resource_payload)
+            if args.app_resource_payload
+            else None,
+        )
+        if args.out_env is not None:
+            repinned = verified_signed_last_good_contract(
+                workspace, app_name=args.app_name, scope=args.scope
+            )
+            _write_binding_env(args.out_env, repinned, gateway_endpoint=repinned.gateway_endpoint)
     elif args.action == "repin":
         if not args.repin_to or not args.expected_rollback_deployment_id:
             parser.error("--to and --expected-rollback-deployment-id are required for repin")

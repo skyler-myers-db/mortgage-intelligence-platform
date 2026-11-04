@@ -219,3 +219,64 @@ def test_a_failure_inside_an_activating_contract_window_keeps_the_dead_man(tmp_p
         "APP_UPGRADE_STATE=green_activating_quiesced\nstop_app_after_failed_deploy\n",
     )
     assert result.returncode == 1 and _cancels(calls) == []
+
+
+# --- the next run: repin --from-deadman before step 0a's proof ----------------------
+
+
+def test_the_next_run_re_pins_a_dead_man_restart_under_its_own_lease(tmp_path: Path) -> None:
+    result, calls = _run(
+        tmp_path,
+        "recover_deadman_quiesce_window\necho recovered\n",
+        JOURNAL="window_open",
+        DEADMAN_STATE="deadman_restarted",
+    )
+    assert result.returncode == 0, result.stderr
+    repin = [call for call in calls if "app_deployment_rollback repin" in call]
+    assert len(repin) == 1 and "repin --from-deadman" in repin[0]
+    for flag in ("--deployment-lease-id lease", "--deployment-source-git-sha sha", "--token-env MIP_BEARER_TOKEN"):
+        assert flag in repin[0], flag
+    assert "--to " not in repin[0] and "--expected-rollback-deployment-id" not in repin[0]
+    assert "--app-resource-payload" in repin[0], "this run's bundle payload, if the live bindings are it"
+    assert not any(_has(calls, stop) for stop in ("quiesce_window start", "stop_app_fail_closed", "apps stop"))
+
+
+@pytest.mark.parametrize(
+    ("journal", "marker"),
+    (
+        ("absent", "absent"),
+        ("closed", "deadman_restarted"),
+        ("window_open", "absent"),
+        ("window_open", "deadman_left_stopped"),
+        ("window_open", "deadman_start_failed"),
+        ("window_open", "mismatch"),
+    ),
+)
+def test_anything_but_an_open_window_the_dead_man_restarted_is_left_alone(
+    tmp_path: Path, journal: str, marker: str
+) -> None:
+    result, calls = _run(
+        tmp_path, "recover_deadman_quiesce_window\necho recovered\n", JOURNAL=journal, DEADMAN_STATE=marker
+    )
+    assert result.returncode == 0 and "recovered" in result.stdout
+    assert not _has(calls, "app_deployment_rollback repin")
+
+
+def test_a_restart_the_re_pin_cannot_prove_exits_before_any_step(tmp_path: Path) -> None:
+    result, calls = _run(
+        tmp_path,
+        "recover_deadman_quiesce_window\necho recovered\n",
+        JOURNAL="window_open",
+        DEADMAN_STATE="deadman_restarted",
+        REPIN_RC="1",
+    )
+    assert result.returncode == 2 and "recovered" not in result.stdout
+    assert "not provably the window's blue" in result.stderr
+
+
+def test_step_0a_recovers_before_it_proves_signed_blue() -> None:
+    text = deploy_entrypoint_text()
+    recover = text.index("\n      recover_deadman_quiesce_window\n")
+    assert text.index("mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET", recover - 400) < recover
+    assert recover < text.index('prove_or_restore_signed_blue "$APP_ROLLBACK_BINDING_ENV"', recover)
+    assert text.index('step "acquire signed workspace lease for the exact App deployment"') < recover

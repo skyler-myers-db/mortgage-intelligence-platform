@@ -328,3 +328,26 @@ def read_marker(workspace: Any, *, app_name: str, token: str) -> dict[str, Any] 
     if not isinstance(value, dict):
         raise RuntimeError("the dead-man marker is not an object")
     return value
+
+
+def deadman_status(
+    workspace: Any, *, app_name: str, current: Mapping[str, Any] | None
+) -> tuple[str, str]:
+    """(the marker's state, its start deployment) for the journal's window; read-only.
+
+    ``absent`` when the journal names no window or no marker exists, and
+    ``mismatch`` when the marker does not name that window. A state here is a
+    pointer for the plan and the recovery, never proof.
+    """
+
+    window_sha256 = str((current or {}).get("window_sha256") or "")
+    lease_id = str((current or {}).get("lease_id") or "")
+    if not window_sha256 or not lease_id:
+        return "absent", ""
+    token = window_token(window_sha256, lease_id)
+    marker = read_marker(workspace, app_name=app_name, token=token)
+    if marker is None:
+        return "absent", ""
+    if marker.get("token") != token or marker.get("window_sha256") != window_sha256:
+        return "mismatch", ""
+    return str(marker.get("state") or "unreadable"), str(marker.get("start_deployment_id") or "")

@@ -603,6 +603,61 @@ compensate_quiesce_window_state() {
 }
 
 # ---------------------------------------------------------------------------
+# The next run after a dead-man restart (M0-PR9)
+# ---------------------------------------------------------------------------
+
+# Step 0a, under this run's lease and before the signed-blue proof: an
+# earlier window whose runner died and whose dead-man restarted blue is
+# re-pinned with the window's own proofs (repin --from-deadman). The dead-man's
+# marker is a pointer, never proof: the tool re-proves the start deployment
+# against the signed journal and the App, re-signs the record under this lease
+# and closes the journal. The live bindings it may record are the record's or
+# exactly this run's bundle payload. A refusal writes nothing and exits; like
+# any step-0a failure on an App not yet proven, the EXIT trap then stops and
+# quiesces it (an unproven start never keeps serving). Any other open journal
+# was refused by the pre-lease plan before the lease.
+recover_deadman_quiesce_window() {
+  local env_file payload
+  local -a applied_bindings=()
+  env_file="$(mktemp -t mip-quiesce-window-recover.XXXXXX.env)"
+  chmod 600 "$env_file"
+  if ! "$PYTHON" -m tools.databricks.quiesce_window status \
+    --app-name "$_GRANTS_APP_NAME" \
+    --out-env "$env_file"; then
+    rm -f "$env_file"
+    echo "${RED}[deploy] the quiesce window journal could not be read; nothing was changed.${RST}" >&2
+    exit 2
+  fi
+  # shellcheck disable=SC1090
+  . "$env_file"
+  rm -f "$env_file"
+  if [[ "$MIP_QUIESCE_WINDOW_JOURNAL_STATE" != "window_open" || \
+        "${MIP_QUIESCE_WINDOW_DEADMAN_STATE:-absent}" != "deadman_restarted" ]]; then
+    return 0
+  fi
+  payload="$(mktemp -t mip-quiesce-window-recover-bindings.XXXXXX.json)"
+  chmod 600 "$payload"
+  if collect_quiesce_window_binding_payload "$payload"; then
+    applied_bindings=(--app-resource-payload "$payload")
+  fi
+  step "re-pin the deployment an earlier window's dead-man started (repin --from-deadman, the window's proofs)"
+  if ! run_with_account_identity run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.app_deployment_rollback repin --from-deadman \
+    --app-name "$_GRANTS_APP_NAME" \
+    --scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --base-url "${MIP_APP_URL:?App URL is required for the re-pin health proof}" \
+    --token-env MIP_BEARER_TOKEN \
+    --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --deployment-source-git-sha "$SOURCE_GIT_SHA" \
+    "${applied_bindings[@]}"; then
+    rm -f "$payload"
+    echo "${RED}[deploy] the dead-man's restart is not provably the window's blue; the record and the journal are unchanged, and the EXIT trap stops and quiesces the unproven App (fail closed). The owner break-glass applies.${RST}" >&2
+    exit 2
+  fi
+  rm -f "$payload"
+}
+
+# ---------------------------------------------------------------------------
 # Named stops and starts the step files call
 # ---------------------------------------------------------------------------
 

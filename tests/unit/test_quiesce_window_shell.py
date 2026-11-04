@@ -46,7 +46,7 @@ case "$*" in
     [[ -z "${FAIL_AWAIT:-}" ]] || exit 1
     printf 'MIP_QUIESCE_WINDOW_PROVEN_DEPLOYMENT_ID=deployment-start-1\n' > "$out" ;;
   *"quiesce_window status"*)
-    printf 'MIP_QUIESCE_WINDOW_JOURNAL_STATE=%s\nMIP_QUIESCE_WINDOW_BLUE_RESTORABLE=%s\nMIP_QUIESCE_WINDOW_START_DEPLOYMENT_ID=%s\nMIP_QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID=deployment-blue\nMIP_QUIESCE_WINDOW_TREE_SHA256=t\n' "${JOURNAL:-window_open}" "${RESTORABLE:-1}" "${START_ID:-}" > "$out" ;;
+    printf 'MIP_QUIESCE_WINDOW_JOURNAL_STATE=%s\nMIP_QUIESCE_WINDOW_BLUE_RESTORABLE=%s\nMIP_QUIESCE_WINDOW_START_DEPLOYMENT_ID=%s\nMIP_QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID=deployment-blue\nMIP_QUIESCE_WINDOW_TREE_SHA256=t\nMIP_QUIESCE_WINDOW_DEADMAN_STATE=%s\n' "${JOURNAL:-window_open}" "${RESTORABLE:-1}" "${START_ID:-}" "${DEADMAN_STATE:-absent}" > "$out" ;;
   *"quiesce_window assert-serving"*)
     [[ -z "${NOT_SERVING:-}" ]] || exit 1 ;;
   *"quiesce_window applicable"*)
@@ -61,7 +61,8 @@ case "$*" in
     [[ -z "${PLAN_REFUSES:-}" ]] || exit 2
     printf '{"code": "%s", "reasons": %s}\n' "${PLAN_CODE:-none}" "${PLAN_REASONS_JSON:-[]}" > "$out" ;;
   *"app_deployment_rollback repin"*)
-    printf 'MIP_APP_ROLLBACK_DEPLOYMENT_ID=deployment-start-1\n' > "$out" ;;
+    [[ -z "${REPIN_RC:-}" ]] || exit "$REPIN_RC"
+    [[ -z "$out" ]] || printf 'MIP_APP_ROLLBACK_DEPLOYMENT_ID=deployment-start-1\n' > "$out" ;;
   *"catalog_bootstrap_skip_rule check"*)
     exit "${SKIP_RULE_RC:-0}" ;;
 esac

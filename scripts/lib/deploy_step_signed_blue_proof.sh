@@ -125,6 +125,8 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
         --mode quiesce
       TREATMENT_RUNTIME_QUIESCED=1
       mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+      # A dead-man restart from an earlier window is re-pinned first (M0-PR9).
+      recover_deadman_quiesce_window
       step "prove or reconcile the signed last-good App before non-App mutations"
       APP_ROLLBACK_BINDING_ENV="$(mktemp -t mip-app-blue-binding.XXXXXX.env)"
       prove_or_restore_signed_blue "$APP_ROLLBACK_BINDING_ENV"

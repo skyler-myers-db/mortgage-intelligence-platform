@@ -527,6 +527,11 @@ def _print_plan(summary: dict[str, Any], *, refused: bool) -> None:
             f"{_PREFIX} admission {admitted['state']}: {admitted['remaining_seconds']} s left, "
             f"{admitted['required_seconds']} s required (window + restore + margin)"
         )
+    if summary["deadman_recovery"]:
+        print(
+            f"{_PREFIX} an earlier window's dead-man restarted blue: this run re-pins it under "
+            "the lease (repin --from-deadman, the window's own proofs) before step 0a"
+        )
     if summary["reasons"]:
         print(f"{_PREFIX} window sha256 {summary['window_sha256']}: acknowledge with {ACK_ENV}")
     for code in summary["refusals"]:
@@ -707,6 +712,18 @@ def main(
             ),
             "MIP_QUIESCE_WINDOW_TREE_SHA256": str((current or {}).get("source_tree_sha256") or ""),
         }
+        # The dead-man's marker for this window (M0-PR9): a pointer, never proof.
+        marker_state, marker_start = deadman.deadman_status(
+            workspace, app_name=app_name, current=current
+        )
+        values["MIP_QUIESCE_WINDOW_DEADMAN_STATE"] = marker_state
+        values["MIP_QUIESCE_WINDOW_DEADMAN_START_DEPLOYMENT_ID"] = marker_start
+        # Codes and booleans only: the deploy workflow's always() step records it.
+        print(
+            f"{_PREFIX} status: journal {values['MIP_QUIESCE_WINDOW_JOURNAL_STATE']}, blue "
+            f"restorable {values['MIP_QUIESCE_WINDOW_BLUE_RESTORABLE'] == '1'}, dead-man "
+            f"{marker_state}"
+        )
     if args.out_env is not None:
         args.out_env.write_text(_env_lines(values), encoding="utf-8")
         args.out_env.chmod(0o600)
