@@ -73,6 +73,14 @@
 #                                       # unbind exactly what adopt bound
 #                                       # (both CI-only when live; neither
 #                                       # stops the App or changes a grant)
+#   ./scripts/deploy.sh -t client --deadline <epoch seconds>
+#                                       # this run's hard deadline
+#                                       # (MIP_JOB_DEADLINE_EPOCH, one run
+#                                       # only): a quiesce window opens only
+#                                       # if the budget left covers it, its
+#                                       # watchdog ends the run's in-window
+#                                       # work before it, and its dead-man
+#                                       # restarts blue then
 # The live install predating the client target is reached only through the
 # emergency recipe in docs/deployment.md until it is adopted (M2-PR6).
 #
@@ -149,6 +157,18 @@ while [[ $# -gt 0 ]]; do
     --skip-smoke)   SKIP_SMOKE=1;    shift ;;
     --no-confirm)   NO_CONFIRM=1;    shift ;;
     --verify-source-only) VERIFY_SOURCE_ONLY=1; shift ;;
+    --deadline|--deadline=*)
+      # The job's hard deadline (M0-PR9). CI exports MIP_JOB_DEADLINE_EPOCH at
+      # job start; the flag is a local run's. Validated only when a quiesce
+      # window needs it (tools/databricks/quiesce_window_budget.py).
+      if [[ "$1" == --deadline=* ]]; then
+        MIP_JOB_DEADLINE_EPOCH="${1#--deadline=}"; shift
+      elif [[ $# -lt 2 ]]; then
+        echo "[deploy] missing value for --deadline (expected epoch seconds)" >&2
+        exit 2
+      else
+        MIP_JOB_DEADLINE_EPOCH="$2"; shift 2
+      fi ;;
     -t|--target)
       if [[ "$TARGET_SEEN" -eq 1 ]]; then
         echo "[deploy] target may be supplied only once" >&2
@@ -189,7 +209,7 @@ while [[ $# -gt 0 ]]; do
       fi
       PHASE_SEEN=1 ;;
     -h|--help)
-      sed -n '2,95p' "$0"
+      sed -n '2,103p' "$0"
       exit 0
       ;;
     *)
@@ -431,6 +451,10 @@ QUIESCE_WINDOW_PLAN_JSON=""
 QUIESCE_WINDOW_BLUE_RESTORABLE=1
 QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID=""
 QUIESCE_WINDOW_TREE_SHA256=""
+# The armed dead-man's one-time run (M0-PR9), cancelled when the journal closes.
+QUIESCE_WINDOW_DEADMAN_RUN_ID=""
+# The restorable window's deadline watchdog (M0-PR9), disarmed on the close.
+QUIESCE_WINDOW_WATCHDOG_PID=""
 APP_ROLLBACK_SECRET_SCOPE="${MIP_APP_ROLLBACK_SECRET_SCOPE:-mip-app-rollback}"
 MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS=""
 MIP_APP_ROLLBACK_RECORD_VERSION=""
@@ -549,6 +573,9 @@ APP_RELEASE_ROOT_LEAF=""
 # shellcheck source=scripts/lib/deploy_first_install_lifecycle.sh
 . "$REPO_ROOT/scripts/lib/deploy_first_install_lifecycle.sh"
 trap restore_rendered_sql_fail_closed EXIT
+# The quiesce window's watchdog (M0-PR9) ends an overrunning in-window
+# mutation before the dead-man may start blue: exit 143 into the EXIT trap.
+trap quiesce_window_deadline_reached USR1
 
 # shellcheck source=scripts/lib/deploy_identity_lifecycle.sh
 . "$REPO_ROOT/scripts/lib/deploy_identity_lifecycle.sh"

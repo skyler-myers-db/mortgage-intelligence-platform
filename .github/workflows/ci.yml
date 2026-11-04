@@ -50,7 +50,13 @@ jobs:
     # W5e (+609 tests, +2.7%) and the Python lock refresh: PR #270's five runs
     # took 13m46s-22m09s (40311237233 22m09s, 40378010376 13m46s, the last
     # green run 21m15s), so 25 left as little as 3 min. 35 restores ~13 min.
-    timeout-minutes: 35
+    # The client-install waves outgrew 35: on 2026-11-04 green main runs took
+    # 34.1 and 34.8 min (41800449619, 41805653458), PR #314's green run
+    # 34.9 min, and PR #312's run 41843562043 was cancelled at the cap while
+    # uploading coverage after every test had passed (main pytest done at
+    # 33m14s, the 191 serial Postgres contracts green). 60 restores headroom
+    # until the parallel step is sharded.
+    timeout-minutes: 60
     services:
       # Disposable PostgreSQL for the DSN-gated real-SQL contracts (audit
       # genie-01 item 4); only the serial step below is given its DSN.

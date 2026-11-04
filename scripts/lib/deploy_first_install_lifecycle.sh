@@ -187,6 +187,10 @@ cleanup_failed_first_install_app() {
 
 restore_rendered_sql_fail_closed() {
   local rc=$? compensation_failed=0 app_stopped=0
+  # First: the window watchdog (M0-PR9) must never interrupt this trap.
+  if declare -F disarm_quiesce_window_watchdog >/dev/null; then
+    disarm_quiesce_window_watchdog
+  fi
   if [[ "$rc" -ne 0 ]]; then
     if stop_app_after_failed_deploy; then
       app_stopped=1

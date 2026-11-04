@@ -6,7 +6,9 @@ deploy runs with their own authorities: the bundle plan gate's report (WR4),
 the binding payload diffed against the live App (WR1), the App, verifier and
 jobs-reader role ``--check`` and the jobs reader's grants (WR2) and the
 Lakebase migration plan (WR3). The two full-tree digests are downloaded only
-when a reason exists.
+when a reason exists. An open window's dead-man marker is read too (M0-PR9):
+a restart it records lets the pre-lease plan through to the recovery under
+the lease, which re-proves it (``repin --from-deadman``).
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from tools.databricks.app_start_deployment import (
     last_deployment_is,
     tree_digest,
 )
+from tools.databricks.quiesce_window_deadman import deadman_status
 from tools.databricks.quiesce_window_plan import WindowFacts
 
 NOT_FOUND_RECORD = "no server-owned last-good App rollback contract exists"
@@ -113,7 +116,14 @@ def collect_facts(
 
     if gate_report.get("verdict") != "passed":
         raise ValueError("the bundle plan gate report did not pass")
-    journal_state = journal.state_of(journal.read(workspace, app_name=app_name))
+    current = journal.read(workspace, app_name=app_name)
+    journal_state = journal.state_of(current)
+    # An open window whose dead-man restarted blue is the recovery's (M0-PR9).
+    deadman_state = (
+        deadman_status(workspace, app_name=app_name, current=current)[0]
+        if journal_state in {"window_open", "window_starting"}
+        else "absent"
+    )
     if rebase_unverified_app:
         return WindowFacts(applicable=False, not_applicable_reason="rebase")
     app = app_or_none(workspace, app_name=app_name)
@@ -147,6 +157,7 @@ def collect_facts(
     facts = WindowFacts(
         applicable=True,
         journal_state=journal_state,
+        deadman_state=deadman_state,
         binding_state=binding_state,
         binding_lines=lines,
         role_state=role_state,

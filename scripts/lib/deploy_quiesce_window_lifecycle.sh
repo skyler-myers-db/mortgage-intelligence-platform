@@ -18,8 +18,12 @@
 #                 reviewed functions): a failure converges them back, App up;
 #   window_open   the App was stopped on purpose (journaled): a failure starts
 #                 and re-pins blue if proven, else leaves the window open for
-#                 the dead-man (M0-PR9). A contract migration
-#                 (blue_restorable=0) leaves it stopped until green activates.
+#                 the dead-man (M0-PR9), armed before the stop. A contract
+#                 migration (blue_restorable=0) leaves it stopped until green
+#                 activates, and the dead-man leaves it stopped too.
+# Every path that closes the journal cancels the dead-man run
+# (cancel_quiesce_window_deadman); a path that leaves the window open never
+# does, because the dead-man is then the App's only restart.
 #   contract_activating  a contract window the activation started the App
 #                 for: blue cannot run on the migrated schema, so until green
 #                 is the signed record a failure stops the App and never
@@ -69,8 +73,9 @@ collect_quiesce_window_binding_payload() {
 # pre-lease predicts it before the lease; pre-apply recomputes it under the
 # lease right before the non-App apply (the TOCTOU recheck). A window needs
 # MIP_ACK_QUIESCE_WINDOW equal to its sha256 at both positions, so the reasons
-# it opens are exactly the predicted ones. A refusal exits 2 with the App
-# untouched.
+# it opens are exactly the predicted ones, and a job budget that admits it
+# (MIP_JOB_DEADLINE_EPOCH, M0-PR9; a run with no window needs no deadline). A
+# refusal exits 2 with the App untouched.
 plan_quiesce_window() {
   local position="${1:?window plan position is required}"
   local gate_report="${2:?bundle plan gate report is required}"
@@ -83,6 +88,8 @@ plan_quiesce_window() {
     else
       echo "  would plan read-only: WR1 binding diff, WR2 App and jobs-reader role --check (the core tier has no verifier) and the jobs reader's grants, WR3 Lakebase migration plan, WR4 acked instance update; a window opens only with MIP_ACK_QUIESCE_WINDOW equal to its sha256"
     fi
+    "$PYTHON" -m tools.databricks.quiesce_window_budget describe \
+      --deadline-epoch "${MIP_JOB_DEADLINE_EPOCH:-}"
     return 0
   fi
   probe_dir="$(mktemp -d -t mip-quiesce-window.XXXXXX)"
@@ -191,6 +198,7 @@ plan_quiesce_window() {
     --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
     --plan-gate-report "$gate_report" \
     --rebase-unverified-app "$rebase" \
+    --deadline-epoch "${MIP_JOB_DEADLINE_EPOCH:-}" \
     --out "$QUIESCE_WINDOW_PLAN_JSON" \
     "${plan_args[@]}" || plan_rc=$?
   if [[ "$plan_rc" -ne 0 ]]; then
@@ -243,13 +251,20 @@ ensure_quiesce_window_open_for() {
 }
 
 # TOCTOU-checked open: the tool re-validates the pre-apply plan, its digest and
-# the exact ack, re-proves blue is the App's last deployment, journals
-# window_open and only then stops the App, identity-pinned. The state switches
-# first, so a failure after the journal write reaches the window compensation,
-# which reads the journal rather than trusting this variable.
+# the exact ack, admits it against the job budget (M0-PR9: no stop and no
+# submit without remaining >= predicted window + predicted restore + 15 min),
+# re-proves blue is the App's last deployment, arms the dead-man (it publishes
+# this run's staged release, create-only and byte-verified, submits
+# jobs/window_deadman.py from that folder as a one-time run and waits until
+# that run is RUNNING and wrote its armed marker), admits and re-checks blue
+# again, journals window_open and only then stops the App, identity-pinned.
+# The state switches first, so a failure after the journal write reaches the
+# window compensation, which reads the journal rather than trusting this
+# variable; the armed run id reaches the env file before the journal write,
+# so that path can cancel it.
 open_quiesce_window() {
   local env_file
-  step "open the quiesce window for ${QUIESCE_WINDOW_REASONS} (journal window_open, then stop)"
+  step "open the quiesce window for ${QUIESCE_WINDOW_REASONS} (arm the dead-man, journal window_open, then stop)"
   env_file="$(mktemp -t mip-quiesce-window-open.XXXXXX.env)"
   chmod 600 "$env_file"
   QUIESCE_WINDOW_STATE="window_open"
@@ -257,18 +272,101 @@ open_quiesce_window() {
     "$PYTHON" -m tools.databricks.quiesce_window open \
     --app-name "$_GRANTS_APP_NAME" \
     --plan "${QUIESCE_WINDOW_PLAN_JSON:?pre-apply window plan is required}" \
+    --deadline-epoch "${MIP_JOB_DEADLINE_EPOCH:-}" \
+    --release-id "${APP_RELEASE_ID:?the staged release is required for the dead-man}" \
+    --stage-dir "$APP_RELEASE_STAGE_ROOT/source" \
+    --manifest "$APP_RELEASE_MANIFEST" \
+    --expected-principal "$CLIENT_DEPLOYER" \
+    --expected-target "$TARGET" \
+    --expected-root-leaf "$CLIENT_KEY" \
     --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --deployment-source-git-sha "$SOURCE_GIT_SHA" \
     --expected-app-id "$_EXISTING_APP_ID" \
     --expected-client-id "$_EXISTING_APP_SP_CLIENT_ID" \
     --expected-scim-id "$_EXISTING_APP_SP_SCIM_ID" \
-    --out-env "$env_file" || return 1
+    --out-env "$env_file" || {
+    read_quiesce_window_deadman_run_id "$env_file"
+    return 1
+  }
   # shellcheck disable=SC1090
   . "$env_file"
   rm -f "$env_file"
+  QUIESCE_WINDOW_DEADMAN_RUN_ID="$MIP_QUIESCE_WINDOW_DEADMAN_RUN_ID"
   QUIESCE_WINDOW_BLUE_RESTORABLE="$MIP_QUIESCE_WINDOW_BLUE_RESTORABLE"
   QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID="$MIP_QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID"
   QUIESCE_WINDOW_TREE_SHA256="$MIP_QUIESCE_WINDOW_TREE_SHA256"
+  arm_quiesce_window_watchdog
+}
+
+# The run's own deadline (M0-PR9): inside a restorable window it never keeps
+# mutating once the dead-man may start blue. CI's job timeout kills the runner
+# by the deadline; a local --deadline had nothing that did. The watchdog
+# (tools/databricks/quiesce_window_watchdog.py) sends this run USR1 a minute
+# before the start guard (deploy.sh traps it: quiesce_window_deadline_reached
+# exits 143 once the current command ends) and TERMs every process the run
+# started but the lease heartbeat, so the EXIT trap, which disarms it first,
+# starts and re-pins blue itself or leaves the window to the dead-man. A
+# contract window gets none: the dead-man never starts one, and ending its
+# activation would only keep the App stopped longer.
+arm_quiesce_window_watchdog() {
+  local -a spare=()
+  [[ "${QUIESCE_WINDOW_BLUE_RESTORABLE:-0}" == "1" && \
+     -z "${QUIESCE_WINDOW_WATCHDOG_PID:-}" ]] || return 0
+  if [[ -n "${APP_DEPLOYMENT_LEASE_HEARTBEAT_PID:-}" ]]; then
+    spare=(--spare "$APP_DEPLOYMENT_LEASE_HEARTBEAT_PID")
+  fi
+  # The arguments are checked in the foreground: the window is never left
+  # with a watchdog that exited at once.
+  "$PYTHON" -m tools.databricks.quiesce_window_watchdog --check \
+    --run-pid "$$" --deadline-epoch "${MIP_JOB_DEADLINE_EPOCH:-}" > /dev/null || return 1
+  "$PYTHON" -m tools.databricks.quiesce_window_watchdog \
+    --run-pid "$$" --deadline-epoch "${MIP_JOB_DEADLINE_EPOCH:-}" "${spare[@]}" &
+  QUIESCE_WINDOW_WATCHDOG_PID=$!
+}
+
+# The journal closed, or the EXIT trap begins: the run's own deadline no
+# longer needs enforcing (the trap's start is bounded by the start guard).
+disarm_quiesce_window_watchdog() {
+  local pid="${QUIESCE_WINDOW_WATCHDOG_PID:-}"
+  [[ -n "$pid" ]] || return 0
+  QUIESCE_WINDOW_WATCHDOG_PID=""
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
+# deploy.sh's USR1 trap: the watchdog ended this run's in-window mutation.
+quiesce_window_deadline_reached() {
+  echo "${RED}[deploy] the job deadline's start guard is near inside the quiesce window: this run ends here (exit 143); its EXIT trap restores blue if it still can, else the dead-man does at the deadline.${RST}" >&2
+  exit 143
+}
+
+# A failed open may still have armed the dead-man: its run id is the first line
+# the tool wrote, so the EXIT trap can cancel exactly that run.
+read_quiesce_window_deadman_run_id() {
+  local env_file="${1:?window env file is required}"
+  if [[ -s "$env_file" ]]; then
+    # shellcheck disable=SC1090
+    . "$env_file"
+    QUIESCE_WINDOW_DEADMAN_RUN_ID="${MIP_QUIESCE_WINDOW_DEADMAN_RUN_ID:-}"
+  fi
+  rm -f "$env_file"
+}
+
+# The journal is closed: cancel the dead-man run (cancel only, nothing is
+# deleted). The tool refuses a run that is not this App's dead-man. A cancel
+# that fails never fails the deploy: the dead-man reads the closed journal at
+# its next poll and exits doing nothing.
+cancel_quiesce_window_deadman() {
+  local run_id="${QUIESCE_WINDOW_DEADMAN_RUN_ID:-}"
+  [[ -n "$run_id" ]] || return 0
+  if "$PYTHON" -m tools.databricks.quiesce_window cancel-deadman \
+    --app-name "$_GRANTS_APP_NAME" \
+    --run-id "$run_id"; then
+    QUIESCE_WINDOW_DEADMAN_RUN_ID=""
+    return 0
+  fi
+  echo "${YLW}[deploy] the dead-man run could not be cancelled; it reads the closed journal and exits without a start.${RST}" >&2
+  return 0
 }
 
 # Start, wait for exactly the deployment the start created, require SUCCEEDED,
@@ -293,6 +391,7 @@ close_quiesce_window() {
   run_with_proof_signing_authority \
     "$PYTHON" -m tools.databricks.quiesce_window start \
     --app-name "$_GRANTS_APP_NAME" \
+    --deadline-epoch "${MIP_JOB_DEADLINE_EPOCH:-}" \
     --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --deployment-source-git-sha "$SOURCE_GIT_SHA" \
     --expected-app-id "$_EXISTING_APP_ID" \
@@ -363,6 +462,8 @@ repin_and_close_quiesce_window() {
     --deployment-source-git-sha "$SOURCE_GIT_SHA" || return 1
   QUIESCE_WINDOW_STATE="blue_serving"
   QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID="$proven"
+  disarm_quiesce_window_watchdog
+  cancel_quiesce_window_deadman
 }
 
 # Outside a window the verifier and jobs-reader roles must already be exact:
@@ -438,6 +539,7 @@ close_contract_window_after_capture() {
     --superseded-by-activation \
     --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --deployment-source-git-sha "$SOURCE_GIT_SHA"
+  cancel_quiesce_window_deadman
 }
 
 # ---------------------------------------------------------------------------
@@ -465,9 +567,11 @@ compensate_open_quiesce_window() {
   QUIESCE_WINDOW_TREE_SHA256="$MIP_QUIESCE_WINDOW_TREE_SHA256"
   case "$state" in
     absent|closed)
-      # The open refused before its journal write: the App was never stopped.
+      # The open refused before its journal write: the App was never stopped,
+      # and a dead-man it may have armed has no window to restart.
       rm -f "$env_file"
       QUIESCE_WINDOW_STATE="blue_serving"
+      cancel_quiesce_window_deadman
       return 0
       ;;
     window_open|window_starting)
@@ -556,6 +660,68 @@ compensate_quiesce_window_state() {
     return 1
   fi
   compensate_serving_blue
+}
+
+# ---------------------------------------------------------------------------
+# The next run after a dead-man restart (M0-PR9)
+# ---------------------------------------------------------------------------
+
+# Step 0a, under this run's lease and before the signed-blue proof: an
+# earlier window whose runner died and whose dead-man restarted blue is
+# re-pinned with the window's own proofs (repin --from-deadman). The dead-man's
+# marker is a pointer, never proof: the tool re-proves the start deployment
+# against the signed journal and the App, re-signs the record under this lease
+# and closes the journal. The live bindings it may record are the record's or
+# exactly this run's bundle payload. It runs BEFORE step 0a arms the
+# fail-closed stop and quiesces treatment, so a refusal exits 2 with the App
+# exactly as the dead-man left it, the journal open and the lease released
+# (as the pre-lease window_journal_open refusal leaves it): a transient
+# failure is retried by the next run, and a re-pin already signed is resumed
+# (only the journal close is left). A WR1 window restarted on the dead
+# runner's bindings re-pins only from that same commit (its bundle payload is
+# exactly those bindings), so re-run that commit first. Any other open journal
+# was refused by the pre-lease plan before the lease.
+recover_deadman_quiesce_window() {
+  local env_file payload
+  local -a applied_bindings=()
+  env_file="$(mktemp -t mip-quiesce-window-recover.XXXXXX.env)"
+  chmod 600 "$env_file"
+  if ! "$PYTHON" -m tools.databricks.quiesce_window status \
+    --app-name "$_GRANTS_APP_NAME" \
+    --out-env "$env_file"; then
+    rm -f "$env_file"
+    echo "${RED}[deploy] the quiesce window journal could not be read; nothing was changed.${RST}" >&2
+    exit 2
+  fi
+  # shellcheck disable=SC1090
+  . "$env_file"
+  rm -f "$env_file"
+  # window_starting too: a runner that died between its start intent and the
+  # start leaves it, and its dead-man restarts that window as well.
+  case "${MIP_QUIESCE_WINDOW_JOURNAL_STATE}:${MIP_QUIESCE_WINDOW_DEADMAN_STATE:-absent}" in
+    window_open:deadman_restarted|window_starting:deadman_restarted) ;;
+    *) return 0 ;;
+  esac
+  payload="$(mktemp -t mip-quiesce-window-recover-bindings.XXXXXX.json)"
+  chmod 600 "$payload"
+  if collect_quiesce_window_binding_payload "$payload"; then
+    applied_bindings=(--app-resource-payload "$payload")
+  fi
+  step "re-pin the deployment an earlier window's dead-man started (repin --from-deadman, the window's proofs)"
+  if ! run_with_account_identity run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.app_deployment_rollback repin --from-deadman \
+    --app-name "$_GRANTS_APP_NAME" \
+    --scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --base-url "${MIP_APP_URL:?App URL is required for the re-pin health proof}" \
+    --token-env MIP_BEARER_TOKEN \
+    --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --deployment-source-git-sha "$SOURCE_GIT_SHA" \
+    "${applied_bindings[@]}"; then
+    rm -f "$payload"
+    echo "${RED}[deploy] the dead-man's restart is not provably the window's blue; nothing else ran and the App is left as the dead-man left it, the journal open. Re-run (a WR1 window re-pins from the dead window's own commit); an App no longer serving the dead-man's start needs the owner break-glass.${RST}" >&2
+    exit 2
+  fi
+  rm -f "$payload"
 }
 
 # ---------------------------------------------------------------------------
