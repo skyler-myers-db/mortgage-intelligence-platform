@@ -83,8 +83,12 @@ WHERE namespace.nspname = '{SCHEMA_NAME}'
   AND type_object.typtype IN ('e', 'r', 'd')
   AND type_object.typelem = 0
 """
-# Read-only preconditions PostgreSQL sets for ALTER ... OWNER TO: the session
-# can SET ROLE to the target; for a schema's objects the target has CREATE on
+# Read-only preconditions PostgreSQL sets for ALTER ... OWNER TO, in both
+# directions: the session can SET ROLE to the target (apply); it holds the
+# target's privileges, USAGE (INHERIT) membership, because after the apply the
+# target owns every object and only an owner may change an owner (revert: a
+# SET-only membership applies and then cannot revert, 42501 "must be owner",
+# proven on PostgreSQL 16); for a schema's objects the target has CREATE on
 # the schema; for the schema the session has CREATE on the database; for the
 # database the session has CREATEDB. Which mechanism grants them is spike S3's;
 # the plan refuses before any change when one is missing.
@@ -97,7 +101,9 @@ SELECT current_user::text,
              AND EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = %(schema)s)
             THEN has_schema_privilege(%(target)s, %(schema)s, 'CREATE') ELSE FALSE END,
        has_database_privilege(current_user, current_database(), 'CREATE'),
-       COALESCE((SELECT rolcreatedb OR rolsuper FROM pg_roles WHERE rolname = current_user), FALSE)
+       COALESCE((SELECT rolcreatedb OR rolsuper FROM pg_roles WHERE rolname = current_user), FALSE),
+       CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %(target)s)
+            THEN pg_has_role(current_user, %(target)s, 'USAGE') ELSE FALSE END
 """
 
 

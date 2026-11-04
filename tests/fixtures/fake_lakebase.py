@@ -48,6 +48,10 @@ class SyntaxProblem(Exception):
     sqlstate = "42601"
 
 
+class InsufficientPrivilege(Exception):
+    sqlstate = "42501"
+
+
 def throwaway() -> FakeServer:
     """A rehearsal's throwaway database: no mip_app, so only the rehearsal's own table appears."""
 
@@ -89,7 +93,12 @@ _TAGS = {
 class FakeServer:
     caller: str = LEGACY
     roles: set[str] = field(default_factory=lambda: {LEGACY, DEPLOYER, APP_ROLE})
+    # The caller's memberships, as PostgreSQL 16 grants them: SET (it may give
+    # an object to the role) and INHERIT (it holds the role's privileges, so
+    # it may change the owner of what the role owns).
+    member_of: frozenset[str] = frozenset({DEPLOYER})
     settable: bool = True
+    inherits: bool = True
     # The other PostgreSQL ALTER OWNER preconditions (AUTHORITY_SQL), all held by default.
     authority: dict[str, bool] = field(default_factory=lambda: {"schema_create": True, "database_create": True, "createdb": True})
     objects: list[PgObject] = field(default_factory=objects)
@@ -126,6 +135,14 @@ class FakeServer:
     @contextmanager
     def read_session(self) -> Any:
         yield FakeCursor(self, None, read_only=True)
+
+    def check_owner_change(self, owner: str, new_owner: str) -> None:
+        """PostgreSQL 16's ALTER ... OWNER TO checks: be the owner (or inherit it), and be able to SET to the new one."""
+
+        if owner != self.caller and not (owner in self.member_of and self.inherits):
+            raise InsufficientPrivilege("must be owner")
+        if new_owner != self.caller and not (new_owner in self.member_of and self.settable):
+            raise InsufficientPrivilege("must be able to SET ROLE")
 
     def object_for(self, head: str) -> PgObject:
         for item in self.objects:
@@ -182,8 +199,17 @@ class FakeCursor:
             target = params["target"]
             exists = target in self.server.roles
             grants = self.server.authority
+            member = target in self.server.member_of
             self._rows = [
-                (self.server.caller, exists, exists and self.server.settable, exists and grants["schema_create"], grants["database_create"], grants["createdb"])
+                (
+                    self.server.caller,
+                    exists,
+                    exists and member and self.server.settable,
+                    exists and grants["schema_create"],
+                    grants["database_create"],
+                    grants["createdb"],
+                    exists and member and self.server.inherits,
+                )
             ]
             return
         if statement == INSTALL_SCHEMA_SQL:
@@ -211,6 +237,7 @@ class FakeCursor:
         item = self.server.object_for(match.group("head"))
         if item.key in self.server.fail_on:
             raise SyntaxProblem("injected failure")
+        self.server.check_owner_change(self.server.owners[item.key], match.group("owner").replace('""', '"'))
         release = self.server.held_until.get(item.key, 0.0)
         if release > self.server.now:
             limit = self.txn["bounds"].get("lock_timeout")

@@ -114,13 +114,18 @@ def compute(cursor: Any, *, target: str) -> LakebasePlan:
         raise LakebaseHandoverRefused("the authority probe returned no row")
     legacy, target_exists, target_settable = str(row[0]), bool(row[1]), bool(row[2])
     schema_create, database_create, createdb = bool(row[3]), bool(row[4]), bool(row[5])
+    target_inherited = bool(row[6])
     refusals: list[str] = []
     if target == legacy:
         refusals.append("target_is_legacy")
     if not target_exists:
         refusals.append("target_role_missing")
-    elif not target_settable:
-        refusals.append("target_role_not_settable")
+    else:
+        if not target_settable:
+            refusals.append("target_role_not_settable")
+        if not target_inherited:
+            # The exact inverse needs the target's privileges: refuse before the apply.
+            refusals.append("caller_cannot_revert")
     changes, other = [], 0
     for item in _inventory(cursor):
         if item.owner != legacy:

@@ -169,10 +169,14 @@ def rehearse(
             for statement in SETUP:
                 cursor.execute(statement)
             cursor.execute(AUTHORITY_SQL, {"target": target, "schema": REHEARSAL_SCHEMA})
-            row = cursor.fetchone() or ("", False, False, False)
+            row = cursor.fetchone() or ("", False, False, False, False, False, False)
         missing = tuple(
             code
-            for code, held in (("target_role_not_settable", row[2]), ("target_needs_schema_create", row[3]))
+            for code, held in (
+                ("target_role_not_settable", row[2]),
+                ("target_needs_schema_create", row[3]),
+                ("caller_cannot_revert", row[6]),
+            )
             if not held
         )
         if missing:

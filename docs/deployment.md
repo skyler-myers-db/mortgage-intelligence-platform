@@ -2678,7 +2678,11 @@ python -m tools.clients.lakebase_handover --apply --ack-plan <sha256> --journal 
 
 The plan reads in a server-enforced read-only session; it refuses a missing
 target role (`target_role_missing`), one the session cannot `SET ROLE` to
-(`target_role_not_settable`), an unreviewed object kind, and each other
+(`target_role_not_settable`), one whose privileges the session does not hold
+(`caller_cannot_revert`: after the apply the target owns every object and only
+an owner may change an owner, so a SET-only membership applies and then
+cannot revert; PostgreSQL 16 refuses that revert with 42501), an unreviewed
+object kind, and each other
 precondition PostgreSQL sets for `ALTER ... OWNER TO`: the target's CREATE on
 `mip_app` for the schema's objects (`target_needs_schema_create`), the
 session's CREATE on the database for the schema

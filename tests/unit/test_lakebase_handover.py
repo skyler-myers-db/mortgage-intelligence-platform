@@ -87,6 +87,7 @@ def test_the_plan_reads_only_and_leaves_other_owners_alone() -> None:
     [
         ({"roles": {LEGACY, APP_ROLE}}, "target_role_missing"),
         ({"settable": False}, "target_role_not_settable"),
+        ({"inherits": False}, "caller_cannot_revert"),
         ({"caller": DEPLOYER}, "target_is_legacy"),
         ({"authority": {"schema_create": False, "database_create": True, "createdb": True}}, "target_needs_schema_create"),
         ({"authority": {"schema_create": True, "database_create": False, "createdb": True}}, "caller_needs_database_create"),
@@ -99,6 +100,26 @@ def test_preconditions_refuse_before_any_change(tmp_path: Path, change: dict[str
     with pytest.raises(sql.LakebaseHandoverRefused, match="refuses"):
         _apply(server, tmp_path / "j.json")
     assert server.transactions == [] and not (tmp_path / "j.json").exists()
+
+
+def test_a_set_only_membership_would_apply_and_then_fail_every_revert(tmp_path: Path) -> None:
+    """Why the plan reads USAGE: PostgreSQL 16 lets SET give an object away, only INHERIT take it back.
+
+    The fake checks ALTER ... OWNER TO as PostgreSQL does (the caller owns
+    the object or inherits its owner, and can SET to the new owner); on a
+    local PostgreSQL 16.15 a ``WITH INHERIT FALSE, SET TRUE`` membership
+    applied and then reverted nothing (42501, "must be owner of database").
+    """
+
+    server = FakeServer()
+    _apply(server, tmp_path / "j.json")
+    server.inherits = False  # the membership the plan now refuses, after an apply it allowed
+    journal = journals.load(tmp_path / "j.json", kind=handover.KIND)
+    document, _refusals = handover.revert_plan(server.read_session, journal)
+    with pytest.raises(Exception, match="must be owner") as failed:
+        handover.revert(server.read_session, server.connect, journal, ack=journals.plan_sha256(document, domain=handover.REVERT_DOMAIN), clock=_clock(server))
+    assert getattr(failed.value, "sqlstate", "") == "42501"
+    assert "caller_cannot_revert" in _plan(FakeServer(inherits=False)).refusals
 
 
 def test_an_unreviewed_object_refuses_the_plan() -> None:
@@ -327,6 +348,21 @@ def test_the_rehearsal_never_runs_on_the_installs_own_instance(capsys: pytest.Ca
     argv = ["--rehearse", "--rehearse-instance", "mip-app-state", "--rehearse-database", "scratch"]
     assert handover.main(argv, session=lambda *a: session) == 2
     assert "rehearse_live_instance" in capsys.readouterr().err
+
+
+def test_the_rehearsal_names_a_membership_that_cannot_revert() -> None:
+    server = FakeServer(objects=[], inherits=False)
+    report = rehearsal.rehearse(
+        server.connect,
+        legacy=LEGACY,
+        target=DEPLOYER,
+        hold_s=8.0,
+        concurrent=lambda _connect, hold: VirtualConcurrent(server, hold),
+        clock=server.clock,
+        sleep=server.sleep,
+    )
+    assert not report.passed and report.missing_preconditions == ("caller_cannot_revert",)
+    assert not any(text.startswith("ALTER ") for text in server.statements)
 
 
 def test_the_rehearsal_refuses_an_install_database_before_creating_anything() -> None:
