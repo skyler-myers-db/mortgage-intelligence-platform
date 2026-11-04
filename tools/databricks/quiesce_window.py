@@ -391,7 +391,8 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--plan-gate-report", required=True, type=Path)
     plan.add_argument("--binding-payload", type=Path)
     plan.add_argument("--role-check", choices=("exact", "drift"))
-    plan.add_argument("--verifier-role-check", choices=("exact", "drift"))
+    # "absent": the core tier deploys no verifier (M2-PR3).
+    plan.add_argument("--verifier-role-check", choices=("exact", "drift", "absent"))
     plan.add_argument("--jobs-reader-role-check", choices=("exact", "drift"))
     plan.add_argument("--migration-plan", type=Path)
     # plan: the rebase step 0a takes; applicable: the operator's request, which

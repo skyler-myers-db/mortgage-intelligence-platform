@@ -123,7 +123,7 @@ class WindowFacts:
     binding_state: str = "equal"  # "equal", "diff" or "unresolved"
     binding_lines: tuple[str, ...] = ()
     role_state: str = "exact"  # the App role: "exact" or "drift"
-    verifier_role_state: str = "exact"  # the AI Gateway verifier role
+    verifier_role_state: str = "exact"  # the AI Gateway verifier role; "absent" in the core tier
     jobs_reader_role_state: str = "exact"  # the jobs identity's Lakebase role (M2-PR5)
     jobs_reader_grants: str = "exact"  # its grants, from the plan ("unchecked" if it refused early)
     migration_decision: str = "noop"  # "noop", "apply" or "refuse"
@@ -140,7 +140,10 @@ class WindowFacts:
     artifact_tree_sha256: str = ""
 
     def reasons(self) -> tuple[str, ...]:
-        roles = (self.role_state, self.verifier_role_state, self.jobs_reader_role_state)
+        # A core tier's absent verifier role has nothing to rotate; any other
+        # value than exact is a drift (WR2), never a silent skip.
+        verifier = "exact" if self.verifier_role_state == "absent" else self.verifier_role_state
+        roles = (self.role_state, verifier, self.jobs_reader_role_state)
         # Only a skipped migration job leaves the jobs reader's grants as they
         # are: apply re-grants them inside its WR3 window, refuse runs nothing.
         regrant = self.jobs_reader_grants != "exact" and self.migration_decision not in {

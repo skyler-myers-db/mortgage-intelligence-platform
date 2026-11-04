@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Prove exact effective EXECUTE grants on the reviewed Growth Agent functions."""
+"""Prove exact effective EXECUTE grants on the reviewed Growth Agent functions.
+
+The consumers are the tier's (M2-PR3, plan §4.15): the App, plus the agent
+runtime and the Supervisor proxy in the agentic tier (``--agentic-tier on``,
+the default, so today's arguments are unchanged). The core tier
+(``--agentic-tier off``) deploys neither, so only the App is a consumer and
+the two other IDs are refused.
+"""
 
 from __future__ import annotations
 
@@ -67,13 +74,25 @@ def verify_reviewed_function_execute_grants(
     *,
     catalog: str,
     principals: tuple[str, ...],
+    agentic_tier: str = "on",
 ) -> None:
-    """Require one direct EXECUTE privilege for every production consumer."""
+    """Require one direct EXECUTE privilege for every production consumer.
+
+    The agentic tier proves the App and at least one agent consumer (the
+    deploy passes the runtime and the proxy); the core tier proves the App
+    alone.
+    """
 
     if not _IDENTIFIER_RE.fullmatch(catalog):
         raise ValueError(f"invalid catalog identifier: {catalog!r}")
-    if len(principals) < 2 or any(not principal.strip() for principal in principals):
+    if agentic_tier not in ("on", "off"):
+        raise ValueError("agentic_tier must be exactly on or off")
+    if any(not principal.strip() for principal in principals):
+        raise ValueError("every function consumer application ID must be set")
+    if agentic_tier == "on" and len(principals) < 2:
         raise ValueError("at least two application IDs are required")
+    if agentic_tier == "off" and len(principals) != 1:
+        raise ValueError("the core tier proves exactly one function consumer: the App")
     if len(set(principals)) != len(principals):
         raise ValueError("function consumer application IDs must be distinct")
 
@@ -97,19 +116,30 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--catalog", required=True)
     parser.add_argument("--app-application-id", required=True)
-    parser.add_argument("--agent-runtime-application-id", required=True)
-    parser.add_argument("--agent-proxy-application-id", required=True)
+    parser.add_argument("--agentic-tier", choices=("on", "off"), default="on")
+    parser.add_argument("--agent-runtime-application-id")
+    parser.add_argument("--agent-proxy-application-id")
     args = parser.parse_args(argv)
+    agentic = (args.agent_runtime_application_id, args.agent_proxy_application_id)
+    if args.agentic_tier == "on" and not all(agentic):
+        parser.error(
+            "the agentic tier requires --agent-runtime-application-id and "
+            "--agent-proxy-application-id"
+        )
+    if args.agentic_tier == "off" and any(value is not None for value in agentic):
+        parser.error("the core tier has no agent runtime or proxy consumer; omit both IDs")
+    principals: tuple[str, ...] = (
+        args.app_application_id,
+        *(value for value in agentic if value is not None),
+    )
     verify_reviewed_function_execute_grants(
         deployment_workspace_client(),
         catalog=args.catalog,
-        principals=(
-            args.app_application_id,
-            args.agent_runtime_application_id,
-            args.agent_proxy_application_id,
-        ),
+        principals=principals,
+        agentic_tier=args.agentic_tier,
     )
-    print("[function-grants] verified nine exact effective direct EXECUTE grants")
+    count = {3: "nine", 1: "three"}[len(principals)]
+    print(f"[function-grants] verified {count} exact effective direct EXECUTE grants")
     return 0
 
 

@@ -35,6 +35,11 @@ from tools.clients.shapes import (
     is_platform_name,
     is_vocabulary,
 )
+from tools.databricks.m2m_identity_contract import (
+    DEPLOY_CLIENT_ID_ENV,
+    lease_writer,
+    required_roles,
+)
 
 _JSON_FIELDS = frozenset(JSON_LEAF_CLASS)
 # Fields whose value names a URL origin: the hostname is what logs print bare.
@@ -50,6 +55,10 @@ _COTALITY_SOURCE_VARIABLES = (
     "cotality_source_schema",
     "cotality_source_table_prefix",
 )
+# The migrate job's verifier flag (databricks.yml, mip_lakebase_migrate): the
+# bundle default requires the dedicated verifier; the core tier asserts its
+# absence instead (jobs/lakebase_migrate.py).
+CORE_TIER_VERIFIER_FLAG = "--ai-gateway-verifier-absent"
 # A mask this short blanks fragments of ordinary words (``qa`` in ``aqua``).
 MIN_MASK_LENGTH = 3
 # The words refusal lines and exposure decisions are made of: the schema
@@ -153,6 +162,11 @@ def client_target_vars(profile: ClientProfile) -> dict[str, str]:
         "deployer_principal": profile.identity_ids.deployer.lower(),
         "jobs_principal": jobs_application_id.lower(),
     }
+    # The core tier has no verifier (plan §4.15): the migrate job asserts its
+    # absence. The agentic tier keeps the bundle default, so its variables are
+    # unchanged.
+    if profile.agentic_tier == "off":
+        variables["require_ai_gateway_verifier"] = CORE_TIER_VERIFIER_FLAG
     if profile.dashboard_parent_path is not None:
         variables["dashboard_parent_path"] = profile.dashboard_parent_path
     if profile.lakebase_readable_secondaries is not None:
@@ -167,16 +181,24 @@ def client_target(profile: ClientProfile) -> dict[str, str]:
 
     The client key, the install class, the profile's workspace host, the
     install policy's closed values (tools/clients/policy.py: App env, demo
-    feeds, presenter mode, weekly refresh) and the ``client`` target's
-    variables as ``BUNDLE_VAR_*`` exports, so a direct ``databricks bundle run
-    -t client`` addresses the same root as tools/databricks/bundle_env.py.
+    feeds, presenter mode, weekly refresh, agentic tier), the tier's identity
+    contract (tools/databricks/m2m_identity_contract.py: the client-id names
+    of its lease writer and of its roles, never their values) and the
+    ``client`` target's variables as ``BUNDLE_VAR_*`` exports, so a direct
+    ``databricks bundle run -t client`` addresses the same root as
+    tools/databricks/bundle_env.py.
     """
 
+    policy = install_policy(profile)
     return {
         "MIP_CLIENT": profile.client,
         "MIP_INSTALL_CLASS": profile.install_class,
         "DATABRICKS_HOST": profile.databricks_host,
-        **policy_controls(install_policy(profile)),
+        **policy_controls(policy),
+        "MIP_TIER_LEASE_WRITER": DEPLOY_CLIENT_ID_ENV[lease_writer(policy.agentic_tier)],
+        "MIP_TIER_IDENTITIES": ",".join(
+            DEPLOY_CLIENT_ID_ENV[role] for role in required_roles(policy.agentic_tier)
+        ),
         **{f"BUNDLE_VAR_{name}": value for name, value in client_target_vars(profile).items()},
     }
 
@@ -211,7 +233,9 @@ def bundle_vars(profile: ClientProfile) -> dict[str, str]:
         value = getattr(profile, variable)
         if value is not None:
             variables[variable] = value
-    if profile.identity_ids.verifier is not None:
+    # Only the agentic tier binds a verifier; the core tier keeps the
+    # placeholder, which its migrate job reads as absent.
+    if profile.identity_ids.verifier is not None and profile.agentic_tier == "on":
         variables["ai_gateway_verifier_client_id"] = profile.identity_ids.verifier
     return variables
 

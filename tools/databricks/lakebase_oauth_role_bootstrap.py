@@ -21,6 +21,9 @@ from jobs.lakebase_migration_contracts import (
     _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_SHA256,
 )
 from jobs.lakebase_migration_provider_plane import _postflight_public_schema_boundary
+from tools.databricks.lakebase_oauth_role_bootstrap_control import (
+    bootstrap_control_credentials,
+)
 from tools.databricks.lakebase_oauth_role_profile import (
     assert_oauth_security_label,
     read_profile,
@@ -33,8 +36,6 @@ _ROLE_FUNCTION_SOURCE_SHA256 = _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_SHA256
 _ROLE_FUNCTION_SOURCE_BYTES = _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_BYTES
 _SDK_HTTP_TIMEOUT_SECONDS = 30
 _SDK_RETRY_TIMEOUT_SECONDS = 30
-_CONTROL_CLIENT_ID_ENV = "MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID"
-_CONTROL_CLIENT_SECRET_ENV = "MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET"
 
 
 def _bounded_bootstrap_workspace_client(**kwargs: Any) -> WorkspaceClient:
@@ -360,16 +361,9 @@ def _create_login_only_role_locked(
         ownership_marker=bootstrap_external_id,
         signing_key=marker_signing_key,
     )
-    control_application_id = os.environ.get(_CONTROL_CLIENT_ID_ENV, "").strip()
-    control_client_secret = os.environ.get(_CONTROL_CLIENT_SECRET_ENV, "").strip()
-    if not control_application_id or not control_client_secret:
-        raise RuntimeError(
-            "fresh OAuth-M2M Lakebase bootstrap control credentials are required"
-        )
-    if control_application_id == application_id:
-        raise RuntimeError(
-            "Lakebase bootstrap control identity must be distinct from the target"
-        )
+    control_application_id, control_client_secret = bootstrap_control_credentials(
+        os.environ, target_application_id=application_id
+    )
     bootstrap_sp: Any | None = None
     bootstrap_application_id = ""
     bootstrap_scim_id = ""

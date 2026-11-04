@@ -468,11 +468,13 @@ def test_bundle_deployment_bind_uses_the_same_reviewed_workspace_contract(
     assert captured["check"] is False
 
 
-def test_direct_bundle_deploy_refuses_missing_remote_verifier_binding(
+def test_a_core_tier_bundle_deploy_binds_the_verifier_absence_not_a_verifier(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    # A core-tier profile has no verifier, so the deploy still has none to bind.
+    # A core-tier profile has no verifier (M2-PR3): the deploy binds none, and
+    # the migrate job is handed the tier's absence flag instead of the
+    # requirement. Before the tier was read, this deploy was refused.
     core_ids = {role: value for role, value in IDENTITY_IDS.items() if role not in {"verifier", "runtime", "proxy"}}
     env_local = _client_env_local(
         tmp_path, MIP_AGENTIC_TIER="off", MIP_IDENTITY_IDS_JSON=json.dumps(core_ids)
@@ -480,16 +482,19 @@ def test_direct_bundle_deploy_refuses_missing_remote_verifier_binding(
     with env_local.open("a", encoding="utf-8") as extra:
         extra.write("DATABRICKS_WAREHOUSE_ID=warehouse-id\nGENIE_SPACE_ID=genie-space-id\n")
     monkeypatch.setattr(bundle_env, "ENV_LOCAL", env_local)
+    monkeypatch.setattr(bundle_env, "BUNDLE_ROOT", tmp_path / "bundle-root")
+    monkeypatch.setattr(bundle_env.render_sql, "render", lambda **_kwargs: (1, 0, 0))
     monkeypatch.setattr(
         bundle_env,
         "_pinned_genie_space_id",
         lambda _env, _profile: "genie-space-id",
     )
-    subprocess_called = False
+    # An ambient verifier flag never survives: the profile's tier decides it.
+    monkeypatch.setenv("BUNDLE_VAR_require_ai_gateway_verifier", "--require-ai-gateway-verifier")
+    seen: dict[str, str] = {}
 
     def fake_run(_command: list[str], *, env: dict[str, str], check: bool) -> Any:
-        nonlocal subprocess_called
-        subprocess_called = True
+        seen.update(env)
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(bundle_env.subprocess, "run", fake_run)
@@ -499,8 +504,44 @@ def test_direct_bundle_deploy_refuses_missing_remote_verifier_binding(
         ["bundle_env.py", "deploy", "-t", "client", "--select", "jobs.refresh_gold"],
     )
 
-    assert bundle_env.main() == 2
-    assert subprocess_called is False
+    assert bundle_env.main() == 0
+    assert seen["BUNDLE_VAR_ai_gateway_verifier_client_id"] == "00000000PLACEHOLDER"
+    assert seen["BUNDLE_VAR_require_ai_gateway_verifier"] == "--ai-gateway-verifier-absent"
+
+
+def test_an_agentic_tier_bundle_deploy_keeps_the_verifier_requirement_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_local = _client_env_local(tmp_path)
+    with env_local.open("a", encoding="utf-8") as extra:
+        extra.write("DATABRICKS_WAREHOUSE_ID=warehouse-id\nGENIE_SPACE_ID=genie-space-id\n")
+    monkeypatch.setattr(bundle_env, "ENV_LOCAL", env_local)
+    monkeypatch.setattr(bundle_env, "BUNDLE_ROOT", tmp_path / "bundle-root")
+    monkeypatch.setattr(bundle_env.render_sql, "render", lambda **_kwargs: (1, 0, 0))
+    monkeypatch.setattr(
+        bundle_env,
+        "_pinned_genie_space_id",
+        lambda _env, _profile: "genie-space-id",
+    )
+    monkeypatch.setenv("BUNDLE_VAR_require_ai_gateway_verifier", "--ai-gateway-verifier-absent")
+    seen: dict[str, str] = {}
+
+    def fake_run(_command: list[str], *, env: dict[str, str], check: bool) -> Any:
+        seen.update(env)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(bundle_env.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        bundle_env.sys,
+        "argv",
+        ["bundle_env.py", "deploy", "-t", "client", "--select", "jobs.refresh_gold"],
+    )
+
+    assert bundle_env.main() == 0
+    assert seen["BUNDLE_VAR_ai_gateway_verifier_client_id"] == IDENTITY_IDS["verifier"]
+    # The bundle default (--require-ai-gateway-verifier) applies; nothing overrides it.
+    assert "BUNDLE_VAR_require_ai_gateway_verifier" not in seen
 
 
 def test_bundle_deploy_preserves_reviewed_genie_name_over_dotenv(

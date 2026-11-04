@@ -569,19 +569,24 @@ def acquire(
     *,
     app_name: str,
     source_git_sha: str,
-    writer_application_id: str | None = None,
+    writer_application_id: str,
     expired_recovery_lease_id: str | None = None,
     now: datetime | None = None,
 ) -> str:
+    """Acquire the signed lease for ``writer_application_id``, its delegated writer.
+
+    The writer is the tier's (``m2m_identity_contract.lease_writer``: the agent
+    runtime in the agentic tier, the release probe in the core tier), named by
+    the caller; no ambient identity ever stands in for it (M2-PR3).
+    """
+
     app_name = app_name.strip()
     _path(app_name)
     source_git_sha = _source_sha(source_git_sha)
     current = now or _now()
     holder = _holder(workspace)
     lease_holder.holder_acl_field(workspace, holder)  # resolve the ACL kind before any write
-    writer = (
-        writer_application_id or os.environ.get("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", "")
-    ).strip()
+    writer = (writer_application_id or "").strip()
     if not writer or writer == holder:
         raise ValueError("App deployment lease requires a distinct writer application ID")
     existing = _download(workspace, app_name=app_name)

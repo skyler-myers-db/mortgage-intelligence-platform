@@ -1839,6 +1839,53 @@ restore, prior app snapshots, source-regression rollback via
 and governed-action HMAC key rotation, use
 [`docs/disaster-recovery.md`](disaster-recovery.md).
 
+### The agentic tier (`MIP_AGENTIC_TIER`, M2-PR3)
+
+The client profile's `MIP_AGENTIC_TIER` decides which reserved M2M identities a
+release uses (plan §4.15). `resolve_client_profile`, the first step of
+`./scripts/deploy.sh`, reads it from the client-target view together with its
+identity contract (`tools/databricks/m2m_identity_contract.py`): the client-id
+name of the signed lease's writer and of every role the tier deploys with. A
+view with no tier, another value than `off` or `on`, or a contract that
+disagrees with its tier exits 2 before any other step; no step has a default
+tier.
+
+| Site | `on` (agentic, client #1 today) | `off` (core) |
+|---|---|---|
+| identities | normal, operator2, admin, release probe, verifier, agent runtime, Supervisor proxy | normal, operator2, admin, release probe |
+| per-run credential checks | all seven | the four core ones |
+| model-attestation key | required | not used |
+| signed lease writer (`lease_writer`) | agent runtime | release probe |
+| pre-stop probes | `--runtime-application-id` and `--verifier-application-id`; Supervisor and Genie clauses for App, runtime and verifier | `--agentic-tier off`, neither id; no Supervisor listing or clause, so the App may hold no Supervisor serving access; the Genie clause audits the App (on a first install, its future service principal as a `users` member) |
+| runtime UC audit, verifier Lakebase role, runtime/verifier/proxy isolation audits | run | skipped |
+| Lakebase bootstrap control identity (`run_with_lakebase_bootstrap_authority`) | the agent runtime, required up front | the release probe, required up front (it has no Lakebase role and is never a converged target) |
+| UC grants and the reviewed-function reconcile | App, runtime and proxy | App only (`verify_reviewed_function_execute_grants --agentic-tier off`) |
+| migrate job verifier flag (`var.require_ai_gateway_verifier`) | the bundle default `--require-ai-gateway-verifier` | `--ai-gateway-verifier-absent`, no verifier bound |
+| quiesce window plan (`plan_quiesce_window`, M0-PR8) | App, verifier and jobs-reader role checks; the migration plan requires the verifier | App and jobs-reader role checks; `--verifier-role-check absent` (no WR2 from it, pinned in the digest); the migration plan asserts `--ai-gateway-verifier-absent` |
+| App payload | unchanged | `MIP_AGENT_ORCHESTRATOR=0`, `MIP_AI_GATEWAY=0`; an operator value turning either on refuses |
+| capability preflight (`tools/clients/capabilities.py`, in the live checks) | Apps, Lakebase, Genie, SQL warehouses, Model Serving, MLflow (the pre-stop probes' Supervisor listing proves the Supervisor API) | Apps, Lakebase, Genie, SQL warehouses |
+
+The agentic tier's plan, bundle variables and App payload are byte-identical
+to those before the tier was read (the PR's artifact-hash proof;
+`tests/unit/test_agentic_tier_dry_run.py` pins its tier-aware lines). The
+emergency recipe builds the agentic payload by default and keeps its 32 env
+names.
+
+**A core release refuses before the lease.** The core tier is tier-aware
+through the Lakebase migration and the grant and reconcile steps, but publish,
+activation, signed capture, the signed-blue restore and the agentic
+provisioning, cutover and evaluation still need the agentic identities (the
+signed rollback record pins the Gateway resource contract). A core release
+would therefore mutate the install through the grants and then stop at step 5
+on every attempt, so it refuses instead, after every read-only check (the live
+checks, the pre-stop probes in their core mode and the bundle plan gate) and
+before the lease, in a dry run too. `--phase plan` and the adopt phases run in
+the core tier, over an existing App as well. The step-5 stop stays as that
+refusal's defence in depth. `tests/unit/test_core_tier_release_sandbox.py`
+pins the refusal, and, with the refusal excised from a sandbox clone, runs the
+sites behind it for real with the four core identities. Building the core
+activation path, and with it a core release, is a follow-up.
+
 ### PII salt (write-once)
 
 The silver SQL and the Lakeflow feature pipeline hash PII with
@@ -2248,6 +2295,10 @@ The client profile's `MIP_ACCEPTED_EXPOSURE_JSON` may accept one exactly
   those in. Grants that can never be accepted (reaching the verifier, or
   elevated for the agent-runtime) are notes with their remedy. Under GitHub
   Actions every identifying value is registered as a mask before it prints.
+  A core-tier install (`MIP_AGENTIC_TIER=off`) deploys no agent-runtime or
+  verifier: run it with `--agentic-tier off` and neither id, and it lists the
+  Genie grants reaching the App alone, as the core pre-stop probe reads them.
+  It has no UC candidates, so `--catalog` refuses there.
 - **Metastore owner.** `converge_campaign_treatment_access` and the pre-stop
   owner probe judge the metastore with `MetastoreOwnerPolicy`:
   `ApprovedOwnerPolicy` over exactly `MIP_UC_METASTORE_OWNER`, without the

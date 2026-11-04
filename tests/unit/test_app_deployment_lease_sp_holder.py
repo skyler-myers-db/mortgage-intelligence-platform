@@ -21,7 +21,6 @@ def _keys(monkeypatch: pytest.MonkeyPatch) -> None:
         "MIP_AI_GATEWAY_PROOF_VERIFY_KEY",
         derive_gateway_proof_verify_key(SIGNING_KEY),
     )
-    monkeypatch.setenv("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", WRITER_ID)
 
 
 class _ServicePrincipals:
