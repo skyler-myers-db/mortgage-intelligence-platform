@@ -2360,6 +2360,126 @@ through the pre-lease gate and exits before the lease. A live plan phase is
 CI-only (`plan is CI-only; use --dry-run or make bundle-validate`); locally,
 `--phase plan --dry-run` prints the same steps without any Databricks call.
 
+### Keep blue serving: the one bounded quiesce window (M0-PR8)
+
+A release keeps the signed last-good App (blue) serving. It stops the App
+only for a **window reason** the read-only plan predicted
+(`tools/databricks/quiesce_window_plan.py`):
+
+- **WR1** binding diff: the App's live resource bindings differ from the
+  bundle's (any diff, until spike S2 proves an unchanged database binding
+  leaves a running App and its role alone), or a binding id is unresolved;
+- **WR2** Lakebase role rotation: `converge_lakebase_oauth_role --check`
+  drifts for the App role, the AI Gateway verifier role or the jobs
+  identity's `jobs_reader` role (M2-PR5), or a `noop` migration plan reads
+  the jobs reader's grants as drift, an absent role included (a rotation
+  drops the role's grants, which only the migration job re-applies, and that
+  job runs only inside a window). Blue never reads as the jobs reader, so its
+  re-grant keeps blue restorable. The first roll-forward that brings the
+  jobs identity to an installed signed blue therefore plans a WR2 window to
+  create and grant that role. The grants alone are no reason under an
+  `apply` plan: its WR3 window runs the migration job, which re-grants the
+  role, and a pending migration that adds or drops a `mip_app` table reads
+  as grant drift even for exact grants, so a WR2 there would only open the
+  window earlier, before the role converges. A `refuse` plan refuses the
+  window (`window_migration_refused`) whatever the grants read, and an early
+  refusal that never reached them records them as `unchecked`;
+- **WR3** pending migration: the Lakebase migration plan decides `apply`;
+- **WR4** acknowledged Lakebase instance update (the plan gate's digest).
+
+The plan runs after each bundle plan gate: before the lease (`pre-lease`, so
+`--phase plan` prints it) and again under the lease right before the non-App
+apply (`pre-apply`, the time-of-check recheck). Its private report is written
+mode 0600 and its public line carries codes, booleans, counts and digests
+only. A window opens only when `MIP_ACK_QUIESCE_WINDOW` equals the plan's
+sha256 at both positions; that sha256 covers the reasons, blue's deployment,
+its restore source and that folder's full-tree digest, the env-name set, the
+role and jobs-reader grant states and the migration's compatibility, so the
+opened reasons are exactly the predicted ones. Export the digest for that run only. It is a shell-only, one-run value,
+never a `.env.local` line. (The owner hardware-key operation attestation the
+plan names is deferred; this exact digest ack stands in for it.) No reason
+needs no ack, and a reason that appears only at the recheck refuses.
+
+**The window** (`scripts/lib/deploy_quiesce_window_lifecycle.sh`) opens at the
+first mutation that needs it (WR4 before the non-App apply, WR1 before the
+binding update, WR2 before the role convergence, WR3 before the migration):
+it re-validates the plan and the ack, re-proves blue is the App's last
+deployment, journals `window_open` (`<lease root>/<app>.quiesce-window.json`,
+signed) and then stops the App, identity-pinned. It closes right after the
+Lakebase migration: journal `window_starting`, then `apps start`; wait for
+**the deployment the start created** (never "active changed"); require
+SUCCEEDED; prove its source is blue's restore source, that folder's full-tree
+digest is unchanged, its `/src/` snapshot has the same digest and its env-name
+set is the signed record's; `app_deployment_rollback repin --to <id>` signs a
+new record version with the same provenance and `predecessor_deployment_id`,
+checking health against the re-pinned id; then the journal closes. After a
+WR1 window blue restarted on the bundle's bindings, so the re-pin records the
+App's live bindings when they are exactly the applied payload
+(`--app-resource-payload`) or the record's own, and refuses anything else;
+the next run's step 0a then has nothing to revert on the serving App. Any
+failure after the start call (a failed proof, an unreadable pending id, a
+vanished restore folder, an SDK error) stops the App again, identity-pinned,
+journals `window_refused` and leaves the window for the dead-man (M0-PR9). A
+start whose id was never journaled (`window_starting`) resumes from the App's
+pending deployment; it is never started twice. A
+contract migration (`blue_restorable` false) keeps the App stopped until the
+green activation, and that outage is part of the acknowledged digest. The
+activation's own start (an App must run to take a deploy) serves blue's last
+deployment on the migrated schema, with treatment authority quiesced, until
+green's snapshot deploy replaces it; that interval is part of the same
+acknowledged outage. The journal stays open through the activation
+(`contract_activating`) and closes only once green is the signed record and
+the App's active deployment. Until then any failure, in the EXIT trap or the
+final-proof rollback, stops the App and refuses the tier-b blue restore.
+
+With no reason, nothing stops: the binding update is skipped (the bindings
+are re-read under the lease and must still equal the bundle's), the App role
+converger refuses any rotation the plan did not predict, the verifier and
+jobs-reader roles are re-checked under the lease right before their converges
+(drift exits 2, blue serving), and the migration job is skipped because the
+pre-apply plan proved it a noop with a passing verify and the jobs reader's
+grants exact.
+
+**EXIT-trap states** (`stop_app_after_failed_deploy`): `blue_serving` never
+stops the App and converges runtime access with it up; `blue_degraded` (blue
+serving while its synced-catalog access or the reviewed functions are
+mutated) also re-reconciles those; `window_open` starts and re-pins blue when
+every proof holds, otherwise leaves the window to the dead-man;
+`contract_activating` stops the App, never restores blue and retains the
+lease. The rollback's
+`ensure` and `restore` re-pin the same way when they start a stopped blue
+(tier a, only while blue is the App's last deployment); `restore` redeploys
+the signed snapshot (tier b) otherwise.
+
+**Catalog bootstrap skip rule** (attack O12,
+`tools/databricks/catalog_bootstrap_skip_rule.py`). `mip_init_catalog_schemas`
+republishes the reviewed functions, an EXECUTE gap while blue serves. It is
+skipped only when the live `information_schema` routines, parameters and DDL
+contract columns and the treatment table's properties hash-equal the rendered
+sources (read-only, under the lease, right before the job); the grants are
+still reconciled and proven. Otherwise it runs and the PlanReport's
+`execute_gap` predicts the interval and the republished functions. A function
+clause the live side does not compare (a parameter `DEFAULT` or `COMMENT`,
+`SQL SECURITY`, `LANGUAGE`, `READS SQL DATA`), a crashed rule or an unreadable
+rendered source always means "run"; only the rule's own exit 0 skips.
+
+**Stop contract** (attack O16). The window library and the EXIT-trap
+compensation are the only shell files that stop or start the App, and
+`tools/databricks/stop_primitive_map.py` maps every SDK `apps.stop`, `start`,
+`deploy` and `update` call in `tools/` (also through a name bound from
+`.apps`) to the CLI modes that reach it; only those two files may call a
+mutating mode, by `-m` or by its `tools/databricks/<module>.py` path (the mode
+is read from that one command's own tokens), or import a stop module in a
+heredoc or `-c`.
+
+**Owed live confirmations.** Spike S7 (a throwaway App): that `apps start`
+creates a new deployment from `default_source_code_path`, whether the env
+config carries over, and the start of a FAILED-active App. Spike S2: whether
+`apps update` with an unchanged database binding touches a running App or its
+role. Until then the code assumes the worst case for both. The live shape of
+`information_schema.routines.routine_definition` is also derived, not
+captured; a reformatted body only ever means "run".
+
 ### Adopting an existing install (M2-PR6, bind only)
 
 An install another identity deployed keeps its direct-engine bundle state in

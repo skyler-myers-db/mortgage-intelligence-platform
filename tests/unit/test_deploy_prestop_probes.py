@@ -1077,9 +1077,10 @@ def test_the_probe_runs_read_only_before_the_lease_and_every_app_stop() -> None:
     lease_root = script.index("tools.databricks.app_deployment_lease recovery-root", steps)
     rollback_scope = script.index("tools.databricks.app_rollback_secret_scope ensure", steps)
     foreign_uc = script.index("tools.databricks.audit_agent_runtime_foreign_uc_access", steps)
-    first_stop = script.index("tools.databricks.stop_app_fail_closed", steps)
+    # Every stop is a window-library function the step files call (M0-PR8).
+    first_stop = script.index("run stop_unsigned_rebase_app", steps)
     quarantine = script.index("--mode quarantine", steps)
-    signed_blue = script.index("tools.databricks.app_deployment_rollback ensure", steps)
+    signed_blue = script.index('prove_or_restore_signed_blue "$APP_ROLLBACK_BINDING_ENV"', steps)
     # The EXIT trap stops the App on any failure once this is armed; a probe
     # refusal must exit while it is still 0, or refusing would stop the App.
     first_arm = script.index("APP_FAIL_CLOSED_ARMED=1", steps)
@@ -1111,6 +1112,9 @@ def test_the_probe_runs_after_deployer_auth_and_the_runtime_secret_check() -> No
         "--mode quarantine",
         "apps stop",
         "APP_FAIL_CLOSED_ARMED=1",
+        "stop_unsigned_rebase_app",
+        "prove_or_restore_signed_blue",
+        "ensure_quiesce_window_open_for",
     ):
         assert app_stop not in before_probe, app_stop
     # One bounded authority only: the owner policy resolves owners in account

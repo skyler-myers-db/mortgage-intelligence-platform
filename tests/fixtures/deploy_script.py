@@ -25,6 +25,9 @@ DEPLOY_REVIEWED_LIBRARIES = (
     _LIB / "deploy_verifier_gateway_lifecycle.sh",
     _LIB / "deploy_cutover_journal_lifecycle.sh",
     _LIB / "deploy_supervisor_creation_lifecycle.sh",
+    # Written for the quiesce window (M0-PR8): the only shell file besides the
+    # EXIT-trap compensation that stops or starts the App.
+    _LIB / "deploy_quiesce_window_lifecycle.sh",
 )
 # Function-only libraries sliced verbatim out of the entrypoint (2026-09-08).
 DEPLOY_SLICED_LIBRARIES = (

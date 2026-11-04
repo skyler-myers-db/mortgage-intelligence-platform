@@ -77,6 +77,8 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
   APP_UPGRADE_STATE="green_treatment_pending_capture"
   step "atomically restore treatment authority and persist the last-good App contract"
   capture_last_good_app "${AGENT_RUNTIME_BINDING_SHA256:-}"
+  # A contract quiesce window closes only now that green is the signed record.
+  close_contract_window_after_capture
   finalize_signed_first_install_capture
   if [[ "$APP_ACCESS_QUARANTINED" -eq 1 ]]; then
     step "replace release-probe access with exact runtime operator access after signed capture"
@@ -275,9 +277,7 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
   APP_UPGRADE_STATE="green_verified"
 elif [[ "$DRY_RUN" -eq 0 ]]; then
   step "stop the unproven candidate before signed-blue rollback"
-  run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
-    --app-name "$APP_NAME" \
-    "${APP_EXPECTED_IDENTITY_ARGS[@]}"
+  run stop_unproven_candidate_before_rollback
   step "prove treatment authority remains quiesced before signed-blue rollback"
   run converge_app_treatment_access quiesce
   TREATMENT_RUNTIME_QUIESCED=1
