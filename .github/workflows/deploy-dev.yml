@@ -71,6 +71,17 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - name: Record the job deadline
+        # timeout-minutes above, read at job start (M0-PR9): deploy.sh opens a
+        # quiesce window only while this deadline leaves the predicted window,
+        # the predicted restore and 15 minutes, and the window's dead-man
+        # restarts blue at it if this runner dies. MIP_JOB_TIMEOUT_MINUTES must
+        # equal timeout-minutes (tests/unit/test_quiesce_window_workflow.py).
+        env:
+          MIP_JOB_TIMEOUT_MINUTES: "240"
+        run: |
+          set -euo pipefail
+          echo "MIP_JOB_DEADLINE_EPOCH=$(( $(date -u +%s) + MIP_JOB_TIMEOUT_MINUTES * 60 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with: { node-version: '22' }
@@ -538,3 +549,19 @@ jobs:
             args+=(--skip-smoke)
           fi
           ./scripts/deploy.sh "${args[@]}"
+      - name: Record the quiesce window journal state
+        # Read-only, whatever happened above (M0-PR9): the window journal and
+        # its dead-man's marker, as codes and booleans only. It never stops,
+        # starts, cancels or writes anything.
+        if: always()
+        env:
+          DATABRICKS_CONFIG_PROFILE: DEFAULT
+          MIP_APP_NAME: ${{ vars.MIP_APP_NAME || 'mip-app' }}
+        run: |
+          set -uo pipefail
+          if line="$(python -m tools.databricks.quiesce_window status --app-name "$MIP_APP_NAME" | grep '^\[mip-quiesce-window\] status: journal ')"; then
+            echo "$line"
+            echo "$line" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::the quiesce window journal could not be read"
+          fi
