@@ -24,6 +24,14 @@ App still serves:
   rollback scope that does not exist yet holds no record; the post-lease
   ``app_rollback_secret_scope ensure`` creates it.
 
+* **adopt phase** (``--phase adopt|unadopt``, M2-PR7): the record is judged
+  the way adopt-live will judge it, with the tier-aware reader. No record (or
+  no scope yet), a v7 adopted record or its retired tombstone passes with a
+  note: adopt-live itself proves the record precondition of its mode under
+  the lease. Any other record refuses as ``rollback_record_present`` (an
+  install with a captured blue is not adopted), and a record that does not
+  verify as ``rollback_record_tampered``.
+
 No App, or an App a signed first-install journal owns (the recovery under the
 lease deletes it), has no blue to protect, so nothing is read. Every call is a
 GET or a list.
@@ -38,6 +46,7 @@ from typing import Any
 from tools.databricks.app_deployment_rollback import verified_signed_last_good_contract
 from tools.databricks.app_deployment_state import active_deployment_id
 from tools.databricks.app_rollback_bootstrap_gate import assert_rollback_record_absent
+from tools.databricks.app_rollback_record_contract import V7_RECORD_VERSION, load_signed_record
 from tools.databricks.app_rollback_secret_scope import (
     _scope_names,
     expected_app_rollback_scope,
@@ -138,6 +147,35 @@ def _absence_verdict(workspace: Any, *, app_name: str, scope: str) -> RollbackRe
     return RollbackRecordVerdict((), ("unsigned rebase: no last-good rollback record exists",))
 
 
+_REMEDY_ADOPT_PRESENT = (
+    "adopt-live signs only an install with no record, its own adopted record or a "
+    "retired tombstone; a captured blue is already governed, so run the release instead."
+)
+
+
+def _adopt_phase_verdict(
+    workspace: Any, *, app_name: str, scope: str, lakebase_instance: str
+) -> RollbackRecordVerdict:
+    try:
+        if expected_app_rollback_scope(app_name) not in _scope_names(workspace):
+            return RollbackRecordVerdict((), ("adopt phase: no rollback scope yet; adopt-live creates it",))
+        record = load_signed_record(
+            workspace, app_name=app_name, scope=scope, expected_lakebase_instance=lakebase_instance
+        )
+    except Exception as exc:  # noqa: BLE001 - a record that does not verify refuses
+        return RollbackRecordVerdict((_refusal(ROLLBACK_RECORD_TAMPERED, str(exc)),), ())
+    if record is None:
+        return RollbackRecordVerdict((), ("adopt phase: no rollback record; adopt-live judges and signs one",))
+    if record["version"] == V7_RECORD_VERSION and record["provenance"] in {"adopted", "retired"}:
+        return RollbackRecordVerdict(
+            (), (f"adopt phase: a v7 {record['provenance']} record; adopt-live judges it under the lease",)
+        )
+    detail = f"the slot holds a v{record['version']} {record.get('provenance', 'captured')} record"
+    return RollbackRecordVerdict(
+        (PrestopRefusal(ROLLBACK_RECORD_PRESENT, f"{detail}. {_REMEDY_ADOPT_PRESENT}"),), ()
+    )
+
+
 def _signed_verdict(workspace: Any, *, app_name: str, scope: str) -> RollbackRecordVerdict:
     try:
         contract = ASSERT_SIGNED(workspace, app_name=app_name, scope=scope)
@@ -172,8 +210,10 @@ def rollback_record_verdict(
     app_exists: bool,
     rebase_unverified_app: bool,
     journal_state: Callable[[], str],
+    adopt_phase: bool = False,
+    lakebase_instance: str = "",
 ) -> RollbackRecordVerdict:
-    """Judge the record the way step 0a will, before the lease and any stop."""
+    """Judge the record the way step 0a (or, in an adopt phase, adopt-live) will."""
 
     if not app_exists:
         return RollbackRecordVerdict((), ("no App exists yet; there is no blue to protect",))
@@ -191,6 +231,10 @@ def rollback_record_verdict(
                 f"the App is owned by its signed first-install journal ({state}); the "
                 "recovery under the lease deletes it, so no blue is protected",
             ),
+        )
+    if adopt_phase:
+        return _adopt_phase_verdict(
+            workspace, app_name=app_name, scope=scope, lakebase_instance=lakebase_instance
         )
     if rebase_unverified_app and state != "signed":
         return _absence_verdict(workspace, app_name=app_name, scope=scope)

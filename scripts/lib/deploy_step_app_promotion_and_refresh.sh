@@ -77,6 +77,8 @@ emit_app_deploy_payload() {
 
 deploy_app_snapshot() {
   local label="$1"
+  # Attack O2 (M2-PR7): blue's tier-b restore proof, once, before the first activation.
+  prove_blue_restorable_before_activation
   step "$label"
   APP_DEPLOY_PAYLOAD="$(mktemp -t mip-app-deploy.XXXXXX.json)"
   emit_app_deploy_payload "$APP_DEPLOY_PAYLOAD" "$APP_SOURCE_PATH" "$APP_GIT_SHA"
