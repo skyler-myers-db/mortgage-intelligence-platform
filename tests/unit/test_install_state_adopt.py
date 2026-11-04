@@ -37,6 +37,9 @@ READS = frozenset(
 
 
 class Lease:
+    lease_id = "lease-1"
+    source_git_sha = "0" * 40
+
     def __init__(self, *, held: bool = True) -> None:
         self.held = held
         self.checks = 0
@@ -265,8 +268,12 @@ def test_apply_refuses_an_ack_that_is_not_the_recomputed_plan(tmp_path: Path) ->
 def test_the_lease_is_asserted_before_every_state_edit(tmp_path: Path) -> None:
     estate = es.Estate()
     lease = Lease()
-    _apply(estate, es.FakeBundleCli(estate), tmp_path, lease=lease)
+    cli = es.FakeBundleCli(estate)
+    _apply(estate, cli, tmp_path, lease=lease)
     assert lease.checks == 1 + 16
+    assert {(a.lease_id, a.source_git_sha) for a in cli.authorities} == {("lease-1", "0" * 40)}, (
+        "bundle_env is handed the held lease's evidence with every edit, to assert it again"
+    )
 
     cli = es.FakeBundleCli(es.Estate())
     with pytest.raises(RuntimeError, match="lease"):
@@ -366,17 +373,20 @@ def test_the_bundle_cli_never_inherits_the_signing_keys(monkeypatch: pytest.Monk
 
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", "PLACEHOLDER-signing-key")
     monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY", "PLACEHOLDER-attestation-key")
+    monkeypatch.setenv(adopt.ACK_ENV, "a" * 64)
     monkeypatch.setattr(adopt.subprocess, "run", run)
     cli = adopt.BundleEnvCli(python="python")
-    cli.bind("mip_ref_seed", "1001", adopt.Authority(tmp_path / "plan.json", "a" * 64))
+    cli.bind("mip_ref_seed", "1001", adopt.Authority(tmp_path / "plan.json", "a" * 64, "lease-1", "0" * 40))
 
     env = seen["env"]
     assert isinstance(env, dict) and "MIP_AI_GATEWAY_PROOF_SIGNING_KEY" not in env
     assert "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY" not in env
+    assert env[adopt.ACK_ENV] == "a" * 64, "bundle_env checks the operator's own ack"
     assert seen["argv"] == [
         "python", "-m", "tools.databricks.bundle_env", "deployment", "bind", "mip_ref_seed", "1001",
         "-t", "client", "--auto-approve",
         "--adopt-plan", str(tmp_path / "plan.json"), "--adopt-plan-sha256", "a" * 64,
+        "--adopt-lease-id", "lease-1", "--adopt-source-git-sha", "0" * 40,
     ]
 
 

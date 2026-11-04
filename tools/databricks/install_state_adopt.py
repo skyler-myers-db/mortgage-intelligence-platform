@@ -25,9 +25,11 @@
 
 Neither phase stops, starts or deploys the App, changes a grant or deletes
 anything: the only mutation is the deployer's own bundle state, through the
-bundle CLI. bundle_env admits a non-App bind or unbind only with this run's
-acknowledged plan (``authorize_state_edit``); the CLI never inherits the
-proof-signing key, and its output (which names ids) stays out of the log.
+bundle CLI. bundle_env admits a non-App bind or unbind only when this run's
+plan names it, its digest is the operator's ``MIP_ADOPT_PLAN_ACK``, it names
+this install and the signed lease is held (``verify_state_edit``); the CLI
+never inherits the proof-signing key, and its output (which names ids) stays
+out of the log.
 
 Signing the live deployment as an adopted blue (``adopt-live``: the
 full-tree digest, the immutable ``app-src/adopted-*`` copy, supersede and
@@ -61,6 +63,8 @@ from tools.databricks.bundle_plan_shape import BundlePlan, parse_plan, sha256_he
 from tools.databricks.bundle_state import STATE_FILE, bound_id, read_state, state_path  # noqa: E402
 
 APP_KEY = "mip_app"
+# The operator's exact digest ack (shell only, never .env.local).
+ACK_ENV = "MIP_ADOPT_PLAN_ACK"
 _PREFIX = "[mip-adopt]"
 # Never inherited by the bundle CLI: the deploy's signing authorities.
 _PRIVATE_ENV = ("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY")
@@ -84,10 +88,31 @@ class AdoptRefused(RuntimeError):
 
 @dataclass(frozen=True)
 class Authority:
-    """The acknowledged plan, on disk for bundle_env to verify before any state edit."""
+    """The acknowledged plan on disk and the held lease, for bundle_env to verify before any state edit."""
 
     plan_path: Path
     sha256: str
+    lease_id: str
+    source_git_sha: str
+
+
+class HeldLease(Protocol):
+    """The signed lease this run holds: asserted before every edit here, and in bundle_env again."""
+
+    lease_id: str
+    source_git_sha: str
+
+    def __call__(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class SignedLease:
+    check: Callable[[], None]
+    lease_id: str
+    source_git_sha: str
+
+    def __call__(self) -> None:
+        self.check()
 
 
 class BundleCli(Protocol):
@@ -133,12 +158,13 @@ class BundleEnvCli:
         self._run(f"unbind of {key}", ["deployment", "unbind", key, "-t", "client", *_flags(authority)])
 
 
-ADOPT_PLAN_FLAG = "--adopt-plan"
-ADOPT_PLAN_SHA256_FLAG = "--adopt-plan-sha256"
+# bundle_env's wrapper-only flags, in this order (bundle_env._ADOPT_FLAGS).
+AUTHORITY_FLAGS = ("--adopt-plan", "--adopt-plan-sha256", "--adopt-lease-id", "--adopt-source-git-sha")
 
 
 def _flags(authority: Authority) -> list[str]:
-    return [ADOPT_PLAN_FLAG, str(authority.plan_path), ADOPT_PLAN_SHA256_FLAG, authority.sha256]
+    values = (str(authority.plan_path), authority.sha256, authority.lease_id, authority.source_git_sha)
+    return [part for flag, value in zip(AUTHORITY_FLAGS, values, strict=True) for part in (flag, value)]
 
 
 def authorize_state_edit(document_text: str, sha256: str, action: str, key: str, live_id: str | None) -> str | None:
@@ -165,6 +191,52 @@ def authorize_state_edit(document_text: str, sha256: str, action: str, key: str,
     if action == "unbind" and key in {pair[0] for pair in pairs}:
         return None
     return f"the acknowledged {phase} plan does not {action} this key"
+
+
+def verify_state_edit(
+    authority: Authority,
+    action: str,
+    key: str,
+    live_id: str | None,
+    *,
+    acknowledged: str,
+    inputs: legacy_map.AdoptInputs,
+    lease: Callable[[], None],
+) -> str | None:
+    """``None`` only for an edit the operator acknowledged, for this install, under the held lease.
+
+    bundle_env's gate for a non-App state edit. A plan file and its digest
+    prove nothing alone: anyone can digest a document they wrote. So the
+    digest must also be the operator's ``MIP_ADOPT_PLAN_ACK`` (``acknowledged``,
+    from bundle_env's own environment), the document must name this
+    profile's client, deployer root and legacy root, and the signed deployment
+    lease must be held: taking one needs the deploy's signing authority,
+    which the bundle CLI never inherits. The lease is asserted last, after
+    every local check.
+    """
+
+    if not acknowledged.strip() or acknowledged.strip() != authority.sha256:
+        return f"{ACK_ENV} is not the adopt plan's sha256"
+    try:
+        text = Path(authority.plan_path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return "the adopt plan could not be read"
+    refusal = authorize_state_edit(text, authority.sha256, action, key, live_id)
+    if refusal is not None:
+        return refusal
+    document = json.loads(text)
+    for name, expected in (
+        ("client", inputs.client_key),
+        ("deployer_root", inputs.deployer_root),
+        ("legacy_root", inputs.legacy_root),
+    ):
+        if document.get(name) != expected:
+            return f"the adopt plan's {name} is not this install's"
+    try:
+        lease()
+    except Exception as exc:  # noqa: BLE001 - the class only: a lease error can name a holder
+        return f"the signed deployment lease is not held ({type(exc).__name__})"
+    return None
 
 
 def inputs_from_profile(profile: Any) -> legacy_map.AdoptInputs:
@@ -247,7 +319,7 @@ def apply(
     cli: BundleCli,
     workspace: Any,
     *,
-    lease: Callable[[], None],
+    lease: HeldLease,
     plan_dir: Path,
 ) -> ApplyResult:
     """Recompute, compare with ``ack``, then edit exactly the plan's state; raises AdoptRefused."""
@@ -266,7 +338,7 @@ def apply(
         )
     path = plan_dir / f"adopt-plan-{plan.sha256[:12]}.json"
     _write_private(path, plan.document)
-    authority = Authority(path, plan.sha256)
+    authority = Authority(path, plan.sha256, lease.lease_id, lease.source_git_sha)
     if phase == "unadopt":
         try:
             for edit in plan.edits:
@@ -336,12 +408,13 @@ def _workspace() -> Any:
     return deployment_workspace_client()
 
 
-def _held_lease(workspace: Any, args: argparse.Namespace) -> Callable[[], None]:
+def _held_lease(workspace: Any, args: argparse.Namespace) -> HeldLease:
     from tools.databricks import app_deployment_lease
 
-    return app_deployment_lease.held_assertion(
+    check = app_deployment_lease.held_assertion(
         workspace, app_name=args.app_name, lease_id=args.lease_id, source_git_sha=args.source_git_sha
     )
+    return SignedLease(check, args.lease_id, args.source_git_sha)
 
 
 def main(
@@ -350,7 +423,7 @@ def main(
     inputs: Callable[[], legacy_map.AdoptInputs] = _profile_inputs,
     workspace_factory: Callable[[], Any] = _workspace,
     cli_factory: Callable[[], BundleCli] = BundleEnvCli,
-    lease_factory: Callable[[Any, argparse.Namespace], Callable[[], None]] = _held_lease,
+    lease_factory: Callable[[Any, argparse.Namespace], HeldLease] = _held_lease,
 ) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)

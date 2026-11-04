@@ -28,6 +28,7 @@ SLICE = REPO / "scripts" / "lib" / "deploy_adopt_phase_lifecycle.sh"
 ADOPT_PATH = (
     SLICE,
     REPO / "tools" / "databricks" / "install_state_adopt.py",
+    REPO / "tools" / "databricks" / "bundle_env_adopt.py",
     REPO / "tools" / "databricks" / "adopt_legacy_map.py",
     REPO / "tools" / "databricks" / "bundle_plan_adopt.py",
     REPO / "tools" / "clients" / "archive_legacy_root.py",

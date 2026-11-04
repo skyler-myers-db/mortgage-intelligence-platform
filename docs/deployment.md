@@ -2440,11 +2440,18 @@ After an exit 3 from either phase, run `--phase unadopt` (again): its plan
 unbinds whatever legacy keys the state still binds, and its live checks accept
 that half-bound state.
 
-`bundle_env deployment` admits a non-App bind or unbind only with the
-acknowledged plan file and its digest (`--adopt-plan`, `--adopt-plan-sha256`,
-wrapper-only flags that never reach the CLI), and only the edits that plan
-names. The CLI never inherits the proof-signing keys, and its output (which
-names ids) stays out of the log; every id read from either state is a runner
+`bundle_env deployment` admits a non-App bind or unbind only as one of the
+edits an adopt plan names, never with `--force-lock`
+(tools/databricks/bundle_env_adopt.py). The caller passes the plan file, its
+digest and the held lease's evidence as wrapper-only flags that never reach the
+CLI (`--adopt-plan`, `--adopt-plan-sha256`, `--adopt-lease-id`,
+`--adopt-source-git-sha`). Those prove nothing alone, since anyone can digest a
+document they wrote, so bundle_env also requires the digest to be the
+`MIP_ADOPT_PLAN_ACK` in its own environment, the plan to name the resolved
+profile's client, deployer root and legacy root, and the profile App's signed
+lease to be held, which only the deploy's signing authority can take. The CLI
+never inherits the proof-signing keys, and its output (which names ids) stays
+out of the log; every id read from either state is a runner
 mask. A live adopt or unadopt phase is CI-only, like the plan phase; locally,
 `--phase adopt --dry-run` (with or without `MIP_ADOPT_PLAN_ACK`) prints the
 steps and stops before the lease. The expected run on client #1 binds 16 keys and

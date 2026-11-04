@@ -29,6 +29,9 @@ APP = DEMO_PROFILE["MIP_APP_NAME"]
 
 
 class Lease:
+    lease_id = "lease-1"
+    source_git_sha = "0" * 40
+
     def __call__(self) -> None:
         return None
 

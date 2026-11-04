@@ -15,8 +15,11 @@ makes, and records every call. ``FakeBundleCli`` plans the bundle against the
 deployer's state the way the direct engine does (unbound: create; bound: an
 update when a name differs, a recreate when a dashboard's parent differs,
 skip otherwise; a state key the bundle dropped: delete) and edits that state
-on bind and unbind, after checking each edit against the acknowledged plan
-with ``install_state_adopt.authorize_state_edit``, as bundle_env does.
+on bind and unbind, after checking each edit with
+``install_state_adopt.verify_state_edit``, as bundle_env does: its
+``acknowledged`` stands for the ``MIP_ADOPT_PLAN_ACK`` bundle_env would see (by
+default the plan's own digest, an operator who acknowledged it) and the lease
+is held. Every authority it is handed is recorded in ``authorities``.
 """
 
 from __future__ import annotations
@@ -25,7 +28,6 @@ import copy
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -37,7 +39,7 @@ from tests.fixtures.fake_workspace import FakeTree
 from tools.databricks.adopt_legacy_map import AdoptInputs
 from tools.databricks.app_release_contract import api_path
 from tools.databricks.bundle_plan_shape import BundlePlan, parse_plan
-from tools.databricks.install_state_adopt import Authority, authorize_state_edit
+from tools.databricks.install_state_adopt import Authority, verify_state_edit
 
 BUNDLE = "/Workspace/Users/{owner}/.bundle/mortgage-intelligence-platform/{leaf}"
 LEGACY_ROOT = BUNDLE.format(owner="legacy-owner@example.invalid", leaf="dev")
@@ -246,6 +248,8 @@ class FakeBundleCli:
     fail_unbind: dict[str, Exception] = field(default_factory=dict)
     recreate_dashboards: bool = False
     instance_drift: bool = False
+    acknowledged: str | None = None
+    authorities: list[Authority] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
     def _key(self, key: str) -> str:
@@ -298,8 +302,11 @@ class FakeBundleCli:
         self.estate.write_state(DEPLOYER_ROOT, document)
 
     def _authorize(self, action: str, key: str, live_id: str | None, authority: Authority) -> None:
-        text = Path(authority.plan_path).read_text(encoding="utf-8")
-        refusal = authorize_state_edit(text, authority.sha256, action, key, live_id)
+        self.authorities.append(authority)
+        acknowledged = authority.sha256 if self.acknowledged is None else self.acknowledged
+        refusal = verify_state_edit(
+            authority, action, key, live_id, acknowledged=acknowledged, inputs=inputs(), lease=lambda: None
+        )
         assert refusal is None, refusal
 
     def bind(self, key: str, live_id: str, authority: Authority) -> None:
