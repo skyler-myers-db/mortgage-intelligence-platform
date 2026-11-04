@@ -139,8 +139,11 @@ fi
 # be the client profile's (tools/clients/live_checks.py: two SCIM Me GETs and
 # the current metastore assignment). A mismatch exits 2 here, naming the
 # check, never a value. A dry run prints the command and makes no call.
-echo "${DIM}\$ $PYTHON -m tools.clients.live_checks${RST}"
-if [[ "$DRY_RUN" -eq 0 ]] && ! "$PYTHON" -m tools.clients.live_checks; then
+# The adopt phase expects the App unadopted: that is what it binds (M2-PR6).
+_LIVE_CHECK_ARGS=()
+[[ "${DEPLOY_PHASE:-}" != "adopt" ]] || _LIVE_CHECK_ARGS=(--phase adopt)
+echo "${DIM}\$ $PYTHON -m tools.clients.live_checks${_LIVE_CHECK_ARGS[*]:+ ${_LIVE_CHECK_ARGS[*]}}${RST}"
+if [[ "$DRY_RUN" -eq 0 ]] && ! "$PYTHON" -m tools.clients.live_checks "${_LIVE_CHECK_ARGS[@]}"; then
   echo "${RED}[deploy] the client live checks refused this workspace or principal; nothing was changed.${RST}" >&2
   exit 2
 fi

@@ -18,7 +18,10 @@ assignment); every refusal among them is reported. Once all four hold, the
 read-only install checks run (tools/clients/install_checks.py, M1-PR3):
 adoption, the ``mip.install_key`` install marker, the Cotality share, the
 storage root and the account principal's roles. They never run against a
-workspace or as a principal that is not the profile's. Exit 0 when every
+workspace or as a principal that is not the profile's. ``--phase adopt``
+(scripts/deploy.sh's adopt phase, M2-PR6) expects the App unadopted: that one
+condition, and the unmarked catalog that goes with it, are noted there, not
+refused. Exit 0 when every
 check holds, 2 otherwise; a read error refuses, never reads as absent. A
 refusal names the check, never a value: these are identifying fields, and the
 line may reach a public CI log. Each id read from the workspace is registered
@@ -98,7 +101,13 @@ def read_live_identity(client: Any) -> LiveIdentity:
     )
 
 
-def check(profile: ClientProfile, client: Any, account: Callable[[], Any] | None = None) -> list[str]:
+def check(
+    profile: ClientProfile,
+    client: Any,
+    account: Callable[[], Any] | None = None,
+    *,
+    adopting: bool = False,
+) -> list[str]:
     """Every refusal, host first; no request is sent when the host differs.
 
     The install checks run only once the workspace and the principal are
@@ -111,7 +120,7 @@ def check(profile: ClientProfile, client: Any, account: Callable[[], Any] | None
     lines = identity_refusals(profile, read_live_identity(client))
     if lines:
         return lines
-    return install_checks.check(profile, client, account)
+    return install_checks.check(profile, client, account, adopting=adopting)
 
 
 def _default_client() -> Any:
@@ -128,13 +137,14 @@ def main(
     client: Callable[[], Any] = _default_client,
     account: Callable[[], Any] | None = None,
 ) -> int:
-    if argv:
-        print("usage: python -m tools.clients.live_checks (no arguments)", file=sys.stderr)
+    adopting = list(argv or ()) == ["--phase", "adopt"]
+    if argv and not adopting:
+        print("usage: python -m tools.clients.live_checks [--phase adopt]", file=sys.stderr)
         return 2
     try:
         raw = from_local(os.environ if environ is None else environ, env_file or REPO / ".env.local")
         profile = resolve(raw)
-        lines = check(profile, client(), account)
+        lines = check(profile, client(), account, adopting=adopting)
     except ProfileRefusal as refusal:
         lines = list(refusal.lines)
     except Exception as exc:  # the class only: an SDK message can carry a host or an id
