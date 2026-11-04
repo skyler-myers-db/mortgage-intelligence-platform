@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 from tests.fixtures.fake_lakebase import APP_ROLE, DEPLOYER, LEGACY, FakeServer, VirtualConcurrent
+from tests.fixtures.handover_jobs_fake import jobs_workspace
 from tools.clients import handover_journal as journals
 from tools.clients import lakebase_handover as handover
 from tools.clients import lakebase_handover_rehearse as rehearsal
@@ -258,14 +259,18 @@ def test_the_wr5_window_applies_exactly_the_exhausted_remainder(tmp_path: Path) 
     assert server.owners[CAMPAIGNS] == DEPLOYER
 
 
-def test_retire_check_refuses_while_a_job_runs_as_the_legacy_identity() -> None:
-    jobs = [SimpleNamespace(job_id=1, run_as_user_name=LEGACY), SimpleNamespace(job_id=2, run_as_user_name=DEPLOYER)]
-    pipelines = [SimpleNamespace(pipeline_id="p-1", run_as_user_name="", creator_user_name=LEGACY.upper())]
-    workspace = SimpleNamespace(jobs=SimpleNamespace(list=lambda: jobs), pipelines=SimpleNamespace(list_pipelines=lambda: pipelines))
+def test_retire_check_refuses_while_a_job_runs_as_the_legacy_identity(capsys: pytest.CaptureFixture[str]) -> None:
+    jobs = {1: {"creator_user_name": DEPLOYER, "run_as_user_name": LEGACY}, 2: {"creator_user_name": LEGACY, "run_as_user_name": DEPLOYER}}
+    pipelines = [{"pipeline_id": "p-1", "run_as_user_name": LEGACY.upper(), "creator_user_name": DEPLOYER}]
+    workspace = jobs_workspace(jobs, pipelines, me=LEGACY)
     assert retire_blockers(workspace, legacy_identity=LEGACY) == ["job:1", "pipeline:p-1"]
-    jobs[0].run_as_user_name = DEPLOYER
+    session = SimpleNamespace(workspace=lambda: workspace)
+    assert handover.main(["--retire-check"], session=lambda *a: session) == 2
+    assert "legacy_identity_in_use" in capsys.readouterr().err
+    jobs[1]["run_as_user_name"] = DEPLOYER
     pipelines.clear()
     assert retire_blockers(workspace, legacy_identity=LEGACY) == []
+    assert handover.main(["--retire-check"], session=lambda *a: session) == 0
 
 
 def test_the_s3_rehearsal_passes_on_the_fake_and_fails_without_the_bound(monkeypatch: pytest.MonkeyPatch) -> None:

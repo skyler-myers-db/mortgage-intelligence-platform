@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from tests.fixtures.handover_jobs_fake import jobs_workspace
 from tools.clients import handover_verify as verify
 
 LEGACY = "legacy-owner@example.com"
@@ -124,11 +125,47 @@ def test_watch_next_run_is_bounded() -> None:
         _watch([[]], timeout_s=13 * 3600.0)
 
 
-def test_retire_check_lists_jobs_and_pipelines_running_as_the_legacy_identity() -> None:
-    workspace = SimpleNamespace(
-        jobs=SimpleNamespace(list=lambda: [SimpleNamespace(job_id=3, run_as_user_name=LEGACY), SimpleNamespace(job_id=4, run_as_user_name="jobs-sp")]),
-        pipelines=SimpleNamespace(list_pipelines=lambda: [SimpleNamespace(pipeline_id="p", run_as_user_name="", creator_user_name=LEGACY)]),
-        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name=LEGACY)),
+def test_retire_check_judges_each_job_by_its_effective_run_as_never_its_creator() -> None:
+    """``jobs.list`` yields ``BaseJob`` (no run_as): the run_as is read by id, the creator never counts."""
+
+    workspace = jobs_workspace(
+        {
+            # Created by the deployer, runs as the legacy identity: blocks.
+            3: {"creator_user_name": "deployer-sp-app-id", "run_as_user_name": LEGACY, "settings": {"run_as": {"user_name": LEGACY}}},
+            # Created by the legacy identity, moved to the jobs SP in place: does not block.
+            4: {"creator_user_name": LEGACY, "run_as_user_name": "jobs-sp-app-id", "settings": {"run_as": {"service_principal_name": "jobs-sp-app-id"}}},
+            # Only the run_as setting is readable: it decides.
+            5: {"creator_user_name": "deployer-sp-app-id", "settings": {"run_as": {"user_name": LEGACY}}},
+            # Nothing readable: blocks, never assumed.
+            6: {"creator_user_name": LEGACY},
+        },
+        pipelines=[
+            {"pipeline_id": "p", "run_as_user_name": "", "creator_user_name": "deployer-sp-app-id"},
+            {"pipeline_id": "q", "run_as_user_name": "jobs-sp-app-id", "creator_user_name": LEGACY},
+            {"pipeline_id": "r", "creator_user_name": LEGACY},
+        ],
+        pipeline_details={"p": {"run_as_user_name": LEGACY}, "r": {}},
+        me=LEGACY,
     )
-    assert verify.retire_blockers(workspace, legacy_identity=LEGACY.upper()) == ["job:3", "pipeline:p"]
+    assert not hasattr(workspace.jobs.list()[0], "run_as_user_name"), "the listing type carries no run_as"
+    assert verify.retire_blockers(workspace, legacy_identity=LEGACY.upper()) == [
+        "job:3",
+        "job:5",
+        "job:6:run_as_unreadable",
+        "pipeline:p",
+        "pipeline:r:run_as_unreadable",
+    ]
+    assert "jobs.get 4" in workspace.reads and "pipelines.get q" not in workspace.reads
     assert verify.main(["retire-check"], workspace_factory=lambda: workspace, catalog=lambda: "mip") == 2
+
+
+def test_retire_check_passes_when_nothing_runs_as_the_legacy_identity() -> None:
+    workspace = jobs_workspace(
+        {4: {"creator_user_name": LEGACY, "run_as_user_name": "jobs-sp-app-id"}},
+        pipelines=[{"pipeline_id": "q", "run_as_user_name": "jobs-sp-app-id", "creator_user_name": LEGACY}],
+        me=LEGACY,
+    )
+    assert verify.retire_blockers(workspace, legacy_identity=LEGACY) == []
+    assert verify.main(["retire-check"], workspace_factory=lambda: workspace, catalog=lambda: "mip") == 0
+    nameless = jobs_workspace({}, me="")
+    assert verify.main(["retire-check"], workspace_factory=lambda: nameless, catalog=lambda: "mip") == 2

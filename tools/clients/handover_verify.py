@@ -19,7 +19,8 @@ release, so the handover is verified without running them (they are never
   after the call, and report its result. It never starts, cancels or repairs
   a run.
 * ``retire-check``: the gate before the owner removes the legacy identity's
-  Lakebase role by hand: it refuses while any job or pipeline runs as it.
+  Lakebase role by hand: it refuses while any job or pipeline runs as it, or
+  while one's run_as cannot be read (never judged by its creator).
 
 Printed lines carry codes and counts; principals, objects and run ids go only
 to ``--report-out`` (mode 0600). Exit codes: 0 pass, 2 refused, 3 the watched
@@ -171,19 +172,47 @@ def watch_next_run(
         sleep(interval_s)
 
 
+def _run_as(detail: object) -> str:
+    """The identity a job or pipeline runs as: its effective ``run_as_user_name``, else its run_as setting.
+
+    Never the creator: a job updated in place keeps its creator while its
+    run_as moves, and one created by someone else can run as anybody.
+    """
+
+    effective_name = str(getattr(detail, "run_as_user_name", "") or "").strip()
+    if effective_name:
+        return effective_name
+    setting = getattr(detail, "run_as", None) or getattr(getattr(detail, "settings", None), "run_as", None)
+    return str(getattr(setting, "user_name", "") or getattr(setting, "service_principal_name", "") or "").strip()
+
+
 def retire_blockers(workspace: Any, *, legacy_identity: str) -> list[str]:
-    """Read-only: every job and pipeline that still runs as the legacy identity (kind:id)."""
+    """Read-only: every job and pipeline that runs as the legacy identity, or whose run_as is unreadable.
+
+    ``jobs.list`` returns ``BaseJob``, which carries no run_as, so each job is
+    read once by id (``jobs.get``: the run_as setting, else the IS_OWNER); a
+    pipeline's listing carries its run_as, and ``pipelines.get`` fills a blank.
+    An identity that cannot be read blocks (``kind:id:run_as_unreadable``).
+    """
 
     folded = legacy_identity.strip().casefold()
+    if not folded:
+        raise ValueError("retire-check needs the legacy identity")
     found: list[str] = []
     for job in workspace.jobs.list():
-        run_as = str(getattr(job, "run_as_user_name", "") or getattr(job, "creator_user_name", "") or "")
-        if run_as.strip().casefold() == folded:
-            found.append(f"job:{getattr(job, 'job_id', '')}")
+        job_id = getattr(job, "job_id", None)
+        run_as = _run_as(workspace.jobs.get(job_id))
+        if not run_as:
+            found.append(f"job:{job_id}:run_as_unreadable")
+        elif run_as.casefold() == folded:
+            found.append(f"job:{job_id}")
     for pipeline in workspace.pipelines.list_pipelines():
-        run_as = str(getattr(pipeline, "run_as_user_name", "") or getattr(pipeline, "creator_user_name", "") or "")
-        if run_as.strip().casefold() == folded:
-            found.append(f"pipeline:{getattr(pipeline, 'pipeline_id', '')}")
+        pipeline_id = getattr(pipeline, "pipeline_id", "")
+        run_as = _run_as(pipeline) or _run_as(workspace.pipelines.get(pipeline_id))
+        if not run_as:
+            found.append(f"pipeline:{pipeline_id}:run_as_unreadable")
+        elif run_as.casefold() == folded:
+            found.append(f"pipeline:{pipeline_id}")
     return sorted(found)
 
 
@@ -232,7 +261,10 @@ def main(argv: list[str] | None = None, *, workspace_factory: Callable[[], Any] 
         print(f"{_PREFIX} watch-next-run: {code} {result}".rstrip())
         rc = {"success": 0, "failed": 3, "timeout": 4}[code]
     else:
-        legacy = args.legacy_identity or str(getattr(workspace.current_user.me(), "user_name", "") or "")
+        legacy = (args.legacy_identity or str(getattr(workspace.current_user.me(), "user_name", "") or "")).strip()
+        if not legacy:
+            print(f"{_PREFIX} REFUSED: the legacy identity is unknown; pass --legacy-identity", file=sys.stderr)
+            return 2
         blockers = retire_blockers(workspace, legacy_identity=legacy)
         report = {"runs_as_legacy": blockers}
         print(f"{_PREFIX} retire-check: {len(blockers)} job(s) or pipeline(s) still run as the legacy identity")
