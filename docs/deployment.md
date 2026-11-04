@@ -2360,6 +2360,134 @@ through the pre-lease gate and exits before the lease. A live plan phase is
 CI-only (`plan is CI-only; use --dry-run or make bundle-validate`); locally,
 `--phase plan --dry-run` prints the same steps without any Databricks call.
 
+### Adopting an existing install (M2-PR6, bind only)
+
+An install another identity deployed keeps its direct-engine bundle state in
+that identity's root, so the client deployer's own state binds nothing and
+every plan refuses it as `not_adopted`. `--phase adopt` binds exactly the
+legacy keys into the deployer's state; `--phase unadopt` is its exact inverse.
+Neither stops, starts or deploys the App, changes a grant or deletes anything:
+the only mutation is the deployer's own bundle state, through
+`databricks bundle deployment bind|unbind`, under the signed lease. Signing the
+live deployment as an adopted blue (`adopt-live`: the full-tree digest, the
+immutable `app-src/adopted-*` copy, supersede, freeze) is M2-PR7's.
+
+**Profile.** `MIP_LEGACY_BUNDLE_ROOT` (identifying: a GitHub Environment secret
+in CI, `.env.local` locally) names the legacy root,
+`/Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/<leaf>`. The
+legacy map's ids and paths are read from that root's `state/resources.json` at
+run time; they are never committed. The profile then requires
+`MIP_DASHBOARD_PARENT_PATH` inside the legacy root (see the dashboards below).
+
+**The run.** Both phases run the same read-only steps as `--phase plan`, with
+the live checks in their adopt mode (`tools.clients.live_checks --phase adopt`
+or `--phase unadopt` accepts an App the deployer's state does not bind, and its
+unmarked catalog: adopt binds that App, unadopt unbinds it, and the half-bound
+state an unproven undo can leave, legacy keys bound without the App, must
+still reach unadopt; a catalog marked for another install still refuses). In
+place of the pre-lease gate,
+`tools/databricks/install_state_adopt.py plan` computes the canonical plan
+(tools/databricks/adopt_legacy_map.py) from the pre-bind bundle plan, both
+states and one GET by id per legacy object, and refuses, before the lease:
+
+- `missing`: the id no longer resolves (a trashed dashboard or a deleted
+  experiment included);
+- `renamed`: the live name is neither the bundle's name for the key nor its
+  development-mode form (`[dev <user>] <name>`, on an experiment path's
+  basename); an App, a Lakebase instance or catalog must keep its name, since
+  it is named by its id;
+- `foreign_bound`: a job or pipeline whose bundle deployment metadata names
+  another root than the legacy root or the deployer's;
+  `bound_elsewhere` (the deployer's state binds the key to another object, or
+  the object under another key) and `duplicate_id` (two legacy keys bind one
+  object);
+- `deployer_state_orphan`, in either phase: a key the deployer's state binds
+  and the bundle no longer declares (the pre-bind plan carries it as a delete,
+  which names no bundle key);
+- `legacy_key_unknown`, `dashboard_parent_moved`, `unresolved_name`,
+  `state_mismatch`, `malformed_state` and `read_failed` (a read error is never
+  read as absent).
+
+It prints the plan's sha256. That digest is the exact acknowledgement: the
+owner attestation is deferred (review mode `single_maintainer_audited`), so a
+mutating run needs `MIP_ADOPT_PLAN_ACK=<sha256>` exported in the shell (never
+`.env.local`). Without it the run ends there, read-only. With it the run takes
+the signed lease and runs `install_state_adopt apply`, which recomputes the
+plan immediately before the first state edit, refuses with nothing changed
+unless the digest is the acknowledged one, asserts the lease before every
+edit and then:
+
+- **adopt** binds exactly the plan's keys
+  (`bundle_env deployment bind <key> <id> -t client --auto-approve`), proves
+  the state binds each to its id, plans again and judges that plan with the
+  bundle plan gate's adopt mode (position `post-bind`): no delete, recreate or
+  `update_id`; no Lakebase instance update or resize (`instance_change`; the
+  release acknowledgement does not apply); creates exactly the bundle's keys
+  minus the bound keys (`create_set_mismatch`, a grant create included); no
+  dashboard recreate or move (`dashboard_recreate`, `dashboard_move`); and
+  every rename's new name looked up with the create's own read-only lookup
+  before anything is renamed (`rename_collision`). On any failure after the
+  first bind it unbinds each key the state shows this run bound, in reverse
+  (the App last), and reads the state again to prove it (exit 2); if that
+  cannot be proven it exits 3 and the private report names what the state may
+  still bind;
+- **unadopt** unbinds each legacy key the deployer's state binds to its legacy
+  id, and nothing else: a key the deployer created itself stays bound. It
+  unbinds in the reverse of adopt's order, so the App's binding is the last one
+  removed, and stops at the first failure (exit 3).
+
+After an exit 3 from either phase, run `--phase unadopt` (again): its plan
+unbinds whatever legacy keys the state still binds, and its live checks accept
+that half-bound state.
+
+`bundle_env deployment` admits a non-App bind or unbind only as one of the
+edits an adopt plan names, never with `--force-lock`
+(tools/databricks/bundle_env_adopt.py). The caller passes the plan file, its
+digest and the held lease's evidence as wrapper-only flags that never reach the
+CLI (`--adopt-plan`, `--adopt-plan-sha256`, `--adopt-lease-id`,
+`--adopt-source-git-sha`). Those prove nothing alone, since anyone can digest a
+document they wrote, so bundle_env also requires the digest to be the
+`MIP_ADOPT_PLAN_ACK` in its own environment, the plan to name the resolved
+profile's client, deployer root and legacy root, and the profile App's signed
+lease to be held, which only the deploy's signing authority can take. The CLI
+never inherits the proof-signing keys, and its output (which names ids) stays
+out of the log; every id read from either state is a runner
+mask. A live adopt or unadopt phase is CI-only, like the plan phase; locally,
+`--phase adopt --dry-run` (with or without `MIP_ADOPT_PLAN_ACK`) prints the
+steps and stops before the lease. The expected run on client #1 binds 16 keys and
+plans exactly 2 creates (the two jobs the legacy install never had).
+
+**Owed live confirmations.** No adoption has run. The direct engine's `bind`
+of every declared kind (App, Lakebase instance and catalog, warehouse, jobs,
+pipeline, dashboards, experiment) on CLI v1.10.0 is unconfirmed: an
+unsupported kind fails its bind, and the run undoes the binds before it.
+
+**Dashboards (attack O9).** Spike S4 (a dashboard `parent_path` move on
+throwaway resources: update in place, or recreate?) has not run, because it
+needs resources only the owner can delete. The worst case is assumed: a move
+recreates the dashboard, losing its id, history and shares. So
+`MIP_DASHBOARD_PARENT_PATH` stays pinned at the legacy dashboards' live folder
+and is permanent for this install (the profile requires it inside
+`MIP_LEGACY_BUNDLE_ROOT`; the adopt plan refuses a legacy dashboard outside it
+and records `pinned_permanent`; the post-bind gate refuses a dashboard
+recreate or move). The other branch, moving both dashboards into the
+deployer's root and updating the pin with the state together, stays unbuilt
+until S4 shows the move is an in-place update.
+
+**Archiving the legacy root (cutover step 16).**
+`python -m tools.clients.archive_legacy_root` is read-only by default. It plans
+copying the legacy root's top-level children (`--only <name>` narrows them)
+into `<deployer root>/legacy-archive/<legacy leaf>/` and refuses (`bound_path`)
+any move whose path set intersects a path a bound resource still uses (a
+dashboard's file, an experiment, the App's default and deployed source
+folders, every workspace path a bound job's settings or the pipeline's spec
+names) or the legacy `state` folder, which unadopt reads. It refuses unless the
+deployer's state binds the App. The Workspace API has no move call, so
+`--apply --ack-plan <sha256>` recomputes the plan, refuses on any difference
+and copies each file and notebook create-only and byte-verified. It never
+deletes: removing the legacy originals stays the owner's cutover step, from
+the plan's list.
+
 ## Presenter mode (demo workspaces only)
 
 `MIP_PRESENTER_MODE` (default off) shows demo-only affordances to every user

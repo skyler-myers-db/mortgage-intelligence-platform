@@ -89,6 +89,8 @@ EXPECTED_IDENTIFYING = frozenset(
         "MIP_COTALITY_SHARE_NAME",
         "MIP_UC_CATALOG_STORAGE_ROOT",
         "MIP_DASHBOARD_PARENT_PATH",
+        # M2-PR6: an adopted install's legacy root names its owner.
+        "MIP_LEGACY_BUNDLE_ROOT",
         "MIP_LENDER_IDENTITY_JSON",
         "MIP_ACCEPTED_EXPOSURE_JSON",
         "MIP_SEED_OPERATOR_EMAIL",

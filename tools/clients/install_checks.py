@@ -15,7 +15,11 @@ reads as absent. Any other read error refuses that check, never "absent".
    When a first-install journal file exists for that App, an interrupted
    first install may own it: the check defers to the pre-lease bundle plan
    gate, which verifies the signed journal and refuses ``not_adopted``
-   otherwise, still before the lease.
+   otherwise, still before the lease. The adopt phases (``adopting``,
+   ``./scripts/deploy.sh -t client --phase adopt|unadopt``) are the runs that
+   expect an unadopted App: adopt binds it, unadopt unbinds it, and an
+   unproven undo can leave other keys bound without it, the state unadopt
+   recovers. There it is noted, not refused.
 2. **install marker.** The catalog ``MIP_DEFAULT_CATALOG`` carries the
    property ``mip.install_key``, which the governed deploy stamps in the very
    call that creates the catalog (tools/databricks/ensure_pipeline_namespace.py),
@@ -25,7 +29,10 @@ reads as absent. Any other read error refuses that check, never "absent".
    only when this deployer's state binds the App (an install it already
    holds, from before the marker); otherwise it is another install's catalog
    or one this deployer never adopted, which a ``CREATE CATALOG IF NOT
-   EXISTS`` would silently reuse. No catalog is a first install.
+   EXISTS`` would silently reuse. No catalog is a first install. The adopt
+   phases accept an unmarked catalog too (the App they bind and unbind
+   predates the marker); a marker for another install refuses there as
+   everywhere.
 3. **Cotality share.** The source catalog (``MIP_COTALITY_SOURCE_*``, the
    canonical names when unset; backend/config/source_names.py) is a Delta
    Sharing catalog, mounted from ``MIP_COTALITY_SHARE_PROVIDER`` and
@@ -79,12 +86,16 @@ def _get_or_none(call: Callable[..., Any], *args: Any) -> Any | None:
 class InstallChecks:
     """One run of the install checks against one deployer workspace client."""
 
-    def __init__(self, profile: ClientProfile, workspace: Any, account: Callable[[], Any]) -> None:
+    def __init__(
+        self, profile: ClientProfile, workspace: Any, account: Callable[[], Any], *, adopting: bool = False
+    ) -> None:
         self.profile = profile
         self.workspace = workspace
         self.account = account
+        self.adopting = adopting
         self.lines: list[str] = []
         self.app_bound = False
+        self.unadopted = False
         self.install_catalog: Any = None
 
     def run(self) -> list[str]:
@@ -121,7 +132,9 @@ class InstallChecks:
         except Exception as exc:  # noqa: BLE001
             self.lines.append(_read_error("adoption", exc))
             return
-        if not journaled:
+        if not journaled and self.adopting:
+            self.unadopted = True
+        elif not journaled:
             self.lines.append(
                 "adoption: the App MIP_APP_NAME names exists, but this deployer's bundle state does not "
                 "bind apps.mip_app to it: an existing install this deployer never adopted (adopt it into "
@@ -157,7 +170,7 @@ class InstallChecks:
                 f"install marker: MIP_DEFAULT_CATALOG carries {INSTALL_KEY_PROPERTY} for another install "
                 "than MIP_CLIENT; refusing to deploy into another install's catalog"
             )
-        elif not marker and not self.app_bound:
+        elif not marker and not self.app_bound and not self.unadopted:
             self.lines.append(
                 f"install marker: MIP_DEFAULT_CATALOG exists without {INSTALL_KEY_PROPERTY}, and this "
                 "deployer's state binds no App: a catalog this install's deploy did not create, which "
@@ -291,7 +304,15 @@ def account_client(profile: ClientProfile) -> Any:
     return client
 
 
-def check(profile: ClientProfile, workspace: Any, account: Callable[[], Any] | None = None) -> list[str]:
+def check(
+    profile: ClientProfile,
+    workspace: Any,
+    account: Callable[[], Any] | None = None,
+    *,
+    adopting: bool = False,
+) -> list[str]:
     """Every install refusal; empty means the install checks hold."""
 
-    return InstallChecks(profile, workspace, account or (lambda: account_client(profile))).run()
+    return InstallChecks(
+        profile, workspace, account or (lambda: account_client(profile)), adopting=adopting
+    ).run()

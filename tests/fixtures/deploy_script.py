@@ -35,6 +35,8 @@ DEPLOY_SLICED_LIBRARIES = (
     # Not sliced from the entrypoint: written for the bundle plan gate
     # (M0-PR4), sourced and expanded the same way, after the identity library.
     _LIB / "deploy_bundle_plan_gate_lifecycle.sh",
+    # The adopt and unadopt phases (M2-PR6), sourced right after the gate.
+    _LIB / "deploy_adopt_phase_lifecycle.sh",
 )
 # Top-level orchestration sliced verbatim out of the entrypoint, in step order.
 DEPLOY_STEP_SCRIPTS = (

@@ -212,6 +212,45 @@ def reserved_identity_refusals(profile: ClientProfile) -> list[str]:
     return lines
 
 
+def adoption_refusals(profile: ClientProfile) -> list[str]:
+    """An adopted install (M2-PR6): another root's state, and its dashboards pinned there.
+
+    ``MIP_LEGACY_BUNDLE_ROOT`` names the root whose bundle state the adopt
+    phase binds from, so it is never the client target's own root. Spike S4
+    has not shown whether a dashboard ``parent_path`` change updates in place
+    or recreates (losing the dashboard's id, history and shares), so an
+    adopted install keeps its dashboards in their legacy folder, permanently
+    until S4 says otherwise: ``MIP_DASHBOARD_PARENT_PATH`` is required and
+    must lie inside the legacy root.
+    """
+
+    root = profile.legacy_bundle_root
+    if not _real(root):
+        return []
+    assert root is not None
+    lines = []
+    deployer = profile.identity_ids.deployer
+    if _real(profile.client) and _real(deployer):
+        own = f"/Workspace/Users/{deployer}/.bundle/mortgage-intelligence-platform/{profile.client}"
+        if root.casefold() == own.casefold():
+            lines.append(
+                "MIP_LEGACY_BUNDLE_ROOT: must not be the client target's own root; it names the "
+                "root an adopted install's state is bound from"
+            )
+    parent = profile.dashboard_parent_path
+    if parent is None:
+        lines.append(
+            "MIP_DASHBOARD_PARENT_PATH: is required when MIP_LEGACY_BUNDLE_ROOT is set: an "
+            "adopted install's dashboards stay in their legacy folder (spike S4 is owed)"
+        )
+    elif _real(parent) and not (parent == root or parent.startswith(f"{root}/")):
+        lines.append(
+            "MIP_DASHBOARD_PARENT_PATH: must lie inside MIP_LEGACY_BUNDLE_ROOT: an adopted "
+            "install's dashboards stay in their legacy folder (spike S4 is owed)"
+        )
+    return lines
+
+
 def exposure_refusals(profile: ClientProfile) -> list[str]:
     """The accepted-exposure policy's closed shape and ceiling, at resolve (M2-PR4).
 
@@ -254,6 +293,7 @@ def cross_field_refusals(profile: ClientProfile, *, allow_placeholders: bool) ->
         install_class_refusals,
         tier_refusals,
         reserved_identity_refusals,
+        adoption_refusals,
         exposure_refusals,
     ):
         lines += rule(profile)
