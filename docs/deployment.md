@@ -1858,7 +1858,7 @@ tier.
 | signed lease writer (`lease_writer`) | agent runtime | release probe |
 | pre-stop probes | `--runtime-application-id` and `--verifier-application-id`; Supervisor and Genie clauses for App, runtime and verifier | `--agentic-tier off`, neither id; no Supervisor clause; the Genie clause audits the App (on a first install, its future service principal as a `users` member) |
 | runtime UC audit, verifier Lakebase role, runtime/verifier/proxy isolation audits | run | skipped |
-| Lakebase bootstrap control identity (`run_with_lakebase_bootstrap_authority`) | the agent runtime, required up front | none; the converger refuses only a path that would create a role |
+| Lakebase bootstrap control identity (`run_with_lakebase_bootstrap_authority`) | the agent runtime, required up front | the release probe, required up front (it has no Lakebase role and is never a converged target) |
 | UC grants and the reviewed-function reconcile | App, runtime and proxy | App only (`verify_reviewed_function_execute_grants --agentic-tier off`) |
 | migrate job verifier flag (`var.require_ai_gateway_verifier`) | the bundle default `--require-ai-gateway-verifier` | `--ai-gateway-verifier-absent`, no verifier bound |
 | App payload | unchanged | `MIP_AGENT_ORCHESTRATOR=0`, `MIP_AI_GATEWAY=0`; an operator value turning either on refuses |

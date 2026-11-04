@@ -157,15 +157,19 @@ def lease_writer(tier: AgenticTier) -> IdentityRole:
     return "agent_runtime" if agentic_tier(tier) == "on" else "release_probe"
 
 
-def lakebase_bootstrap_control(tier: AgenticTier) -> IdentityRole | None:
-    """The identity that controls a one-use Lakebase role creator, or ``None`` in core.
+def lakebase_bootstrap_control(tier: AgenticTier) -> IdentityRole:
+    """The fresh OAuth-M2M positive control of a one-use Lakebase role creator.
 
-    The core tier has no control identity, so the deploy hands none and the
-    converger refuses only the path that would create a role
-    (tools/databricks/lakebase_oauth_role_bootstrap.py).
+    The creator proves its destroyed credential unusable against a second
+    client that still reads the instance
+    (tools/databricks/lakebase_oauth_role_bootstrap_control.py). It must be an
+    M2M identity of the tier that is never a converged role: the agentic tier
+    keeps today's agent runtime; the core tier has none, so its control is the
+    release probe, its isolated identity (no App access outside the candidate
+    probe, no Lakebase role). In both tiers it is also the lease writer.
     """
 
-    return "agent_runtime" if agentic_tier(tier) == "on" else None
+    return "agent_runtime" if agentic_tier(tier) == "on" else "release_probe"
 
 
 def configured_identity_client_ids() -> dict[IdentityRole, str]:

@@ -670,28 +670,26 @@ prove_agent_runtime_dual_uc_boundary() {
 }
 
 run_with_lakebase_bootstrap_authority() {
-  # The core tier has no control identity (m2m_identity_contract.
-  # lakebase_bootstrap_control): the child gets none, and the converger refuses
-  # only the path that would create a role. The agentic tier hands the agent
-  # runtime's credential and still refuses its absence up front.
-  if ! tier_is_agentic; then
-    (
-      unset MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET
-      run_with_account_identity run_with_proof_signing_authority "$@"
-    )
-    return
-  fi
+  # The tier's control identity (m2m_identity_contract.
+  # lakebase_bootstrap_control): the agent runtime in the agentic tier, the
+  # release probe in the core tier, which has no runtime. Both are reserved
+  # M2M identities the per-run credential check already required; either
+  # tier refuses its absence up front.
   local control_client_id="${DATABRICKS_AGENT_RUNTIME_CLIENT_ID:-}"
   local control_client_secret="${DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET:-}"
+  if ! tier_is_agentic; then
+    control_client_id="${DATABRICKS_RELEASE_PROBE_CLIENT_ID:-}"
+    control_client_secret="${DATABRICKS_RELEASE_PROBE_CLIENT_SECRET:-}"
+  fi
   if [[ "$DRY_RUN" -eq 0 && \
         ( -z "$control_client_id" || -z "$control_client_secret" ) ]]; then
     echo "${RED}[deploy] fresh OAuth-M2M Lakebase bootstrap control credentials are missing.${RST}" >&2
     return 2
   fi
-  # Expose the reviewed agent-runtime control identity only to the convergence
-  # child. The child creates a fresh OAuth client for every bracketed probe;
-  # ordinary deploy commands never inherit this credential under a generic
-  # Databricks auth variable.
+  # Expose the reviewed control identity only to the convergence child. The
+  # child creates a fresh OAuth client for every bracketed probe; ordinary
+  # deploy commands never inherit this credential under a generic Databricks
+  # auth variable.
   (
     export MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID="$control_client_id"
     export MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET="$control_client_secret"

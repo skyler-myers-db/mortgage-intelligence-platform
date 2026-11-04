@@ -1,9 +1,13 @@
 """The agentic tier's identity contract, from the profile to the deploy shell (M2-PR3).
 
-* ``m2m_identity_contract``: the core tier deploys the four core roles, its
-  lease writer is the release probe and it has no Lakebase bootstrap control
-  identity; the agentic tier adds the verifier, the runtime and the proxy and
-  keeps today's writer (the runtime). Any other tier value refuses.
+* ``m2m_identity_contract``: the core tier deploys the four core roles, and
+  the release probe writes its lease and is its Lakebase bootstrap control;
+  the agentic tier adds the verifier, the runtime and the proxy and keeps
+  today's writer and control (the runtime). Any other tier value refuses.
+* ``run_with_lakebase_bootstrap_authority`` hands the convergence child that
+  control's credential in either tier, and the one-use creator's own check
+  (lakebase_oauth_role_bootstrap_control) accepts it for every role the tier
+  converges.
 * ``tools/clients``: the policy and the client-target view carry the tier and
   the contract's client-id names; the core tier's bundle variables bind no
   verifier and hand the migrate job its absence flag; the agentic tier's are
@@ -17,6 +21,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -27,6 +32,7 @@ from tools.clients.environment import RawProfile, resolve
 from tools.clients.errors import ProfileRefusal
 from tools.clients.policy import install_policy
 from tools.databricks import m2m_identity_contract as contract
+from tools.databricks.lakebase_oauth_role_bootstrap_control import bootstrap_control_credentials
 
 REPO = Path(__file__).resolve().parents[2]
 CORE_ENVS = (
@@ -45,7 +51,7 @@ AGENTIC_ENVS = (
 def test_the_core_tier_deploys_the_four_core_roles_with_the_release_probe_writing_the_lease() -> None:
     assert contract.required_roles("off") == ("normal", "operator2", "admin", "release_probe")
     assert contract.lease_writer("off") == "release_probe"
-    assert contract.lakebase_bootstrap_control("off") is None
+    assert contract.lakebase_bootstrap_control("off") == "release_probe"
 
 
 def test_the_agentic_tier_keeps_todays_roster_and_writer() -> None:
@@ -67,6 +73,10 @@ def test_every_role_has_one_deploy_client_id_name_and_the_writer_is_never_the_de
     assert len(set(contract.DEPLOY_CLIENT_ID_ENV.values())) == len(contract.DEPLOY_CLIENT_ID_ENV)
     for tier in contract.AGENTIC_TIERS:
         assert contract.lease_writer(tier) in contract.required_roles(tier)
+        # The control is a tier identity that is never a converged Lakebase
+        # role (the App, the jobs reader and the verifier).
+        assert contract.lakebase_bootstrap_control(tier) in contract.required_roles(tier)
+        assert contract.lakebase_bootstrap_control(tier) != "verifier"
 
 
 @pytest.mark.parametrize("value", ["", "core", "agentic", "On", "OFF", " off", "1", "true"])
@@ -197,3 +207,75 @@ def test_the_shell_reads_the_agentic_contract(tmp_path: Path) -> None:
     assert "agentic tier:" not in result.stdout, "the agentic transcript is unchanged"
     assert "tier=on writer=DATABRICKS_AGENT_RUNTIME_CLIENT_ID" in result.stdout
     assert "has release probe" in result.stdout and "no runtime" not in result.stdout
+
+
+# ------------------------------------------- the Lakebase bootstrap control
+
+
+_CONTROL_PROBE = (
+    "import os, sys\n"
+    "from tools.databricks.lakebase_oauth_role_bootstrap_control import bootstrap_control_credentials\n"
+    "print(bootstrap_control_credentials(os.environ, target_application_id=sys.argv[1])[0])\n"
+)
+
+
+def _bootstrap_authority(tier: str, target: str, **credentials: str) -> subprocess.CompletedProcess[str]:
+    """``run_with_lakebase_bootstrap_authority`` around the one-use creator's own control check."""
+
+    script = (
+        "set -euo pipefail\n"
+        "RED=''; RST=''; DRY_RUN=0\n"
+        f". {REPO / 'scripts' / 'lib' / 'deploy_identity_lifecycle.sh'}\n"
+        'run_with_account_identity() { "$@"; }\n'
+        'run_with_proof_signing_authority() { "$@"; }\n'
+        f"CLIENT_AGENTIC_TIER={tier}\n"
+        f'run_with_lakebase_bootstrap_authority python -c "$1" {target}\n'
+        'echo "parent control=${MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID:-unset}"\n'
+    )
+    env = {"PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin", "PYTHONPATH": str(REPO), **credentials}
+    return subprocess.run(
+        ["bash", "-c", script, "bootstrap-authority", _CONTROL_PROBE],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+        env=env,
+    )
+
+
+_CREDENTIALS = {
+    "DATABRICKS_RELEASE_PROBE_CLIENT_ID": IDENTITY_IDS["release_probe"],
+    "DATABRICKS_RELEASE_PROBE_CLIENT_SECRET": "secret-release-probe-PLACEHOLDER",
+    "DATABRICKS_AGENT_RUNTIME_CLIENT_ID": IDENTITY_IDS["runtime"],
+    "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET": "secret-runtime-PLACEHOLDER",
+}
+
+
+@pytest.mark.parametrize("tier", ["off", "on"])
+@pytest.mark.parametrize("target", ["app-client-EXAMPLE", IDENTITY_IDS["jobs"]])
+def test_the_converger_gets_the_tiers_control_and_its_create_check_accepts_it(tier: str, target: str) -> None:
+    # A first install creates the App's and the jobs reader's roles in either
+    # tier: the one-use creator refuses without a control, so each tier hands one.
+    role = contract.lakebase_bootstrap_control(tier)  # type: ignore[arg-type]
+    expected = _CREDENTIALS[contract.IDENTITY_DEFAULTS[role].client_id_secret_name]
+    core_only = {name: value for name, value in _CREDENTIALS.items() if "RELEASE_PROBE" in name}
+    result = _bootstrap_authority(tier, target, **(core_only if tier == "off" else _CREDENTIALS))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [expected, "parent control=unset"], "exposed to the child alone"
+
+
+def test_a_core_converger_without_the_release_probe_refuses_up_front() -> None:
+    result = _bootstrap_authority("off", "app-client-EXAMPLE")
+    assert result.returncode == 2
+    assert "fresh OAuth-M2M Lakebase bootstrap control credentials are missing" in result.stderr
+
+
+def test_the_create_check_refuses_a_missing_control_or_one_that_is_its_target() -> None:
+    with pytest.raises(RuntimeError, match="control credentials are required"):
+        bootstrap_control_credentials({}, target_application_id="app-client-EXAMPLE")
+    control = {
+        "MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID": IDENTITY_IDS["release_probe"],
+        "MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET": "secret-release-probe-PLACEHOLDER",
+    }
+    with pytest.raises(RuntimeError, match="must be distinct from the target"):
+        bootstrap_control_credentials(control, target_application_id=IDENTITY_IDS["release_probe"])

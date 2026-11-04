@@ -14,7 +14,10 @@ against a first install, and the run must:
   reconcile (proven by the real verifier against the grants it applied) and
   the UC grant block, granting only the App;
 * hand the migrate job the core tier's verifier absence flag and no verifier;
-* hand no Lakebase bootstrap control credential to any child;
+* hand the Lakebase role converger the release probe as its bootstrap
+  control, which the one-use creator's real control check accepts for the
+  App's and the jobs reader's roles, and hand that credential to no other
+  child;
 * then stop at the core activation boundary, exit 2, and release the lease
   after the first-install compensation removed the App it created.
 
@@ -115,17 +118,36 @@ def test_the_migrate_job_gets_the_absence_flag_and_no_verifier(core_release) -> 
     assert env["BUNDLE_VAR_ai_gateway_verifier_client_id"] is None
 
 
+def _converges(call: dict) -> bool:  # type: ignore[type-arg]
+    return call["argv"][:2] == ["-m", "tools.databricks.converge_lakebase_oauth_role"]
+
+
 def test_no_child_ever_holds_an_agentic_identity(core_release) -> None:  # type: ignore[no-untyped-def]
     for call in [*core_release.python_calls, *core_release.cli_calls]:
         env = call["env"]
-        assert env["MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID"] is None, call["argv"]
-        assert env["MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET"] is None, call["argv"]
+        if not _converges(call):
+            assert env["MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID"] is None, call["argv"]
+            assert env["MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET"] is None, call["argv"]
         assert not env["DATABRICKS_AGENT_RUNTIME_CLIENT_ID"], call["argv"]
         assert not env["DATABRICKS_VERIFIER_CLIENT_ID"], call["argv"]
     argv = json.dumps([call["argv"] for call in core_release.python_calls])
     assert not any(identity in argv for identity in AGENTIC)
     lakebase = [module for module in core_release.modules() if module[0] == "tools.databricks.converge_lakebase_oauth_role"]
     assert lakebase and all("--role-contract" in module and "verifier" not in module for module in lakebase)
+
+
+def test_the_lakebase_roles_are_created_with_the_release_probe_as_control(core_release) -> None:  # type: ignore[no-untyped-def]
+    # A first install creates both roles; the one-use creator refuses without a control.
+    converges = [call for call in core_release.python_calls if _converges(call)]
+    assert converges and all(
+        call["env"]["MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID"] == IDENTITY_IDS["release_probe"]
+        and call["env"]["MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET"]
+        for call in converges
+    )
+    assert core_release.state["lakebase_role_creates"] == [
+        {"role_contract": "app", "target": APP_CLIENT, "control": IDENTITY_IDS["release_probe"]},
+        {"role_contract": "jobs_reader", "target": IDENTITY_IDS["jobs"], "control": IDENTITY_IDS["release_probe"]},
+    ]
 
 
 @pytest.mark.parametrize("tier", [None, "core", "On", "maybe"])

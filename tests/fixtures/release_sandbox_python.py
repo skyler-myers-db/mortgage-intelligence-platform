@@ -12,6 +12,11 @@ identity-bearing environment names it was handed. Then, by what it is:
 * the reviewed function grant verifier: its real ``main`` with a fake
   workspace that holds exactly the grants the deploy applied (the CLI stub
   records them), so its tier-aware argument contract runs for real;
+* the Lakebase role converger: a first install has no role yet, so each
+  converge takes the create path, whose one-use creator first runs its real
+  control check (tools/databricks/lakebase_oauth_role_bootstrap_control.py)
+  on the credential the deploy handed it. A refusal fails the step loudly. A
+  ``--recover-bootstrap-only`` call finds no creator to recover;
 * a scripted answer for each tool whose output the deploy reads (the lease,
   the first-install journal, the bundle summary, the release id, the stop
   outcome, the resource bindings, the Genie space id), kept in
@@ -184,6 +189,27 @@ def _function_grants(args: list[str]) -> int:
     return verifier.main(args)
 
 
+def _converge_lakebase_role(args: list[str]) -> int:
+    """The create path's first check, for real: no role exists on a first install."""
+
+    from tools.databricks.lakebase_oauth_role_bootstrap_control import bootstrap_control_credentials
+
+    target = _option(args, "--application-id")
+    if "--recover-bootstrap-only" in args:
+        return 0  # the compensation's recovery of a creator this run never left behind
+    try:
+        control, _secret = bootstrap_control_credentials(os.environ, target_application_id=target)
+    except RuntimeError as exc:
+        print(f"[sandbox] converge_lakebase_oauth_role --application-id {target}: {exc}", file=sys.stderr)
+        return 1
+    state = _state()
+    state.setdefault("lakebase_role_creates", []).append(
+        {"role_contract": _option(args, "--role-contract"), "target": target, "control": control}
+    )
+    _save(state)
+    return 0
+
+
 def main() -> int:
     args = sys.argv[1:]
     with open(os.environ["SANDBOX_PY_LOG"], "a", encoding="utf-8") as log:
@@ -205,6 +231,7 @@ def main() -> int:
         "tools.databricks.app_first_install_journal": _journal,
         "tools.databricks.bundle_env": _bundle_env,
         "tools.databricks.verify_reviewed_function_execute_grants": _function_grants,
+        "tools.databricks.converge_lakebase_oauth_role": _converge_lakebase_role,
     }
     if module in handlers:
         return handlers[module](rest)
