@@ -2407,9 +2407,11 @@ still owed at the first governed plan phase. Any field, action or key the
 parser does not know refuses as `malformed_plan`.
 
 `./scripts/deploy.sh -t client --phase plan` runs only the read-only steps
-through the pre-lease gate and exits before the lease. A live plan phase is
-CI-only (`plan is CI-only; use --dry-run or make bundle-validate`); locally,
-`--phase plan --dry-run` prints the same steps without any Databricks call.
+through the pre-lease gate, predicts each phase's budget, and exits before the
+lease. A live plan phase is CI-only (`plan is CI-only; use --dry-run or make
+bundle-validate`); locally, `--phase plan --dry-run` prints the same steps
+without any Databricks call. `--phase data` runs no bundle plan at all (see
+"Governed run phases" below).
 
 ### Keep blue serving: the one bounded quiesce window (M0-PR8)
 
@@ -2694,6 +2696,106 @@ it takes to reach RUNNING and arm (`ARM_WAIT_S` assumes at most 600 s), its
 idempotency token and timeout, `apps start` as the deployer on a stopped App,
 and the cancel of a sleeping run. Until then the worst case is assumed: a start
 creates a new deployment, and nothing is trusted without the re-proof above.
+
+### Governed run phases: plan, release and data (M1-PR6)
+
+CI runs one phase per job (`./scripts/deploy.sh -t client --phase <phase>`,
+M1-PR7), each with its own deadline in `MIP_JOB_DEADLINE_EPOCH` (plan 30,
+release 330 and data 330 minutes). **A run with no `--phase` is unchanged**: it
+is still the complete deploy, release then data in one process, and nothing in
+this section gates it: its dry-run transcript is the one before this change,
+line for line (only the commit sha and mktemp names differ between any two
+runs). A live phase is CI-only; locally every phase runs with `--dry-run`.
+
+| Phase | Lease | What it does |
+|---|---|---|
+| `plan` | none | The read-only steps through the pre-lease bundle plan gate and the window plan, then each phase's predicted budget (`tools/databricks/phase_budget.py describe`), kept as local files. Nothing is written to the workspace; the PlanReport upload to the plan-reports folder is M1-PR7's. |
+| `release` | yes | The run with no `--phase` minus exactly the data jobs (silver, gold and its grant reconcile, the stale-rate guard, the lifecycle sync and the KPI snapshot), which it never runs, submits or triggers. It prints `data jobs deferred to --phase data`. The core tier refuses it before the lease like a run with no phase, until M2-PR7b. |
+| `data` | yes, its own | Silver (unless `--skip-silver`), then `mip_scheduled_refresh` (FRED, gold, lifecycle mirror, KPI snapshot and its outcome gate), each followed by the reviewed-function grant reconcile and verify when its graph touches gold, then the data smoke. No pre-stop probe, no bundle plan or apply, and no Apps call but one read-only `apps get` of the App's service principal. |
+
+**Budgets** (`tools/databricks/phase_budget.py`). Each phase's prediction is a
+reviewed sum of per-step budgets, calibrated to the 240-minute envelope the
+parked workflow held for a whole first install. It must be at most 330
+minutes, and `MIP_JOB_DEADLINE_EPOCH - now` must cover it plus 15 minutes,
+decided by the window's own admission rule under its own schema
+(`quiesce_window_budget.PHASE_BUDGET_SCHEMA`). A release's prediction adds the
+one-use Lakebase role bootstraps when the window plan reads `not_applicable` (a
+first install, or one resumed after the owner bootstrap: the App's role, and the
+verifier's in the agentic tier) and the window's own length and restore when it
+reads `window`. A release refuses before its lease; a data phase refuses in its
+read-only data plan, also before its lease. The numbers are not measurements:
+the first governed run owes the live timings.
+
+**The data job runner** (`tools/databricks/job_phase_runner.py`, with
+`job_phase_definition.py` and `job_phase_ledger.py`):
+
+- `plan` (read-only, before the lease): each job is the one this deployer's
+  bundle state binds, every job of its `run_job_task` closure and every
+  pipeline it starts is bound there too, and each was deployed by this
+  deployer's bundle (`deployment.kind` BUNDLE, its metadata file under the
+  client target's root). The definition digest is the sha256 of the closure's
+  live job settings and pipeline specs. `touches_gold` fails closed: only a
+  silver, ref or catalog-DDL SQL file or the FRED or KPI script is gold-free.
+- `begin`, `run`, `close` (under the lease): a signed ledger beside the lease
+  (`<lease root>/<app>.data-phase-ledger.json`, the proof key's Ed25519 scheme
+  the quiesce journal uses) holds one generation per data phase. Each run's
+  idempotency token, `mip-data-<sha256(client, job, definition, generation,
+  attempt)>`, is journaled before the run-now. A rerun re-attaches to a run
+  still going, skips one that succeeded, and runs only a terminal-failed one
+  (TERMINATED other than SUCCESS, SKIPPED, INTERNAL_ERROR) as the next attempt,
+  with a new token. A run still going at the deadline exits 4: re-run
+  `--phase data` and it re-attaches. Nothing is ever cancelled.
+- **Stale definition.** An open generation whose entry ran under another
+  definition (a release redeployed the job between a failed attempt and this
+  phase) refuses with the sha256 of its reset plan (purpose
+  `data_ledger_supersede`). Review it, then export
+  `MIP_ACK_DATA_LEDGER_SUPERSEDE=<that sha256>` for one run (shell only, never
+  `.env.local`). The runner recomputes the plan, refuses on any difference, and
+  never supersedes while a stale run is still active.
+- **Attack O11.** After every job whose graph touches gold or the UC
+  functions, the data phase runs `reconcile_reviewed_function_execute_grants`
+  (moved verbatim to `scripts/lib/deploy_reviewed_function_grants_lifecycle.sh`
+  so both phases run the same function) and its read-only
+  `verify_reviewed_function_execute_grants`. A failure of either exits 4 and
+  refuses success: no later job runs and the generation stays open.
+
+The runner's run-now is the one reviewed run-now site
+(`tools/databricks/stop_primitive_map.JOB_RUN_SITES`), its mutating modes are
+the data-phase library's alone, and every shell `databricks bundle run <job>` is
+a reviewed site (`SHELL_JOB_RUN_SITES`).
+
+**First install: awaiting owner bootstrap** (`tools/databricks/first_install_bootstrap.py`).
+The account principal manages only the service principals it was enumerated
+for, so a new App's identity needs the owner's human-run
+`python -m tools.clients.bootstrap_account --post-first-install` before any
+App-identity proof. A `--phase release` that created the App (stopped,
+source-free, bound, its signed first-install journal claimed) checks read-only
+whether the account principal holds Service Principal Manager on it. Until it
+does, the release writes a signed awaiting marker
+(`<lease root>/<app>.first-install-bootstrap.json`, bound to the journal's
+claim), keeps the App, and stops with exit 3 and
+`awaiting owner bootstrap --post-first-install`. The owner then runs:
+
+```bash
+python -m tools.clients.bootstrap_account --plan --for post-first-install
+python -m tools.clients.bootstrap_account --post-first-install --ack-plan <sha256>
+```
+
+The next `--phase release` resumes at the same point: step 0a reads the marker
+in place of deleting the journal-owned App, the bundle apply proves the App is
+still bound exactly as its journal recorded, and the gate consumes the marker
+once the check passes. From there it is an ordinary first install, whose
+failure is compensated as before. A run with no `--phase` never reaches the
+gate. Owed live: what the account principal may read of a rule set it does not
+manage yet (a refusal reads as "not held"), and whether a step before the gate
+in the resumed run needs that grant.
+
+**Data phase on a first install.** The release's gold-dependent tail (the
+Genie trusted assets, the agentic tier's Lakebase synced tables, Agent
+Evaluation and the smoke) reads gold. A routine release reads the gold an
+earlier data phase wrote; a first install in phase mode has none yet. Until
+M1-PR7 decides the dispatch order, the no-phase run (release then data in one
+process) stays the first-install path; see the PR's open questions.
 
 ### Adopting an existing install (M2-PR6, bind only)
 
