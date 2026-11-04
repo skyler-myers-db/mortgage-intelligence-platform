@@ -2726,8 +2726,15 @@ identity. `--rehearse --rehearse-instance <throwaway> --rehearse-database
 it creates one table on the throwaway, holds a concurrent long transaction on
 it past `lock_timeout`, probes it, runs the handover's own lock-bounded change
 and its inverse, and passes only if the change needed a retry, the inverse
-restored the owner and no probe query waited longer than `lock_timeout` plus
-a second. Only the L-A mechanism is rehearsed: L-B deletes a role.
+restored the owner, at least one probe query arrived while the change waited
+(`probe_samples_during_change`), and no probe query waited longer than
+`lock_timeout` plus a second; a session that dies voids the run. It refuses a
+database that already holds `mip_app`, and, like every mode of the tool, a
+`LAKEBASE_HOST`, `LAKEBASE_USER`, `LAKEBASE_PASSWORD` or `LAKEBASE_PORT`
+override (the operator runbooks export them for migrations; unset them first).
+On a local PostgreSQL 16.15 it passed with 12 of 12 probe queries during the
+change and a worst wait of 3.0 s. Only the L-A mechanism is rehearsed: L-B
+deletes a role.
 
 **Verify without running the stale jobs.**
 `python -m tools.clients.handover_verify privileges --principal <legacy owner>`

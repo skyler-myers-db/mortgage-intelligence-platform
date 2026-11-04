@@ -265,5 +265,6 @@ class VirtualConcurrent:
     def start(self) -> None:
         self.server.hold(REHEARSAL_KEY, self.hold_s)
 
-    def join(self) -> list[float]:
-        return [end - start for start, end in self.server.exclusive_waits]
+    def join(self) -> list[tuple[float, float]]:
+        # An App query arriving during an ALTER's wait queues behind it: the waits are the samples.
+        return list(self.server.exclusive_waits)

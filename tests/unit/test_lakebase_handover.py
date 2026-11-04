@@ -11,6 +11,7 @@ changes nothing; revert is the exact inverse, also from a partial journal.
 from __future__ import annotations
 
 import ast
+import contextlib
 import json
 import re
 from pathlib import Path
@@ -313,6 +314,7 @@ def test_the_s3_rehearsal_passes_on_the_fake_and_fails_without_the_bound(monkeyp
         sleep=server.sleep,
     )
     assert report.passed and report.change_attempts >= 2 and report.max_probe_wait_s <= 3.0
+    assert report.probe_samples_during_change >= 1
     assert report.owner_after_change == DEPLOYER and report.owner_after_revert == LEGACY
     unbounded = throwaway()
     monkeypatch.setattr(sql, "LOCK_BOUNDS", ())
@@ -326,6 +328,76 @@ def test_the_s3_rehearsal_passes_on_the_fake_and_fails_without_the_bound(monkeyp
         sleep=unbounded.sleep,
     )
     assert not failed.passed and failed.max_probe_wait_s == 8.0
+
+
+class _SilentProbe(VirtualConcurrent):
+    """The hold runs, but the probe recorded nothing (or only outside the change)."""
+
+    def __init__(self, server: FakeServer, hold_s: float, samples: list[tuple[float, float]]) -> None:
+        super().__init__(server, hold_s)
+        self.samples = samples
+
+    def join(self) -> list[tuple[float, float]]:
+        return list(self.samples)
+
+
+@pytest.mark.parametrize("samples", [[], [(-5.0, -4.9), (500.0, 500.1)]], ids=["no_sample", "outside_the_change"])
+def test_a_rehearsal_whose_probe_saw_no_wait_fails(samples: list[tuple[float, float]]) -> None:
+    """No probe query during the change's lock waits is no evidence: the run fails, never passes."""
+
+    server = throwaway()
+    report = rehearsal.rehearse(
+        server.connect,
+        legacy=LEGACY,
+        target=DEPLOYER,
+        hold_s=8.0,
+        concurrent=lambda _connect, hold: _SilentProbe(server, hold, samples),
+        clock=server.clock,
+        sleep=server.sleep,
+    )
+    assert report.change_attempts >= 2 and report.owner_after_revert == LEGACY, "the change itself rehearsed fine"
+    assert not report.passed and report.probe_samples_during_change == 0
+
+
+class _LockOnly:
+    """A connection whose one statement is the hold's LOCK TABLE."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def transaction(self) -> Any:
+        return contextlib.nullcontext()
+
+    def cursor(self) -> Any:
+        return contextlib.nullcontext(SimpleNamespace(execute=lambda _statement: None, fetchone=lambda: (0,)))
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_a_rehearsal_session_that_dies_voids_the_run() -> None:
+    """ThreadedConcurrent re-raises a session's failure (by class) instead of returning no samples."""
+
+    def never(*_args: object) -> Any:
+        raise ConnectionError("no route to the throwaway")
+
+    holdless = rehearsal.ThreadedConcurrent(never, 0.2)
+    with pytest.raises(rehearsal.RehearsalSessionFailed, match=r"hold: ConnectionError") as refused:
+        holdless.start()
+    assert "no route" not in str(refused.value)
+    opened: list[Any] = []
+
+    def hold_then_fail() -> Any:
+        if opened:
+            raise ConnectionError("the probe cannot connect")
+        opened.append(_LockOnly())
+        return opened[0]
+
+    probeless = rehearsal.ThreadedConcurrent(hold_then_fail, 0.2)
+    with pytest.raises(rehearsal.RehearsalSessionFailed, match=r"probe: ConnectionError"):
+        probeless.start()  # raises here when the probe already died, else at join
+        probeless.join()
+    assert opened[0].closed
 
 
 def test_the_rehearsal_names_a_missing_precondition_before_any_change() -> None:

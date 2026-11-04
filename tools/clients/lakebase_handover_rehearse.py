@@ -20,8 +20,10 @@ then measures exactly what the real apply relies on:
    the table to the target role, then the exact inverse moves it back.
 
 It passes when the change needed a retry (the timeout path ran), succeeded
-once the long transaction ended, the inverse restored the prior owner, and no
-probe query waited longer than ``lock_timeout`` plus a scheduling margin. It
+once the long transaction ended, the inverse restored the prior owner, at
+least one probe query arrived while the change waited, and no probe query
+waited longer than ``lock_timeout`` plus a scheduling margin; a session that
+dies voids the run (``RehearsalSessionFailed``) instead of passing it. It
 first reads the same PostgreSQL preconditions the plan does (``AUTHORITY_SQL``
 on the rehearsal schema): a missing one fails the rehearsal and names the gap
 the chosen mechanism must close, before any change. The
@@ -71,11 +73,20 @@ _PREFIX = "[mip-lakebase-rehearsal]"
 
 
 class Concurrent(Protocol):
-    """The long transaction and the probe that run beside the handover's change."""
+    """The long transaction and the probe that run beside the handover's change.
+
+    ``join`` returns each probe query's ``(started, ended)`` on the rehearsal's
+    clock, so the rehearsal can tell which queries arrived while the change
+    waited; it raises when a session died, because then nothing was measured.
+    """
 
     def start(self) -> None: ...
 
-    def join(self) -> list[float]: ...
+    def join(self) -> list[tuple[float, float]]: ...
+
+
+class RehearsalSessionFailed(LakebaseHandoverRefused):
+    """A rehearsal session died, so the measurement is void (the class only, never a driver message)."""
 
 
 @dataclass(frozen=True)
@@ -89,19 +100,48 @@ class RehearsalReport:
     max_probe_wait_s: float
     passed: bool
     missing_preconditions: tuple[str, ...] = ()
+    probe_samples: int = 0
+    # Probe queries that overlapped the change's lock waits: the evidence itself.
+    probe_samples_during_change: int = 0
 
 
 class ThreadedConcurrent:
-    """Real sessions: one holds ACCESS SHARE for ``hold_s``, one probes the table."""
+    """Real sessions: one holds ACCESS SHARE for ``hold_s``, one probes the table.
 
-    def __init__(self, connect: Callable[[], Any], hold_s: float, interval_s: float = 0.25) -> None:
+    A session that raises is recorded and stops the other; ``start`` raises
+    when the hold never took its lock, ``join`` when any session died.
+    """
+
+    def __init__(
+        self,
+        connect: Callable[[], Any],
+        hold_s: float,
+        interval_s: float = 0.25,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._connect = connect
         self._hold_s = hold_s
         self._interval_s = interval_s
+        self._clock = clock
         self._held = threading.Event()
+        self._ready = threading.Event()  # the lock is held, or the hold ended
         self._stop = threading.Event()
-        self._waits: list[float] = []
-        self._threads = [threading.Thread(target=self._hold), threading.Thread(target=self._probe)]
+        self._samples: list[tuple[float, float]] = []
+        self._errors: list[str] = []
+        self._threads = [
+            threading.Thread(target=self._guard, args=("hold", self._hold), daemon=True),
+            threading.Thread(target=self._guard, args=("probe", self._probe), daemon=True),
+        ]
+
+    def _guard(self, role: str, body: Callable[[], None]) -> None:
+        try:
+            body()
+        except BaseException as exc:  # noqa: BLE001 - recorded by class, re-raised by start/join
+            self._errors.append(f"{role}: {type(exc).__name__}")
+            self._stop.set()
+        finally:
+            if role == "hold":
+                self._ready.set()
 
     def _hold(self) -> None:
         connection = self._connect()
@@ -109,34 +149,49 @@ class ThreadedConcurrent:
             with connection.transaction(), connection.cursor() as cursor:
                 cursor.execute(f"LOCK TABLE {QUALIFIED} IN ACCESS SHARE MODE")
                 self._held.set()
+                self._ready.set()
                 time.sleep(self._hold_s)
         finally:
             connection.close()
 
     def _probe(self) -> None:
-        self._held.wait(timeout=30)
+        self._ready.wait(timeout=30)
+        if not self._held.is_set():
+            return
         connection = self._connect()
         try:
             while not self._stop.is_set():
-                started = time.monotonic()
+                started = self._clock()
                 with connection.transaction(), connection.cursor() as cursor:
                     cursor.execute(f"SELECT count(*) FROM {QUALIFIED}")
                     cursor.fetchone()
-                self._waits.append(time.monotonic() - started)
+                self._samples.append((started, self._clock()))
                 time.sleep(self._interval_s)
         finally:
             connection.close()
 
+    def _failed(self) -> RehearsalSessionFailed:
+        return RehearsalSessionFailed(f"a rehearsal session died ({', '.join(self._errors)}); nothing was measured")
+
     def start(self) -> None:
         for thread in self._threads:
             thread.start()
-        self._held.wait(timeout=30)
+        self._ready.wait(timeout=30)
+        if self._errors or not self._held.is_set():
+            self._stop.set()
+            for thread in self._threads:
+                thread.join()
+            if not self._errors:
+                self._errors.append("hold: lock not taken within 30 s")
+            raise self._failed()
 
-    def join(self) -> list[float]:
+    def join(self) -> list[tuple[float, float]]:
         self._threads[0].join()
         self._stop.set()
         self._threads[1].join()
-        return list(self._waits)
+        if self._errors:
+            raise self._failed()
+        return list(self._samples)
 
 
 def _owner(connection: Any) -> str:
@@ -152,7 +207,7 @@ def rehearse(
     legacy: str,
     target: str,
     hold_s: float,
-    concurrent: Callable[[Callable[[], Any], float], Concurrent] = ThreadedConcurrent,
+    concurrent: Callable[[Callable[[], Any], float], Concurrent] | None = None,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     budget: LockBudget = DEFAULT_BUDGET,
@@ -182,26 +237,47 @@ def rehearse(
         if missing:
             owner = _owner(connection)
             return RehearsalReport(LOCK_TIMEOUT_S, hold_s, 0, 0, owner, owner, 0.0, False, missing)
-        sessions = concurrent(connect, hold_s)
+        factory = concurrent or (lambda opened, held: ThreadedConcurrent(opened, held, clock=clock))
+        sessions = factory(connect, hold_s)
         sessions.start()
-        deadline = clock() + budget.total_s
-        change = f"ALTER TABLE {QUALIFIED} OWNER TO {quote_ident(target)}"
-        change_attempts = run_bounded(connection, change, budget=budget, deadline=deadline, clock=clock, sleep=sleep)
-        waits = sessions.join()
+        try:
+            change_started = clock()
+            deadline = change_started + budget.total_s
+            change = f"ALTER TABLE {QUALIFIED} OWNER TO {quote_ident(target)}"
+            change_attempts = run_bounded(connection, change, budget=budget, deadline=deadline, clock=clock, sleep=sleep)
+            change_ended = clock()
+        finally:
+            # Always ends both sessions; a session that died raises here.
+            samples = sessions.join()
         after_change = _owner(connection)
         inverse = f"ALTER TABLE {QUALIFIED} OWNER TO {quote_ident(legacy)}"
         revert_attempts = run_bounded(connection, inverse, budget=budget, deadline=clock() + budget.total_s, clock=clock, sleep=sleep)
         after_revert = _owner(connection)
     finally:
         connection.close()
-    worst = max(waits, default=0.0)
+    worst = max((ended - started for started, ended in samples), default=0.0)
+    # Only a probe query that arrived while the change waited measures what an
+    # App query suffers; none (a probe that recorded nothing) is no evidence.
+    during = sum(1 for started, ended in samples if started < change_ended and ended > change_started)
     passed = (
         change_attempts >= 2
         and after_change == target
         and after_revert == legacy
+        and during >= 1
         and worst <= LOCK_TIMEOUT_S + SCHEDULING_MARGIN_S
     )
-    return RehearsalReport(LOCK_TIMEOUT_S, hold_s, change_attempts, revert_attempts, after_change, after_revert, worst, passed)
+    return RehearsalReport(
+        LOCK_TIMEOUT_S,
+        hold_s,
+        change_attempts,
+        revert_attempts,
+        after_change,
+        after_revert,
+        worst,
+        passed,
+        probe_samples=len(samples),
+        probe_samples_during_change=during,
+    )
 
 
 def run_rehearsal(args: argparse.Namespace, *, session: Callable[..., Any], clock: Any) -> int:
@@ -224,4 +300,4 @@ def run_rehearsal(args: argparse.Namespace, *, session: Callable[..., Any], cloc
     return 0 if report.passed else 2
 
 
-__all__ = ["INSTALL_SCHEMA_SQL", "REHEARSAL_SCHEMA", "RehearsalReport", "ThreadedConcurrent", "rehearse", "run_rehearsal"]
+__all__ = ["INSTALL_SCHEMA_SQL", "REHEARSAL_SCHEMA", "RehearsalReport", "RehearsalSessionFailed", "ThreadedConcurrent", "rehearse", "run_rehearsal"]
