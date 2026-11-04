@@ -1,7 +1,11 @@
 """Spike S3's rehearsal of the Lakebase handover on a throwaway instance (M2-PR8).
 
 Owner-run only, and never against the install's own instance: the run
-refuses when ``--rehearse-instance`` is the profile's ``MIP_LAKEBASE_INSTANCE``.
+refuses when ``--rehearse-instance`` is the profile's ``MIP_LAKEBASE_INSTANCE``,
+when a ``LAKEBASE_HOST``/``USER``/``PASSWORD``/``PORT`` override would point the
+connection elsewhere (``lakebase_handover.CONNECTION_OVERRIDES``), and, read
+before anything is created, when the database already holds a ``mip_app``
+schema (an install's database, not a throwaway).
 On the throwaway it creates one table it owns (``mip_handover_rehearsal``;
 the owner deletes the instance afterwards, nothing here drops anything) and
 then measures exactly what the real apply relies on:
@@ -41,6 +45,8 @@ from tools.clients.lakebase_handover_sql import (
     AUTHORITY_SQL,
     DEFAULT_BUDGET,
     LOCK_TIMEOUT,
+    SCHEMA_NAME,
+    LakebaseHandoverRefused,
     LockBudget,
     quote_ident,
     run_bounded,
@@ -53,6 +59,8 @@ SETUP = (
     f"CREATE SCHEMA IF NOT EXISTS {quote_ident(REHEARSAL_SCHEMA)}",
     f"CREATE TABLE IF NOT EXISTS {QUALIFIED} (id integer PRIMARY KEY)",
 )
+# Read before anything is created: a database holding mip_app is an install's.
+INSTALL_SCHEMA_SQL = "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = %(schema)s)"
 OWNER_SQL = (
     "SELECT pg_get_userbyid(relowner)::text FROM pg_class "
     f"WHERE oid = to_regclass('{REHEARSAL_SCHEMA}.{REHEARSAL_TABLE}')"
@@ -154,6 +162,10 @@ def rehearse(
     connection = connect()
     try:
         with connection.transaction(), connection.cursor() as cursor:
+            cursor.execute(INSTALL_SCHEMA_SQL, {"schema": SCHEMA_NAME})
+            holds_install = cursor.fetchone()
+            if holds_install is None or holds_install[0]:
+                raise LakebaseHandoverRefused("the rehearsal database holds mip_app: an install's database, not a throwaway")
             for statement in SETUP:
                 cursor.execute(statement)
             cursor.execute(AUTHORITY_SQL, {"target": target, "schema": REHEARSAL_SCHEMA})
@@ -208,4 +220,4 @@ def run_rehearsal(args: argparse.Namespace, *, session: Callable[..., Any], cloc
     return 0 if report.passed else 2
 
 
-__all__ = ["REHEARSAL_SCHEMA", "RehearsalReport", "ThreadedConcurrent", "rehearse", "run_rehearsal"]
+__all__ = ["INSTALL_SCHEMA_SQL", "REHEARSAL_SCHEMA", "RehearsalReport", "ThreadedConcurrent", "rehearse", "run_rehearsal"]

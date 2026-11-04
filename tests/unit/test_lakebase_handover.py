@@ -19,7 +19,14 @@ from typing import Any
 
 import pytest
 
-from tests.fixtures.fake_lakebase import APP_ROLE, DEPLOYER, LEGACY, FakeServer, VirtualConcurrent
+from tests.fixtures.fake_lakebase import (
+    APP_ROLE,
+    DEPLOYER,
+    LEGACY,
+    FakeServer,
+    VirtualConcurrent,
+    throwaway,
+)
 from tests.fixtures.handover_jobs_fake import jobs_workspace
 from tools.clients import handover_journal as journals
 from tools.clients import lakebase_handover as handover
@@ -274,7 +281,7 @@ def test_retire_check_refuses_while_a_job_runs_as_the_legacy_identity(capsys: py
 
 
 def test_the_s3_rehearsal_passes_on_the_fake_and_fails_without_the_bound(monkeypatch: pytest.MonkeyPatch) -> None:
-    server = FakeServer()
+    server = throwaway()
     report = rehearsal.rehearse(
         server.connect,
         legacy=LEGACY,
@@ -286,7 +293,7 @@ def test_the_s3_rehearsal_passes_on_the_fake_and_fails_without_the_bound(monkeyp
     )
     assert report.passed and report.change_attempts >= 2 and report.max_probe_wait_s <= 3.0
     assert report.owner_after_change == DEPLOYER and report.owner_after_revert == LEGACY
-    unbounded = FakeServer()
+    unbounded = throwaway()
     monkeypatch.setattr(sql, "LOCK_BOUNDS", ())
     failed = rehearsal.rehearse(
         unbounded.connect,
@@ -301,7 +308,7 @@ def test_the_s3_rehearsal_passes_on_the_fake_and_fails_without_the_bound(monkeyp
 
 
 def test_the_rehearsal_names_a_missing_precondition_before_any_change() -> None:
-    server = FakeServer(authority={"schema_create": False, "database_create": True, "createdb": True})
+    server = FakeServer(objects=[], authority={"schema_create": False, "database_create": True, "createdb": True})
     report = rehearsal.rehearse(
         server.connect,
         legacy=LEGACY,
@@ -320,6 +327,49 @@ def test_the_rehearsal_never_runs_on_the_installs_own_instance(capsys: pytest.Ca
     argv = ["--rehearse", "--rehearse-instance", "mip-app-state", "--rehearse-database", "scratch"]
     assert handover.main(argv, session=lambda *a: session) == 2
     assert "rehearse_live_instance" in capsys.readouterr().err
+
+
+def test_the_rehearsal_refuses_an_install_database_before_creating_anything() -> None:
+    """A database that already holds mip_app is an install's: nothing is created there."""
+
+    server = FakeServer()
+    with pytest.raises(sql.LakebaseHandoverRefused, match="holds mip_app"):
+        rehearsal.rehearse(
+            server.connect,
+            legacy=LEGACY,
+            target=DEPLOYER,
+            hold_s=8.0,
+            concurrent=lambda _connect, hold: VirtualConcurrent(server, hold),
+            clock=server.clock,
+            sleep=server.sleep,
+        )
+    assert server.transactions == [["ROLLBACK"]], "the one transaction read, then rolled back"
+    assert rehearsal.INSTALL_SCHEMA_SQL in server.statements
+    assert not any(text in rehearsal.SETUP or text.startswith("ALTER ") for text in server.statements)
+
+
+@pytest.mark.parametrize("override", handover.CONNECTION_OVERRIDES)
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--plan"],
+        ["--window-context"],
+        ["--rehearse", "--rehearse-instance", "throwaway-rehearsal", "--rehearse-database", "scratch"],
+    ],
+)
+def test_a_connection_override_refuses_before_the_profile_is_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], override: str, argv: list[str]
+) -> None:
+    """LAKEBASE_HOST (and kin) would point every mode at a server the profile does not name."""
+
+    monkeypatch.setattr(handover, "REPO", tmp_path)  # no .env.local is read either way
+    for name in handover.CONNECTION_OVERRIDES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(override, "live-instance.database.example")
+    assert handover.main(argv) == 2
+    err = capsys.readouterr().err
+    assert f"unset {override}:" in err and "live-instance" not in err
+    handover.refuse_connection_overrides({})  # positive control: no override, no refusal
 
 
 def test_a_failure_part_way_exits_three_and_names_the_revert(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

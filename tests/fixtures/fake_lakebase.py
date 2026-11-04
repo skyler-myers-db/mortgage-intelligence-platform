@@ -22,7 +22,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from jobs.lakebase_migration_read_only import assert_read_statement
-from tools.clients.lakebase_handover_rehearse import OWNER_SQL, REHEARSAL_SCHEMA, SETUP
+from tools.clients.lakebase_handover_rehearse import (
+    INSTALL_SCHEMA_SQL,
+    OWNER_SQL,
+    REHEARSAL_SCHEMA,
+    SETUP,
+)
 from tools.clients.lakebase_handover_sql import AUTHORITY_SQL, INVENTORY_SQL, PgObject
 
 LEGACY = "legacy-owner@example.com"
@@ -41,6 +46,12 @@ class LockNotAvailable(Exception):
 
 class SyntaxProblem(Exception):
     sqlstate = "42601"
+
+
+def throwaway() -> FakeServer:
+    """A rehearsal's throwaway database: no mip_app, so only the rehearsal's own table appears."""
+
+    return FakeServer(objects=[])
 
 
 def objects() -> list[PgObject]:
@@ -174,6 +185,10 @@ class FakeCursor:
             self._rows = [
                 (self.server.caller, exists, exists and self.server.settable, exists and grants["schema_create"], grants["database_create"], grants["createdb"])
             ]
+            return
+        if statement == INSTALL_SCHEMA_SQL:
+            schema = params["schema"]
+            self._rows = [(any(item.schema == schema or (item.kind == "SCHEMA" and item.name == schema) for item in self.server.objects),)]
             return
         if statement == OWNER_SQL:
             self._rows = [(self.server.owners[REHEARSAL_KEY],)]

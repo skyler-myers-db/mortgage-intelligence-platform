@@ -28,6 +28,11 @@ offers exactly two exits:
   this tool's; or
 * ``--revert``: the exact inverse from the journal, by the same lock bounds.
 
+Every mode reaches the profile's instance (``MIP_LAKEBASE_INSTANCE``) only: a
+``LAKEBASE_HOST``, ``LAKEBASE_USER``, ``LAKEBASE_PASSWORD`` or ``LAKEBASE_PORT``
+override, which the migration connection would prefer, refuses
+(``CONNECTION_OVERRIDES``).
+
 The tool never drops, creates or reassigns a role. ``--retire-check`` is the
 read-only gate before the owner removes the legacy role by hand: it refuses
 while any job or pipeline still runs as the legacy identity.
@@ -41,7 +46,7 @@ import os
 import shlex
 import sys
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -290,6 +295,24 @@ def _iter_lines(plan_: LakebasePlan) -> Iterator[str]:
         yield f"{_PREFIX} REFUSED {code} x{plan_.refusals.count(code)}"
 
 
+# jobs/lakebase_migration_connection.py prefers these over the named instance
+# (LAKEBASE_HOST alone redirects even its SDK path, which still mints the named
+# instance's credential), so a set one would point the plan, the apply, the
+# window and the rehearsal at a server the profile does not name. Refused.
+CONNECTION_OVERRIDES = ("LAKEBASE_HOST", "LAKEBASE_USER", "LAKEBASE_PASSWORD", "LAKEBASE_PORT")
+
+
+def refuse_connection_overrides(environ: Mapping[str, str]) -> None:
+    """Refuse a connection override: the handover reaches the profile's instance, or the named throwaway."""
+
+    present = [name for name in CONNECTION_OVERRIDES if str(environ.get(name, "") or "").strip()]
+    if present:
+        raise LakebaseHandoverRefused(
+            f"unset {', '.join(present)}: the handover connects only to the instance the profile "
+            "(or --rehearse-instance) names, never to an override"
+        )
+
+
 @dataclass(frozen=True)
 class Session:
     """How the CLI reaches Lakebase and the workspace (injected by tests)."""
@@ -313,6 +336,7 @@ def _profile_session(instance: str = "", database: str = "") -> Session:
     from tools.clients.environment import from_local, resolve
     from tools.databricks.workspace_auth import deployment_workspace_client
 
+    refuse_connection_overrides(os.environ)
     profile = resolve(from_local(os.environ, REPO / ".env.local"))
 
     @cache
