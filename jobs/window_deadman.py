@@ -9,11 +9,16 @@ files root). It is self-contained, the standard library and the Databricks
 SDK only, so that one published file is all it runs.
 
   python window_deadman.py --app NAME --app-id ID --journal PATH --marker PATH
-      --deadline EPOCH --blue-restorable true|false --token HEX
-      --window-sha256 HEX --blue-deployment-id ID --restore-source PATH
-      [--start-timeout-seconds 600] [--poll-seconds 60]
+      --armed-marker PATH --deadline EPOCH --blue-restorable true|false
+      --token HEX --window-sha256 HEX --blue-deployment-id ID
+      --restore-source PATH [--start-timeout-seconds 600] [--poll-seconds 60]
 
-Until the deadline it polls the window journal, and exits doing nothing once
+It first writes its create-only **armed** marker (``announce``): the arm
+waits for that marker, with the run still RUNNING, before it lets the window
+journal ``window_open`` and stop the App, so a run that never started (its
+environment, the workspace file, its auth or the marker folder) refuses the
+window instead of leaving it without a restart. Until the deadline it then
+polls the window journal, and exits doing nothing once
 the journal names this window (its ``window_sha256`` and lease, which ``--token``
 digests) in any state but ``window_open``: the run moved on or closed it (and
 its close also cancels this run). A journal of another window or none at all
@@ -30,8 +35,8 @@ journal still exactly this window's ``window_open``:
 
 It never deploys, updates, stops or changes a grant: its only calls are
 ``apps.get``, ``apps.get_deployment``, ``apps.start``, the journal download
-and one create-only upload of its marker (the AST contract in
-``tests/unit/test_window_deadman.py``). The marker is unsigned, because the
+and the create-only uploads of its armed marker and its marker (the AST
+contract in ``tests/unit/test_window_deadman.py``). The marker is unsigned, because the
 proof-signing key never leaves the deployer's process. It is a pointer, never
 proof: the next governed run re-proves the start deployment against the signed
 journal and the App before it re-pins it (``app_deployment_rollback repin
@@ -53,6 +58,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 MARKER_SCHEMA = "mip.quiesce-window-deadman-marker.v1"
+ARMED_SCHEMA = "mip.quiesce-window-deadman-armed.v1"
 TOKEN_DOMAIN = b"mip-window-deadman-v1\0"
 TERMINAL_STATES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
 MARKER_STATES = frozenset(
@@ -103,6 +109,7 @@ def _parser() -> argparse.ArgumentParser:
         "--app-id",
         "--journal",
         "--marker",
+        "--armed-marker",
         "--token",
         "--window-sha256",
         "--blue-deployment-id",
@@ -243,7 +250,44 @@ def wait_for_terminal(window: Window, deployment_id: str) -> str:
         window.sleep(10.0)
 
 
-# --- the marker -------------------------------------------------------------
+# --- the markers ------------------------------------------------------------
+
+
+def announce(window: Window) -> None:
+    """The create-only armed marker: this run started and can write beside the journal.
+
+    An armed marker of this same window that is already there (the same run,
+    started again by the fake Jobs service or a resumed test) is accepted;
+    any other content raises, and the run fails before its wait.
+    """
+
+    from databricks.sdk.service.workspace import ImportFormat
+
+    args = window.args
+    armed = {
+        "schema": ARMED_SCHEMA,
+        "app_name": args.app,
+        "token": args.token,
+        "window_sha256": args.window_sha256,
+        "state": "deadman_armed",
+        "recorded_at": datetime.fromtimestamp(window.clock(), UTC).isoformat(timespec="seconds"),
+    }
+    try:
+        window.workspace.workspace.upload(
+            args.armed_marker,
+            io.BytesIO(json.dumps(armed, sort_keys=True).encode("utf-8")),
+            format=ImportFormat.AUTO,
+            overwrite=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - only this window's own marker is accepted
+        if type(exc).__name__ != "ResourceAlreadyExists":
+            raise
+        existing = json.loads(window.workspace.workspace.download(args.armed_marker).read().decode("utf-8"))
+        if not isinstance(existing, dict) or any(
+            existing.get(key) != armed[key] for key in ("schema", "app_name", "token", "window_sha256")
+        ):
+            raise RuntimeError("another armed marker is in this window's place") from exc
+    print(f"{_PREFIX} armed for window {args.window_sha256[:12]} until {args.deadline}")
 
 
 def record(window: Window, state: str, *, start_id: str = "", terminal: str = "", reason: str = "") -> None:
@@ -321,6 +365,22 @@ def _workspace() -> Any:
     return WorkspaceClient()
 
 
+def window_from_argv(
+    argv: list[str] | None,
+    *,
+    workspace_factory: Callable[[], Any] | None = None,
+    clock: Callable[[], float] = time.time,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Window | None:
+    """The armed window from the run's parameters, or None when they are not valid."""
+
+    args = _parser().parse_args(argv)
+    if not _HEX64.fullmatch(args.token) or not _HEX64.fullmatch(args.window_sha256):
+        print(f"{_PREFIX} the token and the window digest must be sha256 hex", file=sys.stderr)
+        return None
+    return Window((workspace_factory or _workspace)(), args, clock, sleep)
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -328,11 +388,11 @@ def main(
     clock: Callable[[], float] = time.time,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
-    args = _parser().parse_args(argv)
-    if not _HEX64.fullmatch(args.token) or not _HEX64.fullmatch(args.window_sha256):
-        print(f"{_PREFIX} the token and the window digest must be sha256 hex", file=sys.stderr)
+    window = window_from_argv(argv, workspace_factory=workspace_factory, clock=clock, sleep=sleep)
+    if window is None:
         return 2
-    return run(Window((workspace_factory or _workspace)(), args, clock, sleep))
+    announce(window)
+    return run(window)
 
 
 if __name__ == "__main__":

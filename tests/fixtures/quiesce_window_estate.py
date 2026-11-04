@@ -13,9 +13,12 @@ which ``signed_blue`` writes for blue with the rollback tests' reviewed
 payload and Gateway contract.
 
 ``FakeJobs`` (M0-PR9) takes one-time ``jobs submit`` runs (one per
-idempotency token) and cancels; ``run_deadman`` plays the Jobs service: it
-reads the submitted task's ``python_file`` from the fake workspace, so it runs
-exactly the bytes the window published, never the repo's. ``window_hooks``
+idempotency token) and cancels. A submitted run starts the way ``start``
+says: ``arms`` runs the PUBLISHED dead-man's ``announce`` (its armed marker),
+``fails`` ends INTERNAL_ERROR before it starts, ``silent`` stays RUNNING and
+never arms. ``run_deadman`` plays the Jobs service: it reads the submitted
+task's ``python_file`` from the fake workspace, so it runs exactly the bytes
+the window published, never the repo's. ``window_hooks``
 gives ``open_window`` the real admission and the real arm, publishing a staged
 green release that carries ``jobs/window_deadman.py``.
 """
@@ -305,6 +308,9 @@ class FakeJobs:
     submits: int = 0
     cancels: list[int] = field(default_factory=list)
     fail_submit: bool = False
+    # How a submitted run starts: "arms", "fails" or "silent" (see the module).
+    start: str = "arms"
+    files: FakeFiles | None = None
 
     def submit(self, **request: Any) -> SimpleNamespace:
         self.submits += 1
@@ -313,15 +319,29 @@ class FakeJobs:
         token = str(request["idempotency_token"])
         if token not in self.tokens:
             run_id = 9000 + len(self.runs) + 1
+            started = "INTERNAL_ERROR" if self.start == "fails" else "RUNNING"
             self.runs[run_id] = SimpleNamespace(
                 run_id=run_id,
                 run_name=request["run_name"],
                 tasks=list(request["tasks"]),
-                state=SimpleNamespace(life_cycle_state="RUNNING"),
+                state=SimpleNamespace(life_cycle_state=started),
                 request=request,
             )
             self.tokens[token] = run_id
+            if self.start == "arms":
+                self._announce(self.runs[run_id])
         return SimpleNamespace(response=SimpleNamespace(run_id=self.tokens[token]))
+
+    def _announce(self, run: SimpleNamespace) -> None:
+        """The run starts: the published dead-man writes its armed marker."""
+
+        assert self.files is not None, "the estate wires the jobs service to its files"
+        task = run.tasks[0].spark_python_task
+        module = load_deadman(self.files.download(contract.api_path(task.python_file)).read(), "window_deadman_armed")
+        window = module["window_from_argv"](
+            list(task.parameters), workspace_factory=lambda: SimpleNamespace(workspace=self.files)
+        )
+        module["announce"](window)
 
     def get_run(self, run_id: int) -> SimpleNamespace:
         return self.runs[run_id]
@@ -342,6 +362,10 @@ class Estate:
     secrets: FakeSecrets
     apps: FakeApps
     jobs: FakeJobs = field(default_factory=FakeJobs)
+
+    def __post_init__(self) -> None:
+        if self.jobs.files is None:
+            self.jobs.files = self.files
 
     @property
     def workspace(self) -> SimpleNamespace:
@@ -407,6 +431,8 @@ def window_hooks(
     budget_s: float = 3 * 3600,
     release: PublishPlan | None = None,
     app_id: str = "app-object-id",
+    clock: Callable[[], float] = time.time,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     """The open's M0-PR9 hooks for a run with ``budget_s`` seconds of job budget left.
 
@@ -433,6 +459,8 @@ def window_hooks(
             release=plan,
             deadline=deadline,
             admit=lambda: admit(canonical),
+            clock=clock,
+            sleep=sleep,
         )
 
     def cancel(run_id: str) -> str:

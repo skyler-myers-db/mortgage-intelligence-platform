@@ -82,6 +82,9 @@ def _argv(opened: dict[str, Any], **overrides: str) -> list[str]:
         "--poll-seconds": "60",
         **overrides,
     }
+    # The armed marker is the token's, as the arm derives it (armed_path).
+    armed = _marker_path(values["--token"]).replace(".deadman-", ".armed-")
+    values.setdefault("--armed-marker", armed)
     return [item for pair in values.items() for item in pair]
 
 
@@ -228,6 +231,30 @@ def test_a_start_without_a_readable_deployment_is_recorded_and_never_started_twi
     estate.apps.start = start_hiding  # type: ignore[method-assign]
     assert _deadman(estate, _argv(opened)) == 1
     assert _marker(estate, opened)["state"] == "deadman_start_unreadable" and estate.apps.starts == 1
+
+
+def _armed_path(opened: dict[str, Any]) -> str:
+    argv = _argv(opened)
+    return argv[argv.index("--armed-marker") + 1]
+
+
+def test_the_run_arms_first_and_never_over_another_windows_armed_marker() -> None:
+    estate = _estate()
+    opened = _open(estate)
+    del estate.files.data[_armed_path(opened)]  # the fake Jobs service armed it at the submit
+    assert _deadman(estate, _argv(opened)) == 0
+    armed = json.loads(estate.files.data[_armed_path(opened)])
+    assert armed["state"] == "deadman_armed" and armed["window_sha256"] == opened["window_sha256"]
+    assert armed["recorded_at"].startswith("2027-01-15T08:00"), "written at the run's start, before its wait"
+
+    other = _estate()
+    opened = _open(other)
+    other.files.data[_armed_path(opened)] = json.dumps(
+        {"schema": "mip.quiesce-window-deadman-armed.v1", "token": "f" * 64}
+    ).encode()
+    with pytest.raises(RuntimeError, match="another armed marker"):
+        _deadman(other, _argv(opened))
+    assert other.apps.starts == 0 and _marker(other, opened) is None
 
 
 def test_the_marker_is_create_only() -> None:

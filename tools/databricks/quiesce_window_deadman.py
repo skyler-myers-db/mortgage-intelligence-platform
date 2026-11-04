@@ -23,6 +23,14 @@ and before the journal write and the stop:
    own, the uv.lock pin), no retries, ``timeout_seconds`` = (deadline - now)
    + the start budget, and the idempotency token ``window_token(window
    sha256, lease id)``: one run per window, a retried submit returns it.
+4. **Armed.** A submit returns a run id before the run has started, and a
+   run can still fail to start (its environment, the workspace file, its
+   auth). So the arm waits, at most ``ARM_WAIT_S``, until the run is RUNNING
+   and has written its create-only armed marker beside the journal
+   (``armed_path``; ``announce`` in the job). A run that ends first, or that
+   does not arm in time, is cancelled and the window is refused: nothing is
+   journaled and the App is never stopped. The open admits the budget again
+   after the arm.
 
 ``cancel_deadman`` cancels the run once the run's journal is closed (cancel
 only: nothing is deleted). It first reads the run and refuses one that is not
@@ -73,6 +81,14 @@ DEADMAN_START_WAIT_S = STEP_BUDGET_S["start"]
 DEADMAN_SLACK_S = 300
 DEADMAN_START_BUDGET_S = DEADMAN_START_WAIT_S + DEADMAN_SLACK_S
 TERMINAL_RUN_STATES = frozenset({"TERMINATED", "SKIPPED", "INTERNAL_ERROR"})
+# The arm's wait for the run to start and write its armed marker (M0-PR9). It
+# runs before the stop, so it lengthens no outage; the open re-admits after it.
+# Not a measurement: the serverless one-time run's start time is a spike owed.
+ARM_WAIT_S = 600
+ARM_POLL_S = 10
+# A run in one of these states has not started yet; RUNNING is the only armed state.
+STARTING_RUN_STATES = frozenset({"PENDING", "QUEUED", "BLOCKED", "WAITING_FOR_RETRY"})
+ARMED_SCHEMA = "mip.quiesce-window-deadman-armed.v1"
 _RUN_PREFIX = "mip-window-deadman-"
 
 
@@ -89,6 +105,13 @@ def marker_path(app_name: str, token: str) -> str:
     if len(token) != 64 or any(character not in "0123456789abcdef" for character in token):
         raise ValueError("the dead-man token is not sha256 hex")
     return journal.journal_path(app_name).removesuffix(".json") + f".deadman-{token}.json"
+
+
+def armed_path(app_name: str, token: str) -> str:
+    """The dead-man's armed marker beside the window journal, one per window."""
+
+    marker_path(app_name, token)  # the same token check
+    return journal.journal_path(app_name).removesuffix(".json") + f".armed-{token}.json"
 
 
 def run_name(app_name: str, token: str) -> str:
@@ -185,6 +208,7 @@ def request(
         "--app-id": app_id,
         "--journal": journal.journal_path(app_name),
         "--marker": marker_path(app_name, token),
+        "--armed-marker": armed_path(app_name, token),
         "--deadline": str(deadline),
         "--blue-restorable": "true" if canonical["blue_restorable"] is True else "false",
         "--token": token,
@@ -214,6 +238,54 @@ def submit_deadman(workspace: Any, armed: DeadmanRequest) -> str:
     return run_id
 
 
+def _run_state(workspace: Any, run_id: str) -> str:
+    run = workspace.jobs.get_run(int(run_id))
+    return _text(getattr(getattr(run, "state", None), "life_cycle_state", None)).split(".")[-1].upper()
+
+
+def _armed_marker(workspace: Any, *, app_name: str, token: str) -> dict[str, Any] | None:
+    try:
+        stream = workspace.workspace.download(armed_path(app_name, token))
+    except (NotFound, ResourceDoesNotExist):
+        return None
+    value = json.loads(stream.read().decode("utf-8"))
+    return value if isinstance(value, dict) else None
+
+
+def await_armed(
+    workspace: Any,
+    *,
+    app_name: str,
+    run_id: str,
+    armed: DeadmanRequest,
+    window_sha256: str,
+    clock: Callable[[], float] = time.time,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Return once the run is RUNNING and its armed marker names this window; else raise."""
+
+    expected = {
+        "schema": ARMED_SCHEMA,
+        "app_name": app_name,
+        "token": armed.token,
+        "window_sha256": window_sha256,
+    }
+    deadline = clock() + ARM_WAIT_S
+    while True:
+        marker = _armed_marker(workspace, app_name=app_name, token=armed.token)
+        state = _run_state(workspace, run_id)
+        if state not in STARTING_RUN_STATES | {"RUNNING"}:
+            raise RuntimeError(f"the dead-man run ended before it armed ({state or 'unknown'})")
+        if marker is not None:
+            if any(marker.get(key) != value for key, value in expected.items()):
+                raise RuntimeError("the dead-man's armed marker is not this window's")
+            if state == "RUNNING":
+                return
+        if clock() >= deadline:
+            raise RuntimeError(f"the dead-man run did not arm within {ARM_WAIT_S} s")
+        sleep(ARM_POLL_S)
+
+
 def arm_deadman(
     workspace: Any,
     *,
@@ -226,9 +298,14 @@ def arm_deadman(
     deadline: int,
     admit: Callable[[], object],
     clock: Callable[[], float] = time.time,
+    sleep: Callable[[float], None] = time.sleep,
     publish: Callable[[Any, PublishPlan], PublishReport] = upload_release,
 ) -> str:
-    """Publish the release, verify the dead-man's bytes, re-admit, submit; the run id."""
+    """Publish the release, verify the dead-man's bytes, re-admit, submit, await armed; the run id.
+
+    A run that does not arm is cancelled here (its id never reached the
+    shell), and the arm raises: nothing is journaled, nothing is stopped.
+    """
 
     report = publish(workspace, release)
     source = deadman_source(report, release)
@@ -244,7 +321,24 @@ def arm_deadman(
         deadline=deadline,
         now=clock(),
     )
-    return submit_deadman(workspace, armed)
+    run_id = submit_deadman(workspace, armed)
+    try:
+        await_armed(
+            workspace,
+            app_name=app_name,
+            run_id=run_id,
+            armed=armed,
+            window_sha256=window_sha256,
+            clock=clock,
+            sleep=sleep,
+        )
+    except Exception:
+        try:
+            cancel_deadman(workspace, app_name=app_name, run_id=run_id)
+        except Exception as exc:  # noqa: BLE001 - it finds no window_open and exits
+            print(f"[mip-quiesce-window] the unarmed dead-man was not cancelled ({type(exc).__name__})")
+        raise
+    return run_id
 
 
 def arm_for_release(

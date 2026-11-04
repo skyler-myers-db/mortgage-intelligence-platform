@@ -13,6 +13,7 @@ dead-man and deletes nothing.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from pathlib import Path
@@ -296,6 +297,72 @@ def test_a_journal_write_that_fails_cancels_the_armed_run_and_stops_nothing(
         _open_with(estate)
     run = estate.jobs.only_run()
     assert estate.jobs.cancels == [run.run_id] and estate.apps.stops == 0
+
+
+def test_the_arm_waits_until_the_run_is_running_and_wrote_its_armed_marker() -> None:
+    estate = _estate()
+    order: list[str] = []
+    real_get_run, real_upload = estate.jobs.get_run, estate.files.upload
+
+    def get_run(run_id: int) -> Any:
+        order.append("get_run")
+        return real_get_run(run_id)
+
+    def upload(path: str, content: Any, **kwargs: Any) -> None:
+        if ".armed-" in path:
+            order.append("armed")
+        elif path == journal.journal_path(APP_NAME):
+            order.append("journal")
+        return real_upload(path, content, **kwargs)
+
+    estate.jobs.get_run, estate.files.upload = get_run, upload  # type: ignore[method-assign]
+    _open_with(estate)
+    run = estate.jobs.only_run()
+    token = run.request["idempotency_token"]
+    assert order == ["armed", "get_run", "journal"], "armed by the published run, proven, then journaled"
+    armed = json.loads(estate.files.data[deadman.armed_path(APP_NAME, token)])
+    assert armed["state"] == "deadman_armed" and armed["token"] == token
+    assert _parameters(run)["--armed-marker"] == deadman.armed_path(APP_NAME, token)
+
+
+def test_a_run_that_fails_to_start_refuses_the_window_with_no_stop() -> None:
+    # A serverless environment, the workspace file or a policy can fail the run
+    # after the submit returned its id: the window is never left without its restart.
+    estate = _estate()
+    estate.jobs.start = "fails"
+    with pytest.raises(RuntimeError, match="ended before it armed"):
+        _open_with(estate)
+    assert estate.apps.stops == 0 and journal.read(estate.workspace, app_name=APP_NAME) is None
+    assert estate.jobs.only_run().state.life_cycle_state == "INTERNAL_ERROR" and estate.jobs.cancels == []
+
+
+def test_a_run_that_never_arms_is_cancelled_and_refuses_the_window_with_no_stop() -> None:
+    estate = _estate()
+    estate.jobs.start = "silent"
+    now = [time.time()]
+
+    def sleep(seconds: float) -> None:
+        now[0] += seconds
+
+    with pytest.raises(RuntimeError, match="did not arm within"):
+        _open_with(estate, **window_hooks(estate, clock=lambda: now[0], sleep=sleep))
+    run = estate.jobs.only_run()
+    assert estate.jobs.cancels == [run.run_id], "the unarmed run is cancelled"
+    assert estate.apps.stops == 0 and journal.read(estate.workspace, app_name=APP_NAME) is None
+    assert now[0] >= deadman.ARM_WAIT_S, "bounded by the arm wait"
+
+
+def test_an_armed_marker_of_another_window_refuses_the_window() -> None:
+    estate = _estate()
+    estate.jobs.start = "silent"
+    plan = _plan(estate)
+    token = deadman.window_token(plan.sha256, LEASE_ID)
+    estate.files.data[deadman.armed_path(APP_NAME, token)] = json.dumps(
+        {"schema": deadman.ARMED_SCHEMA, "app_name": APP_NAME, "token": token, "window_sha256": "e" * 64}
+    ).encode()
+    with pytest.raises(RuntimeError, match="not this window's"):
+        _open_with(estate)
+    assert estate.apps.stops == 0 and estate.jobs.cancels == [estate.jobs.only_run().run_id]
 
 
 def test_a_deployment_that_lands_during_the_arm_refuses_the_window_with_no_stop() -> None:

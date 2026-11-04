@@ -15,7 +15,8 @@ digests). It prints the public summary and writes the full plan mode 0600.
 in ``MIP_ACK_QUIESCE_WINDOW``), admits it against the job budget
 (``quiesce_window_budget``, M0-PR9: before any stop), re-checks under the
 lease that blue is still the App's last deployment, arms the dead-man
-(``quiesce_window_deadman``: publish this release, then one ``jobs submit``),
+(``quiesce_window_deadman``: publish this release, one ``jobs submit``, then
+wait until that run is RUNNING and wrote its armed marker),
 admits and re-checks blue again after that arm, journals ``window_open`` and
 only then stops the App, identity-pinned.
 ``cancel-deadman`` cancels that run once the journal is closed. ``start`` journals

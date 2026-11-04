@@ -254,12 +254,14 @@ ensure_quiesce_window_open_for() {
 # the exact ack, admits it against the job budget (M0-PR9: no stop and no
 # submit without remaining >= predicted window + predicted restore + 15 min),
 # re-proves blue is the App's last deployment, arms the dead-man (it publishes
-# this run's staged release, create-only and byte-verified, and submits
-# jobs/window_deadman.py from that folder as a one-time run), journals
-# window_open and only then stops the App, identity-pinned. The state switches
-# first, so a failure after the journal write reaches the window compensation,
-# which reads the journal rather than trusting this variable; the armed run id
-# reaches the env file before the journal write, so that path can cancel it.
+# this run's staged release, create-only and byte-verified, submits
+# jobs/window_deadman.py from that folder as a one-time run and waits until
+# that run is RUNNING and wrote its armed marker), admits and re-checks blue
+# again, journals window_open and only then stops the App, identity-pinned.
+# The state switches first, so a failure after the journal write reaches the
+# window compensation, which reads the journal rather than trusting this
+# variable; the armed run id reaches the env file before the journal write,
+# so that path can cancel it.
 open_quiesce_window() {
   local env_file
   step "open the quiesce window for ${QUIESCE_WINDOW_REASONS} (arm the dead-man, journal window_open, then stop)"
