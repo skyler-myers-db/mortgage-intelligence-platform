@@ -65,10 +65,9 @@ REASON_NAMES = {
 }
 # WR5 (M2-PR8) is the Lakebase ownership handover's announced window, owner-run
 # for an install no signed blue governs yet (tools/databricks/quiesce_window_wr5.py).
-# A release never plans it, so WindowFacts.reasons() and every release digest
-# are unchanged; the reviewed reason set is the two together.
+# A release never plans it, so it is not in REASONS: WindowFacts.reasons() and
+# every release digest are unchanged.
 HANDOVER_REASON = "WR5"
-REVIEWED_REASON_NAMES = {**REASON_NAMES, HANDOVER_REASON: "lakebase_handover_window"}
 CODES = frozenset({"none", "window", "not_applicable", "refused"})
 REFUSAL_CODES = frozenset(
     {

@@ -52,8 +52,7 @@ def _acked(facts: wr5.HandoverWindowFacts) -> dict:
 def test_wr5_is_a_reviewed_reason_the_release_never_plans() -> None:
     assert release.REASONS == ("WR1", "WR2", "WR3", "WR4")
     assert release.HANDOVER_REASON == "WR5"
-    assert release.REVIEWED_REASON_NAMES["WR5"] == "lakebase_handover_window"
-    assert set(release.REVIEWED_REASON_NAMES) == {*release.REASONS, "WR5"}
+    assert "WR5" not in release.REASONS and "WR5" not in release.REASON_NAMES
     every = release.WindowFacts(applicable=True, binding_state="diff", role_state="drift", migration_decision="apply", instance_update_sha256="c" * 64)
     assert every.reasons() == release.REASONS, "a release plan never carries WR5"
     assert "WR5" not in release.STEP_BUDGET_S

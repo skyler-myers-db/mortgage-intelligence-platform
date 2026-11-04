@@ -18,11 +18,12 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures.interim_pairs import pairs_from_json
 from tests.fixtures.uc_handover_fake import LEGACY, OTHER, TARGET, FakeUc, estate
 from tools.clients import handover_journal as journals
 from tools.clients import handover_uc_ownership as handover
 from tools.clients.handover_uc_plan import SYSTEM_USER, HandoverRefused, change, compute
-from tools.databricks.uc_interim_owner_pairs import InterimOwnerPairs, parse_pairs
+from tools.databricks.uc_interim_owner_pairs import InterimOwnerPairs
 
 REPO = Path(__file__).resolve().parents[2]
 GOLDEN = REPO / "tests" / "fixtures" / "handover_uc_plan_golden.json"
@@ -80,12 +81,14 @@ def test_pipeline_datasets_are_excluded_with_suggested_interim_pairs() -> None:
     assert not {item["full_name"] for item in current.changes} & set(pipeline)  # type: ignore[attr-defined]
     suggested = current.suggested_pairs  # type: ignore[attr-defined]
     assert suggested == [{"full_name": name, "owner": LEGACY, "expires_at": EXPIRES.isoformat()} for name in pipeline]
-    pairs = parse_pairs(json.dumps(suggested), now=datetime(2026, 11, 4, tzinfo=UTC))
+    pairs = pairs_from_json(json.dumps(suggested), now=datetime(2026, 11, 4, tzinfo=UTC))
     assert all(pairs.verdict(full_name=name, owner=LEGACY) == "match" for name in pipeline)
+    line = current.report()["interim_owner_pairs_json"]  # type: ignore[attr-defined]
+    assert "\n" not in line and pairs_from_json(line, now=datetime(2026, 11, 4, tzinfo=UTC)).pairs == pairs.pairs
 
 
 def test_an_expired_configured_pair_refuses_the_plan() -> None:
-    expired = parse_pairs(
+    expired = pairs_from_json(
         json.dumps([{"full_name": "mip.silver.parcel_stream", "owner": LEGACY, "expires_at": "2026-11-01"}]),
         now=datetime(2026, 11, 4, tzinfo=UTC),
     )
@@ -233,7 +236,7 @@ def test_verify_passes_only_with_an_exact_pair_for_every_pipeline_dataset(tmp_pa
     handover.apply(fake, _install(), ack=_digest(fake), journal_path=tmp_path / "j.json")
     assert handover.verify(fake, _install()) == ["interim_pair_missing", "interim_pair_missing"]
     rows = handover.plan(fake, _install(), interim_expires=date.today() + timedelta(days=7)).suggested_pairs
-    pairs = parse_pairs(json.dumps(rows))
+    pairs = pairs_from_json(json.dumps(rows))
     assert handover.verify(fake, _install(pairs)) == []
     fake.doc["tables"]["mip.gold.new_since"] = {"owner": LEGACY, "type": "MANAGED"}
     assert handover.verify(fake, _install(pairs)) == ["legacy_owned"]

@@ -43,7 +43,12 @@ from typing import Any
 
 from tools.clients.handover_journal import plan_sha256
 from tools.clients.shapes import is_vocabulary
-from tools.databricks.uc_interim_owner_pairs import EXPIRED, MAX_AHEAD, InterimOwnerPairs
+from tools.databricks.uc_interim_owner_pairs import (
+    EXPIRED,
+    MAX_AHEAD,
+    InterimOwnerPairs,
+    canonical_pairs,
+)
 
 SCHEMA = "mip.uc-ownership-handover.plan.v1"
 DIGEST_DOMAIN = "mip-uc-ownership-handover-plan"
@@ -158,13 +163,18 @@ class UcPlan:
         }
 
     def report(self) -> dict[str, Any]:
-        """The private report: the document, the refusals and the suggested interim pairs."""
+        """The private report: the document, the refusals and the suggested interim pairs.
+
+        ``interim_owner_pairs_json`` is the same pairs as the single-line value
+        ``MIP_UC_INTERIM_OWNER_PAIRS_JSON`` takes, for the owner to review.
+        """
 
         return {
             **self.document,
             "plan_sha256": self.sha256,
             "refusals": [vars(refusal) for refusal in self.refusals],
             "suggested_interim_pairs": self.suggested_pairs,
+            "interim_owner_pairs_json": canonical_pairs(self.suggested_pairs),
         }
 
 

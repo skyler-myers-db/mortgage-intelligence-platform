@@ -110,6 +110,7 @@
       "sql": "ALTER CATALOG `mip_app_state` OWNER TO `acme-data-owners`"
     }
   ],
+  "interim_owner_pairs_json": "[{\"expires_at\":\"2026-11-18\",\"full_name\":\"mip.silver.parcel_rollup\",\"owner\":\"legacy-owner@example.com\"},{\"expires_at\":\"2026-11-18\",\"full_name\":\"mip.silver.parcel_stream\",\"owner\":\"legacy-owner@example.com\"}]",
   "left_alone": {
     "follows_catalog": 0,
     "other_owner": 3,

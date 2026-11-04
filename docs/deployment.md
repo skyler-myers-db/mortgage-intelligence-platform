@@ -2651,13 +2651,16 @@ refuses explicitly: the metastore (`metastore`), a Delta Sharing catalog
 System user owns (never a change), and the users, account users or admins
 vocabulary as the target. The first failure stops the apply (exit 3).
 `--verify` is read-only: nothing left to move, and every pipeline dataset
-paired exactly.
+paired exactly. `--interim-days N` (1 to 14, default 14) sets the suggested
+pairs' expiry.
 
 **Pipeline-managed datasets.** Spike S4 (does `ALTER OWNER` on a
 pipeline-published streaming table or materialized view hold, and survive the
 pipeline's run_as change?) has not run, so they are excluded. The private
-report suggests one interim owner pair per dataset, `(full_name, owner,
-expires_at)`, at most 14 days ahead. The reviewed pairs are per-client
+report (`--report-out`; the printed lines carry counts only) suggests one
+interim owner pair per dataset, `(full_name, owner, expires_at)`, at most 14
+days ahead, as rows (`suggested_interim_pairs`) and as the single-line value
+the profile field takes (`interim_owner_pairs_json`). The reviewed pairs are per-client
 configuration, `MIP_UC_INTERIM_OWNER_PAIRS_JSON` (identifying: a GitHub
 Environment secret, or `.env.local`), never committed.
 `ApprovedOwnerPolicy` admits a pair's owner for exactly that object, character
@@ -2665,8 +2668,11 @@ for character; an expired pair refuses its object, and the handover plan
 refuses once a configured pair has expired (`interim_pair_expired`). A pair
 never approves a grantee (the owner-equivalent probe does not read pairs) or
 the metastore. The deploy's pre-stop probe set holds no pipeline dataset, so
-it passes none. Unset the field after the pipeline update or a journaled
-re-own moves the datasets.
+it passes none: no deploy probe judges a pipeline dataset today, so no
+production caller hands pairs to the policy yet, and `--verify` matches each
+dataset with the same `build_pairs` output from the same profile field.
+Unset the field after the pipeline update or a journaled re-own moves the
+datasets.
 
 **Lakebase (step 8).** After the deployer's Postgres role exists (by the
 mechanism the S3 rehearsal picks), run as the legacy owner:
@@ -2724,16 +2730,23 @@ half-applied (exit 4) and offers exactly two exits:
   WR5 is for an install no signed blue governs yet (the
   handover runs before adoption, which then signs the deployment the start
   created); a signed install refuses (`window_wr5_signed_install`), since its
-  re-pin needs the deployment lease. Predicted: #307's stop and start budgets
-  plus the 300 s apply bound (spikes S2 and S7 owe the live timings). The
-  release window (WR1-WR4) never plans WR5, and its digests are unchanged.
+  re-pin needs the deployment lease. Predicted: 1020 s, #307's conservative
+  stop (120 s) and start (600 s) budgets plus the 300 s apply bound; announce
+  that figure. The plan's "5 minutes or less" is not met by those budgets and
+  is not a gate (a 300 s refusal would refuse every WR5 window: the start
+  budget alone is 600 s); spikes S2 and S7 owe the live timings. The release
+  window (WR1-WR4) never plans WR5, and its digests are unchanged.
+  `--remainder --journal <path>` prints, read-only, the exhausted journal's
+  remainder count and the digest the window plan pins.
 - **Revert**: `--revert --journal <path>`, the exact inverse by the same lock
   bounds.
 
-`--retire-check` (also `python -m tools.clients.handover_verify
-retire-check`) is the read-only gate before the owner removes the legacy
-role by hand: it refuses while any job or pipeline still runs as the legacy
-identity. `--rehearse --rehearse-instance <throwaway> --rehearse-database
+`--retire-check [--legacy-identity <name>]` (also `python -m
+tools.clients.handover_verify retire-check`; the default identity is the
+caller's) is the read-only gate before the owner removes the legacy role by
+hand: it refuses while any job or pipeline still runs as the legacy identity,
+judged by its effective run_as (each job read by id; never its creator), or
+while one's run_as cannot be read. `--rehearse --rehearse-instance <throwaway> --rehearse-database
 <db>` is spike S3's mode (owner-run, refused on the install's own instance):
 it creates one table on the throwaway, holds a concurrent long transaction on
 it past `lock_timeout`, probes it, runs the handover's own lock-bounded change
@@ -2753,9 +2766,13 @@ deletes a role.
 probes each named principal's effective privileges, or ownership (directly or
 through a workspace-visible membership of the owning group), on the
 App-triggered lifecycle job's targets; an invisible membership refuses.
-`watch-next-run --job-id <id>` waits, bounded (at most 12 hours), for the next
-run that starts on its own and reports its result; it never starts or cancels
-a run.
+`--target KIND:FULL_NAME:PRIV+PRIV` (repeatable; KIND is `CATALOG`, `SCHEMA`
+or `TABLE`, and `{catalog}` renders `MIP_DEFAULT_CATALOG`) replaces those
+targets. `watch-next-run --job-id <id> [--timeout-seconds S] [--interval-seconds S]`
+waits, bounded (default 7200 s, at most 12 hours; polled every 30 s by
+default, one request per poll), for the next run that starts on its own and
+reports its result; it never starts or cancels a run. Each mode takes
+`--report-out <private file>` for the names.
 
 **Owner patch: `.env.example`.** Agents cannot edit the template, so these
 are the lines the owner adds under the identifying section:

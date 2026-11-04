@@ -3,10 +3,14 @@
 Spike S4 has not shown that ``ALTER OWNER`` on a pipeline-published streaming
 table or materialized view is accepted, nor that it survives the pipeline's
 run_as change. The ownership handover (tools/clients/handover_uc_ownership.py)
-therefore leaves those datasets with their current owner and prints one pair
-per dataset: ``(full_name, owner, expires_at)``. The reviewed pairs are
-per-client configuration, ``MIP_UC_INTERIM_OWNER_PAIRS_JSON`` (identifying: a
-GitHub Environment secret or ``.env.local``, never the tree).
+therefore leaves those datasets with their current owner, and its ``--plan``
+writes one pair per dataset, ``(full_name, owner, expires_at)``, to the
+private ``--report-out`` report, also as the single-line value
+(``canonical_pairs``). The reviewed pairs are per-client configuration,
+``MIP_UC_INTERIM_OWNER_PAIRS_JSON`` (identifying: a GitHub Environment secret
+or ``.env.local``, never the tree); the client profile parses the field
+(tools/clients/json_fields.InterimOwnerPair) and ``build_pairs`` applies the
+rules below, at resolve as at every use.
 
 A pair is an exception for exactly one object and one owner:
 
@@ -25,16 +29,12 @@ Refusal lines name pair indexes and rules, never a value.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from pydantic import ValidationError
-
 from tools.clients.json_fields import InterimOwnerPair as PairEntry
-from tools.clients.shapes import DuplicateJsonKey, strict_json_loads
 
-INTERIM_PAIRS_ENV = "MIP_UC_INTERIM_OWNER_PAIRS_JSON"
 MAX_AHEAD = timedelta(days=14)
 MATCH, EXPIRED, NONE = "match", "expired", "none"
 
@@ -111,43 +111,15 @@ def build_pairs(entries: Iterable[PairEntry], *, now: datetime) -> InterimOwnerP
     return InterimOwnerPairs(tuple(pairs), now)
 
 
-def parse_pairs(text: str, *, now: datetime | None = None) -> InterimOwnerPairs:
-    """``MIP_UC_INTERIM_OWNER_PAIRS_JSON`` as read at ``now``; blank is no pairs."""
+def canonical_pairs(rows: Iterable[Mapping[str, str]]) -> str:
+    """Pairs as the single-line JSON value the profile field carries, sorted by object."""
 
-    moment = now or datetime.now(UTC)
-    if not text.strip():
-        return InterimOwnerPairs((), moment)
-    try:
-        raw = strict_json_loads(text)
-    except DuplicateJsonKey:
-        raise InterimPairRefusal(["the pairs repeat a key in one JSON object"]) from None
-    except ValueError:
-        raise InterimPairRefusal(["the pairs must be single-line JSON"]) from None
-    if not isinstance(raw, list):
-        raise InterimPairRefusal(["the pairs must be a JSON list"])
-    entries: list[PairEntry] = []
-    lines: list[str] = []
-    for index, item in enumerate(raw):
-        try:
-            entries.append(PairEntry.model_validate(item))
-        except ValidationError as exc:
-            fields = sorted({".".join(str(part) for part in error["loc"]) or "pair" for error in exc.errors()})
-            lines.append(f"pair {index}: {', '.join(fields)} must be full_name, owner and expires_at")
-    if lines:
-        raise InterimPairRefusal(lines)
-    return build_pairs(entries, now=moment)
-
-
-def canonical_pairs(pairs: InterimOwnerPairs) -> str:
-    """The pairs as the single-line JSON the profile carries (sorted by object)."""
-
-    rows = sorted((pair.canonical() for pair in pairs.pairs), key=lambda row: row["full_name"])
-    return json.dumps(rows, sort_keys=True, separators=(",", ":"))
+    canonical = [{"full_name": row["full_name"], "owner": row["owner"], "expires_at": row["expires_at"]} for row in rows]
+    return json.dumps(sorted(canonical, key=lambda row: row["full_name"]), sort_keys=True, separators=(",", ":"))
 
 
 __all__ = [
     "EXPIRED",
-    "INTERIM_PAIRS_ENV",
     "MATCH",
     "MAX_AHEAD",
     "NONE",
@@ -157,5 +129,4 @@ __all__ = [
     "build_pairs",
     "canonical_pairs",
     "parse_expiry",
-    "parse_pairs",
 ]
