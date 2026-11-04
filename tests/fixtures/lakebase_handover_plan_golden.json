@@ -1,0 +1,91 @@
+{
+  "changes": [
+    {
+      "key": "FUNCTION:mip_app.audit_guard()",
+      "kind": "FUNCTION",
+      "new_owner": "00000000-0000-4000-8000-000000000001",
+      "prior_owner": "legacy-owner@example.com",
+      "revert_statement": "ALTER FUNCTION \"mip_app\".\"audit_guard\"() OWNER TO \"legacy-owner@example.com\"",
+      "statement": "ALTER FUNCTION \"mip_app\".\"audit_guard\"() OWNER TO \"00000000-0000-4000-8000-000000000001\""
+    },
+    {
+      "key": "FUNCTION:mip_app.touch_row(row_id bigint, reason text)",
+      "kind": "FUNCTION",
+      "new_owner": "00000000-0000-4000-8000-000000000001",
+      "prior_owner": "legacy-owner@example.com",
+      "revert_statement": "ALTER FUNCTION \"mip_app\".\"touch_row\"(row_id bigint, reason text) OWNER TO \"legacy-owner@example.com\"",
+      "statement": "ALTER FUNCTION \"mip_app\".\"touch_row\"(row_id bigint, reason text) OWNER TO \"00000000-0000-4000-8000-000000000001\""
+    },
+    {
+      "key": "TYPE:mip_app.approval_state",
+      "kind": "TYPE",
+      "new_owner": "00000000-0000-4000-8000-000000000001",
+      "prior_owner": "legacy-owner@example.com",
+      "revert_statement": "ALTER TYPE \"mip_app\".\"approval_state\" OWNER TO \"legacy-owner@example.com\"",
+      "statement": "ALTER TYPE \"mip_app\".\"approval_state\" OWNER TO \"00000000-0000-4000-8000-000000000001\""
+    },
+    {
+      "key": "SEQUENCE:mip_app.standalone_seq",
+      "kind": "SEQUENCE",
+      "new_owner": "00000000-0000-4000-8000-000000000001",
+      "prior_owner": "legacy-owner@example.com",
+      "revert_statement": "ALTER SEQUENCE \"mip_app\".\"standalone_seq\" OWNER TO \"legacy-owner@example.com\"",
+      "statement": "ALTER SEQUENCE \"mip_app\".\"standalone_seq\" OWNER TO \"00000000-0000-4000-8000-000000000001\""
+    },
+    {
+      "key": "VIEW:mip_app.campaign_summary",
+      "kind": "VIEW",
+      "new_owner": "00000000-0000-4000-8000-000000000001",
+      "prior_owner": "legacy-owner@example.com",
+      "revert_statement": "ALTER VIEW \"mip_app\".\"campaign_summary\" OWNER TO \"legacy-owner@example.com\"",
+      "statement": "ALTER VIEW \"mip_app\".\"campaign_summary\" OWNER TO \"00000000-0000-4000-8000-000000000001\""
+    },
+    {
+      "key": "TABLE:mip_app.action_audit",
+      "kind": "TABLE",
+      "new_owner": "00000000-0000-4000-8000-000000000001",
+      "prior_owner": "legacy-owner@example.com",
+      "revert_statement": "ALTER TABLE \"mip_app\".\"action_audit\" OWNER TO \"legacy-owner@example.com\"",
+      "statement": "ALTER TABLE \"mip_app\".\"action_audit\" OWNER TO \"00000000-0000-4000-8000-000000000001\""
+    },
+    {
+      "key": "TABLE:mip_app.approvals",
+      "kind": "TABLE",
+      "new_owner": "00000000-0000-4000-8000-000000000001",
+      "prior_owner": "legacy-owner@example.com",
+      "revert_statement": "ALTER TABLE \"mip_app\".\"approvals\" OWNER TO \"legacy-owner@example.com\"",
+      "statement": "ALTER TABLE \"mip_app\".\"approvals\" OWNER TO \"00000000-0000-4000-8000-000000000001\""
+    },
+    {
+      "key": "TABLE:mip_app.campaigns",
+      "kind": "TABLE",
+      "new_owner": "00000000-0000-4000-8000-000000000001",
+      "prior_owner": "legacy-owner@example.com",
+      "revert_statement": "ALTER TABLE \"mip_app\".\"campaigns\" OWNER TO \"legacy-owner@example.com\"",
+      "statement": "ALTER TABLE \"mip_app\".\"campaigns\" OWNER TO \"00000000-0000-4000-8000-000000000001\""
+    },
+    {
+      "key": "SCHEMA:mip_app",
+      "kind": "SCHEMA",
+      "new_owner": "00000000-0000-4000-8000-000000000001",
+      "prior_owner": "legacy-owner@example.com",
+      "revert_statement": "ALTER SCHEMA \"mip_app\" OWNER TO \"legacy-owner@example.com\"",
+      "statement": "ALTER SCHEMA \"mip_app\" OWNER TO \"00000000-0000-4000-8000-000000000001\""
+    },
+    {
+      "key": "DATABASE:mip_app_state",
+      "kind": "DATABASE",
+      "new_owner": "00000000-0000-4000-8000-000000000001",
+      "prior_owner": "legacy-owner@example.com",
+      "revert_statement": "ALTER DATABASE \"mip_app_state\" OWNER TO \"legacy-owner@example.com\"",
+      "statement": "ALTER DATABASE \"mip_app_state\" OWNER TO \"00000000-0000-4000-8000-000000000001\""
+    }
+  ],
+  "left_alone": {
+    "other_owner": 1
+  },
+  "legacy_role": "legacy-owner@example.com",
+  "plan_sha256": "bae101add4c0bee79eb27ff2297ad504220300399c713570d431ea5adbe175f9",
+  "schema": "mip.lakebase-ownership-handover.plan.v1",
+  "target_role": "00000000-0000-4000-8000-000000000001"
+}

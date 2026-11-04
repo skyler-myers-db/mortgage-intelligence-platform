@@ -10,7 +10,11 @@
   make (the bootstrap, the credential sink M2-PR2 extends, and the legacy
   root archive of M2-PR6, whose only writes are create-only copies). The only
   delete in it is a service-principal secret's; nothing transfers an owner,
-  revokes a grant, removes a member or touches an identity's roles. A call
+  revokes a grant, removes a member or touches an identity's roles, with one
+  reviewed exception: the ownership handover (M2-PR8) changes owners, only in
+  ``handover_uc_ownership.py``, only through ``HANDOVER_OWNER_UPDATES`` with
+  ``owner=`` as the one keyword, and never on the metastore; its reads and the
+  handover verify helpers' are ``HANDOVER_READS``. A call
   the allowlist could not see refuses outright: the raw ``api_client``,
   reflection (``getattr`` and kin) on a session client or naming an SDK
   API, ``attrgetter``/``methodcaller``, and the ``ApiClient`` class. The
@@ -110,6 +114,39 @@ ALLOWED_CALLS = frozenset(
         ("workspace", "upload"),
     }
 )
+# The ownership handover (M2-PR8): the one module that may change an owner,
+# each change a typed update whose only keyword is owner=, and what it and the
+# handover's read-only helpers read (enumeration, the compare-and-swap read
+# back, effective privileges, job runs). No other module may call these.
+HANDOVER_OWNER_MODULE = "handover_uc_ownership.py"
+HANDOVER_OWNER_UPDATES = frozenset(
+    {
+        ("catalogs", "update"),
+        ("schemas", "update"),
+        ("tables", "update"),
+        ("volumes", "update"),
+        ("functions", "update"),
+        ("registered_models", "update"),
+    }
+)
+HANDOVER_READS = frozenset(
+    {
+        ("schemas", "list"),
+        ("tables", "get"),
+        ("tables", "list"),
+        ("volumes", "list"),
+        ("volumes", "read"),
+        ("functions", "get"),
+        ("functions", "list"),
+        ("registered_models", "get"),
+        ("registered_models", "list"),
+        ("grants", "get_effective"),
+        ("jobs", "list"),
+        ("jobs", "list_runs"),
+        ("pipelines", "list_pipelines"),
+    }
+)
+HANDOVER_MODULES = frozenset({HANDOVER_OWNER_MODULE, "handover_uc_plan.py", "handover_verify.py"})
 FORBIDDEN_KEYWORDS = frozenset({"owner", "new_owner", "remove", "roles", "entitlements"})
 DESTRUCTIVE_METHODS = frozenset({"delete", "unassign", "transfer_ownership", "remove", "reset"})
 # Names that reach an API without a visible ``<client>.<api>.<method>(...)``.
@@ -382,6 +419,21 @@ def _sources() -> dict[str, str]:
     return {path.name: path.read_text(encoding="utf-8") for path in BOOTSTRAP_MODULES}
 
 
+def test_the_handover_exception_admits_only_an_owner_only_update() -> None:
+    """A second keyword, the metastore or another module is still an owner change refused."""
+
+    planted = (
+        "workspace.tables.update(name, owner=target)\n"
+        "workspace.tables.update(name, owner=target, new_name='x')\n"
+        "workspace.metastores.update('m', owner=target)\n"
+    )
+    assert _handover_owner_updates(planted) == ["('tables', 'update') sets owner"]
+    remaining = _forbidden_in(planted)
+    for line in _handover_owner_updates(planted):
+        remaining.remove(line)
+    assert remaining == ["('tables', 'update') sets owner", "('metastores', 'update') sets owner"]
+
+
 def test_the_checks_catch_a_planted_alias_transfer_and_revoke() -> None:
     planted = (
         "api = self.account.service_principal_secrets\n"
@@ -424,7 +476,16 @@ def test_the_bootstrap_calls_only_the_reviewed_sdk_surface() -> None:
         assert _aliases_in(source) == [], name
         assert _dynamic_in(source) == [], name
     used = {pair for source in sources.values() for _node, pair in _calls_in(source)}
-    assert used == ALLOWED_CALLS
+    assert used == ALLOWED_CALLS | HANDOVER_READS | HANDOVER_OWNER_UPDATES
+    for name, source in sources.items():
+        pairs = {pair for _node, pair in _calls_in(source)}
+        if name not in HANDOVER_MODULES:
+            assert not pairs & (HANDOVER_READS | HANDOVER_OWNER_UPDATES), name
+        if name != HANDOVER_OWNER_MODULE:
+            assert not pairs & HANDOVER_OWNER_UPDATES, name
+    assert not HANDOVER_OWNER_UPDATES & ALLOWED_CALLS and not HANDOVER_READS & ALLOWED_CALLS
+    assert not {pair for pair in HANDOVER_OWNER_UPDATES | HANDOVER_READS if pair[0] == "metastores"}
+    assert not {pair for pair in HANDOVER_READS if pair[1] in DESTRUCTIVE_METHODS | {"update", "create", "patch"}}
     destructive = {pair for pair in ALLOWED_CALLS if pair[1] in DESTRUCTIVE_METHODS}
     assert destructive == {("service_principal_secrets", "delete")}
     assert sorted(pair for pair in ALLOWED_CALLS if pair[0] == "metastores") == [
@@ -439,9 +500,25 @@ def test_the_bootstrap_calls_only_the_reviewed_sdk_surface() -> None:
     assert not [pair for pair in ALLOWED_CALLS if pair[0] == "service_principals" and pair[1] in {"patch", "update"}]
 
 
+def _handover_owner_updates(source: str) -> list[str]:
+    """The handover's reviewed owner changes: an owner-only update of a reviewed pair."""
+
+    return [
+        f"{pair} sets owner"
+        for node, pair in _calls_in(source)
+        if pair in HANDOVER_OWNER_UPDATES and {keyword.arg for keyword in node.keywords} == {"owner"}
+    ]
+
+
 def test_no_bootstrap_call_changes_an_owner_revokes_or_sets_roles() -> None:
     for name, source in _sources().items():
-        assert _forbidden_in(source) == [], name
+        found = _forbidden_in(source)
+        if name == HANDOVER_OWNER_MODULE:
+            reviewed = _handover_owner_updates(source)
+            assert {line.split(" sets ")[0] for line in reviewed} == {str(pair) for pair in HANDOVER_OWNER_UPDATES}
+            for line in reviewed:
+                found.remove(line)
+        assert found == [], name
     text = "\n".join(_sources().values())
     assert "roles/servicePrincipal.user" in text and "roles/servicePrincipal.manager" in text
     assert "roles/account" not in text
