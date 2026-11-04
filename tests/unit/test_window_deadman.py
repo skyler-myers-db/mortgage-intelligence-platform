@@ -15,14 +15,21 @@ from __future__ import annotations
 
 import ast
 import json
-import sys
-import types
 from pathlib import Path
 from typing import Any
 
 import pytest
+from databricks.sdk.errors import ResourceAlreadyExists
 
-from tests.fixtures.quiesce_window_estate import APP_NAME, BLUE_ID, RELEASE, Estate, StartBehaviour
+from tests.fixtures.quiesce_window_estate import (
+    APP_NAME,
+    BLUE_ID,
+    RELEASE,
+    Estate,
+    StartBehaviour,
+    load_deadman,
+    run_deadman,
+)
 from tests.unit.test_quiesce_window_start_repin import (  # noqa: F401 - the autouse env
     LEASE_ID,
     _env,
@@ -37,17 +44,7 @@ NOW = 1_800_000_000.0
 DEADLINE = int(NOW) + 3600
 
 
-def load_deadman(source: bytes, name: str = "window_deadman_under_test") -> dict[str, Any]:
-    """The dead-man module from exactly ``source``, as the job runs that one file."""
-
-    module = types.ModuleType(name)
-    module.__file__ = str(DEADMAN)
-    sys.modules[name] = module
-    exec(compile(source, str(DEADMAN), "exec"), module.__dict__)  # noqa: S102
-    return module.__dict__
-
-
-DEADMAN_NS = load_deadman(DEADMAN.read_bytes())
+DEADMAN_NS = load_deadman(DEADMAN.read_bytes(), "window_deadman_under_test")
 
 
 class Clock:
@@ -100,6 +97,20 @@ def _marker(estate: Estate, opened: dict[str, Any]) -> dict[str, Any] | None:
 
 
 # --- the restart ----------------------------------------------------------------------
+
+
+def test_the_submitted_run_restarts_blue_from_the_published_bytes() -> None:
+    # The arm's own parameters, run by the fake Jobs service from the file the
+    # window published: the parameter contract between the two ends.
+    estate = _estate()
+    _open(estate)
+    run = estate.jobs.only_run()
+    deadline = int(run.tasks[0].spark_python_task.parameters[run.tasks[0].spark_python_task.parameters.index("--deadline") + 1])
+    clock = Clock(now=float(deadline - 30))
+    assert run_deadman(estate, run.run_id, clock=clock, sleep=clock.sleep) == 0
+    assert estate.apps.compute == "ACTIVE" and estate.apps.active_id == "deployment-start-1"
+    markers = [path for path in estate.files.data if ".deadman-" in path]
+    assert len(markers) == 1 and json.loads(estate.files.data[markers[0]])["state"] == "deadman_restarted"
 
 
 def test_a_dead_runners_open_window_is_restarted_at_the_deadline_on_the_start_deployment() -> None:
@@ -223,7 +234,7 @@ def test_the_marker_is_create_only() -> None:
     estate = _estate()
     opened = _open(estate)
     assert _deadman(estate, _argv(opened)) == 0
-    with pytest.raises(RuntimeError, match="AlreadyExists"):
+    with pytest.raises(ResourceAlreadyExists):
         _deadman(estate, _argv(opened, **{"--blue-restorable": "false"}))
 
 

@@ -11,6 +11,13 @@ tampered snapshot, a dropped env, a FAILED start, no readable pending id.
 the window journal) and the secret scope holding the signed rollback record,
 which ``signed_blue`` writes for blue with the rollback tests' reviewed
 payload and Gateway contract.
+
+``FakeJobs`` (M0-PR9) takes one-time ``jobs submit`` runs (one per
+idempotency token) and cancels; ``run_deadman`` plays the Jobs service: it
+reads the submitted task's ``python_file`` from the fake workspace, so it runs
+exactly the bytes the window published, never the repo's. ``window_hooks``
+gives ``open_window`` the real admission and the real arm, publishing a staged
+green release that carries ``jobs/window_deadman.py``.
 """
 
 from __future__ import annotations
@@ -19,13 +26,21 @@ import base64
 import copy
 import io
 import json
+import sys
+import tempfile
 import time
+import types
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from databricks.sdk.errors import NotFound, ResourceDoesNotExist
+from databricks.sdk.errors import NotFound, ResourceAlreadyExists, ResourceDoesNotExist
 
+from tools.databricks import app_release_contract as contract
+from tools.databricks import quiesce_window_deadman as deadman
+from tools.databricks.app_release_source import PublishPlan
 from tools.databricks.quiesce_window_budget import require_admitted
 
 APP_NAME = "mip-app"
@@ -61,8 +76,11 @@ class FakeFiles:
 
     def upload(self, path: str, content: Any, *, format: Any = None, overwrite: bool = False) -> None:
         if path in self.data and not overwrite:
-            raise RuntimeError("AlreadyExists")
+            raise ResourceAlreadyExists("AlreadyExists")
         self.data[path] = content.read()
+
+    def mkdirs(self, _path: str) -> None:
+        """Folders are implicit in the fake."""
 
     def delete(self, path: str) -> None:
         self.data.pop(path, None)
@@ -279,14 +297,57 @@ class FakeApps:
 
 
 @dataclass
+class FakeJobs:
+    """One-time runs: submit (one per idempotency token), get and cancel; never a delete."""
+
+    runs: dict[int, SimpleNamespace] = field(default_factory=dict)
+    tokens: dict[str, int] = field(default_factory=dict)
+    submits: int = 0
+    cancels: list[int] = field(default_factory=list)
+    fail_submit: bool = False
+
+    def submit(self, **request: Any) -> SimpleNamespace:
+        self.submits += 1
+        if self.fail_submit:
+            raise ConnectionError("the Jobs API is unreachable")
+        token = str(request["idempotency_token"])
+        if token not in self.tokens:
+            run_id = 9000 + len(self.runs) + 1
+            self.runs[run_id] = SimpleNamespace(
+                run_id=run_id,
+                run_name=request["run_name"],
+                tasks=list(request["tasks"]),
+                state=SimpleNamespace(life_cycle_state="RUNNING"),
+                request=request,
+            )
+            self.tokens[token] = run_id
+        return SimpleNamespace(response=SimpleNamespace(run_id=self.tokens[token]))
+
+    def get_run(self, run_id: int) -> SimpleNamespace:
+        return self.runs[run_id]
+
+    def cancel_run(self, run_id: int) -> SimpleNamespace:
+        self.cancels.append(run_id)
+        self.runs[run_id].state.life_cycle_state = "TERMINATED"
+        return SimpleNamespace(response=None)
+
+    def only_run(self) -> SimpleNamespace:
+        assert len(self.runs) == 1, f"{len(self.runs)} dead-man runs"
+        return next(iter(self.runs.values()))
+
+
+@dataclass
 class Estate:
     files: FakeFiles
     secrets: FakeSecrets
     apps: FakeApps
+    jobs: FakeJobs = field(default_factory=FakeJobs)
 
     @property
     def workspace(self) -> SimpleNamespace:
-        return SimpleNamespace(apps=self.apps, secrets=self.secrets, workspace=self.files)
+        return SimpleNamespace(
+            apps=self.apps, secrets=self.secrets, workspace=self.files, jobs=self.jobs
+        )
 
 
 def make_estate(env_names: list[str], behaviour: StartBehaviour | None = None) -> Estate:
@@ -303,8 +364,110 @@ def stored_record(estate: Estate, *, scope: str = "mip") -> dict[str, Any]:
     return json.loads(estate.secrets.values[(scope, _record_key(APP_NAME))])
 
 
-def window_hooks(estate: Estate, *, budget_s: float = 3 * 3600) -> dict[str, Any]:
-    """The open's M0-PR9 hooks for a run with ``budget_s`` seconds of job budget left."""
 
-    deadline = str(int(time.time() + budget_s))
-    return {"admit": lambda canonical: require_admitted(canonical, deadline, now=time.time())}
+# --- the dead-man (M0-PR9) ------------------------------------------------------------
+
+REPO = Path(__file__).resolve().parents[2]
+GREEN_COMMIT = "c" * 40
+DEPLOYER = "deployer-app-id-PLACEHOLDER"
+CLIENT_KEY = "client-key"
+DEADMAN_BYTES = (REPO / "jobs" / "window_deadman.py").read_bytes()
+# The rollback tests' lease (tests/unit/test_app_deployment_rollback.py LEASE_ID).
+LEASE_ID = "11111111-1111-4111-8111-111111111111"
+
+
+def green_release(
+    stage_root: Path | None = None, *, extra: dict[str, bytes] | None = None
+) -> PublishPlan:
+    """This run's staged green release: blue's files plus the dead-man, as step 1 stages it."""
+
+    root = Path(stage_root or tempfile.mkdtemp(prefix="mip-deadman-stage-"))
+    stage = root / "source"
+    files = {**SOURCE_FILES, deadman.DEADMAN_RELPATH: DEADMAN_BYTES, **(extra or {})}
+    for relpath, data in files.items():
+        path = stage / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    manifest = contract.write_manifest(
+        root / "manifest.json", commit=GREEN_COMMIT, entries=contract.manifest_entries(stage)
+    )
+    release_path = contract.release_path(
+        principal=DEPLOYER,
+        target="client",
+        root_leaf=CLIENT_KEY,
+        release_id=manifest.release_id,
+        commit=GREEN_COMMIT,
+    )
+    return PublishPlan(manifest, stage, release_path, 1)
+
+
+def window_hooks(
+    estate: Estate,
+    *,
+    budget_s: float = 3 * 3600,
+    release: PublishPlan | None = None,
+    app_id: str = "app-object-id",
+) -> dict[str, Any]:
+    """The open's M0-PR9 hooks for a run with ``budget_s`` seconds of job budget left.
+
+    ``arm`` is the real one: it publishes ``release`` to the fake workspace,
+    re-reads the dead-man's bytes, re-admits and submits to ``FakeJobs``.
+    """
+
+    from tools.databricks.quiesce_window_plan import body_sha256
+
+    deadline = int(time.time() + budget_s)
+    plan = release or green_release()
+
+    def admit(canonical: Any) -> object:
+        return require_admitted(canonical, str(deadline), now=time.time())
+
+    def arm(canonical: Any) -> str:
+        return deadman.arm_deadman(
+            estate.workspace,
+            app_name=APP_NAME,
+            app_id=app_id,
+            canonical=canonical,
+            window_sha256=body_sha256(canonical),
+            lease_id=LEASE_ID,
+            release=plan,
+            deadline=deadline,
+            admit=lambda: admit(canonical),
+        )
+
+    def cancel(run_id: str) -> str:
+        return deadman.cancel_deadman(estate.workspace, app_name=APP_NAME, run_id=run_id)
+
+    return {"admit": admit, "arm": arm, "cancel": cancel}
+
+
+def load_deadman(source: bytes, name: str = "window_deadman_published") -> dict[str, Any]:
+    """The dead-man module from exactly ``source``, as the job runs that one file."""
+
+    module = types.ModuleType(name)
+    module.__file__ = "window_deadman.py"
+    sys.modules[name] = module
+    exec(compile(source, "window_deadman.py", "exec"), module.__dict__)  # noqa: S102
+    return module.__dict__
+
+
+def run_deadman(
+    estate: Estate,
+    run_id: int,
+    *,
+    clock: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> int:
+    """The Jobs service: run the submitted task's published file with its parameters."""
+
+    task = estate.jobs.get_run(run_id).tasks[0].spark_python_task
+    source = estate.files.download(contract.api_path(task.python_file)).read()
+    module = load_deadman(source)
+    return int(
+        module["main"](
+            list(task.parameters),
+            workspace_factory=lambda: estate.workspace,
+            clock=clock,
+            sleep=sleep,
+        )
+    )

@@ -7,14 +7,17 @@
   python -m tools.databricks.quiesce_window await ...               # wait, require, prove
   python -m tools.databricks.quiesce_window close --repinned ID ... # after the re-pin
   python -m tools.databricks.quiesce_window status --out-env F      # for the EXIT trap
+  python -m tools.databricks.quiesce_window cancel-deadman --run-id N # after the close
 
 ``plan`` is read-only (GET and list calls, and file downloads for the tree
 digests). It prints the public summary and writes the full plan mode 0600.
 ``open`` re-validates that plan (pre-apply, its digest, the exact digest ack
 in ``MIP_ACK_QUIESCE_WINDOW``), admits it against the job budget
 (``quiesce_window_budget``, M0-PR9: before any stop), re-checks under the
-lease that blue is still the App's last deployment, journals ``window_open``
-and only then stops the App, identity-pinned. ``start`` journals
+lease that blue is still the App's last deployment, arms the dead-man
+(``quiesce_window_deadman``: publish this release, then one ``jobs submit``),
+journals ``window_open`` and only then stops the App, identity-pinned.
+``cancel-deadman`` cancels that run once the journal is closed. ``start`` journals
 ``window_starting``, starts, and records the deployment the start created
 (a rerun resumes from the App's pending deployment, never a second start).
 ``await`` waits for exactly that
@@ -43,6 +46,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
+from tools.databricks import quiesce_window_deadman as deadman
 from tools.databricks import quiesce_window_journal as journal
 from tools.databricks.app_release_contract import ReleaseContractError
 from tools.databricks.app_rollback_record_contract import _load_record, _text
@@ -57,7 +61,7 @@ from tools.databricks.app_start_deployment import (
     wait_for_compute_active,
     wait_for_terminal,
 )
-from tools.databricks.quiesce_window_budget import admission, require_admitted
+from tools.databricks.quiesce_window_budget import admission, parse_deadline, require_admitted
 from tools.databricks.quiesce_window_facts import (
     app_or_none,
     collect_facts,
@@ -71,6 +75,8 @@ from tools.databricks.quiesce_window_plan import (
 )
 
 _PREFIX = "[mip-quiesce-window]"
+# The run never starts blue this close to the job deadline: the dead-man does.
+DEADMAN_GUARD_S = 120
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -112,11 +118,16 @@ def open_window(
     assert_lease_held: Callable[[], None],
     stop: Callable[[], str],
     admit: Callable[[Mapping[str, Any]], object],
+    arm: Callable[[Mapping[str, Any]], str],
+    cancel: Callable[[str], object],
 ) -> dict[str, Any]:
     """Journal ``window_open`` for exactly the acknowledged plan, then stop the App.
 
     ``admit`` decides the job-budget admission of the canonical body (M0-PR9)
-    before anything is read or written: a refusal stops nothing.
+    before anything is read or written: a refusal stops and submits nothing.
+    ``arm`` submits the dead-man after the blue re-check and before the
+    journal write, so an arm that fails journals and stops nothing; a journal
+    write that fails cancels the armed run before it raises.
     """
 
     canonical = _validated_plan(plan, acknowledgement=acknowledgement)
@@ -125,7 +136,44 @@ def open_window(
     if not last_deployment_is(workspace, app_name=app_name, deployment_id=blue_id):
         raise RuntimeError("blue is no longer the App's last deployment; the window is refused")
     current = journal.read(workspace, app_name=app_name)
-    opened = journal.write(
+    if journal.state_of(current) not in {"absent", "closed"}:
+        raise RuntimeError("an earlier window's journal is still open; the window is refused")
+    run_id = arm(canonical)
+    try:
+        opened = _journal_open(
+            workspace,
+            app_name=app_name,
+            current=current,
+            plan=plan,
+            canonical=canonical,
+            lease_id=lease_id,
+            source_git_sha=source_git_sha,
+            assert_lease_held=assert_lease_held,
+        )
+    except Exception:
+        try:
+            cancel(run_id)
+        except Exception as exc:  # noqa: BLE001 - it reads no window_open and exits
+            print(f"{_PREFIX} the armed dead-man was not cancelled ({type(exc).__name__})")
+        raise
+    if stop() != "stopped":
+        raise RuntimeError("the App did not stop inside the journaled window")
+    return opened
+
+
+def _journal_open(
+    workspace: Any,
+    *,
+    app_name: str,
+    current: dict[str, Any] | None,
+    plan: dict[str, Any],
+    canonical: Mapping[str, Any],
+    lease_id: str,
+    source_git_sha: str,
+    assert_lease_held: Callable[[], None],
+) -> dict[str, Any]:
+    blue_id = str(canonical["blue_deployment_id"])
+    return journal.write(
         workspace,
         app_name=app_name,
         expected=current,
@@ -142,9 +190,6 @@ def open_window(
         },
         assert_lease_held=assert_lease_held,
     )
-    if stop() != "stopped":
-        raise RuntimeError("the App did not stop inside the journaled window")
-    return opened
 
 
 def _refuse_start(
@@ -185,12 +230,17 @@ def start_window(
     app_name: str,
     assert_lease_held: Callable[[], None],
     stop: Callable[[], str],
+    deadline: int | None = None,
+    clock: Callable[[], float] = time.time,
 ) -> str:
     """Journal the intent, start the App, journal the deployment the start created.
 
     ``window_starting`` is written before ``apps start``, so a start whose id
     was never journaled is not mistaken for "never started": a rerun resumes
-    from the App's pending deployment and never starts a second time.
+    from the App's pending deployment and never starts a second time. Within
+    ``DEADMAN_GUARD_S`` of the job deadline the dead-man owns the start
+    (M0-PR9): the run journals no intent and leaves the window open for it,
+    so the two never both start the App.
     """
 
     current = journal.read(workspace, app_name=app_name)
@@ -200,6 +250,8 @@ def start_window(
     ):
         raise RuntimeError("no restorable window is open to start")
     resumed = state == "window_starting"
+    if not resumed and deadline is not None and clock() >= deadline - DEADMAN_GUARD_S:
+        raise RuntimeError("the job deadline is too close: the dead-man owns this window's start")
     if not resumed:
         current = journal.write(
             workspace,
@@ -372,6 +424,38 @@ def _env_lines(values: dict[str, str]) -> str:
     return "".join(f"{name}={shlex.quote(value)}\n" for name, value in values.items())
 
 
+def _arm(workspace: Any, args: argparse.Namespace, canonical: Mapping[str, Any]) -> str:
+    """Publish this release and submit the dead-man; the run id reaches the shell at once."""
+
+    run_id = deadman.arm_for_release(
+        workspace,
+        app_name=args.app_name,
+        app_id=args.expected_app_id,
+        canonical=canonical,
+        window_sha256=str(_load_json(args.plan)["window_sha256"]),
+        lease_id=args.deployment_lease_id,
+        deadline=args.deadline_epoch,
+        release={
+            "release_id": args.release_id,
+            "stage_dir": Path(args.stage_dir),
+            "manifest_path": Path(args.manifest),
+            "expected_commit": args.deployment_source_git_sha,
+            "principal": args.expected_principal,
+            "target": args.expected_target,
+            "root_leaf": args.expected_root_leaf,
+        },
+        admit=lambda: require_admitted(canonical, args.deadline_epoch, now=time.time()),
+    )
+    # Before the journal write and the stop: a later failure still lets the
+    # EXIT trap cancel exactly this run.
+    if args.out_env is not None:
+        args.out_env.write_text(
+            _env_lines({"MIP_QUIESCE_WINDOW_DEADMAN_RUN_ID": run_id}), encoding="utf-8"
+        )
+        args.out_env.chmod(0o600)
+    return run_id
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -384,6 +468,7 @@ def _parser() -> argparse.ArgumentParser:
         "close",
         "status",
         "assert-serving",
+        "cancel-deadman",
     ):
         mode = sub.add_parser(name)
         mode.add_argument("--app-name", required=True)
@@ -403,8 +488,20 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--jobs-reader-role-check", choices=("exact", "drift"))
     plan.add_argument("--migration-plan", type=Path)
     # The job's deadline (MIP_JOB_DEADLINE_EPOCH, M0-PR9); empty refuses a window.
-    for mode in (plan, sub.choices["open"]):
+    for mode in (plan, sub.choices["open"], sub.choices["start"]):
         mode.add_argument("--deadline-epoch", default="")
+    # open publishes this run's staged release for the dead-man (M0-PR9).
+    opener = sub.choices["open"]
+    for flag in (
+        "--release-id",
+        "--stage-dir",
+        "--manifest",
+        "--expected-principal",
+        "--expected-target",
+        "--expected-root-leaf",
+    ):
+        opener.add_argument(flag, required=flag != "--expected-root-leaf", default=None)
+    sub.choices["cancel-deadman"].add_argument("--run-id", required=True)
     # plan: the rebase step 0a takes; applicable: the operator's request, which
     # it resolves against the first-install journal (MIP_QUIESCE_WINDOW_REBASE).
     for mode in (plan, sub.choices["applicable"]):
@@ -526,11 +623,16 @@ def main(
         )
         print(f"{_PREFIX} assert-serving: the App serves the signed record's deployment")
         return 0
+    if args.command == "cancel-deadman":
+        outcome = deadman.cancel_deadman(workspace, app_name=app_name, run_id=args.run_id)
+        print(f"{_PREFIX} cancel-deadman: {outcome}")
+        return 0
     if args.command != "status" and not (
         args.deployment_lease_id and args.deployment_source_git_sha
     ):
         raise SystemExit(f"{_PREFIX} {args.command} requires the deployment lease and source SHA")
     if args.command == "open":
+        armed: dict[str, str] = {}
         opened = open_window(
             workspace,
             app_name=app_name,
@@ -543,17 +645,29 @@ def main(
             admit=lambda canonical: require_admitted(
                 canonical, args.deadline_epoch, now=time.time()
             ),
+            arm=lambda canonical: armed.setdefault("run_id", _arm(workspace, args, canonical)),
+            cancel=lambda run_id: deadman.cancel_deadman(
+                workspace, app_name=app_name, run_id=run_id
+            ),
         )
         values = {
+            "MIP_QUIESCE_WINDOW_DEADMAN_RUN_ID": armed["run_id"],
             "MIP_QUIESCE_WINDOW_SHA256": opened["window_sha256"],
             "MIP_QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID": opened["blue_deployment_id"],
             "MIP_QUIESCE_WINDOW_TREE_SHA256": opened["source_tree_sha256"],
             "MIP_QUIESCE_WINDOW_BLUE_RESTORABLE": "1" if opened["blue_restorable"] else "0",
         }
     elif args.command == "start":
+        deadline = parse_deadline(args.deadline_epoch)
+        if deadline is None:
+            raise SystemExit(f"{_PREFIX} start requires the job deadline the dead-man was armed with")
         values = {
             "MIP_QUIESCE_WINDOW_START_DEPLOYMENT_ID": start_window(
-                workspace, app_name=app_name, assert_lease_held=lease, stop=stop
+                workspace,
+                app_name=app_name,
+                assert_lease_held=lease,
+                stop=stop,
+                deadline=deadline,
             )
         }
     elif args.command == "await":

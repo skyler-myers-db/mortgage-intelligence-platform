@@ -44,6 +44,18 @@ def test_the_ast_finds_exactly_the_reviewed_job_run_sites() -> None:
     assert stops.python_job_run_sites() == set(stops.JOB_RUN_SITES)
 
 
+def test_the_dead_mans_submit_and_cancel_are_reached_only_through_the_window_tool() -> None:
+    # M0-PR9: the submit and the cancel sit in quiesce_window_deadman, reached
+    # only by quiesce_window's open and cancel-deadman, which only the window
+    # library invokes.
+    reached = stops.reaching_entry_points(sites=set(stops.JOB_RUN_SITES))
+    assert set(reached) == set(stops.JOB_RUN_SITES)
+    assert all(entries == {"tools.databricks.quiesce_window"} for entries in reached.values()), reached
+    entry = stops.ENTRY_POINTS["tools.databricks.quiesce_window"]
+    assert entry.modes["open"] and entry.modes["cancel-deadman"]
+    assert entry.callers == frozenset({stops.WINDOW_LIBRARY})
+
+
 def test_every_site_is_reached_only_by_reviewed_entry_points() -> None:
     reached = stops.reaching_entry_points()
     assert set(reached) == set(stops.PRIMITIVE_SITES)

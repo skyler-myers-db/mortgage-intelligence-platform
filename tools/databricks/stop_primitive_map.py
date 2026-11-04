@@ -83,8 +83,13 @@ PRIMITIVE_SITES = frozenset(
 # The scanned roots: the deploy tooling and the job sources (M0-PR9).
 SCAN_ROOTS = ("tools", "jobs")
 # (module path, top-level function, SDK method): every one-time job submit or
-# cancel (M0-PR9). None exists yet; the dead-man's arm and cancel add theirs.
-JOB_RUN_SITES: frozenset[tuple[str, str, str]] = frozenset()
+# cancel (M0-PR9): the dead-man's arm and its cancel, nothing else.
+JOB_RUN_SITES: frozenset[tuple[str, str, str]] = frozenset(
+    {
+        ("tools/databricks/quiesce_window_deadman.py", "submit_deadman", "submit"),
+        ("tools/databricks/quiesce_window_deadman.py", "cancel_deadman", "cancel_run"),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -130,6 +135,8 @@ ENTRY_POINTS: Mapping[str, EntryPoint] = {
             "close": False,
             "status": False,
             "assert-serving": False,
+            # M0-PR9: the dead-man's cancel, after the journal closes.
+            "cancel-deadman": True,
         },
         callers=frozenset({WINDOW_LIBRARY}),
     ),
@@ -137,6 +144,10 @@ ENTRY_POINTS: Mapping[str, EntryPoint] = {
 # The modules that hold a primitive site: importing one is a stop path.
 SITE_MODULES = frozenset(
     ".".join(Path(path).with_suffix("").parts) for path, _function, _method in PRIMITIVE_SITES
+)
+# The modules that hold a job-run site: importing one is the window's alone.
+JOB_RUN_MODULES = frozenset(
+    ".".join(Path(path).with_suffix("").parts) for path, _function, _method in JOB_RUN_SITES
 )
 # Shell commands that stop or start an App directly, and inline SDK calls.
 _CLI_PRIMITIVE = re.compile(r"\bdatabricks\s+apps\s+(stop|start)\b")
@@ -344,9 +355,12 @@ def _stop_modules() -> list[tuple[str, str, str, frozenset[str]]]:
     """(module, package, name, allowed shell files) for each module whose import stops."""
 
     rules = []
-    for module in sorted({*ENTRY_POINTS, *SITE_MODULES}):
+    for module in sorted({*ENTRY_POINTS, *SITE_MODULES, *JOB_RUN_MODULES}):
         package, _, name = module.rpartition(".")
-        callers = ENTRY_POINTS[module].callers if module in ENTRY_POINTS else STOP_LIBRARIES
+        if module in ENTRY_POINTS:
+            callers = ENTRY_POINTS[module].callers
+        else:
+            callers = frozenset({WINDOW_LIBRARY}) if module in JOB_RUN_MODULES else STOP_LIBRARIES
         rules.append((module, package, name, callers))
     return rules
 

@@ -28,6 +28,8 @@ PRIMITIVES = (
     '"$PYTHON" -m tools.databricks.converge_lakebase_oauth_role --stop-app-for-mutation',
     '"$PYTHON" -m tools.databricks.quiesce_window open --plan "$P"',
     '"$PYTHON" -m tools.databricks.quiesce_window start --app-name "$APP_NAME"',
+    '"$PYTHON" -m tools.databricks.quiesce_window cancel-deadman --run-id "$RUN"',
+    '"$PYTHON" -c "from tools.databricks.quiesce_window_deadman import cancel_deadman"',
     '"$PYTHON" -m tools.databricks.app_deployment_rollback ensure --app-name "$APP_NAME"',
     '"$PYTHON" -m tools.databricks.app_deployment_rollback restore --app-name "$APP_NAME"',
     '"$PYTHON" -m tools.databricks.app_deployment_rollback repin --to "$ID"',

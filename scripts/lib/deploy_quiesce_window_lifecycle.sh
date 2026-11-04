@@ -18,8 +18,12 @@
 #                 reviewed functions): a failure converges them back, App up;
 #   window_open   the App was stopped on purpose (journaled): a failure starts
 #                 and re-pins blue if proven, else leaves the window open for
-#                 the dead-man (M0-PR9). A contract migration
-#                 (blue_restorable=0) leaves it stopped until green activates.
+#                 the dead-man (M0-PR9), armed before the stop. A contract
+#                 migration (blue_restorable=0) leaves it stopped until green
+#                 activates, and the dead-man leaves it stopped too.
+# Every path that closes the journal cancels the dead-man run
+# (cancel_quiesce_window_deadman); a path that leaves the window open never
+# does, because the dead-man is then the App's only restart.
 #   contract_activating  a contract window the activation started the App
 #                 for: blue cannot run on the migrated schema, so until green
 #                 is the signed record a failure stops the App and never
@@ -233,15 +237,18 @@ ensure_quiesce_window_open_for() {
 }
 
 # TOCTOU-checked open: the tool re-validates the pre-apply plan, its digest and
-# the exact ack, admits it against the job budget (M0-PR9: no stop without
-# remaining >= predicted window + predicted restore + 15 min), re-proves blue
-# is the App's last deployment, journals window_open and only then stops the
-# App, identity-pinned. The state switches
+# the exact ack, admits it against the job budget (M0-PR9: no stop and no
+# submit without remaining >= predicted window + predicted restore + 15 min),
+# re-proves blue is the App's last deployment, arms the dead-man (it publishes
+# this run's staged release, create-only and byte-verified, and submits
+# jobs/window_deadman.py from that folder as a one-time run), journals
+# window_open and only then stops the App, identity-pinned. The state switches
 # first, so a failure after the journal write reaches the window compensation,
-# which reads the journal rather than trusting this variable.
+# which reads the journal rather than trusting this variable; the armed run id
+# reaches the env file before the journal write, so that path can cancel it.
 open_quiesce_window() {
   local env_file
-  step "open the quiesce window for ${QUIESCE_WINDOW_REASONS} (journal window_open, then stop)"
+  step "open the quiesce window for ${QUIESCE_WINDOW_REASONS} (arm the dead-man, journal window_open, then stop)"
   env_file="$(mktemp -t mip-quiesce-window-open.XXXXXX.env)"
   chmod 600 "$env_file"
   QUIESCE_WINDOW_STATE="window_open"
@@ -250,18 +257,57 @@ open_quiesce_window() {
     --app-name "$_GRANTS_APP_NAME" \
     --plan "${QUIESCE_WINDOW_PLAN_JSON:?pre-apply window plan is required}" \
     --deadline-epoch "${MIP_JOB_DEADLINE_EPOCH:-}" \
+    --release-id "${APP_RELEASE_ID:?the staged release is required for the dead-man}" \
+    --stage-dir "$APP_RELEASE_STAGE_ROOT/source" \
+    --manifest "$APP_RELEASE_MANIFEST" \
+    --expected-principal "$CLIENT_DEPLOYER" \
+    --expected-target "$TARGET" \
+    --expected-root-leaf "$CLIENT_KEY" \
     --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --deployment-source-git-sha "$SOURCE_GIT_SHA" \
     --expected-app-id "$_EXISTING_APP_ID" \
     --expected-client-id "$_EXISTING_APP_SP_CLIENT_ID" \
     --expected-scim-id "$_EXISTING_APP_SP_SCIM_ID" \
-    --out-env "$env_file" || return 1
+    --out-env "$env_file" || {
+    read_quiesce_window_deadman_run_id "$env_file"
+    return 1
+  }
   # shellcheck disable=SC1090
   . "$env_file"
   rm -f "$env_file"
+  QUIESCE_WINDOW_DEADMAN_RUN_ID="$MIP_QUIESCE_WINDOW_DEADMAN_RUN_ID"
   QUIESCE_WINDOW_BLUE_RESTORABLE="$MIP_QUIESCE_WINDOW_BLUE_RESTORABLE"
   QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID="$MIP_QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID"
   QUIESCE_WINDOW_TREE_SHA256="$MIP_QUIESCE_WINDOW_TREE_SHA256"
+}
+
+# A failed open may still have armed the dead-man: its run id is the first line
+# the tool wrote, so the EXIT trap can cancel exactly that run.
+read_quiesce_window_deadman_run_id() {
+  local env_file="${1:?window env file is required}"
+  if [[ -s "$env_file" ]]; then
+    # shellcheck disable=SC1090
+    . "$env_file"
+    QUIESCE_WINDOW_DEADMAN_RUN_ID="${MIP_QUIESCE_WINDOW_DEADMAN_RUN_ID:-}"
+  fi
+  rm -f "$env_file"
+}
+
+# The journal is closed: cancel the dead-man run (cancel only, nothing is
+# deleted). The tool refuses a run that is not this App's dead-man. A cancel
+# that fails never fails the deploy: the dead-man reads the closed journal at
+# its next poll and exits doing nothing.
+cancel_quiesce_window_deadman() {
+  local run_id="${QUIESCE_WINDOW_DEADMAN_RUN_ID:-}"
+  [[ -n "$run_id" ]] || return 0
+  if "$PYTHON" -m tools.databricks.quiesce_window cancel-deadman \
+    --app-name "$_GRANTS_APP_NAME" \
+    --run-id "$run_id"; then
+    QUIESCE_WINDOW_DEADMAN_RUN_ID=""
+    return 0
+  fi
+  echo "${YLW}[deploy] the dead-man run could not be cancelled; it reads the closed journal and exits without a start.${RST}" >&2
+  return 0
 }
 
 # Start, wait for exactly the deployment the start created, require SUCCEEDED,
@@ -286,6 +332,7 @@ close_quiesce_window() {
   run_with_proof_signing_authority \
     "$PYTHON" -m tools.databricks.quiesce_window start \
     --app-name "$_GRANTS_APP_NAME" \
+    --deadline-epoch "${MIP_JOB_DEADLINE_EPOCH:-}" \
     --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --deployment-source-git-sha "$SOURCE_GIT_SHA" \
     --expected-app-id "$_EXISTING_APP_ID" \
@@ -356,6 +403,7 @@ repin_and_close_quiesce_window() {
     --deployment-source-git-sha "$SOURCE_GIT_SHA" || return 1
   QUIESCE_WINDOW_STATE="blue_serving"
   QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID="$proven"
+  cancel_quiesce_window_deadman
 }
 
 # Outside a window the verifier and jobs-reader roles must already be exact:
@@ -431,6 +479,7 @@ close_contract_window_after_capture() {
     --superseded-by-activation \
     --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --deployment-source-git-sha "$SOURCE_GIT_SHA"
+  cancel_quiesce_window_deadman
 }
 
 # ---------------------------------------------------------------------------
@@ -458,9 +507,11 @@ compensate_open_quiesce_window() {
   QUIESCE_WINDOW_TREE_SHA256="$MIP_QUIESCE_WINDOW_TREE_SHA256"
   case "$state" in
     absent|closed)
-      # The open refused before its journal write: the App was never stopped.
+      # The open refused before its journal write: the App was never stopped,
+      # and a dead-man it may have armed has no window to restart.
       rm -f "$env_file"
       QUIESCE_WINDOW_STATE="blue_serving"
+      cancel_quiesce_window_deadman
       return 0
       ;;
     window_open|window_starting)

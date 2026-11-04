@@ -33,8 +33,14 @@ done
 case "$*" in
   *"quiesce_window open"*)
     [[ -z "${FAIL_OPEN:-}" ]] || exit 2
-    printf 'MIP_QUIESCE_WINDOW_SHA256=w\nMIP_QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID=deployment-blue\nMIP_QUIESCE_WINDOW_TREE_SHA256=t\nMIP_QUIESCE_WINDOW_BLUE_RESTORABLE=%s\n' "${RESTORABLE:-1}" > "$out" ;;
+    # M0-PR9: the armed run id reaches the env file before the journal write.
+    printf 'MIP_QUIESCE_WINDOW_DEADMAN_RUN_ID=%s\n' "${DEADMAN_RUN_ID:-4242}" > "$out"
+    [[ -z "${FAIL_OPEN_AFTER_ARM:-}" ]] || exit 1
+    printf 'MIP_QUIESCE_WINDOW_DEADMAN_RUN_ID=%s\nMIP_QUIESCE_WINDOW_SHA256=w\nMIP_QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID=deployment-blue\nMIP_QUIESCE_WINDOW_TREE_SHA256=t\nMIP_QUIESCE_WINDOW_BLUE_RESTORABLE=%s\n' "${DEADMAN_RUN_ID:-4242}" "${RESTORABLE:-1}" > "$out" ;;
+  *"quiesce_window cancel-deadman"*)
+    exit "${CANCEL_RC:-0}" ;;
   *"quiesce_window start"*)
+    [[ -z "${FAIL_START:-}" ]] || exit 1
     printf 'MIP_QUIESCE_WINDOW_START_DEPLOYMENT_ID=deployment-start-1\n' > "$out" ;;
   *"quiesce_window await"*)
     [[ -z "${FAIL_AWAIT:-}" ]] || exit 1
@@ -89,6 +95,9 @@ APP_ROLLBACK_BINDING_ENV="$TMPDIR/binding.env"; APP_UPGRADE_STATE=blue_quiesced
 TARGET=client; OTEL_RESOURCE_BINDING_ARGS=(); DATABRICKS_VERIFIER_CLIENT_ID=verifier-client
 CLIENT_JOBS_PRINCIPAL=jobs-client
 MIP_LENDER_NAME=lender; MIP_LENDER_NMLS_ID=1; MIP_TENANT_ID=tenant
+APP_RELEASE_ID=aaaaaaaaaaaa-bbbbbbbbbbbb; APP_RELEASE_STAGE_ROOT=.databricks/app-release
+APP_RELEASE_MANIFEST=.databricks/app-release/manifest.json; CLIENT_DEPLOYER=deployer; CLIENT_KEY=client-key
+QUIESCE_WINDOW_DEADMAN_RUN_ID=""
 run_job_with_retry() { echo "job: $*" >> "$CALLS"; }
 """
 
