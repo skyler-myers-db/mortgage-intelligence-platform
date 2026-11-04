@@ -166,7 +166,8 @@ def test_the_feed_switch_runs_only_after_the_client_profile_resolves(tmp_path: P
 
     text = deploy_entrypoint_text()
     assert text.index("\nresolve_client_profile\n") < text.index(FEEDS_START)
-    assert text.index(FEEDS_END) < text.index("\nrun_bundle_plan_gate pre-lease\n")
+    assert text.index(FEEDS_END) < text.index("\n  run_bundle_plan_gate pre-lease\n")
+    assert text.index(FEEDS_END) < text.index('run_adopt_phase_plan "$DEPLOY_PHASE"')
     # Without the profile's policy the switch fails closed, never defaults.
     rc, out, err = _deploy_feed_switch(tmp_path)
     assert rc == 2 and "demo-feed policy did not resolve" in err

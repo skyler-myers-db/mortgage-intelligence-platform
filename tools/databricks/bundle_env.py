@@ -72,6 +72,12 @@ Usage:
   python tools/databricks/bundle_env.py deploy -t client --select jobs.example
   # Deployment-state use is restricted to the configured App binding:
   python tools/databricks/bundle_env.py deployment bind mip_app mip-app -t client
+  # ... and to the exact binds and unbinds of an acknowledged adopt plan
+  # (tools/databricks/install_state_adopt.py, M2-PR6; wrapper-only flags),
+  # with its digest exported as MIP_ADOPT_PLAN_ACK and the signed lease held:
+  python tools/databricks/bundle_env.py deployment bind <key> <id> -t client \
+      --auto-approve --adopt-plan <plan.json> --adopt-plan-sha256 <sha256> \
+      --adopt-lease-id <lease id> --adopt-source-git-sha <sha>
 
 The install policy is the client profile's own fields (tools/clients/policy.py,
 M1-PR3), never a target name: the Summit demo first-party feeds render on
@@ -87,6 +93,7 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +120,7 @@ from tools.clients.errors import ProfileRefusal  # noqa: E402
 from tools.clients.policy import InstallPolicy, install_policy  # noqa: E402
 from tools.clients.schema import ClientProfile  # noqa: E402
 from tools.databricks import (  # noqa: E402
+    bundle_env_adopt,
     install_pins,
     monitor_scheduler_gate,
     scheduled_refresh_posture,
@@ -255,12 +263,21 @@ def _validate_non_app_deploy_selectors(args: list[str]) -> str | None:
     return None
 
 
+_BUNDLE_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
+
+
 def _validate_app_deployment_command(
     args: list[str],
     *,
     expected_app_name: str,
+    adopt_edit: Callable[[str, str, str | None], str | None] | None = None,
 ) -> str | None:
-    """Allow only the exact App bind/unbind used by the signed deploy flow."""
+    """Allow only the exact App bind/unbind used by the signed deploy flow.
+
+    With ``adopt_edit`` (``bundle_env_adopt.edit_verifier``), also exactly one bind or
+    unbind of one key that the check admits, never with ``--force-lock``; an
+    App bind still names the configured App.
+    """
 
     if not args or args[0] not in {"bind", "unbind"}:
         return "bundle deployment permits only the governed App bind or unbind operation"
@@ -297,6 +314,15 @@ def _validate_app_deployment_command(
     if target not in _MUTABLE_BUNDLE_TARGETS:
         return "bundle deployment target must be exactly client"
     expected = ["mip_app", expected_app_name] if action == "bind" else ["mip_app"]
+    if adopt_edit is not None:
+        if "--force-lock" in boolean_flags:
+            return f"bundle deployment {action} under an adopt plan never forces the deployment lock"
+        if len(positional) != (2 if action == "bind" else 1) or _BUNDLE_KEY.match(positional[0]) is None:
+            return f"bundle deployment {action} under an adopt plan names one key (and, to bind, one id)"
+        if positional[0] == "mip_app" and positional != expected[: len(positional)]:
+            return f"bundle deployment {action} must target only the configured App binding {expected!r}"
+        refusal = adopt_edit(action, positional[0], positional[1] if action == "bind" else None)
+        return None if refusal is None else f"bundle deployment {action} refused: {refusal}"
     if positional != expected:
         return (
             f"bundle deployment {action} must target only the configured "
@@ -540,12 +566,21 @@ def main() -> int:
     env.pop("BUNDLE_VAR_sql_warehouse_id", None)
 
     if subcmd == "deployment":
+        rest, adopt_authority, flag_error = bundle_env_adopt.split_authority(rest)
+        if flag_error is None and adopt_authority is not None and profile is None:
+            flag_error = "an adopt plan's state edit needs the resolved client profile"
+        if flag_error is not None:
+            print(f"[bundle_env] {flag_error}", file=sys.stderr)
+            return 2
         deployment_error = _validate_app_deployment_command(
             rest,
             expected_app_name=(
                 profile_variables["app_name"]
                 if profile is not None
                 else str(env.get("MIP_APP_NAME") or "mip-app").strip()
+            ),
+            adopt_edit=(
+                None if adopt_authority is None else bundle_env_adopt.edit_verifier(adopt_authority, profile)
             ),
         )
         if deployment_error is not None:

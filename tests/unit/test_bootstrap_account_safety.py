@@ -7,7 +7,8 @@
   loggers. A cached token there refuses; the operator's ``~/.databrickscfg``
   is never read, whatever it holds.
 * An AST allowlist pins every SDK call the ``tools/clients`` modules can
-  make (the bootstrap and the credential sink M2-PR2 extends). The only
+  make (the bootstrap, the credential sink M2-PR2 extends, and the legacy
+  root archive of M2-PR6, whose only writes are create-only copies). The only
   delete in it is a service-principal secret's; nothing transfers an owner,
   revokes a grant, removes a member or touches an identity's roles. A call
   the allowlist could not see refuses outright: the raw ``api_client``,
@@ -62,6 +63,12 @@ ALLOWED_CALLS = frozenset(
         ("serving_endpoints", "list"),
         ("warehouses", "list"),
         ("catalogs", "get"),
+        # Read-only: tools/clients/archive_legacy_root.py reads every bound
+        # resource by id for the workspace paths it still uses (M2-PR6).
+        ("experiments", "get_experiment"),
+        ("jobs", "get"),
+        ("lakeview", "get"),
+        ("pipelines", "get"),
         # Read-only: tools/clients/live_checks.py proves the deploy runs as the
         # profile's deployer (M1-PR2).
         ("current_user", "me"),
@@ -95,6 +102,12 @@ ALLOWED_CALLS = frozenset(
         # and has no such method, so any other ``workspace`` call still fails.
         ("workspace", "get_workspace_id"),
         ("workspace", "get_status"),
+        # The legacy root archive (M2-PR6): read the state and the tree, then
+        # copy create-only (upload with overwrite=False, mkdirs). Never delete.
+        ("workspace", "download"),
+        ("workspace", "list"),
+        ("workspace", "mkdirs"),
+        ("workspace", "upload"),
     }
 )
 FORBIDDEN_KEYWORDS = frozenset({"owner", "new_owner", "remove", "roles", "entitlements"})

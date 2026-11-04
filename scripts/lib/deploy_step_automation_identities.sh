@@ -319,13 +319,24 @@ else
   echo "  would probe read-only: the creator of Supervisor '${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}' (MIP_RETIRE_HUMAN_SUPERVISOR), Genie group grants, the signed rollback record in ${APP_ROLLBACK_SECRET_SCOPE}, governed owners and owner-equivalent grantees, App serving access, and one Genie turn"
   echo "  would check read-only: scope ${MIP_PII_SALT_SCOPE} and write-once pii-salt-v1"
 fi
+# >>> adopt phase: plan >>>
+# --phase adopt|unadopt plans the bundle state edit read-only in place of the
+# pre-lease gate, which refuses the unadopted install adopt exists to bind
+# (scripts/lib/deploy_adopt_phase_lifecycle.sh). Without the acknowledged
+# digest, or in a dry run, the run ends there, before the lease.
+if [[ "${DEPLOY_PHASE:-}" == "adopt" || "${DEPLOY_PHASE:-}" == "unadopt" ]]; then
+  run_adopt_phase_plan "$DEPLOY_PHASE"
+fi
+# <<< adopt phase: plan <<<
 # >>> bundle plan gate: pre-lease >>>
 # Read-only: plan the bundle and refuse a delete, recreate, identity rename,
 # unknown kind, name collision, unadopted install or unacknowledged Lakebase
 # instance update here, while the App still serves, before the signed lease and
 # every App stop (tools/databricks/bundle_plan_gate.py). --phase plan ends here,
-# with the lease never taken.
-run_bundle_plan_gate pre-lease
+# with the lease never taken; the adopt phases planned above instead.
+if [[ "${DEPLOY_PHASE:-}" != "adopt" && "${DEPLOY_PHASE:-}" != "unadopt" ]]; then
+  run_bundle_plan_gate pre-lease
+fi
 if [[ "${DEPLOY_PHASE:-}" == "plan" ]]; then
   echo "${GRN}[deploy] plan phase complete: read-only, stopped before the lease; nothing was changed.${RST}"
   exit 0
@@ -385,6 +396,14 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     --source-git-sha "$SOURCE_GIT_SHA" \
     --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --parent-pid "$$"
+  # >>> adopt phase: apply >>>
+  # The lease is the run's only mutation so far: the adopt phases edit the
+  # deployer's bundle state and end (the EXIT trap releases the lease), before
+  # any scope, grant, Lakebase or App step below.
+  if [[ "${DEPLOY_PHASE:-}" == "adopt" || "${DEPLOY_PHASE:-}" == "unadopt" ]]; then
+    run_adopt_phase_apply "$DEPLOY_PHASE"
+  fi
+  # <<< adopt phase: apply <<<
   if [[ -n "${MIP_OAUTH_CREDENTIAL_ORPHAN_LEASE_ID:-}" ]]; then
     step "recover the explicitly confirmed orphan OAuth credential lease"
     run_with_proof_signing_authority \

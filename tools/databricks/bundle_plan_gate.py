@@ -44,6 +44,14 @@ and the journal's scope and instance, an App collision whose journal reads
 is deferred, not refused, so the run reaches that recovery. The pre-apply
 gate never defers: the recovery has proven the App absent by then.
 
+**Adopt mode** (``adopt=``, position ``post-bind``, M2-PR6). Right after an
+adoption binds the legacy map (tools/databricks/install_state_adopt.py), the
+plan is judged against what the adoption expects (``bundle_plan_adopt``):
+besides every refusal above, no Lakebase instance update (no acknowledgement
+applies), exactly the expected creates, no dashboard recreate or move, and
+every rename's new name proven free by the create's own lookup first. There is
+no not-adopted fold in adopt mode.
+
 **App ACL preview** (pre-lease only, ``bundle_plan_app_acl``). Given the App
 name and the four release identities, the report previews what the run's
 runtime release access convergence does to the App's direct ACL, and an ACL
@@ -72,6 +80,8 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from tools.databricks import bundle_plan_adopt  # noqa: E402
+from tools.databricks.bundle_plan_adopt import AdoptExpectation  # noqa: E402
 from tools.databricks.bundle_plan_instance_ack import (  # noqa: E402
     ACK_ENV,
     instance_update,
@@ -90,6 +100,7 @@ from tools.databricks.bundle_plan_shape import (  # noqa: E402
 )
 from tools.databricks.deploy_plan_report import (  # noqa: E402
     COUNTED_ACTIONS,
+    AdoptSummary,
     Deferral,
     LookupRecord,
     PlanReport,
@@ -154,8 +165,10 @@ REMEDIES: Mapping[str, str] = MappingProxyType(
             "this deployer's bundle state does not bind the App, which already exists, and "
             "every other refusal is a name collision: an install this deployer never adopted. "
             "Adopt it into this deployer's state (bundle deployment bind, through a reviewed "
-            "change; the governed adoption flow is plan M2-PR6) before any mutating phase"
+            "change; the governed adoption flow is ./scripts/deploy.sh -t client --phase adopt, "
+            "plan M2-PR6) before any mutating phase"
         ),
+        **bundle_plan_adopt.REMEDIES,
     }
 )
 
@@ -195,12 +208,17 @@ def evaluate(
     acknowledgement: str,
     workspace_factory: Callable[[], Any],
     journal_state: Callable[[Any, str], str] | None = None,
+    adopt: AdoptExpectation | None = None,
 ) -> PlanReport:
-    """Judge one parsed plan; ``workspace_factory`` is called once, only if a create needs it.
+    """Judge one parsed plan; ``workspace_factory`` is called once, only if a lookup needs it.
 
     ``journal_state(workspace, app_name)`` reads the signed first-install
     journal of a colliding App; it is consulted only at ``pre-lease``.
+    ``adopt`` judges the plan right after an adoption's binds (``post-bind``).
     """
+
+    if (adopt is None) == (position == bundle_plan_adopt.POSITION):
+        raise ValueError("adopt mode is exactly the post-bind position")
 
     app_resource = f"apps.{app_key}"
     refusals: list[Refusal] = []
@@ -242,7 +260,10 @@ def evaluate(
             refusals.append(_refuse("unknown_kind", entry.symbolic, kind=entry.kind))
             continue
         if entry.action in {"delete", "recreate"}:
-            refusals.append(_refuse(entry.action, entry.symbolic, gone=entry.gone))
+            code = entry.action
+            if adopt is not None and code == "recreate" and entry.kind == "dashboards":
+                code = "dashboard_recreate"
+            refusals.append(_refuse(code, entry.symbolic, gone=entry.gone))
         elif entry.action == "update_id":
             refusals.append(_refuse("id_change", entry.symbolic))
         elif entry.action == "create":
@@ -299,6 +320,36 @@ def evaluate(
                 )
             )
 
+    if adopt is not None:
+        for code, resource, detail in bundle_plan_adopt.refusals(plan, adopt):
+            refusals.append(_refuse(code, resource, **detail))
+        for entry, spec, names in bundle_plan_adopt.renames(plan):
+            # The new name is proven free before anything is renamed.
+            if isinstance(names, str):
+                refusals.append(_refuse("lookup_failed", entry.symbolic, reason=names))
+                continue
+            try:
+                workspace = client()
+                if spec.requires_admin_visibility:
+                    visible(workspace)
+                taken = spec.exists(workspace, names)
+            except Exception as exc:  # noqa: BLE001 - unproven, never "free"
+                outcome = f"failed: {type(exc).__name__}"
+                refusals.append(
+                    _refuse("lookup_failed", entry.symbolic, reason=outcome, error=str(exc))
+                )
+            else:
+                outcome = "exists" if taken else "absent"
+                if taken:
+                    refusals.append(
+                        _refuse("rename_collision", entry.symbolic, kind=entry.kind, names=list(names))
+                    )
+            lookups.append(
+                LookupRecord(
+                    entry.symbolic, entry.kind, names, spec.unique_within, spec.method, outcome
+                )
+            )
+
     diff = instance_update(plan)
     digest = instance_update_digest(plan)
     for item in diff:
@@ -311,7 +362,7 @@ def evaluate(
                     reason=f"{item['resource']} {item['action']} carries no new_state",
                 )
             )
-    if digest and acknowledgement != digest:
+    if digest and adopt is None and acknowledgement != digest:
         for item in diff:
             refusals.append(
                 _refuse(
@@ -333,7 +384,8 @@ def evaluate(
         record.resource == app_resource and record.outcome == "exists" for record in lookups
     )
     if (
-        refusals
+        adopt is None
+        and refusals
         and not app_bound
         and install_found
         and all(r.code == "collision" for r in refusals)
@@ -362,6 +414,14 @@ def evaluate(
         instance_update=diff,
         lookups=tuple(lookups),
         deferrals=tuple(deferrals),
+        adopt=(
+            None
+            if adopt is None
+            else AdoptSummary(
+                bound=tuple(sorted(adopt.bound)),
+                expected_creates=tuple(sorted(adopt.expected_creates)),
+            )
+        ),
     )
 
 

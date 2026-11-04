@@ -133,14 +133,14 @@ fi
 # <<< app runtime closure: check <<<
 
 # >>> client live checks >>>
-# The first Databricks call of the run, once the interpreter, the requirements
-# digest and the App closure are proven: read-only, the deployer client's host,
-# the workspace id, the current metastore and the authenticated principal must
-# be the client profile's (tools/clients/live_checks.py: two SCIM Me GETs and
-# the current metastore assignment). A mismatch exits 2 here, naming the
-# check, never a value. A dry run prints the command and makes no call.
-echo "${DIM}\$ $PYTHON -m tools.clients.live_checks${RST}"
-if [[ "$DRY_RUN" -eq 0 ]] && ! "$PYTHON" -m tools.clients.live_checks; then
+# The first Databricks call, once interpreter, requirements digest and closure
+# are proven. Read-only (tools/clients/live_checks.py: two SCIM Me GETs, the
+# metastore assignment): host, workspace id, metastore and principal must be the
+# profile's, else exit 2 naming the check, never a value; no call in a dry run.
+# Both adopt phases (M2-PR6) accept an unbound App, half-bound states included.
+_LIVE_CHECK_ARGS=(); [[ "${DEPLOY_PHASE:-}" != "adopt" && "${DEPLOY_PHASE:-}" != "unadopt" ]] || _LIVE_CHECK_ARGS=(--phase "$DEPLOY_PHASE")
+echo "${DIM}\$ $PYTHON -m tools.clients.live_checks${_LIVE_CHECK_ARGS[*]:+ ${_LIVE_CHECK_ARGS[*]}}${RST}"
+if [[ "$DRY_RUN" -eq 0 ]] && ! "$PYTHON" -m tools.clients.live_checks "${_LIVE_CHECK_ARGS[@]}"; then
   echo "${RED}[deploy] the client live checks refused this workspace or principal; nothing was changed.${RST}" >&2
   exit 2
 fi
