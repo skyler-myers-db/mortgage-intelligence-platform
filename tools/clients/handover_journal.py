@@ -147,6 +147,17 @@ class Journal:
             return
         raise JournalRefused("the journal has no such object")
 
+    def mark_unmoved(self, key: str) -> None:
+        """A revert's noop: the live owner is already the prior one, so nothing is sent.
+
+        It still passes through ``reverting`` (an ``applied`` object cannot
+        skip it), so every revert reads ``applied -> reverting -> reverted``.
+        """
+
+        if self.entry(key)["state"] == "applied":
+            self.mark(key, "reverting")
+        self.mark(key, "reverted", reverted="noop")
+
     def set_status(self, status: str, **fields: Any) -> None:
         if status not in STATUSES:
             raise JournalRefused("unreviewed journal status")

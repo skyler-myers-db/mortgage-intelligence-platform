@@ -179,7 +179,7 @@ def revert(workspace: Any, journal: journals.Journal, *, ack: str) -> dict[str, 
         raise HandoverRefused("the recomputed revert plan is not the acknowledged digest; nothing was reverted")
     journal.set_status("reverting")
     for key in document["noops"]:
-        journal.mark(key, "reverted", reverted="noop")
+        journal.mark_unmoved(key)
     for move in document["moves"]:
         entry = journal.entry(move["key"])
         journal.mark(move["key"], "reverting")

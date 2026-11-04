@@ -258,6 +258,20 @@ def test_revert_from_an_exhausted_journal_restores_every_prior_owner(tmp_path: P
     assert server.owners == before
 
 
+def test_revert_settles_an_object_already_back_with_its_prior_owner(tmp_path: Path) -> None:
+    """An applied object put back by hand is a noop the revert digest names, not a crash."""
+
+    server = FakeServer()
+    before = dict(server.owners)
+    _apply(server, tmp_path / "j.json")
+    server.owners["TABLE:mip_app.approvals"] = LEGACY
+    assert _revert(server, tmp_path / "j.json")
+    assert server.owners == before
+    journal = journals.load(tmp_path / "j.json", kind=handover.KIND)
+    assert journal.status == "reverted" and journal.counts()["reverted"] == len(journal.entries)
+    assert journal.entry("TABLE:mip_app.approvals")["reverted"] == "noop"
+
+
 def test_revert_refuses_an_object_re_owned_outside_the_handover(tmp_path: Path) -> None:
     server = FakeServer()
     _apply(server, tmp_path / "j.json")

@@ -201,6 +201,20 @@ def test_revert_from_a_partial_journal_restores_every_prior_owner(tmp_path: Path
     assert counts["noop"] == (1 if failure == "fail_on" else 0)
 
 
+def test_revert_settles_an_object_already_back_with_its_prior_owner(tmp_path: Path) -> None:
+    """An applied object put back by hand is a noop the revert digest names, not a crash."""
+
+    fake = FakeUc()
+    before = fake.owners()
+    handover.apply(fake, _install(), ack=_digest(fake), journal_path=tmp_path / "j.json")
+    fake.doc["tables"]["mip.gold.borrower_360"]["owner"] = LEGACY
+    counts = _revert_all(fake, tmp_path / "j.json")
+    assert counts["noop"] == 1 and fake.owners() == before
+    journal = journals.load(tmp_path / "j.json", kind=handover.KIND)
+    assert journal.status == "reverted" and journal.counts()["reverted"] == len(journal.entries)
+    assert journal.entry("TABLE:mip.gold.borrower_360")["reverted"] == "noop"
+
+
 def test_revert_refuses_an_object_re_owned_outside_the_handover(tmp_path: Path) -> None:
     fake = FakeUc()
     handover.apply(fake, _install(), ack=_digest(fake), journal_path=tmp_path / "j.json")

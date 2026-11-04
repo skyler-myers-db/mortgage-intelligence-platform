@@ -284,7 +284,7 @@ def revert(
         raise LakebaseHandoverRefused("the recomputed revert plan is not the acknowledged digest; nothing was reverted")
     journal.set_status("reverting")
     for key in document["noops"]:
-        journal.mark(key, "reverted", reverted="noop")
+        journal.mark_unmoved(key)
     moves = [{**journal.entry(move["key"]), "revert_statement": move["statement"]} for move in document["moves"]]
     connection = connect()
     try:
