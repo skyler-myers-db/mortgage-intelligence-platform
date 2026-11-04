@@ -12,6 +12,7 @@ from tools.databricks.agent_runtime_uc_baseline import (
     _CATALOG_INFORMATION_SCHEMA_TABLES,
     PrivilegeSource,
 )
+from tools.databricks.estate.uc_exposure import UcExposureScope, securable_id
 
 
 def _text(value: object) -> str:
@@ -276,6 +277,8 @@ def _assert_privileges(
     principal: str,
     expected: set[str],
     expected_source_map: dict[str, set[PrivilegeSource]] | None = None,
+    exposure: UcExposureScope | None = None,
+    item_id: str = "",
 ) -> None:
     actual_sources = _effective_privilege_sources(
         workspace,
@@ -283,6 +286,15 @@ def _assert_privileges(
         full_name=full_name,
         principal=principal,
     )
+    if exposure is not None:
+        # Accepted exposure (M2-PR4) leaves the expected baseline to the exact check.
+        actual_sources = exposure.residual(
+            securable_type=securable_type,
+            full_name=full_name,
+            item_id=item_id,
+            sources=actual_sources,
+            keep=expected_source_map,
+        )
     actual = set(actual_sources)
     source_mismatch = expected_source_map is not None and actual_sources != expected_source_map
     if actual != expected or source_mismatch:
@@ -337,8 +349,13 @@ def _assert_no_catalog_child_privileges(
     catalog_owner: str,
     principal: str,
     owner_check: Callable[[object], None] | None = None,
+    exposure: UcExposureScope | None = None,
 ) -> None:
-    """Inventory a non-MIP catalog so a direct child grant cannot hide below it."""
+    """Inventory a non-MIP catalog so a direct child grant cannot hide below it.
+
+    ``exposure`` removes what the audited identity's accepted-exposure matcher
+    accepts (``estate.uc_exposure``); everything else still refuses.
+    """
 
     normalized_catalog_type = catalog_type.strip().upper()
     expected_catalog_owner = catalog_owner
@@ -392,6 +409,8 @@ def _assert_no_catalog_child_privileges(
                 if schema_name == "information_schema" and not managed_online
                 else None
             ),
+            exposure=exposure,
+            item_id=securable_id(schema, securable_type="schema", full_name=schema_full_name),
         )
         inventory: tuple[tuple[str, Any], ...] = (
             (
@@ -448,5 +467,9 @@ def _assert_no_catalog_child_privileges(
                     expected=expected,
                     expected_source_map=(
                         {"SELECT": set(_ACCOUNT_USERS_DIRECT)} if expected else None
+                    ),
+                    exposure=exposure,
+                    item_id=securable_id(
+                        item, securable_type=securable_type, full_name=item_full_name
                     ),
                 )

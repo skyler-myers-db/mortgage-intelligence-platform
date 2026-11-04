@@ -212,6 +212,40 @@ def reserved_identity_refusals(profile: ClientProfile) -> list[str]:
     return lines
 
 
+def exposure_refusals(profile: ClientProfile) -> list[str]:
+    """The accepted-exposure policy's closed shape and ceiling, at resolve (M2-PR4).
+
+    The same ``build_policy`` the deploy's consumers run, minus the ack (which
+    is per run), so a tuple the policy refuses fails here with the profile's
+    other errors rather than at the pre-stop probe. A template entry is left
+    to the placeholder rule.
+    """
+
+    entries = profile.accepted_exposure
+    if not entries or any(is_placeholder(text) for text in _strings(entries)):
+        return []
+    from datetime import UTC, datetime
+
+    from tools.databricks.estate.accepted_exposure import (
+        ExposureRefusal,
+        build_policy,
+        static_control_violations,
+    )
+
+    verifier = profile.identity_ids.verifier
+    try:
+        build_policy(
+            entries,
+            now=datetime.now(UTC),
+            static_control=static_control_violations,
+            verifier_application_ids=[verifier] if _real(verifier) else [],
+            governed_space_names=[profile.genie_space_name] if _real(profile.genie_space_name) else [],
+        )
+    except ExposureRefusal as exc:
+        return [f"{profile.env_name('accepted_exposure')}: {line}" for line in exc.lines]
+    return []
+
+
 def cross_field_refusals(profile: ClientProfile, *, allow_placeholders: bool) -> list[str]:
     lines = [] if allow_placeholders else placeholder_refusals(profile)
     for rule in (
@@ -220,6 +254,7 @@ def cross_field_refusals(profile: ClientProfile, *, allow_placeholders: bool) ->
         install_class_refusals,
         tier_refusals,
         reserved_identity_refusals,
+        exposure_refusals,
     ):
         lines += rule(profile)
     return lines

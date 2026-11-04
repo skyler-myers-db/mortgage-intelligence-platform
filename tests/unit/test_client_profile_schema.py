@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,7 @@ from tools.clients.schema import (
     ClientProfile,
     FieldClass,
 )
+from tools.databricks.estate.accepted_exposure import build_policy
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "deploy" / "clients" / "example.env"
@@ -346,6 +348,29 @@ def test_malformed_json_and_missing_fields_are_refused() -> None:
     _assert_refused(demo_profile(DATABRICKS_HOST=None), "DATABRICKS_HOST", "Field required")
 
 
+def _repeated_key(field: str) -> str:
+    """The field's demo JSON with one key given twice, the second value differing."""
+
+    raw = DEMO_PROFILE[field]
+    if field == "MIP_ACCEPTED_EXPOSURE_JSON":
+        old = '"identities": ["app"]'
+        assert raw.count(old) == 1
+        return raw.replace(old, old + ', "identities": ["runtime"]')
+    assert raw.endswith("}")
+    return raw[:-1] + ', "deployer": ' + json.dumps(IDENTITY_IDS["jobs"]) + "}"
+
+
+@pytest.mark.parametrize("field", ["MIP_ACCEPTED_EXPOSURE_JSON", "MIP_IDENTITY_IDS_JSON"])
+def test_a_repeated_json_key_is_refused_without_naming_it(field: str) -> None:
+    """The last of two values would win silently, unlike what a reviewer reads (review of #306)."""
+
+    repeated = _repeated_key(field)
+    assert json.loads(repeated) != json.loads(DEMO_PROFILE[field]), "plain json.loads lets the last win"
+
+    lines = _assert_refused(demo_profile(**{field: repeated}), field, "repeats a key in one JSON object")
+    assert not any("identities" in line or "deployer" in line for line in lines)
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -362,6 +387,45 @@ def test_exposure_entries_are_a_closed_tuple(change: dict) -> None:
     entry = {**json.loads(DEMO_PROFILE["MIP_ACCEPTED_EXPOSURE_JSON"])[0], **change}
     values = demo_profile(MIP_ACCEPTED_EXPOSURE_JSON=json.dumps([entry]))
     _assert_refused(values, "MIP_ACCEPTED_EXPOSURE_JSON.0", "must")
+
+
+@pytest.mark.parametrize(
+    ("change", "rule"),
+    [
+        (
+            {"binding": {"isolation_mode": "OPEN", "workspace_ids": ["4200000001"]}},
+            "entry 0: a workspace object is ISOLATED to exactly one workspace id",
+        ),
+        ({"identities": ["proxy"]}, "entry 0: no Genie audit consults a matcher for proxy"),
+        (
+            {"privileges": ["CAN_MANAGE"], "privilege_class": "elevated", "identities": ["runtime"]},
+            "entry 0: elevated exposure is refused for runtime",
+        ),
+        (
+            {"privileges": ["CAN_MANAGE"], "privilege_class": "elevated", "expires_at": "2099-12-31"},
+            "entry 0: elevated exposure expires at most 30 days ahead",
+        ),
+        ({"name": "Mortgage Lead Intelligence"}, "entry 0: names the governed Genie space"),
+    ],
+    ids=["open-genie-binding", "proxy-genie", "elevated-runtime", "elevated-too-long", "governed-space"],
+)
+def test_the_accepted_exposure_policy_refuses_at_resolve(change: dict, rule: str) -> None:
+    """Review of #306: a tuple the policy refuses fails with the profile's other errors."""
+
+    first = json.loads(DEMO_PROFILE["MIP_ACCEPTED_EXPOSURE_JSON"])[0]
+    if "name" in change:
+        first["securable"] = {**first["securable"], "name": change.pop("name")}
+    values = demo_profile(MIP_ACCEPTED_EXPOSURE_JSON=json.dumps([{**first, **change}]))
+
+    lines = _assert_refused(values, "MIP_ACCEPTED_EXPOSURE_JSON", rule)
+    assert not any("space-alpha-0001" in line or "Another Team Space" in line for line in lines)
+
+
+def test_the_shared_fixture_exposure_is_the_closed_shape() -> None:
+    profile = _profile(demo_profile())
+    policy = build_policy(profile.accepted_exposure, now=datetime.now(UTC), static_control=lambda: [])
+
+    assert len(policy.entries) == len(json.loads(DEMO_PROFILE["MIP_ACCEPTED_EXPOSURE_JSON"]))
 
 
 # --- aliases and sources ------------------------------------------------------

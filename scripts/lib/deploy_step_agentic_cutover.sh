@@ -236,6 +236,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       --account-id "$DATABRICKS_ACCOUNT_ID"
       --expected-serving-permission CAN_MANAGE
       --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
+      --exposure-identity runtime
       --serving-endpoint "$MIP_AGENT_SUPERVISOR_ENDPOINT"
       --serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT"
     )
@@ -289,6 +290,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       --account-id "$DATABRICKS_ACCOUNT_ID"
       --expected-serving-permission CAN_QUERY
       --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
+      --exposure-identity app
       --serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT"
     )
     if [[ -n "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT:-}" && \
