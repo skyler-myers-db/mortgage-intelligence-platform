@@ -91,8 +91,12 @@ def release(
     """``scripts/deploy.sh -t client`` with DRY_RUN=0, in the sandbox, with only ``client_ids``."""
 
     checkout, base_env, cli_log = sandbox(tmp_path)
+    # As in the refusal matrix: the fake estate's metastore is the deployer's,
+    # and it accepts no shared-estate exposure (M2-PR4).
+    estate_facts = {"MIP_UC_METASTORE_OWNER": DEPLOYER, "MIP_ACCEPTED_EXPOSURE_JSON": "[]"}
     (checkout / ".env.local").write_text(
-        env_file_text({**profile, "DATABRICKS_WAREHOUSE_ID": "warehouse-1"}), encoding="utf-8"
+        env_file_text({**profile, **estate_facts, "DATABRICKS_WAREHOUSE_ID": "warehouse-1"}),
+        encoding="utf-8",
     )
     fixtures = checkout / "tests" / "fixtures"
     bin_dir = tmp_path / "bin"
