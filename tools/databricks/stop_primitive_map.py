@@ -5,11 +5,19 @@ not. This module is the reviewed map of both, and the scanners that keep it
 true (``tests/unit/test_stop_primitive_ast_contract.py`` and
 ``tests/unit/test_quiesce_window_lexical_contract.py``):
 
-* ``python_primitive_sites`` walks every module under ``tools/`` with ``ast``
-  and returns each call ``<expr>.apps.<method>(...)`` whose method is an SDK
-  App stop, start, deploy or update (``SDK_METHODS``, their ``*_and_wait``
-  forms included), also through a name bound from ``<expr>.apps`` or
-  ``getattr(<expr>, "apps")``. ``PRIMITIVE_SITES`` must equal that set exactly.
+* ``python_primitive_sites`` walks every module under ``tools/`` and ``jobs/``
+  with ``ast`` and returns each call ``<expr>.apps.<method>(...)`` whose method
+  is an SDK App stop, start, deploy or update (``SDK_METHODS``, their
+  ``*_and_wait`` forms included), also through a name bound from
+  ``<expr>.apps`` or ``getattr(<expr>, "apps")``. ``PRIMITIVE_SITES`` must
+  equal that set exactly. ``jobs/window_deadman.py`` (M0-PR9) holds one: the
+  dead-man's ``apps start``, reached by no shell file (it runs only as the
+  one-time run the window submits).
+* ``python_job_run_sites`` does the same for ``<expr>.jobs.submit`` and
+  ``cancel_run`` (``JOB_RUN_METHODS``): the dead-man's submit and cancel sit
+  only in ``tools/databricks/quiesce_window_deadman.py``
+  (``JOB_RUN_SITES``), reached only through the window's ``open`` and
+  ``cancel-deadman`` modes, which only the window library calls.
 * ``reaching_entry_points`` follows a coarse static call graph (calls and
   function references through imports, nested functions folded into their
   top-level function) from each site back to the CLI modules whose ``main``
@@ -49,6 +57,10 @@ SDK_METHODS = frozenset(
         "create_update_and_wait",
     }
 )
+# One-time job runs: the dead-man's submit and cancel (M0-PR9).
+JOB_RUN_METHODS = frozenset(
+    {"submit", "submit_and_wait", "cancel_run", "cancel_run_and_wait", "cancel_all_runs"}
+)
 WINDOW_LIBRARY = "scripts/lib/deploy_quiesce_window_lifecycle.sh"
 EXIT_TRAP_LIBRARY = "scripts/lib/deploy_app_release_lifecycle.sh"
 STOP_LIBRARIES = frozenset({WINDOW_LIBRARY, EXIT_TRAP_LIBRARY})
@@ -64,8 +76,15 @@ PRIMITIVE_SITES = frozenset(
             "restore_signed_app_resource_contract",
             "update",
         ),
+        # The dead-man's restart (M0-PR9): start and get only, never a stop.
+        ("jobs/window_deadman.py", "start_blue", "start"),
     }
 )
+# The scanned roots: the deploy tooling and the job sources (M0-PR9).
+SCAN_ROOTS = ("tools", "jobs")
+# (module path, top-level function, SDK method): every one-time job submit or
+# cancel (M0-PR9). None exists yet; the dead-man's arm and cancel add theirs.
+JOB_RUN_SITES: frozenset[tuple[str, str, str]] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -97,6 +116,10 @@ ENTRY_POINTS: Mapping[str, EntryPoint] = {
     "tools.databricks.app_deployment_rollback_cli": EntryPoint(
         modes={"ensure": True, "restore": True, "repin": True, "capture": False, "inspect": False}
     ),
+    # The dead-man job (M0-PR9): only the window's submit runs it, no shell file.
+    "jobs.window_deadman": EntryPoint(
+        modes={"(default)": True}, callers=frozenset(), positional=False
+    ),
     "tools.databricks.quiesce_window": EntryPoint(
         modes={
             "open": True,
@@ -120,59 +143,82 @@ _CLI_PRIMITIVE = re.compile(r"\bdatabricks\s+apps\s+(stop|start)\b")
 _INLINE_SDK = re.compile(
     r"\.apps\.(" + "|".join(sorted(SDK_METHODS)) + r")\s*\(|\b(deploy|start|stop)_and_wait\s*\("
 )
+# A one-time job run or its cancel (M0-PR9): the window library's alone.
+_JOB_RUN = re.compile(
+    r"\bdatabricks\s+jobs\s+(submit|cancel-run|cancel-all-runs)\b|\.jobs\.("
+    + "|".join(sorted(JOB_RUN_METHODS))
+    + r")\s*\("
+)
 
 
 def _module_name(path: Path) -> str:
     return ".".join(path.relative_to(REPO).with_suffix("").parts)
 
 
-def _python_files(root: Path) -> list[Path]:
-    return sorted(path for path in root.rglob("*.py") if "__pycache__" not in path.parts)
+def _python_files(root: Path | None) -> list[Path]:
+    roots = [root] if root is not None else [REPO / name for name in SCAN_ROOTS]
+    return sorted(
+        path for base in roots for path in base.rglob("*.py") if "__pycache__" not in path.parts
+    )
 
 
-def _is_apps_client(node: ast.AST | None) -> bool:
-    """``<expr>.apps`` or ``getattr(<expr>, "apps")``: the SDK Apps client."""
+def _is_service_client(node: ast.AST | None, service: str) -> bool:
+    """``<expr>.<service>`` or ``getattr(<expr>, "<service>")``: an SDK service client."""
 
     if isinstance(node, ast.Attribute):
-        return node.attr == "apps"
+        return node.attr == service
     return (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id == "getattr"
         and len(node.args) >= 2
         and isinstance(node.args[1], ast.Constant)
-        and node.args[1].value == "apps"
+        and node.args[1].value == service
     )
 
 
-def _apps_aliases(tree: ast.AST) -> set[str]:
-    """Names bound from the Apps client anywhere in ``tree`` (``apps = workspace.apps``)."""
+def _service_aliases(tree: ast.AST, service: str) -> set[str]:
+    """Names bound from a service client anywhere in ``tree`` (``apps = workspace.apps``)."""
 
     aliases: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign | ast.AnnAssign | ast.NamedExpr) and _is_apps_client(
-            node.value
+        if isinstance(node, ast.Assign | ast.AnnAssign | ast.NamedExpr) and _is_service_client(
+            node.value, service
         ):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             aliases.update(target.id for target in targets if isinstance(target, ast.Name))
     return aliases
 
 
+def _apps_aliases(tree: ast.AST) -> set[str]:
+    return _service_aliases(tree, "apps")
+
+
 def python_primitive_sites(root: Path | None = None) -> set[tuple[str, str, str]]:
     """Every SDK primitive call on the Apps client below ``root``, aliases included."""
 
+    return _service_sites(root, "apps", SDK_METHODS)
+
+
+def python_job_run_sites(root: Path | None = None) -> set[tuple[str, str, str]]:
+    """Every one-time job submit or cancel on the Jobs client below ``root`` (M0-PR9)."""
+
+    return _service_sites(root, "jobs", JOB_RUN_METHODS)
+
+
+def _service_sites(root: Path | None, service: str, methods: frozenset[str]) -> set[tuple[str, str, str]]:
     sites: set[tuple[str, str, str]] = set()
-    for path in _python_files(root or REPO / "tools"):
+    for path in _python_files(root):
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        aliases = _apps_aliases(tree)
+        aliases = _service_aliases(tree, service)
         for top in tree.body:
             for node in ast.walk(top):
                 if (
                     isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Attribute)
-                    and node.func.attr in SDK_METHODS
+                    and node.func.attr in methods
                     and (
-                        _is_apps_client(node.func.value)
+                        _is_service_client(node.func.value, service)
                         or (isinstance(node.func.value, ast.Name) and node.func.value.id in aliases)
                     )
                 ):
@@ -205,7 +251,7 @@ def call_graph(root: Path | None = None) -> dict[tuple[str, str], set[tuple[str,
     """(module, function) -> the (module, function) pairs it calls or references."""
 
     graph: dict[tuple[str, str], set[tuple[str, str]]] = {}
-    for path in _python_files(root or REPO / "tools"):
+    for path in _python_files(root):
         module = _module_name(path)
         tree = ast.parse(path.read_text(encoding="utf-8"))
         names, modules = _imports(tree)
@@ -230,8 +276,10 @@ def call_graph(root: Path | None = None) -> dict[tuple[str, str], set[tuple[str,
     return graph
 
 
-def reaching_entry_points(root: Path | None = None) -> dict[tuple[str, str, str], set[str]]:
-    """For each primitive site, the CLI modules whose ``main`` reaches it."""
+def reaching_entry_points(
+    root: Path | None = None, sites: set[tuple[str, str, str]] | None = None
+) -> dict[tuple[str, str, str], set[str]]:
+    """For each primitive site (or each of ``sites``), the CLI modules whose ``main`` reaches it."""
 
     graph = call_graph(root)
     reverse: dict[tuple[str, str], set[tuple[str, str]]] = {}
@@ -239,7 +287,7 @@ def reaching_entry_points(root: Path | None = None) -> dict[tuple[str, str, str]
         for callee in callees:
             reverse.setdefault(callee, set()).add(caller)
     reached: dict[tuple[str, str, str], set[str]] = {}
-    for site in python_primitive_sites(root):
+    for site in python_primitive_sites(root) if sites is None else sites:
         start = (_module_name(REPO / site[0]), site[1])
         seen, frontier = {start}, [start]
         while frontier:
@@ -334,6 +382,9 @@ def shell_violations(path: str, text: str) -> list[str]:
             for pattern in (_CLI_PRIMITIVE, _INLINE_SDK):
                 for match in pattern.finditer(line):
                     found.append(f"{path}:{number}: {match.group(0).strip()}")
+        if path != WINDOW_LIBRARY:
+            for match in _JOB_RUN.finditer(line):
+                found.append(f"{path}:{number}: {match.group(0).strip()}")
     # A parenthesized ``from <package> import (...)`` spans lines in a heredoc.
     for match in re.finditer(r"\bfrom\s+(tools(?:\.\w+)*)\s+import\s*\(([^)]*)\)", text):
         names = set(re.findall(r"\w+", match.group(2)))

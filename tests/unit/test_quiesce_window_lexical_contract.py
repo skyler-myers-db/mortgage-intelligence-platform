@@ -98,6 +98,35 @@ def test_read_only_modes_and_comments_are_not_primitives(line: str) -> None:
     assert stops.shell_violations("scripts/lib/deploy_step_bundle_apply.sh", line + "\n") == []
 
 
+@pytest.mark.parametrize(
+    "line",
+    (
+        '"$PYTHON" jobs/window_deadman.py --app "$APP_NAME" --deadline 1',
+        '"$PYTHON" -m jobs.window_deadman --app "$APP_NAME"',
+        '"$PYTHON" -c "import jobs.window_deadman"',
+    ),
+)
+@pytest.mark.parametrize("path", (stops.WINDOW_LIBRARY, stops.EXIT_TRAP_LIBRARY, "scripts/lib/x.sh"))
+def test_no_shell_file_runs_the_dead_man_it_runs_only_as_the_submitted_job(path: str, line: str) -> None:
+    assert stops.shell_violations(path, line + "\n"), f"{line} in {path}"
+
+
+@pytest.mark.parametrize(
+    "line",
+    (
+        'databricks jobs submit --json "@$PAYLOAD"',
+        "run databricks jobs cancel-run 42",
+        "databricks jobs cancel-all-runs --job-id 7",
+        '"$PYTHON" - <<\'PYEOF\'\nclient.jobs.submit(run_name="x")\nPYEOF',
+        '"$PYTHON" -c "w.jobs.cancel_run(42)"',
+    ),
+)
+def test_a_one_time_job_run_or_cancel_is_the_window_librarys_alone(line: str) -> None:
+    for path in (stops.EXIT_TRAP_LIBRARY, "scripts/lib/deploy_step_bundle_apply.sh", "scripts/deploy.sh"):
+        assert stops.shell_violations(path, line + "\n"), f"{line} in {path}"
+    assert stops.shell_violations(stops.WINDOW_LIBRARY, line + "\n") == []
+
+
 def test_continuation_lines_are_read_as_one_command() -> None:
     stop = '"$PYTHON" -m tools.databricks.stop_app_fail_closed \\\n  --app-name "$A" \\\n  "${ARGS[@]}"\n'
     check = stop.replace('"${ARGS[@]}"', "--assert-identity-only")
