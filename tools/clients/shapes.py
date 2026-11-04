@@ -34,6 +34,12 @@ SHARE_OBJECT_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9_. -]{0,254}[A-Za-z0-9]
 # since a blank value means unset (backend/config/source_names.py).
 TABLE_PREFIX = re.compile(r"[a-z0-9_]{1,64}|-")
 WORKSPACE_PATH = re.compile(r"/Workspace(?:/[^/\n\r\0<>]+)+")
+# The bundle root of an install another identity deployed (an adopted
+# install's legacy root): tools/databricks/app_release_contract.bundle_root's
+# shape, for any principal and leaf.
+LEGACY_BUNDLE_ROOT = re.compile(
+    r"/Workspace/Users/[^/\s<>]+/\.bundle/mortgage-intelligence-platform/[A-Za-z0-9][A-Za-z0-9_-]*"
+)
 STORAGE_ROOT = re.compile(r"(?P<scheme>s3|abfss|gs)://[^\s'\"<>]+")
 PRINCIPAL = re.compile(r"[^\s,<>](?:[^,\n\r<>]{0,253}[^\s,<>])?")
 

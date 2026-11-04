@@ -38,6 +38,7 @@ from tools.clients.shapes import (
     DNS_NAME,
     EMAIL,
     GROUP_NAME,
+    LEGACY_BUNDLE_ROOT,
     PRINCIPAL,
     SECRET_SCOPE,
     SHARE_OBJECT_NAME,
@@ -123,6 +124,7 @@ FIELD_CLASS: dict[str, FieldClass] = {
     "MIP_COTALITY_SHARE_NAME": _I,
     "MIP_UC_CATALOG_STORAGE_ROOT": _I,
     "MIP_DASHBOARD_PARENT_PATH": _I,
+    "MIP_LEGACY_BUNDLE_ROOT": _I,
     "MIP_LENDER_IDENTITY_JSON": _I,
     "MIP_ACCEPTED_EXPOSURE_JSON": _I,
     "MIP_SEED_OPERATOR_EMAIL": _I,
@@ -256,6 +258,10 @@ _SCALAR_SHAPES: dict[str, tuple[re.Pattern[str], str]] = {
     "cotality_share_name": (SHARE_OBJECT_NAME, "a share name"),
     "catalog_storage_root": (STORAGE_ROOT, "an s3://, abfss:// or gs:// storage root"),
     "dashboard_parent_path": (WORKSPACE_PATH, "a /Workspace/... folder path"),
+    "legacy_bundle_root": (
+        LEGACY_BUNDLE_ROOT,
+        "a /Workspace/Users/<owner>/.bundle/mortgage-intelligence-platform/<leaf> bundle root",
+    ),
     "seed_operator_email": (EMAIL, "an email address"),
 }
 _EMAIL_LISTS = rules.EMAIL_LISTS
@@ -336,6 +342,9 @@ class ClientProfile(BaseModel):
     cotality_share_name: str | None = Field(default=None, alias="MIP_COTALITY_SHARE_NAME")
     catalog_storage_root: str | None = Field(default=None, alias="MIP_UC_CATALOG_STORAGE_ROOT")
     dashboard_parent_path: str | None = Field(default=None, alias="MIP_DASHBOARD_PARENT_PATH")
+    # An adopted install only (M2-PR6): the root whose bundle state the adopt
+    # phase binds from (tools/databricks/install_state_adopt.py).
+    legacy_bundle_root: str | None = Field(default=None, alias="MIP_LEGACY_BUNDLE_ROOT")
     lender_identity: LenderIdentity | None = Field(default=None, alias="MIP_LENDER_IDENTITY_JSON")
     accepted_exposure: tuple[ExposureEntry, ...] = Field(default=(), alias="MIP_ACCEPTED_EXPOSURE_JSON")
     seed_operator_email: str | None = Field(default=None, alias="MIP_SEED_OPERATOR_EMAIL")
