@@ -180,10 +180,13 @@ def test_the_cli_takes_the_runtime_or_proxy_matcher_only(monkeypatch: pytest.Mon
     monkeypatch.setattr(
         harness.auditor, "audit_foreign_uc_access", lambda _workspace, **kwargs: seen.append(kwargs["exposure"])
     )
+    monkeypatch.setattr(harness.auditor, "load_audit_inputs", lambda *_args, **kwargs: (kwargs["identity"], None))
     base = ["--application-id", "runtime-EXAMPLE", "--expected-inventory-principal", "deployer@example.invalid"]
 
     assert harness.auditor.main([*base, "--exposure-identity", "runtime"]) == 0
-    assert harness.auditor.main(base) == 0
-    assert seen == ["matcher-runtime", None]
-    with pytest.raises(SystemExit):
-        harness.auditor.main([*base, "--exposure-identity", "app"])
+    assert harness.auditor.main([*base, "--exposure-identity", "proxy"]) == 0
+    assert seen == ["matcher-runtime", "matcher-proxy"]
+    # The audited identity is required: its self-view credential depends on it (M4-PR1).
+    for identity in ([], ["--exposure-identity", "app"]):
+        with pytest.raises(SystemExit):
+            harness.auditor.main([*base, *identity])

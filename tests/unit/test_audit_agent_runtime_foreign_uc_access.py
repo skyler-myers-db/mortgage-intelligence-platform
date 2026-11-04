@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from databricks.sdk.errors import PermissionDenied
 
+from tools.clients import estate_inventory
+from tools.clients.handover_journal import canonical_json
 from tools.databricks import audit_agent_runtime_foreign_uc_access as auditor
+from tools.databricks.estate.inventory import EstateInventory, parse_inventory
 from tools.databricks.uc_owner_policy import (
     ApprovedOwnerPolicy,
     TargetServicePrincipal,
@@ -21,6 +25,7 @@ OTHER_WORKSPACE_ID = "2478181912221244"
 FOREIGN_OWNER = "foreign-owner@example.com"
 ACCOUNT_SCIM_ID = "account-runtime-id"
 WORKSPACE_USERS_GROUP_ID = "workspace-users-id"
+NOW = datetime(2026, 11, 4, 12, 0, tzinfo=UTC)
 
 
 def _assignment(
@@ -221,15 +226,15 @@ def _workspace(
                 ]
             )
         ),
-        schemas=SimpleNamespace(list=lambda catalog, **_kwargs: iter(schemas[catalog])),
+        schemas=SimpleNamespace(list=lambda catalog, **_kwargs: iter(schemas.get(catalog, []))),
         functions=SimpleNamespace(
-            list=lambda catalog, schema, **_kwargs: iter(functions[(catalog, schema)])
+            list=lambda catalog, schema, **_kwargs: iter(functions.get((catalog, schema), []))
         ),
         tables=SimpleNamespace(
-            list=lambda catalog, schema, **_kwargs: iter(tables[(catalog, schema)])
+            list=lambda catalog, schema, **_kwargs: iter(tables.get((catalog, schema), []))
         ),
         volumes=SimpleNamespace(
-            list=lambda catalog, schema, **_kwargs: iter(volumes[(catalog, schema)])
+            list=lambda catalog, schema, **_kwargs: iter(volumes.get((catalog, schema), []))
         ),
         users=SimpleNamespace(
             list=lambda **_kwargs: iter(
@@ -433,6 +438,7 @@ def _account() -> object:
         metastore_assignments=SimpleNamespace(
             list=lambda _metastore_id: iter([WORKSPACE_ID, OTHER_WORKSPACE_ID])
         ),
+        workspaces=SimpleNamespace(get=lambda workspace_id: SimpleNamespace(workspace_id=workspace_id)),
         workspace_assignment=SimpleNamespace(
             list=lambda workspace_id: iter(
                 [
@@ -452,17 +458,104 @@ def _account() -> object:
     )
 
 
-def _audit(workspace: Any, **kwargs: Any) -> object:
+def _bound_reader(
+    workspace_id: str = OTHER_WORKSPACE_ID, *, owner: str = INVENTORY_PRINCIPAL, schemas: Any = None
+) -> object:
+    """The owner's client on a workspace a binding-denied catalog is bound to."""
+
+    schemas = schemas or {}
+    return SimpleNamespace(
+        config=SimpleNamespace(workspace_id=workspace_id, host="https://bound.example.invalid"),
+        get_workspace_id=lambda: int(workspace_id),
+        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name=owner)),
+        metastores=SimpleNamespace(
+            current=lambda: SimpleNamespace(metastore_id="metastore-id"),
+            get=lambda _metastore_id: SimpleNamespace(owner=owner),
+        ),
+        schemas=SimpleNamespace(list=lambda catalog, **_kwargs: iter(schemas.get(catalog, []))),
+        functions=SimpleNamespace(list=lambda *_args, **_kwargs: iter([])),
+        tables=SimpleNamespace(list=lambda *_args, **_kwargs: iter([])),
+        volumes=SimpleNamespace(list=lambda *_args, **_kwargs: iter([])),
+        registered_models=SimpleNamespace(list=lambda **_kwargs: iter([])),
+    )
+
+
+def _visible_to_install(workspace: Any, item: Any) -> bool:
+    if str(getattr(item, "isolation_mode", "")).upper() != "ISOLATED":
+        return True
+    return any(
+        str(binding.workspace_id) == WORKSPACE_ID
+        for binding in workspace.workspace_bindings.get_bindings("catalog", item.name)
+    )
+
+
+def _self_view(workspace: Any, *, hidden: tuple[str, ...] = ()) -> object:
+    """The runtime's own view of the same estate: never a binding-denied or ``hidden`` catalog."""
+
+    def catalogs(**kwargs: object) -> Any:
+        assert kwargs == {"include_browse": True}
+        listed = workspace.catalogs.list(include_browse=True, include_unbound=True)
+        return iter([item for item in listed if item.name not in hidden and _visible_to_install(workspace, item)])
+
+    def models(**kwargs: object) -> Any:
+        assert kwargs == {"include_browse": True}
+        names = {item.name for item in catalogs(include_browse=True)}
+        listed = workspace.registered_models.list(include_browse=True)
+        return iter([item for item in listed if str(item.full_name).split(".", 1)[0] in names])
+
+    view = SimpleNamespace(**vars(workspace))
+    view.current_user = SimpleNamespace(
+        me=lambda: SimpleNamespace(
+            user_name=APPLICATION_ID,
+            id="runtime-scim-id",
+            groups=[SimpleNamespace(value=WORKSPACE_USERS_GROUP_ID, display="users")],
+        )
+    )
+    view.catalogs = SimpleNamespace(list=catalogs)
+    view.registered_models = SimpleNamespace(list=models)
+    return view
+
+
+def _inventory(workspace: Any, *, account: Any = None, bound_readers: Any = None) -> EstateInventory:
+    """The owner's inventory of ``workspace``, taken as its metastore owner."""
+
+    document = estate_inventory.collect(
+        workspace,
+        account=account if account is not None else _account(),
+        install_catalog=CATALOG,
+        now=NOW,
+        bound_readers={OTHER_WORKSPACE_ID: _bound_reader()} if bound_readers is None else bound_readers,
+    )
+    return parse_inventory(canonical_json(document))
+
+
+def _audit(
+    workspace: Any,
+    *,
+    inventory_workspace: Any = None,
+    inventory: EstateInventory | None = None,
+    self_view: Any = None,
+    bound_readers: Any = None,
+    **kwargs: Any,
+) -> object:
     kwargs.setdefault("account_factory", _account)
     kwargs.setdefault(
         "target_groups_probe",
         lambda *_args, **_probe_kwargs: {WORKSPACE_USERS_GROUP_ID: "users"},
     )
+    if inventory is None:
+        inventory = _inventory(
+            inventory_workspace if inventory_workspace is not None else workspace,
+            account=kwargs["account_factory"](),
+            bound_readers=bound_readers,
+        )
     return auditor.audit_foreign_uc_access(
         workspace,
         application_id=APPLICATION_ID,
         catalog=CATALOG,
         expected_inventory_principal=INVENTORY_PRINCIPAL,
+        inventory=inventory,
+        self_view=self_view if self_view is not None else _self_view(workspace),
         **kwargs,
     )
 
@@ -1491,38 +1584,41 @@ def test_foreign_uc_control_plane_requires_exact_inventory_identity() -> None:
     )
 
     with pytest.raises(RuntimeError, match="unexpected principal"):
-        _audit(workspace)
+        _audit(workspace, inventory_workspace=_workspace())
 
 
-def test_foreign_uc_control_plane_requires_current_metastore_ownership() -> None:
-    workspace = _workspace(owner="unrelated-owner@example.com")
+def test_foreign_uc_audit_needs_no_deployer_metastore_ownership() -> None:
+    # Acceptance (M4-PR1): the owner took the inventory; the deployer only administers the workspace.
+    proof = _audit(_workspace(owner="unrelated-owner@example.com"), inventory_workspace=_workspace())
 
-    with pytest.raises(RuntimeError, match="own the current metastore directly"):
-        _audit(workspace)
+    assert proof.audited_catalogs == frozenset({"other"})
+
+
+def test_estate_inventory_requires_current_metastore_ownership() -> None:
+    with pytest.raises(RuntimeError, match="metastore's direct owner"):
+        _inventory(_workspace(owner="unrelated-owner@example.com"))
 
 
 @pytest.mark.parametrize("raw_owner", [" deployer@example.com ", 123])
-def test_foreign_uc_control_plane_rejects_noncanonical_metastore_owner(
+def test_estate_inventory_rejects_noncanonical_metastore_owner(
     raw_owner: object,
 ) -> None:
     with pytest.raises(RuntimeError, match="noncanonical owner"):
-        _audit(
+        _inventory(
             _workspace(
                 owner=raw_owner,  # type: ignore[arg-type]
             )
         )
 
 
-def test_foreign_uc_control_plane_rejects_case_variant_metastore_owner() -> None:
-    with pytest.raises(RuntimeError, match="own the current metastore directly"):
-        _audit(_workspace(owner=INVENTORY_PRINCIPAL.upper()))
+def test_estate_inventory_rejects_case_variant_metastore_owner() -> None:
+    with pytest.raises(RuntimeError, match="metastore's direct owner"):
+        _inventory(_workspace(owner=INVENTORY_PRINCIPAL.upper()))
 
 
-def test_foreign_uc_control_plane_rejects_display_name_owner_group() -> None:
-    workspace = _workspace(owner="metastore-owners")
-
-    with pytest.raises(RuntimeError, match="own the current metastore directly"):
-        _audit(workspace)
+def test_estate_inventory_rejects_display_name_owner_group() -> None:
+    with pytest.raises(RuntimeError, match="metastore's direct owner"):
+        _inventory(_workspace(owner="metastore-owners"))
 
 
 def test_foreign_uc_control_plane_accepts_binding_excluded_catalog_grants() -> None:
@@ -1554,7 +1650,6 @@ def test_foreign_uc_control_plane_accepts_binding_excluded_catalog_grants() -> N
 
     proof = _audit(
         workspace,
-        foreign_catalog_binding_policy=_binding_policy(),
     )
 
     assert proof.audited_catalogs == frozenset({"hidden", "other"})
@@ -1592,7 +1687,6 @@ def test_foreign_uc_control_plane_accepts_unassigned_binding_excluded_owner() ->
 
     proof = _audit(
         workspace,
-        foreign_catalog_binding_policy=_binding_policy(owner=owner),
     )
 
     assert tuple(item.catalog for item in proof.binding_denied_catalogs) == ("hidden",)
@@ -1630,7 +1724,6 @@ def test_foreign_uc_control_plane_rejects_noncanonical_binding_denied_catalog_ow
     with pytest.raises(RuntimeError, match="noncanonical owner"):
         _audit(
             workspace,
-            foreign_catalog_binding_policy=_binding_policy(),
         )
 
 
@@ -2196,7 +2289,6 @@ def test_foreign_uc_control_plane_rejects_binding_excluded_account_alias_owner(
     with pytest.raises(RuntimeError, match="cannot own governed UC objects"):
         _audit(
             workspace,
-            foreign_catalog_binding_policy=_binding_policy(owner=owner),
         )
 
 
@@ -2239,7 +2331,6 @@ def test_foreign_uc_control_plane_rejects_binding_excluded_model_ownership() -> 
     with pytest.raises(RuntimeError, match="cannot own governed UC objects"):
         _audit(
             workspace,
-            foreign_catalog_binding_policy=_binding_policy(owner=owner),
         )
 
 
@@ -2281,7 +2372,6 @@ def test_foreign_uc_control_plane_accepts_unassigned_binding_excluded_model_owne
 
     proof = _audit(
         workspace,
-        foreign_catalog_binding_policy=_binding_policy(owner=owner),
     )
 
     assert tuple(item.catalog for item in proof.binding_denied_catalogs) == ("hidden",)
@@ -2328,7 +2418,6 @@ def test_foreign_uc_control_plane_rejects_noncanonical_binding_denied_model_owne
     with pytest.raises(RuntimeError, match="noncanonical owner"):
         _audit(
             workspace,
-            foreign_catalog_binding_policy=_binding_policy(),
         )
 
 
@@ -2366,7 +2455,6 @@ def test_binding_excluded_account_users_owner_rejects_without_group_inventory() 
             workspace,
             account_factory=lambda: account,
             target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(),
-            foreign_catalog_binding_policy=_binding_policy(owner="account users"),
         )
 
 
@@ -2404,7 +2492,6 @@ def test_binding_excluded_account_users_id_rejects_when_identity_is_omitted() ->
             workspace,
             account_factory=lambda: account,
             target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(),
-            foreign_catalog_binding_policy=_binding_policy(owner="account-users-id"),
         )
 
 
@@ -2442,7 +2529,6 @@ def test_binding_excluded_account_users_id_rejects_when_membership_is_implicit()
             workspace,
             account_factory=lambda: account,
             target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(),
-            foreign_catalog_binding_policy=_binding_policy(owner="account-users-id"),
         )
 
 
@@ -2475,7 +2561,6 @@ def test_foreign_uc_control_plane_accepts_binding_excluded_hidden_children() -> 
 
     proof = _audit(
         workspace,
-        foreign_catalog_binding_policy=_binding_policy(),
     )
 
     assert proof.audited_catalogs == frozenset({"hidden", "other"})
@@ -2489,7 +2574,7 @@ def test_foreign_uc_control_plane_accepts_binding_excluded_hidden_children() -> 
         "BINDING_TYPE_READ_WRITE",
     ],
 )
-def test_foreign_uc_control_plane_rejects_grants_when_target_workspace_is_bound(
+def test_foreign_uc_control_plane_audits_grants_when_target_workspace_is_bound(
     binding_type: str,
 ) -> None:
     workspace = _workspace(
@@ -2518,10 +2603,9 @@ def test_foreign_uc_control_plane_rejects_grants_when_target_workspace_is_bound(
         ]
     )
 
-    with pytest.raises(RuntimeError, match="not binding-denied as reviewed"):
+    with pytest.raises(RuntimeError, match="forbidden access on catalog hidden"):
         _audit(
             workspace,
-            foreign_catalog_binding_policy=_binding_policy(),
         )
 
 
@@ -2553,7 +2637,6 @@ def test_foreign_uc_control_plane_propagates_binding_authorization_denial() -> N
     with pytest.raises(PermissionDenied, match="binding inventory requires"):
         _audit(
             workspace,
-            foreign_catalog_binding_policy=_binding_policy(),
         )
 
 
@@ -2586,9 +2669,6 @@ def test_foreign_uc_control_plane_rejects_binding_excluded_runtime_ownership() -
     with pytest.raises(RuntimeError, match="cannot own governed UC objects"):
         _audit(
             workspace,
-            foreign_catalog_binding_policy=_binding_policy(
-                owner=APPLICATION_ID,
-            ),
         )
 
 
@@ -2630,7 +2710,6 @@ def test_foreign_uc_control_plane_skips_binding_excluded_registered_model_grants
 
     proof = _audit(
         workspace,
-        foreign_catalog_binding_policy=_binding_policy(),
     )
 
     assert proof.audited_catalogs == frozenset({"hidden", "other"})
