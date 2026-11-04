@@ -246,3 +246,58 @@ def test_the_exit_trap_starts_an_app_the_window_left_stopped(tmp_path: Path, fai
     kinds = _kinds(lines)
     assert kinds[-2:] == ["databricks apps start", "await-wr5"], kinds
     assert "--window-close" not in kinds
+
+
+def test_plan_wr5_reads_the_exhausted_journal_and_opens_only_with_the_ack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import re
+    import stat
+
+    from tests.fixtures.fake_lakebase import DEPLOYER, FakeServer
+    from tools.clients import lakebase_handover
+    from tools.databricks import quiesce_window
+    from tools.databricks.quiesce_window_facts import NOT_FOUND_RECORD
+
+    server = FakeServer()
+    server.hold("TABLE:mip_app.campaigns", 3600.0)
+    digest = lakebase_handover.plan(server.read_session, target=DEPLOYER).sha256
+    lakebase_handover.apply(
+        server.read_session,
+        server.connect,
+        target=DEPLOYER,
+        ack=digest,
+        journal_path=tmp_path / "journal.json",
+        clock=lakebase_handover.Clock(now=server.clock, sleep=server.sleep),
+    )
+    app = SimpleNamespace(
+        id=FACTS.app_id,
+        service_principal_client_id=FACTS.app_client_id,
+        service_principal_id=FACTS.app_scim_id,
+        compute_status=SimpleNamespace(state="ACTIVE"),
+        active_deployment=SimpleNamespace(deployment_id=FACTS.active_deployment_id, source_code_path=FACTS.active_source),
+        default_source_code_path=FACTS.default_source,
+        pending_deployment=None,
+    )
+
+    def unsigned(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError(f"{NOT_FOUND_RECORD} for this App")
+
+    monkeypatch.setattr(wr5, "app_or_none", lambda _ws, *, app_name: app)
+    monkeypatch.setattr(wr5, "_load_record", unsigned)
+    monkeypatch.setattr(wr5.journal, "read", lambda _ws, *, app_name: None)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    argv = [
+        "plan-wr5", "--app-name", "mip-app", "--lakebase-handover-journal", str(tmp_path / "journal.json"),
+        "--out", str(tmp_path / "plan.json"), "--out-env", str(tmp_path / "plan.env"),
+    ]  # fmt: skip
+    monkeypatch.delenv(release.ACK_ENV, raising=False)
+    assert quiesce_window.main(argv, workspace_factory=lambda: object()) == 2
+    out = capsys.readouterr()
+    assert "REFUSED window_unacked" in out.err and not (tmp_path / "plan.env").exists()
+    window = re.search(r"window sha256 ([0-9a-f]{64})", out.out)
+    assert window is not None and stat.S_IMODE((tmp_path / "plan.json").stat().st_mode) == 0o600
+    monkeypatch.setenv(release.ACK_ENV, window.group(1))
+    assert quiesce_window.main(argv, workspace_factory=lambda: object()) == 0
+    env = (tmp_path / "plan.env").read_text(encoding="utf-8")
+    assert f"MIP_WR5_WINDOW_SHA256={window.group(1)}" in env and f"MIP_WR5_APP_SCIM_ID={FACTS.app_scim_id}" in env
