@@ -33,6 +33,7 @@ from tools.databricks.agent_runtime_access import (
     _principal_entry,
     _text,
 )
+from tools.databricks.estate.genie_exposure import EntryLevel, entry_levels
 
 SHARED_FOLDER = "/Workspace/Shared"
 _DIRECTORY_PREFIX = "/directories/"
@@ -65,12 +66,8 @@ VERIFIER_NEEDS_NONE = "The verifier needs no Genie access. Then re-run."
 
 
 @dataclass(frozen=True)
-class GrantedLevel:
+class GrantedLevel(EntryLevel):
     """One permission level on a Genie space and the object it comes from."""
-
-    level: str
-    inherited: bool
-    inherited_from: tuple[str, ...] = ()
 
     def describe(self, folders: Mapping[str, str]) -> str:
         if not self.inherited:
@@ -83,26 +80,16 @@ class GrantedLevel:
 
 
 def _granted_levels(entry: object) -> tuple[GrantedLevel, ...]:
-    """Every permission in an ACL entry, with its ``inherited_from_object`` source."""
+    """Every permission in an ACL entry, with its ``inherited_from_object`` source.
 
-    granted: list[GrantedLevel] = []
-    for permission in _items(_field(entry, "all_permissions")):
-        inherited = _field(permission, "inherited") is True
-        sources = tuple(
-            source
-            for source in (
-                _text(value) for value in _items(_field(permission, "inherited_from_object"))
-            )
-            if source
-        )
-        granted.append(
-            GrantedLevel(
-                level=_text(_field(permission, "permission_level")),
-                inherited=inherited,
-                inherited_from=sources if inherited else (),
-            )
-        )
-    return tuple(granted)
+    Read by ``genie_exposure.entry_levels``, the reader the post-stop audits'
+    accepted-exposure matching uses, so both sides see the same levels.
+    """
+
+    return tuple(
+        GrantedLevel(level=level.level, inherited=level.inherited, inherited_from=level.inherited_from)
+        for level in entry_levels(entry)
+    )
 
 
 @dataclass(frozen=True)

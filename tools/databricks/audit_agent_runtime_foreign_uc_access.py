@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,6 +31,12 @@ from tools.databricks.audit_global_m2m_access import (
     assert_workspace_admin_inventory_identity,
 )
 from tools.databricks.campaign_treatment_identity_probe import target_identity_groups_probe
+from tools.databricks.estate.accepted_exposure import ExposureMatcher, identity_matcher
+from tools.databricks.estate.uc_exposure import UcExposureScope
+from tools.databricks.foreign_catalog_binding_policy import (
+    _WORKSPACE_BINDING_TYPES,
+    parse_foreign_catalog_binding_policy,
+)
 from tools.databricks.oauth_credential_boundary import (
     held_deployment_credential_assertion,
 )
@@ -121,103 +126,6 @@ def _assert_metastore_owner_inventory_identity(
         )
     workspace_id = authoritative_workspace_id(workspace)
     return metastore_id, workspace_id
-
-
-_WORKSPACE_BINDING_TYPES = frozenset(
-    {
-        "BINDING_TYPE_READ_ONLY",
-        "BINDING_TYPE_READ_WRITE",
-    }
-)
-
-
-class _DuplicatePolicyKey(ValueError):
-    pass
-
-
-def _strict_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise _DuplicatePolicyKey(key)
-        result[key] = value
-    return result
-
-
-def parse_foreign_catalog_binding_policy(raw: str) -> dict[str, CatalogBindingEvidence]:
-    """Parse the exact reviewed binding-denial policy without permissive defaults."""
-
-    value = raw.strip()
-    if not value:
-        return {}
-    try:
-        payload = json.loads(value, object_pairs_hook=_strict_json_object)
-    except json.JSONDecodeError as exc:
-        raise ValueError("foreign catalog binding policy is not valid JSON") from exc
-    except _DuplicatePolicyKey as exc:
-        raise ValueError("foreign catalog binding policy contains a duplicate key") from exc
-    if not isinstance(payload, dict) or set(payload) != {"version", "catalogs"}:
-        raise ValueError("foreign catalog binding policy has an invalid top-level contract")
-    if (
-        type(payload["version"]) is not int
-        or payload["version"] != 1
-        or not isinstance(payload["catalogs"], dict)
-    ):
-        raise ValueError("foreign catalog binding policy has an unsupported version or catalogs")
-    policy: dict[str, CatalogBindingEvidence] = {}
-    for catalog, contract in payload["catalogs"].items():
-        if (
-            not isinstance(catalog, str)
-            or not catalog.strip()
-            or catalog != catalog.strip()
-            or not isinstance(contract, dict)
-            or set(contract) != {"owner", "catalog_type", "bindings"}
-        ):
-            raise ValueError("foreign catalog binding policy has an invalid catalog contract")
-        owner = contract["owner"]
-        catalog_type = contract["catalog_type"]
-        bindings = contract["bindings"]
-        if (
-            not isinstance(owner, str)
-            or not owner.strip()
-            or owner != owner.strip()
-            or not isinstance(catalog_type, str)
-            or not catalog_type.strip()
-            or catalog_type != catalog_type.strip()
-            or not isinstance(bindings, list)
-            or not bindings
-        ):
-            raise ValueError("foreign catalog binding policy has incomplete catalog evidence")
-        normalized_bindings: list[tuple[str, str]] = []
-        for binding in bindings:
-            if not isinstance(binding, dict) or set(binding) != {
-                "workspace_id",
-                "binding_type",
-            }:
-                raise ValueError("foreign catalog binding policy has an invalid binding")
-            binding_workspace_id = binding["workspace_id"]
-            binding_type = binding["binding_type"]
-            if (
-                not isinstance(binding_workspace_id, str)
-                or not binding_workspace_id.isdecimal()
-                or int(binding_workspace_id) <= 0
-                or str(int(binding_workspace_id)) != binding_workspace_id
-                or binding_workspace_id != binding_workspace_id.strip()
-                or not isinstance(binding_type, str)
-                or binding_type not in _WORKSPACE_BINDING_TYPES
-            ):
-                raise ValueError("foreign catalog binding policy has an incomplete binding")
-            normalized_bindings.append((binding_workspace_id, binding_type))
-        if len({item[0] for item in normalized_bindings}) != len(normalized_bindings):
-            raise ValueError("foreign catalog binding policy has duplicate workspace bindings")
-        policy[catalog] = CatalogBindingEvidence(
-            catalog=catalog,
-            owner=owner,
-            catalog_type=catalog_type,
-            isolation_mode="ISOLATED",
-            bindings=tuple(sorted(normalized_bindings)),
-        )
-    return policy
 
 
 def _account_group_inventory_evidence(
@@ -528,6 +436,49 @@ def _assert_runtime_workspace_assignment_boundary(
     return metastore_workspace_ids
 
 
+def _catalog_bindings(workspace: Any, *, catalog: str) -> dict[str, str]:
+    """Every workspace an ISOLATED catalog is bound to, and how; incomplete evidence fails."""
+
+    bindings_by_workspace: dict[str, str] = {}
+    for binding in workspace.workspace_bindings.get_bindings("catalog", catalog):
+        binding_workspace_id = _text(getattr(binding, "workspace_id", None))
+        binding_type = _text(getattr(binding, "binding_type", None)).upper()
+        if not binding_workspace_id or binding_type not in _WORKSPACE_BINDING_TYPES:
+            raise RuntimeError(
+                f"UC control-plane catalog {catalog} returned an incomplete workspace binding"
+            )
+        if binding_workspace_id in bindings_by_workspace:
+            raise RuntimeError(
+                f"UC control-plane catalog {catalog} returned duplicate workspace bindings"
+            )
+        bindings_by_workspace[binding_workspace_id] = binding_type
+    return bindings_by_workspace
+
+
+def _exposure_scope(
+    workspace: Any,
+    matcher: ExposureMatcher | None,
+    catalog_inventory: Mapping[str, tuple[str, object]],
+) -> UcExposureScope | None:
+    """The identity's accepted UC exposure, or ``None`` when it covers nothing (no extra read)."""
+
+    if matcher is None or not matcher.active:
+        return None
+    cache: dict[str, tuple[str, tuple[str, ...]]] = {}
+    lock = Lock()
+
+    def binding(catalog: str) -> tuple[str, tuple[str, ...]]:
+        with lock:
+            if catalog in cache:
+                return cache[catalog]
+        mode = catalog_inventory[catalog][0] if catalog in catalog_inventory else ""
+        bound = sorted(_catalog_bindings(workspace, catalog=catalog)) if mode == "ISOLATED" else []
+        with lock:
+            return cache.setdefault(catalog, (mode, tuple(bound)))
+
+    return UcExposureScope(matcher=matcher, binding=binding)
+
+
 def _binding_evidence(
     workspace: Any,
     *,
@@ -548,19 +499,7 @@ def _binding_evidence(
         )
     if not workspace_id:
         raise RuntimeError("UC control-plane audit found no current workspace identity")
-    bindings_by_workspace: dict[str, str] = {}
-    for binding in workspace.workspace_bindings.get_bindings("catalog", catalog):
-        binding_workspace_id = _text(getattr(binding, "workspace_id", None))
-        binding_type = _text(getattr(binding, "binding_type", None)).upper()
-        if not binding_workspace_id or binding_type not in _WORKSPACE_BINDING_TYPES:
-            raise RuntimeError(
-                f"UC control-plane catalog {catalog} returned an incomplete workspace binding"
-            )
-        if binding_workspace_id in bindings_by_workspace:
-            raise RuntimeError(
-                f"UC control-plane catalog {catalog} returned duplicate workspace bindings"
-            )
-        bindings_by_workspace[binding_workspace_id] = binding_type
+    bindings_by_workspace = _catalog_bindings(workspace, catalog=catalog)
     if workspace_id in bindings_by_workspace:
         return None
     return CatalogBindingEvidence(
@@ -585,8 +524,15 @@ def audit_foreign_uc_access(
     target_groups_probe: Callable[..., dict[str, str]] = target_identity_groups_probe,
     assert_single_writer: Callable[[], None] | None = None,
     allowed_workspace_groups: Mapping[str, str] | None = None,
+    exposure: ExposureMatcher | None = None,
 ) -> ControlPlaneForeignCatalogProof:
-    """Prove zero target-principal access on every ordinary foreign catalog."""
+    """Prove zero target-principal access on every ordinary foreign catalog.
+
+    Zero beyond the target identity's accepted exposure: ``exposure`` is the
+    agent-runtime's or agent-proxy's matcher (M2-PR4), read class only. A
+    catalog whose exposure it accepts is still grant-audited, so the
+    self-view verifiers skip it as before.
+    """
 
     principal = application_id.strip()
     mip_catalog = catalog.strip()
@@ -702,6 +648,7 @@ def audit_foreign_uc_access(
             _text(getattr(item, "isolation_mode", None)).upper(),
             item,
         )
+    scope = _exposure_scope(workspace, exposure, catalog_inventory)
     mip_catalog_exists = mip_catalog in catalog_inventory
     if not mip_catalog_exists and not allow_missing_mip_catalog:
         raise RuntimeError("configured MIP catalog is missing from control-plane inventory")
@@ -781,6 +728,13 @@ def audit_foreign_uc_access(
             full_name=foreign_catalog,
             principal=principal,
         )
+        if scope is not None:
+            sources = scope.residual(
+                securable_type="catalog",
+                full_name=foreign_catalog,
+                item_id=foreign_catalog,
+                sources=sources,
+            )
         if sources:
             raise RuntimeError(
                 f"agent-runtime has forbidden access on catalog {foreign_catalog}: {sources}"
@@ -792,6 +746,7 @@ def audit_foreign_uc_access(
             catalog_owner=catalog_owner,
             principal=principal,
             owner_check=record_owner,
+            exposure=scope,
         )
 
     if foreign_catalogs:
@@ -827,6 +782,8 @@ def audit_foreign_uc_access(
             full_name=full_name,
             principal=principal,
             expected=set(),
+            exposure=scope,
+            item_id=full_name,
         )
     _assert_no_binding_denied_runtime_ownership(
         target_aliases=target.aliases,
@@ -869,6 +826,11 @@ def main(argv: list[str] | None = None) -> int:
         help=("Exact versioned JSON contract for ordinary catalogs denied by workspace binding."),
     )
     parser.add_argument(
+        "--exposure-identity",
+        choices=("runtime", "proxy"),
+        help="Remove what this identity's accepted exposure (MIP_ACCEPTED_EXPOSURE_JSON) accepts.",
+    )
+    parser.add_argument(
         "--allow-missing-mip-catalog",
         action="store_true",
         help=(
@@ -888,6 +850,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_inventory_principal=args.expected_inventory_principal,
         allow_missing_mip_catalog=args.allow_missing_mip_catalog,
         foreign_catalog_binding_policy=args.foreign_catalog_binding_policy_json,
+        exposure=identity_matcher(args.exposure_identity) if args.exposure_identity else None,
     )
     print("agent-runtime foreign UC control-plane boundary: PASS")
     return 0

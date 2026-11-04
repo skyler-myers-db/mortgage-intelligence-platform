@@ -133,15 +133,12 @@ fi
 # <<< app runtime closure: check <<<
 
 # >>> client live checks >>>
-# The first Databricks call of the run, once the interpreter, the requirements
-# digest and the App closure are proven: read-only, the deployer client's host,
-# the workspace id, the current metastore and the authenticated principal must
-# be the client profile's (tools/clients/live_checks.py: two SCIM Me GETs and
-# the current metastore assignment). A mismatch exits 2 here, naming the
-# check, never a value. A dry run prints the command and makes no call.
-# The adopt phase expects the App unadopted: that is what it binds (M2-PR6).
-_LIVE_CHECK_ARGS=()
-[[ "${DEPLOY_PHASE:-}" != "adopt" ]] || _LIVE_CHECK_ARGS=(--phase adopt)
+# The first Databricks call, once the interpreter, requirements digest and App
+# closure are proven. Read-only (tools/clients/live_checks.py: two SCIM Me GETs,
+# the metastore assignment): host, workspace id, metastore and principal must be
+# the profile's, else exit 2 naming the check, never a value; a dry run makes no
+# call. The adopt phase expects the App unadopted: that is what it binds (M2-PR6).
+_LIVE_CHECK_ARGS=(); [[ "${DEPLOY_PHASE:-}" != "adopt" ]] || _LIVE_CHECK_ARGS=(--phase adopt)
 echo "${DIM}\$ $PYTHON -m tools.clients.live_checks${_LIVE_CHECK_ARGS[*]:+ ${_LIVE_CHECK_ARGS[*]}}${RST}"
 if [[ "$DRY_RUN" -eq 0 ]] && ! "$PYTHON" -m tools.clients.live_checks "${_LIVE_CHECK_ARGS[@]}"; then
   echo "${RED}[deploy] the client live checks refused this workspace or principal; nothing was changed.${RST}" >&2
@@ -624,6 +621,13 @@ export MIP_UC_APPROVED_OWNER_PRINCIPALS="$_UC_APPROVED_OWNERS"
 # owner-equivalent probe, attack G12). Empty approves no one else.
 MIP_GENIE_MANAGER_PRINCIPALS="$(deployment_control_value MIP_GENIE_MANAGER_PRINCIPALS)"
 export MIP_GENIE_MANAGER_PRINCIPALS
+# M2-PR4, through the environment only (both name principals): the metastore's
+# exact owner (MetastoreOwnerPolicy; blank refuses), and the accepted exposure,
+# which each consumer refuses unless the shell-only MIP_ACK_ACCEPTED_EXPOSURE_PLAN
+# equals its plan's sha256 (docs/deployment.md; empty accepts nothing).
+MIP_UC_METASTORE_OWNER="$(deployment_control_value MIP_UC_METASTORE_OWNER)"
+MIP_ACCEPTED_EXPOSURE_JSON="$(deployment_control_value MIP_ACCEPTED_EXPOSURE_JSON)"
+export MIP_UC_METASTORE_OWNER MIP_ACCEPTED_EXPOSURE_JSON
 for _ACCOUNT_AUTH_NAME in DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID; do
   resolve_m2m_credential "$_ACCOUNT_AUTH_NAME"
 done

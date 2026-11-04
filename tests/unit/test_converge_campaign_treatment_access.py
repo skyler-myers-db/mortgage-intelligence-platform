@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from databricks.sdk.errors import NotFound, PermissionDenied
@@ -166,11 +167,19 @@ def _mirrored_account(workspace: object) -> object:
     )
 
 
+def _estate_metastore_owner(workspace: Any) -> str:
+    metastores = workspace.metastores
+    return str(metastores.get(metastores.current().metastore_id).owner)
+
+
 def converge_campaign_treatment_access(**kwargs: object) -> bool:
     if "account_factory" not in kwargs:
         workspace = kwargs["workspace"]
         kwargs["account_factory"] = lambda: _mirrored_account(workspace)
     kwargs.setdefault("assert_single_writer", lambda: None)
+    # MIP_UC_METASTORE_OWNER names the fake estate's own owner unless a test
+    # sets it (test_metastore_owner_policy.py covers the policy itself).
+    kwargs.setdefault("metastore_owner", _estate_metastore_owner(kwargs["workspace"]))
     return _converge_campaign_treatment_access(**kwargs)  # type: ignore[arg-type]
 
 

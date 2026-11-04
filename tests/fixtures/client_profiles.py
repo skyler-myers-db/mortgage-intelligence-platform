@@ -63,7 +63,8 @@ EXPOSURE = [
         "grantee": "account users",
         "privileges": ["CAN_VIEW"],
         "source": "direct",
-        "binding": {"isolation_mode": "OPEN", "workspace_ids": ["4200000001"]},
+        # A workspace object: ISOLATED to the one workspace it lives in.
+        "binding": {"isolation_mode": "ISOLATED", "workspace_ids": ["4200000001"]},
         "identities": ["app"],
         "privilege_class": "read",
         "reason": "Shared with every account user by its owner",
@@ -76,7 +77,9 @@ EXPOSURE = [
         "privileges": ["BROWSE", "USE_CATALOG"],
         "source": "inherited:metastore_parent_alpha",
         "binding": {"isolation_mode": "ISOLATED", "workspace_ids": ["4200000002"]},
-        "identities": ["app", "runtime"],
+        # The foreign UC audit judges the agent-runtime's and the agent-proxy's
+        # grants only; an App UC entry would never match, so the policy refuses it.
+        "identities": ["runtime"],
         "privilege_class": "read",
         "reason": "Inherited browse on a shared catalog",
         "expires_at": "2026-12-01T00:00:00Z",

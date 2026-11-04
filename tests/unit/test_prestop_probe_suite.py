@@ -51,6 +51,7 @@ CONFIG = ProbeSuiteConfig(
     deployer=DEPLOYER,
     approved_owner_principals="mip-data-owners",
     genie_manager_principals="",
+    metastore_owner=DEPLOYER,
 )
 
 

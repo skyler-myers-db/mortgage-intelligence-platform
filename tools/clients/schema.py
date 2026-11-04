@@ -18,7 +18,6 @@ refusal lines and exposure decisions stay readable.
 
 from __future__ import annotations
 
-import json
 import re
 from enum import StrEnum
 
@@ -49,11 +48,13 @@ from tools.clients.shapes import (
     UUID,
     WORKSPACE_ID,
     WORKSPACE_PATH,
+    DuplicateJsonKey,
     https_host,
     is_placeholder,
     is_vocabulary,
     require,
     split_list,
+    strict_json_loads,
 )
 
 
@@ -274,7 +275,9 @@ def _parse_json(value: object, *, expected: type) -> object:
     if not isinstance(value, str):
         return value
     try:
-        parsed = json.loads(value)
+        parsed = strict_json_loads(value)
+    except DuplicateJsonKey:
+        raise ValueError("repeats a key in one JSON object; give each key once") from None
     except ValueError:
         raise ValueError("must be single-line JSON") from None
     if not isinstance(parsed, expected):
