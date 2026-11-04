@@ -527,6 +527,12 @@ CLIENT_APP_ENV=""
 CLIENT_DEMO_FEEDS=""
 CLIENT_PRESENTER_MODE=""
 CLIENT_SCHEDULED_REFRESH=""
+# The agentic tier (M2-PR3): on or off, the client-id name of the signed lease's
+# writer, and the comma-separated client-id names of every role the tier
+# deploys with (tools/databricks/m2m_identity_contract.py).
+CLIENT_AGENTIC_TIER=""
+CLIENT_LEASE_WRITER_ENV=""
+CLIENT_TIER_IDENTITIES=""
 # The SQL warehouse the preflight resolves (bundle_state warehouse-id, M1-PR3):
 # bundle-state, or first-install-bootstrap until the step-4 apply.
 _GRANTS_WAREHOUSE_ID=""

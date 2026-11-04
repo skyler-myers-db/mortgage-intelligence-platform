@@ -31,6 +31,10 @@ from tools.databricks.quiesce_window_plan import WindowFacts
 NOT_FOUND_RECORD = "no server-owned last-good App rollback contract exists"
 MIGRATION_DECISIONS = frozenset({"noop", "apply", "refuse"})
 ROLE_STATES = frozenset({"exact", "drift"})
+# The core tier (MIP_AGENTIC_TIER=off, M2-PR3) deploys no verifier: its role is
+# recorded absent, which no converge can rotate. The App and the jobs reader
+# always exist.
+VERIFIER_ROLE_STATES = ROLE_STATES | {"absent"}
 
 
 def app_or_none(workspace: Any, *, app_name: str) -> object | None:
@@ -134,7 +138,8 @@ def collect_facts(
             return WindowFacts(applicable=False, not_applicable_reason="no_signed_record")
         raise
     if (
-        not {role_state, verifier_role_state, jobs_reader_role_state} <= ROLE_STATES
+        not {role_state, jobs_reader_role_state} <= ROLE_STATES
+        or verifier_role_state not in VERIFIER_ROLE_STATES
         or migration_plan is None
     ):
         raise ValueError(

@@ -484,7 +484,8 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--plan-gate-report", required=True, type=Path)
     plan.add_argument("--binding-payload", type=Path)
     plan.add_argument("--role-check", choices=("exact", "drift"))
-    plan.add_argument("--verifier-role-check", choices=("exact", "drift"))
+    # "absent": the core tier deploys no verifier (M2-PR3).
+    plan.add_argument("--verifier-role-check", choices=("exact", "drift", "absent"))
     plan.add_argument("--jobs-reader-role-check", choices=("exact", "drift"))
     plan.add_argument("--migration-plan", type=Path)
     # The job's deadline (MIP_JOB_DEADLINE_EPOCH, M0-PR9); empty refuses a window.

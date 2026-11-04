@@ -19,7 +19,11 @@
   with its remedy instead. Every identifying value (ids, names, grantees,
   paths, workspace ids) is registered as a runner mask before it prints, as
   the profile tools do (``tools.clients.redact.emit_mask``), so a CI log shows
-  the structure and the schema vocabulary only.
+  the structure and the schema vocabulary only. ``--agentic-tier off`` (the
+  client profile's ``MIP_AGENTIC_TIER``, M2-PR3) inventories a core-tier
+  install, which deploys no agent-runtime or verifier: it takes neither id,
+  lists the Genie grants reaching the App alone, and has no UC candidates, so
+  ``--catalog`` refuses there.
 
 Read-only: GET and list calls only. Exit 0 on success, 2 on a refusal.
 """
@@ -115,11 +119,15 @@ def genie_candidates(
     workspace: Any,
     *,
     app_name: str,
-    runtime_application_id: str,
-    verifier_application_id: str,
+    runtime_application_id: str | None,
+    verifier_application_id: str | None,
     governed_title: str,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Group and direct Genie grants reaching the App or the runtime, as the audits read them."""
+    """Group and direct Genie grants reaching the App or the runtime, as the audits read them.
+
+    A ``None`` id is an identity the tier does not deploy (the core tier's
+    runtime and verifier), as in the pre-stop probes: it is not audited.
+    """
 
     from tools.databricks.agent_runtime_access import _field, _genie_spaces, _items, _text
     from tools.databricks.agent_runtime_uc_baseline import authoritative_workspace_id
@@ -141,7 +149,9 @@ def genie_candidates(
         label: principal_effective_groups(workspace, scim_id=scim_id, resolve_groups=resolve_effective_groups)
         for label, scim_id in principals.resolved.items()
     }
-    direct = {principals.app_client_id: "app", runtime_application_id: "runtime"}
+    direct = {principals.app_client_id: "app"}
+    if runtime_application_id is not None:
+        direct[runtime_application_id] = "runtime"
     verifier_groups = next((value for label, value in groups.items() if label.startswith("verifier ")), frozenset())
     titles = _genie_spaces(workspace)
     workspace_id = authoritative_workspace_id(workspace)
@@ -260,6 +270,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ack-plan", default="", help="--check: the reviewed plan's sha256")
     for name in ("--app-name", "--runtime-application-id", "--verifier-application-id", "--expected-inventory-principal"):
         parser.add_argument(name, default="")
+    # The client profile's MIP_AGENTIC_TIER, as for the pre-stop probes: the
+    # agentic tier requires both agentic ids, the core tier deploys neither.
+    parser.add_argument("--agentic-tier", choices=("on", "off"), default="on")
     parser.add_argument("--genie-space-name", default="")
     parser.add_argument("--catalog", default="", help="--emit-exposure-inventory: also list UC candidates")
     args = parser.parse_args(argv)
@@ -278,16 +291,19 @@ def main(argv: list[str] | None = None) -> int:
         for line in exc.lines:
             print(f"{_PREFIX} REFUSED: {line}", file=sys.stderr)
         return 2
-    missing = [
-        flag
-        for flag, value in (
-            ("--app-name", args.app_name),
+    agentic = args.agentic_tier == "on"
+    required = [("--app-name", args.app_name), ("--expected-inventory-principal", args.expected_inventory_principal)]
+    if agentic:
+        required[1:1] = [
             ("--runtime-application-id", args.runtime_application_id),
             ("--verifier-application-id", args.verifier_application_id),
-            ("--expected-inventory-principal", args.expected_inventory_principal),
+        ]
+    elif args.runtime_application_id or args.verifier_application_id or args.catalog:
+        parser.error(
+            "the core tier deploys no agent runtime or verifier: omit --runtime-application-id, "
+            "--verifier-application-id and --catalog (it has no UC candidates)"
         )
-        if not value
-    ]
+    missing = [flag for flag, value in required if not value]
     if missing:
         parser.error("--emit-exposure-inventory requires " + ", ".join(missing))
     from databricks.sdk import WorkspaceClient
@@ -298,8 +314,8 @@ def main(argv: list[str] | None = None) -> int:
     candidates, notes = genie_candidates(
         workspace,
         app_name=args.app_name,
-        runtime_application_id=args.runtime_application_id,
-        verifier_application_id=args.verifier_application_id,
+        runtime_application_id=args.runtime_application_id if agentic else None,
+        verifier_application_id=args.verifier_application_id if agentic else None,
         governed_title=args.genie_space_name,
     )
     if args.catalog:

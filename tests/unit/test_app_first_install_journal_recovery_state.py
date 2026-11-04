@@ -37,14 +37,13 @@ def _keys(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
         "MIP_AI_GATEWAY_PROOF_VERIFY_KEY", derive_gateway_proof_verify_key(SIGNING_KEY)
     )
-    monkeypatch.setenv("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", WRITER_ID)
 
 
 def _interrupted_first_install(monkeypatch: pytest.MonkeyPatch, *, claimed: bool) -> object:
     """A journal-owned App left by a released lease, as the next run's gate sees it."""
 
     workspace = _workspace()
-    creation = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    creation = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -71,7 +70,7 @@ def test_the_bare_read_needs_no_lease_and_matches_status(
     assert workspace.workspace.data == files_before, "the bare read wrote nothing"  # type: ignore[attr-defined]
     assert workspace.apps.delete_calls == 0  # type: ignore[attr-defined]
 
-    held = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
+    held = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="b" * 40)
     assert (
         first_install.status(workspace, lease_id=held, source_git_sha="b" * 40, **COMMON) == state
     )

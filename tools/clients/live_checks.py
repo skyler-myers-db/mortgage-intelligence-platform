@@ -17,13 +17,16 @@ Steps 2-4 are three GETs (SCIM ``Me`` twice and the current metastore
 assignment); every refusal among them is reported. Once all four hold, the
 read-only install checks run (tools/clients/install_checks.py, M1-PR3):
 adoption, the ``mip.install_key`` install marker, the Cotality share, the
-storage root and the account principal's roles. They never run against a
-workspace or as a principal that is not the profile's. ``--phase adopt`` and
-``--phase unadopt`` (scripts/deploy.sh's adopt phases, M2-PR6) expect the App
-possibly unadopted: adopt binds it, unadopt unbinds it, and an unproven undo
-can leave other keys bound without it, which unadopt must still reach. That
-one condition, and the unmarked catalog that goes with it, are noted there,
-not refused. Exit 0 when every check holds, 2 otherwise; a read error refuses, never reads as absent. A
+storage root and the account principal's roles, and then the capability
+preflight (tools/clients/capabilities.py, M2-PR3): every workspace feature the
+profile's ``MIP_AGENTIC_TIER`` needs. They never run against a workspace or as
+a principal that is not the profile's. ``--phase adopt`` and ``--phase
+unadopt`` (scripts/deploy.sh's adopt phases, M2-PR6) expect the App possibly
+unadopted: adopt binds it, unadopt unbinds it, and an unproven undo can leave
+other keys bound without it, which unadopt must still reach. That one
+condition, and the unmarked catalog that goes with it, are noted there, not
+refused. Exit 0 when every check holds, 2 otherwise; a read error refuses,
+never reads as absent. A
 refusal names the check, never a value: these are identifying fields, and the
 line may reach a public CI log. Each id read from the workspace is registered
 as a runner mask the moment it is read (``redact.emit_mask``).
@@ -38,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tools.clients import install_checks
+from tools.clients import capabilities, install_checks
 from tools.clients.environment import from_local, resolve
 from tools.clients.errors import ProfileRefusal
 from tools.clients.redact import emit_mask
@@ -111,8 +114,8 @@ def check(
 ) -> list[str]:
     """Every refusal, host first; no request is sent when the host differs.
 
-    The install checks run only once the workspace and the principal are
-    proven the profile's.
+    The install checks and the tier's capability preflight run only once the
+    workspace and the principal are proven the profile's.
     """
 
     lines = host_refusals(profile, str(getattr(client.config, "host", "") or ""))
@@ -121,7 +124,10 @@ def check(
     lines = identity_refusals(profile, read_live_identity(client))
     if lines:
         return lines
-    return install_checks.check(profile, client, account, adopting=adopting)
+    return [
+        *install_checks.check(profile, client, account, adopting=adopting),
+        *capabilities.check(profile, client),
+    ]
 
 
 def _default_client() -> Any:
@@ -157,7 +163,8 @@ def main(
         return 2
     print(
         "client live checks ok: host, workspace id, metastore id and deployer are the profile's; "
-        "adoption, install marker, Cotality share, storage root and account principal hold"
+        "adoption, install marker, Cotality share, storage root and account principal hold; "
+        "the workspace offers every feature the agentic tier setting needs"
     )
     return 0
 

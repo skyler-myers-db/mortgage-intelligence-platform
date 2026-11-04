@@ -1257,7 +1257,7 @@ resources:
               - "--lender-identity-json=${var.lender_identity_json}"
               - "--lender-identity-sha256=${var.lender_identity_sha256}"
               - "--ai-gateway-verifier-client-id=${var.ai_gateway_verifier_client_id}"
-              - "--require-ai-gateway-verifier"
+              - "${var.require_ai_gateway_verifier}"
               # M2-PR5: the jobs identity's Lakebase jobs_reader role (SELECT on
               # the lifecycle sync's approval and disposition tables only).
               - "--jobs-reader-client-id=${var.jobs_principal}"
@@ -1605,6 +1605,14 @@ variables:
       Dedicated AI Gateway verifier service-principal client ID. The remote
       Lakebase migration requires this exact role before any schema mutation.
     default: 00000000PLACEHOLDER
+  require_ai_gateway_verifier:
+    description: >-
+      The Lakebase migration's verifier flag, set from the client profile's
+      MIP_AGENTIC_TIER (tools/clients/profile.py). The default, the agentic
+      tier's, requires the dedicated verifier role before any schema
+      mutation; the core tier sets --ai-gateway-verifier-absent, which binds
+      no verifier and refuses a real verifier client ID (M2-PR3).
+    default: "--require-ai-gateway-verifier"
   lakebase_instance_name:
     description: >-
       Workspace-unique Lakebase instance name. Override for isolated staging

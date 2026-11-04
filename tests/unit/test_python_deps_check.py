@@ -446,6 +446,9 @@ def test_a_real_deploy_with_a_drifted_override_stops_at_step_0_before_any_worksp
         ignore=shutil.ignore_patterns("__pycache__"),
     )
     (repo / "tools" / "databricks" / "__init__.py").write_text("", encoding="utf-8")
+    # The tier's identity contract the client-target view carries (M2-PR3).
+    for module in ("m2m_identity_contract.py", "agent_proxy_credential_bundle.py"):
+        shutil.copy2(ROOT / "tools" / "databricks" / module, repo / "tools" / "databricks" / module)
     (repo / "backend" / "schemas").mkdir(parents=True)
     # The profile's lender pin rules import the record module (#298), which
     # imports the branding rules.

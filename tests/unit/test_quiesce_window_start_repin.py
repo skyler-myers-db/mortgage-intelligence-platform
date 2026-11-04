@@ -219,6 +219,22 @@ def _run_window(estate: Estate, plan: Any = None) -> tuple[str, dict[str, Any]]:
 # --- the window -----------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(("role", "verifier", "accepted"), [("exact", "absent", True), ("absent", "exact", False)])
+def test_only_the_verifier_role_may_be_absent_the_core_tier(role: str, verifier: str, accepted: bool) -> None:
+    # M2-PR3: the core tier deploys no verifier; the App and the jobs reader always exist.
+    kwargs = {"role_state": role, "verifier_role_state": verifier, "jobs_reader_role_state": "exact"}
+    facts = lambda: window.collect_facts(  # noqa: E731
+        _estate().workspace, app_name=APP_NAME, scope=SCOPE, lakebase_instance="mip-app-state",
+        gate_report={"verdict": "passed", "instance_update_sha256": ""}, binding_payload=EQUAL_BINDINGS,
+        migration_plan=MIGRATION_NOOP, rebase_unverified_app=False, **kwargs,
+    )  # fmt: skip
+    if accepted:
+        assert facts().reasons() == () and facts().verifier_role_state == "absent"
+    else:
+        with pytest.raises(ValueError, match="needs the App, verifier and jobs-reader role checks"):
+            facts()
+
+
 def test_a_start_that_creates_a_new_deployment_closes_the_window_and_is_re_pinned() -> None:
     estate = _estate()
     proven, opened = _run_window(estate)
