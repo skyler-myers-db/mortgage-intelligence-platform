@@ -69,8 +69,9 @@ collect_quiesce_window_binding_payload() {
 # pre-lease predicts it before the lease; pre-apply recomputes it under the
 # lease right before the non-App apply (the TOCTOU recheck). A window needs
 # MIP_ACK_QUIESCE_WINDOW equal to its sha256 at both positions, so the reasons
-# it opens are exactly the predicted ones. A refusal exits 2 with the App
-# untouched.
+# it opens are exactly the predicted ones, and a job budget that admits it
+# (MIP_JOB_DEADLINE_EPOCH, M0-PR9; a run with no window needs no deadline). A
+# refusal exits 2 with the App untouched.
 plan_quiesce_window() {
   local position="${1:?window plan position is required}"
   local gate_report="${2:?bundle plan gate report is required}"
@@ -79,6 +80,8 @@ plan_quiesce_window() {
   step "plan the quiesce window (${position}, read-only)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "  would plan read-only: WR1 binding diff, WR2 App, verifier and jobs-reader role --check and the jobs reader's grants, WR3 Lakebase migration plan, WR4 acked instance update; a window opens only with MIP_ACK_QUIESCE_WINDOW equal to its sha256"
+    "$PYTHON" -m tools.databricks.quiesce_window_budget describe \
+      --deadline-epoch "${MIP_JOB_DEADLINE_EPOCH:-}"
     return 0
   fi
   probe_dir="$(mktemp -d -t mip-quiesce-window.XXXXXX)"
@@ -177,6 +180,7 @@ plan_quiesce_window() {
     --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
     --plan-gate-report "$gate_report" \
     --rebase-unverified-app "$rebase" \
+    --deadline-epoch "${MIP_JOB_DEADLINE_EPOCH:-}" \
     --out "$QUIESCE_WINDOW_PLAN_JSON" \
     "${plan_args[@]}" || plan_rc=$?
   if [[ "$plan_rc" -ne 0 ]]; then
@@ -229,8 +233,10 @@ ensure_quiesce_window_open_for() {
 }
 
 # TOCTOU-checked open: the tool re-validates the pre-apply plan, its digest and
-# the exact ack, re-proves blue is the App's last deployment, journals
-# window_open and only then stops the App, identity-pinned. The state switches
+# the exact ack, admits it against the job budget (M0-PR9: no stop without
+# remaining >= predicted window + predicted restore + 15 min), re-proves blue
+# is the App's last deployment, journals window_open and only then stops the
+# App, identity-pinned. The state switches
 # first, so a failure after the journal write reaches the window compensation,
 # which reads the journal rather than trusting this variable.
 open_quiesce_window() {
@@ -243,6 +249,7 @@ open_quiesce_window() {
     "$PYTHON" -m tools.databricks.quiesce_window open \
     --app-name "$_GRANTS_APP_NAME" \
     --plan "${QUIESCE_WINDOW_PLAN_JSON:?pre-apply window plan is required}" \
+    --deadline-epoch "${MIP_JOB_DEADLINE_EPOCH:-}" \
     --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --deployment-source-git-sha "$SOURCE_GIT_SHA" \
     --expected-app-id "$_EXISTING_APP_ID" \

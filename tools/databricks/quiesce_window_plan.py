@@ -40,6 +40,15 @@ blue unable to run on the migrated schema: ``blue_restorable`` is false, the
 window stays open until green activation, and the dead-man (M0-PR9) leaves the
 App stopped. That outage is part of the acknowledged digest.
 
+**Budget** (M0-PR9). A window's canonical body also names its budget
+inputs: the predicted window (``predicted_seconds``), the predicted restore
+(``predicted_restore_seconds``) and the 15-minute margin, so the exact digest
+ack covers them. The admission itself is time-dependent and never in the
+digest: ``tools/databricks/quiesce_window_budget.py`` refuses a window unless
+the job's remaining budget (``MIP_JOB_DEADLINE_EPOCH`` minus now) covers the
+sum. A plan without a reason has no budget, so its body and digest are the
+ones M0-PR8 computed.
+
 ``public_summary()`` carries codes, counts, booleans and digests only.
 """
 
@@ -48,13 +57,17 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 ACK_ENV = "MIP_ACK_QUIESCE_WINDOW"
+# The job's hard deadline in epoch seconds (M0-PR9): the workflow sets it at job
+# start from timeout-minutes, a local run from --deadline. Shell only, one run.
+DEADLINE_ENV = "MIP_JOB_DEADLINE_EPOCH"
 PUBLIC_SCHEMA = "mip.quiesce-window-plan.public.v1"
 FULL_SCHEMA = "mip.quiesce-window-plan.full.v1"
 CANONICAL_SCHEMA = "mip.quiesce-window-plan.canonical.v1"
+BUDGET_SCHEMA = "mip.quiesce-window-budget.v1"
 POSITIONS = frozenset({"pre-lease", "pre-apply"})
 REASONS = ("WR1", "WR2", "WR3", "WR4")
 REASON_NAMES = {
@@ -72,6 +85,7 @@ REFUSAL_CODES = frozenset(
         "window_migration_refused",
         "window_journal_open",
         "window_facts_incomplete",
+        "window_budget_refused",
     }
 )
 REMEDIES = {
@@ -89,10 +103,16 @@ REMEDIES = {
     ),
     "window_migration_refused": "the Lakebase migration plan refused; see its report",
     "window_journal_open": (
-        "an earlier window's journal is still open; the dead-man recovery (M0-PR9) or the "
-        "owner break-glass must close it first"
+        "an earlier window's journal is still open and no dead-man restart is recorded for "
+        "it: wait for that window's dead-man (M0-PR9), whose restart the next run re-pins "
+        "(repin --from-deadman), or the owner break-glass must close it first"
     ),
     "window_facts_incomplete": "a fact the window needs could not be read; see the private plan",
+    "window_budget_refused": (
+        f"the job budget does not admit the window: {DEADLINE_ENV} (CI sets it at job start "
+        "from timeout-minutes; locally --deadline <epoch>) must leave the predicted window, "
+        "the predicted restore and 15 minutes; see the plan's admission"
+    ),
 }
 ACK_STATES = frozenset({"not_required", "matched", "absent", "mismatch"})
 # Conservative per-step budgets in seconds, for the admission (M0-PR9). They
@@ -106,6 +126,8 @@ STEP_BUDGET_S = {
     "start": 600,
     "repin": 300,
 }
+# The admission margin on top of the predicted window and restore (M0-PR9).
+ADMISSION_MARGIN_S = 15 * 60
 
 
 @dataclass(frozen=True)
@@ -184,6 +206,8 @@ class WindowPlan:
     tier: str = ""
     closes_at: str = ""
     remedies: Mapping[str, str] = field(default_factory=dict)
+    # The job-budget admission (M0-PR9, quiesce_window_budget), when evaluated.
+    admission: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def refused(self) -> bool:
@@ -208,6 +232,7 @@ class WindowPlan:
             "window_sha256": self.sha256,
             "ack": self.ack,
             "refusals": list(self.refusals),
+            "admission": dict(self.admission) or {"state": "not_evaluated"},
         }
 
     def full(self) -> dict[str, Any]:
@@ -220,11 +245,16 @@ class WindowPlan:
 
 
 def canonical_body(facts: WindowFacts, *, blue_restorable: bool) -> dict[str, Any]:
-    """Everything the window relies on; never the position, so both gates digest alike."""
+    """Everything the window relies on; never the position, so both gates digest alike.
 
-    return {
+    A window's body also names its budget inputs (M0-PR9); a plan with no
+    reason has none, so its body is exactly M0-PR8's.
+    """
+
+    reasons = facts.reasons()
+    body: dict[str, Any] = {
         "schema": CANONICAL_SCHEMA,
-        "reasons": list(facts.reasons()),
+        "reasons": list(reasons),
         "blue_deployment_id": facts.blue_deployment_id,
         "restore_source": facts.restore_source,
         "source_tree_sha256": facts.source_tree_sha256,
@@ -240,6 +270,9 @@ def canonical_body(facts: WindowFacts, *, blue_restorable: bool) -> dict[str, An
         "migration_pending_contract": sorted(facts.migration_pending_contract),
         "instance_update_sha256": facts.instance_update_sha256,
     }
+    if reasons:
+        body["budget"] = budget_body(reasons, blue_restorable=blue_restorable)
+    return body
 
 
 def body_sha256(body: Mapping[str, Any]) -> str:
@@ -254,6 +287,46 @@ def predicted_seconds(reasons: tuple[str, ...], *, blue_restorable: bool) -> int
     if blue_restorable:
         total += STEP_BUDGET_S["start"] + STEP_BUDGET_S["repin"]
     return total
+
+
+def predicted_restore_seconds(*, blue_restorable: bool) -> int:
+    """The restore after a failure at the window's last mutation (M0-PR9).
+
+    The EXIT-trap compensation then starts blue and re-pins it (tier a): one
+    start and one re-pin budget. A contract window restores nothing: blue
+    cannot run on the migrated schema, so the App stays stopped until green
+    activation and the dead-man leaves it stopped.
+    """
+
+    return STEP_BUDGET_S["start"] + STEP_BUDGET_S["repin"] if blue_restorable else 0
+
+
+def budget_body(reasons: tuple[str, ...], *, blue_restorable: bool) -> dict[str, Any]:
+    """The budget inputs a window's digest covers: window, restore, margin and their sum."""
+
+    window = predicted_seconds(reasons, blue_restorable=blue_restorable)
+    restore = predicted_restore_seconds(blue_restorable=blue_restorable)
+    return {
+        "schema": BUDGET_SCHEMA,
+        "predicted_window_seconds": window,
+        "predicted_restore_seconds": restore,
+        "margin_seconds": ADMISSION_MARGIN_S,
+        "required_seconds": window + restore + ADMISSION_MARGIN_S,
+    }
+
+
+def with_admission(plan: WindowPlan, admission: Mapping[str, Any], *, admitted: bool) -> WindowPlan:
+    """The plan with its job-budget admission; a window it does not admit refuses."""
+
+    if not plan.reasons:
+        return replace(plan, admission=dict(admission))
+    refusals = plan.refusals if admitted else (*plan.refusals, "window_budget_refused")
+    return replace(
+        plan,
+        admission=dict(admission),
+        refusals=tuple(dict.fromkeys(refusals)),
+        code="refused" if refusals else plan.code,
+    )
 
 
 def window_plan(facts: WindowFacts, *, position: str, acknowledgement: str) -> WindowPlan:

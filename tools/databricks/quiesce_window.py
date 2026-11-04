@@ -11,11 +11,13 @@
 ``plan`` is read-only (GET and list calls, and file downloads for the tree
 digests). It prints the public summary and writes the full plan mode 0600.
 ``open`` re-validates that plan (pre-apply, its digest, the exact digest ack
-in ``MIP_ACK_QUIESCE_WINDOW``), re-checks under the lease that blue is still
-the App's last deployment, journals ``window_open`` and only then stops the
-App, identity-pinned. ``start`` journals ``window_starting``, starts, and
-records the deployment the start created (a rerun resumes from the App's
-pending deployment, never a second start). ``await`` waits for exactly that
+in ``MIP_ACK_QUIESCE_WINDOW``), admits it against the job budget
+(``quiesce_window_budget``, M0-PR9: before any stop), re-checks under the
+lease that blue is still the App's last deployment, journals ``window_open``
+and only then stops the App, identity-pinned. ``start`` journals
+``window_starting``, starts, and records the deployment the start created
+(a rerun resumes from the App's pending deployment, never a second start).
+``await`` waits for exactly that
 deployment to be terminal, requires SUCCEEDED and proves blue's restore
 source, the folder's unchanged full-tree digest, the snapshot's equal digest
 and the signed record's env-name set. Any failure after the start call, a
@@ -35,7 +37,8 @@ import json
 import os
 import shlex
 import sys
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -54,12 +57,18 @@ from tools.databricks.app_start_deployment import (
     wait_for_compute_active,
     wait_for_terminal,
 )
+from tools.databricks.quiesce_window_budget import admission, require_admitted
 from tools.databricks.quiesce_window_facts import (
     app_or_none,
     collect_facts,
     takes_unsigned_rebase,
 )
-from tools.databricks.quiesce_window_plan import ACK_ENV, body_sha256, window_plan
+from tools.databricks.quiesce_window_plan import (
+    ACK_ENV,
+    body_sha256,
+    window_plan,
+    with_admission,
+)
 
 _PREFIX = "[mip-quiesce-window]"
 
@@ -102,10 +111,16 @@ def open_window(
     source_git_sha: str,
     assert_lease_held: Callable[[], None],
     stop: Callable[[], str],
+    admit: Callable[[Mapping[str, Any]], object],
 ) -> dict[str, Any]:
-    """Journal ``window_open`` for exactly the acknowledged plan, then stop the App."""
+    """Journal ``window_open`` for exactly the acknowledged plan, then stop the App.
+
+    ``admit`` decides the job-budget admission of the canonical body (M0-PR9)
+    before anything is read or written: a refusal stops nothing.
+    """
 
     canonical = _validated_plan(plan, acknowledgement=acknowledgement)
+    admit(canonical)
     blue_id = str(canonical["blue_deployment_id"])
     if not last_deployment_is(workspace, app_name=app_name, deployment_id=blue_id):
         raise RuntimeError("blue is no longer the App's last deployment; the window is refused")
@@ -387,6 +402,9 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--verifier-role-check", choices=("exact", "drift"))
     plan.add_argument("--jobs-reader-role-check", choices=("exact", "drift"))
     plan.add_argument("--migration-plan", type=Path)
+    # The job's deadline (MIP_JOB_DEADLINE_EPOCH, M0-PR9); empty refuses a window.
+    for mode in (plan, sub.choices["open"]):
+        mode.add_argument("--deadline-epoch", default="")
     # plan: the rebase step 0a takes; applicable: the operator's request, which
     # it resolves against the first-install journal (MIP_QUIESCE_WINDOW_REBASE).
     for mode in (plan, sub.choices["applicable"]):
@@ -406,6 +424,12 @@ def _print_plan(summary: dict[str, Any], *, refused: bool) -> None:
         f"predicted {summary['predicted_seconds']} s, blue restorable "
         f"{str(summary['blue_restorable']).lower()}, ack {summary['ack']})"
     )
+    admitted = summary["admission"]
+    if admitted.get("state") not in {"not_evaluated", "not_required"}:
+        print(
+            f"{_PREFIX} admission {admitted['state']}: {admitted['remaining_seconds']} s left, "
+            f"{admitted['required_seconds']} s required (window + restore + margin)"
+        )
     if summary["reasons"]:
         print(f"{_PREFIX} window sha256 {summary['window_sha256']}: acknowledge with {ACK_ENV}")
     for code in summary["refusals"]:
@@ -484,6 +508,12 @@ def main(
         result = window_plan(
             facts, position=args.position, acknowledgement=os.environ.get(ACK_ENV, "").strip()
         )
+        decided = admission(
+            result.canonical.get("budget") if result.reasons else None,
+            args.deadline_epoch,
+            now=time.time(),
+        )
+        result = with_admission(result, decided.public(), admitted=decided.admitted)
         _write_private(args.out, result.full())
         _print_plan(result.public_summary(), refused=result.refused)
         return 2 if result.refused else 0
@@ -510,6 +540,9 @@ def main(
             source_git_sha=args.deployment_source_git_sha,
             assert_lease_held=lease,
             stop=stop,
+            admit=lambda canonical: require_admitted(
+                canonical, args.deadline_epoch, now=time.time()
+            ),
         )
         values = {
             "MIP_QUIESCE_WINDOW_SHA256": opened["window_sha256"],

@@ -19,11 +19,14 @@ import base64
 import copy
 import io
 import json
+import time
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
+
+from tools.databricks.quiesce_window_budget import require_admitted
 
 APP_NAME = "mip-app"
 RELEASE = "/Workspace/Users/deployer/.bundle/mip/client/app-src/aaaaaaaaaaaa-bbbbbbbbbbbb"
@@ -298,3 +301,10 @@ def stored_record(estate: Estate, *, scope: str = "mip") -> dict[str, Any]:
     from tools.databricks.app_rollback_record_contract import _record_key
 
     return json.loads(estate.secrets.values[(scope, _record_key(APP_NAME))])
+
+
+def window_hooks(estate: Estate, *, budget_s: float = 3 * 3600) -> dict[str, Any]:
+    """The open's M0-PR9 hooks for a run with ``budget_s`` seconds of job budget left."""
+
+    deadline = str(int(time.time() + budget_s))
+    return {"admit": lambda canonical: require_admitted(canonical, deadline, now=time.time())}

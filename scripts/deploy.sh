@@ -73,6 +73,12 @@
 #                                       # unbind exactly what adopt bound
 #                                       # (both CI-only when live; neither
 #                                       # stops the App or changes a grant)
+#   ./scripts/deploy.sh -t client --deadline <epoch seconds>
+#                                       # this run's hard deadline
+#                                       # (MIP_JOB_DEADLINE_EPOCH, one run
+#                                       # only): a quiesce window opens only
+#                                       # if the budget left covers it, and
+#                                       # its dead-man restarts blue then
 # The live install predating the client target is reached only through the
 # emergency recipe in docs/deployment.md until it is adopted (M2-PR6).
 #
@@ -149,6 +155,18 @@ while [[ $# -gt 0 ]]; do
     --skip-smoke)   SKIP_SMOKE=1;    shift ;;
     --no-confirm)   NO_CONFIRM=1;    shift ;;
     --verify-source-only) VERIFY_SOURCE_ONLY=1; shift ;;
+    --deadline|--deadline=*)
+      # The job's hard deadline (M0-PR9). CI exports MIP_JOB_DEADLINE_EPOCH at
+      # job start; the flag is a local run's. Validated only when a quiesce
+      # window needs it (tools/databricks/quiesce_window_budget.py).
+      if [[ "$1" == --deadline=* ]]; then
+        MIP_JOB_DEADLINE_EPOCH="${1#--deadline=}"; shift
+      elif [[ $# -lt 2 ]]; then
+        echo "[deploy] missing value for --deadline (expected epoch seconds)" >&2
+        exit 2
+      else
+        MIP_JOB_DEADLINE_EPOCH="$2"; shift 2
+      fi ;;
     -t|--target)
       if [[ "$TARGET_SEEN" -eq 1 ]]; then
         echo "[deploy] target may be supplied only once" >&2
@@ -189,7 +207,7 @@ while [[ $# -gt 0 ]]; do
       fi
       PHASE_SEEN=1 ;;
     -h|--help)
-      sed -n '2,95p' "$0"
+      sed -n '2,101p' "$0"
       exit 0
       ;;
     *)

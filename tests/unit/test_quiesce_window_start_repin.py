@@ -34,6 +34,7 @@ from tests.fixtures.quiesce_window_estate import (
     deployment,
     make_estate,
     stored_record,
+    window_hooks,
 )
 from tests.unit.test_app_deployment_rollback import (
     APP_RESOURCES,
@@ -199,6 +200,7 @@ def _run_window(estate: Estate, plan: Any = None) -> tuple[str, dict[str, Any]]:
         source_git_sha=GIT_SHA,
         assert_lease_held=lambda: None,
         stop=_stop(estate),
+        **window_hooks(estate),
     )
     window.start_window(
         estate.workspace, app_name=APP_NAME, assert_lease_held=lambda: None, stop=_stop(estate)
@@ -282,6 +284,7 @@ def test_a_changed_restore_folder_refuses_even_when_the_snapshot_matches() -> No
         source_git_sha=GIT_SHA,
         assert_lease_held=lambda: None,
         stop=_stop(estate),
+        **window_hooks(estate),
     )
     window.start_window(
         estate.workspace, app_name=APP_NAME, assert_lease_held=lambda: None, stop=_stop(estate)
@@ -311,6 +314,7 @@ def _open(estate: Estate) -> dict[str, Any]:
         source_git_sha=GIT_SHA,
         assert_lease_held=lambda: None,
         stop=_stop(estate),
+        **window_hooks(estate),
     )
 
 
@@ -465,6 +469,7 @@ def test_open_refuses_a_plan_whose_ack_is_not_its_exact_digest() -> None:
             source_git_sha=GIT_SHA,
             assert_lease_held=lambda: None,
             stop=_stop(estate),
+            **window_hooks(estate),
         )
     assert estate.apps.stops == 0 and journal.read(estate.workspace, app_name=APP_NAME) is None
 
@@ -483,6 +488,7 @@ def test_open_rechecks_that_blue_is_still_the_last_deployment() -> None:
             source_git_sha=GIT_SHA,
             assert_lease_held=lambda: None,
             stop=_stop(estate),
+            **window_hooks(estate),
         )
     assert estate.apps.stops == 0
 
@@ -579,6 +585,7 @@ def test_a_contract_window_closes_only_once_green_is_the_signed_record_it_serves
         source_git_sha=GIT_SHA,
         assert_lease_held=lambda: None,
         stop=_stop(estate),
+        **window_hooks(estate),
     )
     green = dict(_immutable_payload(git_sha="b" * 40), source_code_path=RELEASE)
     estate.apps.compute = "ACTIVE"
