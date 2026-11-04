@@ -66,6 +66,7 @@ MIGRATION_APPLY = {
     "decision": "apply",
     "blue_restorable": True,
     "migrations": {"pending": ["0042"], "pending_contract": []},
+    "jobs_reader_grants": "exact",
 }
 MIGRATION_NOOP = {**MIGRATION_APPLY, "decision": "noop", "migrations": {"pending": []}}
 EQUAL_BINDINGS = {"name": APP_NAME, "description": "", "resources": APP_RESOURCES}
@@ -146,6 +147,7 @@ def _plan(
     migration: dict[str, Any] = MIGRATION_APPLY,
     ack: str = "",
     bindings: dict[str, Any] = EQUAL_BINDINGS,
+    jobs_reader_role_state: str | None = "exact",
 ) -> Any:
     facts = window.collect_facts(
         estate.workspace,
@@ -156,6 +158,7 @@ def _plan(
         binding_payload=bindings,
         role_state="exact",
         verifier_role_state="exact",
+        jobs_reader_role_state=jobs_reader_role_state,
         migration_plan=migration,
         rebase_unverified_app=False,
     )
@@ -735,3 +738,43 @@ def test_a_wr3_plan_gives_exactly_one_stop_and_one_re_pin() -> None:
     assert plan.reasons == ("WR3",) and plan.code == "window"
     repins = _release(estate, MIGRATION_APPLY)
     assert (estate.apps.stops, estate.apps.starts, estate.apps.deploys, repins) == (1, 1, 1, 1)
+
+
+@pytest.mark.parametrize(
+    ("role", "grants"),
+    (("drift", "drift"), ("exact", "drift"), ("drift", "exact")),
+    ids=("first-roll-forward-absent", "grants-drifted", "role-drifted"),
+)
+def test_a_jobs_reader_re_grant_is_a_restorable_wr2_window_with_one_stop_and_one_re_pin(
+    role: str, grants: str
+) -> None:
+    # M2-PR5 x M0-PR8: only the migration job grants the jobs reader, and a
+    # noop plan skips that job, so a role or grant drift must open a window.
+    # Blue never reads as the jobs reader: the window closes with blue re-pinned.
+    estate = _estate()
+    migration = {**MIGRATION_NOOP, "jobs_reader_grants": grants}
+    plan = _plan(estate, migration=migration, jobs_reader_role_state=role)
+    assert plan.reasons == ("WR2",) and plan.code == "window" and plan.blue_restorable is True
+    assert (plan.canonical["jobs_reader_role_state"], plan.canonical["jobs_reader_grants"]) == (
+        role,
+        grants,
+    )
+    proven, opened = _run_window(estate, plan)
+    _repin(estate, proven, opened["source_tree_sha256"])
+    assert (estate.apps.stops, estate.apps.starts) == (1, 1)
+
+
+@pytest.mark.parametrize(
+    ("migration", "role"),
+    (
+        ({**MIGRATION_NOOP, "jobs_reader_grants": "off"}, "exact"),
+        ({key: value for key, value in MIGRATION_NOOP.items() if key != "jobs_reader_grants"}, "exact"),
+        (MIGRATION_NOOP, None),
+    ),
+    ids=("grants-off", "grants-unchecked", "role-unchecked"),
+)
+def test_signed_blue_refuses_a_plan_that_did_not_check_the_jobs_reader(
+    migration: dict[str, Any], role: str | None
+) -> None:
+    with pytest.raises(ValueError, match="jobs"):
+        _plan(_estate(), migration=migration, jobs_reader_role_state=role)

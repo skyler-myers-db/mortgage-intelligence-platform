@@ -74,11 +74,11 @@ collect_quiesce_window_binding_payload() {
 plan_quiesce_window() {
   local position="${1:?window plan position is required}"
   local gate_report="${2:?bundle plan gate report is required}"
-  local probe_dir role_rc=0 verifier_rc=0 plan_rc=0 rebase
+  local probe_dir role_rc=0 verifier_rc=0 jobs_reader_rc=0 plan_rc=0 rebase
   local -a plan_args=(--position "$position")
   step "plan the quiesce window (${position}, read-only)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "  would plan read-only: WR1 binding diff, WR2 App and verifier role --check, WR3 Lakebase migration plan, WR4 acked instance update; a window opens only with MIP_ACK_QUIESCE_WINDOW equal to its sha256"
+    echo "  would plan read-only: WR1 binding diff, WR2 App, verifier and jobs-reader role --check and the jobs reader's grants, WR3 Lakebase migration plan, WR4 acked instance update; a window opens only with MIP_ACK_QUIESCE_WINDOW equal to its sha256"
     return 0
   fi
   probe_dir="$(mktemp -d -t mip-quiesce-window.XXXXXX)"
@@ -141,6 +141,22 @@ plan_quiesce_window() {
         exit 2
         ;;
     esac
+    # The jobs reader (M2-PR5) is WR2 for the same reason; the migration plan
+    # below reads its grants, which no other step re-applies either.
+    run_with_lakebase_bootstrap_authority \
+      "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role --check \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+      --lakebase-database "$LAKEBASE_DATABASE" \
+      --application-id "$CLIENT_JOBS_PRINCIPAL" \
+      --role-contract jobs_reader || jobs_reader_rc=$?
+    case "$jobs_reader_rc" in
+      0) plan_args+=(--jobs-reader-role-check exact) ;;
+      3) plan_args+=(--jobs-reader-role-check drift) ;;
+      *)
+        echo "${RED}[deploy] the jobs-reader role check could not decide (exit ${jobs_reader_rc}); nothing was changed.${RST}" >&2
+        exit 2
+        ;;
+    esac
     # plan exits 2 for a refusing plan and still prints its report.
     "$PYTHON" jobs/lakebase_migrate.py --mode plan \
       --app-name "$_GRANTS_APP_NAME" \
@@ -150,7 +166,8 @@ plan_quiesce_window() {
       --lender-nmls-id "$MIP_LENDER_NMLS_ID" \
       --tenant-id "$MIP_TENANT_ID" \
       --ai-gateway-verifier-client-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
-      --require-ai-gateway-verifier > "$probe_dir/migration.json" || true
+      --require-ai-gateway-verifier \
+      --jobs-reader-client-id "$CLIENT_JOBS_PRINCIPAL" > "$probe_dir/migration.json" || true
     plan_args+=(--migration-plan "$probe_dir/migration.json")
   fi
   QUIESCE_WINDOW_PLAN_JSON="$probe_dir/plan.json"
@@ -334,27 +351,36 @@ repin_and_close_quiesce_window() {
   QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID="$proven"
 }
 
-# Outside a window the verifier role must already be exact: its converge
-# would rotate it and drop the grants only the migration job re-applies, and
-# that job never runs against a serving blue. Read again under the lease
-# (time of check, time of use); drift exits 2 before the converge.
-require_exact_verifier_role_outside_window() {
-  local rc=0
+# Outside a window the verifier and jobs-reader roles must already be exact:
+# a converge would rotate the role and drop the grants only the migration job
+# re-applies, and that job never runs against a serving blue. Read again under
+# the lease (time of check, time of use); drift exits 2 before the converge.
+require_exact_role_outside_window() {
+  local label="${1:?role label is required}" client_id="${2:?client id is required}"
+  local contract="${3:?role contract is required}" rc=0
   [[ "${QUIESCE_WINDOW_STATE:-}" == "blue_serving" || \
      "${QUIESCE_WINDOW_STATE:-}" == "blue_degraded" ]] || return 0
-  step "prove the verifier Lakebase role is already exact (no window)"
+  step "prove the ${label} Lakebase role is already exact (no window)"
   run_with_lakebase_bootstrap_authority \
     "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role --check \
     --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
     --lakebase-database "$LAKEBASE_DATABASE" \
-    --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
-    --role-contract verifier || rc=$?
+    --application-id "$client_id" \
+    --role-contract "$contract" || rc=$?
   case "$rc" in
     0) return 0 ;;
-    3) echo "${RED}[deploy] the verifier role drifted after the window plan; re-run to plan the window. Blue keeps serving.${RST}" >&2 ;;
-    *) echo "${RED}[deploy] the verifier role check could not decide (exit ${rc}); its converge is refused. Blue keeps serving.${RST}" >&2 ;;
+    3) echo "${RED}[deploy] the ${label} role drifted after the window plan; re-run to plan the window. Blue keeps serving.${RST}" >&2 ;;
+    *) echo "${RED}[deploy] the ${label} role check could not decide (exit ${rc}); its converge is refused. Blue keeps serving.${RST}" >&2 ;;
   esac
   exit 2
+}
+
+require_exact_verifier_role_outside_window() {
+  require_exact_role_outside_window verifier "$DATABRICKS_VERIFIER_CLIENT_ID" verifier
+}
+
+require_exact_jobs_reader_role_outside_window() {
+  require_exact_role_outside_window jobs-reader "$CLIENT_JOBS_PRINCIPAL" jobs_reader
 }
 
 # Blue keeps serving while a dependency it reads is mutated; a failure from

@@ -429,7 +429,9 @@ run_with_lakebase_bootstrap_authority \
 # (step 4b, --jobs-reader-client-id) grants it the lifecycle sync's SELECTs and
 # the KPI snapshot's upsert and postflights exactly that, so the role must
 # exist first. CLIENT_JOBS_PRINCIPAL is the client-target view's
-# (resolve_client_profile).
+# (resolve_client_profile). Its role and grants are WR2 like the verifier's
+# (M0-PR8): outside a window the role is proven exact before its converge.
+require_exact_jobs_reader_role_outside_window
 step "converge jobs-reader Lakebase OAuth role to exact LOGIN-only profile"
 run_with_lakebase_bootstrap_authority \
   "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \

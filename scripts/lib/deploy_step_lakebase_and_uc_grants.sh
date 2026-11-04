@@ -21,10 +21,10 @@
 # With signed blue serving and no window reason (M0-PR8), the pre-apply plan
 # proved the migration a noop: no pending version, equal schema-input digests,
 # an equal catalog fingerprint and a passing verify (app-role grants
-# included). Inside a window the job always runs, also to re-grant a rotated
-# App or verifier role (WR2; outside a window both were proven exact before
-# their converge), and the window closes right after it with blue started and
-# re-pinned.
+# included), and the jobs reader's grants exact (M2-PR5). Inside a window the
+# job always runs, also to re-grant a rotated App, verifier or jobs-reader
+# role (WR2; outside a window each was proven exact before its converge), and
+# the window closes right after it with blue started and re-pinned.
 ensure_quiesce_window_open_for WR3
 if [[ "${QUIESCE_WINDOW_STATE:-}" == "blue_serving" && "${QUIESCE_WINDOW_CODE:-}" == "none" ]]; then
   step "skip the Lakebase migration: the pre-apply plan is noop and its verify passed"

@@ -14,6 +14,13 @@ deploy can run them while the App keeps serving.
   equal catalog fingerprint; then the migration (and the App stop it needs)
   can be skipped.
 
+With the optional jobs reader (M2-PR5, ``--jobs-reader-client-id``) the plan
+also reports ``jobs_reader_grants``: ``exact`` when that role holds exactly
+the grants apply's reconciliation gives it, ``drift`` otherwise (absent
+included), ``off`` without the option. It never changes the decision: blue
+never reads as that role, so the quiesce window plan reads a drift as a role
+re-grant (WR2) that keeps blue restorable, not as a schema change.
+
 The JSON report names checks, codes, versions and ``mip_app`` objects only.
 It never carries a role name, host or exception text, so it is safe to print
 in a public run log.
@@ -37,6 +44,10 @@ from jobs.lakebase_migration_inputs import (
     parse_schema_migrations,
     schema_input_components,
     schema_input_digest,
+)
+from jobs.lakebase_migration_jobs_reader import (
+    postflight_jobs_reader_grants,
+    resolve_jobs_reader_role,
 )
 from jobs.lakebase_migration_ledger import (
     RecordedDigest,
@@ -76,6 +87,7 @@ class CheckContext:
     verifier_role: str | None
     allow_absent_managed_event_triggers: bool = False
     allow_absent_provider_schema: bool = False
+    jobs_reader_role: str | None = None
 
     @property
     def target_roles(self) -> tuple[str, ...]:
@@ -256,6 +268,7 @@ def _role_context(
     resolve_app_role_fn: Callable[..., str],
     allow_absent_managed_event_triggers: bool,
     allow_absent_provider_schema: bool,
+    jobs_reader_role: str | None = None,
 ) -> CheckContext:
     app_role, resolved_verifier = _resolve_database_roles(
         app_name=app_name,
@@ -267,7 +280,25 @@ def _role_context(
         verifier_role=resolved_verifier,
         allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
         allow_absent_provider_schema=allow_absent_provider_schema,
+        jobs_reader_role=resolve_jobs_reader_role(
+            jobs_reader_role,
+            distinct_from={"app": app_role, "AI Gateway verifier": resolved_verifier},
+        ),
     )
+
+
+def _jobs_reader_grants(cur: ReadOnlyCursor, ctx: CheckContext) -> str:
+    """``off``, ``exact`` or ``drift`` (an absent role included); never part of verify."""
+
+    if ctx.jobs_reader_role is None:
+        return "off"
+    try:
+        postflight_jobs_reader_grants(cur, ctx.jobs_reader_role)
+    except ReadOnlyStatementRefused:
+        raise
+    except Exception:  # noqa: BLE001 -- the state is the public diagnostic
+        return "drift"
+    return "exact"
 
 
 def run_verify(conn_kwargs: dict, ctx: CheckContext) -> dict[str, Any]:
@@ -331,10 +362,13 @@ def run_plan(
             else:
                 verify["checks"], verify["failed_check"] = run_checks(cur, ctx, VERIFY_CHECKS)
                 verify["passed"] = verify["failed_check"] is None
-            # Last: a failed read aborts the session, and a failing check
-            # already decides apply, so there is nothing left to compare.
+            # Last decision input: a failed read aborts the session, and a
+            # failing check already decides apply, so nothing is left to compare.
             if recorded is not None:
                 catalog_state = _catalog_state(cur, recorded) if verify["passed"] else "skipped"
+        # After every decision input: a failed read here (an aborted session
+        # reads as drift) can only add a re-grant, never change the decision.
+        jobs_reader_grants = _jobs_reader_grants(cur, ctx)
     declared = {migration.version for migration in migrations}
     pending = [m for m in migrations if applied is not None and m.version not in applied]
     # Ledger rows are database text: the report counts them, never names them.
@@ -377,6 +411,7 @@ def run_plan(
         "digest_components_changed": changed_components,
         "catalog": catalog_state,
         "verify": verify,
+        "jobs_reader_grants": jobs_reader_grants,
     }
 
 
@@ -390,6 +425,7 @@ def main_read_only(
     schema_inputs_fn: Callable[[], tuple[str, tuple[str, str, str, str]]],
     allow_absent_managed_event_triggers: bool = False,
     allow_absent_provider_schema: bool = False,
+    jobs_reader_role: str | None = None,
 ) -> int:
     """Print one public-safe JSON report and return the process exit code.
 
@@ -408,6 +444,7 @@ def main_read_only(
             resolve_app_role_fn=resolve_app_role_fn,
             allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
             allow_absent_provider_schema=allow_absent_provider_schema,
+            jobs_reader_role=jobs_reader_role,
         )
         if mode == "verify":
             stage = "read_only_session"

@@ -49,6 +49,8 @@ case "$*" in
     exit "${APP_ROLE_RC:-0}" ;;
   *"converge_lakebase_oauth_role --check"*"--role-contract verifier"*)
     exit "${VERIFIER_ROLE_RC:-0}" ;;
+  *"converge_lakebase_oauth_role --check"*"--role-contract jobs_reader"*)
+    exit "${JOBS_READER_ROLE_RC:-0}" ;;
   *"quiesce_window plan"*)
     [[ -z "${PLAN_REFUSES:-}" ]] || exit 2
     printf '{"code": "%s", "reasons": %s}\n' "${PLAN_CODE:-none}" "${PLAN_REASONS_JSON:-[]}" > "$out" ;;
@@ -85,6 +87,7 @@ QUIESCE_WINDOW_PLAN_JSON="$TMPDIR/plan.json"; QUIESCE_WINDOW_BLUE_RESTORABLE=1
 QUIESCE_WINDOW_BLUE_DEPLOYMENT_ID=deployment-blue; QUIESCE_WINDOW_TREE_SHA256=t
 APP_ROLLBACK_BINDING_ENV="$TMPDIR/binding.env"; APP_UPGRADE_STATE=blue_quiesced
 TARGET=client; OTEL_RESOURCE_BINDING_ARGS=(); DATABRICKS_VERIFIER_CLIENT_ID=verifier-client
+CLIENT_JOBS_PRINCIPAL=jobs-client
 MIP_LENDER_NAME=lender; MIP_LENDER_NMLS_ID=1; MIP_TENANT_ID=tenant
 run_job_with_retry() { echo "job: $*" >> "$CALLS"; }
 """
@@ -455,17 +458,65 @@ def test_an_undecided_verifier_role_check_refuses_the_plan(tmp_path: Path) -> No
     assert not _has(calls, "quiesce_window plan")
 
 
-@pytest.mark.parametrize(
-    ("state", "rc", "exit_code", "checks"),
-    (
-        ("blue_serving", "0", 0, 1),
-        ("blue_degraded", "3", 2, 1),
-        ("blue_serving", "3", 2, 1),
-        ("blue_serving", "1", 2, 1),
-        ("window_open", "3", 0, 0),
-        ("", "3", 0, 0),
-    ),
+@pytest.mark.parametrize(("rc", "check"), (("0", "exact"), ("3", "drift")))
+def test_the_plan_reads_the_jobs_reader_role_and_grants_as_wr2_facts(
+    tmp_path: Path, rc: str, check: str
+) -> None:
+    # M2-PR5 x M0-PR8: the migration job is the jobs reader's only grantor.
+    (tmp_path / "report.json").write_text("{}", encoding="utf-8")
+    result, calls = _run(
+        tmp_path,
+        'QUIESCE_WINDOW_STATE=blue_serving\nplan_quiesce_window pre-apply "$TMPDIR/report.json"\n',
+        APP_PRESENT="1",
+        JOBS_READER_ROLE_RC=rc,
+    )
+    assert result.returncode == 0, result.stderr
+    role = next(call for call in calls if "--role-contract jobs_reader" in call)
+    assert "--check" in role and "--application-id jobs-client" in role
+    migration = next(call for call in calls if "lakebase_migrate.py --mode plan" in call)
+    assert "--jobs-reader-client-id jobs-client" in migration, "the plan reads its grants"
+    assert f"--jobs-reader-role-check {check}" in next(c for c in calls if "quiesce_window plan" in c)
+
+
+def test_an_undecided_jobs_reader_role_check_refuses_the_plan(tmp_path: Path) -> None:
+    (tmp_path / "report.json").write_text("{}", encoding="utf-8")
+    result, calls = _run(
+        tmp_path,
+        'QUIESCE_WINDOW_STATE=blue_serving\nplan_quiesce_window pre-apply "$TMPDIR/report.json"\n',
+        APP_PRESENT="1",
+        JOBS_READER_ROLE_RC="1",
+    )
+    assert result.returncode == 2 and "jobs-reader role check could not decide" in result.stderr
+    assert not _has(calls, "quiesce_window plan")
+
+
+OUTSIDE_A_WINDOW = (
+    ("blue_serving", "0", 0, 1),
+    ("blue_degraded", "3", 2, 1),
+    ("blue_serving", "3", 2, 1),
+    ("blue_serving", "1", 2, 1),
+    ("window_open", "3", 0, 0),
+    ("", "3", 0, 0),
 )
+
+
+@pytest.mark.parametrize(("state", "rc", "exit_code", "checks"), OUTSIDE_A_WINDOW)
+def test_outside_a_window_the_jobs_reader_role_must_already_be_exact(
+    tmp_path: Path, state: str, rc: str, exit_code: int, checks: int
+) -> None:
+    result, calls = _run(
+        tmp_path,
+        f"QUIESCE_WINDOW_STATE={state}\nrequire_exact_jobs_reader_role_outside_window\n"
+        'echo "converge-jobs-reader" >> "$CALLS"\n',
+        JOBS_READER_ROLE_RC=rc,
+    )
+    assert result.returncode == exit_code, result.stderr
+    assert _has(calls, "--role-contract jobs_reader") == checks
+    assert _has(calls, "--application-id jobs-client") == checks
+    assert ("converge-jobs-reader" in calls) is (exit_code == 0), "drift refuses before the converge"
+
+
+@pytest.mark.parametrize(("state", "rc", "exit_code", "checks"), OUTSIDE_A_WINDOW)
 def test_outside_a_window_the_verifier_role_must_already_be_exact(
     tmp_path: Path, state: str, rc: str, exit_code: int, checks: int
 ) -> None:
@@ -600,6 +651,8 @@ def test_the_step_files_open_each_reason_before_its_mutation_and_close_after_the
     role = at('step "converge App Lakebase OAuth role to exact LOGIN-only profile"')
     verifier_check = at("\nrequire_exact_verifier_role_outside_window\n")
     verifier = at('step "converge verifier Lakebase OAuth role to exact LOGIN-only profile"')
+    jobs_reader_check = at("\nrequire_exact_jobs_reader_role_outside_window\n")
+    jobs_reader = at('step "converge jobs-reader Lakebase OAuth role to exact LOGIN-only profile"')
     wr3 = at("ensure_quiesce_window_open_for WR3")
     migrate = at("databricks bundle run mip_lakebase_migrate")
     proven = at("LAKEBASE_RUNTIME_ACCESS_PROVEN=1", migrate)
@@ -611,6 +664,7 @@ def test_the_step_files_open_each_reason_before_its_mutation_and_close_after_the
     contract_close = at("\n  close_contract_window_after_capture\n", capture)
 
     assert wr4 < apply < wr1 < update < wr2 < role < verifier_check < verifier < wr3 < migrate
+    assert verifier < jobs_reader_check < jobs_reader < wr3, "M2-PR5: proven before its converge"
     assert migrate < proven < close < degrade
     assert activation < green < capture < contract_close
     assert "--stop-app-for-mutation" not in text[steps:], "the converger never stops the App"

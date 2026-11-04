@@ -6,9 +6,11 @@ A release keeps blue serving. It stops the App only for a window reason:
   bundle's (any diff, until spike S2 proves an unchanged database binding
   leaves a running App and its role alone), or a binding id is unresolved;
 * **WR2** Lakebase role rotation: ``converge_lakebase_oauth_role --check``
-  drifts for the App role or the verifier role. A rotation drops the role's
-  grants, which only the migration job re-applies, and that job runs only
-  inside a window;
+  drifts for the App, verifier or jobs-reader role, or the migration plan
+  reads the jobs reader's grants as drift (M2-PR5; absent included). A
+  rotation drops the role's grants, which only the migration job re-applies,
+  and that job runs only inside a window. Blue never reads as the jobs
+  reader, so its re-grant keeps blue restorable;
 * **WR3** pending migration: the Lakebase migration plan decides ``apply``;
 * **WR4** acked instance update: the bundle plan updates the Lakebase
   instance under an acknowledged digest (``bundle_plan_instance_ack``).
@@ -114,6 +116,8 @@ class WindowFacts:
     binding_lines: tuple[str, ...] = ()
     role_state: str = "exact"  # the App role: "exact" or "drift"
     verifier_role_state: str = "exact"  # the AI Gateway verifier role
+    jobs_reader_role_state: str = "exact"  # the jobs identity's Lakebase role (M2-PR5)
+    jobs_reader_grants: str = "exact"  # its grants, from the migration plan
     migration_decision: str = "noop"  # "noop", "apply" or "refuse"
     migration_blue_restorable: bool = True
     migration_pending: tuple[str, ...] = ()
@@ -130,7 +134,15 @@ class WindowFacts:
     def reasons(self) -> tuple[str, ...]:
         present = {
             "WR1": self.binding_state != "equal",
-            "WR2": self.role_state != "exact" or self.verifier_role_state != "exact",
+            "WR2": any(
+                state != "exact"
+                for state in (
+                    self.role_state,
+                    self.verifier_role_state,
+                    self.jobs_reader_role_state,
+                    self.jobs_reader_grants,
+                )
+            ),
             "WR3": self.migration_decision == "apply",
             "WR4": bool(self.instance_update_sha256),
         }
@@ -220,6 +232,8 @@ def canonical_body(facts: WindowFacts, *, blue_restorable: bool) -> dict[str, An
         "binding_lines": sorted(facts.binding_lines),
         "role_state": facts.role_state,
         "verifier_role_state": facts.verifier_role_state,
+        "jobs_reader_role_state": facts.jobs_reader_role_state,
+        "jobs_reader_grants": facts.jobs_reader_grants,
         "migration_pending": sorted(facts.migration_pending),
         "migration_pending_contract": sorted(facts.migration_pending_contract),
         "instance_update_sha256": facts.instance_update_sha256,

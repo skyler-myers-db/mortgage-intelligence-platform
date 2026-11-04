@@ -95,6 +95,36 @@ def test_a_verifier_role_rotation_is_wr2_and_forces_the_migration_job_into_a_win
     assert window_plan(facts, position="pre-apply", acknowledgement="").refusals == ("window_unacked",)
 
 
+@pytest.mark.parametrize(
+    "jobs_reader",
+    (
+        {"jobs_reader_role_state": "drift"},
+        {"jobs_reader_grants": "drift"},
+        {"jobs_reader_role_state": "drift", "jobs_reader_grants": "drift"},
+    ),
+    ids=("role", "grants", "absent"),
+)
+def test_a_jobs_reader_role_or_grant_drift_is_wr2_and_keeps_blue_restorable(
+    jobs_reader: dict[str, str],
+) -> None:
+    # M2-PR5: only the migration job grants the jobs reader, and that job runs
+    # only in a window; blue never reads as that role, so the window closes
+    # with a start and re-pin (tier a), never at green activation.
+    facts = _facts(**jobs_reader)
+    assert facts.reasons() == ("WR2",)
+    plan = _acked(facts)
+    assert plan.code == "window" and plan.blue_restorable is True
+    assert plan.closes_at == "start_repin"
+    for name, state in jobs_reader.items():
+        assert plan.canonical[name] == state
+    assert window_plan(facts, position="pre-apply", acknowledgement="").refusals == ("window_unacked",)
+
+
+@pytest.mark.parametrize("name", ("jobs_reader_role_state", "jobs_reader_grants"))
+def test_an_unreviewed_jobs_reader_state_is_wr2_never_a_silent_skip(name: str) -> None:
+    assert _facts(**{name: "off"}).reasons() == ("WR2",)
+
+
 def test_no_reason_needs_no_window_and_no_ack() -> None:
     plan = window_plan(_facts(), position="pre-apply", acknowledgement="")
     assert (plan.code, plan.ack, plan.reasons, plan.predicted_seconds) == ("none", "not_required", (), 0)
@@ -118,6 +148,8 @@ def test_the_digest_ignores_the_position_so_the_recheck_reproduces_it() -> None:
         {"env_names_sha256": "e" * 64},
         {"role_state": "drift"},
         {"verifier_role_state": "drift"},
+        {"jobs_reader_role_state": "drift"},
+        {"jobs_reader_grants": "drift"},
         {"instance_update_sha256": "f" * 64},
     ),
 )

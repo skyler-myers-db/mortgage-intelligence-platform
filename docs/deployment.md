@@ -2370,9 +2370,14 @@ only for a **window reason** the read-only plan predicted
   bundle's (any diff, until spike S2 proves an unchanged database binding
   leaves a running App and its role alone), or a binding id is unresolved;
 - **WR2** Lakebase role rotation: `converge_lakebase_oauth_role --check`
-  drifts for the App role or the AI Gateway verifier role (a rotation drops
+  drifts for the App role, the AI Gateway verifier role or the jobs
+  identity's `jobs_reader` role (M2-PR5), or the migration plan reads the
+  jobs reader's grants as drift, an absent role included (a rotation drops
   the role's grants, which only the migration job re-applies, and that job
-  runs only inside a window);
+  runs only inside a window). Blue never reads as the jobs reader, so its
+  re-grant keeps blue restorable. The first roll-forward that brings the
+  jobs identity to an installed signed blue therefore plans a WR2 window to
+  create and grant that role;
 - **WR3** pending migration: the Lakebase migration plan decides `apply`;
 - **WR4** acknowledged Lakebase instance update (the plan gate's digest).
 
@@ -2382,9 +2387,9 @@ apply (`pre-apply`, the time-of-check recheck). Its private report is written
 mode 0600 and its public line carries codes, booleans, counts and digests
 only. A window opens only when `MIP_ACK_QUIESCE_WINDOW` equals the plan's
 sha256 at both positions; that sha256 covers the reasons, blue's deployment,
-its restore source and that folder's full-tree digest, the env-name set and
-the migration's compatibility, so the opened reasons are exactly the predicted
-ones. Export the digest for that run only. It is a shell-only, one-run value,
+its restore source and that folder's full-tree digest, the env-name set, the
+role and jobs-reader grant states and the migration's compatibility, so the
+opened reasons are exactly the predicted ones. Export the digest for that run only. It is a shell-only, one-run value,
 never a `.env.local` line. (The owner hardware-key operation attestation the
 plan names is deferred; this exact digest ack stands in for it.) No reason
 needs no ack, and a reason that appears only at the recheck refuses.
@@ -2423,10 +2428,11 @@ final-proof rollback, stops the App and refuses the tier-b blue restore.
 
 With no reason, nothing stops: the binding update is skipped (the bindings
 are re-read under the lease and must still equal the bundle's), the App role
-converger refuses any rotation the plan did not predict, the verifier role is
-re-checked under the lease right before its converge (drift exits 2, blue
-serving), and the migration job is skipped because the pre-apply plan proved
-it a noop with a passing verify.
+converger refuses any rotation the plan did not predict, the verifier and
+jobs-reader roles are re-checked under the lease right before their converges
+(drift exits 2, blue serving), and the migration job is skipped because the
+pre-apply plan proved it a noop with a passing verify and the jobs reader's
+grants exact.
 
 **EXIT-trap states** (`stop_app_after_failed_deploy`): `blue_serving` never
 stops the App and converges runtime access with it up; `blue_degraded` (blue
