@@ -52,6 +52,7 @@ from tools.clients.lakebase_handover_sql import (
     AUTHORITY_SQL,
     DEFAULT_BUDGET,
     INVENTORY_SQL,
+    SCHEMA_NAME,
     BudgetExhausted,
     LakebaseHandoverRefused,
     LockBudget,
@@ -102,11 +103,12 @@ def _inventory(cursor: Any) -> list[Any]:
 def compute(cursor: Any, *, target: str) -> LakebasePlan:
     """Read-only: the session's role is the legacy owner; plan each of its objects."""
 
-    cursor.execute(AUTHORITY_SQL, {"target": target})
+    cursor.execute(AUTHORITY_SQL, {"target": target, "schema": SCHEMA_NAME})
     row = cursor.fetchone()
     if row is None:
         raise LakebaseHandoverRefused("the authority probe returned no row")
     legacy, target_exists, target_settable = str(row[0]), bool(row[1]), bool(row[2])
+    schema_create, database_create, createdb = bool(row[3]), bool(row[4]), bool(row[5])
     refusals: list[str] = []
     if target == legacy:
         refusals.append("target_is_legacy")
@@ -135,6 +137,13 @@ def compute(cursor: Any, *, target: str) -> LakebasePlan:
                 "revert_statement": owner_statement(replace(item, owner=target), legacy),
             }
         )
+    kinds = {entry["kind"] for entry in changes}
+    if kinds - {"SCHEMA", "DATABASE"} and target_exists and not schema_create:
+        refusals.append("target_needs_schema_create")
+    if "SCHEMA" in kinds and not database_create:
+        refusals.append("caller_needs_database_create")
+    if "DATABASE" in kinds and not createdb:
+        refusals.append("caller_needs_createdb")
     document = {
         "schema": SCHEMA,
         "legacy_role": legacy,

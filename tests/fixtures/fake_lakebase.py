@@ -79,6 +79,8 @@ class FakeServer:
     caller: str = LEGACY
     roles: set[str] = field(default_factory=lambda: {LEGACY, DEPLOYER, APP_ROLE})
     settable: bool = True
+    # The other PostgreSQL ALTER OWNER preconditions (AUTHORITY_SQL), all held by default.
+    authority: dict[str, bool] = field(default_factory=lambda: {"schema_create": True, "database_create": True, "createdb": True})
     objects: list[PgObject] = field(default_factory=objects)
     owners: dict[str, str] = field(default_factory=dict)
     held_until: dict[str, float] = field(default_factory=dict)  # object key -> release time
@@ -168,7 +170,10 @@ class FakeCursor:
         if statement == AUTHORITY_SQL:
             target = params["target"]
             exists = target in self.server.roles
-            self._rows = [(self.server.caller, exists, exists and self.server.settable)]
+            grants = self.server.authority
+            self._rows = [
+                (self.server.caller, exists, exists and self.server.settable, exists and grants["schema_create"], grants["database_create"], grants["createdb"])
+            ]
             return
         if statement == OWNER_SQL:
             self._rows = [(self.server.owners[REHEARSAL_KEY],)]

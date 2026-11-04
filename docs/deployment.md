@@ -2678,7 +2678,13 @@ python -m tools.clients.lakebase_handover --apply --ack-plan <sha256> --journal 
 
 The plan reads in a server-enforced read-only session; it refuses a missing
 target role (`target_role_missing`), one the session cannot `SET ROLE` to
-(`target_role_not_settable`) and an unreviewed object kind. The apply moves
+(`target_role_not_settable`), an unreviewed object kind, and each other
+precondition PostgreSQL sets for `ALTER ... OWNER TO`: the target's CREATE on
+`mip_app` for the schema's objects (`target_needs_schema_create`), the
+session's CREATE on the database for the schema
+(`caller_needs_database_create`) and CREATEDB for the database
+(`caller_needs_createdb`). Which mechanism grants them is spike S3's; the
+rehearsal reads the same preconditions first. The apply moves
 the App database and each `mip_app` object the legacy role owns, one
 `ALTER ... OWNER TO` per transaction under `SET LOCAL lock_timeout = '3s'`
 and `SET LOCAL statement_timeout = '30s'`. `ALTER OWNER` takes an ACCESS

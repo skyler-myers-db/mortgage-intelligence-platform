@@ -83,12 +83,21 @@ WHERE namespace.nspname = '{SCHEMA_NAME}'
   AND type_object.typtype IN ('e', 'r', 'd')
   AND type_object.typelem = 0
 """
-# Read-only preconditions: who the session is, and whether it may hand to the target.
+# Read-only preconditions PostgreSQL sets for ALTER ... OWNER TO: the session
+# can SET ROLE to the target; for a schema's objects the target has CREATE on
+# the schema; for the schema the session has CREATE on the database; for the
+# database the session has CREATEDB. Which mechanism grants them is spike S3's;
+# the plan refuses before any change when one is missing.
 AUTHORITY_SQL = """
 SELECT current_user::text,
        EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %(target)s),
        CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %(target)s)
-            THEN pg_has_role(current_user, %(target)s, 'SET') ELSE FALSE END
+            THEN pg_has_role(current_user, %(target)s, 'SET') ELSE FALSE END,
+       CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %(target)s)
+             AND EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = %(schema)s)
+            THEN has_schema_privilege(%(target)s, %(schema)s, 'CREATE') ELSE FALSE END,
+       has_database_privilege(current_user, current_database(), 'CREATE'),
+       COALESCE((SELECT rolcreatedb OR rolsuper FROM pg_roles WHERE rolname = current_user), FALSE)
 """
 
 

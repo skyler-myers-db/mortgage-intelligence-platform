@@ -17,7 +17,10 @@ then measures exactly what the real apply relies on:
 
 It passes when the change needed a retry (the timeout path ran), succeeded
 once the long transaction ended, the inverse restored the prior owner, and no
-probe query waited longer than ``lock_timeout`` plus a scheduling margin. The
+probe query waited longer than ``lock_timeout`` plus a scheduling margin. It
+first reads the same PostgreSQL preconditions the plan does (``AUTHORITY_SQL``
+on the rehearsal schema): a missing one fails the rehearsal and names the gap
+the chosen mechanism must close, before any change. The
 L-B mechanism (``delete_database_instance_role`` with ``reassign_owned_to``)
 deletes a role, which no tool in this PR does; it is not rehearsed here.
 """
@@ -35,6 +38,7 @@ from typing import Any, Protocol
 
 from tools.clients import handover_journal as journals
 from tools.clients.lakebase_handover_sql import (
+    AUTHORITY_SQL,
     DEFAULT_BUDGET,
     LOCK_TIMEOUT,
     LockBudget,
@@ -76,6 +80,7 @@ class RehearsalReport:
     owner_after_revert: str
     max_probe_wait_s: float
     passed: bool
+    missing_preconditions: tuple[str, ...] = ()
 
 
 class ThreadedConcurrent:
@@ -151,6 +156,16 @@ def rehearse(
         with connection.transaction(), connection.cursor() as cursor:
             for statement in SETUP:
                 cursor.execute(statement)
+            cursor.execute(AUTHORITY_SQL, {"target": target, "schema": REHEARSAL_SCHEMA})
+            row = cursor.fetchone() or ("", False, False, False)
+        missing = tuple(
+            code
+            for code, held in (("target_role_not_settable", row[2]), ("target_needs_schema_create", row[3]))
+            if not held
+        )
+        if missing:
+            owner = _owner(connection)
+            return RehearsalReport(LOCK_TIMEOUT_S, hold_s, 0, 0, owner, owner, 0.0, False, missing)
         sessions = concurrent(connect, hold_s)
         sessions.start()
         deadline = clock() + budget.total_s

@@ -80,6 +80,9 @@ def test_the_plan_reads_only_and_leaves_other_owners_alone() -> None:
         ({"roles": {LEGACY, APP_ROLE}}, "target_role_missing"),
         ({"settable": False}, "target_role_not_settable"),
         ({"caller": DEPLOYER}, "target_is_legacy"),
+        ({"authority": {"schema_create": False, "database_create": True, "createdb": True}}, "target_needs_schema_create"),
+        ({"authority": {"schema_create": True, "database_create": False, "createdb": True}}, "caller_needs_database_create"),
+        ({"authority": {"schema_create": True, "database_create": True, "createdb": False}}, "caller_needs_createdb"),
     ],
 )
 def test_preconditions_refuse_before_any_change(tmp_path: Path, change: dict[str, Any], code: str) -> None:
@@ -290,6 +293,21 @@ def test_the_s3_rehearsal_passes_on_the_fake_and_fails_without_the_bound(monkeyp
         sleep=unbounded.sleep,
     )
     assert not failed.passed and failed.max_probe_wait_s == 8.0
+
+
+def test_the_rehearsal_names_a_missing_precondition_before_any_change() -> None:
+    server = FakeServer(authority={"schema_create": False, "database_create": True, "createdb": True})
+    report = rehearsal.rehearse(
+        server.connect,
+        legacy=LEGACY,
+        target=DEPLOYER,
+        hold_s=8.0,
+        concurrent=lambda _connect, hold: VirtualConcurrent(server, hold),
+        clock=server.clock,
+        sleep=server.sleep,
+    )
+    assert not report.passed and report.missing_preconditions == ("target_needs_schema_create",)
+    assert not any(text.startswith("ALTER ") for text in server.statements)
 
 
 def test_the_rehearsal_never_runs_on_the_installs_own_instance(capsys: pytest.CaptureFixture[str]) -> None:
