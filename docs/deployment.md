@@ -2380,9 +2380,12 @@ run time; they are never committed. The profile then requires
 `MIP_DASHBOARD_PARENT_PATH` inside the legacy root (see the dashboards below).
 
 **The run.** Both phases run the same read-only steps as `--phase plan`, with
-the live checks in adopt mode (`tools.clients.live_checks --phase adopt`
-expects the unadopted App and its unmarked catalog; a catalog marked for
-another install still refuses). In place of the pre-lease gate,
+the live checks in their adopt mode (`tools.clients.live_checks --phase adopt`
+or `--phase unadopt` accepts an App the deployer's state does not bind, and its
+unmarked catalog: adopt binds that App, unadopt unbinds it, and the half-bound
+state an unproven undo can leave, legacy keys bound without the App, must
+still reach unadopt; a catalog marked for another install still refuses). In
+place of the pre-lease gate,
 `tools/databricks/install_state_adopt.py plan` computes the canonical plan
 (tools/databricks/adopt_legacy_map.py) from the pre-bind bundle plan, both
 states and one GET by id per legacy object, and refuses, before the lease:
@@ -2424,11 +2427,18 @@ edit and then:
   dashboard recreate or move (`dashboard_recreate`, `dashboard_move`); and
   every rename's new name looked up with the create's own read-only lookup
   before anything is renamed (`rename_collision`). On any failure after the
-  first bind it unbinds each key the state shows this run bound and reads the
-  state again to prove it (exit 2); if that cannot be proven it exits 3 and
-  the private report names what the state may still bind;
+  first bind it unbinds each key the state shows this run bound, in reverse
+  (the App last), and reads the state again to prove it (exit 2); if that
+  cannot be proven it exits 3 and the private report names what the state may
+  still bind;
 - **unadopt** unbinds each legacy key the deployer's state binds to its legacy
-  id, and nothing else: a key the deployer created itself stays bound.
+  id, and nothing else: a key the deployer created itself stays bound. It
+  unbinds in the reverse of adopt's order, so the App's binding is the last one
+  removed, and stops at the first failure (exit 3).
+
+After an exit 3 from either phase, run `--phase unadopt` (again): its plan
+unbinds whatever legacy keys the state still binds, and its live checks accept
+that half-bound state.
 
 `bundle_env deployment` admits a non-App bind or unbind only with the
 acknowledged plan file and its digest (`--adopt-plan`, `--adopt-plan-sha256`,

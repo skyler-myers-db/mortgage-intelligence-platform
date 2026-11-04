@@ -121,9 +121,10 @@ def test_unadopt_is_the_exact_inverse_of_adopt(tmp_path: Path) -> None:
 
     assert not plan.refused and len(plan.edits) == 16
     assert estate.bound() == before == {es.NEW_KEYS[0]: "777"}
-    bound = {call[1] for call in adopter.edits() if call[0] == "bind"}
-    unbound = {call[1] for call in unadopter.edits() if call[0] == "unbind"}
-    assert bound == unbound and len(bound) == 16
+    bound = [call[1] for call in adopter.edits() if call[0] == "bind"]
+    unbound = [call[1] for call in unadopter.edits() if call[0] == "unbind"]
+    assert unbound == bound[::-1] and len(set(bound)) == 16, "adopt's binds, in reverse"
+    assert bound[0] == unbound[-1] == "mip_app", "the App's binding is the last one removed"
     assert [call[0] for call in unadopter.edits()] == ["unbind"] * 16
     assert _plan(estate, es.FakeBundleCli(estate), "unadopt").edits == (), "a second unadopt edits nothing"
 

@@ -15,10 +15,11 @@ reads as absent. Any other read error refuses that check, never "absent".
    When a first-install journal file exists for that App, an interrupted
    first install may own it: the check defers to the pre-lease bundle plan
    gate, which verifies the signed journal and refuses ``not_adopted``
-   otherwise, still before the lease. The adopt phase (``adopting``,
-   ``./scripts/deploy.sh -t client --phase adopt``) is the one run that expects
-   an unadopted App: it is the condition that phase binds away, so there it is
-   noted, not refused.
+   otherwise, still before the lease. The adopt phases (``adopting``,
+   ``./scripts/deploy.sh -t client --phase adopt|unadopt``) are the runs that
+   expect an unadopted App: adopt binds it, unadopt unbinds it, and an
+   unproven undo can leave other keys bound without it, the state unadopt
+   recovers. There it is noted, not refused.
 2. **install marker.** The catalog ``MIP_DEFAULT_CATALOG`` carries the
    property ``mip.install_key``, which the governed deploy stamps in the very
    call that creates the catalog (tools/databricks/ensure_pipeline_namespace.py),
@@ -29,8 +30,9 @@ reads as absent. Any other read error refuses that check, never "absent".
    holds, from before the marker); otherwise it is another install's catalog
    or one this deployer never adopted, which a ``CREATE CATALOG IF NOT
    EXISTS`` would silently reuse. No catalog is a first install. The adopt
-   phase accepts an unmarked catalog too (it binds the App it predates); a
-   marker for another install refuses there as everywhere.
+   phases accept an unmarked catalog too (the App they bind and unbind
+   predates the marker); a marker for another install refuses there as
+   everywhere.
 3. **Cotality share.** The source catalog (``MIP_COTALITY_SOURCE_*``, the
    canonical names when unset; backend/config/source_names.py) is a Delta
    Sharing catalog, mounted from ``MIP_COTALITY_SHARE_PROVIDER`` and

@@ -18,11 +18,12 @@ assignment); every refusal among them is reported. Once all four hold, the
 read-only install checks run (tools/clients/install_checks.py, M1-PR3):
 adoption, the ``mip.install_key`` install marker, the Cotality share, the
 storage root and the account principal's roles. They never run against a
-workspace or as a principal that is not the profile's. ``--phase adopt``
-(scripts/deploy.sh's adopt phase, M2-PR6) expects the App unadopted: that one
-condition, and the unmarked catalog that goes with it, are noted there, not
-refused. Exit 0 when every
-check holds, 2 otherwise; a read error refuses, never reads as absent. A
+workspace or as a principal that is not the profile's. ``--phase adopt`` and
+``--phase unadopt`` (scripts/deploy.sh's adopt phases, M2-PR6) expect the App
+possibly unadopted: adopt binds it, unadopt unbinds it, and an unproven undo
+can leave other keys bound without it, which unadopt must still reach. That
+one condition, and the unmarked catalog that goes with it, are noted there,
+not refused. Exit 0 when every check holds, 2 otherwise; a read error refuses, never reads as absent. A
 refusal names the check, never a value: these are identifying fields, and the
 line may reach a public CI log. Each id read from the workspace is registered
 as a runner mask the moment it is read (``redact.emit_mask``).
@@ -137,9 +138,9 @@ def main(
     client: Callable[[], Any] = _default_client,
     account: Callable[[], Any] | None = None,
 ) -> int:
-    adopting = list(argv or ()) == ["--phase", "adopt"]
+    adopting = list(argv or ()) in (["--phase", "adopt"], ["--phase", "unadopt"])
     if argv and not adopting:
-        print("usage: python -m tools.clients.live_checks [--phase adopt]", file=sys.stderr)
+        print("usage: python -m tools.clients.live_checks [--phase adopt|unadopt]", file=sys.stderr)
         return 2
     try:
         raw = from_local(os.environ if environ is None else environ, env_file or REPO / ".env.local")

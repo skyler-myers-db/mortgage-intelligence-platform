@@ -33,7 +33,8 @@ Signing the live deployment as an adopted blue (``adopt-live``: the
 full-tree digest, the immutable ``app-src/adopted-*`` copy, supersede and
 freeze) is M2-PR7's; this tool only binds. Exit codes: 0 done (or planned),
 2 refused with nothing left changed, 3 refused with the inverse unproven (the
-report names what the state may still bind: run ``--phase unadopt``).
+report names what the state may still bind: run ``--phase unadopt``, whose
+live checks, like adopt's, accept that half-bound state).
 """
 
 from __future__ import annotations
@@ -408,9 +409,10 @@ def main(
                 print(f"{_PREFIX} post-bind plan gate: {json.dumps(partial.gate.public_summary(), sort_keys=True)}")
         print(f"{_PREFIX} REFUSED {refusal.code}: {refusal}", file=sys.stderr)
         if not refusal.inverse_proven:
+            again = " again" if args.phase == "unadopt" else ""
             print(
                 f"{_PREFIX} the inverse is unproven: the state may still bind keys this run bound; "
-                "read the private report, then run --phase unadopt again",
+                f"read the private report, then run --phase unadopt{again}",
                 file=sys.stderr,
             )
             return 3

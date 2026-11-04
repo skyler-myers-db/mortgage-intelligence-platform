@@ -48,8 +48,9 @@ run_adopt_phase_plan() {
 # binds with the bundle plan gate's adopt mode and undoes its own binds on any
 # refusal. The run then ends; the EXIT trap releases the lease. Exit 3 from
 # the tool means the undo is unproven: the report says which keys the state may
-# still bind, and the next release's own plan gate refuses that half-bound
-# state (its unbound legacy keys plan creates of existing names).
+# still bind, --phase unadopt recovers that half-bound state (its live checks
+# accept an unbound App), and the next release's own plan gate refuses it (its
+# unbound legacy keys plan creates of existing names).
 run_adopt_phase_apply() {
   local phase="${1:?adopt phase is required}"
   local report_json rc=0

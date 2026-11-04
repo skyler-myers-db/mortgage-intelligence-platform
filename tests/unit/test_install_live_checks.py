@@ -479,13 +479,13 @@ def test_the_deploy_runs_the_live_checks_before_the_lease_and_every_app_stop() -
 
 
 def _run_adopting(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], **workspace_facts: Any
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], phase: str = "adopt", **workspace_facts: Any
 ) -> tuple[int, str]:
     workspace = LiveWorkspace(DEMO_PROFILE, identity_ids=IDENTITY_IDS, **workspace_facts)
     env_file = tmp_path / "client.env"
     env_file.write_text("".join(f"{name}='{value}'\n" for name, value in DEMO_PROFILE.items()), encoding="utf-8")
     code = live_checks.main(
-        ["--phase", "adopt"],
+        ["--phase", phase],
         environ={},
         env_file=env_file,
         client=lambda: workspace,
@@ -496,23 +496,41 @@ def _run_adopting(
     return code, out.out + out.err
 
 
+@pytest.mark.parametrize("phase", ["adopt", "unadopt"])
 @pytest.mark.parametrize("marker", [{}, None])
-def test_the_adopt_phase_expects_the_unadopted_app_and_its_unmarked_catalog(
-    marker: dict[str, str] | None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_the_adopt_phases_expect_the_unadopted_app_and_its_unmarked_catalog(
+    marker: dict[str, str] | None, phase: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     code, text = _run_adopting(
-        tmp_path, capsys, app=SimpleNamespace(name=APP), state=None, catalog_properties=marker
+        tmp_path, capsys, phase, app=SimpleNamespace(name=APP), state=None, catalog_properties=marker
     )
 
     assert code == 0, text
 
 
-def test_the_adopt_phase_still_refuses_another_installs_catalog(
+def test_unadopt_reaches_a_half_bound_state_a_release_refuses(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An unproven undo can leave legacy keys bound without the App; unadopt must still run."""
+
+    half_bound = {
+        "app": SimpleNamespace(name=APP),
+        "state": bundle_state(**{"pipelines.mip_feature_pipeline": "pipe0001"}),
+    }
+
+    assert _run_adopting(tmp_path, capsys, "unadopt", catalog_properties={}, **half_bound)[0] == 0
+    code, text, _workspace, _account = _run(tmp_path, capsys, catalog_properties={}, **half_bound)
+    assert code == 2 and [line for line in _refusals(text) if line.startswith("adoption")], text
+
+
+@pytest.mark.parametrize("phase", ["adopt", "unadopt"])
+def test_the_adopt_phases_still_refuse_another_installs_catalog(
+    phase: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     code, text = _run_adopting(
         tmp_path,
         capsys,
+        phase,
         app=SimpleNamespace(name=APP),
         state=None,
         catalog_properties={"mip.install_key": "another-client"},
@@ -523,7 +541,7 @@ def test_the_adopt_phase_still_refuses_another_installs_catalog(
     assert not [line for line in _refusals(text) if line.startswith("adoption")]
 
 
-def test_only_the_adopt_phase_flag_is_accepted(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    for argv in (["--phase", "plan"], ["--phase"], ["adopt"]):
+def test_only_the_adopt_phase_flags_are_accepted(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    for argv in (["--phase", "plan"], ["--phase"], ["adopt"], ["--phase", "adopt", "--phase", "unadopt"]):
         assert live_checks.main(argv, environ={}, env_file=tmp_path / "none.env") == 2
-    assert "usage: python -m tools.clients.live_checks [--phase adopt]" in capsys.readouterr().err
+    assert "usage: python -m tools.clients.live_checks [--phase adopt|unadopt]" in capsys.readouterr().err

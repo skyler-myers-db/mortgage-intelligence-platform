@@ -171,6 +171,6 @@ def test_a_refused_profile_exits_2_before_building_a_client(tmp_path: Path, caps
     assert "client live checks refused:" in capsys.readouterr().err
 
 
-def test_live_checks_take_no_arguments_but_the_adopt_phase(capsys: pytest.CaptureFixture[str]) -> None:
+def test_live_checks_take_no_arguments_but_an_adopt_phase(capsys: pytest.CaptureFixture[str]) -> None:
     assert live_checks.main(["--skip"]) == 2
-    assert "usage: python -m tools.clients.live_checks [--phase adopt]" in capsys.readouterr().err
+    assert "usage: python -m tools.clients.live_checks [--phase adopt|unadopt]" in capsys.readouterr().err

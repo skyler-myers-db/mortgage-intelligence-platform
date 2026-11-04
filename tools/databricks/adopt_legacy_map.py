@@ -32,7 +32,8 @@ The canonical document of what would change is digested with
 mutating run must be given (the owner attestation is deferred); the apply
 recomputes the document immediately before the first state edit and refuses
 on any difference. ``unadopt`` is the exact inverse: it unbinds each legacy
-key this deployer's state binds to the legacy id, and nothing else.
+key this deployer's state binds to the legacy id, and nothing else, in the
+reverse of adopt's bind order, so the App's binding is the last one removed.
 
 Refusal reasons name keys, fields and error classes, never a value. Every id
 read from either state is registered as a runner mask the moment it is read.
@@ -469,6 +470,10 @@ def compute(
     # unadopt, which unbinds declared keys only, would leave it bound.
     for resource in sorted(set(ours) - set(bundle)):
         planner.refuse("deployer_state_orphan", resource)
+    if phase == "unadopt":
+        # adopt binds in key order (apps first) and its undo unbinds in
+        # reverse; unadopt does the same, so a partial one leaves the App bound.
+        edits.reverse()
     bound_after = (
         sorted(set(ours) | {edit.resource for edit in edits})
         if phase == "adopt"

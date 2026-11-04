@@ -282,8 +282,7 @@ def test_the_adopt_phase_dry_run_plans_in_place_of_the_gate_and_stops_before_the
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-4000:]
     assert log.read_text(encoding="utf-8").splitlines() == ["--version"], "no Databricks call"
     commands = planned_commands(result.stdout)
-    live = ".venv/bin/python -m tools.clients.live_checks" + (" --phase adopt" if phase == "adopt" else "")
-    assert commands[0] == live
+    assert commands[0] == f".venv/bin/python -m tools.clients.live_checks --phase {phase}"
     assert commands[-1] == (
         f".venv/bin/python -m tools.databricks.install_state_adopt plan --phase {phase}"
         f" --report-out /tmp/mip-dry-run-{phase}-plan-report.json --ack-plan {ACK}"
