@@ -400,10 +400,13 @@ def base_verdict(
     is never relaxed.
 
     With no runtime (the core tier) the Supervisor clauses do not apply: no
-    step of a core deploy creates, replaces or retires a Supervisor.
+    step of a core deploy creates, replaces or retires a Supervisor. Nor does
+    it list the Supervisor agents: a core workspace need not offer that API
+    (tools/clients/capabilities.py), and with no listing the serving clause
+    pins no canonical Supervisor endpoint, so the App may hold access to none.
     """
 
-    agents = list_agents()
+    agents = list_agents() if runtime_application_id is not None else []
     refusals: list[PrestopRefusal] = []
     if runtime_application_id is None:
         notes = [

@@ -121,6 +121,41 @@ def test_the_core_tier_skips_the_supervisor_clauses() -> None:
     assert any("the core tier provisions no Supervisor" in note for note in verdict.notes)
 
 
+def _unavailable_supervisor_api() -> list[dict[str, Any]]:
+    raise RuntimeError("the Supervisor agents API is not enabled in this workspace")
+
+
+def test_the_core_tier_never_lists_the_supervisor_agents() -> None:
+    # The core capability preflight needs no Supervisor API, so the core probes
+    # must not depend on it: a failing listing is never read in this tier.
+    estate = first_install_estate()
+    verdict = probes.base_verdict(
+        FakeWorkspace(estate),
+        app_name="mip-app",
+        runtime_application_id=None,
+        verifier_application_id=None,
+        canonical_name="Mortgage Growth Agent",
+        acknowledgement="",
+        list_agents=_unavailable_supervisor_api,
+        resolve_groups=lambda *_a, **_k: {},
+    )
+    # No listing, so the serving clause pins no canonical Supervisor endpoint:
+    # a core App may hold access to none.
+    assert verdict.refusals == [] and verdict.agents == []
+    # The agentic tier still reads it, and an unreadable listing still raises there.
+    with pytest.raises(RuntimeError, match="Supervisor agents API"):
+        probes.base_verdict(
+            FakeWorkspace(estate),
+            app_name="mip-app",
+            runtime_application_id="runtime-id",
+            verifier_application_id="verifier-id",
+            canonical_name="Mortgage Growth Agent",
+            acknowledgement="",
+            list_agents=_unavailable_supervisor_api,
+            resolve_groups=lambda *_a, **_k: {},
+        )
+
+
 def test_a_core_first_install_audits_its_future_app_for_users_grants() -> None:
     clean = _core_verdict(first_install_estate())
     assert clean.refusals == []

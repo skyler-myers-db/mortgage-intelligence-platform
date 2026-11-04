@@ -1,7 +1,8 @@
 """The ``databricks`` CLI of the past-the-lease release sandbox (test only, M2-PR3).
 
 Answers exactly the calls a first install makes through the grant and
-reconcile steps, and fails loudly (exit 97) on anything else. Each call is
+reconcile steps, and fails loudly (exit 97) on anything else, the Supervisor
+agents listing included: a core release never reads that API. Each call is
 appended to ``DATABRICKS_STUB_LOG`` with the bundle variables it inherited,
 so a test can read what ``databricks bundle run mip_lakebase_migrate`` would
 have rendered. SQL statements are recorded in ``SANDBOX_STATE`` and answered
@@ -48,9 +49,6 @@ def main() -> int:
     state = _state()
     if args == ["--version"]:
         print("Databricks CLI v-test")
-        return 0
-    if args == ["supervisor-agents", "list-supervisor-agents", "-o", "json"]:
-        print("[]")
         return 0
     if args == ["apps", "list", "-o", "json"]:
         print(json.dumps([_app(state)] if state.get("app_created") else []))

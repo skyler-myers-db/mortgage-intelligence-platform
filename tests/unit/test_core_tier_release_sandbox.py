@@ -88,6 +88,8 @@ def test_the_pre_stop_probes_pass_in_their_core_mode(core_release) -> None:  # t
     assert len(probes) == 1
     assert "--agentic-tier" in probes[0] and probes[0][probes[0].index("--agentic-tier") + 1] == "off"
     assert "--runtime-application-id" not in probes[0] and "--verifier-application-id" not in probes[0]
+    # The core tier needs no Supervisor API: the CLI stub refuses that listing, and no call asked for it.
+    assert not any(call["argv"][:1] == ["supervisor-agents"] for call in run.cli_calls)
 
 
 def test_the_grant_and_reconcile_steps_grant_only_the_app(core_release) -> None:  # type: ignore[no-untyped-def]
