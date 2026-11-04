@@ -13,7 +13,9 @@ deploys once; a WR3 window stops once and re-pins once.
 
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -770,11 +772,102 @@ def test_a_jobs_reader_re_grant_is_a_restorable_wr2_window_with_one_stop_and_one
         ({**MIGRATION_NOOP, "jobs_reader_grants": "off"}, "exact"),
         ({key: value for key, value in MIGRATION_NOOP.items() if key != "jobs_reader_grants"}, "exact"),
         (MIGRATION_NOOP, None),
+        ({key: value for key, value in MIGRATION_APPLY.items() if key != "jobs_reader_grants"}, "exact"),
+        ({"mode": "plan", "decision": "refuse", "jobs_reader_grants": "unreviewed"}, "exact"),
     ),
-    ids=("grants-off", "grants-unchecked", "role-unchecked"),
+    ids=("grants-off", "grants-unchecked", "role-unchecked", "apply-grants-unchecked", "refuse-unreviewed"),
 )
 def test_signed_blue_refuses_a_plan_that_did_not_check_the_jobs_reader(
     migration: dict[str, Any], role: str | None
 ) -> None:
     with pytest.raises(ValueError, match="jobs"):
         _plan(_estate(), migration=migration, jobs_reader_role_state=role)
+
+
+def test_a_pending_migration_with_drifted_jobs_reader_grants_is_one_wr3_window_not_a_wr2() -> None:
+    # A pending migration that adds or drops a mip_app table reads as grant
+    # drift for an exact role (postflight_jobs_reader_grants compares the live
+    # table inventory). The WR3 window's migration job re-grants the jobs
+    # reader anyway, so the window opens right before that job, never at WR2
+    # before the role converges.
+    estate = _estate()
+    migration = {**MIGRATION_APPLY, "jobs_reader_grants": "drift"}
+    plan = _plan(estate, migration=migration)
+    assert (plan.reasons, plan.code, plan.closes_at) == (("WR3",), "window", "start_repin")
+    assert plan.canonical["jobs_reader_grants"] == "drift", "still in the acked digest"
+    repins = _release(estate, migration)
+    assert (estate.apps.stops, estate.apps.starts, estate.apps.deploys, repins) == (1, 1, 1, 1)
+
+
+def _early_migration_refusal(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], stage: str
+) -> dict[str, Any]:
+    """main_read_only's own report for a plan that refused before reading the jobs reader."""
+
+    from jobs import lakebase_migration_plan as migration_plan
+    from jobs.lakebase_migration_inputs import render_schema_inputs
+    from jobs.lakebase_migration_read_only import ReadOnlyStatementRefused
+
+    def fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise (ReadOnlyStatementRefused if stage == "read_only_guard" else RuntimeError)(stage)
+
+    def inputs() -> Any:
+        if stage == "migration_inputs":
+            fail()
+        return render_schema_inputs(
+            Path(__file__).resolve().parents[2],
+            lender_name="Summit Mortgage",
+            lender_nmls_id="",
+            tenant_id="",
+        )
+
+    monkeypatch.setattr(migration_plan, "run_plan", fail)
+    code = migration_plan.main_read_only(
+        "plan",
+        {"host": "test"},
+        app_name=None,
+        verifier_role="verifier-role-0002",
+        resolve_app_role_fn=fail if stage == "runtime_roles" else (lambda **_k: "app-role-0001"),
+        schema_inputs_fn=inputs,
+        jobs_reader_role="jobs-reader-0003",
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert (code, report) == (2, {"decision": "refuse", "mode": "plan", "refusals": [stage]})
+    return report
+
+
+@pytest.mark.parametrize(
+    "stage", ("runtime_roles", "migration_inputs", "read_only_session", "read_only_guard")
+)
+def test_an_early_migration_refusal_keeps_its_window_refusal_and_writes_the_private_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    stage: str,
+) -> None:
+    # The early refusal carries no jobs_reader_grants key. The window refuses
+    # it with the reviewed code, and the CLI the shell runs writes the private
+    # plan its refusal message names, never a traceback and no plan.
+    monkeypatch.delenv(window.ACK_ENV, raising=False)
+    report = _early_migration_refusal(monkeypatch, capsys, stage)
+    estate = _estate()
+    plan = _plan(estate, migration=report)
+    assert (plan.code, plan.reasons, plan.refusals) == ("refused", (), ("window_migration_refused",))
+    assert plan.canonical["jobs_reader_grants"] == "unchecked"
+    files = {
+        "--plan-gate-report": {"verdict": "passed", "instance_update_sha256": ""},
+        "--binding-payload": EQUAL_BINDINGS,
+        "--migration-plan": report,
+    }
+    argv = ["plan", "--app-name", APP_NAME, "--scope", SCOPE, "--lakebase-instance", "mip-app-state"]
+    argv += ["--position", "pre-lease", "--out", str(tmp_path / "plan.json")]
+    for flag in ("--role-check", "--verifier-role-check", "--jobs-reader-role-check"):
+        argv += [flag, "exact"]
+    for index, (flag, payload) in enumerate(files.items()):
+        path = tmp_path / f"input-{index}.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        argv += [flag, str(path)]
+    assert window.main(argv, workspace_factory=lambda: estate.workspace) == 2
+    written = json.loads((tmp_path / "plan.json").read_text(encoding="utf-8"))
+    assert (written["code"], written["refusals"]) == ("refused", ["window_migration_refused"])
+    assert (estate.apps.stops, estate.apps.starts, estate.apps.deploys) == (0, 0, 0)

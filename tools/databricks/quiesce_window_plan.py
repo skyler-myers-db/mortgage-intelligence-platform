@@ -6,11 +6,14 @@ A release keeps blue serving. It stops the App only for a window reason:
   bundle's (any diff, until spike S2 proves an unchanged database binding
   leaves a running App and its role alone), or a binding id is unresolved;
 * **WR2** Lakebase role rotation: ``converge_lakebase_oauth_role --check``
-  drifts for the App, verifier or jobs-reader role, or the migration plan
-  reads the jobs reader's grants as drift (M2-PR5; absent included). A
+  drifts for the App, verifier or jobs-reader role, or a ``noop`` migration
+  plan reads the jobs reader's grants as drift (M2-PR5; absent included). A
   rotation drops the role's grants, which only the migration job re-applies,
   and that job runs only inside a window. Blue never reads as the jobs
-  reader, so its re-grant keeps blue restorable;
+  reader, so its re-grant keeps blue restorable. The grants alone are no
+  reason under an ``apply`` plan, whose WR3 window runs that job anyway (a
+  pending table reads as grant drift), nor under a ``refuse`` plan, which
+  refuses the window;
 * **WR3** pending migration: the Lakebase migration plan decides ``apply``;
 * **WR4** acked instance update: the bundle plan updates the Lakebase
   instance under an acknowledged digest (``bundle_plan_instance_ack``).
@@ -117,7 +120,7 @@ class WindowFacts:
     role_state: str = "exact"  # the App role: "exact" or "drift"
     verifier_role_state: str = "exact"  # the AI Gateway verifier role
     jobs_reader_role_state: str = "exact"  # the jobs identity's Lakebase role (M2-PR5)
-    jobs_reader_grants: str = "exact"  # its grants, from the migration plan
+    jobs_reader_grants: str = "exact"  # its grants, from the plan ("unchecked" if it refused early)
     migration_decision: str = "noop"  # "noop", "apply" or "refuse"
     migration_blue_restorable: bool = True
     migration_pending: tuple[str, ...] = ()
@@ -132,17 +135,16 @@ class WindowFacts:
     artifact_tree_sha256: str = ""
 
     def reasons(self) -> tuple[str, ...]:
+        roles = (self.role_state, self.verifier_role_state, self.jobs_reader_role_state)
+        # Only a skipped migration job leaves the jobs reader's grants as they
+        # are: apply re-grants them inside its WR3 window, refuse runs nothing.
+        regrant = self.jobs_reader_grants != "exact" and self.migration_decision not in {
+            "apply",
+            "refuse",
+        }
         present = {
             "WR1": self.binding_state != "equal",
-            "WR2": any(
-                state != "exact"
-                for state in (
-                    self.role_state,
-                    self.verifier_role_state,
-                    self.jobs_reader_role_state,
-                    self.jobs_reader_grants,
-                )
-            ),
+            "WR2": any(state != "exact" for state in roles) or regrant,
             "WR3": self.migration_decision == "apply",
             "WR4": bool(self.instance_update_sha256),
         }

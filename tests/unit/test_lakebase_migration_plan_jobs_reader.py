@@ -3,9 +3,10 @@
 The bundle's migration job grants the non-admin jobs identity its Lakebase
 ``jobs_reader`` role, and the quiesce window skips that job when the plan is a
 noop. So the plan reports ``jobs_reader_grants`` (``off``, ``exact`` or
-``drift``, an absent role included), which the window plan reads as WR2. It
-never changes the decision or blue's restorability: blue never reads as that
-role. The fakes and the static walk are the plan suite's own.
+``drift``, an absent role included), which the window plan reads as WR2
+when the plan is a noop. It never changes the decision or blue's
+restorability: blue never reads as that role. The fakes and the static walk
+are the plan suite's own.
 """
 
 from __future__ import annotations

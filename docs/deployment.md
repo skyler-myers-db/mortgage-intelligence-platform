@@ -2371,13 +2371,19 @@ only for a **window reason** the read-only plan predicted
   leaves a running App and its role alone), or a binding id is unresolved;
 - **WR2** Lakebase role rotation: `converge_lakebase_oauth_role --check`
   drifts for the App role, the AI Gateway verifier role or the jobs
-  identity's `jobs_reader` role (M2-PR5), or the migration plan reads the
-  jobs reader's grants as drift, an absent role included (a rotation drops
-  the role's grants, which only the migration job re-applies, and that job
-  runs only inside a window). Blue never reads as the jobs reader, so its
+  identity's `jobs_reader` role (M2-PR5), or a `noop` migration plan reads
+  the jobs reader's grants as drift, an absent role included (a rotation
+  drops the role's grants, which only the migration job re-applies, and that
+  job runs only inside a window). Blue never reads as the jobs reader, so its
   re-grant keeps blue restorable. The first roll-forward that brings the
   jobs identity to an installed signed blue therefore plans a WR2 window to
-  create and grant that role;
+  create and grant that role. The grants alone are no reason under an
+  `apply` plan: its WR3 window runs the migration job, which re-grants the
+  role, and a pending migration that adds or drops a `mip_app` table reads
+  as grant drift even for exact grants, so a WR2 there would only open the
+  window earlier, before the role converges. A `refuse` plan refuses the
+  window (`window_migration_refused`) whatever the grants read, and an early
+  refusal that never reached them records them as `unchecked`;
 - **WR3** pending migration: the Lakebase migration plan decides `apply`;
 - **WR4** acknowledged Lakebase instance update (the plan gate's digest).
 

@@ -123,6 +123,25 @@ def test_a_jobs_reader_role_or_grant_drift_is_wr2_and_keeps_blue_restorable(
 @pytest.mark.parametrize("name", ("jobs_reader_role_state", "jobs_reader_grants"))
 def test_an_unreviewed_jobs_reader_state_is_wr2_never_a_silent_skip(name: str) -> None:
     assert _facts(**{name: "off"}).reasons() == ("WR2",)
+    assert _facts(**{name: "off", "migration_decision": "unreviewed"}).reasons() == ("WR2",)
+
+
+@pytest.mark.parametrize("grants", ("drift", "off", "unchecked"))
+def test_jobs_reader_grants_alone_are_no_wr2_when_the_migration_job_runs_or_the_plan_refuses(
+    grants: str,
+) -> None:
+    # Only a skipped (noop) migration job leaves the grants as they are. A
+    # pending table reads as grant drift for an exact role, and the WR3
+    # window's job re-grants the role, so WR2 would only open the window early.
+    apply = _acked(_facts("WR3", jobs_reader_grants=grants))
+    assert (apply.reasons, apply.code) == (("WR3",), "window")
+    assert apply.canonical["jobs_reader_grants"] == grants, "the acked digest still names it"
+    refuse = _acked(replace(BLUE, migration_decision="refuse", jobs_reader_grants=grants))
+    assert (refuse.reasons, refuse.refusals) == ((), ("window_migration_refused",))
+    # The role itself stays WR2 under any decision: outside a window it is
+    # re-checked exact before its converge.
+    rotated = _facts("WR3", jobs_reader_role_state="drift", jobs_reader_grants=grants)
+    assert rotated.reasons() == ("WR2", "WR3")
 
 
 def test_no_reason_needs_no_window_and_no_ack() -> None:

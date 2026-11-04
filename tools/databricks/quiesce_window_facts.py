@@ -69,9 +69,15 @@ def _migration(plan: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("the Lakebase migration report is not a plan")
     migrations = plan.get("migrations") or {}
     # The bundle's migration job always grants the jobs reader (M2-PR5), so a
-    # plan that did not check its grants ("off" or missing) is incomplete.
+    # plan that did not check its grants ("off" or missing) is incomplete. A
+    # refusing plan is the exception: main_read_only's early refusal (stage
+    # runtime_roles, migration_inputs, read_only_session or read_only_guard)
+    # never reached the grants, and the window refuses it as
+    # window_migration_refused whatever they are, so they are only recorded.
     jobs_reader_grants = plan.get("jobs_reader_grants")
-    if jobs_reader_grants not in ROLE_STATES:
+    if decision == "refuse" and jobs_reader_grants in {None, "off"}:
+        jobs_reader_grants = "unchecked"
+    elif jobs_reader_grants not in ROLE_STATES:
         raise ValueError("the Lakebase migration plan did not check the jobs reader's grants")
     return {
         "jobs_reader_grants": jobs_reader_grants,
