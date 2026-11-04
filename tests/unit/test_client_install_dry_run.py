@@ -95,6 +95,9 @@ def test_the_client_dry_run_addresses_only_the_client_target(tmp_path: Path) -> 
     ]
     assert "--live-install" not in out and "--target client" not in out
     assert "deployment bind mip_app mip-app -t client" in out
+    # M0-PR9: each window plan's dry run prints the budget admission, with no
+    # Databricks call; this run has no deadline, which only a window needs.
+    assert out.count("window admission: MIP_JOB_DEADLINE_EPOCH unset: a window would refuse") == 2
     # The per-release App source: preflight checks the closure for real (git
     # only), step 1 prints the stage, step 5 the publish, and every
     # activation's converge names the one release folder of the dry run under

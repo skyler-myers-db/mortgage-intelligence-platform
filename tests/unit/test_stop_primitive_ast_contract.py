@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -24,6 +25,36 @@ STEP_FILE = REPO / "scripts" / "lib" / "deploy_step_bundle_apply.sh"
 
 def test_the_ast_finds_exactly_the_reviewed_primitive_sites() -> None:
     assert stops.python_primitive_sites() == set(stops.PRIMITIVE_SITES)
+
+
+DEADMAN_SITE = ("jobs/window_deadman.py", "start_blue", "start")
+
+
+def test_the_dead_mans_restart_is_a_reviewed_site_no_shell_file_reaches() -> None:
+    # M0-PR9: the job sources are scanned too. The dead-man's apps start is
+    # reached only by its own main, the one-time run the window submits.
+    assert DEADMAN_SITE in stops.PRIMITIVE_SITES
+    assert stops.reaching_entry_points()[DEADMAN_SITE] == {"jobs.window_deadman"}
+    entry = stops.ENTRY_POINTS["jobs.window_deadman"]
+    assert entry.callers == frozenset() and entry.modes == {"(default)": True}
+    jobs_sites = {site for site in stops.python_primitive_sites() if site[0].startswith("jobs/")}
+    assert jobs_sites == {DEADMAN_SITE}, "no other job source stops, starts, deploys or updates an App"
+
+
+def test_the_ast_finds_exactly_the_reviewed_job_run_sites() -> None:
+    assert stops.python_job_run_sites() == set(stops.JOB_RUN_SITES)
+
+
+def test_the_dead_mans_submit_and_cancel_are_reached_only_through_the_window_tool() -> None:
+    # M0-PR9: the submit and the cancel sit in quiesce_window_deadman, reached
+    # only by quiesce_window's open and cancel-deadman, which only the window
+    # library invokes.
+    reached = stops.reaching_entry_points(sites=set(stops.JOB_RUN_SITES))
+    assert set(reached) == set(stops.JOB_RUN_SITES)
+    assert all(entries == {"tools.databricks.quiesce_window"} for entries in reached.values()), reached
+    entry = stops.ENTRY_POINTS["tools.databricks.quiesce_window"]
+    assert entry.modes["open"] and entry.modes["cancel-deadman"]
+    assert entry.callers == frozenset({stops.WINDOW_LIBRARY})
 
 
 def test_every_site_is_reached_only_by_reviewed_entry_points() -> None:
@@ -74,8 +105,47 @@ def test_a_step_file_that_calls_a_primitive_fails_the_contract(tmp_path: Path, s
 
 def _tools_copy(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
-    shutil.copytree(REPO / "tools", root / "tools", ignore=shutil.ignore_patterns("__pycache__"))
+    for name in stops.SCAN_ROOTS:
+        shutil.copytree(REPO / name, root / name, ignore=shutil.ignore_patterns("__pycache__"))
     return root
+
+
+@pytest.mark.parametrize(
+    "stray",
+    (
+        "    window.workspace.apps.stop(window.args.app)\n",
+        "    window.workspace.apps.deploy_and_wait(window.args.app, None)\n",
+        "    getattr(window.workspace, 'apps').update(window.args.app, None)\n",
+    ),
+)
+def test_a_stop_deploy_or_update_in_the_dead_man_is_an_unmapped_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stray: str
+) -> None:
+    root = _tools_copy(tmp_path)
+    deadman = root / "jobs" / "window_deadman.py"
+    text = deadman.read_text(encoding="utf-8")
+    anchor = "def blue_refusal(window: Window) -> str:\n"
+    assert anchor in text
+    deadman.write_text(text.replace(anchor, anchor + stray, 1), encoding="utf-8")
+    monkeypatch.setattr(stops, "REPO", root)
+    found = stops.python_primitive_sites()
+    assert {site for site in found - set(stops.PRIMITIVE_SITES) if site[0] == "jobs/window_deadman.py"}
+
+
+def test_a_stray_job_submit_or_cancel_in_a_tool_is_an_unmapped_job_run_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _tools_copy(tmp_path)
+    (root / "tools" / "databricks" / "stray_run.py").write_text(
+        "def fire(workspace):\n    jobs = workspace.jobs\n    jobs.submit(run_name='x')\n\n\n"
+        "def halt(workspace, run_id):\n    getattr(workspace, 'jobs').cancel_run(run_id)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(stops, "REPO", root)
+    assert stops.python_job_run_sites() - set(stops.JOB_RUN_SITES) == {
+        ("tools/databricks/stray_run.py", "fire", "submit"),
+        ("tools/databricks/stray_run.py", "halt", "cancel_run"),
+    }
 
 
 def test_a_new_sdk_primitive_in_a_tool_is_an_unmapped_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -107,6 +177,59 @@ def test_an_aliased_apps_client_is_still_a_site(tmp_path: Path, monkeypatch: pyt
         ("tools/databricks/stray_alias.py", "bounce", "stop"),
         ("tools/databricks/stray_alias.py", "revive", "start"),
     }, "a read through the alias is not a site; a stop or start is"
+
+
+@pytest.mark.parametrize(
+    ("source", "apps_sites", "job_sites"),
+    (
+        # The review's mutation: a tuple alias of both clients.
+        (
+            "def cancel(workspace, name):\n    apps, jobs = workspace.apps, workspace.jobs\n"
+            "    apps.stop(name)\n    jobs.submit(run_name='x')\n",
+            {("cancel", "stop")},
+            {("cancel", "submit")},
+        ),
+        ("def f(w, n):\n    apps, *rest = w.apps, w.jobs\n    apps.stop(n)\n", {("f", "stop")}, set()),
+        ("def f(w, n):\n    for a in (w.apps,):\n        a.start(n)\n", {("f", "start")}, set()),
+        ("def f(w, n):\n    with ctx(w.apps) as a:\n        a.deploy(n, None)\n", {("f", "deploy")}, set()),
+        ("def f(n, a=W.apps):\n    a.update(n, None)\n", {("f", "update")}, set()),
+        ("def f(w, n):\n    a = w.apps\n    b = a\n    b.stop(n)\n", {("f", "stop")}, set()),
+        ("def f(w, n):\n    halt = w.apps.stop\n    halt(n)\n", {("f", "stop")}, set()),
+        ("def f(w, n, verb):\n    getattr(w.apps, verb)(n)\n", {("f", "<dynamic>")}, set()),
+        ("def f(apps, n):\n    apps.stop(n)\n", {("f", "stop")}, set()),
+        ("def f(w, n):\n    (j := w.jobs).cancel_run(n)\n", set(), {("f", "cancel_run")}),
+        (
+            "def f(w, n):\n    w.api_client.do('POST', f'/api/2.0/apps/{n}/stop')\n"
+            "    w.api_client.do('POST', '/api/2.2/jobs/runs/submit', body={})\n",
+            {("f", "rest:stop")},
+            {("f", "rest:submit")},
+        ),
+    ),
+    ids=("tuple", "starred", "for", "with", "default", "chain", "reference", "dynamic", "param", "walrus", "rest"),
+)
+def test_every_way_to_reach_a_client_is_still_a_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str, apps_sites: set[Any], job_sites: set[Any]
+) -> None:
+    # M0-PR9 review: a tuple alias or a raw REST call left every contract green.
+    root = _tools_copy(tmp_path)
+    (root / "tools" / "databricks" / "stray_bypass.py").write_text(source, encoding="utf-8")
+    monkeypatch.setattr(stops, "REPO", root)
+    module = "tools/databricks/stray_bypass.py"
+    assert stops.python_primitive_sites() - set(stops.PRIMITIVE_SITES) == {(module, *site) for site in apps_sites}
+    assert stops.python_job_run_sites() - set(stops.JOB_RUN_SITES) == {(module, *site) for site in job_sites}
+
+
+def test_reads_through_a_tainted_alias_are_not_sites(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Control: the over-approximation adds no site for a read or a value.
+    root = _tools_copy(tmp_path)
+    (root / "tools" / "databricks" / "stray_reads.py").write_text(
+        "def f(w, n):\n    app = w.apps.get(n)\n    apps, jobs = w.apps, w.jobs\n"
+        "    apps.list_deployments(n)\n    jobs.get_run(1)\n    getattr(app, 'url')\n    return app.update_time\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(stops, "REPO", root)
+    assert stops.python_primitive_sites() == set(stops.PRIMITIVE_SITES)
+    assert stops.python_job_run_sites() == set(stops.JOB_RUN_SITES)
 
 
 def test_a_new_cli_that_reaches_a_reviewed_primitive_is_an_unreviewed_entry_point(

@@ -223,7 +223,10 @@ def test_a_contract_migration_keeps_the_window_open_until_green_activation() -> 
     assert plan.code == "window" and plan.blue_restorable is False
     assert plan.closes_at == "green_activation"
     assert plan.canonical["blue_restorable"] is False, "the acked digest names the outage"
-    assert plan.predicted_seconds == STEP_BUDGET_S["stop"] + STEP_BUDGET_S["WR3"]
+    # Review: the window stays open until green activation, so the admission
+    # covers that tail too, not only the stop and the migration.
+    assert plan.predicted_seconds == STEP_BUDGET_S["stop"] + STEP_BUDGET_S["WR3"] + STEP_BUDGET_S["green_activation"]
+    assert plan.canonical["budget"]["predicted_window_seconds"] == plan.predicted_seconds
     expand = _acked(_facts("WR3"))
     assert expand.blue_restorable is True and expand.sha256 != plan.sha256
 

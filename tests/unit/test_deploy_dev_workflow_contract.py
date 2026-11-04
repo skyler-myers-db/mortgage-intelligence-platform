@@ -5789,7 +5789,13 @@ def test_every_deployer_step_keeps_ambient_overrides_off_the_oidc_profile() -> N
         if (step.get("env") or {}).get("DATABRICKS_CONFIG_PROFILE") == "DEFAULT"
     }
 
-    assert list(deployer_steps) == [OIDC_PROOF_STEP, "Deploy dev Databricks App"]
+    # M0-PR9's read-only journal record (tests/unit/test_quiesce_window_workflow.py)
+    # selects the profile too; it carries no App client pair.
+    assert list(deployer_steps) == [
+        OIDC_PROOF_STEP,
+        "Deploy dev Databricks App",
+        "Record the quiesce window journal state",
+    ]
     for step in steps:
         env = step.get("env") or {}
         assert "DATABRICKS_TOKEN" not in env, step.get("name")
