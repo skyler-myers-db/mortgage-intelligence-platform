@@ -24,6 +24,12 @@ bootstrap will run, and so republish the reviewed functions while blue serves
 (``catalog_bootstrap_skip_rule``): ``skip`` when the live catalog already
 equals the rendered sources, ``gap`` with the republished functions and the
 predicted interval otherwise, ``unknown`` when the rule did not report.
+
+**Adopt mode** (M2-PR6, position ``post-bind``): the plan right after an
+adoption bound the legacy map (``bundle_plan_adopt``). The report then carries
+the adoption's expectation: how many keys the state binds, the exact creates
+the plan may hold, and the dashboards' ``parent_path`` policy, which is
+``pinned_permanent`` until spike S4 proves an in-place move.
 """
 
 from __future__ import annotations
@@ -36,7 +42,7 @@ from typing import Any
 
 PUBLIC_SCHEMA = "mip.bundle-plan-report.public.v1"
 FULL_SCHEMA = "mip.bundle-plan-report.full.v1"
-POSITIONS = frozenset({"pre-lease", "pre-apply"})
+POSITIONS = frozenset({"pre-lease", "pre-apply", "post-bind"})
 REFUSAL_CODES = frozenset(
     {
         "malformed_plan",
@@ -49,6 +55,12 @@ REFUSAL_CODES = frozenset(
         "instance_update_unacked",
         "not_adopted",
         "app_acl",
+        # Adopt mode (bundle_plan_adopt, M2-PR6).
+        "instance_change",
+        "create_set_mismatch",
+        "dashboard_recreate",
+        "dashboard_move",
+        "rename_collision",
     }
 )
 DEFERRAL_CODES = frozenset({"journal_owned"})
@@ -56,6 +68,8 @@ APP_ACL_CODES = frozenset({"unchanged", "changes", "app_absent", "refused"})
 APP_ACL_COUNTS = ("keep", "add", "remove", "change")
 EXECUTE_GAP_CODES = frozenset({"skip", "gap", "unknown"})
 EXECUTE_GAP_KINDS = ("catalogs", "schemas", "tables", "table_properties", "functions")
+# A dashboard parent_path stays where the adoption found it until spike S4.
+DASHBOARD_PARENT_POLICIES = frozenset({"pinned_permanent"})
 COUNTED_ACTIONS = ("create", "update", "resize", "update_id", "recreate", "delete", "skip")
 _SYMBOLIC = re.compile(r"[a-z][a-z0-9_]*\.[A-Za-z0-9][A-Za-z0-9_-]*(?:\.(?:permissions|grants))?\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -196,6 +210,27 @@ class ExecuteGapPrediction:
 
 
 @dataclass(frozen=True)
+class AdoptSummary:
+    """What an adoption expects of the plan right after its binds (M2-PR6)."""
+
+    bound: tuple[str, ...]
+    expected_creates: tuple[str, ...]
+    dashboard_parent_path: str = "pinned_permanent"
+
+    def public(self) -> dict[str, Any]:
+        if self.dashboard_parent_path not in DASHBOARD_PARENT_POLICIES:
+            raise UnsafePublicValue("a dashboard parent_path policy is not a reviewed policy")
+        return {
+            "bound": len(self.bound),
+            "expected_creates": [_symbolic(key) for key in self.expected_creates],
+            "dashboard_parent_path": self.dashboard_parent_path,
+        }
+
+    def full(self) -> dict[str, Any]:
+        return {**self.public(), "bound_keys": [_symbolic(key) for key in self.bound]}
+
+
+@dataclass(frozen=True)
 class PlanReport:
     """What the gate found in one plan, at one position of the deploy."""
 
@@ -215,6 +250,7 @@ class PlanReport:
     deferrals: tuple[Deferral, ...] = ()
     app_acl: AppAclPreview | None = None
     execute_gap: ExecuteGapPrediction | None = None
+    adopt: AdoptSummary | None = None
 
     @property
     def refused(self) -> bool:
@@ -266,6 +302,7 @@ class PlanReport:
             "deferred": deferred,
             "app_acl": None if self.app_acl is None else self.app_acl.public(),
             "execute_gap": None if self.execute_gap is None else self.execute_gap.public(),
+            "adopt": None if self.adopt is None else self.adopt.public(),
         }
 
     def full(self) -> dict[str, Any]:
@@ -290,6 +327,7 @@ class PlanReport:
         report["instance_update"] = [dict(item) for item in self.instance_update]
         report["app_acl"] = None if self.app_acl is None else self.app_acl.full()
         report["execute_gap"] = None if self.execute_gap is None else self.execute_gap.full()
+        report["adopt"] = None if self.adopt is None else self.adopt.full()
         report["lookups"] = [
             {
                 "resource": record.resource,

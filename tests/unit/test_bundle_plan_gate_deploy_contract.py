@@ -27,7 +27,8 @@ REPO = Path(__file__).resolve().parents[2]
 PREFLIGHT = 'step "preflight — check .env.local, databricks CLI, venv"'
 GATE_START = "# >>> bundle plan gate: pre-lease >>>"
 GATE_END = "# <<< bundle plan gate: pre-lease <<<"
-PRE_LEASE = "\nrun_bundle_plan_gate pre-lease\n"
+# Skipped only by the adopt phases, which plan the state edit in its place (M2-PR6).
+PRE_LEASE = "\n  run_bundle_plan_gate pre-lease\n"
 PRE_APPLY = "\nrun_bundle_plan_gate pre-apply\n"
 LEASE_ROOT = "tools.databricks.app_deployment_lease recovery-root"
 LEASE = "tools.databricks.app_deployment_lease acquire"
@@ -45,6 +46,7 @@ APP_STOPS = (
 )
 GATE_MODULES = (
     "bundle_plan_gate.py",
+    "bundle_plan_adopt.py",
     "bundle_plan_instance_ack.py",
     "bundle_plan_lookups.py",
     "bundle_plan_shape.py",
@@ -145,13 +147,20 @@ def test_the_plan_phase_exits_at_top_level_between_the_gate_and_the_lease() -> N
     lines = gate_block.splitlines()
 
     assert text.index(GATE_END) < text.index(LEASE_ROOT, _steps(text))
-    assert text[: text.index(GATE_START)].rstrip().endswith("fi"), "outside the dry-run branches"
+    # The adopt phases' plan block (M2-PR6) sits right before it, also at top level.
+    before = text[: text.index(GATE_START)].rstrip()
+    assert before.endswith("# <<< adopt phase: plan <<<")
+    assert before[: before.index("# >>> adopt phase: plan >>>")].rstrip().endswith(
+        "fi"
+    ), "outside the dry-run branches"
     assert text[text.index(GATE_END) + len(GATE_END) :].startswith(
         '\nif [[ "$DRY_RUN" -eq 0 ]]; then\n'
     )
     code = [line for line in lines if not line.startswith("#")]
     assert code == [
-        "run_bundle_plan_gate pre-lease",
+        'if [[ "${DEPLOY_PHASE:-}" != "adopt" && "${DEPLOY_PHASE:-}" != "unadopt" ]]; then',
+        "  run_bundle_plan_gate pre-lease",
+        "fi",
         'if [[ "${DEPLOY_PHASE:-}" == "plan" ]]; then',
         '  echo "${GRN}[deploy] plan phase complete: read-only, stopped before the lease; nothing was changed.${RST}"',
         "  exit 0",
@@ -217,11 +226,12 @@ def test_the_phase_flag_is_parsed_and_the_live_plan_refused_before_any_databrick
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     phase = script[script.index("# >>> deploy phase >>>") : script.index("# <<< deploy phase <<<")]
 
-    assert '[[ "$PHASE_SEEN" -eq 1 && "$DEPLOY_PHASE" != "plan" ]]' in phase
-    assert 'echo "[deploy] plan is CI-only; use --dry-run or make bundle-validate" >&2' in phase
     assert (
-        '"$DEPLOY_PHASE" == "plan" && "$DRY_RUN" -eq 0 && "${GITHUB_ACTIONS:-}" != "true"' in phase
-    )
+        '[[ "$PHASE_SEEN" -eq 1 && "$DEPLOY_PHASE" != "plan" && \\\n'
+        '      "$DEPLOY_PHASE" != "adopt" && "$DEPLOY_PHASE" != "unadopt" ]]'
+    ) in phase
+    assert 'echo "[deploy] ${DEPLOY_PHASE} is CI-only; use --dry-run or make bundle-validate" >&2' in phase
+    assert '"$PHASE_SEEN" -eq 1 && "$DRY_RUN" -eq 0 && "${GITHUB_ACTIONS:-}" != "true"' in phase
     assert script.index("# <<< deploy phase <<<") < script.index("\nverify_exact_deploy_source\n")
     assert "databricks " not in phase.replace("tools.databricks", "")
 

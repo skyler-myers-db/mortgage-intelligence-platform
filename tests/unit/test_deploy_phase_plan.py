@@ -5,7 +5,8 @@ The dry run is driven end to end in the offline sandbox
 anything but ``--version``: the plan phase prints the read-only steps through
 the pre-lease bundle plan gate and exits 0 there, before the lease and every
 App stop. A live plan phase outside GitHub Actions is refused before any
-Databricks call (attack O13), and so is any phase but ``plan``.
+Databricks call (attack O13), and so is any phase but ``plan``, ``adopt`` and
+``unadopt`` (tests/unit/test_adopt_phase_deploy_contract.py drives those two).
 
 The sandbox's .env.local is the paychex-shaped demo profile (M1-PR2), run with
 its weekly refresh off: a demo refresh mails its failures to the deploying
@@ -159,15 +160,16 @@ def test_a_live_plan_phase_outside_github_actions_is_refused_before_any_call(
 @pytest.mark.parametrize(
     ("args", "message"),
     (
-        (["--phase", "release"], "phase must be exactly plan; refusing 'release'"),
-        (["--phase=data"], "phase must be exactly plan; refusing 'data'"),
-        (["--phase="], "phase must be exactly plan; refusing ''"),
-        (["--phase"], "missing value for --phase (expected plan)"),
+        (["--phase", "release"], "phase must be plan, adopt or unadopt; refusing 'release'"),
+        (["--phase=data"], "phase must be plan, adopt or unadopt; refusing 'data'"),
+        (["--phase=adopt-live"], "phase must be plan, adopt or unadopt; refusing 'adopt-live'"),
+        (["--phase="], "phase must be plan, adopt or unadopt; refusing ''"),
+        (["--phase"], "missing value for --phase (expected plan, adopt or unadopt)"),
         (["--phase", "plan", "--phase", "plan"], "phase may be supplied only once"),
         (["--phase=plan", "--phase", "plan"], "phase may be supplied only once"),
     ),
 )
-def test_a_phase_other_than_one_plan_is_refused_at_parse_time(
+def test_a_phase_other_than_one_reviewed_phase_is_refused_at_parse_time(
     args: list[str], message: str
 ) -> None:
     result = _deploy(REPO, _clean_env(), "-t", "client", "--dry-run", *args)
