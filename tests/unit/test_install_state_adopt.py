@@ -208,6 +208,26 @@ def test_a_legacy_key_the_bundle_does_not_declare_refuses(legacy_keys: tuple[str
     assert [(r.code, r.resource) for r in plan.refusals] == [(code, "jobs.retired_job")]
 
 
+@pytest.mark.parametrize("phase", ("adopt", "unadopt"))
+def test_a_deployer_state_key_the_bundle_dropped_refuses_before_the_lease(tmp_path: Path, phase: str) -> None:
+    estate = es.Estate()
+    if phase == "unadopt":
+        _apply(estate, es.FakeBundleCli(estate), tmp_path)
+    # This deployer's state binds a key the bundle no longer declares: the
+    # pre-bind plan carries it as a delete, which names no bundle key.
+    es.FakeBundleCli(estate)._edit("jobs.retired_job", "5555")
+    cli = es.FakeBundleCli(estate)
+    assert [entry.symbolic for entry in cli.plan().entries if entry.action == "delete"] == ["jobs.retired_job"]
+
+    plan = _plan(estate, cli, phase)
+
+    assert [(r.code, r.resource) for r in plan.refusals] == [("deployer_state_orphan", "jobs.retired_job")]
+    with pytest.raises(adopt.AdoptRefused) as refused:
+        adopt.apply(phase, plan.sha256, es.inputs(), cli, estate, lease=Lease(), plan_dir=tmp_path)
+    assert refused.value.code == "plan_refused" and refused.value.inverse_proven
+    assert cli.edits() == [], "refused by the read-only plan, before any edit"
+
+
 def test_no_legacy_root_or_no_legacy_state_refuses() -> None:
     estate = es.Estate()
     cli = es.FakeBundleCli(estate)

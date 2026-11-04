@@ -2398,9 +2398,12 @@ states and one GET by id per legacy object, and refuses, before the lease:
   `bound_elsewhere` (the deployer's state binds the key to another object, or
   the object under another key) and `duplicate_id` (two legacy keys bind one
   object);
-- `legacy_key_unknown`, `deployer_state_orphan`, `dashboard_parent_moved`,
-  `unresolved_name`, `state_mismatch`, `malformed_state` and `read_failed` (a
-  read error is never read as absent).
+- `deployer_state_orphan`, in either phase: a key the deployer's state binds
+  and the bundle no longer declares (the pre-bind plan carries it as a delete,
+  which names no bundle key);
+- `legacy_key_unknown`, `dashboard_parent_moved`, `unresolved_name`,
+  `state_mismatch`, `malformed_state` and `read_failed` (a read error is never
+  read as absent).
 
 It prints the plan's sha256. That digest is the exact acknowledgement: the
 owner attestation is deferred (review mode `single_maintainer_audited`), so a

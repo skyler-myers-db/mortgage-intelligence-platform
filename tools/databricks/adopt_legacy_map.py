@@ -326,7 +326,16 @@ def _lineage(document: Mapping[str, Any] | None) -> dict[str, Any] | None:
 
 
 def _bundle_entries(plan: BundlePlan) -> tuple[dict[str, Any], list[AdoptRefusal]]:
-    entries = {entry.symbolic: entry for entry in plan.entries if "." not in entry.kind}
+    """The resources the bundle declares: every top-level entry but a delete.
+
+    The direct engine plans a delete for a key this deployer's state binds and
+    the bundle no longer declares, so a delete names no bundle key; counting it
+    as one would hide ``deployer_state_orphan`` from the read-only plan.
+    """
+
+    entries = {
+        entry.symbolic: entry for entry in plan.entries if "." not in entry.kind and entry.action != "delete"
+    }
     by_key: dict[str, list[str]] = {}
     for symbolic, entry in entries.items():
         by_key.setdefault(entry.name, []).append(symbolic)
@@ -456,9 +465,10 @@ def compute(
         names = planner.check_live(resource, kind, live_id, expected)
         edits.append(Binding(resource, entry.name, live_id, names))
 
-    if phase == "adopt":
-        for resource in sorted(set(ours) - set(bundle)):
-            planner.refuse("deployer_state_orphan", resource)
+    # Both phases: a release plan would delete such a key's object, and
+    # unadopt, which unbinds declared keys only, would leave it bound.
+    for resource in sorted(set(ours) - set(bundle)):
+        planner.refuse("deployer_state_orphan", resource)
     bound_after = (
         sorted(set(ours) | {edit.resource for edit in edits})
         if phase == "adopt"
