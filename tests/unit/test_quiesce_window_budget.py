@@ -176,6 +176,7 @@ def test_the_open_recomputes_the_budget_from_the_reasons() -> None:
 def test_an_insufficient_budget_refuses_the_open_with_no_stop_and_no_journal(budget_s: float) -> None:
     estate = _estate()
     plan = _plan(estate)
+    files = dict(estate.files.data)
     with pytest.raises((budget.WindowAdmissionError,), match="window_budget_refused"):
         window.open_window(
             estate.workspace,
@@ -189,6 +190,7 @@ def test_an_insufficient_budget_refuses_the_open_with_no_stop_and_no_journal(bud
             **window_hooks(estate, budget_s=budget_s),
         )
     assert estate.apps.stops == 0 and journal.read(estate.workspace, app_name=APP_NAME) is None
+    assert estate.jobs.submits == 0 and estate.files.data == files, "no submit and nothing published"
 
 
 # --- the CLI ----------------------------------------------------------------------------
