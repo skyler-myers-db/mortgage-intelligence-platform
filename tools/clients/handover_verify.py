@@ -35,6 +35,7 @@ import sys
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -145,6 +146,17 @@ def _run_state(run: object) -> tuple[str, str]:
     return _text(getattr(state, "life_cycle_state", None)).upper(), _text(getattr(state, "result_state", None)).upper()
 
 
+def _newest_runs(workspace: Any, *, job_id: int, count: int) -> list[Any]:
+    """The job's ``count`` newest runs: one page, one request.
+
+    ``jobs.list_runs`` follows ``next_page_token`` to the end of the job's
+    history (``limit`` is only the page size), so the iterator is cut at
+    ``count`` and never asks for a second page.
+    """
+
+    return list(islice(workspace.jobs.list_runs(job_id=job_id, limit=count), count))
+
+
 def watch_next_run(
     workspace: Any,
     *,
@@ -154,14 +166,17 @@ def watch_next_run(
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> tuple[str, str]:
-    """(code, result state) of the job's next run after now: success, failed or timeout."""
+    """(code, result state) of the job's next run after now: success, failed or timeout.
 
-    if not 0 < timeout_s <= MAX_WATCH_S:
-        raise ValueError("a watch is bounded: 1 second to 12 hours")
-    baseline = max((int(getattr(run, "run_id", 0) or 0) for run in workspace.jobs.list_runs(job_id=job_id, limit=1)), default=0)
+    Bounded in calls as in time: one request for the baseline and one per poll.
+    """
+
+    if not 0 < timeout_s <= MAX_WATCH_S or interval_s <= 0:
+        raise ValueError("a watch is bounded: 1 second to 12 hours, polled at a positive interval")
+    baseline = max((int(getattr(run, "run_id", 0) or 0) for run in _newest_runs(workspace, job_id=job_id, count=1)), default=0)
     deadline = clock() + timeout_s
     while True:
-        runs = [run for run in workspace.jobs.list_runs(job_id=job_id, limit=5) if int(getattr(run, "run_id", 0) or 0) > baseline]
+        runs = [run for run in _newest_runs(workspace, job_id=job_id, count=5) if int(getattr(run, "run_id", 0) or 0) > baseline]
         if runs:
             newest_first = sorted(runs, key=lambda run: int(getattr(run, "run_id", 0) or 0))
             life_cycle, result = _run_state(newest_first[0])

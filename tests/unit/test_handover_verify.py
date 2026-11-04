@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from tests.fixtures.handover_jobs_fake import jobs_workspace
+from tests.fixtures.handover_jobs_fake import PagedRunsApi, jobs_workspace, run, runs_workspace
 from tools.clients import handover_verify as verify
 
 LEGACY = "legacy-owner@example.com"
@@ -83,39 +83,30 @@ def test_the_privileges_cli_prints_counts_never_principals(capsys: pytest.Captur
     assert LEGACY not in out.out + out.err and "borrower" not in out.out + out.err
 
 
-def _runs(*rows: tuple[int, str, str]) -> list[Any]:
-    return [SimpleNamespace(run_id=run_id, state=SimpleNamespace(life_cycle_state=SimpleNamespace(value=life), result_state=SimpleNamespace(value=result))) for run_id, life, result in rows]
+def _runs(*rows: tuple[int, str, str]) -> list[dict[str, Any]]:
+    return [run(run_id, life, result) for run_id, life, result in rows]
 
 
-class _Jobs:
-    def __init__(self, sequence: list[list[Any]]) -> None:
-        self.sequence = sequence
-        self.calls = 0
+def _watch(sequence: list[list[dict[str, Any]]], timeout_s: float = 300.0) -> tuple[str, str]:
+    """The real ``JobsAPI`` pager over ``PagedRunsApi``; each poll's sleep moves to the next listing."""
 
-    def list_runs(self, *, job_id: int, limit: int) -> list[Any]:
-        batch = self.sequence[min(self.calls, len(self.sequence) - 1)]
-        self.calls += 1
-        return sorted(batch, key=lambda run: -run.run_id)[:limit]
-
-
-def _watch(sequence: list[list[Any]], timeout_s: float = 300.0) -> tuple[str, str]:
     now = [0.0]
-    workspace = SimpleNamespace(jobs=_Jobs(sequence))
-    return verify.watch_next_run(
-        workspace,
-        job_id=7,
-        timeout_s=timeout_s,
-        interval_s=30.0,
-        clock=lambda: now[0],
-        sleep=lambda seconds: now.__setitem__(0, now[0] + seconds),
-    )
+    api = PagedRunsApi(sequence[0])
+    step = [0]
+
+    def sleep(seconds: float) -> None:
+        now[0] += seconds
+        step[0] += 1
+        api.runs = sequence[min(step[0], len(sequence) - 1)]
+
+    return verify.watch_next_run(runs_workspace(api), job_id=7, timeout_s=timeout_s, interval_s=30.0, clock=lambda: now[0], sleep=sleep)
 
 
 def test_watch_next_run_reports_the_next_runs_result_never_an_older_one() -> None:
     old = (10, "TERMINATED", "FAILED")
-    sequence = [[_runs(old)[0]], [_runs(old)[0]], _runs(old, (11, "RUNNING", "")), _runs(old, (11, "TERMINATED", "SUCCESS"))]
+    sequence = [_runs(old), _runs(old), _runs(old, (11, "RUNNING", "")), _runs(old, (11, "TERMINATED", "SUCCESS"))]
     assert _watch(sequence) == ("success", "SUCCESS")
-    failed = [[_runs(old)[0]], _runs(old, (11, "TERMINATED", "FAILED"))]
+    failed = [_runs(old), _runs(old, (11, "TERMINATED", "FAILED"))]
     assert _watch(failed) == ("failed", "FAILED")
 
 
@@ -123,6 +114,25 @@ def test_watch_next_run_is_bounded() -> None:
     assert _watch([_runs((10, "TERMINATED", "SUCCESS"))], timeout_s=90.0) == ("timeout", "")
     with pytest.raises(ValueError, match="bounded"):
         _watch([[]], timeout_s=13 * 3600.0)
+
+
+def test_watch_next_run_reads_one_page_per_poll_however_long_the_history() -> None:
+    """The SDK pager walks every page; the watch asks for one: the baseline plus one per poll."""
+
+    history = [run(run_id) for run_id in range(1, 301)]
+    api = PagedRunsApi(history)
+    now = [0.0]
+    code = verify.watch_next_run(
+        runs_workspace(api),
+        job_id=7,
+        timeout_s=60.0,
+        interval_s=30.0,
+        clock=lambda: now[0],
+        sleep=lambda seconds: now.__setitem__(0, now[0] + seconds),
+    )
+    assert code == ("timeout", "")
+    assert api.requests == 1 + 3, "one baseline page, then one page at 0, 30 and 60 s"
+    assert len(list(runs_workspace(PagedRunsApi(history)).jobs.list_runs(job_id=7, limit=5))) == 300, "positive control: the pager walks the whole history"
 
 
 def test_retire_check_judges_each_job_by_its_effective_run_as_never_its_creator() -> None:
