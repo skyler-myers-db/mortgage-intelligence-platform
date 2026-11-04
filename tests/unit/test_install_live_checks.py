@@ -93,6 +93,14 @@ def test_a_first_install_passes(tmp_path: Path, capsys: pytest.CaptureFixture[st
         "GET catalogs (install)",
         "GET catalogs (share)",
         *["GET tables/exists"] * 7,
+        # Then the agentic tier's capability preflight (M2-PR3): one list read per feature.
+        "GET apps (list)",
+        "GET database/instances (list)",
+        "GET genie/spaces (list)",
+        "GET sql/warehouses (list)",
+        "GET serving-endpoints (list)",
+        "GET supervisor-agents (list)",
+        "GET mlflow/experiments (list)",
     ], "the profile sets MIP_UC_CATALOG_STORAGE_ROOT, so no metastore summary is read"
     assert account.calls == ["GET accounts/scim/ServicePrincipals (id,applicationId,roles)"]
 

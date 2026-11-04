@@ -10,8 +10,9 @@ Sharing catalog from the profile's provider and share with all seven tables;
 the metastore has a storage root; an install catalog, when a test makes one
 exist, has the profile's storage root; the account principal holds no
 account admin; and every feature either tier needs answers its capability
-probe (tools/clients/capabilities.py). Each keyword overrides one of those
-facts; ``missing_features`` names capability probes that answer not-found.
+probe (tools/clients/capabilities.py; one GET of a list each). Each keyword
+overrides one of those facts; ``missing_features`` names capability probes
+that answer not-found.
 """
 
 from __future__ import annotations
@@ -93,12 +94,12 @@ class LiveWorkspace:
         self._missing_features = set(missing_features)
         self.metastores = _Strict(current=self._current, summary=self._summary)
         self.current_user = _Strict(me=self._me)
-        self.apps = _Strict(get=self._app_get, list=self._feature("LIST apps"))
-        self.database = _Strict(list_database_instances=self._feature("LIST database/instances"))
-        self.genie = _Strict(list_spaces=self._feature("LIST genie/spaces"))
-        self.warehouses = _Strict(list=self._feature("LIST sql/warehouses"))
-        self.serving_endpoints = _Strict(list=self._feature("LIST serving-endpoints"))
-        self.experiments = _Strict(list_experiments=self._feature("LIST mlflow/experiments"))
+        self.apps = _Strict(get=self._app_get, list=self._feature("GET apps (list)"))
+        self.database = _Strict(list_database_instances=self._feature("GET database/instances (list)"))
+        self.genie = _Strict(list_spaces=self._feature("GET genie/spaces (list)"))
+        self.warehouses = _Strict(list=self._feature("GET sql/warehouses (list)"))
+        self.serving_endpoints = _Strict(list=self._feature("GET serving-endpoints (list)"))
+        self.experiments = _Strict(list_experiments=self._feature("GET mlflow/experiments (list)"))
         self.api_client = _Strict(do=self._api_do)
         self.workspace = _Strict(download=self._download, get_status=self._get_status)
         self.catalogs = _Strict(get=self._catalog_get)
@@ -202,7 +203,7 @@ class LiveWorkspace:
 
     def _api_do(self, method: str, path: str, **_kwargs: Any) -> object:
         assert (method, path) == ("GET", "/api/2.1/supervisor-agents"), (method, path)
-        return self._feature("LIST supervisor-agents")()
+        return self._feature("GET supervisor-agents (list)")()
 
 
 class LiveAccount:

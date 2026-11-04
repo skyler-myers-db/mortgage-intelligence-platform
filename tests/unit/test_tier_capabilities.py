@@ -143,7 +143,7 @@ def test_the_live_checks_run_the_capability_preflight(tmp_path: Path, capsys: py
     profile = paychex_shaped_profile()
     env_file = tmp_path / ".env.local"
     env_file.write_text(env_file_text(profile), encoding="utf-8")
-    workspace = LiveWorkspace(profile, identity_ids=IDENTITY_IDS, missing_features=("LIST supervisor-agents",))
+    workspace = LiveWorkspace(profile, identity_ids=IDENTITY_IDS, missing_features=("GET supervisor-agents (list)",))
     account = LiveAccount(IDENTITY_IDS["account_principal"])
 
     code = live_checks.main([], environ={}, env_file=env_file, client=lambda: workspace, account=lambda: account)
@@ -151,4 +151,4 @@ def test_the_live_checks_run_the_capability_preflight(tmp_path: Path, capsys: py
     assert code == 2
     err = capsys.readouterr().err
     assert "needs Agent Bricks Supervisor agents, which this workspace does not offer" in err
-    assert "LIST supervisor-agents" in workspace.calls
+    assert "GET supervisor-agents (list)" in workspace.calls

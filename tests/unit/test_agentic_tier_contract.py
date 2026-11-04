@@ -95,8 +95,9 @@ def test_the_core_views_carry_the_core_contract_and_no_verifier() -> None:
     variables = views.bundle_vars(profile)
     assert "ai_gateway_verifier_client_id" not in variables
     assert variables["require_ai_gateway_verifier"] == "--ai-gateway-verifier-absent"
-    # The view names identities, never their values.
-    assert not set(target.values()) & set(IDENTITY_IDS.values()) - {IDENTITY_IDS["deployer"].lower()}
+    # The view names the agentic contract's identities, never their values (the
+    # deployer and jobs ids are the target's own root and run_as variables).
+    assert not set(target.values()) & set(IDENTITY_IDS.values()) - {IDENTITY_IDS["deployer"], IDENTITY_IDS["jobs"]}
 
 
 def test_a_core_profile_that_still_carries_a_verifier_never_binds_it() -> None:
@@ -123,10 +124,9 @@ def test_the_bundle_default_is_the_agentic_requirement_and_the_job_reads_the_var
     assert bundle["variables"]["require_ai_gateway_verifier"]["default"] == "--require-ai-gateway-verifier"
     task = bundle["resources"]["jobs"]["mip_lakebase_migrate"]["tasks"][0]
     parameters = task["spark_python_task"]["parameters"]
-    assert parameters[-2:] == [
-        "--ai-gateway-verifier-client-id=${var.ai_gateway_verifier_client_id}",
-        "${var.require_ai_gateway_verifier}",
-    ]
+    verifier = parameters.index("--ai-gateway-verifier-client-id=${var.ai_gateway_verifier_client_id}")
+    assert parameters[verifier + 1] == "${var.require_ai_gateway_verifier}"
+    assert "--require-ai-gateway-verifier" not in parameters, "the flag comes from the variable alone"
     assert views.CORE_TIER_VERIFIER_FLAG == "--ai-gateway-verifier-absent"
 
 
