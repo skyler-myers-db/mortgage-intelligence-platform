@@ -327,16 +327,8 @@ def _lineage(document: Mapping[str, Any] | None) -> dict[str, Any] | None:
 
 
 def _bundle_entries(plan: BundlePlan) -> tuple[dict[str, Any], list[AdoptRefusal]]:
-    """The resources the bundle declares: every top-level entry but a delete.
-
-    The direct engine plans a delete for a key this deployer's state binds and
-    the bundle no longer declares, so a delete names no bundle key; counting it
-    as one would hide ``deployer_state_orphan`` from the read-only plan.
-    """
-
-    entries = {
-        entry.symbolic: entry for entry in plan.entries if "." not in entry.kind and entry.action != "delete"
-    }
+    # A delete is a state key the bundle no longer declares (deployer_state_orphan), never a bundle key.
+    entries = {e.symbolic: e for e in plan.entries if "." not in e.kind and e.action != "delete"}
     by_key: dict[str, list[str]] = {}
     for symbolic, entry in entries.items():
         by_key.setdefault(entry.name, []).append(symbolic)

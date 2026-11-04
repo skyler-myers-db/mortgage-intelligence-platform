@@ -77,7 +77,7 @@ def _check(
 ) -> str | None:
     """bundle_env's verdict with ``ack`` exported (the authority's own digest unless given)."""
 
-    environ = {adopt.ACK_ENV: authority.sha256 if ack is None else ack}
+    environ = {bundle_env_adopt.ACK_ENV: authority.sha256 if ack is None else ack}
     verifier = bundle_env_adopt.edit_verifier(authority, profile, environ=environ, held_lease=lease or HeldLease())
     return bundle_env._validate_app_deployment_command(args, expected_app_name=APP, adopt_edit=verifier)
 
@@ -88,7 +88,6 @@ def _job(plan: object) -> Any:
 
 def test_the_profile_stub_names_the_estates_install() -> None:
     assert adopt.inputs_from_profile(PROFILE) == es.inputs()
-    assert bundle_env_adopt.FLAGS == adopt.AUTHORITY_FLAGS
 
 
 def test_exactly_the_planned_bind_and_its_inverse_are_admitted(acked: tuple[adopt.Authority, object]) -> None:
@@ -249,7 +248,7 @@ def _main(
 
     for name in KNOWN_NAMES:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.delenv(adopt.ACK_ENV, raising=False)
+    monkeypatch.delenv(bundle_env_adopt.ACK_ENV, raising=False)
     values = paychex_shaped_profile(MIP_LEGACY_BUNDLE_ROOT=LEGACY, MIP_DASHBOARD_PARENT_PATH=f"{LEGACY}/resources")
     env_local = tmp_path / ".env.local"
     env_local.write_text(env_file_text(values), encoding="utf-8")
@@ -264,7 +263,7 @@ def _main(
     }
     authority = _authority(tmp_path / "plan.json", document)
     if ack is not None:
-        monkeypatch.setenv(adopt.ACK_ENV, ack or authority.sha256)
+        monkeypatch.setenv(bundle_env_adopt.ACK_ENV, ack or authority.sha256)
     asserted: list[tuple[str, str]] = []
 
     def held_lease(app_name: str, given: Any) -> Any:

@@ -13,6 +13,7 @@ import pytest
 
 from tests.fixtures import adopt_estate as es
 from tools.databricks import adopt_legacy_map as legacy_map
+from tools.databricks import bundle_env_adopt
 from tools.databricks import install_state_adopt as adopt
 
 READS = frozenset(
@@ -352,16 +353,16 @@ def test_only_an_acknowledged_plan_authorizes_a_state_edit(tmp_path: Path) -> No
     text = __import__("json").dumps(plan.document)
     edit = plan.edits[0]
 
-    assert adopt.authorize_state_edit(text, plan.sha256, "bind", edit.key, edit.live_id) is None
-    assert adopt.authorize_state_edit(text, plan.sha256, "unbind", edit.key, None) is None, "its inverse"
-    assert adopt.authorize_state_edit(text, plan.sha256, "bind", edit.key, "999") is not None
-    assert adopt.authorize_state_edit(text, plan.sha256, "bind", "not_planned", "1") is not None
-    assert adopt.authorize_state_edit(text, "0" * 64, "bind", edit.key, edit.live_id) is not None
+    assert bundle_env_adopt.authorize_state_edit(text, plan.sha256, "bind", edit.key, edit.live_id) is None
+    assert bundle_env_adopt.authorize_state_edit(text, plan.sha256, "unbind", edit.key, None) is None, "its inverse"
+    assert bundle_env_adopt.authorize_state_edit(text, plan.sha256, "bind", edit.key, "999") is not None
+    assert bundle_env_adopt.authorize_state_edit(text, plan.sha256, "bind", "not_planned", "1") is not None
+    assert bundle_env_adopt.authorize_state_edit(text, "0" * 64, "bind", edit.key, edit.live_id) is not None
     tampered = text.replace(edit.live_id, edit.live_id + "0", 1)
-    assert adopt.authorize_state_edit(tampered, plan.sha256, "bind", edit.key, edit.live_id + "0") is not None
+    assert bundle_env_adopt.authorize_state_edit(tampered, plan.sha256, "bind", edit.key, edit.live_id + "0") is not None
     unadopt_plan = _plan(estate, es.FakeBundleCli(estate), "unadopt")
     unadopt_text = __import__("json").dumps(unadopt_plan.document)
-    assert adopt.authorize_state_edit(unadopt_text, unadopt_plan.sha256, "bind", edit.key, edit.live_id) is not None
+    assert bundle_env_adopt.authorize_state_edit(unadopt_text, unadopt_plan.sha256, "bind", edit.key, edit.live_id) is not None
 
 
 def test_the_bundle_cli_never_inherits_the_signing_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -373,7 +374,7 @@ def test_the_bundle_cli_never_inherits_the_signing_keys(monkeypatch: pytest.Monk
 
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", "PLACEHOLDER-signing-key")
     monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY", "PLACEHOLDER-attestation-key")
-    monkeypatch.setenv(adopt.ACK_ENV, "a" * 64)
+    monkeypatch.setenv(bundle_env_adopt.ACK_ENV, "a" * 64)
     monkeypatch.setattr(adopt.subprocess, "run", run)
     cli = adopt.BundleEnvCli(python="python")
     cli.bind("mip_ref_seed", "1001", adopt.Authority(tmp_path / "plan.json", "a" * 64, "lease-1", "0" * 40))
@@ -381,7 +382,7 @@ def test_the_bundle_cli_never_inherits_the_signing_keys(monkeypatch: pytest.Monk
     env = seen["env"]
     assert isinstance(env, dict) and "MIP_AI_GATEWAY_PROOF_SIGNING_KEY" not in env
     assert "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY" not in env
-    assert env[adopt.ACK_ENV] == "a" * 64, "bundle_env checks the operator's own ack"
+    assert env[bundle_env_adopt.ACK_ENV] == "a" * 64, "bundle_env checks the operator's own ack"
     assert seen["argv"] == [
         "python", "-m", "tools.databricks.bundle_env", "deployment", "bind", "mip_ref_seed", "1001",
         "-t", "client", "--auto-approve",

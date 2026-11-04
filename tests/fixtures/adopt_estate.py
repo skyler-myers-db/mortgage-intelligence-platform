@@ -16,7 +16,7 @@ deployer's state the way the direct engine does (unbound: create; bound: an
 update when a name differs, a recreate when a dashboard's parent differs,
 skip otherwise; a state key the bundle dropped: delete) and edits that state
 on bind and unbind, after checking each edit with
-``install_state_adopt.verify_state_edit``, as bundle_env does: its
+``bundle_env_adopt.verify_state_edit``, as bundle_env does: its
 ``acknowledged`` stands for the ``MIP_ADOPT_PLAN_ACK`` bundle_env would see (by
 default the plan's own digest, an operator who acknowledged it) and the lease
 is held. Every authority it is handed is recorded in ``authorities``.
@@ -38,8 +38,9 @@ from tests.fixtures import bundle_plan_fixtures as fx
 from tests.fixtures.fake_workspace import FakeTree
 from tools.databricks.adopt_legacy_map import AdoptInputs
 from tools.databricks.app_release_contract import api_path
+from tools.databricks.bundle_env_adopt import verify_state_edit
 from tools.databricks.bundle_plan_shape import BundlePlan, parse_plan
-from tools.databricks.install_state_adopt import Authority, verify_state_edit
+from tools.databricks.install_state_adopt import Authority
 
 BUNDLE = "/Workspace/Users/{owner}/.bundle/mortgage-intelligence-platform/{leaf}"
 LEGACY_ROOT = BUNDLE.format(owner="legacy-owner@example.invalid", leaf="dev")

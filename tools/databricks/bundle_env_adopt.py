@@ -5,22 +5,25 @@ non-App key only under an adopt plan (tools/databricks/install_state_adopt.py).
 The caller hands bundle_env the plan file, its sha256 and the evidence of the
 signed lease it holds, as four wrapper-only flags that never reach the CLI.
 The plan file and its digest prove nothing alone, since anyone can digest a
-document they wrote, so the edit is admitted only when
-``install_state_adopt.verify_state_edit`` also finds the digest to be the
-operator's ``MIP_ADOPT_PLAN_ACK`` in this process's own environment (shell
-only, never .env.local), the plan naming this profile's install, and the
-profile App's signed deployment lease held. Taking that lease needs the
-deploy's signing authority, which the bundle CLI never inherits.
+document they wrote, so the edit is admitted only when ``verify_state_edit``
+also finds the digest to be the operator's ``MIP_ADOPT_PLAN_ACK`` in this
+process's own environment (shell only, never .env.local), the plan naming
+this profile's install, and the profile App's signed deployment lease held.
+Taking that lease needs the deploy's signing authority, which the bundle CLI
+never inherits.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-# install_state_adopt.AUTHORITY_FLAGS: the plan file, its digest and the held lease.
+# The operator's exact digest ack (shell only, never .env.local).
+ACK_ENV = "MIP_ADOPT_PLAN_ACK"
+# The wrapper-only flags: the plan file, its digest and the held lease's evidence.
 FLAGS = ("--adopt-plan", "--adopt-plan-sha256", "--adopt-lease-id", "--adopt-source-git-sha")
 
 
@@ -58,6 +61,81 @@ def split_authority(args: list[str]) -> tuple[list[str], Any | None, str | None]
     return kept, Authority(Path(plan), sha256, lease_id, source_git_sha), None
 
 
+def authorize_state_edit(document_text: str, sha256: str, action: str, key: str, live_id: str | None) -> str | None:
+    """``None`` when the acknowledged plan names exactly this bind or unbind; else why not.
+
+    bundle_env calls this before it lets the CLI edit state for a non-App key:
+    a bind must be one of an adopt plan's binds; an unbind one of an unadopt
+    plan's unbinds, or the inverse of an adopt plan's bind.
+    """
+
+    from tools.databricks.adopt_legacy_map import PLAN_SCHEMA
+    from tools.databricks.bundle_plan_shape import sha256_hex
+
+    try:
+        document = json.loads(document_text)
+    except ValueError:
+        return "the adopt plan is not JSON"
+    if not isinstance(document, dict) or document.get("schema") != PLAN_SCHEMA:
+        return "the adopt plan is not the reviewed schema"
+    if sha256_hex(document) != sha256:
+        return "the adopt plan is not the acknowledged one"
+    phase = document.get("phase")
+    edits = document.get("bind" if phase == "adopt" else "unbind") or []
+    pairs = {(str(edit.get("key")), str(edit.get("id"))) for edit in edits if isinstance(edit, dict)}
+    if action == "bind" and phase == "adopt" and (key, str(live_id)) in pairs:
+        return None
+    if action == "unbind" and key in {pair[0] for pair in pairs}:
+        return None
+    return f"the acknowledged {phase} plan does not {action} this key"
+
+
+def verify_state_edit(
+    authority: Any,
+    action: str,
+    key: str,
+    live_id: str | None,
+    *,
+    acknowledged: str,
+    inputs: Any,
+    lease: Callable[[], None],
+) -> str | None:
+    """``None`` only for an edit the operator acknowledged, for this install, under the held lease.
+
+    bundle_env's gate for a non-App state edit. A plan file and its digest
+    prove nothing alone: anyone can digest a document they wrote. So the
+    digest must also be the operator's ``MIP_ADOPT_PLAN_ACK`` (``acknowledged``,
+    from bundle_env's own environment), the document must name this
+    profile's client, deployer root and legacy root, and the signed deployment
+    lease must be held: taking one needs the deploy's signing authority,
+    which the bundle CLI never inherits. The lease is asserted last, after
+    every local check.
+    """
+
+    if not acknowledged.strip() or acknowledged.strip() != authority.sha256:
+        return f"{ACK_ENV} is not the adopt plan's sha256"
+    try:
+        text = Path(authority.plan_path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return "the adopt plan could not be read"
+    refusal = authorize_state_edit(text, authority.sha256, action, key, live_id)
+    if refusal is not None:
+        return refusal
+    document = json.loads(text)
+    for name, expected in (
+        ("client", inputs.client_key),
+        ("deployer_root", inputs.deployer_root),
+        ("legacy_root", inputs.legacy_root),
+    ):
+        if document.get(name) != expected:
+            return f"the adopt plan's {name} is not this install's"
+    try:
+        lease()
+    except Exception as exc:  # noqa: BLE001 - the class only: a lease error can name a holder
+        return f"the signed deployment lease is not held ({type(exc).__name__})"
+    return None
+
+
 def held_deployment_lease(app_name: str, authority: Any) -> Callable[[], None]:
     """The signed lease's held assertion, with the deployer's own client."""
 
@@ -87,12 +165,12 @@ def edit_verifier(
     assert_lease = held_lease or held_deployment_lease
 
     def verify(action: str, key: str, live_id: str | None) -> str | None:
-        return adopt.verify_state_edit(
+        return verify_state_edit(
             authority,
             action,
             key,
             live_id,
-            acknowledged=str(source.get(adopt.ACK_ENV) or ""),
+            acknowledged=str(source.get(ACK_ENV) or ""),
             inputs=adopt.inputs_from_profile(profile),
             lease=lambda: assert_lease(profile.app_name, authority)(),
         )
