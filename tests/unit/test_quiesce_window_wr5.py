@@ -169,6 +169,13 @@ def test_the_python_side_of_wr5_reaches_no_primitive() -> None:
 
 
 FAKE_PYTHON = r"""#!/usr/bin/env bash
+if [[ "${1:-}" == "-c" ]]; then
+  case "${2:-}" in
+    *version_info*) echo 3 ;;
+    *) [[ -z "${IMPORTS_FAIL:-}" ]] || exit 1 ;;
+  esac
+  exit 0
+fi
 printf '%s\n' "$*" >> "$CALLS"
 out=""; prev=""
 for arg in "$@"; do
@@ -203,7 +210,7 @@ def _run_entry(tmp_path: Path, **env: str) -> tuple[int, list[str]]:
     bash = shutil.which("bash", path="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin") or "bash"
     result = subprocess.run(
         [bash, str(ENTRY), "--journal", str(tmp_path / "journal.json")],
-        env={**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "PYTHON": str(bin_dir / "fake-python"), "CALLS": str(calls), **env},
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "MIP_DEPLOY_PYTHON": str(bin_dir / "fake-python"), "CALLS": str(calls), **env},
         capture_output=True,
         text=True,
         timeout=60,
@@ -228,6 +235,16 @@ def test_the_entry_runs_plan_journal_stop_apply_start_prove_close_in_order(tmp_p
     for mode in ("--window-open", "--in-window"):
         line = next(line for line in lines if mode in line)
         assert "--window-plan " in line and line.split("--window-plan ")[1].split()[0].endswith("/plan.json"), mode
+
+
+@pytest.mark.parametrize("env", [{"IMPORTS_FAIL": "1"}, {"MIP_DEPLOY_PYTHON": "fake-python"}], ids=["imports", "relative"])
+def test_the_entry_proves_its_interpreter_before_planning(tmp_path: Path, env: dict[str, str]) -> None:
+    """The deploy's interpreter rule, and every module the window imports, before any call."""
+
+    rc, lines = _run_entry(tmp_path, **env)
+    assert rc == 2 and lines == [], "nothing was planned, stopped or started"
+    text = ENTRY.read_text(encoding="utf-8")
+    assert 'PYTHON="${PYTHON:-' not in text and "MIP_DEPLOY_PYTHON" in text and ".venv/bin/python" in text
 
 
 def test_a_refused_plan_never_stops_or_starts(tmp_path: Path) -> None:

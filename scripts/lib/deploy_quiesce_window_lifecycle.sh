@@ -675,12 +675,14 @@ start_lakebase_handover_window() {
 }
 
 # The entry's EXIT trap: a window that failed with the App stopped starts it
-# again (one attempt); the journal keeps the handover's state for --revert.
+# again (one attempt); the journal keeps the handover's state for --revert,
+# the only exit once a window opened (plan-wr5 refuses a journal that is no
+# longer an exhausted apply).
 compensate_lakebase_handover_window() {
   [[ "${WR5_WINDOW_STOPPED:-0}" == "1" ]] || return 0
   echo "${RED}[wr5] the window failed with the App stopped; starting it again.${RST}" >&2
   if ! start_lakebase_handover_window; then
-    echo "${RED}[wr5] the App did not provably start; start it by hand (databricks apps start), then revert or re-run the window.${RST}" >&2
+    echo "${RED}[wr5] the App did not provably start; start it by hand (databricks apps start), then revert: python -m tools.clients.lakebase_handover --revert --journal <path> (a window that opened is never planned again).${RST}" >&2
     return 1
   fi
 }

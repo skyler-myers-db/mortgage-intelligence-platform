@@ -2715,6 +2715,12 @@ half-applied (exit 4) and offers exactly two exits:
   intact, is the one `MIP_ACK_QUIESCE_WINDOW` names for this run and pins this
   journal's remainder; `--in-window` also refuses unless the planned App reads
   STOPPED (read-only) and the plan's PostgreSQL preconditions still hold.
+  The entry selects the deploy's interpreter (`MIP_DEPLOY_PYTHON`, else
+  `.venv/bin/python`, else `python3`) and refuses, before planning, one that
+  cannot import the window's modules (psycopg, databricks-sdk). A window that
+  opened is never planned again (`plan-wr5` then refuses
+  `window_handover_not_exhausted`): after a failed or exhausted window the
+  exit is `--revert --journal <path>`.
   WR5 is for an install no signed blue governs yet (the
   handover runs before adoption, which then signs the deployment the start
   created); a signed install refuses (`window_wr5_signed_install`), since its
