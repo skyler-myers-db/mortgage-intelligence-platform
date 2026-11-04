@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -176,6 +177,59 @@ def test_an_aliased_apps_client_is_still_a_site(tmp_path: Path, monkeypatch: pyt
         ("tools/databricks/stray_alias.py", "bounce", "stop"),
         ("tools/databricks/stray_alias.py", "revive", "start"),
     }, "a read through the alias is not a site; a stop or start is"
+
+
+@pytest.mark.parametrize(
+    ("source", "apps_sites", "job_sites"),
+    (
+        # The review's mutation: a tuple alias of both clients.
+        (
+            "def cancel(workspace, name):\n    apps, jobs = workspace.apps, workspace.jobs\n"
+            "    apps.stop(name)\n    jobs.submit(run_name='x')\n",
+            {("cancel", "stop")},
+            {("cancel", "submit")},
+        ),
+        ("def f(w, n):\n    apps, *rest = w.apps, w.jobs\n    apps.stop(n)\n", {("f", "stop")}, set()),
+        ("def f(w, n):\n    for a in (w.apps,):\n        a.start(n)\n", {("f", "start")}, set()),
+        ("def f(w, n):\n    with ctx(w.apps) as a:\n        a.deploy(n, None)\n", {("f", "deploy")}, set()),
+        ("def f(n, a=W.apps):\n    a.update(n, None)\n", {("f", "update")}, set()),
+        ("def f(w, n):\n    a = w.apps\n    b = a\n    b.stop(n)\n", {("f", "stop")}, set()),
+        ("def f(w, n):\n    halt = w.apps.stop\n    halt(n)\n", {("f", "stop")}, set()),
+        ("def f(w, n, verb):\n    getattr(w.apps, verb)(n)\n", {("f", "<dynamic>")}, set()),
+        ("def f(apps, n):\n    apps.stop(n)\n", {("f", "stop")}, set()),
+        ("def f(w, n):\n    (j := w.jobs).cancel_run(n)\n", set(), {("f", "cancel_run")}),
+        (
+            "def f(w, n):\n    w.api_client.do('POST', f'/api/2.0/apps/{n}/stop')\n"
+            "    w.api_client.do('POST', '/api/2.2/jobs/runs/submit', body={})\n",
+            {("f", "rest:stop")},
+            {("f", "rest:submit")},
+        ),
+    ),
+    ids=("tuple", "starred", "for", "with", "default", "chain", "reference", "dynamic", "param", "walrus", "rest"),
+)
+def test_every_way_to_reach_a_client_is_still_a_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str, apps_sites: set[Any], job_sites: set[Any]
+) -> None:
+    # M0-PR9 review: a tuple alias or a raw REST call left every contract green.
+    root = _tools_copy(tmp_path)
+    (root / "tools" / "databricks" / "stray_bypass.py").write_text(source, encoding="utf-8")
+    monkeypatch.setattr(stops, "REPO", root)
+    module = "tools/databricks/stray_bypass.py"
+    assert stops.python_primitive_sites() - set(stops.PRIMITIVE_SITES) == {(module, *site) for site in apps_sites}
+    assert stops.python_job_run_sites() - set(stops.JOB_RUN_SITES) == {(module, *site) for site in job_sites}
+
+
+def test_reads_through_a_tainted_alias_are_not_sites(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Control: the over-approximation adds no site for a read or a value.
+    root = _tools_copy(tmp_path)
+    (root / "tools" / "databricks" / "stray_reads.py").write_text(
+        "def f(w, n):\n    app = w.apps.get(n)\n    apps, jobs = w.apps, w.jobs\n"
+        "    apps.list_deployments(n)\n    jobs.get_run(1)\n    getattr(app, 'url')\n    return app.update_time\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(stops, "REPO", root)
+    assert stops.python_primitive_sites() == set(stops.PRIMITIVE_SITES)
+    assert stops.python_job_run_sites() == set(stops.JOB_RUN_SITES)
 
 
 def test_a_new_cli_that_reaches_a_reviewed_primitive_is_an_unreviewed_entry_point(

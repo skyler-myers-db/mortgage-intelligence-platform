@@ -45,6 +45,11 @@ PRIMITIVES = (
     '"$PYTHON" - <<\'PYEOF\'\nfrom tools.databricks.stop_app_fail_closed import stop_app_fail_closed\nPYEOF',
     '"$PYTHON" - <<\'PYEOF\'\nfrom tools.databricks import (\n    app_start_deployment,\n)\nPYEOF',
     '"$PYTHON" -c "import tools.databricks.app_deployment_repin as repin"',
+    # A raw REST stop or start, and an inline client a tuple alias hides (M0-PR9).
+    'databricks api post "/api/2.0/apps/${_GRANTS_APP_NAME}/stop"',
+    'curl -X POST "$DATABRICKS_HOST/api/2.0/apps/$APP_NAME/start"',
+    '''"$PYTHON" -c 'a, j = w.apps, w.jobs; a.stop("x")' ''',
+    '"$PYTHON" - <<\'PYEOF\'\napps = getattr(w, "apps")\napps.stop(name)\nPYEOF',
 )
 NOT_PRIMITIVES = (
     '"$PYTHON" -m tools.databricks.stop_app_fail_closed --app-name "$APP_NAME" --assert-identity-only',
@@ -57,6 +62,10 @@ NOT_PRIMITIVES = (
     '"$PYTHON" -m tools.databricks.stop_app_fail_closed --app-name "$A" --assert-identity-only  # check',
     '"$PYTHON" tools/databricks/quiesce_window.py status --out-env "$F"',
     '"$PYTHON" -c "from tools.databricks.app_release_contract import api_path"',
+    # A REST statement and a direct read stay allowed (M0-PR9).
+    'databricks api post /api/2.0/sql/statements/ --json "$J"',
+    'databricks api get "/api/2.0/apps/$APP_NAME"',
+    '''"$PYTHON" -c 'print(w.apps.get("x").url, w.jobs.get_run(1).state)' ''',
 )
 
 
@@ -121,6 +130,11 @@ def test_no_shell_file_runs_the_dead_man_it_runs_only_as_the_submitted_job(path:
         "databricks jobs cancel-all-runs --job-id 7",
         '"$PYTHON" - <<\'PYEOF\'\nclient.jobs.submit(run_name="x")\nPYEOF',
         '"$PYTHON" -c "w.jobs.cancel_run(42)"',
+        # M0-PR9: the REST forms and an inline client a tuple alias hides.
+        'databricks api post "/api/2.2/jobs/runs/submit" --json "@$PAYLOAD"',
+        'curl -X POST "$DATABRICKS_HOST/api/2.1/jobs/runs/cancel" -d "$BODY"',
+        '''"$PYTHON" -c 'a, j = w.apps, w.jobs; j.submit(run_name="x")' ''',
+        '"$PYTHON" - <<\'PYEOF\'\njobs = getattr(w, "jobs")\njobs.submit(run_name="x")\nPYEOF',
     ),
 )
 def test_a_one_time_job_run_or_cancel_is_the_window_librarys_alone(line: str) -> None:
