@@ -383,11 +383,26 @@ def arm_for_release(
 
 
 def _is_this_apps_deadman(run: object, app_name: str) -> bool:
-    name = _text(getattr(run, "run_name", None))
+    """Exactly this App's dead-man: its run name, its ``--app`` and a governed release file.
+
+    The name is compared whole, never by prefix: App ``mip`` must not take
+    App ``mip-app``'s run for its own.
+    """
+
     tasks = list(getattr(run, "tasks", None) or ())
-    if not name.startswith(f"{_RUN_PREFIX}{app_name}-") or len(tasks) != 1:
+    if len(tasks) != 1:
         return False
-    python_file = _text(getattr(getattr(tasks[0], "spark_python_task", None), "python_file", None))
+    task = getattr(tasks[0], "spark_python_task", None)
+    values = [_text(value) for value in getattr(task, "parameters", None) or ()]
+    parameters = dict(zip(values[::2], values[1::2], strict=False))
+    token = parameters.get("--token", "")
+    if (
+        parameters.get("--app") != app_name
+        or len(token) != 64
+        or _text(getattr(run, "run_name", None)) != run_name(app_name, token)
+    ):
+        return False
+    python_file = _text(getattr(task, "python_file", None))
     folder = python_file.removesuffix(f"/{DEADMAN_RELPATH}")
     try:
         contract.release_id_in(folder)

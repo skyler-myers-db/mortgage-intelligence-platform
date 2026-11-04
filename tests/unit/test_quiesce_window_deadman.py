@@ -464,6 +464,25 @@ def test_the_cancel_cancels_only_this_apps_running_dead_man_and_deletes_nothing(
         deadman.cancel_deadman(estate.workspace, app_name=APP_NAME, run_id="4242; rm -rf /")
 
 
+def test_the_cancel_never_takes_another_apps_dead_man_for_this_apps() -> None:
+    # Review: App "mip" accepted App "mip-app"'s run by its name prefix.
+    estate = _estate()
+    _open(estate)
+    run = estate.jobs.only_run()
+    assert run.run_name.startswith(f"{deadman._RUN_PREFIX}mip-")
+    with pytest.raises(RuntimeError, match="not this App's dead-man"):
+        deadman.cancel_deadman(estate.workspace, app_name="mip", run_id=str(run.run_id))
+    task = run.tasks[0].spark_python_task
+    for flag, value in (("--app", "another-app"), ("--token", "f" * 64)):
+        original = list(task.parameters)
+        task.parameters[task.parameters.index(flag) + 1] = value
+        with pytest.raises(RuntimeError, match="not this App's dead-man"):
+            deadman.cancel_deadman(estate.workspace, app_name=APP_NAME, run_id=str(run.run_id))
+        task.parameters = original
+    assert estate.jobs.cancels == []
+    assert deadman.cancel_deadman(estate.workspace, app_name=APP_NAME, run_id=str(run.run_id)) == "cancelled"
+
+
 def test_the_cancel_mode_reports_and_never_raises_on_a_terminated_run(capsys: pytest.CaptureFixture[str]) -> None:
     estate = _estate()
     _open(estate)
