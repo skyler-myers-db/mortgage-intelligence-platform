@@ -175,15 +175,14 @@ def _keys(monkeypatch: pytest.MonkeyPatch) -> None:
         "MIP_AI_GATEWAY_PROOF_VERIFY_KEY",
         derive_gateway_proof_verify_key(SIGNING_KEY),
     )
-    monkeypatch.setenv("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", WRITER_ID)
 
 
 def test_workspace_lease_is_exclusive_and_owner_releasable() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
 
     with pytest.raises(RuntimeError, match="already held by deployer@example.com"):
-        lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40, now=NOW)
+        lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="b" * 40, now=NOW)
 
     lease.release(workspace, app_name="mip-app", lease_id=lease_id)
     released = lease._download(workspace, app_name="mip-app")
@@ -196,7 +195,7 @@ def test_later_lease_recovers_exact_journaled_app_after_creator_process_loss(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    first_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    first_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -209,7 +208,7 @@ def test_later_lease_recovers_exact_journaled_app_after_creator_process_loss(
     monkeypatch.setattr(first_install, "_load_record", _missing_rollback)
 
     lease.release(workspace, app_name="mip-app", lease_id=first_lease)
-    retry_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
+    retry_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="b" * 40)
 
     assert (
         first_install.status(
@@ -241,7 +240,7 @@ def test_process_loss_before_app_identity_claim_recovers_from_server_audit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    creation_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    creation_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -252,7 +251,7 @@ def test_process_loss_before_app_identity_claim_recovers_from_server_audit(
     workspace.apps.app = _journaled_app(marked)
     monkeypatch.setattr(first_install, "_load_record", _missing_rollback)
     lease.release(workspace, app_name="mip-app", lease_id=creation_lease)
-    retry_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
+    retry_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="b" * 40)
 
     assert (
         first_install.status(
@@ -316,7 +315,7 @@ def test_present_unclaimed_app_polls_until_audit_evidence_arrives(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    creation_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    creation_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -326,7 +325,7 @@ def test_present_unclaimed_app_polls_until_audit_evidence_arrives(
     )
     workspace.apps.app = _journaled_app(marked)
     lease.release(workspace, app_name="mip-app", lease_id=creation_lease)
-    retry_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
+    retry_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="b" * 40)
     record = first_install._download(workspace, app_name="mip-app")
     assert record is not None
     visible = False
@@ -367,6 +366,7 @@ def test_expired_lease_takeover_recovers_unclaimed_app_from_audit(
     prepared_at = datetime.now(UTC) - lease.LEASE_TTL - timedelta(minutes=1)
     creation_lease = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="a" * 40,
         now=prepared_at,
@@ -382,6 +382,7 @@ def test_expired_lease_takeover_recovers_unclaimed_app_from_audit(
     workspace.apps.app = _journaled_app(marked)
     retry_lease = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="b" * 40,
         expired_recovery_lease_id=lease.lease_support.recovery_root(
@@ -416,7 +417,7 @@ def test_stale_lease_cannot_commit_audit_identity_claim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    creation_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    creation_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -426,11 +427,11 @@ def test_stale_lease_cannot_commit_audit_identity_claim(
     )
     workspace.apps.app = _journaled_app(marked)
     lease.release(workspace, app_name="mip-app", lease_id=creation_lease)
-    retry_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
+    retry_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="b" * 40)
 
     def lose_lease_during_audit(*_args: object, **_kwargs: object) -> AppCreateAuditProof:
         lease.release(workspace, app_name="mip-app", lease_id=retry_lease)
-        lease.acquire(workspace, app_name="mip-app", source_git_sha="c" * 40)
+        lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="c" * 40)
         return AppCreateAuditProof(
             event_time=datetime.now(UTC).isoformat(),
             event_id="audit-event-id",
@@ -458,7 +459,7 @@ def test_stale_lease_cannot_delete_claimed_first_install_app(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    deployment_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    deployment_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -478,7 +479,7 @@ def test_stale_lease_cannot_delete_claimed_first_install_app(
         app = original_assert_owned(*args, **kwargs)
         if calls == 2:
             lease.release(workspace, app_name="mip-app", lease_id=deployment_lease)
-            lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
+            lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="b" * 40)
         return app
 
     monkeypatch.setattr(first_install, "_assert_owned_app", lose_lease_before_delete)
@@ -500,7 +501,7 @@ def test_same_metadata_replacement_before_identity_claim_is_never_claimed_or_del
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    creation_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    creation_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -564,7 +565,7 @@ def test_identity_claim_accepts_workspace_upload_that_commits_then_times_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    creation_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    creation_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -600,7 +601,7 @@ def test_identity_claim_timeout_before_commit_remains_unclaimed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    creation_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    creation_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -635,7 +636,7 @@ def test_recovery_accepts_app_delete_that_commits_then_times_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    deployment_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    deployment_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -671,7 +672,7 @@ def test_recovery_refuses_app_delete_timeout_before_commit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    deployment_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    deployment_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     marked = first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -712,7 +713,7 @@ def test_arbitrary_unsigned_app_is_never_deleted_without_matching_signed_journal
         compute_status=SimpleNamespace(state="STOPPED"),
         pending_deployment=None,
     )
-    retry_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
+    retry_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="b" * 40)
 
     with pytest.raises(RuntimeError, match="not eligible for unsigned recovery"):
         first_install.delete_recoverable(
@@ -755,6 +756,7 @@ def test_signed_journal_never_authorizes_a_mismatched_live_app_deletion(
     workspace = _workspace()
     deployment_lease = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="a" * 40,
     )
@@ -790,6 +792,7 @@ def test_matching_signed_app_state_cannot_be_deleted_as_first_install_recovery(
     workspace = _workspace()
     deployment_lease = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="a" * 40,
     )
@@ -854,6 +857,7 @@ def test_orphaned_first_install_intent_is_cleared_only_after_window_and_audit(
     workspace = _workspace()
     deployment_lease = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="a" * 40,
         now=NOW,
@@ -914,6 +918,7 @@ def test_orphaned_first_install_intent_is_cleared_only_after_window_and_audit(
     )
     retry_lease = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="b" * 40,
         now=retry_now,
@@ -935,6 +940,7 @@ def test_authenticated_delete_converges_an_orphaned_app_delete() -> None:
     workspace = _workspace()
     deployment_lease = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="a" * 40,
     )
@@ -976,7 +982,7 @@ def test_authenticated_delete_converges_an_orphaned_app_delete() -> None:
 
 def test_workspace_lease_rejects_signed_record_copied_to_another_app_path() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     workspace.workspace.data[lease._path("other-app")] = workspace.workspace.data[
         lease._path("mip-app")
     ]
@@ -994,12 +1000,12 @@ def test_workspace_lease_rejects_signed_record_copied_to_another_app_path() -> N
 @pytest.mark.parametrize("source", ("g" * 40, "A" * 40, "a" * 39, "a" * 41))
 def test_workspace_lease_rejects_noncanonical_source_sha(source: str) -> None:
     with pytest.raises(ValueError, match="exact source SHA"):
-        lease.acquire(_workspace(), app_name="mip-app", source_git_sha=source, now=NOW)
+        lease.acquire(_workspace(), writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha=source, now=NOW)
 
 
 def test_delegated_writer_can_use_bound_lease_assertion() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     workspace.current_user.me = lambda: SimpleNamespace(user_name=WRITER_ID)
     workspace.workspace.get_permissions = lambda *_args, **_kwargs: pytest.fail(
         "CAN_READ writer must not call the manager-only ACL API"
@@ -1017,7 +1023,7 @@ def test_delegated_writer_can_use_bound_lease_assertion() -> None:
 
 def test_delegated_writer_can_assert_but_cannot_release_lease() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     workspace.current_user.me = lambda: SimpleNamespace(user_name=WRITER_ID)
 
     record = lease.assert_held(
@@ -1035,7 +1041,7 @@ def test_delegated_writer_can_assert_but_cannot_release_lease() -> None:
 
 def test_assertion_rejects_lease_replacement_during_acl_validation() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     original_get_permissions = workspace.workspace.get_permissions
     released = False
 
@@ -1069,7 +1075,7 @@ def test_assertion_rejects_lease_replacement_during_acl_validation() -> None:
 
 def test_assertion_accepts_same_lease_renewal_during_acl_validation() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     original_get_permissions = workspace.workspace.get_permissions
     renewed = False
 
@@ -1108,7 +1114,7 @@ def test_assertion_accepts_same_lease_renewal_during_acl_validation() -> None:
 
 def test_unrelated_actor_cannot_assert_deployment_lease() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     workspace.current_user.me = lambda: SimpleNamespace(user_name="other-application-id")
 
     with pytest.raises(RuntimeError, match="not its holder or delegated writer"):
@@ -1127,7 +1133,7 @@ def test_lease_root_avoids_shared_users_management_inheritance() -> None:
 
 def test_release_appends_signed_terminal_and_never_deletes_history() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     workspace.workspace.delete = lambda _path: pytest.fail("lease history must be append-only")
 
     lease.release(workspace, app_name="mip-app", lease_id=lease_id)
@@ -1169,7 +1175,7 @@ def test_release_preserves_only_holder_and_reserved_writer_root_acl() -> None:
 
 def test_release_accepts_successor_create_that_commits_then_times_out() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     real_upload = workspace.workspace.upload
     calls = 0
 
@@ -1198,7 +1204,7 @@ def test_release_accepts_successor_create_that_commits_then_times_out() -> None:
 
 def test_release_refuses_timeout_before_successor_commit() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     real_upload = workspace.workspace.upload
     calls = 0
 
@@ -1227,7 +1233,7 @@ def test_release_refuses_timeout_before_successor_commit() -> None:
 
 def test_release_is_idempotent_after_signed_terminal_commit() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     lease.release(workspace, app_name="mip-app", lease_id=lease_id)
 
     lease.release(workspace, app_name="mip-app", lease_id=lease_id)
@@ -1236,13 +1242,13 @@ def test_release_is_idempotent_after_signed_terminal_commit() -> None:
 
 def test_losing_different_holder_does_not_mutate_active_holder_acl() -> None:
     workspace = _workspace("first@example.com")
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     acl_before = list(workspace.workspace.access_control_list)
     calls_before = workspace.workspace.set_permissions_calls
     workspace.current_user.me = lambda: SimpleNamespace(user_name="loser@example.com")
 
     with pytest.raises(RuntimeError, match="already held by first@example.com"):
-        lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40, now=NOW)
+        lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="b" * 40, now=NOW)
 
     assert workspace.workspace.set_permissions_calls == calls_before
     assert workspace.workspace.access_control_list == acl_before
@@ -1276,13 +1282,14 @@ def test_winner_postflight_failure_appends_signed_release_for_retry(
     monkeypatch.setattr(lease, "_ensure_protected_root", fail_once)
 
     with pytest.raises(RuntimeError, match="injected ACL postflight failure"):
-        lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+        lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
 
     failed = lease._download(workspace, app_name="mip-app")
     assert failed is not None
     assert failed["state"] == "released"
     lease_id = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="a" * 40,
         now=NOW,
@@ -1301,7 +1308,7 @@ def test_process_death_after_first_generation_commit_repairs_exact_acl(
 
     monkeypatch.setattr(lease, "_ensure_protected_root", process_killed)
     with pytest.raises(SystemExit, match="process death"):
-        lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+        lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
 
     committed = lease._download(workspace, app_name="mip-app")
     assert committed is not None
@@ -1311,6 +1318,7 @@ def test_process_death_after_first_generation_commit_repairs_exact_acl(
     assert recovery == committed["recovery_root_lease_id"]
     retry = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="b" * 40,
         expired_recovery_lease_id=recovery,
@@ -1337,6 +1345,7 @@ def test_post_commit_upload_timeout_authenticates_exact_candidate() -> None:
 
     lease_id = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="a" * 40,
         now=NOW,
@@ -1364,6 +1373,7 @@ def test_head_hint_failure_never_rolls_back_authoritative_generation() -> None:
 
     lease_id = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="a" * 40,
         now=NOW,
@@ -1395,7 +1405,7 @@ def test_protocol_marker_postcommit_failure_compensates_to_recoverable_release()
     workspace.workspace.upload = fail_first_marker
 
     with pytest.raises(RuntimeError, match="locator upload failed without an exact commit"):
-        lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+        lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
 
     current = lease._download(workspace, app_name="mip-app")
     assert current is not None and current["state"] == "released"
@@ -1431,7 +1441,7 @@ def test_persistent_protocol_marker_failure_never_appends_markerless_release() -
         RuntimeError,
         match="acquisition failed and signed compensation did not complete",
     ):
-        lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+        lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
 
     base = lease._read_record(
         workspace,
@@ -1485,6 +1495,7 @@ def test_first_v5_acquire_creates_parent_before_checkpoint_upload() -> None:
 
     lease_id = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="a" * 40,
         now=NOW,
@@ -1547,6 +1558,7 @@ def test_ambiguous_upload_never_deletes_a_different_persisted_record() -> None:
     with pytest.raises(RuntimeError, match="without an exact commit"):
         lease.acquire(
             workspace,
+            writer_application_id=WRITER_ID,
             app_name="mip-app",
             source_git_sha="a" * 40,
             now=NOW,
@@ -1559,10 +1571,11 @@ def test_ambiguous_upload_never_deletes_a_different_persisted_record() -> None:
 
 def test_expired_signed_lease_is_replaced_exactly_for_automatic_retry() -> None:
     workspace = _workspace()
-    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    first = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
 
     replacement = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="b" * 40,
         expired_recovery_lease_id=first,
@@ -1578,7 +1591,7 @@ def test_expired_signed_lease_is_replaced_exactly_for_automatic_retry() -> None:
 
 def test_expired_signed_lease_without_exact_recovery_authority_is_not_replaced() -> None:
     workspace = _workspace()
-    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    first = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
 
     with pytest.raises(RuntimeError, match="not authorized by its durable recovery root"):
         lease.acquire(
@@ -1595,11 +1608,12 @@ def test_expired_signed_lease_without_exact_recovery_authority_is_not_replaced()
 
 def test_expired_signed_lease_rejects_wrong_id_for_same_writer() -> None:
     workspace = _workspace()
-    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    first = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
 
     with pytest.raises(RuntimeError, match="not authorized by its durable recovery root"):
         lease.acquire(
             workspace,
+            writer_application_id=WRITER_ID,
             app_name="mip-app",
             source_git_sha="b" * 40,
             expired_recovery_lease_id="different-expired-lease-id",
@@ -1611,11 +1625,12 @@ def test_expired_signed_lease_rejects_wrong_id_for_same_writer() -> None:
 
 def test_only_first_contender_can_replace_exact_expired_lease() -> None:
     workspace = _workspace()
-    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    first = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     retry_now = NOW + lease.LEASE_TTL + timedelta(seconds=1)
 
     winner = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="b" * 40,
         expired_recovery_lease_id=first,
@@ -1624,6 +1639,7 @@ def test_only_first_contender_can_replace_exact_expired_lease() -> None:
     with pytest.raises(RuntimeError, match="already held"):
         lease.acquire(
             workspace,
+            writer_application_id=WRITER_ID,
             app_name="mip-app",
             source_git_sha="c" * 40,
             expired_recovery_lease_id=first,
@@ -1637,6 +1653,7 @@ def test_signed_lease_keeps_exact_recovery_root_without_first_install_journal() 
     workspace = _workspace()
     creation_lease = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="a" * 40,
         now=NOW,
@@ -1646,6 +1663,7 @@ def test_signed_lease_keeps_exact_recovery_root_without_first_install_journal() 
 
     retry = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="b" * 40,
         expired_recovery_lease_id=recovery,
@@ -1656,20 +1674,20 @@ def test_signed_lease_keeps_exact_recovery_root_without_first_install_journal() 
 
 def test_released_lease_allows_clean_handoff_to_a_new_deployer_identity() -> None:
     workspace = _workspace()
-    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    first = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     lease.release(workspace, app_name="mip-app", lease_id=first)
     workspace.current_user.me = lambda: SimpleNamespace(
         user_name="replacement-deployer@example.com"
     )
 
     assert lease.lease_support.recovery_root(lease, workspace, app_name="mip-app") == ""
-    second = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
+    second = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="b" * 40)
     assert lease._download(workspace, app_name="mip-app")["lease_id"] == second
 
 
 def test_released_lease_preserves_same_deployer_recovery_lineage() -> None:
     workspace = _workspace()
-    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    first = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     lease.release(workspace, app_name="mip-app", lease_id=first)
 
     recovery, candidates = lease.lease_support.recovery_context(
@@ -1680,6 +1698,7 @@ def test_released_lease_preserves_same_deployer_recovery_lineage() -> None:
 
     second = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="b" * 40,
         expired_recovery_lease_id=recovery,
@@ -1698,10 +1717,11 @@ def test_recovery_root_cli_exports_every_same_deployer_candidate(
     tmp_path: Path,
 ) -> None:
     workspace = _workspace()
-    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    first = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     lease.release(workspace, app_name="mip-app", lease_id=first)
     second = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="b" * 40,
         expired_recovery_lease_id=first,
@@ -1759,7 +1779,7 @@ def test_released_lineage_remains_discoverable_after_runtime_writer_rotation() -
 
 def test_original_holder_can_recover_lineage_after_released_actor_handoff() -> None:
     workspace = _workspace()
-    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    first = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     lease.release(workspace, app_name="mip-app", lease_id=first)
     workspace.current_user.me = lambda: SimpleNamespace(
         user_name="replacement-deployer@example.com"
@@ -1786,6 +1806,7 @@ def test_original_holder_can_recover_lineage_after_released_actor_handoff() -> N
     ]
     resumed = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="a" * 40,
         expired_recovery_lease_id=recovery,
@@ -1890,7 +1911,7 @@ def test_losing_historical_holder_cannot_overwrite_winning_lease_acl(
 
 def test_active_lease_recovery_root_is_not_disclosed_to_another_actor() -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     workspace.current_user.me = lambda: SimpleNamespace(
         user_name="replacement-deployer@example.com"
     )
@@ -1901,7 +1922,7 @@ def test_active_lease_recovery_root_is_not_disclosed_to_another_actor() -> None:
 
 def test_lease_renewal_extends_exact_owner_fence() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
 
     lease.renew(
         workspace,
@@ -1925,7 +1946,7 @@ def test_renewal_converges_when_same_lease_successor_wins_race(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     real_create = lease._create_generation
     raced = False
 
@@ -1961,7 +1982,7 @@ def test_renewal_converges_when_same_lease_successor_wins_race(
 
 def test_renewal_rejects_wrong_source_or_lease() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
 
     with pytest.raises(RuntimeError, match="ownership or source changed"):
         lease.renew(
@@ -1975,7 +1996,7 @@ def test_renewal_rejects_wrong_source_or_lease() -> None:
 
 def test_lease_fence_rejects_storage_acl_drift() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     workspace.workspace.access_control_list.append(
         SimpleNamespace(
             user_name="other@example.com",
@@ -1996,7 +2017,7 @@ def test_lease_fence_rejects_storage_acl_drift() -> None:
 
 def test_lease_fence_rejects_inherited_non_admin_group_management() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     workspace.workspace.access_control_list.append(
         SimpleNamespace(
             user_name=None,
@@ -2017,7 +2038,7 @@ def test_lease_fence_rejects_inherited_non_admin_group_management() -> None:
 
 def test_deployer_acl_attestation_rejects_extra_reader() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     workspace.workspace.access_control_list.append(
         SimpleNamespace(
             user_name="reader@example.com",
@@ -2038,7 +2059,7 @@ def test_deployer_acl_attestation_rejects_extra_reader() -> None:
 
 def test_delegated_writer_rejects_stale_deployer_acl_attestation() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     workspace.current_user.me = lambda: SimpleNamespace(user_name=WRITER_ID)
 
     with pytest.raises(RuntimeError, match="deployer ACL attestation is stale"):
@@ -2055,7 +2076,7 @@ def test_delegated_writer_resamples_time_after_stalled_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     workspace.current_user.me = lambda: SimpleNamespace(user_name=WRITER_ID)
     observations = iter(
         (
@@ -2076,7 +2097,7 @@ def test_delegated_writer_resamples_time_after_stalled_validation(
 
 def test_delegated_writer_cannot_renew_acl_attestation() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     workspace.current_user.me = lambda: SimpleNamespace(user_name=WRITER_ID)
 
     with pytest.raises(RuntimeError, match="Only the App deployment lease holder"):
@@ -2091,7 +2112,7 @@ def test_delegated_writer_cannot_renew_acl_attestation() -> None:
 
 def test_holder_heartbeat_keeps_writer_attestation_fresh_at_lifetime_cap() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     lease.renew(
         workspace,
         app_name="mip-app",
@@ -2144,7 +2165,7 @@ def test_holder_heartbeat_keeps_writer_attestation_fresh_at_lifetime_cap() -> No
 
 def test_pre_acl_field_v4_chain_keeps_original_parent_digest_compatible() -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     base_path = lease._path("mip-app")
     current_base = json.loads(workspace.workspace.data[base_path])
     legacy_base_unsigned = {
@@ -2197,7 +2218,7 @@ def test_pre_acl_field_v4_chain_keeps_original_parent_digest_compatible() -> Non
 
 def test_legacy_lease_json_keeps_whitespace_compatibility_but_rejects_duplicates() -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     base_path = lease._path("mip-app")
     v5 = json.loads(workspace.workspace.data[base_path])
     v4_unsigned = {
@@ -2253,7 +2274,7 @@ def test_legacy_lease_json_keeps_whitespace_compatibility_but_rejects_duplicates
 
 def test_tampered_lease_cannot_be_replaced_or_released() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     path = lease._path("mip-app")
     payload = json.loads(workspace.workspace.data[path])
     payload["holder"] = "attacker@example.com"
@@ -2262,6 +2283,7 @@ def test_tampered_lease_cannot_be_replaced_or_released() -> None:
     with pytest.raises(RuntimeError, match="signature is invalid"):
         lease.acquire(
             workspace,
+            writer_application_id=WRITER_ID,
             app_name="mip-app",
             source_git_sha="b" * 40,
             now=NOW + lease.LEASE_TTL + timedelta(seconds=1),
@@ -2379,7 +2401,7 @@ def test_acquire_cli_reports_environment_handoff_compensation_failure(
 
 def test_two_expired_takeover_contenders_have_one_atomic_successor_winner() -> None:
     workspace = _workspace()
-    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    first = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     original_upload = workspace.workspace.upload
     barrier = threading.Barrier(2)
     successor_lock = threading.Lock()
@@ -2413,6 +2435,7 @@ def test_two_expired_takeover_contenders_have_one_atomic_successor_winner() -> N
                 "won",
                 lease.acquire(
                     workspace,
+                    writer_application_id=WRITER_ID,
                     app_name="mip-app",
                     source_git_sha=source * 40,
                     expired_recovery_lease_id=first,
@@ -2454,7 +2477,7 @@ def test_two_expired_takeover_contenders_have_one_atomic_successor_winner() -> N
 
 def test_signed_takeover_transition_cannot_change_holder_identity() -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     parent = lease._download(workspace, app_name="mip-app")
     assert parent is not None
     acquired_at = parent["expires_at"]
@@ -2486,7 +2509,7 @@ def test_signed_takeover_transition_cannot_change_holder_identity() -> None:
 
 def test_stale_and_corrupt_head_hints_cannot_override_canonical_successor() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     stale = workspace.workspace.data[lease._head_path("mip-app")]
     lease.renew(
         workspace,
@@ -2510,7 +2533,7 @@ def test_stale_and_corrupt_head_hints_cannot_override_canonical_successor() -> N
 
 def test_head_hint_bounds_reads_after_more_than_4096_historical_generations() -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     initial = lease._download(workspace, app_name="mip-app")
     assert initial is not None
     recovery_fields = {
@@ -2574,7 +2597,7 @@ def test_repair_head_explicitly_scans_beyond_v5_automatic_bound(
     corrupt: bool,
 ) -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     for _ in range(lease.MAX_SUCCESSORS_AFTER_HINT + 1):
         parent = lease._download(workspace, app_name="mip-app")
         assert parent is not None
@@ -2624,7 +2647,7 @@ def test_repair_head_rejects_actor_other_than_signed_holder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     head_path = lease._head_path("mip-app")
     del workspace.workspace.data[head_path]
     workspace.current_user.me = lambda: SimpleNamespace(user_name="other@example.com")
@@ -2642,7 +2665,7 @@ def test_repair_head_replaces_corrupt_v5_locator(
     head_state: str,
 ) -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     current = lease._download(workspace, app_name="mip-app")
     assert current is not None
     head_path = lease._head_path("mip-app")
@@ -2677,7 +2700,7 @@ def test_repair_head_replaces_corrupt_v5_locator(
 @pytest.mark.parametrize("operation", ("sign", "verify"))
 def test_top_level_key_epoch_rejects_json_boolean(operation: str) -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     current = lease._download(workspace, app_name="mip-app")
     assert current is not None
     unsigned = {
@@ -2703,7 +2726,7 @@ def test_top_level_key_epoch_rejects_json_boolean(operation: str) -> None:
 @pytest.mark.parametrize("version", (2.0, 4.0, 5.0, False, True))
 def test_top_level_lease_version_requires_exact_json_integer(version: object) -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     current = lease._download(workspace, app_name="mip-app")
     assert current is not None
     forged = {**current, "version": version}
@@ -2717,7 +2740,7 @@ def test_top_level_lease_version_requires_exact_json_integer(version: object) ->
 @pytest.mark.parametrize("version", (5.0, True))
 def test_create_generation_rejects_inexact_version_before_upload(version: object) -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     current = lease._download(workspace, app_name="mip-app")
     assert current is not None
     invalid = {
@@ -2755,14 +2778,14 @@ def test_three_signing_key_epochs_keep_append_only_history_verifiable(
 
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", signing_keys[0])
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_VERIFY_KEY", verify_keys[0])
-    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    first = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     lease.release(workspace, app_name="mip-app", lease_id=first)
 
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS", verify_keys[0])
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY", verify_keys[0])
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", signing_keys[1])
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_VERIFY_KEY", verify_keys[1])
-    second = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
+    second = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="b" * 40)
     lease.release(workspace, app_name="mip-app", lease_id=second)
 
     monkeypatch.setenv(
@@ -2772,7 +2795,7 @@ def test_three_signing_key_epochs_keep_append_only_history_verifiable(
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY", verify_keys[1])
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", signing_keys[2])
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_VERIFY_KEY", verify_keys[2])
-    third = lease.acquire(workspace, app_name="mip-app", source_git_sha="c" * 40)
+    third = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="c" * 40)
 
     current = lease._download(workspace, app_name="mip-app")
     assert current is not None
@@ -2800,7 +2823,7 @@ def test_three_key_epochs_keep_first_install_recovery_journal_verifiable(
 
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", signing_keys[0])
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_VERIFY_KEY", verify_keys[0])
-    creation_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    creation_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -2849,6 +2872,7 @@ def test_expired_legacy_v2_lease_migrates_only_after_grace_and_exact_authority()
     with pytest.raises(RuntimeError, match="already held"):
         lease.acquire(
             workspace,
+            writer_application_id=WRITER_ID,
             app_name="mip-app",
             source_git_sha="b" * 40,
             expired_recovery_lease_id=legacy_id,
@@ -2856,6 +2880,7 @@ def test_expired_legacy_v2_lease_migrates_only_after_grace_and_exact_authority()
         )
     migrated = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="b" * 40,
         expired_recovery_lease_id=legacy_id,
@@ -2871,6 +2896,7 @@ def test_expired_legacy_v2_lease_migrates_only_after_grace_and_exact_authority()
     lease.release(workspace, app_name="mip-app", lease_id=migrated)
     following = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="c" * 40,
         now=NOW + lease.LEASE_TTL + lease.LEGACY_TAKEOVER_GRACE + timedelta(minutes=1),
@@ -2897,7 +2923,7 @@ def test_v5_recovery_checkpoint_storage_failures_close_recovery(
     message: str,
 ) -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     lease.release(workspace, app_name="mip-app", lease_id=lease_id)
     record = lease._download(workspace, app_name="mip-app")
     assert record is not None
@@ -2939,7 +2965,7 @@ def test_v5_recovery_checkpoint_storage_failures_close_recovery(
 @pytest.mark.parametrize("version", (True, 1.0))
 def test_v5_checkpoint_version_requires_exact_json_integer(version: object) -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     record = lease._download(workspace, app_name="mip-app")
     assert record is not None
     original = recovery_checkpoint._read(
@@ -2985,7 +3011,7 @@ def test_v5_checkpoint_persist_rejects_inexact_version_before_upload(
     version: object,
 ) -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     record = lease._download(workspace, app_name="mip-app")
     assert record is not None
     checkpoint = recovery_checkpoint._read(
@@ -3024,7 +3050,7 @@ def test_v5_protocol_locator_rejects_inexact_json(
     message: str,
 ) -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     path = recovery_checkpoint._protocol_marker_path(lease, "mip-app")
     canonical = workspace.workspace.data[path]
     if mutation == "noncanonical":
@@ -3048,7 +3074,7 @@ def test_v5_protocol_locator_rejects_inexact_json(
 @pytest.mark.parametrize("version", (True, 1.0))
 def test_v5_protocol_locator_version_requires_exact_json_integer(version: object) -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     path = recovery_checkpoint._protocol_marker_path(lease, "mip-app")
     marker = json.loads(workspace.workspace.data[path])
     marker["version"] = version
@@ -3064,7 +3090,7 @@ def test_v5_protocol_locator_version_requires_exact_json_integer(version: object
 
 def test_v5_protocol_locator_accepts_maximum_holder_map_envelope() -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     current = lease._download(workspace, app_name="mip-app")
     assert current is not None
     unsigned = {
@@ -3111,7 +3137,7 @@ def test_v5_protocol_locator_accepts_maximum_holder_map_envelope() -> None:
 
 def test_v5_recovery_checkpoint_rejects_cross_app_and_cross_chain_replay() -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     record = lease._download(workspace, app_name="mip-app")
     assert record is not None
     source_path = recovery_checkpoint.checkpoint_path(
@@ -3156,7 +3182,7 @@ def test_v5_recovery_checkpoint_rejects_cross_app_and_cross_chain_replay() -> No
 
 def test_v5_recovery_rejects_checkpoint_candidate_and_head_drift() -> None:
     workspace = _workspace()
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     lease.release(workspace, app_name="mip-app", lease_id=lease_id)
     record = lease._download(workspace, app_name="mip-app")
     assert record is not None
@@ -3215,9 +3241,9 @@ def test_v5_recovery_requires_exact_immediate_predecessor_checkpoint(
     mutation: str,
 ) -> None:
     workspace = _workspace()
-    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    first = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     lease.release(workspace, app_name="mip-app", lease_id=first)
-    second = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
+    second = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="b" * 40)
     record = lease._download(workspace, app_name="mip-app")
     assert record is not None
     current = recovery_checkpoint._read(
@@ -3299,10 +3325,11 @@ def test_v5_recovery_requires_exact_immediate_predecessor_checkpoint(
 
 def test_expired_v5_takeover_requires_authenticated_checkpoint_predecessor() -> None:
     workspace = _workspace()
-    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    first = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     lease.release(workspace, app_name="mip-app", lease_id=first)
     second = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="b" * 40,
         now=NOW + timedelta(hours=1),
@@ -3327,6 +3354,7 @@ def test_expired_v5_takeover_requires_authenticated_checkpoint_predecessor() -> 
     with pytest.raises(RuntimeError, match="recovery index is missing"):
         lease.acquire(
             workspace,
+            writer_application_id=WRITER_ID,
             app_name="mip-app",
             source_git_sha="c" * 40,
             expired_recovery_lease_id=first,
@@ -3341,7 +3369,7 @@ def test_v5_acquisition_record_requires_exact_current_checkpoint_head(
     mutation: str,
 ) -> None:
     workspace = _workspace()
-    lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     record = lease._download(workspace, app_name="mip-app")
     assert record is not None
     unsigned = {
@@ -3370,7 +3398,7 @@ def test_v5_transition_rejects_recovery_root_reset(
     returning_holder: bool,
 ) -> None:
     workspace = _workspace()
-    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    first = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     lease.release(workspace, app_name="mip-app", lease_id=first)
     parent = lease._download(workspace, app_name="mip-app")
     assert parent is not None
@@ -3425,7 +3453,7 @@ def test_v5_checkpoint_upload_timeout_is_resolved_by_exact_readback() -> None:
             raise TimeoutError("checkpoint committed before timeout")
 
     workspace.workspace.upload = commit_then_timeout
-    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    lease_id = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
 
     assert checkpoint_uploads == 1
     assert lease._download(workspace, app_name="mip-app")["lease_id"] == lease_id
@@ -3448,14 +3476,14 @@ def test_v5_checkpoint_upload_timeout_before_commit_fails_without_lease() -> Non
 
     workspace.workspace.upload = timeout_before_commit
     with pytest.raises(RuntimeError, match="could not be authenticated"):
-        lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+        lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
 
     assert lease._path("mip-app") not in workspace.workspace.data
 
 
 def test_first_v4_to_v5_acquisition_scans_legacy_base_then_recovery_is_bounded() -> None:
     workspace = _workspace()
-    first = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    first = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     base_path = lease._path("mip-app")
     v5_base = json.loads(workspace.workspace.data[base_path])
     v4_unsigned = {
@@ -3500,7 +3528,7 @@ def test_first_v4_to_v5_acquisition_scans_legacy_base_then_recovery_is_bounded()
         return original_download(path)
 
     workspace.workspace.download = counted
-    second = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
+    second = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="b" * 40)
     assert generation_reads >= int(legacy["generation_seq"]) + 1
     assert generation_reads <= 2 * (int(legacy["generation_seq"]) + 2) + 10
     migrated = lease._download(workspace, app_name="mip-app")
@@ -3552,6 +3580,7 @@ def test_delayed_audit_row_during_settlement_preserves_first_install_intent(
     prepared_at = datetime.now(UTC) - lease.LEASE_TTL
     creation_lease = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="a" * 40,
         now=prepared_at,
@@ -3567,6 +3596,7 @@ def test_delayed_audit_row_during_settlement_preserves_first_install_intent(
     lease.release(workspace, app_name="mip-app", lease_id=creation_lease)
     retry_lease = lease.acquire(
         workspace,
+        writer_application_id=WRITER_ID,
         app_name="mip-app",
         source_git_sha="b" * 40,
     )
@@ -3609,7 +3639,7 @@ def test_absent_clear_requeries_when_audit_query_crosses_settlement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
-    creation_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    creation_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="a" * 40)
     first_install.prepare(
         workspace,
         app_name="mip-app",
@@ -3618,7 +3648,7 @@ def test_absent_clear_requeries_when_audit_query_crosses_settlement(
         payload=_first_install_payload(),
     )
     lease.release(workspace, app_name="mip-app", lease_id=creation_lease)
-    retry_lease = lease.acquire(workspace, app_name="mip-app", source_git_sha="b" * 40)
+    retry_lease = lease.acquire(workspace, writer_application_id=WRITER_ID, app_name="mip-app", source_git_sha="b" * 40)
     record = first_install._download(workspace, app_name="mip-app")
     assert record is not None
     settlement = datetime.fromisoformat(record["audit_settlement_until"])

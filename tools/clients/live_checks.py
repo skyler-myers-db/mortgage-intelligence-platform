@@ -17,8 +17,10 @@ Steps 2-4 are three GETs (SCIM ``Me`` twice and the current metastore
 assignment); every refusal among them is reported. Once all four hold, the
 read-only install checks run (tools/clients/install_checks.py, M1-PR3):
 adoption, the ``mip.install_key`` install marker, the Cotality share, the
-storage root and the account principal's roles. They never run against a
-workspace or as a principal that is not the profile's. Exit 0 when every
+storage root and the account principal's roles, and then the capability
+preflight (tools/clients/capabilities.py, M2-PR3): every workspace feature the
+profile's ``MIP_AGENTIC_TIER`` needs. They never run against a workspace or as
+a principal that is not the profile's. Exit 0 when every
 check holds, 2 otherwise; a read error refuses, never reads as absent. A
 refusal names the check, never a value: these are identifying fields, and the
 line may reach a public CI log. Each id read from the workspace is registered
@@ -34,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tools.clients import install_checks
+from tools.clients import capabilities, install_checks
 from tools.clients.environment import from_local, resolve
 from tools.clients.errors import ProfileRefusal
 from tools.clients.redact import emit_mask
@@ -101,8 +103,8 @@ def read_live_identity(client: Any) -> LiveIdentity:
 def check(profile: ClientProfile, client: Any, account: Callable[[], Any] | None = None) -> list[str]:
     """Every refusal, host first; no request is sent when the host differs.
 
-    The install checks run only once the workspace and the principal are
-    proven the profile's.
+    The install checks and the tier's capability preflight run only once the
+    workspace and the principal are proven the profile's.
     """
 
     lines = host_refusals(profile, str(getattr(client.config, "host", "") or ""))
@@ -111,7 +113,7 @@ def check(profile: ClientProfile, client: Any, account: Callable[[], Any] | None
     lines = identity_refusals(profile, read_live_identity(client))
     if lines:
         return lines
-    return install_checks.check(profile, client, account)
+    return [*install_checks.check(profile, client, account), *capabilities.check(profile, client)]
 
 
 def _default_client() -> Any:
@@ -146,7 +148,8 @@ def main(
         return 2
     print(
         "client live checks ok: host, workspace id, metastore id and deployer are the profile's; "
-        "adoption, install marker, Cotality share, storage root and account principal hold"
+        "adoption, install marker, Cotality share, storage root and account principal hold; "
+        "the workspace offers every feature the agentic tier setting needs"
     )
     return 0
 

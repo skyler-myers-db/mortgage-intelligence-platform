@@ -8,8 +8,10 @@ workspace, metastore and deployer are the profile's; no App, no bundle state
 and no install catalog exist yet; the Cotality share catalog is a Delta
 Sharing catalog from the profile's provider and share with all seven tables;
 the metastore has a storage root; an install catalog, when a test makes one
-exist, has the profile's storage root; and the account principal holds no
-account admin. Each keyword overrides one of those facts.
+exist, has the profile's storage root; the account principal holds no
+account admin; and every feature either tier needs answers its capability
+probe (tools/clients/capabilities.py). Each keyword overrides one of those
+facts; ``missing_features`` names capability probes that answer not-found.
 """
 
 from __future__ import annotations
@@ -61,6 +63,7 @@ class LiveWorkspace:
         missing_tables: tuple[str, ...] = (),
         metastore_root: str = "s3://metastore-root-alpha/root",
         fail: Mapping[str, BaseException] | None = None,
+        missing_features: tuple[str, ...] = (),
         **identity: str,
     ) -> None:
         live = {
@@ -87,9 +90,16 @@ class LiveWorkspace:
         self._missing = set(missing_tables)
         self._metastore_root = metastore_root
         self._fail = dict(fail or {})
+        self._missing_features = set(missing_features)
         self.metastores = _Strict(current=self._current, summary=self._summary)
         self.current_user = _Strict(me=self._me)
-        self.apps = _Strict(get=self._app_get)
+        self.apps = _Strict(get=self._app_get, list=self._feature("LIST apps"))
+        self.database = _Strict(list_database_instances=self._feature("LIST database/instances"))
+        self.genie = _Strict(list_spaces=self._feature("LIST genie/spaces"))
+        self.warehouses = _Strict(list=self._feature("LIST sql/warehouses"))
+        self.serving_endpoints = _Strict(list=self._feature("LIST serving-endpoints"))
+        self.experiments = _Strict(list_experiments=self._feature("LIST mlflow/experiments"))
+        self.api_client = _Strict(do=self._api_do)
         self.workspace = _Strict(download=self._download, get_status=self._get_status)
         self.catalogs = _Strict(get=self._catalog_get)
         self.tables = _Strict(exists=self._table_exists)
@@ -178,6 +188,21 @@ class LiveWorkspace:
     def _summary(self) -> object:
         self._raise("GET metastore_summary")
         return SimpleNamespace(storage_root=self._metastore_root)
+
+    # --- capabilities (M2-PR3) -----------------------------------------------
+
+    def _feature(self, call: str) -> Any:
+        def probe(**_kwargs: Any) -> list[object]:
+            self._raise(call)
+            if call in self._missing_features:
+                raise NotFound("ENDPOINT_NOT_FOUND")
+            return []
+
+        return probe
+
+    def _api_do(self, method: str, path: str, **_kwargs: Any) -> object:
+        assert (method, path) == ("GET", "/api/2.1/supervisor-agents"), (method, path)
+        return self._feature("LIST supervisor-agents")()
 
 
 class LiveAccount:

@@ -62,6 +62,12 @@ App down:
 Every refusal carries a reviewed code (``prestop_refusals``). A probe whose
 reads fail refuses (``probe_error``) instead of passing; ``main`` exits 2 on
 any refusal, before the signed lease and any App stop.
+
+The core tier (``--agentic-tier off``, the client profile's
+``MIP_AGENTIC_TIER``; M2-PR3) deploys no agent runtime, verifier or
+Supervisor: it takes neither application ID, the two Supervisor clauses do not
+apply, and the Genie clause audits the App alone. The agentic tier (the
+default, so today's arguments are unchanged) requires both IDs.
 """
 
 from __future__ import annotations
@@ -281,10 +287,13 @@ def audited_principals(
     workspace: Any,
     *,
     app_name: str,
-    runtime_application_id: str,
-    verifier_application_id: str,
+    runtime_application_id: str | None,
+    verifier_application_id: str | None,
 ) -> AuditedPrincipals:
     """Resolve each audited principal's SCIM id; a not-yet-created App is skipped.
+
+    A ``None`` application ID is an identity the tier does not deploy (the
+    core tier's runtime and verifier), so it is not audited.
 
     A principal that does not resolve to exactly one SCIM id is returned as
     unresolved, so the caller can refuse it alongside every other refusal
@@ -314,6 +323,8 @@ def audited_principals(
         ("agent-runtime", runtime_application_id),
         ("verifier", verifier_application_id),
     ):
+        if application_id is None:
+            continue
         key = f"{label} SP {application_id}"
         try:
             resolved[key] = _scim_id(workspace, label=label, application_id=application_id)
@@ -352,31 +363,42 @@ def base_verdict(
     workspace: Any,
     *,
     app_name: str,
-    runtime_application_id: str,
-    verifier_application_id: str,
+    runtime_application_id: str | None,
+    verifier_application_id: str | None,
     canonical_name: str,
     acknowledgement: str,
     list_agents: Callable[[], list[dict[str, Any]]],
     resolve_groups: Callable[..., Mapping[str, str]],
 ) -> BaseVerdict:
-    """Run the Supervisor and Genie-grant clauses; every refusal carries its code."""
+    """Run the Supervisor and Genie-grant clauses; every refusal carries its code.
+
+    With no runtime (the core tier) the Supervisor clauses do not apply: no
+    step of a core deploy creates, replaces or retires a Supervisor.
+    """
 
     agents = list_agents()
-    retirement, notes = supervisor_retirement_refusals(
-        agents,
-        canonical_name=canonical_name,
-        runtime_application_id=runtime_application_id,
-        acknowledgement=acknowledgement,
-    )
-    refusals = [PrestopRefusal(SUPERVISOR_RETIREMENT, message) for message in retirement]
-    refusals.extend(
-        PrestopRefusal(RESERVED_REPLACEMENT_NAME, message)
-        for message in reserved_replacement_refusals(
+    refusals: list[PrestopRefusal] = []
+    if runtime_application_id is None:
+        notes = [
+            "the core tier provisions no Supervisor: the retirement and reserved-name "
+            "clauses do not apply"
+        ]
+    else:
+        retirement, notes = supervisor_retirement_refusals(
             agents,
             canonical_name=canonical_name,
             runtime_application_id=runtime_application_id,
+            acknowledgement=acknowledgement,
         )
-    )
+        refusals.extend(PrestopRefusal(SUPERVISOR_RETIREMENT, message) for message in retirement)
+        refusals.extend(
+            PrestopRefusal(RESERVED_REPLACEMENT_NAME, message)
+            for message in reserved_replacement_refusals(
+                agents,
+                canonical_name=canonical_name,
+                runtime_application_id=runtime_application_id,
+            )
+        )
     principals = audited_principals(
         workspace,
         app_name=app_name,
@@ -403,10 +425,17 @@ def base_verdict(
     effective.update(
         {label: frozenset({SYSTEM_USERS_GROUP}) for label in principals.unresolved}
     )
+    # A core-tier first install audits nobody yet: its App does not exist and
+    # the tier has no runtime or verifier. The App's future service principal
+    # joins 'users' on creation, so its 'users' grants are audited now.
+    if not effective:
+        effective[f"future App SP for {app_name!r}"] = frozenset({SYSTEM_USERS_GROUP})
     acls = genie_acls(workspace)
     grants = genie_group_grants(workspace, effective_groups=effective, acls=acls)
-    verifier_grants = verifier_genie_grants(
-        acls, verifier_application_id=verifier_application_id
+    verifier_grants = (
+        []
+        if verifier_application_id is None
+        else verifier_genie_grants(acls, verifier_application_id=verifier_application_id)
     )
     folders = shared_folder_names(workspace, [*grants, *verifier_grants])
     if grants:
@@ -438,8 +467,8 @@ def run_probes(
     workspace: Any,
     *,
     app_name: str,
-    runtime_application_id: str,
-    verifier_application_id: str,
+    runtime_application_id: str | None,
+    verifier_application_id: str | None,
     canonical_name: str,
     acknowledgement: str,
     list_agents: Callable[[], list[dict[str, Any]]],
@@ -464,8 +493,8 @@ def all_refusals(
     workspace: Any,
     *,
     config: ProbeSuiteConfig,
-    runtime_application_id: str,
-    verifier_application_id: str,
+    runtime_application_id: str | None,
+    verifier_application_id: str | None,
     acknowledgement: str,
     list_agents: Callable[[], list[dict[str, Any]]],
     resolve_groups: Callable[..., Mapping[str, str]],
@@ -514,8 +543,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--app-name", required=True)
     parser.add_argument("--expected-inventory-principal", required=True)
-    parser.add_argument("--runtime-application-id", required=True)
-    parser.add_argument("--verifier-application-id", required=True)
+    # The client profile's MIP_AGENTIC_TIER (scripts/deploy.sh). The agentic
+    # tier requires both identities below; the core tier deploys neither.
+    parser.add_argument("--agentic-tier", choices=("on", "off"), default="on")
+    parser.add_argument("--runtime-application-id")
+    parser.add_argument("--verifier-application-id")
     parser.add_argument("--supervisor-name", required=True)
     parser.add_argument("--rollback-scope", required=True)
     parser.add_argument("--lakebase-instance", required=True)
@@ -523,6 +555,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--genie-space-name", required=True)
     parser.add_argument("--rebase-unverified-app", choices=("0", "1"), required=True)
     args = parser.parse_args(argv)
+    identities = (args.runtime_application_id, args.verifier_application_id)
+    if args.agentic_tier == "on" and not all(identities):
+        parser.error(
+            "the agentic tier requires --runtime-application-id and --verifier-application-id"
+        )
+    if args.agentic_tier == "off" and any(value is not None for value in identities):
+        parser.error(
+            "the core tier deploys no agent runtime or verifier; omit "
+            "--runtime-application-id and --verifier-application-id"
+        )
 
     from databricks.sdk import WorkspaceClient
     from tools.databricks.audit_global_m2m_access import (
