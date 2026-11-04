@@ -443,7 +443,18 @@ def main(argv: list[str] | None = None, *, session: Callable[..., Session] = _pr
     except Exception as exc:  # noqa: BLE001 - the class only: a driver message can name a role
         known = (LakebaseHandoverRefused, journals.JournalRefused)
         print(f"{_PREFIX} REFUSED: {exc if isinstance(exc, known) else type(exc).__name__}", file=sys.stderr)
+        if args.apply and args.journal is not None and _moved_any(args.journal):
+            print(f"{_PREFIX} the apply stopped part-way; the journal names what moved. Revert with --revert --journal <path>", file=sys.stderr)
+            return 3
         return 2
+
+
+def _moved_any(path: Path) -> bool:
+    try:
+        journal = journals.load(path, kind=KIND)
+    except journals.JournalRefused:
+        return False
+    return any(entry["state"] in journals.MAY_HAVE_LANDED for entry in journal.entries)
 
 
 def _report_outcome(journal: journals.Journal) -> int:

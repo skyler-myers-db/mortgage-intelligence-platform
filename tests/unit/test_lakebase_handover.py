@@ -315,3 +315,20 @@ def test_the_rehearsal_never_runs_on_the_installs_own_instance(capsys: pytest.Ca
     argv = ["--rehearse", "--rehearse-instance", "mip-app-state", "--rehearse-database", "scratch"]
     assert handover.main(argv, session=lambda *a: session) == 2
     assert "rehearse_live_instance" in capsys.readouterr().err
+
+
+def test_a_failure_part_way_exits_three_and_names_the_revert(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    server = FakeServer()
+    digest = _plan(server).sha256
+    server.fail_on.add("TABLE:mip_app.approvals")
+    session = SimpleNamespace(read_session=server.read_session, connect=server.connect, workspace=None, target=DEPLOYER, live_instance="live")
+    rc = handover.main(["--apply", "--ack-plan", digest, "--journal", str(tmp_path / "j.json")], session=lambda *a: session, clock=_clock(server))
+    assert rc == 3
+    err = capsys.readouterr().err
+    assert "Revert with --revert --journal" in err and "injected" not in err
+    journal = journals.load(tmp_path / "j.json", kind=handover.KIND)
+    assert journal.status == "refused" and journal.entry("TABLE:mip_app.approvals")["state"] == "applying"
+    server.fail_on.clear()
+    before = {key: LEGACY for key in server.owners if key != "TABLE:mip_app.app_owned_scratch"}
+    assert _revert(server, tmp_path / "j.json")
+    assert all(server.owners[key] == owner for key, owner in before.items())
