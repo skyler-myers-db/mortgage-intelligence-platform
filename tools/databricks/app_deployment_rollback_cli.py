@@ -13,6 +13,7 @@ from tools.databricks.app_deployment_rollback_inputs import (
     payload_file,
     reviewed_resources_file,
 )
+from tools.databricks.app_rollback_record_contract import V7_REFUSAL
 from tools.databricks.app_rollback_signed_contract import SignedLastGoodAppContract
 
 
@@ -66,6 +67,33 @@ def _write_binding_env(
     path.write_text(
         "".join(f"{name}={shlex.quote(value)}\n" for name, value in values.items()),
         encoding="utf-8",
+    )
+
+
+def _inspected_v7(workspace: object, args: argparse.Namespace) -> bool:
+    """A v7 record verified tier-aware (blue_restore_proof.inspect_v7); False for v5 and v6."""
+
+    from tools.databricks import app_deployment_rollback as rollback
+    from tools.databricks.app_rollback_payload_proof import env_map
+    from tools.databricks.blue_restore_proof import inspect_v7
+
+    def gateway_proof(record: dict[str, object]) -> object:
+        # The agentic kind keeps v6's Gateway resource proof, with its reviewed
+        # function owner authenticated as the deployer (the capture-time branch).
+        payload = record["restore_payload"]
+        return rollback._stored_resource_proof(
+            workspace,
+            record={"version": rollback.RECORD_VERSION, "gateway_resources": record["gateway_resources"]},
+            candidate_reviewed_function_owner=env_map(payload)["MIP_REVIEWED_FUNCTION_OWNER"],  # type: ignore[arg-type]
+        )
+
+    return inspect_v7(
+        workspace,
+        app_name=args.app_name,
+        scope=args.scope,
+        lakebase_instance=rollback._expected_lakebase_instance(),
+        out_env=args.out_env,
+        gateway_proof=gateway_proof,  # type: ignore[arg-type]
     )
 
 
@@ -169,16 +197,22 @@ def main(argv: list[str] | None = None) -> int:
     elif args.action == "inspect":
         if args.out_env is None:
             parser.error("--out-env is required for inspect")
-        signed = verified_signed_last_good_contract(
-            workspace,
-            app_name=args.app_name,
-            scope=args.scope,
-        )
-        _write_binding_env(
-            args.out_env,
-            signed,
-            gateway_endpoint=signed.gateway_endpoint,
-        )
+        try:
+            signed = verified_signed_last_good_contract(
+                workspace,
+                app_name=args.app_name,
+                scope=args.scope,
+            )
+        except RuntimeError as exc:
+            # The v5/v6 reader refuses a v7 record by name; read it tier-aware.
+            if V7_REFUSAL not in str(exc) or not _inspected_v7(workspace, args):
+                raise
+        else:
+            _write_binding_env(
+                args.out_env,
+                signed,
+                gateway_endpoint=signed.gateway_endpoint,
+            )
     elif args.action == "restore":
         if not args.treatment_warehouse_id:
             parser.error("--treatment-warehouse-id is required for restore")
