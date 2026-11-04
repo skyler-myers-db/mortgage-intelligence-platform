@@ -356,10 +356,10 @@ repin_and_close_quiesce_window() {
 # re-applies, and that job never runs against a serving blue. Read again under
 # the lease (time of check, time of use); drift exits 2 before the converge.
 require_exact_role_outside_window() {
-  local label="${1:?role label is required}" client_id="${2:?client id is required}"
-  local contract="${3:?role contract is required}" rc=0
+  # The state decides first: ungoverned and dry runs carry no client id here.
   [[ "${QUIESCE_WINDOW_STATE:-}" == "blue_serving" || \
      "${QUIESCE_WINDOW_STATE:-}" == "blue_degraded" ]] || return 0
+  local label="$1" client_id="$2" contract="$3" rc=0
   step "prove the ${label} Lakebase role is already exact (no window)"
   run_with_lakebase_bootstrap_authority \
     "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role --check \
@@ -376,11 +376,11 @@ require_exact_role_outside_window() {
 }
 
 require_exact_verifier_role_outside_window() {
-  require_exact_role_outside_window verifier "$DATABRICKS_VERIFIER_CLIENT_ID" verifier
+  require_exact_role_outside_window verifier "${DATABRICKS_VERIFIER_CLIENT_ID:-}" verifier
 }
 
 require_exact_jobs_reader_role_outside_window() {
-  require_exact_role_outside_window jobs-reader "$CLIENT_JOBS_PRINCIPAL" jobs_reader
+  require_exact_role_outside_window jobs-reader "${CLIENT_JOBS_PRINCIPAL:-}" jobs_reader
 }
 
 # Blue keeps serving while a dependency it reads is mutated; a failure from

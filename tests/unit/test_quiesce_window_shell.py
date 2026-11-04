@@ -516,6 +516,22 @@ def test_outside_a_window_the_jobs_reader_role_must_already_be_exact(
     assert ("converge-jobs-reader" in calls) is (exit_code == 0), "drift refuses before the converge"
 
 
+@pytest.mark.parametrize("state", ("", "window_open"))
+def test_an_ungoverned_or_dry_run_needs_no_role_client_ids_for_the_re_checks(
+    tmp_path: Path, state: str
+) -> None:
+    # A dry run and a first install carry no verifier or jobs-reader client id
+    # at these lines; under set -u the re-checks must return before reading them.
+    result, calls = _run(
+        tmp_path,
+        f"unset DATABRICKS_VERIFIER_CLIENT_ID CLIENT_JOBS_PRINCIPAL\nQUIESCE_WINDOW_STATE={state}\n"
+        "require_exact_verifier_role_outside_window\nrequire_exact_jobs_reader_role_outside_window\n"
+        'echo "both-converges" >> "$CALLS"\n',
+    )
+    assert result.returncode == 0, result.stderr
+    assert "both-converges" in calls and not _has(calls, "converge_lakebase_oauth_role --check")
+
+
 @pytest.mark.parametrize(("state", "rc", "exit_code", "checks"), OUTSIDE_A_WINDOW)
 def test_outside_a_window_the_verifier_role_must_already_be_exact(
     tmp_path: Path, state: str, rc: str, exit_code: int, checks: int
