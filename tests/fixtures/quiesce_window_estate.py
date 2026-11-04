@@ -396,6 +396,8 @@ GREEN_COMMIT = "c" * 40
 DEPLOYER = "deployer-app-id-PLACEHOLDER"
 CLIENT_KEY = "client-key"
 DEADMAN_BYTES = (REPO / "jobs" / "window_deadman.py").read_bytes()
+# The release's uv.lock pins the dead-man's SDK (sdk_requirement).
+UV_LOCK = (REPO / "uv.lock").read_bytes()
 # The rollback tests' lease (tests/unit/test_app_deployment_rollback.py LEASE_ID).
 LEASE_ID = "11111111-1111-4111-8111-111111111111"
 
@@ -403,11 +405,11 @@ LEASE_ID = "11111111-1111-4111-8111-111111111111"
 def green_release(
     stage_root: Path | None = None, *, extra: dict[str, bytes] | None = None
 ) -> PublishPlan:
-    """This run's staged green release: blue's files plus the dead-man, as step 1 stages it."""
+    """This run's staged green release: blue's files, the dead-man and uv.lock, as step 1 stages it."""
 
     root = Path(stage_root or tempfile.mkdtemp(prefix="mip-deadman-stage-"))
     stage = root / "source"
-    files = {**SOURCE_FILES, deadman.DEADMAN_RELPATH: DEADMAN_BYTES, **(extra or {})}
+    files = {**SOURCE_FILES, deadman.DEADMAN_RELPATH: DEADMAN_BYTES, "uv.lock": UV_LOCK, **(extra or {})}
     for relpath, data in files.items():
         path = stage / relpath
         path.parent.mkdir(parents=True, exist_ok=True)

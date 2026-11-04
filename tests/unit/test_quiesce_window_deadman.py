@@ -196,6 +196,45 @@ def test_the_submit_is_one_bounded_serverless_run_as_the_deployer() -> None:
     assert parameters["--start-timeout-seconds"] == str(deadman.DEADMAN_START_WAIT_S)
 
 
+def test_the_sdk_pin_is_the_published_releases_uv_lock_never_the_installed_version() -> None:
+    # Review: the pin was importlib.metadata.version, the deployer's own venv.
+    from importlib.metadata import version
+
+    lock = (REPO / "uv.lock").read_text(encoding="utf-8")
+    pinned = re.sub(r"^databricks-sdk==\S+$", "databricks-sdk==9.9.9", lock, count=1, flags=re.M)
+    assert pinned != lock and version("databricks-sdk") != "9.9.9"
+    estate = _estate()
+    _open_with(estate, **window_hooks(estate, release=green_release(extra={"uv.lock": pinned.encode()})))
+    environment = estate.jobs.only_run().request["environments"][0]
+    assert environment.spec.dependencies == ["databricks-sdk==9.9.9"]
+
+
+@pytest.mark.parametrize(
+    "lock",
+    (None, b"requests==2.32.5\n", b"databricks-sdk==0.1.0\ndatabricks-sdk==0.2.0\n"),
+    ids=("absent", "unpinned", "twice"),
+)
+def test_a_release_whose_uv_lock_does_not_pin_the_sdk_once_refuses_before_any_publish(lock: bytes | None) -> None:
+    estate = _estate()
+    release = green_release(extra={} if lock is None else {"uv.lock": lock})
+    if lock is None:
+        (release.stage_dir / "uv.lock").unlink()
+        release = PublishPlan(
+            contract.Manifest(
+                release.manifest.commit,
+                release.manifest.release_id,
+                tuple(entry for entry in release.manifest.entries if entry.path != "uv.lock"),
+            ),
+            release.stage_dir,
+            release.release_path,
+            1,
+        )
+    files = dict(estate.files.data)
+    with pytest.raises(RuntimeError, match="uv.lock"):
+        _open_with(estate, **window_hooks(estate, release=release))
+    assert (estate.jobs.submits, estate.apps.stops) == (0, 0) and estate.files.data == files, "nothing published"
+
+
 def test_the_bundles_serverless_jobs_use_the_same_environment_version() -> None:
     bundle = (REPO / "databricks.yml").read_text(encoding="utf-8")
     assert f'environment_version: "{deadman.ENVIRONMENT_VERSION}"' in bundle

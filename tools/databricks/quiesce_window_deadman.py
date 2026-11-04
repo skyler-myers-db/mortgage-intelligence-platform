@@ -19,8 +19,10 @@ and before the journal write and the stop:
    ``jobs submit``: a one-time run as the submitting deployer (no ``run_as``
    and no ACL, so only the deployer and workspace admins can see or manage
    it, and the App has no permission on it), serverless like the bundle's
-   jobs (environment version 5, ``databricks-sdk`` pinned to the deploy's
-   own, the uv.lock pin), no retries, ``timeout_seconds`` = (deadline - now)
+   jobs (environment version 5, ``databricks-sdk`` pinned to the published
+   release's own ``uv.lock``, never the deployer's installed version: a
+   stale local venv must not arm an unreviewed SDK), no retries,
+   ``timeout_seconds`` = (deadline - now)
    + the start budget, and the idempotency token ``window_token(window
    sha256, lease id)``: one run per window, a retried submit returns it.
 4. **Armed.** A submit returns a run id before the run has started, and a
@@ -55,10 +57,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from importlib.metadata import version
 from typing import Any
 
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
@@ -90,6 +92,8 @@ ARM_POLL_S = 10
 STARTING_RUN_STATES = frozenset({"PENDING", "QUEUED", "BLOCKED", "WAITING_FOR_RETRY"})
 ARMED_SCHEMA = "mip.quiesce-window-deadman-armed.v1"
 _RUN_PREFIX = "mip-window-deadman-"
+# The one databricks-sdk pin of a uv.lock (a ``uv pip compile`` requirements file).
+_SDK_PIN = re.compile(r"^databricks-sdk==([0-9][0-9A-Za-z.+!-]*)[ \t]*$", re.MULTILINE)
 
 
 def window_token(window_sha256: str, lease_id: str) -> str:
@@ -166,6 +170,21 @@ class DeadmanRequest:
         }
 
 
+def sdk_requirement(release: PublishPlan) -> str:
+    """The dead-man's SDK requirement: the staged release's uv.lock pin, its bytes the manifest's."""
+
+    entry = release.manifest.by_path().get("uv.lock")
+    if entry is None:
+        raise RuntimeError("the release manifest carries no uv.lock to pin the dead-man's SDK")
+    data = (release.stage_dir / "uv.lock").read_bytes()
+    if len(data) != entry.size or hashlib.sha256(data).hexdigest() != entry.sha256:
+        raise RuntimeError("the staged uv.lock is not the manifest's bytes")
+    pins = _SDK_PIN.findall(data.decode("utf-8"))
+    if len(pins) != 1:
+        raise RuntimeError("the release's uv.lock does not pin databricks-sdk exactly once")
+    return f"databricks-sdk=={pins[0]}"
+
+
 def deadman_source(report: PublishReport, plan: PublishPlan) -> str:
     """The dead-man's file in exactly the published, governed release folder."""
 
@@ -197,6 +216,7 @@ def request(
     source: str,
     deadline: int,
     now: float,
+    sdk: str,
 ) -> DeadmanRequest:
     """The one submit a window arms; its timeout is (deadline - now) + the start budget."""
 
@@ -224,7 +244,7 @@ def request(
         source=source,
         parameters=tuple(item for pair in values.items() for item in pair),
         timeout_seconds=int(deadline - now) + DEADMAN_START_BUDGET_S,
-        sdk_requirement=f"databricks-sdk=={version('databricks-sdk')}",
+        sdk_requirement=sdk,
     )
 
 
@@ -307,6 +327,7 @@ def arm_deadman(
     shell), and the arm raises: nothing is journaled, nothing is stopped.
     """
 
+    sdk = sdk_requirement(release)  # before anything is published
     report = publish(workspace, release)
     source = deadman_source(report, release)
     verify_source(workspace, source, release)
@@ -320,6 +341,7 @@ def arm_deadman(
         source=source,
         deadline=deadline,
         now=clock(),
+        sdk=sdk,
     )
     run_id = submit_deadman(workspace, armed)
     try:
