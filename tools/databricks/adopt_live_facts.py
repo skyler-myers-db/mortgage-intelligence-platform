@@ -13,9 +13,14 @@
 4. ``acl_unreadable``: the App ACL is snapshotted.
 5. ``treatment_unverified``: the campaign-treatment boundary is exactly
    converged, read-only, in one reviewed mode (runtime, else quiesce).
-6. ``health_unreadable`` / ``health_sha_not_on_main``: the App's authenticated
-   health names a commit that resolves in this checkout and is an ancestor of
-   the run's main commit.
+6. ``health_unreadable`` / ``main_unresolved`` / ``source_not_on_main`` /
+   ``health_sha_not_on_main``: the App's authenticated health names a commit
+   that resolves in this checkout and is an ancestor of main, where main is
+   the explicit ref ``--main-ref`` names (the governed run passes
+   ``refs/remotes/origin/main``), never the run's own HEAD, and the run's
+   source commit is itself on that main: a run from a branch whose HEAD
+   carries an unmerged commit refuses rather than adopt a deployment built
+   from it.
 7. ``tree_drift``: the full-tree digest of the deployment's source folder,
    every file with ``app.yaml`` and ``frontend/dist``, equals that of the
    deployment's own ``/src/`` snapshot (what the App runs).
@@ -23,9 +28,12 @@
    health sha.
 9. ``closure_differs``: every other file outside ``frontend/dist`` is the App
    runtime closure at the health sha, byte for byte.
-10. ``frontend/dist`` is compared with the build artifact: ``verified`` or
-    ``unverified`` (no refusal; an unverified record needs the
-    ``restore_unverified_frontend`` ack at any restore).
+10. ``frontend/dist`` is compared with the reference this tool builds from
+    the health sha (``build_reference``; never a directory an operator
+    names): ``verified`` or ``unverified`` (no refusal; an unverified record
+    needs the ``restore_unverified_frontend`` ack at any restore). The plan
+    names how the reference was made and, when verified, the digest it
+    matched, so the ack covers what ``verified`` was judged against.
 
 The record preconditions (no record, the same deployment's adopted record, a
 tombstone, or the supersede target) are adopt_live.py's. Every call here is a
@@ -85,7 +93,9 @@ class Readers:
     treatment: Callable[[str, str], list[str] | None]
     repo: Path
     main_ref: str
-    reference_dist: Path | None = None
+    source_sha: str
+    # Builds frontend/dist from a commit and returns it (adopted_source_copy.build_reference_dist).
+    build_reference: Callable[[str], Path] | None = None
     tree: Callable[[Any, str], str] = tree_digest
     read_folder: Callable[[Any, str], dict[str, bytes]] = source.read_folder
 
@@ -105,6 +115,8 @@ class Facts:
     git_sha: str
     tree_sha256: str
     frontend_provenance: str
+    frontend_reference: str
+    frontend_reference_sha256: str | None
     frontend_detail: str
     files: Mapping[str, bytes] = field(repr=False, compare=False)
 
@@ -202,6 +214,33 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _resolved_main(readers: Readers) -> str:
+    """The commit ``main_ref`` names; the run's source commit must already be on it."""
+
+    resolved = _git(
+        readers.repo, "rev-parse", "--verify", "--quiet", f"{readers.main_ref}^{{commit}}"
+    )
+    main = resolved.stdout.strip()
+    if resolved.returncode != 0 or len(main) != 40:
+        raise AdoptLiveRefused(
+            "main_unresolved",
+            "the main ref resolves to no commit in this checkout (fetch origin main with full "
+            "history)",
+        )
+    source = readers.source_sha.strip().lower()
+    if (
+        len(source) != 40
+        or any(c not in "0123456789abcdef" for c in source)
+        or _git(readers.repo, "merge-base", "--is-ancestor", source, main).returncode != 0
+    ):
+        raise AdoptLiveRefused(
+            "source_not_on_main",
+            "the run's source commit is not on main: adopt-live runs only from a commit main "
+            "already holds",
+        )
+    return main
+
+
 def resolved_health_sha(readers: Readers) -> str:
     """Precondition 6: the health sha resolves to one commit that is an ancestor of main."""
 
@@ -213,6 +252,7 @@ def resolved_health_sha(readers: Readers) -> str:
         ) from exc
     if not 7 <= len(reported) <= 40 or any(c not in "0123456789abcdef" for c in reported):
         raise AdoptLiveRefused("health_unreadable", "the App health names no git sha")
+    main = _resolved_main(readers)
     resolved = _git(readers.repo, "rev-parse", "--verify", "--quiet", f"{reported}^{{commit}}")
     sha = resolved.stdout.strip()
     if resolved.returncode != 0 or len(sha) != 40 or not sha.startswith(reported):
@@ -220,11 +260,32 @@ def resolved_health_sha(readers: Readers) -> str:
             "health_sha_not_on_main",
             "the health sha resolves to no single commit in this checkout (fetch full history)",
         )
-    if _git(readers.repo, "merge-base", "--is-ancestor", sha, readers.main_ref).returncode != 0:
+    if _git(readers.repo, "merge-base", "--is-ancestor", sha, main).returncode != 0:
         raise AdoptLiveRefused(
             "health_sha_not_on_main", "the health sha is not an ancestor of main"
         )
     return sha
+
+
+def frontend_facts(
+    files: Mapping[str, bytes], readers: Readers, commit: str
+) -> tuple[str, str, str | None, str]:
+    """(provenance, how the reference was made, the digest it matched or None, why)."""
+
+    if readers.build_reference is None:
+        return "unverified", "none", None, "no reference build of the health sha was requested"
+    try:
+        dist = readers.build_reference(commit)
+    except Exception as exc:  # noqa: BLE001 - the class only: npm output can name a path
+        return (
+            "unverified",
+            "build_failed",
+            None,
+            f"the reference build failed ({type(exc).__name__})",
+        )
+    provenance, detail = source.frontend_provenance(files, dist)
+    matched = source.dist_digest(files) if provenance == "verified" else None
+    return provenance, "built_from_git_sha", matched, detail
 
 
 def gather(workspace: Any, *, app_name: str, readers: Readers) -> Facts:
@@ -291,7 +352,7 @@ def gather(workspace: Any, *, app_name: str, readers: Readers) -> Facts:
         raise AdoptLiveRefused(
             "closure_differs", "the backend closure differs: " + "; ".join(differences)
         )
-    provenance, detail = source.frontend_provenance(files, readers.reference_dist)
+    provenance, reference, matched, detail = frontend_facts(files, readers, git_sha)
     return Facts(
         deployment_id=deployment_id,
         source_code_path=folder,
@@ -304,6 +365,8 @@ def gather(workspace: Any, *, app_name: str, readers: Readers) -> Facts:
         git_sha=git_sha,
         tree_sha256=tree,
         frontend_provenance=provenance,
+        frontend_reference=reference,
+        frontend_reference_sha256=matched,
         frontend_detail=detail,
         files=files,
     )
@@ -325,6 +388,8 @@ def plan_facts(facts: Facts) -> dict[str, object]:
         "source_tree_sha256": facts.tree_sha256,
         "file_count": len(facts.files),
         "frontend_provenance": facts.frontend_provenance,
+        "frontend_reference": facts.frontend_reference,
+        "frontend_reference_sha256": facts.frontend_reference_sha256,
     }
 
 

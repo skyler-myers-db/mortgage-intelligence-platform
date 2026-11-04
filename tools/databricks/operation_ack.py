@@ -5,7 +5,10 @@ review mode is ``single_maintainer_audited``. Every high-risk operation it
 would have gated prints the sha256 of its canonical read-only plan instead,
 and a mutating run must be handed exactly that digest through a one-run shell
 export (``MIP_ACK_<PURPOSE>``, read by scripts/deploy.sh from its own
-environment and passed on as a flag) or a flag, never a ``.env.local`` line.
+environment and passed on as a flag, for the purposes in ``ACK_ENV``) or the
+flag of the command that needs it (``override_freeze``,
+``restore_unverified_frontend``), never a ``.env.local`` line. A refusal names
+exactly that route (``REMEDY``).
 The tool recomputes the plan immediately before it mutates and refuses on any
 difference, with nothing changed.
 
@@ -37,8 +40,23 @@ PURPOSES = (
     "no_rollback_for",
     "override_freeze",
 )
-# The one-run shell export scripts/deploy.sh reads for each purpose.
-ACK_ENV = {purpose: f"MIP_ACK_{purpose.upper()}" for purpose in PURPOSES}
+# The one-run shell export scripts/deploy.sh reads, for the purposes it reads one for.
+ACK_ENV = {
+    purpose: f"MIP_ACK_{purpose.upper()}"
+    for purpose in ("adopt_live", "supersede", "unadopt", "no_rollback_for")
+}
+# How each purpose's ack is handed in: that export, else the flag of the one
+# command that takes it.
+REMEDY = {
+    **{
+        purpose: f"export {name}=<its sha256> for this run only (never in .env.local)"
+        for purpose, name in ACK_ENV.items()
+    },
+    "override_freeze": "pass --override-freeze-ack <its sha256> to this one publish",
+    "restore_unverified_frontend": (
+        "hand this one restore its restore_unverified_frontend ack (<its sha256>)"
+    ),
+}
 _DOMAIN = "mip-operation-ack-v1"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
@@ -80,11 +98,10 @@ def require_ack(purpose: str, plan: Mapping[str, object], given: str | None) -> 
     if not supplied:
         raise AckRefused(
             "ack_missing",
-            f"the {purpose} ack is required: review the read-only plan, then export "
-            f"{ACK_ENV[purpose]}=<its sha256> for this run only (never in .env.local)",
+            f"the {purpose} ack is required: review the read-only plan, then {REMEDY[purpose]}",
         )
     if _SHA256.fullmatch(supplied) is None:
-        raise AckRefused("ack_malformed", f"{ACK_ENV[purpose]} is not a 64-hex sha256")
+        raise AckRefused("ack_malformed", f"the {purpose} ack is not a 64-hex sha256")
     if not hmac.compare_digest(supplied, expected):
         raise AckRefused(
             "ack_mismatch",

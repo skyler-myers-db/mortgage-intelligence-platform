@@ -22,6 +22,7 @@ from tests.fixtures.deploy_script import deploy_entrypoint_text
 ACK = "a" * 64
 OTHER = "b" * 64
 SUPERSEDE = "c" * 64
+RELEASE_ID = f"{'0' * 12}-{'1' * 12}"
 
 
 def _tool(repo: Path, module: str, rc: int) -> Path:
@@ -58,6 +59,7 @@ def _drive(
     shell = (
         f'mint_m2m_token() {{ echo "minted $1" >> {str(repo / "mint")!r}; }}\n'
         'run_with_proof_signing_authority() { "$@"; }\n'
+        + function("tier_is_agentic")
         + function("adopt_live_mode")
         + function("run_adopt_live_plan")
         + function("run_adopt_live_apply")
@@ -72,6 +74,7 @@ def _drive(
         "CLIENT_KEY": "client-one",
         "CLIENT_AGENTIC_TIER": "off",
         "SOURCE_GIT_SHA": "0" * 40,
+        "APP_RELEASE_ID": RELEASE_ID,
         "MIP_APP_DEPLOYMENT_LEASE_ID": "lease-1",
         "BLUE_RESTORE_PROVEN": "0",
         **(env or {}),
@@ -92,7 +95,9 @@ def test_the_plan_passes_the_mode_and_the_profiles_target(tmp_path: Path) -> Non
     pairs = dict(zip(argv[3::2], argv[4::2], strict=False))
     assert pairs["--expected-principal"] == "00000000-0000-4000-8000-000000000001"
     assert pairs["--expected-root-leaf"] == "client-one" and pairs["--agentic-tier"] == "off"
-    assert pairs["--main-ref"] == "0" * 40 and "--ack" not in argv
+    assert pairs["--main-ref"] == "refs/remotes/origin/main", "main is never the run's own HEAD"
+    assert pairs["--source-git-sha"] == "0" * 40 and "--ack" not in argv
+    assert "--build-reference-dist" not in argv
     assert (
         mint.read_text(encoding="utf-8") == "minted MIP_BEARER_TOKEN\n"
     ), "health needs the normal bearer"
@@ -203,10 +208,29 @@ def test_the_apply_runs_under_the_lease_and_a_refusal_ends_the_run(
     assert result.returncode == expected, result.stdout + result.stderr
     (argv,) = calls
     assert argv[:3] == ["apply", "--mode", "adopt"]
-    assert argv[-4:] == ["--lease-id", "lease-1", "--source-git-sha", "0" * 40]
+    assert argv[-2:] == ["--lease-id", "lease-1"]
+    assert argv.count("--source-git-sha") == 1 and argv[argv.index("--source-git-sha") + 1] == (
+        "0" * 40
+    )
     assert "--ack" in argv and argv[argv.index("--ack") + 1] == OTHER
     if expected:
         assert "no record version was written and the App was never stopped" in result.stderr
+
+
+def test_the_reference_build_is_asked_for_by_a_one_run_export_never_a_directory(
+    tmp_path: Path,
+) -> None:
+    result, calls, _ = _drive(
+        tmp_path,
+        "run_adopt_live_plan adopt\n",
+        module="adopt_live",
+        env={"MIP_ADOPT_BUILD_REFERENCE_DIST": "1", "MIP_ADOPT_REFERENCE_DIST": "/tmp/dist"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    (argv,) = calls
+    assert "--build-reference-dist" in argv and "--reference-dist" not in argv
+    assert "/tmp/dist" not in argv
 
 
 # --- the pre-activation proof ---------------------------------------------------------
@@ -221,7 +245,28 @@ def test_the_proof_runs_once_and_passes_the_no_rollback_ack(tmp_path: Path) -> N
     assert result.returncode == 0, result.stderr
     (argv,) = calls
     assert argv[0] == "prepare-activation" and argv[-2:] == ["--no-rollback-ack", ACK]
-    assert dict(zip(argv[1::2], argv[2::2], strict=False))["--lease-id"] == "lease-1"
+    pairs = dict(zip(argv[1::2], argv[2::2], strict=False))
+    assert pairs["--lease-id"] == "lease-1"
+    assert (pairs["--source-git-sha"], pairs["--release-id"]) == (
+        "0" * 40,
+        RELEASE_ID,
+    ), "the no-rollback ack covers this release only, so the proof is told which one"
+    assert pairs["--agentic-tier"] == "off", "a v7 blue's tier is checked against the profile's"
+
+
+def test_the_agentic_tier_passes_no_tier_flag_so_its_plan_is_unchanged(tmp_path: Path) -> None:
+    """The proof's default is the agentic tier (#311's idiom: only the core tier says off)."""
+
+    result, calls, _ = _drive(
+        tmp_path,
+        "prove_blue_restorable_before_activation\n",
+        module="blue_restore_proof",
+        env={"CLIENT_AGENTIC_TIER": "on"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    (argv,) = calls
+    assert "--agentic-tier" not in argv and "--release-id" in argv
 
 
 def test_a_refused_proof_exits_2_before_the_activation(tmp_path: Path) -> None:

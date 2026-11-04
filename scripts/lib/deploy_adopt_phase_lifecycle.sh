@@ -88,8 +88,10 @@ run_adopt_phase_apply() {
 # record's deployment id> re-signs onto a newer active deployment
 # (MIP_ACK_SUPERSEDE); unadopt writes the tombstone (MIP_ACK_UNADOPT). Each ack
 # is a one-run shell export of the digest adopt-live's plan printed, never a
-# .env.local line; MIP_ADOPT_REFERENCE_DIST (shell only, optional) is a dist
-# built from the health sha, without which the frontend reads as unverified.
+# .env.local line. MIP_ADOPT_BUILD_REFERENCE_DIST=1 (shell only, optional) has
+# adopt-live build frontend/dist from the health sha itself and compare;
+# without it the frontend reads as unverified. Main is origin/main, never this
+# checkout's HEAD, and the run's source commit must already be on it.
 adopt_live_mode() {
   local phase="${1:?adopt phase is required}"
   ADOPT_LIVE_MODE="unadopt"
@@ -114,10 +116,11 @@ adopt_live_mode() {
     --expected-root-leaf "$CLIENT_KEY"
     --agentic-tier "$CLIENT_AGENTIC_TIER"
     --catalog "${MIP_DEFAULT_CATALOG:-mip}"
-    --main-ref "$SOURCE_GIT_SHA"
+    --main-ref refs/remotes/origin/main
+    --source-git-sha "$SOURCE_GIT_SHA"
   )
   [[ -z "${MIP_ADOPT_LIVE_SUPERSEDE:-}" ]] || ADOPT_LIVE_ARGS+=(--supersede "$MIP_ADOPT_LIVE_SUPERSEDE")
-  [[ -z "${MIP_ADOPT_REFERENCE_DIST:-}" ]] || ADOPT_LIVE_ARGS+=(--reference-dist "$MIP_ADOPT_REFERENCE_DIST")
+  [[ "${MIP_ADOPT_BUILD_REFERENCE_DIST:-}" != "1" ]] || ADOPT_LIVE_ARGS+=(--build-reference-dist)
   [[ -z "$ADOPT_LIVE_ACK" ]] || ADOPT_LIVE_ARGS+=(--ack "$ADOPT_LIVE_ACK")
 }
 
@@ -151,8 +154,7 @@ run_adopt_live_apply() {
   step "adopt-live (${ADOPT_LIVE_MODE}) under the lease: copy, re-hash and sign one record version (the App is never stopped)"
   if ! run_with_proof_signing_authority "$PYTHON" -m tools.databricks.adopt_live apply \
       "${ADOPT_LIVE_ARGS[@]}" \
-      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
-      --source-git-sha "$SOURCE_GIT_SHA"; then
+      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"; then
     echo "${RED}[deploy] adopt-live (${ADOPT_LIVE_MODE}) refused under the lease; no record version was written and the App was never stopped. The ${phase}'s bundle state edits stay as acknowledged: re-run the phase, or run --phase unadopt.${RST}" >&2
     exit 2
   fi
@@ -162,13 +164,18 @@ run_adopt_live_apply() {
 # the first activation (the release's snapshot activation function calls it),
 # while blue is still active: blue's tier-b restore payload recorded and
 # re-proven (tools/databricks/blue_restore_proof.py), or the exact
-# no_rollback_for ack (MIP_ACK_NO_ROLLBACK_FOR, shell only). A v5 or v6
-# record's own payload is that payload, so the agentic release is unchanged;
-# an adopted v7 blue is the core release path's (M2-PR7b), which builds it.
+# no_rollback_for ack (MIP_ACK_NO_ROLLBACK_FOR, shell only), which covers this
+# blue and this release (commit and release id) only. A v7 blue's tier must be
+# the profile's: the proof's default is the agentic tier, and the core tier
+# passes --agentic-tier off (the payload builder's and pre-stop probes' idiom,
+# so the agentic tier's plan is unchanged). A v5 or v6 record's own payload is
+# that payload, so the agentic release is unchanged; an adopted v7 blue is the
+# core release path's (M2-PR7b), which builds it.
 prove_blue_restorable_before_activation() {
-  local -a ack_args=()
+  local -a ack_args=() tier_args=()
   [[ "$BLUE_RESTORE_PROVEN" -ne 1 ]] || return 0
   [[ -z "${MIP_ACK_NO_ROLLBACK_FOR:-}" ]] || ack_args=(--no-rollback-ack "$MIP_ACK_NO_ROLLBACK_FOR")
+  tier_is_agentic || tier_args=(--agentic-tier off)
   step "prove blue's tier-b restore payload before green activation (or the exact no-rollback ack)"
   if ! run_with_proof_signing_authority "$PYTHON" -m tools.databricks.blue_restore_proof prepare-activation \
       --app-name "$_GRANTS_APP_NAME" \
@@ -176,6 +183,8 @@ prove_blue_restorable_before_activation() {
       --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
       --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
       --source-git-sha "$SOURCE_GIT_SHA" \
+      --release-id "$APP_RELEASE_ID" \
+      "${tier_args[@]}" \
       "${ack_args[@]}"; then
     echo "${RED}[deploy] green activation refused before it began: blue's tier-b restore payload is not proven (see above).${RST}" >&2
     exit 2

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import itertools
 import json
+from pathlib import Path
 
 import pytest
 
 from tools.databricks import operation_ack as acks
 
+REPO = Path(__file__).resolve().parents[2]
 PLAN = {"mode": "adopt", "deployment_sha256": "d" * 64, "source_tree_sha256": "e" * 64}
 
 
@@ -31,15 +33,44 @@ def test_an_ack_for_one_purpose_never_satisfies_another(given: str, checked: str
     assert refused.value.code == "ack_mismatch"
 
 
-def test_each_purpose_has_its_own_one_run_shell_export() -> None:
+def test_only_the_purposes_the_deploy_reads_have_a_one_run_shell_export() -> None:
     assert acks.ACK_ENV == {
         "adopt_live": "MIP_ACK_ADOPT_LIVE",
         "supersede": "MIP_ACK_SUPERSEDE",
         "unadopt": "MIP_ACK_UNADOPT",
-        "restore_unverified_frontend": "MIP_ACK_RESTORE_UNVERIFIED_FRONTEND",
         "no_rollback_for": "MIP_ACK_NO_ROLLBACK_FOR",
-        "override_freeze": "MIP_ACK_OVERRIDE_FREEZE",
     }
+    shell = "".join(
+        path.read_text(encoding="utf-8") for path in sorted((REPO / "scripts").rglob("*.sh"))
+    )
+    for name in acks.ACK_ENV.values():
+        assert name in shell, f"{name} is the export a refusal names, so the deploy must read it"
+    for name in ("MIP_ACK_OVERRIDE_FREEZE", "MIP_ACK_RESTORE_UNVERIFIED_FRONTEND"):
+        assert name not in shell, "no code reads it, so no refusal may name it"
+
+
+@pytest.mark.parametrize(
+    ("purpose", "route"),
+    [
+        ("adopt_live", "export MIP_ACK_ADOPT_LIVE=<its sha256> for this run only"),
+        ("supersede", "export MIP_ACK_SUPERSEDE=<its sha256> for this run only"),
+        ("unadopt", "export MIP_ACK_UNADOPT=<its sha256> for this run only"),
+        ("no_rollback_for", "export MIP_ACK_NO_ROLLBACK_FOR=<its sha256> for this run only"),
+        ("override_freeze", "pass --override-freeze-ack <its sha256> to this one publish"),
+        ("restore_unverified_frontend", "hand this one restore its restore_unverified_frontend"),
+    ],
+)
+def test_a_missing_ack_names_the_route_that_purpose_is_really_handed_in_by(
+    purpose: str, route: str
+) -> None:
+    for given in (None, "A" * 64):
+        with pytest.raises(acks.AckRefused) as refused:
+            acks.require_ack(purpose, PLAN, given)
+        assert "MIP_ACK_OVERRIDE_FREEZE" not in str(refused.value)
+        assert "MIP_ACK_RESTORE_UNVERIFIED_FRONTEND" not in str(refused.value)
+    with pytest.raises(acks.AckRefused) as refused:
+        acks.require_ack(purpose, PLAN, None)
+    assert route in str(refused.value)
 
 
 @pytest.mark.parametrize(

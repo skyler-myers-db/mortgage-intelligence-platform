@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from tests.fixtures import rollback_records as rr
-from tests.fixtures.adopt_live_world import DIST, World, make_repo
+from tests.fixtures.adopt_live_world import World, make_repo
 from tools.databricks import adopt_live, stop_primitive_map
 from tools.databricks import app_release_contract as release
 from tools.databricks import app_rollback_record_contract as contract
@@ -67,7 +67,8 @@ def test_a_sandbox_adopt_signs_a_v7_core_record_with_zero_app_mutations(world: W
         "adopt_live", plan
     )
     assert record["deployment_id"] == "deployment-blue" and record["git_sha"] == world.main
-    assert record["frontend_provenance"] == "unverified", "no build artifact was given"
+    assert record["frontend_provenance"] == "unverified", "no reference build was requested"
+    assert plan["frontend_reference"] == "none" and record["frontend_reference_sha256"] is None
     assert record["restore_payload"] is None and record["treatment_mode"] == "quiesce"
     folder = record["restore_source_path"]
     assert release.adopted_folder_in(folder).startswith(
@@ -82,41 +83,6 @@ def test_a_sandbox_adopt_signs_a_v7_core_record_with_zero_app_mutations(world: W
         == tree_digest(world, world.folder("deployment-blue"))
     )
     assert world.lease_calls >= 3, "the lease is asserted before the plan, the copy and the write"
-
-
-def test_inspect_verifies_the_adopted_record_without_the_gateway(
-    world: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    from tools.databricks import app_deployment_rollback as rollback
-    from tools.databricks import app_deployment_rollback_cli as cli
-
-    world.apply()
-    monkeypatch.setattr(cli, "WorkspaceClient", lambda: world)
-    monkeypatch.setenv("MIP_TEST_TOKEN", "token")
-    monkeypatch.setattr(
-        rollback,
-        "_stored_resource_proof",
-        lambda *_a, **_kw: pytest.fail("core never asks the Gateway"),
-    )
-    out = tmp_path / "blue.env"
-
-    argv = [
-        "inspect",
-        "--app-name",
-        rr.APP_NAME,
-        "--scope",
-        rr.SCOPE,
-        "--base-url",
-        "https://x.example.invalid",
-    ]
-    assert cli.main([*argv, "--token-env", "MIP_TEST_TOKEN", "--out-env", str(out)]) == 0
-    values = dict(line.split("=", 1) for line in out.read_text(encoding="utf-8").splitlines())
-    assert (
-        values["MIP_APP_ROLLBACK_RECORD_VERSION"] == "7"
-        and values["MIP_APP_ROLLBACK_TIER"] == "core"
-    )
-    assert values["MIP_APP_ROLLBACK_PROVENANCE"] == "adopted"
-    assert world.apps.mutations == []
 
 
 def test_no_adopt_live_module_holds_or_reaches_an_app_primitive() -> None:
@@ -196,6 +162,20 @@ def test_the_treatment_boundary_must_verify_read_only(world: World, state: str) 
     assert _refusal(world, treatment=check) == "treatment_unverified"
 
 
+def test_main_is_the_named_ref_never_the_runs_own_head(world: World) -> None:
+    """A run from a branch whose HEAD carries an unmerged commit refuses to adopt a D0 built from it."""
+
+    assert _refusal(world, health_sha=lambda: world.side, source_sha=world.side) == (
+        "source_not_on_main"
+    )
+    assert (
+        _refusal(world, source_sha=world.side) == "source_not_on_main"
+    ), "a run from a branch refuses even when D0 is main's: its HEAD is not on main"
+    assert _refusal(world, main_ref="refs/remotes/origin/main") == "main_unresolved"
+    assert _refusal(world, source_sha="not-a-sha") == "source_not_on_main"
+    assert _plan(world)["git_sha"] == world.main, "a run from main itself adopts"
+
+
 @pytest.mark.parametrize("health", ("side", "unknown", "garbage", "error"))
 def test_the_health_sha_must_be_an_ancestor_of_main(world: World, health: str) -> None:
     def read() -> str:
@@ -234,28 +214,6 @@ def test_the_backend_closure_must_be_the_repos_at_the_health_sha(world: World, c
             world.tree.delete(f"{base}/backend/__init__.py")
 
     assert _refusal(world) == "closure_differs"
-
-
-def test_the_frontend_is_verified_only_against_an_equal_build_artifact(
-    world: World, tmp_path: Path
-) -> None:
-    dist = tmp_path / "dist"
-    for relpath, data in DIST.items():
-        (dist / relpath.removeprefix("frontend/dist/")).parent.mkdir(parents=True, exist_ok=True)
-        (dist / relpath.removeprefix("frontend/dist/")).write_bytes(data)
-
-    verified = adopt_live.compute_plan(
-        world, "adopt", world.target(), world.readers(reference_dist=dist)
-    )[0]
-    (dist / "assets" / "app-abcd1234.js").write_bytes(b"rebuilt\n")
-    unverified = adopt_live.compute_plan(
-        world, "adopt", world.target(), world.readers(reference_dist=dist)
-    )[0]
-
-    assert (verified["frontend_provenance"], unverified["frontend_provenance"]) == (
-        "verified",
-        "unverified",
-    )
 
 
 # --- the record slot ---------------------------------------------------------------------
@@ -334,6 +292,10 @@ def test_an_occupied_adopted_folder_with_other_bytes_refuses(world: World) -> No
     with pytest.raises(AdoptLiveRefused) as refused:
         world.apply(ack=ack_digest("adopt_live", plan))
     assert refused.value.code == "copy_failed" and world.record() is None
+    message = str(refused.value)
+    assert "ReleaseContractError" in message, "the class only"
+    for value in (rr.DEPLOYER, rr.CLIENT_KEY, "/Users/", "adopted-"):
+        assert value not in message, "a refusal reaches the CI log: it names no id or path"
 
 
 def test_the_s7_switch_is_off_and_refuses(world: World) -> None:
@@ -417,12 +379,45 @@ def test_unadopt_writes_a_tombstone_and_a_later_adopt_starts_clean(world: World)
     assert world.apps.mutations == []
 
 
+@pytest.mark.parametrize("tier", ("off", "on"))
 def test_unadopt_with_no_record_retires_nothing_so_the_unbind_recovery_still_runs(
-    world: World,
+    world: World, tier: str
 ) -> None:
-    assert _plan(world, "unadopt") == {"mode": "unadopt", "record_state": "absent"}
-    assert world.apply("unadopt") is None
+    """In either tier: #310's unbind recovery after an adopt refused past its binds."""
+
+    assert _plan(world, "unadopt", tier=tier) == {"mode": "unadopt", "record_state": "absent"}
+    assert world.apply("unadopt", tier=tier) is None
     assert world.secrets.puts == [] and world.record() is None
+
+
+def test_an_agentic_tier_unadopt_retires_a_core_adoption_but_never_adopts(world: World) -> None:
+    world.apply()
+
+    assert world.apply("unadopt", tier="on")["provenance"] == "retired"
+    for mode in ("adopt", "supersede"):
+        with pytest.raises(AdoptLiveRefused) as refused:
+            adopt_live.compute_plan(
+                world, mode, world.target(tier="on", supersede="0" * 64), world.readers()
+            )
+        assert refused.value.code == "tier_agentic"
+
+
+def test_each_ack_covers_one_record_version_so_an_old_one_never_replays(world: World) -> None:
+    world.apply()
+    first_unadopt = ack_digest("unadopt", _plan(world, "unadopt"))
+    world.apply("unadopt", ack=first_unadopt)
+    retired_adopt = ack_digest("adopt_live", _plan(world))
+    world.apply(ack=retired_adopt)
+
+    with pytest.raises(AckRefused) as refused:
+        world.apply("unadopt", ack=first_unadopt)
+    assert refused.value.code == "ack_mismatch", "the first unadopt's ack is not the second's"
+    world.apply("unadopt")
+    with pytest.raises(AckRefused) as refused:
+        world.apply(ack=retired_adopt)
+    assert refused.value.code == "ack_mismatch", "nor the adopt over the first tombstone"
+    record = world.record()
+    assert record is not None and _plan(world)["record_sha256"] == adopt_live.record_digest(record)
 
 
 def test_unadopt_refuses_a_record_it_did_not_adopt(world: World) -> None:
@@ -434,11 +429,8 @@ def test_unadopt_refuses_a_record_it_did_not_adopt(world: World) -> None:
 # --- the command line -----------------------------------------------------------------
 
 
-def test_the_cli_plan_prints_the_digest_and_refuses_a_mismatched_ack(
-    world: World, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(adopt_live, "Readers", lambda **kwargs: world.readers())
-    argv = [
+def _cli_argv(world: World) -> list[str]:
+    return [
         "plan",
         "--mode",
         "adopt",
@@ -455,8 +447,17 @@ def test_the_cli_plan_prints_the_digest_and_refuses_a_mismatched_ack(
         "--agentic-tier",
         "off",
         "--main-ref",
+        "refs/heads/main",
+        "--source-git-sha",
         world.main,
     ]
+
+
+def test_the_cli_plan_prints_the_digest_and_refuses_a_mismatched_ack(
+    world: World, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(adopt_live, "Readers", lambda **kwargs: world.readers())
+    argv = _cli_argv(world)
 
     assert adopt_live.main(argv, workspace_factory=lambda: world) == 0
     out = capsys.readouterr().out

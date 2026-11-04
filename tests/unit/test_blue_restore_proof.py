@@ -13,6 +13,9 @@ from tools.databricks import app_rollback_record_contract as contract
 from tools.databricks import blue_restore_proof as proof
 from tools.databricks.operation_ack import ack_digest
 
+GREEN_SHA = "c" * 40
+GREEN_RELEASE = f"{GREEN_SHA[:12]}-{'d' * 12}"
+
 
 @pytest.fixture(autouse=True)
 def _keys(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -35,13 +38,27 @@ def _restore_payload(world: World, **env: str) -> dict[str, object]:
 
 
 def _prepare(world: World, **kwargs: Any) -> str:
+    values: dict[str, Any] = {
+        "agentic_tier": "off",
+        "green_git_sha": GREEN_SHA,
+        "green_release_id": GREEN_RELEASE,
+        **kwargs,
+    }
     return proof.prepare_activation(
         world,
         app_name=rr.APP_NAME,
         scope=rr.SCOPE,
         lakebase_instance=rr.LAKEBASE,
         lease=world.lease,
-        **kwargs,
+        **values,
+    )
+
+
+def _no_rollback_plan(
+    record: dict[str, Any], *, sha: str = GREEN_SHA, release: str = GREEN_RELEASE
+) -> dict[str, str]:
+    return proof.no_rollback_plan(
+        app_name=rr.APP_NAME, record=record, green_git_sha=sha, green_release_id=release
     )
 
 
@@ -61,7 +78,7 @@ def test_activation_refuses_without_the_payload_or_the_exact_no_rollback_ack(
 ) -> None:
     record = adopted.record()
     assert record is not None
-    plan = proof.no_rollback_plan(app_name=rr.APP_NAME, record=record)
+    plan = _no_rollback_plan(record)
     for ack in (None, "0" * 64, ack_digest("override_freeze", plan), ack_digest("supersede", plan)):
         with pytest.raises(proof.RestoreProofRefused) as refused:
             _prepare(adopted, no_rollback_ack=ack)
@@ -72,6 +89,40 @@ def test_activation_refuses_without_the_payload_or_the_exact_no_rollback_ack(
 
     note = _prepare(adopted, no_rollback_ack=ack_digest("no_rollback_for", plan))
     assert "NO rollback" in note and adopted.apps.mutations == []
+
+
+def test_a_no_rollback_ack_covers_this_blue_and_this_green_release_only(adopted: World) -> None:
+    record = adopted.record()
+    assert record is not None
+    ack = ack_digest("no_rollback_for", _no_rollback_plan(record))
+    assert set(_no_rollback_plan(record)) == {
+        "app_name",
+        "no_rollback_for",
+        "green_git_sha",
+        "green_release_id",
+    }
+    later_sha = "e" * 40
+    for green in (
+        {"green_git_sha": later_sha, "green_release_id": f"{later_sha[:12]}-{'d' * 12}"},
+        {"green_release_id": f"{GREEN_SHA[:12]}-{'f' * 12}"},
+    ):
+        with pytest.raises(proof.RestoreProofRefused) as refused:
+            _prepare(adopted, no_rollback_ack=ack, **green)
+        assert refused.value.code == "no_rollback_proof", "one release's ack never carries"
+
+    assert "NO rollback" in _prepare(adopted, no_rollback_ack=ack)
+    for bad in ({"green_git_sha": "x"}, {"green_release_id": f"{'e' * 12}-{'d' * 12}"}):
+        with pytest.raises(proof.RestoreProofRefused) as refused:
+            _prepare(adopted, no_rollback_ack=ack, **bad)
+        assert refused.value.code == "green_release_invalid"
+
+
+def test_a_v7_blue_whose_tier_is_not_the_profiles_refuses(adopted: World) -> None:
+    with pytest.raises(proof.RestoreProofRefused) as refused:
+        _prepare(adopted, agentic_tier="on", restore_payload=_restore_payload(adopted))
+    assert refused.value.code == "blue_tier_mismatch"
+    record = adopted.record()
+    assert record is not None and record["restore_payload_sha256"] is None, "nothing recorded"
 
 
 def test_the_restore_payload_is_buildable_and_recorded_before_activation(adopted: World) -> None:
@@ -197,8 +248,23 @@ def test_the_cli_refuses_with_exit_2_and_prints_the_ack_to_give(
         "--lease-id",
         "lease-1",
         "--source-git-sha",
-        "0" * 40,
+        GREEN_SHA,
+        "--release-id",
+        GREEN_RELEASE,
+        "--agentic-tier",
+        "off",
     ]
 
     assert proof.main(argv, workspace_factory=lambda: adopted) == 2
-    assert "REFUSED no_rollback_proof" in capsys.readouterr().err
+    record = adopted.record()
+    assert record is not None
+    digest = ack_digest("no_rollback_for", _no_rollback_plan(record))
+    err = capsys.readouterr().err
+    assert "REFUSED no_rollback_proof" in err and f"MIP_ACK_NO_ROLLBACK_FOR={digest}" in err
+
+    assert proof.main([*argv, "--no-rollback-ack", digest], workspace_factory=lambda: adopted) == 0
+    agentic_default = [*argv[:-2], "--no-rollback-ack", digest]
+    assert (
+        proof.main(agentic_default, workspace_factory=lambda: adopted) == 2
+    ), "without --agentic-tier off the profile is agentic, and a core blue never protects it"
+    assert "REFUSED blue_tier_mismatch" in capsys.readouterr().err

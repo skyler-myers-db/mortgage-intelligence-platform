@@ -17,9 +17,10 @@ and the sha256 of its purpose-named canonical body (tools/databricks/operation_a
 * **adopt** (purpose ``adopt_live``): the slot holds no record, a retired
   tombstone (a later adopt starts clean) or this deployment's own adopted
   record (an idempotent re-run); any other record refuses
-  (``record_present``). The profile's tier must be core (``tier_agentic``):
-  the adopted deployment carries no Gateway, so its record cannot carry the
-  Gateway resource proof the agentic kind requires.
+  (``record_present``). The profile's tier must be core (``tier_agentic``,
+  adopt and supersede only): the adopted deployment carries no Gateway, so
+  its record cannot carry the Gateway resource proof the agentic kind
+  requires.
 * **supersede** (purpose ``supersede``, ``--supersede <sha256 of the record's
   deployment id>``): the slot holds an adopted record for exactly that
   deployment and the active deployment is another one; the same proofs then
@@ -27,8 +28,13 @@ and the sha256 of its purpose-named canonical body (tools/databricks/operation_a
 * **unadopt** (purpose ``unadopt``): the slot holds an adopted record (or
   already its tombstone); ``apply`` writes the tombstone version
   (``provenance: retired``). Nothing is deleted: the copy and every field stay.
-  No record retires nothing, so the bind's unadopt recovery (M2-PR6) still
-  runs after an adopt refused past its binds; any other record refuses.
+  No record retires nothing, in either tier, so the bind's unadopt recovery
+  (M2-PR6) still runs after an adopt refused past its binds; any other record
+  refuses.
+
+Whenever the slot holds a record, the plan names that exact signed version's
+sha256 (``record_sha256``), so an ack covers one record version: an unadopt's
+ack never replays after a re-adoption, nor an adopt's over another tombstone.
 
 ``apply`` asserts the signed lease, recomputes the plan immediately before the
 first write and refuses on any difference from the acknowledged digest. adopt
@@ -56,6 +62,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -154,6 +161,13 @@ def _record(workspace: Any, target: Target) -> dict[str, Any] | None:
         ) from exc
 
 
+def record_digest(record: Mapping[str, Any]) -> str:
+    """The sha256 of one signed record version (its signature included), canonical JSON."""
+
+    canonical = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return sha256_text(canonical)
+
+
 def _record_state(
     mode: str, record: Mapping[str, Any] | None, target: Target, facts: Facts | None
 ) -> str:
@@ -199,26 +213,32 @@ def compute_plan(
 
     if mode not in MODES:
         raise AdoptLiveRefused("mode_invalid", f"mode must be one of {', '.join(MODES)}")
-    if tier_of_profile(target.agentic_tier) != "core":
+    tier = tier_of_profile(target.agentic_tier)
+    record = _record(workspace, target)
+    if mode == "unadopt":
+        # Any tier: an absent record retires nothing, so the unbind recovery of
+        # M2-PR6 runs in the agentic tier too, and an adopted record is core.
+        state = _record_state(mode, record, target, None)
+        retired: dict[str, object] = {"mode": mode, "record_state": state}
+        if record is not None:
+            retired["record_sha256"] = record_digest(record)
+            retired["record_deployment_sha256"] = sha256_text(str(record["deployment_id"]))
+            retired["record_tree_sha256"] = str(record["source_tree_sha256"])
+        return retired, None, record
+    if tier != "core":
         raise AdoptLiveRefused(
             "tier_agentic",
             "adopt-live signs a core-tier record only: the adopted deployment carries no Gateway, "
             "and the agentic tier waits for the estate inventory (M4-PR1)",
         )
-    record = _record(workspace, target)
-    if mode == "unadopt":
-        state = _record_state(mode, record, target, None)
-        retired: dict[str, object] = {"mode": mode, "record_state": state}
-        if record is not None:
-            retired["record_deployment_sha256"] = sha256_text(str(record["deployment_id"]))
-            retired["record_tree_sha256"] = str(record["source_tree_sha256"])
-        return retired, None, record
     facts = gather(workspace, app_name=target.app_name, readers=readers)
     state = _record_state(mode, record, target, facts)
     plan: dict[str, object] = {
         "mode": mode,
         "tier": "core",
         "record_state": state,
+        # The exact record version this plan acts on, so an ack covers one version only.
+        "record_sha256": None if record is None else record_digest(record),
         "restore_folder": target.folder_path(facts).rsplit("/", 1)[-1],
         "s7_default_source": "owed" if not S7_DEFAULT_SOURCE_SETTABLE else "settable",
         **plan_facts(facts),
@@ -233,7 +253,9 @@ def _copy_and_rehash(workspace: Any, facts: Facts, path: str, readers: Readers) 
         source.copy_to(workspace, facts.files, release_path=path, commit=facts.git_sha)
     except Exception as exc:  # noqa: BLE001 - the class only: a message can name the folder
         raise AdoptLiveRefused(
-            "copy_failed", f"the create-only copy failed ({type(exc).__name__}: {exc})"
+            "copy_failed",
+            f"the create-only copy failed ({type(exc).__name__}); an occupied adopted folder "
+            "whose bytes differ is reused only byte for byte",
         ) from exc
     if readers.tree(workspace, path) != facts.tree_sha256:
         raise AdoptLiveRefused(
@@ -297,6 +319,7 @@ def apply(
         source_tree_sha256=facts.tree_sha256,
         restore_source_path=path,
         frontend_provenance=facts.frontend_provenance,
+        frontend_reference_sha256=facts.frontend_reference_sha256,
         predecessor_deployment_id=record["deployment_id"]
         if mode == "supersede" and record
         else None,
@@ -350,13 +373,14 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--agentic-tier", required=True, choices=("off", "on"))
         command.add_argument("--catalog", default="mip")
         command.add_argument("--token-env", default="MIP_BEARER_TOKEN")
-        command.add_argument("--main-ref", required=True)
-        command.add_argument("--reference-dist", type=Path, default=None)
+        command.add_argument("--main-ref", default="refs/remotes/origin/main")
+        command.add_argument("--source-git-sha", required=True)
+        # Build frontend/dist from the health sha here and compare (else: unverified).
+        command.add_argument("--build-reference-dist", action="store_true")
         command.add_argument("--supersede", default="", metavar="SHA256")
         command.add_argument("--ack", default="", metavar="SHA256")
         if name == "apply":
             command.add_argument("--lease-id", required=True)
-            command.add_argument("--source-git-sha", required=True)
     return parser
 
 
@@ -384,13 +408,23 @@ def main(
         agentic_tier=args.agentic_tier,
         supersede=args.supersede,
     )
-    readers = Readers(
-        health_sha=health_reader(workspace, args.app_name, args.token_env),
-        treatment=treatment_reader(workspace, args.catalog),
-        repo=REPO,
-        main_ref=args.main_ref,
-        reference_dist=args.reference_dist,
-    )
+    with tempfile.TemporaryDirectory(prefix="mip-adopt-reference-") as scratch:
+        readers = Readers(
+            health_sha=health_reader(workspace, args.app_name, args.token_env),
+            treatment=treatment_reader(workspace, args.catalog),
+            repo=REPO,
+            main_ref=args.main_ref,
+            source_sha=args.source_git_sha,
+            build_reference=(
+                (lambda commit: source.build_reference_dist(REPO, commit, Path(scratch)))
+                if args.build_reference_dist
+                else None
+            ),
+        )
+        return _run(workspace, args, target, readers)
+
+
+def _run(workspace: Any, args: argparse.Namespace, target: Target, readers: Readers) -> int:
     purpose = PURPOSE[args.mode]
     try:
         if args.command == "plan":

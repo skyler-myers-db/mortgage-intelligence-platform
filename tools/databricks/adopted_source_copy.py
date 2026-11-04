@@ -14,11 +14,14 @@ adopt-live trusts nothing the live folder says about itself:
   names it.
 * ``frontend_provenance`` compares ``frontend/dist`` with a dist built from
   the health sha: ``verified`` when the two hold the same paths and bytes,
-  ``unverified`` otherwise, or when no such build was given. No CI job keeps
-  a dist artifact (ci.yml uploads only source maps), so the build artifact is
-  a local build of a checkout of that sha (``npm --prefix frontend ci && npm
-  --prefix frontend run build``) passed as ``--reference-dist``; a different
-  Node or a re-compressed ``.br`` reads as ``unverified``, never as verified.
+  ``unverified`` otherwise. No CI job keeps a dist artifact (ci.yml uploads
+  only source maps), and a directory an operator names proves nothing (a
+  copy of the live dist itself would compare equal), so the only reference is
+  the one ``build_reference_dist`` builds here: ``git archive`` of that sha
+  into a private temporary tree, then ``npm ci`` and ``npm run build`` there,
+  with an allowlisted environment that holds no credential. No build, a
+  failed one, a different Node, a re-compressed ``.br`` or a lender mark the
+  build cannot stage all read as ``unverified``, never as verified.
 * ``copy_to`` stages the downloaded bytes and publishes them create-only into
   the SP-owned ``app-src/adopted-<id12>-<digest12>`` with
   ``app_release_source``'s own ``check_stage`` and ``upload_release`` (exact
@@ -31,9 +34,12 @@ Nothing here stops, starts, deploys or updates an App.
 from __future__ import annotations
 
 import hashlib
+import io
+import os
 import subprocess
+import tarfile
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -53,6 +59,28 @@ from tools.databricks.app_start_deployment import digest_entries
 
 DIST_PREFIX = f"{closure.DIST_PATH}/"
 APP_YAML = "app.yaml"
+# What the reference build may see of the environment: the tools, the npm
+# registry and proxy settings, and the reviewed tenant appearance the deploy
+# exports for its own build (frontend/vite.config.ts). Never a credential.
+BUILD_ENV_NAMES = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "CI",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "NODE_EXTRA_CA_CERTS",
+        "MIP_DEFAULT_THEME",
+        "MIP_DEFAULT_ACCENT",
+        "MIP_LENDER_MARK_SHA256",
+        "MIP_LENDER_NAME",
+    }
+)
+BUILD_ENV_PREFIXES = ("npm_config_", "NPM_CONFIG_")
 
 
 def _sha256(data: bytes) -> str:
@@ -133,7 +161,7 @@ def frontend_provenance(files: Mapping[str, bytes], reference_dist: Path | None)
         if path.startswith(DIST_PREFIX)
     }
     if reference_dist is None:
-        return "unverified", "no build artifact for the health sha was given (--reference-dist)"
+        return "unverified", "no reference build of the health sha was given"
     try:
         reference = {
             entry.path: entry.sha256 for entry in contract.manifest_entries(reference_dist)
@@ -146,6 +174,55 @@ def frontend_provenance(files: Mapping[str, bytes], reference_dist: Path | None)
         path for path in set(ours) | set(reference) if ours.get(path) != reference.get(path)
     )
     return "unverified", f"frontend/dist differs from the build artifact in {len(differ)} files"
+
+
+def build_environment(environ: Mapping[str, str]) -> dict[str, str]:
+    """The reference build's environment: ``BUILD_ENV_NAMES`` and npm's own settings only."""
+
+    return {
+        name: value
+        for name, value in environ.items()
+        if name in BUILD_ENV_NAMES or name.startswith(BUILD_ENV_PREFIXES)
+    }
+
+
+def build_reference_dist(
+    repo: Path,
+    commit: str,
+    workdir: Path,
+    *,
+    run: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
+    """Build ``frontend/dist`` from ``git archive <commit>`` in ``workdir``; raise on any failure."""
+
+    tree = workdir / "tree"
+    tree.mkdir(parents=True)
+    archive = run(
+        ["git", "-C", str(repo), "archive", "--format=tar", contract.check_commit(commit)],
+        capture_output=True,
+        check=True,
+    )
+    with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+        tar.extractall(tree, filter="data")
+    env = build_environment(os.environ if environ is None else environ)
+    frontend = str(tree / "frontend")
+    for step in (["ci", "--no-audit", "--no-fund"], ["run", "build"]):
+        run(
+            ["npm", "--prefix", frontend, *step], cwd=tree, env=env, capture_output=True, check=True
+        )
+    dist = tree / closure.DIST_PATH
+    if not dist.is_dir():
+        raise RuntimeError("the reference build wrote no frontend/dist")
+    return dist
+
+
+def dist_digest(files: Mapping[str, bytes]) -> str:
+    """The full-tree digest of ``frontend/dist`` alone (``tree_digest``'s formula)."""
+
+    return folder_digest(
+        {path: data for path, data in files.items() if path.startswith(DIST_PREFIX)}
+    )
 
 
 def copy_to(

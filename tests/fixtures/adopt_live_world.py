@@ -217,7 +217,8 @@ class World:
             "health_sha": lambda: self.health,
             "treatment": lambda _principal, mode: self.treatment[mode],
             "repo": self.repo,
-            "main_ref": self.main,
+            "main_ref": "refs/heads/main",
+            "source_sha": self.main,
         }
         values.update(overrides)
         return Readers(**values)
@@ -251,10 +252,11 @@ class World:
         readers: Readers | None = None,
         supersede: str = "",
         reviewed: list[dict[str, object]] | None = None,
+        tier: str = "off",
     ) -> Any:
         from tools.databricks.operation_ack import ack_digest
 
-        target = self.target(supersede=supersede)
+        target = self.target(supersede=supersede, tier=tier)
         used = readers or self.readers()
         if ack is None:
             plan, _facts, _record = adopt_live.compute_plan(self, mode, target, used)

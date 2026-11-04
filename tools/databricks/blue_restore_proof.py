@@ -26,10 +26,13 @@ signed blue, ``prepare_activation`` requires blue's tier-b restore payload:
   which is checked the same way and recorded in a new signed version under
   the lease;
 * otherwise activation refuses (exit 2) unless the ``no_rollback_for`` ack
-  names exactly sha256(blue's deployment id), and the refusal prints that
-  digest.
+  covers exactly this blue and this green: sha256(blue's deployment id), the
+  release's source commit and its release id. The refusal prints that digest,
+  so an ack exported in a long-lived shell never carries to another release.
 
-No record, or a retired tombstone, has no blue to protect.
+No record, or a retired tombstone, has no blue to protect. A v7 blue's tier
+must be the profile's (``MIP_AGENTIC_TIER``): a core blue never protects an
+agentic release, nor an agentic blue a core one (``blue_tier_mismatch``).
 
 ``inspect_v7`` is the ``app_deployment_rollback inspect`` reader for a v7
 record: the signature and exact schema, the App's service-principal identity,
@@ -48,6 +51,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from tools.databricks import app_release_contract as release_contract
 from tools.databricks.app_deployment_state import active_deployment_id
 from tools.databricks.app_rollback_record_contract import (
     V7_RECORD_VERSION,
@@ -59,6 +63,7 @@ from tools.databricks.app_rollback_record_contract import (
 from tools.databricks.app_rollback_record_v7 import (
     V7RecordError,
     assert_core_resource_proof,
+    assert_record_tier,
     unsigned,
     validated_v7_record,
 )
@@ -113,10 +118,24 @@ def assert_tier_a(workspace: Any, *, app_name: str, record: Mapping[str, Any]) -
         )
 
 
-def no_rollback_plan(*, app_name: str, record: Mapping[str, Any]) -> dict[str, str]:
-    """The canonical plan a ``no_rollback_for`` ack covers: sha256(blue's deployment id)."""
+def no_rollback_plan(
+    *, app_name: str, record: Mapping[str, Any], green_git_sha: str, green_release_id: str
+) -> dict[str, str]:
+    """The canonical plan a ``no_rollback_for`` ack covers: this blue, this green release."""
 
-    return {"app_name": app_name, "no_rollback_for": sha256_text(str(record["deployment_id"]))}
+    try:
+        commit = release_contract.check_commit(green_git_sha)
+        release_id = release_contract.check_release_id(green_release_id, commit=commit)
+    except release_contract.ReleaseContractError as exc:
+        raise RestoreProofRefused(
+            "green_release_invalid", f"the green release is invalid: {exc}"
+        ) from exc
+    return {
+        "app_name": app_name,
+        "no_rollback_for": sha256_text(str(record["deployment_id"])),
+        "green_git_sha": commit,
+        "green_release_id": release_id,
+    }
 
 
 def unverified_frontend_plan(*, app_name: str, record: Mapping[str, Any]) -> dict[str, str]:
@@ -170,6 +189,9 @@ def prepare_activation(
     scope: str,
     lakebase_instance: str,
     lease: Callable[[], None],
+    agentic_tier: str,
+    green_git_sha: str,
+    green_release_id: str,
     restore_payload: Mapping[str, object] | None = None,
     no_rollback_ack: str | None = None,
     tree: Callable[[Any, str], str] = tree_digest,
@@ -185,6 +207,10 @@ def prepare_activation(
         return "no signed blue record: there is no blue to protect"
     if record["version"] != V7_RECORD_VERSION:
         return "the signed v5/v6 record's own payload is blue's tier-b restore payload"
+    try:
+        assert_record_tier(record, agentic_tier=agentic_tier)
+    except V7RecordError as exc:
+        raise RestoreProofRefused("blue_tier_mismatch", str(exc)) from exc
     if active_deployment_id(workspace, app_name=app_name) != record["deployment_id"]:
         raise RestoreProofRefused(
             "blue_not_active",
@@ -222,7 +248,12 @@ def prepare_activation(
                 "payload_unrecorded", "the restore payload record did not read back exactly"
             )
         return "blue's tier-b restore payload was built, proven and recorded before activation"
-    plan = no_rollback_plan(app_name=app_name, record=record)
+    plan = no_rollback_plan(
+        app_name=app_name,
+        record=record,
+        green_git_sha=green_git_sha,
+        green_release_id=green_release_id,
+    )
     try:
         require_ack("no_rollback_for", plan, no_rollback_ack)
     except AckRefused as exc:
@@ -313,6 +344,9 @@ def main(
     parser.add_argument("--lakebase-instance", required=True)
     parser.add_argument("--lease-id", required=True)
     parser.add_argument("--source-git-sha", required=True)
+    parser.add_argument("--release-id", required=True)
+    # The profile's MIP_AGENTIC_TIER; scripts/deploy.sh passes off for the core tier.
+    parser.add_argument("--agentic-tier", choices=("off", "on"), default="on")
     parser.add_argument("--restore-payload", type=Path, default=None)
     parser.add_argument("--no-rollback-ack", default="")
     args = parser.parse_args(argv)
@@ -338,6 +372,9 @@ def main(
                 lease_id=args.lease_id,
                 source_git_sha=args.source_git_sha,
             ),
+            agentic_tier=args.agentic_tier,
+            green_git_sha=args.source_git_sha,
+            green_release_id=args.release_id,
             restore_payload=payload,
             no_rollback_ack=args.no_rollback_ack,
         )

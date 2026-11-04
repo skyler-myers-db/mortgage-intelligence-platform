@@ -2709,27 +2709,38 @@ and one signed record version.
 **Preconditions** (`tools/databricks/adopt_live_facts.py`), each with its own
 refusal, all before the lease: the active deployment is the newest SUCCEEDED
 one, nothing is pending and the compute is ACTIVE (`deployment_unstable`); its
-env-name set (names only; Databricks redacts the values) carries no serving,
-Gateway, Supervisor or proxy name (`env_names_not_proxyless`); the live
+env-name set (names only; Databricks redacts the values) carries no agent
+model, serving, Gateway, Supervisor, eval, Gateway-attestation or proxy name
+(`env_names_not_proxyless`; the two agentic switches `MIP_AI_GATEWAY` and
+`MIP_AGENT_ORCHESTRATOR` are core names whose restore value must be `0`); the live
 bindings are core kinds only (`bindings_invalid`) and, after the bind, equal
 the profile's reviewed bindings from the bundle summary (`bindings_differ`);
 the App ACL is snapshotted (`acl_unreadable`); the campaign-treatment boundary
 is exactly converged, read-only, in the runtime or the quiesce mode
 (`treatment_unverified`); the App's authenticated health names a commit that
-resolves in the checkout and is an ancestor of the run's main commit
-(`health_unreadable`, `health_sha_not_on_main`; a CI checkout needs the full
-history); the full-tree digest of the deployment's source folder (every file,
+resolves in the checkout and is an ancestor of main, where main is
+`refs/remotes/origin/main`, never the run's own HEAD, and the run's source
+commit is itself on that main (`health_unreadable`, `main_unresolved`,
+`source_not_on_main`, `health_sha_not_on_main`; a CI checkout needs the full
+history and origin/main fetched), so a run from a branch whose HEAD carries an
+unmerged commit refuses; the full-tree digest of the deployment's source folder (every file,
 `app.yaml` and `frontend/dist` included) equals that of its `/src/` snapshot
 (`tree_drift`); `app.yaml` is byte-equal to the repo's at the health sha
 (`app_yaml_differs`); and every other file outside `frontend/dist` is the App
 runtime closure git tracks at that sha (`closure_differs`). A folder staged by
 an older closure definition therefore refuses, and the remedy is a fresh
 emergency deploy of a current commit before the adoption. `frontend/dist` is
-compared with a dist built from the health sha, `MIP_ADOPT_REFERENCE_DIST`
-(shell only): no CI job keeps a dist artifact, so the artifact is a local
-build of a checkout of that sha. Equal bytes are `verified`; anything else, or
-no dist given, is `unverified`, and any restore to an unverified record needs
-the `restore_unverified_frontend` ack.
+compared with a dist adopt-live builds itself from the health sha when
+`MIP_ADOPT_BUILD_REFERENCE_DIST=1` is exported for the run: `git archive` of
+that sha into a private temporary tree, then `npm ci` and `npm run build`
+there, with an allowlisted environment that holds no credential (the tools,
+npm's registry and proxy settings, and the reviewed tenant appearance). No CI
+job keeps a dist artifact, and a directory an operator names proves nothing (a
+copy of the live dist itself compares equal), so no such input exists. Equal
+bytes are `verified`, and the plan and the record carry the digest of the dist
+they matched; anything else (no build, a failed one, another Node, a lender
+mark the build cannot stage) is `unverified`, and any restore to an unverified
+record needs the `restore_unverified_frontend` ack.
 
 **The record slot and the modes.** adopt signs only when the slot holds no
 record, a retired tombstone, or this deployment's own adopted record (an
@@ -2741,8 +2752,11 @@ record's deployment id>` in an adopt phase re-signs an adopted record onto a
 newer active deployment after the same proofs (`predecessor_deployment_id`
 names the old one). unadopt writes the tombstone version (`provenance:
 retired`, every other field kept), so a later adopt starts clean; with no
-adopted record it retires nothing, so the bind's unadopt recovery still runs,
-and a captured blue refuses (`record_present`).
+adopted record it retires nothing, so the bind's unadopt recovery still runs
+in either tier, and a captured blue refuses (`record_present`). Only adopt and
+supersede refuse the agentic tier. Over a tombstone, the v5/v6 reader's
+remedy is a re-adoption (`--phase adopt`): the one-time unsigned rebase's
+bootstrap gate refuses over any signed record, a tombstone included.
 
 **The acks.** The owner attestation is deferred (review mode
 `single_maintainer_audited`), so each mode prints the sha256 of its plan's
@@ -2750,8 +2764,14 @@ purpose-named canonical body (`tools/databricks/operation_ack.py`):
 `MIP_ACK_ADOPT_LIVE`, `MIP_ACK_SUPERSEDE` or `MIP_ACK_UNADOPT`, a one-run shell
 export and never a `.env.local` line. The bind's `MIP_ADOPT_PLAN_ACK` without
 it refuses before the lease. The body names its purpose, so an ack for one
-purpose never satisfies another. `apply` recomputes the plan immediately before
-its first write and refuses on any difference.
+purpose never satisfies another, and whenever the slot holds a record the plan
+names that exact signed version's sha256 (`record_sha256`), so an ack covers
+one record version: the first unadopt's ack is refused after a re-adoption.
+`apply` recomputes the plan immediately before its first write and refuses on
+any difference. The `override_freeze` ack goes to the publisher as
+`--override-freeze-ack`, and the `restore_unverified_frontend` ack to the one
+restore that needs it; neither is an environment variable, and a refusal names
+the route each really takes.
 
 **The copy.** `apply` publishes the downloaded bytes create-only into the
 deployer's `app-src/adopted-<id12>-<digest12>` (`id12` from the sha256 of the
@@ -2769,12 +2789,28 @@ resource proof; or `agentic`, which keeps v6's Gateway contract unchanged),
 `ack_sha256` (the exact ack that authorised the version, in place of the
 plan's `profile_attestation_digest`, which needs the deferred attestation),
 `source_code_path`, `source_tree_sha256`, `restore_source_path`,
-`frontend_provenance`, `env_names`, `restore_payload` and
-`restore_payload_sha256` (null until a release proves them),
-`predecessor_deployment_id`, the App ACL snapshot and the treatment mode. A
-record's tier must equal the profile's for any capture, and a restore re-proves
-the record's own tier. Golden v5 and v6 records verify byte-identically.
-`app_deployment_rollback inspect` verifies a v7 record tier-aware.
+`frontend_provenance` and `frontend_reference_sha256`, `env_names`,
+`restore_payload` and `restore_payload_sha256` (null until a release proves
+them), `predecessor_deployment_id`, the App ACL snapshot and the treatment
+mode. A core record's restore payload carries `MIP_AI_GATEWAY` and
+`MIP_AGENT_ORCHESTRATOR` as exactly a literal `0` or not at all (the core
+tier's own invariant), so a core record never restores an agentic surface.
+Golden v5 and v6 records verify byte-identically.
+
+Where the tier is checked today: adopt-live signs the core tier only; the
+pre-activation proof refuses a v7 blue whose tier is not the profile's
+`MIP_AGENTIC_TIER` (`blue_tier_mismatch`); and `app_deployment_rollback
+inspect` re-proves the record's own tier (core: the App identity and exactly
+the record's core bindings, never the Gateway; agentic: v6 inspect's own
+Gateway resource proof, its reviewed-function owner the signed payload's).
+Owed to M2-PR7b, the core release path, and not claimed here: a capture
+writer (whose tier must equal the profile's), the restore that deploys
+`tier_b_payload`'s payload (with the restore-owned resource repair and, for
+an agentic record, the Gateway proof), and a release that builds blue's
+restore payload: `scripts/deploy.sh` passes no `--restore-payload` yet, so
+over a v7 blue the only way through activation is the exact `no_rollback_for`
+ack, and today's core builder adds the two switches as `0`, which D0's
+env-name set lacks.
 
 **Spike S7 is owed** (whether the Apps update API can set
 `default_source_code_path`, and how an App start snapshots source). The worst
@@ -2791,8 +2827,10 @@ v7 record must carry `restore_payload_sha256`, re-proven now (the copy
 re-hashed), or be handed blue's restore payload (env-name set equal to blue's,
 source the immutable copy), which is checked and recorded under the lease;
 otherwise activation refuses unless `MIP_ACK_NO_ROLLBACK_FOR` is the exact
-`no_rollback_for` digest of sha256(blue's deployment id), which the refusal
-prints. Tier a (start-only) refuses once blue is no longer the App's last
+`no_rollback_for` digest the refusal prints. Its plan covers this blue and
+this green only: sha256(blue's deployment id), the release's source commit
+and its release id (`--source-git-sha`, `--release-id`), so an ack left
+exported in a long-lived shell never carries to another release. Tier a (start-only) refuses once blue is no longer the App's last
 deployment. Building the restore payload in the release and the core release
 path itself are M2-PR7b's; the core release still refuses before the lease.
 
