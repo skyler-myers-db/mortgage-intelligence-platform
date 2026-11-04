@@ -2576,7 +2576,10 @@ and blue, the App to serve exactly that deployment with compute ACTIVE and
 blue's restore folder to keep the journal's digest, then proves source,
 snapshot digest, env names, bindings (the record's or exactly this run's
 bundle payload) and health, signs a new record version under this lease and
-closes the journal (`closed_by: deadman_repin`). A refusal writes nothing, and
+closes the journal (`closed_by: deadman_repin`). The re-pin changes blue's
+deployment id, so a recovering run that also needs a window refuses it at the
+pre-apply recheck (`window_unacked`: the digest moved); the next run plans and
+acks it afresh. A refusal writes nothing, and
 like any step-0a failure on an App not yet proven the EXIT trap stops and
 quiesces it. Any other open journal still refuses before the lease
 (`window_journal_open`): a contract window the dead-man left stopped, a start

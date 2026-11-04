@@ -266,3 +266,36 @@ def test_an_open_window_without_a_restart_still_refuses_before_the_lease() -> No
     plan = _plan(estate)
     assert plan.code == "refused" and "window_journal_open" in plan.refusals
     assert plan.public_summary()["deadman_recovery"] is False
+
+
+def test_a_recovering_run_that_also_needs_a_window_refuses_it_at_the_recheck() -> None:
+    # The pre-lease plan's digest names the old blue; the re-pin moves blue to
+    # the dead-man's start, so the pre-apply recheck no longer matches the ack.
+    from tests.unit.test_quiesce_window_start_repin import MIGRATION_APPLY
+
+    estate = _estate()
+    _dead_runner(estate)
+
+    def plan(position: str, ack: str) -> Any:
+        facts = window.collect_facts(
+            estate.workspace,
+            app_name=APP_NAME,
+            scope=SCOPE,
+            lakebase_instance="mip-app-state",
+            gate_report={"verdict": "passed", "instance_update_sha256": ""},
+            binding_payload={"name": APP_NAME, "description": "", "resources": estate.apps.resources},
+            role_state="exact",
+            verifier_role_state="exact",
+            jobs_reader_role_state="exact",
+            migration_plan=MIGRATION_APPLY,
+            rebase_unverified_app=False,
+        )
+        return window.window_plan(facts, position=position, acknowledgement=ack)
+
+    digest = plan("pre-lease", "").sha256
+    lease = plan("pre-lease", digest)
+    assert lease.code == "window" and lease.public_summary()["deadman_recovery"] is True
+    _repin(estate)
+    recheck = plan("pre-apply", digest)
+    assert recheck.code == "refused" and recheck.refusals == ("window_unacked",)
+    assert recheck.canonical["blue_deployment_id"] == "deployment-start-1"
