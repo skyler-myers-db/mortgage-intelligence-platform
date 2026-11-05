@@ -327,6 +327,10 @@ def test_the_fixture_job_checks_the_built_dist_with_the_require_flag() -> None:
     # image's. The runner rewrites its host path /opt/hostedtoolcache to /__t.
     tool_cache = steps[python]["env"]["AGENT_TOOLSDIRECTORY"]
     assert tool_cache.startswith("/") and not tool_cache.startswith(("/__", "/opt/hostedtoolcache")), tool_cache
+    # pip as root disables a cache under the runner user's /github/home, and
+    # setup-python's `pip cache dir` then fails: the cache is root's own.
+    assert steps[python]["with"]["cache"] == "pip"
+    assert _jobs()[PERF_JOB]["env"]["PIP_CACHE_DIR"].startswith("/root/")
     # The same required-dist step stages that dist as deploy.sh step 1 does.
     assert (ROOT / RELEASE_STAGE_TEST).is_file()
     assert _step_index(steps, RELEASE_STAGE_TEST) == check

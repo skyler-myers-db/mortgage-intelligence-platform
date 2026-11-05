@@ -634,6 +634,11 @@ jobs:
       options: --ipc=host
     env:
       MIP_CI_IMAGE: mcr.microsoft.com/playwright:v1.64.0-noble
+      # pip, as root, disables a cache under the runner user's /github/home
+      # ("not owned or is not writable by the current user"), and then
+      # setup-python's `pip cache dir` fails (run 42119232169). A cache
+      # root owns serves setup-python's cache and the install below alike.
+      PIP_CACHE_DIR: /root/.cache/pip
     steps:
       - uses: actions/checkout@v6
       - name: Trust the checkout for git (the container runs as root)
