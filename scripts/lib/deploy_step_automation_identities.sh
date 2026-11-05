@@ -358,6 +358,10 @@ fi
 if [[ "${DEPLOY_PHASE:-}" == "plan" ]]; then
   # Each phase's predicted budget (M1-PR6), read-only, kept in a local file.
   predict_phase_budgets
+  # The active deployment's digest a release may pin, and the PlanReport's
+  # two halves: public to the step summary, full to the workspace (M1-PR7).
+  print_active_deployment_digest
+  publish_plan_report
   echo "${GRN}[deploy] plan phase complete: read-only, stopped before the lease; nothing was changed.${RST}"
   exit 0
 fi
@@ -381,6 +385,8 @@ fi
 # refuses here, before the lease; a run with no --phase is not admitted.
 if [[ "${DEPLOY_PHASE:-}" == "release" ]]; then
   admit_release_phase_budget
+  # The deployment the dispatch expected, when it names one (M1-PR7).
+  check_expected_active_deployment
 fi
 # <<< release phase: budget admission <<<
 if [[ "$DRY_RUN" -eq 0 ]]; then

@@ -1,0 +1,72 @@
+name: resolve-client-profile
+description: >-
+  Resolve one client's profile from the GitHub Environment the job runs in
+  (M1-PR7): mask every identifying value first, then write .env.local and the
+  github-oidc DEFAULT Databricks profile, and output public values only.
+# The caller passes toJSON(vars) and toJSON(secrets) of its own environment.
+# Identifying fields come from secrets only: tools/clients/environment.py
+# refuses an identifying or secret field found in vars (it would print in
+# clear) and a public one found in secrets (the runner would blank it). The
+# runner masks each whole secret; the FIRST step registers every identifying
+# leaf of a JSON or list secret, and each spelling the deploy derives from
+# one (lower case, the host origin), as a mask, before any other step of
+# this action prints anything. The deploy job's install step has put the
+# hash-pinned runtime closure on PATH; this action installs nothing.
+inputs:
+  environment:
+    description: The GitHub Environment the job runs in; MIP_CLIENT must equal it.
+    required: true
+  vars-json:
+    description: toJSON(vars) of the job.
+    required: true
+  secrets-json:
+    description: toJSON(secrets) of the job.
+    required: true
+outputs:
+  client:
+    description: The client key (public).
+    value: ${{ steps.write.outputs.client }}
+  install-class:
+    description: demo or customer (public).
+    value: ${{ steps.write.outputs.install-class }}
+  agentic-tier:
+    description: off or on (public).
+    value: ${{ steps.write.outputs.agentic-tier }}
+  review-mode:
+    description: The profile's MIP_REVIEW_MODE (public).
+    value: ${{ steps.write.outputs.review-mode }}
+  app-name:
+    description: The profile's MIP_APP_NAME (public).
+    value: ${{ steps.write.outputs.app-name }}
+  profile-digest:
+    description: sha256 over the profile's public and identifying fields (public).
+    value: ${{ steps.write.outputs.profile-digest }}
+runs:
+  using: composite
+  steps:
+    - name: Mask every identifying profile value
+      shell: bash
+      env:
+        MIP_VARS_JSON: ${{ inputs.vars-json }}
+        MIP_SECRETS_JSON: ${{ inputs.secrets-json }}
+        MIP_CLIENT_ENVIRONMENT: ${{ inputs.environment }}
+      run: >-
+        python -m tools.clients mask
+        --vars-json env:MIP_VARS_JSON
+        --secrets-json env:MIP_SECRETS_JSON
+        --environment "$MIP_CLIENT_ENVIRONMENT"
+    - name: Write .env.local and the github-oidc DEFAULT profile
+      id: write
+      shell: bash
+      env:
+        MIP_VARS_JSON: ${{ inputs.vars-json }}
+        MIP_SECRETS_JSON: ${{ inputs.secrets-json }}
+        MIP_CLIENT_ENVIRONMENT: ${{ inputs.environment }}
+      run: >-
+        python -m tools.clients.ci_profile
+        --vars-json env:MIP_VARS_JSON
+        --secrets-json env:MIP_SECRETS_JSON
+        --environment "$MIP_CLIENT_ENVIRONMENT"
+        --env-local .env.local
+        --databrickscfg "$HOME/.databrickscfg"
+        --github-output "$GITHUB_OUTPUT"

@@ -60,7 +60,8 @@ that converger would refuse refuses as ``app_acl``.
 Exit codes: 0 the plan passes; 2 refused (each refusal printed with its
 remedy) or the plan could not be read. Printed lines carry codes, counts,
 digests and symbolic names only (``PlanReport.public_summary``); resolved
-names go to ``--report-out`` (``PlanReport.full``), written mode 0600. The
+names go to ``--report-out`` (``PlanReport.full``), written mode 0600, and
+``--public-out`` holds the public summary alone (a step summary's, M1-PR7). The
 check never writes to the workspace: every SDK call it can make, the journal
 read included, is a GET or a list.
 """
@@ -532,6 +533,8 @@ def main(
     check.add_argument("--position", required=True, choices=("pre-lease", "pre-apply"))
     check.add_argument("--app-key", default=DEFAULT_APP_KEY)
     check.add_argument("--report-out", type=Path)
+    # The public summary alone, for a step summary (M1-PR7, plan_report_publish).
+    check.add_argument("--public-out", type=Path)
     journal = check.add_argument_group(
         "first-install journal (pre-lease only; all three or none)"
     )
@@ -603,6 +606,8 @@ def main(
         )
     if args.report_out is not None:
         _write_private(args.report_out, report.full())
+    if args.public_out is not None:
+        _write_private(args.public_out, report.public_summary())
     _print_report(report)
     if report.refused:
         print(

@@ -113,7 +113,8 @@ def _run(args: argparse.Namespace) -> int:
     elif args.command == "digest":
         print(views.digest(profile))
     elif args.command == "mask":
-        values = views.masks(profile)
+        # Every identifying leaf and each spelling the deploy derives from one (M1-PR7).
+        values = (*views.masks(profile), *views.derived_masks(profile))
         if in_github_actions():
             for value in values:
                 emit_mask(value, stream=sys.stdout)
@@ -123,7 +124,7 @@ def _run(args: argparse.Namespace) -> int:
     else:
         if not args.emit or not args.out:
             raise ProfileRefusal(["resolve: --emit and --out are both required"])
-        for value in views.masks(profile):
+        for value in (*views.masks(profile), *views.derived_masks(profile)):
             emit_mask(value)
         selected = VIEWS[args.emit](profile)
         _write_private(Path(args.out), _render(selected, args.format))

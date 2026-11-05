@@ -633,6 +633,8 @@ trap quiesce_window_deadline_reached USR1
 . "$REPO_ROOT/scripts/lib/deploy_governed_phases_lifecycle.sh"
 # shellcheck source=scripts/lib/deploy_prebuilt_release_lifecycle.sh
 . "$REPO_ROOT/scripts/lib/deploy_prebuilt_release_lifecycle.sh"
+# shellcheck source=scripts/lib/deploy_plan_report_lifecycle.sh
+. "$REPO_ROOT/scripts/lib/deploy_plan_report_lifecycle.sh"
 
 # >>> foreign-catalog remediation refused >>>
 # The foreign-catalog binding remediation rewrote the isolation mode and

@@ -130,9 +130,10 @@ def test_an_existing_app_this_deployer_never_adopted_refuses(
 
     assert code == 2
     assert _refusals(text) == [
-        "adoption: the App MIP_APP_NAME names exists, but this deployer's bundle state does not bind "
-        "apps.mip_app to it: an existing install this deployer never adopted (adopt it into this "
-        "deployer's state first, plan M2-PR6)"
+        # M1-PR7: the refusal a mutating paychex dispatch ends on, before the lease.
+        "adoption: existing install not adopted: the App MIP_APP_NAME names exists, but this "
+        "deployer's bundle state does not bind apps.mip_app to it (adopt it into this deployer's "
+        "state first, plan M2-PR6)"
     ]
 
 

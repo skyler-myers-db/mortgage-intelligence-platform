@@ -97,13 +97,17 @@ def test_resolve_registers_every_mask_on_stderr_before_writing(
     out = capsys.readouterr()
     assert out.out == ""
     registered = [line.removeprefix("::add-mask::") for line in out.err.splitlines() if line.startswith("::add-mask::")]
-    assert registered == list(views.masks(resolve(RawProfile(values=demo_profile()))))
+    profile = resolve(RawProfile(values=demo_profile()))
+    # Every identifying leaf, then each spelling the deploy derives from one (M1-PR7).
+    assert registered == [*views.masks(profile), *views.derived_masks(profile)]
 
 
 def test_mask_prints_runner_commands_only_inside_actions(
     env_file: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    masks = views.masks(resolve(RawProfile(values=demo_profile())))
+    profile = resolve(RawProfile(values=demo_profile()))
+    masks = (*views.masks(profile), *views.derived_masks(profile))
+    assert views.derived_masks(profile), "the demo profile carries mixed-case identifying leaves"
     assert main(["mask", "--env-file-only", "--env-file", str(env_file)]) == 0
     out = capsys.readouterr()
     assert out.out == ""

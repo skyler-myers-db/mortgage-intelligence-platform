@@ -86,12 +86,16 @@ def test_the_plan_phase_dry_run_stops_after_the_pre_lease_gate(tmp_path: Path) -
         ".venv/bin/python -m tools.databricks.bundle_plan_gate check"
         " --plan /tmp/mip-dry-run-bundle-plan-pre-lease.json --position pre-lease --app-key mip_app"
         " --report-out /tmp/mip-dry-run-bundle-plan-report-pre-lease.json"
+        # M1-PR7: the public half, for a plan's step summary.
+        " --public-out /tmp/mip-dry-run-bundle-plan-report-pre-lease.public.json"
         " --execute-gap /tmp/mip-dry-run-catalog-bootstrap-pre-lease.json"
         " --first-install-app-name mip-app --rollback-scope mip-app-rollback"
         " --lakebase-instance mip-app-state",
         # The Growth Agent monitor scheduler stays PAUSED, planned and live (M2-PR5).
         ".venv/bin/python -m tools.databricks.monitor_scheduler_gate check"
         " --plan /tmp/mip-dry-run-bundle-plan-pre-lease.json",
+        # M1-PR7: the active deployment's digest a release may pin (one apps.get).
+        ".venv/bin/python -m tools.databricks.active_deployment_pin digest --app-name mip-app",
     ]
     assert out.rstrip().endswith(
         "[deploy] plan phase complete: read-only, stopped before the lease; nothing was changed."

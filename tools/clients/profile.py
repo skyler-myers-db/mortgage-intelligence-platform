@@ -375,6 +375,19 @@ def _field_masks(name: str, value: Any) -> Iterator[str]:
         yield str(value)
 
 
+def identifying_leaves(profile: ClientProfile) -> tuple[tuple[str, str], ...]:
+    """Each maskable identifying leaf with the field it came from, in field order."""
+
+    leaves: list[tuple[str, str]] = []
+    for attribute in ClientProfile.model_fields:
+        name = ClientProfile.env_name(attribute)
+        value = getattr(profile, attribute)
+        if FIELD_CLASS[name] is not FieldClass.IDENTIFYING or value is None:
+            continue
+        leaves.extend((name, item) for item in _field_masks(name, value) if _maskable(item))
+    return tuple(leaves)
+
+
 def masks(profile: ClientProfile) -> tuple[str, ...]:
     """Every identifying leaf, longest first, for ``::add-mask::``.
 
@@ -385,13 +398,29 @@ def masks(profile: ClientProfile) -> tuple[str, ...]:
     scalar secret that is itself generic stays blanked wherever it prints.
     """
 
+    found = {value for _name, value in identifying_leaves(profile)}
+    return tuple(sorted(found, key=lambda item: (-len(item), item)))
+
+
+def derived_masks(profile: ClientProfile) -> tuple[str, ...]:
+    """The spellings the deploy derives from identifying leaves, beyond ``masks`` (M1-PR7).
+
+    A runner mask matches exactly, and the deploy writes application ids in
+    lower case (the deployer's home folder, each ``service_principal_name``;
+    ``client_target_vars``) and hosts as ``https://`` origins. So each leaf's
+    lower-case and casefolded spelling is a mask too, when it differs and is
+    itself maskable, and so is the origin of each host field.
+    """
+
+    known = set(masks(profile))
     found: set[str] = set()
-    for attribute in ClientProfile.model_fields:
-        name = ClientProfile.env_name(attribute)
-        value = getattr(profile, attribute)
-        if FIELD_CLASS[name] is not FieldClass.IDENTIFYING or value is None:
-            continue
-        found.update(item for item in _field_masks(name, value) if _maskable(item))
+    for _name, value in identifying_leaves(profile):
+        for spelling in (value.lower(), value.casefold()):
+            if spelling not in known and _maskable(spelling):
+                found.add(spelling)
+    for host in (profile.databricks_host, profile.account_host):
+        if host and not is_placeholder(host) and host not in known:
+            found.add(host)
     return tuple(sorted(found, key=lambda item: (-len(item), item)))
 
 

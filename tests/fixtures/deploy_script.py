@@ -47,6 +47,8 @@ DEPLOY_SLICED_LIBRARIES = (
     _LIB / "deploy_governed_phases_lifecycle.sh",
     # The build job's prebuilt release, re-hashed before use (M1-PR7).
     _LIB / "deploy_prebuilt_release_lifecycle.sh",
+    # The plan's two PlanReport halves and the release's deployment pin (M1-PR7).
+    _LIB / "deploy_plan_report_lifecycle.sh",
 )
 # Top-level orchestration sliced verbatim out of the entrypoint, in step order.
 DEPLOY_STEP_SCRIPTS = (

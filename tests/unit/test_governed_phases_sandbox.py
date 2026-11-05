@@ -72,6 +72,8 @@ PLAN_READ_ONLY = (
     "tools.databricks.bundle_env plan",
     "tools.databricks.bundle_plan_gate check",
     "tools.databricks.monitor_scheduler_gate check",
+    # M1-PR7: the active deployment's digest, one apps.get.
+    "tools.databricks.active_deployment_pin digest",
 )
 
 
@@ -203,6 +205,8 @@ def test_the_plan_phase_plans_only_read_only_commands_and_every_phase_budget(run
     for phase in ("plan", "release", "data"):
         assert re.search(rf"phase budget: {phase} predicts \d+ min \(limit 330, margin 15\)", out), phase
     assert "app_deployment_lease" not in result.stdout
+    # M1-PR7: a dry run plans the publish of both PlanReport halves, never runs it.
+    assert "would publish: the public summary to the step summary, the full report to the deployer's plan-reports folder (CI only)" in out
     assert "and no Genie turn (--phase plan; the release asks it)" in out
     for other in ("none", "release"):
         assert "and one Genie turn" in ANSI.sub("", runs[other].stdout), other
