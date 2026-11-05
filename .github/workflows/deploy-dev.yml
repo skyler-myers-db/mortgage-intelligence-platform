@@ -517,10 +517,6 @@ jobs:
           MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE: ${{ vars.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE }}
           MIP_AI_GATEWAY_TABLE_PREFIX: ${{ vars.MIP_AI_GATEWAY_TABLE_PREFIX }}
           MIP_REBASE_UNVERIFIED_APP: ${{ inputs.rebase_unverified_app && '1' || '0' }}
-          # No remediation input: the foreign-catalog binding remediation
-          # rewrites bindings for the whole shared metastore, so this workflow
-          # can never request it (docs/security/GRANTS.md).
-          MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS: '0'
           MIP_REQUIRE_AI_GATEWAY_CLAIMABLE: '1'
           SALESFORCE_INSTANCE_URL: ${{ vars.SALESFORCE_INSTANCE_URL }}
           SALESFORCE_CLIENT_ID: ${{ vars.SALESFORCE_CLIENT_ID }}

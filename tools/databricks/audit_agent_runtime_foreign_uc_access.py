@@ -43,13 +43,6 @@ from tools.databricks.estate import inventory_audit
 from tools.databricks.estate.accepted_exposure import ExposureMatcher, identity_matcher
 from tools.databricks.estate.inventory import EstateInventory, load_estate_inventory
 from tools.databricks.estate.self_view import assert_self_view, self_view_client
-
-# The parser is re-exported for the retired binding remediation tooling only
-# (M4-PR2 deletes both); the audit no longer reads the policy.
-from tools.databricks.foreign_catalog_binding_policy import (
-    _WORKSPACE_BINDING_TYPES,
-    parse_foreign_catalog_binding_policy,  # noqa: F401
-)
 from tools.databricks.oauth_credential_boundary import (
     held_deployment_credential_assertion,
 )
@@ -69,10 +62,14 @@ from tools.databricks.workspace_system_group_evidence import (
     workspace_users_group_evidence,
 )
 
-_DATABRICKS_INTERNAL_CATALOG = "__databricks_internal"
-_PLATFORM_CATALOGS = frozenset({_DATABRICKS_INTERNAL_CATALOG, "samples", "system"})
 _ACCOUNT_USERS_GROUP = "account users"
 _DEFAULT_TARGET_GROUPS_PROBE = target_identity_groups_probe
+_WORKSPACE_BINDING_TYPES = frozenset(
+    {
+        "BINDING_TYPE_READ_ONLY",
+        "BINDING_TYPE_READ_WRITE",
+    }
+)
 
 
 def _exact_owner(item: object, *, context: str) -> str:
@@ -101,48 +98,6 @@ def _assert_no_foreign_ownership(
         group_membership_probe=group_membership_probe,
     )
     policy.assert_objects(objects)
-
-
-def _assert_metastore_owner_inventory_identity(
-    workspace: Any,
-    *,
-    expected_principal: str,
-) -> tuple[str, str]:
-    """Bind the caller to its current metastore authority (the retired remediation manifest only).
-
-    The audit itself no longer requires the deployer to own the metastore: the
-    owner's estate inventory carries those facts (M4-PR1).
-    """
-
-    assert_workspace_admin_inventory_identity(
-        workspace,
-        expected_principal=expected_principal,
-    )
-    caller = workspace.current_user.me()
-    caller_name = getattr(caller, "user_name", None)
-    if (
-        not isinstance(caller_name, str)
-        or not caller_name
-        or caller_name != caller_name.strip()
-        or caller_name != expected_principal
-    ):
-        raise RuntimeError(
-            "UC control-plane audit is running as a noncanonical inventory principal"
-        )
-    metastore_id = _text(getattr(workspace.metastores.current(), "metastore_id", None))
-    if not metastore_id:
-        raise RuntimeError("UC control-plane audit found no current metastore identity")
-    owner = _exact_owner(
-        workspace.metastores.get(metastore_id),
-        context="UC control-plane metastore inventory",
-    )
-    if owner != caller_name:
-        raise RuntimeError(
-            "UC control-plane audit requires the expected caller to own the current "
-            "metastore directly"
-        )
-    workspace_id = authoritative_workspace_id(workspace)
-    return metastore_id, workspace_id
 
 
 def _account_group_inventory_evidence(
@@ -197,20 +152,6 @@ def _account_group_inventory_evidence(
             for group_id, (display_name, _members) in groups_by_id.items()
         },
     )
-
-
-def _account_group_evidence(
-    account: Any,
-    *,
-    target_scim_id: str,
-) -> tuple[dict[str, str], dict[str, str]]:
-    """Retain the effective/system compatibility contract for other auditors."""
-
-    effective, system, _inventory = _account_group_inventory_evidence(
-        account,
-        target_scim_id=target_scim_id,
-    )
-    return effective, system
 
 
 def _normalized_target_groups(value: object) -> dict[str, str]:

@@ -590,10 +590,10 @@ trap quiesce_window_deadline_reached USR1
 # >>> foreign-catalog remediation refused >>>
 # The foreign-catalog binding remediation rewrote the isolation mode and
 # workspace bindings of other teams' catalogs on the shared metastore, and
-# stopped the App to do it. Its stop branches are gone (M0-PR5) and its tool
-# leaves with M4-PR2, so a request for it, from the environment or from
+# stopped the App to do it. Its stop branches are gone (M0-PR5) and its tool is
+# deleted (M4-PR2), so a request for it, from the environment or from a stale
 # .env.local, refuses here: before any Databricks call, in a dry run too, with
-# the App untouched. The deploy-dev workflow passes the literal 0.
+# the App untouched. The deploy-dev workflow never names the flag.
 _REMEDIATE_FOREIGN_CATALOG_BINDINGS="$(
   deployment_control_value MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS 0
 )"

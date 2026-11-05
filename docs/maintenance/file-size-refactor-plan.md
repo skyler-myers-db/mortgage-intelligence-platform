@@ -316,10 +316,10 @@ added none, text-changed none. The deploy command of record still invokes
 entrypoint and `deployment_workspace_client()` call are unchanged (the
 deploy-contract pins that name the helper pass). No re-export facade: the
 three tools and three tests that imported probe names from the converger
-(`ensure_pipeline_namespace`, `foreign_catalog_binding_manifest`,
-`audit_agent_runtime_foreign_uc_access`, and their tests plus the
-credential-settle-window tests) now import them from the probe module. Entry
-removed.
+(`ensure_pipeline_namespace`, the foreign-catalog binding manifest, deleted
+since with M4-PR2, `audit_agent_runtime_foreign_uc_access`, and their tests
+plus the credential-settle-window tests) now import them from the probe module.
+Entry removed.
 
 ### frontend/src/components/mortgage/LeadTable.tsx (1,261 -> 567)
 
