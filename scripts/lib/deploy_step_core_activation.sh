@@ -25,11 +25,15 @@ step "core tier: skip the agentic provisioning, cutover and Agent Evaluation (ag
 
 # The one activation rollover. A first install already activated its snapshot
 # in step 5. Over signed blue it happens here, as the agentic cutover's does:
-# blue's treatment authority quiesced immediately before it, the quiesce
-# window superseded, and deploy_app_snapshot's pre-activation rollback proof
-# (attack O2) first, with blue's restore payload rebuilt for an adopted blue.
+# blue's treatment authority quiesced immediately before it and the quiesce
+# window superseded. The pre-activation rollback proof (attack O2, with blue's
+# restore payload rebuilt for an adopted blue) runs first, before either: a
+# refusal then exits while blue still serves in its step-0a state, which the
+# EXIT trap compensates with blue up, never by restoring blue over itself
+# (deploy_app_snapshot's own call is then a no-op).
 if [[ "$APP_UPGRADE_STATE" == "blue_active" || \
       "$APP_UPGRADE_STATE" == "blue_quiesced" ]]; then
+  prove_blue_restorable_before_activation
   APP_UPGRADE_STATE="blue_quiescing"
   step "quiesce verified-blue treatment authority immediately before green activation"
   run converge_app_treatment_access quiesce
