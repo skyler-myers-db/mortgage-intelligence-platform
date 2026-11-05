@@ -144,10 +144,11 @@ def _decide(
     responses: dict[str, Any] | None = READABLE,
     environ: dict[str, str] | None = None,
     repo: Path | None = None,
+    values: dict[str, str] | None = None,
 ) -> preflight.Verdict:
     monkeypatch.setattr(protections, "from_environ", lambda env: _FROM_ENVIRON(env, opener=_opener(responses)))
     work = Path(tempfile.mkdtemp(dir=_mkdir(tmp_path)))
-    vars_source, secrets_source = _contexts(work)
+    vars_source, secrets_source = _contexts(work, values)
     return preflight.decide(
         phase=phase,
         environment=CLIENT,
@@ -158,8 +159,8 @@ def _decide(
     )
 
 
-def _profile_ack() -> dict[str, str]:
-    return {"MIP_DISPATCH_PROFILE_ACK": acks.profile_ack(CLIENT, _digest())}
+def _profile_ack(values: dict[str, str] | None = None) -> dict[str, str]:
+    return {"MIP_DISPATCH_PROFILE_ACK": acks.profile_ack(CLIENT, _digest(values))}
 
 
 # ------------------------------------------------------------------ the acks
@@ -389,25 +390,64 @@ def test_inside_actions_the_only_lines_that_hold_a_value_are_runner_mask_command
     assert not [value for value in registered if value in printed]
 
 
-def test_the_tree_scan_never_refuses_a_platform_default_or_a_prefix_convention_name(
+def test_the_tree_scan_never_refuses_a_platform_default_or_the_repositorys_own_group_names(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The default account host and <prefix>- names are not a client's own: no refusal, a report at most."""
+    """The default account host and the repository's own group names are not a client's own: a report at most."""
 
     profile = resolve(from_github(*split_contexts(_profile_values()), environment=CLIENT))
     needles = tree_scan.needles(profile)
     assert profile.account_host == "https://accounts.cloud.databricks.com"
     assert not [value for value in needles if "accounts.cloud.databricks.com" in value], "a platform default"
     assert needles["mip-admin"] == tree_scan.Needle("MIP_ADMIN_GROUP_NAME", True)
+    assert needles["mip-approver"] == tree_scan.Needle("MIP_APPROVER_GROUP_NAME", True)
+    assert needles["mip-data-owners"] == tree_scan.Needle("MIP_UC_APPROVED_OWNER_PRINCIPALS", True)
     assert needles["metastore-owners-alpha"] == tree_scan.Needle("MIP_UC_METASTORE_OWNER", False)
     tree = _repo(
         _mkdir(tmp_path / "tree"),
-        {"docs/groups.md": "the admin group is mip-admin; the console is https://accounts.cloud.databricks.com\n"},
+        {"docs/groups.md": "the admin group is mip-admin, the approvers mip-approver; the console is https://accounts.cloud.databricks.com\n"},
     )
     release = _decide(_mkdir(tmp_path / "release"), monkeypatch, phase="release", repo=tree, environ=_profile_ack())
 
     assert release.refusals == []
-    assert "tree scan: 1 tracked files name a <prefix>- convention name of MIP_ADMIN_GROUP_NAME (reported, not refused)" in release.facts
+    assert (
+        "tree scan: 1 tracked files name the repository's own convention name of MIP_ADMIN_GROUP_NAME, "
+        "MIP_APPROVER_GROUP_NAME (reported, not refused)"
+    ) in release.facts, "distinct files, not hits"
+    assert "tree scan: no tracked file holds a resolved identifying value" not in release.facts, "only when nothing was found"
     owned = _repo(_mkdir(tmp_path / "owned"), {"docs/owner.md": "the metastore owner is metastore-owners-alpha\n"})
     refused = _decide(_mkdir(tmp_path / "refused"), monkeypatch, phase="release", repo=owned, environ=_profile_ack())
     assert refused.refusals == ["tree_scan: 1 tracked files hold a resolved identifying value (MIP_UC_METASTORE_OWNER in docs/owner.md)"]
+    clean = _decide(_mkdir(tmp_path / "clean"), monkeypatch, phase="release", environ=_profile_ack())
+    assert "tree scan: no tracked file holds a resolved identifying value" in clean.facts
+
+
+def test_the_tree_scan_exemption_is_a_closed_set_each_name_in_its_own_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A <prefix>- spelling is not a convention: an email, a client's own group, a name another field also holds."""
+
+    values = core_tier_profile(
+        MIP_ADMIN_EMAILS="mip-ops@acme-mortgage-client.example",
+        MIP_ADMIN_GROUP_NAME="mip-acme-mortgage-admins",
+        MIP_GENIE_MANAGER_PRINCIPALS="mip-approver",
+    )
+    needles = tree_scan.needles(resolve(from_github(*split_contexts(values), environment=CLIENT)))
+    assert needles["mip-ops@acme-mortgage-client.example"] == tree_scan.Needle("MIP_ADMIN_EMAILS", False)
+    assert needles["mip-acme-mortgage-admins"] == tree_scan.Needle("MIP_ADMIN_GROUP_NAME", False)
+    assert needles["mip-approver"] == tree_scan.Needle("MIP_GENIE_MANAGER_PRINCIPALS", False), "never exempt by field order"
+    tree = _repo(
+        _mkdir(tmp_path / "tree"),
+        {"docs/x.md": "ops: mip-ops@acme-mortgage-client.example, admins: mip-acme-mortgage-admins, managers: mip-approver\n"},
+    )
+    plan = _decide(_mkdir(tmp_path / "plan"), monkeypatch, phase="plan", repo=tree, values=values)
+    release = _decide(
+        _mkdir(tmp_path / "release"), monkeypatch, phase="release", repo=tree, values=values, environ=_profile_ack(values)
+    )
+
+    assert release.refusals == [
+        "tree_scan: 1 tracked files hold a resolved identifying value (MIP_ADMIN_EMAILS in docs/x.md, "
+        "MIP_ADMIN_GROUP_NAME in docs/x.md, MIP_GENIE_MANAGER_PRINCIPALS in docs/x.md)"
+    ]
+    assert plan.refusals == [] and any(fact.startswith("recorded for the plan: tree_scan: 1 tracked files") for fact in plan.facts)
+    assert not [fact for fact in [*plan.facts, *release.facts] if fact.startswith("tree scan: ")], "no clean or convention fact"

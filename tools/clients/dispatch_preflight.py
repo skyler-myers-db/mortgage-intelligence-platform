@@ -23,8 +23,9 @@ profile again (registering its masks first) and decides, for ``--phase``:
    the dispatch carries the exact ``protections_unverified`` ack;
 7. **tree scan**: no resolved identifying value in any tracked file
    (tools/clients/tree_scan.py); a plan records the hits, a mutating phase
-   refuses them. A name built on the public identity prefix (``mip-admin``)
-   is the repository's own convention: reported, never refused;
+   refuses them. Only the closed set of group names the repository itself
+   defines, each in its own field (``<prefix>-admin`` as the admin group,
+   tree_scan.CONVENTION_NAMES), is reported and never refused;
 8. **expected active deployment**: ``expected_active_deployment_sha256``, when
    given, reaches ``--phase release`` as ``MIP_EXPECTED_ACTIVE_DEPLOYMENT_SHA256``.
 
@@ -164,20 +165,27 @@ def decide(
         else:
             verdict.exports[EXPECTED_DEPLOYMENT_ENV] = expected_deployment
     _protections(verdict, environ, profile.client, environment, profile.review_mode)
-    hits = tree_scan.scan(repo, tree_scan.needles(profile))
+    _tree_scan(verdict, tree_scan.scan(repo, tree_scan.needles(profile)))
+    return verdict
+
+
+def _tree_scan(verdict: Verdict, hits: Sequence[tree_scan.Hit]) -> None:
+    """Counts distinct files; the clean-tree fact only when nothing at all was found."""
+
     own = [hit for hit in hits if not hit.conventional]
     conventional = [hit for hit in hits if hit.conventional]
+    if not hits:
+        verdict.facts.append("tree scan: no tracked file holds a resolved identifying value")
     if own:
         listed = ", ".join(f"{hit.field} in {hit.path}" for hit in own[:20])
-        verdict.record_or_refuse("tree_scan", f"{len(own)} tracked files hold a resolved identifying value ({listed})")
-    else:
-        verdict.facts.append("tree scan: no tracked file holds a resolved identifying value")
+        files = len({hit.path for hit in own})
+        verdict.record_or_refuse("tree_scan", f"{files} tracked files hold a resolved identifying value ({listed})")
     if conventional:
         listed = ", ".join(sorted({hit.field for hit in conventional}))
+        files = len({hit.path for hit in conventional})
         verdict.facts.append(
-            f"tree scan: {len(conventional)} tracked files name a <prefix>- convention name of {listed} (reported, not refused)"
+            f"tree scan: {files} tracked files name the repository's own convention name of {listed} (reported, not refused)"
         )
-    return verdict
 
 
 def _report(verdict: Verdict) -> list[str]:

@@ -3937,9 +3937,13 @@ satisfies another:
   environment and the run's head commit, which the refusal prints;
 - no tracked file holds a resolved identifying value (the tree scan names the
   field and the file, never the value). A cloud's default account-console
-  host is no needle, and a name built on the public identity prefix (such as
-  `mip-admin`), the convention this repository's own docs use, is reported,
-  never refused;
+  host is no needle. Only the closed set of group names the repository itself
+  defines is reported and never refused, each in its own field:
+  `<prefix>-admin` as `MIP_ADMIN_GROUP_NAME`, `<prefix>-approver` as
+  `MIP_APPROVER_GROUP_NAME` and `<prefix>-data-owners` in
+  `MIP_UC_APPROVED_OWNER_PRINCIPALS`, with `<prefix>` the public
+  `MIP_IDENTITY_PREFIX`. Any other value, `<prefix>-` spellings and every
+  email, host, id or share included, is refused by a mutating phase;
 - `expected_active_deployment_sha256`, when given, reaches `--phase release`,
   which refuses before the lease unless the App's active deployment still has
   that digest (a plan prints it).
