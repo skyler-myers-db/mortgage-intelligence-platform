@@ -124,8 +124,15 @@ def test_the_action_writes_the_controls_and_the_oidc_profile_and_outputs_public_
     cfg = root / "home" / ".databrickscfg"
 
     assert env_local.stat().st_mode & 0o777 == 0o600 and cfg.stat().st_mode & 0o777 == 0o600
-    assert dict(dotenv_values(env_local, interpolate=False)) == views.deploy_controls(profile)
-    assert not {name for name in dotenv_values(env_local) if FIELD_CLASS.get(name) is FieldClass.SECRET}
+    # The whole profile, as an operator's .env.local holds it: deploy.sh
+    # un-exports every credential, so its children read the secrets here.
+    assert dict(dotenv_values(env_local, interpolate=False)) == {
+        **views.deploy_controls(profile),
+        **ci_profile.secret_fields(profile),
+    }
+    assert set(ci_profile.secret_fields(profile)) == {
+        name for name, value in values.items() if FIELD_CLASS[name] is FieldClass.SECRET
+    }
     assert cfg.read_text(encoding="utf-8") == (
         "[DEFAULT]\nhost  = https://dbc-unit.cloud.databricks.com\nauth_type = github-oidc\n"
         "client_id = ABCDEF00-0000-4000-8000-000000000001\n"

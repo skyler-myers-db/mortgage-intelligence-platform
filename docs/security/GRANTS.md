@@ -598,8 +598,8 @@ workspace to prove its expected access and grant behavior.
 2026-10-27).** It used to be the manual `deploy-dev` workflow's one-time
 `remediate_foreign_catalog_bindings` input. That input is gone (M0-PR3): the
 workflow passes `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=0` as a literal, so no
-dispatch can request the remediation, and the workflow itself is parked until a
-client environment is selected (M1-PR7). The refusal is deliberate. A catalog's
+dispatch can request the remediation, in any client environment (M1-PR7). The
+refusal is deliberate. A catalog's
 isolation mode and workspace bindings are metastore-level state, and the
 metastore is shared with other teams: this remediation flips each `OPEN`
 catalog the policy names to `ISOLATED` and then binds every other metastore

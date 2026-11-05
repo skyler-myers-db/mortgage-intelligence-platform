@@ -1,8 +1,9 @@
 name: resolve-client-profile
 description: >-
   Resolve one client's profile from the GitHub Environment the job runs in
-  (M1-PR7): mask every identifying value first, then write .env.local and the
-  github-oidc DEFAULT Databricks profile, and output public values only.
+  (M1-PR7): mask every identifying value first, then write .env.local (the
+  whole profile, as an operator keeps it) and the github-oidc DEFAULT
+  Databricks profile, and output public values only.
 # The caller passes toJSON(vars) and toJSON(secrets) of its own environment.
 # Identifying fields come from secrets only: tools/clients/environment.py
 # refuses an identifying or secret field found in vars (it would print in
@@ -10,8 +11,9 @@ description: >-
 # runner masks each whole secret; the FIRST step registers every identifying
 # leaf of a JSON or list secret, and each spelling the deploy derives from
 # one (lower case, the host origin), as a mask, before any other step of
-# this action prints anything. The deploy job's install step has put the
-# hash-pinned runtime closure on PATH; this action installs nothing.
+# this action prints anything. The deploy job's install step has installed
+# the hash-pinned runtime closure into this interpreter; this action installs
+# nothing.
 inputs:
   environment:
     description: The GitHub Environment the job runs in; MIP_CLIENT must equal it.

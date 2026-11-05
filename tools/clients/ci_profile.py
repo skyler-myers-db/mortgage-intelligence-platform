@@ -5,8 +5,13 @@
 ``toJSON(secrets)`` contexts in step env:
 
 * ``.env.local``: the ``controls`` view (tools/clients/profile.deploy_controls),
-  every public and identifying field under the names scripts/deploy.sh reads.
-  No secret: secret fields reach deploy.sh by name in its own step env.
+  every public and identifying field under the names scripts/deploy.sh reads,
+  plus the secret fields the environment holds, under their own names: the
+  file an operator keeps. scripts/deploy.sh un-exports every credential before
+  its first child, and each child that resolves the profile (the client
+  target, the live checks, bundle_env) reads the required secret fields from
+  ``.env.local``, so a step-env secret would never reach them. The runner is
+  ephemeral, the file is mode 0600, and the job's last step deletes it.
 * ``~/.databrickscfg``: the ``DEFAULT`` profile, ``host``, ``auth_type =
   github-oidc`` and the deployer's application id, so the SDK and the CLI
   exchange the job's GitHub ID token for a short-lived Databricks token. No
@@ -32,7 +37,7 @@ from tools.clients import profile as views
 from tools.clients.environment import from_github, read_context, resolve
 from tools.clients.errors import ProfileRefusal
 from tools.clients.redact import emit_mask
-from tools.clients.schema import ClientProfile
+from tools.clients.schema import FIELD_CLASS, ClientProfile, FieldClass
 
 DEPLOYER_PROFILE = "DEFAULT"
 
@@ -49,11 +54,21 @@ def databrickscfg_text(profile: ClientProfile) -> str:
 
 
 def env_local_text(profile: ClientProfile) -> str:
-    controls = views.deploy_controls(profile)
+    controls = {**views.deploy_controls(profile), **secret_fields(profile)}
     unsafe = sorted(name for name, value in controls.items() if any(c in value for c in "'\n\r\0"))
     if unsafe:
         raise ProfileRefusal([f"{name}: cannot be written to .env.local" for name in unsafe])
     return "".join(f"{name}='{value}'\n" for name, value in sorted(controls.items()))
+
+
+def secret_fields(profile: ClientProfile) -> dict[str, str]:
+    """The secret fields the profile holds, under their own names (never printed)."""
+
+    return {
+        name: value
+        for name, value in views.canonical_env(profile, include_secrets=True).items()
+        if FIELD_CLASS[name] is FieldClass.SECRET
+    }
 
 
 def public_outputs(profile: ClientProfile) -> dict[str, str]:
@@ -118,7 +133,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(
         f"client profile resolved: client={outputs['client']} class={outputs['install-class']} "
         f"tier={outputs['agentic-tier']} review={outputs['review-mode']} digest={outputs['profile-digest']}; "
-        f"wrote {env_local.count(chr(10))} controls to {args.env_local.name} and the github-oidc "
+        f"wrote {env_local.count(chr(10))} profile values to {args.env_local.name} and the github-oidc "
         f"{DEPLOYER_PROFILE} profile"
     )
     return 0

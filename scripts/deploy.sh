@@ -260,14 +260,14 @@ if [[ "$TARGET" != "client" ]]; then
   echo "[deploy] target must be exactly client; refusing '$TARGET'" >&2
   exit 2
 fi
-# deploy-dev.yml is parked until a client environment is selected (M1-PR7):
-# the CI staging workspace it deployed to was deleted, and no CI run may
-# reach a client install before M1-PR7's per-client environment lands. The workflow refuses first; this repeats the refusal
-# before any Databricks call, also in DRY_RUN. It keys on the workflow ref,
-# never on GITHUB_ACTIONS alone, so CI's own pytest and its deploy.sh dry
-# runs are unchanged.
-if [[ "${GITHUB_ACTIONS:-}" == "true" && "${GITHUB_WORKFLOW_REF:-}" == *"/.github/workflows/deploy-dev.yml@"* ]]; then
-  echo "[deploy] deploy-dev.yml is parked until a client environment is selected (M1-PR7); refusing" >&2
+# deploy-dev.yml (M1-PR7) runs exactly one named --phase from the build job's
+# --prebuilt-release: its deploy job holds an ID token and has no Node, so no
+# run there may fall back to npm or to a full run with no phase. It keys on
+# the workflow ref, never on GITHUB_ACTIONS alone, so CI's own pytest and its
+# deploy.sh dry runs are unchanged; it runs before anything prints.
+if [[ "${GITHUB_ACTIONS:-}" == "true" && "${GITHUB_WORKFLOW_REF:-}" == *"/.github/workflows/deploy-dev.yml@"* && \
+      ( "$PHASE_SEEN" -ne 1 || -z "${PREBUILT_RELEASE_DIR:-}" ) ]]; then
+  echo "[deploy] deploy-dev.yml runs one named --phase from a --prebuilt-release; refusing" >&2
   exit 2
 fi
 # >>> deploy phase >>>

@@ -26,19 +26,11 @@ ROOT = Path(__file__).resolve().parents[2]
 ENVIRONMENT = "fictional-demo"
 _NON_PUBLIC = sorted(name for name in KNOWN_NAMES if name_class(name) is not FieldClass.PUBLIC)
 _PUBLIC = sorted(name for name in KNOWN_NAMES if name_class(name) is FieldClass.PUBLIC)
-# Identifying names deploy-dev.yml still reads from ``vars`` at origin/main
-# 6c363903. The per-client deploy workflow (M1-PR7) reads them from the
-# profile's secrets and empties this set; it may only shrink.
-_LEGACY_IDENTIFYING_VARS = frozenset(
-    {
-        "MIP_ADMIN_EMAILS",
-        "MIP_ADMIN_GROUP_NAME",
-        "MIP_APPROVER_GROUP_NAME",
-        "MIP_AUDITOR_EMAILS",
-        "MIP_CI_DEPLOYER_CLIENT_ID",
-        "MIP_UC_APPROVED_OWNER_PRINCIPALS",
-    }
-)
+# Identifying names a workflow still reads from ``vars``. deploy-dev.yml read
+# six at origin/main 6c363903; the per-client workflow (M1-PR7) reads the
+# whole profile from its environment's secrets and toJSON(vars), so the set
+# is empty and may never grow (nightly.yml, parked, names none of them).
+_LEGACY_IDENTIFYING_VARS: frozenset[str] = frozenset()
 
 
 def test_every_known_name_has_a_class() -> None:

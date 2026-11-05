@@ -30,7 +30,7 @@ RUNBOOK = ROOT / "docs" / "runbook.md"
 GRANTS_DOC = ROOT / "docs" / "security" / "GRANTS.md"
 WORKFLOWS_README = ROOT / ".github" / "workflows" / "README.md"
 DEPLOY_DEV = ROOT / ".github" / "workflows" / "deploy-dev.yml"
-CI_HEADING = "## CI deploy (deploy-dev.yml): parked, and the release-gate bootstrap"
+CI_HEADING = "## CI deploy (deploy-dev.yml): one client environment per dispatch, and the release-gate bootstrap"
 IDENTITIES_HEADING = "### Per-run M2M identities"
 LIVE_NO_GO = "**The live install is outside this bootstrap, and its governed deploy is NO-GO.**"
 
@@ -311,7 +311,7 @@ def test_the_ci_docs_name_placeholders_never_an_application_account_or_workspace
 
     flat = _flat(texts["deployment.md CI section"])
     assert "`<deployer-application-id>`" in flat, "the placeholder the owner substitutes"
-    assert "subject `repo:<owner>/<repo>:environment:dev`" in flat
+    assert "subject `repo:<owner>/<repo>:environment:<client>`" in flat
     assert "never widen it to a branch, a ref or `repo:<owner>/<repo>:*`" in flat
     assert "It has no OAuth secret and no personal access token" in flat
     proof = "Prove the GitHub OIDC deployer identity"
