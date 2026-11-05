@@ -30,16 +30,23 @@ import {
  * that answers for `.tbl-wrap` only.
  */
 
-/** The control below makes the hook key its offsets by URL, as a regression would. */
-const leak = vi.hoisted(() => ({ urlKeys: false }));
+/**
+ * The controls below make the hook key its offsets the way a regression
+ * would: by URL, or by the router key with the search folded into base36
+ * letters (a borrower id no URL-fragment scan can see).
+ */
+const leak = vi.hoisted(() => ({ mode: 'none' as 'none' | 'url' | 'folded-search' }));
 
 vi.mock('../../hooks/scrollOffsetStore', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../hooks/scrollOffsetStore')>();
   return {
     ...real,
-    scrollStorageKey: (location: ScrollLocation) => (
-      leak.urlKeys ? `${location.pathname}${location.search}` : real.scrollStorageKey(location)
-    ),
+    scrollStorageKey: (location: ScrollLocation) => {
+      if (leak.mode === 'url') return `${location.pathname}${location.search}`;
+      const key = real.scrollStorageKey(location);
+      if (leak.mode === 'folded-search') return `${key}${location.search.toLowerCase().replace(/[^0-9a-z]/g, '')}`;
+      return key;
+    },
   };
 });
 
@@ -340,8 +347,8 @@ describe('useLeadTableScroll', () => {
 
   it('the shape check still catches offsets keyed by URL', async () => {
     // Control: a hook that keyed its offsets by URL is caught through the real
-    // storage write, not only by a crafted value.
-    leak.urlKeys = true;
+    // storage write, not only by a crafted value, and by the fragment scan.
+    leak.mode = 'url';
     try {
       await mount();
       await userScrollTo(640);
@@ -349,11 +356,34 @@ describe('useLeadTableScroll', () => {
       await userScrollTo(700);
       await go(`/borrower-360/${ROW}`);
     } finally {
-      leak.urlKeys = false;
+      leak.mode = 'none';
     }
 
     expect(window.sessionStorage.getItem(LEAD_TABLE_SCROLL_STORAGE_KEY)).toContain(`/lead-queue?row=${ROW}`);
-    expect(() => storedEntries()).toThrow(/lead-queue/);
+    expect(() => storedEntries()).toThrow(`not to contain '${ROW}'`);
+  });
+
+  it('the shape check catches a borrower id folded into a router key, which no fragment scan sees', async () => {
+    // Control: the key check on its own. The folded id is base36 letters, so
+    // the raw value holds no NEVER_STORED fragment and only the key shape fails.
+    let expanded: Location;
+    leak.mode = 'folded-search';
+    try {
+      await mount();
+      await userScrollTo(640);
+      await go(`/lead-queue?row=${ROW}`, { replace: true });
+      expanded = currentLocation;
+      await userScrollTo(700);
+      await go(`/borrower-360/${ROW}`);
+    } finally {
+      leak.mode = 'none';
+    }
+
+    const folded = `row${ROW.toLowerCase().replace(/[^0-9a-z]/g, '')}`;
+    const raw = window.sessionStorage.getItem(LEAD_TABLE_SCROLL_STORAGE_KEY);
+    expect(raw).toContain(`"${expanded.key}${folded}"`);
+    expect(NEVER_STORED.filter((fragment) => raw?.includes(fragment))).toEqual([]);
+    expect(() => storedEntries()).toThrow(`key ${expanded.key}${folded}: expected false to be true`);
   });
 
   it('no correct store spells a fragment the guard admits', () => {
