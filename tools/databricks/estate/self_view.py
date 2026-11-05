@@ -8,6 +8,10 @@ accepted-exposure matcher does not accept refuses, as before. Whether an
 identity's self ``get_effective`` is answered at all is spike S0(a), owed; a
 refused read propagates and refuses, never read as absent.
 
+A grant in a catalog the identity cannot see is not read: it is inert without
+``USE_CATALOG`` there, and the next agentic deploy after it becomes visible
+refuses it (the residual docs/deployment.md, "The self-view", states).
+
 The self-view alone cannot see what the identity owns where it cannot look
 (spike S0(c), owed: the worst case is assumed), which is why the owner's
 estate inventory exists. So the view is judged against it:
@@ -136,6 +140,10 @@ def assert_self_view(
 
     principal = application_id.strip()
     aliases = _assert_authenticated_runtime(view, application_id=principal)
+    # An exposure entry's binding is matched against the inventory's bindings:
+    # only a metastore admin or the catalog's owner can read them live, and
+    # neither identity is one (docs/deployment.md, "What is judged as of the
+    # inventory"). Owner, type and isolation mode are compared live below.
     scope = (
         UcExposureScope(matcher=exposure, binding=inventory.binding)
         if exposure is not None and exposure.active

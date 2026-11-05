@@ -2341,7 +2341,11 @@ python -m tools.clients.estate_inventory --out ~/mip-estate/<client>.json \
   [--catalog mip] [--bound-workspace-profile <cli-profile> ...]
 ```
 
-It lists every catalog with `include_unbound`, binding-denied ones included,
+The install workspace is the ambient Databricks auth, as the owner
+(`DATABRICKS_CONFIG_PROFILE=<the owner's profile on the install workspace>`, or
+`DATABRICKS_HOST` and its credentials); the tool refuses unless that caller
+owns the metastore directly. It lists every catalog with `include_unbound`,
+binding-denied ones included,
 with its type, isolation mode, owner and workspace bindings, and below each
 foreign catalog the owner of every schema, table, function, volume and
 registered model (`information_schema` apart). A catalog bound only to other
@@ -2352,11 +2356,16 @@ profile, or when a read is refused, the catalog is recorded as a gap. The
 account plane (the deploy's `DATABRICKS_ACCOUNT_*` credential, exported for
 the run) classifies every workspace assigned to the metastore, and a deleted
 one is recorded with the exact sha256 of what its assignment listing returns
-(or that it no longer lists). The file is written mode 0600, atomically and
-never through a symlink. The tool prints counts, gap counts and the `estate`
-digest, never a catalog, owner or id; `--summarize <file>` recomputes them.
-Exit 0: written, no gap; 3: written with gaps (the deploy refuses it); 2:
-refused, nothing written.
+(or that it no longer lists). The document is validated by the deploy's own
+parser before it is written, so a refused one never is; the file is written
+mode 0600, atomically and never through a symlink. The tool prints counts, gap
+counts and the `estate` digest, never a catalog, owner or id: a refusal of its
+own prints its line, and any other error (a Databricks API, HTTP or file
+error) only its class and error code, because its text can name another
+team's catalog. `--summarize <file>` recomputes the counts and digest. Its SDK
+calls are pinned to a reviewed set of gets and lists
+(`tests/unit/test_bootstrap_account_safety.py`). Exit 0: written, no gap; 3:
+written with gaps (the deploy refuses it); 2: refused, nothing written.
 
 **Giving it to a run.** The inventory names other teams' catalogs and
 principals, so it is identifying: store the file's content as the client's
@@ -2411,6 +2420,19 @@ relies on the inventory. Any of these refuses:
   `workspaces.get`, the identity's catalog, model or effective-permission
   reads).
 
+**What is judged as of the inventory.** Only a metastore admin or a catalog's
+owner can read its workspace bindings, and neither the deployer nor the agent
+identity is either, so a catalog's bound workspace ids come from the
+inventory, at most 30 days old (plus the run's 24 h margin); its owner, type
+and isolation mode are re-read live and compared. Two things follow. The
+`binding` field of an accepted-exposure entry (plan 4.12) is matched against
+the inventory's bindings, so a catalog rebound while it stays `ISOLATED`
+still matches until the inventory is taken again; and the proof's
+binding-denial evidence carries the inventory's bindings. A catalog that is
+rebound into the install workspace and becomes visible to the identity still
+refuses, and the identity's workspace assignments, read live on the account
+plane, still confine it to the install workspace.
+
 **The self-view.** The audit reads the runtime's (or the proxy's) effective
 privileges as that identity, with its own OAuth credential, on every catalog it
 can browse and everything below each foreign one, through its accepted-exposure
@@ -2419,13 +2441,19 @@ answered (a refusal refuses, so the agentic tier stays off until it is), and
 S0(c), whether an identity sees what it owns without `USE_CATALOG`. The design
 assumes the worst case, which is why ownership comes from the inventory: a
 runtime-owned table behind a revoked `USE_CATALOG` is still refused. A grant
-(not ownership) on an object whose catalog the identity cannot see is not in
-the inventory; it is inert until the identity can see that catalog, and the
-self-view refuses it from then on.
+(not ownership) on an object whose catalog the identity cannot see is neither
+in the inventory nor read by the audit: it is inert without `USE_CATALOG` on
+that catalog. If another team later grants `USE_CATALOG` there (to the
+identity, one of its groups or `account users`), the grant can become usable
+in the running App with no deploy, and it is refused only at the next agentic
+deploy, when the self-view can see it. The metastore-owner audit refused such a
+grant while it was still inert; it accepted the same residual for
+binding-denied catalogs, whose grants it never read.
 
 **The retired binding policy.** `MIP_UC_FOREIGN_CATALOG_BINDING_POLICY` was an
 exact contract on the binding-denied catalogs; the inventory now carries them,
-attested by the owner each run. Set to anything non-blank, it refuses in the
+taken by the owner at most 30 days before the run and acknowledged by its
+exact `estate` digest on each run. Set to anything non-blank, it refuses in the
 agentic tier (it could only have made the audit stricter than the inventory)
 and is one notice in the core tier, which never audited with it. It is never
 exported to a tool again, and the loader refuses it too. The binding

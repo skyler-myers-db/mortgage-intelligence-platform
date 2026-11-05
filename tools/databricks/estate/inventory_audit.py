@@ -128,7 +128,7 @@ def binding_workspace_ids(inventory: EstateInventory) -> set[str]:
 
 
 def binding_evidence(inventory: EstateInventory) -> tuple[CatalogBindingEvidence, ...]:
-    """The binding-denied catalogs as the proof carries them, from the owner's inventory."""
+    """The binding-denied catalogs as the proof carries them: the inventory's bindings, not live ones."""
 
     return tuple(
         CatalogBindingEvidence(

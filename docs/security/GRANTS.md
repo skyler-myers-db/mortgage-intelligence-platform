@@ -466,9 +466,16 @@ foreign one, and must reject any direct or inherited catalog, child-object, or
 registered-model privilege its accepted-exposure matcher does not accept. A
 catalog or owner that view sees and the inventory lacks, or a binding-denied
 catalog or model that becomes visible to it, refuses rather than being
-suppressed. The retired `MIP_UC_FOREIGN_CATALOG_BINDING_POLICY` refuses when
-set. The sealed proof records the grant-audited (visible) catalogs separately
-from the typed binding-denial evidence.
+suppressed. Two things are not judged live (docs/deployment.md, "Estate
+inventory"). A catalog's bound workspace ids, and so the binding of an
+accepted-exposure entry, come from the inventory, because only a metastore
+admin or the catalog's owner can read them; owner, type and isolation mode
+are re-read live. A grant in a catalog the runtime cannot see is not read at
+all: it is inert without `USE_CATALOG` there, and it is refused at the first
+agentic deploy after it becomes visible. The retired
+`MIP_UC_FOREIGN_CATALOG_BINDING_POLICY` refuses when set. The sealed proof
+records the grant-audited (visible) catalogs separately from the typed
+binding-denial evidence.
 
 The same control-plane pass resolves the runtime service principal exactly once
 in both account and MIP workspace SCIM and requires the account identity to be
