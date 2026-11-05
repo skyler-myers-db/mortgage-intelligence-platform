@@ -169,13 +169,21 @@ run_adopt_live_apply() {
 # the profile's: the proof's default is the agentic tier, and the core tier
 # passes --agentic-tier off (the payload builder's and pre-stop probes' idiom,
 # so the agentic tier's plan is unchanged). A v5 or v6 record's own payload is
-# that payload, so the agentic release is unchanged; an adopted v7 blue is the
-# core release path's (M2-PR7b), which builds it.
+# that payload, so the agentic release is unchanged. An adopted v7 core blue's
+# payload is rebuilt first, by the core release (M2-PR7b): it is handed in only
+# when its env-name set is exactly blue's, so the proof can record it.
 prove_blue_restorable_before_activation() {
   local -a ack_args=() tier_args=()
   [[ "$BLUE_RESTORE_PROVEN" -ne 1 ]] || return 0
   [[ -z "${MIP_ACK_NO_ROLLBACK_FOR:-}" ]] || ack_args=(--no-rollback-ack "$MIP_ACK_NO_ROLLBACK_FOR")
   tier_is_agentic || tier_args=(--agentic-tier off)
+  if ! tier_is_agentic && [[ -n "${MIP_ACK_RESTORE_UNVERIFIED_FRONTEND:-}" ]]; then
+    tier_args+=(--restore-unverified-frontend-ack "$MIP_ACK_RESTORE_UNVERIFIED_FRONTEND")
+  fi
+  if ! tier_is_agentic && ! rebuild_core_blue_restore_payload; then
+    echo "${RED}[deploy] green activation refused before it began: blue's restore payload could not be read or rebuilt.${RST}" >&2
+    exit 2
+  fi
   step "prove blue's tier-b restore payload before green activation (or the exact no-rollback ack)"
   if ! run_with_proof_signing_authority "$PYTHON" -m tools.databricks.blue_restore_proof prepare-activation \
       --app-name "$_GRANTS_APP_NAME" \
@@ -185,9 +193,36 @@ prove_blue_restorable_before_activation() {
       --source-git-sha "$SOURCE_GIT_SHA" \
       --release-id "$APP_RELEASE_ID" \
       "${tier_args[@]}" \
+      "${CORE_BLUE_RESTORE_PAYLOAD_ARGS[@]}" \
       "${ack_args[@]}"; then
     echo "${RED}[deploy] green activation refused before it began: blue's tier-b restore payload is not proven (see above).${RST}" >&2
     exit 2
   fi
   BLUE_RESTORE_PROVEN=1
+}
+
+# The core tier (M2-PR7b): an adopted v7 core blue has no restore payload until
+# a release proves one. Databricks redacts env values, so the payload builder
+# rebuilds it from the profile the way the emergency recipe built blue
+# (tools/databricks/core_blue.py); it is handed to the proof only when its
+# env-name set is exactly blue's. Otherwise none is, and the proof then needs
+# the exact no_rollback_for ack. Read-only; nothing runs in a dry run.
+rebuild_core_blue_restore_payload() {
+  local payload
+  CORE_BLUE_RESTORE_PAYLOAD_ARGS=()
+  [[ "$DRY_RUN" -eq 0 && "${APP_SIGNED_BLUE_AVAILABLE:-0}" -eq 1 ]] || return 0
+  payload="$(mktemp -t mip-blue-restore-payload.XXXXXX.json)"
+  chmod 600 "$payload"
+  step "rebuild an adopted core blue's restore payload with blue's exact env-name set (read-only)"
+  run_with_proof_signing_authority "$PYTHON" -m tools.databricks.app_core_rollback restore-payload \
+    --app-name "$_GRANTS_APP_NAME" \
+    --scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --agentic-tier "$CLIENT_AGENTIC_TIER" \
+    --install-class "$CLIENT_INSTALL_CLASS" \
+    --app-env "$APP_RUNTIME_ENV" \
+    --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+    --schema "${MIP_DEFAULT_SCHEMA:-gold}" \
+    --out "$payload" || return 1
+  [[ ! -s "$payload" ]] || CORE_BLUE_RESTORE_PAYLOAD_ARGS=(--restore-payload "$payload")
 }

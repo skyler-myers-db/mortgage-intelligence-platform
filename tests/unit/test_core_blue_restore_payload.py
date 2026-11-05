@@ -39,9 +39,12 @@ def _adopted(names: list[str], **overrides: Any) -> dict[str, Any]:
 @pytest.fixture(autouse=True)
 def _d0(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _d0_operator_config(monkeypatch, tmp_path)
-    # The governed run exports its own commit and lease; blue's payload carries neither.
+    # The governed run exports its own commit and lease, and agentic defaults
+    # (the Supervisor name, the proof verify key); blue's payload carries none.
     monkeypatch.setenv("MIP_GIT_SHA", "e" * 40)
     monkeypatch.setenv("MIP_APP_DEPLOYMENT_LEASE_ID", rr.LEASE_ID)
+    monkeypatch.setenv("MIP_AGENT_SUPERVISOR_NAME", "Mortgage Growth Agent")
+    monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_VERIFY_KEY", "verify-key-EXAMPLE")
 
 
 def test_d0s_restore_payload_is_rebuilt_with_its_32_names_and_its_own_commit() -> None:
@@ -59,6 +62,16 @@ def test_d0s_restore_payload_is_rebuilt_with_its_32_names_and_its_own_commit() -
     assert os.environ["MIP_GIT_SHA"] == "e" * 40 and os.environ["MIP_APP_DEPLOYMENT_LEASE_ID"] == rr.LEASE_ID
 
 
+def test_a_blue_whose_set_holds_both_switches_gets_them_as_zero() -> None:
+    names = sorted({*D0_NAMES, "MIP_AI_GATEWAY", "MIP_AGENT_ORCHESTRATOR"})
+
+    payload, why = core_blue.blue_restore_payload(_adopted(names), **INPUTS)
+
+    assert payload is not None, why
+    env = {item["name"]: item.get("value") for item in payload["env_vars"]}  # type: ignore[union-attr]
+    assert (env["MIP_AI_GATEWAY"], env["MIP_AGENT_ORCHESTRATOR"]) == ("0", "0")
+
+
 def test_a_set_the_rebuild_cannot_reproduce_hands_in_no_payload() -> None:
     payload, why = core_blue.blue_restore_payload(_adopted([*sorted(D0_NAMES), "MIP_OTEL_ENDPOINT"]), **INPUTS)
 
@@ -73,7 +86,7 @@ def test_an_operator_value_that_turns_an_agentic_switch_on_hands_in_no_payload(
 
     for names in (sorted(D0_NAMES), with_switches):
         payload, why = core_blue.blue_restore_payload(_adopted(names), **INPUTS)
-        assert payload is None, why
+        assert payload is None and "refused" in why, why
 
 
 def test_a_recorded_payload_or_no_core_blue_needs_no_rebuild() -> None:

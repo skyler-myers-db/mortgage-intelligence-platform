@@ -5,10 +5,10 @@ review mode is ``single_maintainer_audited``. Every high-risk operation it
 would have gated prints the sha256 of its canonical read-only plan instead,
 and a mutating run must be handed exactly that digest through a one-run shell
 export (``MIP_ACK_<PURPOSE>``, read by scripts/deploy.sh from its own
-environment and passed on as a flag, for the purposes in ``ACK_ENV``) or the
-flag of the command that needs it (``override_freeze``,
-``restore_unverified_frontend``), never a ``.env.local`` line. A refusal names
-exactly that route (``REMEDY``).
+environment and passed on as a flag, for the purposes in ``ACK_ENV``; the
+core release reads ``restore_unverified_frontend``'s since M2-PR7b) or the
+flag of the command that needs it (``override_freeze``, ``tier_transition``),
+never a ``.env.local`` line. A refusal names exactly that route (``REMEDY``).
 The tool recomputes the plan immediately before it mutates and refuses on any
 difference, with nothing changed.
 
@@ -46,7 +46,13 @@ PURPOSES = (
 # The one-run shell export scripts/deploy.sh reads, for the purposes it reads one for.
 ACK_ENV = {
     purpose: f"MIP_ACK_{purpose.upper()}"
-    for purpose in ("adopt_live", "supersede", "unadopt", "no_rollback_for")
+    for purpose in (
+        "adopt_live",
+        "supersede",
+        "unadopt",
+        "no_rollback_for",
+        "restore_unverified_frontend",
+    )
 }
 # How each purpose's ack is handed in: that export, else the flag of the one
 # command that takes it.
@@ -56,9 +62,6 @@ REMEDY = {
         for purpose, name in ACK_ENV.items()
     },
     "override_freeze": "pass --override-freeze-ack <its sha256> to this one publish",
-    "restore_unverified_frontend": (
-        "hand this one restore its restore_unverified_frontend ack (<its sha256>)"
-    ),
     # No release reads it from the shell yet: the one release it can serve, an
     # agentic release over a core blue, is wired by M4-PR1 (blue_tier_gate.py).
     "tier_transition": (

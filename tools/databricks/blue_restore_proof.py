@@ -411,7 +411,7 @@ def main(
     # A release over the other tier's blue (blue_tier_gate.py): no shell passes it yet.
     parser.add_argument("--tier-transition-ack", default="")
     # MIP_ACK_RESTORE_UNVERIFIED_FRONTEND: an unverified blue is restorable only with it.
-    parser.add_argument("--unverified-frontend-ack", default="")
+    parser.add_argument("--restore-unverified-frontend-ack", default="")
     args = parser.parse_args(argv)
     if workspace_factory is None:
         from tools.databricks.workspace_auth import deployment_workspace_client
@@ -441,7 +441,7 @@ def main(
             restore_payload=payload,
             no_rollback_ack=args.no_rollback_ack,
             tier_transition_ack=args.tier_transition_ack,
-            unverified_frontend_ack=args.unverified_frontend_ack,
+            unverified_frontend_ack=args.restore_unverified_frontend_ack,
         )
     except RestoreProofRefused as exc:
         print(f"{_PREFIX} REFUSED {exc.code}: {exc}", file=sys.stderr)

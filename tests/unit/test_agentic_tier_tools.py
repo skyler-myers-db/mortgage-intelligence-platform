@@ -311,6 +311,19 @@ def test_the_core_payload_ships_the_agentic_surfaces_off(monkeypatch: pytest.Mon
     assert _payload(agentic_tier="off")["MIP_AI_GATEWAY"] == "0"
 
 
+@pytest.mark.parametrize(
+    "name", ["MIP_AGENT_SUPERVISOR_NAME", "MIP_AI_GATEWAY_PROOF_VERIFY_KEY", "MIP_AGENT_MODEL", "MIP_AGENT_EVAL_RUN_ID"]
+)
+def test_the_core_payload_ships_no_other_agentic_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str) -> None:
+    """M2-PR7b: defaults the governed run exports never ride a core payload; a core record refuses them."""
+
+    _d0_operator_config(monkeypatch, tmp_path)
+    monkeypatch.setenv(name, "configured-EXAMPLE")
+    assert name not in _payload(agentic_tier="off")
+    assert set(_payload(agentic_tier="off")) == set(D0_NAMES) | {"MIP_AGENT_ORCHESTRATOR", "MIP_AI_GATEWAY"}
+    assert _payload(agentic_tier="on")[name] == "configured-EXAMPLE", "the agentic tier forwards it as before"
+
+
 @pytest.mark.parametrize("name", ["MIP_AGENT_ORCHESTRATOR", "MIP_AI_GATEWAY"])
 @pytest.mark.parametrize("value", ["1", "true", "auto"])
 def test_the_core_payload_refuses_an_agentic_switch_turned_on(

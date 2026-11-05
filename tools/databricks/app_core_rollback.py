@@ -64,7 +64,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--out-env", type=Path)
     # ensure and restore (MIP_ACK_RESTORE_UNVERIFIED_FRONTEND, a one-run export)
     parser.add_argument("--expected-rollback-deployment-id", default="")
-    parser.add_argument("--unverified-frontend-ack", default="")
+    parser.add_argument("--restore-unverified-frontend-ack", default="")
     # capture
     parser.add_argument("--payload", type=Path)
     parser.add_argument("--app-resource-payload", type=Path)
@@ -212,7 +212,7 @@ def run(args: argparse.Namespace, workspace: Any) -> str:
                 lease=lease,
                 treatment=treatment,
                 tier_transition_ack=args.tier_transition_ack,
-                unverified_frontend_ack=args.unverified_frontend_ack,
+                unverified_frontend_ack=args.restore_unverified_frontend_ack,
             )
         else:
             record = core_blue_restore.restore_core_blue(
@@ -222,7 +222,7 @@ def run(args: argparse.Namespace, workspace: Any) -> str:
                 lease=lease,
                 treatment=treatment,
                 tier_transition_ack=args.tier_transition_ack,
-                unverified_frontend_ack=args.unverified_frontend_ack,
+                unverified_frontend_ack=args.restore_unverified_frontend_ack,
                 expected_rollback_deployment_id=args.expected_rollback_deployment_id or None,
             )
     if args.out_env is not None:

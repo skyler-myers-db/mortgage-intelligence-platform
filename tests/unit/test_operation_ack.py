@@ -39,13 +39,15 @@ def test_only_the_purposes_the_deploy_reads_have_a_one_run_shell_export() -> Non
         "supersede": "MIP_ACK_SUPERSEDE",
         "unadopt": "MIP_ACK_UNADOPT",
         "no_rollback_for": "MIP_ACK_NO_ROLLBACK_FOR",
+        # The core release's pre-activation proof and tier-b restore read it (M2-PR7b).
+        "restore_unverified_frontend": "MIP_ACK_RESTORE_UNVERIFIED_FRONTEND",
     }
     shell = "".join(
         path.read_text(encoding="utf-8") for path in sorted((REPO / "scripts").rglob("*.sh"))
     )
     for name in acks.ACK_ENV.values():
         assert name in shell, f"{name} is the export a refusal names, so the deploy must read it"
-    for name in ("MIP_ACK_OVERRIDE_FREEZE", "MIP_ACK_RESTORE_UNVERIFIED_FRONTEND"):
+    for name in ("MIP_ACK_OVERRIDE_FREEZE", "MIP_ACK_TIER_TRANSITION"):
         assert name not in shell, "no code reads it, so no refusal may name it"
 
 
@@ -57,7 +59,10 @@ def test_only_the_purposes_the_deploy_reads_have_a_one_run_shell_export() -> Non
         ("unadopt", "export MIP_ACK_UNADOPT=<its sha256> for this run only"),
         ("no_rollback_for", "export MIP_ACK_NO_ROLLBACK_FOR=<its sha256> for this run only"),
         ("override_freeze", "pass --override-freeze-ack <its sha256> to this one publish"),
-        ("restore_unverified_frontend", "hand this one restore its restore_unverified_frontend"),
+        (
+            "restore_unverified_frontend",
+            "export MIP_ACK_RESTORE_UNVERIFIED_FRONTEND=<its sha256> for this run only",
+        ),
         ("tier_transition", "pass --tier-transition-ack <its sha256> to the one blue proof"),
     ],
 )
@@ -68,7 +73,7 @@ def test_a_missing_ack_names_the_route_that_purpose_is_really_handed_in_by(
         with pytest.raises(acks.AckRefused) as refused:
             acks.require_ack(purpose, PLAN, given)
         assert "MIP_ACK_OVERRIDE_FREEZE" not in str(refused.value)
-        assert "MIP_ACK_RESTORE_UNVERIFIED_FRONTEND" not in str(refused.value)
+        assert "MIP_ACK_TIER_TRANSITION" not in str(refused.value)
     with pytest.raises(acks.AckRefused) as refused:
         acks.require_ack(purpose, PLAN, None)
     assert route in str(refused.value)

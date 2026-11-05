@@ -24,10 +24,12 @@ record only; the App itself is restored by tools/databricks/core_blue_restore.py
   record that has none yet. Databricks redacts env values from
   ``get_deployment``, so the payload is rebuilt with the payload builder from
   the profile, the way the emergency recipe built the adopted deployment:
-  blue's source is the immutable copy, ``MIP_GIT_SHA`` is blue's commit and
-  the campaign-treatment runtime is off. It is returned only when its env-name
-  set equals blue's exactly; otherwise there is none, and the pre-activation
-  proof then needs the exact ``no_rollback_for`` ack.
+  blue's source is the immutable copy, ``MIP_GIT_SHA`` is blue's commit, the
+  campaign-treatment runtime is off and, as for every core payload, no agentic
+  name rides it (the two switches only when blue's own set holds them, as
+  ``"0"``). It is returned only when its env-name set equals blue's exactly;
+  otherwise there is none, and the pre-activation proof then needs the exact
+  ``no_rollback_for`` ack.
 
 Messages name codes, digests and env names, never an id, a path or a value.
 """
@@ -324,11 +326,18 @@ def blue_restore_payload(
                 schema=schema,
                 lakebase_instance=lakebase_instance,
                 campaign_treatment_runtime_enabled=False,
-                agentic_tier="off" if set(CORE_OFF_SWITCHES) <= names else "on",
+                agentic_tier="off",
             )
     except ValueError as exc:  # a lender or tier refusal names no value
         return None, f"the payload builder refused ({type(exc).__name__}: {exc})"
-    env_vars = cast(list[dict[str, object]], payload["env_vars"])
+    # The core payload: no agentic name, the two switches "0". A blue the
+    # emergency recipe built carries neither switch, which reads as off too.
+    env_vars = [
+        item
+        for item in cast(list[dict[str, object]], payload["env_vars"])
+        if item["name"] not in CORE_OFF_SWITCHES or item["name"] in names
+    ]
+    payload = {**payload, "env_vars": env_vars}
     built = {str(item["name"]) for item in env_vars}
     if built != names:
         extra, missing = sorted(built - names), sorted(names - built)

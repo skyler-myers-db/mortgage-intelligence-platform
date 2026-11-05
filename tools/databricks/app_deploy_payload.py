@@ -383,11 +383,26 @@ INSTALL_CLASSES = ("demo", "customer")
 # The client profile's MIP_AGENTIC_TIER (plan §4.15). The core tier ships the
 # agentic surfaces off: these two ride the payload as "0", whatever the
 # operator configuration says, and a truthy operator value refuses rather
-# than being silently dropped. The agentic tier (the default, which the
+# than being silently dropped; every other agentic name is left out
+# (CORE_TIER_DROPPED_NAMES). The agentic tier (the default, which the
 # emergency recipe relies on) leaves the payload exactly as before.
 AGENTIC_TIERS = ("on", "off")
 CORE_TIER_OFF_SWITCHES = ("MIP_AGENT_ORCHESTRATOR", "MIP_AI_GATEWAY")
 _OFF_SWITCH_VALUES = frozenset({"", "0", "false", "no", "off"})
+# The rest of the operator block from MIP_AGENT_ORCHESTRATOR to
+# MIP_AGENT_EVAL_RUN_ID (MIP_LAKEBASE_SYNC is core) names the agent model,
+# Supervisor, Gateway, proxy, proofs and eval. The core tier ships none of
+# them (M2-PR7b): with both switches off nothing reads them, and a core
+# record refuses any (app_rollback_record_v7.is_agentic_env_name, pinned
+# equal by test). Defaults the governed run exports, such as the Supervisor
+# name and the proof verify key, would otherwise ride the core payload.
+_AGENTIC_BLOCK = NON_SECRET_OPERATOR_VARS[
+    NON_SECRET_OPERATOR_VARS.index("MIP_AGENT_ORCHESTRATOR") : NON_SECRET_OPERATOR_VARS.index(
+        "MIP_AGENT_EVAL_RUN_ID"
+    )
+    + 1
+]
+CORE_TIER_DROPPED_NAMES = frozenset(_AGENTIC_BLOCK) - {*CORE_TIER_OFF_SWITCHES, "MIP_LAKEBASE_SYNC"}
 
 
 def _core_tier_switches(dotenv: dict[str, str], agentic_tier: str) -> dict[str, str]:
@@ -529,6 +544,8 @@ def build_payload(
 
     env_vars.extend(cotality_source_env)
     for name in NON_SECRET_OPERATOR_VARS:
+        if agentic_tier == "off" and name in CORE_TIER_DROPPED_NAMES:
+            continue
         _append_value(
             env_vars,
             name,

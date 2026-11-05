@@ -9,21 +9,6 @@
   exit 2
 }
 
-# >>> core tier: activation boundary >>>
-# The core tier (MIP_AGENTIC_TIER=off, M2-PR3) is tier-aware through the grant
-# and reconcile steps above. Everything from here on (publish and activation,
-# signed capture, the signed-blue restore, agentic provisioning, cutover and
-# evaluation) still runs through the agentic identities. A core release
-# already refused before the lease (the core tier release refusal in
-# deploy_step_automation_identities.sh); this stop is its defence in depth,
-# before anything is published or activated. A first install's App is removed
-# by the first-install compensation on exit.
-if ! tier_is_agentic; then
-  echo "${RED}[deploy] the core tier (MIP_AGENTIC_TIER=off) stops at the activation boundary: the grant and reconcile steps completed, but publish, activation and signed capture are not tier-aware yet; nothing was published or activated.${RST}" >&2
-  exit 2
-fi
-# <<< core tier: activation boundary <<<
-
 APP_NAME="${MIP_APP_NAME:-mip-app}"
 
 # Make the snapshot deploy deterministic (2026-06-10 audit fix). Two platform
