@@ -162,7 +162,7 @@ def _stub_cli(bin_dir: Path) -> None:
 
 
 def _deploy(
-    tmp_path: Path, estate: dict[str, Any], **env: str
+    tmp_path: Path, estate: dict[str, Any], *, env_local_extra: str = "", **env: str
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any], list[str], list[str]]:
     checkout, base_env, cli_log = sandbox(tmp_path)
     # The sandbox's synthetic client profile, with the demo install's weekly
@@ -176,7 +176,8 @@ def _deploy(
         MIP_ACCEPTED_EXPOSURE_JSON="[]",
     )
     (checkout / ".env.local").write_text(
-        env_file_text({**profile, "DATABRICKS_WAREHOUSE_ID": "warehouse-1"}), encoding="utf-8"
+        env_file_text({**profile, "DATABRICKS_WAREHOUSE_ID": "warehouse-1"}) + env_local_extra,
+        encoding="utf-8",
     )
     _stub_cli(tmp_path / "bin")
     markers = tmp_path / "markers.log"
@@ -534,6 +535,20 @@ def test_a_remediation_request_refuses_before_any_databricks_call(
 ) -> None:
     result, after, reached, cli_calls = _deploy(
         tmp_path, clean_estate(), MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS=value
+    )
+
+    assert result.returncode == 2, result.stderr[-3000:]
+    assert "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS is refused" in result.stderr
+    assert reached == [] and cli_calls == [], "refused before any Databricks call"
+    assert after["calls"] == [] and after["app"]["state"] == "RUNNING"
+
+
+@pytest.mark.parametrize("value", ("1", "true"))
+def test_a_stale_env_local_remediation_request_refuses_too(tmp_path: Path, value: str) -> None:
+    # The tool is deleted (M4-PR2); an operator .env.local written while it
+    # existed can still carry the flag, and it must refuse, never be ignored.
+    result, after, reached, cli_calls = _deploy(
+        tmp_path, clean_estate(), env_local_extra=f"MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS={value}\n"
     )
 
     assert result.returncode == 2, result.stderr[-3000:]
