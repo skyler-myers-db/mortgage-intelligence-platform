@@ -3918,7 +3918,11 @@ satisfies another:
 - the workflow is `deploy-dev.yml` on `main`, dispatched by hand;
 - `single_maintainer_audited` needs the break-glass acknowledgement; approval
   provenance is "not applicable (single_maintainer_audited)", and the
-  `independent` mode is refused by the profile schema until M1-PR5;
+  `independent` mode is refused by the profile schema until M1-PR5. The
+  preflight also refuses `approval_provenance` for every mode but
+  `single_maintainer_audited` on its own, and the workflow's
+  `refuse-unacknowledged` job needs the break-glass for every dispatch, so an
+  independent mode needs that gate changed as well;
 - the trust-root chain is reported "deferred (M1-PR5)": nothing verifies a
   hardware-key signature or a chain;
 - `owner_attestation` must be the exact `profile` ack (purpose, client and

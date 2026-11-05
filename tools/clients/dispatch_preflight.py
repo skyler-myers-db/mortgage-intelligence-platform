@@ -9,7 +9,10 @@ profile again (registering its masks first) and decides, for ``--phase``:
    ``.github/workflows/deploy-dev.yml`` on ``refs/heads/main``;
 2. **review mode**: ``single_maintainer_audited`` (the only mode built) needs
    the break-glass acknowledgement; approval provenance is "not applicable"
-   in that mode (tools/clients/dispatch_protections.approval_provenance);
+   in that mode, and every other mode refuses here (approval provenance is
+   deferred with M1-PR5; tools/clients/dispatch_protections.approval_provenance).
+   deploy-dev.yml's ``refuse-unacknowledged`` job also needs the break-glass
+   for every dispatch, so an independent mode needs that gate changed too;
 3. **trust-root chain**: deferred with the owner attestation layer (M1-PR5);
    nothing here pretends to verify a signature or a chain;
 4. **profile ack** (the input ``owner_attestation``): every mutating phase
@@ -91,6 +94,18 @@ def _workflow(verdict: Verdict, environ: Mapping[str, str]) -> None:
         verdict.refuse("workflow_ref", f"only {WORKFLOW} on main deploys")
 
 
+def _review_mode(verdict: Verdict, mode: str, environ: Mapping[str, str]) -> None:
+    """Approval provenance is "not applicable" in single_maintainer_audited only; any other mode refuses."""
+
+    provenance = protections.approval_provenance(mode)
+    if mode != protections.SINGLE_MAINTAINER:
+        verdict.refuse("approval_provenance", provenance)
+        return
+    if environ.get("MIP_DISPATCH_BREAK_GLASS") != "true":
+        verdict.refuse("break_glass", "single_maintainer_audited needs acknowledge_single_maintainer_break_glass=true")
+    verdict.facts.append(f"approval provenance: {provenance}")
+
+
 def _protections(verdict: Verdict, environ: Mapping[str, str], client: str, environment: str, mode: str) -> None:
     try:
         session = protections.from_environ(environ)
@@ -141,9 +156,7 @@ def decide(
     digest = views.digest(profile)
     verdict.facts.append(f"client {profile.client}: {profile.install_class}, tier {profile.agentic_tier}, profile digest {digest}")
     _workflow(verdict, environ)
-    if profile.review_mode == "single_maintainer_audited" and environ.get("MIP_DISPATCH_BREAK_GLASS") != "true":
-        verdict.refuse("break_glass", "single_maintainer_audited needs acknowledge_single_maintainer_break_glass=true")
-    verdict.facts.append(f"approval provenance: {protections.approval_provenance(profile.review_mode)}")
+    _review_mode(verdict, profile.review_mode, environ)
     verdict.facts.append(f"trust-root chain: {TRUST_ROOT}")
     expected_profile_ack = acks.profile_ack(profile.client, digest)
     if not verdict.mutating:

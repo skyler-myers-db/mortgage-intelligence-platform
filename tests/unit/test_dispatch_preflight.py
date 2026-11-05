@@ -210,6 +210,30 @@ def test_the_operation_acks_are_a_closed_map_each_read_by_its_own_phases() -> No
     }
 
 
+# Pinned literally: the module's own set never parametrizes a test of itself.
+MUTATING = ("adopt", "data", "release", "unadopt")
+
+
+def test_exactly_these_phases_mutate_and_need_the_acks() -> None:
+    assert frozenset(MUTATING) == acks.MUTATING_PHASES
+    assert frozenset({"plan", *MUTATING}) == acks.PHASES
+
+
+@pytest.mark.parametrize("mode", ("independent", "", "single_maintainer"))
+def test_approval_provenance_refuses_every_review_mode_but_single_maintainer_audited(mode: str) -> None:
+    """The schema refuses independent today; the preflight fails closed on its own too."""
+
+    verdict = preflight.Verdict("plan")
+    preflight._review_mode(verdict, mode, {"MIP_DISPATCH_BREAK_GLASS": "true"})
+    assert verdict.refusals == [
+        "approval_provenance: independent review needs approval provenance, deferred with the attestation layer (M1-PR5)"
+    ]
+    assert not [fact for fact in verdict.facts if fact.startswith("approval provenance")]
+    single = preflight.Verdict("plan")
+    preflight._review_mode(single, "single_maintainer_audited", {})
+    assert [refusal.split(":", 1)[0] for refusal in single.refusals] == ["break_glass"]
+
+
 # ---------------------------------------------------------------- the verdict
 
 
@@ -227,7 +251,7 @@ def test_a_plan_passes_without_any_ack_and_prints_the_profile_ack_a_release_need
     assert verdict.exports == {preflight.PROTECTIONS_ENV: protections.VERIFIED}
 
 
-@pytest.mark.parametrize("phase", sorted(acks.MUTATING_PHASES))
+@pytest.mark.parametrize("phase", MUTATING)
 def test_a_mutating_phase_refuses_without_the_exact_profile_ack(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
@@ -246,27 +270,29 @@ def test_s8_readable_protections_that_match_let_a_release_run(tmp_path: Path, mo
     assert verdict.exports[preflight.PROTECTIONS_ENV] == protections.VERIFIED
 
 
-def test_s8_drifted_protections_are_recorded_by_a_plan_and_refuse_a_release(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("phase", MUTATING)
+def test_s8_drifted_protections_are_recorded_by_a_plan_and_refuse_a_mutating_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
     drifted = json.loads(json.dumps(READABLE))
     drifted["environments"]["environments"][0]["can_admins_bypass"] = True
     plan = _decide(_mkdir(tmp_path / "plan"), monkeypatch, phase="plan", responses=drifted)
-    release = _decide(_mkdir(tmp_path / "release"), monkeypatch, phase="release", responses=drifted, environ=_profile_ack())
+    release = _decide(_mkdir(tmp_path / phase), monkeypatch, phase=phase, responses=drifted, environ=_profile_ack())
 
     assert plan.refusals == []
     assert any("environment_protections_drift" in fact and "can_admins_bypass" in fact for fact in plan.facts)
     assert release.refusals == [f"environment_protections_drift: github: {CLIENT} can_admins_bypass differs from single_maintainer_audited"]
 
 
-def test_s8_worst_case_unreadable_protections_a_plan_records_and_a_release_refuses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("phase", MUTATING)
+def test_s8_worst_case_unreadable_protections_a_plan_records_and_a_mutating_phase_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
     """GITHUB_TOKEN cannot read the rules: never 'verified', never 'unprotected'."""
 
     expected = acks.protections_ack(CLIENT, CLIENT, SHA)
     plan = _decide(_mkdir(tmp_path / "plan"), monkeypatch, phase="plan", responses=None)
-    release = _decide(_mkdir(tmp_path / "release"), monkeypatch, phase="release", responses=None, environ=_profile_ack())
+    release = _decide(_mkdir(tmp_path / phase), monkeypatch, phase=phase, responses=None, environ=_profile_ack())
 
     assert plan.refusals == []
     assert plan.exports[preflight.PROTECTIONS_ENV] == protections.UNREADABLE == "environment_protections_unreadable"
@@ -332,13 +358,14 @@ def test_the_expected_active_deployment_reaches_a_release_only(tmp_path: Path, m
     assert [refusal.split(":", 1)[0] for refusal in data.refusals] == ["expected_active_deployment_sha256"]
 
 
+@pytest.mark.parametrize("phase", MUTATING)
 def test_a_tracked_identifying_value_is_recorded_by_a_plan_and_refuses_a_mutating_phase(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
     host = "dbc-unit.cloud.databricks.com"
     leaked = _repo(_mkdir(tmp_path / "leak"), {"docs/notes.md": f"the workspace is https://{host}/\n", "ok.txt": "fine\n"})
     plan = _decide(_mkdir(tmp_path / "plan"), monkeypatch, phase="plan", repo=leaked)
-    release = _decide(_mkdir(tmp_path / "release"), monkeypatch, phase="release", repo=leaked, environ=_profile_ack())
+    release = _decide(_mkdir(tmp_path / phase), monkeypatch, phase=phase, repo=leaked, environ=_profile_ack())
 
     assert plan.refusals == []
     assert release.refusals == ["tree_scan: 1 tracked files hold a resolved identifying value (DATABRICKS_HOST in docs/notes.md)"]

@@ -124,10 +124,15 @@ def read(session: Any, environment: str, mode_name: str, maintainer_id: str) -> 
     return Result(DRIFT, tuple(lines)) if lines else Result(VERIFIED)
 
 
+SINGLE_MAINTAINER = "single_maintainer_audited"
+
+
 def approval_provenance(mode_name: str) -> str:
-    if mode_name == "single_maintainer_audited":
-        return "not applicable (single_maintainer_audited)"
-    return "refused: independent review needs approval provenance, deferred with the attestation layer (M1-PR5)"
+    """Not applicable in ``single_maintainer_audited``; every other mode is a refusal reason."""
+
+    if mode_name == SINGLE_MAINTAINER:
+        return f"not applicable ({SINGLE_MAINTAINER})"
+    return "independent review needs approval provenance, deferred with the attestation layer (M1-PR5)"
 
 
 def from_environ(environ: Mapping[str, str], *, opener: Opener = _open) -> ActionsTokenSession:
