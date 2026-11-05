@@ -28,9 +28,9 @@ step "core tier: skip the agentic provisioning, cutover and Agent Evaluation (ag
 # blue's treatment authority quiesced immediately before it and the quiesce
 # window superseded. The pre-activation rollback proof (attack O2, with blue's
 # restore payload rebuilt for an adopted blue) runs first, before either: a
-# refusal then exits while blue still serves in its step-0a state, which the
-# EXIT trap compensates with blue up, never by restoring blue over itself
-# (deploy_app_snapshot's own call is then a no-op).
+# refusal then exits while blue still serves (window blue_degraded since step
+# 4c), which the EXIT trap compensates with blue up, never by restoring blue
+# over itself (deploy_app_snapshot's own call is then a no-op).
 if [[ "$APP_UPGRADE_STATE" == "blue_active" || \
       "$APP_UPGRADE_STATE" == "blue_quiesced" ]]; then
   prove_blue_restorable_before_activation

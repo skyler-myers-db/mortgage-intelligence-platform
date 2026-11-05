@@ -1984,12 +1984,20 @@ verifier, the agent runtime or the Supervisor proxy:
   another commit needs its own, which its refusal prints.
 - **A refused pre-activation proof** (`unverified_frontend_unacked`,
   `no_rollback_proof`, a rebuild that fails) exits 2 at step 10b while signed
-  blue still serves in its step-0a state. The EXIT trap then converges
-  blue's runtime access and treatment authority back with the App up
-  (`compensate_serving_blue`); it never restores blue over itself and never
-  stops it. The refusal is not "nothing changed": steps 1 to 10 (grants,
-  migrations, the data refresh) already ran, and the re-run with the printed
-  digest repeats them.
+  blue still serves. Over signed blue the run reaches step 10b in the quiesce
+  window's `blue_degraded` state, not step 0a's `blue_serving`: step 4c
+  quiesced the App's synced-catalog access (in either tier), and the
+  catalog bootstrap may have republished the reviewed functions. The EXIT
+  trap compensates that state with the App up (`compensate_serving_blue`):
+  it proves blue still serves the signed record, reconciles the reviewed
+  function grants when they are unproven, converges the release access and
+  treatment authority (quiesced since step 0a) back to runtime, and releases
+  the lease. In the core tier it leaves the synced-catalog access quiesced,
+  as a successful core release does (`MIP_LAKEBASE_SYNC`, below), so an
+  estate with no Lakebase synced tables compensates the same way. It never
+  restores blue over itself and never stops it. The refusal is not "nothing
+  changed": steps 1 to 10 (grants, migrations, the data refresh) already
+  ran, and the re-run with the printed digest repeats them.
 - **The live smoke** expects no agentic capability; Genie is smoked as in the
   agentic tier (a Genie space is a core resource).
 - **The signed capture** (`tools/databricks/core_blue_capture.py`): a v7 core
@@ -2024,11 +2032,15 @@ verifier, the agent runtime or the Supervisor proxy:
   refuses, and name another install's Supervisor and Gateway.
 - **`MIP_LAKEBASE_SYNC`** is not an agentic name, so an operator value rides
   a core payload, but the core tier neither proves the Lakebase Sync nor
-  converges the App's synced-table grants (both are
-  `deploy_step_agentic_provisioning.sh`'s, agentic-only). A core install
-  leaves it unset: no profile field sets it, and the cache that would is not
-  carried. Set by hand, the App's capability row reports its live
-  synced-table probe.
+  converges the App's synced-table grants to runtime (both are
+  `deploy_step_agentic_provisioning.sh`'s, agentic-only). Step 4c still
+  quiesces the App's synced-catalog access in either tier (it also removes
+  the historical direct grants on the Lakebase schemas), and a core release
+  leaves it quiesced whichever way it ends: only the agentic step converges
+  it back, and the EXIT trap never does in the core tier. A core install
+  leaves the switch unset: no profile field sets it, and the cache that would
+  is not carried. Set by hand, the App's capability row reports its live
+  synced-table probe, which fails while that access stays quiesced.
 
 The agentic tier's plan, bundle variables, payload and the emergency
 recipe's 32 env names are unchanged by this (the PR's artifact-hash proof).
@@ -2661,8 +2673,10 @@ grants exact.
 **EXIT-trap states** (`stop_app_after_failed_deploy`): `blue_serving` never
 stops the App and converges runtime access with it up; `blue_degraded` (blue
 serving while its synced-catalog access or the reviewed functions are
-mutated) also re-reconciles those; `window_open` starts and re-pins blue when
-every proof holds, otherwise leaves the window to the dead-man;
+mutated) also re-reconciles those (in the core tier the functions only: a
+core release leaves the synced-catalog access quiesced); `window_open`
+starts and re-pins blue when every proof holds, otherwise leaves the window
+to the dead-man;
 `contract_activating` stops the App, never restores blue and retains the
 lease. The rollback's
 `ensure` and `restore` re-pin the same way when they start a stopped blue

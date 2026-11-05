@@ -618,7 +618,9 @@ compensate_serving_blue() {
        ! reconcile_reviewed_function_execute_grants; then
       failed=1
     fi
-    if ! "$PYTHON" -m tools.databricks.converge_app_lakebase_sync_access \
+    # The core tier leaves step 4c's synced-catalog quiesce in place, as its success path does.
+    if [[ "${CLIENT_AGENTIC_TIER:-}" != "off" ]] && \
+       ! "$PYTHON" -m tools.databricks.converge_app_lakebase_sync_access \
       --mode runtime \
       --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
       --app-application-id "$APP_SP_CLIENT_ID" \

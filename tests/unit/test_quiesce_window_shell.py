@@ -185,6 +185,19 @@ def test_blue_degraded_converges_the_mutated_dependencies_with_the_app_up(tmp_pa
     assert "treatment runtime" in calls and not any(_has(calls, stop) for stop in STOPS)
 
 
+def test_a_core_blue_degraded_keeps_its_synced_catalog_access_quiesced(tmp_path: Path) -> None:
+    """The core tier never converges step 4c's sync quiesce back (M2-PR7b review)."""
+
+    result, calls = _run(
+        tmp_path,
+        "CLIENT_AGENTIC_TIER=off; QUIESCE_WINDOW_STATE=blue_degraded; REVIEWED_FUNCTION_GRANTS_PROVEN=0\n"
+        "stop_app_after_failed_deploy\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "function-reconcile" in calls and not _has(calls, "converge_app_lakebase_sync_access")
+    assert "treatment runtime" in calls and not any(_has(calls, stop) for stop in STOPS)
+
+
 def test_an_open_restorable_window_starts_proves_and_re_pins_blue(tmp_path: Path) -> None:
     result, calls = _run(
         tmp_path, "QUIESCE_WINDOW_STATE=window_open\nstop_app_after_failed_deploy\n", JOURNAL="window_open"
