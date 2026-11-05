@@ -245,6 +245,31 @@ def test_the_schema_is_closed_and_its_lines_carry_no_value(mutate: Any, expected
         assert all(value not in line.split(" ") for line in caught.value.lines), value
 
 
+def test_the_same_facts_have_one_body_and_one_digest() -> None:
+    """Key order and whitespace are canonical; an unsorted set-valued list refuses."""
+
+    document = _document()
+    spaced = json.dumps(json.loads(canonical_json(document)), indent=4)
+    assert estate.parse_inventory(spaced).digest == estate.estate_digest(document)
+    assert document["workspaces"]["assigned"] == sorted(document["workspaces"]["assigned"])
+    unsorted = _document()
+    unsorted["workspaces"]["assigned"].reverse()
+    with pytest.raises(estate.EstateInventoryRefusal, match="workspaces.assigned: must be sorted"):
+        estate.parse_inventory(canonical_json(unsorted))
+    bound = _document()
+    bound["catalogs"]["other"]["isolation_mode"] = "ISOLATED"
+    bound["catalogs"]["other"]["bindings"] = [
+        {"workspace_id": workspace_id, "binding_type": "BINDING_TYPE_READ_ONLY"}
+        for workspace_id in (harness.WORKSPACE_ID, harness.OTHER_WORKSPACE_ID)
+    ]
+    with pytest.raises(estate.EstateInventoryRefusal, match="bindings must be sorted by workspace id"):
+        estate.parse_inventory(canonical_json(bound))
+    bound["catalogs"]["other"]["bindings"].reverse()
+    assert estate.parse_inventory(canonical_json(bound)).catalogs["other"].bound_workspace_ids == tuple(
+        sorted((harness.WORKSPACE_ID, harness.OTHER_WORKSPACE_ID))
+    )
+
+
 def test_a_repeated_key_refuses() -> None:
     text = canonical_json(_document())
     with pytest.raises(estate.EstateInventoryRefusal, match="repeats a key"):

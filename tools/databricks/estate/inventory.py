@@ -27,6 +27,9 @@ the inventory was taken is still judged.
 deferred (M1-PR5), so the inventory is pinned by an exact digest instead: the
 sha256 of the domain-separated canonical document, which names its purpose
 (``estate``), so no other ack can satisfy it (``handover_journal.plan_sha256``).
+Object keys are sorted by the canonical encoding, and the parser refuses an
+unsorted ``assigned`` or ``bindings`` list, so the same facts have one body
+and one digest.
 A run is given it as ``MIP_ACK_ESTATE_INVENTORY``, a one-run shell export,
 never a ``.env.local`` line; every consumer recomputes the digest from the
 inventory immediately before relying on it. A digest is not a signature: it
@@ -240,6 +243,8 @@ def _catalog(name: str, raw: object, *, install: str, lines: list[str]) -> Catal
             bindings.append((item["workspace_id"], item["binding_type"]))
     if len({item[0] for item in bindings}) != len(bindings):
         lines.append(f"{at}: repeats a bound workspace")
+    elif [item[0] for item in bindings] != sorted(item[0] for item in bindings):
+        lines.append(f"{at}: bindings must be sorted by workspace id, so the inventory has one body")
     if mode == OPEN and bindings:
         lines.append(f"{at}: an OPEN catalog lists no bindings")
     gap = raw["gap"]
@@ -282,6 +287,8 @@ def _workspaces(raw: object, *, install_workspace: str, lines: list[str]) -> tup
         assigned = []
     if len(set(assigned)) != len(assigned):
         lines.append("workspaces.assigned: repeats a workspace")
+    elif assigned != sorted(assigned):
+        lines.append("workspaces.assigned: must be sorted, so the inventory has one body")
     if install_workspace not in assigned:
         lines.append("workspaces.assigned: does not list the install workspace")
     defunct: dict[str, DefunctWorkspace] = {}
