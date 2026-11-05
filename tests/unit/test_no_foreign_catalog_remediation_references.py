@@ -11,9 +11,10 @@ to zero mentions of them, except this file.
 Two names deliberately survive, and neither is the tool:
 
 * ``MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS``: scripts/deploy.sh refuses any
-  value but ``0``, from the environment or a stale ``.env.local``, so neither
-  can bring the remediation back silently. Only the files below may name it,
-  and the workflow never does.
+  value but ``0``, from the environment or a stale ``.env.local``, each read on
+  its own, so neither can bring the remediation back silently and an export of
+  ``0`` cannot mask the file. Only the files below may name it, and the
+  workflow never does.
 * ``retire_foreign_catalog_binding_policy``: M4-PR1's refusal of the retired
   ``MIP_UC_FOREIGN_CATALOG_BINDING_POLICY``. The word boundaries below leave
   it alone.
@@ -142,14 +143,23 @@ def test_only_the_refusal_and_its_records_name_the_refused_flag() -> None:
 
 
 def test_the_refusal_still_reads_every_source_and_refuses_anything_but_zero() -> None:
+    """The guard's shape and position; test_prestop_refusal_matrix.py runs it from each source."""
+
     script = deploy_contract_text()
     assert script.count(_GUARD_START) == 1 and script.count(_GUARD_END) == 1
     before, rest = script.split(_GUARD_START, 1)
-    guard, after = rest.split(_GUARD_END, 1)
+    commented, after = rest.split(_GUARD_END, 1)
+    # Only code counts: a comment that kept an old read would satisfy a substring.
+    guard = "\n".join(line for line in commented.splitlines() if not line.lstrip().startswith("#"))
 
-    # deployment_control_value reads the shell export, then .env.local.
-    assert f"deployment_control_value {REFUSED_FLAG} 0" in guard
-    assert 'if [[ "$_REMEDIATE_FOREIGN_CATALOG_BINDINGS" != "0" ]]; then' in guard
+    # Each source on its own, so an export of 0 cannot mask a .env.local request.
+    assert f'_REMEDIATE_FOREIGN_CATALOG_BINDINGS="${{{REFUSED_FLAG}:-0}}"' in guard
+    assert f'_REMEDIATE_FOREIGN_CATALOG_BINDINGS_DOTENV="$(dotenv_value {REFUSED_FLAG})"' in guard
+    assert (
+        'if [[ "$_REMEDIATE_FOREIGN_CATALOG_BINDINGS" != "0" '
+        '|| "${_REMEDIATE_FOREIGN_CATALOG_BINDINGS_DOTENV:-0}" != "0" ]]; then'
+    ) in guard
+    assert f"deployment_control_value {REFUSED_FLAG}" not in guard
     assert f"[deploy] {REFUSED_FLAG} is refused" in guard
     assert "exit 2" in guard
     # Nothing else in the deploy reads, exports or forwards it.

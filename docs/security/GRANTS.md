@@ -576,8 +576,9 @@ it (M0-PR5); M4-PR2 deleted the tool itself with its signed manifest, its
 journal and the binding policy it read (the owner's estate inventory, M4-PR1,
 now carries the binding-denied catalogs). `deploy-dev.yml` never names
 `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS`, and `scripts/deploy.sh` refuses any
-value of it other than `0`, from the environment or from a stale `.env.local`:
-exit 2 before any Databricks call, in a dry run too, with the App untouched.
+value of it other than `0`, from the environment or from a stale `.env.local`,
+each read on its own so that an export of `0` does not mask the file: exit 2
+before any Databricks call, in a dry run too, with the App untouched.
 No other code ever read the remediation's records, so the deletion changes no
 reader.
 

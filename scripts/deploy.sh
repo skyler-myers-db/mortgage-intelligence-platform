@@ -593,15 +593,16 @@ trap quiesce_window_deadline_reached USR1
 # stopped the App to do it. Its stop branches are gone (M0-PR5) and its tool is
 # deleted (M4-PR2), so a request for it, from the environment or from a stale
 # .env.local, refuses here: before any Databricks call, in a dry run too, with
-# the App untouched. The deploy-dev workflow never names the flag.
-_REMEDIATE_FOREIGN_CATALOG_BINDINGS="$(
-  deployment_control_value MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS 0
-)"
-if [[ "$_REMEDIATE_FOREIGN_CATALOG_BINDINGS" != "0" ]]; then
+# the App untouched. The deploy-dev workflow never names the flag. Each source
+# is read on its own: deployment_control_value lets a non-empty export win, and
+# an export of 0 must not mask a stale .env.local request.
+_REMEDIATE_FOREIGN_CATALOG_BINDINGS="${MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS:-0}"
+_REMEDIATE_FOREIGN_CATALOG_BINDINGS_DOTENV="$(dotenv_value MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS)"
+if [[ "$_REMEDIATE_FOREIGN_CATALOG_BINDINGS" != "0" || "${_REMEDIATE_FOREIGN_CATALOG_BINDINGS_DOTENV:-0}" != "0" ]]; then
   echo "${RED}[deploy] MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS is refused: the foreign-catalog binding remediation rewrites other teams' metastore-level catalog state and is retired (docs/security/GRANTS.md); unset it. Nothing was changed.${RST}" >&2
   exit 2
 fi
-unset _REMEDIATE_FOREIGN_CATALOG_BINDINGS
+unset _REMEDIATE_FOREIGN_CATALOG_BINDINGS _REMEDIATE_FOREIGN_CATALOG_BINDINGS_DOTENV
 # <<< foreign-catalog remediation refused <<<
 
 # Deploy step files: the orchestration below is sliced verbatim, in reviewed

@@ -370,8 +370,9 @@ def test_grants_records_the_foreign_catalog_remediation_as_deleted() -> None:
     ) in paragraph
     assert (
         "`deploy-dev.yml` never names `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS`, and `scripts/deploy.sh` refuses "
-        "any value of it other than `0`, from the environment or from a stale `.env.local`: exit 2 before any "
-        "Databricks call, in a dry run too, with the App untouched."
+        "any value of it other than `0`, from the environment or from a stale `.env.local`, each read on its own "
+        "so that an export of `0` does not mask the file: exit 2 before any Databricks call, in a dry run too, "
+        "with the App untouched."
     ) in paragraph
     assert "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS" not in DEPLOY_DEV.read_text(encoding="utf-8"), "the doc's claim"
     for retired in (

@@ -2201,11 +2201,12 @@ MIP_GENIE_MANAGER_PRINCIPALS=
 
 `MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS` is refused before any of this, before
 any Databricks call and in a dry run too: any value other than `0`, from the
-environment or a stale `.env.local`, exits 2. The stop branches that ran the
-foreign-catalog remediation are gone (M0-PR5) and its tooling is deleted
-(M4-PR2); `deploy-dev.yml` never names the flag. M4-PR2 adds no `.env.example`
-line and removes none: if a run reports the refusal, delete the flag's line from
-that `.env.local`.
+environment or a stale `.env.local`, exits 2. Each source is read on its own,
+so an export of `0` does not mask a stale `.env.local` line. The stop branches
+that ran the foreign-catalog remediation are gone (M0-PR5) and its tooling is
+deleted (M4-PR2); `deploy-dev.yml` never names the flag. M4-PR2 adds no
+`.env.example` line and removes none: if a run reports the refusal, delete the
+flag's line from that `.env.local`.
 
 The probe is an early refusal, not a replacement for the post-stop audits.
 Those still read each target's own `/Me` groups, which can include
