@@ -37,16 +37,59 @@ async function frames(page: Page, count = 3): Promise<void> {
   );
 }
 
-/** The class bar with a 2px margin of the legend around it (inside the legend's padding). */
+interface Clip {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** A whole-pixel clip around a layout box, `margin` pixels wider on every side. */
+function pixelClip(box: Clip, margin: number): Clip {
+  return {
+    x: Math.floor(box.x) - margin,
+    y: Math.floor(box.y) - margin,
+    width: Math.ceil(box.width) + 2 * margin,
+    height: Math.ceil(box.height) + 2 * margin,
+  };
+}
+
+/**
+ * Where `clip` reaches into the legend's edge band: the border, or the
+ * corner radius where that is wider. Empty when the clip is all panel and bar.
+ */
+async function edgeProblems(page: Page, clip: Clip): Promise<string[]> {
+  const inner = await page.locator('#main-content .map-legend').evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    const band = Math.max(
+      ...['top', 'right', 'bottom', 'left'].map((side) => Number.parseFloat(style.getPropertyValue(`border-${side}-width`)) || 0),
+      ...['top-left', 'top-right', 'bottom-right', 'bottom-left'].map((corner) => Number.parseFloat(style.getPropertyValue(`border-${corner}-radius`)) || 0),
+    );
+    return { left: rect.left + band, top: rect.top + band, right: rect.right - band, bottom: rect.bottom - band };
+  });
+  const problems: string[] = [];
+  if (clip.x < Math.ceil(inner.left)) problems.push(`left ${clip.x} < ${Math.ceil(inner.left)}`);
+  if (clip.y < Math.ceil(inner.top)) problems.push(`top ${clip.y} < ${Math.ceil(inner.top)}`);
+  if (clip.x + clip.width > Math.floor(inner.right)) problems.push(`right ${clip.x + clip.width} > ${Math.floor(inner.right)}`);
+  if (clip.y + clip.height > Math.floor(inner.bottom)) problems.push(`bottom ${clip.y + clip.height} > ${Math.floor(inner.bottom)}`);
+  return problems;
+}
+
+/**
+ * The class bar with a 2px margin of the legend around it. The clip must stay
+ * off the legend's edge: the fresh-paint reference (display none, then back)
+ * repeats the page's bytes everywhere but the legend's anti-aliased edge,
+ * where the panel blends with the map under it and the repaint came out two
+ * ways run to run on the fixed build (up to 5 per channel; the bar and the
+ * panel around it never differed). A clip widened to the whole legend would
+ * flake at the byte comparison, so it fails here instead, every time.
+ */
 async function barShot(page: Page): Promise<Buffer> {
   const box = await page.locator('#main-content .map-legend__bar').boundingBox();
   if (!box) throw new Error('the legend class bar is not rendered');
-  const clip = {
-    x: Math.floor(box.x) - 2,
-    y: Math.floor(box.y) - 2,
-    width: Math.ceil(box.width) + 4,
-    height: Math.ceil(box.height) + 4,
-  };
+  const clip = pixelClip(box, 2);
+  expect(await edgeProblems(page, clip), 'the class-bar clip stays off the legend edge, where a fresh paint is not byte-stable').toEqual([]);
   return page.screenshot({ clip, animations: 'disabled', caret: 'hide', scale: 'css' });
 }
 
@@ -82,6 +125,11 @@ for (const theme of THEMES) {
       spacer.style.blockSize = '0px';
       wrap.before(spacer);
     }, SPACER_ID);
+
+    // Non-vacuity: the edge check rejects a clip of the whole legend, the widening it exists to stop.
+    const legendBox = await legend.boundingBox();
+    if (!legendBox) throw new Error('the legend is not rendered');
+    expect(await edgeProblems(page, pixelClip(legendBox, 0)), 'the edge check rejects the whole legend').not.toEqual([]);
 
     const start = await legendTop(page);
     for (const shift of [0.5, 0]) {
