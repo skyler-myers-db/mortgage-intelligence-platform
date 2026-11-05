@@ -10,29 +10,39 @@ calls the Apps API and never cancels a run.
   ``run_job_task`` closure and every pipeline it starts is bound there too,
   and each was deployed by this deployer's bundle (``deployment.kind`` BUNDLE,
   its metadata file under the client target's root). The **definition
-  digest** is the sha256 of the closure's live job settings and pipeline
-  specs. It also classifies the closure (``touches_gold``: fail closed, any
+  digest** is the sha256 of the closure's bound ids, live job settings and
+  pipeline specs (``job_phase_definition``). It also classifies the closure (``touches_gold``: fail closed, any
   task not provably silver, ref or FRED-only touches gold or the UC
   functions) and admits the phase's budget (``phase_budget``). It writes the
   data plan, a local file.
 * **begin** (under the lease): open a ledger generation
   (``job_phase_ledger``), or resume the open one. An open generation whose
-  entry was run under another definition is **stale** and refuses; only
-  ``--ack-supersede`` equal to the sha256 of its reset plan (printed by the
-  refusal, purpose ``data_ledger_supersede``) retires it, and never while one
-  of its runs is still active.
+  entry ran under another definition or job id is **stale**: only
+  ``--ack-supersede``, the sha256 of its reset plan (printed by the refusal,
+  purpose ``data_ledger_supersede``), retires it. One that must run again
+  though nothing is stale (a smoke that fails after every job succeeded, a run
+  no longer readable) is retired only by ``--ack-rerun``, the sha256 of its
+  rerun plan (printed on every resume, purpose ``data_ledger_rerun``). Neither
+  ack satisfies the other or retires a generation while any of its runs is
+  active, and a resume refuses while an entry outside its plan still runs.
 * **run** (under the lease): recompute the definition digest (it must equal
   the plan's), then re-attach to a running run, skip a succeeded one, or run
   the next attempt of a failed one, with the token
   ``mip-data-<sha256(client, job, definition, generation, attempt)>`` written
   to the ledger before the run-now. A killed phase therefore re-attaches: a run
   id in the ledger is polled, and a token journaled without a run id is
-  re-sent, which the Jobs API answers with the run it already started. It
-  waits until the run ends or ``MIP_JOB_DEADLINE_EPOCH`` minus a reserve:
-  exit 0 succeeded or skipped, 1 the run failed, 4 still running (re-run the
-  phase to re-attach), 2 refused.
+  re-sent, which the Jobs API answers with the run it already started. Every
+  run it reads must be a run of the planned job id, and no run-now is sent
+  while another entry of the generation still runs. It waits until the run
+  ends or ``MIP_JOB_DEADLINE_EPOCH`` minus a reserve: exit 0 succeeded or
+  skipped, 1 the run failed, 4 still running (re-run the phase to re-attach),
+  2 refused.
 * **close** (under the lease): every planned job succeeded under its planned
-  definition; the generation closes, and the next data phase starts a new one.
+  definition and no other entry still runs; the generation closes, and the
+  next data phase starts a new one.
+* **quiet** (read-only, under a release's lease): refuse while any entry of an
+  open generation still runs, so a release (or a run with no ``--phase``)
+  never overlaps the job a data phase left running at its deadline.
 """
 
 from __future__ import annotations
@@ -64,6 +74,8 @@ REPO = Path(__file__).resolve().parents[2]
 
 SUPERSEDE_PURPOSE = "data_ledger_supersede"
 ACK_SUPERSEDE_ENV = "MIP_ACK_DATA_LEDGER_SUPERSEDE"
+RERUN_PURPOSE = "data_ledger_rerun"
+ACK_RERUN_ENV = "MIP_ACK_DATA_LEDGER_RERUN"
 TERMINAL_LIFECYCLE = frozenset({"TERMINATED", "SKIPPED", "INTERNAL_ERROR"})
 POLL_SECONDS = 30
 # The deadline reserve: the reconcile, the verify, the smoke and the close.
@@ -92,6 +104,24 @@ def outcome(run: Any) -> str:
 
 def supersede_digest(body: Mapping[str, Any]) -> str:
     return hashlib.sha256(b"mip-data-ledger-supersede\0" + canonical_json(body)).hexdigest()
+
+
+def rerun_digest(body: Mapping[str, Any]) -> str:
+    return hashlib.sha256(b"mip-data-ledger-rerun\0" + canonical_json(body)).hexdigest()
+
+
+def rerun_body(app_name: str, current: Mapping[str, Any]) -> dict[str, Any]:
+    """The rerun plan of an open generation: every entry it would discard, exactly."""
+
+    return {
+        "purpose": RERUN_PURPOSE,
+        "app_name": app_name,
+        "generation": current["generation"],
+        "jobs": {
+            key: {field: entry[field] for field in ("job_id", "definition_sha256", "attempt", "status", "run_id")}
+            for key, entry in sorted(current["jobs"].items())
+        },
+    }
 
 
 @dataclass(frozen=True)
@@ -129,15 +159,46 @@ def _record(ctx: Context, current: dict[str, Any], key: str, entry: dict[str, An
 
 
 def _active(ctx: Context, entry: Mapping[str, Any]) -> bool:
+    """Is this entry's run still going? A run that cannot be read is judged by its job's active runs."""
+
+    if entry["status"] not in {"running", "submitted"}:
+        return False
     if entry["status"] == "running":
-        return outcome(ctx.workspace.jobs.get_run(int(entry["run_id"]))) == "running"
-    if entry["status"] == "submitted":
-        return any(True for _ in ctx.workspace.jobs.list_runs(job_id=int(entry["job_id"]), active_only=True))
-    return False
+        try:
+            run = ctx.workspace.jobs.get_run(int(entry["run_id"]))
+        except Exception:  # noqa: BLE001 - unreadable (a purged run): the job's own active runs decide
+            run = None
+        if run is not None:
+            return outcome(run) == "running"
+    return any(True for _ in ctx.workspace.jobs.list_runs(job_id=int(entry["job_id"]), active_only=True))
 
 
-def begin(ctx: Context, plan: Mapping[str, Any], *, ack: str) -> dict[str, Any]:
-    """Open a generation, resume the open one, or retire a stale one only by its exact ack."""
+def _still_running(ctx: Context, current: Mapping[str, Any], keys: Any) -> list[str]:
+    return [key for key in sorted(keys) if _active(ctx, current["jobs"][key])]
+
+
+def _retire(ctx: Context, current: dict[str, Any], fresh: dict[str, Any], *, reason: str) -> dict[str, Any]:
+    """Supersede the open generation by an exact ack, never while any of its runs is still active."""
+
+    busy = _still_running(ctx, current, current["jobs"])
+    if busy:
+        raise Refused(
+            f"{reason}: jobs.{', jobs.'.join(busy)} of the open generation is still active; "
+            "wait for it to end (it is never cancelled)"
+        )
+    superseded = _write(ctx, current, {**current, "state": "superseded"})
+    return _write(ctx, superseded, fresh)
+
+
+def _assert_run_of(run: Any, entry: Mapping[str, Any], key: str) -> None:
+    """A run the ledger names must be a run of the planned (bound) job id."""
+
+    if str(getattr(run, "job_id", "") or "") != str(entry["job_id"]):
+        raise Refused(f"the run the ledger names for jobs.{key} is not a run of its bound job; nothing was run")
+
+
+def begin(ctx: Context, plan: Mapping[str, Any], *, ack: str, rerun_ack: str = "") -> dict[str, Any]:
+    """Open a generation, resume the open one, or retire it only by the exact ack of its purpose."""
 
     current = ledger.read(ctx.workspace, app_name=ctx.app_name)
     fresh = ledger.new_generation(
@@ -150,9 +211,27 @@ def begin(ctx: Context, plan: Mapping[str, Any], *, ack: str) -> dict[str, Any]:
     stale = {
         key: entry
         for key, entry in sorted(current["jobs"].items())
-        if key in planned and entry["definition_sha256"] != planned[key]["definition_sha256"]
+        if key in planned
+        and (
+            entry["definition_sha256"] != planned[key]["definition_sha256"]
+            or entry["job_id"] != str(planned[key]["job_id"])
+        )
     }
     if not stale:
+        if rerun_ack:
+            digest = rerun_digest(rerun_body(ctx.app_name, current))
+            if rerun_ack != digest:
+                raise Refused(
+                    f"ledger_rerun: {ACK_RERUN_ENV} is not the open generation's rerun plan; it is now "
+                    f"{digest}: review the generation, then re-run with it exported for one run"
+                )
+            return _retire(ctx, current, fresh, reason="ledger_rerun")
+        outside = _still_running(ctx, current, set(current["jobs"]) - set(planned))
+        if outside:
+            raise Refused(
+                f"jobs.{', jobs.'.join(outside)} of the open generation is still running outside this "
+                "phase's plan; wait for it to end, or re-run --phase data with it planned to re-attach"
+            )
         return current
     body = {
         "purpose": SUPERSEDE_PURPOSE,
@@ -164,6 +243,8 @@ def begin(ctx: Context, plan: Mapping[str, Any], *, ack: str) -> dict[str, Any]:
                 "run_id": entry["run_id"],
                 "ledger_definition_sha256": entry["definition_sha256"],
                 "live_definition_sha256": planned[key]["definition_sha256"],
+                "ledger_job_id": entry["job_id"],
+                "live_job_id": str(planned[key]["job_id"]),
             }
             for key, entry in stale.items()
         },
@@ -174,10 +255,7 @@ def begin(ctx: Context, plan: Mapping[str, Any], *, ack: str) -> dict[str, Any]:
             f"stale_definition: the open data-phase generation ran {', '.join(stale)} under another "
             f"definition; review it, then re-run with {ACK_SUPERSEDE_ENV}={digest} exported for one run"
         )
-    if any(_active(ctx, entry) for entry in stale.values()):
-        raise Refused("stale_definition: a stale run is still active; wait for it to end (it is never cancelled)")
-    superseded = _write(ctx, current, {**current, "state": "superseded"})
-    return _write(ctx, superseded, fresh)
+    return _retire(ctx, current, fresh, reason="stale_definition")
 
 
 def start_run(ctx: Context, entry: Mapping[str, Any]) -> str:
@@ -196,18 +274,35 @@ def run_job(ctx: Context, plan: Mapping[str, Any], planned: Mapping[str, Any], *
     assert current is not None
     key = str(planned["key"])
     entry = current["jobs"].get(key)
-    if entry is not None and entry["definition_sha256"] != planned["definition_sha256"]:
-        raise Refused(f"stale_definition: {key} ran under another definition in this generation")
+    if entry is not None and (
+        entry["definition_sha256"] != planned["definition_sha256"] or entry["job_id"] != str(planned["job_id"])
+    ):
+        raise Refused(f"stale_definition: {key} ran under another definition or job id in this generation")
     if entry is not None and entry["status"] == "succeeded":
         return 0, "skipped (succeeded in this generation)"
     if entry is not None and entry["status"] == "running":
-        state = outcome(ctx.workspace.jobs.get_run(int(entry["run_id"])))
+        try:
+            run = ctx.workspace.jobs.get_run(int(entry["run_id"]))
+        except Exception as exc:  # noqa: BLE001 - the class only; the ledger keeps the run id
+            raise Refused(
+                f"the run of {key} could not be read ({type(exc).__name__}); re-run --phase data to "
+                f"re-attach, or, if it stays unreadable, retire the generation with {ACK_RERUN_ENV}"
+            ) from None
+        _assert_run_of(run, entry, key)
+        state = outcome(run)
         if state == "running":
             return _wait(ctx, current, key, entry, deadline=deadline, label="re-attached")
         entry = {**entry, "status": state}
         current = _record(ctx, current, key, entry)
         if state == "succeeded":
             return 0, "skipped (succeeded while no runner watched)"
+    # One job at a time: silver never refreshes under a running gold, nor gold under a running silver.
+    busy = _still_running(ctx, current, set(current["jobs"]) - {key})
+    if busy:
+        raise Refused(
+            f"jobs.{', jobs.'.join(busy)} of this generation is still running; {key} starts only after "
+            "it ends (re-run --phase data to re-attach to it)"
+        )
     if entry is None or entry["status"] == "failed":
         attempt = 1 if entry is None else int(entry["attempt"]) + 1
         entry = {
@@ -246,6 +341,7 @@ def _wait(
                 raise Refused(f"the run of {key} could not be read ({type(exc).__name__}); re-run to re-attach") from None
             ctx.sleep(POLL_SECONDS)
             continue
+        _assert_run_of(run, entry, key)
         state = outcome(run)
         if state != "running":
             result = f"{enum_value(run.state.life_cycle_state)}/{enum_value(run.state.result_state)}"
@@ -265,9 +361,26 @@ def close(ctx: Context, plan: Mapping[str, Any]) -> dict[str, Any]:
     assert current is not None
     for item in plan["jobs"]:
         entry = current["jobs"].get(item["key"])
-        if entry is None or entry["status"] != "succeeded" or entry["definition_sha256"] != item["definition_sha256"]:
+        if (
+            entry is None
+            or entry["status"] != "succeeded"
+            or (entry["definition_sha256"], entry["job_id"]) != (item["definition_sha256"], str(item["job_id"]))
+        ):
             raise Refused(f"jobs.{item['key']} has not succeeded under its planned definition")
+    busy = _still_running(ctx, current, set(current["jobs"]) - {item["key"] for item in plan["jobs"]})
+    if busy:
+        raise Refused(f"jobs.{', jobs.'.join(busy)} of this generation is still running; it closes only when none does")
     return _write(ctx, current, {**current, "state": "closed"})
+
+
+def quiet(ctx: Context) -> list[str]:
+    """Read-only: the entries of an open generation whose runs are still going."""
+
+    current = ledger.read(ctx.workspace, app_name=ctx.app_name)
+    if ledger.state_of(current) != "open":
+        return []
+    assert current is not None
+    return _still_running(ctx, current, current["jobs"])
 
 
 def _load_plan(path: Path) -> dict[str, Any]:
@@ -285,12 +398,14 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--skip-silver", choices=("0", "1"), default="0")
     plan.add_argument("--deadline-epoch", default="")
     plan.add_argument("--out", type=Path, required=True)
+    sub.add_parser("quiet").add_argument("--app-name", required=True)
     for name in ("begin", "run", "close"):
         mode = sub.add_parser(name)
         mode.add_argument("--plan", type=Path, required=True)
         mode.add_argument("--lease-id", required=True)
         mode.add_argument("--source-git-sha", required=True)
     sub.choices["begin"].add_argument("--ack-supersede", default="")
+    sub.choices["begin"].add_argument("--ack-rerun", default="")
     sub.choices["run"].add_argument("--job-key", required=True, choices=phase_budget.DATA_JOBS)
     sub.choices["run"].add_argument("--deadline-epoch", default="")
     sub.choices["run"].add_argument("--out-env", type=Path, required=True)
@@ -322,11 +437,25 @@ def _dispatch(args: argparse.Namespace, workspace: Any, environ: Mapping[str, st
             )
         print(f"  {phase_budget.describe(plan['budget'], args.deadline_epoch, now=time.time())}")
         return 0
+    if args.command == "quiet":
+        busy = quiet(Context(workspace, args.app_name, "", "", **clock))
+        if busy:
+            raise Refused(
+                f"jobs.{', jobs.'.join(busy)} of the open data-phase generation is still running; wait for it, "
+                "or re-run --phase data to re-attach"
+            )
+        print("[job-phase] no data-phase job is running")
+        return 0
     plan = _load_plan(args.plan)
     ctx = Context(workspace, str(plan["app_name"]), args.lease_id, args.source_git_sha, **clock)
     if args.command == "begin":
-        record = begin(ctx, plan, ack=args.ack_supersede.strip())
+        record = begin(ctx, plan, ack=args.ack_supersede.strip(), rerun_ack=args.ack_rerun.strip())
         print(f"[job-phase] generation {record['generation'][:8]} open ({len(record['jobs'])} recorded run(s))")
+        if record["jobs"]:
+            print(
+                "  a succeeded run skips; to retire this generation and rerun every job, review it, then "
+                f"export {ACK_RERUN_ENV}={rerun_digest(rerun_body(ctx.app_name, record))} for one run"
+            )
         return 0
     if args.command == "close":
         close(ctx, plan)
@@ -336,6 +465,8 @@ def _dispatch(args: argparse.Namespace, workspace: Any, environ: Mapping[str, st
     if deadline is None:
         raise Refused("run needs MIP_JOB_DEADLINE_EPOCH; a governed data phase always has one")
     planned = next(item for item in plan["jobs"] if item["key"] == args.job_key)
+    # The classification first, so the shell reconciles after a refusal too (fail closed).
+    args.out_env.write_text(f"JOB_PHASE_TOUCHES_GOLD={1 if planned['touches_gold'] else 0}\n", encoding="utf-8")
     deployer, client_key = profile_install(environ, env_file)
     (live,) = live_definitions(workspace, deployer=deployer, client_key=client_key, jobs=(args.job_key,))
     if (live.job_id, live.sha256) != (planned["job_id"], planned["definition_sha256"]):

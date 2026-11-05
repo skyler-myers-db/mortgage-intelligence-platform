@@ -69,7 +69,7 @@ def test_the_data_phases_run_now_is_reached_only_through_the_runners_run_mode() 
     assert stops.reaching_entry_points(sites={RUNNER_SITE})[RUNNER_SITE] == {"tools.databricks.job_phase_runner"}
     entry = stops.ENTRY_POINTS["tools.databricks.job_phase_runner"]
     assert entry.callers == frozenset({stops.DATA_PHASE_LIBRARY})
-    assert entry.modes == {"plan": False, "begin": True, "run": True, "close": True}
+    assert entry.modes == {"plan": False, "quiet": False, "begin": True, "run": True, "close": True}
     assert not any("job_phase" in site[0] for site in stops.python_primitive_sites())
     run_now = {site for site in stops.python_job_run_sites() if site[2].startswith("run_now")}
     assert run_now == {RUNNER_SITE}, "no other tool or job source starts a job run"

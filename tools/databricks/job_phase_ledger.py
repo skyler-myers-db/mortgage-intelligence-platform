@@ -11,7 +11,8 @@ re-attaches instead of starting a second run.
 One **generation** is one data phase until it completes. It goes ``open`` ->
 ``closed`` once every planned job succeeded and its grants were reconciled and
 verified, or ``open`` -> ``superseded`` when an operator acknowledges, by the
-exact digest of the reset plan, that a stale generation is retired. Only a
+exact digest of its purpose's plan, that a stale generation (or one that must
+run again) is retired. Only a
 ``closed`` or ``superseded`` generation (or none) is followed by a new one.
 
 Each job entry moves ``submitted`` (the idempotency token is journaled before

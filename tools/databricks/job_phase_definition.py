@@ -9,11 +9,16 @@ under it:
   ``run_job_task`` closure starts and every pipeline a ``pipeline_task``
   starts;
 * each was deployed by this deployer's bundle: ``deployment.kind`` BUNDLE and
-  its metadata file under the client target's root (the first governed data
-  phase owes the live capture of both fields, with spike S1's);
-* the **definition digest** is the sha256 of the closure's live job settings
-  and pipeline specs, so a redeploy or an edit between the plan, the run and
-  the ledger's earlier attempt is a different definition;
+  its metadata file under the client target's root (an unspiked assumption no
+  plan section 7 spike covers: the first governed data phase owes the live
+  capture of both fields, and any other shape refuses);
+* the **definition digest** is the sha256 of the closure's bound ids, live job
+  settings and pipeline specs, so a rebind (a job recreated under a new id),
+  an edit, or a bundle deploy that changes any of them between the plan, the
+  run and the ledger's earlier attempt is a different definition. It does not
+  cover the deployed files a task names by path (the SQL and Python content):
+  a release that changes only those keeps the digest, so a job that succeeded
+  in the open generation still skips (the rerun ack retires it);
 * ``touches_gold`` fails closed: a task touches gold or the UC functions
   unless it is a silver, ref or catalog-DDL SQL file or the FRED or KPI
   script; a run, pipeline or notebook task always does. The data phase
@@ -108,6 +113,9 @@ def definition(workspace: Any, *, document: Mapping[str, Any] | None, root: str,
     jobs_by_id, pipelines_by_id = _reverse(document, "jobs"), _reverse(document, "pipelines")
     settings: dict[str, Any] = {}
     specs: dict[str, Any] = {}
+    # The bound ids are part of the definition: a job recreated under a new id
+    # with byte-identical settings is another job (the ledger names the old one).
+    ids: dict[str, dict[str, str]] = {"jobs": {}, "pipelines": {}}
     touches = False
     frontier = [(job_key, job_id)]
     while frontier:
@@ -119,6 +127,7 @@ def definition(workspace: Any, *, document: Mapping[str, Any] | None, root: str,
         if body.get("name") != key:
             raise Refused(f"jobs.{key} is named otherwise than its bundle key")
         settings[key] = body
+        ids["jobs"][key] = str(live_id)
         for task in body.get("tasks") or ():
             touches = touches or task_touches_gold(task)
             child = str((task.get("run_job_task") or {}).get("job_id") or "")
@@ -133,8 +142,9 @@ def definition(workspace: Any, *, document: Mapping[str, Any] | None, root: str,
                 spec = workspace.pipelines.get(pipeline).spec.as_dict()
                 _assert_bundle_deployed("pipelines", pipelines_by_id[pipeline], spec.get("deployment"), root=root)
                 specs[pipelines_by_id[pipeline]] = spec
+                ids["pipelines"][pipelines_by_id[pipeline]] = pipeline
     digest = hashlib.sha256(
-        b"mip-data-phase-definition\0" + canonical_json({"jobs": settings, "pipelines": specs})
+        b"mip-data-phase-definition\0" + canonical_json({"ids": ids, "jobs": settings, "pipelines": specs})
     ).hexdigest()
     return Definition(job_key, job_id, digest, touches, tuple(sorted(settings)), tuple(sorted(specs)))
 

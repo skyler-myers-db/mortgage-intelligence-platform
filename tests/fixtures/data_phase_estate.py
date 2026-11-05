@@ -123,7 +123,10 @@ def state_document(*, jobs: dict[str, int] | None = None, pipelines: dict[str, s
 
 @dataclass
 class FakeJobs:
-    """Jobs API by job id; run-now honours the idempotency token like the service does."""
+    """Jobs API by job id; run-now honours the idempotency token like the service does.
+
+    Each run reports the job id it was started for, as ``runs/get`` does.
+    """
 
     settings: dict[str, dict[str, Any]]
     # run_id -> the life-cycle/result states each get_run returns, in order (the last repeats).
@@ -134,9 +137,12 @@ class FakeJobs:
     tokens: dict[str, int] = field(default_factory=dict)
     active: dict[int, list[int]] = field(default_factory=dict)
     next_run_id: int = 9000
+    # bundle key -> live job id (a job recreated under a new id is rebound here).
+    ids: dict[str, int] = field(default_factory=lambda: dict(JOB_IDS))
+    run_jobs: dict[int, int] = field(default_factory=dict)
 
     def _by_id(self) -> dict[int, str]:
-        return {JOB_IDS[key]: key for key in self.settings}
+        return {self.ids[key]: key for key in self.settings}
 
     def get(self, job_id: int) -> Job:
         key = self._by_id().get(int(job_id))
@@ -150,6 +156,7 @@ class FakeJobs:
             self.next_run_id += 1
             self.tokens[idempotency_token] = self.next_run_id
             self.scripts[self.next_run_id] = list(self.next_script)
+            self.run_jobs[self.next_run_id] = int(job_id)
         run_id = self.tokens[idempotency_token]
         return Wait(lambda **_: None, response=RunNowResponse.from_dict({"run_id": run_id}), run_id=run_id)
 
@@ -159,7 +166,7 @@ class FakeJobs:
         state: dict[str, str] = {"life_cycle_state": lifecycle}
         if result:
             state["result_state"] = result
-        return Run.from_dict({"run_id": int(run_id), "state": state})
+        return Run.from_dict({"run_id": int(run_id), "job_id": self.run_jobs.get(int(run_id)), "state": state})
 
     def list_runs(self, *, job_id: int, active_only: bool) -> Iterator[Run]:
         assert active_only
@@ -188,6 +195,14 @@ class DataPhaseEstate:
         state = document if document is not None else state_document()
         self.workspace.data[api_path(bundle_state.state_path(deployer=DEPLOYER, client_key=CLIENT))] = json.dumps(
             state
+        ).encode("utf-8")
+
+    def rebind(self, key: str, job_id: int) -> None:
+        """The job is recreated under ``job_id`` with the same settings, and the bundle state binds it."""
+
+        self.jobs.ids[key] = job_id
+        self.workspace.data[api_path(bundle_state.state_path(deployer=DEPLOYER, client_key=CLIENT))] = json.dumps(
+            state_document(jobs=self.jobs.ids)
         ).encode("utf-8")
 
     def ledger_bytes(self) -> bytes | None:

@@ -193,8 +193,8 @@ def test_the_job_phase_runners_mutating_modes_are_the_data_phase_librarys_alone(
     for path in (stops.WINDOW_LIBRARY, "scripts/lib/deploy_step_app_promotion_and_refresh.sh", "scripts/deploy.sh"):
         assert stops.shell_violations(path, line), f"{mode} in {path}"
     assert stops.shell_violations(stops.DATA_PHASE_LIBRARY, line) == []
-    plan = line.replace(f" {mode} ", " plan ")
-    assert stops.shell_violations("scripts/lib/deploy_step_automation_identities.sh", plan) == []
+    for read_only in ("plan", "quiet"):
+        assert stops.shell_violations("scripts/lib/deploy_step_automation_identities.sh", line.replace(f" {mode} ", f" {read_only} ")) == []
 
 
 def test_a_bundle_job_runs_from_shell_only_at_its_reviewed_site() -> None:

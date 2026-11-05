@@ -192,10 +192,10 @@ ENTRY_POINTS: Mapping[str, EntryPoint] = {
         },
         callers=frozenset({WINDOW_LIBRARY}),
     ),
-    # The data phase's runner (M1-PR6): plan is read-only; begin, run and close
-    # write the signed ledger, and run starts the job. No App call at all.
+    # The data phase's runner (M1-PR6): plan and quiet are read-only; begin,
+    # run and close write the signed ledger, and run starts the job. No App call.
     "tools.databricks.job_phase_runner": EntryPoint(
-        modes={"plan": False, "begin": True, "run": True, "close": True},
+        modes={"plan": False, "quiet": False, "begin": True, "run": True, "close": True},
         callers=frozenset({DATA_PHASE_LIBRARY}),
     ),
 }
