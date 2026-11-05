@@ -37,12 +37,10 @@ calls the Apps API and never cancels a run.
   ends or ``MIP_JOB_DEADLINE_EPOCH`` minus a reserve: exit 0 succeeded or
   skipped, 1 the run failed, 4 still running (re-run the phase to re-attach),
   2 refused.
-* **close** (under the lease): every planned job succeeded under its planned
-  definition and no other entry still runs; the generation closes, and the
-  next data phase starts a new one.
-* **quiet** (read-only, under a release's lease): refuse while any entry of an
-  open generation still runs, so a release (or a run with no ``--phase``)
-  never overlaps the job a data phase left running at its deadline.
+* **close** (under the lease): every planned job succeeded and no other entry
+  still runs; the generation closes, and the next data phase opens a new one.
+* **quiet** (read-only): a release's (or a no-phase run's) refusal, under its
+  lease, while a job a data phase left at its deadline still runs.
 """
 
 from __future__ import annotations
@@ -177,15 +175,16 @@ def _still_running(ctx: Context, current: Mapping[str, Any], keys: Any) -> list[
     return [key for key in sorted(keys) if _active(ctx, current["jobs"][key])]
 
 
+def _jobs(keys: Sequence[str]) -> str:
+    return ", ".join(f"jobs.{key}" for key in keys)
+
+
 def _retire(ctx: Context, current: dict[str, Any], fresh: dict[str, Any], *, reason: str) -> dict[str, Any]:
     """Supersede the open generation by an exact ack, never while any of its runs is still active."""
 
     busy = _still_running(ctx, current, current["jobs"])
     if busy:
-        raise Refused(
-            f"{reason}: jobs.{', jobs.'.join(busy)} of the open generation is still active; "
-            "wait for it to end (it is never cancelled)"
-        )
+        raise Refused(f"{reason}: {_jobs(busy)} of the open generation is still active; wait for it to end (it is never cancelled)")
     superseded = _write(ctx, current, {**current, "state": "superseded"})
     return _write(ctx, superseded, fresh)
 
@@ -221,17 +220,13 @@ def begin(ctx: Context, plan: Mapping[str, Any], *, ack: str, rerun_ack: str = "
         if rerun_ack:
             digest = rerun_digest(rerun_body(ctx.app_name, current))
             if rerun_ack != digest:
-                raise Refused(
-                    f"ledger_rerun: {ACK_RERUN_ENV} is not the open generation's rerun plan; it is now "
-                    f"{digest}: review the generation, then re-run with it exported for one run"
-                )
+                raise Refused(f"ledger_rerun: {ACK_RERUN_ENV} is not the open generation's rerun plan; it is now "
+                              f"{digest}: review the generation, then re-run with it exported for one run")
             return _retire(ctx, current, fresh, reason="ledger_rerun")
         outside = _still_running(ctx, current, set(current["jobs"]) - set(planned))
         if outside:
-            raise Refused(
-                f"jobs.{', jobs.'.join(outside)} of the open generation is still running outside this "
-                "phase's plan; wait for it to end, or re-run --phase data with it planned to re-attach"
-            )
+            raise Refused(f"{_jobs(outside)} of the open generation is still running outside this phase's plan; "
+                          "wait for it to end, or re-run --phase data with it planned to re-attach")
         return current
     body = {
         "purpose": SUPERSEDE_PURPOSE,
@@ -299,10 +294,8 @@ def run_job(ctx: Context, plan: Mapping[str, Any], planned: Mapping[str, Any], *
     # One job at a time: silver never refreshes under a running gold, nor gold under a running silver.
     busy = _still_running(ctx, current, set(current["jobs"]) - {key})
     if busy:
-        raise Refused(
-            f"jobs.{', jobs.'.join(busy)} of this generation is still running; {key} starts only after "
-            "it ends (re-run --phase data to re-attach to it)"
-        )
+        raise Refused(f"{_jobs(busy)} of this generation is still running; {key} starts only after it ends "
+                      "(re-run --phase data to re-attach to it)")
     if entry is None or entry["status"] == "failed":
         attempt = 1 if entry is None else int(entry["attempt"]) + 1
         entry = {
@@ -369,7 +362,7 @@ def close(ctx: Context, plan: Mapping[str, Any]) -> dict[str, Any]:
             raise Refused(f"jobs.{item['key']} has not succeeded under its planned definition")
     busy = _still_running(ctx, current, set(current["jobs"]) - {item["key"] for item in plan["jobs"]})
     if busy:
-        raise Refused(f"jobs.{', jobs.'.join(busy)} of this generation is still running; it closes only when none does")
+        raise Refused(f"{_jobs(busy)} of this generation is still running; it closes only when none does")
     return _write(ctx, current, {**current, "state": "closed"})
 
 
@@ -440,10 +433,7 @@ def _dispatch(args: argparse.Namespace, workspace: Any, environ: Mapping[str, st
     if args.command == "quiet":
         busy = quiet(Context(workspace, args.app_name, "", "", **clock))
         if busy:
-            raise Refused(
-                f"jobs.{', jobs.'.join(busy)} of the open data-phase generation is still running; wait for it, "
-                "or re-run --phase data to re-attach"
-            )
+            raise Refused(f"{_jobs(busy)} of the open data-phase generation is still running; wait for it, or re-run --phase data to re-attach")
         print("[job-phase] no data-phase job is running")
         return 0
     plan = _load_plan(args.plan)
@@ -472,10 +462,8 @@ def _dispatch(args: argparse.Namespace, workspace: Any, environ: Mapping[str, st
     if (live.job_id, live.sha256) != (planned["job_id"], planned["definition_sha256"]):
         raise Refused(f"jobs.{args.job_key} changed since the data plan; re-plan the data phase")
     rc, label = run_job(ctx, plan, planned, deadline=deadline)
-    args.out_env.write_text(
-        f"JOB_PHASE_TOUCHES_GOLD={1 if planned['touches_gold'] else 0}\nJOB_PHASE_OUTCOME={label.split()[0]}\n",
-        encoding="utf-8",
-    )
+    with args.out_env.open("a", encoding="utf-8") as out:
+        out.write(f"JOB_PHASE_OUTCOME={label.split()[0]}\n")
     print(f"[job-phase] jobs.{args.job_key}: {label}")
     return rc
 
