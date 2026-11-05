@@ -174,6 +174,87 @@ def test_tier_b_refuses_a_tampered_copy_and_an_unproven_payload(world: CoreWorld
     assert world.treatments[-1] == "quiesce"
 
 
+def test_a_green_deploy_that_never_began_leaves_blue_serving_with_no_redeploy(world: CoreWorld) -> None:
+    """Review of #319: blue still active, newest and healthy is restored by redeploying nothing."""
+
+    before = world.record()
+    assert before is not None and before["restore_payload"] is None, "an adopted blue no release proved"
+
+    record = core_blue_restore.restore_core_blue(
+        world, **world.kwargs(), expected_rollback_deployment_id="deployment-blue"
+    )
+
+    assert world.apps.mutations == [] and world.apps.deployed == [], "never a deploy over blue"
+    assert record == before and world.record() == before, "never re-pinned"
+    assert world.health_calls == ["deployment-blue"]
+    assert world.treatments == ["quiesce", "runtime"]
+
+
+@pytest.mark.parametrize("doubt", ["pending", "unhealthy", "stopped", "not_newest"])
+def test_any_doubt_that_blue_still_serves_is_tier_bs(world: CoreWorld, doubt: str) -> None:
+    from types import SimpleNamespace
+
+    if doubt == "pending":
+        world.pending = SimpleNamespace(deployment_id="deployment-green")
+    elif doubt == "unhealthy":
+        world.main = "f" * 40  # the App serves another commit than the record's
+    elif doubt == "stopped":
+        world.compute = "STOPPED"
+    else:
+        world.deployments.append("deployment-newer")  # a newer succeeded deployment, not active
+        world.add_files("deployment-newer")
+
+    with pytest.raises(Exception) as refused:
+        core_blue_restore.restore_core_blue(world, **world.kwargs())
+    assert getattr(refused.value, "code", None) == "no_restore_payload", doubt
+    assert world.apps.deployed == [] and world.treatments[-1] == "quiesce"
+
+
+def test_a_copy_changed_during_the_start_refuses_before_the_deploy(world: CoreWorld) -> None:
+    """Review of #319: the start can wait minutes; the copy is re-hashed again right before the deploy."""
+
+    world.prove_restore_payload()
+    world.activate_green()
+    world.compute = "STOPPED"
+    record = world.record()
+    assert record is not None
+    real_start = world.apps.start
+
+    def start_then_tamper(name: str) -> Any:
+        started = real_start(name)
+        world.tree.add_file(f"{record['restore_source_path'].removeprefix('/Workspace')}/backend/planted.py", b"x\n")
+        return started
+
+    world.apps.start = start_then_tamper  # type: ignore[method-assign]
+    with pytest.raises(RestoreProofRefused) as refused:
+        core_blue_restore.restore_core_blue(world, **world.kwargs())
+    assert refused.value.code == "copy_tampered"
+    assert world.apps.deployed == [] and world.record() == record
+
+
+def test_a_copy_changed_inside_the_deploy_is_never_signed_as_blue(
+    world: CoreWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deployment's own snapshot must hash to blue's tree, as the core capture's does."""
+
+    world.prove_restore_payload()
+    world.activate_green()
+    record = world.record()
+    assert record is not None
+    real = world.apps.deploy_and_wait
+
+    def tamper_then_deploy(name: str, deployment: Any, timeout: Any = None) -> Any:
+        world.tree.add_file(f"{record['restore_source_path'].removeprefix('/Workspace')}/backend/planted.py", b"x\n")
+        return real(name, deployment, timeout)
+
+    monkeypatch.setattr(world.apps, "deploy_and_wait", tamper_then_deploy)
+    with pytest.raises(core_blue.CoreBlueRefused) as refused:
+        core_blue_restore.restore_core_blue(world, **world.kwargs())
+    assert refused.value.code == "restore_unproven" and "snapshot" in str(refused.value)
+    assert world.record() == record, "never re-pinned"
+    assert world.treatments[-1] == "quiesce"
+
+
 def test_tier_b_refuses_a_record_that_changed_after_step_0a(world: CoreWorld) -> None:
     world.prove_restore_payload()
     world.activate_green()

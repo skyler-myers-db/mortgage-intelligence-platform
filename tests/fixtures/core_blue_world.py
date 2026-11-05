@@ -3,8 +3,9 @@
 ``CoreWorld`` is adopt-live's World (tests/fixtures/adopt_live_world.py)
 after its adoption, with an Apps API that can also deploy, start and update:
 a deploy records the payload and becomes the active deployment from the
-payload's own source and env-name set, a start snapshots the active source,
-and an update replaces the bindings. Every call is recorded in
+payload's own source and env-name set, its ``/src/`` snapshot a byte copy of
+that source at deploy time (as adopt-live proves of the live App), a start
+snapshots the active source the same way, and an update replaces the bindings. Every call is recorded in
 ``apps.mutations``. ``serves`` and ``converge_treatment`` are the injected checks the
 core tools take, recording what they were asked. Every value is synthetic.
 """
@@ -16,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+
+from databricks.sdk.service.workspace import ObjectType
 
 from tests.fixtures import rollback_records as rr
 from tests.fixtures.adopt_live_world import DIST, World, make_repo
@@ -45,6 +48,7 @@ class CoreApps:
         new = f"deployment-restored-{len(self.world.deployments)}"
         names = sorted(str(item["name"]) for item in payload["env_vars"])
         self.world.add_deployment(new, source=str(payload["source_code_path"]), env_names=names)
+        self.world.snapshot_source(new, str(payload["source_code_path"]))
         return SimpleNamespace(deployment_id=new, status=SimpleNamespace(state="SUCCEEDED"))
 
     def start(self, name: str) -> SimpleNamespace:
@@ -53,6 +57,7 @@ class CoreApps:
         active = world.deployment(world.active)
         new = f"deployment-started-{len(world.deployments)}"
         world.add_deployment(new, source=active.source_code_path, env_names=list(world.env_names))
+        world.snapshot_source(new, active.source_code_path)
         world.compute = "ACTIVE"
         return SimpleNamespace(response=SimpleNamespace(pending_deployment=SimpleNamespace(deployment_id=new)))
 
@@ -87,6 +92,16 @@ class CoreWorld(World):
         self.sources[deployment_id] = source
         self.env_sets[deployment_id] = env_names
         self.active = deployment_id
+
+    def snapshot_source(self, deployment_id: str, source: str) -> None:
+        """The platform's ``/src/`` snapshot of ``source`` for ``deployment_id``: every file, copied now."""
+
+        root = source.removeprefix("/Workspace")
+        target = self.snapshot(deployment_id).removeprefix("/Workspace")
+        for path in self.tree.below(root):
+            node = self.tree.nodes[path]
+            if node.kind is ObjectType.FILE:
+                self.tree.add_file(target + path[len(root) :], node.data)
 
     # -- the checks the core tools inject ------------------------------------------
     def serves(self, record: dict[str, Any], deployment_id: str) -> None:

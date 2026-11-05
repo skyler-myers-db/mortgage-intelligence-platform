@@ -140,6 +140,17 @@ def test_a_release_folder_that_is_not_the_staged_release_refuses(world: CoreWorl
     assert refused.value.code == "tree_drift" and world.treatments == []
 
 
+@pytest.mark.parametrize("change", ["added", "changed"])
+def test_a_deployment_snapshot_that_is_not_the_staged_release_refuses(world: CoreWorld, change: str) -> None:
+    """Review of #319: the folder still equals the staged release; only what the App runs differs."""
+
+    relpath = "backend/extra.py" if change == "added" else sorted(STAGED)[0]
+    world.tree.add_file(f"{world.snapshot('deployment-green').removeprefix('/Workspace')}/{relpath}", b"x\n")
+    with pytest.raises(CoreBlueRefused) as refused:
+        _capture(world)
+    assert refused.value.code == "tree_drift" and world.treatments == []
+
+
 def test_a_health_drift_after_the_runtime_grant_quiesces_treatment_again(world: CoreWorld) -> None:
     answers = iter([(world.main, None, rr.LEASE_ID, world.active), ("e" * 40, None, rr.LEASE_ID, world.active)])
     with pytest.raises(CoreBlueRefused) as refused:
