@@ -2,7 +2,9 @@ name: deploy-dev
 # One client per dispatch (M1-PR7). `client` names the client's GitHub
 # Environment, whose variables (public fields) and secrets (identifying and
 # secret fields) hold its whole profile (tools/clients/schema.py); nothing
-# client-specific lives in this file. `phase` is the scripts/deploy.sh
+# client-specific lives in this file. No step holds a whole vars or secrets
+# context: a step's env prints in its log header, and a variable prints in
+# clear (tools/clients/workflow_contexts.py names the two steps that read one). `phase` is the scripts/deploy.sh
 # --phase the run executes: `plan` is read-only, the others mutate behind the
 # environment's approval. Manual dispatch only: no push, pull_request or
 # schedule trigger reaches a deploy job.
@@ -67,12 +69,22 @@ jobs:
   check-dispatch:
     # Before any job names an environment: GitHub creates an environment the
     # first time a job references a name it does not know, with no protection
-    # rules, so a malformed client key never reaches `environment:`. A
-    # well-formed key that has no environment yet resolves no profile and
-    # refuses in the deploy job, before any ID token is exchanged.
+    # rules, so a malformed client key never reaches `environment:`, and an
+    # environment that is not a client's (dev, copilot, github-pages) never
+    # becomes a deploy target. A well-formed key that has no environment yet
+    # resolves no profile and refuses in the deploy job, before any ID token
+    # is exchanged.
     if: ${{ inputs.acknowledge_single_maintainer_break_glass }}
     runs-on: ubuntu-latest
     steps:
+      - name: Refuse step debug logging
+        # Step debug logging traces every expression with its operands before
+        # a step runs, a variable's value included, and variables are never
+        # masked: no step of this job may run under it.
+        if: ${{ runner.debug == '1' }}
+        run: |
+          echo "::error::deploy-dev.yml refuses step debug logging: it prints expression operands, variables included, in clear."
+          exit 1
       - name: Refuse a malformed client key or phase
         env:
           MIP_DISPATCH_CLIENT: ${{ inputs.client }}
@@ -83,10 +95,172 @@ jobs:
             echo "::error::client must be a client key: 2-31 lowercase letters, digits or '-', from a letter."
             exit 1
           fi
+          case "$MIP_DISPATCH_CLIENT" in
+            copilot|dev|github-pages) echo "::error::client must name a client's environment; ${MIP_DISPATCH_CLIENT} is not one."; exit 1 ;;
+          esac
           case "$MIP_DISPATCH_PHASE" in
             plan|release|data|adopt|unadopt) ;;
             *) echo "::error::phase must be plan, release, data, adopt or unadopt."; exit 1 ;;
           esac
+      - name: Refuse a profile name set at repository or organization level
+        # This job runs in no environment, so vars and secrets hold only
+        # repository and organization entries here. GitHub merges those into
+        # every client environment's contexts, and nothing says which scope an
+        # entry came from: a field a client's environment omits would be filled
+        # silently from another install's. Each expression yields a name or
+        # nothing, never a value (generated: python -m
+        # tools.clients.workflow_contexts print).
+        env:
+          MIP_REPOSITORY_SCOPE_VARS: >-
+            ${{ vars.APP_ENV && 'APP_ENV' || '' }}
+            ${{ vars.DATABRICKS_ACCOUNT_CLIENT_SECRET && 'DATABRICKS_ACCOUNT_CLIENT_SECRET' || '' }}
+            ${{ vars.DATABRICKS_ACCOUNT_HOST && 'DATABRICKS_ACCOUNT_HOST' || '' }}
+            ${{ vars.DATABRICKS_ACCOUNT_ID && 'DATABRICKS_ACCOUNT_ID' || '' }}
+            ${{ vars.DATABRICKS_ADMIN_CLIENT_SECRET && 'DATABRICKS_ADMIN_CLIENT_SECRET' || '' }}
+            ${{ vars.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE && 'DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE' || '' }}
+            ${{ vars.DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET && 'DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET' || '' }}
+            ${{ vars.DATABRICKS_CLIENT_SECRET && 'DATABRICKS_CLIENT_SECRET' || '' }}
+            ${{ vars.DATABRICKS_HOST && 'DATABRICKS_HOST' || '' }}
+            ${{ vars.DATABRICKS_OPERATOR2_CLIENT_SECRET && 'DATABRICKS_OPERATOR2_CLIENT_SECRET' || '' }}
+            ${{ vars.DATABRICKS_RELEASE_PROBE_CLIENT_SECRET && 'DATABRICKS_RELEASE_PROBE_CLIENT_SECRET' || '' }}
+            ${{ vars.DATABRICKS_VERIFIER_CLIENT_SECRET && 'DATABRICKS_VERIFIER_CLIENT_SECRET' || '' }}
+            ${{ vars.LAKEBASE_DATABASE && 'LAKEBASE_DATABASE' || '' }}
+            ${{ vars.LAKEBASE_INSTANCE_NAME && 'LAKEBASE_INSTANCE_NAME' || '' }}
+            ${{ vars.MIP_ACCEPTED_EXPOSURE_JSON && 'MIP_ACCEPTED_EXPOSURE_JSON' || '' }}
+            ${{ vars.MIP_ADMIN_EMAILS && 'MIP_ADMIN_EMAILS' || '' }}
+            ${{ vars.MIP_ADMIN_GROUP_NAME && 'MIP_ADMIN_GROUP_NAME' || '' }}
+            ${{ vars.MIP_ADMIN_IDENTITIES && 'MIP_ADMIN_IDENTITIES' || '' }}
+            ${{ vars.MIP_AGENTIC_TIER && 'MIP_AGENTIC_TIER' || '' }}
+            ${{ vars.MIP_AGENT_PROXY_SECRET_SCOPE && 'MIP_AGENT_PROXY_SECRET_SCOPE' || '' }}
+            ${{ vars.MIP_AGENT_SUPERVISOR_NAME && 'MIP_AGENT_SUPERVISOR_NAME' || '' }}
+            ${{ vars.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE && 'MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE' || '' }}
+            ${{ vars.MIP_AI_GATEWAY_PROOF_SIGNING_KEY && 'MIP_AI_GATEWAY_PROOF_SIGNING_KEY' || '' }}
+            ${{ vars.MIP_AI_GATEWAY_TABLE_PREFIX && 'MIP_AI_GATEWAY_TABLE_PREFIX' || '' }}
+            ${{ vars.MIP_APPROVER_EMAILS && 'MIP_APPROVER_EMAILS' || '' }}
+            ${{ vars.MIP_APPROVER_GROUP_NAME && 'MIP_APPROVER_GROUP_NAME' || '' }}
+            ${{ vars.MIP_APPROVER_IDENTITIES && 'MIP_APPROVER_IDENTITIES' || '' }}
+            ${{ vars.MIP_APP_ENV && 'MIP_APP_ENV' || '' }}
+            ${{ vars.MIP_APP_NAME && 'MIP_APP_NAME' || '' }}
+            ${{ vars.MIP_APP_ROLLBACK_SECRET_SCOPE && 'MIP_APP_ROLLBACK_SECRET_SCOPE' || '' }}
+            ${{ vars.MIP_AUDITOR_EMAILS && 'MIP_AUDITOR_EMAILS' || '' }}
+            ${{ vars.MIP_AUDITOR_IDENTITIES && 'MIP_AUDITOR_IDENTITIES' || '' }}
+            ${{ vars.MIP_CLIENT && 'MIP_CLIENT' || '' }}
+            ${{ vars.MIP_CLOUD && 'MIP_CLOUD' || '' }}
+            ${{ vars.MIP_COTALITY_SHARE_NAME && 'MIP_COTALITY_SHARE_NAME' || '' }}
+            ${{ vars.MIP_COTALITY_SHARE_PROVIDER && 'MIP_COTALITY_SHARE_PROVIDER' || '' }}
+            ${{ vars.MIP_COTALITY_SOURCE_CATALOG && 'MIP_COTALITY_SOURCE_CATALOG' || '' }}
+            ${{ vars.MIP_COTALITY_SOURCE_SCHEMA && 'MIP_COTALITY_SOURCE_SCHEMA' || '' }}
+            ${{ vars.MIP_COTALITY_SOURCE_TABLE_PREFIX && 'MIP_COTALITY_SOURCE_TABLE_PREFIX' || '' }}
+            ${{ vars.MIP_DASHBOARD_PARENT_PATH && 'MIP_DASHBOARD_PARENT_PATH' || '' }}
+            ${{ vars.MIP_DEFAULT_CATALOG && 'MIP_DEFAULT_CATALOG' || '' }}
+            ${{ vars.MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS && 'MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS' || '' }}
+            ${{ vars.MIP_EXPECT_METASTORE_ID && 'MIP_EXPECT_METASTORE_ID' || '' }}
+            ${{ vars.MIP_EXPECT_WORKSPACE_ID && 'MIP_EXPECT_WORKSPACE_ID' || '' }}
+            ${{ vars.MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY && 'MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY' || '' }}
+            ${{ vars.MIP_GENIE_MANAGER_PRINCIPALS && 'MIP_GENIE_MANAGER_PRINCIPALS' || '' }}
+            ${{ vars.MIP_GENIE_SPACE_NAME && 'MIP_GENIE_SPACE_NAME' || '' }}
+            ${{ vars.MIP_IDENTITY_IDS_JSON && 'MIP_IDENTITY_IDS_JSON' || '' }}
+            ${{ vars.MIP_IDENTITY_PREFIX && 'MIP_IDENTITY_PREFIX' || '' }}
+            ${{ vars.MIP_INSTALL_CLASS && 'MIP_INSTALL_CLASS' || '' }}
+            ${{ vars.MIP_LAKEBASE_DATABASE_NAME && 'MIP_LAKEBASE_DATABASE_NAME' || '' }}
+            ${{ vars.MIP_LAKEBASE_INSTANCE && 'MIP_LAKEBASE_INSTANCE' || '' }}
+            ${{ vars.MIP_LAKEBASE_READABLE_SECONDARIES && 'MIP_LAKEBASE_READABLE_SECONDARIES' || '' }}
+            ${{ vars.MIP_LAKEBASE_SYNC_CATALOG && 'MIP_LAKEBASE_SYNC_CATALOG' || '' }}
+            ${{ vars.MIP_LAKEBASE_SYNC_SCHEMA && 'MIP_LAKEBASE_SYNC_SCHEMA' || '' }}
+            ${{ vars.MIP_LEGACY_BUNDLE_ROOT && 'MIP_LEGACY_BUNDLE_ROOT' || '' }}
+            ${{ vars.MIP_LENDER_IDENTITY_JSON && 'MIP_LENDER_IDENTITY_JSON' || '' }}
+            ${{ vars.MIP_LENDER_IDENTITY_SHA256 && 'MIP_LENDER_IDENTITY_SHA256' || '' }}
+            ${{ vars.MIP_PII_SALT_SCOPE && 'MIP_PII_SALT_SCOPE' || '' }}
+            ${{ vars.MIP_PRESENTER_MODE && 'MIP_PRESENTER_MODE' || '' }}
+            ${{ vars.MIP_PROFILE_VERSION && 'MIP_PROFILE_VERSION' || '' }}
+            ${{ vars.MIP_REVIEW_MODE && 'MIP_REVIEW_MODE' || '' }}
+            ${{ vars.MIP_RUNTIME_SECRET_SCOPE && 'MIP_RUNTIME_SECRET_SCOPE' || '' }}
+            ${{ vars.MIP_SCHEDULED_REFRESH && 'MIP_SCHEDULED_REFRESH' || '' }}
+            ${{ vars.MIP_SCHEDULED_REFRESH_RECIPIENTS && 'MIP_SCHEDULED_REFRESH_RECIPIENTS' || '' }}
+            ${{ vars.MIP_SEED_OPERATOR_EMAIL && 'MIP_SEED_OPERATOR_EMAIL' || '' }}
+            ${{ vars.MIP_UC_APPROVED_OWNER_PRINCIPALS && 'MIP_UC_APPROVED_OWNER_PRINCIPALS' || '' }}
+            ${{ vars.MIP_UC_CATALOG_STORAGE_ROOT && 'MIP_UC_CATALOG_STORAGE_ROOT' || '' }}
+            ${{ vars.MIP_UC_INTERIM_OWNER_PAIRS_JSON && 'MIP_UC_INTERIM_OWNER_PAIRS_JSON' || '' }}
+            ${{ vars.MIP_UC_METASTORE_OWNER && 'MIP_UC_METASTORE_OWNER' || '' }}
+          MIP_REPOSITORY_SCOPE_SECRETS: >-
+            ${{ secrets.APP_ENV && 'APP_ENV' || '' }}
+            ${{ secrets.DATABRICKS_ACCOUNT_CLIENT_SECRET && 'DATABRICKS_ACCOUNT_CLIENT_SECRET' || '' }}
+            ${{ secrets.DATABRICKS_ACCOUNT_HOST && 'DATABRICKS_ACCOUNT_HOST' || '' }}
+            ${{ secrets.DATABRICKS_ACCOUNT_ID && 'DATABRICKS_ACCOUNT_ID' || '' }}
+            ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET && 'DATABRICKS_ADMIN_CLIENT_SECRET' || '' }}
+            ${{ secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE && 'DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE' || '' }}
+            ${{ secrets.DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET && 'DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET' || '' }}
+            ${{ secrets.DATABRICKS_CLIENT_SECRET && 'DATABRICKS_CLIENT_SECRET' || '' }}
+            ${{ secrets.DATABRICKS_HOST && 'DATABRICKS_HOST' || '' }}
+            ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_SECRET && 'DATABRICKS_OPERATOR2_CLIENT_SECRET' || '' }}
+            ${{ secrets.DATABRICKS_RELEASE_PROBE_CLIENT_SECRET && 'DATABRICKS_RELEASE_PROBE_CLIENT_SECRET' || '' }}
+            ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET && 'DATABRICKS_VERIFIER_CLIENT_SECRET' || '' }}
+            ${{ secrets.LAKEBASE_DATABASE && 'LAKEBASE_DATABASE' || '' }}
+            ${{ secrets.LAKEBASE_INSTANCE_NAME && 'LAKEBASE_INSTANCE_NAME' || '' }}
+            ${{ secrets.MIP_ACCEPTED_EXPOSURE_JSON && 'MIP_ACCEPTED_EXPOSURE_JSON' || '' }}
+            ${{ secrets.MIP_ADMIN_EMAILS && 'MIP_ADMIN_EMAILS' || '' }}
+            ${{ secrets.MIP_ADMIN_GROUP_NAME && 'MIP_ADMIN_GROUP_NAME' || '' }}
+            ${{ secrets.MIP_ADMIN_IDENTITIES && 'MIP_ADMIN_IDENTITIES' || '' }}
+            ${{ secrets.MIP_AGENTIC_TIER && 'MIP_AGENTIC_TIER' || '' }}
+            ${{ secrets.MIP_AGENT_PROXY_SECRET_SCOPE && 'MIP_AGENT_PROXY_SECRET_SCOPE' || '' }}
+            ${{ secrets.MIP_AGENT_SUPERVISOR_NAME && 'MIP_AGENT_SUPERVISOR_NAME' || '' }}
+            ${{ secrets.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE && 'MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE' || '' }}
+            ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY && 'MIP_AI_GATEWAY_PROOF_SIGNING_KEY' || '' }}
+            ${{ secrets.MIP_AI_GATEWAY_TABLE_PREFIX && 'MIP_AI_GATEWAY_TABLE_PREFIX' || '' }}
+            ${{ secrets.MIP_APPROVER_EMAILS && 'MIP_APPROVER_EMAILS' || '' }}
+            ${{ secrets.MIP_APPROVER_GROUP_NAME && 'MIP_APPROVER_GROUP_NAME' || '' }}
+            ${{ secrets.MIP_APPROVER_IDENTITIES && 'MIP_APPROVER_IDENTITIES' || '' }}
+            ${{ secrets.MIP_APP_ENV && 'MIP_APP_ENV' || '' }}
+            ${{ secrets.MIP_APP_NAME && 'MIP_APP_NAME' || '' }}
+            ${{ secrets.MIP_APP_ROLLBACK_SECRET_SCOPE && 'MIP_APP_ROLLBACK_SECRET_SCOPE' || '' }}
+            ${{ secrets.MIP_AUDITOR_EMAILS && 'MIP_AUDITOR_EMAILS' || '' }}
+            ${{ secrets.MIP_AUDITOR_IDENTITIES && 'MIP_AUDITOR_IDENTITIES' || '' }}
+            ${{ secrets.MIP_CLIENT && 'MIP_CLIENT' || '' }}
+            ${{ secrets.MIP_CLOUD && 'MIP_CLOUD' || '' }}
+            ${{ secrets.MIP_COTALITY_SHARE_NAME && 'MIP_COTALITY_SHARE_NAME' || '' }}
+            ${{ secrets.MIP_COTALITY_SHARE_PROVIDER && 'MIP_COTALITY_SHARE_PROVIDER' || '' }}
+            ${{ secrets.MIP_COTALITY_SOURCE_CATALOG && 'MIP_COTALITY_SOURCE_CATALOG' || '' }}
+            ${{ secrets.MIP_COTALITY_SOURCE_SCHEMA && 'MIP_COTALITY_SOURCE_SCHEMA' || '' }}
+            ${{ secrets.MIP_COTALITY_SOURCE_TABLE_PREFIX && 'MIP_COTALITY_SOURCE_TABLE_PREFIX' || '' }}
+            ${{ secrets.MIP_DASHBOARD_PARENT_PATH && 'MIP_DASHBOARD_PARENT_PATH' || '' }}
+            ${{ secrets.MIP_DEFAULT_CATALOG && 'MIP_DEFAULT_CATALOG' || '' }}
+            ${{ secrets.MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS && 'MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS' || '' }}
+            ${{ secrets.MIP_EXPECT_METASTORE_ID && 'MIP_EXPECT_METASTORE_ID' || '' }}
+            ${{ secrets.MIP_EXPECT_WORKSPACE_ID && 'MIP_EXPECT_WORKSPACE_ID' || '' }}
+            ${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY && 'MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY' || '' }}
+            ${{ secrets.MIP_GENIE_MANAGER_PRINCIPALS && 'MIP_GENIE_MANAGER_PRINCIPALS' || '' }}
+            ${{ secrets.MIP_GENIE_SPACE_NAME && 'MIP_GENIE_SPACE_NAME' || '' }}
+            ${{ secrets.MIP_IDENTITY_IDS_JSON && 'MIP_IDENTITY_IDS_JSON' || '' }}
+            ${{ secrets.MIP_IDENTITY_PREFIX && 'MIP_IDENTITY_PREFIX' || '' }}
+            ${{ secrets.MIP_INSTALL_CLASS && 'MIP_INSTALL_CLASS' || '' }}
+            ${{ secrets.MIP_LAKEBASE_DATABASE_NAME && 'MIP_LAKEBASE_DATABASE_NAME' || '' }}
+            ${{ secrets.MIP_LAKEBASE_INSTANCE && 'MIP_LAKEBASE_INSTANCE' || '' }}
+            ${{ secrets.MIP_LAKEBASE_READABLE_SECONDARIES && 'MIP_LAKEBASE_READABLE_SECONDARIES' || '' }}
+            ${{ secrets.MIP_LAKEBASE_SYNC_CATALOG && 'MIP_LAKEBASE_SYNC_CATALOG' || '' }}
+            ${{ secrets.MIP_LAKEBASE_SYNC_SCHEMA && 'MIP_LAKEBASE_SYNC_SCHEMA' || '' }}
+            ${{ secrets.MIP_LEGACY_BUNDLE_ROOT && 'MIP_LEGACY_BUNDLE_ROOT' || '' }}
+            ${{ secrets.MIP_LENDER_IDENTITY_JSON && 'MIP_LENDER_IDENTITY_JSON' || '' }}
+            ${{ secrets.MIP_LENDER_IDENTITY_SHA256 && 'MIP_LENDER_IDENTITY_SHA256' || '' }}
+            ${{ secrets.MIP_PII_SALT_SCOPE && 'MIP_PII_SALT_SCOPE' || '' }}
+            ${{ secrets.MIP_PRESENTER_MODE && 'MIP_PRESENTER_MODE' || '' }}
+            ${{ secrets.MIP_PROFILE_VERSION && 'MIP_PROFILE_VERSION' || '' }}
+            ${{ secrets.MIP_REVIEW_MODE && 'MIP_REVIEW_MODE' || '' }}
+            ${{ secrets.MIP_RUNTIME_SECRET_SCOPE && 'MIP_RUNTIME_SECRET_SCOPE' || '' }}
+            ${{ secrets.MIP_SCHEDULED_REFRESH && 'MIP_SCHEDULED_REFRESH' || '' }}
+            ${{ secrets.MIP_SCHEDULED_REFRESH_RECIPIENTS && 'MIP_SCHEDULED_REFRESH_RECIPIENTS' || '' }}
+            ${{ secrets.MIP_SEED_OPERATOR_EMAIL && 'MIP_SEED_OPERATOR_EMAIL' || '' }}
+            ${{ secrets.MIP_UC_APPROVED_OWNER_PRINCIPALS && 'MIP_UC_APPROVED_OWNER_PRINCIPALS' || '' }}
+            ${{ secrets.MIP_UC_CATALOG_STORAGE_ROOT && 'MIP_UC_CATALOG_STORAGE_ROOT' || '' }}
+            ${{ secrets.MIP_UC_INTERIM_OWNER_PAIRS_JSON && 'MIP_UC_INTERIM_OWNER_PAIRS_JSON' || '' }}
+            ${{ secrets.MIP_UC_METASTORE_OWNER && 'MIP_UC_METASTORE_OWNER' || '' }}
+        run: |
+          set -euo pipefail
+          read -r -a variables <<< "$MIP_REPOSITORY_SCOPE_VARS"
+          read -r -a secrets <<< "$MIP_REPOSITORY_SCOPE_SECRETS"
+          if [ "$(( ${#variables[@]} + ${#secrets[@]} ))" -gt 0 ]; then
+            echo "::error::repository- or organization-level profile names (delete each; a client's profile lives in its own environment only): variables: ${variables[*]:-none}; secrets: ${secrets[*]:-none}"
+            exit 1
+          fi
   build:
     # No ID token and no environment: Node, npm and the package index run
     # here only. The job builds the frontend, stages the App runtime closure,
@@ -191,6 +365,14 @@ jobs:
         run: |
           set -euo pipefail
           echo "MIP_JOB_DEADLINE_EPOCH=$(( $(date -u +%s) + MIP_JOB_TIMEOUT_MINUTES * 60 ))" >> "$GITHUB_ENV"
+      - name: Refuse step debug logging
+        # Step debug logging traces every expression with its operands before
+        # a step runs, a variable's value included, and variables are never
+        # masked: no step of this job may run under it.
+        if: ${{ runner.debug == '1' }}
+        run: |
+          echo "::error::deploy-dev.yml refuses step debug logging: it prints expression operands, variables included, in clear."
+          exit 1
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
@@ -220,13 +402,168 @@ jobs:
           set -euo pipefail
           python -m pip install --no-index --find-links "$RUNNER_TEMP/prebuilt-release/wheelhouse" \
             --require-hashes --only-binary=:all: -r requirements-deploy.hashes.txt
+      - name: Collect the client's profile from its environment
+        # The one step that reads vars or secrets. A step prints its env in the
+        # log header, so no context is passed whole: each public name is bound
+        # from vars by value (a public value may print), each profile name from
+        # secrets by value (the runner masks each), and each identifying or
+        # secret name only by whether vars holds it, so a misfiled one prints
+        # its name and refuses. No other variable or secret of any scope
+        # reaches this job (generated: python -m tools.clients.workflow_contexts
+        # print). It writes both objects mode 0600 and prints counts only.
+        env:
+          MIP_CLIENT_VAR__APP_ENV: ${{ vars.APP_ENV }}
+          MIP_CLIENT_VAR__LAKEBASE_DATABASE: ${{ vars.LAKEBASE_DATABASE }}
+          MIP_CLIENT_VAR__LAKEBASE_INSTANCE_NAME: ${{ vars.LAKEBASE_INSTANCE_NAME }}
+          MIP_CLIENT_VAR__MIP_AGENTIC_TIER: ${{ vars.MIP_AGENTIC_TIER }}
+          MIP_CLIENT_VAR__MIP_AGENT_PROXY_SECRET_SCOPE: ${{ vars.MIP_AGENT_PROXY_SECRET_SCOPE }}
+          MIP_CLIENT_VAR__MIP_AGENT_SUPERVISOR_NAME: ${{ vars.MIP_AGENT_SUPERVISOR_NAME }}
+          MIP_CLIENT_VAR__MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE: ${{ vars.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE }}
+          MIP_CLIENT_VAR__MIP_AI_GATEWAY_TABLE_PREFIX: ${{ vars.MIP_AI_GATEWAY_TABLE_PREFIX }}
+          MIP_CLIENT_VAR__MIP_APP_ENV: ${{ vars.MIP_APP_ENV }}
+          MIP_CLIENT_VAR__MIP_APP_NAME: ${{ vars.MIP_APP_NAME }}
+          MIP_CLIENT_VAR__MIP_APP_ROLLBACK_SECRET_SCOPE: ${{ vars.MIP_APP_ROLLBACK_SECRET_SCOPE }}
+          MIP_CLIENT_VAR__MIP_CLIENT: ${{ vars.MIP_CLIENT }}
+          MIP_CLIENT_VAR__MIP_CLOUD: ${{ vars.MIP_CLOUD }}
+          MIP_CLIENT_VAR__MIP_COTALITY_SOURCE_CATALOG: ${{ vars.MIP_COTALITY_SOURCE_CATALOG }}
+          MIP_CLIENT_VAR__MIP_COTALITY_SOURCE_SCHEMA: ${{ vars.MIP_COTALITY_SOURCE_SCHEMA }}
+          MIP_CLIENT_VAR__MIP_COTALITY_SOURCE_TABLE_PREFIX: ${{ vars.MIP_COTALITY_SOURCE_TABLE_PREFIX }}
+          MIP_CLIENT_VAR__MIP_DEFAULT_CATALOG: ${{ vars.MIP_DEFAULT_CATALOG }}
+          MIP_CLIENT_VAR__MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS: ${{ vars.MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS }}
+          MIP_CLIENT_VAR__MIP_GENIE_SPACE_NAME: ${{ vars.MIP_GENIE_SPACE_NAME }}
+          MIP_CLIENT_VAR__MIP_IDENTITY_PREFIX: ${{ vars.MIP_IDENTITY_PREFIX }}
+          MIP_CLIENT_VAR__MIP_INSTALL_CLASS: ${{ vars.MIP_INSTALL_CLASS }}
+          MIP_CLIENT_VAR__MIP_LAKEBASE_DATABASE_NAME: ${{ vars.MIP_LAKEBASE_DATABASE_NAME }}
+          MIP_CLIENT_VAR__MIP_LAKEBASE_INSTANCE: ${{ vars.MIP_LAKEBASE_INSTANCE }}
+          MIP_CLIENT_VAR__MIP_LAKEBASE_READABLE_SECONDARIES: ${{ vars.MIP_LAKEBASE_READABLE_SECONDARIES }}
+          MIP_CLIENT_VAR__MIP_LAKEBASE_SYNC_CATALOG: ${{ vars.MIP_LAKEBASE_SYNC_CATALOG }}
+          MIP_CLIENT_VAR__MIP_LAKEBASE_SYNC_SCHEMA: ${{ vars.MIP_LAKEBASE_SYNC_SCHEMA }}
+          MIP_CLIENT_VAR__MIP_LENDER_IDENTITY_SHA256: ${{ vars.MIP_LENDER_IDENTITY_SHA256 }}
+          MIP_CLIENT_VAR__MIP_PII_SALT_SCOPE: ${{ vars.MIP_PII_SALT_SCOPE }}
+          MIP_CLIENT_VAR__MIP_PRESENTER_MODE: ${{ vars.MIP_PRESENTER_MODE }}
+          MIP_CLIENT_VAR__MIP_PROFILE_VERSION: ${{ vars.MIP_PROFILE_VERSION }}
+          MIP_CLIENT_VAR__MIP_REVIEW_MODE: ${{ vars.MIP_REVIEW_MODE }}
+          MIP_CLIENT_VAR__MIP_RUNTIME_SECRET_SCOPE: ${{ vars.MIP_RUNTIME_SECRET_SCOPE }}
+          MIP_CLIENT_VAR__MIP_SCHEDULED_REFRESH: ${{ vars.MIP_SCHEDULED_REFRESH }}
+          MIP_CLIENT_SECRET__APP_ENV: ${{ secrets.APP_ENV }}
+          MIP_CLIENT_SECRET__DATABRICKS_ACCOUNT_CLIENT_SECRET: ${{ secrets.DATABRICKS_ACCOUNT_CLIENT_SECRET }}
+          MIP_CLIENT_SECRET__DATABRICKS_ACCOUNT_HOST: ${{ secrets.DATABRICKS_ACCOUNT_HOST }}
+          MIP_CLIENT_SECRET__DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}
+          MIP_CLIENT_SECRET__DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}
+          MIP_CLIENT_SECRET__DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE: ${{ secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE }}
+          MIP_CLIENT_SECRET__DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET: ${{ secrets.DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET }}
+          MIP_CLIENT_SECRET__DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          MIP_CLIENT_SECRET__DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          MIP_CLIENT_SECRET__DATABRICKS_OPERATOR2_CLIENT_SECRET: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_SECRET }}
+          MIP_CLIENT_SECRET__DATABRICKS_RELEASE_PROBE_CLIENT_SECRET: ${{ secrets.DATABRICKS_RELEASE_PROBE_CLIENT_SECRET }}
+          MIP_CLIENT_SECRET__DATABRICKS_VERIFIER_CLIENT_SECRET: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}
+          MIP_CLIENT_SECRET__LAKEBASE_DATABASE: ${{ secrets.LAKEBASE_DATABASE }}
+          MIP_CLIENT_SECRET__LAKEBASE_INSTANCE_NAME: ${{ secrets.LAKEBASE_INSTANCE_NAME }}
+          MIP_CLIENT_SECRET__MIP_ACCEPTED_EXPOSURE_JSON: ${{ secrets.MIP_ACCEPTED_EXPOSURE_JSON }}
+          MIP_CLIENT_SECRET__MIP_ADMIN_EMAILS: ${{ secrets.MIP_ADMIN_EMAILS }}
+          MIP_CLIENT_SECRET__MIP_ADMIN_GROUP_NAME: ${{ secrets.MIP_ADMIN_GROUP_NAME }}
+          MIP_CLIENT_SECRET__MIP_ADMIN_IDENTITIES: ${{ secrets.MIP_ADMIN_IDENTITIES }}
+          MIP_CLIENT_SECRET__MIP_AGENTIC_TIER: ${{ secrets.MIP_AGENTIC_TIER }}
+          MIP_CLIENT_SECRET__MIP_AGENT_PROXY_SECRET_SCOPE: ${{ secrets.MIP_AGENT_PROXY_SECRET_SCOPE }}
+          MIP_CLIENT_SECRET__MIP_AGENT_SUPERVISOR_NAME: ${{ secrets.MIP_AGENT_SUPERVISOR_NAME }}
+          MIP_CLIENT_SECRET__MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE: ${{ secrets.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE }}
+          MIP_CLIENT_SECRET__MIP_AI_GATEWAY_PROOF_SIGNING_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}
+          MIP_CLIENT_SECRET__MIP_AI_GATEWAY_TABLE_PREFIX: ${{ secrets.MIP_AI_GATEWAY_TABLE_PREFIX }}
+          MIP_CLIENT_SECRET__MIP_APPROVER_EMAILS: ${{ secrets.MIP_APPROVER_EMAILS }}
+          MIP_CLIENT_SECRET__MIP_APPROVER_GROUP_NAME: ${{ secrets.MIP_APPROVER_GROUP_NAME }}
+          MIP_CLIENT_SECRET__MIP_APPROVER_IDENTITIES: ${{ secrets.MIP_APPROVER_IDENTITIES }}
+          MIP_CLIENT_SECRET__MIP_APP_ENV: ${{ secrets.MIP_APP_ENV }}
+          MIP_CLIENT_SECRET__MIP_APP_NAME: ${{ secrets.MIP_APP_NAME }}
+          MIP_CLIENT_SECRET__MIP_APP_ROLLBACK_SECRET_SCOPE: ${{ secrets.MIP_APP_ROLLBACK_SECRET_SCOPE }}
+          MIP_CLIENT_SECRET__MIP_AUDITOR_EMAILS: ${{ secrets.MIP_AUDITOR_EMAILS }}
+          MIP_CLIENT_SECRET__MIP_AUDITOR_IDENTITIES: ${{ secrets.MIP_AUDITOR_IDENTITIES }}
+          MIP_CLIENT_SECRET__MIP_CLIENT: ${{ secrets.MIP_CLIENT }}
+          MIP_CLIENT_SECRET__MIP_CLOUD: ${{ secrets.MIP_CLOUD }}
+          MIP_CLIENT_SECRET__MIP_COTALITY_SHARE_NAME: ${{ secrets.MIP_COTALITY_SHARE_NAME }}
+          MIP_CLIENT_SECRET__MIP_COTALITY_SHARE_PROVIDER: ${{ secrets.MIP_COTALITY_SHARE_PROVIDER }}
+          MIP_CLIENT_SECRET__MIP_COTALITY_SOURCE_CATALOG: ${{ secrets.MIP_COTALITY_SOURCE_CATALOG }}
+          MIP_CLIENT_SECRET__MIP_COTALITY_SOURCE_SCHEMA: ${{ secrets.MIP_COTALITY_SOURCE_SCHEMA }}
+          MIP_CLIENT_SECRET__MIP_COTALITY_SOURCE_TABLE_PREFIX: ${{ secrets.MIP_COTALITY_SOURCE_TABLE_PREFIX }}
+          MIP_CLIENT_SECRET__MIP_DASHBOARD_PARENT_PATH: ${{ secrets.MIP_DASHBOARD_PARENT_PATH }}
+          MIP_CLIENT_SECRET__MIP_DEFAULT_CATALOG: ${{ secrets.MIP_DEFAULT_CATALOG }}
+          MIP_CLIENT_SECRET__MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS: ${{ secrets.MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS }}
+          MIP_CLIENT_SECRET__MIP_EXPECT_METASTORE_ID: ${{ secrets.MIP_EXPECT_METASTORE_ID }}
+          MIP_CLIENT_SECRET__MIP_EXPECT_WORKSPACE_ID: ${{ secrets.MIP_EXPECT_WORKSPACE_ID }}
+          MIP_CLIENT_SECRET__MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY: ${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY }}
+          MIP_CLIENT_SECRET__MIP_GENIE_MANAGER_PRINCIPALS: ${{ secrets.MIP_GENIE_MANAGER_PRINCIPALS }}
+          MIP_CLIENT_SECRET__MIP_GENIE_SPACE_NAME: ${{ secrets.MIP_GENIE_SPACE_NAME }}
+          MIP_CLIENT_SECRET__MIP_IDENTITY_IDS_JSON: ${{ secrets.MIP_IDENTITY_IDS_JSON }}
+          MIP_CLIENT_SECRET__MIP_IDENTITY_PREFIX: ${{ secrets.MIP_IDENTITY_PREFIX }}
+          MIP_CLIENT_SECRET__MIP_INSTALL_CLASS: ${{ secrets.MIP_INSTALL_CLASS }}
+          MIP_CLIENT_SECRET__MIP_LAKEBASE_DATABASE_NAME: ${{ secrets.MIP_LAKEBASE_DATABASE_NAME }}
+          MIP_CLIENT_SECRET__MIP_LAKEBASE_INSTANCE: ${{ secrets.MIP_LAKEBASE_INSTANCE }}
+          MIP_CLIENT_SECRET__MIP_LAKEBASE_READABLE_SECONDARIES: ${{ secrets.MIP_LAKEBASE_READABLE_SECONDARIES }}
+          MIP_CLIENT_SECRET__MIP_LAKEBASE_SYNC_CATALOG: ${{ secrets.MIP_LAKEBASE_SYNC_CATALOG }}
+          MIP_CLIENT_SECRET__MIP_LAKEBASE_SYNC_SCHEMA: ${{ secrets.MIP_LAKEBASE_SYNC_SCHEMA }}
+          MIP_CLIENT_SECRET__MIP_LEGACY_BUNDLE_ROOT: ${{ secrets.MIP_LEGACY_BUNDLE_ROOT }}
+          MIP_CLIENT_SECRET__MIP_LENDER_IDENTITY_JSON: ${{ secrets.MIP_LENDER_IDENTITY_JSON }}
+          MIP_CLIENT_SECRET__MIP_LENDER_IDENTITY_SHA256: ${{ secrets.MIP_LENDER_IDENTITY_SHA256 }}
+          MIP_CLIENT_SECRET__MIP_PII_SALT_SCOPE: ${{ secrets.MIP_PII_SALT_SCOPE }}
+          MIP_CLIENT_SECRET__MIP_PRESENTER_MODE: ${{ secrets.MIP_PRESENTER_MODE }}
+          MIP_CLIENT_SECRET__MIP_PROFILE_VERSION: ${{ secrets.MIP_PROFILE_VERSION }}
+          MIP_CLIENT_SECRET__MIP_REVIEW_MODE: ${{ secrets.MIP_REVIEW_MODE }}
+          MIP_CLIENT_SECRET__MIP_RUNTIME_SECRET_SCOPE: ${{ secrets.MIP_RUNTIME_SECRET_SCOPE }}
+          MIP_CLIENT_SECRET__MIP_SCHEDULED_REFRESH: ${{ secrets.MIP_SCHEDULED_REFRESH }}
+          MIP_CLIENT_SECRET__MIP_SCHEDULED_REFRESH_RECIPIENTS: ${{ secrets.MIP_SCHEDULED_REFRESH_RECIPIENTS }}
+          MIP_CLIENT_SECRET__MIP_SEED_OPERATOR_EMAIL: ${{ secrets.MIP_SEED_OPERATOR_EMAIL }}
+          MIP_CLIENT_SECRET__MIP_UC_APPROVED_OWNER_PRINCIPALS: ${{ secrets.MIP_UC_APPROVED_OWNER_PRINCIPALS }}
+          MIP_CLIENT_SECRET__MIP_UC_CATALOG_STORAGE_ROOT: ${{ secrets.MIP_UC_CATALOG_STORAGE_ROOT }}
+          MIP_CLIENT_SECRET__MIP_UC_INTERIM_OWNER_PAIRS_JSON: ${{ secrets.MIP_UC_INTERIM_OWNER_PAIRS_JSON }}
+          MIP_CLIENT_SECRET__MIP_UC_METASTORE_OWNER: ${{ secrets.MIP_UC_METASTORE_OWNER }}
+          MIP_CLIENT_VARS_MISFILED: >-
+            ${{ vars.DATABRICKS_ACCOUNT_CLIENT_SECRET && 'DATABRICKS_ACCOUNT_CLIENT_SECRET' || '' }}
+            ${{ vars.DATABRICKS_ACCOUNT_HOST && 'DATABRICKS_ACCOUNT_HOST' || '' }}
+            ${{ vars.DATABRICKS_ACCOUNT_ID && 'DATABRICKS_ACCOUNT_ID' || '' }}
+            ${{ vars.DATABRICKS_ADMIN_CLIENT_SECRET && 'DATABRICKS_ADMIN_CLIENT_SECRET' || '' }}
+            ${{ vars.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE && 'DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE' || '' }}
+            ${{ vars.DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET && 'DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET' || '' }}
+            ${{ vars.DATABRICKS_CLIENT_SECRET && 'DATABRICKS_CLIENT_SECRET' || '' }}
+            ${{ vars.DATABRICKS_HOST && 'DATABRICKS_HOST' || '' }}
+            ${{ vars.DATABRICKS_OPERATOR2_CLIENT_SECRET && 'DATABRICKS_OPERATOR2_CLIENT_SECRET' || '' }}
+            ${{ vars.DATABRICKS_RELEASE_PROBE_CLIENT_SECRET && 'DATABRICKS_RELEASE_PROBE_CLIENT_SECRET' || '' }}
+            ${{ vars.DATABRICKS_VERIFIER_CLIENT_SECRET && 'DATABRICKS_VERIFIER_CLIENT_SECRET' || '' }}
+            ${{ vars.MIP_ACCEPTED_EXPOSURE_JSON && 'MIP_ACCEPTED_EXPOSURE_JSON' || '' }}
+            ${{ vars.MIP_ADMIN_EMAILS && 'MIP_ADMIN_EMAILS' || '' }}
+            ${{ vars.MIP_ADMIN_GROUP_NAME && 'MIP_ADMIN_GROUP_NAME' || '' }}
+            ${{ vars.MIP_ADMIN_IDENTITIES && 'MIP_ADMIN_IDENTITIES' || '' }}
+            ${{ vars.MIP_AI_GATEWAY_PROOF_SIGNING_KEY && 'MIP_AI_GATEWAY_PROOF_SIGNING_KEY' || '' }}
+            ${{ vars.MIP_APPROVER_EMAILS && 'MIP_APPROVER_EMAILS' || '' }}
+            ${{ vars.MIP_APPROVER_GROUP_NAME && 'MIP_APPROVER_GROUP_NAME' || '' }}
+            ${{ vars.MIP_APPROVER_IDENTITIES && 'MIP_APPROVER_IDENTITIES' || '' }}
+            ${{ vars.MIP_AUDITOR_EMAILS && 'MIP_AUDITOR_EMAILS' || '' }}
+            ${{ vars.MIP_AUDITOR_IDENTITIES && 'MIP_AUDITOR_IDENTITIES' || '' }}
+            ${{ vars.MIP_COTALITY_SHARE_NAME && 'MIP_COTALITY_SHARE_NAME' || '' }}
+            ${{ vars.MIP_COTALITY_SHARE_PROVIDER && 'MIP_COTALITY_SHARE_PROVIDER' || '' }}
+            ${{ vars.MIP_DASHBOARD_PARENT_PATH && 'MIP_DASHBOARD_PARENT_PATH' || '' }}
+            ${{ vars.MIP_EXPECT_METASTORE_ID && 'MIP_EXPECT_METASTORE_ID' || '' }}
+            ${{ vars.MIP_EXPECT_WORKSPACE_ID && 'MIP_EXPECT_WORKSPACE_ID' || '' }}
+            ${{ vars.MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY && 'MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY' || '' }}
+            ${{ vars.MIP_GENIE_MANAGER_PRINCIPALS && 'MIP_GENIE_MANAGER_PRINCIPALS' || '' }}
+            ${{ vars.MIP_IDENTITY_IDS_JSON && 'MIP_IDENTITY_IDS_JSON' || '' }}
+            ${{ vars.MIP_LEGACY_BUNDLE_ROOT && 'MIP_LEGACY_BUNDLE_ROOT' || '' }}
+            ${{ vars.MIP_LENDER_IDENTITY_JSON && 'MIP_LENDER_IDENTITY_JSON' || '' }}
+            ${{ vars.MIP_SCHEDULED_REFRESH_RECIPIENTS && 'MIP_SCHEDULED_REFRESH_RECIPIENTS' || '' }}
+            ${{ vars.MIP_SEED_OPERATOR_EMAIL && 'MIP_SEED_OPERATOR_EMAIL' || '' }}
+            ${{ vars.MIP_UC_APPROVED_OWNER_PRINCIPALS && 'MIP_UC_APPROVED_OWNER_PRINCIPALS' || '' }}
+            ${{ vars.MIP_UC_CATALOG_STORAGE_ROOT && 'MIP_UC_CATALOG_STORAGE_ROOT' || '' }}
+            ${{ vars.MIP_UC_INTERIM_OWNER_PAIRS_JSON && 'MIP_UC_INTERIM_OWNER_PAIRS_JSON' || '' }}
+            ${{ vars.MIP_UC_METASTORE_OWNER && 'MIP_UC_METASTORE_OWNER' || '' }}
+        run: >-
+          python -m tools.clients.workflow_contexts collect
+          --vars-out "$RUNNER_TEMP/mip-client-vars.json"
+          --secrets-out "$RUNNER_TEMP/mip-client-secrets.json"
       - name: Resolve the client profile
         id: profile
         uses: ./.github/actions/resolve-client-profile
         with:
           environment: ${{ inputs.client }}
-          vars-json: ${{ toJSON(vars) }}
-          secrets-json: ${{ toJSON(secrets) }}
+          vars-file: ${{ runner.temp }}/mip-client-vars.json
+          secrets-file: ${{ runner.temp }}/mip-client-secrets.json
       - name: Prove the GitHub OIDC deployer identity
         # Read-only, before scripts/deploy.sh (tools/clients/oidc_proof.py):
         # the DEFAULT github-oidc profile authenticates, through the SDK and
@@ -244,8 +581,6 @@ jobs:
         # (deferred, M1-PR5) and the tracked-tree scan. It exports the
         # operation acks for this job only.
         env:
-          MIP_VARS_JSON: ${{ toJSON(vars) }}
-          MIP_SECRETS_JSON: ${{ toJSON(secrets) }}
           MIP_DISPATCH_CLIENT: ${{ inputs.client }}
           MIP_DISPATCH_PHASE: ${{ inputs.phase }}
           MIP_DISPATCH_PROFILE_ACK: ${{ inputs.owner_attestation }}
@@ -258,8 +593,8 @@ jobs:
           python -m tools.clients.dispatch_preflight
           --phase "$MIP_DISPATCH_PHASE"
           --environment "$MIP_DISPATCH_CLIENT"
-          --vars-json env:MIP_VARS_JSON
-          --secrets-json env:MIP_SECRETS_JSON
+          --vars-json "$RUNNER_TEMP/mip-client-vars.json"
+          --secrets-json "$RUNNER_TEMP/mip-client-secrets.json"
           --github-env "$GITHUB_ENV"
           --step-summary "$GITHUB_STEP_SUMMARY"
       - name: Run the client phase
@@ -314,7 +649,8 @@ jobs:
             echo "::warning::the quiesce window journal could not be read"
           fi
       - name: Remove the profile files
-        # Defence in depth on an ephemeral runner: .env.local holds the whole
-        # profile, secrets included, and the DEFAULT profile names the deployer.
+        # Defence in depth on an ephemeral runner: .env.local and the two
+        # collected objects hold the whole profile, secrets included, and the
+        # DEFAULT profile names the deployer.
         if: always()
-        run: rm -f .env.local "$HOME/.databrickscfg"
+        run: rm -f .env.local "$HOME/.databrickscfg" "$RUNNER_TEMP/mip-client-vars.json" "$RUNNER_TEMP/mip-client-secrets.json"

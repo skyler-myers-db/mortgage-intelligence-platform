@@ -1,8 +1,9 @@
 """The deploy job's dispatch preflight, before scripts/deploy.sh (M1-PR7, plan §4.5).
 
 deploy-dev.yml runs this after the resolve-client-profile action and the
-OIDC proof, with the job's ``toJSON(vars)`` and ``toJSON(secrets)`` in step
-env and the dispatch inputs under ``MIP_DISPATCH_*``. It resolves the client
+OIDC proof, with the vars and secrets objects the collect step wrote
+(tools/clients/workflow_contexts.py) and the dispatch inputs under
+``MIP_DISPATCH_*``. It resolves the client
 profile again (registering its masks first) and decides, for ``--phase``:
 
 1. **workflow**: a ``workflow_dispatch`` of this repository's

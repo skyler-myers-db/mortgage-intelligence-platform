@@ -280,10 +280,11 @@ def test_live_workflows_propagate_the_resource_namespace():
         "MIP_LAKEBASE_SYNC_CATALOG",
         "MIP_GENIE_SPACE_NAME",
     )
-    # deploy-dev.yml (M1-PR7) names no variable: the whole environment's
-    # toJSON(vars) reaches the client profile resolver, whose controls view
-    # carries every resource name (tools/clients/profile.deploy_controls).
-    assert "vars-json: ${{ toJSON(vars) }}" in deploy and "vars." not in deploy.replace("toJSON(vars)", "")
+    # deploy-dev.yml (M1-PR7) binds each public name from its environment's
+    # vars one by one (tools/clients/workflow_contexts.py), and the client
+    # profile resolver's controls view carries every resource name
+    # (tools/clients/profile.deploy_controls).
+    assert "toJSON(vars)" not in deploy
     from tests.fixtures.client_profiles import demo_profile, split_contexts
     from tools.clients.environment import from_github, resolve
     from tools.clients.profile import deploy_controls
@@ -291,6 +292,7 @@ def test_live_workflows_propagate_the_resource_namespace():
     controls = deploy_controls(resolve(from_github(*split_contexts(demo_profile()), environment="fictional-demo")))
     for variable in variables:
         assert variable in controls
+        assert f"MIP_CLIENT_VAR__{variable}: ${{{{ vars.{variable} }}}}" in deploy
         assert f"vars.{variable}" in nightly
     for variable in (
         "BUNDLE_VAR_app_name",

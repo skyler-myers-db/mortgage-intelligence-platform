@@ -1,7 +1,8 @@
 """The resolve-client-profile composite action (M1-PR7): mask first, then write, then public outputs.
 
 ``.github/actions/resolve-client-profile`` resolves the client profile from
-the job's ``toJSON(vars)`` and ``toJSON(secrets)``. Its first step registers
+the vars and secrets objects deploy-dev.yml's collect step wrote as files
+(tools/clients/workflow_contexts.py). Its first step registers
 every identifying leaf and derived spelling as a runner mask; only then does
 ``tools.clients.ci_profile`` write ``.env.local`` (public and identifying
 controls, never a secret) and the github-oidc ``DEFAULT`` profile, and output
@@ -61,11 +62,13 @@ def _run_contexts(
     bin_dir.mkdir()
     (bin_dir / "python").write_text(f'#!/usr/bin/env bash\nexec {sys.executable} "$@"\n', encoding="utf-8")
     (bin_dir / "python").chmod(0o755)
-    inputs = {"vars-json": json.dumps(variables), "secrets-json": json.dumps(secrets), "environment": CLIENT}
+    (tmp_path / "vars.json").write_text(json.dumps(variables), encoding="utf-8")
+    (tmp_path / "secrets.json").write_text(json.dumps(secrets), encoding="utf-8")
+    inputs = {"vars-file": str(tmp_path / "vars.json"), "secrets-file": str(tmp_path / "secrets.json"), "environment": CLIENT}
     results = []
     for step in _action()["runs"]["steps"]:
-        env = {name: value.replace("${{ inputs.vars-json }}", inputs["vars-json"]).replace(
-            "${{ inputs.secrets-json }}", inputs["secrets-json"]).replace("${{ inputs.environment }}", inputs["environment"])
+        env = {name: value.replace("${{ inputs.vars-file }}", inputs["vars-file"]).replace(
+            "${{ inputs.secrets-file }}", inputs["secrets-file"]).replace("${{ inputs.environment }}", inputs["environment"])
             for name, value in step["env"].items()}
         results.append(
             subprocess.run(
@@ -99,14 +102,14 @@ def test_the_action_masks_first_and_every_step_reads_the_contexts_only_from_its_
     steps = action["runs"]["steps"]
 
     assert action["runs"]["using"] == "composite"
-    assert set(action["inputs"]) == {"environment", "vars-json", "secrets-json"}
+    assert set(action["inputs"]) == {"environment", "vars-file", "secrets-file"}
     assert steps[0]["name"] == "Mask every identifying profile value"
     assert steps[0]["run"].split()[:4] == ["python", "-m", "tools.clients", "mask"]
     assert steps[1]["id"] == "write" and "tools.clients.ci_profile" in steps[1]["run"]
     for step in steps:
         assert step["env"] == {
-            "MIP_VARS_JSON": "${{ inputs.vars-json }}",
-            "MIP_SECRETS_JSON": "${{ inputs.secrets-json }}",
+            "MIP_CLIENT_VARS_FILE": "${{ inputs.vars-file }}",
+            "MIP_CLIENT_SECRETS_FILE": "${{ inputs.secrets-file }}",
             "MIP_CLIENT_ENVIRONMENT": "${{ inputs.environment }}",
         }
         assert "${{" not in step["run"], "inputs reach a step through env, never interpolated into a script"

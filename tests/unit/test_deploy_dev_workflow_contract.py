@@ -34,7 +34,7 @@ from tests.fixtures.deploy_script import (
     deploy_contract_text,
     deploy_entrypoint_text,
 )
-from tools.clients import ci_profile
+from tools.clients import ci_profile, workflow_contexts
 from tools.clients import profile as views
 from tools.clients.environment import from_github, resolve
 from tools.clients.errors import ProfileRefusal
@@ -46,6 +46,21 @@ from tools.databricks import lakebase_oauth_role_bootstrap_orchestration as orch
 REPO = Path(__file__).resolve().parents[2]
 DEPLOY_DEV = REPO / ".github" / "workflows" / "deploy-dev.yml"
 PROFILE_ACTION = REPO / ".github" / "actions" / "resolve-client-profile" / "action.yml"
+
+
+def _unbound_workflow_text() -> str:
+    """deploy-dev.yml without its two generated env blocks, the only place a profile name is bound.
+
+    tools/clients/workflow_contexts.py names every profile field there, one by
+    one, so a name-absence check reads the rest of the workflow.
+    """
+
+    text = DEPLOY_DEV.read_text(encoding="utf-8")
+    for env in (workflow_contexts.repository_scope_env(), workflow_contexts.collect_env()):
+        block = workflow_contexts.yaml_block(env, 10)
+        assert text.count(block) == 1, "the generated block, verbatim"
+        text = text.replace(block, "")
+    return text
 RUN_STEP = "Run the client phase"
 OIDC_PROOF_STEP = "Prove the GitHub OIDC deployer identity"
 NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
@@ -2303,7 +2318,7 @@ def test_deploy_dev_has_cost_and_permission_guards() -> None:
 
 
 def test_deploy_dev_requires_explicit_admin_rbac_and_mints_distinct_app_bearers() -> None:
-    text = DEPLOY_DEV.read_text(encoding="utf-8")
+    text = _unbound_workflow_text()
     script = _deploy_entrypoint_text()
 
     # M1-PR7: the admin allowlists, every client id and every client secret
@@ -2340,7 +2355,7 @@ def test_deploy_dev_carries_the_read_only_auditor_allowlist_like_the_admin_one()
     (an empty value means no auditors), and the workflow names neither.
     """
 
-    text = DEPLOY_DEV.read_text(encoding="utf-8")
+    text = _unbound_workflow_text()
     assert "MIP_AUDITOR_EMAILS" not in text and "MIP_ADMIN_EMAILS" not in text
     assert FIELD_CLASS["MIP_AUDITOR_EMAILS"] is FIELD_CLASS["MIP_ADMIN_EMAILS"] is FieldClass.IDENTIFYING
     with_auditors = resolve(from_github(*split_contexts(demo_profile()), environment="fictional-demo"))
@@ -2362,7 +2377,7 @@ def test_deploy_dev_carries_no_refusal_capture_switch_outside_the_profile() -> N
 
 
 def test_deploy_uses_isolated_release_probe_only_during_signed_capture_gate() -> None:
-    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+    workflow = _unbound_workflow_text()
     script = _deploy_entrypoint_text()
 
     # M1-PR7: the role's id (MIP_IDENTITY_IDS_JSON) and its secret are profile
@@ -2563,7 +2578,7 @@ def test_explicit_unsigned_candidate_rollback_delegates_to_quarantine_aware_rest
 
 
 def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
-    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+    workflow = _unbound_workflow_text()
     script = _deploy_entrypoint_text()
     bundle = BUNDLE_CONFIG.read_text(encoding="utf-8")
 
@@ -2602,7 +2617,7 @@ def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
 
 
 def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
-    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+    workflow = _unbound_workflow_text()
     script = _deploy_contract_text()
 
     # M1-PR7: the runtime's id and secret are profile fields, from .env.local.
@@ -3277,7 +3292,7 @@ def test_local_deploy_loads_complete_proof_verification_key_registry() -> None:
 
 
 def test_agent_proxy_credential_is_atomic_and_reproved_after_cleanup() -> None:
-    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+    workflow = _unbound_workflow_text()
     nightly = NIGHTLY.read_text(encoding="utf-8")
     script = _deploy_entrypoint_text()
 
@@ -4901,7 +4916,7 @@ def test_deploy_fails_fast_when_python_lacks_repo_tooling_deps() -> None:
 
 
 def test_deploy_dev_wires_separate_required_gateway_signing_keys() -> None:
-    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+    workflow = _unbound_workflow_text()
 
     # M1-PR7: both keys are secret profile fields, from .env.local.
     for key in ("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY"):
@@ -5284,7 +5299,7 @@ def test_federation_subject_in_the_docs_matches_the_deploy_jobs_environment() ->
 
 
 def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
-    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+    workflow = _unbound_workflow_text()
 
     assert "rebase_unverified_app:" in workflow
     assert "remediate_foreign_catalog_bindings" not in workflow
@@ -7284,7 +7299,8 @@ def test_dev_workflow_deploys_one_client_environment_per_manual_dispatch() -> No
 def test_a_malformed_client_key_or_phase_refuses_before_any_job_names_an_environment(
     client: str, phase: str, code: int
 ) -> None:
-    step = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))["jobs"]["check-dispatch"]["steps"][0]
+    steps = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))["jobs"]["check-dispatch"]["steps"]
+    (step,) = [step for step in steps if step.get("name") == "Refuse a malformed client key or phase"]
     assert step["env"] == {"MIP_DISPATCH_CLIENT": "${{ inputs.client }}", "MIP_DISPATCH_PHASE": "${{ inputs.phase }}"}
     result = subprocess.run(
         ["bash", "-c", step["run"]],
@@ -7400,15 +7416,23 @@ def test_the_deploy_job_runs_no_node_or_npm_and_installs_offline_with_hashes() -
 
 
 def test_identifying_fields_reach_the_deploy_job_from_its_secrets_only() -> None:
-    """Every identifying value comes from toJSON(secrets) through the resolver, never a variable."""
+    """Each identifying or secret name is bound from secrets; from vars, by presence only (a misfiled one refuses).
+
+    No step holds toJSON(vars) or toJSON(secrets): a step's env prints in its
+    log header, and a variable prints there in clear
+    (tests/unit/test_workflow_contexts.py parses every expression).
+    """
 
     text = DEPLOY_DEV.read_text(encoding="utf-8")
-    deploy = _jobs()["deploy"]
-    referenced = set(re.findall(r"\bvars\.([A-Za-z_][A-Za-z0-9_]*)", text))
-    assert referenced == set(), "no variable is named: toJSON(vars) reaches the resolver whole"
-    holders = [step.get("name") for step in deploy["steps"] if "toJSON(secrets)" in json.dumps(step)]
-    assert holders == ["Resolve the client profile", "Preflight the dispatch"]
-    assert not re.findall(r"\bsecrets\.[A-Za-z_]", text), "no secret is named one by one"
+    assert "toJSON(vars)" not in text and "toJSON(secrets)" not in text
+    collect = next(step for step in _jobs()["deploy"]["steps"] if step.get("name") == "Collect the client's profile from its environment")
+    for name, value in collect["env"].items():
+        if name.startswith(workflow_contexts.VAR_PREFIX):
+            assert name.removeprefix(workflow_contexts.VAR_PREFIX) in workflow_contexts.PUBLIC_NAMES
+            assert value == f"${{{{ vars.{name.removeprefix(workflow_contexts.VAR_PREFIX)} }}}}"
+    for name in workflow_contexts.PRIVATE_NAMES:
+        assert collect["env"][f"{workflow_contexts.SECRET_PREFIX}{name}"] == f"${{{{ secrets.{name} }}}}"
+        assert f"${{{{ vars.{name} && '{name}' || '' }}}}" in collect["env"][workflow_contexts.MISFILED_ENV]
 
 
 def test_the_secret_names_the_deploy_reads_are_exactly_the_schemas() -> None:
@@ -7430,22 +7454,37 @@ def test_the_secret_names_the_deploy_reads_are_exactly_the_schemas() -> None:
     assert set(ci_profile.secret_fields(profile)) == schema_secrets & set(secrets)
 
 
-def test_the_mask_is_the_first_step_that_holds_a_profile_value() -> None:
+def test_the_mask_is_the_first_step_that_prints_a_profile_value() -> None:
+    """Before the action's mask step, only the collect step reads a context, and it prints counts only.
+
+    Its own header prints the public values it binds and the runner-masked
+    secrets; an identifying name in vars prints as its name, never its value.
+    """
+
     deploy = _jobs()["deploy"]
     steps = deploy["steps"]
     names = [step.get("name") for step in steps]
     first = names.index("Resolve the client profile")
+    collect = names.index("Collect the client's profile from its environment")
+    assert collect == first - 1
     for step in steps[:first]:
         dumped = json.dumps(step)
-        assert "secrets." not in dumped and "toJSON(vars)" not in dumped and ".env.local" not in dumped, step.get("name")
+        if step.get("name") != names[collect]:
+            assert "secrets" not in dumped and "vars." not in dumped and "vars)" not in dumped, step.get("name")
+        assert ".env.local" not in dumped, step.get("name")
+    assert not re.search(r"\b(?:echo|cat|printenv|env)\b", steps[collect]["run"]), "it prints nothing but its own counts"
     action = yaml.safe_load(PROFILE_ACTION.read_text(encoding="utf-8"))
     assert action["runs"]["steps"][0]["name"] == "Mask every identifying profile value"
     assert action["runs"]["steps"][0]["run"].split()[:4] == ["python", "-m", "tools.clients", "mask"]
     assert steps[first]["with"] == {
         "environment": "${{ inputs.client }}",
-        "vars-json": "${{ toJSON(vars) }}",
-        "secrets-json": "${{ toJSON(secrets) }}",
+        "vars-file": "${{ runner.temp }}/mip-client-vars.json",
+        "secrets-file": "${{ runner.temp }}/mip-client-secrets.json",
     }
+    remove = steps[names.index("Remove the profile files")]
+    assert remove["if"] == "always()"
+    for path in (".env.local", '"$HOME/.databrickscfg"', '"$RUNNER_TEMP/mip-client-vars.json"', '"$RUNNER_TEMP/mip-client-secrets.json"'):
+        assert path in remove["run"], path
 
 
 def test_no_retired_install_name_or_databricks_token_in_the_workflow_or_its_action() -> None:

@@ -1,12 +1,16 @@
 """Resolve a client profile from GitHub contexts or from the local environment.
 
-**CI.** ``--vars-json`` carries ``toJSON(vars)`` and ``--secrets-json``
-``toJSON(secrets)``, each from one step's env (``env:NAME``) or a file, and
-``--environment`` names the GitHub Environment the job runs in. The ambient
+**CI.** ``--vars-json`` and ``--secrets-json`` carry the vars and secrets
+objects, each from one step's env (``env:NAME``) or a file, and
+``--environment`` names the GitHub Environment the job runs in. deploy-dev.yml's
+collect step writes both files from its environment, each profile name bound
+one by one (tools/clients/workflow_contexts.py): a step prints its env in the
+log header, so no step holds a whole ``toJSON(vars)``. The ambient
 environment and ``.env.local`` are not read.
 
 * An identifying or secret field (or alias) found in ``vars`` is refused: a
-  variable prints in clear in step env and in the run log.
+  variable prints in clear in step env and in the run log. (The collect step
+  binds such a name by presence only and refuses it there first.)
 * A public field found in ``secrets`` is refused: the runner would mask its
   value, and a masked catalog or scope name blanks unrelated log text.
 * ``MIP_CLIENT`` must equal the environment name, so a job pointed at another
@@ -18,10 +22,10 @@ organization's and the repository's entries, with the environment's winning
 on a clash, and nothing in them says which scope an entry came from. So a
 field the environment omits is filled, silently, from a repository-level entry
 of the same name. No repository- or organization-level secret or variable may
-carry a profile field or alias name; deleting the ones that do is a cutover
-step of the per-client workflow (M1-PR7). Until then a repository-level
-identifying variable is refused here like any other, and a ``MIP_CLIENT`` that
-only the repository holds fails the environment binding.
+carry a profile field or alias name: deploy-dev.yml's ``check-dispatch`` job,
+which runs in no environment and so sees only those scopes, refuses every
+dispatch while one does (tools/clients/workflow_contexts.py). A ``MIP_CLIENT``
+that only the repository holds also fails the environment binding here.
 
 **Local.** A non-empty shell value beats ``.env.local``, as
 ``deployment_control_value`` in scripts/lib/deploy_identity_lifecycle.sh does.

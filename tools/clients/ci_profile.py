@@ -1,8 +1,8 @@
 """Write the deploy job's profile files from its GitHub Environment (M1-PR7).
 
 ``.github/actions/resolve-client-profile`` runs this right after its mask step
-(``python -m tools.clients mask``), with the same ``toJSON(vars)`` and
-``toJSON(secrets)`` contexts in step env:
+(``python -m tools.clients mask``), with the same vars and secrets objects the
+deploy job's collect step wrote as files (tools/clients/workflow_contexts.py):
 
 * ``.env.local``: the ``controls`` view (tools/clients/profile.deploy_controls),
   every public and identifying field under the names scripts/deploy.sh reads,
@@ -98,8 +98,8 @@ def _write_new(path: Path, text: str) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m tools.clients.ci_profile", description=__doc__.splitlines()[0])
-    parser.add_argument("--vars-json", required=True, help="env:NAME holding toJSON(vars)")
-    parser.add_argument("--secrets-json", required=True, help="env:NAME holding toJSON(secrets)")
+    parser.add_argument("--vars-json", required=True, help="env:NAME or a file holding the vars object")
+    parser.add_argument("--secrets-json", required=True, help="env:NAME or a file holding the secrets object")
     parser.add_argument("--environment", required=True, help="the GitHub Environment the job runs in")
     parser.add_argument("--env-local", required=True, type=Path)
     parser.add_argument("--databrickscfg", required=True, type=Path)

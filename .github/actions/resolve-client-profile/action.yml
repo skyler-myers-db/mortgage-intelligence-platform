@@ -4,25 +4,27 @@ description: >-
   (M1-PR7): mask every identifying value first, then write .env.local (the
   whole profile, as an operator keeps it) and the github-oidc DEFAULT
   Databricks profile, and output public values only.
-# The caller passes toJSON(vars) and toJSON(secrets) of its own environment.
-# Identifying fields come from secrets only: tools/clients/environment.py
-# refuses an identifying or secret field found in vars (it would print in
-# clear) and a public one found in secrets (the runner would blank it). The
-# runner masks each whole secret; the FIRST step registers every identifying
-# leaf of a JSON or list secret, and each spelling the deploy derives from
-# one (lower case, the host origin), as a mask, before any other step of
-# this action prints anything. The deploy job's install step has installed
-# the hash-pinned runtime closure into this interpreter; this action installs
-# nothing.
+# The caller's collect step (tools/clients/workflow_contexts.py) binds each
+# profile name of its environment one by one and writes the vars and secrets
+# objects as files, mode 0600; no step ever holds a whole context, whose
+# variables would print in clear in the step's log header. Identifying fields
+# come from secrets only: tools/clients/environment.py refuses an identifying
+# or secret field found in vars and a public one found in secrets (the runner
+# would blank it). The runner masks each whole secret; the FIRST step
+# registers every identifying leaf of a JSON or list secret, and each spelling
+# the deploy derives from one (lower case, the host origin), as a mask, before
+# any other step of this action prints anything. The deploy job's install
+# step has installed the hash-pinned runtime closure into this interpreter;
+# this action installs nothing.
 inputs:
   environment:
     description: The GitHub Environment the job runs in; MIP_CLIENT must equal it.
     required: true
-  vars-json:
-    description: toJSON(vars) of the job.
+  vars-file:
+    description: The vars object the collect step wrote (public profile names only).
     required: true
-  secrets-json:
-    description: toJSON(secrets) of the job.
+  secrets-file:
+    description: The secrets object the collect step wrote (mode 0600).
     required: true
 outputs:
   client:
@@ -49,25 +51,25 @@ runs:
     - name: Mask every identifying profile value
       shell: bash
       env:
-        MIP_VARS_JSON: ${{ inputs.vars-json }}
-        MIP_SECRETS_JSON: ${{ inputs.secrets-json }}
+        MIP_CLIENT_VARS_FILE: ${{ inputs.vars-file }}
+        MIP_CLIENT_SECRETS_FILE: ${{ inputs.secrets-file }}
         MIP_CLIENT_ENVIRONMENT: ${{ inputs.environment }}
       run: >-
         python -m tools.clients mask
-        --vars-json env:MIP_VARS_JSON
-        --secrets-json env:MIP_SECRETS_JSON
+        --vars-json "$MIP_CLIENT_VARS_FILE"
+        --secrets-json "$MIP_CLIENT_SECRETS_FILE"
         --environment "$MIP_CLIENT_ENVIRONMENT"
     - name: Write .env.local and the github-oidc DEFAULT profile
       id: write
       shell: bash
       env:
-        MIP_VARS_JSON: ${{ inputs.vars-json }}
-        MIP_SECRETS_JSON: ${{ inputs.secrets-json }}
+        MIP_CLIENT_VARS_FILE: ${{ inputs.vars-file }}
+        MIP_CLIENT_SECRETS_FILE: ${{ inputs.secrets-file }}
         MIP_CLIENT_ENVIRONMENT: ${{ inputs.environment }}
       run: >-
         python -m tools.clients.ci_profile
-        --vars-json env:MIP_VARS_JSON
-        --secrets-json env:MIP_SECRETS_JSON
+        --vars-json "$MIP_CLIENT_VARS_FILE"
+        --secrets-json "$MIP_CLIENT_SECRETS_FILE"
         --environment "$MIP_CLIENT_ENVIRONMENT"
         --env-local .env.local
         --databrickscfg "$HOME/.databrickscfg"

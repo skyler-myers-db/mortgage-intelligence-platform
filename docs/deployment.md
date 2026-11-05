@@ -3885,10 +3885,17 @@ key.
 
 - `refuse-unacknowledged` and `check-dispatch` run first. Without
   `acknowledge_single_maintainer_break_glass=true` the run ends in the first.
-  The second refuses a client key that is not `MIP_CLIENT`-shaped, and a phase
-  outside the five, before any job names an environment: GitHub creates an
-  environment, unprotected, the first time a job references a name it does
-  not know.
+  The second refuses step debug logging (it traces every expression with its
+  operands, a variable's value included), a client key that is not
+  `MIP_CLIENT`-shaped or names an environment that is not a client's (`dev`,
+  `copilot`, `github-pages`), and a phase outside the five, before any job
+  names an environment: GitHub creates an environment, unprotected, the first
+  time a job references a name it does not know. It also refuses while any
+  profile field or alias name is set as a repository- or organization-level
+  variable or secret, and prints those names (never a value): it runs in no
+  environment, so it sees only those scopes, and GitHub merges them into
+  every client environment's contexts, silently filling a field the
+  environment omits (tools/clients/workflow_contexts.py).
 - `build` has no ID token, no environment and no secret. It runs `npm ci` and
   the vite build, stages the App runtime closure
   (`app_runtime_closure stage --require-brotli-check`), downloads a wheelhouse
@@ -3902,19 +3909,36 @@ key.
   `id-token: write` and `actions: read`. It sets up no Node and runs no npm.
   Its timeout is the phase's: plan 30, release 330, data 330, adopt and
   unadopt 60 minutes, and its first step turns that into
-  `MIP_JOB_DEADLINE_EPOCH`. It re-hashes the artifact against the build job's
+  `MIP_JOB_DEADLINE_EPOCH`; the next refuses step debug logging. It re-hashes
+  the artifact against the build job's
   manifest digest, and checks its staged App source against its own checkout
   of the commit, before it installs anything, installs with
   `pip install --no-index --find-links <wheelhouse> --require-hashes`, runs the
-  resolve-client-profile action, the OIDC proof and the dispatch preflight,
+  collect step, the resolve-client-profile action, the OIDC proof and the
+  dispatch preflight,
   then `./scripts/deploy.sh -t client --phase <phase> --no-confirm
   --prebuilt-release <dir>` with `MIP_REDACT_FOREIGN_NAMES=1`, records the
   quiesce window journal and deletes the profile files. Under this workflow's
   ref `scripts/deploy.sh` refuses any run that names no `--phase` or no
   `--prebuilt-release`, before it prints anything.
 
+**The collect step** is the one step that reads `vars` or `secrets`. The
+runner prints a step's `with:` and `env:` values in its log header before the
+step runs, and only secrets are masked there: a variable prints in clear, and
+the run logs are public. So no step holds `toJSON(vars)` or
+`toJSON(secrets)` (that would print every repository-, organization- and
+environment-level variable and carry every repository secret into the job).
+The collect step binds each public profile name from `vars` by value, each
+profile name from `secrets` by value (the runner masks each), and each
+identifying or secret name only by whether `vars` holds it, so a misfiled one
+prints its name and refuses; no other variable or secret reaches the job. It
+writes the two objects to `$RUNNER_TEMP`, mode 0600 and create-only, and
+prints counts only. Its env is generated from tools/clients/schema.py (`python
+-m tools.clients.workflow_contexts print`), and a test holds the workflow
+equal to it and parses every other expression in it.
+
 **The resolve-client-profile action** (`.github/actions/resolve-client-profile`)
-takes the job's `toJSON(vars)` and `toJSON(secrets)`. Its first step registers
+takes the collect step's two files. Its first step registers
 every identifying leaf, and each spelling the deploy derives from one (lower
 case, the host origin), as a runner mask (`python -m tools.clients mask`),
 before anything else prints. Then `tools/clients/ci_profile.py` writes
@@ -4302,13 +4326,18 @@ gh api "repos/$R/actions/workflows/deploy-dev.yml/runs?per_page=5" --jq '.workfl
    carries a client profile field or alias name: GitHub merges those scopes
    into the job's contexts with no sign of where an entry came from, so a
    field the client's environment omits would be filled from them
-   (tools/clients/environment.py, "Scope precondition"). The old
+   (tools/clients/environment.py, "Scope precondition"). `check-dispatch`
+   refuses every dispatch until they are gone and names each one it finds;
+   the parked `nightly.yml` that still reads some of them waits for M1-PR8
+   anyway. Delete the retired `dev` environment's variables too: no dispatch
+   may name it, and its identifying values must not stay variables. The old
    environment-level `DATABRICKS_CLIENT_ID` (2026-07-20) and the
    repository-level pairs (2026-07-26) are such entries: the client ids now
    live in the environment secret `MIP_IDENTITY_IDS_JSON`. Re-mint the account-SCIM credential yourself. Create
    a new OAuth secret for the service principal `DATABRICKS_ACCOUNT_CLIENT_ID`
-   names and pipe it straight into `gh secret set
-   DATABRICKS_ACCOUNT_CLIENT_SECRET`; agents never handle the value. Then
+   names and pipe it straight into `gh secret set --env <client>
+   DATABRICKS_ACCOUNT_CLIENT_SECRET` (the client's environment, never the
+   repository); agents never handle the value. Then
    retire its older secrets unless something local still uses them. The
    deployer never takes this role: the account plane stays on
    `DATABRICKS_ACCOUNT_*`.

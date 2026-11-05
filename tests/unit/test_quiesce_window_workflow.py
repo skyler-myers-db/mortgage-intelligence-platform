@@ -98,7 +98,7 @@ def test_the_journal_is_recorded_last_whatever_happened_and_read_only() -> None:
     assert _steps()[-1] == {
         "name": "Remove the profile files",
         "if": "always()",
-        "run": 'rm -f .env.local "$HOME/.databrickscfg"',
+        "run": 'rm -f .env.local "$HOME/.databrickscfg" "$RUNNER_TEMP/mip-client-vars.json" "$RUNNER_TEMP/mip-client-secrets.json"',
     }
     last = _record_step()
     assert last["name"] == RECORD_STEP and last["if"] == "always()"

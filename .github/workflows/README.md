@@ -142,12 +142,24 @@ any historical `MIP_AI_GATEWAY_ENDPOINT` or
 `MIP_AI_GATEWAY_INFERENCE_TABLE` repository secrets; the workflow deliberately
 does not consume them.
 
-## Required repo or environment variables (dev deploy)
+## Repository variables (the parked nightly.yml)
 
-At least one of these non-secret variables must be set under **Settings →
-Secrets and variables → Actions → Variables** before `deploy-dev.yml` runs. The
-workflow fails closed if both are empty, so dev deploys do not implicitly grant
-app-admin access to the deploying principal.
+`deploy-dev.yml` reads none of these. It reads only its client environment's
+own variables and secrets, each profile name bound one by one
+(tools/clients/workflow_contexts.py), and its `check-dispatch` job refuses
+every dispatch while any profile field or alias name (a name in
+tools/clients/schema.py) is set as a repository- or organization-level
+variable or secret: GitHub would merge it into every client environment's
+contexts and silently fill a field the environment omits. So each profile
+name in the table below, and every repository-level secret above that is a
+profile field (`DATABRICKS_HOST`, `DATABRICKS_ACCOUNT_ID`, the client
+secrets and signing keys), is deleted before the first per-client dispatch;
+the parked `nightly.yml` that names them is rebuilt per client by M1-PR8.
+
+`MIP_ADMIN_EMAILS`, `MIP_ADMIN_GROUP_NAME` and `MIP_APPROVER_GROUP_NAME` are
+identifying profile fields: a client environment holds them as **secrets**,
+never as variables at any scope (a variable prints in clear in a public run
+log).
 
 The "Defaults to" values below are `nightly.yml`'s fallbacks, which are the
 live install's names. `deploy-dev.yml` has no fallback: every install name is
@@ -158,8 +170,8 @@ a variable of the client's environment (M1-PR7). Its deployer is the profile's
 | Variable | What it is | Notes |
 |---|---|---|
 | `MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS` | Repository variable: every retired AI Gateway proof public key, oldest first, comma-separated. | No client profile field, so `deploy-dev.yml` no longer passes it (M1-PR7); a rotation adds it to the schema first. The key registry must end at the current key, and each signed lease record's `key_epoch` must be its key's index (docs/deployment.md, owner step 6). Public keys only. |
-| `MIP_ADMIN_EMAILS` | Comma-separated app-admin email allowlist for the dev app. | Use when a named operator must access `/api/v1/admin/*`. |
-| `MIP_ADMIN_GROUP_NAME` | Optional local/test compatibility group name. | Deployed automation uses the exact `MIP_ADMIN_IDENTITIES` value derived from `DATABRICKS_ADMIN_CLIENT_ID`; group headers are not authoritative in sandbox/production. |
+| `MIP_ADMIN_EMAILS` | Comma-separated app-admin email allowlist. | Identifying: a client environment **secret**, never a variable. Delete any repository- or `dev`-environment variable of this name. |
+| `MIP_ADMIN_GROUP_NAME` | Optional local/test compatibility group name. | Identifying: a client environment **secret**, never a variable. Deployed automation uses the exact `MIP_ADMIN_IDENTITIES` value derived from `DATABRICKS_ADMIN_CLIENT_ID`; group headers are not authoritative in sandbox/production. |
 | `MIP_DEFAULT_CATALOG` | Target Unity Catalog name. | Defaults to `mip`, the live catalog. Deploy and every nightly proof/render step use the same value. |
 | `MIP_APP_NAME` | Bundle-managed Databricks App name. | Defaults to `mip-app`; use a unique DNS-style value for every isolated staging/customer workspace. |
 | `MIP_LAKEBASE_INSTANCE` | Bundle-managed Lakebase instance name. | Defaults to `mip-app-state`; it must match `LAKEBASE_INSTANCE_NAME` if that compatibility alias is also set. |
