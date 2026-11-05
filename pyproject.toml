@@ -24,6 +24,14 @@ fuzz = [
 testpaths = ["tests/unit", "tests/integration"]
 pythonpath = ["."]
 addopts = "-q"
+# Delete a passing test's tmp_path as soon as it finishes; keep a failing
+# test's for debugging. The deploy sandboxes (tests/fixtures/deploy_sandbox.py)
+# each clone the full ~140 MB tree, and pytest's default ("all") keeps every
+# tmp_path until the session ends: by 2026-11 they alone held 7-9 GB at the
+# end of a run, and the CI runner's disk quota ran out mid-suite (PR #321,
+# run 41975011494, "OSError: [Errno 122] Disk quota exceeded").
+# tmp_path_factory.mktemp dirs (module-scoped fixtures) are not affected.
+tmp_path_retention_policy = "failed"
 # Custom pytest markers. Registered so `-m genie_fuzz_deep` selects the
 # heavy Hypothesis run and PR CI's `pytest` doesn't emit
 # PytestUnknownMarkWarning. See tests/integration/test_genie_fuzz.py.
