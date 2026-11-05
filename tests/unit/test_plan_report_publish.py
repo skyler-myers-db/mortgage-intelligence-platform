@@ -27,6 +27,13 @@ DEPLOYER = "00000000-0000-4000-8000-000000000001"
 FOREIGN = ("other_team_catalog_zyrplax", "owner.zyrplax@other-team.example")
 
 
+@pytest.fixture(autouse=True)
+def _outside_actions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CI runs with GITHUB_ACTIONS=true, where emit_mask writes ::add-mask:: lines; the masked mode has its own test."""
+
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+
 def _report() -> PlanReport:
     return PlanReport(
         position="pre-lease",
@@ -131,3 +138,15 @@ def test_the_active_deployment_pin_prints_and_checks_only_a_digest(capsys: pytes
 
     assert pin.main(["check", "--app-name", "mip-app", "--expect", "none"], workspace_factory=absent) == 0
     assert pin.main(["check", "--app-name", "mip-app", "--expect", "id-not-digest"], workspace_factory=absent) == 2
+
+
+def test_inside_actions_the_deployment_id_is_masked_the_moment_it_is_read(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    deployment = "01f0deadbeefcafe0000000000000002"
+
+    assert pin.main(["digest", "--app-name", "mip-app"], workspace_factory=lambda: _app(deployment)) == 0
+    out = capsys.readouterr()
+    assert out.err.splitlines() == [f"::add-mask::{deployment}"]
+    assert deployment not in out.out

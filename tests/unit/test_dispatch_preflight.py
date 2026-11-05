@@ -47,6 +47,13 @@ ENVIRON = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _outside_actions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CI runs with GITHUB_ACTIONS=true, where emit_mask writes ::add-mask:: lines; the masked mode has its own test."""
+
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+
 def _profile_values() -> dict[str, str]:
     return core_tier_profile()
 
@@ -349,7 +356,7 @@ def test_the_cli_writes_exports_only_on_a_pass_and_never_prints_a_value(
     ]
     environ = {**ENVIRON, **_profile_ack(), "MIP_DISPATCH_OPERATION_ACKS": f"quiesce_window={'d' * 64}"}
 
-    assert preflight.main(argv, environ={**environ, "GITHUB_ACTIONS": "false"}) == 0
+    assert preflight.main(argv, environ=environ) == 0
     exported = github_env.read_text(encoding="utf-8").splitlines()
     assert exported == [f"MIP_ACK_QUIESCE_WINDOW={'d' * 64}", f"{preflight.PROTECTIONS_ENV}={protections.VERIFIED}"]
     out = capsys.readouterr()
@@ -360,5 +367,22 @@ def test_the_cli_writes_exports_only_on_a_pass_and_never_prints_a_value(
     assert "- verdict: passed" in text
     github_env.unlink()
     # data never reads the quiesce-window ack: refused, nothing exported.
-    assert preflight.main(["--phase", "data", *argv[2:]], environ={**environ, "GITHUB_ACTIONS": "false"}) == 2
+    assert preflight.main(["--phase", "data", *argv[2:]], environ=environ) == 2
     assert not github_env.exists(), "a refused dispatch exports nothing"
+
+
+def test_inside_actions_the_only_lines_that_hold_a_value_are_runner_mask_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(protections, "from_environ", lambda env: _FROM_ENVIRON(env, opener=_opener(READABLE)))
+    vars_source, secrets_source = _contexts(tmp_path)
+    argv = ["--phase", "plan", "--environment", CLIENT, "--vars-json", vars_source, "--secrets-json", secrets_source, "--repo", str(_repo(tmp_path))]
+
+    assert preflight.main(argv, environ=ENVIRON) == 0
+    out = capsys.readouterr()
+    profile = resolve(from_github(*split_contexts(_profile_values()), environment=CLIENT))
+    registered = {line.removeprefix("::add-mask::") for line in out.err.splitlines() if line.startswith("::add-mask::")}
+    assert registered == {*views.masks(profile), *views.derived_masks(profile)}
+    printed = "\n".join(line for line in (out.out + out.err).splitlines() if not line.startswith("::add-mask::"))
+    assert not [value for value in registered if value in printed]
