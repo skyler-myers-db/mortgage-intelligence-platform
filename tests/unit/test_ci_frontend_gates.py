@@ -321,10 +321,12 @@ def test_the_fixture_job_checks_the_built_dist_with_the_require_flag() -> None:
     # owns, and the release stage runs git: the workspace is trusted first.
     trust = _step_index(steps, 'git config --global --add safe.directory "$GITHUB_WORKSPACE"')
     assert _step_index(steps, "actions/checkout@") < trust < check
-    # The runner's /__t tool cache holds CPython built for the runner's
-    # Ubuntu; a container-local cache installs the build for the image's.
+    # The runner's tool cache, mounted at /__t, holds CPython built for the
+    # runner's Ubuntu whose pip shebang names a host path (spawn ENOENT in
+    # the container); a container-only cache installs the build for the
+    # image's. The runner rewrites its host path /opt/hostedtoolcache to /__t.
     tool_cache = steps[python]["env"]["AGENT_TOOLSDIRECTORY"]
-    assert tool_cache.startswith("/") and not tool_cache.startswith("/__"), tool_cache
+    assert tool_cache.startswith("/") and not tool_cache.startswith(("/__", "/opt/hostedtoolcache")), tool_cache
     # The same required-dist step stages that dist as deploy.sh step 1 does.
     assert (ROOT / RELEASE_STAGE_TEST).is_file()
     assert _step_index(steps, RELEASE_STAGE_TEST) == check

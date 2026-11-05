@@ -657,12 +657,16 @@ jobs:
       - name: Build production frontend
         run: npm --prefix frontend run build
       - uses: actions/setup-python@v6
-        # The runner's tool cache is mounted at /__t and holds CPython builds
-        # for the RUNNER's Ubuntu, not the image's (noble). A container-local
-        # tool cache makes setup-python install the build its manifest names
-        # for the image's own release, from GitHub, never apt.
+        # The runner's tool cache (/opt/hostedtoolcache) is mounted at /__t.
+        # Its CPython is built for the RUNNER's Ubuntu, not the image's
+        # (noble), and its pip's shebang names the host path, which does not
+        # exist in here: `pip cache dir` failed with spawn ENOENT (run
+        # 42117208805). A tool cache only the container has makes
+        # setup-python install the build its manifest names for the image's
+        # own release, from GitHub, never apt. Not /opt/hostedtoolcache: the
+        # runner rewrites that host path to /__t in a step's env.
         env:
-          AGENT_TOOLSDIRECTORY: /opt/hostedtoolcache
+          AGENT_TOOLSDIRECTORY: /opt/container-toolcache
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
