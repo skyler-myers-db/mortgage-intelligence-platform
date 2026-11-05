@@ -444,6 +444,10 @@ def test_verifier_runtime_overwrites_hostile_sql_and_lakebase_auth(monkeypatch) 
         "DATABRICKS_TOKEN": "hostile-deployer-pat",
     }.items():
         monkeypatch.setenv(name, value)
+    # The proof writes these too; registered so monkeypatch restores them and no
+    # later test on this worker inherits a profile name (LAKEBASE_DATABASE).
+    for name in ("LAKEBASE_DATABASE", "PGDATABASE"):
+        monkeypatch.delenv(name, raising=False)
 
     assert verify_ai_gateway_exact_proof.ensure_lakebase_env(
         lambda: workspace,

@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures.client_profiles import IDENTITY_IDS, env_file_text, paychex_shaped_profile
+from tools.clients import schema as profile_schema
 
 REPO = Path(__file__).resolve().parents[2]
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -35,6 +36,28 @@ STUB = (
 )
 # Ambient names a dry run must never inherit from the developer's or the runner's shell.
 INHERITED_PREFIXES = ("COV_CORE", "COVERAGE", "GITHUB_", "MIP_", "DATABRICKS_", "BUNDLE_VAR_", "GENIE_")
+
+
+def _profile_env_names() -> frozenset[str]:
+    names = set(profile_schema.FIELD_CLASS) | set(profile_schema.IDENTITY_ALIASES)
+    for canonical, aliases in profile_schema.ALIASES.items():
+        names.update((canonical, *aliases))
+    return frozenset(names)
+
+
+# Every client-profile field and alias, whatever its prefix. A shell value wins
+# over .env.local, and some names carry none of the prefixes above
+# (LAKEBASE_DATABASE, LAKEBASE_INSTANCE_NAME, APP_ENV). Tests whose code under
+# test writes them into os.environ leak them to the next module on the same
+# xdist worker, where the dry run then refused the profile ("must agree"):
+# a CI-only, order-dependent failure (PR #321, 2026-11-05).
+PROFILE_ENV_NAMES = _profile_env_names()
+
+
+def inherited(name: str) -> bool:
+    """True for an ambient name the sandbox strips before any dry run."""
+
+    return name.startswith(INHERITED_PREFIXES) or name in PROFILE_ENV_NAMES
 
 
 def venv_prefix() -> Path:
@@ -85,7 +108,7 @@ def sandbox(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
     (bin_dir / "databricks").write_text(STUB, encoding="utf-8")
     (bin_dir / "databricks").chmod(0o755)
     log = tmp_path / "databricks.log"
-    env = {name: value for name, value in os.environ.items() if not name.startswith(INHERITED_PREFIXES)}
+    env = {name: value for name, value in os.environ.items() if not inherited(name)}
     env.update(
         {
             # A Python SDK client the dry run builds by mistake must fail

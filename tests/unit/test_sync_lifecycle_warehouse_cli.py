@@ -121,6 +121,10 @@ def test_bound_deployer_workspace_owns_sql_and_lakebase_auth(monkeypatch) -> Non
         "PGPASSWORD": "hostile-pg-password",
     }.items():
         monkeypatch.setenv(name, value)
+    # Written by _ensure_lakebase_env too; registered so monkeypatch restores
+    # them and no later test on this worker inherits a profile name.
+    for name in ("LAKEBASE_USER", "PGUSER", "LAKEBASE_DATABASE", "PGDATABASE"):
+        monkeypatch.delenv(name, raising=False)
 
     MODULE._ensure_lakebase_env(
         settings,
