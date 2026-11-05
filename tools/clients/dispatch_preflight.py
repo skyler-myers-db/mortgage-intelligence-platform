@@ -23,7 +23,8 @@ profile again (registering its masks first) and decides, for ``--phase``:
    the dispatch carries the exact ``protections_unverified`` ack;
 7. **tree scan**: no resolved identifying value in any tracked file
    (tools/clients/tree_scan.py); a plan records the hits, a mutating phase
-   refuses them;
+   refuses them. A name built on the public identity prefix (``mip-admin``)
+   is the repository's own convention: reported, never refused;
 8. **expected active deployment**: ``expected_active_deployment_sha256``, when
    given, reaches ``--phase release`` as ``MIP_EXPECTED_ACTIVE_DEPLOYMENT_SHA256``.
 
@@ -164,11 +165,18 @@ def decide(
             verdict.exports[EXPECTED_DEPLOYMENT_ENV] = expected_deployment
     _protections(verdict, environ, profile.client, environment, profile.review_mode)
     hits = tree_scan.scan(repo, tree_scan.needles(profile))
-    if hits:
-        listed = ", ".join(f"{hit.field} in {hit.path}" for hit in hits[:20])
-        verdict.record_or_refuse("tree_scan", f"{len(hits)} tracked files hold a resolved identifying value ({listed})")
+    own = [hit for hit in hits if not hit.conventional]
+    conventional = [hit for hit in hits if hit.conventional]
+    if own:
+        listed = ", ".join(f"{hit.field} in {hit.path}" for hit in own[:20])
+        verdict.record_or_refuse("tree_scan", f"{len(own)} tracked files hold a resolved identifying value ({listed})")
     else:
         verdict.facts.append("tree scan: no tracked file holds a resolved identifying value")
+    if conventional:
+        listed = ", ".join(sorted({hit.field for hit in conventional}))
+        verdict.facts.append(
+            f"tree scan: {len(conventional)} tracked files name a <prefix>- convention name of {listed} (reported, not refused)"
+        )
     return verdict
 
 

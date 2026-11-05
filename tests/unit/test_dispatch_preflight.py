@@ -26,6 +26,7 @@ from tools.clients import dispatch_acks as acks
 from tools.clients import dispatch_preflight as preflight
 from tools.clients import dispatch_protections as protections
 from tools.clients import profile as views
+from tools.clients import tree_scan
 from tools.clients.environment import from_github, resolve
 from tools.clients.errors import ProfileRefusal
 
@@ -386,3 +387,27 @@ def test_inside_actions_the_only_lines_that_hold_a_value_are_runner_mask_command
     assert registered == {*views.masks(profile), *views.derived_masks(profile)}
     printed = "\n".join(line for line in (out.out + out.err).splitlines() if not line.startswith("::add-mask::"))
     assert not [value for value in registered if value in printed]
+
+
+def test_the_tree_scan_never_refuses_a_platform_default_or_a_prefix_convention_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default account host and <prefix>- names are not a client's own: no refusal, a report at most."""
+
+    profile = resolve(from_github(*split_contexts(_profile_values()), environment=CLIENT))
+    needles = tree_scan.needles(profile)
+    assert profile.account_host == "https://accounts.cloud.databricks.com"
+    assert not [value for value in needles if "accounts.cloud.databricks.com" in value], "a platform default"
+    assert needles["mip-admin"] == tree_scan.Needle("MIP_ADMIN_GROUP_NAME", True)
+    assert needles["metastore-owners-alpha"] == tree_scan.Needle("MIP_UC_METASTORE_OWNER", False)
+    tree = _repo(
+        _mkdir(tmp_path / "tree"),
+        {"docs/groups.md": "the admin group is mip-admin; the console is https://accounts.cloud.databricks.com\n"},
+    )
+    release = _decide(_mkdir(tmp_path / "release"), monkeypatch, phase="release", repo=tree, environ=_profile_ack())
+
+    assert release.refusals == []
+    assert "tree scan: 1 tracked files name a <prefix>- convention name of MIP_ADMIN_GROUP_NAME (reported, not refused)" in release.facts
+    owned = _repo(_mkdir(tmp_path / "owned"), {"docs/owner.md": "the metastore owner is metastore-owners-alpha\n"})
+    refused = _decide(_mkdir(tmp_path / "refused"), monkeypatch, phase="release", repo=owned, environ=_profile_ack())
+    assert refused.refusals == ["tree_scan: 1 tracked files hold a resolved identifying value (MIP_UC_METASTORE_OWNER in docs/owner.md)"]

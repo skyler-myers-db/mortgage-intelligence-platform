@@ -3935,7 +3935,10 @@ satisfies another:
   unless `protections_unverified_ack` is the exact ack over the client, the
   environment and the run's head commit, which the refusal prints;
 - no tracked file holds a resolved identifying value (the tree scan names the
-  field and the file, never the value);
+  field and the file, never the value). A cloud's default account-console
+  host is no needle, and a name built on the public identity prefix (such as
+  `mip-admin`), the convention this repository's own docs use, is reported,
+  never refused;
 - `expected_active_deployment_sha256`, when given, reaches `--phase release`,
   which refuses before the lease unless the App's active deployment still has
   that digest (a plan prints it).
