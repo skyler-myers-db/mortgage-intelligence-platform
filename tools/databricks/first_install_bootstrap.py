@@ -21,11 +21,21 @@ next ``--phase release`` resumes at the same point.
   written only while that journal reads ``recover`` and the App is stopped with
   no deployment. The deploy keeps the App on that exit; without the marker the
   next run's first-install recovery would delete it (and the owner's grant
-  with its service principal).
+  with its service principal). A marker naming a claim the journal no longer
+  holds is **stale** (its first install was deleted since: the journal holds
+  one claim at a time) and is replaced.
 * ``status`` (under the lease): ``resume`` when a valid marker names the
   journal's own claim and the App is still stopped with no deployment;
-  ``absent`` with no marker; anything else refuses (exit 2), never reads as
-  absent.
+  ``stale`` when it names another claim (it protects nothing; the journal's
+  App is an ordinary interrupted first install); ``absent`` with no marker;
+  anything else refuses (exit 2), never reads as absent.
+* ``retire`` (under the lease): a run with no ``--phase`` never resumes the
+  App a marker keeps and never deletes it silently. Only ``--ack`` equal to the
+  sha256 of the marker's retire plan (purpose
+  ``first_install_bootstrap_retire``, printed by the refusal; a one-run shell
+  export, never ``.env.local``) deletes the marker, after which that run's
+  recovery deletes the App as any interrupted first install. A stale marker
+  protects nothing and is deleted with no ack.
 * ``verify-resume`` (read-only): the resumed App's bindings are still the ones
   its journal recorded and the release planned.
 * ``consume`` (under the lease): delete the marker once ``check`` passed; from
@@ -39,6 +49,7 @@ the data-phase ledger, whose key decoding it reuses.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -82,6 +93,8 @@ FIELDS = frozenset(
 )
 _SIGNATURE_FIELDS = ("attestation_alg", "attestation_verify_key", "attestation_signature")
 EXIT_HELD, EXIT_REFUSED, EXIT_AWAITING = 0, 2, 3
+RETIRE_PURPOSE = "first_install_bootstrap_retire"
+ACK_RETIRE_ENV = "MIP_ACK_FIRST_INSTALL_BOOTSTRAP_RETIRE"
 
 
 class Refused(RuntimeError):
@@ -141,8 +154,8 @@ def read(workspace: Any, *, app_name: str) -> dict[str, Any] | None:
     return value
 
 
-def _claim(workspace: Any, *, app_name: str, lease_id: str, source_git_sha: str, scope: str, instance: str) -> dict[str, Any]:
-    """The journal's claimed first install, read under the lease; its App must still be stopped and source-free."""
+def _claimed(workspace: Any, *, app_name: str, lease_id: str, source_git_sha: str, scope: str, instance: str) -> dict[str, Any]:
+    """The journal's claimed first install, read under the lease."""
 
     state = journal.status(
         workspace,
@@ -155,10 +168,21 @@ def _claim(workspace: Any, *, app_name: str, lease_id: str, source_git_sha: str,
     record = journal._download(workspace, app_name=app_name)
     if state != "recover" or record is None:
         raise Refused(f"the first-install journal reads {state}, not a claimed first install")
+    return record
+
+
+def _assert_kept(workspace: Any, *, app_name: str) -> None:
     app = workspace.apps.get(app_name)
     compute = str(getattr(getattr(app, "compute_status", None), "state", "") or "")
     if compute.split(".")[-1].upper() != "STOPPED" or app.active_deployment is not None or app.pending_deployment is not None:
         raise Refused("the first-install App is no longer stopped and source-free")
+
+
+def _claim(workspace: Any, *, app_name: str, lease_id: str, source_git_sha: str, scope: str, instance: str) -> dict[str, Any]:
+    """The journal's claimed first install; its App must still be stopped and source-free."""
+
+    record = _claimed(workspace, app_name=app_name, lease_id=lease_id, source_git_sha=source_git_sha, scope=scope, instance=instance)
+    _assert_kept(workspace, app_name=app_name)
     return record
 
 
@@ -171,13 +195,16 @@ def _identity(record: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
+def _names(marker: Mapping[str, Any], record: Mapping[str, Any]) -> bool:
+    return {key: marker[key] for key in _identity(record)} == _identity(record)
+
+
 def mark(workspace: Any, *, app_name: str, lease_id: str, source_git_sha: str, scope: str, instance: str) -> dict[str, Any]:
     record = _claim(workspace, app_name=app_name, lease_id=lease_id, source_git_sha=source_git_sha, scope=scope, instance=instance)
     current = read(workspace, app_name=app_name)
-    if current is not None:
-        if {key: current[key] for key in _identity(record)} != _identity(record):
-            raise Refused("a bootstrap marker names another first install")
+    if current is not None and _names(current, record):
         return current
+    # A stale marker (another claim, deleted since) protects nothing: it is replaced.
     marker = _sign(
         {
             "version": MARKER_VERSION,
@@ -190,7 +217,10 @@ def mark(workspace: Any, *, app_name: str, lease_id: str, source_git_sha: str, s
     )
     assert_held(workspace, app_name=app_name, lease_id=lease_id, source_git_sha=source_git_sha)
     workspace.workspace.upload(
-        marker_path(app_name), io.BytesIO(json.dumps(marker, sort_keys=True).encode()), format=ImportFormat.AUTO, overwrite=False
+        marker_path(app_name),
+        io.BytesIO(json.dumps(marker, sort_keys=True).encode()),
+        format=ImportFormat.AUTO,
+        overwrite=current is not None,
     )
     if read(workspace, app_name=app_name) != marker:
         raise Refused("the first-install bootstrap marker did not persist exactly")
@@ -201,10 +231,45 @@ def status(workspace: Any, *, app_name: str, lease_id: str, source_git_sha: str,
     current = read(workspace, app_name=app_name)
     if current is None:
         return "absent"
-    record = _claim(workspace, app_name=app_name, lease_id=lease_id, source_git_sha=source_git_sha, scope=scope, instance=instance)
-    if {key: current[key] for key in _identity(record)} != _identity(record):
-        raise Refused("the bootstrap marker does not name the journal's claimed first install")
+    record = _claimed(workspace, app_name=app_name, lease_id=lease_id, source_git_sha=source_git_sha, scope=scope, instance=instance)
+    if not _names(current, record):
+        return "stale"
+    _assert_kept(workspace, app_name=app_name)
     return "resume"
+
+
+def retire_digest(marker: Mapping[str, Any]) -> str:
+    body = {
+        "purpose": RETIRE_PURPOSE,
+        "app_name": marker["app_name"],
+        **{key: marker[key] for key in ("bootstrap_id", "app_id", "app_service_principal_client_id", "app_service_principal_scim_id")},
+        "marked_at": marker["marked_at"],
+    }
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(b"mip-first-install-bootstrap-retire\0" + canonical).hexdigest()
+
+
+def retire(
+    workspace: Any, *, app_name: str, lease_id: str, source_git_sha: str, scope: str, instance: str, ack: str
+) -> None:
+    """Delete the awaiting marker of the journal's own claim, only by its exact retire ack."""
+
+    current = read(workspace, app_name=app_name)
+    if current is None:
+        return
+    record = _claimed(workspace, app_name=app_name, lease_id=lease_id, source_git_sha=source_git_sha, scope=scope, instance=instance)
+    if _names(current, record):
+        digest = retire_digest(current)
+        if ack.strip() != digest:
+            raise Refused(
+                f"{RETIRE_PURPOSE}: the first-install App awaits the owner bootstrap --post-first-install. Resume it "
+                f"with --phase release, or review it and export {ACK_RETIRE_ENV}={digest} for one run to retire "
+                "the marker, after which this run deletes the App (and any owner grant on its identity)"
+            )
+    assert_held(workspace, app_name=app_name, lease_id=lease_id, source_git_sha=source_git_sha)
+    workspace.workspace.delete(marker_path(app_name))
+    if read(workspace, app_name=app_name) is not None:
+        raise Refused("the first-install bootstrap marker remained after its retirement")
 
 
 def verify_resume(workspace: Any, *, app_name: str, payload: Mapping[str, Any]) -> None:
@@ -251,13 +316,14 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("check").add_argument("--app-application-id", required=True)
-    for name in ("mark", "status", "consume"):
+    for name in ("mark", "status", "consume", "retire"):
         mode = sub.add_parser(name)
         mode.add_argument("--app-name", required=True)
         mode.add_argument("--lease-id", required=True)
         mode.add_argument("--source-git-sha", required=True)
         mode.add_argument("--rollback-scope", default="mip-app-rollback")
         mode.add_argument("--lakebase-instance", default="")
+    sub.choices["retire"].add_argument("--ack", default="")
     resume = sub.add_parser("verify-resume")
     resume.add_argument("--app-name", required=True)
     resume.add_argument("--payload", type=Path, required=True)
@@ -296,6 +362,10 @@ def main(argv: Sequence[str] | None = None, *, workspace: Any = None, account: A
         if args.command == "mark":
             mark(workspace, **common, **located)
             print(f"[first-install] {MESSAGE}: the App is kept, stopped and source-free")
+            return 0
+        if args.command == "retire":
+            retire(workspace, **common, **located, ack=args.ack)
+            print("[first-install] the awaiting marker is retired; this run's recovery deletes the App")
             return 0
         print(status(workspace, **common, **located))
         return 0

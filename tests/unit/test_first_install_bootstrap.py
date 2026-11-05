@@ -4,14 +4,17 @@ Two layers:
 
 * ``tools/databricks/first_install_bootstrap.py`` against fakes: the signed
   awaiting marker is written only for a claimed, stopped, source-free first
-  install, names exactly that claim, refuses tampering and any other claim,
-  and the account probe reads a rule set the principal may not read as "not
-  held".
+  install, names exactly that claim and refuses tampering. A marker naming a
+  claim the journal no longer holds is stale: it reads as such and the next
+  mark replaces it, so a first install deleted some other way never wedges the
+  next one. Only the exact retire ack retires a live marker. The account probe
+  reads a rule set the principal may not read as "not held".
 * the shell gate (``scripts/lib/deploy_governed_phases_lifecycle.sh``) driven
   with stubs: the creating release exits 3 with the App kept (the EXIT trap's
   stop and first-install deletion both stand down), the release after the
   owner bootstrap resumes at the same point and is an ordinary first install
-  again, and a run with no ``--phase`` never reaches the gate.
+  again, and a run with no ``--phase`` never reaches the gate, never resumes
+  the kept App and deletes it only after the exact retire ack.
 """
 
 from __future__ import annotations
@@ -102,20 +105,52 @@ def test_only_a_claimed_stopped_source_free_first_install_is_marked(
     assert workspace.workspace.data == {}, "nothing was written"
 
 
-def test_a_marker_for_another_claim_or_a_tampered_marker_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_marker_for_another_claim_is_stale_and_the_next_mark_replaces_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Exit 3 marked install A; a run with no --phase then retired A some other
+    # way, and a later release created install B: A's marker protects nothing.
+    workspace = _Workspace()
+    _journal(monkeypatch)
+    old = bootstrap.mark(workspace, **COMMON, **LOCATED)
+    other = {**RECORD, "app_id": "app-object-0002", "bootstrap_id": "00000000-0000-4000-8000-0000000000cc"}
+    _journal(monkeypatch, record=other)
+    running = _Workspace(state="ACTIVE")
+    running.workspace = workspace.workspace
+    # Stale, whatever B's App state: B is an ordinary interrupted first install.
+    assert bootstrap.status(running, **COMMON, **LOCATED) == "stale"
+    new = bootstrap.mark(workspace, **COMMON, **LOCATED)
+    assert new["app_id"] == "app-object-0002" and new != old
+    assert bootstrap.status(workspace, **COMMON, **LOCATED) == "resume"
+
+
+def test_a_tampered_marker_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
     workspace = _Workspace()
     _journal(monkeypatch)
     bootstrap.mark(workspace, **COMMON, **LOCATED)
-    # The journal now names another first install (a delete-and-redo happened).
-    _journal(monkeypatch, record={**RECORD, "app_id": "app-object-0002"})
-    with pytest.raises(bootstrap.Refused, match="does not name the journal's claimed first install"):
-        bootstrap.status(workspace, **COMMON, **LOCATED)
     path = bootstrap.marker_path(APP)
     value = json.loads(workspace.workspace.data[path])
     value["app_id"] = "app-object-0002"
     workspace.workspace.data[path] = json.dumps(value).encode()
     with pytest.raises(bootstrap.Refused, match="signature is invalid"):
         bootstrap.status(workspace, **COMMON, **LOCATED)
+
+
+def test_only_the_exact_retire_ack_retires_a_live_marker(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    workspace = _Workspace()
+    _journal(monkeypatch)
+    marker = bootstrap.mark(workspace, **COMMON, **LOCATED)
+    digest = bootstrap.retire_digest(marker)
+    argv = ["retire", "--app-name", APP, "--lease-id", COMMON["lease_id"], "--source-git-sha", COMMON["source_git_sha"]]
+    for ack in ("", "0" * 64, bootstrap.retire_digest({**marker, "marked_at": "2026-01-01T00:00:00+00:00"})):
+        assert bootstrap.main([*argv, "--ack", ack], workspace=workspace) == bootstrap.EXIT_REFUSED
+        assert f"{bootstrap.ACK_RETIRE_ENV}={digest}" in capsys.readouterr().err
+        assert bootstrap.status(workspace, **COMMON, **LOCATED) == "resume", "the App is still kept"
+    assert bootstrap.main([*argv, "--ack", digest], workspace=workspace) == 0
+    assert bootstrap.read(workspace, app_name=APP) is None
+    # A stale marker protects nothing: it is retired with no ack.
+    bootstrap.mark(workspace, **COMMON, **LOCATED)
+    _journal(monkeypatch, record={**RECORD, "app_id": "app-object-0002"})
+    bootstrap.retire(workspace, **COMMON, **LOCATED, ack="")
+    assert bootstrap.read(workspace, app_name=APP) is None
 
 
 def test_a_resume_needs_the_bindings_its_journal_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -188,6 +223,7 @@ py_stub() {{
   case "$3" in
     check) return "${{CHECK_RC:-0}}" ;;
     status) echo "${{STATUS:-absent}}" ;;
+    retire) [[ "$*" == *"--ack ${{MIP_ACK_FIRST_INSTALL_BOOTSTRAP_RETIRE:-}}"* ]] || return 9; return "${{RETIRE_RC:-0}}" ;;
   esac
 }}
 trap 'echo "exit created=$FIRST_INSTALL_APP_CREATED bound=$FIRST_INSTALL_APP_BOUND armed=$APP_FAIL_CLOSED_ARMED resumed=$FIRST_INSTALL_RESUMED state=$APP_UPGRADE_STATE"' EXIT
@@ -237,10 +273,31 @@ def test_an_undecided_check_refuses_and_leaves_the_compensation_armed(tmp_path: 
     assert "exit created=1 bound=1 armed=1" in result.stdout, "a created App is deleted as today"
 
 
-@pytest.mark.parametrize("phase", ("", "plan", "data"))
+@pytest.mark.parametrize("phase", ("plan", "data"))
 def test_only_a_release_reaches_the_gate(tmp_path: Path, phase: str) -> None:
     result, calls = _drive(tmp_path, RESUME, DEPLOY_PHASE=phase, CHECK_RC="3", STATUS="resume")
     assert result.returncode == 0 and calls == [] and "CONTINUED" in result.stdout
+
+
+@pytest.mark.parametrize("state", ("absent", "stale"))
+def test_a_run_with_no_phase_recovers_an_ordinary_interrupted_first_install(tmp_path: Path, state: str) -> None:
+    result, calls = _drive(tmp_path, RESUME, DEPLOY_PHASE="", STATUS=state, CHECK_RC="3")
+    assert result.returncode == 0 and calls == ["status"] and "CONTINUED" in result.stdout
+    assert "resumed=0" in result.stdout, "no resume: step 0a's recovery deletes the interrupted App"
+
+
+def test_a_run_with_no_phase_never_deletes_an_app_awaiting_the_owner_bootstrap_without_the_retire_ack(tmp_path: Path) -> None:
+    # A --phase release stopped with exit 3; a run with no --phase follows it.
+    kept, calls = _drive(tmp_path, RESUME, DEPLOY_PHASE="", STATUS="resume", RETIRE_RC="2")
+    assert kept.returncode == 2 and calls == ["status", "retire"]
+    assert "finish it with --phase release, which resumes it" in kept.stderr and "The App was kept" in kept.stderr
+    assert "CONTINUED" not in kept.stdout
+    (tmp_path / "acked").mkdir()
+    acked, acked_calls = _drive(
+        tmp_path / "acked", RESUME, DEPLOY_PHASE="", STATUS="resume", MIP_ACK_FIRST_INSTALL_BOOTSTRAP_RETIRE="d" * 64
+    )
+    assert acked.returncode == 0 and acked_calls == ["status", "retire"], acked.stderr
+    assert "CONTINUED" in acked.stdout and "resumed=0" in acked.stdout, "retired: its recovery deletes the App"
 
 
 def test_the_gate_sits_after_the_apps_identity_and_before_its_first_proof() -> None:

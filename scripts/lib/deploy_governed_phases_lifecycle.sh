@@ -239,20 +239,36 @@ refuse_while_a_data_job_runs() {
 # the same point instead of deleting the journal-owned App.
 
 # Step 0a, on a signed first-install journal reading "recover": true when its
-# App awaits the owner bootstrap (a valid marker names this exact claim).
+# App awaits the owner bootstrap (a valid marker names this exact claim) and
+# this run is a release. A run with no --phase never resumes that App and
+# never deletes it silently: it refuses unless the marker's exact retire ack
+# (MIP_ACK_FIRST_INSTALL_BOOTSTRAP_RETIRE, shell only, one run) retires it,
+# after which its recovery deletes the App as any interrupted first install.
+# A stale marker (another claim) protects nothing and reads as absent.
 first_install_awaits_owner_bootstrap() {
   local state
-  [[ "${DEPLOY_PHASE:-}" == "release" && "$DRY_RUN" -eq 0 ]] || return 1
-  if ! state="$("$PYTHON" -m tools.databricks.first_install_bootstrap status \
-      --app-name "$_GRANTS_APP_NAME" \
-      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
-      --source-git-sha "$SOURCE_GIT_SHA" \
-      --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
-      --lakebase-instance "$MIP_LAKEBASE_INSTANCE")"; then
+  local -a located=()
+  [[ "$DRY_RUN" -eq 0 ]] || return 1
+  [[ -z "${DEPLOY_PHASE:-}" || "${DEPLOY_PHASE:-}" == "release" ]] || return 1
+  located=(
+    --app-name "$_GRANTS_APP_NAME"
+    --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"
+    --source-git-sha "$SOURCE_GIT_SHA"
+    --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE"
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
+  )
+  if ! state="$("$PYTHON" -m tools.databricks.first_install_bootstrap status "${located[@]}")"; then
     echo "${RED}[deploy] the first-install bootstrap marker could not be proven; nothing was changed.${RST}" >&2
     exit 2
   fi
-  [[ "$state" == "resume" ]]
+  [[ "$state" == "resume" ]] || return 1
+  [[ "${DEPLOY_PHASE:-}" != "release" ]] || return 0
+  if ! run_with_proof_signing_authority "$PYTHON" -m tools.databricks.first_install_bootstrap retire \
+      "${located[@]}" --ack "${MIP_ACK_FIRST_INSTALL_BOOTSTRAP_RETIRE:-}"; then
+    echo "${RED}[deploy] the first-install App awaits the owner bootstrap --post-first-install: finish it with --phase release, which resumes it, or retire it with the exact ack printed above. The App was kept.${RST}" >&2
+    exit 2
+  fi
+  return 1
 }
 
 resume_first_install_after_owner_bootstrap() {
