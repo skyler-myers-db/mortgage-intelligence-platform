@@ -37,6 +37,8 @@ for arg in "$@"; do
   prev="$arg"
 done
 case "$*" in
+  *"app_core_rollback restore-payload"*)
+    prev=""; for arg in "$@"; do [[ "$prev" != "--out" ]] || printf '{}' > "$arg"; prev="$arg"; done ;;
   *"blue_restore_proof prepare-activation"*)
     exit "${PROOF_RC:-0}" ;;
   *"app_core_rollback restore "*)
@@ -143,6 +145,11 @@ def test_a_proven_blue_is_quiesced_only_after_the_proof_and_then_activated(tmp_p
     ]
     assert order == sorted(order), calls
     assert sum("prepare-activation" in call for call in calls) == 1, "deploy_app_snapshot's own call is a no-op"
+    rebuild = next(call.split() for call in calls if "restore-payload" in call)
+    payload = Path(rebuild[rebuild.index("--out") + 1])
+    proof = next(call for call in calls if "prepare-activation" in call)
+    assert f"--restore-payload {payload}" in proof, "the rebuilt payload reached the proof"
+    assert not payload.exists(), "recorded now, so its temp file (operator values) is discarded"
 
 
 def test_the_real_snapshot_activation_still_proves_first() -> None:

@@ -497,8 +497,10 @@ AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=0
 TREATMENT_RUNTIME_QUIESCED=0
 APP_SIGNED_BLUE_AVAILABLE=0
 # The core tier (M2-PR7b): blue's rebuilt restore payload argument for the
-# pre-activation proof, set only when the rebuild reproduces blue's env set.
+# pre-activation proof, set only when the rebuild reproduces blue's env set,
+# and its temp file (operator values; removed once recorded, or on exit).
 CORE_BLUE_RESTORE_PAYLOAD_ARGS=()
+CORE_BLUE_RESTORE_PAYLOAD_FILE=""
 APP_ACCESS_QUARANTINED=0
 REVIEWED_FUNCTION_GRANTS_PROVEN=0
 # Process-local state is never durable proof across deployment retries. Every

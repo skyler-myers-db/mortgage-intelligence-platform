@@ -34,6 +34,13 @@ step "core tier: skip the agentic provisioning, cutover and Agent Evaluation (ag
 if [[ "$APP_UPGRADE_STATE" == "blue_active" || \
       "$APP_UPGRADE_STATE" == "blue_quiesced" ]]; then
   prove_blue_restorable_before_activation
+  # Blue's rebuilt restore payload is in the signed record now; the temp file
+  # holds operator values (the EXIT trap removes it on any other exit).
+  if [[ -n "${CORE_BLUE_RESTORE_PAYLOAD_FILE:-}" ]]; then
+    rm -f "$CORE_BLUE_RESTORE_PAYLOAD_FILE"
+    CORE_BLUE_RESTORE_PAYLOAD_FILE=""
+  fi
+  CORE_BLUE_RESTORE_PAYLOAD_ARGS=()
   APP_UPGRADE_STATE="blue_quiescing"
   step "quiesce verified-blue treatment authority immediately before green activation"
   run converge_app_treatment_access quiesce

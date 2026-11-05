@@ -206,12 +206,16 @@ prove_blue_restorable_before_activation() {
 # rebuilds it from the profile the way the emergency recipe built blue
 # (tools/databricks/core_blue.py); it is handed to the proof only when its
 # env-name set is exactly blue's. Otherwise none is, and the proof then needs
-# the exact no_rollback_for ack. Read-only; nothing runs in a dry run.
+# the exact no_rollback_for ack. Read-only; nothing runs in a dry run. The file
+# holds operator values (CORE_BLUE_RESTORE_PAYLOAD_FILE): the core activation
+# step discards it once the proof recorded it, and the EXIT trap otherwise.
 rebuild_core_blue_restore_payload() {
   local payload
   CORE_BLUE_RESTORE_PAYLOAD_ARGS=()
   [[ "$DRY_RUN" -eq 0 && "${APP_SIGNED_BLUE_AVAILABLE:-0}" -eq 1 ]] || return 0
   payload="$(mktemp -t mip-blue-restore-payload.XXXXXX.json)"
+  # shellcheck disable=SC2034  # read by the core activation step and the EXIT trap.
+  CORE_BLUE_RESTORE_PAYLOAD_FILE="$payload"
   chmod 600 "$payload"
   step "rebuild an adopted core blue's restore payload with blue's exact env-name set (read-only)"
   run_with_proof_signing_authority "$PYTHON" -m tools.databricks.app_core_rollback restore-payload \

@@ -113,6 +113,29 @@ def test_the_core_tier_rebuilds_blues_restore_payload_and_hands_it_in_only_when_
         assert proof[proof.index("--restore-payload") + 1] == flags["--out"]
 
 
+def test_a_refusal_leaves_the_rebuilt_payload_file_to_the_exit_trap_which_removes_it(tmp_path: Path) -> None:
+    """Review of #319: it holds operator values (the success path: test_core_activation_exit_trap.py)."""
+
+    result, calls = _run(
+        tmp_path / "refused",
+        "prove_blue_restorable_before_activation\n",
+        env={"STUB_REBUILD": "1"},
+        rc={"blue_restore_proof": 2},
+    )
+    assert result.returncode == 2
+    out = Path(_flags(calls[0])["--out"])
+    assert out.exists(), "a refusal leaves it to the EXIT trap"
+    cleanup = drive(
+        tmp_path / "refused" / "repo",
+        function("restore_rendered_sql_fail_closed") + "true\nrestore_rendered_sql_fail_closed\n",
+        dry_run=1,
+        env={"CORE_BLUE_RESTORE_PAYLOAD_FILE": str(out)},
+        epilogue="",
+    )
+    assert cleanup.returncode == 0, cleanup.stderr
+    assert not out.exists(), "the EXIT trap removes it"
+
+
 def test_a_failed_rebuild_refuses_before_the_proof_and_the_activation(tmp_path: Path) -> None:
     result, calls = _run(
         tmp_path, "prove_blue_restorable_before_activation\n", rc={"app_core_rollback": 1}
