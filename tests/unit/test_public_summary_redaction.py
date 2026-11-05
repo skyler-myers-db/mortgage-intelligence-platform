@@ -263,7 +263,7 @@ def test_the_synthetic_dispatch_shape_passes_every_step(dispatch: dict[str, Any]
     assert dispatch["log"].read_text(encoding="utf-8").splitlines() == ["--version"], "no Databricks call"
     assert "environment protections: environment_protections_unreadable" in deploy["Preflight the dispatch"].stdout
     run = ANSI.sub("", deploy["Run the client phase"].stdout)
-    assert "plan phase complete: read-only, stopped before the lease" in run
+    assert "plan phase complete: stopped before the lease; no governed resource was changed" in run
     assert "staged source files are this checkout's commit" in deploy["Verify the prebuilt release against its manifest"].stdout
     assert not (dispatch["runner_temp"] / "mip-client-vars.json").exists(), "the last step removes the profile files"
 

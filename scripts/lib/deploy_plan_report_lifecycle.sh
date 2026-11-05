@@ -6,8 +6,8 @@
 # the job's step summary, and PlanReport.full(), which names resolved objects
 # and principals, create-only to the deployer's own bundle root in the client
 # workspace (<root>/plan-reports/<run id>-<attempt>.json), whether the gate
-# passed or refused. That write is the plan phase's only one, and it happens
-# under GitHub Actions only: a local plan is a dry run. No artifact carries
+# passed or refused. That create-only write is the plan phase's only one (no
+# governed resource changes), and it happens under GitHub Actions only. No artifact carries
 # either half. The plan also prints the sha256 of the App's active deployment
 # id, and a --phase release given MIP_EXPECTED_ACTIVE_DEPLOYMENT_SHA256 (the
 # dispatch input expected_active_deployment_sha256, one run only) refuses
@@ -27,7 +27,7 @@ publish_plan_report() {
   fi
   if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]] && \
      ! "$PYTHON" -m tools.databricks.plan_report_publish summary --public "$BUNDLE_PLAN_PUBLIC_JSON" --out "$GITHUB_STEP_SUMMARY"; then
-    echo "${RED}[deploy] the plan's public summary could not be written; the plan ran read-only.${RST}" >&2
+    echo "${RED}[deploy] the plan's public summary could not be written; no governed resource was changed.${RST}" >&2
     exit 2
   fi
   [[ "${GITHUB_ACTIONS:-}" == "true" && -n "${GITHUB_RUN_ID:-}" ]] || return 0
@@ -37,7 +37,7 @@ publish_plan_report() {
       --client "$CLIENT_KEY" \
       --run-id "$GITHUB_RUN_ID" \
       --run-attempt "${GITHUB_RUN_ATTEMPT:-1}"; then
-    echo "${RED}[deploy] the full plan report could not be written to the deployer's plan-reports folder; the plan ran read-only.${RST}" >&2
+    echo "${RED}[deploy] the full plan report could not be written to the deployer's plan-reports folder; no governed resource was changed.${RST}" >&2
     exit 2
   fi
 }
@@ -46,7 +46,7 @@ print_active_deployment_digest() {
   echo "${DIM}\$ $PYTHON -m tools.databricks.active_deployment_pin digest --app-name ${_GRANTS_APP_NAME}${RST}"
   [[ "$DRY_RUN" -eq 0 ]] || return 0
   if ! "$PYTHON" -m tools.databricks.active_deployment_pin digest --app-name "$_GRANTS_APP_NAME"; then
-    echo "${RED}[deploy] the App's active deployment could not be read; the plan ran read-only.${RST}" >&2
+    echo "${RED}[deploy] the App's active deployment could not be read; no governed resource was changed.${RST}" >&2
     exit 2
   fi
 }

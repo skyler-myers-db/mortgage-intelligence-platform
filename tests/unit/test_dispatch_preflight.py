@@ -248,7 +248,7 @@ def test_a_plan_passes_without_any_ack_and_prints_the_profile_ack_a_release_need
     assert "approval provenance: not applicable (single_maintainer_audited)" in verdict.facts
     assert "trust-root chain: deferred (M1-PR5)" in verdict.facts
     assert "environment protections: environment_protections_verified (single_maintainer_audited)" in verdict.facts
-    assert verdict.exports == {preflight.PROTECTIONS_ENV: protections.VERIFIED}
+    assert verdict.exports == {}, "only what a later step reads is exported"
 
 
 @pytest.mark.parametrize("phase", MUTATING)
@@ -267,7 +267,7 @@ def test_s8_readable_protections_that_match_let_a_release_run(tmp_path: Path, mo
     verdict = _decide(_mkdir(tmp_path / "a"), monkeypatch, phase="release", environ=_profile_ack())
 
     assert verdict.refusals == []
-    assert verdict.exports[preflight.PROTECTIONS_ENV] == protections.VERIFIED
+    assert "environment protections: environment_protections_verified (single_maintainer_audited)" in verdict.facts
 
 
 @pytest.mark.parametrize("phase", MUTATING)
@@ -295,7 +295,7 @@ def test_s8_worst_case_unreadable_protections_a_plan_records_and_a_mutating_phas
     release = _decide(_mkdir(tmp_path / phase), monkeypatch, phase=phase, responses=None, environ=_profile_ack())
 
     assert plan.refusals == []
-    assert plan.exports[preflight.PROTECTIONS_ENV] == protections.UNREADABLE == "environment_protections_unreadable"
+    assert protections.UNREADABLE == "environment_protections_unreadable" and plan.exports == {}
     assert "environment protections: environment_protections_unreadable (HTTP 403; spike S8 owed)" in plan.facts
     assert any(fact.startswith("recorded for the plan: environment_protections_unreadable") and expected in fact for fact in plan.facts)
     (refusal,) = release.refusals
@@ -387,7 +387,7 @@ def test_the_cli_writes_exports_only_on_a_pass_and_never_prints_a_value(
 
     assert preflight.main(argv, environ=environ) == 0
     exported = github_env.read_text(encoding="utf-8").splitlines()
-    assert exported == [f"MIP_ACK_QUIESCE_WINDOW={'d' * 64}", f"{preflight.PROTECTIONS_ENV}={protections.VERIFIED}"]
+    assert exported == [f"MIP_ACK_QUIESCE_WINDOW={'d' * 64}"]
     out = capsys.readouterr()
     text = out.out + out.err + summary.read_text(encoding="utf-8")
     profile = resolve(from_github(*split_contexts(_profile_values()), environment=CLIENT))

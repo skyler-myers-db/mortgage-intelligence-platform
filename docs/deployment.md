@@ -2767,7 +2767,7 @@ runs). A live phase is CI-only; locally every phase runs with `--dry-run`.
 
 | Phase | Lease | What it does |
 |---|---|---|
-| `plan` | none | The read-only steps through the pre-lease bundle plan gate and the window plan, then each phase's predicted budget (`tools/databricks/phase_budget.py describe`), kept as local files. Nothing is written to the workspace: its pre-stop probes run with `--genie-turn off`, so the one Genie turn they otherwise ask (the probes' only call that is not a GET or a list; it opens a conversation) is the release's alone. It prints the sha256 of the App's active deployment id (`tools/databricks/active_deployment_pin.py digest`), and under GitHub Actions publishes the PlanReport in its two halves (M1-PR7): `PlanReport.public_summary()` to the step summary and `PlanReport.full()` create-only to `<deployer root>/plan-reports/<run id>-<attempt>.json` in the client workspace, whether the gate passed or refused. That file is the plan phase's one workspace write. `tests/unit/test_plan_phase_live_shape.py` pins every command a live plan phase runs. |
+| `plan` | none | The read-only steps through the pre-lease bundle plan gate and the window plan, then each phase's predicted budget (`tools/databricks/phase_budget.py describe`), kept as local files. No governed resource is changed: its pre-stop probes run with `--genie-turn off`, so the one Genie turn they otherwise ask (the probes' only call that is not a GET or a list; it opens a conversation) is the release's alone. It prints the sha256 of the App's active deployment id (`tools/databricks/active_deployment_pin.py digest`), and under GitHub Actions publishes the PlanReport in its two halves (M1-PR7): `PlanReport.public_summary()` to the step summary and `PlanReport.full()` create-only to `<deployer root>/plan-reports/<run id>-<attempt>.json` in the client workspace, whether the gate passed or refused. That create-only file is the plan phase's one workspace write. `tests/unit/test_plan_phase_live_shape.py` pins every command a live plan phase runs. |
 | `release` | yes | The run with no `--phase` minus exactly the data jobs of steps 6-9b (silver, gold and its grant reconcile, the stale-rate guard, the lifecycle sync and the KPI snapshot), which it never runs, submits or triggers. It prints `data jobs deferred to --phase data`. The core tier refuses it before the lease like a run with no phase, until M2-PR7b. |
 | `data` | yes, its own | Silver (unless `--skip-silver`), then `mip_scheduled_refresh` (FRED, gold, lifecycle mirror, KPI snapshot and its outcome gate), each followed by the reviewed-function grant reconcile and verify when its graph touches gold, then the data smoke. No pre-stop probe, no bundle plan or apply, and no Apps write: its Apps calls are reads only, the preflight's (`apps list`, `apps get`) and the App identity pinned to its signed rollback record. |
 
@@ -3989,7 +3989,9 @@ satisfies another:
   `MIP_UC_APPROVED_OWNER_PRINCIPALS`, with `<prefix>` the public
   `MIP_IDENTITY_PREFIX`. Any other value, `<prefix>-` spellings and every
   email, host, id or share included, is refused by a mutating phase;
-- `expected_active_deployment_sha256`, when given, reaches `--phase release`,
+- `expected_active_deployment_sha256`, when given, reaches `--phase release`
+  as the one-run export `MIP_EXPECTED_ACTIVE_DEPLOYMENT_SHA256` (never a
+  `.env.local` line; a local release may export it the same way),
   which refuses before the lease unless the App's active deployment still has
   that digest (a plan prints it).
 

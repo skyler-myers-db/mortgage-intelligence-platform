@@ -178,7 +178,7 @@ def test_the_plan_phase_exits_at_top_level_between_the_gate_and_the_lease() -> N
         "  # two halves: public to the step summary, full to the workspace (M1-PR7).",
         "  print_active_deployment_digest",
         "  publish_plan_report",
-        '  echo "${GRN}[deploy] plan phase complete: read-only, stopped before the lease; nothing was changed.${RST}"',
+        "  echo \"${GRN}[deploy] plan phase complete: stopped before the lease; no governed resource was changed (its one write, under GitHub Actions only, is the create-only plan report in the deployer's plan-reports folder).${RST}\"",
         "  exit 0",
         "fi",
     ]
@@ -337,7 +337,7 @@ def test_the_plan_phase_exits_read_only_and_never_takes_the_lease(tmp_path: Path
     result, called, lease = _harness(tmp_path, fx.adopted(), phase="plan")
 
     assert result.returncode == 0, result.stderr
-    assert "plan phase complete: read-only, stopped before the lease" in result.stdout
+    assert "plan phase complete: stopped before the lease; no governed resource was changed" in result.stdout
     assert "[mip-plan-gate] pre-lease plan gate passed (read-only)" in result.stdout
     assert result.stdout.index("budgets-predicted") < result.stdout.index("plan phase complete")
     assert called == [

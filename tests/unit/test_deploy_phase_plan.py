@@ -98,7 +98,7 @@ def test_the_plan_phase_dry_run_stops_after_the_pre_lease_gate(tmp_path: Path) -
         ".venv/bin/python -m tools.databricks.active_deployment_pin digest --app-name mip-app",
     ]
     assert out.rstrip().endswith(
-        "[deploy] plan phase complete: read-only, stopped before the lease; nothing was changed."
+        "[deploy] plan phase complete: stopped before the lease; no governed resource was changed (its one write, under GitHub Actions only, is the create-only plan report in the deployer's plan-reports folder)."
     )
     # M1-PR6: each phase's predicted budget, read-only and with no planned command.
     budgets = [line.strip() for line in out.splitlines() if line.strip().startswith("phase budget: ")]

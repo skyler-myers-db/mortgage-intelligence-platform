@@ -7527,7 +7527,9 @@ def test_no_artifact_carries_a_plan_report_and_only_the_build_uploads() -> None:
     assert "plan_report_publish publish" in _deploy_entrypoint_text()
 
 
-def test_the_deploy_job_redacts_foreign_names_and_reads_inputs_through_env_only() -> None:
+def test_the_deploy_job_sets_the_foreign_name_switch_and_reads_inputs_through_env_only() -> None:
+    """The switch is set but inert: no probe prints through tools/clients/redact.foreign() yet (plan §4.16)."""
+
     jobs = _jobs()
     assert jobs["deploy"]["env"] == {"MIP_REDACT_FOREIGN_NAMES": "1"}
     for name, job in jobs.items():

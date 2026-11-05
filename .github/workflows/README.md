@@ -6,7 +6,7 @@ This repo runs five workflows:
 |---|---|---|
 | [`ci.yml`](ci.yml) | `pull_request`, `push` to `main` / `feature/*` | **None.** Every job is credential-free. |
 | [`deps-report.yml`](deps-report.yml) | `schedule` (Mondays 13:17 UTC) + `workflow_dispatch` | **GITHUB_TOKEN only:** contents and actions read in `report`, issues write in `publish`. Edits one `dependency-report` issue in place; never pushes, opens no branch or pull request. |
-| [`nightly.yml`](nightly.yml) | `workflow_dispatch` only | **Parked:** its first job refuses every dispatch until a client environment is selected (M1-PR7). Otherwise required — see below. |
+| [`nightly.yml`](nightly.yml) | `workflow_dispatch` only | **Parked:** its first job refuses every dispatch until M1-PR8 rebuilds it per client environment. Otherwise required — see below. |
 | [`deploy-dev.yml`](deploy-dev.yml) | `workflow_dispatch` only | **One client environment per dispatch (M1-PR7):** the `build` job holds no ID token; the `deploy` job runs in the client's GitHub Environment with GitHub OIDC (`id-token: write`) for the client's deployer service principal, which has no stored credential, and reads the whole client profile from that environment's variables and secrets. |
 | [`deploy-prod.yml`](deploy-prod.yml) | `workflow_dispatch` | **GITHUB_TOKEN (actions: read) only, for the live-validation age check. Non-deploying scaffold gate only.** |
 

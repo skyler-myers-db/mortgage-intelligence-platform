@@ -5,8 +5,9 @@ name: deploy-dev
 # client-specific lives in this file. No step holds a whole vars or secrets
 # context: a step's env prints in its log header, and a variable prints in
 # clear (tools/clients/workflow_contexts.py names the two steps that read one). `phase` is the scripts/deploy.sh
-# --phase the run executes: `plan` is read-only, the others mutate behind the
-# environment's approval. Manual dispatch only: no push, pull_request or
+# --phase the run executes: `plan` changes no governed resource (its one write
+# is a create-only plan report in the deployer's plan-reports folder), the
+# others mutate behind the environment's approval. Manual dispatch only: no push, pull_request or
 # schedule trigger reaches a deploy job.
 on:
   workflow_dispatch:
@@ -16,7 +17,7 @@ on:
         type: string
         required: true
       phase:
-        description: "scripts/deploy.sh --phase: plan (read-only), release, data, adopt or unadopt"
+        description: "scripts/deploy.sh --phase: plan (no governed change; its one write is the create-only plan report), release, data, adopt or unadopt"
         type: choice
         options: [plan, release, data, adopt, unadopt]
         default: plan
@@ -351,7 +352,9 @@ jobs:
       actions: read
       id-token: write
     env:
-      # Other teams' objects, owners and emails print as foreign#n handles (plan §4.16).
+      # Set for the probes that will print other teams' objects, owners and
+      # emails as foreign#n handles (plan §4.16). No probe prints through
+      # tools/clients/redact.foreign() yet, so it changes no output today.
       MIP_REDACT_FOREIGN_NAMES: '1'
     steps:
       - name: Record the job deadline

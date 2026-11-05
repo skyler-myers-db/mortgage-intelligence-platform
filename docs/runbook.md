@@ -108,7 +108,6 @@ belongs to:
   and grant postflight, and activates source only after those checks pass:
 
 ```bash
-BRANCH="$(git branch --show-current)"
 # Routine recovery of a signed last-good App leaves this false. Set it to true
 # only for an approved legacy or failed pre-capture App expected to have no
 # signed record; the workflow re-proves that absence before any rebase mutation.
@@ -119,7 +118,7 @@ REBASE_UNVERIFIED_APP=false
 # step summary printed (owner_attestation; M1-PR7).
 CLIENT="<client>"
 PROFILE_ACK="<profile-ack-from-the-plan-run>"
-RUN_URL="$(gh workflow run deploy-dev.yml --ref "$BRANCH" \
+RUN_URL="$(gh workflow run deploy-dev.yml --ref main \
   -f client="$CLIENT" \
   -f phase=release \
   -f owner_attestation="$PROFILE_ACK" \
@@ -137,11 +136,9 @@ fi
 gh run watch "$RUN_ID" --exit-status
 ```
 
-The GitHub workflow above is dev-only. It is never a recovery path for the
-live dev App.
-Do not transpose it to a customer or production workspace: production requires its separately reviewed
-environment contract and a change-controlled `scripts/deploy.sh -t client`
-invocation with that client's profile. A failed pre-capture rebase remains unsigned and therefore requires
+The workflow above deploys the one client environment `client` names, and
+only from `main`: its preflight refuses any other ref. It is never a recovery
+path for the live dev App. A failed pre-capture rebase remains unsigned and therefore requires
 `REBASE_UNVERIFIED_APP=true` again on its next explicitly approved recovery;
 once a signed last-good record exists, the exceptional path refuses to run.
 

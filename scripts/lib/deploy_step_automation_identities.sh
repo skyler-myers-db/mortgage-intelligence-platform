@@ -362,7 +362,7 @@ if [[ "${DEPLOY_PHASE:-}" == "plan" ]]; then
   # two halves: public to the step summary, full to the workspace (M1-PR7).
   print_active_deployment_digest
   publish_plan_report
-  echo "${GRN}[deploy] plan phase complete: read-only, stopped before the lease; nothing was changed.${RST}"
+  echo "${GRN}[deploy] plan phase complete: stopped before the lease; no governed resource was changed (its one write, under GitHub Actions only, is the create-only plan report in the deployer's plan-reports folder).${RST}"
   exit 0
 fi
 # <<< bundle plan gate: pre-lease <<<

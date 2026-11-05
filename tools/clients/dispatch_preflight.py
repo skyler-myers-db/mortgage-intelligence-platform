@@ -60,7 +60,6 @@ WORKFLOW = ".github/workflows/deploy-dev.yml"
 MAIN = "refs/heads/main"
 TRUST_ROOT = "deferred (M1-PR5)"
 EXPECTED_DEPLOYMENT_ENV = "MIP_EXPECTED_ACTIVE_DEPLOYMENT_SHA256"
-PROTECTIONS_ENV = "MIP_DISPATCH_ENVIRONMENT_PROTECTIONS"
 _EXPECTED_DEPLOYMENT = re.compile(r"[0-9a-f]{64}|none")
 
 
@@ -114,7 +113,6 @@ def _protections(verdict: Verdict, environ: Mapping[str, str], client: str, envi
         result = protections.Result(protections.UNREADABLE, cause=str(exc))
     else:
         result = protections.read(session, environment, mode, environ.get("GITHUB_ACTOR_ID", ""))
-    verdict.exports[PROTECTIONS_ENV] = result.code
     if result.code == protections.VERIFIED:
         verdict.facts.append(f"environment protections: {result.code} ({mode})")
         return
@@ -170,7 +168,7 @@ def decide(
         verdict.exports.update(acks.operation_exports(environ.get("MIP_DISPATCH_OPERATION_ACKS", ""), phase))
     except ProfileRefusal as refusal:
         verdict.refusals.extend(refusal.lines)
-    operation = sorted(name for name in verdict.exports if name != PROTECTIONS_ENV)
+    operation = sorted(verdict.exports)
     verdict.facts.append(f"operation acks: {', '.join(operation) or 'none'}")
     expected_deployment = environ.get("MIP_DISPATCH_EXPECTED_ACTIVE_DEPLOYMENT_SHA256", "").strip()
     if expected_deployment:

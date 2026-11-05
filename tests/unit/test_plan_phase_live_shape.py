@@ -148,7 +148,7 @@ def _tool(call: str) -> str:
 def test_a_live_plan_phase_runs_only_read_only_tools_and_no_genie_turn(tmp_path: Path) -> None:
     result, calls = _drive(tmp_path, "plan")
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
-    assert "plan phase complete: read-only, stopped before the lease" in result.stdout
+    assert "plan phase complete: stopped before the lease; no governed resource was changed" in result.stdout
     assert "PAST-THE-STEP-FILE" not in result.stdout
     tools = [_tool(call) for call in calls]
     assert len(tools) == len(PLAN_CALLS) and all(map(str.startswith, tools, PLAN_CALLS)), tools
