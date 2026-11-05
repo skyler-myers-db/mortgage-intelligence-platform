@@ -314,8 +314,11 @@ the staged closure with its manifest. `deploy-dev.yml` uses it so that its
   `.databricks/app-release` whole with copies, re-hashes the copies and reads
   the release id from the staged manifest as usual (`app_release_contract
   release-id --expected-commit`). No npm runs, the frontend dependency check
-  is skipped, and a configured lender mark refuses: the mark is a local file
-  the build job cannot see, so that release builds locally.
+  is skipped, and every tenant build input vite bakes into the dist refuses:
+  a configured lender mark (a local file the build job cannot see) and a
+  `MIP_DEFAULT_THEME` or `MIP_DEFAULT_ACCENT` other than the product default
+  (`dark`, `bright`), which the build job never sets. Such a release builds
+  locally.
 
 ## Emergency recovery: a slim per-release App source folder
 

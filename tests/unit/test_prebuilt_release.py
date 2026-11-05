@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -364,3 +365,52 @@ def test_a_prebuilt_release_that_differs_refuses_before_any_databricks_call(tmp_
         assert "the staged App source against this checkout's commit: 1 files changed, first backend/main.py" in result.stderr
     assert "step 1" not in ANSI.sub("", result.stdout)
     assert not log.exists() or log.read_text(encoding="utf-8") == "", "refused before any Databricks call"
+
+
+def _step_one(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """install_prebuilt_release, sourced alone, as step 1 runs it in a dry run."""
+
+    script = (
+        "set -euo pipefail\n"
+        f"RED= RST= DIM= PYTHON=false DRY_RUN=1 SOURCE_GIT_SHA={'a' * 40} PREBUILT_RELEASE_DIR=/nonexistent "
+        "APP_RELEASE_STAGE_ROOT=/nonexistent\n"
+        ". scripts/lib/deploy_prebuilt_release_lifecycle.sh\n"
+        "install_prebuilt_release\n"
+        "echo reached the copy\n"
+    )
+    return subprocess.run(
+        ["bash", "-c", script], cwd=REPO, env={"PATH": os.environ["PATH"], **env}, text=True, capture_output=True, check=False, timeout=60
+    )
+
+
+@pytest.mark.parametrize(
+    ("env", "refusal"),
+    (
+        ({}, None),
+        ({"MIP_DEFAULT_THEME": "dark", "MIP_DEFAULT_ACCENT": "bright"}, None),
+        ({"MIP_DEFAULT_THEME": "light"}, "a tenant default theme or accent is configured"),
+        ({"MIP_DEFAULT_ACCENT": "navy"}, "a tenant default theme or accent is configured"),
+        ({"MIP_LENDER_MARK_SHA256": "c" * 64}, "a lender mark is configured"),
+    ),
+)
+def test_step_1_refuses_a_prebuilt_release_for_any_tenant_build_input_the_build_job_cannot_bake(
+    env: dict[str, str], refusal: str | None
+) -> None:
+    """vite bakes the theme, the accent and the mark into the dist; the build job sets none of them."""
+
+    result = _step_one(env)
+    if refusal is None:
+        assert result.returncode == 0, result.stderr
+        assert "would re-hash the prebuilt release" in result.stdout and "reached the copy" in result.stdout
+    else:
+        assert result.returncode == 2 and refusal in result.stderr
+        assert "reached the copy" not in result.stdout
+
+
+def test_the_prebuilt_appearance_defaults_are_the_frontends() -> None:
+    plugin = (REPO / "frontend/src/lib/tenantAppearancePlugin.ts").read_text(encoding="utf-8")
+    shell = (REPO / "scripts/lib/deploy_prebuilt_release_lifecycle.sh").read_text(encoding="utf-8")
+    for constant, variable in (("DEFAULT_THEME_PREFERENCE", "PREBUILT_RELEASE_DEFAULT_THEME"), ("DEFAULT_ACCENT", "PREBUILT_RELEASE_DEFAULT_ACCENT")):
+        (value,) = re.findall(rf"export const {constant} = '([a-z]+)';", plugin)
+        assert f'{variable}="{value}"\n' in shell
+

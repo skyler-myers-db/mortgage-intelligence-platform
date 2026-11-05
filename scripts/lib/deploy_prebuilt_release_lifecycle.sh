@@ -11,12 +11,18 @@
 # Each check also re-derives the staged App source from this checkout's own
 # commit (git blobs, byte for byte) and reviews the dist again: the build job
 # runs npm, so only the dist's bytes are taken from it.
-# The lender mark is the one build input a prebuilt release cannot carry: it
-# is a local file (tools/branding/lender_mark.py), so a configured mark
-# refuses here and builds locally instead.
+# A tenant build input vite bakes into the dist refuses (see below).
 # Sourced by scripts/deploy.sh; this file must not change shell options or traps.
 
 PREBUILT_RELEASE_REQUIREMENTS="requirements-deploy.hashes.txt"
+# A prebuilt release carries none of the tenant build inputs vite bakes into
+# the dist (frontend/vite.config.ts): the lender mark is a local file
+# (tools/branding/lender_mark.py), and the build job sets no MIP_DEFAULT_THEME
+# or MIP_DEFAULT_ACCENT, so its dist wears these product defaults
+# (frontend/src/lib/tenantAppearancePlugin.ts; a test pins them equal). A
+# configured mark, or another theme or accent, refuses and builds locally.
+PREBUILT_RELEASE_DEFAULT_THEME="dark"
+PREBUILT_RELEASE_DEFAULT_ACCENT="bright"
 
 prebuilt_release_args() {
   printf '%s\n' --root "${PREBUILT_RELEASE_DIR:-}" --git-sha "$SOURCE_GIT_SHA" \
@@ -45,6 +51,11 @@ install_prebuilt_release() {
   local -a args=()
   if [[ -n "${MIP_LENDER_MARK_SHA256:-}" ]]; then
     echo "${RED}[deploy] a lender mark is configured, and a prebuilt release carries none (the mark is a local file); build this release locally. Nothing more was changed.${RST}" >&2
+    exit 2
+  fi
+  if [[ "${MIP_DEFAULT_THEME:-$PREBUILT_RELEASE_DEFAULT_THEME}" != "$PREBUILT_RELEASE_DEFAULT_THEME" || \
+        "${MIP_DEFAULT_ACCENT:-$PREBUILT_RELEASE_DEFAULT_ACCENT}" != "$PREBUILT_RELEASE_DEFAULT_ACCENT" ]]; then
+    echo "${RED}[deploy] a tenant default theme or accent is configured, and a prebuilt release wears the product defaults (vite bakes both into the dist; the build job sets neither); build this release locally. Nothing more was changed.${RST}" >&2
     exit 2
   fi
   mapfile -t args < <(prebuilt_release_args)
