@@ -1,4 +1,4 @@
-import { QueryClient } from '@tanstack/react-query';
+import { QueryClient, type Query } from '@tanstack/react-query';
 import { actorScopeStatus, subscribeActorScope } from './actorScope';
 import { isWarmingUpError } from './api';
 import { clientFailureReason } from './apiTransport';
@@ -8,6 +8,22 @@ import { queryKeys } from './queryKeys';
 
 export const DEFAULT_QUERY_STALE_MS = 30_000;
 export const DEFAULT_QUERY_GC_MS = 5 * 60_000;
+
+/**
+ * The app's reconnect refetch. Coming back online never re-reads data the
+ * server has already served: many reads write a VIEW_* audit row, so a
+ * reconnect would add one with no act behind it, the reason focus refetch is
+ * off too. A read whose last attempt never reached the server (fetch()
+ * rejected, offline or unreachable) wrote nothing, so the reconnect still
+ * completes it, as TanStack's default would. A query that waited offline
+ * ('paused') resumes on its own whatever this says, and a query whose every
+ * page writes a row (`meta.auditedPages`) is never refetched here either, as
+ * in connectionState's refetchUnreachableQueries.
+ */
+export function refetchOnReconnectIfNeverServed(query: Query): boolean {
+  const reason = clientFailureReason(query.state.error);
+  return (reason === 'offline' || reason === 'unreachable') && query.meta?.auditedPages !== true;
+}
 
 export function createMipQueryClient(): QueryClient {
   // Offline pauses queries and their retries (networkMode 'online', the
@@ -24,6 +40,8 @@ export function createMipQueryClient(): QueryClient {
         // re-read actor-scoped data after an identity swap, so queries must
         // opt into focus refetch explicitly when it is safe.
         refetchOnWindowFocus: false,
+        // The same for reconnect: only a read that never reached the server.
+        refetchOnReconnect: refetchOnReconnectIfNeverServed,
         retry: (failureCount, error) => {
           // An ended session, no network, an unreachable app or an
           // unreadable body is never retried here (audit states-02): the

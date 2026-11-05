@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
-import { QueryClient } from '@tanstack/react-query';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { onlineManager, QueryClient, QueryObserver, type Query } from '@tanstack/react-query';
 import {
   createMipQueryClient,
   DEFAULT_QUERY_GC_MS,
   DEFAULT_QUERY_STALE_MS,
+  refetchOnReconnectIfNeverServed,
 } from './queryClient';
 import { invalidateOperationalQueries, queryKeys } from './queryKeys';
 import { ApiError } from './api';
@@ -17,6 +18,7 @@ describe('createMipQueryClient', () => {
     expect(queries?.staleTime).toBe(DEFAULT_QUERY_STALE_MS);
     expect(queries?.gcTime).toBe(DEFAULT_QUERY_GC_MS);
     expect(queries?.refetchOnWindowFocus).toBe(false);
+    expect(queries?.refetchOnReconnect).toBe(refetchOnReconnectIfNeverServed);
     expect(client.getDefaultOptions().mutations?.retry).toBe(false);
   });
 
@@ -84,6 +86,69 @@ describe('createMipQueryClient', () => {
     });
 
     expect(retry(0, refused)).toBe(false);
+  });
+});
+
+function failure(reason: string | undefined, extra: { status?: number | null; aborted?: boolean } = {}): ApiError {
+  return new ApiError('failed', { path: '/api/v1/leads', status: extra.status ?? null, retryable: false, reason, aborted: extra.aborted });
+}
+
+function queryIn(error: unknown, meta?: Record<string, unknown>): Query {
+  return { state: { error }, meta } as unknown as Query;
+}
+
+describe('refetchOnReconnectIfNeverServed', () => {
+  it('refetches on reconnect only a read whose last attempt never reached the server', () => {
+    expect(refetchOnReconnectIfNeverServed(queryIn(null))).toBe(false);
+    expect(refetchOnReconnectIfNeverServed(queryIn(failure('offline')))).toBe(true);
+    expect(refetchOnReconnectIfNeverServed(queryIn(failure('unreachable')))).toBe(true);
+    // The server answered: a warming 503, an ended session, an unreadable body.
+    expect(refetchOnReconnectIfNeverServed(queryIn(failure('warming_up', { status: 503 })))).toBe(false);
+    expect(refetchOnReconnectIfNeverServed(queryIn(failure('session_expired', { status: 401 })))).toBe(false);
+    expect(refetchOnReconnectIfNeverServed(queryIn(failure('unreadable_response', { status: 200 })))).toBe(false);
+    // The caller aborted it, or every served page writes a row.
+    expect(refetchOnReconnectIfNeverServed(queryIn(failure('unreachable', { aborted: true })))).toBe(false);
+    expect(refetchOnReconnectIfNeverServed(queryIn(failure('unreachable'), { auditedPages: true }))).toBe(false);
+  });
+});
+
+describe('createMipQueryClient on reconnect', () => {
+  afterEach(() => {
+    onlineManager.setOnline(true);
+  });
+
+  it('never re-reads a served stale query, and completes one that never reached the server', async () => {
+    const client = createMipQueryClient();
+    client.mount();
+    onlineManager.setOnline(true);
+    const served = vi.fn(async () => 'rows');
+    let reachable = false;
+    const neverReached = vi.fn(async () => {
+      if (!reachable) {
+        reachable = true;
+        throw failure('unreachable');
+      }
+      return 'rows';
+    });
+    // staleTime 0: both are stale at once, as every read is once its window has passed.
+    const servedObserver = new QueryObserver(client, { queryKey: ['mip', 'leads', 'served'], queryFn: served, staleTime: 0 });
+    const failedObserver = new QueryObserver(client, { queryKey: ['mip', 'borrower', 'failed'], queryFn: neverReached, staleTime: 0 });
+    const unsubscribe = [servedObserver.subscribe(() => undefined), failedObserver.subscribe(() => undefined)];
+    try {
+      await vi.waitFor(() => expect(servedObserver.getCurrentResult().status).toBe('success'));
+      await vi.waitFor(() => expect(failedObserver.getCurrentResult().status).toBe('error'));
+
+      onlineManager.setOnline(false);
+      onlineManager.setOnline(true);
+
+      await vi.waitFor(() => expect(failedObserver.getCurrentResult().status).toBe('success'));
+      expect(neverReached).toHaveBeenCalledTimes(2);
+      expect(served).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe.forEach((stop) => stop());
+      client.unmount();
+      client.clear();
+    }
   });
 });
 

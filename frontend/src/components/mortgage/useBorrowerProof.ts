@@ -16,7 +16,9 @@
  *   on an enabled false -> true flip or a key change regardless of
  *   refetchOnMount (queryObserver.js).
  * - refetchOnMount / refetchOnReconnect / refetchOnWindowFocus false: the
- *   global client leaves refetchOnReconnect at its default (true).
+ *   global client's reconnect default (refetchOnReconnectIfNeverServed)
+ *   still completes a read that never reached the server, and a proof read
+ *   that failed must wait for an explicit act too.
  * - Retries stay at the client default: a warming 503 writes no audit row.
  *
  * A cache read is this hook with `enabled` false: it observes the cached
