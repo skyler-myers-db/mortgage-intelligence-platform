@@ -2,8 +2,10 @@
 
 Each run is ``scripts/deploy.sh --dry-run`` in the sandbox clone
 (tests/fixtures/deploy_sandbox.py), whose stub ``databricks`` fails on
-anything but ``--version``, so the stub's log is the spy: no phase makes a
-Databricks call in a dry run. The matrix:
+anything but ``--version``, so the stub's log shows that no phase makes a
+Databricks call in a dry run. A dry run proves nothing about a live run's
+writes: the read-only data plan is pinned by
+tests/unit/test_job_phase_runner_safety.py. The matrix:
 
 * **release** is the run with no ``--phase`` minus exactly the data jobs
   (silver, gold and its grant reconcile, the stale-rate guard, the lifecycle
@@ -186,7 +188,8 @@ def test_the_data_phase_runs_only_its_jobs_and_never_touches_the_app(runs: dict[
             assert run < reconcile < verify
         assert out.index("data smoke: gold scored at the rate silver publishes as latest") > verify
         assert "pre-stop probes" not in out and "plan direct deployment" not in out
-        assert "would read: databricks apps get mip-app -o json" in out, "its one App read, read-only"
+        assert "would read: the App's service principal, refused unless it is the one its signed last-good rollback record pins" in out
+        assert "databricks apps get" not in out, "no unpinned App read"
         assert out.rstrip().endswith("the App was not touched.")
 
 

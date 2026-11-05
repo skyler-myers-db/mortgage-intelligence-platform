@@ -8,8 +8,10 @@
 # mip_scheduled_refresh: FRED -> gold -> lifecycle -> KPI and its outcome
 # gate) only through tools/databricks/job_phase_runner.py, under its own signed
 # lease, and reconciles and proves the reviewed function EXECUTE grants after
-# every job whose graph touches gold or the UC functions (attack O11). It never
-# calls the Apps API but the one read-only `apps get` of the App's identity.
+# every job whose graph touches gold or the UC functions, whatever the job's
+# outcome but a run still going (attack O11). It never writes through the Apps
+# API: its only App reads are the preflight's and the App identity, pinned to
+# the signed rollback record (tools/databricks/data_phase_app_identity.py).
 # Sourced by scripts/deploy.sh; this file must not change shell options or traps.
 # shellcheck disable=SC2034  # The phases assign deploy-wide state (the first-install and fail-closed flags) read by other files.
 
@@ -101,30 +103,48 @@ plan_data_phase() {
 # the ledger generation, run each job, reconcile and prove the reviewed
 # function grants after each gold-touching one, smoke the data, close the
 # generation. It ends the run; the EXIT trap releases the lease. A run still
-# going at the deadline exits 4: the next data phase re-attaches to it.
+# going at the deadline exits 4: the next data phase re-attaches to it, and no
+# release starts under the lease until it ends (refuse_while_a_data_job_runs).
 run_data_phase() {
-  local job out_env rc touches
+  local job out_env rc touches reconcile_rc
   local -a ack_args=()
   _GRANTS_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
-  step "data phase: read the App's service principal (one read-only apps get; the App is never touched)"
+  step "data phase: the App's service principal, pinned to its signed rollback record (read-only; the App is never touched)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     APP_SP_CLIENT_ID="dry-run-app-client-id"
-    echo "  would read: databricks apps get ${_GRANTS_APP_NAME} -o json (its service principal, for its EXECUTE grants)"
+    echo "  would read: the App's service principal, refused unless it is the one its signed last-good rollback record pins (for its EXECUTE grants)"
   else
-    APP_SP_CLIENT_ID="$(databricks apps get "$_GRANTS_APP_NAME" -o json | "$PYTHON" -c 'import json,sys; print(str(json.load(sys.stdin).get("service_principal_client_id") or "").strip())')"
-    if [[ -z "$APP_SP_CLIENT_ID" ]]; then
-      echo "${RED}[deploy] the App has no service principal to reconcile EXECUTE for; run the release first. Nothing was run.${RST}" >&2
+    if ! APP_SP_CLIENT_ID="$("$PYTHON" -m tools.databricks.data_phase_app_identity \
+        --app-name "$_GRANTS_APP_NAME" \
+        --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+        --lakebase-instance "$MIP_LAKEBASE_INSTANCE")" || [[ -z "$APP_SP_CLIENT_ID" ]]; then
+      echo "${RED}[deploy] the App identity is not the one its signed rollback record pins; run the release first. Nothing was run.${RST}" >&2
+      exit 2
+    fi
+    # The release's same separation: the App is never the bounded account credential's client.
+    if same_identity_casefold "${DATABRICKS_ACCOUNT_CLIENT_ID:-}" "$APP_SP_CLIENT_ID"; then
+      echo "${RED}[deploy] account-SCIM OAuth client must be distinct from the App service principal. Nothing was run.${RST}" >&2
       exit 2
     fi
   fi
-  # The exact digest of a stale generation's reset plan (shell only, one run,
-  # never .env.local): the runner recomputes the plan and refuses a difference.
+  # The exact digest of the open generation's reset plan, per purpose (shell
+  # only, one run, never .env.local): MIP_ACK_DATA_LEDGER_SUPERSEDE retires a
+  # stale generation, MIP_ACK_DATA_LEDGER_RERUN one that must run again. The
+  # runner recomputes each plan and refuses a difference; neither satisfies
+  # the other.
   if [[ -n "${MIP_ACK_DATA_LEDGER_SUPERSEDE:-}" ]]; then
     if [[ ! "$MIP_ACK_DATA_LEDGER_SUPERSEDE" =~ ^[0-9a-f]{64}$ ]]; then
       echo "${RED}[deploy] MIP_ACK_DATA_LEDGER_SUPERSEDE must be the 64-hex sha256 the stale-generation refusal printed.${RST}" >&2
       exit 2
     fi
     ack_args=(--ack-supersede "$MIP_ACK_DATA_LEDGER_SUPERSEDE")
+  fi
+  if [[ -n "${MIP_ACK_DATA_LEDGER_RERUN:-}" ]]; then
+    if [[ ! "$MIP_ACK_DATA_LEDGER_RERUN" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "${RED}[deploy] MIP_ACK_DATA_LEDGER_RERUN must be the 64-hex sha256 the ledger step printed.${RST}" >&2
+      exit 2
+    fi
+    ack_args+=(--ack-rerun "$MIP_ACK_DATA_LEDGER_RERUN")
   fi
   step "data phase: open or resume the signed ledger generation"
   if ! run_with_proof_signing_authority "$PYTHON" -m tools.databricks.job_phase_runner begin \
@@ -147,31 +167,43 @@ run_data_phase() {
       --job-key "$job" \
       --deadline-epoch "${MIP_JOB_DEADLINE_EPOCH:-}" \
       --out-env "${out_env:-/tmp/mip-dry-run-data-phase-${job}.env}" || rc=$?
+    # Only a run still going skips the repair: its re-attach reconciles after it ends.
     if [[ "$rc" -eq 4 ]]; then
       echo "${YLW}[deploy] ${job} is still running at the job deadline; re-run --phase data to re-attach (it is never cancelled).${RST}" >&2
       exit 4
-    elif [[ "$rc" -ne 0 ]]; then
+    fi
+    touches=1
+    if [[ -s "$out_env" ]]; then
+      touches="$(grep -E '^JOB_PHASE_TOUCHES_GOLD=[01]$' "$out_env" | cut -d= -f2 || true)"
+    fi
+    [[ -z "$out_env" ]] || rm -f "$out_env"
+    # Fail closed: a run whose classification did not arrive reconciles too,
+    # and so does a failed or refused one, as the release's governed job
+    # boundary does (run_job_and_reconcile_reviewed_function_grants).
+    reconcile_rc=0
+    if [[ "$touches" != "0" ]]; then
+      step "data phase: reconcile and prove reviewed function EXECUTE grants after ${job} (attack O11)"
+      reconcile_reviewed_function_execute_grants || reconcile_rc=$?
+    fi
+    if [[ "$rc" -ne 0 ]]; then
+      if [[ "$reconcile_rc" -ne 0 ]]; then
+        echo "${RED}[deploy] ${job} and the reviewed function grant repair both failed.${RST}" >&2
+      fi
       echo "${RED}[deploy] ${job} did not succeed (exit ${rc}); re-run --phase data to rerun only the failed job.${RST}" >&2
       exit "$rc"
     fi
-    touches=1
-    if [[ -n "$out_env" ]]; then
-      touches="$(grep -E '^JOB_PHASE_TOUCHES_GOLD=[01]$' "$out_env" | cut -d= -f2 || true)"
-      rm -f "$out_env"
-    fi
-    # Fail closed: a run whose classification did not arrive reconciles too.
-    if [[ "$touches" != "0" ]]; then
-      step "data phase: reconcile and prove reviewed function EXECUTE grants after ${job} (attack O11)"
-      if ! reconcile_reviewed_function_execute_grants; then
-        echo "${RED}[deploy] ${job} succeeded but the reviewed function EXECUTE grants are unproven; the data phase refuses success.${RST}" >&2
-        exit 4
-      fi
+    if [[ "$reconcile_rc" -ne 0 ]]; then
+      echo "${RED}[deploy] ${job} succeeded but the reviewed function EXECUTE grants are unproven; the data phase refuses success.${RST}" >&2
+      exit 4
     fi
   done < <(data_phase_jobs)
   step "data smoke: gold scored at the rate silver publishes as latest (stale-rate guard)"
-  run "$PYTHON" -m tools.databricks.verify_market_rate_alignment \
-    --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
-    --catalog "$_GRANTS_CATALOG"
+  if ! run "$PYTHON" -m tools.databricks.verify_market_rate_alignment \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+      --catalog "$_GRANTS_CATALOG"; then
+    echo "${RED}[deploy] the data smoke failed; the generation stays open. Re-run --phase data; if the data stays stale, review the generation and retire it with the MIP_ACK_DATA_LEDGER_RERUN its ledger step printed, which reruns every job.${RST}" >&2
+    exit 1
+  fi
   step "data phase: close the ledger generation"
   if ! run_with_proof_signing_authority "$PYTHON" -m tools.databricks.job_phase_runner close \
       --plan "$DATA_PHASE_PLAN_JSON" \
@@ -182,6 +214,18 @@ run_data_phase() {
   fi
   echo "${GRN}[deploy] data phase complete: every data job succeeded under its planned definition and the reviewed function grants are proven; the App was not touched.${RST}"
   exit 0
+}
+
+# A release, or a run with no --phase, right after its lease (live only): a
+# data phase that stopped at its deadline (exit 4) released the lease with its
+# job still running. Nothing starts under the lease until that job ends; the
+# read-only check is silent but for its one line.
+refuse_while_a_data_job_runs() {
+  [[ "$DRY_RUN" -eq 0 ]] || return 0
+  if ! "$PYTHON" -m tools.databricks.job_phase_runner quiet --app-name "$_GRANTS_APP_NAME"; then
+    echo "${RED}[deploy] a data-phase job is still running (or its ledger is unproven): wait for it, or re-run --phase data to re-attach, then re-run. Nothing was changed but the lease.${RST}" >&2
+    exit 2
+  fi
 }
 
 # ---------------------------------------------------------------------------

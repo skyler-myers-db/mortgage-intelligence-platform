@@ -445,6 +445,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   if [[ "${DEPLOY_PHASE:-}" == "data" ]]; then
     run_data_phase
   fi
+  # A release, or a run with no --phase, never overlaps a data job left running.
+  refuse_while_a_data_job_runs
   # <<< data phase: run <<<
   if [[ -n "${MIP_OAUTH_CREDENTIAL_ORPHAN_LEASE_ID:-}" ]]; then
     step "recover the explicitly confirmed orphan OAuth credential lease"

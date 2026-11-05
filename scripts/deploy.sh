@@ -66,14 +66,14 @@
 #                                       # (a live --phase plan is CI-only)
 #   ./scripts/deploy.sh -t client --phase release --dry-run
 #                                       # this run minus the data jobs (steps
-#                                       # 7-9b); a first install stops with
+#                                       # 6-9b); a first install stops with
 #                                       # exit 3 after App creation until the
 #                                       # owner bootstrap --post-first-install
 #   ./scripts/deploy.sh -t client --phase data --dry-run
 #                                       # silver, mip_scheduled_refresh and the
 #                                       # data smoke only, ledgered and
 #                                       # re-attachable, under its own lease;
-#                                       # never an App call but one apps get
+#                                       # App reads only, never an App write
 #                                       # (live release and data are CI-only;
 #                                       # no --phase is release then data)
 #   ./scripts/deploy.sh -t client --phase adopt
