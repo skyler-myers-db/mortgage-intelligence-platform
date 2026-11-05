@@ -11,7 +11,7 @@
  * navigation nothing accessible says which route is painted.
  */
 import { expect, type Locator, type Page } from '@playwright/test';
-import type { DegradeOptions, MockApi } from './mockApi';
+import { PAGE_API_PROBE, type DegradeOptions, type MockApi, type PageApiProbe } from './mockApi';
 
 export type FixtureTheme = 'dark' | 'light';
 
@@ -46,7 +46,7 @@ const SEEDS = {
 } as const;
 const QUIET_WINDOW_MS = 300;
 
-interface SettleState {
+export interface SettleState {
   heading: boolean;
   busy: number;
   /** `data-route-path` of the painted route wrapper (null when none), and the URL's pathname. */
@@ -54,6 +54,46 @@ interface SettleState {
   urlPath: string;
   /** The painted route is the URL's route, or the route error surface stands in for it. */
   painted: boolean;
+  /** The document's own API fetch count (MockApi's PAGE_API_PROBE); null when the probe is missing. */
+  fetches: PageApiProbe | null;
+}
+
+/** What the mock API reports at a poll: requests in its handler, and how long it has been quiet. */
+export interface MockQuiet {
+  inflight: number;
+  idleMs: number;
+}
+
+/** The painted route, its h1, no aria-busy in <main>, and no API fetch of the page's own in flight. */
+function routeReady(state: SettleState): boolean {
+  return state.painted && state.heading && state.busy === 0
+    && state.fetches !== null && state.fetches.started === state.fetches.settled;
+}
+
+/**
+ * settle()'s verdict for one poll, given the poll before it. Pure.
+ *
+ * A route starts the reads it makes at mount (the Offer Orchestrator's
+ * borrower, recommend and draft; TopLeadsQuickPick's GET /leads) in the
+ * effects React runs AFTER the commit that paints its h1, and nothing on those
+ * routes is aria-busy. So one poll can see the route painted, its h1 and no
+ * aria-busy before the page has called fetch(), and a request the page has
+ * called fetch() for reaches the mock's route handler only once the engine
+ * hands it over (up to ~300 ms on a loaded WebKit host): in both gaps the
+ * mock was quiet, often for seconds, since the shell's own boot reads, which
+ * is how a route's natural load landed after markNaturalLoad (main CI run
+ * 41881146873). Settled therefore needs:
+ *   - the route ready on THIS poll and the one before it, the same route in
+ *     the same document, with no API fetch started by the page in between
+ *     (the mount effects have run by the second poll), and none in flight in
+ *     the page (counted from the fetch() call, PAGE_API_PROBE);
+ *   - the mock API with nothing in its handler and quiet for QUIET_WINDOW_MS.
+ */
+export function settleVerdict(previous: SettleState | null, current: SettleState, mock: MockQuiet): boolean {
+  if (!previous || !routeReady(previous) || !routeReady(current)) return false;
+  const sameRoute = previous.paintedPath === current.paintedPath && previous.urlPath === current.urlPath;
+  const noFetchBetween = previous.fetches?.doc === current.fetches?.doc && previous.fetches?.started === current.fetches?.started;
+  return sameRoute && noFetchBetween && mock.inflight === 0 && mock.idleMs >= QUIET_WINDOW_MS;
 }
 
 export class AppDriver {
@@ -116,9 +156,11 @@ export class AppDriver {
 
   /**
    * Settled means: the route painted in `<main>` is the URL's route, an `<h1>`
-   * is rendered there, no `aria-busy` region remains inside it, the mock API
-   * has no request in flight and has been quiet for a short window, and
-   * webfonts are ready. Polls instead of sleeping so it is as fast as the
+   * is rendered there, no `aria-busy` region remains inside it, and the page
+   * has no API fetch in flight, on two consecutive polls with no API fetch
+   * started between them; the mock API has no request in flight and has been
+   * quiet for a short window; and webfonts are ready (settleVerdict says why
+   * one poll is not enough). Polls instead of sleeping so it is as fast as the
    * machine allows and still holds under load.
    *
    * "The URL's route": an in-app navigation to a route whose chunk is still
@@ -133,36 +175,40 @@ export class AppDriver {
    */
   async settle(timeoutMs = 30_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
-    const unread: SettleState = { heading: false, busy: -1, paintedPath: null, urlPath: '', painted: false };
+    const unread: SettleState = { heading: false, busy: -1, paintedPath: null, urlPath: '', painted: false, fetches: null };
     let state: SettleState = unread;
+    let previous: SettleState | null = null;
     while (Date.now() < deadline) {
       state = await this.page
-        .evaluate(() => {
+        .evaluate((probeKey) => {
           const main = document.querySelector('#main-content');
           const paintedPath = main?.querySelector('.route-transition[data-route-path]')?.getAttribute('data-route-path') ?? null;
           const urlPath = window.location.pathname;
           const routeError = Boolean(main?.querySelector('[data-error-boundary="route"]'));
+          const probe = (window as unknown as Record<string, PageApiProbe | undefined>)[probeKey];
           return {
             heading: Boolean(main?.querySelector('h1')),
             busy: main ? main.querySelectorAll('[aria-busy="true"]').length : -1,
             paintedPath,
             urlPath,
             painted: routeError || (paintedPath !== null && new URL(paintedPath, window.location.origin).pathname === urlPath),
+            fetches: probe ? { doc: probe.doc, started: probe.started, settled: probe.settled } : null,
           };
-        })
+        }, PAGE_API_PROBE)
         .catch(() => unread);
-      const quiet = this.mockApi.inflight === 0 && this.mockApi.idleMs >= QUIET_WINDOW_MS;
-      if (state.painted && state.heading && state.busy === 0 && quiet) {
+      if (settleVerdict(previous, state, { inflight: this.mockApi.inflight, idleMs: this.mockApi.idleMs })) {
         await this.page.evaluate(() => document.fonts.ready.then(() => undefined));
         return;
       }
+      previous = state;
       await this.page.waitForTimeout(100);
     }
+    const pageInFlight = state.fetches ? String(state.fetches.started - state.fetches.settled) : 'unknown (no in-page API probe)';
     throw new Error(
       `Route did not settle within ${timeoutMs} ms at ${this.page.url()}: ` +
         `route painted in <main>=${state.paintedPath ?? 'none'} (URL path ${state.urlPath}), ` +
         `h1 rendered=${state.heading}, aria-busy regions in <main>=${state.busy}, ` +
-        `API requests in flight=${this.mockApi.inflight}.`,
+        `API fetches in flight in the page=${pageInFlight}, API requests in flight at the mock=${this.mockApi.inflight}.`,
     );
   }
 
